@@ -108,6 +108,68 @@ func TestClaudeIDFreshnessRejectsSourceMissingTombstone(t *testing.T) {
 	), "ordinary user trash keeps the established freshness behavior")
 }
 
+func TestCoverageTombstoneUsesStoredWindowsPathSpelling(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows path equivalence regression")
+	}
+	database := openTestDB(t)
+	dbPath := filepath.Join(t.TempDir(), "opencode.db")
+	storedPath := dbPath + "#deleted"
+	seedActiveBaselineSource(
+		t, database, parser.AgentOpenCode, "opencode:deleted", storedPath,
+	)
+	require.NoError(t, database.BaselineActiveSessionSourcePaths(
+		t.Context(), "local", []db.SessionSourcePath{{
+			Agent: string(parser.AgentOpenCode), FilePath: storedPath,
+		}},
+	))
+	expectedPath := strings.ReplaceAll(strings.ToUpper(dbPath), `\`, "/") + "#deleted"
+	require.NotEqual(t, storedPath, expectedPath)
+	engine := &Engine{db: database, machine: "local"}
+
+	err := engine.tombstoneCoverageSessions(
+		t.Context(), parser.AgentOpenCode, []parser.CoverageRemoval{{
+			SessionID: "deleted",
+			Source: parser.SourceRef{
+				Provider:    parser.AgentOpenCode,
+				DisplayPath: expectedPath,
+			},
+		}},
+	)
+	require.NoError(t, err)
+	active, err := database.GetSession(t.Context(), "opencode:deleted")
+	require.NoError(t, err)
+	assert.Nil(t, active)
+}
+
+func TestCoverageTombstoneDefersWhenMismatchedOwnershipStillExists(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	storedPath := filepath.Join(root, "storage", "session", "global", "owned.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(storedPath), 0o755))
+	require.NoError(t, os.WriteFile(storedPath, []byte(`{}`), 0o644))
+	seedActiveBaselineSource(
+		t, database, parser.AgentOpenCode, "opencode:owned", storedPath,
+	)
+	engine := &Engine{db: database, machine: "local"}
+
+	err := engine.tombstoneCoverageSessions(
+		t.Context(), parser.AgentOpenCode, []parser.CoverageRemoval{{
+			SessionID: "owned",
+			Source: parser.SourceRef{
+				Provider: parser.AgentOpenCode,
+				DisplayPath: parser.OpenCodeSQLiteVirtualPath(
+					filepath.Join(root, "opencode.db"), "owned",
+				),
+			},
+		}},
+	)
+	require.ErrorIs(t, err, parser.ErrProviderCoverageUnavailable)
+	active, err := database.GetSession(t.Context(), "opencode:owned")
+	require.NoError(t, err)
+	assert.NotNil(t, active)
+}
+
 func TestClassifyProviderChangedPathWatchRootPlanCached(t *testing.T) {
 	root := t.TempDir()
 	var watchRootsCalls atomic.Int32

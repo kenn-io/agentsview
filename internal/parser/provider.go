@@ -11,12 +11,18 @@ const (
 	ProviderFeatureParse         = "parse"
 	ProviderFeatureWatchRoots    = "watch roots"
 	ProviderFeatureActivityHints = "activity hints"
+	ProviderFeatureCoverageFeed  = "bounded coverage feed"
 )
 
 // ErrUnsupportedProviderFeature identifies optional provider behavior that is
 // intentionally absent. Callers use errors.Is to distinguish this from I/O or
 // parse failures.
 var ErrUnsupportedProviderFeature = errors.New("unsupported provider feature")
+
+// ErrProviderCoverageUnavailable marks a transient coverage feed failure.
+var ErrProviderCoverageUnavailable = errors.New("provider coverage unavailable")
+
+var ErrProviderCoverageSourceMissing = errors.New("provider coverage source missing")
 
 // UnsupportedProviderFeatureError wraps ErrUnsupportedProviderFeature with the
 // provider and feature names that produced it.
@@ -93,6 +99,55 @@ type Provider interface {
 		context.Context,
 		IncrementalRequest,
 	) (IncrementalOutcome, IncrementalStatus, error)
+}
+
+// CoverageTrigger identifies why a provider coverage unit was scheduled.
+type CoverageTrigger uint8
+
+const (
+	CoverageTriggerUnknown CoverageTrigger = iota
+	CoverageTriggerBaseline
+	CoverageTriggerNative
+	CoverageTriggerDegraded
+	CoverageTriggerContinuation
+)
+
+// CoverageTask is the provider-owned identity carried through watcher and
+// degraded-poll handoffs.
+type CoverageTask struct {
+	Agent       AgentType
+	CoverageKey string
+	Root        string
+	Trigger     CoverageTrigger
+	// AuthoritativeFallback confirms every physical scope needed for a
+	// provider-root audit is currently available.
+	AuthoritativeFallback bool
+	ChangedPaths          []string
+}
+
+// CoverageResult is a bounded provider change batch. Sources are fed back into
+// the ordinary provider parse path by the engine.
+type CoverageResult struct {
+	Sources       []SourceRef
+	Removed       []CoverageRemoval
+	More          bool
+	AuditRequired bool
+	NextDelay     time.Duration
+	Checkpoint    any
+}
+
+// CoverageRemoval identifies the exact provider source ownership invalidated
+// by a bounded feed event.
+type CoverageRemoval struct {
+	SessionID string
+	Source    SourceRef
+}
+
+// BoundedCoverageProvider is optional. Providers without it retain generic
+// provider-scoped reconciliation semantics.
+type BoundedCoverageProvider interface {
+	PollCoverage(context.Context, CoverageTask) (CoverageResult, error)
+	CommitCoverage(context.Context, CoverageTask, CoverageResult, bool) error
 }
 
 // ReconciliationSourceResolver rebuilds the exact source emitted by streaming
@@ -299,8 +354,8 @@ type WatchRootPlanner interface {
 
 // ResolveWatchRoots returns the bounded root-planning capability when a
 // provider advertises it. Providers that have not migrated yet retain their
-// WatchPlan behavior, but parser-only include/exclude globs are never carried
-// into watcher scheduling.
+// WatchPlan behavior. Parser globs remain excluded from watcher scheduling,
+// except coverage-keyed roots retain them for bounded event routing.
 func ResolveWatchRoots(
 	ctx context.Context,
 	provider Provider,
@@ -329,11 +384,18 @@ func ResolveWatchRoots(
 func watchRootMetadata(roots []WatchRoot) []WatchRoot {
 	out := make([]WatchRoot, 0, len(roots))
 	for _, root := range roots {
-		out = append(out, WatchRoot{
-			Path:        root.Path,
-			Recursive:   root.Recursive,
-			DebounceKey: root.DebounceKey,
-		})
+		metadata := WatchRoot{
+			Path:             root.Path,
+			Recursive:        root.Recursive,
+			DebounceKey:      root.DebounceKey,
+			CoverageKey:      root.CoverageKey,
+			NonBlockingProbe: root.NonBlockingProbe,
+		}
+		if root.CoverageKey != "" {
+			metadata.IncludeGlobs = append([]string(nil), root.IncludeGlobs...)
+			metadata.ExcludeGlobs = append([]string(nil), root.ExcludeGlobs...)
+		}
+		out = append(out, metadata)
 	}
 	return out
 }
@@ -348,6 +410,9 @@ type WatchRoot struct {
 	IncludeGlobs []string
 	ExcludeGlobs []string
 	DebounceKey  string
+	// CoverageKey is a stable provider-owned identity for degraded polling.
+	CoverageKey      string
+	NonBlockingProbe bool
 }
 
 // ActivityHintSource is one bounded append-only signal a provider exposes to

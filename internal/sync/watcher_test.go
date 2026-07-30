@@ -1551,6 +1551,40 @@ func TestWatcherUsesCallbackChangedPathsForRetry(t *testing.T) {
 	assert.False(t, second.FullSync)
 }
 
+func TestWatcherUsesCallbackRenamesForRetry(t *testing.T) {
+	backend := newFakeWatchBackend()
+	calls := make(chan WatchBatch, 2)
+	var attempts atomic.Int32
+	w, err := newWatcherWithBackend(
+		0, 10*time.Millisecond,
+		func(_ context.Context, batch WatchBatch) error {
+			calls <- batch
+			if attempts.Add(1) == 1 {
+				return retryScopedWatchError{retry: WatchBatch{
+					Renames: batch.Renames,
+				}}
+			}
+			return nil
+		},
+		backend, 8, 1_000,
+	)
+	require.NoError(t, err)
+	w.SetRootAgents("/sessions", []string{"codex"})
+	w.Start()
+	t.Cleanup(w.Stop)
+
+	backend.sendBackendEvent(t, backendEvent{
+		Path: "/sessions/renamed", Root: "/sessions",
+		Op: backendOpRename, ItemType: backendItemDirectory,
+	})
+	first := receiveWatchBatch(t, calls)
+	second := receiveWatchBatch(t, calls)
+
+	require.Len(t, first.Renames, 1)
+	assert.Equal(t, first.Renames, second.Renames)
+	assert.Equal(t, ItemIsDir, second.Renames[0].ItemType)
+}
+
 func TestRetainWatchRetryPathOverflowPromotesFullSync(t *testing.T) {
 	pending := newPendingWatchBatch(1, 1_000)
 

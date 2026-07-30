@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 var _ Provider = (*openCodeFormatProvider)(nil)
@@ -20,6 +21,13 @@ var _ Provider = (*openCodeFormatProvider)(nil)
 // index simply by opening a quiet WAL-mode database; those sidecars must not
 // make the watcher trigger itself.
 const sqliteWALHeaderSize = int64(32)
+
+const openCodeCoverageMaxStorageProbes = 4096
+
+var (
+	errOpenCodeCoverageStorageBound = errors.New("OpenCode coverage storage index bound reached")
+	errOpenCodeCoverageStorageDone  = errors.New("OpenCode coverage storage index complete")
+)
 
 type openCodeFormatProviderFactory struct {
 	def  AgentDef
@@ -59,7 +67,7 @@ func (f openCodeFormatProviderFactory) Definition() AgentDef {
 }
 
 func (f openCodeFormatProviderFactory) Capabilities() Capabilities {
-	return openCodeFormatProviderCapabilities()
+	return openCodeFormatProviderCapabilities(f.spec.agent)
 }
 
 func (f openCodeFormatProviderFactory) NewProvider(cfg ProviderConfig) Provider {
@@ -67,7 +75,7 @@ func (f openCodeFormatProviderFactory) NewProvider(cfg ProviderConfig) Provider 
 	return &openCodeFormatProvider{
 		ProviderBase: ProviderBase{
 			Def:    cloneAgentDef(f.def),
-			Caps:   openCodeFormatProviderCapabilities(),
+			Caps:   openCodeFormatProviderCapabilities(f.spec.agent),
 			Config: cfg,
 		},
 		sources: newOpenCodeFormatSourceSet(cfg.Roots, f.spec),
@@ -76,7 +84,182 @@ func (f openCodeFormatProviderFactory) NewProvider(cfg ProviderConfig) Provider 
 
 type openCodeFormatProvider struct {
 	ProviderBase
-	sources openCodeFormatSourceSet
+	sources             openCodeFormatSourceSet
+	coverageMu          sync.Mutex
+	coverage            map[string]OpenCodeCoverageState
+	coverageSchemaMu    sync.Mutex
+	coverageSchemaKnown map[string]openCodeCoverageSchemaState
+}
+
+type openCodeCoverageSchemaState struct {
+	support   openCodeCoverageJournalSupport
+	container SQLiteContainerState
+	known     bool
+}
+
+var probeOpenCodeCoverageJournalFn = probeOpenCodeCoverageJournal
+
+func (p *openCodeFormatProvider) PollCoverage(ctx context.Context, task CoverageTask) (CoverageResult, error) {
+	if p.Def.Type != AgentOpenCode {
+		return CoverageResult{}, UnsupportedProviderFeatureError{Provider: p.Def.Type, Feature: ProviderFeatureCoverageFeed}
+	}
+	ctx, cancel := context.WithTimeout(ctx, OpenCodeCoverageMaxDuration)
+	defer cancel()
+	root := task.Root
+	if root == "" && len(p.Config.Roots) > 0 {
+		root = p.Config.Roots[0]
+	}
+	root = filepath.Clean(root)
+	dbPath := filepath.Join(root, p.sources.spec.dbName)
+	key := task.CoverageKey
+	expectedKey := "opencode-sqlite:" + root
+	if key != expectedKey {
+		return CoverageResult{}, UnsupportedProviderFeatureError{
+			Provider: p.Def.Type, Feature: ProviderFeatureCoverageFeed,
+		}
+	}
+	p.coverageMu.Lock()
+	state := cloneOpenCodeCoverageState(p.coverage[key])
+	p.coverageMu.Unlock()
+	if task.Trigger == CoverageTriggerNative && len(task.ChangedPaths) > 0 {
+		walOnly := true
+		for _, changed := range task.ChangedPaths {
+			name := filepath.Base(changed)
+			if name == p.sources.spec.dbName+"-wal" {
+				if sqliteWALHasFrames(changed) {
+					walOnly = false
+					break
+				}
+				continue
+			}
+			if name == p.sources.spec.dbName+"-shm" {
+				continue
+			}
+			walOnly = false
+			break
+		}
+		if walOnly {
+			state.Generation++
+			return CoverageResult{Checkpoint: state}, nil
+		}
+	}
+	if _, err := os.Stat(dbPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) &&
+			(state.Initialized || task.Trigger == CoverageTriggerNative) {
+			return CoverageResult{}, fmt.Errorf(
+				"%w: %s", ErrProviderCoverageSourceMissing, dbPath,
+			)
+		}
+		return CoverageResult{}, fmt.Errorf(
+			"%w: OpenCode event journal", ErrProviderCoverageUnavailable,
+		)
+	}
+	support := p.coverageJournalSupport(ctx, dbPath)
+	if support == openCodeCoverageJournalIncompatible {
+		return CoverageResult{}, UnsupportedProviderFeatureError{
+			Provider: p.Def.Type, Feature: ProviderFeatureCoverageFeed,
+		}
+	}
+	if support == openCodeCoverageJournalUnknown {
+		return CoverageResult{}, fmt.Errorf(
+			"%w: OpenCode event journal", ErrProviderCoverageUnavailable,
+		)
+	}
+	wasInitialized := state.Initialized
+	batch, err := ReadOpenCodeCoverage(ctx, dbPath, state)
+	if err != nil {
+		return CoverageResult{}, err
+	}
+	batch.Next.Generation = state.Generation + 1
+	result := CoverageResult{
+		More: batch.More,
+		AuditRequired: (!wasInitialized && task.Trigger != CoverageTriggerBaseline) ||
+			batch.AuditRequired,
+		Checkpoint: batch.Next,
+	}
+	coverageIDs := append([]string(nil), batch.SessionIDs...)
+	coverageIDs = append(coverageIDs, batch.RemovedIDs...)
+	expectedSource := p.sources.spec.resolve(root)
+	storageIndex, complete, err := p.sources.coverageStorageIndexWithMode(
+		ctx, root, coverageIDs, !task.AuthoritativeFallback && (len(coverageIDs) > 0 || batch.More), expectedSource,
+	)
+	if err != nil {
+		return CoverageResult{}, err
+	}
+	if !complete {
+		result.AuditRequired = true
+	}
+	for _, id := range batch.RemovedIDs {
+		if source, shadowed := storageIndex[id]; shadowed {
+			result.Sources = append(result.Sources, source)
+			continue
+		}
+		result.Removed = append(result.Removed, CoverageRemoval{
+			SessionID: id,
+			Source:    p.sources.newSourceRef(root, dbPath+"#"+id, ""),
+		})
+	}
+	for _, id := range batch.SessionIDs {
+		if result.AuditRequired {
+			break
+		}
+		if src, ok := p.sources.coverageVirtualSource(
+			root, dbPath+"#"+id, storageIndex,
+		); ok {
+			result.Sources = append(result.Sources, src)
+		}
+	}
+	return result, nil
+}
+
+func (p *openCodeFormatProvider) CommitCoverage(
+	ctx context.Context, task CoverageTask, result CoverageResult, audited bool,
+) error {
+	root := task.Root
+	if root == "" && len(p.Config.Roots) > 0 {
+		root = p.Config.Roots[0]
+	}
+	key := task.CoverageKey
+	if key == "" {
+		key = "opencode-sqlite:" + root
+	}
+	next, ok := result.Checkpoint.(OpenCodeCoverageState)
+	if !ok {
+		return errors.New("opencode coverage checkpoint is missing")
+	}
+	if audited {
+		if next.HighWaterKnown {
+			next.LastRowID = next.HighWaterRowID
+			next.LastEventID = next.HighWaterEventID
+		}
+		next.HighWaterRowID = 0
+		next.HighWaterEventID = ""
+		next.HighWaterKnown = false
+		next.AuditLatched = false
+		next.PendingIDs = nil
+		next.ReadyIDs = nil
+		next.RemovedIDs = nil
+	}
+	p.coverageMu.Lock()
+	defer p.coverageMu.Unlock()
+	current := p.coverage[key]
+	if audited {
+		next.Generation = current.Generation + 1
+	} else if next.Generation != current.Generation+1 {
+		return fmt.Errorf("opencode coverage checkpoint changed concurrently")
+	}
+	if p.coverage == nil {
+		p.coverage = make(map[string]OpenCodeCoverageState)
+	}
+	p.coverage[key] = cloneOpenCodeCoverageState(next)
+	return nil
+}
+
+func cloneOpenCodeCoverageState(state OpenCodeCoverageState) OpenCodeCoverageState {
+	state.PendingIDs = append([]string(nil), state.PendingIDs...)
+	state.ReadyIDs = append([]string(nil), state.ReadyIDs...)
+	state.RemovedIDs = append([]string(nil), state.RemovedIDs...)
+	return state
 }
 
 func (p *openCodeFormatProvider) Discover(ctx context.Context) ([]SourceRef, error) {
@@ -89,6 +272,37 @@ func (p *openCodeFormatProvider) DiscoverEach(ctx context.Context, yield func(So
 
 func (p *openCodeFormatProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
 	return p.sources.WatchPlan(ctx)
+}
+
+func (p *openCodeFormatProvider) coverageJournalSupport(
+	ctx context.Context, dbPath string,
+) openCodeCoverageJournalSupport {
+	container, known := StatSQLiteContainerState(dbPath)
+	if !known {
+		return openCodeCoverageJournalUnknown
+	}
+	p.coverageSchemaMu.Lock()
+	if p.coverageSchemaKnown != nil {
+		if cached, ok := p.coverageSchemaKnown[dbPath]; ok &&
+			cached.known == known && (!known || cached.container == container) {
+			p.coverageSchemaMu.Unlock()
+			return cached.support
+		}
+	}
+	p.coverageSchemaMu.Unlock()
+	support := probeOpenCodeCoverageJournalFn(ctx, dbPath)
+	if support == openCodeCoverageJournalUnknown {
+		return support
+	}
+	p.coverageSchemaMu.Lock()
+	if p.coverageSchemaKnown == nil {
+		p.coverageSchemaKnown = make(map[string]openCodeCoverageSchemaState)
+	}
+	p.coverageSchemaKnown[dbPath] = openCodeCoverageSchemaState{
+		support: support, container: container, known: known,
+	}
+	p.coverageSchemaMu.Unlock()
+	return support
 }
 
 func (p *openCodeFormatProvider) SourcesForChangedPath(
@@ -556,8 +770,28 @@ func (s openCodeFormatSourceSet) discoverStorageEach(
 }
 
 func (s openCodeFormatSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
-	roots := make([]WatchRoot, 0, len(s.roots))
+	roots := make([]WatchRoot, 0, len(s.roots)*2)
 	for _, root := range s.roots {
+		if s.spec.agent == AgentOpenCode {
+			roots = append(roots, WatchRoot{
+				Path: root, Recursive: false,
+				IncludeGlobs: []string{
+					s.spec.dbName, s.spec.dbName + "-wal",
+				},
+				DebounceKey: string(s.spec.agent) + ":sqlite:" + root,
+				CoverageKey: "opencode-sqlite:" + root,
+			})
+			storageRoot := filepath.Join(root, "storage")
+			storageInfo, storageErr := os.Stat(storageRoot)
+			hasStorage := storageErr == nil && storageInfo.IsDir()
+			roots = append(roots, WatchRoot{
+				Path: storageRoot, Recursive: true,
+				NonBlockingProbe: !hasStorage,
+				IncludeGlobs:     []string{"*.json"},
+				DebounceKey:      string(s.spec.agent) + ":storage:" + storageRoot,
+			})
+			continue
+		}
 		for _, watchRoot := range s.spec.watchRoots(root) {
 			roots = append(roots, WatchRoot{
 				Path:      watchRoot,
@@ -631,38 +865,111 @@ func (s openCodeFormatSourceSet) SourceForReconciliation(
 	return SourceRef{}, false, nil
 }
 
-var errOpenCodeCanonicalSourceFound = errors.New("opencode canonical source found")
-
 func (s openCodeFormatSourceSet) canonicalVirtualSource(
-	ctx context.Context, root, virtualPath string,
+	_ context.Context, root, virtualPath string,
 ) (SourceRef, bool, error) {
-	_, sessionID, ok := s.spec.parseVirtual(virtualPath)
-	if !ok {
+	dbPath, sessionID, ok := s.spec.parseVirtual(virtualPath)
+	root = filepath.Clean(root)
+	if !ok || !IsValidSessionID(sessionID) ||
+		!samePath(dbPath, filepath.Join(root, s.spec.dbName)) {
 		return SourceRef{}, false, nil
 	}
-	src := s.spec.resolve(root)
-	if src.Mode == OpenCodeSourceStorage {
-		var found SourceRef
-		err := streamDirectoryEntries(ctx, src.SessionRoot, func(project os.DirEntry) error {
-			if !isDirOrSymlink(project, src.SessionRoot) {
-				return nil
-			}
-			path := filepath.Join(src.SessionRoot, project.Name(), sessionID+".json")
-			if source, ok := s.sourceRef(root, path, false); ok {
-				found = source
-				return errOpenCodeCanonicalSourceFound
-			}
-			return nil
-		})
-		switch {
-		case errors.Is(err, errOpenCodeCanonicalSourceFound):
-			return found, true, nil
-		case ctx.Err() != nil:
-			return SourceRef{}, false, ctx.Err()
+	if source, found := s.sourceForRawID(root, sessionID); found {
+		return source, true, nil
+	}
+	source, found := s.sourceRef(root, virtualPath, false)
+	return source, found, nil
+}
+
+func (s openCodeFormatSourceSet) coverageStorageIndex(ctx context.Context, root string, sessionIDs []string) (map[string]SourceRef, bool, error) {
+	return s.coverageStorageIndexWithMode(ctx, root, sessionIDs, false, s.spec.resolve(root))
+}
+
+func (s openCodeFormatSourceSet) coverageStorageIndexWithMode(
+	ctx context.Context, root string, sessionIDs []string, requireStorage bool, expectedSource OpenCodeSource,
+) (map[string]SourceRef, bool, error) {
+	src := expectedSource
+	if requireStorage {
+		if src.Mode != OpenCodeSourceStorage {
+			return nil, false, fmt.Errorf("%w: OpenCode storage mode changed", ErrProviderCoverageUnavailable)
+		}
+		info, err := os.Stat(src.SessionRoot)
+		if err != nil || !info.IsDir() {
+			return nil, false, fmt.Errorf("%w: OpenCode storage shadow scope %s", ErrProviderCoverageUnavailable, src.SessionRoot)
 		}
 	}
-	source, ok := s.sourceRef(root, virtualPath, false)
-	return source, ok, nil
+	index := make(map[string]SourceRef)
+	wanted := make(map[string]struct{}, len(sessionIDs))
+	for _, id := range sessionIDs {
+		if IsValidSessionID(id) {
+			wanted[id] = struct{}{}
+		}
+	}
+	if len(wanted) == 0 {
+		return index, true, nil
+	}
+	if src.Mode != OpenCodeSourceStorage {
+		return index, true, nil
+	}
+	probes := 0
+	err := streamDirectoryEntries(ctx, src.SessionRoot, func(entry os.DirEntry) error {
+		probes++
+		if probes > openCodeCoverageMaxStorageProbes {
+			return errOpenCodeCoverageStorageBound
+		}
+		if !isDirOrSymlink(entry, src.SessionRoot) {
+			return nil
+		}
+		for id := range wanted {
+			probes++
+			if probes > openCodeCoverageMaxStorageProbes {
+				return errOpenCodeCoverageStorageBound
+			}
+			path := filepath.Join(src.SessionRoot, entry.Name(), id+".json")
+			source, ok := s.sourceRef(root, path, false)
+			if !ok {
+				continue
+			}
+			index[id] = source
+			delete(wanted, id)
+		}
+		if len(wanted) == 0 {
+			return errOpenCodeCoverageStorageDone
+		}
+		return nil
+	})
+	if requireStorage && err == nil {
+		info, statErr := os.Stat(src.SessionRoot)
+		if statErr != nil || !info.IsDir() {
+			return nil, false, fmt.Errorf("%w: OpenCode storage shadow scope %s", ErrProviderCoverageUnavailable, src.SessionRoot)
+		}
+	}
+	switch {
+	case errors.Is(err, errOpenCodeCoverageStorageDone), err == nil:
+		return index, true, nil
+	case errors.Is(err, errOpenCodeCoverageStorageBound):
+		return index, false, nil
+	default:
+		if requireStorage {
+			return nil, false, fmt.Errorf("%w: indexing OpenCode storage shadow scope: %v", ErrProviderCoverageUnavailable, err)
+		}
+		return nil, false, err
+	}
+}
+
+func (s openCodeFormatSourceSet) coverageVirtualSource(
+	root, virtualPath string, storageIndex map[string]SourceRef,
+) (SourceRef, bool) {
+	dbPath, sessionID, ok := s.spec.parseVirtual(virtualPath)
+	root = filepath.Clean(root)
+	if !ok || !IsValidSessionID(sessionID) ||
+		!samePath(dbPath, filepath.Join(root, s.spec.dbName)) {
+		return SourceRef{}, false
+	}
+	if source, shadowed := storageIndex[sessionID]; shadowed {
+		return source, true
+	}
+	return s.sourceRef(root, virtualPath, false)
 }
 
 func (s openCodeFormatSourceSet) FindSource(
@@ -1060,11 +1367,26 @@ func (s openCodeFormatSourceSet) isStorageSessionPath(
 		return false
 	}
 	parts := strings.Split(rel, string(filepath.Separator))
-	return len(parts) == 4 &&
+	validShape := len(parts) == 4 &&
 		parts[0] == "storage" &&
 		parts[1] == filepath.Base(src.SessionRoot) &&
-		strings.HasSuffix(parts[3], ".json") &&
-		(!requireExisting || IsRegularFile(path))
+		strings.HasSuffix(parts[3], ".json")
+	if !validShape || !requireExisting {
+		return validShape
+	}
+	if !IsRegularFile(path) {
+		return false
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(src.SessionRoot)
+	if err != nil {
+		return false
+	}
+	resolvedPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	_, under := relUnder(resolvedRoot, resolvedPath)
+	return under
 }
 
 func readOpenCodeProviderStorageSessionID(path string) string {
@@ -1101,7 +1423,7 @@ func findOpenCodeProviderStorageSessionIDByMessageID(
 	return ""
 }
 
-func openCodeFormatProviderCapabilities() Capabilities {
+func openCodeFormatProviderCapabilities(agent AgentType) Capabilities {
 	return Capabilities{
 		Source: SourceCapabilities{
 			DiscoverSources:       CapabilitySupported,
@@ -1116,6 +1438,12 @@ func openCodeFormatProviderCapabilities() Capabilities {
 			PerSessionErrors:      CapabilityNotApplicable,
 			ExcludedSessions:      CapabilityNotApplicable,
 			ForceReplaceOnParse:   CapabilityNotApplicable,
+			BoundedCoverage: func() CapabilitySupport {
+				if agent == AgentOpenCode {
+					return CapabilitySupported
+				}
+				return CapabilityUnsupported
+			}(),
 		},
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,

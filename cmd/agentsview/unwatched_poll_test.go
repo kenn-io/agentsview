@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -40,6 +41,37 @@ type cancelBlockingUnwatchedPollSyncer struct {
 	started  chan struct{}
 	canceled chan struct{}
 	calls    int
+}
+
+type recordingCoverageSyncer struct {
+	recordingUnwatchedPollSyncer
+	coverageMu sync.Mutex
+	tasks      []parser.CoverageTask
+	started    chan parser.CoverageTask
+	release    chan struct{}
+	result     parser.CoverageResult
+	errors     map[parser.AgentType]error
+}
+
+func (s *recordingCoverageSyncer) ReconcileCoverage(
+	_ context.Context, task parser.CoverageTask,
+) (parser.CoverageResult, error) {
+	s.coverageMu.Lock()
+	s.tasks = append(s.tasks, task)
+	s.coverageMu.Unlock()
+	if s.started != nil {
+		s.started <- task
+	}
+	if s.release != nil {
+		<-s.release
+	}
+	return s.result, s.errors[task.Agent]
+}
+
+func (s *recordingCoverageSyncer) coverageTasks() []parser.CoverageTask {
+	s.coverageMu.Lock()
+	defer s.coverageMu.Unlock()
+	return append([]parser.CoverageTask(nil), s.tasks...)
 }
 
 func (s *cancelBlockingUnwatchedPollSyncer) ReconcileWatchRoots(
@@ -173,6 +205,151 @@ func TestUnwatchedPollTickUsesRootsAddedAfterStart(t *testing.T) {
 		"unwatched polling must reconcile the owned scopes authoritatively")
 }
 
+func TestUnwatchedCoverageDispatchesEveryTypedScopeWithoutGlobalReconciliation(
+	t *testing.T,
+) {
+	root := requireExistingPollRoot(t, t.TempDir(), "shared")
+	syncer := &recordingCoverageSyncer{
+		recordingUnwatchedPollSyncer: recordingUnwatchedPollSyncer{
+			wake: make(chan struct{}, 1),
+		},
+		started: make(chan parser.CoverageTask, 2),
+	}
+	coordinator := newUnwatchedPollCoordinatorWithTicks(
+		t.Context(), syncer, make(chan time.Time), func() {},
+		func(run func()) { run() }, nil,
+	)
+	t.Cleanup(coordinator.Stop)
+	require.NoError(t, coordinator.AddObligation(pollingObligation{
+		Key: "shared", Roots: []string{root}, Probe: root,
+		Scopes: []pollingScope{
+			{Agent: parser.AgentOpenCode, Root: root, CoverageKey: "opencode:" + root},
+			{Agent: parser.AgentClaude, Root: root},
+		},
+	}))
+
+	coordinator.requestPoll()
+	for range 2 {
+		select {
+		case <-syncer.started:
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for typed coverage dispatch")
+		}
+	}
+
+	assert.Empty(t, syncer.snapshot())
+	assert.Equal(t, []parser.CoverageTask{
+		{Agent: parser.AgentOpenCode, CoverageKey: "opencode:" + root,
+			Root: root, Trigger: parser.CoverageTriggerDegraded,
+			AuthoritativeFallback: true},
+		{Agent: parser.AgentClaude, Root: root,
+			Trigger:               parser.CoverageTriggerDegraded,
+			AuthoritativeFallback: true},
+	}, syncer.coverageTasks())
+}
+
+func TestUnwatchedCoverageDeduplicatesTypedScopesAcrossObligations(t *testing.T) {
+	root := requireExistingPollRoot(t, t.TempDir(), "shared")
+	scope := pollingScope{
+		Agent: parser.AgentOpenCode, Root: root,
+		CoverageKey: "opencode-sqlite:" + root,
+	}
+	syncer := &recordingCoverageSyncer{}
+	coordinator := newUnwatchedPollCoordinatorWithTicks(
+		t.Context(), syncer, make(chan time.Time), func() {},
+		func(run func()) { run() }, nil,
+	)
+	t.Cleanup(coordinator.Stop)
+	require.NoError(t, coordinator.AddObligation(pollingObligation{
+		Key: "sqlite", Roots: []string{root}, Probe: root,
+		Scopes: []pollingScope{scope},
+	}))
+	require.NoError(t, coordinator.AddObligation(pollingObligation{
+		Key: "storage", Roots: []string{root}, Probe: root,
+		Scopes: []pollingScope{scope},
+	}))
+
+	coordinator.requestPoll()
+	assert.Eventually(t, func() bool { return len(syncer.coverageTasks()) == 1 },
+		time.Second, 10*time.Millisecond)
+	assert.Never(t, func() bool { return len(syncer.coverageTasks()) > 1 },
+		100*time.Millisecond, 10*time.Millisecond)
+}
+
+func TestUnwatchedCoverageAttemptsIndependentScopesAfterFailures(t *testing.T) {
+	root := requireExistingPollRoot(t, t.TempDir(), "shared")
+	syncer := &recordingCoverageSyncer{
+		started: make(chan parser.CoverageTask, 3),
+		errors: map[parser.AgentType]error{
+			parser.AgentOpenCode: errors.New("opencode failed"),
+			parser.AgentClaude:   errors.New("claude failed"),
+		},
+	}
+	coordinator := newUnwatchedPollCoordinatorWithTicks(
+		t.Context(), syncer, make(chan time.Time), func() {},
+		func(run func()) { run() }, nil,
+	)
+	t.Cleanup(coordinator.Stop)
+	require.NoError(t, coordinator.AddObligation(pollingObligation{
+		Key: "shared", Roots: []string{root}, Probe: root,
+		Scopes: []pollingScope{
+			{Agent: parser.AgentOpenCode, Root: root, CoverageKey: "open"},
+			{Agent: parser.AgentCowork, Root: root},
+			{Agent: parser.AgentClaude, Root: root},
+		},
+	}))
+
+	coordinator.requestPoll()
+	for range 3 {
+		select {
+		case <-syncer.started:
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for independent coverage dispatch")
+		}
+	}
+	assert.Len(t, syncer.coverageTasks(), 3)
+}
+
+func TestUnwatchedCoverageDropsTickerDebtUntilCompletionDelay(t *testing.T) {
+	root := requireExistingPollRoot(t, t.TempDir(), "opencode")
+	ticks := make(chan time.Time, 4)
+	syncer := &recordingCoverageSyncer{
+		started: make(chan parser.CoverageTask, 4),
+		release: make(chan struct{}, 4),
+	}
+	coordinator := newUnwatchedPollCoordinatorWithSchedule(
+		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil,
+		80*time.Millisecond,
+	)
+	t.Cleanup(coordinator.Stop)
+	require.NoError(t, coordinator.AddObligation(pollingObligation{
+		Key: "opencode", Roots: []string{root}, Probe: root,
+		Scopes: []pollingScope{{
+			Agent: parser.AgentOpenCode, Root: root,
+			CoverageKey: "opencode:" + root,
+		}},
+	}))
+
+	ticks <- time.Now()
+	select {
+	case <-syncer.started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first coverage pass")
+	}
+	ticks <- time.Now()
+	syncer.release <- struct{}{}
+	assert.Never(t, func() bool {
+		return len(syncer.coverageTasks()) > 1
+	}, 50*time.Millisecond, 5*time.Millisecond)
+
+	select {
+	case <-syncer.started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for completion-scheduled pass")
+	}
+	syncer.release <- struct{}{}
+}
+
 func TestUnwatchedPollSkipsAbsentObligatedRootUntilItReturns(t *testing.T) {
 	parent := t.TempDir()
 	root := filepath.Join(parent, "provider")
@@ -288,6 +465,136 @@ func TestUnwatchedPollDefersSharedScopeWhileAnyProbeMissing(t *testing.T) {
 	requirePollWithin(t, syncer.wake, time.Second)
 	assert.Equal(t, [][]string{{configured}, {configured}}, syncer.snapshot(),
 		"the shared scope must resume once every probe returns")
+}
+
+func TestTypedUnwatchedPollDefersOverlappingScopeAcrossObligations(t *testing.T) {
+	base := t.TempDir()
+	nested := requireExistingPollRoot(t, base, "nested")
+	missingProbe := filepath.Join(nested, "missing-probe")
+	syncer := &recordingCoverageSyncer{}
+	coordinator := newUnwatchedPollCoordinatorWithTicks(
+		t.Context(), syncer, make(chan time.Time), func() {},
+		func(run func()) { run() }, nil,
+	)
+	t.Cleanup(coordinator.Stop)
+	require.NoError(t, coordinator.AddObligation(pollingObligation{
+		Key: "base", Roots: []string{base}, Probe: base,
+		Scopes: []pollingScope{{Agent: parser.AgentOpenHands, Root: base}},
+	}))
+	require.NoError(t, coordinator.AddObligation(pollingObligation{
+		Key: "nested", Roots: []string{nested}, Probe: missingProbe,
+		Scopes: []pollingScope{{Agent: parser.AgentClaude, Root: nested}},
+	}))
+
+	coordinator.requestPoll()
+	assert.Never(t, func() bool { return len(syncer.coverageTasks()) > 0 },
+		100*time.Millisecond, 10*time.Millisecond,
+		"typed dispatch must retain cross-obligation overlap gating")
+
+	require.NoError(t, os.Mkdir(missingProbe, 0o755))
+	coordinator.requestPoll()
+	assert.Eventually(t, func() bool { return len(syncer.coverageTasks()) == 2 },
+		time.Second, 10*time.Millisecond)
+}
+
+func TestTypedUnwatchedPollSkipsMissingNonBlockingObligation(t *testing.T) {
+	root := t.TempDir()
+	storage := filepath.Join(root, "storage")
+	syncer := &recordingCoverageSyncer{}
+	coordinator := newUnwatchedPollCoordinatorWithTicks(
+		t.Context(), syncer, make(chan time.Time), func() {},
+		func(run func()) { run() }, nil,
+	)
+	t.Cleanup(coordinator.Stop)
+	require.NoError(t, coordinator.AddObligation(pollingObligation{
+		Key: "sqlite", Roots: []string{root}, Probe: root,
+		Scopes: []pollingScope{{
+			Agent: parser.AgentOpenCode, Root: root,
+			CoverageKey: "opencode-sqlite:" + root,
+		}},
+	}))
+	require.NoError(t, coordinator.AddObligation(pollingObligation{
+		Key: "storage", Roots: []string{root}, Probe: storage,
+		NonBlockingProbe: true,
+		Scopes:           []pollingScope{{Agent: parser.AgentOpenCode, Root: root}},
+	}))
+
+	coordinator.requestPoll()
+	assert.Eventually(t, func() bool { return len(syncer.coverageTasks()) == 1 },
+		time.Second, 10*time.Millisecond)
+	assert.Equal(t, "opencode-sqlite:"+root,
+		syncer.coverageTasks()[0].CoverageKey)
+	assert.True(t, syncer.coverageTasks()[0].AuthoritativeFallback,
+		"startup-optional storage must not defer provider-wide fallback")
+	assert.Empty(t, syncer.snapshot())
+
+	require.NoError(t, os.Mkdir(storage, 0o755))
+	coordinator.requestPoll()
+	assert.Eventually(t, func() bool { return len(syncer.coverageTasks()) == 3 },
+		time.Second, 10*time.Millisecond)
+	assert.True(t, syncer.coverageTasks()[1].AuthoritativeFallback)
+	assert.True(t, syncer.coverageTasks()[2].AuthoritativeFallback)
+}
+
+func TestTypedUnwatchedPollRunsKeyedCoverageWithoutFallbackAuthority(t *testing.T) {
+	root := t.TempDir()
+	storage := filepath.Join(root, "storage")
+	syncer := &recordingCoverageSyncer{}
+	coordinator := newUnwatchedPollCoordinatorWithTicks(
+		t.Context(), syncer, make(chan time.Time), func() {},
+		func(run func()) { run() }, nil,
+	)
+	t.Cleanup(coordinator.Stop)
+	require.NoError(t, coordinator.AddObligation(pollingObligation{
+		Key: "sqlite", Roots: []string{root}, Probe: root,
+		Scopes: []pollingScope{{
+			Agent: parser.AgentOpenCode, Root: root,
+			CoverageKey: "opencode-sqlite:" + root,
+		}},
+	}))
+	require.NoError(t, coordinator.AddObligation(pollingObligation{
+		Key: "storage", Roots: []string{root}, Probe: storage,
+		Scopes: []pollingScope{{Agent: parser.AgentOpenCode, Root: root}},
+	}))
+
+	coordinator.requestPoll()
+	assert.Eventually(t, func() bool { return len(syncer.coverageTasks()) == 1 },
+		time.Second, 10*time.Millisecond)
+	task := syncer.coverageTasks()[0]
+	assert.Equal(t, "opencode-sqlite:"+root, task.CoverageKey)
+	assert.False(t, task.AuthoritativeFallback)
+	assert.Empty(t, syncer.snapshot())
+}
+
+func TestTypedUnwatchedPollAllowsSharedGenericFallbackPastOptionalProbe(t *testing.T) {
+	root := t.TempDir()
+	storage := filepath.Join(root, "storage")
+	syncer := &recordingCoverageSyncer{}
+	coordinator := newUnwatchedPollCoordinatorWithTicks(
+		t.Context(), syncer, make(chan time.Time), func() {},
+		func(run func()) { run() }, nil,
+	)
+	t.Cleanup(coordinator.Stop)
+	require.NoError(t, coordinator.AddObligation(pollingObligation{
+		Key: "sqlite", Roots: []string{root}, Probe: root,
+		Scopes: []pollingScope{
+			{Agent: parser.AgentOpenCode, Root: root,
+				CoverageKey: "opencode-sqlite:" + root},
+			{Agent: parser.AgentClaude, Root: root},
+		},
+	}))
+	require.NoError(t, coordinator.AddObligation(pollingObligation{
+		Key: "storage", Roots: []string{root}, Probe: storage,
+		NonBlockingProbe: true,
+		Scopes:           []pollingScope{{Agent: parser.AgentOpenCode, Root: root}},
+	}))
+
+	coordinator.requestPoll()
+	assert.Eventually(t, func() bool { return len(syncer.coverageTasks()) == 2 },
+		time.Second, 10*time.Millisecond)
+	for _, task := range syncer.coverageTasks() {
+		assert.True(t, task.AuthoritativeFallback)
+	}
 }
 
 // TestAvailableUnwatchedPollRootsDefersRootsOverlappingBlockedScopes pins the

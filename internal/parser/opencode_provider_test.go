@@ -389,9 +389,12 @@ func TestOpenCodeProviderStorageSourceMethods(t *testing.T) {
 
 	plan, err := provider.WatchPlan(context.Background())
 	require.NoError(t, err)
-	require.Len(t, plan.Roots, 1)
-	assert.Equal(t, filepath.Join(root, "storage"), plan.Roots[0].Path)
-	assert.True(t, plan.Roots[0].Recursive)
+	require.Len(t, plan.Roots, 2)
+	assert.Equal(t, root, plan.Roots[0].Path)
+	assert.False(t, plan.Roots[0].Recursive)
+	assert.Equal(t, "opencode-sqlite:"+root, plan.Roots[0].CoverageKey)
+	assert.Equal(t, filepath.Join(root, "storage"), plan.Roots[1].Path)
+	assert.True(t, plan.Roots[1].Recursive)
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
@@ -494,12 +497,16 @@ func TestOpenCodeProviderSQLiteSourceMethods(t *testing.T) {
 
 	plan, err := provider.WatchPlan(context.Background())
 	require.NoError(t, err)
-	require.Len(t, plan.Roots, 1)
+	require.Len(t, plan.Roots, 2)
 	assert.Equal(t, root, plan.Roots[0].Path)
-	assert.True(t, plan.Roots[0].Recursive)
+	assert.False(t, plan.Roots[0].Recursive)
 	assert.Equal(t, []string{
-		"*.json", "opencode.db", "opencode.db-wal",
+		"opencode.db", "opencode.db-wal",
 	}, plan.Roots[0].IncludeGlobs)
+	assert.Equal(t, "opencode-sqlite:"+root, plan.Roots[0].CoverageKey,
+		"prospective coverage re-probes compatibility during dispatch")
+	assert.Equal(t, filepath.Join(root, "storage"), plan.Roots[1].Path)
+	assert.True(t, plan.Roots[1].Recursive)
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
@@ -573,6 +580,713 @@ func TestOpenCodeProviderSQLiteSourceMethods(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Empty(t, removed, "removed sqlite DBs have no stateless virtual source list")
+}
+
+func TestOpenCodeProviderWatchPlanCachesJournalCompatibility(t *testing.T) {
+	dbPath, _ := newOpenCodeEventDB(t)
+	root := filepath.Dir(dbPath)
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	for range 2 {
+		plan, err := provider.WatchPlan(t.Context())
+		require.NoError(t, err)
+		require.Len(t, plan.Roots, 2)
+		assert.Equal(t, "opencode-sqlite:"+root, plan.Roots[0].CoverageKey)
+		assert.Equal(t, filepath.Join(root, "storage"), plan.Roots[1].Path)
+		assert.True(t, plan.Roots[1].Recursive)
+	}
+}
+
+func TestOpenCodeProviderProspectiveCoverageActivatesAfterDatabaseCreation(t *testing.T) {
+	root := t.TempDir()
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	feed := provider.(BoundedCoverageProvider)
+	task := CoverageTask{
+		Agent: AgentOpenCode, Root: root,
+		CoverageKey: "opencode-sqlite:" + root,
+		Trigger:     CoverageTriggerDegraded,
+	}
+	plan, err := provider.WatchPlan(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, task.CoverageKey, plan.Roots[0].CoverageKey)
+	missing, err := feed.PollCoverage(t.Context(), task)
+	require.ErrorIs(t, err, ErrProviderCoverageUnavailable)
+	assert.Nil(t, missing.Checkpoint)
+
+	dbPath := filepath.Join(root, "opencode.db")
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = writer.Close() })
+	_, err = writer.Exec(`
+	CREATE TABLE project (id TEXT PRIMARY KEY, worktree TEXT NOT NULL);
+	CREATE TABLE session (
+		id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT,
+		title TEXT, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL
+	);
+	CREATE TABLE event (
+		id TEXT PRIMARY KEY,
+		aggregate_id TEXT NOT NULL,
+		seq INTEGER NOT NULL,
+		type TEXT NOT NULL,
+		data TEXT NOT NULL
+	);
+	INSERT INTO project(id, worktree) VALUES('prj_new', '/tmp/project');
+	INSERT INTO session(id, project_id, title, time_created, time_updated)
+	VALUES('ses_new', 'prj_new', 'New', 1, 2);
+	`)
+	require.NoError(t, err)
+	task.Trigger = CoverageTriggerBaseline
+	baseline, err := feed.PollCoverage(t.Context(), task)
+	require.NoError(t, err)
+	assert.False(t, baseline.AuditRequired)
+	require.NoError(t, feed.CommitCoverage(t.Context(), task, baseline, false))
+	task.Trigger = CoverageTriggerDegraded
+	_, err = writer.Exec(
+		"INSERT INTO event(id, aggregate_id, seq, type, data) VALUES('evt_pending', 'ses_new', 1, 'message.part.updated.1', ?)",
+		partUpdatedPayload("ses_new"),
+	)
+	require.NoError(t, err)
+	changed, err := feed.PollCoverage(t.Context(), task)
+	require.NoError(t, err)
+	checkpoint := changed.Checkpoint.(OpenCodeCoverageState)
+	assert.Equal(t, int64(1), checkpoint.LastRowID)
+	assert.False(t, changed.AuditRequired)
+}
+
+func TestOpenCodeProviderDoesNotCacheTransientJournalProbe(t *testing.T) {
+	dbPath, _ := newOpenCodeEventDB(t)
+	root := filepath.Dir(dbPath)
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	feed := provider.(BoundedCoverageProvider)
+	task := CoverageTask{
+		Agent: AgentOpenCode, Root: root,
+		CoverageKey: "opencode-sqlite:" + root,
+		Trigger:     CoverageTriggerDegraded,
+	}
+	originalProbe := probeOpenCodeCoverageJournalFn
+	t.Cleanup(func() { probeOpenCodeCoverageJournalFn = originalProbe })
+	calls := 0
+	probeOpenCodeCoverageJournalFn = func(
+		context.Context, string,
+	) openCodeCoverageJournalSupport {
+		calls++
+		if calls == 1 {
+			return openCodeCoverageJournalUnknown
+		}
+		return openCodeCoverageJournalSupported
+	}
+
+	unknown, err := feed.PollCoverage(t.Context(), task)
+	require.ErrorIs(t, err, ErrProviderCoverageUnavailable)
+	assert.Nil(t, unknown.Checkpoint)
+	task.Trigger = CoverageTriggerBaseline
+	supported, err := feed.PollCoverage(t.Context(), task)
+	require.NoError(t, err)
+	assert.False(t, supported.AuditRequired)
+	assert.Equal(t, 2, calls)
+}
+
+func TestOpenCodeProviderCoverageCheckpointSlicesAreIsolated(t *testing.T) {
+	dbPath, writer := newOpenCodeEventDB(t)
+	root := filepath.Dir(dbPath)
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	feed := provider.(BoundedCoverageProvider)
+	task := CoverageTask{
+		Agent: AgentOpenCode, Root: root,
+		CoverageKey: "opencode-sqlite:" + root,
+		Trigger:     CoverageTriggerBaseline,
+	}
+	baseline, err := feed.PollCoverage(t.Context(), task)
+	require.NoError(t, err)
+	require.NoError(t, feed.CommitCoverage(t.Context(), task, baseline, false))
+	impl := provider.(*openCodeFormatProvider)
+	impl.coverage[task.CoverageKey] = cloneOpenCodeCoverageState(
+		baseline.Checkpoint.(OpenCodeCoverageState),
+	)
+	impl.coverage[task.CoverageKey] = func() OpenCodeCoverageState {
+		state := impl.coverage[task.CoverageKey]
+		state.PendingIDs = []string{"ses_changed"}
+		return state
+	}()
+	_, err = writer.Exec(`
+		CREATE TABLE project (id TEXT PRIMARY KEY, worktree TEXT NOT NULL);
+		CREATE TABLE session (
+			id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT,
+			title TEXT, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL
+		);
+		INSERT INTO project(id, worktree) VALUES('prj_changed', '/tmp/project');
+		INSERT INTO session(id, project_id, title, time_created, time_updated)
+		VALUES('ses_changed', 'prj_changed', 'Changed', 1, 2);
+	`)
+	require.NoError(t, err)
+	_, err = writer.Exec(
+		"INSERT INTO event(id, aggregate_id, seq, type, data) VALUES('evt_changed', 'ses_changed', 1, 'session.updated.1', ?)",
+		sessionUpdatedPayload("ses_changed"),
+	)
+	require.NoError(t, err)
+	task.Trigger = CoverageTriggerDegraded
+	task.AuthoritativeFallback = true
+	result, err := feed.PollCoverage(t.Context(), task)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ses_changed"}, impl.coverage[task.CoverageKey].PendingIDs)
+	require.NoError(t, feed.CommitCoverage(t.Context(), task, result, false))
+	checkpoint := result.Checkpoint.(OpenCodeCoverageState)
+	checkpoint.ReadyIDs = append(checkpoint.ReadyIDs, "mutated")
+	assert.NotContains(t, impl.coverage[task.CoverageKey].ReadyIDs, "mutated")
+}
+
+func TestOpenCodeProviderFirstNativeChangeRequestsAudit(t *testing.T) {
+	dbPath, _ := newOpenCodeEventDB(t)
+	root := filepath.Dir(dbPath)
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	result, err := provider.(BoundedCoverageProvider).PollCoverage(
+		t.Context(), CoverageTask{
+			Agent: AgentOpenCode, Root: root,
+			CoverageKey: "opencode-sqlite:" + root,
+			Trigger:     CoverageTriggerNative, ChangedPaths: []string{dbPath},
+		},
+	)
+	require.NoError(t, err)
+	assert.True(t, result.AuditRequired)
+}
+
+func TestOpenCodeProviderNativeCoverageIgnoresNonDataSidecars(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		suffix string
+		size   int
+	}{
+		{name: "missing WAL", suffix: "-wal"},
+		{name: "header-only WAL", suffix: "-wal", size: int(sqliteWALHeaderSize)},
+		{name: "SHM", suffix: "-shm", size: 32 * 1024},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "opencode.db") + tc.suffix
+			if tc.size > 0 {
+				require.NoError(t, os.WriteFile(path, make([]byte, tc.size), 0o600))
+			}
+			provider, ok := NewProvider(
+				AgentOpenCode, ProviderConfig{Roots: []string{root}},
+			)
+			require.True(t, ok)
+
+			result, err := provider.(BoundedCoverageProvider).PollCoverage(
+				t.Context(), CoverageTask{
+					Agent: AgentOpenCode, Root: root,
+					CoverageKey: "opencode-sqlite:" + root,
+					Trigger:     CoverageTriggerNative, ChangedPaths: []string{path},
+				},
+			)
+			require.NoError(t, err)
+			assert.False(t, result.AuditRequired)
+			assert.Empty(t, result.Sources)
+			assert.Empty(t, result.Removed)
+			checkpoint := result.Checkpoint.(OpenCodeCoverageState)
+			assert.Equal(t, uint64(1), checkpoint.Generation)
+		})
+	}
+}
+
+func TestOpenCodeProviderNativeCoverageProcessesFramedWAL(t *testing.T) {
+	dbPath, writer := newOpenCodeEventDB(t)
+	root := filepath.Dir(dbPath)
+	var journalMode string
+	require.NoError(t, writer.QueryRow("PRAGMA journal_mode=WAL").Scan(&journalMode))
+	require.Equal(t, "wal", journalMode)
+	_, err := writer.Exec("PRAGMA wal_autocheckpoint=0")
+	require.NoError(t, err)
+	_, err = writer.Exec(
+		"INSERT INTO event(id, aggregate_id, seq, type, data) VALUES('evt_wal', 'ses_wal', 1, 'session.updated.1', ?)",
+		sessionUpdatedPayload("ses_wal"),
+	)
+	require.NoError(t, err)
+	walPath := dbPath + "-wal"
+	walInfo, err := os.Stat(walPath)
+	require.NoError(t, err)
+	require.Greater(t, walInfo.Size(), sqliteWALHeaderSize)
+	provider, ok := NewProvider(
+		AgentOpenCode, ProviderConfig{Roots: []string{root}},
+	)
+	require.True(t, ok)
+
+	result, err := provider.(BoundedCoverageProvider).PollCoverage(
+		t.Context(), CoverageTask{
+			Agent: AgentOpenCode, Root: root,
+			CoverageKey: "opencode-sqlite:" + root,
+			Trigger:     CoverageTriggerNative, ChangedPaths: []string{walPath},
+		},
+	)
+	require.NoError(t, err)
+	assert.True(t, result.AuditRequired)
+}
+
+func TestOpenCodeProviderUnprimedDegradedPollRequestsAudit(t *testing.T) {
+	dbPath, _ := newOpenCodeEventDB(t)
+	root := filepath.Dir(dbPath)
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	result, err := provider.(BoundedCoverageProvider).PollCoverage(
+		t.Context(), CoverageTask{
+			Agent: AgentOpenCode, Root: root,
+			CoverageKey: "opencode-sqlite:" + root,
+			Trigger:     CoverageTriggerDegraded,
+		},
+	)
+	require.NoError(t, err)
+	assert.True(t, result.AuditRequired)
+}
+
+func TestOpenCodeProviderRevalidatesJournalAfterContainerReplacement(t *testing.T) {
+	dbPath, writer := newOpenCodeEventDB(t)
+	root := filepath.Dir(dbPath)
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	plan, err := provider.WatchPlan(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, "opencode-sqlite:"+root, plan.Roots[0].CoverageKey)
+	require.NoError(t, writer.Close())
+
+	replacement := dbPath + ".replacement"
+	replacementDB, err := sql.Open("sqlite3", replacement)
+	require.NoError(t, err)
+	_, err = replacementDB.Exec(
+		"CREATE TABLE event(id TEXT PRIMARY KEY); CREATE TABLE padding(value BLOB); INSERT INTO padding VALUES(zeroblob(8192))",
+	)
+	require.NoError(t, err)
+	require.NoError(t, replacementDB.Close())
+	require.NoError(t, os.Remove(dbPath))
+	require.NoError(t, os.Rename(replacement, dbPath))
+
+	plan, err = provider.WatchPlan(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "opencode-sqlite:"+root, plan.Roots[0].CoverageKey)
+	_, err = provider.(BoundedCoverageProvider).PollCoverage(
+		t.Context(), CoverageTask{
+			Agent: AgentOpenCode, Root: root,
+			CoverageKey: "opencode-sqlite:" + root,
+			Trigger:     CoverageTriggerDegraded,
+		},
+	)
+	require.ErrorIs(t, err, ErrUnsupportedProviderFeature)
+}
+
+func TestOpenCodeProviderCoverageResolvesOneSettledSession(t *testing.T) {
+	dbPath, seeder, writer := newTestDB(t)
+	defer writer.Close()
+	seeder.AddProject("prj_coverage", t.TempDir())
+	seeder.AddSession(
+		"ses_coverage", "prj_coverage", "", "Coverage",
+		1700000000000, 1700000010000,
+	)
+	_, err := writer.Exec(`CREATE TABLE event (
+		id TEXT PRIMARY KEY,
+		aggregate_id TEXT NOT NULL,
+		seq INTEGER NOT NULL,
+		type TEXT NOT NULL,
+		data TEXT NOT NULL
+	)`)
+	require.NoError(t, err)
+	root := filepath.Dir(dbPath)
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	feed := provider.(BoundedCoverageProvider)
+	task := CoverageTask{
+		Agent: AgentOpenCode, Root: root,
+		CoverageKey: "opencode-sqlite:" + root,
+		Trigger:     CoverageTriggerBaseline,
+	}
+	baseline, err := feed.PollCoverage(t.Context(), task)
+	require.NoError(t, err)
+	assert.Empty(t, baseline.Sources)
+	assert.False(t, baseline.AuditRequired)
+	require.NoError(t, feed.CommitCoverage(t.Context(), task, baseline, false))
+	task.Trigger = CoverageTriggerDegraded
+	task.AuthoritativeFallback = true
+	_, err = writer.Exec(
+		"INSERT INTO event(id, aggregate_id, seq, type, data) VALUES('evt_0001', 'ses_coverage', 1, 'session.updated.1', ?)",
+		`{"sessionID":"ses_coverage","info":{"id":"ses_coverage","projectID":"prj_coverage"}}`,
+	)
+	require.NoError(t, err)
+
+	result, err := feed.PollCoverage(t.Context(), task)
+	require.NoError(t, err)
+	require.Len(t, result.Sources, 1)
+	assert.Equal(t, OpenCodeSQLiteVirtualPath(dbPath, "ses_coverage"),
+		result.Sources[0].DisplayPath)
+	require.NoError(t, feed.CommitCoverage(t.Context(), task, result, false))
+
+	storagePath := writeOpenCodeProviderStorageSession(
+		t, root, "session", "ses_coverage", "prj_coverage", "Coverage",
+	)
+	unexpectedProjectDir := filepath.Join(
+		root, "storage", "session", "unexpected-project",
+	)
+	require.NoError(t, os.MkdirAll(unexpectedProjectDir, 0o755))
+	unexpectedStoragePath := filepath.Join(
+		unexpectedProjectDir, "ses_coverage.json",
+	)
+	require.NoError(t, os.Rename(storagePath, unexpectedStoragePath))
+	storagePath = unexpectedStoragePath
+	_, err = provider.Discover(t.Context())
+	require.NoError(t, err)
+	_, err = writer.Exec(
+		"INSERT INTO event(id, aggregate_id, seq, type, data) VALUES('evt_0002', 'ses_coverage', 2, 'session.updated.1', ?)",
+		`{"sessionID":"ses_coverage","info":{"id":"ses_coverage","projectID":"prj_coverage"}}`,
+	)
+	require.NoError(t, err)
+	transitioned, err := feed.PollCoverage(t.Context(), task)
+	require.NoError(t, err)
+	require.Len(t, transitioned.Sources, 1)
+	assert.Equal(t, storagePath, transitioned.Sources[0].DisplayPath)
+	require.NoError(t, feed.CommitCoverage(t.Context(), task, transitioned, false))
+
+	_, err = writer.Exec(
+		"INSERT INTO event(id, aggregate_id, seq, type, data) VALUES('evt_0003', 'ses_coverage', 3, 'future.event.1', '{}')",
+	)
+	require.NoError(t, err)
+	audit, err := feed.PollCoverage(t.Context(), task)
+	require.NoError(t, err)
+	assert.True(t, audit.AuditRequired)
+	retriedAudit, err := feed.PollCoverage(t.Context(), task)
+	require.NoError(t, err)
+	assert.True(t, retriedAudit.AuditRequired)
+	_, err = writer.Exec(
+		"INSERT INTO event(id, aggregate_id, seq, type, data) VALUES('evt_0004', 'ses_coverage', 4, 'session.updated.1', ?)",
+		`{"sessionID":"ses_coverage","info":{"id":"ses_coverage","projectID":"prj_coverage"}}`,
+	)
+	require.NoError(t, err)
+	require.NoError(t, feed.CommitCoverage(t.Context(), task, audit, true))
+	recovered, err := feed.PollCoverage(t.Context(), task)
+	require.NoError(t, err)
+	require.Len(t, recovered.Sources, 1)
+}
+
+func TestOpenCodeProviderCoverageDefersMissingStorageShadowScope(t *testing.T) {
+	root := t.TempDir()
+	_, seeder, writer := newTestDBAt(
+		t, filepath.Join(root, "opencode.db"),
+	)
+	t.Cleanup(func() { require.NoError(t, writer.Close()) })
+	seeder.AddProject("proj", t.TempDir())
+	seeder.AddSession(
+		"ses_deferred", "proj", "", "Deferred",
+		1700000000000, 1700000010000,
+	)
+	_, err := writer.Exec(`CREATE TABLE event (
+		id TEXT PRIMARY KEY,
+		aggregate_id TEXT NOT NULL,
+		seq INTEGER NOT NULL,
+		type TEXT NOT NULL,
+		data TEXT NOT NULL
+	)`)
+	require.NoError(t, err)
+	writeOpenCodeProviderStorageSession(
+		t, root, "session", "ses_deferred", "storage", "Deferred",
+	)
+	provider, ok := NewProvider(
+		AgentOpenCode, ProviderConfig{Roots: []string{root}},
+	)
+	require.True(t, ok)
+	feed := provider.(BoundedCoverageProvider)
+	task := CoverageTask{
+		Agent: AgentOpenCode, Root: root,
+		CoverageKey: "opencode-sqlite:" + root,
+		Trigger:     CoverageTriggerBaseline,
+	}
+	baseline, err := feed.PollCoverage(t.Context(), task)
+	require.NoError(t, err)
+	require.NoError(t, feed.CommitCoverage(t.Context(), task, baseline, false))
+	require.NoError(t, os.RemoveAll(filepath.Join(root, "storage")))
+	_, err = writer.Exec(
+		"INSERT INTO event(id, aggregate_id, seq, type, data) VALUES('evt_deferred', 'ses_deferred', 1, 'session.updated.1', ?)",
+		sessionUpdatedPayload("ses_deferred"),
+	)
+	require.NoError(t, err)
+	task.Trigger = CoverageTriggerDegraded
+	task.AuthoritativeFallback = false
+
+	_, err = feed.PollCoverage(t.Context(), task)
+	require.ErrorIs(t, err, ErrProviderCoverageUnavailable)
+	storagePath := writeOpenCodeProviderStorageSession(
+		t, root, "session", "ses_deferred", "storage", "Deferred",
+	)
+	task.AuthoritativeFallback = true
+	retried, err := feed.PollCoverage(t.Context(), task)
+	require.NoError(t, err)
+	require.Len(t, retried.Sources, 1)
+	assert.Equal(t, storagePath, retried.Sources[0].DisplayPath)
+	assert.Empty(t, retried.Removed)
+}
+
+func TestOpenCodeProviderCoverageContinuationRequiresStorageBeforeCheckpoint(t *testing.T) {
+	root := t.TempDir()
+	_, seeder, writer := newTestDBAt(t, filepath.Join(root, "opencode.db"))
+	t.Cleanup(func() { require.NoError(t, writer.Close()) })
+	seeder.AddProject("proj", t.TempDir())
+	seeder.AddSession("ses_cont", "proj", "", "Continuation", 1700000000000, 1700000010000)
+	_, err := writer.Exec(`CREATE TABLE event (id TEXT PRIMARY KEY, aggregate_id TEXT NOT NULL, seq INTEGER NOT NULL, type TEXT NOT NULL, data TEXT NOT NULL)`)
+	require.NoError(t, err)
+	writeOpenCodeProviderStorageSession(t, root, "session", "ses_cont", "storage", "Continuation")
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	feed := provider.(BoundedCoverageProvider)
+	task := CoverageTask{Agent: AgentOpenCode, Root: root, CoverageKey: "opencode-sqlite:" + root, Trigger: CoverageTriggerBaseline}
+	baseline, err := feed.PollCoverage(t.Context(), task)
+	require.NoError(t, err)
+	require.NoError(t, feed.CommitCoverage(t.Context(), task, baseline, false))
+	for i := 0; i < OpenCodeCoverageMaxRows+1; i++ {
+		_, err = writer.Exec("INSERT INTO event(id, aggregate_id, seq, type, data) VALUES(?, 'ses_cont', ?, 'session.updated.1', ?)", fmt.Sprintf("evt_cont_%03d", i), i+1, sessionUpdatedPayload("ses_cont"))
+		require.NoError(t, err)
+	}
+	require.NoError(t, os.RemoveAll(filepath.Join(root, "storage")))
+	task.Trigger = CoverageTriggerDegraded
+	_, err = feed.PollCoverage(t.Context(), task)
+	require.ErrorIs(t, err, ErrProviderCoverageUnavailable)
+	writeOpenCodeProviderStorageSession(t, root, "session", "ses_cont", "storage", "Continuation")
+	retried, err := feed.PollCoverage(t.Context(), task)
+	require.NoError(t, err)
+	assert.True(t, retried.More || len(retried.Sources) > 0)
+}
+
+func TestOpenCodeProviderCoverageDefersStorageDisappearanceDuringIndex(t *testing.T) {
+	root := t.TempDir()
+	_, seeder, writer := newTestDBAt(t, filepath.Join(root, "opencode.db"))
+	t.Cleanup(func() { require.NoError(t, writer.Close()) })
+	seeder.AddProject("proj", t.TempDir())
+	seeder.AddSession("ses_race", "proj", "", "Race", 1700000000000, 1700000010000)
+	_, err := writer.Exec(`CREATE TABLE event (id TEXT PRIMARY KEY, aggregate_id TEXT NOT NULL, seq INTEGER NOT NULL, type TEXT NOT NULL, data TEXT NOT NULL)`)
+	require.NoError(t, err)
+	writeOpenCodeProviderStorageSession(t, root, "session", "ses_race", "storage", "Race")
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	feed := provider.(BoundedCoverageProvider)
+	task := CoverageTask{Agent: AgentOpenCode, Root: root, CoverageKey: "opencode-sqlite:" + root, Trigger: CoverageTriggerBaseline}
+	baseline, err := feed.PollCoverage(t.Context(), task)
+	require.NoError(t, err)
+	require.NoError(t, feed.CommitCoverage(t.Context(), task, baseline, false))
+	_, err = writer.Exec("INSERT INTO event(id, aggregate_id, seq, type, data) VALUES('evt_race', 'ses_race', 1, 'session.updated.1', ?)", sessionUpdatedPayload("ses_race"))
+	require.NoError(t, err)
+	task.Trigger = CoverageTriggerDegraded
+	storageRoot := filepath.Join(root, "storage")
+	sessionRoot := filepath.Join(storageRoot, "session")
+	ctx := withStreamingDirectoryReader(t.Context(), func(ctx context.Context, dir string, yield func(os.DirEntry) error) error {
+		if samePath(dir, sessionRoot) {
+			require.NoError(t, os.RemoveAll(storageRoot))
+		}
+		return streamDirectoryEntriesDirect(ctx, dir, yield)
+	})
+
+	_, err = feed.PollCoverage(ctx, task)
+	require.ErrorIs(t, err, ErrProviderCoverageUnavailable)
+	storagePath := writeOpenCodeProviderStorageSession(t, root, "session", "ses_race", "storage", "Race")
+	retried, err := feed.PollCoverage(t.Context(), task)
+	require.NoError(t, err)
+	require.Len(t, retried.Sources, 1)
+	assert.Equal(t, storagePath, retried.Sources[0].DisplayPath)
+}
+
+func TestOpenCodeProviderCoverageRejectsDatabasePathComponents(t *testing.T) {
+	root := t.TempDir()
+	dbPath, seeder, writer := newTestDBAt(
+		t, filepath.Join(root, "opencode.db"),
+	)
+	t.Cleanup(func() { require.NoError(t, writer.Close()) })
+	seeder.AddProject("..", t.TempDir())
+	seeder.AddSession(
+		"ses_safe", "..", "", "Coverage",
+		1700000000000, 1700000010000,
+	)
+	_, err := writer.Exec(`CREATE TABLE event (
+		id TEXT PRIMARY KEY,
+		aggregate_id TEXT NOT NULL,
+		seq INTEGER NOT NULL,
+		type TEXT NOT NULL,
+		data TEXT NOT NULL
+	)`)
+	require.NoError(t, err)
+	escapedPath := filepath.Join(root, "storage", "ses_safe.json")
+	writeOpenCodeStorageFile(t, escapedPath, map[string]any{
+		"id": "ses_safe", "directory": "/home/user/code/escaped",
+	})
+	provider, ok := NewProvider(
+		AgentOpenCode, ProviderConfig{Roots: []string{root}},
+	)
+	require.True(t, ok)
+	_, err = provider.Discover(t.Context())
+	require.NoError(t, err)
+	feed := provider.(BoundedCoverageProvider)
+	task := CoverageTask{
+		Agent: AgentOpenCode, Root: root,
+		CoverageKey: "opencode-sqlite:" + root,
+		Trigger:     CoverageTriggerBaseline,
+	}
+	baseline, err := feed.PollCoverage(t.Context(), task)
+	require.NoError(t, err)
+	require.NoError(t, feed.CommitCoverage(t.Context(), task, baseline, false))
+	_, err = writer.Exec(
+		"INSERT INTO event(id, aggregate_id, seq, type, data) VALUES('evt_safe', 'ses_safe', 1, 'session.updated.1', ?)",
+		`{"sessionID":"ses_safe","info":{"id":"ses_safe","projectID":".."}}`,
+	)
+	require.NoError(t, err)
+	task.Trigger = CoverageTriggerDegraded
+	task.AuthoritativeFallback = true
+
+	result, err := feed.PollCoverage(t.Context(), task)
+	require.NoError(t, err)
+	require.Len(t, result.Sources, 1)
+	assert.Equal(t,
+		OpenCodeSQLiteVirtualPath(dbPath, "ses_safe"),
+		result.Sources[0].DisplayPath,
+	)
+}
+
+func TestOpenCodeProviderCoverageRejectsEscapedStorageSymlink(t *testing.T) {
+	root := t.TempDir()
+	dbPath, seeder, writer := newTestDBAt(
+		t, filepath.Join(root, "opencode.db"),
+	)
+	t.Cleanup(func() { require.NoError(t, writer.Close()) })
+	seeder.AddProject("linked", t.TempDir())
+	seeder.AddSession(
+		"ses_safe", "linked", "", "Coverage",
+		1700000000000, 1700000010000,
+	)
+	_, err := writer.Exec(`CREATE TABLE event (
+		id TEXT PRIMARY KEY,
+		aggregate_id TEXT NOT NULL,
+		seq INTEGER NOT NULL,
+		type TEXT NOT NULL,
+		data TEXT NOT NULL
+	)`)
+	require.NoError(t, err)
+	outside := t.TempDir()
+	writeOpenCodeStorageFile(t,
+		filepath.Join(outside, "ses_safe.json"),
+		map[string]any{"id": "ses_safe", "directory": "/outside"},
+	)
+	sessionRoot := filepath.Join(root, "storage", "session")
+	require.NoError(t, os.MkdirAll(sessionRoot, 0o755))
+	if err := os.Symlink(outside, filepath.Join(sessionRoot, "linked")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	provider, ok := NewProvider(
+		AgentOpenCode, ProviderConfig{Roots: []string{root}},
+	)
+	require.True(t, ok)
+	_, err = provider.Discover(t.Context())
+	require.NoError(t, err)
+	feed := provider.(BoundedCoverageProvider)
+	task := CoverageTask{
+		Agent: AgentOpenCode, Root: root,
+		CoverageKey: "opencode-sqlite:" + root,
+		Trigger:     CoverageTriggerBaseline,
+	}
+	baseline, err := feed.PollCoverage(t.Context(), task)
+	require.NoError(t, err)
+	require.NoError(t, feed.CommitCoverage(t.Context(), task, baseline, false))
+	_, err = writer.Exec(
+		"INSERT INTO event(id, aggregate_id, seq, type, data) VALUES('evt_safe', 'ses_safe', 1, 'session.updated.1', ?)",
+		`{"sessionID":"ses_safe","info":{"id":"ses_safe","projectID":"linked"}}`,
+	)
+	require.NoError(t, err)
+	task.Trigger = CoverageTriggerDegraded
+
+	result, err := feed.PollCoverage(t.Context(), task)
+	require.NoError(t, err)
+	require.Len(t, result.Sources, 1)
+	assert.Equal(t,
+		OpenCodeSQLiteVirtualPath(dbPath, "ses_safe"),
+		result.Sources[0].DisplayPath,
+	)
+}
+
+func TestOpenCodeCoverageStorageIndexHasFixedProbeBound(t *testing.T) {
+	root := t.TempDir()
+	sessionRoot := filepath.Join(root, "storage", "session")
+	require.NoError(t, os.MkdirAll(sessionRoot, 0o755))
+	for i := 0; i <= openCodeCoverageMaxStorageProbes/2; i++ {
+		require.NoError(t, os.Mkdir(
+			filepath.Join(sessionRoot, fmt.Sprintf("project-%04d", i)),
+			0o755,
+		))
+	}
+	sources := newOpenCodeFormatSourceSet(
+		[]string{root}, openCodeProviderSpecForAgent(AgentOpenCode),
+	)
+
+	index, complete, err := sources.coverageStorageIndex(
+		t.Context(), root, []string{"missing-session"},
+	)
+	require.NoError(t, err)
+	assert.False(t, complete)
+	assert.Empty(t, index)
+}
+
+func TestOpenCodeProviderCoverageAcknowledgesReplacementAudit(t *testing.T) {
+	dbPath, writer := newOpenCodeEventDB(t)
+	insertOpenCodeEvents(t, writer, 1, 1)
+	root := filepath.Dir(dbPath)
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	feed := provider.(BoundedCoverageProvider)
+	task := CoverageTask{
+		Agent: AgentOpenCode, Root: root,
+		CoverageKey: "opencode-sqlite:" + root,
+		Trigger:     CoverageTriggerBaseline,
+	}
+	baseline, err := feed.PollCoverage(t.Context(), task)
+	require.NoError(t, err)
+	require.False(t, baseline.AuditRequired)
+	require.NoError(t, feed.CommitCoverage(t.Context(), task, baseline, false))
+	task.Trigger = CoverageTriggerDegraded
+	require.NoError(t, writer.Close())
+	replaceOpenCodeEventDBPreservingEndpoint(t, dbPath, "ses_replaced")
+
+	replacement, err := feed.PollCoverage(t.Context(), task)
+	require.NoError(t, err)
+	require.True(t, replacement.AuditRequired)
+	require.NoError(t, feed.CommitCoverage(t.Context(), task, replacement, true))
+
+	idle, err := feed.PollCoverage(t.Context(), task)
+	require.NoError(t, err)
+	assert.False(t, idle.AuditRequired)
+	assert.Empty(t, idle.Sources)
+}
+
+func TestOpenCodeProviderCoverageRejectsStorageScope(t *testing.T) {
+	root := t.TempDir()
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	feed := provider.(BoundedCoverageProvider)
+
+	_, err := feed.PollCoverage(t.Context(), CoverageTask{
+		Agent: AgentOpenCode, Root: root, Trigger: CoverageTriggerDegraded,
+	})
+	require.ErrorIs(t, err, ErrUnsupportedProviderFeature)
+}
+
+func TestOpenCodeProviderCoverageNormalizesTaskRoot(t *testing.T) {
+	dbPath, _ := newOpenCodeEventDB(t)
+	root := filepath.Dir(dbPath)
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	feed := provider.(BoundedCoverageProvider)
+
+	result, err := feed.PollCoverage(t.Context(), CoverageTask{
+		Agent: AgentOpenCode, Root: root + string(filepath.Separator),
+		CoverageKey: "opencode-sqlite:" + root,
+		Trigger:     CoverageTriggerBaseline,
+	})
+	require.NoError(t, err)
+	assert.False(t, result.AuditRequired)
 }
 
 func TestOpenCodeProviderIgnoresNonDataSQLiteSidecars(t *testing.T) {

@@ -195,7 +195,7 @@ func runSyncWorkerStartup(
 		var stats sync.SyncStats
 		var tombstoned int
 		var auditErr error
-		if auditRoots := reconcileRootPaths(cfg); len(auditRoots) > 0 {
+		if auditRoots := reconcileRootPathsWithOwner(cfg, engine); len(auditRoots) > 0 {
 			stats, tombstoned, auditErr = engine.ReconcileWatchRootsWithStats(
 				ctx, auditRoots, false,
 			)

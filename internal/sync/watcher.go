@@ -58,11 +58,21 @@ type WatchRename struct {
 // reconciliation so freshness shortcuts can be invalidated only when needed.
 type WatchBatch struct {
 	Paths           []string
+	Coverage        []WatchCoverage
 	Renames         []WatchRename
 	ReconcileRoots  []string
 	FullSync        bool
 	LostEvents      bool
 	lifecycleTokens []backendLifecycleToken
+}
+
+type WatchCoverage struct {
+	Agent                 string
+	Root                  string
+	CoverageKey           string
+	AuthoritativeFallback bool
+	Paths                 []string
+	ConsumePath           bool
 }
 
 type WatchCallback func(context.Context, WatchBatch) error
@@ -79,7 +89,9 @@ type PollingObligation struct {
 	// authoritatively reconcile a present <root> while the missing physical
 	// subtree holds every session, tombstoning all of them. Empty means the
 	// Roots themselves are the physical paths to probe.
-	Probe string
+	Probe            string
+	NonBlockingProbe bool
+	Scopes           []WatchScope
 }
 
 // WatcherOptions configures runtime ownership handoffs that are not needed by
@@ -90,10 +102,9 @@ type WatcherOptions struct {
 	OnPollingReleased  func(string) error
 }
 
-// WatchRetryError carries the authoritative reconciliation scope selected by a
-// callback after it classifies a batch. The watcher consumes only FullSync and
-// ReconcileRoots from WatchRetryBatch; ordinary paths and rename metadata are
-// never replayed through this protocol.
+// WatchRetryError carries the bounded work selected by a callback after it
+// classifies a batch. The watcher retains paths, renames, and reconciliation
+// scope so failures before rename handling cannot discard authoritative work.
 type WatchRetryError interface {
 	error
 	WatchRetryBatch() WatchBatch
@@ -1210,11 +1221,12 @@ func callbackRetryBatch(err error) (WatchBatch, bool) {
 	if retry.FullSync {
 		return WatchBatch{FullSync: true, LostEvents: retry.LostEvents}, true
 	}
-	if len(retry.Paths) == 0 && len(retry.ReconcileRoots) == 0 {
+	if len(retry.Paths) == 0 && len(retry.ReconcileRoots) == 0 && len(retry.Renames) == 0 {
 		return WatchBatch{}, false
 	}
 	return WatchBatch{
 		Paths:          append([]string(nil), retry.Paths...),
+		Renames:        append([]WatchRename(nil), retry.Renames...),
 		ReconcileRoots: append([]string(nil), retry.ReconcileRoots...),
 		LostEvents:     retry.LostEvents,
 	}, true
@@ -1229,6 +1241,9 @@ func retainWatchRetry(pending *pendingWatchBatch, retry WatchBatch) {
 		}
 		for _, root := range retry.ReconcileRoots {
 			pending.AddReconcileRoot(root)
+		}
+		for _, rename := range retry.Renames {
+			pending.AddRename(rename)
 		}
 	}
 	pending.lostEvents = pending.lostEvents || retry.LostEvents

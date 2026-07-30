@@ -408,6 +408,9 @@ type Engine struct {
 	reconciliationMu           gosync.RWMutex
 	lastReconciliation         ReconciliationResult
 	reconciliationSpoolFactory func(string) (reconciliationSpoolStore, error)
+	coverageMu                 gosync.Mutex
+	coverageProviders          map[string]parser.Provider
+	coverageLocks              map[string]*gosync.Mutex
 }
 
 // ReconciliationResult is the structured acknowledgement for the most recent
@@ -839,6 +842,20 @@ func (e *Engine) SyncPaths(paths []string) {
 	_ = e.SyncPathsContext(context.Background(), paths)
 }
 
+type excludedProviderContextKey struct{}
+
+func (e *Engine) SyncPathsExcludingProvidersContext(
+	ctx context.Context, paths []string, agents []parser.AgentType,
+) error {
+	excluded := make(map[parser.AgentType]struct{}, len(agents))
+	for _, agent := range agents {
+		excluded[agent] = struct{}{}
+	}
+	return e.SyncPathsContext(
+		context.WithValue(ctx, excludedProviderContextKey{}, excluded), paths,
+	)
+}
+
 // SyncPathsContext is SyncPaths with caller-controlled cancellation. The
 // file watcher threads the serve shutdown context through here: its stop
 // path waits for the in-flight onChange callback, so a watcher-driven sync
@@ -1027,6 +1044,11 @@ func (e *Engine) classifyProviderChangedPath(
 	})
 
 	for _, agentType := range agents {
+		if excluded, _ := ctx.Value(excludedProviderContextKey{}).(map[parser.AgentType]struct{}); excluded != nil {
+			if _, skip := excluded[agentType]; skip {
+				continue
+			}
+		}
 		mode := e.providerMigrationModes[agentType]
 		switch mode {
 		case parser.ProviderMigrationProviderAuthoritative:
@@ -3172,6 +3194,264 @@ func (e *Engine) ReconcileProviderRoots(
 	}
 	_, _, err := e.reconcileScopedWatchRoots(ctx, agent, roots, false, false)
 	return err
+}
+
+// coverageProvider returns the stateful provider for one coverage identity.
+func (e *Engine) coverageProvider(task parser.CoverageTask) (parser.Provider, error) {
+	factory := e.providerFactories[task.Agent]
+	if factory == nil {
+		return nil, fmt.Errorf("provider %s is not registered", task.Agent)
+	}
+	providerKey := coverageOperationKey(task)
+	e.coverageMu.Lock()
+	if e.coverageProviders == nil {
+		e.coverageProviders = make(map[string]parser.Provider)
+	}
+	provider := e.coverageProviders[providerKey]
+	if provider == nil {
+		provider = factory.NewProvider(parser.ProviderConfig{
+			Roots: e.agentDirs[task.Agent], Machine: e.machine,
+			PathRewriter: e.pathRewriter,
+		})
+		e.coverageProviders[providerKey] = provider
+	}
+	e.coverageMu.Unlock()
+	return provider, nil
+}
+
+func coverageOperationKey(task parser.CoverageTask) string {
+	return string(task.Agent) + "\x00" + task.CoverageKey
+}
+
+func (e *Engine) coverageOperationLock(task parser.CoverageTask) *gosync.Mutex {
+	key := coverageOperationKey(task)
+	e.coverageMu.Lock()
+	defer e.coverageMu.Unlock()
+	if e.coverageLocks == nil {
+		e.coverageLocks = make(map[string]*gosync.Mutex)
+	}
+	lock := e.coverageLocks[key]
+	if lock == nil {
+		lock = &gosync.Mutex{}
+		e.coverageLocks[key] = lock
+	}
+	return lock
+}
+
+// PrimeCoverage captures a provider feed checkpoint before startup
+// reconciliation. The startup pass then covers the captured history while
+// later bounded polls retain every change that races with that pass.
+func (e *Engine) PrimeCoverage(ctx context.Context, task parser.CoverageTask) error {
+	task.Trigger = parser.CoverageTriggerBaseline
+	operationLock := e.coverageOperationLock(task)
+	operationLock.Lock()
+	defer operationLock.Unlock()
+	provider, err := e.coverageProvider(task)
+	if err != nil {
+		return err
+	}
+	feed, ok := provider.(parser.BoundedCoverageProvider)
+	if !ok || provider.Capabilities().Source.BoundedCoverage != parser.CapabilitySupported {
+		return nil
+	}
+	result, err := feed.PollCoverage(ctx, task)
+	if err != nil {
+		if errors.Is(err, parser.ErrUnsupportedProviderFeature) ||
+			errors.Is(err, parser.ErrProviderCoverageUnavailable) {
+			return nil
+		}
+		return err
+	}
+	if result.AuditRequired || result.More || len(result.Sources) > 0 {
+		return errors.New("coverage baseline returned work")
+	}
+	return feed.CommitCoverage(ctx, task, result, false)
+}
+
+// ReconcileCoverage dispatches one provider-owned bounded coverage task. The
+// provider retains journal state; unsupported providers use scoped discovery.
+func (e *Engine) ReconcileCoverage(ctx context.Context, task parser.CoverageTask) (parser.CoverageResult, error) {
+	operationLock := e.coverageOperationLock(task)
+	operationLock.Lock()
+	defer operationLock.Unlock()
+	provider, err := e.coverageProvider(task)
+	if err != nil {
+		return parser.CoverageResult{}, err
+	}
+	feed, ok := provider.(parser.BoundedCoverageProvider)
+	if !ok || provider.Capabilities().Source.BoundedCoverage != parser.CapabilitySupported {
+		if !task.AuthoritativeFallback {
+			return parser.CoverageResult{}, fmt.Errorf(
+				"%w: %s provider fallback is unavailable",
+				parser.ErrProviderCoverageUnavailable, task.Agent,
+			)
+		}
+		return parser.CoverageResult{}, e.ReconcileProviderRoots(ctx, task.Agent, []string{task.Root})
+	}
+	result, err := feed.PollCoverage(ctx, task)
+	if err != nil {
+		if errors.Is(err, parser.ErrProviderCoverageSourceMissing) {
+			if !task.AuthoritativeFallback {
+				return result, err
+			}
+			return parser.CoverageResult{}, e.ReconcileProviderRoots(
+				ctx, task.Agent, []string{task.Root},
+			)
+		}
+		if errors.Is(err, parser.ErrUnsupportedProviderFeature) {
+			if !task.AuthoritativeFallback {
+				return result, fmt.Errorf(
+					"%w: %s provider fallback is unavailable",
+					parser.ErrProviderCoverageUnavailable, task.Agent,
+				)
+			}
+			return parser.CoverageResult{}, e.ReconcileProviderRoots(
+				ctx, task.Agent, []string{task.Root},
+			)
+		}
+		if errors.Is(err, parser.ErrProviderCoverageUnavailable) &&
+			task.Trigger == parser.CoverageTriggerNative && task.AuthoritativeFallback {
+			return parser.CoverageResult{}, e.ReconcileProviderRoots(
+				ctx, task.Agent, []string{task.Root},
+			)
+		}
+		return result, err
+	}
+	if result.AuditRequired {
+		if !task.AuthoritativeFallback {
+			return result, fmt.Errorf(
+				"%w: %s coverage audit is unavailable",
+				parser.ErrProviderCoverageUnavailable, task.Agent,
+			)
+		}
+		if err := e.ReconcileProviderRoots(ctx, task.Agent, []string{task.Root}); err != nil {
+			return result, fmt.Errorf("%s coverage audit: %w", task.Agent, err)
+		}
+		if err := feed.CommitCoverage(ctx, task, result, true); err != nil {
+			return result, err
+		}
+		return result, nil
+	}
+	if len(result.Sources) > 0 {
+		if err := e.syncCoverageSources(ctx, task.Agent, result.Sources); err != nil {
+			return result, err
+		}
+	}
+	if len(result.Removed) > 0 {
+		if err := e.tombstoneCoverageSessions(ctx, task.Agent, result.Removed); err != nil {
+			return result, err
+		}
+	}
+	if err := feed.CommitCoverage(ctx, task, result, false); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+func (e *Engine) tombstoneCoverageSessions(
+	ctx context.Context, agent parser.AgentType, removals []parser.CoverageRemoval,
+) error {
+	changed := false
+	err := func() error {
+		e.syncMu.Lock()
+		defer e.syncMu.Unlock()
+		for _, removal := range removals {
+			id := string(agent) + ":" + removal.SessionID
+			allowed, err := e.missingMemberTombstoneAllowed(ctx, id)
+			if err != nil {
+				return err
+			}
+			if !allowed {
+				continue
+			}
+			session, err := e.db.GetSessionFull(ctx, id)
+			if err != nil {
+				return err
+			}
+			expectedPath := providerDiscoveredPath(removal.Source)
+			if session == nil {
+				continue
+			}
+			if session.FilePath == nil || expectedPath == "" {
+				return fmt.Errorf("%w: coverage deletion ownership unresolved", parser.ErrProviderCoverageUnavailable)
+			}
+			storedPath := *session.FilePath
+			if !sameReconciliationSourcePath(storedPath, expectedPath) {
+				_, statErr := os.Stat(storedPath)
+				if statErr == nil || !errors.Is(statErr, os.ErrNotExist) {
+					return fmt.Errorf("%w: coverage deletion ownership %s remains unproven", parser.ErrProviderCoverageUnavailable, storedPath)
+				}
+			}
+			tombstoned, err := e.tombstoneSessionSourceOwnership(
+				ctx, e.machine, string(agent), id, storedPath,
+			)
+			if err != nil {
+				return err
+			}
+			changed = changed || tombstoned
+		}
+		return nil
+	}()
+	if changed {
+		e.emit("sessions")
+	}
+	return err
+}
+
+func (e *Engine) syncCoverageSources(
+	ctx context.Context, agent parser.AgentType, sources []parser.SourceRef,
+) error {
+	files := make([]parser.DiscoveredFile, 0, len(sources))
+	paths := make([]string, 0, len(sources))
+	for i := range sources {
+		path := providerDiscoveredPath(sources[i])
+		if path == "" {
+			continue
+		}
+		source := sources[i]
+		files = append(files, parser.DiscoveredFile{
+			Path: path, Project: source.ProjectHint, Agent: agent,
+			ForceParse: true, ProviderSource: &source, ProviderProcess: true,
+		})
+		paths = append(paths, path)
+	}
+	if len(files) == 0 {
+		return nil
+	}
+	preContainerStates := e.captureSQLiteContainerStates(paths)
+	stats := func() SyncStats {
+		e.syncMu.Lock()
+		defer e.syncMu.Unlock()
+		defer e.clearCurrentProgress()
+		e.resetS3CodexIndexCache()
+		e.anomalies.reset()
+		e.beginSQLiteContainerPass(files, preContainerStates)
+		stats := e.collectAndBatch(
+			ctx, e.startWorkers(ctx, files), len(files), len(files), nil,
+			syncWriteDefault,
+		)
+		e.finishSQLiteContainerPass(true, false)
+		e.anomalies.applyTo(&stats)
+		e.persistSkipCache()
+		e.mu.Lock()
+		e.lastSync = time.Now()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats
+	}()
+	if stats.Synced > 0 {
+		e.emit("sessions")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if stats.Aborted || stats.Failed > 0 || stats.providerFailures > 0 {
+		return fmt.Errorf(
+			"coverage sync incomplete: %d source or archive failures",
+			stats.Failed,
+		)
+	}
+	return nil
 }
 
 func (e *Engine) reconcileScopedWatchRoots(

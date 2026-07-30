@@ -542,6 +542,419 @@ func TestProcessFileProviderAuthoritativeNotFoundFails(t *testing.T) {
 	assert.Equal(t, []string{"find-source"}, provider.calls)
 }
 
+func TestOpenCodeCoverageProcessesProviderSourcesThroughArchiveWrite(t *testing.T) {
+	root := t.TempDir()
+	sourcePath, fingerprint := writeProcessProviderSource(t, root, "coverage.jsonl")
+	source := processFixtureSource(sourcePath)
+	provider := newProcessFixtureProvider(
+		source,
+		fingerprint,
+		parser.ParseOutcome{
+			Results: []parser.ParseResultOutcome{{
+				Result: processFixtureResult(
+					"cowork:coverage", parser.AgentCowork,
+					"fixture-project", sourcePath, fingerprint,
+				),
+				DataVersion: parser.DataVersionCurrent,
+			}},
+			ResultSetComplete: true,
+		},
+	)
+	provider.Caps.Source.BoundedCoverage = parser.CapabilitySupported
+	provider.Caps.Source.StreamingDiscovery = parser.CapabilitySupported
+	provider.Caps.Source.WatchRoots = parser.CapabilitySupported
+	provider.coverageResult = parser.CoverageResult{Sources: []parser.SourceRef{source}}
+	engine := newProcessFixtureEngine(t, root, provider)
+	t.Cleanup(engine.Close)
+	engine.writeBatchOverride = func(
+		[]pendingWrite, syncWriteMode, bool,
+	) (int, int, int, int) {
+		return 0, 0, 1, 0
+	}
+
+	_, err := engine.ReconcileCoverage(t.Context(), parser.CoverageTask{
+		Agent: parser.AgentCowork, CoverageKey: "cowork:coverage", Root: root,
+		Trigger: parser.CoverageTriggerDegraded,
+	})
+	require.Error(t, err)
+	assert.Zero(t, provider.coverageCommits)
+	engine.writeBatchOverride = nil
+
+	result, err := engine.ReconcileCoverage(t.Context(), parser.CoverageTask{
+		Agent: parser.AgentCowork, CoverageKey: "cowork:coverage", Root: root,
+		Trigger: parser.CoverageTriggerDegraded,
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Sources, 1)
+	require.Len(t, provider.coverageTasks, 2)
+	assert.Equal(t, 1, provider.coverageCommits)
+	stored, err := engine.db.GetSession(t.Context(), "cowork:coverage")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	require.NotNil(t, stored.FirstMessage)
+	assert.Equal(t, "fixture prompt", *stored.FirstMessage)
+}
+
+func TestCoverageUnsupportedKeyFallsBackToProviderRootReconciliation(t *testing.T) {
+	root := t.TempDir()
+	sourcePath, fingerprint := writeProcessProviderSource(t, root, "storage.jsonl")
+	source := processFixtureSource(sourcePath)
+	provider := newProcessFixtureProvider(
+		source,
+		fingerprint,
+		parser.ParseOutcome{
+			Results: []parser.ParseResultOutcome{{
+				Result: processFixtureResult(
+					"cowork:storage", parser.AgentCowork,
+					"fixture-project", sourcePath, fingerprint,
+				),
+				DataVersion: parser.DataVersionCurrent,
+			}},
+			ResultSetComplete: true,
+		},
+	)
+	provider.Caps.Source.BoundedCoverage = parser.CapabilitySupported
+	provider.Caps.Source.StreamingDiscovery = parser.CapabilitySupported
+	provider.Caps.Source.WatchRoots = parser.CapabilitySupported
+	provider.coverageErr = parser.UnsupportedProviderFeatureError{
+		Provider: parser.AgentCowork, Feature: parser.ProviderFeatureCoverageFeed,
+	}
+	engine := newProcessFixtureEngine(t, root, provider)
+	t.Cleanup(engine.Close)
+
+	_, err := engine.ReconcileCoverage(t.Context(), parser.CoverageTask{
+		Agent: parser.AgentCowork, Root: root,
+		Trigger: parser.CoverageTriggerDegraded, AuthoritativeFallback: true,
+	})
+	require.NoError(t, err)
+	assert.Len(t, provider.coverageTasks, 1)
+	assert.Zero(t, provider.coverageCommits)
+	stored, err := engine.db.GetSession(t.Context(), "cowork:storage")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+}
+
+func TestOpenCodeInitialCoverageBaselineAvoidsArchiveAudit(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "opencode.db")
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = writer.Close() })
+	_, err = writer.Exec(`CREATE TABLE event (
+		id TEXT PRIMARY KEY,
+		aggregate_id TEXT NOT NULL,
+		seq INTEGER NOT NULL,
+		type TEXT NOT NULL,
+		data TEXT NOT NULL
+	)`)
+	require.NoError(t, err)
+	tx, err := writer.Begin()
+	require.NoError(t, err)
+	stmt, err := tx.Prepare(
+		"INSERT INTO event(id, aggregate_id, seq, type, data) VALUES(?, 'ses_history', ?, 'message.part.updated.1', ?)",
+	)
+	require.NoError(t, err)
+	for id := 1; id <= 1000; id++ {
+		_, err = stmt.Exec(
+			fmt.Sprintf("evt_%08d", id), id,
+			`{"sessionID":"ses_history","part":{"id":"prt_1","messageID":"msg_1","sessionID":"ses_history"},"time":1}`,
+		)
+		require.NoError(t, err)
+	}
+	require.NoError(t, stmt.Close())
+	require.NoError(t, tx.Commit())
+	engine := NewEngine(openTestDB(t), EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentOpenCode: {root}},
+		Machine:   "devbox",
+	})
+	t.Cleanup(engine.Close)
+	task := parser.CoverageTask{
+		Agent: parser.AgentOpenCode, Root: root,
+		CoverageKey: "opencode-sqlite:" + root,
+	}
+	require.NoError(t, engine.PrimeCoverage(t.Context(), task))
+
+	task.Trigger = parser.CoverageTriggerDegraded
+	result, err := engine.ReconcileCoverage(t.Context(), task)
+	require.NoError(t, err)
+	assert.False(t, result.AuditRequired)
+	assert.Empty(t, result.Sources)
+}
+
+func TestOpenCodeCoverageBaselineRetainsStartupGapChange(t *testing.T) {
+	root := t.TempDir()
+	writer, err := sql.Open("sqlite3", filepath.Join(root, "opencode.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = writer.Close() })
+	_, err = writer.Exec(`
+	CREATE TABLE project (id TEXT PRIMARY KEY, worktree TEXT NOT NULL);
+	CREATE TABLE session (
+		id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT,
+		title TEXT, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL
+	);
+	CREATE TABLE message (
+		id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+		data TEXT NOT NULL, time_created INTEGER NOT NULL
+	);
+	CREATE TABLE part (
+		id TEXT PRIMARY KEY, session_id TEXT NOT NULL, message_id TEXT NOT NULL,
+		data TEXT NOT NULL, time_created INTEGER NOT NULL
+	);
+	CREATE TABLE event (
+		id TEXT PRIMARY KEY,
+		aggregate_id TEXT NOT NULL,
+		seq INTEGER NOT NULL,
+		type TEXT NOT NULL,
+		data TEXT NOT NULL
+	);
+	`)
+	require.NoError(t, err)
+	_, err = writer.Exec(
+		"INSERT INTO project(id, worktree) VALUES('prj_gap', ?)", t.TempDir(),
+	)
+	require.NoError(t, err)
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentOpenCode: {root}},
+		Machine:   "devbox",
+	})
+	t.Cleanup(engine.Close)
+	task := parser.CoverageTask{
+		Agent: parser.AgentOpenCode, Root: root,
+		CoverageKey: "opencode-sqlite:" + root,
+	}
+	require.NoError(t, engine.PrimeCoverage(t.Context(), task))
+	engine.SyncAll(t.Context(), nil)
+
+	_, err = writer.Exec(`
+		INSERT INTO session(id, project_id, title, time_created, time_updated)
+		VALUES('ses_gap', 'prj_gap', 'Gap', 1, 2);
+		INSERT INTO message(id, session_id, data, time_created)
+		VALUES('msg_gap', 'ses_gap', '{"role":"user"}', 1);
+		INSERT INTO part(id, session_id, message_id, data, time_created)
+		VALUES('prt_gap', 'ses_gap', 'msg_gap', '{"type":"text","content":"gap prompt"}', 1);
+	`)
+	require.NoError(t, err)
+	_, err = writer.Exec(
+		`INSERT INTO event(id, aggregate_id, seq, type, data)
+		 VALUES('evt_gap', 'ses_gap', 1, 'session.updated.1', ?)`,
+		`{"sessionID":"ses_gap","info":{"id":"ses_gap","projectID":"prj_gap"}}`,
+	)
+	require.NoError(t, err)
+	task.Trigger = parser.CoverageTriggerDegraded
+	result, err := engine.ReconcileCoverage(t.Context(), task)
+	require.NoError(t, err)
+	assert.False(t, result.AuditRequired)
+	require.Len(t, result.Sources, 1)
+	stored, err := database.GetSession(t.Context(), "opencode:ses_gap")
+	require.NoError(t, err)
+	assert.NotNil(t, stored)
+}
+
+func TestOpenCodeNativeUnknownCoverageFallsBackToProviderRoot(t *testing.T) {
+	root := t.TempDir()
+	engine := NewEngine(openTestDB(t), EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentOpenCode: {root}},
+		Machine:   "devbox",
+	})
+	t.Cleanup(engine.Close)
+
+	_, err := engine.ReconcileCoverage(t.Context(), parser.CoverageTask{
+		Agent: parser.AgentOpenCode, Root: root,
+		CoverageKey:           "opencode-sqlite:" + root,
+		Trigger:               parser.CoverageTriggerNative,
+		AuthoritativeFallback: true,
+		ChangedPaths:          []string{filepath.Join(root, "opencode.db")},
+	})
+	require.NoError(t, err)
+}
+
+func TestOpenCodeDegradedMissingActiveDatabaseFallsBack(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "opencode.db")
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = writer.Exec(`CREATE TABLE event (
+		id TEXT PRIMARY KEY, aggregate_id TEXT NOT NULL, seq INTEGER NOT NULL,
+		type TEXT NOT NULL, data TEXT NOT NULL
+	)`)
+	require.NoError(t, err)
+	engine := NewEngine(openTestDB(t), EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentOpenCode: {root}},
+		Machine:   "devbox",
+	})
+	t.Cleanup(engine.Close)
+	task := parser.CoverageTask{
+		Agent: parser.AgentOpenCode, Root: root,
+		CoverageKey: "opencode-sqlite:" + root,
+	}
+	require.NoError(t, engine.PrimeCoverage(t.Context(), task))
+	require.NoError(t, writer.Close())
+	require.NoError(t, os.Remove(dbPath))
+	task.Trigger = parser.CoverageTriggerDegraded
+	task.AuthoritativeFallback = true
+	_, err = engine.ReconcileCoverage(t.Context(), task)
+	require.NoError(t, err)
+}
+
+func TestCoverageAuditDefersWithoutAvailabilityProof(t *testing.T) {
+	root := t.TempDir()
+	sourcePath, fingerprint := writeProcessProviderSource(t, root, "coverage.jsonl")
+	provider := newProcessFixtureProvider(
+		processFixtureSource(sourcePath), fingerprint, parser.ParseOutcome{},
+	)
+	provider.Caps.Source.BoundedCoverage = parser.CapabilitySupported
+	provider.coverageResult = parser.CoverageResult{AuditRequired: true}
+	engine := newProcessFixtureEngine(t, root, provider)
+	t.Cleanup(engine.Close)
+
+	_, err := engine.ReconcileCoverage(t.Context(), parser.CoverageTask{
+		Agent: parser.AgentCowork, CoverageKey: "cowork:coverage", Root: root,
+		Trigger: parser.CoverageTriggerNative,
+	})
+	require.ErrorIs(t, err, parser.ErrProviderCoverageUnavailable)
+	assert.Zero(t, provider.coverageCommits)
+}
+
+func TestCoverageProviderFallbackDefersWithoutAvailabilityProof(t *testing.T) {
+	root := t.TempDir()
+	sourcePath, fingerprint := writeProcessProviderSource(t, root, "generic.jsonl")
+	provider := newProcessFixtureProvider(
+		processFixtureSource(sourcePath), fingerprint, parser.ParseOutcome{},
+	)
+	engine := newProcessFixtureEngine(t, root, provider)
+	t.Cleanup(engine.Close)
+
+	_, err := engine.ReconcileCoverage(t.Context(), parser.CoverageTask{
+		Agent: parser.AgentCowork, Root: root,
+		Trigger: parser.CoverageTriggerDegraded,
+	})
+	require.ErrorIs(t, err, parser.ErrProviderCoverageUnavailable)
+}
+
+func TestCoverageEmissionRunsAfterSyncLockRelease(t *testing.T) {
+	root := t.TempDir()
+	sourcePath, fingerprint := writeProcessProviderSource(t, root, "coverage.jsonl")
+	source := processFixtureSource(sourcePath)
+	provider := newProcessFixtureProvider(
+		source, fingerprint,
+		parser.ParseOutcome{
+			Results: []parser.ParseResultOutcome{{
+				Result: processFixtureResult(
+					"cowork:coverage-emit", parser.AgentCowork,
+					"fixture-project", sourcePath, fingerprint,
+				),
+				DataVersion: parser.DataVersionCurrent,
+			}},
+			ResultSetComplete: true,
+		},
+	)
+	provider.Caps.Source.BoundedCoverage = parser.CapabilitySupported
+	provider.coverageResult = parser.CoverageResult{Sources: []parser.SourceRef{source}}
+	engine := newProcessFixtureEngine(t, root, provider)
+	t.Cleanup(engine.Close)
+	acquired := false
+	engine.emitter = emitterFunc(func(string) {
+		if engine.syncMu.TryLock() {
+			engine.syncMu.Unlock()
+			acquired = true
+		}
+	})
+
+	_, err := engine.ReconcileCoverage(t.Context(), parser.CoverageTask{
+		Agent: parser.AgentCowork, CoverageKey: "cowork:coverage", Root: root,
+		Trigger: parser.CoverageTriggerDegraded,
+	})
+	require.NoError(t, err)
+	assert.True(t, acquired)
+}
+
+func TestCoverageReconciliationSerializesDeletionBeforeRecreation(t *testing.T) {
+	root := t.TempDir()
+	sourcePath, fingerprint := writeProcessProviderSource(t, root, "race.jsonl")
+	source := processFixtureSource(sourcePath)
+	provider := newProcessFixtureProvider(
+		source, fingerprint,
+		parser.ParseOutcome{
+			Results: []parser.ParseResultOutcome{{
+				Result: processFixtureResult(
+					"cowork:coverage-race", parser.AgentCowork,
+					"fixture-project", sourcePath, fingerprint,
+				),
+				DataVersion: parser.DataVersionCurrent,
+			}},
+			ResultSetComplete: true,
+		},
+	)
+	provider.Caps.Source.BoundedCoverage = parser.CapabilitySupported
+	engine := newProcessFixtureEngine(t, root, provider)
+	t.Cleanup(engine.Close)
+	task := parser.CoverageTask{
+		Agent: parser.AgentCowork, CoverageKey: "cowork:race", Root: root,
+		Trigger: parser.CoverageTriggerDegraded,
+	}
+	provider.coverageResult = parser.CoverageResult{
+		Sources: []parser.SourceRef{source},
+	}
+	_, err := engine.ReconcileCoverage(t.Context(), task)
+	require.NoError(t, err)
+
+	firstEntered := make(chan struct{})
+	secondEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var once stdsync.Once
+	t.Cleanup(func() { once.Do(func() { close(releaseFirst) }) })
+	calls := 0
+	var callsMu stdsync.Mutex
+	provider.pollCoverageFn = func(
+		ctx context.Context, _ parser.CoverageTask,
+	) (parser.CoverageResult, error) {
+		callsMu.Lock()
+		calls++
+		call := calls
+		callsMu.Unlock()
+		if call == 1 {
+			close(firstEntered)
+			select {
+			case <-ctx.Done():
+				return parser.CoverageResult{}, ctx.Err()
+			case <-releaseFirst:
+			}
+			return parser.CoverageResult{Removed: []parser.CoverageRemoval{{
+				SessionID: "coverage-race", Source: source,
+			}}}, nil
+		}
+		close(secondEntered)
+		return parser.CoverageResult{Sources: []parser.SourceRef{source}}, nil
+	}
+
+	errs := make(chan error, 2)
+	go func() {
+		_, reconcileErr := engine.ReconcileCoverage(t.Context(), task)
+		errs <- reconcileErr
+	}()
+	<-firstEntered
+	go func() {
+		_, reconcileErr := engine.ReconcileCoverage(t.Context(), task)
+		errs <- reconcileErr
+	}()
+	assert.Never(t, func() bool {
+		select {
+		case <-secondEntered:
+			return true
+		default:
+			return false
+		}
+	}, 100*time.Millisecond, 10*time.Millisecond)
+	once.Do(func() { close(releaseFirst) })
+	require.NoError(t, <-errs)
+	require.NoError(t, <-errs)
+
+	active, err := engine.db.GetSession(t.Context(), "cowork:coverage-race")
+	require.NoError(t, err)
+	assert.NotNil(t, active)
+}
+
 func TestSyncSingleSessionProviderAuthoritativeBypassesProviderSkipCache(t *testing.T) {
 
 	root := t.TempDir()
@@ -1383,13 +1796,68 @@ func (f processFixtureFactory) NewProvider(parser.ProviderConfig) parser.Provide
 type processFixtureProvider struct {
 	parser.ProviderBase
 
-	source        parser.SourceRef
-	findFound     bool
-	fingerprint   parser.SourceFingerprint
-	outcome       parser.ParseOutcome
-	calls         []string
-	findRequests  []parser.FindSourceRequest
-	parseRequests []parser.ParseRequest
+	source           parser.SourceRef
+	findFound        bool
+	fingerprint      parser.SourceFingerprint
+	outcome          parser.ParseOutcome
+	calls            []string
+	findRequests     []parser.FindSourceRequest
+	parseRequests    []parser.ParseRequest
+	coverageResult   parser.CoverageResult
+	coverageErr      error
+	pollCoverageFn   func(context.Context, parser.CoverageTask) (parser.CoverageResult, error)
+	commitCoverageFn func(context.Context, parser.CoverageTask, parser.CoverageResult, bool) error
+	coverageTasks    []parser.CoverageTask
+	coverageCommits  int
+}
+
+func (p *processFixtureProvider) Discover(context.Context) ([]parser.SourceRef, error) {
+	return []parser.SourceRef{p.source}, nil
+}
+
+func (p *processFixtureProvider) DiscoverEach(
+	_ context.Context, yield func(parser.SourceRef) error,
+) error {
+	return yield(p.source)
+}
+
+func (p *processFixtureProvider) WatchPlan(context.Context) (parser.WatchPlan, error) {
+	return parser.WatchPlan{Roots: []parser.WatchRoot{{
+		Path: filepath.Dir(p.source.DisplayPath), Recursive: true,
+	}}}, nil
+}
+
+func (p *processFixtureProvider) WatchRoots(context.Context) ([]parser.WatchRoot, error) {
+	return []parser.WatchRoot{{
+		Path: filepath.Dir(p.source.DisplayPath), Recursive: true,
+	}}, nil
+}
+
+func (p *processFixtureProvider) SourceForReconciliation(
+	context.Context, string, string,
+) (parser.SourceRef, bool, error) {
+	return p.source, true, nil
+}
+
+func (p *processFixtureProvider) PollCoverage(
+	ctx context.Context, task parser.CoverageTask,
+) (parser.CoverageResult, error) {
+	if p.pollCoverageFn != nil {
+		return p.pollCoverageFn(ctx, task)
+	}
+	p.coverageTasks = append(p.coverageTasks, task)
+	return p.coverageResult, p.coverageErr
+}
+
+func (p *processFixtureProvider) CommitCoverage(
+	ctx context.Context, task parser.CoverageTask,
+	result parser.CoverageResult, audited bool,
+) error {
+	if p.commitCoverageFn != nil {
+		return p.commitCoverageFn(ctx, task, result, audited)
+	}
+	p.coverageCommits++
+	return nil
 }
 
 func (p *processFixtureProvider) FindSource(

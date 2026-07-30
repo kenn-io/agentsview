@@ -331,6 +331,19 @@ type pushWatchOwnerCase struct {
 	run  func(context.Context, *archivePushWatchHooks) error
 }
 
+func TestStartArchivePushWatcherWithoutLocalEngine(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{
+		parser.AgentOpenCode: {root},
+	}}
+	stop, open, _ := startArchivePushWatcher(
+		nil, cfg, nil, func(context.Context, syncpkg.WatchBatch) error { return nil },
+		syncpkg.WatcherOptions{},
+	)
+	open()
+	stop()
+}
+
 func pushWatchOwnerCases(t *testing.T) []pushWatchOwnerCase {
 	t.Helper()
 	// Keep SQLite setup outside the timed owner goroutines so channel deadlines

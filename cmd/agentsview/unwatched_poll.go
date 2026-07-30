@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/server"
 )
 
@@ -18,6 +19,10 @@ var errUnwatchedPollStopped = errors.New("unwatched poll coordinator stopped")
 
 type unwatchedPollSyncer interface {
 	ReconcileWatchRoots(context.Context, []string, bool) error
+}
+
+type boundedCoverageSyncer interface {
+	ReconcileCoverage(context.Context, parser.CoverageTask) (parser.CoverageResult, error)
 }
 
 type unwatchedPollAdd struct {
@@ -36,7 +41,16 @@ type pollingObligation struct {
 	// vanish while its configured scope <root> still exists, and reconciling
 	// the scope then would tombstone every session under the missing
 	// subtree. Empty means the Roots themselves are probed.
-	Probe string
+	Probe            string
+	NonBlockingProbe bool
+	Scopes           []pollingScope
+}
+
+type pollingScope struct {
+	Agent                 parser.AgentType
+	Root                  string
+	CoverageKey           string
+	AuthoritativeFallback bool
 }
 
 type sharedUnwatchedPollCoordinator struct {
@@ -58,6 +72,7 @@ type sharedUnwatchedPollCoordinator struct {
 	// coordinator loop; each entry keeps its probe so availability is
 	// evaluated per obligation at poll time.
 	pollObligations []pollingObligation
+	completionDelay time.Duration
 	stop            chan struct{}
 	done            chan struct{}
 	stopOnce        sync.Once
@@ -69,8 +84,9 @@ func newUnwatchedPollCoordinator(
 	idleTracker *server.IdleTracker,
 ) *sharedUnwatchedPollCoordinator {
 	ticker := time.NewTicker(unwatchedPollInterval)
-	return newUnwatchedPollCoordinatorWithTicks(
+	return newUnwatchedPollCoordinatorWithSchedule(
 		ctx, engine, ticker.C, ticker.Stop, idleTracker.Do, nil,
+		unwatchedPollInterval,
 	)
 }
 
@@ -82,21 +98,36 @@ func newUnwatchedPollCoordinatorWithTicks(
 	doWork func(func()),
 	onRootsOwned func([]string),
 ) *sharedUnwatchedPollCoordinator {
+	return newUnwatchedPollCoordinatorWithSchedule(
+		ctx, engine, ticks, stopTicker, doWork, onRootsOwned, 0,
+	)
+}
+
+func newUnwatchedPollCoordinatorWithSchedule(
+	ctx context.Context,
+	engine unwatchedPollSyncer,
+	ticks <-chan time.Time,
+	stopTicker func(),
+	doWork func(func()),
+	onRootsOwned func([]string),
+	completionDelay time.Duration,
+) *sharedUnwatchedPollCoordinator {
 	workerCtx, workerCancel := context.WithCancel(ctx)
 	coordinator := &sharedUnwatchedPollCoordinator{
-		ctx:          ctx,
-		workerCtx:    workerCtx,
-		workerCancel: workerCancel,
-		engine:       engine,
-		ticks:        ticks,
-		stopTicker:   stopTicker,
-		doWork:       doWork,
-		add:          make(chan unwatchedPollAdd),
-		pollWake:     make(chan struct{}, 1),
-		pollDone:     make(chan struct{}),
-		stop:         make(chan struct{}),
-		done:         make(chan struct{}),
-		onRootsOwned: onRootsOwned,
+		ctx:             ctx,
+		workerCtx:       workerCtx,
+		workerCancel:    workerCancel,
+		engine:          engine,
+		ticks:           ticks,
+		stopTicker:      stopTicker,
+		doWork:          doWork,
+		add:             make(chan unwatchedPollAdd),
+		pollWake:        make(chan struct{}, 1),
+		pollDone:        make(chan struct{}),
+		stop:            make(chan struct{}),
+		done:            make(chan struct{}),
+		onRootsOwned:    onRootsOwned,
+		completionDelay: completionDelay,
 	}
 	go coordinator.run()
 	return coordinator
@@ -120,9 +151,9 @@ func (c *sharedUnwatchedPollCoordinator) updateRoots(
 ) error {
 	request := unwatchedPollAdd{
 		obligation: pollingObligation{
-			Key:   obligation.Key,
-			Roots: append([]string(nil), obligation.Roots...),
-			Probe: obligation.Probe,
+			Key: obligation.Key, Roots: append([]string(nil), obligation.Roots...),
+			Probe: obligation.Probe, NonBlockingProbe: obligation.NonBlockingProbe,
+			Scopes: append([]pollingScope(nil), obligation.Scopes...),
 		},
 		remove: remove,
 		done:   make(chan struct{}),
@@ -216,17 +247,185 @@ func (c *sharedUnwatchedPollCoordinator) runPollWorker() {
 			if c.workerCtx.Err() != nil {
 				return
 			}
-			roots := availableUnwatchedPollRoots(c.currentPollObligations())
-			if len(roots) == 0 {
+			obligations := c.currentPollObligations()
+			if len(obligations) == 0 {
 				continue
 			}
-			log.Printf("polling %d unwatched root(s)", len(roots))
+			if allGenericPollingObligations(obligations) {
+				roots := availableUnwatchedPollRoots(obligations)
+				if len(roots) == 0 {
+					continue
+				}
+				c.doWork(func() {
+					if c.workerCtx.Err() == nil {
+						pollUnwatchedRootsOnce(c.workerCtx, c.engine, roots)
+					}
+				})
+				continue
+			}
+			log.Printf("polling %d unwatched obligation(s)", len(obligations))
 			c.doWork(func() {
 				if c.workerCtx.Err() != nil {
 					return
 				}
-				pollUnwatchedRootsOnce(c.workerCtx, c.engine, roots)
+				available := make(map[string]struct{})
+				for _, root := range availableUnwatchedPollRoots(obligations) {
+					available[absRootPath(root)] = struct{}{}
+				}
+				genericRoots := make(map[string]struct{})
+				typedRoots := make(map[string]struct{})
+				typedScopes := make([]pollingScope, 0)
+				seenScopes := make(map[string]struct{})
+				for _, obligation := range obligations {
+					if !pollingObligationProbeAvailable(obligation) {
+						continue
+					}
+					availableObligation := filterPollingObligationRoots(
+						obligation, available,
+					)
+					if len(obligation.Scopes) == 0 {
+						for _, root := range availableObligation.Roots {
+							genericRoots[root] = struct{}{}
+						}
+						continue
+					}
+					for _, scope := range obligation.Scopes {
+						if scope.CoverageKey == "" {
+							if _, ok := available[absRootPath(scope.Root)]; !ok {
+								continue
+							}
+						} else if _, err := os.Stat(scope.Root); err != nil {
+							continue
+						}
+						scope.AuthoritativeFallback = coverageFallbackAvailable(
+							scope, obligations, c.engine,
+						)
+						key := string(scope.Agent) + "\x00" + scope.Root + "\x00" + scope.CoverageKey
+						if _, ok := seenScopes[key]; ok {
+							continue
+						}
+						seenScopes[key] = struct{}{}
+						typedScopes = append(typedScopes, scope)
+						typedRoots[scope.Root] = struct{}{}
+					}
+				}
+				if len(genericRoots) > 0 {
+					pollUnwatchedRootsOnce(
+						c.workerCtx, c.engine, unwatchedPollRoots(genericRoots),
+					)
+				}
+				if len(typedScopes) > 0 {
+					pollCoverageOnce(c.workerCtx, c.engine, pollingObligation{
+						Roots: unwatchedPollRoots(typedRoots), Scopes: typedScopes,
+					})
+				}
 			})
+			if c.completionDelay > 0 {
+				delay := c.completionDelay
+				c.drainPollWake()
+				timer := time.NewTimer(delay)
+				select {
+				case <-c.workerCtx.Done():
+					if !timer.Stop() {
+						<-timer.C
+					}
+					return
+				case <-timer.C:
+				}
+				c.drainPollWake()
+				c.requestPoll()
+			}
+		}
+	}
+}
+
+func coverageFallbackAvailable(
+	scope pollingScope, obligations []pollingObligation, engine unwatchedPollSyncer,
+) bool {
+	scopeRoot := absRootPath(scope.Root)
+	for _, obligation := range obligations {
+		overlaps := false
+		for _, root := range obligation.Roots {
+			root = absRootPath(root)
+			if root == scopeRoot || pathWithinRoot(root, scopeRoot) ||
+				pathWithinRoot(scopeRoot, root) {
+				overlaps = true
+				break
+			}
+		}
+		if !overlaps {
+			continue
+		}
+		if obligation.Probe != "" {
+			if _, err := os.Stat(obligation.Probe); err != nil {
+				owner, _ := engine.(activeSourceProbe)
+				hasArchived := false
+				if owner != nil {
+					hasArchived, err = owner.HasActiveSessionSourceBelow(
+						string(scope.Agent), obligation.Probe,
+					)
+					if err != nil {
+						hasArchived = true
+					}
+				}
+				if !obligation.NonBlockingProbe || hasArchived {
+					return false
+				}
+			}
+			continue
+		}
+		for _, root := range obligation.Roots {
+			if _, err := os.Stat(root); err != nil {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func pollingObligationProbeAvailable(obligation pollingObligation) bool {
+	if obligation.Probe == "" {
+		return true
+	}
+	_, err := os.Stat(obligation.Probe)
+	return err == nil
+}
+
+func filterPollingObligationRoots(
+	obligation pollingObligation, available map[string]struct{},
+) pollingObligation {
+	obligation.Roots = slices.DeleteFunc(
+		append([]string(nil), obligation.Roots...),
+		func(root string) bool {
+			_, ok := available[absRootPath(root)]
+			return !ok
+		},
+	)
+	obligation.Scopes = slices.DeleteFunc(
+		append([]pollingScope(nil), obligation.Scopes...),
+		func(scope pollingScope) bool {
+			_, ok := available[absRootPath(scope.Root)]
+			return !ok
+		},
+	)
+	return obligation
+}
+
+func allGenericPollingObligations(obligations []pollingObligation) bool {
+	for _, o := range obligations {
+		if len(o.Scopes) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *sharedUnwatchedPollCoordinator) drainPollWake() {
+	for {
+		select {
+		case <-c.pollWake:
+		default:
+			return
 		}
 	}
 }
@@ -262,8 +461,11 @@ func availableUnwatchedPollRoots(obligations []pollingObligation) []string {
 			if root == "" {
 				continue
 			}
-			if probeMissing {
+			if probeMissing && !obligation.NonBlockingProbe {
 				blocked[filepath.Clean(root)] = struct{}{}
+				continue
+			}
+			if probeMissing {
 				continue
 			}
 			if _, err := os.Stat(root); err == nil {
@@ -308,5 +510,56 @@ func pollUnwatchedRootsOnce(
 	}
 	if err := engine.ReconcileWatchRoots(ctx, roots, false); err != nil {
 		log.Printf("polling unwatched roots: %v", err)
+	}
+}
+
+func pollCoverageOnce(
+	ctx context.Context, engine unwatchedPollSyncer, obligation pollingObligation,
+) {
+	coverage, ok := engine.(boundedCoverageSyncer)
+	if !ok || len(obligation.Scopes) == 0 {
+		pollUnwatchedRootsOnce(ctx, engine, obligation.Roots)
+		return
+	}
+	for _, scope := range obligation.Scopes {
+		if scope.Agent == "" || scope.Root == "" {
+			continue
+		}
+		trigger := parser.CoverageTriggerDegraded
+		for page := 0; ; page++ {
+			if page >= 1024 {
+				log.Printf("polling %s coverage: continuation limit exceeded", scope.Agent)
+				break
+			}
+			result, err := coverage.ReconcileCoverage(ctx, parser.CoverageTask{
+				Agent: scope.Agent, CoverageKey: scope.CoverageKey,
+				Root: scope.Root, Trigger: trigger,
+				AuthoritativeFallback: scope.AuthoritativeFallback,
+			})
+			if err != nil {
+				log.Printf("polling %s coverage: %v", scope.Agent, err)
+				break
+			}
+			if result.AuditRequired {
+				log.Printf("polling %s coverage requested archive audit", scope.Agent)
+			}
+			if !result.More {
+				break
+			}
+			trigger = parser.CoverageTriggerContinuation
+			delay := result.NextDelay
+			if delay <= 0 {
+				delay = 100 * time.Millisecond
+			}
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return
+			case <-timer.C:
+			}
+		}
 	}
 }

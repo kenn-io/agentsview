@@ -229,6 +229,22 @@ func TestProviderCapabilitiesFallbackWatchPlanRetainsOnlyRootMetadata(t *testing
 	assert.Equal(t, 1, provider.watchPlanCalls)
 }
 
+func TestProviderCapabilitiesCoverageRootRetainsRoutingGlobs(t *testing.T) {
+	provider := &watchRootCapabilityTestProvider{
+		ProviderBase: ProviderBase{Def: AgentDef{Type: "coverage-watch-root-test"}},
+		plan: WatchPlan{Roots: []WatchRoot{{
+			Path: "/sessions", IncludeGlobs: []string{"state.db", "state.db-wal"},
+			ExcludeGlobs: []string{"*.tmp"}, CoverageKey: "sqlite:/sessions",
+		}}},
+	}
+
+	roots, err := ResolveWatchRoots(context.Background(), provider)
+	require.NoError(t, err)
+	require.Len(t, roots, 1)
+	assert.Equal(t, []string{"state.db", "state.db-wal"}, roots[0].IncludeGlobs)
+	assert.Equal(t, []string{"*.tmp"}, roots[0].ExcludeGlobs)
+}
+
 func TestProviderCapabilitiesSourceSetAdapterImplementsWatchRootPlanner(t *testing.T) {
 	root := filepath.Clean("/sessions")
 	factory := NewSourceSetFactory(

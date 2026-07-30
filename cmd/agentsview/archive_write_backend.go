@@ -106,8 +106,9 @@ func newArchivePushUnwatchedPoller(
 		return hooks.newUnwatchedPoller(ctx, engine)
 	}
 	ticker := time.NewTicker(unwatchedPollInterval)
-	return newUnwatchedPollCoordinatorWithTicks(
+	return newUnwatchedPollCoordinatorWithSchedule(
 		ctx, engine, ticker.C, ticker.Stop, func(work func()) { work() }, nil,
+		unwatchedPollInterval,
 	)
 }
 
@@ -155,10 +156,16 @@ func archivePushWatchWatcherOptions(
 			return loop.NotifyCoverageDegraded(roots)
 		},
 		OnPollingRequired: func(obligation syncpkg.PollingObligation) error {
+			scopes := make([]pollingScope, 0, len(obligation.Scopes))
+			for _, scope := range obligation.Scopes {
+				scopes = append(scopes, pollingScope{
+					Agent: parser.AgentType(scope.Agent), Root: scope.SyncDir,
+					CoverageKey: scope.CoverageKey,
+				})
+			}
 			return poller.AddObligation(pollingObligation{
-				Key:   obligation.Key,
-				Roots: obligation.Roots,
-				Probe: obligation.Probe,
+				Key: obligation.Key, Roots: obligation.Roots, Probe: obligation.Probe,
+				NonBlockingProbe: obligation.NonBlockingProbe, Scopes: scopes,
 			})
 		},
 		OnPollingReleased: poller.RemoveObligation,
@@ -172,7 +179,7 @@ func archivePushWatchBatchCallback(
 ) syncpkg.WatchCallback {
 	return func(callbackCtx context.Context, batch syncpkg.WatchBatch) error {
 		scope := func() watchRecoveryScope {
-			return probeWatchRecoveryScope(appCfg)
+			return probeWatchRecoveryScopeWithOwner(appCfg, engine)
 		}
 		if err := syncWatchBatch(callbackCtx, engine, batch, scope); err != nil {
 			return err

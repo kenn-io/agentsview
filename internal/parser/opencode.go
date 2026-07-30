@@ -141,13 +141,6 @@ func parseOpenCodeDBSession(
 	}
 	defer db.Close()
 
-	projects, err := loadOpenCodeProjectsCached(db, dbPath)
-	if err != nil {
-		return nil, nil, fmt.Errorf(
-			"loading opencode projects: %w", err,
-		)
-	}
-
 	hasDirectory, err := openCodeSessionHasDirectoryCached(db, dbPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf(
@@ -163,7 +156,11 @@ func parseOpenCodeDBSession(
 		)
 	}
 
-	projectWorktree := strings.TrimSpace(projects[s.projectID])
+	projectWorktree, err := loadOpenCodeProjectWorktree(db, s.projectID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading opencode project: %w", err)
+	}
+	projectWorktree = strings.TrimSpace(projectWorktree)
 	cwd := resolveOpenCodeWorktree(s.directory, projectWorktree)
 	if !openCodeUsableWorktree(projectWorktree) {
 		projectWorktree = cwd
@@ -171,6 +168,21 @@ func parseOpenCodeDBSession(
 	return buildOpenCodeSession(
 		db, s, cwd, projectWorktree, dbPath, machine,
 	)
+}
+
+func loadOpenCodeProjectWorktree(db *sql.DB, projectID string) (string, error) {
+	if projectID == "" {
+		return "", nil
+	}
+	var worktree string
+	err := db.QueryRow("SELECT worktree FROM project WHERE id = ? LIMIT 1", projectID).Scan(&worktree)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil && strings.Contains(err.Error(), "no such table") {
+		return "", nil
+	}
+	return worktree, err
 }
 
 // resolveOpenCodeWorktree picks the session working directory used for

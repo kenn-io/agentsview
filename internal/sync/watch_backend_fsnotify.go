@@ -16,28 +16,30 @@ import (
 )
 
 type fsnotifyBackend struct {
-	watcher           *fsnotify.Watcher
-	errorInput        <-chan error
-	watchOps          fsnotifyWatchOps
-	events            chan backendEvent
-	errors            chan error
-	excludes          []string
-	roots             []string
-	recursive         []string
-	shallow           []string
-	rootsMu           sync.RWMutex
-	watchMu           sync.Mutex
-	watchOwners       map[string]map[string]struct{}
-	watchBudgetCost   map[string]int
-	runtimeBudget     int
-	rootScopes        map[string][]string
-	degradedRoots     map[string]struct{}
-	onPollingRequired func(PollingObligation) error
-	lifecycleMu       sync.Mutex
-	lifecycle         fsnotifyBackendLifecycle
-	stop              chan struct{}
-	done              chan struct{}
-	finishOnce        sync.Once
+	watcher            *fsnotify.Watcher
+	errorInput         <-chan error
+	watchOps           fsnotifyWatchOps
+	events             chan backendEvent
+	errors             chan error
+	excludes           []string
+	roots              []string
+	recursive          []string
+	shallow            []string
+	rootsMu            sync.RWMutex
+	watchMu            sync.Mutex
+	watchOwners        map[string]map[string]struct{}
+	watchBudgetCost    map[string]int
+	runtimeBudget      int
+	rootScopes         map[string][]string
+	rootCoverageScopes map[string][]WatchScope
+	rootNonBlocking    map[string]bool
+	degradedRoots      map[string]struct{}
+	onPollingRequired  func(PollingObligation) error
+	lifecycleMu        sync.Mutex
+	lifecycle          fsnotifyBackendLifecycle
+	stop               chan struct{}
+	done               chan struct{}
+	finishOnce         sync.Once
 }
 
 type fsnotifyWatchOps interface {
@@ -59,18 +61,20 @@ func newFSNotifyBackend(excludes []string) (*fsnotifyBackend, error) {
 		return nil, err
 	}
 	return &fsnotifyBackend{
-		watcher:         watcher,
-		errorInput:      watcher.Errors,
-		watchOps:        watcher,
-		events:          make(chan backendEvent),
-		errors:          make(chan error, 1),
-		excludes:        normalizeExcludePatterns(excludes),
-		watchOwners:     make(map[string]map[string]struct{}),
-		watchBudgetCost: make(map[string]int),
-		rootScopes:      make(map[string][]string),
-		degradedRoots:   make(map[string]struct{}),
-		stop:            make(chan struct{}),
-		done:            make(chan struct{}),
+		watcher:            watcher,
+		errorInput:         watcher.Errors,
+		watchOps:           watcher,
+		events:             make(chan backendEvent),
+		errors:             make(chan error, 1),
+		excludes:           normalizeExcludePatterns(excludes),
+		watchOwners:        make(map[string]map[string]struct{}),
+		watchBudgetCost:    make(map[string]int),
+		rootScopes:         make(map[string][]string),
+		rootCoverageScopes: make(map[string][]WatchScope),
+		rootNonBlocking:    make(map[string]bool),
+		degradedRoots:      make(map[string]struct{}),
+		stop:               make(chan struct{}),
+		done:               make(chan struct{}),
 	}, nil
 }
 
@@ -135,6 +139,8 @@ func (b *fsnotifyBackend) setWatchRootPlan(roots []WatchRoot) {
 	b.watchMu.Lock()
 	defer b.watchMu.Unlock()
 	b.rootScopes = make(map[string][]string, len(roots))
+	b.rootCoverageScopes = make(map[string][]WatchScope, len(roots))
+	b.rootNonBlocking = make(map[string]bool, len(roots))
 	for _, root := range roots {
 		path := filepath.Clean(root.Path)
 		for _, scope := range root.Scopes {
@@ -142,6 +148,8 @@ func (b *fsnotifyBackend) setWatchRootPlan(roots []WatchRoot) {
 				b.rootScopes[path] = append(b.rootScopes[path], scope.SyncDir)
 			}
 		}
+		b.rootCoverageScopes[path] = append([]WatchScope(nil), root.Scopes...)
+		b.rootNonBlocking[path] = root.NonBlockingProbe
 		slices.Sort(b.rootScopes[path])
 		b.rootScopes[path] = slices.Compact(b.rootScopes[path])
 	}
@@ -494,6 +502,8 @@ func (b *fsnotifyBackend) requireRuntimePolling(roots []string) {
 		}
 		required := b.onPollingRequired
 		scopes := append([]string(nil), b.rootScopes[root]...)
+		coverageScopes := append([]WatchScope(nil), b.rootCoverageScopes[root]...)
+		nonBlockingProbe := b.rootNonBlocking[root]
 		b.watchMu.Unlock()
 		if len(scopes) == 0 {
 			scopes = []string{root}
@@ -506,6 +516,7 @@ func (b *fsnotifyBackend) requireRuntimePolling(roots []string) {
 		}
 		if err := required(PollingObligation{
 			Key: "fsnotify-runtime:" + root, Roots: scopes, Probe: root,
+			NonBlockingProbe: nonBlockingProbe, Scopes: coverageScopes,
 		}); err != nil {
 			b.reportError(fmt.Errorf(
 				"transfer fsnotify coverage for %s to polling: %w", root, err,

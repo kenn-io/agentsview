@@ -6,18 +6,20 @@ import "slices"
 // by a logical watcher root. A physical root may cover multiple configured
 // directories or providers, so registration must preserve every exact scope.
 type WatchScope struct {
-	Agent   string
-	SyncDir string
+	Agent       string
+	SyncDir     string
+	CoverageKey string
 }
 
 // WatchRoot is one desired logical watcher root. Exists describes startup
 // state, not whether the root remains desired: missing roots stay in the plan
 // so a lifecycle-aware backend can establish ancestor coverage later.
 type WatchRoot struct {
-	Path      string
-	Recursive bool
-	Exists    bool
-	Scopes    []WatchScope
+	Path             string
+	Recursive        bool
+	Exists           bool
+	NonBlockingProbe bool
+	Scopes           []WatchScope
 }
 
 // RegisterRoots passes the complete desired root plan to the watcher before

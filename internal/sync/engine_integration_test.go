@@ -867,6 +867,384 @@ func TestSyncEngineOpenCodeSQLiteWALOnlyChangeStillReemits(t *testing.T) {
 	)
 }
 
+func TestOpenCodeCoverageForceParsesWALOnlyChildUpdate(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.mustExec(t, "enable WAL", "PRAGMA journal_mode=WAL")
+	oc.mustExec(t, "create event journal", `CREATE TABLE event (
+		id TEXT PRIMARY KEY, aggregate_id TEXT NOT NULL, seq INTEGER NOT NULL,
+		type TEXT NOT NULL, data TEXT NOT NULL
+	)`)
+	oc.addProject(t, "proj", "/home/user/code/opencode-app")
+	seedOpenCodeSQLiteTextSession(
+		t, oc, "proj", "wal-coverage",
+		1779012000000, 1779012030000,
+		"original prompt", "original answer",
+	)
+	task := parser.CoverageTask{
+		Agent: parser.AgentOpenCode, Root: env.opencodeDir,
+		CoverageKey: "opencode-sqlite:" + env.opencodeDir,
+	}
+	require.NoError(t, env.engine.PrimeCoverage(t.Context(), task))
+	stats := env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
+
+	dbPath := filepath.Join(env.opencodeDir, "opencode.db")
+	before, err := os.Stat(dbPath)
+	require.NoError(t, err)
+	oc.mustExec(t, "update child row without session timestamp",
+		`UPDATE part SET data = '{"type":"text","content":"changed prompt"}'
+		 WHERE id = 'wal-coverage-msg-user-part'`,
+	)
+	oc.mustExec(t, "insert child event",
+		`INSERT INTO event(id, aggregate_id, seq, type, data)
+		 VALUES('evt_wal_child', 'wal-coverage', 1, 'message.part.updated.1', ?)`,
+		`{"sessionID":"wal-coverage","part":{"id":"wal-coverage-msg-user-part","messageID":"wal-coverage-msg-user","sessionID":"wal-coverage"},"time":1}`,
+	)
+	after, err := os.Stat(dbPath)
+	require.NoError(t, err)
+	require.Equal(t, before.Size(), after.Size())
+	require.Equal(t, before.ModTime(), after.ModTime())
+
+	task.Trigger = parser.CoverageTriggerDegraded
+	task.AuthoritativeFallback = true
+	result, err := env.engine.ReconcileCoverage(t.Context(), task)
+	require.NoError(t, err)
+	require.Len(t, result.Sources, 1)
+	assertMessageContent(
+		t, env.db, "opencode:wal-coverage", "changed prompt", "original answer",
+	)
+}
+
+func TestOpenCodeCoverageDeletionEventTombstonesOnlyRemovedSession(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.mustExec(t, "create event journal", `CREATE TABLE event (
+		id TEXT PRIMARY KEY, aggregate_id TEXT NOT NULL, seq INTEGER NOT NULL,
+		type TEXT NOT NULL, data TEXT NOT NULL
+	)`)
+	oc.addProject(t, "proj", "/home/user/code/opencode-app")
+	seedOpenCodeSQLiteTextSession(
+		t, oc, "proj", "deleted-session",
+		1779012000000, 1779012030000,
+		"deleted prompt", "deleted answer",
+	)
+	seedOpenCodeSQLiteTextSession(
+		t, oc, "proj", "surviving-session",
+		1779012100000, 1779012130000,
+		"surviving prompt", "surviving answer",
+	)
+	task := parser.CoverageTask{
+		Agent: parser.AgentOpenCode, Root: env.opencodeDir,
+		CoverageKey: "opencode-sqlite:" + env.opencodeDir,
+	}
+	require.NoError(t, env.engine.PrimeCoverage(t.Context(), task))
+	stats := env.engine.SyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted, "initial sync aborted: %+v", stats)
+	require.Equal(t, 2, stats.Synced)
+
+	oc.mustExec(t, "delete session rows", `
+		DELETE FROM part WHERE session_id = 'deleted-session';
+		DELETE FROM message WHERE session_id = 'deleted-session';
+		DELETE FROM session WHERE id = 'deleted-session';
+	`)
+	oc.mustExec(t, "insert deletion event", `
+		INSERT INTO event(id, aggregate_id, seq, type, data)
+		VALUES('evt_deleted', 'deleted-session', 1, 'session.deleted.1', ?)
+	`, `{"sessionID":"deleted-session","info":{"id":"deleted-session"}}`)
+	task.Trigger = parser.CoverageTriggerDegraded
+	task.AuthoritativeFallback = true
+	result, err := env.engine.ReconcileCoverage(t.Context(), task)
+	require.NoError(t, err)
+	assert.False(t, result.AuditRequired)
+	require.Len(t, result.Removed, 1)
+	assert.Equal(t, "deleted-session", result.Removed[0].SessionID)
+	assert.Equal(t,
+		parser.OpenCodeSQLiteVirtualPath(oc.path, "deleted-session"),
+		result.Removed[0].Source.DisplayPath,
+	)
+
+	deleted, err := env.db.GetSession(t.Context(), "opencode:deleted-session")
+	require.NoError(t, err)
+	assert.Nil(t, deleted)
+	archived, err := env.db.GetSessionFull(
+		t.Context(), "opencode:deleted-session",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, archived)
+	assert.NotNil(t, archived.DeletedAt)
+	surviving, err := env.db.GetSession(
+		t.Context(), "opencode:surviving-session",
+	)
+	require.NoError(t, err)
+	assert.NotNil(t, surviving)
+}
+
+func TestOpenCodeCoverageDeletionPreservesStorageShadow(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+	const sessionID = "storage-shadow"
+	storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/storage-app", "Storage Shadow",
+		1779012000000, 1779012030000,
+	)
+	storage.addMessage(
+		t, sessionID, "storage-msg", "assistant", 1779012001000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "storage-msg", "storage-part",
+		"storage answer", 1779012001000,
+	)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.mustExec(t, "create event journal", `CREATE TABLE event (
+		id TEXT PRIMARY KEY, aggregate_id TEXT NOT NULL, seq INTEGER NOT NULL,
+		type TEXT NOT NULL, data TEXT NOT NULL
+	)`)
+	oc.addProject(t, "proj", "/home/user/code/sqlite-app")
+	seedOpenCodeSQLiteTextSession(
+		t, oc, "proj", sessionID,
+		1779012000000, 1779012030000,
+		"sqlite prompt", "sqlite answer",
+	)
+	task := parser.CoverageTask{
+		Agent: parser.AgentOpenCode, Root: env.opencodeDir,
+		CoverageKey: "opencode-sqlite:" + env.opencodeDir,
+	}
+	require.NoError(t, env.engine.PrimeCoverage(t.Context(), task))
+	stats := env.engine.SyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted, "initial sync aborted: %+v", stats)
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID, "storage answer",
+	)
+
+	oc.mustExec(t, "delete shadowed sqlite rows", `
+		DELETE FROM part WHERE session_id = 'storage-shadow';
+		DELETE FROM message WHERE session_id = 'storage-shadow';
+		DELETE FROM session WHERE id = 'storage-shadow';
+	`)
+	oc.mustExec(t, "insert shadowed deletion event", `
+		INSERT INTO event(id, aggregate_id, seq, type, data)
+		VALUES('evt_shadow_deleted', 'storage-shadow', 1, 'session.deleted.1', ?)
+	`, `{"sessionID":"storage-shadow","info":{"id":"storage-shadow"}}`)
+	task.Trigger = parser.CoverageTriggerDegraded
+	task.AuthoritativeFallback = true
+	result, err := env.engine.ReconcileCoverage(t.Context(), task)
+	require.NoError(t, err)
+	assert.False(t, result.AuditRequired)
+	require.Len(t, result.Sources, 1)
+	assert.Empty(t, result.Removed)
+
+	active, err := env.db.GetSession(t.Context(), "opencode:"+sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, active)
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID, "storage answer",
+	)
+}
+
+func TestOpenCodeCoverageDeletionTombstonesMissingStorageOwnership(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+	const sessionID = "deleted-storage-owner"
+	storagePath := storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/storage-app", "Deleted Storage Owner",
+		1779012000000, 1779012030000,
+	)
+	storage.addMessage(
+		t, sessionID, "storage-msg", "assistant", 1779012001000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "storage-msg", "storage-part",
+		"storage answer", 1779012001000,
+	)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.mustExec(t, "create event journal", `CREATE TABLE event (
+		id TEXT PRIMARY KEY, aggregate_id TEXT NOT NULL, seq INTEGER NOT NULL,
+		type TEXT NOT NULL, data TEXT NOT NULL
+	)`)
+	oc.addProject(t, "proj", "/home/user/code/sqlite-app")
+	seedOpenCodeSQLiteTextSession(
+		t, oc, "proj", sessionID,
+		1779012000000, 1779012030000,
+		"sqlite prompt", "sqlite answer",
+	)
+	task := parser.CoverageTask{
+		Agent: parser.AgentOpenCode, Root: env.opencodeDir,
+		CoverageKey: "opencode-sqlite:" + env.opencodeDir,
+	}
+	require.NoError(t, env.engine.PrimeCoverage(t.Context(), task))
+	stats := env.engine.SyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted, "initial sync aborted: %+v", stats)
+	archived, err := env.db.GetSessionFull(t.Context(), "opencode:"+sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, archived)
+	require.NotNil(t, archived.FilePath)
+	assert.Equal(t, storagePath, *archived.FilePath)
+
+	require.NoError(t, os.Remove(storagePath))
+	oc.mustExec(t, "delete sqlite rows for missing storage owner", `
+		DELETE FROM part WHERE session_id = 'deleted-storage-owner';
+		DELETE FROM message WHERE session_id = 'deleted-storage-owner';
+		DELETE FROM session WHERE id = 'deleted-storage-owner';
+	`)
+	oc.mustExec(t, "insert deletion event for missing storage owner", `
+		INSERT INTO event(id, aggregate_id, seq, type, data)
+		VALUES('evt_deleted_storage_owner', 'deleted-storage-owner', 1, 'session.deleted.1', ?)
+	`, `{"sessionID":"deleted-storage-owner","info":{"id":"deleted-storage-owner"}}`)
+	task.Trigger = parser.CoverageTriggerDegraded
+	task.AuthoritativeFallback = true
+	result, err := env.engine.ReconcileCoverage(t.Context(), task)
+	require.NoError(t, err)
+	require.Len(t, result.Removed, 1)
+
+	active, err := env.db.GetSession(t.Context(), "opencode:"+sessionID)
+	require.NoError(t, err)
+	assert.Nil(t, active)
+	deleted, err := env.db.GetSessionFull(t.Context(), "opencode:"+sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, deleted)
+	assert.NotNil(t, deleted.DeletedAt)
+	assert.Equal(t, storagePath, *deleted.FilePath)
+
+	replayed, err := env.engine.ReconcileCoverage(t.Context(), task)
+	require.NoError(t, err)
+	assert.Empty(t, replayed.Removed)
+}
+
+func TestOpenCodeCoverageDeletionPromotesNewStorageShadow(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.mustExec(t, "create event journal", `CREATE TABLE event (
+		id TEXT PRIMARY KEY, aggregate_id TEXT NOT NULL, seq INTEGER NOT NULL,
+		type TEXT NOT NULL, data TEXT NOT NULL
+	)`)
+	oc.addProject(t, "proj", "/home/user/code/sqlite-app")
+	const sessionID = "late-storage-shadow"
+	seedOpenCodeSQLiteTextSession(
+		t, oc, "proj", sessionID,
+		1779012000000, 1779012030000,
+		"sqlite prompt", "sqlite answer",
+	)
+	task := parser.CoverageTask{
+		Agent: parser.AgentOpenCode, Root: env.opencodeDir,
+		CoverageKey: "opencode-sqlite:" + env.opencodeDir,
+	}
+	require.NoError(t, env.engine.PrimeCoverage(t.Context(), task))
+	stats := env.engine.SyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted, "initial sync aborted: %+v", stats)
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID, "sqlite prompt", "sqlite answer",
+	)
+
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+	storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/storage-app", "Late Storage Shadow",
+		1779012100000, 1779012130000,
+	)
+	storage.addMessage(
+		t, sessionID, "storage-user", "user", 1779012101000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "storage-user", "storage-user-part",
+		"late storage prompt", 1779012101000,
+	)
+	storage.addMessage(
+		t, sessionID, "storage-assistant", "assistant", 1779012102000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "storage-assistant", "storage-assistant-part",
+		"late storage answer", 1779012102000,
+	)
+	oc.mustExec(t, "delete newly shadowed sqlite rows", `
+		DELETE FROM part WHERE session_id = 'late-storage-shadow';
+		DELETE FROM message WHERE session_id = 'late-storage-shadow';
+		DELETE FROM session WHERE id = 'late-storage-shadow';
+	`)
+	oc.mustExec(t, "insert newly shadowed deletion event", `
+		INSERT INTO event(id, aggregate_id, seq, type, data)
+		VALUES('evt_late_shadow_deleted', 'late-storage-shadow', 1, 'session.deleted.1', ?)
+	`, `{"sessionID":"late-storage-shadow","info":{"id":"late-storage-shadow"}}`)
+	task.Trigger = parser.CoverageTriggerDegraded
+	task.AuthoritativeFallback = true
+	result, err := env.engine.ReconcileCoverage(t.Context(), task)
+	require.NoError(t, err)
+	assert.False(t, result.AuditRequired)
+	require.Len(t, result.Sources, 1)
+	assert.Empty(t, result.Removed)
+
+	active, err := env.db.GetSession(t.Context(), "opencode:"+sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, active)
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"late storage prompt", "late storage answer",
+	)
+}
+
+func TestOpenCodeCoverageDeletionHonorsNarrowedCwdFilter(t *testing.T) {
+	root := t.TempDir()
+	database := dbtest.OpenTestDB(t)
+	initial := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenCode: {root},
+		},
+		Machine: "local",
+	})
+	oc := createOpenCodeDB(t, root)
+	oc.mustExec(t, "create event journal", `CREATE TABLE event (
+		id TEXT PRIMARY KEY, aggregate_id TEXT NOT NULL, seq INTEGER NOT NULL,
+		type TEXT NOT NULL, data TEXT NOT NULL
+	)`)
+	oc.addProject(t, "proj", "/home/user/code/excluded-app")
+	seedOpenCodeSQLiteTextSession(
+		t, oc, "proj", "filtered-deletion",
+		1779012000000, 1779012030000,
+		"excluded prompt", "excluded answer",
+	)
+	stats := initial.SyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted, "initial sync aborted: %+v", stats)
+	require.Equal(t, 1, stats.Synced)
+	initial.Close()
+
+	filtered := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenCode: {root},
+		},
+		Machine:            "local",
+		IncludeCwdPrefixes: []string{"/home/user/code/included-app"},
+	})
+	t.Cleanup(filtered.Close)
+	task := parser.CoverageTask{
+		Agent: parser.AgentOpenCode, Root: root,
+		CoverageKey: "opencode-sqlite:" + root,
+	}
+	require.NoError(t, filtered.PrimeCoverage(t.Context(), task))
+	oc.mustExec(t, "delete filtered session rows", `
+		DELETE FROM part WHERE session_id = 'filtered-deletion';
+		DELETE FROM message WHERE session_id = 'filtered-deletion';
+		DELETE FROM session WHERE id = 'filtered-deletion';
+	`)
+	oc.mustExec(t, "insert filtered deletion event", `
+		INSERT INTO event(id, aggregate_id, seq, type, data)
+		VALUES('evt_filtered_deleted', 'filtered-deletion', 1, 'session.deleted.1', ?)
+	`, `{"sessionID":"filtered-deletion","info":{"id":"filtered-deletion"}}`)
+	task.Trigger = parser.CoverageTriggerDegraded
+	task.AuthoritativeFallback = true
+	result, err := filtered.ReconcileCoverage(t.Context(), task)
+	require.NoError(t, err)
+	assert.False(t, result.AuditRequired)
+	require.Len(t, result.Removed, 1)
+
+	active, err := database.GetSession(
+		t.Context(), "opencode:filtered-deletion",
+	)
+	require.NoError(t, err)
+	assert.NotNil(t, active)
+}
+
 // TestSyncEngineOpenCodeSQLiteCwdFilteredContainerStaysUntrusted pins the
 // promotion invariant against the cwd allow-list: a session that parses but
 // is vetoed by the filter was deliberately not persisted, so its container

@@ -319,7 +319,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 				// The serve ctx reaches watcher-driven syncs so SIGTERM can
 				// interrupt database reconciliation before Stop waits for it.
 				return syncWatchBatch(ctx, engine, batch, func() watchRecoveryScope {
-					return probeWatchRecoveryScope(cfg)
+					return probeWatchRecoveryScopeWithOwner(cfg, engine)
 				})
 			},
 			sync.WatcherOptions{
@@ -329,10 +329,17 @@ func runServe(cfg config.Config, opts serveOptions) {
 					})
 				},
 				OnPollingRequired: func(obligation sync.PollingObligation) error {
+					scopes := make([]pollingScope, 0, len(obligation.Scopes))
+					for _, scope := range obligation.Scopes {
+						scopes = append(scopes, pollingScope{
+							Agent: parser.AgentType(scope.Agent), Root: scope.SyncDir,
+							CoverageKey: scope.CoverageKey,
+						})
+					}
 					return unwatchedPoller.AddObligation(pollingObligation{
-						Key:   obligation.Key,
-						Roots: obligation.Roots,
-						Probe: obligation.Probe,
+						Key: obligation.Key, Roots: obligation.Roots,
+						Probe:            obligation.Probe,
+						NonBlockingProbe: obligation.NonBlockingProbe, Scopes: scopes,
 					})
 				},
 				OnPollingReleased: unwatchedPoller.RemoveObligation,
@@ -365,7 +372,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 				// RecordStartupReconciled fires.
 				completeWorkerStartup = func() {
 					var gapErr error
-					if gapRoots := reconcileRootPaths(cfg); len(gapRoots) > 0 {
+					if gapRoots := reconcileRootPathsWithOwner(cfg, engine); len(gapRoots) > 0 {
 						gapErr = engine.ReconcileWatchRoots(ctx, gapRoots, false)
 					}
 					if gapErr != nil && ctx.Err() == nil {
@@ -770,6 +777,14 @@ func reconcileRootPaths(cfg config.Config) []string {
 	return probeWatchRecoveryScope(cfg).available
 }
 
+func reconcileRootPathsWithOwner(cfg config.Config, owner activeSourceProbe) []string {
+	return probeWatchRecoveryScopeWithOwner(cfg, owner).available
+}
+
+type activeSourceProbe interface {
+	HasActiveSessionSourceBelow(agent, path string) (bool, error)
+}
+
 // watchRecoveryScope is one probed availability snapshot of the configured
 // watch scope: the currently available reconciliation paths plus the
 // configured dirs whose physical scope is missing and therefore deferred to
@@ -799,22 +814,33 @@ func (s watchRecoveryScope) coversProviderRoot(root string) bool {
 // probeWatchRecoveryScope computes the probed reconciliation scope backing
 // reconcileRootPaths; see that function for the deferral semantics.
 func probeWatchRecoveryScope(cfg config.Config) watchRecoveryScope {
+	return probeWatchRecoveryScopeWithOwner(cfg, nil)
+}
+
+func probeWatchRecoveryScopeWithOwner(
+	cfg config.Config, owner activeSourceProbe,
+) watchRecoveryScope {
 	roots, unwatchedDirs, symlinkGatedDirs := collectWatchRoots(cfg)
 	deferred := make(map[string]struct{})
 	// A recursive symlink root never joins the watch roots, so its exact
 	// availability probe is the symlink target itself: os.Stat follows the
 	// link and fails while the target is gone, deferring the configured
 	// scope before an overlapping present path could expand into it.
-	for symRoot, dirs := range symlinkGatedDirs {
+	for symRoot, gate := range symlinkGatedDirs {
 		if _, err := os.Stat(symRoot); err == nil {
 			continue
 		}
-		for _, dir := range dirs {
-			deferred[filepath.Clean(dir)] = struct{}{}
+		root := watchRoot{path: symRoot, scopes: gate.scopes,
+			nonBlockingProbe: gate.nonBlockingProbe}
+		if gate.nonBlockingProbe && !watchRootHasArchivedSources(owner, root) {
+			continue
+		}
+		for _, scope := range gate.scopes {
+			deferred[filepath.Clean(scope.syncDir)] = struct{}{}
 		}
 	}
 	for _, r := range roots {
-		if r.exists {
+		if r.exists || (r.nonBlockingProbe && !watchRootHasArchivedSources(owner, r)) {
 			continue
 		}
 		for _, dir := range r.pendingPollingDirs {
@@ -859,6 +885,19 @@ func probeWatchRecoveryScope(cfg config.Config) watchRecoveryScope {
 		}
 	}
 	return watchRecoveryScope{available: paths, deferred: deferred}
+}
+
+func watchRootHasArchivedSources(owner activeSourceProbe, root watchRoot) bool {
+	if owner == nil {
+		return false
+	}
+	for _, scope := range root.scopes {
+		has, err := owner.HasActiveSessionSourceBelow(string(scope.agent), root.path)
+		if err != nil || has {
+			return true
+		}
+	}
+	return false
 }
 
 // overlapsDeferredScope reports whether the engine-side expansion of a
@@ -1805,6 +1844,17 @@ func startFileWatcher(
 ) {
 	t := time.Now()
 	roots, unwatchedDirs, symlinkGatedDirs := collectWatchRoots(cfg)
+	primeWatchCoverage(engine, roots)
+	authorityRoots := append([]watchRoot(nil), roots...)
+	for path, gate := range symlinkGatedDirs {
+		authorityRoots = append(authorityRoots, watchRoot{
+			path: path, scopes: gate.scopes,
+			nonBlockingProbe: gate.nonBlockingProbe,
+		})
+	}
+	onChange = annotateWatchCoverageWithAuthority(
+		onChange, roots, authorityRoots, activeSourceProbeForEngine(engine),
+	)
 	watcher, err := sync.NewWatcherWithCallback(
 		watcherBatchDelay,
 		watcherSyncMinInterval,
@@ -1897,6 +1947,197 @@ func startFileWatcher(
 		watcher.QueueRetryBatch
 }
 
+func activeSourceProbeForEngine(engine *sync.Engine) activeSourceProbe {
+	if engine == nil {
+		return nil
+	}
+	return engine
+}
+
+func primeWatchCoverage(engine *sync.Engine, roots []watchRoot) {
+	if engine == nil {
+		return
+	}
+	seen := make(map[string]struct{})
+	for _, root := range roots {
+		for _, scope := range root.scopes {
+			if scope.agent == "" || scope.syncDir == "" || scope.coverageKey == "" {
+				continue
+			}
+			key := string(scope.agent) + "\x00" + scope.syncDir + "\x00" + scope.coverageKey
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			if err := engine.PrimeCoverage(context.Background(), parser.CoverageTask{
+				Agent: scope.agent, Root: scope.syncDir,
+				CoverageKey: scope.coverageKey,
+			}); err != nil {
+				log.Printf("prime %s coverage: %v", scope.agent, err)
+			}
+		}
+	}
+}
+
+func annotateWatchCoverage(
+	next sync.WatchCallback, roots []watchRoot,
+) sync.WatchCallback {
+	return annotateWatchCoverageWithAuthority(next, roots, roots, nil)
+}
+
+func annotateWatchCoverageWithAuthority(
+	next sync.WatchCallback, roots, authorityRoots []watchRoot,
+	owner activeSourceProbe,
+) sync.WatchCallback {
+	return func(ctx context.Context, batch sync.WatchBatch) error {
+		for _, rename := range batch.Renames {
+			if rename.ItemType != sync.ItemIsDir {
+				batch.Paths = appendUniqueString(batch.Paths, rename.Path)
+			}
+		}
+		batch.Coverage = watchCoverageForPathsWithAuthority(
+			roots, authorityRoots, owner, batch.Paths,
+		)
+		return next(ctx, batch)
+	}
+}
+
+func watchCoverageForPaths(
+	roots []watchRoot, paths []string,
+) []sync.WatchCoverage {
+	return watchCoverageForPathsWithAuthority(roots, roots, nil, paths)
+}
+
+func watchCoverageForPathsWithAuthority(
+	roots, authorityRoots []watchRoot, owner activeSourceProbe, paths []string,
+) []sync.WatchCoverage {
+	byKey := make(map[string]sync.WatchCoverage)
+	for _, path := range paths {
+		bestLen := -1
+		var best *watchRoot
+		hasGenericScope := false
+		for i := range roots {
+			if !sameOrDescendantPath(path, roots[i].path) {
+				continue
+			}
+			for _, scope := range roots[i].scopes {
+				if scope.coverageKey == "" {
+					hasGenericScope = true
+				}
+			}
+			if len(roots[i].path) >= bestLen {
+				bestLen = len(roots[i].path)
+				best = &roots[i]
+			}
+		}
+		if best == nil {
+			continue
+		}
+		hasBoundedCoverage := false
+		for _, scope := range best.scopes {
+			if scope.coverageKey != "" && watchScopeMatchesPath(*best, scope, path) {
+				hasBoundedCoverage = true
+			}
+		}
+		if !hasBoundedCoverage {
+			continue
+		}
+		for _, scope := range best.scopes {
+			if scope.coverageKey == "" || !watchScopeMatchesPath(*best, scope, path) {
+				continue
+			}
+			key := string(scope.agent) + "\x00" + scope.syncDir + "\x00" + scope.coverageKey
+			coverage := byKey[key]
+			coverage.Agent = string(scope.agent)
+			coverage.Root = scope.syncDir
+			coverage.CoverageKey = scope.coverageKey
+			coverage.AuthoritativeFallback = watchScopeFallbackAvailable(
+				authorityRoots, scope, owner,
+			)
+			coverage.ConsumePath = !hasGenericScope
+			coverage.Paths = appendUniqueString(coverage.Paths, path)
+			byKey[key] = coverage
+		}
+	}
+	out := make([]sync.WatchCoverage, 0, len(byKey))
+	for _, coverage := range byKey {
+		slices.Sort(coverage.Paths)
+		out = append(out, coverage)
+	}
+	slices.SortFunc(out, func(a, b sync.WatchCoverage) int {
+		if c := strings.Compare(a.Agent, b.Agent); c != 0 {
+			return c
+		}
+		if c := strings.Compare(a.CoverageKey, b.CoverageKey); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Root, b.Root)
+	})
+	return out
+}
+
+func watchScopeFallbackAvailable(
+	roots []watchRoot, scope watchScope, owner activeSourceProbe,
+) bool {
+	for _, root := range roots {
+		ownsScope := false
+		for _, candidate := range root.scopes {
+			if candidate.agent == scope.agent && candidate.syncDir == scope.syncDir {
+				ownsScope = true
+				break
+			}
+		}
+		if !ownsScope {
+			continue
+		}
+		if _, err := os.Stat(root.path); err != nil {
+			if !root.nonBlockingProbe || watchRootHasArchivedSources(owner, root) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func watchScopeMatchesPath(root watchRoot, scope watchScope, path string) bool {
+	rel, err := filepath.Rel(root.path, path)
+	if err != nil || rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	includes := splitWatchGlobs(scope.includeGlobs)
+	if len(includes) > 0 && !watchGlobMatchesAny(includes, rel) {
+		return false
+	}
+	return !watchGlobMatchesAny(splitWatchGlobs(scope.excludeGlobs), rel)
+}
+
+func watchGlobMatchesAny(patterns []string, rel string) bool {
+	for _, pattern := range patterns {
+		if matched, err := filepath.Match(pattern, rel); err == nil && matched {
+			return true
+		}
+	}
+	return false
+}
+
+func splitWatchGlobs(encoded string) []string {
+	if encoded == "" {
+		return nil
+	}
+	return strings.Split(encoded, "\x00")
+}
+
+func sameOrDescendantPath(path, root string) bool {
+	path = filepath.Clean(path)
+	root = filepath.Clean(root)
+	if path == root {
+		return true
+	}
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != "." && rel != ".." &&
+		!strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 func watchPollingObligations(
 	roots []watchRoot,
 	results []sync.RecursiveWatchResult,
@@ -1904,6 +2145,8 @@ func watchPollingObligations(
 ) []sync.PollingObligation {
 	byKey := make(map[string][]string)
 	probes := make(map[string]string)
+	scopesByKey := make(map[string][]sync.WatchScope)
+	nonBlockingByKey := make(map[string]bool)
 	represented := make(map[string]struct{})
 	// The probe is the physical path whose availability gates the
 	// obligation's reconciliation roots: the watch root's own path for
@@ -1929,9 +2172,17 @@ func watchPollingObligations(
 		}
 		if !result.MissingRootLifecycleOwned {
 			add(root.path, root.path, root.pendingPollingDirs...)
+			nonBlockingByKey[root.path] = root.nonBlockingProbe
+			scopesByKey[root.path] = appendUniqueWatchScopes(
+				scopesByKey[root.path], root.registeredRoot().Scopes,
+			)
 		}
 		for _, dir := range root.persistentPollingDirs {
-			add("persistent:"+filepath.Clean(dir), dir, dir)
+			key := "persistent:" + filepath.Clean(dir)
+			add(key, dir, dir)
+			scopesByKey[key] = appendUniqueWatchScopes(
+				scopesByKey[key], root.registeredRoot().Scopes,
+			)
 		}
 		if i >= len(results) {
 			// No registration result exists for this root: the watcher was
@@ -1941,11 +2192,19 @@ func watchPollingObligations(
 			// pollable and the fallback poll reconciles it as an
 			// authoritative empty discovery.
 			add(root.path, root.path, root.syncDirs()...)
+			nonBlockingByKey[root.path] = root.nonBlockingProbe
+			scopesByKey[root.path] = appendUniqueWatchScopes(
+				scopesByKey[root.path], root.registeredRoot().Scopes,
+			)
 			continue
 		}
 		if result.Unwatched > 0 || result.BudgetExhausted ||
 			result.ResourceExhausted || result.Err != nil {
 			add(root.path, root.path, root.syncDirs()...)
+			nonBlockingByKey[root.path] = root.nonBlockingProbe
+			scopesByKey[root.path] = appendUniqueWatchScopes(
+				scopesByKey[root.path], root.registeredRoot().Scopes,
+			)
 		}
 	}
 	for _, dir := range unwatchedDirs {
@@ -1959,12 +2218,25 @@ func watchPollingObligations(
 		slices.Sort(roots)
 		obligations = append(obligations, sync.PollingObligation{
 			Key: key, Roots: roots, Probe: probes[key],
+			NonBlockingProbe: nonBlockingByKey[key], Scopes: scopesByKey[key],
 		})
 	}
 	slices.SortFunc(obligations, func(a, b sync.PollingObligation) int {
 		return strings.Compare(a.Key, b.Key)
 	})
 	return obligations
+}
+
+func appendUniqueWatchScopes(
+	dst []sync.WatchScope, values []sync.WatchScope,
+) []sync.WatchScope {
+	for _, value := range values {
+		if slices.Contains(dst, value) {
+			continue
+		}
+		dst = append(dst, value)
+	}
+	return dst
 }
 
 // registerWatcherUnavailableObligations installs the polling obligations for
@@ -1989,14 +2261,20 @@ func registerWatcherUnavailableObligations(
 	options sync.WatcherOptions,
 	roots []watchRoot,
 	unwatchedDirs []string,
-	symlinkGatedDirs map[string][]string,
+	symlinkGatedDirs map[string]symlinkGate,
 ) error {
+	typedRoots := make(map[string]struct{})
 	if options.OnPollingRequired != nil {
 		obligations := watchPollingObligations(roots, nil, unwatchedDirs)
 		obligations = append(
 			obligations, symlinkPollingObligations(symlinkGatedDirs)...,
 		)
 		for _, obligation := range obligations {
+			if len(obligation.Scopes) > 0 {
+				for _, root := range obligation.Roots {
+					typedRoots[filepath.Clean(root)] = struct{}{}
+				}
+			}
 			if err := options.OnPollingRequired(obligation); err != nil {
 				log.Printf(
 					"register polling obligation %q: %v", obligation.Key, err,
@@ -2007,7 +2285,17 @@ func registerWatcherUnavailableObligations(
 	if options.OnCoverageDegraded == nil {
 		return nil
 	}
-	return options.OnCoverageDegraded(unwatchedDirs)
+	untyped := slices.DeleteFunc(
+		append([]string(nil), unwatchedDirs...),
+		func(root string) bool {
+			_, ok := typedRoots[filepath.Clean(root)]
+			return ok
+		},
+	)
+	if len(untyped) == 0 {
+		return nil
+	}
+	return options.OnCoverageDegraded(untyped)
 }
 
 // symlinkPollingObligations gates persistent polling of dirs whose recursive
@@ -2019,19 +2307,21 @@ func registerWatcherUnavailableObligations(
 // referencing it has a missing probe, so this composes with the dir's own
 // persistent obligation.
 func symlinkPollingObligations(
-	symlinkGatedDirs map[string][]string,
+	symlinkGatedDirs map[string]symlinkGate,
 ) []sync.PollingObligation {
 	obligations := make([]sync.PollingObligation, 0, len(symlinkGatedDirs))
-	for symRoot, dirs := range symlinkGatedDirs {
-		roots := make([]string, 0, len(dirs))
-		for _, dir := range dirs {
-			roots = appendUniqueString(roots, filepath.Clean(dir))
+	for symRoot, gate := range symlinkGatedDirs {
+		roots := make([]string, 0, len(gate.scopes))
+		for _, scope := range gate.scopes {
+			roots = appendUniqueString(roots, filepath.Clean(scope.syncDir))
 		}
 		slices.Sort(roots)
 		obligations = append(obligations, sync.PollingObligation{
-			Key:   "symlink:" + filepath.Clean(symRoot),
-			Roots: roots,
-			Probe: filepath.Clean(symRoot),
+			Key:              "symlink:" + filepath.Clean(symRoot),
+			Roots:            roots,
+			Probe:            filepath.Clean(symRoot),
+			NonBlockingProbe: gate.nonBlockingProbe,
+			Scopes:           watchRoot{scopes: gate.scopes}.registeredRoot().Scopes,
 		})
 	}
 	slices.SortFunc(obligations, func(a, b sync.PollingObligation) int {
@@ -2086,6 +2376,12 @@ type watchSyncer interface {
 	ReconcileWatchRootsAfterLostEvents(context.Context, []string, bool) error
 }
 
+type providerExcludingWatchSyncer interface {
+	SyncPathsExcludingProvidersContext(
+		context.Context, []string, []parser.AgentType,
+	) error
+}
+
 type watchReconciliationError struct {
 	cause error
 	retry sync.WatchBatch
@@ -2137,7 +2433,19 @@ func (e *watchReconciliationError) WatchRetryBatch() sync.WatchBatch {
 	retry := e.retry
 	retry.Paths = append([]string(nil), retry.Paths...)
 	retry.ReconcileRoots = append([]string(nil), retry.ReconcileRoots...)
+	retry.Renames = append([]sync.WatchRename(nil), retry.Renames...)
+	retry.Coverage = append([]sync.WatchCoverage(nil), retry.Coverage...)
+	for i := range retry.Coverage {
+		retry.Coverage[i].Paths = append([]string(nil), retry.Coverage[i].Paths...)
+	}
 	return retry
+}
+
+func coverageRetryBatch(batch sync.WatchBatch) sync.WatchBatch {
+	if batch.FullSync {
+		return sync.WatchBatch{FullSync: true, LostEvents: batch.LostEvents}
+	}
+	return batch
 }
 
 // syncWatchBatch applies one watcher batch to the engine. recoveryScope
@@ -2154,13 +2462,10 @@ func syncWatchBatch(
 	recoveryScope func() watchRecoveryScope,
 ) error {
 	paths := append([]string(nil), batch.Paths...)
+	coverageHandled := make(map[string]struct{})
 	full := batch.FullSync
 	reconcileRoots := append([]string(nil), batch.ReconcileRoots...)
 	lostEvents := batch.LostEvents
-	type renameOwner struct {
-		path  string
-		agent string
-	}
 	var scope watchRecoveryScope
 	scopeProbed := false
 	probeScope := func() watchRecoveryScope {
@@ -2169,6 +2474,49 @@ func syncWatchBatch(
 			scopeProbed = true
 		}
 		return scope
+	}
+	if len(batch.Coverage) > 0 {
+		covered, excluded, err := syncWatchCoverage(ctx, engine, batch.Coverage)
+		if err != nil {
+			return &watchReconciliationError{
+				cause: err,
+				retry: coverageRetryBatch(batch),
+			}
+		}
+		paths = slices.DeleteFunc(paths, func(path string) bool {
+			_, ok := covered[filepath.Clean(path)]
+			if ok {
+				coverageHandled[filepath.Clean(path)] = struct{}{}
+			}
+			return ok
+		})
+		if len(paths) > 0 && len(excluded) > 0 {
+			if dispatcher, ok := engine.(providerExcludingWatchSyncer); ok {
+				for _, path := range paths {
+					agents := excluded[filepath.Clean(path)]
+					if len(agents) == 0 {
+						continue
+					}
+					coverageHandled[filepath.Clean(path)] = struct{}{}
+					if err := dispatcher.SyncPathsExcludingProvidersContext(
+						ctx, []string{path}, agents,
+					); err != nil {
+						return &watchReconciliationError{
+							cause: err,
+							retry: coverageRetryBatch(batch),
+						}
+					}
+				}
+				paths = slices.DeleteFunc(paths, func(path string) bool {
+					_, handled := coverageHandled[filepath.Clean(path)]
+					return handled
+				})
+			}
+		}
+	}
+	type renameOwner struct {
+		path  string
+		agent string
 	}
 	authoritativePaths := make(map[string]struct{})
 	authoritativeRenames := make(map[renameOwner]struct{})
@@ -2196,7 +2544,9 @@ func syncWatchBatch(
 		}
 		switch rename.ItemType {
 		case sync.ItemIsFile:
-			paths = appendUniqueString(paths, rename.Path)
+			if _, handled := coverageHandled[filepath.Clean(rename.Path)]; !handled {
+				paths = appendUniqueString(paths, rename.Path)
+			}
 		case sync.ItemIsDir:
 			promoteDirectoryRename(rename)
 			authoritativePaths[rename.Path] = struct{}{}
@@ -2211,7 +2561,9 @@ func syncWatchBatch(
 					authoritativeRenames[owner] = struct{}{}
 					paths = removeString(paths, rename.Path)
 				} else {
-					paths = appendUniqueString(paths, rename.Path)
+					if _, handled := coverageHandled[filepath.Clean(rename.Path)]; !handled {
+						paths = appendUniqueString(paths, rename.Path)
+					}
 				}
 				continue
 			}
@@ -2229,7 +2581,9 @@ func syncWatchBatch(
 				paths = removeString(paths, rename.Path)
 			} else {
 				if _, authoritative := authoritativePaths[rename.Path]; !authoritative {
-					paths = appendUniqueString(paths, rename.Path)
+					if _, handled := coverageHandled[filepath.Clean(rename.Path)]; !handled {
+						paths = appendUniqueString(paths, rename.Path)
+					}
 				}
 			}
 		}
@@ -2285,6 +2639,73 @@ func syncWatchBatch(
 	return nil
 }
 
+func syncWatchCoverage(
+	ctx context.Context, engine watchSyncer, coverage []sync.WatchCoverage,
+) (map[string]struct{}, map[string][]parser.AgentType, error) {
+	dispatcher, ok := engine.(boundedCoverageSyncer)
+	if !ok {
+		return nil, nil, nil
+	}
+	covered := make(map[string]struct{})
+	excluded := make(map[string][]parser.AgentType)
+	for _, item := range coverage {
+		trigger := parser.CoverageTriggerNative
+		for page := 0; ; page++ {
+			if page >= 1024 {
+				return nil, nil, fmt.Errorf("%s coverage continuation limit exceeded", item.Agent)
+			}
+			result, err := dispatcher.ReconcileCoverage(ctx, parser.CoverageTask{
+				Agent: parser.AgentType(item.Agent), Root: item.Root,
+				CoverageKey: item.CoverageKey, Trigger: trigger,
+				AuthoritativeFallback: item.AuthoritativeFallback,
+				ChangedPaths:          append([]string(nil), item.Paths...),
+			})
+			if err != nil {
+				return nil, nil, fmt.Errorf("%s watcher coverage: %w", item.Agent, err)
+			}
+			if result.AuditRequired {
+				log.Printf("%s watcher coverage requested archive audit", item.Agent)
+			}
+			if !result.More {
+				break
+			}
+			trigger = parser.CoverageTriggerContinuation
+			delay := result.NextDelay
+			if delay <= 0 {
+				delay = 100 * time.Millisecond
+			}
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return nil, nil, ctx.Err()
+			case <-timer.C:
+			}
+		}
+		for _, path := range item.Paths {
+			path = filepath.Clean(path)
+			excluded[path] = appendUniqueAgentType(
+				excluded[path], parser.AgentType(item.Agent),
+			)
+			if item.ConsumePath {
+				covered[path] = struct{}{}
+			}
+		}
+	}
+	return covered, excluded, nil
+}
+
+func appendUniqueAgentType(
+	values []parser.AgentType, value parser.AgentType,
+) []parser.AgentType {
+	if slices.Contains(values, value) {
+		return values
+	}
+	return append(values, value)
+}
+
 func removeString(values []string, remove string) []string {
 	return slices.DeleteFunc(values, func(value string) bool { return value == remove })
 }
@@ -2306,32 +2727,40 @@ func deduplicateStrings(values []string) []string {
 }
 
 type watchScope struct {
-	agent   parser.AgentType
-	syncDir string
+	agent        parser.AgentType
+	syncDir      string
+	coverageKey  string
+	includeGlobs string
+	excludeGlobs string
 }
 
 type watchRoot struct {
 	path                  string
 	recursive             bool
 	exists                bool
+	nonBlockingProbe      bool
 	scopes                []watchScope
 	pendingPollingDirs    []string
 	persistentPollingDirs []string
+}
+
+type symlinkGate struct {
+	scopes           []watchScope
+	nonBlockingProbe bool
 }
 
 func (r watchRoot) registeredRoot() sync.WatchRoot {
 	scopes := make([]sync.WatchScope, 0, len(r.scopes))
 	for _, scope := range r.scopes {
 		scopes = append(scopes, sync.WatchScope{
-			Agent:   string(scope.agent),
-			SyncDir: scope.syncDir,
+			Agent:       string(scope.agent),
+			SyncDir:     scope.syncDir,
+			CoverageKey: scope.coverageKey,
 		})
 	}
 	return sync.WatchRoot{
-		Path:      r.path,
-		Recursive: r.recursive,
-		Exists:    r.exists,
-		Scopes:    scopes,
+		Path: r.path, Recursive: r.recursive, Exists: r.exists,
+		NonBlockingProbe: r.nonBlockingProbe, Scopes: scopes,
 	}
 }
 
@@ -2350,17 +2779,27 @@ func (r watchRoot) syncDirs() []string {
 func collectWatchRoots(cfg config.Config) (
 	roots []watchRoot,
 	unwatchedDirs []string,
-	symlinkGatedDirs map[string][]string,
+	symlinkGatedDirs map[string]symlinkGate,
 ) {
 	rootIndexes := make(map[string]int)
 	persistentPollingDirs := make(map[string]struct{})
-	symlinkGatedDirs = make(map[string][]string)
-	addRoot := func(agent parser.AgentType, dir, path string, recursive, exists bool) {
+	symlinkGatedDirs = make(map[string]symlinkGate)
+	addRoot := func(
+		agent parser.AgentType, dir, path string, recursive, exists bool,
+		coverageKey string, nonBlockingProbe bool,
+		includeGlobs, excludeGlobs []string,
+	) {
+		dir = filepath.Clean(dir)
 		path = filepath.Clean(path)
-		scope := watchScope{agent: agent, syncDir: dir}
+		scope := watchScope{
+			agent: agent, syncDir: dir, coverageKey: coverageKey,
+			includeGlobs: strings.Join(includeGlobs, "\x00"),
+			excludeGlobs: strings.Join(excludeGlobs, "\x00"),
+		}
 		if idx, ok := rootIndexes[path]; ok {
 			roots[idx].recursive = roots[idx].recursive || recursive
 			roots[idx].exists = roots[idx].exists || exists
+			roots[idx].nonBlockingProbe = roots[idx].nonBlockingProbe && nonBlockingProbe
 			if !slices.Contains(roots[idx].scopes, scope) {
 				roots[idx].scopes = append(roots[idx].scopes, scope)
 			}
@@ -2368,27 +2807,40 @@ func collectWatchRoots(cfg config.Config) (
 		}
 		rootIndexes[path] = len(roots)
 		roots = append(roots, watchRoot{
-			path:      path,
-			recursive: recursive,
-			exists:    exists,
-			scopes:    []watchScope{scope},
+			path: path, recursive: recursive, exists: exists,
+			nonBlockingProbe: nonBlockingProbe, scopes: []watchScope{scope},
 		})
 	}
 	for _, def := range parser.Registry {
 		for _, d := range cfg.ResolveDirs(def.Type) {
-			addAgentRoot := func(dir, root string, recursive, exists bool) {
-				addRoot(def.Type, dir, root, recursive, exists)
+			addAgentRoot := func(
+				dir, root string, recursive, exists bool, coverageKey string,
+				nonBlockingProbe bool, includeGlobs, excludeGlobs []string,
+			) {
+				addRoot(
+					def.Type, dir, root, recursive, exists, coverageKey,
+					nonBlockingProbe, includeGlobs, excludeGlobs,
+				)
 			}
 			_, hasProvider := parser.ProviderFactoryByType(def.Type)
 			if providerWatched, polling := collectProviderWatchRoots(def, d, addAgentRoot); providerWatched {
-				if polling.persistent {
-					persistentPollingDirs[d] = struct{}{}
-					unwatchedDirs = appendUniqueString(unwatchedDirs, d)
-				}
 				for _, symRoot := range polling.symlinkRoots {
-					symlinkGatedDirs[symRoot] = appendUniqueString(
-						symlinkGatedDirs[symRoot], d,
-					)
+					scope := watchScope{
+						agent: def.Type, syncDir: d,
+						coverageKey:  symRoot.coverageKey,
+						includeGlobs: symRoot.includeGlobs,
+						excludeGlobs: symRoot.excludeGlobs,
+					}
+					gate := symlinkGatedDirs[symRoot.path]
+					if len(gate.scopes) == 0 {
+						gate.nonBlockingProbe = symRoot.nonBlockingProbe
+					} else {
+						gate.nonBlockingProbe = gate.nonBlockingProbe && symRoot.nonBlockingProbe
+					}
+					if !slices.Contains(gate.scopes, scope) {
+						gate.scopes = append(gate.scopes, scope)
+					}
+					symlinkGatedDirs[symRoot.path] = gate
 				}
 				for _, missing := range polling.missingRoots {
 					idx, ok := rootIndexes[filepath.Clean(missing)]
@@ -2409,7 +2861,12 @@ func collectWatchRoots(cfg config.Config) (
 				}
 				continue
 			}
-			fallbackUnwatched := collectLegacyWatchRoots(def, d, addAgentRoot)
+			fallbackUnwatched := collectLegacyWatchRoots(
+				def, d,
+				func(dir, root string, recursive, exists bool) {
+					addAgentRoot(dir, root, recursive, exists, "", false, nil, nil)
+				},
+			)
 			for _, pollingDir := range fallbackUnwatched {
 				persistentPollingDirs[pollingDir] = struct{}{}
 				unwatchedDirs = appendUniqueString(unwatchedDirs, pollingDir)
@@ -2435,14 +2892,24 @@ type providerPollingReasons struct {
 	// the root itself is a symlink. They are served by persistent polling, and
 	// their target availability gates the configured dir's reconciliation
 	// scope: a broken symlink streams an empty discovery without error.
-	symlinkRoots []string
-	persistent   bool
+	symlinkRoots []providerSymlinkRoot
+}
+
+type providerSymlinkRoot struct {
+	path             string
+	coverageKey      string
+	includeGlobs     string
+	excludeGlobs     string
+	nonBlockingProbe bool
 }
 
 func collectProviderWatchRoots(
 	def parser.AgentDef,
 	dir string,
-	addRoot func(dir, root string, recursive, exists bool),
+	addRoot func(
+		dir, root string, recursive, exists bool, coverageKey string,
+		nonBlockingProbe bool, includeGlobs, excludeGlobs []string,
+	),
 ) (bool, providerPollingReasons) {
 	factory, ok := parser.ProviderFactoryByType(def.Type)
 	if !ok {
@@ -2468,13 +2935,21 @@ func collectProviderWatchRoots(
 		}
 		planned = true
 		if providerRoot.Recursive && isSymlinkPath(root) {
-			polling.persistent = true
-			polling.symlinkRoots = append(polling.symlinkRoots, root)
+			polling.symlinkRoots = append(polling.symlinkRoots, providerSymlinkRoot{
+				path: root, coverageKey: providerRoot.CoverageKey,
+				includeGlobs:     strings.Join(providerRoot.IncludeGlobs, "\x00"),
+				excludeGlobs:     strings.Join(providerRoot.ExcludeGlobs, "\x00"),
+				nonBlockingProbe: providerRoot.NonBlockingProbe,
+			})
 			continue
 		}
 		_, err := os.Stat(root)
 		exists := err == nil
-		addRoot(dir, root, providerRoot.Recursive, exists)
+		addRoot(
+			dir, root, providerRoot.Recursive, exists,
+			providerRoot.CoverageKey, providerRoot.NonBlockingProbe,
+			providerRoot.IncludeGlobs, providerRoot.ExcludeGlobs,
+		)
 		if exists {
 			continue
 		}

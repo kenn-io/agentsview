@@ -613,7 +613,7 @@ func TestCollectWatchRootsPollsRecursiveSymlinkProviderRoot(t *testing.T) {
 		},
 	}
 
-	roots, unwatchedDirs, _ := collectWatchRoots(cfg)
+	roots, unwatchedDirs, symlinkGatedDirs := collectWatchRoots(cfg)
 
 	require.Len(t, roots, 2)
 	assert.Equal(t, root, roots[0].path)
@@ -628,7 +628,12 @@ func TestCollectWatchRootsPollsRecursiveSymlinkProviderRoot(t *testing.T) {
 	assert.False(t, roots[1].recursive)
 	assert.True(t, roots[1].exists)
 	assert.Equal(t, []watchScope{{agent: parser.AgentVSCopilot, syncDir: root}}, roots[1].scopes)
-	assert.ElementsMatch(t, []string{root}, unwatchedDirs)
+	assert.Empty(t, unwatchedDirs)
+	assert.Equal(t, map[string]symlinkGate{
+		filepath.Join(root, ".VS"): {scopes: []watchScope{{
+			agent: parser.AgentVSCopilot, syncDir: root,
+		}}},
+	}, symlinkGatedDirs)
 }
 
 // fakeEmitter records Emit calls; safe for concurrent use.
@@ -1141,6 +1146,255 @@ func TestCollectWatchRootsUsesCoworkProviderRecursiveRoot(t *testing.T) {
 	assert.Equal(t, []watchScope{{agent: parser.AgentCowork, syncDir: root}}, got.scopes)
 }
 
+func TestCollectWatchRootsKeepsOpenCodeSQLiteShallowBeforeStorage(t *testing.T) {
+	root := t.TempDir()
+	raw, err := sql.Open("sqlite3", filepath.Join(root, "opencode.db"))
+	require.NoError(t, err)
+	_, err = raw.Exec(`CREATE TABLE event (
+		id TEXT PRIMARY KEY, aggregate_id TEXT NOT NULL, seq INTEGER NOT NULL,
+		type TEXT NOT NULL, data TEXT NOT NULL
+	)`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	storage := filepath.Join(root, "storage")
+	require.NoError(t, os.Mkdir(storage, 0o755))
+	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{
+		parser.AgentOpenCode: {root + string(filepath.Separator)},
+	}}
+
+	roots, _, _ := collectWatchRoots(cfg)
+	require.Len(t, roots, 2)
+	assert.Equal(t, root, roots[0].path)
+	assert.False(t, roots[0].recursive)
+	assert.Equal(t, []watchScope{{
+		agent: parser.AgentOpenCode, syncDir: root,
+		coverageKey:  "opencode-sqlite:" + root,
+		includeGlobs: "opencode.db\x00opencode.db-wal",
+	}}, roots[0].scopes)
+	assert.Equal(t, storage, roots[1].path)
+	assert.True(t, roots[1].recursive)
+	assert.Equal(t, []watchScope{{
+		agent: parser.AgentOpenCode, syncDir: root,
+	}}, roots[1].scopes)
+}
+
+func TestCollectWatchRootsRetainsMissingOpenCodeStorageLifecycle(t *testing.T) {
+	root := t.TempDir()
+	raw, err := sql.Open("sqlite3", filepath.Join(root, "opencode.db"))
+	require.NoError(t, err)
+	_, err = raw.Exec(`CREATE TABLE event (
+		id TEXT PRIMARY KEY, aggregate_id TEXT NOT NULL, seq INTEGER NOT NULL,
+		type TEXT NOT NULL, data TEXT NOT NULL
+	)`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{
+		parser.AgentOpenCode: {root},
+	}}
+
+	roots, unwatched, _ := collectWatchRoots(cfg)
+	require.Len(t, roots, 2)
+	storage := filepath.Join(root, "storage")
+	assert.Equal(t, storage, roots[1].path)
+	assert.True(t, roots[1].recursive)
+	assert.False(t, roots[1].exists)
+	assert.Equal(t, []string{root}, roots[1].pendingPollingDirs)
+	assert.Equal(t, []string{root}, unwatched)
+	obligations := watchPollingObligations(roots, nil, unwatched)
+	local := make([]pollingObligation, 0, len(obligations))
+	for _, obligation := range obligations {
+		local = append(local, pollingObligation{
+			Key: obligation.Key, Roots: obligation.Roots, Probe: obligation.Probe,
+			NonBlockingProbe: obligation.NonBlockingProbe,
+		})
+	}
+	assert.Equal(t, []string{root}, availableUnwatchedPollRoots(local),
+		"missing optional storage must not block SQLite coverage")
+	assert.True(t, probeWatchRecoveryScope(cfg).coversProviderRoot(root),
+		"missing optional storage must not block provider fallback authority")
+	owner := &watchSyncRecorder{lookupResults: map[string]bool{
+		string(parser.AgentOpenCode) + "\x00" + storage: true,
+	}}
+	assert.False(t, probeWatchRecoveryScopeWithOwner(cfg, owner).coversProviderRoot(root),
+		"archived storage ownership must keep the missing root blocking")
+}
+
+func TestWatchCoverageForPathsRoutesSQLiteButLeavesStorageNative(t *testing.T) {
+	root := t.TempDir()
+	storage := filepath.Join(root, "storage")
+	roots := []watchRoot{
+		{path: root, scopes: []watchScope{
+			{agent: parser.AgentOpenCode, syncDir: root,
+				coverageKey: "opencode-sqlite:" + root},
+			{agent: parser.AgentClaude, syncDir: root},
+		}},
+		{path: storage, recursive: true, scopes: []watchScope{{
+			agent: parser.AgentOpenCode, syncDir: root,
+		}}},
+	}
+	dbPath := filepath.Join(root, "opencode.db-wal")
+	storagePath := filepath.Join(storage, "message", "ses_1", "msg_1.json")
+
+	assert.Equal(t, []agentsync.WatchCoverage{{
+		Agent: string(parser.AgentOpenCode), Root: root,
+		CoverageKey: "opencode-sqlite:" + root, Paths: []string{dbPath},
+		ConsumePath: false,
+	}}, watchCoverageForPaths(roots, []string{storagePath, dbPath}))
+}
+
+func TestWatchCoverageForPathsAppliesCoverageRoutingGlobs(t *testing.T) {
+	root := t.TempDir()
+	roots := []watchRoot{{
+		path: root,
+		scopes: []watchScope{{
+			agent: parser.AgentOpenCode, syncDir: root,
+			coverageKey:  "opencode-sqlite:" + root,
+			includeGlobs: "opencode.db\x00opencode.db-wal",
+		}},
+	}}
+
+	assert.Empty(t, watchCoverageForPaths(
+		roots, []string{filepath.Join(root, "unrelated.json")},
+	))
+	assert.Equal(t, []agentsync.WatchCoverage{{
+		Agent: string(parser.AgentOpenCode), Root: root,
+		CoverageKey:           "opencode-sqlite:" + root,
+		AuthoritativeFallback: true,
+		Paths:                 []string{filepath.Join(root, "opencode.db-wal")},
+		ConsumePath:           true,
+	}}, watchCoverageForPaths(roots, []string{
+		filepath.Join(root, "unrelated.json"),
+		filepath.Join(root, "opencode.db-wal"),
+	}))
+}
+
+func TestWatchCoverageForPathsPreservesStartupProbeAuthority(t *testing.T) {
+	root := t.TempDir()
+	storage := filepath.Join(root, "storage")
+	scope := watchScope{
+		agent: parser.AgentOpenCode, syncDir: root,
+		coverageKey:  "opencode-sqlite:" + root,
+		includeGlobs: "opencode.db\x00opencode.db-wal",
+	}
+	dbPath := filepath.Join(root, "opencode.db")
+
+	optional := watchCoverageForPaths([]watchRoot{
+		{path: root, exists: true, scopes: []watchScope{scope}},
+		{path: storage, nonBlockingProbe: true, scopes: []watchScope{{
+			agent: parser.AgentOpenCode, syncDir: root,
+		}}},
+	}, []string{dbPath})
+	require.Len(t, optional, 1)
+	assert.True(t, optional[0].AuthoritativeFallback)
+
+	require.NoError(t, os.Mkdir(storage, 0o755))
+	plannedPresent := []watchRoot{
+		{path: root, exists: true, scopes: []watchScope{scope}},
+		{path: storage, exists: true, scopes: []watchScope{{
+			agent: parser.AgentOpenCode, syncDir: root,
+		}}},
+	}
+	require.NoError(t, os.RemoveAll(storage))
+	disappeared := watchCoverageForPaths(plannedPresent, []string{dbPath})
+	require.Len(t, disappeared, 1)
+	assert.False(t, disappeared[0].AuthoritativeFallback)
+}
+
+func TestWatchCoverageAuthorityIncludesBrokenSymlinkGate(t *testing.T) {
+	root := t.TempDir()
+	symRoot := filepath.Join(root, "storage-link")
+	scope := watchScope{
+		agent: parser.AgentOpenCode, syncDir: root,
+		coverageKey:  "opencode-sqlite:" + root,
+		includeGlobs: "opencode.db",
+	}
+	coverage := watchCoverageForPathsWithAuthority(
+		[]watchRoot{{path: root, scopes: []watchScope{scope}}},
+		[]watchRoot{
+			{path: root, scopes: []watchScope{scope}},
+			{path: symRoot, scopes: []watchScope{{
+				agent: parser.AgentOpenCode, syncDir: root,
+			}}},
+		}, nil, []string{filepath.Join(root, "opencode.db")},
+	)
+	require.Len(t, coverage, 1)
+	assert.False(t, coverage[0].AuthoritativeFallback)
+}
+
+func TestWatchCoverageOptionalProbeBlocksWhenArchiveOwnsSources(t *testing.T) {
+	root := t.TempDir()
+	storage := filepath.Join(root, "storage")
+	scope := watchScope{
+		agent: parser.AgentOpenCode, syncDir: root,
+		coverageKey:  "opencode-sqlite:" + root,
+		includeGlobs: "opencode.db",
+	}
+	owner := &watchSyncRecorder{lookupResults: map[string]bool{
+		string(parser.AgentOpenCode) + "\x00" + storage: true,
+	}}
+	coverage := watchCoverageForPathsWithAuthority(
+		[]watchRoot{{path: root, scopes: []watchScope{scope}}},
+		[]watchRoot{
+			{path: root, scopes: []watchScope{scope}},
+			{path: storage, nonBlockingProbe: true, scopes: []watchScope{{
+				agent: parser.AgentOpenCode, syncDir: root,
+			}}},
+		}, owner, []string{filepath.Join(root, "opencode.db")},
+	)
+	require.Len(t, coverage, 1)
+	assert.False(t, coverage[0].AuthoritativeFallback)
+}
+
+func TestWatchCoverageForPathsRetainsGenericAncestorOwnership(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(root, "nested")
+	dbPath := filepath.Join(nested, "opencode.db-wal")
+	roots := []watchRoot{
+		{path: root, recursive: true, scopes: []watchScope{{
+			agent: parser.AgentClaude, syncDir: root,
+		}}},
+		{path: nested, scopes: []watchScope{{
+			agent: parser.AgentOpenCode, syncDir: nested,
+			coverageKey: "opencode-sqlite:" + nested,
+		}}},
+	}
+
+	assert.Equal(t, []agentsync.WatchCoverage{{
+		Agent: string(parser.AgentOpenCode), Root: nested,
+		CoverageKey: "opencode-sqlite:" + nested,
+		Paths:       []string{dbPath}, ConsumePath: false,
+	}}, watchCoverageForPaths(roots, []string{dbPath}))
+}
+
+func TestWatcherUnavailableOpenCodeUsesOnlyTypedPolling(t *testing.T) {
+	root := t.TempDir()
+	planned := watchRoot{
+		path: root, scopes: []watchScope{{
+			agent: parser.AgentOpenCode, syncDir: root,
+			coverageKey: "opencode-sqlite:" + root,
+		}},
+	}
+	var typed []agentsync.PollingObligation
+	var degraded [][]string
+	err := registerWatcherUnavailableObligations(
+		agentsync.WatcherOptions{
+			OnPollingRequired: func(obligation agentsync.PollingObligation) error {
+				typed = append(typed, obligation)
+				return nil
+			},
+			OnCoverageDegraded: func(roots []string) error {
+				degraded = append(degraded, append([]string(nil), roots...))
+				return nil
+			},
+		},
+		[]watchRoot{planned}, []string{root}, nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, typed, 1)
+	require.Len(t, typed[0].Scopes, 1)
+	assert.Empty(t, degraded)
+}
+
 func TestCollectWatchRootsUsesGeminiProviderMetadataRoot(t *testing.T) {
 	root := t.TempDir()
 	tmpRoot := filepath.Join(root, "tmp")
@@ -1580,8 +1834,10 @@ func TestWatchPollingObligationsKeepPendingAndPersistentReasonsIndependent(t *te
 	)
 
 	assert.Equal(t, []agentsync.PollingObligation{
-		{Key: pendingPath, Roots: []string{shared}, Probe: pendingPath},
-		{Key: "persistent:" + shared, Roots: []string{shared}, Probe: shared},
+		{Key: pendingPath, Roots: []string{shared}, Probe: pendingPath,
+			Scopes: []agentsync.WatchScope{{Agent: string(parser.AgentDevin), SyncDir: shared}}},
+		{Key: "persistent:" + shared, Roots: []string{shared}, Probe: shared,
+			Scopes: []agentsync.WatchScope{{Agent: string(parser.AgentDevin), SyncDir: shared}}},
 	}, got)
 }
 
@@ -1601,6 +1857,7 @@ func TestWatchPollingObligationsCoverRegistrationFailureByLogicalRoot(t *testing
 
 	assert.Equal(t, []agentsync.PollingObligation{{
 		Key: watchPath, Roots: []string{syncDir}, Probe: watchPath,
+		Scopes: []agentsync.WatchScope{{Agent: string(parser.AgentClaude), SyncDir: syncDir}},
 	}}, got)
 }
 
@@ -1616,12 +1873,34 @@ func TestSymlinkPollingObligationsGateDirsOnTargetAvailability(t *testing.T) {
 	symRoot := filepath.Join(parent, "sessions")
 	requireSymlinkOrSkip(t, target, symRoot)
 
-	obligations := symlinkPollingObligations(map[string][]string{
-		symRoot: {parent},
+	obligations := symlinkPollingObligations(map[string]symlinkGate{
+		symRoot: {scopes: []watchScope{{
+			agent: parser.AgentOpenCode, syncDir: parent,
+			coverageKey: "opencode-storage:" + symRoot,
+		}}},
 	})
 	require.Equal(t, []agentsync.PollingObligation{{
 		Key: "symlink:" + symRoot, Roots: []string{parent}, Probe: symRoot,
+		Scopes: []agentsync.WatchScope{{
+			Agent: string(parser.AgentOpenCode), SyncDir: parent,
+			CoverageKey: "opencode-storage:" + symRoot,
+		}},
 	}}, obligations)
+	recorder := &watchSyncRecorder{}
+	pollCoverageOnce(t.Context(), recorder, pollingObligation{
+		Key: obligations[0].Key, Roots: obligations[0].Roots,
+		Probe: obligations[0].Probe,
+		Scopes: []pollingScope{{
+			Agent: parser.AgentOpenCode, Root: parent,
+			CoverageKey: "opencode-storage:" + symRoot,
+		}},
+	})
+	assert.Equal(t, []parser.CoverageTask{{
+		Agent: parser.AgentOpenCode, Root: parent,
+		CoverageKey: "opencode-storage:" + symRoot,
+		Trigger:     parser.CoverageTriggerDegraded,
+	}}, recorder.coverageCalls)
+	assert.Empty(t, recorder.reconcileCalls)
 
 	combined := []pollingObligation{
 		{Key: "persistent:" + parent, Roots: []string{parent}, Probe: parent},
@@ -1633,6 +1912,27 @@ func TestSymlinkPollingObligationsGateDirsOnTargetAvailability(t *testing.T) {
 	require.NoError(t, os.RemoveAll(target))
 	assert.Empty(t, availableUnwatchedPollRoots(combined),
 		"a broken symlink target must defer the dir even though the dir itself exists")
+}
+
+func TestSymlinkPollingObligationsPreserveOptionalProbe(t *testing.T) {
+	parent := t.TempDir()
+	symRoot := filepath.Join(parent, "missing-storage-link")
+	obligations := symlinkPollingObligations(map[string]symlinkGate{
+		symRoot: {
+			nonBlockingProbe: true,
+			scopes: []watchScope{{
+				agent: parser.AgentOpenCode, syncDir: parent,
+			}},
+		},
+	})
+	require.Len(t, obligations, 1)
+	assert.True(t, obligations[0].NonBlockingProbe)
+	assert.Equal(t, []string{parent}, availableUnwatchedPollRoots([]pollingObligation{
+		{Key: "persistent", Roots: []string{parent}, Probe: parent},
+		{Key: obligations[0].Key, Roots: obligations[0].Roots,
+			Probe:            obligations[0].Probe,
+			NonBlockingProbe: obligations[0].NonBlockingProbe},
+	}))
 }
 
 // TestWatcherUnavailableFallbackDefersBrokenSymlinkScope guards the
@@ -1650,24 +1950,29 @@ func TestWatcherUnavailableFallbackDefersBrokenSymlinkScope(t *testing.T) {
 	requireSymlinkOrSkip(t, target, symRoot)
 	other := requireExistingPollRoot(t, t.TempDir(), "other")
 
-	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 3)}
-	coordinator := newUnwatchedPollCoordinatorWithTicks(
-		t.Context(), syncer, make(chan time.Time), func() {},
-		func(run func()) { run() }, nil,
-	)
-	t.Cleanup(coordinator.Stop)
+	var registered []pollingObligation
 	options := agentsync.WatcherOptions{
 		OnCoverageDegraded: func(roots []string) error {
-			return coordinator.AddObligation(pollingObligation{
+			registered = append(registered, pollingObligation{
 				Key: "watcher-fallback", Roots: roots,
 			})
+			return nil
 		},
 		OnPollingRequired: func(obligation agentsync.PollingObligation) error {
-			return coordinator.AddObligation(pollingObligation{
-				Key:   obligation.Key,
-				Roots: obligation.Roots,
-				Probe: obligation.Probe,
+			scopes := make([]pollingScope, 0, len(obligation.Scopes))
+			for _, scope := range obligation.Scopes {
+				scopes = append(scopes, pollingScope{
+					Agent: parser.AgentType(scope.Agent), Root: scope.SyncDir,
+					CoverageKey: scope.CoverageKey,
+				})
+			}
+			registered = append(registered, pollingObligation{
+				Key:    obligation.Key,
+				Roots:  obligation.Roots,
+				Probe:  obligation.Probe,
+				Scopes: scopes,
 			})
+			return nil
 		},
 	}
 
@@ -1675,26 +1980,21 @@ func TestWatcherUnavailableFallbackDefersBrokenSymlinkScope(t *testing.T) {
 		options,
 		nil,
 		[]string{parent, other},
-		map[string][]string{symRoot: {parent}},
+		map[string]symlinkGate{symRoot: {scopes: []watchScope{{
+			agent: parser.AgentOpenCode, syncDir: parent,
+			coverageKey: "opencode-storage:" + symRoot,
+		}}}},
 	))
 
-	bothDirs := []string{parent, other}
-	slices.Sort(bothDirs)
-	coordinator.requestPoll()
-	requirePollWithin(t, syncer.wake, time.Second)
-	assert.Equal(t, [][]string{bothDirs}, syncer.snapshot(),
+	assert.ElementsMatch(t, []string{parent, other}, availableUnwatchedPollRoots(registered),
 		"a working symlink target keeps the configured dir pollable")
 
 	require.NoError(t, os.RemoveAll(target))
-	coordinator.requestPoll()
-	requirePollWithin(t, syncer.wake, time.Second)
-	assert.Equal(t, [][]string{bothDirs, {other}}, syncer.snapshot(),
+	assert.Equal(t, []string{other}, availableUnwatchedPollRoots(registered),
 		"a broken symlink target must defer the configured dir from the fallback poll")
 
 	require.NoError(t, os.MkdirAll(target, 0o755))
-	coordinator.requestPoll()
-	requirePollWithin(t, syncer.wake, time.Second)
-	assert.Equal(t, [][]string{bothDirs, {other}, bothDirs}, syncer.snapshot(),
+	assert.ElementsMatch(t, []string{parent, other}, availableUnwatchedPollRoots(registered),
 		"the deferred dir must resume once the symlink target returns")
 }
 
@@ -2181,6 +2481,23 @@ type watchSyncRecorder struct {
 	reconcileErr   error
 	callOrder      []string
 	ctxValue       any
+	coverageCalls  []parser.CoverageTask
+	coverageResult parser.CoverageResult
+	coverageErr    error
+	excludedCalls  []watchExcludedPathCall
+}
+
+type watchExcludedPathCall struct {
+	paths  []string
+	agents []parser.AgentType
+}
+
+func (r *watchSyncRecorder) ReconcileCoverage(
+	_ context.Context, task parser.CoverageTask,
+) (parser.CoverageResult, error) {
+	r.coverageCalls = append(r.coverageCalls, task)
+	r.callOrder = append(r.callOrder, "coverage")
+	return r.coverageResult, r.coverageErr
 }
 
 type watchReconcileCall struct {
@@ -2226,6 +2543,17 @@ func (r *watchSyncRecorder) SyncPathsContext(ctx context.Context, paths []string
 	return r.pathErr
 }
 
+func (r *watchSyncRecorder) SyncPathsExcludingProvidersContext(
+	ctx context.Context, paths []string, agents []parser.AgentType,
+) error {
+	r.excludedCalls = append(r.excludedCalls, watchExcludedPathCall{
+		paths:  append([]string(nil), paths...),
+		agents: append([]parser.AgentType(nil), agents...),
+	})
+	r.ctxValue = ctx.Value(watchSyncContextKey{})
+	return r.pathErr
+}
+
 func (r *watchSyncRecorder) HasActiveSessionSourceBelow(agent, path string) (bool, error) {
 	r.lookupCalls = append(r.lookupCalls, [2]string{agent, path})
 	return r.lookupResults[agent+"\x00"+path], nil
@@ -2260,6 +2588,37 @@ func (r *watchSyncRecorder) ReconcileWatchRootsAfterLostEvents(
 	return r.reconcileErr
 }
 
+func TestNilEngineCoverageAnnotationDispatchesOpenCodeEvent(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "opencode.db")
+	require.NoError(t, os.WriteFile(dbPath, []byte("sqlite"), 0o600))
+	scope := watchScope{
+		agent: parser.AgentOpenCode, syncDir: root,
+		coverageKey:  "opencode-sqlite:" + root,
+		includeGlobs: "opencode.db\x00opencode.db-wal",
+	}
+	roots := []watchRoot{{path: root, scopes: []watchScope{scope}}}
+	authorityRoots := append([]watchRoot(nil), roots...)
+	authorityRoots = append(authorityRoots, watchRoot{
+		path:             filepath.Join(root, "storage"),
+		nonBlockingProbe: true, scopes: []watchScope{scope},
+	})
+	var received agentsync.WatchBatch
+	callback := annotateWatchCoverageWithAuthority(
+		func(_ context.Context, batch agentsync.WatchBatch) error {
+			received = batch
+			return nil
+		},
+		roots, authorityRoots, activeSourceProbeForEngine(nil),
+	)
+
+	require.NoError(t, callback(t.Context(), agentsync.WatchBatch{
+		Paths: []string{dbPath},
+	}))
+	require.Len(t, received.Coverage, 1)
+	assert.True(t, received.Coverage[0].AuthoritativeFallback)
+}
+
 type watchSyncContextKey struct{}
 
 func TestSyncWatchBatch(t *testing.T) {
@@ -2273,6 +2632,101 @@ func TestSyncWatchBatch(t *testing.T) {
 	root := filepath.Join(tempDir, "root")
 	probedRoot := filepath.Join(tempDir, "probed-root")
 	agent := string(parser.AgentCodex)
+
+	t.Run("provider coverage bypasses changed-path discovery", func(t *testing.T) {
+		dbPath := filepath.Join(tempDir, "opencode.db-wal")
+		recorder := &watchSyncRecorder{}
+		err := syncWatchBatch(ctx, recorder, agentsync.WatchBatch{
+			Paths: []string{dbPath},
+			Coverage: []agentsync.WatchCoverage{{
+				Agent: string(parser.AgentOpenCode), Root: tempDir,
+				CoverageKey:           "opencode-sqlite:" + tempDir,
+				AuthoritativeFallback: true,
+				Paths:                 []string{dbPath},
+			}},
+		}, staticFullRoots())
+
+		require.NoError(t, err)
+		assert.Empty(t, recorder.pathCalls)
+		assert.Empty(t, recorder.reconcileCalls)
+		assert.Equal(t, []parser.CoverageTask{{
+			Agent: parser.AgentOpenCode, Root: tempDir,
+			CoverageKey:           "opencode-sqlite:" + tempDir,
+			Trigger:               parser.CoverageTriggerNative,
+			AuthoritativeFallback: true,
+			ChangedPaths:          []string{dbPath},
+		}}, recorder.coverageCalls)
+	})
+
+	t.Run("provider coverage preserves annotated fallback authority", func(t *testing.T) {
+		dbPath := filepath.Join(tempDir, "opencode.db-wal")
+		recorder := &watchSyncRecorder{}
+		err := syncWatchBatch(ctx, recorder, agentsync.WatchBatch{
+			Paths: []string{dbPath},
+			Coverage: []agentsync.WatchCoverage{{
+				Agent: string(parser.AgentOpenCode), Root: tempDir,
+				CoverageKey:           "opencode-sqlite:" + tempDir,
+				AuthoritativeFallback: true,
+				Paths:                 []string{dbPath},
+			}},
+		}, staticFullRoots(tempDir))
+
+		require.NoError(t, err)
+		require.Len(t, recorder.coverageCalls, 1)
+		assert.True(t, recorder.coverageCalls[0].AuthoritativeFallback)
+	})
+
+	t.Run("coverage failure preserves authoritative retry work", func(t *testing.T) {
+		coverageErr := errors.New("coverage failed")
+		recorder := &watchSyncRecorder{coverageErr: coverageErr}
+		batch := agentsync.WatchBatch{
+			Paths: []string{filePath}, ReconcileRoots: []string{root},
+			LostEvents: true,
+			Coverage: []agentsync.WatchCoverage{{
+				Agent: string(parser.AgentOpenCode), Root: tempDir,
+				CoverageKey: "opencode-sqlite:" + tempDir,
+				Paths:       []string{filePath},
+			}},
+		}
+		err := syncWatchBatch(ctx, recorder, batch, staticFullRoots())
+		assert.ErrorIs(t, err, coverageErr)
+		assert.Equal(t, batch, requireWatchRetryBatch(t, err))
+	})
+
+	t.Run("coverage failure promotes coalesced full retry", func(t *testing.T) {
+		coverageErr := errors.New("coverage failed")
+		recorder := &watchSyncRecorder{coverageErr: coverageErr}
+		err := syncWatchBatch(ctx, recorder, agentsync.WatchBatch{
+			FullSync: true, LostEvents: true,
+			Paths: []string{filePath}, ReconcileRoots: []string{root},
+			Coverage: []agentsync.WatchCoverage{{
+				Agent: string(parser.AgentOpenCode), Root: tempDir,
+				CoverageKey: "opencode-sqlite:" + tempDir,
+			}},
+		}, staticFullRoots())
+		assert.ErrorIs(t, err, coverageErr)
+		assert.Equal(t, agentsync.WatchBatch{
+			FullSync: true, LostEvents: true,
+		}, requireWatchRetryBatch(t, err))
+	})
+
+	t.Run("generic exclusion failure preserves coalesced full retry", func(t *testing.T) {
+		pathErr := errors.New("generic path failed")
+		recorder := &watchSyncRecorder{pathErr: pathErr}
+		err := syncWatchBatch(ctx, recorder, agentsync.WatchBatch{
+			FullSync: true, LostEvents: true, Paths: []string{filePath},
+			ReconcileRoots: []string{root},
+			Coverage: []agentsync.WatchCoverage{{
+				Agent: string(parser.AgentOpenCode), Root: tempDir,
+				CoverageKey: "opencode-sqlite:" + tempDir,
+				Paths:       []string{filePath}, ConsumePath: false,
+			}},
+		}, staticFullRoots())
+		assert.ErrorIs(t, err, pathErr)
+		assert.Equal(t, agentsync.WatchBatch{
+			FullSync: true, LostEvents: true,
+		}, requireWatchRetryBatch(t, err))
+	})
 
 	t.Run("file rename uses changed path", func(t *testing.T) {
 		recorder := &watchSyncRecorder{}
@@ -2597,6 +3051,83 @@ func TestSyncWatchBatch(t *testing.T) {
 		assert.Equal(t, agentsync.WatchBatch{FullSync: true}, requireWatchRetryBatch(t, err))
 		assert.Empty(t, recorder.reconcileCalls)
 	})
+}
+
+func TestOpenCodeNativeCoverageBypassesChangedPathDiscovery(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "opencode.db-wal")
+	recorder := &watchSyncRecorder{}
+	err := syncWatchBatch(t.Context(), recorder, agentsync.WatchBatch{
+		Paths: []string{dbPath},
+		Coverage: []agentsync.WatchCoverage{{
+			Agent: string(parser.AgentOpenCode), Root: root,
+			CoverageKey: "opencode-sqlite:" + root, Paths: []string{dbPath},
+		}},
+	}, staticFullRoots())
+
+	require.NoError(t, err)
+	assert.Empty(t, recorder.pathCalls)
+	assert.Empty(t, recorder.reconcileCalls)
+	assert.Len(t, recorder.coverageCalls, 1)
+	assert.Equal(t, []watchExcludedPathCall{{
+		paths: []string{dbPath}, agents: []parser.AgentType{parser.AgentOpenCode},
+	}}, recorder.excludedCalls)
+}
+
+func TestOpenCodeRenameUsesBoundedCoverageAndPreservesGenericScope(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "opencode.db")
+	recorder := &watchSyncRecorder{}
+	roots := []watchRoot{{
+		path: root,
+		scopes: []watchScope{
+			{agent: parser.AgentOpenCode, syncDir: root,
+				coverageKey: "opencode-sqlite:" + root},
+			{agent: parser.AgentClaude, syncDir: root},
+		},
+	}}
+	callback := annotateWatchCoverage(
+		func(ctx context.Context, batch agentsync.WatchBatch) error {
+			return syncWatchBatch(ctx, recorder, batch, staticFullRoots())
+		},
+		roots,
+	)
+
+	err := callback(t.Context(), agentsync.WatchBatch{
+		Renames: []agentsync.WatchRename{{
+			Path: dbPath, Agent: string(parser.AgentOpenCode),
+			ItemType: agentsync.ItemIsFile,
+		}},
+	})
+	require.NoError(t, err)
+	assert.Len(t, recorder.coverageCalls, 1)
+	assert.Equal(t, []string{dbPath}, recorder.coverageCalls[0].ChangedPaths)
+	assert.Equal(t, []watchExcludedPathCall{{
+		paths: []string{dbPath}, agents: []parser.AgentType{parser.AgentOpenCode},
+	}}, recorder.excludedCalls)
+	assert.Empty(t, recorder.pathCalls)
+}
+
+func TestOpenCodeCoverageExcludesEverySharedGenericPath(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "opencode.db")
+	walPath := dbPath + "-wal"
+	recorder := &watchSyncRecorder{}
+	err := syncWatchBatch(t.Context(), recorder, agentsync.WatchBatch{
+		Paths: []string{dbPath, walPath},
+		Coverage: []agentsync.WatchCoverage{{
+			Agent: string(parser.AgentOpenCode), Root: root,
+			CoverageKey: "opencode-sqlite:" + root,
+			Paths:       []string{dbPath, walPath}, ConsumePath: false,
+		}},
+	}, staticFullRoots())
+
+	require.NoError(t, err)
+	assert.Empty(t, recorder.pathCalls)
+	assert.Equal(t, []watchExcludedPathCall{
+		{paths: []string{dbPath}, agents: []parser.AgentType{parser.AgentOpenCode}},
+		{paths: []string{walPath}, agents: []parser.AgentType{parser.AgentOpenCode}},
+	}, recorder.excludedCalls)
 }
 
 type stubRetryRootsError struct{ roots []string }

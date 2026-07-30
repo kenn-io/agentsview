@@ -53,6 +53,7 @@ type SourceCapabilities struct {
 	WatchSources         CapabilitySupport
 	WatchRoots           CapabilitySupport
 	ActivityHints        CapabilitySupport
+	BoundedCoverage      CapabilitySupport
 	ClassifyChangedPath  CapabilitySupport
 	StoredSourceHints    CapabilitySupport
 	FindSource           CapabilitySupport

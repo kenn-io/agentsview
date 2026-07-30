@@ -49,14 +49,10 @@ type SQLiteContainerState struct {
 	DBMtimeSec      int64
 	DBChangeCounter uint32
 	// DBInode and DBDevice distinguish a replaced or restored container
-	// file (new inode) from in-place transaction writes, which the header
-	// markers alone cannot: a byte-identical copy carries the same size,
-	// counter, and salts. Zero on platforms without cheap file identity
-	// (Windows), where replacement detection degrades to the other
-	// markers. In-place byte surgery that preserves every marker and
-	// lands within the trusted mtime's second is explicitly out of
-	// scope — the same exposure class every mtime-based sync tool
-	// accepts.
+	// file from in-place transaction writes, which the header markers
+	// alone cannot: a byte-identical copy carries the same size, counter,
+	// and salts. In-place byte surgery that preserves every marker and
+	// lands within the trusted mtime's second remains out of scope.
 	DBInode  uint64
 	DBDevice uint64
 
@@ -98,7 +94,7 @@ func StatSQLiteContainerState(dbPath string) (SQLiteContainerState, bool) {
 		DBSize:     info.Size(),
 		DBMtimeSec: info.ModTime().Unix(),
 	}
-	state.DBInode, state.DBDevice = sourceFileIdentity(info)
+	state.DBInode, state.DBDevice = sqliteFileIdentity(dbPath, info)
 	counter, ok := readSQLiteChangeCounter(dbPath)
 	if !ok {
 		return SQLiteContainerState{}, false
