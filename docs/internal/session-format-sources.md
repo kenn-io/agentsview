@@ -130,13 +130,26 @@ Grok section and remove the explicit registry exception in the coverage test.
 ## Codex (`codex`)
 
 - **Format:** Rollout JSONL files, with a separate JSONL session index used for
-  discovery and metadata.
+  discovery and metadata. The TUI also maintains an append-only
+  `history.jsonl` whose records contain `session_id`, Unix-seconds `ts`, and
+  submitted prompt `text`; Agentsview consumes only the first two fields as a
+  live-activity hint.
 - **Evidence:** `source`.
 - **Upstream:** Clone `https://github.com/openai/codex.git` at
-  `3e2f79727a4e8ddfc8e3acb838d496b121094b9e`; see the pinned
-  [rollout recorder](https://github.com/openai/codex/blob/3e2f79727a4e8ddfc8e3acb838d496b121094b9e/codex-rs/rollout/src/recorder.rs)
+  `406dc9239492aff6d295cca5eebe2a548548d42f`; see the pinned
+  [rollout recorder](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/rollout/src/recorder.rs)
   and
-  [protocol types](https://github.com/openai/codex/blob/3e2f79727a4e8ddfc8e3acb838d496b121094b9e/codex-rs/protocol/src/protocol.rs).
+  [protocol types](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/protocol/src/protocol.rs).
+  The pinned
+  [message-history implementation](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/message-history/src/lib.rs)
+  defines the `session_id`/`ts`/`text` schema, append behavior, file
+  location, and the no-write path for `HistoryPersistence::None`. The
+  [TUI input-submission path](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/tui/src/chatwidget/input_submission.rs)
+  emits accepted submitted text to the
+  [TUI history append route](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/tui/src/app/thread_routing.rs).
+  The
+  [configuration schema](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/core/config.schema.json)
+  defines `save-all` (the default) and `none`.
 - **Usage and cost:** `token_count` records include total and last usage with
   input, cached input, cache-write input, output, reasoning output, and total
   tokens. Agentsview currently consumes input, cached input, and output only:
@@ -146,7 +159,13 @@ Grok section and remove the explicit registry exception in the coverage test.
   emits.
 - **Agentsview:** `internal/parser/codex.go` and
   `internal/parser/codex_provider.go`; usage is taken from the last-turn
-  counters rather than repeatedly counting cumulative totals.
+  counters rather than repeatedly counting cumulative totals. Reverified
+  2026-07-29: the pinned TUI is the evidenced `history.jsonl` producer. No
+  `append_entry` producer call exists under the pinned `app-server` or `exec`
+  trees, so this evidence does not establish IDE, desktop, or `codex exec`
+  activity-hint coverage. Locally observed Codex app builds can write the same
+  schema, but that is observational evidence rather than a public
+  compatibility guarantee.
 
 ## GitHub Copilot CLI (`copilot`)
 

@@ -1,6 +1,6 @@
 # Codex Open-File Freshness Design
 
-Status: approved for implementation planning
+Status: implemented
 
 Date: 2026-07-29
 
@@ -272,6 +272,22 @@ ownership.
 
 Run the relevant package tests, the short suite, `go fmt ./...`, and
 `go vet ./...` before committing implementation changes.
+
+## Known Limitations
+
+- Codex activity hints depend on a frontend writing `history.jsonl`. Setting
+  Codex `[history] persistence = "none"` disables those records, and the
+  pinned upstream evidence establishes the producer path only for the TUI.
+  Other frontends retain native-watcher and periodic-sync freshness unless
+  they write the same hint schema.
+- Hot-session state is in memory. On daemon restart, the bootstrap reads at most
+  the newest 4 MiB and accepts records at most 24 hours old. A long autonomous
+  run whose last persisted prompt falls outside either bound is not
+  reintroduced to the hot set until another persisted prompt.
+- A custom Codex session root probes only its cleaned parent for
+  `history.jsonl`; Agentsview does not search for a data root. An override
+  whose history file lives elsewhere therefore retains the ordinary watcher
+  behavior.
 
 ## Expected User-Visible Result
 
