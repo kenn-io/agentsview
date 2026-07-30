@@ -601,6 +601,7 @@ func TestPGPricingUpsertStatementBatchesRows(t *testing.T) {
 	assert.Contains(t, query, "EXCLUDED.input_microdollars_per_mtok")
 	assert.NotContains(t, query,
 		"model_pricing.updated_at IS DISTINCT FROM")
+	assert.Contains(t, query, "RETURNING model_pattern")
 	require.Len(t, args, 12)
 	assert.Equal(t, "model-a", args[0])
 	assert.Equal(t, "call-time", args[5])

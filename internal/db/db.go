@@ -2346,22 +2346,6 @@ func (db *DB) migrateColumns() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	w := db.getWriter()
-	legacyPricing, err := sqliteColumnExists(
-		w, "model_pricing", "input_per_mtok",
-	)
-	if err != nil {
-		return err
-	}
-	if legacyPricing {
-		// schema.sql initializes this PR's new child table before the shipped
-		// exact-money migration rebuilds its legacy parent. Remove the still-empty
-		// child so SQLite cannot retarget its foreign key to the temporary parent
-		// name during ALTER TABLE RENAME.
-		if _, err := w.Exec(`DROP TABLE IF EXISTS model_pricing_bands`); err != nil {
-			return fmt.Errorf(
-				"preparing pricing bands for money migration: %w", err)
-		}
-	}
 	if err := migrateMoneyColumnsLocked(w); err != nil {
 		return err
 	}

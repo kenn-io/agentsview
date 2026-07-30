@@ -118,6 +118,25 @@ func migrateMoneyColumnsLocked(w *writerHandle) error {
 				check.table, check.column)
 		}
 	}
+	if legacyPricing {
+		var bandCount int
+		if err := tx.QueryRow(
+			`SELECT COUNT(*) FROM model_pricing_bands`,
+		).Scan(&bandCount); err != nil {
+			return fmt.Errorf("checking legacy pricing bands: %w", err)
+		}
+		if bandCount != 0 {
+			return fmt.Errorf(
+				"legacy model_pricing migration requires an empty model_pricing_bands table",
+			)
+		}
+		// schema.sql creates this child before the legacy parent is rebuilt.
+		// Keep its removal and recreation in the same transaction so a failed
+		// money migration cannot leave the archive without the band schema.
+		if _, err := tx.Exec(`DROP TABLE model_pricing_bands`); err != nil {
+			return fmt.Errorf("preparing legacy pricing bands: %w", err)
+		}
+	}
 
 	for _, migration := range []struct {
 		needed bool
@@ -133,6 +152,11 @@ func migrateMoneyColumnsLocked(w *writerHandle) error {
 		}
 		if _, err := tx.Exec(migration.sql); err != nil {
 			return fmt.Errorf("migrating %s to microdollars: %w", migration.name, err)
+		}
+	}
+	if legacyPricing {
+		if _, err := tx.Exec(modelPricingBandsSchemaSQL); err != nil {
+			return fmt.Errorf("recreating pricing bands: %w", err)
 		}
 	}
 	if legacyCursor {

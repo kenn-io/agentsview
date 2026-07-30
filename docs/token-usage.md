@@ -671,8 +671,10 @@ session-summary v1 contract shipped in 0.37.1. Releases 0.38.0 and 0.38.1
 emitted the substantially revised project-evidence shape while still reporting
 version 1. Version 2 corrected those markers, version 3 introduced exact
 microdollar money objects, and version 4 adds resolved-model pricing provenance
-with request-pricing bands and application counts. The two transitional releases
-must not be treated as v1-compatible. The commands do not provide an
+with request-pricing bands and application counts. Version 4 is a contract bump
+because band selection changes pricing semantics and bands participate in digest
+canonicalization, not merely because fields were added. The two transitional
+releases must not be treated as v1-compatible. The commands do not provide an
 earlier-version output mode. Consumers should require the expected
 `schema_version` and ignore unknown additive fields.
 
@@ -715,6 +717,10 @@ payload used those rates:
 Reported-only rows do not increment application counts. These counts preserve
 the difference between one above-threshold request and several smaller requests
 after their tokens and costs have been aggregated.
+
+When no catalog bands or applied bands exist, their canonical JSON value is
+`null`, not `[]`. Consumers should accept future additive fields but can rely on
+that null-versus-nonempty-array representation within schema version 4.
 
 Ordinary models have one resolution whose `priced_model` is the reported model.
 Timestamp-aware aliases can have more than one resolution in a report. For

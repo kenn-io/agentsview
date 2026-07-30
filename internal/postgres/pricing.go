@@ -413,7 +413,8 @@ func pgPricingUpsertStatement(
 		OR model_pricing.cache_creation_microdollars_per_mtok IS DISTINCT FROM
 			EXCLUDED.cache_creation_microdollars_per_mtok
 		OR model_pricing.cache_read_microdollars_per_mtok IS DISTINCT FROM
-			EXCLUDED.cache_read_microdollars_per_mtok`)
+			EXCLUDED.cache_read_microdollars_per_mtok
+	RETURNING model_pattern`)
 	return b.String(), args
 }
 
@@ -578,7 +579,7 @@ func pgPricingBandInsertStatement(
 
 func upsertModelPricing(
 	ctx context.Context, pg *sql.DB,
-	prices, existing []db.ModelPricing,
+	prices []db.ModelPricing,
 ) error {
 	if len(prices) == 0 {
 		return nil
@@ -591,29 +592,44 @@ func upsertModelPricing(
 	defer func() { _ = tx.Rollback() }()
 
 	defaultUpdatedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	baseChanged := make(map[string]struct{}, len(prices))
 	for i := 0; i < len(prices); i += pricingUpsertBatch {
 		end := min(i+pricingUpsertBatch, len(prices))
 		query, args := pgPricingUpsertStatement(
 			prices[i:end], defaultUpdatedAt,
 		)
-		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+		rows, err := tx.QueryContext(ctx, query, args...)
+		if err != nil {
 			return fmt.Errorf(
 				"upserting pg pricing batch starting at %d: %w",
 				i, err,
 			)
 		}
-	}
-	existingByPattern := make(map[string]db.ModelPricing, len(existing))
-	for _, price := range existing {
-		existingByPattern[price.ModelPattern] = price
+		for rows.Next() {
+			var modelPattern string
+			if err := rows.Scan(&modelPattern); err != nil {
+				rows.Close()
+				return fmt.Errorf(
+					"scanning changed pg pricing at batch %d: %w", i, err)
+			}
+			baseChanged[modelPattern] = struct{}{}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf(
+				"iterating changed pg pricing at batch %d: %w", i, err)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf(
+				"closing changed pg pricing at batch %d: %w", i, err)
+		}
 	}
 	modelPrices := make([]db.ModelPricing, 0, len(prices))
 	bandOnlyPrices := make([]db.ModelPricing, 0, len(prices))
 	for _, price := range prices {
 		if !strings.HasPrefix(price.ModelPattern, "_") {
 			modelPrices = append(modelPrices, price)
-			if current, ok := existingByPattern[price.ModelPattern]; ok &&
-				pgPricingBaseRatesEqual(current, price) {
+			if _, changed := baseChanged[price.ModelPattern]; !changed {
 				bandOnlyPrices = append(bandOnlyPrices, price)
 			}
 		}
@@ -679,15 +695,8 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if len(changedPrices) == 0 {
 		return nil
 	}
-	if err := upsertModelPricing(ctx, s.pg, changedPrices, existing); err != nil {
+	if err := upsertModelPricing(ctx, s.pg, changedPrices); err != nil {
 		return fmt.Errorf("syncing model pricing to pg: %w", err)
 	}
 	return nil
-}
-
-func pgPricingBaseRatesEqual(a, b db.ModelPricing) bool {
-	return a.InputPerMTok == b.InputPerMTok &&
-		a.OutputPerMTok == b.OutputPerMTok &&
-		a.CacheCreationPerMTok == b.CacheCreationPerMTok &&
-		a.CacheReadPerMTok == b.CacheReadPerMTok
 }

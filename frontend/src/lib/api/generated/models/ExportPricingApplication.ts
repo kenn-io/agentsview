@@ -2,8 +2,9 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { ExportAppliedPricingBand } from './ExportAppliedPricingBand';
 export type ExportPricingApplication = {
   aggregate_row_count: number;
-  bands: any[] | null;
+  bands: Array<ExportAppliedPricingBand> | null;
   base_request_count: number;
 };
