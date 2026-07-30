@@ -377,10 +377,11 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 func sortReportingUsage(rows []activity.UsageRow) {
 	sort.SliceStable(rows, func(i, j int) bool {
 		a, b := rows[i], rows[j]
-		if compared := compareDailyUsageTimestampText(
-			a.Timestamp, b.Timestamp,
-		); compared != 0 {
-			return compared < 0
+		// Reporting export deliberately mirrors the SQLite BINARY ordering
+		// used by GetDailyUsage's first-seen-wins survivor pass. Ordinary
+		// activity reports instead sort timestamps by parsed instant.
+		if a.Timestamp != b.Timestamp {
+			return a.Timestamp < b.Timestamp
 		}
 		if a.SessionID != b.SessionID {
 			return a.SessionID < b.SessionID
