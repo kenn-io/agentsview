@@ -6,6 +6,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -168,6 +169,68 @@ func TestStoreGetDailyUsageWithBreakdowns(t *testing.T) {
 	assert.Zero(t, noCounts.SessionCounts.Total)
 	assert.Nil(t, noCounts.SessionCounts.ByProject)
 	assert.Nil(t, noCounts.SessionCounts.ByAgent)
+}
+
+func TestStoreGetDailyUsageAppliesPricingBandsOnlyToRequests(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_usage_pricing_band_test")
+	ctx := context.Background()
+
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO model_pricing (
+			model_pattern, input_microdollars_per_mtok,
+			output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok,
+			cache_read_microdollars_per_mtok, updated_at
+		) VALUES ('banded-model', 1000000, 0, 0, 0, 'seed');
+		INSERT INTO model_pricing_bands (
+			model_pattern, above_input_tokens,
+			input_microdollars_per_mtok,
+			output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok,
+			cache_read_microdollars_per_mtok, updated_at
+		) VALUES ('banded-model', 200000, 2000000, 0, 0, 0, 'seed');
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at,
+			message_count, user_message_count
+		) VALUES (
+			'pricing-band', 'test-machine', 'proj', 'codex',
+			'2026-03-12T10:00:00Z'::timestamptz, 1, 1
+		);
+		INSERT INTO messages (
+			session_id, ordinal, role, content, timestamp,
+			content_length, model, token_usage
+		) VALUES (
+			'pricing-band', 0, 'assistant', 'request',
+			'2026-03-12T10:00:00Z'::timestamptz, 7,
+			'banded-model', '{"input_tokens":300000}'
+		);
+		INSERT INTO usage_events (
+			session_id, source, model, input_tokens,
+			occurred_at, dedup_key
+		) VALUES (
+			'pricing-band', 'aggregate', 'banded-model', 300000,
+			'2026-03-12T10:01:00Z'::timestamptz, 'aggregate'
+		)`)
+	require.NoError(t, err)
+
+	result, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-03-12", To: "2026-03-12", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, 600_000, result.Totals.InputTokens)
+	assert.Equal(t, money.Money{Microdollars: 900_000},
+		result.Totals.TotalCost)
+	require.NotNil(t, result.Pricing)
+	provenance := result.Pricing.Models["banded-model"]
+	require.Len(t, provenance.Resolutions, 1)
+	assert.Equal(t, export.PricingApplication{
+		AggregateRowCount: 1,
+		Bands: []export.AppliedPricingBand{{
+			AboveInputTokens: 200_000,
+			RequestCount:     1,
+		}},
+	}, provenance.Resolutions[0].Application)
 }
 
 func TestStoreGetDailyUsageDedupesBySourceUUIDWhenClaudePairIncomplete(t *testing.T) {
@@ -1163,6 +1226,13 @@ func TestPushSyncsModelPricingToPostgres(t *testing.T) {
 		OutputPerMTok:        money.MustParseDollars("2.5"),
 		CacheCreationPerMTok: money.MustParseDollars("3.5"),
 		CacheReadPerMTok:     money.MustParseDollars("0.5"),
+		Bands: []db.PricingBand{{
+			AboveInputTokens:     200_000,
+			InputPerMTok:         money.MustParseDollars("3"),
+			OutputPerMTok:        money.MustParseDollars("5"),
+			CacheCreationPerMTok: money.MustParseDollars("7"),
+			CacheReadPerMTok:     money.MustParseDollars("1"),
+		}},
 	}}), "UpsertModelPricing")
 
 	ps, err := New(pgURL, "agentsview", local, "test-machine", true, SyncOptions{})
@@ -1197,6 +1267,57 @@ func TestPushSyncsModelPricingToPostgres(t *testing.T) {
 	assert.Equal(t, int64(2_500_000), output)
 	assert.Equal(t, int64(3_500_000), cacheCreation)
 	assert.Equal(t, int64(500_000), cacheRead)
+	require.NoError(t, rows.Close())
+
+	var (
+		threshold                                               int
+		bandInput, bandOutput, bandCacheCreation, bandCacheRead int64
+		firstUpdatedAt                                          string
+	)
+	require.NoError(t, store.DB().QueryRowContext(context.Background(), `
+		SELECT b.above_input_tokens,
+			b.input_microdollars_per_mtok,
+			b.output_microdollars_per_mtok,
+			b.cache_creation_microdollars_per_mtok,
+			b.cache_read_microdollars_per_mtok,
+			p.updated_at
+		FROM model_pricing_bands b
+		JOIN model_pricing p USING (model_pattern)
+		WHERE b.model_pattern = 'test-model-sync'`).Scan(
+		&threshold, &bandInput, &bandOutput,
+		&bandCacheCreation, &bandCacheRead, &firstUpdatedAt,
+	))
+	assert.Equal(t, 200_000, threshold)
+	assert.Equal(t, int64(3_000_000), bandInput)
+	assert.Equal(t, int64(5_000_000), bandOutput)
+	assert.Equal(t, int64(7_000_000), bandCacheCreation)
+	assert.Equal(t, int64(1_000_000), bandCacheRead)
+
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:         "test-model-sync",
+		InputPerMTok:         money.MustParseDollars("1.5"),
+		OutputPerMTok:        money.MustParseDollars("2.5"),
+		CacheCreationPerMTok: money.MustParseDollars("3.5"),
+		CacheReadPerMTok:     money.MustParseDollars("0.5"),
+	}}), "remove local pricing bands")
+	_, err = ps.Push(context.Background(), false, nil)
+	require.NoError(t, err, "push band removal")
+
+	var bandCount int
+	require.NoError(t, store.DB().QueryRowContext(context.Background(), `
+		SELECT COUNT(*) FROM model_pricing_bands
+		WHERE model_pattern = 'test-model-sync'`).Scan(&bandCount))
+	assert.Zero(t, bandCount)
+	var secondUpdatedAt string
+	require.NoError(t, store.DB().QueryRowContext(context.Background(), `
+		SELECT updated_at FROM model_pricing
+		WHERE model_pattern = 'test-model-sync'`).Scan(&secondUpdatedAt))
+	firstRevision, err := time.Parse(time.RFC3339Nano, firstUpdatedAt)
+	require.NoError(t, err)
+	secondRevision, err := time.Parse(time.RFC3339Nano, secondUpdatedAt)
+	require.NoError(t, err)
+	assert.True(t, secondRevision.After(firstRevision),
+		"band removal must advance the parent pricing revision")
 }
 
 func TestPushFallsBackToBuiltinPricingWhenLocalTableEmpty(t *testing.T) {

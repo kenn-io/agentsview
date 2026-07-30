@@ -530,6 +530,7 @@ func TestSyncEnsureSchemaSkipsDDLWhenSchemaCompatible(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
 	state.existingTables = map[string]bool{
 		"model_pricing":                             true,
+		"model_pricing_bands":                       true,
 		"source_archives":                           true,
 		"source_project_identity_observations":      true,
 		"source_session_project_identity_snapshots": true,
@@ -559,6 +560,7 @@ func TestEnsureSchemaScrubsProjectIdentityGitRemoteCredentials(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
 	state.existingTables = map[string]bool{
 		"model_pricing":                             true,
+		"model_pricing_bands":                       true,
 		"source_archives":                           true,
 		"source_project_identity_observations":      true,
 		"source_session_project_identity_snapshots": true,

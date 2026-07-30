@@ -165,6 +165,11 @@ func TestPGGetActivityReportUsageCostAndTokens(t *testing.T) {
 	assert.Equal(t, 500, r.Totals.OutputTokens)
 	// Cost = (1000*3 + 500*15) / 1e6 = 0.0105
 	assert.Equal(t, money.MustParseDollars("0.0105"), r.Totals.Cost)
+	require.NotNil(t, r.Pricing)
+	provenance := r.Pricing.Models["claude-sonnet-4-20250514"]
+	require.Len(t, provenance.Resolutions, 1)
+	assert.Equal(t, 1,
+		provenance.Resolutions[0].Application.BaseRequestCount)
 }
 
 func TestPGGetActivityReportCopilotReportedCostReplacesSessionEstimates(t *testing.T) {

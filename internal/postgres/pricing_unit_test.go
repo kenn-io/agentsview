@@ -118,12 +118,14 @@ func (c *pricingProbeConn) QueryContext(
 	}
 	return &pricingProbeRows{
 		columns: []string{
-			"model_pattern",
-			"input_microdollars_per_mtok",
+			"model_pattern", "input_microdollars_per_mtok",
 			"output_microdollars_per_mtok",
 			"cache_creation_microdollars_per_mtok",
-			"cache_read_microdollars_per_mtok",
-			"updated_at",
+			"cache_read_microdollars_per_mtok", "updated_at",
+			"above_input_tokens", "band_input_microdollars_per_mtok",
+			"band_output_microdollars_per_mtok",
+			"band_cache_creation_microdollars_per_mtok",
+			"band_cache_read_microdollars_per_mtok", "band_updated_at",
 		},
 		values: values,
 	}, nil
@@ -229,6 +231,58 @@ func TestCustomPricingOverridesPricingMap(t *testing.T) {
 			assert.Equal(t, tt.wantSource, got.Source)
 		})
 	}
+}
+
+func TestPricingRowsToMapPreservesPricingBandsAndCustomSuppressesThem(t *testing.T) {
+	prices := []db.ModelPricing{{
+		ModelPattern: "banded-model",
+		InputPerMTok: money.MustParseDollars("1"),
+		Bands: []db.PricingBand{{
+			AboveInputTokens: 200_000,
+			InputPerMTok:     money.MustParseDollars("2"),
+		}},
+	}}
+	out := pricingRowsToMap(prices)
+	require.Len(t, out["banded-model"].Bands, 1)
+	assert.Equal(t, 200_000, out["banded-model"].Bands[0].AboveInputTokens)
+
+	store := &Store{}
+	store.SetCustomPricing(map[string]config.CustomModelRate{
+		"banded-model": {InputMicrodollarsPerMTok: 9_000_000},
+	})
+	store.applyCustomPricing(out)
+
+	assert.Empty(t, out["banded-model"].Bands)
+}
+
+func TestClonePricingRowsDeepClonesPricingBands(t *testing.T) {
+	rows := []export.EffectivePricingRow{{
+		ModelPattern: "banded-model",
+		Rates: export.ModelRates{Bands: []export.PricingBand{{
+			AboveInputTokens: 200_000,
+		}}},
+	}}
+	cloned := clonePricingRows(rows)
+	cloned[0].Rates.Bands[0].AboveInputTokens = 1
+
+	assert.Equal(t, 200_000, rows[0].Rates.Bands[0].AboveInputTokens)
+}
+
+func TestPGModelPricingSourceDetectsBandOnlyFallbackMismatch(t *testing.T) {
+	fallback := pgFallbackRateMap()
+	rates, ok := fallback["gpt-5.5"]
+	require.True(t, ok)
+	require.NotEmpty(t, rates.Bands)
+	p := db.ModelPricing{
+		ModelPattern:         "gpt-5.5",
+		InputPerMTok:         rates.InputPerMTok,
+		OutputPerMTok:        rates.OutputPerMTok,
+		CacheCreationPerMTok: rates.CacheWritePerMTok,
+		CacheReadPerMTok:     rates.CacheReadPerMTok,
+	}
+
+	assert.Equal(t, export.PricingRowSourceFetched,
+		pgModelPricingSource(p, fallback))
 }
 
 func TestLoadPricingMapSharesConcurrentDBRows(t *testing.T) {

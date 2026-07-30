@@ -7,7 +7,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/tidwall/gjson"
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
@@ -161,8 +160,9 @@ func (s *Store) GetSessionUsageRows(
 			}
 			seen[key] = struct{}{}
 		}
-		_, outputTok, _, _, _, _, priceErr := pgDailyUsageAmounts(
+		_, outputTok, _, _, _ := pgDailyUsageRowTokens(
 			pgDailyUsageScanRow{
+				messageOrdinal:           r.messageOrdinal,
 				usageSource:              r.usageSource,
 				tokenJSON:                r.tokenJSON,
 				inputTokens:              r.inputTokens,
@@ -170,15 +170,8 @@ func (s *Store) GetSessionUsageRows(
 				cacheCreationInputTokens: r.cacheCreationInputTokens,
 				cacheReadInputTokens:     r.cacheReadInputTokens,
 				reasoningTokens:          r.reasoningTokens,
-				cost:                     r.cost,
-				costSource:               r.costSource,
-				model:                    r.model,
 			},
-			rateResolver,
 		)
-		if priceErr != nil {
-			return nil, priceErr
-		}
 		costRow := r
 		var sessionCost *money.Money
 		if r.costSource == db.CopilotReportedCostSource && r.cost.Valid {
@@ -486,11 +479,7 @@ func (s *Store) activityReportUsage(
 		if !mask[i] {
 			continue
 		}
-		_, outputTok, _, _, _, _, priceErr :=
-			pgDailyUsageAmounts(o.scan, rateResolver)
-		if priceErr != nil {
-			return nil, nil, priceErr
-		}
+		_, outputTok, _, _, _ := pgDailyUsageRowTokens(o.scan)
 		costRow := o.scan
 		var sessionCost *money.Money
 		if o.scan.costSource == db.CopilotReportedCostSource && o.scan.cost.Valid {
@@ -529,21 +518,7 @@ func pgActivityReportRowStatus(
 ) (cost money.Money, priced, contributes bool, err error) {
 	pricedModel, lookup := pricing.Resolve(
 		r.model, pgUsageLookupModel(r.model, r.ts))
-	var inTok, outTok, crTok, rdTok int
-	reasoningTok := r.reasoningTokens
-	if r.usageSource == "message" {
-		usage := gjson.Parse(r.tokenJSON)
-		inTok = pgTokenJSONCount(usage, "input_tokens")
-		outTok = pgTokenJSONCount(usage, "output_tokens")
-		crTok = pgTokenJSONCount(usage, "cache_creation_input_tokens")
-		rdTok = pgTokenJSONCount(usage, "cache_read_input_tokens")
-		reasoningTok = pgTokenJSONCount(usage, "reasoning_tokens")
-	} else {
-		inTok, outTok, crTok, rdTok = pgUsageEventRowTokens(
-			r.usageSource,
-			r.inputTokens, r.outputTokens,
-			r.cacheCreationInputTokens, r.cacheReadInputTokens)
-	}
+	inTok, outTok, crTok, rdTok, reasoningTok := pgDailyUsageRowTokens(r)
 
 	if r.cost.Valid {
 		pricing.RecordResolvedReported(r.model, pricedModel, lookup)
@@ -557,12 +532,16 @@ func pgActivityReportRowStatus(
 		pricing.RecordResolvedComputed(r.model, pricedModel, lookup)
 		return money.Money{}, false, true, nil
 	}
-	cost, err = lookup.Rates.CostForTokens(
+	requestScoped := pgUsageRowIsRequestScoped(r.usageSource, r.messageOrdinal)
+	cost, err = lookup.Rates.CostForTokensScoped(
+		requestScoped,
 		inTok, outTok, reasoningTok, crTok, rdTok)
 	if err != nil {
 		return money.Money{}, false, false,
 			fmt.Errorf("pricing pg activity usage for model %q: %w", r.model, err)
 	}
-	pricing.RecordResolvedComputed(r.model, pricedModel, lookup)
+	pgRecordComputedUsagePricing(
+		pricing, r.model, pricedModel, lookup,
+		requestScoped, inTok, crTok, rdTok)
 	return cost, true, true, nil
 }

@@ -243,6 +243,18 @@ CREATE TABLE IF NOT EXISTS model_pricing (
     updated_at TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS model_pricing_bands (
+    model_pattern TEXT NOT NULL
+        REFERENCES model_pricing(model_pattern) ON DELETE CASCADE,
+    above_input_tokens BIGINT NOT NULL CHECK (above_input_tokens > 0),
+    input_microdollars_per_mtok BIGINT NOT NULL,
+    output_microdollars_per_mtok BIGINT NOT NULL,
+    cache_creation_microdollars_per_mtok BIGINT NOT NULL,
+    cache_read_microdollars_per_mtok BIGINT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (model_pattern, above_input_tokens)
+);
+
 CREATE TABLE IF NOT EXISTS source_archives (
     source_archive_id   TEXT PRIMARY KEY,
     source_archive_salt TEXT NOT NULL
@@ -490,6 +502,7 @@ func migrateMoneyColumnsPG(
 	existingColumns, err = loadExistingColumns(
 		ctx, tx, nil,
 		"usage_events", "cursor_usage_events", "model_pricing",
+		"model_pricing_bands",
 	)
 	if err != nil {
 		return err
@@ -1049,6 +1062,7 @@ func EnsureSchema(
 	existingColumns, err := loadExistingColumns(
 		ctx, db, alters,
 		"usage_events", "cursor_usage_events", "model_pricing",
+		"model_pricing_bands",
 	)
 	if err != nil {
 		return err
@@ -2229,6 +2243,7 @@ func CheckSchemaCompat(
 	}
 	rows.Close()
 
+	hasModelPricing := true
 	rows, err = db.QueryContext(ctx,
 		`SELECT input_microdollars_per_mtok,
 			output_microdollars_per_mtok,
@@ -2242,7 +2257,24 @@ func CheckSchemaCompat(
 				err,
 			)
 		}
+		hasModelPricing = false
 	} else {
+		rows.Close()
+	}
+
+	if hasModelPricing {
+		rows, err = db.QueryContext(ctx,
+			`SELECT model_pattern, above_input_tokens,
+				input_microdollars_per_mtok, output_microdollars_per_mtok,
+				cache_creation_microdollars_per_mtok,
+				cache_read_microdollars_per_mtok, updated_at
+			 FROM model_pricing_bands LIMIT 0`)
+		if err != nil {
+			return fmt.Errorf(
+				"model_pricing_bands table missing required columns: %w",
+				err,
+			)
+		}
 		rows.Close()
 	}
 
@@ -2358,6 +2390,7 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 		return false
 	}
 	if !pgHasTable(ctx, db, "model_pricing") ||
+		!pgHasTable(ctx, db, "model_pricing_bands") ||
 		!pgHasTable(ctx, db, "source_archives") ||
 		!pgHasTable(ctx, db, "source_project_identity_observations") ||
 		!pgHasTable(ctx, db, "source_session_project_identity_snapshots") ||

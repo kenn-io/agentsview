@@ -957,7 +957,60 @@ func pgDailyUsageAmounts(
 	cost, savings money.Money,
 	err error,
 ) {
-	reasoningTok := r.reasoningTokens
+	inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok :=
+		pgDailyUsageRowTokens(r)
+
+	pricedModel, lookup := pricing.Resolve(
+		r.model, pgUsageLookupModel(r.model, r.ts))
+	rates := lookup.Rates
+	requestScoped := pgUsageRowIsRequestScoped(r.usageSource, r.messageOrdinal)
+	if r.cost.Valid && r.costSource != db.CopilotReportedCostSource {
+		cost = money.Money{Microdollars: r.cost.Int64}
+		pricing.RecordResolvedReported(r.model, pricedModel, lookup)
+	} else {
+		cost, err = rates.CostForTokensScoped(
+			requestScoped,
+			inputTok, outputTok, reasoningTok, cacheCrTok, cacheRdTok)
+		if err != nil {
+			return 0, 0, 0, 0, money.Money{}, money.Money{},
+				fmt.Errorf("pricing pg usage row for model %q: %w", r.model, err)
+		}
+		pgRecordComputedUsagePricing(
+			pricing, r.model, pricedModel, lookup, requestScoped,
+			inputTok, cacheCrTok, cacheRdTok,
+		)
+	}
+	selectedRates := rates
+	if requestScoped {
+		selectedRates = rates.RatesForTokens(inputTok, cacheCrTok, cacheRdTok)
+	}
+	readRate, err := money.Sub(
+		selectedRates.InputPerMTok, selectedRates.CacheReadPerMTok)
+	if err != nil {
+		return 0, 0, 0, 0, money.Money{}, money.Money{},
+			fmt.Errorf("deriving pg cache read rate for model %q: %w", r.model, err)
+	}
+	creationRate, err := money.Sub(
+		selectedRates.InputPerMTok, selectedRates.CacheWritePerMTok)
+	if err != nil {
+		return 0, 0, 0, 0, money.Money{}, money.Money{},
+			fmt.Errorf("deriving pg cache creation rate for model %q: %w", r.model, err)
+	}
+	savings, err = money.SignedCostPerMillion([]money.RatedTokens{
+		{Tokens: int64(cacheRdTok), Rate: readRate},
+		{Tokens: int64(cacheCrTok), Rate: creationRate},
+	})
+	if err != nil {
+		return 0, 0, 0, 0, money.Money{}, money.Money{},
+			fmt.Errorf("pricing pg cache savings for model %q: %w", r.model, err)
+	}
+	return inputTok, outputTok, cacheCrTok, cacheRdTok, cost, savings, nil
+}
+
+func pgDailyUsageRowTokens(
+	r pgDailyUsageScanRow,
+) (inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok int) {
+	reasoningTok = r.reasoningTokens
 	if r.usageSource == "message" {
 		usage := gjson.Parse(r.tokenJSON)
 		inputTok = pgTokenJSONCount(usage, "input_tokens")
@@ -973,41 +1026,29 @@ func pgDailyUsageAmounts(
 				r.inputTokens, r.outputTokens,
 				r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}
-
-	pricedModel, lookup := pricing.Resolve(
-		r.model, pgUsageLookupModel(r.model, r.ts))
-	rates := lookup.Rates
-	if r.cost.Valid && r.costSource != db.CopilotReportedCostSource {
-		cost = money.Money{Microdollars: r.cost.Int64}
-		pricing.RecordResolvedReported(r.model, pricedModel, lookup)
-	} else {
-		cost, err = rates.CostForTokens(
-			inputTok, outputTok, reasoningTok, cacheCrTok, cacheRdTok)
-		if err != nil {
-			return 0, 0, 0, 0, money.Money{}, money.Money{},
-				fmt.Errorf("pricing pg usage row for model %q: %w", r.model, err)
-		}
-		pricing.RecordResolvedComputed(r.model, pricedModel, lookup)
-	}
-	readRate, err := money.Sub(rates.InputPerMTok, rates.CacheReadPerMTok)
-	if err != nil {
-		return 0, 0, 0, 0, money.Money{}, money.Money{},
-			fmt.Errorf("deriving pg cache read rate for model %q: %w", r.model, err)
-	}
-	creationRate, err := money.Sub(rates.InputPerMTok, rates.CacheWritePerMTok)
-	if err != nil {
-		return 0, 0, 0, 0, money.Money{}, money.Money{},
-			fmt.Errorf("deriving pg cache creation rate for model %q: %w", r.model, err)
-	}
-	savings, err = money.SignedCostPerMillion([]money.RatedTokens{
-		{Tokens: int64(cacheRdTok), Rate: readRate},
-		{Tokens: int64(cacheCrTok), Rate: creationRate},
-	})
-	if err != nil {
-		return 0, 0, 0, 0, money.Money{}, money.Money{},
-			fmt.Errorf("pricing pg cache savings for model %q: %w", r.model, err)
-	}
 	return
+}
+
+func pgUsageRowIsRequestScoped(
+	usageSource string, messageOrdinal sql.NullInt64,
+) bool {
+	return usageSource == "message" || messageOrdinal.Valid
+}
+
+func pgRecordComputedUsagePricing(
+	pricing *export.PricingResolver,
+	reportedModel, pricedModel string,
+	lookup export.PricingLookup,
+	requestScoped bool,
+	inputTokens, cacheWriteTokens, cacheReadTokens int,
+) {
+	if requestScoped {
+		pricing.RecordResolvedComputedRequest(
+			reportedModel, pricedModel, lookup,
+			inputTokens, cacheWriteTokens, cacheReadTokens)
+		return
+	}
+	pricing.RecordResolvedComputedAggregate(reportedModel, pricedModel, lookup)
 }
 
 type pgUsageDedupToken struct {
@@ -1072,13 +1113,17 @@ func pgSessionRowCost(
 		pricing.RecordResolvedComputed(r.model, pricedModel, lookup)
 		return money.Money{}, false, true, nil
 	}
-	cost, err = lookup.Rates.CostForTokens(
+	requestScoped := pgUsageRowIsRequestScoped(r.usageSource, r.messageOrdinal)
+	cost, err = lookup.Rates.CostForTokensScoped(
+		requestScoped,
 		inTok, outTok, reasoningTok, crTok, rdTok)
 	if err != nil {
 		return money.Money{}, false, false,
 			fmt.Errorf("pricing pg session usage for model %q: %w", r.model, err)
 	}
-	pricing.RecordResolvedComputed(r.model, pricedModel, lookup)
+	pgRecordComputedUsagePricing(
+		pricing, r.model, pricedModel, lookup,
+		requestScoped, inTok, crTok, rdTok)
 	return cost, true, true, nil
 }
 

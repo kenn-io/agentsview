@@ -24,7 +24,8 @@ func TestLoadPricingMapAppliesCustomWhenTableMissing(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	_, err := store.DB().ExecContext(ctx, `DROP TABLE model_pricing`)
+	_, err := store.DB().ExecContext(ctx,
+		`DROP TABLE model_pricing_bands, model_pricing`)
 	require.NoError(t, err, "drop model_pricing")
 
 	store.SetCustomPricing(map[string]config.CustomModelRate{
