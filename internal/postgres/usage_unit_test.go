@@ -17,6 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
 type usageProbeDriver struct{}
@@ -514,6 +515,112 @@ func TestPGSessionRowCostIncludesReasoningOnlyRows(t *testing.T) {
 		block.Models["reasoning-model"].CostSource)
 }
 
+func TestPGActivityReportRowStatusCanonicalizesKimiAliasByTimestamp(t *testing.T) {
+	tests := []struct {
+		name         string
+		timestamp    time.Time
+		canonical    string
+		expectedCost money.Money
+	}{
+		{
+			name:         "before cutoff",
+			timestamp:    pricingpkg.KimiModelEraCutoff.Add(-time.Second),
+			canonical:    pricingpkg.KimiK26Canonical,
+			expectedCost: money.MustParseDollars("1"),
+		},
+		{
+			name:         "at cutoff",
+			timestamp:    pricingpkg.KimiModelEraCutoff,
+			canonical:    pricingpkg.KimiK3Canonical,
+			expectedCost: money.MustParseDollars("2"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolver := export.NewPricingResolver([]export.EffectivePricingRow{
+				{
+					ModelPattern: pricingpkg.KimiK26Canonical,
+					Rates: export.ModelRates{
+						InputPerMTok: money.MustParseDollars("1"),
+					},
+				},
+				{
+					ModelPattern: pricingpkg.KimiK3Canonical,
+					Rates: export.ModelRates{
+						InputPerMTok: money.MustParseDollars("2"),
+					},
+				},
+			})
+
+			cost, priced, contributes, err := pgActivityReportRowStatus(
+				pgDailyUsageScanRow{
+					usageSource: "provider",
+					model:       "daimon-kimi-code",
+					ts:          sql.NullTime{Time: tt.timestamp, Valid: true},
+					inputTokens: 1_000_000,
+				},
+				resolver,
+			)
+
+			require.NoError(t, err)
+			assert.True(t, priced)
+			assert.True(t, contributes)
+			assert.Equal(t, tt.expectedCost, cost)
+			block, err := resolver.BuildBlock()
+			require.NoError(t, err)
+			require.Contains(t, block.Models, "daimon-kimi-code")
+			resolutions := block.Models["daimon-kimi-code"].Resolutions
+			require.Len(t, resolutions, 1)
+			assert.Equal(t, tt.canonical, resolutions[0].PricedModel)
+			assert.NotContains(t, block.Models, tt.canonical)
+		})
+	}
+}
+
+func TestPGActivityReportRowStatusPrefersExactCustomKimiAlias(t *testing.T) {
+	resolver := export.NewPricingResolver([]export.EffectivePricingRow{
+		{
+			ModelPattern: "daimon-kimi-code",
+			Rates: export.ModelRates{
+				InputPerMTok: money.MustParseDollars("7"),
+				Source:       export.PricingRowSourceCustom,
+			},
+		},
+		{
+			ModelPattern: pricingpkg.KimiK3Canonical,
+			Rates: export.ModelRates{
+				InputPerMTok: money.MustParseDollars("2"),
+				Source:       export.PricingRowSourceFetched,
+			},
+		},
+	})
+
+	cost, priced, contributes, err := pgActivityReportRowStatus(
+		pgDailyUsageScanRow{
+			usageSource: "provider",
+			model:       "daimon-kimi-code",
+			ts: sql.NullTime{
+				Time:  pricingpkg.KimiModelEraCutoff,
+				Valid: true,
+			},
+			inputTokens: 1_000_000,
+		},
+		resolver,
+	)
+
+	require.NoError(t, err)
+	assert.True(t, priced)
+	assert.True(t, contributes)
+	assert.Equal(t, money.MustParseDollars("7"), cost)
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+	require.Contains(t, block.Models, "daimon-kimi-code")
+	resolutions := block.Models["daimon-kimi-code"].Resolutions
+	require.Len(t, resolutions, 1)
+	assert.Equal(t, "daimon-kimi-code", resolutions[0].PricedModel)
+}
+
 func TestPGUsageAmountsIncludeMessageReasoningTokens(t *testing.T) {
 	resolver := export.NewPricingResolver(
 		[]export.EffectivePricingRow{{
@@ -546,4 +653,42 @@ func TestPGUsageAmountsIncludeMessageReasoningTokens(t *testing.T) {
 	assert.True(t, priced)
 	assert.True(t, contributes)
 	assert.Equal(t, money.MustParseDollars("0.002"), sessionCost)
+}
+
+func TestPGDailyUsageAmountsPrefersExactCustomKimiAlias(t *testing.T) {
+	resolver := export.NewPricingResolver([]export.EffectivePricingRow{
+		{
+			ModelPattern: "kimi-for-coding",
+			Rates: export.ModelRates{
+				InputPerMTok: money.MustParseDollars("7"),
+				Source:       export.PricingRowSourceCustom,
+			},
+		},
+		{
+			ModelPattern: pricingpkg.KimiK3Canonical,
+			Rates: export.ModelRates{
+				InputPerMTok: money.MustParseDollars("2"),
+				Source:       export.PricingRowSourceFetched,
+			},
+		},
+	})
+
+	_, _, _, _, cost, _, err := pgDailyUsageAmounts(pgDailyUsageScanRow{
+		usageSource: "provider",
+		model:       "kimi-for-coding",
+		ts: sql.NullTime{
+			Time:  pricingpkg.KimiModelEraCutoff,
+			Valid: true,
+		},
+		inputTokens: 1_000_000,
+	}, resolver)
+
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("7"), cost)
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+	require.Contains(t, block.Models, "kimi-for-coding")
+	resolutions := block.Models["kimi-for-coding"].Resolutions
+	require.Len(t, resolutions, 1)
+	assert.Equal(t, "kimi-for-coding", resolutions[0].PricedModel)
 }

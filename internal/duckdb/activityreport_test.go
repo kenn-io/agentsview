@@ -13,7 +13,9 @@ import (
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
 // duckDayQuery resolves a single-day "day" Query for date/tz against a
@@ -192,6 +194,107 @@ func TestDuckGetActivityReportUsageCostAndTokens(t *testing.T) {
 	assert.Equal(t, 500, r.Totals.OutputTokens)
 	// Cost = (1000*3 + 500*15) / 1e6 = 0.0105
 	assert.Equal(t, money.MustParseDollars("0.0105"), r.Totals.Cost)
+}
+
+func TestDuckActivityReportRowStatusCanonicalizesKimiAliasByTimestamp(t *testing.T) {
+	tests := []struct {
+		name         string
+		timestamp    string
+		canonical    string
+		expectedCost money.Money
+	}{
+		{
+			name:         "before cutoff",
+			timestamp:    "2026-07-18T23:59:59Z",
+			canonical:    pricingpkg.KimiK26Canonical,
+			expectedCost: money.MustParseDollars("1"),
+		},
+		{
+			name:         "at cutoff",
+			timestamp:    "2026-07-19T00:00:00Z",
+			canonical:    pricingpkg.KimiK3Canonical,
+			expectedCost: money.MustParseDollars("2"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolver := export.NewPricingResolver([]export.EffectivePricingRow{
+				{
+					ModelPattern: pricingpkg.KimiK26Canonical,
+					Rates: export.ModelRates{
+						InputPerMTok: money.MustParseDollars("1"),
+					},
+				},
+				{
+					ModelPattern: pricingpkg.KimiK3Canonical,
+					Rates: export.ModelRates{
+						InputPerMTok: money.MustParseDollars("2"),
+					},
+				},
+			})
+
+			_, cost, priced, contributes, err := duckActivityReportRowStatus(
+				duckActivityReportUsageRow{
+					model:    "daimon-kimi-code",
+					ts:       tt.timestamp,
+					inputTok: 1_000_000,
+				},
+				resolver,
+			)
+
+			require.NoError(t, err)
+			assert.True(t, priced)
+			assert.True(t, contributes)
+			assert.Equal(t, tt.expectedCost, cost)
+			block, err := resolver.BuildBlock()
+			require.NoError(t, err)
+			require.Contains(t, block.Models, "daimon-kimi-code")
+			resolutions := block.Models["daimon-kimi-code"].Resolutions
+			require.Len(t, resolutions, 1)
+			assert.Equal(t, tt.canonical, resolutions[0].PricedModel)
+			assert.NotContains(t, block.Models, tt.canonical)
+		})
+	}
+}
+
+func TestDuckActivityReportRowStatusPrefersExactCustomKimiAlias(t *testing.T) {
+	resolver := export.NewPricingResolver([]export.EffectivePricingRow{
+		{
+			ModelPattern: "daimon-kimi-code",
+			Rates: export.ModelRates{
+				InputPerMTok: money.MustParseDollars("7"),
+				Source:       export.PricingRowSourceCustom,
+			},
+		},
+		{
+			ModelPattern: pricingpkg.KimiK3Canonical,
+			Rates: export.ModelRates{
+				InputPerMTok: money.MustParseDollars("2"),
+				Source:       export.PricingRowSourceFetched,
+			},
+		},
+	})
+
+	_, cost, priced, contributes, err := duckActivityReportRowStatus(
+		duckActivityReportUsageRow{
+			model:    "daimon-kimi-code",
+			ts:       "2026-07-19T00:00:00Z",
+			inputTok: 1_000_000,
+		},
+		resolver,
+	)
+
+	require.NoError(t, err)
+	assert.True(t, priced)
+	assert.True(t, contributes)
+	assert.Equal(t, money.MustParseDollars("7"), cost)
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+	require.Contains(t, block.Models, "daimon-kimi-code")
+	resolutions := block.Models["daimon-kimi-code"].Resolutions
+	require.Len(t, resolutions, 1)
+	assert.Equal(t, "daimon-kimi-code", resolutions[0].PricedModel)
 }
 
 func TestDuckGetActivityReportCopilotReportedCostReplacesSessionEstimates(t *testing.T) {

@@ -119,9 +119,18 @@ afterEach(() => {
   router.route = "sessions";
   router.params = {};
   router.sessionId = null;
+  window.history.replaceState(null, "", "/");
   usage.summary = null;
   usage.topSessions = null;
   usage.errors.summary = null;
+  usage.errors.topSessions = null;
+  usage.mode = "cost";
+  usage.setSelectedTokenTypes([
+    "input",
+    "cache_write",
+    "cache_read",
+    "output",
+  ]);
   usage.isPinned = false;
   usage.windowDays = 30;
   usage.from = "";
@@ -136,6 +145,165 @@ afterEach(() => {
 });
 
 describe("UsagePage refresh behavior", () => {
+  it("hydrates token mode from the canonical URL before fetching", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const fetchAll = vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    router.route = "usage";
+    router.params = { view: "tokens", project: "demo" };
+
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+
+    expect(usage.mode).toBe("token");
+    expect(document.querySelector(
+      '[role="radiogroup"][aria-label="Usage metric"] '
+        + '[role="radio"][aria-checked="true"]',
+    )?.textContent?.trim()).toBe("Tokens");
+    expect(fetchAll).toHaveBeenCalled();
+  });
+
+  it("hydrates and renders an Output-only token selection", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    router.route = "usage";
+    router.params = {
+      view: "tokens",
+      token_types: "output",
+      project: "demo",
+    };
+
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+
+    expect(usage.selectedTokenTypes).toEqual(["output"]);
+    expect(document.querySelector(
+      'button[aria-label="Token types: Output"]',
+    )).not.toBeNull();
+    expect(router.params).toEqual(expect.objectContaining({
+      view: "tokens",
+      token_types: "output",
+      project: "demo",
+    }));
+  });
+
+  it("switches metrics without dropping filters", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    const fetchTopSessions = vi.spyOn(usage, "fetchTopSessions")
+      .mockResolvedValue("ok");
+    const replaceParams = vi.spyOn(router, "replaceParams");
+    window.history.replaceState(
+      null,
+      "",
+      "/usage?view=tokens&project=demo&window_days=90",
+    );
+    router.route = "usage";
+    router.params = {
+      view: "tokens",
+      project: "demo",
+      window_days: "90",
+    };
+    usage.mode = "token";
+
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+    const costOption = document.querySelector<HTMLButtonElement>(
+      '[role="radiogroup"][aria-label="Usage metric"] '
+        + '[role="radio"]:first-child',
+    );
+    expect(costOption).not.toBeNull();
+
+    costOption!.click();
+    await flushEffects();
+
+    expect(usage.mode).toBe("cost");
+    expect(replaceParams).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        project: "demo",
+        window_days: "90",
+      }),
+    );
+    expect(replaceParams.mock.lastCall?.[0]).not.toHaveProperty("view");
+    expect(fetchTopSessions).toHaveBeenCalledOnce();
+  });
+
+  it("normalizes the legacy token route while retaining filters", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    const replace = vi.spyOn(router, "replace");
+    window.history.replaceState(
+      null,
+      "",
+      "/token-usage?project=demo&window_days=90",
+    );
+    router.route = "token-usage";
+    router.params = {
+      project: "demo",
+      window_days: "90",
+    };
+
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+
+    expect(replace).toHaveBeenCalledWith("usage", {
+      project: "demo",
+      window_days: "90",
+      view: "tokens",
+    });
+    expect(router.route).toBe("usage");
+    expect(usage.mode).toBe("token");
+  });
+
+  it("removes an unsupported metric value from the canonical URL", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    const replaceParams = vi.spyOn(router, "replaceParams");
+    router.route = "usage";
+    router.params = { view: "unknown", project: "demo" };
+
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+
+    expect(usage.mode).toBe("cost");
+    expect(replaceParams).toHaveBeenCalled();
+    expect(replaceParams.mock.lastCall?.[0]).not.toHaveProperty("view");
+  });
+
   it("materializes rolling bounds before fetching a returned bare page", async () => {
     const fetchStates: Array<{
       isPinned: boolean;

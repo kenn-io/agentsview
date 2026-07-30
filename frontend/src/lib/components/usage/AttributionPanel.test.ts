@@ -198,6 +198,13 @@ describe("AttributionPanel project identity", () => {
 describe("AttributionPanel colors", () => {
   afterEach(() => {
     usage.summary = null;
+    usage.mode = "cost";
+    usage.setSelectedTokenTypes([
+      "input",
+      "cache_write",
+      "cache_read",
+      "output",
+    ]);
     usage.toggles.attribution.groupBy = "project";
     usage.toggles.attribution.view = "list";
     settings.chartPalette = "agentsview";
@@ -235,6 +242,45 @@ describe("AttributionPanel colors", () => {
     ).map((dot) => dot.style.background);
     expect(new Set(tileColors).size).toBe(2);
     expect(railColors).toEqual(tileColors);
+    unmount(component);
+  });
+
+  it("formats treemap values as tokens in token mode", async () => {
+    const summary = summaryWithAgents(["codex"]);
+    summary.agentTotals[0]!.inputTokens = 750_000;
+    summary.agentTotals[0]!.outputTokens = 250_000;
+    usage.summary = summary;
+    usage.mode = "token";
+    usage.toggles.attribution.groupBy = "agent";
+    usage.toggles.attribution.view = "treemap";
+
+    const component = mountPanel();
+    await tick();
+
+    const value = document.querySelector(".tile-value")?.textContent?.trim();
+    expect(value).toBe("1M");
+    expect(value).not.toContain("$");
+    unmount(component);
+  });
+
+  it("attributes only output tokens when Output is selected", async () => {
+    const summary = summaryWithAgents(["codex"]);
+    summary.agentTotals[0]!.inputTokens = 750_000;
+    summary.agentTotals[0]!.cacheCreationTokens = 125_000;
+    summary.agentTotals[0]!.cacheReadTokens = 2_000_000;
+    summary.agentTotals[0]!.outputTokens = 250_000;
+    usage.summary = summary;
+    usage.mode = "token";
+    usage.setSelectedTokenTypes(["output"]);
+    usage.toggles.attribution.groupBy = "agent";
+    usage.toggles.attribution.view = "treemap";
+
+    const component = mountPanel();
+    await tick();
+
+    expect(
+      document.querySelector(".tile-value")?.textContent?.trim(),
+    ).toBe("250k");
     unmount(component);
   });
 

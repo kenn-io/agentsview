@@ -476,15 +476,16 @@ func mergeExportSessionsPricing(
 
 	merged := cloneExportSessionsPricing(base)
 	if merged.Models == nil {
-		merged.Models = map[string]export.EffectiveModelRate{}
+		merged.Models = map[string]export.ModelPricingProvenance{}
 	}
-	for model, rate := range next.Models {
+	for model, provenance := range next.Models {
 		if existing, ok := merged.Models[model]; ok {
-			rate = mergeExportSessionsModelRate(existing, rate)
+			provenance = mergeExportSessionsModelProvenance(
+				existing, provenance)
 		} else {
-			rate = cloneExportSessionsModelRate(rate)
+			provenance = cloneExportSessionsModelProvenance(provenance)
 		}
-		merged.Models[model] = rate
+		merged.Models[model] = provenance
 	}
 	merged.Fallback.Models = mergeExportSessionsStringSets(
 		merged.Fallback.Models, next.Fallback.Models)
@@ -524,12 +525,25 @@ func cloneExportSessionsPricing(
 	clone := *block
 	clone.Fallback.Models = append([]string{}, block.Fallback.Models...)
 	clone.Fallback.Used = len(clone.Fallback.Models) > 0
-	clone.Models = make(map[string]export.EffectiveModelRate,
+	clone.Models = make(map[string]export.ModelPricingProvenance,
 		len(block.Models))
-	for model, rate := range block.Models {
-		clone.Models[model] = cloneExportSessionsModelRate(rate)
+	for model, provenance := range block.Models {
+		clone.Models[model] =
+			cloneExportSessionsModelProvenance(provenance)
 	}
 	return &clone
+}
+
+func cloneExportSessionsModelProvenance(
+	provenance export.ModelPricingProvenance,
+) export.ModelPricingProvenance {
+	clone := provenance
+	clone.Resolutions = make([]export.EffectiveModelRate,
+		len(provenance.Resolutions))
+	for i, rate := range provenance.Resolutions {
+		clone.Resolutions[i] = cloneExportSessionsModelRate(rate)
+	}
+	return clone
 }
 
 func cloneExportSessionsModelRate(
@@ -542,17 +556,61 @@ func cloneExportSessionsModelRate(
 	return rate
 }
 
-func mergeExportSessionsModelRate(
-	base, next export.EffectiveModelRate,
-) export.EffectiveModelRate {
-	merged := cloneExportSessionsModelRate(base)
-	if merged.MatchedPattern == nil && next.MatchedPattern != nil {
-		pattern := *next.MatchedPattern
-		merged.MatchedPattern = &pattern
-	}
+type exportSessionsModelResolutionKey struct {
+	pricedModel       string
+	matchedPattern    string
+	hasMatchedPattern bool
+}
+
+func mergeExportSessionsModelProvenance(
+	base, next export.ModelPricingProvenance,
+) export.ModelPricingProvenance {
+	merged := cloneExportSessionsModelProvenance(base)
 	merged.CostSource = mergeExportSessionsCostSource(
 		merged.CostSource, next.CostSource)
+	positions := make(map[exportSessionsModelResolutionKey]int,
+		len(merged.Resolutions))
+	for i, rate := range merged.Resolutions {
+		positions[exportSessionsModelRateKey(rate)] = i
+	}
+	for _, rate := range next.Resolutions {
+		key := exportSessionsModelRateKey(rate)
+		if i, ok := positions[key]; ok {
+			merged.Resolutions[i].CostSource =
+				mergeExportSessionsCostSource(
+					merged.Resolutions[i].CostSource,
+					rate.CostSource)
+			continue
+		}
+		positions[key] = len(merged.Resolutions)
+		merged.Resolutions = append(merged.Resolutions,
+			cloneExportSessionsModelRate(rate))
+	}
+	sort.Slice(merged.Resolutions, func(i, j int) bool {
+		left := exportSessionsModelRateKey(merged.Resolutions[i])
+		right := exportSessionsModelRateKey(merged.Resolutions[j])
+		if left.pricedModel != right.pricedModel {
+			return left.pricedModel < right.pricedModel
+		}
+		if left.hasMatchedPattern != right.hasMatchedPattern {
+			return !left.hasMatchedPattern
+		}
+		return left.matchedPattern < right.matchedPattern
+	})
 	return merged
+}
+
+func exportSessionsModelRateKey(
+	rate export.EffectiveModelRate,
+) exportSessionsModelResolutionKey {
+	key := exportSessionsModelResolutionKey{
+		pricedModel: rate.PricedModel,
+	}
+	if rate.MatchedPattern != nil {
+		key.matchedPattern = *rate.MatchedPattern
+		key.hasMatchedPattern = true
+	}
+	return key
 }
 
 func mergeExportSessionsCostSource(

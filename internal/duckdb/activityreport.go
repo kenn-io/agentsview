@@ -674,6 +674,7 @@ func duckActivityReportUsageQuery(inClause string) string {
 func duckActivityReportRowStatus(
 	r duckActivityReportUsageRow, pricing *export.PricingResolver,
 ) (savings, cost money.Money, priced, contributes bool, err error) {
+	canonicalModel := duckUsageLookupModel(r.model, r.ts)
 	var explicitCost int64
 	var billableInput, billableOutput, billableReasoning, billableCacheCr, billableCacheRd int
 	if r.cost != nil {
@@ -683,7 +684,7 @@ func duckActivityReportRowStatus(
 	} else if r.inputTok != 0 || r.outputTok != 0 || r.reasoningTok != 0 ||
 		r.cacheCr != 0 || r.cacheRd != 0 {
 		contributes = true
-		lookup := pricing.Lookup(r.model)
+		_, lookup := pricing.Resolve(r.model, canonicalModel)
 		priced = lookup.OK
 		billableInput = r.inputTok
 		billableOutput = r.outputTok
@@ -698,8 +699,8 @@ func duckActivityReportRowStatus(
 		billableCacheCr = r.cacheCr
 		billableCacheRd = r.cacheRd
 	}
-	cost, savings, _, _, err = duckUsageAggregateCost(
-		r.model,
+	cost, savings, _, _, err = duckUsageAggregateResolvedCost(
+		r.model, canonicalModel,
 		r.inputTok, r.outputTok, r.cacheCr, r.cacheRd,
 		billableInput, billableOutput, billableReasoning,
 		billableCacheCr, billableCacheRd,

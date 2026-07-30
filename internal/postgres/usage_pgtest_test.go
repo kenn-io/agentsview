@@ -557,6 +557,48 @@ func TestStoreGetTopSessionsByCostDedupesSourceUUIDFallback(t *testing.T) {
 	assert.Equal(t, "usage-top-source-001", top[0].SessionID)
 }
 
+func TestStoreGetTopSessionsRanksBySelectedTokenTypes(t *testing.T) {
+	_, store := prepareUsageSchema(
+		t, "agentsview_top_sessions_selected_tokens_test",
+	)
+	ctx := context.Background()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at,
+			message_count, user_message_count
+		) VALUES
+			('input-heavy', 'test-machine', 'demo', 'codex',
+			 '2026-02-01T12:00:00Z'::timestamptz, 1, 1),
+			('output-heavy', 'test-machine', 'demo', 'codex',
+			 '2026-02-01T13:00:00Z'::timestamptz, 1, 1);
+		INSERT INTO usage_events (
+			session_id, source, model, input_tokens, output_tokens,
+			cache_creation_input_tokens, cache_read_input_tokens,
+			occurred_at, dedup_key
+		) VALUES
+			('input-heavy', 'provider', 'model', 1000, 1, 40, 800,
+			 '2026-02-01T12:01:00Z'::timestamptz, 'input-heavy'),
+			('output-heavy', 'provider', 'model', 10, 50, 2, 3,
+			 '2026-02-01T13:01:00Z'::timestamptz, 'output-heavy')`)
+	require.NoError(t, err)
+
+	top, err := store.GetTopSessionsByCost(ctx, db.UsageFilter{
+		From:                  "2026-02-01",
+		To:                    "2026-02-01",
+		Timezone:              "UTC",
+		TopSessionsSort:       db.TopSessionsSortTokens,
+		TopSessionsTokenTypes: db.UsageTokenTypeOutput,
+	}, 1)
+	require.NoError(t, err)
+	require.Len(t, top, 1)
+	assert.Equal(t, "output-heavy", top[0].SessionID)
+	assert.Equal(t, 10, top[0].InputTokens)
+	assert.Equal(t, 50, top[0].OutputTokens)
+	assert.Equal(t, 2, top[0].CacheCreationTokens)
+	assert.Equal(t, 3, top[0].CacheReadTokens)
+	assert.Equal(t, 65, top[0].TotalTokens)
+}
+
 func TestStoreGetUsageSessionCountsDedupesClaudeKeys(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_usage_counts_test")
 

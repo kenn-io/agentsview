@@ -24,7 +24,7 @@ JSON output is one document:
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 4,
   "database_id": "00000000-0000-4000-8000-000000000001",
   "cursor": {
     "next": "opaque-cursor-or-empty"
@@ -34,7 +34,7 @@ JSON output is one document:
     "table_version": "2026-07-03T12:00:00Z",
     "latest_row_updated_at": "2026-07-03T12:00:00Z",
     "custom_override_count": 0,
-    "effective_row_count": 2428,
+    "effective_row_count": 2432,
     "digest": "sha256:8d815a1737bce68fa1a19ba977bf33c8c8efcc74deb954fcf62ce80e46e75f2c",
     "cost_source": "mixed",
     "fallback": {
@@ -43,12 +43,18 @@ JSON output is one document:
     },
     "models": {
       "fixture-model-computed": {
-        "matched_pattern": "fixture-model-computed",
-        "input_cost_per_mtok": 2,
-        "output_cost_per_mtok": 8,
-        "cache_write_cost_per_mtok": 3,
-        "cache_read_cost_per_mtok": 0.5,
-        "cost_source": "computed"
+        "cost_source": "computed",
+        "resolutions": [
+          {
+            "priced_model": "fixture-model-computed",
+            "matched_pattern": "fixture-model-computed",
+            "input_cost_per_mtok": {"microdollars": 2000000},
+            "output_cost_per_mtok": {"microdollars": 8000000},
+            "cache_write_cost_per_mtok": {"microdollars": 3000000},
+            "cache_read_cost_per_mtok": {"microdollars": 500000},
+            "cost_source": "computed"
+          }
+        ]
       }
     }
   },
@@ -138,13 +144,13 @@ rows on subsequent lines. The metadata line has `"type": "meta"`; session rows
 do not add a `type` discriminator.
 
 ```json
-{"type":"meta","schema_version":3,"database_id":"00000000-0000-4000-8000-000000000001","cursor":{"next":"..."},"pricing":{},"projects":{}}
+{"type":"meta","schema_version":4,"database_id":"00000000-0000-4000-8000-000000000001","cursor":{"next":"..."},"pricing":{},"projects":{}}
 {"id":"path-current","agent":"claude","model_usage":{"models":["fixture-model-reported"],"input_tokens":300,"output_tokens":60,"cost":{"microdollars":12500},"has_cost":true}}
 ```
 
 These snippets are abbreviated illustrations. Complete checked JSON and NDJSON
-outputs live in `testdata/golden/session_export_v3.json` and
-`testdata/golden/session_export_v3.ndjson`.
+outputs live in `testdata/golden/session_export_v4.json` and
+`testdata/golden/session_export_v4.ndjson`.
 
 ## Content Boundary
 
@@ -271,20 +277,23 @@ error.
 Its v1 shape shipped in 0.37.1. Releases 0.38.0 and 0.38.1 introduced the
 current privacy-bounded project, repository, worktree, and checkout evidence
 shape but mistakenly continued to report version 1. Current builds report
-version 2; payloads from those two transitional releases must not be treated as
-v1-compatible. There is no flag to request v1 output. Additive fields do not
-require a bump, but row semantic changes, field type changes, sort order
-changes, cursor semantics changes, required-field meaning changes, field
-removal, pricing digest canonicalization changes, project key derivation
-changes, remote normalization changes, path fallback normalization changes, and
-new closed-enum values require a bump.
+version 4. Version 2 corrected the project-evidence marker, version 3 introduced
+exact microdollar money objects, and version 4 adds explicit
+reported-to-priced-model resolutions. Payloads from the two transitional
+releases must not be treated as v1-compatible. There is no flag to request an
+earlier output version. Additive fields do not require a bump, but row semantic
+changes, field type changes, sort order changes, cursor semantics changes,
+required-field meaning changes, field removal, pricing digest canonicalization
+changes, project key derivation changes, remote normalization changes, path
+fallback normalization changes, and new closed-enum values require a bump.
 
 Consumers should require the expected `schema_version` and ignore unknown
 additive fields.
 
-Closed v2 enums in this surface include project `resolution` (`resolved`,
-`unknown`, `ambiguous`), session `classification` (`interactive`, `automated`),
-and `cost_source` (`computed`, `reported`, `mixed`).
+Closed enums established in version 2 and unchanged in version 4 include project
+`resolution` (`resolved`, `unknown`, `ambiguous`), session `classification`
+(`interactive`, `automated`), and `cost_source` (`computed`, `reported`,
+`mixed`).
 
 See [Token Usage & Costs](/token-usage/#pricing-provenance) for the shared
 pricing provenance contract and

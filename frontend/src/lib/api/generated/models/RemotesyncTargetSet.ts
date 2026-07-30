@@ -6,5 +6,6 @@ export type RemotesyncTargetSet = {
   dirs: Record<string, any[] | null>;
   extra_files?: any[] | null;
   files?: Record<string, any[] | null>;
+  forbidden_roots?: any[] | null;
 };
 

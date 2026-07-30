@@ -40,14 +40,14 @@ and `automation`.
 The summary cards show:
 
 - **Peak Concurrency** — the maximum number of agents active in the same bucket,
-    with the local clock time of the peak
+  with the local clock time of the peak
 - **Active** — active wall-clock time, plus idle time in the range
 - **Agent-minutes** — combined active minutes across concurrent agents
 - **Sessions** — session count, with interactive/automated and untimed-session
-    detail when applicable
+  detail when applicable
 - **Projects** and **Models** — distinct counts in the range
 - **Total Cost** — selected session cost attributed to activity in the range:
-    authoritative reported totals when available, otherwise catalog estimates
+  authoritative reported totals when available, otherwise catalog estimates
 
 The report counts subagent sessions (for example Claude Code Task-tool agents)
 and fork sessions (rewound conversation branches) alongside their parent
@@ -100,11 +100,11 @@ stacked bars to compare interactive and automated contributions.
 Rows with no value for the selected metric are omitted from that view, so
 cost-only untimed sessions appear in **Cost** but not **Agent-min**.
 
-Project, agent, session, bucket, and report totals use the authoritative
-session total when one is available. For a multi-model session, AgentsView
-allocates that total across usage rows in proportion to their catalog-price
-estimates. The per-model costs are therefore estimated attributions, not
-provider-reported model charges, but they still sum to the displayed total.
+Project, agent, session, bucket, and report totals use the authoritative session
+total when one is available. For a multi-model session, AgentsView allocates
+that total across usage rows in proportion to their catalog-price estimates. The
+per-model costs are therefore estimated attributions, not provider-reported
+model charges, but they still sum to the displayed total.
 
 ## Activity Insight
 
@@ -154,18 +154,21 @@ The activity report JSON, `agentsview usage daily --json`, and
 surfaces. Usage and activity already emitted `schema_version: 1` before 0.38,
 and the session-summary v1 contract shipped in 0.37.1. Releases 0.38.0 and
 0.38.1 emitted the substantially revised project-evidence shape while still
-reporting version 1. Current builds correct all three markers to version 2;
-those two transitional releases must not be treated as v1-compatible.
-Consumers should require the expected `schema_version` and ignore unknown
-additive fields. The commands do not provide a v1 output mode.
+reporting version 1. Version 2 corrected those markers, version 3 introduced
+exact microdollar money objects, and current builds emit version 4 with
+resolved-model pricing provenance. Those two transitional releases must not be
+treated as v1-compatible. Consumers should require the expected `schema_version`
+and ignore unknown additive fields. The commands do not provide an
+earlier-version output mode.
 
 The activity report includes the shared report-level `pricing` and `projects`
-blocks. `pricing.models` contains effective model rates using fields such as
-`input_cost_per_mtok`, `output_cost_per_mtok`, `cache_write_cost_per_mtok`, and
-`cache_read_cost_per_mtok`. Every project-bearing report row contains an opaque
-`project_key`. `projects` is keyed by that value and carries the
-presentation-only `display_label`; unknown project identity is represented by an
-explicit `resolution` with `identity` omitted.
+blocks. `pricing.models` is keyed by reported model names. Each entry contains
+an aggregate `cost_source` and explicit `resolutions` with `priced_model` and
+effective rate fields such as `input_cost_per_mtok`, `output_cost_per_mtok`,
+`cache_write_cost_per_mtok`, and `cache_read_cost_per_mtok`. Every
+project-bearing report row contains an opaque `project_key`. `projects` is keyed
+by that value and carries the presentation-only `display_label`; unknown project
+identity is represented by an explicit `resolution` with `identity` omitted.
 
 See [Token Usage & Costs](/token-usage/#json-contract) for the shared bump
 rules, [Pricing Provenance](/token-usage/#pricing-provenance) for pricing digest

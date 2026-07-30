@@ -42,6 +42,7 @@ var providerMigrationModes = map[AgentType]ProviderMigrationMode{
 	AgentOpenClaw:       ProviderMigrationProviderAuthoritative,
 	AgentQClaw:          ProviderMigrationProviderAuthoritative,
 	AgentKimi:           ProviderMigrationProviderAuthoritative,
+	AgentKimiWork:       ProviderMigrationProviderAuthoritative,
 	AgentClaudeAI:       ProviderMigrationImportOnly,
 	AgentChatGPT:        ProviderMigrationImportOnly,
 	AgentKiro:           ProviderMigrationProviderAuthoritative,

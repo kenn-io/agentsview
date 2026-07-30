@@ -137,6 +137,7 @@ export type { EmbeddingsGenerationActionRequest } from './models/EmbeddingsGener
 export type { EmbeddingsGenerationsResponse } from './models/EmbeddingsGenerationsResponse';
 export type { EmptyTrashResponse } from './models/EmptyTrashResponse';
 export type { ExportEffectiveModelRate } from './models/ExportEffectiveModelRate';
+export type { ExportModelPricingProvenance } from './models/ExportModelPricingProvenance';
 export type { ExportPricingBlock } from './models/ExportPricingBlock';
 export type { ExportPricingFallback } from './models/ExportPricingFallback';
 export type { ExportProjectIdentity } from './models/ExportProjectIdentity';

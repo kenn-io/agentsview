@@ -13,6 +13,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
 const pgUsageMessageEligibility = `
@@ -936,6 +937,19 @@ func pgFloorNegativeTokens(v int) int {
 	return v
 }
 
+// pgUsageLookupModel mirrors internal/db usage pricing: date-ambiguous Kimi
+// aliases resolve according to the usage row timestamp.
+func pgUsageLookupModel(model string, ts sql.NullTime) string {
+	var timestamp time.Time
+	if ts.Valid {
+		timestamp = ts.Time
+	}
+	if canonical := pricingpkg.CanonicalModelForDate(model, timestamp); canonical != "" {
+		return canonical
+	}
+	return model
+}
+
 func pgDailyUsageAmounts(
 	r pgDailyUsageScanRow, pricing *export.PricingResolver,
 ) (
@@ -960,11 +974,12 @@ func pgDailyUsageAmounts(
 				r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}
 
-	lookup := pricing.Lookup(r.model)
+	pricedModel, lookup := pricing.Resolve(
+		r.model, pgUsageLookupModel(r.model, r.ts))
 	rates := lookup.Rates
 	if r.cost.Valid && r.costSource != db.CopilotReportedCostSource {
 		cost = money.Money{Microdollars: r.cost.Int64}
-		pricing.RecordReported(r.model, lookup)
+		pricing.RecordResolvedReported(r.model, pricedModel, lookup)
 	} else {
 		cost, err = rates.CostForTokens(
 			inputTok, outputTok, reasoningTok, cacheCrTok, cacheRdTok)
@@ -972,7 +987,7 @@ func pgDailyUsageAmounts(
 			return 0, 0, 0, 0, money.Money{}, money.Money{},
 				fmt.Errorf("pricing pg usage row for model %q: %w", r.model, err)
 		}
-		pricing.RecordComputed(r.model, lookup)
+		pricing.RecordResolvedComputed(r.model, pricedModel, lookup)
 	}
 	readRate, err := money.Sub(rates.InputPerMTok, rates.CacheReadPerMTok)
 	if err != nil {
@@ -1043,17 +1058,18 @@ func pgSessionRowCost(
 			r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}
 
+	pricedModel, lookup := pricing.Resolve(
+		r.model, pgUsageLookupModel(r.model, r.ts))
 	if r.cost.Valid {
-		pricing.RecordReported(r.model, pricing.Lookup(r.model))
+		pricing.RecordResolvedReported(r.model, pricedModel, lookup)
 		return money.Money{Microdollars: r.cost.Int64}, true, true, nil
 	}
 	if inTok == 0 && outTok == 0 && reasoningTok == 0 &&
 		crTok == 0 && rdTok == 0 {
 		return money.Money{}, true, false, nil
 	}
-	lookup := pricing.Lookup(r.model)
 	if !lookup.OK {
-		pricing.RecordComputed(r.model, lookup)
+		pricing.RecordResolvedComputed(r.model, pricedModel, lookup)
 		return money.Money{}, false, true, nil
 	}
 	cost, err = lookup.Rates.CostForTokens(
@@ -1062,7 +1078,7 @@ func pgSessionRowCost(
 		return money.Money{}, false, false,
 			fmt.Errorf("pricing pg session usage for model %q: %w", r.model, err)
 	}
-	pricing.RecordComputed(r.model, lookup)
+	pricing.RecordResolvedComputed(r.model, pricedModel, lookup)
 	return cost, true, true, nil
 }
 
@@ -1950,6 +1966,10 @@ func (s *Store) GetTopSessionsByCost(
 
 	loc := usageLocation(f)
 	type sessAccum struct {
+		inputTokens       int
+		outputTokens      int
+		cacheCreateTokens int
+		cacheReadTokens   int
 		totalTokens       int
 		cost              money.Money
 		authoritativeCost *money.Money
@@ -1996,6 +2016,10 @@ func (s *Store) GetTopSessionsByCost(
 			accum[r.sessionID] = sa
 			order = append(order, r.sessionID)
 		}
+		sa.inputTokens += inputTok
+		sa.outputTokens += outputTok
+		sa.cacheCreateTokens += cacheCrTok
+		sa.cacheReadTokens += cacheRdTok
 		sa.totalTokens += inputTok + outputTok + cacheCrTok + cacheRdTok
 		sa.cost, priceErr = money.Add(sa.cost, cost)
 		if priceErr != nil {
@@ -2019,9 +2043,13 @@ func (s *Store) GetTopSessionsByCost(
 			continue
 		}
 		result = append(result, db.TopSessionEntry{
-			SessionID:   id,
-			DisplayName: id,
-			TotalTokens: sa.totalTokens,
+			SessionID:           id,
+			DisplayName:         id,
+			InputTokens:         sa.inputTokens,
+			OutputTokens:        sa.outputTokens,
+			CacheCreationTokens: sa.cacheCreateTokens,
+			CacheReadTokens:     sa.cacheReadTokens,
+			TotalTokens:         sa.totalTokens,
 			Cost: func() money.Money {
 				if sa.authoritativeCost != nil {
 					return *sa.authoritativeCost
@@ -2031,15 +2059,9 @@ func (s *Store) GetTopSessionsByCost(
 		})
 	}
 
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].Cost.Microdollars != result[j].Cost.Microdollars {
-			return result[i].Cost.Microdollars > result[j].Cost.Microdollars
-		}
-		return result[i].SessionID < result[j].SessionID
-	})
-	if len(result) > limit {
-		result = result[:limit]
-	}
+	result = db.SortAndLimitTopSessions(
+		result, limit, f.TopSessionsSort, f.TopSessionsTokenTypes,
+	)
 
 	sessionIDs := make([]string, len(result))
 	for i := range result {

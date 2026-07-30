@@ -164,6 +164,13 @@ describe("CostTimeSeriesChart", () => {
 
   afterEach(() => {
     usage.summary = null;
+    usage.mode = "cost";
+    usage.setSelectedTokenTypes([
+      "input",
+      "cache_write",
+      "cache_read",
+      "output",
+    ]);
     settings.chartPalette = "agentsview";
     document.body.innerHTML = "";
   });
@@ -187,6 +194,21 @@ describe("CostTimeSeriesChart", () => {
     const textWidthEstimate = lastLabel!.textContent!.length * 5;
 
     expect(x + textWidthEstimate / 2).toBeLessThanOrEqual(viewBoxRight);
+
+    unmount(component);
+  });
+
+  it("scales token series from only the selected token types", async () => {
+    usage.mode = "token";
+    usage.setSelectedTokenTypes(["output"]);
+    const component = mountChart();
+    await tick();
+
+    const labels = Array.from(
+      document.querySelectorAll<SVGTextElement>("text.y-label"),
+    ).map((label) => label.textContent?.trim());
+    expect(labels).toContain("50");
+    expect(labels).not.toContain("150");
 
     unmount(component);
   });

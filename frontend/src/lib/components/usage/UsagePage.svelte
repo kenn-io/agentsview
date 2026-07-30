@@ -6,6 +6,7 @@
     buildUsageUrlParams,
     mergeUsageAndSessionUrlParams,
     parseWindowDays,
+    type UsageMode,
   } from "../../stores/usage.svelte.js";
   import {
     sessions,
@@ -33,6 +34,17 @@
   import SessionActiveFilters from "../filters/SessionActiveFilters.svelte";
   import FilterDropdown from "./FilterDropdown.svelte";
   import RefreshControl from "../shared/RefreshControl.svelte";
+  import UsageModePicker from "./UsageModePicker.svelte";
+  import TokenTypePicker from "./TokenTypePicker.svelte";
+  import {
+    usageModeFromParams,
+    withUsageMode,
+  } from "./usageMode.js";
+  import {
+    selectedTokenTypesFromParams,
+    withSelectedTokenTypes,
+    type UsageTokenType,
+  } from "../../stores/usageTokenTypes.js";
   import {
     yokedDates,
     panelDateState,
@@ -207,11 +219,46 @@
   let urlInitRan = $state(false);
   let urlWritebackReady = $state(false);
   let initialFetchDone = $state(false);
+
+  function selectUsageMode(mode: UsageMode): void {
+    if (!usage.setMode(mode)) return;
+    router.replaceParams(withSelectedTokenTypes(
+      withUsageMode(router.params, mode),
+      usage.selectedTokenTypes,
+      mode,
+    ));
+    void usage.fetchTopSessions();
+  }
+
+  function selectTokenTypes(selected: UsageTokenType[]): void {
+    if (!usage.setSelectedTokenTypes(selected)) return;
+    router.replaceParams(withSelectedTokenTypes(
+      withUsageMode(router.params, usage.mode),
+      usage.selectedTokenTypes,
+      usage.mode,
+    ));
+    void usage.fetchTopSessions();
+  }
+
   $effect(() => {
     const route = router.route;
     const params = router.params;
     untrack(() => {
+      if (route === "token-usage") {
+        router.replace("usage", withUsageMode(params, "token"));
+        return;
+      }
       if (route !== "usage") return;
+      const nextMode = usageModeFromParams(params);
+      const modeChanged = usage.setMode(nextMode);
+      const tokenTypesChanged = nextMode === "token"
+        ? usage.setSelectedTokenTypes(
+            selectedTokenTypesFromParams(params),
+          )
+        : false;
+      if ((modeChanged || tokenTypesChanged) && urlInitRan) {
+        void usage.fetchTopSessions();
+      }
       const hasDateParam = !!params["from"] || !!params["to"];
       const parsedWindowDays = parseWindowDays(params["window_days"]);
       const supportedSessionParams =
@@ -346,9 +393,16 @@
       excludedModels: usage.excludedModels,
       selectedModels: usage.selectedModels,
     };
-    const nextParams = mergeUsageAndSessionUrlParams(
-      buildUsageUrlParams(state),
-      sessionUrlParams,
+    const nextParams = withSelectedTokenTypes(
+      withUsageMode(
+        mergeUsageAndSessionUrlParams(
+          buildUsageUrlParams(state),
+          sessionUrlParams,
+        ),
+        usage.mode,
+      ),
+      usage.selectedTokenTypes,
+      usage.mode,
     );
     const ready = urlInitRan && urlWritebackReady;
     untrack(() => {
@@ -394,6 +448,18 @@
 <div class="usage-page">
   <div class="usage-toolbar">
     <div class="toolbar-controls">
+      <UsageModePicker
+        value={usage.mode}
+        onChange={selectUsageMode}
+      />
+
+      {#if usage.mode === "token"}
+        <TokenTypePicker
+          value={usage.selectedTokenTypes}
+          onChange={selectTokenTypes}
+        />
+      {/if}
+
       <div class="usage-filter-anchor">
         <SessionFilterControl
           showDisplay={false}

@@ -542,8 +542,95 @@ describe("UsageStore session filter params", () => {
         minUserMessages: 5,
         includeOneShot: false,
         includeAutomated: true,
+        sort: "cost",
       }),
     );
+  });
+
+  it("requests top sessions sorted by tokens in token mode", async () => {
+    const { usage } = await loadStore();
+    usage.mode = "token";
+    usage.setSelectedTokenTypes(["output"]);
+    await usage.fetchTopSessions();
+    expect(usageServiceMocks.getApiV1UsageTopSessions).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        sort: "tokens",
+        tokenTypes: "output",
+      }),
+    );
+  });
+
+  it("defaults to all token types and rejects an empty selection", async () => {
+    const { usage } = await loadStore();
+
+    expect(usage.selectedTokenTypes).toEqual([
+      "input",
+      "cache_write",
+      "cache_read",
+      "output",
+    ]);
+    expect(usage.setSelectedTokenTypes(["output"])).toBe(true);
+    expect(usage.selectedTokenTypes).toEqual(["output"]);
+    expect(usage.setSelectedTokenTypes([])).toBe(false);
+    expect(usage.selectedTokenTypes).toEqual(["output"]);
+  });
+
+  it("invalidates token rankings when selected token types change", async () => {
+    const { usage } = await loadStore();
+    usage.mode = "token";
+    await usage.fetchTopSessions();
+    expect(usage.topSessions).not.toBeNull();
+
+    expect(usage.setSelectedTokenTypes(["output"])).toBe(true);
+
+    expect(usage.topSessions).toBeNull();
+    expect(usage.errors.topSessions).toBeNull();
+    expect(usage.loading.topSessions).toBe(false);
+  });
+
+  it("invalidates a ranking when the usage mode changes", async () => {
+    const { usage } = await loadStore();
+    await usage.fetchTopSessions();
+    expect(usage.topSessions).not.toBeNull();
+
+    expect(usage.setMode("token")).toBe(true);
+
+    expect(usage.mode).toBe("token");
+    expect(usage.topSessions).toBeNull();
+    expect(usage.errors.topSessions).toBeNull();
+    expect(usage.loading.topSessions).toBe(false);
+  });
+
+  it("preserves the current ranking when setting the same mode", async () => {
+    const { usage } = await loadStore();
+    await usage.fetchTopSessions();
+    const current = usage.topSessions;
+
+    expect(usage.setMode("cost")).toBe(false);
+    expect(usage.topSessions).toBe(current);
+  });
+
+  it("aborts an in-flight ranking when the usage mode changes", async () => {
+    const signals: (AbortSignal | undefined)[] = [];
+    apiRuntimeMocks.callGenerated.mockImplementation(
+      (request: () => Promise<unknown>, signal?: AbortSignal) => {
+        signals.push(signal);
+        return request();
+      },
+    );
+    usageServiceMocks.getApiV1UsageTopSessions.mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+    const { usage } = await loadStore();
+
+    void usage.fetchTopSessions();
+    await Promise.resolve();
+    expect(signals[0]?.aborted).toBe(false);
+
+    usage.setMode("token");
+
+    expect(signals[0]?.aborted).toBe(true);
+    expect(usage.topSessions).toBeNull();
   });
 
   it("passes exclusion filters to usage endpoints", async () => {

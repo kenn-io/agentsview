@@ -177,6 +177,10 @@ export interface TopSessionEntry {
   agent: string;
   project: string;
   startedAt: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
   totalTokens: number;
   cost: Money;
 }

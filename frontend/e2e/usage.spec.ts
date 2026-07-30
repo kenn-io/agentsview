@@ -155,6 +155,82 @@ test.describe("Usage page", () => {
     await expectActiveNavTab(page, "Usage");
   });
 
+  test("switches between cost and token views with canonical URLs", async ({
+    page,
+  }) => {
+    const metric = page.getByRole("radiogroup", {
+      name: "Usage metric",
+    });
+
+    await metric.getByRole("radio", { name: "Tokens" }).click();
+    await expect(page).toHaveURL(/\/usage\?.*view=tokens/);
+    await expect(
+      metric.getByRole("radio", { name: "Tokens" }),
+    ).toHaveAttribute("aria-checked", "true");
+
+    await metric.getByRole("radio", { name: "Cost" }).click();
+    await expect(page).toHaveURL(/\/usage(?:\?.*)?$/);
+    expect(new URL(page.url()).searchParams.has("view")).toBe(false);
+  });
+
+  test("ranks token panels by an Output-only selection", async ({
+    page,
+  }) => {
+    await page.getByRole("radio", { name: "Tokens" }).click();
+    const picker = page.locator(
+      '.usage-toolbar button[title="Token types"]',
+    );
+    await expect(picker).toHaveAttribute(
+      "aria-label",
+      "Token types: All",
+    );
+    await picker.click();
+
+    const menu = page.locator(
+      ".usage-toolbar .kit-filter-dropdown__panel",
+    );
+    await menu.locator("button", { hasText: "Input" }).click();
+    await menu.locator("button", { hasText: "Cache Writes" }).click();
+    const outputRequest = page.waitForRequest((request) => {
+      const url = new URL(request.url());
+      return url.pathname.endsWith("/api/v1/usage/top-sessions")
+        && url.searchParams.get("token_types") === "output";
+    });
+    await menu.locator("button", { hasText: "Cached Read" }).click();
+    await outputRequest;
+
+    await expect(picker).toHaveAttribute(
+      "aria-label",
+      "Token types: Output",
+    );
+    await expect(page).toHaveURL((url) =>
+      url.pathname === "/usage"
+      && url.searchParams.get("view") === "tokens"
+      && url.searchParams.get("token_types") === "output"
+    );
+    await expect(
+      page.locator(".top-sessions-container .chart-title"),
+    ).toHaveText("Top Sessions by Output Tokens");
+  });
+
+  test("normalizes legacy token links without dropping filters", async ({
+    page,
+  }) => {
+    await page.goto(
+      "/token-usage?window_days=90&project=project-delta",
+    );
+
+    await expect(page).toHaveURL((url) =>
+      url.pathname === "/usage"
+      && url.searchParams.get("view") === "tokens"
+      && url.searchParams.get("window_days") === "90"
+      && url.searchParams.get("project") === "project-delta"
+    );
+    await expect(
+      page.getByRole("radio", { name: "Tokens" }),
+    ).toHaveAttribute("aria-checked", "true");
+  });
+
   test("URL updates when filter changes", async ({ page }) => {
     // Wait for data.
     await expect(

@@ -533,6 +533,8 @@ func (db *DB) activityReportUsage(
 func sqliteActivityReportRowStatus(
 	r dailyUsageScanRow, pricing *export.PricingResolver,
 ) (cost money.Money, priced, contributes bool, err error) {
+	pricedModel, lookup := pricing.Resolve(
+		r.model, usageLookupModel(r.model, r.ts))
 	var inTok, outTok, crTok, rdTok int
 	reasoningTok := r.reasoningTokens
 	if r.usageSource == "message" {
@@ -546,16 +548,15 @@ func sqliteActivityReportRowStatus(
 	}
 
 	if r.cost.Valid {
-		pricing.RecordReported(r.model, pricing.Lookup(r.model))
+		pricing.RecordResolvedReported(r.model, pricedModel, lookup)
 		return money.Money{Microdollars: r.cost.Int64}, true, true, nil
 	}
 	if inTok == 0 && outTok == 0 && reasoningTok == 0 &&
 		crTok == 0 && rdTok == 0 {
 		return money.Money{}, true, false, nil
 	}
-	lookup := pricing.Lookup(r.model)
 	if !lookup.OK {
-		pricing.RecordComputed(r.model, lookup)
+		pricing.RecordResolvedComputed(r.model, pricedModel, lookup)
 		return money.Money{}, false, true, nil
 	}
 	cost, err = lookup.Rates.CostForTokens(
@@ -564,6 +565,6 @@ func sqliteActivityReportRowStatus(
 		return money.Money{}, false, false,
 			fmt.Errorf("pricing activity usage for model %q: %w", r.model, err)
 	}
-	pricing.RecordComputed(r.model, lookup)
+	pricing.RecordResolvedComputed(r.model, pricedModel, lookup)
 	return cost, true, true, nil
 }

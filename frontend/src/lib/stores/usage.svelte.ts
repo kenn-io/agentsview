@@ -14,6 +14,11 @@ import {
 import { sessions } from "./sessions.svelte.js";
 import { perf, type PerfEntryStatus } from "./perf.svelte.js";
 import { rollingRange, today } from "../utils/dates.js";
+import {
+  ALL_TOKEN_TYPES,
+  canonicalTokenTypes,
+  type UsageTokenType,
+} from "./usageTokenTypes.js";
 
 type UsageParams = Parameters<typeof UsageService.getApiV1UsageSummary>[0];
 type UsagePairwiseParams =
@@ -192,11 +197,17 @@ function samePairwiseSelection(
     left.right.value === right.right.value;
 }
 
+export type UsageMode = "cost" | "token";
+
 class UsageStore {
   from: string = $state(rollingRange(DEFAULT_WINDOW_DAYS).from);
   to: string = $state(today());
   isPinned: boolean = $state(false);
   windowDays: number = $state(DEFAULT_WINDOW_DAYS);
+  mode: UsageMode = $state("cost");
+  selectedTokenTypes: UsageTokenType[] = $state([
+    ...ALL_TOKEN_TYPES,
+  ]);
 
   // Excluded project items and included model items
   // (comma-separated strings). Empty models = all models.
@@ -559,6 +570,36 @@ class UsageStore {
     return Object.values(this.querying).some(Boolean);
   }
 
+  setMode(mode: UsageMode): boolean {
+    if (this.mode === mode) return false;
+    this.mode = mode;
+    this.invalidatePanel("topSessions");
+    this.topSessions = null;
+    this.errors.topSessions = null;
+    this.loading.topSessions = false;
+    return true;
+  }
+
+  setSelectedTokenTypes(selected: readonly UsageTokenType[]): boolean {
+    const canonical = canonicalTokenTypes(selected);
+    if (canonical.length === 0) return false;
+    if (
+      canonical.length === this.selectedTokenTypes.length &&
+      canonical.every(
+        (tokenType, index) =>
+          tokenType === this.selectedTokenTypes[index],
+      )
+    ) {
+      return false;
+    }
+    this.selectedTokenTypes = canonical;
+    this.invalidatePanel("topSessions");
+    this.topSessions = null;
+    this.errors.topSessions = null;
+    this.loading.topSessions = false;
+    return true;
+  }
+
   setTimeSeriesGroupBy(g: GroupBy) {
     this.toggles.timeSeries.groupBy = g;
     this.toggles.attribution.groupBy = g;
@@ -866,9 +907,15 @@ class UsageStore {
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
       const data = await callGenerated(() =>
-        UsageService.getApiV1UsageTopSessions(
-          params ?? this.baseParams(),
-        ),
+        UsageService.getApiV1UsageTopSessions({
+          ...(params ?? this.baseParams()),
+          sort: this.mode === "token" ? "tokens" : "cost",
+          tokenTypes:
+            this.mode === "token" &&
+            this.selectedTokenTypes.length < ALL_TOKEN_TYPES.length
+              ? this.selectedTokenTypes.join(",")
+              : undefined,
+        }),
         signal,
       ) as unknown as TopUsageSessionsResponse;
       if (this.versions.topSessions === v) {

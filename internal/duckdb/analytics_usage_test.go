@@ -13,6 +13,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
 // TestDuckBuildAnalyticsWhereSubagents verifies that the DuckDB
@@ -280,7 +281,9 @@ func TestDuckUsageAggregateCostKeepsMixedUnpricedComputedTokensUnpriced(t *testi
 	assert.Equal(t, export.CostSourceMixed, block.CostSource)
 	require.Contains(t, block.Models, "unknown-model")
 	assert.Equal(t, export.CostSourceMixed, block.Models["unknown-model"].CostSource)
-	assert.Nil(t, block.Models["unknown-model"].MatchedPattern)
+	require.Len(t, block.Models["unknown-model"].Resolutions, 1)
+	assert.Nil(t,
+		block.Models["unknown-model"].Resolutions[0].MatchedPattern)
 	assert.Empty(t, block.Fallback.Models)
 }
 
@@ -341,6 +344,43 @@ func TestDuckUsageAggregateCostRecordsZeroTokenModelProvenance(t *testing.T) {
 	require.Contains(t, block.Models, "zero-model")
 	assert.Equal(t, export.CostSourceComputed,
 		block.Models["zero-model"].CostSource)
+}
+
+func TestDuckUsageAggregateCostPrefersExactCustomKimiAlias(t *testing.T) {
+	resolver := export.NewPricingResolver([]export.EffectivePricingRow{
+		{
+			ModelPattern: "kimi-for-coding",
+			Rates: export.ModelRates{
+				InputPerMTok: money.MustParseDollars("7"),
+				Source:       export.PricingRowSourceCustom,
+			},
+		},
+		{
+			ModelPattern: pricingpkg.KimiK3Canonical,
+			Rates: export.ModelRates{
+				InputPerMTok: money.MustParseDollars("2"),
+				Source:       export.PricingRowSourceFetched,
+			},
+		},
+	})
+
+	cost, _, priced, contributes, err := duckUsageAggregateResolvedCost(
+		"kimi-for-coding", pricingpkg.KimiK3Canonical,
+		1_000_000, 0, 0, 0,
+		1_000_000, 0, 0, 0, 0,
+		0, false, resolver,
+	)
+
+	require.NoError(t, err)
+	assert.True(t, priced)
+	assert.True(t, contributes)
+	assert.Equal(t, money.MustParseDollars("7"), cost)
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+	require.Contains(t, block.Models, "kimi-for-coding")
+	resolutions := block.Models["kimi-for-coding"].Resolutions
+	require.Len(t, resolutions, 1)
+	assert.Equal(t, "kimi-for-coding", resolutions[0].PricedModel)
 }
 
 func TestDuckUsageAutomatedScopeOneShotExemption(t *testing.T) {

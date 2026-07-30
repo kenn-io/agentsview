@@ -169,6 +169,33 @@ describe("RouterStore", () => {
     spy.mockRestore();
   });
 
+  it("replaces a route and preserves supplied params without adding history", () => {
+    setURL("/token-usage?project=demo&desktop");
+    store = new RouterStore();
+    const before = window.history.length;
+    const replaceSpy = vi.spyOn(
+      window.history,
+      "replaceState",
+    );
+
+    store.replace("usage", {
+      project: "demo",
+      desktop: "",
+      view: "tokens",
+    });
+
+    expect(store.route).toBe("usage");
+    expect(store.params).toEqual({
+      project: "demo",
+      desktop: "",
+      view: "tokens",
+    });
+    expect(window.location.pathname).toBe("/usage");
+    expect(window.location.search).toContain("view=tokens");
+    expect(window.history.length).toBe(before);
+    expect(replaceSpy).toHaveBeenCalledOnce();
+  });
+
   it("navigate updates URL to /trends", () => {
     setURL("/");
     store = new RouterStore();

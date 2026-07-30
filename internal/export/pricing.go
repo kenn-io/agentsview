@@ -59,7 +59,7 @@ type PricingResolver struct {
 	rows                 []EffectivePricingRow
 	byModel              map[string]ModelRates
 	lookupCache          map[string]PricingLookup
-	recorded             map[string]*pricingRecord
+	recorded             map[string]map[string]*pricingRecord
 	unattributedReported bool
 }
 
@@ -83,7 +83,7 @@ func NewPricingResolver(rows []EffectivePricingRow) *PricingResolver {
 		rows:        copied,
 		byModel:     byModel,
 		lookupCache: make(map[string]PricingLookup),
-		recorded:    make(map[string]*pricingRecord),
+		recorded:    make(map[string]map[string]*pricingRecord),
 	}
 }
 
@@ -104,19 +104,55 @@ func (r *PricingResolver) Lookup(model string) PricingLookup {
 	return lookup
 }
 
-func (r *PricingResolver) RecordComputed(model string, lookup PricingLookup) {
-	if r == nil || model == "" {
-		return
+// Resolve selects the effective priced model while preserving the model name
+// reported by the source. An exact custom rate for the reported name takes
+// precedence over caller-supplied canonicalization.
+func (r *PricingResolver) Resolve(
+	reportedModel, canonicalModel string,
+) (string, PricingLookup) {
+	if r == nil {
+		return reportedModel, PricingLookup{}
 	}
-	rec := r.record(model, lookup)
-	rec.computed = true
+	if rates, ok := r.byModel[reportedModel]; ok &&
+		rates.Source == PricingRowSourceCustom {
+		return reportedModel, PricingLookup{
+			Rates:   rates,
+			Pattern: reportedModel,
+			OK:      true,
+		}
+	}
+	pricedModel := canonicalModel
+	if pricedModel == "" {
+		pricedModel = reportedModel
+	}
+	return pricedModel, r.Lookup(pricedModel)
+}
+
+func (r *PricingResolver) RecordComputed(model string, lookup PricingLookup) {
+	r.RecordResolvedComputed(model, model, lookup)
 }
 
 func (r *PricingResolver) RecordReported(model string, lookup PricingLookup) {
-	if r == nil || model == "" {
+	r.RecordResolvedReported(model, model, lookup)
+}
+
+func (r *PricingResolver) RecordResolvedComputed(
+	reportedModel, pricedModel string, lookup PricingLookup,
+) {
+	if r == nil || reportedModel == "" || pricedModel == "" {
 		return
 	}
-	rec := r.record(model, lookup)
+	rec := r.record(reportedModel, pricedModel, lookup)
+	rec.computed = true
+}
+
+func (r *PricingResolver) RecordResolvedReported(
+	reportedModel, pricedModel string, lookup PricingLookup,
+) {
+	if r == nil || reportedModel == "" || pricedModel == "" {
+		return
+	}
+	rec := r.record(reportedModel, pricedModel, lookup)
 	rec.reported = true
 }
 
@@ -128,11 +164,18 @@ func (r *PricingResolver) RecordUnattributedReported() {
 	}
 }
 
-func (r *PricingResolver) record(model string, lookup PricingLookup) *pricingRecord {
-	rec := r.recorded[model]
+func (r *PricingResolver) record(
+	reportedModel, pricedModel string, lookup PricingLookup,
+) *pricingRecord {
+	byPricedModel := r.recorded[reportedModel]
+	if byPricedModel == nil {
+		byPricedModel = make(map[string]*pricingRecord)
+		r.recorded[reportedModel] = byPricedModel
+	}
+	rec := byPricedModel[pricedModel]
 	if rec == nil {
 		rec = &pricingRecord{}
-		r.recorded[model] = rec
+		byPricedModel[pricedModel] = rec
 	}
 	rec.lookup = lookup
 	return rec
@@ -142,7 +185,7 @@ func (r *PricingResolver) BuildBlock() (PricingBlock, error) {
 	if r == nil {
 		return PricingBlock{}, nil
 	}
-	models := make(map[string]EffectiveModelRate, len(r.recorded))
+	models := make(map[string]ModelPricingProvenance, len(r.recorded))
 	fallbackSet := make(map[string]struct{})
 	var hasComputed bool
 	hasReported := r.unattributedReported
@@ -151,29 +194,51 @@ func (r *PricingResolver) BuildBlock() (PricingBlock, error) {
 		modelNames = append(modelNames, model)
 	}
 	sort.Strings(modelNames)
-	for _, model := range modelNames {
-		rec := r.recorded[model]
-		if rec == nil {
+	for _, reportedModel := range modelNames {
+		byPricedModel := r.recorded[reportedModel]
+		if len(byPricedModel) == 0 {
 			continue
 		}
-		source := recordCostSource(rec)
-		hasComputed = hasComputed || rec.computed
-		hasReported = hasReported || rec.reported
-		rate := EffectiveModelRate{
-			InputCostPerMTok:      rec.lookup.Rates.InputPerMTok,
-			OutputCostPerMTok:     rec.lookup.Rates.OutputPerMTok,
-			CacheWriteCostPerMTok: rec.lookup.Rates.CacheWritePerMTok,
-			CacheReadCostPerMTok:  rec.lookup.Rates.CacheReadPerMTok,
-			CostSource:            source,
+		pricedModels := make([]string, 0, len(byPricedModel))
+		for pricedModel := range byPricedModel {
+			pricedModels = append(pricedModels, pricedModel)
 		}
-		if rec.lookup.OK {
-			pattern := rec.lookup.Pattern
-			rate.MatchedPattern = &pattern
-			if rec.lookup.Rates.Source == PricingRowSourceEmbedded {
-				fallbackSet[model] = struct{}{}
+		sort.Strings(pricedModels)
+
+		provenance := ModelPricingProvenance{
+			Resolutions: make([]EffectiveModelRate, 0, len(pricedModels)),
+		}
+		var modelComputed, modelReported bool
+		for _, pricedModel := range pricedModels {
+			rec := byPricedModel[pricedModel]
+			if rec == nil {
+				continue
 			}
+			source := recordCostSource(rec)
+			modelComputed = modelComputed || rec.computed
+			modelReported = modelReported || rec.reported
+			rate := EffectiveModelRate{
+				PricedModel:           pricedModel,
+				InputCostPerMTok:      rec.lookup.Rates.InputPerMTok,
+				OutputCostPerMTok:     rec.lookup.Rates.OutputPerMTok,
+				CacheWriteCostPerMTok: rec.lookup.Rates.CacheWritePerMTok,
+				CacheReadCostPerMTok:  rec.lookup.Rates.CacheReadPerMTok,
+				CostSource:            source,
+			}
+			if rec.lookup.OK {
+				pattern := rec.lookup.Pattern
+				rate.MatchedPattern = &pattern
+				if rec.lookup.Rates.Source == PricingRowSourceEmbedded {
+					fallbackSet[reportedModel] = struct{}{}
+				}
+			}
+			provenance.Resolutions = append(provenance.Resolutions, rate)
 		}
-		models[model] = rate
+		provenance.CostSource = CombinedCostSource(
+			modelComputed, modelReported)
+		hasComputed = hasComputed || modelComputed
+		hasReported = hasReported || modelReported
+		models[reportedModel] = provenance
 	}
 
 	fallbackModels := make([]string, 0, len(fallbackSet))
