@@ -58,12 +58,20 @@ After all chunks have been read, the exporter globally orders:
 - sessions and candidate session IDs by session ID;
 - activity events by session ID, ordinal, timestamp, role, model, and other
   persisted semantic tie fields; and
-- normalized usage rows by occurrence time, session ID, ordinal, source,
-  deduplication identity, model, token counts, cost attributes, agent, and
-  project.
+- normalized usage rows first by occurrence time, session ID ascending, and
+  `COALESCE(message_ordinal, -1)` ascending, matching the ordering prefix used
+  by daily usage, and then by source, deduplication identity, model, token
+  counts, cost attributes, agent, and project.
 
 Ordering never uses row IDs or other storage-layout identifiers. Per-chunk SQL
 ordering is not treated as global ordering.
+
+Normalized usage rows retain their source and message ordinal until after the
+single merged survivor pass. An absent session ID remains the empty string and
+therefore sorts before a non-empty session ID; standalone rows do not receive a
+fabricated session ID to alter that order. The fields after the daily-usage
+ordering prefix are deterministic semantic tie-breakers only. They do not
+replace or precede the first-seen ordering contract.
 
 ## Derived minute totals
 
@@ -108,6 +116,19 @@ before invoking the database opener and before writing output. A small
 command-construction seam allows tests to prove that unsupported versions do not
 open the database.
 
+## Read-only pricing bootstrap
+
+After opening the archive, reporting commands check whether `model_pricing`
+contains any non-metadata rows. If it is empty, the exporter installs the
+embedded fallback catalog plus configured custom pricing as an in-memory
+effective-pricing overlay. This is the same empty-catalog behavior used by the
+session exporter: it does not write to the read-only archive and does not
+override a stored catalog.
+
+If the pricing check or fallback setup fails, the reporting database is closed
+before the command returns the error. Hour, day, and digest commands all use
+this prepared database path.
+
 ## Canonical output and fixtures
 
 Version 1 retains the documented canonical JSON algorithm:
@@ -137,16 +158,23 @@ Focused regressions cover:
   before deduplication, with the complete usage projection asserted and no
   activity or first-seen contamination;
 - a duplicate spanning session-linked and standalone inputs, proving that the
-  merged stream is deduplicated once;
+  merged stream is deduplicated once and that the survivor matches the
+  daily-usage timestamp, ascending session-ID, and ordinal ordering prefix;
+- equal-prefix usage rows with different sources and semantic values, proving
+  deterministic trailing tie-breakers without changing the daily-usage ordering
+  prefix;
 - more than one SQL parameter chunk of equivalent data inserted in different
   orders, asserting exact canonical bytes, exact digests, and at least one
   literal expected aggregate total;
 - explicit global activity-event ordering across chunk boundaries;
 - valid minute totals, exact tolerance-boundary acceptance, just-over-boundary
   rejection, non-finite rejection, and negative-value rejection;
-- default and explicit version 1 output for hour, day, and digest commands; and
+- default and explicit version 1 output for hour, day, and digest commands;
 - unsupported schema rejection with an uncalled database opener and empty
-  output.
+  output; and
+- a read-only archive with an empty pricing catalog and usage for a known
+  embedded model, asserting nonzero exported cost and embedded fallback
+  provenance.
 
 Before each commit, inspect the complete staged diff and all changed generated
 fixtures. Verify that they contain only conspicuously synthetic identities and
