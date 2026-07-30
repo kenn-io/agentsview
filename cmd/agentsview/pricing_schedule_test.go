@@ -88,7 +88,7 @@ func TestRunPeriodicPricingRefreshFetchesAfterRecentAttempt(t *testing.T) {
 	require.NotEqual(t, previousAttempt, currentAttempt)
 }
 
-func TestRunPeriodicPricingRefreshWaitsForResyncSwap(t *testing.T) {
+func TestStartPeriodicPricingRefreshWaitsForResyncSwap(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 	engine := agentsync.NewEngine(database, agentsync.EngineConfig{})
 	t.Cleanup(engine.Close)
@@ -132,10 +132,9 @@ func TestRunPeriodicPricingRefreshWaitsForResyncSwap(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	ticks := make(chan time.Time, 1)
 	refreshDone := make(chan struct{})
 	go func() {
-		runPeriodicPricingRefresh(ctx, ticks, database, engine)
+		startPeriodicPricingRefresh(ctx, database, engine)
 		close(refreshDone)
 	}()
 	t.Cleanup(func() {
@@ -150,7 +149,6 @@ func TestRunPeriodicPricingRefreshWaitsForResyncSwap(t *testing.T) {
 		}, time.Second, time.Millisecond)
 	})
 
-	ticks <- time.Now()
 	assert.Never(t, func() bool {
 		return len(requests) > 0
 	}, 50*time.Millisecond, time.Millisecond)
@@ -170,6 +168,84 @@ func TestRunPeriodicPricingRefreshWaitsForResyncSwap(t *testing.T) {
 		price, err := database.GetModelPricing("scheduled-model")
 		return err == nil && price != nil
 	}, time.Second, time.Millisecond)
+}
+
+func TestSeedPricingWaitsForResyncSwap(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	price, err := database.GetModelPricing("gpt-5.5")
+	require.NoError(t, err)
+	require.Nil(t, price)
+
+	engine := agentsync.NewEngine(database, agentsync.EngineConfig{})
+	t.Cleanup(engine.Close)
+	dbtest.EnsureTestDBAt(t, engine.ResyncTempPath())
+
+	swapEntered := make(chan struct{})
+	releaseSwap := make(chan struct{}, 1)
+	swapDone := make(chan error, 1)
+	go func() {
+		swapDone <- engine.RunExclusive(func() error {
+			close(swapEntered)
+			<-releaseSwap
+			if err := engine.SwapResyncDatabase(
+				engine.ResyncTempPath(),
+			); err != nil {
+				return err
+			}
+			return engine.ResetCachesAfterSwap()
+		})
+	}()
+	defer func() {
+		select {
+		case releaseSwap <- struct{}{}:
+		default:
+		}
+	}()
+	require.Eventually(t, func() bool {
+		select {
+		case <-swapEntered:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+
+	seedDone := make(chan struct{})
+	go func() {
+		seedPricing(database, engine)
+		close(seedDone)
+	}()
+	assert.Never(t, func() bool {
+		select {
+		case <-seedDone:
+			return true
+		default:
+			return false
+		}
+	}, 50*time.Millisecond, time.Millisecond)
+
+	releaseSwap <- struct{}{}
+	var swapErr error
+	require.Eventually(t, func() bool {
+		select {
+		case swapErr = <-swapDone:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+	require.NoError(t, swapErr)
+	require.Eventually(t, func() bool {
+		select {
+		case <-seedDone:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+	price, err = database.GetModelPricing("gpt-5.5")
+	require.NoError(t, err)
+	require.NotNil(t, price)
 }
 
 func TestRunPricingRefreshLoopContinuesAfterFailure(t *testing.T) {

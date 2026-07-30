@@ -375,8 +375,7 @@ func printSyncSummaryStderr(stats sync.SyncStats, t time.Time) {
 	}
 }
 
-// seedPricing ensures fallback rates are present in
-// model_pricing, then kicks off a background LiteLLM refresh.
+// seedPricing ensures fallback rates are present in model_pricing.
 //
 // Fallback rates are only upserted when the stored seed
 // version differs from pricing.SeedVersion (or is
@@ -386,22 +385,15 @@ func printSyncSummaryStderr(stats sync.SyncStats, t time.Time) {
 // the supplemental alias version, so curated alias additions
 // (see internal/pricing/supplemental.go) also reach existing
 // databases without a resync.
-func seedPricing(database *db.DB) {
-	if err := pricingrefresh.SeedFallback(database); err != nil {
+func seedPricing(
+	database *db.DB,
+	runner pricingRefreshExclusiveRunner,
+) {
+	err := runPricingExclusive(runner, func() error {
+		return pricingrefresh.SeedFallback(database)
+	})
+	if err != nil {
 		log.Printf("pricing seed: %v", err)
-	}
-	go refreshPricingFromLiteLLM(database)
-}
-
-// refreshPricingFromLiteLLM fetches the upstream LiteLLM
-// catalog and upserts it over whatever is in the table. Called
-// from a goroutine after the synchronous fallback seed so a
-// slow or failing fetch never blocks server startup.
-func refreshPricingFromLiteLLM(database *db.DB) {
-	if err := pricingrefresh.Refresh(
-		database, pricing.FetchLiteLLMPricing,
-	); err != nil {
-		log.Printf("pricing refresh: %v", err)
 	}
 }
 

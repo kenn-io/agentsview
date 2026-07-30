@@ -20,6 +20,11 @@ func startPeriodicPricingRefresh(
 	database *db.DB,
 	runner pricingRefreshExclusiveRunner,
 ) {
+	if err := runCurrentPricingRefresh(
+		ctx, database, runner,
+	); err != nil && ctx.Err() == nil {
+		log.Printf("pricing refresh: %v", err)
+	}
 	ticker := time.NewTicker(periodicPricingRefreshInterval)
 	defer ticker.Stop()
 	runPeriodicPricingRefresh(ctx, ticker.C, database, runner)
@@ -32,14 +37,29 @@ func runPeriodicPricingRefresh(
 	runner pricingRefreshExclusiveRunner,
 ) {
 	runPricingRefreshLoop(ctx, ticks, func(ctx context.Context) error {
-		refresh := func() error {
-			return pricingrefresh.RefreshCurrent(ctx, database)
-		}
-		if runner == nil {
-			return refresh()
-		}
-		return runner.RunExclusive(refresh)
+		return runCurrentPricingRefresh(ctx, database, runner)
 	})
+}
+
+func runCurrentPricingRefresh(
+	ctx context.Context,
+	database *db.DB,
+	runner pricingRefreshExclusiveRunner,
+) error {
+	refresh := func() error {
+		return pricingrefresh.RefreshCurrent(ctx, database)
+	}
+	return runPricingExclusive(runner, refresh)
+}
+
+func runPricingExclusive(
+	runner pricingRefreshExclusiveRunner,
+	work func() error,
+) error {
+	if runner == nil {
+		return work()
+	}
+	return runner.RunExclusive(work)
 }
 
 func runPricingRefreshLoop(
