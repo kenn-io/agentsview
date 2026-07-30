@@ -348,6 +348,87 @@ func TestExportReportingFallbackPricingOnUnseededArchive(t *testing.T) {
 	assert.Positive(t, hour.Activity.Totals.Cost.Microdollars)
 }
 
+func TestExportReportingSnapshotStoredPricingOverridesInstalledFallback(
+	t *testing.T,
+) {
+	dataDir := testDataDir(t)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+	model := exactFallbackPricedModel(t)
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:               "fixture-snapshot-pricing",
+		Machine:          "fixture-machine",
+		Agent:            "agent snapshot",
+		StartedAt:        dbtest.Ptr("2026-07-28T10:00:00Z"),
+		EndedAt:          dbtest.Ptr("2026-07-28T10:06:00Z"),
+		MessageCount:     2,
+		UserMessageCount: 1,
+	}))
+	require.NoError(t, database.InsertMessages([]db.Message{
+		{
+			SessionID:     "fixture-snapshot-pricing",
+			Ordinal:       0,
+			Role:          "user",
+			Content:       "synthetic question",
+			ContentLength: len("synthetic question"),
+			Timestamp:     "2026-07-28T10:00:00Z",
+		},
+		{
+			SessionID:     "fixture-snapshot-pricing",
+			Ordinal:       1,
+			Role:          "assistant",
+			Content:       "synthetic answer",
+			ContentLength: len("synthetic answer"),
+			Timestamp:     "2026-07-28T10:05:00Z",
+			Model:         model,
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":1000,"output_tokens":500}`,
+			),
+		},
+	}))
+
+	deps := defaultExportReportingDeps()
+	deps.now = func() time.Time {
+		return time.Date(2026, 7, 29, 14, 37, 0, 0, time.UTC)
+	}
+	openDatabase := deps.openDatabase
+	deps.openDatabase = func(
+		cmd *cobra.Command,
+	) (*db.DB, func(), error) {
+		reader, cleanup, err := openDatabase(cmd)
+		if err != nil {
+			return nil, func() {}, err
+		}
+		if err := database.UpsertModelPricing([]db.ModelPricing{{
+			ModelPattern:  model,
+			InputPerMTok:  money.MustParseDollars("123"),
+			OutputPerMTok: money.MustParseDollars("456"),
+		}}); err != nil {
+			cleanup()
+			return nil, func() {}, err
+		}
+		return reader, cleanup, nil
+	}
+
+	stdout, stderr, err := executeExportSessionsCommand(
+		newExportReportingTestRootWithDeps(deps),
+		"export", "hour", "2026-07-28-10",
+	)
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
+
+	var hour export.ReportingHour
+	require.NoError(t, json.Unmarshal([]byte(stdout), &hour))
+	assert.Equal(
+		t,
+		money.Money{Microdollars: 351_000},
+		hour.Usage.Totals.Cost,
+	)
+	assert.Equal(t, hour.Usage.Totals.Cost, hour.Activity.Totals.Cost)
+}
+
 func newExportReportingTestRoot(now time.Time) *cobra.Command {
 	deps := defaultExportReportingDeps()
 	deps.now = func() time.Time { return now }

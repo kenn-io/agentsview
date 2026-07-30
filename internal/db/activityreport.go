@@ -463,7 +463,6 @@ func (db *DB) activityReportUsageFrom(
 type activityReportUsageCandidate struct {
 	row     activity.UsageRow
 	scan    dailyUsageScanRow
-	ts      time.Time
 	ordinal int64
 }
 
@@ -520,9 +519,7 @@ func (db *DB) loadActivityReportUsageCandidatesFrom(
 			if r.messageOrdinal.Valid {
 				ord = r.messageOrdinal.Int64
 			}
-			parsedTS, _ := parseTimestamp(r.ts)
 			candidates = append(candidates, activityReportUsageCandidate{
-				ts:      parsedTS,
 				ordinal: ord,
 				scan:    r,
 				row: activity.UsageRow{
@@ -554,8 +551,10 @@ func sortActivityReportUsageCandidates(
 ) {
 	sort.SliceStable(candidates, func(i, j int) bool {
 		a, b := candidates[i], candidates[j]
-		if !a.ts.Equal(b.ts) {
-			return a.ts.Before(b.ts)
+		if compared := compareDailyUsageTimestampText(
+			a.row.Timestamp, b.row.Timestamp,
+		); compared != 0 {
+			return compared < 0
 		}
 		if a.row.SessionID != b.row.SessionID {
 			return a.row.SessionID < b.row.SessionID
@@ -565,6 +564,12 @@ func sortActivityReportUsageCandidates(
 		}
 		return compareDailyUsageSemantic(a.scan, b.scan) < 0
 	})
+}
+
+// compareDailyUsageTimestampText mirrors SQLite's default BINARY ordering for
+// the u.ts column used by GetDailyUsage's first-seen-wins survivor pass.
+func compareDailyUsageTimestampText(a, b string) int {
+	return cmp.Compare(a, b)
 }
 
 // activityReportUsageCandidatesFrom returns normalized padded-range rows

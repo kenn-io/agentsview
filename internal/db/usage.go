@@ -1808,6 +1808,12 @@ func (db *DB) loadPricingMapFrom(
 		out[p.ModelPattern] = rates
 	}
 
+	if len(out) == 0 {
+		for model, rates := range db.emptyCatalogPricing {
+			rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
+			out[model] = rates
+		}
+	}
 	for model, cp := range db.customPricing {
 		rates := export.ModelRates{
 			InputPerMTok: money.Money{

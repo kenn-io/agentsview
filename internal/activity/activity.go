@@ -53,7 +53,8 @@ type ActivityEvent struct {
 // UsageRow is one cost/token row from the usage-row union, with cost already
 // computed by the backend (so cost logic stays in each backend, matching
 // GetDailyUsage). Rows MUST be delivered ordered by
-// (ts ASC, session_id ASC, COALESCE(message_ordinal,-1) ASC).
+// (ts text in SQLite BINARY order, session_id ASC,
+// COALESCE(message_ordinal,-1) ASC).
 type UsageRow struct {
 	SessionID           string
 	Model               string

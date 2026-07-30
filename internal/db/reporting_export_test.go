@@ -649,6 +649,64 @@ func TestReportingExportDeduplicatesMergedUsageInputs(t *testing.T) {
 	assert.Zero(t, hour.Activity.Totals.NewModels)
 }
 
+func TestReportingExportDedupMatchesDailyUsageForMixedTimestampPrecision(
+	t *testing.T,
+) {
+	d := testDB(t)
+	insertSession(t, d, "fixture-mixed-precision", "project precision", func(s *Session) {
+		s.Agent = "agent precision"
+		s.StartedAt = Ptr("2026-07-28T09:00:00Z")
+		s.EndedAt = Ptr("2026-07-28T09:01:00Z")
+	})
+	sessionCost := money.MustParseDollars("0.002")
+	require.NoError(t, d.ReplaceSessionUsageEvents(
+		"fixture-mixed-precision",
+		[]UsageEvent{{
+			Source:       "fixture-source",
+			Model:        "model earlier instant",
+			InputTokens:  41,
+			OutputTokens: 7,
+			Cost:         &sessionCost,
+			CostStatus:   "exact",
+			CostSource:   "reported",
+			OccurredAt:   "2026-07-28T09:00:00Z",
+			DedupKey:     "shared",
+		}},
+	))
+	require.NoError(t, d.InsertCursorUsageEvents([]CursorUsageEvent{{
+		OccurredAt:   "2026-07-28T09:00:00.123Z",
+		Model:        "model text-order winner",
+		Kind:         "usage",
+		InputTokens:  17,
+		OutputTokens: 3,
+		Charged:      money.MustParseDollars("0.007"),
+		DedupKey:     "fixture-mixed-precision:fixture-source:shared",
+	}}))
+
+	day, err := d.ExportReportingDay(context.Background(), ReportingExportOptions{
+		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	daily, err := d.GetDailyUsage(context.Background(), UsageFilter{
+		From:       "2026-07-28",
+		To:         "2026-07-28",
+		Timezone:   "UTC",
+		Breakdowns: true,
+	})
+	require.NoError(t, err)
+
+	hour := day.Hours[9]
+	assert.Equal(t, int64(17), hour.Usage.Totals.InputTokens)
+	assert.Equal(t, int64(3), hour.Usage.Totals.OutputTokens)
+	assert.Equal(t, money.MustParseDollars("0.007"), hour.Usage.Totals.Cost)
+	require.Len(t, hour.Usage.ByModel, 1)
+	assert.Equal(t, "model text-order winner", hour.Usage.ByModel[0].Key)
+	assert.Equal(t, daily.Totals.InputTokens, int(hour.Usage.Totals.InputTokens))
+	assert.Equal(t, daily.Totals.OutputTokens, int(hour.Usage.Totals.OutputTokens))
+	assert.Equal(t, daily.Totals.TotalCost, hour.Usage.Totals.Cost)
+}
+
 func TestReportingExportPreservesMessageOrdinalForDedup(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "fixture-ordinal", "", func(s *Session) {

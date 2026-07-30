@@ -377,13 +377,10 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 func sortReportingUsage(rows []activity.UsageRow) {
 	sort.SliceStable(rows, func(i, j int) bool {
 		a, b := rows[i], rows[j]
-		aTime, aErr := parseTimestamp(a.Timestamp)
-		bTime, bErr := parseTimestamp(b.Timestamp)
-		if aErr == nil && bErr == nil && !aTime.Equal(bTime) {
-			return aTime.Before(bTime)
-		}
-		if a.Timestamp != b.Timestamp {
-			return a.Timestamp < b.Timestamp
+		if compared := compareDailyUsageTimestampText(
+			a.Timestamp, b.Timestamp,
+		); compared != 0 {
+			return compared < 0
 		}
 		if a.SessionID != b.SessionID {
 			return a.SessionID < b.SessionID
