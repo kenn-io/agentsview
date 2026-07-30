@@ -13,7 +13,7 @@ import { test, expect, type Page } from "@playwright/test";
 
 const SHOWCASE = "test-session-duration-showcase";
 const SHOWCASE_WORKTREE =
-  "/workspace/مشروع/.worktrees/שלום-feature-with-a-long-checkout-name";
+  "/workspace/مشروع/.worktrees/שלום-feature-with-a-deliberately-long-checkout-name-for-tooltip-wrapping";
 
 // The conversation scrolls inside `.message-list-scroll`
 // (`SessionsPage.scroller`). The plan's sketch referenced
@@ -122,6 +122,66 @@ test.describe("Session Vital Signs", () => {
     expect(layout.lastRight).toBeLessThanOrEqual(
       layout.containerRight,
     );
+  });
+
+  test("uses available viewport width for the worktree tooltip", async ({
+    page,
+  }) => {
+    await gotoShowcase(page);
+
+    const panel = page.locator("aside.vitals");
+    const path = page.locator(".context-value--path");
+    await path.hover();
+
+    const tooltip = page.getByRole("tooltip");
+    await expect(tooltip).toHaveText(SHOWCASE_WORKTREE);
+    const panelLeft = await panel.evaluate(
+      (element) => element.getBoundingClientRect().left,
+    );
+    const wideLayout = await tooltip.evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const lineTops = Array.from(
+        range.getClientRects(),
+        (rect) => Math.round(rect.top),
+      );
+      const rect = element.getBoundingClientRect();
+      return {
+        left: rect.left,
+        lineCount: new Set(lineTops).size,
+        viewportWidth: window.innerWidth,
+        width: rect.width,
+      };
+    });
+
+    expect(wideLayout.width).toBeLessThanOrEqual(
+      wideLayout.viewportWidth * 0.5 + 1,
+    );
+    expect(wideLayout.lineCount).toBe(1);
+    expect(wideLayout.left).toBeLessThan(panelLeft);
+
+    await page.setViewportSize({ width: 1000, height: 900 });
+    await expect(path).toBeVisible();
+    await path.hover();
+    const narrowLayout = await tooltip.evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const lineTops = Array.from(
+        range.getClientRects(),
+        (rect) => Math.round(rect.top),
+      );
+      const rect = element.getBoundingClientRect();
+      return {
+        lineCount: new Set(lineTops).size,
+        viewportWidth: window.innerWidth,
+        width: rect.width,
+      };
+    });
+
+    expect(narrowLayout.width).toBeLessThanOrEqual(
+      narrowLayout.viewportWidth * 0.5 + 1,
+    );
+    expect(narrowLayout.lineCount).toBeGreaterThan(1);
   });
 
   test("slowest-call link scrolls the conversation", async ({

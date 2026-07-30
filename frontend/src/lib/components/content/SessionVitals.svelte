@@ -343,7 +343,11 @@
               </div>
               {#if session.cwd}
                 <div class="context-tooltip">
-                  <Tooltip text={session.cwd} focusable>
+                  <Tooltip
+                    text={session.cwd}
+                    focusable
+                    class="worktree-path-tooltip"
+                  >
                     <div class="context-value context-value--path">
                       <bdi dir="ltr">{session.cwd}</bdi>
                     </div>
@@ -801,6 +805,11 @@
   .context-tooltip :global(.kit-tooltip-trigger) {
     display: flex;
     width: 100%;
+  }
+
+  .context-tooltip :global(.worktree-path-tooltip) {
+    max-width: min(50vw, calc(100vw - 32px));
+    overflow-wrap: anywhere;
   }
 
   /* Stat grid */
