@@ -414,16 +414,50 @@ func TestDarwinWatcherColdArchiveCardinalityUsesOneRecursiveStream(t *testing.T)
 			require.NoError(t, err)
 			_, err = appendFile.WriteString("{\"type\":\"assistant\"}\n")
 			require.NoError(t, err)
+			var appendBatch WatchBatch
+			observedBeforeClose := false
+			observationTimer := time.NewTimer(750 * time.Millisecond)
+		observeOpenAppend:
+			for {
+				select {
+				case batch := <-batches:
+					if slices.Contains(batch.Paths, changedPath) {
+						appendBatch = batch
+						observedBeforeClose = true
+						break observeOpenAppend
+					}
+				case <-observationTimer.C:
+					break observeOpenAppend
+				}
+			}
+			if !observationTimer.Stop() {
+				select {
+				case <-observationTimer.C:
+				default:
+				}
+			}
 			require.NoError(t, appendFile.Close())
-			appendBatch := waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
-				return slices.Contains(batch.Paths, changedPath)
-			})
+			if !observedBeforeClose {
+				appendBatch = waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
+					return slices.Contains(batch.Paths, changedPath)
+				})
+			}
+			t.Logf("recursive append observed before descriptor close: %t",
+				observedBeforeClose)
 			assert.False(t, appendBatch.FullSync)
 			assert.Empty(t, appendBatch.ReconcileRoots)
 			assert.Empty(t, appendBatch.Renames)
 			assert.Equal(t, []string{changedPath}, appendBatch.Paths)
 			got.appendPaths = len(appendBatch.Paths)
 			got.appendRenames = len(appendBatch.Renames)
+
+			// Establish an after-close delivery barrier so any duplicate append
+			// notification cannot be mistaken for the atomic replacement below.
+			closedBarrier := filepath.Join(root, ".append-closed")
+			require.NoError(t, os.WriteFile(closedBarrier, []byte("closed"), 0o600))
+			waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
+				return slices.Contains(batch.Paths, closedBarrier)
+			})
 
 			tempPath := filepath.Join(activeDir, ".changed-session.tmp")
 			require.NoError(t, os.WriteFile(
