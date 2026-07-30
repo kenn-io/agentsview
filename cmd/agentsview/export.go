@@ -90,6 +90,10 @@ type exportSessionsCursorResetError struct {
 }
 
 func newExportCommand() *cobra.Command {
+	return newExportCommandWithDeps(defaultExportReportingDeps())
+}
+
+func newExportCommandWithDeps(deps exportReportingDeps) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "export",
 		Short:        "Export local archive data",
@@ -102,6 +106,9 @@ func newExportCommand() *cobra.Command {
 	}
 	cmd.AddCommand(newExportSessionsCommand())
 	cmd.AddCommand(newExportStatusCommand())
+	cmd.AddCommand(newExportHourCommand(deps))
+	cmd.AddCommand(newExportDayCommand(deps))
+	cmd.AddCommand(newExportDigestCommand(deps))
 	return cmd
 }
 

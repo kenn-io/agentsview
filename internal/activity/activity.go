@@ -55,20 +55,23 @@ type ActivityEvent struct {
 // GetDailyUsage). Rows MUST be delivered ordered by
 // (ts ASC, session_id ASC, COALESCE(message_ordinal,-1) ASC).
 type UsageRow struct {
-	SessionID       string
-	Model           string
-	Timestamp       string // ts, RFC3339 or ""
-	OutputTokens    int
-	Cost            money.Money
-	CostSource      export.CostSource
-	SessionCost     *money.Money
-	Priced          bool
-	Contributes     bool
-	Agent           string
-	ClaudeMessageID string
-	ClaudeRequestID string
-	SourceUUID      string
-	UsageDedupKey   string
+	SessionID           string
+	Model               string
+	Timestamp           string // ts, RFC3339 or ""
+	InputTokens         int
+	OutputTokens        int
+	CacheCreationTokens int
+	CacheReadTokens     int
+	Cost                money.Money
+	CostSource          export.CostSource
+	SessionCost         *money.Money
+	Priced              bool
+	Contributes         bool
+	Agent               string
+	ClaudeMessageID     string
+	ClaudeRequestID     string
+	SourceUUID          string
+	UsageDedupKey       string
 }
 
 type UsageCostAllocation struct {
@@ -398,28 +401,52 @@ func buildIntervals(activity []ActivityEvent, cap time.Duration,
 		for i := 1; i < len(evs); i++ {
 			prev, ts := parseTS(evs[i-1].Timestamp)
 			cur, ts2 := parseTS(evs[i].Timestamp)
-			if !ts || !ts2 {
+			if !ts || !ts2 || !cur.After(prev) {
 				continue
 			}
-			gap := cur.Sub(prev)
-			if gap <= 0 {
-				continue
-			}
-			if gap > cap {
-				gap = cap
-			}
-			iv := interval{sessionID: sid, start: prev, end: prev.Add(gap)}
+			intervalStart, intervalEnd, effective :=
+				EffectiveIntervalBounds(prev, cur, start, effEnd, cap)
 			// Model attribution: closing assistant message wins.
 			if evs[i].Role == "assistant" && evs[i].Model != "" {
 				lastModel = evs[i].Model
 			}
-			iv.model = lastModel
-			if c, ok := clip(iv, start, effEnd); ok {
-				out = append(out, c)
+			if effective {
+				out = append(out, interval{
+					sessionID: sid,
+					start:     intervalStart,
+					end:       intervalEnd,
+					model:     lastModel,
+				})
 			}
 		}
 	}
 	return out
+}
+
+// EffectiveIntervalBounds applies the activity gap cap and clips one positive
+// message pair to [start, end). It returns false when no activity from the pair
+// falls inside the requested range.
+func EffectiveIntervalBounds(
+	previous, current, start, end time.Time,
+	gapCap time.Duration,
+) (time.Time, time.Time, bool) {
+	if !current.After(previous) {
+		return time.Time{}, time.Time{}, false
+	}
+	intervalEnd := current
+	if capped := previous.Add(gapCap); intervalEnd.After(capped) {
+		intervalEnd = capped
+	}
+	if previous.Before(start) {
+		previous = start
+	}
+	if intervalEnd.After(end) {
+		intervalEnd = end
+	}
+	if !intervalEnd.After(previous) {
+		return time.Time{}, time.Time{}, false
+	}
+	return previous, intervalEnd, true
 }
 
 func clip(iv interval, start, end time.Time) (interval, bool) {

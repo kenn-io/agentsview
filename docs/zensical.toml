@@ -25,6 +25,7 @@ nav = [
   {"Session Insights" = "insights.md"},
   {"CLI Reference" = "commands.md"},
   {"Session Export" = "session-export.md"},
+  {"Reporting Export" = "reporting-export.md"},
   {"Stats" = "stats.md"},
   {"Session API" = "session-api.md"},
   {"Semantic Search" = "semantic-search.md"},

@@ -943,6 +943,27 @@ stdout empty, and exit with code 4:
 
 ______________________________________________________________________
 
+### `agentsview export hour|day|digest`
+
+Export canonical UTC-hour activity and usage documents, coherent UTC-day
+snapshots, or compact date-range digests from the local archive. See
+[Reporting Export](/reporting-export/) for the v1 wire schema, quiet-hour
+semantics, snapshot guarantee, and digest rules.
+
+```bash
+agentsview export hour 2026-07-28-13
+agentsview export day 2026-07-28
+agentsview export digest --from 2026-06-28 --to 2026-07-27
+```
+
+Hour and date keys must be exact, zero-padded UTC values. Open and future hours
+are rejected. The current UTC date contains only closed hours and has no day
+digest. Digest ranges are inclusive and limited to 31 dates. Integrations
+should validate the emitted `schema_version: 1` and content digest before
+accepting a document.
+
+______________________________________________________________________
+
 ### `agentsview session`
 
 Programmatic access to session data for scripts, automation agents, and CI jobs.
