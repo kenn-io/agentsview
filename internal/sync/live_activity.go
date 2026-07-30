@@ -121,7 +121,7 @@ func (p *LiveActivityPoller) PollOnce(
 	}
 
 	stats := LiveActivityPollStats{}
-	var pollErrors []error
+	pollErrors := make([]error, 0)
 	hinted := make(map[string]liveActivityRetryEntry)
 	bytesRemaining := activityHintMaxReadBytes
 	recordsRemaining := activityHintMaxIDsPerPoll
@@ -130,7 +130,7 @@ func (p *LiveActivityPoller) PollOnce(
 		target      LiveActivityTarget
 		source      parser.ActivityHintSource
 	}
-	var sources []pollSource
+	sources := make([]pollSource, 0)
 	for targetIndex, target := range p.targets {
 		for _, source := range target.Sources {
 			sources = append(sources, pollSource{

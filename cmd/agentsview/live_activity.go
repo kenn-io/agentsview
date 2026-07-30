@@ -34,7 +34,7 @@ func collectLiveActivityTargets(
 			targetErrors = append(targetErrors, err)
 			continue
 		}
-		if !supported {
+		if !supported || hints == nil {
 			continue
 		}
 		sources, err := hints.ActivityHintSources(ctx)
