@@ -226,7 +226,7 @@ func TestReadActivityHintsErrorNamesPathWithoutRecordContent(t *testing.T) {
 		activityHintMaxReadBytes, activityHintMaxIDsPerPoll)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), path)
+	assert.Contains(t, err.Error(), fmt.Sprintf("%q", path))
 	assert.NotContains(t, err.Error(), "private-prompt-sentinel")
 }
 

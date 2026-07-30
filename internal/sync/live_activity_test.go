@@ -383,6 +383,50 @@ func TestLiveActivityRetriesCanonicalRefreshWhileOldPathExists(t *testing.T) {
 	assert.Equal(t, 3, lookups)
 }
 
+func TestLiveActivityRetriesHintWhoseIndexedPathIsMissing(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	dir := t.TempDir()
+	history := filepath.Join(dir, "history.jsonl")
+	missing := filepath.Join(dir, "missing.jsonl")
+	canonical := filepath.Join(dir, "canonical.jsonl")
+	require.NoError(t, os.WriteFile(
+		history, []byte(hintRecord("move", now)), 0o644,
+	))
+	require.NoError(t, os.WriteFile(canonical, []byte("active\n"), 0o644))
+	provider := newLiveActivityTestProvider(history)
+	lookups := 0
+	var synced []string
+	poller := NewLiveActivityPoller([]LiveActivityTarget{{
+		Provider: provider,
+		Hints:    provider,
+		Sources:  []parser.ActivityHintSource{{Path: history}},
+	}}, func(_ context.Context, id string) (LiveActivitySource, bool, error) {
+		assert.Equal(t, "codex:move", id)
+		lookups++
+		if lookups == 1 {
+			return LiveActivitySource{Path: missing}, true, nil
+		}
+		return LiveActivitySource{Path: canonical}, true, nil
+	}, func(_ context.Context, paths []string) error {
+		synced = append(synced, paths...)
+		return nil
+	}, nil)
+
+	_, err := poller.PollOnce(t.Context(), now)
+	require.NoError(t, err)
+	assert.Equal(t, 1, lookups)
+	assert.NotContains(t, poller.hot, "codex:move")
+	require.Contains(t, poller.retries, "codex:move")
+
+	_, err = poller.PollOnce(t.Context(), now.Add(time.Second))
+	require.NoError(t, err)
+	assert.Equal(t, 2, lookups)
+	require.Contains(t, poller.hot, "codex:move")
+	assert.Equal(t, canonical, poller.hot["codex:move"].source.Path)
+	assert.NotContains(t, poller.retries, "codex:move")
+	assert.Equal(t, []string{canonical}, synced)
+}
+
 func TestLiveActivityPreservesRefreshRetryAcrossHotExpiration(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0).UTC()
 	dir := t.TempDir()
@@ -520,6 +564,50 @@ func TestLiveActivityArchiveCardinalityDoesNotChangeWork(t *testing.T) {
 		SourceStats:    1,
 		SyncPaths:      1,
 	}, withoutHintBytes(small))
+}
+
+func TestLiveActivityBoundsCursorMemoryAcrossManySources(t *testing.T) {
+	const (
+		sourceCount            = 320
+		expectedMaxCursors     = 256
+		expectedMaxCursorBytes = 6 << 20
+	)
+	now := time.Unix(1_800_000_000, 0).UTC()
+	dir := t.TempDir()
+	partial := []byte(strings.Repeat("x", 64<<10))
+	sources := make([]parser.ActivityHintSource, 0, sourceCount)
+	for i := range sourceCount {
+		path := filepath.Join(dir, fmt.Sprintf("history-%03d.jsonl", i))
+		require.NoError(t, os.WriteFile(path, partial, 0o644))
+		sources = append(sources, parser.ActivityHintSource{Path: path})
+	}
+	provider := newLiveActivityTestProvider(sources[0].Path)
+	poller := NewLiveActivityPoller([]LiveActivityTarget{{
+		Provider: provider,
+		Hints:    provider,
+		Sources:  sources,
+	}}, func(context.Context, string) (LiveActivitySource, bool, error) {
+		return LiveActivitySource{}, false, nil
+	}, func(context.Context, []string) error {
+		return nil
+	}, nil)
+
+	for i := range 5 {
+		stats, err := poller.PollOnce(
+			t.Context(), now.Add(time.Duration(i)*time.Second),
+		)
+		require.NoError(t, err)
+		assert.LessOrEqual(t, stats.HintFiles, expectedMaxCursors)
+		assert.LessOrEqual(t, stats.HintBytes, activityHintMaxReadBytes)
+	}
+
+	retainedBytes := 0
+	for key, cursor := range poller.cursors {
+		retainedBytes += len(key.path) + len(cursor.boundary) +
+			len(cursor.partial)
+	}
+	assert.LessOrEqual(t, len(poller.cursors), expectedMaxCursors)
+	assert.LessOrEqual(t, retainedBytes, expectedMaxCursorBytes)
 }
 
 func TestLiveActivityRunStopsOnCancellation(t *testing.T) {
@@ -722,7 +810,7 @@ func TestLiveActivityThrottlesErrorsWithoutRecordContent(t *testing.T) {
 	require.Len(t, logs, 2)
 	for _, logLine := range logs {
 		assert.Contains(t, logLine, "1")
-		assert.Contains(t, logLine, history)
+		assert.Contains(t, logLine, fmt.Sprintf("%q", history))
 		assert.NotContains(t, logLine, "private-prompt-sentinel")
 	}
 }

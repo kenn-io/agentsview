@@ -13,12 +13,15 @@ import (
 )
 
 const (
-	liveActivityPollInterval = 30 * time.Second
-	liveActivityHotTTL       = 24 * time.Hour
-	liveActivityRetryTTL     = 2 * time.Minute
-	liveActivityLogInterval  = 5 * time.Minute
-	liveActivityMaxEntries   = 8192
-	liveActivityMaxPathBytes = 2 << 20
+	liveActivityPollInterval   = 30 * time.Second
+	liveActivityHotTTL         = 24 * time.Hour
+	liveActivityRetryTTL       = 2 * time.Minute
+	liveActivityLogInterval    = 5 * time.Minute
+	liveActivityMaxEntries     = 8192
+	liveActivityMaxPathBytes   = 2 << 20
+	liveActivityMaxCursors     = 256
+	liveActivityMaxCursorBytes = activityHintMaxReadBytes +
+		liveActivityMaxPathBytes
 )
 
 type LiveActivitySource struct {
@@ -83,6 +86,7 @@ type LiveActivityPoller struct {
 	logged  map[string]time.Time
 
 	nextHintSource int
+	cursorSequence uint64
 }
 
 func cloneActivityHintCursor(
@@ -140,14 +144,20 @@ func (p *LiveActivityPoller) PollOnce(
 			})
 		}
 	}
-	stats.HintFiles = len(sources)
 	start := 0
 	if len(sources) > 0 {
 		start = p.nextHintSource % len(sources)
-		p.nextHintSource = (start + 1) % len(sources)
 	}
-	for offset := range len(sources) {
-		current := sources[(start+offset)%len(sources)]
+	processedSources := 0
+	deferredSource := -1
+	for offset := range min(len(sources), liveActivityMaxCursors) {
+		if bytesRemaining == 0 || recordsRemaining == 0 {
+			break
+		}
+		sourceIndex := (start + offset) % len(sources)
+		current := sources[sourceIndex]
+		processedSources++
+		stats.HintFiles++
 		key := liveActivityCursorKey{
 			target: current.targetIndex,
 			path:   current.source.Path,
@@ -156,9 +166,6 @@ func (p *LiveActivityPoller) PollOnce(
 		if cursor == nil {
 			cursor = &activityHintCursor{}
 			p.cursors[key] = cursor
-		}
-		if bytesRemaining == 0 || recordsRemaining == 0 {
-			continue
 		}
 		cursorBefore := cloneActivityHintCursor(cursor)
 		byteBudget := bytesRemaining
@@ -170,6 +177,7 @@ func (p *LiveActivityPoller) PollOnce(
 		stats.HintBytes += result.BytesRead
 		if err != nil {
 			*cursor = cursorBefore
+			p.markCursorUsed(cursor)
 			pollErrors = append(pollErrors, err)
 			continue
 		}
@@ -185,8 +193,11 @@ func (p *LiveActivityPoller) PollOnce(
 			recordBudget < activityHintMaxIDsPerPoll &&
 				result.RecordOverflow {
 			*cursor = cursorBefore
-			continue
+			p.markCursorUsed(cursor)
+			deferredSource = sourceIndex
+			break
 		}
+		p.markCursorUsed(cursor)
 		for _, hint := range result.Hints {
 			fullID := current.target.Provider.Definition().IDPrefix +
 				hint.RawSessionID
@@ -198,6 +209,19 @@ func (p *LiveActivityPoller) PollOnce(
 				}
 			}
 		}
+	}
+	if len(sources) > 0 {
+		switch {
+		case deferredSource >= 0:
+			p.nextHintSource = deferredSource
+		case processedSources > 0:
+			p.nextHintSource = (start + processedSources) % len(sources)
+		}
+	}
+	if evicted := p.enforceCursorBounds(); evicted > 0 {
+		p.logThrottled("cursor-overflow", now,
+			"live activity hint cursors exceeded bounded capacity: evicted=%d entries=%d bytes=%d",
+			evicted, len(p.cursors), p.cursorBytes())
 	}
 
 	attempted := make(map[string]struct{}, len(hinted))
@@ -294,7 +318,11 @@ func (p *LiveActivityPoller) PollOnce(
 		info, err := os.Stat(entry.source.Path)
 		if errors.Is(err, os.ErrNotExist) {
 			delete(p.hot, fullID)
-			if entry.refreshRetry != nil {
+			if hint, ok := hinted[fullID]; ok {
+				p.addRetry(
+					fullID, hint.target, now, hint.lastHint,
+				)
+			} else if entry.refreshRetry != nil {
 				p.retries[fullID] = entry.refreshRetry
 			}
 			continue
@@ -504,6 +532,65 @@ func (p *LiveActivityPoller) hotPathBytes() int {
 	total := 0
 	for _, entry := range p.hot {
 		total += len(entry.source.Path)
+	}
+	return total
+}
+
+func (p *LiveActivityPoller) markCursorUsed(
+	cursor *activityHintCursor,
+) {
+	p.cursorSequence++
+	cursor.lastUsed = p.cursorSequence
+}
+
+func (p *LiveActivityPoller) enforceCursorBounds() int {
+	retainedBytes := p.cursorBytes()
+	if len(p.cursors) <= liveActivityMaxCursors &&
+		retainedBytes <= liveActivityMaxCursorBytes {
+		return 0
+	}
+	type candidate struct {
+		key      liveActivityCursorKey
+		lastUsed uint64
+		bytes    int
+	}
+	candidates := make([]candidate, 0, len(p.cursors))
+	for key, cursor := range p.cursors {
+		candidates = append(candidates, candidate{
+			key:      key,
+			lastUsed: cursor.lastUsed,
+			bytes: len(key.path) + len(cursor.boundary) +
+				len(cursor.partial),
+		})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].lastUsed == candidates[j].lastUsed {
+			if candidates[i].key.target == candidates[j].key.target {
+				return candidates[i].key.path < candidates[j].key.path
+			}
+			return candidates[i].key.target < candidates[j].key.target
+		}
+		return candidates[i].lastUsed < candidates[j].lastUsed
+	})
+
+	evicted := 0
+	for _, oldest := range candidates {
+		if len(p.cursors) <= liveActivityMaxCursors &&
+			retainedBytes <= liveActivityMaxCursorBytes {
+			break
+		}
+		delete(p.cursors, oldest.key)
+		retainedBytes -= oldest.bytes
+		evicted++
+	}
+	return evicted
+}
+
+func (p *LiveActivityPoller) cursorBytes() int {
+	total := 0
+	for key, cursor := range p.cursors {
+		total += len(key.path) + len(cursor.boundary) +
+			len(cursor.partial)
 	}
 	return total
 }

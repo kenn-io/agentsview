@@ -28,6 +28,7 @@ type activityHintCursor struct {
 	partial      []byte
 	initialized  bool
 	droppingLine bool
+	lastUsed     uint64
 }
 
 type activityHintReadResult struct {
