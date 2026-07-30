@@ -115,6 +115,45 @@ func TestStoreImportCoordinatorIgnoresLocalOrigin(t *testing.T) {
 	assert.Zero(t, count)
 }
 
+func TestStoreImportCoordinatorRejectsOutOfRangeCheckpointWithoutAdvancingHead(
+	t *testing.T,
+) {
+	store := newTestArtifactStore(t)
+	destination := testDB(t)
+	coordinator := NewStoreImportCoordinator(
+		destination, store, importLocalOrigin,
+	)
+	outOfRange := Entry{
+		Ref: Ref{
+			Origin: contractOrigin, Kind: KindCheckpoints,
+			Name: "cp-2147483648.json",
+		},
+		Identity: identityForBytes(t, []byte("out-of-range")),
+	}
+
+	err := coordinator.RecordChanged(t.Context(), outOfRange)
+	assert.ErrorIs(t, err, ErrArtifactInvalid)
+	_, found, err := destination.GetArtifactPeerCheckpointHead(
+		t.Context(), contractOrigin,
+	)
+	require.NoError(t, err)
+	assert.False(t, found)
+
+	valid := createImportTestCheckpoint(
+		t, store, contractOrigin, 1, map[string]string{},
+	)
+	require.NoError(t, coordinator.RecordChanged(t.Context(), valid))
+	head, found, err := destination.GetArtifactPeerCheckpointHead(
+		t.Context(), contractOrigin,
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, 1, head.Sequence)
+	count, _, err := destination.ArtifactImportQueueStats(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+}
+
 func TestStoreImportCoordinatorRetriesMissingSegmentAfterArrival(t *testing.T) {
 	store := newTestArtifactStore(t)
 	segmentBody, err := encodeSegment([]db.Message{{

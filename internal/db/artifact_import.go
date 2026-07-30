@@ -74,7 +74,7 @@ func (db *DB) EnqueueArtifactImport(
 	if err := validateArtifactImportWork(work, false); err != nil {
 		return err
 	}
-	sequence, err := artifactImportCheckpointSequence(work.Name)
+	sequence, err := ParseArtifactCheckpointSequence(work.Name)
 	if err != nil {
 		return err
 	}
@@ -117,7 +117,7 @@ func (db *DB) EnqueueArtifactImport(
 		return fmt.Errorf("reading highest artifact import checkpoint: %w", err)
 	}
 	if err == nil {
-		highest, parseErr := artifactImportCheckpointSequence(highestName)
+		highest, parseErr := ParseArtifactCheckpointSequence(highestName)
 		if parseErr != nil {
 			return fmt.Errorf("parsing queued artifact checkpoint: %w", parseErr)
 		}
@@ -365,7 +365,7 @@ func (db *DB) AcknowledgeArtifactImportAndDiscardStage(
 	if !work.QuarantinePending {
 		return false, errors.New("artifact import quarantine intent is required")
 	}
-	sequence, err := artifactImportCheckpointSequence(work.Name)
+	sequence, err := ParseArtifactCheckpointSequence(work.Name)
 	if err != nil {
 		return false, err
 	}
@@ -1016,7 +1016,7 @@ func validateArtifactImportWork(
 	if work.Kind != "checkpoints" {
 		return errors.New("artifact import kind must be checkpoints")
 	}
-	if _, err := artifactImportCheckpointSequence(work.Name); err != nil {
+	if _, err := ParseArtifactCheckpointSequence(work.Name); err != nil {
 		return err
 	}
 	if len(work.SHA256) != 64 || work.Size < 0 {
@@ -1099,7 +1099,9 @@ func validateLowerHex(value string) error {
 	return nil
 }
 
-func artifactImportCheckpointSequence(name string) (int, error) {
+// ParseArtifactCheckpointSequence validates the canonical checkpoint filename
+// and the sequence range shared by artifact ingestion and durable import state.
+func ParseArtifactCheckpointSequence(name string) (int, error) {
 	if len(name) != len("cp-0000000001.json") ||
 		!strings.HasPrefix(name, "cp-") ||
 		!strings.HasSuffix(name, ".json") {
