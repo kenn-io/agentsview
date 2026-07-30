@@ -85,6 +85,15 @@ type LiveActivityPoller struct {
 	nextHintSource int
 }
 
+func cloneActivityHintCursor(
+	cursor *activityHintCursor,
+) activityHintCursor {
+	cloned := *cursor
+	cloned.boundary = append([]byte(nil), cursor.boundary...)
+	cloned.partial = append([]byte(nil), cursor.partial...)
+	return cloned
+}
+
 func NewLiveActivityPoller(
 	targets []LiveActivityTarget,
 	lookup LiveActivityLookup,
@@ -151,12 +160,16 @@ func (p *LiveActivityPoller) PollOnce(
 		if bytesRemaining == 0 || recordsRemaining == 0 {
 			continue
 		}
+		cursorBefore := cloneActivityHintCursor(cursor)
+		byteBudget := bytesRemaining
+		recordBudget := recordsRemaining
 		result, err := readActivityHints(
 			ctx, current.source, current.target.Hints, cursor, now,
-			bytesRemaining, recordsRemaining,
+			byteBudget, recordBudget,
 		)
 		stats.HintBytes += result.BytesRead
 		if err != nil {
+			*cursor = cursorBefore
 			pollErrors = append(pollErrors, err)
 			continue
 		}
@@ -167,6 +180,12 @@ func (p *LiveActivityPoller) PollOnce(
 				"live activity hint input exceeded a bounded poll: path=%q bytes=%d records=%d ids=%d",
 				current.source.Path, result.BytesRead,
 				result.RecordsDecoded, len(result.Hints))
+		}
+		if byteBudget < activityHintMaxReadBytes && result.ByteOverflow ||
+			recordBudget < activityHintMaxIDsPerPoll &&
+				result.RecordOverflow {
+			*cursor = cursorBefore
+			continue
 		}
 		for _, hint := range result.Hints {
 			fullID := current.target.Provider.Definition().IDPrefix +

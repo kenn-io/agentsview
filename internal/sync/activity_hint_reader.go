@@ -35,6 +35,8 @@ type activityHintReadResult struct {
 	BytesRead      int
 	RecordsDecoded int
 	Overflow       bool
+	ByteOverflow   bool
+	RecordOverflow bool
 }
 
 func readActivityHints(
@@ -57,6 +59,11 @@ func readActivityHints(
 	if err != nil {
 		return activityHintReadResult{}, fmt.Errorf(
 			"stat activity hint %q: %w", source.Path, err,
+		)
+	}
+	if !info.Mode().IsRegular() {
+		return activityHintReadResult{}, fmt.Errorf(
+			"activity hint %q is not a regular file", source.Path,
 		)
 	}
 
@@ -82,6 +89,8 @@ func readActivityHints(
 	shifted := false
 	result := activityHintReadResult{}
 	if bootstrap {
+		result.ByteOverflow = info.Size() >
+			int64(min(activityHintBootstrapBytes, maxBytes))
 		start = max(
 			int64(0),
 			info.Size()-int64(min(activityHintBootstrapBytes, maxBytes)),
@@ -90,10 +99,11 @@ func readActivityHints(
 	} else if unread := info.Size() - cursor.offset; unread > int64(maxBytes) {
 		start = info.Size() - int64(maxBytes)
 		shifted = true
-		result.Overflow = true
+		result.ByteOverflow = true
 		cursor.partial = nil
 		cursor.droppingLine = false
 	}
+	result.Overflow = result.ByteOverflow
 
 	file, err := os.Open(source.Path)
 	if err != nil {
@@ -170,7 +180,8 @@ func readActivityHints(
 		return activityHintReadResult{}, canceled
 	}
 	result.RecordsDecoded = decoded
-	result.Overflow = result.Overflow || overflow
+	result.RecordOverflow = overflow
+	result.Overflow = result.Overflow || result.RecordOverflow
 	return result, nil
 }
 

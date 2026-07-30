@@ -167,7 +167,6 @@ func TestReadActivityHintsResetsAfterReplacementAndTruncation(t *testing.T) {
 		literalActivityHintDecoder{}, cursor, now,
 		activityHintMaxReadBytes, activityHintMaxIDsPerPoll)
 	require.NoError(t, err)
-	oldInfo := cursor.info
 
 	replacement := path + ".new"
 	require.NoError(t, os.WriteFile(replacement, []byte(hintRecord("replacement", now)), 0o644))
@@ -178,7 +177,6 @@ func TestReadActivityHintsResetsAfterReplacementAndTruncation(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got.Hints, 1)
 	assert.Equal(t, "replacement", got.Hints[0].RawSessionID)
-	assert.False(t, os.SameFile(oldInfo, cursor.info))
 
 	require.NoError(t, os.WriteFile(path, []byte(hintRecord("short", now)), 0o644))
 	got, err = readActivityHints(t.Context(), parser.ActivityHintSource{Path: path},

@@ -171,15 +171,16 @@ func TestLiveActivityHintBudgetIsGlobalAcrossSources(t *testing.T) {
 	second := filepath.Join(dir, "second.jsonl")
 	var firstRecords strings.Builder
 	var secondRecords strings.Builder
-	for i := range activityHintMaxIDsPerPoll {
+	for i := range activityHintMaxIDsPerPoll - 1 {
 		firstRecords.WriteString(hintRecord(fmt.Sprintf("first-%05d", i), now))
-		secondRecords.WriteString(hintRecord(fmt.Sprintf("second-%05d", i), now))
 	}
+	secondRecords.WriteString(hintRecord("second-00000", now))
+	secondRecords.WriteString(hintRecord("second-00001", now))
 	require.NoError(t, os.WriteFile(first, []byte(firstRecords.String()), 0o644))
 	require.NoError(t, os.WriteFile(second, []byte(secondRecords.String()), 0o644))
 	provider := newLiveActivityTestProvider(first)
 	decoder := &countingActivityHintDecoder{}
-	lookups := 0
+	var lookupIDs []string
 	poller := NewLiveActivityPoller([]LiveActivityTarget{{
 		Provider: provider,
 		Hints:    decoder,
@@ -187,8 +188,8 @@ func TestLiveActivityHintBudgetIsGlobalAcrossSources(t *testing.T) {
 			{Path: first},
 			{Path: second},
 		},
-	}}, func(context.Context, string) (LiveActivitySource, bool, error) {
-		lookups++
+	}}, func(_ context.Context, id string) (LiveActivitySource, bool, error) {
+		lookupIDs = append(lookupIDs, id)
 		return LiveActivitySource{}, false, nil
 	}, func(context.Context, []string) error {
 		return nil
@@ -197,17 +198,19 @@ func TestLiveActivityHintBudgetIsGlobalAcrossSources(t *testing.T) {
 	firstStats, err := poller.PollOnce(t.Context(), now)
 	require.NoError(t, err)
 	assert.Equal(t, activityHintMaxIDsPerPoll, decoder.decoded)
-	assert.Equal(t, activityHintMaxIDsPerPoll, lookups)
-	assert.Equal(t, activityHintMaxIDsPerPoll, firstStats.SessionLookups)
+	assert.Len(t, lookupIDs, activityHintMaxIDsPerPoll-1)
+	assert.Equal(t, activityHintMaxIDsPerPoll-1, firstStats.SessionLookups)
+	assert.NotContains(t, lookupIDs, "codex:second-00000")
+	assert.NotContains(t, lookupIDs, "codex:second-00001")
 	secondCursor := poller.cursors[liveActivityCursorKey{path: second}]
 	require.NotNil(t, secondCursor)
 	assert.False(t, secondCursor.initialized,
-		"a source deferred by the global budget must remain unread")
+		"a partially read source must remain unread")
 
-	appendFile(t, first, firstRecords.String())
 	_, err = poller.PollOnce(t.Context(), now.Add(time.Second))
 	require.NoError(t, err)
-	assert.Equal(t, activityHintMaxIDsPerPoll*2, decoder.decoded)
+	assert.Contains(t, lookupIDs, "codex:second-00000")
+	assert.Contains(t, lookupIDs, "codex:second-00001")
 	assert.True(t, secondCursor.initialized)
 }
 
@@ -216,10 +219,16 @@ func TestLiveActivityHintByteBudgetIsGlobalAcrossSources(t *testing.T) {
 	dir := t.TempDir()
 	first := filepath.Join(dir, "first.jsonl")
 	second := filepath.Join(dir, "second.jsonl")
-	content := []byte(strings.Repeat("x", 3<<20))
-	require.NoError(t, os.WriteFile(first, content, 0o644))
-	require.NoError(t, os.WriteFile(second, content, 0o644))
+	firstContent := []byte(strings.Repeat("x", activityHintMaxReadBytes-64))
+	const firstSecondID = "second-byte-00000000000000000000"
+	const secondSecondID = "second-byte-00000000000000000001"
+	secondContent := hintRecord(firstSecondID, now) +
+		hintRecord(secondSecondID, now)
+	require.Greater(t, len(secondContent), 64)
+	require.NoError(t, os.WriteFile(first, firstContent, 0o644))
+	require.NoError(t, os.WriteFile(second, []byte(secondContent), 0o644))
 	provider := newLiveActivityTestProvider(first)
+	var lookupIDs []string
 	poller := NewLiveActivityPoller([]LiveActivityTarget{{
 		Provider: provider,
 		Hints:    provider,
@@ -227,7 +236,8 @@ func TestLiveActivityHintByteBudgetIsGlobalAcrossSources(t *testing.T) {
 			{Path: first},
 			{Path: second},
 		},
-	}}, func(context.Context, string) (LiveActivitySource, bool, error) {
+	}}, func(_ context.Context, id string) (LiveActivitySource, bool, error) {
+		lookupIDs = append(lookupIDs, id)
 		return LiveActivitySource{}, false, nil
 	}, func(context.Context, []string) error {
 		return nil
@@ -237,6 +247,17 @@ func TestLiveActivityHintByteBudgetIsGlobalAcrossSources(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, activityHintMaxReadBytes, stats.HintBytes)
+	assert.Empty(t, lookupIDs)
+	secondCursor := poller.cursors[liveActivityCursorKey{path: second}]
+	require.NotNil(t, secondCursor)
+	assert.False(t, secondCursor.initialized,
+		"a partially read source must remain unread")
+
+	_, err = poller.PollOnce(t.Context(), now.Add(time.Second))
+	require.NoError(t, err)
+	assert.Contains(t, lookupIDs, "codex:"+firstSecondID)
+	assert.Contains(t, lookupIDs, "codex:"+secondSecondID)
+	assert.True(t, secondCursor.initialized)
 }
 
 func TestLiveActivityNewHintRestartsExpiredLookupWindow(t *testing.T) {
