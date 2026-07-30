@@ -125,6 +125,12 @@ archive snapshot even when a sync writes concurrently. Usage deduplication and
 authoritative session-cost allocation happen once on the merged usage stream
 across the day before rows are partitioned by hour.
 
+First-seen usage deduplication orders candidates by occurrence time, session ID
+ascending, and `COALESCE(message_ordinal, -1)` ascending, matching the Usage
+view. A standalone row retains its empty session ID and therefore sorts before a
+session-linked row at the same time. Source and the remaining semantic fields
+provide deterministic tie-breakers only after that shared ordering prefix.
+
 Arrays use stable contract ordering. Canonical JSON preserves declared JSON
 field names and encodes money exactly. Version 1 uses a project-specific
 canonical format and does not claim RFC 8785 or JSON Canonicalization Scheme
@@ -219,6 +225,10 @@ transaction. Version 1 does not pin a closed hour to the catalog revision that
 was current when the hour closed, so a later catalog change can change cost and
 therefore the hour digest without changing token facts. Integrations should
 treat such a digest change as an ordinary source correction.
+
+When the archive has no stored model-pricing rows, the read-only reporting
+command applies the embedded fallback catalog and configured custom prices in
+memory. It does not write to the archive or replace a non-empty stored catalog.
 
 The sum of a completed export day's usage fields reconciles with the Usage view
 for the same UTC date and filters. Usage-session selection follows usage

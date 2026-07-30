@@ -58,6 +58,8 @@ type UsageRow struct {
 	SessionID           string
 	Model               string
 	Timestamp           string // ts, RFC3339 or ""
+	MessageOrdinal      int64  // COALESCE(message_ordinal, -1)
+	UsageSource         string
 	InputTokens         int
 	OutputTokens        int
 	CacheCreationTokens int

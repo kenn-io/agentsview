@@ -33,7 +33,8 @@ and validate the CLI schema version before opening storage.
   components after validation.
 - Use only conspicuously synthetic names, labels, paths, repositories, and
   domains in tests, fixtures, documentation, and commit text.
-- Do not push, rewrite history, or interact with the pull request.
+- Push the new follow-up commit normally after verification. Do not rewrite
+  history or post pull-request comments.
 
 ______________________________________________________________________
 
@@ -637,5 +638,245 @@ docs(export): freeze completed reporting schema v1
 
 - [ ] **Step 8: Confirm the final local state**
 
-Run `git status --short` and report the commits and verification results. Do not
-push, rewrite history, or post pull-request comments.
+Run `git status --short` and record the commits and verification results for
+that checkpoint. Task 6 performs the final push without rewriting history or
+posting a pull-request comment.
+
+### Task 5: Match daily-usage survivor ordering
+
+**Files:**
+
+- Modify: `internal/activity/activity.go`
+- Modify: `internal/db/activityreport.go`
+- Modify: `internal/db/reporting_export.go`
+- Test: `internal/db/reporting_export_test.go`
+
+**Interfaces:**
+
+- Extends `activity.UsageRow` with `UsageSource string` and
+  `MessageOrdinal int64`, where `-1` represents a missing message ordinal.
+
+- Preserves
+  `finalizeReportingUsage(activity.Query, []activity.UsageRow) []activity.UsageRow`.
+
+- Preserves the current semantic comparators as deterministic tie-breakers after
+  timestamp, session ID, and ordinal.
+
+- [x] **Step 1: Write regressions for primary and trailing ordering**
+
+Add a table-driven `TestFinalizeReportingUsageOrdering` that constructs real
+`activity.UsageRow` values with one shared `UsageDedupKey` and literal token and
+cost values. Cover these cases:
+
+```go
+{
+	name: "empty session sorts before linked session",
+	rows: []activity.UsageRow{
+		{
+			SessionID: "fixture-session", MessageOrdinal: -1,
+			UsageSource: "usage_event", UsageDedupKey: "shared",
+			Timestamp: "2026-07-28T09:05:00Z", InputTokens: 41,
+		},
+		{
+			SessionID: "", MessageOrdinal: -1,
+			UsageSource: "cursor", UsageDedupKey: "shared",
+			Timestamp: "2026-07-28T09:05:00Z", InputTokens: 17,
+		},
+	},
+	wantInput: 17,
+},
+{
+	name: "lower ordinal wins before semantic fields",
+	rows: []activity.UsageRow{
+		{
+			SessionID: "fixture-session", MessageOrdinal: 2,
+			UsageSource: "message", UsageDedupKey: "shared",
+			Timestamp: "2026-07-28T09:05:00Z", InputTokens: 11,
+		},
+		{
+			SessionID: "fixture-session", MessageOrdinal: 1,
+			UsageSource: "usage_event", UsageDedupKey: "shared",
+			Timestamp: "2026-07-28T09:05:00Z", InputTokens: 29,
+		},
+	},
+	wantInput: 29,
+},
+```
+
+Add a third case with equal timestamp, session, and ordinal but different
+sources and semantic values. Assert exact output for both insertion orders so
+the trailing source and semantic comparators remain deterministic.
+
+Extend `TestReportingExportDeduplicatesMergedUsageInputs` so the standalone and
+session-linked rows have the same occurrence time and stable dedup token but
+distinct input tokens, costs, models, and project attribution. Compare the
+exported day with `GetDailyUsage` and assert the literal winning token and cost
+values.
+
+- [x] **Step 2: Run the ordering regressions and verify RED**
+
+Run:
+
+```bash
+CGO_ENABLED=1 go test -tags fts5 ./internal/db \
+  -run 'TestFinalizeReportingUsageOrdering|TestReportingExportDeduplicatesMergedUsageInputs' \
+  -count=1
+```
+
+Expected: FAIL because reporting puts the non-empty session ID first and has no
+ordinal or source metadata after candidate materialization.
+
+- [x] **Step 3: Carry normalized ordering metadata**
+
+Add these internal fields to `activity.UsageRow`:
+
+```go
+UsageSource   string
+MessageOrdinal int64
+```
+
+When `loadActivityReportUsageCandidatesFrom` maps a scanned row, copy
+`r.usageSource` and the normalized ordinal already computed for sorting.
+Standalone Cursor candidates set `UsageSource: "cursor"` and
+`MessageOrdinal: -1`. Do not fabricate session or project values.
+
+- [x] **Step 4: Apply the daily-usage ordering prefix**
+
+Update `sortReportingUsage` to compare:
+
+1. parsed occurrence instant and raw timestamp fallback;
+1. `SessionID` using ordinary ascending string order, including empty string;
+1. `MessageOrdinal` ascending; and
+1. `UsageSource` followed by the existing deterministic semantic comparators.
+
+Remove the special non-empty-session preference. Keep every existing semantic
+comparison after the primary prefix.
+
+- [x] **Step 5: Run focused tests and verify GREEN**
+
+Run:
+
+```bash
+CGO_ENABLED=1 go test -tags fts5 ./internal/db \
+  -run 'TestFinalizeReportingUsageOrdering|TestReportingExportDeduplicatesMergedUsageInputs|TestReportingExportIncludesStandaloneRowsOnlyInUsage|TestReportingExportIsIndependentOfArchiveLayout' \
+  -count=1
+```
+
+Expected: PASS.
+
+### Task 6: Prepare reporting fallback pricing
+
+**Files:**
+
+- Modify: `cmd/agentsview/export_reporting.go`
+- Test: `cmd/agentsview/export_reporting_test.go`
+- Delete:
+  `docs/superpowers/specs/2026-07-30-reporting-export-contract-corrections-design.md`
+
+**Interfaces:**
+
+- Reuses
+  `ensureExportSessionsPricing(context.Context, *db.DB, config.Config) error`.
+
+- Preserves `openReportingExportDB(*cobra.Command) (*db.DB, func(), error)`.
+
+- [x] **Step 1: Write the unseeded-archive regression**
+
+Create `TestExportReportingFallbackPricingOnUnseededArchive`. Open a real
+temporary archive, leave `model_pricing` empty, and seed a synthetic session
+with a known exact embedded fallback model:
+
+```go
+model := exactFallbackPricedModel(t)
+```
+
+Insert a user message at `2026-07-28T10:00:00Z` and an assistant message with
+literal usage at `2026-07-28T10:05:00Z`:
+
+```json
+{"input_tokens":1000,"output_tokens":500}
+```
+
+Run `export hour 2026-07-28-10`, decode the reporting hour, and assert:
+
+```go
+assert.Positive(t, hour.Usage.Totals.Cost.Microdollars)
+assert.Positive(t, hour.Activity.Totals.Cost.Microdollars)
+```
+
+The observable nonzero totals catch removal of the fallback setup without
+mirroring the pricing implementation.
+
+- [x] **Step 2: Run the fallback regression and verify RED**
+
+Run:
+
+```bash
+CGO_ENABLED=1 go test -tags fts5 ./cmd/agentsview \
+  -run TestExportReportingFallbackPricingOnUnseededArchive -count=1
+```
+
+Expected: FAIL with zero exported cost because reporting has not installed the
+empty-catalog in-memory fallback.
+
+- [x] **Step 3: Prepare pricing during database open**
+
+In `openReportingExportDB`, after `openExportReadOnlyDB` succeeds, call:
+
+```go
+if err := ensureExportSessionsPricing(
+	cmd.Context(), database, appConfig,
+); err != nil {
+	_ = database.Close()
+	return nil, func() {}, err
+}
+```
+
+Return the existing cleanup closure only after preparation succeeds. This keeps
+the archive read-only, retains stored pricing when present, and prevents a
+database leak on setup failure.
+
+- [x] **Step 4: Run the command regression and neighboring tests**
+
+Run:
+
+```bash
+CGO_ENABLED=1 go test -tags fts5 ./cmd/agentsview \
+  -run 'TestExportReportingFallbackPricingOnUnseededArchive|TestExportHour|TestExportDay|TestExportDigest|TestExportReportingSchemaVersion' \
+  -count=1
+```
+
+Expected: PASS.
+
+- [x] **Step 5: Remove the temporary design document**
+
+Delete only:
+
+```text
+docs/superpowers/specs/2026-07-30-reporting-export-contract-corrections-design.md
+```
+
+Do not remove unrelated Superpowers plans or specifications.
+
+- [ ] **Step 6: Verify, audit, commit, and push**
+
+Run:
+
+```bash
+go fmt ./...
+CGO_ENABLED=1 go test -tags fts5 ./...
+go vet ./...
+```
+
+Inspect the complete staged diff and scan added strings for private identities,
+hosts, repositories, paths, credentials, or workflow-specific context. Verify
+the reporting fixture manifest remains valid. Use the mandatory commit skill
+and commit the implementation, regressions, plan update, and requested design
+document removal with:
+
+```text
+fix(export): align reporting usage reconciliation
+```
+
+Push normally to `origin/agent/hourly-reporting-export`. Do not force-push,
+rewrite history, or post pull-request comments.

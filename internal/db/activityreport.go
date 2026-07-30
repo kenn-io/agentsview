@@ -529,6 +529,8 @@ func (db *DB) loadActivityReportUsageCandidatesFrom(
 					SessionID:       r.sessionID,
 					Model:           r.model,
 					Timestamp:       r.ts,
+					MessageOrdinal:  ord,
+					UsageSource:     r.usageSource,
 					Agent:           r.agent,
 					ClaudeMessageID: r.claudeMessageID,
 					ClaudeRequestID: r.claudeRequestID,

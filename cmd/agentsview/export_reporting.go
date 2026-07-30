@@ -214,6 +214,12 @@ func openReportingExportDB(
 	if err != nil {
 		return nil, func() {}, err
 	}
+	if err := ensureExportSessionsPricing(
+		cmd.Context(), database, appConfig,
+	); err != nil {
+		_ = database.Close()
+		return nil, func() {}, err
+	}
 	return database, func() {
 		_ = database.Close()
 	}, nil

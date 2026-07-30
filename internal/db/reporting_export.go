@@ -344,6 +344,8 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 			)
 		}
 		row.Agent = "cursor"
+		row.MessageOrdinal = -1
+		row.UsageSource = "cursor"
 		row.CostSource = export.CostSourceReported
 		row.Priced = true
 		row.Contributes = true
@@ -368,13 +370,14 @@ func sortReportingUsage(rows []activity.UsageRow) {
 		if a.Timestamp != b.Timestamp {
 			return a.Timestamp < b.Timestamp
 		}
-		if (a.SessionID != "") != (b.SessionID != "") {
-			return a.SessionID != ""
-		}
 		if a.SessionID != b.SessionID {
 			return a.SessionID < b.SessionID
 		}
+		if a.MessageOrdinal != b.MessageOrdinal {
+			return a.MessageOrdinal < b.MessageOrdinal
+		}
 		for _, compared := range []int{
+			cmp.Compare(a.UsageSource, b.UsageSource),
 			cmp.Compare(a.UsageDedupKey, b.UsageDedupKey),
 			cmp.Compare(a.ClaudeMessageID, b.ClaudeMessageID),
 			cmp.Compare(a.ClaudeRequestID, b.ClaudeRequestID),

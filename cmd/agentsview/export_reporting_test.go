@@ -293,6 +293,61 @@ func TestExportReportingRunsWhileWriteOwnerLockHeld(t *testing.T) {
 	assert.Empty(t, stderr)
 }
 
+func TestExportReportingFallbackPricingOnUnseededArchive(t *testing.T) {
+	dataDir := testDataDir(t)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	model := exactFallbackPricedModel(t)
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:               "fixture-fallback-priced",
+		Machine:          "fixture-machine",
+		Agent:            "agent fallback",
+		StartedAt:        dbtest.Ptr("2026-07-28T10:00:00Z"),
+		EndedAt:          dbtest.Ptr("2026-07-28T10:06:00Z"),
+		MessageCount:     2,
+		UserMessageCount: 1,
+	}))
+	require.NoError(t, database.InsertMessages([]db.Message{
+		{
+			SessionID:     "fixture-fallback-priced",
+			Ordinal:       0,
+			Role:          "user",
+			Content:       "synthetic question",
+			ContentLength: len("synthetic question"),
+			Timestamp:     "2026-07-28T10:00:00Z",
+		},
+		{
+			SessionID:     "fixture-fallback-priced",
+			Ordinal:       1,
+			Role:          "assistant",
+			Content:       "synthetic answer",
+			ContentLength: len("synthetic answer"),
+			Timestamp:     "2026-07-28T10:05:00Z",
+			Model:         model,
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":1000,"output_tokens":500}`,
+			),
+		},
+	}))
+	seeded, err := database.HasModelPricingRows(context.Background())
+	require.NoError(t, err)
+	assert.False(t, seeded)
+	require.NoError(t, database.Close())
+
+	stdout, stderr, err := executeExportSessionsCommand(
+		newExportReportingTestRoot(
+			time.Date(2026, 7, 29, 14, 37, 0, 0, time.UTC),
+		),
+		"export", "hour", "2026-07-28-10",
+	)
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
+
+	var hour export.ReportingHour
+	require.NoError(t, json.Unmarshal([]byte(stdout), &hour))
+	assert.Positive(t, hour.Usage.Totals.Cost.Microdollars)
+	assert.Positive(t, hour.Activity.Totals.Cost.Microdollars)
+}
+
 func newExportReportingTestRoot(now time.Time) *cobra.Command {
 	deps := defaultExportReportingDeps()
 	deps.now = func() time.Time { return now }

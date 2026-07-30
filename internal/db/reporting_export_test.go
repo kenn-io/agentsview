@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"testing"
@@ -401,10 +402,10 @@ func TestReportingExportDeduplicatesMergedUsageInputs(t *testing.T) {
 	))
 	require.NoError(t, d.InsertCursorUsageEvents([]CursorUsageEvent{{
 		OccurredAt:   "2026-07-28T09:05:00Z",
-		Model:        "model merged-dedup",
+		Model:        "model standalone winner",
 		Kind:         "usage",
-		InputTokens:  41,
-		OutputTokens: 7,
+		InputTokens:  17,
+		OutputTokens: 3,
 		Charged:      money.MustParseDollars("0.007"),
 		DedupKey:     "fixture-dedup:merged-source:shared",
 	}}))
@@ -416,17 +417,188 @@ func TestReportingExportDeduplicatesMergedUsageInputs(t *testing.T) {
 	require.NoError(t, err)
 
 	hour := day.Hours[9]
-	assert.Equal(t, int64(41), hour.Usage.Totals.InputTokens)
-	assert.Equal(t, int64(7), hour.Usage.Totals.OutputTokens)
-	assert.Equal(t, sessionCost, hour.Usage.Totals.Cost)
+	assert.Equal(t, int64(17), hour.Usage.Totals.InputTokens)
+	assert.Equal(t, int64(3), hour.Usage.Totals.OutputTokens)
+	assert.Equal(t, money.MustParseDollars("0.007"), hour.Usage.Totals.Cost)
 	require.Len(t, hour.Usage.ByModel, 1)
-	assert.Equal(t, "model merged-dedup", hour.Usage.ByModel[0].Key)
-	require.Len(t, hour.Usage.ByProject, 1)
-	assert.Equal(t, "project dedup", hour.Usage.ByProject[0].Project)
+	assert.Equal(t, "model standalone winner", hour.Usage.ByModel[0].Key)
+	assert.Empty(t, hour.Usage.ByProject)
+
+	daily, err := d.GetDailyUsage(context.Background(), UsageFilter{
+		From:       "2026-07-28",
+		To:         "2026-07-28",
+		Timezone:   "UTC",
+		Breakdowns: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, daily.Totals.InputTokens, int(hour.Usage.Totals.InputTokens))
+	assert.Equal(t, daily.Totals.OutputTokens, int(hour.Usage.Totals.OutputTokens))
+	assert.Equal(t, daily.Totals.TotalCost, hour.Usage.Totals.Cost)
 	assert.Zero(t, hour.Activity.Totals.AgentMinutes)
 	assert.Equal(t, 1, hour.Activity.Totals.NewSessions)
 	assert.Equal(t, 1, hour.Activity.Totals.NewProjects)
-	assert.Equal(t, 1, hour.Activity.Totals.NewModels)
+	assert.Zero(t, hour.Activity.Totals.NewModels)
+}
+
+func TestReportingExportPreservesMessageOrdinalForDedup(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "fixture-ordinal", "", func(s *Session) {
+		s.Agent = "agent ordinal"
+		s.StartedAt = Ptr("2026-07-28T09:00:00Z")
+		s.EndedAt = Ptr("2026-07-28T09:06:00Z")
+	})
+	require.NoError(t, d.InsertMessages([]Message{
+		{
+			SessionID: "fixture-ordinal",
+			Ordinal:   0,
+			Role:      "user",
+			Content:   "synthetic prompt",
+			Timestamp: "2026-07-28T09:00:00Z",
+		},
+		{
+			SessionID:       "fixture-ordinal",
+			Ordinal:         1,
+			Role:            "assistant",
+			Content:         "synthetic first response",
+			Timestamp:       "2026-07-28T09:05:00Z",
+			Model:           "model-z-ordinal-winner",
+			ClaudeMessageID: "fixture-shared-message",
+			ClaudeRequestID: "fixture-shared-request",
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":29,"output_tokens":3}`,
+			),
+		},
+		{
+			SessionID:       "fixture-ordinal",
+			Ordinal:         2,
+			Role:            "assistant",
+			Content:         "synthetic rewritten response",
+			Timestamp:       "2026-07-28T09:05:00Z",
+			Model:           "model-a-semantic-runner-up",
+			ClaudeMessageID: "fixture-shared-message",
+			ClaudeRequestID: "fixture-shared-request",
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":11,"output_tokens":2}`,
+			),
+		},
+	}))
+
+	day, err := d.ExportReportingDay(context.Background(), ReportingExportOptions{
+		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+
+	hour := day.Hours[9]
+	assert.Equal(t, int64(29), hour.Usage.Totals.InputTokens)
+	assert.Equal(t, int64(3), hour.Usage.Totals.OutputTokens)
+	require.Len(t, hour.Usage.ByModel, 1)
+	assert.Equal(t, "model-z-ordinal-winner", hour.Usage.ByModel[0].Key)
+
+	daily, err := d.GetDailyUsage(context.Background(), UsageFilter{
+		From: "2026-07-28", To: "2026-07-28", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, daily.Totals.InputTokens, int(hour.Usage.Totals.InputTokens))
+	assert.Equal(t, daily.Totals.OutputTokens, int(hour.Usage.Totals.OutputTokens))
+}
+
+func TestFinalizeReportingUsageOrdering(t *testing.T) {
+	query := activity.Query{
+		RangeStart: time.Date(2026, 7, 28, 9, 0, 0, 0, time.UTC),
+		RangeEnd:   time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC),
+		EffectiveEnd: time.Date(
+			2026, 7, 28, 10, 0, 0, 0, time.UTC,
+		),
+	}
+	tests := []struct {
+		name      string
+		rows      []activity.UsageRow
+		wantInput int
+		wantCost  money.Money
+	}{
+		{
+			name: "lower ordinal wins before semantic fields",
+			rows: []activity.UsageRow{
+				{
+					SessionID:      "fixture-session",
+					MessageOrdinal: 2,
+					UsageSource:    "message",
+					UsageDedupKey:  "shared-ordinal",
+					Timestamp:      "2026-07-28T09:05:00Z",
+					Model:          "model-a",
+					InputTokens:    11,
+					Cost:           money.Money{Microdollars: 1100},
+					CostSource:     export.CostSourceReported,
+					Priced:         true,
+					Contributes:    true,
+				},
+				{
+					SessionID:      "fixture-session",
+					MessageOrdinal: 1,
+					UsageSource:    "usage_event",
+					UsageDedupKey:  "shared-ordinal",
+					Timestamp:      "2026-07-28T09:05:00Z",
+					Model:          "model-z",
+					InputTokens:    29,
+					Cost:           money.Money{Microdollars: 2900},
+					CostSource:     export.CostSourceReported,
+					Priced:         true,
+					Contributes:    true,
+				},
+			},
+			wantInput: 29,
+			wantCost:  money.Money{Microdollars: 2900},
+		},
+		{
+			name: "source settles an equal primary prefix",
+			rows: []activity.UsageRow{
+				{
+					SessionID:      "fixture-session",
+					MessageOrdinal: 1,
+					UsageSource:    "z-source",
+					UsageDedupKey:  "shared-source",
+					Timestamp:      "2026-07-28T09:05:00Z",
+					Model:          "model-a",
+					InputTokens:    13,
+					Cost:           money.Money{Microdollars: 1300},
+					CostSource:     export.CostSourceReported,
+					Priced:         true,
+					Contributes:    true,
+				},
+				{
+					SessionID:      "fixture-session",
+					MessageOrdinal: 1,
+					UsageSource:    "a-source",
+					UsageDedupKey:  "shared-source",
+					Timestamp:      "2026-07-28T09:05:00Z",
+					Model:          "model-z",
+					InputTokens:    23,
+					Cost:           money.Money{Microdollars: 2300},
+					CostSource:     export.CostSourceReported,
+					Priced:         true,
+					Contributes:    true,
+				},
+			},
+			wantInput: 23,
+			wantCost:  money.Money{Microdollars: 2300},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, reverse := range []bool{false, true} {
+				rows := append([]activity.UsageRow(nil), tt.rows...)
+				if reverse {
+					rows[0], rows[1] = rows[1], rows[0]
+				}
+				survivors := finalizeReportingUsage(query, rows)
+				require.Len(t, survivors, 1)
+				assert.Equal(t, tt.wantInput, survivors[0].InputTokens)
+				assert.Equal(t, tt.wantCost, survivors[0].Cost)
+			}
+		})
+	}
 }
 
 func reportingUsageBreakdownKeys(
