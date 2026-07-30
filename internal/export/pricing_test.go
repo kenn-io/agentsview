@@ -320,6 +320,36 @@ func TestPricingResolverReportedOnlyRowDoesNotCountPricingApplication(t *testing
 	assert.Equal(t, PricingApplication{}, model.Application)
 }
 
+func TestPricingResolverUnresolvedRequestPreservesComputedProvenanceWithoutApplication(t *testing.T) {
+	resolver := NewPricingResolver(nil)
+	lookup := resolver.Lookup("unpriced-request-model")
+	require.False(t, lookup.OK)
+
+	resolver.RecordComputedRequest("unpriced-request-model", lookup, 150_000, 0, 0)
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+
+	model := onlyPricingResolution(t, block.Models["unpriced-request-model"])
+	assert.Equal(t, CostSourceComputed, model.CostSource)
+	assert.Nil(t, model.MatchedPattern)
+	assert.Equal(t, PricingApplication{}, model.Application)
+}
+
+func TestPricingResolverUnresolvedAggregatePreservesComputedProvenanceWithoutApplication(t *testing.T) {
+	resolver := NewPricingResolver(nil)
+	lookup := resolver.Lookup("unpriced-aggregate-model")
+	require.False(t, lookup.OK)
+
+	resolver.RecordComputedAggregate("unpriced-aggregate-model", lookup)
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+
+	model := onlyPricingResolution(t, block.Models["unpriced-aggregate-model"])
+	assert.Equal(t, CostSourceComputed, model.CostSource)
+	assert.Nil(t, model.MatchedPattern)
+	assert.Equal(t, PricingApplication{}, model.Application)
+}
+
 func TestPricingResolverBuildBlockModelsAndFallback(t *testing.T) {
 	resolver := NewPricingResolver([]EffectivePricingRow{
 		{

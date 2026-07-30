@@ -222,6 +222,9 @@ func (r *PricingResolver) RecordResolvedComputedRequest(
 	}
 	rec := r.record(reportedModel, pricedModel, lookup)
 	rec.computed = true
+	if !lookup.OK {
+		return
+	}
 	band, ok := lookup.Rates.pricingBandForTokens(
 		inputTokens,
 		cacheWriteTokens,
@@ -249,6 +252,9 @@ func (r *PricingResolver) RecordResolvedComputedAggregate(
 	}
 	rec := r.record(reportedModel, pricedModel, lookup)
 	rec.computed = true
+	if !lookup.OK {
+		return
+	}
 	rec.aggregateRowCount++
 }
 
