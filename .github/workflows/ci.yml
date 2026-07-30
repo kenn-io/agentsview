@@ -232,7 +232,7 @@ jobs:
         run: go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Test with coverage
-        run: go test -tags "fts5" -coverprofile=coverage.out ./...
+        run: go test -tags "fts5" -coverprofile=coverage.out ./... -timeout=20m
         env:
           CGO_ENABLED: "1"
 

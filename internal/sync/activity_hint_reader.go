@@ -24,6 +24,9 @@ const (
 
 type activityHintCursor struct {
 	info           os.FileInfo
+	inode          int64
+	device         int64
+	hasIdentity    bool
 	offset         int64
 	boundaryDigest [sha256.Size]byte
 	boundaryLength int
@@ -71,9 +74,19 @@ func readActivityHints(
 		)
 	}
 
+	// Freeze identity now. Windows FileInfo resolves SameFile lazily from the
+	// path, so an old snapshot can otherwise resolve to its replacement.
+	inode, device := getFileIdentity(source.Path, info)
+	hasIdentity := inode != 0 || device != 0
+	sameFile := false
+	if cursor.hasIdentity && hasIdentity {
+		sameFile = cursor.inode == inode && cursor.device == device
+	} else if cursor.info != nil {
+		sameFile = os.SameFile(cursor.info, info)
+	}
 	if cursor.initialized &&
 		(cursor.info == nil ||
-			!os.SameFile(cursor.info, info) ||
+			!sameFile ||
 			info.Size() < cursor.offset) {
 		*cursor = activityHintCursor{}
 	}
@@ -138,6 +151,9 @@ func readActivityHints(
 
 	result.BytesRead = len(data)
 	cursor.info = info
+	cursor.inode = inode
+	cursor.device = device
+	cursor.hasIdentity = hasIdentity
 	cursor.offset = start + int64(len(data))
 	cursor.initialized = true
 	digest, length, err := readActivityHintBoundary(file, cursor.offset)
