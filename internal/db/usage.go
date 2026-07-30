@@ -1993,14 +1993,6 @@ func (db *DB) GetDailyUsage(
 	}
 	defer rows.Close()
 
-	// 4-tuple key for per-(date, project, agent, model) accumulation.
-	type accumKey struct {
-		date    string
-		project string
-		agent   string
-		machine string
-		model   string
-	}
 	type bucket struct {
 		inputTok  int
 		outputTok int
@@ -2009,11 +2001,11 @@ func (db *DB) GetDailyUsage(
 		cost      money.Money
 	}
 	type sessionCost struct {
-		estimated     map[accumKey]money.Money
+		estimated     map[usageCostAllocationKey]money.Money
 		authoritative *money.Money
 	}
 
-	accum := make(map[accumKey]*bucket)
+	accum := make(map[usageCostAllocationKey]*bucket)
 	sessionCosts := make(map[string]sessionCost)
 	useAuthoritativeCost := f.Model == "" && f.ExcludeModel == ""
 
@@ -2082,7 +2074,7 @@ func (db *DB) GetDailyUsage(
 				"summing daily usage cache savings: %w", priceErr)
 		}
 
-		key := accumKey{
+		key := usageCostAllocationKey{
 			date: date, project: r.project,
 			agent: r.agent, machine: r.machine, model: r.model,
 		}
@@ -2098,7 +2090,7 @@ func (db *DB) GetDailyUsage(
 
 		sc := sessionCosts[r.sessionID]
 		if sc.estimated == nil {
-			sc.estimated = make(map[accumKey]money.Money)
+			sc.estimated = make(map[usageCostAllocationKey]money.Money)
 		}
 		sc.estimated[key], priceErr = money.Add(sc.estimated[key], cost)
 		if priceErr != nil {
@@ -2126,38 +2118,14 @@ func (db *DB) GetDailyUsage(
 	for _, sessionID := range sessionIDs {
 		sc := sessionCosts[sessionID]
 		if sc.authoritative != nil {
-			keys := make([]accumKey, 0, len(sc.estimated))
-			for key := range sc.estimated {
-				keys = append(keys, key)
-			}
-			sort.Slice(keys, func(i, j int) bool {
-				a, b := keys[i], keys[j]
-				if a.date != b.date {
-					return a.date < b.date
-				}
-				if a.project != b.project {
-					return a.project < b.project
-				}
-				if a.agent != b.agent {
-					return a.agent < b.agent
-				}
-				if a.machine != b.machine {
-					return a.machine < b.machine
-				}
-				return a.model < b.model
-			})
-			weights := make([]money.Money, len(keys))
-			for i, key := range keys {
-				weights[i] = sc.estimated[key]
-			}
-			costs := export.AllocateCostByWeight(*sc.authoritative, weights)
-			for i, key := range keys {
+			costs := allocateUsageCostByKey(*sc.authoritative, sc.estimated)
+			for key, cost := range costs {
 				b := accum[key]
 				if b == nil {
 					b = &bucket{}
 					accum[key] = b
 				}
-				b.cost, err = money.Add(b.cost, costs[i])
+				b.cost, err = money.Add(b.cost, cost)
 				if err != nil {
 					return DailyUsageResult{}, fmt.Errorf(
 						"summing allocated daily usage cost: %w", err)

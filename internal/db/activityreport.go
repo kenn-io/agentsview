@@ -496,7 +496,7 @@ func (db *DB) loadActivityReportUsageCandidatesFrom(
 		rowsSQL := dailyUsageRowsSQLWithWhere(
 			usageMessageEligibility+" AND m.session_id IN "+ph,
 			usageEventEligibility+" AND ue.session_id IN "+ph)
-		query := dailyUsageRowSelectFromRows(rowsSQL) + `
+		query := dailyUsageRowSelectFromRowsWithMachine(rowsSQL, true) + `
 			AND u.ts >= ? AND u.ts <= ?`
 
 		args := make([]any, 0, len(chunkArgs)*2+2)
@@ -511,7 +511,7 @@ func (db *DB) loadActivityReportUsageCandidatesFrom(
 		defer rows.Close()
 
 		for rows.Next() {
-			r, scanErr := scanDailyUsageRow(rows)
+			r, scanErr := scanDailyUsageRowWithMachine(rows, true)
 			if scanErr != nil {
 				return fmt.Errorf(
 					"scanning activity report usage: %w", scanErr)
@@ -529,6 +529,8 @@ func (db *DB) loadActivityReportUsageCandidatesFrom(
 					SessionID:       r.sessionID,
 					Model:           r.model,
 					Timestamp:       r.ts,
+					Project:         r.project,
+					Machine:         r.machine,
 					MessageOrdinal:  ord,
 					UsageSource:     r.usageSource,
 					Agent:           r.agent,

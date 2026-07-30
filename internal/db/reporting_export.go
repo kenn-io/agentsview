@@ -136,7 +136,10 @@ func (db *DB) reportingHoursFromSnapshot(
 		append([]activity.UsageRow(nil), sessionUsage...),
 		standaloneUsage...,
 	)
-	usage = finalizeReportingUsage(query, usage)
+	usage, err = finalizeReportingUsage(query, usage)
+	if err != nil {
+		return nil, err
+	}
 	activityIDs := reportingSessionIDSet(ids)
 	activityUsage := reportingActivityUsage(usage, activityIDs)
 
@@ -329,13 +332,15 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 	loaded := []activity.UsageRow{}
 	for rows.Next() {
 		var row activity.UsageRow
+		var inputTokens, outputTokens int
+		var cacheCreationTokens, cacheReadTokens int
 		if err := rows.Scan(
 			&row.Timestamp,
 			&row.Model,
-			&row.InputTokens,
-			&row.OutputTokens,
-			&row.CacheCreationTokens,
-			&row.CacheReadTokens,
+			&inputTokens,
+			&outputTokens,
+			&cacheCreationTokens,
+			&cacheReadTokens,
 			&row.Cost,
 			&row.UsageDedupKey,
 		); err != nil {
@@ -343,6 +348,16 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 				"scanning standalone reporting usage: %w", err,
 			)
 		}
+		row.InputTokens,
+			row.OutputTokens,
+			row.CacheCreationTokens,
+			row.CacheReadTokens = usageEventRowTokens(
+			"cursor",
+			inputTokens,
+			outputTokens,
+			cacheCreationTokens,
+			cacheReadTokens,
+		)
 		row.Agent = "cursor"
 		row.MessageOrdinal = -1
 		row.UsageSource = "cursor"
@@ -384,6 +399,8 @@ func sortReportingUsage(rows []activity.UsageRow) {
 			cmp.Compare(a.SourceUUID, b.SourceUUID),
 			cmp.Compare(a.Model, b.Model),
 			cmp.Compare(a.Agent, b.Agent),
+			cmp.Compare(a.Project, b.Project),
+			cmp.Compare(a.Machine, b.Machine),
 			cmp.Compare(a.InputTokens, b.InputTokens),
 			cmp.Compare(a.OutputTokens, b.OutputTokens),
 			cmp.Compare(a.CacheCreationTokens, b.CacheCreationTokens),
@@ -405,7 +422,7 @@ func sortReportingUsage(rows []activity.UsageRow) {
 func finalizeReportingUsage(
 	query activity.Query,
 	rows []activity.UsageRow,
-) []activity.UsageRow {
+) ([]activity.UsageRow, error) {
 	sortReportingUsage(rows)
 	mask := activity.UsageSurvivorMask(
 		query.RangeStart, query.RangeEnd, query.EffectiveEnd, rows,
@@ -490,17 +507,81 @@ func mergeReportingSessions(
 	return out
 }
 
-func allocateReportingUsageCosts(rows []activity.UsageRow) []activity.UsageRow {
-	allocated := activity.AllocateUsageCosts(rows)
+func allocateReportingUsageCosts(
+	rows []activity.UsageRow,
+) ([]activity.UsageRow, error) {
 	out := append([]activity.UsageRow(nil), rows...)
+	type sessionCost struct {
+		carrier int
+		cost    money.Money
+		indices map[usageCostAllocationKey][]int
+	}
+	sessionCosts := make(map[string]*sessionCost)
 	for i := range out {
-		out[i].Cost = allocated[i].Cost
-		out[i].CostSource = allocated[i].CostSource
-		out[i].Priced = allocated[i].Priced
-		out[i].Contributes = allocated[i].Contributes
+		if out[i].SessionCost != nil {
+			sessionCosts[out[i].SessionID] = &sessionCost{
+				carrier: i,
+				cost:    *out[i].SessionCost,
+				indices: make(map[usageCostAllocationKey][]int),
+			}
+		}
+	}
+	for i, row := range out {
+		selected := sessionCosts[row.SessionID]
+		if selected == nil {
+			continue
+		}
+		key := usageCostAllocationKey{
+			date:    localDate(row.Timestamp, time.UTC),
+			project: row.Project,
+			agent:   row.Agent,
+			machine: row.Machine,
+			model:   row.Model,
+		}
+		selected.indices[key] = append(selected.indices[key], i)
+	}
+	for _, selected := range sessionCosts {
+		if len(selected.indices) == 0 {
+			out[selected.carrier].Cost = selected.cost
+			out[selected.carrier].CostSource = export.CostSourceReported
+			out[selected.carrier].Priced = true
+			out[selected.carrier].Contributes = true
+			continue
+		}
+		estimated := make(
+			map[usageCostAllocationKey]money.Money,
+			len(selected.indices),
+		)
+		for key, indices := range selected.indices {
+			for _, index := range indices {
+				cost, err := money.Add(estimated[key], rows[index].Cost)
+				if err != nil {
+					return nil, fmt.Errorf(
+						"summing reporting allocation weights: %w", err,
+					)
+				}
+				estimated[key] = cost
+			}
+		}
+		keyCosts := allocateUsageCostByKey(selected.cost, estimated)
+		for key, indices := range selected.indices {
+			weights := make([]money.Money, len(indices))
+			for i, index := range indices {
+				weights[i] = rows[index].Cost
+			}
+			costs := export.AllocateCostByWeight(keyCosts[key], weights)
+			for i, index := range indices {
+				out[index].Cost = costs[i]
+				out[index].CostSource = export.CostSourceReported
+				out[index].Priced = true
+				out[index].Contributes = true
+			}
+		}
+	}
+	for i := range out {
 		out[i].SessionCost = nil
 	}
-	return out
+	return out, nil
 }
 
 func (db *DB) reportingProjectIdentityMapFrom(

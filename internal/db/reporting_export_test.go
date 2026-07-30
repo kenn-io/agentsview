@@ -198,6 +198,215 @@ func TestReportingExportAllocatesAuthoritativeSessionCostBeforeHourPartition(
 	assert.Equal(t, int64(existing.Totals.InputTokens), hourlyInputTokens)
 }
 
+func TestReportingExportAllocatesAuthoritativeCostByDailyBreakdownKey(
+	t *testing.T,
+) {
+	d := testDB(t)
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{
+		{
+			ModelPattern: "model-a",
+			InputPerMTok: money.MustParseDollars("1"),
+		},
+		{
+			ModelPattern: "model-z",
+			InputPerMTok: money.MustParseDollars("1"),
+		},
+	}))
+	insertSession(t, d, "fixture-authoritative-key", "project-a", func(s *Session) {
+		s.Agent = "agent-a"
+		s.StartedAt = Ptr("2026-07-28T10:00:00Z")
+		s.EndedAt = Ptr("2026-07-28T10:03:00Z")
+	})
+	reportedCost := money.Money{Microdollars: 1}
+	require.NoError(t, d.ReplaceSessionUsageEvents(
+		"fixture-authoritative-key",
+		[]UsageEvent{
+			{
+				Source:      "fixture-source",
+				Model:       "model-z",
+				InputTokens: 1,
+				OccurredAt:  "2026-07-28T10:01:00Z",
+				DedupKey:    "first",
+			},
+			{
+				Source:      "fixture-source",
+				Model:       "model-a",
+				InputTokens: 1,
+				Cost:        &reportedCost,
+				CostStatus:  "exact",
+				CostSource:  CopilotReportedCostSource,
+				OccurredAt:  "2026-07-28T10:02:00Z",
+				DedupKey:    "second",
+			},
+		},
+	))
+
+	day, err := d.ExportReportingDay(context.Background(), ReportingExportOptions{
+		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	daily, err := d.GetDailyUsage(context.Background(), UsageFilter{
+		From:       "2026-07-28",
+		To:         "2026-07-28",
+		Timezone:   "UTC",
+		Breakdowns: true,
+	})
+	require.NoError(t, err)
+
+	require.Len(t, daily.Daily, 1)
+	exportedCosts := make(map[string]money.Money)
+	for _, breakdown := range day.Hours[10].Usage.ByModel {
+		exportedCosts[breakdown.Key] = breakdown.Cost
+	}
+	dailyCosts := make(map[string]money.Money)
+	for _, breakdown := range daily.Daily[0].ModelBreakdowns {
+		dailyCosts[breakdown.ModelName] = breakdown.Cost
+	}
+	assert.Equal(t, money.Money{}, exportedCosts["model-a"])
+	assert.Equal(t, money.Money{Microdollars: 1}, exportedCosts["model-z"])
+	assert.Equal(t, dailyCosts, exportedCosts)
+}
+
+func TestReportingExportPreservesZeroWeightAuthoritativeBreakdownKeys(
+	t *testing.T,
+) {
+	d := testDB(t)
+	insertSession(t, d, "fixture-authoritative-zero", "project-a", func(s *Session) {
+		s.Agent = "agent-a"
+		s.StartedAt = Ptr("2026-07-28T10:00:00Z")
+		s.EndedAt = Ptr("2026-07-28T10:03:00Z")
+	})
+	reportedCost := money.Money{Microdollars: 1}
+	require.NoError(t, d.ReplaceSessionUsageEvents(
+		"fixture-authoritative-zero",
+		[]UsageEvent{
+			{
+				Source:     "fixture-source",
+				Model:      "model-z",
+				OccurredAt: "2026-07-28T10:01:00Z",
+				DedupKey:   "first",
+			},
+			{
+				Source:     "fixture-source",
+				Model:      "model-a",
+				Cost:       &reportedCost,
+				CostStatus: "exact",
+				CostSource: CopilotReportedCostSource,
+				OccurredAt: "2026-07-28T10:02:00Z",
+				DedupKey:   "second",
+			},
+		},
+	))
+
+	day, err := d.ExportReportingDay(context.Background(), ReportingExportOptions{
+		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	daily, err := d.GetDailyUsage(context.Background(), UsageFilter{
+		From:       "2026-07-28",
+		To:         "2026-07-28",
+		Timezone:   "UTC",
+		Breakdowns: true,
+	})
+	require.NoError(t, err)
+
+	require.Len(t, daily.Daily, 1)
+	exportedCosts := make(map[string]money.Money)
+	for _, breakdown := range day.Hours[10].Usage.ByModel {
+		exportedCosts[breakdown.Key] = breakdown.Cost
+	}
+	dailyCosts := make(map[string]money.Money)
+	for _, breakdown := range daily.Daily[0].ModelBreakdowns {
+		dailyCosts[breakdown.ModelName] = breakdown.Cost
+	}
+	assert.Equal(t, money.Money{}, exportedCosts["model-a"])
+	assert.Equal(t, money.Money{Microdollars: 1}, exportedCosts["model-z"])
+	assert.Equal(t, dailyCosts, exportedCosts)
+}
+
+func TestReportingExportClampsStandaloneUsageTokens(t *testing.T) {
+	d := testDB(t)
+	require.NoError(t, d.InsertCursorUsageEvents([]CursorUsageEvent{
+		{
+			OccurredAt:       "2026-07-28T09:05:00Z",
+			Model:            "model-negative",
+			Kind:             "usage",
+			InputTokens:      -1,
+			OutputTokens:     -2,
+			CacheWriteTokens: -3,
+			CacheReadTokens:  -4,
+			DedupKey:         "negative",
+		},
+		{
+			OccurredAt:       "2026-07-28T09:06:00Z",
+			Model:            "model-oversized",
+			Kind:             "usage",
+			InputTokens:      MaxPlausibleTokens + 1,
+			OutputTokens:     MaxPlausibleTokens + 2,
+			CacheWriteTokens: MaxPlausibleTokens + 3,
+			CacheReadTokens:  MaxPlausibleTokens + 4,
+			DedupKey:         "oversized",
+		},
+	}))
+
+	day, err := d.ExportReportingDay(context.Background(), ReportingExportOptions{
+		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	daily, err := d.GetDailyUsage(context.Background(), UsageFilter{
+		From:       "2026-07-28",
+		To:         "2026-07-28",
+		Timezone:   "UTC",
+		Breakdowns: true,
+	})
+	require.NoError(t, err)
+
+	hour := day.Hours[9]
+	assert.Equal(t, int64(MaxPlausibleTokens), hour.Usage.Totals.InputTokens)
+	assert.Equal(t, int64(MaxPlausibleTokens), hour.Usage.Totals.OutputTokens)
+	assert.Equal(
+		t, int64(MaxPlausibleTokens),
+		hour.Usage.Totals.CacheCreationTokens,
+	)
+	assert.Equal(t, int64(MaxPlausibleTokens), hour.Usage.Totals.CacheReadTokens)
+	assert.Equal(t, daily.Totals.InputTokens, int(hour.Usage.Totals.InputTokens))
+	assert.Equal(t, daily.Totals.OutputTokens, int(hour.Usage.Totals.OutputTokens))
+	assert.Equal(
+		t,
+		daily.Totals.CacheCreationTokens,
+		int(hour.Usage.Totals.CacheCreationTokens),
+	)
+	assert.Equal(
+		t,
+		daily.Totals.CacheReadTokens,
+		int(hour.Usage.Totals.CacheReadTokens),
+	)
+	require.Len(t, hour.Usage.ByModel, 2)
+	for _, breakdown := range hour.Usage.ByModel {
+		switch breakdown.Key {
+		case "model-negative":
+			assert.Zero(t, breakdown.InputTokens)
+			assert.Zero(t, breakdown.OutputTokens)
+			assert.Zero(t, breakdown.CacheCreationTokens)
+			assert.Zero(t, breakdown.CacheReadTokens)
+		case "model-oversized":
+			assert.Equal(t, int64(MaxPlausibleTokens), breakdown.InputTokens)
+			assert.Equal(t, int64(MaxPlausibleTokens), breakdown.OutputTokens)
+			assert.Equal(
+				t,
+				int64(MaxPlausibleTokens),
+				breakdown.CacheCreationTokens,
+			)
+			assert.Equal(t, int64(MaxPlausibleTokens), breakdown.CacheReadTokens)
+		default:
+			assert.Fail(t, "unexpected model breakdown", breakdown.Key)
+		}
+	}
+}
+
 func TestReportingExportUsesOneCoherentReadSnapshot(t *testing.T) {
 	d := testDB(t)
 	opts := ReportingExportOptions{
@@ -592,7 +801,8 @@ func TestFinalizeReportingUsageOrdering(t *testing.T) {
 				if reverse {
 					rows[0], rows[1] = rows[1], rows[0]
 				}
-				survivors := finalizeReportingUsage(query, rows)
+				survivors, err := finalizeReportingUsage(query, rows)
+				require.NoError(t, err)
 				require.Len(t, survivors, 1)
 				assert.Equal(t, tt.wantInput, survivors[0].InputTokens)
 				assert.Equal(t, tt.wantCost, survivors[0].Cost)
