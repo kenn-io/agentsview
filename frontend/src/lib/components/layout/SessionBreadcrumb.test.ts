@@ -10,6 +10,7 @@ import { messages } from "../../stores/messages.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { setLocale } from "../../i18n/index.js";
 import { router } from "../../stores/router.svelte.js";
+import { ui } from "../../stores/ui.svelte.js";
 import { testMoney } from "../../test/money.js";
 import type { Money } from "../../money.js";
 import { copyToClipboard } from "../../utils/clipboard.js";
@@ -196,14 +197,74 @@ beforeEach(() => {
   sessions.activeSessionId = null;
   sessions.activeSessionUsageVersion = 0;
   sessions.childSessions = new Map();
+  ui.sidebarOpen = true;
+  ui.isMobileViewport = false;
 });
 
 afterEach(() => {
   setLocale("en");
   document.body.innerHTML = "";
+  ui.sidebarOpen = true;
+  ui.isMobileViewport = false;
 });
 
 describe("SessionBreadcrumb", () => {
+  it("places the desktop expand control to the left of the relocated filter", async () => {
+    ui.sidebarOpen = false;
+
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("claude"),
+        onBack: () => {},
+      },
+    });
+    await tick();
+
+    const controls = document.querySelector<HTMLElement>(
+      ".sidebar-controls",
+    );
+    const expandButton = controls?.querySelector<HTMLButtonElement>(
+      'button[aria-label="Open sidebar"]',
+    );
+    const filterButton = controls?.querySelector<HTMLButtonElement>(
+      ".filter-btn",
+    );
+
+    expect(controls).not.toBeNull();
+    expect(expandButton).not.toBeNull();
+    expect(filterButton).not.toBeNull();
+    expect(expandButton?.nextElementSibling).toBe(filterButton);
+    expect(expandButton?.title).toBe("Toggle sidebar (b)");
+
+    expandButton!.click();
+    await tick();
+
+    expect(ui.sidebarOpen).toBe(true);
+    await unmount(component);
+  });
+
+  it("does not duplicate collapsed sidebar controls below the mobile title bar", async () => {
+    ui.sidebarOpen = false;
+    ui.isMobileViewport = true;
+
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("claude"),
+        onBack: () => {},
+      },
+    });
+    await tick();
+
+    expect(document.querySelector(".sidebar-controls")).toBeNull();
+    expect(
+      document.querySelector('button[aria-label="Open sidebar"]'),
+    ).toBeNull();
+
+    await unmount(component);
+  });
+
   it("renders session reading controls in Simplified Chinese", async () => {
     setLocale("zh-CN");
     openersService.getApiV1Openers.mockResolvedValue({

@@ -16,6 +16,7 @@ import { readProgress } from "../../stores/read-progress.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import type { Session } from "../../api/types.js";
 import { starred } from "../../stores/starred.svelte.js";
+import { ui } from "../../stores/ui.svelte.js";
 import { m, setLocale } from "../../i18n/index.js";
 import {
   ITEM_HEIGHT,
@@ -91,6 +92,8 @@ describe("SessionList filter dropdown", () => {
     readProgress.reset();
     starred.filterOnly = false;
     starred.ids = new Set();
+    ui.sidebarOpen = true;
+    ui.isMobileViewport = false;
     setLocale("en");
     localStorage.clear();
   });
@@ -109,6 +112,8 @@ describe("SessionList filter dropdown", () => {
     clientHeightSpy?.mockRestore();
     rafSpy?.mockRestore();
     readProgress.reset();
+    ui.sidebarOpen = true;
+    ui.isMobileViewport = false;
     vi.restoreAllMocks();
   });
 
@@ -146,6 +151,39 @@ describe("SessionList filter dropdown", () => {
     expect(filterButton).not.toBeNull();
     expect(filterButton?.title).toBe("Filter sessions");
     expect(filterButton?.getAttribute("aria-label")).toBe("Filters");
+  });
+
+  it("places the desktop collapse control to the right of the filter", async () => {
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    const filterButton = document.querySelector<HTMLButtonElement>(
+      ".filter-btn",
+    );
+    const collapseButton = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Close sidebar"]',
+    );
+
+    expect(filterButton).not.toBeNull();
+    expect(collapseButton).not.toBeNull();
+    expect(filterButton?.nextElementSibling).toBe(collapseButton);
+    expect(collapseButton?.title).toBe("Toggle sidebar (b)");
+
+    collapseButton!.click();
+    await tick();
+
+    expect(ui.sidebarOpen).toBe(false);
+  });
+
+  it("does not duplicate the hamburger inside the mobile drawer", async () => {
+    ui.isMobileViewport = true;
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    expect(
+      document.querySelector('button[aria-label="Close sidebar"]'),
+    ).toBeNull();
   });
 
   it("renders translated sidebar filter controls and row actions", async () => {

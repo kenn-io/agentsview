@@ -50,6 +50,8 @@ const approvedIconNames = [
   "MoonIcon",
   "MoreHorizontalIcon",
   "MousePointer2Icon",
+  "PanelLeftCloseIcon",
+  "PanelLeftOpenIcon",
   "PencilIcon",
   "PinIcon",
   "PlusIcon",

@@ -2,9 +2,11 @@
   import { onDestroy, onMount } from "svelte";
   import { m } from "../../i18n/index.js";
   import { sessions } from "../../stores/sessions.svelte.js";
+  import { ui } from "../../stores/ui.svelte.js";
   import { starred } from "../../stores/starred.svelte.js";
   import SessionItem from "./SessionItem.svelte";
   import SessionFilterControl from "../filters/SessionFilterControl.svelte";
+  import SidebarToggleButton from "../layout/SidebarToggleButton.svelte";
   import {
     ChevronDownIcon,
     ChevronRightIcon,
@@ -494,6 +496,9 @@
       onClearExtra={() => sessions.setTerminationFilter("")}
       extraSections={statusFilterSection}
     />
+    {#if !ui.isMobileViewport}
+      <SidebarToggleButton />
+    {/if}
     {#snippet statusFilterSection()}
       <div class="filter-section">
         <div class="filter-section-label">{m.sidebar_status()}</div>

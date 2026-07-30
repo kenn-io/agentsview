@@ -8,6 +8,7 @@
   "app_undo_undo": "실행 취소",
   "nav_toggle_sidebar": "사이드바 전환",
   "nav_toggle_sidebar_shortcut": "사이드바 전환 (b)",
+  "nav_open_sidebar": "사이드바 열기",
   "nav_close_sidebar": "사이드바 닫기",
   "nav_resize_sidebar": "사이드바 크기 조정",
   "nav_home": "홈",

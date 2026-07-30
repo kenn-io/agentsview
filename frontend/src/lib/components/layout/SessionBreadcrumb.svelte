@@ -39,6 +39,8 @@
   import { normalizeMessagePreview } from "../../utils/messages.js";
   import { getGradeStyle, getGradeLabel } from "../../utils/grade.js";
   import SignalPanel from "../content/SignalPanel.svelte";
+  import SessionFilterControl from "../filters/SessionFilterControl.svelte";
+  import SidebarToggleButton from "./SidebarToggleButton.svelte";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { insights } from "../../stores/insights.svelte.js";
@@ -741,6 +743,16 @@
 
 
 <div class="session-breadcrumb">
+  {#if !ui.isMobileViewport && !ui.sidebarOpen}
+    <div class="sidebar-controls">
+      <SidebarToggleButton />
+      <SessionFilterControl
+        showDisplay={false}
+        showStarred={false}
+        align="left"
+      />
+    </div>
+  {/if}
   <button
     class="breadcrumb-link"
     onclick={onBack}
@@ -1122,6 +1134,12 @@
     flex-shrink: 0;
     font-size: 11px;
     color: var(--text-muted);
+  }
+
+  .sidebar-controls {
+    position: relative;
+    display: flex;
+    align-items: center;
   }
 
   .breadcrumb-link {

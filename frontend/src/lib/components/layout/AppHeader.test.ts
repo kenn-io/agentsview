@@ -28,6 +28,7 @@ vi.mock("../../utils/clipboard.js", () => ({
 import { sessions } from "../../stores/sessions.svelte.js";
 import { sync } from "../../stores/sync.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
+import { router } from "../../stores/router.svelte.js";
 import { setLocale } from "../../i18n/index.js";
 import type { Session } from "../../api/types.js";
 
@@ -62,7 +63,9 @@ describe("AppHeader export actions", () => {
     sessions.sessions = [testSession()];
     sync.serverVersion = null;
     ui.isMobileViewport = false;
+    ui.sidebarOpen = true;
     ui.followLatest = false;
+    router.route = "sessions";
     setLocale("en");
   });
 
@@ -72,6 +75,9 @@ describe("AppHeader export actions", () => {
       component = undefined;
     }
     document.body.innerHTML = "";
+    ui.isMobileViewport = false;
+    ui.sidebarOpen = true;
+    router.route = "sessions";
   });
 
   it("copies markdown export link from export menu", async () => {
@@ -158,7 +164,7 @@ describe("AppHeader export actions", () => {
     expect(followButton!.classList.contains("active")).toBe(false);
   });
 
-  it("labels compact title-bar actions with hover hints", async () => {
+  it("keeps the sidebar toggle out of the desktop title bar", async () => {
     component = mount(AppHeader, { target: document.body });
     await tick();
 
@@ -169,10 +175,28 @@ describe("AppHeader export actions", () => {
       'button[aria-label="Keyboard shortcuts"]',
     );
 
-    expect(sidebarButton).not.toBeNull();
-    expect(sidebarButton?.title).toBe("Toggle sidebar (b)");
+    expect(sidebarButton).toBeNull();
     expect(shortcutsButton).not.toBeNull();
     expect(shortcutsButton?.title).toBe("Keyboard shortcuts (?)");
+  });
+
+  it("keeps the mobile hamburger and its drawer behavior", async () => {
+    ui.isMobileViewport = true;
+    ui.sidebarOpen = true;
+
+    component = mount(AppHeader, { target: document.body });
+    await tick();
+
+    const sidebarButton = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Toggle sidebar"]',
+    );
+    expect(sidebarButton).not.toBeNull();
+    expect(sidebarButton?.title).toBe("Toggle sidebar (b)");
+
+    sidebarButton!.click();
+    await tick();
+
+    expect(ui.sidebarOpen).toBe(false);
   });
 
   it("renders every route as a primary-nav tab", async () => {
