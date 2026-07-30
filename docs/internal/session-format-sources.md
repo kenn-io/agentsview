@@ -18,6 +18,30 @@ computes later with its pricing catalog. A compatible upstream implementation,
 independent parser, or recorded fixture is useful evidence for a format, but is
 called out when it is not the product's own producer source.
 
+## Pricing Catalog Evidence
+
+Agentsview's fetched and embedded token prices come from LiteLLM's
+[`model_prices_and_context_window.json`](https://github.com/BerriAI/litellm/blob/551e5d097c11f08fd2400a25a651b1844fcf89c2/model_prices_and_context_window.json)
+at pinned commit `551e5d097c11f08fd2400a25a651b1844fcf89c2`. LiteLLM's
+[`cost_per_token` implementation](https://github.com/BerriAI/litellm/blob/551e5d097c11f08fd2400a25a651b1844fcf89c2/litellm/litellm_core_utils/llm_cost_calc/utils.py)
+shows that these catalog fields are request-pricing thresholds rather than
+model-name conventions.
+
+Agentsview recognizes the anchored standard field shape
+`input_cost_per_token_above_<N>[k]_tokens`, including the published 200K and
+272K bands, and reads output, cache-creation, and cache-read companions with the
+same suffix. A band applies only when whole-request input is strictly greater
+than its threshold; when several bands exist, the highest eligible threshold
+wins. Additional suffixes for Batch, Flex, Priority, regional, or other service
+tiers are deliberately excluded because stored usage does not identify those
+variants.
+
+Claude and Codex session artifacts provide normalized input, output,
+cache-creation, and cache-read token categories, but they do not supply this
+pricing metadata. Agentsview therefore uses their request boundaries and token
+counts with the catalog bands; it does not infer thresholds from provider or
+model names.
+
 Unless an entry states otherwise, entries were last verified on 2026-07-19. A
 pinned revision is a reproducible research snapshot, not a claim that it
 produced every historical artifact that Agentsview accepts. Where an entry

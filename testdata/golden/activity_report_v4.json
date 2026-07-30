@@ -5,8 +5,8 @@
     "table_version": "2026-07-03T12:00:00Z",
     "latest_row_updated_at": "2026-07-03T12:00:00Z",
     "custom_override_count": 0,
-    "effective_row_count": 2432,
-    "digest": "sha256:af18e039bcb7f6e32f7db44fe28c37ce348e90236bdd176f72307c36b8a0e831",
+    "effective_row_count": 2537,
+    "digest": "sha256:353de9ad69eeec047ba50a6333d5a021b2de2edc96c197df6628aa4f55368f04",
     "cost_source": "mixed",
     "fallback": {
       "used": false,
@@ -31,7 +31,13 @@
             "cache_read_cost_per_mtok": {
               "microdollars": 500000
             },
-            "cost_source": "computed"
+            "cost_source": "computed",
+            "bands": null,
+            "application": {
+              "base_request_count": 1,
+              "aggregate_row_count": 0,
+              "bands": null
+            }
           }
         ]
       },
@@ -53,7 +59,13 @@
             "cache_read_cost_per_mtok": {
               "microdollars": 250000
             },
-            "cost_source": "reported"
+            "cost_source": "reported",
+            "bands": null,
+            "application": {
+              "base_request_count": 0,
+              "aggregate_row_count": 0,
+              "bands": null
+            }
           }
         ]
       }

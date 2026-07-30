@@ -155,20 +155,21 @@ surfaces. Usage and activity already emitted `schema_version: 1` before 0.38,
 and the session-summary v1 contract shipped in 0.37.1. Releases 0.38.0 and
 0.38.1 emitted the substantially revised project-evidence shape while still
 reporting version 1. Version 2 corrected those markers, version 3 introduced
-exact microdollar money objects, and current builds emit version 4 with
-resolved-model pricing provenance. Those two transitional releases must not be
-treated as v1-compatible. Consumers should require the expected `schema_version`
-and ignore unknown additive fields. The commands do not provide an
-earlier-version output mode.
+exact microdollar money objects, and version 4 adds resolved-model pricing
+provenance with complete request-pricing bands and application counts. Those
+two transitional releases must not be treated as v1-compatible. Consumers
+should require the expected `schema_version` and ignore unknown additive fields.
+The commands do not provide an earlier-version output mode.
 
 The activity report includes the shared report-level `pricing` and `projects`
 blocks. `pricing.models` is keyed by reported model names. Each entry contains
 an aggregate `cost_source` and explicit `resolutions` with `priced_model` and
 effective rate fields such as `input_cost_per_mtok`, `output_cost_per_mtok`,
-`cache_write_cost_per_mtok`, and `cache_read_cost_per_mtok`. Every
-project-bearing report row contains an opaque `project_key`. `projects` is keyed
-by that value and carries the presentation-only `display_label`; unknown project
-identity is represented by an explicit `resolution` with `identity` omitted.
+`cache_write_cost_per_mtok`, and `cache_read_cost_per_mtok`, plus available
+`bands` and report-specific `application` counts. Every project-bearing report
+row contains an opaque `project_key`. `projects` is keyed by that value and
+carries the presentation-only `display_label`; unknown project identity is
+represented by an explicit `resolution` with `identity` omitted.
 
 See [Token Usage & Costs](/token-usage/#json-contract) for the shared bump
 rules, [Pricing Provenance](/token-usage/#pricing-provenance) for pricing digest

@@ -52,7 +52,13 @@ JSON output is one document:
             "output_cost_per_mtok": {"microdollars": 8000000},
             "cache_write_cost_per_mtok": {"microdollars": 3000000},
             "cache_read_cost_per_mtok": {"microdollars": 500000},
-            "cost_source": "computed"
+            "cost_source": "computed",
+            "bands": null,
+            "application": {
+              "base_request_count": 1,
+              "aggregate_row_count": 0,
+              "bands": null
+            }
           }
         ]
       }
@@ -279,13 +285,14 @@ current privacy-bounded project, repository, worktree, and checkout evidence
 shape but mistakenly continued to report version 1. Current builds report
 version 4. Version 2 corrected the project-evidence marker, version 3 introduced
 exact microdollar money objects, and version 4 adds explicit
-reported-to-priced-model resolutions. Payloads from the two transitional
-releases must not be treated as v1-compatible. There is no flag to request an
-earlier output version. Additive fields do not require a bump, but row semantic
-changes, field type changes, sort order changes, cursor semantics changes,
-required-field meaning changes, field removal, pricing digest canonicalization
-changes, project key derivation changes, remote normalization changes, path
-fallback normalization changes, and new closed-enum values require a bump.
+reported-to-priced-model resolutions with complete request-pricing bands and
+application counts. Payloads from the two transitional releases must not be
+treated as v1-compatible. There is no flag to request an earlier output version.
+Additive fields do not require a bump, but row semantic changes, field type
+changes, sort order changes, cursor semantics changes, required-field meaning
+changes, field removal, pricing digest canonicalization changes, project key
+derivation changes, remote normalization changes, path fallback normalization
+changes, and new closed-enum values require a bump.
 
 Consumers should require the expected `schema_version` and ignore unknown
 additive fields.

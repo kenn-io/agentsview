@@ -69,7 +69,7 @@ func TestStoreGetDailyUsageUsesFallbackPricing(t *testing.T) {
 		Timezone: "UTC",
 	})
 	require.NoError(t, err, "GetDailyUsage")
-	assert.Equal(t, money.MustParseDollars("3"), result.Totals.TotalCost)
+	assert.Equal(t, money.MustParseDollars("6"), result.Totals.TotalCost)
 	assert.Len(t, result.Daily, 1)
 }
 
