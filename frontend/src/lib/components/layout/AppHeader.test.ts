@@ -197,6 +197,7 @@ describe("AppHeader export actions", () => {
     ]) {
       expect(labels).toContain(expected);
     }
+    expect(labels).not.toContain("Token Usage");
   });
 
   it("distinguishes global sync from page refresh controls", async () => {

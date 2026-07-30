@@ -3734,6 +3734,61 @@ func newSyncedStore(t *testing.T) (*Store, syncFixture) {
 	return NewStoreFromDB(syncer.DB()), fixture
 }
 
+func TestDuckTopSessionsRanksBySelectedTokenTypes(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	writes := []db.SessionBatchWrite{
+		{
+			Session: syncSession(
+				"input-heavy", "demo", "input-heavy",
+				"2026-02-01T12:00:00Z", 1,
+			),
+			UsageEvents: []db.UsageEvent{{
+				Source: "provider", Model: "model",
+				InputTokens: 1000, OutputTokens: 1,
+				OccurredAt: "2026-02-01T12:01:00Z",
+				DedupKey:   "input-heavy",
+			}},
+			DataVersion: 1,
+		},
+		{
+			Session: syncSession(
+				"output-heavy", "demo", "output-heavy",
+				"2026-02-01T13:00:00Z", 1,
+			),
+			UsageEvents: []db.UsageEvent{{
+				Source: "provider", Model: "model",
+				InputTokens: 10, OutputTokens: 50,
+				OccurredAt: "2026-02-01T13:01:00Z",
+				DedupKey:   "output-heavy",
+			}},
+			DataVersion: 1,
+		},
+	}
+	_, err := local.WriteSessionBatchAtomic(writes)
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	top, err := store.GetTopSessionsByCost(ctx, db.UsageFilter{
+		From:                  "2026-02-01",
+		To:                    "2026-02-01",
+		Timezone:              "UTC",
+		TopSessionsSort:       db.TopSessionsSortTokens,
+		TopSessionsTokenTypes: db.UsageTokenTypeOutput,
+	}, 1)
+	require.NoError(t, err)
+	require.Len(t, top, 1)
+	assert.Equal(t, "output-heavy", top[0].SessionID)
+	assert.Equal(t, 10, top[0].InputTokens)
+	assert.Equal(t, 50, top[0].OutputTokens)
+	assert.Equal(t, 60, top[0].TotalTokens)
+}
+
 func TestDuckUsageQuantizesCostBeforeAggregation(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)

@@ -847,7 +847,7 @@ Response excerpt:
     "table_version": "litellm-398a0b15378c",
     "latest_row_updated_at": "2026-06-20T18:40:00Z",
     "custom_override_count": 0,
-    "effective_row_count": 2428,
+    "effective_row_count": 2432,
     "digest": "sha256:8d815a1737bce68fa1a19ba977bf33c8c8efcc74deb954fcf62ce80e46e75f2c",
     "cost_source": "mixed",
     "fallback": {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -65,7 +66,9 @@ type UsageFilterInput struct {
 
 type usageTopSessionsInput struct {
 	UsageFilterInput
-	Limit int `query:"limit" minimum:"0" maximum:"100" default:"20" doc:"Maximum number of sessions"`
+	Limit      int    `query:"limit" minimum:"0" maximum:"100" default:"20" doc:"Maximum number of sessions"`
+	Sort       string `query:"sort" enum:"cost,tokens" default:"cost" doc:"Rank sessions by cost or selected token types"`
+	TokenTypes string `query:"token_types" doc:"Comma-separated token counters for token ranking: input, cache_write, cache_read, output"`
 }
 
 type usageComparisonInput struct {
@@ -294,6 +297,20 @@ func (s *Server) humaUsageTopSessions(
 		return nil, err
 	}
 	f.Breakdowns = false
+	switch strings.ToLower(strings.TrimSpace(in.Sort)) {
+	case "", db.TopSessionsSortCost:
+		f.TopSessionsSort = db.TopSessionsSortCost
+	case db.TopSessionsSortTokens:
+		f.TopSessionsSort = db.TopSessionsSortTokens
+	default:
+		return nil, huma.Error400BadRequest("sort must be cost or tokens")
+	}
+	f.TopSessionsTokenTypes, err = db.ParseUsageTokenTypes(in.TokenTypes)
+	if err != nil {
+		return nil, huma.Error400BadRequest(
+			"invalid token_types: " + err.Error(),
+		)
+	}
 	limit := in.Limit
 	if limit <= 0 {
 		limit = 20

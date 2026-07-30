@@ -627,6 +627,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newGeminiProviderFactory(def)
 	case AgentKimi:
 		return newKimiProviderFactory(def)
+	case AgentKimiWork:
+		return newKimiWorkProviderFactory(def)
 	case AgentKiro:
 		return newKiroProviderFactory(def)
 	case AgentKiroIDE:

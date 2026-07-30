@@ -15,9 +15,19 @@
     items: TreemapItem[];
     height?: number;
     onSelect?: (id: string) => void;
+    formatValue?: (value: number) => string;
   }
 
-  const { items, height = 260, onSelect }: Props = $props();
+  function formatCost(value: number): string {
+    return formatMoney(moneyFromMicrodollars(value));
+  }
+
+  const {
+    items,
+    height = 260,
+    onSelect,
+    formatValue = formatCost,
+  }: Props = $props();
 
   let containerEl: HTMLDivElement | undefined = $state();
   let width = $state(600);
@@ -132,7 +142,7 @@
           y={tile.y + 30}
           class="tile-value"
         >
-          {formatMoney(moneyFromMicrodollars(tile.value))}
+          {formatValue(tile.value)}
         </text>
         {#if tile.meta}
           <text

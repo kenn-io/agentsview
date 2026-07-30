@@ -10,5 +10,6 @@ export type ExportEffectiveModelRate = {
   input_cost_per_mtok: MoneyMoney;
   matched_pattern: string | null;
   output_cost_per_mtok: MoneyMoney;
+  priced_model: string;
 };
 

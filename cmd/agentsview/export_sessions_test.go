@@ -249,15 +249,15 @@ func TestMergeExportSessionsPricingTreatsOnlyComputedNoModelPagesAsNeutral(
 ) {
 	noModels := &export.PricingBlock{
 		CostSource: export.CostSourceComputed,
-		Models:     map[string]export.EffectiveModelRate{},
+		Models:     map[string]export.ModelPricingProvenance{},
 	}
 	mixedNoModels := &export.PricingBlock{
 		CostSource: export.CostSourceMixed,
-		Models:     map[string]export.EffectiveModelRate{},
+		Models:     map[string]export.ModelPricingProvenance{},
 	}
 	reported := &export.PricingBlock{
 		CostSource: export.CostSourceReported,
-		Models: map[string]export.EffectiveModelRate{
+		Models: map[string]export.ModelPricingProvenance{
 			"reported-model": {
 				CostSource: export.CostSourceReported,
 			},
@@ -278,6 +278,53 @@ func TestMergeExportSessionsPricingTreatsOnlyComputedNoModelPagesAsNeutral(
 
 	got = mergeExportSessionsPricing(mixedNoModels, noModels)
 	assert.Equal(t, export.CostSourceMixed, got.CostSource)
+}
+
+func TestMergeExportSessionsPricingCombinesReportedModelResolutions(t *testing.T) {
+	base := &export.PricingBlock{
+		CostSource: export.CostSourceComputed,
+		Models: map[string]export.ModelPricingProvenance{
+			"kimi-for-coding": {
+				CostSource: export.CostSourceComputed,
+				Resolutions: []export.EffectiveModelRate{{
+					PricedModel: "kimi-k3",
+					CostSource:  export.CostSourceComputed,
+				}},
+			},
+		},
+	}
+	next := &export.PricingBlock{
+		CostSource: export.CostSourceMixed,
+		Models: map[string]export.ModelPricingProvenance{
+			"kimi-for-coding": {
+				CostSource: export.CostSourceMixed,
+				Resolutions: []export.EffectiveModelRate{
+					{
+						PricedModel: "moonshot/kimi-k2.6",
+						CostSource:  export.CostSourceComputed,
+					},
+					{
+						PricedModel: "kimi-k3",
+						CostSource:  export.CostSourceReported,
+					},
+				},
+			},
+		},
+	}
+
+	got := mergeExportSessionsPricing(base, next)
+
+	require.Contains(t, got.Models, "kimi-for-coding")
+	provenance := got.Models["kimi-for-coding"]
+	assert.Equal(t, export.CostSourceMixed, provenance.CostSource)
+	require.Len(t, provenance.Resolutions, 2)
+	assert.Equal(t, "kimi-k3", provenance.Resolutions[0].PricedModel)
+	assert.Equal(t, export.CostSourceMixed,
+		provenance.Resolutions[0].CostSource)
+	assert.Equal(t, "moonshot/kimi-k2.6",
+		provenance.Resolutions[1].PricedModel)
+	assert.Equal(t, export.CostSourceComputed,
+		provenance.Resolutions[1].CostSource)
 }
 
 func TestExportSessionsAllNDJSONCursorNextEmpty(t *testing.T) {
@@ -667,7 +714,7 @@ func TestExportSessionsJSONGolden(t *testing.T) {
 	assert.NotContains(t, stdout, `"machine":"golden-host"`)
 	assert.NotContains(t, stdout, `"root_path":"/`)
 
-	assertGoldenBytes(t, "session_export_v3.json", []byte(stdout))
+	assertGoldenBytes(t, "session_export_v4.json", []byte(stdout))
 }
 
 func TestExportSessionsNDJSONGolden(t *testing.T) {
@@ -682,7 +729,7 @@ func TestExportSessionsNDJSONGolden(t *testing.T) {
 	require.NoError(t, err, "export sessions ndjson golden")
 	require.Empty(t, stderr)
 
-	assertGoldenBytes(t, "session_export_v3.ndjson", []byte(stdout))
+	assertGoldenBytes(t, "session_export_v4.ndjson", []byte(stdout))
 }
 
 func firstExportSessionsCursor(t *testing.T) string {

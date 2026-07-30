@@ -5,6 +5,7 @@
   import type { UsagePairwiseDimension } from "../../api/types/usage.js";
   import type { Money } from "../../money.js";
   import { formatMoney, formatSignedMoney } from "../../money.js";
+  import { sumSelectedTokens } from "../../stores/usageTokenTypes.js";
 
   function fmtCount(value: number): string {
     return String(value);
@@ -92,6 +93,8 @@
     },
   ]);
 
+  const isTokenMode = $derived(usage.mode === "token");
+
   type MetricRow = {
     label: string;
     left: string;
@@ -108,6 +111,74 @@
   const rows = $derived.by((): MetricRow[] => {
     const comparison = usage.pairwiseComparison;
     if (!comparison) return [];
+
+    if (isTokenMode) {
+      const leftTokens = sumSelectedTokens(
+        comparison.left,
+        usage.selectedTokenTypes,
+      );
+      const rightTokens = sumSelectedTokens(
+        comparison.right,
+        usage.selectedTokenTypes,
+      );
+      const tokenDelta = rightTokens - leftTokens;
+      const tokenRatio = leftTokens === 0
+        ? null
+        : tokenDelta / leftTokens;
+      const leftPerSession = comparison.left.sessionCount > 0
+        ? leftTokens / comparison.left.sessionCount
+        : null;
+      const rightPerSession = comparison.right.sessionCount > 0
+        ? rightTokens / comparison.right.sessionCount
+        : null;
+      const perSessionDelta =
+        leftPerSession === null || rightPerSession === null
+          ? null
+          : rightPerSession - leftPerSession;
+      const perSessionRatio =
+        leftPerSession === null || leftPerSession === 0 ||
+          perSessionDelta === null
+          ? null
+          : perSessionDelta / leftPerSession;
+      return [
+        {
+          label: m.usage_pairwise_total_tokens(),
+          left: fmtTokens(leftTokens),
+          right: fmtTokens(rightTokens),
+          delta: fmtSignedTokens(tokenDelta),
+          ratio: fmtRatio(tokenRatio),
+        },
+        {
+          label: m.analytics_col_sessions(),
+          left: fmtCount(comparison.left.sessionCount),
+          right: fmtCount(comparison.right.sessionCount),
+          delta: fmtSignedCount(comparison.deltas.sessionCountDelta),
+          ratio: fmtRatio(comparison.deltas.sessionCountDeltaRatio),
+        },
+        {
+          label: m.usage_pairwise_tokens_per_session(),
+          left: fmtMaybeTokens(leftPerSession),
+          right: fmtMaybeTokens(rightPerSession),
+          delta: fmtMaybeSignedTokens(perSessionDelta),
+          ratio: fmtRatio(perSessionRatio),
+        },
+        {
+          label: m.usage_input_tokens(),
+          left: fmtTokens(comparison.left.inputTokens),
+          right: fmtTokens(comparison.right.inputTokens),
+          delta: fmtSignedTokens(comparison.deltas.inputTokensDelta),
+          ratio: fmtRatio(comparison.deltas.inputTokensDeltaRatio),
+        },
+        {
+          label: m.analytics_metric_output_tokens(),
+          left: fmtTokens(comparison.left.outputTokens),
+          right: fmtTokens(comparison.right.outputTokens),
+          delta: fmtSignedTokens(comparison.deltas.outputTokensDelta),
+          ratio: fmtRatio(comparison.deltas.outputTokensDeltaRatio),
+        },
+      ];
+    }
+
     return [
       {
         label: m.usage_total_cost(),
@@ -165,8 +236,8 @@
 <section class="pairwise-panel">
   <div class="panel-header">
     <div>
-      <h2>{m.usage_pairwise_title()}</h2>
-      <p>{m.usage_pairwise_subtitle()}</p>
+      <h2>{isTokenMode ? m.usage_pairwise_tokens_title() : m.usage_pairwise_title()}</h2>
+      <p>{isTokenMode ? m.usage_pairwise_tokens_subtitle() : m.usage_pairwise_subtitle()}</p>
     </div>
   </div>
 

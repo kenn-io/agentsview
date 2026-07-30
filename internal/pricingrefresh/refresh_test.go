@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -206,6 +207,103 @@ func TestEnsureCurrentCancellationAllowsImmediateRetry(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, retryCalls)
+}
+
+func TestRefreshCurrentFetchesDespiteRecentAttempt(t *testing.T) {
+	database := testDB(t)
+	now := pricingTestNow()
+	seedPricingAttempt(t, database, now, 10*time.Minute)
+
+	err := refreshCurrent(context.Background(), database, func(
+		context.Context,
+	) ([]pricing.ModelPricing, error) {
+		return []pricing.ModelPricing{{
+			ModelPattern: "scheduled-model",
+		}}, nil
+	}, now)
+
+	require.NoError(t, err)
+	price, err := database.GetModelPricing("scheduled-model")
+	require.NoError(t, err)
+	require.NotNil(t, price)
+	assertPricingAttemptMeta(t, database, now.Format(time.RFC3339))
+}
+
+func TestRefreshCurrentSkipsWhileEnsureCurrentInFlight(t *testing.T) {
+	database := testDB(t)
+	now := pricingTestNow()
+	ensureFetchStarted := make(chan struct{})
+	releaseEnsureFetch := make(chan struct{}, 1)
+	ensureDone := make(chan error, 1)
+
+	go func() {
+		ensureDone <- ensureCurrent(context.Background(), database, func(
+			context.Context,
+		) ([]pricing.ModelPricing, error) {
+			close(ensureFetchStarted)
+			<-releaseEnsureFetch
+			return []pricing.ModelPricing{{
+				ModelPattern: "ensure-model",
+			}}, nil
+		}, now)
+	}()
+	defer func() {
+		releaseEnsureFetch <- struct{}{}
+	}()
+
+	require.Eventually(t, func() bool {
+		select {
+		case <-ensureFetchStarted:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+
+	var refreshFetchCalls atomic.Int32
+	refreshDone := make(chan error, 1)
+	go func() {
+		refreshDone <- refreshCurrent(
+			context.Background(), database, func(
+				context.Context,
+			) ([]pricing.ModelPricing, error) {
+				refreshFetchCalls.Add(1)
+				return []pricing.ModelPricing{{
+					ModelPattern: "scheduled-model",
+				}}, nil
+			}, now.Add(time.Minute),
+		)
+	}()
+
+	var refreshErr error
+	require.Eventually(t, func() bool {
+		select {
+		case refreshErr = <-refreshDone:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+	require.NoError(t, refreshErr)
+	assert.Zero(t, refreshFetchCalls.Load())
+	scheduledPrice, err := database.GetModelPricing("scheduled-model")
+	require.NoError(t, err)
+	assert.Nil(t, scheduledPrice)
+
+	releaseEnsureFetch <- struct{}{}
+	var ensureErr error
+	require.Eventually(t, func() bool {
+		select {
+		case ensureErr = <-ensureDone:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+	require.NoError(t, ensureErr)
+	ensuredPrice, err := database.GetModelPricing("ensure-model")
+	require.NoError(t, err)
+	require.NotNil(t, ensuredPrice)
 }
 
 func testDB(t *testing.T) *db.DB {

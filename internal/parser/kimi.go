@@ -132,6 +132,14 @@ func kimiIDComponentsValid(components ...string) bool {
 func parseKimiSession(
 	path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
+	return parseKimiSessionWithFallbackModel(
+		path, project, machine, defaultKimiModel,
+	)
+}
+
+func parseKimiSessionWithFallbackModel(
+	path, project, machine, fallbackModel string,
+) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("stat %s: %w", path, err)
@@ -184,7 +192,7 @@ func parseKimiSession(
 		currentTS time.Time
 		pendingTS time.Time
 
-		currentModel = defaultKimiModel
+		currentModel = fallbackModel
 	)
 
 	resetAssistantTurn := func() {

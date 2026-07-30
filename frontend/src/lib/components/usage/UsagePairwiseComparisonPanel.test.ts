@@ -143,6 +143,13 @@ describe("UsagePairwiseComparisonPanel", () => {
     };
     usage.loading.pairwise = false;
     usage.errors.pairwise = null;
+    usage.mode = "cost";
+    usage.setSelectedTokenTypes([
+      "input",
+      "cache_write",
+      "cache_read",
+      "output",
+    ]);
     document.body.innerHTML = "";
     vi.restoreAllMocks();
   });
@@ -207,6 +214,28 @@ describe("UsagePairwiseComparisonPanel", () => {
     expect(text).toContain("None");
     expect(text).not.toContain("+$0.00");
     expect(text).not.toContain("+0.0%");
+
+    unmount(component);
+  });
+
+  it("compares aggregate output tokens when Output is selected", async () => {
+    usage.mode = "token";
+    usage.setSelectedTokenTypes(["output"]);
+    const component = mount(UsagePairwiseComparisonPanel, {
+      target: document.body,
+    });
+    await tick();
+
+    const firstRow = document.querySelector("tbody tr");
+    const cells = Array.from(
+      firstRow?.querySelectorAll("th, td") ?? [],
+    ).map((cell) => cell.textContent?.replace(/\s+/g, " ").trim());
+    expect(cells).toEqual([
+      "Total Tokens",
+      "100",
+      "50",
+      "-50 -50.0%",
+    ]);
 
     unmount(component);
   });

@@ -21,6 +21,7 @@
     qclaw: "QClaw",
     zed: "Zed",
     kimi: "Kimi",
+    "kimi-work": "Kimi Work",
     workbuddy: "WorkBuddy",
     qoder: "Qoder",
     piebald: "Piebald",

@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"sort"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -407,6 +408,9 @@ func exportFullToStoreWithDrainRoundsAndLimits(
 		if _, _, err := exportClaimedSessionToStore(
 			ctx, database, store, origin, sess, limits,
 		); err != nil {
+			if isDeterministicArtifactExportError(err) {
+				continue
+			}
 			return result, err
 		}
 	}
@@ -502,6 +506,12 @@ func exportLoadedSessionToStore(
 	usageEvents []db.UsageEvent,
 	limits artifactLimits,
 ) (string, bool, error) {
+	if sess.ID == "" || strings.Contains(sess.ID, "~") {
+		return "", false, rejectArtifactExportf(
+			"native session ID %q is invalid: must be non-empty and exclude '~'",
+			sess.ID,
+		)
+	}
 	if len(messages) > limits.sessionMessages {
 		return "", false, rejectArtifactExportf(
 			"session message limit exceeded for %s: got %d, limit %d",

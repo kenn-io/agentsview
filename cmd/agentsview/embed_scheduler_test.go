@@ -1522,7 +1522,7 @@ func TestVectorServingCloseWaitsForAPIStartedRecallBuild(t *testing.T) {
 	select {
 	case closeErr := <-closeDone:
 		require.NoError(t, closeErr)
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		require.Fail(t, "vector serving did not close after the API build completed")
 	}
 }

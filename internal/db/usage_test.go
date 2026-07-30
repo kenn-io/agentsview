@@ -22,6 +22,7 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/parsertest"
+	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
 var (
@@ -1811,6 +1812,90 @@ func TestGetTopSessionsByCost(t *testing.T) {
 	assert.Equal(t, "sSmall", top[1].SessionID, "top[1].SessionID")
 	assert.Greater(t, top[0].Cost.Microdollars, top[1].Cost.Microdollars,
 		"top[0].Cost should be > top[1].Cost")
+}
+
+// TestGetTopSessionsByTokens ranks by total tokens and applies limit
+// against the token order, not a re-sort of a cost-truncated top-N.
+// A high-token/low-cost session must outrank a low-token/high-cost one.
+func TestGetTopSessionsByTokens(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	requireNoError(t, d.UpsertModelPricing([]ModelPricing{
+		{
+			ModelPattern:  "expensive-model",
+			InputPerMTok:  money.MustParseDollars("100.0"),
+			OutputPerMTok: money.MustParseDollars("100.0"),
+		},
+		{
+			ModelPattern:  "cheap-model",
+			InputPerMTok:  money.MustParseDollars("0.01"),
+			OutputPerMTok: money.MustParseDollars("0.01"),
+		},
+	}), "UpsertModelPricing")
+
+	// High cost, low tokens.
+	insertSession(t, d, "sCostly", "proj-a", func(s *Session) {
+		s.Agent = "claude"
+		s.SessionName = new("Costly")
+		s.StartedAt = new("2024-06-15T10:00:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "sCostly", Ordinal: 0,
+		Role: "assistant", Timestamp: "2024-06-15T10:30:00Z",
+		Model: "expensive-model",
+		TokenUsage: json.RawMessage(
+			`{"input_tokens":100,"output_tokens":100}`),
+	})
+
+	// Low cost, high tokens.
+	insertSession(t, d, "sTokeny", "proj-b", func(s *Session) {
+		s.Agent = "codex"
+		s.SessionName = new("Tokeny")
+		s.StartedAt = new("2024-06-15T11:00:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "sTokeny", Ordinal: 0,
+		Role: "assistant", Timestamp: "2024-06-15T11:30:00Z",
+		Model: "cheap-model",
+		TokenUsage: json.RawMessage(
+			`{"input_tokens":50000,"output_tokens":50000}`),
+	})
+
+	filter := UsageFilter{From: "2024-06-01", To: "2024-06-30"}
+
+	byCost, err := d.GetTopSessionsByCost(ctx, filter, 1)
+	requireNoError(t, err, "by cost")
+	require.Len(t, byCost, 1, "by cost limit")
+	assert.Equal(t, "sCostly", byCost[0].SessionID, "cost rank")
+
+	filter.TopSessionsSort = TopSessionsSortTokens
+	byTokens, err := d.GetTopSessionsByCost(ctx, filter, 1)
+	requireNoError(t, err, "by tokens")
+	require.Len(t, byTokens, 1, "by tokens limit")
+	assert.Equal(t, "sTokeny", byTokens[0].SessionID, "token rank")
+	assert.Equal(t, 100000, byTokens[0].TotalTokens, "token total")
+}
+
+func TestSortAndLimitTopSessions(t *testing.T) {
+	in := []TopSessionEntry{
+		{SessionID: "a", InputTokens: 10, TotalTokens: 10, Cost: money.MustParseDollars("5")},
+		{SessionID: "b", InputTokens: 100, TotalTokens: 100, Cost: money.MustParseDollars("1")},
+		{SessionID: "c", InputTokens: 50, TotalTokens: 50, Cost: money.MustParseDollars("3")},
+	}
+	got := SortAndLimitTopSessions(
+		in, 2, TopSessionsSortTokens, UsageTokenTypesAll,
+	)
+	require.Len(t, got, 2)
+	assert.Equal(t, "b", got[0].SessionID)
+	assert.Equal(t, "c", got[1].SessionID)
+
+	gotCost := SortAndLimitTopSessions(
+		in, 2, TopSessionsSortCost, UsageTokenTypesAll,
+	)
+	require.Len(t, gotCost, 2)
+	assert.Equal(t, "a", gotCost[0].SessionID)
+	assert.Equal(t, "c", gotCost[1].SessionID)
 }
 
 func TestGetTopSessionsByCost_DisplayNameFallback(t *testing.T) {
@@ -3978,4 +4063,280 @@ func TestGetDailyUsage_CodebuffCostOnly(t *testing.T) {
 		"the cost-only row should produce one daily entry")
 	assert.Equal(t, cost, daily.Daily[0].TotalCost,
 		"the day's TotalCost must include the reported cost")
+}
+  
+// TestGetDailyUsage_KimiDateAliasPricing proves the date-based pricing
+// path end to end on SQLite: the date-ambiguous Kimi aliases
+// (kimi-for-coding, daimon-kimi-code, daimon-kimi-messages) price each
+// row by its timestamp — K2.6 rates before the 2026-07-19T00:00:00Z
+// UTC cutoff, K3 rates at and after it — while the static k3/k3-agent
+// rows price flat at K3 regardless of date, including before the
+// cutoff (proving the static rows don't break date-based precedence).
+func TestGetDailyUsage_KimiDateAliasPricing(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// K2.6 era rates (matching the moonshot/kimi-k2.6 snapshot row) and
+	// K3 era rates (matching the static supplemental rows).
+	requireNoError(t, d.UpsertModelPricing([]ModelPricing{
+		{
+			ModelPattern:     "moonshot/kimi-k2.6",
+			InputPerMTok:     money.MustParseDollars("0.95"),
+			OutputPerMTok:    money.MustParseDollars("4.0"),
+			CacheReadPerMTok: money.MustParseDollars("0.16"),
+		},
+		{
+			ModelPattern:     "kimi-k3",
+			InputPerMTok:     money.MustParseDollars("3.00"),
+			OutputPerMTok:    money.MustParseDollars("15.00"),
+			CacheReadPerMTok: money.MustParseDollars("0.30"),
+		},
+		{
+			ModelPattern:     "k3",
+			InputPerMTok:     money.MustParseDollars("3.00"),
+			OutputPerMTok:    money.MustParseDollars("15.00"),
+			CacheReadPerMTok: money.MustParseDollars("0.30"),
+		},
+		{
+			ModelPattern:     "k3-agent",
+			InputPerMTok:     money.MustParseDollars("3.00"),
+			OutputPerMTok:    money.MustParseDollars("15.00"),
+			CacheReadPerMTok: money.MustParseDollars("0.30"),
+		},
+	}), "UpsertModelPricing")
+
+	// Token mix per message: 1M input + 100k output + 1M cache read.
+	// K2.6 cost: 0.95 + 0.40 + 0.16 = 1.51
+	// K3 cost:   3.00 + 1.50 + 0.30 = 4.80
+	k26Cost := money.MustParseDollars("1.51")
+	k3Cost := money.MustParseDollars("4.80")
+	tokenUsage := json.RawMessage(
+		`{"input_tokens":1000000,"output_tokens":100000,` +
+			`"cache_creation_input_tokens":0,"cache_read_input_tokens":1000000}`)
+
+	tests := []struct {
+		name           string
+		model          string
+		ts             string
+		wantCost       money.Money
+		wantPriceModel string // key expected in the pricing block
+	}{
+		{
+			name:           "kimi-for-coding one second before cutoff",
+			model:          "kimi-for-coding",
+			ts:             "2026-07-18T23:59:59Z",
+			wantCost:       k26Cost,
+			wantPriceModel: "moonshot/kimi-k2.6",
+		},
+		{
+			name:           "kimi-for-coding exactly at cutoff",
+			model:          "kimi-for-coding",
+			ts:             "2026-07-19T00:00:00Z",
+			wantCost:       k3Cost,
+			wantPriceModel: "kimi-k3",
+		},
+		{
+			name:           "kimi-for-coding after cutoff",
+			model:          "kimi-for-coding",
+			ts:             "2026-07-20T12:00:00Z",
+			wantCost:       k3Cost,
+			wantPriceModel: "kimi-k3",
+		},
+		{
+			name:           "daimon-kimi-code before cutoff",
+			model:          "daimon-kimi-code",
+			ts:             "2026-07-18T12:00:00Z",
+			wantCost:       k26Cost,
+			wantPriceModel: "moonshot/kimi-k2.6",
+		},
+		{
+			name:           "daimon-kimi-code after cutoff",
+			model:          "daimon-kimi-code",
+			ts:             "2026-07-20T12:00:00Z",
+			wantCost:       k3Cost,
+			wantPriceModel: "kimi-k3",
+		},
+		{
+			name:           "daimon-kimi-messages before cutoff",
+			model:          "daimon-kimi-messages",
+			ts:             "2026-07-18T12:00:00Z",
+			wantCost:       k26Cost,
+			wantPriceModel: "moonshot/kimi-k2.6",
+		},
+		{
+			name:           "daimon-kimi-messages after cutoff",
+			model:          "daimon-kimi-messages",
+			ts:             "2026-07-20T12:00:00Z",
+			wantCost:       k3Cost,
+			wantPriceModel: "kimi-k3",
+		},
+		{
+			name:           "provider-prefixed alias before cutoff",
+			model:          "kimi-code/kimi-for-coding",
+			ts:             "2026-07-18T12:00:00Z",
+			wantCost:       k26Cost,
+			wantPriceModel: "moonshot/kimi-k2.6",
+		},
+		{
+			name:           "static k3 stays flat before cutoff",
+			model:          "k3",
+			ts:             "2026-07-18T12:00:00Z",
+			wantCost:       k3Cost,
+			wantPriceModel: "k3",
+		},
+		{
+			name:           "static k3-agent stays flat after cutoff",
+			model:          "k3-agent",
+			ts:             "2026-07-20T12:00:00Z",
+			wantCost:       k3Cost,
+			wantPriceModel: "k3-agent",
+		},
+	}
+
+	for i, tt := range tests {
+		sessionID := "kimi-dates-" + strconv.Itoa(i)
+		insertSession(t, d, sessionID, "proj", func(s *Session) {
+			s.Agent = "kimi"
+			s.StartedAt = new(tt.ts)
+		})
+		insertMessages(t, d, Message{
+			SessionID:  sessionID,
+			Ordinal:    0,
+			Role:       "assistant",
+			Timestamp:  tt.ts,
+			Model:      tt.model,
+			TokenUsage: tokenUsage,
+		})
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			day := tt.ts[:10]
+			result, err := d.GetDailyUsage(ctx, UsageFilter{
+				From:     day,
+				To:       day,
+				Timezone: "UTC",
+				Model:    tt.model,
+			})
+			requireNoError(t, err, "GetDailyUsage")
+
+			assert.Equal(t, tt.wantCost, result.Totals.TotalCost,
+				"TotalCost")
+			require.NotNil(t, result.Pricing, "pricing block")
+			require.Contains(t, result.Pricing.Models, tt.model)
+			resolutions := result.Pricing.Models[tt.model].Resolutions
+			require.Len(t, resolutions, 1)
+			assert.Equal(t, tt.wantPriceModel,
+				resolutions[0].PricedModel)
+			if tt.wantPriceModel != tt.model {
+				assert.NotContains(t, result.Pricing.Models,
+					tt.wantPriceModel)
+			}
+		})
+	}
+}
+
+// TestGetDailyUsage_KimiDateAliasMixedDaySameModel proves one reported
+// model straddling the cutoff sums both eras: a pre-cutoff row prices
+// at K2.6 and a post-cutoff row at K3 within the same model breakdown.
+func TestGetDailyUsage_KimiDateAliasMixedDaySameModel(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	requireNoError(t, d.UpsertModelPricing([]ModelPricing{
+		{
+			ModelPattern:     "moonshot/kimi-k2.6",
+			InputPerMTok:     money.MustParseDollars("0.95"),
+			OutputPerMTok:    money.MustParseDollars("4.0"),
+			CacheReadPerMTok: money.MustParseDollars("0.16"),
+		},
+		{
+			ModelPattern:     "kimi-k3",
+			InputPerMTok:     money.MustParseDollars("3.00"),
+			OutputPerMTok:    money.MustParseDollars("15.00"),
+			CacheReadPerMTok: money.MustParseDollars("0.30"),
+		},
+	}), "UpsertModelPricing")
+
+	tokenUsage := json.RawMessage(
+		`{"input_tokens":1000000,"output_tokens":100000,` +
+			`"cache_creation_input_tokens":0,"cache_read_input_tokens":1000000}`)
+	timestamps := []string{
+		"2026-07-18T12:00:00Z", // K2.6: 1.51
+		"2026-07-19T00:00:00Z", // K3: 4.80
+	}
+	insertSession(t, d, "kimi-mixed", "proj", func(s *Session) {
+		s.Agent = "kimi"
+		s.StartedAt = new(timestamps[0])
+	})
+	for i, ts := range timestamps {
+		insertMessages(t, d, Message{
+			SessionID:  "kimi-mixed",
+			Ordinal:    i,
+			Role:       "assistant",
+			Timestamp:  ts,
+			Model:      "kimi-for-coding",
+			TokenUsage: tokenUsage,
+		})
+	}
+
+	result, err := d.GetDailyUsage(ctx, UsageFilter{
+		From:     "2026-07-01",
+		To:       "2026-07-31",
+		Timezone: "UTC",
+		Model:    "kimi-for-coding",
+	})
+	requireNoError(t, err, "GetDailyUsage")
+
+	assert.Equal(t, money.MustParseDollars("6.31"), result.Totals.TotalCost,
+		"TotalCost must sum the K2.6 and K3 eras")
+	require.Len(t, result.Daily, 2, "one entry per active day")
+	assert.Equal(t, money.MustParseDollars("1.51"), result.Daily[0].TotalCost,
+		"pre-cutoff day at K2.6 rates")
+	assert.Equal(t, money.MustParseDollars("4.80"), result.Daily[1].TotalCost,
+		"post-cutoff day at K3 rates")
+
+	require.NotNil(t, result.Pricing, "pricing block")
+	require.Contains(t, result.Pricing.Models, "kimi-for-coding")
+	resolutions := result.Pricing.Models["kimi-for-coding"].Resolutions
+	require.Len(t, resolutions, 2)
+	assert.Equal(t, "kimi-k3", resolutions[0].PricedModel)
+	assert.Equal(t, "moonshot/kimi-k2.6", resolutions[1].PricedModel)
+	assert.NotContains(t, result.Pricing.Models, "moonshot/kimi-k2.6")
+	assert.NotContains(t, result.Pricing.Models, "kimi-k3")
+}
+
+func TestDailyUsageAmountsPrefersExactCustomKimiAlias(t *testing.T) {
+	resolver := export.NewPricingResolver([]export.EffectivePricingRow{
+		{
+			ModelPattern: "kimi-for-coding",
+			Rates: export.ModelRates{
+				InputPerMTok: money.MustParseDollars("7"),
+				Source:       export.PricingRowSourceCustom,
+			},
+		},
+		{
+			ModelPattern: pricingpkg.KimiK3Canonical,
+			Rates: export.ModelRates{
+				InputPerMTok: money.MustParseDollars("2"),
+				Source:       export.PricingRowSourceFetched,
+			},
+		},
+	})
+
+	_, _, _, _, cost, _, err := dailyUsageAmounts(dailyUsageScanRow{
+		usageSource: "provider",
+		model:       "kimi-for-coding",
+		ts:          "2026-07-19T00:00:00Z",
+		inputTokens: 1_000_000,
+	}, resolver)
+
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("7"), cost)
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+	require.Contains(t, block.Models, "kimi-for-coding")
+	resolutions := block.Models["kimi-for-coding"].Resolutions
+	require.Len(t, resolutions, 1)
+	assert.Equal(t, "kimi-for-coding", resolutions[0].PricedModel)
 }

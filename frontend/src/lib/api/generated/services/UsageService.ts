@@ -510,6 +510,8 @@ export class UsageService {
     breakdowns = true,
     sessionCounts = true,
     limit = 20,
+    sort = 'cost',
+    tokenTypes,
   }: {
     /**
      * Range start date
@@ -595,6 +597,14 @@ export class UsageService {
      * Maximum number of sessions
      */
     limit?: number,
+    /**
+     * Rank sessions by cost or selected token types
+     */
+    sort?: 'cost' | 'tokens',
+    /**
+     * Comma-separated token counters for token ranking: input, cache_write, cache_read, output
+     */
+    tokenTypes?: string,
   }): CancelablePromise<any[] | null> {
     return __request(OpenAPI, {
       method: 'GET',
@@ -621,6 +631,8 @@ export class UsageService {
         'breakdowns': breakdowns,
         'session_counts': sessionCounts,
         'limit': limit,
+        'sort': sort,
+        'token_types': tokenTypes,
       },
       errors: {
         400: `Bad Request`,

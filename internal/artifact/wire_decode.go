@@ -23,7 +23,9 @@ func decodeManifestWithLimits(data []byte, limits artifactLimits) (manifest, err
 	// their scalar header avoids allocating collections whose schema this
 	// version does not understand.
 	if envelope.Version > manifestFormatVersion {
-		return manifest{Version: envelope.Version, Origin: envelope.Origin}, nil
+		return manifest{}, &futureArtifactVersionError{
+			Kind: KindManifests, Version: envelope.Version,
+		}
 	}
 	if envelope.Version != manifestFormatVersion {
 		return manifest{}, fmt.Errorf(
@@ -169,11 +171,14 @@ func decodePreflightedSegment(preflight segmentPreflight) ([]db.Message, error) 
 	return msgs, nil
 }
 
-func segmentRecords(data []byte, limit int) ([][]byte, error) {
-	capacity := min(max(limit, 0), 64)
-	records := make([][]byte, 0, capacity)
+func preflightSegmentData(data []byte, limits artifactLimits) (segmentPreflight, error) {
+	preflight := segmentPreflight{
+		records: make([][]byte, 0, min(max(limits.segmentMessages, 0), 64)),
+	}
 	remaining := data
 	lineNumber := 0
+	version := messageSegmentFormatVersion
+	haveVersion := false
 	for len(remaining) > 0 {
 		lineNumber++
 		newline := bytes.IndexByte(remaining, '\n')
@@ -184,47 +189,51 @@ func segmentRecords(data []byte, limit int) ([][]byte, error) {
 		} else {
 			remaining = nil
 		}
-		if len(records) >= limit {
-			return nil, fmt.Errorf(
-				"message record limit exceeded: limit %d per segment", limit,
-			)
-		}
 		if len(bytes.TrimSpace(line)) == 0 {
-			return nil, fmt.Errorf("blank message record at line %d", lineNumber)
-		}
-		records = append(records, line)
-	}
-	return records, nil
-}
-
-func preflightSegmentData(data []byte, limits artifactLimits) (segmentPreflight, error) {
-	records, err := segmentRecords(data, limits.segmentMessages)
-	if err != nil {
-		return segmentPreflight{}, err
-	}
-	preflight := segmentPreflight{records: records}
-	for _, line := range records {
-		var header struct {
-			Version int `json:"v"`
-		}
-		if err := json.Unmarshal(line, &header); err != nil {
-			return segmentPreflight{}, fmt.Errorf("decoding message segment header: %w", err)
-		}
-		if header.Version > messageSegmentFormatVersion {
 			return segmentPreflight{}, fmt.Errorf(
-				"%w: message segment has artifact version %d",
-				errFutureArtifactVersion, header.Version,
+				"blank message record at line %d", lineNumber,
 			)
 		}
-		if header.Version != messageSegmentFormatVersion {
+		if !haveVersion {
+			var header struct {
+				Version int `json:"v"`
+			}
+			if err := json.Unmarshal(line, &header); err != nil {
+				return segmentPreflight{}, fmt.Errorf(
+					"decoding message segment header at line %d: %w",
+					lineNumber, err,
+				)
+			}
+			version = header.Version
+			haveVersion = true
+			if version > messageSegmentFormatVersion {
+				return segmentPreflight{}, &futureArtifactVersionError{
+					Kind: KindSegments, Version: version,
+				}
+			}
+			if version != messageSegmentFormatVersion {
+				return segmentPreflight{}, fmt.Errorf(
+					"message segment has unsupported artifact version %d",
+					version,
+				)
+			}
+		}
+		if len(preflight.records) >= limits.segmentMessages {
 			return segmentPreflight{}, fmt.Errorf(
-				"message segment has unsupported artifact version %d",
-				header.Version,
+				"message record limit exceeded: limit %d per segment",
+				limits.segmentMessages,
 			)
 		}
-		messageNested, err := preflightMessageNestedCollections(line, limits)
+		recordVersion, messageNested, err :=
+			preflightMessageNestedCollections(line, limits)
 		if err != nil {
 			return segmentPreflight{}, err
+		}
+		if recordVersion != version {
+			return segmentPreflight{}, fmt.Errorf(
+				"message segment mixes artifact versions %d and %d",
+				version, recordVersion,
+			)
 		}
 		if exceedsCollectionLimit(
 			preflight.nested.toolCalls,
@@ -247,6 +256,7 @@ func preflightSegmentData(data []byte, limits artifactLimits) (segmentPreflight,
 		}
 		preflight.nested.toolCalls += messageNested.toolCalls
 		preflight.nested.resultEvents += messageNested.resultEvents
+		preflight.records = append(preflight.records, line)
 	}
 	return preflight, nil
 }
@@ -254,17 +264,21 @@ func preflightSegmentData(data []byte, limits artifactLimits) (segmentPreflight,
 func preflightMessageNestedCollections(
 	line []byte,
 	limits artifactLimits,
-) (nestedCollectionCounts, error) {
+) (int, nestedCollectionCounts, error) {
 	var envelope struct {
+		Version   int             `json:"v"`
 		Ordinal   int             `json:"ordinal"`
 		ToolCalls json.RawMessage `json:"tool_calls"`
 	}
 	if err := json.Unmarshal(line, &envelope); err != nil {
-		return nestedCollectionCounts{}, fmt.Errorf(
+		return 0, nestedCollectionCounts{}, fmt.Errorf(
 			"decoding message segment collections: %w", err,
 		)
 	}
-	return preflightToolCallCollections(envelope.ToolCalls, envelope.Ordinal, limits)
+	nested, err := preflightToolCallCollections(
+		envelope.ToolCalls, envelope.Ordinal, limits,
+	)
+	return envelope.Version, nested, err
 }
 
 func preflightToolCallCollections(

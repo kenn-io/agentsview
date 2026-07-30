@@ -37,7 +37,8 @@ func TestPricingResolverBuildBlockUsesRecordedLookup(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Contains(t, block.Models, "claude-test-20260703")
-	model := block.Models["claude-test-20260703"]
+	model := onlyPricingResolution(
+		t, block.Models["claude-test-20260703"])
 	require.NotNil(t, model.MatchedPattern)
 	assert.Equal(t, lookup.Pattern, *model.MatchedPattern)
 	assert.Equal(t, lookup.Rates.InputPerMTok, model.InputCostPerMTok)
@@ -45,6 +46,110 @@ func TestPricingResolverBuildBlockUsesRecordedLookup(t *testing.T) {
 	assert.Equal(t, lookup.Rates.CacheWritePerMTok, model.CacheWriteCostPerMTok)
 	assert.Equal(t, lookup.Rates.CacheReadPerMTok, model.CacheReadCostPerMTok)
 	assert.Equal(t, money.MustParseDollars("45.45"), cost)
+}
+
+func TestPricingResolverResolvePrefersExactCustomReportedModel(t *testing.T) {
+	resolver := NewPricingResolver([]EffectivePricingRow{
+		{
+			ModelPattern: "kimi-for-coding",
+			Rates: ModelRates{
+				InputPerMTok: money.MustParseDollars("7"),
+				Source:       PricingRowSourceCustom,
+			},
+		},
+		{
+			ModelPattern: "moonshot/kimi-k3",
+			Rates: ModelRates{
+				InputPerMTok: money.MustParseDollars("2"),
+				Source:       PricingRowSourceFetched,
+			},
+		},
+	})
+
+	pricedModel, lookup := resolver.Resolve(
+		"kimi-for-coding", "moonshot/kimi-k3")
+
+	assert.Equal(t, "kimi-for-coding", pricedModel)
+	require.True(t, lookup.OK)
+	assert.Equal(t, "kimi-for-coding", lookup.Pattern)
+	assert.Equal(t, money.MustParseDollars("7"), lookup.Rates.InputPerMTok)
+}
+
+func TestPricingResolverResolveUsesCanonicalWithoutExactCustom(t *testing.T) {
+	resolver := NewPricingResolver([]EffectivePricingRow{
+		{
+			ModelPattern: "kimi-for-coding",
+			Rates: ModelRates{
+				InputPerMTok: money.MustParseDollars("9"),
+				Source:       PricingRowSourceFetched,
+			},
+		},
+		{
+			ModelPattern: "moonshot/kimi-k3",
+			Rates: ModelRates{
+				InputPerMTok: money.MustParseDollars("2"),
+				Source:       PricingRowSourceFetched,
+			},
+		},
+	})
+
+	pricedModel, lookup := resolver.Resolve(
+		"kimi-for-coding", "moonshot/kimi-k3")
+
+	assert.Equal(t, "moonshot/kimi-k3", pricedModel)
+	require.True(t, lookup.OK)
+	assert.Equal(t, "moonshot/kimi-k3", lookup.Pattern)
+	assert.Equal(t, money.MustParseDollars("2"), lookup.Rates.InputPerMTok)
+}
+
+func TestPricingResolverBuildBlockKeepsReportedModelResolutions(t *testing.T) {
+	resolver := NewPricingResolver([]EffectivePricingRow{
+		{
+			ModelPattern: "moonshot/kimi-k2.6",
+			Rates: ModelRates{
+				InputPerMTok: money.MustParseDollars("1"),
+				Source:       PricingRowSourceFetched,
+			},
+		},
+		{
+			ModelPattern: "moonshot/kimi-k3",
+			Rates: ModelRates{
+				InputPerMTok: money.MustParseDollars("2"),
+				Source:       PricingRowSourceFetched,
+			},
+		},
+	})
+
+	k26 := resolver.Lookup("moonshot/kimi-k2.6")
+	k3 := resolver.Lookup("moonshot/kimi-k3")
+	require.True(t, k26.OK)
+	require.True(t, k3.OK)
+	resolver.RecordResolvedComputed(
+		"kimi-for-coding", "moonshot/kimi-k3", k3)
+	resolver.RecordResolvedReported(
+		"kimi-for-coding", "moonshot/kimi-k2.6", k26)
+
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+
+	require.Contains(t, block.Models, "kimi-for-coding")
+	provenance := block.Models["kimi-for-coding"]
+	assert.Equal(t, CostSourceMixed, provenance.CostSource)
+	require.Len(t, provenance.Resolutions, 2)
+	assert.Equal(t, "moonshot/kimi-k2.6",
+		provenance.Resolutions[0].PricedModel)
+	assert.Equal(t, CostSourceReported,
+		provenance.Resolutions[0].CostSource)
+	assert.Equal(t, money.MustParseDollars("1"),
+		provenance.Resolutions[0].InputCostPerMTok)
+	assert.Equal(t, "moonshot/kimi-k3",
+		provenance.Resolutions[1].PricedModel)
+	assert.Equal(t, CostSourceComputed,
+		provenance.Resolutions[1].CostSource)
+	assert.Equal(t, money.MustParseDollars("2"),
+		provenance.Resolutions[1].InputCostPerMTok)
+	assert.NotContains(t, block.Models, "moonshot/kimi-k2.6")
+	assert.NotContains(t, block.Models, "moonshot/kimi-k3")
 }
 
 func TestModelRatesCostForTokensTreatsReasoningAsOutputBreakdown(t *testing.T) {
@@ -115,7 +220,8 @@ func TestPricingResolverBuildBlockModelsAndFallback(t *testing.T) {
 	assert.NotContains(t, block.Fallback.Models, "unpriced-model")
 	assert.NotContains(t, block.Models, "unused-model")
 
-	unpriced := block.Models["unpriced-model"]
+	unpriced := onlyPricingResolution(
+		t, block.Models["unpriced-model"])
 	assert.Nil(t, unpriced.MatchedPattern)
 	assert.Zero(t, unpriced.InputCostPerMTok)
 	assert.Zero(t, unpriced.OutputCostPerMTok)
@@ -132,7 +238,9 @@ func TestPricingResolverReportedCostWithoutMatchingRateIsExplicit(t *testing.T) 
 	block, err := resolver.BuildBlock()
 	require.NoError(t, err)
 	require.Contains(t, block.Models, "provider-opaque-model")
-	model := block.Models["provider-opaque-model"]
+	provenance := block.Models["provider-opaque-model"]
+	assert.Equal(t, CostSourceReported, provenance.CostSource)
+	model := onlyPricingResolution(t, provenance)
 	assert.Equal(t, CostSourceReported, model.CostSource)
 	assert.Nil(t, model.MatchedPattern)
 	assert.Zero(t, model.InputCostPerMTok)
@@ -396,4 +504,12 @@ func mapKeys[V any](m map[string]V) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+func onlyPricingResolution(
+	t *testing.T, provenance ModelPricingProvenance,
+) EffectiveModelRate {
+	t.Helper()
+	require.Len(t, provenance.Resolutions, 1)
+	return provenance.Resolutions[0]
 }

@@ -443,6 +443,9 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 			return fmt.Errorf("copying %s: %w", copy.table, err)
 		}
 	}
+	if err := copyArtifactImportState(ctx, tx); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO main.artifact_checkpoint_floors(origin, sequence)
 		SELECT origin, sequence FROM main.artifact_checkpoint_heads WHERE true
@@ -471,6 +474,536 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing sync state copy: %w", err)
+	}
+	return nil
+}
+
+func copyArtifactImportState(ctx context.Context, tx *sql.Tx) error {
+	if oldDBHasTable(ctx, tx, "artifact_import_queue") {
+		quarantinePending := "0"
+		if oldDBHasColumn(
+			ctx, tx, "artifact_import_queue", "quarantine_pending",
+		) {
+			quarantinePending = "quarantine_pending"
+		}
+		var conflicts int
+		err := tx.QueryRowContext(ctx, `
+			SELECT count(*)
+			FROM old_db.artifact_import_queue old
+			JOIN main.artifact_import_queue current
+			  ON current.origin = old.origin
+			 AND current.kind = old.kind
+			 AND current.name = old.name
+			WHERE current.sha256 <> old.sha256 OR current.size <> old.size`,
+		).Scan(&conflicts)
+		if err != nil {
+			return fmt.Errorf("checking artifact import queue conflicts: %w", err)
+		}
+		if conflicts > 0 {
+			return fmt.Errorf(
+				"%w: copied artifact import queue identity changed",
+				ErrArtifactImportConflict,
+			)
+		}
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO main.artifact_import_queue (
+				origin, kind, name, sha256, size,
+				required_checkpoint_version,
+				required_manifest_version,
+				required_segment_version,
+				attempt_generation, quarantine_pending, enqueued_at
+			)
+			SELECT
+				origin, kind, name, sha256, size,
+				required_checkpoint_version,
+				required_manifest_version,
+				required_segment_version,
+				attempt_generation, `+quarantinePending+`, enqueued_at
+			FROM old_db.artifact_import_queue WHERE true
+			ON CONFLICT(origin, kind, name) DO UPDATE SET
+				required_checkpoint_version = max(
+					artifact_import_queue.required_checkpoint_version,
+					excluded.required_checkpoint_version
+				),
+				required_manifest_version = max(
+					artifact_import_queue.required_manifest_version,
+					excluded.required_manifest_version
+				),
+				required_segment_version = max(
+					artifact_import_queue.required_segment_version,
+					excluded.required_segment_version
+				),
+				attempt_generation = max(
+					artifact_import_queue.attempt_generation,
+					excluded.attempt_generation
+				),
+				quarantine_pending = max(
+					artifact_import_queue.quarantine_pending,
+					excluded.quarantine_pending
+				),
+				enqueued_at = min(
+					artifact_import_queue.enqueued_at,
+					excluded.enqueued_at
+				)`)
+		if err != nil {
+			return fmt.Errorf("copying artifact import queue: %w", err)
+		}
+		_, err = tx.ExecContext(ctx, `
+			DELETE FROM main.artifact_import_queue
+			WHERE kind = 'checkpoints'
+			  AND EXISTS (
+				SELECT 1
+				FROM main.artifact_import_queue newer
+				WHERE newer.origin = artifact_import_queue.origin
+				  AND newer.kind = artifact_import_queue.kind
+				  AND newer.name > artifact_import_queue.name
+			  )`)
+		if err != nil {
+			return fmt.Errorf("pruning copied artifact import queue: %w", err)
+		}
+	}
+	if oldDBHasTable(ctx, tx, "artifact_import_attempt_generations") {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO main.artifact_import_attempt_generations (
+				singleton, generation
+			)
+			SELECT singleton, generation
+			FROM old_db.artifact_import_attempt_generations WHERE true
+			ON CONFLICT(singleton) DO UPDATE SET
+				generation = max(
+					artifact_import_attempt_generations.generation,
+					excluded.generation
+				)`)
+		if err != nil {
+			return fmt.Errorf("copying artifact import generations: %w", err)
+		}
+	}
+	if err := copyArtifactPeerHeads(ctx, tx); err != nil {
+		return err
+	}
+	if err := copyArtifactCheckpointStages(ctx, tx); err != nil {
+		return err
+	}
+	if err := copyArtifactCheckpointLandings(ctx, tx); err != nil {
+		return err
+	}
+	if oldDBHasTable(ctx, tx, "artifact_imported_sessions") {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO main.artifact_imported_sessions (
+				origin, gid, manifest_hash, imported_session_id, imported_at
+			)
+			SELECT
+				origin, gid, manifest_hash, imported_session_id, imported_at
+			FROM old_db.artifact_imported_sessions WHERE true
+			ON CONFLICT(origin, gid) DO UPDATE SET
+				manifest_hash = excluded.manifest_hash,
+				imported_session_id = excluded.imported_session_id,
+				imported_at = excluded.imported_at
+			WHERE excluded.imported_at >= artifact_imported_sessions.imported_at`)
+		if err != nil {
+			return fmt.Errorf("copying artifact imported-session provenance: %w", err)
+		}
+	}
+	return nil
+}
+
+func copyArtifactCheckpointStages(ctx context.Context, tx *sql.Tx) error {
+	if !oldDBHasTable(ctx, tx, "artifact_checkpoint_stages") {
+		return nil
+	}
+	var conflicts int
+	err := tx.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM old_db.artifact_checkpoint_stages old
+		JOIN main.artifact_checkpoint_stages current
+		  ON current.origin = old.origin
+		 AND current.sequence = old.sequence
+		WHERE current.checkpoint_sha256 <> old.checkpoint_sha256
+		   OR current.checkpoint_size <> old.checkpoint_size
+		   OR current.decoder_version <> old.decoder_version
+		   OR (
+				current.complete = 1 AND old.complete = 1
+				AND current.session_count <> old.session_count
+		   )`,
+	).Scan(&conflicts)
+	if err != nil {
+		return fmt.Errorf("checking copied artifact checkpoint stages: %w", err)
+	}
+	if conflicts > 0 {
+		return fmt.Errorf(
+			"%w: copied artifact checkpoint stage changed",
+			ErrArtifactImportConflict,
+		)
+	}
+	oldHasStageSessions := oldDBHasTable(
+		ctx, tx, "artifact_checkpoint_stage_sessions",
+	)
+	if !oldHasStageSessions {
+		var stages int
+		err = tx.QueryRowContext(ctx, `
+			SELECT count(*) FROM old_db.artifact_checkpoint_stages`,
+		).Scan(&stages)
+		if err != nil {
+			return fmt.Errorf(
+				"checking copied artifact checkpoint stage maps: %w", err,
+			)
+		}
+		if stages > 0 {
+			return fmt.Errorf(
+				"%w: copied artifact checkpoint stage map is unavailable",
+				ErrArtifactImportConflict,
+			)
+		}
+	}
+	if oldHasStageSessions {
+		err = validateArtifactCheckpointStageMerges(ctx, tx)
+		if err != nil {
+			return err
+		}
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO main.artifact_checkpoint_stages (
+			origin, sequence, checkpoint_sha256, checkpoint_size,
+			complete, session_count, pending_count,
+			decoded_count, decode_offset, decoder_version
+		)
+		SELECT
+			origin, sequence, checkpoint_sha256, checkpoint_size,
+			complete, session_count, pending_count,
+			decoded_count, decode_offset, decoder_version
+		FROM old_db.artifact_checkpoint_stages WHERE true
+		ON CONFLICT(origin, sequence) DO UPDATE SET
+			complete = max(artifact_checkpoint_stages.complete, excluded.complete),
+			session_count = max(
+				artifact_checkpoint_stages.session_count,
+				excluded.session_count
+			),
+			decoded_count = max(
+				artifact_checkpoint_stages.decoded_count,
+				excluded.decoded_count
+			),
+			decode_offset = max(
+				artifact_checkpoint_stages.decode_offset,
+				excluded.decode_offset
+			)`)
+	if err != nil {
+		return fmt.Errorf("copying artifact checkpoint stages: %w", err)
+	}
+	if !oldHasStageSessions {
+		return nil
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO main.artifact_checkpoint_stage_sessions (
+			origin, sequence, gid, manifest_hash, attempt_generation, satisfied
+		)
+		SELECT
+			origin, sequence, gid, manifest_hash, attempt_generation, satisfied
+		FROM old_db.artifact_checkpoint_stage_sessions WHERE true
+		ON CONFLICT(origin, sequence, gid) DO UPDATE SET
+			attempt_generation = max(
+				artifact_checkpoint_stage_sessions.attempt_generation,
+				excluded.attempt_generation
+			),
+			satisfied = max(
+				artifact_checkpoint_stage_sessions.satisfied,
+				excluded.satisfied
+			)`)
+	if err != nil {
+		return fmt.Errorf("copying artifact checkpoint stage sessions: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, `
+		UPDATE main.artifact_checkpoint_stages AS stage
+		SET pending_count = (
+			SELECT count(*)
+			FROM main.artifact_checkpoint_stage_sessions sessions
+			WHERE sessions.origin = stage.origin
+			  AND sessions.sequence = stage.sequence
+			  AND sessions.satisfied = 0
+		)
+		WHERE EXISTS (
+			SELECT 1
+			FROM old_db.artifact_checkpoint_stages old
+			WHERE old.origin = stage.origin
+			  AND old.sequence = stage.sequence
+		)`)
+	if err != nil {
+		return fmt.Errorf("recounting copied artifact checkpoint stages: %w", err)
+	}
+	return nil
+}
+
+func validateArtifactCheckpointStageMerges(
+	ctx context.Context,
+	tx *sql.Tx,
+) error {
+	var conflicts int
+	err := tx.QueryRowContext(ctx, `
+		WITH overlapping AS (
+			SELECT
+				old_stage.complete AS old_complete,
+				current_stage.complete AS current_complete,
+				old_stage.session_count AS old_session_count,
+				current_stage.session_count AS current_session_count,
+				old_stage.decoded_count AS old_decoded_count,
+				current_stage.decoded_count AS current_decoded_count,
+				old_stage.decode_offset AS old_decode_offset,
+				current_stage.decode_offset AS current_decode_offset,
+				EXISTS (
+					SELECT gid, manifest_hash
+					FROM old_db.artifact_checkpoint_stage_sessions
+					WHERE origin = old_stage.origin
+					  AND sequence = old_stage.sequence
+					EXCEPT
+					SELECT gid, manifest_hash
+					FROM main.artifact_checkpoint_stage_sessions
+					WHERE origin = old_stage.origin
+					  AND sequence = old_stage.sequence
+				) AS old_only,
+				EXISTS (
+					SELECT gid, manifest_hash
+					FROM main.artifact_checkpoint_stage_sessions
+					WHERE origin = old_stage.origin
+					  AND sequence = old_stage.sequence
+					EXCEPT
+					SELECT gid, manifest_hash
+					FROM old_db.artifact_checkpoint_stage_sessions
+					WHERE origin = old_stage.origin
+					  AND sequence = old_stage.sequence
+				) AS current_only
+			FROM old_db.artifact_checkpoint_stages old_stage
+			JOIN main.artifact_checkpoint_stages current_stage
+			  ON current_stage.origin = old_stage.origin
+			 AND current_stage.sequence = old_stage.sequence
+			 AND current_stage.checkpoint_sha256 = old_stage.checkpoint_sha256
+			 AND current_stage.checkpoint_size = old_stage.checkpoint_size
+		)
+		SELECT count(*) FROM overlapping
+		WHERE (
+			old_complete = 1 AND current_complete = 1
+			AND (old_only OR current_only)
+		)
+		OR (
+			old_complete = 0 AND current_complete = 0
+			AND (
+				(
+					old_decoded_count < current_decoded_count
+					AND old_decode_offset > current_decode_offset
+				)
+				OR (
+					old_decoded_count > current_decoded_count
+					AND old_decode_offset < current_decode_offset
+				)
+				OR (
+					old_decoded_count <= current_decoded_count
+					AND old_only
+				)
+				OR (
+					current_decoded_count <= old_decoded_count
+					AND current_only
+				)
+			)
+		)
+		OR (
+			old_complete = 1 AND current_complete = 0
+			AND (
+				current_decoded_count > old_session_count
+				OR current_only
+			)
+		)
+		OR (
+			old_complete = 0 AND current_complete = 1
+			AND (
+				old_decoded_count > current_session_count
+				OR old_only
+			)
+		)`,
+	).Scan(&conflicts)
+	if err != nil {
+		return fmt.Errorf(
+			"checking copied artifact checkpoint stage maps: %w", err,
+		)
+	}
+	if conflicts > 0 {
+		return fmt.Errorf(
+			"%w: copied artifact checkpoint stage map changed",
+			ErrArtifactImportConflict,
+		)
+	}
+	return nil
+}
+
+func copyArtifactPeerHeads(ctx context.Context, tx *sql.Tx) error {
+	if !oldDBHasTable(ctx, tx, "artifact_peer_checkpoint_heads") {
+		return nil
+	}
+	var conflicts int
+	err := tx.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM old_db.artifact_peer_checkpoint_heads old
+		JOIN main.artifact_peer_checkpoint_heads current
+		  ON current.origin = old.origin
+		 AND current.sequence = old.sequence
+		WHERE current.checkpoint_sha256 <> old.checkpoint_sha256
+		   OR current.checkpoint_size <> old.checkpoint_size`,
+	).Scan(&conflicts)
+	if err != nil {
+		return fmt.Errorf("checking copied artifact peer heads: %w", err)
+	}
+	if conflicts > 0 {
+		return fmt.Errorf(
+			"%w: copied artifact peer head identity changed",
+			ErrArtifactImportConflict,
+		)
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO main.artifact_peer_checkpoint_heads (
+			origin, sequence, checkpoint_sha256, checkpoint_size
+		)
+		SELECT origin, sequence, checkpoint_sha256, checkpoint_size
+		FROM old_db.artifact_peer_checkpoint_heads WHERE true
+		ON CONFLICT(origin) DO UPDATE SET
+			sequence = excluded.sequence,
+			checkpoint_sha256 = excluded.checkpoint_sha256,
+			checkpoint_size = excluded.checkpoint_size
+		WHERE excluded.sequence > artifact_peer_checkpoint_heads.sequence`)
+	if err != nil {
+		return fmt.Errorf("copying artifact peer heads: %w", err)
+	}
+	return nil
+}
+
+func copyArtifactCheckpointLandings(ctx context.Context, tx *sql.Tx) error {
+	if !oldDBHasTable(ctx, tx, "artifact_checkpoint_landings") {
+		return nil
+	}
+	oldHasLandingSessions := oldDBHasTable(
+		ctx, tx, "artifact_checkpoint_landing_sessions",
+	)
+	if !oldHasLandingSessions {
+		var landings int
+		if err := tx.QueryRowContext(ctx, `
+			SELECT count(*) FROM old_db.artifact_checkpoint_landings`,
+		).Scan(&landings); err != nil {
+			return fmt.Errorf(
+				"checking copied artifact checkpoint landing maps: %w", err,
+			)
+		}
+		if landings > 0 {
+			return fmt.Errorf(
+				"%w: copied artifact checkpoint landing map is unavailable",
+				ErrArtifactImportConflict,
+			)
+		}
+	}
+	var conflicts int
+	err := tx.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM old_db.artifact_checkpoint_landings old
+		JOIN main.artifact_checkpoint_landings current
+		  ON current.origin = old.origin
+		 AND current.sequence = old.sequence
+		WHERE current.checkpoint_sha256 <> old.checkpoint_sha256
+		   OR current.checkpoint_size <> old.checkpoint_size`,
+	).Scan(&conflicts)
+	if err != nil {
+		return fmt.Errorf("checking copied artifact checkpoint landings: %w", err)
+	}
+	if conflicts > 0 {
+		return fmt.Errorf(
+			"%w: copied artifact checkpoint landing identity changed",
+			ErrArtifactImportConflict,
+		)
+	}
+	if oldHasLandingSessions {
+		err = tx.QueryRowContext(ctx, `
+			SELECT count(*)
+			FROM old_db.artifact_checkpoint_landings old
+			JOIN main.artifact_checkpoint_landings current
+			  ON current.origin = old.origin
+			 AND current.sequence = old.sequence
+			 AND current.checkpoint_sha256 = old.checkpoint_sha256
+			 AND current.checkpoint_size = old.checkpoint_size
+			WHERE EXISTS (
+				SELECT gid, manifest_hash
+				FROM old_db.artifact_checkpoint_landing_sessions
+				WHERE origin = old.origin
+				EXCEPT
+				SELECT gid, manifest_hash
+				FROM main.artifact_checkpoint_landing_sessions
+				WHERE origin = old.origin
+			)
+			OR EXISTS (
+				SELECT gid, manifest_hash
+				FROM main.artifact_checkpoint_landing_sessions
+				WHERE origin = old.origin
+				EXCEPT
+				SELECT gid, manifest_hash
+				FROM old_db.artifact_checkpoint_landing_sessions
+				WHERE origin = old.origin
+			)`,
+		).Scan(&conflicts)
+		if err != nil {
+			return fmt.Errorf(
+				"checking copied artifact checkpoint landing maps: %w", err,
+			)
+		}
+		if conflicts > 0 {
+			return fmt.Errorf(
+				"%w: copied artifact checkpoint landing map changed",
+				ErrArtifactImportConflict,
+			)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TEMP TABLE _artifact_import_replaced_landings AS
+		SELECT old.origin
+		FROM old_db.artifact_checkpoint_landings old
+		LEFT JOIN main.artifact_checkpoint_landings current
+		  ON current.origin = old.origin
+		WHERE current.origin IS NULL OR old.sequence > current.sequence`,
+	); err != nil {
+		return fmt.Errorf("selecting copied artifact checkpoint landings: %w", err)
+	}
+	defer func() {
+		_, _ = tx.ExecContext(
+			context.WithoutCancel(ctx),
+			"DROP TABLE IF EXISTS _artifact_import_replaced_landings",
+		)
+	}()
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO main.artifact_checkpoint_landings (
+			origin, sequence, checkpoint_sha256, checkpoint_size
+		)
+		SELECT origin, sequence, checkpoint_sha256, checkpoint_size
+		FROM old_db.artifact_checkpoint_landings WHERE true
+		ON CONFLICT(origin) DO UPDATE SET
+			sequence = excluded.sequence,
+			checkpoint_sha256 = excluded.checkpoint_sha256,
+			checkpoint_size = excluded.checkpoint_size
+		WHERE excluded.sequence > artifact_checkpoint_landings.sequence`)
+	if err != nil {
+		return fmt.Errorf("copying artifact checkpoint landings: %w", err)
+	}
+	if oldHasLandingSessions {
+		_, err = tx.ExecContext(ctx, `
+			DELETE FROM main.artifact_checkpoint_landing_sessions
+			WHERE origin IN (
+				SELECT origin FROM _artifact_import_replaced_landings
+			)`)
+		if err != nil {
+			return fmt.Errorf("clearing copied artifact landing maps: %w", err)
+		}
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO main.artifact_checkpoint_landing_sessions (
+				origin, gid, manifest_hash
+			)
+			SELECT sessions.origin, sessions.gid, sessions.manifest_hash
+			FROM old_db.artifact_checkpoint_landing_sessions sessions
+			JOIN _artifact_import_replaced_landings replaced
+			  ON replaced.origin = sessions.origin`)
+		if err != nil {
+			return fmt.Errorf("copying artifact checkpoint landing maps: %w", err)
+		}
 	}
 	return nil
 }
@@ -1099,6 +1632,30 @@ func copySessionDataForIDs(
 			"WHERE session_id IN (SELECT id FROM "+tempIDsTable+")",
 	); err != nil {
 		return fmt.Errorf("copying messages: %w", err)
+	}
+
+	if oldDBHasTable(ctx, tx, "usage_events") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO usage_events (
+				session_id, message_ordinal, source, model,
+				input_tokens, output_tokens,
+				cache_creation_input_tokens, cache_read_input_tokens,
+				reasoning_tokens, cost_microdollars, cost_status, cost_source,
+				occurred_at, dedup_key
+			)
+			SELECT
+				session_id, message_ordinal, source, model,
+				input_tokens, output_tokens,
+				cache_creation_input_tokens, cache_read_input_tokens,
+				reasoning_tokens, cost_microdollars, cost_status, cost_source,
+				occurred_at, dedup_key
+			FROM old_db.usage_events
+			WHERE session_id IN (
+				SELECT id FROM `+tempIDsTable+`
+			)`,
+		); err != nil {
+			return fmt.Errorf("copying usage_events: %w", err)
+		}
 	}
 
 	// Copy tool_calls. Map old message_id to new

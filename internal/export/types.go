@@ -9,9 +9,9 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
-const UsageDailySchemaVersion = 3
-const ActivityReportSchemaVersion = 3
-const SessionSummarySchemaVersion = 3
+const UsageDailySchemaVersion = 4
+const ActivityReportSchemaVersion = 4
+const SessionSummarySchemaVersion = 4
 
 // CostSource is a closed contract enum. Adding a value requires a schema version
 // bump for any export surface that emits it.
@@ -24,15 +24,15 @@ const (
 )
 
 type PricingBlock struct {
-	Source              string                        `json:"source"`
-	TableVersion        string                        `json:"table_version"`
-	LatestRowUpdatedAt  *time.Time                    `json:"latest_row_updated_at"`
-	CustomOverrideCount int                           `json:"custom_override_count"`
-	EffectiveRowCount   int                           `json:"effective_row_count"`
-	Digest              string                        `json:"digest"`
-	CostSource          CostSource                    `json:"cost_source"`
-	Fallback            PricingFallback               `json:"fallback"`
-	Models              map[string]EffectiveModelRate `json:"models"`
+	Source              string                            `json:"source"`
+	TableVersion        string                            `json:"table_version"`
+	LatestRowUpdatedAt  *time.Time                        `json:"latest_row_updated_at"`
+	CustomOverrideCount int                               `json:"custom_override_count"`
+	EffectiveRowCount   int                               `json:"effective_row_count"`
+	Digest              string                            `json:"digest"`
+	CostSource          CostSource                        `json:"cost_source"`
+	Fallback            PricingFallback                   `json:"fallback"`
+	Models              map[string]ModelPricingProvenance `json:"models"`
 }
 
 type PricingFallback struct {
@@ -40,7 +40,13 @@ type PricingFallback struct {
 	Models []string `json:"models"`
 }
 
+type ModelPricingProvenance struct {
+	CostSource  CostSource           `json:"cost_source"`
+	Resolutions []EffectiveModelRate `json:"resolutions"`
+}
+
 type EffectiveModelRate struct {
+	PricedModel           string      `json:"priced_model"`
 	MatchedPattern        *string     `json:"matched_pattern"`
 	InputCostPerMTok      money.Money `json:"input_cost_per_mtok"`
 	OutputCostPerMTok     money.Money `json:"output_cost_per_mtok"`

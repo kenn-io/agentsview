@@ -253,6 +253,7 @@ export IFLOW_DIR=~/custom/iflow/projects
 export KILO_DIR=~/custom/kilo
 export KILO_LEGACY_DIR=~/custom/kilo-legacy
 export KIMI_DIR=~/custom/kimi/sessions
+export KIMI_WORK_DIR=~/custom/kimi-work/sessions
 export KIRO_SESSIONS_DIR=~/custom/kiro
 export KIRO_IDE_DIR=~/custom/kiro-ide
 export MIMOCODE_DIR=~/custom/mimocode

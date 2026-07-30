@@ -227,6 +227,39 @@ func TestOpenLegacySchemasPreservesArchiveAndRequestsResync(t *testing.T) {
 	}
 }
 
+func TestLegacySchemaAddsArtifactImportAuthorityNonDestructively(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	conn, err := sql.Open("sqlite3", makeDSN(path, false))
+	require.NoError(t, err)
+	conn.SetMaxOpenConns(1)
+	_, err = conn.Exec(preParentLegacySchema)
+	require.NoError(t, err)
+	_, err = conn.Exec(legacyArchiveRows)
+	require.NoError(t, err)
+	_, err = conn.Exec(fmt.Sprintf("PRAGMA user_version = %d", dataVersion))
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	database, err := Open(path)
+	require.NoError(t, err)
+	defer database.Close()
+	requireSessionExists(t, database, "legacy-session")
+
+	for _, table := range []string{
+		"artifact_import_queue",
+		"artifact_import_attempt_generations",
+		"artifact_peer_checkpoint_heads",
+	} {
+		var count int
+		err := database.getReader().QueryRow(`
+			SELECT count(*) FROM sqlite_master
+			WHERE type = 'table' AND name = ?
+		`, table).Scan(&count)
+		require.NoError(t, err)
+		assert.Equal(t, 1, count, "table %s", table)
+	}
+}
+
 func requireIndexColumns(
 	t *testing.T, d *DB, index string, want []string,
 ) {

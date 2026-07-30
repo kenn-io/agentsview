@@ -435,6 +435,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentOpenClaw,
 		AgentQClaw,
 		AgentKimi,
+		AgentKimiWork,
 		AgentClaudeAI,
 		AgentChatGPT,
 		AgentKiro,

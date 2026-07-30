@@ -112,6 +112,46 @@ func TestExportClassifiesBoundedLoadLimit(t *testing.T) {
 	assertNoPublishedArtifacts(t, store, contractOrigin)
 }
 
+func TestExportRejectsNativeSessionIDsImporterCannotRepresent(t *testing.T) {
+	tests := []struct {
+		name      string
+		sessionID string
+	}{
+		{name: "empty", sessionID: ""},
+		{name: "reserved separator", sessionID: "native~session"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newTestArtifactStore(t)
+			session := &db.Session{
+				ID:               tt.sessionID,
+				Machine:          "local",
+				MessageCount:     1,
+				UserMessageCount: 1,
+			}
+			messages := []db.Message{{
+				SessionID: tt.sessionID,
+				Ordinal:   0,
+				Role:      "user",
+				Content:   "hello",
+			}}
+
+			_, _, err := exportLoadedSessionToStore(
+				t.Context(),
+				store,
+				contractOrigin,
+				session,
+				messages,
+				nil,
+				productionArtifactLimits(),
+			)
+			require.ErrorIs(t, err, ErrArtifactExportRejected)
+			assert.Contains(t, err.Error(), "native session ID")
+			assertNoPublishedArtifacts(t, store, contractOrigin)
+		})
+	}
+}
+
 func TestExportRejectsNestedAmplificationBeforePublication(t *testing.T) {
 	tests := []struct {
 		name      string

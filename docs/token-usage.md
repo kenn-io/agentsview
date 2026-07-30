@@ -133,6 +133,13 @@ the URL — copying the address bar gives you a shareable link to the exact view
 you're looking at. A **Clear filters** link appears next to the refresh button
 when anything is active.
 
+Switch the toolbar metric from **Cost** to **Tokens** to analyze token volume.
+The token-type multi-select scopes token totals, trends, attribution,
+comparisons, and top-session ranking to any combination of **Input**, **Cache
+Writes**, **Cached Read**, and **Output**. All four are selected by default.
+Token-type selections are also written to the URL, so an Output-only project or
+session ranking can be shared directly.
+
 Project-key exclusions are the exception. Shared-store project keys are scoped
 to the current aggregate archive set, so the page keeps those exclusions in
 memory and does not write or restore them through the URL.
@@ -339,12 +346,12 @@ input_microdollars_per_mtok = 200_000
 output_microdollars_per_mtok = 800_000
 ```
 
-| Field                                      | Description                                                                  |
-| ------------------------------------------ | ---------------------------------------------------------------------------- |
-| `input_microdollars_per_mtok`              | Integer microdollars per million input tokens (defaults to `0` if omitted)   |
-| `output_microdollars_per_mtok`             | Integer microdollars per million output tokens (defaults to `0` if omitted)  |
-| `cache_creation_microdollars_per_mtok`     | Integer microdollars per million cache-creation tokens (optional)            |
-| `cache_read_microdollars_per_mtok`         | Integer microdollars per million cache-read tokens (optional)                |
+| Field                                  | Description                                                                 |
+| -------------------------------------- | --------------------------------------------------------------------------- |
+| `input_microdollars_per_mtok`          | Integer microdollars per million input tokens (defaults to `0` if omitted)  |
+| `output_microdollars_per_mtok`         | Integer microdollars per million output tokens (defaults to `0` if omitted) |
+| `cache_creation_microdollars_per_mtok` | Integer microdollars per million cache-creation tokens (optional)           |
+| `cache_read_microdollars_per_mtok`     | Integer microdollars per million cache-read tokens (optional)               |
 
 The table key is the model name as it appears in your session data (match the
 string the agent itself writes, dots and all — quote the key if it contains
@@ -399,20 +406,18 @@ it.
 ### Copilot Reported Billing
 
 Copilot CLI `session.shutdown` events can include a `totalNanoAiu` billing
-total. Copilot sessions starting on or after June 1,
-2026 can report an authoritative `totalNanoAiu` billing total. Older sessions
-remain catalog-priced because they were created under the premium-request
-pricing model. AgentsView converts that cumulative amount
-exactly (`totalNanoAiu / 1e11` USD) and stores the session-level value
-through the normal reported-cost fields, on one stable usage-event row.
-Later shutdowns supersede earlier totals, including an authoritative final
-zero.
+total. Copilot sessions starting on or after June 1, 2026 can report an
+authoritative `totalNanoAiu` billing total. Older sessions remain catalog-priced
+because they were created under the premium-request pricing model. AgentsView
+converts that cumulative amount exactly (`totalNanoAiu / 1e11` USD) and stores
+the session-level value through the normal reported-cost fields, on one stable
+usage-event row. Later shutdowns supersede earlier totals, including an
+authoritative final zero.
 
 When the selected data contains this reported session cost, AgentsView
-suppresses every catalog-priced estimate for that session. This prevents
-double counting across models, days, and resumed segments. Historical Copilot
-sessions without `totalNanoAiu` and other Copilot-family agents retain
-catalog pricing.
+suppresses every catalog-priced estimate for that session. This prevents double
+counting across models, days, and resumed segments. Historical Copilot sessions
+without `totalNanoAiu` and other Copilot-family agents retain catalog pricing.
 
 For unfiltered reports, AgentsView allocates the session total across the
 selected usage rows in proportion to their catalog-price estimates. This keeps
@@ -421,10 +426,10 @@ session or report total. In a multi-model session those model costs are
 estimated attributions; Copilot reports only the session total, not a charge per
 model.
 
-A date window containing only rows before the reported settlement can still
-show catalog estimates because the later session total is outside the selected
-data. Model-filtered reports also remain catalog estimates because applying the
-whole session total to one selected model would overstate that model.
+A date window containing only rows before the reported settlement can still show
+catalog estimates because the later session total is outside the selected data.
+Model-filtered reports also remain catalog estimates because applying the whole
+session total to one selected model would overstate that model.
 
 ### Copilot AI Credits
 
@@ -434,8 +439,8 @@ have a complete cost. The conversion is cost divided by `$0.01`, matching the
 unit AgentsView uses for Copilot credit reporting. When a session carries an
 authoritative Copilot-reported cost, the credits derive from that reported
 total; otherwise they derive from the catalog estimate. The Usage dashboard
-shows this as an optional summary card, and `agentsview session usage` prints
-an `AI Credits` line for priced Copilot-family sessions. Usage report totals
+shows this as an optional summary card, and `agentsview session usage` prints an
+`AI Credits` line for priced Copilot-family sessions. Usage report totals
 continue to expose the same `copilotAICredits` field.
 
 ### Claude Streaming & Codex Token Events
@@ -490,15 +495,15 @@ Beyond raw speed, `agentsview usage`:
   CLI, OpenCode-format tools, Pi, Gemini, Qwen Code, OpenClaw/QClaw, Hermes,
   WorkBuddy, Forge, Piebald, Antigravity, Zed, VS Code Copilot, Visual Studio
   Copilot, Mistral Vibe, and gptme from the same database and command whenever
-  those sessions log token metadata. Filter with `--agent <name>` when you
-  want a single-agent view.
+  those sessions log token metadata. Filter with `--agent <name>` when you want
+  a single-agent view.
 - **Shares one database with the UI** — the same data powers
-  [Analytics](/usage/#dashboard) and session detail views, so there's no
-  second index to keep fresh.
+  [Analytics](/usage/#dashboard) and session detail views, so there's no second
+  index to keep fresh.
 - **Includes on-demand sync** — when no AgentsView server is running, `usage`
   does a quick incremental sync scoped to files modified since the last sync
-  start time so reports always reflect current state. Skip with `--no-sync`
-  for the fastest path.
+  start time so reports always reflect current state. Skip with `--no-sync` for
+  the fastest path.
 
 ## `agentsview usage daily`
 
@@ -530,13 +535,13 @@ to X" still works.
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 4,
   "pricing": {
     "source": "fetched",
     "table_version": "2026-07-03T12:00:00Z",
     "latest_row_updated_at": "2026-07-03T12:00:00Z",
     "custom_override_count": 0,
-    "effective_row_count": 2428,
+    "effective_row_count": 2432,
     "digest": "sha256:8d815a1737bce68fa1a19ba977bf33c8c8efcc74deb954fcf62ce80e46e75f2c",
     "cost_source": "mixed",
     "fallback": {
@@ -545,12 +550,18 @@ to X" still works.
     },
     "models": {
       "claude-opus-4-6": {
-        "matched_pattern": "claude-opus-4-6",
-        "input_cost_per_mtok": 15,
-        "output_cost_per_mtok": 75,
-        "cache_write_cost_per_mtok": 18.75,
-        "cache_read_cost_per_mtok": 1.5,
-        "cost_source": "computed"
+        "cost_source": "computed",
+        "resolutions": [
+          {
+            "priced_model": "claude-opus-4-6",
+            "matched_pattern": "claude-opus-4-6",
+            "input_cost_per_mtok": {"microdollars": 15000000},
+            "output_cost_per_mtok": {"microdollars": 75000000},
+            "cache_write_cost_per_mtok": {"microdollars": 18750000},
+            "cache_read_cost_per_mtok": {"microdollars": 1500000},
+            "cost_source": "computed"
+          }
+        ]
       }
     }
   },
@@ -628,10 +639,12 @@ versioned surfaces, so a future bump in one does not imply a bump in the others.
 Usage and activity already emitted `schema_version: 1` before 0.38, and the
 session-summary v1 contract shipped in 0.37.1. Releases 0.38.0 and 0.38.1
 emitted the substantially revised project-evidence shape while still reporting
-version 1. Current builds correct all three markers to version 2; those two
-transitional releases must not be treated as v1-compatible. The commands do
-not provide a v1 output mode. Consumers should require the expected
-`schema_version` and ignore unknown additive fields.
+version 1. Version 2 corrected those markers, version 3 introduced exact
+microdollar money objects, and current builds emit version 4 with resolved-model
+pricing provenance. The two transitional releases must not be treated as
+v1-compatible. The commands do not provide an earlier-version output mode.
+Consumers should require the expected `schema_version` and ignore unknown
+additive fields.
 
 | Change                                                                                | Requires `schema_version` bump? |
 | ------------------------------------------------------------------------------------- | ------------------------------- |
@@ -646,25 +659,37 @@ not provide a v1 output mode. Consumers should require the expected
 | Project key derivation, remote normalization, or path fallback normalization changes  | Yes                             |
 | New closed-enum values for project resolution, session classification, or cost source | Yes                             |
 
-Additive fields may appear in future v1 payloads. Consumers should ignore
-unknown keys.
+Additive fields may appear in future compatible payloads. Consumers should
+ignore unknown keys.
 
 ### Pricing Provenance
 
 Versioned usage, activity, and session-export payloads include a report-level
 `pricing` block. `pricing.models` is nested under that block and is keyed by the
-distinct model names that appear in the payload, not by every row in the pricing
-table. Each model entry reports `matched_pattern`, `input_cost_per_mtok`,
-`output_cost_per_mtok`, `cache_write_cost_per_mtok`, `cache_read_cost_per_mtok`,
-and `cost_source`.
+distinct model names reported in payload rows, not by canonical pricing names or
+every row in the pricing table. Each reported-model entry has an aggregate
+`cost_source` and a `resolutions` array. A resolution reports `priced_model`,
+`matched_pattern`, `input_cost_per_mtok`, `output_cost_per_mtok`,
+`cache_write_cost_per_mtok`, `cache_read_cost_per_mtok`, and `cost_source`.
+Resolutions are sorted by `priced_model` and then `matched_pattern`.
 
-`cost_source` is a closed v2 enum everywhere it appears: `computed`, `reported`,
-or `mixed`. `computed` means AgentsView derived cost from token counts and the
-effective pricing resolver. `reported` means a source supplied explicit cost,
-such as Cursor Admin API billing data; those amounts may not be derivable from
-tokens times rates. `mixed` means the enclosing report or rollup contains both
-provenance kinds. For computed costs, reasoning tokens are priced at the
-output-token rate.
+Ordinary models have one resolution whose `priced_model` is the reported model.
+Timestamp-aware aliases can have more than one resolution in a report. For
+example, one `kimi-for-coding` entry can contain both `moonshot/kimi-k2.6` and
+`kimi-k3` resolutions when its rows span the pricing cutoff. An exact
+custom-pricing row for the reported alias takes precedence before timestamp
+canonicalization and produces one self-resolution. Fallback provenance also
+lists reported model names.
+
+`cost_source` is a closed enum everywhere it appears: `computed`, `reported`, or
+`mixed`. It was established in schema version 2 and is unchanged in version 4.
+`computed` means AgentsView derived cost from token counts and the effective
+pricing resolver. `reported` means a source supplied explicit cost, such as
+Cursor Admin API billing data; those amounts may not be derivable from tokens
+times rates. `mixed` means the enclosing report, reported-model entry, or rollup
+contains both provenance kinds. Each resolution carries its own source, while
+the reported-model entry aggregates its resolutions. For computed costs,
+reasoning tokens are priced at the output-token rate.
 
 An authoritative session total is never added to that session's computed
 estimate. It replaces the estimate completely. A report-level pricing block can
@@ -674,9 +699,10 @@ from catalog-cost weights and sum to the reported total. A multi-session rollup
 can also be `mixed` when different sessions use different sources.
 
 If a source reports an amount for a model with no matching effective pricing
-row, the model entry has `cost_source: "reported"`, `matched_pattern: null`, and
-zero in all four rate fields. The reported amount remains authoritative; the
-zero rates express unavailable rate provenance, not a zero-rate calculation.
+row, its model entry and resolution have `cost_source: "reported"`, the
+resolution has `matched_pattern: null`, and all four rate fields are zero. The
+reported amount remains authoritative; the zero rates express unavailable rate
+provenance, not a zero-rate calculation.
 
 `pricing.source` is one of `embedded`, `fetched`, `custom`, `custom+embedded`,
 or `custom+fetched`. Combined values always serialize `custom` first, followed
@@ -693,7 +719,8 @@ exactly `model_pattern`, `input_per_mtok`, `output_per_mtok`,
 `2026-07-03T12:00:00Z`. Digest canonicalization errors fail the export instead
 of emitting an empty digest. The digest uses the resolver's internal canonical
 pricing-row keys; the public `pricing.models` block uses the `*_cost_per_mtok`
-field names shown above.
+field names shown above. The reported-to-priced resolution mapping is not part
+of the pricing-table digest.
 
 ### Project Identity
 
@@ -799,8 +826,8 @@ incremental sync before querying so reports always include recent activity:
 1. If the parser data version has changed (i.e. you just upgraded), a full
    resync runs first.
 1. Otherwise, the sync scans only files modified since the last recorded sync
-   start time, minus a 10-second safety margin to catch files written during
-   the prior sync.
+   start time, minus a 10-second safety margin to catch files written during the
+   prior sync.
 
 If an `agentsview serve` process is already running, the file watcher already
 has you covered and the on-demand sync is skipped to avoid duplicate work. A

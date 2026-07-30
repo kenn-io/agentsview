@@ -79,21 +79,11 @@ func normalizeCheckpointName(name string) (string, error) {
 }
 
 func checkpointSequence(filename string) (int, error) {
-	base := strings.TrimSuffix(filename, ".json")
-	if len(base) != len("cp-0000000000") || !strings.HasPrefix(base, "cp-") {
-		return 0, fmt.Errorf("%w: invalid checkpoint name", ErrArtifactInvalid)
+	sequence, err := db.ParseArtifactCheckpointSequence(filename)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %v", ErrArtifactInvalid, err)
 	}
-	seq := 0
-	for _, r := range base[len("cp-"):] {
-		if r < '0' || r > '9' {
-			return 0, fmt.Errorf("%w: invalid checkpoint name", ErrArtifactInvalid)
-		}
-		seq = seq*10 + int(r-'0')
-	}
-	if seq <= 0 {
-		return 0, fmt.Errorf("%w: invalid checkpoint sequence", ErrArtifactInvalid)
-	}
-	return seq, nil
+	return sequence, nil
 }
 
 func validateHashHex(hash string) error {

@@ -866,8 +866,9 @@ func TestWatcherOverflowCollapsesPathAndByteLimitsToOneFullSync(t *testing.T) {
 			var callCount atomic.Int32
 			backend := newFakeWatchBackend()
 			w := startFakeWatcherWithLimits(t, backend, func(batch WatchBatch) {
+				call := callCount.Add(1)
 				calls <- batch
-				if callCount.Add(1) == 1 {
+				if call == 1 {
 					<-firstRelease
 				}
 			}, tt.maxEntries, tt.maxPathBytes)

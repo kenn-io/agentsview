@@ -1,12 +1,12 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "pricing": {
     "source": "fetched",
     "table_version": "2026-07-03T12:00:00Z",
     "latest_row_updated_at": "2026-07-03T12:00:00Z",
     "custom_override_count": 0,
-    "effective_row_count": 2428,
-    "digest": "sha256:f929bb40d51293f4e0c97a5b53fdbd09c4f6a291bee18a7a19616d4b1ca11a2e",
+    "effective_row_count": 2432,
+    "digest": "sha256:af18e039bcb7f6e32f7db44fe28c37ce348e90236bdd176f72307c36b8a0e831",
     "cost_source": "mixed",
     "fallback": {
       "used": false,
@@ -14,36 +14,48 @@
     },
     "models": {
       "fixture-model-computed": {
-        "matched_pattern": "fixture-model-computed",
-        "input_cost_per_mtok": {
-          "microdollars": 2000000
-        },
-        "output_cost_per_mtok": {
-          "microdollars": 8000000
-        },
-        "cache_write_cost_per_mtok": {
-          "microdollars": 3000000
-        },
-        "cache_read_cost_per_mtok": {
-          "microdollars": 500000
-        },
-        "cost_source": "computed"
+        "cost_source": "computed",
+        "resolutions": [
+          {
+            "priced_model": "fixture-model-computed",
+            "matched_pattern": "fixture-model-computed",
+            "input_cost_per_mtok": {
+              "microdollars": 2000000
+            },
+            "output_cost_per_mtok": {
+              "microdollars": 8000000
+            },
+            "cache_write_cost_per_mtok": {
+              "microdollars": 3000000
+            },
+            "cache_read_cost_per_mtok": {
+              "microdollars": 500000
+            },
+            "cost_source": "computed"
+          }
+        ]
       },
       "fixture-model-reported": {
-        "matched_pattern": "fixture-model-reported",
-        "input_cost_per_mtok": {
-          "microdollars": 1000000
-        },
-        "output_cost_per_mtok": {
-          "microdollars": 4000000
-        },
-        "cache_write_cost_per_mtok": {
-          "microdollars": 2000000
-        },
-        "cache_read_cost_per_mtok": {
-          "microdollars": 250000
-        },
-        "cost_source": "reported"
+        "cost_source": "reported",
+        "resolutions": [
+          {
+            "priced_model": "fixture-model-reported",
+            "matched_pattern": "fixture-model-reported",
+            "input_cost_per_mtok": {
+              "microdollars": 1000000
+            },
+            "output_cost_per_mtok": {
+              "microdollars": 4000000
+            },
+            "cache_write_cost_per_mtok": {
+              "microdollars": 2000000
+            },
+            "cache_read_cost_per_mtok": {
+              "microdollars": 250000
+            },
+            "cost_source": "reported"
+          }
+        ]
       }
     }
   },

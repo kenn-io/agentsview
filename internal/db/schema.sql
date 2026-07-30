@@ -1053,3 +1053,117 @@ CREATE INDEX IF NOT EXISTS idx_secret_findings_session
     ON secret_findings(session_id);
 CREATE INDEX IF NOT EXISTS idx_secret_findings_rule
     ON secret_findings(rule_name);
+
+-- Durable normalized-artifact import claims. Artifact kinds evolve
+-- independently, so each claim retains a separate version gate.
+CREATE TABLE IF NOT EXISTS artifact_import_queue (
+    origin                      TEXT NOT NULL,
+    kind                        TEXT NOT NULL,
+    name                        TEXT NOT NULL,
+    sha256                      TEXT NOT NULL,
+    size                        INTEGER NOT NULL CHECK (size >= 0),
+    required_checkpoint_version INTEGER NOT NULL CHECK (
+        required_checkpoint_version >= 1
+    ),
+    required_manifest_version   INTEGER NOT NULL CHECK (
+        required_manifest_version >= 1
+    ),
+    required_segment_version    INTEGER NOT NULL CHECK (
+        required_segment_version >= 1
+    ),
+    attempt_generation          INTEGER NOT NULL DEFAULT 0 CHECK (
+        attempt_generation >= 0
+    ),
+    quarantine_pending          INTEGER NOT NULL DEFAULT 0 CHECK (
+        quarantine_pending IN (0, 1)
+    ),
+    enqueued_at                 TEXT NOT NULL DEFAULT (
+        strftime('%Y-%m-%dT%H:%M:%fZ','now')
+    ),
+    PRIMARY KEY (origin, kind, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_artifact_import_queue_pending
+ON artifact_import_queue (
+    required_checkpoint_version,
+    required_manifest_version,
+    required_segment_version,
+    attempt_generation,
+    enqueued_at,
+    origin,
+    kind,
+    name
+);
+
+CREATE TABLE IF NOT EXISTS artifact_import_attempt_generations (
+    singleton  INTEGER PRIMARY KEY CHECK (singleton = 1),
+    generation INTEGER NOT NULL CHECK (generation >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS artifact_peer_checkpoint_heads (
+    origin            TEXT PRIMARY KEY,
+    sequence          INTEGER NOT NULL CHECK (sequence >= 1),
+    checkpoint_sha256 TEXT NOT NULL,
+    checkpoint_size   INTEGER NOT NULL CHECK (checkpoint_size >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS artifact_checkpoint_landings (
+    origin            TEXT PRIMARY KEY,
+    sequence          INTEGER NOT NULL CHECK (sequence >= 1),
+    checkpoint_sha256 TEXT NOT NULL,
+    checkpoint_size   INTEGER NOT NULL CHECK (checkpoint_size >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS artifact_checkpoint_landing_sessions (
+    origin        TEXT NOT NULL,
+    gid           TEXT NOT NULL,
+    manifest_hash TEXT NOT NULL,
+    PRIMARY KEY (origin, gid),
+    FOREIGN KEY (origin) REFERENCES artifact_checkpoint_landings(origin)
+        ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS artifact_checkpoint_stages (
+    origin            TEXT NOT NULL,
+    sequence          INTEGER NOT NULL CHECK (sequence >= 1),
+    checkpoint_sha256 TEXT NOT NULL,
+    checkpoint_size   INTEGER NOT NULL CHECK (checkpoint_size >= 0),
+    complete          INTEGER NOT NULL DEFAULT 0 CHECK (complete IN (0, 1)),
+    session_count     INTEGER NOT NULL DEFAULT 0 CHECK (session_count >= 0),
+    pending_count     INTEGER NOT NULL DEFAULT 0 CHECK (pending_count >= 0),
+    decoded_count     INTEGER NOT NULL DEFAULT 0 CHECK (decoded_count >= 0),
+    decode_offset     INTEGER NOT NULL DEFAULT 0 CHECK (decode_offset >= 0),
+    decoder_version   INTEGER NOT NULL DEFAULT 1 CHECK (decoder_version >= 1),
+    PRIMARY KEY (origin, sequence)
+);
+
+CREATE TABLE IF NOT EXISTS artifact_checkpoint_stage_sessions (
+    origin             TEXT NOT NULL,
+    sequence           INTEGER NOT NULL,
+    gid                TEXT NOT NULL,
+    manifest_hash      TEXT NOT NULL,
+    attempt_generation INTEGER NOT NULL DEFAULT 0 CHECK (
+        attempt_generation >= 0
+    ),
+    satisfied         INTEGER NOT NULL DEFAULT 0 CHECK (satisfied IN (0, 1)),
+    PRIMARY KEY (origin, sequence, gid),
+    FOREIGN KEY (origin, sequence)
+        REFERENCES artifact_checkpoint_stages(origin, sequence)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_artifact_checkpoint_stage_ready
+ON artifact_checkpoint_stage_sessions (
+    origin, sequence, satisfied, attempt_generation, gid, manifest_hash
+);
+
+CREATE TABLE IF NOT EXISTS artifact_imported_sessions (
+    origin              TEXT NOT NULL,
+    gid                 TEXT NOT NULL,
+    manifest_hash       TEXT NOT NULL,
+    imported_session_id TEXT NOT NULL,
+    imported_at         TEXT NOT NULL DEFAULT (
+        strftime('%Y-%m-%dT%H:%M:%fZ','now')
+    ),
+    PRIMARY KEY (origin, gid)
+);
