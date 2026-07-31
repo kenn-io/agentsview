@@ -5,6 +5,8 @@ package e2e_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"testing"
@@ -110,7 +112,7 @@ func TestArtifactSyncTwoInstanceFolder(t *testing.T) {
 		3,
 	)
 
-	writeCompleteCorruptCheckpoint(t, target)
+	publishCompleteCorruptCheckpoint(t, target)
 	afterCorruptionA := syncArtifactNode(t, nodeA, target)
 	assert.Equal(t, 1, afterCorruptionA.Quarantined)
 	afterCorruptionB := syncArtifactNode(t, nodeB, target)
@@ -268,39 +270,60 @@ func writeArtifactSyncSource(
 	require.NoError(t, os.WriteFile(path, content, 0o600))
 }
 
-func writeCompleteCorruptCheckpoint(
+func publishCompleteCorruptCheckpoint(
 	t *testing.T,
 	target string,
 ) {
 	t.Helper()
 	origin := "broken-a7b8c9"
+	body := []byte(`{"v":1}`)
 	ref, err := artifact.NewRef(
 		origin,
 		artifact.KindCheckpoints,
 		"cp-0000000001.json",
 	)
 	require.NoError(t, err)
-	wire, err := artifact.ToWireRef(ref)
-	require.NoError(t, err)
-	directory := filepath.Join(
-		target,
-		origin,
-		string(artifact.KindCheckpoints),
-	)
-	require.NoError(t, os.MkdirAll(directory, 0o755))
-	file, err := os.OpenFile(
-		filepath.Join(directory, wire.Name),
-		os.O_WRONLY|os.O_CREATE|os.O_EXCL,
-		0o600,
+	sum := sha256.Sum256(body)
+	identity, err := artifact.NewIdentity(
+		hex.EncodeToString(sum[:]),
+		int64(len(body)),
 	)
 	require.NoError(t, err)
-	encodeErr := artifact.EncodeWire(
-		context.Background(),
+	repository, err := artifact.OpenRepository(t.Context(), t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, repository.Close()) })
+	_, err = repository.Content().Create(
+		t.Context(),
 		ref,
-		bytes.NewBufferString(`{"v":1}`),
-		file,
+		identity,
+		"application/json",
+		bytes.NewReader(body),
 	)
-	closeErr := file.Close()
-	require.NoError(t, encodeErr)
-	require.NoError(t, closeErr)
+	require.NoError(t, err)
+
+	transport, err := artifact.OpenFolderTransport(
+		target,
+		artifact.FolderTransportOptions{},
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	result, err := transport.Exchange(
+		t.Context(),
+		artifactSyncTransportStore{ArtifactStore: repository.Content()},
+		origin,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Published)
+	assert.False(t, result.More)
+}
+
+type artifactSyncTransportStore struct {
+	artifact.ArtifactStore
+}
+
+func (artifactSyncTransportStore) RecordTransportChanged(
+	context.Context,
+	artifact.Entry,
+) error {
+	return nil
 }

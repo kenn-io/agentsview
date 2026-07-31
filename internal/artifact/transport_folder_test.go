@@ -999,6 +999,30 @@ func TestFolderTransportExchangeLockProtectsActivePublishTemp(t *testing.T) {
 	assert.FileExists(t, active)
 }
 
+func TestFolderTransportExchangeLockRejectsSymlinkEscape(t *testing.T) {
+	t.Parallel()
+
+	target := t.TempDir()
+	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+
+	escaped := filepath.Join(t.TempDir(), "escaped.lock")
+	lockPath := filepath.Join(target, folderExchangeLockName)
+	if err := os.Symlink(escaped, lockPath); err != nil {
+		t.Skipf("creating lock symlink: %v", err)
+	}
+
+	_, err = transport.Exchange(
+		t.Context(),
+		&transportRecordingStore{ArtifactStore: newTestArtifactStore(t)},
+		testFolderPublishOrigin,
+	)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "exchange lock is not a regular file")
+	assert.NoFileExists(t, escaped)
+}
+
 func TestFolderTransportRejectsOversizedStoreEntryBeforePublication(
 	t *testing.T,
 ) {

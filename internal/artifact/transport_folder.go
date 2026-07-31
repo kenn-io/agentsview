@@ -13,9 +13,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
-
-	"github.com/gofrs/flock"
 )
 
 const (
@@ -186,28 +183,6 @@ func (t *folderTransport) Exchange(
 		return result, err
 	}
 	return result, nil
-}
-
-func (t *folderTransport) acquireExchangeLockLocked(
-	ctx context.Context,
-) (*flock.Flock, error) {
-	lock := flock.New(filepath.Join(t.target, folderExchangeLockName))
-	locked, err := lock.TryLockContext(ctx, 100*time.Millisecond)
-	if err != nil {
-		_ = lock.Close()
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, ctxErr
-		}
-		return nil, fmt.Errorf("acquiring artifact folder exchange lock: %w", err)
-	}
-	if !locked {
-		_ = lock.Close()
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, ctxErr
-		}
-		return nil, errors.New("artifact folder exchange is already running")
-	}
-	return lock, nil
 }
 
 func (t *folderTransport) Close() error {
