@@ -12467,6 +12467,7 @@ func (e *Engine) SyncSingleSessionContext(
 		return nil
 	}
 
+	writtenIDs := make([]string, 0, len(res.results))
 	for _, pr := range res.results {
 		if err := e.writeSessionFull(
 			pendingWrite{
@@ -12484,12 +12485,18 @@ func (e *Engine) SyncSingleSessionContext(
 		} else if errors.Is(err, errSessionPreserved) {
 			preserved = true
 		}
+		writtenIDs = append(writtenIDs, pr.Session.ID)
 	}
 
-	// Link subagent child sessions to their parents.
-	// Required for Zencoder sessions that reference subagent
-	// session IDs in tool_calls.subagent_session_id.
-	if err := e.db.LinkSubagentSessions(); err != nil {
+	// Link subagent child sessions to their parents (required for agents
+	// that reference subagent session IDs in
+	// tool_calls.subagent_session_id, e.g. Zencoder). Scoped to the
+	// sessions this sync wrote: the session watcher re-syncs a single file
+	// on every change, so a global pass here would make per-event work
+	// scale with the archive's spawn edges instead of the changed batch.
+	if err := e.db.LinkSubagentSessionsForSessions(
+		e.applyIDPrefixToSessionIDs(writtenIDs),
+	); err != nil {
 		log.Printf("link subagent sessions: %v", err)
 	}
 

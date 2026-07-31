@@ -426,10 +426,200 @@ func TestLinkSubagentSessionsPlanScalesWithSpawnEdges(t *testing.T) {
 	}
 }
 
+// TestLinkSubagentSessionsForSessionsScopesToBatch pins the scoped variant's
+// contract: only children reachable from the given batch — via a batch
+// member's spawn edges (spawner side) or as a batch member that is itself a
+// child (child side) — are re-resolved. A mislinked child outside the batch
+// must be left alone; that skip is what bounds a single-session watcher sync
+// by the changed batch instead of the archive.
+func TestLinkSubagentSessionsForSessionsScopesToBatch(t *testing.T) {
+	setup := func(t *testing.T) *DB {
+		t.Helper()
+		d := testDB(t)
+		for _, pair := range [][2]string{
+			{"spawner-a", "child-a"},
+			{"spawner-b", "child-b"},
+		} {
+			spawner, child := pair[0], pair[1]
+			insertSession(t, d, spawner, "p", func(s *Session) {
+				s.MessageCount = 1
+			})
+			// Both children carry the buggy path-derived state: wrong
+			// parent, already tagged 'subagent'.
+			insertSession(t, d, child, "p", func(s *Session) {
+				s.MessageCount = 1
+				s.ParentSessionID = Ptr("wrong-parent")
+				s.RelationshipType = "subagent"
+			})
+			insertMessages(t, d, spawnEdgeTo(spawner, child, "spawn "+child))
+		}
+		return d
+	}
+
+	t.Run("spawner in batch links its child", func(t *testing.T) {
+		d := setup(t)
+		require.NoError(t,
+			d.LinkSubagentSessionsForSessions([]string{"spawner-a"}))
+
+		assert.Equal(t, "spawner-a", parentOfSession(t, d, "child-a"),
+			"child of a batch spawner must be re-linked")
+		assert.Equal(t, "wrong-parent", parentOfSession(t, d, "child-b"),
+			"a mislinked child outside the batch must not be touched")
+	})
+
+	t.Run("child in batch links itself", func(t *testing.T) {
+		d := setup(t)
+		require.NoError(t,
+			d.LinkSubagentSessionsForSessions([]string{"child-b"}))
+
+		assert.Equal(t, "spawner-b", parentOfSession(t, d, "child-b"),
+			"a batch member that is itself a child must be re-linked")
+		assert.Equal(t, "wrong-parent", parentOfSession(t, d, "child-a"),
+			"a mislinked child outside the batch must not be touched")
+	})
+
+	t.Run("empty batch is a no-op", func(t *testing.T) {
+		d := setup(t)
+		require.NoError(t, d.LinkSubagentSessionsForSessions(nil))
+		assert.Equal(t, "wrong-parent", parentOfSession(t, d, "child-a"))
+		assert.Equal(t, "wrong-parent", parentOfSession(t, d, "child-b"))
+	})
+}
+
+// TestLinkSubagentSessionsForSessionsConvergesAcrossIngestionOrder replays
+// the ingestion-order sequence of TestLinkSubagentSessionsConvergesAcross-
+// IngestionOrder through the scoped variant, batching exactly the session a
+// single-file watcher sync would have written each time. A conflicting edge
+// always arrives through its spawner's transcript, so the spawner is in that
+// sync's batch and the child it claims is re-resolved — scoping must not
+// reintroduce the provisional-parent lock-in the earliest-started rule fixed.
+func TestLinkSubagentSessionsForSessionsConvergesAcrossIngestionOrder(
+	t *testing.T,
+) {
+	const (
+		realSpawner = "real-spawner"
+		copySpawner = "copied-spawner"
+		child       = "kid"
+	)
+
+	d := testDB(t)
+	insertSession(t, d, realSpawner, "p", func(s *Session) {
+		s.MessageCount = 1
+		s.StartedAt = Ptr("2026-01-01T00:00:00.000Z")
+	})
+	insertSession(t, d, copySpawner, "p", func(s *Session) {
+		s.MessageCount = 1
+		s.StartedAt = Ptr("2026-06-01T00:00:00.000Z")
+	})
+	insertSession(t, d, child, "p", func(s *Session) {
+		s.MessageCount = 1
+		s.RelationshipType = "subagent"
+	})
+
+	// The copied spawner's transcript syncs first: its edge is the only one
+	// stored, so the link it writes is provisional.
+	insertMessages(t, d, spawnEdgeTo(copySpawner, child, "copied spawn"))
+	require.NoError(t,
+		d.LinkSubagentSessionsForSessions([]string{copySpawner}),
+		"link (copied edge only)")
+	assert.Equal(t, copySpawner, parentOfSession(t, d, child),
+		"the only stored edge wins provisionally")
+
+	// The real spawner's transcript syncs later. Only the real spawner is
+	// in this batch, but its edge claims the child, so the child must be
+	// re-resolved against BOTH edges and converge to the earliest-started
+	// (real) spawner.
+	insertMessages(t, d, spawnEdgeTo(realSpawner, child, "real spawn"))
+	require.NoError(t,
+		d.LinkSubagentSessionsForSessions([]string{realSpawner}),
+		"link (both edges)")
+	assert.Equal(t, realSpawner, parentOfSession(t, d, child),
+		"a scoped link must still converge to the real spawner once its "+
+			"edge lands")
+}
+
+// TestLinkSubagentSessionsForSessionsChunksLargeBatches drives a batch past
+// the per-statement chunk size (each id binds twice, so chunks are halved) to
+// prove linking still reaches ids beyond the first chunk.
+func TestLinkSubagentSessionsForSessionsChunksLargeBatches(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "spawner", "p", func(s *Session) {
+		s.MessageCount = 1
+	})
+	insertSession(t, d, "kid", "p", func(s *Session) {
+		s.MessageCount = 1
+		s.ParentSessionID = Ptr("wrong-parent")
+		s.RelationshipType = "subagent"
+	})
+	insertMessages(t, d, spawnEdgeTo("spawner", "kid", "spawn"))
+
+	// Front-load enough filler ids that the real spawner lands in a later
+	// chunk.
+	ids := make([]string, 0, maxSQLVars+1)
+	for i := range maxSQLVars {
+		ids = append(ids, "no-such-session-"+strconv.Itoa(i))
+	}
+	ids = append(ids, "spawner")
+
+	require.NoError(t, d.LinkSubagentSessionsForSessions(ids))
+	assert.Equal(t, "spawner", parentOfSession(t, d, "kid"),
+		"an id beyond the first chunk must still drive linking")
+}
+
+// TestLinkSubagentSessionsForSessionsPlanIsBatchBounded pins the cost shape
+// of the scoped statement, mirroring TestLinkSubagentSessionsPlanScalesWith-
+// SpawnEdges: the watcher calls this once per changed file, so neither
+// sessions nor tool_calls may be scanned — both UNION branches have to seek
+// their index and the archive's size must never enter the plan.
+func TestLinkSubagentSessionsForSessionsPlanIsBatchBounded(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		sessions int
+	}{
+		{name: "small archive", sessions: 4},
+		{name: "large archive", sessions: 500},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			for i := range tc.sessions {
+				insertSession(t, d, "bulk-"+strconv.Itoa(i), "p",
+					func(s *Session) { s.MessageCount = 1 })
+			}
+			insertSession(t, d, "spawner", "p", func(s *Session) {
+				s.MessageCount = 1
+			})
+			insertSession(t, d, "kid", "p", func(s *Session) {
+				s.MessageCount = 1
+				s.RelationshipType = "subagent"
+			})
+			insertMessages(t, d, spawnEdgeTo("spawner", "kid", "spawn"))
+			require.NoError(t,
+				d.LinkSubagentSessionsForSessions([]string{"spawner"}))
+
+			plan := queryPlanOf(
+				t, d, linkSubagentSessionsForSessionsQuery("(?)"),
+				"spawner", "spawner",
+			)
+
+			assert.NotContains(t, plan, "SCAN s",
+				"scoped linking must not scan sessions\n"+plan)
+			assert.NotContains(t, plan, "SCAN tc",
+				"scoped linking must not scan tool_calls: per-event cost "+
+					"has to track the batch, not the archive's edges\n"+plan)
+			assert.Contains(t, plan, "idx_tool_calls_session",
+				"the spawner-side branch must seek the session_id index\n"+
+					plan)
+			assert.Contains(t, plan, "idx_tool_calls_subagent",
+				"the child-side branch must seek the subagent partial "+
+					"index\n"+plan)
+		})
+	}
+}
+
 // queryPlanOf returns the EXPLAIN QUERY PLAN detail lines for sql.
-func queryPlanOf(t *testing.T, d *DB, sql string) string {
+func queryPlanOf(t *testing.T, d *DB, sql string, args ...any) string {
 	t.Helper()
-	rows, err := d.getReader().Query("EXPLAIN QUERY PLAN " + sql)
+	rows, err := d.getReader().Query("EXPLAIN QUERY PLAN "+sql, args...)
 	requireNoError(t, err, "EXPLAIN QUERY PLAN")
 	defer rows.Close()
 

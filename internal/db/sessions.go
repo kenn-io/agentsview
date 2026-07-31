@@ -1650,7 +1650,9 @@ const linkSubagentSessionsQuery = `
 // spawner is resolved, and linkSubagentSessionsQuery for why the
 // statement is driven from the spawn-edge index: every sync calls this,
 // so its cost has to track the number of spawn edges rather than the
-// size of the archive.
+// size of the archive. Per-event paths (single-session watcher syncs)
+// use LinkSubagentSessionsForSessions instead, which further bounds the
+// pass to the changed batch.
 func (db *DB) LinkSubagentSessions() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -1667,6 +1669,78 @@ func (db *DB) LinkSubagentSessions() error {
 		return fmt.Errorf("linking subagent sessions: %w", err)
 	}
 	return nil
+}
+
+// linkSubagentSessionsForSessionsQuery is linkSubagentSessionsQuery
+// restricted to the children a batch of changed sessions can affect. ph is
+// an inPlaceholders list bound twice: once per branch of the UNION.
+//
+// A changed session can alter linking in exactly two ways, one per branch:
+//   - tc.session_id IN ph: the session's transcript carries spawn edges, so
+//     every child it claims is re-resolved (idx_tool_calls_session seek).
+//     A conflicting edge always arrives through its spawner's transcript,
+//     so this branch is what lets a provisional link self-correct — the
+//     spawner whose edge just landed is in the batch by definition.
+//   - tc.subagent_session_id IN ph: the session is itself a child whose row
+//     was rewritten (e.g. re-parsed with a path-derived parent), so its own
+//     link is re-resolved (idx_tool_calls_subagent seek).
+//
+// Sessions outside both branches have unchanged edges, and resolution is a
+// pure function of the stored edges (see subagentSpawnerExpr), so their
+// links cannot have changed — skipping them is what keeps a single-session
+// watcher sync bounded by the batch instead of the archive.
+func linkSubagentSessionsForSessionsQuery(ph string) string {
+	return `
+	UPDATE sessions AS s
+	SET parent_session_id = (` + subagentSpawnerExpr + `
+	),
+	relationship_type = 'subagent',
+	local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+	WHERE s.id IN (
+		SELECT tc.subagent_session_id FROM tool_calls tc
+		WHERE tc.session_id IN ` + ph + `
+		AND tc.subagent_session_id IS NOT NULL
+		UNION
+		SELECT tc.subagent_session_id FROM tool_calls tc
+		WHERE tc.subagent_session_id IN ` + ph + `
+	)
+	AND (
+		relationship_type != 'subagent'
+		OR parent_session_id IS NOT (` + subagentSpawnerExpr + `
+		)
+	)`
+}
+
+// LinkSubagentSessionsForSessions is LinkSubagentSessions scoped to the
+// sessions written by one sync batch: only children reachable from a batch
+// member's spawn edges (or batch members that are themselves children) are
+// re-resolved. Per-event paths — the session watcher re-syncs a single file
+// on every change — must use this form so their linking cost tracks the
+// changed batch; bulk paths (full sync, reconciliation, resync) keep the
+// global LinkSubagentSessions pass they already coalesce to.
+func (db *DB) LinkSubagentSessionsForSessions(ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	// Each id binds twice (once per UNION branch), so halve the chunk to
+	// stay within SQLite's bind-variable limit.
+	return queryChunkedSize(ids, maxSQLVars/2, func(chunk []string) error {
+		ph, args := inPlaceholders(chunk)
+		allArgs := append(args, args...)
+		_, err := db.getWriter().Exec(
+			linkSubagentSessionsForSessionsQuery(ph), allArgs...,
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"linking subagent sessions for %d changed sessions: %w",
+				len(chunk), err,
+			)
+		}
+		return nil
+	})
 }
 
 // GetSessionFileInfo returns file_size and file_mtime for a session. Used for
