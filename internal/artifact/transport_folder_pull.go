@@ -116,38 +116,25 @@ func (t *folderTransport) pullJournalEventLocked(
 	if err != nil {
 		return err
 	}
-	if err := t.pullWireEntryLocked(
+	expected, err := NewIdentity(event.SHA256, event.Size)
+	if err != nil {
+		return err
+	}
+	outcome, err := t.pullWireEntryLocked(
 		ctx,
 		store,
 		kindRoot,
 		event.Origin,
 		event.Kind,
 		fs.FileInfoToDirEntry(info),
+		&expected,
 		result,
-	); err != nil {
-		return err
-	}
-	ref, err := FromWireRef(event.Origin, event.Kind, event.Name)
+	)
 	if err != nil {
 		return err
 	}
-	entry, err := store.Stat(ctx, ref)
-	if errors.Is(err, ErrArtifactNotFound) {
-		expected, identityErr := NewIdentity(event.SHA256, event.Size)
-		if identityErr != nil {
-			return identityErr
-		}
+	if outcome.Quarantined {
 		return writeFolderJournalRejection(kindRoot, event.Name, expected)
-	}
-	if err != nil {
-		return err
-	}
-	expected, err := NewIdentity(event.SHA256, event.Size)
-	if err != nil {
-		return err
-	}
-	if entry.Identity != expected {
-		return fmt.Errorf("%w: artifact journal identity mismatch", ErrArtifactConflict)
 	}
 	return nil
 }
@@ -216,15 +203,17 @@ func (t *folderTransport) pullOriginLocked(
 			kindRoot,
 			".",
 			func(entry os.DirEntry) error {
-				return t.pullWireEntryLocked(
+				_, err := t.pullWireEntryLocked(
 					ctx,
 					store,
 					kindRoot,
 					origin,
 					kind,
 					entry,
+					nil,
 					result,
 				)
+				return err
 			},
 		)
 		closeErr := kindRoot.Close()
@@ -235,6 +224,10 @@ func (t *folderTransport) pullOriginLocked(
 	return nil
 }
 
+type folderPullOutcome struct {
+	Quarantined bool
+}
+
 func (t *folderTransport) pullWireEntryLocked(
 	ctx context.Context,
 	store ArtifactStore,
@@ -242,16 +235,17 @@ func (t *folderTransport) pullWireEntryLocked(
 	origin string,
 	kind Kind,
 	entry os.DirEntry,
+	expected *Identity,
 	result *ExchangeResult,
-) (retErr error) {
+) (_ folderPullOutcome, retErr error) {
 	if strings.HasPrefix(entry.Name(), folderPublishTempPrefix) {
-		return removeFolderFile(kindRoot, entry.Name())
+		return folderPullOutcome{}, removeFolderFile(kindRoot, entry.Name())
 	}
 	if strings.HasPrefix(entry.Name(), folderMarkerTempPrefix) {
-		return nil
+		return folderPullOutcome{}, nil
 	}
 	if entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
-		return fmt.Errorf(
+		return folderPullOutcome{}, fmt.Errorf(
 			"%w: artifact wire entry is not a regular file",
 			ErrArtifactInvalid,
 		)
@@ -259,16 +253,16 @@ func (t *folderTransport) pullWireEntryLocked(
 	ref, err := FromWireRef(origin, kind, entry.Name())
 	if err != nil {
 		if isFolderQuarantineWireName(origin, kind, entry.Name()) {
-			return nil
+			return folderPullOutcome{}, nil
 		}
-		return err
+		return folderPullOutcome{}, err
 	}
 	wire, err := ToWireRef(ref)
 	if err != nil {
-		return err
+		return folderPullOutcome{}, err
 	}
 	if wire.Name != entry.Name() {
-		return fmt.Errorf(
+		return folderPullOutcome{}, fmt.Errorf(
 			"%w: artifact wire name is not canonical",
 			ErrArtifactInvalid,
 		)
@@ -276,7 +270,7 @@ func (t *folderTransport) pullWireEntryLocked(
 
 	file, before, err := openFolderRegularFile(kindRoot, entry.Name())
 	if err != nil {
-		return err
+		return folderPullOutcome{}, err
 	}
 	spool, identity, decodeErr := spoolFolderWire(
 		ctx,
@@ -294,13 +288,13 @@ func (t *folderTransport) pullWireEntryLocked(
 		if spool != nil {
 			_ = closeAndRemoveFolderSpool(spool)
 		}
-		return errors.Join(unchangedErr, file.Close())
+		return folderPullOutcome{}, errors.Join(unchangedErr, file.Close())
 	}
 	if err := file.Close(); err != nil {
 		if spool != nil {
 			_ = closeAndRemoveFolderSpool(spool)
 		}
-		return err
+		return folderPullOutcome{}, err
 	}
 	if decodeErr != nil {
 		if spool != nil {
@@ -308,31 +302,39 @@ func (t *folderTransport) pullWireEntryLocked(
 		}
 		if errors.Is(decodeErr, ErrArtifactCorrupt) ||
 			errors.Is(decodeErr, ErrArtifactInvalid) {
-			return t.quarantineFolderEntryLocked(kindRoot, entry.Name())
+			err := t.quarantineFolderEntryLocked(kindRoot, entry.Name())
+			return folderPullOutcome{Quarantined: err == nil}, err
 		}
-		return decodeErr
+		return folderPullOutcome{}, decodeErr
 	}
 	defer func() {
 		retErr = errors.Join(retErr, closeAndRemoveFolderSpool(spool))
 	}()
 	if err := validateRefIdentity(ref, identity); err != nil {
 		if errors.Is(err, ErrArtifactInvalid) {
-			return t.quarantineFolderEntryLocked(kindRoot, entry.Name())
+			quarantineErr := t.quarantineFolderEntryLocked(kindRoot, entry.Name())
+			return folderPullOutcome{Quarantined: quarantineErr == nil}, quarantineErr
 		}
-		return err
+		return folderPullOutcome{}, err
+	}
+	if expected != nil && identity != *expected {
+		return folderPullOutcome{}, fmt.Errorf(
+			"%w: artifact journal identity mismatch",
+			ErrArtifactConflict,
+		)
 	}
 	if _, err := spool.Seek(0, io.SeekStart); err != nil {
-		return err
+		return folderPullOutcome{}, err
 	}
 	recorder, canRecord := store.(transportChangeRecorder)
 	existing, statErr := store.Stat(ctx, ref)
 	switch {
 	case errors.Is(statErr, ErrArtifactNotFound) && !canRecord:
-		return errors.New("artifact transport change recorder is required")
+		return folderPullOutcome{}, errors.New("artifact transport change recorder is required")
 	case statErr != nil && !errors.Is(statErr, ErrArtifactNotFound):
-		return statErr
+		return folderPullOutcome{}, statErr
 	case statErr == nil && existing.Identity != identity:
-		return fmt.Errorf(
+		return folderPullOutcome{}, fmt.Errorf(
 			"%w: artifact folder object conflicts with local identity",
 			ErrArtifactConflict,
 		)
@@ -345,17 +347,17 @@ func (t *folderTransport) pullWireEntryLocked(
 		spool,
 	)
 	if err != nil {
-		return err
+		return folderPullOutcome{}, err
 	}
 	if created.Created {
 		result.Received++
 	}
 	if canRecord && (created.Created || kind == KindCheckpoints) {
 		if err := recorder.RecordTransportChanged(ctx, created.Entry); err != nil {
-			return err
+			return folderPullOutcome{}, err
 		}
 	}
-	return nil
+	return folderPullOutcome{}, nil
 }
 
 func isFolderQuarantineWireName(origin string, kind Kind, name string) bool {

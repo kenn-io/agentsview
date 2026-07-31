@@ -504,6 +504,57 @@ func TestFolderTransportQuarantinesCompleteCorruptWireAndContinues(t *testing.T)
 	assertArtifactBody(t, replayStore, validRef, validBody)
 }
 
+func TestFolderTransportQuarantineLetsFreshConsumerAdvanceWhenArtifactExistsLocally(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	target := t.TempDir()
+	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+
+	origin := "peer-a1b2c3"
+	localBody := []byte(`{"v":2}`)
+	ref := testContentRef(t, origin, KindManifests, localBody, ".json")
+	wire, err := ToWireRef(ref)
+	require.NoError(t, err)
+	directory := filepath.Join(target, origin, string(KindManifests))
+	require.NoError(t, os.MkdirAll(directory, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(directory, wire.Name), []byte("not zstd"), 0o600,
+	))
+	appendFolderJournalTestEntry(t, target, Entry{
+		Ref:      ref,
+		Identity: identityForBytes(t, localBody),
+	})
+	laterBody := []byte("{\"content\":\"later event\"}\n")
+	laterRef := testContentRef(t, origin, KindSegments, laterBody, ".ndjson")
+	writeFolderWire(t, target, laterRef, laterBody)
+
+	local := newTestArtifactStore(t)
+	createTestStoreArtifact(t, local, ref, localBody)
+	store := &transportRecordingStore{ArtifactStore: local}
+	result, err := transport.Exchange(
+		t.Context(), store, testFolderPublishOrigin,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, ExchangeResult{Received: 1}, result)
+	assertArtifactBody(t, store, ref, localBody)
+	require.NoError(t, transport.Close())
+
+	reopened, err := OpenFolderTransport(target, FolderTransportOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	replayStore := &transportRecordingStore{ArtifactStore: newTestArtifactStore(t)}
+	replay, err := reopened.Exchange(
+		t.Context(), replayStore, testFolderPublishOrigin,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, ExchangeResult{Received: 1}, replay)
+	assertArtifactBody(t, replayStore, laterRef, laterBody)
+}
+
 func TestFolderTransportRequiresChangeRecorderBeforeAcceptingArtifact(
 	t *testing.T,
 ) {
@@ -570,6 +621,48 @@ func TestFolderTransportRejectsCheckpointIdentityConflict(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrArtifactConflict)
 	assertArtifactBody(t, store, ref, localBody)
+}
+
+func TestFolderTransportValidatesJournalIdentityBeforeCheckpointPersistence(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	target := t.TempDir()
+	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+
+	ref, err := NewRef(
+		"peer-a1b2c3",
+		KindCheckpoints,
+		"cp-0000000001.json",
+	)
+	require.NoError(t, err)
+	expectedBody := []byte(`{"origin":"peer-a1b2c3","sessions":{},"v":1}`)
+	unexpectedBody := []byte(
+		`{"origin":"peer-a1b2c3","sessions":{"peer-a1b2c3~other":"` +
+			strings.Repeat("a", 64) + `"},"v":1}`,
+	)
+	writeFolderWireFile(t, target, ref, unexpectedBody)
+	appendFolderJournalTestEntry(t, target, Entry{
+		Ref:      ref,
+		Identity: identityForBytes(t, expectedBody),
+	})
+	store := &transportRecordingStore{ArtifactStore: newTestArtifactStore(t)}
+
+	_, err = transport.Exchange(t.Context(), store, testFolderPublishOrigin)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrArtifactConflict)
+	_, statErr := store.Stat(t.Context(), ref)
+	assert.ErrorIs(t, statErr, ErrArtifactNotFound)
+	assert.Empty(t, store.changed)
+
+	writeFolderWireFile(t, target, ref, expectedBody)
+	result, err := transport.Exchange(t.Context(), store, testFolderPublishOrigin)
+	require.NoError(t, err)
+	assert.Equal(t, ExchangeResult{Received: 1}, result)
+	assertArtifactBody(t, store, ref, expectedBody)
 }
 
 func TestFolderTransportRejectsSymlinkedWireEntry(t *testing.T) {
@@ -1202,6 +1295,15 @@ func testMetadataRef(t *testing.T, origin string, body []byte) Ref {
 
 func writeFolderWire(t *testing.T, target string, ref Ref, body []byte) {
 	t.Helper()
+	writeFolderWireFile(t, target, ref, body)
+	appendFolderJournalTestEntry(t, target, Entry{
+		Ref:      ref,
+		Identity: identityForBytes(t, body),
+	})
+}
+
+func writeFolderWireFile(t *testing.T, target string, ref Ref, body []byte) {
+	t.Helper()
 	wire, err := ToWireRef(ref)
 	require.NoError(t, err)
 	directory := filepath.Join(target, wire.Origin, string(wire.Kind))
@@ -1218,10 +1320,6 @@ func writeFolderWire(t *testing.T, target string, ref Ref, body []byte) {
 		encoded.Bytes(),
 		0o600,
 	))
-	appendFolderJournalTestEntry(t, target, Entry{
-		Ref:      ref,
-		Identity: identityForBytes(t, body),
-	})
 }
 
 func appendFolderJournalTestEntry(t *testing.T, target string, entry Entry) {
