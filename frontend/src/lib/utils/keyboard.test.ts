@@ -7,6 +7,7 @@ import { router } from "../stores/router.svelte.js";
 import { messages } from "../stores/messages.svelte.js";
 import { SessionsService } from "../api/generated/index";
 import { copyToClipboard } from "../utils/clipboard.js";
+import AppHeader from "../components/layout/AppHeader.svelte";
 import SidebarToggleButton from "../components/layout/SidebarToggleButton.svelte";
 import { registerShortcuts } from "./keyboard.js";
 
@@ -360,6 +361,39 @@ describe("registerShortcuts", () => {
       } finally {
         await unmount(contentToggle);
         sidebar.remove();
+      }
+    });
+
+    it("moves mobile focus from the closing drawer to the hamburger", async () => {
+      router.navigate("sessions");
+      ui.isMobileViewport = true;
+      ui.sidebarOpen = true;
+
+      const sidebar = document.createElement("aside");
+      sidebar.id = "session-sidebar";
+      const focusedControl = document.createElement("button");
+      focusedControl.textContent = "Focused mobile drawer control";
+      sidebar.appendChild(focusedControl);
+      document.body.appendChild(sidebar);
+      const header = mount(AppHeader, { target: document.body });
+
+      try {
+        focusedControl.focus();
+        fireKey("b");
+        await tick();
+
+        const hamburger = document.querySelector<HTMLButtonElement>(
+          'button[aria-label="Toggle sidebar"]',
+        );
+        expect(ui.sidebarOpen).toBe(false);
+        expect(hamburger).not.toBeNull();
+        await vi.waitFor(() => {
+          expect(document.activeElement).toBe(hamburger);
+        });
+      } finally {
+        await unmount(header);
+        sidebar.remove();
+        ui.isMobileViewport = false;
       }
     });
 

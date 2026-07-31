@@ -37,9 +37,11 @@ export async function toggleSidebarWithFocus(): Promise<void> {
   if (!shouldMoveFocus) return;
 
   await tick();
+  const focusTarget =
+    ui.isMobileViewport && nextPlacement === "content"
+      ? '[data-sidebar-focus-target="mobile"]'
+      : `.sidebar-panel-control--${nextPlacement}`;
   document
-    .querySelector<HTMLButtonElement>(
-      `.sidebar-panel-control--${nextPlacement}`,
-    )
+    .querySelector<HTMLButtonElement>(focusTarget)
     ?.focus();
 }

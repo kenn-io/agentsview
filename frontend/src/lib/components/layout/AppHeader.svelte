@@ -326,6 +326,7 @@
         aria-label={m.nav_toggle_sidebar()}
         aria-expanded={ui.sidebarOpen}
         aria-controls="session-sidebar"
+        data-sidebar-focus-target="mobile"
       >
         <MenuIcon size="16" strokeWidth="2" aria-hidden="true" />
       </button>
