@@ -425,11 +425,14 @@ directory shape, never pasted tokens, OAuth files, or other secrets.
 layouts. If a `storage/session/` directory exists under the OpenCode root,
 sessions are parsed from the per-file JSON layout (`storage/session`,
 `storage/message`, `storage/part`); otherwise the legacy `opencode.db` SQLite
-file is used. Detection is automatic and requires no configuration. In storage
-mode, the file watcher scopes itself to the `storage/` subtree rather than the
-entire OpenCode directory, so unrelated OpenCode state like binaries, logs, and
-caches no longer trigger sync events. In SQLite mode, it watches the
-`opencode.db` parent.
+file is used. Detection is automatic and requires no configuration. The file
+watcher always places a shallow (non-recursive) watch on the OpenCode
+directory itself, which observes `opencode.db` and its WAL as direct children
+without descending into unrelated OpenCode state like binaries, logs, and
+caches. When the file-backed storage layout is present, a separate recursive
+watch covers the `storage/` subtree, so database and storage coverage are
+independent: exhausting the recursive watch limit degrades only the storage
+subtree, never the SQLite database watch.
 
 Kilo and MiMoCode use the same OpenCode-format storage reader. Kilo reads from
 `storage/session`, while MiMoCode reads from `storage/session_diff` when

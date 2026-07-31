@@ -333,12 +333,6 @@ func (spec openCodeProviderSpec) find(root, sessionID string) string {
 	return findOpenCodeFormatSourceFile(spec.format, root, sessionID)
 }
 
-// watchRoots returns the directories that should be watched for live
-// updates under a configured root.
-func (spec openCodeProviderSpec) watchRoots(root string) []string {
-	return resolveOpenCodeFormatWatchRoots(spec.format, root)
-}
-
 // storageIDs returns the set of session IDs present as storage JSON
 // under a root, used to skip duplicate SQLite metas in hybrid roots.
 func (spec openCodeProviderSpec) storageIDs(root string) map[string]struct{} {
@@ -666,20 +660,40 @@ func (s openCodeFormatSourceSet) discoverStorageEach(
 func (s openCodeFormatSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 	roots := make([]WatchRoot, 0, len(s.roots))
 	for _, root := range s.roots {
-		for _, watchRoot := range s.spec.watchRoots(root) {
-			roots = append(roots, WatchRoot{
-				Path:      watchRoot,
-				Recursive: true,
-				IncludeGlobs: []string{
-					"*.json",
-					s.spec.dbName,
-					s.spec.dbName + "-wal",
-				},
-				DebounceKey: string(s.spec.agent) + ":opencode:" + watchRoot,
-			})
-		}
+		roots = append(roots, s.watchUnits(root)...)
 	}
 	return WatchPlan{Roots: roots}, nil
+}
+
+// watchUnits returns the coverage units for one configured root. The shallow
+// container unit is always emitted: the SQLite database, its WAL, and the
+// storage/ directory lifecycle are all direct children of the root, and a
+// non-recursive watch never competes for the shared recursive watch budget,
+// so SQLite coverage cannot be starved by archive size. The recursive storage
+// unit is emitted only when the root resolves to file-backed storage: an
+// always-emitted <root>/storage unit would become a permanently missing probe
+// on pure-SQLite roots, and the unwatched-root poller defers every candidate
+// overlapping a blocked root, silencing the configured directory's only
+// remaining coverage.
+func (s openCodeFormatSourceSet) watchUnits(root string) []WatchRoot {
+	units := []WatchRoot{{
+		Path:      root,
+		Recursive: false,
+		IncludeGlobs: []string{
+			s.spec.dbName,
+			s.spec.dbName + "-wal",
+		},
+		DebounceKey: string(s.spec.agent) + ":container:" + root,
+	}}
+	if s.spec.resolve(root).Mode == OpenCodeSourceStorage {
+		units = append(units, WatchRoot{
+			Path:         filepath.Join(root, "storage"),
+			Recursive:    true,
+			IncludeGlobs: []string{"*.json"},
+			DebounceKey:  string(s.spec.agent) + ":storage:" + root,
+		})
+	}
+	return units
 }
 
 // reconciliationContainer maps a requested path to the SQLite container that
@@ -715,6 +729,9 @@ func (s openCodeFormatSourceSet) SourcesForChangedPath(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if !s.unitScopeAllows(req) {
+		return nil, nil
+	}
 	if dbPath, _, virtual := s.spec.parseVirtual(req.Path); virtual {
 		for _, root := range s.roots {
 			if _, under := relUnder(root, dbPath); !under {
@@ -744,6 +761,50 @@ func (s openCodeFormatSourceSet) SourcesForChangedPath(
 		}
 	}
 	return nil, nil
+}
+
+// unitScopeAllows scopes changed-path classification to the coverage unit
+// that observed the path. The engine calls SourcesForChangedPath once per
+// emitted watch root per event, so with two units per root an unscoped WAL
+// event would run the SQLite fan-out twice. A request whose path (or, for a
+// virtual path, its physical database path) lies outside req.WatchRoot is
+// another unit's event and yields no sources; when the container unit's root
+// also emits a recursive storage unit, paths inside that storage subtree
+// belong to the storage unit so exactly one unit claims each changed path.
+// An empty req.WatchRoot preserves unscoped behavior for callers that do not
+// dispatch per watch root.
+func (s openCodeFormatSourceSet) unitScopeAllows(req ChangedPathRequest) bool {
+	if req.WatchRoot == "" {
+		return true
+	}
+	path := req.Path
+	if dbPath, _, virtual := s.spec.parseVirtual(req.Path); virtual {
+		path = dbPath
+	}
+	if !pathAtOrUnder(req.WatchRoot, path) {
+		return false
+	}
+	watchRoot := filepath.Clean(req.WatchRoot)
+	for _, root := range s.roots {
+		if watchRoot != filepath.Clean(root) {
+			continue
+		}
+		if s.spec.resolve(root).Mode != OpenCodeSourceStorage {
+			return true
+		}
+		_, insideStorage := relUnder(filepath.Join(root, "storage"), path)
+		return !insideStorage
+	}
+	return true
+}
+
+// pathAtOrUnder reports whether path is root itself or contained within it.
+func pathAtOrUnder(root, path string) bool {
+	if filepath.Clean(root) == filepath.Clean(path) {
+		return true
+	}
+	_, under := relUnder(root, path)
+	return under
 }
 
 func (s openCodeFormatSourceSet) SourceForReconciliation(
