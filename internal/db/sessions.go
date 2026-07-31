@@ -1751,6 +1751,47 @@ func (db *DB) LinkSubagentSessionsForSessions(ids []string) error {
 	})
 }
 
+// SubagentChildSessionIDs returns the distinct children the given sessions'
+// spawn edges currently reference (tool_calls.subagent_session_id). Sync
+// captures this BEFORE a full rewrite or parser-exclusion delete: those
+// writes cascade tool_calls away, and LinkSubagentSessionsForSessions
+// discovers children only through post-write edges, so a child whose edge is
+// about to disappear must be carried into the scoped batch explicitly to be
+// re-resolved against its remaining spawners.
+func (db *DB) SubagentChildSessionIDs(ids []string) ([]string, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var children []string
+	err := queryChunked(ids, func(chunk []string) error {
+		ph, args := inPlaceholders(chunk)
+		rows, err := db.getReader().Query(`
+			SELECT DISTINCT tc.subagent_session_id
+			FROM tool_calls tc
+			WHERE tc.session_id IN `+ph+`
+			AND tc.subagent_session_id IS NOT NULL`, args...)
+		if err != nil {
+			return fmt.Errorf(
+				"listing subagent children of %d sessions: %w",
+				len(chunk), err,
+			)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var child string
+			if err := rows.Scan(&child); err != nil {
+				return fmt.Errorf("scanning subagent child: %w", err)
+			}
+			children = append(children, child)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return children, nil
+}
+
 // GetSessionFileInfo returns file_size and file_mtime for a session. Used for
 // fast skip checks during sync. Recoverable source-missing tombstones are
 // excluded so an identical source restoration cannot be mistaken for fresh.

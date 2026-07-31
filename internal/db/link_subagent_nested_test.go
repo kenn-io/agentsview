@@ -566,6 +566,28 @@ func TestLinkSubagentSessionsForSessionsChunksLargeBatches(t *testing.T) {
 		"an id beyond the first chunk must still drive linking")
 }
 
+// TestSubagentChildSessionIDs covers the pre-write capture helper: it must
+// return the distinct children the given sessions' spawn edges reference,
+// ignore sessions with no edges, and treat an empty input as a no-op.
+func TestSubagentChildSessionIDs(t *testing.T) {
+	d := testDB(t)
+	for _, id := range []string{"s1", "s2", "quiet"} {
+		insertSession(t, d, id, "p", func(s *Session) { s.MessageCount = 1 })
+	}
+	insertMessages(t, d,
+		spawnEdgeTo("s1", "kid-a", "spawn a"),
+		spawnEdgeTo("s2", "kid-b", "spawn b"),
+	)
+
+	children, err := d.SubagentChildSessionIDs([]string{"s1", "s2", "quiet"})
+	require.NoError(t, err, "SubagentChildSessionIDs")
+	assert.ElementsMatch(t, []string{"kid-a", "kid-b"}, children)
+
+	none, err := d.SubagentChildSessionIDs(nil)
+	require.NoError(t, err, "empty input")
+	assert.Empty(t, none)
+}
+
 // TestLinkSubagentSessionsForSessionsPlanIsBatchBounded pins the cost shape
 // of the scoped statement, mirroring TestLinkSubagentSessionsPlanScalesWith-
 // SpawnEdges: the watcher calls this once per changed file, so neither

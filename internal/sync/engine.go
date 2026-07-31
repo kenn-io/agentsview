@@ -12416,6 +12416,28 @@ func (e *Engine) SyncSingleSessionContext(
 		e.clearSkip(res.skipCacheKey(path))
 	}
 
+	// Capture the children this batch's PRE-write spawn edges reference.
+	// The parser-exclusion delete below and the full message replacement
+	// in the write loop both cascade tool_calls away, and the scoped
+	// linker discovers children only through post-write edges — so a
+	// child whose edge is about to be removed must be carried into the
+	// linking batch explicitly, or it could never re-resolve to a
+	// remaining spawner until the next bulk sync.
+	excluded := e.applyIDPrefixToSessionIDs(res.excludedSessionIDs)
+	resultIDs := make([]string, 0, len(res.results))
+	for _, pr := range res.results {
+		resultIDs = append(resultIDs, pr.Session.ID)
+	}
+	resultIDs = e.applyIDPrefixToSessionIDs(resultIDs)
+	priorChildren, childErr := e.db.SubagentChildSessionIDs(
+		append(append([]string{}, excluded...), resultIDs...),
+	)
+	if childErr != nil {
+		// Degrade to batch-only linking; the next bulk sync's global
+		// pass repairs anything a removed edge left behind.
+		log.Printf("list pre-write subagent children: %v", childErr)
+	}
+
 	// Delete parser-excluded sessions before writing the parsed
 	// results, mirroring collectAndBatch. Vibe promotes a session
 	// from its directory-name fallback ID to the canonical
@@ -12424,9 +12446,7 @@ func (e *Engine) SyncSingleSessionContext(
 	// the DB and double-count messages and usage. Like
 	// collectAndBatch, exclusions from a source with no session
 	// inside the cwd allow-list are frozen so archived rows survive.
-	if excluded := e.applyIDPrefixToSessionIDs(
-		res.excludedSessionIDs,
-	); len(excluded) > 0 && e.sourceAllowsParserExclusions(res) {
+	if len(excluded) > 0 && e.sourceAllowsParserExclusions(res) {
 		if _, err := e.db.DeleteParserExcludedSessions(
 			excluded,
 		); err != nil {
@@ -12460,14 +12480,29 @@ func (e *Engine) SyncSingleSessionContext(
 		if err := e.writeIncremental(res.incremental); err != nil {
 			return err
 		}
+		// An append can introduce a spawn edge (a Task tool_use whose
+		// subagent mapping lands in the same append stays on the
+		// incremental path), so its child must be linked now rather
+		// than waiting for the next bulk sync's global pass.
+		if err := e.db.LinkSubagentSessionsForSessions(append(
+			priorChildren, res.incremental.sessionID,
+		)); err != nil {
+			log.Printf("link subagent sessions: %v", err)
+		}
 		return nil
 	}
 
 	if len(res.results) == 0 {
+		// No writes, but the exclusion delete above may still have
+		// removed spawn edges; re-resolve their former children.
+		if err := e.db.LinkSubagentSessionsForSessions(
+			priorChildren,
+		); err != nil {
+			log.Printf("link subagent sessions: %v", err)
+		}
 		return nil
 	}
 
-	writtenIDs := make([]string, 0, len(res.results))
 	for _, pr := range res.results {
 		if err := e.writeSessionFull(
 			pendingWrite{
@@ -12485,17 +12520,17 @@ func (e *Engine) SyncSingleSessionContext(
 		} else if errors.Is(err, errSessionPreserved) {
 			preserved = true
 		}
-		writtenIDs = append(writtenIDs, pr.Session.ID)
 	}
 
 	// Link subagent child sessions to their parents (required for agents
 	// that reference subagent session IDs in
 	// tool_calls.subagent_session_id, e.g. Zencoder). Scoped to the
-	// sessions this sync wrote: the session watcher re-syncs a single file
-	// on every change, so a global pass here would make per-event work
-	// scale with the archive's spawn edges instead of the changed batch.
+	// sessions this sync wrote plus the children their pre-write edges
+	// referenced: the session watcher re-syncs a single file on every
+	// change, so a global pass here would make per-event work scale with
+	// the archive's spawn edges instead of the changed batch.
 	if err := e.db.LinkSubagentSessionsForSessions(
-		e.applyIDPrefixToSessionIDs(writtenIDs),
+		append(priorChildren, resultIDs...),
 	); err != nil {
 		log.Printf("link subagent sessions: %v", err)
 	}

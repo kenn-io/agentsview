@@ -13562,3 +13562,170 @@ func testStringPtrValue(v *string) string {
 	}
 	return *v
 }
+
+// parentSessionIDOf returns the stored parent_session_id of id, failing the
+// test when the session is missing or its parent is unset.
+func parentSessionIDOf(t *testing.T, env *testEnv, id string) string {
+	t.Helper()
+	sess, err := env.db.GetSession(context.Background(), id)
+	require.NoError(t, err, "GetSession %s", id)
+	require.NotNil(t, sess, "session %s must exist", id)
+	require.NotNil(t, sess.ParentSessionID, "%s parent must be set", id)
+	return *sess.ParentSessionID
+}
+
+// TestSyncSingleSessionIncrementalAppendLinksSpawnedChild covers the
+// incremental branch of SyncSingleSessionContext: an append that introduces
+// a Task tool_use together with its subagent mapping stays on the
+// incremental path, and the spawn edge it stores must re-link the child in
+// the same sync rather than leaving the hierarchy stale until the next bulk
+// pass. The scenario is the depth-2 tree the linking fix exists for: the
+// orchestrator (itself a subagent, path-derived parent = main) spawns the
+// grandchild, whose path-derived parent also points at main.
+func TestSyncSingleSessionIncrementalAppendLinksSpawnedChild(t *testing.T) {
+	env := setupTestEnv(t)
+
+	env.writeClaudeSession(
+		t, "proj-inc-link", "main-inc-link.jsonl", testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T09:00:00Z","uuid":"m1","message":{"content":"root"},"cwd":"/tmp","sessionId":"main-inc-link"}`,
+		),
+	)
+	orchPath := env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-inc-link", "main-inc-link", "subagents",
+			"agent-orch.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"o1","message":{"content":"orchestrate"},"cwd":"/tmp","sessionId":"main-inc-link"}`,
+		),
+	)
+	env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-inc-link", "main-inc-link", "subagents",
+			"agent-kid.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T10:30:00Z","uuid":"k1","message":{"content":"grandchild work"},"cwd":"/tmp","sessionId":"main-inc-link"}`,
+		),
+	)
+
+	env.engine.SyncAll(context.Background(), nil)
+
+	// Path derivation pins every flat subagent to the main session.
+	require.Equal(t, "main-inc-link",
+		parentSessionIDOf(t, env, "agent-kid"),
+		"before the append the grandchild sits under main")
+
+	// The stored orchestrator row id proves the append stayed on the
+	// incremental path: a full replacement would delete and reinsert it.
+	var orchMsgID int64
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT id FROM messages
+		WHERE session_id = ? AND ordinal = 0`,
+		"agent-orch",
+	).Scan(&orchMsgID), "query orchestrator message id before append")
+
+	// One append introduces the Task tool_use AND its subagent mapping,
+	// so the incremental parser can link without a full parse.
+	appended := testjsonl.JoinJSONL(
+		`{"type":"assistant","timestamp":"2024-01-01T10:31:00Z","uuid":"o2","parentUuid":"o1","message":{"id":"msg_orch","content":[{"type":"tool_use","id":"toolu_inc","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:32:00Z","uuid":"o3","parentUuid":"o2","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_inc","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"kid"}}`,
+	) + "\n"
+	f, err := os.OpenFile(orchPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open orchestrator transcript for append")
+	_, writeErr := f.WriteString(appended)
+	f.Close()
+	require.NoError(t, writeErr, "append spawn edge")
+
+	require.NoError(t, env.engine.SyncSingleSession("agent-orch"),
+		"SyncSingleSession orchestrator")
+
+	var gotMsgID int64
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT id FROM messages
+		WHERE session_id = ? AND ordinal = 0`,
+		"agent-orch",
+	).Scan(&gotMsgID), "query orchestrator message id after append")
+	require.Equal(t, orchMsgID, gotMsgID,
+		"the append must stay on the incremental path for this test to "+
+			"pin the incremental branch (a full replace reinserts rows)")
+
+	assert.Equal(t, "agent-orch", parentSessionIDOf(t, env, "agent-kid"),
+		"an incrementally appended spawn edge must re-link the child in "+
+			"the same single-session sync")
+}
+
+// TestSyncSingleSessionRewriteRemovingEdgeRelinksFormerChild covers the
+// pre-write child capture in SyncSingleSessionContext: a full rewrite that
+// REMOVES a spawn edge cascades the tool_calls row away, so the scoped
+// linker can no longer discover the former child through post-write edges.
+// The child must still be re-resolved — here to the remaining spawner —
+// in the same sync instead of keeping the deleted edge's stale parent.
+func TestSyncSingleSessionRewriteRemovingEdgeRelinksFormerChild(t *testing.T) {
+	env := setupTestEnv(t)
+
+	env.writeClaudeSession(
+		t, "proj-edge-rm", "main-edge-rm.jsonl", testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T09:00:00Z","uuid":"m1","message":{"content":"root"},"cwd":"/tmp","sessionId":"main-edge-rm"}`,
+		),
+	)
+	// Both orchestrators claim the grandchild; orcha starts earlier, so
+	// the chronological resolution links the child under orcha.
+	orchaInitial := testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"a1","message":{"content":"orchestrate a"},"cwd":"/tmp","sessionId":"main-edge-rm"}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:01:00Z","uuid":"a2","parentUuid":"a1","message":{"id":"msg_a","content":[{"type":"tool_use","id":"toolu_a","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:02:00Z","uuid":"a3","parentUuid":"a2","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_a","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"kid"}}`,
+	)
+	orchaPath := env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-edge-rm", "main-edge-rm", "subagents",
+			"agent-orcha.jsonl",
+		),
+		orchaInitial,
+	)
+	env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-edge-rm", "main-edge-rm", "subagents",
+			"agent-orchb.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T11:00:00Z","uuid":"b1","message":{"content":"orchestrate b"},"cwd":"/tmp","sessionId":"main-edge-rm"}`,
+			`{"type":"assistant","timestamp":"2024-01-01T11:01:00Z","uuid":"b2","parentUuid":"b1","message":{"id":"msg_b","content":[{"type":"tool_use","id":"toolu_b","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+			`{"type":"user","timestamp":"2024-01-01T11:02:00Z","uuid":"b3","parentUuid":"b2","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_b","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"kid"}}`,
+		),
+	)
+	env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-edge-rm", "main-edge-rm", "subagents",
+			"agent-kid.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T11:30:00Z","uuid":"k1","message":{"content":"grandchild work"},"cwd":"/tmp","sessionId":"main-edge-rm"}`,
+		),
+	)
+
+	env.engine.SyncAll(context.Background(), nil)
+
+	require.Equal(t, "agent-orcha",
+		parentSessionIDOf(t, env, "agent-kid"),
+		"the earliest-started spawner wins while both edges exist")
+
+	// Rewrite orcha WITHOUT its spawn edge (same first message, so its
+	// start time is unchanged; the shrunk file forces a full replace,
+	// which cascades the toolu_a edge away).
+	require.NoError(t, os.WriteFile(orchaPath, []byte(testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"a1","message":{"content":"orchestrate a"},"cwd":"/tmp","sessionId":"main-edge-rm"}`,
+	)+"\n"), 0o644), "rewrite orcha without the spawn edge")
+
+	require.NoError(t, env.engine.SyncSingleSession("agent-orcha"),
+		"SyncSingleSession rewritten orchestrator")
+
+	assert.Equal(t, "agent-orchb", parentSessionIDOf(t, env, "agent-kid"),
+		"removing orcha's edge must re-resolve its former child to the "+
+			"remaining spawner in the same sync, not leave the stale parent")
+}
