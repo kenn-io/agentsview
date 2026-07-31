@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -312,6 +313,101 @@ func TestInFamilyContainerCaptureBoundedByBatchRoots(t *testing.T) {
 	assert.Equal(t, probeCounts[2], probeCounts[8],
 		"container probes per pass must be bounded by the batch roots, "+
 			"not by the agent's total configured dirs")
+}
+
+// tombstoneFailingSpool wraps the real spool and fails the stored-source
+// lookups (replacement, persistent-member, identity) that only the tombstone
+// phase performs, so page writes commit cleanly and the pass errors
+// afterwards.
+type tombstoneFailingSpool struct {
+	reconciliationSpoolStore
+}
+
+func (s *tombstoneFailingSpool) Candidate(
+	context.Context, parser.AgentType, string,
+) (reconciliationCandidate, bool, error) {
+	return reconciliationCandidate{}, false, errors.New("tombstone lookup unavailable")
+}
+
+func (s *tombstoneFailingSpool) ContainsSource(
+	context.Context, parser.AgentType, string,
+) (bool, error) {
+	return false, errors.New("tombstone lookup unavailable")
+}
+
+func (s *tombstoneFailingSpool) ContainsSourceIdentity(
+	context.Context, parser.AgentType, string, string,
+) (bool, error) {
+	return false, errors.New("tombstone lookup unavailable")
+}
+
+// TestReconcileProviderRootsGroupedRunsEpilogueDespiteTombstoneFailure:
+// epilogue eligibility is decided when page writes commit, before
+// tombstoning. A pass whose sessions synced but whose tombstone sweep fails
+// must still get subagent linking and skip-cache persistence from the shared
+// epilogue — otherwise a persistent tombstone failure would leave synced
+// subagents unlinked indefinitely.
+func TestReconcileProviderRootsGroupedRunsEpilogueDespiteTombstoneFailure(t *testing.T) {
+	database := openTestDB(t)
+	rootA := filepath.Join(t.TempDir(), "claude-a")
+	writeGroupedClaudeFixture(t, rootA, "grouped-a")
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {rootA},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	seedGroupedSubagentFixture(t, database)
+	engine.cacheSkip(filepath.Join(rootA, "seeded-skip.jsonl"), 42)
+
+	// A stored session whose file vanished forces the tombstone sweep to
+	// consult the spool, which the wrapper below fails.
+	missingPath := filepath.Join(rootA, "project", "vanished.jsonl")
+	size := int64(1)
+	mtime := int64(1)
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "vanished", Agent: string(parser.AgentClaude), Project: "project",
+		Machine: "local", FilePath: &missingPath, FileSize: &size,
+		FileMtime: &mtime,
+	}))
+	require.NoError(t, database.SetSessionDataVersion(
+		"vanished", db.CurrentDataVersion(),
+	))
+	raw, err := sql.Open("sqlite3", database.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, raw.Close()) })
+	_, err = raw.Exec(`INSERT INTO local_session_source_baselines
+		(session_id, machine, agent, file_path) VALUES (?,?,?,?)`,
+		"vanished", "local", string(parser.AgentClaude), missingPath)
+	require.NoError(t, err)
+
+	defaultFactory := engine.reconciliationSpoolFactory
+	engine.reconciliationSpoolFactory = func(path string) (reconciliationSpoolStore, error) {
+		spool, err := defaultFactory(path)
+		if err != nil {
+			return nil, err
+		}
+		return &tombstoneFailingSpool{reconciliationSpoolStore: spool}, nil
+	}
+
+	err = engine.ReconcileProviderRootsGrouped(t.Context(),
+		[]ProviderRootsGroup{
+			{Agent: parser.AgentClaude, Roots: []string{rootA}},
+		},
+	)
+	require.Error(t, err, "the tombstone failure must be reported")
+	assert.ErrorContains(t, err, "tombstone lookup unavailable")
+
+	synced, getErr := database.GetSession(t.Context(), "grouped-a")
+	require.NoError(t, getErr)
+	require.NotNil(t, synced, "page writes must commit before the tombstone failure")
+	skipped, loadErr := database.LoadSkippedFiles()
+	require.NoError(t, loadErr)
+	assert.NotEmpty(t, skipped,
+		"a tombstone failure after committed writes must not skip skip-cache persistence")
+	requireGroupedChildParent(t, database, true,
+		"a tombstone failure after committed writes must not skip subagent linking")
 }
 
 // TestReconcileProviderRootsGroupedAttemptsEveryGroupAfterFailure pins the
