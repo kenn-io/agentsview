@@ -670,11 +670,15 @@ func (s openCodeFormatSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 // storage/ directory lifecycle are all direct children of the root, and a
 // non-recursive watch never competes for the shared recursive watch budget,
 // so SQLite coverage cannot be starved by archive size. The recursive storage
-// unit is emitted only when the root resolves to file-backed storage: an
-// always-emitted <root>/storage unit would become a permanently missing probe
-// on pure-SQLite roots, and the unwatched-root poller defers every candidate
-// overlapping a blocked root, silencing the configured directory's only
-// remaining coverage.
+// unit is emitted whenever <root>/storage exists as a directory, which is
+// weaker than the root resolving to file-backed storage: the session
+// subdirectory under it is created lazily, so keying on the resolved mode
+// leaves an existing-but-empty storage tree with only grandchild coverage the
+// shallow unit cannot see. Emission still requires the directory to exist,
+// because an always-emitted <root>/storage unit would become a permanently
+// missing probe on pure-SQLite roots, and the unwatched-root poller defers
+// every candidate overlapping a blocked root, silencing the configured
+// directory's only remaining coverage.
 func (s openCodeFormatSourceSet) watchUnits(root string) []WatchRoot {
 	units := []WatchRoot{{
 		Path:      root,
@@ -685,7 +689,7 @@ func (s openCodeFormatSourceSet) watchUnits(root string) []WatchRoot {
 		},
 		DebounceKey: string(s.spec.agent) + ":container:" + root,
 	}}
-	if s.spec.resolve(root).Mode == OpenCodeSourceStorage {
+	if s.emitsStorageUnit(root) {
 		units = append(units, WatchRoot{
 			Path:         filepath.Join(root, "storage"),
 			Recursive:    true,
@@ -789,13 +793,22 @@ func (s openCodeFormatSourceSet) unitScopeAllows(req ChangedPathRequest) bool {
 		if watchRoot != filepath.Clean(root) {
 			continue
 		}
-		if s.spec.resolve(root).Mode != OpenCodeSourceStorage {
+		if !s.emitsStorageUnit(root) {
 			return true
 		}
 		_, insideStorage := relUnder(filepath.Join(root, "storage"), path)
 		return !insideStorage
 	}
 	return true
+}
+
+// emitsStorageUnit reports whether root emits a recursive storage unit. Watch
+// emission and changed-path scoping must agree on this predicate: a root that
+// emits the unit must yield storage-subtree paths to it, and a root that does
+// not must keep claiming them itself.
+func (s openCodeFormatSourceSet) emitsStorageUnit(root string) bool {
+	info, err := os.Stat(filepath.Join(root, "storage"))
+	return err == nil && info.IsDir()
 }
 
 // pathAtOrUnder reports whether path is root itself or contained within it.

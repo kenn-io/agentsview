@@ -45,8 +45,10 @@ func openCodeFamilyStorageUnit(agent AgentType, root string) WatchRoot {
 // TestOpenCodeFamilyWatchPlanCoverageUnits pins the two-unit emission shape
 // for every OpenCode-family agent across resolved mode, database presence,
 // and root existence: the shallow container unit is unconditional, and the
-// recursive storage unit exists only when the root resolves to file-backed
-// storage, so a pure-SQLite root never gains an absent-probe obligation.
+// recursive storage unit exists exactly when storage/ exists as a directory,
+// so a pure-SQLite root never gains an absent-probe obligation while a
+// storage tree whose session subdirectory has not been created yet still
+// gets recursive coverage.
 func TestOpenCodeFamilyWatchPlanCoverageUnits(t *testing.T) {
 	for _, agentCase := range openCodeFamilyWatchUnitAgents {
 		t.Run(string(agentCase.agent), func(t *testing.T) {
@@ -99,6 +101,33 @@ func TestOpenCodeFamilyWatchPlanCoverageUnits(t *testing.T) {
 						require.NoError(t, os.MkdirAll(filepath.Join(
 							root, "storage", agentCase.sessionSubdir,
 						), 0o755))
+						writeTestFileHelper(t,
+							filepath.Join(root, agentCase.dbName))
+						return root
+					},
+					withStorage: true,
+				},
+				{
+					// The session subdirectory is created lazily, so a root
+					// can carry storage/ with nothing under it yet. The
+					// session tree that appears there later is a grandchild
+					// of the configured root, which the shallow unit cannot
+					// see, so this shape must still get recursive coverage.
+					name: "storage tree before first session",
+					setup: func(t *testing.T) string {
+						root := t.TempDir()
+						require.NoError(t, os.MkdirAll(
+							filepath.Join(root, "storage"), 0o755))
+						return root
+					},
+					withStorage: true,
+				},
+				{
+					name: "sqlite with empty storage tree",
+					setup: func(t *testing.T) string {
+						root := t.TempDir()
+						require.NoError(t, os.MkdirAll(
+							filepath.Join(root, "storage"), 0o755))
 						writeTestFileHelper(t,
 							filepath.Join(root, agentCase.dbName))
 						return root
