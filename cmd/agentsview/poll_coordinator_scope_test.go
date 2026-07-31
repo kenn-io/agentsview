@@ -1,9 +1,6 @@
 package main
 
 // Tests for scoping degraded-coverage polling to one provider per pass.
-// These tests reference ReconcileProviderRoots and pollingScope which are added by
-// this PR. They will not compile against the base code; that compilation error is
-// the captured red state.
 
 import (
 	"context"
@@ -131,10 +128,8 @@ func TestUnwatchedPollDoesNotDragUnrelatedProvidersThroughOneProvidersGap(t *tes
 		rootB := requireExistingPollRoot(t, parent, "root-b")
 
 		syncer := &recordingProviderPollSyncer{wake: make(chan struct{}, 4)}
-		var logged []string
 		var logMu sync.Mutex
 		origOutput := log.Writer()
-		_ = origOutput
 		var logBuf strings.Builder
 		log.SetOutput(&lockedWriter{mu: &logMu, w: &logBuf})
 		t.Cleanup(func() { log.SetOutput(origOutput) })
@@ -164,7 +159,6 @@ func TestUnwatchedPollDoesNotDragUnrelatedProvidersThroughOneProvidersGap(t *tes
 		logMu.Lock()
 		output := logBuf.String()
 		logMu.Unlock()
-		_ = logged
 		assert.Contains(t, output, "polling 2 unwatched root(s)",
 			"log must report total root count, not per-group count")
 	})
@@ -395,8 +389,8 @@ func TestUnwatchedPollDefersOnlyTheProviderWhoseProbeIsMissing(t *testing.T) {
 		"provider A must never be called while its probe is missing")
 }
 
-// TestUnwatchedPollStopDuringCooldown is added as a subtest of shutdown.
-// Stop() must return immediately during the cooldown wait.
+// TestUnwatchedPollStopDuringCooldown asserts that Stop() returns immediately
+// during the cooldown wait rather than waiting out the cooldown.
 func TestUnwatchedPollStopDuringCooldown(t *testing.T) {
 	ticks := make(chan time.Time, 1)
 	passRelease := make(chan struct{})

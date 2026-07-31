@@ -1,8 +1,6 @@
 package main
 
 // Regression tests for provider identity in polling obligations.
-// Tests are written test-first; they are expected to fail against the
-// un-fixed head before the production-code changes are applied.
 
 import (
 	"context"
@@ -174,16 +172,13 @@ func TestRegisterWatcherUnavailablePreservesAgents(t *testing.T) {
 		"no scope must be stripped to the empty agent; per-provider blocking requires real agents")
 }
 
-// TestWatchPollingObligationsPersistentDirCarriesAgentFromSymlinkOnlyProvider
-// : when a provider's only physical root
-// is a symlink and is therefore recorded in symlinkGatedDirs rather than roots,
-// the persistent obligation for its syncDir must still carry the provider's
-// agent. Without the fix, syncDirToAgents is built from roots only (empty in
-// this case), so the persistent obligation gets Agent:"" and the coordinator
-// cannot distinguish the provider's dir from an unowned fallback dir.
-//
-// This test uses the post-fix 4-parameter watchPollingObligations signature.
-// The compile error is the red state: the function currently accepts 3 args.
+// TestWatchPollingObligationsPersistentDirCarriesAgentFromSymlinkOnlyProvider:
+// when a provider's only physical root is a symlink and is therefore recorded
+// in symlinkGatedDirs rather than roots, the persistent obligation for its
+// syncDir must still carry the provider's agent. If syncDirToAgents were built
+// from roots only (empty in this case), the persistent obligation would get
+// Agent:"" and the coordinator could not distinguish the provider's dir from
+// an unowned fallback dir.
 func TestWatchPollingObligationsPersistentDirCarriesAgentFromSymlinkOnlyProvider(t *testing.T) {
 	parent := t.TempDir()
 	syncDir := filepath.Join(parent, "copilot-dir")
@@ -481,7 +476,7 @@ func TestUnwatchedPollCooldownIsExactlyOneInterval(t *testing.T) {
 	beforeFire := callCount
 	callMu.Unlock()
 	assert.Equal(t, 1, beforeFire,
-		"no second reconcile must start before the cooldown timer fires (P10)")
+		"no second reconcile must start before the cooldown timer fires")
 
 	// Fire the cooldown timer.
 	timerCh <- time.Now()
@@ -497,5 +492,5 @@ func TestUnwatchedPollCooldownIsExactlyOneInterval(t *testing.T) {
 	afterFire := callCount
 	callMu.Unlock()
 	assert.Equal(t, 2, afterFire,
-		"exactly one second reconcile must fire after the cooldown timer (P10)")
+		"exactly one second reconcile must fire after the cooldown timer")
 }

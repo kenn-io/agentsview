@@ -73,8 +73,8 @@ func TestWatcherStartFailureSuppressesFallbackWhenPollingOwnershipSet(t *testing
 		"named-agent root must not produce an empty-agent scope")
 }
 
-// TestWatcherStartFailureEmitsNamedObligationForCleanRoot verifies the P1
-// regression: when OnPollingRequired is set and a root registered cleanly
+// TestWatcherStartFailureEmitsNamedObligationForCleanRoot verifies that
+// when OnPollingRequired is set and a root registered cleanly
 // (healthy result, no pending dirs), the backend's Start failure must still
 // emit a named obligation covering that root. The caller's pre-start
 // obligations (from watchPollingObligations) only cover roots with known
@@ -225,8 +225,8 @@ func TestWatcherStartFailureNoEmptyAgentForNamedRoot(t *testing.T) {
 	}
 }
 
-// TestWatcherStartFailureMixedScopesBothDirsAreCovered verifies the P1
-// Mixed-scope regression: when a registered root has both a named-agent scope
+// TestWatcherStartFailureMixedScopesBothDirsAreCovered verifies the
+// mixed-scope regression: when a registered root has both a named-agent scope
 // and an empty-agent scope, the start-failure emission must carry BOTH
 // configured dirs and must NOT suppress the empty-agent scope just because a
 // named agent also exists on the same physical root. Before the fix,

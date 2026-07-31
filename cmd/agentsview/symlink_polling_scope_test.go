@@ -1,13 +1,5 @@
 package main
 
-// TestSymlinkPollingObligationsCarryProviderAgent: symlinkPollingObligations
-// must preserve the agent from the watchScope when building PollingScope values.
-// This test uses the post-fix type map[string][]watchScope; before the fix the
-// parameter type is map[string][]string and the test fails to compile.
-//
-// The compile error is the pre-fix state:
-//   cannot use map[string][]watchScope as map[string][]string
-
 import (
 	"path/filepath"
 	"testing"
@@ -17,6 +9,9 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
+// TestSymlinkPollingObligationsCarryProviderAgent asserts that
+// symlinkPollingObligations preserves the agent from the watchScope when
+// building PollingScope values.
 func TestSymlinkPollingObligationsCarryProviderAgent(t *testing.T) {
 	parent := t.TempDir()
 	symRoot := filepath.Join(parent, "sessions-symlink")

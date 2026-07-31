@@ -400,8 +400,8 @@ func unwatchedPollRoots(owned map[string]struct{}) []string {
 
 // pollUnwatchedScopesOnce calls ReconcileProviderRoots once per agent group.
 // Every available group receives exactly one attempt regardless of whether an
-// earlier group errored; failures are joined and returned together (P10).
-// At most one reconcile call is in flight at a time (P11).
+// earlier group errored; failures are joined and returned together.
+// At most one reconcile call is in flight at a time.
 func pollUnwatchedScopesOnce(
 	ctx context.Context,
 	engine unwatchedPollSyncer,
