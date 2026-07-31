@@ -363,6 +363,25 @@ func codebuffProviderCapabilities() Capabilities {
 	// passes would fall back to the composite, missing same-size
 	// sibling rewrites whose mtime stays below the existing max.
 	caps.MultiFileStatHash = CapabilitySupported
+	// Content-hash freshness is the per-fingerprint safety net that
+	// catches a sibling rewrite whose SHA-256 changes while size
+	// and mtime stay identical. The legacy size/mtime composite and
+	// the per-component provider_freshness digest both fold the
+	// chat file plus companions down to a single int compare; a
+	// content-hash mismatch is the only signal that survives a
+	// same-size, same-max-mtime rewrite of every companion. Without
+	// this flag providerFingerprintHashMatchesDB short-circuits on
+	// `!required` and treats the rewrite as fresh, so an identical
+	// size swap (where the bytes change but the byte length is the
+	// same, as testable via a same-length sibling rewrite with
+	// matching content) would let stale costs, agent classification,
+	// or Freebuff metadata survive the warm pass and never revisit
+	// the source. Setting this opts Codebuff into
+	// providerFingerprintHashEstablishesFreshness, which provides
+	// the second safety net behind the per-component provider_freshness
+	// digest: if the side-table is ever cleared (post-tombstone) or
+	// missing on first warm pass, provider.Fingerprint's content-hash
+	// compare still catches the rewrite.
 	return Capabilities{
 		Source: caps,
 		Content: ContentCapabilities{
@@ -376,6 +395,9 @@ func codebuffProviderCapabilities() Capabilities {
 			Relationships:        CapabilityNotApplicable,
 			TerminationStatus:    CapabilityNotApplicable,
 			MalformedLineCount:   CapabilityNotApplicable,
+		},
+		Sync: ProviderSyncSemantics{
+			FingerprintHashRequiredForFreshness: true,
 		},
 	}
 }

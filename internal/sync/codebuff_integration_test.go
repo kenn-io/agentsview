@@ -991,6 +991,208 @@ func TestSyncCodebuffCwdFilteredSourceDoesNotPersistStatHash(t *testing.T) {
 			"(Issue 2) regressed")
 }
 
+// TestSyncCodebuffTombstoneClearsProviderStatHash pins Issue 3 at
+// end-to-end behavior: when a Codebuff source is removed from
+// disk and reconciliation tombstones the archived row, the
+// engine must drop the provider_freshness row in addition to
+// the session-source-ownership rows. Without that, a future
+// byte-identical restoration of the directory would falsely be
+// considered fresh by the digest gate (Issue 1) and the
+// tombstoned session could not be revived. A regression that
+// leaves the side-table intact surfaces here as a non-nil
+// provider_freshness row after the reconcile-driven tombstone.
+//
+// ReconcileProviderRoots is the production-realistic trigger for
+// tombstoneMissingWatchSourcesForAgentLocked: it iterates the
+// archived ownership records for the agent's roots, checks each
+// against the filesystem, and routes any provably-missing source
+// through tombstoneSessionSourceOwnership. SyncPathsContext has
+// the same end-of-pass tombstone path but with single-file
+// granularity and the remove-event filter that drops missing
+// non-persistent sources — which means a SyncPathsContext test
+// would never reach the tombstone, only mark the source via the
+// in-memory skip cache.
+func TestSyncCodebuffTombstoneClearsProviderStatHash(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	database := dbtest.OpenTestDB(t)
+	root, chatPath := createCodebuffSingleSession(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	require.Equal(t, 1,
+		engine.SyncAll(context.Background(), nil).Synced,
+		"cold sync must parse the seeded Codebuff session")
+	_, hasBefore, err := database.GetProviderStatHash(
+		context.Background(), parser.AgentCodebuff, chatPath,
+	)
+	require.NoError(t, err)
+	require.True(t, hasBefore,
+		"a successful cold sync must populate provider_freshness "+
+			"as the precondition for the tombstone clear")
+
+	// Remove the entire session directory so reconcile's lstat check
+	// sees a fully missing source. Reconcile iterates archived
+	// ownership, calls lstat on each, and tombstones any source that
+	// is gone without container fallback.
+	require.NoError(t, os.RemoveAll(filepath.Dir(chatPath)),
+		"deleting the session directory must succeed; partial "+
+			"deletions leave companion files for the engine to "+
+			"still consider the source present")
+
+	_, _, err = engine.ReconcileWatchRootsWithStats(
+		context.Background(), []string{root}, true,
+	)
+	require.NoError(t, err,
+		"reconcile must complete; an error here would mask whether "+
+			"the tombstone path was actually reached")
+
+	// Sentinel: confirm the tombstone actually fired by ensuring the
+	// archived session row is soft-deleted. GetSession filters out
+	// rows whose deleted_at IS NOT NULL, so a tombstoned row returns
+	// (nil, nil). Without this assertion the test could pass for the
+	// wrong reason if reconcile's owner-page lookup missed the
+	// archived record and tombstoneSessionSourceOwnership never ran.
+	const sessionID = "codebuff:project-0:2026-07-15T10-00-00.000Z"
+	sess, err := database.GetSession(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.Nil(t, sess,
+		"the archived session row must be soft-deleted after a "+
+			"missing-source reconcile; a non-nil sess means "+
+			"tombstoneSessionSourceOwnership never reached "+
+			"SoftDeleteSessionSourceOwnership, so the provider_freshness "+
+			"assertion below would pin nothing about Issue 3")
+
+	_, hasAfter, err := database.GetProviderStatHash(
+		context.Background(), parser.AgentCodebuff, chatPath,
+	)
+	require.NoError(t, err)
+	require.False(t, hasAfter,
+		"tombstoning must clear provider_freshness; a non-nil row "+
+			"after this means Issue 3 regressed and a future "+
+			"byte-identical restore would falsely mark the source as "+
+			"fresh")
+}
+
+// TestSyncCodebuffColdStartForcesFingerprintUntilStamped pins Issue 4a:
+// when provider_freshness carries no row for a discovered Codebuff
+// source (cold-start before the column is populated, or the
+// post-tombstone state), the freshness gate must force a real
+// fingerprint instead of falling through to the legacy size/max-mtime
+// composite. The composite would short-circuit a coincidental
+// size/mtime match and leave provider_freshness permanently empty,
+// so the per-component gate never engages and a subsequent real
+// content change could go undetected. After a forced fingerprint
+// the staging block stamps the digest, so the warm sync must
+// repopulate the row.
+func TestSyncCodebuffColdStartForcesFingerprintUntilStamped(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	database := dbtest.OpenTestDB(t)
+	root, chatPath := createCodebuffSingleSession(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	require.Equal(t, 1,
+		engine.SyncAll(context.Background(), nil).Synced,
+		"cold sync must parse the seeded session")
+	_, hasBefore, err := database.GetProviderStatHash(
+		context.Background(), parser.AgentCodebuff, chatPath,
+	)
+	require.NoError(t, err)
+	require.True(t, hasBefore,
+		"first sync must populate provider_freshness as the "+
+			"precondition to clearing it post-cold-warm")
+
+	// Manual delete simulates the post-tombstone / cold-warm
+	// transition. A correct implementation forces provider.Fingerprint
+	// on the next SyncAll because the freshness gate sees !hasStored,
+	// so the staging block at applyProviderFilePathPolicies
+	// recomputes and persists a fresh digest.
+	require.NoError(t, database.DeleteProviderStatHash(
+		context.Background(), parser.AgentCodebuff, chatPath,
+	))
+	_, hasCleared, err := database.GetProviderStatHash(
+		context.Background(), parser.AgentCodebuff, chatPath,
+	)
+	require.NoError(t, err)
+	require.False(t, hasCleared,
+		"DeleteProviderStatHash must take effect so the cold-warm "+
+			"path is exercised next")
+
+	engine.SyncAll(context.Background(), nil)
+
+	_, hasAfter, err := database.GetProviderStatHash(
+		context.Background(), parser.AgentCodebuff, chatPath,
+	)
+	require.NoError(t, err)
+	require.True(t, hasAfter,
+		"a warm SyncAll with provider_freshness cleared must "+
+			"re-stamp the digest; a missing row here means the "+
+			"per-component gate fell through to the legacy "+
+			"size/mtime composite and the cold-start branch was "+
+			"never forced through provider.Fingerprint")
+}
+
+// TestSyncCodebuffSingleSessionWritesProviderStatHash pins Issue 4b:
+// a single-session sync (SyncSingleSession) that writes through
+// writeSessionFull must also persist the staged
+// res.providerStatHash, mirroring the per-row persist gate in
+// flushPending. Without this, single-session syncs leave
+// provider_freshness empty for Codebuff/Freebuff and the next
+// warm pass short-circuits on a coincidental size/mtime match
+// before any digest is stamped. A regression that drops the
+// per-row gate for the single-session path surfaces here as a
+// missing digest after SyncSingleSession.
+func TestSyncCodebuffSingleSessionWritesProviderStatHash(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	database := dbtest.OpenTestDB(t)
+	root, chatPath := createCodebuffSingleSession(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	require.NoError(t,
+		engine.SyncSingleSession(
+			"codebuff:project-0:2026-07-15T10-00-00.000Z",
+		),
+		"a single-session sync on a live source must commit "+
+			"without errors; ErrOrNil semantics here ensure the "+
+			"test only exercises the digest-persist gate")
+
+	_, has, err := database.GetProviderStatHash(
+		context.Background(), parser.AgentCodebuff, chatPath,
+	)
+	require.NoError(t, err)
+	require.True(t, has,
+		"single-session SyncAll must persist provider_freshness; "+
+			"a missing row here means the per-row persist gate "+
+			"in writeSessionFull is missing (Issue 4) and the "+
+			"per-component digest gate never engages on the next "+
+			"warm pass")
+}
+
 // TestSyncEngineProviderStatHashersRegistrationIsCapabilityGated pins the
 // side-effect of adding Source.MultiFileStatHash capability gating to
 // buildProviderStatHashers: every SourceSet-wrapped agent unconditionally

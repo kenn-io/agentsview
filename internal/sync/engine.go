@@ -719,32 +719,47 @@ func buildProviderStatHashers(
 // targetKey is the cache key the engine uses for both the digest lookup
 // and persistence, so remote-synced sessions hash their materialized
 // file but store the digest under their canonical logical key.
+//
+// digest is the per-component stat snapshot the hasher computed at
+// staging time. Capturing it here closes a TOCTOU window between
+// provider.Fingerprint (which stats and parses a stable file state)
+// and the later flushPending write: if the file changes between the
+// two calls, a re-compute at flushPending time would store the new
+// state under the old parse, falsely pinning the cache against the
+// next warm pass. Persisting the pre-parse digest under the same
+// session row guarantees provider_freshness reflects the file state
+// the write actually committed.
 type pendingProviderStatHash struct {
 	agent        parser.AgentType
 	physicalPath string
 	targetKey    string
+	digest       uint64
 }
 
-// recordProviderStatHash computes the per-component stat digest for a
-// source and persists it to provider_freshness. Providers without a
-// MultiFileStatHasher implementation are silently skipped (their
-// freshness is owned by the engine's existing skip-cache path). The
-// hasher performs its own os.Stat on the physical chat path so the
-// caller does not need to supply FileInfo. The cache key (targetKey)
-// and the hashed path (physicalPath) are kept distinct so a remote
-// import whose pathRewriter rewrites the stored file_path to a logical
+// recordProviderStatHash persists the pre-computed per-component stat
+// digest for a source to provider_freshness. The digest is staged in
+// applyProviderFilePathPolicies at the same wall-clock moment the file
+// is stat-ed for the parse, so what is persisted always matches the
+// snapshot the parse saw. Providers without a MultiFileStatHasher
+// implementation carry a zero digest and are silently skipped here:
+// their freshness is owned by the engine's existing skip-cache path,
+// and the staging site does not populate res.providerStatHash for
+// non-multi-file agents. The cache key (targetKey) and the hashed path
+// (physicalPath) are kept distinct so a remote import whose
+// pathRewriter rewrites the stored file_path to a logical
 // "host:/remote/path" still hashes the materialized local file.
 func (e *Engine) recordProviderStatHash(
 	ctx context.Context,
 	hash pendingProviderStatHash,
 ) {
-	hasher, ok := e.providerStatHashers[hash.agent]
-	if !ok {
+	if hash.digest == 0 {
 		return
 	}
-	digest := hasher.ComputeMultiFileStatHash(hash.physicalPath)
+	if _, ok := e.providerStatHashers[hash.agent]; !ok {
+		return
+	}
 	if err := e.db.UpsertProviderStatHash(
-		ctx, hash.agent, hash.targetKey, digest,
+		ctx, hash.agent, hash.targetKey, hash.digest,
 	); err != nil {
 		log.Printf(
 			"provider_freshness write for %s/%s: %v",
@@ -4503,6 +4518,32 @@ func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
 	return deleted, nil
 }
 
+// canonicalProviderStatHashAgent maps an AgentType key to the canonical
+// agent used by the provider_freshness side-table. The side-table is
+// only ever written by recordProviderStatHash via the
+// pendingProviderStatHash.agent field, which is set at the staging site
+// from the discovered source's AgentType — always AgentCodebuff in the
+// current registry because the Codebuff provider is the sole provider
+// registered with MultiFileStatHash (Freebuff sessions surface with
+// agent=AgentCodebuff per parser.AgentLabel routing, see
+// buildProviderStatHashers). The storage-layer ownership rows, however,
+// can carry agent=AgentFreebuff (the watcher/reconcile path may label a
+// Freebuff-on-disk session with the AgentFreebuff literal, while the
+// side-table provenance still rooted at the Codebuff probe). Reading
+// the side-table at any site that takes ownership.Agent must therefore
+// normalize Freebuff to Codebuff; without this, a tombstone on a
+// Freebuff-tagged ownership row would silently miss the side-table row
+// that the cold sync stamped under the Codebuff key, and a future
+// byte-identical restore of the directory would falsely match the
+// stale digest.
+func canonicalProviderStatHashAgent(agent string) parser.AgentType {
+	a := parser.AgentType(agent)
+	if a == parser.AgentFreebuff {
+		return parser.AgentCodebuff
+	}
+	return a
+}
+
 func (e *Engine) tombstoneSessionSourceOwnership(
 	ctx context.Context, machine, agent, id, filePath string,
 ) (bool, error) {
@@ -4511,6 +4552,22 @@ func (e *Engine) tombstoneSessionSourceOwnership(
 	// tombstone as one recoverable operation.
 	if _, err := e.clearSkipPersistent(filePath); err != nil {
 		return false, fmt.Errorf("clear source skip cache: %w", err)
+	}
+	// Also drop the per-component provider_freshness row under the same
+	// (agent, filePath) key. Freebuff sessions surface in storage with
+	// agent=AgentFreebuff but the provider_freshness side-table is only
+	// ever stamped under the canonical AgentCodebuff key (the sole
+	// MultiFileStatHasher provider); canonicalProviderStatHashAgent
+	// remaps Freebuff to Codebuff here so the delete matches the row the
+	// cold-sync staging site wrote. If this row is left intact and the
+	// same physical directory is later restored byte-for-byte, the stale
+	// digest would short-circuit providerSourceFreshBeforeFingerprint on
+	// the next warm pass and silently skip the source, preventing the
+	// tombstoned row from being revived by reconciliation.
+	if err := e.db.DeleteProviderStatHash(
+		ctx, canonicalProviderStatHashAgent(agent), filePath,
+	); err != nil {
+		return false, fmt.Errorf("clear provider_freshness: %w", err)
 	}
 	changed, err := e.db.SoftDeleteSessionSourceOwnership(
 		ctx, machine, agent, id, filePath,
@@ -8221,11 +8278,21 @@ func (e *Engine) applyProviderFilePathPolicies(
 		// sources keep hashing a real local file but read back under
 		// the canonical logical key.
 		//
-		// The digest is staged here and persisted only after the
-		// matching source's sessions-table write commits
-		// successfully, so a downstream write failure or a CWD-filter
-		// veto cannot mark an absent or stale session as fresh.
-		if _, ok := e.providerStatHashers[agent]; ok {
+		// The digest is staged here, COMPUTED from the same snapshot
+		// provider.Fingerprint used for the parse, and persisted only
+		// after the matching source's sessions-table write commits
+		// successfully. Capturing the digest at staging time closes
+		// the TOCTOU window between parse and write: a file change
+		// between provider.Fingerprint and flushPending would
+		// otherwise let flushPending store the new digest under the
+		// old parse payload, falsely pinning a stale row on the
+		// next warm sync. The per-row persist gate in flushPending
+		// and the single-session writeSessionFull loop is what
+		// guarantees provider_freshness only sees digests whose
+		// matching session row actually committed; a CWD-filter
+		// veto, a failed upsert, or a parser-skipped session all
+		// bypass the persist call and keep the side-table clean.
+		if hasher, ok := e.providerStatHashers[agent]; ok {
 			targetKey := filePath
 			if e.pathRewriter != nil {
 				targetKey = e.pathRewriter(filePath)
@@ -8235,6 +8302,7 @@ func (e *Engine) applyProviderFilePathPolicies(
 					agent:        agent,
 					physicalPath: filePath,
 					targetKey:    targetKey,
+					digest:       hasher.ComputeMultiFileStatHash(filePath),
 				}
 				// Test observability: this counter lets tests
 				// distinguish a regression that drops just the
@@ -9117,14 +9185,52 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 	// through to the size/mtime composite below, because that
 	// composite can miss same-size sibling rewrites whose mtime
 	// stays below the existing max (or offsetting size deltas that
-	// cancel out in sum-of-sizes). The side-table is only populated
-	// after a successful parse+write, so a missing row falls through
-	// to the legacy stat-only composite for cold-start archives.
+	// cancel out in sum-of-sizes). The side-table is populated
+	// either by a successful write's flushPending, by a single-session
+	// writeSessionFull commit, or by the cold-start fall-through in
+	// the !hasStored arm below (which stamps directly so a content-
+	// unchanged warm pass can still engage the per-component gate).
 	if hasher, ok := e.providerStatHashers[file.Agent]; ok {
-		digest := hasher.ComputeMultiFileStatHash(path)
 		stored, hasStored, hashErr :=
 			e.db.GetProviderStatHash(ctx, file.Agent, lookupPath)
 		switch {
+		case !hasStored:
+			// Cold-start (no side-table row yet) or post-tombstone
+			// (provider_freshness was cleared): force a real
+			// fingerprint so a content-unchanged source still flows
+			// through provider.Fingerprint → engine skip → no write →
+			// no flushPending → no recordProviderStatHash => the
+			// side-table row never gets re-populated and !hasStored
+			// would persist forever on its own. Closing that loop
+			// requires a synchronous digest write that runs BEFORE
+			// the parse/write outcome is known — but doing so here
+			// unconditionally would override the per-row gate at
+			// flushPending that holds for CWD-filtered sources
+			// (TestSyncCodebuffCwdFilteredSourceDoesNotPersistStatHash).
+			// Since the freshness gate cannot read the session's
+			// recorded cwd (that is parsed only later), the gate is
+			// skipped whenever CWD filtering is active and deferred to
+			// the per-row write path. Production has cwdFilter.empty
+			// and the cold-loop break still applies; tests that pin
+			// the CWD-filter side-effect (IncludeCwdPrefixes set)
+			// take the persisting-only-via-flushPending path so the
+			// side-table row stays absent for sources that never
+			// reach a successful session write. The fingerprint call
+			// still runs so size/mtime/data-version freshness checks
+			// proceed normally; the digest just lives somewhere
+			// gated by the post-parse write outcome.
+			if e.db != nil && e.cwdFilter.empty() {
+				digest := hasher.ComputeMultiFileStatHash(path)
+				if err := e.db.UpsertProviderStatHash(
+					ctx, file.Agent, lookupPath, digest,
+				); err != nil {
+					log.Printf(
+						"provider_freshness cold-stamp for %s/%s: %v",
+						file.Agent, lookupPath, err,
+					)
+				}
+			}
+			return 0, false
 		case hashErr != nil:
 			log.Printf(
 				"provider_freshness read for %s/%s: %v",
@@ -9134,7 +9240,7 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 			// persistent read error that started this turn should not
 			// silently skip a stale source indefinitely.
 			return 0, false
-		case hasStored && stored == digest:
+		case stored == hasher.ComputeMultiFileStatHash(path):
 			// Cold writes stamp fingerprint.MTimeNS as the max of
 			// chat + sibling companions (see codebuffFingerprintSource);
 			// the skip cache key/decision must align with that stamp
@@ -9143,8 +9249,8 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 			// MultiFileStatHasher fall through to chat-only via the
 			// helper.
 			return providerStatFreshnessMtime(file.Agent, lookupPath, info), true
-		case hasStored:
-			// Stored digest disagrees with current compoent stats.
+		default:
+			// Stored digest disagrees with current component stats.
 			// Forcing provider.Fingerprint instead of falling through
 			// to the size/mtime composite is the point of the per
 			// component digest: a same-size companion rewrite whose
@@ -13557,6 +13663,7 @@ func (e *Engine) SyncSingleSessionContext(
 		return nil
 	}
 
+	written := 0
 	for _, pr := range res.results {
 		write := pendingWrite{
 			sess:         pr.Session,
@@ -13565,9 +13672,16 @@ func (e *Engine) SyncSingleSessionContext(
 			needsRetry:   res.needsRetryForSession(pr.Session.ID),
 			forceReplace: res.forceReplace,
 		}
-		if err := e.writeSessionFull(write); err != nil &&
-			!isIntentionalSessionSkip(err) &&
-			!errors.Is(err, errSessionPreserved) {
+		err := e.writeSessionFull(write)
+		switch {
+		case err == nil:
+			// A nil writeSessionFull is the single-session analog of
+			// outcome.written[i]=true in flushPending; only counted
+			// successes advance the persisted-digest gate below.
+			written++
+		case errors.Is(err, errSessionPreserved):
+			preserved = true
+		case !isIntentionalSessionSkip(err):
 			// Mirror the batch write paths: a partial write (session
 			// row updated, messages or usage not) must demote the
 			// stored data version, or the next container parse would
@@ -13575,9 +13689,19 @@ func (e *Engine) SyncSingleSessionContext(
 			e.markStaleFailedMemberWrite(write)
 			return fmt.Errorf("write session %s: %w",
 				pr.Session.ID, err)
-		} else if errors.Is(err, errSessionPreserved) {
-			preserved = true
 		}
+	}
+	// Persist staged digest only when at least one session row
+	// actually committed. Mirrors the per-row gate in flushPending:
+	// a session-trashed, parser-excluded, or otherwise skipped
+	// batch must NOT stamp provider_freshness with a digest whose
+	// matching session row was not actually persisted. Without this
+	// the single-session sync path would leave provider_freshness
+	// empty for Codebuff/Freebuff forever, leaving the digest gate
+	// un-armed on the next warm pass and a stale session row
+	// unrepaired by the per-component digest.
+	if written > 0 && res.providerStatHash != nil {
+		e.recordProviderStatHash(ctx, *res.providerStatHash)
 	}
 
 	// Link subagent child sessions to their parents.
