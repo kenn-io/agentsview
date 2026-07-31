@@ -274,6 +274,7 @@ type EngineConfig struct {
 // Engine orchestrates session file discovery and sync.
 type Engine struct {
 	db    *db.DB
+	stat  func(string) (os.FileInfo, error)
 	lstat func(string) (os.FileInfo, error)
 	// archiveStore is the database holding previously archived
 	// sessions for the preserve guards in prepareSessionWrite.
@@ -510,6 +511,7 @@ func NewEngine(
 
 	e := &Engine{
 		db:                      database,
+		stat:                    os.Stat,
 		lstat:                   os.Lstat,
 		agentDirs:               dirs,
 		machine:                 cfg.Machine,
@@ -10079,14 +10081,18 @@ func (e *Engine) preserveUnavailableSourceProjects(
 			continue
 		}
 		sess := batch[i].sess
-		if sess.ID == "" || sess.Project == "" || sess.Cwd == "" ||
+		if sess.ID == "" || sess.Cwd == "" ||
 			sess.Machine != e.machine ||
 			!safeLocalAbsolutePath(sess.Cwd) ||
 			export.IsAutomountNamespacePath(runtime.GOOS, filepath.Clean(sess.Cwd)) {
 			batch[i].sourceProjectResolved = true
 			continue
 		}
-		if _, err := os.Stat(sess.Cwd); !errors.Is(err, os.ErrNotExist) {
+		stat := e.stat
+		if stat == nil {
+			stat = os.Stat
+		}
+		if _, err := stat(sess.Cwd); err == nil && sess.Project != "" {
 			batch[i].sourceProjectResolved = true
 			continue
 		}

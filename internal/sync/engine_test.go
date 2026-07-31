@@ -101,6 +101,80 @@ func TestPreserveUnavailableSourceProjectsRetriesSnapshotLookupFailure(
 		"successful retry must recover the durable resolved project")
 }
 
+func TestPreserveUnavailableSourceProjectsUsesDurableSnapshot(
+	t *testing.T,
+) {
+	for _, tc := range []struct {
+		name          string
+		parsedProject string
+		makeSource    bool
+		statErr       error
+	}{
+		{
+			name:          "missing source",
+			parsedProject: "parser-fallback",
+		},
+		{
+			name:          "source permission failure",
+			parsedProject: "parser-fallback",
+			statErr:       os.ErrPermission,
+		},
+		{
+			name:       "empty parser project",
+			makeSource: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const (
+				sessionID       = "unavailable-source"
+				originalProject = "resolved-project"
+				machine         = "test-machine"
+			)
+			database := openTestDB(t)
+			root := filepath.Join(t.TempDir(), "checkout")
+			cwd := filepath.Join(root, "nested")
+			if tc.makeSource {
+				require.NoError(t, os.MkdirAll(cwd, 0o755))
+			}
+			require.NoError(t, database.UpsertSession(db.Session{
+				ID: sessionID, Project: originalProject, Machine: machine,
+				Agent: string(parser.AgentClaude), Cwd: cwd,
+			}))
+			require.NoError(t,
+				database.UpsertProjectIdentityObservationWithSnapshotProject(
+					t.Context(), export.ProjectIdentityObservation{
+						SessionID: sessionID, Project: originalProject,
+						Machine: machine, RootPath: root,
+						GitRemote:        "https://example.com/team/project.git",
+						RemoteResolution: export.ProjectResolutionResolved,
+						ObservedAt: time.Date(
+							2026, 7, 31, 12, 0, 0, 0, time.UTC,
+						),
+					}, originalProject,
+				))
+			engine := NewEngine(database, EngineConfig{Machine: machine})
+			t.Cleanup(engine.Close)
+			if tc.statErr != nil {
+				engine.stat = func(got string) (os.FileInfo, error) {
+					assert.Equal(t, cwd, got)
+					return nil, tc.statErr
+				}
+			}
+
+			result, err := engine.preserveUnavailableSourceProjects(
+				t.Context(), []pendingWrite{{sess: parser.ParsedSession{
+					ID: sessionID, Project: tc.parsedProject, Machine: machine,
+					Agent: parser.AgentClaude, Cwd: cwd,
+				}}},
+			)
+			require.NoError(t, err)
+			require.Len(t, result, 1)
+			assert.True(t, result[0].sourceProjectResolved)
+			assert.Equal(t, originalProject, result[0].sess.Project)
+		})
+	}
+}
+
 func TestClaudeIDFreshnessRejectsSourceMissingTombstone(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
