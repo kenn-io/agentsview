@@ -47,7 +47,11 @@ func (t *folderTransport) appendFolderJournalLocked(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	journal, err := ensureFolderSubroot(t.root, folderJournalDirectory, "journal")
+	journal, err := t.ensureFolderSubrootLocked(
+		t.root,
+		folderJournalDirectory,
+		"journal",
+	)
 	if err != nil {
 		return err
 	}
@@ -73,7 +77,7 @@ func (t *folderTransport) appendFolderJournalLocked(
 		return err
 	}
 	if existing != nil && *existing != event {
-		if err := writeFolderJournalHead(journal, folderJournalHead{
+		if err := t.writeFolderJournalHeadLocked(journal, folderJournalHead{
 			Sequence: existing.Sequence,
 		}); err != nil {
 			return err
@@ -90,7 +94,7 @@ func (t *folderTransport) appendFolderJournalLocked(
 			)
 		}
 	}
-	return writeFolderJournalHead(journal, folderJournalHead{
+	return t.writeFolderJournalHeadLocked(journal, folderJournalHead{
 		Sequence: event.Sequence,
 	})
 }
@@ -105,7 +109,7 @@ func (t *folderTransport) installFolderJournalEventLocked(
 	}
 	body = append(body, '\n')
 	name := folderJournalEventName(event.Sequence)
-	err = writeFolderFileExclusive(journal, name, body)
+	err = t.writeFolderFileExclusiveLocked(journal, name, body)
 	if err == nil {
 		return nil, nil
 	}
@@ -122,7 +126,7 @@ func (t *folderTransport) installFolderJournalEventLocked(
 	if quarantineErr := t.quarantineFolderEntryLocked(journal, name); quarantineErr != nil {
 		return nil, errors.Join(err, readErr, quarantineErr)
 	}
-	if retryErr := writeFolderFileExclusive(journal, name, body); retryErr != nil {
+	if retryErr := t.writeFolderFileExclusiveLocked(journal, name, body); retryErr != nil {
 		return nil, errors.Join(err, readErr, retryErr)
 	}
 	return nil, nil
@@ -211,7 +215,10 @@ func decodeCanonicalFolderJSON(body []byte, destination any) error {
 	return nil
 }
 
-func writeFolderJournalHead(root *os.Root, head folderJournalHead) (retErr error) {
+func (t *folderTransport) writeFolderJournalHeadLocked(
+	root *os.Root,
+	head folderJournalHead,
+) (retErr error) {
 	body, err := json.Marshal(head)
 	if err != nil {
 		return err
@@ -240,11 +247,10 @@ func writeFolderJournalHead(root *os.Root, head folderJournalHead) (retErr error
 		return err
 	}
 	tempExists = false
-	syncFolderDirectoryBestEffort(root)
-	return nil
+	return t.syncFolderDirectoryLocked(root)
 }
 
-func writeFolderFileExclusive(
+func (t *folderTransport) writeFolderFileExclusiveLocked(
 	root *os.Root,
 	name string,
 	body []byte,
@@ -291,15 +297,14 @@ func writeFolderFileExclusive(
 		}
 		tempExists = false
 	}
-	syncFolderDirectoryBestEffort(root)
-	return nil
+	return t.syncFolderDirectoryLocked(root)
 }
 
 func folderJournalRejectionName(wireName string) string {
 	return wireName + ".rejected"
 }
 
-func writeFolderJournalRejection(
+func (t *folderTransport) writeFolderJournalRejectionLocked(
 	root *os.Root,
 	wireName string,
 	identity Identity,
@@ -310,7 +315,7 @@ func writeFolderJournalRejection(
 		return err
 	}
 	body = append(body, '\n')
-	err = writeFolderFileExclusive(
+	err = t.writeFolderFileExclusiveLocked(
 		root,
 		folderJournalRejectionName(wireName),
 		body,
@@ -329,10 +334,10 @@ func writeFolderJournalRejection(
 		return validationErr
 	}
 	name := folderJournalRejectionName(wireName)
-	if quarantineErr := quarantineFolderEntry(root, name); quarantineErr != nil {
+	if quarantineErr := t.quarantineFolderEntryLocked(root, name); quarantineErr != nil {
 		return errors.Join(err, validationErr, quarantineErr)
 	}
-	if retryErr := writeFolderFileExclusive(root, name, body); retryErr != nil {
+	if retryErr := t.writeFolderFileExclusiveLocked(root, name, body); retryErr != nil {
 		return errors.Join(err, validationErr, retryErr)
 	}
 	return nil

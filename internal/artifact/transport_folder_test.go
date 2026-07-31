@@ -935,6 +935,188 @@ func TestFolderTransportPushesWireObjectsBeforeCheckpointAndRetriesUnchanged(
 	assert.Empty(t, temps)
 }
 
+func TestFolderTransportDirectorySyncFailureStopsPublicationAuthority(
+	t *testing.T,
+) {
+	body := []byte("directory-sync-segment")
+	ref := testContentRef(
+		t,
+		testFolderPublishOrigin,
+		KindSegments,
+		body,
+		".ndjson",
+	)
+	wire, err := ToWireRef(ref)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name      string
+		failCall  int
+		wantHead  bool
+		lostEntry func(string) string
+	}{
+		{
+			name:     "object entry",
+			failCall: 3,
+			lostEntry: func(target string) string {
+				return filepath.Join(
+					target,
+					testFolderPublishOrigin,
+					string(KindSegments),
+					wire.Name,
+				)
+			},
+		},
+		{
+			name:     "journal event",
+			failCall: 5,
+			lostEntry: func(target string) string {
+				return filepath.Join(
+					target,
+					folderJournalDirectory,
+					folderJournalEventName(1),
+				)
+			},
+		},
+		{
+			name:     "journal head",
+			failCall: 6,
+			wantHead: true,
+			lostEntry: func(target string) string {
+				return filepath.Join(
+					target,
+					folderJournalDirectory,
+					folderJournalHeadName,
+				)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			target := t.TempDir()
+			opened, openErr := OpenFolderTransport(
+				target,
+				FolderTransportOptions{},
+			)
+			require.NoError(t, openErr)
+			transport := opened.(*folderTransport)
+			t.Cleanup(func() { require.NoError(t, transport.Close()) })
+			require.NoError(t, os.MkdirAll(
+				filepath.Join(
+					target,
+					testFolderPublishOrigin,
+					string(KindSegments),
+				),
+				0o755,
+			))
+			require.NoError(t, os.MkdirAll(
+				filepath.Join(target, folderJournalDirectory),
+				0o755,
+			))
+
+			store := newTestArtifactStore(t)
+			createTestStoreArtifact(t, store, ref, body)
+			interrupted := errors.New("directory sync interrupted")
+			calls := 0
+			transport.syncDirectory = func(root *os.Root) error {
+				calls++
+				if calls == tt.failCall {
+					return interrupted
+				}
+				return syncFolderDirectory(root)
+			}
+
+			_, exchangeErr := transport.Exchange(
+				t.Context(),
+				store,
+				testFolderPublishOrigin,
+			)
+			require.Error(t, exchangeErr)
+			assert.ErrorIs(t, exchangeErr, interrupted)
+			assert.Equal(t, tt.failCall, calls)
+			headPath := filepath.Join(
+				target,
+				folderJournalDirectory,
+				folderJournalHeadName,
+			)
+			if tt.wantHead {
+				assert.FileExists(t, headPath)
+			} else {
+				assert.NoFileExists(t, headPath)
+			}
+
+			require.NoError(t, os.Remove(tt.lostEntry(target)))
+			transport.syncDirectory = nil
+			_, exchangeErr = transport.Exchange(
+				t.Context(),
+				store,
+				testFolderPublishOrigin,
+			)
+			require.NoError(t, exchangeErr)
+			assertFolderWireBody(t, target, ref, body)
+			journal, journalErr := os.OpenRoot(
+				filepath.Join(target, folderJournalDirectory),
+			)
+			require.NoError(t, journalErr)
+			head, headErr := readFolderJournalHead(journal)
+			require.NoError(t, headErr)
+			require.NoError(t, journal.Close())
+			assert.Equal(t, int64(1), head.Sequence)
+		})
+	}
+}
+
+func TestFolderTransportDirectorySyncFailureStopsSubdirectoryUse(t *testing.T) {
+	target := t.TempDir()
+	opened, err := OpenFolderTransport(target, FolderTransportOptions{})
+	require.NoError(t, err)
+	transport := opened.(*folderTransport)
+	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+
+	body := []byte("subdirectory-sync-segment")
+	ref := testContentRef(
+		t,
+		testFolderPublishOrigin,
+		KindSegments,
+		body,
+		".ndjson",
+	)
+	store := newTestArtifactStore(t)
+	createTestStoreArtifact(t, store, ref, body)
+	interrupted := errors.New("subdirectory sync interrupted")
+	transport.syncDirectory = func(*os.Root) error {
+		return interrupted
+	}
+
+	_, err = transport.Exchange(t.Context(), store, testFolderPublishOrigin)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, interrupted)
+	assert.NoDirExists(t, filepath.Join(
+		target,
+		testFolderPublishOrigin,
+		string(KindSegments),
+	))
+	assert.NoFileExists(t, filepath.Join(
+		target,
+		folderJournalDirectory,
+		folderJournalHeadName,
+	))
+
+	_, err = transport.Exchange(t.Context(), store, testFolderPublishOrigin)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, interrupted)
+	assert.NoDirExists(t, filepath.Join(
+		target,
+		testFolderPublishOrigin,
+		string(KindSegments),
+	))
+
+	transport.syncDirectory = nil
+	_, err = transport.Exchange(t.Context(), store, testFolderPublishOrigin)
+	require.NoError(t, err)
+	assertFolderWireBody(t, target, ref, body)
+}
+
 func TestFolderTransportPushFallsBackWithoutHardLinks(t *testing.T) {
 	t.Parallel()
 

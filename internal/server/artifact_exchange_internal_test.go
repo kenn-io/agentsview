@@ -219,7 +219,7 @@ func TestArtifactExchangeRunnerErrorIsRedacted(t *testing.T) {
 
 	rec := serveArtifactExchange(
 		t, srv, "127.0.0.1:43125",
-		`{"target":"`+privateTarget+`"}`,
+		artifactExchangeBody(t, privateTarget, false),
 	)
 
 	assert.Equal(t, http.StatusBadGateway, rec.Code)

@@ -54,7 +54,7 @@ func (t *folderTransport) pushOriginLocked(
 	if pager, ok := store.(folderTransportPublicationPager); ok {
 		return t.pushAuthoritativeOriginLocked(ctx, store, pager, origin)
 	}
-	originRoot, err := ensureFolderSubroot(t.root, origin, "origin")
+	originRoot, err := t.ensureFolderSubrootLocked(t.root, origin, "origin")
 	if err != nil {
 		return 0, false, err
 	}
@@ -137,7 +137,7 @@ func (t *folderTransport) pushAuthoritativeOriginLocked(
 	if err != nil {
 		return 0, false, err
 	}
-	originRoot, err := ensureFolderSubroot(t.root, origin, "origin")
+	originRoot, err := t.ensureFolderSubrootLocked(t.root, origin, "origin")
 	if err != nil {
 		return 0, false, err
 	}
@@ -157,7 +157,7 @@ func (t *folderTransport) pushAuthoritativeOriginLocked(
 				}
 				kindRoot = nil
 			}
-			kindRoot, err = ensureFolderSubroot(
+			kindRoot, err = t.ensureFolderSubrootLocked(
 				originRoot,
 				string(entry.Ref.Kind),
 				"kind",
@@ -244,7 +244,7 @@ func (t *folderTransport) pushKindLocked(
 		t.observeStorePageLocked(len(page))
 		if len(page) > 0 && kindRoot == nil {
 			var err error
-			kindRoot, err = ensureFolderSubroot(
+			kindRoot, err = t.ensureFolderSubrootLocked(
 				originRoot,
 				string(kind),
 				"kind",
@@ -411,7 +411,9 @@ func (t *folderTransport) publishFolderEntryLocked(
 		return false, err
 	}
 	tempExists = false
-	syncFolderDirectoryBestEffort(kindRoot)
+	if err := t.syncFolderDirectoryLocked(kindRoot); err != nil {
+		return false, err
+	}
 	return created, nil
 }
 
@@ -546,7 +548,7 @@ func (w *countingWriter) Write(buffer []byte) (int, error) {
 	return count, err
 }
 
-func ensureFolderSubroot(
+func (t *folderTransport) ensureFolderSubrootLocked(
 	parent *os.Root,
 	name string,
 	role string,
@@ -556,13 +558,18 @@ func ensureFolderSubroot(
 		return nil, err
 	}
 	if root != nil {
+		if err := t.syncFolderDirectoryLocked(parent); err != nil {
+			return nil, errors.Join(err, root.Close())
+		}
 		return root, nil
 	}
 	if err := parent.Mkdir(name, 0o755); err != nil &&
 		!errors.Is(err, fs.ErrExist) {
 		return nil, err
 	}
-	syncFolderDirectoryBestEffort(parent)
+	if err := t.syncFolderDirectoryLocked(parent); err != nil {
+		return nil, err
+	}
 	return openFolderSubroot(parent, name, role)
 }
 

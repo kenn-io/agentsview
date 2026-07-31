@@ -45,6 +45,7 @@ type folderTransport struct {
 	observeStorePage     func(int)
 	publishLink          func(*os.Root, string, string) error
 	quarantineEntry      func(*os.Root, string) error
+	syncDirectory        func(*os.Root) error
 	maxObjects           int
 	maxBytes             int64
 	pushCursor           folderPushCursor
@@ -486,8 +487,7 @@ func createFolderMarker(root *os.Root) (retErr error) {
 		return err
 	}
 	tempExists = false
-	syncFolderDirectoryBestEffort(root)
-	return nil
+	return syncFolderDirectory(root)
 }
 
 func createFolderMarkerExclusive(root *os.Root, body []byte) error {
@@ -643,11 +643,22 @@ func removeFolderFile(root *os.Root, name string) error {
 	return err
 }
 
-func syncFolderDirectoryBestEffort(root *os.Root) {
+func syncFolderDirectory(root *os.Root) (retErr error) {
 	directory, err := root.Open(".")
 	if err != nil {
-		return
+		return err
 	}
-	_ = directory.Sync()
-	_ = directory.Close()
+	defer func() { retErr = errors.Join(retErr, directory.Close()) }()
+	if err := directory.Sync(); err != nil &&
+		!isFolderDirectorySyncUnsupported(err) {
+		return err
+	}
+	return nil
+}
+
+func (t *folderTransport) syncFolderDirectoryLocked(root *os.Root) error {
+	if t.syncDirectory != nil {
+		return t.syncDirectory(root)
+	}
+	return syncFolderDirectory(root)
 }
