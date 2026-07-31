@@ -132,37 +132,10 @@ func (s *Sync) commitWorktreeMappingPublication(
 	}
 	if fullPublication {
 		if s.isFiltered() {
-			if _, err := tx.ExecContext(ctx, `
-				DELETE FROM source_worktree_project_mappings mapping
-				WHERE mapping.source_archive_id = $1
-				  AND EXISTS (
-					SELECT 1
-					FROM source_worktree_project_mapping_scopes owner
-					WHERE owner.source_archive_id = mapping.source_archive_id
-					  AND owner.machine = mapping.machine
-					  AND owner.path_prefix = mapping.path_prefix
-					  AND owner.publication_scope = $2
-				  )
-				  AND NOT EXISTS (
-					SELECT 1
-					FROM source_worktree_project_mapping_scopes owner
-					WHERE owner.source_archive_id = mapping.source_archive_id
-					  AND owner.machine = mapping.machine
-					  AND owner.path_prefix = mapping.path_prefix
-					  AND owner.publication_scope <> $2
-				  )`,
-				s.archiveID, publicationScope,
+			if err := releaseFilteredWorktreeMappingFullOwnership(
+				ctx, tx, s.archiveID, publicationScope,
 			); err != nil {
-				return fmt.Errorf(
-					"clearing exclusively owned filtered mappings: %w", err)
-			}
-			if _, err := tx.ExecContext(ctx, `
-				DELETE FROM source_worktree_project_mapping_scopes
-				WHERE source_archive_id = $1 AND publication_scope = $2`,
-				s.archiveID, publicationScope,
-			); err != nil {
-				return fmt.Errorf(
-					"clearing filtered mapping publication ownership: %w", err)
+				return err
 			}
 		} else if _, err := tx.ExecContext(ctx, `
 				DELETE FROM source_worktree_project_mappings
@@ -223,6 +196,46 @@ func (s *Sync) commitWorktreeMappingPublication(
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing mapping publication: %w", err)
+	}
+	return nil
+}
+
+func releaseFilteredWorktreeMappingFullOwnership(
+	ctx context.Context,
+	q pgProjectIdentityExecer,
+	archiveID, publicationScope string,
+) error {
+	if _, err := q.ExecContext(ctx, `
+		DELETE FROM source_worktree_project_mappings mapping
+		WHERE mapping.source_archive_id = $1
+		  AND EXISTS (
+			SELECT 1
+			FROM source_worktree_project_mapping_scopes owner
+			WHERE owner.source_archive_id = mapping.source_archive_id
+			  AND owner.machine = mapping.machine
+			  AND owner.path_prefix = mapping.path_prefix
+			  AND owner.publication_scope = $2
+		  )
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM source_worktree_project_mapping_scopes owner
+			WHERE owner.source_archive_id = mapping.source_archive_id
+			  AND owner.machine = mapping.machine
+			  AND owner.path_prefix = mapping.path_prefix
+			  AND owner.publication_scope <> $2
+		  )`, archiveID, publicationScope); err != nil {
+		return fmt.Errorf(
+			"clearing exclusively owned filtered mappings: %w", err,
+		)
+	}
+	if _, err := q.ExecContext(ctx, `
+		DELETE FROM source_worktree_project_mapping_scopes
+		WHERE source_archive_id = $1 AND publication_scope = $2`,
+		archiveID, publicationScope,
+	); err != nil {
+		return fmt.Errorf(
+			"clearing filtered mapping publication ownership: %w", err,
+		)
 	}
 	return nil
 }

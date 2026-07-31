@@ -10096,10 +10096,11 @@ func (e *Engine) preserveUnavailableSourceProjects(
 			batch[i].sourceProjectResolved = true
 			continue
 		}
-		if _, exists := indexes[sess.ID]; !exists {
-			ids = append(ids, sess.ID)
+		storedID := applyIDPrefixToID(e.idPrefix, sess.ID)
+		if _, exists := indexes[storedID]; !exists {
+			ids = append(ids, storedID)
 		}
-		indexes[sess.ID] = append(indexes[sess.ID], i)
+		indexes[storedID] = append(indexes[storedID], i)
 	}
 	if len(ids) == 0 {
 		return batch, nil

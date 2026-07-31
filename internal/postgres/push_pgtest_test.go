@@ -3126,6 +3126,24 @@ func TestArchiveIdentityChangeRepublishesUnchangedSessions(t *testing.T) {
 		ctx, repairedArchiveID,
 		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 	))
+	_, err = pg.ExecContext(ctx, `
+		INSERT INTO source_archives (source_archive_id, source_archive_salt)
+		VALUES ($1, $2)`, repairedArchiveID,
+		"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+	)
+	require.NoError(t, err)
+
+	_, err = syncer.Push(ctx, false, nil)
+	require.ErrorContains(t, err, "archive salt mismatch")
+	persistedArchiveID, err := localDB.GetSyncState(lastPushSourceArchiveIDKey)
+	require.NoError(t, err)
+	assert.Equal(t, oldArchiveID, persistedArchiveID,
+		"failed metadata publication must leave archive repair retryable")
+	_, err = pg.ExecContext(ctx,
+		`DELETE FROM source_archives WHERE source_archive_id = $1`,
+		repairedArchiveID,
+	)
+	require.NoError(t, err)
 
 	second, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
@@ -3165,6 +3183,150 @@ func TestArchiveIdentityChangeRepublishesUnchangedSessions(t *testing.T) {
 		assert.Equal(t, 1, repairedCount,
 			"%s must be republished under the repaired archive id", table)
 	}
+}
+
+func TestFilteredArchiveIdentityRepairPreservesOtherPublicationScope(
+	t *testing.T,
+) {
+	const schema = "agentsview_filtered_archive_identity_repair_test"
+	pgURL := testPGURL(t)
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	ctx := context.Background()
+	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, local.Close()) })
+	for _, project := range []string{"alpha", "beta"} {
+		sessionID := "session-" + project
+		seedProvenanceSession(t, local, sessionID, "workstation", project, "")
+		require.NoError(t, local.UpsertProjectIdentityObservation(
+			ctx, export.ProjectIdentityObservation{
+				SessionID: sessionID, Project: project, Machine: "workstation",
+				RootPath:         "/workspace/" + project,
+				GitRemote:        "https://example.com/team/" + project + ".git",
+				WorktreeRootPath: "/workspace/" + project,
+				RemoteResolution: export.ProjectResolutionResolved,
+				ObservedAt: time.Date(
+					2026, 7, 31, 12, 0, 0, 0, time.UTC,
+				),
+			},
+		))
+		_, err = local.CreateWorktreeProjectMapping(
+			ctx, db.WorktreeProjectMapping{
+				Machine: "workstation", PathPrefix: "/workspace/" + project,
+				Layout: db.WorktreeMappingLayoutExplicit, Project: project,
+				Enabled: true,
+			},
+		)
+		require.NoError(t, err)
+	}
+
+	alpha, err := New(pgURL, schema, local, "workstation", true, SyncOptions{
+		Projects: []string{"alpha"},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, alpha.Close()) })
+	beta, err := New(pgURL, schema, local, "workstation", true, SyncOptions{
+		Projects: []string{"beta"},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, beta.Close()) })
+	for _, syncer := range []*Sync{alpha, beta} {
+		require.NoError(t, syncer.EnsureSchema(ctx))
+		_, err = syncer.Push(ctx, false, nil)
+		require.NoError(t, err)
+	}
+	oldArchiveID, err := local.GetArchiveID(ctx)
+	require.NoError(t, err)
+	const repairedArchiveID = "filtered-repaired-archive-id"
+	require.NoError(t, local.SetArchiveIdentityForTest(
+		ctx, repairedArchiveID,
+		"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+	))
+
+	_, err = alpha.Push(ctx, false, nil)
+	require.NoError(t, err)
+	for _, fixture := range []struct {
+		query string
+		args  []any
+	}{
+		{
+			`SELECT COUNT(*) FROM sessions
+			 WHERE id = 'session-beta' AND source_archive_id = $1`,
+			[]any{oldArchiveID},
+		},
+		{
+			`SELECT COUNT(*) FROM source_project_identity_observations
+			 WHERE project = 'beta' AND source_archive_id = $1`,
+			[]any{oldArchiveID},
+		},
+		{
+			`SELECT COUNT(*) FROM source_session_project_identity_snapshots
+			 WHERE project = 'beta' AND source_archive_id = $1`,
+			[]any{oldArchiveID},
+		},
+		{
+			`SELECT COUNT(*) FROM source_worktree_project_mappings
+			 WHERE project = 'beta' AND source_archive_id = $1`,
+			[]any{oldArchiveID},
+		},
+		{
+			`SELECT COUNT(*) FROM source_archives WHERE source_archive_id = $1`,
+			[]any{oldArchiveID},
+		},
+	} {
+		var count int
+		require.NoError(t, alpha.pg.QueryRowContext(
+			ctx, fixture.query, fixture.args...,
+		).Scan(&count))
+		assert.Equal(t, 1, count,
+			"repairing alpha must preserve beta's old archive metadata")
+	}
+	for _, table := range []string{
+		"source_project_identity_observations",
+		"source_session_project_identity_snapshots",
+		"source_worktree_project_mappings",
+	} {
+		var oldAlphaCount, repairedAlphaCount int
+		require.NoError(t, alpha.pg.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM "+table+
+				" WHERE project = 'alpha' AND source_archive_id = $1",
+			oldArchiveID,
+		).Scan(&oldAlphaCount))
+		assert.Zero(t, oldAlphaCount)
+		require.NoError(t, alpha.pg.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM "+table+
+				" WHERE project = 'alpha' AND source_archive_id = $1",
+			repairedArchiveID,
+		).Scan(&repairedAlphaCount))
+		assert.Equal(t, 1, repairedAlphaCount)
+	}
+
+	_, err = beta.Push(ctx, false, nil)
+	require.NoError(t, err)
+	for _, table := range []string{
+		"source_archives",
+		"source_project_identity_observations",
+		"source_project_identity_observation_scopes",
+		"source_session_project_identity_snapshots",
+		"source_session_project_identity_snapshot_scopes",
+		"source_worktree_project_mappings",
+		"source_worktree_project_mapping_scopes",
+	} {
+		var oldCount int
+		require.NoError(t, alpha.pg.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM "+table+" WHERE source_archive_id = $1",
+			oldArchiveID,
+		).Scan(&oldCount))
+		assert.Zero(t, oldCount,
+			"last repaired scope must retire old rows from %s", table)
+	}
+	var repairedSessions int
+	require.NoError(t, alpha.pg.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM sessions WHERE source_archive_id = $1`,
+		repairedArchiveID,
+	).Scan(&repairedSessions))
+	assert.Equal(t, 2, repairedSessions)
 }
 
 // TestSessionProvenanceBackfillForcesOneFullPush verifies that the provenance

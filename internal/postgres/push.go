@@ -205,6 +205,7 @@ func (s *Sync) PushWithOptions(
 		return result, fmt.Errorf("reading archive id: %w", err)
 	}
 	s.archiveID = archiveID
+	repairedPreviousArchiveID := ""
 	storedArchiveID, err := state.GetSyncState(lastPushSourceArchiveIDKey)
 	if err != nil {
 		return result, fmt.Errorf(
@@ -218,6 +219,7 @@ func (s *Sync) PushWithOptions(
 		if err := s.retireSourceArchiveMetadata(ctx, storedArchiveID); err != nil {
 			return result, err
 		}
+		repairedPreviousArchiveID = storedArchiveID
 		if err := clearPushState(state); err != nil {
 			return result, err
 		}
@@ -539,9 +541,6 @@ func (s *Sync) PushWithOptions(
 		); err != nil {
 			return result, err
 		}
-		if err := persistPushSourceArchiveID(state, s.archiveID); err != nil {
-			return result, err
-		}
 		if err := s.writePushMarker(
 			ctx, markerID, markerMachine, markerMachineAliases,
 		); err != nil {
@@ -568,6 +567,11 @@ func (s *Sync) PushWithOptions(
 			return result, err
 		}
 		if err := s.syncWorktreeMappings(ctx, full); err != nil {
+			return result, err
+		}
+		if err := s.finalizeSourceArchiveRepair(
+			ctx, state, repairedPreviousArchiveID,
+		); err != nil {
 			return result, err
 		}
 		result.Vectors, err = s.runVectorPushPhase(
@@ -663,10 +667,6 @@ func (s *Sync) PushWithOptions(
 	); err != nil {
 		return result, err
 	}
-	if err := persistPushSourceArchiveID(state, s.archiveID); err != nil {
-		return result, err
-	}
-
 	// Write the push marker only after the push and local finalization
 	// succeed. A reset-recovery push that fails before this point leaves
 	// the marker absent, so the next push re-detects the reset and retries
@@ -698,6 +698,11 @@ func (s *Sync) PushWithOptions(
 			return result, err
 		}
 		if err := s.syncWorktreeMappings(ctx, full); err != nil {
+			return result, err
+		}
+		if err := s.finalizeSourceArchiveRepair(
+			ctx, state, repairedPreviousArchiveID,
+		); err != nil {
 			return result, err
 		}
 	} else {
@@ -1444,11 +1449,9 @@ func clearPushState(local syncStateStore) error {
 	return nil
 }
 
-// retireSourceArchiveMetadata removes governance and provenance metadata that
-// belongs to an archive identity superseded by a local repair. A full push
-// republishes the current archive immediately afterward. Keeping retirement in
-// one transaction prevents readers from observing only a subset of the old
-// archive's rules or identity evidence.
+// retireSourceArchiveMetadata removes governance metadata that belongs to an
+// archive identity superseded by a local repair. Filtered pushes release only
+// their own publication scope, leaving other scopes intact until they repair.
 func (s *Sync) retireSourceArchiveMetadata(
 	ctx context.Context, archiveID string,
 ) error {
@@ -1457,24 +1460,75 @@ func (s *Sync) retireSourceArchiveMetadata(
 		return fmt.Errorf("beginning old archive metadata retirement: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	for _, table := range []string{
-		"source_project_identity_observation_scopes",
-		"source_session_project_identity_snapshot_scopes",
-		"source_worktree_project_mapping_scopes",
-		"source_project_identity_observations",
-		"source_session_project_identity_snapshots",
-		"source_worktree_project_mappings",
-		"source_archives",
-	} {
-		if _, err := tx.ExecContext(ctx,
-			"DELETE FROM "+table+" WHERE source_archive_id = $1",
-			archiveID,
+	if s.isFiltered() {
+		publicationScope := pushSyncStateScope(
+			"", s.projects, s.excludeProjects,
+		)
+		if err := releaseFilteredProjectIdentityFullOwnership(
+			ctx, tx, archiveID, publicationScope,
 		); err != nil {
-			return fmt.Errorf("retiring old archive metadata from %s: %w", table, err)
+			return err
+		}
+		if err := releaseFilteredWorktreeMappingFullOwnership(
+			ctx, tx, archiveID, publicationScope,
+		); err != nil {
+			return err
+		}
+	} else {
+		for _, table := range []string{
+			"source_project_identity_observation_scopes",
+			"source_session_project_identity_snapshot_scopes",
+			"source_worktree_project_mapping_scopes",
+			"source_project_identity_observations",
+			"source_session_project_identity_snapshots",
+			"source_worktree_project_mappings",
+		} {
+			if _, err := tx.ExecContext(ctx,
+				"DELETE FROM "+table+" WHERE source_archive_id = $1",
+				archiveID,
+			); err != nil {
+				return fmt.Errorf(
+					"retiring old archive metadata from %s: %w", table, err,
+				)
+			}
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing old archive metadata retirement: %w", err)
+	}
+	return nil
+}
+
+func (s *Sync) finalizeSourceArchiveRepair(
+	ctx context.Context,
+	state syncStateStore,
+	previousArchiveID string,
+) error {
+	if previousArchiveID != "" {
+		if _, err := s.pg.ExecContext(ctx, `
+			DELETE FROM source_archives archive
+			WHERE archive.source_archive_id = $1
+			  AND NOT EXISTS (
+				SELECT 1 FROM sessions
+				WHERE source_archive_id = archive.source_archive_id
+			  )
+			  AND NOT EXISTS (
+				SELECT 1 FROM source_project_identity_observations
+				WHERE source_archive_id = archive.source_archive_id
+			  )
+			  AND NOT EXISTS (
+				SELECT 1 FROM source_session_project_identity_snapshots
+				WHERE source_archive_id = archive.source_archive_id
+			  )
+			  AND NOT EXISTS (
+				SELECT 1 FROM source_worktree_project_mappings
+				WHERE source_archive_id = archive.source_archive_id
+			  )`, previousArchiveID); err != nil {
+			return fmt.Errorf("cleaning up repaired source archive: %w", err)
+		}
+	}
+	if err := persistPushSourceArchiveID(state, s.archiveID); err != nil {
+		return err
 	}
 	return nil
 }

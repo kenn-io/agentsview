@@ -109,6 +109,7 @@ func TestPreserveUnavailableSourceProjectsUsesDurableSnapshot(
 		parsedProject string
 		makeSource    bool
 		statErr       error
+		idPrefix      string
 	}{
 		{
 			name:          "missing source",
@@ -123,6 +124,11 @@ func TestPreserveUnavailableSourceProjectsUsesDurableSnapshot(
 			name:       "empty parser project",
 			makeSource: true,
 		},
+		{
+			name:          "remote prefixed session",
+			parsedProject: "parser-fallback",
+			idPrefix:      "remote~",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			const (
@@ -133,17 +139,18 @@ func TestPreserveUnavailableSourceProjectsUsesDurableSnapshot(
 			database := openTestDB(t)
 			root := filepath.Join(t.TempDir(), "checkout")
 			cwd := filepath.Join(root, "nested")
+			storedSessionID := applyIDPrefixToID(tc.idPrefix, sessionID)
 			if tc.makeSource {
 				require.NoError(t, os.MkdirAll(cwd, 0o755))
 			}
 			require.NoError(t, database.UpsertSession(db.Session{
-				ID: sessionID, Project: originalProject, Machine: machine,
+				ID: storedSessionID, Project: originalProject, Machine: machine,
 				Agent: string(parser.AgentClaude), Cwd: cwd,
 			}))
 			require.NoError(t,
 				database.UpsertProjectIdentityObservationWithSnapshotProject(
 					t.Context(), export.ProjectIdentityObservation{
-						SessionID: sessionID, Project: originalProject,
+						SessionID: storedSessionID, Project: originalProject,
 						Machine: machine, RootPath: root,
 						GitRemote:        "https://example.com/team/project.git",
 						RemoteResolution: export.ProjectResolutionResolved,
@@ -152,7 +159,9 @@ func TestPreserveUnavailableSourceProjectsUsesDurableSnapshot(
 						),
 					}, originalProject,
 				))
-			engine := NewEngine(database, EngineConfig{Machine: machine})
+			engine := NewEngine(database, EngineConfig{
+				Machine: machine, IDPrefix: tc.idPrefix,
+			})
 			t.Cleanup(engine.Close)
 			if tc.statErr != nil {
 				engine.stat = func(got string) (os.FileInfo, error) {
@@ -171,6 +180,8 @@ func TestPreserveUnavailableSourceProjectsUsesDurableSnapshot(
 			require.Len(t, result, 1)
 			assert.True(t, result[0].sourceProjectResolved)
 			assert.Equal(t, originalProject, result[0].sess.Project)
+			assert.Equal(t, sessionID, result[0].sess.ID,
+				"snapshot lookup must not mutate the parser session id")
 		})
 	}
 }
