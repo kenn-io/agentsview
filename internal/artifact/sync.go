@@ -130,7 +130,7 @@ func SyncWithRepository(
 		origin,
 	)
 	coordinated.record = coordinator.RecordChanged
-	exchanged, err := transport.Exchange(ctx, coordinated)
+	exchanged, err := transport.Exchange(ctx, coordinated, origin)
 	if err != nil {
 		return result, err
 	}

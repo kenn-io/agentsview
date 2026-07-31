@@ -119,6 +119,50 @@ func TestArtifactSyncTwoNodeFolderRoundTripAndReplay(t *testing.T) {
 	assert.Equal(t, "updated response", updatedMessages[1].Content)
 }
 
+func TestArtifactSyncDoesNotRepublishPeerArtifactsAcrossTargets(t *testing.T) {
+	t.Parallel()
+
+	targetA := t.TempDir()
+	transportA, err := OpenFolderTransport(targetA, FolderTransportOptions{})
+	require.NoError(t, err)
+	require.NoError(t, transportA.Close())
+
+	peerBody := []byte("{\"content\":\"private peer session\"}\n")
+	peerRef := testContentRef(
+		t,
+		"peer-a1b2c3",
+		KindSegments,
+		peerBody,
+		".ndjson",
+	)
+	writeFolderWire(t, targetA, peerRef, peerBody)
+
+	database := testDB(t)
+	repository, err := OpenRepository(t.Context(), t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, repository.Close()) })
+	opts := SyncOptions{Origin: "local-d4e5f6"}
+
+	opts.Target = targetA
+	_, err = SyncWithRepository(t.Context(), database, repository, opts)
+	require.NoError(t, err)
+	assertArtifactBody(t, repository.Content(), peerRef, peerBody)
+
+	targetB := t.TempDir()
+	opts.Target = targetB
+	_, err = SyncWithRepository(t.Context(), database, repository, opts)
+	require.NoError(t, err)
+
+	peerWire, err := ToWireRef(peerRef)
+	require.NoError(t, err)
+	assert.NoFileExists(t, filepath.Join(
+		targetB,
+		peerWire.Origin,
+		string(peerWire.Kind),
+		peerWire.Name,
+	))
+}
+
 func TestArtifactSyncValidatesBeforeCreatingOwnedStorage(t *testing.T) {
 	t.Run("missing target", func(t *testing.T) {
 		dataDir := t.TempDir()
@@ -234,6 +278,7 @@ func (replacementQuarantineTransport) Prepare(
 func (replacementQuarantineTransport) Exchange(
 	context.Context,
 	ArtifactStore,
+	string,
 ) (ExchangeResult, error) {
 	return ExchangeResult{}, nil
 }

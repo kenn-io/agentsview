@@ -5,10 +5,16 @@ import (
 )
 
 // Transport exchanges immutable artifact objects through their external wire
-// representation. Implementations never receive the Docbank physical layout.
+// representation. Implementations pull supported peer objects but publish only
+// the explicitly authorized local origin. They never receive the Docbank
+// physical layout.
 type Transport interface {
 	Prepare(context.Context, ArtifactStore) error
-	Exchange(context.Context, ArtifactStore) (ExchangeResult, error)
+	Exchange(
+		context.Context,
+		ArtifactStore,
+		string,
+	) (ExchangeResult, error)
 	Close() error
 }
 

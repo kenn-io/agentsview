@@ -27,29 +27,9 @@ var folderCopyBufferPool = sync.Pool{
 func (t *folderTransport) pushLocked(
 	ctx context.Context,
 	store ArtifactStore,
-) (published int, retErr error) {
-	origins, err := store.Origins(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer func() { retErr = errors.Join(retErr, origins.Close()) }()
-	for {
-		page, nextErr := origins.Next(ctx, transportStorePageSize)
-		t.observeStorePageLocked(len(page))
-		for _, origin := range page {
-			count, err := t.pushOriginLocked(ctx, store, origin)
-			published += count
-			if err != nil {
-				return published, err
-			}
-		}
-		if errors.Is(nextErr, io.EOF) {
-			return published, nil
-		}
-		if nextErr != nil {
-			return published, nextErr
-		}
-	}
+	origin string,
+) (int, error) {
+	return t.pushOriginLocked(ctx, store, origin)
 }
 
 func (t *folderTransport) pushOriginLocked(
@@ -65,7 +45,7 @@ func (t *folderTransport) pushOriginLocked(
 		return 0, err
 	}
 	defer func() { retErr = errors.Join(retErr, originRoot.Close()) }()
-	for _, kind := range transportKinds {
+	for _, kind := range folderExchangeKinds {
 		iterator, err := store.Entries(ctx, origin, kind)
 		if err != nil {
 			return published, err

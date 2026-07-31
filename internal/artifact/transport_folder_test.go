@@ -23,6 +23,7 @@ import (
 
 const testFolderMarkerBody = `{"format":"agentsview-normalized-artifacts","version":2}
 `
+const testFolderPublishOrigin = "local-a1b2c3"
 
 func TestOpenFolderTransportInitializesMissingAndEmptyTargets(t *testing.T) {
 	t.Parallel()
@@ -320,7 +321,11 @@ func TestFolderTransportPullsDependenciesBeforeCheckpoint(t *testing.T) {
 	writeFolderWire(t, target, segment, segmentBody)
 
 	store := &transportRecordingStore{ArtifactStore: newTestArtifactStore(t)}
-	result, err := transport.Exchange(t.Context(), store)
+	result, err := transport.Exchange(
+		t.Context(),
+		store,
+		testFolderPublishOrigin,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, ExchangeResult{Received: 3}, result)
 	require.Len(t, store.changed, 3)
@@ -338,12 +343,108 @@ func TestFolderTransportPullsDependenciesBeforeCheckpoint(t *testing.T) {
 	assertArtifactBody(t, store, manifest, manifestBody)
 	assertArtifactBody(t, store, checkpoint, checkpointBody)
 
-	replay, err := transport.Exchange(t.Context(), store)
+	replay, err := transport.Exchange(
+		t.Context(),
+		store,
+		testFolderPublishOrigin,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, ExchangeResult{}, replay)
 	require.Len(t, store.changed, 4)
 	assert.Equal(t, checkpoint, store.changed[3].Ref,
 		"an existing checkpoint must close the create-before-signal crash window")
+}
+
+func TestFolderTransportPullsOnlyNormalizedSessionKinds(t *testing.T) {
+	t.Parallel()
+
+	target := t.TempDir()
+	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+
+	origin := "peer-a1b2c3"
+	segmentBody := []byte("{\"content\":\"normalized session\"}\n")
+	segmentRef := testContentRef(
+		t,
+		origin,
+		KindSegments,
+		segmentBody,
+		".ndjson",
+	)
+	rawBody := []byte("provider-owned source")
+	rawRef := testContentRef(t, origin, KindRaw, rawBody, "")
+	metadataBody := []byte(`{"title":"mutable user metadata"}`)
+	metadataRef := testMetadataRef(t, origin, metadataBody)
+	for ref, body := range map[Ref][]byte{
+		segmentRef:  segmentBody,
+		rawRef:      rawBody,
+		metadataRef: metadataBody,
+	} {
+		writeFolderWire(t, target, ref, body)
+	}
+
+	store := &transportRecordingStore{ArtifactStore: newTestArtifactStore(t)}
+	result, err := transport.Exchange(
+		t.Context(),
+		store,
+		testFolderPublishOrigin,
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, ExchangeResult{Received: 1}, result)
+	assertArtifactBody(t, store, segmentRef, segmentBody)
+	for _, ref := range []Ref{rawRef, metadataRef} {
+		_, err := store.Stat(t.Context(), ref)
+		assert.ErrorIs(t, err, ErrArtifactNotFound)
+	}
+}
+
+func TestFolderTransportPublishesOnlyNormalizedSessionKinds(t *testing.T) {
+	t.Parallel()
+
+	target := t.TempDir()
+	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+
+	origin := testFolderPublishOrigin
+	segmentBody := []byte("{\"content\":\"normalized session\"}\n")
+	segmentRef := testContentRef(
+		t,
+		origin,
+		KindSegments,
+		segmentBody,
+		".ndjson",
+	)
+	rawBody := []byte("provider-owned source")
+	rawRef := testContentRef(t, origin, KindRaw, rawBody, "")
+	metadataBody := []byte(`{"title":"mutable user metadata"}`)
+	metadataRef := testMetadataRef(t, origin, metadataBody)
+	store := newTestArtifactStore(t)
+	for ref, body := range map[Ref][]byte{
+		segmentRef:  segmentBody,
+		rawRef:      rawBody,
+		metadataRef: metadataBody,
+	} {
+		createTestStoreArtifact(t, store, ref, body)
+	}
+
+	result, err := transport.Exchange(t.Context(), store, origin)
+
+	require.NoError(t, err)
+	assert.Equal(t, ExchangeResult{Published: 1}, result)
+	assertFolderWireBody(t, target, segmentRef, segmentBody)
+	for _, ref := range []Ref{rawRef, metadataRef} {
+		wire, err := ToWireRef(ref)
+		require.NoError(t, err)
+		assert.NoFileExists(t, filepath.Join(
+			target,
+			wire.Origin,
+			string(wire.Kind),
+			wire.Name,
+		))
+	}
 }
 
 func TestFolderTransportQuarantinesCompleteCorruptWireAndContinues(t *testing.T) {
@@ -374,7 +475,11 @@ func TestFolderTransportQuarantinesCompleteCorruptWireAndContinues(t *testing.T)
 	writeFolderWire(t, target, validRef, validBody)
 
 	store := &transportRecordingStore{ArtifactStore: newTestArtifactStore(t)}
-	result, err := transport.Exchange(t.Context(), store)
+	result, err := transport.Exchange(
+		t.Context(),
+		store,
+		testFolderPublishOrigin,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, ExchangeResult{Received: 1}, result)
 	assert.NoFileExists(t, corruptPath)
@@ -394,41 +499,25 @@ func TestFolderTransportRequiresChangeRecorderBeforeAcceptingArtifact(
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, transport.Close()) })
 	body := []byte("unrecorded")
-	ref := testContentRef(t, "peer-a1b2c3", KindRaw, body, "")
+	ref := testContentRef(
+		t,
+		"peer-a1b2c3",
+		KindSegments,
+		body,
+		".ndjson",
+	)
 	writeFolderWire(t, target, ref, body)
 	store := newTestArtifactStore(t)
 
-	_, err = transport.Exchange(t.Context(), store)
+	_, err = transport.Exchange(
+		t.Context(),
+		store,
+		testFolderPublishOrigin,
+	)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "change recorder is required")
 	_, err = store.Stat(t.Context(), ref)
 	assert.ErrorIs(t, err, ErrArtifactNotFound)
-}
-
-func TestFolderTransportAcceptsCanonicalMetadataContainingCorruptSubstring(
-	t *testing.T,
-) {
-	t.Parallel()
-
-	target := t.TempDir()
-	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
-	body := []byte(`{"v":1}`)
-	hash := sha256.Sum256(body)
-	ref, err := NewRef(
-		"peer-a1b2c3",
-		KindMeta,
-		"event.corrupt-prefix-"+hex.EncodeToString(hash[:])+".json",
-	)
-	require.NoError(t, err)
-	writeFolderWire(t, target, ref, body)
-	store := &transportRecordingStore{ArtifactStore: newTestArtifactStore(t)}
-
-	result, err := transport.Exchange(t.Context(), store)
-	require.NoError(t, err)
-	assert.Equal(t, ExchangeResult{Received: 1}, result)
-	assertArtifactBody(t, store, ref, body)
 }
 
 func TestFolderTransportRejectsCheckpointIdentityConflict(t *testing.T) {
@@ -458,7 +547,11 @@ func TestFolderTransportRejectsCheckpointIdentityConflict(t *testing.T) {
 	require.NoError(t, err)
 	writeFolderWire(t, target, ref, remoteBody)
 
-	_, err = transport.Exchange(t.Context(), store)
+	_, err = transport.Exchange(
+		t.Context(),
+		store,
+		testFolderPublishOrigin,
+	)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrArtifactConflict)
 	assertArtifactBody(t, store, ref, localBody)
@@ -472,8 +565,14 @@ func TestFolderTransportRejectsSymlinkedWireEntry(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, transport.Close()) })
 
-	body := []byte("raw body")
-	ref := testContentRef(t, "peer-a1b2c3", KindRaw, body, "")
+	body := []byte("segment body")
+	ref := testContentRef(
+		t,
+		"peer-a1b2c3",
+		KindSegments,
+		body,
+		".ndjson",
+	)
 	wire, err := ToWireRef(ref)
 	require.NoError(t, err)
 	directory := filepath.Join(target, wire.Origin, string(wire.Kind))
@@ -489,7 +588,11 @@ func TestFolderTransportRejectsSymlinkedWireEntry(t *testing.T) {
 		filepath.Join(directory, wire.Name),
 	))
 
-	_, err = transport.Exchange(t.Context(), newTestArtifactStore(t))
+	_, err = transport.Exchange(
+		t.Context(),
+		newTestArtifactStore(t),
+		testFolderPublishOrigin,
+	)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "not a regular file")
 }
@@ -508,13 +611,17 @@ func TestFolderTransportPullDirectoryPagesStayBounded(t *testing.T) {
 	const objectCount = transportDirectoryPageSize + 1
 	origin := "peer-a1b2c3"
 	for index := range objectCount {
-		body := fmt.Appendf(nil, "raw-%04d", index)
-		ref := testContentRef(t, origin, KindRaw, body, "")
+		body := fmt.Appendf(nil, "segment-%04d", index)
+		ref := testContentRef(t, origin, KindSegments, body, ".ndjson")
 		writeFolderWire(t, target, ref, body)
 	}
 
 	store := &transportRecordingStore{ArtifactStore: newTestArtifactStore(t)}
-	result, err := transport.Exchange(t.Context(), store)
+	result, err := transport.Exchange(
+		t.Context(),
+		store,
+		testFolderPublishOrigin,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, objectCount, result.Received)
 	require.NotEmpty(t, pageSizes)
@@ -541,7 +648,13 @@ func TestFolderTransportUsesLstatForUnknownOriginEntryType(t *testing.T) {
 	transport := opened.(*folderTransport)
 	t.Cleanup(func() { require.NoError(t, transport.Close()) })
 	body := []byte("network-filesystem-entry")
-	ref := testContentRef(t, "peer-a1b2c3", KindRaw, body, "")
+	ref := testContentRef(
+		t,
+		"peer-a1b2c3",
+		KindSegments,
+		body,
+		".ndjson",
+	)
 	writeFolderWire(t, target, ref, body)
 	store := &transportRecordingStore{ArtifactStore: newTestArtifactStore(t)}
 	var result ExchangeResult
@@ -580,7 +693,7 @@ func TestFolderTransportPushesWireObjectsBeforeCheckpointAndRetriesUnchanged(
 	createTestStoreArtifact(t, store, manifest, manifestBody)
 	createTestStoreArtifact(t, store, segment, segmentBody)
 
-	result, err := transport.Exchange(t.Context(), store)
+	result, err := transport.Exchange(t.Context(), store, origin)
 	require.NoError(t, err)
 	assert.Equal(t, ExchangeResult{Published: 3}, result)
 	assertFolderWireBody(t, target, segment, segmentBody)
@@ -598,7 +711,7 @@ func TestFolderTransportPushesWireObjectsBeforeCheckpointAndRetriesUnchanged(
 	before, err := os.Stat(manifestPath)
 	require.NoError(t, err)
 
-	replay, err := transport.Exchange(t.Context(), store)
+	replay, err := transport.Exchange(t.Context(), store, origin)
 	require.NoError(t, err)
 	assert.Equal(t, ExchangeResult{}, replay)
 	after, err := os.Stat(manifestPath)
@@ -625,16 +738,30 @@ func TestFolderTransportPushFallsBackWithoutHardLinks(t *testing.T) {
 	}
 
 	body := []byte("fallback body")
-	ref := testContentRef(t, "local-a1b2c3", KindRaw, body, "")
+	ref := testContentRef(
+		t,
+		testFolderPublishOrigin,
+		KindSegments,
+		body,
+		".ndjson",
+	)
 	store := newTestArtifactStore(t)
 	createTestStoreArtifact(t, store, ref, body)
 
-	result, err := transport.Exchange(t.Context(), store)
+	result, err := transport.Exchange(
+		t.Context(),
+		store,
+		testFolderPublishOrigin,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, ExchangeResult{Published: 1}, result)
 	assertFolderWireBody(t, target, ref, body)
 
-	replay, err := transport.Exchange(t.Context(), store)
+	replay, err := transport.Exchange(
+		t.Context(),
+		store,
+		testFolderPublishOrigin,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, ExchangeResult{}, replay)
 }
@@ -647,7 +774,11 @@ func TestFolderTransportRemovesAbandonedPublishTemp(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, transport.Close()) })
 
-	directory := filepath.Join(target, "local-a1b2c3", string(KindRaw))
+	directory := filepath.Join(
+		target,
+		testFolderPublishOrigin,
+		string(KindSegments),
+	)
 	require.NoError(t, os.MkdirAll(directory, 0o755))
 	abandoned := filepath.Join(
 		directory,
@@ -656,11 +787,21 @@ func TestFolderTransportRemovesAbandonedPublishTemp(t *testing.T) {
 	require.NoError(t, os.WriteFile(abandoned, []byte("partial"), 0o600))
 
 	body := []byte("complete")
-	ref := testContentRef(t, "local-a1b2c3", KindRaw, body, "")
+	ref := testContentRef(
+		t,
+		testFolderPublishOrigin,
+		KindSegments,
+		body,
+		".ndjson",
+	)
 	store := newTestArtifactStore(t)
 	createTestStoreArtifact(t, store, ref, body)
 
-	result, err := transport.Exchange(t.Context(), store)
+	result, err := transport.Exchange(
+		t.Context(),
+		store,
+		testFolderPublishOrigin,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, ExchangeResult{Published: 1}, result)
 	assert.NoFileExists(t, abandoned)
@@ -674,7 +815,11 @@ func TestFolderTransportExchangeLockProtectsActivePublishTemp(t *testing.T) {
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, transport.Close()) })
-	directory := filepath.Join(target, "local-a1b2c3", string(KindRaw))
+	directory := filepath.Join(
+		target,
+		testFolderPublishOrigin,
+		string(KindSegments),
+	)
 	require.NoError(t, os.MkdirAll(directory, 0o755))
 	active := filepath.Join(directory, folderPublishTempPrefix+"active")
 	require.NoError(t, os.WriteFile(active, []byte("in progress"), 0o600))
@@ -689,6 +834,7 @@ func TestFolderTransportExchangeLockProtectsActivePublishTemp(t *testing.T) {
 	_, err = transport.Exchange(
 		ctx,
 		&transportRecordingStore{ArtifactStore: newTestArtifactStore(t)},
+		testFolderPublishOrigin,
 	)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
@@ -709,7 +855,11 @@ func TestFolderTransportRejectsOversizedStoreEntryBeforePublication(
 	store := newTestArtifactStore(t)
 	createTestStoreArtifact(t, store, ref, body)
 
-	_, err = transport.Exchange(t.Context(), store)
+	_, err = transport.Exchange(
+		t.Context(),
+		store,
+		testFolderPublishOrigin,
+	)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrArtifactInvalid)
 	assert.ErrorContains(t, err, "decoded size limit")
@@ -770,18 +920,18 @@ func TestFolderTransportPushStorePagesStayBounded(t *testing.T) {
 	origin := "local-a1b2c3"
 	store := newTestArtifactStore(t)
 	for index := range objectCount {
-		body := fmt.Appendf(nil, "local-raw-%04d", index)
-		ref := testContentRef(t, origin, KindRaw, body, "")
+		body := fmt.Appendf(nil, "local-segment-%04d", index)
+		ref := testContentRef(t, origin, KindSegments, body, ".ndjson")
 		createTestStoreArtifact(t, store, ref, body)
 	}
 
-	result, err := transport.Exchange(t.Context(), store)
+	result, err := transport.Exchange(t.Context(), store, origin)
 	require.NoError(t, err)
 	assert.Equal(t, objectCount, result.Published)
 	require.NotEmpty(t, pageSizes)
 	assert.LessOrEqual(t, maxInt(pageSizes), transportStorePageSize)
-	assert.GreaterOrEqual(t, len(pageSizes), 3,
-		"origin plus the two object-store pages must be observed")
+	assert.GreaterOrEqual(t, len(pageSizes), 2,
+		"the two object-store pages must be observed")
 }
 
 type transportRecordingStore struct {
@@ -807,6 +957,18 @@ func testContentRef(
 	t.Helper()
 	sum := sha256.Sum256(body)
 	ref, err := NewRef(origin, kind, hex.EncodeToString(sum[:])+extension)
+	require.NoError(t, err)
+	return ref
+}
+
+func testMetadataRef(t *testing.T, origin string, body []byte) Ref {
+	t.Helper()
+	sum := sha256.Sum256(body)
+	ref, err := NewRef(
+		origin,
+		KindMeta,
+		"event-"+hex.EncodeToString(sum[:])+".json",
+	)
 	require.NoError(t, err)
 	return ref
 }

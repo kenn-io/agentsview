@@ -19,9 +19,8 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-// exportOnlyKinds mirrors transport.go's package-wide transportKinds (out of
-// PR2 scope) restricted to the kinds ExportToStore can create, so tests can
-// assert nothing was published without pulling in transport.go.
+// exportOnlyKinds mirrors folderExchangeKinds, which are also the only kinds
+// ExportToStore creates.
 var exportOnlyKinds = []Kind{KindSegments, KindManifests, KindCheckpoints}
 
 func assertNoPublishedArtifacts(t *testing.T, store ArtifactStore, origin string) {

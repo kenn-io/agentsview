@@ -106,6 +106,7 @@ func (t *folderTransport) Prepare(ctx context.Context, _ ArtifactStore) error {
 func (t *folderTransport) Exchange(
 	ctx context.Context,
 	store ArtifactStore,
+	publishOrigin string,
 ) (result ExchangeResult, retErr error) {
 	if ctx == nil {
 		return ExchangeResult{}, fmt.Errorf(
@@ -118,6 +119,9 @@ func (t *folderTransport) Exchange(
 			"%w: artifact store is required",
 			ErrArtifactInvalid,
 		)
+	}
+	if err := validateOriginID(publishOrigin); err != nil {
+		return ExchangeResult{}, err
 	}
 	if err := ctx.Err(); err != nil {
 		return ExchangeResult{}, err
@@ -141,7 +145,7 @@ func (t *folderTransport) Exchange(
 	if err != nil {
 		return result, err
 	}
-	published, err := t.pushLocked(ctx, store)
+	published, err := t.pushLocked(ctx, store, publishOrigin)
 	result.Published += published
 	if err != nil {
 		return result, err

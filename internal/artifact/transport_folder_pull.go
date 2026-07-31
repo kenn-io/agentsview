@@ -19,11 +19,9 @@ const (
 	folderCorruptSeparator     = ".corrupt-"
 )
 
-var transportKinds = [...]Kind{
+var folderExchangeKinds = [...]Kind{
 	KindSegments,
-	KindRaw,
 	KindManifests,
-	KindMeta,
 	KindCheckpoints,
 }
 
@@ -92,7 +90,7 @@ func (t *folderTransport) pullOriginLocked(
 	origin string,
 	result *ExchangeResult,
 ) error {
-	for _, kind := range transportKinds {
+	for _, kind := range folderExchangeKinds {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
