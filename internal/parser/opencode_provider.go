@@ -811,7 +811,10 @@ func (s openCodeFormatSourceSet) unitScopeAllows(req ChangedPathRequest) bool {
 // not must keep claiming them itself.
 func (s openCodeFormatSourceSet) emitsStorageUnit(root string) bool {
 	info, err := os.Stat(filepath.Join(root, "storage"))
-	return err == nil && info.IsDir()
+	if err != nil {
+		return false
+	}
+	return info.IsDir()
 }
 
 // pathAtOrUnder reports whether path is root itself or contained within it.
