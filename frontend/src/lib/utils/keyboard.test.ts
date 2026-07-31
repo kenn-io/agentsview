@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
+import { mount, tick, unmount } from "svelte";
 import { ui } from "../stores/ui.svelte.js";
 import { sessions } from "../stores/sessions.svelte.js";
 import { starred } from "../stores/starred.svelte.js";
@@ -6,6 +7,7 @@ import { router } from "../stores/router.svelte.js";
 import { messages } from "../stores/messages.svelte.js";
 import { SessionsService } from "../api/generated/index";
 import { copyToClipboard } from "../utils/clipboard.js";
+import SidebarToggleButton from "../components/layout/SidebarToggleButton.svelte";
 import { registerShortcuts } from "./keyboard.js";
 
 vi.mock("../utils/clipboard.js", () => ({
@@ -324,6 +326,41 @@ describe("registerShortcuts", () => {
 
       fireKey("b");
       expect(ui.sidebarOpen).toBe(true);
+    });
+
+    it("moves focus out of the sidebar when the shortcut collapses it", async () => {
+      router.navigate("sessions");
+      ui.isMobileViewport = false;
+      ui.sidebarOpen = true;
+
+      const sidebar = document.createElement("aside");
+      sidebar.id = "session-sidebar";
+      const focusedControl = document.createElement("button");
+      focusedControl.textContent = "Focused sidebar control";
+      sidebar.appendChild(focusedControl);
+      document.body.appendChild(sidebar);
+      const contentToggle = mount(SidebarToggleButton, {
+        target: document.body,
+        props: { placement: "content" },
+      });
+
+      try {
+        focusedControl.focus();
+        fireKey("b");
+        await tick();
+
+        const openButton = document.querySelector<HTMLButtonElement>(
+          'button[aria-label="Open sidebar"]',
+        );
+        expect(ui.sidebarOpen).toBe(false);
+        expect(openButton).not.toBeNull();
+        await vi.waitFor(() => {
+          expect(document.activeElement).toBe(openButton);
+        });
+      } finally {
+        await unmount(contentToggle);
+        sidebar.remove();
+      }
     });
 
     it("should navigate to sessions on non-session routes when mobile", () => {

@@ -510,7 +510,10 @@
 <div class="analytics-page">
   <div class="analytics-toolbar">
     {#if !ui.isMobileViewport && !ui.sidebarOpen}
-      <div class="toolbar-filter-anchor">
+      <div
+        class="toolbar-filter-anchor"
+        data-sidebar-focus-region="content"
+      >
         <SidebarToggleButton placement="content" />
         <SessionFilterControl
           showDisplay={false}

@@ -1,12 +1,12 @@
 <script lang="ts">
   import { IconButton } from "@kenn-io/kit-ui";
-  import { tick } from "svelte";
   import { m } from "../../i18n/index.js";
   import {
     PanelLeftCloseIcon,
     PanelLeftOpenIcon,
   } from "../../icons.js";
   import { ui } from "../../stores/ui.svelte.js";
+  import { toggleSidebarWithFocus } from "../../utils/sidebar-toggle.js";
 
   interface Props {
     placement: "sidebar" | "content";
@@ -19,27 +19,12 @@
       ? m.nav_close_sidebar()
       : m.nav_open_sidebar(),
   );
-
-  async function toggleSidebar(event: MouseEvent) {
-    const shouldMoveFocus = document.activeElement === event.currentTarget;
-    ui.toggleSidebar();
-
-    if (!shouldMoveFocus) return;
-
-    await tick();
-    const nextPlacement = placement === "sidebar" ? "content" : "sidebar";
-    document
-      .querySelector<HTMLButtonElement>(
-        `.sidebar-panel-control--${nextPlacement}`,
-      )
-      ?.focus();
-  }
 </script>
 
 <IconButton
   class={`sidebar-panel-control sidebar-panel-control--${placement}`}
   size="sm"
-  onclick={toggleSidebar}
+  onclick={() => void toggleSidebarWithFocus()}
   title={m.nav_toggle_sidebar_shortcut()}
   ariaLabel={label}
   ariaExpanded={ui.sidebarOpen}

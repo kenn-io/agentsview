@@ -10,6 +10,7 @@ import { SessionsService, type ResumeRequest, type ResumeResponse } from "../api
 import { configureGeneratedClient } from "../api/runtime.js";
 import { supportsResume, buildResumeCommand, formatResumeResponseCommand } from "./resume.js";
 import { copyToClipboard } from "./clipboard.js";
+import { toggleSidebarWithFocus } from "./sidebar-toggle.js";
 
 function isInputFocused(): boolean {
   const el = document.activeElement;
@@ -227,12 +228,12 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
       },
       b: () => {
         if (router.route === "sessions") {
-          ui.toggleSidebar();
+          void toggleSidebarWithFocus();
         } else if (ui.isMobileViewport) {
           router.navigate("sessions");
           ui.sidebarOpen = true;
         } else {
-          ui.toggleSidebar();
+          void toggleSidebarWithFocus();
         }
       },
     };

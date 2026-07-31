@@ -744,7 +744,10 @@
 
 <div class="session-breadcrumb">
   {#if !ui.isMobileViewport && !ui.sidebarOpen}
-    <div class="sidebar-controls">
+    <div
+      class="sidebar-controls"
+      data-sidebar-focus-region="content"
+    >
       <SidebarToggleButton placement="content" />
       <SessionFilterControl
         showDisplay={false}
