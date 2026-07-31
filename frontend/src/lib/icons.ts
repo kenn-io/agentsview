@@ -17,6 +17,7 @@ export { default as ClockIcon } from "@lucide/svelte/icons/clock";
 export { default as CodeIcon } from "@lucide/svelte/icons/code";
 export { default as CloudUploadIcon } from "@lucide/svelte/icons/cloud-upload";
 export { default as CopyIcon } from "@lucide/svelte/icons/copy";
+export { default as DatabaseIcon } from "@lucide/svelte/icons/database";
 export { default as DatabaseBackupIcon } from "@lucide/svelte/icons/database-backup";
 export { default as DownloadIcon } from "@lucide/svelte/icons/download";
 export { default as EllipsisIcon } from "@lucide/svelte/icons/ellipsis";

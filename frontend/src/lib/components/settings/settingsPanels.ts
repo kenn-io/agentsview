@@ -70,7 +70,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
       id: "worktree-mappings",
       label: m.worktree_title(),
       title: m.worktree_title(),
-      description: m.worktree_description(),
+      description: m.settings_worktree_moved(),
       group: data,
       keywords: m.settings_search_keywords_worktree_mappings(),
     },

@@ -258,9 +258,9 @@ func (b *copilotSessionBuilder) appendToolExecutionEvent(
 	if toolCallID == "" {
 		return
 	}
-	for i := len(b.messages) - 1; i >= 0; i-- {
-		for j := range b.messages[i].ToolCalls {
-			call := &b.messages[i].ToolCalls[j]
+	for _, v := range slices.Backward(b.messages) {
+		for j := range v.ToolCalls {
+			call := &v.ToolCalls[j]
 			if call.ToolUseID != toolCallID {
 				continue
 			}

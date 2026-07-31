@@ -93,6 +93,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     runaway_tool_loop_count   INT NOT NULL DEFAULT 0,
     termination_status        TEXT,
     transcript_revision       TEXT NOT NULL DEFAULT '0',
+    source_archive_id          TEXT NOT NULL DEFAULT '',
+    source_database_generation TEXT NOT NULL DEFAULT '',
+    file_path                  TEXT,
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -286,6 +289,29 @@ CREATE TABLE IF NOT EXISTS source_project_identity_observations (
 CREATE INDEX IF NOT EXISTS idx_source_project_identity_observations_project
     ON source_project_identity_observations (project);
 
+CREATE TABLE IF NOT EXISTS source_project_identity_observation_scopes (
+    source_archive_id TEXT NOT NULL,
+    project           TEXT NOT NULL,
+    machine           TEXT NOT NULL,
+    root_path         TEXT NOT NULL DEFAULT '',
+    git_remote        TEXT NOT NULL DEFAULT '',
+    publication_scope TEXT NOT NULL,
+    PRIMARY KEY (
+        source_archive_id, project, machine, root_path, git_remote,
+        publication_scope
+    ),
+    FOREIGN KEY (
+        source_archive_id, project, machine, root_path, git_remote
+    ) REFERENCES source_project_identity_observations (
+        source_archive_id, project, machine, root_path, git_remote
+    ) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_project_identity_observation_scopes_scope
+    ON source_project_identity_observation_scopes (
+        source_archive_id, publication_scope
+    );
+
 CREATE TABLE IF NOT EXISTS source_session_project_identity_snapshots (
     source_archive_id          TEXT NOT NULL,
     source_database_generation TEXT NOT NULL,
@@ -315,6 +341,59 @@ CREATE TABLE IF NOT EXISTS source_session_project_identity_snapshots (
 CREATE INDEX IF NOT EXISTS idx_source_session_project_identity_snapshots_project
     ON source_session_project_identity_snapshots (
         source_archive_id, project
+    );
+
+CREATE TABLE IF NOT EXISTS source_session_project_identity_snapshot_scopes (
+    source_archive_id          TEXT NOT NULL,
+    source_database_generation TEXT NOT NULL,
+    source_session_id          TEXT NOT NULL,
+    publication_scope          TEXT NOT NULL,
+    PRIMARY KEY (
+        source_archive_id, source_database_generation, source_session_id,
+        publication_scope
+    ),
+    FOREIGN KEY (
+        source_archive_id, source_database_generation, source_session_id
+    ) REFERENCES source_session_project_identity_snapshots (
+        source_archive_id, source_database_generation, source_session_id
+    ) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_session_project_identity_snapshot_scopes_scope
+    ON source_session_project_identity_snapshot_scopes (
+        source_archive_id, publication_scope
+    );
+
+CREATE TABLE IF NOT EXISTS source_worktree_project_mappings (
+    source_archive_id TEXT NOT NULL,
+    machine           TEXT NOT NULL,
+    path_prefix       TEXT NOT NULL,
+    layout            TEXT NOT NULL DEFAULT 'explicit',
+    project           TEXT NOT NULL DEFAULT '',
+    original_project  TEXT NOT NULL DEFAULT '',
+    enabled           BOOLEAN NOT NULL DEFAULT TRUE,
+    updated_at        TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (source_archive_id, machine, path_prefix)
+);
+
+CREATE TABLE IF NOT EXISTS source_worktree_project_mapping_scopes (
+    source_archive_id TEXT NOT NULL,
+    machine           TEXT NOT NULL,
+    path_prefix       TEXT NOT NULL,
+    publication_scope TEXT NOT NULL,
+    PRIMARY KEY (
+        source_archive_id, machine, path_prefix, publication_scope
+    ),
+    FOREIGN KEY (
+        source_archive_id, machine, path_prefix
+    ) REFERENCES source_worktree_project_mappings (
+        source_archive_id, machine, path_prefix
+    ) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_worktree_project_mapping_scopes_scope
+    ON source_worktree_project_mapping_scopes (
+        source_archive_id, publication_scope
     );
 
 CREATE TABLE IF NOT EXISTS tool_calls (
@@ -1056,6 +1135,21 @@ func EnsureSchema(
 			"source_project_identity_observations", "remote_candidate_count",
 			`remote_candidate_count INT NOT NULL DEFAULT 0`,
 			"adding source_project_identity_observations.remote_candidate_count",
+		},
+		{
+			"sessions", "source_archive_id",
+			`source_archive_id TEXT NOT NULL DEFAULT ''`,
+			"adding sessions.source_archive_id",
+		},
+		{
+			"sessions", "source_database_generation",
+			`source_database_generation TEXT NOT NULL DEFAULT ''`,
+			"adding sessions.source_database_generation",
+		},
+		{
+			"sessions", "file_path",
+			`file_path TEXT`,
+			"adding sessions.file_path",
 		},
 	}
 	step = time.Now()
@@ -2347,13 +2441,34 @@ func CheckSchemaCompat(
 		)
 	}
 	rows.Close()
+	rows, err = db.QueryContext(ctx,
+		`SELECT source_archive_id, source_database_generation, file_path
+		 FROM sessions LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"sessions table missing provenance columns: %w", err,
+		)
+	}
+	rows.Close()
+	rows, err = db.QueryContext(ctx,
+		`SELECT source_archive_id, machine, path_prefix, layout, project,
+			original_project, enabled, updated_at
+		 FROM source_worktree_project_mappings LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"source_worktree_project_mappings table missing required columns: %w",
+			err,
+		)
+	}
+	rows.Close()
 	return nil
 }
 
 // checkPushSchemaCompat verifies schema elements that only push needs. PG serve
-// never reads sync_metadata or owner_marker, so they live outside
-// CheckSchemaCompat (which gates read-only serve startup) and are checked only
-// on the push fast path.
+// never reads sync_metadata or sessions.owner_marker, so they live outside
+// CheckSchemaCompat (which gates read-only serve startup and now probes the
+// serve-read sessions.source_archive_id/file_path provenance columns itself)
+// and are checked only on the push fast path.
 func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
 	rows, err := db.QueryContext(ctx,
 		`SELECT key, value FROM sync_metadata LIMIT 0`)
@@ -2393,7 +2508,11 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 		!pgHasTable(ctx, db, "model_pricing_bands") ||
 		!pgHasTable(ctx, db, "source_archives") ||
 		!pgHasTable(ctx, db, "source_project_identity_observations") ||
+		!pgHasTable(ctx, db, "source_project_identity_observation_scopes") ||
 		!pgHasTable(ctx, db, "source_session_project_identity_snapshots") ||
+		!pgHasTable(ctx, db, "source_session_project_identity_snapshot_scopes") ||
+		!pgHasTable(ctx, db, "source_worktree_project_mappings") ||
+		!pgHasTable(ctx, db, "source_worktree_project_mapping_scopes") ||
 		!pgHasTable(ctx, db, "cursor_usage_events") {
 		return false
 	}

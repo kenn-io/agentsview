@@ -16,6 +16,7 @@
   import {
     ActivityIcon,
     ChartColumnIcon,
+    DatabaseIcon,
     Grid2x2Icon,
     LayoutGridIcon,
     LogsIcon,
@@ -368,6 +369,14 @@
       >
         <PencilIcon size="12" strokeWidth="2" aria-hidden="true" />
         {m.nav_recent_edits()}
+      </button>
+      <button
+        class="mobile-nav-btn"
+        class:active={router.route === "data"}
+        onclick={() => mobileNav("data")}
+      >
+        <DatabaseIcon size="12" strokeWidth="2" aria-hidden="true" />
+        {m.nav_data()}
       </button>
     </nav>
     {@render sidebar()}

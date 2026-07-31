@@ -106,6 +106,17 @@ that total across usage rows in proportion to their catalog-price estimates. The
 per-model costs are therefore estimated attributions, not provider-reported
 model charges, but they still sum to the displayed total.
 
+## Create A Project Mapping
+
+Worktree layouts the parser does not recognize can surface a branch or
+worktree directory name as a project. Each row in the **Project** breakdown
+links to that project on the [Data page](/data/), where the mapping editor lists
+the project's observed session folders, previews the full-archive impact of a
+folder-path → project rule, and applies a
+[worktree project mapping](/configuration/#worktree-project-mappings) rule in
+one atomic step. Cleaning always evaluates the complete archive; the current
+Activity range and filters do not carry over.
+
 ## Activity Insight
 
 At the bottom of the page, **Activity Insight** shows an existing global

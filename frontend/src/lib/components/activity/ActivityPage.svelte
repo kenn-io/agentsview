@@ -6,7 +6,6 @@
     localDateStr,
     type Automation,
   } from "../../stores/activity.svelte.js";
-  import { events } from "../../stores/events.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import {
@@ -289,18 +288,12 @@
     // range/filters are set before this first load. RefreshControl handles the
     // periodic refresh after that.
     activity.load();
-    // SSE events only flag that newer data exists; they never refetch the
-    // report directly. Refetching on every event flips `loading` and blanks the
-    // dashboard, so it is bounded to the RefreshControl scheduler and the
-    // manual button.
-    const unsubEvents = events.subscribe(() => activity.markNewData());
     return () => {
       activity.cancelInFlightReads();
       if (todayRolloverTimer !== undefined) {
         clearTimeout(todayRolloverTimer);
       }
       detach();
-      unsubEvents();
     };
   });
 
@@ -431,6 +424,7 @@
       </Card>
     {/if}
   </div>
+
 </div>
 
 <style>

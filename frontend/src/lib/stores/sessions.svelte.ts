@@ -1285,17 +1285,12 @@ class SessionsStore {
   async deleteSession(id: string) {
     configureGeneratedClient();
     await SessionsService.deleteApiV1SessionsId({ id });
-    const before = this.sessions.length;
-    this.sessions = this.sessions.filter((s) => s.id !== id);
-    const removed = before - this.sessions.length;
-    if (removed > 0) {
-      this.total = Math.max(0, this.total - removed);
-    }
     if (this.activeSessionId === id) {
       this.setActiveSession(null);
     }
     this.addRecentlyDeleted([id]);
     this.invalidateFilterCaches();
+    await this.load({ force: true });
   }
 
   async batchDeleteSessions(ids: string[]) {
@@ -1353,19 +1348,23 @@ class SessionsStore {
   }
 
   invalidateFilterCaches() {
-    this.projectsVersion++;
-    this.projectsLoaded = false;
-    this.projectsPromise = null;
+    this.invalidateProjectCache();
     this.agentsVersion++;
     this.agentsLoaded = false;
     this.agentsPromise = null;
     this.machinesVersion++;
     this.machinesLoaded = false;
     this.machinesPromise = null;
-    this.loadProjects();
     this.loadAgents();
     this.loadMachines();
     sync.loadStats(this.metadataParams);
+  }
+
+  invalidateProjectCache() {
+    this.projectsVersion++;
+    this.projectsLoaded = false;
+    this.projectsPromise = null;
+    this.loadProjects();
   }
 
   /** Remove one or all entries from the undo toast list. */
@@ -1450,6 +1449,7 @@ class SessionsStore {
       return;
     }
     if (event.scope === "sessions" || event.scope === "sync") {
+      this.invalidateProjectCache();
       this.scheduleIndexRefresh();
       this.bumpActiveSessionUsageVersion();
       this.refreshActiveChildSessions();

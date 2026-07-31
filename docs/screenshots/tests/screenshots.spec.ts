@@ -1160,18 +1160,20 @@ test.describe('Settings', () => {
   });
 
   test('worktree project mappings section', async ({ page }) => {
-    await openSettings(page);
-    const worktreeSection = await openSettingsPanel(
-      page,
-      'Worktree mappings'
-    );
-    await worktreeSection.scrollIntoViewIfNeeded();
-    const mappingPath = worktreeSection.getByRole('textbox').first();
+    // Mapping rules moved from Settings to the Data page's Rules view.
+    await page.goto('/data?view=rules');
+
+    const rulesView = page.locator('section.rules-view');
+    await expect(rulesView).toBeVisible({ timeout: 5_000 });
+    await rulesView.scrollIntoViewIfNeeded();
+    const mappingPath = rulesView.getByRole('textbox', {
+      name: 'Path prefix',
+    });
     await mappingPath.fill('~/code/project.worktrees');
     await expect(mappingPath).toHaveValue('~/code/project.worktrees');
     await page.waitForTimeout(500);
 
-    await snapEl(worktreeSection, 'worktree-mappings');
+    await snapEl(rulesView, 'worktree-mappings');
   });
 });
 

@@ -237,6 +237,28 @@ describe("ThreeColumnLayout", () => {
     navigate.mockRestore();
   });
 
+  it("exposes Data in the mobile nav, reachable below the header breakpoint", async () => {
+    renderLayout();
+    await tick();
+
+    const navButtons = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        ".mobile-nav .mobile-nav-btn",
+      ),
+    );
+    const data = navButtons.find(
+      (btn) => btn.textContent?.trim() === m.nav_data(),
+    );
+    expect(data).not.toBeUndefined();
+
+    const navigate = vi
+      .spyOn(router, "navigate")
+      .mockImplementation(() => true);
+    data!.click();
+    expect(navigate).toHaveBeenCalledWith("data");
+    navigate.mockRestore();
+  });
+
   it("renders the resize handle at the desktop layout breakpoint", async () => {
     const expectedWidth = getClampedSidebarWidthForLayout(
       320,

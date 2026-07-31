@@ -295,7 +295,7 @@ func (db *DB) ApplyProjectIdentityBackfillBatch(
 				func(ctx context.Context, query string, args ...any) rowScanner {
 					return tx.QueryRowContext(ctx, query, args...)
 				},
-				observation,
+				observation, false,
 			); err != nil {
 				return fmt.Errorf(
 					"applying unresolved project identity backfill batch: %w", err)

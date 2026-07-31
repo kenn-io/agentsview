@@ -390,6 +390,37 @@ describe("App session URL date state", () => {
     expect(navigateToSession).toHaveBeenCalledWith("session-1");
   });
 
+  it("renders the Data page shell for the data route", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(settings, "load").mockResolvedValue();
+    vi.spyOn(starred, "load").mockResolvedValue();
+    vi.spyOn(sync, "loadStatus").mockResolvedValue();
+    vi.spyOn(sync, "loadStats").mockResolvedValue();
+    vi.spyOn(sync, "loadVersion").mockResolvedValue();
+    vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
+    vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(sync, "watchSession").mockImplementation(() => {});
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(sessions, "loadProjects").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
+
+    router.route = "data";
+    component = mount(App, { target: document.body });
+    await flushEffects();
+
+    const dataPage = document.querySelector(".data-page");
+    expect(dataPage).not.toBeNull();
+    expect(dataPage?.querySelector("h2")?.textContent).toBe("Projects");
+  });
+
   it("treats rolling window and termination as sessions route params", () => {
     expect(SESSION_FILTER_KEYS.has("window_days")).toBe(true);
     expect(SESSION_FILTER_KEYS.has("termination")).toBe(true);

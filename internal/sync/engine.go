@@ -2341,11 +2341,12 @@ func (e *Engine) resyncBuildLocked(
 		return stats, err
 	}
 
-	// Merge user-managed data and immutable project-identity snapshots from the
-	// old DB. Snapshot copy happens after parsing because the destination rows
-	// reference freshly parsed sessions. Failure must abort the swap: a fresh
-	// database without those snapshots could no longer export stable identity
-	// after a source working directory disappears.
+	// Merge user-managed data and trustworthy immutable project-identity
+	// snapshots from the old DB. Snapshot copy happens after parsing because the
+	// destination rows reference freshly parsed sessions. Pre-source-snapshot
+	// archives retain the fresh parse results instead. Failure must abort the
+	// swap: a fresh database without valid snapshots could no longer export
+	// stable identity after a source working directory disappears.
 	reportResyncPhase(
 		PhaseCopyingMetadata,
 		"Copying user-managed session metadata",
@@ -2365,10 +2366,61 @@ func (e *Engine) resyncBuildLocked(
 		e.mu.Unlock()
 		return stats, err
 	}
-	if _, err := newDB.ApplyWorktreeProjectMappingsFromSync(
-		context.Background(), e.machine,
+	if _, err := newDB.RestoreSessionProjectsFromIdentitySnapshots(
+		context.Background(),
 	); err != nil {
-		log.Printf("resync: apply worktree mappings: %v", err)
+		log.Printf("resync: restore session project identity: %v", err)
+		stats.Aborted = true
+		stats.Warnings = append(stats.Warnings,
+			"session project identity restore failed, aborting swap: "+err.Error(),
+		)
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats, err
+	}
+	mappingMachines, err := ops.listActiveWorktreeMappingMachines(ctx, newDB)
+	if err != nil {
+		warning := "worktree mapping machine discovery failed, aborting swap: " +
+			err.Error()
+		log.Printf("resync: %s", warning)
+		stats.Aborted = true
+		stats.Warnings = append(stats.Warnings, warning)
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats, fmt.Errorf(
+			"discovering active worktree mapping machines: %w", err,
+		)
+	}
+	for _, machine := range mappingMachines {
+		if _, applyErr := ops.applyWorktreeMappings(
+			ctx, newDB, machine,
+		); applyErr != nil {
+			warning := fmt.Sprintf(
+				"worktree mapping apply failed for machine %q, aborting swap: %v",
+				machine, applyErr,
+			)
+			log.Printf("resync: %s", warning)
+			stats.Aborted = true
+			stats.Warnings = append(stats.Warnings, warning)
+			newDB.Close()
+			removeTempDB(tempPath)
+			restoreSkipCache()
+			e.mu.Lock()
+			e.lastSyncStats = stats
+			e.mu.Unlock()
+			return stats, fmt.Errorf(
+				"applying worktree mappings for machine %q: %w",
+				machine, applyErr,
+			)
+		}
 	}
 
 	// Reclassify is_automated across every row. Orphan-copied
@@ -3099,6 +3151,47 @@ func (e *Engine) RunExclusiveFlushed(work func() error) error {
 	defer e.syncMu.Unlock()
 	e.signalSched.flushAllInline()
 	return work()
+}
+
+// ApplyWorktreeReclassification serializes the mapping rule, historical
+// session rewrites, and identity publication with watcher and sync writes.
+func (e *Engine) ApplyWorktreeReclassification(
+	ctx context.Context,
+	draft db.WorktreeReclassificationDraft,
+	acceptedToken string,
+	existingMappingID *int64,
+) (db.WorktreeProjectMapping, db.WorktreeReclassificationPreview, error) {
+	var mapping db.WorktreeProjectMapping
+	var preview db.WorktreeReclassificationPreview
+	err := e.RunExclusive(func() error {
+		var err error
+		mapping, preview, err = e.db.ApplyWorktreeReclassification(
+			ctx, draft, acceptedToken, existingMappingID,
+		)
+		return err
+	})
+	if err == nil && preview.UpdatedSessions > 0 {
+		e.emit("sessions")
+	}
+	return mapping, preview, err
+}
+
+// ApplyWorktreeProjectMappings serializes historical session rewrites and
+// identity publication with watcher and sync writes.
+func (e *Engine) ApplyWorktreeProjectMappings(
+	ctx context.Context,
+	machine string,
+) (db.ApplyWorktreeProjectMappingsResult, error) {
+	var result db.ApplyWorktreeProjectMappingsResult
+	err := e.RunExclusive(func() error {
+		var err error
+		result, err = e.db.ApplyWorktreeProjectMappings(ctx, machine)
+		return err
+	})
+	if err == nil && result.UpdatedSessions > 0 {
+		e.emit("sessions")
+	}
+	return result, err
 }
 
 // SyncAll discovers and syncs all session files from all agents.
@@ -6794,6 +6887,7 @@ func drainResults(results <-chan syncJob, remaining int) {
 type incrementalUpdate struct {
 	sessionID            string
 	project              string
+	sourceProject        string
 	machine              string
 	cwd                  string
 	msgs                 []parser.ParsedMessage
@@ -9038,6 +9132,7 @@ func (e *Engine) tryIncrementalJSONL(
 				incremental: &incrementalUpdate{
 					sessionID:            inc.ID,
 					project:              inc.Project,
+					sourceProject:        inc.SourceProject,
 					machine:              inc.Machine,
 					cwd:                  inc.Cwd,
 					links:                links,
@@ -9155,6 +9250,7 @@ func (e *Engine) tryIncrementalJSONL(
 		incremental: &incrementalUpdate{
 			sessionID:            inc.ID,
 			project:              inc.Project,
+			sourceProject:        inc.SourceProject,
 			machine:              inc.Machine,
 			cwd:                  inc.Cwd,
 			msgs:                 newMsgs,
@@ -9859,6 +9955,9 @@ type pendingWrite struct {
 	usageEvents  []parser.ParsedUsageEvent
 	needsRetry   bool
 	forceReplace bool
+	// sourceProjectResolved marks writes whose parser project has already
+	// been reconciled with durable identity for an unavailable local cwd.
+	sourceProjectResolved bool
 	// baselineEligible is set by collectAndBatch only when the complete source
 	// outcome is safe to make deletion-eligible after this write succeeds.
 	baselineEligible bool
@@ -9969,6 +10068,99 @@ func (e *Engine) loadWorktreeProjectResolver() worktreeProjectResolver {
 	}
 }
 
+func (e *Engine) preserveUnavailableSourceProjects(
+	ctx context.Context,
+	batch []pendingWrite,
+) ([]pendingWrite, error) {
+	indexes := make(map[string][]int)
+	ids := make([]string, 0, len(batch))
+	for i := range batch {
+		if batch[i].sourceProjectResolved {
+			continue
+		}
+		sess := batch[i].sess
+		if sess.ID == "" || sess.Project == "" || sess.Cwd == "" ||
+			sess.Machine != e.machine ||
+			!safeLocalAbsolutePath(sess.Cwd) ||
+			export.IsAutomountNamespacePath(runtime.GOOS, filepath.Clean(sess.Cwd)) {
+			batch[i].sourceProjectResolved = true
+			continue
+		}
+		if _, err := os.Stat(sess.Cwd); !errors.Is(err, os.ErrNotExist) {
+			batch[i].sourceProjectResolved = true
+			continue
+		}
+		if _, exists := indexes[sess.ID]; !exists {
+			ids = append(ids, sess.ID)
+		}
+		indexes[sess.ID] = append(indexes[sess.ID], i)
+	}
+	if len(ids) == 0 {
+		return batch, nil
+	}
+
+	snapshots, err := e.db.ListSessionProjectIdentitySnapshotsByID(
+		ctx, ids,
+	)
+	if err != nil {
+		return batch, fmt.Errorf(
+			"load unavailable-cwd project identity snapshots: %w", err,
+		)
+	}
+	for _, matchingIndexes := range indexes {
+		for _, i := range matchingIndexes {
+			batch[i].sourceProjectResolved = true
+		}
+	}
+	for id, snapshot := range snapshots {
+		if snapshot.Project == "" ||
+			snapshot.RemoteResolution != export.ProjectResolutionResolved ||
+			snapshot.GitRemote == "" {
+			continue
+		}
+		for _, i := range indexes[id] {
+			sess := &batch[i].sess
+			if snapshot.Machine != sess.Machine ||
+				!pathContains(snapshot.RootPath, sess.Cwd) {
+				continue
+			}
+			sess.Project = snapshot.Project
+		}
+	}
+	return batch, nil
+}
+
+func pathContains(root, path string) bool {
+	root = resolveExistingPathPrefix(root)
+	path = resolveExistingPathPrefix(path)
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." ||
+		(rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+func resolveExistingPathPrefix(path string) string {
+	cleaned := filepath.Clean(path)
+	current := cleaned
+	var missingTail []string
+	for {
+		if resolved, err := filepath.EvalSymlinks(current); err == nil {
+			for _, v := range slices.Backward(missingTail) {
+				resolved = filepath.Join(resolved, v)
+			}
+			return filepath.Clean(resolved)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return cleaned
+		}
+		missingTail = append(missingTail, filepath.Base(current))
+		current = parent
+	}
+}
+
 func (e *Engine) writeBatch(
 	batch []pendingWrite,
 	writeMode syncWriteMode,
@@ -9984,6 +10176,19 @@ func (e *Engine) writeBatchWithOutcome(
 	writeMode syncWriteMode,
 	forceReplace bool,
 ) writeBatchOutcome {
+	var err error
+	batch, err = e.preserveUnavailableSourceProjects(
+		context.Background(), batch,
+	)
+	if err != nil {
+		log.Printf("preserve unavailable source projects: %v", err)
+		outcome := writeBatchOutcome{written: make([]bool, len(batch))}
+		for _, pw := range batch {
+			e.markStaleFailedMemberWrite(pw)
+		}
+		outcome.failedSessions = len(batch)
+		return outcome
+	}
 	if writeMode == syncWriteBulk {
 		return e.writeBatchBulkWithOutcome(batch, forceReplace)
 	}
@@ -10018,7 +10223,10 @@ func (e *Engine) writeBatchWithOutcome(
 		// dependent write succeeds below. For incremental updates
 		// (writeIncremental), messages are written first since the session
 		// already exists.
-		revivingSourceMissing, err := e.db.UpsertSessionPendingContent(s)
+		revivingSourceMissing, err :=
+			e.upsertSessionPendingContentWithProjectIdentity(
+				s, pw.sess.Project,
+			)
 		if err != nil {
 			if isIntentionalSessionSkip(err) {
 				if pw.sess.File.Path != "" {
@@ -10035,15 +10243,6 @@ func (e *Engine) writeBatchWithOutcome(
 			outcome.failedSessions++
 			continue
 		}
-		if err := e.writeProjectIdentityObservation(
-			context.Background(), s,
-		); err != nil {
-			log.Printf(
-				"write project identity observation for %s: %v",
-				s.ID, err,
-			)
-		}
-
 		replaceMessages := shouldReplaceFullParseMessages(
 			pw, forceReplace, stale, revivingSourceMissing,
 		)
@@ -10973,6 +11172,7 @@ func (e *Engine) writeBatchBulkWithOutcome(
 		tScan := time.Now()
 		update, findings := computeSignalsAndSecrets(s, msgs)
 		e.phaseStats.ScanNanos.Add(int64(time.Since(tScan)))
+		snapshotProject := pw.sess.Project
 		writes = append(writes, db.SessionBatchWrite{
 			Session:     s,
 			Messages:    msgs,
@@ -10980,10 +11180,11 @@ func (e *Engine) writeBatchBulkWithOutcome(
 			IdentityObservation: identityObservationOrZero(
 				e.projectIdentityObservation(s),
 			),
-			Signals:         update,
-			Findings:        findings,
-			DataVersion:     dataVersionForWrite(pw),
-			ReplaceMessages: replaceMessages,
+			IdentitySnapshotProject: &snapshotProject,
+			Signals:                 update,
+			Findings:                findings,
+			DataVersion:             dataVersionForWrite(pw),
+			ReplaceMessages:         replaceMessages,
 		})
 		pendingIndexes = append(pendingIndexes, pendingIndex)
 		pendingByID[s.ID] = pw
@@ -11139,11 +11340,24 @@ func (e *Engine) cachedProjectIdentity(machine, rootPath string) projectIdentity
 func (e *Engine) writeProjectIdentityObservation(
 	ctx context.Context, s db.Session,
 ) error {
+	return e.writeProjectIdentityObservationWithSnapshotProject(
+		ctx, s, s.Project,
+	)
+}
+
+func (e *Engine) writeProjectIdentityObservationWithSnapshotProject(
+	ctx context.Context,
+	s db.Session,
+	snapshotProject string,
+) error {
 	obs, ok := e.projectIdentityObservation(s)
 	if !ok {
 		return nil
 	}
-	fingerprint := projectIdentityObservationFingerprint(obs)
+	snapshot := obs
+	snapshot.Project = snapshotProject
+	fingerprint := projectIdentityObservationFingerprint(obs) + "\x00" +
+		projectIdentityObservationFingerprint(snapshot)
 	e.projectIdentityMu.Lock()
 	if e.projectIdentityWritten == nil {
 		e.projectIdentityWritten = make(map[string]struct{})
@@ -11154,7 +11368,9 @@ func (e *Engine) writeProjectIdentityObservation(
 	}
 	e.projectIdentityMu.Unlock()
 
-	if err := e.db.UpsertProjectIdentityObservation(ctx, obs); err != nil {
+	if err := e.db.UpsertProjectIdentityObservationWithSnapshotProject(
+		ctx, obs, snapshotProject,
+	); err != nil {
 		return err
 	}
 
@@ -11162,6 +11378,19 @@ func (e *Engine) writeProjectIdentityObservation(
 	e.projectIdentityWritten[fingerprint] = struct{}{}
 	e.projectIdentityMu.Unlock()
 	return nil
+}
+
+func (e *Engine) upsertSessionPendingContentWithProjectIdentity(
+	s db.Session,
+	snapshotProject string,
+) (bool, error) {
+	obs, ok := e.projectIdentityObservation(s)
+	if !ok {
+		return e.db.UpsertSessionPendingContent(s)
+	}
+	return e.db.UpsertSessionPendingContentWithProjectIdentity(
+		s, obs, snapshotProject,
+	)
 }
 
 func projectIdentityObservationFingerprint(
@@ -11544,19 +11773,22 @@ func (e *Engine) writeIncremental(
 		)
 	}
 
-	if err := e.applyWorktreeMappingToSingleSession(
+	finalProject, err := e.applyWorktreeMappingToSingleSession(
 		inc.sessionID,
-	); err != nil {
+	)
+	if err != nil {
 		return err
 	}
-	if err := e.writeProjectIdentityObservation(
+	identitySession := db.Session{
+		ID:      inc.sessionID,
+		Project: finalProject,
+		Machine: inc.machine,
+		Cwd:     inc.cwd,
+	}
+	if err := e.writeProjectIdentityObservationWithSnapshotProject(
 		context.Background(),
-		db.Session{
-			ID:      inc.sessionID,
-			Project: inc.project,
-			Machine: inc.machine,
-			Cwd:     inc.cwd,
-		},
+		identitySession,
+		inc.sourceProject,
 	); err != nil {
 		log.Printf(
 			"incremental project identity observation %s: %v",
@@ -11636,13 +11868,22 @@ func (e *Engine) writeSessionFullWithResolver(
 	pw pendingWrite,
 	resolveWorktreeProject worktreeProjectResolver,
 ) error {
+	preserved, err := e.preserveUnavailableSourceProjects(
+		context.Background(), []pendingWrite{pw},
+	)
+	if err != nil {
+		return err
+	}
+	pw = preserved[0]
 	s, msgs, verdict := e.prepareSessionWrite(
 		pw, resolveWorktreeProject,
 	)
 	if verdict != sessionWriteOK {
 		return errSessionPreserved
 	}
-	_, err := e.db.UpsertSessionPendingContent(s)
+	_, err = e.upsertSessionPendingContentWithProjectIdentity(
+		s, pw.sess.Project,
+	)
 	if err != nil {
 		if isIntentionalSessionSkip(err) {
 			if pw.sess.File.Path != "" {
@@ -13008,27 +13249,49 @@ func (e *Engine) SyncSingleSessionContext(
 
 func (e *Engine) applyWorktreeMappingToSingleSession(
 	sessionID string,
-) error {
+) (string, error) {
 	ctx := context.Background()
 	sess, err := e.db.GetSession(ctx, sessionID)
-	if err != nil || sess == nil || sess.Cwd == "" {
-		return err
+	if err != nil {
+		return "", err
+	}
+	if sess == nil {
+		return "", fmt.Errorf(
+			"apply worktree mapping to session %s: session disappeared",
+			sessionID,
+		)
 	}
 
 	machine := sess.Machine
 	if machine == "" {
 		machine = e.machine
 	}
-	_, err = e.db.ApplyWorktreeProjectMappingToSessionFromSync(
+	updated, err := e.db.ApplyWorktreeProjectMappingToSessionFromSync(
 		ctx, machine, sess.ID, sess.Cwd, sess.Project,
 	)
 	if err != nil {
-		return fmt.Errorf(
+		return "", fmt.Errorf(
 			"apply worktree mapping to session %s: %w",
 			sessionID, err,
 		)
 	}
-	return nil
+	if !updated {
+		return sess.Project, nil
+	}
+	mapped, err := e.db.GetSession(ctx, sessionID)
+	if err != nil {
+		return "", fmt.Errorf(
+			"reload mapped session %s: %w",
+			sessionID, err,
+		)
+	}
+	if mapped == nil {
+		return "", fmt.Errorf(
+			"reload mapped session %s: session disappeared",
+			sessionID,
+		)
+	}
+	return mapped.Project, nil
 }
 
 // filterShadowedLegacyKiroFiles drops discovered legacy Kiro JSONL sources

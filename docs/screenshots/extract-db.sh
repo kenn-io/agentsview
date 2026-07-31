@@ -290,6 +290,8 @@ DELETE FROM session_project_identity_snapshots;
 DELETE FROM project_identity_observation_changes;
 DELETE FROM session_project_identity_snapshot_changes;
 DELETE FROM worktree_project_mappings;
+-- The mapping delete above journals tombstones, so clear that journal last.
+DELETE FROM worktree_project_mapping_changes;
 
 -- Keep generated screenshots independent of the source machine's hostname.
 -- The PostgreSQL fixture relabels a subset as work-desktop after push so the

@@ -346,7 +346,10 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // stats.session_cached_tokens, splitting the provider cache-hit count out of
 // input tokens into the usage event's cache-read field. Existing rows need
 // re-parsing so the cached prefix is priced at the discounted cache-read rate
-// instead of the full input rate.)
+// instead of the full input rate. The same reparse replaces parser-source
+// project identity snapshots that older mapping behavior could persist with
+// the mapped target label before incremental ingestion is allowed to reuse
+// them.)
 const dataVersion = 77
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
@@ -1143,6 +1146,11 @@ CREATE TABLE IF NOT EXISTS session_project_identity_snapshots (
     key                TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
+
+CREATE INDEX IF NOT EXISTS idx_session_project_identity_snapshots_evidence
+    ON session_project_identity_snapshots(
+        machine, root_path, git_remote, observed_at DESC, session_id
+    );
 
 CREATE TABLE IF NOT EXISTS background_migrations (
     name            TEXT PRIMARY KEY,
@@ -2084,6 +2092,10 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE worktree_project_mappings ADD COLUMN layout TEXT NOT NULL DEFAULT 'explicit'",
 		},
 		{
+			"worktree_project_mappings", "original_project",
+			"ALTER TABLE worktree_project_mappings ADD COLUMN original_project TEXT NOT NULL DEFAULT ''",
+		},
+		{
 			"project_identity_observations", "session_id",
 			"ALTER TABLE project_identity_observations ADD COLUMN session_id TEXT NOT NULL DEFAULT ''",
 		},
@@ -2455,6 +2467,7 @@ func (db *DB) migrateColumns() error {
 			path_prefix TEXT NOT NULL,
 			layout      TEXT NOT NULL DEFAULT 'explicit',
 			project     TEXT NOT NULL,
+			original_project TEXT NOT NULL DEFAULT '',
 			enabled     INTEGER NOT NULL DEFAULT 1,
 			created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
 			updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
@@ -2522,6 +2535,10 @@ func (db *DB) migrateColumns() error {
 			key                TEXT NOT NULL DEFAULT '',
 			FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 		);
+		CREATE INDEX IF NOT EXISTS idx_session_project_identity_snapshots_evidence
+			ON session_project_identity_snapshots(
+				machine, root_path, git_remote, observed_at DESC, session_id
+			);
 	`); err != nil {
 		return fmt.Errorf(
 			"creating project identity metadata: %w", err,

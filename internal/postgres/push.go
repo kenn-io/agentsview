@@ -23,10 +23,14 @@ import (
 
 const (
 	lastPushBoundaryStateKey           = "last_push_boundary_state"
+	lastPushSourceArchiveIDKey         = "pg_source_archive_id_v1"
 	lastPushTargetFingerprintKey       = "pg_target_fingerprint_v1"
 	sessionAliasBackfillStateKey       = "pg_session_alias_backfill_v1"
-	projectIdentityPublicationStateKey = "project_identity_publication_revision_v2"
+	legacyProjectIdentityStateKey      = "project_identity_publication_revision_v2"
+	projectIdentityPublicationStateKey = "project_identity_publication_revision_v3"
 	transcriptRevisionBackfillStateKey = "pg_transcript_revision_backfill_v1"
+	sessionProvenanceBackfillStateKey  = "pg_session_provenance_backfill_v1"
+	unfilteredPublicationScope         = "all-projects"
 )
 
 // pushMarkerIDStateKey names the local sync-state entry holding this DB's
@@ -196,6 +200,35 @@ func (s *Sync) PushWithOptions(
 		full = true
 		pushStateCleared = true
 	}
+	archiveID, err := s.local.GetArchiveID(ctx)
+	if err != nil {
+		return result, fmt.Errorf("reading archive id: %w", err)
+	}
+	s.archiveID = archiveID
+	storedArchiveID, err := state.GetSyncState(lastPushSourceArchiveIDKey)
+	if err != nil {
+		return result, fmt.Errorf(
+			"reading %s: %w", lastPushSourceArchiveIDKey, err,
+		)
+	}
+	if (lastPush != "" || boundaryState != "") &&
+		storedArchiveID != archiveID {
+		log.Printf(
+			"pgsync: source archive identity changed; clearing local push watermark state",
+		)
+		if err := clearPushState(state); err != nil {
+			return result, err
+		}
+		lastPush = ""
+		boundaryState = ""
+		full = true
+		pushStateCleared = true
+	}
+	databaseGeneration, err := s.local.GetDatabaseID(ctx)
+	if err != nil {
+		return result, fmt.Errorf("reading database generation: %w", err)
+	}
+	s.databaseGeneration = databaseGeneration
 	markerID, err := s.pushMarkerID()
 	if err != nil {
 		return result, err
@@ -207,6 +240,8 @@ func (s *Sync) PushWithOptions(
 	legacyMarkerMachines := pushMarkerLegacyMachines(
 		markerMachine, markerMachineAliases,
 	)
+	var reconciledScopeMoveIDs []string
+	var identityRefreshSessionIDs []string
 	// Keep the backfill marker scoped to target only; all other push
 	// state remains scoped by full effective sync state (including filter
 	// fingerprint when present).
@@ -220,6 +255,25 @@ func (s *Sync) PushWithOptions(
 	if aliasBackfillNeeded {
 		log.Printf(
 			"pgsync: session alias backfill marker missing; forcing full push",
+		)
+	}
+	provenanceBackfillState := aliasBackfillState
+	if s.isFiltered() {
+		// The target-wide marker cannot describe a partial project scope.
+		// Keep filtered completion in the same effective-scope namespace as
+		// its watermark and boundary fingerprints.
+		provenanceBackfillState = state
+	}
+	provenanceBackfillNeeded := false
+	full, provenanceBackfillNeeded, err = applySessionProvenanceBackfillRequirement(
+		provenanceBackfillState, full,
+	)
+	if err != nil {
+		return result, err
+	}
+	if provenanceBackfillNeeded {
+		log.Printf(
+			"pgsync: session provenance backfill marker missing; forcing full push",
 		)
 	}
 	transcriptRevisionBackfillNeeded := false
@@ -292,6 +346,31 @@ func (s *Sync) PushWithOptions(
 			}
 		}
 	}
+	if s.isFiltered() {
+		scopeMoveCandidates, scopeErr := listPGProjectScopeMoveCandidates(
+			ctx, s.local, lastPush,
+		)
+		if scopeErr != nil {
+			return result, fmt.Errorf(
+				"listing filtered project-scope move candidates: %w", scopeErr,
+			)
+		}
+		identityRefreshSessionIDs = make(
+			[]string, 0, len(scopeMoveCandidates),
+		)
+		for _, candidate := range scopeMoveCandidates {
+			identityRefreshSessionIDs = append(
+				identityRefreshSessionIDs, candidate.ID,
+			)
+		}
+		reconciledScopeMoveIDs, scopeErr = reconcilePGProjectScopeMoves(
+			ctx, s.pg, markerID, scopeMoveCandidates,
+			s.projects, s.excludeProjects,
+		)
+		if scopeErr != nil {
+			return result, scopeErr
+		}
+	}
 	if err := timedPushSetupStep("model pricing sync",
 		func() error { return s.syncModelPricing(ctx) }); err != nil {
 		return result, err
@@ -336,6 +415,9 @@ func (s *Sync) PushWithOptions(
 		if bErr != nil {
 			return result, bErr
 		}
+	}
+	for _, id := range reconciledScopeMoveIDs {
+		delete(priorFingerprints, id)
 	}
 
 	if err := purgePGExcludedPushSessions(
@@ -392,7 +474,9 @@ func (s *Sync) PushWithOptions(
 			sess := sessionByID[id]
 			sessionFingerprints[id] = sessionPushFingerprint(
 				sess, pushedSessionMachine(sess, s.machine),
-				usageFP, markerID, dependencyFP,
+				s.archiveID, usageFP, markerID,
+				dependencyFP+"\x00source-database-generation:"+
+					s.databaseGeneration,
 			)
 			prepared++
 			if prepared%pushPrepareProgressStride == 0 {
@@ -453,6 +537,9 @@ func (s *Sync) PushWithOptions(
 		); err != nil {
 			return result, err
 		}
+		if err := persistPushSourceArchiveID(state, s.archiveID); err != nil {
+			return result, err
+		}
 		if err := s.writePushMarker(
 			ctx, markerID, markerMachine, markerMachineAliases,
 		); err != nil {
@@ -463,12 +550,22 @@ func (s *Sync) PushWithOptions(
 		); err != nil {
 			return result, err
 		}
+		if err := completeSessionProvenanceBackfill(
+			provenanceBackfillState, provenanceBackfillNeeded, result,
+		); err != nil {
+			return result, err
+		}
 		if err := completeTranscriptRevisionBackfill(
 			state, transcriptRevisionBackfillNeeded, result,
 		); err != nil {
 			return result, err
 		}
-		if err := s.syncProjectIdentityObservations(ctx, full); err != nil {
+		if err := s.syncProjectIdentityObservations(
+			ctx, full, identityRefreshSessionIDs,
+		); err != nil {
+			return result, err
+		}
+		if err := s.syncWorktreeMappings(ctx, full); err != nil {
 			return result, err
 		}
 		result.Vectors, err = s.runVectorPushPhase(
@@ -564,6 +661,9 @@ func (s *Sync) PushWithOptions(
 	); err != nil {
 		return result, err
 	}
+	if err := persistPushSourceArchiveID(state, s.archiveID); err != nil {
+		return result, err
+	}
 
 	// Write the push marker only after the push and local finalization
 	// succeed. A reset-recovery push that fails before this point leaves
@@ -579,18 +679,28 @@ func (s *Sync) PushWithOptions(
 	); err != nil {
 		return result, err
 	}
+	if err := completeSessionProvenanceBackfill(
+		provenanceBackfillState, provenanceBackfillNeeded, result,
+	); err != nil {
+		return result, err
+	}
 	if err := completeTranscriptRevisionBackfill(
 		state, transcriptRevisionBackfillNeeded, result,
 	); err != nil {
 		return result, err
 	}
 	if result.Errors == 0 {
-		if err := s.syncProjectIdentityObservations(ctx, full); err != nil {
+		if err := s.syncProjectIdentityObservations(
+			ctx, full, identityRefreshSessionIDs,
+		); err != nil {
+			return result, err
+		}
+		if err := s.syncWorktreeMappings(ctx, full); err != nil {
 			return result, err
 		}
 	} else {
 		log.Printf(
-			"pgsync: skipping project identity publication after %d session push errors",
+			"pgsync: skipping project identity and mapping publication after %d session push errors",
 			result.Errors,
 		)
 	}
@@ -637,7 +747,7 @@ func (s *Sync) runVectorPushPhase(
 }
 
 func (s *Sync) syncProjectIdentityObservations(
-	ctx context.Context, force bool,
+	ctx context.Context, force bool, refreshSessionIDs []string,
 ) error {
 	revision, err := s.local.ProjectIdentityPublicationRevision(ctx)
 	if err != nil {
@@ -654,13 +764,27 @@ func (s *Sync) syncProjectIdentityObservations(
 	if err != nil {
 		return fmt.Errorf("reading project identity publication revision: %w", err)
 	}
+	adoptLegacyFilteredScope := false
+	if s.isFiltered() && publishedRevisionValue == "" {
+		legacyValue, loadErr := state.GetSyncState(
+			legacyProjectIdentityStateKey + ":" + databaseGeneration,
+		)
+		if loadErr != nil {
+			return fmt.Errorf(
+				"reading legacy project identity publication revision: %w",
+				loadErr,
+			)
+		}
+		adoptLegacyFilteredScope = legacyValue != ""
+	}
 	fullPublication := force || publishedRevisionValue == ""
 	var publishedRevision int64
 	if !fullPublication {
 		publishedRevision, err = strconv.ParseInt(publishedRevisionValue, 10, 64)
 		if err != nil || publishedRevision < 0 || publishedRevision > revision {
 			fullPublication = true
-		} else if publishedRevision == revision {
+		} else if publishedRevision == revision &&
+			len(refreshSessionIDs) == 0 {
 			return nil
 		}
 	}
@@ -676,13 +800,13 @@ func (s *Sync) syncProjectIdentityObservations(
 		observations = filterProjectIdentityObservations(
 			observations, s.projects, s.excludeProjects,
 		)
-		snapshots, err = s.local.ListSessionProjectIdentitySnapshots(ctx)
+		snapshots, err =
+			s.local.ListPublishableSessionProjectIdentitySnapshots(
+				ctx, nil, s.projects, s.excludeProjects,
+			)
 		if err != nil {
 			return fmt.Errorf("loading session project identity snapshots: %w", err)
 		}
-		snapshots = filterProjectIdentityObservations(
-			snapshots, s.projects, s.excludeProjects,
-		)
 	} else {
 		delta, err = s.local.LoadProjectIdentityPublicationDelta(
 			ctx, publishedRevision, revision, s.projects, s.excludeProjects,
@@ -692,6 +816,19 @@ func (s *Sync) syncProjectIdentityObservations(
 		}
 		observations = delta.Observations
 		snapshots = delta.Snapshots
+	}
+	if len(refreshSessionIDs) > 0 {
+		refreshSnapshots, loadErr :=
+			s.local.ListPublishableSessionProjectIdentitySnapshots(
+				ctx, refreshSessionIDs, s.projects, s.excludeProjects,
+			)
+		if loadErr != nil {
+			return fmt.Errorf(
+				"loading refreshed session project identity snapshots: %w",
+				loadErr,
+			)
+		}
+		snapshots = mergeProjectIdentitySnapshots(snapshots, refreshSnapshots)
 	}
 
 	archiveID, err := s.local.GetArchiveID(ctx)
@@ -716,9 +853,25 @@ func (s *Sync) syncProjectIdentityObservations(
 	if err := upsertSourceArchiveScope(ctx, tx, archiveID, archiveSalt); err != nil {
 		return err
 	}
-	if fullPublication {
-		if err := deleteProjectIdentityScope(
-			ctx, tx, archiveID, s.projects, s.excludeProjects,
+	publicationScope := unfilteredPublicationScope
+	if s.isFiltered() {
+		publicationScope = pushSyncStateScope(
+			"", s.projects, s.excludeProjects,
+		)
+		if err := prepareFilteredProjectIdentityPublication(
+			ctx, tx, archiveID, databaseGeneration, publicationScope,
+			fullPublication, adoptLegacyFilteredScope,
+			s.projects, s.excludeProjects,
+			delta.ObservationDeletes, delta.SnapshotDeletes, refreshSessionIDs,
+		); err != nil {
+			return err
+		}
+	} else if fullPublication {
+		// Rebuild the archive from the destination's own rows. This removes
+		// stale out-of-scope identity without loading or transmitting
+		// excluded-project tombstone metadata.
+		if err := deleteProjectIdentityArchive(
+			ctx, tx, archiveID,
 		); err != nil {
 			return err
 		}
@@ -727,6 +880,13 @@ func (s *Sync) syncProjectIdentityObservations(
 		delta.ObservationDeletes, delta.SnapshotDeletes,
 	); err != nil {
 		return err
+	}
+	if !s.isFiltered() {
+		if err := deleteSessionProjectIdentitySnapshotsBySessionID(
+			ctx, tx, archiveID, refreshSessionIDs,
+		); err != nil {
+			return err
+		}
 	}
 	for i, obs := range observations {
 		obs.SourceArchiveID = archiveID
@@ -738,6 +898,11 @@ func (s *Sync) syncProjectIdentityObservations(
 	); err != nil {
 		return fmt.Errorf("syncing project identity observations: %w", err)
 	}
+	if err := ownProjectIdentityObservations(
+		ctx, tx, archiveID, publicationScope, observations,
+	); err != nil {
+		return err
+	}
 	for i := range snapshots {
 		snapshots[i] = export.SanitizeStoredProjectIdentityObservation(snapshots[i])
 	}
@@ -746,6 +911,11 @@ func (s *Sync) syncProjectIdentityObservations(
 	); err != nil {
 		return fmt.Errorf("syncing session project identity snapshots: %w", err)
 	}
+	if err := ownSessionProjectIdentitySnapshots(
+		ctx, tx, archiveID, databaseGeneration, publicationScope, snapshots,
+	); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing project identity observation sync: %w", err)
 	}
@@ -753,6 +923,26 @@ func (s *Sync) syncProjectIdentityObservations(
 		return fmt.Errorf("recording project identity publication revision: %w", err)
 	}
 	return nil
+}
+
+func mergeProjectIdentitySnapshots(
+	base, refresh []export.ProjectIdentityObservation,
+) []export.ProjectIdentityObservation {
+	merged := make(map[string]export.ProjectIdentityObservation, len(base)+len(refresh))
+	for _, snapshot := range base {
+		merged[snapshot.SessionID] = snapshot
+	}
+	for _, snapshot := range refresh {
+		merged[snapshot.SessionID] = snapshot
+	}
+	out := make([]export.ProjectIdentityObservation, 0, len(merged))
+	for _, snapshot := range merged {
+		out = append(out, snapshot)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].SessionID < out[j].SessionID
+	})
+	return out
 }
 
 func filterProjectIdentityObservations(
@@ -1302,6 +1492,54 @@ func completeSessionAliasBackfill(
 	return markSessionAliasBackfillDone(local)
 }
 
+func sessionProvenanceBackfillNeeded(local syncStateStore) (bool, error) {
+	done, err := local.GetSyncState(sessionProvenanceBackfillStateKey)
+	if err != nil {
+		return false, fmt.Errorf(
+			"reading session provenance backfill state: %w", err)
+	}
+	return done == "", nil
+}
+
+// applySessionProvenanceBackfillRequirement forces one full push while the
+// provenance backfill marker is missing. Callers select the marker namespace:
+// target-wide for unfiltered pushes, or effective-filter-scoped for filtered
+// pushes, so each scope repairs its own fingerprint-matched rows exactly once.
+func applySessionProvenanceBackfillRequirement(
+	local syncStateStore, full bool,
+) (bool, bool, error) {
+	needed, err := sessionProvenanceBackfillNeeded(local)
+	if err != nil {
+		return full, false, err
+	}
+	if !needed {
+		return full, false, nil
+	}
+	return true, true, nil
+}
+
+func markSessionProvenanceBackfillDone(local syncStateStore) error {
+	if err := local.SetSyncState(
+		sessionProvenanceBackfillStateKey, "1",
+	); err != nil {
+		return fmt.Errorf(
+			"marking session provenance backfill done: %w", err)
+	}
+	return nil
+}
+
+// completeSessionProvenanceBackfill marks the caller-selected target or filter
+// scope complete only after every session in that scope was pushed without an
+// error.
+func completeSessionProvenanceBackfill(
+	local syncStateStore, needed bool, result PushResult,
+) error {
+	if !needed || result.Errors > 0 {
+		return nil
+	}
+	return markSessionProvenanceBackfillDone(local)
+}
+
 func applyTranscriptRevisionBackfillRequirement(
 	local syncStateStore, full bool,
 ) (bool, bool, error) {
@@ -1349,6 +1587,13 @@ func persistPushTargetFingerprint(
 			"updating %s: %w",
 			lastPushTargetFingerprintKey, err,
 		)
+	}
+	return nil
+}
+
+func persistPushSourceArchiveID(local syncStateStore, archiveID string) error {
+	if err := local.SetSyncState(lastPushSourceArchiveIDKey, archiveID); err != nil {
+		return fmt.Errorf("updating %s: %w", lastPushSourceArchiveIDKey, err)
 	}
 	return nil
 }
@@ -1536,6 +1781,89 @@ func purgePGExcludedPushSessions(
 	return deletePGExcludedSessionRows(ctx, pg, purgeIDs)
 }
 
+func reconcilePGProjectScopeMoves(
+	ctx context.Context,
+	pg *sql.DB,
+	ownerMarker string,
+	changedSessions []db.Session,
+	projects []string,
+	excludeProjects []string,
+) ([]string, error) {
+	if len(changedSessions) == 0 {
+		return nil, nil
+	}
+	localProjects := make(map[string]string, len(changedSessions))
+	changedIDs := make([]string, 0, len(changedSessions))
+	for _, session := range changedSessions {
+		localProjects[session.ID] = session.Project
+		changedIDs = append(changedIDs, session.ID)
+	}
+	rows, err := pg.QueryContext(ctx, `
+		SELECT id, project
+		FROM sessions
+		WHERE owner_marker = $1 AND id = ANY($2)`,
+		ownerMarker, changedIDs)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"listing changed pg sessions for scope reconciliation: %w", err,
+		)
+	}
+	defer rows.Close()
+
+	staleIDs := []string{}
+	for rows.Next() {
+		var id, project string
+		if err := rows.Scan(&id, &project); err != nil {
+			return nil, fmt.Errorf("scanning owned pg session for scope reconciliation: %w", err)
+		}
+		if !projectInPGSyncScope(project, projects, excludeProjects) {
+			continue
+		}
+		if !projectInPGSyncScope(
+			localProjects[id], projects, excludeProjects,
+		) {
+			staleIDs = append(staleIDs, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating owned pg sessions for scope reconciliation: %w", err)
+	}
+	if len(staleIDs) == 0 {
+		return nil, nil
+	}
+	sort.Strings(staleIDs)
+	if _, err := pg.ExecContext(ctx, `
+		DELETE FROM sessions
+		WHERE owner_marker = $1 AND id = ANY($2)`, ownerMarker, staleIDs); err != nil {
+		return nil, fmt.Errorf("deleting pg sessions that moved out of scope: %w", err)
+	}
+	return staleIDs, nil
+}
+
+// listPGProjectScopeMoveCandidates returns the same incremental sync-marker
+// window as the normal push, but without the project filter. A session that
+// moves out of scope is absent from the filtered push window, so this bounded
+// companion read is what lets reconciliation delete its formerly in-scope PG
+// row. An empty watermark is the intentional one-time full-scan path.
+func listPGProjectScopeMoveCandidates(
+	ctx context.Context,
+	local *db.DB,
+	lastPush string,
+) ([]db.Session, error) {
+	return local.ListSessionsForMirrorWindow(ctx, lastPush, nil, nil)
+}
+
+func projectInPGSyncScope(
+	project string,
+	projects []string,
+	excludeProjects []string,
+) bool {
+	if len(projects) > 0 && !slices.Contains(projects, project) {
+		return false
+	}
+	return !slices.Contains(excludeProjects, project)
+}
+
 func hasPGExcludedSessionID(
 	ids []string, excluded map[string]struct{},
 ) bool {
@@ -1597,12 +1925,14 @@ func deletePGSessionIfExcluded(
 // fallback to force a re-push when s.machine changes.
 func sessionPushFingerprint(
 	sess db.Session, pushedMachine,
-	usageEventFingerprint, ownerMarker, dependencyFingerprint string,
+	sourceArchiveID, usageEventFingerprint, ownerMarker,
+	dependencyFingerprint string,
 ) string {
 	fields := []string{
 		sess.ID,
 		sess.Project,
 		pushedMachine,
+		sourceArchiveID,
 		ownerMarker,
 		dependencyFingerprint,
 		sess.Agent,
@@ -1827,24 +2157,25 @@ func (s *Sync) pushSession(
 			no_code_context_count, runaway_tool_loop_count,
 			transcript_fidelity, transcript_revision,
 			agent_label, entrypoint,
+			source_archive_id, source_database_generation, file_path,
 			updated_at
 			)
 			SELECT
 				$1, $2, $3, $4, $5, $6, $7, $8,
 				$9, $10, $11, $12, $13, $14, $15,
 				$16, $17, $18, $19,
-			$20, $21, $22, $23,
-			$24, $25, $26, $27, $28, $29, $30,
-			$31, $32,
-			$33, $34, $35, $36,
-			$37, $38, $39, $40,
-			$41,
-			$42, $43,
-			$44,
-			$45, $46, $47, $48,
-			$49, $50,
+				$20, $21, $22, $23,
+				$24, $25, $26, $27, $28, $29, $30,
+				$31, $32,
+				$33, $34, $35, $36,
+				$37, $38, $39, $40,
+				$41,
+				$42, $43,
+				$44,
+				$45, $46, $47, $48,
+				$49, $50,
 				$51, $52, $53, $54, $55, $56, $57, $58, $59, $60,
-				$61, $62,
+				$61, $62, $63, $64, $65,
 				NOW()
 			WHERE NOT EXISTS (
 				SELECT 1 FROM excluded_sessions WHERE id = $1
@@ -1856,6 +2187,9 @@ func (s *Sync) pushSession(
 			agent = EXCLUDED.agent,
 			agent_label = EXCLUDED.agent_label,
 			entrypoint = EXCLUDED.entrypoint,
+			source_archive_id = EXCLUDED.source_archive_id,
+			source_database_generation = EXCLUDED.source_database_generation,
+			file_path = EXCLUDED.file_path,
 			first_message = EXCLUDED.first_message,
 			display_name = CASE
 				WHEN sessions.display_name IS DISTINCT FROM
@@ -1930,7 +2264,7 @@ func (s *Sync) pushSession(
 					OR sessions.machine = 'local'
 					OR sessions.machine = ''
 					OR sessions.machine IN (
-						SELECT jsonb_array_elements_text($63::jsonb)
+						SELECT jsonb_array_elements_text($66::jsonb)
 					))
 			)
 			OR sessions.owner_marker = EXCLUDED.owner_marker)
@@ -1945,6 +2279,10 @@ func (s *Sync) pushSession(
 			OR sessions.agent IS DISTINCT FROM EXCLUDED.agent
 			OR sessions.agent_label IS DISTINCT FROM EXCLUDED.agent_label
 			OR sessions.entrypoint IS DISTINCT FROM EXCLUDED.entrypoint
+			OR sessions.source_archive_id IS DISTINCT FROM EXCLUDED.source_archive_id
+			OR sessions.source_database_generation IS DISTINCT FROM
+				EXCLUDED.source_database_generation
+			OR sessions.file_path IS DISTINCT FROM EXCLUDED.file_path
 			OR sessions.first_message IS DISTINCT FROM EXCLUDED.first_message
 			OR sessions.source_display_name IS DISTINCT FROM EXCLUDED.display_name
 			OR sessions.session_name IS DISTINCT FROM EXCLUDED.session_name
@@ -2041,6 +2379,9 @@ func (s *Sync) pushSession(
 		transcriptRevisionValue(sess.TranscriptRevision),
 		sanitizePG(sess.AgentLabel),
 		sanitizePG(sess.Entrypoint),
+		s.archiveID,
+		s.databaseGeneration,
+		sess.FilePath,
 		string(legacyMarkerMachinesJSON),
 	)
 	if err != nil {

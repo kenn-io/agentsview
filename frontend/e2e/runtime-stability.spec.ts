@@ -15,11 +15,11 @@ const KNOWN_SVELTE_WARNINGS_RE =
   /each_key_duplicate|ResizeObserver loop completed with undelivered notifications/;
 
 // Test-fixture assumptions: project-alpha has sessions with 2
-// and 5+ messages, totalling 10 sessions across all projects
-// (including the project-duration showcase and project-edits fixture).
+// and 5+ messages, totalling 12 sessions across all projects (including
+// the duration, recent-edits, and project-reclassification fixtures).
 const TEST_PROJECT = "project-alpha";
 const FILTERED_SESSION_COUNT = 2;
-const TOTAL_SESSION_COUNT = 10;
+const TOTAL_SESSION_COUNT = 12;
 
 // Session deep in the list to exercise virtualizer scroll.
 const TARGET_SESSION_INDEX = 6;

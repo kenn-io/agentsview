@@ -166,6 +166,14 @@ type Sync struct {
 	syncStateTarget        string
 	migrateLegacySyncState bool
 
+	// archiveID caches this local archive's stable identifier, populated at
+	// the top of Push and stamped onto every pushed session's
+	// source_archive_id column.
+	archiveID string
+	// databaseGeneration identifies the exact local database generation that
+	// produced each pushed session and its identity snapshot.
+	databaseGeneration string
+
 	// Project filtering for push scope.
 	projects        []string
 	excludeProjects []string

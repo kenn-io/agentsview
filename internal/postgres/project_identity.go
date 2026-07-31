@@ -3,19 +3,86 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/export"
 )
 
+// ListProjectIdentityObservations returns the mirrored identity
+// observations for the given raw project labels, or every stored
+// observation when labels is nil. Rows are ordered by (source_archive_id,
+// project, machine, root_path, git_remote). Label lists of any size are
+// supported: labels are sorted, deduplicated, and split into
+// maxPGVars-sized chunks so the IN list stays far below PostgreSQL's
+// 65,535 bind-parameter protocol limit. source_archive_id leads the ORDER
+// BY, so per-chunk (label-range) results do not concatenate into the
+// global order; when more than one chunk runs, the combined rows are
+// re-sorted in Go on the same key columns (byte-wise, matching the C
+// collation).
 func (s *Store) ListProjectIdentityObservations(
 	ctx context.Context,
 	labels []string,
 ) ([]export.ProjectIdentityObservation, error) {
-	if labels != nil && len(labels) == 0 {
+	if labels == nil {
+		return s.listProjectIdentityObservationsChunk(ctx, nil)
+	}
+	if len(labels) == 0 {
 		return []export.ProjectIdentityObservation{}, nil
 	}
+	sorted := slices.Clone(labels)
+	slices.Sort(sorted)
+	sorted = slices.Compact(sorted)
+	if len(sorted) <= maxPGVars {
+		return s.listProjectIdentityObservationsChunk(ctx, sorted)
+	}
+	var out []export.ProjectIdentityObservation
+	err := pgQueryChunked(sorted, func(chunk []string) error {
+		part, err := s.listProjectIdentityObservationsChunk(ctx, chunk)
+		if err != nil {
+			return err
+		}
+		out = append(out, part...)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sortProjectIdentityObservations(out)
+	return out, nil
+}
+
+// sortProjectIdentityObservations restores the documented
+// (source_archive_id, project, machine, root_path, git_remote) ordering
+// after chunked queries are concatenated.
+func sortProjectIdentityObservations(obs []export.ProjectIdentityObservation) {
+	sort.SliceStable(obs, func(i, j int) bool {
+		a, b := obs[i], obs[j]
+		if a.SourceArchiveID != b.SourceArchiveID {
+			return a.SourceArchiveID < b.SourceArchiveID
+		}
+		if a.Project != b.Project {
+			return a.Project < b.Project
+		}
+		if a.Machine != b.Machine {
+			return a.Machine < b.Machine
+		}
+		if a.RootPath != b.RootPath {
+			return a.RootPath < b.RootPath
+		}
+		return a.GitRemote < b.GitRemote
+	})
+}
+
+// listProjectIdentityObservationsChunk runs one observation query for a
+// single label chunk (nil means "all rows"); the chunk must already be
+// within the bind-parameter budget.
+func (s *Store) listProjectIdentityObservationsChunk(
+	ctx context.Context,
+	labels []string,
+) ([]export.ProjectIdentityObservation, error) {
 	query := `SELECT source_archive_id, source_archive_salt,
 		project, machine, root_path, git_remote, git_remote_name,
 		repository_path, worktree_name, worktree_root_path,

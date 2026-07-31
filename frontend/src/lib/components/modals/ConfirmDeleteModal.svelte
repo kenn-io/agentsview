@@ -74,6 +74,7 @@
 
 <Modal
   title={m.confirm_delete_title()}
+  closeLabel={m.confirm_delete_close()}
   tone="danger"
   width="380px"
   onclose={close}

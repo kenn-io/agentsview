@@ -243,6 +243,8 @@ describe("AppHeader export actions", () => {
       "Pinned",
       "Insights",
       "Trash",
+      "Recent Edits",
+      "Data",
     ]) {
       expect(labels).toContain(expected);
     }

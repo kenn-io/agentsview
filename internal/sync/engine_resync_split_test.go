@@ -156,6 +156,95 @@ func TestResyncBarrierCloseFailureRestoresWriter(t *testing.T) {
 	assert.True(t, ok)
 }
 
+func TestResyncMappingFailureKeepsOriginalArchive(t *testing.T) {
+	for _, failure := range []string{"discovery", "apply"} {
+		t.Run(failure, func(t *testing.T) {
+			ctx := context.Background()
+			root := t.TempDir()
+			worktreePrefix := filepath.Join(t.TempDir(), "worktrees")
+			sessionCwd := filepath.Join(worktreePrefix, "feature")
+			sourcePath := filepath.Join(root, "source", "mapped.jsonl")
+			require.NoError(t, os.MkdirAll(filepath.Dir(sourcePath), 0o755))
+			require.NoError(t, os.WriteFile(sourcePath, []byte(
+				testjsonl.NewSessionBuilder().
+					AddClaudeUser(
+						"2026-01-01T00:00:00Z", "mapped session", sessionCwd,
+					).
+					AddClaudeAssistant(
+						"2026-01-01T00:00:01Z", "mapped reply",
+					).
+					String(),
+			), 0o644))
+
+			database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			_, err = database.CreateWorktreeProjectMapping(
+				ctx, db.WorktreeProjectMapping{
+					Machine: "local", PathPrefix: worktreePrefix,
+					Layout:  db.WorktreeMappingLayoutExplicit,
+					Project: "canonical_project", Enabled: true,
+				},
+			)
+			require.NoError(t, err)
+			engine := NewEngine(database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					parser.AgentClaude: {root},
+				},
+				Machine: "local",
+			})
+			t.Cleanup(engine.Close)
+			require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+			before, err := database.GetSession(ctx, "mapped")
+			require.NoError(t, err)
+			require.NotNil(t, before)
+			require.Equal(t, "canonical_project", before.Project)
+
+			sentinel := errors.New("mapping " + failure + " failed")
+			operations := rebuildOperations{}
+			appliedMachines := []string{}
+			switch failure {
+			case "discovery":
+				operations.listActiveWorktreeMappingMachines = func(
+					context.Context, *db.DB,
+				) ([]string, error) {
+					return nil, sentinel
+				}
+			case "apply":
+				operations.applyWorktreeMappings = func(
+					_ context.Context, _ *db.DB, machine string,
+				) (db.ApplyWorktreeProjectMappingsResult, error) {
+					appliedMachines = append(appliedMachines, machine)
+					return db.ApplyWorktreeProjectMappingsResult{}, sentinel
+				}
+			}
+
+			stats, err := engine.resyncAllWithOptionsAndOperations(
+				ctx, nil, RebuildOptions{}, operations,
+			)
+			require.ErrorIs(t, err, sentinel)
+			assert.True(t, stats.Aborted)
+			require.NotEmpty(t, stats.Warnings)
+			assert.Contains(t, stats.Warnings[len(stats.Warnings)-1],
+				"aborting swap")
+			if failure == "apply" {
+				assert.Equal(t, []string{"local"}, appliedMachines)
+			}
+
+			after, err := database.GetSession(ctx, "mapped")
+			require.NoError(t, err)
+			require.NotNil(t, after)
+			assert.Equal(t, "canonical_project", after.Project,
+				"failed mapping reconciliation must retain the active archive")
+			starred, err := database.StarSession("mapped")
+			require.NoError(t, err,
+				"the original archive must remain writable after the abort")
+			assert.True(t, starred)
+			assert.NoFileExists(t, engine.ResyncTempPath())
+		})
+	}
+}
+
 // TestResyncAbortsWhenReplacementCloseFails pins the replacement-close failure
 // posture: when the freshly built temp database cannot drain its connections,
 // committed rows may still sit uncheckpointed in the temp WAL. The build must

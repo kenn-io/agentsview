@@ -31,6 +31,7 @@ func TestPGSessionIdentityVisibleInReadPaths(t *testing.T) {
 	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
+	filePath := "/fixtures/sessions/sid-001.jsonl"
 	sess := db.Session{
 		ID:               "sid-001",
 		Project:          "proj",
@@ -43,6 +44,7 @@ func TestPGSessionIdentityVisibleInReadPaths(t *testing.T) {
 		CreatedAt:        "2026-01-01T00:00:00Z",
 		StartedAt:        strPtr("2026-01-01T00:00:00Z"),
 		EndedAt:          strPtr("2026-01-01T01:00:00Z"),
+		FilePath:         &filePath,
 	}
 	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
 
@@ -77,9 +79,19 @@ func TestPGSessionIdentityVisibleInReadPaths(t *testing.T) {
 	assert.Equal(t, "triage", idx.Sessions[0].AgentLabel)
 	assert.Equal(t, "sdk-cli", idx.Sessions[0].Entrypoint)
 
+	page, err := store.ListSessions(ctx, db.SessionFilter{
+		IncludeChildren: true,
+	})
+	require.NoError(t, err, "ListSessions")
+	require.Len(t, page.Sessions, 1, "expected one listed session")
+	require.NotNil(t, page.Sessions[0].FilePath)
+	assert.Equal(t, filePath, *page.Sessions[0].FilePath)
+
 	full, err := store.GetSession(ctx, sess.ID)
 	require.NoError(t, err, "GetSession")
 	require.NotNil(t, full, "GetSession must return the session")
 	assert.Equal(t, "triage", full.AgentLabel)
 	assert.Equal(t, "sdk-cli", full.Entrypoint)
+	require.NotNil(t, full.FilePath)
+	assert.Equal(t, filePath, *full.FilePath)
 }

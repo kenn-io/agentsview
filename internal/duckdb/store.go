@@ -528,7 +528,24 @@ func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) 
 	f.Cursor = ""
 	f.Limit = 0
 
-	where, args := db.BuildSessionFilterSQL(f, db.DuckDBQueryDialect())
+	dialect := db.DuckDBQueryDialect()
+	where, args := db.BuildSessionFilterSQL(f, dialect)
+	rootFilter := f
+	rootFilter.IncludeChildren = false
+	rootWhere, rootArgs := db.BuildSessionBaseFilterSQL(rootFilter, dialect)
+	canonicalRootWhere := db.BuildCanonicalRootWhere(
+		dialect, "sessions", f.IncludeOrphans,
+	)
+	var total int
+	if err := s.queryRowContext(
+		ctx,
+		"SELECT COUNT(*) FROM sessions WHERE "+rootWhere+
+			" AND "+canonicalRootWhere,
+		rootArgs...,
+	).Scan(&total); err != nil {
+		return db.SidebarSessionIndex{},
+			fmt.Errorf("counting duckdb sidebar roots: %w", err)
+	}
 	query := `
 		SELECT
 			id,
@@ -564,6 +581,7 @@ func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) 
 
 	index := db.SidebarSessionIndex{
 		Sessions: []db.SidebarSessionIndexRow{},
+		Total:    total,
 	}
 	for rows.Next() {
 		var row db.SidebarSessionIndexRow
@@ -607,8 +625,6 @@ func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) 
 		return db.SidebarSessionIndex{},
 			fmt.Errorf("iterating duckdb sidebar session index: %w", err)
 	}
-	index.Total = len(index.Sessions)
-
 	return index, nil
 }
 

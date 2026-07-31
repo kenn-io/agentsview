@@ -1255,7 +1255,7 @@ func TestDuckSessionFingerprintFieldsDiffer(t *testing.T) {
 func TestDuckSessionFingerprintCoversEveryMirroredColumn(t *testing.T) {
 	base := db.Session{CreatedAt: "2026-03-11T12:00:00Z"}
 	encodeArgs := func(s db.Session) string {
-		data, err := json.Marshal(sessionInsertArgs(s, "m", "fp"))
+		data, err := json.Marshal(sessionInsertArgs(s, "m", "archive", "fp"))
 		require.NoError(t, err)
 		return string(data)
 	}
@@ -1556,7 +1556,7 @@ func TestSyncMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
-	rev, err := syncer.syncProjectIdentityObservations(ctx, 0, false)
+	rev, err := syncer.syncProjectIdentityObservations(ctx, 0, false, nil)
 	require.NoError(t, err)
 
 	var gotArchive, gotGeneration, gotSession, gotRemote string
@@ -1584,7 +1584,7 @@ func TestSyncMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 		SET git_remote = 'sentinel'
 		WHERE source_session_id = ?`, "snapshot-session")
 	require.NoError(t, err)
-	rev2, err := syncer.syncProjectIdentityObservations(ctx, rev, false)
+	rev2, err := syncer.syncProjectIdentityObservations(ctx, rev, false, nil)
 	require.NoError(t, err)
 	assert.Equal(t, rev, rev2, "unchanged local revision should not advance")
 	require.NoError(t, syncer.DB().QueryRowContext(ctx, `
@@ -1593,7 +1593,7 @@ func TestSyncMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 	assert.Equal(t, "sentinel", gotRemote,
 		"unchanged local revision should skip mirror publication")
 
-	rev3, err := syncer.syncProjectIdentityObservations(ctx, rev, true)
+	rev3, err := syncer.syncProjectIdentityObservations(ctx, rev, true, nil)
 	require.NoError(t, err)
 	require.NoError(t, syncer.DB().QueryRowContext(ctx, `
 		SELECT git_remote FROM source_session_project_identity_snapshots
@@ -1602,11 +1602,90 @@ func TestSyncMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 		"forced publication should rebuild mirror identity rows")
 
 	require.NoError(t, local.DeleteSession("snapshot-session"))
-	_, err = syncer.syncProjectIdentityObservations(ctx, rev3, false)
+	_, err = syncer.syncProjectIdentityObservations(ctx, rev3, false, nil)
 	require.NoError(t, err)
 	assertDuckDBCountWhere(t, syncer.DB(),
 		"source_session_project_identity_snapshots",
 		"source_archive_id = ?", archiveID, 0,
+	)
+}
+
+func TestFilteredIncrementalPushPublishesMovedSessionSourceSnapshot(t *testing.T) {
+	const (
+		sessionID     = "duck-filtered-project-move"
+		sourceProject = "source_project"
+		targetProject = "target_project"
+		root          = "/srv/custom-worktrees/sample-branch"
+	)
+	ctx := context.Background()
+	local := newLocalDB(t)
+	startedAt := "2026-07-16T12:00:00.000Z"
+	localModifiedAt := startedAt
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID: sessionID, Project: sourceProject, Machine: duckPushMachine,
+		Agent: "claude", Cwd: root, StartedAt: &startedAt,
+		LocalModifiedAt: &localModifiedAt, MessageCount: 1,
+		UserMessageCount: 1,
+	}))
+	require.NoError(t, local.InsertMessages([]db.Message{{
+		SessionID: sessionID, Ordinal: 0, Role: "user",
+		Content: "project move", ContentLength: len("project move"),
+		Timestamp: startedAt,
+	}}))
+	require.NoError(t, local.UpsertProjectIdentityObservation(
+		ctx, export.ProjectIdentityObservation{
+			SessionID: sessionID, Project: sourceProject, Machine: duckPushMachine,
+			RootPath: root, WorktreeRootPath: root,
+			RemoteResolution: export.ProjectResolutionResolved,
+			ObservedAt:       time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC),
+		},
+	))
+
+	path := filepath.Join(t.TempDir(), "filtered-project-move.duckdb")
+	opts := SyncOptions{Projects: []string{targetProject}}
+	_, err := Push(ctx, path, local, duckPushMachine, opts, true, nil)
+	require.NoError(t, err)
+
+	_, err = local.CreateWorktreeProjectMapping(ctx, db.WorktreeProjectMapping{
+		Machine: duckPushMachine, PathPrefix: "/srv/custom-worktrees",
+		Layout: db.WorktreeMappingLayoutExplicit, Project: targetProject,
+		OriginalProject: sourceProject, Enabled: true,
+	})
+	require.NoError(t, err)
+	applied, err := local.ApplyWorktreeProjectMappings(ctx, duckPushMachine)
+	require.NoError(t, err)
+	require.Equal(t, 1, applied.UpdatedSessions)
+
+	_, err = Push(ctx, path, local, duckPushMachine, opts, false, nil)
+	require.NoError(t, err)
+	mirror, err := OpenReadOnly(path)
+	require.NoError(t, err)
+
+	var gotProject string
+	require.NoError(t, mirror.QueryRowContext(ctx,
+		`SELECT project FROM sessions WHERE id = ?`, sessionID,
+	).Scan(&gotProject))
+	assert.Equal(t, targetProject, gotProject)
+
+	var snapshotProject string
+	require.NoError(t, mirror.QueryRowContext(ctx, `
+		SELECT project FROM source_session_project_identity_snapshots
+		WHERE source_session_id = ?`, sessionID,
+	).Scan(&snapshotProject))
+	assert.Equal(t, sourceProject, snapshotProject,
+		"the immutable snapshot keeps its source label while scope follows the session")
+	require.NoError(t, mirror.Close())
+
+	require.NoError(t, local.DeleteSession(sessionID))
+	deleted, err := Push(ctx, path, local, duckPushMachine, opts, false, nil)
+	require.NoError(t, err)
+	assert.False(t, deleted.Diagnostics.Full)
+	mirror, err = OpenReadOnly(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mirror.Close()) })
+	assertDuckDBCountWhere(t, mirror,
+		"source_session_project_identity_snapshots",
+		"source_session_id = ?", sessionID, 0,
 	)
 }
 
@@ -1631,7 +1710,7 @@ func TestSyncPreservesAmbiguousIdentityAlongsideResolvedRemote(t *testing.T) {
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
-	_, err := syncer.syncProjectIdentityObservations(ctx, 0, true)
+	_, err := syncer.syncProjectIdentityObservations(ctx, 0, true, nil)
 	require.NoError(t, err)
 
 	got, err := NewStoreFromDB(syncer.DB()).BuildProjectIdentityMap(
@@ -1667,7 +1746,7 @@ func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
 		Projects: []string{"alpha"},
 	})
 	require.NoError(t, createSchema(ctx, filtered.DB()))
-	rev, err := filtered.syncProjectIdentityObservations(ctx, 0, false)
+	rev, err := filtered.syncProjectIdentityObservations(ctx, 0, false, nil)
 	require.NoError(t, err)
 	_, err = filtered.DB().ExecContext(ctx, `
 		UPDATE source_project_identity_observations
@@ -1684,7 +1763,7 @@ func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
 			ObservedAt:       time.Date(2026, 7, 11, 13, 0, 0, 0, time.UTC),
 		},
 	))
-	_, err = filtered.syncProjectIdentityObservations(ctx, rev, false)
+	_, err = filtered.syncProjectIdentityObservations(ctx, rev, false, nil)
 	require.NoError(t, err)
 	var alphaRemoteName string
 	require.NoError(t, filtered.DB().QueryRowContext(ctx, `
@@ -1696,7 +1775,7 @@ func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
 
 	unfiltered := newTestSync(t, target, local, SyncOptions{})
 	require.NoError(t, createSchema(ctx, unfiltered.DB()))
-	_, err = unfiltered.syncProjectIdentityObservations(ctx, 0, false)
+	_, err = unfiltered.syncProjectIdentityObservations(ctx, 0, false, nil)
 	require.NoError(t, err)
 	assertDuckDBCountWhere(t, unfiltered.DB(),
 		"source_session_project_identity_snapshots",
@@ -1740,7 +1819,7 @@ func TestIdentityPublicationUpdatesOnlyChangedRowsAndAppliesTombstones(
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
-	rev, err := syncer.syncProjectIdentityObservations(ctx, 0, false)
+	rev, err := syncer.syncProjectIdentityObservations(ctx, 0, false, nil)
 	require.NoError(t, err)
 	_, err = syncer.DB().ExecContext(ctx, `
 		UPDATE source_project_identity_observations
@@ -1768,7 +1847,7 @@ func TestIdentityPublicationUpdatesOnlyChangedRowsAndAppliesTombstones(
 			ObservedAt:       observedAt.Add(time.Hour),
 		},
 	))
-	rev, err = syncer.syncProjectIdentityObservations(ctx, rev, false)
+	rev, err = syncer.syncProjectIdentityObservations(ctx, rev, false, nil)
 	require.NoError(t, err)
 
 	var alphaRemoteName, betaRemoteName string
@@ -1793,7 +1872,7 @@ func TestIdentityPublicationUpdatesOnlyChangedRowsAndAppliesTombstones(
 	assert.Equal(t, 1, gammaRemotes)
 
 	require.NoError(t, local.DeleteSession("identity-alpha"))
-	_, err = syncer.syncProjectIdentityObservations(ctx, rev, false)
+	_, err = syncer.syncProjectIdentityObservations(ctx, rev, false, nil)
 	require.NoError(t, err)
 	assertDuckDBCountWhere(t, syncer.DB(),
 		"source_session_project_identity_snapshots",
@@ -2433,4 +2512,52 @@ func TestSyncResultDurationIsSet(t *testing.T) {
 	result, err := Push(ctx, path, local, "test-machine", SyncOptions{}, true, nil)
 	require.NoError(t, err)
 	assert.Greater(t, result.Duration, time.Duration(0))
+}
+
+// TestDuckPushWritesSessionProvenance verifies that every pushed session row
+// carries the local archive's stable id in source_archive_id: stamped by the
+// rebuild path on the first push, and restored by the incremental
+// session-replace path when a changed session is re-pushed.
+func TestDuckPushWritesSessionProvenance(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+
+	archiveID, err := local.GetArchiveID(ctx)
+	require.NoError(t, err)
+	require.NotEmpty(t, archiveID)
+
+	readProvenance := func() string {
+		t.Helper()
+		conn, err := Open(path)
+		require.NoError(t, err)
+		defer conn.Close()
+		var got string
+		require.NoError(t, conn.QueryRowContext(ctx,
+			`SELECT source_archive_id FROM sessions WHERE id = ?`, "sess-1",
+		).Scan(&got))
+		return got
+	}
+	assert.Equal(t, archiveID, readProvenance(),
+		"rebuild push must stamp source_archive_id")
+
+	probe, err := ProbeMirror(ctx, path)
+	require.NoError(t, err)
+	setSessionSignalsTo(t, local, "sess-1", probe.LastPushCutoff)
+	conn, err := Open(path)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx,
+		`UPDATE sessions
+		 SET source_archive_id = '', agentsview_push_fingerprint = NULL
+		 WHERE id = ?`, "sess-1")
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.False(t, res.Diagnostics.Full,
+		"second push must be incremental to exercise the session-replace path")
+	assert.Equal(t, archiveID, readProvenance(),
+		"incremental re-push must restore source_archive_id")
 }

@@ -41,16 +41,18 @@ func deleteProjectIdentityDelta(
 	for start := 0; start < len(snapshotKeys); start += projectIdentityDeleteBatchSize {
 		end := min(start+projectIdentityDeleteBatchSize, len(snapshotKeys))
 		args := []any{archiveID, databaseGeneration}
-		placeholders := make([]string, 0, end-start)
+		tuples := make([]string, 0, end-start)
 		for _, key := range snapshotKeys[start:end] {
-			args = append(args, key.SessionID)
-			placeholders = append(placeholders, fmt.Sprintf("$%d", len(args)))
+			base := len(args) + 1
+			tuples = append(tuples, fmt.Sprintf("($%d, $%d)", base, base+1))
+			args = append(args, key.SessionID, key.Project)
 		}
 		if _, err := q.ExecContext(ctx, `
 			DELETE FROM source_session_project_identity_snapshots
 			WHERE source_archive_id = $1
 			  AND source_database_generation = $2
-			  AND source_session_id IN (`+strings.Join(placeholders, ", ")+`)`,
+			  AND (source_session_id, project) IN (`+
+			strings.Join(tuples, ", ")+`)`,
 			args...,
 		); err != nil {
 			return fmt.Errorf("deleting pg session identity snapshot delta: %w", err)
@@ -59,39 +61,475 @@ func deleteProjectIdentityDelta(
 	return nil
 }
 
-func deleteProjectIdentityScope(
+func deleteProjectIdentityArchive(
 	ctx context.Context,
 	q pgProjectIdentityExecer,
 	archiveID string,
-	projects, excludeProjects []string,
 ) error {
-	args := []any{archiveID}
-	predicates := []string{"source_archive_id = $1"}
-	appendSet := func(column string, values []string, negate bool) {
-		if len(values) == 0 {
-			return
-		}
-		placeholders := make([]string, 0, len(values))
-		for _, value := range values {
-			args = append(args, value)
-			placeholders = append(placeholders, fmt.Sprintf("$%d", len(args)))
-		}
-		op := "IN"
-		if negate {
-			op = "NOT IN"
-		}
-		predicates = append(predicates,
-			column+" "+op+" ("+strings.Join(placeholders, ",")+")")
-	}
-	appendSet("project", projects, false)
-	appendSet("project", excludeProjects, true)
-	where := strings.Join(predicates, " AND ")
 	for _, table := range []string{
 		"source_project_identity_observations",
 		"source_session_project_identity_snapshots",
 	} {
-		if _, err := q.ExecContext(ctx, "DELETE FROM "+table+" WHERE "+where, args...); err != nil {
-			return fmt.Errorf("clearing pg %s publication scope: %w", table, err)
+		if _, err := q.ExecContext(ctx,
+			"DELETE FROM "+table+" WHERE source_archive_id = $1",
+			archiveID,
+		); err != nil {
+			return fmt.Errorf("clearing pg %s archive: %w", table, err)
+		}
+	}
+	return nil
+}
+
+func prepareFilteredProjectIdentityPublication(
+	ctx context.Context,
+	q pgProjectIdentityExecer,
+	archiveID, databaseGeneration, publicationScope string,
+	full, adoptLegacyScope bool,
+	projects, excludeProjects []string,
+	observationKeys []db.ProjectIdentityObservationKey,
+	snapshotKeys []db.SessionProjectIdentitySnapshotKey,
+	refreshSessionIDs []string,
+) error {
+	if full {
+		if adoptLegacyScope {
+			if err := adoptLegacyFilteredProjectIdentityScope(
+				ctx, q, archiveID, publicationScope,
+				projects, excludeProjects,
+			); err != nil {
+				return err
+			}
+		}
+		if err := releaseFilteredProjectIdentityFullOwnership(
+			ctx, q, archiveID, publicationScope,
+		); err != nil {
+			return err
+		}
+	} else {
+		if err := deleteFilteredProjectIdentityDeltaOwnership(
+			ctx, q, archiveID, databaseGeneration, publicationScope,
+			observationKeys, snapshotKeys,
+		); err != nil {
+			return err
+		}
+	}
+	if err := deleteFilteredSnapshotOwnershipBySessionID(
+		ctx, q, archiveID, publicationScope, refreshSessionIDs,
+	); err != nil {
+		return err
+	}
+	return nil
+}
+
+// adoptLegacyFilteredProjectIdentityScope assigns ownerless rows written by
+// the v2 publisher to the filter that previously managed them. The subsequent
+// full reconciliation removes stale rows before publishing the current scope;
+// a successful v3 cursor write prevents this bounded adoption from recurring.
+func adoptLegacyFilteredProjectIdentityScope(
+	ctx context.Context,
+	q pgProjectIdentityExecer,
+	archiveID, publicationScope string,
+	projects, excludeProjects []string,
+) error {
+	args := []any{archiveID, publicationScope}
+	values := projects
+	operator := "IN"
+	if len(values) == 0 {
+		values = excludeProjects
+		operator = "NOT IN"
+	}
+	placeholders := make([]string, 0, len(values))
+	for _, project := range values {
+		args = append(args, project)
+		placeholders = append(placeholders, fmt.Sprintf("$%d", len(args)))
+	}
+	projectPredicate := operator + " (" + strings.Join(placeholders, ", ") + ")"
+	if _, err := q.ExecContext(ctx, `
+		INSERT INTO source_project_identity_observation_scopes (
+			source_archive_id, project, machine, root_path, git_remote,
+			publication_scope
+		)
+		SELECT observation.source_archive_id, observation.project,
+			observation.machine, observation.root_path, observation.git_remote, $2
+		FROM source_project_identity_observations observation
+		WHERE observation.source_archive_id = $1
+		  AND observation.project `+projectPredicate+`
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM source_project_identity_observation_scopes owner
+			WHERE owner.source_archive_id = observation.source_archive_id
+			  AND owner.project = observation.project
+			  AND owner.machine = observation.machine
+			  AND owner.root_path = observation.root_path
+			  AND owner.git_remote = observation.git_remote
+		  )
+		ON CONFLICT DO NOTHING`, args...); err != nil {
+		return fmt.Errorf("adopting legacy pg identity observations: %w", err)
+	}
+
+	if _, err := q.ExecContext(ctx, `
+		INSERT INTO source_session_project_identity_snapshot_scopes (
+			source_archive_id, source_database_generation,
+			source_session_id, publication_scope
+		)
+		SELECT snapshot.source_archive_id, snapshot.source_database_generation,
+			snapshot.source_session_id, $2
+		FROM source_session_project_identity_snapshots snapshot
+		WHERE snapshot.source_archive_id = $1
+		  AND snapshot.project `+projectPredicate+`
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM source_session_project_identity_snapshot_scopes owner
+			WHERE owner.source_archive_id = snapshot.source_archive_id
+			  AND owner.source_database_generation =
+			      snapshot.source_database_generation
+			  AND owner.source_session_id = snapshot.source_session_id
+		  )
+		ON CONFLICT DO NOTHING`, args...); err != nil {
+		return fmt.Errorf("adopting legacy pg identity snapshots: %w", err)
+	}
+	return nil
+}
+
+func releaseFilteredProjectIdentityFullOwnership(
+	ctx context.Context,
+	q pgProjectIdentityExecer,
+	archiveID, publicationScope string,
+) error {
+	if _, err := q.ExecContext(ctx, `
+		DELETE FROM source_project_identity_observations observation
+		WHERE observation.source_archive_id = $1
+		  AND EXISTS (
+			SELECT 1
+			FROM source_project_identity_observation_scopes owner
+			WHERE owner.source_archive_id = observation.source_archive_id
+			  AND owner.project = observation.project
+			  AND owner.machine = observation.machine
+			  AND owner.root_path = observation.root_path
+			  AND owner.git_remote = observation.git_remote
+			  AND owner.publication_scope = $2
+		  )
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM source_project_identity_observation_scopes owner
+			WHERE owner.source_archive_id = observation.source_archive_id
+			  AND owner.project = observation.project
+			  AND owner.machine = observation.machine
+			  AND owner.root_path = observation.root_path
+			  AND owner.git_remote = observation.git_remote
+			  AND owner.publication_scope <> $2
+		  )`, archiveID, publicationScope); err != nil {
+		return fmt.Errorf(
+			"clearing exclusively owned filtered pg identity observations: %w",
+			err,
+		)
+	}
+	if _, err := q.ExecContext(ctx, `
+		DELETE FROM source_session_project_identity_snapshots snapshot
+		WHERE snapshot.source_archive_id = $1
+		  AND EXISTS (
+			SELECT 1
+			FROM source_session_project_identity_snapshot_scopes owner
+			WHERE owner.source_archive_id = snapshot.source_archive_id
+			  AND owner.source_database_generation =
+			      snapshot.source_database_generation
+			  AND owner.source_session_id = snapshot.source_session_id
+			  AND owner.publication_scope = $2
+		  )
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM source_session_project_identity_snapshot_scopes owner
+			WHERE owner.source_archive_id = snapshot.source_archive_id
+			  AND owner.source_database_generation =
+			      snapshot.source_database_generation
+			  AND owner.source_session_id = snapshot.source_session_id
+			  AND owner.publication_scope <> $2
+		  )`, archiveID, publicationScope); err != nil {
+		return fmt.Errorf(
+			"clearing exclusively owned filtered pg identity snapshots: %w", err,
+		)
+	}
+	for _, table := range []string{
+		"source_project_identity_observation_scopes",
+		"source_session_project_identity_snapshot_scopes",
+	} {
+		if _, err := q.ExecContext(ctx,
+			"DELETE FROM "+table+
+				" WHERE source_archive_id = $1 AND publication_scope = $2",
+			archiveID, publicationScope,
+		); err != nil {
+			return fmt.Errorf("clearing filtered pg %s scope: %w", table, err)
+		}
+	}
+	return nil
+}
+
+func deleteFilteredProjectIdentityDeltaOwnership(
+	ctx context.Context,
+	q pgProjectIdentityExecer,
+	archiveID, databaseGeneration, publicationScope string,
+	observationKeys []db.ProjectIdentityObservationKey,
+	snapshotKeys []db.SessionProjectIdentitySnapshotKey,
+) error {
+	for start := 0; start < len(observationKeys); start += projectIdentityDeleteBatchSize {
+		end := min(start+projectIdentityDeleteBatchSize, len(observationKeys))
+		args := []any{archiveID, publicationScope}
+		tuples := make([]string, 0, end-start)
+		for _, key := range observationKeys[start:end] {
+			base := len(args) + 1
+			tuples = append(tuples, fmt.Sprintf(
+				"($%d, $%d, $%d, $%d)", base, base+1, base+2, base+3,
+			))
+			args = append(args, key.Project, key.Machine, key.RootPath, key.GitRemote)
+		}
+		if _, err := q.ExecContext(ctx, `
+			DELETE FROM source_project_identity_observations observation
+			WHERE observation.source_archive_id = $1
+			  AND (observation.project, observation.machine,
+			       observation.root_path, observation.git_remote) IN (`+
+			strings.Join(tuples, ", ")+`)
+			  AND EXISTS (
+				SELECT 1
+				FROM source_project_identity_observation_scopes owner
+				WHERE owner.source_archive_id = observation.source_archive_id
+				  AND owner.project = observation.project
+				  AND owner.machine = observation.machine
+				  AND owner.root_path = observation.root_path
+				  AND owner.git_remote = observation.git_remote
+				  AND owner.publication_scope = $2
+			  )
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM source_project_identity_observation_scopes owner
+				WHERE owner.source_archive_id = observation.source_archive_id
+				  AND owner.project = observation.project
+				  AND owner.machine = observation.machine
+				  AND owner.root_path = observation.root_path
+				  AND owner.git_remote = observation.git_remote
+				  AND owner.publication_scope <> $2
+			  )`, args...); err != nil {
+			return fmt.Errorf(
+				"deleting exclusively owned filtered pg identity delta: %w", err,
+			)
+		}
+		if _, err := q.ExecContext(ctx, `
+			DELETE FROM source_project_identity_observation_scopes
+			WHERE source_archive_id = $1 AND publication_scope = $2
+			  AND (project, machine, root_path, git_remote) IN (`+
+			strings.Join(tuples, ", ")+`)`, args...); err != nil {
+			return fmt.Errorf(
+				"deleting filtered pg project identity ownership delta: %w", err)
+		}
+	}
+	for start := 0; start < len(snapshotKeys); start += projectIdentityDeleteBatchSize {
+		end := min(start+projectIdentityDeleteBatchSize, len(snapshotKeys))
+		args := []any{archiveID, databaseGeneration, publicationScope}
+		placeholders := make([]string, 0, end-start)
+		for _, key := range snapshotKeys[start:end] {
+			args = append(args, key.SessionID)
+			placeholders = append(
+				placeholders, fmt.Sprintf("$%d", len(args)))
+		}
+		if _, err := q.ExecContext(ctx, `
+			DELETE FROM source_session_project_identity_snapshots snapshot
+			WHERE snapshot.source_archive_id = $1
+			  AND snapshot.source_database_generation = $2
+			  AND snapshot.source_session_id IN (`+
+			strings.Join(placeholders, ", ")+`)
+			  AND EXISTS (
+				SELECT 1
+				FROM source_session_project_identity_snapshot_scopes owner
+				WHERE owner.source_archive_id = snapshot.source_archive_id
+				  AND owner.source_database_generation =
+				      snapshot.source_database_generation
+				  AND owner.source_session_id = snapshot.source_session_id
+				  AND owner.publication_scope = $3
+			  )
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM source_session_project_identity_snapshot_scopes owner
+				WHERE owner.source_archive_id = snapshot.source_archive_id
+				  AND owner.source_database_generation =
+				      snapshot.source_database_generation
+				  AND owner.source_session_id = snapshot.source_session_id
+				  AND owner.publication_scope <> $3
+			  )`, args...); err != nil {
+			return fmt.Errorf(
+				"deleting exclusively owned filtered pg snapshot delta: %w", err,
+			)
+		}
+		if _, err := q.ExecContext(ctx, `
+			DELETE FROM source_session_project_identity_snapshot_scopes
+			WHERE source_archive_id = $1
+			  AND source_database_generation = $2
+			  AND publication_scope = $3
+			  AND source_session_id IN (`+
+			strings.Join(placeholders, ", ")+`)`, args...); err != nil {
+			return fmt.Errorf(
+				"deleting filtered pg session identity ownership delta: %w", err)
+		}
+	}
+	return nil
+}
+
+func deleteFilteredSnapshotOwnershipBySessionID(
+	ctx context.Context,
+	q pgProjectIdentityExecer,
+	archiveID, publicationScope string,
+	sessionIDs []string,
+) error {
+	for start := 0; start < len(sessionIDs); start += projectIdentityDeleteBatchSize {
+		end := min(start+projectIdentityDeleteBatchSize, len(sessionIDs))
+		args := []any{archiveID, publicationScope}
+		placeholders := make([]string, 0, end-start)
+		for _, sessionID := range sessionIDs[start:end] {
+			args = append(args, sessionID)
+			placeholders = append(
+				placeholders, fmt.Sprintf("$%d", len(args)))
+		}
+		if _, err := q.ExecContext(ctx, `
+			DELETE FROM source_session_project_identity_snapshots snapshot
+			WHERE snapshot.source_archive_id = $1
+			  AND snapshot.source_session_id IN (`+
+			strings.Join(placeholders, ", ")+`)
+			  AND EXISTS (
+				SELECT 1
+				FROM source_session_project_identity_snapshot_scopes owner
+				WHERE owner.source_archive_id = snapshot.source_archive_id
+				  AND owner.source_database_generation =
+				      snapshot.source_database_generation
+				  AND owner.source_session_id = snapshot.source_session_id
+				  AND owner.publication_scope = $2
+			  )
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM source_session_project_identity_snapshot_scopes owner
+				WHERE owner.source_archive_id = snapshot.source_archive_id
+				  AND owner.source_database_generation =
+				      snapshot.source_database_generation
+				  AND owner.source_session_id = snapshot.source_session_id
+				  AND owner.publication_scope <> $2
+			  )`, args...); err != nil {
+			return fmt.Errorf(
+				"deleting exclusively owned filtered pg refreshed snapshots: %w",
+				err,
+			)
+		}
+		if _, err := q.ExecContext(ctx, `
+			DELETE FROM source_session_project_identity_snapshot_scopes
+			WHERE source_archive_id = $1 AND publication_scope = $2
+			  AND source_session_id IN (`+
+			strings.Join(placeholders, ", ")+`)`, args...); err != nil {
+			return fmt.Errorf(
+				"deleting filtered pg session identity refresh ownership: %w",
+				err,
+			)
+		}
+	}
+	return nil
+}
+
+func ownProjectIdentityObservations(
+	ctx context.Context,
+	tx *sql.Tx,
+	archiveID, publicationScope string,
+	observations []export.ProjectIdentityObservation,
+) error {
+	for start := 0; start < len(observations); start += projectIdentityDeleteBatchSize {
+		end := min(start+projectIdentityDeleteBatchSize, len(observations))
+		args := []any{archiveID, publicationScope}
+		tuples := make([]string, 0, end-start)
+		for _, observation := range observations[start:end] {
+			base := len(args) + 1
+			tuples = append(tuples, fmt.Sprintf(
+				"($%d, $%d, $%d, $%d)", base, base+1, base+2, base+3,
+			))
+			args = append(args,
+				observation.Project, observation.Machine,
+				observation.RootPath, observation.GitRemote,
+			)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			WITH keys(project, machine, root_path, git_remote) AS (
+				VALUES `+strings.Join(tuples, ", ")+`
+			)
+			INSERT INTO source_project_identity_observation_scopes (
+				source_archive_id, project, machine, root_path, git_remote,
+				publication_scope
+			)
+			SELECT $1, keys.project, keys.machine, keys.root_path,
+				keys.git_remote, $2
+			FROM keys
+			JOIN source_project_identity_observations observation
+			  ON observation.source_archive_id = $1
+			 AND observation.project = keys.project
+			 AND observation.machine = keys.machine
+			 AND observation.root_path = keys.root_path
+			 AND observation.git_remote = keys.git_remote
+			ON CONFLICT DO NOTHING`, args...); err != nil {
+			return fmt.Errorf("owning pg project identity observations: %w", err)
+		}
+	}
+	return nil
+}
+
+func ownSessionProjectIdentitySnapshots(
+	ctx context.Context,
+	tx *sql.Tx,
+	archiveID, databaseGeneration, publicationScope string,
+	snapshots []export.ProjectIdentityObservation,
+) error {
+	for start := 0; start < len(snapshots); start += projectIdentityDeleteBatchSize {
+		end := min(start+projectIdentityDeleteBatchSize, len(snapshots))
+		args := []any{archiveID, databaseGeneration, publicationScope}
+		placeholders := make([]string, 0, end-start)
+		for _, snapshot := range snapshots[start:end] {
+			args = append(args, snapshot.SessionID)
+			placeholders = append(
+				placeholders, fmt.Sprintf("($%d)", len(args)))
+		}
+		if _, err := tx.ExecContext(ctx, `
+			WITH keys(source_session_id) AS (
+				VALUES `+strings.Join(placeholders, ", ")+`
+			)
+			INSERT INTO source_session_project_identity_snapshot_scopes (
+				source_archive_id, source_database_generation,
+				source_session_id, publication_scope
+			)
+			SELECT $1, $2, keys.source_session_id, $3
+			FROM keys
+			JOIN source_session_project_identity_snapshots snapshot
+			  ON snapshot.source_archive_id = $1
+			 AND snapshot.source_database_generation = $2
+			 AND snapshot.source_session_id = keys.source_session_id
+			ON CONFLICT DO NOTHING`, args...); err != nil {
+			return fmt.Errorf("owning pg session identity snapshots: %w", err)
+		}
+	}
+	return nil
+}
+
+func deleteSessionProjectIdentitySnapshotsBySessionID(
+	ctx context.Context,
+	q pgProjectIdentityExecer,
+	archiveID string,
+	sessionIDs []string,
+) error {
+	for start := 0; start < len(sessionIDs); start += projectIdentityDeleteBatchSize {
+		end := min(start+projectIdentityDeleteBatchSize, len(sessionIDs))
+		args := []any{archiveID}
+		placeholders := make([]string, 0, end-start)
+		for _, sessionID := range sessionIDs[start:end] {
+			args = append(args, sessionID)
+			placeholders = append(placeholders, fmt.Sprintf("$%d", len(args)))
+		}
+		if _, err := q.ExecContext(ctx, `
+			DELETE FROM source_session_project_identity_snapshots
+			WHERE source_archive_id = $1
+			  AND source_session_id IN (`+
+			strings.Join(placeholders, ", ")+`)`, args...); err != nil {
+			return fmt.Errorf(
+				"deleting pg session identity snapshots by session id: %w", err,
+			)
 		}
 	}
 	return nil

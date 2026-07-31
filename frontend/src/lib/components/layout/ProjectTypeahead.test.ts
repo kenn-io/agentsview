@@ -61,4 +61,68 @@ describe("ProjectTypeahead", () => {
       screen.getByRole("option", { name: m.shared_all_projects() }).getAttribute("aria-selected"),
     ).toBe("false");
   });
+
+  it("can omit the all-projects option for a required selection", async () => {
+    component = mount(ProjectTypeahead, {
+      target: document.body,
+      props: {
+        projects,
+        value: "",
+        onselect: vi.fn(),
+        includeAll: false,
+      },
+    });
+
+    await fireEvent.click(screen.getByRole("button"));
+
+    expect(screen.queryByRole("option", { name: m.shared_all_projects() })).toBeNull();
+    expect(screen.getByRole("option", { name: "repo-a (2)" })).toBeTruthy();
+  });
+
+  it("commits a nonempty custom project alongside partial matches", async () => {
+    const onselect = vi.fn();
+    component = mount(ProjectTypeahead, {
+      target: document.body,
+      props: {
+        projects,
+        value: "",
+        onselect,
+        includeAll: false,
+        allowCustom: true,
+        customLabel: 'Use project "{query}"',
+      },
+    });
+
+    await fireEvent.click(screen.getByRole("button"));
+    const input = screen.getByRole("combobox");
+    await fireEvent.input(input, { target: { value: "repo" } });
+
+    expect(screen.getByRole("option", { name: "repo-a (2)" })).toBeTruthy();
+    const custom = screen.getByRole("option", { name: 'Use project "repo"' });
+    await fireEvent.mouseDown(custom);
+    expect(onselect).toHaveBeenCalledWith("repo");
+
+    await fireEvent.click(screen.getByRole("button"));
+    await fireEvent.input(screen.getByRole("combobox"), { target: { value: "   " } });
+    expect(screen.queryByRole("option", { name: 'Use project ""' })).toBeNull();
+    expect(screen.queryByRole("option", { name: /^Use project/ })).toBeNull();
+  });
+
+  it("reports query edits to callers that need to invalidate derived state", async () => {
+    const onquery = vi.fn();
+    component = mount(ProjectTypeahead, {
+      target: document.body,
+      props: {
+        projects,
+        value: "repo-a",
+        onselect: vi.fn(),
+        onquery,
+      },
+    });
+
+    await fireEvent.click(screen.getByRole("button"));
+    await fireEvent.input(screen.getByRole("combobox"), { target: { value: "repo-b" } });
+
+    expect(onquery).toHaveBeenLastCalledWith("repo-b");
+  });
 });

@@ -672,11 +672,11 @@ func TestPushSessionCarriesDeletionCauseInStableParameterOrder(t *testing.T) {
 		"marker", nil,
 	)
 	require.NoError(t, err)
-	require.Len(t, state.upsertArgs, 63)
+	require.Len(t, state.upsertArgs, 66)
 	assert.IsType(t, time.Time{}, state.upsertArgs[12].Value)
 	assert.IsType(t, time.Time{}, state.upsertArgs[13].Value)
 	assert.Equal(t, cause, state.upsertArgs[14].Value)
-	assert.Equal(t, "[]", state.upsertArgs[62].Value)
+	assert.Equal(t, "[]", state.upsertArgs[65].Value)
 
 	query := strings.ToLower(strings.Join(strings.Fields(state.upsertQuery), " "))
 	assert.Contains(t, query,
@@ -695,8 +695,8 @@ func TestSessionPushFingerprintIncludesDeletionCause(t *testing.T) {
 	withCause.DeletionCause = &cause
 
 	assert.NotEqual(t,
-		sessionPushFingerprint(base, base.Machine, "", "", ""),
-		sessionPushFingerprint(withCause, withCause.Machine, "", "", ""),
+		sessionPushFingerprint(base, base.Machine, "", "", "", ""),
+		sessionPushFingerprint(withCause, withCause.Machine, "", "", "", ""),
 	)
 }
 
@@ -1060,7 +1060,7 @@ func TestSessionPushFingerprintDiffers(t *testing.T) {
 		CreatedAt:        "2026-03-11T12:00:00Z",
 	}
 
-	fp1 := sessionPushFingerprint(base, base.Machine, "", "", "")
+	fp1 := sessionPushFingerprint(base, base.Machine, "", "", "", "")
 
 	tests := []struct {
 		name   string
@@ -1170,13 +1170,13 @@ func TestSessionPushFingerprintDiffers(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			modified := tc.modify(base)
-			fp2 := sessionPushFingerprint(modified, modified.Machine, "", "", "")
+			fp2 := sessionPushFingerprint(modified, modified.Machine, "", "", "", "")
 			require.NotEqual(t, fp1, fp2,
 				"fingerprint should differ after %s", tc.name)
 		})
 	}
 
-	assert.Equal(t, fp1, sessionPushFingerprint(base, base.Machine, "", "", ""),
+	assert.Equal(t, fp1, sessionPushFingerprint(base, base.Machine, "", "", "", ""),
 		"identical sessions should produce identical fingerprints")
 }
 
@@ -1196,24 +1196,24 @@ func TestSessionPushFingerprintIgnoresVolatileStatFields(t *testing.T) {
 		LocalModifiedAt:  &localModifiedAt,
 		CreatedAt:        "2026-03-11T12:00:00Z",
 	}
-	baseFP := sessionPushFingerprint(base, base.Machine, "", "", "deps")
+	baseFP := sessionPushFingerprint(base, base.Machine, "", "", "", "deps")
 
 	statOnlyMtime := int64(1700000001000000000)
 	statOnlyModifiedAt := "2026-03-11T12:00:01.000Z"
 	statOnly := base
 	statOnly.FileMtime = &statOnlyMtime
 	statOnly.LocalModifiedAt = &statOnlyModifiedAt
-	assert.Equal(t, baseFP, sessionPushFingerprint(statOnly, statOnly.Machine, "", "", "deps"),
+	assert.Equal(t, baseFP, sessionPushFingerprint(statOnly, statOnly.Machine, "", "", "", "deps"),
 		"file stat churn should not change push candidacy")
 
 	contentChanged := statOnly
 	contentChanged.MessageCount++
 	assert.NotEqual(t, baseFP,
-		sessionPushFingerprint(contentChanged, contentChanged.Machine, "", "", "deps"),
+		sessionPushFingerprint(contentChanged, contentChanged.Machine, "", "", "", "deps"),
 		"content changes should still change push candidacy")
 
 	assert.NotEqual(t, baseFP,
-		sessionPushFingerprint(statOnly, statOnly.Machine, "", "", "changed-deps"),
+		sessionPushFingerprint(statOnly, statOnly.Machine, "", "", "", "changed-deps"),
 		"dependent row changes should still change push candidacy")
 }
 
@@ -1252,7 +1252,7 @@ func TestLocalSessionDependencyPushFingerprintTracksMessageEditsWithoutFileHash(
 		CreatedAt:        "2026-03-11T12:00:00Z",
 	}
 	fpBefore := sessionPushFingerprint(
-		session, session.Machine, "", "", depsBefore,
+		session, session.Machine, "", "", "", depsBefore,
 	)
 
 	require.NoError(t, localDB.ReplaceSessionMessages(sessID, []db.Message{{
@@ -1266,7 +1266,7 @@ func TestLocalSessionDependencyPushFingerprintTracksMessageEditsWithoutFileHash(
 	)
 	require.NoError(t, err)
 	fpAfter := sessionPushFingerprint(
-		session, session.Machine, "", "", depsAfter,
+		session, session.Machine, "", "", "", depsAfter,
 	)
 
 	assert.NotEqual(t, depsBefore, depsAfter)
@@ -1287,10 +1287,25 @@ func TestSessionPushFingerprintIncludesUsageEventFingerprint(
 		CreatedAt:        "2026-03-11T12:00:00Z",
 	}
 
-	withoutUsage := sessionPushFingerprint(base, base.Machine, "", "", "")
-	withUsage := sessionPushFingerprint(base, base.Machine, "usage-fp", "", "")
+	withoutUsage := sessionPushFingerprint(base, base.Machine, "", "", "", "")
+	withUsage := sessionPushFingerprint(base, base.Machine, "", "usage-fp", "", "")
 	assert.NotEqual(t, withoutUsage, withUsage,
 		"usage event fingerprint should affect session fingerprint")
+}
+
+func TestSessionPushFingerprintTracksSourceArchiveID(t *testing.T) {
+	session := db.Session{
+		ID: "sess-001", Project: "proj", Machine: "laptop", Agent: "claude",
+		CreatedAt: "2026-03-11T12:00:00Z",
+	}
+
+	archiveA := sessionPushFingerprint(
+		session, session.Machine, "archive-a", "", "", "",
+	)
+	archiveB := sessionPushFingerprint(
+		session, session.Machine, "archive-b", "", "", "",
+	)
+	assert.NotEqual(t, archiveA, archiveB)
 }
 
 func TestSessionPushFingerprintTracksResolvedMachine(t *testing.T) {
@@ -1302,9 +1317,9 @@ func TestSessionPushFingerprintTracksResolvedMachine(t *testing.T) {
 		CreatedAt: "2026-03-11T12:00:00Z",
 	}
 	fpA := sessionPushFingerprint(
-		sentinel, pushedSessionMachine(sentinel, "host-a"), "", "", "")
+		sentinel, pushedSessionMachine(sentinel, "host-a"), "", "", "", "")
 	fpB := sessionPushFingerprint(
-		sentinel, pushedSessionMachine(sentinel, "host-b"), "", "", "")
+		sentinel, pushedSessionMachine(sentinel, "host-b"), "", "", "", "")
 	assert.NotEqual(t, fpA, fpB,
 		"sentinel session fingerprint must change with the fallback machine")
 
@@ -1316,9 +1331,9 @@ func TestSessionPushFingerprintTracksResolvedMachine(t *testing.T) {
 		CreatedAt: "2026-03-11T12:00:00Z",
 	}
 	fp1 := sessionPushFingerprint(
-		real, pushedSessionMachine(real, "host-a"), "", "", "")
+		real, pushedSessionMachine(real, "host-a"), "", "", "", "")
 	fp2 := sessionPushFingerprint(
-		real, pushedSessionMachine(real, "host-b"), "", "", "")
+		real, pushedSessionMachine(real, "host-b"), "", "", "", "")
 	assert.Equal(t, fp1, fp2,
 		"a session with a real machine ignores the fallback")
 }
@@ -1376,8 +1391,8 @@ func TestSessionPushFingerprintNoFieldCollisions(
 		CreatedAt: "2026-03-11T12:00:00Z",
 	}
 	assert.NotEqual(t,
-		sessionPushFingerprint(s1, s1.Machine, "", "", ""),
-		sessionPushFingerprint(s2, s2.Machine, "", "", ""),
+		sessionPushFingerprint(s1, s1.Machine, "", "", "", ""),
+		sessionPushFingerprint(s2, s2.Machine, "", "", "", ""),
 		"length-prefixed fingerprints should not collide")
 }
 
@@ -1662,7 +1677,7 @@ func TestFinalizePushStateMergesPriorFingerprints(
 	require.NoError(t, finalizePushState(
 		store, cutoff, cycle2Sessions,
 		priorFingerprints,
-		map[string]string{"sess-002": sessionPushFingerprint(cycle2Sessions[0], cycle2Sessions[0].Machine, "", "", "")},
+		map[string]string{"sess-002": sessionPushFingerprint(cycle2Sessions[0], cycle2Sessions[0].Machine, "", "", "", "")},
 	))
 
 	raw := store.values[lastPushBoundaryStateKey]

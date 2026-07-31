@@ -4,9 +4,9 @@ import { clickNavTab } from "./helpers/nav";
 
 // Test-fixture assumptions: project-alpha has 2 sessions,
 // project-beta has 3, project-duration has 1 (the duration UX
-// showcase), project-edits has 1 (the recent-edits fixture),
-// totalling 10 sessions across all projects.
-const TOTAL_SESSIONS = 10;
+// showcase), project-edits has 1 (the recent-edits fixture), and the
+// project-reclassification fixture has 2, totalling 12 sessions.
+const TOTAL_SESSIONS = 12;
 const ALPHA_SESSIONS = 2;
 const BETA_SESSIONS = 3;
 const SLOW_SESSION_RESPONSE_MS = 5_500;

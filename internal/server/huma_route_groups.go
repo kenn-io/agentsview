@@ -10,6 +10,7 @@ func (s *Server) registerTypedAPIRoutes() {
 	s.registerOpenersRoutes()
 	s.registerAnalyticsRoutes()
 	s.registerActivityRoutes()
+	s.registerDataRoutes()
 	s.registerRecentEditsRoutes()
 	s.registerTrendsRoutes()
 	s.registerUsageRoutes()
