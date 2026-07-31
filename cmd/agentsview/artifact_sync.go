@@ -207,6 +207,9 @@ func artifactSyncForbiddenRoots(appCfg config.Config) []string {
 		if strings.TrimSpace(root) == "" {
 			return
 		}
+		if isRemoteSourceRoot(root) {
+			return
+		}
 		root = filepath.Clean(root)
 		if _, ok := seen[root]; ok {
 			return

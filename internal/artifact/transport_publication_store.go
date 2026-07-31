@@ -2,23 +2,32 @@ package artifact
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"strings"
 	"sync"
 
 	"go.kenn.io/agentsview/internal/db"
 )
 
 type artifactPublicationAuthority interface {
-	artifactPublicationStreamer
 	GetArtifactCheckpointHead(
 		context.Context,
 		string,
 	) (db.ArtifactCheckpointHead, bool, error)
+	ArtifactPublicationPage(
+		context.Context,
+		string,
+		string,
+		int,
+	) ([]db.ArtifactPublication, int64, bool, error)
 }
+
+var errArtifactPublicationPageBoundary = errors.New(
+	"artifact publication page boundary",
+)
 
 // authoritativePublicationStore exposes only the current closure selected by
 // the local publication ledger. The embedded store remains available for pull,
@@ -26,9 +35,9 @@ type artifactPublicationAuthority interface {
 type authoritativePublicationStore struct {
 	ArtifactStore
 
-	origin         string
-	head           db.ArtifactCheckpointHead
-	manifestHashes []string
+	authority artifactPublicationAuthority
+	origin    string
+	head      db.ArtifactCheckpointHead
 }
 
 func newAuthoritativePublicationStore(
@@ -36,7 +45,7 @@ func newAuthoritativePublicationStore(
 	authority artifactPublicationAuthority,
 	store ArtifactStore,
 	origin string,
-) (_ *authoritativePublicationStore, retErr error) {
+) (*authoritativePublicationStore, error) {
 	if authority == nil {
 		return nil, errors.New("artifact publication authority is required")
 	}
@@ -59,92 +68,31 @@ func newAuthoritativePublicationStore(
 			ErrArtifactConflict,
 		)
 	}
-	mapSpool, mapDigest, revision, err := spoolArtifactPublicationMap(
-		ctx,
-		authority,
-		origin,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		retErr = errors.Join(retErr, closeAndRemoveExportSpool(mapSpool))
-	}()
-	if revision != head.PublicationRevision ||
-		mapDigest != head.SessionMapSHA256 {
+	if head.Sequence <= 0 || head.PublicationRevision < 0 {
 		return nil, fmt.Errorf(
-			"%w: authoritative publication snapshot differs from checkpoint head",
-			ErrArtifactConflict,
-		)
-	}
-	info, err := mapSpool.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("stating authoritative publication map: %w", err)
-	}
-	if info.Size() > checkpointDecodedLimit {
-		return nil, fmt.Errorf(
-			"%w: authoritative publication map exceeds checkpoint limit",
+			"%w: authoritative checkpoint head is invalid",
 			ErrArtifactInvalid,
 		)
 	}
-	manifestHashes, err := decodePublicationManifestHashes(
-		mapSpool,
+	if err := validateHashHex(head.SessionMapSHA256); err != nil {
+		return nil, fmt.Errorf("authoritative session map identity: %w", err)
+	}
+	if _, err := NewIdentity(head.CheckpointSHA256, head.CheckpointSize); err != nil {
+		return nil, fmt.Errorf("authoritative checkpoint identity: %w", err)
+	}
+	if _, err := NewRef(
 		origin,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("decoding authoritative publication map: %w", err)
+		KindCheckpoints,
+		fmt.Sprintf("cp-%010d.json", head.Sequence),
+	); err != nil {
+		return nil, err
 	}
 	return &authoritativePublicationStore{
-		ArtifactStore:  store,
-		origin:         origin,
-		head:           head,
-		manifestHashes: manifestHashes,
+		ArtifactStore: store,
+		authority:     authority,
+		origin:        origin,
+		head:          head,
 	}, nil
-}
-
-func decodePublicationManifestHashes(
-	reader io.Reader,
-	origin string,
-) ([]string, error) {
-	decoder := json.NewDecoder(reader)
-	token, err := decoder.Token()
-	if err != nil || token != json.Delim('{') {
-		return nil, errors.New("artifact publication map is not an object")
-	}
-	hashes := make([]string, 0, 64)
-	prefix := origin + "~"
-	for decoder.More() {
-		token, err := decoder.Token()
-		if err != nil {
-			return nil, err
-		}
-		gid, ok := token.(string)
-		if !ok || len(gid) <= len(prefix) || gid[:len(prefix)] != prefix {
-			return nil, errors.New("artifact publication identity is invalid")
-		}
-		var hash string
-		if err := decoder.Decode(&hash); err != nil {
-			return nil, err
-		}
-		if err := validateHashHex(hash); err != nil {
-			return nil, err
-		}
-		hashes = append(hashes, hash)
-	}
-	token, err = decoder.Token()
-	if err != nil || token != json.Delim('}') {
-		return nil, errors.New("artifact publication map is incomplete")
-	}
-	if token, err = decoder.Token(); !errors.Is(err, io.EOF) {
-		if err != nil {
-			return nil, err
-		}
-		return nil, fmt.Errorf(
-			"artifact publication map has trailing token %v",
-			token,
-		)
-	}
-	return hashes, nil
 }
 
 func (s *authoritativePublicationStore) Entries(
@@ -186,23 +134,23 @@ func (s *authoritativePublicationStore) Entries(
 			}},
 		}, nil
 	case KindManifests:
-		refs := make([]authorizedPublicationRef, len(s.manifestHashes))
-		for index, hash := range s.manifestHashes {
-			ref, err := NewRef(origin, KindManifests, hash+".json")
-			if err != nil {
-				return nil, err
-			}
-			refs[index] = authorizedPublicationRef{ref: ref}
-		}
-		return &publicationRefIterator{
+		return &publicationManifestIterator{
 			store: s.ArtifactStore,
-			refs:  refs,
+			publications: publicationPageCursor{
+				authority:        s.authority,
+				origin:           origin,
+				expectedRevision: s.head.PublicationRevision,
+			},
 		}, nil
 	case KindSegments:
 		return &publicationSegmentIterator{
-			store:          s.ArtifactStore,
-			origin:         origin,
-			manifestHashes: s.manifestHashes,
+			store:  s.ArtifactStore,
+			origin: origin,
+			publications: publicationPageCursor{
+				authority:        s.authority,
+				origin:           origin,
+				expectedRevision: s.head.PublicationRevision,
+			},
 		}, nil
 	default:
 		return nil, fmt.Errorf(
@@ -229,9 +177,12 @@ func (s *authoritativePublicationStore) folderTransportPage(
 ) ([]Entry, folderPushCursor, bool, error) {
 	entries := make([]Entry, 0, min(maxObjects, 64))
 	var logicalBytes int64
-	cache := folderTransportPageCache{manifestIndex: -1}
+	cache := folderTransportPageCache{}
 	for maxObjects <= 0 || len(entries) < maxObjects {
 		entry, next, done, err := s.nextFolderTransportEntry(ctx, cursor, &cache)
+		if errors.Is(err, errArtifactPublicationPageBoundary) {
+			return entries, next, true, nil
+		}
 		if err != nil {
 			return nil, cursor, false, err
 		}
@@ -245,7 +196,10 @@ func (s *authoritativePublicationStore) folderTransportPage(
 		logicalBytes += entry.Identity.Size
 		cursor = next
 	}
-	_, _, done, err := s.nextFolderTransportEntry(ctx, cursor, &cache)
+	_, next, done, err := s.nextFolderTransportEntry(ctx, cursor, &cache)
+	if errors.Is(err, errArtifactPublicationPageBoundary) {
+		return entries, next, true, nil
+	}
 	if err != nil {
 		return nil, cursor, false, err
 	}
@@ -253,8 +207,14 @@ func (s *authoritativePublicationStore) folderTransportPage(
 }
 
 type folderTransportPageCache struct {
-	manifestIndex int
-	segments      []string
+	kindIndex        int
+	loaded           bool
+	publications     []db.ArtifactPublication
+	publicationIndex int
+	more             bool
+	pageBoundary     bool
+	manifestSession  string
+	segments         []string
 }
 
 func (s *authoritativePublicationStore) nextFolderTransportEntry(
@@ -265,29 +225,38 @@ func (s *authoritativePublicationStore) nextFolderTransportEntry(
 	for {
 		switch cursor.KindIndex {
 		case 0:
-			if cursor.ManifestIndex >= len(s.manifestHashes) {
+			publication, found, err := s.currentFolderPublication(
+				ctx,
+				cursor,
+				cache,
+			)
+			if err != nil {
+				return Entry{}, cursor, false, err
+			}
+			if !found {
 				cursor.KindIndex = 1
 				cursor.Offset = 0
-				cursor.ManifestIndex = 0
+				cursor.PublicationSessionID = ""
 				cursor.SegmentIndex = 0
 				continue
 			}
-			if cache.manifestIndex != cursor.ManifestIndex {
+			if cache.manifestSession != publication.SessionID {
 				segments, err := authorizedManifestSegments(
 					ctx,
 					s.ArtifactStore,
 					s.origin,
-					s.manifestHashes[cursor.ManifestIndex],
+					publication.ManifestHash,
 				)
 				if err != nil {
 					return Entry{}, cursor, false, err
 				}
-				cache.manifestIndex = cursor.ManifestIndex
+				cache.manifestSession = publication.SessionID
 				cache.segments = segments
 			}
 			if cursor.SegmentIndex >= len(cache.segments) {
-				cursor.ManifestIndex++
+				cursor.PublicationSessionID = publication.SessionID
 				cursor.SegmentIndex = 0
+				cache.advancePublication()
 				continue
 			}
 			ref, err := NewRef(
@@ -310,15 +279,24 @@ func (s *authoritativePublicationStore) nextFolderTransportEntry(
 			next.SegmentIndex++
 			return entry, next, false, nil
 		case 1:
-			if cursor.Offset >= len(s.manifestHashes) {
+			publication, found, err := s.currentFolderPublication(
+				ctx,
+				cursor,
+				cache,
+			)
+			if err != nil {
+				return Entry{}, cursor, false, err
+			}
+			if !found {
 				cursor.KindIndex = 2
 				cursor.Offset = 0
+				cursor.PublicationSessionID = ""
 				continue
 			}
 			ref, err := NewRef(
 				s.origin,
 				KindManifests,
-				s.manifestHashes[cursor.Offset]+".json",
+				publication.ManifestHash+".json",
 			)
 			if err != nil {
 				return Entry{}, cursor, false, err
@@ -332,7 +310,8 @@ func (s *authoritativePublicationStore) nextFolderTransportEntry(
 				return Entry{}, cursor, false, err
 			}
 			next := cursor
-			next.Offset++
+			next.PublicationSessionID = publication.SessionID
+			cache.advancePublication()
 			return entry, next, false, nil
 		case 2:
 			if cursor.Offset > 0 {
@@ -368,6 +347,65 @@ func (s *authoritativePublicationStore) nextFolderTransportEntry(
 		default:
 			return Entry{}, cursor, true, nil
 		}
+	}
+}
+
+func (s *authoritativePublicationStore) currentFolderPublication(
+	ctx context.Context,
+	cursor folderPushCursor,
+	cache *folderTransportPageCache,
+) (db.ArtifactPublication, bool, error) {
+	if !cache.loaded || cache.kindIndex != cursor.KindIndex {
+		if cache.pageBoundary && cache.kindIndex == cursor.KindIndex {
+			cache.pageBoundary = false
+			return db.ArtifactPublication{}, false,
+				errArtifactPublicationPageBoundary
+		}
+		page, revision, more, err := s.authority.ArtifactPublicationPage(
+			ctx,
+			s.origin,
+			cursor.PublicationSessionID,
+			transportStorePageSize,
+		)
+		if err != nil {
+			return db.ArtifactPublication{}, false, err
+		}
+		if err := validateArtifactPublicationPage(
+			page,
+			revision,
+			s.head.PublicationRevision,
+			s.origin,
+			cursor.PublicationSessionID,
+		); err != nil {
+			return db.ArtifactPublication{}, false, err
+		}
+		if len(page) == 0 && more {
+			return db.ArtifactPublication{}, false, fmt.Errorf(
+				"%w: empty artifact publication page has continuation",
+				ErrArtifactConflict,
+			)
+		}
+		cache.kindIndex = cursor.KindIndex
+		cache.loaded = true
+		cache.publications = page
+		cache.publicationIndex = 0
+		cache.more = more
+		cache.manifestSession = ""
+		cache.segments = nil
+	}
+	if cache.publicationIndex >= len(cache.publications) {
+		return db.ArtifactPublication{}, false, nil
+	}
+	return cache.publications[cache.publicationIndex], true, nil
+}
+
+func (c *folderTransportPageCache) advancePublication() {
+	c.publicationIndex++
+	c.manifestSession = ""
+	c.segments = nil
+	if c.publicationIndex == len(c.publications) && c.more {
+		c.loaded = false
+		c.pageBoundary = true
 	}
 }
 
@@ -432,16 +470,145 @@ func (i *publicationRefIterator) Close() error {
 	return nil
 }
 
+type publicationPageCursor struct {
+	authority        artifactPublicationAuthority
+	origin           string
+	expectedRevision int64
+	afterSessionID   string
+	page             []db.ArtifactPublication
+	index            int
+	more             bool
+	pageBoundary     bool
+	exhausted        bool
+}
+
+func (c *publicationPageCursor) current(
+	ctx context.Context,
+) (db.ArtifactPublication, bool, error) {
+	if c.index < len(c.page) {
+		return c.page[c.index], true, nil
+	}
+	if c.exhausted {
+		return db.ArtifactPublication{}, false, nil
+	}
+	if c.pageBoundary {
+		c.pageBoundary = false
+		return db.ArtifactPublication{}, false,
+			errArtifactPublicationPageBoundary
+	}
+	page, revision, more, err := c.authority.ArtifactPublicationPage(
+		ctx,
+		c.origin,
+		c.afterSessionID,
+		transportStorePageSize,
+	)
+	if err != nil {
+		return db.ArtifactPublication{}, false, err
+	}
+	if err := validateArtifactPublicationPage(
+		page,
+		revision,
+		c.expectedRevision,
+		c.origin,
+		c.afterSessionID,
+	); err != nil {
+		return db.ArtifactPublication{}, false, err
+	}
+	if len(page) == 0 {
+		if more {
+			return db.ArtifactPublication{}, false, fmt.Errorf(
+				"%w: empty artifact publication page has continuation",
+				ErrArtifactConflict,
+			)
+		}
+		c.exhausted = true
+		return db.ArtifactPublication{}, false, nil
+	}
+	c.page = page
+	c.index = 0
+	c.more = more
+	return c.page[0], true, nil
+}
+
+func (c *publicationPageCursor) advance() {
+	c.afterSessionID = c.page[c.index].SessionID
+	c.index++
+	if c.index == len(c.page) && !c.more {
+		c.exhausted = true
+	} else if c.index == len(c.page) {
+		c.pageBoundary = true
+	}
+}
+
+type publicationManifestIterator struct {
+	mu sync.Mutex
+
+	store        ArtifactStore
+	publications publicationPageCursor
+	closed       bool
+}
+
+func (i *publicationManifestIterator) Next(
+	ctx context.Context,
+	limit int,
+) ([]Entry, error) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if err := validatePublicationIteratorNext(ctx, limit, i.closed); err != nil {
+		return nil, err
+	}
+	entries := make([]Entry, 0, min(limit, 64))
+	for len(entries) < limit {
+		publication, found, err := i.publications.current(ctx)
+		if errors.Is(err, errArtifactPublicationPageBoundary) {
+			return entries, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return entries, io.EOF
+		}
+		ref, err := NewRef(
+			i.publications.origin,
+			KindManifests,
+			publication.ManifestHash+".json",
+		)
+		if err != nil {
+			return nil, err
+		}
+		entry, err := statAuthorizedPublication(
+			ctx,
+			i.store,
+			authorizedPublicationRef{ref: ref},
+		)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+		i.publications.advance()
+	}
+	return entries, nil
+}
+
+func (i *publicationManifestIterator) Close() error {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.closed = true
+	i.publications.page = nil
+	return nil
+}
+
 type publicationSegmentIterator struct {
 	mu sync.Mutex
 
-	store          ArtifactStore
-	origin         string
-	manifestHashes []string
-	manifestIndex  int
-	segmentHashes  []string
-	segmentIndex   int
-	closed         bool
+	store           ArtifactStore
+	origin          string
+	publications    publicationPageCursor
+	manifestSession string
+	segmentHashes   []string
+	segmentIndex    int
+	closed          bool
 }
 
 func (i *publicationSegmentIterator) Next(
@@ -476,21 +643,40 @@ func (i *publicationSegmentIterator) Next(
 			i.segmentIndex++
 			continue
 		}
-		if i.manifestIndex == len(i.manifestHashes) {
-			return entries, io.EOF
+		if i.manifestSession != "" {
+			i.publications.advance()
+			i.manifestSession = ""
+			i.segmentHashes = nil
+			i.segmentIndex = 0
 		}
-		segments, err := authorizedManifestSegments(
-			ctx,
-			i.store,
-			i.origin,
-			i.manifestHashes[i.manifestIndex],
-		)
+		publication, found, err := i.publications.current(ctx)
+		if errors.Is(err, errArtifactPublicationPageBoundary) {
+			return entries, nil
+		}
 		if err != nil {
 			return nil, err
 		}
-		i.manifestIndex++
-		i.segmentHashes = segments
-		i.segmentIndex = 0
+		if !found {
+			return entries, io.EOF
+		}
+		if i.manifestSession != publication.SessionID {
+			segments, err := authorizedManifestSegments(
+				ctx,
+				i.store,
+				i.origin,
+				publication.ManifestHash,
+			)
+			if err != nil {
+				return nil, err
+			}
+			i.manifestSession = publication.SessionID
+			i.segmentHashes = segments
+			i.segmentIndex = 0
+		}
+		if len(i.segmentHashes) == 0 {
+			i.publications.advance()
+			i.manifestSession = ""
+		}
 	}
 	return entries, nil
 }
@@ -499,7 +685,40 @@ func (i *publicationSegmentIterator) Close() error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.closed = true
+	i.publications.page = nil
 	i.segmentHashes = nil
+	return nil
+}
+
+func validateArtifactPublicationPage(
+	publications []db.ArtifactPublication,
+	revision int64,
+	expectedRevision int64,
+	origin string,
+	afterSessionID string,
+) error {
+	if revision != expectedRevision {
+		return fmt.Errorf(
+			"%w: authoritative publication revision changed",
+			ErrArtifactConflict,
+		)
+	}
+	previous := afterSessionID
+	for _, publication := range publications {
+		if publication.Origin != origin ||
+			publication.SessionID == "" ||
+			strings.Contains(publication.SessionID, "~") ||
+			publication.SessionID <= previous {
+			return fmt.Errorf(
+				"%w: authoritative publication page is invalid",
+				ErrArtifactConflict,
+			)
+		}
+		if err := validateHashHex(publication.ManifestHash); err != nil {
+			return fmt.Errorf("authoritative publication manifest: %w", err)
+		}
+		previous = publication.SessionID
+	}
 	return nil
 }
 

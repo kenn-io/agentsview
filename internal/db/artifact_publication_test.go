@@ -1043,6 +1043,55 @@ func TestArtifactPublicationRowsStreamInCanonicalOrder(t *testing.T) {
 	assert.Equal(t, []string{"alpha=hash-a", "zulu=hash-z"}, got)
 }
 
+func TestArtifactPublicationPageUsesCanonicalKeysetCursor(t *testing.T) {
+	database := testDB(t)
+	ctx := t.Context()
+	seedArtifactOrigin(t, database)
+	for _, id := range []string{"zulu", "bravo", "alpha"} {
+		require.NoError(t, database.UpsertSession(Session{
+			ID: id, Project: "project", Machine: "local", Agent: "claude",
+		}))
+	}
+	claimed, err := database.PendingArtifactExports(ctx, 10)
+	require.NoError(t, err)
+	claimGeneration := make(map[string]int64, len(claimed))
+	for _, item := range claimed {
+		claimGeneration[item.SessionID] = item.Generation
+	}
+	revision, changed, err := database.ApplyArtifactPublicationChanges(
+		ctx,
+		"desktop-a1b2c3",
+		[]ArtifactPublicationChange{
+			{SessionID: "zulu", Generation: claimGeneration["zulu"], ManifestHash: "hash-z", SourceFingerprint: "source-z"},
+			{SessionID: "bravo", Generation: claimGeneration["bravo"], ManifestHash: "hash-b", SourceFingerprint: "source-b"},
+			{SessionID: "alpha", Generation: claimGeneration["alpha"], ManifestHash: "hash-a", SourceFingerprint: "source-a"},
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	first, firstRevision, more, err := database.ArtifactPublicationPage(
+		ctx, "desktop-a1b2c3", "", 2,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, revision, firstRevision)
+	assert.True(t, more)
+	require.Len(t, first, 2)
+	assert.Equal(t, []string{"alpha", "bravo"}, []string{
+		first[0].SessionID,
+		first[1].SessionID,
+	})
+
+	second, secondRevision, more, err := database.ArtifactPublicationPage(
+		ctx, "desktop-a1b2c3", first[1].SessionID, 2,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, revision, secondRevision)
+	assert.False(t, more)
+	require.Len(t, second, 1)
+	assert.Equal(t, "zulu", second[0].SessionID)
+}
+
 func TestArtifactCheckpointHeadRejectsRegressionWithoutAcknowledgingWork(t *testing.T) {
 	database := testDB(t)
 	ctx := t.Context()

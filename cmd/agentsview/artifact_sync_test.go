@@ -61,8 +61,12 @@ func TestRunArtifactFolderSyncPassesOnlyDistinctProtectedRoots(t *testing.T) {
 	appCfg := config.Config{
 		DataDir: dataDir,
 		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentClaude: {providerA, filepath.Join(providerA, ".")},
-			parser.AgentCodex:  {providerB},
+			parser.AgentClaude: {
+				providerA,
+				filepath.Join(providerA, "."),
+				"s3://archive-bucket/claude",
+			},
+			parser.AgentCodex:  {providerB, "s3://archive-bucket/codex"},
 			parser.AgentGemini: {dataDir},
 		},
 	}

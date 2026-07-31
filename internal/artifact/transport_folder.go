@@ -56,12 +56,12 @@ type folderTransport struct {
 }
 
 type folderPushCursor struct {
-	Generation    string `json:"generation,omitempty"`
-	Origin        string `json:"origin,omitempty"`
-	KindIndex     int    `json:"kind_index,omitempty"`
-	Offset        int    `json:"offset,omitempty"`
-	ManifestIndex int    `json:"manifest_index,omitempty"`
-	SegmentIndex  int    `json:"segment_index,omitempty"`
+	Generation           string `json:"generation,omitempty"`
+	Origin               string `json:"origin,omitempty"`
+	KindIndex            int    `json:"kind_index,omitempty"`
+	Offset               int    `json:"offset,omitempty"`
+	SegmentIndex         int    `json:"segment_index,omitempty"`
+	PublicationSessionID string `json:"publication_session_id,omitempty"`
 }
 
 // OpenFolderTransport opens or initializes a marked artifact exchange target.
@@ -549,7 +549,6 @@ func validateFolderTransportState(state folderTransportPersistedState) error {
 	if state.PullSequence < 0 ||
 		push.KindIndex < 0 ||
 		push.Offset < 0 ||
-		push.ManifestIndex < 0 ||
 		push.SegmentIndex < 0 {
 		return errors.New("decoding artifact folder continuation state: negative cursor")
 	}
