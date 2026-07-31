@@ -18,7 +18,12 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
+type artifactPublicationStreamer interface {
+	StreamArtifactPublications(context.Context, string, func(db.ArtifactPublication) error) (int64, error)
+}
+
 type artifactExportStore interface {
+	artifactPublicationStreamer
 	ListOwnedSessionIDsForExport(context.Context) ([]string, error)
 	CountPendingArtifactExports(context.Context) (int, error)
 	PendingArtifactExports(context.Context, int) ([]db.ArtifactExportQueueItem, error)
@@ -31,7 +36,6 @@ type artifactExportStore interface {
 	FinalizeArtifactExports(context.Context, []db.ArtifactExportOutcome) error
 	GetArtifactCheckpointHead(context.Context, string) (db.ArtifactCheckpointHead, bool, error)
 	ArtifactLocalMachineName(context.Context) (string, error)
-	StreamArtifactPublications(context.Context, string, func(db.ArtifactPublication) error) (int64, error)
 	RecordArtifactCheckpointHeadOutcomes(
 		context.Context, db.ArtifactCheckpointHead, []db.ArtifactExportOutcome,
 	) error
@@ -740,7 +744,7 @@ func exportMessageSegmentsToStore(
 
 func spoolArtifactPublicationMap(
 	ctx context.Context,
-	database artifactExportStore,
+	database artifactPublicationStreamer,
 	origin string,
 ) (_ *os.File, _ string, _ int64, retErr error) {
 	spool, err := os.CreateTemp("", "agentsview-artifact-map-*")

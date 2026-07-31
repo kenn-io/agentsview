@@ -119,7 +119,9 @@ func TestArtifactSyncTwoNodeFolderRoundTripAndReplay(t *testing.T) {
 	assert.Equal(t, "updated response", updatedMessages[1].Content)
 }
 
-func TestArtifactSyncDoesNotRepublishPeerArtifactsAcrossTargets(t *testing.T) {
+func TestArtifactSyncDoesNotIngestOrRepublishSpoofedLocalOrigin(
+	t *testing.T,
+) {
 	t.Parallel()
 
 	targetA := t.TempDir()
@@ -127,39 +129,87 @@ func TestArtifactSyncDoesNotRepublishPeerArtifactsAcrossTargets(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, transportA.Close())
 
-	peerBody := []byte("{\"content\":\"private peer session\"}\n")
-	peerRef := testContentRef(
+	localOrigin := "local-d4e5f6"
+	spoofedBody := []byte("{\"content\":\"spoofed local session\"}\n")
+	spoofedRef := testContentRef(
 		t,
-		"peer-a1b2c3",
+		localOrigin,
 		KindSegments,
-		peerBody,
+		spoofedBody,
 		".ndjson",
 	)
-	writeFolderWire(t, targetA, peerRef, peerBody)
+	writeFolderWire(t, targetA, spoofedRef, spoofedBody)
 
 	database := testDB(t)
 	repository, err := OpenRepository(t.Context(), t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, repository.Close()) })
-	opts := SyncOptions{Origin: "local-d4e5f6"}
+	opts := SyncOptions{Origin: localOrigin}
 
 	opts.Target = targetA
 	_, err = SyncWithRepository(t.Context(), database, repository, opts)
 	require.NoError(t, err)
-	assertArtifactBody(t, repository.Content(), peerRef, peerBody)
+	_, err = repository.Content().Stat(t.Context(), spoofedRef)
+	assert.ErrorIs(t, err, ErrArtifactNotFound)
 
 	targetB := t.TempDir()
 	opts.Target = targetB
 	_, err = SyncWithRepository(t.Context(), database, repository, opts)
 	require.NoError(t, err)
 
-	peerWire, err := ToWireRef(peerRef)
+	spoofedWire, err := ToWireRef(spoofedRef)
 	require.NoError(t, err)
 	assert.NoFileExists(t, filepath.Join(
 		targetB,
-		peerWire.Origin,
-		string(peerWire.Kind),
-		peerWire.Name,
+		spoofedWire.Origin,
+		string(spoofedWire.Kind),
+		spoofedWire.Name,
+	))
+}
+
+func TestArtifactSyncDoesNotPublishUnrecordedLocalOriginObjects(t *testing.T) {
+	t.Parallel()
+
+	origin := "local-a1b2c3"
+	database := testDB(t)
+	seedSession(t, database, "owned", "alpha")
+	repository, err := OpenRepository(t.Context(), t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, repository.Close()) })
+
+	unrecordedBody := []byte("{\"content\":\"unrecorded local object\"}\n")
+	unrecordedRef := testContentRef(
+		t,
+		origin,
+		KindSegments,
+		unrecordedBody,
+		".ndjson",
+	)
+	createTestStoreArtifact(
+		t,
+		repository.Content(),
+		unrecordedRef,
+		unrecordedBody,
+	)
+
+	target := t.TempDir()
+	result, err := SyncWithRepository(
+		t.Context(),
+		database,
+		repository,
+		SyncOptions{Target: target, Origin: origin},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.ExportedSessions)
+	assert.Positive(t, result.PublishedArtifacts)
+	unrecordedWire, err := ToWireRef(unrecordedRef)
+	require.NoError(t, err)
+	assert.NoFileExists(t, filepath.Join(
+		target,
+		unrecordedWire.Origin,
+		string(unrecordedWire.Kind),
+		unrecordedWire.Name,
 	))
 }
 

@@ -28,6 +28,7 @@ var folderExchangeKinds = [...]Kind{
 func (t *folderTransport) pullLocked(
 	ctx context.Context,
 	store ArtifactStore,
+	publishOrigin string,
 ) (ExchangeResult, error) {
 	var result ExchangeResult
 	err := t.visitFolderDirectory(
@@ -38,6 +39,9 @@ func (t *folderTransport) pullLocked(
 			if entry.Name() == folderMarkerName ||
 				entry.Name() == folderExchangeLockName ||
 				strings.HasPrefix(entry.Name(), folderMarkerTempPrefix) {
+				return nil
+			}
+			if entry.Name() == publishOrigin {
 				return nil
 			}
 			return t.pullRootEntryLocked(ctx, store, entry, &result)

@@ -130,7 +130,16 @@ func SyncWithRepository(
 		origin,
 	)
 	coordinated.record = coordinator.RecordChanged
-	exchanged, err := transport.Exchange(ctx, coordinated, origin)
+	publications, err := newAuthoritativePublicationStore(
+		ctx,
+		database,
+		coordinated,
+		origin,
+	)
+	if err != nil {
+		return result, err
+	}
+	exchanged, err := transport.Exchange(ctx, publications, origin)
 	if err != nil {
 		return result, err
 	}

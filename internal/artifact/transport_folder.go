@@ -141,7 +141,7 @@ func (t *folderTransport) Exchange(
 	if err := t.prepareLocked(); err != nil {
 		return ExchangeResult{}, err
 	}
-	result, err = t.pullLocked(ctx, store)
+	result, err = t.pullLocked(ctx, store, publishOrigin)
 	if err != nil {
 		return result, err
 	}

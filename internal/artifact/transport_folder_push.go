@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"strings"
 	"sync"
 )
 
@@ -46,6 +47,13 @@ func (t *folderTransport) pushOriginLocked(
 	}
 	defer func() { retErr = errors.Join(retErr, originRoot.Close()) }()
 	for _, kind := range folderExchangeKinds {
+		if err := t.removeAbandonedPublishTempsLocked(
+			ctx,
+			originRoot,
+			kind,
+		); err != nil {
+			return published, err
+		}
 		iterator, err := store.Entries(ctx, origin, kind)
 		if err != nil {
 			return published, err
@@ -65,6 +73,35 @@ func (t *folderTransport) pushOriginLocked(
 		}
 	}
 	return published, nil
+}
+
+func (t *folderTransport) removeAbandonedPublishTempsLocked(
+	ctx context.Context,
+	originRoot *os.Root,
+	kind Kind,
+) (retErr error) {
+	kindRoot, err := openOptionalFolderSubroot(
+		originRoot,
+		string(kind),
+		"kind",
+	)
+	if err != nil || kindRoot == nil {
+		return err
+	}
+	defer func() {
+		retErr = errors.Join(retErr, kindRoot.Close())
+	}()
+	return t.visitFolderDirectory(
+		ctx,
+		kindRoot,
+		".",
+		func(entry os.DirEntry) error {
+			if strings.HasPrefix(entry.Name(), folderPublishTempPrefix) {
+				return removeFolderFile(kindRoot, entry.Name())
+			}
+			return nil
+		},
+	)
 }
 
 func (t *folderTransport) pushKindLocked(
