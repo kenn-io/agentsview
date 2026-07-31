@@ -13,12 +13,16 @@ import (
 
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/server"
+	agentsync "go.kenn.io/agentsview/internal/sync"
 )
 
 var errUnwatchedPollStopped = errors.New("unwatched poll coordinator stopped")
 
 type unwatchedPollSyncer interface {
-	ReconcileProviderRoots(context.Context, parser.AgentType, []string) error
+	// ReconcileProviderRootsGrouped runs one bounded pass per provider group
+	// while sharing a single archive-sized epilogue across the batch; the
+	// coordinator issues exactly one grouped call per poll pass.
+	ReconcileProviderRootsGrouped(context.Context, []agentsync.ProviderRootsGroup) error
 }
 
 type unwatchedPollAdd struct {
@@ -398,10 +402,11 @@ func unwatchedPollRoots(owned map[string]struct{}) []string {
 	return roots
 }
 
-// pollUnwatchedScopesOnce calls ReconcileProviderRoots once per agent group.
-// Every available group receives exactly one attempt regardless of whether an
-// earlier group errored; failures are joined and returned together.
-// At most one reconcile call is in flight at a time.
+// pollUnwatchedScopesOnce issues one grouped reconcile call covering every
+// agent group, in agent order. The engine attempts every group even when an
+// earlier one errors and shares one archive-sized epilogue (subagent linking,
+// skip-cache persistence) across the batch, so per-pass database work does not
+// multiply with the number of providers holding obligations.
 func pollUnwatchedScopesOnce(
 	ctx context.Context,
 	engine unwatchedPollSyncer,
@@ -417,12 +422,11 @@ func pollUnwatchedScopesOnce(
 	slices.SortFunc(agents, func(a, b parser.AgentType) int {
 		return strings.Compare(string(a), string(b))
 	})
-	var errs []error
+	grouped := make([]agentsync.ProviderRootsGroup, 0, len(agents))
 	for _, agent := range agents {
-		roots := groups[agent]
-		if err := engine.ReconcileProviderRoots(ctx, agent, roots); err != nil {
-			errs = append(errs, err)
-		}
+		grouped = append(grouped, agentsync.ProviderRootsGroup{
+			Agent: agent, Roots: groups[agent],
+		})
 	}
-	return errors.Join(errs...)
+	return engine.ReconcileProviderRootsGrouped(ctx, grouped)
 }

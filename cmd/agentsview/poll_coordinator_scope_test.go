@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/parser"
+	agentsync "go.kenn.io/agentsview/internal/sync"
 )
 
 // recordingProviderPollSyncer records ReconcileProviderRoots calls.
@@ -51,6 +53,12 @@ func (s *recordingProviderPollSyncer) ReconcileProviderRoots(
 	return err
 }
 
+func (s *recordingProviderPollSyncer) ReconcileProviderRootsGrouped(
+	ctx context.Context, groups []agentsync.ProviderRootsGroup,
+) error {
+	return reconcileGroupsSequentially(ctx, groups, s.ReconcileProviderRoots)
+}
+
 func (s *recordingProviderPollSyncer) snapshot() []providerPollCall {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -62,6 +70,79 @@ func (s *recordingProviderPollSyncer) snapshot() []providerPollCall {
 		}
 	}
 	return out
+}
+
+// groupedCountingPollSyncer records each grouped reconcile call verbatim.
+type groupedCountingPollSyncer struct {
+	mu    sync.Mutex
+	calls [][]agentsync.ProviderRootsGroup
+	wake  chan struct{}
+}
+
+func (s *groupedCountingPollSyncer) ReconcileProviderRootsGrouped(
+	_ context.Context, groups []agentsync.ProviderRootsGroup,
+) error {
+	copied := make([]agentsync.ProviderRootsGroup, len(groups))
+	for i, group := range groups {
+		copied[i] = agentsync.ProviderRootsGroup{
+			Agent: group.Agent,
+			Roots: append([]string(nil), group.Roots...),
+		}
+	}
+	s.mu.Lock()
+	s.calls = append(s.calls, copied)
+	s.mu.Unlock()
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+func (s *groupedCountingPollSyncer) snapshot() [][]agentsync.ProviderRootsGroup {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([][]agentsync.ProviderRootsGroup(nil), s.calls...)
+}
+
+// TestUnwatchedPollIssuesOneGroupedReconcilePerPass is the cardinality
+// regression for the shared epilogue: a poll pass must hand every provider
+// group to the engine in a single grouped call, so the engine's archive-sized
+// per-pass work (skip-cache persistence, global subagent linking) stays
+// constant as the number of providers holding obligations grows.
+func TestUnwatchedPollIssuesOneGroupedReconcilePerPass(t *testing.T) {
+	for _, providerCount := range []int{2, 8} {
+		t.Run(fmt.Sprintf("providers=%d", providerCount), func(t *testing.T) {
+			parent := t.TempDir()
+			syncer := &groupedCountingPollSyncer{wake: make(chan struct{}, 1)}
+			coordinator := newUnwatchedPollCoordinatorWithTicks(
+				t.Context(), syncer, make(chan time.Time), func() {},
+				func(run func()) { run() }, nil,
+				time.Now, time.After,
+			)
+			t.Cleanup(coordinator.Stop)
+
+			for i := range providerCount {
+				root := requireExistingPollRoot(t, parent, fmt.Sprintf("root-%d", i))
+				agent := parser.AgentType(fmt.Sprintf("agent-%d", i))
+				require.NoError(t, coordinator.AddObligation(pollingObligation{
+					Key:    fmt.Sprintf("degraded:%s:%s", agent, root),
+					Scopes: []pollingScope{{Agent: agent, Root: root}},
+					Probe:  root,
+				}))
+			}
+
+			coordinator.requestPoll()
+			requirePollWithin(t, syncer.wake, time.Second)
+
+			calls := syncer.snapshot()
+			require.Len(t, calls, 1,
+				"a pass must issue exactly one grouped reconcile call, "+
+					"independent of provider count")
+			assert.Len(t, calls[0], providerCount,
+				"the single grouped call must cover every provider's group")
+		})
+	}
 }
 
 // TestUnwatchedPollDoesNotDragUnrelatedProvidersThroughOneProvidersGap is the
@@ -279,6 +360,12 @@ func (s *manualProviderPollSyncer) ReconcileProviderRoots(
 	ctx context.Context, agent parser.AgentType, roots []string,
 ) error {
 	return s.fn(ctx, agent, roots)
+}
+
+func (s *manualProviderPollSyncer) ReconcileProviderRootsGrouped(
+	ctx context.Context, groups []agentsync.ProviderRootsGroup,
+) error {
+	return reconcileGroupsSequentially(ctx, groups, s.ReconcileProviderRoots)
 }
 
 // TestUnwatchedPollAttemptsEveryProviderAfterOneFails asserts that when the

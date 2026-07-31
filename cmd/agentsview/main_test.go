@@ -536,6 +536,12 @@ func (f *fakeUnwatchedPollSyncer) ReconcileProviderRoots(
 	return nil
 }
 
+func (f *fakeUnwatchedPollSyncer) ReconcileProviderRootsGrouped(
+	ctx context.Context, groups []agentsync.ProviderRootsGroup,
+) error {
+	return reconcileGroupsSequentially(ctx, groups, f.ReconcileProviderRoots)
+}
+
 func TestPollUnwatchedScopesOnceUsesScopedAuthoritativeReconciliation(t *testing.T) {
 	fake := &fakeUnwatchedPollSyncer{}
 	roots := []string{"/tmp/claude", "/tmp/codex"}

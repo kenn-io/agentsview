@@ -43,6 +43,15 @@ var errSessionPreserved = errors.New("session preserved")
 type reconciliationMetricsContextKey struct{}
 type reconciliationBaselineContextKey struct{}
 type deferGlobalLinkContextKey struct{}
+type deferPassEpilogueContextKey struct{}
+
+// passEpilogueDeferred reports whether a grouped caller owns the pass
+// epilogue — global subagent linking and skip-cache persistence — so a
+// scoped reconciliation must not repeat that archive-sized work itself.
+func passEpilogueDeferred(ctx context.Context) bool {
+	deferred, _ := ctx.Value(deferPassEpilogueContextKey{}).(bool)
+	return deferred
+}
 
 type reconciliationBaselineTracker struct {
 	sources     map[db.SessionSourcePath]struct{}
@@ -3174,6 +3183,61 @@ func (e *Engine) ReconcileProviderRoots(
 	return err
 }
 
+// ProviderRootsGroup pairs one provider with the roots of its bounded
+// scheduled pass. An empty Agent runs the unscoped local reconciliation path.
+type ProviderRootsGroup struct {
+	Agent parser.AgentType
+	Roots []string
+}
+
+// ReconcileProviderRootsGrouped runs ReconcileProviderRoots for every group
+// and shares one pass epilogue — global subagent linking and skip-cache
+// persistence — across the whole batch, so a multi-provider poll performs
+// that archive-sized work once instead of once per provider. Every group is
+// attempted even when an earlier one fails; per-group failures are wrapped
+// with the provider and joined.
+//
+// Linking runs when any group committed its page writes (a clean pass or one
+// reporting only provider discovery failures), matching the per-pass rule.
+// The skip cache persists when any group completed cleanly, mirroring the
+// per-pass retErr == nil condition.
+func (e *Engine) ReconcileProviderRootsGrouped(
+	ctx context.Context, groups []ProviderRootsGroup,
+) error {
+	deferredCtx := context.WithValue(ctx, deferPassEpilogueContextKey{}, true)
+	var errs []error
+	linkEligible := false
+	persistEligible := false
+	for _, group := range groups {
+		err := e.ReconcileProviderRoots(deferredCtx, group.Agent, group.Roots)
+		if err == nil {
+			linkEligible = true
+			persistEligible = true
+			continue
+		}
+		var incomplete *incompleteReconciliationError
+		if errors.As(err, &incomplete) {
+			linkEligible = true
+		}
+		agent := string(group.Agent)
+		if agent == "" {
+			agent = "unscoped"
+		}
+		errs = append(errs, fmt.Errorf("reconcile %s roots: %w", agent, err))
+	}
+	if linkEligible {
+		if err := e.linkSubagentSessions(ctx); err != nil {
+			errs = append(errs, fmt.Errorf(
+				"link subagent sessions after grouped reconciliation: %w", err,
+			))
+		}
+	}
+	if persistEligible {
+		e.persistSkipCache()
+	}
+	return errors.Join(errs...)
+}
+
 func (e *Engine) reconcileScopedWatchRoots(
 	ctx context.Context, agent parser.AgentType, roots []string, full, force bool,
 ) (SyncStats, int, error) {
@@ -3401,7 +3465,12 @@ func (e *Engine) reconcileWatchRootsStreamed(
 	// Page writes committed cleanly when the paging loop finished without an
 	// error or a failed write; provider discovery failures are layered on
 	// below and must not suppress work that only depends on committed writes.
-	if retErr == nil && stats.Failed == 0 && !stats.Aborted {
+	// A grouped caller (passEpilogueDeferred) runs linking once after every
+	// group instead; tombstoning below then proceeds without the linking
+	// gate, which is safe because linking is idempotent and retried on the
+	// caller's next pass.
+	if retErr == nil && stats.Failed == 0 && !stats.Aborted &&
+		!passEpilogueDeferred(ctx) {
 		// Batch-level linking was deferred to this global pass, so run it
 		// whenever the committed page writes succeeded — including partial
 		// provider failures. Sessions from healthy providers are already in
@@ -3448,7 +3517,9 @@ func (e *Engine) reconcileWatchRootsStreamed(
 		)
 	}
 	if retErr == nil {
-		e.persistSkipCache()
+		if !passEpilogueDeferred(ctx) {
+			e.persistSkipCache()
+		}
 		e.mu.Lock()
 		e.lastSync = time.Now()
 		e.lastSyncStats = stats

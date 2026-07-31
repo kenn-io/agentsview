@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +19,24 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	agentsync "go.kenn.io/agentsview/internal/sync"
 )
+
+// reconcileGroupsSequentially adapts a per-group fake to the grouped syncer
+// interface, mirroring the engine contract pinned by
+// TestReconcileProviderRootsGrouped*: every group is attempted in order and
+// failures are joined.
+func reconcileGroupsSequentially(
+	ctx context.Context,
+	groups []agentsync.ProviderRootsGroup,
+	reconcile func(context.Context, parser.AgentType, []string) error,
+) error {
+	var errs []error
+	for _, group := range groups {
+		if err := reconcile(ctx, group.Agent, group.Roots); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
 
 type recordingUnwatchedPollSyncer struct {
 	mu           sync.Mutex
@@ -54,6 +73,12 @@ func (s *cancelBlockingUnwatchedPollSyncer) ReconcileProviderRoots(
 	return ctx.Err()
 }
 
+func (s *cancelBlockingUnwatchedPollSyncer) ReconcileProviderRootsGrouped(
+	ctx context.Context, groups []agentsync.ProviderRootsGroup,
+) error {
+	return reconcileGroupsSequentially(ctx, groups, s.ReconcileProviderRoots)
+}
+
 func (s *cancelBlockingUnwatchedPollSyncer) callCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -77,6 +102,12 @@ func (s *blockingUnwatchedPollSyncer) ReconcileProviderRoots(
 	return nil
 }
 
+func (s *blockingUnwatchedPollSyncer) ReconcileProviderRootsGrouped(
+	ctx context.Context, groups []agentsync.ProviderRootsGroup,
+) error {
+	return reconcileGroupsSequentially(ctx, groups, s.ReconcileProviderRoots)
+}
+
 func (s *blockingUnwatchedPollSyncer) snapshot() ([][]string, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -98,6 +129,12 @@ func (s *recordingUnwatchedPollSyncer) ReconcileProviderRoots(
 	default:
 	}
 	return s.reconcileErr
+}
+
+func (s *recordingUnwatchedPollSyncer) ReconcileProviderRootsGrouped(
+	ctx context.Context, groups []agentsync.ProviderRootsGroup,
+) error {
+	return reconcileGroupsSequentially(ctx, groups, s.ReconcileProviderRoots)
 }
 
 func (s *recordingUnwatchedPollSyncer) snapshot() [][]string {
