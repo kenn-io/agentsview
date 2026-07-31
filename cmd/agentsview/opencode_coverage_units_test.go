@@ -58,10 +58,13 @@ func TestOpenCodeSQLiteRootSurvivesExhaustedRecursiveBudget(t *testing.T) {
 		parser.AgentOpenCode: {openCodeDir},
 	}}
 
-	roots, unwatchedDirs, symlinkGatedDirs := collectWatchRoots(cfg)
+	roots, unwatchedDirs, symlinkGatedDirs, persistentDirAgents :=
+		collectWatchRoots(cfg)
 	results := registerCollectedWatchRoots(t, roots, 0)
 	unwatchedDirs = accountRegisteredWatchRoots(unwatchedDirs, roots, results)
-	obligations := watchPollingObligations(roots, results, unwatchedDirs)
+	obligations := watchPollingObligations(
+		roots, results, unwatchedDirs, persistentDirAgents,
+	)
 	obligations = append(
 		obligations, symlinkPollingObligations(symlinkGatedDirs)...,
 	)
@@ -69,29 +72,33 @@ func TestOpenCodeSQLiteRootSurvivesExhaustedRecursiveBudget(t *testing.T) {
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 2)}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
 		t.Context(), syncer, make(chan time.Time), func() {},
-		func(run func()) { run() }, nil,
+		func(run func()) { run() }, nil, time.Now,
+		func(d time.Duration) <-chan time.Time {
+			ch := make(chan time.Time, 1)
+			ch <- time.Time{}
+			return ch
+		},
 	)
 	t.Cleanup(coordinator.Stop)
 	for _, obligation := range obligations {
-		require.NoError(t, coordinator.AddObligation(pollingObligation{
-			Key:   obligation.Key,
-			Roots: obligation.Roots,
-			Probe: obligation.Probe,
-		}))
+		require.NoError(t,
+			coordinator.AddObligation(syncObligationToPoller(obligation)))
 	}
 	// The sentinel keeps one pollable root installed so the poll pass is
 	// observable even when the OpenCode root correctly stays out of it.
 	require.NoError(t, coordinator.AddObligation(pollingObligation{
-		Key: "sentinel", Roots: []string{sentinel},
+		Key: "sentinel", Scopes: []pollingScope{{Root: sentinel}},
 	}))
 
 	coordinator.requestPoll()
 	requirePollWithin(t, syncer.wake, time.Second)
 	calls := syncer.snapshot()
-	require.Len(t, calls, 1)
-	assert.NotContains(t, calls[0], filepath.Clean(openCodeDir),
-		"a budget-starved SQLite root must not reach the archive poller")
-	assert.Contains(t, calls[0], sentinel)
+	require.NotEmpty(t, calls)
+	for _, call := range calls {
+		assert.NotContains(t, call, filepath.Clean(openCodeDir),
+			"a budget-starved SQLite root must not reach the archive poller")
+	}
+	assert.Contains(t, slices.Concat(calls...), sentinel)
 }
 
 // TestOpenCodeContainerUnitIsBudgetExempt pins the registration mechanism in
@@ -107,7 +114,7 @@ func TestOpenCodeContainerUnitIsBudgetExempt(t *testing.T) {
 		parser.AgentClaude:   {claudeDir},
 	}}
 
-	roots, _, _ := collectWatchRoots(cfg)
+	roots, _, _, _ := collectWatchRoots(cfg)
 	results := registerCollectedWatchRoots(t, roots, 0)
 
 	openCodeIdx := slices.IndexFunc(roots, func(root watchRoot) bool {
@@ -153,19 +160,17 @@ func TestOpenCodeSQLiteRootPollableUnderWatcherUnavailableFallback(
 		parser.AgentOpenCode: {openCodeDir},
 	}}
 
-	roots, unwatchedDirs, _ := collectWatchRoots(cfg)
-	obligations := watchPollingObligations(roots, nil, unwatchedDirs)
+	roots, unwatchedDirs, _, persistentDirAgents := collectWatchRoots(cfg)
+	obligations := watchPollingObligations(
+		roots, nil, unwatchedDirs, persistentDirAgents,
+	)
 
 	gates := make([]pollingObligation, 0, len(obligations))
 	for _, obligation := range obligations {
-		gates = append(gates, pollingObligation{
-			Key:   obligation.Key,
-			Roots: obligation.Roots,
-			Probe: obligation.Probe,
-		})
+		gates = append(gates, syncObligationToPoller(obligation))
 	}
 	assert.Contains(t,
-		availableUnwatchedPollRoots(gates), filepath.Clean(openCodeDir),
+		availableUnwatchedPollRootsFlat(gates), filepath.Clean(openCodeDir),
 		"a pure-SQLite root must stay pollable when no watcher exists")
 }
 
@@ -183,7 +188,7 @@ func TestOpenCodeSymlinkedStorageSubtreeKeepsExistingGate(t *testing.T) {
 		parser.AgentOpenCode: {root},
 	}}
 
-	roots, unwatchedDirs, symlinkGatedDirs := collectWatchRoots(cfg)
+	roots, unwatchedDirs, symlinkGatedDirs, _ := collectWatchRoots(cfg)
 
 	container, ok := findCollectedWatchRoot(roots, root)
 	require.True(t, ok, "container unit must register natively")
@@ -192,8 +197,10 @@ func TestOpenCodeSymlinkedStorageSubtreeKeepsExistingGate(t *testing.T) {
 	_, storageInPlan := findCollectedWatchRoot(roots, storageRoot)
 	assert.False(t, storageInPlan,
 		"a symlinked recursive root never joins the watcher plan")
-	assert.Equal(t, map[string][]string{
-		filepath.Clean(storageRoot): {filepath.Clean(root)},
+	assert.Equal(t, map[string][]watchScope{
+		filepath.Clean(storageRoot): {
+			{agent: parser.AgentOpenCode, syncDir: filepath.Clean(root)},
+		},
 	}, symlinkGatedDirs,
 		"the symlinked storage subtree keeps the polling.symlinkRoots gate")
 	assert.Contains(t, unwatchedDirs, filepath.Clean(root))
@@ -209,7 +216,8 @@ func TestOpenCodeModeNoneRootProducesZeroObligationsAtZeroBudget(t *testing.T) {
 		parser.AgentOpenCode: {root},
 	}}
 
-	roots, unwatchedDirs, symlinkGatedDirs := collectWatchRoots(cfg)
+	roots, unwatchedDirs, symlinkGatedDirs, persistentDirAgents :=
+		collectWatchRoots(cfg)
 	require.Len(t, roots, 1)
 	assert.False(t, roots[0].recursive)
 	results := registerCollectedWatchRoots(t, roots, 0)
@@ -217,7 +225,9 @@ func TestOpenCodeModeNoneRootProducesZeroObligationsAtZeroBudget(t *testing.T) {
 	assert.Equal(t, 1, results[0].Watched)
 
 	unwatchedDirs = accountRegisteredWatchRoots(unwatchedDirs, roots, results)
-	obligations := watchPollingObligations(roots, results, unwatchedDirs)
+	obligations := watchPollingObligations(
+		roots, results, unwatchedDirs, persistentDirAgents,
+	)
 	obligations = append(
 		obligations, symlinkPollingObligations(symlinkGatedDirs)...,
 	)
