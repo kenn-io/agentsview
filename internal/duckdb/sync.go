@@ -245,10 +245,14 @@ func Push(
 	if err != nil {
 		return PushResult{}, fmt.Errorf("reading local archive database id: %w", err)
 	}
+	localArchiveID, err := local.GetArchiveID(ctx)
+	if err != nil {
+		return PushResult{}, fmt.Errorf("reading local archive id: %w", err)
+	}
 
 	reason := rebuildReason(
 		probe, scope, db.CurrentDataVersion(), full, localDeletionRevision,
-		machine, localDatabaseID,
+		machine, localDatabaseID, localArchiveID,
 	)
 	if reason == "" {
 		result, err := incrementalPush(ctx, path, local, machine, opts, probe, onProgress)
@@ -711,6 +715,7 @@ func (s *Sync) finalizeIncrementalPush(
 		SchemaVersion:    SchemaVersion,
 		DataVersion:      db.CurrentDataVersion(),
 		SourceDatabaseID: sourceDatabaseID,
+		SourceArchiveID:  s.archiveID,
 		Scope:            canonicalPushScope(opts.Projects, opts.ExcludeProjects),
 		LastPushCutoff:   cutoff,
 		LastPushAt:       time.Now().UTC().Format(time.RFC3339),

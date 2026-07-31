@@ -48,6 +48,9 @@ type MirrorProbe struct {
 	// the mirror was built from (see mirrorMetadata.SourceDatabaseID). "" on
 	// mirrors written before the id was recorded.
 	SourceDatabaseID string
+	// SourceArchiveID is the provenance id stamped onto mirror rows. "" on
+	// mirrors written before the id was recorded.
+	SourceArchiveID  string
 	Scope            string // canonical scope string, see canonicalPushScope
 	LastPushCutoff   string
 	LastPushAt       string
@@ -160,6 +163,7 @@ func probeOpenMirror(ctx context.Context, conn *sql.DB) MirrorProbe {
 	probe.SchemaVersion = meta.SchemaVersion
 	probe.DataVersion = meta.DataVersion
 	probe.SourceDatabaseID = meta.SourceDatabaseID
+	probe.SourceArchiveID = meta.SourceArchiveID
 	probe.Scope = meta.Scope
 	probe.LastPushCutoff = meta.LastPushCutoff
 	probe.LastPushAt = meta.LastPushAt
@@ -286,12 +290,12 @@ func (p MirrorProbe) NeedsRebuild(scope string, sourceDataVersion int) bool {
 // configured name changes. Explicit per-source machine labels remain unchanged.
 //
 // localDeletionRevision is the caller's local.SessionDeletionPublicationRevision
-// read, and localDatabaseID the caller's local.GetDatabaseID read; both are
-// passed in rather than threaded through NeedsRebuild's pure scope/version
-// signature.
+// read, localDatabaseID the caller's local.GetDatabaseID read, and
+// localArchiveID the caller's local.GetArchiveID read; they are passed in
+// rather than threaded through NeedsRebuild's pure scope/version signature.
 func rebuildReason(
 	probe MirrorProbe, scope string, sourceDataVersion int, full bool,
-	localDeletionRevision int64, machine string, localDatabaseID string,
+	localDeletionRevision int64, machine, localDatabaseID, localArchiveID string,
 ) string {
 	switch {
 	case full:
@@ -316,6 +320,8 @@ func rebuildReason(
 		)
 	case probe.SourceDatabaseID != localDatabaseID:
 		return "mirror was built from a different archive (source database id changed)"
+	case probe.SourceArchiveID != localArchiveID:
+		return "mirror provenance changed (source archive id changed)"
 	case probe.DeletionRevision > localDeletionRevision:
 		return "mirror deletion cursor ahead of archive; archive was rebuilt"
 	default:

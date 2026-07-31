@@ -211,11 +211,13 @@ func (s *Sync) PushWithOptions(
 			"reading %s: %w", lastPushSourceArchiveIDKey, err,
 		)
 	}
-	if (lastPush != "" || boundaryState != "") &&
-		storedArchiveID != archiveID {
+	if storedArchiveID != "" && storedArchiveID != archiveID {
 		log.Printf(
-			"pgsync: source archive identity changed; clearing local push watermark state",
+			"pgsync: source archive identity changed; retiring old archive metadata and clearing local push watermark state",
 		)
+		if err := s.retireSourceArchiveMetadata(ctx, storedArchiveID); err != nil {
+			return result, err
+		}
 		if err := clearPushState(state); err != nil {
 			return result, err
 		}
@@ -1438,6 +1440,41 @@ func clearPushState(local syncStateStore) error {
 		return fmt.Errorf(
 			"clearing last_push_at: %w", err,
 		)
+	}
+	return nil
+}
+
+// retireSourceArchiveMetadata removes governance and provenance metadata that
+// belongs to an archive identity superseded by a local repair. A full push
+// republishes the current archive immediately afterward. Keeping retirement in
+// one transaction prevents readers from observing only a subset of the old
+// archive's rules or identity evidence.
+func (s *Sync) retireSourceArchiveMetadata(
+	ctx context.Context, archiveID string,
+) error {
+	tx, err := s.pg.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning old archive metadata retirement: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, table := range []string{
+		"source_project_identity_observation_scopes",
+		"source_session_project_identity_snapshot_scopes",
+		"source_worktree_project_mapping_scopes",
+		"source_project_identity_observations",
+		"source_session_project_identity_snapshots",
+		"source_worktree_project_mappings",
+		"source_archives",
+	} {
+		if _, err := tx.ExecContext(ctx,
+			"DELETE FROM "+table+" WHERE source_archive_id = $1",
+			archiveID,
+		); err != nil {
+			return fmt.Errorf("retiring old archive metadata from %s: %w", table, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing old archive metadata retirement: %w", err)
 	}
 	return nil
 }

@@ -25,6 +25,7 @@ const schemaVersionMetadataKey = "agentsview_schema_version"
 const (
 	dataVersionMetadataKey      = "agentsview_source_data_version"
 	sourceDatabaseIDMetadataKey = "agentsview_source_database_id"
+	sourceArchiveIDMetadataKey  = "agentsview_source_archive_id"
 	pushScopeMetadataKey        = "agentsview_push_scope"
 	lastPushAtMetadataKey       = "agentsview_last_push_at"
 	lastPushMachineMetadataKey  = "agentsview_last_push_machine"
@@ -806,6 +807,10 @@ type mirrorMetadata struct {
 	// different archive's history and only a full rebuild is sound (see
 	// rebuildReason).
 	SourceDatabaseID string
+	// SourceArchiveID is the stable provenance identity stamped onto mirrored
+	// sessions and governance metadata. It may change independently when an
+	// archive identity is repaired.
+	SourceArchiveID  string
 	Scope            string
 	LastPushCutoff   string
 	LastPushAt       string
@@ -824,6 +829,7 @@ func writeMirrorMetadata(ctx context.Context, db *sql.DB, meta mirrorMetadata) e
 		{schemaVersionMetadataKey, strconv.Itoa(meta.SchemaVersion)},
 		{dataVersionMetadataKey, strconv.Itoa(meta.DataVersion)},
 		{sourceDatabaseIDMetadataKey, meta.SourceDatabaseID},
+		{sourceArchiveIDMetadataKey, meta.SourceArchiveID},
 		{pushScopeMetadataKey, meta.Scope},
 		{lastPushCutoffMetadataKey, meta.LastPushCutoff},
 		{lastPushAtMetadataKey, meta.LastPushAt},
@@ -845,10 +851,11 @@ func writeMirrorMetadata(ctx context.Context, db *sql.DB, meta mirrorMetadata) e
 // errors so callers (ProbeMirror) can surface them as shape issues rather
 // than silently treating a corrupt mirror as version 0.
 func readMirrorMetadata(ctx context.Context, db *sql.DB) (mirrorMetadata, error) {
-	raw := make(map[string]string, 8)
+	raw := make(map[string]string, 11)
 	for _, key := range []string{
 		schemaVersionMetadataKey, dataVersionMetadataKey,
-		sourceDatabaseIDMetadataKey, pushScopeMetadataKey,
+		sourceDatabaseIDMetadataKey, sourceArchiveIDMetadataKey,
+		pushScopeMetadataKey,
 		lastPushCutoffMetadataKey, lastPushAtMetadataKey, lastPushMachineMetadataKey,
 		deletionRevisionMetadataKey, identityRevisionMetadataKey,
 		mappingRevisionMetadataKey,
@@ -861,6 +868,7 @@ func readMirrorMetadata(ctx context.Context, db *sql.DB) (mirrorMetadata, error)
 	}
 	meta := mirrorMetadata{
 		SourceDatabaseID: raw[sourceDatabaseIDMetadataKey],
+		SourceArchiveID:  raw[sourceArchiveIDMetadataKey],
 		Scope:            raw[pushScopeMetadataKey],
 		LastPushCutoff:   raw[lastPushCutoffMetadataKey],
 		LastPushAt:       raw[lastPushAtMetadataKey],

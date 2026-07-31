@@ -908,6 +908,68 @@ func TestPushRebuildsWhenMirrorBuiltFromDifferentArchive(t *testing.T) {
 		"a matching source database id must allow the incremental path")
 }
 
+func TestPushRebuildsWhenArchiveIdentityIsRepaired(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	_, err := local.CreateWorktreeProjectMapping(
+		ctx, db.WorktreeProjectMapping{
+			Machine: "test-machine", PathPrefix: "/workspace/alpha",
+			Layout: db.WorktreeMappingLayoutExplicit, Project: "alpha",
+			Enabled: true,
+		},
+	)
+	require.NoError(t, err)
+
+	first, err := Push(ctx, path, local, "test-machine", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	require.True(t, first.Diagnostics.Full)
+	oldArchiveID, err := local.GetArchiveID(ctx)
+	require.NoError(t, err)
+	databaseID, err := local.GetDatabaseID(ctx)
+	require.NoError(t, err)
+
+	const repairedArchiveID = "repaired-archive-id"
+	require.NoError(t, local.SetArchiveIdentityForTest(
+		ctx, repairedArchiveID,
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	))
+	gotDatabaseID, err := local.GetDatabaseID(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, databaseID, gotDatabaseID,
+		"archive identity repair must not rely on a database generation change")
+
+	result, err := Push(ctx, path, local, "test-machine", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.True(t, result.Diagnostics.Full)
+	assert.Contains(t, result.Diagnostics.RebuildReason, "source archive id changed")
+
+	probe, err := ProbeMirror(ctx, path)
+	require.NoError(t, err)
+	assert.Equal(t, repairedArchiveID, probe.SourceArchiveID)
+	conn, err := Open(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	var sessionArchiveID string
+	require.NoError(t, conn.QueryRowContext(ctx, `
+		SELECT source_archive_id FROM sessions WHERE id = 'sess-1'`,
+	).Scan(&sessionArchiveID))
+	assert.Equal(t, repairedArchiveID, sessionArchiveID)
+	for _, archive := range []struct {
+		id   string
+		want int
+	}{
+		{oldArchiveID, 0},
+		{repairedArchiveID, 1},
+	} {
+		var count int
+		require.NoError(t, conn.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM source_worktree_project_mappings
+			WHERE source_archive_id = ?`, archive.id,
+		).Scan(&count))
+		assert.Equal(t, archive.want, count)
+	}
+}
+
 // TestPushRebuildsWhenMachineNameChanges guards legacy sessions whose source
 // machine is empty or "local". Those rows use the configured push machine, so
 // changing that name must rebuild the mirror and restamp every fallback row.

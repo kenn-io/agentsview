@@ -3096,20 +3096,36 @@ func TestArchiveIdentityChangeRepublishesUnchangedSessions(t *testing.T) {
 	const schema = "agentsview_push_archive_identity_change_test"
 	syncer, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 	seedProvenanceSession(t, localDB, "sess-1", "workstation", "proj", "")
+	require.NoError(t, localDB.UpsertProjectIdentityObservation(
+		ctx, export.ProjectIdentityObservation{
+			SessionID: "sess-1", Project: "proj", Machine: "workstation",
+			RootPath:         "/workspace/proj",
+			GitRemote:        "https://example.com/team/proj.git",
+			WorktreeRootPath: "/workspace/proj",
+			RemoteResolution: export.ProjectResolutionResolved,
+			ObservedAt:       time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC),
+		},
+	))
+	_, err := localDB.CreateWorktreeProjectMapping(
+		ctx, db.WorktreeProjectMapping{
+			Machine: "workstation", PathPrefix: "/workspace/proj",
+			Layout: db.WorktreeMappingLayoutExplicit, Project: "proj",
+			Enabled: true,
+		},
+	)
+	require.NoError(t, err)
 
 	first, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, first.SessionsPushed)
+	oldArchiveID, err := localDB.GetArchiveID(ctx)
+	require.NoError(t, err)
 
 	const repairedArchiveID = "repaired-archive-id"
-	localSQL, err := sql.Open("sqlite3", localDB.Path())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, localSQL.Close()) })
-	_, err = localSQL.ExecContext(ctx, `
-		UPDATE archive_metadata SET value = ? WHERE key = 'archive_id'`,
-		repairedArchiveID,
-	)
-	require.NoError(t, err)
+	require.NoError(t, localDB.SetArchiveIdentityForTest(
+		ctx, repairedArchiveID,
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	))
 
 	second, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
@@ -3119,6 +3135,36 @@ func TestArchiveIdentityChangeRepublishesUnchangedSessions(t *testing.T) {
 		SELECT source_archive_id FROM sessions WHERE id = 'sess-1'`,
 	).Scan(&gotArchiveID))
 	assert.Equal(t, repairedArchiveID, gotArchiveID)
+	for _, table := range []string{
+		"source_archives",
+		"source_project_identity_observations",
+		"source_project_identity_observation_scopes",
+		"source_session_project_identity_snapshots",
+		"source_session_project_identity_snapshot_scopes",
+		"source_worktree_project_mappings",
+		"source_worktree_project_mapping_scopes",
+	} {
+		var oldCount int
+		require.NoError(t, pg.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM "+table+" WHERE source_archive_id = $1",
+			oldArchiveID,
+		).Scan(&oldCount))
+		assert.Zero(t, oldCount, "%s must not retain the old archive id", table)
+	}
+	for _, table := range []string{
+		"source_archives",
+		"source_project_identity_observations",
+		"source_session_project_identity_snapshots",
+		"source_worktree_project_mappings",
+	} {
+		var repairedCount int
+		require.NoError(t, pg.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM "+table+" WHERE source_archive_id = $1",
+			repairedArchiveID,
+		).Scan(&repairedCount))
+		assert.Equal(t, 1, repairedCount,
+			"%s must be republished under the repaired archive id", table)
+	}
 }
 
 // TestSessionProvenanceBackfillForcesOneFullPush verifies that the provenance

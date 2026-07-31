@@ -268,6 +268,9 @@ type rebuildSnapshot struct {
 	// rebuild's *db.DB handle is open, so capturing it here is a convenience
 	// rather than a race guard.
 	sourceDatabaseID string
+	// sourceArchiveID is the stable provenance identity stamped onto every
+	// mirrored row. A repair can change it without changing database_id.
+	sourceArchiveID string
 }
 
 // captureRebuildSnapshot reads the state tokens rebuildMirror needs to seed
@@ -284,10 +287,17 @@ func captureRebuildSnapshot(ctx context.Context, local *db.DB) (rebuildSnapshot,
 			"reading local archive database id: %w", err,
 		)
 	}
+	sourceArchiveID, err := local.GetArchiveID(ctx)
+	if err != nil {
+		return rebuildSnapshot{}, fmt.Errorf(
+			"reading local archive id: %w", err,
+		)
+	}
 	return rebuildSnapshot{
 		cutoff:           time.Now().UTC().Format(localSyncTimestampLayout),
 		deletionRevision: deletionRevision,
 		sourceDatabaseID: sourceDatabaseID,
+		sourceArchiveID:  sourceArchiveID,
 	}, nil
 }
 
@@ -444,6 +454,7 @@ func (s *Sync) writeRebuildMetadata(
 		SchemaVersion:    SchemaVersion,
 		DataVersion:      db.CurrentDataVersion(),
 		SourceDatabaseID: snapshot.sourceDatabaseID,
+		SourceArchiveID:  snapshot.sourceArchiveID,
 		Scope:            scope,
 		LastPushCutoff:   snapshot.cutoff,
 		LastPushAt:       time.Now().UTC().Format(time.RFC3339),

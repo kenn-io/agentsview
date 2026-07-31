@@ -1167,6 +1167,10 @@ Grok section and remove the explicit registry exception in the coverage test.
   context/last-turn/total statistics, without per-message cache or cost data.
   Agentsview emits one aggregate usage event and catalog-prices it when model
   identity is available.
+- **Project identity:** Metadata records `session_id`, `git_branch`, and
+  `environment.working_directory`. Agentsview recovers those independent
+  fields even when another optional metadata field is malformed, so a partial
+  parse cannot replace repository classification with generic fallbacks.
 - **Agentsview:** `internal/parser/vibe.go` and
   `internal/parser/vibe_provider.go`.
 

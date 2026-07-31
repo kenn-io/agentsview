@@ -613,17 +613,19 @@ func TestParseVibeSessionToolResultNotCountedAsUser(t *testing.T) {
 	assert.Equal(t, "Read the README file", result.Session.FirstMessage)
 }
 
-// TestParseVibeSessionMalformedMetaRecoversID verifies that when meta.json has
-// a valid session_id but a malformed optional field (a bad timestamp here that
-// fails the full parse), the canonical ID is still recovered rather than
-// dropping to the directory-name fallback, which would abandon the canonical
-// session row.
-func TestParseVibeSessionMalformedMetaRecoversID(t *testing.T) {
+// TestParseVibeSessionMalformedMetaRecoversIdentity verifies that a malformed
+// optional field does not discard independent identity-bearing metadata.
+func TestParseVibeSessionMalformedMetaRecoversIdentity(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	content := `{"role": "user", "content": "hello", "message_id": "1"}
 `
-	metaContent := `{"session_id": "uuid-canonical-1", "start_time": "not-a-timestamp"}`
+	metaContent := `{
+		"session_id": "uuid-canonical-1",
+		"start_time": "not-a-timestamp",
+		"git_branch": "feature/fallback",
+		"environment": {"working_directory": "/workspace/sample-project"}
+	}`
 	setupFileSystem(t, tmpDir, map[string]string{
 		"session_dir/messages.jsonl": content,
 		"session_dir/meta.json":      metaContent,
@@ -637,6 +639,9 @@ func TestParseVibeSessionMalformedMetaRecoversID(t *testing.T) {
 
 	assert.Equal(t, "vibe:uuid-canonical-1", result.Session.ID)
 	assert.Equal(t, "uuid-canonical-1", result.Session.SourceSessionID)
+	assert.Equal(t, "/workspace/sample-project", result.Session.Cwd)
+	assert.Equal(t, "sample_project", result.Session.Project)
+	assert.Equal(t, "feature/fallback", result.Session.GitBranch)
 	// The malformed optional fields are skipped, so no usage event is emitted.
 	assert.Empty(t, result.UsageEvents)
 }
