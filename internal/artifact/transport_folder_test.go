@@ -555,6 +555,58 @@ func TestFolderTransportQuarantineLetsFreshConsumerAdvanceWhenArtifactExistsLoca
 	assertArtifactBody(t, replayStore, laterRef, laterBody)
 }
 
+func TestFolderTransportWritesRejectionBeforeQuarantiningWire(t *testing.T) {
+	t.Parallel()
+
+	target := t.TempDir()
+	opened, err := OpenFolderTransport(target, FolderTransportOptions{})
+	require.NoError(t, err)
+	transport := opened.(*folderTransport)
+	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+
+	origin := "peer-a1b2c3"
+	expectedBody := []byte(`{"v":2}`)
+	ref := testContentRef(t, origin, KindManifests, expectedBody, ".json")
+	wire, err := ToWireRef(ref)
+	require.NoError(t, err)
+	directory := filepath.Join(target, origin, string(KindManifests))
+	require.NoError(t, os.MkdirAll(directory, 0o755))
+	wirePath := filepath.Join(directory, wire.Name)
+	require.NoError(t, os.WriteFile(wirePath, []byte("not zstd"), 0o600))
+	identity := identityForBytes(t, expectedBody)
+	appendFolderJournalTestEntry(t, target, Entry{
+		Ref:      ref,
+		Identity: identity,
+	})
+
+	interrupted := errors.New("interrupt quarantine")
+	transport.quarantineEntry = func(*os.Root, string) error {
+		return interrupted
+	}
+	store := &transportRecordingStore{ArtifactStore: newTestArtifactStore(t)}
+	_, err = transport.Exchange(t.Context(), store, testFolderPublishOrigin)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, interrupted)
+	assert.FileExists(t, wirePath)
+	kindRoot, err := os.OpenRoot(directory)
+	require.NoError(t, err)
+	require.NoError(t, validateFolderJournalRejection(
+		kindRoot,
+		wire.Name,
+		identity,
+	))
+	require.NoError(t, kindRoot.Close())
+
+	transport.quarantineEntry = nil
+	result, err := transport.Exchange(t.Context(), store, testFolderPublishOrigin)
+	require.NoError(t, err)
+	assert.Equal(t, ExchangeResult{}, result)
+	assert.NoFileExists(t, wirePath)
+	quarantined, err := filepath.Glob(wirePath + folderCorruptSeparator + "*")
+	require.NoError(t, err)
+	require.Len(t, quarantined, 1)
+}
+
 func TestFolderTransportRequiresChangeRecorderBeforeAcceptingArtifact(
 	t *testing.T,
 ) {
@@ -1253,6 +1305,115 @@ func TestFolderTransportRecoversJournalEventBeforeHeadAdvance(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, root.Close())
 	assert.Equal(t, int64(1), head.Sequence)
+}
+
+func TestFolderTransportRecoversTruncatedUncommittedJournalEvent(t *testing.T) {
+	t.Parallel()
+
+	target := t.TempDir()
+	opened, err := OpenFolderTransport(target, FolderTransportOptions{})
+	require.NoError(t, err)
+	transport := opened.(*folderTransport)
+	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+
+	journalDirectory := filepath.Join(target, folderJournalDirectory)
+	require.NoError(t, os.MkdirAll(journalDirectory, 0o755))
+	eventPath := filepath.Join(journalDirectory, folderJournalEventName(1))
+	require.NoError(t, os.WriteFile(eventPath, []byte(`{"kind":`), 0o600))
+
+	body := []byte("recovered-segment")
+	ref := testContentRef(
+		t,
+		testFolderPublishOrigin,
+		KindSegments,
+		body,
+		".ndjson",
+	)
+	entry := Entry{Ref: ref, Identity: identityForBytes(t, body)}
+	require.NoError(t, transport.appendFolderJournalLocked(t.Context(), entry))
+
+	journal, err := os.OpenRoot(journalDirectory)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, journal.Close()) })
+	event, err := readFolderJournalEvent(journal, 1)
+	require.NoError(t, err)
+	wire, err := ToWireRef(ref)
+	require.NoError(t, err)
+	assert.Equal(t, folderJournalEvent{
+		Kind:     KindSegments,
+		Name:     wire.Name,
+		Origin:   testFolderPublishOrigin,
+		Sequence: 1,
+		SHA256:   entry.Identity.SHA256,
+		Size:     entry.Identity.Size,
+	}, event)
+	head, err := readFolderJournalHead(journal)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), head.Sequence)
+	quarantined, err := filepath.Glob(eventPath + folderCorruptSeparator + "*")
+	require.NoError(t, err)
+	require.Len(t, quarantined, 1)
+	partial, err := os.ReadFile(quarantined[0])
+	require.NoError(t, err)
+	assert.Equal(t, []byte(`{"kind":`), partial)
+}
+
+func TestFolderTransportRecoversTruncatedJournalRejection(t *testing.T) {
+	t.Parallel()
+
+	target := t.TempDir()
+	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+
+	body := []byte("rejected-segment")
+	ref := testContentRef(
+		t,
+		"peer-a1b2c3",
+		KindSegments,
+		body,
+		".ndjson",
+	)
+	wire, err := ToWireRef(ref)
+	require.NoError(t, err)
+	identity := identityForBytes(t, body)
+	appendFolderJournalTestEntry(t, target, Entry{
+		Ref:      ref,
+		Identity: identity,
+	})
+	directory := filepath.Join(target, ref.Origin, string(ref.Kind))
+	require.NoError(t, os.MkdirAll(directory, 0o755))
+	rejectionPath := filepath.Join(
+		directory,
+		folderJournalRejectionName(wire.Name),
+	)
+	require.NoError(t, os.WriteFile(
+		rejectionPath,
+		[]byte(`{"sha256":`),
+		0o600,
+	))
+
+	result, err := transport.Exchange(
+		t.Context(),
+		&transportRecordingStore{ArtifactStore: newTestArtifactStore(t)},
+		testFolderPublishOrigin,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, ExchangeResult{}, result)
+	kindRoot, err := os.OpenRoot(directory)
+	require.NoError(t, err)
+	require.NoError(t, validateFolderJournalRejection(
+		kindRoot,
+		wire.Name,
+		identity,
+	))
+	require.NoError(t, kindRoot.Close())
+	quarantined, err := filepath.Glob(rejectionPath + folderCorruptSeparator + "*")
+	require.NoError(t, err)
+	require.Len(t, quarantined, 1)
+	partial, err := os.ReadFile(quarantined[0])
+	require.NoError(t, err)
+	assert.Equal(t, []byte(`{"sha256":`), partial)
 }
 
 type testFolderTransportStateStore struct {

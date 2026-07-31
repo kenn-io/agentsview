@@ -44,6 +44,7 @@ type folderTransport struct {
 	observeDirectoryPage func(int)
 	observeStorePage     func(int)
 	publishLink          func(*os.Root, string, string) error
+	quarantineEntry      func(*os.Root, string) error
 	maxObjects           int
 	maxBytes             int64
 	pushCursor           folderPushCursor

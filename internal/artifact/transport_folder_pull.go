@@ -111,7 +111,19 @@ func (t *folderTransport) pullJournalEventLocked(
 		if identityErr != nil {
 			return identityErr
 		}
-		return validateFolderJournalRejection(kindRoot, event.Name, expected)
+		validationErr := validateFolderJournalRejection(
+			kindRoot,
+			event.Name,
+			expected,
+		)
+		if errors.Is(validationErr, ErrArtifactInvalid) {
+			return writeFolderJournalRejection(
+				kindRoot,
+				event.Name,
+				expected,
+			)
+		}
+		return validationErr
 	}
 	if err != nil {
 		return err
@@ -120,7 +132,7 @@ func (t *folderTransport) pullJournalEventLocked(
 	if err != nil {
 		return err
 	}
-	outcome, err := t.pullWireEntryLocked(
+	_, err = t.pullWireEntryLocked(
 		ctx,
 		store,
 		kindRoot,
@@ -130,13 +142,7 @@ func (t *folderTransport) pullJournalEventLocked(
 		&expected,
 		result,
 	)
-	if err != nil {
-		return err
-	}
-	if outcome.Quarantined {
-		return writeFolderJournalRejection(kindRoot, event.Name, expected)
-	}
-	return nil
+	return err
 }
 
 func (t *folderTransport) pullRootEntryLocked(
@@ -302,7 +308,11 @@ func (t *folderTransport) pullWireEntryLocked(
 		}
 		if errors.Is(decodeErr, ErrArtifactCorrupt) ||
 			errors.Is(decodeErr, ErrArtifactInvalid) {
-			err := t.quarantineFolderEntryLocked(kindRoot, entry.Name())
+			err := t.rejectFolderEntryLocked(
+				kindRoot,
+				entry.Name(),
+				expected,
+			)
 			return folderPullOutcome{Quarantined: err == nil}, err
 		}
 		return folderPullOutcome{}, decodeErr
@@ -312,7 +322,11 @@ func (t *folderTransport) pullWireEntryLocked(
 	}()
 	if err := validateRefIdentity(ref, identity); err != nil {
 		if errors.Is(err, ErrArtifactInvalid) {
-			quarantineErr := t.quarantineFolderEntryLocked(kindRoot, entry.Name())
+			quarantineErr := t.rejectFolderEntryLocked(
+				kindRoot,
+				entry.Name(),
+				expected,
+			)
 			return folderPullOutcome{Quarantined: quarantineErr == nil}, quarantineErr
 		}
 		return folderPullOutcome{}, err
@@ -470,16 +484,36 @@ func (t *folderTransport) QuarantineTransportArtifact(
 			ErrArtifactConflict,
 		)
 	}
-	if err := t.quarantineFolderEntryLocked(kindRoot, wire.Name); err != nil {
+	if err := writeFolderJournalRejection(kindRoot, wire.Name, expected); err != nil {
 		return err
 	}
-	return writeFolderJournalRejection(kindRoot, wire.Name, expected)
+	return t.quarantineFolderEntryLocked(kindRoot, wire.Name)
+}
+
+func (t *folderTransport) rejectFolderEntryLocked(
+	root *os.Root,
+	name string,
+	expected *Identity,
+) error {
+	if expected != nil {
+		if err := writeFolderJournalRejection(root, name, *expected); err != nil {
+			return err
+		}
+	}
+	return t.quarantineFolderEntryLocked(root, name)
 }
 
 func (t *folderTransport) quarantineFolderEntryLocked(
 	root *os.Root,
 	name string,
 ) error {
+	if t.quarantineEntry != nil {
+		return t.quarantineEntry(root, name)
+	}
+	return quarantineFolderEntry(root, name)
+}
+
+func quarantineFolderEntry(root *os.Root, name string) error {
 	if _, err := root.Lstat(name); errors.Is(err, fs.ErrNotExist) {
 		return nil
 	} else if err != nil {

@@ -68,51 +68,64 @@ func (t *folderTransport) appendFolderJournalLocked(
 		SHA256:   entry.Identity.SHA256,
 		Size:     entry.Identity.Size,
 	}
-	body, err := json.Marshal(event)
+	existing, err := t.installFolderJournalEventLocked(journal, event)
 	if err != nil {
 		return err
 	}
-	body = append(body, '\n')
-	if err := writeFolderFileExclusive(
-		journal,
-		folderJournalEventName(event.Sequence),
-		body,
-	); err != nil {
-		if !errors.Is(err, fs.ErrExist) {
+	if existing != nil && *existing != event {
+		if err := writeFolderJournalHead(journal, folderJournalHead{
+			Sequence: existing.Sequence,
+		}); err != nil {
 			return err
 		}
-		existing, readErr := readFolderJournalEvent(journal, event.Sequence)
-		if readErr != nil {
-			return errors.Join(err, readErr)
+		event.Sequence++
+		occupied, err := t.installFolderJournalEventLocked(journal, event)
+		if err != nil {
+			return err
 		}
-		if existing != event {
-			if err := writeFolderJournalHead(journal, folderJournalHead{
-				Sequence: existing.Sequence,
-			}); err != nil {
-				return err
-			}
-			event.Sequence++
-			body, err = json.Marshal(event)
-			if err != nil {
-				return err
-			}
-			body = append(body, '\n')
-			if err := writeFolderFileExclusive(
-				journal,
-				folderJournalEventName(event.Sequence),
-				body,
-			); err != nil {
-				return fmt.Errorf(
-					"%w: artifact journal recovery sequence is occupied: %v",
-					ErrArtifactConflict,
-					err,
-				)
-			}
+		if occupied != nil && *occupied != event {
+			return fmt.Errorf(
+				"%w: artifact journal recovery sequence is occupied",
+				ErrArtifactConflict,
+			)
 		}
 	}
 	return writeFolderJournalHead(journal, folderJournalHead{
 		Sequence: event.Sequence,
 	})
+}
+
+func (t *folderTransport) installFolderJournalEventLocked(
+	journal *os.Root,
+	event folderJournalEvent,
+) (*folderJournalEvent, error) {
+	body, err := json.Marshal(event)
+	if err != nil {
+		return nil, err
+	}
+	body = append(body, '\n')
+	name := folderJournalEventName(event.Sequence)
+	err = writeFolderFileExclusive(journal, name, body)
+	if err == nil {
+		return nil, nil
+	}
+	if !errors.Is(err, fs.ErrExist) {
+		return nil, err
+	}
+	existing, readErr := readFolderJournalEvent(journal, event.Sequence)
+	if readErr == nil {
+		return &existing, nil
+	}
+	if !errors.Is(readErr, ErrArtifactInvalid) {
+		return nil, errors.Join(err, readErr)
+	}
+	if quarantineErr := t.quarantineFolderEntryLocked(journal, name); quarantineErr != nil {
+		return nil, errors.Join(err, readErr, quarantineErr)
+	}
+	if retryErr := writeFolderFileExclusive(journal, name, body); retryErr != nil {
+		return nil, errors.Join(err, readErr, retryErr)
+	}
+	return nil, nil
 }
 
 func readFolderJournalHead(root *os.Root) (folderJournalHead, error) {
@@ -231,11 +244,21 @@ func writeFolderJournalHead(root *os.Root, head folderJournalHead) (retErr error
 	return nil
 }
 
-func writeFolderFileExclusive(root *os.Root, name string, body []byte) error {
-	file, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+func writeFolderFileExclusive(
+	root *os.Root,
+	name string,
+	body []byte,
+) (retErr error) {
+	tempName, file, err := createFolderTemp(root, folderJournalTempPrefix)
 	if err != nil {
 		return err
 	}
+	tempExists := true
+	defer func() {
+		if tempExists {
+			retErr = errors.Join(retErr, removeFolderFile(root, tempName))
+		}
+	}()
 	if _, err := file.Write(body); err != nil {
 		return errors.Join(err, file.Close())
 	}
@@ -244,6 +267,29 @@ func writeFolderFileExclusive(root *os.Root, name string, body []byte) error {
 	}
 	if err := file.Close(); err != nil {
 		return err
+	}
+
+	linkErr := root.Link(tempName, name)
+	switch {
+	case linkErr == nil:
+		if err := root.Remove(tempName); err != nil {
+			return err
+		}
+		tempExists = false
+	case errors.Is(linkErr, fs.ErrExist):
+		return linkErr
+	default:
+		_, statErr := root.Lstat(name)
+		switch {
+		case statErr == nil:
+			return fmt.Errorf("%w: %s", fs.ErrExist, name)
+		case !errors.Is(statErr, fs.ErrNotExist):
+			return errors.Join(linkErr, statErr)
+		}
+		if renameErr := root.Rename(tempName, name); renameErr != nil {
+			return errors.Join(linkErr, renameErr)
+		}
+		tempExists = false
 	}
 	syncFolderDirectoryBestEffort(root)
 	return nil
@@ -275,7 +321,21 @@ func writeFolderJournalRejection(
 	if !errors.Is(err, fs.ErrExist) {
 		return err
 	}
-	return validateFolderJournalRejection(root, wireName, identity)
+	validationErr := validateFolderJournalRejection(root, wireName, identity)
+	if validationErr == nil {
+		return nil
+	}
+	if !errors.Is(validationErr, ErrArtifactInvalid) {
+		return validationErr
+	}
+	name := folderJournalRejectionName(wireName)
+	if quarantineErr := quarantineFolderEntry(root, name); quarantineErr != nil {
+		return errors.Join(err, validationErr, quarantineErr)
+	}
+	if retryErr := writeFolderFileExclusive(root, name, body); retryErr != nil {
+		return errors.Join(err, validationErr, retryErr)
+	}
+	return nil
 }
 
 func validateFolderJournalRejection(
@@ -297,7 +357,11 @@ func validateFolderJournalRejection(
 	}
 	var rejection folderJournalRejection
 	if err := decodeCanonicalFolderJSON(body, &rejection); err != nil {
-		return err
+		return fmt.Errorf(
+			"%w: invalid artifact journal rejection: %v",
+			ErrArtifactInvalid,
+			err,
+		)
 	}
 	if rejection.SHA256 != identity.SHA256 || rejection.Size != identity.Size {
 		return fmt.Errorf("%w: artifact rejection identity mismatch", ErrArtifactConflict)
