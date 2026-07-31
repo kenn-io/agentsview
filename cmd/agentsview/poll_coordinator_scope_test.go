@@ -67,50 +67,6 @@ func (s *recordingProviderPollSyncer) snapshot() []providerPollCall {
 	return out
 }
 
-func (s *recordingProviderPollSyncer) callCount() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.calls)
-}
-
-// blockingProviderPollSyncer blocks until released, per-agent.
-type blockingProviderPollSyncer struct {
-	mu      sync.Mutex
-	started chan providerPollCall
-	release chan struct{}
-	calls   []providerPollCall
-	errs    map[parser.AgentType]error
-}
-
-func (s *blockingProviderPollSyncer) ReconcileProviderRoots(
-	_ context.Context, agent parser.AgentType, roots []string,
-) error {
-	call := providerPollCall{Agent: agent, Roots: append([]string(nil), roots...)}
-	s.mu.Lock()
-	s.calls = append(s.calls, call)
-	var err error
-	if s.errs != nil {
-		err = s.errs[agent]
-	}
-	s.mu.Unlock()
-	s.started <- call
-	if err != nil {
-		return err
-	}
-	<-s.release
-	return nil
-}
-
-func (s *blockingProviderPollSyncer) snapshot() []providerPollCall {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]providerPollCall, len(s.calls))
-	for i, c := range s.calls {
-		out[i] = providerPollCall{Agent: c.Agent, Roots: append([]string(nil), c.Roots...)}
-	}
-	return out
-}
-
 // TestUnwatchedPollDoesNotDragUnrelatedProvidersThroughOneProvidersGap is the
 // reproduction test: one provider's degraded coverage must not cause an
 // authoritative pass for any other provider.
@@ -152,9 +108,10 @@ func TestUnwatchedPollDoesNotDragUnrelatedProvidersThroughOneProvidersGap(t *tes
 			"each provider must get exactly one ReconcileProviderRoots call")
 		var agentACalls, agentBCalls []providerPollCall
 		for _, c := range calls {
-			if c.Agent == parser.AgentClaude {
+			switch c.Agent {
+			case parser.AgentClaude:
 				agentACalls = append(agentACalls, c)
-			} else if c.Agent == parser.AgentOpenHands {
+			case parser.AgentOpenHands:
 				agentBCalls = append(agentBCalls, c)
 			}
 		}

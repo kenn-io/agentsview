@@ -898,31 +898,6 @@ func syncObligationToPoller(o sync.PollingObligation) pollingObligation {
 	return pollingObligation{Key: o.Key, Scopes: scopes, Probe: o.Probe}
 }
 
-// rootPathsToPollingScopes resolves which (agent, syncDir) pairs are configured
-// at the given physical root paths, for building coverage-degraded obligations.
-func rootPathsToPollingScopes(roots []watchRoot, paths []string) []pollingScope {
-	var scopes []pollingScope
-	for _, path := range paths {
-		cleanPath := filepath.Clean(path)
-		for _, root := range roots {
-			if filepath.Clean(root.path) == cleanPath {
-				for _, scope := range root.scopes {
-					ps := pollingScope{Agent: scope.agent, Root: scope.syncDir}
-					if !slices.Contains(scopes, ps) {
-						scopes = append(scopes, ps)
-					}
-				}
-			}
-		}
-	}
-	if len(scopes) == 0 {
-		for _, path := range paths {
-			scopes = append(scopes, pollingScope{Root: path})
-		}
-	}
-	return scopes
-}
-
 // absRootPath mirrors the engine's cleanRootPath so daemon-side scope-overlap
 // checks compare the same path form the engine's root expansion uses.
 func absRootPath(path string) string {
