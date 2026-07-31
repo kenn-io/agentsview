@@ -674,11 +674,14 @@ func (s openCodeFormatSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 // weaker than the root resolving to file-backed storage: the session
 // subdirectory under it is created lazily, so keying on the resolved mode
 // leaves an existing-but-empty storage tree with only grandchild coverage the
-// shallow unit cannot see. Emission still requires the directory to exist,
-// because an always-emitted <root>/storage unit would become a permanently
-// missing probe on pure-SQLite roots, and the unwatched-root poller defers
-// every candidate overlapping a blocked root, silencing the configured
-// directory's only remaining coverage.
+// shallow unit cannot see. Emission still requires the directory to exist:
+// an always-emitted <root>/storage unit is a permanently missing probe on
+// pure-SQLite roots, and the unwatched-root poller defers every candidate
+// overlapping a blocked root, so the fallback poll that degraded or
+// unavailable watcher coverage depends on never runs. Activating the unit
+// when the directory appears avoids the probe, but that needs ancestor
+// lifecycle ownership in the portable backend and invalidation of the
+// engine's cached changed-path plan, so it belongs to the follow-up.
 func (s openCodeFormatSourceSet) watchUnits(root string) []WatchRoot {
 	units := []WatchRoot{{
 		Path:      root,
