@@ -19,21 +19,20 @@ import (
 )
 
 const (
-	folderMarkerName       = ".agentsview-artifacts.json"
-	folderMarkerMaxBytes   = int64(4 << 10)
-	folderFormatName       = "agentsview-normalized-artifacts"
-	folderFormatVersion    = 2
-	folderMarkerTempPrefix = ".agentsview-artifacts.tmp-"
-	folderExchangeLockName = ".agentsview-artifacts.lock"
-)
-
-var folderMarkerBody = []byte(
-	"{\"format\":\"agentsview-normalized-artifacts\",\"version\":2}\n",
+	folderMarkerName         = ".agentsview-artifacts.json"
+	folderMarkerMaxBytes     = int64(4 << 10)
+	folderFormatName         = "agentsview-normalized-artifacts"
+	folderFormatVersion      = 3
+	folderMarkerTempPrefix   = ".agentsview-artifacts.tmp-"
+	folderExchangeLockName   = ".agentsview-artifacts.lock"
+	folderExchangeMaxObjects = 128
+	folderExchangeMaxBytes   = int64(64 << 20)
 )
 
 type folderMarker struct {
-	Format  string `json:"format"`
-	Version int    `json:"version"`
+	Format      string `json:"format"`
+	NamespaceID string `json:"namespace_id"`
+	Version     int    `json:"version"`
 }
 
 type folderTransport struct {
@@ -42,11 +41,28 @@ type folderTransport struct {
 	target       string
 	root         *os.Root
 	rootIdentity fs.FileInfo
+	namespaceID  string
 	closed       bool
 
 	observeDirectoryPage func(int)
 	observeStorePage     func(int)
 	publishLink          func(*os.Root, string, string) error
+	maxObjects           int
+	maxBytes             int64
+	pushCursor           folderPushCursor
+	stateStore           FolderTransportStateStore
+	stateLoaded          bool
+	pullSequence         int64
+	publishedGeneration  string
+}
+
+type folderPushCursor struct {
+	Generation    string `json:"generation,omitempty"`
+	Origin        string `json:"origin,omitempty"`
+	KindIndex     int    `json:"kind_index,omitempty"`
+	Offset        int    `json:"offset,omitempty"`
+	ManifestIndex int    `json:"manifest_index,omitempty"`
+	SegmentIndex  int    `json:"segment_index,omitempty"`
 }
 
 // OpenFolderTransport opens or initializes a marked artifact exchange target.
@@ -81,6 +97,15 @@ func OpenFolderTransport(
 		target:       canonical,
 		root:         root,
 		rootIdentity: identity,
+		maxObjects:   opts.MaxObjects,
+		maxBytes:     opts.MaxBytes,
+		stateStore:   opts.StateStore,
+	}
+	if transport.maxObjects <= 0 {
+		transport.maxObjects = folderExchangeMaxObjects
+	}
+	if transport.maxBytes <= 0 {
+		transport.maxBytes = folderExchangeMaxBytes
 	}
 	if err := transport.prepareMarker(); err != nil {
 		return nil, err
@@ -141,16 +166,23 @@ func (t *folderTransport) Exchange(
 	if err := t.prepareLocked(); err != nil {
 		return ExchangeResult{}, err
 	}
+	if err := t.loadStateLocked(ctx); err != nil {
+		return ExchangeResult{}, err
+	}
 	result, err = t.pullLocked(ctx, store, publishOrigin)
 	if err != nil {
 		return result, err
 	}
-	published, err := t.pushLocked(ctx, store, publishOrigin)
+	published, more, err := t.pushLocked(ctx, store, publishOrigin)
 	result.Published += published
+	result.More = result.More || more
 	if err != nil {
 		return result, err
 	}
 	if err := t.verifyRootIdentityLocked(); err != nil {
+		return result, err
+	}
+	if err := t.saveStateLocked(ctx); err != nil {
 		return result, err
 	}
 	return result, nil
@@ -202,7 +234,11 @@ func (t *folderTransport) prepareMarker() error {
 		return err
 	}
 	if found {
-		return validateFolderMarker(t.root)
+		marker, err := readFolderMarker(t.root)
+		if err == nil {
+			t.namespaceID = marker.NamespaceID
+		}
+		return err
 	}
 	empty, err := folderRootEmpty(t.root)
 	if err != nil {
@@ -217,7 +253,11 @@ func (t *folderTransport) prepareMarker() error {
 	if err := createFolderMarker(t.root); err != nil {
 		return fmt.Errorf("initializing agentsview artifact target: %w", err)
 	}
-	return validateFolderMarker(t.root)
+	marker, err := readFolderMarker(t.root)
+	if err == nil {
+		t.namespaceID = marker.NamespaceID
+	}
+	return err
 }
 
 func (t *folderTransport) verifyRootIdentityLocked() error {
@@ -241,7 +281,14 @@ func (t *folderTransport) prepareLocked() error {
 	if err := t.verifyRootIdentityLocked(); err != nil {
 		return err
 	}
-	return validateFolderMarker(t.root)
+	marker, err := readFolderMarker(t.root)
+	if err != nil {
+		return err
+	}
+	if marker.NamespaceID != t.namespaceID {
+		return errors.New("artifact folder target marker changed while open")
+	}
+	return nil
 }
 
 func openFolderTargetRoot(path string) (*os.Root, fs.FileInfo, error) {
@@ -380,36 +427,60 @@ func folderRootEmpty(root *os.Root) (bool, error) {
 }
 
 func validateFolderMarker(root *os.Root) error {
+	_, err := readFolderMarker(root)
+	return err
+}
+
+func readFolderMarker(root *os.Root) (folderMarker, error) {
 	file, _, err := openFolderRegularFile(root, folderMarkerName)
 	if err != nil {
-		return fmt.Errorf("invalid agentsview artifact target marker: %w", err)
+		return folderMarker{}, fmt.Errorf("invalid agentsview artifact target marker: %w", err)
 	}
 	defer file.Close()
 
 	limited := io.LimitReader(file, folderMarkerMaxBytes+1)
 	body, err := io.ReadAll(limited)
 	if err != nil {
-		return fmt.Errorf("invalid agentsview artifact target marker: %w", err)
+		return folderMarker{}, fmt.Errorf("invalid agentsview artifact target marker: %w", err)
 	}
 	if int64(len(body)) > folderMarkerMaxBytes {
-		return errors.New("invalid agentsview artifact target marker: marker is too large")
+		return folderMarker{}, errors.New("invalid agentsview artifact target marker: marker is too large")
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(body)))
 	decoder.DisallowUnknownFields()
 	var marker folderMarker
 	if err := decoder.Decode(&marker); err != nil {
-		return fmt.Errorf("invalid agentsview artifact target marker: %w", err)
+		return folderMarker{}, fmt.Errorf("invalid agentsview artifact target marker: %w", err)
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return errors.New("invalid agentsview artifact target marker: trailing content")
+		return folderMarker{}, errors.New("invalid agentsview artifact target marker: trailing content")
 	}
 	if marker.Format != folderFormatName || marker.Version != folderFormatVersion {
-		return errors.New("invalid agentsview artifact target marker: unsupported format")
+		return folderMarker{}, errors.New("invalid agentsview artifact target marker: unsupported format")
 	}
-	return nil
+	if len(marker.NamespaceID) != 32 {
+		return folderMarker{}, errors.New("invalid agentsview artifact target marker: invalid namespace ID")
+	}
+	if _, err := hex.DecodeString(marker.NamespaceID); err != nil {
+		return folderMarker{}, errors.New("invalid agentsview artifact target marker: invalid namespace ID")
+	}
+	return marker, nil
 }
 
 func createFolderMarker(root *os.Root) (retErr error) {
+	var namespace [16]byte
+	if _, err := rand.Read(namespace[:]); err != nil {
+		return err
+	}
+	body, err := json.Marshal(folderMarker{
+		Format:      folderFormatName,
+		NamespaceID: hex.EncodeToString(namespace[:]),
+		Version:     folderFormatVersion,
+	})
+	if err != nil {
+		return err
+	}
+	body = append(body, '\n')
 	tempName, file, err := createFolderTemp(root, folderMarkerTempPrefix)
 	if err != nil {
 		return err
@@ -420,7 +491,7 @@ func createFolderMarker(root *os.Root) (retErr error) {
 			retErr = errors.Join(retErr, removeFolderFile(root, tempName))
 		}
 	}()
-	if _, err := file.Write(folderMarkerBody); err != nil {
+	if _, err := file.Write(body); err != nil {
 		return errors.Join(err, file.Close())
 	}
 	if err := file.Sync(); err != nil {
@@ -431,7 +502,7 @@ func createFolderMarker(root *os.Root) (retErr error) {
 	}
 
 	if err := root.Link(tempName, folderMarkerName); err != nil {
-		if fallbackErr := createFolderMarkerExclusive(root); fallbackErr != nil {
+		if fallbackErr := createFolderMarkerExclusive(root, body); fallbackErr != nil {
 			return errors.Join(err, fallbackErr)
 		}
 	}
@@ -443,7 +514,7 @@ func createFolderMarker(root *os.Root) (retErr error) {
 	return nil
 }
 
-func createFolderMarkerExclusive(root *os.Root) error {
+func createFolderMarkerExclusive(root *os.Root, body []byte) error {
 	file, err := root.OpenFile(
 		folderMarkerName,
 		os.O_WRONLY|os.O_CREATE|os.O_EXCL,
@@ -455,10 +526,78 @@ func createFolderMarkerExclusive(root *os.Root) error {
 		}
 		return err
 	}
-	if _, err := file.Write(folderMarkerBody); err != nil {
+	if _, err := file.Write(body); err != nil {
 		return errors.Join(err, file.Close())
 	}
 	return errors.Join(file.Sync(), file.Close())
+}
+
+type folderTransportPersistedState struct {
+	PublishedGeneration string           `json:"published_generation,omitempty"`
+	PullSequence        int64            `json:"pull_sequence,omitempty"`
+	Push                folderPushCursor `json:"push"`
+}
+
+func (t *folderTransport) loadStateLocked(ctx context.Context) error {
+	if t.stateLoaded || t.stateStore == nil {
+		t.stateLoaded = true
+		return nil
+	}
+	body, err := t.stateStore.LoadFolderTransportState(ctx, t.namespaceID)
+	if err != nil {
+		return err
+	}
+	if body != "" {
+		decoder := json.NewDecoder(strings.NewReader(body))
+		decoder.DisallowUnknownFields()
+		var state folderTransportPersistedState
+		if err := decoder.Decode(&state); err != nil {
+			return fmt.Errorf("decoding artifact folder continuation state: %w", err)
+		}
+		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+			return errors.New("decoding artifact folder continuation state: trailing content")
+		}
+		if err := validateFolderTransportState(state); err != nil {
+			return err
+		}
+		t.pushCursor = state.Push
+		t.pullSequence = state.PullSequence
+		t.publishedGeneration = state.PublishedGeneration
+	}
+	t.stateLoaded = true
+	return nil
+}
+
+func validateFolderTransportState(state folderTransportPersistedState) error {
+	push := state.Push
+	if state.PullSequence < 0 ||
+		push.KindIndex < 0 ||
+		push.Offset < 0 ||
+		push.ManifestIndex < 0 ||
+		push.SegmentIndex < 0 {
+		return errors.New("decoding artifact folder continuation state: negative cursor")
+	}
+	if push.Origin != "" {
+		if err := validateOriginID(push.Origin); err != nil {
+			return fmt.Errorf("decoding artifact folder continuation state: %w", err)
+		}
+	}
+	return nil
+}
+
+func (t *folderTransport) saveStateLocked(ctx context.Context) error {
+	if t.stateStore == nil {
+		return nil
+	}
+	body, err := json.Marshal(folderTransportPersistedState{
+		PublishedGeneration: t.publishedGeneration,
+		PullSequence:        t.pullSequence,
+		Push:                t.pushCursor,
+	})
+	if err != nil {
+		return err
+	}
+	return t.stateStore.SaveFolderTransportState(ctx, t.namespaceID, string(body))
 }
 
 func createFolderTemp(

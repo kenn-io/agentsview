@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -69,6 +70,7 @@ func TestArtifactSyncTwoNodeFolderRoundTripAndReplay(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, messages, 2)
 	assert.Equal(t, "world", messages[1].Content)
+	journalSequenceBeforeReplay := readTestFolderJournalSequence(t, target)
 
 	replay, err := SyncWithRepository(
 		t.Context(),
@@ -80,6 +82,12 @@ func TestArtifactSyncTwoNodeFolderRoundTripAndReplay(t *testing.T) {
 	assert.Zero(t, replay.ImportedSessions)
 	assert.Zero(t, replay.ImportedMessages)
 	assert.False(t, replay.More)
+	assert.Equal(
+		t,
+		journalSequenceBeforeReplay,
+		readTestFolderJournalSequence(t, target),
+		"an unchanged authoritative head must not replay its closure",
+	)
 
 	require.NoError(t, databaseA.ReplaceSessionMessages("one", []db.Message{
 		{
@@ -117,6 +125,16 @@ func TestArtifactSyncTwoNodeFolderRoundTripAndReplay(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, updatedMessages, 2)
 	assert.Equal(t, "updated response", updatedMessages[1].Content)
+}
+
+func readTestFolderJournalSequence(t *testing.T, target string) int64 {
+	t.Helper()
+	root, err := os.OpenRoot(filepath.Join(target, folderJournalDirectory))
+	require.NoError(t, err)
+	head, err := readFolderJournalHead(root)
+	require.NoError(t, err)
+	require.NoError(t, root.Close())
+	return head.Sequence
 }
 
 func TestArtifactSyncDoesNotIngestOrRepublishSpoofedLocalOrigin(

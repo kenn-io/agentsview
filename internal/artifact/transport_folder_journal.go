@@ -1,0 +1,306 @@
+package artifact
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+)
+
+const (
+	folderJournalDirectory  = ".agentsview-journal"
+	folderJournalHeadName   = "head.json"
+	folderJournalTempPrefix = ".agentsview-journal.tmp-"
+	folderJournalMaxBytes   = int64(4 << 10)
+)
+
+type folderJournalHead struct {
+	Sequence int64 `json:"sequence"`
+}
+
+type folderJournalEvent struct {
+	Kind     Kind   `json:"kind"`
+	Name     string `json:"name"`
+	Origin   string `json:"origin"`
+	Sequence int64  `json:"sequence"`
+	SHA256   string `json:"sha256"`
+	Size     int64  `json:"size"`
+}
+
+type folderJournalRejection struct {
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+}
+
+func folderJournalEventName(sequence int64) string {
+	return fmt.Sprintf("event-%020d.json", sequence)
+}
+
+func (t *folderTransport) appendFolderJournalLocked(
+	ctx context.Context,
+	entry Entry,
+) (retErr error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	journal, err := ensureFolderSubroot(t.root, folderJournalDirectory, "journal")
+	if err != nil {
+		return err
+	}
+	defer func() { retErr = errors.Join(retErr, journal.Close()) }()
+	head, err := readFolderJournalHead(journal)
+	if err != nil {
+		return err
+	}
+	wire, err := ToWireRef(entry.Ref)
+	if err != nil {
+		return err
+	}
+	event := folderJournalEvent{
+		Kind:     entry.Ref.Kind,
+		Name:     wire.Name,
+		Origin:   entry.Ref.Origin,
+		Sequence: head.Sequence + 1,
+		SHA256:   entry.Identity.SHA256,
+		Size:     entry.Identity.Size,
+	}
+	body, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	body = append(body, '\n')
+	if err := writeFolderFileExclusive(
+		journal,
+		folderJournalEventName(event.Sequence),
+		body,
+	); err != nil {
+		if !errors.Is(err, fs.ErrExist) {
+			return err
+		}
+		existing, readErr := readFolderJournalEvent(journal, event.Sequence)
+		if readErr != nil {
+			return errors.Join(err, readErr)
+		}
+		if existing != event {
+			if err := writeFolderJournalHead(journal, folderJournalHead{
+				Sequence: existing.Sequence,
+			}); err != nil {
+				return err
+			}
+			event.Sequence++
+			body, err = json.Marshal(event)
+			if err != nil {
+				return err
+			}
+			body = append(body, '\n')
+			if err := writeFolderFileExclusive(
+				journal,
+				folderJournalEventName(event.Sequence),
+				body,
+			); err != nil {
+				return fmt.Errorf(
+					"%w: artifact journal recovery sequence is occupied: %v",
+					ErrArtifactConflict,
+					err,
+				)
+			}
+		}
+	}
+	return writeFolderJournalHead(journal, folderJournalHead{
+		Sequence: event.Sequence,
+	})
+}
+
+func readFolderJournalHead(root *os.Root) (folderJournalHead, error) {
+	file, _, err := openFolderRegularFile(root, folderJournalHeadName)
+	if errors.Is(err, fs.ErrNotExist) {
+		return folderJournalHead{}, nil
+	}
+	if err != nil {
+		return folderJournalHead{}, err
+	}
+	defer file.Close()
+	body, err := io.ReadAll(io.LimitReader(file, folderJournalMaxBytes+1))
+	if err != nil {
+		return folderJournalHead{}, err
+	}
+	if int64(len(body)) > folderJournalMaxBytes {
+		return folderJournalHead{}, fmt.Errorf("%w: artifact journal head is too large", ErrArtifactInvalid)
+	}
+	var head folderJournalHead
+	if err := decodeCanonicalFolderJSON(body, &head); err != nil {
+		return folderJournalHead{}, fmt.Errorf("%w: invalid artifact journal head: %v", ErrArtifactInvalid, err)
+	}
+	if head.Sequence < 0 {
+		return folderJournalHead{}, fmt.Errorf("%w: invalid artifact journal sequence", ErrArtifactInvalid)
+	}
+	return head, nil
+}
+
+func readFolderJournalEvent(
+	root *os.Root,
+	sequence int64,
+) (folderJournalEvent, error) {
+	file, _, err := openFolderRegularFile(root, folderJournalEventName(sequence))
+	if err != nil {
+		return folderJournalEvent{}, err
+	}
+	defer file.Close()
+	body, err := io.ReadAll(io.LimitReader(file, folderJournalMaxBytes+1))
+	if err != nil {
+		return folderJournalEvent{}, err
+	}
+	if int64(len(body)) > folderJournalMaxBytes {
+		return folderJournalEvent{}, fmt.Errorf("%w: artifact journal event is too large", ErrArtifactInvalid)
+	}
+	var event folderJournalEvent
+	if err := decodeCanonicalFolderJSON(body, &event); err != nil {
+		return folderJournalEvent{}, fmt.Errorf("%w: invalid artifact journal event: %v", ErrArtifactInvalid, err)
+	}
+	if event.Sequence != sequence {
+		return folderJournalEvent{}, fmt.Errorf("%w: artifact journal sequence mismatch", ErrArtifactInvalid)
+	}
+	ref, err := FromWireRef(event.Origin, event.Kind, event.Name)
+	if err != nil {
+		return folderJournalEvent{}, err
+	}
+	identity, err := NewIdentity(event.SHA256, event.Size)
+	if err != nil {
+		return folderJournalEvent{}, err
+	}
+	if err := validateRefIdentity(ref, identity); err != nil {
+		return folderJournalEvent{}, err
+	}
+	return event, nil
+}
+
+func decodeCanonicalFolderJSON(body []byte, destination any) error {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("trailing content")
+	}
+	canonical, err := json.Marshal(destination)
+	if err != nil {
+		return err
+	}
+	canonical = append(canonical, '\n')
+	if !bytes.Equal(body, canonical) {
+		return errors.New("noncanonical JSON")
+	}
+	return nil
+}
+
+func writeFolderJournalHead(root *os.Root, head folderJournalHead) (retErr error) {
+	body, err := json.Marshal(head)
+	if err != nil {
+		return err
+	}
+	body = append(body, '\n')
+	tempName, file, err := createFolderTemp(root, folderJournalTempPrefix)
+	if err != nil {
+		return err
+	}
+	tempExists := true
+	defer func() {
+		if tempExists {
+			retErr = errors.Join(retErr, removeFolderFile(root, tempName))
+		}
+	}()
+	if _, err := file.Write(body); err != nil {
+		return errors.Join(err, file.Close())
+	}
+	if err := file.Sync(); err != nil {
+		return errors.Join(err, file.Close())
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := root.Rename(tempName, folderJournalHeadName); err != nil {
+		return err
+	}
+	tempExists = false
+	syncFolderDirectoryBestEffort(root)
+	return nil
+}
+
+func writeFolderFileExclusive(root *os.Root, name string, body []byte) error {
+	file, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(body); err != nil {
+		return errors.Join(err, file.Close())
+	}
+	if err := file.Sync(); err != nil {
+		return errors.Join(err, file.Close())
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	syncFolderDirectoryBestEffort(root)
+	return nil
+}
+
+func folderJournalRejectionName(wireName string) string {
+	return wireName + ".rejected"
+}
+
+func writeFolderJournalRejection(
+	root *os.Root,
+	wireName string,
+	identity Identity,
+) error {
+	rejection := folderJournalRejection(identity)
+	body, err := json.Marshal(rejection)
+	if err != nil {
+		return err
+	}
+	body = append(body, '\n')
+	err = writeFolderFileExclusive(
+		root,
+		folderJournalRejectionName(wireName),
+		body,
+	)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	return validateFolderJournalRejection(root, wireName, identity)
+}
+
+func validateFolderJournalRejection(
+	root *os.Root,
+	wireName string,
+	identity Identity,
+) error {
+	file, _, err := openFolderRegularFile(
+		root,
+		folderJournalRejectionName(wireName),
+	)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	body, err := io.ReadAll(io.LimitReader(file, folderJournalMaxBytes+1))
+	if err != nil {
+		return err
+	}
+	var rejection folderJournalRejection
+	if err := decodeCanonicalFolderJSON(body, &rejection); err != nil {
+		return err
+	}
+	if rejection.SHA256 != identity.SHA256 || rejection.Size != identity.Size {
+		return fmt.Errorf("%w: artifact rejection identity mismatch", ErrArtifactConflict)
+	}
+	return nil
+}

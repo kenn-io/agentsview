@@ -31,23 +31,125 @@ func (t *folderTransport) pullLocked(
 	publishOrigin string,
 ) (ExchangeResult, error) {
 	var result ExchangeResult
-	err := t.visitFolderDirectory(
-		ctx,
+	journal, err := openOptionalFolderSubroot(
 		t.root,
-		".",
-		func(entry os.DirEntry) error {
-			if entry.Name() == folderMarkerName ||
-				entry.Name() == folderExchangeLockName ||
-				strings.HasPrefix(entry.Name(), folderMarkerTempPrefix) {
-				return nil
-			}
-			if entry.Name() == publishOrigin {
-				return nil
-			}
-			return t.pullRootEntryLocked(ctx, store, entry, &result)
-		},
+		folderJournalDirectory,
+		"journal",
 	)
-	return result, err
+	if err != nil || journal == nil {
+		return result, err
+	}
+	defer journal.Close()
+	head, err := readFolderJournalHead(journal)
+	if err != nil {
+		return result, err
+	}
+	if t.pullSequence > head.Sequence {
+		return result, fmt.Errorf(
+			"%w: artifact journal is behind the durable pull cursor",
+			ErrArtifactConflict,
+		)
+	}
+	processed := 0
+	var processedBytes int64
+	for t.pullSequence < head.Sequence {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
+		if t.maxObjects > 0 && processed >= t.maxObjects {
+			result.More = true
+			return result, nil
+		}
+		event, err := readFolderJournalEvent(journal, t.pullSequence+1)
+		if err != nil {
+			return result, err
+		}
+		if t.maxBytes > 0 && processed > 0 && event.Size > t.maxBytes-processedBytes {
+			result.More = true
+			return result, nil
+		}
+		if event.Origin != publishOrigin && isFolderExchangeKind(event.Kind) {
+			if err := t.pullJournalEventLocked(ctx, store, event, &result); err != nil {
+				return result, err
+			}
+		}
+		t.pullSequence = event.Sequence
+		processed++
+		processedBytes += event.Size
+	}
+	return result, nil
+}
+
+func isFolderExchangeKind(kind Kind) bool {
+	for _, candidate := range folderExchangeKinds {
+		if kind == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func (t *folderTransport) pullJournalEventLocked(
+	ctx context.Context,
+	store ArtifactStore,
+	event folderJournalEvent,
+	result *ExchangeResult,
+) (retErr error) {
+	originRoot, err := openFolderSubroot(t.root, event.Origin, "origin")
+	if err != nil {
+		return err
+	}
+	defer func() { retErr = errors.Join(retErr, originRoot.Close()) }()
+	kindRoot, err := openFolderSubroot(originRoot, string(event.Kind), "kind")
+	if err != nil {
+		return err
+	}
+	defer func() { retErr = errors.Join(retErr, kindRoot.Close()) }()
+	info, err := kindRoot.Lstat(event.Name)
+	if errors.Is(err, fs.ErrNotExist) {
+		expected, identityErr := NewIdentity(event.SHA256, event.Size)
+		if identityErr != nil {
+			return identityErr
+		}
+		return validateFolderJournalRejection(kindRoot, event.Name, expected)
+	}
+	if err != nil {
+		return err
+	}
+	if err := t.pullWireEntryLocked(
+		ctx,
+		store,
+		kindRoot,
+		event.Origin,
+		event.Kind,
+		fs.FileInfoToDirEntry(info),
+		result,
+	); err != nil {
+		return err
+	}
+	ref, err := FromWireRef(event.Origin, event.Kind, event.Name)
+	if err != nil {
+		return err
+	}
+	entry, err := store.Stat(ctx, ref)
+	if errors.Is(err, ErrArtifactNotFound) {
+		expected, identityErr := NewIdentity(event.SHA256, event.Size)
+		if identityErr != nil {
+			return identityErr
+		}
+		return writeFolderJournalRejection(kindRoot, event.Name, expected)
+	}
+	if err != nil {
+		return err
+	}
+	expected, err := NewIdentity(event.SHA256, event.Size)
+	if err != nil {
+		return err
+	}
+	if entry.Identity != expected {
+		return fmt.Errorf("%w: artifact journal identity mismatch", ErrArtifactConflict)
+	}
+	return nil
 }
 
 func (t *folderTransport) pullRootEntryLocked(
@@ -366,7 +468,10 @@ func (t *folderTransport) QuarantineTransportArtifact(
 			ErrArtifactConflict,
 		)
 	}
-	return t.quarantineFolderEntryLocked(kindRoot, wire.Name)
+	if err := t.quarantineFolderEntryLocked(kindRoot, wire.Name); err != nil {
+		return err
+	}
+	return writeFolderJournalRejection(kindRoot, wire.Name, expected)
 }
 
 func (t *folderTransport) quarantineFolderEntryLocked(

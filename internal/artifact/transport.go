@@ -22,12 +22,23 @@ type Transport interface {
 type ExchangeResult struct {
 	Received  int
 	Published int
+	More      bool
 }
 
 // FolderTransportOptions defines roots that must remain disjoint from the
 // external artifact target.
 type FolderTransportOptions struct {
 	ForbiddenRoots []string
+	MaxObjects     int
+	MaxBytes       int64
+	StateStore     FolderTransportStateStore
+}
+
+// FolderTransportStateStore persists target-bound continuation state between
+// bounded exchanges. Implementations must treat namespaceID as an opaque key.
+type FolderTransportStateStore interface {
+	LoadFolderTransportState(context.Context, string) (string, error)
+	SaveFolderTransportState(context.Context, string, string) error
 }
 
 type transportChangeRecorder interface {

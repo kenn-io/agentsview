@@ -25,11 +25,21 @@ var folderCopyBufferPool = sync.Pool{
 	},
 }
 
+type folderTransportPublicationPager interface {
+	folderTransportGeneration() string
+	folderTransportPage(
+		context.Context,
+		folderPushCursor,
+		int,
+		int64,
+	) ([]Entry, folderPushCursor, bool, error)
+}
+
 func (t *folderTransport) pushLocked(
 	ctx context.Context,
 	store ArtifactStore,
 	origin string,
-) (int, error) {
+) (int, bool, error) {
 	return t.pushOriginLocked(ctx, store, origin)
 }
 
@@ -37,42 +47,143 @@ func (t *folderTransport) pushOriginLocked(
 	ctx context.Context,
 	store ArtifactStore,
 	origin string,
-) (published int, retErr error) {
+) (published int, more bool, retErr error) {
 	if err := validateOriginID(origin); err != nil {
-		return 0, err
+		return 0, false, err
+	}
+	if pager, ok := store.(folderTransportPublicationPager); ok {
+		return t.pushAuthoritativeOriginLocked(ctx, store, pager, origin)
 	}
 	originRoot, err := ensureFolderSubroot(t.root, origin, "origin")
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	defer func() { retErr = errors.Join(retErr, originRoot.Close()) }()
-	for _, kind := range folderExchangeKinds {
+	if t.pushCursor.Origin != origin {
+		t.pushCursor = folderPushCursor{Origin: origin}
+	}
+	processed := 0
+	var processedBytes int64
+	for kindIndex := t.pushCursor.KindIndex; kindIndex < len(folderExchangeKinds); kindIndex++ {
+		kind := folderExchangeKinds[kindIndex]
 		if err := t.removeAbandonedPublishTempsLocked(
 			ctx,
 			originRoot,
 			kind,
 		); err != nil {
-			return published, err
+			return published, false, err
 		}
 		iterator, err := store.Entries(ctx, origin, kind)
 		if err != nil {
-			return published, err
+			return published, false, err
 		}
-		count, iterateErr := t.pushKindLocked(
+		if kindIndex == t.pushCursor.KindIndex && t.pushCursor.Offset > 0 {
+			if err := discardArtifactEntries(ctx, iterator, t.pushCursor.Offset); err != nil {
+				_ = iterator.Close()
+				return published, false, err
+			}
+		}
+		count, consumed, bytes, kindMore, iterateErr := t.pushKindLocked(
 			ctx,
 			store,
 			originRoot,
 			origin,
 			kind,
 			iterator,
+			t.maxObjects-processed,
+			t.maxBytes-processedBytes,
 		)
 		published += count
+		processed += consumed
+		processedBytes += bytes
 		closeErr := iterator.Close()
 		if iterateErr != nil || closeErr != nil {
-			return published, errors.Join(iterateErr, closeErr)
+			return published, false, errors.Join(iterateErr, closeErr)
+		}
+		if kindMore {
+			t.pushCursor.KindIndex = kindIndex
+			t.pushCursor.Offset += consumed
+			return published, true, nil
+		}
+		t.pushCursor.KindIndex = kindIndex + 1
+		t.pushCursor.Offset = 0
+	}
+	t.pushCursor = folderPushCursor{}
+	return published, false, nil
+}
+
+func (t *folderTransport) pushAuthoritativeOriginLocked(
+	ctx context.Context,
+	store ArtifactStore,
+	pager folderTransportPublicationPager,
+	origin string,
+) (published int, more bool, retErr error) {
+	generation := pager.folderTransportGeneration()
+	if generation == t.publishedGeneration {
+		return 0, false, nil
+	}
+	if t.pushCursor.Origin != origin || t.pushCursor.Generation != generation {
+		t.pushCursor = folderPushCursor{
+			Generation: generation,
+			Origin:     origin,
 		}
 	}
-	return published, nil
+	entries, next, more, err := pager.folderTransportPage(
+		ctx,
+		t.pushCursor,
+		t.maxObjects,
+		t.maxBytes,
+	)
+	if err != nil {
+		return 0, false, err
+	}
+	originRoot, err := ensureFolderSubroot(t.root, origin, "origin")
+	if err != nil {
+		return 0, false, err
+	}
+	defer func() { retErr = errors.Join(retErr, originRoot.Close()) }()
+	var kindRoot *os.Root
+	var openKind Kind
+	defer func() {
+		if kindRoot != nil {
+			retErr = errors.Join(retErr, kindRoot.Close())
+		}
+	}()
+	for _, entry := range entries {
+		if kindRoot == nil || openKind != entry.Ref.Kind {
+			if kindRoot != nil {
+				if err := kindRoot.Close(); err != nil {
+					return published, false, err
+				}
+				kindRoot = nil
+			}
+			kindRoot, err = ensureFolderSubroot(
+				originRoot,
+				string(entry.Ref.Kind),
+				"kind",
+			)
+			if err != nil {
+				return published, false, err
+			}
+			openKind = entry.Ref.Kind
+		}
+		created, err := t.publishFolderEntryLocked(ctx, store, kindRoot, entry)
+		if err != nil {
+			return published, false, err
+		}
+		if created {
+			published++
+		}
+		if err := t.appendFolderJournalLocked(ctx, entry); err != nil {
+			return published, false, err
+		}
+	}
+	t.pushCursor = next
+	if !more {
+		t.publishedGeneration = generation
+		t.pushCursor = folderPushCursor{}
+	}
+	return published, more, nil
 }
 
 func (t *folderTransport) removeAbandonedPublishTempsLocked(
@@ -111,7 +222,9 @@ func (t *folderTransport) pushKindLocked(
 	origin string,
 	kind Kind,
 	iterator EntryIterator,
-) (published int, retErr error) {
+	maxObjects int,
+	maxBytes int64,
+) (published int, processed int, processedBytes int64, more bool, retErr error) {
 	var kindRoot *os.Root
 	defer func() {
 		if kindRoot != nil {
@@ -119,7 +232,15 @@ func (t *folderTransport) pushKindLocked(
 		}
 	}()
 	for {
-		page, nextErr := iterator.Next(ctx, transportStorePageSize)
+		pageLimit := transportStorePageSize
+		if maxObjects > 0 {
+			remaining := maxObjects - processed
+			if remaining <= 0 {
+				return published, processed, processedBytes, true, nil
+			}
+			pageLimit = min(pageLimit, remaining)
+		}
+		page, nextErr := iterator.Next(ctx, pageLimit)
 		t.observeStorePageLocked(len(page))
 		if len(page) > 0 && kindRoot == nil {
 			var err error
@@ -129,12 +250,15 @@ func (t *folderTransport) pushKindLocked(
 				"kind",
 			)
 			if err != nil {
-				return published, err
+				return published, processed, processedBytes, false, err
 			}
 		}
 		for _, entry := range page {
+			if maxBytes > 0 && processed > 0 && entry.Identity.Size > maxBytes-processedBytes {
+				return published, processed, processedBytes, true, nil
+			}
 			if entry.Ref.Origin != origin || entry.Ref.Kind != kind {
-				return published, fmt.Errorf(
+				return published, processed, processedBytes, false, fmt.Errorf(
 					"%w: artifact iterator returned an entry outside its collection",
 					ErrArtifactInvalid,
 				)
@@ -146,19 +270,45 @@ func (t *folderTransport) pushKindLocked(
 				entry,
 			)
 			if err != nil {
-				return published, err
+				return published, processed, processedBytes, false, err
 			}
 			if created {
 				published++
 			}
+			if err := t.appendFolderJournalLocked(ctx, entry); err != nil {
+				return published, processed, processedBytes, false, err
+			}
+			processed++
+			processedBytes += entry.Identity.Size
 		}
 		if errors.Is(nextErr, io.EOF) {
-			return published, nil
+			return published, processed, processedBytes, false, nil
 		}
 		if nextErr != nil {
-			return published, nextErr
+			return published, processed, processedBytes, false, nextErr
 		}
 	}
+}
+
+func discardArtifactEntries(
+	ctx context.Context,
+	iterator EntryIterator,
+	count int,
+) error {
+	for count > 0 {
+		page, err := iterator.Next(ctx, min(count, transportStorePageSize))
+		count -= len(page)
+		if errors.Is(err, io.EOF) {
+			if count == 0 {
+				return nil
+			}
+			return fmt.Errorf("%w: artifact publication cursor is past EOF", ErrArtifactConflict)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (t *folderTransport) publishFolderEntryLocked(

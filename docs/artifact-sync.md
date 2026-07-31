@@ -1,7 +1,6 @@
----
-title: Artifact Folder Sync
-description: Exchange normalized sessions between AgentsView archives through a trusted folder
----
+______________________________________________________________________
+
+## title: Artifact Folder Sync description: Exchange normalized sessions between AgentsView archives through a trusted folder
 
 Artifact folder sync exchanges normalized AgentsView sessions between machines
 through a folder that both machines can access. The folder can be a mounted NAS,
@@ -17,16 +16,19 @@ folder, or change ordinary provider sync behavior.
 
 !!! warning
 
-    The target contains normalized session messages and related metadata. It can
-    contain sensitive prompts, responses, tool activity, and usage data. Use only a
-    folder whose storage and access controls you trust.
+```
+The target contains normalized session messages and related metadata. It can
+contain sensitive prompts, responses, tool activity, and usage data. Use only a
+folder whose storage and access controls you trust.
+```
 
 ## First use
 
 The target must either not exist or be an empty directory. On first use,
 AgentsView creates it and adds an `.agentsview-artifacts.json` namespace marker.
-Later runs refuse an unmarked nonempty directory rather than adopting unrelated
-files.
+The marker includes a randomly generated namespace identity used to bind local
+continuation state to this exact target. Later runs refuse an unmarked nonempty
+directory rather than adopting unrelated files.
 
 Run the command once on each participating machine:
 
@@ -40,13 +42,16 @@ agentsview sync --target /mnt/team-agentsview
 
 The path can differ between machines. Each archive pulls verified immutable
 objects already in the folder, publishes its own objects, and imports supported
-peer checkpoints into its local SQLite archive. Repeating the command is safe:
-already accepted content is verified and skipped, while changed sessions publish
-a new revision.
+peer checkpoints into its local SQLite archive. Publication also appends an
+immutable change-journal entry. Each machine retains a target-bound journal
+cursor, so repeating the command processes new entries instead of rescanning and
+rehashing the folder's complete history. Changed sessions publish a new
+revision.
 
-The command performs a bounded amount of work so concurrent provider writes
-cannot keep it running forever. If the summary says that artifact work remains,
-run the same command again:
+The command enforces object-count and decoded-byte budgets for both inbound and
+outbound transport work. Continuation cursors are durable, so later runs resume
+after the last accepted object rather than restarting at the first object. If
+the summary says that artifact work remains, run the same command again:
 
 ```text
 Artifact work remains; run the sync command again.
@@ -96,6 +101,9 @@ restored from backup, keep only one active writer for that restored origin.
   machine retains imported sessions in its own SQLite archive.
 - Objects are content-addressed and immutable. Conflicting content under an
   existing identity fails closed.
+- Journal entries are immutable and sequence numbered. AgentsView advances a
+  local cursor only after the referenced object has been read, verified, and
+  accepted, making interruption and retry safe.
 - Invalid complete objects are quarantined so one corrupt peer artifact does not
   permanently block unrelated origins.
 - Folder operations are serialized between cooperating AgentsView processes. Do

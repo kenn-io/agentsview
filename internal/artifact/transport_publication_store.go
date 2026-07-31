@@ -212,6 +212,165 @@ func (s *authoritativePublicationStore) Entries(
 	}
 }
 
+func (s *authoritativePublicationStore) folderTransportGeneration() string {
+	return fmt.Sprintf(
+		"%d:%s:%d",
+		s.head.Sequence,
+		s.head.CheckpointSHA256,
+		s.head.CheckpointSize,
+	)
+}
+
+func (s *authoritativePublicationStore) folderTransportPage(
+	ctx context.Context,
+	cursor folderPushCursor,
+	maxObjects int,
+	maxBytes int64,
+) ([]Entry, folderPushCursor, bool, error) {
+	entries := make([]Entry, 0, min(maxObjects, 64))
+	var logicalBytes int64
+	cache := folderTransportPageCache{manifestIndex: -1}
+	for maxObjects <= 0 || len(entries) < maxObjects {
+		entry, next, done, err := s.nextFolderTransportEntry(ctx, cursor, &cache)
+		if err != nil {
+			return nil, cursor, false, err
+		}
+		if done {
+			return entries, cursor, false, nil
+		}
+		if maxBytes > 0 && len(entries) > 0 && entry.Identity.Size > maxBytes-logicalBytes {
+			return entries, cursor, true, nil
+		}
+		entries = append(entries, entry)
+		logicalBytes += entry.Identity.Size
+		cursor = next
+	}
+	_, _, done, err := s.nextFolderTransportEntry(ctx, cursor, &cache)
+	if err != nil {
+		return nil, cursor, false, err
+	}
+	return entries, cursor, !done, nil
+}
+
+type folderTransportPageCache struct {
+	manifestIndex int
+	segments      []string
+}
+
+func (s *authoritativePublicationStore) nextFolderTransportEntry(
+	ctx context.Context,
+	cursor folderPushCursor,
+	cache *folderTransportPageCache,
+) (Entry, folderPushCursor, bool, error) {
+	for {
+		switch cursor.KindIndex {
+		case 0:
+			if cursor.ManifestIndex >= len(s.manifestHashes) {
+				cursor.KindIndex = 1
+				cursor.Offset = 0
+				cursor.ManifestIndex = 0
+				cursor.SegmentIndex = 0
+				continue
+			}
+			if cache.manifestIndex != cursor.ManifestIndex {
+				segments, err := authorizedManifestSegments(
+					ctx,
+					s.ArtifactStore,
+					s.origin,
+					s.manifestHashes[cursor.ManifestIndex],
+				)
+				if err != nil {
+					return Entry{}, cursor, false, err
+				}
+				cache.manifestIndex = cursor.ManifestIndex
+				cache.segments = segments
+			}
+			if cursor.SegmentIndex >= len(cache.segments) {
+				cursor.ManifestIndex++
+				cursor.SegmentIndex = 0
+				continue
+			}
+			ref, err := NewRef(
+				s.origin,
+				KindSegments,
+				cache.segments[cursor.SegmentIndex]+".ndjson",
+			)
+			if err != nil {
+				return Entry{}, cursor, false, err
+			}
+			entry, err := statAuthorizedPublication(
+				ctx,
+				s.ArtifactStore,
+				authorizedPublicationRef{ref: ref},
+			)
+			if err != nil {
+				return Entry{}, cursor, false, err
+			}
+			next := cursor
+			next.SegmentIndex++
+			return entry, next, false, nil
+		case 1:
+			if cursor.Offset >= len(s.manifestHashes) {
+				cursor.KindIndex = 2
+				cursor.Offset = 0
+				continue
+			}
+			ref, err := NewRef(
+				s.origin,
+				KindManifests,
+				s.manifestHashes[cursor.Offset]+".json",
+			)
+			if err != nil {
+				return Entry{}, cursor, false, err
+			}
+			entry, err := statAuthorizedPublication(
+				ctx,
+				s.ArtifactStore,
+				authorizedPublicationRef{ref: ref},
+			)
+			if err != nil {
+				return Entry{}, cursor, false, err
+			}
+			next := cursor
+			next.Offset++
+			return entry, next, false, nil
+		case 2:
+			if cursor.Offset > 0 {
+				cursor.KindIndex = 3
+				continue
+			}
+			ref, err := NewRef(
+				s.origin,
+				KindCheckpoints,
+				fmt.Sprintf("cp-%010d.json", s.head.Sequence),
+			)
+			if err != nil {
+				return Entry{}, cursor, false, err
+			}
+			identity, err := NewIdentity(
+				s.head.CheckpointSHA256,
+				s.head.CheckpointSize,
+			)
+			if err != nil {
+				return Entry{}, cursor, false, err
+			}
+			entry, err := statAuthorizedPublication(
+				ctx,
+				s.ArtifactStore,
+				authorizedPublicationRef{ref: ref, identity: &identity},
+			)
+			if err != nil {
+				return Entry{}, cursor, false, err
+			}
+			next := cursor
+			next.Offset = 1
+			return entry, next, false, nil
+		default:
+			return Entry{}, cursor, true, nil
+		}
+	}
+}
+
 func (s *authoritativePublicationStore) RecordTransportChanged(
 	ctx context.Context,
 	entry Entry,

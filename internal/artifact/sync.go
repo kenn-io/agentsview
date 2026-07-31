@@ -95,7 +95,10 @@ func SyncWithRepository(
 	forbidden = append(forbidden, repository.rootPath)
 	transport, err := OpenFolderTransport(
 		opts.Target,
-		FolderTransportOptions{ForbiddenRoots: forbidden},
+		FolderTransportOptions{
+			ForbiddenRoots: forbidden,
+			StateStore:     databaseFolderTransportState{database: database},
+		},
 	)
 	if err != nil {
 		return SyncResult{}, err
@@ -154,8 +157,27 @@ func SyncWithRepository(
 	if err != nil {
 		return result, err
 	}
-	result.More = exportMore || importMore
+	result.More = exportMore || exchanged.More || importMore
 	return result, nil
+}
+
+type databaseFolderTransportState struct {
+	database *db.DB
+}
+
+func (s databaseFolderTransportState) LoadFolderTransportState(
+	_ context.Context,
+	namespaceID string,
+) (string, error) {
+	return s.database.GetSyncState("artifact_transport_" + namespaceID)
+}
+
+func (s databaseFolderTransportState) SaveFolderTransportState(
+	_ context.Context,
+	namespaceID string,
+	value string,
+) error {
+	return s.database.SetSyncState("artifact_transport_"+namespaceID, value)
 }
 
 func validateArtifactSyncOptions(opts SyncOptions) error {
