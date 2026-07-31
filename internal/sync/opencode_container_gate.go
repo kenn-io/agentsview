@@ -102,7 +102,7 @@ func (e *Engine) captureSQLiteContainerStates(
 	states := make(map[string]parser.SQLiteContainerState)
 	if len(changedPaths) == 0 {
 		for _, agent := range openCodeFamilySQLiteAgents {
-			e.captureAgentSQLiteContainerStates(agent, states)
+			e.captureAgentSQLiteContainerStates(agent, nil, states)
 		}
 		return states
 	}
@@ -126,10 +126,12 @@ func (e *Engine) captureSQLiteContainerStates(
 // what an agent-scoped pass can discover. A pass scoped to a provider outside
 // the OpenCode SQLite family streams no shared containers, so probing every
 // configured container there would repeat once per provider group in a
-// grouped poll; an in-family scope probes only that agent's containers. The
-// unscoped pass (empty agent) still captures every configured container.
+// grouped poll; an in-family scope probes only its own containers that
+// overlap the pass's reconciliation roots, keeping capture work bounded by
+// the batch rather than the agent's full configuration. The unscoped pass
+// (empty agent) still captures every configured container.
 func (e *Engine) captureSQLiteContainerStatesForAgent(
-	agent parser.AgentType,
+	agent parser.AgentType, roots []string,
 ) map[string]parser.SQLiteContainerState {
 	if agent == "" {
 		return e.captureSQLiteContainerStates(nil)
@@ -138,20 +140,45 @@ func (e *Engine) captureSQLiteContainerStatesForAgent(
 		return nil
 	}
 	states := make(map[string]parser.SQLiteContainerState)
-	e.captureAgentSQLiteContainerStates(agent, states)
+	e.captureAgentSQLiteContainerStates(agent, roots, states)
 	return states
 }
 
+// captureAgentSQLiteContainerStates captures one agent's containers. Non-nil
+// roots restrict the capture to configured dirs overlapping them; nil roots
+// capture every configured dir (full and changed-path passes).
 func (e *Engine) captureAgentSQLiteContainerStates(
-	agent parser.AgentType, states map[string]parser.SQLiteContainerState,
+	agent parser.AgentType,
+	roots []string,
+	states map[string]parser.SQLiteContainerState,
 ) {
 	for _, dir := range e.agentDirs[agent] {
 		if dir == "" || strings.HasPrefix(dir, "s3://") {
 			continue
 		}
+		if !containerDirOverlapsRoots(dir, roots) {
+			continue
+		}
 		src := resolveOpenCodeFormatSource(agent, filepath.Clean(dir))
 		addSQLiteContainerState(states, src.DBPath)
 	}
+}
+
+// containerDirOverlapsRoots mirrors logicalRootsForAgentWatchRoots's
+// bidirectional overlap so the capture covers exactly the configured dirs a
+// scoped pass can expand into: a dir is capturable when it is the same path
+// as, an ancestor of, or a descendant of any reconciliation root. Empty
+// roots match everything.
+func containerDirOverlapsRoots(dir string, roots []string) bool {
+	if len(roots) == 0 {
+		return true
+	}
+	cleanedDir := cleanRootPath(dir)
+	return slices.ContainsFunc(roots, func(root string) bool {
+		cleanedRoot := cleanRootPath(root)
+		return samePathOrDescendant(cleanedRoot, cleanedDir) ||
+			samePathOrDescendant(cleanedDir, cleanedRoot)
+	})
 }
 
 func addSQLiteContainerState(

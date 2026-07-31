@@ -3219,6 +3219,9 @@ func (e *Engine) ReconcileProviderRootsGrouped(
 		linkEligible := false
 		persistEligible := false
 		for _, group := range groups {
+			if ctx.Err() != nil {
+				break
+			}
 			stats, tombstoned, err := e.reconcileScopedWatchRootsLocked(
 				deferredCtx, group.Agent, group.Roots, false, false,
 			)
@@ -3237,6 +3240,17 @@ func (e *Engine) ReconcileProviderRootsGrouped(
 				agent = "unscoped"
 			}
 			errs = append(errs, fmt.Errorf("reconcile %s roots: %w", agent, err))
+		}
+		// A canceled batch skips the epilogue entirely: linking and skip-cache
+		// persistence are not context-aware, and shutdown must not block on
+		// archive-sized database work. In-memory skip promotions survive and
+		// persist on the next clean pass; the returned error keeps the batch
+		// from being mistaken for a completed one.
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, fmt.Errorf(
+				"grouped reconciliation epilogue skipped: %w", err,
+			))
+			return
 		}
 		if linkEligible {
 			if err := e.linkSubagentSessions(ctx); err != nil {
@@ -3382,7 +3396,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	} else if scope != nil {
 		scope.agent = agent
 	}
-	preContainerStates := e.captureSQLiteContainerStatesForAgent(agent)
+	preContainerStates := e.captureSQLiteContainerStatesForAgent(agent, roots)
 	providers, completedScopes, failedRoots,
 		failures, discoveryErr, err := e.streamReconciliationCandidates(
 		ctx, scope, spool,
