@@ -1579,6 +1579,14 @@ func (db *DB) GetChildSessions(
 //     usable start time still resolves the same way on every sync
 //     instead of following whichever edge SQLite visited first.
 //
+// Ranking unknown start times last is a deliberate trade-off: a real
+// spawner with no usable started_at loses to a copied spawner that has
+// one. The only signal that could protect it — the child's currently
+// stored parent — depends on what earlier syncs wrote, which is the
+// ingestion-order dependence this resolution exists to remove. If the
+// spawner's start time later becomes known, its row update re-enters
+// linking and the child self-corrects.
+//
 // The LEFT JOIN keeps an edge whose spawner has no sessions row as a
 // last-resort candidate (it sorts with the unknown start times) rather
 // than discarding it.
