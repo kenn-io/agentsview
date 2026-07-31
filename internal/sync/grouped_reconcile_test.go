@@ -3,8 +3,10 @@ package sync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -132,6 +134,79 @@ func TestReconcileProviderRootsGroupedRunsSharedEpilogueOnce(t *testing.T) {
 		"the grouped call must persist the skip cache after the last group")
 	requireGroupedChildParent(t, database, true,
 		"the grouped call must run subagent linking in the shared epilogue")
+}
+
+// TestGroupedReconcileContainerProbesDoNotScaleWithProviderGroups is the
+// cardinality regression for the pre-discovery container capture: an
+// agent-scoped pass outside the OpenCode SQLite family can never discover a
+// shared container, so it must not probe any configured container. Otherwise
+// per-poll probe work would multiply as provider groups grow, even with the
+// shared epilogue.
+func TestGroupedReconcileContainerProbesDoNotScaleWithProviderGroups(t *testing.T) {
+	countContainerProbes := func(t *testing.T) *atomic.Int32 {
+		t.Helper()
+		var probes atomic.Int32
+		orig := statSQLiteContainerState
+		statSQLiteContainerState = func(dbPath string) (parser.SQLiteContainerState, bool) {
+			probes.Add(1)
+			return orig(dbPath)
+		}
+		t.Cleanup(func() { statSQLiteContainerState = orig })
+		return &probes
+	}
+	newContainerEngine := func(t *testing.T, claudeRoots []string) *Engine {
+		t.Helper()
+		openCodeDir := t.TempDir()
+		require.NoError(t, os.WriteFile(
+			filepath.Join(openCodeDir, "opencode.db"), []byte("not a real db"), 0o644,
+		))
+		engine := NewEngine(openTestDB(t), EngineConfig{
+			AgentDirs: map[parser.AgentType][]string{
+				parser.AgentClaude:   claudeRoots,
+				parser.AgentOpenCode: {openCodeDir},
+			},
+			Machine: "local",
+		})
+		t.Cleanup(engine.Close)
+		return engine
+	}
+
+	for _, groupCount := range []int{2, 8} {
+		t.Run(fmt.Sprintf("groups=%d", groupCount), func(t *testing.T) {
+			var claudeRoots []string
+			var groups []ProviderRootsGroup
+			for i := range groupCount {
+				root := filepath.Join(t.TempDir(), fmt.Sprintf("claude-%d", i))
+				writeGroupedClaudeFixture(t, root, fmt.Sprintf("session-%d", i))
+				claudeRoots = append(claudeRoots, root)
+				groups = append(groups, ProviderRootsGroup{
+					Agent: parser.AgentClaude, Roots: []string{root},
+				})
+			}
+			engine := newContainerEngine(t, claudeRoots)
+			probes := countContainerProbes(t)
+
+			require.NoError(t, engine.ReconcileProviderRootsGrouped(t.Context(), groups))
+
+			assert.Zero(t, probes.Load(),
+				"out-of-family provider groups must not probe any container, "+
+					"regardless of group count")
+		})
+	}
+
+	t.Run("unscoped group still captures containers", func(t *testing.T) {
+		root := filepath.Join(t.TempDir(), "claude-0")
+		writeGroupedClaudeFixture(t, root, "session-0")
+		engine := newContainerEngine(t, []string{root})
+		probes := countContainerProbes(t)
+
+		require.NoError(t, engine.ReconcileProviderRootsGrouped(t.Context(),
+			[]ProviderRootsGroup{{Agent: "", Roots: []string{root}}},
+		))
+
+		assert.Positive(t, probes.Load(),
+			"the unscoped pass must still capture configured containers")
+	})
 }
 
 // TestReconcileProviderRootsGroupedAttemptsEveryGroupAfterFailure pins the

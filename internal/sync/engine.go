@@ -3190,12 +3190,18 @@ type ProviderRootsGroup struct {
 	Roots []string
 }
 
-// ReconcileProviderRootsGrouped runs ReconcileProviderRoots for every group
-// and shares one pass epilogue — global subagent linking and skip-cache
+// ReconcileProviderRootsGrouped runs the bounded scheduled pass for every
+// group and shares one pass epilogue — global subagent linking and skip-cache
 // persistence — across the whole batch, so a multi-provider poll performs
 // that archive-sized work once instead of once per provider. Every group is
 // attempted even when an earlier one fails; per-group failures are wrapped
 // with the provider and joined.
+//
+// syncMu is held across every group and the epilogue: releasing it between a
+// group and the deferred persistSkipCache would let a concurrent pass update
+// and persist newer skip state that the epilogue's snapshot then overwrites,
+// resurrecting removed entries after a restart. "sessions" emits happen after
+// the lock is released, coalesced into one event for the batch.
 //
 // Linking runs when any group committed its page writes (a clean pass or one
 // reporting only provider discovery failures), matching the per-pass rule.
@@ -3206,39 +3212,69 @@ func (e *Engine) ReconcileProviderRootsGrouped(
 ) error {
 	deferredCtx := context.WithValue(ctx, deferPassEpilogueContextKey{}, true)
 	var errs []error
-	linkEligible := false
-	persistEligible := false
-	for _, group := range groups {
-		err := e.ReconcileProviderRoots(deferredCtx, group.Agent, group.Roots)
-		if err == nil {
-			linkEligible = true
-			persistEligible = true
-			continue
+	changed := false
+	func() {
+		e.syncMu.Lock()
+		defer e.syncMu.Unlock()
+		linkEligible := false
+		persistEligible := false
+		for _, group := range groups {
+			stats, tombstoned, err := e.reconcileScopedWatchRootsLocked(
+				deferredCtx, group.Agent, group.Roots, false, false,
+			)
+			changed = changed || stats.Synced > 0 || tombstoned > 0
+			if err == nil {
+				linkEligible = true
+				persistEligible = true
+				continue
+			}
+			var incomplete *incompleteReconciliationError
+			if errors.As(err, &incomplete) {
+				linkEligible = true
+			}
+			agent := string(group.Agent)
+			if agent == "" {
+				agent = "unscoped"
+			}
+			errs = append(errs, fmt.Errorf("reconcile %s roots: %w", agent, err))
 		}
-		var incomplete *incompleteReconciliationError
-		if errors.As(err, &incomplete) {
-			linkEligible = true
+		if linkEligible {
+			if err := e.linkSubagentSessions(ctx); err != nil {
+				errs = append(errs, fmt.Errorf(
+					"link subagent sessions after grouped reconciliation: %w", err,
+				))
+			}
 		}
-		agent := string(group.Agent)
-		if agent == "" {
-			agent = "unscoped"
+		if persistEligible {
+			e.persistSkipCache()
 		}
-		errs = append(errs, fmt.Errorf("reconcile %s roots: %w", agent, err))
-	}
-	if linkEligible {
-		if err := e.linkSubagentSessions(ctx); err != nil {
-			errs = append(errs, fmt.Errorf(
-				"link subagent sessions after grouped reconciliation: %w", err,
-			))
-		}
-	}
-	if persistEligible {
-		e.persistSkipCache()
+	}()
+	if changed {
+		e.emit("sessions")
 	}
 	return errors.Join(errs...)
 }
 
 func (e *Engine) reconcileScopedWatchRoots(
+	ctx context.Context, agent parser.AgentType, roots []string, full, force bool,
+) (SyncStats, int, error) {
+	stats, tombstoned, err := func() (SyncStats, int, error) {
+		e.syncMu.Lock()
+		defer e.syncMu.Unlock()
+		return e.reconcileScopedWatchRootsLocked(ctx, agent, roots, full, force)
+	}()
+	// Emit outside syncMu so an Emitter implementation cannot widen the
+	// critical section or deadlock by re-entering sync code (see SyncAll).
+	if stats.Synced > 0 || tombstoned > 0 {
+		e.emit("sessions")
+	}
+	return stats, tombstoned, err
+}
+
+// reconcileScopedWatchRootsLocked is the scoped pass body. The caller holds
+// syncMu and is responsible for emitting "sessions" when the returned stats
+// or tombstone count report changes.
+func (e *Engine) reconcileScopedWatchRootsLocked(
 	ctx context.Context, agent parser.AgentType, roots []string, full, force bool,
 ) (SyncStats, int, error) {
 	var logicalRoots []string
@@ -3255,13 +3291,10 @@ func (e *Engine) reconcileScopedWatchRoots(
 		})
 		return SyncStats{}, 0, nil
 	}
-	stats, metrics, tombstoned, err := e.reconcileWatchRootsStreamed(
+	stats, metrics, tombstoned, err := e.reconcileWatchRootsStreamedLocked(
 		ctx, agent, logicalRoots, full, force,
 	)
 	metrics.ExcludedRemoteRoots = excludedRemoteRoots
-	if stats.Synced > 0 || tombstoned > 0 {
-		e.emit("sessions")
-	}
 	complete := err == nil && ctx.Err() == nil && !stats.Aborted &&
 		stats.Failed == 0 && stats.providerFailures == 0
 	if err == nil && !complete {
@@ -3292,14 +3325,16 @@ func (e *Engine) ReconciliationRootsForAgent(agent string) []string {
 	return append([]string(nil), e.agentDirs[parser.AgentType(agent)]...)
 }
 
-func (e *Engine) reconcileWatchRootsStreamed(
+// reconcileWatchRootsStreamedLocked runs one streamed reconciliation pass.
+// The caller must hold syncMu: reconcileScopedWatchRoots takes it per pass,
+// and ReconcileProviderRootsGrouped holds it across every group plus the
+// shared epilogue so no other pass can interleave with a pending epilogue.
+func (e *Engine) reconcileWatchRootsStreamedLocked(
 	ctx context.Context, agent parser.AgentType, roots []string, full, force bool,
 ) (stats SyncStats, metrics ReconciliationMetrics, tombstoned int, retErr error) {
 	if err := ctx.Err(); err != nil {
 		return SyncStats{Aborted: true}, metrics, 0, err
 	}
-	e.syncMu.Lock()
-	defer e.syncMu.Unlock()
 	if force {
 		e.clearWatcherOverflowCaches()
 	}
@@ -3347,7 +3382,7 @@ func (e *Engine) reconcileWatchRootsStreamed(
 	} else if scope != nil {
 		scope.agent = agent
 	}
-	preContainerStates := e.captureSQLiteContainerStates(nil)
+	preContainerStates := e.captureSQLiteContainerStatesForAgent(agent)
 	providers, completedScopes, failedRoots,
 		failures, discoveryErr, err := e.streamReconciliationCandidates(
 		ctx, scope, spool,
