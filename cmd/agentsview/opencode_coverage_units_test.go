@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"testing"
 	"time"
@@ -125,8 +126,18 @@ func TestOpenCodeContainerUnitIsBudgetExempt(t *testing.T) {
 	})
 	require.GreaterOrEqual(t, claudeIdx, 0)
 	require.True(t, roots[claudeIdx].recursive)
-	assert.True(t, results[claudeIdx].BudgetExhausted,
-		"recursive roots still compete for the exhausted budget")
+	if recursiveWatchesMeterBudget() {
+		assert.True(t, results[claudeIdx].BudgetExhausted,
+			"recursive roots still compete for the exhausted budget")
+	}
+}
+
+// recursiveWatchesMeterBudget reports whether this platform's watch backend
+// counts recursive roots against the shared directory budget. The macOS
+// FSEvents backend owns the whole root plan and opens one stream per logical
+// root, so it never consults the budget and never reports exhaustion.
+func recursiveWatchesMeterBudget() bool {
+	return runtime.GOOS != "darwin"
 }
 
 // TestOpenCodeSQLiteRootPollableUnderWatcherUnavailableFallback proves the
