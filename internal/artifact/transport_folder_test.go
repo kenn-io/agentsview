@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -166,12 +167,17 @@ func TestOpenFolderTransportRejectsMixedRelativeAndAbsoluteOverlap(
 ) {
 	t.Parallel()
 
-	root := t.TempDir()
+	workingDirectory, err := os.Getwd()
+	require.NoError(t, err)
+	root, err := os.MkdirTemp(
+		workingDirectory,
+		".artifact-overlap-",
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(root)) })
 	protected := filepath.Join(root, "provider")
 	target := filepath.Join(protected, "share")
 	require.NoError(t, os.MkdirAll(target, 0o755))
-	workingDirectory, err := os.Getwd()
-	require.NoError(t, err)
 	relativeTarget, err := filepath.Rel(workingDirectory, target)
 	require.NoError(t, err)
 	relativeProtected, err := filepath.Rel(workingDirectory, protected)
@@ -274,6 +280,9 @@ func TestFolderTransportPrepareRejectsSwappedTarget(t *testing.T) {
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows prevents replacing a directory held open by os.Root")
+	}
 
 	moved := filepath.Join(root, "moved")
 	require.NoError(t, os.Rename(target, moved))
@@ -469,12 +478,16 @@ func TestFolderTransportRejectsSymlinkedWireEntry(t *testing.T) {
 	require.NoError(t, err)
 	directory := filepath.Join(target, wire.Origin, string(wire.Kind))
 	require.NoError(t, os.MkdirAll(directory, 0o755))
+	sourceDirectory := t.TempDir()
 	require.NoError(t, os.WriteFile(
-		filepath.Join(directory, "source"),
+		filepath.Join(sourceDirectory, "source"),
 		body,
 		0o600,
 	))
-	require.NoError(t, os.Symlink("source", filepath.Join(directory, wire.Name)))
+	require.NoError(t, os.Symlink(
+		filepath.Join(sourceDirectory, "source"),
+		filepath.Join(directory, wire.Name),
+	))
 
 	_, err = transport.Exchange(t.Context(), newTestArtifactStore(t))
 	require.Error(t, err)

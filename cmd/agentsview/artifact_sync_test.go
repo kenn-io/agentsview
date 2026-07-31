@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -248,6 +249,7 @@ func TestDoSyncRunsArtifactExchangeAfterConfiguredRemoteFanout(t *testing.T) {
 func TestRunDaemonArtifactExchangeUsesAuthenticatedLoopbackEndpoint(
 	t *testing.T,
 ) {
+	target := filepath.Join(t.TempDir(), "archive")
 	var got server.ArtifactExchangeRequest
 	ts := httptest.NewServer(http.HandlerFunc(func(
 		w http.ResponseWriter,
@@ -270,17 +272,99 @@ func TestRunDaemonArtifactExchangeUsesAuthenticatedLoopbackEndpoint(
 		t.Context(),
 		transport{Mode: transportHTTP, URL: ts.URL + "/"},
 		"test-token",
-		"/mounted/archive",
+		target,
 		true,
 	)
 
 	require.NoError(t, err)
 	assert.Equal(t, server.ArtifactExchangeRequest{
-		Target: "/mounted/archive",
+		Target: target,
 		Full:   true,
 	}, got)
 	assert.Equal(t, "node-a1b2c3", result.Origin)
 	assert.Equal(t, 3, result.PublishedArtifacts)
+}
+
+func TestDaemonArtifactExchangeNotifiesClientsAndSchedulersAfterImport(
+	t *testing.T,
+) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "sessions.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	broadcaster := server.NewBroadcaster(0)
+	events, unsubscribe := broadcaster.Subscribe()
+	t.Cleanup(unsubscribe)
+
+	embedManager := &fakeEmbedManager{}
+	embedScheduler := newEmbedScheduler(
+		embedManager,
+		time.Millisecond,
+		0,
+		false,
+		nil,
+	)
+	go embedScheduler.Run(t.Context())
+	t.Cleanup(embedScheduler.Stop)
+
+	recallNotified := make(chan struct{}, 1)
+	emitter := wrapEmbeddingSyncEmitter(
+		broadcaster,
+		vectorServing{
+			Scheduler: embedScheduler,
+			RecallMutationNotify: func() {
+				recallNotified <- struct{}{}
+			},
+		},
+		true,
+	)
+	engine := agentsync.NewEngine(
+		database,
+		agentsync.EngineConfig{Emitter: emitter},
+	)
+	t.Cleanup(engine.Close)
+
+	original := runArtifactSyncCLI
+	runArtifactSyncCLI = func(
+		context.Context,
+		*db.DB,
+		artifact.SyncOptions,
+	) (artifact.SyncResult, error) {
+		return artifact.SyncResult{
+			ImportedSessions: 1,
+			ImportedMessages: 2,
+		}, nil
+	}
+	t.Cleanup(func() { runArtifactSyncCLI = original })
+
+	runner := newDaemonArtifactExchangeRunner(
+		config.Config{DataDir: t.TempDir()},
+		database,
+		engine,
+		emitter,
+	)
+	result, err := runner(t.Context(), server.ArtifactExchangeRequest{
+		Target: t.TempDir(),
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.ImportedSessions)
+	select {
+	case event := <-events:
+		assert.Equal(t, "sessions", event.Scope)
+	case <-time.After(time.Second):
+		require.Fail(t, "artifact import did not notify SSE subscribers")
+	}
+	waitForSchedulerCondition(
+		t,
+		func() bool { return embedManager.callCount() == 1 },
+		"artifact import did not notify the embedding scheduler",
+	)
+	select {
+	case <-recallNotified:
+	case <-time.After(time.Second):
+		require.Fail(t, "artifact import did not notify the recall scheduler")
+	}
 }
 
 func TestRunDaemonArtifactExchangeMakesRelativeTargetAbsolute(t *testing.T) {

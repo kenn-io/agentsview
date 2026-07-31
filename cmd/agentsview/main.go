@@ -500,7 +500,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 		))
 	}
 	srvOpts = append(srvOpts, server.WithArtifactExchangeRunner(
-		newDaemonArtifactExchangeRunner(cfg, database, engine),
+		newDaemonArtifactExchangeRunner(cfg, database, engine, emitter),
 	))
 	srv := server.New(cfg, database, engine, srvOpts...)
 

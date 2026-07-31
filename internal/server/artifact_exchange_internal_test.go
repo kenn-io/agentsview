@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +30,7 @@ func TestArtifactExchangeRouteRequiresRunner(t *testing.T) {
 }
 
 func TestArtifactExchangeAcceptsAuthenticatedLoopbackRequest(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "archive")
 	var got ArtifactExchangeRequest
 	srv := testArtifactExchangeServer(t, func(
 		_ context.Context,
@@ -44,12 +46,12 @@ func TestArtifactExchangeAcceptsAuthenticatedLoopbackRequest(t *testing.T) {
 
 	rec := serveArtifactExchange(
 		t, srv, "127.0.0.1:43125",
-		`{"target":"/mounted/archive","full":true}`,
+		artifactExchangeBody(t, target, true),
 	)
 
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	assert.Equal(t, ArtifactExchangeRequest{
-		Target: "/mounted/archive",
+		Target: target,
 		Full:   true,
 	}, got)
 	var result artifact.SyncResult
@@ -183,6 +185,7 @@ func TestArtifactExchangeRejectsInvalidBodies(t *testing.T) {
 }
 
 func TestArtifactExchangeAcceptsLocalhostHost(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "archive")
 	called := false
 	srv := testArtifactExchangeServer(t, func(
 		context.Context,
@@ -196,7 +199,7 @@ func TestArtifactExchangeAcceptsLocalhostHost(t *testing.T) {
 		t,
 		srv,
 		"localhost:43125",
-		`{"target":"/mounted/archive"}`,
+		artifactExchangeBody(t, target, false),
 	)
 
 	assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
@@ -204,7 +207,7 @@ func TestArtifactExchangeAcceptsLocalhostHost(t *testing.T) {
 }
 
 func TestArtifactExchangeRunnerErrorIsRedacted(t *testing.T) {
-	privateTarget := "/private/company/archive"
+	privateTarget := filepath.Join(t.TempDir(), "private", "archive")
 	srv := testArtifactExchangeServer(t, func(
 		context.Context,
 		ArtifactExchangeRequest,
@@ -310,4 +313,14 @@ func artifactExchangeRequest(
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer test-token")
 	return req
+}
+
+func artifactExchangeBody(t *testing.T, target string, full bool) string {
+	t.Helper()
+	body, err := json.Marshal(ArtifactExchangeRequest{
+		Target: target,
+		Full:   full,
+	})
+	require.NoError(t, err)
+	return string(body)
 }

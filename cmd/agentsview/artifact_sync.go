@@ -62,6 +62,7 @@ func newDaemonArtifactExchangeRunner(
 	appCfg config.Config,
 	database *db.DB,
 	engine *agentsync.Engine,
+	emitter agentsync.Emitter,
 ) server.ArtifactExchangeRunner {
 	return func(
 		ctx context.Context,
@@ -80,6 +81,9 @@ func newDaemonArtifactExchangeRunner(
 			err = work()
 		} else {
 			err = engine.RunExclusiveFlushed(work)
+		}
+		if result.ImportedSessions > 0 && emitter != nil {
+			emitter.Emit("sessions")
 		}
 		return result, err
 	}
