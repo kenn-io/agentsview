@@ -1008,9 +1008,9 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 		"expected tool_result_events table after reopen")
 }
 
-func TestCurrentDataVersionCopilotToolTiming(t *testing.T) {
-	assert.Equal(t, 76, CurrentDataVersion(),
-		"Copilot tool execution timing requires a data version bump")
+func TestCurrentDataVersionVibeCachedTokensReparse(t *testing.T) {
+	assert.Equal(t, 77, CurrentDataVersion(),
+		"reading Vibe cache-hit tokens requires a data version bump")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {

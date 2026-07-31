@@ -520,6 +520,55 @@ func TestParseVibeSessionModelFromConfig(t *testing.T) {
 	assert.Equal(t, 40, usageEvent.OutputTokens)
 }
 
+// TestParseVibeSessionCachedTokens verifies that the provider cache-hit count
+// recorded under stats.session_cached_tokens is split out into the cache-read
+// field and subtracted from input tokens, since Vibe reports it as a subset of
+// session_prompt_tokens (OpenAI/Mistral wire shape). Counting it in both places
+// would double-bill the cached prefix.
+func TestParseVibeSessionCachedTokens(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	content := `{"role": "user", "content": "test message", "message_id": "1"}
+{"role": "assistant", "content": "test response", "message_id": "2"}
+`
+	metaContent := `{
+		"session_id": "test-session-cached",
+		"start_time": "2026-06-13T10:00:00Z",
+		"end_time": "2026-06-13T10:05:00Z",
+		"title": "Test session with cached tokens",
+		"config": {"active_model": "mistral-medium-3.5"},
+		"stats": {
+			"session_prompt_tokens": 100,
+			"session_completion_tokens": 40,
+			"session_cached_tokens": 30,
+			"context_tokens": 140,
+			"last_turn_cached_tokens": 10,
+			"session_total_llm_tokens": 140
+		}
+	}
+`
+	files := map[string]string{
+		"session_test/messages.jsonl": content,
+		"session_test/meta.json":      metaContent,
+	}
+	setupFileSystem(t, tmpDir, files)
+
+	path := filepath.Join(tmpDir, "session_test", "messages.jsonl")
+	fileInfo := FileInfo{Path: path, Mtime: time.Now().UnixNano()}
+
+	result, err := parseVibeTestSession(t, path, fileInfo)
+	require.NoError(t, err)
+
+	require.Len(t, result.UsageEvents, 1)
+	usageEvent := result.UsageEvents[0]
+	assert.Equal(t, "mistral-medium-3.5", usageEvent.Model)
+	// Input is the fresh (non-cached) prefix: 100 - 30.
+	assert.Equal(t, 70, usageEvent.InputTokens)
+	assert.Equal(t, 40, usageEvent.OutputTokens)
+	assert.Equal(t, 30, usageEvent.CacheReadInputTokens)
+	assert.Equal(t, 0, usageEvent.CacheCreationInputTokens)
+}
+
 // TestParseVibeSessionInjectedUserExcluded verifies that an injected user
 // record (system context) is marked system and excluded from both the first
 // message and the user-message count, so it cannot masquerade as the user's

@@ -342,7 +342,12 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // (76: Copilot CLI tool execution boundaries. Re-parsing persists
 // tool.execution_start and tool.execution_complete timestamps as result events
 // so Session Analysis excludes resumed-session idle time from completed calls.)
-const dataVersion = 76
+// (77: Vibe usage reparse. The Vibe parser now reads
+// stats.session_cached_tokens, splitting the provider cache-hit count out of
+// input tokens into the usage event's cache-read field. Existing rows need
+// re-parsing so the cached prefix is priced at the discounted cache-read rate
+// instead of the full input rate.)
+const dataVersion = 77
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

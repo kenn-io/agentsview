@@ -60,9 +60,11 @@ type VibeStats struct {
 	Steps                    int   `json:"steps"`
 	SessionPromptTokens      int   `json:"session_prompt_tokens"`
 	SessionCompletionTokens  int   `json:"session_completion_tokens"`
+	SessionCachedTokens      int   `json:"session_cached_tokens"`
 	ContextTokens            int   `json:"context_tokens"`
 	LastTurnPromptTokens     int   `json:"last_turn_prompt_tokens"`
 	LastTurnCompletionTokens int   `json:"last_turn_completion_tokens"`
+	LastTurnCachedTokens     int   `json:"last_turn_cached_tokens"`
 	SessionTotalLLMTokens    int64 `json:"session_total_llm_tokens"`
 	LastTurnTotalTokens      int   `json:"last_turn_total_tokens"`
 }
@@ -441,7 +443,13 @@ func vibeUsageEvents(
 	// Use SessionPromptTokens for input tokens and SessionCompletionTokens for output tokens.
 	// SessionTotalLLMTokens appears to be the sum of input + output tokens,
 	// so we don't use it as a direct source but it can serve as validation.
-	inputTokens := stats.SessionPromptTokens
+	//
+	// SessionCachedTokens is the provider cache-hit (read) count, reported as a
+	// subset of SessionPromptTokens (OpenAI/Mistral wire shape). Split it out
+	// so cache reads are priced at the discounted cache-read rate and not
+	// double-counted against the full input rate.
+	cacheReadTokens := max(stats.SessionCachedTokens, 0)
+	inputTokens := max(stats.SessionPromptTokens-cacheReadTokens, 0)
 	outputTokens := stats.SessionCompletionTokens
 
 	return []ParsedUsageEvent{{
@@ -450,9 +458,9 @@ func vibeUsageEvents(
 		Model:        model,
 		InputTokens:  inputTokens,
 		OutputTokens: outputTokens,
-		// Vibe doesn't currently expose cache token breakdown in meta.json
+		// Vibe doesn't currently expose cache-creation breakdown
 		CacheCreationInputTokens: 0,
-		CacheReadInputTokens:     0,
+		CacheReadInputTokens:     cacheReadTokens,
 		ReasoningTokens:          0,
 		// Vibe doesn't currently expose cost information
 		Cost:       nil,
