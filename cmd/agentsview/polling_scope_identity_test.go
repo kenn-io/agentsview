@@ -47,8 +47,8 @@ func TestPollingScopesForDirsEmitsAllAgents(t *testing.T) {
 }
 
 // TestWatchPollingObligationsPersistentDirBothAgents covers the persistent-dir branch:
-// when two agents share a persistent polling dir, the obligation for that dir
-// must carry both agents' scopes, not just the last writer in syncDirToAgents.
+// when two agents both request persistent polling for a shared dir, the
+// obligation for that dir must carry both requesters' scopes.
 // Uses a non-nil results slice so the "no watcher" path is not taken; only the
 // persistent-dir loop runs.
 func TestWatchPollingObligationsPersistentDirBothAgents(t *testing.T) {
@@ -67,7 +67,9 @@ func TestWatchPollingObligationsPersistentDirBothAgents(t *testing.T) {
 	// "no watcher" (i >= len(results)) branch does NOT execute.
 	results := []agentsync.RecursiveWatchResult{{Watched: 1, MissingRootLifecycleOwned: false}}
 
-	got := watchPollingObligations(roots, results, nil, nil)
+	got := watchPollingObligations(roots, results, nil, map[string][]parser.AgentType{
+		sharedDir: {parser.AgentClaude, parser.AgentGemini},
+	})
 
 	agentSet := make(map[parser.AgentType]bool)
 	for _, ob := range got {
@@ -83,10 +85,44 @@ func TestWatchPollingObligationsPersistentDirBothAgents(t *testing.T) {
 		"persistent obligation for shared dir must carry Gemini's scope")
 }
 
+// TestWatchPollingObligationsPersistentDirScopedToRequestingProvider is the
+// ownership regression: when only one of two agents sharing a configured dir
+// requested persistent polling, the persistent obligation must carry only the
+// requester's scope. Granting the other agent a scope would reconcile it
+// authoritatively on every pass and tombstone its sessions under a
+// lifecycle-owned missing root.
+func TestWatchPollingObligationsPersistentDirScopedToRequestingProvider(t *testing.T) {
+	parent := t.TempDir()
+	sharedDir := filepath.Join(parent, "shared-sync")
+
+	roots := []watchRoot{{
+		path: filepath.Join(parent, "physical-root"),
+		scopes: []watchScope{
+			{agent: parser.AgentClaude, syncDir: sharedDir},
+			{agent: parser.AgentGemini, syncDir: sharedDir},
+		},
+		persistentPollingDirs: []string{sharedDir},
+	}}
+	results := []agentsync.RecursiveWatchResult{{Watched: 1}}
+
+	// Only Claude requested persistent polling for the shared dir.
+	got := watchPollingObligations(roots, results, nil, map[string][]parser.AgentType{
+		sharedDir: {parser.AgentClaude},
+	})
+
+	require.Len(t, got, 1)
+	assert.Equal(t, []agentsync.PollingScope{
+		{Agent: string(parser.AgentClaude), Root: filepath.Clean(sharedDir)},
+	}, got[0].Scopes,
+		"persistent obligation must carry only the requesting provider's scope; "+
+			"Gemini shares the dir but did not request persistent polling")
+}
+
 // TestWatchPollingObligationsUnwatchedFallbackBothAgents covers the unwatched-fallback branch:
-// when two agents share a dir in the unwatched-dirs fallback, both agents'
-// scopes must appear in the resulting obligation. Uses non-nil results so the
-// "no watcher" path is not taken.
+// when two agents both request persistent polling for a dir that reaches the
+// unwatched-dirs fallback, both requesters' scopes must appear in the
+// resulting obligation. Uses non-nil results so the "no watcher" path is not
+// taken.
 func TestWatchPollingObligationsUnwatchedFallbackBothAgents(t *testing.T) {
 	parent := t.TempDir()
 	sharedDir := filepath.Join(parent, "shared-sync")
@@ -102,7 +138,9 @@ func TestWatchPollingObligationsUnwatchedFallbackBothAgents(t *testing.T) {
 	results := []agentsync.RecursiveWatchResult{{Watched: 1}}
 	unwatchedDirs := []string{sharedDir}
 
-	got := watchPollingObligations(roots, results, unwatchedDirs, nil)
+	got := watchPollingObligations(roots, results, unwatchedDirs, map[string][]parser.AgentType{
+		sharedDir: {parser.AgentClaude, parser.AgentGemini},
+	})
 
 	agentSet := make(map[parser.AgentType]bool)
 	for _, ob := range got {
@@ -151,7 +189,7 @@ func TestRegisterWatcherUnavailablePreservesAgents(t *testing.T) {
 		},
 	}}
 
-	err := registerWatcherUnavailableObligations(opts, roots, nil, nil)
+	err := registerWatcherUnavailableObligations(opts, roots, nil, nil, nil)
 	require.NoError(t, err)
 
 	mu.Lock()
@@ -173,28 +211,25 @@ func TestRegisterWatcherUnavailablePreservesAgents(t *testing.T) {
 }
 
 // TestWatchPollingObligationsPersistentDirCarriesAgentFromSymlinkOnlyProvider:
-// when a provider's only physical root is a symlink and is therefore recorded
-// in symlinkGatedDirs rather than roots, the persistent obligation for its
-// syncDir must still carry the provider's agent. If syncDirToAgents were built
-// from roots only (empty in this case), the persistent obligation would get
-// Agent:"" and the coordinator could not distinguish the provider's dir from
-// an unowned fallback dir.
+// when a provider's only physical root is a symlink and is therefore excluded
+// from roots, the persistent obligation for its syncDir must still carry the
+// provider's agent. collectWatchRoots records the symlink provider as a
+// persistent-polling requester, so the provenance map identifies the agent
+// even though no watch root mentions the dir; without it the persistent
+// obligation would get Agent:"" and the coordinator could not distinguish the
+// provider's dir from an unowned fallback dir.
 func TestWatchPollingObligationsPersistentDirCarriesAgentFromSymlinkOnlyProvider(t *testing.T) {
 	parent := t.TempDir()
 	syncDir := filepath.Join(parent, "copilot-dir")
 	require.NoError(t, os.Mkdir(syncDir, 0o755))
-	symRoot := filepath.Join(parent, "sessions-symlink") // symlink root; not in roots
 
-	// symlinkGatedDirs records that symRoot is a symlink root for
-	// parser.AgentCopilot whose syncDir is syncDir.
-	symlinkGated := map[string][]watchScope{
-		symRoot: {{agent: parser.AgentCopilot, syncDir: syncDir}},
-	}
-
-	// roots is empty: the provider's only root is a symlink (in symlinkGatedDirs),
-	// so nothing appears in the watch plan's regular root list.
+	// roots is empty: the provider's only root is a symlink, so nothing appears
+	// in the watch plan's regular root list. The provenance map records the
+	// symlink provider's persistent-polling request for its syncDir.
 	got := watchPollingObligations(
-		nil, nil, []string{syncDir}, symlinkGated,
+		nil, nil, []string{syncDir}, map[string][]parser.AgentType{
+			syncDir: {parser.AgentCopilot},
+		},
 	)
 
 	agentSet := make(map[string]bool)
@@ -207,9 +242,9 @@ func TestWatchPollingObligationsPersistentDirCarriesAgentFromSymlinkOnlyProvider
 	}
 	assert.True(t, agentSet[string(parser.AgentCopilot)],
 		"persistent obligation for syncDir must carry the provider's agent "+
-			"when its only root is a symlink recorded in symlinkGatedDirs")
+			"when its only root is a symlink excluded from the watch plan")
 	assert.False(t, agentSet[""],
-		"no scope should carry the empty agent when provider identity is known from symlinkGatedDirs")
+		"no scope should carry the empty agent when provider identity is known from provenance")
 }
 
 // TestWatcherStartFailureEmptyAgentBypassesNamedGate (coordinator level):

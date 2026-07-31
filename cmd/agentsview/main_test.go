@@ -561,7 +561,7 @@ func TestCollectWatchRootsPreservesDirsSharingWatchRoot(t *testing.T) {
 		},
 	}
 
-	roots, unwatchedDirs, _ := collectWatchRoots(cfg)
+	roots, unwatchedDirs, _, _ := collectWatchRoots(cfg)
 
 	assert.ElementsMatch(t, []string{sessionsDir, archivedDir}, unwatchedDirs,
 		"missing roots retain polling until native activation completes")
@@ -610,7 +610,7 @@ func TestCollectWatchRootsPollsRecursiveSymlinkProviderRoot(t *testing.T) {
 		},
 	}
 
-	roots, unwatchedDirs, _ := collectWatchRoots(cfg)
+	roots, unwatchedDirs, _, _ := collectWatchRoots(cfg)
 
 	require.Len(t, roots, 2)
 	assert.Equal(t, root, roots[0].path)
@@ -1086,7 +1086,7 @@ func TestCollectWatchRootsHermesSessionsWatchesStateDBParent(t *testing.T) {
 		},
 	}
 
-	roots, unwatchedDirs, _ := collectWatchRoots(cfg)
+	roots, unwatchedDirs, _, _ := collectWatchRoots(cfg)
 
 	require.Empty(t, unwatchedDirs, "unwatched dirs before watcher setup")
 	require.Len(t, roots, 2)
@@ -1109,7 +1109,7 @@ func TestCollectWatchRootsWatchesHermesProfilesContainerRecursively(t *testing.T
 		},
 	}
 
-	roots, unwatchedDirs, _ := collectWatchRoots(cfg)
+	roots, unwatchedDirs, _, _ := collectWatchRoots(cfg)
 
 	require.Empty(t, unwatchedDirs)
 	require.Len(t, roots, 1)
@@ -1127,7 +1127,7 @@ func TestCollectWatchRootsUsesCoworkProviderRecursiveRoot(t *testing.T) {
 		},
 	}
 
-	roots, unwatchedDirs, _ := collectWatchRoots(cfg)
+	roots, unwatchedDirs, _, _ := collectWatchRoots(cfg)
 
 	require.Empty(t, unwatchedDirs, "cowork root should be watched directly")
 	got, ok := findCollectedWatchRoot(roots, root)
@@ -1148,7 +1148,7 @@ func TestCollectWatchRootsUsesGeminiProviderMetadataRoot(t *testing.T) {
 		},
 	}
 
-	roots, unwatchedDirs, _ := collectWatchRoots(cfg)
+	roots, unwatchedDirs, _, _ := collectWatchRoots(cfg)
 
 	require.Empty(t, unwatchedDirs, "all gemini provider roots exist")
 	metadataRoot, ok := findCollectedWatchRoot(roots, root)
@@ -1172,7 +1172,7 @@ func TestCollectWatchRootsUsesAntigravityCLIHistoryRoot(t *testing.T) {
 		},
 	}
 
-	roots, unwatchedDirs, _ := collectWatchRoots(cfg)
+	roots, unwatchedDirs, _, _ := collectWatchRoots(cfg)
 
 	require.Empty(t, unwatchedDirs, "all antigravity cli provider roots exist")
 	historyRoot, ok := findCollectedWatchRoot(roots, root)
@@ -1199,7 +1199,7 @@ func TestCollectWatchRootsIncludesDevinProviderRootsForNonFileAgent(t *testing.T
 		},
 	}
 
-	roots, unwatchedDirs, _ := collectWatchRoots(cfg)
+	roots, unwatchedDirs, _, _ := collectWatchRoots(cfg)
 
 	require.Empty(t, unwatchedDirs)
 	cliRoot, ok := findCollectedWatchRoot(roots, filepath.Join(root, "cli"))
@@ -1221,7 +1221,7 @@ func TestCollectWatchRootsTracksExactAgentsForSharedRoot(t *testing.T) {
 		parser.AgentCodex:  {root},
 	}}
 
-	roots, unwatchedDirs, _ := collectWatchRoots(cfg)
+	roots, unwatchedDirs, _, _ := collectWatchRoots(cfg)
 
 	require.Empty(t, unwatchedDirs)
 	shared, ok := findCollectedWatchRoot(roots, root)
@@ -1247,7 +1247,7 @@ func TestCollectWatchRootsPreservesMissingProviderRoots(t *testing.T) {
 		},
 	}
 
-	roots, unwatchedDirs, _ := collectWatchRoots(cfg)
+	roots, unwatchedDirs, _, _ := collectWatchRoots(cfg)
 
 	require.Len(t, roots, 2)
 	cliRoot, ok := findCollectedWatchRoot(roots, filepath.Join(root, "cli"))
@@ -1538,7 +1538,7 @@ func TestOpenCodeFormatMissingRootsUseNativeLifecycleWithoutPolling(t *testing.T
 				parser.AgentMiMoCode: dirs,
 			}}
 
-			roots, unwatched, _ := collectWatchRoots(cfg)
+			roots, unwatched, _, persistentDirAgents := collectWatchRoots(cfg)
 			require.Len(t, roots, rootCount)
 			results := make([]agentsync.RecursiveWatchResult, rootCount)
 			for i := range results {
@@ -1549,7 +1549,7 @@ func TestOpenCodeFormatMissingRootsUseNativeLifecycleWithoutPolling(t *testing.T
 			}
 			unwatched = accountRegisteredWatchRoots(unwatched, roots, results)
 
-			assert.Empty(t, watchPollingObligations(roots, results, unwatched, nil),
+			assert.Empty(t, watchPollingObligations(roots, results, unwatched, persistentDirAgents),
 				"absent OpenCode-format providers must not add archive-scale polling")
 		})
 	}
@@ -1575,7 +1575,7 @@ func TestWatchPollingObligationsKeepPendingAndPersistentReasonsIndependent(t *te
 		roots,
 		[]agentsync.RecursiveWatchResult{{Watched: 1}, {Watched: 1}},
 		[]string{shared},
-		nil,
+		map[string][]parser.AgentType{shared: {parser.AgentDevin}},
 	)
 
 	assert.Equal(t, []agentsync.PollingObligation{
@@ -1695,6 +1695,7 @@ func TestWatcherUnavailableFallbackDefersBrokenSymlinkScope(t *testing.T) {
 		nil,
 		[]string{parent, other},
 		map[string][]watchScope{symRoot: {{syncDir: parent}}},
+		nil,
 	))
 
 	bothDirs := []string{parent, other}
@@ -1774,7 +1775,7 @@ func TestWatcherUnavailableFallbackDefersMissingNestedRootScope(t *testing.T) {
 	}}
 
 	require.NoError(t, registerWatcherUnavailableObligations(
-		options, roots, []string{parent, other}, nil,
+		options, roots, []string{parent, other}, nil, nil,
 	))
 
 	coordinator.requestPoll()
@@ -1859,7 +1860,7 @@ func TestWatcherUnavailableFallbackDefersNestedRootLostAfterRegistration(t *test
 	}}
 
 	require.NoError(t, registerWatcherUnavailableObligations(
-		options, roots, []string{parent, other}, nil,
+		options, roots, []string{parent, other}, nil, nil,
 	))
 
 	// Per-agent polling: parent (gemini) and other ("") arrive as separate calls.
@@ -1941,7 +1942,7 @@ func TestRegisterWatcherUnavailableCoversDegradedWithoutPollingRequired(t *testi
 	}}
 
 	require.NoError(t, registerWatcherUnavailableObligations(
-		options, roots, []string{parent, other}, nil,
+		options, roots, []string{parent, other}, nil, nil,
 	))
 
 	// Pre-fix, probeGated excludes parent (its scope has a probe=nestedRoot
@@ -2002,7 +2003,7 @@ func TestWatcherUnavailableObligationsGateBeforeFallback(t *testing.T) {
 	}}
 
 	require.NoError(t, registerWatcherUnavailableObligations(
-		options, roots, []string{parent, other}, nil,
+		options, roots, []string{parent, other}, nil, nil,
 	))
 
 	require.NotEmpty(t, stepAvailable)

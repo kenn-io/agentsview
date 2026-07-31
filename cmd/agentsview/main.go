@@ -795,7 +795,7 @@ func (s watchRecoveryScope) coversProviderRoot(root string) bool {
 // probeWatchRecoveryScope computes the probed reconciliation scope backing
 // reconcileRootPaths; see that function for the deferral semantics.
 func probeWatchRecoveryScope(cfg config.Config) watchRecoveryScope {
-	roots, unwatchedDirs, symlinkGatedDirs := collectWatchRoots(cfg)
+	roots, unwatchedDirs, symlinkGatedDirs, _ := collectWatchRoots(cfg)
 	deferred := make(map[string]struct{})
 	// A recursive symlink root never joins the watch roots, so its exact
 	// availability probe is the symlink target itself: os.Stat follows the
@@ -1818,7 +1818,7 @@ func startFileWatcher(
 	queueRetry func(sync.WatchBatch),
 ) {
 	t := time.Now()
-	roots, unwatchedDirs, symlinkGatedDirs := collectWatchRoots(cfg)
+	roots, unwatchedDirs, symlinkGatedDirs, persistentDirAgents := collectWatchRoots(cfg)
 	watcher, err := sync.NewWatcherWithCallback(
 		watcherBatchDelay,
 		watcherSyncMinInterval,
@@ -1831,7 +1831,7 @@ func startFileWatcher(
 			unwatchedDirs = appendUniqueStrings(unwatchedDirs, root.syncDirs()...)
 		}
 		if coverageErr := registerWatcherUnavailableObligations(
-			options, roots, unwatchedDirs, symlinkGatedDirs,
+			options, roots, unwatchedDirs, symlinkGatedDirs, persistentDirAgents,
 		); coverageErr != nil {
 			err = errors.Join(err, coverageErr)
 		}
@@ -1878,7 +1878,7 @@ func startFileWatcher(
 		}
 	}
 	if options.OnPollingRequired != nil {
-		obligations := watchPollingObligations(roots, results, unwatchedDirs, symlinkGatedDirs)
+		obligations := watchPollingObligations(roots, results, unwatchedDirs, persistentDirAgents)
 		obligations = append(obligations, symlinkPollingObligations(symlinkGatedDirs)...)
 		for _, obligation := range obligations {
 			if err := options.OnPollingRequired(obligation); err != nil {
@@ -1911,11 +1911,18 @@ func startFileWatcher(
 		watcher.QueueRetryBatch
 }
 
+// watchPollingObligations builds the polling obligations for the watch plan.
+// persistentDirAgents maps each clean persistent-polling dir to the providers
+// that requested persistent polling for it (from collectWatchRoots); persistent
+// obligations carry scopes only for those requesters. Other agents that merely
+// share the configured dir are covered by their own watch results, and pulling
+// them into another provider's persistent poll would reconcile them
+// authoritatively — tombstoning sessions under a lifecycle-owned missing root.
 func watchPollingObligations(
 	roots []watchRoot,
 	results []sync.RecursiveWatchResult,
 	unwatchedDirs []string,
-	symlinkGatedDirs map[string][]watchScope,
+	persistentDirAgents map[string][]parser.AgentType,
 ) []sync.PollingObligation {
 	type draft struct {
 		probe  string
@@ -1944,32 +1951,6 @@ func watchPollingObligations(
 		}
 	}
 
-	// syncDirToAgents maps clean syncDir → all agents configured for that dir.
-	// Include both regular roots and symlink-gated dirs so that a provider
-	// whose only physical root is a symlink (excluded from the watch plan) still
-	// has its agent recorded for persistent obligation scopes.
-	syncDirToAgents := make(map[string][]parser.AgentType)
-	for _, root := range roots {
-		for _, scope := range root.scopes {
-			if scope.syncDir != "" {
-				cleanDir := filepath.Clean(scope.syncDir)
-				if !slices.Contains(syncDirToAgents[cleanDir], scope.agent) {
-					syncDirToAgents[cleanDir] = append(syncDirToAgents[cleanDir], scope.agent)
-				}
-			}
-		}
-	}
-	for _, scopes := range symlinkGatedDirs {
-		for _, scope := range scopes {
-			if scope.syncDir != "" {
-				cleanDir := filepath.Clean(scope.syncDir)
-				if !slices.Contains(syncDirToAgents[cleanDir], scope.agent) {
-					syncDirToAgents[cleanDir] = append(syncDirToAgents[cleanDir], scope.agent)
-				}
-			}
-		}
-	}
-
 	for i, root := range roots {
 		var result sync.RecursiveWatchResult
 		if i < len(results) {
@@ -1981,7 +1962,7 @@ func watchPollingObligations(
 		}
 		for _, dir := range root.persistentPollingDirs {
 			cleanDir := filepath.Clean(dir)
-			agents := syncDirToAgents[cleanDir]
+			agents := persistentDirAgents[cleanDir]
 			if len(agents) == 0 {
 				addScope(pollingObligationKey("persistent", cleanDir), dir,
 					pollingScope{Root: dir})
@@ -2012,7 +1993,7 @@ func watchPollingObligations(
 	for _, dir := range unwatchedDirs {
 		cleanDir := filepath.Clean(dir)
 		if _, ok := represented[cleanDir]; !ok {
-			agents := syncDirToAgents[cleanDir]
+			agents := persistentDirAgents[cleanDir]
 			if len(agents) == 0 {
 				addScope(pollingObligationKey("persistent", cleanDir), cleanDir,
 					pollingScope{Root: dir})
@@ -2073,8 +2054,9 @@ func registerWatcherUnavailableObligations(
 	roots []watchRoot,
 	unwatchedDirs []string,
 	symlinkGatedDirs map[string][]watchScope,
+	persistentDirAgents map[string][]parser.AgentType,
 ) error {
-	obligations := watchPollingObligations(roots, nil, unwatchedDirs, symlinkGatedDirs)
+	obligations := watchPollingObligations(roots, nil, unwatchedDirs, persistentDirAgents)
 	obligations = append(obligations, symlinkPollingObligations(symlinkGatedDirs)...)
 	if options.OnPollingRequired != nil {
 		for _, obligation := range obligations {
@@ -2503,14 +2485,27 @@ func (r watchRoot) pollingScopesForDirs(dirs []string) []pollingScope {
 // each recursive provider root skipped because it is a symlink to the
 // configured dirs whose reconciliation scope its target availability gates;
 // those roots never join the watcher plan or the returned roots.
+// persistentDirAgents maps each clean persistent-polling dir to the providers
+// that requested persistent polling for it, so obligation scopes can stay
+// limited to the owning providers rather than every agent sharing the dir.
 func collectWatchRoots(cfg config.Config) (
 	roots []watchRoot,
 	unwatchedDirs []string,
 	symlinkGatedDirs map[string][]watchScope,
+	persistentDirAgents map[string][]parser.AgentType,
 ) {
 	rootIndexes := make(map[string]int)
 	persistentPollingDirs := make(map[string]struct{})
 	symlinkGatedDirs = make(map[string][]watchScope)
+	persistentDirAgents = make(map[string][]parser.AgentType)
+	addPersistent := func(agent parser.AgentType, dir string) {
+		persistentPollingDirs[dir] = struct{}{}
+		unwatchedDirs = appendUniqueString(unwatchedDirs, dir)
+		cleanDir := filepath.Clean(dir)
+		if !slices.Contains(persistentDirAgents[cleanDir], agent) {
+			persistentDirAgents[cleanDir] = append(persistentDirAgents[cleanDir], agent)
+		}
+	}
 	addRoot := func(agent parser.AgentType, dir, path string, recursive, exists bool) {
 		path = filepath.Clean(path)
 		scope := watchScope{agent: agent, syncDir: dir}
@@ -2538,8 +2533,7 @@ func collectWatchRoots(cfg config.Config) (
 			_, hasProvider := parser.ProviderFactoryByType(def.Type)
 			if providerWatched, polling := collectProviderWatchRoots(def, d, addAgentRoot); providerWatched {
 				if polling.persistent {
-					persistentPollingDirs[d] = struct{}{}
-					unwatchedDirs = appendUniqueString(unwatchedDirs, d)
+					addPersistent(def.Type, d)
 				}
 				for _, symRoot := range polling.symlinkRoots {
 					scope := watchScope{agent: def.Type, syncDir: d}
@@ -2561,15 +2555,13 @@ func collectWatchRoots(cfg config.Config) (
 			}
 			if !def.FileBased {
 				if hasProvider {
-					persistentPollingDirs[d] = struct{}{}
-					unwatchedDirs = appendUniqueString(unwatchedDirs, d)
+					addPersistent(def.Type, d)
 				}
 				continue
 			}
 			fallbackUnwatched := collectLegacyWatchRoots(def, d, addAgentRoot)
 			for _, pollingDir := range fallbackUnwatched {
-				persistentPollingDirs[pollingDir] = struct{}{}
-				unwatchedDirs = appendUniqueString(unwatchedDirs, pollingDir)
+				addPersistent(def.Type, pollingDir)
 			}
 		}
 	}
@@ -2583,7 +2575,7 @@ func collectWatchRoots(cfg config.Config) (
 			}
 		}
 	}
-	return roots, unwatchedDirs, symlinkGatedDirs
+	return roots, unwatchedDirs, symlinkGatedDirs, persistentDirAgents
 }
 
 type providerPollingReasons struct {
@@ -2917,7 +2909,7 @@ type scheduledReconcileTarget struct {
 // present scope would read the missing one as an authoritative empty discovery
 // and tombstone every session beneath it.
 func scheduledReconcileTargets(cfg config.Config) []scheduledReconcileTarget {
-	roots, _, _ := collectWatchRoots(cfg)
+	roots, _, _, _ := collectWatchRoots(cfg)
 	deferred := make(map[parser.AgentType]map[string]struct{})
 	for _, root := range roots {
 		if root.exists {
