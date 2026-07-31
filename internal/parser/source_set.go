@@ -162,6 +162,32 @@ func (p *SourceSetProvider) PersistentArchiveSource(
 	return resolver.PersistentArchiveSource(path, fullSessionID)
 }
 
+// sourceSetFreshnessHasher is the optional inner-source-set shape of
+// parser.MultiFileStatHasher. A SourceSet-backed base that owns a
+// multi-file on-disk layout (currently codebuffSourceSet) implements
+// ComputeMultiFileStatHash on the inner SourceSet, and SourceSetProvider
+// forwards that method here so the engine's provider-level type
+// assertion against MultiFileStatHasher succeeds. Without the
+// forwarding, the provider wrapping the hasher leaves the engine's
+// providerStatHashers cache empty and the per-component freshness
+// digest is never populated for any multi-file agent.
+type sourceSetFreshnessHasher interface {
+	ComputeMultiFileStatHash(chatPath string) uint64
+}
+
+// ComputeMultiFileStatHash implements parser.MultiFileStatHasher by
+// delegating to the wrapped SourceSet when it advertises the optional
+// hasher shape. Returns 0 when the inner source set is single-file
+// (Claude, Codex, Roocode, ...) and the engine should keep using the
+// existing size/mtime composite freshness path.
+func (p *SourceSetProvider) ComputeMultiFileStatHash(chatPath string) uint64 {
+	hasher, ok := p.sources.(sourceSetFreshnessHasher)
+	if !ok {
+		return 0
+	}
+	return hasher.ComputeMultiFileStatHash(chatPath)
+}
+
 // SourceSetFactory is the generic ProviderFactory for any SourceSet-backed
 // provider. build constructs the SourceSet from the cloned per-provider config
 // (roots, machine, path rewriter), so a base captures whatever config it needs

@@ -341,6 +341,19 @@ type Engine struct {
 	// writeBatchOverride is a test seam for exercising reconciliation archive
 	// write failures after discovery and parse have succeeded.
 	writeBatchOverride func([]pendingWrite, syncWriteMode, bool) (int, int, int, int)
+	// stagedProviderStatHashes is a test observability seam that
+	// counts every successful staging of pr.providerStatHash in
+	// applyProviderFilePathPolicies. Tests assert against a
+	// post-sync snapshot via ResetStagedProviderStatHashes /
+	// StagedProviderStatHashes to verify the per-component digest
+	// staging block actually ran, distinct from proving the parse
+	// path ran at all (which is the counting wrapper's job). Without
+	// this counter a regression that drops the staging call while
+	// keeping provider.Fingerprint intact would still satisfy any
+	// hasStored==false assertion because flushPending's nil check
+	// is a no-op on absent digests. atomic.Int64 is a zero-value
+	// type so the field does not need explicit initialization.
+	stagedProviderStatHashes atomic.Int64
 	// workerCountOverride is a test seam for exercising the production worker
 	// floor and cap independently of the host CPU count.
 	workerCountOverride  int
@@ -485,6 +498,46 @@ const codexExecMigrationKey = "codex_exec_legacy_migration_v1"
 // upgrading to the non-cacheable read-error behavior.
 const visualStudioCopilotSkipMigrationKey = "visualstudio_copilot_skip_migration_v1"
 
+// ProviderStatHasher returns the cached MultiFileStatHasher for the
+// given agent type, or nil when the agent does not declare a
+// multi-file on-disk layout. Tests use this to confirm the
+// per-component freshness gate is wired only for agents whose
+// Source.MultiFileStatHash capability is supported, and absent
+// otherwise so a 0==0 digest match does not short-circuit the
+// legacy size/mtime freshness path for unrelated agents.
+func (e *Engine) ProviderStatHasher(agent parser.AgentType) parser.MultiFileStatHasher {
+	if e == nil {
+		return nil
+	}
+	return e.providerStatHashers[agent]
+}
+
+// StagedProviderStatHashes returns the cumulative number of per-source
+// process results whose applyProviderFilePathPolicies step attached a
+// non-nil res.providerStatHash. Tests reset the counter via
+// ResetStagedProviderStatHashes, run a sync, and assert on the
+// post-sync value to verify the per-component digest staging block
+// actually ran. The counter is cumulative across the engine's
+// lifetime; tests reset it explicitly rather than relying on a
+// per-pass reset so production code does not pay for an unnecessary
+// zero on every SyncAll entry.
+func (e *Engine) StagedProviderStatHashes() int64 {
+	if e == nil {
+		return 0
+	}
+	return e.stagedProviderStatHashes.Load()
+}
+
+// ResetStagedProviderStatHashes zeroes the test observability counter
+// so a single sync pass's staging events can be read as a clean
+// snapshot via StagedProviderStatHashes.
+func (e *Engine) ResetStagedProviderStatHashes() {
+	if e == nil {
+		return
+	}
+	e.stagedProviderStatHashes.Store(0)
+}
+
 // NewEngine creates a sync engine. It pre-populates the
 // in-memory skip cache from the database so that files
 // skipped in a prior run are not re-parsed on startup, and
@@ -607,11 +660,35 @@ func providerFactoryMap(
 }
 
 // buildProviderStatHashers constructs probe providers for each factory
-// and caches the MultiFileStatHasher implementations. Providers that
-// do not implement the interface are absent from the result so the
-// engine's pre-check can fast-path on a missing key. The probe must
-// be side-effect-free: a fresh provider per agent is allocated only
-// for the type assertion, and the probe is discarded immediately.
+// and caches the MultiFileStatHasher implementations. Because every
+// SourceSet-wrapped provider unconditionally satisfies the
+// MultiFileStatHasher interface (a forwarding method on the wrapper
+// delegates to the inner SourceSet when present and returns 0
+// otherwise), the gate here MUST be the explicit
+// Source.MultiFileStatHash capability declaration: an agent whose
+// inner SourceSet does not own a multi-file layout would otherwise
+// be registered with a 0-returning stub, and a warm pass would
+// short-circuit its parse on a 0==0 digest match between
+// ComputeMultiFileStatHash(path) and the previously-stored 0. The
+// probe must be side-effect-free: a fresh provider per agent is
+// allocated only for the type assertion, and the probe is discarded
+// immediately.
+//
+// Freebuff sessions intentionally route through this single
+// AgentCodebuff entry: AgentFreebuff is a recognized AgentType string
+// for ID-prefix display, but the on-disk Codebuff provider is the
+// sole registration in parser.Registry for both paid Codebuff and
+// free Freebuff transcripts (see types_test.go TestFreebuffNotRegistered).
+// parser.AgentFreebuff therefore never appears as a Registry key
+// and never lands here as a separate hasher entry; Freebuff
+// sessions are parsed by the AgentCodebuff probe and surface in
+// storage with agent=AgentCodebuff, which is the key this map
+// actually uses. Any future change that adds AgentFreebuff as a
+// distinct Registry entry must carry Source.MultiFileStatHash=
+// CapabilitySupported along with it -- otherwise Freebuff sessions
+// will silently fall back to the legacy size/max-mtime composite
+// in providerSourceFreshBeforeFingerprint and the per-component
+// digest gate will under-cover them.
 func buildProviderStatHashers(
 	factories map[parser.AgentType]parser.ProviderFactory,
 ) map[parser.AgentType]parser.MultiFileStatHasher {
@@ -620,6 +697,9 @@ func buildProviderStatHashers(
 		probe := factory.NewProvider(parser.ProviderConfig{
 			Machine: "",
 		})
+		if probe.Capabilities().Source.MultiFileStatHash != parser.CapabilitySupported {
+			continue
+		}
 		if h, ok := probe.(parser.MultiFileStatHasher); ok {
 			out[agent] = h
 		}
@@ -627,24 +707,49 @@ func buildProviderStatHashers(
 	return out
 }
 
+// pendingProviderStatHash is the staged freshness digest attached to a
+// per-source processResult. The engine stages it during processFile
+// (before any sessions-table write) and only persists it after the
+// matching source's write batch commits successfully, so a CWD-filtered
+// or failed write cannot mark an absent or stale session as fresh.
+//
+// physicalPath is the on-disk chat path the hasher stats (the path that
+// actually exists locally, even when pathRewriter rewrites the stored
+// file_path to a logical "host:/remote/path" for remote imports).
+// targetKey is the cache key the engine uses for both the digest lookup
+// and persistence, so remote-synced sessions hash their materialized
+// file but store the digest under their canonical logical key.
+type pendingProviderStatHash struct {
+	agent        parser.AgentType
+	physicalPath string
+	targetKey    string
+}
+
 // recordProviderStatHash computes the per-component stat digest for a
 // source and persists it to provider_freshness. Providers without a
 // MultiFileStatHasher implementation are silently skipped (their
 // freshness is owned by the engine's existing skip-cache path). The
-// hasher performs its own os.Stat on the chat path so the caller does
-// not need to supply FileInfo.
+// hasher performs its own os.Stat on the physical chat path so the
+// caller does not need to supply FileInfo. The cache key (targetKey)
+// and the hashed path (physicalPath) are kept distinct so a remote
+// import whose pathRewriter rewrites the stored file_path to a logical
+// "host:/remote/path" still hashes the materialized local file.
 func (e *Engine) recordProviderStatHash(
 	ctx context.Context,
-	agent parser.AgentType,
-	path string,
+	hash pendingProviderStatHash,
 ) {
-	hasher, ok := e.providerStatHashers[agent]
+	hasher, ok := e.providerStatHashers[hash.agent]
 	if !ok {
 		return
 	}
-	digest := hasher.ComputeMultiFileStatHash(path)
-	if err := e.db.UpsertProviderStatHash(ctx, agent, path, digest); err != nil {
-		log.Printf("provider_freshness write for %s/%s: %v", agent, path, err)
+	digest := hasher.ComputeMultiFileStatHash(hash.physicalPath)
+	if err := e.db.UpsertProviderStatHash(
+		ctx, hash.agent, hash.targetKey, digest,
+	); err != nil {
+		log.Printf(
+			"provider_freshness write for %s/%s: %v",
+			hash.agent, hash.targetKey, err,
+		)
 	}
 }
 
@@ -6550,6 +6655,26 @@ func (e *Engine) collectAndBatch(
 			stats.cwdFilteredSessions += outcome.cwdFiltered
 			progress.MessagesIndexed += outcome.writtenMessages
 			stats.messagesIndexed = progress.MessagesIndexed
+			// Persist per-component freshness digests for the per-row
+			// entries whose write succeeded. outcome.written[i]
+			// is the authoritative per-source success flag:
+			// writeBatchWithOutcome sets it to false for any row
+			// that was CWD-filtered or whose session upsert failed,
+			// so a single failing row in a mixed batch correctly
+			// suppresses only its own digest persist. Successful
+			// rows in the same batch still get their digests
+			// stamped; a pendingStatHash source whose whole session
+			// row committed is exactly the invariant the side-table
+			// needs to recognize on the next warm pass.
+			for i, pw := range pending {
+				if pw.providerStatHash == nil {
+					continue
+				}
+				if i < len(outcome.written) && !outcome.written[i] {
+					continue
+				}
+				e.recordProviderStatHash(ctx, *pw.providerStatHash)
+			}
 		}()
 		pending = pending[:0]
 		pendingLeases = pendingLeases[:0]
@@ -6774,10 +6899,10 @@ func (e *Engine) collectAndBatch(
 			stats.messagesIndexed = progress.MessagesIndexed
 			r.releaseRetention()
 		} else {
-			for _, pr := range allowed {
+			for i, pr := range allowed {
 				needsRetry := r.providerFailureCount > 0 ||
 					r.needsRetryForSession(pr.Session.ID)
-				pending = append(pending, pendingWrite{
+				pw := pendingWrite{
 					sess:              pr.Session,
 					msgs:              pr.Messages,
 					usageEvents:       pr.UsageEvents,
@@ -6787,7 +6912,16 @@ func (e *Engine) collectAndBatch(
 					storageTrustPath:  r.storageTrustPath,
 					storageTrustState: r.storageTrustState,
 					storageTrustSnap:  r.storageTrustSnap,
-				})
+				}
+				// The source's per-component digest (providerStatHash) is
+				// a one-row side-table entry keyed by (agent, file_path),
+				// so tagging only the first allowed result is enough.
+				// The flush path below persists it after the matching
+				// session row commits successfully.
+				if i == 0 && r.providerStatHash != nil {
+					pw.providerStatHash = r.providerStatHash
+				}
+				pending = append(pending, pw)
 				if runtimeMetrics != nil {
 					runtimeMetrics.pendingWrites(len(pending))
 				}
@@ -7031,7 +7165,15 @@ type processResult struct {
 	mtime       int64
 	err         error
 	incremental *incrementalUpdate
-	cacheSkip   bool
+	// providerStatHash stages the per-component freshness digest that
+	// applyProviderFilePathPolicies computed but did not yet write. The
+	// collector persists it after the matching session row commits
+	// successfully, so a downstream write failure (or a CWD-filter veto)
+	// never marks an absent or stale session as fresh. nil when the
+	// source is not a multi-file hasher agent or its parse produced no
+	// kept results.
+	providerStatHash *pendingProviderStatHash
+	cacheSkip        bool
 	// cacheAfterWrite records a successful, complete rowless container parse
 	// after its member writes commit. Unlike ordinary provider results, these
 	// containers have no physical-path session row that can make the next full
@@ -8071,30 +8213,37 @@ func (e *Engine) applyProviderFilePathPolicies(
 	}
 	res.results = kept
 	if len(kept) > 0 && filePath != "" {
-		// Per-event work gates the digest write by what actually got kept
+		// Per-event work gates the digest stage by what actually got kept
 		// (an empty kept must not stamp a row that would suppress real
-		// drift on the next warm sync) AND uses the pathRewriter so the
-		// write key matches the warm pre-check's read-side lookup,
-		// which mirrors the same call. For remote-synced sessions
-		// filePath is the temporal chat path on the current host while
-		// targetPath is the canonical "host:/remote/path" the warm pass
-		// resolves; writing under the unrewritten key would never match
-		// and the side-table digest would never short-circuit, so the
-		// MultiFileStatHasher stat cost would be paid on every warm
-		// pass without payoff.
+		// drift on the next warm sync). The hash is taken from the
+		// physical on-disk chat path while the cache key uses the
+		// pathRewriter's "host:/remote/path" form so remote-synced
+		// sources keep hashing a real local file but read back under
+		// the canonical logical key.
 		//
-		// Note: this records the digest inside processFile BEFORE the
-		// downstream sessions-table write. A rare downstream write
-		// failure would leave a stale digest for one cycle; the next
-		// fingerprint mismatch on real content drift clears it via the
-		// normal warm-path fallback. Future work could move the
-		// write-back into the success side of the actual upsert.
-		targetPath := filePath
-		if e.pathRewriter != nil {
-			targetPath = e.pathRewriter(filePath)
-		}
-		if targetPath != "" {
-			e.recordProviderStatHash(ctx, agent, targetPath)
+		// The digest is staged here and persisted only after the
+		// matching source's sessions-table write commits
+		// successfully, so a downstream write failure or a CWD-filter
+		// veto cannot mark an absent or stale session as fresh.
+		if _, ok := e.providerStatHashers[agent]; ok {
+			targetKey := filePath
+			if e.pathRewriter != nil {
+				targetKey = e.pathRewriter(filePath)
+			}
+			if targetKey != "" {
+				res.providerStatHash = &pendingProviderStatHash{
+					agent:        agent,
+					physicalPath: filePath,
+					targetKey:    targetKey,
+				}
+				// Test observability: this counter lets tests
+				// distinguish a regression that drops just the
+				// staging block from one that drops the entire
+				// freshness gate. See stagedProviderStatHashes
+				// on Engine and the per-row suppress test in
+				// codebuff_integration_test.go.
+				e.stagedProviderStatHashes.Add(1)
+			}
 		}
 	}
 }
@@ -8957,19 +9106,35 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 	// (Codebuff/Freebuff). When the provider implements
 	// MultiFileStatHasher and the side-table holds a digest that
 	// matches the current stat snapshot, the source is fresh and we
-	// short-circuit provider.Fingerprint. The side-table is only
-	// populated after a successful parse+write, so its absence falls
-	// through to the existing stat-only composite below for the
-	// first warm sync after the column is introduced.
+	// short-circuit provider.Fingerprint. The hash is computed from
+	// the physical on-disk chat path while the cache lookup uses the
+	// pathRewriter's logical key, mirroring the write path; without
+	// that split a remote-synced source whose stored file_path is
+	// "host:/remote/path" would hash zero-stat tuples for every
+	// companion and miss real content drift on the materialized
+	// download. A stored digest that does not match the current
+	// stat snapshot forces provider.Fingerprint instead of falling
+	// through to the size/mtime composite below, because that
+	// composite can miss same-size sibling rewrites whose mtime
+	// stays below the existing max (or offsetting size deltas that
+	// cancel out in sum-of-sizes). The side-table is only populated
+	// after a successful parse+write, so a missing row falls through
+	// to the legacy stat-only composite for cold-start archives.
 	if hasher, ok := e.providerStatHashers[file.Agent]; ok {
-		digest := hasher.ComputeMultiFileStatHash(lookupPath)
+		digest := hasher.ComputeMultiFileStatHash(path)
 		stored, hasStored, hashErr :=
 			e.db.GetProviderStatHash(ctx, file.Agent, lookupPath)
-		if hashErr != nil {
+		switch {
+		case hashErr != nil:
 			log.Printf(
 				"provider_freshness read for %s/%s: %v",
 				file.Agent, lookupPath, hashErr)
-		} else if hasStored && stored == digest {
+			// On read error force a real re-verification rather than
+			// falling through to the lossy size/mtime composite: a
+			// persistent read error that started this turn should not
+			// silently skip a stale source indefinitely.
+			return 0, false
+		case hasStored && stored == digest:
 			// Cold writes stamp fingerprint.MTimeNS as the max of
 			// chat + sibling companions (see codebuffFingerprintSource);
 			// the skip cache key/decision must align with that stamp
@@ -8978,6 +9143,16 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 			// MultiFileStatHasher fall through to chat-only via the
 			// helper.
 			return providerStatFreshnessMtime(file.Agent, lookupPath, info), true
+		case hasStored:
+			// Stored digest disagrees with current compoent stats.
+			// Forcing provider.Fingerprint instead of falling through
+			// to the size/mtime composite is the point of the per
+			// component digest: a same-size companion rewrite whose
+			// mtime stays below the existing max, an offsetting pair
+			// of size changes that cancel out in sum-of-sizes, or a
+			// missing companion that another leg replaces must not
+			// short-circuit on the legacy composite.
+			return 0, false
 		}
 	}
 	switch file.Agent {
@@ -9045,6 +9220,14 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 		// stamps, so unchanged sessions skip without reading transcript
 		// bytes, and a sibling-only change still changes the composite
 		// and falls through to the full fingerprint.
+		//
+		// Note: the per-component digest above (Issue 1) handles the
+		// warm path once provider_freshness has at least one row. This
+		// case remains the cold-start fallback for the very first
+		// warm sync after the column is introduced, when no digest
+		// exists yet and the legacy size/mtime composite must still
+		// short-circuit unchanged sources so the digest can be
+		// stamped after the cold parse.
 		dir := filepath.Dir(path)
 		size := info.Size()
 		mtime := info.ModTime().UnixNano()
@@ -10218,6 +10401,13 @@ type pendingWrite struct {
 	// baselineEligible is set by collectAndBatch only when the complete source
 	// outcome is safe to make deletion-eligible after this write succeeds.
 	baselineEligible bool
+	// providerStatHash is set on the first allowed ParseResult of a
+	// source whose processResult staged a per-component freshness
+	// digest. The flush path persists it after the matching session
+	// row commits successfully, so a downstream write failure or a
+	// CWD-filter veto never marks an absent or stale session as
+	// fresh. nil when the source is not a multi-file hasher agent.
+	providerStatHash *pendingProviderStatHash
 	// storageTrustPath/State/Snap promote the session's OpenCode
 	// storage-gate trust after its batch is confirmed fully written.
 	// Empty for everything else.

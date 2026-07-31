@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -61,6 +62,25 @@ func createCodebuffArchive(t *testing.T, numSessions int) string {
 		}
 	}
 	return root
+}
+
+// createCodebuffSingleSession creates exactly one Codebuff session in
+// project-0/chats/<ts>/ and returns the archive root plus the canonical
+// chat-messages.json path. New tests that target a single source prefer
+// this helper over createCodebuffArchive(t, 1): the legacy helper
+// distributes sessions across three projects and produces three
+// sessions for any numSessions <= 3, which silently masks single-source
+// regressions behind a triple-count expectation.
+func createCodebuffSingleSession(t *testing.T) (root, chatPath string) {
+	t.Helper()
+	root = t.TempDir()
+	project := "project-0"
+	ts := "2026-07-15T10-00-00.000Z"
+	dir := filepath.Join(root, project, "chats", ts)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	writeCodebuffTestFiles(t, dir, "Single source")
+	chatPath = filepath.Join(dir, "chat-messages.json")
+	return root, chatPath
 }
 
 // TestSyncAllCodebuffBoundedPerEventWork verifies that unchanged Codebuff
@@ -671,6 +691,356 @@ func TestSyncCodebuffCompanionFileDeletionReparsesSession(t *testing.T) {
 			"one session via the directory mtime cutoff signal; a "+
 			"zero means the freshness gate missed the deletion, and "+
 			"a value above one means it over-counted")
+}
+
+// TestSyncCodebuffProviderStatHashSideTable pins Issue 1 (engine wire-up)
+// at engine-side behavior: a successful cold sync against the default
+// codebuff factory must populate provider_freshness for every persisted
+// source. A regression that drops the SourceSetProvider forwarding
+// method would leave provider_freshness empty here, since the engine's
+// MultiFileStatHasher type assertion would not surface the inner
+// codebuffSourceSet through the wrapper.
+func TestSyncCodebuffProviderStatHashSideTable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	database := dbtest.OpenTestDB(t)
+	root, chatPath := createCodebuffSingleSession(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	require.Equal(t, 1,
+		engine.SyncAll(context.Background(), nil).Synced,
+		"cold sync must parse the seeded codebuff session")
+	hashed, hasHash, err := database.GetProviderStatHash(
+		context.Background(), parser.AgentCodebuff, chatPath,
+	)
+	require.NoError(t, err)
+	require.True(t, hasHash,
+		"a successful cold sync must populate provider_freshness "+
+			"for the registered codebuff source; a missing row "+
+			"means the Engine's MultiFileStatHasher type "+
+			"assertion failed to surface the SourceSetProvider "+
+			"wrapping the codebuffSourceSet")
+	require.NotZero(t, hashed,
+		"the staged digest must be non-zero so a later warm pass "+
+			"can short-circuit on a matching snapshot")
+
+	// Warm sync with no changes leaves the side-table intact and
+	// skips the source.
+	require.Equal(t, 0,
+		engine.SyncAll(context.Background(), nil).Synced,
+		"warm sync over an unchanged codebuff source must skip "+
+			"the source via the per-component digest short-circuit")
+	hashedAgain, hasHashAgain, err := database.GetProviderStatHash(
+		context.Background(), parser.AgentCodebuff, chatPath,
+	)
+	require.NoError(t, err)
+	require.True(t, hasHashAgain)
+	require.Equal(t, hashed, hashedAgain,
+		"the side-table digest must be stable across an unchanged "+
+			"warm sync; a divergence here means the digest "+
+			"pre-check is hashing inconsistent inputs across runs")
+}
+
+// TestSyncCodebuffProviderStatHashSiblingDriftForcesReparse pins Issue 1
+// at engine-side reparse behavior: a same-size sibling-file rewrite
+// whose mtime stays strictly below the chat file's mtime must change the
+// per-component digest enough to force provider.Fingerprint on the next
+// sync. Without the per-component digest the legacy size/mtime composite
+// would see size unchanged and max-mtime unchanged, falsely short-circuit
+// the source and retain stale metadata, costs, or lifecycle state on the
+// stored row. A regression that drops the hash lookup entirely (Issue 1)
+// lets the source continue to skip; a regression that hashes the wrong
+// inputs (the rewritten logical key instead of the physical file, Issue 3)
+// sees the digest stay constant and the warm sync also continues to skip.
+func TestSyncCodebuffProviderStatHashSiblingDriftForcesReparse(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	database := dbtest.OpenTestDB(t)
+	root, chatPath := createCodebuffSingleSession(t)
+	runStatePath := filepath.Join(filepath.Dir(chatPath), "run-state.json")
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	require.Equal(t, 1,
+		engine.SyncAll(context.Background(), nil).Synced,
+		"cold sync must parse the seeded session")
+
+	// Hold chat's mtime as the max; rewrite run-state.json with the
+	// same byte length so size+max-mtime composite would stay
+	// identical, but use a new mtime strictly below chatTime and
+	// different content so the per-component digest must change.
+	// Both bodies must be the same byte length so a size-only
+	// reduction cannot detect the drift; the assertion specifically
+	// pins the per-component digest path (Issue 1) -- if a future
+	// composite change folds sibling mtimes into the max, the legacy
+	// size/mtime composite would also catch this drift and the test
+	// would pass via the wrong observation. The matching one-byte
+	// swap of `"unusedC":"0"` -> `"unusedC":"9"` keeps the byte
+	// length exactly equal while still changing the content SHA256.
+	runStateBody := `{"sessionState":{"mainAgentState":{"agentType":"base2-free-deepseek","unusedA":"0","unusedB":"0","unusedC":"0"}}}`
+	runStateBodyRewritten := strings.Replace(
+		runStateBody, `"unusedC":"0"`, `"unusedC":"9"`, 1,
+	)
+	require.Equal(t, len(runStateBody), len(runStateBodyRewritten),
+		"rewritten run-state body length must match exactly so "+
+			"the sum-of-sizes and max-mtime composite stay "+
+			"constant between the two syncs")
+	chatTime := time.Date(2026, time.July, 4, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, os.Chtimes(chatPath, chatTime, chatTime))
+
+	// Sub-max mtime under the existing chat-messages.json max.
+	time.Sleep(10 * time.Millisecond)
+	subMaxTime := chatTime.Add(-1 * time.Minute)
+	require.NoError(t, os.WriteFile(runStatePath, []byte(runStateBodyRewritten), 0o644))
+	require.NoError(t, os.Chtimes(runStatePath, subMaxTime, subMaxTime))
+
+	// After the rewrite the warm sync must reparse the session.
+	// Without the per-component fix the engine's max-mtime
+	// composite would stay at chatTime and skip the source,
+	// leaving a stale row.
+	require.Equal(t, 1,
+		engine.SyncAll(context.Background(), nil).Synced,
+		"a same-size sibling rewrite with a sub-max mtime must "+
+			"force provider.Fingerprint on the next warm sync; "+
+			"a zero here means Issue 1 or Issue 3 is broken and "+
+			"the engine kept skipping with a stale digest")
+}
+
+// TestSyncCodebuffProviderStatHashRemoteStoresUnderLogicalKey pins Issue 3
+// at end-to-end behavior: a remote-import sync that wires the engine
+// with a pathRewriter mapping the on-disk chat-messages.json to a
+// canonical "host:/remote/path" key must persist the per-component
+// freshness digest under the logical key, not the physical file. A
+// regression that hashes the rewritten key (Issue 3) would compute a
+// zero-value digest because the logical path is not stat-able on the
+// local filesystem, then falsely report freshness forever.
+//
+// The test does not need a real remote end -- the engine reads files
+// from the configured root, applies the rewriter at write time, and
+// stores the side-table entry under whatever key the rewriter returns.
+// We observe behavior through database.GetProviderStatHash directly,
+// and additionally mutate the materialized file after the cold sync
+// to prove the digest is computed from the physical on-disk file
+// (not the logical path that would stat-empty).
+func TestSyncCodebuffProviderStatHashRemoteStoresUnderLogicalKey(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	database := dbtest.OpenTestDB(t)
+	root, _ := createCodebuffSingleSession(t)
+	const rewritePrefix = "hosts~/remote/"
+	logicalChat := rewritePrefix + "project-0/chats/2026-07-15T10-00-00.000Z/chat-messages.json"
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {root},
+		},
+		Machine: "local",
+		PathRewriter: func(p string) string {
+			if !strings.HasPrefix(p, root) {
+				return p
+			}
+			return rewritePrefix + strings.TrimPrefix(p, root+string(filepath.Separator))
+		},
+	})
+	t.Cleanup(engine.Close)
+
+	require.Equal(t, 1,
+		engine.SyncAll(context.Background(), nil).Synced,
+		"remote-import engine must sync with the path rewriter")
+
+	// The side-table row must be keyed by the logical (rewritten)
+	// path, not the physical chat-messages.json file. A non-nil
+	// digest under the physical key would mean the engine hashed
+	// the wrong path; a missing digest under the logical key would
+	// mean the engine did not honor the rewriter at all.
+	logicalHash, hasLogical, err := database.GetProviderStatHash(
+		context.Background(), parser.AgentCodebuff, logicalChat,
+	)
+	require.NoError(t, err)
+	require.True(t, hasLogical,
+		"a successful remote-import sync must persist the "+
+			"per-component digest under the rewritten logical "+
+			"key; a missing row means Issue 3 is broken and the "+
+			"engine either hashed the wrong path or dropped the "+
+			"rewriter at the write site")
+	require.NotZero(t, logicalHash,
+		"logical-key digest must be non-zero; a zero means the "+
+			"engine hashed the logical path itself rather than the "+
+			"physical materialized file (which is not stat-able "+
+			"locally)")
+
+	// The actual physical-vs-logical hash invariant: mutate the
+	// materialized chat-messages.json after the cold sync and confirm
+	// the warm sync's digest differs from the cold sync's digest. If
+	// Issue 3 ever regressed to hashing the logical key, this
+	// warm-pass digest would either stay constant (because every
+	// logical-path stat fails) or match a missing-file pattern that
+	// SHA-comparing the logical path never reaches.
+	require.Equal(t, 0,
+		engine.SyncAll(context.Background(), nil).Synced,
+		"warm sync over an unchanged materialized file must skip "+
+			"via the per-component digest short-circuit")
+	rewriteMaterializedChat := filepath.Join(root, "project-0", "chats",
+		"2026-07-15T10-00-00.000Z", "chat-messages.json")
+	require.NoError(t, os.WriteFile(rewriteMaterializedChat, []byte(
+		`[{"id":"u1","variant":"user","content":"hi","timestamp":"03:04 PM"},
+        {"id":"u2","variant":"user","content":"there","timestamp":"03:05 PM"}]`,
+	), 0o644))
+	time.Sleep(10 * time.Millisecond)
+	bump := time.Now()
+	require.NoError(t, os.Chtimes(rewriteMaterializedChat, bump, bump))
+	require.Equal(t, 1,
+		engine.SyncAll(context.Background(), nil).Synced,
+		"mutating the materialized chat-messages.json must "+
+			"trigger a reparse via the per-component digest; a "+
+			"zero means Issue 3 is regressing to logical-path "+
+			"hashing where stat would always miss the file")
+	logicalHashAfter, hasLogicalAfter, err := database.GetProviderStatHash(
+		context.Background(), parser.AgentCodebuff, logicalChat,
+	)
+	require.NoError(t, err)
+	require.True(t, hasLogicalAfter)
+	require.NotEqual(t, logicalHash, logicalHashAfter,
+		"post-mutation digest must differ from the pre-mutation "+
+			"digest; equality means the engine is hashing something "+
+			"other than the materialized file (the original Issue 3 "+
+			"regression)")
+}
+
+// TestSyncCodebuffCwdFilteredSourceDoesNotPersistStatHash pins Issue 2
+// at end-to-end behavior: a Codebuff source that the engine parses
+// and discovers but then CWD-filters before write must NOT land its
+// per-component digest in provider_freshness. The staged digest is
+// dropped explicitly in flushPending whenever outcome.written[i] is
+// false, so a CWD-filtered source row (or any row whose session
+// upsert failed) cannot escape the gate and mark an absent session
+// as fresh on the next warm pass. A regression that re-flattens the
+// per-row gate (removes the !outcome.written[i] check, or persists
+// before the session write commits) surfaces here as a non-nil
+// digest for the CWD-filtered source.
+//
+// The asserted invariants are:
+//   - StagedProviderStatHashes() == 1 -- the per-component digest
+//     staging block in applyProviderFilePathPolicies actually ran
+//     for the discovered source. This distinguishes a regression
+//     that drops just the staging block (which would otherwise
+//     silently pass any hasStored==false check via
+//     flushPending's no-op nil skip) from a regression that drops
+//     the whole gate.
+//   - SyncAll returns zero synced -- the source row was
+//     CWD-filtered at the write seam.
+//   - provider_freshness carries no row for the chat path -- the
+//     per-row gate suppressed digest persist despite a non-nil
+//     staged hash.
+func TestSyncCodebuffCwdFilteredSourceDoesNotPersistStatHash(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	database := dbtest.OpenTestDB(t)
+	root, chatPath := createCodebuffSingleSession(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {root},
+		},
+		IncludeCwdPrefixes: []string{
+			"/this/prefix/cannot/match/the/seeded/archive",
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	engine.ResetStagedProviderStatHashes()
+	require.Equal(t, 0,
+		engine.SyncAll(context.Background(), nil).Synced,
+		"CWD-prefix mismatch must CWD-filter every discovered "+
+			"source; a non-zero synced count means the test "+
+			"prefix accidentally matches the seeded archive")
+	require.Equal(t, int64(1), engine.StagedProviderStatHashes(),
+		"the per-component digest staging block must have "+
+			"run once for the discovered source even though "+
+			"the CWD filter rejects its session write; "+
+			"a zero here means applyProviderFilePathPolicies "+
+			"dropped its staging call and the hasStored "+
+			"assertion below pins nothing about the gate")
+	_, hasStored, err := database.GetProviderStatHash(
+		context.Background(), parser.AgentCodebuff, chatPath,
+	)
+	require.NoError(t, err)
+	require.False(t, hasStored,
+		"provider_freshness must NOT be populated when the "+
+			"source row was CWD-filtered despite a non-nil "+
+			"staged digest; a non-nil row here means the "+
+			"per-row gate that suppresses digest persist "+
+			"(Issue 2) regressed")
+}
+
+// TestSyncEngineProviderStatHashersRegistrationIsCapabilityGated pins the
+// side-effect of adding Source.MultiFileStatHash capability gating to
+// buildProviderStatHashers: every SourceSet-wrapped agent unconditionally
+// satisfies parser.MultiFileStatHasher via the SourceSetProvider
+// forwarding method, so the engine must NOT register a hasher unless the
+// provider explicitly declares the multi-file capability. Without the
+// gate every Claude/Codex/RooCode/KiloLegacy/etc. provider would land in
+// providerStatHashers as a 0-returning stub, store a 0 digest on first
+// cold sync, then short-circuit every warm pass on a 0==0 match --
+// every non-Codebuff SourceSet agent's parse left stale.
+//
+// The test does not depend on any Codebuff fixture; constructing an
+// engine with the default registry must produce a non-nil entry only
+// for Codebuff (and any future agent that opts in via the capability).
+func TestSyncEngineProviderStatHashersRegistrationIsCapabilityGated(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		// No AgentDirs: the engine is registered with the default
+		// factory map but discovers nothing; that is sufficient to
+		// populate providerStatHashers at construction time.
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	require.NotNil(t,
+		engine.ProviderStatHasher(parser.AgentCodebuff),
+		"Codebuff declares Source.MultiFileStatHash=Supported and "+
+			"must land in providerStatHashers; a nil here means the "+
+			"capability gate is missing or codebuffProviderCapabilities "+
+			"lost the override")
+	for _, agent := range []parser.AgentType{
+		parser.AgentClaude,
+		parser.AgentCodex,
+		parser.AgentRooCode,
+		parser.AgentKiloLegacy,
+		parser.AgentGemini,
+		parser.AgentCopilot,
+	} {
+		assert.Nil(t, engine.ProviderStatHasher(agent),
+			"%s is a single-file (non-multi-file) agent and must "+
+				"NOT be registered in providerStatHashers; a non-nil "+
+				"entry means the SourceSetProvider forwarding method "+
+				"is registering 0-returning stubs that would falsely "+
+				"short-circuit warm passes on 0==0 digest matches",
+			agent)
+	}
 }
 
 // TestSourceMtimeCodebuffUsesPerFileHash pins the roborev-medium

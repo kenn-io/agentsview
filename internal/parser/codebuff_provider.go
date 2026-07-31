@@ -354,6 +354,15 @@ func codebuffProviderCapabilities() Capabilities {
 	// so force full message replacement to avoid stale ordinals and
 	// missed in-place block updates.
 	caps.ForceReplaceOnParse = CapabilitySupported
+	// The Codebuff source layout folds chat-messages.json with its
+	// sibling companions run-state.json and chat-meta.json, so the
+	// engine's stat-only freshness gate must consult the per-component
+	// provider_freshness digest instead of the legacy
+	// size/max-mtime composite. Without this capability the engine
+	// would not register Codebuff in providerStatHashers and warm
+	// passes would fall back to the composite, missing same-size
+	// sibling rewrites whose mtime stays below the existing max.
+	caps.MultiFileStatHash = CapabilitySupported
 	return Capabilities{
 		Source: caps,
 		Content: ContentCapabilities{
