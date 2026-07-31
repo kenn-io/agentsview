@@ -1,6 +1,7 @@
-______________________________________________________________________
-
-## title: Artifact Folder Sync description: Exchange normalized sessions between AgentsView archives through a trusted folder
+---
+title: Artifact Folder Sync
+description: Exchange normalized sessions between AgentsView archives through a trusted folder
+---
 
 Artifact folder sync exchanges normalized AgentsView sessions between machines
 through a folder that both machines can access. The folder can be a mounted NAS,
@@ -16,11 +17,9 @@ folder, or change ordinary provider sync behavior.
 
 !!! warning
 
-```
-The target contains normalized session messages and related metadata. It can
-contain sensitive prompts, responses, tool activity, and usage data. Use only a
-folder whose storage and access controls you trust.
-```
+    The target contains normalized session messages and related metadata. It can
+    contain sensitive prompts, responses, tool activity, and usage data. Use only a
+    folder whose storage and access controls you trust.
 
 ## First use
 
