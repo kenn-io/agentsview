@@ -34,9 +34,9 @@ var ErrSessionTrashed = errors.New("session trashed")
 // recoverable source loss distinct from explicit user deletion.
 const deletionCauseSourceMissing = "source_missing"
 
-// subagentParentRepairQueueStateKey stores child session IDs that must be
-// re-evaluated after a sync mutates spawn edges. Keeping the queue in SQLite
-// makes the repair retryable after a write error or process restart.
+// subagentParentRepairQueueStateKey is the temporary JSON queue used by early
+// builds of the nested-hierarchy change. RepairQueuedSubagentParents migrates
+// it into subagent_parent_repair_queue before processing queued children.
 const subagentParentRepairQueueStateKey = "subagent_parent_repair_queue_v1"
 
 // sessionBaseCols is the column list for standard session queries
@@ -1911,49 +1911,20 @@ func (db *DB) QueueSubagentParentRepairs(ids []string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	queued := make(map[string]struct{}, len(ids))
-	var encoded string
-	err = tx.QueryRow(
-		"SELECT value FROM pg_sync_state WHERE key = ?",
-		subagentParentRepairQueueStateKey,
-	).Scan(&encoded)
-	if err != nil && err != sql.ErrNoRows {
-		return fmt.Errorf("reading subagent parent repair queue: %w", err)
-	}
-	if err == nil {
-		var existing []string
-		if err := json.Unmarshal([]byte(encoded), &existing); err != nil {
-			return fmt.Errorf("decoding subagent parent repair queue: %w", err)
-		}
-		for _, id := range existing {
-			if id != "" {
-				queued[id] = struct{}{}
-			}
-		}
-	}
-	for _, id := range ids {
-		if id != "" {
-			queued[id] = struct{}{}
-		}
-	}
-	if len(queued) == 0 {
-		return nil
-	}
-	merged := make([]string, 0, len(queued))
-	for id := range queued {
-		merged = append(merged, id)
-	}
-	sort.Strings(merged)
-	payload, err := json.Marshal(merged)
+	stmt, err := tx.Prepare(`
+		INSERT INTO subagent_parent_repair_queue (session_id) VALUES (?)
+		ON CONFLICT(session_id) DO NOTHING`)
 	if err != nil {
-		return fmt.Errorf("encoding subagent parent repair queue: %w", err)
+		return fmt.Errorf("preparing subagent parent repair queue insert: %w", err)
 	}
-	if _, err := tx.Exec(
-		`INSERT INTO pg_sync_state (key, value) VALUES (?, ?)
-		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-		subagentParentRepairQueueStateKey, string(payload),
-	); err != nil {
-		return fmt.Errorf("writing subagent parent repair queue: %w", err)
+	defer stmt.Close()
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, err := stmt.Exec(id); err != nil {
+			return fmt.Errorf("queueing subagent parent repair for %s: %w", id, err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing subagent parent repair queue: %w", err)
@@ -1969,28 +1940,52 @@ func (db *DB) RepairQueuedSubagentParents() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	var encoded string
-	err := db.getWriter().QueryRow(
-		"SELECT value FROM pg_sync_state WHERE key = ?",
+	var pending int
+	err := db.getWriter().QueryRow(`
+		SELECT EXISTS(SELECT 1 FROM subagent_parent_repair_queue)
+		    OR EXISTS(SELECT 1 FROM pg_sync_state WHERE key = ?)`,
 		subagentParentRepairQueueStateKey,
-	).Scan(&encoded)
-	if err == sql.ErrNoRows {
-		return nil
-	}
+	).Scan(&pending)
 	if err != nil {
-		return fmt.Errorf("reading subagent parent repair queue: %w", err)
+		return fmt.Errorf("checking subagent parent repair queue: %w", err)
+	}
+	if pending == 0 {
+		return nil
 	}
 	tx, err := db.getWriter().Begin()
 	if err != nil {
 		return fmt.Errorf("beginning queued subagent parent repair: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	var ids []string
-	if err := json.Unmarshal([]byte(encoded), &ids); err != nil {
-		return fmt.Errorf("decoding subagent parent repair queue: %w", err)
+	if err := migrateLegacySubagentParentRepairQueueTx(tx); err != nil {
+		return err
 	}
+	for {
+		rows, err := tx.Query(`
+			SELECT session_id FROM subagent_parent_repair_queue
+			ORDER BY session_id LIMIT ?`, maxSQLVars/2)
+		if err != nil {
+			return fmt.Errorf("listing queued subagent parent repairs: %w", err)
+		}
+		ids := make([]string, 0, maxSQLVars/2)
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return fmt.Errorf("scanning queued subagent parent repair: %w", err)
+			}
+			ids = append(ids, id)
+		}
+		rowsErr := rows.Err()
+		rows.Close()
+		if rowsErr != nil {
+			return fmt.Errorf("iterating queued subagent parent repairs: %w", rowsErr)
+		}
+		if len(ids) == 0 {
+			break
+		}
 
-	if err := queryChunkedSize(ids, maxSQLVars/2, func(chunk []string) error {
+		chunk := ids
 		ph, args := inPlaceholders(chunk)
 		allArgs := append(append([]any{}, args...), args...)
 		if _, err := tx.Exec(
@@ -2010,18 +2005,58 @@ func (db *DB) RepairQueuedSubagentParents() error {
 				len(chunk), err,
 			)
 		}
+		if _, err := tx.Exec(
+			"DELETE FROM subagent_parent_repair_queue WHERE session_id IN "+ph,
+			args...,
+		); err != nil {
+			return fmt.Errorf(
+				"clearing %d queued subagent parent repairs: %w",
+				len(chunk), err,
+			)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing queued subagent parent repair: %w", err)
+	}
+	return nil
+}
+
+func migrateLegacySubagentParentRepairQueueTx(tx *sql.Tx) error {
+	var encoded string
+	err := tx.QueryRow(
+		"SELECT value FROM pg_sync_state WHERE key = ?",
+		subagentParentRepairQueueStateKey,
+	).Scan(&encoded)
+	if err == sql.ErrNoRows {
 		return nil
-	}); err != nil {
-		return err
+	}
+	if err != nil {
+		return fmt.Errorf("reading legacy subagent parent repair queue: %w", err)
+	}
+	var ids []string
+	if err := json.Unmarshal([]byte(encoded), &ids); err != nil {
+		return fmt.Errorf("decoding legacy subagent parent repair queue: %w", err)
+	}
+	stmt, err := tx.Prepare(`
+		INSERT INTO subagent_parent_repair_queue (session_id) VALUES (?)
+		ON CONFLICT(session_id) DO NOTHING`)
+	if err != nil {
+		return fmt.Errorf("preparing legacy subagent parent repair migration: %w", err)
+	}
+	defer stmt.Close()
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, err := stmt.Exec(id); err != nil {
+			return fmt.Errorf("migrating legacy subagent parent repair for %s: %w", id, err)
+		}
 	}
 	if _, err := tx.Exec(
 		"DELETE FROM pg_sync_state WHERE key = ?",
 		subagentParentRepairQueueStateKey,
 	); err != nil {
-		return fmt.Errorf("clearing subagent parent repair queue: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing queued subagent parent repair: %w", err)
+		return fmt.Errorf("clearing legacy subagent parent repair queue: %w", err)
 	}
 	return nil
 }

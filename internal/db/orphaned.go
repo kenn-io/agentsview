@@ -367,6 +367,13 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 			return fmt.Errorf("copying sync state: %w", err)
 		}
 	}
+	if oldDBHasTable(ctx, tx, "subagent_parent_repair_queue") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT OR IGNORE INTO main.subagent_parent_repair_queue (session_id)
+			SELECT session_id FROM old_db.subagent_parent_repair_queue`); err != nil {
+			return fmt.Errorf("copying subagent parent repair queue: %w", err)
+		}
+	}
 
 	headRevisionExpr := "0"
 	if oldDBHasColumn(ctx, tx, "artifact_checkpoint_heads", "publication_revision") {

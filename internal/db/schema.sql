@@ -1074,6 +1074,13 @@ CREATE TABLE IF NOT EXISTS pg_sync_state (
     value TEXT NOT NULL
 );
 
+-- Durable child IDs awaiting spawn-edge hierarchy reconciliation. One row per
+-- child keeps queue additions O(changed children) instead of rewriting an
+-- accumulated JSON value on every source processed by bulk sync.
+CREATE TABLE IF NOT EXISTS subagent_parent_repair_queue (
+    session_id TEXT PRIMARY KEY
+) WITHOUT ROWID;
+
 -- Model pricing for cost calculation
 CREATE TABLE IF NOT EXISTS model_pricing (
     model_pattern    TEXT PRIMARY KEY,

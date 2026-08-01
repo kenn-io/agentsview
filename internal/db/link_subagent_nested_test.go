@@ -847,6 +847,63 @@ func TestSubagentChildSessionIDs(t *testing.T) {
 	assert.Empty(t, none)
 }
 
+// TestQueueSubagentParentRepairsAdditionWorkIsQueueSizeIndependent protects
+// the watcher/bulk-sync cost shape: adding one affected child must not decode
+// and rewrite every child already waiting for repair. Repeating an existing
+// ID keeps the observable queue unchanged while isolating the per-add work.
+func TestQueueSubagentParentRepairsAdditionWorkIsQueueSizeIndependent(
+	t *testing.T,
+) {
+	queueAllocs := func(size int) float64 {
+		t.Helper()
+		d := testDB(t)
+		ids := make([]string, 0, size)
+		for i := range size {
+			ids = append(ids, "queued-child-"+strconv.Itoa(i))
+		}
+		require.NoError(t, d.QueueSubagentParentRepairs(ids))
+		return testing.AllocsPerRun(3, func() {
+			require.NoError(t, d.QueueSubagentParentRepairs(
+				[]string{"queued-child-0"},
+			))
+		})
+	}
+
+	small := queueAllocs(1)
+	large := queueAllocs(500)
+	assert.Less(t, large, small*3,
+		"adding one ID must not allocate in proportion to queued IDs: "+
+			"small=%0.0f large=%0.0f", small, large)
+}
+
+func TestRepairQueuedSubagentParentsMigratesLegacyJSONQueue(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "spawner", "p", func(s *Session) {
+		s.MessageCount = 1
+	})
+	insertSession(t, d, "kid", "p", func(s *Session) {
+		s.MessageCount = 1
+		s.ParentSessionID = Ptr("wrong-parent")
+		s.RelationshipType = "subagent"
+	})
+	insertMessages(t, d, spawnEdgeTo("spawner", "kid", "spawn"))
+	require.NoError(t, d.SetSyncState(
+		subagentParentRepairQueueStateKey, `["kid"]`,
+	))
+
+	require.NoError(t, d.RepairQueuedSubagentParents())
+
+	assert.Equal(t, "spawner", parentOfSession(t, d, "kid"))
+	legacy, err := d.GetSyncState(subagentParentRepairQueueStateKey)
+	require.NoError(t, err)
+	assert.Empty(t, legacy, "successful migration must remove the JSON queue")
+	var queued int
+	require.NoError(t, d.Reader().QueryRow(
+		"SELECT count(*) FROM subagent_parent_repair_queue",
+	).Scan(&queued))
+	assert.Zero(t, queued, "successful repair must clear migrated rows")
+}
+
 // TestLinkSubagentSessionsForSessionsPlanIsBatchBounded pins the cost shape
 // of the scoped statement, mirroring TestLinkSubagentSessionsPlanScalesWith-
 // SpawnEdges: the watcher calls this once per changed file, so neither

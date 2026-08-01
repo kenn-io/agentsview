@@ -14374,6 +14374,97 @@ func TestSyncSingleSessionIncrementalAppendLinksSpawnedChild(t *testing.T) {
 			"the same single-session sync")
 }
 
+// TestSyncSingleSessionNewEdgeLinkFailureRetriesFromDurableQueue covers the
+// inverse of edge removal: an incremental write can successfully store a new
+// spawn edge and then fail while linking its child. The next explicit sync is
+// fresh and does not rewrite messages, so the newly referenced child itself
+// must have been queued after the write for that retry to finish the link.
+func TestSyncSingleSessionNewEdgeLinkFailureRetriesFromDurableQueue(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+
+	env.writeClaudeSession(
+		t, "proj-new-edge-retry", "main-new-edge-retry.jsonl",
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T09:00:00Z","uuid":"m1","message":{"content":"root"},"cwd":"/tmp","sessionId":"main-new-edge-retry"}`,
+		),
+	)
+	orchPath := env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-new-edge-retry", "main-new-edge-retry", "subagents",
+			"agent-orch.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"o1","message":{"content":"orchestrate"},"cwd":"/tmp","sessionId":"main-new-edge-retry"}`,
+		),
+	)
+	env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-new-edge-retry", "main-new-edge-retry", "subagents",
+			"agent-kid.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T10:30:00Z","uuid":"k1","message":{"content":"child work"},"cwd":"/tmp","sessionId":"main-new-edge-retry"}`,
+		),
+	)
+	env.engine.SyncAll(t.Context(), nil)
+	require.Equal(t, "main-new-edge-retry",
+		parentSessionIDOf(t, env, "agent-kid"))
+
+	appended := testjsonl.JoinJSONL(
+		`{"type":"assistant","timestamp":"2024-01-01T10:31:00Z","uuid":"o2","parentUuid":"o1","message":{"id":"msg_orch","content":[{"type":"tool_use","id":"toolu_retry","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:32:00Z","uuid":"o3","parentUuid":"o2","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_retry","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"kid"}}`,
+	) + "\n"
+	f, err := os.OpenFile(orchPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, writeErr := f.WriteString(appended)
+	closeErr := f.Close()
+	require.NoError(t, writeErr)
+	require.NoError(t, closeErr)
+
+	raw, err := sql.Open("sqlite3", env.db.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	_, err = raw.Exec(`
+		CREATE TRIGGER fail_new_child_parent_link
+		BEFORE UPDATE OF parent_session_id ON sessions
+		WHEN NEW.id = 'agent-kid'
+		  AND NEW.parent_session_id = 'agent-orch'
+		BEGIN
+			SELECT RAISE(FAIL, 'injected new child link failure');
+		END`)
+	require.NoError(t, err)
+
+	firstErr := env.engine.SyncSingleSession("agent-orch")
+	require.ErrorContains(t, firstErr, "injected new child link failure")
+	assert.Equal(t, "main-new-edge-retry",
+		parentSessionIDOf(t, env, "agent-kid"))
+	var edgeCount int
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT count(*) FROM tool_calls
+		WHERE session_id = 'agent-orch'
+		  AND subagent_session_id = 'agent-kid'`,
+	).Scan(&edgeCount))
+	require.Equal(t, 1, edgeCount,
+		"the first sync must persist the new edge before linking fails")
+	var queuedRepairs int
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT count(*) FROM subagent_parent_repair_queue
+		WHERE session_id = 'agent-kid'`,
+	).Scan(&queuedRepairs))
+	require.Equal(t, 1, queuedRepairs,
+		"the new child must remain durably queued after linking fails")
+
+	_, err = raw.Exec("DROP TRIGGER fail_new_child_parent_link")
+	require.NoError(t, err)
+	require.NoError(t, env.engine.SyncSingleSession("agent-orch"),
+		"freshness retry must consume the durable new-child repair")
+	assert.Equal(t, "agent-orch", parentSessionIDOf(t, env, "agent-kid"))
+}
+
 // TestSyncSingleSessionRewriteRemovingEdgeRelinksFormerChild covers the
 // pre-write child capture in SyncSingleSessionContext: a full rewrite that
 // REMOVES a spawn edge cascades the tool_calls row away, so the scoped

@@ -13334,6 +13334,13 @@ func (e *Engine) SyncSingleSessionContext(
 		if err := e.db.RepairQueuedSubagentParents(); err != nil {
 			return fmt.Errorf("repair queued subagent parents: %w", err)
 		}
+		// A previous write may have stored a new spawn edge but failed
+		// before its child could be durably queued. The requested session is
+		// still a bounded repair seed on the freshness path because its
+		// surviving edges identify those children directly.
+		if err := e.db.LinkSubagentSessionsForSessions([]string{sessionID}); err != nil {
+			return fmt.Errorf("link fresh subagent sessions: %w", err)
+		}
 		return nil
 	}
 	if res.cacheSkip {
@@ -13370,17 +13377,32 @@ func (e *Engine) SyncSingleSessionContext(
 	if err := e.db.QueueSubagentParentRepairs(priorChildren); err != nil {
 		return fmt.Errorf("queue subagent parent repairs: %w", err)
 	}
-	// Always attempt the queued repair after mutations begin, including when
-	// a later write fails. errors.Join preserves both failures for the caller,
-	// while a repair failure leaves the queue intact for the next sync.
-	if len(priorChildren) > 0 {
-		defer func() {
-			if repairErr := e.db.RepairQueuedSubagentParents(); repairErr != nil {
-				err = errors.Join(err, fmt.Errorf(
-					"repair queued subagent parents: %w", repairErr,
-				))
-			}
-		}()
+	// Always attempt queued work after mutations begin, including when a later
+	// write or scoped link fails. Post-write capture below expands this flag
+	// when the write introduces children that did not exist before it.
+	repairQueued := len(priorChildren) > 0
+	defer func() {
+		if !repairQueued {
+			return
+		}
+		if repairErr := e.db.RepairQueuedSubagentParents(); repairErr != nil {
+			err = errors.Join(err, fmt.Errorf(
+				"repair queued subagent parents: %w", repairErr,
+			))
+		}
+	}()
+	queueWrittenChildren := func(spawnerIDs []string) error {
+		children, childErr := e.db.SubagentChildSessionIDs(spawnerIDs)
+		if childErr != nil {
+			return fmt.Errorf("list post-write subagent children: %w", childErr)
+		}
+		if err := e.db.QueueSubagentParentRepairs(children); err != nil {
+			return fmt.Errorf("queue post-write subagent parent repairs: %w", err)
+		}
+		if len(children) > 0 {
+			repairQueued = true
+		}
+		return nil
 	}
 
 	// Delete parser-excluded sessions before writing the parsed
@@ -13433,6 +13455,11 @@ func (e *Engine) SyncSingleSessionContext(
 		if err := e.writeIncremental(res.incremental); err != nil {
 			return err
 		}
+		if err := queueWrittenChildren(
+			[]string{res.incremental.sessionID},
+		); err != nil {
+			return err
+		}
 		if err := e.db.LinkSubagentSessionsForSessions(
 			[]string{res.incremental.sessionID},
 		); err != nil {
@@ -13466,6 +13493,9 @@ func (e *Engine) SyncSingleSessionContext(
 		} else if errors.Is(err, errSessionPreserved) {
 			preserved = true
 		}
+	}
+	if err := queueWrittenChildren(resultIDs); err != nil {
+		return err
 	}
 	if err := e.db.LinkSubagentSessionsForSessions(resultIDs); err != nil {
 		return fmt.Errorf("link changed subagent sessions: %w", err)
