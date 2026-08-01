@@ -1909,6 +1909,26 @@ func TestArtifactPublicationQueueIgnoresSessionBookkeepingUpdates(t *testing.T) 
 	assert.Empty(t, artifactExportQueueIDs(t, database))
 }
 
+// TestArtifactPublicationQueueEnqueuesSessionKindOnlyUpdate pins
+// session_kind into the artifact_sessions_update_queue trigger's
+// change-detection list: the field is export-visible via the manifest, so a
+// session-kind-only update on an already-published session must re-enqueue
+// its export.
+func TestArtifactPublicationQueueEnqueuesSessionKindOnlyUpdate(t *testing.T) {
+	database := testDB(t)
+	seedArtifactOrigin(t, database)
+	require.NoError(t, database.UpsertSession(Session{
+		ID: "session", Project: "project", Machine: "local", Agent: "claude",
+	}))
+	clearArtifactExportQueue(t, database)
+
+	_, err := database.getWriter().Exec(
+		`UPDATE sessions SET session_kind = 'bg' WHERE id = 'session'`)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"session"}, artifactExportQueueIDs(t, database),
+		"a session-kind-only update must re-enqueue the session for export")
+}
+
 // TestArtifactExportQueueStaysEmptyWithoutOrigin covers the deviation-1
 // origin gate: an archive that has never created or adopted an artifact
 // origin must never populate artifact_export_queue, regardless of how many

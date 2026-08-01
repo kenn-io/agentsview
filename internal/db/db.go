@@ -2311,6 +2311,7 @@ WHEN (
     OLD.agent IS NOT NEW.agent OR
     OLD.agent_label IS NOT NEW.agent_label OR
     OLD.entrypoint IS NOT NEW.entrypoint OR
+    OLD.session_kind IS NOT NEW.session_kind OR
     OLD.first_message IS NOT NEW.first_message OR
     OLD.display_name IS NOT NEW.display_name OR
     OLD.session_name IS NOT NEW.session_name OR
