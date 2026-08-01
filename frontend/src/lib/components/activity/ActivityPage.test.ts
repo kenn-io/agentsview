@@ -66,18 +66,21 @@ function projectReport(): Report {
       interactive_cost: testMoney(0),
       interactive_sessions: 1,
     },
-    by_project: [{
-      key: "wrong-project",
-      project_key: "pl1:sha256:wrong",
-      agent_minutes: 20,
-      cost: testMoney(0),
-      interactive_agent_minutes: 20,
-      automated_agent_minutes: 0,
-      interactive_cost: testMoney(0),
-      automated_cost: testMoney(0),
-    }],
+    by_project: [
+      {
+        key: "wrong-project",
+        project_key: "pl1:sha256:wrong",
+        agent_minutes: 20,
+        cost: testMoney(0),
+        interactive_agent_minutes: 20,
+        automated_agent_minutes: 0,
+        interactive_cost: testMoney(0),
+        automated_cost: testMoney(0),
+      },
+    ],
     by_model: [],
     by_agent: [],
+    by_branch: [],
     by_session: [],
     intervals: [],
     projects: {},
@@ -116,15 +119,27 @@ describe("ActivityPage breakdown links", () => {
     component = mount(ActivityPage, { target: document.body });
     await flushEffects();
 
-    expect(
-      document.body.querySelector("button[aria-label^=\"Reclassify\"]"),
-    ).toBeNull();
+    expect(document.body.querySelector('button[aria-label^="Reclassify"]')).toBeNull();
     const link = document.body.querySelector("a.bar-label") as HTMLAnchorElement;
     expect(link).toBeTruthy();
-    expect(link.getAttribute("href")).toBe(
-      "/data?project_key=pl1%3Asha256%3Awrong",
-    );
+    expect(link.getAttribute("href")).toBe("/data?project_key=pl1%3Asha256%3Awrong");
     expect(link.getAttribute("title")).toBe("View wrong-project in Data");
+  });
+});
+
+describe("ActivityPage branch filter", () => {
+  it("wires the shared single-select branch picker through the activity store", () => {
+    expect(source).toContain("<BranchPicker");
+    expect(source).toContain('mode="single"');
+    expect(source).toContain("selected={selectedBranchNames}");
+    expect(source).toContain("onChange={onBranchChange}");
+    expect(source).toContain("reconcileBranchFilterValues(");
+    expect(source).toContain("activity.branch ? [activity.branch] : []");
+  });
+
+  it("passes the active project as branch search scope", () => {
+    expect(source).toContain("activity.project ? [activity.project] : []");
+    expect(source).toContain("projects={branchProjects}");
   });
 });
 

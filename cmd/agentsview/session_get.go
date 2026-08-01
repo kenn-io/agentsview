@@ -136,6 +136,9 @@ func printSessionDetailHuman(w io.Writer, s *service.SessionDetail) error {
 	fmt.Fprintf(w, "%s %s\n", label("ID"), sanitizeTerminal(s.ID))
 	fmt.Fprintf(w, "%s %s\n", label("Name"), sanitizeTerminal(name))
 	fmt.Fprintf(w, "%s %s\n", label("Project"), sanitizeTerminal(s.Project))
+	if s.GitBranch != "" {
+		fmt.Fprintf(w, "%s %s\n", label("Branch"), sanitizeTerminal(s.GitBranch))
+	}
 	fmt.Fprintf(w, "%s %s\n", label("Agent"), sanitizeTerminal(s.Agent))
 	fmt.Fprintf(w, "%s %s\n", label("Machine"), sanitizeTerminal(s.Machine))
 	fmt.Fprintf(w, "%s %s\n",

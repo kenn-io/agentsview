@@ -84,6 +84,43 @@ func seedPairwiseUsageFixture(t *testing.T, d *db.DB) {
 	}
 }
 
+func seedCollidingBranchProjectFixture(t *testing.T, d *db.DB) {
+	t.Helper()
+
+	seeds := []struct {
+		id      string
+		project string
+		input   int
+	}{
+		{id: "usage-private-first", project: "/Users/example/one/private/repo", input: 10},
+		{id: "usage-private-second", project: "/Users/example/two/private/repo", input: 20},
+	}
+	for i, seed := range seeds {
+		started := fmt.Sprintf("2024-06-01T1%d:00:00Z", i)
+		assistant := dbtest.AsstMsg(seed.id, 1, "done")
+		assistant.Timestamp = started
+		assistant.Model = "test-model"
+		assistant.TokenUsage = fmt.Appendf(nil, `{"input_tokens":%d}`, seed.input)
+		dbtest.SeedSessionWithMessages(
+			t,
+			d,
+			seed.id,
+			seed.project,
+			[]db.Message{
+				dbtest.UserMsg(seed.id, 0, "compare branch usage"),
+				assistant,
+			},
+			dbtest.WithMessageCounts(2, 1),
+			func(s *db.Session) {
+				s.Agent = "claude"
+				s.GitBranch = "main"
+				s.StartedAt = &started
+				s.EndedAt = &started
+			},
+		)
+	}
+}
+
 func seedCommaProjectUsageFixture(t *testing.T, d *db.DB) {
 	t.Helper()
 	started := "2024-06-01T09:00:00Z"
@@ -147,20 +184,34 @@ func assistantUsageMsg(
 func TestBuildUsageFilter_ValidMapping(t *testing.T) {
 	t.Parallel()
 	f, err := service.BuildUsageFilter(service.UsageRequest{
-		From:    "2024-06-01",
-		To:      "2024-06-15",
-		Project: "proj",
-		Agent:   "claude",
+		From:             "2024-06-01",
+		To:               "2024-06-15",
+		Project:          "proj",
+		Agent:            "claude",
+		GitBranch:        "proj\x1fmain",
+		ExcludeGitBranch: "proj\x1fdev",
 		// IncludeOneShot/IncludeAutomated default false -> exclude true.
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "2024-06-01", f.From)
 	assert.Equal(t, "2024-06-15", f.To)
 	assert.Equal(t, "proj", f.Project)
+	assert.Equal(t, "proj\x1fmain", f.GitBranch)
+	assert.Equal(t, "proj\x1fdev", f.ExcludeGitBranch)
 	assert.Equal(t, "UTC", f.Timezone, "empty timezone defaults to UTC")
 	assert.True(t, f.ExcludeOneShot, "IncludeOneShot=false -> ExcludeOneShot=true")
 	assert.True(t, f.ExcludeAutomated, "IncludeAutomated=false -> ExcludeAutomated=true")
 	assert.True(t, f.Breakdowns, "summary needs per-day breakdowns")
+	assert.False(t, f.BranchBreakdowns,
+		"branch aggregation is opt-in independently of ordinary breakdowns")
+
+	branchBreakdowns := true
+	f, err = service.BuildUsageFilter(service.UsageRequest{
+		From: "2024-06-01", To: "2024-06-15",
+		BranchBreakdowns: &branchBreakdowns,
+	})
+	require.NoError(t, err)
+	assert.True(t, f.BranchBreakdowns)
 }
 
 func TestBuildUsageFilter_IncludeFlagsInvert(t *testing.T) {
@@ -290,6 +341,34 @@ func TestHTTPBackend_UsageSummary_SendsExplicitIncludeOneShot(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
+}
+
+func TestHTTPBackend_UsageSummary_SerializesBranchFilters(t *testing.T) {
+	t.Parallel()
+	var gitBranch, excludeGitBranch, branchBreakdowns string
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			gitBranch = r.URL.Query().Get("git_branch")
+			excludeGitBranch = r.URL.Query().Get("exclude_git_branch")
+			branchBreakdowns = r.URL.Query().Get("branch_breakdowns")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"from":"x","to":"y"}`))
+		}))
+	t.Cleanup(srv.Close)
+	svc := service.NewHTTPBackend(srv.URL, "", false)
+	includeBranchBreakdowns := true
+
+	_, err := svc.UsageSummary(context.Background(), service.UsageRequest{
+		From:             "2024-06-01",
+		To:               "2024-06-02",
+		GitBranch:        "alpha\x1fmain",
+		ExcludeGitBranch: "alpha\x1fdev",
+		BranchBreakdowns: &includeBranchBreakdowns,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "alpha\x1fmain", gitBranch)
+	assert.Equal(t, "alpha\x1fdev", excludeGitBranch)
+	assert.Equal(t, "true", branchBreakdowns)
 }
 
 // A read-only daemon (pg serve) returns 501 for usage; the HTTP backend
@@ -518,6 +597,58 @@ func TestDirectBackend_UsageSummary_ExcludesOpaqueProjectKey(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, filtered.ProjectTotals, 1)
 	assert.Equal(t, "alpha", filtered.ProjectTotals[0].Project)
+}
+
+func TestDirectBackend_UsageSummary_FiltersProjectKeyQualifiedBranch(t *testing.T) {
+	t.Parallel()
+
+	d := dbtest.OpenTestDB(t)
+	seedCollidingBranchProjectFixture(t, d)
+	be := service.NewDirectBackend(d, nil)
+	branchBreakdowns := true
+	base := service.UsageRequest{
+		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
+		IncludeOneShot:   true,
+		BranchBreakdowns: &branchBreakdowns,
+	}
+	summary, err := be.UsageSummary(context.Background(), base)
+	require.NoError(t, err)
+	require.Len(t, summary.BranchTotals, 2)
+
+	var selected service.BranchTotal
+	for _, branch := range summary.BranchTotals {
+		if branch.InputTokens == 20 {
+			selected = branch
+		}
+	}
+	require.NotEmpty(t, selected.ProjectKey)
+	assert.Empty(t, selected.Project)
+
+	base.GitBranch = db.EncodeBranchFilterToken(selected.ProjectKey, selected.Branch)
+	filtered, err := be.UsageSummary(context.Background(), base)
+	require.NoError(t, err)
+	require.Len(t, filtered.BranchTotals, 1)
+	assert.Equal(t, selected.ProjectKey, filtered.BranchTotals[0].ProjectKey)
+	assert.Equal(t, 20, filtered.Totals.InputTokens)
+}
+
+func TestDirectBackend_UsageSummary_RejectsUnknownBranchProjectKey(t *testing.T) {
+	t.Parallel()
+
+	d := dbtest.OpenTestDB(t)
+	seedCollidingBranchProjectFixture(t, d)
+	be := service.NewDirectBackend(d, nil)
+	branchBreakdowns := true
+	_, err := be.UsageSummary(context.Background(), service.UsageRequest{
+		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
+		IncludeOneShot:   true,
+		BranchBreakdowns: &branchBreakdowns,
+		GitBranch:        db.EncodeBranchFilterToken("pl1:sha256:missing", "main"),
+	})
+
+	var inputErr *service.UsageInputError
+	require.ErrorAs(t, err, &inputErr)
+	assert.Equal(t, service.UsageErrorCodeUnknownProjectKey, inputErr.Code)
 }
 
 func TestDirectBackend_UsageSummary_ExcludesSubagentOnlyProjectKey(t *testing.T) {
@@ -762,6 +893,7 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 				"right_dimension":     r.URL.Query().Get("right_dimension"),
 				"right_value":         r.URL.Query().Get("right_value"),
 				"git_branch":          r.URL.Query().Get("git_branch"),
+				"exclude_git_branch":  r.URL.Query().Get("exclude_git_branch"),
 				"exclude_project_key": r.URL.Query().Get("exclude_project_key"),
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -776,6 +908,7 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 		service.UsagePairwiseComparisonRequest{
 			UsageRequest: service.UsageRequest{
 				GitBranch:         "alpha/main",
+				ExcludeGitBranch:  "alpha\x1fdev",
 				ExcludeProjectKey: "pl1:sha256:hidden",
 			},
 			LeftDimension:  "project",
@@ -792,5 +925,6 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 	assert.Equal(t, "gpt-4o", queryValues["right_value"])
 	assert.Equal(t, "alpha/main", queryValues["git_branch"])
 	assert.Equal(t, "pl1:sha256:hidden", queryValues["exclude_project_key"])
+	assert.Equal(t, "alpha\x1fdev", queryValues["exclude_git_branch"])
 	assert.Equal(t, 22, res.Deltas.TotalTokensDelta)
 }

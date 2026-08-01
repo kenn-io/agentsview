@@ -3,18 +3,13 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { MoneyMoney } from './MoneyMoney';
-export type DbDailyUsageEntry = {
-  agentBreakdowns: any[] | null;
-  branchBreakdowns: any[] | null;
+export type BranchTotal = {
+  branch: string;
   cacheCreationTokens: number;
   cacheReadTokens: number;
-  date: string;
+  cost: MoneyMoney;
   inputTokens: number;
-  machineBreakdowns: any[] | null;
-  modelBreakdowns: any[] | null;
-  modelsUsed: any[] | null;
   outputTokens: number;
-  projectBreakdowns: any[] | null;
-  totalCost: MoneyMoney;
+  project: string;
+  project_key: string;
 };
-

@@ -76,6 +76,7 @@ const STICKY_PARAMS = new Set(["desktop"]);
 const SESSION_ROUTE_PARAMS = new Set([
   "project",
   "machine",
+  "git_branch",
   "agent",
   "termination",
   "date",

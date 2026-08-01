@@ -54,6 +54,7 @@ function tenModelSummary(): UsageSummaryResponse {
     projectTotals: [],
     modelTotals,
     agentTotals: [],
+    branchTotals: [],
     sessionCounts: { total: 10, byProject: {}, byAgent: {} },
     cacheStats: {
       cacheReadTokens: 0,

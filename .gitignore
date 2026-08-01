@@ -49,6 +49,8 @@ __pycache__/
 .cache
 .gomodcache/
 .gopath/
+# per-worktree golangci-lint cache (see GOLANGCI_LINT_CACHE in Makefile)
+/.golangci-cache/
 
 # Docs build and hydrated assets
 docs/.venv/

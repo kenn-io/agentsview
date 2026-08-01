@@ -68,9 +68,7 @@ func TestInsights_CannedMetadataAndCacheLookup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCachedInsight: %v", err)
 	}
-	if got == nil {
-		t.Fatal("expected cached insight")
-	}
+	require.NotNil(t, got, "expected cached insight")
 	if got.ID != id || got.Kind != "prompt_maturity_review" ||
 		got.SchemaVersion != "llm_insight.v1" ||
 		got.ProvenanceJSON == "" || got.StructuredJSON == "" {

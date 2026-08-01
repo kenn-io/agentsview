@@ -12,6 +12,12 @@
   } from "../../utils/agents.js";
   import type { GroupMode } from "../sidebar/session-list-utils.js";
   import { CheckIcon, FunnelIcon } from "../../icons.js";
+  import BranchPicker from "../shared/BranchPicker.svelte";
+  import { searchBranches } from "../../api/client.js";
+  import {
+    branchPickerValues,
+    reconcileBranchFilterValues,
+  } from "../../branchFilters.js";
 
   interface Props {
     groupMode?: GroupMode;
@@ -21,6 +27,7 @@
     onToggleGroupByAgent?: () => void;
     onToggleGroupByProject?: () => void;
     onClearGroupMode?: () => void;
+    /** Whether any page-local filter outside this dropdown is active. */
     extraActive?: boolean;
     onClearExtra?: () => void;
     extraSections?: Snippet;
@@ -47,23 +54,76 @@
   let agentSearch = $state("");
   let machineSearch = $state("");
 
+  // Each section floats selected entries to the top so a reopened dropdown
+  // shows the active selection without scrolling; the sort is stable, so
+  // ties keep each section's own ordering (count for agents, alphabetical
+  // for machines, server recency for branches). Selection membership is
+  // hoisted into Sets, and the search filter lives in a separate derived
+  // from the sort, so a keystroke re-filters the already-ranked list
+  // instead of re-copying and re-sorting it (the branch list is uncapped
+  // and can run to thousands of entries).
+  const selectedAgentSet = $derived(new Set(sessions.selectedAgents));
+  const selectedMachineSet = $derived(new Set(sessions.selectedMachines));
+  const selectedBranchSet = $derived(new Set(sessions.selectedBranches));
+
+  const rankedAgents = $derived.by(() =>
+    [...sessions.agents].sort((a, b) => {
+      const aSel = selectedAgentSet.has(a.name);
+      const bSel = selectedAgentSet.has(b.name);
+      if (aSel !== bSel) return aSel ? -1 : 1;
+      return b.session_count - a.session_count;
+    }),
+  );
+
   const sortedAgents = $derived.by(() => {
-    const agents = [...sessions.agents].sort(
-      (a, b) => b.session_count - a.session_count,
-    );
-    if (!agentSearch) return agents;
+    if (!agentSearch) return rankedAgents;
     const q = agentSearch.toLowerCase();
-    return agents.filter((a) =>
+    return rankedAgents.filter((a) =>
       agentLabel(a.name).toLowerCase().includes(q),
     );
   });
 
+  const rankedMachines = $derived.by(() =>
+    [...sessions.machines].sort((a, b) => {
+      const aSel = selectedMachineSet.has(a);
+      const bSel = selectedMachineSet.has(b);
+      if (aSel !== bSel) return aSel ? -1 : 1;
+      return a < b ? -1 : a > b ? 1 : 0;
+    }),
+  );
+
   const sortedMachines = $derived.by(() => {
-    const machines = [...sessions.machines].sort();
-    if (!machineSearch) return machines;
+    if (!machineSearch) return rankedMachines;
     const q = machineSearch.toLowerCase();
-    return machines.filter((m) => m.toLowerCase().includes(q));
+    return rankedMachines.filter((m) => m.toLowerCase().includes(q));
   });
+
+  const branchProjects = $derived(
+    sessions.filters.project ? [sessions.filters.project] : [],
+  );
+  const selectedBranchNames = $derived(
+    branchPickerValues(sessions.selectedBranches),
+  );
+
+  function updateBranches(values: string[]) {
+    sessions.setBranchFilters(reconcileBranchFilterValues(
+      sessions.selectedBranches,
+      values,
+    ));
+  }
+
+  function searchSessionBranches(params: {
+    projects?: string[];
+    search: string;
+    limit: number;
+  }) {
+    return searchBranches({
+      ...params,
+      includeOneShot: sessions.filters.includeOneShot,
+      includeAutomated: sessions.filters.includeAutomated,
+      scope: "roots",
+    });
+  }
 
   $effect(() => {
     if (open) {
@@ -74,11 +134,12 @@
     }
   });
 
-  let hasFilters = $derived(
-    sessions.hasActiveFilters ||
-      (showStarred && starred.filterOnly) ||
-      extraActive,
+  const totalFilterCount = $derived(
+    sessions.activeFilterCount +
+      (showStarred && starred.filterOnly ? 1 : 0) +
+      (extraActive ? 1 : 0),
   );
+  let hasFilters = $derived(totalFilterCount > 0);
   let isRecentlyActiveOn = $derived(
     sessions.filters.recentlyActive,
   );
@@ -145,7 +206,9 @@
   aria-expanded={open}
 >
   <FunnelIcon size="14" strokeWidth="2" aria-hidden="true" />
-  {#if hasFilters || (showDisplay && groupMode !== "none")}
+  {#if totalFilterCount > 0}
+    <span class="filter-badge">{totalFilterCount}</span>
+  {:else if showDisplay && groupMode !== "none"}
     <span class="filter-indicator"></span>
   {/if}
 </button>
@@ -298,8 +361,7 @@
           <span class="agent-select-name">{m.sidebar_filters_all_agents()}</span>
         </button>
         {#each sortedAgents as agent (agent.name)}
-          {@const selected =
-            sessions.isAgentSelected(agent.name)}
+          {@const selected = selectedAgentSet.has(agent.name)}
           <button
             class="agent-select-row"
             class:selected
@@ -347,8 +409,7 @@
         {/if}
         <div class="agent-select-list">
           {#each sortedMachines as machine (machine)}
-            {@const selected =
-              sessions.isMachineSelected(machine)}
+            {@const selected = selectedMachineSet.has(machine)}
             <button
               class="agent-select-row"
               class:selected
@@ -377,6 +438,24 @@
         </div>
       </div>
     {/if}
+    <div class="filter-section branch-filter-section">
+      <div class="filter-section-label">{m.sidebar_filters_branch()}</div>
+      <BranchPicker
+        mode="multi"
+        selected={selectedBranchNames}
+        projects={branchProjects}
+        search={searchSessionBranches}
+        label={m.sidebar_filters_branch()}
+        allLabel={m.activity_all_branches()}
+        placeholder={m.sidebar_filters_search_branches()}
+        clearSearchLabel={m.shared_branch_clear_search()}
+        loadingLabel={m.shared_branch_loading()}
+        emptyLabel={m.shared_branch_no_match()}
+        refineLabel={m.shared_branch_refine()}
+        noBranchLabel={m.shared_no_branch()}
+        onChange={updateBranches}
+      />
+    </div>
     <div class="filter-section">
       <div class="filter-section-label">{m.sidebar_filters_min_prompts()}</div>
       <div class="pill-buttons">
@@ -432,6 +511,24 @@
     height: 6px;
     border-radius: 50%;
     background: var(--accent-green);
+  }
+
+  .filter-badge {
+    position: absolute;
+    top: 0px;
+    right: 0px;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: var(--accent-amber);
+    color: var(--accent-amber-foreground);
+    font-size: 7px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    pointer-events: none;
   }
 
   .filter-dropdown {

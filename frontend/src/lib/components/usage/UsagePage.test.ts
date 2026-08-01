@@ -16,6 +16,32 @@ import type { UsageSummaryResponse } from "../../api/types/usage.js";
 import source from "./UsagePage.svelte?raw";
 import UsagePage from "./UsagePage.svelte";
 
+vi.mock("../../virtual/createVirtualizer.svelte.js", () => ({
+  createVirtualizer: (
+    options: () => {
+      count: number;
+      estimateSize: (index: number) => number;
+      getItemKey?: (index: number) => string | number;
+    },
+  ) => ({
+    get instance() {
+      const opts = options();
+      const size = opts.estimateSize(0);
+      return {
+        getTotalSize: () => opts.count * size,
+        getVirtualItems: () =>
+          Array.from({ length: opts.count }, (_, index) => ({
+            index,
+            key: opts.getItemKey?.(index) ?? index,
+            start: index * size,
+            size,
+            end: (index + 1) * size,
+          })),
+      };
+    },
+  }),
+}));
+
 async function flushEffects() {
   await tick();
   await Promise.resolve();
@@ -39,6 +65,7 @@ function usageSummaryWithUnsupported(kind?: string) {
     projectTotals: [],
     modelTotals: [],
     agentTotals: [],
+    branchTotals: [],
     sessionCounts: {
       total: 0,
       byProject: {},
@@ -672,6 +699,14 @@ describe("UsagePage refresh behavior", () => {
     );
     expect(initBlock).not.toContain("parseFiltersFromParams(params)");
     expect(initBlock).not.toContain("sessions.initFromParams(params)");
+  });
+
+  it("wires the shared multi-select branch picker with project scope", () => {
+    expect(source).toContain("<BranchPicker");
+    expect(source).toContain('mode="multi"');
+    expect(source).toContain("selected={selectedBranchNames}");
+    expect(source).toContain("projects={branchProjects}");
+    expect(source).toContain("onChange={onUsageBranchesChange}");
   });
 
   it("mounts the pairwise comparison panel additively", () => {

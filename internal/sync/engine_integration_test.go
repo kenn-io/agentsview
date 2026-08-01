@@ -9296,9 +9296,7 @@ func TestResyncAllPreservesTrashedSessionData(t *testing.T) {
 			t.Fatalf("orphan health score = %v, want 94", sess.HealthScore)
 		}
 		qs := sess.StoredQualitySignals()
-		if qs == nil {
-			t.Fatal("orphan quality signals were not preserved")
-		}
+		require.NotNil(t, qs, "orphan quality signals were not preserved")
 		if qs.Version != db.CurrentQualitySignalVersion ||
 			qs.ShortPromptCount != 1 ||
 			qs.MissingSuccessCriteriaCount != 1 {
