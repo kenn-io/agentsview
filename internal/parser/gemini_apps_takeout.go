@@ -122,7 +122,7 @@ func (p *geminiAppsImportOnlyProvider) ParseGeminiAppsExport(
 	}
 	if len(paths) > 0 && emitted == 0 {
 		return summary, fmt.Errorf(
-			"Gemini Apps input contains no admissible Prompted records",
+			"input contains no admissible Prompted records",
 		)
 	}
 	return summary, nil
@@ -345,7 +345,7 @@ func geminiAppsRecordKind(tokens []html.Token) string {
 
 func geminiAppsTextFields(value string) []string {
 	var fields []string
-	for _, line := range strings.Split(value, "\n") {
+	for line := range strings.SplitSeq(value, "\n") {
 		field := strings.ToLower(strings.Join(strings.Fields(line), " "))
 		if field != "" {
 			fields = append(fields, field)
@@ -420,7 +420,7 @@ func geminiAppsZones(tokens []html.Token) []geminiAppsZone {
 func hasHTMLClass(token html.Token, wanted string) bool {
 	for _, attr := range token.Attr {
 		if strings.EqualFold(attr.Key, "class") {
-			for _, className := range strings.Fields(attr.Val) {
+			for className := range strings.FieldsSeq(attr.Val) {
 				if strings.EqualFold(className, wanted) {
 					return true
 				}
@@ -453,12 +453,12 @@ func parseGeminiAppsCell(tokens []html.Token) (ParseResult, error) {
 
 	if len(contentZones) == 0 {
 		return ParseResult{}, fmt.Errorf(
-			"Prompted activity record has no content cell",
+			"prompted activity record has no content cell",
 		)
 	}
 	prompt, response := geminiAppsPromptAndResponse(contentZones)
 	if strings.TrimSpace(prompt) == "" {
-		return ParseResult{}, fmt.Errorf("Prompted activity record has no prompt")
+		return ParseResult{}, fmt.Errorf("prompted activity record has no prompt")
 	}
 
 	idInput := ts.UTC().Format(time.RFC3339Nano) + "\x00" + prompt
