@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -487,13 +488,34 @@ func TestReconcileTombstonesAfterSourceLabelChange(t *testing.T) {
 	require.False(t, first.SyncAll(context.Background(), nil).Aborted)
 
 	require.Equal(t, "archivebox", activeSessionMachines(t, database)["archive-session"])
+	// Model an archive admitted before deletion-proof baselines existed. The
+	// relabeled reconciliation must recreate proof under the stored machine,
+	// not only visit the configured candidate machine.
+	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+		_, err := tx.Exec(
+			"DELETE FROM local_session_source_baselines WHERE session_id = ?",
+			"archive-session",
+		)
+		return err
+	}))
+	appendSessionSourceClaudeMessage(t, archivePath)
 
 	// The user edits the label. Existing rows keep "archivebox" by design.
 	relabeled := newEngine("renamedbox")
 	t.Cleanup(relabeled.Close)
-	require.False(t, relabeled.SyncAll(context.Background(), nil).Aborted)
+	require.NoError(t, relabeled.ReconcileWatchRootsAfterLostEvents(
+		context.Background(), []string{archiveRoot}, false,
+	))
 	assert.Equal(t, "archivebox", activeSessionMachines(t, database)["archive-session"],
 		"an edited label must not rewrite an already-ingested session")
+	ownership, err := database.ListActiveSessionSourceOwnershipScopesPage(
+		context.Background(), "archivebox", string(parser.AgentClaude),
+		[]db.StoredSourcePathHintScope{{Path: archiveRoot}},
+		db.SessionSourceCursor{},
+	)
+	require.NoError(t, err)
+	require.Len(t, ownership, 1,
+		"reconciliation must restore deletion proof under stored attribution")
 
 	// Now delete the source and reconcile under the new label.
 	require.NoError(t, os.Remove(archivePath))

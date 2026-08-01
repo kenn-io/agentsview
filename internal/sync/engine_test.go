@@ -186,6 +186,57 @@ func TestPreserveUnavailableSourceProjectsUsesDurableSnapshot(
 	}
 }
 
+func TestWriteBatchRelabelRecoversUnavailableSourceProject(t *testing.T) {
+	const (
+		sessionID       = "relabel-unavailable-source"
+		originalProject = "resolved-project"
+		fallbackProject = "parser-fallback"
+		storedMachine   = "local-machine"
+		configuredLabel = "renamed-machine"
+		idPrefix        = "remote~"
+	)
+	database := openTestDB(t)
+	root := filepath.Join(t.TempDir(), "missing-checkout")
+	cwd := filepath.Join(root, "nested")
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	recordedAt := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	storedSessionID := applyIDPrefixToID(idPrefix, sessionID)
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: storedSessionID, Project: originalProject, Machine: storedMachine,
+		Agent: string(parser.AgentClaude), Cwd: cwd, FilePath: &path,
+	}))
+	require.NoError(t, database.UpsertProjectIdentityObservationWithSnapshotProject(
+		t.Context(), export.ProjectIdentityObservation{
+			SessionID: storedSessionID, Project: originalProject, Machine: storedMachine,
+			RootPath: root, GitRemote: "https://example.com/team/project.git",
+			RemoteResolution: export.ProjectResolutionResolved,
+			ObservedAt:       recordedAt,
+		}, originalProject,
+	))
+	engine := NewEngine(database, EngineConfig{
+		Machine: storedMachine, IDPrefix: idPrefix,
+	})
+	t.Cleanup(engine.Close)
+
+	outcome := engine.writeBatchWithOutcome([]pendingWrite{{
+		sess: parser.ParsedSession{
+			ID: sessionID, Project: fallbackProject, Machine: configuredLabel,
+			Agent: parser.AgentClaude, Cwd: cwd,
+			StartedAt: recordedAt, EndedAt: recordedAt,
+			File: parser.FileInfo{Path: path, Mtime: recordedAt.UnixNano()},
+		},
+	}}, syncWriteDefault, true)
+
+	require.Equal(t, 1, outcome.writtenSessions)
+	stored, err := database.GetSessionFull(t.Context(), storedSessionID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, storedMachine, stored.Machine,
+		"a relabel must not rewrite immutable machine attribution")
+	assert.Equal(t, originalProject, stored.Project,
+		"project recovery must use the stored machine before the checkout lookup")
+}
+
 func TestClaudeIDFreshnessRejectsSourceMissingTombstone(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
@@ -1271,6 +1322,160 @@ func TestSyncProviderDBBackedBaselinesOnlyCompleteSuccessfulSources(t *testing.T
 				"the clean source should use the fresh shortcut on the second pass")
 		})
 	}
+}
+
+func TestSyncProviderDBBackedBatchesWarmSourceAttributionLookup(t *testing.T) {
+	for _, sourceCount := range []int{1, 100} {
+		t.Run(fmt.Sprintf("sources-%d", sourceCount), func(t *testing.T) {
+			const agent parser.AgentType = "warm-db-backed"
+			database := openTestDB(t)
+			root := t.TempDir()
+			sources := make([]parser.SourceRef, sourceCount)
+			for i := range sourceCount {
+				path := filepath.Join(root, fmt.Sprintf("session-%03d.db", i))
+				sources[i] = parser.SourceRef{
+					Provider: agent, Key: path,
+					DisplayPath: path, FingerprintKey: path,
+				}
+				mtime := int64(2)
+				require.NoError(t, database.UpsertSession(db.Session{
+					ID: fmt.Sprintf("session-%03d", i), Project: "project",
+					Machine: "local", Agent: string(agent),
+					FilePath: &path, FileMtime: &mtime,
+				}))
+				require.NoError(t, database.SetSessionDataVersion(
+					fmt.Sprintf("session-%03d", i), db.CurrentDataVersion(),
+				))
+			}
+			provider := &baselineDBBackedProvider{
+				ProviderBase: parser.ProviderBase{
+					Def: parser.AgentDef{Type: agent, FileBased: false},
+					Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+						StreamingDiscovery: parser.CapabilitySupported,
+					}},
+				},
+				sources:          sources,
+				outcomes:         make(map[string]parser.ParseOutcome),
+				fingerprintCalls: make(map[string]int),
+				parseCalls:       make(map[string]int),
+			}
+			engine := NewEngine(database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{agent: {root}},
+				SourceMachines: map[parser.AgentType]map[string]string{
+					agent: {root: "local"},
+				},
+				Machine: "local",
+				ProviderFactories: []parser.ProviderFactory{
+					baselineDBBackedFactory{provider: provider},
+				},
+				ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+					agent: parser.ProviderMigrationProviderAuthoritative,
+				},
+			})
+			t.Cleanup(engine.Close)
+			lookupCalls := 0
+			engine.sourceAttributionLookupOverride = func(
+				ctx context.Context, requested []db.SessionSourcePath,
+			) ([]db.SessionSourceAttribution, error) {
+				lookupCalls++
+				assert.Len(t, requested, sourceCount)
+				return database.ListActiveSessionSourceAttributions(ctx, requested)
+			}
+			stats := SyncStats{}
+
+			aborted := engine.syncProviderDBBackedAgent(
+				t.Context(), agent, string(agent), syncWriteBulk, false,
+				newRootSyncScope([]string{root}), &stats, func(int, int) {},
+			)
+
+			assert.False(t, aborted)
+			assert.Equal(t, 1, lookupCalls,
+				"one warm discovery page must use one attribution lookup")
+			assert.Empty(t, provider.parseCalls,
+				"current warm sources must not be reparsed")
+		})
+	}
+}
+
+func TestSyncProviderDBBackedBaselinesEveryStoredMachineForSharedSource(
+	t *testing.T,
+) {
+	const agent parser.AgentType = "shared-db-backed"
+	database := openTestDB(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "shared.db")
+	mtime := int64(2)
+	for _, seed := range []struct {
+		id      string
+		machine string
+	}{
+		{id: "shared-a", machine: "machine-a"},
+		{id: "shared-b", machine: "machine-b"},
+	} {
+		require.NoError(t, database.UpsertSession(db.Session{
+			ID: seed.id, Project: "project", Machine: seed.machine,
+			Agent: string(agent), FilePath: &path, FileMtime: &mtime,
+		}))
+		require.NoError(t, database.SetSessionDataVersion(
+			seed.id, db.CurrentDataVersion(),
+		))
+	}
+	provider := &baselineDBBackedProvider{
+		ProviderBase: parser.ProviderBase{
+			Def: parser.AgentDef{Type: agent, FileBased: false},
+			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+				StreamingDiscovery: parser.CapabilitySupported,
+			}},
+		},
+		sources: []parser.SourceRef{{
+			Provider: agent, Key: path,
+			DisplayPath: path, FingerprintKey: path,
+		}},
+		outcomes:         make(map[string]parser.ParseOutcome),
+		fingerprintCalls: make(map[string]int),
+		parseCalls:       make(map[string]int),
+	}
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{agent: {root}},
+		SourceMachines: map[parser.AgentType]map[string]string{
+			agent: {root: "renamed-machine"},
+		},
+		Machine: "local",
+		ProviderFactories: []parser.ProviderFactory{
+			baselineDBBackedFactory{provider: provider},
+		},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			agent: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	t.Cleanup(engine.Close)
+	stats := SyncStats{}
+
+	aborted := engine.syncProviderDBBackedAgent(
+		t.Context(), agent, string(agent), syncWriteBulk, false,
+		newRootSyncScope([]string{root}), &stats, func(int, int) {},
+	)
+
+	assert.False(t, aborted)
+	for _, machine := range []string{"machine-a", "machine-b"} {
+		ownership, err := database.ListActiveSessionSourceOwnershipScopesPage(
+			t.Context(), machine, string(agent),
+			[]db.StoredSourcePathHintScope{{Path: root}},
+			db.SessionSourceCursor{},
+		)
+		require.NoError(t, err)
+		require.Len(t, ownership, 1,
+			"shared source must keep proof for %s", machine)
+		assert.Equal(t, path, ownership[0].FilePath)
+	}
+	configured, err := database.ListActiveSessionSourceOwnershipScopesPage(
+		t.Context(), "renamed-machine", string(agent),
+		[]db.StoredSourcePathHintScope{{Path: root}},
+		db.SessionSourceCursor{},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, configured,
+		"configured relabel must not replace stored source attribution")
 }
 
 func TestSyncProviderDBBackedAgentFlushesEachSourceBeforeParsingNext(t *testing.T) {

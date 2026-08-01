@@ -2470,6 +2470,66 @@ func (db *DB) ListSessionIDsByFilePath(path, agent string) ([]string, error) {
 	return ids, nil
 }
 
+const sessionMachineBatchSize = 500
+
+// ListSessionMachinesByID returns the stored machine attribution for each
+// requested session, including tombstoned rows that may be revived by a later
+// successful parse. Requests are chunked below SQLite's bind-variable limit.
+func (db *DB) ListSessionMachinesByID(
+	ctx context.Context,
+	ids []string,
+) (map[string]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	machines := make(map[string]string, len(ids))
+	unique := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	for start := 0; start < len(unique); start += sessionMachineBatchSize {
+		end := min(start+sessionMachineBatchSize, len(unique))
+		batch := unique[start:end]
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		rows, err := db.getReader().QueryContext(ctx, `
+			SELECT id, machine
+			FROM sessions
+			WHERE id IN (`+placeholders+`)
+			ORDER BY id`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("listing session machines by ID: %w", err)
+		}
+		for rows.Next() {
+			var id, machine string
+			if err := rows.Scan(&id, &machine); err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf("scanning session machine by ID: %w", err)
+			}
+			machines[id] = machine
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("iterating session machines by ID: %w", err)
+		}
+		if err := rows.Close(); err != nil {
+			return nil, fmt.Errorf("closing session machines by ID: %w", err)
+		}
+	}
+	return machines, nil
+}
+
 const descendantSessionRootBatchSize = 100
 
 // ListActiveDescendantSessionSourcePaths returns the source paths of active
@@ -2590,6 +2650,14 @@ type SessionSourceOwnership struct {
 // successful local reconciliation. The baseline is deliberately path-exact:
 // callers must pass virtual member paths without splitting their suffixes.
 type SessionSourcePath struct {
+	Agent    string
+	FilePath string
+}
+
+// SessionSourceAttribution is one distinct immutable machine label represented
+// by active sessions at an exact provider source.
+type SessionSourceAttribution struct {
+	Machine  string
 	Agent    string
 	FilePath string
 }
@@ -2911,6 +2979,75 @@ func buildSourcePairFilter(sources []SessionSourcePath) (string, []any, bool) {
 	}
 	sb.WriteString(")")
 	return sb.String(), args, true
+}
+
+// ListActiveSessionSourceAttributions returns every distinct machine label
+// represented by active rows at the requested exact sources. A shared provider
+// database may contain sessions admitted under multiple immutable labels, so
+// the result is intentionally not collapsed to one machine per path.
+func (db *DB) ListActiveSessionSourceAttributions(
+	ctx context.Context,
+	sources []SessionSourcePath,
+) ([]SessionSourceAttribution, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	seen := make(map[SessionSourceAttribution]struct{})
+	for start := 0; start < len(sources); start += baselinePairChunk {
+		end := min(start+baselinePairChunk, len(sources))
+		filter, args, ok := buildSourcePairFilter(sources[start:end])
+		if !ok {
+			continue
+		}
+		rows, err := db.getReader().QueryContext(ctx, `
+			SELECT DISTINCT machine, agent, file_path
+			FROM sessions
+			WHERE `+filter+`
+			  AND file_path IS NOT NULL
+			  AND deleted_at IS NULL`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("listing active session source attributions: %w", err)
+		}
+		for rows.Next() {
+			var attribution SessionSourceAttribution
+			if err := rows.Scan(
+				&attribution.Machine,
+				&attribution.Agent,
+				&attribution.FilePath,
+			); err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf(
+					"scanning active session source attribution: %w", err,
+				)
+			}
+			seen[attribution] = struct{}{}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf(
+				"iterating active session source attributions: %w", err,
+			)
+		}
+		if err := rows.Close(); err != nil {
+			return nil, fmt.Errorf(
+				"closing active session source attributions: %w", err,
+			)
+		}
+	}
+	attributions := make([]SessionSourceAttribution, 0, len(seen))
+	for attribution := range seen {
+		attributions = append(attributions, attribution)
+	}
+	sort.Slice(attributions, func(i, j int) bool {
+		if attributions[i].Machine != attributions[j].Machine {
+			return attributions[i].Machine < attributions[j].Machine
+		}
+		if attributions[i].Agent != attributions[j].Agent {
+			return attributions[i].Agent < attributions[j].Agent
+		}
+		return attributions[i].FilePath < attributions[j].FilePath
+	})
+	return attributions, nil
 }
 
 func baselineActiveSessionSourcePathsTx(

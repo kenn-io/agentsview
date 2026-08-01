@@ -360,6 +360,11 @@ type Engine struct {
 	// writeBatchOverride is a test seam for exercising reconciliation archive
 	// write failures after discovery and parse have succeeded.
 	writeBatchOverride func([]pendingWrite, syncWriteMode, bool) (int, int, int, int)
+	// sourceAttributionLookupOverride observes or replaces the bounded source
+	// attribution query in DB-backed sync tests.
+	sourceAttributionLookupOverride func(
+		context.Context, []db.SessionSourcePath,
+	) ([]db.SessionSourceAttribution, error)
 	// workerCountOverride is a test seam for exercising the production worker
 	// floor and cap independently of the host CPU count.
 	workerCountOverride  int
@@ -687,30 +692,6 @@ func (e *Engine) reconciliationOwnershipMachines(
 		add(machine)
 	}
 	return machines
-}
-
-// storedSourceMachine returns the machine an already-ingested session at path
-// was admitted under, or "" when the archive holds none. Attribution is
-// immutable, so a stored row outranks the configured label whenever the two
-// disagree. It short-circuits unless the agent actually has labeled roots, so
-// the common unlabeled setup adds no per-source queries.
-func (e *Engine) storedSourceMachine(
-	agent parser.AgentType, path string,
-) string {
-	if len(e.sourceMachines[agent]) == 0 || path == "" {
-		return ""
-	}
-	ids, err := e.db.ListSessionIDsByFilePath(path, string(agent))
-	if err != nil {
-		return ""
-	}
-	for _, id := range ids {
-		session, err := e.db.GetSession(context.Background(), id)
-		if err == nil && session != nil && session.Machine != "" {
-			return session.Machine
-		}
-	}
-	return ""
 }
 
 func pathWithinRoot(path, root string) bool {
@@ -4098,21 +4079,49 @@ func (e *Engine) replaceActiveSessionSourceBaselinesByMachine(
 	candidates []machineSessionSource,
 	admitted []machineSessionSource,
 ) error {
-	candidatesByMachine := make(map[string][]db.SessionSourcePath)
-	admittedByMachine := make(map[string][]db.SessionSourcePath)
+	candidatesByMachine := make(map[string]map[db.SessionSourcePath]struct{})
+	admittedByMachine := make(map[string]map[db.SessionSourcePath]struct{})
+	add := func(
+		byMachine map[string]map[db.SessionSourcePath]struct{},
+		source machineSessionSource,
+	) {
+		if source.Machine == "" ||
+			source.Source.Agent == "" || source.Source.FilePath == "" {
+			return
+		}
+		if byMachine[source.Machine] == nil {
+			byMachine[source.Machine] = make(map[db.SessionSourcePath]struct{})
+		}
+		byMachine[source.Machine][source.Source] = struct{}{}
+	}
 	for _, source := range candidates {
-		candidatesByMachine[source.Machine] = append(
-			candidatesByMachine[source.Machine], source.Source,
-		)
+		add(candidatesByMachine, source)
 	}
 	for _, source := range admitted {
-		admittedByMachine[source.Machine] = append(
-			admittedByMachine[source.Machine], source.Source,
-		)
+		add(admittedByMachine, source)
+		// An admitted source may carry immutable attribution that differs from
+		// the currently configured candidate. Make it a candidate under its own
+		// machine so replacement visits that machine as well.
+		add(candidatesByMachine, source)
 	}
-	for machine, sources := range candidatesByMachine {
+	machines := make([]string, 0, len(candidatesByMachine))
+	for machine := range candidatesByMachine {
+		machines = append(machines, machine)
+	}
+	slices.Sort(machines)
+	for _, machine := range machines {
+		sources := make([]db.SessionSourcePath, 0, len(candidatesByMachine[machine]))
+		for source := range candidatesByMachine[machine] {
+			sources = append(sources, source)
+		}
+		admittedSources := make(
+			[]db.SessionSourcePath, 0, len(admittedByMachine[machine]),
+		)
+		for source := range admittedByMachine[machine] {
+			admittedSources = append(admittedSources, source)
+		}
 		if err := e.db.ReplaceActiveSessionSourceBaselines(
-			ctx, machine, sources, admittedByMachine[machine],
+			ctx, machine, sources, admittedSources,
 		); err != nil {
 			return err
 		}
@@ -6636,6 +6645,16 @@ func shelleyDBCompositeMtime(dbPath string) (int64, error) {
 	return maxMtime, nil
 }
 
+func (e *Engine) listActiveSessionSourceAttributions(
+	ctx context.Context,
+	sources []db.SessionSourcePath,
+) ([]db.SessionSourceAttribution, error) {
+	if e.sourceAttributionLookupOverride != nil {
+		return e.sourceAttributionLookupOverride(ctx, sources)
+	}
+	return e.db.ListActiveSessionSourceAttributions(ctx, sources)
+}
+
 // syncProviderDBBacked enumerates a DB-backed provider's sources, parses only
 // the changed ones through the provider facade, and flushes each source before
 // parsing the next. Change detection compares the provider fingerprint mtime
@@ -6672,8 +6691,27 @@ func (e *Engine) syncProviderDBBacked(
 		if len(baselines) == 0 {
 			return nil
 		}
+		sources := make([]db.SessionSourcePath, 0, len(baselines))
+		for _, candidate := range baselines {
+			sources = append(sources, candidate.Source)
+		}
+		attributions, err := e.listActiveSessionSourceAttributions(ctx, sources)
+		if err != nil {
+			return fmt.Errorf(
+				"load %s streaming source attributions: %w", agent, err,
+			)
+		}
+		admitted := make([]machineSessionSource, 0, len(attributions))
+		for _, attribution := range attributions {
+			admitted = append(admitted, machineSessionSource{
+				Machine: attribution.Machine,
+				Source: db.SessionSourcePath{
+					Agent: attribution.Agent, FilePath: attribution.FilePath,
+				},
+			})
+		}
 		if err := e.replaceActiveSessionSourceBaselinesByMachine(
-			ctx, baselines, baselines,
+			ctx, baselines, admitted,
 		); err != nil {
 			return fmt.Errorf("baseline %s streaming sources: %w", agent, err)
 		}
@@ -6687,11 +6725,6 @@ func (e *Engine) syncProviderDBBacked(
 		}
 		storedPath := e.effectiveSourcePath(path)
 		machine := e.machineForProviderSource(agent, source, path)
-		// An already-ingested session keeps the label it was admitted under,
-		// so the baseline must follow the row rather than current config.
-		if stored := e.storedSourceMachine(agent, storedPath); stored != "" {
-			machine = stored
-		}
 		baselines = append(baselines, machineSessionSource{
 			Machine: machine,
 			Source: db.SessionSourcePath{
@@ -7412,7 +7445,9 @@ func (e *Engine) collectAndBatch(
 			}
 			stats.RecordSynced(1)
 			if r.providerFailureCount == 0 {
-				baselineProcessedSource(r, true)
+				baselineJob := r
+				baselineJob.machine = r.incremental.machine
+				baselineProcessedSource(baselineJob, true)
 			}
 			progress.MessagesIndexed += len(
 				r.incremental.msgs,
@@ -7499,14 +7534,8 @@ func (e *Engine) baselinePendingWriteSources(
 	)
 	for i, write := range pending {
 		path := e.effectiveSourcePath(write.sess.File.Path)
-		// Key on what was persisted, not on what the parser proposed: an
-		// already-ingested session keeps its original label through a relabel.
-		machine := write.persistedMachine
-		if machine == "" {
-			machine = write.sess.Machine
-		}
 		source := machineSessionSource{
-			Machine: machine,
+			Machine: write.sess.Machine,
 			Source: db.SessionSourcePath{
 				Agent: string(write.sess.Agent), FilePath: path,
 			},
@@ -10705,18 +10734,67 @@ type pendingWrite struct {
 	// baselineEligible is set by collectAndBatch only when the complete source
 	// outcome is safe to make deletion-eligible after this write succeeds.
 	baselineEligible bool
-	// persistedMachine is the machine the session was actually written under.
-	// prepareSessionWrite preserves an existing archive row's attribution, so
-	// after a label edit this differs from sess.Machine. Ownership baselines
-	// must key on it or they land under a machine no session row holds, and
-	// the source can never be tombstoned when it later disappears.
-	persistedMachine string
 	// storageTrustPath/State/Snap promote the session's OpenCode
 	// storage-gate trust after its batch is confirmed fully written.
 	// Empty for everything else.
 	storageTrustPath  string
 	storageTrustState string
 	storageTrustSnap  storageTrustSnapshot
+}
+
+type sessionMachineReader interface {
+	ListSessionMachinesByID(
+		context.Context, []string,
+	) (map[string]string, error)
+}
+
+// normalizePendingWriteMachines resolves immutable attribution before any
+// consumer can make a project, worktree, baseline, or persistence decision.
+// Existing sessions keep the archive's machine; first ingestions retain the
+// configured machine already stamped by discovery and parsing.
+func (e *Engine) normalizePendingWriteMachines(
+	ctx context.Context,
+	batch []pendingWrite,
+) ([]pendingWrite, error) {
+	indexes := make(map[string][]int, len(batch))
+	ids := make([]string, 0, len(batch))
+	for i := range batch {
+		if batch[i].sess.ID == "" {
+			continue
+		}
+		id := applyIDPrefixToID(e.idPrefix, batch[i].sess.ID)
+		if _, exists := indexes[id]; !exists {
+			ids = append(ids, id)
+		}
+		indexes[id] = append(indexes[id], i)
+	}
+	if len(ids) == 0 {
+		return batch, nil
+	}
+
+	var archive any = e.db
+	if e.archiveStore != nil {
+		archive = e.archiveStore
+	}
+	reader, ok := archive.(sessionMachineReader)
+	if !ok {
+		return batch, fmt.Errorf(
+			"archive %T does not support session machine lookup", archive,
+		)
+	}
+	machines, err := reader.ListSessionMachinesByID(ctx, ids)
+	if err != nil {
+		return batch, fmt.Errorf("load immutable session machines: %w", err)
+	}
+	for id, machine := range machines {
+		if machine == "" {
+			continue
+		}
+		for _, i := range indexes[id] {
+			batch[i].sess.Machine = machine
+		}
+	}
+	return batch, nil
 }
 
 type writeBatchOutcome struct {
@@ -10932,6 +11010,18 @@ func (e *Engine) writeBatchWithOutcome(
 	forceReplace bool,
 ) writeBatchOutcome {
 	var err error
+	batch, err = e.normalizePendingWriteMachines(
+		context.Background(), batch,
+	)
+	if err != nil {
+		log.Printf("normalize pending write machines: %v", err)
+		outcome := writeBatchOutcome{written: make([]bool, len(batch))}
+		for _, pw := range batch {
+			e.markStaleFailedMemberWrite(pw)
+		}
+		outcome.failedSessions = len(batch)
+		return outcome
+	}
 	batch, err = e.preserveUnavailableSourceProjects(
 		context.Background(), batch,
 	)
@@ -10960,8 +11050,6 @@ func (e *Engine) writeBatchWithOutcome(
 			}
 			continue
 		}
-		batch[i].persistedMachine = s.Machine
-
 		// Detect stale parser version BEFORE UpsertSession
 		// overwrites it. Existing message rows from an
 		// older parser lack new metadata columns, and newly
@@ -11097,20 +11185,6 @@ func (e *Engine) prepareSessionWrite(
 		pw.sess.CountsAuthoritative,
 	)
 	e.applyRemoteRewrites(&s, msgs)
-	// Machine attribution is assigned when a session is first ingested.
-	// Ordinary reparses and appends must not rewrite it when configuration
-	// changes. During a rebuild, archiveStore points at the original archive
-	// while e.db is the fresh replacement, so the same rule survives sync
-	// --full without a second reattribution pass.
-	archive := e.archiveStore
-	if archive == nil {
-		archive = e.db
-	}
-	if stored, err := archive.GetSessionFull(
-		context.Background(), s.ID,
-	); err == nil && stored != nil && stored.Machine != "" {
-		s.Machine = stored.Machine
-	}
 	if s.Cwd != "" && resolveWorktreeProject != nil {
 		if mapped, ok := resolveWorktreeProject(
 			s.Machine, s.Cwd, s.Project,
@@ -11936,7 +12010,6 @@ func (e *Engine) writeBatchBulkWithOutcome(
 			}
 			continue
 		}
-		batch[pendingIndex].persistedMachine = s.Machine
 		replaceMessages := shouldReplaceFullParseMessages(
 			pw, forceReplace, false, false,
 		)
@@ -12639,8 +12712,14 @@ func (e *Engine) writeSessionFullWithResolver(
 	pw pendingWrite,
 	resolveWorktreeProject worktreeProjectResolver,
 ) error {
-	preserved, err := e.preserveUnavailableSourceProjects(
+	normalized, err := e.normalizePendingWriteMachines(
 		context.Background(), []pendingWrite{pw},
+	)
+	if err != nil {
+		return err
+	}
+	preserved, err := e.preserveUnavailableSourceProjects(
+		context.Background(), normalized,
 	)
 	if err != nil {
 		return err
