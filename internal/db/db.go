@@ -350,7 +350,18 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // project identity snapshots that older mapping behavior could persist with
 // the mapped target label before incremental ingestion is allowed to reuse
 // them.)
-const dataVersion = 77
+//
+// (78: Devin timestamp reparse. The Devin parser read sessions.created_at,
+// sessions.last_activity_at, and message_nodes.created_at as epoch
+// milliseconds when Devin writes epoch seconds, so every existing Devin row
+// carries 1970-era started_at/ended_at and message timestamps that were
+// discarded as invalid. Existing rows need re-parsing to backfill real
+// timestamps. A fingerprint change alone cannot cover this: for a message-node
+// fallback session whose sessions row has no usable created_at or
+// last_activity_at, the Devin fingerprint hashes only raw epoch integers and
+// zero-time metadata, so it is byte-identical before and after the fix and
+// incremental sync would skip the correction.)
+const dataVersion = 78
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
