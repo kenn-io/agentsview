@@ -31,10 +31,10 @@ func TestDevinDBPath(t *testing.T) {
 
 func TestListDevinSessionMeta(t *testing.T) {
 	fixture := newDevinTestFixture(t,
-		devinSessionRow{ID: "session-hidden", Title: "Hidden", WorkingDirectory: "/cwd/hidden", Model: "model-hidden", CreatedAtMillis: new(int64(1_700_000_010_000)), LastActivityMillis: new(int64(1_700_000_090_000)), Hidden: true},
-		devinSessionRow{ID: "session-fallback", Title: "Fallback title", WorkingDirectory: "/cwd/fallback", Model: "model-fallback", CreatedAtMillis: new(int64(1_700_000_020_000))},
-		devinSessionRow{ID: "session-active", Title: "Active title", WorkingDirectory: "/cwd/active", Model: "model-active", CreatedAtMillis: new(int64(1_700_000_030_000)), LastActivityMillis: new(int64(1_700_000_080_000))},
-		devinSessionRow{ID: "session-newest", Title: "Newest title", WorkingDirectory: "/cwd/newest", Model: "model-newest", CreatedAtMillis: new(int64(1_700_000_040_000)), LastActivityMillis: new(int64(1_700_000_095_000))},
+		devinSessionRow{ID: "session-hidden", Title: "Hidden", WorkingDirectory: "/cwd/hidden", Model: "model-hidden", CreatedAt: new(int64(1_700_000_010)), LastActivityAt: new(int64(1_700_000_090)), Hidden: true},
+		devinSessionRow{ID: "session-fallback", Title: "Fallback title", WorkingDirectory: "/cwd/fallback", Model: "model-fallback", CreatedAt: new(int64(1_700_000_020))},
+		devinSessionRow{ID: "session-active", Title: "Active title", WorkingDirectory: "/cwd/active", Model: "model-active", CreatedAt: new(int64(1_700_000_030)), LastActivityAt: new(int64(1_700_000_080))},
+		devinSessionRow{ID: "session-newest", Title: "Newest title", WorkingDirectory: "/cwd/newest", Model: "model-newest", CreatedAt: new(int64(1_700_000_040)), LastActivityAt: new(int64(1_700_000_095))},
 	)
 
 	metas, err := ListDevinSessionMeta(fixture.DBPath)
@@ -47,10 +47,10 @@ func TestListDevinSessionMeta(t *testing.T) {
 	assert.Equal(t, "Newest title", metas[0].Title)
 	assert.Equal(t, "/cwd/newest", metas[0].CWD)
 	assert.Equal(t, "model-newest", metas[0].Model)
-	assert.Equal(t, time.UnixMilli(1_700_000_095_000).UTC(), metas[0].UpdatedAt)
+	assert.Equal(t, time.Unix(1_700_000_095, 0).UTC(), metas[0].UpdatedAt)
 	assert.Equal(t, int64(1_700_000_095_000_000_000), metas[0].FileMtime)
 
-	assert.Equal(t, time.UnixMilli(1_700_000_020_000).UTC(), metas[2].UpdatedAt)
+	assert.Equal(t, time.Unix(1_700_000_020, 0).UTC(), metas[2].UpdatedAt)
 	assert.Equal(t, int64(1_700_000_020_000_000_000), metas[2].FileMtime)
 
 	for _, meta := range metas {
@@ -100,7 +100,7 @@ func TestListDevinSessionMetaMalformedSchema(t *testing.T) {
 
 func TestOpenDevinDBUsesReadOnlyMode(t *testing.T) {
 	fixture := newDevinTestFixture(t,
-		devinSessionRow{ID: "session-readonly", Title: "Read only", WorkingDirectory: "/tmp/readonly", Model: "db-model", CreatedAtMillis: new(int64(1704103199000)), LastActivityMillis: new(int64(1704103265000))},
+		devinSessionRow{ID: "session-readonly", Title: "Read only", WorkingDirectory: "/tmp/readonly", Model: "db-model", CreatedAt: new(int64(1704103199)), LastActivityAt: new(int64(1704103265))},
 	)
 
 	db, err := openDevinDB(fixture.DBPath)
@@ -151,14 +151,14 @@ func TestOpenDevinDBWithSpecialCharPath(t *testing.T) {
 func TestParseDevinSession(t *testing.T) {
 	const sessionID = "session-123"
 	dbPath, transcriptPath := newDevinSessionFixture(t, devinSessionRow{
-		ID:                 sessionID,
-		Title:              "DB title wins",
-		WorkingDirectory:   "/Users/alice/code/my-app",
-		Model:              "db-model",
-		CreatedAtMillis:    new(int64(1704103199000)),
-		LastActivityMillis: new(int64(1704103265000)),
-		WorkspaceJSON:      `{"root_path":"/Users/alice/code/my-app"}`,
-		MetadataJSON:       `{"source":"synthetic"}`,
+		ID:               sessionID,
+		Title:            "DB title wins",
+		WorkingDirectory: "/Users/alice/code/my-app",
+		Model:            "db-model",
+		CreatedAt:        new(int64(1704103199)),
+		LastActivityAt:   new(int64(1704103265)),
+		WorkspaceJSON:    `{"root_path":"/Users/alice/code/my-app"}`,
+		MetadataJSON:     `{"source":"synthetic"}`,
 	}, `{
 		"title":"Transcript title loses",
 		"cwd":"/Users/alice/code/transcript-cwd",
@@ -192,8 +192,8 @@ func TestParseDevinSession(t *testing.T) {
 	assert.Equal(t, "/Users/alice/code/my-app", sess.Cwd)
 	assert.Equal(t, "Fix the login bug", sess.FirstMessage)
 	assert.Equal(t, 1, sess.UserMessageCount)
-	assertTimestamp(t, sess.StartedAt, time.UnixMilli(1_704_103_199_000).UTC())
-	assertTimestamp(t, sess.EndedAt, time.UnixMilli(1_704_103_265_000).UTC())
+	assertTimestamp(t, sess.StartedAt, time.Unix(1_704_103_199, 0).UTC())
+	assertTimestamp(t, sess.EndedAt, time.Unix(1_704_103_265, 0).UTC())
 	assert.True(t, sess.HasTotalOutputTokens)
 	assert.Equal(t, 222, sess.TotalOutputTokens)
 	assert.True(t, sess.HasPeakContextTokens)
@@ -248,12 +248,12 @@ func TestParseDevinSession(t *testing.T) {
 func TestParseDevinSessionStepMetricsPopulateTokenUsage(t *testing.T) {
 	const sessionID = "session-step-metrics"
 	dbPath, _ := newDevinSessionFixture(t, devinSessionRow{
-		ID:                 sessionID,
-		Title:              "Step metrics",
-		WorkingDirectory:   "/tmp/devin-pricing",
-		Model:              "adaptive",
-		CreatedAtMillis:    new(int64(1704103199000)),
-		LastActivityMillis: new(int64(1704103265000)),
+		ID:               sessionID,
+		Title:            "Step metrics",
+		WorkingDirectory: "/tmp/devin-pricing",
+		Model:            "adaptive",
+		CreatedAt:        new(int64(1704103199)),
+		LastActivityAt:   new(int64(1704103265)),
 	}, `{
 		"agent":{"model_name":"Adaptive"},
 		"final_metrics":{
@@ -301,12 +301,12 @@ func TestParseDevinSessionStepMetricsPopulateTokenUsage(t *testing.T) {
 func TestParseDevinSessionFinalMetricsTotalKeys(t *testing.T) {
 	const sessionID = "session-final-total-metrics"
 	dbPath, _ := newDevinSessionFixture(t, devinSessionRow{
-		ID:                 sessionID,
-		Title:              "Final metrics",
-		WorkingDirectory:   "/tmp/devin-final-metrics",
-		Model:              "glm-5-2",
-		CreatedAtMillis:    new(int64(1704103199000)),
-		LastActivityMillis: new(int64(1704103265000)),
+		ID:               sessionID,
+		Title:            "Final metrics",
+		WorkingDirectory: "/tmp/devin-final-metrics",
+		Model:            "glm-5-2",
+		CreatedAt:        new(int64(1704103199)),
+		LastActivityAt:   new(int64(1704103265)),
 	}, `{
 		"agent":{"model_name":"Adaptive"},
 		"final_metrics":{
@@ -335,12 +335,12 @@ func TestParseDevinSessionTranscriptFallbacks(t *testing.T) {
 	worktree := filepath.Join(t.TempDir(), "fallback-app")
 	require.NoError(t, os.MkdirAll(filepath.Join(worktree, ".git"), 0o755))
 	dbPath, _ := newDevinSessionFixture(t, devinSessionRow{
-		ID:                 sessionID,
-		Model:              "db-model",
-		CreatedAtMillis:    new(int64(0)),
-		WorkspaceJSON:      fmt.Sprintf(`[{"root_path":%q}]`, worktree),
-		MetadataJSON:       `{"mode":"fallback"}`,
-		LastActivityMillis: nil,
+		ID:             sessionID,
+		Model:          "db-model",
+		CreatedAt:      new(int64(0)),
+		WorkspaceJSON:  fmt.Sprintf(`[{"root_path":%q}]`, worktree),
+		MetadataJSON:   `{"mode":"fallback"}`,
+		LastActivityAt: nil,
 	}, fmt.Sprintf(`{
 		"agent":{"model_name":""},
 		"workspace_dirs":[{"root_path":%q}],
@@ -403,12 +403,12 @@ func TestParseDevinSessionEmptyTranscriptUsesDBMetadata(t *testing.T) {
 	worktree := filepath.Join(t.TempDir(), "db-only-project")
 	require.NoError(t, os.MkdirAll(filepath.Join(worktree, ".git"), 0o755))
 	dbPath, _ := newDevinSessionFixture(t, devinSessionRow{
-		ID:                 sessionID,
-		Title:              "DB only session",
-		WorkingDirectory:   worktree,
-		Model:              "db-only-model",
-		CreatedAtMillis:    new(int64(1704103200000)),
-		LastActivityMillis: new(int64(1704103209000)),
+		ID:               sessionID,
+		Title:            "DB only session",
+		WorkingDirectory: worktree,
+		Model:            "db-only-model",
+		CreatedAt:        new(int64(1704103200)),
+		LastActivityAt:   new(int64(1704103209)),
 	}, `{
 		"agent":{"model_name":"transcript-model"},
 		"steps":[]
@@ -423,24 +423,24 @@ func TestParseDevinSessionEmptyTranscriptUsesDBMetadata(t *testing.T) {
 	assert.Equal(t, "db_only_project", sess.Project)
 	assert.Equal(t, 0, sess.MessageCount)
 	assert.Equal(t, 0, sess.UserMessageCount)
-	assertTimestamp(t, sess.StartedAt, time.UnixMilli(1_704_103_200_000).UTC())
-	assertTimestamp(t, sess.EndedAt, time.UnixMilli(1_704_103_209_000).UTC())
+	assertTimestamp(t, sess.StartedAt, time.Unix(1_704_103_200, 0).UTC())
+	assertTimestamp(t, sess.EndedAt, time.Unix(1_704_103_209, 0).UTC())
 }
 
 func TestParseDevinSessionMissingTranscriptFallsBackToMessageNodes(t *testing.T) {
 	const sessionID = "session-db-only"
 	fixture := newDevinTestFixture(t, devinSessionRow{
-		ID:                 sessionID,
-		Title:              "DB only session",
-		WorkingDirectory:   "/tmp/db-only-project",
-		Model:              "db-only-model",
-		CreatedAtMillis:    new(int64(1704103200000)),
-		LastActivityMillis: new(int64(1704103209000)),
+		ID:               sessionID,
+		Title:            "DB only session",
+		WorkingDirectory: "/tmp/db-only-project",
+		Model:            "db-only-model",
+		CreatedAt:        new(int64(1704103200)),
+		LastActivityAt:   new(int64(1704103209)),
 	})
 	fixture.insertMessageNodes(t,
-		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 1, ChatMessage: `{"role":"user","content":"Recover from SQLite fallback"}`, CreatedAtMillis: 1704103201000},
-		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 2, ChatMessage: `{"role":"assistant","content":"I'll use the database transcript fallback.","thinking":"checking message_nodes","tool_calls":[{"id":"call-1","function":{"name":"read_file","arguments":"{\"file_path\":\"main.go\"}"}}]}`, CreatedAtMillis: 1704103205000},
-		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 3, ChatMessage: `{"role":"tool","content":"package main\n","tool_call_id":"call-1"}`, CreatedAtMillis: 1704103207000},
+		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 1, ChatMessage: `{"role":"user","content":"Recover from SQLite fallback"}`, CreatedAt: 1704103201},
+		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 2, ChatMessage: `{"role":"assistant","content":"I'll use the database transcript fallback.","thinking":"checking message_nodes","tool_calls":[{"id":"call-1","function":{"name":"read_file","arguments":"{\"file_path\":\"main.go\"}"}}]}`, CreatedAt: 1704103205},
+		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 3, ChatMessage: `{"role":"tool","content":"package main\n","tool_call_id":"call-1"}`, CreatedAt: 1704103207},
 	)
 
 	sess, msgs, err := parseDevinSession(fixture.DBPath, sessionID, "local")
@@ -469,12 +469,12 @@ func TestParseDevinSessionMissingTranscriptFallsBackToMessageNodes(t *testing.T)
 func TestParseDevinSessionTranscriptStillWinsOverMessageNodes(t *testing.T) {
 	const sessionID = "session-transcript-wins"
 	fixture := newDevinTestFixture(t, devinSessionRow{
-		ID:                 sessionID,
-		Title:              "Transcript wins",
-		WorkingDirectory:   "/tmp/transcript-wins",
-		Model:              "db-model",
-		CreatedAtMillis:    new(int64(1704103200000)),
-		LastActivityMillis: new(int64(1704103209000)),
+		ID:               sessionID,
+		Title:            "Transcript wins",
+		WorkingDirectory: "/tmp/transcript-wins",
+		Model:            "db-model",
+		CreatedAt:        new(int64(1704103200)),
+		LastActivityAt:   new(int64(1704103209)),
 	})
 	fixture.writeTranscript(t, sessionID, `{
 		"agent":{"model_name":"transcript-model"},
@@ -484,8 +484,8 @@ func TestParseDevinSessionTranscriptStillWinsOverMessageNodes(t *testing.T) {
 		]
 	}`)
 	fixture.insertMessageNodes(t,
-		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 1, ChatMessage: `{"role":"user","content":"Use fallback instead"}`, CreatedAtMillis: 1704103201000},
-		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 2, ChatMessage: `{"role":"assistant","content":"Fallback answer"}`, CreatedAtMillis: 1704103205000},
+		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 1, ChatMessage: `{"role":"user","content":"Use fallback instead"}`, CreatedAt: 1704103201},
+		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 2, ChatMessage: `{"role":"assistant","content":"Fallback answer"}`, CreatedAt: 1704103205},
 	)
 
 	sess, msgs, err := parseDevinSession(fixture.DBPath, sessionID, "local")
@@ -500,12 +500,12 @@ func TestParseDevinSessionTranscriptStillWinsOverMessageNodes(t *testing.T) {
 func TestParseDevinSessionMissingTranscriptWithoutDBMessagesReturnsRedactedError(t *testing.T) {
 	const sessionID = "session-db-only-empty"
 	fixture := newDevinTestFixture(t, devinSessionRow{
-		ID:                 sessionID,
-		Title:              "DB only session",
-		WorkingDirectory:   "/tmp/db-only-project",
-		Model:              "db-only-model",
-		CreatedAtMillis:    new(int64(1704103200000)),
-		LastActivityMillis: new(int64(1704103209000)),
+		ID:               sessionID,
+		Title:            "DB only session",
+		WorkingDirectory: "/tmp/db-only-project",
+		Model:            "db-only-model",
+		CreatedAt:        new(int64(1704103200)),
+		LastActivityAt:   new(int64(1704103209)),
 	})
 
 	sess, msgs, err := parseDevinSession(fixture.DBPath, sessionID, "local")
@@ -524,15 +524,15 @@ func TestParseDevinSessionFallbackErrorsStayRedacted(t *testing.T) {
 		secretSentinel = "oauth-token-SYNTHETIC-SECRET-SENTINEL"
 	)
 	fixture := newDevinTestFixture(t, devinSessionRow{
-		ID:                 sessionID,
-		Title:              "DB only session",
-		WorkingDirectory:   "/tmp/db-only-project",
-		Model:              "db-only-model",
-		CreatedAtMillis:    new(int64(1704103200000)),
-		LastActivityMillis: new(int64(1704103209000)),
+		ID:               sessionID,
+		Title:            "DB only session",
+		WorkingDirectory: "/tmp/db-only-project",
+		Model:            "db-only-model",
+		CreatedAt:        new(int64(1704103200)),
+		LastActivityAt:   new(int64(1704103209)),
 	})
 	fixture.insertMessageNodes(t,
-		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 1, ChatMessage: `{"content":"` + secretSentinel, CreatedAtMillis: 1704103201000},
+		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 1, ChatMessage: `{"content":"` + secretSentinel, CreatedAt: 1704103201},
 	)
 
 	sess, msgs, err := parseDevinSession(fixture.DBPath, sessionID, "local")
@@ -549,12 +549,12 @@ func TestParseDevinSessionFallbackErrorsStayRedacted(t *testing.T) {
 func TestParseDevinSessionCorruptTranscriptReturnsRedactedError(t *testing.T) {
 	const sessionID = "secret-session"
 	dbPath, transcriptPath := newDevinSessionFixture(t, devinSessionRow{
-		ID:                 sessionID,
-		Title:              "Corrupt transcript",
-		WorkingDirectory:   "/tmp/app",
-		Model:              "db-model",
-		CreatedAtMillis:    new(int64(1704103199000)),
-		LastActivityMillis: new(int64(1704103265000)),
+		ID:               sessionID,
+		Title:            "Corrupt transcript",
+		WorkingDirectory: "/tmp/app",
+		Model:            "db-model",
+		CreatedAt:        new(int64(1704103199)),
+		LastActivityAt:   new(int64(1704103265)),
 	}, `{"steps":[]}`)
 	require.NoError(t, os.WriteFile(transcriptPath, []byte(`{"apiKey":"secret-value","steps":[`), 0o644))
 
@@ -595,7 +595,7 @@ func TestParseDevinSessionRedactsCredentialPathsAndTokenLikeValues(t *testing.T)
 		secretSentinel = "oauth-token-SYNTHETIC-SECRET-SENTINEL"
 	)
 	fixture := newDevinTestFixture(t,
-		devinSessionRow{ID: sessionID, Title: "Privacy", WorkingDirectory: "/tmp/app", Model: "db-model", CreatedAtMillis: new(int64(1704103199000)), LastActivityMillis: new(int64(1704103265000))},
+		devinSessionRow{ID: sessionID, Title: "Privacy", WorkingDirectory: "/tmp/app", Model: "db-model", CreatedAt: new(int64(1704103199)), LastActivityAt: new(int64(1704103265))},
 	)
 	transcriptPath := fixture.writeTranscript(t, sessionID, `{"access_token":"oauth-token-SYNTHETIC-SECRET-SENTINEL","steps":[`)
 

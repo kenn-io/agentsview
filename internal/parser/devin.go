@@ -86,27 +86,27 @@ func ForEachDevinSessionMeta(
 
 	for rows.Next() {
 		var meta DevinSessionMeta
-		var createdAtMS int64
-		var lastActivityMS sql.NullInt64
-		var updatedAtMS int64
+		var createdAt int64
+		var lastActivity sql.NullInt64
+		var updatedAt int64
 		if err := rows.Scan(
 			&meta.RawSessionID,
 			&meta.Title,
 			&meta.CWD,
 			&meta.Model,
-			&createdAtMS,
-			&lastActivityMS,
-			&updatedAtMS,
+			&createdAt,
+			&lastActivity,
+			&updatedAt,
 		); err != nil {
 			return fmt.Errorf("scanning devin session meta: %w", err)
 		}
 		meta.VirtualPath = VirtualSourcePath(dbPath, meta.RawSessionID)
-		meta.CreatedAt = devinUnixMilli(createdAtMS)
-		if lastActivityMS.Valid {
-			meta.LastActivity = devinUnixMilli(lastActivityMS.Int64)
+		meta.CreatedAt = devinUnixSec(createdAt)
+		if lastActivity.Valid {
+			meta.LastActivity = devinUnixSec(lastActivity.Int64)
 		}
-		meta.UpdatedAt = devinUnixMilli(updatedAtMS)
-		meta.FileMtime = updatedAtMS * 1_000_000
+		meta.UpdatedAt = devinUnixSec(updatedAt)
+		meta.FileMtime = updatedAt * 1_000_000_000
 		observeStreamingDiscoveryBuffer(ctx, 1)
 		if err := yield(meta); err != nil {
 			return err
@@ -137,9 +137,9 @@ func getDevinSessionMeta(
 	defer db.Close()
 
 	var meta DevinSessionMeta
-	var createdAtMS int64
-	var lastActivityMS sql.NullInt64
-	var updatedAtMS int64
+	var createdAt int64
+	var lastActivity sql.NullInt64
+	var updatedAt int64
 	err = db.QueryRow(`
 		SELECT id,
 		       COALESCE(title, ''),
@@ -156,9 +156,9 @@ func getDevinSessionMeta(
 		&meta.Title,
 		&meta.CWD,
 		&meta.Model,
-		&createdAtMS,
-		&lastActivityMS,
-		&updatedAtMS,
+		&createdAt,
+		&lastActivity,
+		&updatedAt,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -168,20 +168,20 @@ func getDevinSessionMeta(
 	}
 
 	meta.VirtualPath = VirtualSourcePath(dbPath, meta.RawSessionID)
-	meta.CreatedAt = devinUnixMilli(createdAtMS)
-	if lastActivityMS.Valid {
-		meta.LastActivity = devinUnixMilli(lastActivityMS.Int64)
+	meta.CreatedAt = devinUnixSec(createdAt)
+	if lastActivity.Valid {
+		meta.LastActivity = devinUnixSec(lastActivity.Int64)
 	}
-	meta.UpdatedAt = devinUnixMilli(updatedAtMS)
-	meta.FileMtime = updatedAtMS * 1_000_000
+	meta.UpdatedAt = devinUnixSec(updatedAt)
+	meta.FileMtime = updatedAt * 1_000_000_000
 	return &meta, nil
 }
 
-func devinUnixMilli(ms int64) time.Time {
-	if ms <= 0 {
+func devinUnixSec(sec int64) time.Time {
+	if sec <= 0 {
 		return time.Time{}
 	}
-	return time.UnixMilli(ms).UTC()
+	return time.Unix(sec, 0).UTC()
 }
 
 type devinTranscriptError struct {
@@ -406,7 +406,7 @@ type devinMessageNodeRow struct {
 	NodeID       int64
 	ParentNodeID sql.NullInt64
 	ChatMessage  string
-	CreatedAtMS  int64
+	CreatedAt    int64
 }
 
 func listDevinMessageNodes(dbPath, rawSessionID string) ([]devinMessageNodeRow, error) {
@@ -434,7 +434,7 @@ func listDevinMessageNodes(dbPath, rawSessionID string) ([]devinMessageNodeRow, 
 	var nodes []devinMessageNodeRow
 	for rows.Next() {
 		var row devinMessageNodeRow
-		if err := rows.Scan(&row.RowID, &row.NodeID, &row.ParentNodeID, &row.ChatMessage, &row.CreatedAtMS); err != nil {
+		if err := rows.Scan(&row.RowID, &row.NodeID, &row.ParentNodeID, &row.ChatMessage, &row.CreatedAt); err != nil {
 			return nil, err
 		}
 		nodes = append(nodes, row)
@@ -489,7 +489,7 @@ func parseDevinDBMessageNode(
 		Role:          role,
 		Content:       content,
 		ThinkingText:  thinking,
-		Timestamp:     devinUnixMilli(row.CreatedAtMS),
+		Timestamp:     devinUnixSec(row.CreatedAt),
 		HasThinking:   hasThinking,
 		HasToolUse:    hasToolUse || len(toolCalls) > 0,
 		IsSystem:      isSystem,

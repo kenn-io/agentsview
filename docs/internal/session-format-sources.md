@@ -820,7 +820,9 @@ Grok section and remove the explicit registry exception in the coverage test.
 ## Devin CLI (`devin`)
 
 - **Format:** `cli/sessions.db` for session metadata plus transcript JSON
-  artifacts.
+  artifacts. The `sessions.created_at`, `sessions.last_activity_at`, and
+  `message_nodes.created_at` columns are Unix epoch seconds (not
+  milliseconds). Verified against a live Devin CLI database 2026-07-31.
 - **Evidence:** `no-public-source`.
 - **Upstream:** Cognition's first-party
   [Devin documentation](https://docs.devin.ai/) and public repositories were
