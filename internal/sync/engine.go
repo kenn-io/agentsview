@@ -13480,6 +13480,18 @@ func (e *Engine) SyncSingleSessionContext(
 			needsRetry:   res.needsRetryForSession(pr.Session.ID),
 			forceReplace: res.forceReplace,
 		}
+		// The session upsert commits parser-derived parent provenance before
+		// the later content, usage, and completion stages. Queue the attempted
+		// session itself first so a failure after that upsert still re-resolves
+		// its incoming spawn edges in the deferred repair pass.
+		if err := e.db.QueueSubagentParentRepairs(
+			[]string{resultIDs[i]},
+		); err != nil {
+			return fmt.Errorf(
+				"queue attempted session parent repair: %w", err,
+			)
+		}
+		repairQueued = true
 		writeErr := e.writeSessionFull(write)
 		// Full-write stages commit independently. Message content (and a new
 		// spawn edge) can persist even when a later usage, data-version, or
