@@ -796,8 +796,8 @@ func TestProcessFileProviderDevinSkipsStoredFreshSource(t *testing.T) {
 		root,
 		"session-001",
 		"Initial reply",
-		1700000000000,
-		1700000005000,
+		1700000000,
+		1700000005,
 	)
 	virtualPath := parser.VirtualSourcePath(dbPath, "session-001")
 	database := dbtest.OpenTestDB(t)
@@ -856,8 +856,8 @@ func TestProcessFileProviderDevinReparsesTranscriptOnlyChange(t *testing.T) {
 		root,
 		"session-002",
 		"Initial reply",
-		1700000000000,
-		1700000005000,
+		1700000000,
+		1700000005,
 	)
 	virtualPath := parser.VirtualSourcePath(dbPath, "session-002")
 	database := dbtest.OpenTestDB(t)
@@ -924,8 +924,8 @@ func TestProcessFileProviderDevinSameSizeSameMtimeTranscriptRewriteReparses(t *t
 				root,
 				"session-same-mtime",
 				"Initial reply",
-				1700000000000,
-				1700000005000,
+				1700000000,
+				1700000005,
 			)
 			virtualPath := parser.VirtualSourcePath(dbPath, "session-same-mtime")
 			database := dbtest.OpenTestDB(t)
@@ -1005,8 +1005,8 @@ func TestProcessFileProviderDevinRepeatedHashRewriteIgnoresStaleHashedCache(t *t
 		root,
 		"session-repeated-hash",
 		"Initial reply",
-		1700000000000,
-		1700000005000,
+		1700000000,
+		1700000005,
 	)
 	virtualPath := parser.VirtualSourcePath(dbPath, "session-repeated-hash")
 	file := parser.DiscoveredFile{
@@ -1070,8 +1070,8 @@ func TestSyncAllProviderDevinMissingDBPreservesArchive(t *testing.T) {
 		root,
 		"session-003",
 		"Archived reply",
-		1700000000000,
-		1700000005000,
+		1700000000,
+		1700000005,
 	)
 	database := dbtest.OpenTestDB(t)
 	engine := NewEngine(database, EngineConfig{
@@ -1168,8 +1168,8 @@ func writeProcessProviderDevinFixture(
 	root string,
 	sessionID string,
 	assistantReply string,
-	createdAtMS int64,
-	lastActivityAtMS int64,
+	createdAtSec int64,
+	lastActivityAtSec int64,
 ) (string, string) {
 	t.Helper()
 	cliDir := filepath.Join(root, "cli")
@@ -1198,8 +1198,8 @@ func writeProcessProviderDevinFixture(
 		"Devin fixture",
 		"/Users/devbox/src/agentsview",
 		"devin-1",
-		createdAtMS,
-		lastActivityAtMS,
+		createdAtSec,
+		lastActivityAtSec,
 	)
 	require.NoError(t, err)
 	require.NoError(t, database.Close())

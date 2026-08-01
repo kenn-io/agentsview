@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,7 +107,7 @@ func ForEachDevinSessionMeta(
 			meta.LastActivity = devinUnixSec(lastActivity.Int64)
 		}
 		meta.UpdatedAt = devinUnixSec(updatedAt)
-		meta.FileMtime = updatedAt * 1_000_000_000
+		meta.FileMtime = devinFileMtimeNS(updatedAt)
 		observeStreamingDiscoveryBuffer(ctx, 1)
 		if err := yield(meta); err != nil {
 			return err
@@ -173,15 +174,41 @@ func getDevinSessionMeta(
 		meta.LastActivity = devinUnixSec(lastActivity.Int64)
 	}
 	meta.UpdatedAt = devinUnixSec(updatedAt)
-	meta.FileMtime = updatedAt * 1_000_000_000
+	meta.FileMtime = devinFileMtimeNS(updatedAt)
 	return &meta, nil
 }
 
+// devinMaxEpochSec is the largest epoch-second value whose nanosecond form
+// still fits in int64 (year 2262). Anything larger is not a plausible Devin
+// timestamp and signals a unit mismatch -- a 13-digit millisecond value, for
+// example. Rejecting it keeps a bad column from silently overflowing into a
+// far-future mtime, which would wedge change detection: devinApplyFileInfoTimes
+// only ever raises Mtime, so a wrapped value can never be superseded and the
+// session would stop resyncing.
+const devinMaxEpochSec = math.MaxInt64 / int64(time.Second)
+
+// devinPlausibleEpochSec reports whether sec is a usable Devin epoch-second
+// timestamp. Devin stores created_at, last_activity_at, and
+// message_nodes.created_at as Unix seconds.
+func devinPlausibleEpochSec(sec int64) bool {
+	return sec > 0 && sec <= devinMaxEpochSec
+}
+
 func devinUnixSec(sec int64) time.Time {
-	if sec <= 0 {
+	if !devinPlausibleEpochSec(sec) {
 		return time.Time{}
 	}
 	return time.Unix(sec, 0).UTC()
+}
+
+// devinFileMtimeNS converts a Devin epoch-second timestamp to the nanosecond
+// mtime the sync layer compares against. Implausible values yield 0, which
+// callers already treat as "no synthetic mtime available".
+func devinFileMtimeNS(sec int64) int64 {
+	if !devinPlausibleEpochSec(sec) {
+		return 0
+	}
+	return sec * int64(time.Second)
 }
 
 type devinTranscriptError struct {

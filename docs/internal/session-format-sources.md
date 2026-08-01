@@ -822,7 +822,12 @@ Grok section and remove the explicit registry exception in the coverage test.
 - **Format:** `cli/sessions.db` for session metadata plus transcript JSON
   artifacts. The `sessions.created_at`, `sessions.last_activity_at`, and
   `message_nodes.created_at` columns are Unix epoch seconds (not
-  milliseconds). Verified against a live Devin CLI database 2026-07-31.
+  milliseconds). Verified against a live Devin CLI database 2026-07-31, and
+  reverified independently against CLI 3000.3.22 the same day. Because the unit
+  is observed rather than documented, the parser rejects values outside the
+  nanosecond-representable epoch-second range instead of converting them, so a
+  future unit change surfaces as missing timestamps rather than as a silently
+  overflowed far-future mtime that would wedge resync.
 - **Evidence:** `no-public-source`.
 - **Upstream:** Cognition's first-party
   [Devin documentation](https://docs.devin.ai/) and public repositories were

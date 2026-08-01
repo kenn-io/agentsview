@@ -73,6 +73,69 @@ func TestListDevinSessionMetaAllowsMissingTimestamps(t *testing.T) {
 	assert.Zero(t, metas[0].FileMtime)
 }
 
+// Devin stores epoch seconds. A row carrying some other unit (milliseconds, in
+// practice) must not be converted anyway: FileMtime is seconds*1e9, which
+// overflows int64 above year 2262 and wraps to a far-future nanosecond value.
+// devinApplyFileInfoTimes only ever raises Mtime, so a wrapped value can never
+// be superseded by a real file mtime and the session stops resyncing.
+func TestListDevinSessionMetaRejectsImplausibleTimestamps(t *testing.T) {
+	tests := []struct {
+		name           string
+		lastActivityAt int64
+		wantUpdatedAt  time.Time
+		wantFileMtime  int64
+	}{
+		{
+			name:           "epoch seconds are accepted",
+			lastActivityAt: 1_700_000_095,
+			wantUpdatedAt:  time.Unix(1_700_000_095, 0).UTC(),
+			wantFileMtime:  1_700_000_095_000_000_000,
+		},
+		{
+			name:           "largest nanosecond-representable second is accepted",
+			lastActivityAt: 9_223_372_036,
+			wantUpdatedAt:  time.Unix(9_223_372_036, 0).UTC(),
+			wantFileMtime:  9_223_372_036_000_000_000,
+		},
+		{
+			name:           "one second past the nanosecond range is rejected",
+			lastActivityAt: 9_223_372_037,
+		},
+		{
+			name:           "millisecond value is rejected instead of overflowing",
+			lastActivityAt: 1_700_000_095_000,
+		},
+		{
+			name:           "negative value is rejected",
+			lastActivityAt: -1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newDevinTestFixture(t,
+				devinSessionRow{
+					ID:               "session-units",
+					Title:            "Units",
+					WorkingDirectory: "/cwd/units",
+					Model:            "model-units",
+					CreatedAt:        new(tc.lastActivityAt),
+					LastActivityAt:   new(tc.lastActivityAt),
+				},
+			)
+
+			metas, err := ListDevinSessionMeta(fixture.DBPath)
+			require.NoError(t, err)
+			require.Len(t, metas, 1)
+
+			assert.Equal(t, tc.wantUpdatedAt, metas[0].UpdatedAt)
+			assert.Equal(t, tc.wantUpdatedAt, metas[0].CreatedAt)
+			assert.Equal(t, tc.wantUpdatedAt, metas[0].LastActivity)
+			assert.Equal(t, tc.wantFileMtime, metas[0].FileMtime)
+		})
+	}
+}
+
 func TestListDevinSessionMetaMissingDB(t *testing.T) {
 	metas, err := ListDevinSessionMeta(filepath.Join(t.TempDir(), "cli", devinDBFilename))
 	require.NoError(t, err)
