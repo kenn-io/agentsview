@@ -508,6 +508,58 @@ func TestReconcileHermesDefaultSessionsRootTombstonesRemovedStateMember(t *testi
 		"authoritative reconciliation must tombstone a removed state.db member")
 }
 
+// TestReconcileHermesScopedArchiveTombstonesRemovedStateMember pins
+// aggregate-member authority for a pass scoped to one complete archive: the
+// scope's proof spans the archive's whole state.db membership, so a removed
+// member is reclaimed even though a second configured root stays uncovered
+// and full provider-root coverage is out of reach.
+func TestReconcileHermesScopedArchiveTombstonesRemovedStateMember(
+	t *testing.T,
+) {
+	archiveRoot := t.TempDir()
+	stateDB := writeHermesArchiveStateDB(t, archiveRoot)
+	sessionsDir := filepath.Join(archiveRoot, "sessions")
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+	otherRoot := t.TempDir()
+	writeHermesTranscriptFile(t, otherRoot, "keeper")
+
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentHermes: {sessionsDir, otherRoot},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
+		t.Context(), []string{sessionsDir, otherRoot}, false,
+	))
+	stored, err := database.GetSession(t.Context(), "hermes:child")
+	require.NoError(t, err)
+	require.NotNil(t, stored, "initial reconciliation must store the state member")
+
+	conn, err := sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), "DELETE FROM sessions WHERE id = 'child'")
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	// The pass is scoped to the archive only; the other configured root is
+	// deliberately not requested, so full provider-root coverage is absent.
+	require.NoError(t, engine.ReconcileProviderRoots(
+		t.Context(), parser.AgentHermes, []string{sessionsDir},
+	))
+
+	stored, err = database.GetSession(t.Context(), "hermes:child")
+	require.NoError(t, err)
+	assert.Nil(t, stored,
+		"an archive-scoped pass proves its own membership and reclaims the member")
+	survivor, err := database.GetSession(t.Context(), "hermes:keeper")
+	require.NoError(t, err)
+	assert.NotNil(t, survivor,
+		"the unrequested root's sessions are untouched")
+}
+
 // Streamed discovery must open state.db a bounded number of times per pass:
 // once to stream members and once for the transcript membership check — not
 // once per transcript file, which scales reconciliation work with archive

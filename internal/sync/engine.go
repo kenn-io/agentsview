@@ -4419,14 +4419,27 @@ func sameReconciliationSourcePath(left, right string) bool {
 		canonicalReconciliationSourceIdentity(right)
 }
 
-// aggregateOwnedMemberGone reports whether an ownership row whose stored
-// FilePath is a still-present multi-member container has lost its member.
-// Container discovery records the container path itself for every member,
-// so a removed member never trips the missing-path stat; compare the row
-// against the streamed pass's membership instead. The check requires a
-// spool and full provider-root coverage — absence from a partial stream
-// proves nothing — and providers opt in via
-// parser.ReconciliationAggregateMemberResolver.
+// reconciliationMemberRelocated reports whether the provider still resolves
+// the session anywhere in its full configured scope. A scoped pass proves a
+// member gone from its own container, but the same logical member may have
+// moved to another configured root the pass never streamed; a deletion
+// claimed here would outlive the move until that root happens to sync. The
+// lookup passes only the session identity — a stored-path probe could
+// resolve the stale spelling without verifying the row exists.
+func reconciliationMemberRelocated(
+	ctx context.Context, provider parser.Provider, fullSessionID string,
+) (bool, error) {
+	_, found, err := provider.FindSource(ctx, parser.FindSourceRequest{
+		FullSessionID: fullSessionID,
+	})
+	if err != nil {
+		return false, fmt.Errorf(
+			"resolve possibly relocated member %s: %w", fullSessionID, err,
+		)
+	}
+	return found, nil
+}
+
 // reconciliationProofCoversContainerMembership reports whether one completed
 // scope's proof claims the whole virtual membership of the container at
 // physicalPath. Such a scope streamed and admitted exactly that container's
@@ -4444,15 +4457,24 @@ func reconciliationProofCoversContainerMembership(
 	return false
 }
 
+// aggregateOwnedMemberGone reports whether an ownership row whose stored
+// FilePath is a still-present multi-member container has lost its member.
+// Container discovery records the container path itself for every member,
+// so a removed member never trips the missing-path stat; compare the row
+// against the streamed pass's membership instead. The check requires a
+// spool and member authority — full provider-root coverage, or a completed
+// scope whose proof spans the row's whole container membership; absence
+// from any narrower stream proves nothing — and providers opt in via
+// parser.ReconciliationAggregateMemberResolver.
 func aggregateOwnedMemberGone(
 	ctx context.Context,
 	spool reconciliationSpoolStore,
 	provider parser.Provider,
 	agent parser.AgentType,
 	ownership db.SessionSourceOwnership,
-	allProviderRootsCovered bool,
+	memberAuthority bool,
 ) (bool, error) {
-	if spool == nil || provider == nil || !allProviderRootsCovered {
+	if spool == nil || provider == nil || !memberAuthority {
 		return false, nil
 	}
 	resolver, ok := provider.(parser.ReconciliationAggregateMemberResolver)
@@ -4651,15 +4673,38 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 						missingByPath[statPath] = missing
 					}
 					if !missing {
+						// An aggregate row stores its container path, so
+						// full-root coverage OR a scope proof spanning that
+						// container's whole membership grants member-absence
+						// authority: either way the completed stream
+						// enumerated every member the row could resolve to.
 						gone, checkErr := aggregateOwnedMemberGone(
 							ctx, spool, provider, agent, ownership,
-							allProviderRootsCovered,
+							allProviderRootsCovered ||
+								reconciliationProofCoversContainerMembership(
+									scope.proofScopes, ownership.FilePath,
+								),
 						)
 						if checkErr != nil {
 							return deleted, checkErr
 						}
 						if !gone {
 							continue
+						}
+						if !allProviderRootsCovered {
+							// Membership authority came from the scope's own
+							// container proof; a same-ID copy under another
+							// configured root would make this a move, not a
+							// deletion.
+							relocated, err := reconciliationMemberRelocated(
+								ctx, provider, ownership.ID,
+							)
+							if err != nil {
+								return deleted, err
+							}
+							if relocated {
+								continue
+							}
 						}
 						// The container still exists but the streamed pass no
 						// longer yields this member; tombstone directly — the
@@ -4815,13 +4860,30 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 							)
 						}
 						if found {
-							_, _, virtual := parser.ParseVirtualSourcePath(
+							container, _, virtual := parser.ParseVirtualSourcePath(
 								providerDiscoveredPath(source),
 							)
 							if virtual && !allProviderRootsCovered {
 								// A scoped pass cannot prove that the same logical
-								// member did not move to another configured root.
-								continue
+								// member did not move to another configured root —
+								// unless the completed scope's proof spans this
+								// container's whole virtual membership AND the
+								// provider, asked across its full configured
+								// scope, no longer resolves the session anywhere.
+								if !reconciliationProofCoversContainerMembership(
+									scope.proofScopes, container,
+								) {
+									continue
+								}
+								relocated, err := reconciliationMemberRelocated(
+									ctx, provider, ownership.ID,
+								)
+								if err != nil {
+									return deleted, err
+								}
+								if relocated {
+									continue
+								}
 							}
 							if spool == nil || !virtual {
 								continue
@@ -5928,10 +5990,17 @@ func (e *Engine) discoveredFileEffectiveMtime(
 	// session, scaling cutoff filtering with the container instead of the
 	// changed batch — and these sources are only listed for containers that
 	// provably have not changed since their last verified pass, where the
-	// carried watermark and the composite are equally stale.
+	// carried watermark and the composite are equally stale. That proof is
+	// the pass's container capture: a container that changed between the
+	// listing and the recapture check may have advanced a session past its
+	// carried watermark, so the stale value cannot decide the cutoff — fall
+	// through and resolve the live composite instead.
 	if file.ProviderSource != nil {
 		if wm, ok := parser.SourceWatermarkOnlyMTimeNS(*file.ProviderSource); ok {
-			return wm, nil
+			if dbPath, _, ok := sqliteContainerSourceForFile(file); ok &&
+				e.sqliteContainerPassCaptureValid(dbPath) {
+				return wm, nil
+			}
 		}
 	}
 	// Provider-authoritative sources resolve freshness through the provider

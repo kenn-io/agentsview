@@ -221,6 +221,84 @@ func TestClassifyChangedPathWatermarkMergeRelistsOnStaleCapture(t *testing.T) {
 		"a stale capture must keep every member for the per-file gates")
 }
 
+// TestDiscoveredFileWatermarkCutoffRequiresLiveCapture pins cutoff
+// filtering's trust in carried session-row watermarks: the carried value may
+// decide the incremental cutoff only while the pass's container capture is
+// live. A child-only commit landing during discovery leaves the session-row
+// watermark behind the live composite; if the stale carried value were
+// trusted after the recapture invalidated the pass, the file would fall
+// below the cutoff and be dropped before full fingerprinting ever saw the
+// update. Without a live capture the effective mtime must resolve the live
+// composite instead.
+func TestDiscoveredFileWatermarkCutoffRequiresLiveCapture(t *testing.T) {
+	dbPath, conn := newCompositeContainerTestDB(t)
+	const sessionRow = int64(1779012000000)
+	const childWrite = int64(1779012500000)
+	_, err := conn.Exec(
+		"INSERT INTO session (id, project_id, time_created, time_updated)"+
+			" VALUES ('ses-1', 'proj', ?, ?)",
+		sessionRow, sessionRow,
+	)
+	require.NoError(t, err, "insert session row")
+	_, err = conn.Exec(
+		"INSERT INTO message (id, session_id, data, time_created, time_updated)"+
+			" VALUES ('msg-1', 'ses-1', '{}', ?, ?)",
+		childWrite, childWrite,
+	)
+	require.NoError(t, err, "insert message row")
+
+	root := filepath.Dir(dbPath)
+	provider, ok := parser.NewProvider(
+		parser.AgentOpenCode,
+		parser.ProviderConfig{Roots: []string{root}, Machine: "local"},
+	)
+	require.True(t, ok)
+	sources, err := provider.SourcesForChangedPath(
+		t.Context(), parser.ChangedPathRequest{
+			Path: dbPath, WatchRoot: root, AllowWatermarkOnlySources: true,
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	carried, watermarkOnly := parser.SourceWatermarkOnlyMTimeNS(sources[0])
+	require.True(t, watermarkOnly)
+	require.Equal(t, sessionRow*1_000_000, carried,
+		"the carried watermark must be the session row alone")
+
+	engine := NewEngine(openTestDB(t), EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenCode: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	file := parser.DiscoveredFile{
+		Agent:           parser.AgentOpenCode,
+		Path:            sources[0].DisplayPath,
+		ProviderSource:  &sources[0],
+		ProviderProcess: true,
+	}
+
+	// No live capture: the stale carried watermark cannot decide the
+	// cutoff, so the live composite (dominated by the child write) decides.
+	mtime, err := engine.discoveredFileEffectiveMtime(t.Context(), file)
+	require.NoError(t, err)
+	assert.Equal(t, childWrite*1_000_000, mtime,
+		"without a live capture the effective mtime is the live composite")
+
+	// With a live, matching capture the carried watermark is trusted.
+	pre, ok := statSQLiteContainerState(dbPath)
+	require.True(t, ok)
+	engine.beginSQLiteContainerPass(
+		[]parser.DiscoveredFile{file},
+		map[string]parser.SQLiteContainerState{dbPath: pre},
+	)
+	mtime, err = engine.discoveredFileEffectiveMtime(t.Context(), file)
+	require.NoError(t, err)
+	assert.Equal(t, carried, mtime,
+		"a live capture lets the carried watermark decide the cutoff")
+}
+
 // TestSQLiteContainerPassPromotesOnlyPreDiscoveryCaptures pins the gate's
 // ordering invariant: the state promoted to trusted must have been captured
 // BEFORE discovery listed the container's sessions. Discovery reads the
