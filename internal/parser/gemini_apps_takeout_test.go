@@ -143,6 +143,26 @@ func TestParseGeminiAppsBrStaysInsidePromptBlock(t *testing.T) {
 	assert.Equal(t, "answer", results[0].Messages[1].Content)
 }
 
+func TestParseGeminiAppsEmptyFirstContentBlockIsError(t *testing.T) {
+	fixture := `<!doctype html><html><head><title>My Activity History</title></head><body>
+<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Prompted</p><p>Jan 2, 2025, 3:04:05 PM EDT</p></div><div class="content-cell"><p></p><p>answer</p></div></div>
+</body></html>`
+	path := filepath.Join(t.TempDir(), "empty-first-block.html")
+	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
+
+	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
+	require.True(t, ok)
+	exporter := provider.(GeminiAppsExportParser)
+	var results []ParseResult
+	summary, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
+		results = append(results, result)
+		return nil
+	})
+	assert.ErrorContains(t, err, "no admissible Prompted records")
+	assert.Empty(t, results)
+	assert.Equal(t, 1, summary.Errors)
+}
+
 func TestParseGeminiAppsTimestampMustBeInHeader(t *testing.T) {
 	fixture := strings.Replace(
 		sanitizedGeminiAppsHTML,

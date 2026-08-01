@@ -526,8 +526,11 @@ func splitGeminiAppsBlocks(tokens []html.Token) []string {
 	var block []html.Token
 	blockDepth := 0
 	flush := func() {
+		if block == nil {
+			return
+		}
 		value := strings.TrimSpace(renderGeminiAppsTokens(block))
-		if value != "" && !geminiAppsTimestampRE.MatchString(value) {
+		if !geminiAppsTimestampRE.MatchString(value) {
 			blocks = append(blocks, value)
 		}
 		block = nil
