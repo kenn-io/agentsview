@@ -1182,10 +1182,11 @@ func (d *DB) CopySessionMetadataFrom(
 	// old DB means the uuid does not identify which message the pin
 	// was on, so transferring it to a lone same-uuid survivor could
 	// misattach a pin whose real target was removed by the re-parse.
-	// Fall back to ordinal only for legacy pins whose source row
-	// has no source_uuid, or when the row at the old ordinal carries
-	// the same uuid, role, and content and that tuple is unique on both
-	// sides. The stronger identity check handles duplicate uuids without
+	// Fall back to ordinal only when the row at the old ordinal also
+	// matches the pinned row's role and content: unconditionally for
+	// legacy pins whose source row has no source_uuid, and for
+	// duplicated uuids additionally requiring the tuple to be unique
+	// on both sides. The stronger identity check handles duplicate uuids without
 	// mistaking a surviving duplicate that shifted into the pinned row's
 	// old ordinal for the removed message. A nonempty uuid with no safe
 	// match means the pinned message is gone: the pin is dropped rather
@@ -1232,13 +1233,21 @@ func (d *DB) CopySessionMetadataFrom(
 		// source_uuid pass already restored the same row and INSERT OR
 		// IGNORE dedupes; duplicate uuids need the stronger tuple to
 		// avoid attaching a removed pin to a shifted survivor.
-		uuidFallbackGuard := ""
+		uuidFallbackGuard := `
+			AND new_m.role = old_m.role
+			AND new_m.content = old_m.content`
 		if hasSourceUUID {
 			uuidFallbackGuard = `
-				AND (old_m.source_uuid IS NULL
-					OR old_m.source_uuid = ''
+				AND (
+					(
+						(old_m.source_uuid IS NULL
+							OR old_m.source_uuid = '')
+						AND new_m.role = old_m.role
+						AND new_m.content = old_m.content
+					)
 					OR (
 						new_m.source_uuid = old_m.source_uuid
+						AND old_m.source_uuid != ''
 						AND new_m.role = old_m.role
 						AND new_m.content = old_m.content
 						AND (

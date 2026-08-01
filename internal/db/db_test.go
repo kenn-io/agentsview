@@ -5863,6 +5863,17 @@ func TestCopySessionMetadataFrom_PinsFollowSourceUUID(t *testing.T) {
 		},
 	)
 	pinByOrdinal(srcDB, "s7", 1)
+
+	// Legacy session (no source uuids) whose pinned combined prompt
+	// is split by the re-parse: the hidden envelope row takes over
+	// the pinned ordinal.
+	insertSession(t, srcDB, "s8", "proj")
+	insertMessages(t, srcDB, Message{
+		SessionID: "s8", Ordinal: 1, Role: "user",
+		Content:       "<ide_opened_file>f</ide_opened_file> explain",
+		ContentLength: 44,
+	})
+	pinByOrdinal(srcDB, "s8", 1)
 	srcDB.Close()
 
 	// Destination DB: the re-parse split the envelope into its own
@@ -5893,6 +5904,19 @@ func TestCopySessionMetadataFrom_PinsFollowSourceUUID(t *testing.T) {
 		Content: "same dup", ContentLength: 8,
 		SourceUUID: "u-identical-dup",
 	})
+	insertSession(t, dstDB, "s8", "proj")
+	insertMessages(t, dstDB,
+		Message{
+			SessionID: "s8", Ordinal: 1, Role: "user",
+			Content:       "<ide_opened_file>f</ide_opened_file>",
+			ContentLength: 36, IsSystem: true,
+			SourceUUID: "u8:ide-context",
+		},
+		Message{
+			SessionID: "s8", Ordinal: 2, Role: "user",
+			Content: "explain", ContentLength: 7, SourceUUID: "u8",
+		},
+	)
 	insertSession(t, dstDB, "s2", "proj")
 	insertMessages(t, dstDB, Message{
 		SessionID: "s2", Ordinal: 1, Role: "user",
@@ -5984,6 +6008,12 @@ func TestCopySessionMetadataFrom_PinsFollowSourceUUID(t *testing.T) {
 	assert.Empty(t, pins,
 		"pin on indistinguishable old duplicates must be dropped when "+
 			"their multiplicity changes")
+
+	pins, err = dstDB.ListPinnedMessages(ctx, "s8", "")
+	require.NoError(t, err, "ListPins s8")
+	assert.Empty(t, pins,
+		"uuid-less pin on a split combined prompt must not attach to "+
+			"the hidden envelope row at its old ordinal")
 }
 
 func TestCopySessionMetadataCopiesFromSource(t *testing.T) {
