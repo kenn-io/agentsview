@@ -346,5 +346,33 @@ func TestFolderTransportResumesBoundedPublishedRepairAfterReopen(t *testing.T) {
 	assert.False(t, more)
 	assert.Equal(t, 1, published)
 	assert.FileExists(t, checkpointPath)
-	assert.Equal(t, journalSequence, readTestFolderJournalSequence(t, target))
+	assert.Equal(t, journalSequence+1, readTestFolderJournalSequence(t, target))
+
+	kindRoot, err := os.OpenRoot(filepath.Dir(checkpointPath))
+	require.NoError(t, err)
+	require.NoError(t, (&folderTransport{}).writeFolderJournalRejectionLocked(
+		kindRoot,
+		checkpointWire.Name,
+		checkpointIdentity,
+	))
+	require.NoError(t, kindRoot.Close())
+	recovery, err := OpenFolderTransport(target, FolderTransportOptions{
+		MaxObjects:      10,
+		StateStore:      state,
+		RepairPublished: true,
+	})
+	require.NoError(t, err)
+	recoveryResult, err := recovery.Exchange(t.Context(), publishedStore, origin)
+	require.NoError(t, err)
+	assert.Zero(t, recoveryResult.Published)
+	assert.False(t, recoveryResult.More)
+	require.NoError(t, recovery.Close())
+	assert.Equal(t, journalSequence+2, readTestFolderJournalSequence(t, target))
+	assert.NoFileExists(t,
+		filepath.Join(
+			filepath.Dir(checkpointPath),
+			folderJournalRejectionName(checkpointWire.Name),
+		),
+		"a durable repair event supersedes the rejection marker",
+	)
 }

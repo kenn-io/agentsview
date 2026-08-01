@@ -26,8 +26,9 @@ type ExchangeResult struct {
 }
 
 // FolderTransportOptions configures a bounded folder exchange. RepairPublished
-// verifies an already-completed authoritative generation without adding new
-// journal events, and is intended for explicit full synchronization.
+// verifies an already-completed authoritative generation and journals only
+// restored or rejection-marked objects so advanced peers can retry them. It is
+// intended for explicit full synchronization.
 type FolderTransportOptions struct {
 	ForbiddenRoots  []string
 	MaxObjects      int

@@ -178,6 +178,25 @@ func (t *folderTransport) pushAuthoritativeOriginLocked(
 			}
 			openKind = entry.Ref.Kind
 		}
+		// The rejection marker survives a crash after object recreation but
+		// before the repair event, so retries still publish the notification.
+		rejectionPending := false
+		rejectionWireName := ""
+		if t.pushCursor.Repair {
+			wire, wireErr := ToWireRef(entry.Ref)
+			if wireErr != nil {
+				return published, false, wireErr
+			}
+			rejectionPending, err = folderJournalRejectionExists(
+				kindRoot,
+				wire.Name,
+				entry.Identity,
+			)
+			if err != nil {
+				return published, false, err
+			}
+			rejectionWireName = wire.Name
+		}
 		created, err := t.publishFolderEntryLocked(ctx, store, kindRoot, entry)
 		if err != nil {
 			return published, false, err
@@ -185,9 +204,17 @@ func (t *folderTransport) pushAuthoritativeOriginLocked(
 		if created {
 			published++
 		}
-		if !t.pushCursor.Repair {
+		if !t.pushCursor.Repair || created || rejectionPending {
 			if err := t.appendFolderJournalLocked(ctx, entry); err != nil {
 				return published, false, err
+			}
+			if rejectionPending {
+				if err := t.clearFolderJournalRejectionLocked(
+					kindRoot,
+					rejectionWireName,
+				); err != nil {
+					return published, false, err
+				}
 			}
 		}
 	}

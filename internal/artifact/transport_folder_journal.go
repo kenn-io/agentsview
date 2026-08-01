@@ -373,3 +373,28 @@ func validateFolderJournalRejection(
 	}
 	return nil
 }
+
+func folderJournalRejectionExists(
+	root *os.Root,
+	wireName string,
+	identity Identity,
+) (bool, error) {
+	err := validateFolderJournalRejection(root, wireName, identity)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func (t *folderTransport) clearFolderJournalRejectionLocked(
+	root *os.Root,
+	wireName string,
+) error {
+	if err := root.Remove(folderJournalRejectionName(wireName)); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	return t.syncFolderDirectoryLocked(root)
+}

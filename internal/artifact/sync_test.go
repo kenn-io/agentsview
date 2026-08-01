@@ -127,55 +127,71 @@ func TestArtifactSyncTwoNodeFolderRoundTripAndReplay(t *testing.T) {
 	assert.Equal(t, "updated response", updatedMessages[1].Content)
 }
 
-func TestArtifactSyncFullRepairsMissingPublishedObjectWithoutJournalGrowth(
+func TestArtifactSyncFullRepairRejournalsMissingObjectForAdvancedPeer(
 	t *testing.T,
 ) {
 	t.Parallel()
 
 	target := t.TempDir()
-	database := testDB(t)
-	repository, err := OpenRepository(t.Context(), t.TempDir())
+	databaseA := testDB(t)
+	databaseB := testDB(t)
+	repositoryA, err := OpenRepository(t.Context(), t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, repository.Close()) })
-	origin := "laptop-a1b2c3"
-	seedSession(t, database, "one", "alpha")
-	opts := SyncOptions{Target: target, Origin: origin}
+	t.Cleanup(func() { require.NoError(t, repositoryA.Close()) })
+	repositoryB, err := OpenRepository(t.Context(), t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, repositoryB.Close()) })
+	originA := "laptop-a1b2c3"
+	originB := "desktop-d4e5f6"
+	seedSession(t, databaseA, "one", "alpha")
+	opts := SyncOptions{Target: target, Origin: originA}
 
-	initial, err := SyncWithRepository(t.Context(), database, repository, opts)
+	initial, err := SyncWithRepository(t.Context(), databaseA, repositoryA, opts)
 	require.NoError(t, err)
 	assert.Positive(t, initial.PublishedArtifacts)
-	head, found, err := database.GetArtifactCheckpointHead(t.Context(), origin)
-	require.NoError(t, err)
-	require.True(t, found)
-	checkpointRef, err := NewRef(
-		origin,
-		KindCheckpoints,
-		fmt.Sprintf("cp-%010d.json", head.Sequence),
-	)
-	require.NoError(t, err)
-	checkpointWire, err := ToWireRef(checkpointRef)
-	require.NoError(t, err)
-	checkpointPath := filepath.Join(
+	segmentPaths, err := filepath.Glob(filepath.Join(
 		target,
-		checkpointWire.Origin,
-		string(checkpointWire.Kind),
-		checkpointWire.Name,
+		originA,
+		string(KindSegments),
+		"*"+segmentExtension,
+	))
+	require.NoError(t, err)
+	require.Len(t, segmentPaths, 1)
+	segmentPath := segmentPaths[0]
+	require.NoError(t, os.WriteFile(segmentPath, []byte("not zstd"), 0o600))
+
+	advanced, err := SyncWithRepository(
+		t.Context(),
+		databaseB,
+		repositoryB,
+		SyncOptions{Target: target, Origin: originB},
 	)
-	require.NoError(t, os.Remove(checkpointPath))
+	require.NoError(t, err)
+	assert.Zero(t, advanced.ImportedSessions)
+	assert.NoFileExists(t, segmentPath)
 	journalSequence := readTestFolderJournalSequence(t, target)
 
-	noOp, err := SyncWithRepository(t.Context(), database, repository, opts)
+	noOp, err := SyncWithRepository(t.Context(), databaseA, repositoryA, opts)
 	require.NoError(t, err)
 	assert.Zero(t, noOp.PublishedArtifacts)
-	assert.NoFileExists(t, checkpointPath)
+	assert.NoFileExists(t, segmentPath)
 
 	opts.Full = true
-	repaired, err := SyncWithRepository(t.Context(), database, repository, opts)
+	repaired, err := SyncWithRepository(t.Context(), databaseA, repositoryA, opts)
 	require.NoError(t, err)
 	assert.Equal(t, 1, repaired.PublishedArtifacts)
-	assert.FileExists(t, checkpointPath)
-	assert.Equal(t, journalSequence, readTestFolderJournalSequence(t, target),
-		"repairing an already-journaled object must not duplicate the journal")
+	assert.FileExists(t, segmentPath)
+	assert.Equal(t, journalSequence+1, readTestFolderJournalSequence(t, target))
+
+	imported, err := SyncWithRepository(
+		t.Context(),
+		databaseB,
+		repositoryB,
+		SyncOptions{Target: target, Origin: originB},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, imported.ImportedSessions)
+	assert.Equal(t, 2, imported.ImportedMessages)
 }
 
 func readTestFolderJournalSequence(t *testing.T, target string) int64 {
