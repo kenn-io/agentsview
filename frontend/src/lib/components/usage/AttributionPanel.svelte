@@ -24,6 +24,7 @@
   const view = $derived(usage.toggles.attribution.view);
   const isTokenMode = $derived(usage.mode === "token");
   const noBranchLabel = $derived(m.shared_no_branch());
+  const UNATTRIBUTED_ID = "__unattributed__";
 
   interface Row {
     id: string;
@@ -31,6 +32,7 @@
     value: number;
     color: string;
     pct: number;
+    selectable: boolean;
   }
 
   const rowItems = $derived.by(() => {
@@ -41,6 +43,7 @@
       id: string;
       label: string;
       value: number;
+      selectable?: boolean;
     }> = [];
 
     if (groupBy === "project") {
@@ -67,6 +70,19 @@
           ? sumSelectedTokens(b, usage.selectedTokenTypes)
           : b.cost.microdollars,
       }));
+      const attributed = items.reduce((sum, item) => sum + item.value, 0);
+      const total = isTokenMode
+        ? sumSelectedTokens(s.totals, usage.selectedTokenTypes)
+        : s.totals.totalCost.microdollars;
+      const unattributed = Math.max(0, total - attributed);
+      if (unattributed > 0) {
+        items.push({
+          id: UNATTRIBUTED_ID,
+          label: m.usage_unattributed(),
+          value: unattributed,
+          selectable: false,
+        });
+      }
     } else {
       items = s.agentTotals.map((a) => ({
         id: a.agent,
@@ -89,8 +105,11 @@
       id: d.id,
       label: d.label,
       value: d.value,
-      color: colorMap.get(d.id) ?? "var(--text-muted)",
+      color: d.id === UNATTRIBUTED_ID
+        ? "var(--text-muted)"
+        : colorMap.get(d.id) ?? "var(--text-muted)",
       pct: total > 0 ? d.value / total : 0,
+      selectable: d.selectable ?? true,
     }));
   });
 
@@ -132,6 +151,7 @@
   );
 
   function handleSelect(id: string) {
+    if (id === UNATTRIBUTED_ID) return;
     if (groupBy === "project") {
       usage.toggleProjectKey(id);
     } else if (groupBy === "agent") {
@@ -157,6 +177,7 @@
   }
 
   function rowTitle(id: string, label: string): string {
+    if (id === UNATTRIBUTED_ID) return label;
     if (!includeBased) return m.usage_click_to_hide({ label });
     return isRowSelected(id)
       ? m.usage_click_to_clear_filter({ label })
@@ -164,6 +185,7 @@
   }
 
   function rowAriaLabel(id: string, label: string): string {
+    if (id === UNATTRIBUTED_ID) return label;
     if (!includeBased) return m.usage_hide_from_chart({ label });
     return isRowSelected(id)
       ? m.usage_clear_filter_item({ label })
@@ -268,6 +290,7 @@
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
                 <div
                   class="rail-row"
+                  class:interactive={row.selectable}
                   title={rowTitle(row.id, row.label)}
                   style="position: absolute; top: 0; left: 0; width: 100%; height: {virtualRow.size}px; transform: translateY({virtualRow.start}px);"
                   onclick={() => handleSelect(row.id)}
@@ -299,6 +322,7 @@
               <!-- svelte-ignore a11y_no_static_element_interactions -->
               <div
                 class="list-row"
+                class:interactive={row.selectable}
                 title={rowTitle(row.id, row.label)}
                 style="position: absolute; top: 0; left: 0; width: 100%; height: {virtualRow.size}px; transform: translateY({virtualRow.start}px);"
                 onclick={() => handleSelect(row.id)}
@@ -406,12 +430,15 @@
     gap: 6px;
     padding: 3px 4px;
     border-radius: var(--radius-sm);
-    cursor: pointer;
     transition: background 0.1s;
     box-sizing: border-box;
   }
 
-  .rail-row:hover {
+  .rail-row.interactive {
+    cursor: pointer;
+  }
+
+  .rail-row.interactive:hover {
     background: var(--bg-surface-hover);
   }
 
@@ -459,12 +486,15 @@
     gap: 8px;
     padding: 4px 6px;
     border-radius: var(--radius-sm);
-    cursor: pointer;
     transition: background 0.1s;
     box-sizing: border-box;
   }
 
-  .list-row:hover {
+  .list-row.interactive {
+    cursor: pointer;
+  }
+
+  .list-row.interactive:hover {
     background: var(--bg-surface-hover);
   }
 

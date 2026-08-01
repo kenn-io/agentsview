@@ -67,9 +67,14 @@
     selected.filter((value) => value !== ""),
   );
   const selectedSet = $derived(new Set(normalizedSelected));
+  const pinnedRows = $derived([
+    ...(noBranchLabel ? [NO_BRANCH_FILTER_TOKEN] : []),
+    ...normalizedSelected.filter((branch) => branch !== NO_BRANCH_FILTER_TOKEN),
+  ]);
+  const pinnedRowSet = $derived(new Set(pinnedRows));
   const rows = $derived([
-    ...normalizedSelected,
-    ...results.filter((branch) => !selectedSet.has(branch)).slice(0, 100),
+    ...pinnedRows,
+    ...results.filter((branch) => !pinnedRowSet.has(branch)).slice(0, 100),
   ]);
   const buttonLabel = $derived.by(() => {
     if (normalizedSelected.length === 0) return allLabel;

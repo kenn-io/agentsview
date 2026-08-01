@@ -450,6 +450,39 @@ describe("AttributionPanel branch mode", () => {
     vi.restoreAllMocks();
   });
 
+  it("shows fully unattributed usage instead of an empty branch panel", async () => {
+    usage.summary!.branchTotals = [];
+    const spy = vi
+      .spyOn(usage, "toggleBranch")
+      .mockImplementation(() => {});
+    const component = mountPanel();
+    await tick();
+
+    expect(document.querySelector(".empty")).toBeNull();
+    const row = document.querySelector<HTMLElement>(".list-row");
+    expect(row?.textContent).toContain("Unattributed");
+    expect(row?.textContent).toContain("$12.00");
+    expect(row?.textContent).toContain("100.0%");
+    row?.click();
+    expect(spy).not.toHaveBeenCalled();
+    unmount(component);
+  });
+
+  it("includes the unattributed remainder in branch percentages", async () => {
+    usage.summary!.branchTotals = [usage.summary!.branchTotals[0]!];
+    const component = mountPanel();
+    await tick();
+
+    const rows = Array.from(
+      document.querySelectorAll<HTMLElement>(".list-row"),
+    ).map((row) => row.textContent?.replace(/\s+/g, " ").trim());
+    expect(rows).toEqual([
+      "1 alpha/main 66.7% $8.00",
+      "2 Unattributed 33.3% $4.00",
+    ]);
+    unmount(component);
+  });
+
   it("routes a branch row click into the branch exclusion toggle", async () => {
     const spy = vi
       .spyOn(usage, "toggleBranch")

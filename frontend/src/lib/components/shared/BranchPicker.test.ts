@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { render } from "@testing-library/svelte";
+import { NO_BRANCH_FILTER_TOKEN } from "../../branchFilters.js";
 import BranchPicker from "./BranchPicker.svelte";
 
 type Deferred<T> = {
@@ -76,6 +77,45 @@ describe("BranchPicker", () => {
     expect(document.body.textContent).toContain(
       "More branches exist. Refine your search.",
     );
+  });
+
+  it("pins the no-branch option outside bounded results", async () => {
+    const search = vi.fn().mockResolvedValue({
+      branches: Array.from({ length: 100 }, (_, i) => ({ branch: `branch-${i}` })),
+      has_more: true,
+    });
+    const onChange = vi.fn();
+    component = mount(BranchPicker, {
+      target: document.body,
+      props: {
+        mode: "multi",
+        selected: [],
+        projects: [],
+        search,
+        label: "Branch",
+        allLabel: "All branches",
+        placeholder: "Search branches",
+        clearSearchLabel: "Clear branch search",
+        loadingLabel: "Loading branches…",
+        emptyLabel: "No matching branches",
+        refineLabel: "More branches exist. Refine your search.",
+        noBranchLabel: "(no branch)",
+        onChange,
+      },
+    });
+
+    document.querySelector<HTMLButtonElement>(".branch-picker-trigger")!.click();
+    await flush();
+
+    expect(rowNames()).toHaveLength(101);
+    expect(rowNames()[0]).toBe("(no branch)");
+
+    const noBranchOption = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("[role=option]:not(.all)"),
+    ).find((row) => row.textContent?.includes("(no branch)"));
+    noBranchOption!.click();
+
+    expect(onChange).toHaveBeenCalledWith([NO_BRANCH_FILTER_TOKEN]);
   });
 
   it("pins selected branches above search results without duplicating them", async () => {
