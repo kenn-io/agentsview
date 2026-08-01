@@ -7,8 +7,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"path/filepath"
-	"strings"
 	stdsync "sync"
 	"time"
 
@@ -286,9 +284,13 @@ func watchBatchIsAffirmativelyNonData(
 		return false
 	}
 	for _, path := range batch.Paths {
+		if path == "" {
+			return false
+		}
+		path = absRootPath(path)
 		matched := false
 		for _, candidate := range providers {
-			if !watchPathUnderRoot(candidate.root, path) {
+			if !pathWithinRoot(path, candidate.root) {
 				continue
 			}
 			matched = true
@@ -322,7 +324,7 @@ func configuredWatchPathRelevanceProviders(
 			if root == "" {
 				continue
 			}
-			root = filepath.Clean(root)
+			root = absRootPath(root)
 			providers = append(providers, watchPathRelevanceProvider{
 				provider: factory.NewProvider(parser.ProviderConfig{
 					Roots: []string{root},
@@ -333,15 +335,6 @@ func configuredWatchPathRelevanceProviders(
 	}
 	return providers
 }
-
-func watchPathUnderRoot(root, path string) bool {
-	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
-	if err != nil || rel == "." || rel == ".." || filepath.IsAbs(rel) {
-		return false
-	}
-	return !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
-
 func watchBatchNeedsPushAck(batch syncpkg.WatchBatch) bool {
 	if batch.FullSync || len(batch.ReconcileRoots) > 0 {
 		return true

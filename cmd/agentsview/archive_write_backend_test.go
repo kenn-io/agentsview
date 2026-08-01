@@ -833,6 +833,8 @@ func TestDaemonPGPushWatchSuppressesRepeatedOpenCodeSHMOnlyBatches(t *testing.T)
 }
 
 func TestDaemonPGPushWatchRelevancePreservesExplicitCurrentDirectoryRoot(t *testing.T) {
+	workingDir, err := os.Getwd()
+	require.NoError(t, err)
 	cfg := config.Config{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOpenCode: {"."},
@@ -844,12 +846,12 @@ func TestDaemonPGPushWatchRelevancePreservesExplicitCurrentDirectoryRoot(t *test
 	})
 	require.NoError(t, notifyPushForWatchBatchWithConfig(
 		t.Context(), loop, cfg, syncpkg.WatchBatch{
-			Paths: []string{filepath.Join(".", "opencode.db-shm")},
+			Paths: []string{filepath.Join(workingDir, "opencode.db-shm")},
 		},
 	))
 	assert.False(t, loop.pending,
 		"an explicit current-directory root must retain relevance coverage")
-	t.Log("reason_change_attempts=0 root=. path=opencode.db-shm")
+	t.Log("reason_change_attempts=0 root=. absolute_event=opencode.db-shm")
 }
 
 func TestDaemonPushWatchOwnersSuppressOpenCodeSHMOnlyBatches(t *testing.T) {
