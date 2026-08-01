@@ -5,6 +5,16 @@ on:
     branches: [main]
     tags:
       - 'v*'
+    paths:
+      - 'cmd/**'
+      - 'internal/**'
+      - 'frontend/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'docker-entrypoint.sh'
+      - '.github/workflows/docker.yml'
   workflow_dispatch:
 
 permissions:

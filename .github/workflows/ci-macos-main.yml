@@ -6,6 +6,13 @@ on:
   # this exact workflow path only from refs/heads/main.
   push:
     branches: [main]
+    paths:
+      - 'cmd/**'
+      - 'internal/**'
+      - 'testdata/golden/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/ci-macos-main.yml'
 
 permissions:
   contents: read
