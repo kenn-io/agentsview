@@ -16,6 +16,8 @@ import (
 const importLocalOrigin = "local-b2c3d4"
 
 func TestArtifactImportEndToEndAndReplay(t *testing.T) {
+	t.Parallel()
+
 	source := testExportDB(t)
 	seedSession(t, source, "one", "project")
 	seedSession(t, source, "two", "project")
@@ -97,6 +99,8 @@ func TestArtifactImportEndToEndAndReplay(t *testing.T) {
 }
 
 func TestStoreImportCoordinatorIgnoresLocalOrigin(t *testing.T) {
+	t.Parallel()
+
 	store := newTestArtifactStore(t)
 	entry := createImportTestCheckpoint(
 		t, store, contractOrigin, 1, map[string]string{},
@@ -118,6 +122,8 @@ func TestStoreImportCoordinatorIgnoresLocalOrigin(t *testing.T) {
 func TestStoreImportCoordinatorRejectsOutOfRangeCheckpointWithoutAdvancingHead(
 	t *testing.T,
 ) {
+	t.Parallel()
+
 	store := newTestArtifactStore(t)
 	destination := testDB(t)
 	coordinator := NewStoreImportCoordinator(
@@ -155,6 +161,8 @@ func TestStoreImportCoordinatorRejectsOutOfRangeCheckpointWithoutAdvancingHead(
 }
 
 func TestStoreImportCoordinatorRetriesMissingSegmentAfterArrival(t *testing.T) {
+	t.Parallel()
+
 	store := newTestArtifactStore(t)
 	segmentBody, err := encodeSegment([]db.Message{{
 		Ordinal: 0, Role: "user", Content: "arrived",
@@ -205,6 +213,8 @@ func TestStoreImportCoordinatorRetriesMissingSegmentAfterArrival(t *testing.T) {
 }
 
 func TestStoreImportCoordinatorTracksIndependentFutureRequirements(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name         string
 		prepare      func(*testing.T, ArtifactStore) string
@@ -287,6 +297,8 @@ func TestStoreImportCoordinatorTracksIndependentFutureRequirements(t *testing.T)
 func TestStoreImportCoordinatorDefersLargeFutureCheckpointBeforeValidClaim(
 	t *testing.T,
 ) {
+	t.Parallel()
+
 	const futureSessionCount = artifactImportDrainLimit*2 + 1
 	store := newTestArtifactStore(t)
 	futureSessions := make(map[string]string, futureSessionCount)
@@ -341,6 +353,8 @@ func TestStoreImportCoordinatorDefersLargeFutureCheckpointBeforeValidClaim(
 func TestStoreImportCoordinatorFinishesSupportedSessionsBeforeFutureGate(
 	t *testing.T,
 ) {
+	t.Parallel()
+
 	store := newTestArtifactStore(t)
 	sessionMap := map[string]string{
 		contractOrigin + "~000-future": createHashedImportArtifact(
@@ -421,6 +435,8 @@ func TestStoreImportCoordinatorFinishesSupportedSessionsBeforeFutureGate(
 func TestStoreImportCoordinatorQuarantinesInvalidCheckpointAndContinues(
 	t *testing.T,
 ) {
+	t.Parallel()
+
 	store := newTestArtifactStore(t)
 	invalidOrigin := "alpha-a1b2c3"
 	invalidRef := requireContractRef(
@@ -462,6 +478,8 @@ func TestStoreImportCoordinatorQuarantinesInvalidCheckpointAndContinues(
 func TestStoreImportCoordinatorRecoversCrashAfterCheckpointQuarantine(
 	t *testing.T,
 ) {
+	t.Parallel()
+
 	base := newTestArtifactStore(t)
 	invalidOrigin := "alpha-a1b2c3"
 	invalidRef := requireContractRef(
@@ -507,6 +525,8 @@ func TestStoreImportCoordinatorRecoversCrashAfterCheckpointQuarantine(
 func TestStoreImportCoordinatorDiscardsPartialStageAfterQuarantineCrash(
 	t *testing.T,
 ) {
+	t.Parallel()
+
 	base := newTestArtifactStore(t)
 	sessionMap := make(map[string]string, artifactImportDrainLimit+1)
 	for i := range artifactImportDrainLimit {
@@ -563,6 +583,8 @@ func TestStoreImportCoordinatorDiscardsPartialStageAfterQuarantineCrash(
 }
 
 func TestStoreImportCoordinatorRetainsClaimOnOperationalStoreError(t *testing.T) {
+	t.Parallel()
+
 	base := newTestArtifactStore(t)
 	checkpointEntry := createImportTestCheckpoint(
 		t, base, contractOrigin, 1, map[string]string{},
@@ -587,6 +609,8 @@ func TestStoreImportCoordinatorRetainsClaimOnOperationalStoreError(t *testing.T)
 }
 
 func TestStoreImportCoordinatorSuppressesExcludedAndTrashedSessions(t *testing.T) {
+	t.Parallel()
+
 	store := newTestArtifactStore(t)
 	sessionMap := make(map[string]string)
 	for _, nativeID := range []string{"excluded", "trashed"} {
@@ -640,6 +664,8 @@ func TestStoreImportCoordinatorSuppressesExcludedAndTrashedSessions(t *testing.T
 }
 
 func TestStoreImportCoordinatorRetriesTrashedManifestAfterRestore(t *testing.T) {
+	t.Parallel()
+
 	store := newTestArtifactStore(t)
 	gid := contractOrigin + "~session"
 	firstManifest := importTestManifest("session")
@@ -727,6 +753,8 @@ func TestStoreImportCoordinatorRetriesTrashedManifestAfterRestore(t *testing.T) 
 func TestStoreImportCoordinatorContinuesAfterConcurrentCheckpointSupersession(
 	t *testing.T,
 ) {
+	t.Parallel()
+
 	store := newTestArtifactStore(t)
 	gid := contractOrigin + "~session"
 	firstManifest := importTestManifest("session")
@@ -788,6 +816,8 @@ func TestStoreImportCoordinatorContinuesAfterConcurrentCheckpointSupersession(
 }
 
 func TestStoreImportCoordinatorSuppressesLocalSessionIDCollision(t *testing.T) {
+	t.Parallel()
+
 	store := newTestArtifactStore(t)
 	m := importTestManifest("session")
 	manifestHash := createImportTestClosure(t, store, &m, []db.Message{{
@@ -832,6 +862,8 @@ func TestStoreImportCoordinatorSuppressesLocalSessionIDCollision(t *testing.T) {
 func TestStoreImportCoordinatorKeepsCheckpointPendingAfterInvalidDependency(
 	t *testing.T,
 ) {
+	t.Parallel()
+
 	store := newTestArtifactStore(t)
 	segment := []byte("{not-json}\n")
 	segmentHash := createHashedImportArtifact(
@@ -869,6 +901,8 @@ func TestStoreImportCoordinatorKeepsCheckpointPendingAfterInvalidDependency(
 func TestStoreImportCoordinatorDoesNotDeleteSessionOmittedByNewCheckpoint(
 	t *testing.T,
 ) {
+	t.Parallel()
+
 	store := newTestArtifactStore(t)
 	m := importTestManifest("session")
 	manifestHash := createImportTestClosure(t, store, &m, []db.Message{{
@@ -906,6 +940,8 @@ func TestStoreImportCoordinatorDoesNotDeleteSessionOmittedByNewCheckpoint(
 }
 
 func TestStoreImportCoordinatorCrashWindowsConverge(t *testing.T) {
+	t.Parallel()
+
 	injected := errors.New("injected crash")
 	tests := []struct {
 		name      string
@@ -1033,6 +1069,8 @@ func TestStoreImportCoordinatorCrashWindowsConverge(t *testing.T) {
 }
 
 func TestStoreImportCoordinatorBoundsUnchangedCheckpointWork(t *testing.T) {
+	t.Parallel()
+
 	const unchangedSessions = 10_000
 	base := newTestArtifactStore(t)
 	m := importTestManifest("changed")
@@ -1115,6 +1153,8 @@ func TestStoreImportCoordinatorBoundsUnchangedCheckpointWork(t *testing.T) {
 func TestStoreImportCoordinatorPagesLargeChangedCheckpointAcrossDrains(
 	t *testing.T,
 ) {
+	t.Parallel()
+
 	const changedSessions = 300
 	base := newTestArtifactStore(t)
 	sessionMap := make(map[string]string, changedSessions)
@@ -1159,6 +1199,8 @@ func TestStoreImportCoordinatorPagesLargeChangedCheckpointAcrossDrains(
 func TestStoreImportCoordinatorPreservesSignalsDuringActiveAttempt(
 	t *testing.T,
 ) {
+	t.Parallel()
+
 	const sessionCount = 300
 	store := newTestArtifactStore(t)
 	segmentBody, err := encodeSegment([]db.Message{{
@@ -1226,6 +1268,8 @@ func TestStoreImportCoordinatorPreservesSignalsDuringActiveAttempt(
 func TestStoreImportCoordinatorPreservesSignalDuringCompletedPrune(
 	t *testing.T,
 ) {
+	t.Parallel()
+
 	store := newTestArtifactStore(t)
 	destination := testDB(t)
 	coordinator := NewStoreImportCoordinator(
@@ -1253,6 +1297,8 @@ func TestStoreImportCoordinatorPreservesSignalDuringCompletedPrune(
 }
 
 func TestStoreImportCoordinatorRereadsCheckpointOnceAfterRestart(t *testing.T) {
+	t.Parallel()
+
 	const changedSessions = 300
 	base := newTestArtifactStore(t)
 	sessionMap := make(map[string]string, changedSessions)
@@ -1291,6 +1337,8 @@ func TestStoreImportCoordinatorRereadsCheckpointOnceAfterRestart(t *testing.T) {
 }
 
 func TestStoreImportCoordinatorRecoversTerminalCheckpointPage(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	databasePath := filepath.Join(root, "archive.db")
 	storeRoot := filepath.Join(root, "artifacts")
@@ -1367,6 +1415,8 @@ func TestStoreImportCoordinatorRecoversTerminalCheckpointPage(t *testing.T) {
 }
 
 func TestStoreImportCoordinatorDoesNotDoubleImportSignals(t *testing.T) {
+	t.Parallel()
+
 	base := newTestArtifactStore(t)
 	ordinal := 0
 	m := importTestManifest("session")

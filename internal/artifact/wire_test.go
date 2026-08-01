@@ -8,6 +8,8 @@ import (
 )
 
 func TestValidateRawSource(t *testing.T) {
+	t.Parallel()
+
 	validHash := strings.Repeat("ab", 32)
 	cases := []struct {
 		name    string

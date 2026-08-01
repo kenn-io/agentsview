@@ -10,6 +10,8 @@ import (
 )
 
 func TestEnsureOriginPersists(t *testing.T) {
+	t.Parallel()
+
 	database := testDB(t)
 
 	first, err := EnsureOrigin(database)
@@ -23,6 +25,8 @@ func TestEnsureOriginPersists(t *testing.T) {
 }
 
 func TestAdoptOriginPersistsConfigOrigin(t *testing.T) {
+	t.Parallel()
+
 	database := testDB(t)
 
 	require.NoError(t, AdoptOrigin(database, "desk-a1b2c3"))
@@ -39,6 +43,8 @@ func TestAdoptOriginPersistsConfigOrigin(t *testing.T) {
 }
 
 func TestAdoptOriginIsIdempotent(t *testing.T) {
+	t.Parallel()
+
 	database := testDB(t)
 
 	require.NoError(t, AdoptOrigin(database, "desk-a1b2c3"))
@@ -50,6 +56,8 @@ func TestAdoptOriginIsIdempotent(t *testing.T) {
 }
 
 func TestAdoptOriginOverwritesDivergentDBOrigin(t *testing.T) {
+	t.Parallel()
+
 	database := testDB(t)
 
 	// Simulate the pre-fix state: the recorder generated a DB-only origin
@@ -66,6 +74,8 @@ func TestAdoptOriginOverwritesDivergentDBOrigin(t *testing.T) {
 }
 
 func TestAdoptOriginRepairsInvalidPersistedOrigin(t *testing.T) {
+	t.Parallel()
+
 	database := testDB(t)
 	require.NoError(t, database.SetSyncState(originStateKey, "../outside"))
 
@@ -77,6 +87,8 @@ func TestAdoptOriginRepairsInvalidPersistedOrigin(t *testing.T) {
 }
 
 func TestAdoptOriginRejectsInvalidOrigin(t *testing.T) {
+	t.Parallel()
+
 	database := testDB(t)
 
 	err := AdoptOrigin(database, "../outside")
@@ -89,6 +101,8 @@ func TestAdoptOriginRejectsInvalidOrigin(t *testing.T) {
 }
 
 func TestEnsureOriginRejectsInvalidPersistedOrigin(t *testing.T) {
+	t.Parallel()
+
 	database := testDB(t)
 	require.NoError(t, database.SetSyncState(originStateKey, "../outside"))
 
@@ -104,6 +118,8 @@ func TestEnsureOriginRejectsInvalidPersistedOrigin(t *testing.T) {
 // to the origin-gated queue triggers and enqueue hooks, so EnsureOrigin must
 // bootstrap the queue immediately after it persists the origin key.
 func TestEnsureOriginBootstrapsPreExistingLocalSessions(t *testing.T) {
+	t.Parallel()
+
 	database := testDB(t)
 	seedSession(t, database, "sess-1", "alpha")
 	seedSession(t, database, "sess-2", "alpha")
@@ -130,6 +146,8 @@ func TestEnsureOriginBootstrapsPreExistingLocalSessions(t *testing.T) {
 // empty, so every owned session must be force-requeued with a bumped
 // generation.
 func TestAdoptOriginRequeuesAllExportsOnDivergentAdoption(t *testing.T) {
+	t.Parallel()
+
 	database := testDB(t)
 	require.NoError(t, AdoptOrigin(database, "origin-a1b2c3"))
 	seedSession(t, database, "sess-1", "alpha")
@@ -164,6 +182,8 @@ func TestAdoptOriginRequeuesAllExportsOnDivergentAdoption(t *testing.T) {
 }
 
 func TestAdoptOriginRemovesPublicationsThatBecameDeletedWhileOriginWasInactive(t *testing.T) {
+	t.Parallel()
+
 	database := testDB(t)
 	store, err := newProtocolTestStore(t.TempDir())
 	require.NoError(t, err)
@@ -196,6 +216,8 @@ func TestAdoptOriginRemovesPublicationsThatBecameDeletedWhileOriginWasInactive(t
 }
 
 func TestOriginRejectionLifecycleRemovesRetriesAndRequeues(t *testing.T) {
+	t.Parallel()
+
 	database := testDB(t)
 	store, err := newProtocolTestStore(t.TempDir())
 	require.NoError(t, err)
@@ -268,6 +290,8 @@ func TestOriginRejectionLifecycleRemovesRetriesAndRequeues(t *testing.T) {
 // case for the AdoptOrigin path (used when a config-declared origin is
 // applied to a database that predates it).
 func TestAdoptOriginBootstrapsPreExistingLocalSessions(t *testing.T) {
+	t.Parallel()
+
 	database := testDB(t)
 	seedSession(t, database, "sess-1", "alpha")
 

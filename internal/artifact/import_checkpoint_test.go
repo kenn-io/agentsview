@@ -15,6 +15,8 @@ import (
 )
 
 func TestReadVerifiedImportArtifactByteBoundaries(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name      string
 		kind      Kind
@@ -70,6 +72,8 @@ func TestReadVerifiedImportArtifactByteBoundaries(t *testing.T) {
 }
 
 func TestFutureArtifactVersionErrorsIdentifyDependencyKind(t *testing.T) {
+	t.Parallel()
+
 	t.Run("manifest", func(t *testing.T) {
 		_, err := decodeManifestWithLimits(
 			[]byte(`{"origin":"contract-a1b2c3","v":4}`),
@@ -96,6 +100,8 @@ func TestFutureArtifactVersionErrorsIdentifyDependencyKind(t *testing.T) {
 }
 
 func TestFutureSegmentVersionPrecedesCurrentRecordLimit(t *testing.T) {
+	t.Parallel()
+
 	var body strings.Builder
 	for range productionArtifactLimits().segmentMessages + 1 {
 		body.WriteString(
@@ -114,6 +120,8 @@ func TestFutureSegmentVersionPrecedesCurrentRecordLimit(t *testing.T) {
 }
 
 func TestCurrentSegmentRecordLimitPrecedesLaterRecordDecode(t *testing.T) {
+	t.Parallel()
+
 	limits := productionArtifactLimits()
 	limits.segmentMessages = 1
 	body := []byte(
@@ -127,6 +135,8 @@ func TestCurrentSegmentRecordLimitPrecedesLaterRecordDecode(t *testing.T) {
 }
 
 func TestImportCollectionBoundaries(t *testing.T) {
+	t.Parallel()
+
 	t.Run("manifest usage events", func(t *testing.T) {
 		limits := productionArtifactLimits()
 		limits.manifestUsageEvents = 2
@@ -291,6 +301,8 @@ func TestImportCollectionBoundaries(t *testing.T) {
 }
 
 func TestDecodeImportCheckpointAcceptsSemanticCurrentJSON(t *testing.T) {
+	t.Parallel()
+
 	hash := strings.Repeat("a", 64)
 	want := importCheckpoint{
 		Version:  1,
@@ -337,6 +349,8 @@ func TestDecodeImportCheckpointAcceptsSemanticCurrentJSON(t *testing.T) {
 }
 
 func TestDecodeImportCheckpointStreamsBoundedSessionPages(t *testing.T) {
+	t.Parallel()
+
 	const sessionCount = 300
 	var body strings.Builder
 	fmt.Fprintf(&body, `{"origin":%q,"seq":7,"sessions":{`, contractOrigin)
@@ -369,6 +383,8 @@ func TestDecodeImportCheckpointStreamsBoundedSessionPages(t *testing.T) {
 }
 
 func TestDecodeImportCheckpointDefersSessionValidationToPages(t *testing.T) {
+	t.Parallel()
+
 	var body strings.Builder
 	fmt.Fprintf(&body, `{"origin":%q,"seq":7,"sessions":{`, contractOrigin)
 	for i := range 128 {
@@ -396,6 +412,8 @@ func TestDecodeImportCheckpointDefersSessionValidationToPages(t *testing.T) {
 }
 
 func TestDecodeImportCheckpointRejectsInvalidCurrentJSON(t *testing.T) {
+	t.Parallel()
+
 	hash := strings.Repeat("a", 64)
 	valid := fmt.Sprintf(
 		`{"origin":%q,"seq":7,"sessions":{%q:%q},"v":1}`,
@@ -471,6 +489,8 @@ func TestDecodeImportCheckpointRejectsInvalidCurrentJSON(t *testing.T) {
 }
 
 func TestDecodeImportCheckpointBoundsTopLevelFieldState(t *testing.T) {
+	t.Parallel()
+
 	var body strings.Builder
 	body.WriteByte('{')
 	for i := range 10_000 {
@@ -546,6 +566,8 @@ func TestDecodeImportCheckpointRejectsCurrentExtraFieldBeforeItsValue(
 }
 
 func TestDecodeImportCheckpointDefersExtensibleFutureJSON(t *testing.T) {
+	t.Parallel()
+
 	tests := []string{
 		`{"sessions":"opaque","v":2}`,
 		`{"new_field":{"codec":"v3"},"sessions":[1,2,3],"v":3}`,
@@ -567,6 +589,8 @@ func TestDecodeImportCheckpointDefersExtensibleFutureJSON(t *testing.T) {
 func TestDecodeImportCheckpointFutureVersionDoesNotMaskMalformedJSON(
 	t *testing.T,
 ) {
+	t.Parallel()
+
 	_, err := decodeImportCheckpoint(
 		[]byte(`{"sessions":{"broken":},"v":2}`),
 		contractOrigin, "cp-0000000007.json",
@@ -576,6 +600,8 @@ func TestDecodeImportCheckpointFutureVersionDoesNotMaskMalformedJSON(
 }
 
 func TestReadVerifiedImportArtifactUsesExactBoundedIdentity(t *testing.T) {
+	t.Parallel()
+
 	store := newTestArtifactStore(t)
 	ref := requireContractRef(
 		t, contractOrigin, KindCheckpoints, "cp-0000000001.json",
@@ -598,6 +624,8 @@ func TestReadVerifiedImportArtifactUsesExactBoundedIdentity(t *testing.T) {
 }
 
 func TestReadVerifiedImportArtifactRejectsOversizeBeforeOpen(t *testing.T) {
+	t.Parallel()
+
 	ref := requireContractRef(
 		t, contractOrigin, KindCheckpoints, "cp-0000000001.json",
 	)
@@ -618,6 +646,8 @@ func TestReadVerifiedImportArtifactRejectsOversizeBeforeOpen(t *testing.T) {
 }
 
 func TestReadVerifiedImportArtifactPreservesOperationalReadError(t *testing.T) {
+	t.Parallel()
+
 	ref := requireContractRef(
 		t, contractOrigin, KindCheckpoints, "cp-0000000001.json",
 	)

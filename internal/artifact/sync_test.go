@@ -299,6 +299,8 @@ func TestArtifactSyncDoesNotPublishUnrecordedLocalOriginObjects(t *testing.T) {
 }
 
 func TestArtifactSyncValidatesBeforeCreatingOwnedStorage(t *testing.T) {
+	t.Parallel()
+
 	t.Run("missing target", func(t *testing.T) {
 		dataDir := t.TempDir()
 		_, err := Sync(
@@ -431,6 +433,8 @@ func (replacementQuarantineTransport) QuarantineTransportArtifact(
 }
 
 func TestDrainArtifactSyncExportsReturnsMoreAtRoundBudget(t *testing.T) {
+	t.Parallel()
+
 	database := testDB(t)
 	origin := "local-a1b2c3"
 	require.NoError(t, AdoptOrigin(database, origin))
@@ -458,6 +462,8 @@ func TestDrainArtifactSyncExportsReturnsMoreAtRoundBudget(t *testing.T) {
 func TestDrainArtifactSyncFullExportReturnsMoreWhenQueueDoesNotSettle(
 	t *testing.T,
 ) {
+	t.Parallel()
+
 	database := testExportDB(t)
 	seedSession(t, database, "sess-1", "alpha")
 	store := newTestArtifactStore(t)
@@ -489,6 +495,8 @@ func (f *repeatingImportFinalizer) Finalize(context.Context) (ImportResult, erro
 }
 
 func TestDrainArtifactSyncImportsReturnsMoreAtRoundBudget(t *testing.T) {
+	t.Parallel()
+
 	finalizer := &repeatingImportFinalizer{}
 	var result SyncResult
 

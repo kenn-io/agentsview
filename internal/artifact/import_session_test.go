@@ -18,6 +18,8 @@ import (
 func TestRewriteManifestForImportClearsLocalStateAndPrefixesRelationships(
 	t *testing.T,
 ) {
+	t.Parallel()
+
 	filePath := "/provider/session.jsonl"
 	fileSize := int64(1024)
 	fileMtime := int64(42)
@@ -117,6 +119,8 @@ func TestRewriteManifestForImportClearsLocalStateAndPrefixesRelationships(
 }
 
 func TestLoadImportedSessionCompleteClosure(t *testing.T) {
+	t.Parallel()
+
 	database := testExportDB(t)
 	store := newTestArtifactStore(t)
 	m := importTestManifest("session")
@@ -138,6 +142,8 @@ func TestLoadImportedSessionCompleteClosure(t *testing.T) {
 }
 
 func TestLoadImportedSessionDefersOversizedFutureSegment(t *testing.T) {
+	t.Parallel()
+
 	database := testExportDB(t)
 	store := newTestArtifactStore(t)
 	var segment strings.Builder
@@ -169,6 +175,8 @@ func TestLoadImportedSessionDefersOversizedFutureSegment(t *testing.T) {
 }
 
 func TestLoadImportedSessionDefersMissingAndFutureDependencies(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name       string
 		prepare    func(*testing.T, ArtifactStore) string
@@ -239,6 +247,8 @@ func TestLoadImportedSessionDefersMissingAndFutureDependencies(t *testing.T) {
 }
 
 func TestLoadImportedSessionQuarantinesInvalidStatDependency(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name string
 		kind Kind
@@ -284,6 +294,8 @@ func TestLoadImportedSessionQuarantinesInvalidStatDependency(t *testing.T) {
 func TestLoadImportedSessionQuarantinesPersistenceInvariantViolations(
 	t *testing.T,
 ) {
+	t.Parallel()
+
 	tests := []struct {
 		name    string
 		prepare func(*testing.T, ArtifactStore) (manifest, string)
@@ -367,6 +379,8 @@ func TestLoadImportedSessionQuarantinesPersistenceInvariantViolations(
 }
 
 func TestLoadImportedSessionQuarantinesInvalidCompleteDependency(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name    string
 		prepare func(*testing.T, ArtifactStore) (string, Ref)
@@ -437,6 +451,8 @@ func TestLoadImportedSessionQuarantinesInvalidCompleteDependency(t *testing.T) {
 }
 
 func TestLoadImportedSessionAcceptsNoncanonicalManifestAndSegment(t *testing.T) {
+	t.Parallel()
+
 	database := testExportDB(t)
 	store := newTestArtifactStore(t)
 	segment := []byte(
@@ -470,6 +486,8 @@ func TestLoadImportedSessionAcceptsNoncanonicalManifestAndSegment(t *testing.T) 
 }
 
 func TestLoadImportedSessionEnforcesAggregateLimits(t *testing.T) {
+	t.Parallel()
+
 	database := testExportDB(t)
 	store := newTestArtifactStore(t)
 	m := importTestManifest("session")
@@ -488,6 +506,8 @@ func TestLoadImportedSessionEnforcesAggregateLimits(t *testing.T) {
 }
 
 func TestLoadImportedSessionAggregateBoundaries(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name      string
 		configure func(*artifactLimits)
@@ -590,6 +610,8 @@ func TestLoadImportedSessionAggregateBoundaries(t *testing.T) {
 }
 
 func TestLoadImportedSessionPropagatesOperationalStoreError(t *testing.T) {
+	t.Parallel()
+
 	database := testExportDB(t)
 	base := newTestArtifactStore(t)
 	m := importTestManifest("session")
