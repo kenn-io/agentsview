@@ -814,6 +814,193 @@ func TestLoadFile_ReadsDirArrays(t *testing.T) {
 	assert.True(t, cfg.IsUserConfigured(parser.AgentAider))
 }
 
+func TestLoadFileSessionSourcesAreAdditiveAndOverrideDuplicateMachine(t *testing.T) {
+	f := newConfigFixture(t)
+	f.WriteConfigText(t, `
+copilot_dirs = ["/sessions/local", "/sessions/duplicate/."]
+
+[[session_sources]]
+agent = "copilot"
+dir = "/sessions/archive"
+machine = "buildbox"
+
+[[session_sources]]
+agent = "copilot"
+dir = "/sessions/duplicate"
+machine = "archivebox"
+`)
+
+	cfg := f.LoadMinimal(t)
+
+	assert.Equal(t, []string{
+		"/sessions/local",
+		"/sessions/duplicate/.",
+		"/sessions/archive",
+	}, cfg.ResolveDirs(parser.AgentCopilot))
+	assert.Equal(t, cfg.LocalMachineName,
+		cfg.SourceMachines[parser.AgentCopilot]["/sessions/local"])
+	assert.Equal(t, "archivebox",
+		cfg.SourceMachines[parser.AgentCopilot]["/sessions/duplicate/."])
+	assert.Equal(t, "buildbox",
+		cfg.SourceMachines[parser.AgentCopilot]["/sessions/archive"])
+	assert.True(t, cfg.IsUserConfigured(parser.AgentCopilot))
+}
+
+func TestLoadFileSessionSourcePreservesConfiguredPathSpelling(t *testing.T) {
+	f := newConfigFixture(t)
+	f.WriteConfigText(t, `
+[[session_sources]]
+agent = "copilot"
+dir = "/sessions/archive/."
+machine = "archivebox"
+`)
+
+	cfg := f.LoadMinimal(t)
+
+	require.Len(t, cfg.SessionSources, 1)
+	assert.Equal(t, "/sessions/archive/.", cfg.SessionSources[0].Dir)
+	assert.Contains(t, cfg.ResolveDirs(parser.AgentCopilot), "/sessions/archive/.")
+	assert.Equal(t, "archivebox",
+		cfg.SourceMachines[parser.AgentCopilot]["/sessions/archive/."])
+}
+
+func TestLoadFileSessionSourcesRemainAdditiveToEnvDirs(t *testing.T) {
+	f := newConfigFixture(t)
+	t.Setenv("COPILOT_DIR", "/sessions/from-env")
+	f.WriteConfigText(t, `
+copilot_dirs = ["/sessions/from-config"]
+
+[[session_sources]]
+agent = "copilot"
+dir = "/sessions/from-archive"
+machine = "archivebox"
+`)
+
+	cfg := f.LoadMinimal(t)
+
+	assert.Equal(t, []string{
+		"/sessions/from-env",
+		"/sessions/from-archive",
+	}, cfg.ResolveDirs(parser.AgentCopilot))
+	assert.Equal(t, cfg.LocalMachineName,
+		cfg.SourceMachines[parser.AgentCopilot]["/sessions/from-env"])
+	assert.Equal(t, "archivebox",
+		cfg.SourceMachines[parser.AgentCopilot]["/sessions/from-archive"])
+}
+
+func TestLoadFileSessionSourcesPreserveLegacyS3Roots(t *testing.T) {
+	cfg := loadMinimalWithConfig(t, map[string]any{
+		"claude_project_dirs": []string{"s3://session-archive/claude"},
+	})
+
+	assert.Equal(t, []string{"s3://session-archive/claude"},
+		cfg.ResolveDirs(parser.AgentClaude))
+	assert.NotContains(t, cfg.SourceMachines[parser.AgentClaude],
+		"s3://session-archive/claude")
+}
+
+func TestLoadFileSessionSourceDefaultsMachineToHostname(t *testing.T) {
+	cfg := loadMinimalWithConfig(t, map[string]any{
+		"session_sources": []map[string]any{{
+			"agent": "copilot",
+			"dir":   "/sessions/archive",
+		}},
+	})
+
+	require.NotEmpty(t, cfg.LocalMachineName)
+	assert.Equal(t, cfg.LocalMachineName,
+		cfg.SourceMachines[parser.AgentCopilot]["/sessions/archive"])
+	require.Len(t, cfg.SessionSources, 1)
+	assert.Equal(t, cfg.LocalMachineName, cfg.SessionSources[0].Machine)
+}
+
+func TestLoadFileSessionSourceValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  string
+		wantErr string
+	}{
+		{
+			name: "unknown agent",
+			config: `
+[[session_sources]]
+agent = "not-an-agent"
+dir = "/sessions/archive"
+`,
+			wantErr: `session_sources: entry 1: unknown agent "not-an-agent"`,
+		},
+		{
+			name: "empty dir",
+			config: `
+[[session_sources]]
+agent = "copilot"
+dir = " "
+`,
+			wantErr: "entry 1 (copilot): dir is required",
+		},
+		{
+			name: "empty explicit machine",
+			config: `
+[[session_sources]]
+agent = "copilot"
+dir = "/sessions/archive"
+machine = " "
+`,
+			wantErr: "entry 1 (copilot): machine must not be empty when set",
+		},
+		{
+			name: "reserved local machine",
+			config: `
+[[session_sources]]
+agent = "copilot"
+dir = "/sessions/archive"
+machine = "local"
+`,
+			wantErr: `entry 1 (copilot): machine "local" is reserved`,
+		},
+		{
+			name: "chatgpt import-only provider",
+			config: `
+[[session_sources]]
+agent = "chatgpt"
+dir = "/sessions/archive"
+`,
+			wantErr: "entry 1 (chatgpt): session_sources requires a discoverable filesystem provider; chatgpt is import-only",
+		},
+		{
+			name: "claude-ai import-only provider",
+			config: `
+[[session_sources]]
+agent = "claude-ai"
+dir = "/sessions/archive"
+`,
+			wantErr: "entry 1 (claude-ai): session_sources requires a discoverable filesystem provider; claude-ai is import-only",
+		},
+		{
+			name: "s3 root",
+			config: `
+[[session_sources]]
+agent = "copilot"
+dir = "s3://session-archive/copilot"
+machine = "buildbox"
+`,
+			wantErr: "session_sources supports filesystem roots only",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newConfigFixture(t)
+			f.WriteConfigText(t, tt.config)
+
+			err := f.LoadMinimalErr(t)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
 func TestResolveDirs(t *testing.T) {
 	tests := []struct {
 		name           string
