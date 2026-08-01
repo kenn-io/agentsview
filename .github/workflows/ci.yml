@@ -165,7 +165,7 @@ jobs:
         run: go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Run Go tests
-        run: go test -tags "fts5" ./... -v -count=1 -timeout=20m
+        run: go test -tags "fts5" ${{ runner.os == 'Linux' && '-coverprofile=coverage.out' || '' }} ./... -v -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
@@ -173,11 +173,40 @@ jobs:
         if: runner.os == 'Linux'
         run: make test-evalingest
 
-      - name: Run Go tests (race detector)
+      - name: Upload coverage
         if: runner.os == 'Linux'
-        run: |
-          go test -tags "fts5" ./internal/duckdb -count=1
-          go test -tags "fts5" -race $(go list ./... | grep -v '/internal/duckdb$') -count=1 -timeout=20m
+        id: codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
+        with:
+          files: coverage.out
+        continue-on-error: true
+
+      - name: Warn on coverage upload failure
+        if: runner.os == 'Linux' && steps.codecov.outcome == 'failure'
+        run: echo "::warning::Codecov upload failed"
+
+  test-race:
+    name: Go Test (race detector)
+    runs-on: ${{ github.repository == 'kenn-io/agentsview' && (github.event_name == 'push' && github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.base.repo.full_name == github.repository)) && 'kenn-linux-x64-public' || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: ${{ github.repository == 'kenn-io/agentsview' && (github.event_name == 'push' && github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.base.repo.full_name == github.repository)) && 'false' || 'true' }}
+
+      - name: Restore pricing snapshot
+        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
+
+      # internal/duckdb is excluded from -race (CGo-heavy, race-insensitive,
+      # and 7+ minutes on its own); it is still covered without -race by the
+      # main test job's ./... run.
+      - name: Run Go tests (race detector)
+        run: go test -tags "fts5" -race $(go list ./... | grep -v '/internal/duckdb$') -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
@@ -215,38 +244,6 @@ jobs:
 
       - name: Run Windows desktop update tests
         run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml --lib install_downloaded_update
-
-  coverage:
-    runs-on: ${{ github.repository == 'kenn-io/agentsview' && (github.event_name == 'push' && github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.base.repo.full_name == github.repository)) && 'kenn-linux-x64-public' || 'ubuntu-latest' }}
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
-        with:
-          go-version-file: go.mod
-          cache: ${{ github.repository == 'kenn-io/agentsview' && (github.event_name == 'push' && github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.base.repo.full_name == github.repository)) && 'false' || 'true' }}
-
-      - name: Restore pricing snapshot
-        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
-
-      - name: Test with coverage
-        run: go test -tags "fts5" -coverprofile=coverage.out ./... -timeout=20m
-        env:
-          CGO_ENABLED: "1"
-
-      - name: Upload coverage
-        id: codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
-        with:
-          files: coverage.out
-        continue-on-error: true
-
-      - name: Warn on coverage upload failure
-        if: steps.codecov.outcome == 'failure'
-        run: echo "::warning::Codecov upload failed"
 
   integration:
     runs-on: ${{ github.repository == 'kenn-io/agentsview' && (github.event_name == 'push' && github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.base.repo.full_name == github.repository)) && 'kenn-linux-x64-public' || 'ubuntu-latest' }}

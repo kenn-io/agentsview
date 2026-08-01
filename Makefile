@@ -283,9 +283,11 @@ test-short: pricing-snapshot ensure-embed-dir
 	go test -tags "fts5" ./... -short -count=1
 
 # Run the quarantined eval-ingest endpoint tests under their build tag.
+# Only internal/server contains evalingest-gated code; every other package is
+# identical under the tag and already covered by the untagged run.
 test-evalingest: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,evalingest" \
-		./internal/db ./internal/server -v -count=1
+		./internal/server -v -count=1
 
 # Compare db.Store read-query performance across SQLite, DuckDB, and PostgreSQL.
 # Requires Docker because the PostgreSQL backend is started with testcontainers.
