@@ -5809,6 +5809,43 @@ func TestCopySessionMetadataFrom_PinsFollowSourceUUID(t *testing.T) {
 		},
 	)
 	pinByOrdinal(srcDB, "s4", 2)
+
+	// Session where the OLD DB itself holds duplicate uuids and only
+	// one row survives the re-parse. The uuid cannot identify which
+	// duplicate the pin was on, so a pin on the removed duplicate
+	// must not transfer to the survivor.
+	insertSession(t, srcDB, "s5", "proj")
+	insertMessages(t, srcDB,
+		Message{
+			SessionID: "s5", Ordinal: 1, Role: "user",
+			Content: "removed dup", ContentLength: 11,
+			SourceUUID: "u-old-dup",
+		},
+		Message{
+			SessionID: "s5", Ordinal: 2, Role: "user",
+			Content: "surviving dup", ContentLength: 13,
+			SourceUUID: "u-old-dup",
+		},
+	)
+	pinByOrdinal(srcDB, "s5", 1)
+
+	// Same old-side duplication, but the pin sits on the duplicate
+	// that survives at its ordinal: the guarded ordinal fallback
+	// still restores it.
+	insertSession(t, srcDB, "s6", "proj")
+	insertMessages(t, srcDB,
+		Message{
+			SessionID: "s6", Ordinal: 1, Role: "user",
+			Content: "removed dup", ContentLength: 11,
+			SourceUUID: "u-old-dup6",
+		},
+		Message{
+			SessionID: "s6", Ordinal: 2, Role: "user",
+			Content: "surviving dup", ContentLength: 13,
+			SourceUUID: "u-old-dup6",
+		},
+	)
+	pinByOrdinal(srcDB, "s6", 2)
 	srcDB.Close()
 
 	// Destination DB: the re-parse split the envelope into its own
@@ -5855,6 +5892,33 @@ func TestCopySessionMetadataFrom_PinsFollowSourceUUID(t *testing.T) {
 		},
 	)
 
+	insertSession(t, dstDB, "s5", "proj")
+	insertMessages(t, dstDB,
+		Message{
+			SessionID: "s5", Ordinal: 1, Role: "user",
+			Content: "unrelated", ContentLength: 9,
+			SourceUUID: "u-fresh5",
+		},
+		Message{
+			SessionID: "s5", Ordinal: 2, Role: "user",
+			Content: "surviving dup", ContentLength: 13,
+			SourceUUID: "u-old-dup",
+		},
+	)
+	insertSession(t, dstDB, "s6", "proj")
+	insertMessages(t, dstDB,
+		Message{
+			SessionID: "s6", Ordinal: 1, Role: "user",
+			Content: "unrelated", ContentLength: 9,
+			SourceUUID: "u-fresh6",
+		},
+		Message{
+			SessionID: "s6", Ordinal: 2, Role: "user",
+			Content: "surviving dup", ContentLength: 13,
+			SourceUUID: "u-old-dup6",
+		},
+	)
+
 	require.NoError(t, dstDB.CopySessionMetadataFrom(srcPath),
 		"CopySessionMetadataFrom")
 
@@ -5886,6 +5950,18 @@ func TestCopySessionMetadataFrom_PinsFollowSourceUUID(t *testing.T) {
 	require.Len(t, pins, 1, "pins s4")
 	assert.Equal(t, 2, pins[0].Ordinal,
 		"duplicated uuid resolves by old ordinal to the same-uuid row")
+
+	pins, err = dstDB.ListPinnedMessages(ctx, "s5", "")
+	require.NoError(t, err, "ListPins s5")
+	assert.Empty(t, pins,
+		"pin on a removed old-side duplicate must not transfer to the "+
+			"lone same-uuid survivor")
+
+	pins, err = dstDB.ListPinnedMessages(ctx, "s6", "")
+	require.NoError(t, err, "ListPins s6")
+	require.Len(t, pins, 1, "pins s6")
+	assert.Equal(t, 2, pins[0].Ordinal,
+		"pin on the surviving old-side duplicate restores at its ordinal")
 }
 
 func TestCopySessionMetadataCopiesFromSource(t *testing.T) {

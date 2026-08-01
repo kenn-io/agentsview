@@ -1178,7 +1178,11 @@ func (d *DB) CopySessionMetadataFrom(
 	// Prefer the source_uuid natural key: a re-parse can insert or
 	// drop rows (e.g. the v75 IDE-envelope split), shifting ordinals
 	// so that the old (session_id, ordinal) key lands on an unrelated
-	// row. Fall back to ordinal only for legacy pins whose source row
+	// row. The uuid must be unique on BOTH sides: a duplicate in the
+	// old DB means the uuid does not identify which message the pin
+	// was on, so transferring it to a lone same-uuid survivor could
+	// misattach a pin whose real target was removed by the re-parse.
+	// Fall back to ordinal only for legacy pins whose source row
 	// has no source_uuid, or when the row at the old ordinal carries
 	// the same uuid (a duplicated uuid, where the old coordinates are
 	// the best disambiguator). A nonempty uuid with no matching fresh
@@ -1209,6 +1213,11 @@ func (d *DB) CopySessionMetadataFrom(
 					SELECT COUNT(*) FROM main.messages x
 					WHERE x.session_id = old_m.session_id
 					AND x.source_uuid = old_m.source_uuid
+				) = 1
+				AND (
+					SELECT COUNT(*) FROM old_db.messages y
+					WHERE y.session_id = old_m.session_id
+					AND y.source_uuid = old_m.source_uuid
 				) = 1`); err != nil {
 				return fmt.Errorf(
 					"copying pinned messages by source uuid: %w", err,
