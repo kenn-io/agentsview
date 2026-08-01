@@ -546,9 +546,6 @@ func splitGeminiAppsBlocks(tokens []html.Token) []string {
 				if !isGeminiAppsVoidElement(token.Data) {
 					blockDepth++
 				}
-				if isGeminiAppsVoidElement(token.Data) {
-					flush()
-				}
 			}
 			continue
 		}
@@ -564,9 +561,6 @@ func splitGeminiAppsBlocks(tokens []html.Token) []string {
 		}
 		if blockDepth > 0 {
 			block = append(block, token)
-		}
-		if token.Type == html.SelfClosingTagToken && strings.EqualFold(token.Data, "br") {
-			flush()
 		}
 	}
 	flush()

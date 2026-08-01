@@ -118,6 +118,31 @@ func TestParseGeminiAppsPreservesOrdinaryResponseAndAnswerText(t *testing.T) {
 	assert.Equal(t, "ordinary Response: and Answer: text", results[0].Messages[0].Content)
 }
 
+func TestParseGeminiAppsBrStaysInsidePromptBlock(t *testing.T) {
+	fixture := strings.Replace(
+		sanitizedGeminiAppsHTML,
+		`<div class="content-cell mdl-cell"><p>first prompt<br></p><p><strong>first</strong> answer &amp; detail</p><script>secret script</script><style>secret style</style><template>secret template</template><noscript>secret noscript</noscript></div>`,
+		`<div class="content-cell mdl-cell"><p>line one<br>line two</p><p>answer</p></div>`,
+		1,
+	)
+	path := filepath.Join(t.TempDir(), "br-inline.html")
+	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
+
+	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
+	require.True(t, ok)
+	exporter := provider.(GeminiAppsExportParser)
+	var results []ParseResult
+	_, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
+		results = append(results, result)
+		return nil
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	require.Len(t, results[0].Messages, 2)
+	assert.Equal(t, "line one\nline two", results[0].Messages[0].Content)
+	assert.Equal(t, "answer", results[0].Messages[1].Content)
+}
+
 func TestParseGeminiAppsTimestampMustBeInHeader(t *testing.T) {
 	fixture := strings.Replace(
 		sanitizedGeminiAppsHTML,
