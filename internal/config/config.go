@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -1846,7 +1847,12 @@ func (c *Config) resolveSessionSources() error {
 			if value == "" {
 				continue
 			}
-			key := sessionSourceComparisonKey(value)
+			key, err := sessionSourceComparisonKey(value)
+			if err != nil {
+				return fmt.Errorf(
+					"resolve %s session source %q: %w", def.Type, value, err,
+				)
+			}
 			if _, ok := seen[key]; ok {
 				continue
 			}
@@ -1913,7 +1919,12 @@ func (c *Config) resolveSessionSources() error {
 			seen = make(map[string]rootState)
 			rootsByAgent[agent] = seen
 		}
-		key := sessionSourceComparisonKey(dir)
+		key, err := sessionSourceComparisonKey(dir)
+		if err != nil {
+			problems = append(problems,
+				fmt.Sprintf("entry %d (%s): %v", entry, agent, err))
+			continue
+		}
 		state, duplicate := seen[key]
 		if duplicate {
 			state.machine = machine
@@ -1950,11 +1961,18 @@ func (c *Config) resolveSessionSources() error {
 	return nil
 }
 
-func sessionSourceComparisonKey(dir string) string {
+func sessionSourceComparisonKey(dir string) (string, error) {
 	if strings.HasPrefix(strings.ToLower(dir), "s3://") {
-		return dir
+		return dir, nil
 	}
-	return filepath.Clean(dir)
+	key, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("resolving dir %q: %w", dir, err)
+	}
+	if runtime.GOOS == "windows" {
+		key = strings.ToLower(key)
+	}
+	return key, nil
 }
 
 func normalizeSessionSourceDir(raw string) (string, error) {

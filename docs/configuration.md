@@ -669,7 +669,7 @@ machine = "buildbox"
 ```
 
 The fields are `agent`, `dir`, and optional `machine`. Entries are additive to
-the per-agent arrays, defaults, and environment variables above. Exact duplicate
+the per-agent arrays, defaults, and environment variables above. Equivalent
 roots are deduplicated; a structured entry supplies the machine label when it
 duplicates a shorthand root. An omitted `machine` uses the local hostname.
 

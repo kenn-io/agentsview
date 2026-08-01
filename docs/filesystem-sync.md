@@ -54,10 +54,11 @@ dir = "/srv/session-archive/buildbox/copilot"
 machine = "buildbox"
 ```
 
-AgentsView normalizes roots for duplicate comparison. Legacy per-agent settings
-and structured entries retain their original path spelling. When a structured
-source names the same root as a per-agent array, default, or environment
-variable, the structured entry supplies the machine label.
+AgentsView compares roots as absolute, cleaned paths and ignores case on
+Windows. Legacy per-agent settings and structured entries retain their original
+path spelling. When a structured source names the same root as a per-agent
+array, default, or environment variable, the structured entry supplies the
+machine label.
 
 `session_sources` accepts filesystem roots only. Keep using the existing
 Claude/Codex per-agent arrays for `s3://` roots; S3 ingestion has established

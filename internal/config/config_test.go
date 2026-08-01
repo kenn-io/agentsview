@@ -2338,3 +2338,25 @@ machine = "archivebox"
 	assert.Equal(t, "archivebox", cfg.SourceMachines[parser.AgentCopilot][want],
 		"the structured entry must relabel the root it deduplicates onto")
 }
+
+func TestLoadFileSessionSourceAbsoluteDirDeduplicatesRelativeLegacyRoot(t *testing.T) {
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	relative := filepath.Join("testdata", "session-source-alias")
+	absolute := filepath.Join(cwd, relative)
+
+	cfg := loadMinimalWithConfig(t, map[string]any{
+		"copilot_dirs": []string{relative},
+		"session_sources": []map[string]any{{
+			"agent":   "copilot",
+			"dir":     absolute,
+			"machine": "archivebox",
+		}},
+	})
+
+	assert.Equal(t, []string{relative}, cfg.ResolveDirs(parser.AgentCopilot),
+		"equivalent roots must retain one scan path")
+	assert.Equal(t, map[string]string{relative: "archivebox"},
+		cfg.SourceMachines[parser.AgentCopilot],
+		"the structured entry must relabel the equivalent legacy root")
+}

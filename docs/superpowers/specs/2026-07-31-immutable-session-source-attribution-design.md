@@ -69,9 +69,10 @@ stored ownership baseline for the machine that originally admitted the session.
 
 `normalizeSessionSourceDir` validates and trims a structured source directory
 but does not rewrite its separators or spelling. A separate comparison key may
-use `filepath.Clean` to deduplicate equivalent roots on the current platform.
-Legacy arrays, environment-derived paths, and structured entries therefore
-retain the spelling supplied by the user while comparisons remain normalized.
+use an absolute, cleaned path and case-fold it on Windows to deduplicate
+equivalent roots on the current platform. Legacy arrays, environment-derived
+paths, and structured entries therefore retain the spelling supplied by the
+user while comparisons remain normalized.
 
 ## DuckDB Boundary
 
