@@ -422,6 +422,121 @@ func TestProcessFileProviderAuthoritativeKeepsRetryStatePerResult(t *testing.T) 
 	assert.False(t, res.suppressesPresenceSweepForRetry())
 }
 
+func TestSyncSingleSessionPartialFullWritesQueueNewChild(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		includeLater bool
+		failureSQL   string
+		wantError    string
+	}{
+		{
+			name:         "later member fails",
+			includeLater: true,
+			failureSQL: `
+				CREATE TRIGGER fail_later_member_write
+				BEFORE INSERT ON sessions
+				WHEN NEW.id = 'cowork:later'
+				BEGIN
+					SELECT RAISE(FAIL, 'injected later member write failure');
+				END`,
+			wantError: "injected later member write failure",
+		},
+		{
+			name: "spawner completion fails after content commit",
+			failureSQL: fmt.Sprintf(`
+				CREATE TRIGGER fail_spawner_write_completion
+				BEFORE UPDATE OF data_version ON sessions
+				WHEN NEW.id = 'cowork:spawner' AND NEW.data_version = %d
+				BEGIN
+					SELECT RAISE(FAIL, 'injected spawner completion failure');
+				END`, db.CurrentDataVersion()),
+			wantError: "injected spawner completion failure",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			sourcePath, fingerprint := writeProcessProviderSource(
+				t, root, "partial-write.jsonl",
+			)
+			spawner := processFixtureResult(
+				"cowork:spawner", parser.AgentCowork, "fixture-project",
+				sourcePath, fingerprint,
+			)
+			spawner.Messages[0] = parser.ParsedMessage{
+				Ordinal: 0, Role: parser.RoleAssistant,
+				Content: "spawn child", Timestamp: spawner.Session.StartedAt,
+				HasToolUse: true,
+				ToolCalls: []parser.ParsedToolCall{{
+					ToolUseID: "spawn-child", ToolName: "Agent", Category: "Task",
+					SubagentSessionID: "cowork:child",
+				}},
+			}
+			results := []parser.ParseResultOutcome{{
+				Result: spawner, DataVersion: parser.DataVersionCurrent,
+			}}
+			if tc.includeLater {
+				results = append(results, parser.ParseResultOutcome{
+					Result: processFixtureResult(
+						"cowork:later", parser.AgentCowork, "fixture-project",
+						sourcePath, fingerprint,
+					),
+					DataVersion: parser.DataVersionCurrent,
+				})
+			}
+			provider := newProcessFixtureProvider(
+				processFixtureSource(sourcePath), fingerprint,
+				parser.ParseOutcome{
+					Results: results, ResultSetComplete: true, ForceReplace: true,
+				},
+			)
+			provider.Caps.Source.MultiSessionSource = parser.CapabilitySupported
+			engine := newProcessFixtureEngine(t, root, provider)
+			database := engine.db
+			require.NoError(t, database.UpsertSession(db.Session{
+				ID: "cowork:spawner", Agent: string(parser.AgentCowork),
+				Project: "fixture-project", Machine: "devbox", FilePath: &sourcePath,
+			}))
+			require.NoError(t, database.UpsertSession(db.Session{
+				ID: "cowork:child", Agent: string(parser.AgentCowork),
+				Project: "fixture-project", Machine: "devbox",
+			}))
+
+			raw, err := sql.Open("sqlite3", database.Path())
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, raw.Close()) })
+			_, err = raw.Exec(tc.failureSQL + `;
+				CREATE TRIGGER fail_partial_parent_repair
+				BEFORE UPDATE OF parent_session_id ON sessions
+				WHEN NEW.id = 'cowork:child'
+				BEGIN
+					SELECT RAISE(FAIL, 'injected partial parent repair failure');
+				END`)
+			require.NoError(t, err)
+
+			syncErr := engine.SyncSingleSession("cowork:spawner")
+
+			require.ErrorContains(t, syncErr, tc.wantError)
+			assert.ErrorContains(t, syncErr, "injected partial parent repair failure",
+				"committed message content must activate deferred repair")
+			var edgeCount int
+			require.NoError(t, database.Reader().QueryRow(`
+				SELECT count(*) FROM tool_calls
+				WHERE session_id = 'cowork:spawner'
+				  AND subagent_session_id = 'cowork:child'`,
+			).Scan(&edgeCount))
+			assert.Equal(t, 1, edgeCount,
+				"the partial write must commit its new spawn edge")
+			var queuedRepairs int
+			require.NoError(t, database.Reader().QueryRow(`
+				SELECT count(*) FROM subagent_parent_repair_queue
+				WHERE session_id = 'cowork:child'`,
+			).Scan(&queuedRepairs))
+			assert.Equal(t, 1, queuedRepairs,
+				"the new child must remain durable after partial failure")
+		})
+	}
+}
+
 func TestProcessFileProviderAuthoritativeSuppressesUncleanSkipCache(t *testing.T) {
 
 	root := t.TempDir()

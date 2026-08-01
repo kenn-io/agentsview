@@ -13472,7 +13472,7 @@ func (e *Engine) SyncSingleSessionContext(
 		return nil
 	}
 
-	for _, pr := range res.results {
+	for i, pr := range res.results {
 		write := pendingWrite{
 			sess:         pr.Session,
 			msgs:         pr.Messages,
@@ -13480,22 +13480,32 @@ func (e *Engine) SyncSingleSessionContext(
 			needsRetry:   res.needsRetryForSession(pr.Session.ID),
 			forceReplace: res.forceReplace,
 		}
-		if err := e.writeSessionFull(write); err != nil &&
-			!isIntentionalSessionSkip(err) &&
-			!errors.Is(err, errSessionPreserved) {
+		writeErr := e.writeSessionFull(write)
+		// Full-write stages commit independently. Message content (and a new
+		// spawn edge) can persist even when a later usage, data-version, or
+		// sibling write fails, so discover and queue children after every
+		// attempt rather than waiting for the entire result set to finish.
+		queueErr := queueWrittenChildren([]string{resultIDs[i]})
+		if writeErr != nil &&
+			!isIntentionalSessionSkip(writeErr) &&
+			!errors.Is(writeErr, errSessionPreserved) {
 			// Mirror the batch write paths: a partial write (session
 			// row updated, messages or usage not) must demote the
 			// stored data version, or the next container parse would
 			// compare the member as unchanged and never repair it.
 			e.markStaleFailedMemberWrite(write)
+			if queueErr != nil {
+				writeErr = errors.Join(writeErr, queueErr)
+			}
 			return fmt.Errorf("write session %s: %w",
-				pr.Session.ID, err)
-		} else if errors.Is(err, errSessionPreserved) {
+				pr.Session.ID, writeErr)
+		}
+		if queueErr != nil {
+			return queueErr
+		}
+		if errors.Is(writeErr, errSessionPreserved) {
 			preserved = true
 		}
-	}
-	if err := queueWrittenChildren(resultIDs); err != nil {
-		return err
 	}
 	if err := e.db.LinkSubagentSessionsForSessions(resultIDs); err != nil {
 		return fmt.Errorf("link changed subagent sessions: %w", err)
