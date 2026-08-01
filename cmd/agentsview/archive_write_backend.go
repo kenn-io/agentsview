@@ -264,8 +264,9 @@ func notifyPushForWatchBatchWithConfig(
 }
 
 type watchPathRelevanceProvider struct {
-	provider parser.Provider
-	root     string
+	provider           parser.Provider
+	root               string
+	relevanceSupported bool
 }
 
 func watchBatchIsAffirmativelyNonData(
@@ -294,6 +295,9 @@ func watchBatchIsAffirmativelyNonData(
 				continue
 			}
 			matched = true
+			if !candidate.relevanceSupported {
+				return false
+			}
 			relevance, err := parser.ResolveChangedPathRelevance(
 				ctx, candidate.provider, parser.ChangedPathRequest{
 					Path: path, WatchRoot: candidate.root,
@@ -315,21 +319,24 @@ func configuredWatchPathRelevanceProviders(
 ) []watchPathRelevanceProvider {
 	var providers []watchPathRelevanceProvider
 	for _, factory := range parser.ProviderFactories() {
-		if factory.Capabilities().Source.ChangedPathRelevance !=
-			parser.CapabilitySupported {
-			continue
-		}
+		relevanceSupported := factory.Capabilities().Source.ChangedPathRelevance ==
+			parser.CapabilitySupported
 		roots := cfg.ResolveDirs(factory.Definition().Type)
 		for _, root := range roots {
 			if root == "" {
 				continue
 			}
 			root = absRootPath(root)
-			providers = append(providers, watchPathRelevanceProvider{
-				provider: factory.NewProvider(parser.ProviderConfig{
+			var provider parser.Provider
+			if relevanceSupported {
+				provider = factory.NewProvider(parser.ProviderConfig{
 					Roots: []string{root},
-				}),
-				root: root,
+				})
+			}
+			providers = append(providers, watchPathRelevanceProvider{
+				provider:           provider,
+				root:               root,
+				relevanceSupported: relevanceSupported,
 			})
 		}
 	}

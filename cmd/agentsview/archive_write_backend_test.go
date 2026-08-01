@@ -854,6 +854,27 @@ func TestDaemonPGPushWatchRelevancePreservesExplicitCurrentDirectoryRoot(t *test
 	t.Log("reason_change_attempts=0 root=. absolute_event=opencode.db-shm")
 }
 
+func TestDaemonPGPushWatchRetainsOpenCodeSHMWhenOverlappingUnsupportedProvider(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenCode:       {root},
+			parser.AgentAntigravityCLI: {root},
+		},
+	}
+	loop, _, _ := newTestLoop(func(context.Context, pushReason) error {
+		return nil
+	})
+	require.NoError(t, notifyPushForWatchBatchWithConfig(
+		t.Context(), loop, cfg, syncpkg.WatchBatch{
+			Paths: []string{filepath.Join(root, "opencode.db-shm")},
+		},
+	))
+	assert.True(t, loop.pending,
+		"an unsupported overlapping provider must retain the notification")
+	t.Log("notification_retained=unsupported_overlap path=opencode.db-shm")
+}
+
 func TestDaemonPushWatchOwnersSuppressOpenCodeSHMOnlyBatches(t *testing.T) {
 	root := t.TempDir()
 	cfg := config.Config{
