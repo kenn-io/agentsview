@@ -20,6 +20,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/pathutil"
 	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/timeutil"
@@ -616,11 +617,17 @@ func (e *Engine) machineForPath(agent parser.AgentType, path string) string {
 func (e *Engine) configuredMachineForPath(
 	agent parser.AgentType, path string,
 ) (string, bool) {
-	path = filepath.Clean(path)
+	path, err := pathutil.LocalComparisonKey(path)
+	if err != nil {
+		return "", false
+	}
 	bestRoot := ""
 	machine := ""
 	for root, candidate := range e.sourceMachines[agent] {
-		cleanRoot := filepath.Clean(root)
+		cleanRoot, err := pathutil.LocalComparisonKey(root)
+		if err != nil {
+			continue
+		}
 		if !pathWithinRoot(path, cleanRoot) || len(cleanRoot) <= len(bestRoot) {
 			continue
 		}
@@ -669,13 +676,19 @@ func (e *Engine) reconciliationOwnershipMachines(
 	// Map iteration is unordered; sort so the query sequence is deterministic.
 	slices.Sort(configured)
 	for _, root := range roots {
-		clean := filepath.Clean(root)
-		add(e.machineForPath(agent, clean))
+		add(e.machineForPath(agent, root))
+		clean, err := pathutil.LocalComparisonKey(root)
+		if err != nil {
+			continue
+		}
 		// A reconciliation scope is a watched directory, which may sit above
 		// (or below) the labeled root itself — a container file such as
 		// Hermes's state.db is configured directly but watched via its parent.
 		for _, cfg := range configured {
-			cleanCfg := filepath.Clean(cfg)
+			cleanCfg, err := pathutil.LocalComparisonKey(cfg)
+			if err != nil {
+				continue
+			}
 			if pathWithinRoot(cleanCfg, clean) || pathWithinRoot(clean, cleanCfg) {
 				add(e.sourceMachines[agent][cfg])
 			}

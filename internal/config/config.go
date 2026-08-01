@@ -15,7 +15,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -1965,14 +1964,7 @@ func sessionSourceComparisonKey(dir string) (string, error) {
 	if strings.HasPrefix(strings.ToLower(dir), "s3://") {
 		return dir, nil
 	}
-	key, err := filepath.Abs(dir)
-	if err != nil {
-		return "", fmt.Errorf("resolving dir %q: %w", dir, err)
-	}
-	if runtime.GOOS == "windows" {
-		key = strings.ToLower(key)
-	}
-	return key, nil
+	return pathutil.LocalComparisonKey(dir)
 }
 
 func normalizeSessionSourceDir(raw string) (string, error) {

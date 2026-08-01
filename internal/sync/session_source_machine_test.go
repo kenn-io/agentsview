@@ -100,6 +100,23 @@ func TestMachineForPathUsesNormalizedRootSpecificity(t *testing.T) {
 	))
 }
 
+func TestMachineForPathMatchesAbsolutePathToRelativeRoot(t *testing.T) {
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	relativeRoot := filepath.Join("testdata", "relative-session-source")
+	engine := &Engine{
+		sourceMachines: map[parser.AgentType]map[string]string{
+			parser.AgentClaude: {relativeRoot: "archivebox"},
+		},
+		machine: "localbox",
+	}
+
+	assert.Equal(t, "archivebox", engine.machineForPath(
+		parser.AgentClaude,
+		filepath.Join(cwd, relativeRoot, "session.jsonl"),
+	))
+}
+
 func TestReconcileWatchRootsTombstonesMissingLabeledFilesystemSession(
 	t *testing.T,
 ) {
