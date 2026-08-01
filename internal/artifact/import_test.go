@@ -217,13 +217,14 @@ func TestStoreImportCoordinatorTracksIndependentFutureRequirements(t *testing.T)
 			prepare: func(t *testing.T, store ArtifactStore) string {
 				return createHashedImportArtifact(
 					t, store, KindManifests, ".json",
-					[]byte(`{"origin":"contract-a1b2c3","v":3}`),
+					[]byte(`{"origin":"contract-a1b2c3","v":4}`),
 				)
 			},
-			wantManifest: 3, wantSegment: messageSegmentFormatVersion,
+			wantManifest: manifestFormatVersion + 1,
+			wantSegment:  messageSegmentFormatVersion,
 			understood: db.ArtifactImportVersions{
 				Checkpoint: checkpointFormatVersion,
-				Manifest:   3,
+				Manifest:   manifestFormatVersion + 1,
 				Segment:    messageSegmentFormatVersion,
 			},
 		},
@@ -231,7 +232,7 @@ func TestStoreImportCoordinatorTracksIndependentFutureRequirements(t *testing.T)
 			name: "future segment",
 			prepare: func(t *testing.T, store ArtifactStore) string {
 				segment := []byte(
-					"{\"content\":\"future\",\"ordinal\":0,\"role\":\"user\",\"v\":2}\n",
+					"{\"content\":\"future\",\"ordinal\":0,\"role\":\"user\",\"v\":3}\n",
 				)
 				segmentHash := createHashedImportArtifact(
 					t, store, KindSegments, ".ndjson", segment,
@@ -240,11 +241,12 @@ func TestStoreImportCoordinatorTracksIndependentFutureRequirements(t *testing.T)
 				m.Segments = []string{segmentHash}
 				return createImportTestManifest(t, store, m, false)
 			},
-			wantManifest: manifestFormatVersion, wantSegment: 2,
+			wantManifest: manifestFormatVersion,
+			wantSegment:  messageSegmentFormatVersion + 1,
 			understood: db.ArtifactImportVersions{
 				Checkpoint: checkpointFormatVersion,
 				Manifest:   manifestFormatVersion,
-				Segment:    2,
+				Segment:    messageSegmentFormatVersion + 1,
 			},
 		},
 	}
@@ -343,7 +345,7 @@ func TestStoreImportCoordinatorFinishesSupportedSessionsBeforeFutureGate(
 	sessionMap := map[string]string{
 		contractOrigin + "~000-future": createHashedImportArtifact(
 			t, store, KindManifests, ".json",
-			[]byte(`{"origin":"contract-a1b2c3","v":3}`),
+			[]byte(`{"origin":"contract-a1b2c3","v":4}`),
 		),
 	}
 	const supportedSessions = artifactImportDrainLimit + 1
@@ -405,7 +407,7 @@ func TestStoreImportCoordinatorFinishesSupportedSessionsBeforeFutureGate(
 		t.Context(),
 		db.ArtifactImportVersions{
 			Checkpoint: checkpointFormatVersion,
-			Manifest:   3,
+			Manifest:   manifestFormatVersion + 1,
 			Segment:    messageSegmentFormatVersion,
 		},
 		attempt,
@@ -413,7 +415,7 @@ func TestStoreImportCoordinatorFinishesSupportedSessionsBeforeFutureGate(
 	)
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
-	assert.Equal(t, 3, pending[0].RequiredManifestVersion)
+	assert.Equal(t, manifestFormatVersion+1, pending[0].RequiredManifestVersion)
 }
 
 func TestStoreImportCoordinatorQuarantinesInvalidCheckpointAndContinues(

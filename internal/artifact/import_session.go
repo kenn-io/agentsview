@@ -159,7 +159,7 @@ func loadImportedSession(
 func validateImportedManifest(
 	m manifest, origin, gid string, limits artifactLimits,
 ) error {
-	if m.Version != manifestFormatVersion {
+	if m.Version < manifestMinDecodeVersion || m.Version > manifestFormatVersion {
 		return errors.New("manifest version is unsupported")
 	}
 	if m.Origin != origin {
