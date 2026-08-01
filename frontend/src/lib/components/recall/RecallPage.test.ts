@@ -196,6 +196,93 @@ describe("RecallPage", () => {
     );
   });
 
+  it("refreshes entries and extraction coverage while the page stays open", async () => {
+    const defaultFetch = fetchMock as unknown as (
+      input: RequestInfo | URL,
+    ) => Promise<Response>;
+    let entryRequests = 0;
+    let statusRequests = 0;
+    fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/recall/entries?")) {
+        entryRequests++;
+        if (entryRequests > 1) {
+          return new Response(JSON.stringify({
+            entries: [{
+              id: "recall-new",
+              type: "fact",
+              scope: "project",
+              status: "accepted",
+              review_state: "unreviewed_auto",
+              title: "Newly distilled Recall entry",
+              body: "This entry became available after the page opened.",
+              source_session_id: "session-new",
+              source_run_id: "generation-active",
+              extractor_method: "turns-v1",
+              transferable: false,
+              provenance_ok: true,
+              created_at: "2026-07-23T12:00:00Z",
+              updated_at: "2026-07-23T12:00:00Z",
+              evidence: [],
+            }],
+            trusted_only: false,
+          }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+      }
+      if (url.includes("/recall/extraction/status")) {
+        statusRequests++;
+        if (statusRequests > 1) {
+          return new Response(JSON.stringify({
+            configured: true,
+            fingerprint: "generation-active",
+            source_runs: ["generation-active"],
+            generations: [],
+            stats: {
+              pending: 1,
+              partial: 0,
+              done: 9,
+              failed: 1,
+              units_done: 20,
+              units_total: 20,
+              entries: 13,
+            },
+            eligible_backlog: 0,
+          }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+      }
+      return defaultFetch(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    component = mount(RecallPage, { target: document.body });
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain(
+        "Keep extraction passes bounded",
+      );
+    });
+
+    const refresh = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Refresh"]',
+    );
+    expect(refresh).not.toBeNull();
+    refresh!.click();
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain(
+        "Newly distilled Recall entry",
+      );
+      expect(document.body.textContent).toContain("9 done");
+      expect(document.body.textContent).toContain("13 entries");
+    });
+    expect(entryRequests).toBe(2);
+    expect(statusRequests).toBe(2);
+  });
+
   it("loads the next cursor page and removes the truncation action", async () => {
     component = mount(RecallPage, { target: document.body });
 

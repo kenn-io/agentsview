@@ -25,6 +25,7 @@
   import { sessions } from "../../stores/sessions.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { LatestRead } from "../../utils/latest-read.js";
+  import RefreshControl from "../shared/RefreshControl.svelte";
 
   const ENTRY_TYPES = [
     "fact",
@@ -50,6 +51,8 @@
   let entriesFailed = $state(false);
   let statusLoading = $state(true);
   let statusFailed = $state(false);
+  let entriesUpdatedAt = $state<number | null>(null);
+  let statusUpdatedAt = $state<number | null>(null);
   let search = $state("");
   let query = $state("");
   let project = $state("");
@@ -60,6 +63,11 @@
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   const entriesRead = new LatestRead();
   const statusRead = new LatestRead();
+  const lastUpdatedAt = $derived(
+    entriesUpdatedAt !== null && statusUpdatedAt !== null
+      ? Math.min(entriesUpdatedAt, statusUpdatedAt)
+      : null,
+  );
 
   const projectOptions = $derived.by((): TypeaheadOption[] => [
     {
@@ -134,6 +142,7 @@
         : page.entries;
       nextCursor = page.nextCursor ?? "";
       resultCap = page.resultCap ?? 0;
+      entriesUpdatedAt = Date.now();
     } catch (error) {
       if (isAbortError(error) || !entriesRead.isCurrent(signal)) return;
       if (appending && error instanceof ApiError && error.status === 409) {
@@ -159,6 +168,7 @@
       const next = await fetchRecallExtractionStatus(signal);
       if (!statusRead.isCurrent(signal)) return;
       status = next;
+      statusUpdatedAt = Date.now();
     } catch (error) {
       if (isAbortError(error) || !statusRead.isCurrent(signal)) return;
       status = null;
@@ -173,6 +183,10 @@
     searchTimer = setTimeout(() => {
       query = search.trim();
     }, 250);
+  }
+
+  async function refreshRecall() {
+    await Promise.all([loadEntries(), loadStatus()]);
   }
 
   function evidenceLabel(evidence: RecallEvidence): string {
@@ -221,13 +235,21 @@
       <h2>{m.recall_page_title()}</h2>
       <p>{m.recall_page_subtitle()}</p>
     </div>
-    {#if !entriesLoading && !entriesFailed}
-      <span class="entry-count">
-        {m.recall_page_entries_shown({
-          countLabel: entries.length.toLocaleString(),
-        })}
-      </span>
-    {/if}
+    <div class="header-actions">
+      {#if !entriesLoading && !entriesFailed}
+        <span class="entry-count">
+          {m.recall_page_entries_shown({
+            countLabel: entries.length.toLocaleString(),
+          })}
+        </span>
+      {/if}
+      <RefreshControl
+        {lastUpdatedAt}
+        busy={entriesLoading || statusLoading}
+        onRefresh={refreshRecall}
+        label={m.shared_refresh()}
+      />
+    </div>
   </header>
 
   <Card level="default" padding="none" class="extraction-card">
@@ -511,6 +533,12 @@
     color: var(--text-muted);
     font-family: var(--font-mono);
     font-size: 10px;
+  }
+
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
   }
 
   .extraction-content {
