@@ -10882,7 +10882,7 @@ func (e *Engine) normalizePendingWriteMachines(
 	if e.archiveStore != nil {
 		unresolved := make([]string, 0, len(ids))
 		for _, id := range ids {
-			if machines[id] == "" {
+			if _, exists := machines[id]; !exists {
 				unresolved = append(unresolved, id)
 			}
 		}
@@ -10896,19 +10896,14 @@ func (e *Engine) normalizePendingWriteMachines(
 				)
 			}
 			for id, machine := range replacementMachines {
-				if machine != "" {
-					machines[id] = machine
-				}
+				machines[id] = machine
 			}
 		}
 	}
 	for _, id := range ids {
-		machine := machines[id]
-		if machine == "" {
+		machine, exists := machines[id]
+		if !exists {
 			machine = batch[indexes[id][0]].sess.Machine
-		}
-		if machine == "" {
-			continue
 		}
 		for _, i := range indexes[id] {
 			batch[i].sess.Machine = machine

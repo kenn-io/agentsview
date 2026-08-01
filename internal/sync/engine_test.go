@@ -301,6 +301,62 @@ func TestWriteBatchResyncDuplicateIDKeepsFirstReplacementMachine(t *testing.T) {
 		"a later rebuild batch must retain the first replacement write's machine")
 }
 
+func TestWriteBatchExistingEmptyMachineRemainsEmpty(t *testing.T) {
+	const sessionID = "legacy-empty-machine"
+	database := openTestDB(t)
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: sessionID, Project: "legacy", Machine: "",
+		Agent: string(parser.AgentCopilot),
+	}))
+	engine := NewEngine(database, EngineConfig{Machine: "local-machine"})
+	t.Cleanup(engine.Close)
+	startedAt := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+
+	outcome := engine.writeBatchWithOutcome([]pendingWrite{{
+		sess: parser.ParsedSession{
+			ID: sessionID, Project: "refreshed", Machine: "archivebox",
+			Agent: parser.AgentCopilot, StartedAt: startedAt, EndedAt: startedAt,
+			File: parser.FileInfo{Path: "/sources/session.jsonl"},
+		},
+	}}, syncWriteDefault, true)
+
+	require.Equal(t, 1, outcome.writtenSessions)
+	stored, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Empty(t, stored.Machine,
+		"refreshing a legacy row must retain its stored empty attribution")
+}
+
+func TestWriteBatchResyncReplacementEmptyMachineRemainsEmpty(t *testing.T) {
+	const sessionID = "replacement-empty-machine"
+	original := openTestDB(t)
+	replacement := openTestDB(t)
+	require.NoError(t, replacement.UpsertSession(db.Session{
+		ID: sessionID, Project: "legacy", Machine: "",
+		Agent: string(parser.AgentCopilot),
+	}))
+	engine := NewEngine(replacement, EngineConfig{Machine: "local-machine"})
+	engine.archiveStore = original
+	t.Cleanup(engine.Close)
+	startedAt := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+
+	outcome := engine.writeBatchWithOutcome([]pendingWrite{{
+		sess: parser.ParsedSession{
+			ID: sessionID, Project: "refreshed", Machine: "archivebox",
+			Agent: parser.AgentCopilot, StartedAt: startedAt, EndedAt: startedAt,
+			File: parser.FileInfo{Path: "/sources/session.jsonl"},
+		},
+	}}, syncWriteDefault, true)
+
+	require.Equal(t, 1, outcome.writtenSessions)
+	stored, err := replacement.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Empty(t, stored.Machine,
+		"a rebuild must retain an empty attribution already in the replacement")
+}
+
 func TestClaudeIDFreshnessRejectsSourceMissingTombstone(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
