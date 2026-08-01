@@ -81,6 +81,63 @@ func TestProjectIdentityPublicationRevisionTracksSnapshotChanges(t *testing.T) {
 	assert.Greater(t, afterDelete, afterInsert)
 }
 
+func TestCopySessionMetadataPreservesRecordedMachineAttribution(
+	t *testing.T,
+) {
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.db")
+	source := testDBAtPath(t, sourcePath, "source")
+	require.NoError(t, source.UpsertSession(Session{
+		ID: "resynced-session", Project: "app",
+		Machine: "oldbox", Agent: "claude",
+	}))
+	require.NoError(t, source.UpsertProjectIdentityObservation(
+		t.Context(), export.ProjectIdentityObservation{
+			SessionID: "resynced-session", Project: "app", Machine: "oldbox",
+			RootPath: "/workspace/app", ObservedAt: time.Now().UTC(),
+		},
+	))
+	require.NoError(t, source.Close())
+
+	destinationPath := filepath.Join(dir, "destination.db")
+	destination := testDBAtPath(t, destinationPath, "destination")
+	t.Cleanup(func() { _ = destination.Close() })
+	require.NoError(t, destination.UpsertSession(Session{
+		ID: "resynced-session", Project: "app",
+		Machine: "newbox", Agent: "claude",
+	}))
+	require.NoError(t, destination.UpsertProjectIdentityObservation(
+		t.Context(), export.ProjectIdentityObservation{
+			SessionID: "resynced-session", Project: "app", Machine: "newbox",
+			RootPath: "/workspace/app", ObservedAt: time.Now().UTC(),
+		},
+	))
+
+	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
+
+	session, err := destination.GetSessionFull(
+		t.Context(), "resynced-session",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "newbox", session.Machine)
+	snapshots, err := destination.ListSessionProjectIdentitySnapshots(
+		t.Context(),
+	)
+	require.NoError(t, err)
+	require.Len(t, snapshots, 1)
+	assert.Equal(t, "oldbox", snapshots[0].Machine)
+	observations, err := destination.ListProjectIdentityObservations(
+		t.Context(), []string{"app"},
+	)
+	require.NoError(t, err)
+	require.Len(t, observations, 2)
+	assert.ElementsMatch(t, []string{"newbox", "oldbox"}, []string{
+		observations[0].Machine,
+		observations[1].Machine,
+	})
+}
+
 func TestSessionProjectIdentitySnapshotPreservesFirstRootKeyUntilRemoteEvidence(
 	t *testing.T,
 ) {

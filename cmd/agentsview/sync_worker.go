@@ -360,6 +360,7 @@ func openWorkerWriteDB(cfg config.Config) (*db.DB, *writeOwnerLock, error) {
 func workerEngineConfig(cfg config.Config) sync.EngineConfig {
 	return sync.EngineConfig{
 		AgentDirs:               cfg.AgentDirs,
+		SourceMachines:          cfg.SourceMachines,
 		IncludeCwdPrefixes:      cfg.SyncIncludeCwdPrefixes,
 		Machine:                 cfg.LocalMachineName,
 		BlockedResultCategories: cfg.ResultContentBlockedCategories,

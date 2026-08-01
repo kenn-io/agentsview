@@ -99,6 +99,28 @@ func TestSyncWorkerStartupModeSyncsAndEmitsTerminalResult(t *testing.T) {
 		"public SyncStats fields must survive the NDJSON protocol")
 }
 
+func TestSyncWorkerStartupUsesConfiguredSourceMachine(t *testing.T) {
+	cfg := testConfigWithClaudeFixture(t)
+	claudeRoot := cfg.AgentDirs[parser.AgentClaude][0]
+	cfg.SourceMachines = map[parser.AgentType]map[string]string{
+		parser.AgentClaude: {claudeRoot: "archivebox"},
+	}
+
+	var out bytes.Buffer
+	require.NoError(t, runSyncWorker(cfg, "startup", &out))
+	assert.Equal(t, "ok", decodeSingleResult(t, &out).Status)
+
+	database, err := db.OpenReadOnly(cfg.DBPath)
+	require.NoError(t, err)
+	defer database.Close()
+	page, err := database.ListSessions(context.Background(), db.SessionFilter{})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 3)
+	for _, sess := range page.Sessions {
+		assert.Equal(t, "archivebox", sess.Machine)
+	}
+}
+
 func TestSyncWorkerReportsAbortAsFailure(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())

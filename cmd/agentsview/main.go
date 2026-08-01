@@ -296,6 +296,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 		var onStartupReconciled func(sync.SyncStats, error)
 		engine = sync.NewEngine(database, sync.EngineConfig{
 			AgentDirs:               cfg.AgentDirs,
+			SourceMachines:          cfg.SourceMachines,
 			IncludeCwdPrefixes:      cfg.SyncIncludeCwdPrefixes,
 			Machine:                 cfg.LocalMachineName,
 			BlockedResultCategories: cfg.ResultContentBlockedCategories,

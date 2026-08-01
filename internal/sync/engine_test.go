@@ -2780,7 +2780,11 @@ func TestReconciliationSourceBaselineUsesStoredPathRewrite(t *testing.T) {
 	require.NoError(t, engine.baselineReconciliationCandidates(
 		t.Context(), []reconciliationCandidate{{
 			Provider: parser.AgentClaude, Identity: "session", Path: localPath,
-		}}, []db.SessionSourcePath{{Agent: "claude", FilePath: storedPath}},
+			Machine: "host",
+		}}, []machineSessionSource{{
+			Machine: "host",
+			Source:  db.SessionSourcePath{Agent: "claude", FilePath: storedPath},
+		}},
 	))
 	changed, err := database.SoftDeleteSessionSourceOwnership(
 		t.Context(), "host", "claude", "session", storedPath,
@@ -6141,8 +6145,9 @@ func TestProcessFileSkipCacheReparsesStaleCodexProject(t *testing.T) {
 	}
 
 	res := e.processFile(context.Background(), parser.DiscoveredFile{
-		Agent: parser.AgentCodex,
-		Path:  path,
+		Agent:   parser.AgentCodex,
+		Path:    path,
+		Machine: "host",
 	})
 	require.NoError(t, res.err)
 	require.False(t, res.skip,
@@ -6485,8 +6490,9 @@ func TestProcessFileCodexDBFreshSkipIsNotCached(t *testing.T) {
 	}
 
 	res := e.processFile(context.Background(), parser.DiscoveredFile{
-		Agent: parser.AgentCodex,
-		Path:  path,
+		Agent:   parser.AgentCodex,
+		Path:    path,
+		Machine: "host",
 	})
 	require.NoError(t, res.err)
 	require.True(t, res.skip)

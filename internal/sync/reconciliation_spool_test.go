@@ -23,12 +23,13 @@ func TestReconciliationSpoolSelectsPreferredCandidateInSQL(t *testing.T) {
 	ctx := t.Context()
 	require.NoError(t, spool.Add(ctx, reconciliationCandidate{
 		Provider: parser.AgentClaude, Identity: "same", Path: "/sessions/old.jsonl",
-		StoredPath:  "remote:/sessions/old.jsonl",
+		StoredPath: "remote:/sessions/old.jsonl", Machine: "old-machine",
 		Preference1: 100, Preference2: 1,
 	}))
 	require.NoError(t, spool.Add(ctx, reconciliationCandidate{
 		Provider: parser.AgentClaude, Identity: "same", Path: "/sessions/new.jsonl",
 		StoredPath: "remote:/sessions/new.jsonl", MemberIdentity: "stable",
+		Machine:     "new-machine",
 		Preference1: 200, Preference2: 2,
 	}))
 	require.NoError(t, spool.Add(ctx, reconciliationCandidate{
@@ -45,6 +46,7 @@ func TestReconciliationSpoolSelectsPreferredCandidateInSQL(t *testing.T) {
 	require.Len(t, page, 2)
 	assert.Equal(t, "/sessions/new.jsonl", page[0].Path)
 	assert.Equal(t, "remote:/sessions/new.jsonl", page[0].StoredPath)
+	assert.Equal(t, "new-machine", page[0].Machine)
 	assert.Equal(t, "/sessions/2026/07/14/rollout-uuid.jsonl", page[1].Path)
 	present, err := spool.ContainsSource(
 		ctx, parser.AgentClaude, "remote:/sessions/new.jsonl",
