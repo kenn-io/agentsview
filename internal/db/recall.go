@@ -739,6 +739,33 @@ func (db *DB) ListRecallEntries(
 	return entries, nil
 }
 
+// ListServedRecallSourceRuns returns the extraction/import source runs that
+// currently contribute entries to the accepted Recall corpus.
+func (db *DB) ListServedRecallSourceRuns(ctx context.Context) ([]string, error) {
+	rows, err := db.getReader().QueryContext(ctx, `
+		SELECT DISTINCT source_run_id
+		FROM recall_entries
+		WHERE status = ? AND source_run_id != ''
+		ORDER BY source_run_id`, corerecall.StatusAccepted)
+	if err != nil {
+		return nil, fmt.Errorf("listing served recall source runs: %w", err)
+	}
+	defer rows.Close()
+
+	var sourceRuns []string
+	for rows.Next() {
+		var sourceRun string
+		if err := rows.Scan(&sourceRun); err != nil {
+			return nil, fmt.Errorf("scanning served recall source run: %w", err)
+		}
+		sourceRuns = append(sourceRuns, sourceRun)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating served recall source runs: %w", err)
+	}
+	return sourceRuns, nil
+}
+
 func (db *DB) ListRecallEntryTextCandidates(
 	ctx context.Context, q RecallQuery,
 ) ([]RecallEntry, error) {

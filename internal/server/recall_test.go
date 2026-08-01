@@ -503,6 +503,43 @@ func TestRecallExtractionStatusReportsUnconfigured(t *testing.T) {
 	assert.False(t, status.Configured)
 }
 
+func TestRecallExtractionStatusReportsServedSourceRunsWithoutManager(
+	t *testing.T,
+) {
+	te := setup(t)
+	seedRecallEntrySession(t, te)
+	for _, entry := range []db.RecallEntry{
+		{
+			ID: "accepted-retired", Title: "Accepted retired entry",
+			Body:            "Still served after review.",
+			SourceSessionID: "recall-session", SourceRunID: "retired-run",
+		},
+		{
+			ID: "accepted-reconcile", Title: "Reconciled entry",
+			Body:            "Served without an extraction manager.",
+			SourceSessionID: "other-session", SourceRunID: "reconcile-only",
+		},
+		{
+			ID: "archived-building", Title: "Building entry",
+			Body: "Not part of the served corpus.", Status: "archived",
+			SourceSessionID: "recall-session", SourceRunID: "building-run",
+		},
+	} {
+		seedRecallEntry(t, te, entry)
+	}
+
+	w := te.get(t, "/api/v1/recall/extraction/status")
+	assertStatus(t, w, http.StatusOK)
+
+	status := decode[struct {
+		Configured bool     `json:"configured"`
+		SourceRuns []string `json:"source_runs"`
+	}](t, w)
+	assert.False(t, status.Configured)
+	assert.Equal(t, []string{"reconcile-only", "retired-run"},
+		status.SourceRuns)
+}
+
 func TestRecallExtractionStatusReportsManagerCoverage(t *testing.T) {
 	provider := recallExtractionStatusProvider{
 		status: recallextract.Status{

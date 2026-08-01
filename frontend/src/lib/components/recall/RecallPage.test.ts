@@ -25,6 +25,11 @@ describe("RecallPage", () => {
         return new Response(JSON.stringify({
           configured: true,
           fingerprint: "generation-active",
+          source_runs: [
+            "generation-active",
+            "generation-retired",
+            "reconcile-only",
+          ],
           generations: [{
             fingerprint: "generation-active",
             state: "active",
@@ -316,7 +321,7 @@ describe("RecallPage", () => {
     );
   });
 
-  it("offers only the active extraction generation as a served filter", async () => {
+  it("offers every source run represented in the served corpus", async () => {
     component = mount(RecallPage, { target: document.body });
 
     await vi.waitFor(() => {
@@ -331,6 +336,7 @@ describe("RecallPage", () => {
 
     expect(document.body.textContent).toContain("generation-active");
     expect(document.body.textContent).not.toContain("generation-building");
-    expect(document.body.textContent).not.toContain("generation-retired");
+    expect(document.body.textContent).toContain("generation-retired");
+    expect(document.body.textContent).toContain("reconcile-only");
   });
 });

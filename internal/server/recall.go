@@ -49,6 +49,10 @@ type recallQueryRevisionProvider interface {
 	RecallQueryRevision(context.Context) (string, error)
 }
 
+type servedRecallSourceRunLister interface {
+	ListServedRecallSourceRuns(context.Context) ([]string, error)
+}
+
 func (s *Server) handleListRecallEntries(
 	w http.ResponseWriter, r *http.Request,
 ) {
@@ -328,9 +332,22 @@ func decodeRecallListCursor(raw string) (recallListCursor, error) {
 func (s *Server) handleRecallExtractionStatus(
 	w http.ResponseWriter, r *http.Request,
 ) {
+	var sourceRuns []string
+	if lister, ok := s.db.(servedRecallSourceRunLister); ok {
+		var err error
+		sourceRuns, err = lister.ListServedRecallSourceRuns(r.Context())
+		if err != nil {
+			if handleContextError(w, err) {
+				return
+			}
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
 	if s.recallExtractionStatus == nil {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"configured": false,
+			"configured":  false,
+			"source_runs": sourceRuns,
 		})
 		return
 	}
@@ -359,6 +376,7 @@ func (s *Server) handleRecallExtractionStatus(
 		Configured:      true,
 		Fingerprint:     status.Fingerprint,
 		Generations:     generations,
+		SourceRuns:      sourceRuns,
 		Stats:           status.Stats,
 		EligibleBacklog: status.EligibleBacklog,
 	})
@@ -377,6 +395,7 @@ type recallExtractionStatusResponse struct {
 	Configured      bool                            `json:"configured"`
 	Fingerprint     string                          `json:"fingerprint,omitempty"`
 	Generations     []recallExtractGenerationStatus `json:"generations,omitempty"`
+	SourceRuns      []string                        `json:"source_runs,omitempty"`
 	Stats           db.ExtractProgressStats         `json:"stats"`
 	EligibleBacklog int                             `json:"eligible_backlog"`
 }

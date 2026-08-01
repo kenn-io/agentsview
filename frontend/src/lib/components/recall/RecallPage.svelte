@@ -94,12 +94,11 @@
       label: m.recall_page_all_generations(),
       displayLabel: m.recall_page_all_generations(),
     },
-    ...(status?.generations ?? [])
-      .filter((item) => item.state === "active")
-      .map((item) => ({
-        name: item.fingerprint,
-        label: `${item.fingerprint} (${item.state})`,
-        displayLabel: item.fingerprint,
+    ...(status?.source_runs ?? [])
+      .map((sourceRun) => ({
+        name: sourceRun,
+        label: sourceRun,
+        displayLabel: sourceRun,
       })),
   ]);
   const reviewOptions = $derived.by((): TypeaheadOption[] => [

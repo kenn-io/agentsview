@@ -69,6 +69,7 @@ export interface RecallExtractionStatus {
   configured: boolean;
   fingerprint?: string;
   generations?: RecallExtractGeneration[];
+  source_runs?: string[];
   stats?: RecallExtractProgressStats;
   eligible_backlog?: number;
 }
