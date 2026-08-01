@@ -92,6 +92,40 @@ func TestOpenFolderTransportRecoversInterruptedMarkerTemporary(t *testing.T) {
 	assert.Contains(t, string(marker), folderFormatName)
 }
 
+func TestOpenFolderTransportRecoversPartialFinalWithCompleteTemporary(t *testing.T) {
+	t.Parallel()
+
+	target := t.TempDir()
+	temporary := filepath.Join(
+		target,
+		folderMarkerTempPrefix+"0123456789abcdef",
+	)
+	body, err := json.Marshal(folderMarker{
+		Format:      folderFormatName,
+		NamespaceID: "0123456789abcdef0123456789abcdef",
+		Version:     folderFormatVersion,
+	})
+	require.NoError(t, err)
+	body = append(body, '\n')
+	require.NoError(t, os.WriteFile(temporary, body, 0o600))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(target, folderMarkerName),
+		[]byte(`{"format":`),
+		0o600,
+	))
+
+	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+
+	assert.NoFileExists(t, temporary)
+	root, err := os.OpenRoot(target)
+	require.NoError(t, err)
+	_, err = readFolderMarker(root)
+	require.NoError(t, err)
+	require.NoError(t, root.Close())
+}
+
 func TestOpenFolderTransportRejectsMarkerTempLookalike(t *testing.T) {
 	t.Parallel()
 
@@ -1123,6 +1157,73 @@ func TestFolderTransportDirectorySyncFailureStopsPublicationAuthority(
 			assert.Equal(t, int64(1), head.Sequence)
 		})
 	}
+}
+
+func TestFolderTransportRetrySyncsVisibleObjectBeforeJournal(t *testing.T) {
+	target := t.TempDir()
+	opened, err := OpenFolderTransport(target, FolderTransportOptions{})
+	require.NoError(t, err)
+	transport := opened.(*folderTransport)
+	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+
+	body := []byte("visible-but-not-yet-durable")
+	ref := testContentRef(
+		t,
+		testFolderPublishOrigin,
+		KindSegments,
+		body,
+		".ndjson",
+	)
+	wire, err := ToWireRef(ref)
+	require.NoError(t, err)
+	store := newTestArtifactStore(t)
+	createTestStoreArtifact(t, store, ref, body)
+	objectSyncInterrupted := errors.New("object directory sync interrupted")
+	failedObjectSync := false
+	transport.syncDirectory = func(root *os.Root) error {
+		if !failedObjectSync {
+			if _, statErr := root.Lstat(wire.Name); statErr == nil {
+				failedObjectSync = true
+				return objectSyncInterrupted
+			}
+		}
+		return syncFolderDirectory(root)
+	}
+
+	_, err = transport.Exchange(t.Context(), store, testFolderPublishOrigin)
+	require.ErrorIs(t, err, objectSyncInterrupted)
+	assert.True(t, failedObjectSync)
+	assertFolderWireBody(t, target, ref, body)
+	assert.NoFileExists(t, filepath.Join(
+		target,
+		folderJournalDirectory,
+		folderJournalHeadName,
+	))
+
+	retrySyncInterrupted := errors.New("retry object sync interrupted")
+	transport.syncDirectory = func(root *os.Root) error {
+		if _, statErr := root.Lstat(wire.Name); statErr == nil {
+			return retrySyncInterrupted
+		}
+		return syncFolderDirectory(root)
+	}
+	_, err = transport.Exchange(t.Context(), store, testFolderPublishOrigin)
+	require.ErrorIs(t, err, retrySyncInterrupted)
+	assert.NoFileExists(t, filepath.Join(
+		target,
+		folderJournalDirectory,
+		folderJournalHeadName,
+	))
+
+	transport.syncDirectory = nil
+	_, err = transport.Exchange(t.Context(), store, testFolderPublishOrigin)
+	require.NoError(t, err)
+	journal, err := os.OpenRoot(filepath.Join(target, folderJournalDirectory))
+	require.NoError(t, err)
+	head, err := readFolderJournalHead(journal)
+	require.NoError(t, err)
+	require.NoError(t, journal.Close())
+	assert.Equal(t, int64(1), head.Sequence)
 }
 
 func TestFolderTransportDirectorySyncFailureStopsSubdirectoryUse(t *testing.T) {

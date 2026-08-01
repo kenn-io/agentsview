@@ -215,26 +215,35 @@ func (t *folderTransport) prepareMarker() error {
 		return err
 	}
 	if found {
-		marker, err := readFolderMarker(t.root)
-		if err == nil {
+		marker, markerErr := readFolderMarker(t.root)
+		if markerErr == nil {
 			t.namespaceID = marker.NamespaceID
+			return nil
 		}
-		return err
+		recovered, recoveryErr := recoverFolderMarkerTemporaries(t.root, true)
+		if recoveryErr != nil {
+			return errors.Join(markerErr, recoveryErr)
+		}
+		if !recovered {
+			return markerErr
+		}
 	}
-	empty, err := folderRootEmpty(t.root)
-	if err != nil {
-		return err
-	}
-	if !empty {
-		recovered, err := recoverFolderMarkerTemporaries(t.root)
+	if !found {
+		empty, err := folderRootEmpty(t.root)
 		if err != nil {
 			return err
 		}
-		if !recovered {
-			return fmt.Errorf(
-				"%w: target is not an agentsview artifact target",
-				ErrArtifactInvalid,
-			)
+		if !empty {
+			recovered, err := recoverFolderMarkerTemporaries(t.root, false)
+			if err != nil {
+				return err
+			}
+			if !recovered {
+				return fmt.Errorf(
+					"%w: target is not an agentsview artifact target",
+					ErrArtifactInvalid,
+				)
+			}
 		}
 	}
 	if err := createFolderMarker(t.root); err != nil {
@@ -413,7 +422,10 @@ func folderRootEmpty(root *os.Root) (bool, error) {
 	return len(entries) == 0, nil
 }
 
-func recoverFolderMarkerTemporaries(root *os.Root) (_ bool, retErr error) {
+func recoverFolderMarkerTemporaries(
+	root *os.Root,
+	invalidFinal bool,
+) (_ bool, retErr error) {
 	directory, err := root.Open(".")
 	if err != nil {
 		return false, fmt.Errorf("opening artifact target directory: %w", err)
@@ -421,6 +433,8 @@ func recoverFolderMarkerTemporaries(root *os.Root) (_ bool, retErr error) {
 	defer func() { retErr = errors.Join(retErr, directory.Close()) }()
 
 	names := make([]string, 0, 1)
+	foundFinal := false
+	foundValidTemporary := false
 	for {
 		entries, err := directory.ReadDir(1)
 		if errors.Is(err, io.EOF) {
@@ -430,6 +444,17 @@ func recoverFolderMarkerTemporaries(root *os.Root) (_ bool, retErr error) {
 			return false, fmt.Errorf("reading artifact target directory: %w", err)
 		}
 		name := entries[0].Name()
+		if invalidFinal && name == folderMarkerName {
+			info, err := root.Lstat(name)
+			if err != nil {
+				return false, fmt.Errorf("stating invalid marker: %w", err)
+			}
+			if !info.Mode().IsRegular() {
+				return false, nil
+			}
+			foundFinal = true
+			continue
+		}
 		if !isFolderMarkerTemporaryName(name) ||
 			len(names) >= folderMarkerMaxTemps {
 			return false, nil
@@ -441,10 +466,23 @@ func recoverFolderMarkerTemporaries(root *os.Root) (_ bool, retErr error) {
 		if !info.Mode().IsRegular() {
 			return false, nil
 		}
+		if invalidFinal {
+			if _, err := readFolderMarkerNamed(root, name); err == nil {
+				foundValidTemporary = true
+			}
+		}
 		names = append(names, name)
 	}
-	if len(names) == 0 {
+	if invalidFinal && (!foundFinal || !foundValidTemporary) {
+		return false, nil
+	}
+	if !invalidFinal && len(names) == 0 {
 		return true, nil
+	}
+	if invalidFinal {
+		if err := removeFolderFile(root, folderMarkerName); err != nil {
+			return false, fmt.Errorf("removing invalid marker: %w", err)
+		}
 	}
 	for _, name := range names {
 		if err := removeFolderFile(root, name); err != nil {
@@ -477,7 +515,11 @@ func validateFolderMarker(root *os.Root) error {
 }
 
 func readFolderMarker(root *os.Root) (folderMarker, error) {
-	file, _, err := openFolderRegularFile(root, folderMarkerName)
+	return readFolderMarkerNamed(root, folderMarkerName)
+}
+
+func readFolderMarkerNamed(root *os.Root, name string) (folderMarker, error) {
+	file, _, err := openFolderRegularFile(root, name)
 	if err != nil {
 		return folderMarker{}, fmt.Errorf("invalid agentsview artifact target marker: %w", err)
 	}

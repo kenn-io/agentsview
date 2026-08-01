@@ -422,6 +422,9 @@ func (t *folderTransport) publishFolderEntryLocked(
 	}
 	if found {
 		if matches {
+			if err := t.syncFolderDirectoryLocked(kindRoot); err != nil {
+				return false, err
+			}
 			return false, nil
 		}
 		return false, fmt.Errorf(
