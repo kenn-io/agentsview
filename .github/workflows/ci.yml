@@ -354,8 +354,32 @@ jobs:
         env:
           CGO_ENABLED: "1"
 
+      - name: Resolve Playwright version
+        id: playwright-version
+        run: |
+          version=$(node -p "require('./package-lock.json').packages['node_modules/@playwright/test'].version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+        working-directory: frontend
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-browsers-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+
       - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps chromium webkit
+        working-directory: frontend
+
+      # Cache hit: browser binaries are already present, but the runner
+      # image itself isn't guaranteed to have the OS packages Playwright
+      # needs (e.g. after a fresh self-hosted runner or an ubuntu-latest
+      # image bump), so make sure those are still installed.
+      - name: Install Playwright system dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium webkit
         working-directory: frontend
 
       - name: Run E2E tests
