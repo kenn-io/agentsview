@@ -72,6 +72,82 @@ func TestParseGeminiAppsExportRealOuterCellHeaderShape(t *testing.T) {
 	assert.Equal(t, firstID, repeated[0].Session.ID)
 }
 
+func TestParseGeminiAppsRejectsNotPromptedActivityLabel(t *testing.T) {
+	fixture := strings.ReplaceAll(
+		sanitizedGeminiAppsHTML,
+		"<p>Prompted<br></p>",
+		"<p>Not Prompted</p>",
+	)
+	path := filepath.Join(t.TempDir(), "not-prompted.html")
+	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
+
+	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
+	require.True(t, ok)
+	exporter := provider.(GeminiAppsExportParser)
+	var results []ParseResult
+	summary, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
+		results = append(results, result)
+		return nil
+	})
+	assert.Empty(t, results)
+	assert.Equal(t, 5, summary.Skipped)
+	assert.ErrorContains(t, err, "no admissible Prompted records")
+}
+
+func TestParseGeminiAppsPreservesOrdinaryResponseAndAnswerText(t *testing.T) {
+	fixture := strings.Replace(
+		sanitizedGeminiAppsHTML,
+		`<div class="content-cell mdl-cell"><p>first prompt<br></p><p><strong>first</strong> answer &amp; detail</p><script>secret script</script><style>secret style</style><template>secret template</template><noscript>secret noscript</noscript></div>`,
+		`<div class="content-cell mdl-cell"><p>ordinary Response: and Answer: text</p></div>`,
+		1,
+	)
+	path := filepath.Join(t.TempDir(), "ordinary-markers.html")
+	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
+
+	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
+	require.True(t, ok)
+	exporter := provider.(GeminiAppsExportParser)
+	var results []ParseResult
+	_, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
+		results = append(results, result)
+		return nil
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	require.Len(t, results[0].Messages, 1)
+	assert.Equal(t, "ordinary Response: and Answer: text", results[0].Messages[0].Content)
+}
+
+func TestParseGeminiAppsTimestampMustBeInHeader(t *testing.T) {
+	fixture := strings.Replace(
+		sanitizedGeminiAppsHTML,
+		"<p>Jan 2, 2025, 3:04:05 PM EDT</p>",
+		"<p>header timestamp missing</p>",
+		1,
+	)
+	fixture = strings.Replace(
+		fixture,
+		"<p>first prompt<br></p>",
+		"<p>Jan 2, 2025, 3:04:05 PM EDT</p><p>first prompt</p>",
+		1,
+	)
+	path := filepath.Join(t.TempDir(), "content-date.html")
+	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
+
+	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
+	require.True(t, ok)
+	exporter := provider.(GeminiAppsExportParser)
+	var results []ParseResult
+	summary, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
+		results = append(results, result)
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Equal(t, 1, summary.Errors)
+	assert.Equal(t, "second prompt", results[0].Messages[0].Content)
+}
+
 func TestParseGeminiAppsExportAdmitsDirectoryAndRejectsOtherHTML(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(

@@ -57,7 +57,11 @@ func runImport(cfg ImportConfig) {
 	}
 
 	if err != nil {
-		fmt.Fprintln(os.Stderr)
+		if summary := formatImportFailureSummary(stats); summary != "" {
+			fmt.Fprint(os.Stderr, summary)
+		} else {
+			fmt.Fprintln(os.Stderr)
+		}
 		log.Fatalf("Import failed: %v", err)
 	}
 
@@ -168,8 +172,13 @@ func runGeminiAppsImport(
 }
 
 func printImportSummary(stats importer.ImportStats) {
+	fmt.Fprint(os.Stderr, formatImportSummary(stats))
+}
+
+func formatImportSummary(stats importer.ImportStats) string {
+	var summary strings.Builder
 	total := stats.Imported + stats.Updated + stats.Skipped
-	fmt.Fprintf(os.Stderr, "\rDone: %d processed", total)
+	fmt.Fprintf(&summary, "\rDone: %d processed", total)
 	var parts []string
 	if stats.Imported > 0 {
 		parts = append(
@@ -187,14 +196,20 @@ func printImportSummary(stats importer.ImportStats) {
 		)
 	}
 	if len(parts) > 0 {
-		fmt.Fprintf(
-			os.Stderr, " (%s)", strings.Join(parts, ", "),
-		)
+		fmt.Fprintf(&summary, " (%s)", strings.Join(parts, ", "))
 	}
-	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(&summary)
 	if stats.Errors > 0 {
-		fmt.Fprintf(os.Stderr, "  %d errors\n", stats.Errors)
+		fmt.Fprintf(&summary, "  %d errors\n", stats.Errors)
 	}
+	return summary.String()
+}
+
+func formatImportFailureSummary(stats importer.ImportStats) string {
+	if stats.Imported+stats.Updated+stats.Skipped+stats.Errors == 0 {
+		return ""
+	}
+	return formatImportSummary(stats)
 }
 
 // resolveImportSource handles zip extraction. If the path is

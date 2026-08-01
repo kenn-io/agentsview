@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/importer"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
@@ -63,6 +64,20 @@ func TestGeminiAppsImportDispatchesDirectAndZipSources(t *testing.T) {
 		filepath.Join(t.TempDir(), "missing.html"), t.TempDir(), "test-machine",
 	)
 	assert.ErrorContains(t, err, "stat import source")
+
+	nonPrompt := filepath.Join(t.TempDir(), "non-prompt.html")
+	require.NoError(t, os.WriteFile(
+		nonPrompt,
+		[]byte(strings.Replace(geminiAppsCLIHTML, "<p>Prompted</p>", "<p>Canvas</p>", 1)),
+		0o644,
+	))
+	stats, err = runImportDispatch(
+		context.Background(), database, "gemini-apps", nonPrompt, t.TempDir(), "test-machine",
+	)
+	assert.ErrorContains(t, err, "no admissible Prompted records")
+	assert.Equal(t, 1, stats.Skipped)
+	assert.Equal(t, "\rDone: 1 processed (1 skipped)\n", formatImportFailureSummary(stats))
+	assert.Empty(t, formatImportFailureSummary(importer.ImportStats{}))
 }
 
 // isolateParseDiffEnv points the data dir, HOME, and every per-agent

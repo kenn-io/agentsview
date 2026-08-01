@@ -325,27 +325,33 @@ func isGeminiAppsHeading(tag string) bool {
 
 func geminiAppsRecordKind(tokens []html.Token) string {
 	zones := geminiAppsZones(tokens)
-	var label string
 	for _, zone := range zones {
-		if zone.name == "header" {
-			label = strings.ToLower(renderGeminiAppsTokens(zone.tokens))
-			break
+		if zone.name != "header" {
+			continue
 		}
-	}
-	if label == "" {
-		label = strings.ToLower(renderGeminiAppsTokens(tokens))
-	}
-	label = strings.Join(strings.Fields(label), " ")
-	for _, candidate := range []struct{ label, kind string }{
-		{"prompted", "prompted"},
-		{"canvas", "canvas"},
-		{"feedback", "feedback"},
-	} {
-		if containsWord(label, candidate.label) {
-			return candidate.kind
+		for _, field := range geminiAppsTextFields(renderGeminiAppsTokens(zone.tokens)) {
+			switch field {
+			case "prompted":
+				return "prompted"
+			case "canvas":
+				return "canvas"
+			case "feedback":
+				return "feedback"
+			}
 		}
 	}
 	return "unknown"
+}
+
+func geminiAppsTextFields(value string) []string {
+	var fields []string
+	for _, line := range strings.Split(value, "\n") {
+		field := strings.ToLower(strings.Join(strings.Fields(line), " "))
+		if field != "" {
+			fields = append(fields, field)
+		}
+	}
+	return fields
 }
 
 func containsWord(text, word string) bool {
@@ -425,23 +431,26 @@ func hasHTMLClass(token html.Token, wanted string) bool {
 }
 
 func parseGeminiAppsCell(tokens []html.Token) (ParseResult, error) {
-	text := renderGeminiAppsTokens(tokens)
-	match := geminiAppsTimestampRE.FindStringSubmatch(text)
+	zones := geminiAppsZones(tokens)
+	var headerText string
+	var contentZones [][]html.Token
+	for _, zone := range zones {
+		switch zone.name {
+		case "header":
+			headerText = renderGeminiAppsTokens(zone.tokens)
+		case "content":
+			contentZones = append(contentZones, zone.tokens)
+		}
+	}
+	match := geminiAppsTimestampRE.FindStringSubmatch(headerText)
 	if len(match) != 2 {
-		return ParseResult{}, fmt.Errorf("activity record has no supported timestamp")
+		return ParseResult{}, fmt.Errorf("activity record has no supported header timestamp")
 	}
 	ts, err := parseGeminiAppsTimestamp(match[0], match[1])
 	if err != nil {
 		return ParseResult{}, err
 	}
 
-	zones := geminiAppsZones(tokens)
-	var contentZones [][]html.Token
-	for _, zone := range zones {
-		if zone.name == "content" {
-			contentZones = append(contentZones, zone.tokens)
-		}
-	}
 	if len(contentZones) == 0 {
 		return ParseResult{}, fmt.Errorf(
 			"Prompted activity record has no content cell",
@@ -505,25 +514,11 @@ func geminiAppsPromptAndResponse(zones [][]html.Token) (string, string) {
 	}
 
 	value := rendered[0]
-	for _, marker := range []string{"Response:", "Answer:"} {
-		if before, after, ok := cutFold(value, marker); ok {
-			return strings.TrimSpace(strings.TrimSuffix(before, "Prompt:")), strings.TrimSpace(after)
-		}
-	}
 	blocks := splitGeminiAppsBlocks(zones[0])
 	if len(blocks) > 1 {
 		return blocks[0], strings.TrimSpace(strings.Join(blocks[1:], "\n\n"))
 	}
 	return value, ""
-}
-
-func cutFold(value, marker string) (string, string, bool) {
-	lower := strings.ToLower(value)
-	index := strings.Index(lower, strings.ToLower(marker))
-	if index < 0 {
-		return "", "", false
-	}
-	return value[:index], value[index+len(marker):], true
 }
 
 func splitGeminiAppsBlocks(tokens []html.Token) []string {
