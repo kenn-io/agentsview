@@ -34,9 +34,11 @@ to your local database alongside your agent coding sessions.
 AgentsView imports `Prompted` activity records. Canvas, feedback, and unknown
 activity kinds are reported as skipped. Each prompt becomes a one-turn session;
 the importer resolves the timestamp's explicit exported zone instead of using
-the host timezone. The current parser supports the observed English Takeout
-rendering. Declared non-English or otherwise unsupported localized formats are
-reported as unsupported before any sessions are emitted.
+the host timezone. Mixed Takeout archives may contain other product activity;
+those explicitly identified cells are ignored. The current parser supports the
+observed English rendering for Gemini Apps cells. Declared non-English or
+otherwise unsupported localized Gemini candidates are reported as unsupported
+before any sessions are emitted.
 
 ## Importing via the UI
 

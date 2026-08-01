@@ -54,6 +54,14 @@ type geminiAppsDocumentInfo struct {
 	hasOuterCell bool
 }
 
+type geminiAppsProductKind uint8
+
+const (
+	geminiAppsProductUnknown geminiAppsProductKind = iota
+	geminiAppsProductGemini
+	geminiAppsProductOther
+)
+
 // ParseGeminiAppsExport reads a Takeout directory or HTML file and streams
 // admitted Prompted records to onConversation.
 func (p *geminiAppsImportOnlyProvider) ParseGeminiAppsExport(
@@ -95,7 +103,7 @@ func (p *geminiAppsImportOnlyProvider) ParseGeminiAppsExport(
 			return summary, fmt.Errorf("reading Takeout HTML: %w", err)
 		}
 		scanErr := scanGeminiAppsHTML(file, func(tokens []html.Token) error {
-			if geminiAppsHeaderProductTitle(tokens) == "" {
+			if geminiAppsHeaderProductKind(tokens) != geminiAppsProductGemini {
 				return nil
 			}
 			kind := geminiAppsRecordKind(tokens)
@@ -159,15 +167,12 @@ func geminiAppsPreflightFile(path string) (bool, error) {
 		return false, fmt.Errorf("reading Takeout HTML: %w", err)
 	}
 	scanErr := scanGeminiAppsHTML(file, func(tokens []html.Token) error {
+		if geminiAppsHeaderProductKind(tokens) != geminiAppsProductGemini {
+			return nil
+		}
 		headerText, hasHeader, hasContent := geminiAppsHeaderAndContent(tokens)
 		if hasHeader && hasContent {
 			hasPlausibleCell = true
-		}
-		if geminiAppsHeaderProductTitle(tokens) == "" {
-			if hasHeader && hasContent {
-				hasUnsupportedVocabulary = true
-			}
-			return nil
 		}
 		timestampMatch := geminiAppsTimestampRE.FindStringSubmatch(headerText)
 		if timestampMatch == nil && geminiAppsTimestampLikeRE.MatchString(headerText) {
@@ -201,7 +206,7 @@ func geminiAppsPreflightFile(path string) (bool, error) {
 	}
 
 	titleAdmitted := geminiAppsTitleAdmitted(metadata.title)
-	candidate := titleAdmitted || hasPlausibleCell || hasSupportedCell
+	candidate := hasPlausibleCell || hasSupportedCell
 	if !candidate {
 		return false, nil
 	}
@@ -373,7 +378,7 @@ func isGeminiAppsVoidElement(tag string) bool {
 	}
 }
 
-func geminiAppsHeaderProductTitle(tokens []html.Token) string {
+func geminiAppsHeaderProductHeading(tokens []html.Token) string {
 	for _, zone := range geminiAppsZones(tokens) {
 		if zone.name != "header" {
 			continue
@@ -396,14 +401,9 @@ func geminiAppsHeaderProductTitle(tokens []html.Token) string {
 				if depth > 0 {
 					depth--
 					if depth == 0 {
-						value := strings.ToLower(strings.Join(
+						return strings.ToLower(strings.Join(
 							strings.Fields(heading.String()), " "),
 						)
-						if containsWord(value, "gemini") &&
-							containsWord(value, "apps") {
-							return value
-						}
-						heading.Reset()
 					}
 				}
 			case html.TextToken:
@@ -414,6 +414,17 @@ func geminiAppsHeaderProductTitle(tokens []html.Token) string {
 		}
 	}
 	return ""
+}
+
+func geminiAppsHeaderProductKind(tokens []html.Token) geminiAppsProductKind {
+	switch geminiAppsHeaderProductHeading(tokens) {
+	case "gemini apps":
+		return geminiAppsProductGemini
+	case "":
+		return geminiAppsProductUnknown
+	default:
+		return geminiAppsProductOther
+	}
 }
 
 func isGeminiAppsHeading(tag string) bool {
@@ -478,17 +489,6 @@ func geminiAppsTextFields(value string) []string {
 		}
 	}
 	return fields
-}
-
-func containsWord(text, word string) bool {
-	for _, field := range strings.FieldsFunc(text, func(r rune) bool {
-		return r < 'A' || (r > 'Z' && r < 'a') || r > 'z'
-	}) {
-		if strings.EqualFold(field, word) {
-			return true
-		}
-	}
-	return false
 }
 
 func geminiAppsZones(tokens []html.Token) []geminiAppsZone {
@@ -791,10 +791,18 @@ func geminiAppsZoneOffset(zone string) (int, bool) {
 	return 0, false
 }
 
+type geminiAppsRenderedPartKind uint8
+
+const (
+	geminiAppsOrdinaryPart geminiAppsRenderedPartKind = iota
+	geminiAppsPreservedPart
+	geminiAppsInlinePart
+	geminiAppsStructuralPart
+)
+
 type geminiAppsRenderedPart struct {
-	text     string
-	preserve bool
-	boundary bool
+	text string
+	kind geminiAppsRenderedPartKind
 }
 
 func renderGeminiAppsTokens(tokens []html.Token) string {
@@ -802,12 +810,12 @@ func renderGeminiAppsTokens(tokens []html.Token) string {
 	skipDepth := 0
 	preDepth := 0
 	codeDepth := 0
-	appendPart := func(text string, preserve, boundary bool) {
+	appendPart := func(text string, kind geminiAppsRenderedPartKind) {
 		if text == "" {
 			return
 		}
 		parts = append(parts, geminiAppsRenderedPart{
-			text: text, preserve: preserve, boundary: boundary,
+			text: text, kind: kind,
 		})
 	}
 	for _, token := range tokens {
@@ -822,11 +830,11 @@ func renderGeminiAppsTokens(tokens []html.Token) string {
 				continue
 			}
 			tag := strings.ToLower(token.Data)
-			appendPart(
-				renderGeminiAppsStart(&strings.Builder{}, tag),
-				preDepth > 0 || codeDepth > 0 || isGeminiAppsInlineMarkerTag(tag),
-				isGeminiAppsBoundaryTag(tag),
-			)
+			kind := geminiAppsTagPartKind(tag)
+			if preDepth > 0 || codeDepth > 0 {
+				kind = geminiAppsPreservedPart
+			}
+			appendPart(renderGeminiAppsStart(&strings.Builder{}, tag), kind)
 			if tag == "pre" {
 				preDepth++
 			}
@@ -845,27 +853,27 @@ func renderGeminiAppsTokens(tokens []html.Token) string {
 			if tag == "code" && codeDepth > 0 {
 				codeDepth--
 			}
-			appendPart(
-				renderGeminiAppsEnd(&strings.Builder{}, tag),
-				preDepth > 0 || codeDepth > 0 || isGeminiAppsInlineMarkerTag(tag),
-				isGeminiAppsBoundaryTag(tag),
-			)
+			kind := geminiAppsTagPartKind(tag)
+			if preDepth > 0 || codeDepth > 0 {
+				kind = geminiAppsPreservedPart
+			}
+			appendPart(renderGeminiAppsEnd(&strings.Builder{}, tag), kind)
 		case html.SelfClosingTagToken:
 			if skipDepth == 0 {
 				tag := strings.ToLower(token.Data)
-				appendPart(
-					renderGeminiAppsStart(&strings.Builder{}, tag),
-					preDepth > 0 || codeDepth > 0 || tag == "br",
-					isGeminiAppsBoundaryTag(tag),
-				)
+				kind := geminiAppsTagPartKind(tag)
+				if preDepth > 0 || codeDepth > 0 || tag == "br" {
+					kind = geminiAppsPreservedPart
+				}
+				appendPart(renderGeminiAppsStart(&strings.Builder{}, tag), kind)
 			}
 		case html.TextToken:
 			if skipDepth == 0 {
-				appendPart(
-					sanitizeGeminiAppsText(string(token.Data)),
-					preDepth > 0 || codeDepth > 0,
-					false,
-				)
+				kind := geminiAppsOrdinaryPart
+				if preDepth > 0 || codeDepth > 0 {
+					kind = geminiAppsPreservedPart
+				}
+				appendPart(sanitizeGeminiAppsText(string(token.Data)), kind)
 			}
 		}
 	}
@@ -874,11 +882,21 @@ func renderGeminiAppsTokens(tokens []html.Token) string {
 
 func isGeminiAppsBoundaryTag(tag string) bool {
 	switch strings.ToLower(tag) {
-	case "br", "blockquote", "div", "h1", "h2", "h3", "h4", "h5", "h6", "p", "pre", "table", "tr":
+	case "br", "blockquote", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "p", "pre", "table", "td", "th", "tr":
 		return true
 	default:
 		return false
 	}
+}
+
+func geminiAppsTagPartKind(tag string) geminiAppsRenderedPartKind {
+	if isGeminiAppsBoundaryTag(tag) {
+		return geminiAppsStructuralPart
+	}
+	if isGeminiAppsInlineMarkerTag(tag) {
+		return geminiAppsInlinePart
+	}
+	return geminiAppsOrdinaryPart
 }
 
 func isGeminiAppsInlineMarkerTag(tag string) bool {
@@ -946,14 +964,14 @@ func sanitizeGeminiAppsText(value string) string {
 }
 
 func cleanGeminiAppsParts(parts []geminiAppsRenderedPart) string {
-	for len(parts) > 0 && parts[0].boundary {
+	for len(parts) > 0 && parts[0].kind == geminiAppsStructuralPart {
 		parts[0].text = strings.TrimLeft(parts[0].text, "\r\n")
 		if parts[0].text != "" {
 			break
 		}
 		parts = parts[1:]
 	}
-	for len(parts) > 0 && parts[len(parts)-1].boundary {
+	for len(parts) > 0 && parts[len(parts)-1].kind == geminiAppsStructuralPart {
 		last := len(parts) - 1
 		parts[last].text = strings.TrimRight(parts[last].text, "\r\n")
 		if parts[last].text != "" {
@@ -964,27 +982,51 @@ func cleanGeminiAppsParts(parts []geminiAppsRenderedPart) string {
 
 	var out strings.Builder
 	lastWasNewline := false
-	for i, part := range parts {
-		if part.boundary && strings.Trim(part.text, "\r\n") == "" {
+	for i := 0; i < len(parts); {
+		part := parts[i]
+		if part.kind == geminiAppsOrdinaryPart {
+			end := i + 1
+			for end < len(parts) && parts[end].kind == geminiAppsOrdinaryPart {
+				end++
+			}
+			keepLeading := i > 0 && parts[i-1].kind == geminiAppsInlinePart &&
+				hasHorizontalWhitespacePrefix(part.text)
+			keepTrailing := end < len(parts) && parts[end].kind == geminiAppsInlinePart &&
+				hasHorizontalWhitespaceSuffix(parts[end-1].text)
+			var ordinary strings.Builder
+			for _, runPart := range parts[i:end] {
+				ordinary.WriteString(runPart.text)
+			}
+			text := cleanGeminiAppsOrdinaryText(
+				ordinary.String(), keepLeading, keepTrailing,
+			)
+			out.WriteString(text)
+			if text != "" {
+				lastWasNewline = strings.HasSuffix(text, "\n")
+			}
+			i = end
+			continue
+		}
+		if part.kind == geminiAppsStructuralPart && strings.Trim(part.text, "\r\n") == "" {
 			if !lastWasNewline {
 				out.WriteByte('\n')
 				lastWasNewline = true
 			}
+			i++
 			continue
 		}
-		if part.preserve {
+		if part.kind == geminiAppsPreservedPart {
 			text := strings.ReplaceAll(part.text, "\r\n", "\n")
 			out.WriteString(text)
 			lastWasNewline = strings.HasSuffix(text, "\n")
+			i++
 			continue
 		}
-		keepLeading := i > 0 && parts[i-1].preserve && hasHorizontalWhitespacePrefix(part.text)
-		keepTrailing := i+1 < len(parts) && parts[i+1].preserve && hasHorizontalWhitespaceSuffix(part.text)
-		text := cleanGeminiAppsOrdinaryText(part.text, keepLeading, keepTrailing)
-		out.WriteString(text)
-		if text != "" {
-			lastWasNewline = strings.HasSuffix(text, "\n")
+		if part.kind == geminiAppsInlinePart || part.kind == geminiAppsStructuralPart {
+			out.WriteString(part.text)
+			lastWasNewline = strings.HasSuffix(part.text, "\n")
 		}
+		i++
 	}
 	return out.String()
 }

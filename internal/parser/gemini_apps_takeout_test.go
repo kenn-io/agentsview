@@ -37,9 +37,18 @@ const sanitizedGeminiAppsHTML = `<!doctype html>
 func geminiAppsSingleCellHTML(
 	lang, title, label, timestamp, content string,
 ) string {
-	return `<!doctype html><html` + lang + `><head><title>` + title + `</title></head><body>
-<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>` + label + `</p><p>` + timestamp + `</p></div><div class="content-cell">` + content + `</div></div>
-</body></html>`
+	return `<!doctype html><html` + lang + `><head><title>` + title + `</title></head><body>` +
+		geminiAppsProductCellHTML("Gemini Apps", label, timestamp, content) +
+		`</body></html>`
+}
+
+func geminiAppsProductCellHTML(
+	product, label, timestamp, content string,
+) string {
+	return `<div class="outer-cell"><div class="header-cell"><h3>` + product +
+		`</h3><p>` + label + `</p><p>` + timestamp +
+		`</p></div><div class="content-cell">` + content +
+		`</div></div>`
 }
 
 func TestParseGeminiAppsExportRealOuterCellHeaderShape(t *testing.T) {
@@ -124,6 +133,136 @@ func TestParseGeminiAppsPreservesOrdinaryResponseAndAnswerText(t *testing.T) {
 	require.Len(t, results, 2)
 	require.Len(t, results[0].Messages, 1)
 	assert.Equal(t, "ordinary Response: and Answer: text", results[0].Messages[0].Content)
+}
+
+func TestParseGeminiAppsIgnoresOtherProductCells(t *testing.T) {
+	gemini := geminiAppsProductCellHTML(
+		"Gemini Apps", "Prompted", "Jan 2, 2025, 3:04:05 PM EDT",
+		"<p>prompt</p>",
+	)
+	youtube := geminiAppsProductCellHTML(
+		"YouTube", "Watched", "Jan 2, 2025, 3:04:05 PM XYZ",
+		"<p>video title</p>",
+	)
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "mixed file",
+			input: `<!doctype html><html><head><title>My Activity History</title></head><body>` + gemini + youtube + `</body></html>`,
+		},
+		{
+			name:  "mixed directory",
+			input: "directory",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			if tt.input == "directory" {
+				require.NoError(t, os.WriteFile(
+					filepath.Join(root, "01-gemini.html"),
+					[]byte(`<!doctype html><html><head><title>My Activity History</title></head><body>`+gemini+`</body></html>`),
+					0o644,
+				))
+				require.NoError(t, os.WriteFile(
+					filepath.Join(root, "02-youtube.html"),
+					[]byte(`<!doctype html><html><head><title>My Activity History</title></head><body>`+youtube+`</body></html>`),
+					0o644,
+				))
+			} else {
+				root = filepath.Join(root, "mixed.html")
+				require.NoError(t, os.WriteFile(root, []byte(tt.input), 0o644))
+			}
+
+			provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
+			require.True(t, ok)
+			exporter := provider.(GeminiAppsExportParser)
+			var results []ParseResult
+			summary, err := exporter.ParseGeminiAppsExport(root, func(result ParseResult) error {
+				results = append(results, result)
+				return nil
+			})
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			assert.Equal(t, "prompt", results[0].Messages[0].Content)
+			assert.Zero(t, summary.Skipped)
+			assert.Zero(t, summary.Errors)
+		})
+	}
+}
+
+func TestParseGeminiAppsOnlyOtherProductIsNotGeminiDocument(t *testing.T) {
+	fixture := `<!doctype html><html><head><title>My Activity History</title></head><body>` +
+		geminiAppsProductCellHTML(
+			"YouTube", "Watched", "Jan 2, 2025, 3:04:05 PM XYZ", "<p>video</p>",
+		) + `</body></html>`
+	path := filepath.Join(t.TempDir(), "youtube.html")
+	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
+
+	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
+	require.True(t, ok)
+	exporter := provider.(GeminiAppsExportParser)
+	callbacks := 0
+	_, err := exporter.ParseGeminiAppsExport(path, func(ParseResult) error {
+		callbacks++
+		return nil
+	})
+	assert.ErrorContains(t, err, "does not contain a Gemini Apps")
+	assert.Zero(t, callbacks)
+}
+
+func TestParseGeminiAppsPreservesInlineAndListSpacing(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "link",
+			content: `<p>See <a href="https://example.invalid">source</a> for details</p>`,
+			want:    "See source for details",
+		},
+		{
+			name:    "span",
+			content: `<p>Before <span>middle</span> after</p>`,
+			want:    "Before middle after",
+		},
+		{
+			name:    "nested marker",
+			content: `<p>Read <span><strong>this</strong></span> now</p>`,
+			want:    "Read **this** now",
+		},
+		{
+			name:    "list markers",
+			content: `<div><ul><li>first <a href="https://example.invalid">link</a></li><li><span>second</span> item</li></ul></div>`,
+			want:    "- first link\n- second item",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := geminiAppsSingleCellHTML(
+				"", "My Activity History", "Prompted",
+				"Jan 2, 2025, 3:04:05 PM EDT", tt.content,
+			)
+			path := filepath.Join(t.TempDir(), "inline-spacing.html")
+			require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
+
+			provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
+			require.True(t, ok)
+			exporter := provider.(GeminiAppsExportParser)
+			var results []ParseResult
+			_, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
+				results = append(results, result)
+				return nil
+			})
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			require.Len(t, results[0].Messages, 1)
+			assert.Equal(t, tt.want, results[0].Messages[0].Content)
+		})
+	}
 }
 
 func TestParseGeminiAppsBrStaysInsidePromptBlock(t *testing.T) {

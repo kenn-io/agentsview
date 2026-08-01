@@ -45,6 +45,33 @@ func TestImportGeminiApps(t *testing.T) {
 	assert.Equal(t, "test-machine", sessions.Sessions[0].Machine)
 }
 
+func TestImportGeminiAppsIgnoresOtherProductsThroughPublicPath(t *testing.T) {
+	root := t.TempDir()
+	gemini := `<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Prompted</p><p>Jan 2, 2025, 3:04:05 PM EDT</p></div><div class="content-cell"><p>See <a href="https://example.invalid">source</a> for details</p></div></div>`
+	other := `<div class="outer-cell"><div class="header-cell"><h3>YouTube</h3><p>Watched</p><p>Jan 2, 2025, 3:04:05 PM XYZ</p></div><div class="content-cell"><p>video title</p></div></div>`
+	path := filepath.Join(root, "activity.html")
+	require.NoError(t, os.WriteFile(
+		path,
+		[]byte(`<!doctype html><html><head><title>My Activity History</title></head><body>`+gemini+other+`</body></html>`),
+		0o644,
+	))
+
+	d := testDB(t)
+	stats, err := ImportGeminiApps(context.Background(), d, root, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Imported)
+	assert.Zero(t, stats.Skipped)
+	assert.Zero(t, stats.Errors)
+
+	page, err := d.ListSessions(context.Background(), db.SessionFilter{Agent: "gemini-apps"})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 1)
+	messages, err := d.GetAllMessages(context.Background(), page.Sessions[0].ID)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "See source for details", messages[0].Content)
+}
+
 func TestImportGeminiAppsReimportUpdatesResponseWithStableID(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "activity.html")
