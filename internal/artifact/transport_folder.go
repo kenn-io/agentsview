@@ -48,6 +48,7 @@ type folderTransport struct {
 	syncDirectory        func(*os.Root) error
 	maxObjects           int
 	maxBytes             int64
+	repairPublished      bool
 	pushCursor           folderPushCursor
 	stateStore           FolderTransportStateStore
 	stateLoaded          bool
@@ -62,6 +63,7 @@ type folderPushCursor struct {
 	Offset               int    `json:"offset,omitempty"`
 	SegmentIndex         int    `json:"segment_index,omitempty"`
 	PublicationSessionID string `json:"publication_session_id,omitempty"`
+	Repair               bool   `json:"repair,omitempty"`
 }
 
 // OpenFolderTransport opens or initializes a marked artifact exchange target.
@@ -93,12 +95,13 @@ func OpenFolderTransport(
 		}
 	}()
 	transport := &folderTransport{
-		target:       canonical,
-		root:         root,
-		rootIdentity: identity,
-		maxObjects:   opts.MaxObjects,
-		maxBytes:     opts.MaxBytes,
-		stateStore:   opts.StateStore,
+		target:          canonical,
+		root:            root,
+		rootIdentity:    identity,
+		maxObjects:      opts.MaxObjects,
+		maxBytes:        opts.MaxBytes,
+		repairPublished: opts.RepairPublished,
+		stateStore:      opts.StateStore,
 	}
 	if transport.maxObjects <= 0 {
 		transport.maxObjects = folderExchangeMaxObjects

@@ -3,6 +3,8 @@ package artifact
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -236,4 +238,113 @@ func TestFolderTransportNoOpSkipsAuthoritativePublicationPages(t *testing.T) {
 	assert.Equal(t, ExchangeResult{}, second)
 	assert.Equal(t, 2, authority.pageCalls,
 		"an unchanged head must not inspect any publication page")
+}
+
+func TestFolderTransportResumesBoundedPublishedRepairAfterReopen(t *testing.T) {
+	t.Parallel()
+
+	origin := "local-a1b2c3"
+	content := newTestArtifactStore(t)
+	segmentBodies := [][]byte{
+		[]byte("first segment\n"),
+		[]byte("second segment\n"),
+	}
+	segmentHashes := make([]string, 0, len(segmentBodies))
+	for _, body := range segmentBodies {
+		ref := testContentRef(t, origin, KindSegments, body, ".ndjson")
+		createTestStoreArtifact(t, content, ref, body)
+		segmentHashes = append(segmentHashes, identityForBytes(t, body).SHA256)
+	}
+	manifestBody, err := canonicalJSON(manifest{
+		Version:  manifestFormatVersion,
+		Origin:   origin,
+		Segments: segmentHashes,
+	})
+	require.NoError(t, err)
+	manifestIdentity := identityForBytes(t, manifestBody)
+	manifestRef, err := NewRef(
+		origin,
+		KindManifests,
+		manifestIdentity.SHA256+".json",
+	)
+	require.NoError(t, err)
+	createTestStoreArtifact(t, content, manifestRef, manifestBody)
+	checkpointBody := []byte("checkpoint")
+	checkpointIdentity := identityForBytes(t, checkpointBody)
+	checkpointRef, err := NewRef(origin, KindCheckpoints, "cp-0000000001.json")
+	require.NoError(t, err)
+	createTestStoreArtifact(t, content, checkpointRef, checkpointBody)
+	authority := &countingPublicationAuthority{
+		head: db.ArtifactCheckpointHead{
+			Origin:              origin,
+			Sequence:            1,
+			PublicationRevision: 7,
+			SessionMapSHA256:    emptyArtifactPublicationMapSHA256,
+			CheckpointSHA256:    checkpointIdentity.SHA256,
+			CheckpointSize:      checkpointIdentity.Size,
+		},
+		publications: []db.ArtifactPublication{{
+			Origin: origin, SessionID: "one",
+			ManifestHash: manifestIdentity.SHA256,
+		}},
+	}
+	publishedStore, err := newAuthoritativePublicationStore(
+		t.Context(), authority, content, origin,
+	)
+	require.NoError(t, err)
+	state := &testFolderTransportStateStore{}
+	target := t.TempDir()
+	initial, err := OpenFolderTransport(target, FolderTransportOptions{
+		MaxObjects: 10,
+		StateStore: state,
+	})
+	require.NoError(t, err)
+	initialResult, err := initial.Exchange(t.Context(), publishedStore, origin)
+	require.NoError(t, err)
+	assert.Equal(t, 4, initialResult.Published)
+	assert.False(t, initialResult.More)
+	require.NoError(t, initial.Close())
+
+	checkpointWire, err := ToWireRef(checkpointRef)
+	require.NoError(t, err)
+	checkpointPath := filepath.Join(
+		target,
+		checkpointWire.Origin,
+		string(checkpointWire.Kind),
+		checkpointWire.Name,
+	)
+	require.NoError(t, os.Remove(checkpointPath))
+	journalSequence := readTestFolderJournalSequence(t, target)
+	repair, err := OpenFolderTransport(target, FolderTransportOptions{
+		MaxObjects:      1,
+		StateStore:      state,
+		RepairPublished: true,
+	})
+	require.NoError(t, err)
+	firstRepair, err := repair.Exchange(t.Context(), publishedStore, origin)
+	require.NoError(t, err)
+	assert.Zero(t, firstRepair.Published)
+	assert.True(t, firstRepair.More)
+	require.NoError(t, repair.Close())
+
+	published := 0
+	more := true
+	for attempts := 0; more && attempts < 10; attempts++ {
+		resumed, openErr := OpenFolderTransport(target, FolderTransportOptions{
+			MaxObjects: 1,
+			StateStore: state,
+		})
+		require.NoError(t, openErr)
+		result, exchangeErr := resumed.Exchange(
+			t.Context(), publishedStore, origin,
+		)
+		require.NoError(t, exchangeErr)
+		require.NoError(t, resumed.Close())
+		published += result.Published
+		more = result.More
+	}
+	assert.False(t, more)
+	assert.Equal(t, 1, published)
+	assert.FileExists(t, checkpointPath)
+	assert.Equal(t, journalSequence, readTestFolderJournalSequence(t, target))
 }

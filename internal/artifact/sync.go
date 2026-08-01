@@ -96,8 +96,9 @@ func SyncWithRepository(
 	transport, err := OpenFolderTransport(
 		opts.Target,
 		FolderTransportOptions{
-			ForbiddenRoots: forbidden,
-			StateStore:     databaseFolderTransportState{database: database},
+			ForbiddenRoots:  forbidden,
+			StateStore:      databaseFolderTransportState{database: database},
+			RepairPublished: opts.Full,
 		},
 	)
 	if err != nil {

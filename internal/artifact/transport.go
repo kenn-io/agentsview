@@ -25,13 +25,15 @@ type ExchangeResult struct {
 	More      bool
 }
 
-// FolderTransportOptions defines roots that must remain disjoint from the
-// external artifact target.
+// FolderTransportOptions configures a bounded folder exchange. RepairPublished
+// verifies an already-completed authoritative generation without adding new
+// journal events, and is intended for explicit full synchronization.
 type FolderTransportOptions struct {
-	ForbiddenRoots []string
-	MaxObjects     int
-	MaxBytes       int64
-	StateStore     FolderTransportStateStore
+	ForbiddenRoots  []string
+	MaxObjects      int
+	MaxBytes        int64
+	StateStore      FolderTransportStateStore
+	RepairPublished bool
 }
 
 // FolderTransportStateStore persists target-bound continuation state between

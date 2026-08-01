@@ -127,6 +127,57 @@ func TestArtifactSyncTwoNodeFolderRoundTripAndReplay(t *testing.T) {
 	assert.Equal(t, "updated response", updatedMessages[1].Content)
 }
 
+func TestArtifactSyncFullRepairsMissingPublishedObjectWithoutJournalGrowth(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	target := t.TempDir()
+	database := testDB(t)
+	repository, err := OpenRepository(t.Context(), t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, repository.Close()) })
+	origin := "laptop-a1b2c3"
+	seedSession(t, database, "one", "alpha")
+	opts := SyncOptions{Target: target, Origin: origin}
+
+	initial, err := SyncWithRepository(t.Context(), database, repository, opts)
+	require.NoError(t, err)
+	assert.Positive(t, initial.PublishedArtifacts)
+	head, found, err := database.GetArtifactCheckpointHead(t.Context(), origin)
+	require.NoError(t, err)
+	require.True(t, found)
+	checkpointRef, err := NewRef(
+		origin,
+		KindCheckpoints,
+		fmt.Sprintf("cp-%010d.json", head.Sequence),
+	)
+	require.NoError(t, err)
+	checkpointWire, err := ToWireRef(checkpointRef)
+	require.NoError(t, err)
+	checkpointPath := filepath.Join(
+		target,
+		checkpointWire.Origin,
+		string(checkpointWire.Kind),
+		checkpointWire.Name,
+	)
+	require.NoError(t, os.Remove(checkpointPath))
+	journalSequence := readTestFolderJournalSequence(t, target)
+
+	noOp, err := SyncWithRepository(t.Context(), database, repository, opts)
+	require.NoError(t, err)
+	assert.Zero(t, noOp.PublishedArtifacts)
+	assert.NoFileExists(t, checkpointPath)
+
+	opts.Full = true
+	repaired, err := SyncWithRepository(t.Context(), database, repository, opts)
+	require.NoError(t, err)
+	assert.Equal(t, 1, repaired.PublishedArtifacts)
+	assert.FileExists(t, checkpointPath)
+	assert.Equal(t, journalSequence, readTestFolderJournalSequence(t, target),
+		"repairing an already-journaled object must not duplicate the journal")
+}
+
 func readTestFolderJournalSequence(t *testing.T, target string) int64 {
 	t.Helper()
 	root, err := os.OpenRoot(filepath.Join(target, folderJournalDirectory))

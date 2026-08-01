@@ -119,10 +119,21 @@ func (t *folderTransport) pushAuthoritativeOriginLocked(
 	origin string,
 ) (published int, more bool, retErr error) {
 	generation := pager.folderTransportGeneration()
+	continuing := t.pushCursor.Origin == origin &&
+		t.pushCursor.Generation == generation
 	if generation == t.publishedGeneration {
-		return 0, false, nil
-	}
-	if t.pushCursor.Origin != origin || t.pushCursor.Generation != generation {
+		switch {
+		case continuing && t.pushCursor.Repair:
+		case !t.repairPublished:
+			return 0, false, nil
+		default:
+			t.pushCursor = folderPushCursor{
+				Generation: generation,
+				Origin:     origin,
+				Repair:     true,
+			}
+		}
+	} else if !continuing || t.pushCursor.Repair {
 		t.pushCursor = folderPushCursor{
 			Generation: generation,
 			Origin:     origin,
@@ -174,8 +185,10 @@ func (t *folderTransport) pushAuthoritativeOriginLocked(
 		if created {
 			published++
 		}
-		if err := t.appendFolderJournalLocked(ctx, entry); err != nil {
-			return published, false, err
+		if !t.pushCursor.Repair {
+			if err := t.appendFolderJournalLocked(ctx, entry); err != nil {
+				return published, false, err
+			}
 		}
 	}
 	t.pushCursor = next
