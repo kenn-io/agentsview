@@ -60,9 +60,13 @@ func runImport(cfg ImportConfig) {
 		stats, err = runChatGPTImport(
 			ctx, database, dir, assetsDir, appCfg.LocalMachineName,
 		)
+	case "gemini-apps":
+		stats, err = runGeminiAppsImport(
+			ctx, database, dir, appCfg.LocalMachineName,
+		)
 	default:
 		log.Fatalf(
-			"Unknown import type: %s (use claude-ai or chatgpt)",
+			"Unknown import type: %s (use claude-ai, chatgpt, or gemini-apps)",
 			cfg.Type,
 		)
 	}
@@ -136,6 +140,23 @@ func runChatGPTImport(
 					os.Stderr,
 					"\rRebuilding search index...   ",
 				)
+			},
+		}, machine,
+	)
+}
+
+func runGeminiAppsImport(
+	ctx context.Context, database *db.DB, path, machine string,
+) (importer.ImportStats, error) {
+	return importer.ImportGeminiApps(
+		ctx, database, path,
+		&importer.ImportCallbacks{
+			OnProgress: func(s importer.ImportStats) {
+				n := s.Imported + s.Updated + s.Skipped
+				fmt.Fprintf(os.Stderr, "\r%d records processed...", n)
+			},
+			OnIndexing: func() {
+				fmt.Fprintf(os.Stderr, "\rRebuilding search index...   ")
 			},
 		}, machine,
 	)

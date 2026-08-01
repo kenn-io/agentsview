@@ -152,6 +152,11 @@ func TestParseDiffAgentTypes(t *testing.T) {
 			in:      []string{"claude-ai"},
 			wantErr: "is not supported by parse-diff",
 		},
+		{
+			name:    "Gemini Apps import-only agent",
+			in:      []string{"gemini-apps"},
+			wantErr: "is not supported by parse-diff",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

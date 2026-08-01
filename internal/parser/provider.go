@@ -1051,6 +1051,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newGptmeProviderFactory(def)
 	case AgentGemini:
 		return newGeminiProviderFactory(def)
+	case AgentGeminiApps:
+		return newImportOnlyProviderFactory(def)
 	case AgentKimi:
 		return newKimiProviderFactory(def)
 	case AgentKimiWork:

@@ -860,7 +860,7 @@ ______________________________________________________________________
 
 ### `agentsview import`
 
-Import Claude.ai or ChatGPT conversations into the local database. See
+Import Claude.ai, ChatGPT, or Gemini Apps conversations into the local database. See
 [Chat Import](/chat-import/) for full documentation.
 
 ```bash
@@ -869,10 +869,11 @@ agentsview import --type <type> <path>
 
 | Flag     | Default | Description                                      |
 | -------- | ------- | ------------------------------------------------ |
-| `--type` |         | Import type: `claude-ai` or `chatgpt` (required) |
+| `--type` |         | Import type: `claude-ai`, `chatgpt`, or `gemini-apps` (required) |
 
-The path can be a `.zip` file, a `conversations.json` file (Claude.ai only), or
-a directory containing the extracted export.
+The path can be a `.zip` file, a `conversations.json` file (Claude.ai only), a
+Gemini Apps `MyActivity.html` file, or a directory containing the extracted
+export.
 
 **Examples:**
 
@@ -880,6 +881,7 @@ a directory containing the extracted export.
 agentsview import --type claude-ai ~/Downloads/claude.zip
 agentsview import --type chatgpt ~/Downloads/chatgpt.zip
 agentsview import --type claude-ai ./conversations.json
+agentsview import --type gemini-apps ~/Downloads/takeout.zip
 ```
 
 ______________________________________________________________________

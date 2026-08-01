@@ -18,6 +18,7 @@ const (
 	AgentCodex          AgentType = "codex"
 	AgentCopilot        AgentType = "copilot"
 	AgentGemini         AgentType = "gemini"
+	AgentGeminiApps     AgentType = "gemini-apps"
 	AgentMiMoCode       AgentType = "mimocode"
 	AgentOpenCode       AgentType = "opencode"
 	AgentKilo           AgentType = "kilo"
@@ -528,6 +529,12 @@ var Registry = []AgentDef{
 		Type:        AgentChatGPT,
 		DisplayName: "ChatGPT",
 		IDPrefix:    "chatgpt:",
+		FileBased:   false,
+	},
+	{
+		Type:        AgentGeminiApps,
+		DisplayName: "Gemini Apps",
+		IDPrefix:    "gemini-apps:",
 		FileBased:   false,
 	},
 	{

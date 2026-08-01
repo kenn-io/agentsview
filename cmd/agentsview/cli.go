@@ -457,7 +457,7 @@ func newImportCommand() *cobra.Command {
 			runImport(ImportConfig{Type: importType, Path: args[0]})
 		},
 	}
-	cmd.Flags().StringVar(&importType, "type", "", "Import type: claude-ai, chatgpt")
+	cmd.Flags().StringVar(&importType, "type", "", "Import type: claude-ai, chatgpt, gemini-apps")
 	_ = cmd.MarkFlagRequired("type")
 	return cmd
 }
