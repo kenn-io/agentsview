@@ -12,6 +12,24 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
+type manifestOpenCountingStore struct {
+	ArtifactStore
+	manifestBytes int64
+	manifestOpens int
+}
+
+func (s *manifestOpenCountingStore) Open(
+	ctx context.Context,
+	ref Ref,
+) (Entry, VerifiedReader, error) {
+	entry, reader, err := s.ArtifactStore.Open(ctx, ref)
+	if err == nil && ref.Kind == KindManifests {
+		s.manifestOpens++
+		s.manifestBytes += entry.Identity.Size
+	}
+	return entry, reader, err
+}
+
 const emptyArtifactPublicationMapSHA256 = "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
 
 type countingPublicationAuthority struct {
@@ -124,6 +142,65 @@ func TestAuthoritativePublicationStoreBoundsEmptySegmentTraversal(t *testing.T) 
 	assert.Equal(t, "session-0127", cursor.PublicationSessionID)
 	assert.Equal(t, 3, authority.pageCalls,
 		"resume reads the remaining segment page and one manifest page")
+}
+
+func TestAuthoritativePublicationStoreChargesManifestInspection(t *testing.T) {
+	t.Parallel()
+
+	origin := "local-a1b2c3"
+	content := &manifestOpenCountingStore{ArtifactStore: newTestArtifactStore(t)}
+	manifestBody, err := canonicalJSON(manifest{
+		Version:  manifestFormatVersion,
+		Origin:   origin,
+		Segments: []string{},
+	})
+	require.NoError(t, err)
+	manifestIdentity := identityForBytes(t, manifestBody)
+	manifestRef, err := NewRef(
+		origin,
+		KindManifests,
+		manifestIdentity.SHA256+".json",
+	)
+	require.NoError(t, err)
+	createTestStoreArtifact(t, content.ArtifactStore, manifestRef, manifestBody)
+
+	publications := make([]db.ArtifactPublication, 3)
+	for index := range publications {
+		publications[index] = db.ArtifactPublication{
+			Origin:       origin,
+			SessionID:    fmt.Sprintf("session-%04d", index),
+			ManifestHash: manifestIdentity.SHA256,
+		}
+	}
+	authority := &countingPublicationAuthority{
+		head: db.ArtifactCheckpointHead{
+			Origin:              origin,
+			Sequence:            1,
+			PublicationRevision: 7,
+			SessionMapSHA256:    emptyArtifactPublicationMapSHA256,
+			CheckpointSHA256:    strings64("a"),
+			CheckpointSize:      10,
+		},
+		publications: publications,
+	}
+	store, err := newAuthoritativePublicationStore(
+		t.Context(), authority, content, origin,
+	)
+	require.NoError(t, err)
+
+	entries, cursor, more, err := store.folderTransportPage(
+		t.Context(),
+		folderPushCursor{Origin: origin},
+		folderExchangeMaxObjects,
+		manifestIdentity.Size,
+	)
+
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+	assert.True(t, more)
+	assert.Equal(t, "session-0000", cursor.PublicationSessionID)
+	assert.Equal(t, 1, content.manifestOpens)
+	assert.Equal(t, manifestIdentity.Size, content.manifestBytes)
 }
 
 func TestAuthoritativePublicationStoreReadsOnlyHeadDuringConstruction(

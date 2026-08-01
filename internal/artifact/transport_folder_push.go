@@ -35,6 +35,42 @@ type folderTransportPublicationPager interface {
 	) ([]Entry, folderPushCursor, bool, error)
 }
 
+type folderExchangeBudget struct {
+	maxObjects   int
+	maxBytes     int64
+	objects      int
+	bytes        int64
+	bytesLimited bool
+}
+
+func newFolderExchangeBudget(maxObjects int, maxBytes int64) *folderExchangeBudget {
+	return &folderExchangeBudget{
+		maxObjects:   maxObjects,
+		maxBytes:     maxBytes,
+		bytesLimited: maxBytes > 0,
+	}
+}
+
+func (b *folderExchangeBudget) objectLimitReached() bool {
+	return b.maxObjects > 0 && b.objects >= b.maxObjects
+}
+
+func (b *folderExchangeBudget) permitsBytes(size int64, allowOversized bool) bool {
+	if !b.bytesLimited || size <= b.maxBytes-b.bytes {
+		return true
+	}
+	return allowOversized
+}
+
+func (b *folderExchangeBudget) consumeInspection(size int64) {
+	b.bytes += size
+}
+
+func (b *folderExchangeBudget) consumeObject(size int64) {
+	b.objects++
+	b.bytes += size
+}
+
 func (t *folderTransport) pushLocked(
 	ctx context.Context,
 	store ArtifactStore,
@@ -62,8 +98,7 @@ func (t *folderTransport) pushOriginLocked(
 	if t.pushCursor.Origin != origin {
 		t.pushCursor = folderPushCursor{Origin: origin}
 	}
-	processed := 0
-	var processedBytes int64
+	budget := newFolderExchangeBudget(t.maxObjects, t.maxBytes)
 	for kindIndex := t.pushCursor.KindIndex; kindIndex < len(folderExchangeKinds); kindIndex++ {
 		kind := folderExchangeKinds[kindIndex]
 		if err := t.removeAbandonedPublishTempsLocked(
@@ -83,19 +118,16 @@ func (t *folderTransport) pushOriginLocked(
 				return published, false, err
 			}
 		}
-		count, consumed, bytes, kindMore, iterateErr := t.pushKindLocked(
+		count, consumed, _, kindMore, iterateErr := t.pushKindLocked(
 			ctx,
 			store,
 			originRoot,
 			origin,
 			kind,
 			iterator,
-			t.maxObjects-processed,
-			t.maxBytes-processedBytes,
+			budget,
 		)
 		published += count
-		processed += consumed
-		processedBytes += bytes
 		closeErr := iterator.Close()
 		if iterateErr != nil || closeErr != nil {
 			return published, false, errors.Join(iterateErr, closeErr)
@@ -262,8 +294,7 @@ func (t *folderTransport) pushKindLocked(
 	origin string,
 	kind Kind,
 	iterator EntryIterator,
-	maxObjects int,
-	maxBytes int64,
+	budget *folderExchangeBudget,
 ) (published int, processed int, processedBytes int64, more bool, retErr error) {
 	var kindRoot *os.Root
 	defer func() {
@@ -273,8 +304,8 @@ func (t *folderTransport) pushKindLocked(
 	}()
 	for {
 		pageLimit := transportStorePageSize
-		if maxObjects > 0 {
-			remaining := maxObjects - processed
+		if budget.maxObjects > 0 {
+			remaining := budget.maxObjects - budget.objects
 			if remaining <= 0 {
 				return published, processed, processedBytes, true, nil
 			}
@@ -294,7 +325,7 @@ func (t *folderTransport) pushKindLocked(
 			}
 		}
 		for _, entry := range page {
-			if maxBytes > 0 && processed > 0 && entry.Identity.Size > maxBytes-processedBytes {
+			if !budget.permitsBytes(entry.Identity.Size, budget.objects == 0) {
 				return published, processed, processedBytes, true, nil
 			}
 			if entry.Ref.Origin != origin || entry.Ref.Kind != kind {
@@ -320,6 +351,7 @@ func (t *folderTransport) pushKindLocked(
 			}
 			processed++
 			processedBytes += entry.Identity.Size
+			budget.consumeObject(entry.Identity.Size)
 		}
 		if errors.Is(nextErr, io.EOF) {
 			return published, processed, processedBytes, false, nil

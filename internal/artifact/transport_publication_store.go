@@ -176,10 +176,15 @@ func (s *authoritativePublicationStore) folderTransportPage(
 	maxBytes int64,
 ) ([]Entry, folderPushCursor, bool, error) {
 	entries := make([]Entry, 0, min(maxObjects, 64))
-	var logicalBytes int64
+	budget := newFolderExchangeBudget(maxObjects, maxBytes)
 	cache := folderTransportPageCache{}
-	for maxObjects <= 0 || len(entries) < maxObjects {
-		entry, next, done, err := s.nextFolderTransportEntry(ctx, cursor, &cache)
+	for !budget.objectLimitReached() {
+		entry, next, done, err := s.nextFolderTransportEntry(
+			ctx,
+			cursor,
+			&cache,
+			budget,
+		)
 		if errors.Is(err, errArtifactPublicationPageBoundary) {
 			return entries, next, true, nil
 		}
@@ -189,21 +194,11 @@ func (s *authoritativePublicationStore) folderTransportPage(
 		if done {
 			return entries, cursor, false, nil
 		}
-		if maxBytes > 0 && len(entries) > 0 && entry.Identity.Size > maxBytes-logicalBytes {
-			return entries, cursor, true, nil
-		}
 		entries = append(entries, entry)
-		logicalBytes += entry.Identity.Size
+		budget.consumeObject(entry.Identity.Size)
 		cursor = next
 	}
-	_, next, done, err := s.nextFolderTransportEntry(ctx, cursor, &cache)
-	if errors.Is(err, errArtifactPublicationPageBoundary) {
-		return entries, next, true, nil
-	}
-	if err != nil {
-		return nil, cursor, false, err
-	}
-	return entries, cursor, !done, nil
+	return entries, cursor, true, nil
 }
 
 type folderTransportPageCache struct {
@@ -221,10 +216,12 @@ func (s *authoritativePublicationStore) nextFolderTransportEntry(
 	ctx context.Context,
 	cursor folderPushCursor,
 	cache *folderTransportPageCache,
+	budget *folderExchangeBudget,
 ) (Entry, folderPushCursor, bool, error) {
 	for {
 		switch cursor.KindIndex {
 		case 0:
+			allowOversizedObject := budget.objects == 0
 			publication, found, err := s.currentFolderPublication(
 				ctx,
 				cursor,
@@ -241,7 +238,7 @@ func (s *authoritativePublicationStore) nextFolderTransportEntry(
 				continue
 			}
 			if cache.manifestSession != publication.SessionID {
-				segments, err := authorizedManifestSegments(
+				manifestEntry, err := statAuthorizedManifest(
 					ctx,
 					s.ArtifactStore,
 					s.origin,
@@ -250,6 +247,22 @@ func (s *authoritativePublicationStore) nextFolderTransportEntry(
 				if err != nil {
 					return Entry{}, cursor, false, err
 				}
+				if !budget.permitsBytes(
+					manifestEntry.Identity.Size,
+					budget.objects == 0 && budget.bytes == 0,
+				) {
+					return Entry{}, cursor, false, errArtifactPublicationPageBoundary
+				}
+				segments, err := readAuthorizedManifestSegments(
+					ctx,
+					s.ArtifactStore,
+					s.origin,
+					manifestEntry,
+				)
+				if err != nil {
+					return Entry{}, cursor, false, err
+				}
+				budget.consumeInspection(manifestEntry.Identity.Size)
 				cache.manifestSession = publication.SessionID
 				cache.segments = segments
 			}
@@ -274,6 +287,9 @@ func (s *authoritativePublicationStore) nextFolderTransportEntry(
 			)
 			if err != nil {
 				return Entry{}, cursor, false, err
+			}
+			if !budget.permitsBytes(entry.Identity.Size, allowOversizedObject) {
+				return Entry{}, cursor, false, errArtifactPublicationPageBoundary
 			}
 			next := cursor
 			next.SegmentIndex++
@@ -309,6 +325,9 @@ func (s *authoritativePublicationStore) nextFolderTransportEntry(
 			if err != nil {
 				return Entry{}, cursor, false, err
 			}
+			if !budget.permitsBytes(entry.Identity.Size, budget.objects == 0) {
+				return Entry{}, cursor, false, errArtifactPublicationPageBoundary
+			}
 			next := cursor
 			next.PublicationSessionID = publication.SessionID
 			cache.advancePublication()
@@ -340,6 +359,9 @@ func (s *authoritativePublicationStore) nextFolderTransportEntry(
 			)
 			if err != nil {
 				return Entry{}, cursor, false, err
+			}
+			if !budget.permitsBytes(entry.Identity.Size, budget.objects == 0) {
+				return Entry{}, cursor, false, errArtifactPublicationPageBoundary
 			}
 			next := cursor
 			next.Offset = 1
@@ -779,21 +801,55 @@ func authorizedManifestSegments(
 	store ArtifactStore,
 	origin string,
 	hash string,
-) (_ []string, retErr error) {
+) ([]string, error) {
 	ref, err := NewRef(origin, KindManifests, hash+".json")
 	if err != nil {
 		return nil, err
 	}
-	entry, reader, err := store.Open(ctx, ref)
+	entry, err := statAuthorizedPublication(
+		ctx,
+		store,
+		authorizedPublicationRef{ref: ref},
+	)
+	if err != nil {
+		return nil, err
+	}
+	return readAuthorizedManifestSegments(ctx, store, origin, entry)
+}
+
+func statAuthorizedManifest(
+	ctx context.Context,
+	store ArtifactStore,
+	origin string,
+	hash string,
+) (Entry, error) {
+	ref, err := NewRef(origin, KindManifests, hash+".json")
+	if err != nil {
+		return Entry{}, err
+	}
+	return statAuthorizedPublication(
+		ctx,
+		store,
+		authorizedPublicationRef{ref: ref},
+	)
+}
+
+func readAuthorizedManifestSegments(
+	ctx context.Context,
+	store ArtifactStore,
+	origin string,
+	expected Entry,
+) (_ []string, retErr error) {
+	entry, reader, err := store.Open(ctx, expected.Ref)
 	if err != nil {
 		return nil, err
 	}
 	defer func() {
 		retErr = errors.Join(retErr, reader.Close())
 	}()
-	if entry.Ref != ref {
+	if entry != expected {
 		return nil, fmt.Errorf(
-			"%w: authoritative manifest reference changed",
+			"%w: authoritative manifest changed during inspection",
 			ErrArtifactConflict,
 		)
 	}

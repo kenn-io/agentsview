@@ -1361,6 +1361,63 @@ func TestFolderTransportPushExchangeWorkStaysBounded(t *testing.T) {
 		"the two object-store pages must be observed")
 }
 
+func TestFolderTransportPushSharesLimitsAcrossKinds(t *testing.T) {
+	segmentBody := []byte("segment-fills-the-exchange-budget")
+	tests := []struct {
+		name       string
+		maxObjects int
+		maxBytes   int64
+	}{
+		{name: "byte budget", maxObjects: 8, maxBytes: int64(len(segmentBody))},
+		{name: "object budget", maxObjects: 1, maxBytes: 1 << 20},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			target := t.TempDir()
+			origin := "local-a1b2c3"
+			transport, err := OpenFolderTransport(target, FolderTransportOptions{
+				MaxObjects: tt.maxObjects,
+				MaxBytes:   tt.maxBytes,
+			})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, transport.Close()) })
+
+			store := newTestArtifactStore(t)
+			segmentRef := testContentRef(t, origin, KindSegments, segmentBody, ".ndjson")
+			createTestStoreArtifact(t, store, segmentRef, segmentBody)
+			manifestBody, err := canonicalJSON(manifest{
+				Version:  manifestFormatVersion,
+				Origin:   origin,
+				Segments: []string{},
+			})
+			require.NoError(t, err)
+			manifestRef := testContentRef(t, origin, KindManifests, manifestBody, ".json")
+			createTestStoreArtifact(t, store, manifestRef, manifestBody)
+
+			first, err := transport.Exchange(t.Context(), store, origin)
+			require.NoError(t, err)
+			assert.Equal(t, 1, first.Published)
+			assert.True(t, first.More)
+			assertFolderWireBody(t, target, segmentRef, segmentBody)
+			_, err = os.Stat(filepath.Join(
+				target, origin, string(KindManifests), manifestRef.Name,
+			))
+			assert.ErrorIs(t, err, fs.ErrNotExist)
+
+			second, err := transport.Exchange(t.Context(), store, origin)
+			require.NoError(t, err)
+			assert.Equal(t, 1, second.Published)
+			assertFolderWireBody(t, target, manifestRef, manifestBody)
+			if second.More {
+				settled, settleErr := transport.Exchange(t.Context(), store, origin)
+				require.NoError(t, settleErr)
+				assert.Zero(t, settled.Published)
+				assert.False(t, settled.More)
+			}
+		})
+	}
+}
+
 func TestFolderTransportExchangeResumesWithinObjectBudget(t *testing.T) {
 	target := t.TempDir()
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{
