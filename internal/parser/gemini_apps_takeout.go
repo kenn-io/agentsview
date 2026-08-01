@@ -99,17 +99,25 @@ func planGeminiAppsFile(path string) (geminiAppsFilePlan, bool, error) {
 	}
 
 	info := geminiAppsDocumentInfo(doc)
-	if info.language != "" && !strings.EqualFold(strings.SplitN(info.language, "-", 2)[0], "en") {
-		return geminiAppsFilePlan{}, false, fmt.Errorf("unsupported Gemini Apps Takeout locale")
-	}
 	plan := geminiAppsFilePlan{}
 	cells := geminiAppsOuterCells(doc)
-	hasGemini := false
+	geminiCells := make([]*html.Node, 0, len(cells))
 	for _, cell := range cells {
 		if geminiAppsProductHeading(cell) != "gemini apps" {
 			continue
 		}
-		hasGemini = true
+		geminiCells = append(geminiCells, cell)
+	}
+	if len(geminiCells) == 0 {
+		return plan, false, nil
+	}
+	if info.language != "" && !strings.EqualFold(strings.SplitN(info.language, "-", 2)[0], "en") {
+		return geminiAppsFilePlan{}, false, fmt.Errorf("unsupported Gemini Apps Takeout locale")
+	}
+	if !geminiAppsTitleAdmitted(info.title) {
+		return geminiAppsFilePlan{}, false, fmt.Errorf("unsupported localized or changed Gemini Apps Takeout format")
+	}
+	for _, cell := range geminiCells {
 		admittedCell, result, err := planGeminiAppsCell(cell)
 		if !admittedCell {
 			continue
@@ -126,12 +134,6 @@ func planGeminiAppsFile(path string) (geminiAppsFilePlan, bool, error) {
 			continue
 		}
 		plan.results = append(plan.results, result)
-	}
-	if hasGemini && !geminiAppsTitleAdmitted(info.title) {
-		return geminiAppsFilePlan{}, false, fmt.Errorf("unsupported localized or changed Gemini Apps Takeout format")
-	}
-	if !hasGemini || len(cells) == 0 {
-		return plan, false, nil
 	}
 	return plan, true, nil
 }
@@ -174,10 +176,13 @@ func geminiAppsOuterCells(doc *html.Node) []*html.Node {
 
 func planGeminiAppsCell(cell *html.Node) (bool, ParseResult, error) {
 	header := firstDescendantClass(cell, "header-cell")
-	content := firstDescendantClass(cell, "content-cell")
 	if header == nil {
 		return false, ParseResult{}, nil
 	}
+	if geminiAppsActivityLabel(header) != "prompted" {
+		return true, ParseResult{}, nil
+	}
+	content := firstDescendantClass(cell, "content-cell")
 	headerText := normalizeMetadata(geminiAppsText(header, false))
 	match := geminiAppsTimestampRE.FindStringSubmatch(headerText)
 	if match == nil {
@@ -193,15 +198,11 @@ func planGeminiAppsCell(cell *html.Node) (bool, ParseResult, error) {
 	if content == nil {
 		return true, ParseResult{}, fmt.Errorf("prompted activity record has no content cell")
 	}
-	label := geminiAppsActivityLabel(headerText, match[0])
-	if label != "prompted" {
-		return true, ParseResult{}, nil
-	}
 	blocks := geminiAppsContentBlocks(content)
 	var rendered []string
 	for _, block := range blocks {
-		value := strings.TrimSpace(renderGeminiAppsNode(block, false))
-		if len(rendered) == 0 && value == "" {
+		value := strings.TrimSpace(renderGeminiAppsBlock(block))
+		if value == "" || !geminiAppsNodeHasContent(block) || geminiAppsHasEmptySemanticNode(block) {
 			return true, ParseResult{}, fmt.Errorf("prompted activity record has no prompt")
 		}
 		if value != "" && normalizeMetadata(value) != normalizeMetadata(match[0]) {
@@ -224,20 +225,36 @@ func planGeminiAppsCell(cell *html.Node) (bool, ParseResult, error) {
 	return true, result, nil
 }
 
-func geminiAppsActivityLabel(header, timestamp string) string {
-	value := strings.TrimSpace(strings.Replace(header, normalizeMetadata(timestamp), "", 1))
-	value = strings.TrimSpace(strings.TrimPrefix(strings.ToLower(value), "gemini apps"))
-	return strings.Join(strings.Fields(value), " ")
+func geminiAppsActivityLabel(header *html.Node) string {
+	var label string
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if label != "" {
+			return
+		}
+		if n.Type == html.ElementNode && isGeminiAppsIgnored(strings.ToLower(n.Data)) {
+			return
+		}
+		if n.Type == html.ElementNode && strings.EqualFold(n.Data, "p") {
+			label = strings.ToLower(normalizeMetadata(geminiAppsText(n, false)))
+			return
+		}
+		for child := n.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(header)
+	return label
 }
 
 func geminiAppsContentBlocks(content *html.Node) []*html.Node {
 	var blocks []*html.Node
 	var run *html.Node
 	flush := func() {
-		if run != nil {
+		if run != nil && (strings.TrimSpace(renderGeminiAppsBlock(run)) != "" || geminiAppsHasEmptySemanticNode(run)) {
 			blocks = append(blocks, run)
-			run = nil
 		}
+		run = nil
 	}
 	for child := content.FirstChild; child != nil; child = child.NextSibling {
 		if isGeminiAppsBlock(child) {
@@ -264,6 +281,36 @@ func geminiAppsContentBlocks(content *html.Node) []*html.Node {
 	return blocks
 }
 
+func renderGeminiAppsBlock(n *html.Node) string {
+	value := renderGeminiAppsNode(n, false)
+	if n.Type == html.ElementNode && n.Data == "run" && !geminiAppsContainsPreformatted(n) {
+		lines := strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n")
+		for i := range lines {
+			lines[i] = strings.Join(strings.Fields(lines[i]), " ")
+		}
+		return strings.Join(lines, "\n")
+	}
+	return value
+}
+
+func geminiAppsContainsPreformatted(n *html.Node) bool {
+	if n.Type == html.ElementNode {
+		tag := strings.ToLower(n.Data)
+		if isGeminiAppsIgnored(tag) {
+			return false
+		}
+		if tag == "pre" || tag == "code" {
+			return true
+		}
+	}
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		if geminiAppsContainsPreformatted(child) {
+			return true
+		}
+	}
+	return false
+}
+
 func isGeminiAppsBlock(n *html.Node) bool {
 	if n.Type != html.ElementNode {
 		return false
@@ -271,6 +318,39 @@ func isGeminiAppsBlock(n *html.Node) bool {
 	switch strings.ToLower(n.Data) {
 	case "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "code", "table", "ul", "ol":
 		return true
+	}
+	return false
+}
+
+func geminiAppsNodeHasContent(n *html.Node) bool {
+	if n.Type == html.TextNode {
+		return strings.TrimSpace(sanitizeGeminiAppsText(n.Data)) != ""
+	}
+	if n.Type == html.ElementNode && isGeminiAppsIgnored(strings.ToLower(n.Data)) {
+		return false
+	}
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		if geminiAppsNodeHasContent(child) {
+			return true
+		}
+	}
+	return false
+}
+
+func geminiAppsHasEmptySemanticNode(n *html.Node) bool {
+	if n.Type == html.ElementNode {
+		tag := strings.ToLower(n.Data)
+		if isGeminiAppsIgnored(tag) {
+			return false
+		}
+		if tag != "run" && tag != "br" && tag != "img" && !geminiAppsNodeHasContent(n) {
+			return true
+		}
+	}
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		if geminiAppsHasEmptySemanticNode(child) {
+			return true
+		}
 	}
 	return false
 }
@@ -330,6 +410,9 @@ func geminiAppsTextValue(value string, preserved bool) string {
 	}
 	if value == "" {
 		return ""
+	}
+	if strings.TrimSpace(value) == "" {
+		return " "
 	}
 	leading, trailing := unicode.IsSpace([]rune(value)[0]), unicode.IsSpace([]rune(value)[len([]rune(value))-1])
 	value = strings.Join(strings.Fields(value), " ")
