@@ -443,8 +443,8 @@ func TestHermesStreamingTranscriptFailureContinuesLaterRoots(t *testing.T) {
 // the reconciliation tombstoning path: hermesProfileArchiveRoots used to
 // convert every os.ReadDir failure into an empty profile list, so a
 // transient permission or I/O failure on the profiles container made
-// discovery look authoritatively empty while ReconciliationOwnershipScopes
-// still claimed the whole container — and the engine tombstoned every
+// discovery look authoritatively empty while the resolved reconciliation
+// scope still proved the whole container — and the engine tombstoned every
 // stored hermes session under it as source_missing. Enumeration failures
 // must surface as DiscoveryIncompleteError so the engine retains
 // reconciliation markers and retries instead.

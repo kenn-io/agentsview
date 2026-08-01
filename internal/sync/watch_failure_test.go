@@ -51,11 +51,24 @@ func (factory partialFailureStreamingFactory) Capabilities() parser.Capabilities
 	return factory.provider.Capabilities()
 }
 
+type partialFailureStreamingScopedProvider struct {
+	*partialFailureStreamingProvider
+	scopes parser.ProviderBase
+}
+
+func (p partialFailureStreamingScopedProvider) ResolveReconciliationScopes(
+	ctx context.Context, req parser.ReconciliationScopeRequest,
+) (parser.ReconciliationScopePlan, error) {
+	return p.scopes.ResolveReconciliationScopes(ctx, req)
+}
+
 func (factory partialFailureStreamingFactory) NewProvider(
 	cfg parser.ProviderConfig,
 ) parser.Provider {
-	factory.provider.Config = cfg.Clone()
-	return factory.provider
+	return partialFailureStreamingScopedProvider{
+		partialFailureStreamingProvider: factory.provider,
+		scopes:                          perCallScopeProviderBase(factory.provider.ProviderBase, cfg),
+	}
 }
 
 type fingerprintCountingProvider struct {
@@ -117,11 +130,24 @@ func (f changedPathFailureFactory) Capabilities() parser.Capabilities {
 	return f.provider.Capabilities()
 }
 
+type changedPathFailureScopedProvider struct {
+	*changedPathFailureProvider
+	scopes parser.ProviderBase
+}
+
+func (p changedPathFailureScopedProvider) ResolveReconciliationScopes(
+	ctx context.Context, req parser.ReconciliationScopeRequest,
+) (parser.ReconciliationScopePlan, error) {
+	return p.scopes.ResolveReconciliationScopes(ctx, req)
+}
+
 func (f changedPathFailureFactory) NewProvider(
 	cfg parser.ProviderConfig,
 ) parser.Provider {
-	f.provider.Config = cfg.Clone()
-	return f.provider
+	return changedPathFailureScopedProvider{
+		changedPathFailureProvider: f.provider,
+		scopes:                     perCallScopeProviderBase(f.provider.ProviderBase, cfg),
+	}
 }
 
 type changedPathContextKey struct{}

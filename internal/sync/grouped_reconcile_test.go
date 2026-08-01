@@ -249,18 +249,31 @@ func TestGroupedReconcileContainerProbesDoNotScaleWithProviderGroups(t *testing.
 		})
 	}
 
-	t.Run("unscoped group still captures containers", func(t *testing.T) {
+	t.Run("unscoped group captures only planned containers", func(t *testing.T) {
 		root := filepath.Join(t.TempDir(), "claude-0")
 		writeGroupedClaudeFixture(t, root, "session-0")
 		engine := newContainerEngine(t, []string{root})
 		probes := countContainerProbes(t)
 
+		// An unscoped partial pass resolves each provider's own topology; a
+		// Claude-only root yields no OpenCode scopes, so no container can be
+		// discovered and none may be probed.
 		require.NoError(t, engine.ReconcileProviderRootsGrouped(t.Context(),
 			[]ProviderRootsGroup{{Agent: "", Roots: []string{root}}},
 		))
+		assert.Zero(t, probes.Load(),
+			"an unscoped pass whose plans stream no shared container must not probe one")
 
+		// A full unscoped recovery covers every provider's configured scope
+		// and still captures every configured container. The fixture
+		// container is deliberately not a valid database, so the pass itself
+		// reports OpenCode discovery as failed; only the probe count is
+		// pinned here.
+		_ = engine.ReconcileProviderRootsGrouped(t.Context(),
+			[]ProviderRootsGroup{{Agent: "", Roots: nil}},
+		)
 		assert.Positive(t, probes.Load(),
-			"the unscoped pass must still capture configured containers")
+			"a full unscoped pass must still capture configured containers")
 	})
 }
 

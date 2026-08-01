@@ -1103,11 +1103,35 @@ func (e *Engine) classifyProviderChangedPath(
 			!changedPathWithinAnyRoot(path, watchRoots) {
 			continue
 		}
+		// Capture the shared container's state before any watermark-only
+		// listing below: the provider-side freshness merge may trust the
+		// caller's stored authority only while the container provably has
+		// not changed across the listing window, and the pass-level capture
+		// guard does not exist yet at classification time.
+		watermarkContainer := openCodeContainerPathForChangedPathEvent(
+			agentType, roots, path,
+		)
+		var watermarkPreState parser.SQLiteContainerState
+		watermarkPreStateOK := false
+		if watermarkContainer != "" {
+			watermarkPreState, watermarkPreStateOK =
+				statSQLiteContainerState(watermarkContainer)
+		}
 		for _, watchRoot := range watchRoots {
 			request := parser.ChangedPathRequest{
 				Path:      path,
 				EventKind: eventKind,
 				WatchRoot: watchRoot,
+				// Shared-container providers merge the bounded session-row
+				// listing against the paged stored freshness below and emit
+				// only members whose watermark advanced, instead of a
+				// whole-container child digest scan.
+				AllowWatermarkOnlySources: true,
+			}
+			if watermarkContainer != "" && watermarkPreStateOK &&
+				!e.forceParse && e.pathRewriter == nil {
+				request.StoredMemberFreshnessPage =
+					e.storedMemberFreshnessPager(watermarkContainer)
 			}
 			if provider.Capabilities().Source.StoredSourceHints == parser.CapabilitySupported {
 				if resolver, ok := provider.(parser.StoredSourceHintScopeProvider); ok {
@@ -1136,6 +1160,18 @@ func (e *Engine) classifyProviderChangedPath(
 				ctx,
 				request,
 			)
+			if err == nil && request.StoredMemberFreshnessPage != nil {
+				if post, ok := statSQLiteContainerState(watermarkContainer); !ok ||
+					post != watermarkPreState {
+					// The container changed while the merged listing ran: a
+					// commit inside that window can advance a session past
+					// its listed watermark, so the merge may have dropped a
+					// changed member. Re-list without stored authority and
+					// let the per-file gates decide.
+					request.StoredMemberFreshnessPage = nil
+					sources, err = provider.SourcesForChangedPath(ctx, request)
+				}
+			}
 			if err != nil {
 				if !errors.Is(err, parser.ErrUnsupportedProviderFeature) {
 					classificationErr = errors.Join(
@@ -3275,10 +3311,10 @@ func (e *Engine) reconcileWatchRoots(
 }
 
 // ReconcileProviderRoots runs the bounded scheduled pass for one provider. It
-// bypasses the cross-provider expansion in logicalRootsForWatchRoots so a
-// shallow-watched agent never enumerates or tombstones another agent's sessions
-// under an overlapping root. Providers whose scheduled discovery is
-// non-authoritative leave deletion proof to the archive audit.
+// resolves scopes against that provider's topology only, so a shallow-watched
+// agent never enumerates or tombstones another agent's sessions under an
+// overlapping root. Providers whose scheduled discovery is non-authoritative
+// leave deletion proof to the archive audit.
 func (e *Engine) ReconcileProviderRoots(
 	ctx context.Context, agent parser.AgentType, roots []string,
 ) error {
@@ -3396,14 +3432,15 @@ func (e *Engine) reconcileScopedWatchRoots(
 func (e *Engine) reconcileScopedWatchRootsLocked(
 	ctx context.Context, agent parser.AgentType, roots []string, full, force bool,
 ) (SyncStats, int, passEpilogueEligibility, error) {
-	var logicalRoots []string
-	var excludedRemoteRoots int
-	if agent == "" {
-		logicalRoots, excludedRemoteRoots = e.localReconciliationRoots(roots, full)
-	} else {
-		logicalRoots, excludedRemoteRoots = e.agentReconciliationRoots(agent, roots)
-	}
-	if !full && len(roots) > 0 && len(logicalRoots) == 0 && excludedRemoteRoots > 0 {
+	fullCoverage := full || (agent == "" && len(roots) == 0)
+	plans, excludedRemoteRoots := e.resolveReconciliationPlans(
+		ctx, agent, roots, full, fullCoverage,
+	)
+	if !fullCoverage && !reconciliationPlansNeedPass(plans) {
+		// No provider resolved any scope for the request: every root was
+		// blank, remote, or unrelated to every configured topology. Complete
+		// as a bounded no-op before any spool allocation, preserving the
+		// remote-root accounting.
 		e.setLastReconciliationResult(ReconciliationResult{
 			Complete: true,
 			Metrics:  ReconciliationMetrics{ExcludedRemoteRoots: excludedRemoteRoots},
@@ -3411,7 +3448,7 @@ func (e *Engine) reconcileScopedWatchRootsLocked(
 		return SyncStats{}, 0, passEpilogueEligibility{}, nil
 	}
 	stats, metrics, tombstoned, eligibility, err := e.reconcileWatchRootsStreamedLocked(
-		ctx, agent, logicalRoots, full, force,
+		ctx, plans, fullCoverage, force,
 	)
 	metrics.ExcludedRemoteRoots = excludedRemoteRoots
 	complete := err == nil && ctx.Err() == nil && !stats.Aborted &&
@@ -3444,12 +3481,133 @@ func (e *Engine) ReconciliationRootsForAgent(agent string) []string {
 	return append([]string(nil), e.agentDirs[parser.AgentType(agent)]...)
 }
 
+// providerReconciliationPlan pairs one authoritative provider with the scope
+// plan it resolved for the caller's request. A resolution failure is carried
+// rather than returned so sibling providers still run, and the failed
+// provider reports the caller's own roots for retry.
+type providerReconciliationPlan struct {
+	agent        parser.AgentType
+	plan         parser.ReconciliationScopePlan
+	requestRoots []string
+	err          error
+}
+
+// resolveReconciliationPlans asks each in-scope authoritative provider to map
+// the request onto its own topology. Providers own traversal, proof,
+// coverage, and retry authority; the engine only selects which providers to
+// ask and preserves the historical remote-root accounting.
+func (e *Engine) resolveReconciliationPlans(
+	ctx context.Context,
+	agentFilter parser.AgentType,
+	roots []string,
+	full, fullCoverage bool,
+) ([]providerReconciliationPlan, int) {
+	agents := make([]parser.AgentType, 0, len(e.providerFactories))
+	for agent := range e.providerFactories {
+		agents = append(agents, agent)
+	}
+	slices.SortFunc(agents, func(a, b parser.AgentType) int {
+		return strings.Compare(string(a), string(b))
+	})
+	var plans []providerReconciliationPlan
+	for _, agent := range agents {
+		if e.providerMigrationModes[agent] != parser.ProviderMigrationProviderAuthoritative {
+			continue
+		}
+		if agentFilter != "" && agent != agentFilter {
+			continue
+		}
+		if len(e.agentDirs[agent]) == 0 {
+			continue
+		}
+		factory := e.providerFactories[agent]
+		if factory == nil {
+			continue
+		}
+		requestRoots := roots
+		if fullCoverage {
+			// A full authoritative request covers each provider's complete
+			// configured scope; a partial request lets each provider resolve
+			// the same exact caller roots.
+			requestRoots = e.agentDirs[agent]
+		}
+		filtered := make([]string, 0, len(requestRoots))
+		for _, root := range requestRoots {
+			if strings.TrimSpace(root) == "" || isRemoteReconciliationRoot(root) {
+				continue
+			}
+			filtered = append(filtered, root)
+		}
+		if len(filtered) == 0 {
+			continue
+		}
+		provider := factory.NewProvider(parser.ProviderConfig{
+			Roots: e.agentDirs[agent], Machine: e.machine,
+			PathRewriter: e.pathRewriter,
+		})
+		plan, err := provider.ResolveReconciliationScopes(
+			ctx, parser.ReconciliationScopeRequest{Roots: filtered},
+		)
+		plans = append(plans, providerReconciliationPlan{
+			agent: agent, plan: plan, requestRoots: filtered, err: err,
+		})
+	}
+	return plans, e.excludedRemoteReconciliationRoots(agentFilter, roots, full)
+}
+
+// excludedRemoteReconciliationRoots preserves the historical ExcludedRemoteRoots
+// semantics: agent-scoped requests count every remote occurrence, unscoped
+// partial requests count unique remote roots, and a full recovery counts
+// unique remote configured roots.
+func (e *Engine) excludedRemoteReconciliationRoots(
+	agentFilter parser.AgentType, roots []string, full bool,
+) int {
+	if agentFilter != "" {
+		remote := 0
+		for _, root := range roots {
+			if isRemoteReconciliationRoot(root) {
+				remote++
+			}
+		}
+		return remote
+	}
+	requested := roots
+	if full {
+		requested = nil
+		for _, dirs := range e.agentDirs {
+			requested = append(requested, dirs...)
+		}
+	}
+	remote := make(map[string]struct{})
+	for _, root := range requested {
+		if isRemoteReconciliationRoot(root) {
+			remote[root] = struct{}{}
+		}
+	}
+	return len(remote)
+}
+
+// reconciliationPlansNeedPass reports whether any provider resolved a scope
+// or failed to resolve; either requires the streamed pass to run so work is
+// performed or the failure is accounted with retry roots.
+func reconciliationPlansNeedPass(plans []providerReconciliationPlan) bool {
+	for _, plan := range plans {
+		if plan.err != nil || len(plan.plan.Scopes) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // reconcileWatchRootsStreamedLocked runs one streamed reconciliation pass.
 // The caller must hold syncMu: reconcileScopedWatchRoots takes it per pass,
 // and ReconcileProviderRootsGrouped holds it across every group plus the
 // shared epilogue so no other pass can interleave with a pending epilogue.
+// It accepts resolved plans rather than raw roots so no caller can bypass
+// provider scope resolution with a string slice.
 func (e *Engine) reconcileWatchRootsStreamedLocked(
-	ctx context.Context, agent parser.AgentType, roots []string, full, force bool,
+	ctx context.Context, plans []providerReconciliationPlan,
+	fullCoverage, force bool,
 ) (
 	stats SyncStats, metrics ReconciliationMetrics, tombstoned int,
 	eligibility passEpilogueEligibility, retErr error,
@@ -3498,16 +3656,10 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		}
 	}()
 
-	scope := newRootSyncScope(roots)
-	if full {
-		scope = nil
-	} else if scope != nil {
-		scope.agent = agent
-	}
-	preContainerStates := e.captureSQLiteContainerStatesForAgent(agent, roots)
+	preContainerStates := e.capturePlannedSQLiteContainerStates(plans, fullCoverage)
 	providers, completedScopes, failedRoots,
 		failures, discoveryErr, err := e.streamReconciliationCandidates(
-		ctx, scope, spool,
+		ctx, plans, spool, preContainerStates,
 	)
 	stats.providerFailures = failures
 	if err != nil {
@@ -3528,12 +3680,12 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	defer func() {
 		e.finishSQLiteContainerPass(
 			retErr != nil || stats.Aborted || stats.Failed > 0 || stats.providerFailures > 0,
-			scope == nil,
+			fullCoverage,
 		)
 	}()
 
 	var verifiedPass uint64
-	if scope == nil && e.pathRewriter == nil {
+	if fullCoverage && e.pathRewriter == nil {
 		verifiedPass = e.beginVerifiedSourcePass()
 		defer func() {
 			e.finishVerifiedSourcePass(
@@ -3687,8 +3839,8 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	}
 	if retErr == nil && ctx.Err() == nil && !stats.Aborted &&
 		stats.Failed == 0 && stats.providerFailures == 0 {
-		tombstoned, retErr = e.tombstoneMissingWatchSourcesForAgentLocked(
-			ctx, roots, agent, spool,
+		tombstoned, retErr = e.tombstoneMissingWatchSourceScopesLocked(
+			ctx, completedScopes, spool,
 		)
 	} else if canTombstoneCompletedScopes && ctx.Err() == nil &&
 		!stats.Aborted && stats.Failed == 0 {
@@ -3718,27 +3870,23 @@ func (e *Engine) tombstoneCompletedReconciliationScopesLocked(
 	spool reconciliationSpoolStore,
 	incomplete *incompleteReconciliationError,
 ) (deleted int, retErr error) {
-	for _, scope := range incomplete.completed {
-		count, err := e.tombstoneMissingWatchSourcesForAgentLocked(
-			ctx, scope.roots, scope.agent, spool,
-		)
-		deleted += count
-		if err == nil {
-			continue
-		}
-		retryRoots := append([]string(nil), incomplete.roots...)
-		for _, completed := range incomplete.completed {
-			retryRoots = append(retryRoots, completed.roots...)
-		}
-		slices.Sort(retryRoots)
-		retryRoots = slices.Compact(retryRoots)
-		return deleted, &incompleteReconciliationError{
-			failures: incomplete.failures,
-			roots:    retryRoots,
-			cause:    errors.Join(incomplete, err),
-		}
+	deleted, err := e.tombstoneMissingWatchSourceScopesLocked(
+		ctx, incomplete.completed, spool,
+	)
+	if err == nil {
+		return deleted, nil
 	}
-	return deleted, nil
+	retryRoots := append([]string(nil), incomplete.roots...)
+	for _, completed := range incomplete.completed {
+		retryRoots = append(retryRoots, completed.roots...)
+	}
+	slices.Sort(retryRoots)
+	retryRoots = slices.Compact(retryRoots)
+	return deleted, &incompleteReconciliationError{
+		failures: incomplete.failures,
+		roots:    retryRoots,
+		cause:    errors.Join(incomplete, err),
+	}
 }
 
 func (e *Engine) baselineReconciliationCandidates(
@@ -3784,8 +3932,9 @@ func eligibleReconciliationBaselines(
 
 func (e *Engine) streamReconciliationCandidates(
 	ctx context.Context,
-	scope *rootSyncScope,
+	plans []providerReconciliationPlan,
 	spool reconciliationSpoolStore,
+	preContainerStates map[string]parser.SQLiteContainerState,
 ) (
 	map[parser.AgentType]parser.Provider,
 	[]reconciliationProviderScope,
@@ -3799,85 +3948,154 @@ func (e *Engine) streamReconciliationCandidates(
 	var failedRoots []string
 	var failures int
 	var discoveryErr error
-	agents := make([]parser.AgentType, 0, len(e.providerFactories))
-	for agent := range e.providerFactories {
-		agents = append(agents, agent)
-	}
-	slices.SortFunc(agents, func(a, b parser.AgentType) int {
-		return strings.Compare(string(a), string(b))
-	})
-	for _, agent := range agents {
-		if e.providerMigrationModes[agent] != parser.ProviderMigrationProviderAuthoritative {
+	// Trusted containers stream the bounded watermark listing here for the
+	// same reason full discovery lists them that way: every candidate they
+	// spool will gate-skip, so the child digest would be archive-sized work
+	// nothing reads. The predicate is keyed to this pass's pre-discovery
+	// captures; a container that changes mid-stream fails its recapture
+	// check and its candidates resolve full fingerprints instead.
+	containerTrusted := e.sqliteContainerTrustedForDiscovery(preContainerStates)
+	for _, plan := range plans {
+		agent := plan.agent
+		if plan.err != nil {
+			failures++
+			failedRoots = append(failedRoots, plan.requestRoots...)
+			log.Printf("%s provider reconciliation scopes: %v", agent, plan.err)
+			discoveryErr = errors.Join(discoveryErr, fmt.Errorf(
+				"%s provider reconciliation scopes: %w", agent, plan.err,
+			))
 			continue
 		}
-		if !scope.matchesAgent(agent) {
-			continue
-		}
-		roots := slices.DeleteFunc(append([]string(nil), e.agentDirs[agent]...), func(root string) bool {
-			return isRemoteReconciliationRoot(root) || !scope.includes(root)
-		})
-		if len(roots) == 0 {
+		if len(plan.plan.Scopes) == 0 {
 			continue
 		}
 		factory := e.providerFactories[agent]
 		if factory == nil {
 			continue
 		}
+		// traversalRoots is the ordered union across the plan's scopes: the
+		// rehydration provider and candidate preference ranking see the same
+		// root list one whole-provider discovery would have used.
+		var traversalRoots []string
+		var planRetryRoots []string
+		for _, scope := range plan.plan.Scopes {
+			for _, root := range scope.TraversalRoots {
+				if !slices.Contains(traversalRoots, root) {
+					traversalRoots = append(traversalRoots, root)
+				}
+			}
+			planRetryRoots = append(planRetryRoots, scope.RetryRoots...)
+		}
 		provider := factory.NewProvider(parser.ProviderConfig{
-			Roots: roots, Machine: e.machine, PathRewriter: e.pathRewriter,
+			Roots: traversalRoots, Machine: e.machine, PathRewriter: e.pathRewriter,
+			SQLiteContainerUnchangedSinceTrust: containerTrusted,
 		})
 		providers[agent] = provider
 		if provider.Capabilities().Source.StreamingDiscovery != parser.CapabilitySupported {
 			failures++
-			failedRoots = append(failedRoots, roots...)
+			failedRoots = append(failedRoots, planRetryRoots...)
 			log.Printf("%s provider discovery: streaming discovery unsupported", agent)
-			continue
-		}
-		discoverer, ok := provider.(parser.StreamingDiscoverer)
-		if !ok {
-			failures++
-			failedRoots = append(failedRoots, roots...)
 			continue
 		}
 		watchRoots, err := parser.ResolveWatchRoots(ctx, provider)
 		if err != nil {
 			failures++
-			failedRoots = append(failedRoots, roots...)
+			failedRoots = append(failedRoots, planRetryRoots...)
 			discoveryErr = errors.Join(discoveryErr, fmt.Errorf(
 				"%s provider watch roots: %w", agent, err,
 			))
 			continue
 		}
-		var spoolErr error
-		err = discoverer.DiscoverEach(ctx, func(source parser.SourceRef) error {
-			candidate, ok := e.reconciliationCandidate(provider, source, roots, watchRoots)
+		for _, group := range reconciliationTraversalGroups(plan.plan.Scopes) {
+			var groupRetryRoots []string
+			for _, scope := range group.scopes {
+				groupRetryRoots = append(groupRetryRoots, scope.RetryRoots...)
+			}
+			scopeProvider := factory.NewProvider(parser.ProviderConfig{
+				Roots: group.roots, Machine: e.machine,
+				PathRewriter:                       e.pathRewriter,
+				SQLiteContainerUnchangedSinceTrust: containerTrusted,
+			})
+			discoverer, ok := scopeProvider.(parser.StreamingDiscoverer)
 			if !ok {
-				return nil
+				failures++
+				failedRoots = append(failedRoots, groupRetryRoots...)
+				continue
 			}
-			spoolErr = spool.Add(ctx, candidate)
-			return spoolErr
-		})
-		if err != nil {
-			if spoolErr != nil {
-				return providers, completedScopes,
-					failedRoots, failures, discoveryErr, spoolErr
+			groupProofs := make([][]db.StoredSourcePathHintScope, len(group.scopes))
+			for i, scope := range group.scopes {
+				groupProofs[i] = storedSourceDBHintScopes(scope.PhysicalProofScopes)
 			}
-			if ctx.Err() != nil {
-				return providers, completedScopes,
-					failedRoots, failures, discoveryErr, ctx.Err()
+			var spoolErr error
+			err = discoverer.DiscoverEach(ctx, func(source parser.SourceRef) error {
+				candidate, ok := e.reconciliationCandidate(
+					provider, source, traversalRoots, watchRoots,
+				)
+				if !ok {
+					return nil
+				}
+				admitted := false
+				for _, proofScopes := range groupProofs {
+					if db.StoredSourcePathHintScopesContain(candidate.Path, proofScopes) {
+						admitted = true
+						break
+					}
+				}
+				if !admitted {
+					if reconciliationPathWithinTraversal(
+						candidate.Path, group.roots,
+					) {
+						// An unrequested sibling inside the traversal gateway:
+						// dropping before the spool is baseline-safe because
+						// ReplaceActiveSessionSourceBaselines diffs only
+						// candidates present in the page.
+						return nil
+					}
+					// Outside both traversal and every proof is a provider
+					// contract violation; fail the group closed so its
+					// sessions are preserved and its own retry roots are
+					// returned.
+					return fmt.Errorf(
+						"source %s outside traversal and proof scope",
+						candidate.Path,
+					)
+				}
+				spoolErr = spool.Add(ctx, candidate)
+				return spoolErr
+			})
+			if err != nil {
+				if spoolErr != nil {
+					return providers, completedScopes,
+						failedRoots, failures, discoveryErr, spoolErr
+				}
+				if ctx.Err() != nil {
+					return providers, completedScopes,
+						failedRoots, failures, discoveryErr, ctx.Err()
+				}
+				log.Printf("%s provider streaming discovery: %v", agent, err)
+				failures++
+				failedRoots = append(failedRoots, groupRetryRoots...)
+				discoveryErr = errors.Join(discoveryErr, fmt.Errorf(
+					"%s provider streaming discovery: %w", agent, err,
+				))
+				continue
 			}
-			log.Printf("%s provider streaming discovery: %v", agent, err)
-			failures++
-			failedRoots = append(failedRoots, roots...)
-			discoveryErr = errors.Join(discoveryErr, fmt.Errorf(
-				"%s provider streaming discovery: %w", agent, err,
-			))
-			continue
+			for _, scope := range group.scopes {
+				completedScopes = append(completedScopes, reconciliationProviderScope{
+					agent: agent,
+					roots: append([]string(nil), scope.RetryRoots...),
+					proofScopes: append(
+						[]parser.StoredSourceHintScope(nil), scope.PhysicalProofScopes...,
+					),
+					coverageIdentities: append(
+						[]string(nil), scope.CoverageIdentities...,
+					),
+					requiredCoverageIdentities: append(
+						[]string(nil), plan.plan.RequiredCoverageIdentities...,
+					),
+				})
+			}
 		}
-		completedScopes = append(completedScopes, reconciliationProviderScope{
-			agent: agent,
-			roots: append([]string(nil), roots...),
-		})
 	}
 	slices.Sort(failedRoots)
 	failedRoots = slices.Compact(failedRoots)
@@ -3885,9 +4103,67 @@ func (e *Engine) streamReconciliationCandidates(
 		failedRoots, failures, discoveryErr, nil
 }
 
+// reconciliationTraversalGroup is one shared discovery walk: every scope in
+// the group declares the identical traversal-root set, so a single stream
+// serves them all, with each scope keeping its own proof and coverage
+// authority.
+type reconciliationTraversalGroup struct {
+	roots  []string
+	scopes []parser.ReconciliationScope
+}
+
+// reconciliationTraversalGroups clusters one plan's scopes by their exact
+// traversal-root sets. A request naming N descendants under one configured
+// gateway resolves N scopes that all traverse that gateway; without grouping
+// the pass would walk the gateway N times to admit each proof, and the walk
+// is the archive-scale part. A group failure fails every member scope, which
+// matches the shared traversal: the same walk would have failed each of them
+// individually.
+func reconciliationTraversalGroups(
+	scopes []parser.ReconciliationScope,
+) []reconciliationTraversalGroup {
+	var groups []reconciliationTraversalGroup
+	for _, scope := range scopes {
+		matched := false
+		for i := range groups {
+			if slices.Equal(groups[i].roots, scope.TraversalRoots) {
+				groups[i].scopes = append(groups[i].scopes, scope)
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			groups = append(groups, reconciliationTraversalGroup{
+				roots:  scope.TraversalRoots,
+				scopes: []parser.ReconciliationScope{scope},
+			})
+		}
+	}
+	return groups
+}
+
+// reconciliationPathWithinTraversal reports whether a discovered candidate
+// lies inside one of the scope's traversal gateways, resolving provider
+// virtual member syntax to the physical container first.
+func reconciliationPathWithinTraversal(path string, traversalRoots []string) bool {
+	cleaned := cleanRootPath(validatedProviderSourceStatPath(path))
+	for _, root := range traversalRoots {
+		if samePathOrDescendant(cleaned, cleanRootPath(root)) {
+			return true
+		}
+	}
+	return false
+}
+
+// reconciliationProviderScope is the completed-scope record: the caller's own
+// retry roots plus the provider-issued proof, coverage, and required-coverage
+// authorities that tombstoning consumes.
 type reconciliationProviderScope struct {
-	agent parser.AgentType
-	roots []string
+	agent                      parser.AgentType
+	roots                      []string
+	proofScopes                []parser.StoredSourceHintScope
+	coverageIdentities         []string
+	requiredCoverageIdentities []string
 }
 
 type incompleteReconciliationError struct {
@@ -4151,6 +4427,23 @@ func sameReconciliationSourcePath(left, right string) bool {
 // spool and full provider-root coverage — absence from a partial stream
 // proves nothing — and providers opt in via
 // parser.ReconciliationAggregateMemberResolver.
+// reconciliationProofCoversContainerMembership reports whether one completed
+// scope's proof claims the whole virtual membership of the container at
+// physicalPath. Such a scope streamed and admitted exactly that container's
+// members, so a member row absent from the spool is provably gone from the
+// container even though the pass covered no configured root in full.
+func reconciliationProofCoversContainerMembership(
+	proofs []parser.StoredSourceHintScope, physicalPath string,
+) bool {
+	for _, proof := range proofs {
+		if proof.IncludeVirtualMembers &&
+			sameReconciliationSourcePath(proof.Path, physicalPath) {
+			return true
+		}
+	}
+	return false
+}
+
 func aggregateOwnedMemberGone(
 	ctx context.Context,
 	spool reconciliationSpoolStore,
@@ -4226,20 +4519,68 @@ func mergeReconciliationSyncStats(dst *SyncStats, src SyncStats) {
 	dst.Aborted = dst.Aborted || src.Aborted
 }
 
+// tombstoneMissingWatchSourcesLocked adapts a raw changed-path root list to
+// the typed scope authority by resolving it through each provider's own
+// topology, exactly as a reconciliation pass would.
 func (e *Engine) tombstoneMissingWatchSourcesLocked(
 	ctx context.Context,
 	roots []string,
 	spool reconciliationSpoolStore,
 ) (deleted int, retErr error) {
-	return e.tombstoneMissingWatchSourcesForAgentLocked(
-		ctx, roots, "", spool,
-	)
+	plans, _ := e.resolveReconciliationPlans(ctx, "", roots, false, false)
+	var scopes []reconciliationProviderScope
+	for _, plan := range plans {
+		if plan.err != nil {
+			return 0, fmt.Errorf(
+				"%s provider reconciliation scopes: %w", plan.agent, plan.err,
+			)
+		}
+		for _, scope := range plan.plan.Scopes {
+			scopes = append(scopes, reconciliationProviderScope{
+				agent:                      plan.agent,
+				roots:                      scope.RetryRoots,
+				proofScopes:                scope.PhysicalProofScopes,
+				coverageIdentities:         scope.CoverageIdentities,
+				requiredCoverageIdentities: plan.plan.RequiredCoverageIdentities,
+			})
+		}
+	}
+	return e.tombstoneMissingWatchSourceScopesLocked(ctx, scopes, spool)
 }
 
-func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
+// reconciliationCoverageComplete reports whether the scopes completed for one
+// provider cover every coverage identity its full configured scope requires.
+// This is the provider-issued replacement for recomputing root geometry: a
+// remote or unresolved configured root keeps its required identity uncovered,
+// so full-coverage deletion authority stays unreachable.
+func reconciliationCoverageComplete(scopes []reconciliationProviderScope) bool {
+	covered := make(map[string]struct{})
+	var required []string
+	for _, scope := range scopes {
+		if len(scope.requiredCoverageIdentities) > 0 {
+			required = scope.requiredCoverageIdentities
+		}
+		for _, identity := range scope.coverageIdentities {
+			covered[identity] = struct{}{}
+		}
+	}
+	if len(required) == 0 {
+		return false
+	}
+	for _, identity := range required {
+		if _, ok := covered[identity]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// tombstoneMissingWatchSourceScopesLocked pages ownership rows inside each
+// completed scope's provider-issued physical proof and tombstones rows whose
+// sources are provably gone.
+func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 	ctx context.Context,
-	roots []string,
-	agentFilter parser.AgentType,
+	scopes []reconciliationProviderScope,
 	spool reconciliationSpoolStore,
 ) (deleted int, retErr error) {
 	if e.pathRewriter != nil {
@@ -4248,32 +4589,30 @@ func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
 		// provider lookup cannot authoritatively prove source loss.
 		return 0, nil
 	}
-	for agent, dirs := range e.agentDirs {
-		if agentFilter != "" && agent != agentFilter {
-			continue
+	var agents []parser.AgentType
+	scopesByAgent := make(map[parser.AgentType][]reconciliationProviderScope)
+	for _, scope := range scopes {
+		if _, ok := scopesByAgent[scope.agent]; !ok {
+			agents = append(agents, scope.agent)
 		}
+		scopesByAgent[scope.agent] = append(scopesByAgent[scope.agent], scope)
+	}
+	for _, agent := range agents {
+		agentScopes := scopesByAgent[agent]
 		var provider parser.Provider
 		var replacementIndex reconciliationSpoolStore
 		ownsReplacementIndex := false
-		allProviderRootsCovered := reconciliationCoversConfiguredRoots(roots, dirs)
+		allProviderRootsCovered := reconciliationCoverageComplete(agentScopes)
 		if factory := e.providerFactories[agent]; factory != nil {
 			provider = factory.NewProvider(parser.ProviderConfig{
 				Roots: e.agentDirs[agent], Machine: e.machine,
 				PathRewriter: e.pathRewriter,
 			})
 		}
-		for _, root := range roots {
-			if !slices.ContainsFunc(dirs, func(dir string) bool {
-				return samePathOrDescendant(cleanRootPath(dir), cleanRootPath(root)) ||
-					samePathOrDescendant(cleanRootPath(root), cleanRootPath(dir))
-			}) {
+		for _, scope := range agentScopes {
+			ownershipScopes := storedSourceDBHintScopes(scope.proofScopes)
+			if len(ownershipScopes) == 0 {
 				continue
-			}
-			ownershipScopes := []parser.StoredSourceHintScope{{Path: root}}
-			if resolver, ok := provider.(parser.ReconciliationOwnershipScopeProvider); ok {
-				if resolved := resolver.ReconciliationOwnershipScopes(root); len(resolved) > 0 {
-					ownershipScopes = resolved
-				}
 			}
 			var cursor db.SessionSourceCursor
 			for {
@@ -4282,7 +4621,7 @@ func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
 				}
 				page, err := e.db.ListActiveSessionSourceOwnershipScopesPage(
 					ctx, e.machine, string(agent),
-					storedSourceDBHintScopes(ownershipScopes), cursor,
+					ownershipScopes, cursor,
 				)
 				if err != nil {
 					return deleted, fmt.Errorf(
@@ -4294,6 +4633,15 @@ func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
 				}
 				missingByPath := make(map[string]bool, len(page))
 				for _, ownership := range page {
+					if !db.StoredSourcePathHintScopesContain(
+						ownership.FilePath, ownershipScopes,
+					) {
+						// The SQL LIKE prefilter is ASCII-case-insensitive
+						// while this predicate is platform-exact; retain any
+						// row the pass holds no proof over and leave the
+						// keyset cursor untouched.
+						continue
+					}
 					statPath := ownership.FilePath
 					persistentMemberContainerExists := false
 					missing, ok := missingByPath[statPath]
@@ -4353,8 +4701,12 @@ func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
 								}
 								replacementIndex = spool
 							} else {
+								// Deliberate bypass of the pass's narrowed proof:
+								// the index must span the provider's full
+								// configured scope so a replacement beyond the
+								// narrowed pass stays resolvable.
 								replacementIndex, err = e.buildReconciliationReplacementIndex(
-									ctx, provider, dirs,
+									ctx, provider, e.agentDirs[agent],
 								)
 								if err != nil {
 									return deleted, fmt.Errorf(
@@ -4397,9 +4749,16 @@ func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
 								statPath, ownership.ID,
 							)
 							if valid {
-								if !allProviderRootsCovered {
+								if !allProviderRootsCovered &&
+									!reconciliationProofCoversContainerMembership(
+										scope.proofScopes, physicalPath,
+									) {
 									// A scoped pass cannot prove that this member does not
-									// exist in a persistent container under another root.
+									// exist in a persistent container under another root —
+									// unless the completed scope's proof is this container's
+									// whole virtual membership, in which case the admitted
+									// stream enumerated exactly this container and spool
+									// absence is authoritative for rows bound to it.
 									continue
 								}
 								if _, statErr := e.lstatSource(physicalPath); statErr != nil {
@@ -4547,20 +4906,6 @@ func (e *Engine) tombstoneSessionSourceOwnership(
 	return true, nil
 }
 
-func reconciliationCoversConfiguredRoots(requested, configured []string) bool {
-	for _, configuredRoot := range configured {
-		if isRemoteReconciliationRoot(configuredRoot) ||
-			!slices.ContainsFunc(requested, func(requestedRoot string) bool {
-				return samePathOrDescendant(
-					cleanRootPath(configuredRoot), cleanRootPath(requestedRoot),
-				)
-			}) {
-			return false
-		}
-	}
-	return true
-}
-
 func (e *Engine) buildReconciliationReplacementIndex(
 	ctx context.Context, provider parser.Provider, configuredRoots []string,
 ) (result reconciliationSpoolStore, retErr error) {
@@ -4603,105 +4948,6 @@ func (e *Engine) lstatSource(path string) (os.FileInfo, error) {
 		return e.lstat(path)
 	}
 	return os.Lstat(path)
-}
-
-func (e *Engine) logicalRootsForWatchRoots(roots []string) []string {
-	var logical []string
-	for _, root := range roots {
-		cleanedRoot := cleanRootPath(root)
-		matched := false
-		for _, dirs := range e.agentDirs {
-			for _, dir := range dirs {
-				cleanedDir := cleanRootPath(dir)
-				if !samePathOrDescendant(cleanedRoot, cleanedDir) &&
-					!samePathOrDescendant(cleanedDir, cleanedRoot) {
-					continue
-				}
-				if !slices.Contains(logical, cleanedDir) {
-					logical = append(logical, cleanedDir)
-				}
-				matched = true
-			}
-		}
-		if !matched && !slices.Contains(logical, cleanedRoot) {
-			logical = append(logical, cleanedRoot)
-		}
-	}
-	return logical
-}
-
-// logicalRootsForAgentWatchRoots resolves the given roots against one agent's
-// configured dirs only. Unlike logicalRootsForWatchRoots it never crosses into
-// another provider's dirs, so an overlapping ancestor root cannot drag other
-// providers into a scoped reconciliation.
-func (e *Engine) logicalRootsForAgentWatchRoots(
-	agent parser.AgentType, roots []string,
-) []string {
-	dirs := e.agentDirs[agent]
-	var logical []string
-	for _, root := range roots {
-		cleanedRoot := cleanRootPath(root)
-		matched := false
-		for _, dir := range dirs {
-			cleanedDir := cleanRootPath(dir)
-			if !samePathOrDescendant(cleanedRoot, cleanedDir) &&
-				!samePathOrDescendant(cleanedDir, cleanedRoot) {
-				continue
-			}
-			if !slices.Contains(logical, cleanedDir) {
-				logical = append(logical, cleanedDir)
-			}
-			matched = true
-		}
-		if !matched && !slices.Contains(logical, cleanedRoot) {
-			logical = append(logical, cleanedRoot)
-		}
-	}
-	return logical
-}
-
-// agentReconciliationRoots restricts the requested roots to a single agent's
-// configured dirs and excludes remote object roots, mirroring
-// localReconciliationRoots but without the cross-provider expansion.
-func (e *Engine) agentReconciliationRoots(
-	agent parser.AgentType, roots []string,
-) ([]string, int) {
-	local := make([]string, 0, len(roots))
-	remote := 0
-	for _, root := range roots {
-		if isRemoteReconciliationRoot(root) {
-			remote++
-			continue
-		}
-		local = append(local, root)
-	}
-	return e.logicalRootsForAgentWatchRoots(agent, local), remote
-}
-
-// localReconciliationRoots expands a full watcher recovery to every configured
-// local root before tombstoning. Remote object roots are owned by the remote
-// sync path: local reconciliation neither enumerates nor tombstones them, and
-// reports the exclusion explicitly in its result metrics.
-func (e *Engine) localReconciliationRoots(
-	roots []string, full bool,
-) ([]string, int) {
-	requested := append([]string(nil), roots...)
-	if full {
-		requested = requested[:0]
-		for _, dirs := range e.agentDirs {
-			requested = append(requested, dirs...)
-		}
-	}
-	local := make([]string, 0, len(requested))
-	remote := make(map[string]struct{})
-	for _, root := range requested {
-		if isRemoteReconciliationRoot(root) {
-			remote[root] = struct{}{}
-			continue
-		}
-		local = append(local, root)
-	}
-	return e.logicalRootsForWatchRoots(local), len(remote)
 }
 
 func isRemoteReconciliationRoot(root string) bool {
@@ -4886,7 +5132,9 @@ func (e *Engine) syncAllLocked(
 
 	var all []parser.DiscoveredFile
 	counts := make(map[parser.AgentType]int)
-	providerFound, providerFailures := e.discoverProviderSources(ctx, scope)
+	providerFound, providerFailures := e.discoverProviderSources(
+		ctx, scope, preContainerStates,
+	)
 	for _, file := range providerFound {
 		counts[file.Agent]++
 	}
@@ -5147,9 +5395,11 @@ const slowProviderDiscoveryThreshold = 100 * time.Millisecond
 func (e *Engine) discoverProviderSources(
 	ctx context.Context,
 	scope *rootSyncScope,
+	preContainerStates map[string]parser.SQLiteContainerState,
 ) ([]parser.DiscoveredFile, int) {
 	var files []parser.DiscoveredFile
 	var failures int
+	containerTrusted := e.sqliteContainerTrustedForDiscovery(preContainerStates)
 
 	agents := make([]parser.AgentType, 0, len(e.providerFactories))
 	for agent := range e.providerFactories {
@@ -5185,8 +5435,9 @@ func (e *Engine) discoverProviderSources(
 			continue
 		}
 		provider := factory.NewProvider(parser.ProviderConfig{
-			Roots:   filteredRoots,
-			Machine: e.machine,
+			Roots:                              filteredRoots,
+			Machine:                            e.machine,
+			SQLiteContainerUnchangedSinceTrust: containerTrusted,
 		})
 		// Shared-database providers are streamed source-by-source by their
 		// dedicated sync phase. Calling Discover here would build an archive-sized
@@ -5670,6 +5921,18 @@ func (e *Engine) discoveredFileEffectiveMtime(
 			}
 		}
 		return mtime, nil
+	}
+	// Watermark-only shared-container sources carry their session-row
+	// watermark from discovery. Consulting the provider Fingerprint instead
+	// would resolve the full composite with one indexed child lookup per
+	// session, scaling cutoff filtering with the container instead of the
+	// changed batch — and these sources are only listed for containers that
+	// provably have not changed since their last verified pass, where the
+	// carried watermark and the composite are equally stale.
+	if file.ProviderSource != nil {
+		if wm, ok := parser.SourceWatermarkOnlyMTimeNS(*file.ProviderSource); ok {
+			return wm, nil
+		}
 	}
 	// Provider-authoritative sources resolve freshness through the provider
 	// Fingerprint so composite provider-owned source state participates in
@@ -7402,6 +7665,19 @@ func (e *Engine) processProviderFile(
 		}, true
 	}
 
+	// Watermark-only shared-container sources (changed-path classification)
+	// carry just the session-row watermark. When it does not advance past
+	// the stored composite watermark, the session and project rows provably
+	// did not change, so skip before Fingerprint pays the per-session child
+	// lookup; a child-only edit this cannot see is reconciled by the next
+	// full-discovery pass, whose digest comparison still catches it.
+	if freshMtime, fresh := e.watermarkOnlySQLiteSourceFresh(source, file); fresh {
+		return processResult{
+			skip:  true,
+			mtime: freshMtime,
+		}, true
+	}
+
 	fingerprint, err := provider.Fingerprint(ctx, source)
 	if err != nil {
 		if file.ForceParse &&
@@ -8853,7 +9129,7 @@ func (e *Engine) providerIncrementalContentChanged(
 	if !ok || storedHash == "" {
 		return false, false
 	}
-	curHash, err := ComputeFileHashPrefix(hashPath, info.Size())
+	curHash, err := computeFileHashPrefix(hashPath, info.Size())
 	if err != nil {
 		return false, false
 	}

@@ -986,12 +986,55 @@ func (factory manyStreamingFactory) Capabilities() parser.Capabilities {
 	return factory.provider.Capabilities()
 }
 
-func (factory manyStreamingFactory) NewProvider(parser.ProviderConfig) parser.Provider {
-	return factory.provider
+// perCallScopeProviderBase builds the ProviderBase a factory hands to its
+// per-call wrapper: the shared Def and Caps with this call's config. Shared
+// test providers must never have Config written by NewProvider — sync workers
+// construct providers concurrently, so the write races with the
+// value-receiver reads of the embedded base (Definition, Capabilities).
+func perCallScopeProviderBase(
+	shared parser.ProviderBase, cfg parser.ProviderConfig,
+) parser.ProviderBase {
+	return parser.ProviderBase{
+		Def: shared.Def, Caps: shared.Caps, Config: cfg.Clone(),
+	}
 }
 
-func (factory directStreamingFactory) NewProvider(parser.ProviderConfig) parser.Provider {
-	return factory.provider
+// manyStreamingScopedProvider overlays per-call reconciliation scope
+// resolution on the shared provider; behavior and counters stay shared.
+type manyStreamingScopedProvider struct {
+	*manyStreamingProvider
+	scopes parser.ProviderBase
+}
+
+func (p manyStreamingScopedProvider) ResolveReconciliationScopes(
+	ctx context.Context, req parser.ReconciliationScopeRequest,
+) (parser.ReconciliationScopePlan, error) {
+	return p.scopes.ResolveReconciliationScopes(ctx, req)
+}
+
+func (factory manyStreamingFactory) NewProvider(cfg parser.ProviderConfig) parser.Provider {
+	return manyStreamingScopedProvider{
+		manyStreamingProvider: factory.provider,
+		scopes:                perCallScopeProviderBase(factory.provider.ProviderBase, cfg),
+	}
+}
+
+type directStreamingScopedProvider struct {
+	*directStreamingProvider
+	scopes parser.ProviderBase
+}
+
+func (p directStreamingScopedProvider) ResolveReconciliationScopes(
+	ctx context.Context, req parser.ReconciliationScopeRequest,
+) (parser.ReconciliationScopePlan, error) {
+	return p.scopes.ResolveReconciliationScopes(ctx, req)
+}
+
+func (factory directStreamingFactory) NewProvider(cfg parser.ProviderConfig) parser.Provider {
+	return directStreamingScopedProvider{
+		directStreamingProvider: factory.provider,
+		scopes:                  perCallScopeProviderBase(factory.provider.ProviderBase, cfg),
+	}
 }
 
 type baselineDBBackedProvider struct {
@@ -1820,8 +1863,22 @@ func (f failingDBBackedFactory) Capabilities() parser.Capabilities {
 	return f.provider.Capabilities()
 }
 
-func (f failingDBBackedFactory) NewProvider(parser.ProviderConfig) parser.Provider {
-	return f.provider
+type failingDBBackedScopedProvider struct {
+	*failingDBBackedProvider
+	scopes parser.ProviderBase
+}
+
+func (p failingDBBackedScopedProvider) ResolveReconciliationScopes(
+	ctx context.Context, req parser.ReconciliationScopeRequest,
+) (parser.ReconciliationScopePlan, error) {
+	return p.scopes.ResolveReconciliationScopes(ctx, req)
+}
+
+func (f failingDBBackedFactory) NewProvider(cfg parser.ProviderConfig) parser.Provider {
+	return failingDBBackedScopedProvider{
+		failingDBBackedProvider: f.provider,
+		scopes:                  perCallScopeProviderBase(f.provider.ProviderBase, cfg),
+	}
 }
 
 func TestReconcileWatchRootsFailsWhenDBBackedDiscoveryFails(t *testing.T) {
@@ -2353,13 +2410,14 @@ func TestTombstoneMissingWatchSourcesScopesSharedPathByAgent(t *testing.T) {
 			{Agent: "codex", FilePath: shared},
 		},
 	))
-	engine := &Engine{
-		db: database, machine: "local",
-		agentDirs: map[parser.AgentType][]string{
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {root},
 			parser.AgentCodex:  {root},
 		},
-	}
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
 
 	deleted, err := tombstoneMissingWatchSourcesUnderSyncLock(
 		t.Context(), engine, []string{root},
@@ -2462,12 +2520,13 @@ func TestTombstoneMissingWatchSourcesPaginatesLargeArchive(t *testing.T) {
 	require.NoError(t, database.BaselineActiveSessionSourcePaths(
 		t.Context(), "local", sources,
 	))
-	engine := &Engine{
-		db: database, machine: "local",
-		agentDirs: map[parser.AgentType][]string{
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {root},
 		},
-	}
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
 
 	deleted, err := tombstoneMissingWatchSourcesUnderSyncLock(
 		t.Context(), engine, []string{root},
@@ -2501,15 +2560,19 @@ func TestTombstoneMissingWatchSourcesDoesNotRediscoverEachOwnership(t *testing.T
 					Type: parser.AgentCowork, IDPrefix: "cowork:", FileBased: true,
 				},
 			}}
-			engine := &Engine{
-				db: database, machine: "local",
-				agentDirs: map[parser.AgentType][]string{
+			engine := NewEngine(database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentCowork: {root},
 				},
-				providerFactories: providerFactoryMap([]parser.ProviderFactory{
+				Machine: "local",
+				ProviderFactories: []parser.ProviderFactory{
 					lookupSourceFactory{provider: provider},
-				}),
-			}
+				},
+				ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+					parser.AgentCowork: parser.ProviderMigrationProviderAuthoritative,
+				},
+			})
+			t.Cleanup(engine.Close)
 
 			deleted, err := tombstoneMissingWatchSourcesUnderSyncLock(
 				t.Context(), engine, []string{root},
@@ -2546,18 +2609,19 @@ func TestTombstoneMissingWatchSourcesDoesNotInferUnvalidatedVirtualPaths(t *test
 		t.Context(), "local", sources,
 	))
 	var statCalls atomic.Int32
-	engine := &Engine{
-		db: database, machine: "local",
-		agentDirs: map[parser.AgentType][]string{
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {root},
 		},
-		lstat: func(path string) (os.FileInfo, error) {
-			statCalls.Add(1)
-			_, expected := wantPaths[path]
-			assert.True(t, expected, "only the exact stored path may be checked")
-			delete(wantPaths, path)
-			return nil, os.ErrNotExist
-		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	engine.lstat = func(path string) (os.FileInfo, error) {
+		statCalls.Add(1)
+		_, expected := wantPaths[path]
+		assert.True(t, expected, "only the exact stored path may be checked")
+		delete(wantPaths, path)
+		return nil, os.ErrNotExist
 	}
 
 	deleted, err := tombstoneMissingWatchSourcesUnderSyncLock(
@@ -7212,8 +7276,22 @@ func (f lookupSourceFactory) Capabilities() parser.Capabilities {
 	return f.provider.Capabilities()
 }
 
-func (f lookupSourceFactory) NewProvider(parser.ProviderConfig) parser.Provider {
-	return f.provider
+type lookupSourceScopedProvider struct {
+	*lookupSourceProvider
+	scopes parser.ProviderBase
+}
+
+func (p lookupSourceScopedProvider) ResolveReconciliationScopes(
+	ctx context.Context, req parser.ReconciliationScopeRequest,
+) (parser.ReconciliationScopePlan, error) {
+	return p.scopes.ResolveReconciliationScopes(ctx, req)
+}
+
+func (f lookupSourceFactory) NewProvider(cfg parser.ProviderConfig) parser.Provider {
+	return lookupSourceScopedProvider{
+		lookupSourceProvider: f.provider,
+		scopes:               perCallScopeProviderBase(f.provider.ProviderBase, cfg),
+	}
 }
 
 type lookupSourceProvider struct {

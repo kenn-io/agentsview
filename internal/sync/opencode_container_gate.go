@@ -3,6 +3,7 @@
 package sync
 
 import (
+	"context"
 	"maps"
 	"path/filepath"
 	"slices"
@@ -122,25 +123,38 @@ func (e *Engine) captureSQLiteContainerStates(
 	return states
 }
 
-// captureSQLiteContainerStatesForAgent scopes the pre-discovery capture to
-// what an agent-scoped pass can discover. A pass scoped to a provider outside
-// the OpenCode SQLite family streams no shared containers, so probing every
-// configured container there would repeat once per provider group in a
-// grouped poll; an in-family scope probes only its own containers that
-// overlap the pass's reconciliation roots, keeping capture work bounded by
-// the batch rather than the agent's full configuration. The unscoped pass
-// (empty agent) still captures every configured container.
-func (e *Engine) captureSQLiteContainerStatesForAgent(
-	agent parser.AgentType, roots []string,
+// capturePlannedSQLiteContainerStates scopes the pre-discovery capture to
+// what the resolved reconciliation plans can discover. A pass whose plans
+// name no OpenCode-family provider streams no shared containers, so probing
+// every configured container there would repeat once per provider group in a
+// grouped poll; an in-family plan probes only its own containers that
+// overlap its scopes' traversal roots, keeping capture work bounded by the
+// batch rather than the agent's full configuration. A full-coverage pass
+// still captures every configured container.
+func (e *Engine) capturePlannedSQLiteContainerStates(
+	plans []providerReconciliationPlan, fullCoverage bool,
 ) map[string]parser.SQLiteContainerState {
-	if agent == "" {
+	if fullCoverage {
 		return e.captureSQLiteContainerStates(nil)
 	}
-	if e.forceParse || !slices.Contains(openCodeFamilySQLiteAgents, agent) {
+	if e.forceParse {
 		return nil
 	}
 	states := make(map[string]parser.SQLiteContainerState)
-	e.captureAgentSQLiteContainerStates(agent, roots, states)
+	for _, plan := range plans {
+		if plan.err != nil ||
+			!slices.Contains(openCodeFamilySQLiteAgents, plan.agent) {
+			continue
+		}
+		var roots []string
+		for _, scope := range plan.plan.Scopes {
+			roots = append(roots, scope.TraversalRoots...)
+		}
+		if len(roots) == 0 {
+			continue
+		}
+		e.captureAgentSQLiteContainerStates(plan.agent, roots, states)
+	}
 	return states
 }
 
@@ -195,6 +209,148 @@ func addSQLiteContainerState(
 		return
 	}
 	states[dbPath] = state
+}
+
+// openCodeContainerPathForChangedPathEvent maps a changed-path event to the
+// shared SQLite container it names for one OpenCode-family agent, or ""
+// when the agent has no container or the event is not a container write.
+func openCodeContainerPathForChangedPathEvent(
+	agent parser.AgentType,
+	roots []string,
+	path string,
+) string {
+	if openCodeFormatDBName(agent) == "" {
+		return ""
+	}
+	for _, dir := range roots {
+		if dir == "" || strings.HasPrefix(dir, "s3://") {
+			continue
+		}
+		if container := openCodeContainerPathForEvent(agent, dir, path); container != "" {
+			return container
+		}
+	}
+	return ""
+}
+
+// storedMemberFreshnessPager pages stored freshness for one shared container
+// in ascending virtual-path order, translating each folded row into the
+// coverage authority the provider's changed-path merge consumes: a listed
+// member whose carried session-row watermark is at or below the row's
+// covered-through watermark is provably unchanged and is omitted from the
+// listing, so a one-session write flows one candidate into the sync pipeline
+// while peak memory stays one page — never the container's full membership.
+//
+// The covered-through watermark is the session/project metadata watermark
+// recovered from the stored child digest (storedSessionRowWatermarkNS),
+// keeping the comparison per-session and like-for-like: a session or project
+// row that advances past its own stored metadata watermark is always kept,
+// wherever other sessions' watermarks or its own child timestamps sit. Rows
+// behind the current data version are not emitted at all — a version rewrite
+// must keep the source — and sessions with no stored row are kept by the
+// merge's absent-row rule.
+//
+// Known, deliberate deferral (not a detection gap to "fix" here): a
+// child-only write that leaves the session and project rows untouched is
+// invisible to the session-row watermark wherever its timestamps land —
+// above or below the stored composite alike. Detecting it per event would
+// require reading child rows, which is exactly the archive-sized work this
+// path exists to avoid. Such writes reconcile on the next full-discovery
+// pass, whose digest still catches them (the write itself broke container
+// trust, so that pass carries the full digest); actively watched sessions
+// bypass this path entirely via the per-session composite poll. The
+// contract is documented in docs/internal/session-format-sources.md and
+// pinned by TestOpenCodeWatcherPassDefersChildOnlyEditToFullDiscovery.
+func (e *Engine) storedMemberFreshnessPager(
+	container string,
+) parser.StoredMemberFreshnessPager {
+	current := db.CurrentDataVersion()
+	return func(
+		ctx context.Context, afterPath string, limit int,
+	) ([]parser.StoredMemberFreshness, bool, error) {
+		var rows []parser.StoredMemberFreshness
+		// Withheld rows shrink the emitted page below the raw page, so keep
+		// reading raw pages — advancing by the raw cursor, not the emitted
+		// one — until something is vouchable or the container is exhausted.
+		// Returning an empty page with done=false instead would read as
+		// exhaustion to the merge cursor, silently un-covering every stored
+		// member past the first all-stale page.
+		for {
+			page, done, err := e.db.ListVirtualContainerMemberFreshnessPage(
+				ctx, container, afterPath, limit,
+			)
+			if err != nil {
+				return nil, false, err
+			}
+			for _, row := range page {
+				if row.DataVersion < current {
+					continue
+				}
+				rows = append(rows, parser.StoredMemberFreshness{
+					Path: row.Path,
+					CoveredThroughNS: storedSessionRowWatermarkNS(
+						row.VirtualContainerMemberFreshness,
+					),
+				})
+			}
+			if done || len(rows) > 0 {
+				return rows, done, nil
+			}
+			if len(page) == 0 {
+				// The page contract returns done for an empty page; treat a
+				// violation as exhaustion rather than spinning on it.
+				return rows, true, nil
+			}
+			afterPath = page[len(page)-1].Path
+		}
+	}
+}
+
+// storedSessionRowWatermarkNS resolves the stored value a carried session-row
+// watermark is compared against, like-for-like: the session/project metadata
+// watermark recovered from the stored child digest. Comparing against the
+// stored composite MTimeNS instead would over-skip — a composite dominated by
+// a newer child timestamp would hide a metadata update (title, directory,
+// worktree rename) whose stamp lands below it. Rows without a parseable
+// digest (pre-digest fingerprints, future digest versions) fall back to the
+// composite, the conservative pre-digest behavior that self-heals on the
+// row's next reparse.
+func storedSessionRowWatermarkNS(
+	member db.VirtualContainerMemberFreshness,
+) int64 {
+	if metadata, ok := parser.OpenCodeChildDigestMetadataWatermarkNS(
+		member.Hash,
+	); ok {
+		return metadata
+	}
+	return member.MTimeNS
+}
+
+// sqliteContainerTrustedForDiscovery returns discovery's trust probe: it
+// reports containers whose pre-discovery capture matches the last fully
+// verified state, meaning every member will gate-skip before fingerprinting
+// and the full child digest would be computed for nothing. The probe is
+// keyed to the pass's own pre-discovery captures so a container that
+// changes between capture and listing can never look trusted with a newer
+// session set (the gate separately fails such containers for the pass).
+// Nil when nothing was captured or every parse is forced.
+func (e *Engine) sqliteContainerTrustedForDiscovery(
+	preStates map[string]parser.SQLiteContainerState,
+) func(string) bool {
+	if len(preStates) == 0 || e.forceParse {
+		return nil
+	}
+	return func(dbPath string) bool {
+		dbPath = filepath.Clean(dbPath)
+		state, ok := preStates[dbPath]
+		if !ok {
+			return false
+		}
+		e.containerMu.Lock()
+		trusted, ok := e.trustedSQLiteContainers[dbPath]
+		e.containerMu.Unlock()
+		return ok && trusted.state == state
+	}
 }
 
 func openCodeContainerPathForEvent(
@@ -334,6 +490,85 @@ func (e *Engine) sqliteContainerSourceFresh(file parser.DiscoveredFile) bool {
 	fullID := applyIDPrefixToID(e.idPrefix, string(file.Agent)+":"+sessionID)
 	return e.db.GetSessionDataVersion(fullID) >= db.CurrentDataVersion() &&
 		e.db.GetSessionFilePath(fullID) == e.effectiveSourcePath(file.Path)
+}
+
+// watermarkOnlySQLiteSourceFresh reports whether a shared-container session
+// whose source carries only the session-row watermark is already covered by
+// its stored session/project metadata watermark, compared like-for-like:
+// the stored value is recovered from the persisted child digest, falling
+// back to the stored composite MTimeNS for rows without a parseable digest.
+// A session-row watermark at or below the stored metadata watermark proves
+// the session and project rows did not advance, so the parse is skipped
+// without resolving the child digest. What the watermark cannot see — any
+// child-only write that leaves the session and project rows untouched — is
+// deliberately deferred to the next full-discovery pass, whose carried
+// digest still catches it (see storedMemberFreshnessPager for the full
+// contract). That keeps per-event work bounded by the changed batch instead
+// of the archive.
+func (e *Engine) watermarkOnlySQLiteSourceFresh(
+	source parser.SourceRef,
+	file parser.DiscoveredFile,
+) (int64, bool) {
+	if e.forceParse || file.ForceParse {
+		return 0, false
+	}
+	watermark, ok := parser.SourceWatermarkOnlyMTimeNS(source)
+	if !ok {
+		return 0, false
+	}
+	// The skip is only sound while the pass's container capture is valid. A
+	// trusted full discovery lists watermark-only sources; if the container
+	// changes between that listing and the pass's recapture check, the
+	// capture is invalidated and a concurrent child-only write may hide
+	// beneath an unchanged metadata watermark — those sources must fall
+	// through to Fingerprint and resolve the full digest instead.
+	if dbPath, _, ok := sqliteContainerSourceForFile(file); !ok ||
+		!e.sqliteContainerPassCaptureValid(dbPath) {
+		return 0, false
+	}
+	lookupPath := providerDiscoveredPath(source)
+	if lookupPath == "" {
+		return 0, false
+	}
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(lookupPath)
+	}
+	_, storedMtime, found := e.db.GetFileInfoByPath(lookupPath)
+	if !found {
+		return 0, false
+	}
+	limit := storedMtime
+	if hash, ok := e.db.GetFileHashByPath(lookupPath); ok {
+		if metadata, parsed := parser.OpenCodeChildDigestMetadataWatermarkNS(
+			hash,
+		); parsed {
+			limit = metadata
+		}
+	}
+	if limit < watermark {
+		return 0, false
+	}
+	if e.db.GetDataVersionByPath(lookupPath) < db.CurrentDataVersion() {
+		return 0, false
+	}
+	return storedMtime, true
+}
+
+// sqliteContainerPassCaptureValid reports whether the current pass still
+// holds a live capture for the container: one was taken before discovery,
+// the post-discovery recapture matched it, and no processing failure has
+// poisoned the container since. Watermark-only skips require this — an
+// invalidated capture means the container changed while the pass was
+// listing it, and the watermark cannot see what that change touched.
+func (e *Engine) sqliteContainerPassCaptureValid(dbPath string) bool {
+	e.containerMu.Lock()
+	defer e.containerMu.Unlock()
+	pass := e.containerPass
+	if pass == nil || pass.failed[dbPath] {
+		return false
+	}
+	_, ok := pass.captured[dbPath]
+	return ok
 }
 
 // noteSQLiteContainerResult records a processed file's outcome for

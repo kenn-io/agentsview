@@ -98,6 +98,36 @@ func (p *SourceSetProvider) SourcesForChangedPath(
 	return p.sources.SourcesForChangedPath(ctx, req)
 }
 
+// reconciliationContainerTopologyProvider is implemented by source sets whose
+// members are virtual children of a physical container. The provider-level
+// scope resolver widens a request naming the container, a sidecar, or one
+// member to the container's whole membership; without it a container-path
+// request would prove only the bare path, which admits no member source and
+// pages no member row — a successful no-op over sessions the caller asked
+// about.
+type reconciliationContainerTopologyProvider interface {
+	ReconciliationContainer(requested string) (string, bool)
+}
+
+// ResolveReconciliationScopes applies the source set's container topology
+// when it declares one, and otherwise inherits the generic directory plan.
+func (p *SourceSetProvider) ResolveReconciliationScopes(
+	ctx context.Context, req ReconciliationScopeRequest,
+) (ReconciliationScopePlan, error) {
+	topology, ok := p.sources.(reconciliationContainerTopologyProvider)
+	if !ok {
+		return p.ProviderBase.ResolveReconciliationScopes(ctx, req)
+	}
+	if err := ValidateReconciliationScopeRoots(
+		p.Def.Type, p.Config.Roots, req.Roots,
+	); err != nil {
+		return ReconciliationScopePlan{}, err
+	}
+	return containerAwareReconciliationScopePlan(
+		p.Config.Roots, req.Roots, topology.ReconciliationContainer,
+	), nil
+}
+
 func (p *SourceSetProvider) StoredSourceHintScopes(
 	req ChangedPathRequest,
 ) []StoredSourceHintScope {

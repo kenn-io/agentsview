@@ -79,8 +79,8 @@ func TestReconcileProviderRootsDoesNotExpandAcrossProviders(t *testing.T) {
 	}
 	base := t.TempDir()
 	aiderRoot := filepath.Join(base, "aider")
-	// claudeDir is a descendant of aiderRoot: the overlap that
-	// logicalRootsForWatchRoots would otherwise expand across providers.
+	// claudeDir is a descendant of aiderRoot: the overlap an unscoped root
+	// expansion would otherwise widen across providers.
 	claudeDir := filepath.Join(aiderRoot, "claude")
 	require.NoError(t, os.MkdirAll(claudeDir, 0o755))
 

@@ -202,10 +202,16 @@ var (
 	kiroSQLiteFixtureCache stdsync.Map
 )
 
+// openCodeLikeSchema mirrors the production OpenCode container schema,
+// including the project/message/part time_updated columns. Those columns are
+// the per-session change signal (openCodeCompositeMtimeExpr); a fixture that
+// omitted them could not model shared-container freshness at all, which is how
+// the whole-container re-parse regression went unnoticed.
 const openCodeLikeSchema = `
 	CREATE TABLE project (
 		id TEXT PRIMARY KEY,
-		worktree TEXT NOT NULL
+		worktree TEXT NOT NULL,
+		time_updated INTEGER NOT NULL DEFAULT 0
 	);
 	CREATE TABLE session (
 		id TEXT PRIMARY KEY,
@@ -219,15 +225,21 @@ const openCodeLikeSchema = `
 		id TEXT PRIMARY KEY,
 		session_id TEXT NOT NULL,
 		data TEXT NOT NULL,
-		time_created INTEGER NOT NULL
+		time_created INTEGER NOT NULL,
+		time_updated INTEGER NOT NULL DEFAULT 0
 	);
 	CREATE TABLE part (
 		id TEXT PRIMARY KEY,
 		session_id TEXT NOT NULL,
 		message_id TEXT NOT NULL,
 		data TEXT NOT NULL,
-		time_created INTEGER NOT NULL
+		time_created INTEGER NOT NULL,
+		time_updated INTEGER NOT NULL DEFAULT 0
 	);
+	CREATE INDEX message_session_time_created_id_idx
+		ON message (session_id, time_created, id);
+	CREATE INDEX part_session_idx ON part (session_id);
+	CREATE INDEX part_message_id_id_idx ON part (message_id, id);
 `
 
 const kiroSQLiteSchema = `
@@ -430,8 +442,22 @@ func (oc *openCodeTestDB) addProject(
 ) {
 	t.Helper()
 	oc.mustExec(t, "insert project",
-		"INSERT INTO project (id, worktree) VALUES (?, ?)",
-		id, worktree,
+		"INSERT INTO project (id, worktree, time_updated) VALUES (?, ?, ?)",
+		id, worktree, 0,
+	)
+}
+
+// updateProjectWorktree renames a project's worktree and bumps its
+// time_updated, matching production OpenCode. The bump is what lets every
+// session in that project re-resolve its cwd/project without the container
+// stat acting as a blunt whole-archive invalidator.
+func (oc *openCodeTestDB) updateProjectWorktree(
+	t *testing.T, id, worktree string, timeUpdated int64,
+) {
+	t.Helper()
+	oc.mustExec(t, "update project worktree",
+		"UPDATE project SET worktree = ?, time_updated = ? WHERE id = ?",
+		worktree, timeUpdated, id,
 	)
 }
 
@@ -471,9 +497,9 @@ func (oc *openCodeTestDB) addMessage(
 	require.NoError(t, err, "marshal message")
 	oc.mustExec(t, "insert message",
 		`INSERT INTO message
-			(id, session_id, data, time_created)
-		 VALUES (?, ?, ?, ?)`,
-		id, sessionID, string(data), timeCreated,
+			(id, session_id, data, time_created, time_updated)
+		 VALUES (?, ?, ?, ?, ?)`,
+		id, sessionID, string(data), timeCreated, timeCreated,
 	)
 }
 
@@ -483,8 +509,11 @@ func (oc *openCodeTestDB) updateMessageData(
 	t.Helper()
 	raw, err := json.Marshal(data)
 	require.NoError(t, err, "marshal message update")
+	// Production OpenCode bumps time_updated on an in-place row edit; the
+	// per-session composite freshness signal depends on it.
 	oc.mustExec(t, "update message data",
-		"UPDATE message SET data = ? WHERE id = ?",
+		`UPDATE message SET data = ?, time_updated = time_updated + 1
+		 WHERE id = ?`,
 		string(raw), id,
 	)
 }
@@ -502,9 +531,9 @@ func (oc *openCodeTestDB) addTextPart(
 	require.NoError(t, err, "marshal text part")
 	oc.mustExec(t, "insert part",
 		`INSERT INTO part
-			(id, session_id, message_id, data, time_created)
-		 VALUES (?, ?, ?, ?, ?)`,
-		id, sessionID, messageID, string(data), timeCreated,
+			(id, session_id, message_id, data, time_created, time_updated)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		id, sessionID, messageID, string(data), timeCreated, timeCreated,
 	)
 }
 
@@ -523,9 +552,9 @@ func (oc *openCodeTestDB) addToolPart(
 	require.NoError(t, err, "marshal tool part")
 	oc.mustExec(t, "insert tool part",
 		`INSERT INTO part
-			(id, session_id, message_id, data, time_created)
-		 VALUES (?, ?, ?, ?, ?)`,
-		id, sessionID, messageID, string(data), timeCreated,
+			(id, session_id, message_id, data, time_created, time_updated)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		id, sessionID, messageID, string(data), timeCreated, timeCreated,
 	)
 }
 

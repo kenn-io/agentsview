@@ -25,6 +25,202 @@ func newContainerTestDB(t *testing.T) (string, *sql.DB) {
 	return path, conn
 }
 
+// newCompositeContainerTestDB creates an OpenCode container whose schema
+// carries the composite change-signal columns and session_id indexes, so
+// watermark-only listings are supported.
+func newCompositeContainerTestDB(t *testing.T) (string, *sql.DB) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "opencode.db")
+	conn, err := sql.Open("sqlite3", path)
+	require.NoError(t, err, "open container db")
+	t.Cleanup(func() { _ = conn.Close() })
+	_, err = conn.Exec(`
+		CREATE TABLE project (
+			id TEXT PRIMARY KEY,
+			worktree TEXT NOT NULL,
+			time_updated INTEGER NOT NULL DEFAULT 0
+		);
+		CREATE TABLE session (
+			id TEXT PRIMARY KEY,
+			project_id TEXT NOT NULL,
+			time_created INTEGER NOT NULL,
+			time_updated INTEGER NOT NULL
+		);
+		CREATE TABLE message (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			data TEXT NOT NULL,
+			time_created INTEGER NOT NULL,
+			time_updated INTEGER NOT NULL DEFAULT 0
+		);
+		CREATE TABLE part (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			message_id TEXT NOT NULL,
+			data TEXT NOT NULL,
+			time_created INTEGER NOT NULL,
+			time_updated INTEGER NOT NULL DEFAULT 0
+		);
+		CREATE INDEX message_session_idx ON message (session_id);
+		CREATE INDEX part_session_idx ON part (session_id);
+	`)
+	require.NoError(t, err, "create composite schema")
+	return path, conn
+}
+
+// seedCoveredVirtualMember stores one virtual member whose stored freshness
+// fully covers watermarkMS, stamped with the current data version as a
+// completed parse would be (UpsertSession seeds data_version 0 by design).
+func seedCoveredVirtualMember(
+	t *testing.T, database *db.DB, sessionID, virtualPath string,
+	watermarkMS int64,
+) {
+	t.Helper()
+	storedMtime := watermarkMS * 1_000_000
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: sessionID, Agent: "opencode", Project: "project",
+		Machine: "local", FilePath: &virtualPath, FileMtime: &storedMtime,
+	}))
+	require.NoError(t, database.SetSessionDataVersion(
+		sessionID, db.CurrentDataVersion(),
+	))
+}
+
+// TestStoredMemberFreshnessPagerEmitsOnlyVouchableRows pins the pager's
+// translation of stored rows into coverage authority: rows behind the
+// current data version are omitted entirely so their sources stay listed,
+// a stored child digest yields its embedded session/project metadata
+// watermark, and a plain fingerprint falls back to the stored composite.
+func TestStoredMemberFreshnessPagerEmitsOnlyVouchableRows(t *testing.T) {
+	database := openTestDB(t)
+	const container = "/data/opencode.db"
+	seedCoveredVirtualMember(t, database, "opencode:a", container+"#a", 100)
+
+	digest := "opencode-child:v1:900:20:30:1:2:abcd"
+	digestPath := container + "#b"
+	digestMtime := int64(900) * 1_000_000
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "opencode:b", Agent: "opencode", Project: "project",
+		Machine: "local", FilePath: &digestPath, FileMtime: &digestMtime,
+		FileHash: &digest,
+	}))
+	require.NoError(t, database.SetSessionDataVersion(
+		"opencode:b", db.CurrentDataVersion(),
+	))
+
+	stalePath := container + "#c"
+	staleMtime := int64(100) * 1_000_000
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "opencode:c", Agent: "opencode", Project: "project",
+		Machine: "local", FilePath: &stalePath, FileMtime: &staleMtime,
+	}))
+
+	e := &Engine{db: database, machine: "local"}
+	rows, done, err := e.storedMemberFreshnessPager(container)(
+		t.Context(), "", 10,
+	)
+	require.NoError(t, err)
+	assert.True(t, done)
+	require.Len(t, rows, 2,
+		"the stale-version row must not be emitted at all")
+	assert.Equal(t, container+"#a", rows[0].Path)
+	assert.Equal(t, int64(100)*1_000_000, rows[0].CoveredThroughNS,
+		"a plain fingerprint falls back to the stored composite")
+	assert.Equal(t, container+"#b", rows[1].Path)
+	assert.Equal(t, int64(30)*1_000_000, rows[1].CoveredThroughNS,
+		"a child digest yields its embedded metadata watermark")
+}
+
+// TestStoredMemberFreshnessPagerAdvancesPastAllStalePages pins the pager's
+// raw-cursor advance: version-stale rows are withheld from the emitted page,
+// and when a whole raw page is stale the pager must keep reading from the
+// raw cursor instead of returning an empty not-done page — the merge cursor
+// reads that as exhaustion, which would silently un-cover every stored
+// member past the first all-stale page and let one event's work scale with
+// the remainder of the archive.
+func TestStoredMemberFreshnessPagerAdvancesPastAllStalePages(t *testing.T) {
+	database := openTestDB(t)
+	const container = "/data/opencode.db"
+	// Two stale-version members sort before the covered current-version
+	// member, so a limit-2 first page is entirely withheld.
+	for _, id := range []string{"a", "b"} {
+		path := container + "#" + id
+		mtime := int64(100) * 1_000_000
+		require.NoError(t, database.UpsertSession(db.Session{
+			ID: "opencode:" + id, Agent: "opencode", Project: "project",
+			Machine: "local", FilePath: &path, FileMtime: &mtime,
+		}))
+	}
+	seedCoveredVirtualMember(t, database, "opencode:c", container+"#c", 500)
+
+	e := &Engine{db: database, machine: "local"}
+	rows, done, err := e.storedMemberFreshnessPager(container)(
+		t.Context(), "", 2,
+	)
+	require.NoError(t, err)
+	require.Len(t, rows, 1,
+		"the pager must advance past the all-stale page to the vouchable row")
+	assert.Equal(t, container+"#c", rows[0].Path)
+	assert.Equal(t, int64(500)*1_000_000, rows[0].CoveredThroughNS)
+	assert.True(t, done)
+}
+
+// TestClassifyChangedPathWatermarkMergeRelistsOnStaleCapture pins the
+// classification-time capture guard around the merged listing: while the
+// container provably has not changed across the listing window, covered
+// members are dropped during the stream and a fully covered container
+// classifies to nothing; when every recapture differs from the pre-listing
+// capture, the merge cannot be trusted and classification re-lists without
+// stored authority, keeping every member for the per-file gates.
+func TestClassifyChangedPathWatermarkMergeRelistsOnStaleCapture(t *testing.T) {
+	dbPath, conn := newCompositeContainerTestDB(t)
+	const base = int64(1779012000000)
+	for _, id := range []string{"ses-1", "ses-2"} {
+		_, err := conn.Exec(
+			"INSERT INTO session (id, project_id, time_created, time_updated)"+
+				" VALUES (?, 'proj', ?, ?)",
+			id, base, base,
+		)
+		require.NoError(t, err, "insert session row")
+	}
+
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenCode: {filepath.Dir(dbPath)},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	seedCoveredVirtualMember(t, database, "opencode:ses-1", dbPath+"#ses-1", base)
+	seedCoveredVirtualMember(t, database, "opencode:ses-2", dbPath+"#ses-2", base)
+
+	files, err := engine.classifyProviderChangedPath(t.Context(), dbPath)
+	require.NoError(t, err)
+	assert.Empty(t, files,
+		"a fully covered container classifies to nothing under a live capture")
+
+	// A capture that never repeats: the post-listing revalidation always
+	// mismatches, so the merged listing must be discarded and re-listed
+	// without stored authority.
+	orig := statSQLiteContainerState
+	t.Cleanup(func() { statSQLiteContainerState = orig })
+	var drift int64
+	statSQLiteContainerState = func(
+		path string,
+	) (parser.SQLiteContainerState, bool) {
+		state, ok := orig(path)
+		drift++
+		state.DBSize += drift
+		return state, ok
+	}
+
+	files, err = engine.classifyProviderChangedPath(t.Context(), dbPath)
+	require.NoError(t, err)
+	assert.Len(t, files, 2,
+		"a stale capture must keep every member for the per-file gates")
+}
+
 // TestSQLiteContainerPassPromotesOnlyPreDiscoveryCaptures pins the gate's
 // ordering invariant: the state promoted to trusted must have been captured
 // BEFORE discovery listed the container's sessions. Discovery reads the

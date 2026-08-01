@@ -2231,6 +2231,141 @@ func (db *DB) GetFileInfoByPath(
 	return s.Int64, m.Int64, true
 }
 
+// VirtualContainerMemberFreshness is one stored virtual member's freshness
+// signal: the newest stored file_mtime for its path, the minimum stored
+// data version, and the newest row's fingerprint hash, mirroring
+// GetFileInfoByPath, GetDataVersionByPath, and GetFileHashByPath.
+type VirtualContainerMemberFreshness struct {
+	MTimeNS     int64
+	DataVersion int
+	Hash        string
+}
+
+// VirtualContainerMemberFreshnessRow pairs one virtual member path with its
+// folded freshness signal.
+type VirtualContainerMemberFreshnessRow struct {
+	Path string
+	VirtualContainerMemberFreshness
+}
+
+// ListVirtualContainerMemberFreshnessPage returns the freshness signal for
+// stored sessions whose file_path is a virtual member of the shared container
+// at containerPath ("<containerPath>#<sessionID>"), excluding source-missing
+// tombstones: at most limit member paths strictly after afterPath, in
+// ascending path order, and whether the container's stored membership is
+// exhausted. Changed-path classification merges a streamed watermark-only
+// listing against these pages, so a one-session write flows one candidate
+// into the sync pipeline while peak memory stays one page — never the
+// container's full membership.
+//
+// Two queries per page keep each path's fold complete without materializing
+// the container: a DISTINCT path page rides idx_sessions_file_path ('$' is
+// the ASCII successor of '#', so the half-open range covers exactly the
+// "<containerPath>#" prefix), and the row fetch is bounded to that page's
+// [first, last] interval, so duplicate session rows for one path can never
+// split across pages. Folded in Go rather than GROUP BY: the fold needs
+// MAX(file_mtime), MIN(data_version), and the hash of the newest-mtime row,
+// and SQLite's bare-column-from-the-extreme-row guarantee only holds with
+// exactly one min/max aggregate in the query.
+func (db *DB) ListVirtualContainerMemberFreshnessPage(
+	ctx context.Context, containerPath, afterPath string, limit int,
+) ([]VirtualContainerMemberFreshnessRow, bool, error) {
+	if containerPath == "" || limit <= 0 {
+		return nil, true, nil
+	}
+	notMissing := " AND (deletion_cause IS NULL" +
+		" OR deletion_cause <> '" + deletionCauseSourceMissing + "')"
+	lower := containerPath + "#"
+	lowerOp := ">="
+	if afterPath > lower {
+		lower = afterPath
+		lowerOp = ">"
+	}
+	pathRows, err := db.getReader().QueryContext(ctx,
+		"SELECT DISTINCT file_path FROM sessions"+
+			" WHERE file_path "+lowerOp+" ? AND file_path < ? || '$'"+
+			notMissing+
+			" ORDER BY file_path LIMIT ?",
+		lower, containerPath, limit,
+	)
+	if err != nil {
+		return nil, false, fmt.Errorf(
+			"listing container member paths %s: %w", containerPath, err,
+		)
+	}
+	defer pathRows.Close()
+	var paths []string
+	for pathRows.Next() {
+		var path string
+		if err := pathRows.Scan(&path); err != nil {
+			return nil, false, fmt.Errorf(
+				"scanning container member path %s: %w", containerPath, err,
+			)
+		}
+		paths = append(paths, path)
+	}
+	if err := pathRows.Err(); err != nil {
+		return nil, false, err
+	}
+	if len(paths) == 0 {
+		return nil, true, nil
+	}
+	done := len(paths) < limit
+
+	rows, err := db.getReader().QueryContext(ctx,
+		"SELECT file_path, file_mtime, data_version, file_hash FROM sessions"+
+			" WHERE file_path >= ? AND file_path <= ?"+notMissing,
+		paths[0], paths[len(paths)-1],
+	)
+	if err != nil {
+		return nil, false, fmt.Errorf(
+			"listing container member freshness %s: %w", containerPath, err,
+		)
+	}
+	defer rows.Close()
+	members := make(map[string]VirtualContainerMemberFreshness, len(paths))
+	for rows.Next() {
+		var path string
+		var mtime, version sql.NullInt64
+		var hash sql.NullString
+		if err := rows.Scan(&path, &mtime, &version, &hash); err != nil {
+			return nil, false, fmt.Errorf(
+				"scanning container member freshness %s: %w",
+				containerPath, err,
+			)
+		}
+		row := VirtualContainerMemberFreshness{
+			MTimeNS:     mtime.Int64,
+			DataVersion: int(version.Int64),
+			Hash:        hash.String,
+		}
+		member, seen := members[path]
+		if !seen {
+			members[path] = row
+			continue
+		}
+		if row.MTimeNS > member.MTimeNS {
+			member.MTimeNS = row.MTimeNS
+			member.Hash = row.Hash
+		}
+		if row.DataVersion < member.DataVersion {
+			member.DataVersion = row.DataVersion
+		}
+		members[path] = member
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	page := make([]VirtualContainerMemberFreshnessRow, 0, len(paths))
+	for _, path := range paths {
+		page = append(page, VirtualContainerMemberFreshnessRow{
+			Path:                            path,
+			VirtualContainerMemberFreshness: members[path],
+		})
+	}
+	return page, done, nil
+}
+
 // GetProjectByPath returns the stored project for the newest
 // non-deleted session matching file_path.
 func (db *DB) GetProjectByPath(path string) (project string, ok bool) {
@@ -2502,8 +2637,14 @@ func (db *DB) listActiveSessionSourceOwnershipScopeBatch(
 	for _, scope := range scopes {
 		root := scope.Path
 		likeRoot := sqliteLikeEscape(root)
+		// A drive root or share root already ends in a separator, so the
+		// child prefix must not add a second one: stored children carry one.
+		childPrefix := likeRoot + string(filepath.Separator) + "%"
+		if strings.HasSuffix(root, string(filepath.Separator)) {
+			childPrefix = likeRoot + "%"
+		}
 		rootClause := `(b.file_path = ? OR b.file_path LIKE ? ESCAPE '!')`
-		args = append(args, root, likeRoot+string(filepath.Separator)+"%")
+		args = append(args, root, childPrefix)
 		if scope.IncludeVirtualMembers {
 			// Mirror storedSourcePathHintInRoot: a virtual member is the
 			// container plus '#' and a nonempty single segment. Nested stored
@@ -2979,17 +3120,51 @@ func storedSourcePathHintInAnyRoot(
 	return false
 }
 
+// StoredSourcePathHintScopesContain reports whether one stored or discovered
+// source path lies inside any of the bounded scopes, using the same
+// platform-aware containment the SQLite queries in this file re-check. It is
+// the single Go-side authority for path-to-scope membership: the SQL LIKE
+// prefilters stay a superset of this predicate for ASCII paths, and every
+// caller that pages or admits by scope must apply it rather than comparing
+// prefixes itself.
+func StoredSourcePathHintScopesContain(
+	path string, scopes []StoredSourcePathHintScope,
+) bool {
+	return storedSourcePathHintInAnyRoot(path, scopes)
+}
+
 func storedSourcePathHintInRoot(path string, scope StoredSourcePathHintScope) bool {
 	path = cleanStoredSourcePathHint(path)
 	root := cleanStoredSourcePathHint(scope.Path)
-	if path == root || strings.HasPrefix(path, root+string(filepath.Separator)) {
+	if storedSourcePathSameOrDescendant(path, root) {
 		return true
 	}
-	suffix, ok := strings.CutPrefix(path, root+"#")
-	return ok &&
-		scope.IncludeVirtualMembers &&
-		suffix != "" &&
-		!strings.ContainsAny(suffix, `/\`)
+	if !scope.IncludeVirtualMembers || len(path) < len(root)+2 ||
+		path[len(root)] != '#' {
+		return false
+	}
+	// A virtual member is the container plus '#' and a nonempty single
+	// segment. The container prefix folds with the same platform semantics as
+	// the directory branch; the member segment rule stays byte-exact.
+	if rel, err := filepath.Rel(root, path[:len(root)]); err != nil || rel != "." {
+		return false
+	}
+	member := path[len(root)+1:]
+	return !strings.ContainsAny(member, `/\`)
+}
+
+// storedSourcePathSameOrDescendant compares with filepath.Rel semantics so
+// containment matches platform path equality: case-folded per element on
+// Windows, byte-exact on Unix. This keeps the Go predicate aligned with the
+// ASCII-case-insensitive SQL LIKE prefilter on Windows while staying exact on
+// case-sensitive filesystems.
+func storedSourcePathSameOrDescendant(path, root string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." || rel != ".." &&
+		!strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func sqliteLikeEscape(value string) string {

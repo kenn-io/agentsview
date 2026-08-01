@@ -30,8 +30,22 @@ func (f semanticTestFactory) Capabilities() parser.Capabilities {
 	return f.provider.Capabilities()
 }
 
-func (f semanticTestFactory) NewProvider(parser.ProviderConfig) parser.Provider {
-	return f.provider
+type semanticTestScopedProvider struct {
+	*semanticTestProvider
+	scopes parser.ProviderBase
+}
+
+func (p semanticTestScopedProvider) ResolveReconciliationScopes(
+	ctx context.Context, req parser.ReconciliationScopeRequest,
+) (parser.ReconciliationScopePlan, error) {
+	return p.scopes.ResolveReconciliationScopes(ctx, req)
+}
+
+func (f semanticTestFactory) NewProvider(cfg parser.ProviderConfig) parser.Provider {
+	return semanticTestScopedProvider{
+		semanticTestProvider: f.provider,
+		scopes:               perCallScopeProviderBase(f.provider.ProviderBase, cfg),
+	}
 }
 
 type semanticTestProvider struct {

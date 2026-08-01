@@ -307,6 +307,82 @@ Grok section and remove the explicit registry exception in the coverage test.
   counts as a failure, matching the existing `exit status N` heuristic, and a
   timed-out command records `timeout: true` with no `exit` key, so it is not
   detected here. See #1256.
+- **Change detection (SQLite layout):** every session in a root shares one
+  physical `opencode.db`, so the container's own size and mtime move whenever
+  any single session is written and cannot discriminate between sessions.
+  Agentsview instead builds a per-session composite from
+  `session.time_updated`, `project.time_updated`, `MAX(message.time_updated)`,
+  and `MAX(part.time_updated)` (`openCodeCompositeMtimeExpr`), and omits the
+  container size from the per-session fingerprint. Verified 2026-07-27 against
+  an isolated clone of a production container (13.5 GB, 5,981 sessions, 104k
+  messages, 508k parts): 432,779 of 508,400 parts (86%) carry
+  `time_updated != time_created`, so in-place child edits do move the signal;
+  437 sessions have `MAX(part.time_updated) > session.time_updated`, so the
+  session row alone is insufficient; and no project's `time_updated` falls
+  within 5s of its newest session, so folding `project` in tracks genuine
+  worktree/metadata changes rather than ordinary session activity. The child
+  scans cost ~0.6s warm on that container because `part.data` lives in SQLite
+  overflow pages, so scanning `(session_id, time_updated)` does not read
+  transcript bytes. A MAX over timestamps cannot see a deletion: on that
+  container 5,758 of 5,981 sessions (96%) carry a session or project timestamp
+  at or above every child, so removing a message or part leaves the max
+  untouched. The fingerprint hash therefore carries a per-session digest of the
+  watermark plus the child row counts, and freshness compares it
+  (`FingerprintHashRequiredForFreshness`). An earlier revision of this entry
+  claimed a revert stays detectable because it lowers the max; that is wrong for
+  the 96% above, and the row counts are what actually cover deletions. Known
+  gap: a write that leaves the watermark, the message count and the part count
+  all unchanged is not attributed to any session, which requires an in-place
+  edit that does not stamp `time_updated`. Containers whose schema lacks the
+  child `time_updated` columns (older OpenCode, Kilo, MiMoCode, ICodeMate) fall
+  back to the session-only mtime plus the container size and emit an empty
+  digest, preserving prior behavior. Watcher events do not pay the child scan
+  at all: changed-path classification lists sessions through a bounded
+  session-row watermark (`MAX(session.time_updated, project.time_updated)`,
+  `ForEachOpenCodeSessionWatermarkMeta`, ordered by session id), compares it
+  per session and like-for-like against the stored session/project metadata
+  watermark recovered from the persisted child digest
+  (`OpenCodeChildDigestMetadataWatermarkNS`; rows without a parseable digest
+  fall back to the stored composite), merged in ascending virtual-path order
+  against a paged stored-freshness cursor
+  (`ListVirtualContainerMemberFreshnessPage` through
+  `storedMemberFreshnessPager` and `changedWatermarkSources`), and drops
+  covered sessions during the stream — only the changed batch is ever
+  materialized, peak memory per event is one stored page plus that batch,
+  and the surviving sources resolve the full composite and digest through
+  the indexed per-session lookup. The merge trusts stored authority only
+  while a container capture taken before the listing still matches a
+  recapture afterwards; a stale capture re-lists unfiltered and leaves the
+  decision to the per-file gates. The comparison must be like-for-like: the
+  stored composite can be dominated by a newer child timestamp, and
+  comparing the session-row watermark against it would hide a metadata
+  update (title, directory, worktree rename) whose stamp lands below that
+  child maximum. A session or project row that advances past its own stored
+  metadata watermark is always a candidate, wherever other sessions'
+  watermarks or its own child timestamps sit. Periodic full passes and
+  streamed reconciliation passes over a container whose captured state still
+  matches the last fully verified pass also list the watermark form
+  (`SQLiteContainerUnchangedSinceTrust`): every member gate-skips before
+  fingerprinting, so the child identity scan would be archive-sized work
+  nothing reads; any write breaks that trust and the next pass carries the
+  complete digest again. Watermark-only skips additionally require the
+  pass's container capture to still be valid
+  (`sqliteContainerPassCaptureValid`) — a container that changes between
+  listing and the recapture check resolves full per-session digests instead,
+  so a concurrent child-only write cannot hide beneath an unchanged metadata
+  watermark. The trade is explicit: any
+  child-only write that leaves the session and project rows untouched —
+  wherever its timestamps land relative to the stored composite — is
+  invisible to a watcher pass and is reconciled by the next full-discovery
+  pass over the now-untrusted container, whose digest still catches it; on
+  the production container above, 96% of sessions carry a session/project
+  timestamp at or above every child, and actively watched sessions bypass
+  this entirely via the per-session composite poll. Per-event work is
+  bounded by the changed batch plus one O(session-count) scan of small
+  fixed-width rows (the session table and the paged stored-member reads);
+  that floor is irreducible without a watermark index, which OpenCode's
+  schema does not have and which is not agentsview's to add — but only the
+  changed batch and one stored page are ever held in memory.
 - **Agentsview:** `internal/parser/opencode.go`,
   `internal/parser/opencode_provider.go`, and
   `internal/parser/opencode_storage_state.go`; legacy and database layouts are
