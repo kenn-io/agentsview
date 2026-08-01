@@ -72,6 +72,65 @@ func TestOpenFolderTransportReopensMarkedTarget(t *testing.T) {
 	require.NoError(t, transport.Prepare(t.Context(), nil))
 }
 
+func TestOpenFolderTransportRecoversInterruptedMarkerTemporary(t *testing.T) {
+	t.Parallel()
+
+	target := t.TempDir()
+	temporary := filepath.Join(
+		target,
+		folderMarkerTempPrefix+"0123456789abcdef",
+	)
+	require.NoError(t, os.WriteFile(temporary, []byte(`{"format":`), 0o600))
+
+	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+
+	assert.NoFileExists(t, temporary)
+	marker, err := os.ReadFile(filepath.Join(target, folderMarkerName))
+	require.NoError(t, err)
+	assert.Contains(t, string(marker), folderFormatName)
+}
+
+func TestOpenFolderTransportRejectsMarkerTempLookalike(t *testing.T) {
+	t.Parallel()
+
+	target := t.TempDir()
+	lookalike := filepath.Join(target, folderMarkerTempPrefix+"not-generated")
+	require.NoError(t, os.WriteFile(lookalike, []byte("keep"), 0o600))
+
+	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
+	require.Error(t, err)
+	assert.Nil(t, transport)
+	assert.ErrorContains(t, err, "not an agentsview artifact target")
+	assert.FileExists(t, lookalike)
+	assert.NoFileExists(t, filepath.Join(target, folderMarkerName))
+}
+
+func TestCreateFolderMarkerExclusiveRemovesPartialFinal(t *testing.T) {
+	t.Parallel()
+
+	target := t.TempDir()
+	root, err := os.OpenRoot(target)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	body := []byte(`{"format":"agentsview-normalized-artifacts"}`)
+	partialWrite := errors.New("partial marker write")
+
+	err = createFolderMarkerExclusiveWithWriter(
+		root,
+		body,
+		func(file *os.File, body []byte) (int, error) {
+			written, writeErr := file.Write(body[:8])
+			require.NoError(t, writeErr)
+			return written, partialWrite
+		},
+	)
+
+	require.ErrorIs(t, err, partialWrite)
+	assert.NoFileExists(t, filepath.Join(target, folderMarkerName))
+}
+
 func TestOpenFolderTransportRefusesUnmarkedNonemptyTarget(t *testing.T) {
 	t.Parallel()
 

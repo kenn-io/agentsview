@@ -21,6 +21,7 @@ const (
 	folderFormatName         = "agentsview-normalized-artifacts"
 	folderFormatVersion      = 3
 	folderMarkerTempPrefix   = ".agentsview-artifacts.tmp-"
+	folderMarkerMaxTemps     = 128
 	folderExchangeLockName   = ".agentsview-artifacts.lock"
 	folderExchangeMaxObjects = 128
 	folderExchangeMaxBytes   = int64(64 << 20)
@@ -225,10 +226,16 @@ func (t *folderTransport) prepareMarker() error {
 		return err
 	}
 	if !empty {
-		return fmt.Errorf(
-			"%w: target is not an agentsview artifact target",
-			ErrArtifactInvalid,
-		)
+		recovered, err := recoverFolderMarkerTemporaries(t.root)
+		if err != nil {
+			return err
+		}
+		if !recovered {
+			return fmt.Errorf(
+				"%w: target is not an agentsview artifact target",
+				ErrArtifactInvalid,
+			)
+		}
 	}
 	if err := createFolderMarker(t.root); err != nil {
 		return fmt.Errorf("initializing agentsview artifact target: %w", err)
@@ -406,6 +413,64 @@ func folderRootEmpty(root *os.Root) (bool, error) {
 	return len(entries) == 0, nil
 }
 
+func recoverFolderMarkerTemporaries(root *os.Root) (_ bool, retErr error) {
+	directory, err := root.Open(".")
+	if err != nil {
+		return false, fmt.Errorf("opening artifact target directory: %w", err)
+	}
+	defer func() { retErr = errors.Join(retErr, directory.Close()) }()
+
+	names := make([]string, 0, 1)
+	for {
+		entries, err := directory.ReadDir(1)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return false, fmt.Errorf("reading artifact target directory: %w", err)
+		}
+		name := entries[0].Name()
+		if !isFolderMarkerTemporaryName(name) ||
+			len(names) >= folderMarkerMaxTemps {
+			return false, nil
+		}
+		info, err := root.Lstat(name)
+		if err != nil {
+			return false, fmt.Errorf("stating marker temporary: %w", err)
+		}
+		if !info.Mode().IsRegular() {
+			return false, nil
+		}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return true, nil
+	}
+	for _, name := range names {
+		if err := removeFolderFile(root, name); err != nil {
+			return false, fmt.Errorf("removing marker temporary: %w", err)
+		}
+	}
+	if err := syncFolderDirectory(root); err != nil {
+		return false, fmt.Errorf("syncing recovered artifact target: %w", err)
+	}
+	return true, nil
+}
+
+func isFolderMarkerTemporaryName(name string) bool {
+	suffix, found := strings.CutPrefix(name, folderMarkerTempPrefix)
+	if !found || len(suffix) != 16 {
+		return false
+	}
+	for _, character := range suffix {
+		if (character < '0' || character > '9') &&
+			(character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 func validateFolderMarker(root *os.Root) error {
 	_, err := readFolderMarker(root)
 	return err
@@ -494,6 +559,20 @@ func createFolderMarker(root *os.Root) (retErr error) {
 }
 
 func createFolderMarkerExclusive(root *os.Root, body []byte) error {
+	return createFolderMarkerExclusiveWithWriter(
+		root,
+		body,
+		func(file *os.File, body []byte) (int, error) {
+			return file.Write(body)
+		},
+	)
+}
+
+func createFolderMarkerExclusiveWithWriter(
+	root *os.Root,
+	body []byte,
+	write func(*os.File, []byte) (int, error),
+) (retErr error) {
 	file, err := root.OpenFile(
 		folderMarkerName,
 		os.O_WRONLY|os.O_CREATE|os.O_EXCL,
@@ -505,10 +584,36 @@ func createFolderMarkerExclusive(root *os.Root, body []byte) error {
 		}
 		return err
 	}
-	if _, err := file.Write(body); err != nil {
-		return errors.Join(err, file.Close())
+	closed := false
+	keep := false
+	defer func() {
+		if !closed {
+			retErr = errors.Join(retErr, file.Close())
+		}
+		if !keep {
+			retErr = errors.Join(
+				retErr,
+				removeFolderFile(root, folderMarkerName),
+			)
+		}
+	}()
+	written, err := write(file, body)
+	if err != nil {
+		return err
 	}
-	return errors.Join(file.Sync(), file.Close())
+	if written != len(body) {
+		return io.ErrShortWrite
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	closeErr := file.Close()
+	closed = true
+	if closeErr != nil {
+		return closeErr
+	}
+	keep = true
+	return nil
 }
 
 type folderTransportPersistedState struct {
