@@ -520,3 +520,74 @@ func activeSessionMachines(t *testing.T, database *db.DB) map[string]string {
 	}
 	return out
 }
+
+// TestBaselineFollowsPersistedMachineAfterRelabel pins the ownership baseline
+// to the machine a session was actually written under. prepareSessionWrite
+// preserves the original label, so keying the baseline off the freshly parsed
+// (configured) machine strands it under a machine no session row holds, and the
+// source can never be tombstoned once it disappears.
+func TestBaselineFollowsPersistedMachineAfterRelabel(t *testing.T) {
+	archiveRoot := t.TempDir()
+	archivePath := writeSessionSourceClaudeFile(t, archiveRoot, "archive-session.jsonl")
+	database := openTestDB(t)
+
+	newEngine := func(machine string) *Engine {
+		return NewEngine(database, EngineConfig{
+			AgentDirs: map[parser.AgentType][]string{
+				parser.AgentClaude: {archiveRoot},
+			},
+			SourceMachines: map[parser.AgentType]map[string]string{
+				parser.AgentClaude: {archiveRoot: machine},
+			},
+			Machine: "localbox",
+		})
+	}
+
+	first := newEngine("archivebox")
+	t.Cleanup(first.Close)
+	require.False(t, first.SyncAll(context.Background(), nil).Aborted)
+
+	// Append to the source so the relabeled pass actually reparses and rewrites
+	// it. An unchanged file is skipped, which never exercises the write path.
+	appendSessionSourceClaudeMessage(t, archivePath)
+
+	// Relabel the root and resync. The session keeps "archivebox"; the baseline
+	// must land there too, not under the newly configured "renamedbox".
+	relabeled := newEngine("renamedbox")
+	t.Cleanup(relabeled.Close)
+	require.False(t, relabeled.SyncAll(context.Background(), nil).Aborted)
+
+	require.Equal(t, "archivebox",
+		activeSessionMachines(t, database)["archive-session"])
+
+	ownershipFor := func(machine string) []db.SessionSourceOwnership {
+		rows, err := database.ListActiveSessionSourceOwnershipScopesPage(
+			context.Background(), machine, string(parser.AgentClaude),
+			[]db.StoredSourcePathHintScope{{Path: archiveRoot}},
+			db.SessionSourceCursor{},
+		)
+		require.NoError(t, err)
+		return rows
+	}
+
+	stranded := ownershipFor("renamedbox")
+	assert.Empty(t, stranded,
+		"the baseline must not be keyed under a label no session row holds")
+
+	owned := ownershipFor("archivebox")
+	require.Len(t, owned, 1,
+		"the baseline must follow the persisted machine")
+	assert.Equal(t, archivePath, owned[0].FilePath)
+}
+
+// appendSessionSourceClaudeMessage grows an existing Claude transcript so the
+// next sync sees a changed source instead of skipping it.
+func appendSessionSourceClaudeMessage(t *testing.T, path string) {
+	t.Helper()
+	builder := testjsonl.NewSessionBuilder()
+	builder.AddClaudeUser("2026-07-01T10:00:00Z", "hello")
+	builder.AddClaudeAssistant("2026-07-01T10:00:01Z", "hi")
+	builder.AddClaudeUser("2026-07-01T10:00:02Z", "more")
+	builder.AddClaudeAssistant("2026-07-01T10:00:03Z", "sure")
+	require.NoError(t, os.WriteFile(path, []byte(builder.String()), 0o600))
+}

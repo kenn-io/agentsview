@@ -689,6 +689,30 @@ func (e *Engine) reconciliationOwnershipMachines(
 	return machines
 }
 
+// storedSourceMachine returns the machine an already-ingested session at path
+// was admitted under, or "" when the archive holds none. Attribution is
+// immutable, so a stored row outranks the configured label whenever the two
+// disagree. It short-circuits unless the agent actually has labeled roots, so
+// the common unlabeled setup adds no per-source queries.
+func (e *Engine) storedSourceMachine(
+	agent parser.AgentType, path string,
+) string {
+	if len(e.sourceMachines[agent]) == 0 || path == "" {
+		return ""
+	}
+	ids, err := e.db.ListSessionIDsByFilePath(path, string(agent))
+	if err != nil {
+		return ""
+	}
+	for _, id := range ids {
+		session, err := e.db.GetSession(context.Background(), id)
+		if err == nil && session != nil && session.Machine != "" {
+			return session.Machine
+		}
+	}
+	return ""
+}
+
 func pathWithinRoot(path, root string) bool {
 	root = filepath.Clean(root)
 	rel, err := filepath.Rel(root, path)
@@ -4501,6 +4525,7 @@ func (e *Engine) rehydrateReconciliationPage(
 				files = append(files, parser.DiscoveredFile{
 					Path: candidate.Path, Project: source.ProjectHint,
 					Agent: candidate.Provider, ForceParse: forceCandidate,
+					Machine:        candidate.Machine,
 					ProviderSource: &source, ProviderProcess: true,
 				})
 				continue
@@ -4527,6 +4552,10 @@ func (e *Engine) rehydrateReconciliationPage(
 		files = append(files, parser.DiscoveredFile{
 			Path: candidate.Path, Project: source.ProjectHint,
 			Agent: candidate.Provider, ForceParse: forceCandidate,
+			// Carry the candidate's stored attribution: recomputing it from the
+			// physical path is wrong for providers whose source can sit outside
+			// the labeled root it was configured under.
+			Machine:        candidate.Machine,
 			ProviderSource: &source, ProviderProcess: true,
 		})
 	}
@@ -6656,10 +6685,17 @@ func (e *Engine) syncProviderDBBacked(
 		if path == "" {
 			return nil
 		}
+		storedPath := e.effectiveSourcePath(path)
+		machine := e.machineForProviderSource(agent, source, path)
+		// An already-ingested session keeps the label it was admitted under,
+		// so the baseline must follow the row rather than current config.
+		if stored := e.storedSourceMachine(agent, storedPath); stored != "" {
+			machine = stored
+		}
 		baselines = append(baselines, machineSessionSource{
-			Machine: e.machineForProviderSource(agent, source, path),
+			Machine: machine,
 			Source: db.SessionSourcePath{
-				Agent: string(agent), FilePath: e.effectiveSourcePath(path),
+				Agent: string(agent), FilePath: storedPath,
 			},
 		})
 		if len(baselines) == reconciliationPageSize {
@@ -7463,8 +7499,14 @@ func (e *Engine) baselinePendingWriteSources(
 	)
 	for i, write := range pending {
 		path := e.effectiveSourcePath(write.sess.File.Path)
+		// Key on what was persisted, not on what the parser proposed: an
+		// already-ingested session keeps its original label through a relabel.
+		machine := write.persistedMachine
+		if machine == "" {
+			machine = write.sess.Machine
+		}
 		source := machineSessionSource{
-			Machine: write.sess.Machine,
+			Machine: machine,
 			Source: db.SessionSourcePath{
 				Agent: string(write.sess.Agent), FilePath: path,
 			},
@@ -10663,6 +10705,12 @@ type pendingWrite struct {
 	// baselineEligible is set by collectAndBatch only when the complete source
 	// outcome is safe to make deletion-eligible after this write succeeds.
 	baselineEligible bool
+	// persistedMachine is the machine the session was actually written under.
+	// prepareSessionWrite preserves an existing archive row's attribution, so
+	// after a label edit this differs from sess.Machine. Ownership baselines
+	// must key on it or they land under a machine no session row holds, and
+	// the source can never be tombstoned when it later disappears.
+	persistedMachine string
 	// storageTrustPath/State/Snap promote the session's OpenCode
 	// storage-gate trust after its batch is confirmed fully written.
 	// Empty for everything else.
@@ -10912,6 +10960,7 @@ func (e *Engine) writeBatchWithOutcome(
 			}
 			continue
 		}
+		batch[i].persistedMachine = s.Machine
 
 		// Detect stale parser version BEFORE UpsertSession
 		// overwrites it. Existing message rows from an
@@ -11887,6 +11936,7 @@ func (e *Engine) writeBatchBulkWithOutcome(
 			}
 			continue
 		}
+		batch[pendingIndex].persistedMachine = s.Machine
 		replaceMessages := shouldReplaceFullParseMessages(
 			pw, forceReplace, false, false,
 		)
