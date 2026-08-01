@@ -34,6 +34,11 @@ var ErrSessionTrashed = errors.New("session trashed")
 // recoverable source loss distinct from explicit user deletion.
 const deletionCauseSourceMissing = "source_missing"
 
+// subagentParentRepairQueueStateKey stores child session IDs that must be
+// re-evaluated after a sync mutates spawn edges. Keeping the queue in SQLite
+// makes the repair retryable after a write error or process restart.
+const subagentParentRepairQueueStateKey = "subagent_parent_repair_queue_v1"
+
 // sessionBaseCols is the column list for standard session queries
 // (list, get). Keep in sync with scanSessionRow.
 const sessionBaseCols = `id, project, machine, agent,
@@ -102,7 +107,7 @@ const sessionFullCols = `id, project, machine, agent,
 	agent_label, entrypoint, session_kind,
 	first_message, display_name, session_name, started_at, ended_at,
 	message_count, user_message_count,
-	parent_session_id, relationship_type,
+	parent_session_id, parser_parent_session_id, relationship_type,
 	total_output_tokens, peak_context_tokens,
 	has_total_output_tokens, has_peak_context_tokens,
 	is_automated,
@@ -276,27 +281,28 @@ func (s *Session) UnmarshalJSON(data []byte) error {
 
 // Session represents a row in the sessions table.
 type Session struct {
-	ID                   string  `json:"id"`
-	Project              string  `json:"project"`
-	Machine              string  `json:"machine"`
-	Agent                string  `json:"agent"`
-	AgentLabel           string  `json:"agent_label,omitempty"`
-	Entrypoint           string  `json:"entrypoint,omitempty"`
-	SessionKind          string  `json:"session_kind,omitempty"`
-	FirstMessage         *string `json:"first_message"`
-	DisplayName          *string `json:"display_name,omitempty"`
-	SessionName          *string `json:"-"`
-	StartedAt            *string `json:"started_at"`
-	EndedAt              *string `json:"ended_at"`
-	MessageCount         int     `json:"message_count"`
-	UserMessageCount     int     `json:"user_message_count"`
-	ParentSessionID      *string `json:"parent_session_id,omitempty"`
-	RelationshipType     string  `json:"relationship_type,omitempty"`
-	TotalOutputTokens    int     `json:"total_output_tokens"`
-	PeakContextTokens    int     `json:"peak_context_tokens"`
-	HasTotalOutputTokens bool    `json:"has_total_output_tokens"`
-	HasPeakContextTokens bool    `json:"has_peak_context_tokens"`
-	IsAutomated          bool    `json:"is_automated"`
+	ID                    string  `json:"id"`
+	Project               string  `json:"project"`
+	Machine               string  `json:"machine"`
+	Agent                 string  `json:"agent"`
+	AgentLabel            string  `json:"agent_label,omitempty"`
+	Entrypoint            string  `json:"entrypoint,omitempty"`
+	SessionKind           string  `json:"session_kind,omitempty"`
+	FirstMessage          *string `json:"first_message"`
+	DisplayName           *string `json:"display_name,omitempty"`
+	SessionName           *string `json:"-"`
+	StartedAt             *string `json:"started_at"`
+	EndedAt               *string `json:"ended_at"`
+	MessageCount          int     `json:"message_count"`
+	UserMessageCount      int     `json:"user_message_count"`
+	ParentSessionID       *string `json:"parent_session_id,omitempty"`
+	ParserParentSessionID *string `json:"-"`
+	RelationshipType      string  `json:"relationship_type,omitempty"`
+	TotalOutputTokens     int     `json:"total_output_tokens"`
+	PeakContextTokens     int     `json:"peak_context_tokens"`
+	HasTotalOutputTokens  bool    `json:"has_total_output_tokens"`
+	HasPeakContextTokens  bool    `json:"has_peak_context_tokens"`
+	IsAutomated           bool    `json:"is_automated"`
 
 	// Session signals (computed from messages/tool_calls).
 	ToolFailureSignalCount int      `json:"tool_failure_signal_count"`
@@ -1143,7 +1149,7 @@ func (db *DB) getSessionFullUncoalesced(
 		&s.AgentLabel, &s.Entrypoint, &s.SessionKind,
 		&s.FirstMessage, &s.DisplayName, &s.SessionName, &s.StartedAt, &s.EndedAt,
 		&s.MessageCount, &s.UserMessageCount,
-		&s.ParentSessionID, &s.RelationshipType,
+		&s.ParentSessionID, &s.ParserParentSessionID, &s.RelationshipType,
 		&s.TotalOutputTokens, &s.PeakContextTokens,
 		&s.HasTotalOutputTokens, &s.HasPeakContextTokens,
 		&s.IsAutomated,
@@ -1329,6 +1335,7 @@ const insertSessionSQL = `
 			agent_label, entrypoint, session_kind,
 			started_at, ended_at, message_count,
 			user_message_count, parent_session_id,
+			parser_parent_session_id,
 			relationship_type,
 			total_output_tokens, peak_context_tokens,
 			has_total_output_tokens, has_peak_context_tokens,
@@ -1342,7 +1349,7 @@ const insertSessionSQL = `
 			file_path, file_size, file_mtime,
 			next_ordinal, last_entry_uuid, claude_linear_parse,
 			file_inode, file_device, file_hash
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // insertSessionIfAbsentSQL inserts a session only when its id does not already
 // exist, leaving an existing row untouched.
@@ -1366,6 +1373,7 @@ const upsertSessionBaseSQL = insertSessionSQL + `
 			message_count = excluded.message_count,
 			user_message_count = excluded.user_message_count,
 			parent_session_id = excluded.parent_session_id,
+			parser_parent_session_id = excluded.parser_parent_session_id,
 			relationship_type = excluded.relationship_type,
 			total_output_tokens = excluded.total_output_tokens,
 			peak_context_tokens = excluded.peak_context_tokens,
@@ -1419,12 +1427,19 @@ func sessionIsAutomated(s Session) bool {
 			IsAutomatedSession(*s.FirstMessage))
 }
 
+func parserParentSessionID(s Session) *string {
+	if s.ParserParentSessionID != nil {
+		return s.ParserParentSessionID
+	}
+	return s.ParentSessionID
+}
+
 func upsertSessionArgs(s Session) []any {
 	return []any{
 		s.ID, s.Project, s.Machine, s.Agent, s.FirstMessage, s.SessionName,
 		s.AgentLabel, s.Entrypoint, s.SessionKind,
 		s.StartedAt, s.EndedAt, s.MessageCount,
-		s.UserMessageCount, s.ParentSessionID,
+		s.UserMessageCount, s.ParentSessionID, parserParentSessionID(s),
 		s.RelationshipType,
 		s.TotalOutputTokens, s.PeakContextTokens,
 		s.HasTotalOutputTokens, s.HasPeakContextTokens,
@@ -1621,12 +1636,135 @@ func (db *DB) GetChildSessions(
 	return scanSessionRows(rows)
 }
 
+// subagentSpawnerExpr resolves the parent of the session aliased `s`
+// from the authoritative tool_calls spawn edges (recorded by the parser
+// from toolUseResult.agentId).
+//
+// A child is normally referenced by exactly one edge, but copied or
+// forked history can leave several sessions claiming the same child.
+// Resolution must then be a pure function of the stored edges and never
+// of the order they arrived, because any single sync may observe only a
+// subset of them: a link written from a partial view has to self-correct
+// once the rest land, rather than being locked in.
+//
+// A fork derives from the session it was forked from, so it always
+// starts later. Ordering candidates by start time therefore resolves to
+// the original spawner from any subset, and converges on the next sync.
+//
+// started_at has to be NORMALIZED before it is ordered, not compared
+// raw. It is TEXT written by timeutil.Format, i.e. time.RFC3339Nano,
+// which STRIPS trailing zeros from the fractional second: a whole-second
+// start is stored '...T00:00:00Z' while a later one is stored
+// '...T00:00:00.1Z', and '.' (0x2E) sorts before 'Z' (0x5A). Raw lexical
+// order is therefore not chronological in exactly the case that matters
+// here — it ranks a whole-second spawner behind every fractional one and
+// would hand the child to a copy. strftime re-renders each value as
+// fixed-width '...T00:00:00.000Z', for which lexical order IS
+// chronological (to the millisecond; anything closer than that falls
+// through to the id key below).
+//
+// The remaining keys keep that total order well defined:
+//   - strftime yields NULL for a started_at that is unset, empty or
+//     malformed, and SQLite sorts NULL first, so an unknown start time
+//     would otherwise outrank every real one — the leading IS NULL key
+//     pushes those candidates last instead.
+//   - among candidates whose normalized start times TIE (identical
+//     timestamps — a copy shares its source's; sub-millisecond gaps
+//     truncated away by %f; or all unknown), the parser-established
+//     parent wins if it is one of them. parser_parent_session_id is
+//     immutable linker provenance: unlike the effective parent, a
+//     copied-only linker pass cannot overwrite it and then make its own
+//     provisional choice sticky when the real edge arrives later.
+//     Whenever start times DO differ, chronology still decides
+//     unconditionally, so parser provenance never preserves a parent
+//     that stronger evidence contradicts.
+//   - the session id breaks any remaining tie (no parser-established
+//     parent among the tied candidates), so resolution still never
+//     depends on whichever edge SQLite visited first.
+//
+// Ranking unknown start times last is a deliberate trade-off: a real
+// spawner with no usable started_at loses to a copied spawner that has
+// one. Protecting it unconditionally would make the stored parent
+// outrank fresher evidence, which is the ingestion-order dependence
+// this resolution exists to remove. If the spawner's start time later
+// becomes known, its row update re-enters linking and the child
+// self-corrects.
+//
+// The LEFT JOIN keeps an edge whose spawner has no sessions row as a
+// last-resort candidate (it sorts with the unknown start times) rather
+// than discarding it.
+const subagentSpawnerExpr = `
+		SELECT tc.session_id
+		FROM tool_calls tc
+		LEFT JOIN sessions ps ON ps.id = tc.session_id
+		WHERE tc.subagent_session_id = s.id
+		ORDER BY
+			(strftime('%Y-%m-%dT%H:%M:%fZ', ps.started_at) IS NULL),
+			strftime('%Y-%m-%dT%H:%M:%fZ', ps.started_at),
+			(tc.session_id IS NOT s.parser_parent_session_id),
+			tc.session_id
+		LIMIT 1`
+
+// linkSubagentSessionsQuery re-points every session that carries a spawn edge
+// at the spawner subagentSpawnerExpr resolves for it.
+//
+// The statement is driven from the edges rather than from sessions: `s.id IN
+// (SELECT tc.subagent_session_id ...)` lets SQLite seek the partial index
+// idx_tool_calls_subagent and then look each child up by primary key, so a
+// sync's linking cost scales with the number of spawn edges instead of with
+// the size of the archive. The equivalent EXISTS(...) form reads the same but
+// plans as a full scan of sessions with a correlated probe per row, which is
+// what makes linking on a large archive expensive even when nothing changed.
+// The IS NOT NULL filter keeps the candidate list free of NULLs, so the IN
+// comparison cannot go three-valued (the partial index carries exactly those
+// rows, so the filter is free).
+const linkSubagentSessionsQuery = `
+	UPDATE sessions AS s
+	SET parent_session_id = (` + subagentSpawnerExpr + `
+	),
+	relationship_type = 'subagent',
+	local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+	-- The tool_calls edge (from toolUseResult.agentId) records the actual
+	-- spawn, authoritative over the path-derived parent set at parse time.
+	-- Nested subagents (depth >= 2) live flat in <main>/subagents/, so path
+	-- derivation pins them to the main session AND tags them 'subagent';
+	-- the old relationship_type != 'subagent' guard skipped them, leaving
+	-- the hierarchy flat.
+	--
+	-- Update when EITHER the row is not yet 'subagent' (upgrade
+	-- continuation/fork/empty) OR the resolved spawner differs from the
+	-- stored parent (null-safe IS NOT, so a subagent with a NULL parent is
+	-- still linked). Because the resolved spawner depends only on the
+	-- stored edges, a row already pointing at it matches neither branch:
+	-- linking stays a no-op and does not churn local_modified_at.
+	WHERE s.id IN (
+		SELECT tc.subagent_session_id FROM tool_calls tc
+		WHERE tc.subagent_session_id IS NOT NULL
+	)
+	AND (
+		relationship_type != 'subagent'
+		OR parent_session_id IS NOT (` + subagentSpawnerExpr + `
+		)
+	)`
+
 // LinkSubagentSessions sets parent_session_id and
-// relationship_type on sessions that are referenced by
-// tool_calls.subagent_session_id. Updates sessions that either
-// have no parent yet or have a non-subagent relationship (e.g.
-// a Zencoder session classified as "continuation" from header
-// parentId that is actually a spawned subagent).
+// relationship_type on sessions referenced by
+// tool_calls.subagent_session_id (the authoritative spawn edge).
+// A session is updated when it is not yet tagged 'subagent' (e.g.
+// a Zencoder session classified as "continuation" from a header
+// parentId that is actually a spawned subagent) OR when its stored
+// parent disagrees with the spawn edge. The latter re-parents
+// nested subagents (depth >= 2), which the parser pins to the main
+// session because Claude Code stores every subagent flat under
+// <main>/subagents/. Already-correct subagents are left untouched.
+//
+// See subagentSpawnerExpr for how a child claimed by more than one
+// spawner is resolved, and linkSubagentSessionsQuery for why the
+// statement is driven from the spawn-edge index: every sync calls this,
+// so its cost has to track the number of spawn edges rather than the
+// size of the archive. Per-event paths (single-session watcher syncs)
+// use LinkSubagentSessionsForSessions instead, which further bounds the
+// pass to the changed batch.
 func (db *DB) LinkSubagentSessions() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -1638,25 +1776,295 @@ func (db *DB) LinkSubagentSessions() error {
 	// session after a mirror's cutoff would otherwise never re-push it
 	// (see updateSessionSignalsTx and ReplaceSessionUsageEvents for the
 	// same pattern).
-	_, err := db.getWriter().Exec(`
-		UPDATE sessions
-		SET parent_session_id = (
-			SELECT tc.session_id
-			FROM tool_calls tc
-			WHERE tc.subagent_session_id = sessions.id
-			LIMIT 1
-		),
-		relationship_type = 'subagent',
-		local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		WHERE relationship_type != 'subagent'
-		AND EXISTS (
-			SELECT 1 FROM tool_calls tc
-			WHERE tc.subagent_session_id = sessions.id
-		)`)
+	_, err := db.getWriter().Exec(linkSubagentSessionsQuery)
 	if err != nil {
 		return fmt.Errorf("linking subagent sessions: %w", err)
 	}
 	return nil
+}
+
+// linkSubagentSessionsForSessionsQuery is linkSubagentSessionsQuery
+// restricted to the children a batch of changed sessions can affect. ph is
+// an inPlaceholders list bound twice: once per branch of the UNION.
+//
+// A changed session can alter linking in exactly two ways, one per branch:
+//   - tc.session_id IN ph: the session's transcript carries spawn edges, so
+//     every child it claims is re-resolved (idx_tool_calls_session seek).
+//     A conflicting edge always arrives through its spawner's transcript,
+//     so this branch is what lets a provisional link self-correct — the
+//     spawner whose edge just landed is in the batch by definition.
+//   - tc.subagent_session_id IN ph: the session is itself a child whose row
+//     was rewritten (e.g. re-parsed with a path-derived parent), so its own
+//     link is re-resolved (idx_tool_calls_subagent seek).
+//
+// Sessions outside both branches have unchanged edges, and resolution is a
+// pure function of the stored edges (see subagentSpawnerExpr), so their
+// links cannot have changed — skipping them is what keeps a single-session
+// watcher sync bounded by the batch instead of the archive.
+func linkSubagentSessionsForSessionsQuery(ph string) string {
+	return `
+	UPDATE sessions AS s
+	SET parent_session_id = (` + subagentSpawnerExpr + `
+	),
+	relationship_type = 'subagent',
+	local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+	WHERE s.id IN (
+		SELECT tc.subagent_session_id FROM tool_calls tc
+		WHERE tc.session_id IN ` + ph + `
+		AND tc.subagent_session_id IS NOT NULL
+		UNION
+		SELECT tc.subagent_session_id FROM tool_calls tc
+		WHERE tc.subagent_session_id IN ` + ph + `
+	)
+	AND (
+		relationship_type != 'subagent'
+		OR parent_session_id IS NOT (` + subagentSpawnerExpr + `
+		)
+	)`
+}
+
+// clearDanglingSubagentParentQuery repairs a captured child whose LAST spawn
+// edge was removed together with its spawner: both UNION branches of the
+// linking statement select from remaining tool_calls, so an edge-less child
+// can never be re-resolved there, and its parent now points at a session
+// that no longer exists. Clearing is deliberately restricted to that
+// dangling case — when the stored parent still exists, only the edge is
+// gone, and nothing distinguishes an edge-derived parent (stale) from a
+// path-derived one (still valid, e.g. a Claude subagent whose directory
+// proves membership), so the safer failure mode is to keep the historical
+// claim. relationship_type stays 'subagent'; if an edge reappears, linking
+// re-parents the NULL-parent row (see the null-safe IS NOT predicate).
+func clearDanglingSubagentParentQuery(ph string) string {
+	return `
+	UPDATE sessions AS s
+	SET parent_session_id = NULL,
+	local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+	WHERE s.id IN ` + ph + `
+	AND s.relationship_type = 'subagent'
+	AND s.parent_session_id IS NOT NULL
+	AND NOT EXISTS (
+		SELECT 1 FROM tool_calls tc WHERE tc.subagent_session_id = s.id
+	)
+	AND NOT EXISTS (
+		SELECT 1 FROM sessions p WHERE p.id = s.parent_session_id
+	)`
+}
+
+// LinkSubagentSessionsForSessions is LinkSubagentSessions scoped to the
+// sessions written by one sync batch: only children reachable from a batch
+// member's spawn edges (or batch members that are themselves children) are
+// re-resolved. Children in ids whose edges are all gone and whose parent no
+// longer exists are un-parented (see clearDanglingSubagentParentQuery).
+// Per-event paths — the session watcher re-syncs a single file
+// on every change — must use this form so their linking cost tracks the
+// changed batch; bulk paths (full sync, reconciliation, resync) keep the
+// global LinkSubagentSessions pass they already coalesce to.
+func (db *DB) LinkSubagentSessionsForSessions(ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	// Each id binds twice (once per UNION branch), so halve the chunk to
+	// stay within SQLite's bind-variable limit.
+	return queryChunkedSize(ids, maxSQLVars/2, func(chunk []string) error {
+		ph, args := inPlaceholders(chunk)
+		allArgs := append(append([]any{}, args...), args...)
+		_, err := db.getWriter().Exec(
+			linkSubagentSessionsForSessionsQuery(ph), allArgs...,
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"linking subagent sessions for %d changed sessions: %w",
+				len(chunk), err,
+			)
+		}
+		_, err = db.getWriter().Exec(
+			clearDanglingSubagentParentQuery(ph), args...,
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"clearing dangling subagent parents for %d changed "+
+					"sessions: %w",
+				len(chunk), err,
+			)
+		}
+		return nil
+	})
+}
+
+// QueueSubagentParentRepairs durably records sessions whose hierarchy may be
+// changed by an upcoming write. Callers must queue the IDs before deleting or
+// replacing messages because those writes can cascade away the only spawn
+// edge that identifies an affected child.
+func (db *DB) QueueSubagentParentRepairs(ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return fmt.Errorf("beginning subagent parent repair queue update: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	queued := make(map[string]struct{}, len(ids))
+	var encoded string
+	err = tx.QueryRow(
+		"SELECT value FROM pg_sync_state WHERE key = ?",
+		subagentParentRepairQueueStateKey,
+	).Scan(&encoded)
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("reading subagent parent repair queue: %w", err)
+	}
+	if err == nil {
+		var existing []string
+		if err := json.Unmarshal([]byte(encoded), &existing); err != nil {
+			return fmt.Errorf("decoding subagent parent repair queue: %w", err)
+		}
+		for _, id := range existing {
+			if id != "" {
+				queued[id] = struct{}{}
+			}
+		}
+	}
+	for _, id := range ids {
+		if id != "" {
+			queued[id] = struct{}{}
+		}
+	}
+	if len(queued) == 0 {
+		return nil
+	}
+	merged := make([]string, 0, len(queued))
+	for id := range queued {
+		merged = append(merged, id)
+	}
+	sort.Strings(merged)
+	payload, err := json.Marshal(merged)
+	if err != nil {
+		return fmt.Errorf("encoding subagent parent repair queue: %w", err)
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO pg_sync_state (key, value) VALUES (?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		subagentParentRepairQueueStateKey, string(payload),
+	); err != nil {
+		return fmt.Errorf("writing subagent parent repair queue: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing subagent parent repair queue: %w", err)
+	}
+	return nil
+}
+
+// RepairQueuedSubagentParents re-evaluates every durably queued session and
+// clears the queue in the same transaction. A failed link or cleanup rolls
+// back both the hierarchy changes and queue deletion so a later sync retries
+// the exact IDs even when their original spawn edges have disappeared.
+func (db *DB) RepairQueuedSubagentParents() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	var encoded string
+	err := db.getWriter().QueryRow(
+		"SELECT value FROM pg_sync_state WHERE key = ?",
+		subagentParentRepairQueueStateKey,
+	).Scan(&encoded)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("reading subagent parent repair queue: %w", err)
+	}
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return fmt.Errorf("beginning queued subagent parent repair: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var ids []string
+	if err := json.Unmarshal([]byte(encoded), &ids); err != nil {
+		return fmt.Errorf("decoding subagent parent repair queue: %w", err)
+	}
+
+	if err := queryChunkedSize(ids, maxSQLVars/2, func(chunk []string) error {
+		ph, args := inPlaceholders(chunk)
+		allArgs := append(append([]any{}, args...), args...)
+		if _, err := tx.Exec(
+			linkSubagentSessionsForSessionsQuery(ph), allArgs...,
+		); err != nil {
+			return fmt.Errorf(
+				"linking queued subagent parents for %d sessions: %w",
+				len(chunk), err,
+			)
+		}
+		if _, err := tx.Exec(
+			clearDanglingSubagentParentQuery(ph), args...,
+		); err != nil {
+			return fmt.Errorf(
+				"clearing queued dangling subagent parents for %d "+
+					"sessions: %w",
+				len(chunk), err,
+			)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(
+		"DELETE FROM pg_sync_state WHERE key = ?",
+		subagentParentRepairQueueStateKey,
+	); err != nil {
+		return fmt.Errorf("clearing subagent parent repair queue: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing queued subagent parent repair: %w", err)
+	}
+	return nil
+}
+
+// SubagentChildSessionIDs returns the distinct children the given sessions'
+// spawn edges currently reference (tool_calls.subagent_session_id). Sync
+// captures this BEFORE a full rewrite or parser-exclusion delete: those
+// writes cascade tool_calls away, and LinkSubagentSessionsForSessions
+// discovers children only through post-write edges, so a child whose edge is
+// about to disappear must be carried into the scoped batch explicitly to be
+// re-resolved against its remaining spawners.
+func (db *DB) SubagentChildSessionIDs(ids []string) ([]string, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var children []string
+	err := queryChunked(ids, func(chunk []string) error {
+		ph, args := inPlaceholders(chunk)
+		rows, err := db.getReader().Query(`
+			SELECT DISTINCT tc.subagent_session_id
+			FROM tool_calls tc
+			WHERE tc.session_id IN `+ph+`
+			AND tc.subagent_session_id IS NOT NULL`, args...)
+		if err != nil {
+			return fmt.Errorf(
+				"listing subagent children of %d sessions: %w",
+				len(chunk), err,
+			)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var child string
+			if err := rows.Scan(&child); err != nil {
+				return fmt.Errorf("scanning subagent child: %w", err)
+			}
+			children = append(children, child)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return children, nil
 }
 
 // GetSessionFileInfo returns file_size and file_mtime for a session. Used for
@@ -3988,7 +4396,7 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.AgentLabel, &s.Entrypoint, &s.SessionKind,
 			&s.FirstMessage, &s.DisplayName, &s.SessionName, &s.StartedAt, &s.EndedAt,
 			&s.MessageCount, &s.UserMessageCount,
-			&s.ParentSessionID, &s.RelationshipType,
+			&s.ParentSessionID, &s.ParserParentSessionID, &s.RelationshipType,
 			&s.TotalOutputTokens, &s.PeakContextTokens,
 			&s.HasTotalOutputTokens, &s.HasPeakContextTokens,
 			&s.IsAutomated,
@@ -4097,7 +4505,7 @@ func (db *DB) ListSessionsForMirrorWindow(
 			&s.AgentLabel, &s.Entrypoint, &s.SessionKind,
 			&s.FirstMessage, &s.DisplayName, &s.SessionName, &s.StartedAt, &s.EndedAt,
 			&s.MessageCount, &s.UserMessageCount,
-			&s.ParentSessionID, &s.RelationshipType,
+			&s.ParentSessionID, &s.ParserParentSessionID, &s.RelationshipType,
 			&s.TotalOutputTokens, &s.PeakContextTokens,
 			&s.HasTotalOutputTokens, &s.HasPeakContextTokens,
 			&s.IsAutomated,

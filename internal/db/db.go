@@ -1764,6 +1764,14 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE sessions ADD COLUMN display_name TEXT",
 		},
 		{
+			// Preserve the current parent exactly once when the private parser
+			// provenance column is introduced. Running the UPDATE on every open
+			// would let a later linker-derived effective parent overwrite it.
+			"sessions", "parser_parent_session_id",
+			"ALTER TABLE sessions ADD COLUMN parser_parent_session_id TEXT;" +
+				" UPDATE sessions SET parser_parent_session_id = parent_session_id",
+		},
+		{
 			"sessions", "session_name",
 			"ALTER TABLE sessions ADD COLUMN session_name TEXT",
 		},
@@ -2160,11 +2168,26 @@ func schemaColumnMigrations() []schemaColumnMigration {
 	}
 }
 
-func applySchemaColumnMigrations(
-	queryRow func(string, ...any) rowScanner,
-	exec func(string, ...any) (sql.Result, error),
-) error {
-	return applyColumnMigrations(schemaColumnMigrations(), queryRow, exec)
+func applySchemaColumnMigrations(w *writerHandle) error {
+	tx, err := w.BeginTx(context.Background(), nil)
+	if err != nil {
+		return fmt.Errorf("starting column migration transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := applyColumnMigrations(
+		schemaColumnMigrations(),
+		func(query string, args ...any) rowScanner {
+			return tx.QueryRow(query, args...)
+		},
+		tx.Exec,
+	); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing column migrations: %w", err)
+	}
+	return nil
 }
 
 func applyColumnMigrations(
@@ -2411,7 +2434,7 @@ func (db *DB) migrateColumns() error {
 	if _, err := w.Exec(artifactSessionQueueTriggerDropsSQL); err != nil {
 		return fmt.Errorf("dropping artifact session queue triggers: %w", err)
 	}
-	if err := applySchemaColumnMigrations(w.QueryRow, w.Exec); err != nil {
+	if err := applySchemaColumnMigrations(w); err != nil {
 		return err
 	}
 	if _, err := w.Exec(artifactSessionQueueTriggerCreatesSQL); err != nil {

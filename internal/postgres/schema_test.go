@@ -634,6 +634,20 @@ func TestCheckSchemaCompatRequiresDeletionCause(t *testing.T) {
 	assert.Contains(t, err.Error(), "sessions table missing required columns")
 }
 
+func TestCheckSchemaCompatRequiresParserParentSessionID(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.queryErrors = []schemaProbeQueryError{{
+		contains: "parser_parent_session_id",
+		err: errors.New(
+			`ERROR: column "parser_parent_session_id" does not exist (SQLSTATE 42703)`),
+	}}
+
+	err := CheckSchemaCompat(t.Context(), pg)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sessions table missing required columns")
+}
+
 func TestCheckSchemaCompatRequiresUsageEventMicrodollars(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
 	state.queryErrors = []schemaProbeQueryError{{

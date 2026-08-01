@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     local_modified_at TEXT,
     transcript_revision TEXT NOT NULL DEFAULT '0',
     parent_session_id TEXT,
+    parser_parent_session_id TEXT,
     relationship_type TEXT NOT NULL DEFAULT '',
     total_output_tokens INTEGER NOT NULL DEFAULT 0,
     peak_context_tokens INTEGER NOT NULL DEFAULT 0,

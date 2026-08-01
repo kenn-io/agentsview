@@ -6890,6 +6890,49 @@ func TestCollectAndBatchPrefixesParserExcludedIDs(t *testing.T) {
 	assert.Nil(t, gotPrefixed, "prefixed remote session should be deleted")
 }
 
+func TestCollectAndBatchClearsDanglingParentAfterParserExclusion(t *testing.T) {
+	database := openTestDB(t)
+	parentID := "excluded-spawner"
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: parentID, Project: "project", Machine: "local", Agent: "claude",
+	}))
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "child", Project: "project", Machine: "local", Agent: "claude",
+		ParentSessionID: &parentID, RelationshipType: "subagent",
+	}))
+	require.NoError(t, database.InsertMessages([]db.Message{{
+		SessionID: parentID, Ordinal: 0, Role: "assistant",
+		Content: "spawn child", HasToolUse: true,
+		ToolCalls: []db.ToolCall{{
+			ToolName: "Task", Category: "Task", SubagentSessionID: "child",
+		}},
+	}}))
+
+	results := make(chan syncJob, 1)
+	results <- syncJob{
+		processResult: processResult{
+			excludedSessionIDs: []string{parentID},
+		},
+		path: "/archive/excluded-spawner.jsonl",
+	}
+	close(results)
+
+	engine := &Engine{db: database}
+	stats := engine.collectAndBatch(
+		t.Context(), results, 1, 1, nil, syncWriteDefault,
+	)
+
+	assert.Zero(t, stats.Failed)
+	spawner, err := database.GetSession(t.Context(), parentID)
+	require.NoError(t, err)
+	assert.Nil(t, spawner, "parser exclusion must delete the spawner")
+	child, err := database.GetSession(t.Context(), "child")
+	require.NoError(t, err)
+	require.NotNil(t, child)
+	assert.Nil(t, child.ParentSessionID,
+		"bulk exclusion must clear a child parent that no longer exists")
+}
+
 func TestShouldSkipByPathWithRewriter(t *testing.T) {
 	database := openTestDB(t)
 

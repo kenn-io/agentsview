@@ -362,7 +362,8 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 			INSERT OR REPLACE INTO main.pg_sync_state (key, value)
 			SELECT key, value FROM old_db.pg_sync_state
 			WHERE key = 'pg_push_marker_id'
-			   OR key LIKE 'artifact\_%' ESCAPE '\'`); err != nil {
+			   OR key LIKE 'artifact\_%' ESCAPE '\'
+			   OR key = ?`, subagentParentRepairQueueStateKey); err != nil {
 			return fmt.Errorf("copying sync state: %w", err)
 		}
 	}
@@ -1477,6 +1478,9 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 		"file_mtime", "file_hash", "parent_session_id",
 		"relationship_type",
 	)
+	if oldDBHasColumn(ctx, tx, "sessions", "parser_parent_session_id") {
+		cols = append(cols, "parser_parent_session_id")
+	}
 	for _, c := range []string{"agent_label", "entrypoint", "session_kind"} {
 		if oldDBHasColumn(ctx, tx, "sessions", c) {
 			cols = append(cols, c)
