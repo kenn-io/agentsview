@@ -1129,6 +1129,16 @@ func extractMessagesFrom(
 					IsSidechain:      gjson.Get(e.line, "isSidechain").Bool(),
 				})
 				ordinal++
+				// The revealed remainder must get the same
+				// command/system-reminder preprocessing a bare
+				// prompt gets, so command XML normalizes (e.g.
+				// "/clear") instead of surfacing raw markup in
+				// first_message.
+				var skip bool
+				remainder, skip = preprocessClaudeUserText(remainder)
+				if skip || strings.TrimSpace(remainder) == "" {
+					continue
+				}
 				text = remainder
 			}
 			// Skip unclassified noise (e.g. non-caveat
@@ -2192,6 +2202,16 @@ func extractMessages(entries []dagEntry) (
 					IsSidechain:      gjson.Get(e.line, "isSidechain").Bool(),
 				})
 				ordinal++
+				// The revealed remainder must get the same
+				// command/system-reminder preprocessing a bare
+				// prompt gets, so command XML normalizes (e.g.
+				// "/clear") instead of surfacing raw markup in
+				// first_message.
+				var skip bool
+				remainder, skip = preprocessClaudeUserText(remainder)
+				if skip || strings.TrimSpace(remainder) == "" {
+					continue
+				}
 				text = remainder
 			}
 			if isClaudeSystemMessage(text) {

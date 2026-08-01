@@ -366,6 +366,50 @@ func TestParseClaudeSession_SkippedMessages(t *testing.T) {
 		assert.Equal(t, "What does this do?", msgs[3].Content)
 	})
 
+	t.Run("split IDE envelope remainder gets command preprocessing", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.ClaudeUserJSON(
+				"<ide_opened_file>The user opened /workspace/app/README.md.</ide_opened_file>\n"+
+					"<command-message>clear</command-message>\n"+
+					"<command-name>/clear</command-name>",
+				tsZero,
+			),
+			testjsonl.ClaudeUserJSON("real question", tsZeroS1),
+		)
+		sess, msgs := runClaudeParserTest(t, "test.jsonl", content)
+		// The command XML revealed by the split normalizes exactly
+		// like a bare command message instead of being stored as
+		// raw markup.
+		require.Len(t, msgs, 3)
+		assert.True(t, msgs[0].IsSystem)
+		assert.Equal(t, "ide_opened_file", msgs[0].SourceSubtype)
+		assert.False(t, msgs[1].IsSystem)
+		assert.Equal(t, "/clear", msgs[1].Content)
+		assert.Equal(t, "real question", msgs[2].Content)
+		assert.Equal(t, "real question", sess.FirstMessage,
+			"slash command must not become first_message")
+	})
+
+	t.Run("split IDE envelope remainder honors preprocessing skip", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.ClaudeUserJSON(
+				"<ide_selection>The user selected package main.</ide_selection>\n"+
+					"<command-message></command-message>",
+				tsZero,
+			),
+			testjsonl.ClaudeUserJSON("real question", tsZeroS1),
+		)
+		sess, msgs := runClaudeParserTest(t, "test.jsonl", content)
+		// The remainder is a command envelope that cannot be
+		// normalized: it is skipped like a standalone one, keeping
+		// only the hidden envelope message.
+		require.Len(t, msgs, 2)
+		assert.True(t, msgs[0].IsSystem)
+		assert.Equal(t, "ide_selection", msgs[0].SourceSubtype)
+		assert.Equal(t, "real question", msgs[1].Content)
+		assert.Equal(t, "real question", sess.FirstMessage)
+	})
+
 	t.Run("split IDE envelope gets a distinct source uuid", func(t *testing.T) {
 		content := testjsonl.JoinJSONL(
 			testjsonl.ClaudeEntryJSON(
@@ -990,6 +1034,45 @@ func TestParseClaudeSessionFrom_IDEContextPrependedToPrompt(t *testing.T) {
 	assert.False(t, newMsgs[1].IsSystem)
 	assert.Equal(t, RoleUser, newMsgs[1].Role)
 	assert.Equal(t, "Explain this file.", newMsgs[1].Content)
+}
+
+func TestParseClaudeSessionFrom_IDEContextPrependedToCommand(t *testing.T) {
+	t.Parallel()
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("hello", tsEarly),
+		testjsonl.ClaudeAssistantJSON("hi", tsEarlyS1),
+	)
+	path := createTestFile(t, "inc-ide-context-command.jsonl", initial)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+
+	appended := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON(
+			"<ide_opened_file>The user opened /workspace/app/README.md.</ide_opened_file>\n"+
+				"<command-message>clear</command-message>\n"+
+				"<command-name>/clear</command-name>",
+			tsLate,
+		),
+	)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(appended)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	newMsgs, _, _, err := callParseClaudeSessionFrom(path, info.Size(), 2, "")
+	require.NoError(t, err)
+	require.Len(t, newMsgs, 2,
+		"the entry splits into a hidden IDE-context message plus the normalized command")
+
+	assert.True(t, newMsgs[0].IsSystem)
+	assert.Equal(t, "ide_opened_file", newMsgs[0].SourceSubtype)
+
+	assert.False(t, newMsgs[1].IsSystem)
+	assert.Equal(t, RoleUser, newMsgs[1].Role)
+	assert.Equal(t, "/clear", newMsgs[1].Content,
+		"command XML revealed by the split must normalize, not stay raw")
 }
 
 func TestParseClaudeSessionFrom_ReminderPrefixedCommand(t *testing.T) {
