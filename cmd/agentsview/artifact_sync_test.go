@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -425,7 +426,41 @@ func TestRunDaemonArtifactExchangeAcceptsLocalhostEndpoint(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	assert.Equal(t, "127.0.0.1:"+endpoint.Port(), gotHost)
+	assert.Equal(t, "localhost:"+endpoint.Port(), gotHost)
+}
+
+func TestRunDaemonArtifactExchangeConnectsToIPv6LocalhostListener(t *testing.T) {
+	listener, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Skipf("IPv6 loopback is unavailable: %v", err)
+	}
+	var gotHost string
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		gotHost = r.Host
+		w.Header().Set("Content-Type", "application/json")
+		_, writeErr := io.WriteString(w, `{}`)
+		require.NoError(t, writeErr)
+	}))
+	ts.Listener = listener
+	ts.Start()
+	t.Cleanup(ts.Close)
+	endpoint, err := url.Parse(ts.URL)
+	require.NoError(t, err)
+	endpoint.Host = "localhost:" + endpoint.Port()
+
+	_, err = runDaemonArtifactExchange(
+		t.Context(),
+		transport{Mode: transportHTTP, URL: endpoint.String()},
+		"",
+		t.TempDir(),
+		false,
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, "localhost:"+endpoint.Port(), gotHost)
 }
 
 func TestRunLocalAndArtifactFolderSyncStopsAfterLocalFailure(t *testing.T) {

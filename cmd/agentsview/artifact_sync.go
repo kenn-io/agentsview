@@ -24,13 +24,65 @@ var runArtifactSyncCLI = artifact.Sync
 
 const daemonArtifactExchangeResponseLimit = 1 << 20
 
-var daemonArtifactExchangeHTTPClient = &http.Client{
-	CheckRedirect: func(
-		*http.Request,
-		[]*http.Request,
-	) error {
-		return http.ErrUseLastResponse
-	},
+var daemonArtifactExchangeHTTPClient = newDaemonArtifactExchangeHTTPClient()
+
+func newDaemonArtifactExchangeHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	dialer := &net.Dialer{}
+	transport.DialContext = func(
+		ctx context.Context,
+		network string,
+		address string,
+	) (net.Conn, error) {
+		return dialLoopbackDaemon(ctx, dialer, network, address)
+	}
+	return &http.Client{
+		Transport: transport,
+		CheckRedirect: func(
+			*http.Request,
+			[]*http.Request,
+		) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
+func dialLoopbackDaemon(
+	ctx context.Context,
+	dialer *net.Dialer,
+	network string,
+	address string,
+) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || !strings.EqualFold(host, "localhost") {
+		return dialer.DialContext(ctx, network, address)
+	}
+	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	if len(addresses) == 0 {
+		return nil, errors.New("localhost did not resolve to a loopback address")
+	}
+	for _, candidate := range addresses {
+		if !candidate.IP.IsLoopback() {
+			return nil, errors.New("localhost resolved to a non-loopback address")
+		}
+	}
+	var dialErr error
+	for _, candidate := range addresses {
+		connection, candidateErr := dialer.DialContext(
+			ctx,
+			network,
+			net.JoinHostPort(candidate.String(), port),
+		)
+		if candidateErr == nil {
+			return connection, nil
+		}
+		dialErr = errors.Join(dialErr, candidateErr)
+	}
+	return nil, dialErr
 }
 
 func validateArtifactSyncConfig(cfg SyncConfig) error {
@@ -168,16 +220,10 @@ func validatedLoopbackDaemonURL(rawURL string) (string, error) {
 		parsed.Fragment != "" {
 		return "", errors.New("unsafe daemon endpoint")
 	}
-	ip := net.ParseIP(parsed.Hostname())
-	if strings.EqualFold(parsed.Hostname(), "localhost") {
-		host := "127.0.0.1"
-		if parsed.Port() != "" {
-			host = net.JoinHostPort(host, parsed.Port())
-		}
-		parsed.Host = host
-		ip = net.ParseIP("127.0.0.1")
-	}
-	if ip == nil || !ip.IsLoopback() {
+	hostname := parsed.Hostname()
+	ip := net.ParseIP(hostname)
+	if !strings.EqualFold(hostname, "localhost") &&
+		(ip == nil || !ip.IsLoopback()) {
 		return "", errors.New("daemon endpoint is not loopback")
 	}
 	return strings.TrimSuffix(parsed.String(), "/"), nil
