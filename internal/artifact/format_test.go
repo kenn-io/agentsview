@@ -206,6 +206,10 @@ func TestEncodeSegmentPreservesPromptSource(t *testing.T) {
 	var decoded segmentMessage
 	require.NoError(t, json.Unmarshal(data, &decoded))
 	assert.Equal(t, "typed", decoded.PromptSource)
+
+	restored := decoded.dbMessage()
+	assert.Equal(t, "typed", restored.PromptSource,
+		"import must carry prompt_source back into the db message")
 }
 
 func TestCanonicalMetadataEventGolden(t *testing.T) {

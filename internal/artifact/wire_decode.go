@@ -358,6 +358,7 @@ func (m segmentMessage) dbMessage() db.Message {
 		SourceParentUUID:  m.SourceParentUUID,
 		IsSidechain:       m.IsSidechain,
 		IsCompactBoundary: m.IsCompactBoundary,
+		PromptSource:      m.PromptSource,
 	}
 	if len(m.ToolCalls) > 0 {
 		msg.ToolCalls = make([]db.ToolCall, len(m.ToolCalls))
