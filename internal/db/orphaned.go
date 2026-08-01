@@ -1184,9 +1184,11 @@ func (d *DB) CopySessionMetadataFrom(
 	// misattach a pin whose real target was removed by the re-parse.
 	// Fall back to ordinal only for legacy pins whose source row
 	// has no source_uuid, or when the row at the old ordinal carries
-	// the same uuid (a duplicated uuid, where the old coordinates are
-	// the best disambiguator). A nonempty uuid with no matching fresh
-	// row means the pinned message is gone: the pin is dropped rather
+	// the same uuid, role, and content and that tuple is unique on both
+	// sides. The stronger identity check handles duplicate uuids without
+	// mistaking a surviving duplicate that shifted into the pinned row's
+	// old ordinal for the removed message. A nonempty uuid with no safe
+	// match means the pinned message is gone: the pin is dropped rather
 	// than silently attached to whatever now occupies its ordinal.
 	if oldDBHasTable(ctx, tx, "pinned_messages") {
 		hasSourceUUID := oldDBHasColumn(
@@ -1225,17 +1227,35 @@ func (d *DB) CopySessionMetadataFrom(
 			}
 		}
 		// Ordinal fallback: legacy pins without a uuid, or an ordinal
-		// candidate that carries the pin's own uuid (duplicate-uuid
-		// case; when the uuid was unique the source_uuid pass already
-		// restored the same row and INSERT OR IGNORE dedupes). An
-		// ordinal candidate with a different uuid is unrelated
-		// content, so the pin is dropped instead.
+		// candidate whose uuid, role, and content uniquely match the
+		// pinned source row on both sides. When the uuid was unique the
+		// source_uuid pass already restored the same row and INSERT OR
+		// IGNORE dedupes; duplicate uuids need the stronger tuple to
+		// avoid attaching a removed pin to a shifted survivor.
 		uuidFallbackGuard := ""
 		if hasSourceUUID {
 			uuidFallbackGuard = `
 				AND (old_m.source_uuid IS NULL
 					OR old_m.source_uuid = ''
-					OR new_m.source_uuid = old_m.source_uuid)`
+					OR (
+						new_m.source_uuid = old_m.source_uuid
+						AND new_m.role = old_m.role
+						AND new_m.content = old_m.content
+						AND (
+							SELECT COUNT(*) FROM old_db.messages y
+							WHERE y.session_id = old_m.session_id
+							AND y.source_uuid = old_m.source_uuid
+							AND y.role = old_m.role
+							AND y.content = old_m.content
+						) = 1
+						AND (
+							SELECT COUNT(*) FROM main.messages x
+							WHERE x.session_id = old_m.session_id
+							AND x.source_uuid = old_m.source_uuid
+							AND x.role = old_m.role
+							AND x.content = old_m.content
+						) = 1
+					))`
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT OR IGNORE INTO main.pinned_messages
