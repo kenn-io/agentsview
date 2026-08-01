@@ -115,6 +115,12 @@ type recallUnavailableHTTPStore struct {
 	readOnlyHTTPStore
 }
 
+func (recallUnavailableHTTPStore) ListRecallEntries(
+	context.Context, db.RecallQuery,
+) ([]db.RecallEntry, error) {
+	return nil, db.ErrReadOnly
+}
+
 type recallTransientHTTPStore struct {
 	*db.DB
 }

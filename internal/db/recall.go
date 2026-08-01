@@ -94,12 +94,16 @@ type RecallQuery struct {
 	Type                string
 	Scope               string
 	Status              string
+	ReviewState         string
 	ExtractorMethod     string
 	SourceSessionID     string
 	SourceEpisodeID     string
 	SourceRunID         string
 	SupersedesEntryID   string
 	SupersededByEntryID string
+	CursorUpdatedAt     string
+	CursorID            string
+	ProbeNext           bool
 	TrustedOnly         bool
 	Limit               int
 }
@@ -245,6 +249,9 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 	if err := copyRecallCorpusRevisionFromAttachedTx(ctx, tx); err != nil {
 		return err
 	}
+	if err := copyRecallQueryRevisionFromAttachedTx(ctx, tx); err != nil {
+		return err
+	}
 	if err := copyRecallEmbeddingChangesFromAttachedTx(ctx, tx); err != nil {
 		return err
 	}
@@ -345,6 +352,25 @@ func copyRecallCorpusRevisionFromAttachedTx(
 		), revision))
 		WHERE singleton = 1`); err != nil {
 		return fmt.Errorf("copying recall corpus revision: %w", err)
+	}
+	return nil
+}
+
+func copyRecallQueryRevisionFromAttachedTx(
+	ctx context.Context, tx *sql.Tx,
+) error {
+	if !oldDBHasTable(ctx, tx, "recall_query_state") {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE main.recall_query_state
+		SET revision = MAX(revision, COALESCE((
+			SELECT revision
+			FROM old_db.recall_query_state
+			WHERE singleton = 1
+		), revision)) + 1
+		WHERE singleton = 1`); err != nil {
+		return fmt.Errorf("copying recall query revision: %w", err)
 	}
 	return nil
 }
@@ -682,6 +708,9 @@ func (db *DB) ListRecallEntries(
 	q = NormalizeRecallQuery(q)
 	where, args := buildRecallEntryWhere(q, false)
 	limit := recallLimit(q.Limit)
+	if q.ProbeNext {
+		limit++
+	}
 	query := "SELECT " + recallBaseCols +
 		" FROM recall_entries WHERE " + where +
 		" ORDER BY updated_at DESC, id ASC LIMIT ?"
@@ -1352,12 +1381,15 @@ func NormalizeRecallQuery(q RecallQuery) RecallQuery {
 	q.Type = strings.TrimSpace(q.Type)
 	q.Scope = strings.TrimSpace(q.Scope)
 	q.Status = strings.TrimSpace(q.Status)
+	q.ReviewState = strings.TrimSpace(q.ReviewState)
 	q.ExtractorMethod = strings.TrimSpace(q.ExtractorMethod)
 	q.SourceSessionID = strings.TrimSpace(q.SourceSessionID)
 	q.SourceEpisodeID = strings.TrimSpace(q.SourceEpisodeID)
 	q.SourceRunID = strings.TrimSpace(q.SourceRunID)
 	q.SupersedesEntryID = strings.TrimSpace(q.SupersedesEntryID)
 	q.SupersededByEntryID = strings.TrimSpace(q.SupersededByEntryID)
+	q.CursorUpdatedAt = strings.TrimSpace(q.CursorUpdatedAt)
+	q.CursorID = strings.TrimSpace(q.CursorID)
 	return q
 }
 
@@ -1386,6 +1418,21 @@ func ValidateRecallQuery(q RecallQuery) error {
 			"%w: trusted_only requires status %q",
 			ErrInvalidRecallQuery,
 			corerecall.StatusAccepted,
+		)
+	}
+	if q.ReviewState != "" {
+		if _, ok := corerecall.NormalizeReviewState(q.ReviewState); !ok {
+			return fmt.Errorf(
+				"%w: unknown recall review state %q",
+				ErrInvalidRecallQuery,
+				q.ReviewState,
+			)
+		}
+	}
+	if (q.CursorUpdatedAt == "") != (q.CursorID == "") {
+		return fmt.Errorf(
+			"%w: recall cursor requires both updated_at and id",
+			ErrInvalidRecallQuery,
 		)
 	}
 	return nil
@@ -1553,6 +1600,10 @@ func buildRecallEntryWhere(q RecallQuery, includeText bool) (string, []any) {
 		preds = append(preds, "scope = ?")
 		args = append(args, q.Scope)
 	}
+	if q.ReviewState != "" {
+		preds = append(preds, "review_state = ?")
+		args = append(args, q.ReviewState)
+	}
 	if q.ExtractorMethod != "" {
 		preds = append(preds, "extractor_method = ?")
 		args = append(args, q.ExtractorMethod)
@@ -1576,6 +1627,12 @@ func buildRecallEntryWhere(q RecallQuery, includeText bool) (string, []any) {
 	if q.SupersededByEntryID != "" {
 		preds = append(preds, "superseded_by_entry_id = ?")
 		args = append(args, q.SupersededByEntryID)
+	}
+	if q.CursorUpdatedAt != "" {
+		preds = append(preds,
+			"(updated_at < ? OR (updated_at = ? AND id > ?))")
+		args = append(args,
+			q.CursorUpdatedAt, q.CursorUpdatedAt, q.CursorID)
 	}
 	if q.TrustedOnly {
 		preds = append(preds, "review_state = ?")

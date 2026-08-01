@@ -27,6 +27,7 @@ vi.mock("../../utils/clipboard.js", () => ({
 
 import { sessions } from "../../stores/sessions.svelte.js";
 import { sync } from "../../stores/sync.svelte.js";
+import { settings } from "../../stores/settings.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
 import { router } from "../../stores/router.svelte.js";
 import { setLocale } from "../../i18n/index.js";
@@ -62,6 +63,9 @@ describe("AppHeader export actions", () => {
     sessions.activeSessionId = "sess-123";
     sessions.sessions = [testSession()];
     sync.serverVersion = null;
+    settings.loaded = true;
+    settings.readOnly = false;
+    settings.error = null;
     ui.isMobileViewport = false;
     ui.sidebarOpen = true;
     ui.followLatest = false;
@@ -78,6 +82,9 @@ describe("AppHeader export actions", () => {
     ui.isMobileViewport = false;
     ui.sidebarOpen = true;
     router.route = "sessions";
+    settings.loaded = false;
+    settings.readOnly = false;
+    settings.error = null;
   });
 
   it("copies markdown export link from export menu", async () => {
@@ -240,6 +247,7 @@ describe("AppHeader export actions", () => {
       "Usage",
       "Activity",
       "Trends",
+      "Recall",
       "Pinned",
       "Insights",
       "Trash",
@@ -286,6 +294,23 @@ describe("AppHeader export actions", () => {
     expect(
       refreshButton?.querySelector("svg.lucide-database-backup"),
     ).not.toBeNull();
+    expect(document.body.textContent).not.toContain("Recall");
+  });
+
+  it("hides Recall when settings report a read-only backend", async () => {
+    sync.serverVersion = {
+      version: "dev",
+      commit: "unknown",
+      build_date: "",
+      read_only: false,
+    };
+    settings.readOnly = true;
+
+    component = mount(AppHeader, { target: document.body });
+    await tick();
+
+    expect(document.body.textContent).toContain("Sessions");
+    expect(document.body.textContent).not.toContain("Recall");
   });
 
   it("renders translated shell navigation when locale is Simplified Chinese", async () => {

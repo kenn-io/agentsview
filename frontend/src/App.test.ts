@@ -83,6 +83,10 @@ afterEach(() => {
   yokedDates.setEnabled(false);
   ui.clearScrollState();
   settings.needsAuth = false;
+  settings.loaded = false;
+  settings.readOnly = false;
+  settings.error = null;
+  sync.serverVersion = null;
 });
 
 function appSourceSlice(startMarker: string, endMarker: string): string {
@@ -92,6 +96,62 @@ function appSourceSlice(startMarker: string, endMarker: string): string {
   expect(end).toBeGreaterThan(start);
   return source.slice(start, end);
 }
+
+describe("App Recall availability", () => {
+  it("does not query Recall when a read-only backend opens the direct route", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/recall/extraction/status")) {
+        return new Response(JSON.stringify({ configured: false }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ entries: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    vi.spyOn(settings, "load").mockResolvedValue();
+    vi.spyOn(starred, "load").mockResolvedValue();
+    vi.spyOn(sync, "loadStatus").mockResolvedValue();
+    vi.spyOn(sync, "loadStats").mockResolvedValue();
+    vi.spyOn(sync, "loadVersion").mockResolvedValue();
+    vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
+    vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(sessions, "loadProjects").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+
+    sync.serverVersion = {
+      version: "dev",
+      commit: "unknown",
+      build_date: "",
+      read_only: true,
+    };
+    router.route = "recall";
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+
+    expect(document.body.textContent).toContain(
+      "Recall is unavailable in read-only mode.",
+    );
+    expect(
+      fetchSpy.mock.calls.some(([input]) =>
+        String(input).includes("/recall/"),
+      ),
+    ).toBe(false);
+  });
+});
 
 describe("App session URL date state", () => {
   it("cancels session reads on route exit and restarts an incomplete load on return", async () => {
