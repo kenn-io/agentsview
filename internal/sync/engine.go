@@ -360,8 +360,8 @@ type Engine struct {
 	// writeBatchOverride is a test seam for exercising reconciliation archive
 	// write failures after discovery and parse have succeeded.
 	writeBatchOverride func([]pendingWrite, syncWriteMode, bool) (int, int, int, int)
-	// sourceAttributionLookupOverride observes or replaces the bounded source
-	// attribution query in DB-backed sync tests.
+	// sourceAttributionLookupOverride observes or replaces bounded source
+	// attribution queries in sync tests.
 	sourceAttributionLookupOverride func(
 		context.Context, []db.SessionSourcePath,
 	) ([]db.SessionSourceAttribution, error)
@@ -4045,6 +4045,13 @@ func (e *Engine) baselineReconciliationCandidates(
 			},
 		})
 	}
+	var err error
+	sources, admitted, err = e.expandSourceBaselinesByStoredAttribution(
+		ctx, sources, admitted,
+	)
+	if err != nil {
+		return fmt.Errorf("load reconciliation source attributions: %w", err)
+	}
 	if err := e.replaceActiveSessionSourceBaselinesByMachine(
 		ctx, sources, admitted,
 	); err != nil {
@@ -6655,6 +6662,68 @@ func (e *Engine) listActiveSessionSourceAttributions(
 	return e.db.ListActiveSessionSourceAttributions(ctx, sources)
 }
 
+// expandSourceBaselinesByStoredAttribution applies one source-level admission
+// decision to every immutable machine currently represented at that source.
+// This is for no-write outcomes, where there is no normalized pending session
+// to carry the stored machine through baseline replacement.
+func (e *Engine) expandSourceBaselinesByStoredAttribution(
+	ctx context.Context,
+	candidates []machineSessionSource,
+	admitted []machineSessionSource,
+) ([]machineSessionSource, []machineSessionSource, error) {
+	requestedSet := make(map[db.SessionSourcePath]struct{}, len(candidates))
+	requested := make([]db.SessionSourcePath, 0, len(candidates))
+	candidateSet := make(map[machineSessionSource]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		candidateSet[candidate] = struct{}{}
+		if candidate.Source.Agent == "" || candidate.Source.FilePath == "" {
+			continue
+		}
+		if _, exists := requestedSet[candidate.Source]; exists {
+			continue
+		}
+		requestedSet[candidate.Source] = struct{}{}
+		requested = append(requested, candidate.Source)
+	}
+	if len(requested) == 0 {
+		return candidates, admitted, nil
+	}
+
+	admittedSources := make(map[db.SessionSourcePath]struct{}, len(admitted))
+	admittedSet := make(map[machineSessionSource]struct{}, len(admitted))
+	for _, source := range admitted {
+		admittedSources[source.Source] = struct{}{}
+		admittedSet[source] = struct{}{}
+	}
+	attributions, err := e.listActiveSessionSourceAttributions(ctx, requested)
+	if err != nil {
+		return candidates, admitted, err
+	}
+	for _, attribution := range attributions {
+		source := machineSessionSource{
+			Machine: attribution.Machine,
+			Source: db.SessionSourcePath{
+				Agent: attribution.Agent, FilePath: attribution.FilePath,
+			},
+		}
+		if _, requested := requestedSet[source.Source]; !requested {
+			continue
+		}
+		if _, exists := candidateSet[source]; !exists {
+			candidateSet[source] = struct{}{}
+			candidates = append(candidates, source)
+		}
+		if _, sourceAdmitted := admittedSources[source.Source]; !sourceAdmitted {
+			continue
+		}
+		if _, exists := admittedSet[source]; !exists {
+			admittedSet[source] = struct{}{}
+			admitted = append(admitted, source)
+		}
+	}
+	return candidates, admitted, nil
+}
+
 // syncProviderDBBacked enumerates a DB-backed provider's sources, parses only
 // the changed ones through the provider facade, and flushes each source before
 // parsing the next. Change detection compares the provider fingerprint mtime
@@ -7114,9 +7183,16 @@ func (e *Engine) collectAndBatch(
 			}
 			delete(baselineCacheWrites, source)
 		}
-		if err := e.replaceActiveSessionSourceBaselinesByMachine(
-			ctx, baselineCandidates, baselineAdmitted,
-		); err != nil {
+		resolvedCandidates, resolvedAdmitted, err :=
+			e.expandSourceBaselinesByStoredAttribution(
+				ctx, baselineCandidates, baselineAdmitted,
+			)
+		if err == nil {
+			err = e.replaceActiveSessionSourceBaselinesByMachine(
+				ctx, resolvedCandidates, resolvedAdmitted,
+			)
+		}
+		if err != nil {
 			log.Printf("replace successful non-write source baselines: %v", err)
 			stats.RecordFailed()
 			e.poisonSQLiteContainerPass()
