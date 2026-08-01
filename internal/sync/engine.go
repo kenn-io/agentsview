@@ -4851,22 +4851,6 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 								if present {
 									continue
 								}
-								if !allProviderRootsCovered {
-									// Membership authority came from the scope's
-									// own container proof; the member may have
-									// moved to a persistent container under
-									// another configured root the pass never
-									// streamed.
-									relocated, err := reconciliationMemberRelocated(
-										ctx, provider, ownership.ID,
-									)
-									if err != nil {
-										return deleted, err
-									}
-									if relocated {
-										continue
-									}
-								}
 								persistentMemberContainerExists = true
 							}
 						}
@@ -4884,27 +4868,17 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 							container, _, virtual := parser.ParseVirtualSourcePath(
 								providerDiscoveredPath(source),
 							)
-							if virtual && !allProviderRootsCovered {
+							if virtual && !allProviderRootsCovered &&
+								!reconciliationProofCoversContainerMembership(
+									scope.proofScopes, container,
+								) {
 								// A scoped pass cannot prove that the same logical
 								// member did not move to another configured root —
 								// unless the completed scope's proof spans this
-								// container's whole virtual membership AND the
-								// provider, asked across its full configured
-								// scope, no longer resolves the session anywhere.
-								if !reconciliationProofCoversContainerMembership(
-									scope.proofScopes, container,
-								) {
-									continue
-								}
-								relocated, err := reconciliationMemberRelocated(
-									ctx, provider, ownership.ID,
-								)
-								if err != nil {
-									return deleted, err
-								}
-								if relocated {
-									continue
-								}
+								// container's whole virtual membership; the
+								// relocation guard before the tombstone below
+								// then rules out a copy under another root.
+								continue
 							}
 							if spool == nil || !virtual {
 								continue
@@ -4941,6 +4915,27 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 						}
 						if !missing {
 							continue
+						}
+					}
+					if !allProviderRootsCovered {
+						// A scoped pass never streamed the other configured
+						// roots, so before tombstoning a virtual member —
+						// whose home container may itself be gone — ask the
+						// provider across its full configured scope whether
+						// the session still resolves anywhere: a same-ID copy
+						// under another root is a move, not a deletion.
+						if _, _, virtual := parser.ParseVirtualSourcePath(
+							ownership.FilePath,
+						); virtual {
+							relocated, err := reconciliationMemberRelocated(
+								ctx, provider, ownership.ID,
+							)
+							if err != nil {
+								return deleted, err
+							}
+							if relocated {
+								continue
+							}
 						}
 					}
 					changed, err := e.tombstoneSessionSourceOwnership(

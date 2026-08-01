@@ -333,9 +333,22 @@ type scopedStreamingProvider struct {
 	parser.ProviderBase
 	sourcesByRoot map[string][]parser.SourceRef
 	failRoots     map[string]bool
+	// findable maps full session IDs to the source FindSource resolves for
+	// them, standing in for a member that lives under another configured
+	// root than the one a scoped pass streamed.
+	findable map[string]parser.SourceRef
 	// streamCalls is pointer-shared across the per-call copies NewProvider
 	// returns, so tests observe every discovery walk on one counter.
 	streamCalls *atomic.Int32
+}
+
+func (p *scopedStreamingProvider) FindSource(
+	_ context.Context, req parser.FindSourceRequest,
+) (parser.SourceRef, bool, error) {
+	if source, ok := p.findable[req.FullSessionID]; ok {
+		return source, true, nil
+	}
+	return parser.SourceRef{}, false, nil
 }
 
 func (p *scopedStreamingProvider) DiscoverEach(
@@ -440,8 +453,78 @@ func newScopedStreamingProvider(
 		},
 		sourcesByRoot: make(map[string][]parser.SourceRef),
 		failRoots:     make(map[string]bool),
+		findable:      make(map[string]parser.SourceRef),
 		streamCalls:   &atomic.Int32{},
 	}
+}
+
+// TestReconcileProviderRootsScopedVirtualMemberChecksRelocationWhenContainerGone
+// pins the relocation guard for a virtual member whose home container is
+// itself deleted: the stale spelling resolves nowhere, so no branch-level
+// guard fires, and only the shared pre-tombstone check can distinguish a
+// member that moved to another configured root from one that is gone. The
+// moved member is preserved; a sibling the provider resolves nowhere is
+// reclaimed in the same pass.
+func TestReconcileProviderRootsScopedVirtualMemberChecksRelocationWhenContainerGone(
+	t *testing.T,
+) {
+	database := openTestDB(t)
+	const agent = parser.AgentType("scoped-virtual-relocation")
+	rootOne := t.TempDir()
+	rootTwo := t.TempDir()
+	// The container under rootOne is already gone; its two stored members
+	// differ only in whether the provider still resolves them elsewhere.
+	container := filepath.Join(rootOne, "traces", "chat.db")
+	movedPath := container + "#moved"
+	gonePath := container + "#gone"
+	for id, path := range map[string]string{
+		"moved": movedPath, "gone": gonePath,
+	} {
+		p := path
+		require.NoError(t, database.UpsertSession(db.Session{
+			ID: id, Agent: string(agent), Project: "proj",
+			Machine: "local", FilePath: &p,
+		}))
+	}
+	require.NoError(t, database.BaselineActiveSessionSourcePaths(
+		t.Context(), "local", []db.SessionSourcePath{
+			{Agent: string(agent), FilePath: movedPath},
+			{Agent: string(agent), FilePath: gonePath},
+		},
+	))
+
+	provider := newScopedStreamingProvider(agent)
+	provider.findable["moved"] = scopedTestSource(
+		agent, filepath.Join(rootTwo, "traces", "chat.db")+"#moved",
+	)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{agent: {rootOne, rootTwo}},
+		Machine:   "local",
+		ProviderFactories: []parser.ProviderFactory{
+			scopedStreamingFactory{provider: provider},
+		},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			agent: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	t.Cleanup(engine.Close)
+
+	// Only rootOne is requested, so the pass holds no full-root coverage
+	// and never streams rootTwo.
+	require.NoError(t, engine.ReconcileProviderRoots(
+		t.Context(), agent, []string{rootOne},
+	))
+
+	survivor, err := database.GetSession(t.Context(), "moved")
+	require.NoError(t, err)
+	assert.NotNil(t, survivor,
+		"a member the provider resolves under another root is a move")
+	gone, err := database.GetSessionFull(t.Context(), "gone")
+	require.NoError(t, err)
+	require.NotNil(t, gone)
+	require.NotNil(t, gone.DeletionCause)
+	assert.Equal(t, "source_missing", *gone.DeletionCause,
+		"a member the provider resolves nowhere is reclaimed")
 }
 
 func scopedTestSource(agent parser.AgentType, path string) parser.SourceRef {
