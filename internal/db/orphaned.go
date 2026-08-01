@@ -1178,9 +1178,12 @@ func (d *DB) CopySessionMetadataFrom(
 	// Prefer the source_uuid natural key: a re-parse can insert or
 	// drop rows (e.g. the v75 IDE-envelope split), shifting ordinals
 	// so that the old (session_id, ordinal) key lands on an unrelated
-	// row. Fall back to ordinal only for pins whose source row lacks
-	// a resolvable source_uuid (legacy rows, or a uuid that is not
-	// unique in the fresh DB).
+	// row. Fall back to ordinal only for legacy pins whose source row
+	// has no source_uuid, or when the row at the old ordinal carries
+	// the same uuid (a duplicated uuid, where the old coordinates are
+	// the best disambiguator). A nonempty uuid with no matching fresh
+	// row means the pinned message is gone: the pin is dropped rather
+	// than silently attached to whatever now occupies its ordinal.
 	if oldDBHasTable(ctx, tx, "pinned_messages") {
 		hasSourceUUID := oldDBHasColumn(
 			ctx, tx, "messages", "source_uuid",
@@ -1212,19 +1215,18 @@ func (d *DB) CopySessionMetadataFrom(
 				)
 			}
 		}
-		// Ordinal fallback, restricted to pins the source_uuid pass
-		// could not resolve so a uuid-restored pin is not duplicated
-		// onto a second row at its old ordinal.
-		uuidUnresolvable := ""
+		// Ordinal fallback: legacy pins without a uuid, or an ordinal
+		// candidate that carries the pin's own uuid (duplicate-uuid
+		// case; when the uuid was unique the source_uuid pass already
+		// restored the same row and INSERT OR IGNORE dedupes). An
+		// ordinal candidate with a different uuid is unrelated
+		// content, so the pin is dropped instead.
+		uuidFallbackGuard := ""
 		if hasSourceUUID {
-			uuidUnresolvable = `
+			uuidFallbackGuard = `
 				AND (old_m.source_uuid IS NULL
 					OR old_m.source_uuid = ''
-					OR (
-						SELECT COUNT(*) FROM main.messages x
-						WHERE x.session_id = old_m.session_id
-						AND x.source_uuid = old_m.source_uuid
-					) != 1)`
+					OR new_m.source_uuid = old_m.source_uuid)`
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT OR IGNORE INTO main.pinned_messages
@@ -1240,7 +1242,7 @@ func (d *DB) CopySessionMetadataFrom(
 				AND new_m.ordinal = old_m.ordinal
 			WHERE op.session_id IN (
 				SELECT id FROM main.sessions
-			)`+uuidUnresolvable); err != nil {
+			)`+uuidFallbackGuard); err != nil {
 			return fmt.Errorf("copying pinned messages: %w", err)
 		}
 	}

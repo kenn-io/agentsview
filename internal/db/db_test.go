@@ -5772,13 +5772,43 @@ func TestCopySessionMetadataFrom_PinsFollowSourceUUID(t *testing.T) {
 		SessionID: "s2", Ordinal: 1, Role: "user",
 		Content: "legacy", ContentLength: 6,
 	})
-	var legacyMsgID int64
-	require.NoError(t, srcDB.getReader().QueryRow(
-		"SELECT id FROM messages WHERE session_id = 's2' AND ordinal = 1",
-	).Scan(&legacyMsgID), "resolve legacy message id")
-	pinID, err := srcDB.PinMessage("s2", legacyMsgID, nil)
-	require.NoError(t, err, "pin legacy in src")
-	require.NotZero(t, pinID, "legacy pin not created")
+	pinByOrdinal := func(d *DB, sessionID string, ordinal int) {
+		t.Helper()
+		var msgID int64
+		require.NoError(t, d.getReader().QueryRow(
+			"SELECT id FROM messages WHERE session_id = ? AND ordinal = ?",
+			sessionID, ordinal,
+		).Scan(&msgID), "resolve %s ordinal %d", sessionID, ordinal)
+		pinID, err := d.PinMessage(sessionID, msgID, nil)
+		require.NoError(t, err, "pin %s ordinal %d", sessionID, ordinal)
+		require.NotZero(t, pinID, "pin %s ordinal %d not created",
+			sessionID, ordinal)
+	}
+	pinByOrdinal(srcDB, "s2", 1)
+
+	// Session whose pinned message vanished in the re-parse while an
+	// unrelated message took over its ordinal.
+	insertSession(t, srcDB, "s3", "proj")
+	insertMessages(t, srcDB, Message{
+		SessionID: "s3", Ordinal: 1, Role: "user",
+		Content: "gone soon", ContentLength: 9, SourceUUID: "u-gone",
+	})
+	pinByOrdinal(srcDB, "s3", 1)
+
+	// Session whose pinned message's uuid is duplicated in the fresh
+	// DB; the old ordinal still identifies which duplicate was meant.
+	insertSession(t, srcDB, "s4", "proj")
+	insertMessages(t, srcDB,
+		Message{
+			SessionID: "s4", Ordinal: 1, Role: "user",
+			Content: "dup a", ContentLength: 5, SourceUUID: "u-dup",
+		},
+		Message{
+			SessionID: "s4", Ordinal: 2, Role: "user",
+			Content: "dup b", ContentLength: 5, SourceUUID: "u-dup",
+		},
+	)
+	pinByOrdinal(srcDB, "s4", 2)
 	srcDB.Close()
 
 	// Destination DB: the re-parse split the envelope into its own
@@ -5808,6 +5838,22 @@ func TestCopySessionMetadataFrom_PinsFollowSourceUUID(t *testing.T) {
 		SessionID: "s2", Ordinal: 1, Role: "user",
 		Content: "legacy", ContentLength: 6,
 	})
+	insertSession(t, dstDB, "s3", "proj")
+	insertMessages(t, dstDB, Message{
+		SessionID: "s3", Ordinal: 1, Role: "user",
+		Content: "unrelated", ContentLength: 9, SourceUUID: "u-other",
+	})
+	insertSession(t, dstDB, "s4", "proj")
+	insertMessages(t, dstDB,
+		Message{
+			SessionID: "s4", Ordinal: 1, Role: "user",
+			Content: "dup a", ContentLength: 5, SourceUUID: "u-dup",
+		},
+		Message{
+			SessionID: "s4", Ordinal: 2, Role: "user",
+			Content: "dup b", ContentLength: 5, SourceUUID: "u-dup",
+		},
+	)
 
 	require.NoError(t, dstDB.CopySessionMetadataFrom(srcPath),
 		"CopySessionMetadataFrom")
@@ -5828,6 +5874,18 @@ func TestCopySessionMetadataFrom_PinsFollowSourceUUID(t *testing.T) {
 	require.Len(t, pins, 1, "pins s2")
 	assert.Equal(t, 1, pins[0].Ordinal,
 		"legacy pin without source_uuid falls back to ordinal")
+
+	pins, err = dstDB.ListPinnedMessages(ctx, "s3", "")
+	require.NoError(t, err, "ListPins s3")
+	assert.Empty(t, pins,
+		"pin whose uuid vanished must be dropped, not attached to the "+
+			"unrelated message now at its ordinal")
+
+	pins, err = dstDB.ListPinnedMessages(ctx, "s4", "")
+	require.NoError(t, err, "ListPins s4")
+	require.Len(t, pins, 1, "pins s4")
+	assert.Equal(t, 2, pins[0].Ordinal,
+		"duplicated uuid resolves by old ordinal to the same-uuid row")
 }
 
 func TestCopySessionMetadataCopiesFromSource(t *testing.T) {
