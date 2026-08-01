@@ -34,7 +34,9 @@ to your local database alongside your agent coding sessions.
 AgentsView imports `Prompted` activity records. Canvas, feedback, and unknown
 activity kinds are reported as skipped. Each prompt becomes a one-turn session;
 the importer resolves the timestamp's explicit exported zone instead of using
-the host timezone.
+the host timezone. The current parser supports the observed English Takeout
+rendering. Declared non-English or otherwise unsupported localized formats are
+reported as unsupported before any sessions are emitted.
 
 ## Importing via the UI
 
@@ -81,9 +83,9 @@ directory containing the extracted export.
 
 ### Messages
 
-All conversation turns are imported as sessions: user
-messages, assistant responses, thinking/reasoning blocks,
-and tool usage (code interpreter, web search, DALL-E).
+Conversation turns are imported as sessions. Providers that emit
+thinking/reasoning blocks or tool usage preserve those message types;
+Gemini Apps imports one user prompt and an optional assistant response.
 
 ### Images (ChatGPT)
 

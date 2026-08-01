@@ -256,12 +256,16 @@ Grok section and remove the explicit registry exception in the coverage test.
 
 - **Format:** Google Takeout `My Activity` HTML containing Gemini Apps activity
   cells. Prompted records are imported as one-turn sessions; Canvas, feedback,
-  and unknown record kinds are counted as skipped.
+  and unknown record kinds are counted as skipped. The current parser supports
+  the observed English rendering and reports declared non-English or otherwise
+  unsupported localized formats before emitting sessions.
 - **Evidence:** `no-public-source`.
 - **Upstream:** Google's Takeout documentation and public format references
   were searched 2026-08-01. Google does not publish a versioned Gemini Apps
   activity HTML schema, so markup, labels, timestamp zones, and future record
-  kinds remain observed compatibility evidence from sanitized exports.
+  kinds remain observed compatibility evidence from sanitized exports. No
+  translated label or timestamp vocabulary is claimed; unsupported localized
+  formats return an explicit compatibility error.
 - **Usage and cost:** Takeout activity records expose no authoritative token,
   cache, reasoning, credit, or monetary-cost fields to Agentsview.
 - **Agentsview:** `internal/parser/gemini_apps_takeout.go` and
