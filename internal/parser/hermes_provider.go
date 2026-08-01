@@ -1262,6 +1262,7 @@ func hermesArchiveSourceRef(root, stateDB string) (SourceRef, bool) {
 	stateDB = filepath.Clean(stateDB)
 	return SourceRef{
 		Provider:       AgentHermes,
+		ConfiguredRoot: root,
 		Key:            stateDB,
 		DisplayPath:    stateDB,
 		FingerprintKey: stateDB,
@@ -1275,7 +1276,11 @@ func hermesArchiveSourceRef(root, stateDB string) (SourceRef, bool) {
 func hermesStateMemberSourceRef(root, stateDB, sessionID string) SourceRef {
 	path := VirtualSourcePath(stateDB, sessionID)
 	return SourceRef{
-		Provider: AgentHermes, Key: path, DisplayPath: path, FingerprintKey: path,
+		Provider:       AgentHermes,
+		ConfiguredRoot: filepath.Clean(root),
+		Key:            path,
+		DisplayPath:    path,
+		FingerprintKey: path,
 		Opaque: hermesSource{Root: filepath.Clean(root), Path: path,
 			StateDB: filepath.Clean(stateDB), SessionID: sessionID},
 	}
@@ -1286,6 +1291,7 @@ func hermesTranscriptSourceRef(root, path string) (SourceRef, bool) {
 	path = filepath.Clean(path)
 	return SourceRef{
 		Provider:       AgentHermes,
+		ConfiguredRoot: root,
 		Key:            path,
 		DisplayPath:    path,
 		FingerprintKey: path,
