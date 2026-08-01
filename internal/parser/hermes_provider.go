@@ -802,16 +802,44 @@ func (s hermesSourceSet) reconciliationScopePlan(
 	plan := ReconciliationScopePlan{RequiredCoverageIdentities: required}
 	scopeIndex := make(map[string]int)
 	addScope := func(key, raw string, scope ReconciliationScope) {
-		if index, ok := scopeIndex[key]; ok {
-			existing := &plan.Scopes[index]
-			if !slices.Contains(existing.RetryRoots, raw) {
-				existing.RetryRoots = append(existing.RetryRoots, raw)
-			}
+		index, ok := scopeIndex[key]
+		if !ok {
+			scope.RetryRoots = []string{raw}
+			scopeIndex[key] = len(plan.Scopes)
+			plan.Scopes = append(plan.Scopes, scope)
 			return
 		}
-		scope.RetryRoots = []string{raw}
-		scopeIndex[key] = len(plan.Scopes)
-		plan.Scopes = append(plan.Scopes, scope)
+		// One archive can resolve through several branches — its own
+		// configured root and a container's profile enumeration — in any
+		// order, depending on how overlapping roots are configured and
+		// requested. The colliding scopes describe the same unit, so merge
+		// every authority rather than keeping the first arrival's: dropping
+		// a later CoverageIdentities would leave a required identity
+		// permanently uncovered and withhold aggregate-member deletion from
+		// a pass that requested every configured root.
+		existing := &plan.Scopes[index]
+		if !slices.Contains(existing.RetryRoots, raw) {
+			existing.RetryRoots = append(existing.RetryRoots, raw)
+		}
+		for _, root := range scope.TraversalRoots {
+			if !slices.Contains(existing.TraversalRoots, root) {
+				existing.TraversalRoots = append(existing.TraversalRoots, root)
+			}
+		}
+		for _, proof := range scope.PhysicalProofScopes {
+			if !slices.Contains(existing.PhysicalProofScopes, proof) {
+				existing.PhysicalProofScopes = append(
+					existing.PhysicalProofScopes, proof,
+				)
+			}
+		}
+		for _, identity := range scope.CoverageIdentities {
+			if !slices.Contains(existing.CoverageIdentities, identity) {
+				existing.CoverageIdentities = append(
+					existing.CoverageIdentities, identity,
+				)
+			}
+		}
 	}
 	for _, raw := range req.Roots {
 		if strings.TrimSpace(raw) == "" ||

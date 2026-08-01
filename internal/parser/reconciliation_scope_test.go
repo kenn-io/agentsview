@@ -278,6 +278,43 @@ func TestHermesReconciliationPlanProfileRequestIsolatesSiblings(t *testing.T) {
 		plan.RequiredCoverageIdentities)
 }
 
+// TestHermesReconciliationPlanOverlappingRootsMergeScopeAuthority pins the
+// scope-collision merge: with a profiles container and one of its profiles
+// both configured, a request can reach the profile's archive through the
+// container's profile branch (no coverage) before its own configured-root
+// branch (coverage), depending on ordering. The colliding scopes describe
+// one unit, so the merge must keep every authority — dropping the later
+// coverage identity would leave a required identity permanently uncovered
+// and withhold aggregate-member deletion from a pass that requested every
+// configured root.
+func TestHermesReconciliationPlanOverlappingRootsMergeScopeAuthority(
+	t *testing.T,
+) {
+	home := t.TempDir()
+	container := filepath.Join(home, ".hermes", "profiles")
+	profile := filepath.Join(container, "alpha")
+	writeHermesPlanArchive(t, profile)
+
+	// Container configured before the profile, requested in the reverse
+	// order: the profile request resolves through the container first.
+	plan := resolveHermesPlan(t,
+		[]string{container, profile},
+		[]string{profile, container},
+	)
+
+	covered := make(map[string]bool)
+	for _, scope := range plan.Scopes {
+		for _, identity := range scope.CoverageIdentities {
+			covered[identity] = true
+		}
+	}
+	require.NotEmpty(t, plan.RequiredCoverageIdentities)
+	for _, required := range plan.RequiredCoverageIdentities {
+		assert.True(t, covered[required],
+			"requesting every configured root must cover %q", required)
+	}
+}
+
 func TestHermesReconciliationPlanContainerRequestCoversContainer(t *testing.T) {
 	home := t.TempDir()
 	container := filepath.Join(home, ".hermes", "profiles")
