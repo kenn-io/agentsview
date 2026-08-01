@@ -1101,6 +1101,10 @@ func newTestDBAt(
 	copyOpenCodeSchemaTemplate(t, dbPath)
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err, "open test db")
+	// Close before TempDir cleanup: Windows cannot delete a database file
+	// that still has an open handle. Close is idempotent, so tests that
+	// close the writer themselves are unaffected.
+	t.Cleanup(func() { _ = db.Close() })
 	return dbPath, &OpenCodeSeeder{db: db, t: t}, db
 }
 

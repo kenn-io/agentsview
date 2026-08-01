@@ -4429,6 +4429,11 @@ func sameReconciliationSourcePath(left, right string) bool {
 func reconciliationMemberRelocated(
 	ctx context.Context, provider parser.Provider, fullSessionID string,
 ) (bool, error) {
+	if provider == nil {
+		// Without a provider the move cannot be ruled out; report the member
+		// as possibly relocated so deletion is withheld.
+		return true, nil
+	}
 	_, found, err := provider.FindSource(ctx, parser.FindSourceRequest{
 		FullSessionID: fullSessionID,
 	})
@@ -4845,6 +4850,22 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 								}
 								if present {
 									continue
+								}
+								if !allProviderRootsCovered {
+									// Membership authority came from the scope's
+									// own container proof; the member may have
+									// moved to a persistent container under
+									// another configured root the pass never
+									// streamed.
+									relocated, err := reconciliationMemberRelocated(
+										ctx, provider, ownership.ID,
+									)
+									if err != nil {
+										return deleted, err
+									}
+									if relocated {
+										continue
+									}
 								}
 								persistentMemberContainerExists = true
 							}
