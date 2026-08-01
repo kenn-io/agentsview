@@ -267,6 +267,40 @@ func TestWriteBatchDuplicateNewSessionIDKeepsFirstMachine(t *testing.T) {
 		"every same-batch copy must use the machine of the first ingestion")
 }
 
+func TestWriteBatchResyncDuplicateIDKeepsFirstReplacementMachine(t *testing.T) {
+	const sessionID = "copied-across-resync-batches"
+	original := openTestDB(t)
+	replacement := openTestDB(t)
+	engine := NewEngine(replacement, EngineConfig{Machine: "local-machine"})
+	engine.archiveStore = original
+	t.Cleanup(engine.Close)
+	startedAt := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	write := func(machine, project, path string) pendingWrite {
+		return pendingWrite{sess: parser.ParsedSession{
+			ID: sessionID, Project: project, Machine: machine,
+			Agent: parser.AgentCopilot, StartedAt: startedAt, EndedAt: startedAt,
+			File: parser.FileInfo{Path: path},
+		}}
+	}
+
+	first := engine.writeBatchWithOutcome([]pendingWrite{
+		write("machine-a", "first-copy", "/sources/a/session.jsonl"),
+	}, syncWriteDefault, true)
+	require.Equal(t, 1, first.writtenSessions)
+	require.Zero(t, first.failedSessions)
+	second := engine.writeBatchWithOutcome([]pendingWrite{
+		write("machine-b", "second-copy", "/sources/b/session.jsonl"),
+	}, syncWriteDefault, true)
+	require.Equal(t, 1, second.writtenSessions)
+	require.Zero(t, second.failedSessions)
+
+	stored, err := replacement.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "machine-a", stored.Machine,
+		"a later rebuild batch must retain the first replacement write's machine")
+}
+
 func TestClaudeIDFreshnessRejectsSourceMissingTombstone(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()

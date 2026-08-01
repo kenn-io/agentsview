@@ -10863,6 +10863,32 @@ func (e *Engine) normalizePendingWriteMachines(
 	if err != nil {
 		return batch, fmt.Errorf("load immutable session machines: %w", err)
 	}
+	// A rebuild reads preexisting attribution from archiveStore while writing
+	// into e.db. An ID first seen earlier in this rebuild is absent from the old
+	// archive, so consult the replacement before treating it as a new ingestion.
+	if e.archiveStore != nil {
+		unresolved := make([]string, 0, len(ids))
+		for _, id := range ids {
+			if machines[id] == "" {
+				unresolved = append(unresolved, id)
+			}
+		}
+		if len(unresolved) > 0 {
+			replacementMachines, err := e.db.ListSessionMachinesByID(
+				ctx, unresolved,
+			)
+			if err != nil {
+				return batch, fmt.Errorf(
+					"load replacement session machines: %w", err,
+				)
+			}
+			for id, machine := range replacementMachines {
+				if machine != "" {
+					machines[id] = machine
+				}
+			}
+		}
+	}
 	for _, id := range ids {
 		machine := machines[id]
 		if machine == "" {
