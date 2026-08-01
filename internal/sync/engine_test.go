@@ -237,6 +237,36 @@ func TestWriteBatchRelabelRecoversUnavailableSourceProject(t *testing.T) {
 		"project recovery must use the stored machine before the checkout lookup")
 }
 
+func TestWriteBatchDuplicateNewSessionIDKeepsFirstMachine(t *testing.T) {
+	const sessionID = "copied-session"
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{Machine: "local-machine"})
+	t.Cleanup(engine.Close)
+	startedAt := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	writes := []pendingWrite{
+		{sess: parser.ParsedSession{
+			ID: sessionID, Project: "first-copy", Machine: "machine-z",
+			Agent: parser.AgentCopilot, StartedAt: startedAt, EndedAt: startedAt,
+			File: parser.FileInfo{Path: "/sources/a/session.jsonl"},
+		}},
+		{sess: parser.ParsedSession{
+			ID: sessionID, Project: "second-copy", Machine: "machine-a",
+			Agent: parser.AgentCopilot, StartedAt: startedAt, EndedAt: startedAt,
+			File: parser.FileInfo{Path: "/sources/b/session.jsonl"},
+		}},
+	}
+
+	outcome := engine.writeBatchWithOutcome(writes, syncWriteDefault, true)
+
+	require.Equal(t, 2, outcome.writtenSessions)
+	require.Zero(t, outcome.failedSessions)
+	stored, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "machine-z", stored.Machine,
+		"every same-batch copy must use the machine of the first ingestion")
+}
+
 func TestClaudeIDFreshnessRejectsSourceMissingTombstone(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()

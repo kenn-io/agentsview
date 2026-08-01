@@ -10750,8 +10750,9 @@ type sessionMachineReader interface {
 
 // normalizePendingWriteMachines resolves immutable attribution before any
 // consumer can make a project, worktree, baseline, or persistence decision.
-// Existing sessions keep the archive's machine; first ingestions retain the
-// configured machine already stamped by discovery and parsing.
+// Existing sessions keep the archive's machine. For a new ID represented more
+// than once in the batch, every copy uses the first pending write's configured
+// machine so later upserts cannot rewrite its first-ingestion attribution.
 func (e *Engine) normalizePendingWriteMachines(
 	ctx context.Context,
 	batch []pendingWrite,
@@ -10786,7 +10787,11 @@ func (e *Engine) normalizePendingWriteMachines(
 	if err != nil {
 		return batch, fmt.Errorf("load immutable session machines: %w", err)
 	}
-	for id, machine := range machines {
+	for _, id := range ids {
+		machine := machines[id]
+		if machine == "" {
+			machine = batch[indexes[id][0]].sess.Machine
+		}
 		if machine == "" {
 			continue
 		}
