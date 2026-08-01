@@ -132,7 +132,7 @@ func (t *folderTransport) pullJournalEventLocked(
 	if err != nil {
 		return err
 	}
-	_, err = t.pullWireEntryLocked(
+	outcome, err := t.pullWireEntryLocked(
 		ctx,
 		store,
 		kindRoot,
@@ -142,6 +142,9 @@ func (t *folderTransport) pullJournalEventLocked(
 		&expected,
 		result,
 	)
+	if outcome.Quarantined {
+		result.Quarantined++
+	}
 	return err
 }
 
@@ -209,7 +212,7 @@ func (t *folderTransport) pullOriginLocked(
 			kindRoot,
 			".",
 			func(entry os.DirEntry) error {
-				_, err := t.pullWireEntryLocked(
+				outcome, err := t.pullWireEntryLocked(
 					ctx,
 					store,
 					kindRoot,
@@ -219,6 +222,9 @@ func (t *folderTransport) pullOriginLocked(
 					nil,
 					result,
 				)
+				if outcome.Quarantined {
+					result.Quarantined++
+				}
 				return err
 			},
 		)

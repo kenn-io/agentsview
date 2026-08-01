@@ -368,6 +368,43 @@ func TestArtifactSyncQuarantinesInvalidCheckpointInFolderAndDocbank(
 	assert.ErrorIs(t, err, ErrArtifactNotFound)
 }
 
+func TestArtifactSyncCountsTransportQuarantine(t *testing.T) {
+	t.Parallel()
+
+	target := t.TempDir()
+	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
+	require.NoError(t, err)
+	require.NoError(t, transport.Close())
+
+	origin := "peer-a1b2c3"
+	body := []byte(`{"v":2}`)
+	ref := testContentRef(t, origin, KindManifests, body, ".json")
+	wire, err := ToWireRef(ref)
+	require.NoError(t, err)
+	wireDirectory := filepath.Join(target, origin, string(KindManifests))
+	require.NoError(t, os.MkdirAll(wireDirectory, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(wireDirectory, wire.Name),
+		[]byte("not zstd"),
+		0o600,
+	))
+	appendFolderJournalTestEntry(t, target, Entry{
+		Ref: ref, Identity: identityForBytes(t, body),
+	})
+
+	repository, err := OpenRepository(t.Context(), t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, repository.Close()) })
+	result, err := SyncWithRepository(
+		t.Context(),
+		testDB(t),
+		repository,
+		SyncOptions{Target: target, Origin: "local-d4e5f6"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Quarantined)
+}
+
 func TestCoordinatedQuarantineDropsStaleLocalAfterRemoteReplacement(
 	t *testing.T,
 ) {

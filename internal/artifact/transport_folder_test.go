@@ -577,7 +577,7 @@ func TestFolderTransportQuarantinesCompleteCorruptWireAndContinues(t *testing.T)
 		testFolderPublishOrigin,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, ExchangeResult{Received: 1}, result)
+	assert.Equal(t, ExchangeResult{Received: 1, Quarantined: 1}, result)
 	assert.NoFileExists(t, corruptPath)
 	quarantined, err := filepath.Glob(corruptPath + folderCorruptSeparator + "*")
 	require.NoError(t, err)
@@ -632,7 +632,7 @@ func TestFolderTransportQuarantineLetsFreshConsumerAdvanceWhenArtifactExistsLoca
 		t.Context(), store, testFolderPublishOrigin,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, ExchangeResult{Received: 1}, result)
+	assert.Equal(t, ExchangeResult{Received: 1, Quarantined: 1}, result)
 	assertArtifactBody(t, store, ref, localBody)
 	require.NoError(t, transport.Close())
 
@@ -693,7 +693,7 @@ func TestFolderTransportWritesRejectionBeforeQuarantiningWire(t *testing.T) {
 	transport.quarantineEntry = nil
 	result, err := transport.Exchange(t.Context(), store, testFolderPublishOrigin)
 	require.NoError(t, err)
-	assert.Equal(t, ExchangeResult{}, result)
+	assert.Equal(t, ExchangeResult{Quarantined: 1}, result)
 	assert.NoFileExists(t, wirePath)
 	quarantined, err := filepath.Glob(wirePath + folderCorruptSeparator + "*")
 	require.NoError(t, err)
