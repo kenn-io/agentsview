@@ -1512,12 +1512,12 @@ func diversifyRecallResults(
 	byID map[string]RecallEntry,
 	limit int,
 ) []corerecall.Result {
-	if limit <= 0 || len(results) <= limit {
+	if limit <= 0 || len(results) == 0 {
 		return results
 	}
-	usedIDs := make(map[string]bool, limit)
-	usedSources := make(map[string]bool, limit)
-	out := make([]corerecall.Result, 0, limit)
+	usedIDs := make(map[string]bool, len(results))
+	usedSources := make(map[string]bool, len(results))
+	out := make([]corerecall.Result, 0, len(results))
 	for _, result := range results {
 		source := recallSourceDiversityKey(byID[result.Entry.ID])
 		if source == "" || usedSources[source] {
@@ -1526,20 +1526,14 @@ func diversifyRecallResults(
 		out = append(out, result)
 		usedIDs[result.Entry.ID] = true
 		usedSources[source] = true
-		if len(out) >= limit {
-			return out
-		}
 	}
 	for _, result := range results {
 		if usedIDs[result.Entry.ID] {
 			continue
 		}
 		out = append(out, result)
-		if len(out) >= limit {
-			return out
-		}
 	}
-	return out
+	return out[:min(limit, len(out))]
 }
 
 func recallSourceDiversityKey(m RecallEntry) string {

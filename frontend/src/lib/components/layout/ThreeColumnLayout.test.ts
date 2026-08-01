@@ -18,6 +18,8 @@ import {
   clampSidebarWidthForLayout,
 } from "./sidebar-width.js";
 import { ui } from "../../stores/ui.svelte.js";
+import { sync } from "../../stores/sync.svelte.js";
+import { settings } from "../../stores/settings.svelte.js";
 
 const sidebarSnippet = createRawSnippet(() => ({
   render: () => '<div data-testid="sidebar-slot">Sidebar</div>',
@@ -210,10 +212,62 @@ afterEach(() => {
   ui.sidebarOpen = true;
   ui.isMobileViewport = false;
   ui.setSidebarWidth(SIDEBAR_WIDTH_DEFAULT);
+  sync.serverVersion = null;
+  settings.loaded = false;
+  settings.readOnly = false;
+  settings.error = null;
   setViewportWidth(SIDEBAR_DESKTOP_BREAKPOINT);
 });
 
 describe("ThreeColumnLayout", () => {
+  it("exposes Recall in mobile navigation when the backend supports it", async () => {
+    setViewportWidth(SIDEBAR_DESKTOP_BREAKPOINT - 1);
+    ui.isMobileViewport = true;
+    sync.serverVersion = {
+      version: "dev",
+      commit: "unknown",
+      build_date: "",
+      read_only: false,
+    };
+    renderLayout();
+    await tick();
+
+    const recall = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        ".mobile-nav .mobile-nav-btn",
+      ),
+    ).find((button) => button.textContent?.trim() === m.nav_recall());
+    expect(recall).not.toBeUndefined();
+
+    const navigate = vi
+      .spyOn(router, "navigate")
+      .mockImplementation(() => true);
+    recall!.click();
+    expect(navigate).toHaveBeenCalledWith("recall");
+    expect(ui.sidebarOpen).toBe(false);
+    navigate.mockRestore();
+  });
+
+  it("omits Recall from mobile navigation for read-only backends", async () => {
+    setViewportWidth(SIDEBAR_DESKTOP_BREAKPOINT - 1);
+    ui.isMobileViewport = true;
+    sync.serverVersion = {
+      version: "dev",
+      commit: "unknown",
+      build_date: "",
+      read_only: true,
+    };
+    renderLayout();
+    await tick();
+
+    const labels = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        ".mobile-nav .mobile-nav-btn",
+      ),
+    ).map((button) => button.textContent?.trim());
+    expect(labels).not.toContain(m.nav_recall());
+  });
+
   it("exposes Recent Edits in the mobile nav, reachable below the header breakpoint", async () => {
     renderLayout();
     await tick();

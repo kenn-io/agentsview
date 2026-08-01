@@ -199,28 +199,37 @@ func TestListRecallEntriesPaginatesWithoutRepeatingEntries(t *testing.T) {
 	assert.ElementsMatch(t, []string{"page-a", "page-b", "page-c"}, ids)
 }
 
-func TestListRecallEntriesPaginatesRankedSearchResults(t *testing.T) {
+func TestListRecallEntriesPaginatesStableDiversifiedRankedResults(t *testing.T) {
 	te := setup(t)
-	seedRecallEntrySession(t, te)
+	for _, sessionID := range []string{"a-shared", "b-unique", "c-unique"} {
+		te.seedSession(t, sessionID, "agentsview", 1, func(s *db.Session) {
+			s.Agent = "codex"
+		})
+	}
 	for _, entry := range []db.RecallEntry{
 		{
-			ID:              "ranked-title",
+			ID:              "shared-a",
 			Title:           "Heliotrope retry policy",
-			Body:            "Use the documented retry policy.",
-			SourceSessionID: "recall-session",
-		},
-		{
-			ID:              "ranked-body",
-			Title:           "Retry policy",
 			Body:            "Use heliotrope backoff for this failure.",
-			SourceSessionID: "recall-session",
+			SourceSessionID: "a-shared",
 		},
 		{
-			ID:              "ranked-trigger",
-			Title:           "Failure handling",
-			Body:            "Use the documented backoff.",
-			Trigger:         "When heliotrope requests fail.",
-			SourceSessionID: "recall-session",
+			ID:              "shared-b",
+			Title:           "Heliotrope retry policy",
+			Body:            "Use heliotrope backoff for this failure.",
+			SourceSessionID: "a-shared",
+		},
+		{
+			ID:              "unique-b",
+			Title:           "Heliotrope retry policy",
+			Body:            "Use heliotrope backoff for this failure.",
+			SourceSessionID: "b-unique",
+		},
+		{
+			ID:              "unique-c",
+			Title:           "Heliotrope retry policy",
+			Body:            "Use heliotrope backoff for this failure.",
+			SourceSessionID: "c-unique",
 		},
 	} {
 		seedRecallEntry(t, te, entry)
@@ -232,6 +241,10 @@ func TestListRecallEntriesPaginatesRankedSearchResults(t *testing.T) {
 	require.Len(t, firstPage.RecallEntries, 2)
 	require.NotEmpty(t, firstPage.NextCursor)
 	assert.Equal(t, db.MaxRecallEntryLimit, firstPage.ResultCap)
+	assert.Equal(t, []string{"shared-a", "unique-b"}, []string{
+		firstPage.RecallEntries[0].ID,
+		firstPage.RecallEntries[1].ID,
+	})
 	direct, err := te.db.QueryRecallEntries(context.Background(), db.RecallQuery{
 		Text:  "heliotrope",
 		Limit: 2,
@@ -253,17 +266,20 @@ func TestListRecallEntriesPaginatesRankedSearchResults(t *testing.T) {
 		url.QueryEscape(firstPage.NextCursor))
 	assertStatus(t, second, http.StatusOK)
 	secondPage := decode[listRecallEntriesResponse](t, second)
-	require.Len(t, secondPage.RecallEntries, 1)
+	require.Len(t, secondPage.RecallEntries, 2)
 	assert.Empty(t, secondPage.NextCursor)
-	assert.Positive(t, secondPage.RecallEntries[0].Score)
+	for _, result := range secondPage.RecallEntries {
+		assert.Positive(t, result.Score)
+	}
 
 	ids := []string{
 		firstPage.RecallEntries[0].ID,
 		firstPage.RecallEntries[1].ID,
 		secondPage.RecallEntries[0].ID,
+		secondPage.RecallEntries[1].ID,
 	}
 	assert.ElementsMatch(t,
-		[]string{"ranked-title", "ranked-body", "ranked-trigger"}, ids)
+		[]string{"shared-a", "shared-b", "unique-b", "unique-c"}, ids)
 }
 
 func TestListRecallEntriesRejectsRankedCursorAfterCorpusMutation(t *testing.T) {
