@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,62 +11,30 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"golang.org/x/net/html"
 )
 
-// GeminiAppsParseSummary reports records that did not become sessions.
-type GeminiAppsParseSummary struct {
-	Skipped int
-	Errors  int
-}
+type GeminiAppsParseSummary struct{ Skipped, Errors int }
 
-// GeminiAppsExportParser is implemented by the Gemini Apps import-only
-// provider. Takeout activity has no durable conversation identifier, so each
-// admitted prompt is represented as a one-turn session.
 type GeminiAppsExportParser interface {
-	ParseGeminiAppsExport(
-		root string,
-		onConversation func(ParseResult) error,
-	) (GeminiAppsParseSummary, error)
+	ParseGeminiAppsExport(string, func(ParseResult) error) (GeminiAppsParseSummary, error)
 }
 
-type geminiAppsZone struct {
-	name   string
-	tokens []html.Token
+var geminiAppsTimestampRE = regexp.MustCompile(`(?i)\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4},\s+\d{1,2}:\d{2}:\d{2}[\x{00a0}\x{202f} ]*(?:AM|PM)[\x{00a0}\x{202f} ]+(GMT[+-]\d{1,2}:\d{2}|[A-Za-z]{2,5})\b`)
+var geminiAppsTimestampLikeRE = regexp.MustCompile(`(?i)(?:\b\d{1,2}\D+\d{4}\b|\b\d{4}\D+\d{1,2}\D+\d{1,2}\b)`)
+
+type geminiAppsFilePlan struct {
+	results         []ParseResult
+	skipped, errors int
 }
 
-var geminiAppsTimestampRE = regexp.MustCompile(
-	`(?i)\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)` +
-		`\s+\d{1,2},\s+\d{4},\s+\d{1,2}:\d{2}:\d{2}` +
-		`[\x{00a0}\x{202f} ]*(?:AM|PM)` +
-		`[\x{00a0}\x{202f} ]+(GMT[+-]\d{1,2}:\d{2}|[A-Za-z]{2,5})\b`,
-)
+type geminiAppsUnsupportedError struct{ err error }
 
-var geminiAppsTimestampLikeRE = regexp.MustCompile(
-	`(?i)(?:\b\d{1,2}\D+\d{4}\b|\b\d{4}\D+\d{1,2}\D+\d{1,2}\b)`,
-)
+func (e geminiAppsUnsupportedError) Error() string { return e.err.Error() }
 
-type geminiAppsDocumentInfo struct {
-	title        string
-	language     string
-	hasOuterCell bool
-}
-
-type geminiAppsProductKind uint8
-
-const (
-	geminiAppsProductUnknown geminiAppsProductKind = iota
-	geminiAppsProductGemini
-	geminiAppsProductOther
-)
-
-// ParseGeminiAppsExport reads a Takeout directory or HTML file and streams
-// admitted Prompted records to onConversation.
-func (p *geminiAppsImportOnlyProvider) ParseGeminiAppsExport(
-	root string,
-	onConversation func(ParseResult) error,
-) (summary GeminiAppsParseSummary, retErr error) {
+func (p *geminiAppsImportOnlyProvider) ParseGeminiAppsExport(root string, callback func(ParseResult) error) (summary GeminiAppsParseSummary, retErr error) {
 	paths, err := geminiAppsHTMLPaths(root)
 	if err != nil {
 		return summary, err
@@ -76,152 +43,378 @@ func (p *geminiAppsImportOnlyProvider) ParseGeminiAppsExport(
 		return summary, fmt.Errorf("no HTML files found in import source")
 	}
 
+	plans := make([]geminiAppsFilePlan, 0, len(paths))
 	admitted := false
-	emitted := 0
-	var admittedPaths []string
 	for _, path := range paths {
-		fileAdmitted, err := geminiAppsPreflightFile(path)
+		plan, ok, err := planGeminiAppsFile(path)
 		if err != nil {
-			if strings.Contains(err.Error(), "unsupported Gemini Apps") ||
-				strings.Contains(err.Error(), "unsupported localized or changed Gemini Apps") {
-				summary.Errors++
-				return summary, fmt.Errorf(
-					"input contains no admissible Prompted records: %w", err,
-				)
-			}
 			return summary, err
 		}
-		if fileAdmitted {
-			admitted = true
-			admittedPaths = append(admittedPaths, path)
+		if !ok {
+			continue
 		}
+		admitted = true
+		plans = append(plans, plan)
 	}
-
-	for _, path := range admittedPaths {
-		file, err := os.Open(path)
-		if err != nil {
-			return summary, fmt.Errorf("reading Takeout HTML: %w", err)
-		}
-		scanErr := scanGeminiAppsHTML(file, func(tokens []html.Token) error {
-			if geminiAppsHeaderProductKind(tokens) != geminiAppsProductGemini {
-				return nil
-			}
-			kind := geminiAppsRecordKind(tokens)
-			if kind != "prompted" {
-				summary.Skipped++
-				return nil
-			}
-
-			result, err := parseGeminiAppsCell(tokens)
-			if err != nil {
-				summary.Errors++
-				return nil
-			}
-			if err := onConversation(result); err != nil {
-				return err
-			}
-			emitted++
-			return nil
-		})
-		closeErr := file.Close()
-		if scanErr != nil {
-			return summary, fmt.Errorf("scanning Takeout HTML: %w", scanErr)
-		}
-		if closeErr != nil {
-			return summary, fmt.Errorf("closing Takeout HTML: %w", closeErr)
-		}
-	}
-
 	if !admitted {
-		return summary, fmt.Errorf(
-			"input does not contain a Gemini Apps My Activity HTML document",
-		)
+		return summary, fmt.Errorf("input does not contain a Gemini Apps My Activity HTML document")
 	}
-	if len(paths) > 0 && emitted == 0 {
-		return summary, fmt.Errorf(
-			"input contains no admissible Prompted records",
-		)
+	for _, plan := range plans {
+		summary.Skipped += plan.skipped
+		summary.Errors += plan.errors
+	}
+	for _, plan := range plans {
+		for _, result := range plan.results {
+			if err := callback(result); err != nil {
+				return summary, err
+			}
+		}
+	}
+	if len(plans) == 0 || countPlannedResults(plans) == 0 {
+		return summary, fmt.Errorf("input contains no admissible Prompted records")
 	}
 	return summary, nil
 }
 
-func geminiAppsPreflightFile(path string) (bool, error) {
+func countPlannedResults(plans []geminiAppsFilePlan) int {
+	n := 0
+	for _, p := range plans {
+		n += len(p.results)
+	}
+	return n
+}
+
+func planGeminiAppsFile(path string) (geminiAppsFilePlan, bool, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return false, fmt.Errorf("reading Takeout HTML: %w", err)
+		return geminiAppsFilePlan{}, false, fmt.Errorf("reading Takeout HTML: %w", err)
 	}
-	metadata, err := geminiAppsDocumentMetadata(file)
+	doc, parseErr := html.Parse(file)
 	closeErr := file.Close()
-	if err != nil {
-		return false, fmt.Errorf("scanning Takeout HTML: %w", err)
+	if parseErr != nil {
+		return geminiAppsFilePlan{}, false, fmt.Errorf("parsing Takeout HTML: %w", parseErr)
 	}
 	if closeErr != nil {
-		return false, fmt.Errorf("closing Takeout HTML: %w", closeErr)
+		return geminiAppsFilePlan{}, false, fmt.Errorf("closing Takeout HTML: %w", closeErr)
 	}
 
-	hasPlausibleCell := false
-	hasSupportedCell := false
-	hasUnsupportedVocabulary := false
-	file, err = os.Open(path)
-	if err != nil {
-		return false, fmt.Errorf("reading Takeout HTML: %w", err)
+	info := geminiAppsDocumentInfo(doc)
+	if info.language != "" && !strings.EqualFold(strings.SplitN(info.language, "-", 2)[0], "en") {
+		return geminiAppsFilePlan{}, false, fmt.Errorf("unsupported Gemini Apps Takeout locale")
 	}
-	scanErr := scanGeminiAppsHTML(file, func(tokens []html.Token) error {
-		if geminiAppsHeaderProductKind(tokens) != geminiAppsProductGemini {
-			return nil
+	plan := geminiAppsFilePlan{}
+	cells := geminiAppsOuterCells(doc)
+	hasGemini := false
+	for _, cell := range cells {
+		if geminiAppsProductHeading(cell) != "gemini apps" {
+			continue
 		}
-		headerText, hasHeader, hasContent := geminiAppsHeaderAndContent(tokens)
-		if hasHeader && hasContent {
-			hasPlausibleCell = true
+		hasGemini = true
+		admittedCell, result, err := planGeminiAppsCell(cell)
+		if !admittedCell {
+			continue
 		}
-		timestampMatch := geminiAppsTimestampRE.FindStringSubmatch(headerText)
-		if timestampMatch == nil && geminiAppsTimestampLikeRE.MatchString(headerText) {
-			hasUnsupportedVocabulary = true
-			return nil
+		if err != nil {
+			if _, unsupported := err.(geminiAppsUnsupportedError); unsupported {
+				return geminiAppsFilePlan{}, false, err
+			}
+			plan.errors++
+			continue
 		}
-		if timestampMatch != nil {
-			if _, err := parseGeminiAppsTimestamp(
-				timestampMatch[0], timestampMatch[1],
-			); err != nil {
-				hasUnsupportedVocabulary = true
-				return nil
+		if result.Session.ID == "" {
+			plan.skipped++
+			continue
+		}
+		plan.results = append(plan.results, result)
+	}
+	if hasGemini && !geminiAppsTitleAdmitted(info.title) {
+		return geminiAppsFilePlan{}, false, fmt.Errorf("unsupported localized or changed Gemini Apps Takeout format")
+	}
+	if !hasGemini || len(cells) == 0 {
+		return plan, false, nil
+	}
+	return plan, true, nil
+}
+
+type geminiAppsDocument struct{ title, language string }
+
+func geminiAppsDocumentInfo(doc *html.Node) geminiAppsDocument {
+	info := geminiAppsDocument{}
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode && strings.EqualFold(n.Data, "html") {
+			info.language = attr(n, "lang")
+		}
+		if n.Type == html.ElementNode && strings.EqualFold(n.Data, "title") {
+			info.title = strings.TrimSpace(geminiAppsText(n, true))
+		}
+		for child := n.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(doc)
+	return info
+}
+
+func geminiAppsOuterCells(doc *html.Node) []*html.Node {
+	var cells []*html.Node
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode && hasClass(n, "outer-cell") {
+			cells = append(cells, n)
+			return
+		}
+		for child := n.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(doc)
+	return cells
+}
+
+func planGeminiAppsCell(cell *html.Node) (bool, ParseResult, error) {
+	header := firstDescendantClass(cell, "header-cell")
+	content := firstDescendantClass(cell, "content-cell")
+	if header == nil {
+		return false, ParseResult{}, nil
+	}
+	headerText := normalizeMetadata(geminiAppsText(header, false))
+	match := geminiAppsTimestampRE.FindStringSubmatch(headerText)
+	if match == nil {
+		if geminiAppsTimestampLikeRE.MatchString(headerText) {
+			return true, ParseResult{}, geminiAppsUnsupportedError{fmt.Errorf("activity record has no supported header timestamp")}
+		}
+		return true, ParseResult{}, fmt.Errorf("activity record has no supported header timestamp")
+	}
+	ts, err := parseGeminiAppsTimestamp(match[0], match[1])
+	if err != nil {
+		return true, ParseResult{}, geminiAppsUnsupportedError{err}
+	}
+	if content == nil {
+		return true, ParseResult{}, fmt.Errorf("prompted activity record has no content cell")
+	}
+	label := geminiAppsActivityLabel(headerText, match[0])
+	if label != "prompted" {
+		return true, ParseResult{}, nil
+	}
+	blocks := geminiAppsContentBlocks(content)
+	var rendered []string
+	for _, block := range blocks {
+		value := strings.TrimSpace(renderGeminiAppsNode(block, false))
+		if len(rendered) == 0 && value == "" {
+			return true, ParseResult{}, fmt.Errorf("prompted activity record has no prompt")
+		}
+		if value != "" && normalizeMetadata(value) != normalizeMetadata(match[0]) {
+			rendered = append(rendered, value)
+		}
+	}
+	if len(rendered) == 0 || rendered[0] == "" {
+		return true, ParseResult{}, fmt.Errorf("prompted activity record has no prompt")
+	}
+	prompt := rendered[0]
+	response := strings.Join(rendered[1:], "\n\n")
+	idInput := ts.UTC().Format(time.RFC3339Nano) + "\x00" + prompt
+	hash := sha256.Sum256([]byte(idInput))
+	result := ParseResult{Session: ParsedSession{ID: "gemini-apps:" + hex.EncodeToString(hash[:]), Project: "gemini.google.com", Machine: "local", Agent: AgentGeminiApps, FirstMessage: prompt, SessionName: prompt, StartedAt: ts, EndedAt: ts, MessageCount: 1, UserMessageCount: 1}}
+	result.Messages = []ParsedMessage{{Ordinal: 0, Role: RoleUser, Content: prompt, Timestamp: ts, ContentLength: len(prompt)}}
+	if response != "" {
+		result.Messages = append(result.Messages, ParsedMessage{Ordinal: 1, Role: RoleAssistant, Content: response, Timestamp: ts, ContentLength: len(response)})
+		result.Session.MessageCount = 2
+	}
+	return true, result, nil
+}
+
+func geminiAppsActivityLabel(header, timestamp string) string {
+	value := strings.TrimSpace(strings.Replace(header, normalizeMetadata(timestamp), "", 1))
+	value = strings.TrimSpace(strings.TrimPrefix(strings.ToLower(value), "gemini apps"))
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func geminiAppsContentBlocks(content *html.Node) []*html.Node {
+	var blocks []*html.Node
+	var run *html.Node
+	flush := func() {
+		if run != nil {
+			blocks = append(blocks, run)
+			run = nil
+		}
+	}
+	for child := content.FirstChild; child != nil; child = child.NextSibling {
+		if isGeminiAppsBlock(child) {
+			flush()
+			blocks = append(blocks, child)
+			continue
+		}
+		if run == nil {
+			run = &html.Node{Type: html.ElementNode, Data: "run"}
+		}
+		clone := *child
+		clone.Parent = run
+		clone.PrevSibling = nil
+		clone.NextSibling = nil
+		if run.LastChild == nil {
+			run.FirstChild = &clone
+		} else {
+			run.LastChild.NextSibling = &clone
+			clone.PrevSibling = run.LastChild
+		}
+		run.LastChild = &clone
+	}
+	flush()
+	return blocks
+}
+
+func isGeminiAppsBlock(n *html.Node) bool {
+	if n.Type != html.ElementNode {
+		return false
+	}
+	switch strings.ToLower(n.Data) {
+	case "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "code", "table", "ul", "ol":
+		return true
+	}
+	return false
+}
+
+func renderGeminiAppsNode(n *html.Node, preserved bool) string {
+	if n.Type == html.TextNode {
+		return geminiAppsTextValue(n.Data, preserved)
+	}
+	if n.Type != html.ElementNode {
+		return ""
+	}
+	tag := strings.ToLower(n.Data)
+	if isGeminiAppsIgnored(tag) {
+		return ""
+	}
+	preserved = preserved || tag == "pre" || tag == "code"
+	var b strings.Builder
+	switch tag {
+	case "br":
+		b.WriteByte('\n')
+	case "li":
+		b.WriteString("- ")
+	case "strong", "b":
+		b.WriteString("**")
+	case "em", "i":
+		b.WriteByte('*')
+	case "code":
+		b.WriteByte('`')
+	case "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "tr", "table", "ul", "ol":
+		b.WriteByte('\n')
+	}
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		b.WriteString(renderGeminiAppsNode(child, preserved))
+	}
+	switch tag {
+	case "li":
+		b.WriteByte('\n')
+	case "strong", "b":
+		b.WriteString("**")
+	case "em", "i":
+		b.WriteByte('*')
+	case "code":
+		b.WriteByte('`')
+	case "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "tr", "table", "ul", "ol":
+		b.WriteByte('\n')
+	}
+	if preserved {
+		return strings.ReplaceAll(b.String(), "\r\n", "\n")
+	}
+	return b.String()
+}
+
+func geminiAppsTextValue(value string, preserved bool) string {
+	value = sanitizeGeminiAppsText(value)
+	if preserved {
+		return strings.ReplaceAll(value, "\r\n", "\n")
+	}
+	if value == "" {
+		return ""
+	}
+	leading, trailing := unicode.IsSpace([]rune(value)[0]), unicode.IsSpace([]rune(value)[len([]rune(value))-1])
+	value = strings.Join(strings.Fields(value), " ")
+	if leading && value != "" {
+		value = " " + value
+	}
+	if trailing && value != "" {
+		value += " "
+	}
+	return value
+}
+
+func geminiAppsText(n *html.Node, preserved bool) string {
+	var b strings.Builder
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		b.WriteString(renderGeminiAppsNode(child, preserved))
+	}
+	return b.String()
+}
+
+func sanitizeGeminiAppsText(value string) string {
+	var b strings.Builder
+	for _, r := range value {
+		if r == 0 || r == 0x1b || r == 0x7f || (r < 0x20 && r != '\n' && r != '\r' && r != '\t') || (r >= 0x80 && r <= 0x9f) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+func isGeminiAppsIgnored(tag string) bool {
+	switch tag {
+	case "script", "style", "template", "noscript":
+		return true
+	}
+	return false
+}
+func hasClass(n *html.Node, wanted string) bool {
+	for c := range strings.FieldsSeq(attr(n, "class")) {
+		if strings.EqualFold(c, wanted) {
+			return true
+		}
+	}
+	return false
+}
+func attr(n *html.Node, key string) string {
+	for _, a := range n.Attr {
+		if strings.EqualFold(a.Key, key) {
+			return a.Val
+		}
+	}
+	return ""
+}
+func firstDescendantClass(n *html.Node, class string) *html.Node {
+	if n.Type == html.ElementNode && hasClass(n, class) {
+		return n
+	}
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		if found := firstDescendantClass(child, class); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+func geminiAppsProductHeading(n *html.Node) string {
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		if child.Type == html.ElementNode && strings.HasPrefix(strings.ToLower(child.Data), "h") {
+			text := normalizeMetadata(geminiAppsText(child, false))
+			if text != "" {
+				return strings.ToLower(text)
 			}
 		}
-		if geminiAppsRecordKind(tokens) == "unknown" &&
-			!geminiAppsUnknownActivityLabelSupported(
-				geminiAppsHeaderActivityLabel(tokens),
-			) {
-			hasUnsupportedVocabulary = true
-			return nil
+		if found := geminiAppsProductHeading(child); found != "" {
+			return found
 		}
-		hasSupportedCell = true
-		return nil
-	})
-	closeErr = file.Close()
-	if scanErr != nil {
-		return false, fmt.Errorf("scanning Takeout HTML: %w", scanErr)
 	}
-	if closeErr != nil {
-		return false, fmt.Errorf("closing Takeout HTML: %w", closeErr)
-	}
-
-	titleAdmitted := geminiAppsTitleAdmitted(metadata.title)
-	candidate := hasPlausibleCell || hasSupportedCell
-	if !candidate {
-		return false, nil
-	}
-	primaryLanguage := strings.ToLower(strings.SplitN(
-		strings.TrimSpace(metadata.language), "-", 2,
-	)[0])
-	if primaryLanguage != "" && primaryLanguage != "en" {
-		return false, fmt.Errorf("unsupported Gemini Apps Takeout locale")
-	}
-	if !titleAdmitted || hasUnsupportedVocabulary {
-		return false, fmt.Errorf(
-			"unsupported localized or changed Gemini Apps Takeout format",
-		)
-	}
-	return hasSupportedCell, nil
+	return ""
+}
+func normalizeMetadata(value string) string {
+	value = strings.NewReplacer("\u00a0", " ", "\u202f", " ").Replace(value)
+	return strings.Join(strings.Fields(value), " ")
+}
+func geminiAppsTitleAdmitted(title string) bool {
+	value := strings.ToLower(normalizeMetadata(title))
+	return value == "my activity history" || strings.Contains(value, "gemini apps")
 }
 
 func geminiAppsHTMLPaths(root string) ([]string, error) {
@@ -232,20 +425,16 @@ func geminiAppsHTMLPaths(root string) ([]string, error) {
 	if !info.IsDir() {
 		return []string{root}, nil
 	}
-
 	var paths []string
-	err = filepath.WalkDir(root, func(
-		path string, entry os.DirEntry, walkErr error,
-	) error {
+	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if entry.IsDir() {
-			return nil
-		}
-		ext := strings.ToLower(filepath.Ext(entry.Name()))
-		if ext == ".html" || ext == ".htm" {
-			paths = append(paths, path)
+		if !entry.IsDir() {
+			ext := strings.ToLower(filepath.Ext(entry.Name()))
+			if ext == ".html" || ext == ".htm" {
+				paths = append(paths, path)
+			}
 		}
 		return nil
 	})
@@ -256,495 +445,24 @@ func geminiAppsHTMLPaths(root string) ([]string, error) {
 	return paths, nil
 }
 
-func geminiAppsDocumentMetadata(r io.Reader) (geminiAppsDocumentInfo, error) {
-	tok := html.NewTokenizer(r)
-	var metadata geminiAppsDocumentInfo
-	depth := 0
-	titleDepth := 0
-	for {
-		tokenType := tok.Next()
-		switch tokenType {
-		case html.ErrorToken:
-			if err := tok.Err(); err != io.EOF {
-				return metadata, err
-			}
-			return metadata, nil
-		case html.StartTagToken, html.SelfClosingTagToken:
-			t := tok.Token()
-			if tokenType == html.StartTagToken && strings.EqualFold(t.Data, "title") {
-				titleDepth = depth + 1
-			}
-			if tokenType == html.StartTagToken && strings.EqualFold(t.Data, "html") {
-				for _, attr := range t.Attr {
-					if strings.EqualFold(attr.Key, "lang") {
-						metadata.language = attr.Val
-						break
-					}
-				}
-			}
-			if tokenType == html.StartTagToken && hasHTMLClass(t, "outer-cell") {
-				metadata.hasOuterCell = true
-			}
-			if tokenType == html.StartTagToken && !isGeminiAppsVoidElement(t.Data) {
-				depth++
-			}
-		case html.EndTagToken:
-			t := tok.Token()
-			if titleDepth > 0 && depth == titleDepth && strings.EqualFold(t.Data, "title") {
-				titleDepth = 0
-			}
-			if depth > 0 {
-				depth--
-			}
-		case html.TextToken:
-			if titleDepth > 0 {
-				metadata.title += string(tok.Text())
-			}
-		}
-	}
-}
-
-func scanGeminiAppsHTML(r io.Reader, onCell func([]html.Token) error) error {
-	tok := html.NewTokenizer(r)
-	var (
-		cell      []html.Token
-		depth     int
-		cellDepth int
-		inCell    bool
-	)
-	flush := func() error {
-		if !inCell || len(cell) == 0 {
-			return nil
-		}
-		tokens := cell
-		cell = nil
-		inCell = false
-		return onCell(tokens)
-	}
-	for {
-		tokenType := tok.Next()
-		switch tokenType {
-		case html.ErrorToken:
-			if err := tok.Err(); err != io.EOF {
-				return err
-			}
-			return flush()
-		case html.StartTagToken, html.SelfClosingTagToken:
-			t := tok.Token()
-			if !inCell && hasHTMLClass(t, "outer-cell") {
-				inCell = true
-				cellDepth = depth + 1
-				cell = nil
-			}
-			if inCell {
-				cell = append(cell, t)
-			}
-			if tokenType == html.StartTagToken && !isGeminiAppsVoidElement(t.Data) {
-				depth++
-			}
-		case html.EndTagToken:
-			t := tok.Token()
-			if inCell {
-				cell = append(cell, t)
-				if depth == cellDepth && strings.EqualFold(t.Data, "div") {
-					if err := flush(); err != nil {
-						return err
-					}
-				}
-			}
-			if depth > 0 {
-				depth--
-			}
-		case html.TextToken, html.CommentToken:
-			if inCell {
-				cell = append(cell, tok.Token())
-			}
-		}
-	}
-}
-
-func geminiAppsTitleAdmitted(title string) bool {
-	normalized := strings.ToLower(strings.Join(strings.Fields(title), " "))
-	return normalized == "my activity history" ||
-		strings.Contains(normalized, "gemini apps")
-}
-
-func isGeminiAppsVoidElement(tag string) bool {
-	switch strings.ToLower(tag) {
-	case "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr":
-		return true
-	default:
-		return false
-	}
-}
-
-func geminiAppsHeaderProductHeading(tokens []html.Token) string {
-	for _, zone := range geminiAppsZones(tokens) {
-		if zone.name != "header" {
-			continue
-		}
-		var (
-			heading strings.Builder
-			depth   int
-		)
-		for _, token := range zone.tokens {
-			switch token.Type {
-			case html.StartTagToken:
-				if depth == 0 && isGeminiAppsHeading(token.Data) {
-					depth = 1
-					continue
-				}
-				if depth > 0 && !isGeminiAppsVoidElement(token.Data) {
-					depth++
-				}
-			case html.EndTagToken:
-				if depth > 0 {
-					depth--
-					if depth == 0 {
-						return strings.ToLower(strings.Join(
-							strings.Fields(heading.String()), " "),
-						)
-					}
-				}
-			case html.TextToken:
-				if depth > 0 {
-					heading.WriteString(token.Data)
-				}
-			}
-		}
-	}
-	return ""
-}
-
-func geminiAppsHeaderProductKind(tokens []html.Token) geminiAppsProductKind {
-	switch geminiAppsHeaderProductHeading(tokens) {
-	case "gemini apps":
-		return geminiAppsProductGemini
-	case "":
-		return geminiAppsProductUnknown
-	default:
-		return geminiAppsProductOther
-	}
-}
-
-func isGeminiAppsHeading(tag string) bool {
-	switch strings.ToLower(tag) {
-	case "h1", "h2", "h3", "h4", "h5", "h6":
-		return true
-	default:
-		return false
-	}
-}
-
-func geminiAppsRecordKind(tokens []html.Token) string {
-	zones := geminiAppsZones(tokens)
-	for _, zone := range zones {
-		if zone.name != "header" {
-			continue
-		}
-		for _, field := range geminiAppsTextFields(renderGeminiAppsTokens(zone.tokens)) {
-			switch field {
-			case "prompted":
-				return "prompted"
-			case "canvas":
-				return "canvas"
-			case "feedback":
-				return "feedback"
-			}
-		}
-	}
-	return "unknown"
-}
-
-func geminiAppsHeaderActivityLabel(tokens []html.Token) string {
-	for _, zone := range geminiAppsZones(tokens) {
-		if zone.name != "header" {
-			continue
-		}
-		for _, field := range geminiAppsTextFields(renderGeminiAppsTokens(zone.tokens)) {
-			if field == "gemini apps" || geminiAppsTimestampRE.MatchString(field) {
-				continue
-			}
-			return field
-		}
-	}
-	return ""
-}
-
-func geminiAppsUnknownActivityLabelSupported(label string) bool {
-	switch strings.ToLower(strings.Join(strings.Fields(label), " ")) {
-	case "not prompted", "unknown", "unknown activity", "unrecognized activity":
-		return true
-	default:
-		return false
-	}
-}
-
-func geminiAppsTextFields(value string) []string {
-	var fields []string
-	for line := range strings.SplitSeq(value, "\n") {
-		field := strings.ToLower(strings.Join(strings.Fields(line), " "))
-		if field != "" {
-			fields = append(fields, field)
-		}
-	}
-	return fields
-}
-
-func geminiAppsZones(tokens []html.Token) []geminiAppsZone {
-	var zones []geminiAppsZone
-	depth := 0
-	active := make([]struct {
-		name   string
-		depth  int
-		tokens []html.Token
-	}, 0, 2)
-
-	for _, token := range tokens {
-		switch token.Type {
-		case html.StartTagToken:
-			for i := range active {
-				active[i].tokens = append(active[i].tokens, token)
-			}
-			name := ""
-			if hasHTMLClass(token, "header-cell") {
-				name = "header"
-			} else if hasHTMLClass(token, "content-cell") {
-				name = "content"
-			}
-			if name != "" {
-				active = append(active, struct {
-					name   string
-					depth  int
-					tokens []html.Token
-				}{name: name, depth: depth + 1, tokens: []html.Token{token}})
-			}
-			if !isGeminiAppsVoidElement(token.Data) {
-				depth++
-			}
-		case html.SelfClosingTagToken, html.TextToken, html.CommentToken:
-			for i := range active {
-				active[i].tokens = append(active[i].tokens, token)
-			}
-		case html.EndTagToken:
-			for i := range active {
-				active[i].tokens = append(active[i].tokens, token)
-			}
-			if len(active) > 0 && depth == active[len(active)-1].depth {
-				zone := active[len(active)-1]
-				zones = append(zones, geminiAppsZone{name: zone.name, tokens: zone.tokens})
-				active = active[:len(active)-1]
-			}
-			if depth > 0 {
-				depth--
-			}
-		}
-	}
-	return zones
-}
-
-func hasHTMLClass(token html.Token, wanted string) bool {
-	for _, attr := range token.Attr {
-		if strings.EqualFold(attr.Key, "class") {
-			for className := range strings.FieldsSeq(attr.Val) {
-				if strings.EqualFold(className, wanted) {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
-func geminiAppsHeaderAndContent(
-	tokens []html.Token,
-) (headerText string, hasHeader, hasContent bool) {
-	for _, zone := range geminiAppsZones(tokens) {
-		switch zone.name {
-		case "header":
-			headerText = renderGeminiAppsTokens(zone.tokens)
-			hasHeader = true
-		case "content":
-			hasContent = true
-		}
-	}
-	return headerText, hasHeader, hasContent
-}
-
-func parseGeminiAppsCell(tokens []html.Token) (ParseResult, error) {
-	zones := geminiAppsZones(tokens)
-	var contentZones [][]html.Token
-	for _, zone := range zones {
-		if zone.name == "content" {
-			contentZones = append(contentZones, zone.tokens)
-		}
-	}
-	headerText, _, _ := geminiAppsHeaderAndContent(tokens)
-	match := geminiAppsTimestampRE.FindStringSubmatch(headerText)
-	if len(match) != 2 {
-		return ParseResult{}, fmt.Errorf("activity record has no supported header timestamp")
-	}
-	ts, err := parseGeminiAppsTimestamp(match[0], match[1])
-	if err != nil {
-		return ParseResult{}, err
-	}
-
-	if len(contentZones) == 0 {
-		return ParseResult{}, fmt.Errorf(
-			"prompted activity record has no content cell",
-		)
-	}
-	prompt, response := geminiAppsPromptAndResponse(contentZones, match[0])
-	if strings.TrimSpace(prompt) == "" {
-		return ParseResult{}, fmt.Errorf("prompted activity record has no prompt")
-	}
-
-	idInput := ts.UTC().Format(time.RFC3339Nano) + "\x00" + prompt
-	hash := sha256.Sum256([]byte(idInput))
-	sessionID := "gemini-apps:" + hex.EncodeToString(hash[:])
-	messages := []ParsedMessage{{
-		Ordinal:       0,
-		Role:          RoleUser,
-		Content:       prompt,
-		Timestamp:     ts,
-		ContentLength: len(prompt),
-	}}
-	if strings.TrimSpace(response) != "" {
-		messages = append(messages, ParsedMessage{
-			Ordinal:       1,
-			Role:          RoleAssistant,
-			Content:       response,
-			Timestamp:     ts,
-			ContentLength: len(response),
-		})
-	}
-
-	return ParseResult{
-		Session: ParsedSession{
-			ID:               sessionID,
-			Project:          "gemini.google.com",
-			Machine:          "local",
-			Agent:            AgentGeminiApps,
-			FirstMessage:     prompt,
-			SessionName:      prompt,
-			StartedAt:        ts,
-			EndedAt:          ts,
-			MessageCount:     len(messages),
-			UserMessageCount: 1,
-		},
-		Messages: messages,
-	}, nil
-}
-
-func geminiAppsPromptAndResponse(
-	zones [][]html.Token, headerTimestamp string,
-) (string, string) {
-	var blocks []string
-	for _, zone := range zones {
-		zoneBlocks, sawBlock := splitGeminiAppsBlocks(zone, headerTimestamp)
-		if sawBlock {
-			blocks = append(blocks, zoneBlocks...)
-			continue
-		}
-		if value := renderGeminiAppsTokens(zone); value != "" {
-			blocks = append(blocks, value)
-		}
-	}
-	if len(blocks) == 0 {
-		return "", ""
-	}
-	if len(blocks) > 1 {
-		return blocks[0], strings.Join(blocks[1:], "\n\n")
-	}
-	return blocks[0], ""
-}
-
-func splitGeminiAppsBlocks(tokens []html.Token, headerTimestamp string) ([]string, bool) {
-	var blocks []string
-	var block []html.Token
-	blockDepth := 0
-	sawBlock := false
-	flush := func() {
-		if block == nil {
-			return
-		}
-		value := renderGeminiAppsTokens(block)
-		if normalizeGeminiAppsMetadata(value) !=
-			normalizeGeminiAppsMetadata(headerTimestamp) {
-			blocks = append(blocks, value)
-		}
-		block = nil
-	}
-	for _, token := range tokens {
-		if token.Type == html.StartTagToken {
-			if blockDepth == 0 &&
-				isGeminiAppsBlockTag(token.Data) &&
-				!hasHTMLClass(token, "content-cell") {
-				block = []html.Token{token}
-				blockDepth = 1
-				sawBlock = true
-				continue
-			}
-			if blockDepth > 0 {
-				block = append(block, token)
-				if !isGeminiAppsVoidElement(token.Data) {
-					blockDepth++
-				}
-			}
-			continue
-		}
-		if token.Type == html.EndTagToken {
-			if blockDepth > 0 {
-				block = append(block, token)
-				blockDepth--
-				if blockDepth == 0 {
-					flush()
-				}
-			}
-			continue
-		}
-		if blockDepth > 0 {
-			block = append(block, token)
-		}
-	}
-	flush()
-	return blocks, sawBlock
-}
-
-func normalizeGeminiAppsMetadata(value string) string {
-	value = strings.NewReplacer("\u00a0", " ", "\u202f", " ").Replace(value)
-	return strings.Join(strings.Fields(value), " ")
-}
-
-func isGeminiAppsBlockTag(tag string) bool {
-	switch strings.ToLower(tag) {
-	case "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "blockquote", "pre", "code", "table":
-		return true
-	default:
-		return false
-	}
-}
-
 func parseGeminiAppsTimestamp(value, zone string) (time.Time, error) {
-	value = strings.NewReplacer("\u00a0", " ", "\u202f", " ").Replace(value)
+	value = normalizeMetadata(value)
 	zone = strings.ToUpper(zone)
 	offset, ok := geminiAppsZoneOffset(zone)
 	if !ok {
 		return time.Time{}, fmt.Errorf("unsupported Gemini Apps timestamp zone %q", zone)
 	}
-	zoneStart := strings.LastIndex(value, " ")
-	if zoneStart < 0 {
+	index := strings.LastIndex(value, " ")
+	if index < 0 {
 		return time.Time{}, fmt.Errorf("invalid Gemini Apps timestamp %q", value)
 	}
-	datePart := strings.TrimSpace(value[:zoneStart])
 	loc := time.FixedZone(zone, offset)
-	parsed, err := time.ParseInLocation("Jan 2, 2006, 3:04:05 PM", datePart, loc)
+	parsed, err := time.ParseInLocation("Jan 2, 2006, 3:04:05 PM", strings.TrimSpace(value[:index]), loc)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("parsing Gemini Apps timestamp: %w", err)
 	}
 	return parsed, nil
 }
-
 func geminiAppsZoneOffset(zone string) (int, bool) {
 	switch zone {
 	case "UTC", "GMT":
@@ -771,297 +489,16 @@ func geminiAppsZoneOffset(zone string) (int, bool) {
 		if len(parts) != 2 {
 			return 0, false
 		}
-		hourPart := parts[0]
 		sign := 1
-		if strings.HasPrefix(hourPart, "-") {
+		if strings.HasPrefix(parts[0], "-") {
 			sign = -1
 		}
-		hourDigits := strings.TrimPrefix(hourPart, "+")
-		hourDigits = strings.TrimPrefix(hourDigits, "-")
-		hours, errHour := strconv.Atoi(hourDigits)
-		minutes, errMinute := strconv.Atoi(parts[1])
-		if errHour != nil || errMinute != nil || minutes < 0 || minutes > 59 {
+		hours, e1 := strconv.Atoi(strings.TrimLeft(parts[0], "+-"))
+		minutes, e2 := strconv.Atoi(parts[1])
+		if e1 != nil || e2 != nil || hours > 23 || minutes > 59 {
 			return 0, false
 		}
-		if hours > 23 {
-			return 0, false
-		}
-		return sign * (hours*60*60 + minutes*60), true
+		return sign * (hours*3600 + minutes*60), true
 	}
 	return 0, false
-}
-
-type geminiAppsRenderedPartKind uint8
-
-const (
-	geminiAppsOrdinaryPart geminiAppsRenderedPartKind = iota
-	geminiAppsPreservedPart
-	geminiAppsInlinePart
-	geminiAppsStructuralPart
-)
-
-type geminiAppsRenderedPart struct {
-	text string
-	kind geminiAppsRenderedPartKind
-}
-
-func renderGeminiAppsTokens(tokens []html.Token) string {
-	var parts []geminiAppsRenderedPart
-	skipDepth := 0
-	preDepth := 0
-	codeDepth := 0
-	appendPart := func(text string, kind geminiAppsRenderedPartKind) {
-		if text == "" {
-			return
-		}
-		parts = append(parts, geminiAppsRenderedPart{
-			text: text, kind: kind,
-		})
-	}
-	for _, token := range tokens {
-		switch token.Type {
-		case html.StartTagToken:
-			if isGeminiAppsIgnoredTag(token.Data) {
-				skipDepth = 1
-				continue
-			}
-			if skipDepth > 0 {
-				skipDepth++
-				continue
-			}
-			tag := strings.ToLower(token.Data)
-			kind := geminiAppsTagPartKind(tag)
-			if preDepth > 0 || codeDepth > 0 {
-				kind = geminiAppsPreservedPart
-			}
-			appendPart(renderGeminiAppsStart(&strings.Builder{}, tag), kind)
-			if tag == "pre" {
-				preDepth++
-			}
-			if tag == "code" {
-				codeDepth++
-			}
-		case html.EndTagToken:
-			if skipDepth > 0 {
-				skipDepth--
-				continue
-			}
-			tag := strings.ToLower(token.Data)
-			if tag == "pre" && preDepth > 0 {
-				preDepth--
-			}
-			if tag == "code" && codeDepth > 0 {
-				codeDepth--
-			}
-			kind := geminiAppsTagPartKind(tag)
-			if preDepth > 0 || codeDepth > 0 {
-				kind = geminiAppsPreservedPart
-			}
-			appendPart(renderGeminiAppsEnd(&strings.Builder{}, tag), kind)
-		case html.SelfClosingTagToken:
-			if skipDepth == 0 {
-				tag := strings.ToLower(token.Data)
-				kind := geminiAppsTagPartKind(tag)
-				if preDepth > 0 || codeDepth > 0 || tag == "br" {
-					kind = geminiAppsPreservedPart
-				}
-				appendPart(renderGeminiAppsStart(&strings.Builder{}, tag), kind)
-			}
-		case html.TextToken:
-			if skipDepth == 0 {
-				kind := geminiAppsOrdinaryPart
-				if preDepth > 0 || codeDepth > 0 {
-					kind = geminiAppsPreservedPart
-				}
-				appendPart(sanitizeGeminiAppsText(string(token.Data)), kind)
-			}
-		}
-	}
-	return cleanGeminiAppsParts(parts)
-}
-
-func isGeminiAppsBoundaryTag(tag string) bool {
-	switch strings.ToLower(tag) {
-	case "br", "blockquote", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "p", "pre", "table", "td", "th", "tr":
-		return true
-	default:
-		return false
-	}
-}
-
-func geminiAppsTagPartKind(tag string) geminiAppsRenderedPartKind {
-	if isGeminiAppsBoundaryTag(tag) {
-		return geminiAppsStructuralPart
-	}
-	if isGeminiAppsInlineMarkerTag(tag) {
-		return geminiAppsInlinePart
-	}
-	return geminiAppsOrdinaryPart
-}
-
-func isGeminiAppsInlineMarkerTag(tag string) bool {
-	switch strings.ToLower(tag) {
-	case "b", "code", "em", "i", "strong":
-		return true
-	default:
-		return false
-	}
-}
-
-func isGeminiAppsIgnoredTag(tag string) bool {
-	switch strings.ToLower(tag) {
-	case "script", "style", "template", "noscript":
-		return true
-	default:
-		return false
-	}
-}
-
-func renderGeminiAppsStart(out *strings.Builder, tag string) string {
-	switch strings.ToLower(tag) {
-	case "br":
-		out.WriteByte('\n')
-	case "li":
-		out.WriteString("\n- ")
-	case "td", "th":
-		out.WriteString(" | ")
-	case "strong", "b":
-		out.WriteString("**")
-	case "em", "i":
-		out.WriteByte('*')
-	case "code":
-		out.WriteByte('`')
-	case "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "tr", "table":
-		out.WriteByte('\n')
-	}
-	return out.String()
-}
-
-func renderGeminiAppsEnd(out *strings.Builder, tag string) string {
-	switch strings.ToLower(tag) {
-	case "strong", "b":
-		out.WriteString("**")
-	case "em", "i":
-		out.WriteByte('*')
-	case "code":
-		out.WriteByte('`')
-	case "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "tr", "table":
-		out.WriteByte('\n')
-	}
-	return out.String()
-}
-
-func sanitizeGeminiAppsText(value string) string {
-	var out strings.Builder
-	for _, r := range value {
-		if r == '\x00' || r == '\x1b' || (r < 0x20 && r != '\n' && r != '\r' && r != '\t') ||
-			r == 0x7f || (r >= 0x80 && r <= 0x9f) {
-			continue
-		}
-		out.WriteRune(r)
-	}
-	return out.String()
-}
-
-func cleanGeminiAppsParts(parts []geminiAppsRenderedPart) string {
-	for len(parts) > 0 && parts[0].kind == geminiAppsStructuralPart {
-		parts[0].text = strings.TrimLeft(parts[0].text, "\r\n")
-		if parts[0].text != "" {
-			break
-		}
-		parts = parts[1:]
-	}
-	for len(parts) > 0 && parts[len(parts)-1].kind == geminiAppsStructuralPart {
-		last := len(parts) - 1
-		parts[last].text = strings.TrimRight(parts[last].text, "\r\n")
-		if parts[last].text != "" {
-			break
-		}
-		parts = parts[:last]
-	}
-
-	var out strings.Builder
-	lastWasNewline := false
-	for i := 0; i < len(parts); {
-		part := parts[i]
-		if part.kind == geminiAppsOrdinaryPart {
-			end := i + 1
-			for end < len(parts) && parts[end].kind == geminiAppsOrdinaryPart {
-				end++
-			}
-			keepLeading := i > 0 && parts[i-1].kind == geminiAppsInlinePart &&
-				hasHorizontalWhitespacePrefix(part.text)
-			keepTrailing := end < len(parts) && parts[end].kind == geminiAppsInlinePart &&
-				hasHorizontalWhitespaceSuffix(parts[end-1].text)
-			var ordinary strings.Builder
-			for _, runPart := range parts[i:end] {
-				ordinary.WriteString(runPart.text)
-			}
-			text := cleanGeminiAppsOrdinaryText(
-				ordinary.String(), keepLeading, keepTrailing,
-			)
-			out.WriteString(text)
-			if text != "" {
-				lastWasNewline = strings.HasSuffix(text, "\n")
-			}
-			i = end
-			continue
-		}
-		if part.kind == geminiAppsStructuralPart && strings.Trim(part.text, "\r\n") == "" {
-			if !lastWasNewline {
-				out.WriteByte('\n')
-				lastWasNewline = true
-			}
-			i++
-			continue
-		}
-		if part.kind == geminiAppsPreservedPart {
-			text := strings.ReplaceAll(part.text, "\r\n", "\n")
-			out.WriteString(text)
-			lastWasNewline = strings.HasSuffix(text, "\n")
-			i++
-			continue
-		}
-		if part.kind == geminiAppsInlinePart || part.kind == geminiAppsStructuralPart {
-			out.WriteString(part.text)
-			lastWasNewline = strings.HasSuffix(part.text, "\n")
-		}
-		i++
-	}
-	return out.String()
-}
-
-func hasHorizontalWhitespacePrefix(value string) bool {
-	return strings.HasPrefix(value, " ") || strings.HasPrefix(value, "\t")
-}
-
-func hasHorizontalWhitespaceSuffix(value string) bool {
-	return strings.HasSuffix(value, " ") || strings.HasSuffix(value, "\t")
-}
-
-func cleanGeminiAppsOrdinaryText(
-	value string, keepLeading, keepTrailing bool,
-) string {
-	lines := strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n")
-	for i := range lines {
-		lines[i] = strings.TrimSpace(lines[i])
-	}
-	var out []string
-	for _, line := range lines {
-		if line == "" {
-			if len(out) > 0 && out[len(out)-1] != "" {
-				out = append(out, "")
-			}
-			continue
-		}
-		out = append(out, strings.Join(strings.Fields(line), " "))
-	}
-	cleaned := strings.Join(out, "\n")
-	if keepLeading && cleaned != "" {
-		cleaned = " " + cleaned
-	}
-	if keepTrailing && cleaned != "" {
-		cleaned += " "
-	}
-	return cleaned
 }

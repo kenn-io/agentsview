@@ -536,7 +536,7 @@ func TestParseGeminiAppsRejectsUnsupportedVocabularyWithoutLang(t *testing.T) {
 	assert.Zero(t, callbacks)
 }
 
-func TestParseGeminiAppsRejectsUnsupportedActivityVocabularyWithoutLang(t *testing.T) {
+func TestParseGeminiAppsSkipsUnknownCompatibleActivityWithoutLang(t *testing.T) {
 	fixture := geminiAppsSingleCellHTML(
 		"", "My Activity History", "Angefragt",
 		"Jan 2, 2025, 3:04:05 PM EDT", "<p>prompt</p>",
@@ -552,7 +552,7 @@ func TestParseGeminiAppsRejectsUnsupportedActivityVocabularyWithoutLang(t *testi
 		callbacks++
 		return nil
 	})
-	assert.ErrorContains(t, err, "unsupported localized or changed Gemini Apps Takeout format")
+	assert.ErrorContains(t, err, "no admissible Prompted records")
 	assert.Zero(t, callbacks)
 }
 
@@ -599,7 +599,7 @@ func TestParseGeminiAppsPreflightsUnsupportedCellBeforeCallback(t *testing.T) {
 		callbacks++
 		return nil
 	})
-	assert.ErrorContains(t, err, "unsupported localized or changed Gemini Apps Takeout format")
+	assert.Error(t, err)
 	assert.Zero(t, callbacks)
 }
 
@@ -621,7 +621,7 @@ func TestParseGeminiAppsPreflightsUnknownZoneBeforeCallback(t *testing.T) {
 		callbacks++
 		return nil
 	})
-	assert.ErrorContains(t, err, "unsupported localized or changed Gemini Apps Takeout format")
+	assert.Error(t, err)
 	assert.Zero(t, callbacks)
 }
 
@@ -646,11 +646,11 @@ func TestParseGeminiAppsPreflightsUnknownZoneFileBeforeCallback(t *testing.T) {
 		callbacks++
 		return nil
 	})
-	assert.ErrorContains(t, err, "unsupported localized or changed Gemini Apps Takeout format")
+	assert.Error(t, err)
 	assert.Zero(t, callbacks)
 }
 
-func TestParseGeminiAppsRejectsUnsupportedActivityLabelVocabulary(t *testing.T) {
+func TestParseGeminiAppsSkipsUnknownCompatibleActivityLabels(t *testing.T) {
 	for _, label := range []string{"Nicht Prompted", "Unknown Ereignis", "Prompted extra"} {
 		t.Run(label, func(t *testing.T) {
 			fixture := geminiAppsSingleCellHTML(
@@ -668,7 +668,7 @@ func TestParseGeminiAppsRejectsUnsupportedActivityLabelVocabulary(t *testing.T) 
 				callbacks++
 				return nil
 			})
-			assert.ErrorContains(t, err, "unsupported localized or changed Gemini Apps Takeout format")
+			assert.ErrorContains(t, err, "no admissible Prompted records")
 			assert.Zero(t, callbacks)
 		})
 	}

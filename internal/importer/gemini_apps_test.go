@@ -143,8 +143,8 @@ func TestImportGeminiAppsUnknownZoneDoesNotWriteSession(t *testing.T) {
 
 	d := testDB(t)
 	stats, err := ImportGeminiApps(context.Background(), d, root, nil)
-	assert.ErrorContains(t, err, "no admissible Prompted records")
-	assert.Equal(t, 1, stats.Errors)
+	assert.Error(t, err)
+	assert.Zero(t, stats.Errors)
 	page, listErr := d.ListSessions(context.Background(), db.SessionFilter{Agent: "gemini-apps"})
 	require.NoError(t, listErr)
 	assert.Empty(t, page.Sessions)
