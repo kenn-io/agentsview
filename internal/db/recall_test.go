@@ -2548,6 +2548,53 @@ func TestCopyRecallEntriesFromReconcilesShiftedEvidence(t *testing.T) {
 	assert.Equal(t, original.ContentDigest, got.Evidence[0].ContentDigest)
 }
 
+func TestCopyRecallEntriesFromRevokesIDEEnvelopeSplitEvidence(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "old-ide-evidence.db")
+	srcDB, err := Open(srcPath)
+	require.NoError(t, err)
+	seedRecallEvidenceWindow(t, srcDB, "s1", 10, "stable", "")
+	oldMessages, err := srcDB.GetAllMessages(context.Background(), "s1")
+	require.NoError(t, err)
+	const envelope = "<ide_opened_file>The user opened a.go.</ide_opened_file>"
+	oldMessages[0].Content = envelope + "  \nRun the formatter."
+	oldMessages[0].ContentLength = len(oldMessages[0].Content)
+	require.NoError(t, srcDB.ReplaceSessionMessages("s1", oldMessages))
+	insertVerifiedRecallSelection(
+		t, srcDB, "m1", "s1", 10, 11, []string{"tool-a"},
+	)
+	oldMessages, err = srcDB.GetAllMessages(context.Background(), "s1")
+	require.NoError(t, err)
+	_, err = srcDB.getWriter().Exec("PRAGMA user_version = 79")
+	require.NoError(t, err)
+	require.NoError(t, srcDB.Close())
+
+	dstPath := filepath.Join(dir, "new-ide-evidence.db")
+	dstDB, err := Open(dstPath)
+	require.NoError(t, err)
+	defer dstDB.Close()
+	insertSession(t, dstDB, "s1", "agentsview")
+	for i := range oldMessages {
+		oldMessages[i].ID = 0
+		oldMessages[i].Ordinal++
+	}
+	oldMessages[0].Content = "Run the formatter."
+	oldMessages[0].ContentLength = len(oldMessages[0].Content)
+	hidden := recallEvidenceMessage(
+		"s1", 10, "user", envelope, "stable-10:ide-context",
+	)
+	hidden.IsSystem = true
+	insertMessages(t, dstDB, append([]Message{hidden}, oldMessages...)...)
+
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
+
+	got := requireRecallEntry(t, dstDB, "m1")
+	assert.False(t, got.ProvenanceOK,
+		"evidence spanning rewritten content must revoke fail-closed")
+	require.Len(t, got.Evidence, 1,
+		"revocation retains the historical evidence row")
+}
+
 func TestCopyRecallEntriesFromRevokesChangedEvidence(t *testing.T) {
 	dir := t.TempDir()
 	srcPath := filepath.Join(dir, "old-changed-evidence.db")
