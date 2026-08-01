@@ -1124,7 +1124,7 @@ func extractMessagesFrom(
 					ContentLength:    len(envelope),
 					SourceType:       "system",
 					SourceSubtype:    subtype,
-					SourceUUID:       e.uuid,
+					SourceUUID:       claudeIDEEnvelopeSourceUUID(e.uuid),
 					SourceParentUUID: e.parentUuid,
 					IsSidechain:      gjson.Get(e.line, "isSidechain").Bool(),
 				})
@@ -2187,7 +2187,7 @@ func extractMessages(entries []dagEntry) (
 					ContentLength:    len(envelope),
 					SourceType:       "system",
 					SourceSubtype:    subtype,
-					SourceUUID:       e.uuid,
+					SourceUUID:       claudeIDEEnvelopeSourceUUID(e.uuid),
 					SourceParentUUID: e.parentUuid,
 					IsSidechain:      gjson.Get(e.line, "isSidechain").Bool(),
 				})
@@ -2688,6 +2688,19 @@ func isStandaloneClaudeTaggedMessage(content, tag string) bool {
 // extension prepends one of these wrappers directly onto a real
 // prompt in the same user entry.
 var claudeIDEEnvelopeTags = [...]string{"ide_opened_file", "ide_selection"}
+
+// claudeIDEEnvelopeSourceUUID derives a distinct source UUID for the
+// synthetic hidden message a split envelope becomes. The real prompt
+// keeps the entry's own uuid: pins and Recall evidence resolve source
+// UUIDs and require them to be unique per session, so the two rows
+// produced from one entry must not share an identity. An empty entry
+// uuid stays empty rather than becoming a shared non-empty value.
+func claudeIDEEnvelopeSourceUUID(entryUUID string) string {
+	if entryUUID == "" {
+		return ""
+	}
+	return entryUUID + ":ide-context"
+}
 
 // splitLeadingClaudeIDEEnvelope detects a well-formed IDE-context
 // envelope at the very start of content that is followed by

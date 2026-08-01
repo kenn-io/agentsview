@@ -110,6 +110,13 @@ Grok section and remove the explicit registry exception in the coverage test.
   `promptSource` (per user turn, e.g. `"typed"`, `"queued"`, `"system"`,
   `"sdk"`). Neither key is documented upstream or covered by the codeburn
   notes; the evidence remains local observation under `no-public-source`.
+  Reverified 2026-07-31 against the transcript shape reported in
+  [#1265](https://github.com/kenn-io/agentsview/pull/1265): the extension can
+  also prepend one `ide_opened_file`/`ide_selection` wrapper directly onto a
+  real operator prompt inside a single `user` record (envelope first, prompt
+  text after the closing tag, one shared `uuid` for the whole record); the
+  parser splits these into a hidden system-metadata message plus the visible
+  prompt.
 
 ## OpenClaude (`openclaude`)
 

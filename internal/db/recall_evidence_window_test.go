@@ -238,6 +238,43 @@ func TestRecallEvidenceReplaceRemapsStableEndpoints(t *testing.T) {
 	}
 }
 
+// TestRecallEvidenceSurvivesIDEEnvelopeSplit mirrors the Claude v75
+// reparse that splits a leading IDE-context envelope into its own
+// hidden row before the real prompt: the synthetic row carries a
+// derived source uuid, so the prompt's uuid stays unique and evidence
+// endpoints anchored on it remap instead of being revoked as
+// ambiguous.
+func TestRecallEvidenceSurvivesIDEEnvelopeSplit(t *testing.T) {
+	d := testDB(t)
+	seedRecallEvidenceWindow(t, d, "ide-split", 10, "stable", "")
+	original := insertVerifiedRecallSelection(
+		t, d, "m1", "ide-split", 10, 11, []string{"tool-a"},
+	)
+
+	messages, err := d.GetAllMessages(context.Background(), "ide-split")
+	require.NoError(t, err)
+	for i := range messages {
+		messages[i].ID = 0
+		messages[i].Ordinal++
+	}
+	envelope := recallEvidenceMessage(
+		"ide-split", 10, "user",
+		"<ide_opened_file>The user opened a.go.</ide_opened_file>",
+		recallEvidenceSourceUUID("stable", 10)+":ide-context",
+	)
+	envelope.IsSystem = true
+	replaced := append([]Message{envelope}, messages...)
+
+	require.NoError(t, d.ReplaceSessionMessages("ide-split", replaced))
+
+	got := requireRecallEntry(t, d, "m1")
+	assert.True(t, got.ProvenanceOK)
+	require.Len(t, got.Evidence, 1)
+	assert.Equal(t, 11, got.Evidence[0].MessageStartOrdinal)
+	assert.Equal(t, 12, got.Evidence[0].MessageEndOrdinal)
+	assert.Equal(t, original.ContentDigest, got.Evidence[0].ContentDigest)
+}
+
 func TestRecallEvidenceSourceUUIDLookupUsesPartialIndex(t *testing.T) {
 	d := testDB(t)
 	seedRecallEvidenceWindow(t, d, "query-plan", 10, "stable", "")

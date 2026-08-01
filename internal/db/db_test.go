@@ -5735,6 +5735,101 @@ func TestCopySessionMetadataFrom(t *testing.T) {
 	assert.Equal(t, 1, starCount, "stars after")
 }
 
+func TestCopySessionMetadataFrom_PinsFollowSourceUUID(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	// Source DB: pre-reparse shape where one entry held the IDE
+	// envelope and the prompt combined at ordinal 1.
+	srcPath := filepath.Join(dir, "src.db")
+	srcDB := testDBAtPath(t, srcPath, "src")
+	insertSession(t, srcDB, "s1", "proj")
+	insertMessages(t, srcDB,
+		Message{
+			SessionID: "s1", Ordinal: 1, Role: "user",
+			Content:       "<ide_opened_file>f</ide_opened_file> explain",
+			ContentLength: 44, SourceUUID: "u1",
+		},
+		Message{
+			SessionID: "s1", Ordinal: 2, Role: "assistant",
+			Content: "sure", ContentLength: 4, SourceUUID: "u2",
+		},
+	)
+	for _, ordinal := range []int{1, 2} {
+		var msgID int64
+		require.NoError(t, srcDB.getReader().QueryRow(
+			"SELECT id FROM messages WHERE session_id = 's1' AND ordinal = ?",
+			ordinal,
+		).Scan(&msgID), "resolve s1 message id")
+		pinID, err := srcDB.PinMessage("s1", msgID, nil)
+		require.NoError(t, err, "pin s1 ordinal %d", ordinal)
+		require.NotZero(t, pinID, "pin s1 ordinal %d not created", ordinal)
+	}
+
+	// Legacy session without source uuids still restores by ordinal.
+	insertSession(t, srcDB, "s2", "proj")
+	insertMessages(t, srcDB, Message{
+		SessionID: "s2", Ordinal: 1, Role: "user",
+		Content: "legacy", ContentLength: 6,
+	})
+	var legacyMsgID int64
+	require.NoError(t, srcDB.getReader().QueryRow(
+		"SELECT id FROM messages WHERE session_id = 's2' AND ordinal = 1",
+	).Scan(&legacyMsgID), "resolve legacy message id")
+	pinID, err := srcDB.PinMessage("s2", legacyMsgID, nil)
+	require.NoError(t, err, "pin legacy in src")
+	require.NotZero(t, pinID, "legacy pin not created")
+	srcDB.Close()
+
+	// Destination DB: the re-parse split the envelope into its own
+	// hidden row, shifting the prompt and reply down by one ordinal.
+	dstPath := filepath.Join(dir, "dst.db")
+	dstDB := testDBAtPath(t, dstPath, "dst")
+	defer dstDB.Close()
+	insertSession(t, dstDB, "s1", "proj")
+	insertMessages(t, dstDB,
+		Message{
+			SessionID: "s1", Ordinal: 1, Role: "user",
+			Content:       "<ide_opened_file>f</ide_opened_file>",
+			ContentLength: 36, IsSystem: true,
+			SourceUUID: "u1:ide-context",
+		},
+		Message{
+			SessionID: "s1", Ordinal: 2, Role: "user",
+			Content: "explain", ContentLength: 7, SourceUUID: "u1",
+		},
+		Message{
+			SessionID: "s1", Ordinal: 3, Role: "assistant",
+			Content: "sure", ContentLength: 4, SourceUUID: "u2",
+		},
+	)
+	insertSession(t, dstDB, "s2", "proj")
+	insertMessages(t, dstDB, Message{
+		SessionID: "s2", Ordinal: 1, Role: "user",
+		Content: "legacy", ContentLength: 6,
+	})
+
+	require.NoError(t, dstDB.CopySessionMetadataFrom(srcPath),
+		"CopySessionMetadataFrom")
+
+	// Pins follow source_uuid across the ordinal shift instead of
+	// landing on the hidden envelope row at their old ordinals, and
+	// no duplicate pin is created by the ordinal fallback.
+	pins, err := dstDB.ListPinnedMessages(ctx, "s1", "")
+	require.NoError(t, err, "ListPins s1")
+	require.Len(t, pins, 2, "pins s1")
+	gotOrdinals := []int{pins[0].Ordinal, pins[1].Ordinal}
+	slices.Sort(gotOrdinals)
+	assert.Equal(t, []int{2, 3}, gotOrdinals,
+		"pins should follow source_uuid to the shifted ordinals")
+
+	pins, err = dstDB.ListPinnedMessages(ctx, "s2", "")
+	require.NoError(t, err, "ListPins s2")
+	require.Len(t, pins, 1, "pins s2")
+	assert.Equal(t, 1, pins[0].Ordinal,
+		"legacy pin without source_uuid falls back to ordinal")
+}
+
 func TestCopySessionMetadataCopiesFromSource(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()

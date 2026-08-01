@@ -366,6 +366,30 @@ func TestParseClaudeSession_SkippedMessages(t *testing.T) {
 		assert.Equal(t, "What does this do?", msgs[3].Content)
 	})
 
+	t.Run("split IDE envelope gets a distinct source uuid", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.ClaudeEntryJSON(
+				"user",
+				"<ide_opened_file>The user opened /workspace/app/README.md.</ide_opened_file> Explain this file.",
+				tsZero, "uuid-entry-1", "uuid-parent-0",
+			),
+		)
+		_, msgs := runClaudeParserTest(t, "test.jsonl", content)
+		require.Len(t, msgs, 2)
+
+		// Pins and Recall evidence resolve messages by source_uuid and
+		// require it to be unique per session, so the entry's own uuid
+		// must stay on the real prompt only; the synthetic hidden
+		// envelope row gets a derived identity.
+		assert.True(t, msgs[0].IsSystem)
+		assert.Equal(t, "uuid-entry-1:ide-context", msgs[0].SourceUUID)
+		assert.Equal(t, "uuid-parent-0", msgs[0].SourceParentUUID)
+
+		assert.False(t, msgs[1].IsSystem)
+		assert.Equal(t, "uuid-entry-1", msgs[1].SourceUUID)
+		assert.Equal(t, "uuid-parent-0", msgs[1].SourceParentUUID)
+	})
+
 	t.Run("skill invocation shown as user message", func(t *testing.T) {
 		content := testjsonl.JoinJSONL(
 			testjsonl.ClaudeUserJSON(

@@ -1173,10 +1173,59 @@ func (d *DB) CopySessionMetadataFrom(
 	}
 
 	// Copy pinned messages (table may not exist in older DBs).
-	// Map old message_id to new message_id via the
-	// (session_id, ordinal) natural key, since auto-increment
-	// IDs differ between DBs.
+	// Auto-increment message IDs differ between DBs, so old
+	// message_id must be re-resolved against the fresh rows.
+	// Prefer the source_uuid natural key: a re-parse can insert or
+	// drop rows (e.g. the v75 IDE-envelope split), shifting ordinals
+	// so that the old (session_id, ordinal) key lands on an unrelated
+	// row. Fall back to ordinal only for pins whose source row lacks
+	// a resolvable source_uuid (legacy rows, or a uuid that is not
+	// unique in the fresh DB).
 	if oldDBHasTable(ctx, tx, "pinned_messages") {
+		hasSourceUUID := oldDBHasColumn(
+			ctx, tx, "messages", "source_uuid",
+		)
+		if hasSourceUUID {
+			if _, err := tx.ExecContext(ctx, `
+				INSERT OR IGNORE INTO main.pinned_messages
+					(session_id, message_id, ordinal, note, created_at)
+				SELECT
+					op.session_id, new_m.id, new_m.ordinal,
+					op.note, op.created_at
+				FROM old_db.pinned_messages op
+				JOIN old_db.messages old_m
+					ON old_m.id = op.message_id
+				JOIN main.messages new_m
+					ON new_m.session_id = old_m.session_id
+					AND new_m.source_uuid = old_m.source_uuid
+				WHERE op.session_id IN (
+					SELECT id FROM main.sessions
+				)
+				AND old_m.source_uuid != ''
+				AND (
+					SELECT COUNT(*) FROM main.messages x
+					WHERE x.session_id = old_m.session_id
+					AND x.source_uuid = old_m.source_uuid
+				) = 1`); err != nil {
+				return fmt.Errorf(
+					"copying pinned messages by source uuid: %w", err,
+				)
+			}
+		}
+		// Ordinal fallback, restricted to pins the source_uuid pass
+		// could not resolve so a uuid-restored pin is not duplicated
+		// onto a second row at its old ordinal.
+		uuidUnresolvable := ""
+		if hasSourceUUID {
+			uuidUnresolvable = `
+				AND (old_m.source_uuid IS NULL
+					OR old_m.source_uuid = ''
+					OR (
+						SELECT COUNT(*) FROM main.messages x
+						WHERE x.session_id = old_m.session_id
+						AND x.source_uuid = old_m.source_uuid
+					) != 1)`
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT OR IGNORE INTO main.pinned_messages
 				(session_id, message_id, ordinal, note, created_at)
@@ -1191,7 +1240,7 @@ func (d *DB) CopySessionMetadataFrom(
 				AND new_m.ordinal = old_m.ordinal
 			WHERE op.session_id IN (
 				SELECT id FROM main.sessions
-			)`); err != nil {
+			)`+uuidUnresolvable); err != nil {
 			return fmt.Errorf("copying pinned messages: %w", err)
 		}
 	}
