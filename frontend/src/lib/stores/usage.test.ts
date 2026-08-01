@@ -277,6 +277,22 @@ function usageSummary(totalCost = 0): UsageSummaryResponse {
   };
 }
 
+function usageSummaryWithBranch(): UsageSummaryResponse {
+  return {
+    ...usageSummary(),
+    branchTotals: [{
+      project_key: "pl1:sha256:alpha",
+      project: "alpha",
+      branch: "main",
+      inputTokens: 1,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      cost: testMoney(0),
+    }],
+  };
+}
+
 function usageComparison(): UsageComparison {
   return {
     priorFrom: "2023-12-01",
@@ -567,25 +583,91 @@ describe("UsageStore lazy branch breakdowns", () => {
     );
   });
 
+  it("enriches after Branch is selected during the initial summary load", async () => {
+    let resolveInitial:
+      | ((value: UsageSummaryResponse) => void)
+      | undefined;
+    usageServiceMocks.getApiV1UsageSummary
+      .mockImplementationOnce(
+        () => new Promise((resolve) => {
+          resolveInitial = resolve;
+        }),
+      )
+      .mockResolvedValueOnce(usageSummaryWithBranch());
+    const { usage } = await loadStore();
+
+    const initialLoad = usage.fetchSummary({ loadComparison: false });
+    await vi.waitFor(() =>
+      expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(1)
+    );
+    usage.setAttributionGroupBy("branch");
+    resolveInitial?.(usageSummary());
+    await initialLoad;
+
+    await vi.waitFor(() =>
+      expect(usage.summary?.branchTotals).toHaveLength(1)
+    );
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenLastCalledWith(
+      expect.objectContaining({ branchBreakdowns: true }),
+    );
+  });
+
+  it("keeps rich branch data when it finishes before a cached refetch", async () => {
+    const { usage } = await loadStore();
+    await usage.fetchSummary({ loadComparison: false });
+    const callsBeforeRefetch =
+      usageServiceMocks.getApiV1UsageSummary.mock.calls.length;
+    let resolveOrdinary:
+      | ((value: UsageSummaryResponse) => void)
+      | undefined;
+    let resolveRich:
+      | ((value: UsageSummaryResponse) => void)
+      | undefined;
+    usageServiceMocks.getApiV1UsageSummary
+      .mockImplementationOnce(
+        () => new Promise((resolve) => {
+          resolveOrdinary = resolve;
+        }),
+      )
+      .mockImplementationOnce(
+        () => new Promise((resolve) => {
+          resolveRich = resolve;
+        }),
+      );
+
+    const refetch = usage.fetchSummary({ loadComparison: false });
+    await vi.waitFor(() =>
+      expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(
+        callsBeforeRefetch + 1,
+      )
+    );
+    usage.setAttributionGroupBy("branch");
+    await vi.waitFor(() =>
+      expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(
+        callsBeforeRefetch + 2,
+      )
+    );
+    resolveRich?.(usageSummaryWithBranch());
+    await vi.waitFor(() =>
+      expect(usage.summary?.branchTotals).toHaveLength(1)
+    );
+
+    resolveOrdinary?.(usageSummary());
+    const loaded = await refetch;
+
+    expect(usage.summary?.branchTotals).toHaveLength(1);
+    expect(loaded?.summary.branchTotals).toHaveLength(1);
+  });
+
   it("preserves completed comparison during branch enrichment", async () => {
     const { usage } = await loadStore();
     await usage.fetchSummary();
     await vi.waitFor(() =>
       expect(usage.summary?.comparison).toEqual(usageComparison())
     );
-    usageServiceMocks.getApiV1UsageSummary.mockResolvedValueOnce({
-      ...usageSummary(),
-      branchTotals: [{
-        project_key: "pl1:sha256:alpha",
-        project: "alpha",
-        branch: "main",
-        inputTokens: 1,
-        outputTokens: 0,
-        cacheCreationTokens: 0,
-        cacheReadTokens: 0,
-        cost: testMoney(0),
-      }],
-    });
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValueOnce(
+      usageSummaryWithBranch(),
+    );
 
     usage.setAttributionGroupBy("branch");
     await vi.waitFor(() =>
@@ -621,19 +703,7 @@ describe("UsageStore lazy branch breakdowns", () => {
     );
     usageServiceMocks.getApiV1UsageSummary
       .mockResolvedValueOnce(usageSummary())
-      .mockResolvedValueOnce({
-        ...usageSummary(),
-        branchTotals: [{
-          project_key: "pl1:sha256:alpha",
-          project: "alpha",
-          branch: "main",
-          inputTokens: 1,
-          outputTokens: 0,
-          cacheCreationTokens: 0,
-          cacheReadTokens: 0,
-          cost: testMoney(0),
-        }],
-      });
+      .mockResolvedValueOnce(usageSummaryWithBranch());
 
     const { usage } = await loadStore();
     const refresh = usage.fetchAll();

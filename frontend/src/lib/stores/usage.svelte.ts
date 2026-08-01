@@ -256,6 +256,7 @@ class UsageStore {
 
   summary = $state<UsageSummaryResponse | null>(null);
   private summaryHasBranchBreakdowns = $state(false);
+  private branchBreakdownSummaryVersion = 0;
   private branchBreakdownRequestPending = false;
   pairwiseComparison =
     $state<UsagePairwiseComparisonResponse | null>(null);
@@ -782,19 +783,38 @@ class UsageStore {
         signal,
       ) as unknown as UsageSummaryResponse;
       if (this.versions.summary === v) {
-        this.summary = data;
-        this.summaryHasBranchBreakdowns = params.branchBreakdowns === true;
+        const responseHasBranchBreakdowns = params.branchBreakdowns === true;
+        const preserveRichSummary =
+          !responseHasBranchBreakdowns &&
+          this.toggles.attribution.groupBy === "branch" &&
+          this.summaryHasBranchBreakdowns &&
+          this.branchBreakdownSummaryVersion === v &&
+          this.summary !== null;
+        const currentSummary = preserveRichSummary ? this.summary! : data;
+        if (!preserveRichSummary) {
+          this.summary = data;
+          this.summaryHasBranchBreakdowns = responseHasBranchBreakdowns;
+          this.branchBreakdownSummaryVersion = responseHasBranchBreakdowns
+            ? v
+            : 0;
+        }
         this.errors.summary = null;
         this.ensurePairwiseSelection();
         this.clearPairwiseComparisonState();
         const loaded = {
           version: v,
-          summary: data,
+          summary: currentSummary,
           params,
           projectScopeRecovered: false,
         };
+        if (
+          !responseHasBranchBreakdowns &&
+          this.toggles.attribution.groupBy === "branch"
+        ) {
+          void this.ensureBranchBreakdowns();
+        }
         if (loadComparison) {
-          void this.fetchComparison(v, data, params);
+          void this.fetchComparison(v, currentSummary, params);
           void this.fetchPairwise(v, params);
         }
         return loaded;
@@ -873,6 +893,7 @@ class UsageStore {
           comparison: this.summary.comparison,
         };
         this.summaryHasBranchBreakdowns = true;
+        this.branchBreakdownSummaryVersion = summaryVersion;
       }
     } catch (e) {
       if (this.versions.summary === summaryVersion) {
