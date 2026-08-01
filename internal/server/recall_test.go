@@ -44,6 +44,24 @@ type queryRecallEntriesResponse struct {
 	ContextEntries []db.RecallResult           `json:"context_entries,omitempty"`
 }
 
+type listRecallExtractProgressResponse struct {
+	GenerationFingerprint string `json:"generation_fingerprint"`
+	Progress              []struct {
+		SessionID             string `json:"session_id"`
+		GenerationFingerprint string `json:"generation_fingerprint"`
+		State                 string `json:"state"`
+		UnitCursor            int    `json:"unit_cursor"`
+		UnitsTotal            int    `json:"units_total"`
+		LastError             string `json:"last_error"`
+		UpdatedAt             string `json:"updated_at"`
+		SessionTitle          string `json:"session_title"`
+		Project               string `json:"project"`
+		Agent                 string `json:"agent"`
+		RetryAt               string `json:"retry_at"`
+	} `json:"progress"`
+	NextCursor string `json:"next_cursor"`
+}
+
 type readOnlyRecallQueryStore struct {
 	db.Store
 	queryCalls int
@@ -137,6 +155,105 @@ func TestListRecallEntriesFiltersByProject(t *testing.T) {
 	r := decode[listRecallEntriesResponse](t, w)
 	require.Len(t, r.RecallEntries, 1)
 	assert.Equal(t, "m1", r.RecallEntries[0].ID)
+}
+
+func TestListRecallExtractProgressPaginatesActionableSessionsWithoutManager(
+	t *testing.T,
+) {
+	te := setup(t, func(cfg *config.Config) {
+		cfg.Recall.Extract.FailureBackoff = "1h"
+	})
+	ctx := t.Context()
+	_, err := te.db.EnsureExtractGeneration(ctx, db.ExtractGeneration{
+		Fingerprint: "generation-building",
+		Model:       "distiller",
+		Segmenter:   "turns-v1",
+	})
+	require.NoError(t, err)
+
+	states := []struct {
+		sessionID string
+		project   string
+		action    string
+	}{
+		{sessionID: "session-pending", project: "alpha", action: "pending"},
+		{sessionID: "session-partial", project: "beta", action: "partial"},
+		{sessionID: "session-failed", project: "gamma", action: "failed"},
+		{sessionID: "session-done", project: "delta", action: "done"},
+	}
+	for _, state := range states {
+		te.seedSession(t, state.sessionID, state.project, 3, func(s *db.Session) {
+			s.Agent = "codex"
+			s.FirstMessage = new("Investigate " + state.project)
+		})
+		_, err := te.db.UpsertExtractProgress(ctx, db.ExtractProgressUpsert{
+			SessionID:     state.sessionID,
+			Fingerprint:   "generation-building",
+			ContentDigest: "digest-" + state.sessionID,
+			UnitsTotal:    3,
+			StampedAt:     time.Now(),
+		})
+		require.NoError(t, err)
+		switch state.action {
+		case "partial":
+			err = te.db.AdvanceExtractCursor(
+				ctx, state.sessionID, "generation-building",
+				"digest-"+state.sessionID, 1,
+			)
+		case "failed":
+			err = te.db.MarkExtractProgressFailed(ctx, db.ExtractFailure{
+				SessionID:      state.sessionID,
+				Fingerprint:    "generation-building",
+				ExpectedDigest: "digest-" + state.sessionID,
+				ExpectedCursor: 0,
+				LastError:      "model response was empty",
+			})
+		case "done":
+			err = te.db.AdvanceExtractCursor(
+				ctx, state.sessionID, "generation-building",
+				"digest-"+state.sessionID, 3,
+			)
+		}
+		require.NoError(t, err)
+	}
+
+	first := te.get(t, "/api/v1/recall/extraction/progress?limit=2")
+	assertStatus(t, first, http.StatusOK)
+	firstPage := decode[listRecallExtractProgressResponse](t, first)
+	assert.Equal(t, "generation-building", firstPage.GenerationFingerprint)
+	require.Len(t, firstPage.Progress, 2)
+	assert.NotEmpty(t, firstPage.NextCursor)
+
+	second := te.get(t, "/api/v1/recall/extraction/progress?limit=2&cursor="+
+		url.QueryEscape(firstPage.NextCursor))
+	assertStatus(t, second, http.StatusOK)
+	secondPage := decode[listRecallExtractProgressResponse](t, second)
+	require.Len(t, secondPage.Progress, 1)
+	assert.Empty(t, secondPage.NextCursor)
+
+	gotSessions := []string{
+		firstPage.Progress[0].SessionID,
+		firstPage.Progress[1].SessionID,
+		secondPage.Progress[0].SessionID,
+	}
+	assert.ElementsMatch(t, []string{
+		"session-pending", "session-partial", "session-failed",
+	}, gotSessions)
+	for _, progress := range append(firstPage.Progress, secondPage.Progress...) {
+		assert.NotEqual(t, "session-done", progress.SessionID)
+		assert.NotEmpty(t, progress.SessionTitle)
+		assert.NotEmpty(t, progress.Project)
+		assert.Equal(t, "codex", progress.Agent)
+	}
+
+	failed := te.get(t,
+		"/api/v1/recall/extraction/progress?state=failed&limit=10")
+	assertStatus(t, failed, http.StatusOK)
+	failedPage := decode[listRecallExtractProgressResponse](t, failed)
+	require.Len(t, failedPage.Progress, 1)
+	assert.Equal(t, "session-failed", failedPage.Progress[0].SessionID)
+	assert.Equal(t, "model response was empty", failedPage.Progress[0].LastError)
+	assert.NotEmpty(t, failedPage.Progress[0].RetryAt)
 }
 
 func TestListRecallEntriesFiltersByReviewState(t *testing.T) {

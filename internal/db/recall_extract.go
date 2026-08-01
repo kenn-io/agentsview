@@ -78,6 +78,32 @@ type ExtractProgress struct {
 	UpdatedAt             string `json:"updated_at"`
 }
 
+// ExtractProgressDetail adds the source-session fields needed to inspect one
+// extraction progress row without loading its transcript.
+type ExtractProgressDetail struct {
+	ExtractProgress
+	SessionTitle string `json:"session_title"`
+	Project      string `json:"project"`
+	Agent        string `json:"agent"`
+}
+
+// ExtractProgressListQuery selects one bounded page of actionable extraction
+// progress. An empty fingerprint resolves to the active generation, falling
+// back to the newest registered generation when no corpus is active.
+type ExtractProgressListQuery struct {
+	GenerationFingerprint string
+	State                 string
+	CursorUpdatedAt       string
+	CursorSessionID       string
+	Limit                 int
+}
+
+// ExtractProgressList is one generation-scoped page of progress rows.
+type ExtractProgressList struct {
+	GenerationFingerprint string
+	Progress              []ExtractProgressDetail
+}
+
 // EnsureExtractGeneration registers a generation if its fingerprint is new
 // and returns the stored row. An existing fingerprint wins: the caller's
 // metadata is ignored so a re-registration can never mutate a corpus's
@@ -906,6 +932,112 @@ func (db *DB) ExtractProgress(
 		)
 	}
 	return progress, true, nil
+}
+
+// ListExtractProgress returns actionable progress rows newest-first. The
+// generation is resolved before the page query so the existing
+// (generation_fingerprint, state, updated_at) index bounds the scan even when
+// the caller does not have an extraction manager from which to obtain the
+// active fingerprint.
+func (db *DB) ListExtractProgress(
+	ctx context.Context, q ExtractProgressListQuery,
+) (ExtractProgressList, error) {
+	var result ExtractProgressList
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	switch q.State {
+	case "", ExtractProgressPending, ExtractProgressPartial,
+		ExtractProgressFailed:
+	default:
+		return result, fmt.Errorf("invalid extract progress state %q", q.State)
+	}
+	if (q.CursorUpdatedAt == "") != (q.CursorSessionID == "") {
+		return result, fmt.Errorf(
+			"extract progress cursor requires updated_at and session_id")
+	}
+	limit := q.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+
+	fingerprint := strings.TrimSpace(q.GenerationFingerprint)
+	if fingerprint == "" {
+		err := db.getReader().QueryRowContext(ctx, `
+			SELECT fingerprint
+			FROM recall_extract_generations
+			ORDER BY CASE state
+				WHEN 'active' THEN 0
+				WHEN 'building' THEN 1
+				ELSE 2
+			END,
+			created_at DESC, fingerprint
+			LIMIT 1`).Scan(&fingerprint)
+		if errors.Is(err, sql.ErrNoRows) {
+			result.Progress = []ExtractProgressDetail{}
+			return result, nil
+		}
+		if err != nil {
+			return result, fmt.Errorf(
+				"resolving extract progress generation: %w", err)
+		}
+	}
+	result.GenerationFingerprint = fingerprint
+
+	var query strings.Builder
+	query.WriteString(`
+		SELECT p.session_id, p.generation_fingerprint, p.unit_cursor,
+		       p.units_total, p.state, p.content_digest, p.last_error,
+		       p.updated_at,
+		       COALESCE(NULLIF(s.display_name, ''),
+		                NULLIF(s.first_message, ''), p.session_id),
+		       s.project, s.agent
+		FROM recall_extract_progress p
+		JOIN sessions s ON s.id = p.session_id
+		WHERE p.generation_fingerprint = ?`)
+	args := []any{fingerprint}
+	if q.State == "" {
+		query.WriteString(` AND p.state IN (?, ?, ?)`)
+		args = append(args, ExtractProgressPending, ExtractProgressPartial,
+			ExtractProgressFailed)
+	} else {
+		query.WriteString(` AND p.state = ?`)
+		args = append(args, q.State)
+	}
+	if q.CursorUpdatedAt != "" {
+		query.WriteString(`
+			AND (p.updated_at < ?
+				OR (p.updated_at = ? AND p.session_id < ?))`)
+		args = append(args, q.CursorUpdatedAt, q.CursorUpdatedAt,
+			q.CursorSessionID)
+	}
+	query.WriteString(`
+		ORDER BY p.updated_at DESC, p.session_id DESC
+		LIMIT ?`)
+	args = append(args, limit)
+
+	rows, err := db.getReader().QueryContext(ctx, query.String(), args...)
+	if err != nil {
+		return result, fmt.Errorf("listing extract progress: %w", err)
+	}
+	defer rows.Close()
+	result.Progress = make([]ExtractProgressDetail, 0, min(limit, 50))
+	for rows.Next() {
+		var progress ExtractProgressDetail
+		if err := rows.Scan(
+			&progress.SessionID, &progress.GenerationFingerprint,
+			&progress.UnitCursor, &progress.UnitsTotal, &progress.State,
+			&progress.ContentDigest, &progress.LastError, &progress.UpdatedAt,
+			&progress.SessionTitle, &progress.Project, &progress.Agent,
+		); err != nil {
+			return result, fmt.Errorf("scanning extract progress: %w", err)
+		}
+		result.Progress = append(result.Progress, progress)
+	}
+	if err := rows.Err(); err != nil {
+		return result, fmt.Errorf("listing extract progress: %w", err)
+	}
+	return result, nil
 }
 
 // attachedColumnExistsTx reports whether the attached old_db's table carries

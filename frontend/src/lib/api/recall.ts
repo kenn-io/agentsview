@@ -3,6 +3,9 @@ import type {
   RecallEntry,
   RecallEntryFilters,
   RecallEntriesPage,
+  RecallExtractProgressFilters,
+  RecallExtractProgressPage,
+  RecallExtractProgressResponse,
   RecallExtractionStatus,
 } from "./types/recall.js";
 import {
@@ -14,6 +17,7 @@ import {
 
 const SESSION_RECALL_LIMIT = 500;
 const RECALL_PAGE_LIMIT = 200;
+const RECALL_PROGRESS_LIMIT = 50;
 
 export async function fetchRecallEntries(
   filters: RecallEntryFilters = {},
@@ -64,6 +68,34 @@ export async function fetchRecallExtractionStatus(
     );
   }
   return (await response.json()) as RecallExtractionStatus;
+}
+
+export async function fetchRecallExtractionProgress(
+  filters: RecallExtractProgressFilters = {},
+  signal?: AbortSignal,
+): Promise<RecallExtractProgressPage> {
+  const query = new URLSearchParams({
+    limit: String(filters.limit ?? RECALL_PROGRESS_LIMIT),
+  });
+  if (filters.generation) query.set("generation", filters.generation);
+  if (filters.state) query.set("state", filters.state);
+  if (filters.cursor) query.set("cursor", filters.cursor);
+  const response = await fetch(
+    `${getBase()}/recall/extraction/progress?${query.toString()}`,
+    authHeaders({ signal }),
+  );
+  if (!response.ok) {
+    throw new ApiError(
+      response.status,
+      await responseErrorMessage(response),
+    );
+  }
+  const data = (await response.json()) as RecallExtractProgressResponse;
+  return {
+    generationFingerprint: data.generation_fingerprint || undefined,
+    progress: data.progress ?? [],
+    nextCursor: data.next_cursor || undefined,
+  };
 }
 
 export async function fetchSessionRecall(

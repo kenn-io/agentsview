@@ -5,7 +5,10 @@ import {
   it,
   vi,
 } from "vite-plus/test";
-import { fetchRecallEntries } from "./recall.js";
+import {
+  fetchRecallEntries,
+  fetchRecallExtractionProgress,
+} from "./recall.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -49,6 +52,43 @@ describe("fetchRecallEntries", () => {
       entries: [],
       nextCursor: "cursor-2",
       resultCap: 500,
+    });
+  });
+});
+
+describe("fetchRecallExtractionProgress", () => {
+  it("sends bounded generation, state, and cursor filters", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({
+        generation_fingerprint: "generation-a",
+        progress: [],
+        next_cursor: "progress-cursor-2",
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const page = await fetchRecallExtractionProgress({
+      generation: "generation-a",
+      state: "failed",
+      cursor: "progress-cursor-1",
+      limit: 25,
+    });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const url = new URL(String(fetchMock.mock.calls[0]?.[0]),
+      window.location.origin);
+    expect(url.pathname).toBe("/api/v1/recall/extraction/progress");
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      limit: "25",
+      generation: "generation-a",
+      state: "failed",
+      cursor: "progress-cursor-1",
+    });
+    expect(page).toEqual({
+      generationFingerprint: "generation-a",
+      progress: [],
+      nextCursor: "progress-cursor-2",
     });
   });
 });

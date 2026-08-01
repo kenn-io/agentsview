@@ -4,22 +4,27 @@
     Card,
     EmptyState,
     SearchInput,
+    SegmentedControl,
     Table,
     TableHeaderCell,
     Typeahead,
+    type SegmentedControlOption,
     type TypeaheadOption,
   } from "@kenn-io/kit-ui";
   import {
     fetchRecallEntries,
+    fetchRecallExtractionProgress,
     fetchRecallExtractionStatus,
   } from "../../api/recall.js";
   import type {
     RecallEntry,
     RecallEvidence,
+    RecallExtractProgress,
+    RecallExtractProgressState,
     RecallExtractionStatus,
   } from "../../api/types/recall.js";
   import { ApiError, isAbortError } from "../../api/runtime.js";
-  import { m } from "../../i18n/index.js";
+  import { formatDateTime, m } from "../../i18n/index.js";
   import { ChevronDownIcon, ChevronRightIcon } from "../../icons.js";
   import { router } from "../../stores/router.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -53,6 +58,12 @@
   let statusFailed = $state(false);
   let entriesUpdatedAt = $state<number | null>(null);
   let statusUpdatedAt = $state<number | null>(null);
+  let progress = $state<RecallExtractProgress[]>([]);
+  let progressExpanded = $state(false);
+  let progressState = $state<"" | RecallExtractProgressState>("");
+  let progressNextCursor = $state("");
+  let progressLoading = $state(false);
+  let progressFailed = $state(false);
   let search = $state("");
   let query = $state("");
   let project = $state("");
@@ -63,6 +74,7 @@
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   const entriesRead = new LatestRead();
   const statusRead = new LatestRead();
+  const progressRead = new LatestRead();
   const lastUpdatedAt = $derived(
     entriesUpdatedAt !== null && statusUpdatedAt !== null
       ? Math.min(entriesUpdatedAt, statusUpdatedAt)
@@ -121,6 +133,22 @@
       displayLabel: name,
     })),
   ]);
+  const progressStateOptions = $derived<SegmentedControlOption[]>([
+    { value: "", label: m.recall_page_progress_all() },
+    {
+      value: "pending",
+      label: m.recall_page_progress_pending(),
+    },
+    {
+      value: "partial",
+      label: m.recall_page_progress_partial(),
+    },
+    {
+      value: "failed",
+      label: m.recall_page_progress_failed(),
+      tone: "danger",
+    },
+  ]);
 
   async function loadEntries(cursor = "") {
     const signal = entriesRead.begin();
@@ -178,6 +206,34 @@
     }
   }
 
+  async function loadProgress(cursor = "") {
+    const signal = progressRead.begin();
+    const appending = cursor !== "";
+    progressLoading = true;
+    progressFailed = false;
+    try {
+      const page = await fetchRecallExtractionProgress({
+        generation: status?.fingerprint || undefined,
+        state: progressState || undefined,
+        cursor: cursor || undefined,
+      }, signal);
+      if (!progressRead.isCurrent(signal)) return;
+      progress = appending
+        ? [...progress, ...page.progress]
+        : page.progress;
+      progressNextCursor = page.nextCursor ?? "";
+    } catch (error) {
+      if (isAbortError(error) || !progressRead.isCurrent(signal)) return;
+      if (!appending) {
+        progress = [];
+        progressNextCursor = "";
+        progressFailed = true;
+      }
+    } finally {
+      if (progressRead.finish(signal)) progressLoading = false;
+    }
+  }
+
   function scheduleSearch() {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => {
@@ -187,6 +243,30 @@
 
   async function refreshRecall() {
     await Promise.all([loadEntries(), loadStatus()]);
+    if (progressExpanded) await loadProgress();
+  }
+
+  function toggleProgress() {
+    progressExpanded = !progressExpanded;
+    if (!progressExpanded) progressRead.cancel();
+  }
+
+  function progressStateLabel(state: RecallExtractProgressState): string {
+    switch (state) {
+      case "pending":
+        return m.recall_page_progress_pending();
+      case "partial":
+        return m.recall_page_progress_partial();
+      case "failed":
+        return m.recall_page_progress_failed();
+    }
+  }
+
+  function progressTimestamp(value: string): string {
+    return formatDateTime(value, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
   }
 
   function evidenceLabel(evidence: RecallEvidence): string {
@@ -225,7 +305,15 @@
       clearTimeout(searchTimer);
       entriesRead.cancel();
       statusRead.cancel();
+      progressRead.cancel();
     };
+  });
+
+  $effect(() => {
+    if (!progressExpanded) return;
+    progressState;
+    status?.fingerprint;
+    void loadProgress();
   });
 </script>
 
@@ -245,7 +333,7 @@
       {/if}
       <RefreshControl
         {lastUpdatedAt}
-        busy={entriesLoading || statusLoading}
+        busy={entriesLoading || statusLoading || progressLoading}
         onRefresh={refreshRecall}
         label={m.shared_refresh()}
       />
@@ -256,13 +344,26 @@
     <div class="extraction-content">
       <div class="extraction-heading">
         <h3>{m.recall_page_extraction_title()}</h3>
-        {#if status?.configured && status.generations?.length}
-          <span class="generation-state">
-            {status.generations.find(
-              (item) => item.fingerprint === status?.fingerprint,
-            )?.state ?? status.generations[0]?.state}
-          </span>
-        {/if}
+        <div class="extraction-actions">
+          {#if status?.configured && status.generations?.length}
+            <span class="generation-state">
+              {status.generations.find(
+                (item) => item.fingerprint === status?.fingerprint,
+              )?.state ?? status.generations[0]?.state}
+            </span>
+          {/if}
+          {#if !statusLoading && !statusFailed}
+            <Button
+              size="sm"
+              tone="neutral"
+              surface="outline"
+              label={progressExpanded
+                ? m.recall_page_progress_hide()
+                : m.recall_page_progress_show()}
+              onclick={toggleProgress}
+            />
+          {/if}
+        </div>
       </div>
       {#if statusLoading}
         <p class="status-state">{m.recall_page_loading()}</p>
@@ -298,6 +399,116 @@
           <span>{m.recall_page_status_entries({
             countLabel: status.stats.entries.toLocaleString(),
           })}</span>
+        </div>
+      {/if}
+
+      {#if progressExpanded}
+        <div class="progress-panel">
+          <SegmentedControl
+            options={progressStateOptions}
+            value={progressState}
+            ariaLabel={m.recall_page_progress_filter_label()}
+            onchange={(value) => {
+              progressState = value as "" | RecallExtractProgressState;
+            }}
+          />
+          {#if progressLoading && progress.length === 0}
+            <p class="progress-state">{m.recall_page_loading()}</p>
+          {:else if progressFailed}
+            <p class="progress-state status-error">
+              {m.recall_page_progress_error()}
+            </p>
+          {:else if progress.length === 0}
+            <p class="progress-state">{m.recall_page_progress_empty()}</p>
+          {:else}
+            <div class="progress-table-shell">
+              <Table
+                ariaLabel={m.recall_page_progress_table_label()}
+                stickyHeader={false}
+                zebra={false}
+                class="progress-table"
+              >
+                {#snippet header()}
+                  <TableHeaderCell
+                    label={m.recall_page_progress_session_column()}
+                  />
+                  <TableHeaderCell
+                    label={m.recall_page_progress_state_column()}
+                  />
+                  <TableHeaderCell
+                    label={m.recall_page_progress_units_column()}
+                  />
+                  <TableHeaderCell
+                    label={m.recall_page_progress_updated_column()}
+                  />
+                {/snippet}
+                {#snippet children()}
+                  {#each progress as item (`${item.generation_fingerprint}:${item.session_id}`)}
+                    <tr>
+                      <td class="progress-session-cell">
+                        <a
+                          class="progress-session-link"
+                          href={router.buildSessionHref(item.session_id)}
+                          onclick={(event) => {
+                            if (
+                              event.metaKey || event.ctrlKey ||
+                              event.shiftKey || event.altKey ||
+                              event.button !== 0
+                            ) return;
+                            event.preventDefault();
+                            router.navigateToSession(item.session_id);
+                          }}
+                        >{item.session_title}</a>
+                        <span class="progress-session-meta">
+                          {item.project} · {item.agent}
+                        </span>
+                        {#if item.last_error}
+                          <span class="progress-error">{item.last_error}</span>
+                        {/if}
+                      </td>
+                      <td>
+                        <span class="progress-state-label" data-state={item.state}>
+                          {progressStateLabel(item.state)}
+                        </span>
+                        {#if item.retry_eligible}
+                          <span class="retry-state">
+                            {m.recall_page_progress_retry_ready()}
+                          </span>
+                        {:else if item.retry_at}
+                          <span class="retry-state">
+                            {m.recall_page_progress_retry_after({
+                              date: progressTimestamp(item.retry_at),
+                            })}
+                          </span>
+                        {/if}
+                      </td>
+                      <td class="progress-units">
+                        {item.unit_cursor.toLocaleString()} /
+                        {item.units_total.toLocaleString()}
+                      </td>
+                      <td class="progress-updated">
+                        {progressTimestamp(item.updated_at)}
+                      </td>
+                    </tr>
+                  {/each}
+                {/snippet}
+              </Table>
+            </div>
+            {#if progressNextCursor}
+              <div class="progress-load-more">
+                <Button
+                  size="sm"
+                  tone="neutral"
+                  surface="outline"
+                  label={progressLoading
+                    ? m.recall_page_progress_loading_more()
+                    : m.recall_page_progress_load_more()}
+                  disabled={progressLoading}
+                  onclick={() => loadProgress(progressNextCursor)}
+                />
+              </div>
+            {/if}
+          {/if}
         </div>
       {/if}
     </div>
@@ -552,6 +763,12 @@
     gap: var(--space-4);
   }
 
+  .extraction-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+  }
+
   .extraction-heading h3 {
     color: var(--text-primary);
     font-size: 12px;
@@ -592,6 +809,87 @@
     color: var(--text-secondary);
     font-family: var(--font-mono);
     font-size: 10px;
+  }
+
+  .progress-panel {
+    margin-top: var(--space-6);
+    padding-top: var(--space-5);
+    border-top: 1px solid var(--border-default);
+  }
+
+  .progress-state {
+    padding: var(--space-6) 0 var(--space-2);
+    color: var(--text-muted);
+    font-size: 12px;
+    text-align: center;
+  }
+
+  .progress-table-shell {
+    margin-top: var(--space-4);
+    overflow-x: auto;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+  }
+
+  :global(.progress-table table) {
+    min-width: 680px;
+  }
+
+  :global(.progress-table thead th) {
+    padding: 9px 12px;
+  }
+
+  :global(.progress-table tbody td) {
+    padding: 11px 12px;
+    vertical-align: top;
+  }
+
+  .progress-session-cell {
+    width: 52%;
+  }
+
+  .progress-session-link {
+    display: block;
+    color: var(--accent-blue);
+    font-size: 11px;
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  .progress-session-link:hover {
+    text-decoration: underline;
+  }
+
+  .progress-session-meta,
+  .progress-error,
+  .retry-state {
+    display: block;
+    margin-top: var(--space-1);
+    color: var(--text-muted);
+    font-size: 9px;
+  }
+
+  .progress-error {
+    color: var(--slow-fg);
+    overflow-wrap: anywhere;
+  }
+
+  .progress-state-label,
+  .progress-units,
+  .progress-updated {
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 9px;
+  }
+
+  .progress-state-label[data-state="failed"] {
+    color: var(--slow-fg);
+  }
+
+  .progress-load-more {
+    display: flex;
+    justify-content: center;
+    margin-top: var(--space-4);
   }
 
   .recall-toolbar {
