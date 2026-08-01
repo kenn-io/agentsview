@@ -545,6 +545,70 @@ func TestReconcileTombstonesAfterSourceLabelChange(t *testing.T) {
 			"no longer matches the configured one")
 }
 
+func TestReconcileTombstonesLegacyEmptyMachineSession(t *testing.T) {
+	root := t.TempDir()
+	path := writeSessionSourceClaudeFile(t, root, "legacy-empty-machine.jsonl")
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {root},
+		},
+		SourceMachines: map[parser.AgentType]map[string]string{
+			parser.AgentClaude: {root: "archivebox"},
+		},
+		Machine: "localbox",
+	})
+	t.Cleanup(engine.Close)
+	require.False(t, engine.SyncAll(t.Context(), nil).Aborted)
+
+	// Model a session admitted before machine attribution and deletion-proof
+	// baselines existed. Refreshing it must retain the empty attribution while
+	// recreating deletion proof for that exact stored ownership key.
+	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+		if _, err := tx.Exec(
+			"UPDATE sessions SET machine = '' WHERE id = ?",
+			"legacy-empty-machine",
+		); err != nil {
+			return err
+		}
+		_, err := tx.Exec(
+			"DELETE FROM local_session_source_baselines WHERE session_id = ?",
+			"legacy-empty-machine",
+		)
+		return err
+	}))
+	appendSessionSourceClaudeMessage(t, path)
+	require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
+		t.Context(), []string{root}, false,
+	))
+	machine, exists := activeSessionMachines(t, database)["legacy-empty-machine"]
+	require.True(t, exists)
+	assert.Empty(t, machine)
+	ownership, err := database.ListActiveSessionSourceOwnershipScopesPage(
+		t.Context(), "", string(parser.AgentClaude),
+		[]db.StoredSourcePathHintScope{{Path: root}},
+		db.SessionSourceCursor{},
+	)
+	require.NoError(t, err)
+	require.Len(t, ownership, 1,
+		"refresh must restore deletion proof for the empty stored machine key")
+
+	require.NoError(t, os.Remove(path))
+	require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
+		t.Context(), []string{root}, false,
+	))
+
+	active, err := database.GetSession(t.Context(), "legacy-empty-machine")
+	require.NoError(t, err)
+	assert.Nil(t, active)
+	archived, err := database.GetSessionFull(t.Context(), "legacy-empty-machine")
+	require.NoError(t, err)
+	require.NotNil(t, archived)
+	assert.Empty(t, archived.Machine)
+	require.NotNil(t, archived.DeletionCause)
+	assert.Equal(t, "source_missing", *archived.DeletionCause)
+}
+
 // activeSessionMachines returns the stored machine of every active session,
 // keyed by session ID.
 func activeSessionMachines(t *testing.T, database *db.DB) map[string]string {

@@ -71,6 +71,8 @@ type reconciliationBaselineTracker struct {
 }
 
 type machineSessionSource struct {
+	// Machine is an exact stored ownership key. Empty remains valid for
+	// sessions written before machine attribution was introduced.
 	Machine string
 	Source  db.SessionSourcePath
 }
@@ -117,8 +119,7 @@ func reconciliationBaselineTrackerFor(
 func (tracker *reconciliationBaselineTracker) add(
 	source machineSessionSource,
 ) {
-	if source.Machine == "" ||
-		source.Source.Agent == "" || source.Source.FilePath == "" {
+	if source.Source.Agent == "" || source.Source.FilePath == "" {
 		return
 	}
 	tracker.sources[source] = struct{}{}
@@ -663,7 +664,7 @@ func (e *Engine) reconciliationOwnershipMachines(
 	seen := make(map[string]bool, len(roots)+len(archiveMachines)+1)
 	machines := make([]string, 0, len(roots)+len(archiveMachines)+1)
 	add := func(machine string) {
-		if machine == "" || seen[machine] {
+		if seen[machine] {
 			return
 		}
 		seen[machine] = true
@@ -1417,7 +1418,7 @@ func (e *Engine) expandOmnigentInheritedMetadataSources(
 		seenParents[parentID] = struct{}{}
 		machine := e.machineForProviderSource(agent, source, sourcePath)
 		if session, err := e.db.GetSession(ctx, parentID); err == nil &&
-			session != nil && session.Machine != "" {
+			session != nil {
 			machine = session.Machine
 		}
 		if _, exists := parentsByMachine[machine]; !exists {
@@ -4105,8 +4106,7 @@ func (e *Engine) replaceActiveSessionSourceBaselinesByMachine(
 		byMachine map[string]map[db.SessionSourcePath]struct{},
 		source machineSessionSource,
 	) {
-		if source.Machine == "" ||
-			source.Source.Agent == "" || source.Source.FilePath == "" {
+		if source.Source.Agent == "" || source.Source.FilePath == "" {
 			return
 		}
 		if byMachine[source.Machine] == nil {
@@ -7172,7 +7172,7 @@ func (e *Engine) collectAndBatch(
 				Agent: string(job.agent), FilePath: e.effectiveSourcePath(job.path),
 			},
 		}
-		return source, source.Machine != "" &&
+		return source,
 			source.Source.Agent != "" && source.Source.FilePath != ""
 	}
 	flushBaselineSources := func() {
@@ -7629,8 +7629,7 @@ func (e *Engine) baselinePendingWriteSources(
 				Agent: string(write.sess.Agent), FilePath: path,
 			},
 		}
-		if source.Machine == "" ||
-			source.Source.Agent == "" || source.Source.FilePath == "" {
+		if source.Source.Agent == "" || source.Source.FilePath == "" {
 			continue
 		}
 		if _, seen := eligible[source]; !seen {
@@ -8611,7 +8610,7 @@ func (e *Engine) providerSourceSessionOwnershipsForForceReplace(
 			seen[id] = struct{}{}
 			machine := e.machineForProviderSource(agent, source, sourcePath)
 			if session, err := e.db.GetSession(context.Background(), id); err == nil &&
-				session != nil && session.Machine != "" {
+				session != nil {
 				machine = session.Machine
 			}
 			members = append(members, sourceMissingMember{

@@ -2667,8 +2667,9 @@ func (o SessionSourceOwnership) Cursor() SessionSourceCursor {
 }
 
 // ListActiveSessionSourceOwnershipScopesPage returns one stable keyset page
-// across a provider's bounded physical scopes. Normalization deduplicates
-// repeated declarations before building the query.
+// across a provider's bounded physical scopes. Machine is an exact stored key,
+// including the empty key retained by legacy sessions. Normalization
+// deduplicates repeated declarations before building the query.
 func (db *DB) ListActiveSessionSourceOwnershipScopesPage(
 	ctx context.Context,
 	machine string,
@@ -2677,7 +2678,7 @@ func (db *DB) ListActiveSessionSourceOwnershipScopesPage(
 	after SessionSourceCursor,
 ) ([]SessionSourceOwnership, error) {
 	scopes = normalizeStoredSourcePathHintScopes(scopes)
-	if machine == "" || agent == "" || len(scopes) == 0 {
+	if agent == "" || len(scopes) == 0 {
 		return nil, nil
 	}
 	if after.Agent != "" && after.Agent != agent {
@@ -2808,8 +2809,9 @@ func mergeSessionSourceOwnershipPages(
 }
 
 // BaselineActiveSessionSourcePaths marks exact active local ownerships as
-// observed. Callers pass one bounded discovery page or changed-path batch at a
-// time so this update never scales its live memory with the archive.
+// observed. Machine is an exact stored key, including the empty key retained by
+// legacy sessions. Callers pass one bounded discovery page or changed-path
+// batch at a time so this update never scales its live memory with the archive.
 func (db *DB) BaselineActiveSessionSourcePaths(
 	ctx context.Context,
 	machine string,
@@ -2818,7 +2820,7 @@ func (db *DB) BaselineActiveSessionSourcePaths(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if machine == "" || len(sources) == 0 {
+	if len(sources) == 0 {
 		return nil
 	}
 	db.mu.Lock()
@@ -2840,9 +2842,10 @@ func (db *DB) BaselineActiveSessionSourcePaths(
 }
 
 // ReplaceActiveSessionSourceBaselines makes admitted the exact subset of a
-// bounded candidate page that carries deletion proof. Existing proof for
-// rejected candidates is removed in the same transaction that admits the
-// successful candidates.
+// bounded candidate page that carries deletion proof. Machine is an exact
+// stored key, including the empty key retained by legacy sessions. Existing
+// proof for rejected candidates is removed in the same transaction that admits
+// the successful candidates.
 //
 // The replacement is a diff, not a rewrite: warm no-op syncs replay every
 // unchanged archived source as an admitted candidate each pass, so unchanged
@@ -2858,7 +2861,7 @@ func (db *DB) ReplaceActiveSessionSourceBaselines(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if machine == "" || len(candidates) == 0 {
+	if len(candidates) == 0 {
 		return nil
 	}
 	rejected := rejectedSourceCandidates(candidates, admitted)

@@ -440,16 +440,20 @@ func TestOmnigentCompleteResultOwnershipTombstonesAndRevivesMissingMember(
 		},
 		{
 			ID: "omnigent:missing", Agent: string(parser.AgentOmnigent),
-			Machine: "devbox", FilePath: &missingPath,
+			Machine: "", FilePath: &missingPath,
 		},
 	} {
 		require.NoError(t, database.UpsertSession(seed))
 	}
 	require.NoError(t, database.BaselineActiveSessionSourcePaths(
-		t.Context(), "devbox", []db.SessionSourcePath{
-			{Agent: string(parser.AgentOmnigent), FilePath: keptPath},
-			{Agent: string(parser.AgentOmnigent), FilePath: missingPath},
-		},
+		t.Context(), "devbox", []db.SessionSourcePath{{
+			Agent: string(parser.AgentOmnigent), FilePath: keptPath,
+		}},
+	))
+	require.NoError(t, database.BaselineActiveSessionSourcePaths(
+		t.Context(), "", []db.SessionSourcePath{{
+			Agent: string(parser.AgentOmnigent), FilePath: missingPath,
+		}},
 	))
 	provider, source := newContainerSemanticProvider(
 		container, fingerprint, parser.ParseOutcome{
@@ -477,6 +481,7 @@ func TestOmnigentCompleteResultOwnershipTombstonesAndRevivesMissingMember(
 	archived, err := database.GetSessionFull(t.Context(), "omnigent:missing")
 	require.NoError(t, err)
 	require.NotNil(t, archived)
+	assert.Empty(t, archived.Machine)
 	require.NotNil(t, archived.DeletionCause)
 	assert.Equal(t, "source_missing", *archived.DeletionCause)
 
@@ -502,7 +507,8 @@ func TestOmnigentCompleteResultOwnershipTombstonesAndRevivesMissingMember(
 
 	revived, err := database.GetSession(t.Context(), "omnigent:missing")
 	require.NoError(t, err)
-	assert.NotNil(t, revived)
+	require.NotNil(t, revived)
+	assert.Empty(t, revived.Machine)
 }
 
 func TestCompleteResultOwnershipReadFailureAbortsWithoutCaching(
@@ -610,13 +616,13 @@ func TestOmnigentDependentSourceExpansionPreservesEngineIDPrefixing(
 	require.NoError(t, database.UpsertSession(db.Session{
 		ID:       parentID,
 		Agent:    string(parser.AgentOmnigent),
-		Machine:  "local",
+		Machine:  "",
 		FilePath: &rootPath,
 	}))
 	require.NoError(t, database.UpsertSession(db.Session{
 		ID:              "remote~omnigent:child",
 		Agent:           string(parser.AgentOmnigent),
-		Machine:         "local",
+		Machine:         "",
 		ParentSessionID: &parentID,
 		FilePath:        &childPath,
 	}))
