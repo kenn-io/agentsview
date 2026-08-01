@@ -237,6 +237,52 @@ func TestWriteBatchRelabelRecoversUnavailableSourceProject(t *testing.T) {
 		"project recovery must use the stored machine before the checkout lookup")
 }
 
+func TestWriteBatchLegacyLocalRecoversUnavailableSourceProject(t *testing.T) {
+	const (
+		sessionID       = "legacy-local-unavailable-source"
+		originalProject = "resolved-project"
+		fallbackProject = "parser-fallback"
+		currentMachine  = "current-machine"
+	)
+	database := openTestDB(t)
+	root := filepath.Join(t.TempDir(), "missing-checkout")
+	cwd := filepath.Join(root, "nested")
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	recordedAt := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: sessionID, Project: originalProject, Machine: "local",
+		Agent: string(parser.AgentClaude), Cwd: cwd, FilePath: &path,
+	}))
+	require.NoError(t, database.UpsertProjectIdentityObservationWithSnapshotProject(
+		t.Context(), export.ProjectIdentityObservation{
+			SessionID: sessionID, Project: originalProject, Machine: "local",
+			RootPath: root, GitRemote: "https://example.com/team/project.git",
+			RemoteResolution: export.ProjectResolutionResolved,
+			ObservedAt:       recordedAt,
+		}, originalProject,
+	))
+	engine := NewEngine(database, EngineConfig{Machine: currentMachine})
+	t.Cleanup(engine.Close)
+
+	outcome := engine.writeBatchWithOutcome([]pendingWrite{{
+		sess: parser.ParsedSession{
+			ID: sessionID, Project: fallbackProject, Machine: currentMachine,
+			Agent: parser.AgentClaude, Cwd: cwd,
+			StartedAt: recordedAt, EndedAt: recordedAt,
+			File: parser.FileInfo{Path: path, Mtime: recordedAt.UnixNano()},
+		},
+	}}, syncWriteDefault, true)
+
+	require.Equal(t, 1, outcome.writtenSessions)
+	stored, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "local", stored.Machine,
+		"legacy attribution must remain immutable")
+	assert.Equal(t, originalProject, stored.Project,
+		"legacy local attribution must still use local project recovery")
+}
+
 func TestWriteBatchDuplicateNewSessionIDKeepsFirstMachine(t *testing.T) {
 	const sessionID = "copied-session"
 	database := openTestDB(t)
@@ -5391,6 +5437,40 @@ func TestProjectIdentityObservationSkipsDiscoveryForRemoteMachine(t *testing.T) 
 		"foreign-machine cwd must not be probed for a local git identity")
 	assert.Equal(t, cwd, observations[0].RootPath,
 		"root path must stay the raw cwd, not a locally resolved git root")
+}
+
+func TestProjectIdentityObservationDiscoversForLegacyLocalMachine(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, ".git", "config"),
+		[]byte("[remote \"origin\"]\n\turl = https://github.com/acme/remote.git\n"),
+		0o644,
+	))
+	cwd := filepath.Join(root, "subdir")
+	require.NoError(t, os.Mkdir(cwd, 0o755))
+	engine := NewEngine(database, EngineConfig{Machine: "current-machine"})
+	t.Cleanup(engine.Close)
+
+	require.NoError(t, engine.writeProjectIdentityObservation(
+		t.Context(), db.Session{
+			ID: "identity-legacy-local", Project: "legacy-local-project",
+			Machine: "local", Agent: "codex", Cwd: cwd,
+			StartedAt: strPtr(time.Now().UTC().Format(time.RFC3339Nano)),
+		},
+	))
+
+	observations, err := database.ListProjectIdentityObservations(
+		t.Context(), []string{"legacy-local-project"},
+	)
+	require.NoError(t, err)
+	require.Len(t, observations, 1)
+	assert.Equal(t, "https://github.com/acme/remote.git",
+		observations[0].GitRemote,
+		"legacy local attribution must still discover local git identity")
+	assert.Equal(t, "local", observations[0].Machine,
+		"discovery must not rewrite persisted attribution")
 }
 
 func TestProjectIdentitySafeLocalAbsolutePathHandlesWindowsDriveRootsByOS(t *testing.T) {

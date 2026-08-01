@@ -10895,17 +10895,16 @@ func (e *Engine) normalizePendingWriteMachines(
 					"load replacement session machines: %w", err,
 				)
 			}
-			for id, machine := range replacementMachines {
-				machines[id] = machine
-			}
+			maps.Copy(machines, replacementMachines)
 		}
 	}
 	for _, id := range ids {
 		machine, exists := machines[id]
-		if !exists {
-			machine = batch[indexes[id][0]].sess.Machine
-		}
 		for _, i := range indexes[id] {
+			if !exists {
+				machine = batch[i].sess.Machine
+				exists = true
+			}
 			batch[i].sess.Machine = machine
 		}
 	}
@@ -11023,7 +11022,7 @@ func (e *Engine) preserveUnavailableSourceProjects(
 		}
 		sess := batch[i].sess
 		if sess.ID == "" || sess.Cwd == "" ||
-			sess.Machine != e.machine ||
+			!e.isLocalMachineAttribution(sess.Machine) ||
 			!safeLocalAbsolutePath(sess.Cwd) ||
 			export.IsAutomountNamespacePath(runtime.GOOS, filepath.Clean(sess.Cwd)) {
 			batch[i].sourceProjectResolved = true
@@ -11076,6 +11075,12 @@ func (e *Engine) preserveUnavailableSourceProjects(
 		}
 	}
 	return batch, nil
+}
+
+// isLocalMachineAttribution recognizes the legacy "local" sentinel as this
+// machine without rewriting the immutable value stored with the session.
+func (e *Engine) isLocalMachineAttribution(machine string) bool {
+	return machine == "local" || machine == e.machine
 }
 
 func pathContains(root, path string) bool {
@@ -12263,7 +12268,8 @@ func (e *Engine) cachedProjectIdentity(machine, rootPath string) projectIdentity
 	// wakes the /home automounter — with tens of thousands of remote
 	// sessions and a one-minute cache TTL that becomes a sustained
 	// automountd/opendirectoryd CPU storm.
-	if e.idPrefix == "" && e.pathRewriter == nil && machine == e.machine {
+	if e.idPrefix == "" && e.pathRewriter == nil &&
+		e.isLocalMachineAttribution(machine) {
 		if normalized, ok, err := export.NormalizeRootPath(rootPath); err == nil && ok {
 			identity.rootPath = normalized
 		}
