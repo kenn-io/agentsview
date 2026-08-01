@@ -480,6 +480,29 @@ March 2026), which shares that same database. *Kilo (legacy)* is the legacy
 RooCode-derived VS Code extension that wrote per-task JSON under
 `kilocode.kilo-code/tasks/`.
 
+## Filesystem Session Sync
+
+One primary AgentsView instance can ingest native agent session directories
+copied or mounted from other machines without PostgreSQL:
+
+```toml
+[[session_sources]]
+agent = "copilot"
+dir = "/srv/session-archive/buildbox/copilot"
+machine = "buildbox"
+```
+
+Structured sources are additive to existing `copilot_dirs`,
+`claude_project_dirs`, and other per-agent settings. They label sessions by
+source machine without namespacing native session IDs. Transport source session
+files only -- never copy `sessions.db` or its WAL files. Machine labels are
+captured at first ingestion; ordinary sync and `agentsview sync --full` preserve
+the stored label. Changing attribution for existing sessions is not currently
+supported.
+
+See the [Filesystem Session Sync guide](https://agentsview.io/filesystem-sync/)
+for Git, rsync, shared-mount, freshness, and operational guidance.
+
 ## PostgreSQL Sync
 
 Push session data to a shared PostgreSQL instance for team dashboards:
@@ -633,6 +656,7 @@ Full docs at **[agentsview.io](https://agentsview.io)**:
 [Usage Guide](https://agentsview.io/usage/) --
 [CLI Reference](https://agentsview.io/commands/) --
 [Configuration](https://agentsview.io/configuration/) --
+[Filesystem Sync](https://agentsview.io/filesystem-sync/) --
 [Architecture](https://agentsview.io/architecture/)
 
 ______________________________________________________________________

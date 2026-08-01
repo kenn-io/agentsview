@@ -34,6 +34,7 @@ nav = [
   {"Recall (Experimental)" = "recall.md"},
   {"Remote Access" = "remote-access.md"},
   {"Artifact Folder Sync" = "artifact-sync.md"},
+  {"Filesystem Session Sync" = "filesystem-sync.md"},
   {"PostgreSQL Sync" = "pg-sync.md"},
   {"DuckDB Mirror" = "duckdb.md"},
   {"Changelog" = "changelog.md"},

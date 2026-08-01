@@ -77,6 +77,7 @@ daemon_idle_timeout = "20m"
 | `[vector]`                          | Opt-in semantic-search index; model settings live in `[vector.embeddings]`, named endpoints in `[vector.embeddings.servers.<name>]`, embedding schedule in `[vector.embed]` — see [Semantic Search](/semantic-search/#enabling-vector) for every key |
 | `[recall.extract]`                  | Opt-in model-backed recall extraction; named endpoints in `[recall.extract.servers.<name>]`, prompt selection in `[recall.extract.prompts]`, request overrides in `[recall.extract.request]` — see [Recall](/recall/#automatic-extraction)           |
 | `[[remote_hosts]]`                  | Remote machines synced by a bare `agentsview sync` — see [CLI Reference](/commands/#agentsview-sync)                                                                                                                                                 |
+| `[[session_sources]]`               | Additional filesystem session roots with per-root machine labels — see [Filesystem Session Sync](/filesystem-sync/)                                                                                                                                  |
 | `[automated]`                       | Custom automated-session patterns — see [Automated Session Detection](#automated-session-detection)                                                                                                                                                  |
 | `[custom_model_pricing]`            | Per-model price overrides for usage reports — see [Custom Model Pricing](/token-usage/#custom-model-pricing)                                                                                                                                         |
 
@@ -654,6 +655,32 @@ these take precedence over the single-directory environment variable and the
 default path.
 
 All listed directories are discovered, watched, and synced independently.
+
+### Machine-Labeled Filesystem Sources
+
+Use `[[session_sources]]` when a root was produced on another machine and
+transported to this AgentsView host:
+
+```toml
+[[session_sources]]
+agent = "copilot"
+dir = "/srv/session-archive/buildbox/copilot"
+machine = "buildbox"
+```
+
+The fields are `agent`, `dir`, and optional `machine`. Entries are additive to
+the per-agent arrays, defaults, and environment variables above. Exact duplicate
+roots are deduplicated; a structured entry supplies the machine label when it
+duplicates a shorthand root. An omitted `machine` uses the local hostname.
+
+Machine attribution is captured when each session is first ingested. Changing
+an entry's `machine` value affects newly discovered sessions but does not
+relabel existing sessions during ordinary syncs or `agentsview sync --full`.
+Changing attribution for existing sessions is not currently supported.
+
+See [Filesystem Session Sync](/filesystem-sync/) for multi-machine examples,
+transport safety, ID deduplication, watcher behavior, and the comparison with
+PostgreSQL.
 
 ### S3-Compatible Session Sources
 
