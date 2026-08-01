@@ -1965,7 +1965,16 @@ func normalizeSessionSourceDir(raw string) (string, error) {
 	if strings.ContainsRune(value, '\x00') {
 		return "", fmt.Errorf("dir %q contains a NUL byte", raw)
 	}
-	return value, nil
+	// Structured sources resolve after expandLocalPaths has already expanded
+	// the legacy per-agent arrays, so expand here too. Without it a "~/..."
+	// root is never scanned and cannot deduplicate against, or relabel, the
+	// equivalent expanded legacy root. This resolves the path only; separator
+	// and case spelling are still left exactly as configured.
+	expanded, err := pathutil.ExpandHome(value)
+	if err != nil {
+		return "", fmt.Errorf("expanding dir %q: %w", raw, err)
+	}
+	return expanded, nil
 }
 
 func resolvePublicURL(value string, proxyCfg ProxyConfig) (string, error) {

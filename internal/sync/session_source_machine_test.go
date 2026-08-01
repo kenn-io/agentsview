@@ -460,3 +460,63 @@ func writeSessionSourceClaudeFile(t *testing.T, root, name string) string {
 	require.NoError(t, os.WriteFile(path, []byte(builder.String()), 0o600))
 	return path
 }
+
+// TestReconcileTombstonesAfterSourceLabelChange pins the deletion path across a
+// configuration edit. Attribution is immutable, so a session admitted under the
+// old label keeps it; reconciliation must therefore query stored attribution
+// rather than the currently configured label, or the delete is never noticed.
+func TestReconcileTombstonesAfterSourceLabelChange(t *testing.T) {
+	archiveRoot := t.TempDir()
+	archivePath := writeSessionSourceClaudeFile(t, archiveRoot, "archive-session.jsonl")
+	database := openTestDB(t)
+
+	newEngine := func(machine string) *Engine {
+		return NewEngine(database, EngineConfig{
+			AgentDirs: map[parser.AgentType][]string{
+				parser.AgentClaude: {archiveRoot},
+			},
+			SourceMachines: map[parser.AgentType]map[string]string{
+				parser.AgentClaude: {archiveRoot: machine},
+			},
+			Machine: "localbox",
+		})
+	}
+
+	first := newEngine("archivebox")
+	t.Cleanup(first.Close)
+	require.False(t, first.SyncAll(context.Background(), nil).Aborted)
+
+	require.Equal(t, "archivebox", activeSessionMachines(t, database)["archive-session"])
+
+	// The user edits the label. Existing rows keep "archivebox" by design.
+	relabeled := newEngine("renamedbox")
+	t.Cleanup(relabeled.Close)
+	require.False(t, relabeled.SyncAll(context.Background(), nil).Aborted)
+	assert.Equal(t, "archivebox", activeSessionMachines(t, database)["archive-session"],
+		"an edited label must not rewrite an already-ingested session")
+
+	// Now delete the source and reconcile under the new label.
+	require.NoError(t, os.Remove(archivePath))
+	require.NoError(t, relabeled.ReconcileWatchRootsAfterLostEvents(
+		context.Background(), []string{archiveRoot}, false,
+	))
+
+	assert.NotContains(t, activeSessionMachines(t, database), "archive-session",
+		"a removed source must be tombstoned even though its stored label "+
+			"no longer matches the configured one")
+}
+
+// activeSessionMachines returns the stored machine of every active session,
+// keyed by session ID.
+func activeSessionMachines(t *testing.T, database *db.DB) map[string]string {
+	t.Helper()
+	page, err := database.ListSessions(context.Background(), db.SessionFilter{
+		Limit: 100,
+	})
+	require.NoError(t, err)
+	out := make(map[string]string, len(page.Sessions))
+	for _, session := range page.Sessions {
+		out[session.ID] = session.Machine
+	}
+	return out
+}

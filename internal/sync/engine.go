@@ -646,10 +646,10 @@ func (e *Engine) machineForProviderSource(
 // under, so a root that has since been relabeled still needs its older machine
 // queried or its deletions would never be discovered.
 func (e *Engine) reconciliationOwnershipMachines(
-	agent parser.AgentType, roots []string,
+	agent parser.AgentType, roots []string, archiveMachines []string,
 ) []string {
-	seen := make(map[string]bool, len(roots)+1)
-	machines := make([]string, 0, len(roots)+1)
+	seen := make(map[string]bool, len(roots)+len(archiveMachines)+1)
+	machines := make([]string, 0, len(roots)+len(archiveMachines)+1)
 	add := func(machine string) {
 		if machine == "" || seen[machine] {
 			return
@@ -679,6 +679,13 @@ func (e *Engine) reconciliationOwnershipMachines(
 	// Unlabeled roots, and rows admitted before a label existed, are stored
 	// under the local machine, so it always stays in the query set.
 	add(e.machine)
+	// A label the user has since edited away is still stored on the rows it
+	// admitted, and is no longer derivable from configuration. The archive's
+	// own machine list is small and closes that gap; each entry still queries
+	// through the (machine, agent, file_path) ownership index.
+	for _, machine := range archiveMachines {
+		add(machine)
+	}
 	return machines
 }
 
@@ -1370,11 +1377,16 @@ func (e *Engine) expandOmnigentInheritedMetadataSources(
 	}
 	agent := provider.Definition().Type
 	seenSources := make(map[string]struct{}, len(sources))
-	parentIDs := make([]string, 0, len(sources))
 	seenParents := make(map[string]struct{}, len(sources))
+	// A descendant is stored under the machine its parent was admitted under,
+	// which is not necessarily the local one, so group the lookup by each
+	// parent's stored attribution instead of assuming e.machine.
+	parentsByMachine := make(map[string][]string, 1)
+	machineOrder := make([]string, 0, 1)
 	for _, source := range sources {
-		if path := providerDiscoveredPath(source); path != "" {
-			seenSources[path] = struct{}{}
+		sourcePath := providerDiscoveredPath(source)
+		if sourcePath != "" {
+			seenSources[sourcePath] = struct{}{}
 		}
 		rawID, found := parser.OmnigentMemberSessionID(source)
 		if !found {
@@ -1385,16 +1397,28 @@ func (e *Engine) expandOmnigentInheritedMetadataSources(
 			continue
 		}
 		seenParents[parentID] = struct{}{}
-		parentIDs = append(parentIDs, parentID)
+		machine := e.machineForProviderSource(agent, source, sourcePath)
+		if session, err := e.db.GetSession(ctx, parentID); err == nil &&
+			session != nil && session.Machine != "" {
+			machine = session.Machine
+		}
+		if _, exists := parentsByMachine[machine]; !exists {
+			machineOrder = append(machineOrder, machine)
+		}
+		parentsByMachine[machine] = append(parentsByMachine[machine], parentID)
 	}
-	if len(parentIDs) == 0 {
+	if len(machineOrder) == 0 {
 		return sources, nil
 	}
-	paths, err := e.db.ListActiveDescendantSessionSourcePaths(
-		ctx, e.machine, string(agent), parentIDs,
-	)
-	if err != nil {
-		return nil, err
+	var paths []string
+	for _, machine := range machineOrder {
+		machinePaths, err := e.db.ListActiveDescendantSessionSourcePaths(
+			ctx, machine, string(agent), parentsByMachine[machine],
+		)
+		if err != nil {
+			return nil, err
+		}
+		paths = append(paths, machinePaths...)
 	}
 	for _, path := range paths {
 		if _, exists := seenSources[path]; exists {
@@ -4767,6 +4791,12 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 		}
 		scopesByAgent[scope.agent] = append(scopesByAgent[scope.agent], scope)
 	}
+	// Read once per pass, not per scope: the list is bounded by how many
+	// machines the archive holds, which is independent of its session count.
+	archiveMachines, err := e.db.GetMachines(ctx, false, false)
+	if err != nil {
+		return 0, fmt.Errorf("list archive machines for watch reconciliation: %w", err)
+	}
 	for _, agent := range agents {
 		agentScopes := scopesByAgent[agent]
 		var provider parser.Provider
@@ -4787,7 +4817,9 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 			// A scope proves absence for its own roots, but a stored row carries
 			// the machine it was admitted under. Query every machine those roots
 			// can hold so a relabeled root still reconciles its older rows.
-			ownershipMachines := e.reconciliationOwnershipMachines(agent, scope.roots)
+			ownershipMachines := e.reconciliationOwnershipMachines(
+				agent, scope.roots, archiveMachines,
+			)
 			if len(ownershipMachines) == 0 {
 				continue
 			}
@@ -7242,7 +7274,7 @@ func (e *Engine) collectAndBatch(
 					continue
 				}
 				changed, err := e.tombstoneSessionSourceOwnership(
-					ctx, e.machine, string(r.agent),
+					ctx, member.machine, string(r.agent),
 					member.sessionID, member.filePath,
 				)
 				if err != nil {
@@ -13885,7 +13917,7 @@ func (e *Engine) SyncSingleSessionContext(
 				continue
 			}
 			if _, err := e.tombstoneSessionSourceOwnership(
-				ctx, e.machine, string(file.Agent),
+				ctx, member.machine, string(file.Agent),
 				member.sessionID, member.filePath,
 			); err != nil {
 				return fmt.Errorf(

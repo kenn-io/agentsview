@@ -2291,3 +2291,50 @@ func TestValidateArtifactOriginID(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadFileSessionSourceExpandsHomeRelativeDir(t *testing.T) {
+	f := newConfigFixture(t)
+	f.WriteConfigText(t, `
+[[session_sources]]
+agent = "copilot"
+dir = "~/sessions/archive"
+machine = "archivebox"
+`)
+
+	cfg := f.LoadMinimal(t)
+
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	want := filepath.Join(home, "sessions", "archive")
+
+	require.Len(t, cfg.SessionSources, 1)
+	assert.Equal(t, want, cfg.SessionSources[0].Dir,
+		"a structured root must be expanded or it is never scanned")
+	assert.Contains(t, cfg.ResolveDirs(parser.AgentCopilot), want)
+	assert.Equal(t, "archivebox", cfg.SourceMachines[parser.AgentCopilot][want])
+	assert.NotContains(t, cfg.ResolveDirs(parser.AgentCopilot), "~/sessions/archive")
+}
+
+func TestLoadFileSessionSourceHomeRelativeDirDeduplicatesExpandedLegacyRoot(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	want := filepath.Join(home, "sessions", "archive")
+
+	f := newConfigFixture(t)
+	f.WriteConfigText(t, `
+copilot_dirs = ["~/sessions/archive"]
+
+[[session_sources]]
+agent = "copilot"
+dir = "~/sessions/archive"
+machine = "archivebox"
+`)
+
+	cfg := f.LoadMinimal(t)
+
+	dirs := cfg.ResolveDirs(parser.AgentCopilot)
+	assert.Equal(t, []string{want}, dirs,
+		"the structured root must collapse onto the equivalent legacy root")
+	assert.Equal(t, "archivebox", cfg.SourceMachines[parser.AgentCopilot][want],
+		"the structured entry must relabel the root it deduplicates onto")
+}
