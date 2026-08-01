@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -33,10 +32,6 @@ type GeminiAppsExportParser interface {
 	) (GeminiAppsParseSummary, error)
 }
 
-type geminiAppsCell struct {
-	tokens []html.Token
-}
-
 type geminiAppsZone struct {
 	name   string
 	tokens []html.Token
@@ -66,36 +61,58 @@ func (p *geminiAppsImportOnlyProvider) ParseGeminiAppsExport(
 	admitted := false
 	emitted := 0
 	for _, path := range paths {
-		data, err := os.ReadFile(path)
+		file, err := os.Open(path)
 		if err != nil {
 			return summary, fmt.Errorf("reading Takeout HTML: %w", err)
 		}
 
-		cells, title, err := scanGeminiAppsHTML(data)
+		title, err := geminiAppsDocumentTitle(file)
 		if err != nil {
+			_ = file.Close()
 			return summary, fmt.Errorf("scanning Takeout HTML: %w", err)
 		}
-		if !geminiAppsDocumentAdmitted(title, cells) {
+		if err := file.Close(); err != nil {
+			return summary, fmt.Errorf("closing Takeout HTML: %w", err)
+		}
+		if !geminiAppsTitleAdmitted(title) {
 			continue
 		}
-		admitted = true
-		for _, cell := range cells {
-			kind := geminiAppsRecordKind(cell.tokens)
+
+		file, err = os.Open(path)
+		if err != nil {
+			return summary, fmt.Errorf("reading Takeout HTML: %w", err)
+		}
+		fileAdmitted := false
+		scanErr := scanGeminiAppsHTML(file, func(tokens []html.Token) error {
+			if geminiAppsHeaderProductTitle(tokens) == "" {
+				return nil
+			}
+			fileAdmitted = true
+			kind := geminiAppsRecordKind(tokens)
 			if kind != "prompted" {
 				summary.Skipped++
-				continue
+				return nil
 			}
 
-			result, err := parseGeminiAppsCell(cell.tokens)
+			result, err := parseGeminiAppsCell(tokens)
 			if err != nil {
 				summary.Errors++
-				continue
+				return nil
 			}
 			if err := onConversation(result); err != nil {
-				return summary, err
+				return err
 			}
 			emitted++
+			return nil
+		})
+		closeErr := file.Close()
+		if scanErr != nil {
+			return summary, fmt.Errorf("scanning Takeout HTML: %w", scanErr)
 		}
+		if closeErr != nil {
+			return summary, fmt.Errorf("closing Takeout HTML: %w", closeErr)
+		}
+		admitted = admitted || fileAdmitted
 	}
 
 	if !admitted {
@@ -143,34 +160,70 @@ func geminiAppsHTMLPaths(root string) ([]string, error) {
 	return paths, nil
 }
 
-func scanGeminiAppsHTML(data []byte) ([]geminiAppsCell, string, error) {
-	tok := html.NewTokenizer(bytes.NewReader(data))
-	var (
-		title      strings.Builder
-		cells      []geminiAppsCell
-		cell       []html.Token
-		depth      int
-		cellDepth  int
-		inCell     bool
-		titleDepth int
-	)
-
+func geminiAppsDocumentTitle(r io.Reader) (string, error) {
+	tok := html.NewTokenizer(r)
+	var title strings.Builder
+	depth := 0
+	titleDepth := 0
 	for {
 		tokenType := tok.Next()
 		switch tokenType {
 		case html.ErrorToken:
 			if err := tok.Err(); err != io.EOF {
-				return nil, "", err
+				return "", err
 			}
-			if inCell && len(cell) > 0 {
-				cells = append(cells, geminiAppsCell{tokens: cell})
-			}
-			return cells, title.String(), nil
+			return title.String(), nil
 		case html.StartTagToken, html.SelfClosingTagToken:
 			t := tok.Token()
-			if strings.EqualFold(t.Data, "title") && tokenType == html.StartTagToken {
+			if tokenType == html.StartTagToken && strings.EqualFold(t.Data, "title") {
 				titleDepth = depth + 1
 			}
+			if tokenType == html.StartTagToken && !isGeminiAppsVoidElement(t.Data) {
+				depth++
+			}
+		case html.EndTagToken:
+			t := tok.Token()
+			if titleDepth > 0 && depth == titleDepth && strings.EqualFold(t.Data, "title") {
+				titleDepth = 0
+			}
+			if depth > 0 {
+				depth--
+			}
+		case html.TextToken:
+			if titleDepth > 0 {
+				title.Write(tok.Text())
+			}
+		}
+	}
+}
+
+func scanGeminiAppsHTML(r io.Reader, onCell func([]html.Token) error) error {
+	tok := html.NewTokenizer(r)
+	var (
+		cell      []html.Token
+		depth     int
+		cellDepth int
+		inCell    bool
+	)
+	flush := func() error {
+		if !inCell || len(cell) == 0 {
+			return nil
+		}
+		tokens := cell
+		cell = nil
+		inCell = false
+		return onCell(tokens)
+	}
+	for {
+		tokenType := tok.Next()
+		switch tokenType {
+		case html.ErrorToken:
+			if err := tok.Err(); err != io.EOF {
+				return err
+			}
+			return flush()
+		case html.StartTagToken, html.SelfClosingTagToken:
+			t := tok.Token()
 			if !inCell && hasHTMLClass(t, "outer-cell") {
 				inCell = true
 				cellDepth = depth + 1
@@ -179,7 +232,7 @@ func scanGeminiAppsHTML(data []byte) ([]geminiAppsCell, string, error) {
 			if inCell {
 				cell = append(cell, t)
 			}
-			if tokenType == html.StartTagToken {
+			if tokenType == html.StartTagToken && !isGeminiAppsVoidElement(t.Data) {
 				depth++
 			}
 		case html.EndTagToken:
@@ -187,26 +240,15 @@ func scanGeminiAppsHTML(data []byte) ([]geminiAppsCell, string, error) {
 			if inCell {
 				cell = append(cell, t)
 				if depth == cellDepth && strings.EqualFold(t.Data, "div") {
-					cells = append(cells, geminiAppsCell{tokens: cell})
-					cell = nil
-					inCell = false
+					if err := flush(); err != nil {
+						return err
+					}
 				}
-			}
-			if titleDepth > 0 && depth == titleDepth && strings.EqualFold(t.Data, "title") {
-				titleDepth = 0
 			}
 			if depth > 0 {
 				depth--
 			}
-		case html.TextToken:
-			text := string(tok.Text())
-			if titleDepth > 0 {
-				title.WriteString(text)
-			}
-			if inCell {
-				cell = append(cell, html.Token{Type: html.TextToken, Data: text})
-			}
-		case html.CommentToken:
+		case html.TextToken, html.CommentToken:
 			if inCell {
 				cell = append(cell, tok.Token())
 			}
@@ -220,19 +262,13 @@ func geminiAppsTitleAdmitted(title string) bool {
 		strings.Contains(normalized, "gemini apps")
 }
 
-func geminiAppsDocumentAdmitted(
-	documentTitle string,
-	cells []geminiAppsCell,
-) bool {
-	if !geminiAppsTitleAdmitted(documentTitle) {
+func isGeminiAppsVoidElement(tag string) bool {
+	switch strings.ToLower(tag) {
+	case "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr":
+		return true
+	default:
 		return false
 	}
-	for _, cell := range cells {
-		if geminiAppsHeaderProductTitle(cell.tokens) != "" {
-			return true
-		}
-	}
-	return false
 }
 
 func geminiAppsHeaderProductTitle(tokens []html.Token) string {
@@ -251,7 +287,7 @@ func geminiAppsHeaderProductTitle(tokens []html.Token) string {
 					depth = 1
 					continue
 				}
-				if depth > 0 {
+				if depth > 0 && !isGeminiAppsVoidElement(token.Data) {
 					depth++
 				}
 			case html.EndTagToken:
@@ -351,7 +387,9 @@ func geminiAppsZones(tokens []html.Token) []geminiAppsZone {
 					tokens []html.Token
 				}{name: name, depth: depth + 1, tokens: []html.Token{token}})
 			}
-			depth++
+			if !isGeminiAppsVoidElement(token.Data) {
+				depth++
+			}
 		case html.SelfClosingTagToken, html.TextToken, html.CommentToken:
 			for i := range active {
 				active[i].tokens = append(active[i].tokens, token)
@@ -405,7 +443,9 @@ func parseGeminiAppsCell(tokens []html.Token) (ParseResult, error) {
 		}
 	}
 	if len(contentZones) == 0 {
-		contentZones = [][]html.Token{tokens}
+		return ParseResult{}, fmt.Errorf(
+			"Prompted activity record has no content cell",
+		)
 	}
 	prompt, response := geminiAppsPromptAndResponse(contentZones)
 	if strings.TrimSpace(prompt) == "" {
@@ -508,7 +548,12 @@ func splitGeminiAppsBlocks(tokens []html.Token) []string {
 			}
 			if blockDepth > 0 {
 				block = append(block, token)
-				blockDepth++
+				if !isGeminiAppsVoidElement(token.Data) {
+					blockDepth++
+				}
+				if isGeminiAppsVoidElement(token.Data) {
+					flush()
+				}
 			}
 			continue
 		}
@@ -588,15 +633,17 @@ func geminiAppsZoneOffset(zone string) (int, bool) {
 		if len(parts) != 2 {
 			return 0, false
 		}
-		hours, errHour := strconv.Atoi(parts[0])
+		hourPart := parts[0]
+		sign := 1
+		if strings.HasPrefix(hourPart, "-") {
+			sign = -1
+		}
+		hourDigits := strings.TrimPrefix(hourPart, "+")
+		hourDigits = strings.TrimPrefix(hourDigits, "-")
+		hours, errHour := strconv.Atoi(hourDigits)
 		minutes, errMinute := strconv.Atoi(parts[1])
 		if errHour != nil || errMinute != nil || minutes < 0 || minutes > 59 {
 			return 0, false
-		}
-		sign := 1
-		if hours < 0 {
-			sign = -1
-			hours = -hours
 		}
 		if hours > 23 {
 			return 0, false
@@ -684,7 +731,8 @@ func renderGeminiAppsEnd(out *strings.Builder, tag string) {
 func sanitizeGeminiAppsText(value string) string {
 	var out strings.Builder
 	for _, r := range value {
-		if r == '\x00' || r == '\x1b' || (r < 0x20 && r != '\n' && r != '\r' && r != '\t') {
+		if r == '\x00' || r == '\x1b' || (r < 0x20 && r != '\n' && r != '\r' && r != '\t') ||
+			r == 0x7f || (r >= 0x80 && r <= 0x9f) {
 			continue
 		}
 		out.WriteRune(r)

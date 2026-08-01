@@ -13,8 +13,8 @@ import (
 const sanitizedGeminiAppsHTML = `<!doctype html>
 <html><head><title>My Activity History</title></head><body>
 <div class="outer-cell mdl-cell">
-  <div class="header-cell mdl-cell"><h3>Gemini Apps</h3><p>Prompted</p><p>Jan 2, 2025, 3:04:05 PM EDT</p></div>
-  <div class="content-cell mdl-cell"><p>first prompt</p><p><strong>first</strong> answer &amp; detail</p><script>secret script</script><style>secret style</style><template>secret template</template><noscript>secret noscript</noscript></div>
+  <div class="header-cell mdl-cell"><h3>Gemini Apps</h3><p>Prompted<br></p><p>Jan 2, 2025, 3:04:05 PM EDT</p></div>
+  <div class="content-cell mdl-cell"><p>first prompt<br></p><p><strong>first</strong> answer &amp; detail</p><script>secret script</script><style>secret style</style><template>secret template</template><noscript>secret noscript</noscript></div>
 </div>
 <div class="outer-cell mdl-cell">
   <div class="header-cell mdl-cell"><h3>Gemini Apps</h3><p>Canvas</p><p>Jan 3, 2025, 3:04:05 PM PST</p></div>
@@ -25,7 +25,7 @@ const sanitizedGeminiAppsHTML = `<!doctype html>
   <div class="content-cell mdl-cell"><p>feedback content</p></div>
 </div>
 <div class="outer-cell mdl-cell">
-  <div class="header-cell mdl-cell"><h3>Gemini Apps</h3><p>Prompted</p><p>Jan 5, 2025, 3:04:05 PM PST</p></div>
+  <div class="header-cell mdl-cell"><h3>Gemini Apps</h3><p>Prompted<br></p><p>Jan 5, 2025, 3:04:05 PM PST</p></div>
   <div class="content-cell mdl-cell"><p>second prompt</p><p>second answer</p></div>
 </div>
 <div class="outer-cell mdl-cell">
@@ -115,6 +115,7 @@ func TestParseGeminiAppsTimestampUsesExplicitZones(t *testing.T) {
 		{"edt", "Jan 2, 2025, 3:04:05 PM EDT", "2025-01-02T19:04:05Z"},
 		{"pst", "Jan 2, 2025, 3:04:05 PM PST", "2025-01-02T23:04:05Z"},
 		{"numeric", "Jan 2, 2025, 3:04:05 PM GMT+05:30", "2025-01-02T09:34:05Z"},
+		{"negative-zero", "Jan 2, 2025, 3:04:05 PM GMT-00:30", "2025-01-02T15:34:05Z"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -132,6 +133,52 @@ func TestParseGeminiAppsTimestampUsesExplicitZones(t *testing.T) {
 	require.Len(t, match, 2)
 	_, err := parseGeminiAppsTimestamp(match[0], match[1])
 	assert.ErrorContains(t, err, "unsupported")
+}
+
+func TestParseGeminiAppsMissingContentCellIsCountedError(t *testing.T) {
+	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
+	require.True(t, ok)
+	exporter := provider.(GeminiAppsExportParser)
+	withoutContent := strings.Replace(
+		sanitizedGeminiAppsHTML,
+		`  <div class="content-cell mdl-cell"><p>first prompt<br></p><p><strong>first</strong> answer &amp; detail</p><script>secret script</script><style>secret style</style><template>secret template</template><noscript>secret noscript</noscript></div>
+`,
+		"",
+		1,
+	)
+	path := filepath.Join(t.TempDir(), "missing-content.html")
+	require.NoError(t, os.WriteFile(path, []byte(withoutContent), 0o644))
+	var results []ParseResult
+	summary, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
+		results = append(results, result)
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Equal(t, 3, summary.Skipped)
+	assert.Equal(t, 1, summary.Errors)
+}
+
+func TestParseGeminiAppsTextDropsC0DELAndC1Controls(t *testing.T) {
+	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
+	require.True(t, ok)
+	exporter := provider.(GeminiAppsExportParser)
+	fixture := strings.Replace(
+		sanitizedGeminiAppsHTML,
+		"first answer",
+		"first\x7f\u0085\u009b answer",
+		1,
+	)
+	path := filepath.Join(t.TempDir(), "controls.html")
+	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
+	var results []ParseResult
+	_, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
+		results = append(results, result)
+		return nil
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, "**first** answer & detail", results[0].Messages[1].Content)
 }
 
 func TestParseGeminiAppsZeroRecordsAndUnknownLabel(t *testing.T) {

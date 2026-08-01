@@ -48,27 +48,12 @@ func runImport(cfg ImportConfig) {
 		defer cleanup()
 	}
 
-	var stats importer.ImportStats
-
-	switch cfg.Type {
-	case "claude-ai":
-		stats, err = runClaudeAIImport(
-			ctx, database, dir, appCfg.LocalMachineName,
-		)
-	case "chatgpt":
-		assetsDir := filepath.Join(appCfg.DataDir, "assets")
-		stats, err = runChatGPTImport(
-			ctx, database, dir, assetsDir, appCfg.LocalMachineName,
-		)
-	case "gemini-apps":
-		stats, err = runGeminiAppsImport(
-			ctx, database, dir, appCfg.LocalMachineName,
-		)
-	default:
-		log.Fatalf(
-			"Unknown import type: %s (use claude-ai, chatgpt, or gemini-apps)",
-			cfg.Type,
-		)
+	assetsDir := filepath.Join(appCfg.DataDir, "assets")
+	stats, err := runImportDispatch(
+		ctx, database, cfg.Type, dir, assetsDir, appCfg.LocalMachineName,
+	)
+	if err != nil && strings.HasPrefix(err.Error(), "unknown import type:") {
+		log.Fatalf("%v", err)
 	}
 
 	if err != nil {
@@ -80,6 +65,26 @@ func runImport(cfg ImportConfig) {
 
 	if stats.Errors > 0 {
 		os.Exit(1)
+	}
+}
+
+func runImportDispatch(
+	ctx context.Context,
+	database *db.DB,
+	importType, path, assetsDir, machine string,
+) (importer.ImportStats, error) {
+	switch importType {
+	case "claude-ai":
+		return runClaudeAIImport(ctx, database, path, machine)
+	case "chatgpt":
+		return runChatGPTImport(ctx, database, path, assetsDir, machine)
+	case "gemini-apps":
+		return runGeminiAppsImport(ctx, database, path, machine)
+	default:
+		return importer.ImportStats{}, fmt.Errorf(
+			"unknown import type: %s (use claude-ai, chatgpt, or gemini-apps)",
+			importType,
+		)
 	}
 }
 
