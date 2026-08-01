@@ -968,6 +968,129 @@ describe("UsageStore session filter params", () => {
     expect(usage.summary).not.toBeNull();
   });
 
+  it("recovers a stale persisted opaque branch selection", async () => {
+    const staleBranch = "pl1:sha256:stale\u001fmain";
+    const storage = installStorage({
+      "usage-filters": JSON.stringify({
+        selectedGitBranch: staleBranch,
+      }),
+    });
+    usageServiceMocks.getApiV1UsageSummary
+      .mockRejectedValueOnce(
+        new apiRuntimeMocks.ApiError(
+          400,
+          "unknown project key",
+          "unknown_project_key",
+        ),
+      )
+      .mockResolvedValueOnce(usageSummary());
+    const { usage } = await loadStore();
+
+    await usage.fetchAll();
+
+    expect(usage.selectedGitBranch).toBe("main");
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(2);
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ gitBranch: staleBranch }),
+    );
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ gitBranch: "main" }),
+    );
+    expect(usageServiceMocks.getApiV1UsageTopSessions).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(
+      storage.getItem("usage-filters") ?? "{}",
+    ).selectedGitBranch).toBe("main");
+    expect(usage.summary).not.toBeNull();
+  });
+
+  it("recovers a stale opaque URL branch during a cached refetch", async () => {
+    const staleBranch = "pl1:sha256:stale\u001fmain";
+    const { usage } = await loadStore();
+    await usage.fetchSummary({ loadComparison: false });
+    const summaryCalls = usageServiceMocks.getApiV1UsageSummary.mock.calls.length;
+    usage.selectedGitBranch = staleBranch;
+    usageServiceMocks.getApiV1UsageSummary
+      .mockRejectedValueOnce(
+        new apiRuntimeMocks.ApiError(
+          400,
+          "unknown project key",
+          "unknown_project_key",
+        ),
+      )
+      .mockResolvedValueOnce(usageSummary(2));
+
+    await usage.fetchAll();
+
+    expect(usage.selectedGitBranch).toBe("main");
+    expect(usage.summary?.totals.totalCost).toEqual(testMoney(2));
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(
+      summaryCalls + 2,
+    );
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenLastCalledWith(
+      expect.objectContaining({ gitBranch: "main" }),
+    );
+  });
+
+  it("preserves a valid qualified branch while clearing a stale project key", async () => {
+    const validBranch = "pl1:sha256:valid\u001fmain";
+    usageServiceMocks.getApiV1UsageSummary
+      .mockRejectedValueOnce(
+        new apiRuntimeMocks.ApiError(
+          400,
+          "unknown project key",
+          "unknown_project_key",
+        ),
+      )
+      .mockResolvedValueOnce(usageSummary());
+    const { usage } = await loadStore();
+    usage.excludedProjectKeys = "pl1:sha256:stale";
+    usage.selectedGitBranch = validBranch;
+
+    await usage.fetchAll();
+
+    expect(usage.excludedProjectKeys).toBe("");
+    expect(usage.selectedGitBranch).toBe(validBranch);
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(2);
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenLastCalledWith(
+      expect.objectContaining({ gitBranch: validBranch }),
+    );
+  });
+
+  it("falls back after both project and branch keys prove stale", async () => {
+    const staleBranch = "pl1:sha256:stale-branch\u001fmain";
+    usageServiceMocks.getApiV1UsageSummary
+      .mockRejectedValueOnce(
+        new apiRuntimeMocks.ApiError(
+          400,
+          "unknown project key",
+          "unknown_project_key",
+        ),
+      )
+      .mockRejectedValueOnce(
+        new apiRuntimeMocks.ApiError(
+          400,
+          "unknown project key",
+          "unknown_project_key",
+        ),
+      )
+      .mockResolvedValueOnce(usageSummary());
+    const { usage } = await loadStore();
+    usage.excludedProjectKeys = "pl1:sha256:stale-project";
+    usage.selectedGitBranch = staleBranch;
+
+    await usage.fetchAll();
+
+    expect(usage.excludedProjectKeys).toBe("");
+    expect(usage.selectedGitBranch).toBe("main");
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(3);
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenLastCalledWith(
+      expect.objectContaining({ gitBranch: "main" }),
+    );
+    expect(usage.summary).not.toBeNull();
+  });
+
   it("passes the branch selection to usage endpoints", async () => {
     const { usage } = await loadStore();
 

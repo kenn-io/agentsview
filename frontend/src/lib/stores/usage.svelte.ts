@@ -25,6 +25,7 @@ import {
   NO_BRANCH_MATCH_TOKEN,
   branchFilterValuesEqual,
   intersectBranchFilterValues,
+  portableBranchFilterValues,
   scopeBranchFilterValues,
 } from "../branchFilters.js";
 import { toggleListValue } from "../utils/lists.js";
@@ -826,18 +827,34 @@ class UsageStore {
         return null;
       }
       status = "error";
+      const portableGitBranch = portableBranchFilterValues(
+        this.selectedGitBranch
+          ? this.selectedGitBranch.split(BRANCH_LIST_SEP)
+          : [],
+      ).join(BRANCH_LIST_SEP);
+      const hasExcludedProjectKeys = this.excludedProjectKeys !== "";
+      const hasOpaqueBranchKeys =
+        portableGitBranch !== this.selectedGitBranch;
       if (
         recoverProjectScope &&
         this.versions.summary === v &&
-        this.excludedProjectKeys !== "" &&
+        (hasExcludedProjectKeys || hasOpaqueBranchKeys) &&
         isUnknownProjectKeyError(e)
       ) {
+        // The API intentionally does not reveal which opaque key failed.
+        // Preserve branch precision by clearing excluded project keys first;
+        // downgrade branch keys only if a retry proves they are stale too.
         this.excludedProjectKeys = "";
+        if (!hasExcludedProjectKeys) {
+          this.selectedGitBranch = portableGitBranch;
+        }
+        saveUsageFilters(this);
         this.abortPanel("topSessions");
         const loaded = await this.fetchSummary({
           loadComparison,
           params: this.baseParams(),
-          recoverProjectScope: false,
+          recoverProjectScope:
+            hasExcludedProjectKeys && hasOpaqueBranchKeys,
         });
         return loaded === null
           ? null

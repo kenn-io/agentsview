@@ -56,6 +56,20 @@ describe("branch filter compatibility", () => {
     ]);
   });
 
+  it("intersects a plain branch with every matching qualified branch", () => {
+    const first = branchFilterToken("proj-a", "main");
+    const second = branchFilterToken("proj-b", "main");
+
+    expect(intersectBranchFilterValues(["main"], [first, second])).toEqual([
+      first,
+      second,
+    ]);
+    expect(intersectBranchFilterValues([first, second], ["main"])).toEqual([
+      first,
+      second,
+    ]);
+  });
+
   it("preserves existing legacy values while adding plain picker values", () => {
     expect(reconcileBranchFilterValues(
       [
@@ -64,6 +78,20 @@ describe("branch filter compatibility", () => {
       ],
       ["main", "feature"],
     )).toEqual([branchFilterToken("proj-a", "main"), "feature"]);
+  });
+
+  it("reconciles every qualified value selected by one plain branch", () => {
+    const first = branchFilterToken("proj-a", "main");
+    const second = branchFilterToken("proj-b", "main");
+
+    expect(reconcileBranchFilterValues(
+      [first, second],
+      ["main"],
+    )).toEqual([first, second]);
+    expect(reconcileBranchFilterValues(
+      [second, first],
+      ["main"],
+    )).toEqual([second, first]);
   });
 
   it("uses sentinel values that cannot collide with legal Git branch names", () => {

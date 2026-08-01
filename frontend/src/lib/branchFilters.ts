@@ -63,20 +63,35 @@ export function branchPickerValues(values: string[]): string[] {
   return [...new Set(values.map(branchFilterValue))];
 }
 
+export function portableBranchFilterValues(values: string[]): string[] {
+  return [...new Set(values.map((value) => {
+    const { project } = splitBranchFilterToken(value);
+    return project.startsWith(OPAQUE_PROJECT_KEY_PREFIX)
+      ? branchFilterValue(value)
+      : value;
+  }))];
+}
+
 export function reconcileBranchFilterValues(
   current: string[],
   pickerValues: string[],
 ): string[] {
-  const remaining = new Set(pickerValues.map(branchFilterValue));
+  const selected = new Set(pickerValues.map(branchFilterValue));
   const next: string[] = [];
+  const seen = new Set<string>();
+  const represented = new Set<string>();
   for (const value of current) {
     const name = branchFilterValue(value);
-    if (!remaining.delete(name)) continue;
+    if (!selected.has(name) || seen.has(value)) continue;
+    seen.add(value);
+    represented.add(name);
     next.push(value);
   }
   for (const value of pickerValues) {
     const name = branchFilterValue(value);
-    if (!remaining.delete(name)) continue;
+    if (represented.has(name) || seen.has(name)) continue;
+    seen.add(name);
+    represented.add(name);
     next.push(name);
   }
   return next;
@@ -110,7 +125,6 @@ export function intersectBranchFilterValues(
         seen.add(value);
         result.push(value);
       }
-      break;
     }
   }
   return result;
