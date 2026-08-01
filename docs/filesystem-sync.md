@@ -1,6 +1,7 @@
-______________________________________________________________________
-
-## title: Filesystem Session Sync description: View sessions from multiple machines by transporting native agent session directories to one AgentsView instance
+---
+title: Filesystem Session Sync
+description: View sessions from multiple machines by transporting native agent session directories to one AgentsView instance
+---
 
 AgentsView can label filesystem session roots with the machine that produced
 them. This supports a simple multi-machine topology without PostgreSQL:
