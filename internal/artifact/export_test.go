@@ -1073,6 +1073,7 @@ func TestLatestValidCheckpointFallsBackPastSemanticCandidateAndDefersFuture(t *t
 }
 
 func TestExportSpoolConstructionJoinsCleanupFailures(t *testing.T) {
+	// Serial: overrides package-level spool filesystem hooks.
 	chmodFailure := errors.New("injected spool setup failure")
 	cleanupFailure := errors.New("injected spool cleanup failure")
 	previousChmod := exportSpoolChmod

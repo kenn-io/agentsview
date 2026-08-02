@@ -515,6 +515,7 @@ func TestDecodeImportCheckpointBoundsTopLevelFieldState(t *testing.T) {
 }
 
 func TestPreflightImportCheckpointVersionBoundsAllocations(t *testing.T) {
+	// Serial: AllocsPerRun measures process-global allocation state.
 	const sessionCount = 1_000
 	var body strings.Builder
 	fmt.Fprintf(&body, `{"origin":%q,"seq":7,"sessions":{`, contractOrigin)
@@ -544,6 +545,7 @@ func TestPreflightImportCheckpointVersionBoundsAllocations(t *testing.T) {
 func TestDecodeImportCheckpointRejectsCurrentExtraFieldBeforeItsValue(
 	t *testing.T,
 ) {
+	// Serial: AllocsPerRun measures process-global allocation state.
 	var body strings.Builder
 	body.WriteString(`{"v":1,"extra":{`)
 	for i := range 10_000 {

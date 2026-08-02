@@ -651,6 +651,7 @@ func TestWireCodecStreamsMultiMegabyteArtifactsWithBoundedBuffers(t *testing.T) 
 }
 
 func TestWireCodecAllocatedBytesStayBoundedAsArtifactsGrow(t *testing.T) {
+	// Serial: Benchmark reads process-global allocation statistics.
 	const (
 		smallSize = int64(32 << 10)
 		largeSize = int64(12 << 20)

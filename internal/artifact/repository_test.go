@@ -101,6 +101,7 @@ func TestOpenRepositoryFollowsFinalRootSymlink(t *testing.T) {
 }
 
 func TestOpenRepositoryRetainsAbsoluteCanonicalRoot(t *testing.T) {
+	// Serial: Chdir changes the process-wide working directory.
 	dataDir := t.TempDir()
 	// Chdir to the temp dir's parent so the relative path stays on one
 	// volume; on Windows CI the checkout and temp dirs are on different
