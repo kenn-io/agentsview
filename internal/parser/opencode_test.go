@@ -91,14 +91,36 @@ func assertEq[T comparable](t *testing.T, name string, got, want T) {
 	assert.Equal(t, want, got, name)
 }
 
+type openCodeSeedExecer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
 type OpenCodeSeeder struct {
-	db *sql.DB
-	t  *testing.T
+	db   *sql.DB
+	exec openCodeSeedExecer
+	t    *testing.T
+}
+
+func (s *OpenCodeSeeder) executor() openCodeSeedExecer {
+	if s.exec != nil {
+		return s.exec
+	}
+	return s.db
+}
+
+func (s *OpenCodeSeeder) InTransaction(seed func(*OpenCodeSeeder)) {
+	s.t.Helper()
+	tx, err := s.db.Begin()
+	require.NoError(s.t, err, "begin seed transaction")
+	defer func() { _ = tx.Rollback() }()
+
+	seed(&OpenCodeSeeder{db: s.db, exec: tx, t: s.t})
+	require.NoError(s.t, tx.Commit(), "commit seed transaction")
 }
 
 func (s *OpenCodeSeeder) AddProject(id, worktree string) {
 	s.t.Helper()
-	_, err := s.db.Exec(`INSERT INTO project (id, worktree) VALUES (?, ?)`, id, worktree)
+	_, err := s.executor().Exec(`INSERT INTO project (id, worktree) VALUES (?, ?)`, id, worktree)
 	require.NoError(s.t, err, "add project")
 }
 
@@ -115,7 +137,7 @@ func (s *OpenCodeSeeder) AddSession(id, projectID, parentID, title string, timeC
 
 	// Omit directory so the same helper works on legacy schemas that
 	// lack the column; modern fixtures default directory to ''.
-	_, err := s.db.Exec(
+	_, err := s.executor().Exec(
 		`INSERT INTO session
 			(id, project_id, parent_id, title, time_created, time_updated)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
@@ -138,7 +160,7 @@ func (s *OpenCodeSeeder) AddSessionDirectory(
 		tStr = title
 	}
 
-	_, err := s.db.Exec(
+	_, err := s.executor().Exec(
 		`INSERT INTO session
 			(id, project_id, parent_id, title, directory,
 			 time_created, time_updated)
@@ -150,14 +172,14 @@ func (s *OpenCodeSeeder) AddSessionDirectory(
 
 func (s *OpenCodeSeeder) AddMessage(id, sessionID string, timeCreated, timeUpdated int64, data string) {
 	s.t.Helper()
-	_, err := s.db.Exec(`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`,
+	_, err := s.executor().Exec(`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`,
 		id, sessionID, timeCreated, timeUpdated, data)
 	require.NoError(s.t, err, "add message")
 }
 
 func (s *OpenCodeSeeder) AddPart(id, messageID, sessionID string, timeCreated, timeUpdated int64, data string) {
 	s.t.Helper()
-	_, err := s.db.Exec(`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`,
+	_, err := s.executor().Exec(`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`,
 		id, messageID, sessionID, timeCreated, timeUpdated, data)
 	require.NoError(s.t, err, "add part")
 }

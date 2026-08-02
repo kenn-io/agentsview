@@ -60,7 +60,10 @@ func TestReconcileWatchRootsAiderScansOneLargeContainerOnce(t *testing.T) {
 	repo := filepath.Join(root, "repo")
 	require.NoError(t, os.MkdirAll(repo, 0o755))
 	var history strings.Builder
-	for i := range 600 {
+	// Cross the reconciliation page boundary so the fixture exercises a
+	// multi-page container without paying to archive hundreds of redundant
+	// rows beyond the boundary.
+	for i := range reconciliationPageSize + 1 {
 		history.WriteString("# aider chat started at 2026-06-09 14:01:00\n")
 		history.WriteString("#### prompt ")
 		history.WriteString(strings.Repeat("x", i%17+1))
