@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -161,6 +162,32 @@ func TestParseGeminiAppsEquivalentNumericZonesKeepStableIdentity(t *testing.T) {
 	ids := parseGeminiAppsIDs(t, geminiAppsPromptedDocument(cell("GMT+8")))
 	padded := parseGeminiAppsIDs(t, geminiAppsPromptedDocument(cell("GMT+08:00")))
 	assert.Equal(t, ids["prompt"], padded["prompt"])
+}
+
+func TestRESPEC2HeadGMT8Reproduction(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "activity.html")
+	fixture := geminiAppsSingleCellHTML(
+		"", "My Activity History", "Prompted",
+		"Jan 2, 2025, 3:04:05 PM GMT+8", "<p>prompt</p>",
+	)
+	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
+
+	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
+	require.True(t, ok)
+	exporter := provider.(GeminiAppsExportParser)
+	var result ParseResult
+	_, err := exporter.ParseGeminiAppsExport(path, func(got ParseResult) error {
+		result = got
+		return nil
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Messages, 1)
+
+	sessionTimestamp := result.Session.StartedAt.UTC().Format(time.RFC3339)
+	messageTimestamp := result.Messages[0].Timestamp.UTC().Format(time.RFC3339)
+	t.Logf("session=%s message=%s messages=%d id=%s", sessionTimestamp, messageTimestamp, len(result.Messages), result.Session.ID)
+	assert.Equal(t, "2025-01-02T07:04:05Z", sessionTimestamp)
+	assert.Equal(t, sessionTimestamp, messageTimestamp)
 }
 
 func TestParseGeminiAppsRejectsNotPromptedActivityLabel(t *testing.T) {
@@ -1165,10 +1192,22 @@ func TestParseGeminiAppsTimestampUsesExplicitZones(t *testing.T) {
 	}{
 		{"edt", "Jan 2, 2025, 3:04:05 PM EDT", "2025-01-02T19:04:05Z"},
 		{"pst", "Jan 2, 2025, 3:04:05 PM PST", "2025-01-02T23:04:05Z"},
+		{"utc", "Jan 2, 2025, 3:04:05 PM UTC", "2025-01-02T15:04:05Z"},
+		{"gmt", "Jan 2, 2025, 3:04:05 PM GMT", "2025-01-02T15:04:05Z"},
+		{"est", "Jan 2, 2025, 3:04:05 PM EST", "2025-01-02T20:04:05Z"},
+		{"cst", "Jan 2, 2025, 3:04:05 PM CST", "2025-01-02T21:04:05Z"},
+		{"cdt", "Jan 2, 2025, 3:04:05 PM CDT", "2025-01-02T20:04:05Z"},
+		{"mst", "Jan 2, 2025, 3:04:05 PM MST", "2025-01-02T22:04:05Z"},
+		{"mdt", "Jan 2, 2025, 3:04:05 PM MDT", "2025-01-02T21:04:05Z"},
+		{"pdt", "Jan 2, 2025, 3:04:05 PM PDT", "2025-01-02T22:04:05Z"},
 		{"whole-hour", "Jan 2, 2025, 3:04:05 PM GMT+8", "2025-01-02T07:04:05Z"},
 		{"whole-hour-padded", "Jan 2, 2025, 3:04:05 PM GMT+08:00", "2025-01-02T07:04:05Z"},
+		{"whole-hour-two-digit", "Jan 2, 2025, 3:04:05 PM GMT+08", "2025-01-02T07:04:05Z"},
+		{"whole-hour-lowercase", "Jan 2, 2025, 3:04:05 PM gmt+8", "2025-01-02T07:04:05Z"},
+		{"whole-hour-mixed-case", "Jan 2, 2025, 3:04:05 PM GmT+8", "2025-01-02T07:04:05Z"},
 		{"whole-hour-negative", "Jan 2, 2025, 3:04:05 PM GMT-8", "2025-01-02T23:04:05Z"},
 		{"numeric", "Jan 2, 2025, 3:04:05 PM GMT+05:30", "2025-01-02T09:34:05Z"},
+		{"numeric-max", "Jan 2, 2025, 3:04:05 PM GMT+23:59", "2025-01-01T15:05:05Z"},
 		{"negative-zero", "Jan 2, 2025, 3:04:05 PM GMT-00:30", "2025-01-02T15:34:05Z"},
 	}
 	for _, tt := range tests {
@@ -1182,7 +1221,7 @@ func TestParseGeminiAppsTimestampUsesExplicitZones(t *testing.T) {
 	}
 
 	for _, zone := range []string{
-		"GMT+8:3", "GMT+8junk", "GMT+8:30junk", "GMT+24", "GMT+8:60", "XYZ",
+		"GMT+8:3", "GMT+8junk", "GMT+8:30junk", "GMT+24", "GMT+8:60", "GMT+8,", "XYZ",
 	} {
 		t.Run("reject-"+zone, func(t *testing.T) {
 			match := geminiAppsTimestampRE.FindStringSubmatch(
@@ -1191,6 +1230,7 @@ func TestParseGeminiAppsTimestampUsesExplicitZones(t *testing.T) {
 			require.Len(t, match, 2)
 			_, err := parseGeminiAppsTimestamp(match[0], match[1])
 			assert.ErrorContains(t, err, "unsupported")
+			assert.ErrorContains(t, err, strings.ToUpper(zone))
 		})
 	}
 }
