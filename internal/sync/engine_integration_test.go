@@ -9435,6 +9435,88 @@ func TestResyncAllPreservesInsights(t *testing.T) {
 	assert.Equal(t, "test insight survives resync", insights[0].Content, "insight content = %q, want preserved", insights[0].Content)
 }
 
+func TestResyncAllConsumesCopiedHierarchyRepairs(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "hierarchy repair session").
+		AddClaudeAssistant(tsEarlyS5, "hierarchy repair reply").
+		String()
+	env.writeClaudeSession(t, "test-proj", "hierarchy-repair.jsonl", content)
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+	require.NoError(t, env.db.QueueSubagentParentRepairs(
+		[]string{"queued-relink"},
+	))
+	require.NoError(t, env.db.QueueSubagentParentCleanupRepairs(
+		[]string{"queued-cleanup"},
+	))
+
+	stats := env.engine.ResyncAll(context.Background(), nil)
+
+	require.False(t, stats.Aborted, "resync aborted: %v", stats.Warnings)
+	for _, table := range []string{
+		"subagent_parent_repair_queue",
+		"subagent_parent_cleanup_queue",
+	} {
+		var pending int
+		require.NoError(t, env.db.Reader().QueryRow(
+			"SELECT count(*) FROM "+table,
+		).Scan(&pending))
+		assert.Zero(t, pending, "%s must be consumed before swap", table)
+	}
+}
+
+func TestResyncAllAbortsWhenCopiedHierarchyRepairFails(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "original hierarchy repair session").
+		AddClaudeAssistant(tsEarlyS5, "original hierarchy repair reply").
+		String()
+	env.writeClaudeSession(
+		t, "test-proj", "hierarchy-repair-resync.jsonl", content,
+	)
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+	require.NoError(t, env.db.QueueSubagentParentRepairs(
+		[]string{"queued-hierarchy-repair"},
+	))
+
+	stats, err := env.engine.ResyncAllWithOptions(
+		context.Background(), nil,
+		sync.RebuildOptions{Contributors: []sync.RebuildContributor{{
+			Name: "repair-failure-fixture",
+			Config: sync.EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					parser.AgentClaude: {t.TempDir()},
+				},
+				Machine:   "repair-fixture",
+				IDPrefix:  "repair-fixture~",
+				Ephemeral: true,
+			},
+			AfterSync: func(_ *sync.Engine, tempDB *db.DB) error {
+				return tempDB.Update(func(tx *sql.Tx) error {
+					_, triggerErr := tx.Exec(`
+						CREATE TRIGGER fail_copied_hierarchy_repair
+						BEFORE DELETE ON subagent_parent_repair_queue
+						BEGIN
+							SELECT RAISE(FAIL, 'injected copied hierarchy repair failure');
+						END`)
+					return triggerErr
+				})
+			},
+		}}},
+	)
+
+	require.ErrorContains(t, err, "injected copied hierarchy repair failure")
+	assert.True(t, stats.Aborted)
+	assert.Contains(t, strings.Join(stats.Warnings, "\n"),
+		"hierarchy repair failed, aborting swap")
+	assertSessionMessageCount(t, env.db, "hierarchy-repair-resync", 2)
+	assert.NoFileExists(t, env.db.Path()+"-resync")
+}
+
 func TestResyncAllPreservesModelPricing(t *testing.T) {
 	env := setupTestEnv(t)
 

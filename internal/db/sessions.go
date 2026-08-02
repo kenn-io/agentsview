@@ -1823,7 +1823,7 @@ func linkSubagentSessionsForSessionsQuery(ph string) string {
 	)`
 }
 
-// clearDanglingSubagentParentQuery repairs a captured child whose LAST spawn
+// clearDanglingSubagentParentQuery repairs a captured former child whose LAST spawn
 // edge was removed together with its spawner: both UNION branches of the
 // linking statement select from remaining tool_calls, so an edge-less child
 // can never be re-resolved there, and its parent now points at a session
@@ -1853,8 +1853,11 @@ func clearDanglingSubagentParentQuery(ph string) string {
 // LinkSubagentSessionsForSessions is LinkSubagentSessions scoped to the
 // sessions written by one sync batch: only children reachable from a batch
 // member's spawn edges (or batch members that are themselves children) are
-// re-resolved. Children in ids whose edges are all gone and whose parent no
-// longer exists are un-parented (see clearDanglingSubagentParentQuery).
+// re-resolved. Generic changed-session IDs are deliberately ineligible for
+// dangling-parent cleanup: a parser-derived parent may simply not have been
+// ingested yet. Destructive cleanup is reserved for former children captured
+// before a write that can remove their spawn edges and persisted through
+// QueueSubagentParentCleanupRepairs.
 // Per-event paths — the session watcher re-syncs a single file
 // on every change — must use this form so their linking cost tracks the
 // changed batch; bulk paths (full sync, reconciliation, resync) keep the
@@ -1880,25 +1883,27 @@ func (db *DB) LinkSubagentSessionsForSessions(ids []string) error {
 				len(chunk), err,
 			)
 		}
-		_, err = db.getWriter().Exec(
-			clearDanglingSubagentParentQuery(ph), args...,
-		)
-		if err != nil {
-			return fmt.Errorf(
-				"clearing dangling subagent parents for %d changed "+
-					"sessions: %w",
-				len(chunk), err,
-			)
-		}
 		return nil
 	})
 }
 
-// QueueSubagentParentRepairs durably records sessions whose hierarchy may be
-// changed by an upcoming write. Callers must queue the IDs before deleting or
-// replacing messages because those writes can cascade away the only spawn
-// edge that identifies an affected child.
+// QueueSubagentParentRepairs durably records sessions whose hierarchy must be
+// re-evaluated from surviving spawn edges. These generic seeds are never used
+// for destructive dangling-parent cleanup; callers that captured a former
+// child before removing edges use QueueSubagentParentCleanupRepairs instead.
 func (db *DB) QueueSubagentParentRepairs(ids []string) error {
+	return db.queueSubagentParentRepairs(ids, false)
+}
+
+// QueueSubagentParentCleanupRepairs durably records former children captured
+// before an exclusion or message replacement can remove their spawn edges.
+// Cleanup intent is separate from ordinary relink work so a newly parsed child
+// whose parent has not arrived yet never loses valid parser-derived parentage.
+func (db *DB) QueueSubagentParentCleanupRepairs(ids []string) error {
+	return db.queueSubagentParentRepairs(ids, true)
+}
+
+func (db *DB) queueSubagentParentRepairs(ids []string, cleanup bool) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -1911,19 +1916,38 @@ func (db *DB) QueueSubagentParentRepairs(ids []string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	stmt, err := tx.Prepare(`
+	repairStmt, err := tx.Prepare(`
 		INSERT INTO subagent_parent_repair_queue (session_id) VALUES (?)
 		ON CONFLICT(session_id) DO NOTHING`)
 	if err != nil {
 		return fmt.Errorf("preparing subagent parent repair queue insert: %w", err)
 	}
-	defer stmt.Close()
+	defer repairStmt.Close()
+	var cleanupStmt *sql.Stmt
+	if cleanup {
+		cleanupStmt, err = tx.Prepare(`
+			INSERT INTO subagent_parent_cleanup_queue (session_id) VALUES (?)
+			ON CONFLICT(session_id) DO NOTHING`)
+		if err != nil {
+			return fmt.Errorf(
+				"preparing subagent parent cleanup queue insert: %w", err,
+			)
+		}
+		defer cleanupStmt.Close()
+	}
 	for _, id := range ids {
 		if id == "" {
 			continue
 		}
-		if _, err := stmt.Exec(id); err != nil {
+		if _, err := repairStmt.Exec(id); err != nil {
 			return fmt.Errorf("queueing subagent parent repair for %s: %w", id, err)
+		}
+		if cleanupStmt != nil {
+			if _, err := cleanupStmt.Exec(id); err != nil {
+				return fmt.Errorf(
+					"queueing subagent parent cleanup for %s: %w", id, err,
+				)
+			}
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -1943,6 +1967,7 @@ func (db *DB) RepairQueuedSubagentParents() error {
 	var pending int
 	err := db.getWriter().QueryRow(`
 		SELECT EXISTS(SELECT 1 FROM subagent_parent_repair_queue)
+		    OR EXISTS(SELECT 1 FROM subagent_parent_cleanup_queue)
 		    OR EXISTS(SELECT 1 FROM pg_sync_state WHERE key = ?)`,
 		subagentParentRepairQueueStateKey,
 	).Scan(&pending)
@@ -1963,6 +1988,8 @@ func (db *DB) RepairQueuedSubagentParents() error {
 	for {
 		rows, err := tx.Query(`
 			SELECT session_id FROM subagent_parent_repair_queue
+			UNION
+			SELECT session_id FROM subagent_parent_cleanup_queue
 			ORDER BY session_id LIMIT ?`, maxSQLVars/2)
 		if err != nil {
 			return fmt.Errorf("listing queued subagent parent repairs: %w", err)
@@ -1996,12 +2023,23 @@ func (db *DB) RepairQueuedSubagentParents() error {
 				len(chunk), err,
 			)
 		}
+		cleanupSeeds := `(SELECT session_id
+			FROM subagent_parent_cleanup_queue WHERE session_id IN ` + ph + `)`
 		if _, err := tx.Exec(
-			clearDanglingSubagentParentQuery(ph), args...,
+			clearDanglingSubagentParentQuery(cleanupSeeds), args...,
 		); err != nil {
 			return fmt.Errorf(
 				"clearing queued dangling subagent parents for %d "+
 					"sessions: %w",
+				len(chunk), err,
+			)
+		}
+		if _, err := tx.Exec(
+			"DELETE FROM subagent_parent_cleanup_queue WHERE session_id IN "+ph,
+			args...,
+		); err != nil {
+			return fmt.Errorf(
+				"clearing %d queued subagent parent cleanups: %w",
 				len(chunk), err,
 			)
 		}
@@ -2037,19 +2075,34 @@ func migrateLegacySubagentParentRepairQueueTx(tx *sql.Tx) error {
 	if err := json.Unmarshal([]byte(encoded), &ids); err != nil {
 		return fmt.Errorf("decoding legacy subagent parent repair queue: %w", err)
 	}
-	stmt, err := tx.Prepare(`
+	repairStmt, err := tx.Prepare(`
 		INSERT INTO subagent_parent_repair_queue (session_id) VALUES (?)
 		ON CONFLICT(session_id) DO NOTHING`)
 	if err != nil {
 		return fmt.Errorf("preparing legacy subagent parent repair migration: %w", err)
 	}
-	defer stmt.Close()
+	defer repairStmt.Close()
+	cleanupStmt, err := tx.Prepare(`
+		INSERT INTO subagent_parent_cleanup_queue (session_id) VALUES (?)
+		ON CONFLICT(session_id) DO NOTHING`)
+	if err != nil {
+		return fmt.Errorf("preparing legacy subagent parent cleanup migration: %w", err)
+	}
+	defer cleanupStmt.Close()
 	for _, id := range ids {
 		if id == "" {
 			continue
 		}
-		if _, err := stmt.Exec(id); err != nil {
+		if _, err := repairStmt.Exec(id); err != nil {
 			return fmt.Errorf("migrating legacy subagent parent repair for %s: %w", id, err)
+		}
+		// The JSON queue predates generic post-write and attempted-session
+		// seeds; every legacy ID was captured before a destructive write and
+		// therefore carries cleanup intent.
+		if _, err := cleanupStmt.Exec(id); err != nil {
+			return fmt.Errorf(
+				"migrating legacy subagent parent cleanup for %s: %w", id, err,
+			)
 		}
 	}
 	if _, err := tx.Exec(

@@ -775,8 +775,9 @@ func TestLinkSubagentSessionsForSessionsClearsDanglingParent(t *testing.T) {
 	require.Equal(t, 1, n, "spawner must be deleted")
 
 	// The engine captures the kid as a pre-write child of the deleted
-	// spawner and carries it into the scoped batch.
-	require.NoError(t, d.LinkSubagentSessionsForSessions([]string{"kid"}))
+	// spawner and persists cleanup intent before the destructive write.
+	require.NoError(t, d.QueueSubagentParentCleanupRepairs([]string{"kid"}))
+	require.NoError(t, d.RepairQueuedSubagentParents())
 
 	kid, err := d.GetSession(context.Background(), "kid")
 	requireNoError(t, err, "GetSession kid")
@@ -786,6 +787,39 @@ func TestLinkSubagentSessionsForSessionsClearsDanglingParent(t *testing.T) {
 	assert.Equal(t, "subagent", kid.RelationshipType,
 		"the subagent classification survives so a reappearing edge "+
 			"re-links the child")
+}
+
+// TestLinkSubagentSessionsForSessionsKeepsUnresolvedPathParent proves that a
+// normal changed-session seed is not evidence that its parent was deleted.
+// Providers can ingest a path-derived child before its parent, with no spawn
+// edge yet available; scoped edge linking must preserve that parser claim so
+// the later parent row completes the hierarchy instead of leaving the child
+// permanently un-parented.
+func TestLinkSubagentSessionsForSessionsKeepsUnresolvedPathParent(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "kid", "p", func(s *Session) {
+		s.MessageCount = 1
+		s.ParentSessionID = Ptr("parent-not-ingested-yet")
+		s.RelationshipType = "subagent"
+	})
+
+	require.NoError(t, d.LinkSubagentSessionsForSessions([]string{"kid"}))
+	assert.Equal(t, "parent-not-ingested-yet", parentOfSession(t, d, "kid"),
+		"a generic changed-session seed must preserve parser-derived parentage")
+	require.NoError(t, d.QueueSubagentParentRepairs([]string{"kid"}))
+	require.NoError(t, d.RepairQueuedSubagentParents())
+	assert.Equal(t, "parent-not-ingested-yet", parentOfSession(t, d, "kid"),
+		"a durable generic repair must remain relink-only")
+
+	insertSession(t, d, "parent-not-ingested-yet", "p", func(s *Session) {
+		s.MessageCount = 1
+	})
+	require.NoError(t, d.LinkSubagentSessionsForSessions(
+		[]string{"parent-not-ingested-yet"},
+	))
+	assert.Equal(t, "parent-not-ingested-yet", parentOfSession(t, d, "kid"),
+		"ingesting the parent later must leave the valid path hierarchy intact")
 }
 
 // TestLinkSubagentSessionsForSessionsKeepsParentWhenSpawnerRemains pins the
@@ -902,6 +936,32 @@ func TestRepairQueuedSubagentParentsMigratesLegacyJSONQueue(t *testing.T) {
 		"SELECT count(*) FROM subagent_parent_repair_queue",
 	).Scan(&queued))
 	assert.Zero(t, queued, "successful repair must clear migrated rows")
+}
+
+func TestRepairQueuedSubagentParentsMigratesLegacyCleanupIntent(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "spawner", "p", func(s *Session) {
+		s.MessageCount = 1
+	})
+	insertSession(t, d, "kid", "p", func(s *Session) {
+		s.MessageCount = 1
+		s.ParentSessionID = Ptr("spawner")
+		s.RelationshipType = "subagent"
+	})
+	insertMessages(t, d, spawnEdgeTo("spawner", "kid", "spawn"))
+	require.NoError(t, d.SetSyncState(
+		subagentParentRepairQueueStateKey, `["kid"]`,
+	))
+	_, err := d.DeleteParserExcludedSessions([]string{"spawner"})
+	require.NoError(t, err)
+
+	require.NoError(t, d.RepairQueuedSubagentParents())
+
+	kid, err := d.GetSession(context.Background(), "kid")
+	require.NoError(t, err)
+	require.NotNil(t, kid)
+	assert.Nil(t, kid.ParentSessionID,
+		"the legacy queue contained pre-write children and must retain cleanup intent")
 }
 
 // TestLinkSubagentSessionsForSessionsPlanIsBatchBounded pins the cost shape

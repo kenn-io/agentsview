@@ -1081,6 +1081,13 @@ CREATE TABLE IF NOT EXISTS subagent_parent_repair_queue (
     session_id TEXT PRIMARY KEY
 ) WITHOUT ROWID;
 
+-- Subset of queued hierarchy repairs whose pre-write spawn edge may have been
+-- removed. Only these captured former children are eligible for destructive
+-- dangling-parent cleanup; ordinary changed-session seeds are relink-only.
+CREATE TABLE IF NOT EXISTS subagent_parent_cleanup_queue (
+    session_id TEXT PRIMARY KEY
+) WITHOUT ROWID;
+
 -- Model pricing for cost calculation
 CREATE TABLE IF NOT EXISTS model_pricing (
     model_pattern    TEXT PRIMARY KEY,

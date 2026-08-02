@@ -2343,6 +2343,26 @@ func (e *Engine) resyncBuildLocked(
 		}
 	}
 
+	// CopySyncStateFrom runs after the fresh archive's normal linking pass so
+	// pending hierarchy work from the original must be consumed explicitly.
+	// Wait until orphan restoration is complete so every queued session and
+	// copied spawn edge is present. A failed repair leaves hierarchy state
+	// uncertain and must abort before the replacement can be installed.
+	if err := newDB.RepairQueuedSubagentParents(); err != nil {
+		log.Printf("resync: repair copied subagent parents: %v", err)
+		stats.Aborted = true
+		stats.Warnings = append(stats.Warnings,
+			"hierarchy repair failed, aborting swap: "+err.Error(),
+		)
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats, err
+	}
+
 	// Copy recall entries and their evidence from the quiesced old DB.
 	// The fresh DB is built from source files, which never contain
 	// recall entries, so without this every accepted entry is lost on
@@ -6710,7 +6730,7 @@ func (e *Engine) collectAndBatch(
 		// Persist affected IDs before any exclusion or replacement can
 		// cascade their only spawn edge away. The queue is cleared only in
 		// the same transaction that successfully repairs the hierarchy.
-		if err := e.db.QueueSubagentParentRepairs(children); err != nil {
+		if err := e.db.QueueSubagentParentCleanupRepairs(children); err != nil {
 			log.Printf("queue subagent parent repairs: %v", err)
 			stats.RecordFailed()
 			e.noteSQLiteContainerResult(r.path, false)
@@ -13374,7 +13394,7 @@ func (e *Engine) SyncSingleSessionContext(
 	if err := e.db.RepairQueuedSubagentParents(); err != nil {
 		return fmt.Errorf("repair queued subagent parents: %w", err)
 	}
-	if err := e.db.QueueSubagentParentRepairs(priorChildren); err != nil {
+	if err := e.db.QueueSubagentParentCleanupRepairs(priorChildren); err != nil {
 		return fmt.Errorf("queue subagent parent repairs: %w", err)
 	}
 	// Always attempt queued work after mutations begin, including when a later

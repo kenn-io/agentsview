@@ -5632,6 +5632,9 @@ func TestCopySyncStateFrom_OnlyCopiesDurableKeys(t *testing.T) {
 		"seed source finished")
 	require.NoError(t, srcDB.QueueSubagentParentRepairs([]string{"queued-child"}),
 		"seed durable hierarchy repair")
+	require.NoError(t, srcDB.QueueSubagentParentCleanupRepairs(
+		[]string{"queued-former-child"},
+	), "seed durable hierarchy cleanup")
 	require.NoError(t, srcDB.UpsertSession(Session{
 		ID: "queued-session", Project: "p", Machine: "local", Agent: "claude",
 	}), "seed source queued session")
@@ -5667,6 +5670,13 @@ func TestCopySyncStateFrom_OnlyCopiesDurableKeys(t *testing.T) {
 	).Scan(&queuedRepairs), "query copied subagent repair queue")
 	assert.Equal(t, 1, queuedRepairs,
 		"pending hierarchy repairs must survive an archive rebuild")
+	var queuedCleanups int
+	require.NoError(t, dstDB.Reader().QueryRow(`
+		SELECT count(*) FROM subagent_parent_cleanup_queue
+		WHERE session_id = 'queued-former-child'`,
+	).Scan(&queuedCleanups), "query copied subagent cleanup queue")
+	assert.Equal(t, 1, queuedCleanups,
+		"pending destructive cleanup intent must survive an archive rebuild")
 
 	gotStarted, err := dstDB.GetSyncState("last_sync_started_at")
 	require.NoError(t, err, "GetSyncState last_sync_started_at")
