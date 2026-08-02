@@ -63,6 +63,16 @@ func (p *geminiAppsImportOnlyProvider) ParseGeminiAppsExport(root string, callba
 		summary.Skipped += plan.skipped
 		summary.Errors += plan.errors
 	}
+	ordinal := 0
+	for planIndex := range plans {
+		for resultIndex := range plans[planIndex].results {
+			result := &plans[planIndex].results[resultIndex]
+			idInput := result.Session.StartedAt.UTC().Format(time.RFC3339Nano) + "\x00" + strconv.Itoa(ordinal)
+			hash := sha256.Sum256([]byte(idInput))
+			result.Session.ID = "gemini-apps:" + hex.EncodeToString(hash[:])
+			ordinal++
+		}
+	}
 	for _, plan := range plans {
 		for _, result := range plan.results {
 			if err := callback(result); err != nil {
@@ -129,7 +139,7 @@ func planGeminiAppsFile(path string) (geminiAppsFilePlan, bool, error) {
 			plan.errors++
 			continue
 		}
-		if result.Session.ID == "" {
+		if result.Session.FirstMessage == "" {
 			plan.skipped++
 			continue
 		}
@@ -198,31 +208,34 @@ func planGeminiAppsCell(cell *html.Node) (bool, ParseResult, error) {
 	if content == nil {
 		return true, ParseResult{}, fmt.Errorf("prompted activity record has no content cell")
 	}
-	blocks := geminiAppsContentBlocks(content)
-	var rendered []string
-	for _, block := range blocks {
-		value := strings.TrimSpace(renderGeminiAppsBlock(block))
-		if value == "" || !geminiAppsNodeHasContent(block) || geminiAppsHasEmptySemanticNode(block) {
-			return true, ParseResult{}, fmt.Errorf("prompted activity record has no prompt")
-		}
-		if value != "" && normalizeMetadata(value) != normalizeMetadata(match[0]) {
-			rendered = append(rendered, value)
-		}
-	}
-	if len(rendered) == 0 || rendered[0] == "" {
+	payload := geminiAppsContentText(content, match[0])
+	payload = strings.TrimSpace(payload)
+	if payload == "" {
 		return true, ParseResult{}, fmt.Errorf("prompted activity record has no prompt")
 	}
-	prompt := rendered[0]
-	response := strings.Join(rendered[1:], "\n\n")
-	idInput := ts.UTC().Format(time.RFC3339Nano) + "\x00" + prompt
-	hash := sha256.Sum256([]byte(idInput))
-	result := ParseResult{Session: ParsedSession{ID: "gemini-apps:" + hex.EncodeToString(hash[:]), Project: "gemini.google.com", Machine: "local", Agent: AgentGeminiApps, FirstMessage: prompt, SessionName: prompt, StartedAt: ts, EndedAt: ts, MessageCount: 1, UserMessageCount: 1}}
-	result.Messages = []ParsedMessage{{Ordinal: 0, Role: RoleUser, Content: prompt, Timestamp: ts, ContentLength: len(prompt)}}
-	if response != "" {
-		result.Messages = append(result.Messages, ParsedMessage{Ordinal: 1, Role: RoleAssistant, Content: response, Timestamp: ts, ContentLength: len(response)})
-		result.Session.MessageCount = 2
-	}
+	result := ParseResult{Session: ParsedSession{Project: "gemini.google.com", Machine: "local", Agent: AgentGeminiApps, FirstMessage: payload, SessionName: payload, StartedAt: ts, EndedAt: ts, MessageCount: 1, UserMessageCount: 1}}
+	result.Messages = []ParsedMessage{{Ordinal: 0, Role: RoleUser, Content: payload, Timestamp: ts, ContentLength: len(payload)}}
 	return true, result, nil
+}
+
+func geminiAppsContentText(content *html.Node, headerTimestamp string) string {
+	var b strings.Builder
+	for child := content.FirstChild; child != nil; child = child.NextSibling {
+		text := geminiAppsVisibleText(child)
+		if child.Type == html.ElementNode && isGeminiAppsStructuralTextElement(child.Data) && normalizeMetadata(text) == normalizeMetadata(headerTimestamp) {
+			continue
+		}
+		b.WriteString(geminiAppsVisibleTextInContext(child, false))
+	}
+	return normalizeGeminiAppsVisibleText(b.String())
+}
+
+func isGeminiAppsStructuralTextElement(tag string) bool {
+	switch strings.ToLower(tag) {
+	case "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "li", "tr", "table", "ul", "ol":
+		return true
+	}
+	return false
 }
 
 func geminiAppsActivityLabel(header *html.Node) string {
@@ -247,115 +260,66 @@ func geminiAppsActivityLabel(header *html.Node) string {
 	return label
 }
 
-func geminiAppsContentBlocks(content *html.Node) []*html.Node {
-	var blocks []*html.Node
-	var run *html.Node
-	flush := func() {
-		if run != nil && (strings.TrimSpace(renderGeminiAppsBlock(run)) != "" || geminiAppsHasEmptySemanticNode(run)) {
-			blocks = append(blocks, run)
-		}
-		run = nil
-	}
-	for child := content.FirstChild; child != nil; child = child.NextSibling {
-		if isGeminiAppsBlock(child) {
-			flush()
-			blocks = append(blocks, child)
-			continue
-		}
-		if run == nil {
-			run = &html.Node{Type: html.ElementNode, Data: "run"}
-		}
-		clone := *child
-		clone.Parent = run
-		clone.PrevSibling = nil
-		clone.NextSibling = nil
-		if run.LastChild == nil {
-			run.FirstChild = &clone
-		} else {
-			run.LastChild.NextSibling = &clone
-			clone.PrevSibling = run.LastChild
-		}
-		run.LastChild = &clone
-	}
-	flush()
-	return blocks
+func geminiAppsVisibleText(n *html.Node) string {
+	return normalizeGeminiAppsVisibleText(geminiAppsVisibleTextInContext(n, false))
 }
 
-func renderGeminiAppsBlock(n *html.Node) string {
-	value := renderGeminiAppsNode(n, false)
-	if n.Type == html.ElementNode && n.Data == "run" && !geminiAppsContainsPreformatted(n) {
-		lines := strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n")
-		for i := range lines {
-			lines[i] = strings.Join(strings.Fields(lines[i]), " ")
+func normalizeGeminiAppsVisibleText(value string) string {
+	const start, end = "\ue000", "\ue001"
+	clean := func(part string) string {
+		var out []rune
+		pendingSpace := false
+		for _, r := range part {
+			if r == '\n' {
+				for len(out) > 0 && out[len(out)-1] == ' ' {
+					out = out[:len(out)-1]
+				}
+				out = append(out, '\n')
+				pendingSpace = false
+				continue
+			}
+			if unicode.IsSpace(r) {
+				pendingSpace = true
+				continue
+			}
+			if pendingSpace && len(out) > 0 && out[len(out)-1] != '\n' {
+				out = append(out, ' ')
+			}
+			out = append(out, r)
+			pendingSpace = false
 		}
-		return strings.Join(lines, "\n")
+		for len(out) > 0 && out[len(out)-1] == ' ' {
+			out = out[:len(out)-1]
+		}
+		for i := 0; i+2 < len(out); i++ {
+			if out[i] == '\n' && out[i+1] == '\n' && out[i+2] == '\n' {
+				out = append(out[:i+2], out[i+3:]...)
+				i--
+			}
+		}
+		return string(out)
 	}
-	return value
+	var b strings.Builder
+	for value != "" {
+		startIndex := strings.Index(value, start)
+		if startIndex < 0 {
+			b.WriteString(clean(value))
+			break
+		}
+		b.WriteString(clean(value[:startIndex]))
+		value = value[startIndex+len(start):]
+		endIndex := strings.Index(value, end)
+		if endIndex < 0 {
+			b.WriteString(value)
+			break
+		}
+		b.WriteString(value[:endIndex])
+		value = value[endIndex+len(end):]
+	}
+	return b.String()
 }
 
-func geminiAppsContainsPreformatted(n *html.Node) bool {
-	if n.Type == html.ElementNode {
-		tag := strings.ToLower(n.Data)
-		if isGeminiAppsIgnored(tag) {
-			return false
-		}
-		if tag == "pre" || tag == "code" {
-			return true
-		}
-	}
-	for child := n.FirstChild; child != nil; child = child.NextSibling {
-		if geminiAppsContainsPreformatted(child) {
-			return true
-		}
-	}
-	return false
-}
-
-func isGeminiAppsBlock(n *html.Node) bool {
-	if n.Type != html.ElementNode {
-		return false
-	}
-	switch strings.ToLower(n.Data) {
-	case "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "code", "table", "ul", "ol":
-		return true
-	}
-	return false
-}
-
-func geminiAppsNodeHasContent(n *html.Node) bool {
-	if n.Type == html.TextNode {
-		return strings.TrimSpace(sanitizeGeminiAppsText(n.Data)) != ""
-	}
-	if n.Type == html.ElementNode && isGeminiAppsIgnored(strings.ToLower(n.Data)) {
-		return false
-	}
-	for child := n.FirstChild; child != nil; child = child.NextSibling {
-		if geminiAppsNodeHasContent(child) {
-			return true
-		}
-	}
-	return false
-}
-
-func geminiAppsHasEmptySemanticNode(n *html.Node) bool {
-	if n.Type == html.ElementNode {
-		tag := strings.ToLower(n.Data)
-		if isGeminiAppsIgnored(tag) {
-			return false
-		}
-		if tag != "run" && tag != "br" && tag != "img" && !geminiAppsNodeHasContent(n) {
-			return true
-		}
-	}
-	for child := n.FirstChild; child != nil; child = child.NextSibling {
-		if geminiAppsHasEmptySemanticNode(child) {
-			return true
-		}
-	}
-	return false
-}
-
-func renderGeminiAppsNode(n *html.Node, preserved bool) string {
+func geminiAppsVisibleTextInContext(n *html.Node, preserved bool) string {
 	if n.Type == html.TextNode {
 		return geminiAppsTextValue(n.Data, preserved)
 	}
@@ -366,35 +330,25 @@ func renderGeminiAppsNode(n *html.Node, preserved bool) string {
 	if isGeminiAppsIgnored(tag) {
 		return ""
 	}
-	preserved = preserved || tag == "pre" || tag == "code"
+	preserved = preserved || tag == "pre"
 	var b strings.Builder
 	switch tag {
 	case "br":
 		b.WriteByte('\n')
-	case "li":
-		b.WriteString("- ")
-	case "strong", "b":
-		b.WriteString("**")
-	case "em", "i":
-		b.WriteByte('*')
-	case "code":
-		b.WriteByte('`')
-	case "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "tr", "table", "ul", "ol":
+	case "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "li", "tr", "table", "ul", "ol":
 		b.WriteByte('\n')
+	}
+	if tag == "pre" {
+		b.WriteString("\ue000")
 	}
 	for child := n.FirstChild; child != nil; child = child.NextSibling {
-		b.WriteString(renderGeminiAppsNode(child, preserved))
+		b.WriteString(geminiAppsVisibleTextInContext(child, preserved))
+	}
+	if tag == "pre" {
+		b.WriteString("\ue001")
 	}
 	switch tag {
-	case "li":
-		b.WriteByte('\n')
-	case "strong", "b":
-		b.WriteString("**")
-	case "em", "i":
-		b.WriteByte('*')
-	case "code":
-		b.WriteByte('`')
-	case "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "tr", "table", "ul", "ol":
+	case "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "li", "tr", "table", "ul", "ol":
 		b.WriteByte('\n')
 	}
 	if preserved {
@@ -428,7 +382,7 @@ func geminiAppsTextValue(value string, preserved bool) string {
 func geminiAppsText(n *html.Node, preserved bool) string {
 	var b strings.Builder
 	for child := n.FirstChild; child != nil; child = child.NextSibling {
-		b.WriteString(renderGeminiAppsNode(child, preserved))
+		b.WriteString(geminiAppsVisibleTextInContext(child, preserved))
 	}
 	return b.String()
 }

@@ -98,6 +98,10 @@ func TestImportGeminiAppsReimportUpdatesResponseWithStableID(t *testing.T) {
 	first, err := ImportGeminiApps(context.Background(), d, root, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, first.Imported)
+	initialPage, err := d.ListSessions(context.Background(), db.SessionFilter{Agent: "gemini-apps"})
+	require.NoError(t, err)
+	require.Len(t, initialPage.Sessions, 1)
+	initialID := initialPage.Sessions[0].ID
 
 	updated := strings.ReplaceAll(initial, "first answer", "updated answer")
 	require.NoError(t, os.WriteFile(path, []byte(updated), 0o644))
@@ -110,10 +114,11 @@ func TestImportGeminiAppsReimportUpdatesResponseWithStableID(t *testing.T) {
 	page, err := d.ListSessions(context.Background(), db.SessionFilter{Agent: "gemini-apps"})
 	require.NoError(t, err)
 	require.Len(t, page.Sessions, 1)
+	assert.Equal(t, initialID, page.Sessions[0].ID)
 	messages, err := d.GetAllMessages(context.Background(), page.Sessions[0].ID)
 	require.NoError(t, err)
-	require.Len(t, messages, 2)
-	assert.Equal(t, "updated answer", messages[1].Content)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "first prompt\n\nupdated answer", messages[0].Content)
 }
 
 func TestImportGeminiAppsUnknownZoneDoesNotWriteSession(t *testing.T) {

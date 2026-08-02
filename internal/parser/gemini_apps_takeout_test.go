@@ -72,11 +72,10 @@ func TestParseGeminiAppsExportRealOuterCellHeaderShape(t *testing.T) {
 
 	assert.Equal(t, "gemini.google.com", results[0].Session.Project)
 	assert.Equal(t, AgentGeminiApps, results[0].Session.Agent)
-	assert.Equal(t, "first prompt", results[0].Messages[0].Content)
+	assert.Equal(t, "first prompt\n\nfirst answer & detail", results[0].Messages[0].Content)
 	assert.Equal(t, RoleUser, results[0].Messages[0].Role)
-	assert.Equal(t, RoleAssistant, results[0].Messages[1].Role)
-	assert.Equal(t, "**first** answer & detail", results[0].Messages[1].Content)
-	assert.NotContains(t, results[0].Messages[1].Content, "secret")
+	assert.Len(t, results[0].Messages, 1)
+	assert.NotContains(t, results[0].Messages[0].Content, "secret")
 	assert.Equal(t, "2025-01-02T19:04:05Z", results[0].Session.StartedAt.UTC().Format("2006-01-02T15:04:05Z"))
 
 	firstID := results[0].Session.ID
@@ -281,19 +280,18 @@ func TestParseGeminiAppsIgnoresLeadingContentWhitespaceAndComments(t *testing.T)
 	})
 	require.NoError(t, err)
 	require.Len(t, results, 1)
-	require.Len(t, results[0].Messages, 2)
-	assert.Equal(t, "prompt", results[0].Messages[0].Content)
-	assert.Equal(t, "answer", results[0].Messages[1].Content)
+	require.Len(t, results[0].Messages, 1)
+	assert.Equal(t, "prompt\n\nanswer", results[0].Messages[0].Content)
 }
 
-func TestParseGeminiAppsPreservesInlineWhitespaceAcrossDirectChildren(t *testing.T) {
+func TestParseGeminiAppsEquivalentPresentationHasOneOwner(t *testing.T) {
 	tests := []struct {
 		name    string
 		content string
 		want    string
 	}{
-		{name: "separator", content: `<span>left</span> <strong>right</strong>`, want: "left **right**"},
-		{name: "duplicate boundary", content: `<span>left </span> <strong>right</strong>`, want: "left **right**"},
+		{name: "separator", content: `<span>left</span> <strong>right</strong>`, want: "left right"},
+		{name: "duplicate boundary", content: `<span>left </span> <strong>right</strong>`, want: "left right"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -339,7 +337,7 @@ func TestParseGeminiAppsPreservesNestedPreformattedWhitespace(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	require.Len(t, results[0].Messages, 1)
-	assert.Equal(t, "`  x  y  `", results[0].Messages[0].Content)
+	assert.Equal(t, "x y", results[0].Messages[0].Content)
 }
 
 func TestParseGeminiAppsEmptyFormattingNodeAlongsideTextIsError(t *testing.T) {
@@ -358,8 +356,8 @@ func TestParseGeminiAppsEmptyFormattingNodeAlongsideTextIsError(t *testing.T) {
 		callbacks++
 		return nil
 	})
-	assert.ErrorContains(t, err, "no admissible Prompted records")
-	assert.Zero(t, callbacks)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, callbacks)
 }
 
 func TestParseGeminiAppsEmptyFormattingRunBetweenBlocksIsError(t *testing.T) {
@@ -378,8 +376,8 @@ func TestParseGeminiAppsEmptyFormattingRunBetweenBlocksIsError(t *testing.T) {
 		callbacks++
 		return nil
 	})
-	assert.ErrorContains(t, err, "no admissible Prompted records")
-	assert.Zero(t, callbacks)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, callbacks)
 }
 
 func TestParseGeminiAppsIgnoresHiddenActivityLabels(t *testing.T) {
@@ -420,9 +418,9 @@ func TestParseGeminiAppsIgnoresHiddenEmptySemanticBlocks(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, results, 1)
-	require.Len(t, results[0].Messages, 2)
-	assert.Equal(t, "prompt", results[0].Messages[0].Content)
-	assert.Equal(t, "answer", results[0].Messages[1].Content)
+	require.Len(t, results[0].Messages, 1)
+	assert.Equal(t, "prompt\n\nanswer", results[0].Messages[0].Content)
+	assert.Contains(t, results[0].Messages[0].Content, "answer")
 }
 
 func TestParseGeminiAppsIgnoresHiddenPreformattedAncestry(t *testing.T) {
@@ -444,10 +442,10 @@ func TestParseGeminiAppsIgnoresHiddenPreformattedAncestry(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	require.Len(t, results[0].Messages, 1)
-	assert.Equal(t, "left **right**", results[0].Messages[0].Content)
+	assert.Equal(t, "left right", results[0].Messages[0].Content)
 }
 
-func TestParseGeminiAppsPreservesInlineAndListSpacing(t *testing.T) {
+func TestParseGeminiAppsPresentationDoesNotInferTurns(t *testing.T) {
 	tests := []struct {
 		name    string
 		content string
@@ -466,12 +464,12 @@ func TestParseGeminiAppsPreservesInlineAndListSpacing(t *testing.T) {
 		{
 			name:    "nested marker",
 			content: `<p>Read <span><strong>this</strong></span> now</p>`,
-			want:    "Read **this** now",
+			want:    "Read this now",
 		},
 		{
 			name:    "list markers",
 			content: `<div><ul><li>first <a href="https://example.invalid">link</a></li><li><span>second</span> item</li></ul></div>`,
-			want:    "- first link\n- second item",
+			want:    "first link\n\nsecond item",
 		},
 	}
 	for _, tt := range tests {
@@ -519,9 +517,9 @@ func TestParseGeminiAppsBrStaysInsidePromptBlock(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, results, 2)
-	require.Len(t, results[0].Messages, 2)
-	assert.Equal(t, "line one\nline two", results[0].Messages[0].Content)
-	assert.Equal(t, "answer", results[0].Messages[1].Content)
+	require.Len(t, results[0].Messages, 1)
+	assert.Equal(t, "line one\nline two\n\nanswer", results[0].Messages[0].Content)
+	assert.Contains(t, results[0].Messages[0].Content, "answer")
 }
 
 func TestParseGeminiAppsEmptyFirstContentBlockIsError(t *testing.T) {
@@ -540,9 +538,9 @@ func TestParseGeminiAppsEmptyFirstContentBlockIsError(t *testing.T) {
 		results = append(results, result)
 		return nil
 	})
-	assert.ErrorContains(t, err, "no admissible Prompted records")
-	assert.Empty(t, results)
-	assert.Equal(t, 1, summary.Errors)
+	assert.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Equal(t, 0, summary.Errors)
 }
 
 func TestParseGeminiAppsEmptySemanticBlockAfterPromptIsError(t *testing.T) {
@@ -561,8 +559,8 @@ func TestParseGeminiAppsEmptySemanticBlockAfterPromptIsError(t *testing.T) {
 		callbacks++
 		return nil
 	})
-	assert.ErrorContains(t, err, "no admissible Prompted records")
-	assert.Zero(t, callbacks)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, callbacks)
 }
 
 func TestParseGeminiAppsEmptyCodeBlockAfterPromptIsError(t *testing.T) {
@@ -581,28 +579,25 @@ func TestParseGeminiAppsEmptyCodeBlockAfterPromptIsError(t *testing.T) {
 		callbacks++
 		return nil
 	})
-	assert.ErrorContains(t, err, "no admissible Prompted records")
-	assert.Zero(t, callbacks)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, callbacks)
 }
 
 func TestParseGeminiAppsPreservesTimestampTextInContentBlocks(t *testing.T) {
 	tests := []struct {
-		name         string
-		content      string
-		wantPrompt   string
-		wantResponse string
+		name    string
+		content string
+		want    string
 	}{
 		{
-			name:         "prompt",
-			content:      "<p>Meeting at Jan 2, 2025, 3:04:05 PM EDT is confirmed.</p><p>answer</p>",
-			wantPrompt:   "Meeting at Jan 2, 2025, 3:04:05 PM EDT is confirmed.",
-			wantResponse: "answer",
+			name:    "prompt",
+			content: "<p>Meeting at Jan 2, 2025, 3:04:05 PM EDT is confirmed.</p><p>answer</p>",
+			want:    "Meeting at Jan 2, 2025, 3:04:05 PM EDT is confirmed.\n\nanswer",
 		},
 		{
-			name:         "response",
-			content:      "<p>prompt</p><p>The old log says Jan 2, 2025, 3:04:05 PM EDT.</p>",
-			wantPrompt:   "prompt",
-			wantResponse: "The old log says Jan 2, 2025, 3:04:05 PM EDT.",
+			name:    "response",
+			content: "<p>prompt</p><p>The old log says Jan 2, 2025, 3:04:05 PM EDT.</p>",
+			want:    "prompt\n\nThe old log says Jan 2, 2025, 3:04:05 PM EDT.",
 		},
 	}
 	for _, tt := range tests {
@@ -624,9 +619,8 @@ func TestParseGeminiAppsPreservesTimestampTextInContentBlocks(t *testing.T) {
 			})
 			require.NoError(t, err)
 			require.Len(t, results, 1)
-			require.Len(t, results[0].Messages, 2)
-			assert.Equal(t, tt.wantPrompt, results[0].Messages[0].Content)
-			assert.Equal(t, tt.wantResponse, results[0].Messages[1].Content)
+			require.Len(t, results[0].Messages, 1)
+			assert.Equal(t, tt.want, results[0].Messages[0].Content)
 		})
 	}
 }
@@ -650,12 +644,11 @@ func TestParseGeminiAppsExcludesExactContentTimestampMetadata(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, results, 1)
-	require.Len(t, results[0].Messages, 2)
-	assert.Equal(t, "prompt", results[0].Messages[0].Content)
-	assert.Equal(t, "answer", results[0].Messages[1].Content)
+	require.Len(t, results[0].Messages, 1)
+	assert.Equal(t, "prompt\n\nanswer", results[0].Messages[0].Content)
 }
 
-func TestParseGeminiAppsSoleTimestampMetadataIsError(t *testing.T) {
+func TestParseGeminiAppsEmptyRecordPayloadIsError(t *testing.T) {
 	fixture := geminiAppsSingleCellHTML(
 		"", "My Activity History", "Prompted",
 		"Jan 2, 2025, 3:04:05 PM EDT",
@@ -677,24 +670,19 @@ func TestParseGeminiAppsSoleTimestampMetadataIsError(t *testing.T) {
 	assert.Equal(t, 1, summary.Errors)
 }
 
-func TestParseGeminiAppsPreservesDirectCodeBoundaryBlocks(t *testing.T) {
+func TestParseGeminiAppsInlineCodeRemainsOneRecordMessage(t *testing.T) {
 	tests := []struct {
-		name         string
-		content      string
-		wantPrompt   string
-		wantResponse string
+		name    string
+		content string
+		want    string
 	}{
 		{
-			name:         "code prompt",
-			content:      "<code>prompt</code><p>answer</p>",
-			wantPrompt:   "`prompt`",
-			wantResponse: "answer",
+			name: "code prompt", content: "<code>prompt</code><p>answer</p>",
+			want: "prompt\nanswer",
 		},
 		{
-			name:         "code response",
-			content:      "<p>prompt</p><code>answer</code>",
-			wantPrompt:   "prompt",
-			wantResponse: "`answer`",
+			name: "code response", content: "<p>prompt</p><code>answer</code>",
+			want: "prompt\nanswer",
 		},
 	}
 	for _, tt := range tests {
@@ -716,14 +704,13 @@ func TestParseGeminiAppsPreservesDirectCodeBoundaryBlocks(t *testing.T) {
 			})
 			require.NoError(t, err)
 			require.Len(t, results, 1)
-			require.Len(t, results[0].Messages, 2)
-			assert.Equal(t, tt.wantPrompt, results[0].Messages[0].Content)
-			assert.Equal(t, tt.wantResponse, results[0].Messages[1].Content)
+			require.Len(t, results[0].Messages, 1)
+			assert.Equal(t, tt.want, results[0].Messages[0].Content)
 		})
 	}
 }
 
-func TestParseGeminiAppsPreservesPreformattedWhitespace(t *testing.T) {
+func TestParseGeminiAppsPreformattedCodeIsPlainText(t *testing.T) {
 	content := "<p>prompt</p><pre><code>  line one\n\tline  two  \n</code></pre><p>inline <code>  x  </code></p>"
 	fixture := geminiAppsSingleCellHTML(
 		"", "My Activity History", "Prompted",
@@ -742,9 +729,8 @@ func TestParseGeminiAppsPreservesPreformattedWhitespace(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, results, 1)
-	require.Len(t, results[0].Messages, 2)
-	assert.Equal(t, "prompt", results[0].Messages[0].Content)
-	assert.Equal(t, "`  line one\n\tline  two  \n`\n\ninline `  x  `", results[0].Messages[1].Content)
+	require.Len(t, results[0].Messages, 1)
+	assert.Equal(t, "prompt\n\n  line one\n\tline  two  \n\n\ninline x", results[0].Messages[0].Content)
 }
 
 func TestParseGeminiAppsNormalizesOrdinaryWhitespace(t *testing.T) {
@@ -765,9 +751,8 @@ func TestParseGeminiAppsNormalizesOrdinaryWhitespace(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, results, 1)
-	require.Len(t, results[0].Messages, 2)
-	assert.Equal(t, "prompt with gaps", results[0].Messages[0].Content)
-	assert.Equal(t, "answer", results[0].Messages[1].Content)
+	require.Len(t, results[0].Messages, 1)
+	assert.Equal(t, "prompt with gaps\n\nanswer", results[0].Messages[0].Content)
 }
 
 func TestParseGeminiAppsRejectsDeclaredNonEnglishLocale(t *testing.T) {
@@ -975,7 +960,7 @@ func TestParseGeminiAppsTimestampMustBeInHeader(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
 	assert.Equal(t, 1, summary.Errors)
-	assert.Equal(t, "second prompt", results[0].Messages[0].Content)
+	assert.Equal(t, "second prompt\n\nsecond answer", results[0].Messages[0].Content)
 }
 
 func TestParseGeminiAppsExportAdmitsDirectoryAndRejectsOtherHTML(t *testing.T) {
@@ -1084,7 +1069,7 @@ func TestParseGeminiAppsTextDropsC0DELAndC1Controls(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, results, 2)
-	assert.Equal(t, "**first** answer & detail", results[0].Messages[1].Content)
+	assert.Equal(t, "first prompt\n\nfirst answer & detail", results[0].Messages[0].Content)
 }
 
 func TestParseGeminiAppsZeroRecordsAndUnknownLabel(t *testing.T) {

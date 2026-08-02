@@ -87,7 +87,9 @@ directory containing the extracted export.
 
 Conversation turns are imported as sessions. Providers that emit
 thinking/reasoning blocks or tool usage preserve those message types;
-Gemini Apps imports one user prompt and an optional assistant response.
+each Gemini Apps `Prompted` record becomes one user message containing its
+complete visible plain text. HTML presentation does not infer speaker roles;
+inline code and preformatted text remain text without generated Markdown.
 
 ### Images (ChatGPT)
 
