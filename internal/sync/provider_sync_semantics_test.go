@@ -638,6 +638,13 @@ func TestOmnigentDependentSourceExpansionPreservesEngineIDPrefixing(
 
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []parser.SourceRef{rootSource, childSource}, expanded)
+
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = engine.expandOmnigentInheritedMetadataSources(
+		canceled, provider, []parser.SourceRef{rootSource},
+	)
+	require.ErrorContains(t, err, "list omnigent parent session machines")
 }
 
 // TestBaselineFailureDoesNotPromoteSkipCache pins the omnigent-only cache

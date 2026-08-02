@@ -1397,11 +1397,8 @@ func (e *Engine) expandOmnigentInheritedMetadataSources(
 	agent := provider.Definition().Type
 	seenSources := make(map[string]struct{}, len(sources))
 	seenParents := make(map[string]struct{}, len(sources))
-	// A descendant is stored under the machine its parent was admitted under,
-	// which is not necessarily the local one, so group the lookup by each
-	// parent's stored attribution instead of assuming e.machine.
-	parentsByMachine := make(map[string][]string, 1)
-	machineOrder := make([]string, 0, 1)
+	parentIDs := make([]string, 0, len(sources))
+	configuredMachines := make(map[string]string, len(sources))
 	for _, source := range sources {
 		sourcePath := providerDiscoveredPath(source)
 		if sourcePath != "" {
@@ -1416,18 +1413,32 @@ func (e *Engine) expandOmnigentInheritedMetadataSources(
 			continue
 		}
 		seenParents[parentID] = struct{}{}
-		machine := e.machineForProviderSource(agent, source, sourcePath)
-		if session, err := e.db.GetSession(ctx, parentID); err == nil &&
-			session != nil {
-			machine = session.Machine
+		parentIDs = append(parentIDs, parentID)
+		configuredMachines[parentID] = e.machineForProviderSource(
+			agent, source, sourcePath,
+		)
+	}
+	if len(parentIDs) == 0 {
+		return sources, nil
+	}
+	storedMachines, err := e.db.ListSessionMachinesByID(ctx, parentIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list omnigent parent session machines: %w", err)
+	}
+	// A descendant is stored under the machine its parent was admitted under,
+	// which is not necessarily the local one, so group the lookup by each
+	// parent's stored attribution instead of assuming e.machine.
+	parentsByMachine := make(map[string][]string, 1)
+	machineOrder := make([]string, 0, 1)
+	for _, parentID := range parentIDs {
+		machine := configuredMachines[parentID]
+		if stored, exists := storedMachines[parentID]; exists {
+			machine = stored
 		}
 		if _, exists := parentsByMachine[machine]; !exists {
 			machineOrder = append(machineOrder, machine)
 		}
 		parentsByMachine[machine] = append(parentsByMachine[machine], parentID)
-	}
-	if len(machineOrder) == 0 {
-		return sources, nil
 	}
 	var paths []string
 	for _, machine := range machineOrder {
@@ -8131,7 +8142,7 @@ func (e *Engine) processProviderFile(
 			errors.Is(err, os.ErrNotExist) {
 			excludedSessionIDs, ownershipErr :=
 				e.providerSourceSessionIDsForForceReplace(
-					provider, source,
+					ctx, provider, source,
 				)
 			if ownershipErr != nil {
 				return processResult{
@@ -8359,7 +8370,7 @@ func (e *Engine) processProviderFile(
 		if outcome.ForceReplace && outcome.ResultSetComplete {
 			owned, ownershipErr :=
 				e.providerSourceSessionOwnershipsForForceReplace(
-					provider, source,
+					ctx, provider, source,
 				)
 			if ownershipErr != nil {
 				return processResult{
@@ -8418,7 +8429,7 @@ func (e *Engine) processProviderFile(
 		outcome.ResultSetComplete && len(outcome.SourceErrors) == 0 {
 		missingMembers, err =
 			e.providerSourceMissingSessionOwnershipsForCompleteResult(
-				provider, source, parsedResults,
+				ctx, provider, source, parsedResults,
 			)
 		if err != nil {
 			return processResult{
@@ -8546,11 +8557,12 @@ func (e *Engine) dropUnchangedSharedSQLiteResults(
 }
 
 func (e *Engine) providerSourceSessionIDsForForceReplace(
+	ctx context.Context,
 	provider parser.Provider,
 	source parser.SourceRef,
 ) ([]string, error) {
 	members, err := e.providerSourceSessionOwnershipsForForceReplace(
-		provider, source,
+		ctx, provider, source,
 	)
 	if err != nil {
 		return nil, err
@@ -8567,6 +8579,7 @@ func (e *Engine) providerSourceSessionIDsForForceReplace(
 // file path each row is tracked under, so callers can either hard-delete
 // them as parser exclusions or tombstone their exact source ownership.
 func (e *Engine) providerSourceSessionOwnershipsForForceReplace(
+	ctx context.Context,
 	provider parser.Provider,
 	source parser.SourceRef,
 ) ([]sourceMissingMember, error) {
@@ -8602,6 +8615,7 @@ func (e *Engine) providerSourceSessionOwnershipsForForceReplace(
 	}
 	seen := make(map[string]struct{})
 	var members []sourceMissingMember
+	var sessionIDs []string
 	for _, sourcePath := range sourcePaths {
 		pathIDs, err := e.db.ListSessionIDsByFilePath(sourcePath, string(agent))
 		if err != nil {
@@ -8615,22 +8629,32 @@ func (e *Engine) providerSourceSessionOwnershipsForForceReplace(
 				continue
 			}
 			seen[id] = struct{}{}
-			machine := e.machineForProviderSource(agent, source, sourcePath)
-			if session, err := e.db.GetSession(context.Background(), id); err == nil &&
-				session != nil {
-				machine = session.Machine
-			}
 			members = append(members, sourceMissingMember{
 				sessionID: id,
 				filePath:  sourcePath,
-				machine:   machine,
+				machine: e.machineForProviderSource(
+					agent, source, sourcePath,
+				),
 			})
+			sessionIDs = append(sessionIDs, id)
+		}
+	}
+	storedMachines, err := e.db.ListSessionMachinesByID(ctx, sessionIDs)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"list provider force-replace session machines: %w", err,
+		)
+	}
+	for i := range members {
+		if machine, exists := storedMachines[members[i].sessionID]; exists {
+			members[i].machine = machine
 		}
 	}
 	return members, nil
 }
 
 func (e *Engine) providerSourceMissingSessionOwnershipsForCompleteResult(
+	ctx context.Context,
 	provider parser.Provider,
 	source parser.SourceRef,
 	results []parser.ParseResult,
@@ -8643,7 +8667,7 @@ func (e *Engine) providerSourceMissingSessionOwnershipsForCompleteResult(
 		}
 	}
 	stored, err := e.providerSourceSessionOwnershipsForForceReplace(
-		provider, source,
+		ctx, provider, source,
 	)
 	if err != nil {
 		return nil, err

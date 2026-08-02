@@ -1883,12 +1883,23 @@ func TestProviderForceReplaceRewritesResolvedMultiSessionHintScopes(t *testing.T
 		pathRewriter: func(path string) string { return "host:" + path },
 	}
 
-	ids, err := engine.providerSourceSessionIDsForForceReplace(provider, parser.SourceRef{
-		Provider: "scope-provider", DisplayPath: container,
-	})
+	ids, err := engine.providerSourceSessionIDsForForceReplace(
+		t.Context(), provider, parser.SourceRef{
+			Provider: "scope-provider", DisplayPath: container,
+		},
+	)
 
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"remote-a", "remote-b"}, ids)
+
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = engine.providerSourceSessionIDsForForceReplace(
+		canceled, provider, parser.SourceRef{
+			Provider: "scope-provider", DisplayPath: container,
+		},
+	)
+	require.ErrorContains(t, err, "list provider force-replace session machines")
 }
 
 func TestProviderChangedPathEventKindTreatsExistingHashPathAsPhysical(t *testing.T) {
