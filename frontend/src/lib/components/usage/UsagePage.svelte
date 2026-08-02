@@ -111,8 +111,8 @@
   }) {
     return searchBranches({
       ...params,
-      includeOneShot: true,
-      includeAutomated: true,
+      includeOneShot: sessions.filters.includeOneShot,
+      includeAutomated: sessions.filters.includeAutomated,
       scope: "all",
     });
   }

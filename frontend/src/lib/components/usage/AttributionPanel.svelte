@@ -25,6 +25,7 @@
   const isTokenMode = $derived(usage.mode === "token");
   const noBranchLabel = $derived(m.shared_no_branch());
   const UNATTRIBUTED_ID = "__unattributed__";
+  const OTHER_ID = "__attribution_other__";
 
   interface Row {
     id: string;
@@ -135,23 +136,41 @@
   }));
 
   // One SVG group is drawn per tile, and branch grouping can produce
-  // thousands of (project, branch) rows whose tiles would be sub-pixel;
-  // cap the treemap to the top slice by cost. The side rail and list view
-  // scroll, so every row stays visible and clickable there.
+  // thousands of (project, branch) rows whose tiles would be sub-pixel.
+  // Reserve the final capped tile for their aggregate so the treemap still
+  // represents the full total. The side rail and list view retain every row.
   const TREEMAP_MAX_TILES = 40;
 
-  const treemapItems = $derived(
-    rows.slice(0, TREEMAP_MAX_TILES).map((r) => ({
+  const treemapItems = $derived.by(() => {
+    const visibleCount = rows.length > TREEMAP_MAX_TILES
+      ? TREEMAP_MAX_TILES - 1
+      : TREEMAP_MAX_TILES;
+    const items = rows.slice(0, visibleCount).map((r) => ({
       id: r.id,
       label: r.label,
       value: r.value,
       color: r.color,
       meta: r.pct > 0 ? `${(r.pct * 100).toFixed(1)}%` : "",
-    })),
-  );
+      selectable: r.selectable,
+    }));
+    const omitted = rows.slice(visibleCount);
+    if (omitted.length > 0) {
+      const value = omitted.reduce((sum, row) => sum + row.value, 0);
+      const pct = omitted.reduce((sum, row) => sum + row.pct, 0);
+      items.push({
+        id: OTHER_ID,
+        label: m.shared_other(),
+        value,
+        color: "var(--text-muted)",
+        meta: pct > 0 ? `${(pct * 100).toFixed(1)}%` : "",
+        selectable: false,
+      });
+    }
+    return items;
+  });
 
   function handleSelect(id: string) {
-    if (id === UNATTRIBUTED_ID) return;
+    if (id === UNATTRIBUTED_ID || id === OTHER_ID) return;
     if (groupBy === "project") {
       usage.toggleProjectKey(id);
     } else if (groupBy === "agent") {
@@ -177,7 +196,7 @@
   }
 
   function rowTitle(id: string, label: string): string {
-    if (id === UNATTRIBUTED_ID) return label;
+    if (id === UNATTRIBUTED_ID || id === OTHER_ID) return label;
     if (!includeBased) return m.usage_click_to_hide({ label });
     return isRowSelected(id)
       ? m.usage_click_to_clear_filter({ label })
@@ -185,7 +204,7 @@
   }
 
   function rowAriaLabel(id: string, label: string): string {
-    if (id === UNATTRIBUTED_ID) return label;
+    if (id === UNATTRIBUTED_ID || id === OTHER_ID) return label;
     if (!includeBased) return m.usage_hide_from_chart({ label });
     return isRowSelected(id)
       ? m.usage_clear_filter_item({ label })

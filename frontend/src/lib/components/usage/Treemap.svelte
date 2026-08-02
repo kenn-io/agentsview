@@ -8,6 +8,7 @@
     value: number;
     color: string;
     meta?: string;
+    selectable?: boolean;
   }
 
   interface Props {
@@ -55,6 +56,7 @@
     value: number;
     color: string;
     meta?: string;
+    selectable: boolean;
     x: number;
     y: number;
     width: number;
@@ -79,6 +81,7 @@
         value: src.value,
         color: src.color,
         meta: src.meta,
+        selectable: src.selectable ?? true,
         x: t.x,
         y: t.y,
         width: t.width,
@@ -119,11 +122,12 @@
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <g
       class="tile"
-      tabindex={0}
-      role="button"
+      class:interactive={tile.selectable}
+      tabindex={tile.selectable ? 0 : undefined}
+      role={tile.selectable ? "button" : undefined}
       aria-label={ariaLabelFor(tile.id, tile.label)}
-      onclick={() => onSelect(tile.id)}
-      onkeydown={(e) => handleKey(e, tile.id)}
+      onclick={tile.selectable ? () => onSelect(tile.id) : undefined}
+      onkeydown={tile.selectable ? (e) => handleKey(e, tile.id) : undefined}
       clip-path="url(#{clipId})"
     >
       <title>{titleFor(tile.id, tile.label)}</title>
@@ -183,19 +187,19 @@
     display: block;
   }
 
-  .tile {
+  .tile.interactive {
     cursor: pointer;
   }
 
-  .tile:hover rect {
+  .tile.interactive:hover rect {
     opacity: 0.92;
   }
 
-  .tile:focus-visible {
+  .tile.interactive:focus-visible {
     outline: none;
   }
 
-  .tile:focus-visible rect {
+  .tile.interactive:focus-visible rect {
     stroke: white;
     stroke-width: 2;
   }

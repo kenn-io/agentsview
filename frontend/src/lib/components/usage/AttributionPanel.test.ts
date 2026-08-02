@@ -1,4 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import type { UsageSummaryResponse } from "../../api/types/usage.js";
 import { testMoney } from "../../test/money.js";
@@ -624,6 +631,46 @@ describe("AttributionPanel branch mode", () => {
       document.querySelector<HTMLElement>(".rail-virtual-spacer")?.style.height,
     ).toBe("24000px");
     unmount(component);
+  });
+
+  it("aggregates omitted rows into a non-interactive Other tile", async () => {
+    usage.summary = usageSummary();
+    usage.summary.totals.totalCost = testMoney(80);
+    usage.summary.branchTotals = Array.from({ length: 41 }, (_, index) => ({
+      project_key: `pl1:sha256:${index}`,
+      project: `project-${index}`,
+      branch: `branch-${index}`,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      cost: testMoney(index < 39 ? 2 : 1),
+    }));
+    usage.toggles.attribution.view = "treemap";
+    const toggleBranch = vi
+      .spyOn(usage, "toggleBranch")
+      .mockImplementation(() => {});
+
+    const component = mountPanel();
+    await tick();
+
+    const tiles = document.querySelectorAll<SVGGElement>("g.tile");
+    expect(tiles).toHaveLength(40);
+    const otherTile = Array.from(tiles).find((tile) =>
+      tile.querySelector("title")?.textContent === "Other"
+    );
+    expect(otherTile).toBeDefined();
+    expect(otherTile?.getAttribute("role")).toBeNull();
+    expect(otherTile?.getAttribute("tabindex")).toBeNull();
+
+    const otherRect = otherTile?.querySelector("rect");
+    const area = Number(otherRect?.getAttribute("width"))
+      * Number(otherRect?.getAttribute("height"));
+    expect(area / (600 * 260)).toBeCloseTo(2 / 80, 5);
+
+    otherTile?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(toggleBranch).not.toHaveBeenCalled();
+    await unmount(component);
   });
 });
 

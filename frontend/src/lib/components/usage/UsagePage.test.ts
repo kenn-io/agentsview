@@ -13,6 +13,7 @@ import { settings } from "../../stores/settings.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
 import { testMoney } from "../../test/money.js";
 import type { UsageSummaryResponse } from "../../api/types/usage.js";
+import { MetadataService } from "../../api/generated/index.js";
 import source from "./UsagePage.svelte?raw";
 import UsagePage from "./UsagePage.svelte";
 
@@ -167,6 +168,8 @@ afterEach(() => {
   usage.toggles.attribution.view = "treemap";
   settings.chartPalette = "agentsview";
   sessions.projects = [];
+  sessions.filters.includeOneShot = true;
+  sessions.filters.includeAutomated = false;
   yokedDates.setEnabled(false);
   localStorage.clear();
 });
@@ -488,6 +491,40 @@ describe("UsagePage refresh behavior", () => {
     await flushEffects();
 
     expect(loadAgents).toHaveBeenCalled();
+  });
+
+  it("searches branches with the active usage session filters", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    const searchBranches = vi.spyOn(MetadataService, "getApiV1Branches")
+      .mockResolvedValue({ branches: [], has_more: false });
+    router.route = "usage";
+    router.params = {
+      include_one_shot: "false",
+      include_automated: "true",
+    };
+
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+    document.querySelector<HTMLButtonElement>('button[title="Branch"]')
+      ?.click();
+
+    await vi.waitFor(() =>
+      expect(searchBranches).toHaveBeenCalledWith(
+        expect.objectContaining({
+          includeOneShot: false,
+          includeAutomated: true,
+          scope: "all",
+        }),
+      )
+    );
   });
 
   it("ignores response-scoped project keys restored from a URL", async () => {
