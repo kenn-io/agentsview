@@ -387,6 +387,55 @@ describe("RecallPage", () => {
     });
   });
 
+  it("returns refresh to idle when pending progress is hidden", async () => {
+    const defaultFetch = fetchMock as unknown as (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => Promise<Response>;
+    fetchMock = vi.fn(async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      if (String(input).includes("/recall/extraction/progress")) {
+        return await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(new DOMException("Aborted", "AbortError"));
+          }, { once: true });
+        });
+      }
+      return defaultFetch(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    component = mount(RecallPage, { target: document.body });
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("8 done");
+    });
+
+    const refresh = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Refresh"]',
+    );
+    const showProgress = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent?.trim() === "Show progress");
+    expect(refresh).not.toBeNull();
+    expect(showProgress).toBeDefined();
+
+    showProgress!.click();
+    await vi.waitFor(() => {
+      expect(refresh!.disabled).toBe(true);
+    });
+
+    const hideProgress = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent?.trim() === "Hide progress");
+    expect(hideProgress).toBeDefined();
+    hideProgress!.click();
+    await tick();
+
+    expect(refresh!.disabled).toBe(false);
+  });
+
   it("hides extraction progress when the backend does not support it", async () => {
     const defaultFetch = fetchMock as unknown as (
       input: RequestInfo | URL,

@@ -248,7 +248,10 @@
 
   function toggleProgress() {
     progressExpanded = !progressExpanded;
-    if (!progressExpanded) progressRead.cancel();
+    if (!progressExpanded) {
+      progressRead.cancel();
+      progressLoading = false;
+    }
   }
 
   function progressStateLabel(state: RecallExtractProgressState): string {
