@@ -2121,12 +2121,33 @@ func (e *Engine) resyncBuildLocked(
 	rebuildOldFileSessions := oldFileSessions
 	contributorOldFileSessions := make([]int, len(opts.Contributors))
 	if len(opts.Contributors) > 0 {
-		localOldFileSessions, err = e.protectedFileSessionCount(
-			origDB, e.machine, "", e.machine != "",
-		)
-		if err != nil {
-			log.Printf("resync: get old local file count: %v", err)
-			localOldFileSessions = 1
+		localMachines := map[string]bool{}
+		if e.machine != "" {
+			localMachines[e.machine] = true
+		}
+		for _, roots := range e.sourceMachines {
+			for _, machine := range roots {
+				if machine != "" {
+					localMachines[machine] = true
+				}
+			}
+		}
+		if len(localMachines) > 0 {
+			localOldFileSessions = 0
+			for machine := range localMachines {
+				count, countErr := e.protectedFileSessionCount(
+					origDB, machine, "", true,
+				)
+				if countErr != nil {
+					log.Printf(
+						"resync: get old local machine %q file count: %v",
+						machine, countErr,
+					)
+					localOldFileSessions = 1
+					break
+				}
+				localOldFileSessions += count
+			}
 		}
 		for i, contributor := range opts.Contributors {
 			count, countErr := e.protectedFileSessionCount(
@@ -2142,8 +2163,11 @@ func (e *Engine) resyncBuildLocked(
 				count = 1
 			}
 			contributorOldFileSessions[i] = count
-			if contributor.Config.Machine == e.machine &&
-				contributor.Config.IDPrefix != "" {
+			// A structured local root may use a historical machine label, while a
+			// contributor is owned by its ID namespace. Remove a contributor only
+			// when its machine was included in the local attribution count.
+			if contributor.Config.IDPrefix != "" &&
+				(len(localMachines) == 0 || localMachines[contributor.Config.Machine]) {
 				localOldFileSessions -= count
 				if localOldFileSessions < 0 {
 					localOldFileSessions = 0

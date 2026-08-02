@@ -29,6 +29,13 @@ func ResolveTargets(cfg config.Config) TargetSet {
 			continue
 		}
 		for _, dir := range resolvedDirs {
+			// Remote imports assign the serving host to every transported root.
+			// A structured root attributed to another machine would therefore
+			// lose its identity in transit, so keep it as a local archive input
+			// instead of advertising it for remote sync.
+			if !isLocalRemoteSyncSource(cfg, def.Type, dir) {
+				continue
+			}
 			if def.Type == parser.AgentHermes {
 				hermesDirs, hermesFiles := resolveHermesTargets(dir)
 				if len(hermesDirs) > 0 {
@@ -96,6 +103,13 @@ func ResolveTargets(cfg config.Config) TargetSet {
 	return filterForbiddenTargets(TargetSet{
 		Dirs: dirs, Files: files, ExtraFiles: extra, ForbiddenRoots: forbiddenRoots,
 	})
+}
+
+func isLocalRemoteSyncSource(
+	cfg config.Config, agent parser.AgentType, dir string,
+) bool {
+	machine, ok := cfg.SourceMachines[agent][dir]
+	return !ok || machine == "" || machine == cfg.LocalMachineName
 }
 
 // filterForbiddenTargets drops resolved targets that lie inside a forbidden
