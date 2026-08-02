@@ -503,7 +503,7 @@ describe("UsagePage refresh behavior", () => {
     );
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
-    const searchBranches = vi.spyOn(MetadataService, "getApiV1Branches")
+    const searchBranches = vi.spyOn(MetadataService, "getApiV1BranchNames")
       .mockResolvedValue({ branches: [], has_more: false });
     router.route = "usage";
     router.params = {

@@ -1175,8 +1175,46 @@ func (s *Store) GetMachines(
 	return machines, rows.Err()
 }
 
-// GetBranches mirrors db.DB.GetBranches for PostgreSQL.
+// GetBranches mirrors the stable qualified branch metadata contract.
 func (s *Store) GetBranches(
+	ctx context.Context,
+	excludeOneShot, excludeAutomated bool,
+) ([]db.BranchInfo, error) {
+	q := `SELECT DISTINCT project, git_branch FROM sessions
+		WHERE message_count > 0
+		  AND relationship_type NOT IN ('subagent', 'fork')
+		  AND deleted_at IS NULL`
+	if excludeOneShot {
+		if !excludeAutomated {
+			q += " AND (user_message_count > 1 OR is_automated = TRUE)"
+		} else {
+			q += " AND user_message_count > 1"
+		}
+	}
+	if excludeAutomated {
+		q += " AND is_automated = FALSE"
+	}
+	q += " ORDER BY project, git_branch"
+	rows, err := s.pg.QueryContext(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("querying branches: %w", err)
+	}
+	defer rows.Close()
+
+	branches := []db.BranchInfo{}
+	for rows.Next() {
+		var branch db.BranchInfo
+		if err := rows.Scan(&branch.Project, &branch.Branch); err != nil {
+			return nil, fmt.Errorf("scanning branch: %w", err)
+		}
+		branch.Token = db.EncodeBranchFilterToken(branch.Project, branch.Branch)
+		branches = append(branches, branch)
+	}
+	return branches, rows.Err()
+}
+
+// SearchBranchNames mirrors db.DB.SearchBranchNames for PostgreSQL.
+func (s *Store) SearchBranchNames(
 	ctx context.Context, query db.BranchQuery,
 ) (db.BranchResult, error) {
 	query = db.NormalizeBranchQuery(query)

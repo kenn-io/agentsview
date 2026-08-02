@@ -270,7 +270,7 @@ func TestBranchFilterToken(t *testing.T) {
 	assert.Equal(t, EncodeBranchFilterToken("proj", "main"), tok)
 }
 
-func TestGetBranches(t *testing.T) {
+func TestSearchBranchNames(t *testing.T) {
 	d := testDB(t)
 
 	insertSession(t, d, "s1", "alpha", func(s *Session) {
@@ -317,7 +317,7 @@ func TestGetBranches(t *testing.T) {
 		s.EndedAt = new("2026-06-13T10:00:00Z")
 	})
 
-	all, err := d.GetBranches(context.Background(), BranchQuery{
+	all, err := d.SearchBranchNames(context.Background(), BranchQuery{
 		Scope: BranchScopeRoots,
 		Limit: 100,
 	})
@@ -329,7 +329,7 @@ func TestGetBranches(t *testing.T) {
 		{Branch: "solo"},
 	}}, all, "branch names deduplicated by latest activity, empty branch included")
 
-	withForks, err := d.GetBranches(context.Background(), BranchQuery{
+	withForks, err := d.SearchBranchNames(context.Background(), BranchQuery{
 		Scope: BranchScopeAll,
 		Limit: 100,
 	})
@@ -337,7 +337,7 @@ func TestGetBranches(t *testing.T) {
 	assert.Contains(t, withForks.Branches, BranchOption{Branch: "fork-only"},
 		"fork-only branch included when scope is all")
 
-	filtered, err := d.GetBranches(context.Background(), BranchQuery{
+	filtered, err := d.SearchBranchNames(context.Background(), BranchQuery{
 		Scope:          BranchScopeRoots,
 		ExcludeOneShot: true,
 		Limit:          100,
@@ -347,7 +347,7 @@ func TestGetBranches(t *testing.T) {
 		"one-shot branch excluded when excludeOneShot is set")
 }
 
-func TestGetBranchesProjectsSearchAndLimit(t *testing.T) {
+func TestSearchBranchNamesProjectsSearchAndLimit(t *testing.T) {
 	d := testDB(t)
 	seed := func(id, project, branch, endedAt string) {
 		insertSession(t, d, id, project, func(s *Session) {
@@ -366,7 +366,7 @@ func TestGetBranchesProjectsSearchAndLimit(t *testing.T) {
 	seed("project-name-match", "feature-project", "main", "2026-07-01T10:00:00Z")
 	seed("alpha-empty", "alpha", "", "2026-06-08T10:00:00Z")
 
-	got, err := d.GetBranches(context.Background(), BranchQuery{
+	got, err := d.SearchBranchNames(context.Background(), BranchQuery{
 		Projects: []string{"alpha", "beta", "feature-project"},
 		Search:   "FEATURE",
 		Limit:    2,
@@ -377,7 +377,7 @@ func TestGetBranchesProjectsSearchAndLimit(t *testing.T) {
 		HasMore:  true,
 	}, got, "project filter applies before dedupe and recency ordering")
 
-	empty, err := d.GetBranches(context.Background(), BranchQuery{
+	empty, err := d.SearchBranchNames(context.Background(), BranchQuery{
 		Projects: []string{"alpha"},
 		Limit:    100,
 	})

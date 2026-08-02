@@ -3989,8 +3989,15 @@ func TestDuckDBBranchDimension(t *testing.T) {
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
+	qualified, err := store.GetBranches(ctx, false, false)
+	require.NoError(t, err, "GetBranches")
+	assert.Contains(t, qualified, db.BranchInfo{
+		Project: "alpha",
+		Branch:  "feature-x",
+		Token:   "alpha\x1ffeature-x",
+	})
 
-	branches, err := store.GetBranches(ctx, db.BranchQuery{
+	branches, err := store.SearchBranchNames(ctx, db.BranchQuery{
 		Projects: []string{"alpha", "beta"},
 		Search:   "MAIN",
 		Limit:    1,
@@ -4001,7 +4008,7 @@ func TestDuckDBBranchDimension(t *testing.T) {
 		HasMore:  false,
 	}, branches, "same-named branches deduplicate after filtering selected projects")
 
-	withForks, err := store.GetBranches(ctx, db.BranchQuery{
+	withForks, err := store.SearchBranchNames(ctx, db.BranchQuery{
 		Scope:    db.BranchScopeAll,
 		Projects: []string{"delta"},
 		Limit:    100,

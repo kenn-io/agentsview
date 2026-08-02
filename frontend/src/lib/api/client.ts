@@ -39,7 +39,7 @@ export async function searchBranches(
   params: BranchSearchParams,
 ): Promise<BranchSearchResponse> {
   configureGeneratedClient();
-  const response = await MetadataService.getApiV1Branches({
+  const response = await MetadataService.getApiV1BranchNames({
     projects: params.projects,
     search: params.search || undefined,
     limit: params.limit ?? 100,

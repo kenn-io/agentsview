@@ -45,6 +45,8 @@
   const byProject = $derived(rankedRows(report.by_project));
   const byModel = $derived(rankedRows(report.by_model));
   const byAgent = $derived(rankedRows(report.by_agent));
+  const BRANCH_ROW_LIMIT = 40;
+  const OTHER_BRANCHES_KEY = "__activity_other_branches__";
   // Tokenizing branch rows depends only on the report, not the metric, so
   // keep it out of the rankedRows derived: flipping minutes/cost re-ranks
   // without re-allocating every row of an uncapped (project, branch) list.
@@ -55,7 +57,34 @@
       displayLabel: branchLabel(b.project, b.branch, m.shared_no_branch()),
     })),
   );
-  const byBranch = $derived(rankedRows(branchRows));
+  const byBranch = $derived.by(() => {
+    const ranked = rankedRows(branchRows);
+    if (ranked.length <= BRANCH_ROW_LIMIT) return ranked;
+
+    const visible = ranked.slice(0, BRANCH_ROW_LIMIT - 1);
+    const omitted = ranked.slice(BRANCH_ROW_LIMIT - 1);
+    const sum = (value: (row: BreakdownRow) => number) =>
+      omitted.reduce((total, row) => total + value(row), 0);
+    return [
+      ...visible,
+      {
+        key: OTHER_BRANCHES_KEY,
+        displayLabel: m.shared_other(),
+        agent_minutes: sum((row) => row.agent_minutes),
+        cost: moneyFromMicrodollars(sum((row) => row.cost.microdollars)),
+        interactive_agent_minutes: sum(
+          (row) => row.interactive_agent_minutes,
+        ),
+        automated_agent_minutes: sum((row) => row.automated_agent_minutes),
+        interactive_cost: moneyFromMicrodollars(
+          sum((row) => row.interactive_cost.microdollars),
+        ),
+        automated_cost: moneyFromMicrodollars(
+          sum((row) => row.automated_cost.microdollars),
+        ),
+      },
+    ];
+  });
 
   interface Panel {
     title: string;

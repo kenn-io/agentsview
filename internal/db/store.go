@@ -64,7 +64,8 @@ type Store interface {
 	GetActiveProjectLabels(ctx context.Context) ([]string, error)
 	GetAgents(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]AgentInfo, error)
 	GetMachines(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]string, error)
-	GetBranches(ctx context.Context, q BranchQuery) (BranchResult, error)
+	GetBranches(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]BranchInfo, error)
+	SearchBranchNames(ctx context.Context, q BranchQuery) (BranchResult, error)
 	ListProjectIdentityObservations(ctx context.Context, labels []string) ([]export.ProjectIdentityObservation, error)
 	BuildProjectIdentityMap(ctx context.Context, labels []string) (map[string]export.ProjectMapEntry, error)
 

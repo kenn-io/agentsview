@@ -3,6 +3,7 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { AgentsResponse } from '../models/AgentsResponse';
+import type { BranchesResponse } from '../models/BranchesResponse';
 import type { DbBranchResult } from '../models/DbBranchResult';
 import type { DbSessionStats } from '../models/DbSessionStats';
 import type { DbStats } from '../models/DbStats';
@@ -55,11 +56,11 @@ export class MetadataService {
     });
   }
   /**
-   * List branches
+   * Search branch names
    * @returns DbBranchResult OK
    * @throws ApiError
    */
-  public static getApiV1Branches({
+  public static getApiV1BranchNames({
     includeOneShot,
     includeAutomated,
     scope,
@@ -94,7 +95,7 @@ export class MetadataService {
   }): CancelablePromise<DbBranchResult> {
     return __request(OpenAPI, {
       method: 'GET',
-      url: '/api/v1/branches',
+      url: '/api/v1/branch-names',
       query: {
         'include_one_shot': includeOneShot,
         'include_automated': includeAutomated,
@@ -102,6 +103,46 @@ export class MetadataService {
         'projects': projects,
         'search': search,
         'limit': limit,
+      },
+      errors: {
+        400: `Bad Request`,
+        401: `Unauthorized`,
+        403: `Forbidden`,
+        404: `Not Found`,
+        409: `Conflict`,
+        422: `Unprocessable Entity`,
+        500: `Internal Server Error`,
+        501: `Not Implemented`,
+        502: `Bad Gateway`,
+        503: `Service Unavailable`,
+        504: `Gateway Timeout`,
+      },
+    });
+  }
+  /**
+   * List branches
+   * @returns BranchesResponse OK
+   * @throws ApiError
+   */
+  public static getApiV1Branches({
+    includeOneShot,
+    includeAutomated,
+  }: {
+    /**
+     * Include one-shot sessions
+     */
+    includeOneShot?: boolean,
+    /**
+     * Include automated sessions
+     */
+    includeAutomated?: boolean,
+  }): CancelablePromise<BranchesResponse> {
+    return __request(OpenAPI, {
+      method: 'GET',
+      url: '/api/v1/branches',
+      query: {
+        'include_one_shot': includeOneShot,
+        'include_automated': includeAutomated,
       },
       errors: {
         400: `Bad Request`,

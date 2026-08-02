@@ -117,12 +117,33 @@ for filter options:
 GET /api/v1/projects
 GET /api/v1/machines
 GET /api/v1/branches
+GET /api/v1/branch-names
 GET /api/v1/agents
 ```
 
-`GET /api/v1/branches` returns a bounded list of distinct branch names for
-filter pickers. Results are sorted by session count and then branch name. The
-search is case-insensitive and matches branch-name substrings.
+`GET /api/v1/branches` preserves the stable project-qualified metadata
+contract. It returns distinct `(project, branch)` pairs, ordered by project and
+branch, plus an opaque token for exact filtering:
+
+```json
+{
+  "branches": [
+    {
+      "project": "myapp",
+      "branch": "main",
+      "token": "..."
+    }
+  ]
+}
+```
+
+Pass the token back as `git_branch` when project identity must remain exact;
+treat it as opaque and URL-encode it in manual HTTP calls.
+
+`GET /api/v1/branch-names` is the bounded name-search contract used by filter
+pickers. It deduplicates same-named branches after applying project scope and
+orders names by the most recent matching session activity, then branch name.
+Search is case-insensitive and matches branch-name substrings.
 
 | Query parameter | Meaning |
 |-----------------|---------|
@@ -130,23 +151,24 @@ search is case-insensitive and matches branch-name substrings.
 | `projects` | Optional repeated project filter applied before branch-name deduplication |
 | `scope` | `roots` by default; `all` also includes subagent and fork sessions |
 | `limit` | Maximum branch names, from 1 through 100; default 100 |
+| `include_one_shot` | Include one-shot sessions; default false |
+| `include_automated` | Include automated sessions; default false |
 
 ```json
 {
   "branches": [
     {
-      "branch": "main",
-      "session_count": 42
+      "branch": "main"
     }
   ],
   "has_more": false
 }
 ```
 
-`has_more` is true when additional matching branch names exist beyond the
-requested limit. Branch-aware endpoints accept branch names directly in
-`git_branch`; clients do not obtain opaque filter tokens from this metadata
-endpoint.
+`has_more` is true when additional matching names exist beyond the requested
+limit. Branch-aware endpoints accept these names directly in `git_branch` for
+name-based filtering, or the token from `/api/v1/branches` for an exact
+project/branch identity.
 
 ## Commands
 
@@ -236,7 +258,7 @@ therefore appear on both dates.
 | `--project`           | `project`           | string                            |
 | `--exclude-project`   | `exclude_project`   | string                            |
 | `--machine`           | `machine`           | string                            |
-| `--branch`            | `git_branch`        | Branch name; the CLI requires `--project`. Direct HTTP callers may supply project scope separately |
+| `--branch`            | `git_branch`        | Branch name; the CLI requires `--project` and sends an exact opaque token. Direct HTTP callers may use a name or token |
 | `--agent`             | `agent`             | string                            |
 | `--date`              | `date`              | `YYYY-MM-DD`                      |
 | `--date-from`         | `date_from`         | `YYYY-MM-DD`                      |

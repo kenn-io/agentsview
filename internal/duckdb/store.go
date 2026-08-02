@@ -833,6 +833,32 @@ func (s *Store) GetMachines(ctx context.Context, excludeOneShot, excludeAutomate
 }
 
 func (s *Store) GetBranches(
+	ctx context.Context,
+	excludeOneShot, excludeAutomated bool,
+) ([]db.BranchInfo, error) {
+	rows, err := s.queryContext(ctx,
+		`SELECT DISTINCT project, git_branch FROM sessions WHERE `+
+			rootSessionWhere(excludeOneShot, excludeAutomated)+
+			` ORDER BY project, git_branch`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying duckdb branches: %w", err)
+	}
+	defer rows.Close()
+
+	branches := []db.BranchInfo{}
+	for rows.Next() {
+		var branch db.BranchInfo
+		if err := rows.Scan(&branch.Project, &branch.Branch); err != nil {
+			return nil, fmt.Errorf("scanning duckdb branch: %w", err)
+		}
+		branch.Token = db.EncodeBranchFilterToken(branch.Project, branch.Branch)
+		branches = append(branches, branch)
+	}
+	return branches, rows.Err()
+}
+
+func (s *Store) SearchBranchNames(
 	ctx context.Context, query db.BranchQuery,
 ) (db.BranchResult, error) {
 	query = db.NormalizeBranchQuery(query)

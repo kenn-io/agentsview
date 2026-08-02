@@ -394,4 +394,51 @@ describe("Breakdowns", () => {
     unmount(component);
     target.remove();
   });
+
+  it("caps large branch panels with an aggregated Other row", async () => {
+    const report = makeReport();
+    report.by_branch = Array.from({ length: 41 }, (_, index) => {
+      const value = index < 39 ? 2 : 1;
+      return {
+        project_key: `pl1:sha256:${index}`,
+        project: `project-${index}`,
+        branch: `branch-${index}`,
+        agent_minutes: value,
+        cost: testMoney(value),
+        interactive_agent_minutes: value,
+        automated_agent_minutes: 0,
+        interactive_cost: testMoney(value),
+        automated_cost: testMoney(0),
+      };
+    });
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(Breakdowns, { target, props: { report } });
+    await tick();
+
+    const branchPanel = Array.from(
+      target.querySelectorAll<HTMLElement>(".breakdown-panel"),
+    ).find(
+      (panel) => panel.querySelector(".panel-title")?.textContent === "Branch",
+    );
+    expect(branchPanel?.querySelectorAll(".bar-row")).toHaveLength(40);
+    const otherRow = Array.from(
+      branchPanel?.querySelectorAll<HTMLElement>(".bar-row") ?? [],
+    ).find((row) => row.querySelector(".bar-label")?.textContent === "Other");
+    expect(otherRow?.querySelector(".bar-value")?.textContent?.trim()).toBe("2");
+    expect(branchPanel?.textContent).not.toContain("project-39/branch-39");
+    expect(branchPanel?.textContent).not.toContain("project-40/branch-40");
+
+    const costButton = Array.from(
+      target.querySelectorAll<HTMLButtonElement>(".metric-btn"),
+    ).find((button) => button.textContent?.trim() === "Cost");
+    costButton?.click();
+    await tick();
+    expect(otherRow?.querySelector(".bar-value")?.textContent?.trim()).toBe(
+      "$2.00",
+    );
+
+    await unmount(component);
+    target.remove();
+  });
 });

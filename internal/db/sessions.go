@@ -3429,8 +3429,49 @@ type BranchInfo struct {
 	Token   string `json:"token"`
 }
 
+// GetBranches returns distinct (project, git_branch) pairs, including the empty
+// branch used for sessions with no recorded branch. This is the stable metadata
+// contract consumed by clients that need opaque project-qualified tokens.
+func (db *DB) GetBranches(
+	ctx context.Context,
+	excludeOneShot, excludeAutomated bool,
+) ([]BranchInfo, error) {
+	q := `SELECT DISTINCT project, git_branch
+		FROM sessions
+		WHERE message_count > 0
+		  AND relationship_type NOT IN ('subagent', 'fork')
+		  AND deleted_at IS NULL`
+	if excludeOneShot {
+		if !excludeAutomated {
+			q += " AND (user_message_count > 1 OR is_automated = 1)"
+		} else {
+			q += " AND user_message_count > 1"
+		}
+	}
+	if excludeAutomated {
+		q += " AND is_automated = 0"
+	}
+	q += " ORDER BY project, git_branch"
+	rows, err := db.getReader().QueryContext(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("querying branches: %w", err)
+	}
+	defer rows.Close()
+
+	branches := []BranchInfo{}
+	for rows.Next() {
+		var branch BranchInfo
+		if err := rows.Scan(&branch.Project, &branch.Branch); err != nil {
+			return nil, fmt.Errorf("scanning branch: %w", err)
+		}
+		branch.Token = EncodeBranchFilterToken(branch.Project, branch.Branch)
+		branches = append(branches, branch)
+	}
+	return branches, rows.Err()
+}
+
 // BranchScope selects which session relationships contribute (project,
-// branch) pairs to GetBranches.
+// branch) pairs to SearchBranchNames.
 type BranchScope int
 
 const (
@@ -3501,9 +3542,9 @@ func ScanBranchResult(rows *sql.Rows, q BranchQuery) (BranchResult, error) {
 	return BranchResult{Branches: branches, HasMore: hasMore}, nil
 }
 
-// GetBranches returns distinct git_branch values, including the empty branch,
-// ordered by the latest matching session activity and then branch name.
-func (db *DB) GetBranches(
+// SearchBranchNames returns distinct git_branch values, including the empty
+// branch, ordered by the latest matching session activity and then branch name.
+func (db *DB) SearchBranchNames(
 	ctx context.Context, query BranchQuery,
 ) (BranchResult, error) {
 	query = NormalizeBranchQuery(query)

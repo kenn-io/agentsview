@@ -1600,7 +1600,7 @@ func TestStoreWriteSurfaceSplitByCapability(t *testing.T) {
 	assert.ErrorIs(t, err, db.ErrReadOnly)
 }
 
-func TestStoreGetBranchesPickerQuery(t *testing.T) {
+func TestStoreSearchBranchNamesPickerQuery(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -1638,13 +1638,20 @@ func TestStoreGetBranchesPickerQuery(t *testing.T) {
 			 '2026-03-20T10:00:00Z'::timestamptz, 2, 2)
 	`)
 	require.NoError(t, err, "inserting branch sessions")
+	qualified, err := store.GetBranches(context.Background(), false, false)
+	require.NoError(t, err, "GetBranches")
+	assert.Contains(t, qualified, db.BranchInfo{
+		Project: "alpha",
+		Branch:  "feat/x",
+		Token:   "alpha\x1ffeat/x",
+	})
 
-	branches, err := store.GetBranches(context.Background(), db.BranchQuery{
+	branches, err := store.SearchBranchNames(context.Background(), db.BranchQuery{
 		Projects: []string{"alpha", "beta"},
 		Search:   "FEAT",
 		Limit:    1,
 	})
-	require.NoError(t, err, "GetBranches")
+	require.NoError(t, err, "SearchBranchNames")
 	assert.Equal(t, db.BranchResult{
 		Branches: []db.BranchOption{{Branch: "feat/x"}},
 		HasMore:  true,

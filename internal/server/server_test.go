@@ -1420,6 +1420,10 @@ type branchPickerResponse struct {
 	HasMore  bool               `json:"has_more"`
 }
 
+type branchListResponse struct {
+	Branches []db.BranchInfo `json:"branches"`
+}
+
 type syncStatusResponse struct {
 	LastSync string         `json:"last_sync"`
 	Progress *sync.Progress `json:"progress"`
@@ -2451,7 +2455,30 @@ func TestSessionStats_DefaultVisibilityMatchesListDefaults(t *testing.T) {
 	assert.Equal(t, 21, resp.Totals.MessagesTotal, "include_all messages_total")
 }
 
-func TestListBranchesPickerFiltersSearchesDeduplicatesAndPaginates(t *testing.T) {
+func TestListBranchesPreservesQualifiedTokenContract(t *testing.T) {
+	te := setup(t)
+	seed := func(id, project, branch string) {
+		te.seedSession(t, id, project, 5, func(s *db.Session) {
+			s.GitBranch = branch
+			s.UserMessageCount = 5
+		})
+	}
+
+	seed("alpha-main", "alpha", "main")
+	seed("beta-main", "beta", "main")
+	seed("alpha-empty", "alpha", "")
+
+	w := te.get(t, "/api/v1/branches")
+	assertStatus(t, w, http.StatusOK)
+	resp := decode[branchListResponse](t, w)
+	assert.Equal(t, []db.BranchInfo{
+		{Project: "alpha", Branch: "", Token: "alpha\x1f"},
+		{Project: "alpha", Branch: "main", Token: "alpha\x1fmain"},
+		{Project: "beta", Branch: "main", Token: "beta\x1fmain"},
+	}, resp.Branches)
+}
+
+func TestSearchBranchNamesFiltersDeduplicatesAndPaginates(t *testing.T) {
 	te := setup(t)
 	seed := func(id, project, branch, endedAt string) {
 		te.seedSession(t, id, project, 5, func(s *db.Session) {
@@ -2468,7 +2495,7 @@ func TestListBranchesPickerFiltersSearchesDeduplicatesAndPaginates(t *testing.T)
 	seed("unselected-shared", "gamma", "feature-shared", "2026-06-20T10:00:00Z")
 	seed("search-miss", "beta", "bugfix", "2026-06-30T10:00:00Z")
 
-	w := te.get(t, "/api/v1/branches?projects=alpha&projects=beta&search=FEATURE&limit=2")
+	w := te.get(t, "/api/v1/branch-names?projects=alpha&projects=beta&search=FEATURE&limit=2")
 	assertStatus(t, w, http.StatusOK)
 	resp := decode[branchPickerResponse](t, w)
 	require.Len(t, resp.Branches, 2)
