@@ -10823,9 +10823,11 @@ type pendingWrite struct {
 	usageEvents  []parser.ParsedUsageEvent
 	needsRetry   bool
 	forceReplace bool
-	// sourceConflict rejects a native ID collision across distinct source
-	// ownerships before project discovery or persistence can trust it.
-	sourceConflict bool
+	// sourceIdentityUnverified marks a copy that shares a native session ID
+	// without matching the stored machine, source path, or content hash. The
+	// copy still follows native-ID deduplication, but it cannot borrow the
+	// stored attribution for local filesystem identity discovery.
+	sourceIdentityUnverified bool
 	// sourceProjectResolved marks writes whose parser project has already
 	// been reconciled with durable identity for an unavailable local cwd.
 	sourceProjectResolved bool
@@ -10855,7 +10857,7 @@ func (e *Engine) pendingWriteIdentity(pw pendingWrite) db.SessionWriteIdentity {
 	}
 }
 
-func sessionWriteIdentitiesCompatible(
+func sessionWriteIdentitySupportsStoredAttribution(
 	left, right db.SessionWriteIdentity,
 ) bool {
 	if left.Agent != right.Agent {
@@ -10874,9 +10876,9 @@ func sessionWriteIdentitiesCompatible(
 
 // normalizePendingWriteMachines resolves immutable attribution before any
 // consumer can make a project, worktree, baseline, or persistence decision.
-// Existing sessions keep the archive's machine. A cross-machine copy may reuse
-// the ID only when it is the same source path or has the same content hash;
-// divergent copies are rejected before local project discovery or persistence.
+// Existing sessions keep the archive's machine. Native IDs continue to
+// deduplicate across copied roots, while unverified copies cannot borrow the
+// stored attribution for local filesystem identity discovery.
 func (e *Engine) normalizePendingWriteMachines(
 	ctx context.Context,
 	batch []pendingWrite,
@@ -10942,30 +10944,20 @@ func (e *Engine) normalizePendingWriteMachines(
 		if exists {
 			for _, i := range matchingIndexes {
 				incoming := e.pendingWriteIdentity(batch[i])
-				if !sessionWriteIdentitiesCompatible(stored, incoming) {
-					batch[i].sourceConflict = true
-					continue
-				}
+				batch[i].sourceIdentityUnverified =
+					!sessionWriteIdentitySupportsStoredAttribution(stored, incoming)
 				batch[i].sess.Machine = stored.Machine
 			}
 			continue
 		}
 
 		first := e.pendingWriteIdentity(batch[matchingIndexes[0]])
-		compatible := true
-		for _, i := range matchingIndexes[1:] {
-			if !sessionWriteIdentitiesCompatible(
-				first, e.pendingWriteIdentity(batch[i]),
-			) {
-				compatible = false
-				break
-			}
-		}
 		for _, i := range matchingIndexes {
-			batch[i].sourceConflict = !compatible
-			if compatible {
-				batch[i].sess.Machine = first.Machine
-			}
+			batch[i].sourceIdentityUnverified =
+				!sessionWriteIdentitySupportsStoredAttribution(
+					first, e.pendingWriteIdentity(batch[i]),
+				)
+			batch[i].sess.Machine = first.Machine
 		}
 	}
 	return batch, nil
@@ -11082,6 +11074,7 @@ func (e *Engine) preserveUnavailableSourceProjects(
 		}
 		sess := batch[i].sess
 		if sess.ID == "" || sess.Cwd == "" ||
+			batch[i].sourceIdentityUnverified ||
 			!e.isLocalMachineAttribution(sess.Machine) ||
 			!safeLocalAbsolutePath(sess.Cwd) ||
 			export.IsAutomountNamespacePath(runtime.GOOS, filepath.Clean(sess.Cwd)) {
@@ -11127,7 +11120,7 @@ func (e *Engine) preserveUnavailableSourceProjects(
 		}
 		for _, i := range indexes[id] {
 			sess := &batch[i].sess
-			if snapshot.Machine != sess.Machine ||
+			if !e.sameLocalMachineAttribution(snapshot.Machine, sess.Machine) ||
 				!pathContains(snapshot.RootPath, sess.Cwd) {
 				continue
 			}
@@ -11137,10 +11130,15 @@ func (e *Engine) preserveUnavailableSourceProjects(
 	return batch, nil
 }
 
-// isLocalMachineAttribution recognizes the legacy "local" sentinel as this
-// machine without rewriting the immutable value stored with the session.
+// isLocalMachineAttribution recognizes empty and the legacy "local" sentinel
+// as this machine without rewriting the immutable stored value.
 func (e *Engine) isLocalMachineAttribution(machine string) bool {
-	return machine == "local" || machine == e.machine
+	return machine == "" || machine == "local" || machine == e.machine
+}
+
+func (e *Engine) sameLocalMachineAttribution(left, right string) bool {
+	return left == right ||
+		(e.isLocalMachineAttribution(left) && e.isLocalMachineAttribution(right))
 }
 
 func pathContains(root, path string) bool {
@@ -11221,11 +11219,6 @@ func (e *Engine) writeBatchWithOutcome(
 	outcome := writeBatchOutcome{written: make([]bool, len(batch))}
 	resolveWorktreeProject := e.loadWorktreeProjectResolver()
 	for i, pw := range batch {
-		if pw.sourceConflict {
-			log.Printf("reject divergent source collision for session %s", pw.sess.ID)
-			outcome.failedSessions++
-			continue
-		}
 		s, msgs, verdict := e.prepareSessionWrite(
 			pw, resolveWorktreeProject,
 		)
@@ -11253,9 +11246,7 @@ func (e *Engine) writeBatchWithOutcome(
 		// (writeIncremental), messages are written first since the session
 		// already exists.
 		revivingSourceMissing, err :=
-			e.upsertSessionPendingContentWithProjectIdentity(
-				s, pw.sess.Project,
-			)
+			e.upsertSessionPendingContentForWrite(pw, s)
 		if err != nil {
 			if isIntentionalSessionSkip(err) {
 				if pw.sess.File.Path != "" {
@@ -11370,7 +11361,8 @@ func (e *Engine) prepareSessionWrite(
 		pw.sess.CountsAuthoritative,
 	)
 	e.applyRemoteRewrites(&s, msgs)
-	if s.Cwd != "" && resolveWorktreeProject != nil {
+	if !pw.sourceIdentityUnverified &&
+		s.Cwd != "" && resolveWorktreeProject != nil {
 		if mapped, ok := resolveWorktreeProject(
 			s.Machine, s.Cwd, s.Project,
 		); ok {
@@ -12184,11 +12176,6 @@ func (e *Engine) writeBatchBulkWithOutcome(
 	resolveWorktreeProject := e.loadWorktreeProjectResolver()
 
 	for pendingIndex, pw := range batch {
-		if pw.sourceConflict {
-			log.Printf("reject divergent source collision for session %s", pw.sess.ID)
-			outcome.failedSessions++
-			continue
-		}
 		tPrep := time.Now()
 		s, msgs, verdict := e.prepareSessionWrite(
 			pw, resolveWorktreeProject,
@@ -12212,7 +12199,7 @@ func (e *Engine) writeBatchBulkWithOutcome(
 			Messages:    msgs,
 			UsageEvents: e.usageEventsForWrite(s.ID, pw.usageEvents),
 			IdentityObservation: identityObservationOrZero(
-				e.projectIdentityObservation(s),
+				e.projectIdentityObservationForWrite(pw, s),
 			),
 			IdentitySnapshotProject: &snapshotProject,
 			Signals:                 update,
@@ -12317,6 +12304,16 @@ func (e *Engine) projectIdentityObservation(
 		obs.CheckoutState, obs.GitBranch = readGitCheckout(cached.gitDir)
 	}
 	return obs, true
+}
+
+func (e *Engine) projectIdentityObservationForWrite(
+	pw pendingWrite,
+	s db.Session,
+) (export.ProjectIdentityObservation, bool) {
+	if pw.sourceIdentityUnverified {
+		return export.ProjectIdentityObservation{}, false
+	}
+	return e.projectIdentityObservation(s)
 }
 
 func (e *Engine) cachedProjectIdentity(machine, rootPath string) projectIdentityCacheEntry {
@@ -12425,6 +12422,18 @@ func (e *Engine) upsertSessionPendingContentWithProjectIdentity(
 	}
 	return e.db.UpsertSessionPendingContentWithProjectIdentity(
 		s, obs, snapshotProject,
+	)
+}
+
+func (e *Engine) upsertSessionPendingContentForWrite(
+	pw pendingWrite,
+	s db.Session,
+) (bool, error) {
+	if pw.sourceIdentityUnverified {
+		return e.db.UpsertSessionPendingContent(s)
+	}
+	return e.upsertSessionPendingContentWithProjectIdentity(
+		s, pw.sess.Project,
 	)
 }
 
@@ -12909,11 +12918,6 @@ func (e *Engine) writeSessionFullWithResolver(
 	if err != nil {
 		return err
 	}
-	if normalized[0].sourceConflict {
-		return fmt.Errorf(
-			"session %s has divergent source ownership", pw.sess.ID,
-		)
-	}
 	preserved, err := e.preserveUnavailableSourceProjects(
 		context.Background(), normalized,
 	)
@@ -12927,9 +12931,7 @@ func (e *Engine) writeSessionFullWithResolver(
 	if verdict != sessionWriteOK {
 		return errSessionPreserved
 	}
-	_, err = e.upsertSessionPendingContentWithProjectIdentity(
-		s, pw.sess.Project,
-	)
+	_, err = e.upsertSessionPendingContentForWrite(pw, s)
 	if err != nil {
 		if isIntentionalSessionSkip(err) {
 			if pw.sess.File.Path != "" {

@@ -110,6 +110,7 @@ func TestPreserveUnavailableSourceProjectsUsesDurableSnapshot(
 		makeSource    bool
 		statErr       error
 		idPrefix      string
+		emptyMachine  bool
 	}{
 		{
 			name:          "missing source",
@@ -129,6 +130,11 @@ func TestPreserveUnavailableSourceProjectsUsesDurableSnapshot(
 			parsedProject: "parser-fallback",
 			idPrefix:      "remote~",
 		},
+		{
+			name:          "empty legacy machine",
+			parsedProject: "parser-fallback",
+			emptyMachine:  true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			const (
@@ -136,6 +142,14 @@ func TestPreserveUnavailableSourceProjectsUsesDurableSnapshot(
 				originalProject = "resolved-project"
 				machine         = "test-machine"
 			)
+			attributedMachine := machine
+			if tc.emptyMachine {
+				attributedMachine = ""
+			}
+			snapshotMachine := attributedMachine
+			if snapshotMachine == "" {
+				snapshotMachine = machine
+			}
 			database := openTestDB(t)
 			root := filepath.Join(t.TempDir(), "checkout")
 			cwd := filepath.Join(root, "nested")
@@ -144,14 +158,15 @@ func TestPreserveUnavailableSourceProjectsUsesDurableSnapshot(
 				require.NoError(t, os.MkdirAll(cwd, 0o755))
 			}
 			require.NoError(t, database.UpsertSession(db.Session{
-				ID: storedSessionID, Project: originalProject, Machine: machine,
-				Agent: string(parser.AgentClaude), Cwd: cwd,
+				ID: storedSessionID, Project: originalProject,
+				Machine: attributedMachine,
+				Agent:   string(parser.AgentClaude), Cwd: cwd,
 			}))
 			require.NoError(t,
 				database.UpsertProjectIdentityObservationWithSnapshotProject(
 					t.Context(), export.ProjectIdentityObservation{
 						SessionID: storedSessionID, Project: originalProject,
-						Machine: machine, RootPath: root,
+						Machine: snapshotMachine, RootPath: root,
 						GitRemote:        "https://example.com/team/project.git",
 						RemoteResolution: export.ProjectResolutionResolved,
 						ObservedAt: time.Date(
@@ -172,8 +187,9 @@ func TestPreserveUnavailableSourceProjectsUsesDurableSnapshot(
 
 			result, err := engine.preserveUnavailableSourceProjects(
 				t.Context(), []pendingWrite{{sess: parser.ParsedSession{
-					ID: sessionID, Project: tc.parsedProject, Machine: machine,
-					Agent: parser.AgentClaude, Cwd: cwd,
+					ID: sessionID, Project: tc.parsedProject,
+					Machine: attributedMachine,
+					Agent:   parser.AgentClaude, Cwd: cwd,
 				}}},
 			)
 			require.NoError(t, err)
@@ -313,7 +329,7 @@ func TestWriteBatchDuplicateNewSessionIDKeepsFirstMachine(t *testing.T) {
 		"every same-batch copy must use the machine of the first ingestion")
 }
 
-func TestWriteBatchRejectsDivergentForeignSessionIDCollision(t *testing.T) {
+func TestWriteBatchUnverifiedCopyKeepsStoredIdentitySnapshot(t *testing.T) {
 	const sessionID = "shared-native-id"
 	database := openTestDB(t)
 	engine := NewEngine(database, EngineConfig{Machine: "local-machine"})
@@ -341,23 +357,28 @@ func TestWriteBatchRejectsDivergentForeignSessionIDCollision(t *testing.T) {
 	require.Equal(t, 1, initial.writtenSessions)
 	require.Zero(t, initial.failedSessions)
 
-	collision := engine.writeBatchWithOutcome([]pendingWrite{
+	copyWrite := engine.writeBatchWithOutcome([]pendingWrite{
 		write("foreign-machine", "foreign-project", foreignPath, "foreign-hash", "foreign content"),
-	}, syncWriteDefault, true)
+	}, syncWriteBulk, true)
 
-	assert.Zero(t, collision.writtenSessions)
-	assert.Equal(t, 1, collision.failedSessions)
+	assert.Equal(t, 1, copyWrite.writtenSessions)
+	assert.Zero(t, copyWrite.failedSessions)
 	stored, err := database.GetSessionFull(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Equal(t, "local-machine", stored.Machine)
-	assert.Equal(t, "local-project", stored.Project)
+	assert.Equal(t, "foreign-project", stored.Project)
 	require.NotNil(t, stored.FilePath)
-	assert.Equal(t, localPath, *stored.FilePath)
+	assert.Equal(t, foreignPath, *stored.FilePath)
 	messages, err := database.GetAllMessages(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
-	assert.Equal(t, "local content", messages[0].Content)
+	assert.Equal(t, "foreign content", messages[0].Content)
+	snapshots, err := database.ListSessionProjectIdentitySnapshots(t.Context())
+	require.NoError(t, err)
+	require.Len(t, snapshots, 1)
+	assert.Equal(t, "local-project", snapshots[0].Project,
+		"an unverified copy must not rewrite local filesystem identity evidence")
 }
 
 func TestWriteBatchResyncDuplicateIDKeepsFirstReplacementMachine(t *testing.T) {

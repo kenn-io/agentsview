@@ -2472,8 +2472,8 @@ func (db *DB) ListSessionIDsByFilePath(path, agent string) ([]string, error) {
 
 const sessionMachineBatchSize = 500
 
-// SessionWriteIdentity is the stored ownership evidence needed before a sync
-// write can reuse an existing native session ID.
+// SessionWriteIdentity is the stored evidence used to decide whether a copied
+// source may reuse the session's machine for local project identity discovery.
 type SessionWriteIdentity struct {
 	Machine  string
 	Agent    string
@@ -2481,7 +2481,7 @@ type SessionWriteIdentity struct {
 	FileHash string
 }
 
-// ListSessionWriteIdentitiesByID returns stored ownership evidence for each
+// ListSessionWriteIdentitiesByID returns stored source evidence for each
 // requested session, including tombstoned rows that may be revived by a later
 // successful parse. Requests are chunked below SQLite's bind-variable limit.
 func (db *DB) ListSessionWriteIdentitiesByID(
