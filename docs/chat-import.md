@@ -130,6 +130,8 @@ You can safely re-import the same export file:
   new messages. User-edited display names are preserved.
 - **ChatGPT** — existing sessions are skipped (not
   re-imported), so your data stays unchanged.
-- **Gemini Apps** — existing sessions are matched by the
-  exported timestamp and record order. Content changes update the
-  same one-message session; unchanged records are skipped.
+- **Gemini Apps** — existing sessions are matched by the canonical UTC
+  timestamp and its zero-based occurrence among records sharing that
+  timestamp. Inserting or reordering records with other timestamps doesn't
+  change existing IDs. Content changes update the same one-message session;
+  unchanged records are skipped.

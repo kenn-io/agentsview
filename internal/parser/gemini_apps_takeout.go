@@ -63,14 +63,16 @@ func (p *geminiAppsImportOnlyProvider) ParseGeminiAppsExport(root string, callba
 		summary.Skipped += plan.skipped
 		summary.Errors += plan.errors
 	}
-	ordinal := 0
+	occurrencesByTimestamp := make(map[string]int)
 	for planIndex := range plans {
 		for resultIndex := range plans[planIndex].results {
 			result := &plans[planIndex].results[resultIndex]
-			idInput := result.Session.StartedAt.UTC().Format(time.RFC3339Nano) + "\x00" + strconv.Itoa(ordinal)
+			timestampKey := result.Session.StartedAt.UTC().Format(time.RFC3339Nano)
+			occurrence := occurrencesByTimestamp[timestampKey]
+			occurrencesByTimestamp[timestampKey] = occurrence + 1
+			idInput := timestampKey + "\x00" + strconv.Itoa(occurrence)
 			hash := sha256.Sum256([]byte(idInput))
 			result.Session.ID = "gemini-apps:" + hex.EncodeToString(hash[:])
-			ordinal++
 		}
 	}
 	for _, plan := range plans {

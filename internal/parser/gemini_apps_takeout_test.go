@@ -51,6 +51,28 @@ func geminiAppsProductCellHTML(
 		`</div></div>`
 }
 
+func parseGeminiAppsIDs(t *testing.T, fixture string) map[string]string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "activity.html")
+	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
+
+	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
+	require.True(t, ok)
+	exporter := provider.(GeminiAppsExportParser)
+	ids := make(map[string]string)
+	_, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
+		ids[result.Messages[0].Content] = result.Session.ID
+		return nil
+	})
+	require.NoError(t, err)
+	return ids
+}
+
+func geminiAppsPromptedDocument(cells ...string) string {
+	return `<!doctype html><html><head><title>My Activity History</title></head><body>` +
+		strings.Join(cells, "") + `</body></html>`
+}
+
 func TestParseGeminiAppsExportRealOuterCellHeaderShape(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "activity.html")
 	require.NoError(t, os.WriteFile(path, []byte(sanitizedGeminiAppsHTML), 0o644))
@@ -86,6 +108,47 @@ func TestParseGeminiAppsExportRealOuterCellHeaderShape(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, firstID, repeated[0].Session.ID)
+}
+
+func TestParseGeminiAppsIDsIgnoreUnrelatedRecordOrder(t *testing.T) {
+	cell := func(label, timestamp, content string) string {
+		return geminiAppsProductCellHTML("Gemini Apps", label, timestamp, "<p>"+content+"</p>")
+	}
+	a := cell("Prompted", "Jan 2, 2025, 3:04:05 PM EDT", "first")
+	b := cell("Prompted", "Jan 3, 2025, 3:04:05 PM EDT", "second")
+	c := cell("Prompted", "Jan 4, 2025, 3:04:05 PM EDT", "prepended")
+
+	initial := parseGeminiAppsIDs(t, geminiAppsPromptedDocument(a, b))
+	prepended := parseGeminiAppsIDs(t, geminiAppsPromptedDocument(c, a, b))
+	reordered := parseGeminiAppsIDs(t, geminiAppsPromptedDocument(b, a))
+
+	require.Len(t, initial, 2)
+	require.Len(t, prepended, 3)
+	require.Len(t, reordered, 2)
+	require.Contains(t, initial, "first")
+	require.Contains(t, initial, "second")
+	require.Contains(t, prepended, "first")
+	require.Contains(t, prepended, "second")
+	require.Contains(t, reordered, "first")
+	require.Contains(t, reordered, "second")
+	assert.Equal(t, initial["first"], prepended["first"])
+	assert.Equal(t, initial["second"], prepended["second"])
+	assert.Equal(t, initial["first"], reordered["first"])
+	assert.Equal(t, initial["second"], reordered["second"])
+}
+
+func TestParseGeminiAppsIDsDisambiguateSameTimestampOccurrences(t *testing.T) {
+	timestamp := "Jan 2, 2025, 3:04:05 PM EDT"
+	fixture := geminiAppsPromptedDocument(
+		geminiAppsProductCellHTML("Gemini Apps", "Prompted", timestamp, "<p>first</p>"),
+		geminiAppsProductCellHTML("Gemini Apps", "Prompted", timestamp, "<p>second</p>"),
+	)
+	ids := parseGeminiAppsIDs(t, fixture)
+	repeated := parseGeminiAppsIDs(t, fixture)
+
+	require.Len(t, ids, 2)
+	assert.NotEqual(t, ids["first"], ids["second"])
+	assert.Equal(t, ids, repeated)
 }
 
 func TestParseGeminiAppsRejectsNotPromptedActivityLabel(t *testing.T) {

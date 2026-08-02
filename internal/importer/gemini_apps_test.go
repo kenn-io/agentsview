@@ -121,6 +121,88 @@ func TestImportGeminiAppsReimportUpdatesResponseWithStableID(t *testing.T) {
 	assert.Equal(t, "first prompt\n\nupdated answer", messages[0].Content)
 }
 
+func geminiAppsImportPromptedCell(timestamp, content string) string {
+	return `<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Prompted</p><p>` + timestamp +
+		`</p></div><div class="content-cell"><p>` + content + `</p></div></div>`
+}
+
+func geminiAppsImportDocument(cells ...string) string {
+	return `<!doctype html><html><head><title>My Activity History</title></head><body>` +
+		strings.Join(cells, "") + `</body></html>`
+}
+
+func geminiAppsSessionIDs(t *testing.T, d *db.DB) map[string]bool {
+	t.Helper()
+	page, err := d.ListSessions(context.Background(), db.SessionFilter{Agent: "gemini-apps"})
+	require.NoError(t, err)
+	ids := make(map[string]bool, len(page.Sessions))
+	for _, session := range page.Sessions {
+		ids[session.ID] = true
+	}
+	return ids
+}
+
+func TestImportGeminiAppsReimportAfterPrependKeepsExistingSessions(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "activity.html")
+	first := geminiAppsImportPromptedCell("Jan 2, 2025, 3:04:05 PM EDT", "first")
+	second := geminiAppsImportPromptedCell("Jan 3, 2025, 3:04:05 PM EDT", "second")
+	prepended := geminiAppsImportPromptedCell("Jan 1, 2025, 3:04:05 PM EDT", "prepended")
+	require.NoError(t, os.WriteFile(path, []byte(geminiAppsImportDocument(first, second)), 0o644))
+
+	d := testDB(t)
+	initial, err := ImportGeminiApps(context.Background(), d, root, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, initial.Imported)
+	initialIDs := geminiAppsSessionIDs(t, d)
+
+	require.NoError(t, os.WriteFile(path, []byte(geminiAppsImportDocument(prepended, first, second)), 0o644))
+	secondImport, err := ImportGeminiApps(context.Background(), d, root, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, secondImport.Imported)
+	assert.Zero(t, secondImport.Updated)
+	assert.Equal(t, 2, secondImport.Skipped)
+	assert.Zero(t, secondImport.Errors)
+
+	page, err := d.ListSessions(context.Background(), db.SessionFilter{Agent: "gemini-apps"})
+	require.NoError(t, err)
+	assert.Len(t, page.Sessions, 3)
+	finalIDs := geminiAppsSessionIDs(t, d)
+	for id := range initialIDs {
+		assert.True(t, finalIDs[id])
+	}
+}
+
+func TestImportGeminiAppsReimportAfterReorderKeepsExistingSessions(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "activity.html")
+	first := geminiAppsImportPromptedCell("Jan 2, 2025, 3:04:05 PM EDT", "first")
+	second := geminiAppsImportPromptedCell("Jan 3, 2025, 3:04:05 PM EDT", "second")
+	require.NoError(t, os.WriteFile(path, []byte(geminiAppsImportDocument(first, second)), 0o644))
+
+	d := testDB(t)
+	initial, err := ImportGeminiApps(context.Background(), d, root, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, initial.Imported)
+	initialIDs := geminiAppsSessionIDs(t, d)
+
+	require.NoError(t, os.WriteFile(path, []byte(geminiAppsImportDocument(second, first)), 0o644))
+	reordered, err := ImportGeminiApps(context.Background(), d, root, nil)
+	require.NoError(t, err)
+	assert.Zero(t, reordered.Imported)
+	assert.Zero(t, reordered.Updated)
+	assert.Equal(t, 2, reordered.Skipped)
+	assert.Zero(t, reordered.Errors)
+
+	page, err := d.ListSessions(context.Background(), db.SessionFilter{Agent: "gemini-apps"})
+	require.NoError(t, err)
+	assert.Len(t, page.Sessions, 2)
+	finalIDs := geminiAppsSessionIDs(t, d)
+	for id := range initialIDs {
+		assert.True(t, finalIDs[id])
+	}
+}
+
 func TestImportGeminiAppsUnknownZoneDoesNotWriteSession(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "activity.html")

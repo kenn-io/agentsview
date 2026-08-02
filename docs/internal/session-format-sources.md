@@ -264,6 +264,10 @@ Grok section and remove the explicit registry exception in the coverage test.
   declared non-English or otherwise unsupported localized Gemini candidates
   before emitting sessions. Inline code remains inline text, while preformatted
   text preserves authored spaces, tabs, newlines, and backticks as data.
+  Session IDs use the canonical UTC timestamp plus a zero-based occurrence
+  index among admitted `Prompted` records sharing that timestamp. Records with
+  other timestamps can be inserted or reordered without changing existing IDs;
+  order remains a tie-breaker only for exact timestamp collisions.
 - **Evidence:** `no-public-source`.
 - **Upstream:** Google's Takeout documentation and public format references
   were searched 2026-08-01. Google does not publish a versioned Gemini Apps
