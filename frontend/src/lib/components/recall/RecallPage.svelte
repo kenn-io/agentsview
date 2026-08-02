@@ -352,7 +352,7 @@
               )?.state ?? status.generations[0]?.state}
             </span>
           {/if}
-          {#if !statusLoading && !statusFailed}
+          {#if !statusLoading && !statusFailed && status?.progress_available}
             <Button
               size="sm"
               tone="neutral"

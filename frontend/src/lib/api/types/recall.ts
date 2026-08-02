@@ -67,6 +67,7 @@ export interface RecallExtractProgressStats {
 
 export interface RecallExtractionStatus {
   configured: boolean;
+  progress_available: boolean;
   fingerprint?: string;
   generations?: RecallExtractGeneration[];
   source_runs?: string[];

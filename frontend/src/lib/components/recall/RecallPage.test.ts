@@ -25,6 +25,7 @@ describe("RecallPage", () => {
       if (url.includes("/recall/extraction/status")) {
         return new Response(JSON.stringify({
           configured: true,
+          progress_available: true,
           fingerprint: "generation-active",
           source_runs: [
             "generation-active",
@@ -384,6 +385,43 @@ describe("RecallPage", () => {
         "Trace the pending extraction",
       );
     });
+  });
+
+  it("hides extraction progress when the backend does not support it", async () => {
+    const defaultFetch = fetchMock as unknown as (
+      input: RequestInfo | URL,
+    ) => Promise<Response>;
+    fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/recall/extraction/status")) {
+        return new Response(JSON.stringify({
+          configured: false,
+          progress_available: false,
+          source_runs: [],
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return defaultFetch(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    component = mount(RecallPage, { target: document.body });
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain(
+        "Keep extraction passes bounded",
+      );
+    });
+
+    expect(Array.from(
+      document.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent?.trim() === "Show progress"))
+      .toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("/recall/extraction/progress"),
+      expect.anything(),
+    );
   });
 
   it("loads the next cursor page and removes the truncation action", async () => {

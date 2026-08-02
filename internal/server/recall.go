@@ -339,6 +339,7 @@ func decodeRecallListCursor(raw string) (recallListCursor, error) {
 func (s *Server) handleRecallExtractionStatus(
 	w http.ResponseWriter, r *http.Request,
 ) {
+	_, progressAvailable := s.db.(recallExtractProgressLister)
 	var sourceRuns []string
 	if lister, ok := s.db.(servedRecallSourceRunLister); ok {
 		var err error
@@ -353,8 +354,9 @@ func (s *Server) handleRecallExtractionStatus(
 	}
 	if s.recallExtractionStatus == nil {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"configured":  false,
-			"source_runs": sourceRuns,
+			"configured":         false,
+			"progress_available": progressAvailable,
+			"source_runs":        sourceRuns,
 		})
 		return
 	}
@@ -380,12 +382,13 @@ func (s *Server) handleRecallExtractionStatus(
 		})
 	}
 	writeJSON(w, http.StatusOK, recallExtractionStatusResponse{
-		Configured:      true,
-		Fingerprint:     status.Fingerprint,
-		Generations:     generations,
-		SourceRuns:      sourceRuns,
-		Stats:           status.Stats,
-		EligibleBacklog: status.EligibleBacklog,
+		Configured:        true,
+		ProgressAvailable: progressAvailable,
+		Fingerprint:       status.Fingerprint,
+		Generations:       generations,
+		SourceRuns:        sourceRuns,
+		Stats:             status.Stats,
+		EligibleBacklog:   status.EligibleBacklog,
 	})
 }
 
@@ -399,12 +402,13 @@ type recallExtractGenerationStatus struct {
 }
 
 type recallExtractionStatusResponse struct {
-	Configured      bool                            `json:"configured"`
-	Fingerprint     string                          `json:"fingerprint,omitempty"`
-	Generations     []recallExtractGenerationStatus `json:"generations,omitempty"`
-	SourceRuns      []string                        `json:"source_runs,omitempty"`
-	Stats           db.ExtractProgressStats         `json:"stats"`
-	EligibleBacklog int                             `json:"eligible_backlog"`
+	Configured        bool                            `json:"configured"`
+	ProgressAvailable bool                            `json:"progress_available"`
+	Fingerprint       string                          `json:"fingerprint,omitempty"`
+	Generations       []recallExtractGenerationStatus `json:"generations,omitempty"`
+	SourceRuns        []string                        `json:"source_runs,omitempty"`
+	Stats             db.ExtractProgressStats         `json:"stats"`
+	EligibleBacklog   int                             `json:"eligible_backlog"`
 }
 
 const (

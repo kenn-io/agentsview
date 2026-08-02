@@ -615,9 +615,23 @@ func TestRecallExtractionStatusReportsUnconfigured(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 
 	status := decode[struct {
-		Configured bool `json:"configured"`
+		Configured        bool `json:"configured"`
+		ProgressAvailable bool `json:"progress_available"`
 	}](t, w)
 	assert.False(t, status.Configured)
+	assert.True(t, status.ProgressAvailable)
+}
+
+func TestRecallExtractionStatusReportsProgressUnavailable(t *testing.T) {
+	te := setupHostOnly(t)
+
+	w := te.get(t, "/api/v1/recall/extraction/status")
+	assertStatus(t, w, http.StatusOK)
+
+	status := decode[struct {
+		ProgressAvailable bool `json:"progress_available"`
+	}](t, w)
+	assert.False(t, status.ProgressAvailable)
 }
 
 func TestRecallExtractionStatusReportsServedSourceRunsWithoutManager(
@@ -686,13 +700,15 @@ func TestRecallExtractionStatusReportsManagerCoverage(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 
 	status := decode[struct {
-		Configured      bool                    `json:"configured"`
-		Fingerprint     string                  `json:"fingerprint"`
-		Generations     []db.ExtractGeneration  `json:"generations"`
-		Stats           db.ExtractProgressStats `json:"stats"`
-		EligibleBacklog int                     `json:"eligible_backlog"`
+		Configured        bool                    `json:"configured"`
+		ProgressAvailable bool                    `json:"progress_available"`
+		Fingerprint       string                  `json:"fingerprint"`
+		Generations       []db.ExtractGeneration  `json:"generations"`
+		Stats             db.ExtractProgressStats `json:"stats"`
+		EligibleBacklog   int                     `json:"eligible_backlog"`
 	}](t, w)
 	assert.True(t, status.Configured)
+	assert.True(t, status.ProgressAvailable)
 	assert.Equal(t, "generation-a", status.Fingerprint)
 	require.Len(t, status.Generations, 1)
 	assert.Equal(t, db.ExtractGenerationActive,
