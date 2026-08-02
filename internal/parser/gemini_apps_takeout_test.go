@@ -471,6 +471,11 @@ func TestParseGeminiAppsPresentationDoesNotInferTurns(t *testing.T) {
 			content: `<div><ul><li>first <a href="https://example.invalid">link</a></li><li><span>second</span> item</li></ul></div>`,
 			want:    "first link\n\nsecond item",
 		},
+		{
+			name:    "heading quote table",
+			content: `<h2>Heading</h2><blockquote>quote</blockquote><table><tr><th>key</th><td>value</td></tr></table>`,
+			want:    "Heading\n\nquote\n\nkey\n\nvalue",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -670,6 +675,33 @@ func TestParseGeminiAppsEmptyRecordPayloadIsError(t *testing.T) {
 	assert.Equal(t, 1, summary.Errors)
 }
 
+func TestParseGeminiAppsExcludesStandaloneTimestampMetadataAcrossDirectNodes(t *testing.T) {
+	timestamp := "Jan 2, 2025, 3:04:05 PM EDT"
+	for _, content := range []string{
+		timestamp + "<p>prompt</p>",
+		"<span>" + timestamp + "</span><p>prompt</p>",
+		"<code>" + timestamp + "</code><p>prompt</p>",
+	} {
+		t.Run(content, func(t *testing.T) {
+			fixture := geminiAppsSingleCellHTML("", "My Activity History", "Prompted", timestamp, content)
+			path := filepath.Join(t.TempDir(), "direct-timestamp-metadata.html")
+			require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
+
+			provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
+			require.True(t, ok)
+			exporter := provider.(GeminiAppsExportParser)
+			var results []ParseResult
+			_, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
+				results = append(results, result)
+				return nil
+			})
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			assert.Equal(t, "prompt", results[0].Messages[0].Content)
+		})
+	}
+}
+
 func TestParseGeminiAppsInlineCodeRemainsOneRecordMessage(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -683,6 +715,10 @@ func TestParseGeminiAppsInlineCodeRemainsOneRecordMessage(t *testing.T) {
 		{
 			name: "code response", content: "<p>prompt</p><code>answer</code>",
 			want: "prompt\nanswer",
+		},
+		{
+			name: "inline code", content: "<p>Use <code>go test</code> now</p>",
+			want: "Use go test now",
 		},
 	}
 	for _, tt := range tests {
@@ -711,7 +747,7 @@ func TestParseGeminiAppsInlineCodeRemainsOneRecordMessage(t *testing.T) {
 }
 
 func TestParseGeminiAppsPreformattedCodeIsPlainText(t *testing.T) {
-	content := "<p>prompt</p><pre><code>  line one\n\tline  two  \n</code></pre><p>inline <code>  x  </code></p>"
+	content := "<p>prompt</p><pre><code>  line one\n\tline  two  \n`one` and ```three```  \n</code></pre><p>inline <code>  x  </code></p>"
 	fixture := geminiAppsSingleCellHTML(
 		"", "My Activity History", "Prompted",
 		"Jan 2, 2025, 3:04:05 PM EDT", content,
@@ -730,7 +766,26 @@ func TestParseGeminiAppsPreformattedCodeIsPlainText(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	require.Len(t, results[0].Messages, 1)
-	assert.Equal(t, "prompt\n\n  line one\n\tline  two  \n\n\ninline x", results[0].Messages[0].Content)
+	assert.Equal(t, "prompt\n\n  line one\n\tline  two  \n`one` and ```three```  \n\n\ninline x", results[0].Messages[0].Content)
+}
+
+func TestParseGeminiAppsPreservesBoundaryPreformattedWhitespace(t *testing.T) {
+	content := "<pre><code>  leading\n\tbody\n  </code></pre>"
+	fixture := geminiAppsSingleCellHTML("", "My Activity History", "Prompted", "Jan 2, 2025, 3:04:05 PM EDT", content)
+	path := filepath.Join(t.TempDir(), "boundary-preformatted.html")
+	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
+
+	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
+	require.True(t, ok)
+	exporter := provider.(GeminiAppsExportParser)
+	var results []ParseResult
+	_, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
+		results = append(results, result)
+		return nil
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "  leading\n\tbody\n  ", results[0].Messages[0].Content)
 }
 
 func TestParseGeminiAppsNormalizesOrdinaryWhitespace(t *testing.T) {

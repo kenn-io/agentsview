@@ -131,5 +131,5 @@ You can safely re-import the same export file:
 - **ChatGPT** — existing sessions are skipped (not
   re-imported), so your data stays unchanged.
 - **Gemini Apps** — existing sessions are matched by the
-  exported timestamp and prompt. Response changes update the
-  same session; unchanged records are skipped.
+  exported timestamp and record order. Content changes update the
+  same one-message session; unchanged records are skipped.

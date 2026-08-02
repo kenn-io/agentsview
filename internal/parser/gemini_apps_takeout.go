@@ -209,7 +209,6 @@ func planGeminiAppsCell(cell *html.Node) (bool, ParseResult, error) {
 		return true, ParseResult{}, fmt.Errorf("prompted activity record has no content cell")
 	}
 	payload := geminiAppsContentText(content, match[0])
-	payload = strings.TrimSpace(payload)
 	if payload == "" {
 		return true, ParseResult{}, fmt.Errorf("prompted activity record has no prompt")
 	}
@@ -222,20 +221,12 @@ func geminiAppsContentText(content *html.Node, headerTimestamp string) string {
 	var b strings.Builder
 	for child := content.FirstChild; child != nil; child = child.NextSibling {
 		text := geminiAppsVisibleText(child)
-		if child.Type == html.ElementNode && isGeminiAppsStructuralTextElement(child.Data) && normalizeMetadata(text) == normalizeMetadata(headerTimestamp) {
+		if normalizeMetadata(text) == normalizeMetadata(headerTimestamp) {
 			continue
 		}
 		b.WriteString(geminiAppsVisibleTextInContext(child, false))
 	}
-	return normalizeGeminiAppsVisibleText(b.String())
-}
-
-func isGeminiAppsStructuralTextElement(tag string) bool {
-	switch strings.ToLower(tag) {
-	case "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "li", "tr", "table", "ul", "ol":
-		return true
-	}
-	return false
+	return normalizeGeminiAppsContentText(b.String())
 }
 
 func geminiAppsActivityLabel(header *html.Node) string {
@@ -265,6 +256,20 @@ func geminiAppsVisibleText(n *html.Node) string {
 }
 
 func normalizeGeminiAppsVisibleText(value string) string {
+	const start, end = "\ue000", "\ue001"
+	value = normalizeGeminiAppsVisibleTextWithMarkers(value)
+	return strings.NewReplacer(start, "", end, "").Replace(value)
+}
+
+func normalizeGeminiAppsContentText(value string) string {
+	const start, end = "\ue000", "\ue001"
+	value = normalizeGeminiAppsVisibleTextWithMarkers(value)
+	value = strings.TrimLeft(value, "\n")
+	value = strings.TrimRight(value, "\n")
+	return strings.NewReplacer(start, "", end, "").Replace(value)
+}
+
+func normalizeGeminiAppsVisibleTextWithMarkers(value string) string {
 	const start, end = "\ue000", "\ue001"
 	clean := func(part string) string {
 		var out []rune
@@ -335,7 +340,7 @@ func geminiAppsVisibleTextInContext(n *html.Node, preserved bool) string {
 	switch tag {
 	case "br":
 		b.WriteByte('\n')
-	case "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "li", "tr", "table", "ul", "ol":
+	case "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "li", "tr", "th", "td", "table", "ul", "ol":
 		b.WriteByte('\n')
 	}
 	if tag == "pre" {
@@ -348,7 +353,7 @@ func geminiAppsVisibleTextInContext(n *html.Node, preserved bool) string {
 		b.WriteString("\ue001")
 	}
 	switch tag {
-	case "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "li", "tr", "table", "ul", "ol":
+	case "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "li", "tr", "th", "td", "table", "ul", "ol":
 		b.WriteByte('\n')
 	}
 	if preserved {
