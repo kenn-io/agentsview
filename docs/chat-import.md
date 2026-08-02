@@ -36,9 +36,11 @@ activity kinds are reported as skipped. Each prompt becomes a one-turn session;
 the importer resolves the timestamp's explicit exported zone instead of using
 the host timezone. Mixed Takeout archives may contain other product activity;
 those explicitly identified cells are ignored. The current parser supports the
-observed English rendering for Gemini Apps cells. Declared non-English or
-otherwise unsupported localized Gemini candidates are reported as unsupported
-before any sessions are emitted.
+observed English rendering for Gemini Apps cells, including the named zones it
+currently recognizes and complete `GMT±H`, `GMT±HH`, `GMT±H:MM`, and
+`GMT±HH:MM` zones; omitted minutes mean zero. Declared non-English or otherwise
+unsupported localized Gemini candidates and malformed zone tokens are reported
+as unsupported before any sessions are emitted.
 
 ## Importing via the UI
 

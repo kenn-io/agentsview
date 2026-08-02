@@ -22,7 +22,7 @@ type GeminiAppsExportParser interface {
 	ParseGeminiAppsExport(string, func(ParseResult) error) (GeminiAppsParseSummary, error)
 }
 
-var geminiAppsTimestampRE = regexp.MustCompile(`(?i)\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4},\s+\d{1,2}:\d{2}:\d{2}[\x{00a0}\x{202f} ]*(?:AM|PM)[\x{00a0}\x{202f} ]+(GMT[+-]\d{1,2}:\d{2}|[A-Za-z]{2,5})\b`)
+var geminiAppsTimestampRE = regexp.MustCompile(`(?i)\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4},\s+\d{1,2}:\d{2}:\d{2}[\x{00a0}\x{202f} ]*(?:AM|PM)[\x{00a0}\x{202f} ]+(\S+)`)
 var geminiAppsTimestampLikeRE = regexp.MustCompile(`(?i)(?:\b\d{1,2}\D+\d{4}\b|\b\d{4}\D+\d{1,2}\D+\d{1,2}\b)`)
 
 type geminiAppsFilePlan struct {
@@ -529,16 +529,37 @@ func geminiAppsZoneOffset(zone string) (int, bool) {
 		return -7 * 60 * 60, true
 	}
 	if strings.HasPrefix(zone, "GMT+") || strings.HasPrefix(zone, "GMT-") {
-		parts := strings.Split(strings.TrimPrefix(zone, "GMT"), ":")
-		if len(parts) != 2 {
+		numeric := strings.TrimPrefix(strings.TrimPrefix(zone, "GMT+"), "GMT-")
+		if numeric == "" {
 			return 0, false
 		}
 		sign := 1
-		if strings.HasPrefix(parts[0], "-") {
+		if zone[3] == '-' {
 			sign = -1
 		}
-		hours, e1 := strconv.Atoi(strings.TrimLeft(parts[0], "+-"))
-		minutes, e2 := strconv.Atoi(parts[1])
+		parts := strings.Split(numeric, ":")
+		if len(parts) > 2 || len(parts[0]) < 1 || len(parts[0]) > 2 {
+			return 0, false
+		}
+		for _, part := range parts {
+			if part == "" {
+				return 0, false
+			}
+			for _, char := range part {
+				if char < '0' || char > '9' {
+					return 0, false
+				}
+			}
+		}
+		if len(parts) == 2 && len(parts[1]) != 2 {
+			return 0, false
+		}
+		hours, e1 := strconv.Atoi(parts[0])
+		minutes := 0
+		var e2 error
+		if len(parts) == 2 {
+			minutes, e2 = strconv.Atoi(parts[1])
+		}
 		if e1 != nil || e2 != nil || hours > 23 || minutes > 59 {
 			return 0, false
 		}

@@ -273,8 +273,11 @@ Grok section and remove the explicit registry exception in the coverage test.
   were searched 2026-08-01. Google does not publish a versioned Gemini Apps
   activity HTML schema, so markup, labels, timestamp zones, and future record
   kinds remain observed compatibility evidence from sanitized exports. No
-  translated label or timestamp vocabulary is claimed; unsupported localized
-  formats return an explicit compatibility error.
+  translated label or timestamp vocabulary is claimed. Timestamp compatibility
+  includes the existing named zones and complete `GMT±H`, `GMT±HH`,
+  `GMT±H:MM`, and `GMT±HH:MM` forms, with omitted minutes treated as zero;
+  unsupported localized formats and malformed zone tokens return an explicit
+  compatibility error.
 - **Usage and cost:** Takeout activity records expose no authoritative token,
   cache, reasoning, credit, or monetary-cost fields to Agentsview.
 - **Agentsview:** `internal/parser/gemini_apps_takeout.go` and

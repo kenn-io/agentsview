@@ -237,6 +237,45 @@ func TestImportGeminiAppsUnknownZoneDoesNotWriteSession(t *testing.T) {
 	assert.Empty(t, page.Sessions)
 }
 
+func TestImportGeminiAppsWholeHourZonePersistsCorrectTimestamp(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "activity.html")
+	valid := geminiAppsImportPromptedCell(
+		"Jan 2, 2025, 3:04:05 PM GMT+8", "prompt",
+	)
+	malformed := geminiAppsImportPromptedCell(
+		"Jan 3, 2025, 3:04:05 PM GMT+8junk", "malformed",
+	)
+	require.NoError(t, os.WriteFile(path, []byte(geminiAppsImportDocument(valid)), 0o644))
+
+	d := testDB(t)
+	stats, err := ImportGeminiApps(context.Background(), d, root, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Imported)
+
+	page, err := d.ListSessions(context.Background(), db.SessionFilter{Agent: "gemini-apps"})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 1)
+	stored, err := d.GetSessionFull(context.Background(), page.Sessions[0].ID)
+	require.NoError(t, err)
+	require.NotNil(t, stored.StartedAt)
+	assert.Equal(t, "2025-01-02T07:04:05Z", *stored.StartedAt)
+	messages, err := d.GetAllMessages(context.Background(), page.Sessions[0].ID)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, *stored.StartedAt, messages[0].Timestamp)
+
+	require.NoError(t, os.WriteFile(path, []byte(geminiAppsImportDocument(malformed)), 0o644))
+	stats, err = ImportGeminiApps(context.Background(), d, root, nil)
+	assert.Error(t, err)
+	assert.Zero(t, stats.Imported)
+	assert.Zero(t, stats.Updated)
+	assert.Zero(t, stats.Errors)
+	page, err = d.ListSessions(context.Background(), db.SessionFilter{Agent: "gemini-apps"})
+	require.NoError(t, err)
+	assert.Len(t, page.Sessions, 1)
+}
+
 func TestImportGeminiAppsPersistenceGuards(t *testing.T) {
 	t.Run("unchanged and superset preserve revision", func(t *testing.T) {
 		root := t.TempDir()

@@ -151,6 +151,18 @@ func TestParseGeminiAppsIDsDisambiguateSameTimestampOccurrences(t *testing.T) {
 	assert.Equal(t, ids, repeated)
 }
 
+func TestParseGeminiAppsEquivalentNumericZonesKeepStableIdentity(t *testing.T) {
+	cell := func(zone string) string {
+		return geminiAppsProductCellHTML(
+			"Gemini Apps", "Prompted",
+			"Jan 2, 2025, 3:04:05 PM "+zone, "<p>prompt</p>",
+		)
+	}
+	ids := parseGeminiAppsIDs(t, geminiAppsPromptedDocument(cell("GMT+8")))
+	padded := parseGeminiAppsIDs(t, geminiAppsPromptedDocument(cell("GMT+08:00")))
+	assert.Equal(t, ids["prompt"], padded["prompt"])
+}
+
 func TestParseGeminiAppsRejectsNotPromptedActivityLabel(t *testing.T) {
 	fixture := strings.ReplaceAll(
 		sanitizedGeminiAppsHTML,
@@ -1027,6 +1039,36 @@ func TestParseGeminiAppsPreflightsUnknownZoneFileBeforeCallback(t *testing.T) {
 	assert.Zero(t, callbacks)
 }
 
+func TestParseGeminiAppsPreflightsMalformedZoneBeforeCallback(t *testing.T) {
+	supported := geminiAppsSingleCellHTML(
+		"", "My Activity History", "Prompted",
+		"Jan 2, 2025, 3:04:05 PM EDT", "<p>prompt</p>",
+	)
+	for _, zone := range []string{"GMT+8:3", "GMT+8junk", "GMT+8:30junk", "GMT+24", "GMT+8:60"} {
+		t.Run(zone, func(t *testing.T) {
+			unsupported := geminiAppsSingleCellHTML(
+				"", "My Activity History", "Prompted",
+				"Jan 3, 2025, 3:04:05 PM "+zone, "<p>prompt</p>",
+			)
+			path := filepath.Join(t.TempDir(), "malformed-zone.html")
+			require.NoError(t, os.WriteFile(path, []byte(strings.Replace(
+				supported, "</body>", unsupported+"</body>", 1),
+			), 0o644))
+
+			provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
+			require.True(t, ok)
+			exporter := provider.(GeminiAppsExportParser)
+			callbacks := 0
+			_, err := exporter.ParseGeminiAppsExport(path, func(ParseResult) error {
+				callbacks++
+				return nil
+			})
+			assert.Error(t, err)
+			assert.Zero(t, callbacks)
+		})
+	}
+}
+
 func TestParseGeminiAppsSkipsUnknownCompatibleActivityLabels(t *testing.T) {
 	for _, label := range []string{"Nicht Prompted", "Unknown Ereignis", "Prompted extra"} {
 		t.Run(label, func(t *testing.T) {
@@ -1123,6 +1165,9 @@ func TestParseGeminiAppsTimestampUsesExplicitZones(t *testing.T) {
 	}{
 		{"edt", "Jan 2, 2025, 3:04:05 PM EDT", "2025-01-02T19:04:05Z"},
 		{"pst", "Jan 2, 2025, 3:04:05 PM PST", "2025-01-02T23:04:05Z"},
+		{"whole-hour", "Jan 2, 2025, 3:04:05 PM GMT+8", "2025-01-02T07:04:05Z"},
+		{"whole-hour-padded", "Jan 2, 2025, 3:04:05 PM GMT+08:00", "2025-01-02T07:04:05Z"},
+		{"whole-hour-negative", "Jan 2, 2025, 3:04:05 PM GMT-8", "2025-01-02T23:04:05Z"},
 		{"numeric", "Jan 2, 2025, 3:04:05 PM GMT+05:30", "2025-01-02T09:34:05Z"},
 		{"negative-zero", "Jan 2, 2025, 3:04:05 PM GMT-00:30", "2025-01-02T15:34:05Z"},
 	}
@@ -1136,12 +1181,18 @@ func TestParseGeminiAppsTimestampUsesExplicitZones(t *testing.T) {
 		})
 	}
 
-	match := geminiAppsTimestampRE.FindStringSubmatch(
-		"Jan 2, 2025, 3:04:05 PM XYZ",
-	)
-	require.Len(t, match, 2)
-	_, err := parseGeminiAppsTimestamp(match[0], match[1])
-	assert.ErrorContains(t, err, "unsupported")
+	for _, zone := range []string{
+		"GMT+8:3", "GMT+8junk", "GMT+8:30junk", "GMT+24", "GMT+8:60", "XYZ",
+	} {
+		t.Run("reject-"+zone, func(t *testing.T) {
+			match := geminiAppsTimestampRE.FindStringSubmatch(
+				"Jan 2, 2025, 3:04:05 PM " + zone,
+			)
+			require.Len(t, match, 2)
+			_, err := parseGeminiAppsTimestamp(match[0], match[1])
+			assert.ErrorContains(t, err, "unsupported")
+		})
+	}
 }
 
 func TestParseGeminiAppsMissingContentCellIsCountedError(t *testing.T) {
