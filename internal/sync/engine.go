@@ -2121,33 +2121,26 @@ func (e *Engine) resyncBuildLocked(
 	rebuildOldFileSessions := oldFileSessions
 	contributorOldFileSessions := make([]int, len(opts.Contributors))
 	if len(opts.Contributors) > 0 {
-		localMachines := map[string]bool{}
-		if e.machine != "" {
-			localMachines[e.machine] = true
-		}
-		for _, roots := range e.sourceMachines {
-			for _, machine := range roots {
-				if machine != "" {
-					localMachines[machine] = true
-				}
-			}
-		}
-		if len(localMachines) > 0 {
-			localOldFileSessions = 0
-			for machine := range localMachines {
-				count, countErr := e.protectedFileSessionCount(
-					origDB, machine, "", true,
+		contributorPrefixes := make([]string, 0, len(opts.Contributors))
+		for _, contributor := range opts.Contributors {
+			if contributor.Config.IDPrefix != "" {
+				contributorPrefixes = append(
+					contributorPrefixes, contributor.Config.IDPrefix,
 				)
-				if countErr != nil {
-					log.Printf(
-						"resync: get old local machine %q file count: %v",
-						machine, countErr,
-					)
-					localOldFileSessions = 1
-					break
-				}
-				localOldFileSessions += count
 			}
+		}
+		excludedAgents := []string{
+			string(parser.AgentOpenCode),
+			string(parser.AgentKilo),
+			string(parser.AgentMiMoCode),
+			string(parser.AgentIcodemate),
+		}
+		localOldFileSessions, err = origDB.FileBackedSessionCountForRebuildOwner(
+			context.Background(), e.machine, contributorPrefixes, excludedAgents,
+		)
+		if err != nil {
+			log.Printf("resync: get old local rebuild file count: %v", err)
+			localOldFileSessions = 1
 		}
 		for i, contributor := range opts.Contributors {
 			count, countErr := e.protectedFileSessionCount(
@@ -2163,16 +2156,6 @@ func (e *Engine) resyncBuildLocked(
 				count = 1
 			}
 			contributorOldFileSessions[i] = count
-			// A structured local root may use a historical machine label, while a
-			// contributor is owned by its ID namespace. Remove a contributor only
-			// when its machine was included in the local attribution count.
-			if contributor.Config.IDPrefix != "" &&
-				(len(localMachines) == 0 || localMachines[contributor.Config.Machine]) {
-				localOldFileSessions -= count
-				if localOldFileSessions < 0 {
-					localOldFileSessions = 0
-				}
-			}
 		}
 		rebuildOldFileSessions = localOldFileSessions
 		for _, count := range contributorOldFileSessions {
@@ -10840,6 +10823,9 @@ type pendingWrite struct {
 	usageEvents  []parser.ParsedUsageEvent
 	needsRetry   bool
 	forceReplace bool
+	// sourceConflict rejects a native ID collision across distinct source
+	// ownerships before project discovery or persistence can trust it.
+	sourceConflict bool
 	// sourceProjectResolved marks writes whose parser project has already
 	// been reconciled with durable identity for an unavailable local cwd.
 	sourceProjectResolved bool
@@ -10854,17 +10840,43 @@ type pendingWrite struct {
 	storageTrustSnap  storageTrustSnapshot
 }
 
-type sessionMachineReader interface {
-	ListSessionMachinesByID(
+type sessionWriteIdentityReader interface {
+	ListSessionWriteIdentitiesByID(
 		context.Context, []string,
-	) (map[string]string, error)
+	) (map[string]db.SessionWriteIdentity, error)
+}
+
+func (e *Engine) pendingWriteIdentity(pw pendingWrite) db.SessionWriteIdentity {
+	return db.SessionWriteIdentity{
+		Machine:  pw.sess.Machine,
+		Agent:    string(pw.sess.Agent),
+		FilePath: e.effectiveSourcePath(pw.sess.File.Path),
+		FileHash: pw.sess.File.Hash,
+	}
+}
+
+func sessionWriteIdentitiesCompatible(
+	left, right db.SessionWriteIdentity,
+) bool {
+	if left.Agent != right.Agent {
+		return false
+	}
+	if left.Machine == right.Machine {
+		return true
+	}
+	if left.FilePath != "" && right.FilePath != "" &&
+		sameReconciliationSourcePath(left.FilePath, right.FilePath) {
+		return true
+	}
+	return left.FileHash != "" && right.FileHash != "" &&
+		left.FileHash == right.FileHash
 }
 
 // normalizePendingWriteMachines resolves immutable attribution before any
 // consumer can make a project, worktree, baseline, or persistence decision.
-// Existing sessions keep the archive's machine. For a new ID represented more
-// than once in the batch, every copy uses the first pending write's configured
-// machine so later upserts cannot rewrite its first-ingestion attribution.
+// Existing sessions keep the archive's machine. A cross-machine copy may reuse
+// the ID only when it is the same source path or has the same content hash;
+// divergent copies are rejected before local project discovery or persistence.
 func (e *Engine) normalizePendingWriteMachines(
 	ctx context.Context,
 	batch []pendingWrite,
@@ -10889,15 +10901,15 @@ func (e *Engine) normalizePendingWriteMachines(
 	if e.archiveStore != nil {
 		archive = e.archiveStore
 	}
-	reader, ok := archive.(sessionMachineReader)
+	reader, ok := archive.(sessionWriteIdentityReader)
 	if !ok {
 		return batch, fmt.Errorf(
-			"archive %T does not support session machine lookup", archive,
+			"archive %T does not support session write identity lookup", archive,
 		)
 	}
-	machines, err := reader.ListSessionMachinesByID(ctx, ids)
+	identities, err := reader.ListSessionWriteIdentitiesByID(ctx, ids)
 	if err != nil {
-		return batch, fmt.Errorf("load immutable session machines: %w", err)
+		return batch, fmt.Errorf("load immutable session write identities: %w", err)
 	}
 	// A rebuild reads preexisting attribution from archiveStore while writing
 	// into e.db. An ID first seen earlier in this rebuild is absent from the old
@@ -10905,30 +10917,55 @@ func (e *Engine) normalizePendingWriteMachines(
 	if e.archiveStore != nil {
 		unresolved := make([]string, 0, len(ids))
 		for _, id := range ids {
-			if _, exists := machines[id]; !exists {
+			if _, exists := identities[id]; !exists {
 				unresolved = append(unresolved, id)
 			}
 		}
 		if len(unresolved) > 0 {
-			replacementMachines, err := e.db.ListSessionMachinesByID(
+			replacementIdentities, err := e.db.ListSessionWriteIdentitiesByID(
 				ctx, unresolved,
 			)
 			if err != nil {
 				return batch, fmt.Errorf(
-					"load replacement session machines: %w", err,
+					"load replacement session write identities: %w", err,
 				)
 			}
-			maps.Copy(machines, replacementMachines)
+			maps.Copy(identities, replacementIdentities)
 		}
 	}
 	for _, id := range ids {
-		machine, exists := machines[id]
-		for _, i := range indexes[id] {
-			if !exists {
-				machine = batch[i].sess.Machine
-				exists = true
+		matchingIndexes := indexes[id]
+		if len(matchingIndexes) == 0 {
+			continue
+		}
+		stored, exists := identities[id]
+		if exists {
+			for _, i := range matchingIndexes {
+				incoming := e.pendingWriteIdentity(batch[i])
+				if !sessionWriteIdentitiesCompatible(stored, incoming) {
+					batch[i].sourceConflict = true
+					continue
+				}
+				batch[i].sess.Machine = stored.Machine
 			}
-			batch[i].sess.Machine = machine
+			continue
+		}
+
+		first := e.pendingWriteIdentity(batch[matchingIndexes[0]])
+		compatible := true
+		for _, i := range matchingIndexes[1:] {
+			if !sessionWriteIdentitiesCompatible(
+				first, e.pendingWriteIdentity(batch[i]),
+			) {
+				compatible = false
+				break
+			}
+		}
+		for _, i := range matchingIndexes {
+			batch[i].sourceConflict = !compatible
+			if compatible {
+				batch[i].sess.Machine = first.Machine
+			}
 		}
 	}
 	return batch, nil
@@ -11184,6 +11221,11 @@ func (e *Engine) writeBatchWithOutcome(
 	outcome := writeBatchOutcome{written: make([]bool, len(batch))}
 	resolveWorktreeProject := e.loadWorktreeProjectResolver()
 	for i, pw := range batch {
+		if pw.sourceConflict {
+			log.Printf("reject divergent source collision for session %s", pw.sess.ID)
+			outcome.failedSessions++
+			continue
+		}
 		s, msgs, verdict := e.prepareSessionWrite(
 			pw, resolveWorktreeProject,
 		)
@@ -12142,6 +12184,11 @@ func (e *Engine) writeBatchBulkWithOutcome(
 	resolveWorktreeProject := e.loadWorktreeProjectResolver()
 
 	for pendingIndex, pw := range batch {
+		if pw.sourceConflict {
+			log.Printf("reject divergent source collision for session %s", pw.sess.ID)
+			outcome.failedSessions++
+			continue
+		}
 		tPrep := time.Now()
 		s, msgs, verdict := e.prepareSessionWrite(
 			pw, resolveWorktreeProject,
@@ -12198,7 +12245,7 @@ func (e *Engine) writeBatchBulkWithOutcome(
 		for _, pw := range pendingByID {
 			e.markStaleFailedMemberWrite(pw)
 		}
-		outcome.failedSessions = len(writes)
+		outcome.failedSessions += len(writes)
 		return outcome
 	}
 	for _, writtenIndex := range result.WrittenIndexes {
@@ -12223,7 +12270,7 @@ func (e *Engine) writeBatchBulkWithOutcome(
 	}
 	outcome.writtenSessions = result.WrittenSessions
 	outcome.writtenMessages = result.WrittenMessages
-	outcome.failedSessions = result.FailedSessions
+	outcome.failedSessions += result.FailedSessions
 	return outcome
 }
 
@@ -12861,6 +12908,11 @@ func (e *Engine) writeSessionFullWithResolver(
 	)
 	if err != nil {
 		return err
+	}
+	if normalized[0].sourceConflict {
+		return fmt.Errorf(
+			"session %s has divergent source ownership", pw.sess.ID,
+		)
 	}
 	preserved, err := e.preserveUnavailableSourceProjects(
 		context.Background(), normalized,

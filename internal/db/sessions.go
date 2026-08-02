@@ -2472,17 +2472,26 @@ func (db *DB) ListSessionIDsByFilePath(path, agent string) ([]string, error) {
 
 const sessionMachineBatchSize = 500
 
-// ListSessionMachinesByID returns the stored machine attribution for each
+// SessionWriteIdentity is the stored ownership evidence needed before a sync
+// write can reuse an existing native session ID.
+type SessionWriteIdentity struct {
+	Machine  string
+	Agent    string
+	FilePath string
+	FileHash string
+}
+
+// ListSessionWriteIdentitiesByID returns stored ownership evidence for each
 // requested session, including tombstoned rows that may be revived by a later
 // successful parse. Requests are chunked below SQLite's bind-variable limit.
-func (db *DB) ListSessionMachinesByID(
+func (db *DB) ListSessionWriteIdentitiesByID(
 	ctx context.Context,
 	ids []string,
-) (map[string]string, error) {
+) (map[string]SessionWriteIdentity, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	machines := make(map[string]string, len(ids))
+	identities := make(map[string]SessionWriteIdentity, len(ids))
 	unique := make([]string, 0, len(ids))
 	seen := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
@@ -2504,28 +2513,53 @@ func (db *DB) ListSessionMachinesByID(
 			args[i] = id
 		}
 		rows, err := db.getReader().QueryContext(ctx, `
-			SELECT id, machine
+			SELECT id, machine, agent,
+			       COALESCE(file_path, ''), COALESCE(file_hash, '')
 			FROM sessions
 			WHERE id IN (`+placeholders+`)
 			ORDER BY id`, args...)
 		if err != nil {
-			return nil, fmt.Errorf("listing session machines by ID: %w", err)
+			return nil, fmt.Errorf("listing session write identities by ID: %w", err)
 		}
 		for rows.Next() {
-			var id, machine string
-			if err := rows.Scan(&id, &machine); err != nil {
+			var id string
+			var identity SessionWriteIdentity
+			if err := rows.Scan(
+				&id, &identity.Machine, &identity.Agent,
+				&identity.FilePath, &identity.FileHash,
+			); err != nil {
 				_ = rows.Close()
-				return nil, fmt.Errorf("scanning session machine by ID: %w", err)
+				return nil, fmt.Errorf(
+					"scanning session write identity by ID: %w", err,
+				)
 			}
-			machines[id] = machine
+			identities[id] = identity
 		}
 		if err := rows.Err(); err != nil {
 			_ = rows.Close()
-			return nil, fmt.Errorf("iterating session machines by ID: %w", err)
+			return nil, fmt.Errorf("iterating session write identities by ID: %w", err)
 		}
 		if err := rows.Close(); err != nil {
-			return nil, fmt.Errorf("closing session machines by ID: %w", err)
+			return nil, fmt.Errorf("closing session write identities by ID: %w", err)
 		}
+	}
+	return identities, nil
+}
+
+// ListSessionMachinesByID returns the stored machine attribution for each
+// requested session, including tombstoned rows that may be revived by a later
+// successful parse. Requests are chunked below SQLite's bind-variable limit.
+func (db *DB) ListSessionMachinesByID(
+	ctx context.Context,
+	ids []string,
+) (map[string]string, error) {
+	identities, err := db.ListSessionWriteIdentitiesByID(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	machines := make(map[string]string, len(ids))
+	for id, identity := range identities {
+		machines[id] = identity.Machine
 	}
 	return machines, nil
 }

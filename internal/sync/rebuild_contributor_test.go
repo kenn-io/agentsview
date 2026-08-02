@@ -247,13 +247,14 @@ func TestResyncAbortsWhenLabeledLocalSourceDisappearsAlongsideHealthyContributor
 	require.NoError(t, err)
 	require.NotNil(t, local)
 	require.Equal(t, "archive-host", local.Machine)
+	engine.sourceMachines[parser.AgentClaude][localRoot] = "renamed-archive-host"
 	require.NoError(t, os.Remove(localPath))
 
 	stats, err := engine.ResyncAllWithOptions(context.Background(), nil, options)
 
 	require.NoError(t, err)
 	assert.True(t, stats.Aborted,
-		"a healthy contributor must not mask an empty labeled local source")
+		"a healthy contributor must not mask a relabeled local source")
 	local, err = database.GetSession(context.Background(), "local")
 	require.NoError(t, err)
 	assert.NotNil(t, local, "aborted rebuild must preserve labeled local history")

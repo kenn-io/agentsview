@@ -293,12 +293,12 @@ func TestWriteBatchDuplicateNewSessionIDKeepsFirstMachine(t *testing.T) {
 		{sess: parser.ParsedSession{
 			ID: sessionID, Project: "first-copy", Machine: "machine-z",
 			Agent: parser.AgentCopilot, StartedAt: startedAt, EndedAt: startedAt,
-			File: parser.FileInfo{Path: "/sources/a/session.jsonl"},
+			File: parser.FileInfo{Path: "/sources/a/session.jsonl", Hash: "same-copy"},
 		}},
 		{sess: parser.ParsedSession{
 			ID: sessionID, Project: "second-copy", Machine: "machine-a",
 			Agent: parser.AgentCopilot, StartedAt: startedAt, EndedAt: startedAt,
-			File: parser.FileInfo{Path: "/sources/b/session.jsonl"},
+			File: parser.FileInfo{Path: "/sources/b/session.jsonl", Hash: "same-copy"},
 		}},
 	}
 
@@ -313,6 +313,53 @@ func TestWriteBatchDuplicateNewSessionIDKeepsFirstMachine(t *testing.T) {
 		"every same-batch copy must use the machine of the first ingestion")
 }
 
+func TestWriteBatchRejectsDivergentForeignSessionIDCollision(t *testing.T) {
+	const sessionID = "shared-native-id"
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{Machine: "local-machine"})
+	t.Cleanup(engine.Close)
+	startedAt := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	write := func(machine, project, path, hash, content string) pendingWrite {
+		return pendingWrite{
+			sess: parser.ParsedSession{
+				ID: sessionID, Project: project, Machine: machine,
+				Agent: parser.AgentCopilot, Cwd: filepath.Dir(path),
+				StartedAt: startedAt, EndedAt: startedAt, MessageCount: 1,
+				File: parser.FileInfo{Path: path, Hash: hash},
+			},
+			msgs: []parser.ParsedMessage{{
+				Ordinal: 0, Role: parser.RoleUser, Content: content,
+				Timestamp: startedAt,
+			}},
+		}
+	}
+	localPath := filepath.Join(t.TempDir(), "local.jsonl")
+	foreignPath := filepath.Join(t.TempDir(), "foreign.jsonl")
+	initial := engine.writeBatchWithOutcome([]pendingWrite{
+		write("local-machine", "local-project", localPath, "local-hash", "local content"),
+	}, syncWriteDefault, true)
+	require.Equal(t, 1, initial.writtenSessions)
+	require.Zero(t, initial.failedSessions)
+
+	collision := engine.writeBatchWithOutcome([]pendingWrite{
+		write("foreign-machine", "foreign-project", foreignPath, "foreign-hash", "foreign content"),
+	}, syncWriteDefault, true)
+
+	assert.Zero(t, collision.writtenSessions)
+	assert.Equal(t, 1, collision.failedSessions)
+	stored, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "local-machine", stored.Machine)
+	assert.Equal(t, "local-project", stored.Project)
+	require.NotNil(t, stored.FilePath)
+	assert.Equal(t, localPath, *stored.FilePath)
+	messages, err := database.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "local content", messages[0].Content)
+}
+
 func TestWriteBatchResyncDuplicateIDKeepsFirstReplacementMachine(t *testing.T) {
 	const sessionID = "copied-across-resync-batches"
 	original := openTestDB(t)
@@ -325,7 +372,7 @@ func TestWriteBatchResyncDuplicateIDKeepsFirstReplacementMachine(t *testing.T) {
 		return pendingWrite{sess: parser.ParsedSession{
 			ID: sessionID, Project: project, Machine: machine,
 			Agent: parser.AgentCopilot, StartedAt: startedAt, EndedAt: startedAt,
-			File: parser.FileInfo{Path: path},
+			File: parser.FileInfo{Path: path, Hash: "same-copy"},
 		}}
 	}
 
@@ -352,7 +399,7 @@ func TestWriteBatchExistingEmptyMachineRemainsEmpty(t *testing.T) {
 	database := openTestDB(t)
 	require.NoError(t, database.UpsertSession(db.Session{
 		ID: sessionID, Project: "legacy", Machine: "",
-		Agent: string(parser.AgentCopilot),
+		Agent: string(parser.AgentCopilot), FilePath: strPtr("/sources/session.jsonl"),
 	}))
 	engine := NewEngine(database, EngineConfig{Machine: "local-machine"})
 	t.Cleanup(engine.Close)
@@ -380,7 +427,7 @@ func TestWriteBatchResyncReplacementEmptyMachineRemainsEmpty(t *testing.T) {
 	replacement := openTestDB(t)
 	require.NoError(t, replacement.UpsertSession(db.Session{
 		ID: sessionID, Project: "legacy", Machine: "",
-		Agent: string(parser.AgentCopilot),
+		Agent: string(parser.AgentCopilot), FilePath: strPtr("/sources/session.jsonl"),
 	}))
 	engine := NewEngine(replacement, EngineConfig{Machine: "local-machine"})
 	engine.archiveStore = original
