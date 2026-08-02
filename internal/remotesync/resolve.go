@@ -34,6 +34,7 @@ func ResolveTargets(cfg config.Config) TargetSet {
 			// lose its identity in transit, so keep it as a local archive input
 			// instead of advertising it for remote sync.
 			if !isLocalRemoteSyncSource(cfg, def.Type, dir) {
+				forbiddenRoots = appendUniqueForbiddenRoot(forbiddenRoots, dir)
 				continue
 			}
 			if def.Type == parser.AgentHermes {

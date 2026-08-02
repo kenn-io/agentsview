@@ -29,10 +29,14 @@ func TestResolveTargetsExcludesNonLocalStructuredSessionSources(t *testing.T) {
 	dataDir := filepath.Join(home, "data")
 	localRoot := filepath.Join(home, "local-copilot")
 	localStructuredRoot := filepath.Join(home, "local-structured-copilot")
-	foreignRoot := filepath.Join(home, "foreign-copilot")
+	foreignRoot := filepath.Join(localRoot, "foreign-copilot")
 	for _, dir := range []string{dataDir, localRoot, localStructuredRoot, foreignRoot} {
 		require.NoError(t, os.MkdirAll(dir, 0o755))
 	}
+	localSession := filepath.Join(localRoot, "local.jsonl")
+	foreignSession := filepath.Join(foreignRoot, "foreign.jsonl")
+	require.NoError(t, os.WriteFile(localSession, []byte("local\n"), 0o600))
+	require.NoError(t, os.WriteFile(foreignSession, []byte("foreign\n"), 0o600))
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
@@ -67,6 +71,16 @@ machine = %q
 		targets.Dirs[parser.AgentCopilot])
 	assert.NotContains(t, targets.Dirs[parser.AgentCopilot], foreignRoot,
 		"a source attributed to another machine must not be re-exported as local")
+	assert.Contains(t, targets.ForbiddenRoots, foreignRoot)
+	manifest, err := remotesync.BuildManifest(targets)
+	require.NoError(t, err)
+	var manifestPaths []string
+	for _, file := range manifest.Files {
+		manifestPaths = append(manifestPaths, file.Path)
+	}
+	assert.Contains(t, manifestPaths, localSession)
+	assert.NotContains(t, manifestPaths, foreignSession,
+		"an allowed ancestor must not re-export its nested foreign source")
 }
 
 func TestResolveTargetsFiltersAndIncludesSpecialFiles(t *testing.T) {
