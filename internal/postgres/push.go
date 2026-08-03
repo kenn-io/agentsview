@@ -3012,11 +3012,20 @@ func restorePinnedMessages(
 	ctx context.Context, tx *sql.Tx, sessionID string,
 	pins []savedPostgresPin,
 ) error {
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM pinned_messages WHERE session_id = $1`,
-		sessionID,
-	); err != nil {
-		return fmt.Errorf("clearing pg pins before restoration: %w", err)
+	// Delete only rows captured and locked by the snapshot. A new pin may
+	// commit after the snapshot but before restoration; it must survive and
+	// win any target conflict below because it represents the newer user
+	// action.
+	for _, pin := range pins {
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM pinned_messages
+			WHERE session_id = $1 AND id = $2`,
+			sessionID, pin.id,
+		); err != nil {
+			return fmt.Errorf(
+				"clearing snapshotted pg pin id=%d: %w", pin.id, err,
+			)
+		}
 	}
 
 	resolved := make(map[int]resolvedPostgresPin)
@@ -3055,7 +3064,8 @@ func restorePinnedMessages(
 				id, session_id, message_id, ordinal,
 				source_uuid, note, created_at
 			)
-			VALUES ($1, $2, $3, $3, $4, $5, $6)`,
+			VALUES ($1, $2, $3, $3, $4, $5, $6)
+			ON CONFLICT (session_id, message_id) DO NOTHING`,
 			pin.saved.id, sessionID, pin.target,
 			pin.sourceUUID, note, pin.saved.createdAt,
 		); err != nil {

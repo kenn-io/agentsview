@@ -394,6 +394,85 @@ func TestPushReconcilesPGPinsByPriorMessageIdentity(t *testing.T) {
 	}
 }
 
+func TestRestorePinnedMessagesPreservesPinCreatedAfterSnapshot(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_pin_snapshot_race_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+	defer func() {
+		_, _ = pg.ExecContext(
+			context.Background(),
+			`DROP SCHEMA IF EXISTS `+schema+` CASCADE`,
+		)
+	}()
+
+	ctx := context.Background()
+	_, err = pg.ExecContext(ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	_, err = pg.ExecContext(ctx, `
+		INSERT INTO sessions
+			(id, machine, project, agent, first_message,
+			 started_at, message_count, user_message_count)
+		VALUES
+			('pg-pin-snapshot-race', 'machine-a', 'proj-curation',
+			 'codex', 'snapshot race',
+			 '2026-05-01T00:00:00Z'::timestamptz, 2, 1);
+		INSERT INTO messages
+			(session_id, ordinal, role, content, timestamp,
+			 content_length, source_uuid)
+		VALUES
+			('pg-pin-snapshot-race', 0, 'user', 'first',
+			 '2026-05-01T00:00:00Z'::timestamptz, 5, 'uuid-first'),
+			('pg-pin-snapshot-race', 1, 'assistant', 'second',
+			 '2026-05-01T00:00:01Z'::timestamptz, 6, 'uuid-second');
+		INSERT INTO pinned_messages
+			(session_id, message_id, ordinal, source_uuid, note)
+		VALUES
+			('pg-pin-snapshot-race', 0, 0, 'uuid-first', 'old pin')`)
+	require.NoError(t, err, "seed session and old pin")
+
+	tx, err := pg.BeginTx(ctx, nil)
+	require.NoError(t, err, "begin tx")
+	pins, err := snapshotPinnedMessages(ctx, tx, "pg-pin-snapshot-race")
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("snapshotPinnedMessages: %v", err)
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO pinned_messages
+			(session_id, message_id, ordinal, source_uuid, note)
+		VALUES
+			('pg-pin-snapshot-race', 1, 1, 'uuid-second', 'new pin')`)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("insert post-snapshot pin: %v", err)
+	}
+	if err := restorePinnedMessages(
+		ctx, tx, "pg-pin-snapshot-race", pins,
+	); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("restorePinnedMessages: %v", err)
+	}
+	require.NoError(t, tx.Commit(), "commit tx")
+
+	store, err := NewStore(pgURL, schema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+	got, err := store.ListPinnedMessages(ctx, "pg-pin-snapshot-race", "")
+	require.NoError(t, err, "ListPinnedMessages")
+	require.Len(t, got, 2, "post-snapshot pin must survive: %v", got)
+	byOrdinal := make(map[int]db.PinnedMessage, len(got))
+	for _, pin := range got {
+		byOrdinal[pin.Ordinal] = pin
+	}
+	assert.Contains(t, byOrdinal, 0, "snapshotted pin restored")
+	assert.Contains(t, byOrdinal, 1, "post-snapshot pin preserved")
+}
+
 func TestReconcilePinnedMessagesPrefersCurrentTargetPin(t *testing.T) {
 	pgURL := testPGURL(t)
 
