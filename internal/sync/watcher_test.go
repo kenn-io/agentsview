@@ -17,12 +17,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/parser"
 )
 
 const watcherTestTimeout = 5 * time.Second
 
-func TestPendingWatchBatchKeepsProviderGroupsIndependentFromGenericRoots(t *testing.T) {
+func TestPendingWatchBatchFullSyncDropsProviderGroups(t *testing.T) {
 	pending := newPendingWatchBatch(defaultWatchBatchMaxEntries, defaultWatchBatchMaxPathBytes)
 	pending.AddReconcileGroup("opencode", `C:\provider\root`)
 	pending.AddFullSync()
@@ -30,13 +29,11 @@ func TestPendingWatchBatchKeepsProviderGroupsIndependentFromGenericRoots(t *test
 	batch, ok := pending.Take()
 	require.True(t, ok)
 	require.True(t, batch.FullSync)
-	require.Len(t, batch.ReconcileGroups, 1)
+	assert.Empty(t, batch.ReconcileGroups)
 	assert.Empty(t, batch.ReconcileRoots)
-	assert.Equal(t, parser.AgentType("opencode"), batch.ReconcileGroups[0].Agent)
-	assert.Equal(t, []string{`C:\provider\root`}, batch.ReconcileGroups[0].Roots)
 }
 
-func TestPendingWatchBatchFullSyncAfterRenameOverflowKeepsProviderGroups(t *testing.T) {
+func TestPendingWatchBatchFullSyncAfterRenameOverflowDropsProviderGroups(t *testing.T) {
 	pending := newPendingWatchBatch(1, defaultWatchBatchMaxPathBytes)
 	pending.AddReconcileGroup("opencode", `C:\provider\root`)
 	pending.AddRename(WatchRename{Path: `C:\provider\root\nested\rename`, Root: `C:\provider\root`})
@@ -44,8 +41,20 @@ func TestPendingWatchBatchFullSyncAfterRenameOverflowKeepsProviderGroups(t *test
 	batch, ok := pending.TakeWithRootAgents(nil)
 	require.True(t, ok)
 	require.True(t, batch.FullSync)
-	require.Len(t, batch.ReconcileGroups, 1)
-	assert.Equal(t, []string{`C:\provider\root`}, batch.ReconcileGroups[0].Roots)
+	assert.Empty(t, batch.ReconcileGroups)
+}
+
+func TestCanonicalizeWatchBatchFullSyncDropsPartialObligations(t *testing.T) {
+	batch := CanonicalizeWatchBatch(WatchBatch{
+		FullSync:        true,
+		Paths:           []string{"/sessions/a.jsonl"},
+		ReconcileRoots:  []string{"/sessions"},
+		ReconcileGroups: []ProviderRootsGroup{{Agent: "opencode", Roots: []string{"/sessions/opencode"}}},
+	})
+	assert.True(t, batch.FullSync)
+	assert.Empty(t, batch.Paths)
+	assert.Empty(t, batch.ReconcileRoots)
+	assert.Empty(t, batch.ReconcileGroups)
 }
 
 func TestPendingWatchBatchGroupBudgetOverflowFallsBackToGenericFullSync(t *testing.T) {

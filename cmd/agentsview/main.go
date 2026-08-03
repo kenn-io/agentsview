@@ -2376,15 +2376,23 @@ func newWatchReconciliationError(
 	var scoped interface{ ReconciliationRetryRoots() []string }
 	if errors.As(cause, &scoped) {
 		if failedRoots := deduplicateStrings(scoped.ReconciliationRetryRoots()); len(failedRoots) > 0 {
+			if full {
+				return &watchReconciliationError{
+					cause: cause,
+					retry: sync.CanonicalizeWatchBatch(sync.WatchBatch{
+						FullSync: true, LostEvents: lostEvents,
+					}),
+				}
+			}
 			mergedRoots := append([]string(nil), roots...)
 			mergedRoots = append(mergedRoots, failedRoots...)
 			return &watchReconciliationError{
 				cause: cause,
-				retry: sync.WatchBatch{
+				retry: sync.CanonicalizeWatchBatch(sync.WatchBatch{
 					ReconcileRoots:  deduplicateStrings(mergedRoots),
 					ReconcileGroups: groups,
 					LostEvents:      lostEvents,
-				},
+				}),
 			}
 		}
 	}
@@ -2393,7 +2401,7 @@ func newWatchReconciliationError(
 	if !full {
 		retry.ReconcileRoots = append([]string(nil), roots...)
 	}
-	return &watchReconciliationError{cause: cause, retry: retry}
+	return &watchReconciliationError{cause: cause, retry: sync.CanonicalizeWatchBatch(retry)}
 }
 
 // gapReconciliationRetryBatch classifies a failed worker-to-watcher gap
@@ -2439,6 +2447,7 @@ func syncWatchBatch(
 	batch sync.WatchBatch,
 	recoveryScope func() watchRecoveryScope,
 ) error {
+	batch = sync.CanonicalizeWatchBatch(batch)
 	paths := append([]string(nil), batch.Paths...)
 	full := batch.FullSync
 	reconcileRoots := append([]string(nil), batch.ReconcileRoots...)

@@ -139,3 +139,38 @@ func TestBoundedCoverageTransitionRequiresScopedGenerationBinding(t *testing.T) 
 		t.Fatal("bounded transition accepted a lease without exact scope binding")
 	}
 }
+
+func TestBoundedCoverageTransitionSeparatesSamePhysicalNestedScopes(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "opencode.db")
+	if err := os.WriteFile(path, []byte("db"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := &Engine{boundedCoverageGenerations: make(map[string]uint64)}
+	newLease := func(scope string) *BoundedCoverageLease {
+		return &BoundedCoverageLease{
+			Binding: BoundedCoverageBinding{
+				Agent: parser.AgentOpenCode, PhysicalDBPath: path,
+				Scope: scope, Generation: 1,
+			},
+			Provider: parser.AgentOpenCode, PhysicalDBPath: path,
+			ExactProviderScope: scope, Generation: 1,
+			FileIdentity: boundedCoverageFileIdentity(path, info), fileInfo: info,
+		}
+	}
+	if _, err := engine.TransitionBoundedCoverageRequest(
+		t.Context(), newLease(root), nil, parser.OpenCodeCoverageCheckpoint{}, true,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.TransitionBoundedCoverageRequest(
+		t.Context(), newLease(filepath.Join(root, "nested")), nil,
+		parser.OpenCodeCoverageCheckpoint{}, true,
+	); err != nil {
+		t.Fatalf("same physical database at a different provider scope shared generation state: %v", err)
+	}
+}

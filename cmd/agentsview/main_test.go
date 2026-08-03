@@ -2766,10 +2766,8 @@ func TestSyncWatchBatch(t *testing.T) {
 		}, staticFullRoots(probedRoot))
 
 		assert.ErrorContains(t, err, reconcileErr.Error())
-		assert.Equal(t, agentsync.WatchBatch{
-			ReconcileRoots: []string{failedRoot},
-			LostEvents:     true,
-		}, requireWatchRetryBatch(t, err))
+		assert.Equal(t, agentsync.WatchBatch{FullSync: true, LostEvents: true},
+			requireWatchRetryBatch(t, err))
 	})
 
 	t.Run("full recovery failure without scope retries the full batch", func(t *testing.T) {

@@ -403,7 +403,7 @@ func (e *Engine) TransitionBoundedCoverageRequest(
 	if lease == nil {
 		return BoundedCoverageTransitionResult{}, errors.New("nil bounded coverage lease")
 	}
-	key := boundedCoverageBindingKey(lease.Provider, lease.PhysicalDBPath, "")
+	key := boundedCoverageBindingKey(lease.Provider, lease.PhysicalDBPath, lease.ExactProviderScope)
 	var result BoundedCoverageTransitionResult
 	var stats SyncStats
 	var err error

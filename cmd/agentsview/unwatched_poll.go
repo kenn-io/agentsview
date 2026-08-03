@@ -213,7 +213,6 @@ func (c *sharedUnwatchedPollCoordinator) WakeBoundedCoverage(
 	}
 	c.coverageMu.Lock()
 	for _, binding := range bindings {
-		c.invalidateBoundedCoverageReplacementsLocked(binding)
 		state := c.coverageState[binding.Key]
 		current, statErr := os.Stat(binding.DBPath)
 		if state != nil && ((statErr == nil && state.dbFile != nil && !sameBoundedFile(state.dbFile, current)) ||
@@ -284,7 +283,6 @@ func (c *sharedUnwatchedPollCoordinator) admitBoundedCoverage(
 		if needsLease {
 			generation = c.nextCoverageGenerationLocked(boundedCoverageGenerationKey(binding))
 		}
-		oldKey := ""
 		frozen := make(map[*boundedCoverageState]bool)
 		freeze := func(candidate *boundedCoverageState) {
 			if _, recorded := frozen[candidate]; !recorded {
@@ -302,14 +300,6 @@ func (c *sharedUnwatchedPollCoordinator) admitBoundedCoverage(
 		if needsLease {
 			if state != nil {
 				freeze(state)
-			}
-			for key, candidate := range c.coverageState {
-				if filepath.Clean(candidate.binding.PhysicalDBPath) == filepath.Clean(binding.PhysicalDBPath) &&
-					filepath.Clean(candidate.binding.Scope) != filepath.Clean(binding.Scope) {
-					oldKey = key
-					freeze(candidate)
-					break
-				}
 			}
 		}
 		c.coverageMu.Unlock()
@@ -364,9 +354,6 @@ func (c *sharedUnwatchedPollCoordinator) admitBoundedCoverage(
 			state.mode = boundedModeNative
 		}
 		c.coverageState[binding.Key] = state
-		if oldKey != "" {
-			delete(c.coverageState, oldKey)
-		}
 		admitted = append(admitted, binding)
 		c.coverageMu.Unlock()
 	}
@@ -374,22 +361,8 @@ func (c *sharedUnwatchedPollCoordinator) admitBoundedCoverage(
 	return admitted, nil
 }
 
-func (c *sharedUnwatchedPollCoordinator) invalidateBoundedCoverageReplacementsLocked(
-	binding agentsync.BoundedCoverageBinding,
-) {
-	physical := filepath.Clean(binding.PhysicalDBPath)
-	for _, state := range c.coverageState {
-		if filepath.Clean(state.binding.PhysicalDBPath) == physical &&
-			filepath.Clean(state.binding.Scope) != filepath.Clean(binding.Scope) {
-			// Freeze under coverageMu. The write gate is acquired by the
-			// replacement handoff after this lock is released.
-			state.frozen = true
-		}
-	}
-}
-
 func boundedCoverageGenerationKey(binding agentsync.BoundedCoverageBinding) string {
-	return string(binding.Agent) + "\x00" + filepath.Clean(binding.PhysicalDBPath)
+	return string(binding.Agent) + "\x00" + filepath.Clean(binding.PhysicalDBPath) + "\x00" + filepath.Clean(binding.Scope)
 }
 
 func (c *sharedUnwatchedPollCoordinator) PrimedBoundedCoverage(

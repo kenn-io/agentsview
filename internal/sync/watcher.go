@@ -413,10 +413,27 @@ func (p *pendingWatchBatch) makeFullSync(lostEvents bool) {
 	clear(p.renames)
 	clear(p.backendRenames)
 	clear(p.roots)
+	clear(p.groups)
 	clear(p.strings)
 	p.pathBytes = 0
+	p.groupBytes = 0
+	p.groupEntries = 0
 	p.fullSync = true
 	p.lostEvents = p.lostEvents || lostEvents
+}
+
+// CanonicalizeWatchBatch keeps authoritative recovery from carrying partial
+// obligations that could exclude a provider from the generic pass.
+func CanonicalizeWatchBatch(batch WatchBatch) WatchBatch {
+	batch.Paths = append([]string(nil), batch.Paths...)
+	batch.ReconcileRoots = append([]string(nil), batch.ReconcileRoots...)
+	batch.ReconcileGroups = cloneProviderRootsGroups(batch.ReconcileGroups)
+	if batch.FullSync {
+		batch.Paths = nil
+		batch.ReconcileRoots = nil
+		batch.ReconcileGroups = nil
+	}
+	return batch
 }
 
 func (p *pendingWatchBatch) Take() (WatchBatch, bool) {
@@ -434,9 +451,9 @@ func (p *pendingWatchBatch) TakeWithRootAgents(
 		lostEvents := p.lostEvents
 		p.lostEvents = false
 		tokens := p.takeLifecycleTokens()
-		groups := p.takeProviderGroups()
+		p.takeProviderGroups()
 		return WatchBatch{FullSync: true, LostEvents: lostEvents,
-			ReconcileGroups: groups, lifecycleTokens: tokens}, true
+			lifecycleTokens: tokens}, true
 	}
 	for rename := range p.backendRenames {
 		agents := []string{""}
@@ -458,10 +475,9 @@ func (p *pendingWatchBatch) TakeWithRootAgents(
 				lostEvents := p.lostEvents
 				p.lostEvents = false
 				tokens := p.takeLifecycleTokens()
-				groups := p.takeProviderGroups()
+				p.takeProviderGroups()
 				return WatchBatch{
-					FullSync: true, LostEvents: lostEvents, ReconcileGroups: groups,
-					lifecycleTokens: tokens,
+					FullSync: true, LostEvents: lostEvents, lifecycleTokens: tokens,
 				}, true
 			}
 		}
@@ -1430,21 +1446,16 @@ func callbackRetryBatch(err error) (WatchBatch, bool) {
 		return WatchBatch{}, false
 	}
 	retry := retryErr.WatchRetryBatch()
+	retry = CanonicalizeWatchBatch(retry)
 	if retry.FullSync {
-		return WatchBatch{FullSync: true, LostEvents: retry.LostEvents,
-			ReconcileGroups: cloneProviderRootsGroups(retry.ReconcileGroups)}, true
+		return retry, true
 	}
 	if len(retry.Paths) == 0 && len(retry.ReconcileRoots) == 0 {
 		if len(retry.ReconcileGroups) == 0 {
 			return WatchBatch{}, false
 		}
 	}
-	return WatchBatch{
-		Paths:           append([]string(nil), retry.Paths...),
-		ReconcileRoots:  append([]string(nil), retry.ReconcileRoots...),
-		ReconcileGroups: cloneProviderRootsGroups(retry.ReconcileGroups),
-		LostEvents:      retry.LostEvents,
-	}, true
+	return retry, true
 }
 
 func cloneProviderRootsGroups(
@@ -1464,6 +1475,7 @@ func cloneProviderRootsGroups(
 }
 
 func retainWatchRetry(pending *pendingWatchBatch, retry WatchBatch) {
+	retry = CanonicalizeWatchBatch(retry)
 	if retry.FullSync {
 		pending.retainFullSync()
 	} else {
