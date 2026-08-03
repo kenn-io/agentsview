@@ -2928,6 +2928,7 @@ func (s *Sync) replaceUsageEvents(
 type savedPostgresPin struct {
 	id                  int64
 	ordinal             int
+	anchorOrdinal       int
 	sourceUUID          string
 	role                string
 	content             string
@@ -2949,12 +2950,14 @@ func snapshotPinnedMessages(
 ) ([]savedPostgresPin, error) {
 	// A populated pin source_uuid is the durable anchor and may legitimately
 	// disagree with message_id after an older ordinal-shifting reconciliation.
-	// Resolve it when unique and snapshot that resolved row's ordinal; for
-	// duplicates, accept only the row still at the recorded ordinal. UUID-less
-	// legacy pins continue to anchor by message_id.
+	// Resolve it when unique and snapshot that resolved row's anchor ordinal;
+	// for duplicates, accept only the row still at the recorded ordinal. Keep
+	// the recorded ordinal separately so conflict resolution can distinguish a
+	// shifted stale pin from a pin already stored on the resolved target.
+	// UUID-less legacy pins continue to anchor by message_id.
 	rows, err := tx.QueryContext(ctx, `
-		SELECT p.id, COALESCE(anchored.ordinal, p.message_id),
-			p.note, p.created_at,
+		SELECT p.id, p.message_id,
+			COALESCE(anchored.ordinal, p.message_id), p.note, p.created_at,
 			CASE WHEN p.source_uuid <> ''
 				THEN anchored.ordinal IS NOT NULL
 				ELSE current_message.ordinal IS NOT NULL
@@ -3036,7 +3039,8 @@ func snapshotPinnedMessages(
 	for rows.Next() {
 		var pin savedPostgresPin
 		if err := rows.Scan(
-			&pin.id, &pin.ordinal, &pin.note, &pin.createdAt,
+			&pin.id, &pin.ordinal, &pin.anchorOrdinal,
+			&pin.note, &pin.createdAt,
 			&pin.messageFound, &pin.sourceUUID,
 			&pin.role, &pin.content,
 			&pin.sourceUUIDCount, &pin.sourceIdentityCount,
@@ -3174,14 +3178,14 @@ func resolvePinnedMessageTarget(
 							AND same_identity.role = m.role
 							AND same_identity.content = m.content
 					) = 1`,
-				sessionID, pin.ordinal, pin.sourceUUID,
+				sessionID, pin.anchorOrdinal, pin.sourceUUID,
 				pin.role, pin.content,
 			),
 		)
 		if err != nil {
 			return 0, "", false, fmt.Errorf(
 				"resolving ambiguous pg pin uuid=%s ord=%d: %w",
-				pin.sourceUUID, pin.ordinal, err,
+				pin.sourceUUID, pin.anchorOrdinal, err,
 			)
 		}
 		return target, sourceUUID, ok, nil
