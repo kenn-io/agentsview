@@ -277,10 +277,17 @@ func TestUpsertPinnedMessageRowsPreservesSourceIDForMirrorPolicy(t *testing.T) {
 			Ordinal: 1, CreatedAt: created,
 		}}, PreservePinRowIDs,
 	))
+	require.NoError(t, UpsertPinnedMessageRows(
+		t.Context(), store, []bunmodel.PinnedMessage{{
+			ID: 7002, SessionID: "mirror-session", MessageID: &messageID,
+			Ordinal: 1, CreatedAt: created,
+		}}, PreservePinRowIDs,
+	))
 	var pin bunmodel.PinnedMessage
 	require.NoError(t, store.NewSelect().Model(&pin).
 		Where("session_id = ?", "mirror-session").Scan(t.Context()))
-	assert.Equal(t, int64(7001), pin.ID)
+	assert.Equal(t, int64(7002), pin.ID,
+		"a replacement mirror row adopts the current source identity")
 }
 
 func TestUpsertPinnedMessageRowsRollsBackGeneratedBatch(t *testing.T) {

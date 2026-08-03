@@ -311,11 +311,12 @@ driver error in the chain.
 read transaction, PostgreSQL uses a repeatable-read transaction, and a local
 DuckDB serving mirror holds one immutable guarded handle. A mutable direct
 DuckDB handle uses one transaction. Quack cannot carry a remote transaction
-across separate `query()` requests, so its adapter reads the mirror metadata
-token before and after the callback and retries the complete callback when a
-server-side mirror replacement changes that token; repeated instability returns
-an error rather than a mixed-generation result. There is no non-snapshot
-fallback for adapters.
+across separate `query()` requests, so its adapter reads an opaque mirror
+generation before and after the callback and retries the complete callback when
+a server-side mirror replacement changes that token; repeated instability
+returns an error rather than a mixed-generation result. Consistent-view
+callbacks can therefore replay and must stage results until the guarded call
+returns successfully. There is no non-snapshot fallback for adapters.
 
 Common store methods use Bun models and query builders. Complex CTEs and
 aggregates may use parameterized Bun raw fragments, but query composition,

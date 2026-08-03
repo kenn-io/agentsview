@@ -151,8 +151,9 @@ func TestBunStoreMutationContract(t *testing.T) {
 				"bun-mutation-generation", extraTrashRows,
 			)
 			require.NoError(t, err)
+			futureRevision := time.Date(2200, 1, 1, 0, 0, 0, 0, time.UTC)
 			_, err = store.bun.NewUpdate().Table("sessions").
-				Set("updated_at = ?", time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)).
+				Set("updated_at = ?", futureRevision).
 				Where("1 = 1").
 				Exec(t.Context())
 			require.NoError(t, err)
@@ -171,7 +172,7 @@ func TestBunStoreMutationContract(t *testing.T) {
 					var updatedAt time.Time
 					require.NoError(t, store.bun.NewSelect().Table("sessions").
 						Column("updated_at").Where("id = ?", id).Scan(t.Context(), &updatedAt))
-					return updatedAt.After(time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
+					return updatedAt.After(futureRevision)
 				},
 			}
 		},

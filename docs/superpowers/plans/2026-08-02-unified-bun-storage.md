@@ -577,9 +577,10 @@ ______________________________________________________________________
 
     PostgreSQL wraps its stable pool with `pgdialect.New()` and delegates close to
     the existing raw-pool owner. Its operation capabilities allow curation,
-    insight (after the existing capability probe), and session-management writes
-    but reject archive/Recall ingestion. DuckDB wraps each mirror generation
-    with `bundialect.New()` and swaps raw/Bun handles together under `handleMu`.
+    insight insertion and deletion (after their independent capability probes),
+    and session-management writes but reject archive/Recall ingestion. DuckDB
+    wraps each mirror generation with `bundialect.New()` and swaps raw/Bun
+    handles together under `handleMu`.
 
     The Quack resolver returns an `IConn` that formats no values itself: Bun has
     already produced safe DuckDB SQL. `QueryContext` and `QueryRowContext` pass

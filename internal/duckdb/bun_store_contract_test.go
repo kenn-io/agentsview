@@ -39,19 +39,22 @@ func TestStableDuckDBViewRetriesChangedRemoteGeneration(t *testing.T) {
 	assert.Equal(t, len(tokens), tokenIndex)
 }
 
-func TestDuckDBMirrorReadTokenCoversOrderedMetadata(t *testing.T) {
+func TestDuckDBMirrorReadTokenUsesOpaqueGeneration(t *testing.T) {
 	conn, err := Open(filepath.Join(t.TempDir(), "mirror-token.duckdb"))
 	require.NoError(t, err)
 	_, err = conn.Exec(`
 		CREATE TABLE sync_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-		INSERT INTO sync_metadata (key, value) VALUES ('z-key', 'second'), ('a-key', 'first')`)
+		INSERT INTO sync_metadata (key, value) VALUES
+			('agentsview_mirror_generation', 'opaque-generation'),
+			('z-key', 'second'),
+			('a-key', 'first')`)
 	require.NoError(t, err)
 	store := NewStoreFromDB(conn)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 
 	token, err := store.mirrorReadToken(t.Context())
 	require.NoError(t, err)
-	assert.Equal(t, "a-key=first|z-key=second", token)
+	assert.Equal(t, "opaque-generation", token)
 }
 
 func TestBunStoreConsistentViewSnapshotsMutableDirectConnection(t *testing.T) {

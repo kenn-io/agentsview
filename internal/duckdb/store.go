@@ -91,8 +91,10 @@ func (b *duckBunBackend) View(
 
 // ConsistentView keeps one coherent database image for a composite read. Local
 // serving mirrors are immutable for the lifetime of their guarded handle,
-// direct mutable connections use a read transaction, and Quack retries across
-// a server-side mirror replacement detected through its metadata token.
+// direct mutable connections use a read transaction, and Quack retries the
+// complete callback across a server-side mirror replacement detected through
+// its opaque generation token. Callbacks must stage their output because a
+// retry can replay them before ConsistentView returns.
 func (b *duckBunBackend) ConsistentView(
 	ctx context.Context, fn func(bun.IDB) error,
 ) error {
@@ -120,10 +122,8 @@ func (s *Store) mirrorReadToken(ctx context.Context) (string, error) {
 	var token string
 	err := queryDuckDBRowContext(
 		ctx, s.duck, s.connectionKind, s.quack,
-		`SELECT COALESCE(
-			string_agg(key || '=' || value, '|' ORDER BY key),
-			''
-		) FROM sync_metadata`,
+		`SELECT value FROM sync_metadata WHERE key = ?`,
+		mirrorGenerationMetadataKey,
 	).Scan(&token)
 	if err != nil {
 		return "", fmt.Errorf("reading duckdb mirror consistency token: %w", err)
