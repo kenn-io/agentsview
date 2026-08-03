@@ -151,7 +151,7 @@ func (s *Store) GetSessionUsageRows(
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	pricing, err := s.loadPricingMap(ctx)
+	pricing, err := s.LoadPricingMap(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("loading pg pricing: %w", err)
 	}
@@ -556,7 +556,7 @@ func (s *Store) activityReportUsage(
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
 	out := []activity.UsageRow{}
 
-	pricing, err := s.loadPricingMap(ctx)
+	pricing, err := s.LoadPricingMap(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading pg pricing: %w", err)
 	}

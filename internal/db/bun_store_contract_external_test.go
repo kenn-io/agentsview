@@ -207,3 +207,24 @@ func TestBunStoreReadOnlyRecallContract(t *testing.T) {
 		},
 	})
 }
+
+func TestBunStoreUsageContract(t *testing.T) {
+	storetest.RunUsageContract(t, storetest.UsageBackend{
+		Name: "sqlite",
+		Open: func(t *testing.T) storetest.UsageStore {
+			database, err := db.Open(filepath.Join(t.TempDir(), "usage-contract.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			archiveID, err := database.GetArchiveID(t.Context())
+			require.NoError(t, err)
+			generation, err := database.GetDatabaseID(t.Context())
+			require.NoError(t, err)
+			require.NoError(t, database.Update(func(tx *sql.Tx) error {
+				return storetest.InsertSQLiteUsageFixture(
+					t.Context(), tx, archiveID, generation,
+				)
+			}))
+			return database.BunStore
+		},
+	})
+}

@@ -20,8 +20,6 @@ import (
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/sqlitedialect"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -634,10 +632,6 @@ type DB struct {
 	writerClosed atomic.Bool
 	dataStale    atomic.Bool // set by Open when user_version < dataVersion
 
-	customPricing       map[string]config.CustomModelRate
-	effectivePricing    map[string]export.ModelRates
-	emptyCatalogPricing map[string]export.ModelRates
-
 	checkpointMu   sync.Mutex
 	checkpointStop chan struct{}
 	checkpointDone chan struct{}
@@ -877,45 +871,6 @@ func (db *DB) requireWritable() error {
 		return ErrReadOnly
 	}
 	return nil
-}
-
-func (db *DB) SetCustomPricing(p map[string]config.CustomModelRate) {
-	if db.BunStore != nil {
-		db.BunStore.SetCustomPricing(p)
-	}
-	db.customPricing = p
-	db.effectivePricing = nil
-}
-
-// SetEffectivePricing installs in-memory pricing rows with explicit provenance
-// sources for read-only fallback paths that cannot seed model_pricing.
-func (db *DB) SetEffectivePricing(
-	p map[string]export.ModelRates,
-) {
-	if db.BunStore != nil {
-		db.BunStore.SetEffectivePricing(p)
-	}
-	db.customPricing = nil
-	db.effectivePricing = make(map[string]export.ModelRates, len(p))
-	for model, rates := range p {
-		rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
-		db.effectivePricing[model] = rates
-	}
-}
-
-// SetEmptyCatalogPricing installs in-memory rates that are used only when the
-// query source loading pricing sees no stored catalog rows.
-func (db *DB) SetEmptyCatalogPricing(
-	p map[string]export.ModelRates,
-) {
-	if db.BunStore != nil {
-		db.BunStore.SetEmptyCatalogPricing(p)
-	}
-	db.emptyCatalogPricing = make(map[string]export.ModelRates, len(p))
-	for model, rates := range p {
-		rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
-		db.emptyCatalogPricing[model] = rates
-	}
 }
 
 // makeDSN builds a SQLite connection string with shared pragmas.

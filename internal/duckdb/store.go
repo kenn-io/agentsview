@@ -13,7 +13,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/uptrace/bun"
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/duckdb/bundialect"
 	"go.kenn.io/agentsview/internal/secrets"
@@ -53,7 +52,6 @@ type Store struct {
 
 	quack          *quackClient
 	connectionKind duckDBConnectionKind
-	customPricing  map[string]config.CustomModelRate
 }
 
 type duckBunBackend struct {
@@ -352,13 +350,6 @@ func (r duckSingleRow) Scan(dest ...any) error {
 		return err
 	}
 	return r.rows.Err()
-}
-
-func (s *Store) SetCustomPricing(p map[string]config.CustomModelRate) {
-	if s.BunStore != nil {
-		s.BunStore.SetCustomPricing(p)
-	}
-	s.customPricing = p
 }
 
 func (s *Store) ReadOnly() bool { return true }

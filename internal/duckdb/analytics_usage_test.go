@@ -152,82 +152,6 @@ func TestDuckAnalyticsModelAndHourUseSameMessagePredicate(t *testing.T) {
 	assert.Contains(t, sql, "CAST(strftime(")
 }
 
-func TestDuckUsageTerminationPredicate(t *testing.T) {
-	where, args := appendDuckUsageSessionFilterClauses(
-		"WHERE true",
-		nil,
-		db.UsageFilter{Termination: "clean,unclean"},
-		"",
-	)
-
-	assert.Contains(t, where, "s.termination_status = 'clean'")
-	assert.Contains(t, where, "s.termination_status IN ('tool_call_pending', 'truncated')")
-	assert.Contains(t, where, "COALESCE(s.ended_at, s.started_at, s.created_at) <= CAST(? AS TIMESTAMP)")
-	require.Len(t, args, 1)
-	_, ok := args[0].(string)
-	assert.True(t, ok, "termination cutoff should be bound as a timestamp string")
-}
-
-func TestDuckUsageProjectLabelsPreserveCommas(t *testing.T) {
-	where, args := appendDuckUsageSessionFilterClauses(
-		"WHERE true",
-		nil,
-		db.UsageFilter{
-			ProjectLabels:        []string{"team,core"},
-			ExcludeProjectLabels: []string{"other,group"},
-		},
-		"",
-	)
-
-	assert.Contains(t, where, "s.project = ?")
-	assert.Contains(t, where, "s.project != ?")
-	assert.Equal(t, []any{"team,core", "other,group"}, args)
-}
-
-func TestDuckUsageAutomatedScopePredicates(t *testing.T) {
-	tests := []struct {
-		name    string
-		filter  db.UsageFilter
-		want    string
-		notWant string
-	}{
-		{
-			name:   "legacy exclude automated normalizes to human",
-			filter: db.UsageFilter{ExcludeAutomated: true},
-			want:   "COALESCE(s.is_automated, FALSE) = FALSE",
-		},
-		{
-			name: "all scope suppresses legacy human filter",
-			filter: db.UsageFilter{
-				AutomatedScope:   "all",
-				ExcludeAutomated: true,
-			},
-			notWant: "COALESCE(s.is_automated, FALSE) = FALSE",
-		},
-		{
-			name:    "automated scope selects automated sessions",
-			filter:  db.UsageFilter{AutomatedScope: "automated"},
-			want:    "COALESCE(s.is_automated, FALSE) = TRUE",
-			notWant: "COALESCE(s.is_automated, FALSE) = FALSE",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			where, _ := appendDuckUsageSessionFilterClauses(
-				"WHERE true", nil, tt.filter, "")
-			if tt.want != "" {
-				assert.Contains(t, where, tt.want,
-					"DuckDB usage SQL missing expected predicate")
-			}
-			if tt.notWant != "" {
-				assert.NotContains(t, where, tt.notWant,
-					"DuckDB usage SQL has unexpected predicate")
-			}
-		})
-	}
-}
-
 func TestDuckUsageAggregateCostRecordsMixedReportedAndComputed(t *testing.T) {
 	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
 		ModelPattern: "mixed-model",
@@ -536,30 +460,6 @@ func TestDuckUsageAggregateCostPrefersExactCustomKimiAlias(t *testing.T) {
 	resolutions := block.Models["kimi-for-coding"].Resolutions
 	require.Len(t, resolutions, 1)
 	assert.Equal(t, "kimi-for-coding", resolutions[0].PricedModel)
-}
-
-func TestDuckUsageAutomatedScopeOneShotExemption(t *testing.T) {
-	where, _ := appendDuckUsageSessionFilterClauses(
-		"WHERE true",
-		nil,
-		db.UsageFilter{AutomatedScope: "automated", ExcludeOneShot: true},
-		"",
-	)
-	assert.Contains(t, where,
-		"(s.user_message_count > 1 OR COALESCE(s.is_automated, FALSE) = TRUE)",
-		"DuckDB usage SQL missing non-human one-shot exemption")
-
-	humanWhere, _ := appendDuckUsageSessionFilterClauses(
-		"WHERE true",
-		nil,
-		db.UsageFilter{AutomatedScope: "human", ExcludeOneShot: true},
-		"",
-	)
-	assert.Contains(t, humanWhere, "AND s.user_message_count > 1",
-		"DuckDB usage human one-shot must be a plain threshold")
-	assert.NotContains(t, humanWhere,
-		"OR COALESCE(s.is_automated, FALSE) = TRUE",
-		"DuckDB usage human one-shot must not exempt automated sessions")
 }
 
 func TestDuckSignalMessagesFormatsTimestampValues(t *testing.T) {
