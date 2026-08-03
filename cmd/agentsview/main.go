@@ -314,7 +314,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 		unwatchedPoller.SetBoundedCoverageAuditRequester(
 			func(auditCtx context.Context, binding sync.BoundedCoverageBinding, reason string) error {
 				log.Printf("bounded coverage audit for %s: %s", binding.Key, reason)
-				return runBoundedCoverageAudit(ctx, cfg, engine, database, writeLock, emitter, binding, reason)
+				return runBoundedCoverageAudit(auditCtx, unwatchedPoller.workerCtx, cfg, engine, database, writeLock, emitter, binding, reason)
 			},
 		)
 		stopWatcher, openWatcherDispatch, _, queueWatchRetry = startFileWatcher(
@@ -355,11 +355,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 					}); err != nil {
 						return err
 					}
-					if len(unprimed) > 0 {
-						if err := unwatchedPoller.PrimeBoundedCoverageBindings(ctx, unprimed); err != nil {
-							return &WatchRetryError{cause: err, paths: batch.Paths}
-						}
-					}
+					unwatchedPoller.admitPendingBoundedCoverage(unprimed)
 					return nil
 				}
 				return syncWatchBatch(ctx, engine, batch, func() watchRecoveryScope {
@@ -3034,6 +3030,7 @@ func runArchiveAudit(
 
 func runBoundedCoverageAudit(
 	ctx context.Context,
+	recoveryCtx context.Context,
 	cfg config.Config,
 	engine *sync.Engine,
 	database *db.DB,
@@ -3043,8 +3040,10 @@ func runBoundedCoverageAudit(
 	reason string,
 ) error {
 	log.Printf("bounded coverage scoped audit %s: %s", binding.Key, reason)
+	operationCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	result, err := runWorkerWritePass(
-		ctx, ctx, cfg, engine, database, lock,
+		operationCtx, recoveryCtx, cfg, engine, database, lock,
 		fmt.Sprintf("audit-scoped|%s|%s", binding.Agent, binding.DBPath), nil,
 	)
 	if (result.Synced > 0 || result.Tombstoned > 0) && emitter != nil {

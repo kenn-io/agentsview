@@ -243,6 +243,42 @@ func (c *sharedUnwatchedPollCoordinator) WakeBoundedCoverage(
 	c.requestPoll()
 }
 
+func (c *sharedUnwatchedPollCoordinator) admitPendingBoundedCoverage(
+	bindings []agentsync.BoundedCoverageBinding,
+) {
+	c.coverageMu.Lock()
+	for _, binding := range bindings {
+		state := c.coverageState[binding.Key]
+		current, statErr := os.Stat(binding.DBPath)
+		if state != nil && ((statErr == nil && state.dbFile != nil && !sameBoundedFile(state.dbFile, current)) ||
+			(statErr != nil && errors.Is(statErr, os.ErrNotExist))) {
+			state.mode = boundedModeRetired
+			delete(c.coverageState, binding.Key)
+			state = nil
+		}
+		if state == nil {
+			state = &boundedCoverageState{binding: binding, dbFile: current,
+				admissionPending: true, mode: boundedModePolling,
+				pendingWake: true, wake: boundedWakePending}
+			state.generation = c.nextCoverageGenerationLocked(binding.Key)
+			c.coverageState[binding.Key] = state
+			continue
+		}
+		state.binding = binding
+		if state.dbFile == nil {
+			state.dbFile = current
+		}
+		if !state.checkpoint.Initialized && !state.nativeAdmitted {
+			state.admissionPending = true
+			state.mode = boundedModePolling
+			state.pendingWake = true
+			state.wake = boundedWakePending
+		}
+	}
+	c.coverageMu.Unlock()
+	c.requestPoll()
+}
+
 func (c *sharedUnwatchedPollCoordinator) PrimedBoundedCoverage(
 	bindings []agentsync.BoundedCoverageBinding,
 ) []agentsync.BoundedCoverageBinding {
@@ -318,26 +354,38 @@ func (c *sharedUnwatchedPollCoordinator) PrimeBoundedCoverageBindings(
 			delete(c.coverageState, binding.Key)
 			state = nil
 		}
-		initialized := state != nil && state.checkpoint.Initialized
-		if initialized && state.admissionPending {
-			state.admissionPending = false
-			state.nativeAdmitted = true
-			state.generation = c.nextCoverageGenerationLocked(binding.Key)
+		if state != nil && state.admissionPending {
+			c.coverageMu.Unlock()
+			continue
 		}
+		initialized := state != nil && state.checkpoint.Initialized
 		c.coverageMu.Unlock()
 		if initialized {
 			continue
 		}
+		c.coverageMu.Lock()
+		state = c.coverageState[binding.Key]
+		if state == nil {
+			state = &boundedCoverageState{binding: binding, dbFile: current,
+				generation: c.nextCoverageGenerationLocked(binding.Key)}
+			c.coverageState[binding.Key] = state
+		}
+		generation := state.generation
+		identity := state.dbFile
+		c.coverageMu.Unlock()
 		checkpoint, err := primer.PrimeBoundedCoverage(ctx, binding)
 		if err != nil {
 			return err
 		}
 		c.coverageMu.Lock()
 		state = c.coverageState[binding.Key]
-		if state == nil {
-			state = &boundedCoverageState{binding: binding}
-			c.coverageState[binding.Key] = state
-		} else if state.checkpoint.Initialized {
+		current, statErr = os.Stat(binding.DBPath)
+		if state == nil || state.generation != generation || !sameBoundedFile(identity, current) ||
+			(statErr != nil && errors.Is(statErr, os.ErrNotExist)) {
+			c.coverageMu.Unlock()
+			continue
+		}
+		if state.checkpoint.Initialized {
 			c.coverageMu.Unlock()
 			continue
 		}
@@ -430,18 +478,7 @@ func (c *sharedUnwatchedPollCoordinator) run() {
 					for _, binding := range bindings {
 						owned[binding.Key] = struct{}{}
 					}
-					if err := c.PrimeBoundedCoverageBindings(c.ctx, bindings); err != nil {
-						log.Printf("bounded coverage prime: %v", err)
-					} else {
-						c.coverageMu.Lock()
-						for _, binding := range bindings {
-							if state := c.coverageState[binding.Key]; state != nil {
-								state.pollOwned = true
-							}
-						}
-						c.coverageMu.Unlock()
-						c.WakeBoundedCoverage(bindings)
-					}
+					c.admitPendingBoundedCoverage(bindings)
 					ownedBindings[request.obligation.Key] = owned
 				}
 			}
@@ -474,10 +511,6 @@ func (c *sharedUnwatchedPollCoordinator) refreshBoundedCoverage(
 	if err != nil {
 		return err
 	}
-	primer, ok := c.coverage.(agentsync.BoundedCoveragePrimer)
-	if !ok {
-		return errors.New("bounded coverage resolver cannot prime")
-	}
 	c.coverageMu.Lock()
 	initialized := make(map[string]struct{}, len(c.coverageState))
 	pending := make(map[string]struct{}, len(c.coverageState))
@@ -498,20 +531,6 @@ func (c *sharedUnwatchedPollCoordinator) refreshBoundedCoverage(
 		}
 	}
 	c.coverageMu.Unlock()
-	checkpoints := make(map[string]parser.OpenCodeCoverageCheckpoint)
-	for _, binding := range bindings {
-		if _, admitted := initialized[binding.Key]; admitted {
-			continue
-		}
-		if _, waiting := pending[binding.Key]; waiting {
-			continue
-		}
-		checkpoint, err := primer.PrimeBoundedCoverage(c.ctx, binding)
-		if err != nil {
-			return err
-		}
-		checkpoints[binding.Key] = checkpoint
-	}
 	c.coverageMu.Lock()
 	defer c.coverageMu.Unlock()
 	admitted := make(map[string]struct{}, len(bindings))
@@ -521,7 +540,7 @@ func (c *sharedUnwatchedPollCoordinator) refreshBoundedCoverage(
 		} else if _, ok := pending[binding.Key]; ok {
 			admitted[binding.Key] = struct{}{}
 			continue
-		} else if checkpoint, ok := checkpoints[binding.Key]; ok {
+		} else {
 			admitted[binding.Key] = struct{}{}
 			state := c.coverageState[binding.Key]
 			if state == nil {
@@ -529,11 +548,10 @@ func (c *sharedUnwatchedPollCoordinator) refreshBoundedCoverage(
 				c.coverageState[binding.Key] = state
 			}
 			state.binding = binding
-			state.checkpoint = checkpoint
 			state.dbFile, _ = os.Stat(binding.DBPath)
 			state.admissionPending = true
 			state.mode = boundedModePolling
-			state.pollOwned = true
+			state.pollOwned = false
 			state.wake = boundedWakePending
 			state.pendingWake = true
 			state.generation = c.nextCoverageGenerationLocked(binding.Key)
@@ -583,18 +601,27 @@ func (c *sharedUnwatchedPollCoordinator) primeAfterOrdinaryPoll(
 	if err != nil {
 		return err
 	}
-	if err := c.PrimeBoundedCoverageBindings(ctx, bindings); err != nil {
-		return err
-	}
+	available := availableUnwatchedPollScopes(c.currentPollObligations())
 	c.coverageMu.Lock()
 	defer c.coverageMu.Unlock()
 	for _, binding := range bindings {
-		if state := c.coverageState[binding.Key]; state != nil && state.checkpoint.Initialized {
-			state.pollOwned = true
-			// Ordinary reconciliation settles polling ownership; it cannot consume
-			// a native wake that was admitted concurrently.
-			state.mode = boundedModePolling
-			state.pollOwned = true
+		if state := c.coverageState[binding.Key]; state != nil {
+			ordinaryOwned := false
+			for agent, roots := range available {
+				if agent != "" && agent != binding.Agent {
+					continue
+				}
+				for _, root := range roots {
+					if withinOrEqualForPoll(binding.DBPath, root) {
+						ordinaryOwned = true
+						break
+					}
+				}
+			}
+			if ordinaryOwned && state.admissionPending && !state.nativeAdmitted {
+				state.pollOwned = true
+				state.mode = boundedModePolling
+			}
 		}
 	}
 	return nil
@@ -694,7 +721,7 @@ func (c *sharedUnwatchedPollCoordinator) excludeAdmittedCoverageScopes(
 	c.coverageMu.Lock()
 	bindings := make([]agentsync.BoundedCoverageBinding, 0, len(c.coverageState))
 	for _, state := range c.coverageState {
-		if !state.pollOwned {
+		if !state.pollOwned || state.admissionPending {
 			continue
 		}
 		bindings = append(bindings, state.binding)
@@ -810,13 +837,14 @@ func checkpointAfterBoundedAudit(
 func (c *sharedUnwatchedPollCoordinator) pollBoundedCoverageOnce(ctx context.Context) error {
 	c.coverageMu.Lock()
 	type workItem struct {
-		key           string
-		generation    uint64
-		binding       agentsync.BoundedCoverageBinding
-		checkpoint    parser.OpenCodeCoverageCheckpoint
-		auditPending  bool
-		auditBoundary parser.OpenCodeCoverageCheckpoint
-		retired       bool
+		key              string
+		generation       uint64
+		binding          agentsync.BoundedCoverageBinding
+		checkpoint       parser.OpenCodeCoverageCheckpoint
+		auditPending     bool
+		auditBoundary    parser.OpenCodeCoverageCheckpoint
+		retired          bool
+		admissionPending bool
 	}
 	states := make([]workItem, 0, len(c.coverageState))
 	for _, state := range c.coverageState {
@@ -827,7 +855,7 @@ func (c *sharedUnwatchedPollCoordinator) pollBoundedCoverageOnce(ctx context.Con
 			states = append(states, workItem{key: state.binding.Key,
 				generation: state.generation, binding: state.binding,
 				checkpoint: state.checkpoint, auditPending: state.auditPending,
-				auditBoundary: state.auditBoundary})
+				auditBoundary: state.auditBoundary, admissionPending: state.admissionPending})
 		}
 	}
 	requestAudit := c.requestAudit
@@ -940,6 +968,9 @@ func (c *sharedUnwatchedPollCoordinator) pollBoundedCoverageOnce(ctx context.Con
 			s.auditPending = work.auditPending
 			s.retry = false
 			s.running = false
+			if work.admissionPending {
+				s.admissionPending = false
+			}
 		})
 	}
 	return nil

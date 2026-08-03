@@ -21,9 +21,15 @@ type BoundedCoverageRoot struct {
 // BoundedCoverageBinding is the immutable coordinator key for one provider
 // coverage obligation.
 type BoundedCoverageBinding struct {
-	Key    string
-	Agent  parser.AgentType
-	DBPath string
+	Key            string
+	Agent          parser.AgentType
+	DBPath         string
+	PhysicalDBPath string
+	Scope          string
+}
+
+type boundedCoverageIdentityProvider interface {
+	BoundedCoverageIdentity(context.Context, string, string) (string, string, error)
 }
 
 // BoundedCoverageScope is the provider-resolved physical scope retained by a
@@ -88,13 +94,18 @@ func (e *Engine) BoundedCoverageBindings(
 				} else if !compatible {
 					continue
 				}
-				key := string(requested.Agent) + "\x00" + dbPath
+				physicalDBPath, scope, err := boundedCoverageIdentity(ctx, provider, dbPath, watchRoot.Path)
+				if err != nil {
+					return nil, err
+				}
+				key := string(requested.Agent) + "\x00" + physicalDBPath
 				if _, ok := seen[key]; ok {
 					continue
 				}
 				seen[key] = struct{}{}
 				bindings = append(bindings, BoundedCoverageBinding{
-					Key: key, Agent: requested.Agent, DBPath: dbPath,
+					Key: key, Agent: requested.Agent, DBPath: physicalDBPath,
+					PhysicalDBPath: physicalDBPath, Scope: scope,
 				})
 			}
 		}
@@ -147,10 +158,17 @@ func (e *Engine) BoundedCoverageBindingsForPaths(
 						continue
 					}
 					matched = true
-					key := string(agent) + "\x00" + dbPath
+					physicalDBPath, scope, err := boundedCoverageIdentity(ctx, provider, dbPath, watchRoot.Path)
+					if err != nil {
+						return nil, nil, err
+					}
+					key := string(agent) + "\x00" + physicalDBPath
 					if _, ok := seen[key]; !ok {
 						seen[key] = struct{}{}
-						bindings = append(bindings, BoundedCoverageBinding{Key: key, Agent: agent, DBPath: dbPath})
+						bindings = append(bindings, BoundedCoverageBinding{
+							Key: key, Agent: agent, DBPath: physicalDBPath,
+							PhysicalDBPath: physicalDBPath, Scope: scope,
+						})
 					}
 				}
 			}
@@ -172,20 +190,29 @@ func (e *Engine) DrainBoundedCoverage(
 	if factory == nil || factory.Capabilities().Source.BoundedCoverage != parser.CapabilitySupported {
 		return parser.OpenCodeFeedResult{Next: checkpoint}, nil, nil
 	}
-	provider := factory.NewProvider(parser.ProviderConfig{
-		Roots: []string{filepath.Dir(binding.DBPath)}, Machine: e.machine,
-	})
-	if _, err := os.Stat(binding.DBPath); err != nil {
-		return parser.OpenCodeFeedResult{Next: checkpoint}, nil, fmt.Errorf("%w: %s", parser.ErrOpenCodeCoverageDatabaseMissing, binding.DBPath)
+	dbPath := binding.PhysicalDBPath
+	if dbPath == "" {
+		dbPath = binding.DBPath
 	}
-	_, compatible, err := parser.ProbeOpenCodeJournalCapability(ctx, binding.DBPath)
+	scope := binding.Scope
+	if scope == "" {
+		return parser.OpenCodeFeedResult{Next: checkpoint}, nil,
+			errors.New("bounded coverage binding has no provider-resolved scope")
+	}
+	provider := factory.NewProvider(parser.ProviderConfig{
+		Roots: []string{scope}, Machine: e.machine,
+	})
+	if _, err := os.Stat(dbPath); err != nil {
+		return parser.OpenCodeFeedResult{Next: checkpoint}, nil, fmt.Errorf("%w: %s", parser.ErrOpenCodeCoverageDatabaseMissing, dbPath)
+	}
+	_, compatible, err := parser.ProbeOpenCodeJournalCapability(ctx, dbPath)
 	if err != nil {
 		return parser.OpenCodeFeedResult{Next: checkpoint}, nil, err
 	}
 	if !compatible {
 		return parser.OpenCodeFeedResult{Next: checkpoint}, nil, nil
 	}
-	result, err := parser.DrainOpenCodeJournal(ctx, binding.DBPath, checkpoint)
+	result, err := parser.DrainOpenCodeJournal(ctx, dbPath, checkpoint)
 	if err != nil {
 		return result, nil, err
 	}
@@ -204,6 +231,15 @@ func (e *Engine) DrainBoundedCoverage(
 		sources = append(sources, source)
 	}
 	return result, sources, nil
+}
+
+func boundedCoverageIdentity(
+	ctx context.Context, provider parser.Provider, dbPath, scope string,
+) (string, string, error) {
+	if resolver, ok := provider.(boundedCoverageIdentityProvider); ok {
+		return resolver.BoundedCoverageIdentity(ctx, dbPath, scope)
+	}
+	return "", "", errors.New("provider does not resolve bounded coverage identity")
 }
 
 func (e *Engine) PrimeBoundedCoverage(

@@ -931,6 +931,9 @@ func TestRunWorkerWritePassShutdownStopsPersistentRecovery(t *testing.T) {
 	daemonCtx, shutdown := context.WithCancel(context.Background())
 	defer shutdown()
 	var contender *writeOwnerLock
+	operationCtx, cancelOperation := context.WithCancel(context.Background())
+	defer cancelOperation()
+	workerReady := make(chan struct{})
 	restore := stubLaunchSyncWorker(t, func(
 		_ context.Context, _ config.Config, _ string, _ func(workerLine),
 	) (workerResult, error) {
@@ -939,7 +942,8 @@ func TestRunWorkerWritePassShutdownStopsPersistentRecovery(t *testing.T) {
 		taken, err := tryAcquireWriteOwnerLock(cfg.DataDir)
 		require.NoError(t, err, "contender takes the freed lock")
 		contender = taken
-		shutdown()
+		cancelOperation()
+		close(workerReady)
 		return workerResult{Status: "ok", DiscoveryComplete: true}, nil
 	})
 	defer restore()
@@ -952,11 +956,24 @@ func TestRunWorkerWritePassShutdownStopsPersistentRecovery(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := runWorkerWritePass(
-			context.Background(), daemonCtx, cfg, engine, database, lock,
+			operationCtx, daemonCtx, cfg, engine, database, lock,
 			"sync", nil,
 		)
 		done <- err
 	}()
+	select {
+	case <-workerReady:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not complete its operation")
+	}
+	select {
+	case <-done:
+		t.Fatal("operation cancellation must not cancel daemon-lifetime recovery")
+	case <-time.After(100 * time.Millisecond):
+	}
+	shutdown()
+	assert.NoError(t, contender.Close())
+	contender = nil
 	select {
 	case err := <-done:
 		require.Error(t, err,

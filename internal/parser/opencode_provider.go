@@ -93,6 +93,25 @@ func (p *openCodeFormatProvider) WatchPlan(ctx context.Context) (WatchPlan, erro
 	return p.sources.WatchPlan(ctx)
 }
 
+// BoundedCoverageIdentity resolves the database and its watch scope once at
+// the provider boundary so callers retain physical ownership across aliases.
+func (p *openCodeFormatProvider) BoundedCoverageIdentity(
+	ctx context.Context, dbPath, scope string,
+) (string, string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
+	physicalDBPath, err := filepath.EvalSymlinks(dbPath)
+	if err != nil {
+		return "", "", err
+	}
+	physicalScope, err := filepath.EvalSymlinks(scope)
+	if err != nil {
+		return "", "", err
+	}
+	return filepath.Clean(physicalDBPath), filepath.Clean(physicalScope), nil
+}
+
 func (p *openCodeFormatProvider) SourcesForChangedPath(
 	ctx context.Context,
 	req ChangedPathRequest,
