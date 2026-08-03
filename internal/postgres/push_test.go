@@ -1049,6 +1049,20 @@ func (c *pushSessionProbeConn) QueryContext(
 	}
 }
 
+func namedValueStrings(args []driver.NamedValue) []string {
+	if len(args) == 0 {
+		return nil
+	}
+	switch value := args[0].Value.(type) {
+	case []string:
+		return value
+	case string:
+		return []string{value}
+	default:
+		return nil
+	}
+}
+
 func (pushSessionProbeTx) Commit() error { return nil }
 
 func (pushSessionProbeTx) Rollback() error { return nil }

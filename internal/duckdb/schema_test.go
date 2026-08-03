@@ -66,6 +66,26 @@ func TestEnsureSchemaCreatesRequiredMirrorTables(t *testing.T) {
 	assert.Equal(t, strconv.Itoa(SchemaVersion), version)
 }
 
+func TestWriteMirrorMetadataPublishesFreshGeneration(t *testing.T) {
+	conn := openTestDuckDB(t)
+	require.NoError(t, createSchema(t.Context(), conn))
+
+	meta := mirrorMetadata{SchemaVersion: SchemaVersion, DataVersion: 81}
+	require.NoError(t, writeMirrorMetadata(t.Context(), conn, meta))
+	first, err := readMetadataKey(
+		t.Context(), conn, "agentsview_mirror_generation",
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, first)
+
+	require.NoError(t, writeMirrorMetadata(t.Context(), conn, meta))
+	second, err := readMetadataKey(
+		t.Context(), conn, "agentsview_mirror_generation",
+	)
+	require.NoError(t, err)
+	assert.NotEqual(t, first, second)
+}
+
 func TestUsageEventsDedupIndexAllowsRepeatedEmptyKeysAndRejectsDuplicates(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDuckDB(t)

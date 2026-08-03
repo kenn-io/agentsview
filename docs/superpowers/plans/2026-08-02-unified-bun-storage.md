@@ -577,9 +577,10 @@ ______________________________________________________________________
 
     PostgreSQL wraps its stable pool with `pgdialect.New()` and delegates close to
     the existing raw-pool owner. Its operation capabilities allow curation,
-    insight (after the existing capability probe), and session-management writes
-    but reject archive/Recall ingestion. DuckDB wraps each mirror generation
-    with `bundialect.New()` and swaps raw/Bun handles together under `handleMu`.
+    insight insertion and deletion (after their independent capability probes),
+    and session-management writes but reject archive/Recall ingestion. DuckDB
+    wraps each mirror generation with `bundialect.New()` and swaps raw/Bun
+    handles together under `handleMu`.
 
     The Quack resolver returns an `IConn` that formats no values itself: Bun has
     already produced safe DuckDB SQL. `QueryContext` and `QueryRowContext` pass
@@ -691,7 +692,7 @@ ______________________________________________________________________
 - Produces one forward SQLite/PostgreSQL schema-convergence migration that is
   additive and transactional.
 
-- Produces DuckDB `SchemaVersion = 10` and rebuild-only canonical schema
+- Produces DuckDB `SchemaVersion = 11` and rebuild-only canonical schema
   creation.
 
 - [ ] **Step 1: Classify the migration history before editing**
@@ -758,7 +759,7 @@ ______________________________________________________________________
     proves convergence drops the old pin alias's NOT NULL constraint and accepts
     an ordinal-only canonical pin.
 
-    Update the DuckDB rebuild test to expect schema version 10, the full canonical
+    Update the DuckDB rebuild test to expect schema version 11, the full canonical
     common table/column set, preserved source rows, and atomic replacement.
 
 - [ ] **Step 3: Verify RED**
