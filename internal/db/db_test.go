@@ -1693,11 +1693,15 @@ func TestReplaceSessionMessagesPreservesPins(t *testing.T) {
 	ctx := context.Background()
 
 	insertSession(t, d, "s1", "p")
-	insertMessages(t, d,
+	oldMessages := []Message{
 		userMsg("s1", 0, "msg0"),
 		asstMsg("s1", 1, "msg1"),
 		userMsg("s1", 2, "msg2"),
-	)
+	}
+	for i := range oldMessages {
+		oldMessages[i].SourceUUID = fmt.Sprintf("uuid-%d", i)
+	}
+	insertMessages(t, d, oldMessages...)
 
 	msgs, err := d.GetAllMessages(ctx, "s1")
 	require.NoError(t, err, "GetAllMessages")
@@ -1719,11 +1723,16 @@ func TestReplaceSessionMessagesPreservesPins(t *testing.T) {
 
 	// Full replace (simulates a resync of an OpenCode or
 	// explicitly re-synced session).
-	require.NoError(t, d.ReplaceSessionMessages("s1", []Message{
+	newMessages := []Message{
 		userMsg("s1", 0, "msg0-updated"),
 		asstMsg("s1", 1, "msg1-updated"),
 		userMsg("s1", 2, "msg2-updated"),
-	}), "ReplaceSessionMessages")
+	}
+	for i := range newMessages {
+		newMessages[i].SourceUUID = fmt.Sprintf("uuid-%d", i)
+	}
+	require.NoError(t, d.ReplaceSessionMessages("s1", newMessages),
+		"ReplaceSessionMessages")
 
 	newMsgs, err := d.GetAllMessages(ctx, "s1")
 	require.NoError(t, err, "GetAllMessages after replace")
@@ -1763,10 +1772,13 @@ func TestReplaceSessionMessagesDropsPinsForRemovedOrdinals(t *testing.T) {
 	ctx := context.Background()
 
 	insertSession(t, d, "s1", "p")
-	insertMessages(t, d,
+	oldMessages := []Message{
 		userMsg("s1", 0, "msg0"),
 		asstMsg("s1", 1, "msg1"),
-	)
+	}
+	oldMessages[0].SourceUUID = "uuid-0"
+	oldMessages[1].SourceUUID = "uuid-1"
+	insertMessages(t, d, oldMessages...)
 
 	msgs, err := d.GetAllMessages(ctx, "s1")
 	require.NoError(t, err, "GetAllMessages")
@@ -1777,9 +1789,10 @@ func TestReplaceSessionMessagesDropsPinsForRemovedOrdinals(t *testing.T) {
 	}
 
 	// Replace with only ordinal-0 (ordinal-1 is gone).
-	require.NoError(t, d.ReplaceSessionMessages("s1", []Message{
-		userMsg("s1", 0, "msg0-updated"),
-	}), "ReplaceSessionMessages")
+	replacement := userMsg("s1", 0, "msg0-updated")
+	replacement.SourceUUID = "uuid-0"
+	require.NoError(t, d.ReplaceSessionMessages("s1", []Message{replacement}),
+		"ReplaceSessionMessages")
 
 	pins, err := d.ListPinnedMessages(ctx, "s1", "")
 	require.NoError(t, err, "ListPinnedMessages")
@@ -1861,6 +1874,7 @@ func TestReplaceSessionMessagesPinFallsBackToOrdinal(t *testing.T) {
 	insertMessages(t, d,
 		userMsg("s1", 0, "msg0"),
 		asstMsg("s1", 1, "msg1"),
+		userMsg("s1", 2, "removed"),
 	)
 
 	msgs, err := d.GetAllMessages(ctx, "s1")
@@ -1868,16 +1882,89 @@ func TestReplaceSessionMessagesPinFallsBackToOrdinal(t *testing.T) {
 	_, err = d.PinMessage("s1", msgs[1].ID, nil)
 	require.NoError(t, err, "PinMessage")
 
-	// Replace with the same ordinals (and still no source_uuid).
+	// Truncation forces a full replacement. The pinned legacy row remains
+	// unchanged at its old ordinal, so the guarded fallback can restore it.
 	require.NoError(t, d.ReplaceSessionMessages("s1", []Message{
-		userMsg("s1", 0, "msg0-v2"),
-		asstMsg("s1", 1, "msg1-v2"),
+		userMsg("s1", 0, "msg0"),
+		asstMsg("s1", 1, "msg1"),
 	}), "ReplaceSessionMessages")
 
 	pins, err := d.ListPinnedMessages(ctx, "s1", "")
 	require.NoError(t, err, "ListPinnedMessages")
 	require.Len(t, pins, 1, "want 1 pin")
 	assert.Equal(t, 1, pins[0].Ordinal, "pin ordinal")
+}
+
+func TestReplaceSessionContentDuplicateSourceUUIDRestoresOnePin(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "s1", "p")
+	insertMessages(t, d,
+		Message{
+			SessionID: "s1", Ordinal: 0, Role: "user",
+			Content: "pinned", SourceUUID: "duplicate",
+		},
+		Message{
+			SessionID: "s1", Ordinal: 1, Role: "assistant",
+			Content: "not pinned", SourceUUID: "duplicate",
+		},
+		Message{
+			SessionID: "s1", Ordinal: 2, Role: "user",
+			Content: "removed", SourceUUID: "tail",
+		},
+	)
+	msgs, err := d.GetAllMessages(ctx, "s1")
+	require.NoError(t, err, "GetAllMessages")
+	_, err = d.PinMessage("s1", msgs[0].ID, nil)
+	require.NoError(t, err, "PinMessage")
+
+	require.NoError(t, d.ReplaceSessionContent("s1", []Message{
+		{
+			SessionID: "s1", Ordinal: 0, Role: "user",
+			Content: "pinned", SourceUUID: "duplicate",
+		},
+		{
+			SessionID: "s1", Ordinal: 1, Role: "assistant",
+			Content: "not pinned", SourceUUID: "duplicate",
+		},
+	}, SessionSignalUpdate{}, nil), "ReplaceSessionContent")
+
+	pins, err := d.ListPinnedMessages(ctx, "s1", "")
+	require.NoError(t, err, "ListPinnedMessages")
+	require.Len(t, pins, 1, "duplicate UUID must not duplicate the pin")
+	assert.Equal(t, 0, pins[0].Ordinal, "pin stays on its original message")
+}
+
+func TestReplaceSessionContentMissingSourceUUIDDropsPin(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "s1", "p")
+	insertMessages(t, d,
+		Message{
+			SessionID: "s1", Ordinal: 0, Role: "user",
+			Content: "gone", SourceUUID: "gone-uuid",
+		},
+		Message{
+			SessionID: "s1", Ordinal: 1, Role: "assistant",
+			Content: "removed", SourceUUID: "tail",
+		},
+	)
+	msgs, err := d.GetAllMessages(ctx, "s1")
+	require.NoError(t, err, "GetAllMessages")
+	_, err = d.PinMessage("s1", msgs[0].ID, nil)
+	require.NoError(t, err, "PinMessage")
+
+	require.NoError(t, d.ReplaceSessionContent("s1", []Message{{
+		SessionID: "s1", Ordinal: 0, Role: "assistant",
+		Content: "unrelated", SourceUUID: "other-uuid",
+	}}, SessionSignalUpdate{}, nil), "ReplaceSessionContent")
+
+	pins, err := d.ListPinnedMessages(ctx, "s1", "")
+	require.NoError(t, err, "ListPinnedMessages")
+	assert.Empty(t, pins,
+		"a vanished UUID must not fall back to an unrelated ordinal")
 }
 
 func TestGetSessionFilePath(t *testing.T) {
