@@ -121,6 +121,7 @@ type pendingWatchBatch struct {
 	strings        map[string]struct{}
 	lifecycle      map[backendLifecycleToken]struct{}
 	pathBytes      int
+	groupBytes     int
 	maxEntries     int
 	maxPathBytes   int
 	fullSync       bool
@@ -226,10 +227,13 @@ func (p *pendingWatchBatch) AddReconcileGroup(
 	if _, exists := p.groups[agent][root]; exists {
 		return
 	}
-	if !p.retainStrings(string(agent), root) {
+	groupBytes := len(string(agent)) + len(root)
+	if p.groupBytes+groupBytes > p.maxPathBytes {
+		p.overflow()
 		return
 	}
 	p.groups[agent][root] = struct{}{}
+	p.groupBytes += groupBytes
 }
 
 func (p *pendingWatchBatch) AddBackendEvent(event backendEvent) bool {
@@ -502,6 +506,7 @@ func (p *pendingWatchBatch) TakeWithRootAgents(
 	clear(p.strings)
 	tokens := p.takeLifecycleTokens()
 	p.pathBytes = 0
+	p.groupBytes = 0
 	lostEvents := p.lostEvents
 	p.lostEvents = false
 	return WatchBatch{
@@ -530,6 +535,7 @@ func (p *pendingWatchBatch) takeProviderGroups() []ProviderRootsGroup {
 		groups = append(groups, ProviderRootsGroup{Agent: agent, Roots: roots})
 	}
 	clear(p.groups)
+	p.groupBytes = 0
 	return groups
 }
 
@@ -1449,10 +1455,10 @@ func retainWatchRetry(pending *pendingWatchBatch, retry WatchBatch) {
 		for _, root := range retry.ReconcileRoots {
 			pending.AddReconcileRoot(root)
 		}
-		for _, group := range retry.ReconcileGroups {
-			for _, root := range group.Roots {
-				pending.AddReconcileGroup(group.Agent, root)
-			}
+	}
+	for _, group := range retry.ReconcileGroups {
+		for _, root := range group.Roots {
+			pending.AddReconcileGroup(group.Agent, root)
 		}
 	}
 	pending.lostEvents = pending.lostEvents || retry.LostEvents

@@ -1,13 +1,13 @@
 package main
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
@@ -25,11 +25,10 @@ func TestBoundedCoverageCoordinatorCardinality(t *testing.T) {
 		t.Skip("skipping bounded coverage cardinality integration")
 	}
 	for _, mode := range []struct {
-		name   string
-		native bool
+		name string
 	}{
-		{name: "native", native: true},
-		{name: "degraded", native: false},
+		{name: "native"},
+		{name: "degraded"},
 	} {
 		for _, sessions := range []int{10, 5000} {
 			t.Run(fmt.Sprintf("%s_sessions_%d", mode.name, sessions), func(t *testing.T) {
@@ -70,10 +69,12 @@ func TestBoundedCoverageCoordinatorCardinality(t *testing.T) {
 					Machine:   "local",
 				})
 				t.Cleanup(engine.Close)
-				coordinator := &sharedUnwatchedPollCoordinator{
-					ctx: context.Background(), coverage: engine,
-					coverageState: make(map[string]*boundedCoverageState),
-				}
+				ticks := make(chan time.Time)
+				coordinator := newUnwatchedPollCoordinatorWithTicks(
+					t.Context(), engine, ticks, func() {}, func(func()) {}, nil,
+					time.Now, time.After,
+				)
+				t.Cleanup(coordinator.Stop)
 				var rows, applied int
 				coordinator.onBoundedCoveragePage = func(result parser.OpenCodeFeedResult) {
 					rows += result.RowsRead
@@ -95,8 +96,14 @@ func TestBoundedCoverageCoordinatorCardinality(t *testing.T) {
 					VALUES (?, 'ses00000', ?, ?, ?)`, fmt.Sprintf("event-before-%d", i), i+1, eventType, payload)
 					require.NoError(t, err)
 				}
-				_, err = coordinator.AdmitBoundedCoverage(t.Context(), bindings, mode.native)
-				require.NoError(t, err)
+				if mode.name == "native" {
+					_, err = coordinator.AdmitBoundedCoverage(t.Context(), bindings, true)
+					require.NoError(t, err)
+				} else {
+					require.NoError(t, coordinator.AddObligation(pollingObligation{
+						Key: "degraded", Scopes: []pollingScope{{Agent: parser.AgentOpenCode, Root: root}},
+					}))
+				}
 				for i, eventType := range eventTypes {
 					payload := "{}"
 					if eventType == "message.updated" {
@@ -111,14 +118,12 @@ func TestBoundedCoverageCoordinatorCardinality(t *testing.T) {
 				require.NoError(t, err)
 				require.Greater(t, walInfo.Size(), int64(32),
 					"the measured mutation must retain WAL frames beyond its header")
-				require.NoError(t, coordinator.refreshBoundedCoverage(map[string]pollingObligation{
-					"degraded": {Key: "degraded", Scopes: []pollingScope{{Agent: parser.AgentOpenCode, Root: root}}},
-				}))
 				require.NoError(t, coordinator.pollBoundedCoverageOnce(t.Context()))
 				_, err = archive.GetSession(t.Context(), "ses00000")
 				require.NoError(t, err)
 				t.Logf("bounded_admission mode=%s sessions=%d event_types=%s observed_journal_rows=%d applied_sources=%d source=%s wal_bytes=%d", mode.name, sessions, strings.Join(eventTypes, ","), rows, applied, bindings[0].PhysicalDBPath, walInfo.Size())
-				require.GreaterOrEqual(t, rows, 2, "row-zero admission must retain pre-admission and triggering rows")
+				require.Equal(t, len(eventTypes)*2, rows,
+					"native and degraded production admission must retain every producer event")
 				require.Equal(t, 1, applied)
 				require.LessOrEqual(t, rows, parser.OpenCodeCoverageMaxRows)
 			})

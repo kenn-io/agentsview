@@ -33,14 +33,68 @@ import (
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
-func TestRemoveGroupedRootsExcludesOverlappingGenericRoots(t *testing.T) {
-	groupRoot := filepath.Join(t.TempDir(), "provider", "nested")
-	grouped := providerGroupRoots([]agentsync.ProviderRootsGroup{{
-		Agent: parser.AgentOpenCode,
-		Roots: []string{groupRoot},
-	}})
-	roots := []string{groupRoot, filepath.Dir(groupRoot), filepath.Join(groupRoot, "child"), filepath.Join(filepath.Dir(groupRoot), "sibling")}
-	assert.Equal(t, []string{filepath.Join(filepath.Dir(groupRoot), "sibling")}, removeGroupedRoots(roots, grouped))
+type groupedRootDispatchRecorder struct {
+	groups   []agentsync.ProviderRootsGroup
+	generic  [][]string
+	excluded [][]parser.AgentType
+}
+
+func (r *groupedRootDispatchRecorder) SyncPathsContext(context.Context, []string) error {
+	return nil
+}
+
+func (r *groupedRootDispatchRecorder) HasActiveSessionSourceBelow(string, string) (bool, error) {
+	return false, nil
+}
+
+func (r *groupedRootDispatchRecorder) ReconciliationRootsForAgent(string) []string {
+	return nil
+}
+
+func (r *groupedRootDispatchRecorder) ReconcileWatchRoots(
+	_ context.Context, roots []string, _ bool,
+) error {
+	r.generic = append(r.generic, append([]string(nil), roots...))
+	return nil
+}
+
+func (r *groupedRootDispatchRecorder) ReconcileWatchRootsAfterLostEvents(
+	ctx context.Context, roots []string, lost bool,
+) error {
+	return r.ReconcileWatchRoots(ctx, roots, lost)
+}
+
+func (r *groupedRootDispatchRecorder) ReconcileProviderRootsGrouped(
+	_ context.Context, groups []agentsync.ProviderRootsGroup,
+) error {
+	r.groups = append(r.groups, groups...)
+	return nil
+}
+
+func (r *groupedRootDispatchRecorder) ReconcileWatchRootsExcludingAgents(
+	_ context.Context, roots []string, excluded []parser.AgentType, _ bool,
+) error {
+	r.generic = append(r.generic, append([]string(nil), roots...))
+	r.excluded = append(r.excluded, append([]parser.AgentType(nil), excluded...))
+	return nil
+}
+
+func TestSyncWatchBatchKeepsSharedRootsForOtherProviders(t *testing.T) {
+	recorder := new(groupedRootDispatchRecorder)
+	sharedRoot := filepath.Join(t.TempDir(), "shared")
+	groupRoot := filepath.Join(sharedRoot, "opencode")
+	err := syncWatchBatch(t.Context(), recorder, agentsync.WatchBatch{
+		ReconcileRoots: []string{sharedRoot},
+		ReconcileGroups: []agentsync.ProviderRootsGroup{{
+			Agent: parser.AgentOpenCode, Roots: []string{groupRoot},
+		}},
+	}, func() watchRecoveryScope {
+		return watchRecoveryScope{}
+	})
+	require.NoError(t, err)
+	require.Len(t, recorder.groups, 1)
+	require.Equal(t, []string{sharedRoot}, recorder.generic[0])
+	require.Equal(t, []parser.AgentType{parser.AgentOpenCode}, recorder.excluded[0])
 }
 
 func TestRuntimeWarningHelper(t *testing.T) {

@@ -83,3 +83,30 @@ func TestBoundedCoverageTransitionRetiresBeforeApply(t *testing.T) {
 		t.Fatal("retired generation was accepted for apply")
 	}
 }
+
+func TestBoundedCoverageTransitionRejectsMismatchedSourceProvider(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "opencode.db")
+	if err := os.WriteFile(path, []byte("db"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := &Engine{boundedCoverageGenerations: make(map[string]uint64)}
+	lease := &BoundedCoverageLease{
+		Binding: BoundedCoverageBinding{
+			Agent: parser.AgentOpenCode, PhysicalDBPath: path, Scope: root, Generation: 1,
+		},
+		Provider: parser.AgentOpenCode, PhysicalDBPath: path,
+		ExactProviderScope: root, Generation: 1,
+		FileIdentity: boundedCoverageFileIdentity(path, info), fileInfo: info,
+	}
+	source := parser.SourceRef{Provider: parser.AgentClaude, DisplayPath: path}
+	if _, err := engine.TransitionBoundedCoverageRequest(
+		t.Context(), lease, []parser.SourceRef{source}, parser.OpenCodeCoverageCheckpoint{}, false,
+	); err == nil {
+		t.Fatal("source from another provider crossed the bounded write boundary")
+	}
+}

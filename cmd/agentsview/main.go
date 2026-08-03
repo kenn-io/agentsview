@@ -2328,6 +2328,12 @@ type watchSyncer interface {
 	ReconcileWatchRootsAfterLostEvents(context.Context, []string, bool) error
 }
 
+type watchSyncerExcludingAgents interface {
+	ReconcileWatchRootsExcludingAgents(
+		context.Context, []string, []parser.AgentType, bool,
+	) error
+}
+
 type groupedWatchSyncer interface {
 	ReconcileProviderRootsGrouped(context.Context, []sync.ProviderRootsGroup) error
 }
@@ -2425,7 +2431,7 @@ func syncWatchBatch(
 	full := batch.FullSync
 	reconcileRoots := append([]string(nil), batch.ReconcileRoots...)
 	reconcileGroups := append([]sync.ProviderRootsGroup(nil), batch.ReconcileGroups...)
-	groupedRoots := providerGroupRoots(reconcileGroups)
+	groupedAgents := providerGroupAgents(reconcileGroups)
 	lostEvents := batch.LostEvents
 	type renameOwner struct {
 		path  string
@@ -2509,7 +2515,7 @@ func syncWatchBatch(
 			retry := sync.WatchBatch{FullSync: full, LostEvents: lostEvents, ReconcileGroups: reconcileGroups}
 			if !full {
 				retry.Paths = append([]string(nil), paths...)
-				retry.ReconcileRoots = removeGroupedRoots(deduplicateStrings(reconcileRoots), groupedRoots)
+				retry.ReconcileRoots = deduplicateStrings(reconcileRoots)
 			}
 			return &watchReconciliationError{
 				cause: err,
@@ -2529,6 +2535,19 @@ func syncWatchBatch(
 			}
 		}
 	}
+	reconcileGeneric := func(roots []string) error {
+		if len(groupedAgents) > 0 {
+			if scoped, ok := engine.(watchSyncerExcludingAgents); ok {
+				return scoped.ReconcileWatchRootsExcludingAgents(
+					ctx, roots, groupedAgents, lostEvents,
+				)
+			}
+		}
+		if lostEvents {
+			return engine.ReconcileWatchRootsAfterLostEvents(ctx, roots, false)
+		}
+		return engine.ReconcileWatchRoots(ctx, roots, false)
+	}
 	if full {
 		// Scope the recovery to the currently available roots, exactly like
 		// the startup gap reconciliation and the archive audit. An engine-side
@@ -2537,29 +2556,19 @@ func syncWatchBatch(
 		// discovery, and tombstone every baselined session beneath it.
 		// Unavailable scopes are deferred to their polling probes instead; a
 		// failed recovery retries as a full batch so availability is re-probed.
-		fullRoots := removeGroupedRoots(probeScope().available, groupedRoots)
+		fullRoots := probeScope().available
 		if len(fullRoots) == 0 {
 			return nil
 		}
-		var err error
-		if lostEvents {
-			err = engine.ReconcileWatchRootsAfterLostEvents(ctx, fullRoots, false)
-		} else {
-			err = engine.ReconcileWatchRoots(ctx, fullRoots, false)
-		}
+		err := reconcileGeneric(fullRoots)
 		if err != nil {
 			return newWatchReconciliationError(err, nil, true, lostEvents)
 		}
 		return nil
 	}
-	roots := removeGroupedRoots(deduplicateStrings(reconcileRoots), groupedRoots)
+	roots := deduplicateStrings(reconcileRoots)
 	if len(roots) > 0 {
-		var err error
-		if lostEvents {
-			err = engine.ReconcileWatchRootsAfterLostEvents(ctx, roots, false)
-		} else {
-			err = engine.ReconcileWatchRoots(ctx, roots, false)
-		}
+		err := reconcileGeneric(roots)
 		if err != nil {
 			return newWatchReconciliationError(err, roots, false, lostEvents)
 		}
@@ -2567,41 +2576,21 @@ func syncWatchBatch(
 	return nil
 }
 
-func providerGroupRoots(groups []sync.ProviderRootsGroup) map[string]struct{} {
-	roots := make(map[string]struct{})
+func providerGroupAgents(groups []sync.ProviderRootsGroup) []parser.AgentType {
+	seen := make(map[parser.AgentType]struct{}, len(groups))
 	for _, group := range groups {
-		for _, root := range group.Roots {
-			roots[root] = struct{}{}
+		if group.Agent != "" {
+			seen[group.Agent] = struct{}{}
 		}
 	}
-	return roots
-}
-
-func removeGroupedRoots(roots []string, grouped map[string]struct{}) []string {
-	if len(grouped) == 0 {
-		return roots
+	agents := make([]parser.AgentType, 0, len(seen))
+	for agent := range seen {
+		agents = append(agents, agent)
 	}
-	return slices.DeleteFunc(roots, func(root string) bool {
-		for groupedRoot := range grouped {
-			if pathsOverlap(root, groupedRoot) {
-				return true
-			}
-		}
-		return false
+	slices.SortFunc(agents, func(a, b parser.AgentType) int {
+		return strings.Compare(string(a), string(b))
 	})
-}
-
-func pathsOverlap(a, b string) bool {
-	a = filepath.Clean(a)
-	b = filepath.Clean(b)
-	if a == b {
-		return true
-	}
-	under := func(path, root string) bool {
-		rel, err := filepath.Rel(root, path)
-		return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-	}
-	return under(a, b) || under(b, a)
+	return agents
 }
 
 func removeString(values []string, remove string) []string {

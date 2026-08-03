@@ -285,16 +285,30 @@ func (c *sharedUnwatchedPollCoordinator) admitBoundedCoverage(
 			generation = c.nextCoverageGenerationLocked(boundedCoverageGenerationKey(binding))
 		}
 		oldKey := ""
+		frozen := make(map[*boundedCoverageState]bool)
+		freeze := func(candidate *boundedCoverageState) {
+			if _, recorded := frozen[candidate]; !recorded {
+				frozen[candidate] = candidate.frozen
+			}
+			candidate.frozen = true
+		}
+		restoreFrozen := func() {
+			c.coverageMu.Lock()
+			for candidate, wasFrozen := range frozen {
+				candidate.frozen = wasFrozen
+			}
+			c.coverageMu.Unlock()
+		}
 		if needsLease {
 			if state != nil {
-				state.frozen = true
+				freeze(state)
 				oldKey = binding.Key
 			}
 			for key, candidate := range c.coverageState {
 				if filepath.Clean(candidate.binding.PhysicalDBPath) == filepath.Clean(binding.PhysicalDBPath) &&
 					filepath.Clean(candidate.binding.Scope) != filepath.Clean(binding.Scope) {
 					oldKey = key
-					candidate.frozen = true
+					freeze(candidate)
 					break
 				}
 			}
@@ -315,12 +329,14 @@ func (c *sharedUnwatchedPollCoordinator) admitBoundedCoverage(
 				}
 			}
 			if err != nil {
+				restoreFrozen()
 				return admitted, err
 			}
 			if leaseResolver, ok := c.coverage.(agentsync.BoundedCoverageLeaseResolver); ok {
 				if _, err = leaseResolver.TransitionBoundedCoverageRequest(
 					ctx, lease, nil, lease.AdmissionCheckpoint, true,
 				); err != nil {
+					restoreFrozen()
 					return admitted, err
 				}
 			}

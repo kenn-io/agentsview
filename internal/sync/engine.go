@@ -3697,10 +3697,11 @@ func (e *Engine) reconcileScopedWatchRoots(
 // exactly when the pass itself would have.
 func (e *Engine) reconcileScopedWatchRootsLocked(
 	ctx context.Context, agent parser.AgentType, roots []string, full, force bool,
+	excluded ...map[parser.AgentType]struct{},
 ) (SyncStats, int, passEpilogueEligibility, error) {
 	fullCoverage := full || (agent == "" && len(roots) == 0)
 	plans, excludedRemoteRoots := e.resolveReconciliationPlans(
-		ctx, agent, roots, full, fullCoverage,
+		ctx, agent, roots, full, fullCoverage, excluded...,
 	)
 	if !fullCoverage && !reconciliationPlansNeedPass(plans) {
 		// No provider resolved any scope for the request: every root was
@@ -3740,6 +3741,30 @@ func (e *Engine) ReconcileWatchRootsAfterLostEvents(
 	return e.reconcileWatchRoots(ctx, roots, full, true)
 }
 
+// ReconcileWatchRootsExcludingAgents keeps an unscoped recovery on every
+// physical root while omitting providers already handled by grouped dispatch.
+// A shared physical root must not be removed just because one provider owns a
+// grouped pass for it.
+func (e *Engine) ReconcileWatchRootsExcludingAgents(
+	ctx context.Context, roots []string, excluded []parser.AgentType, lostEvents bool,
+) error {
+	excludedSet := make(map[parser.AgentType]struct{}, len(excluded))
+	for _, agent := range excluded {
+		excludedSet[agent] = struct{}{}
+	}
+	stats, tombstoned, _, err := func() (SyncStats, int, passEpilogueEligibility, error) {
+		e.syncMu.Lock()
+		defer e.syncMu.Unlock()
+		return e.reconcileScopedWatchRootsLocked(
+			ctx, "", roots, false, lostEvents, excludedSet,
+		)
+	}()
+	if stats.Synced > 0 || tombstoned > 0 {
+		e.emit("sessions")
+	}
+	return err
+}
+
 // ReconciliationRootsForAgent returns every configured root for one provider.
 // Directory rename events use the complete provider scope because FSEvents may
 // report only one endpoint of a move between that provider's roots.
@@ -3767,6 +3792,7 @@ func (e *Engine) resolveReconciliationPlans(
 	agentFilter parser.AgentType,
 	roots []string,
 	full, fullCoverage bool,
+	excluded ...map[parser.AgentType]struct{},
 ) ([]providerReconciliationPlan, int) {
 	agents := make([]parser.AgentType, 0, len(e.providerFactories))
 	for agent := range e.providerFactories {
@@ -3777,6 +3803,11 @@ func (e *Engine) resolveReconciliationPlans(
 	})
 	var plans []providerReconciliationPlan
 	for _, agent := range agents {
+		if len(excluded) > 0 {
+			if _, skip := excluded[0][agent]; skip {
+				continue
+			}
+		}
 		if e.providerMigrationModes[agent] != parser.ProviderMigrationProviderAuthoritative {
 			continue
 		}

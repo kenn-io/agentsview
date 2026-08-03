@@ -37,7 +37,7 @@ func TestPendingWatchBatchKeepsProviderGroupsIndependentFromGenericRoots(t *test
 }
 
 func TestPendingWatchBatchFullSyncAfterRenameOverflowKeepsProviderGroups(t *testing.T) {
-	pending := newPendingWatchBatch(2, defaultWatchBatchMaxPathBytes)
+	pending := newPendingWatchBatch(1, defaultWatchBatchMaxPathBytes)
 	pending.AddReconcileGroup("opencode", `C:\provider\root`)
 	pending.AddRename(WatchRename{Path: `C:\provider\root\nested\rename`, Root: `C:\provider\root`})
 

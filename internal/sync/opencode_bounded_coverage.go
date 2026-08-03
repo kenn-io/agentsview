@@ -339,6 +339,14 @@ func (e *Engine) AdmitBoundedCoverageLease(
 }
 
 func (e *Engine) validateBoundedCoverageLease(lease *BoundedCoverageLease) error {
+	if lease == nil || lease.Provider == "" || lease.Provider != lease.Binding.Agent ||
+		filepath.Clean(lease.PhysicalDBPath) != filepath.Clean(lease.Binding.PhysicalDBPath) ||
+		(lease.ExactProviderScope != "" &&
+			filepath.Clean(lease.ExactProviderScope) != filepath.Clean(lease.Binding.Scope)) ||
+		(lease.Binding.Generation != 0 && lease.Generation != lease.Binding.Generation) ||
+		lease.Generation == 0 {
+		return errors.New("bounded coverage lease identity mismatch")
+	}
 	return e.validateBoundedCoveragePhysicalLease(lease)
 }
 
@@ -363,7 +371,7 @@ func (e *Engine) validateBoundedCoveragePhysicalLease(lease *BoundedCoverageLeas
 func (e *Engine) DrainBoundedCoverageLease(
 	ctx context.Context, lease *BoundedCoverageLease, checkpoint parser.OpenCodeCoverageCheckpoint,
 ) (parser.OpenCodeFeedResult, []parser.SourceRef, error) {
-	if err := e.validateBoundedCoveragePhysicalLease(lease); err != nil {
+	if err := e.validateBoundedCoverageLease(lease); err != nil {
 		return parser.OpenCodeFeedResult{Next: checkpoint}, nil, err
 	}
 	result, sources, err := e.DrainBoundedCoverage(ctx, lease.Binding, checkpoint)
@@ -388,33 +396,55 @@ func (e *Engine) TransitionBoundedCoverageRequest(
 		return BoundedCoverageTransitionResult{}, errors.New("nil bounded coverage lease")
 	}
 	key := boundedCoverageBindingKey(lease.Provider, lease.PhysicalDBPath, "")
-	e.syncMu.Lock()
-	defer e.syncMu.Unlock()
-	current := e.boundedCoverageGenerations[key]
-	if replace {
-		if lease.Generation == 0 || lease.Generation <= current {
-			return BoundedCoverageTransitionResult{}, fmt.Errorf("bounded coverage generation %d is retired", lease.Generation)
+	var result BoundedCoverageTransitionResult
+	var stats SyncStats
+	var err error
+	func() {
+		e.syncMu.Lock()
+		defer e.syncMu.Unlock()
+		current := e.boundedCoverageGenerations[key]
+		if replace {
+			if lease.Generation == 0 || lease.Generation <= current {
+				err = fmt.Errorf("bounded coverage generation %d is retired", lease.Generation)
+				return
+			}
+			if err = e.validateBoundedCoverageLease(lease); err != nil {
+				return
+			}
+			e.boundedCoverageGenerations[key] = lease.Generation
+			result = BoundedCoverageTransitionResult{
+				Checkpoint: lease.AdmissionCheckpoint, Generation: lease.Generation,
+			}
+			return
 		}
-		if err := e.validateBoundedCoveragePhysicalLease(lease); err != nil {
-			return BoundedCoverageTransitionResult{}, err
+		if current != lease.Generation {
+			if current != 0 {
+				err = fmt.Errorf("bounded coverage generation %d is retired", lease.Generation)
+				return
+			}
+			e.boundedCoverageGenerations[key] = lease.Generation
 		}
-		e.boundedCoverageGenerations[key] = lease.Generation
-		return BoundedCoverageTransitionResult{Checkpoint: lease.AdmissionCheckpoint, Generation: lease.Generation}, nil
-	}
-	if current != lease.Generation {
-		if current != 0 {
-			return BoundedCoverageTransitionResult{}, fmt.Errorf("bounded coverage generation %d is retired", lease.Generation)
+		if err = e.validateBoundedCoverageLease(lease); err != nil {
+			return
 		}
-		e.boundedCoverageGenerations[key] = lease.Generation
-	}
-	if err := e.validateBoundedCoveragePhysicalLease(lease); err != nil {
-		return BoundedCoverageTransitionResult{}, err
-	}
-	stats, err := e.syncSourceRefsContextLocked(ctx, sources)
+		if err = e.validateBoundedCoverageSources(lease, sources); err != nil {
+			return
+		}
+		stats, err = e.syncSourceRefsContextLocked(ctx, sources)
+		if err != nil {
+			return
+		}
+		result = BoundedCoverageTransitionResult{
+			Stats: stats, Checkpoint: checkpoint, Generation: lease.Generation,
+		}
+	}()
 	if err != nil {
 		return BoundedCoverageTransitionResult{}, err
 	}
-	return BoundedCoverageTransitionResult{Stats: stats, Checkpoint: checkpoint, Generation: lease.Generation}, nil
+	if stats.Synced > 0 || stats.sourceMissingTombstoned > 0 {
+		e.emit("sessions")
+	}
+	return result, nil
 }
 
 func (e *Engine) ReconcileBoundedCoverageLease(
@@ -460,20 +490,35 @@ func (e *Engine) ReconcileBoundedCoverageSourceLease(
 	if len(sources) == 0 {
 		return nil
 	}
+	if err := e.validateBoundedCoverageSources(lease, sources); err != nil {
+		return err
+	}
+	_, err = e.TransitionBoundedCoverageRequest(
+		ctx, lease, sources, lease.AdmissionCheckpoint, false,
+	)
+	return err
+}
+
+func (e *Engine) validateBoundedCoverageSources(
+	lease *BoundedCoverageLease, sources []parser.SourceRef,
+) error {
 	for _, source := range sources {
+		if source.Provider != lease.Provider {
+			return fmt.Errorf("bounded coverage source provider mismatch: %s", source.DisplayPath)
+		}
 		path := source.DisplayPath
-		if dbPath, _, virtual := strings.Cut(source.DisplayPath, "#"); virtual {
+		if dbPath, _, virtual := strings.Cut(path, "#"); virtual {
 			path = dbPath
 		}
 		physical, err := filepath.EvalSymlinks(path)
 		if err != nil || filepath.Clean(physical) != filepath.Clean(lease.PhysicalDBPath) {
 			return fmt.Errorf("bounded coverage source identity mismatch: %s", source.DisplayPath)
 		}
+		if !withinOrEqual(physical, lease.ExactProviderScope) {
+			return fmt.Errorf("bounded coverage source scope mismatch: %s", source.DisplayPath)
+		}
 	}
-	_, err = e.TransitionBoundedCoverageRequest(
-		ctx, lease, sources, lease.AdmissionCheckpoint, false,
-	)
-	return err
+	return nil
 }
 
 func withinOrEqual(path, root string) bool {

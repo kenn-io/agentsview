@@ -20,6 +20,61 @@ import (
 	agentsync "go.kenn.io/agentsview/internal/sync"
 )
 
+type failingBoundedCoverageAdmission struct{}
+
+func (failingBoundedCoverageAdmission) BoundedCoverageBindings(
+	context.Context, []agentsync.BoundedCoverageRoot,
+) ([]agentsync.BoundedCoverageBinding, error) {
+	return nil, nil
+}
+
+func (failingBoundedCoverageAdmission) BoundedCoverageBindingsForPaths(
+	context.Context, []string,
+) ([]agentsync.BoundedCoverageBinding, []string, error) {
+	return nil, nil, nil
+}
+
+func (failingBoundedCoverageAdmission) DrainBoundedCoverage(
+	context.Context, agentsync.BoundedCoverageBinding, parser.OpenCodeCoverageCheckpoint,
+) (parser.OpenCodeFeedResult, []parser.SourceRef, error) {
+	return parser.OpenCodeFeedResult{}, nil, nil
+}
+
+func (failingBoundedCoverageAdmission) ApplyBoundedCoverageSources(
+	context.Context, []parser.SourceRef,
+) (agentsync.SyncStats, error) {
+	return agentsync.SyncStats{}, nil
+}
+
+func (failingBoundedCoverageAdmission) InitializeBoundedCoverage(
+	context.Context, agentsync.BoundedCoverageBinding,
+) (parser.OpenCodeCoverageCheckpoint, error) {
+	return parser.OpenCodeCoverageCheckpoint{}, errors.New("admission failed")
+}
+
+func TestFailedBoundedCoverageAdmissionRestoresFrozenState(t *testing.T) {
+	oldPath := filepath.Join(t.TempDir(), "old.db")
+	newPath := filepath.Join(t.TempDir(), "new.db")
+	require.NoError(t, os.WriteFile(oldPath, []byte("old"), 0o600))
+	require.NoError(t, os.WriteFile(newPath, []byte("new"), 0o600))
+	oldInfo, err := os.Stat(oldPath)
+	require.NoError(t, err)
+	binding := agentsync.BoundedCoverageBinding{
+		Key: "opencode:new", Agent: parser.AgentOpenCode,
+		DBPath: newPath, PhysicalDBPath: newPath, Scope: filepath.Dir(newPath),
+	}
+	old := &boundedCoverageState{
+		binding: binding, dbFile: oldInfo, nativeAdmitted: true, pollOwned: true,
+	}
+	coordinator := &sharedUnwatchedPollCoordinator{
+		coverage:      failingBoundedCoverageAdmission{},
+		coverageState: map[string]*boundedCoverageState{binding.Key: old},
+	}
+	_, err = coordinator.admitBoundedCoverage(t.Context(), []agentsync.BoundedCoverageBinding{binding}, true)
+	require.Error(t, err)
+	assert.False(t, old.frozen, "failed replacement must return the previous state to polling")
+}
+
 func TestPollingOwnershipRebuildPreservesOverlapAndNativeAdmission(t *testing.T) {
 	coordinator := &sharedUnwatchedPollCoordinator{
 		coverageState: make(map[string]*boundedCoverageState),
