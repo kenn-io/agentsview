@@ -786,9 +786,6 @@ type DB struct {
 	// extraction keep the strict boundary.
 	extractAllowCandidateFindings atomic.Bool
 
-	cursorMu     sync.RWMutex
-	cursorSecret []byte
-
 	customPricing       map[string]config.CustomModelRate
 	effectivePricing    map[string]export.ModelRates
 	emptyCatalogPricing map[string]export.ModelRates
@@ -1094,16 +1091,6 @@ func (db *DB) SetEmptyCatalogPricing(
 		rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
 		db.emptyCatalogPricing[model] = rates
 	}
-}
-
-// SetCursorSecret updates the secret key used for cursor signing.
-func (db *DB) SetCursorSecret(secret []byte) {
-	if db.BunStore != nil {
-		db.BunStore.SetCursorSecret(secret)
-	}
-	db.cursorMu.Lock()
-	defer db.cursorMu.Unlock()
-	db.cursorSecret = append([]byte(nil), secret...)
 }
 
 // makeDSN builds a SQLite connection string with shared pragmas.
@@ -1747,14 +1734,14 @@ func OpenReadOnly(path string) (*DB, error) {
 	db.reader.Store(reader)
 	db.bunReader = bun.NewDB(reader, sqlitedialect.New())
 	db.BunStore = NewBunStore(&sqliteBunBackend{store: db})
-	db.cursorSecret = make([]byte, 32)
-	if _, err := rand.Read(db.cursorSecret); err != nil {
+	cursorSecret := make([]byte, 32)
+	if _, err := rand.Read(cursorSecret); err != nil {
 		reader.Close()
 		return nil, fmt.Errorf(
 			"generating cursor secret: %w", err,
 		)
 	}
-	db.BunStore.SetCursorSecret(db.cursorSecret)
+	db.SetCursorSecret(cursorSecret)
 	return db, nil
 }
 
@@ -4309,15 +4296,15 @@ func openAndInit(
 	db.bunReader = bun.NewDB(reader, sqlitedialect.New())
 	db.BunStore = NewBunStore(&sqliteBunBackend{store: db})
 
-	db.cursorSecret = make([]byte, 32)
-	if _, err := rand.Read(db.cursorSecret); err != nil {
+	cursorSecret := make([]byte, 32)
+	if _, err := rand.Read(cursorSecret); err != nil {
 		writer.Close()
 		reader.Close()
 		return nil, fmt.Errorf(
 			"generating cursor secret: %w", err,
 		)
 	}
-	db.BunStore.SetCursorSecret(db.cursorSecret)
+	db.SetCursorSecret(cursorSecret)
 	if schemaRepairNeeded {
 		if err := ctx.Err(); err != nil {
 			_ = db.CloseContext(ctx)

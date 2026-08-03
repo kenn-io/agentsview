@@ -56,7 +56,7 @@ func TestPGParserParentProvenanceRoundTripsAndRepushes(t *testing.T) {
 	require.NoError(t, err)
 
 	assertPGSessionParents(t, pg, "child", "parent-a", "parent-a")
-	store := &Store{pg: pg}
+	store := newStore(pg)
 	got, err := store.GetSession(ctx, "child")
 	require.NoError(t, err)
 	require.NotNil(t, got)
