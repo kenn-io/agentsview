@@ -20,6 +20,27 @@ uses a dedicated Bun dialect and Quack connection resolver.
 duckdb-go v2, pgx v5, SQLite/FTS5, PostgreSQL/pgvector, DuckDB/Quack, testify,
 Kata.
 
+## Kata Tracking
+
+| Plan task           | Kata issue |
+| ------------------- | ---------- |
+| DuckDB dialect      | `8q6m`     |
+| Canonical models    | `r758`     |
+| Guarded adapters    | `044k`     |
+| Schema convergence  | `s0cx`     |
+| Core reads          | `5g5j`     |
+| Data and curation   | `35m1`     |
+| Pricing and usage   | `pjbd`     |
+| Analytics           | `97q3`     |
+| Search capabilities | `bhr4`     |
+| Replication writes  | `63rc`     |
+| Legacy cutover      | `k2vq`     |
+| Full verification   | `trgg`     |
+
+All are children of epic `fk9t` and carry the dependency order in this plan.
+Claim and close each issue as its evidence lands; close the epic only after
+`trgg` passes.
+
 ## Global Constraints
 
 - SQLite remains the persistent writable archive and must never be deleted,
@@ -34,6 +55,13 @@ Kata.
   configuration, handle draining/swapping, and connector transport.
 - Backend-specific SQL is limited to operational metadata plus small FTS/vector
   capabilities.
+- Canonical non-search fragments use the shared SQL subset. Timestamp bucketing,
+  percentiles, regex normalization, and JSON interpretation move to Go
+  reducers when engine semantics differ; common methods do not branch on
+  backend name.
+- Canonical identity serving uses `source_archives` and the source-scoped
+  identity/snapshot/worktree tables on every backend. SQLite's current
+  non-source tables are migration inputs, not a permanent second path.
 - Do not add a runtime feature flag, dual read/write path, legacy fallback, or
   compatibility wrapper for the superseded stores.
 - Existing shipped migrations are immutable. Add one forward convergence
@@ -44,6 +72,15 @@ Kata.
 - Run `go fmt ./...` and `go vet ./...` before every code commit.
 - Do not test Bun, database drivers, deleted symbols, or source-code strings;
   test AgentsView's boundary contracts against real temporary databases.
+- Tasks 5-10 are Kata umbrellas, not single review diffs. Commit each completed
+  Store method family and its cross-backend proof separately, then commit
+  legacy deletion only after the replacement contract is green. The final
+  commit step in each task is the cleanup checkpoint, not permission to batch
+  the whole task.
+- Store contracts record Bun query-hook counts for list, usage, analytics, and
+  search hot paths. Counts must remain fixed as fixture cardinality grows;
+  tests also cap the number of hydrated rows to the requested page/window
+  before Go reducers run.
 
 ______________________________________________________________________
 
@@ -151,8 +188,9 @@ ______________________________________________________________________
       error, and then proves ID 10 is absent.
 
     `returning` is covered by both returning subtests and `insert_on_conflict` by
-    the representative model test. Each subtest must also assert that `Features`
-    contains the flag whose syntax it exercises.
+    the representative model test. Each SQL-feature subtest must also assert
+    that `Features` contains the flag whose syntax it exercises;
+    `transaction_rollback` is a lifecycle contract and has no feature flag.
 
 - [ ] **Step 3: Run the focused tests and verify RED**
 
@@ -237,10 +275,13 @@ ______________________________________________________________________
   tables: `Session`, `Message`, `UsageEvent`, `CursorUsageEvent`, `ToolCall`,
   `ToolResultEvent`, `SecretFinding`, `ModelPricing`, `ModelPricingBand`,
   `StarredSession`, `PinnedMessage`, `ExcludedSession`, `SessionAlias`,
-  `Insight`, `ProjectIdentityObservation`, `SessionProjectIdentitySnapshot`,
-  `WorktreeProjectMapping`, `SourceArchive`,
-  `SourceProjectIdentityObservation`, `SourceSessionProjectIdentitySnapshot`,
-  and `SourceWorktreeProjectMapping`.
+  `Insight`, `SourceArchive`, `SourceProjectIdentityObservation`,
+  `SourceSessionProjectIdentitySnapshot`, and `SourceWorktreeProjectMapping`.
+
+- Uses the source-scoped identity tables as the only canonical serving models.
+  Existing SQLite non-source identity/mapping structs remain domain or
+  migration inputs until Task 4 backfills them; they are not registered common
+  tables.
 
 - Produces: `func CommonTables() []Table`, where `Table` contains `Model any`
   and the canonical ordinary index definitions for that model.
@@ -267,9 +308,11 @@ ______________________________________________________________________
         assert.Subset(t, servingTableNames(CommonTables()), []string{
             "cursor_usage_events", "excluded_sessions", "insights", "messages",
             "model_pricing", "model_pricing_bands", "pinned_messages",
-            "project_identity_observations", "secret_findings", "sessions",
+            "source_project_identity_observations", "secret_findings", "sessions",
             "session_aliases", "starred_sessions", "tool_calls",
-            "tool_result_events", "usage_events",
+            "source_session_project_identity_snapshots",
+            "source_worktree_project_mappings", "tool_result_events",
+            "usage_events",
         })
     }
     ```
@@ -349,6 +392,7 @@ ______________________________________________________________________
 - Modify: `internal/db/db.go`
 - Modify: `internal/db/db_test.go`
 - Modify: `internal/postgres/connect.go`
+- Modify: `internal/postgres/sessions.go`
 - Modify: `internal/postgres/store.go`
 - Modify: `internal/postgres/store_unit_test.go`
 - Modify: `internal/duckdb/store.go`
@@ -356,6 +400,7 @@ ______________________________________________________________________
 - Modify: `internal/duckdb/store_reopen_test.go`
 - Create: `internal/duckdb/quack_bun.go`
 - Create: `internal/duckdb/quack_bun_test.go`
+- Create: `internal/duckdb/quack_bun_duckdbtest_test.go`
 
 **Interfaces:**
 
@@ -394,6 +439,8 @@ ______________________________________________________________________
         backend      BunBackend
         cursorMu     sync.RWMutex
         cursorSecret []byte
+        pricingMu    sync.RWMutex
+        pricing      pricingState
     }
 
     func NewBunStore(backend BunBackend) *BunStore
@@ -401,6 +448,11 @@ ______________________________________________________________________
     func (s *BunStore) view(ctx context.Context, fn func(bun.IDB) error) error
     func (s *BunStore) update(ctx context.Context, op WriteOperation, fn func(bun.IDB) error) error
     ```
+
+    `pricingState` owns custom, effective-catalog, and empty-catalog overrides so
+    promoted usage methods never depend on fields in an outer concrete wrapper.
+    Task 7 moves the existing setters onto `BunStore` and protects them with
+    `pricingMu`.
 
 - Produces thin composition: SQLite `DB`, `postgres.Store`, and `duckdb.Store`
   embed `*BunStore` but retain their current concrete public types and
@@ -446,6 +498,9 @@ ______________________________________________________________________
     Add a Quack resolver unit test with a recording `bun.IConn` seam: a generated
     `SELECT id FROM sessions WHERE project = 'alpha'` must be handed to
     `query(?)` as one SQL argument, not executed against the in-memory catalog.
+    Add a `duckdbtest` integration case that executes a Bun-generated quoted
+    predicate and scans JSON/timestamp data through a real Quack `query()`
+    attachment. Reuse the existing stale-attachment and error-redaction harness.
 
 - [ ] **Step 2: Verify RED**
 
@@ -496,10 +551,12 @@ ______________________________________________________________________
     ```bash
     git add internal/db/bun_backend.go internal/db/bun_store.go \
       internal/db/bun_backend_test.go internal/db/db.go internal/db/db_test.go \
-      internal/postgres/connect.go internal/postgres/store.go \
+      internal/postgres/connect.go internal/postgres/sessions.go \
+      internal/postgres/store.go \
       internal/postgres/store_unit_test.go internal/duckdb/store.go \
       internal/duckdb/connect.go internal/duckdb/store_reopen_test.go \
-      internal/duckdb/quack_bun.go internal/duckdb/quack_bun_test.go
+      internal/duckdb/quack_bun.go internal/duckdb/quack_bun_test.go \
+      internal/duckdb/quack_bun_duckdbtest_test.go
     git commit -m "refactor(storage): add guarded Bun backends"
     ```
 
@@ -566,6 +623,13 @@ ______________________________________________________________________
     1. PostgreSQL's prior schema fixture migrates in one transaction and retains a
        named session under `pgtest`.
 
+    Seed the prior SQLite fixture with an aggregate identity observation, a
+    session snapshot, and a worktree mapping. Assert that convergence backfills
+    the source-scoped tables with the archive ID/generation before canonical
+    reads switch, and that subsequent writes target only those canonical tables.
+    Inject a failure before the compatibility stamp on SQLite and PostgreSQL;
+    assert the new rows, stamp, and all intermediate DDL roll back together.
+
     Update the DuckDB rebuild test to expect schema version 10, the full canonical
     common table/column set, preserved source rows, and atomic replacement.
 
@@ -595,6 +659,8 @@ ______________________________________________________________________
     prior SQLite/PostgreSQL schemas match the canonical logical schema. Do not
     rewrite equivalent SQLite text timestamps or integer booleans. Stamp schema
     compatibility only in the same transaction as all convergence statements.
+    Retain SQLite's old non-source identity tables as inert migration history;
+    do not read, write, drop, or use them as a fallback after the cutover.
 
     Replace DuckDB's duplicated common `mirrorTables` declarations with registry
     creation. Keep only `sync_metadata`, provenance, and DuckDB-specific indexes
@@ -652,6 +718,7 @@ ______________________________________________________________________
 - Create: `internal/storetest/contract.go`
 - Create: `internal/storetest/fixture.go`
 - Create: `internal/db/bun_store_contract_external_test.go`
+- Create: `internal/postgres/bun_store_contract_pgtest_test.go`
 - Modify: `internal/db/store_contract_test.go`
 - Modify: `internal/db/sessions.go`
 - Modify: `internal/db/messages.go`
@@ -701,10 +768,12 @@ ______________________________________________________________________
 
 - [ ] **Step 2: Add a failing proof that all backends use the common methods**
 
-    Register SQLite, PostgreSQL, and DuckDB with `RunCoreContract`. Add a
-    `recordingBackend` case that invokes `BunStore.ListSessions` and asserts one
-    guarded Bun view plus the literal result. The test should fail to compile
-    until `BunStore` owns `ListSessions`.
+    Register SQLite, PostgreSQL, and DuckDB with `RunCoreContract`; PostgreSQL's
+    registration lives in `bun_store_contract_pgtest_test.go` and opens a real
+    dedicated test schema. Add a `recordingBackend` case that invokes
+    `BunStore.ListSessions` and asserts one guarded Bun view plus the literal
+    result. The test should fail to compile until `BunStore` owns
+    `ListSessions`.
 
 - [ ] **Step 3: Verify RED**
 
@@ -823,6 +892,15 @@ ______________________________________________________________________
   star/pin operations, shared insight reads/writes, and shared session
   rename/trash/restore/delete mutations.
 
+- Produces `UpsertStarredSessionRows` and `UpsertPinnedMessageRows` canonical
+  write helpers used by local mutations and the Task 10 cross-target fixture.
+
+- Produces identity and mapping reads exclusively from the source-scoped
+  canonical tables. In the same slice, redirect SQLite observation, snapshot,
+  and mapping writes from the retired migration-input tables to those
+  canonical tables before enabling the shared reads; no commit may leave new
+  writes invisible to the active read path.
+
 - Produces the `db.Store` Recall methods once on `BunStore`: the SQLite adapter
   advertises `BackendCapabilities.Recall`, while PostgreSQL and DuckDB
   preserve the current `db.ErrReadOnly` behavior without concrete stub
@@ -833,13 +911,14 @@ ______________________________________________________________________
 
 - [ ] **Step 1: Extend the contract with literal data and curation behavior**
 
-    Seed two project identities, one mapping, one starred session, one pinned
-    message, and one insight. Assert literal inventory rollups, rule selection,
-    candidate ordering, star/pin rows, and insight retrieval. For each operation
-    not authorized by a backend, assert `ErrorIs(db.ErrReadOnly)` and assert
-    reads still return mirrored/synchronized curation. Explicitly assert that
-    PostgreSQL remains publicly read-only while star, pin, rename, trash, and
-    available insight writes succeed.
+    Seed two source-scoped project identities from distinct archives, one mapping,
+    one starred session, one pinned message, and one insight. Assert literal
+    inventory rollups, rule selection, candidate ordering, star/pin rows, and
+    insight retrieval. For each operation not authorized by a backend, assert
+    `ErrorIs(db.ErrReadOnly)` and assert reads still return
+    mirrored/synchronized curation. Explicitly assert that PostgreSQL remains
+    publicly read-only while star, pin, rename, trash, and available insight
+    writes succeed.
 
 - [ ] **Step 2: Verify RED**
 
@@ -856,9 +935,10 @@ ______________________________________________________________________
 - [ ] **Step 3: Implement shared identity and inventory reads**
 
     Port identity observations/snapshots, inventory aggregation, project rules,
-    and worktree candidates to canonical Bun rows. Keep path normalization and
-    identity merge algorithms in their existing pure helpers; only database
-    access moves.
+    and worktree candidates to canonical source-scoped Bun rows. Redirect the
+    SQLite write entry points in the same transaction boundary. Keep path
+    normalization and identity merge algorithms in their existing pure helpers;
+    only database access moves.
 
 - [ ] **Step 4: Implement shared curation, insight, and session mutations**
 
@@ -934,7 +1014,14 @@ ______________________________________________________________________
 
 - Produces shared `GetDailyUsage`, `GetTopSessionsByCost`,
   `GetUsageSessionCounts`, `GetUsageMatchingSessionCount`, and
-  `GetSessionUsage` methods, plus shared model-pricing loads.
+  `GetSessionUsage` methods, plus shared model-pricing loads. Moves
+  `SetCustomPricing`, `SetEffectivePricing`, and `SetEmptyCatalogPricing` onto
+  `BunStore`; concrete wrappers do not retain shadow pricing fields or
+  setters.
+
+- Produces `UpsertModelPricingRows` and `ReplaceModelPricingBandRows` canonical
+  write helpers; pricing bands replace per model pattern in the same
+  transaction as their base pricing row.
 
 - Keeps cursor/provider normalization and exact microdollar calculation in pure
   shared functions; only row selection and aggregation SQL move to Bun.
@@ -945,7 +1032,9 @@ ______________________________________________________________________
     pricing-band event, aggregate event without an ordinal, Cursor event, and a
     session whose message timestamp—not session timestamp—places usage in the
     window. Assert exact integer microdollars, counts, ordering, and application
-    provenance.
+    provenance. Run the same fixture under custom pricing, effective-catalog
+    pricing, and explicit empty-catalog fallback to prove promoted methods read
+    `BunStore`'s synchronized pricing state.
 
 - [ ] **Step 2: Verify RED**
 
@@ -1150,12 +1239,20 @@ ______________________________________________________________________
     }
 
     type ContentSearchHit struct {
-        SessionID string
-        Ordinal   int
-        Location  string
-        ToolName  string
-        Snippet   string
-        Score     *float64
+        SessionID   string
+        Ordinal     int
+        OrdinalStart int
+        OrdinalEnd   int
+        Subordinate  bool
+        DocKey       string
+        Location     string
+        MessageID    *int64
+        CallIndex    *int
+        EventIndex   *int
+        SourceUUID   string
+        ToolName     string
+        Snippet      string
+        Score        *float64
     }
 
     type FullTextCapability interface {
@@ -1168,6 +1265,7 @@ ______________________________________________________________________
     type SemanticCapability interface {
         Available() bool
         SearchContent(context.Context, ContentSearchFilter) ([]ContentSearchHit, error)
+        ResolveMessageUnits(context.Context, []MessageRef) ([]UnitRef, error)
     }
     ```
 
@@ -1200,9 +1298,11 @@ ______________________________________________________________________
 
     Move SQLite FTS5, PostgreSQL FTS/pgvector, and DuckDB/Quack search SQL behind
     the capability interfaces. Each capability accepts canonical filters and
-    returns minimal `SearchHit`/`ContentSearchHit` values. Use `BunStore` to
-    batch hydrate sessions/messages, enforce common visibility scopes, sign
-    cursors, and reconstruct secret sources.
+    returns stable `SearchHit`/`ContentSearchHit` identities, including tool
+    call/result coordinates and semantic unit ranges. Use `BunStore` to resolve
+    lexical hits through `ResolveMessageUnits`, batch hydrate sessions/messages,
+    enforce common visibility scopes, sign cursors, fuse on unit identity, and
+    reconstruct the exact source for secret redaction.
 
 - [ ] **Step 4: Verify common capability hydration on every backend**
 
@@ -1275,11 +1375,22 @@ ______________________________________________________________________
 
     ```go
     func ReplaceSessionRows(ctx context.Context, tx bun.IDB, write SessionBatchWrite) error
-    func UpsertSessionRows(ctx context.Context, tx bun.IDB, rows []bunmodel.Session) error
+    func UpsertSessionRows(ctx context.Context, tx bun.IDB, write ReplicationSessionWrite, policy SessionConflictPolicy) error
     func ReplaceMessageRows(ctx context.Context, tx bun.IDB, sessionID string, rows []bunmodel.Message) error
     func ReplaceUsageEventRows(ctx context.Context, tx bun.IDB, sessionID string, rows []bunmodel.UsageEvent) error
     func ReplaceToolRows(ctx context.Context, tx bun.IDB, sessionID string, calls []bunmodel.ToolCall, results []bunmodel.ToolResultEvent) error
     ```
+
+    `ReplicationSessionWrite` carries source archive, database generation,
+    owner-marker, and alias context. `SessionConflictPolicy` is supplied by the
+    adapter: SQLite/DuckDB use canonical replacement semantics, while PostgreSQL
+    uses a Bun-built conflict clause that rejects excluded IDs and foreign
+    owners and preserves target-owned display-name/deletion baselines. This is
+    an operational replication policy, not a duplicate common Store query.
+
+- Consumes the canonical pricing/band and star/pin write helpers defined in
+  Tasks 6-7; the cross-target fixture never relies on an undefined test-only
+  writer.
 
 - Preserves SQLite batch atomicity/callback ordering, PostgreSQL push
   fingerprint/watermark behavior, and DuckDB whole-session replacement.
@@ -1303,9 +1414,12 @@ ______________________________________________________________________
     are applied through their canonical write APIs in the same target setup.
     Apply the fixture to a temporary SQLite archive, PostgreSQL target, and
     DuckDB mirror, then read each with the common store and assert identical
-    durable rows. Add failure injection before commit and assert no partial rows
-    or advanced watermark remain. Do not widen the production
-    `SessionBatchWrite` contract for test convenience.
+    durable rows. PostgreSQL cases include a foreign owner, an excluded session,
+    local target rename/trash state, and a legacy alias; assert a later push
+    neither takes ownership nor overwrites target curation. Add failure
+    injection before commit and assert no partial rows or advanced watermark
+    remain. Do not widen the production `SessionBatchWrite` contract for test
+    convenience.
 
 - [ ] **Step 2: Verify RED**
 
@@ -1410,14 +1524,18 @@ ______________________________________________________________________
     Run focused source inventories as development checks, not tests:
 
     ```bash
-    rg -n '^func \(.*\*(DB|Store)\) (ListSessions|GetMessages|GetAnalytics|GetDailyUsage|SearchContent|RecentEdits)' \
+    go doc -all go.kenn.io/agentsview/internal/db.Store
+    rg -n '^func \([^)]*\*(DB|Store)\) [A-Z][A-Za-z0-9_]*\(' \
       internal/db internal/postgres internal/duckdb --glob '*.go' --glob '!**/*_test.go'
     rg -n 'QueryDialect|NewQueryBuilder|BuildSessionFilterSQL' \
       internal/db internal/postgres internal/duckdb --glob '*.go'
     ```
 
-    Record every remaining receiver as either a `BunStore` method or a documented
-    allowed adapter capability. Do not add a source-grep regression test.
+    Cross-check every method printed for `db.Store` against the complete exported
+    receiver inventory. Record every remaining concrete receiver as lifecycle,
+    sync/operational metadata, or an allowed FTS/vector capability; there is no
+    sampled method-name regex, and `GetAnalytics*` families cannot evade the
+    audit. Do not add a source-grep regression test.
 
 - [ ] **Step 2: Remove shadowing methods and the legacy dialect builder**
 
@@ -1528,15 +1646,18 @@ ______________________________________________________________________
     make e2e-duckdb
     ```
 
-    Expected: local mirror serve, Quack query transport, data mode, session list,
-    and mirror replacement workflows pass.
+    Expected: local mirror serve, Quack query transport, Bun-generated quoted
+    predicates and JSON/timestamp scans, stale-attachment retry, credential
+    redaction, data mode, session list, and mirror replacement workflows pass.
 
 - [ ] **Step 5: Run backend performance gates**
 
     First capture the candidate's backend comparison and hot-path samples:
 
     ```bash
-    make bench-backends | tee /tmp/agentsview-bun-backends-new.txt
+    backend_flags="-bench . -run '^$' -benchmem -count 6 -benchtime 20x"
+    make bench-backends BENCH_BACKENDS_FLAGS="$backend_flags" \
+      | tee /tmp/agentsview-bun-backends-new.txt
     make bench-gate | tee /tmp/agentsview-bun-gate-new.txt
     ```
 
@@ -1551,6 +1672,10 @@ ______________________________________________________________________
     eval "$(make bench-gate-config)"
     (
       cd "$baseline_dir"
+      make bench-backends BENCH_BACKENDS_FLAGS="$backend_flags"
+    ) | tee /tmp/agentsview-bun-backends-old.txt
+    (
+      cd "$baseline_dir"
       make bench-gate \
         BENCH_GATE_COUNT="$BENCH_GATE_COUNT" \
         BENCH_GATE_TIME="$BENCH_GATE_TIME"
@@ -1558,18 +1683,24 @@ ______________________________________________________________________
     go run ./cmd/benchgate \
       -old /tmp/agentsview-bun-gate-old.txt \
       -new /tmp/agentsview-bun-gate-new.txt
+    go run ./cmd/benchgate \
+      -old /tmp/agentsview-bun-backends-old.txt \
+      -new /tmp/agentsview-bun-backends-new.txt
     ```
 
-    Expected: `benchgate: no regressions beyond thresholds`. The first command
-    also records relative SQLite/PostgreSQL/DuckDB results for manual
-    query-count review. If a benchmark regresses, profile only these isolated
-    fixtures and fix query count/index usage before proceeding. The snapshot
-    directory was created by this agent and may be removed after the comparison.
+    Expected: both comparisons report
+    `benchgate: no regressions beyond   thresholds`; backend-store performance
+    is enforced rather than recorded for manual review. Contract
+    query-count/cardinality limits also pass. If a benchmark regresses, profile
+    only these isolated fixtures and fix query count/index usage before
+    proceeding. The snapshot directory was created by this agent and may be
+    removed after the comparison.
 
 - [ ] **Step 6: Re-run deletion/direct-access audits**
 
     ```bash
-    rg -n '^func \(.*\*(DB|Store)\) (ListSessions|GetMessages|GetAnalytics|GetDailyUsage|SearchContent|RecentEdits)' \
+    go doc -all go.kenn.io/agentsview/internal/db.Store
+    rg -n '^func \([^)]*\*(DB|Store)\) [A-Z][A-Za-z0-9_]*\(' \
       internal/db internal/postgres internal/duckdb --glob '*.go' --glob '!**/*_test.go'
     rg -n 'QueryDialect|NewQueryBuilder|BuildSessionFilterSQL' \
       internal/db internal/postgres internal/duckdb --glob '*.go'
