@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -33,16 +32,6 @@ func (s *Store) DB() *sql.DB { return s.pg }
 // Close closes the underlying database connection.
 func (s *Store) Close() error {
 	return s.pg.Close()
-}
-
-func (s *Store) SetCustomPricing(p map[string]config.CustomModelRate) {
-	if s.BunStore != nil {
-		s.BunStore.SetCustomPricing(p)
-	}
-	s.pricingMu.Lock()
-	defer s.pricingMu.Unlock()
-	s.customPricing = p
-	s.forgetPricingLoad()
 }
 
 // ReadOnly returns true because PG serve still treats the remote

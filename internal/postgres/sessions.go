@@ -10,7 +10,6 @@ import (
 
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/pgdialect"
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
@@ -26,11 +25,6 @@ type Store struct {
 	insightCapabilityMu        sync.RWMutex
 	insightGenerationAvailable bool
 	insightDeletionAvailable   bool
-
-	pricingMu     sync.Mutex
-	pricingLoadMu sync.Mutex
-	pricingLoad   *pricingLoad
-	customPricing map[string]config.CustomModelRate
 
 	// vectorMu guards the semantic-search seam. vectorSearcher is the PG
 	// vector searcher wired at pg serve startup when a generation matches

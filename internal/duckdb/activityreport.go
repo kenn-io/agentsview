@@ -152,10 +152,11 @@ func (s *Store) GetSessionUsageRows(
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	rateResolver, err := s.loadPricingResolver(ctx)
+	pricing, err := s.LoadPricingMap(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("loading duckdb pricing: %w", err)
 	}
+	rateResolver := export.NewPricingResolver(pricing)
 	sessionOrder := make(map[string]int, len(ids))
 	for i, id := range ids {
 		sessionOrder[id] = i
@@ -431,7 +432,7 @@ func activityReportProjectLabels(sessions []activity.SessionMeta) []string {
 	for _, session := range sessions {
 		set[session.Project] = true
 	}
-	return sortedBoolKeys(set)
+	return sortedKeys(set)
 }
 
 // activityReportSessions returns the candidate sessions whose window
@@ -830,10 +831,11 @@ func (s *Store) activityReportUsage(
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
 	out := []activity.UsageRow{}
 
-	rateResolver, err := s.loadPricingResolver(ctx)
+	pricing, err := s.LoadPricingMap(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading duckdb pricing: %w", err)
 	}
+	rateResolver := export.NewPricingResolver(pricing)
 	if len(ids) == 0 {
 		block, err := rateResolver.BuildBlock()
 		if err != nil {
@@ -1125,7 +1127,7 @@ func duckActivityReportUsageQuery(candidateWhere string) string {
 func duckActivityReportRowStatus(
 	r duckActivityReportUsageRow, pricing *export.PricingResolver,
 ) (savings, cost money.Money, priced, contributes bool, err error) {
-	canonicalModel := duckUsageLookupModel(r.model, r.pricingTS)
+	canonicalModel := duckUsageLookupModel(r.model, r.ts)
 	var explicitCost int64
 	var billableInput, billableOutput, billableReasoning, billableCacheCr, billableCacheCr1h, billableCacheRd int
 	var billableWebSearch int

@@ -1075,7 +1075,7 @@ func TestSessionExportCursorPrefixUsesSameSnapshotAsPageQuery(t *testing.T) {
 	}
 
 	where, args := buildSessionExportFilter(SessionFilter{Project: "snapshot"})
-	tx, err := d.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := d.bunReader.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	require.NoError(t, err, "begin read snapshot")
 	defer func() { require.NoError(t, tx.Rollback(), "rollback read snapshot") }()
 
@@ -1134,7 +1134,7 @@ func TestSessionExportUsageUsesPageReadSnapshot(t *testing.T) {
 		HasOutputTokens:  true,
 	})
 
-	tx, err := d.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := d.bunReader.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	require.NoError(t, err, "begin page snapshot")
 	defer func() { require.NoError(t, tx.Rollback(), "rollback page snapshot") }()
 	var messageCount int

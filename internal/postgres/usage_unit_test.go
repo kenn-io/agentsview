@@ -1,13 +1,8 @@
 package postgres
 
 import (
-	"context"
 	"database/sql"
-	"database/sql/driver"
-	"errors"
-	"io"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -30,253 +25,6 @@ func TestPaddedUTCBoundClampsBeforeYearOne(t *testing.T) {
 		"2026-03-10T10:00:00Z",
 		paddedUTCBound("2026-03-11T00:00:00Z", -14),
 	)
-}
-
-type usageProbeDriver struct{}
-
-type usageProbeConn struct {
-	state *usageProbeState
-}
-
-type usageProbeRows struct {
-	columns []string
-	values  [][]driver.Value
-	next    int
-}
-
-type usageProbeState struct {
-	mu      sync.Mutex
-	queries []string
-}
-
-var (
-	usageProbeRegisterOnce sync.Once
-	usageProbeStatesMu     sync.Mutex
-	usageProbeStates       = map[string]*usageProbeState{}
-)
-
-func newUsageProbeDB(
-	t *testing.T, state *usageProbeState,
-) *sql.DB {
-	t.Helper()
-	usageProbeRegisterOnce.Do(func() {
-		sql.Register("agentsview_usage_probe", usageProbeDriver{})
-	})
-	name := t.Name()
-	usageProbeStatesMu.Lock()
-	usageProbeStates[name] = state
-	usageProbeStatesMu.Unlock()
-	t.Cleanup(func() {
-		usageProbeStatesMu.Lock()
-		delete(usageProbeStates, name)
-		usageProbeStatesMu.Unlock()
-	})
-
-	pg, err := sql.Open("agentsview_usage_probe", name)
-	require.NoError(t, err, "open usage probe db")
-	t.Cleanup(func() { pg.Close() })
-	return pg
-}
-
-func (usageProbeDriver) Open(name string) (driver.Conn, error) {
-	usageProbeStatesMu.Lock()
-	state := usageProbeStates[name]
-	usageProbeStatesMu.Unlock()
-	return &usageProbeConn{state: state}, nil
-}
-
-func (c *usageProbeConn) Prepare(string) (driver.Stmt, error) {
-	return nil, errors.New("prepare not implemented")
-}
-
-func (c *usageProbeConn) Close() error { return nil }
-
-func (c *usageProbeConn) Begin() (driver.Tx, error) {
-	return nil, errors.New("begin not implemented")
-}
-
-func (c *usageProbeConn) QueryContext(
-	_ context.Context, query string, _ []driver.NamedValue,
-) (driver.Rows, error) {
-	c.state.mu.Lock()
-	c.state.queries = append(c.state.queries, query)
-	c.state.mu.Unlock()
-
-	normalized := strings.ToLower(query)
-	if strings.Contains(normalized, "from genai_pricing") {
-		return &usageProbeRows{columns: []string{
-			"version", "source_ref", "source", "data_json", "updated_at",
-		}}, nil
-	}
-	if strings.Contains(normalized, "from model_pricing") {
-		return &usageProbeRows{
-			columns: []string{
-				"model_pattern",
-				"input_microdollars_per_mtok",
-				"output_microdollars_per_mtok",
-				"cache_creation_microdollars_per_mtok",
-				"cache_creation_1h_microdollars_per_mtok",
-				"cache_read_microdollars_per_mtok",
-				"updated_at",
-				"above_input_tokens",
-				"band_input_microdollars_per_mtok",
-				"band_output_microdollars_per_mtok",
-				"band_cache_creation_microdollars_per_mtok",
-				"band_cache_creation_1h_microdollars_per_mtok",
-				"band_cache_read_microdollars_per_mtok",
-				"band_updated_at",
-			},
-			values: [][]driver.Value{{
-				"claude-sonnet", int64(3000000), int64(15000000), int64(3750000), int64(0), int64(300000), "2026-06-08",
-				nil, nil, nil, nil, nil, nil, nil,
-			}},
-		}, nil
-	}
-	if strings.Contains(normalized, "source_archives") {
-		return &usageProbeRows{
-			columns: []string{"source_archive_id", "source_archive_salt"},
-			values:  [][]driver.Value{{"probe-archive", "probe-salt"}},
-		}, nil
-	}
-	if strings.Contains(normalized, "source_project_identity_observations") {
-		return &usageProbeRows{
-			columns: []string{
-				"project",
-				"machine",
-				"root_path",
-				"git_remote",
-				"git_remote_name",
-				"worktree_name",
-				"worktree_root_path",
-				"observed_at",
-				"normalized_remote",
-				"key_source",
-				"key",
-			},
-		}, nil
-	}
-	if strings.Contains(normalized, "select project, cwd") &&
-		strings.Contains(normalized, "from sessions") {
-		return &usageProbeRows{
-			columns: []string{"project", "cwd"},
-		}, nil
-	}
-	if strings.Contains(normalized, "select id from sessions") {
-		return &usageProbeRows{
-			columns: []string{"id"},
-			values: [][]driver.Value{
-				{"kimi:project-hash:session-uuid"},
-				{"openclaw:project-hash:session-uuid"},
-			},
-		}, nil
-	}
-	if strings.Contains(normalized, "select count(*)") &&
-		strings.Contains(normalized, "from sessions s") {
-		return &usageProbeRows{
-			columns: []string{"count"},
-			values: [][]driver.Value{
-				{int64(1)},
-			},
-		}, nil
-	}
-	if strings.Contains(normalized, "from (") &&
-		strings.Contains(normalized, "from messages") {
-		ts := time.Date(2024, 6, 15, 10, 0, 0, 0, time.UTC)
-		return &usageProbeRows{
-			columns: []string{
-				"session_id",
-				"message_ordinal",
-				"usage_source",
-				"ts",
-				"pricing_ts",
-				"model",
-				"provider_id",
-				"token_usage",
-				"web_search_requests",
-				"input_tokens",
-				"output_tokens",
-				"cache_creation_input_tokens",
-				"cache_read_input_tokens",
-				"reasoning_tokens",
-				"cost_microdollars",
-				"cost_source",
-				"claude_message_id",
-				"claude_request_id",
-				"source_uuid",
-				"usage_dedup_key",
-				"project",
-				"agent",
-			},
-			values: [][]driver.Value{
-				usageProbeUsageRow("s-parent", "proj-a", "claude", ts),
-				usageProbeUsageRow("s-fork", "proj-b", "codex", ts.Add(time.Minute)),
-			},
-		}, nil
-	}
-	return nil, errors.New("unexpected usage query")
-}
-
-func usageProbeUsageRow(
-	sessionID, project, agent string, ts time.Time,
-) []driver.Value {
-	return []driver.Value{
-		sessionID,
-		int64(0),
-		"message",
-		ts,
-		ts,
-		"claude-sonnet",
-		"",
-		`{"input_tokens":100,"output_tokens":50}`,
-		int64(0),
-		int64(0),
-		int64(0),
-		int64(0),
-		int64(0),
-		int64(0),
-		nil,
-		"",
-		"msg-dup",
-		"req-dup",
-		"",
-		"",
-		project,
-		agent,
-	}
-}
-
-func (r *usageProbeRows) Columns() []string { return r.columns }
-
-func (r *usageProbeRows) Close() error { return nil }
-
-func (r *usageProbeRows) Next(dest []driver.Value) error {
-	if r.next >= len(r.values) {
-		return io.EOF
-	}
-	copy(dest, r.values[r.next])
-	r.next++
-	return nil
-}
-
-func TestPGGetDailyUsageReturnsDedupedSessionCounts(t *testing.T) {
-	store := newStore(newUsageProbeDB(t, &usageProbeState{}))
-
-	result, err := store.GetDailyUsage(context.Background(), db.UsageFilter{
-		From: "2024-06-15",
-		To:   "2024-06-15",
-	})
-	require.NoError(t, err, "GetDailyUsage")
-
-	assert.Equal(t, 1, result.SessionCounts.Total)
-	countsByDisplay := make(map[string]int, len(result.Projects))
-	for key, project := range result.Projects {
-		countsByDisplay[project.DisplayLabel] = result.SessionCounts.ByProject[key]
-		assert.NotContains(t, key, project.DisplayLabel)
-	}
-	assert.Equal(t, map[string]int{"proj-a": 1}, countsByDisplay)
-	assert.Equal(t, 1, result.SessionCounts.ByAgent["claude"])
-	assert.NotContains(t, countsByDisplay, "proj-b")
-	assert.Zero(t, result.SessionCounts.ByAgent["codex"])
 }
 
 func TestPGUsageDedupTokenForRowFallsBackToSourceUUIDWhenClaudePairIncomplete(t *testing.T) {
@@ -490,45 +238,6 @@ func TestPGBoundedDailyUsageRowsCTEProjectsReasoningTokens(t *testing.T) {
 	assert.Contains(t, normalized, "from usage_event_timestamp_rows ue\njoin sessions s")
 }
 
-// TestPGGetUsageMatchingSessionCountUsesSessionQuery exercises the
-// unbounded (no From/To) code path, which counts sessions directly with
-// EXISTS subqueries built from the same relaxed matching eligibility
-// predicates as the bounded branch. Bounded filters take the
-// timestamped-CTE path (see TestPGMatchingUsageRowsSQLForBoundsRelaxesTokenEligibility
-// for that SQL shape) and are not exercised by this probe-mock test.
-func TestPGGetUsageMatchingSessionCountUsesSessionQuery(t *testing.T) {
-	state := &usageProbeState{}
-	store := &Store{
-		pg: newUsageProbeDB(t, state),
-	}
-
-	count, err := store.GetUsageMatchingSessionCount(context.Background(), db.UsageFilter{
-		Agent: "copilot",
-		Model: "gpt-5.3-codex",
-	})
-	require.NoError(t, err, "GetUsageMatchingSessionCount")
-	assert.Equal(t, 1, count)
-
-	state.mu.Lock()
-	queries := append([]string(nil), state.queries...)
-	state.mu.Unlock()
-	require.NotEmpty(t, queries)
-
-	last := strings.ToLower(queries[len(queries)-1])
-	assert.Contains(t, last, "select count(*)")
-	assert.Contains(t, last, "from sessions s")
-	assert.Contains(t, last, "exists (")
-	assert.Contains(t, last, "from messages m")
-	assert.Contains(t, last, "from usage_events ue")
-	assert.Contains(t, last, "s.agent = ")
-	assert.Contains(t, last, "m.model = ")
-	// The message EXISTS uses the relaxed matching eligibility: assistant
-	// rows without requiring a model name, so empty-model Copilot
-	// assistant messages match the same way they do on the bounded path.
-	assert.Contains(t, last, "m.role = 'assistant'")
-	assert.NotContains(t, last, "m.model != ''")
-}
-
 // TestPGMatchingUsageRowsSQLForBoundsRelaxesTokenEligibility asserts the
 // bounded matching-session query relaxes token eligibility (no
 // m.token_usage check) and model-presence eligibility (m.role = 'assistant'
@@ -673,7 +382,6 @@ func TestPGActivityReportRowStatusCanonicalizesKimiAliasByTimestamp(t *testing.T
 					usageSource: "provider",
 					model:       "daimon-kimi-code",
 					ts:          sql.NullTime{Time: tt.timestamp, Valid: true},
-					pricingTS:   sql.NullTime{Time: tt.timestamp, Valid: true},
 					inputTokens: 1_000_000,
 				},
 				resolver,
@@ -717,10 +425,6 @@ func TestPGActivityReportRowStatusPrefersExactCustomKimiAlias(t *testing.T) {
 			usageSource: "provider",
 			model:       "daimon-kimi-code",
 			ts: sql.NullTime{
-				Time:  pricingpkg.KimiModelEraCutoff,
-				Valid: true,
-			},
-			pricingTS: sql.NullTime{
 				Time:  pricingpkg.KimiModelEraCutoff,
 				Valid: true,
 			},

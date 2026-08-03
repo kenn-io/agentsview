@@ -28,7 +28,10 @@ type BunStore struct {
 
 // NewBunStore creates a shared store over one guarded backend.
 func NewBunStore(backend BunBackend) *BunStore {
-	return &BunStore{backend: backend}
+	return &BunStore{
+		backend: backend,
+		pricing: pricingState{emptyCatalog: fallbackRateMap()},
+	}
 }
 
 // SetCursorSecret updates the shared cursor signing key.
