@@ -14,6 +14,7 @@ import (
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/pgdialect"
 	commondb "go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
 
 const schemaTestSchema = "agentsview_schema_test"
@@ -37,6 +38,7 @@ func TestEnsureSchemaConvergesCommonColumnsAndRetainsPriorRows(t *testing.T) {
 		ALTER TABLE sessions DROP COLUMN IF EXISTS file_size;
 		ALTER TABLE messages DROP COLUMN IF EXISTS id;
 		ALTER TABLE tool_calls DROP COLUMN IF EXISTS message_id;
+		ALTER TABLE pinned_messages ALTER COLUMN message_id SET NOT NULL;
 		DELETE FROM sync_metadata WHERE key = 'bun_common_schema_v1';
 	`)
 	require.NoError(t, err)
@@ -54,6 +56,25 @@ func TestEnsureSchemaConvergesCommonColumnsAndRetainsPriorRows(t *testing.T) {
 		SELECT value FROM sync_metadata WHERE key = 'bun_common_schema_v1'`,
 	).Scan(&stamp))
 	assert.Equal(t, "1", stamp)
+	var pinMessageIDNullable string
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
+		SELECT is_nullable FROM information_schema.columns
+		WHERE table_schema = $1 AND table_name = 'pinned_messages'
+		  AND column_name = 'message_id'`, schemaTestSchema,
+	).Scan(&pinMessageIDNullable))
+	assert.Equal(t, "YES", pinMessageIDNullable)
+
+	_, err = pg.ExecContext(t.Context(), `
+		INSERT INTO messages (session_id, ordinal, role, content)
+		VALUES ('prior-common-session', 4, 'assistant', 'done')`)
+	require.NoError(t, err)
+	createdAt := bunmodel.NewTimestamp(
+		time.Date(2026, 8, 2, 12, 1, 0, 0, time.UTC),
+	)
+	_, err = store.NewInsert().Model(&bunmodel.PinnedMessage{
+		SessionID: "prior-common-session", Ordinal: 4, CreatedAt: createdAt,
+	}).Exec(t.Context())
+	require.NoError(t, err)
 }
 
 func TestPostgresCommonConvergenceRollsBackDDLAndStamp(t *testing.T) {

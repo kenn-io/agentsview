@@ -22,7 +22,8 @@ func TestEnsureProjectIdentityBackfillRequeuesUnverifiedCompletedGap(
 		Agent: "codex",
 	}))
 	_, err := d.getWriter().ExecContext(ctx,
-		`DELETE FROM session_project_identity_snapshots WHERE session_id = ?`,
+		`DELETE FROM source_session_project_identity_snapshots
+		 WHERE source_session_id = ?`,
 		"missing-snapshot")
 	require.NoError(t, err)
 	_, err = d.getWriter().ExecContext(ctx, `
@@ -117,8 +118,8 @@ func TestResyncOrphanCopyLeavesLegacySnapshotGapEligibleForBackfill(
 			ObservedAt: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
 		}))
 	_, err = source.getWriter().ExecContext(ctx, `
-		DELETE FROM session_project_identity_snapshots
-		WHERE session_id IN ('live', 'legacy-orphan')`)
+		DELETE FROM source_session_project_identity_snapshots
+		WHERE source_session_id IN ('live', 'legacy-orphan')`)
 	require.NoError(t, err)
 	require.NoError(t, source.Close())
 
@@ -228,8 +229,8 @@ func TestResyncTrashedCopyLeavesLegacySnapshotGapEligibleForBackfill(
 		UPDATE sessions
 		SET deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE id = 'legacy-trashed';
-		DELETE FROM session_project_identity_snapshots
-		WHERE session_id = 'legacy-trashed'`)
+		DELETE FROM source_session_project_identity_snapshots
+		WHERE source_session_id = 'legacy-trashed'`)
 	require.NoError(t, err)
 	require.NoError(t, source.Close())
 
@@ -261,7 +262,7 @@ func TestProjectIdentityBackfillBatchUsesKeysetAndAdvancesAtomically(
 		}))
 	}
 	_, err := d.getWriter().ExecContext(ctx,
-		`DELETE FROM session_project_identity_snapshots`)
+		`DELETE FROM source_session_project_identity_snapshots`)
 	require.NoError(t, err)
 	require.NoError(t, d.EnsureProjectIdentityBackfillQueued(ctx))
 	require.NoError(t, d.StartProjectIdentityBackfill(ctx))
@@ -304,7 +305,8 @@ func TestProjectIdentityBackfillPersistsUnknownSnapshotForEmptyProject(
 		ID: "unresolved", Machine: "local", Agent: "antigravity-cli",
 	}))
 	_, err := d.getWriter().ExecContext(ctx,
-		`DELETE FROM session_project_identity_snapshots WHERE session_id = ?`,
+		`DELETE FROM source_session_project_identity_snapshots
+		 WHERE source_session_id = ?`,
 		"unresolved")
 	require.NoError(t, err)
 	require.NoError(t, d.EnsureProjectIdentityBackfillQueued(ctx))

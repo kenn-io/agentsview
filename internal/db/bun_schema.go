@@ -88,6 +88,56 @@ func CheckCommonSchema(ctx context.Context, db bun.IDB) error {
 			return fmt.Errorf("closing common table %s check: %w", table.Name, err)
 		}
 	}
+	checks := []struct {
+		name  string
+		query string
+	}{
+		{
+			"session provenance",
+			`SELECT EXISTS (
+				SELECT 1 FROM sessions
+				WHERE TRIM(source_archive_id) = ''
+				   OR TRIM(source_database_generation) = ''
+			)`,
+		},
+		{
+			"tool call message ordinal",
+			`SELECT EXISTS (
+				SELECT 1 FROM tool_calls WHERE message_ordinal IS NULL
+			)`,
+		},
+		{
+			"message logical key",
+			`SELECT EXISTS (
+				SELECT 1 FROM messages
+				GROUP BY session_id, ordinal HAVING COUNT(*) > 1
+			)`,
+		},
+		{
+			"tool call logical key",
+			`SELECT EXISTS (
+				SELECT 1 FROM tool_calls
+				GROUP BY session_id, message_ordinal, call_index
+				HAVING COUNT(*) > 1
+			)`,
+		},
+		{
+			"pin logical key",
+			`SELECT EXISTS (
+				SELECT 1 FROM pinned_messages
+				GROUP BY session_id, ordinal HAVING COUNT(*) > 1
+			)`,
+		},
+	}
+	for _, check := range checks {
+		var invalid bool
+		if err := db.NewRaw(check.query).Scan(ctx, &invalid); err != nil {
+			return fmt.Errorf("checking common %s: %w", check.name, err)
+		}
+		if invalid {
+			return fmt.Errorf("common %s is invalid", check.name)
+		}
+	}
 	return nil
 }
 
@@ -99,6 +149,22 @@ func (db *DB) convergeSQLiteCommonSchemaLocked(
 		return fmt.Errorf("starting common SQLite schema migration: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	complete, err := sqliteCommonSchemaStamped(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if complete {
+		if err := installSQLiteCanonicalIdentityTriggers(ctx, tx); err != nil {
+			return err
+		}
+		if err := CheckCommonSchema(ctx, tx); err != nil {
+			return fmt.Errorf("validating stamped common SQLite schema: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("closing common SQLite schema validation: %w", err)
+		}
+		return nil
+	}
 
 	if err := applyColumnMigrations(
 		sqliteCommonSchemaColumnMigrations,
@@ -172,6 +238,9 @@ func (db *DB) convergeSQLiteCommonSchemaLocked(
 	); err != nil {
 		return err
 	}
+	if err := installSQLiteCanonicalIdentityTriggers(ctx, tx); err != nil {
+		return err
+	}
 	if err := CheckCommonSchema(ctx, tx); err != nil {
 		return err
 	}
@@ -194,6 +263,234 @@ func (db *DB) convergeSQLiteCommonSchemaLocked(
 		return fmt.Errorf("committing common SQLite schema migration: %w", err)
 	}
 	return nil
+}
+
+const sqliteCanonicalIdentityTriggerDDL = `
+DROP TRIGGER IF EXISTS trg_project_identity_observations_revision_insert;
+DROP TRIGGER IF EXISTS trg_project_identity_observations_revision_update;
+DROP TRIGGER IF EXISTS trg_project_identity_observations_revision_delete;
+DROP TRIGGER IF EXISTS trg_session_project_identity_snapshots_revision_insert;
+DROP TRIGGER IF EXISTS trg_session_project_identity_snapshots_revision_update;
+DROP TRIGGER IF EXISTS trg_session_project_identity_snapshots_revision_delete;
+DROP TRIGGER IF EXISTS trg_sessions_create_project_identity_snapshot;
+DROP TRIGGER IF EXISTS trg_sessions_delete_project_identity_snapshot;
+DROP TRIGGER IF EXISTS trg_worktree_project_mappings_revision_insert;
+DROP TRIGGER IF EXISTS trg_worktree_project_mappings_revision_update;
+DROP TRIGGER IF EXISTS trg_worktree_project_mappings_revision_delete;
+
+CREATE TRIGGER trg_project_identity_observations_revision_insert
+AFTER INSERT ON source_project_identity_observations BEGIN
+    INSERT INTO archive_metadata (key, value)
+    VALUES ('project_identity_publication_revision', '1')
+    ON CONFLICT(key) DO UPDATE SET
+        value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+    INSERT INTO project_identity_observation_changes (
+        project, machine, root_path, git_remote, revision, deleted
+    ) VALUES (
+        NEW.project, NEW.machine, NEW.root_path, NEW.git_remote,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'project_identity_publication_revision'), 0
+    ) ON CONFLICT(project, machine, root_path, git_remote) DO UPDATE SET
+        revision = excluded.revision, deleted = 0;
+END;
+
+CREATE TRIGGER trg_project_identity_observations_revision_update
+AFTER UPDATE ON source_project_identity_observations BEGIN
+    INSERT INTO archive_metadata (key, value)
+    VALUES ('project_identity_publication_revision', '1')
+    ON CONFLICT(key) DO UPDATE SET
+        value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+    INSERT INTO project_identity_observation_changes (
+        project, machine, root_path, git_remote, revision, deleted
+    ) VALUES (
+        OLD.project, OLD.machine, OLD.root_path, OLD.git_remote,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'project_identity_publication_revision'), 1
+    ) ON CONFLICT(project, machine, root_path, git_remote) DO UPDATE SET
+        revision = excluded.revision, deleted = 1;
+    INSERT INTO project_identity_observation_changes (
+        project, machine, root_path, git_remote, revision, deleted
+    ) VALUES (
+        NEW.project, NEW.machine, NEW.root_path, NEW.git_remote,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'project_identity_publication_revision'), 0
+    ) ON CONFLICT(project, machine, root_path, git_remote) DO UPDATE SET
+        revision = excluded.revision, deleted = 0;
+END;
+
+CREATE TRIGGER trg_project_identity_observations_revision_delete
+AFTER DELETE ON source_project_identity_observations BEGIN
+    INSERT INTO archive_metadata (key, value)
+    VALUES ('project_identity_publication_revision', '1')
+    ON CONFLICT(key) DO UPDATE SET
+        value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+    INSERT INTO project_identity_observation_changes (
+        project, machine, root_path, git_remote, revision, deleted
+    ) VALUES (
+        OLD.project, OLD.machine, OLD.root_path, OLD.git_remote,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'project_identity_publication_revision'), 1
+    ) ON CONFLICT(project, machine, root_path, git_remote) DO UPDATE SET
+        revision = excluded.revision, deleted = 1;
+END;
+
+CREATE TRIGGER trg_session_project_identity_snapshots_revision_insert
+AFTER INSERT ON source_session_project_identity_snapshots BEGIN
+    INSERT INTO archive_metadata (key, value)
+    VALUES ('project_identity_publication_revision', '1')
+    ON CONFLICT(key) DO UPDATE SET
+        value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+    INSERT INTO session_project_identity_snapshot_changes (
+        session_id, project, revision, deleted
+    ) VALUES (
+        NEW.source_session_id, NEW.project,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'project_identity_publication_revision'), 0
+    ) ON CONFLICT(session_id, project) DO UPDATE SET
+        revision = excluded.revision, deleted = 0;
+END;
+
+CREATE TRIGGER trg_session_project_identity_snapshots_revision_update
+AFTER UPDATE ON source_session_project_identity_snapshots BEGIN
+    INSERT INTO archive_metadata (key, value)
+    VALUES ('project_identity_publication_revision', '1')
+    ON CONFLICT(key) DO UPDATE SET
+        value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+    INSERT INTO session_project_identity_snapshot_changes (
+        session_id, project, revision, deleted
+    ) VALUES (
+        OLD.source_session_id, OLD.project,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'project_identity_publication_revision'), 1
+    ) ON CONFLICT(session_id, project) DO UPDATE SET
+        revision = excluded.revision, deleted = 1;
+    INSERT INTO session_project_identity_snapshot_changes (
+        session_id, project, revision, deleted
+    ) VALUES (
+        NEW.source_session_id, NEW.project,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'project_identity_publication_revision'), 0
+    ) ON CONFLICT(session_id, project) DO UPDATE SET
+        revision = excluded.revision, deleted = 0;
+END;
+
+CREATE TRIGGER trg_session_project_identity_snapshots_revision_delete
+AFTER DELETE ON source_session_project_identity_snapshots BEGIN
+    INSERT INTO archive_metadata (key, value)
+    VALUES ('project_identity_publication_revision', '1')
+    ON CONFLICT(key) DO UPDATE SET
+        value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+    INSERT INTO session_project_identity_snapshot_changes (
+        session_id, project, revision, deleted
+    ) VALUES (
+        OLD.source_session_id, OLD.project,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'project_identity_publication_revision'), 1
+    ) ON CONFLICT(session_id, project) DO UPDATE SET
+        revision = excluded.revision, deleted = 1;
+END;
+
+CREATE TRIGGER trg_sessions_create_project_identity_snapshot
+AFTER INSERT ON sessions
+WHEN NEW.source_archive_id <> '' AND NEW.source_database_generation <> '' BEGIN
+    INSERT INTO source_session_project_identity_snapshots (
+        source_archive_id, source_database_generation, source_session_id,
+        project, machine, root_path, worktree_relationship,
+        checkout_state, git_branch, remote_resolution, observed_at
+    ) VALUES (
+        NEW.source_archive_id, NEW.source_database_generation, NEW.id,
+        NEW.project, NEW.machine, NEW.cwd, 'unknown',
+        CASE WHEN NEW.git_branch <> '' THEN 'branch' ELSE 'unknown' END,
+        NEW.git_branch, 'unknown', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+    ) ON CONFLICT(
+        source_archive_id, source_database_generation, source_session_id
+    ) DO NOTHING;
+END;
+
+CREATE TRIGGER trg_sessions_delete_project_identity_snapshot
+AFTER DELETE ON sessions BEGIN
+    DELETE FROM source_session_project_identity_snapshots
+    WHERE source_archive_id = OLD.source_archive_id
+      AND source_database_generation = OLD.source_database_generation
+      AND source_session_id = OLD.id;
+END;
+
+CREATE TRIGGER trg_worktree_project_mappings_revision_insert
+AFTER INSERT ON source_worktree_project_mappings BEGIN
+    INSERT INTO archive_metadata (key, value)
+    VALUES ('worktree_mapping_publication_revision', '1')
+    ON CONFLICT(key) DO UPDATE SET
+        value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+    INSERT INTO worktree_project_mapping_changes
+        (machine, path_prefix, revision, deleted)
+    VALUES (NEW.machine, NEW.path_prefix,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'worktree_mapping_publication_revision'), 0)
+    ON CONFLICT(machine, path_prefix) DO UPDATE SET
+        revision = excluded.revision, deleted = 0;
+END;
+
+CREATE TRIGGER trg_worktree_project_mappings_revision_update
+AFTER UPDATE ON source_worktree_project_mappings BEGIN
+    INSERT INTO archive_metadata (key, value)
+    VALUES ('worktree_mapping_publication_revision', '1')
+    ON CONFLICT(key) DO UPDATE SET
+        value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+    INSERT INTO worktree_project_mapping_changes
+        (machine, path_prefix, revision, deleted)
+    VALUES (OLD.machine, OLD.path_prefix,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'worktree_mapping_publication_revision'), 1)
+    ON CONFLICT(machine, path_prefix) DO UPDATE SET
+        revision = excluded.revision, deleted = 1;
+    INSERT INTO worktree_project_mapping_changes
+        (machine, path_prefix, revision, deleted)
+    VALUES (NEW.machine, NEW.path_prefix,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'worktree_mapping_publication_revision'), 0)
+    ON CONFLICT(machine, path_prefix) DO UPDATE SET
+        revision = excluded.revision, deleted = 0;
+END;
+
+CREATE TRIGGER trg_worktree_project_mappings_revision_delete
+AFTER DELETE ON source_worktree_project_mappings BEGIN
+    INSERT INTO archive_metadata (key, value)
+    VALUES ('worktree_mapping_publication_revision', '1')
+    ON CONFLICT(key) DO UPDATE SET
+        value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+    INSERT INTO worktree_project_mapping_changes
+        (machine, path_prefix, revision, deleted)
+    VALUES (OLD.machine, OLD.path_prefix,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'worktree_mapping_publication_revision'), 1)
+    ON CONFLICT(machine, path_prefix) DO UPDATE SET
+        revision = excluded.revision, deleted = 1;
+END;`
+
+func installSQLiteCanonicalIdentityTriggers(ctx context.Context, db bun.IDB) error {
+	if _, err := db.ExecContext(ctx, sqliteCanonicalIdentityTriggerDDL); err != nil {
+		return fmt.Errorf("installing canonical SQLite identity triggers: %w", err)
+	}
+	return nil
+}
+
+func sqliteCommonSchemaStamped(ctx context.Context, db bun.IDB) (bool, error) {
+	complete, err := db.NewSelect().Table("archive_metadata").
+		Where("key = ?", CommonSchemaCompatibilityMetadataKey).
+		Exists(ctx)
+	if err != nil {
+		return false, fmt.Errorf("probing common SQLite schema stamp: %w", err)
+	}
+	return complete, nil
 }
 
 func sqliteMetadataValue(
@@ -289,11 +586,11 @@ func backfillSQLiteCommonIdentity(
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO source_worktree_project_mappings (
-			source_archive_id, machine, path_prefix, layout,
-			project, original_project, enabled, updated_at
+			id, source_archive_id, machine, path_prefix, layout,
+			project, original_project, enabled, created_at, updated_at
 		)
-		SELECT ?, machine, path_prefix, layout,
-			project, original_project, enabled, updated_at
+		SELECT id, ?, machine, path_prefix, layout,
+			project, original_project, enabled, created_at, updated_at
 		FROM worktree_project_mappings
 		WHERE true
 		ON CONFLICT(source_archive_id, machine, path_prefix) DO UPDATE SET

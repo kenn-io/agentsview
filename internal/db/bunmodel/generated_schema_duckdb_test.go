@@ -119,3 +119,28 @@ func TestCommonTablesDuckDBPreservesNativeBooleansJSONAndOptionalMessageID(t *te
 	assert.True(t, got.IsSystem)
 	assert.JSONEq(t, `{"output_tokens":7}`, string(got.TokenUsage))
 }
+
+func TestCommonTablesDuckDBAcceptsTextPricingMetadataVersions(t *testing.T) {
+	raw, err := sql.Open("duckdb", "")
+	require.NoError(t, err)
+	raw.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	store := bun.NewDB(raw, bundialect.New())
+	for _, table := range CommonTables() {
+		_, err := registeredCreateTable(store, table, false).Exec(t.Context())
+		require.NoError(t, err, table.Name)
+	}
+
+	_, err = raw.ExecContext(t.Context(), `
+		INSERT INTO model_pricing (
+			model_pattern, input_microdollars_per_mtok,
+			output_microdollars_per_mtok, updated_at
+		) VALUES ('__pricing_seed_version__', 0, 0, '2')`)
+	require.NoError(t, err)
+	var updatedAt string
+	require.NoError(t, raw.QueryRowContext(t.Context(), `
+		SELECT updated_at FROM model_pricing
+		WHERE model_pattern = '__pricing_seed_version__'`,
+	).Scan(&updatedAt))
+	assert.Equal(t, "2", updatedAt)
+}

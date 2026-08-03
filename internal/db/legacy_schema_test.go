@@ -8,9 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/export"
 )
 
 func priorCommonSQLiteSchema() string {
@@ -146,6 +148,80 @@ func TestLegacySchemaCommonConvergenceRetainsRowsAndBackfillsProvenance(t *testi
 		CommonSchemaCompatibilityMetadataKey,
 	).Scan(&stamp))
 	assert.Equal(t, "1", stamp)
+}
+
+func TestLegacySchemaCommonCutoverWritesCanonicalRowsAndDoesNotReplay(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-common-cutover.db")
+	createPriorCommonSQLiteArchive(t, path)
+
+	database, err := Open(path)
+	require.NoError(t, err)
+	observation := export.ProjectIdentityObservation{
+		SessionID: "common-legacy-session", Project: "runtime-project",
+		Machine: "legacy-machine", RootPath: "/work/runtime",
+		GitRemote:  "https://example.invalid/runtime.git",
+		ObservedAt: time.Date(2026, 8, 2, 13, 0, 0, 0, time.UTC),
+	}
+	require.NoError(t, database.UpsertProjectIdentityObservation(
+		t.Context(), observation,
+	))
+	_, err = database.CreateWorktreeProjectMapping(t.Context(), WorktreeProjectMapping{
+		Machine: "legacy-machine", PathPrefix: "/work/runtime",
+		Layout: WorktreeMappingLayoutExplicit, Project: "runtime-project",
+		Enabled: true,
+	})
+	require.NoError(t, err)
+
+	for table, want := range map[string]int{
+		"project_identity_observations":             1,
+		"session_project_identity_snapshots":        1,
+		"worktree_project_mappings":                 1,
+		"source_project_identity_observations":      2,
+		"source_session_project_identity_snapshots": 1,
+		"source_worktree_project_mappings":          2,
+	} {
+		var count int
+		require.NoError(t, database.getReader().QueryRowContext(t.Context(),
+			"SELECT count(*) FROM "+table,
+		).Scan(&count))
+		assert.Equal(t, want, count, table)
+	}
+	require.NoError(t, database.Close())
+
+	conn, err := sql.Open("sqlite3", makeDSN(path, false))
+	require.NoError(t, err)
+	conn.SetMaxOpenConns(1)
+	_, err = conn.ExecContext(t.Context(), `
+		UPDATE project_identity_observations
+		SET key = 'stale-legacy'
+		WHERE project = 'legacy-project';
+		UPDATE source_project_identity_observations
+		SET key = 'canonical-after-cutover'
+		WHERE project = 'legacy-project';
+		UPDATE worktree_project_mappings
+		SET project = 'stale-legacy'
+		WHERE path_prefix = '/work/legacy';
+		UPDATE source_worktree_project_mappings
+		SET project = 'canonical-after-cutover'
+		WHERE path_prefix = '/work/legacy';
+	`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	database, err = Open(path)
+	require.NoError(t, err)
+	defer database.Close()
+	var identityKey, mappingProject string
+	require.NoError(t, database.getReader().QueryRowContext(t.Context(), `
+		SELECT key FROM source_project_identity_observations
+		WHERE project = 'legacy-project'`,
+	).Scan(&identityKey))
+	assert.Equal(t, "canonical-after-cutover", identityKey)
+	require.NoError(t, database.getReader().QueryRowContext(t.Context(), `
+		SELECT project FROM source_worktree_project_mappings
+		WHERE path_prefix = '/work/legacy'`,
+	).Scan(&mappingProject))
+	assert.Equal(t, "canonical-after-cutover", mappingProject)
 }
 
 func TestLegacySchemaCommonConvergenceRollsBackDDLDataAndStamp(t *testing.T) {

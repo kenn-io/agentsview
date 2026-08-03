@@ -206,6 +206,11 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		if err := copySessionDataForIDs(ctx, tx, "_orphaned_ids"); err != nil {
 			return 0, fmt.Errorf("copying orphaned data: %w", err)
 		}
+		if err := stampCopiedSessionProvenance(
+			ctx, tx, "_orphaned_ids",
+		); err != nil {
+			return 0, fmt.Errorf("stamping orphan provenance: %w", err)
+		}
 		sourceVersion := copiedSourceDataVersion(ctx, tx)
 		if err := removeGeneratedIdentitySnapshotsWithoutSource(
 			ctx, tx, "_orphaned_ids", sourceVersion,
@@ -306,6 +311,9 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) (int, error) {
 
 	if err := copySessionDataForIDs(ctx, tx, "_trashed_ids"); err != nil {
 		return 0, fmt.Errorf("copying trashed data: %w", err)
+	}
+	if err := stampCopiedSessionProvenance(ctx, tx, "_trashed_ids"); err != nil {
+		return 0, fmt.Errorf("stamping trashed provenance: %w", err)
 	}
 	sourceVersion := copiedSourceDataVersion(ctx, tx)
 	if err := removeGeneratedIdentitySnapshotsWithoutSource(
@@ -1110,6 +1118,12 @@ func (d *DB) CopySessionMetadataFrom(
 		return fmt.Errorf("begin metadata tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	var previousArchiveID string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT value FROM main.archive_metadata WHERE key = 'archive_id'`,
+	).Scan(&previousArchiveID); err != nil {
+		return fmt.Errorf("reading destination archive identity: %w", err)
+	}
 
 	// Copy user-managed metadata from the quiesced old DB. User-owned
 	// deleted_at is copied for all rows. Recoverable source_missing state is
@@ -1260,6 +1274,32 @@ func (d *DB) CopySessionMetadataFrom(
 				updated_at = excluded.updated_at`); err != nil {
 			return fmt.Errorf("copying archive metadata: %w", err)
 		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO main.source_archives (
+				source_archive_id, source_archive_salt
+			)
+			SELECT archive.value, salt.value
+			FROM main.archive_metadata archive
+			JOIN main.archive_metadata salt
+			  ON salt.key = 'archive_salt'
+			WHERE archive.key = 'archive_id'
+			ON CONFLICT(source_archive_id) DO UPDATE SET
+				source_archive_salt = excluded.source_archive_salt`); err != nil {
+			return fmt.Errorf("recording copied source archive: %w", err)
+		}
+		var copiedArchiveID string
+		if err := tx.QueryRowContext(ctx, `
+			SELECT value FROM main.archive_metadata WHERE key = 'archive_id'`,
+		).Scan(&copiedArchiveID); err != nil {
+			return fmt.Errorf("reading copied archive identity: %w", err)
+		}
+		if copiedArchiveID != previousArchiveID {
+			if err := rekeyLocalArchiveRows(
+				ctx, tx, previousArchiveID, copiedArchiveID,
+			); err != nil {
+				return err
+			}
+		}
 	}
 
 	// The session_deletion_changes journal is deliberately NOT copied from
@@ -1268,95 +1308,15 @@ func (d *DB) CopySessionMetadataFrom(
 	// journal continuity across the swap has no consumer. The fresh
 	// database's journal starts over with its own counter.
 
-	if oldDBHasTable(ctx, tx, "project_identity_observations") {
-		identityColumn := func(name, fallback string) string {
-			if oldDBHasColumn(ctx, tx, "project_identity_observations", name) {
-				return name
-			}
-			return fallback
-		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO main.project_identity_observations (
-				source_archive_id, source_archive_salt,
-				project, machine, root_path, git_remote, git_remote_name,
-				repository_path, worktree_name, worktree_root_path,
-				worktree_relationship, checkout_state, git_branch,
-				remote_resolution, remote_candidate_count, observed_at,
-				normalized_remote, key_source, key
-			)
-			SELECT `+identityColumn("source_archive_id", "''")+`,
-				`+identityColumn("source_archive_salt", "''")+`,
-				project, machine, root_path, git_remote, git_remote_name,
-				`+identityColumn("repository_path", "''")+`,
-				worktree_name, worktree_root_path,
-				`+identityColumn("worktree_relationship", "'unknown'")+`,
-				`+identityColumn("checkout_state", "'unknown'")+`,
-				`+identityColumn("git_branch", "''")+`,
-				`+identityColumn("remote_resolution", "'unknown'")+`,
-				`+identityColumn("remote_candidate_count", "0")+`, observed_at,
-				normalized_remote, key_source, key
-			FROM old_db.project_identity_observations
-			WHERE true
-			ON CONFLICT(project, machine, root_path, git_remote) DO NOTHING`); err != nil {
-			return fmt.Errorf("copying project identity observations: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `
-			DELETE FROM main.project_identity_observations
-			WHERE git_remote = ''
-			  AND EXISTS (
-				SELECT 1
-				FROM main.project_identity_observations remote
-				WHERE remote.project = main.project_identity_observations.project
-				  AND remote.machine = main.project_identity_observations.machine
-				  AND remote.root_path = main.project_identity_observations.root_path
-				  AND remote.git_remote != ''
-			  )`); err != nil {
-			return fmt.Errorf(
-				"removing stale project identity root fallbacks: %w", err)
-		}
-		if err := scrubProjectIdentityGitRemoteCredentialsTx(ctx, tx); err != nil {
-			return err
-		}
+	if err := copyProjectIdentityObservationsFromAttached(ctx, tx); err != nil {
+		return err
 	}
 
 	sourceVersion := copiedSourceDataVersion(ctx, tx)
-	if sourceVersion >= projectIdentitySourceSnapshotDataVersion &&
-		oldDBHasTable(ctx, tx, "session_project_identity_snapshots") {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO main.session_project_identity_snapshots (
-				session_id, project, machine, root_path, git_remote,
-				git_remote_name, repository_path, worktree_name,
-				worktree_root_path, worktree_relationship, checkout_state,
-				git_branch, remote_resolution, remote_candidate_count,
-				observed_at, normalized_remote, key_source, key
-			)
-			SELECT session_id, project, machine, root_path, git_remote,
-				git_remote_name, repository_path, worktree_name,
-				worktree_root_path, worktree_relationship, checkout_state,
-				git_branch, remote_resolution, remote_candidate_count,
-				observed_at, normalized_remote, key_source, key
-			FROM old_db.session_project_identity_snapshots
-			WHERE session_id IN (SELECT id FROM main.sessions)
-			ON CONFLICT(session_id) DO UPDATE SET
-				project = excluded.project,
-				machine = excluded.machine,
-				root_path = excluded.root_path,
-				git_remote = excluded.git_remote,
-				git_remote_name = excluded.git_remote_name,
-				repository_path = excluded.repository_path,
-				worktree_name = excluded.worktree_name,
-				worktree_root_path = excluded.worktree_root_path,
-				worktree_relationship = excluded.worktree_relationship,
-				checkout_state = excluded.checkout_state,
-				git_branch = excluded.git_branch,
-				remote_resolution = excluded.remote_resolution,
-				remote_candidate_count = excluded.remote_candidate_count,
-					observed_at = excluded.observed_at,
-					normalized_remote = excluded.normalized_remote,
-					key_source = excluded.key_source,
-					key = excluded.key`); err != nil {
-			return fmt.Errorf("copying session project identity snapshots: %w", err)
-		}
+	if err := copySessionProjectIdentitySnapshotsFromAttached(
+		ctx, tx, sourceVersion,
+	); err != nil {
+		return err
 	}
 
 	if oldDBHasTable(ctx, tx, "sessions") {
@@ -1407,56 +1367,296 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 	}
 
-	// Copy persistent worktree project mappings. Omit id so
-	// primary-key values from old_db cannot shadow existing
-	// destination rows. ResyncAll may pre-copy mappings into
-	// the temp DB before parsing, so the final metadata copy
-	// reconciles the table to the quiesced source state.
-	if oldDBHasTable(ctx, tx, "worktree_project_mappings") {
-		layoutSelect := "'" + WorktreeMappingLayoutExplicit + "'"
-		if oldDBHasColumn(ctx, tx, "worktree_project_mappings", "layout") {
-			layoutSelect = "layout"
-		}
-		originalProjectSelect := "''"
-		if oldDBHasColumn(ctx, tx, "worktree_project_mappings", "original_project") {
-			originalProjectSelect = "original_project"
-		}
-		if _, err := tx.ExecContext(ctx, `
-			DELETE FROM main.worktree_project_mappings
-			WHERE NOT EXISTS (
-				SELECT 1
-				FROM old_db.worktree_project_mappings old_m
-				WHERE old_m.machine = main.worktree_project_mappings.machine
-				  AND replace(old_m.path_prefix, char(92), '/') =
-					main.worktree_project_mappings.path_prefix
-			)`); err != nil {
-			return fmt.Errorf("reconciling worktree project mappings: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO main.worktree_project_mappings
-				(machine, path_prefix, layout, project, original_project,
-				 enabled, created_at, updated_at)
-			SELECT machine, replace(path_prefix, char(92), '/'),
-				`+layoutSelect+`, project,
-				`+originalProjectSelect+`, enabled, created_at, updated_at
-			FROM old_db.worktree_project_mappings
-			WHERE true
-			ON CONFLICT(machine, path_prefix) DO UPDATE SET
-				layout = excluded.layout,
-				project = excluded.project,
-				original_project = CASE
-					WHEN worktree_project_mappings.original_project = ''
-						THEN excluded.original_project
-					ELSE worktree_project_mappings.original_project
-				END,
-				enabled = excluded.enabled,
-				created_at = excluded.created_at,
-				updated_at = excluded.updated_at`); err != nil {
-			return fmt.Errorf("copying worktree project mappings: %w", err)
-		}
+	if err := reconcileWorktreeProjectMappingsFromAttached(ctx, tx); err != nil {
+		return err
 	}
 
 	return tx.Commit()
+}
+
+func rekeyLocalArchiveRows(
+	ctx context.Context,
+	tx *sql.Tx,
+	previousArchiveID string,
+	copiedArchiveID string,
+) error {
+	for _, table := range []string{
+		"source_project_identity_observations",
+		"source_session_project_identity_snapshots",
+		"source_worktree_project_mappings",
+		"sessions",
+	} {
+		if _, err := tx.ExecContext(ctx, `UPDATE main.`+table+`
+			SET source_archive_id = ? WHERE source_archive_id = ?`,
+			copiedArchiveID, previousArchiveID,
+		); err != nil {
+			return fmt.Errorf("rekeying copied archive table %s: %w", table, err)
+		}
+	}
+	return nil
+}
+
+func copyProjectIdentityObservationsFromAttached(
+	ctx context.Context,
+	tx *sql.Tx,
+) error {
+	sourceTable := ""
+	identityColumn := func(name, fallback string) string {
+		return fallback
+	}
+	if oldDBHasTable(ctx, tx, "source_project_identity_observations") {
+		sourceTable = "old_db.source_project_identity_observations"
+		identityColumn = func(name, _ string) string { return "old." + name }
+	} else if oldDBHasTable(ctx, tx, "project_identity_observations") {
+		sourceTable = "old_db.project_identity_observations"
+		identityColumn = func(name, fallback string) string {
+			if oldDBHasColumn(ctx, tx, "project_identity_observations", name) {
+				return "old." + name
+			}
+			return fallback
+		}
+	}
+	if sourceTable == "" {
+		return nil
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO main.source_project_identity_observations (
+			source_archive_id, source_archive_salt,
+			project, machine, root_path, git_remote, git_remote_name,
+			repository_path, worktree_name, worktree_root_path,
+			worktree_relationship, checkout_state, git_branch,
+			remote_resolution, remote_candidate_count, observed_at,
+			normalized_remote, key_source, key
+		)
+		SELECT archive.value, salt.value,
+			old.project, old.machine, old.root_path, old.git_remote,
+			old.git_remote_name,
+			`+identityColumn("repository_path", "''")+`,
+			old.worktree_name, old.worktree_root_path,
+			`+identityColumn("worktree_relationship", "'unknown'")+`,
+			`+identityColumn("checkout_state", "'unknown'")+`,
+			`+identityColumn("git_branch", "''")+`,
+			`+identityColumn("remote_resolution", "'unknown'")+`,
+			`+identityColumn("remote_candidate_count", "0")+`,
+			old.observed_at, old.normalized_remote, old.key_source, old.key
+		FROM `+sourceTable+` old
+		JOIN main.archive_metadata archive ON archive.key = 'archive_id'
+		JOIN main.archive_metadata salt ON salt.key = 'archive_salt'
+		WHERE true
+		ON CONFLICT(
+			source_archive_id, project, machine, root_path, git_remote
+		) DO NOTHING`); err != nil {
+		return fmt.Errorf("copying project identity observations: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM main.source_project_identity_observations
+		WHERE source_archive_id = (
+			SELECT value FROM main.archive_metadata WHERE key = 'archive_id'
+		)
+		  AND git_remote = ''
+		  AND EXISTS (
+			SELECT 1
+			FROM main.source_project_identity_observations remote
+			WHERE remote.source_archive_id =
+				main.source_project_identity_observations.source_archive_id
+			  AND remote.project =
+				main.source_project_identity_observations.project
+			  AND remote.machine =
+				main.source_project_identity_observations.machine
+			  AND remote.root_path =
+				main.source_project_identity_observations.root_path
+			  AND remote.git_remote != ''
+		  )`); err != nil {
+		return fmt.Errorf(
+			"removing stale project identity root fallbacks: %w", err)
+	}
+	return scrubProjectIdentityGitRemoteCredentialsTx(ctx, tx)
+}
+
+func copySessionProjectIdentitySnapshotsFromAttached(
+	ctx context.Context,
+	tx *sql.Tx,
+	sourceVersion int,
+) error {
+	if sourceVersion < projectIdentitySourceSnapshotDataVersion {
+		return nil
+	}
+
+	var source string
+	if oldDBHasTable(ctx, tx, "source_session_project_identity_snapshots") {
+		source = `
+			SELECT current.source_archive_id,
+				current.source_database_generation, old.source_session_id,
+				old.project, old.machine, old.root_path, old.git_remote,
+				old.git_remote_name, old.repository_path, old.worktree_name,
+				old.worktree_root_path, old.worktree_relationship,
+				old.checkout_state, old.git_branch, old.remote_resolution,
+				old.remote_candidate_count, old.observed_at,
+				old.normalized_remote, old.key_source, old.key
+			FROM old_db.source_session_project_identity_snapshots old
+			JOIN old_db.sessions previous
+			  ON previous.id = old.source_session_id
+			 AND previous.source_archive_id = old.source_archive_id
+			 AND previous.source_database_generation =
+				old.source_database_generation
+			JOIN main.sessions current ON current.id = old.source_session_id`
+	} else if oldDBHasTable(ctx, tx, "session_project_identity_snapshots") {
+		source = `
+			SELECT current.source_archive_id,
+				current.source_database_generation, old.session_id,
+				old.project, old.machine, old.root_path, old.git_remote,
+				old.git_remote_name, old.repository_path, old.worktree_name,
+				old.worktree_root_path, old.worktree_relationship,
+				old.checkout_state, old.git_branch, old.remote_resolution,
+				old.remote_candidate_count, old.observed_at,
+				old.normalized_remote, old.key_source, old.key
+			FROM old_db.session_project_identity_snapshots old
+			JOIN main.sessions current ON current.id = old.session_id`
+	} else {
+		return nil
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO main.source_session_project_identity_snapshots (
+			source_archive_id, source_database_generation, source_session_id,
+			project, machine, root_path, git_remote, git_remote_name,
+			repository_path, worktree_name, worktree_root_path,
+			worktree_relationship, checkout_state, git_branch,
+			remote_resolution, remote_candidate_count, observed_at,
+			normalized_remote, key_source, key
+		)`+source+`
+		ON CONFLICT(
+			source_archive_id, source_database_generation, source_session_id
+		) DO UPDATE SET
+			project = excluded.project,
+			machine = excluded.machine,
+			root_path = excluded.root_path,
+			git_remote = excluded.git_remote,
+			git_remote_name = excluded.git_remote_name,
+			repository_path = excluded.repository_path,
+			worktree_name = excluded.worktree_name,
+			worktree_root_path = excluded.worktree_root_path,
+			worktree_relationship = excluded.worktree_relationship,
+			checkout_state = excluded.checkout_state,
+			git_branch = excluded.git_branch,
+			remote_resolution = excluded.remote_resolution,
+			remote_candidate_count = excluded.remote_candidate_count,
+			observed_at = excluded.observed_at,
+			normalized_remote = excluded.normalized_remote,
+			key_source = excluded.key_source,
+			key = excluded.key`); err != nil {
+		return fmt.Errorf("copying session project identity snapshots: %w", err)
+	}
+	return nil
+}
+
+func reconcileWorktreeProjectMappingsFromAttached(
+	ctx context.Context,
+	tx *sql.Tx,
+) error {
+	return copyWorktreeProjectMappingsFromAttached(ctx, tx, true)
+}
+
+func copyWorktreeProjectMappingsFromAttached(
+	ctx context.Context,
+	tx *sql.Tx,
+	deleteMissing bool,
+) error {
+	sourceTable := ""
+	sourceFilter := "true"
+	layoutSelect := "'" + WorktreeMappingLayoutExplicit + "'"
+	originalProjectSelect := "''"
+	if oldDBHasTable(ctx, tx, "source_worktree_project_mappings") {
+		sourceTable = "old_db.source_worktree_project_mappings"
+		sourceFilter = `old.source_archive_id = (
+			SELECT value FROM old_db.archive_metadata WHERE key = 'archive_id'
+		)`
+		layoutSelect = "old.layout"
+		originalProjectSelect = "old.original_project"
+	} else if oldDBHasTable(ctx, tx, "worktree_project_mappings") {
+		sourceTable = "old_db.worktree_project_mappings"
+		if oldDBHasColumn(ctx, tx, "worktree_project_mappings", "layout") {
+			layoutSelect = "old.layout"
+		}
+		if oldDBHasColumn(ctx, tx, "worktree_project_mappings", "original_project") {
+			originalProjectSelect = "old.original_project"
+		}
+	}
+	if sourceTable == "" {
+		return nil
+	}
+	conflictUpdate := `
+			original_project = CASE
+				WHEN source_worktree_project_mappings.original_project = ''
+					THEN excluded.original_project
+				ELSE source_worktree_project_mappings.original_project
+			END`
+
+	if deleteMissing {
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM main.source_worktree_project_mappings
+			WHERE source_archive_id = (
+				SELECT value FROM main.archive_metadata WHERE key = 'archive_id'
+			)
+			  AND NOT EXISTS (
+				SELECT 1 FROM `+sourceTable+` old
+				WHERE `+sourceFilter+`
+				  AND old.machine =
+					main.source_worktree_project_mappings.machine
+				  AND replace(old.path_prefix, char(92), '/') =
+					main.source_worktree_project_mappings.path_prefix
+			  )`); err != nil {
+			return fmt.Errorf("reconciling worktree project mappings: %w", err)
+		}
+		conflictUpdate = `
+			layout = excluded.layout,
+			project = excluded.project,
+			original_project = CASE
+				WHEN source_worktree_project_mappings.original_project = ''
+					THEN excluded.original_project
+				ELSE source_worktree_project_mappings.original_project
+			END,
+			enabled = excluded.enabled,
+			created_at = excluded.created_at,
+			updated_at = excluded.updated_at`
+	}
+	if _, err := tx.ExecContext(ctx, `
+		WITH source_rows AS (
+			SELECT old.machine,
+				replace(old.path_prefix, char(92), '/') AS path_prefix,
+				`+layoutSelect+` AS layout, old.project,
+				`+originalProjectSelect+` AS original_project,
+				old.enabled, old.created_at, old.updated_at
+			FROM `+sourceTable+` old
+			WHERE `+sourceFilter+`
+		), id_base AS (
+			SELECT COALESCE(MAX(id), 0) AS max_id
+			FROM main.source_worktree_project_mappings
+			WHERE source_archive_id = (
+				SELECT value FROM main.archive_metadata WHERE key = 'archive_id'
+			)
+		)
+		INSERT INTO main.source_worktree_project_mappings (
+			id, source_archive_id, machine, path_prefix, layout, project,
+			original_project, enabled, created_at, updated_at
+		)
+		SELECT id_base.max_id + ROW_NUMBER() OVER (
+				ORDER BY source_rows.machine, source_rows.path_prefix
+			),
+			archive.value, source_rows.machine, source_rows.path_prefix,
+			source_rows.layout, source_rows.project,
+			source_rows.original_project, source_rows.enabled,
+			source_rows.created_at, source_rows.updated_at
+		FROM source_rows
+		CROSS JOIN id_base
+		JOIN main.archive_metadata archive ON archive.key = 'archive_id'
+		WHERE true
+		ON CONFLICT(source_archive_id, machine, path_prefix) DO UPDATE SET`+
+		conflictUpdate); err != nil {
+		return fmt.Errorf("copying worktree project mappings: %w", err)
+	}
+	return nil
 }
 
 // oldDBHasTable checks if a table exists in old_db.
@@ -1850,6 +2050,26 @@ func copySessionDataForIDs(
 	return nil
 }
 
+func stampCopiedSessionProvenance(
+	ctx context.Context,
+	tx *sql.Tx,
+	tempIDsTable string,
+) error {
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE main.sessions
+		SET source_archive_id = (
+				SELECT value FROM main.archive_metadata WHERE key = 'archive_id'
+			),
+			source_database_generation = (
+				SELECT value FROM main.archive_metadata WHERE key = 'database_id'
+			)
+		WHERE id IN (SELECT id FROM `+tempIDsTable+`)
+		  AND (source_archive_id = '' OR source_database_generation = '')`); err != nil {
+		return fmt.Errorf("stamping copied session provenance: %w", err)
+	}
+	return nil
+}
+
 // removeGeneratedIdentitySnapshotsWithoutSource removes placeholder snapshots
 // created by the session-insert trigger for the current copy batch. Sources
 // predating parser-source snapshots cannot provide trustworthy replacements,
@@ -1865,16 +2085,38 @@ func removeGeneratedIdentitySnapshotsWithoutSource(
 ) error {
 	missingSourceSnapshot := "true"
 	if sourceVersion >= projectIdentitySourceSnapshotDataVersion &&
+		oldDBHasTable(ctx, tx, "source_session_project_identity_snapshots") {
+		missingSourceSnapshot = `NOT EXISTS (
+			SELECT 1
+			FROM old_db.source_session_project_identity_snapshots old_snapshot
+			JOIN old_db.sessions old_session
+			  ON old_session.id = old_snapshot.source_session_id
+			 AND old_session.source_archive_id = old_snapshot.source_archive_id
+			 AND old_session.source_database_generation =
+				old_snapshot.source_database_generation
+			WHERE old_snapshot.source_session_id =
+				source_session_project_identity_snapshots.source_session_id
+		)`
+	} else if sourceVersion >= projectIdentitySourceSnapshotDataVersion &&
 		oldDBHasTable(ctx, tx, "session_project_identity_snapshots") {
 		missingSourceSnapshot = `NOT EXISTS (
 			SELECT 1 FROM old_db.session_project_identity_snapshots old_snapshot
 			WHERE old_snapshot.session_id =
-				session_project_identity_snapshots.session_id
+				source_session_project_identity_snapshots.source_session_id
 		)`
 	}
 	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM main.session_project_identity_snapshots
-		WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)
+		DELETE FROM main.source_session_project_identity_snapshots
+		WHERE EXISTS (
+			SELECT 1 FROM main.sessions current
+			WHERE current.id IN (SELECT id FROM `+tempIDsTable+`)
+			  AND current.source_archive_id =
+				main.source_session_project_identity_snapshots.source_archive_id
+			  AND current.source_database_generation =
+				main.source_session_project_identity_snapshots.source_database_generation
+			  AND current.id =
+				main.source_session_project_identity_snapshots.source_session_id
+		)
 		  AND `+missingSourceSnapshot); err != nil {
 		return fmt.Errorf("removing generated identity snapshots: %w", err)
 	}

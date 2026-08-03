@@ -1342,6 +1342,12 @@ var postgresCommonColumnMigrations = []struct {
 	{"sessions", "local_modified_at", "TIMESTAMPTZ"},
 	{"messages", "id", "BIGINT"},
 	{"tool_calls", "message_id", "BIGINT"},
+	{"source_worktree_project_mappings", "id", "BIGINT NOT NULL DEFAULT 0"},
+	{"source_worktree_project_mappings", "created_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()"},
+}
+
+var postgresCommonConstraintMigrations = []string{
+	"ALTER TABLE pinned_messages ALTER COLUMN message_id DROP NOT NULL",
 }
 
 func convergePostgresCommonSchema(
@@ -1369,6 +1375,22 @@ func convergePostgresCommonSchema(
 	)`); err != nil {
 		return fmt.Errorf("locking common PostgreSQL schema migration: %w", err)
 	}
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM sync_metadata WHERE key = ?
+		)`, db.CommonSchemaCompatibilityMetadataKey,
+	).Scan(&complete); err != nil {
+		return fmt.Errorf("rechecking common PostgreSQL schema stamp: %w", err)
+	}
+	if complete {
+		if err := db.CheckCommonSchema(ctx, tx); err != nil {
+			return fmt.Errorf("validating stamped common PostgreSQL schema: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("closing common PostgreSQL schema validation: %w", err)
+		}
+		return nil
+	}
 	for _, migration := range postgresCommonColumnMigrations {
 		query := fmt.Sprintf(
 			"ALTER TABLE %s ADD COLUMN IF NOT EXISTS %s %s",
@@ -1379,6 +1401,11 @@ func convergePostgresCommonSchema(
 				"adding common PostgreSQL column %s.%s: %w",
 				migration.table, migration.column, err,
 			)
+		}
+	}
+	for _, query := range postgresCommonConstraintMigrations {
+		if _, err := tx.ExecContext(ctx, query); err != nil {
+			return fmt.Errorf("converging common PostgreSQL constraint: %w", err)
 		}
 	}
 	if err := db.CreateCommonSchema(ctx, tx); err != nil {

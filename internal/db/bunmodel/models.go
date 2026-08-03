@@ -74,23 +74,23 @@ func (t Timestamp) Value() (driver.Value, error) {
 type ModelPricing struct {
 	bun.BaseModel `bun:"table:model_pricing"`
 
-	ModelPattern                     string    `bun:"model_pattern,pk"`
-	InputMicrodollarsPerMTok         int64     `bun:"input_microdollars_per_mtok,notnull,default:0"`
-	OutputMicrodollarsPerMTok        int64     `bun:"output_microdollars_per_mtok,notnull,default:0"`
-	CacheCreationMicrodollarsPerMTok int64     `bun:"cache_creation_microdollars_per_mtok,notnull,default:0"`
-	CacheReadMicrodollarsPerMTok     int64     `bun:"cache_read_microdollars_per_mtok,notnull,default:0"`
-	UpdatedAt                        Timestamp `bun:"updated_at,type:TIMESTAMPTZ,notnull"`
+	ModelPattern                     string `bun:"model_pattern,pk"`
+	InputMicrodollarsPerMTok         int64  `bun:"input_microdollars_per_mtok,notnull,default:0"`
+	OutputMicrodollarsPerMTok        int64  `bun:"output_microdollars_per_mtok,notnull,default:0"`
+	CacheCreationMicrodollarsPerMTok int64  `bun:"cache_creation_microdollars_per_mtok,notnull,default:0"`
+	CacheReadMicrodollarsPerMTok     int64  `bun:"cache_read_microdollars_per_mtok,notnull,default:0"`
+	UpdatedAt                        string `bun:"updated_at,notnull,default:''"`
 }
 
 // ModelPricingBand overrides pricing above one input-token threshold.
 type ModelPricingBand struct {
 	bun.BaseModel `bun:"table:model_pricing_bands"`
 
-	ModelPattern                     string    `bun:"model_pattern,pk"`
-	AboveInputTokens                 int64     `bun:"above_input_tokens,pk"`
-	InputMicrodollarsPerMTok         int64     `bun:"input_microdollars_per_mtok,notnull,default:0"`
-	OutputMicrodollarsPerMTok        int64     `bun:"output_microdollars_per_mtok,notnull,default:0"`
-	CacheCreationMicrodollarsPerMTok int64     `bun:"cache_creation_microdollars_per_mtok,notnull,default:0"`
-	CacheReadMicrodollarsPerMTok     int64     `bun:"cache_read_microdollars_per_mtok,notnull,default:0"`
-	UpdatedAt                        Timestamp `bun:"updated_at,type:TIMESTAMPTZ,notnull"`
+	ModelPattern                     string `bun:"model_pattern,pk"`
+	AboveInputTokens                 int64  `bun:"above_input_tokens,pk"`
+	InputMicrodollarsPerMTok         int64  `bun:"input_microdollars_per_mtok,notnull,default:0"`
+	OutputMicrodollarsPerMTok        int64  `bun:"output_microdollars_per_mtok,notnull,default:0"`
+	CacheCreationMicrodollarsPerMTok int64  `bun:"cache_creation_microdollars_per_mtok,notnull,default:0"`
+	CacheReadMicrodollarsPerMTok     int64  `bun:"cache_read_microdollars_per_mtok,notnull,default:0"`
+	UpdatedAt                        string `bun:"updated_at,notnull,default:''"`
 }
