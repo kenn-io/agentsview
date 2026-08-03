@@ -42,14 +42,14 @@ type Store struct {
 	semanticUnavailableReason string
 }
 
-// pgSessionCols is the column list for standard PG session
-// queries. PG has no local file metadata columns; transcript_revision
-// carries the backend-neutral content revision pushed from SQLite.
+// pgSessionCols is the column list for standard PG session queries.
+// PostgreSQL retains the source file path used by read-side session
+// functionality while omitting volatile local fingerprint metadata.
 const pgSessionCols = `id, project, machine, agent,
-	agent_label, entrypoint,
+	agent_label, entrypoint, session_kind,
 	first_message, COALESCE(display_name, session_name) AS display_name, created_at, started_at,
 	ended_at, message_count, user_message_count,
-	parent_session_id, relationship_type,
+	parent_session_id, parser_parent_session_id, relationship_type,
 	total_output_tokens, peak_context_tokens,
 	has_total_output_tokens, has_peak_context_tokens,
 	is_automated,
@@ -71,7 +71,8 @@ const pgSessionCols = `id, project, machine, agent,
 	cwd, git_branch, source_session_id, source_version,
 	transcript_fidelity, parser_malformed_lines, is_truncated,
 	secret_leak_count, secrets_rules_version,
-	deleted_at, deletion_cause, termination_status, transcript_revision`
+	deleted_at, deletion_cause, termination_status, transcript_revision,
+	file_path`
 
 // paramBuilder generates numbered PostgreSQL placeholders.
 type paramBuilder struct {
@@ -204,11 +205,11 @@ func scanPGSession(
 	var startedAt, endedAt, deletedAt *time.Time
 	err := rs.Scan(
 		&s.ID, &s.Project, &s.Machine, &s.Agent,
-		&s.AgentLabel, &s.Entrypoint,
+		&s.AgentLabel, &s.Entrypoint, &s.SessionKind,
 		&s.FirstMessage, &s.DisplayName,
 		&createdAt, &startedAt, &endedAt,
 		&s.MessageCount, &s.UserMessageCount,
-		&s.ParentSessionID, &s.RelationshipType,
+		&s.ParentSessionID, &s.ParserParentSessionID, &s.RelationshipType,
 		&s.TotalOutputTokens, &s.PeakContextTokens,
 		&s.HasTotalOutputTokens, &s.HasPeakContextTokens,
 		&s.IsAutomated,
@@ -232,6 +233,7 @@ func scanPGSession(
 		&s.TranscriptFidelity, &s.ParserMalformedLines, &s.IsTruncated,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
 		&deletedAt, &s.DeletionCause, &s.TerminationStatus, &s.TranscriptRevision,
+		&s.FilePath,
 	)
 	if err != nil {
 		return s, err
@@ -508,6 +510,21 @@ func (s *Store) GetSidebarSessionIndex(
 	}
 
 	f.Cursor = ""
+	rootFilter := f
+	rootFilter.IncludeChildren = false
+	rootWhere, rootArgs := buildPGSessionBaseFilter(rootFilter)
+	canonicalRootWhere := db.BuildCanonicalRootWhere(
+		db.PostgresQueryDialect(), "sessions", f.IncludeOrphans,
+	)
+	var total int
+	countQuery := "SELECT COUNT(*) FROM sessions WHERE " +
+		rootWhere + " AND " + canonicalRootWhere
+	if err := s.pg.QueryRowContext(
+		ctx, countQuery, rootArgs...,
+	).Scan(&total); err != nil {
+		return db.SidebarSessionIndex{},
+			fmt.Errorf("counting sidebar roots: %w", err)
+	}
 
 	where, args := buildPGSessionFilter(f)
 	query := `
@@ -520,6 +537,7 @@ func (s *Store) GetSidebarSessionIndex(
 			agent,
 			agent_label,
 			entrypoint,
+			session_kind,
 			COALESCE(display_name, session_name) AS display_name,
 			started_at,
 			ended_at,
@@ -549,7 +567,7 @@ func (s *Store) GetSidebarSessionIndex(
 	}
 	index := db.SidebarSessionIndex{
 		Sessions: sessions,
-		Total:    len(sessions),
+		Total:    total,
 	}
 
 	return index, nil
@@ -759,6 +777,7 @@ func (s *Store) getSidebarSessionIndexPage(
 			s.agent,
 			s.agent_label,
 			s.entrypoint,
+			s.session_kind,
 			COALESCE(s.display_name, s.session_name) AS display_name,
 			s.started_at,
 			s.ended_at,
@@ -806,6 +825,7 @@ func scanPGSidebarSessionIndexRows(
 			&row.Agent,
 			&row.AgentLabel,
 			&row.Entrypoint,
+			&row.SessionKind,
 			&row.DisplayName,
 			&startedAt,
 			&endedAt,

@@ -283,9 +283,11 @@ test-short: pricing-snapshot ensure-embed-dir
 	go test -tags "fts5" ./... -short -count=1
 
 # Run the quarantined eval-ingest endpoint tests under their build tag.
+# Only internal/server contains evalingest-gated code; every other package is
+# identical under the tag and already covered by the untagged run.
 test-evalingest: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,evalingest" \
-		./internal/db ./internal/server -v -count=1
+		./internal/server -v -count=1
 
 # Compare db.Store read-query performance across SQLite, DuckDB, and PostgreSQL.
 # Requires Docker because the PostgreSQL backend is started with testcontainers.
@@ -378,7 +380,8 @@ e2e:
 # Run focused Playwright smoke tests against duckdb serve.
 e2e-duckdb:
 	cd frontend && AGENTSVIEW_E2E_BACKEND=duckdb npx playwright test \
-		e2e/duckdb-backend.spec.ts e2e/session-list.spec.ts --project=chromium
+		e2e/duckdb-backend.spec.ts e2e/data-mode.spec.ts \
+		e2e/session-list.spec.ts --project=chromium
 
 # Vet
 vet: pricing-snapshot ensure-embed-dir
@@ -425,20 +428,69 @@ nilaway-golangci-build:
 		golangci-lint custom --version "$(GOLANGCI_LINT_VERSION)" --name custom-gcl
 
 # Run NilAway through the custom golangci-lint module plugin.
+#
+# NilAway is run once per package instead of once over ./... because a single
+# whole-module run blows up memory. Each invocation therefore keeps its own
+# tight caps (GOMAXPROCS=1, GOGC=10, GOMEMLIMIT=512MiB). Those caps are
+# per-process, so the ~45 invocations can safely overlap: NILAWAY_JOBS of them
+# run at a time, bounding peak usage at roughly NILAWAY_JOBS x GOMEMLIMIT.
+# Concurrent invocations share one GOLANGCI_LINT_CACHE, so they need
+# --allow-parallel-runners; without it golangci-lint's start-up file lock makes
+# every overlapping run fail with "parallel golangci-lint is running".
+#
+# Each invocation writes its output to its own scratch file, which the parent
+# prints in package order once the run finishes. Writing straight to stdout
+# would interleave one package's findings with another's as soon as a report
+# exceeded the pipe's atomic-write size. NILAWAY_JOBS must be a positive
+# integer: `xargs -P 0` means "unlimited" and would remove the memory bound
+# this whole arrangement depends on.
+NILAWAY_JOBS ?= 4
+
 nilaway: pricing-snapshot ensure-embed-dir nilaway-golangci-build
 	@set -e; \
+	case "$(NILAWAY_JOBS)" in \
+		''|*[!0-9]*) \
+			echo "nilaway: NILAWAY_JOBS must be a positive integer (got '$(NILAWAY_JOBS)')" >&2; \
+			exit 1;; \
+	esac; \
+	njobs=$$(( $(NILAWAY_JOBS) + 0 )); \
+	if [ "$$njobs" -lt 1 ]; then \
+		echo "nilaway: NILAWAY_JOBS must be at least 1 (got '$(NILAWAY_JOBS)')" >&2; \
+		exit 1; \
+	fi; \
 	root=$$(pwd); \
 	dirs=$$(go list -f '{{.Dir}}' ./...); \
-	for dir in $$dirs; do \
+	pkgs=$$(for dir in $$dirs; do \
 		if [ "$$dir" = "$$root" ]; then \
-			pkg="."; \
+			printf '%s\n' "."; \
 		else \
-			pkg="./$${dir#$$root/}"; \
+			printf '%s\n' "./$${dir#$$root/}"; \
 		fi; \
-		echo "$(CUSTOM_GCL) run --config .golangci.nilaway.yml $$pkg"; \
-		GOMAXPROCS=$${GOMAXPROCS:-1} GOGC=$${GOGC:-10} GOMEMLIMIT=$${GOMEMLIMIT:-512MiB} \
-			$(CUSTOM_GCL) run --config .golangci.nilaway.yml "$$pkg"; \
-	done
+	done); \
+	if [ -z "$$pkgs" ]; then echo "nilaway: no packages to lint" >&2; exit 1; fi; \
+	NILAWAY_OUT_DIR=$$(mktemp -d); \
+	export NILAWAY_OUT_DIR; \
+	trap 'rm -f "$$NILAWAY_OUT_DIR"/*; rmdir "$$NILAWAY_OUT_DIR"' EXIT HUP INT TERM; \
+	set +e; \
+	printf '%s\n' "$$pkgs" | awk '{ printf "%d:%s\n", NR, $$0 }' | tr '\n' '\0' \
+		| xargs -0 -n 1 -P "$$njobs" sh -c ' \
+		n=$${1%%:*}; \
+		pkg=$${1#*:}; \
+		cmd="$(CUSTOM_GCL) run --allow-parallel-runners --config .golangci.nilaway.yml $$pkg"; \
+		out=$$(GOMAXPROCS=$${GOMAXPROCS:-1} GOGC=$${GOGC:-10} GOMEMLIMIT=$${GOMEMLIMIT:-512MiB} \
+			$(CUSTOM_GCL) run --allow-parallel-runners \
+				--config .golangci.nilaway.yml "$$pkg" 2>&1); \
+		status=$$?; \
+		{ printf "%s\n" "$$cmd"; \
+		  if [ -n "$$out" ]; then printf "%s\n" "$$out"; fi; \
+		} > "$$NILAWAY_OUT_DIR/$$n"; \
+		exit $$status' sh; \
+	rc=$$?; \
+	set -e; \
+	ls "$$NILAWAY_OUT_DIR" | sort -n | while IFS= read -r n; do \
+		cat "$$NILAWAY_OUT_DIR/$$n"; \
+	done; \
+	exit $$rc
 
 # Install pinned local lint tools.
 lint-tools:

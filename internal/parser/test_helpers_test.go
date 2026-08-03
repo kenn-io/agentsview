@@ -44,15 +44,15 @@ CREATE TABLE message_nodes (
 `
 
 type devinSessionRow struct {
-	ID                 string
-	Title              string
-	WorkingDirectory   string
-	Model              string
-	CreatedAtMillis    *int64
-	LastActivityMillis *int64
-	WorkspaceJSON      string
-	MetadataJSON       string
-	Hidden             bool
+	ID               string
+	Title            string
+	WorkingDirectory string
+	Model            string
+	CreatedAt        *int64
+	LastActivityAt   *int64
+	WorkspaceJSON    string
+	MetadataJSON     string
+	Hidden           bool
 }
 
 type devinTestFixture struct {
@@ -63,12 +63,12 @@ type devinTestFixture struct {
 }
 
 type devinSyntheticMessageNodeRow struct {
-	SessionID       string
-	NodeID          int64
-	ParentNodeID    *int64
-	ChatMessage     string
-	CreatedAtMillis int64
-	MetadataJSON    string
+	SessionID    string
+	NodeID       int64
+	ParentNodeID *int64
+	ChatMessage  string
+	CreatedAt    int64
+	MetadataJSON string
 }
 
 func newDevinTestFixture(t *testing.T, rows ...devinSessionRow) *devinTestFixture {
@@ -127,8 +127,8 @@ func insertDevinSessionRow(t *testing.T, dbPath string, row devinSessionRow) {
 		row.Title,
 		row.WorkingDirectory,
 		row.Model,
-		devinNullableMillis(row.CreatedAtMillis),
-		devinNullableMillis(row.LastActivityMillis),
+		devinNullableTimestamp(row.CreatedAt),
+		devinNullableTimestamp(row.LastActivityAt),
 		devinNullableString(row.WorkspaceJSON),
 		devinNullableString(row.MetadataJSON),
 		row.Hidden,
@@ -136,11 +136,11 @@ func insertDevinSessionRow(t *testing.T, dbPath string, row devinSessionRow) {
 	require.NoError(t, err)
 }
 
-func devinNullableMillis(ms *int64) any {
-	if ms == nil {
+func devinNullableTimestamp(sec *int64) any {
+	if sec == nil {
 		return nil
 	}
-	return *ms
+	return *sec
 }
 
 func devinNullableString(value string) any {
@@ -204,7 +204,7 @@ func insertDevinMessageNodeRow(t *testing.T, dbPath string, row devinSyntheticMe
 		row.NodeID,
 		devinNullableInt64(row.ParentNodeID),
 		row.ChatMessage,
-		row.CreatedAtMillis,
+		row.CreatedAt,
 		devinNullableString(row.MetadataJSON),
 	)
 	require.NoError(t, err)

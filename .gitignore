@@ -67,9 +67,9 @@ docs/.env*.local
 testdata/ssh/test_key
 
 # Local data
-data/
-sessions/
-html/
+/data/
+/sessions/
+/html/
 .superset/
 .github/hooks/
 .superpowers/

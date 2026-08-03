@@ -225,6 +225,23 @@ func TestLoadArtifactExportDataRawByteBoundaries(t *testing.T) {
 		require.ErrorIs(t, err, ErrArtifactExportLimit)
 	})
 
+	t.Run("prompt source data", func(t *testing.T) {
+		database := artifactExportLoadTestDB(t)
+		require.NoError(t, database.ReplaceSessionMessages("session", []Message{{
+			SessionID: "session", Ordinal: 0, Role: "user", Content: "abcd",
+			PromptSource: "typed",
+		}}))
+		limits := smallArtifactExportLoadLimits()
+		limits.MessageBytes = 13
+		data, err := database.LoadArtifactExportData(t.Context(), "session", limits)
+		require.NoError(t, err)
+		assert.Len(t, data.Messages, 1)
+
+		limits.MessageBytes = 12
+		_, err = database.LoadArtifactExportData(t.Context(), "session", limits)
+		require.ErrorIs(t, err, ErrArtifactExportLimit)
+	})
+
 	t.Run("usage data", func(t *testing.T) {
 		database := artifactExportLoadTestDB(t)
 		require.NoError(t, database.ReplaceSessionUsageEvents("session", []UsageEvent{{

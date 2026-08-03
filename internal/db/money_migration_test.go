@@ -1,6 +1,8 @@
 package db
 
 import (
+	"context"
+	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -133,6 +135,103 @@ FROM model_pricing WHERE model_pattern = 'model'`,
 
 	// The migration is one-way and idempotent once the legacy columns are gone.
 	require.NoError(t, migrateMoneyColumnsLocked(d.getWriter()))
+}
+
+func TestOpenLegacyMoneySchemaCreatesUsablePricingBands(t *testing.T) {
+	d := testDB(t)
+	path := d.Path()
+	_, err := d.rawWriter().Exec(`
+DROP TABLE model_pricing_bands;
+DROP TABLE model_pricing;
+CREATE TABLE model_pricing (
+ model_pattern TEXT PRIMARY KEY, input_per_mtok REAL NOT NULL DEFAULT 0,
+ output_per_mtok REAL NOT NULL DEFAULT 0,
+ cache_creation_per_mtok REAL NOT NULL DEFAULT 0,
+ cache_read_per_mtok REAL NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
+);
+INSERT INTO model_pricing (
+ model_pattern, input_per_mtok, output_per_mtok,
+ cache_creation_per_mtok, cache_read_per_mtok, updated_at
+) VALUES ('legacy-model', 1, 2, 0.5, 0.1, '2026-07-29T12:00:00Z');`)
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+
+	reopened, err := Open(path)
+	require.NoError(t, err)
+	defer reopened.Close()
+	require.NoError(t, reopened.UpsertModelPricing([]ModelPricing{{
+		ModelPattern:         "legacy-model",
+		InputPerMTok:         money.MustParseDollars("1"),
+		OutputPerMTok:        money.MustParseDollars("2"),
+		CacheCreationPerMTok: money.MustParseDollars("0.5"),
+		CacheReadPerMTok:     money.MustParseDollars("0.1"),
+		Bands: []PricingBand{{
+			AboveInputTokens:     200_000,
+			InputPerMTok:         money.MustParseDollars("2"),
+			OutputPerMTok:        money.MustParseDollars("3"),
+			CacheCreationPerMTok: money.MustParseDollars("1"),
+			CacheReadPerMTok:     money.MustParseDollars("0.2"),
+		}},
+	}}))
+
+	prices, err := reopened.ListModelPricing(context.Background())
+	require.NoError(t, err)
+	require.Len(t, prices, 1)
+	require.Len(t, prices[0].Bands, 1)
+	assert.Equal(t, 200_000, prices[0].Bands[0].AboveInputTokens)
+}
+
+func TestOpenLegacyMoneyFailurePreservesPricingBandSchema(t *testing.T) {
+	d := testDB(t)
+	path := d.Path()
+	insertSession(t, d, "invalid-open-money-migration", "project")
+	_, err := d.rawWriter().Exec(`
+DROP TABLE model_pricing_bands;
+DROP TABLE model_pricing;
+CREATE TABLE model_pricing (
+ model_pattern TEXT PRIMARY KEY, input_per_mtok REAL NOT NULL DEFAULT 0,
+ output_per_mtok REAL NOT NULL DEFAULT 0,
+ cache_creation_per_mtok REAL NOT NULL DEFAULT 0,
+ cache_read_per_mtok REAL NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
+);
+INSERT INTO model_pricing (
+ model_pattern, input_per_mtok, output_per_mtok,
+ cache_creation_per_mtok, cache_read_per_mtok, updated_at
+) VALUES ('legacy-model', 1, 2, 0.5, 0.1, '2026-07-29T12:00:00Z');
+DROP TABLE usage_events;
+CREATE TABLE usage_events (
+ id INTEGER PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+ message_ordinal INTEGER, source TEXT NOT NULL, model TEXT NOT NULL,
+ input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+ cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
+ cache_read_input_tokens INTEGER NOT NULL DEFAULT 0, reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+ cost_usd REAL, cost_status TEXT NOT NULL DEFAULT '', cost_source TEXT NOT NULL DEFAULT '',
+ occurred_at TEXT, dedup_key TEXT NOT NULL DEFAULT ''
+);
+INSERT INTO usage_events (session_id, source, model, cost_usd)
+VALUES ('invalid-open-money-migration', 'provider', 'model', -0.01);`)
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+
+	reopened, err := Open(path)
+	require.Error(t, err)
+	if reopened != nil {
+		require.NoError(t, reopened.Close())
+	}
+
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	defer raw.Close()
+	var bandTableCount int
+	require.NoError(t, raw.QueryRow(`
+SELECT COUNT(*) FROM sqlite_master
+WHERE type = 'table' AND name = 'model_pricing_bands'`).Scan(&bandTableCount))
+	assert.Equal(t, 1, bandTableCount)
+	var legacyPrice float64
+	require.NoError(t, raw.QueryRow(`
+SELECT input_per_mtok FROM model_pricing WHERE model_pattern = 'legacy-model'`,
+	).Scan(&legacyPrice))
+	assert.Equal(t, 1.0, legacyPrice)
 }
 
 func TestMigrateMoneyColumnsRejectsInvalidLegacyValueWithoutChangingSchema(t *testing.T) {

@@ -152,6 +152,66 @@ func TestResyncOrphanCopyLeavesLegacySnapshotGapEligibleForBackfill(
 	assert.Equal(t, 1, status.TotalItems)
 }
 
+func TestVersion76ResyncRejectsLegacyProjectIdentitySnapshots(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	sourcePath := filepath.Join(dir, "source.db")
+
+	source, err := Open(sourcePath)
+	require.NoError(t, err)
+	for _, session := range []Session{
+		{
+			ID: "live", Project: "mapped-app", Machine: "local",
+			Agent: "codex",
+		},
+		{
+			ID: "orphan", Project: "mapped-app", Machine: "local",
+			Agent: "codex",
+		},
+	} {
+		require.NoError(t, source.UpsertSession(session))
+		require.NoError(t, source.UpsertProjectIdentityObservation(ctx,
+			export.ProjectIdentityObservation{
+				SessionID: session.ID, Project: "mapped-app", Machine: "local",
+				RootPath:   "/legacy/mapped-app",
+				GitRemote:  "https://example.com/legacy/mapped-app.git",
+				ObservedAt: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+			}))
+	}
+	_, err = source.getWriter().ExecContext(ctx, `PRAGMA user_version = 76`)
+	require.NoError(t, err)
+	require.NoError(t, source.Close())
+
+	destination := testDB(t)
+	require.NoError(t, destination.UpsertSession(Session{
+		ID: "live", Project: "source-app", Machine: "local", Agent: "codex",
+	}))
+	require.NoError(t, destination.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID: "live", Project: "source-app", Machine: "local",
+			RootPath:   "/fresh/source-app",
+			GitRemote:  "https://example.com/source/source-app.git",
+			ObservedAt: time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC),
+		}))
+
+	copied, err := destination.CopyOrphanedDataFrom(sourcePath)
+	require.NoError(t, err)
+	assert.Equal(t, 1, copied)
+	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
+
+	snapshots, err := destination.listSessionProjectIdentitySnapshots(
+		ctx, []string{"live", "orphan"},
+	)
+	require.NoError(t, err)
+	require.Contains(t, snapshots, "live")
+	assert.Equal(t, "source-app", snapshots["live"].Project)
+	assert.Equal(t, "/fresh/source-app", snapshots["live"].RootPath)
+	assert.Equal(t, "https://example.com/source/source-app.git",
+		snapshots["live"].GitRemote)
+	assert.NotContains(t, snapshots, "orphan",
+		"an orphan must not inherit target-labelled version 76 evidence")
+}
+
 func TestResyncTrashedCopyLeavesLegacySnapshotGapEligibleForBackfill(
 	t *testing.T,
 ) {

@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -59,13 +60,25 @@ func (e *RebuildContributorError) Error() string {
 func (e *RebuildContributorError) Unwrap() error { return e.Err }
 
 type rebuildOperations struct {
-	rebuildFTS func(*db.DB) error
-	reopen     func(*db.DB) error
+	rebuildFTS                        func(*db.DB) error
+	reopen                            func(*db.DB) error
+	listActiveWorktreeMappingMachines func(context.Context, *db.DB) ([]string, error)
+	applyWorktreeMappings             func(context.Context, *db.DB, string) (db.ApplyWorktreeProjectMappingsResult, error)
 }
 
 var productionRebuildOperations = rebuildOperations{
 	rebuildFTS: func(database *db.DB) error { return database.RebuildFTS() },
 	reopen:     func(database *db.DB) error { return database.Reopen() },
+	listActiveWorktreeMappingMachines: func(
+		ctx context.Context, database *db.DB,
+	) ([]string, error) {
+		return database.ListActiveWorktreeProjectMappingMachines(ctx)
+	},
+	applyWorktreeMappings: func(
+		ctx context.Context, database *db.DB, machine string,
+	) (db.ApplyWorktreeProjectMappingsResult, error) {
+		return database.ApplyWorktreeProjectMappingsFromSync(ctx, machine)
+	},
 }
 
 func (ops rebuildOperations) withDefaults() rebuildOperations {
@@ -74,6 +87,14 @@ func (ops rebuildOperations) withDefaults() rebuildOperations {
 	}
 	if ops.reopen == nil {
 		ops.reopen = productionRebuildOperations.reopen
+	}
+	if ops.listActiveWorktreeMappingMachines == nil {
+		ops.listActiveWorktreeMappingMachines =
+			productionRebuildOperations.listActiveWorktreeMappingMachines
+	}
+	if ops.applyWorktreeMappings == nil {
+		ops.applyWorktreeMappings =
+			productionRebuildOperations.applyWorktreeMappings
 	}
 	return ops
 }

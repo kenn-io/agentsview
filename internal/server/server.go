@@ -24,6 +24,7 @@ import (
 	"go.kenn.io/agentsview/internal/insight"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/pricingrefresh"
+	"go.kenn.io/agentsview/internal/recall/extract"
 	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/sync"
@@ -45,7 +46,7 @@ type VersionInfo struct {
 // APIVersion is shared by HTTP version reporting and local daemon discovery.
 // Bump it when a client-visible contract cannot be decoded safely by an older
 // CLI or daemon.
-const APIVersion = 4
+const APIVersion = 5
 
 const daemonService = "agentsview"
 
@@ -110,6 +111,7 @@ type Server struct {
 	// recallCorpusMutationNotify, when set, is called after an import adds or
 	// supersedes accepted recall entries so semantic mirrors can refresh.
 	recallCorpusMutationNotify func()
+	recallExtractionStatus     RecallExtractionStatusProvider
 
 	// pprofEnabled registers net/http/pprof handlers under
 	// /debug/pprof/ so a running daemon can be profiled. Off by
@@ -145,6 +147,8 @@ type Server struct {
 	// localResyncRunner, when set, backs the foreground full-resync HTTP handler
 	// with the worker-backed build-and-swap instead of an in-process resync.
 	localResyncRunner LocalResyncRunner
+
+	artifactExchangeRunner ArtifactExchangeRunner
 
 	ensurePricing func(context.Context, *db.DB) error
 }
@@ -353,6 +357,20 @@ func WithRecallCorpusMutationNotifier(fn func()) Option {
 	return func(s *Server) { s.recallCorpusMutationNotify = fn }
 }
 
+// RecallExtractionStatusProvider supplies read-only extraction coverage for
+// the Recall page. The model-backed manager satisfies this interface directly.
+type RecallExtractionStatusProvider interface {
+	Status(context.Context) (extract.Status, error)
+}
+
+// WithRecallExtractionStatusProvider exposes extraction coverage through the
+// HTTP API. A nil provider leaves the endpoint available but unconfigured.
+func WithRecallExtractionStatusProvider(
+	provider RecallExtractionStatusProvider,
+) Option {
+	return func(s *Server) { s.recallExtractionStatus = provider }
+}
+
 // WithPprof enables the net/http/pprof handlers under
 // /debug/pprof/ for live profiling of a running daemon.
 func WithPprof(enabled bool) Option {
@@ -432,6 +450,10 @@ func (s *Server) routes() {
 		"GET /api/v1/recall/entries/{id}",
 		s.handleGetRecallEntry,
 	))
+	s.mux.Handle("GET /api/v1/recall/extraction/status", s.withTimeout(
+		"GET /api/v1/recall/extraction/status",
+		s.handleRecallExtractionStatus,
+	))
 	s.mux.Handle("POST /api/v1/recall/query", s.withTimeout(
 		"POST /api/v1/recall/query",
 		s.handleQueryRecallEntries,
@@ -441,6 +463,13 @@ func (s *Server) routes() {
 		s.handleImportRecallEntries,
 	))
 	s.registerEvalIngestRoutes()
+
+	if s.artifactExchangeRunner != nil {
+		s.mux.HandleFunc(
+			"POST /api/v1/artifacts/exchange",
+			s.handleArtifactExchange,
+		)
+	}
 
 	// SPA fallback: serve embedded frontend
 	// Do not use timeout handler for static assets to avoid buffering.

@@ -18,6 +18,30 @@ computes later with its pricing catalog. A compatible upstream implementation,
 independent parser, or recorded fixture is useful evidence for a format, but is
 called out when it is not the product's own producer source.
 
+## Pricing Catalog Evidence
+
+Agentsview's fetched and embedded token prices come from LiteLLM's
+[`model_prices_and_context_window.json`](https://github.com/BerriAI/litellm/blob/551e5d097c11f08fd2400a25a651b1844fcf89c2/model_prices_and_context_window.json)
+at pinned commit `551e5d097c11f08fd2400a25a651b1844fcf89c2`. LiteLLM's
+[`cost_per_token` implementation](https://github.com/BerriAI/litellm/blob/551e5d097c11f08fd2400a25a651b1844fcf89c2/litellm/litellm_core_utils/llm_cost_calc/utils.py)
+shows that these catalog fields are request-pricing thresholds rather than
+model-name conventions.
+
+Agentsview recognizes the anchored standard field shape
+`input_cost_per_token_above_<N>[k]_tokens`, including the published 200K and
+272K bands, and reads output, cache-creation, and cache-read companions with the
+same suffix. A band applies only when whole-request input is strictly greater
+than its threshold; when several bands exist, the highest eligible threshold
+wins. Additional suffixes for Batch, Flex, Priority, regional, or other service
+tiers are deliberately excluded because stored usage does not identify those
+variants.
+
+Claude and Codex session artifacts provide normalized input, output,
+cache-creation, and cache-read token categories, but they do not supply this
+pricing metadata. Agentsview therefore uses their request boundaries and token
+counts with the catalog bands; it does not infer thresholds from provider or
+model names.
+
 Unless an entry states otherwise, entries were last verified on 2026-07-19. A
 pinned revision is a reproducible research snapshot, not a claim that it
 produced every historical artifact that Agentsview accepts. Where an entry
@@ -79,6 +103,13 @@ Grok section and remove the explicit registry exception in the coverage test.
   in [#1238](https://github.com/kenn-io/agentsview/issues/1238): Claude Code
   for VS Code writes standalone `user` records wrapped in `ide_opened_file` or
   `ide_selection` tags for editor context rather than operator prompts.
+  Reverified 2026-07-24 against local CLI transcripts: current
+  transcripts carry two top-level launch/prompt-provenance keys that the
+  parser now captures — `sessionKind` (session-level, e.g. `"bg"`; present on
+  background/headless sessions and absent on interactive ones) and
+  `promptSource` (per user turn, e.g. `"typed"`, `"queued"`, `"system"`,
+  `"sdk"`). Neither key is documented upstream or covered by the codeburn
+  notes; the evidence remains local observation under `no-public-source`.
 
 ## OpenClaude (`openclaude`)
 
@@ -129,13 +160,27 @@ Grok section and remove the explicit registry exception in the coverage test.
 ## Codex (`codex`)
 
 - **Format:** Rollout JSONL files, with a separate JSONL session index used for
-  discovery and metadata.
+  discovery and metadata. The TUI also maintains an append-oriented
+  `history.jsonl` whose records contain `session_id`, Unix-seconds `ts`, and
+  submitted prompt `text`; configured size enforcement can rewrite a retained
+  tail in place. Agentsview consumes only the first two fields as a
+  live-activity hint.
 - **Evidence:** `source`.
 - **Upstream:** Clone `https://github.com/openai/codex.git` at
-  `3e2f79727a4e8ddfc8e3acb838d496b121094b9e`; see the pinned
-  [rollout recorder](https://github.com/openai/codex/blob/3e2f79727a4e8ddfc8e3acb838d496b121094b9e/codex-rs/rollout/src/recorder.rs)
+  `406dc9239492aff6d295cca5eebe2a548548d42f`; see the pinned
+  [rollout recorder](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/rollout/src/recorder.rs)
   and
-  [protocol types](https://github.com/openai/codex/blob/3e2f79727a4e8ddfc8e3acb838d496b121094b9e/codex-rs/protocol/src/protocol.rs).
+  [protocol types](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/protocol/src/protocol.rs).
+  The pinned
+  [message-history implementation](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/message-history/src/lib.rs)
+  defines the `session_id`/`ts`/`text` schema, append behavior, file
+  location, and the no-write path for `HistoryPersistence::None`. The
+  [TUI input-submission path](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/tui/src/chatwidget/input_submission.rs)
+  emits accepted submitted text to the
+  [TUI history append route](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/tui/src/app/thread_routing.rs).
+  The
+  [configuration schema](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/core/config.schema.json)
+  defines `save-all` (the default) and `none`.
 - **Usage and cost:** `token_count` records include total and last usage with
   input, cached input, cache-write input, output, reasoning output, and total
   tokens. Agentsview currently consumes input, cached input, and output only: it
@@ -144,7 +189,20 @@ Grok section and remove the explicit registry exception in the coverage test.
   Catalog pricing therefore covers only the normalized fields the parser emits.
 - **Agentsview:** `internal/parser/codex.go` and
   `internal/parser/codex_provider.go`; usage is taken from the last-turn
-  counters rather than repeatedly counting cumulative totals.
+  counters rather than repeatedly counting cumulative totals. Reverified
+  2026-07-29: the pinned TUI is the evidenced `history.jsonl` producer. No
+  `append_entry` producer call exists under the pinned `app-server` or `exec`
+  trees, so this evidence does not establish IDE, desktop, or `codex exec`
+  activity-hint coverage. Locally observed Codex app builds can write the same
+  schema, but that is observational evidence rather than a public
+  compatibility guarantee. Agentsview derives the hint path as
+  `<configured-sessions-root>/../history.jsonl`; a custom sessions root
+  without that sibling, or `HistoryPersistence::None`, degrades to ordinary
+  watcher behavior, degraded-coverage polling when applicable, and the daily
+  archive audit. Restart bootstrap reads at most the newest 4 MiB and accepts
+  records from the preceding 24 hours. If a daemon restarts during a longer
+  autonomous run whose last prompt falls outside those bounds, the rollout
+  relies on those fallbacks until its next prompt.
 
 ## GitHub Copilot CLI (`copilot`)
 
@@ -170,7 +228,11 @@ Grok section and remove the explicit registry exception in the coverage test.
   cache-write, and reasoning tokens. Copilot accounting is credit-oriented;
   Agentsview does not treat credits as USD and does not infer a monetary cost.
 - **Agentsview:** `internal/parser/copilot.go` and
-  `internal/parser/copilot_provider.go`.
+  `internal/parser/copilot_provider.go`. Reverified 2026-07-28 against local
+  Copilot CLI 1.0.76-0 transcripts: `tool.execution_start` and
+  `tool.execution_complete` carry the same `data.toolCallId` and independent
+  RFC3339 `timestamp` values, providing an exact execution interval even when
+  the next user message arrives after a long resumed-session idle gap.
 
 ## Gemini CLI (`gemini`)
 
@@ -252,6 +314,82 @@ Grok section and remove the explicit registry exception in the coverage test.
   counts as a failure, matching the existing `exit status N` heuristic, and a
   timed-out command records `timeout: true` with no `exit` key, so it is not
   detected here. See #1256.
+- **Change detection (SQLite layout):** every session in a root shares one
+  physical `opencode.db`, so the container's own size and mtime move whenever
+  any single session is written and cannot discriminate between sessions.
+  Agentsview instead builds a per-session composite from
+  `session.time_updated`, `project.time_updated`, `MAX(message.time_updated)`,
+  and `MAX(part.time_updated)` (`openCodeCompositeMtimeExpr`), and omits the
+  container size from the per-session fingerprint. Verified 2026-07-27 against
+  an isolated clone of a production container (13.5 GB, 5,981 sessions, 104k
+  messages, 508k parts): 432,779 of 508,400 parts (86%) carry
+  `time_updated != time_created`, so in-place child edits do move the signal;
+  437 sessions have `MAX(part.time_updated) > session.time_updated`, so the
+  session row alone is insufficient; and no project's `time_updated` falls
+  within 5s of its newest session, so folding `project` in tracks genuine
+  worktree/metadata changes rather than ordinary session activity. The child
+  scans cost ~0.6s warm on that container because `part.data` lives in SQLite
+  overflow pages, so scanning `(session_id, time_updated)` does not read
+  transcript bytes. A MAX over timestamps cannot see a deletion: on that
+  container 5,758 of 5,981 sessions (96%) carry a session or project timestamp
+  at or above every child, so removing a message or part leaves the max
+  untouched. The fingerprint hash therefore carries a per-session digest of the
+  watermark plus the child row counts, and freshness compares it
+  (`FingerprintHashRequiredForFreshness`). An earlier revision of this entry
+  claimed a revert stays detectable because it lowers the max; that is wrong for
+  the 96% above, and the row counts are what actually cover deletions. Known
+  gap: a write that leaves the watermark, the message count and the part count
+  all unchanged is not attributed to any session, which requires an in-place
+  edit that does not stamp `time_updated`. Containers whose schema lacks the
+  child `time_updated` columns (older OpenCode, Kilo, MiMoCode, ICodeMate) fall
+  back to the session-only mtime plus the container size and emit an empty
+  digest, preserving prior behavior. Watcher events do not pay the child scan
+  at all: changed-path classification lists sessions through a bounded
+  session-row watermark (`MAX(session.time_updated, project.time_updated)`,
+  `ForEachOpenCodeSessionWatermarkMeta`, ordered by session id), compares it
+  per session and like-for-like against the stored session/project metadata
+  watermark recovered from the persisted child digest
+  (`OpenCodeChildDigestMetadataWatermarkNS`; rows without a parseable digest
+  fall back to the stored composite), merged in ascending virtual-path order
+  against a paged stored-freshness cursor
+  (`ListVirtualContainerMemberFreshnessPage` through
+  `storedMemberFreshnessPager` and `changedWatermarkSources`), and drops
+  covered sessions during the stream — only the changed batch is ever
+  materialized, peak memory per event is one stored page plus that batch,
+  and the surviving sources resolve the full composite and digest through
+  the indexed per-session lookup. The merge trusts stored authority only
+  while a container capture taken before the listing still matches a
+  recapture afterwards; a stale capture re-lists unfiltered and leaves the
+  decision to the per-file gates. The comparison must be like-for-like: the
+  stored composite can be dominated by a newer child timestamp, and
+  comparing the session-row watermark against it would hide a metadata
+  update (title, directory, worktree rename) whose stamp lands below that
+  child maximum. A session or project row that advances past its own stored
+  metadata watermark is always a candidate, wherever other sessions'
+  watermarks or its own child timestamps sit. Periodic full passes and
+  streamed reconciliation passes over a container whose captured state still
+  matches the last fully verified pass also list the watermark form
+  (`SQLiteContainerUnchangedSinceTrust`): every member gate-skips before
+  fingerprinting, so the child identity scan would be archive-sized work
+  nothing reads; any write breaks that trust and the next pass carries the
+  complete digest again. Watermark-only skips additionally require the
+  pass's container capture to still be valid
+  (`sqliteContainerPassCaptureValid`) — a container that changes between
+  listing and the recapture check resolves full per-session digests instead,
+  so a concurrent child-only write cannot hide beneath an unchanged metadata
+  watermark. The trade is explicit: any
+  child-only write that leaves the session and project rows untouched —
+  wherever its timestamps land relative to the stored composite — is
+  invisible to a watcher pass and is reconciled by the next full-discovery
+  pass over the now-untrusted container, whose digest still catches it; on
+  the production container above, 96% of sessions carry a session/project
+  timestamp at or above every child, and actively watched sessions bypass
+  this entirely via the per-session composite poll. Per-event work is
+  bounded by the changed batch plus one O(session-count) scan of small
+  fixed-width rows (the session table and the paged stored-member reads);
+  that floor is irreducible without a watermark index, which OpenCode's
+  schema does not have and which is not agentsview's to add — but only the
+  changed batch and one stored page are ever held in memory.
 - **Agentsview:** `internal/parser/opencode.go`,
   `internal/parser/opencode_provider.go`, and
   `internal/parser/opencode_storage_state.go`; legacy and database layouts are
@@ -618,12 +756,19 @@ Grok section and remove the explicit registry exception in the coverage test.
   the desktop directory wrapper and auxiliary-session prefixes.
 - **Usage and cost:** The shared wire records expose input, output, cache-read,
   and cache-creation token counts. Kimi Work can report the internal model
-  aliases `daimon-kimi-code`, `daimon-kimi-messages`, and `k3-agent`; Agentsview
-  catalog-prices those tokens. The date-ambiguous `daimon-*` aliases resolve to
-  K2.6 before the 2026-07-19 UTC cutoff and K3 at or after it. When a transcript
-  omits model metadata, Agentsview uses the date-ambiguous `daimon-kimi-code`
-  alias so the same timestamp rule applies instead of assuming one model era. No
-  authoritative persisted USD cost is consumed.
+  aliases `daimon-kimi-code`, `daimon-kimi-messages`, `k2d6-agent`, and
+  `k3-agent`; Agentsview catalog-prices those tokens. The explicit
+  `k2d6-agent` alias resolves to K2.6. The date-ambiguous `daimon-*` aliases
+  resolve to K2.6 before the 2026-07-19 UTC cutoff and K3 at or after it. When a
+  transcript omits model metadata, Agentsview uses the date-ambiguous
+  `daimon-kimi-code` alias so the same timestamp rule applies instead of
+  assuming one model era. No authoritative persisted USD cost is consumed.
+- **Event ordering reverified 2026-08-03:** observed protocol-1.4 transcripts
+  can persist `tool.call`, then `tool.result`, then `step.end` for one model
+  step. The following `usage.record` repeats the same native usage values.
+  Agentsview keeps the assistant tool-call message as the pending usage target
+  across the user-role tool result, attaches the trailing `step.end` usage, and
+  treats `usage.record` only as a fallback so the step is counted once.
 - **Agentsview:** `internal/parser/kimi_work_provider.go` constrains discovery
   to user conversations, delegates wire decoding to `internal/parser/kimi.go`,
   and rewrites the provider identity and aggregate usage-event keys to
@@ -765,7 +910,14 @@ Grok section and remove the explicit registry exception in the coverage test.
 ## Devin CLI (`devin`)
 
 - **Format:** `cli/sessions.db` for session metadata plus transcript JSON
-  artifacts.
+  artifacts. The `sessions.created_at`, `sessions.last_activity_at`, and
+  `message_nodes.created_at` columns are Unix epoch seconds (not milliseconds).
+  Verified against a live Devin CLI database 2026-07-31, and reverified
+  independently against CLI 3000.3.22 the same day. Because the unit is observed
+  rather than documented, the parser rejects values outside the
+  nanosecond-representable epoch-second range instead of converting them, so a
+  future unit change surfaces as missing timestamps rather than as a silently
+  overflowed far-future mtime that would wedge resync.
 - **Evidence:** `no-public-source`.
 - **Upstream:** Cognition's first-party
   [Devin documentation](https://docs.devin.ai/) and public repositories were
@@ -1112,6 +1264,10 @@ Grok section and remove the explicit registry exception in the coverage test.
   context/last-turn/total statistics, without per-message cache or cost data.
   Agentsview emits one aggregate usage event and catalog-prices it when model
   identity is available.
+- **Project identity:** Metadata records `session_id`, `git_branch`, and
+  `environment.working_directory`. Agentsview recovers those independent
+  fields even when another optional metadata field is malformed, so a partial
+  parse cannot replace repository classification with generic fallbacks.
 - **Agentsview:** `internal/parser/vibe.go` and
   `internal/parser/vibe_provider.go`.
 

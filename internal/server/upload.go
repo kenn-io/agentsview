@@ -216,6 +216,7 @@ func sessionBatchWriteFromParsed(
 			ContentLength:    m.ContentLength,
 			Model:            m.Model,
 			TokenUsage:       m.TokenUsage,
+			PromptSource:     m.PromptSource,
 			ContextTokens:    m.ContextTokens,
 			OutputTokens:     m.OutputTokens,
 			HasContextTokens: hasCtx,

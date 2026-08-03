@@ -443,8 +443,8 @@ func TestHermesStreamingTranscriptFailureContinuesLaterRoots(t *testing.T) {
 // the reconciliation tombstoning path: hermesProfileArchiveRoots used to
 // convert every os.ReadDir failure into an empty profile list, so a
 // transient permission or I/O failure on the profiles container made
-// discovery look authoritatively empty while ReconciliationOwnershipScopes
-// still claimed the whole container — and the engine tombstoned every
+// discovery look authoritatively empty while the resolved reconciliation
+// scope still proved the whole container — and the engine tombstoned every
 // stored hermes session under it as source_missing. Enumeration failures
 // must surface as DiscoveryIncompleteError so the engine retains
 // reconciliation markers and retries instead.
@@ -842,19 +842,23 @@ func TestHermesMemberCoreSeedRetainedIDBytesStayBounded(t *testing.T) {
 		stateDB := filepath.Join(root, "state.db")
 		conn, err := sql.Open("sqlite3", stateDB)
 		require.NoError(t, err)
-		_, err = conn.Exec("DELETE FROM messages; DELETE FROM sessions")
+		tx, err := conn.Begin()
+		require.NoError(t, err)
+		defer func() { _ = tx.Rollback() }()
+		_, err = tx.Exec("DELETE FROM messages; DELETE FROM sessions")
 		require.NoError(t, err)
 		for i := range sessionCount {
 			id := fmt.Sprintf("member-%06d", i)
-			_, err = conn.Exec(`INSERT INTO sessions
+			_, err = tx.Exec(`INSERT INTO sessions
 				(id, source, started_at, estimated_cost_usd, actual_cost_usd)
 				VALUES (?, 'cli', ?, 0, 0)`, id, i)
 			require.NoError(t, err)
-			_, err = conn.Exec(`INSERT INTO messages
+			_, err = tx.Exec(`INSERT INTO messages
 				(session_id, role, content, timestamp)
 				VALUES (?, 'user', 'hello', ?)`, id, i)
 			require.NoError(t, err)
 		}
+		require.NoError(t, tx.Commit())
 		require.NoError(t, conn.Close())
 
 		var retained, peak int64

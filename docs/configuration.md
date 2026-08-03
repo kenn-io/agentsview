@@ -54,6 +54,7 @@ cursor_secret = "base64-encoded-secret"
 require_auth = true
 cursor_admin_api_key = "key_xxxxx"
 daemon_idle_timeout = "20m"
+chart_palette = "agentsview"
 ```
 
 | Field                               | Description                                                                                                                                                                                                                                          |
@@ -70,6 +71,7 @@ daemon_idle_timeout = "20m"
 | `public_url`                        | Public URL for hostname/proxy access and origin validation                                                                                                                                                                                           |
 | `public_origins`                    | Array of additional trusted CORS origins                                                                                                                                                                                                             |
 | `daemon_idle_timeout`               | Idle timeout for detached writable daemons; set to `"0s"` to keep them alive                                                                                                                                                                         |
+| `chart_palette`                     | Server-wide categorical chart colors: `"agentsview"` (default) or `"matplotlib"`; also configurable under **Settings > Appearance**                                                                                                                  |
 | `[proxy]`                           | Managed proxy configuration table — see [Remote Access](/remote-access/)                                                                                                                                                                             |
 | `disable_update_check`              | Disable the automatic update check (see [Privacy](#privacy-and-telemetry))                                                                                                                                                                           |
 | `[pg]`                              | PostgreSQL sync configuration — see [PostgreSQL Sync](/pg-sync/)                                                                                                                                                                                     |
@@ -77,6 +79,7 @@ daemon_idle_timeout = "20m"
 | `[vector]`                          | Opt-in semantic-search index; model settings live in `[vector.embeddings]`, named endpoints in `[vector.embeddings.servers.<name>]`, embedding schedule in `[vector.embed]` — see [Semantic Search](/semantic-search/#enabling-vector) for every key |
 | `[recall.extract]`                  | Opt-in model-backed recall extraction; named endpoints in `[recall.extract.servers.<name>]`, prompt selection in `[recall.extract.prompts]`, request overrides in `[recall.extract.request]` — see [Recall](/recall/#automatic-extraction)           |
 | `[[remote_hosts]]`                  | Remote machines synced by a bare `agentsview sync` — see [CLI Reference](/commands/#agentsview-sync)                                                                                                                                                 |
+| `[[session_sources]]`               | Additional filesystem session roots with per-root machine labels — see [Filesystem Session Sync](/filesystem-sync/)                                                                                                                                  |
 | `[automated]`                       | Custom automated-session patterns — see [Automated Session Detection](#automated-session-detection)                                                                                                                                                  |
 | `[custom_model_pricing]`            | Per-model price overrides for usage reports — see [Custom Model Pricing](/token-usage/#custom-model-pricing)                                                                                                                                         |
 
@@ -694,6 +697,32 @@ default path.
 
 All listed directories are discovered, watched, and synced independently.
 
+### Machine-Labeled Filesystem Sources
+
+Use `[[session_sources]]` when a root was produced on another machine and
+transported to this AgentsView host:
+
+```toml
+[[session_sources]]
+agent = "copilot"
+dir = "/srv/session-archive/buildbox/copilot"
+machine = "buildbox"
+```
+
+The fields are `agent`, `dir`, and optional `machine`. Entries are additive to
+the per-agent arrays, defaults, and environment variables above. Equivalent
+roots are deduplicated; a structured entry supplies the machine label when it
+duplicates a shorthand root. An omitted `machine` uses the local hostname.
+
+Machine attribution is captured when each session is first ingested. Changing
+an entry's `machine` value affects newly discovered sessions but does not
+relabel existing sessions during ordinary syncs or `agentsview sync --full`.
+Changing attribution for existing sessions is not currently supported.
+
+See [Filesystem Session Sync](/filesystem-sync/) for multi-machine examples,
+transport safety, ID deduplication, watcher behavior, and the comparison with
+PostgreSQL.
+
 ### S3-Compatible Session Sources
 
 Claude and Codex session roots can also be `s3://` URIs. This is useful when
@@ -759,27 +788,43 @@ manual sync, and the periodic directory scan.
 
 ### Worktree Project Mappings
 
-The parser infers a session's project from its `cwd`, which works for standard
-layouts but not custom worktree conventions like
-`~/code/{project}.worktrees/feat/<branch>/` — those sessions otherwise group
-under `<branch>` rather than `{project}`. As of 0.29.0, you can register manual
-**path-prefix → project** rules from the **Worktree Project Mappings** section
-in Settings:
+The parser infers a session's project from its `cwd`. It recognizes common
+worktree manager layouts, including the generic
+`worktrees/github.com/<owner>/<repository>/<worktree>` convention, where the
+repository segment becomes the project. Layouts it does not recognize — such
+as `~/code/{project}.worktrees/feat/<branch>/` — otherwise group sessions
+under `<branch>` rather than `{project}`. For those, register manual
+**path-prefix → project** rules from the **Rules** view on the
+[Data page](/data/#rules), or let the
+[mapping editor](/data/#create-a-project-mapping) create one from a project's
+observed session folders:
 
-![Worktree Project Mappings settings section](/assets/generated/screenshots/worktree-mappings.png)
+![Worktree mapping rules on the Data page](/assets/generated/screenshots/worktree-mappings.png)
 
 - Mappings are explicit; there is no auto-discovery.
+- Each rule is scoped to one machine. The machine selector manages rules for
+  the local machine and for any remotely synced machine. Rules live in the
+  writable archive that ingests that machine's sessions, which may be the
+  source machine's local SQLite archive or a separate collector archive.
 - Each rule applies whenever a session's `cwd` falls under the configured
   prefix, on both new sessions as they sync and (via the **Apply** button)
-  already-imported sessions.
+  already-imported sessions. Prefixes match on directory boundaries, so
+  `/worktrees/service` does not match `/worktrees/service-old`.
+- Enabled mappings run after parser inference, so an explicit rule always wins
+  when the two disagree.
 - The default `explicit` layout maps every matching path to the project name
   stored on the rule. The `repo_dot_worktrees` layout derives the project from
   the first path segment under the prefix when it is named `<repo>.worktrees`,
   so a path like `/code/agentsview.worktrees/feature/frontend` resolves to
   project `agentsview`.
-- Rules are stored in a `worktree_project_mappings` SQLite table scoped to the
-  host machine, so a mapping created on one machine does not leak into another
-  machine's view of synced sessions.
+- Rules created from the Data mapping editor record the mislabeled
+  project they corrected, shown as the rule's **original label**. The value is
+  informational and set once; to manually revert a reclassification, edit the
+  rule's target back to that original label and apply again.
+- Disabling or deleting a rule does not rewrite sessions by itself. Sessions
+  whose source files still exist revert to parser-derived names on a later
+  reparse or full resync, while orphaned sessions keep their stored
+  classification.
 - Excluded, trashed, and skipped session files are left alone.
 
 Mappings only mutate the session's `project` field; the rest of the session
@@ -861,7 +906,8 @@ full rewrite.
 
 ## Sync Behavior
 
-AgentsView keeps the database in sync with session files through two mechanisms:
+AgentsView keeps the database in sync with session files through three
+mechanisms:
 
 1. **File watcher** — uses fsnotify to detect file changes. An isolated edit is
    batched for 500ms; watcher-driven sync start times remain at least five
@@ -869,10 +915,34 @@ AgentsView keeps the database in sync with session files through two mechanisms:
    `__pycache__`, `.git`, `vendor`, `dist`, etc.) are automatically skipped to
    reduce noise and overhead.
 1. **Periodic sync** — full directory scan every 15 minutes as a safety net
+1. **Codex live-activity hints** — every 30 seconds, the daemon checks the
+   provider-declared `history.jsonl` append stream and file metadata for a
+   bounded set of recently active rollouts. This is a freshness backstop for
+   already indexed sessions, not a session source: normal discovery and sync
+   still own ingestion, deletion, and canonical-path selection.
 
 Change detection uses file size, mtime, inode, and device tracking to validate
 incremental parses more reliably. A pool of 8 workers processes files in
 parallel during sync.
+
+Codex history hints are available when the producing frontend writes
+`history.jsonl`. In Codex configuration, `[history] persistence = "none"`
+disables those writes; frontends that do not produce history entries retain the
+native watcher and periodic-sync freshness behavior. AgentsView reads only
+session identity and timestamp metadata from accepted hint records and neither
+stores nor logs submitted prompt text.
+
+For each configured local Codex session root, AgentsView probes
+`history.jsonl` in the cleaned root's parent. For example, a custom
+`/data/custom/sessions` root probes `/data/custom/history.jsonl`. It does not
+search ancestors or the rollout archive for another history file. Missing hint
+files remain cheap probes.
+
+The initial daemon poll bootstraps at most the newest 4 MiB of each history file
+and accepts records at most 24 hours old. If AgentsView restarts during a long
+autonomous run whose last persisted prompt is outside either bound, that rollout
+uses native-watcher freshness until another persisted prompt makes it hot
+again.
 
 For `s3://` Claude and Codex roots, change detection uses object size,
 `LastModified`, and available object fingerprints such as ETag, version ID, and

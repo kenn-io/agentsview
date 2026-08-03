@@ -3,7 +3,9 @@
 /* tslint:disable */
 /* eslint-disable */
 export type WorktreeMappingsResponse = {
+  local_machine: string;
   machine: string;
+  machines: any[] | null;
   mappings: any[] | null;
 };
 

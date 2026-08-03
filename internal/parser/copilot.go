@@ -19,6 +19,7 @@ const (
 	copilotEventSessionStart    = "session.start"
 	copilotEventUserMessage     = "user.message"
 	copilotEventAssistantMsg    = "assistant.message"
+	copilotEventToolStart       = "tool.execution_start"
 	copilotEventToolComplete    = "tool.execution_complete"
 	copilotEventAssistantReason = "assistant.reasoning"
 	copilotEventModelChange     = "session.model_change"
@@ -69,6 +70,8 @@ func (b *copilotSessionBuilder) processLine(line string) {
 		b.handleUserMessage(data, ts)
 	case copilotEventAssistantMsg:
 		b.handleAssistantMessage(data, ts)
+	case copilotEventToolStart:
+		b.handleToolStart(data, ts)
 	case copilotEventToolComplete:
 		b.handleToolComplete(data, ts)
 	case copilotEventAssistantReason:
@@ -207,6 +210,14 @@ func (b *copilotSessionBuilder) handleAssistantMessage(
 	b.ordinal++
 }
 
+func (b *copilotSessionBuilder) handleToolStart(
+	data gjson.Result, ts time.Time,
+) {
+	b.appendToolExecutionEvent(
+		data.Get("toolCallId").Str, "started", "", ts,
+	)
+}
+
 func (b *copilotSessionBuilder) handleToolComplete(
 	data gjson.Result, ts time.Time,
 ) {
@@ -220,6 +231,11 @@ func (b *copilotSessionBuilder) handleToolComplete(
 	if r.Type != gjson.String && r.Raw != "" {
 		content = r.Raw
 	}
+	status := "completed"
+	if success := data.Get("success"); success.Exists() && !success.Bool() {
+		status = "errored"
+	}
+	b.appendToolExecutionEvent(toolCallID, status, content, ts)
 	contentLen := len(content)
 
 	// Emit a tool-result-only user message for pairing.
@@ -234,6 +250,30 @@ func (b *copilotSessionBuilder) handleToolComplete(
 		}},
 	})
 	b.ordinal++
+}
+
+func (b *copilotSessionBuilder) appendToolExecutionEvent(
+	toolCallID, status, content string, ts time.Time,
+) {
+	if toolCallID == "" {
+		return
+	}
+	for _, v := range slices.Backward(b.messages) {
+		for j := range v.ToolCalls {
+			call := &v.ToolCalls[j]
+			if call.ToolUseID != toolCallID {
+				continue
+			}
+			call.ResultEvents = append(call.ResultEvents, ParsedToolResultEvent{
+				ToolUseID: toolCallID,
+				Source:    "tool_execution",
+				Status:    status,
+				Content:   content,
+				Timestamp: ts,
+			})
+			return
+		}
+	}
 }
 
 func (b *copilotSessionBuilder) handleAssistantReasoning() {

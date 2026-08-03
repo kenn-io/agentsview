@@ -2,7 +2,8 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { ExportEffectiveModelRate } from './ExportEffectiveModelRate';
 export type ExportModelPricingProvenance = {
   cost_source: string;
-  resolutions: any[] | null;
+  resolutions: Array<ExportEffectiveModelRate> | null;
 };

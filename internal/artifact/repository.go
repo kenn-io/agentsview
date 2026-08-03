@@ -201,8 +201,12 @@ func canonicalRepositoryRoot(dataDir string) (string, error) {
 // components do not yet exist, so a repository root under construction can be
 // canonicalized before Docbank creates it.
 func canonicalArtifactPath(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
 	missing := make([]string, 0, 2)
-	current := path
+	current := absolute
 	for {
 		resolved, err := filepath.EvalSymlinks(current)
 		if err == nil {

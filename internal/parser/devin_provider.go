@@ -473,13 +473,13 @@ func devinAppendMessageNodesFingerprint(h io.Writer, dbPath, rawSessionID string
 	if err != nil {
 		return err
 	}
-	var maxCreatedAtMS int64
+	var maxCreatedAt int64
 	for _, node := range nodes {
-		if node.CreatedAtMS > maxCreatedAtMS {
-			maxCreatedAtMS = node.CreatedAtMS
+		if node.CreatedAt > maxCreatedAt {
+			maxCreatedAt = node.CreatedAt
 		}
 	}
-	if _, err := fmt.Fprintf(h, "message_nodes\x00count\x00%d\x00max_created\x00%d\x00", len(nodes), maxCreatedAtMS); err != nil {
+	if _, err := fmt.Fprintf(h, "message_nodes\x00count\x00%d\x00max_created\x00%d\x00", len(nodes), maxCreatedAt); err != nil {
 		return err
 	}
 	for _, node := range nodes {
@@ -490,7 +490,7 @@ func devinAppendMessageNodesFingerprint(h io.Writer, dbPath, rawSessionID string
 			node.NodeID,
 			node.ParentNodeID.Valid,
 			node.ParentNodeID.Int64,
-			node.CreatedAtMS,
+			node.CreatedAt,
 			len(node.ChatMessage),
 		); err != nil {
 			return err

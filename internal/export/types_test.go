@@ -38,6 +38,21 @@ func TestPricingBlockJSONShape(t *testing.T) {
 					CacheWriteCostPerMTok: money.MustParseDollars("3.75"),
 					CacheReadCostPerMTok:  money.MustParseDollars("0.30"),
 					CostSource:            export.CostSourceComputed,
+					Bands: []export.PricingBand{{
+						AboveInputTokens:  200_000,
+						InputPerMTok:      money.MustParseDollars("6"),
+						OutputPerMTok:     money.MustParseDollars("22.50"),
+						CacheWritePerMTok: money.MustParseDollars("7.50"),
+						CacheReadPerMTok:  money.MustParseDollars("0.60"),
+					}},
+					Application: export.PricingApplication{
+						BaseRequestCount:  2,
+						AggregateRowCount: 1,
+						Bands: []export.AppliedPricingBand{{
+							AboveInputTokens: 200_000,
+							RequestCount:     3,
+						}},
+					},
 				}},
 			},
 		},
@@ -66,7 +81,19 @@ func TestPricingBlockJSONShape(t *testing.T) {
 					"output_cost_per_mtok": {"microdollars": 15000000},
 					"cache_write_cost_per_mtok": {"microdollars": 3750000},
 					"cache_read_cost_per_mtok": {"microdollars": 300000},
-					"cost_source": "computed"
+					"cost_source": "computed",
+					"bands": [{
+						"above_input_tokens": 200000,
+						"input_cost_per_mtok": {"microdollars": 6000000},
+						"output_cost_per_mtok": {"microdollars": 22500000},
+						"cache_write_cost_per_mtok": {"microdollars": 7500000},
+						"cache_read_cost_per_mtok": {"microdollars": 600000}
+					}],
+					"application": {
+						"base_request_count": 2,
+						"aggregate_row_count": 1,
+						"bands": [{"above_input_tokens": 200000, "request_count": 3}]
+					}
 				}]
 			}
 		}

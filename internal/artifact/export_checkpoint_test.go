@@ -15,6 +15,8 @@ import (
 )
 
 func TestCheckpointFloorBootstrapsFromLiveAndQuarantinedNodes(t *testing.T) {
+	t.Parallel()
+
 	_, store := newTestDocbankStore(t, docbank.Config{})
 	database := testDB(t)
 	origin := contractOrigin
@@ -47,6 +49,8 @@ func TestCheckpointFloorBootstrapsFromLiveAndQuarantinedNodes(t *testing.T) {
 }
 
 func TestCheckpointFloorTraversesStoreOnlyBeforeBootstrap(t *testing.T) {
+	t.Parallel()
+
 	database := testDB(t)
 	store := &countingCheckpointFloorStore{floor: 40}
 
@@ -75,6 +79,8 @@ func (s *countingCheckpointFloorStore) checkpointFloor(context.Context, string) 
 }
 
 func TestExportCheckpointBootstrapStreamsLargeSessionMap(t *testing.T) {
+	t.Parallel()
+
 	sessions := make(map[string]string, 2000)
 	for i := range 2000 {
 		sessions[fmt.Sprintf("%s~session-%04d", contractOrigin, i)] = strings64("a")
@@ -95,6 +101,8 @@ func TestExportCheckpointBootstrapStreamsLargeSessionMap(t *testing.T) {
 }
 
 func TestExportCheckpointBootstrapSkipsNoncanonicalJSON(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name string
 		body string
@@ -132,6 +140,8 @@ func TestExportCheckpointBootstrapSkipsNoncanonicalJSON(t *testing.T) {
 }
 
 func TestExportCheckpointBootstrapSkipsMalformedCheckpointBeforeEOF(t *testing.T) {
+	t.Parallel()
+
 	database := testExportDB(t)
 	store := newTestArtifactStore(t)
 	body := append([]byte(`{"unexpected":`), deterministicDocbankBytes(1<<20)...)
@@ -153,6 +163,8 @@ func TestExportCheckpointBootstrapSkipsMalformedCheckpointBeforeEOF(t *testing.T
 }
 
 func TestExportCheckpointBootstrapDefersOnlyValidFutureCheckpoint(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name       string
 		body       string
@@ -291,6 +303,8 @@ func strings64(ch string) string {
 }
 
 func TestDecodeSegmentRejectsAggregateNestedLimitsWithSmallLimits(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name      string
 		records   []segmentMessage
@@ -334,6 +348,8 @@ func TestDecodeSegmentRejectsAggregateNestedLimitsWithSmallLimits(t *testing.T) 
 }
 
 func TestDecodeSegmentAcceptsCanonicalTrailingNewlineAndEmptySession(t *testing.T) {
+	t.Parallel()
+
 	record := nestedSegmentData(t, segmentMessage{})
 	tests := []struct {
 		name string

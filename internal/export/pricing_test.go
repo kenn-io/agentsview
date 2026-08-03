@@ -185,6 +185,171 @@ func TestModelRatesCostForTokensReturnsOverflow(t *testing.T) {
 	require.ErrorIs(t, err, money.ErrOverflow)
 }
 
+func TestModelRatesCostForTokensPricingBandBoundary(t *testing.T) {
+	rates := ModelRates{
+		InputPerMTok:      money.MustParseDollars("1"),
+		OutputPerMTok:     money.MustParseDollars("2"),
+		CacheWritePerMTok: money.MustParseDollars("0.50"),
+		CacheReadPerMTok:  money.MustParseDollars("0.10"),
+		Bands: []PricingBand{{
+			AboveInputTokens:  200_000,
+			InputPerMTok:      money.MustParseDollars("2"),
+			OutputPerMTok:     money.MustParseDollars("3"),
+			CacheWritePerMTok: money.MustParseDollars("1"),
+			CacheReadPerMTok:  money.MustParseDollars("0.20"),
+		}},
+	}
+
+	atBoundary, err := rates.CostForTokens(100_000, 10_000, 0, 50_000, 50_000)
+	require.NoError(t, err)
+	aboveBoundary, err := rates.CostForTokens(100_001, 10_000, 0, 50_000, 50_000)
+	require.NoError(t, err)
+
+	assert.Equal(t, money.Money{Microdollars: 150_000}, atBoundary)
+	assert.Equal(t, money.Money{Microdollars: 290_002}, aboveBoundary)
+}
+
+func TestModelRatesRatesForTokensUsesHighestPricingBand(t *testing.T) {
+	rates := ModelRates{
+		InputPerMTok: money.MustParseDollars("1"),
+		Bands: []PricingBand{
+			{AboveInputTokens: 200_000, InputPerMTok: money.MustParseDollars("2")},
+			{AboveInputTokens: 272_000, InputPerMTok: money.MustParseDollars("4")},
+		},
+	}
+
+	selected := rates.RatesForTokens(272_001, 0, 0)
+
+	assert.Equal(t, money.MustParseDollars("4"), selected.InputPerMTok)
+}
+
+func TestModelRatesPricesRequestsBeforeAggregation(t *testing.T) {
+	rates := ModelRates{
+		InputPerMTok: money.MustParseDollars("1"),
+		Bands: []PricingBand{{
+			AboveInputTokens: 200_000,
+			InputPerMTok:     money.MustParseDollars("2"),
+		}},
+	}
+
+	first, err := rates.CostForTokens(150_000, 0, 0, 0, 0)
+	require.NoError(t, err)
+	second, err := rates.CostForTokens(150_000, 0, 0, 0, 0)
+	require.NoError(t, err)
+
+	assert.Equal(t, money.Money{Microdollars: 300_000}, money.MustAdd(first, second))
+}
+
+func TestModelRatesCostForTokensScopedAggregateUsesBaseRate(t *testing.T) {
+	rates := ModelRates{
+		InputPerMTok: money.MustParseDollars("1"),
+		Bands: []PricingBand{{
+			AboveInputTokens: 200_000,
+			InputPerMTok:     money.MustParseDollars("2"),
+		}},
+	}
+
+	cost, err := rates.CostForTokensScoped(false, 300_000, 0, 0, 0, 0)
+	require.NoError(t, err)
+
+	assert.Equal(t, money.Money{Microdollars: 300_000}, cost)
+}
+
+func TestPricingResolverBuildBlockPricingBandsAndApplicationCounts(t *testing.T) {
+	baseUpdatedAt := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
+	bandUpdatedAt := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
+	resolver := NewPricingResolver([]EffectivePricingRow{{
+		ModelPattern: "banded-model",
+		Rates: ModelRates{
+			InputPerMTok: money.MustParseDollars("1"),
+			UpdatedAt:    &baseUpdatedAt,
+			Source:       PricingRowSourceFetched,
+			Bands: []PricingBand{{
+				AboveInputTokens: 200_000,
+				InputPerMTok:     money.MustParseDollars("2"),
+				UpdatedAt:        &bandUpdatedAt,
+			}},
+		},
+	}})
+	lookup := resolver.Lookup("banded-model")
+	require.True(t, lookup.OK)
+
+	resolver.RecordComputedRequest("banded-model", lookup, 150_000, 0, 0)
+	resolver.RecordComputedRequest("banded-model", lookup, 200_001, 0, 0)
+	resolver.RecordComputedAggregate("banded-model", lookup)
+	resolver.RecordReported("banded-model", lookup)
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+
+	require.NotNil(t, block.LatestRowUpdatedAt)
+	assert.Equal(t, bandUpdatedAt, *block.LatestRowUpdatedAt)
+	model := onlyPricingResolution(t, block.Models["banded-model"])
+	assert.Equal(t, []PricingBand{{
+		AboveInputTokens: 200_000,
+		InputPerMTok:     money.MustParseDollars("2"),
+		UpdatedAt:        &bandUpdatedAt,
+	}}, model.Bands)
+	assert.Equal(t, PricingApplication{
+		BaseRequestCount:  1,
+		AggregateRowCount: 1,
+		Bands: []AppliedPricingBand{{
+			AboveInputTokens: 200_000,
+			RequestCount:     1,
+		}},
+	}, model.Application)
+}
+
+func TestPricingResolverReportedOnlyRowDoesNotCountPricingApplication(t *testing.T) {
+	resolver := NewPricingResolver([]EffectivePricingRow{{
+		ModelPattern: "reported-model",
+		Rates: ModelRates{
+			InputPerMTok: money.MustParseDollars("1"),
+			Bands: []PricingBand{{
+				AboveInputTokens: 200_000,
+				InputPerMTok:     money.MustParseDollars("2"),
+			}},
+		},
+	}})
+	lookup := resolver.Lookup("reported-model")
+	resolver.RecordReported("reported-model", lookup)
+
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+
+	model := onlyPricingResolution(t, block.Models["reported-model"])
+	assert.Equal(t, PricingApplication{}, model.Application)
+}
+
+func TestPricingResolverUnresolvedRequestPreservesComputedProvenanceWithoutApplication(t *testing.T) {
+	resolver := NewPricingResolver(nil)
+	lookup := resolver.Lookup("unpriced-request-model")
+	require.False(t, lookup.OK)
+
+	resolver.RecordComputedRequest("unpriced-request-model", lookup, 150_000, 0, 0)
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+
+	model := onlyPricingResolution(t, block.Models["unpriced-request-model"])
+	assert.Equal(t, CostSourceComputed, model.CostSource)
+	assert.Nil(t, model.MatchedPattern)
+	assert.Equal(t, PricingApplication{}, model.Application)
+}
+
+func TestPricingResolverUnresolvedAggregatePreservesComputedProvenanceWithoutApplication(t *testing.T) {
+	resolver := NewPricingResolver(nil)
+	lookup := resolver.Lookup("unpriced-aggregate-model")
+	require.False(t, lookup.OK)
+
+	resolver.RecordComputedAggregate("unpriced-aggregate-model", lookup)
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+
+	model := onlyPricingResolution(t, block.Models["unpriced-aggregate-model"])
+	assert.Equal(t, CostSourceComputed, model.CostSource)
+	assert.Nil(t, model.MatchedPattern)
+	assert.Equal(t, PricingApplication{}, model.Application)
+}
+
 func TestPricingResolverBuildBlockModelsAndFallback(t *testing.T) {
 	resolver := NewPricingResolver([]EffectivePricingRow{
 		{
@@ -348,6 +513,25 @@ func TestPricingResolverLookupCachesByReportedModel(t *testing.T) {
 
 	assert.Equal(t, first, second)
 	assert.Len(t, resolver.lookupCache, 1)
+}
+
+func TestPricingResolverDeepClonesPricingBands(t *testing.T) {
+	rows := []EffectivePricingRow{{
+		ModelPattern: "banded-model",
+		Rates: ModelRates{Bands: []PricingBand{{
+			AboveInputTokens: 200_000,
+			InputPerMTok:     money.MustParseDollars("2"),
+		}}},
+	}}
+	resolver := NewPricingResolver(rows)
+	rows[0].Rates.Bands[0].InputPerMTok = money.MustParseDollars("99")
+
+	lookup := resolver.Lookup("banded-model")
+	require.True(t, lookup.OK)
+	lookup.Rates.Bands[0].InputPerMTok = money.MustParseDollars("88")
+	second := resolver.Lookup("banded-model")
+
+	assert.Equal(t, money.MustParseDollars("2"), second.Rates.Bands[0].InputPerMTok)
 }
 
 func TestPricingResolverSourceCanonicalOrder(t *testing.T) {

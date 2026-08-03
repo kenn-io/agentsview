@@ -20,10 +20,10 @@
   },
   "dependencies": {
     "@kenn-io/kit-ui": "git+https://github.com/kenn-io/kit-ui.git#97be355ef25a02ce96de6da4f3627ed5b922c4c3",
-    "@lucide/svelte": "1.24.0",
-    "@tanstack/virtual-core": "3.17.3",
+    "@lucide/svelte": "1.26.0",
+    "@tanstack/virtual-core": "3.17.6",
     "dompurify": "3.4.12",
-    "marked": "18.0.6",
+    "marked": "18.0.7",
     "mermaid": "11.16.0",
     "shiki": "4.3.1"
   },
@@ -37,15 +37,15 @@
     "@tsconfig/svelte": "5.0.8",
     "jsdom": "29.1.1",
     "openapi-typescript-codegen": "^0.31.0",
-    "svelte": "5.56.4",
-    "svelte-check": "4.7.2",
+    "svelte": "5.56.7",
+    "svelte-check": "4.7.3",
     "typescript": "6.0.3",
-    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.4",
-    "vite-plus": "0.2.4",
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.6",
+    "vite-plus": "0.2.6",
     "vitest": "4.1.10"
   },
   "overrides": {
-    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.4"
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.6"
   },
   "packageManager": "npm@12.0.1"
 }

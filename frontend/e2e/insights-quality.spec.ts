@@ -31,7 +31,9 @@ const cannedInsight = {
 };
 
 test.describe("Insights quality rollout", () => {
-  test.describe.configure({ timeout: COLD_WEBKIT_TEST_TIMEOUT_MS });
+  if (process.env.CI !== "true") {
+    test.describe.configure({ timeout: COLD_WEBKIT_TEST_TIMEOUT_MS });
+  }
 
   test.beforeEach(async ({ page }) => {
     await page.route("**/api/v1/projects*", (route) =>

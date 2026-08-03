@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
 	"reflect"
 	"sort"
 	"strconv"
@@ -18,8 +19,7 @@ func EffectivePricingDigest(rows []EffectivePricingRow) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("canonical pricing digest: %w", err)
 	}
-	sum := sha256.Sum256(canonical)
-	return "sha256:" + fmt.Sprintf("%x", sum), nil
+	return digestCanonicalBytes(canonical), nil
 }
 
 func canonicalPricingRows(rows []EffectivePricingRow) map[string]any {
@@ -35,6 +35,7 @@ func canonicalPricingRows(rows []EffectivePricingRow) map[string]any {
 			updatedAt = row.Rates.UpdatedAt.UTC().Format(jsonTimeLayout)
 		}
 		out = append(out, map[string]any{
+			"bands":                canonicalPricingBands(row.Rates.Bands),
 			"cache_read_per_mtok":  row.Rates.CacheReadPerMTok.Microdollars,
 			"cache_write_per_mtok": row.Rates.CacheWritePerMTok.Microdollars,
 			"input_per_mtok":       row.Rates.InputPerMTok.Microdollars,
@@ -47,14 +48,69 @@ func canonicalPricingRows(rows []EffectivePricingRow) map[string]any {
 	return map[string]any{"rows": out}
 }
 
+func canonicalPricingBands(bands []PricingBand) []any {
+	copied := append([]PricingBand(nil), bands...)
+	sort.SliceStable(copied, func(i, j int) bool {
+		return copied[i].AboveInputTokens < copied[j].AboveInputTokens
+	})
+	out := make([]any, 0, len(copied))
+	for _, band := range copied {
+		var updatedAt any
+		if band.UpdatedAt != nil {
+			updatedAt = band.UpdatedAt.UTC().Format(jsonTimeLayout)
+		}
+		out = append(out, map[string]any{
+			"above_input_tokens":   band.AboveInputTokens,
+			"cache_read_per_mtok":  band.CacheReadPerMTok.Microdollars,
+			"cache_write_per_mtok": band.CacheWritePerMTok.Microdollars,
+			"input_per_mtok":       band.InputPerMTok.Microdollars,
+			"output_per_mtok":      band.OutputPerMTok.Microdollars,
+			"updated_at":           updatedAt,
+		})
+	}
+	return out
+}
+
 const jsonTimeLayout = "2006-01-02T15:04:05Z07:00"
 
 func canonicalPricingJSON(v any) ([]byte, error) {
+	return MarshalCanonical(v)
+}
+
+// MarshalCanonical renders v as canonical JSON. It honors json struct tags,
+// omitempty, and custom JSON marshalers before recursively ordering object
+// keys and normalizing numbers.
+func MarshalCanonical(v any) ([]byte, error) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("marshal canonical JSON input: %w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var normalized any
+	if err := decoder.Decode(&normalized); err != nil {
+		return nil, fmt.Errorf("decode canonical JSON input: %w", err)
+	}
+
 	var b bytes.Buffer
-	if err := writeCanonicalJSON(&b, reflect.ValueOf(v)); err != nil {
+	if err := writeCanonicalJSON(&b, reflect.ValueOf(normalized)); err != nil {
 		return nil, err
 	}
 	return b.Bytes(), nil
+}
+
+// DigestCanonical returns the SHA-256 identity of v's canonical JSON.
+func DigestCanonical(v any) (string, error) {
+	canonical, err := MarshalCanonical(v)
+	if err != nil {
+		return "", err
+	}
+	return digestCanonicalBytes(canonical), nil
+}
+
+func digestCanonicalBytes(canonical []byte) string {
+	sum := sha256.Sum256(canonical)
+	return "sha256:" + fmt.Sprintf("%x", sum)
 }
 
 func writeCanonicalJSON(b *bytes.Buffer, v reflect.Value) error {
@@ -68,6 +124,11 @@ func writeCanonicalJSON(b *bytes.Buffer, v reflect.Value) error {
 			return nil
 		}
 		return writeCanonicalJSON(b, v.Elem())
+	}
+	if v.CanInterface() {
+		if number, ok := v.Interface().(json.Number); ok {
+			return writeCanonicalJSONNumber(b, number)
+		}
 	}
 	switch v.Kind() {
 	case reflect.Map:
@@ -125,6 +186,24 @@ func writeCanonicalJSON(b *bytes.Buffer, v reflect.Value) error {
 	return nil
 }
 
+func writeCanonicalJSONNumber(b *bytes.Buffer, number json.Number) error {
+	value := number.String()
+	if !strings.ContainsAny(value, ".eE") {
+		integer, ok := new(big.Int).SetString(value, 10)
+		if !ok {
+			return fmt.Errorf("canonical JSON invalid number %q", value)
+		}
+		b.WriteString(integer.String())
+		return nil
+	}
+	f, err := strconv.ParseFloat(value, 64)
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+		return fmt.Errorf("canonical JSON invalid number %q", value)
+	}
+	b.WriteString(formatCanonicalJSONFloat(f, 64))
+	return nil
+}
+
 func writeJSONString(b *bytes.Buffer, s string) {
 	var encoded bytes.Buffer
 	enc := json.NewEncoder(&encoded)
@@ -157,7 +236,34 @@ func canonicalPricingRowSortValues(row EffectivePricingRow) []string {
 		strconv.FormatInt(row.Rates.CacheWritePerMTok.Microdollars, 10),
 		strconv.FormatInt(row.Rates.CacheReadPerMTok.Microdollars, 10),
 		updatedAt,
+		canonicalPricingBandsSortKey(row.Rates.Bands),
 	}
+}
+
+func canonicalPricingBandsSortKey(bands []PricingBand) string {
+	copied := append([]PricingBand(nil), bands...)
+	sort.SliceStable(copied, func(i, j int) bool {
+		return copied[i].AboveInputTokens < copied[j].AboveInputTokens
+	})
+	var key strings.Builder
+	for _, band := range copied {
+		values := []int64{
+			int64(band.AboveInputTokens),
+			band.InputPerMTok.Microdollars,
+			band.OutputPerMTok.Microdollars,
+			band.CacheWritePerMTok.Microdollars,
+			band.CacheReadPerMTok.Microdollars,
+		}
+		for _, value := range values {
+			key.WriteString(strconv.FormatInt(value, 10))
+			key.WriteByte(',')
+		}
+		if band.UpdatedAt != nil {
+			key.WriteString(band.UpdatedAt.UTC().Format(jsonTimeLayout))
+		}
+		key.WriteByte(';')
+	}
+	return key.String()
 }
 
 func formatCanonicalJSONFloat(f float64, bits int) string {

@@ -52,6 +52,85 @@ func TestCanonicalPricingJSONFormatsNumbers(t *testing.T) {
 	}
 }
 
+func TestMarshalCanonicalHonorsJSONContract(t *testing.T) {
+	type fixture struct {
+		Ignored string         `json:"-"`
+		Second  string         `json:"second"`
+		First   map[string]any `json:"first"`
+		Empty   string         `json:"empty,omitempty"`
+	}
+
+	got, err := MarshalCanonical(fixture{
+		Ignored: "private",
+		Second:  "<visible>",
+		First: map[string]any{
+			"integer": int64(9_007_199_254_740_993),
+			"decimal": 0.000001,
+		},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(
+		t,
+		`{"first":{"decimal":0.000001,"integer":9007199254740993},"second":"<visible>"}`,
+		string(got),
+	)
+}
+
+func TestMarshalCanonicalVectors(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  any
+		bytes  string
+		digest string
+	}{
+		{
+			name: "UTF-16 key order",
+			input: map[string]any{
+				"\ue000":     "bmp",
+				"\U00010000": "astral",
+			},
+			bytes:  `{"𐀀":"astral","":"bmp"}`,
+			digest: "sha256:5e72745dd500f8b8d997ef851679707b89099da29d2aca4b93dfd85810ebaa20",
+		},
+		{
+			name:   "string escaping",
+			input:  map[string]any{"text": "<>&\b\f\u2028\u2029"},
+			bytes:  `{"text":"<>&\b\f\u2028\u2029"}`,
+			digest: "sha256:654cd6bbd6c7311e46686b6cbf6dbfc9f092258e669b2d0ce2f286a5e81dd2bb",
+		},
+		{
+			name:   "exact integer above double range",
+			input:  map[string]any{"n": int64(9_007_199_254_740_993)},
+			bytes:  `{"n":9007199254740993}`,
+			digest: "sha256:4ac8309cc76123ef6c5325ef925fc873e9b5856ec4f844ef1462f9303960378a",
+		},
+		{
+			name: "floating point forms",
+			input: map[string]any{
+				"large":         1e21,
+				"negative_zero": math.Copysign(0, -1),
+				"plain":         1e-6,
+				"small":         1e-7,
+			},
+			bytes:  `{"large":1e+21,"negative_zero":0,"plain":0.000001,"small":1e-7}`,
+			digest: "sha256:940f129aabf5afc6800add24fbf597727e9dc6316f6ae10adbc78a3362b1c483",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			canonical, err := MarshalCanonical(tt.input)
+			require.NoError(t, err)
+			digest, err := DigestCanonical(tt.input)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.bytes, string(canonical))
+			assert.Equal(t, tt.digest, digest)
+		})
+	}
+}
+
 func TestEffectivePricingDigestIgnoresPricingRowInsertionOrder(t *testing.T) {
 	rows := digestFixtureRows(t)
 	reversed := []EffectivePricingRow{rows[1], rows[0]}
@@ -77,6 +156,26 @@ func TestEffectivePricingDigestChangesWhenRateChanges(t *testing.T) {
 	assert.NotEqual(t, digest, changedDigest)
 }
 
+func TestEffectivePricingDigestChangesWhenPricingBandChanges(t *testing.T) {
+	rows := digestFixtureRows(t)
+	rows[0].Rates.Bands = []PricingBand{{
+		AboveInputTokens: 200_000,
+		InputPerMTok:     money.MustParseDollars("6"),
+	}}
+	changed := digestFixtureRows(t)
+	changed[0].Rates.Bands = []PricingBand{{
+		AboveInputTokens: 200_000,
+		InputPerMTok:     money.MustParseDollars("7"),
+	}}
+
+	digest, err := EffectivePricingDigest(rows)
+	require.NoError(t, err)
+	changedDigest, err := EffectivePricingDigest(changed)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, digest, changedDigest)
+}
+
 func TestEffectivePricingDigestFixture(t *testing.T) {
 	rows := digestFixtureRows(t)
 	canonical, err := canonicalPricingJSON(canonicalPricingRows(rows))
@@ -87,7 +186,7 @@ func TestEffectivePricingDigestFixture(t *testing.T) {
 
 	require.Equal(t, "sha256:"+fmt.Sprintf("%x", sum), digest)
 	assert.Equal(t,
-		"sha256:af16a07941c06a54c4ae531ce8d14df0d8a84d2c9e803b4dee93ef95bba6ab28",
+		"sha256:247836888d2c78a5fda3d0e391bbc28a7fd58b4fb3af9b0d5a0e037a9f3faf0b",
 		digest,
 	)
 }

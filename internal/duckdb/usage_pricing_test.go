@@ -127,6 +127,55 @@ func TestDailyUsageKimiDateAliasPricing(t *testing.T) {
 	assert.NotContains(t, got.Pricing.Models, "kimi-k3")
 }
 
+func TestDailyUsageKimiFixedK26AliasPricing(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "moonshot/kimi-k2.6",
+		InputPerMTok: money.MustParseDollars("0.95"),
+	}}), "UpsertModelPricing")
+
+	session := syncSession(
+		"duck-kimi-k2d6", "alpha", "fixed K2.6 alias",
+		"2026-07-20T12:00:00.000Z", 1)
+	session.Agent = "kimi-work"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: session,
+		Messages: []db.Message{{
+			SessionID: "duck-kimi-k2d6",
+			Ordinal:   0,
+			Role:      "assistant",
+			Timestamp: "2026-07-20T12:00:00.000Z",
+			Model:     "k2d6-agent",
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":1000000,"output_tokens":0}`),
+		}},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	got, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From:     "2026-07-20",
+		To:       "2026-07-20",
+		Timezone: "UTC",
+		Model:    "k2d6-agent",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("0.95"), got.Totals.TotalCost)
+	require.NotNil(t, got.Pricing)
+	resolutions := got.Pricing.Models["k2d6-agent"].Resolutions
+	require.Len(t, resolutions, 1)
+	assert.Equal(t, "moonshot/kimi-k2.6", resolutions[0].PricedModel)
+}
+
 // TestSessionUsageKimiDateAliasPricing proves the per-row session
 // usage path (breakdown rows) applies the same date-based mapping as
 // the aggregate path.

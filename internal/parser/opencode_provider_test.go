@@ -148,7 +148,7 @@ func TestOpenCodeStreamingPartialSQLiteFailureContinuesLaterRoots(t *testing.T) 
 		}
 	}
 	sources := newOpenCodeFormatSourceSet(
-		[]string{partialRoot, healthyRoot}, spec,
+		[]string{partialRoot, healthyRoot}, spec, nil,
 	)
 	var paths []string
 
@@ -622,6 +622,80 @@ func TestOpenCodeProviderIgnoresNonDataSQLiteSidecars(t *testing.T) {
 	}
 }
 
+func TestOpenCodeFormatWatchPathRelevance(t *testing.T) {
+	tests := []struct {
+		name  string
+		agent AgentType
+		db    string
+	}{
+		{name: "OpenCode", agent: AgentOpenCode, db: "opencode.db"},
+		{name: "Kilo", agent: AgentKilo, db: "kilo.db"},
+		{name: "MiMoCode", agent: AgentMiMoCode, db: "mimocode.db"},
+		{name: "Icodemate", agent: AgentIcodemate, db: "icodemate.db"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			provider, ok := NewProvider(tc.agent, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+
+			check := func(path string) ChangedPathRelevance {
+				relevance, err := ResolveChangedPathRelevance(
+					t.Context(), provider, ChangedPathRequest{
+						Path: path, WatchRoot: root,
+					},
+				)
+				require.NoError(t, err)
+				return relevance
+			}
+
+			assert.Equal(t, ChangedPathNonData,
+				check(filepath.Join(root, tc.db+"-shm")))
+			assert.Equal(t, ChangedPathNonData,
+				check(filepath.Join(root, tc.db+"-wal")),
+				"missing WAL is non-data")
+			walPath := filepath.Join(root, tc.db+"-wal")
+			require.NoError(t, os.WriteFile(walPath, make([]byte, 32), 0o600))
+			assert.Equal(t, ChangedPathNonData, check(walPath),
+				"32-byte WAL header has no transaction frame")
+			require.NoError(t, os.WriteFile(walPath, make([]byte, 33), 0o600))
+			assert.Equal(t, ChangedPathDataBearing, check(walPath),
+				"WAL data begins after the 32-byte header")
+			assert.Equal(t, ChangedPathDataBearing,
+				check(filepath.Join(root, tc.db)),
+				"the main database remains push-worthy even when absent")
+			assert.Equal(t, ChangedPathUnclassified,
+				check(filepath.Join(root, tc.db+"-backup")))
+			assert.Equal(t, ChangedPathUnclassified,
+				check(filepath.Join(t.TempDir(), tc.db+"-shm")),
+				"the same basename outside the configured root is unclaimed")
+		})
+	}
+}
+
+func TestOpenCodeFormatWatchPathRelevanceFailsOpen(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory-permission stat failures are not portable to this runner")
+	}
+	root := t.TempDir()
+	walDir := filepath.Join(root, "locked")
+	require.NoError(t, os.Mkdir(walDir, 0o700))
+	walPath := filepath.Join(walDir, "opencode.db-wal")
+	require.NoError(t, os.WriteFile(walPath, make([]byte, 64), 0o600))
+	require.NoError(t, os.Chmod(walDir, 0o000))
+	t.Cleanup(func() { require.NoError(t, os.Chmod(walDir, 0o700)) })
+
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{walDir}})
+	require.True(t, ok)
+	relevance, err := ResolveChangedPathRelevance(
+		t.Context(), provider, ChangedPathRequest{Path: walPath, WatchRoot: walDir},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, ChangedPathDataBearing, relevance,
+		"unexpected WAL stat failures must retain the push")
+}
+
 func TestSQLiteWALHasFramesFailsOpenOnStatError(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("directory-permission stat failures are not portable to Windows")
@@ -736,9 +810,12 @@ func TestOpenCodeProviderSQLiteFingerprintUsesDiscoveryMeta(t *testing.T) {
 		"fingerprint must not reopen the SQLite DB for a discovered source")
 	assert.Equal(t, OpenCodeSQLiteVirtualPath(dbPath, "ses_meta"), fp.Key)
 	assert.Equal(t, int64(1700000010000000000), fp.MTimeNS,
-		"fingerprint mtime must be the discovered time_updated in ns")
-	assert.Equal(t, int64(len(garbage)), fp.Size,
-		"fingerprint size stays the shared container file size")
+		"fingerprint mtime must be the discovered composite in ns")
+	assert.Zero(t, fp.Size,
+		"a per-session fingerprint must not carry the shared container's "+
+			"size: every session in the root shares one opencode.db, so any "+
+			"one session's write would change every other session's "+
+			"fingerprint and drop its freshness skip")
 }
 
 func TestOpenCodeProviderHybridDiscoveryFiltersSQLiteDuplicate(t *testing.T) {
@@ -1098,5 +1175,262 @@ func newTestDBAt(
 	copyOpenCodeSchemaTemplate(t, dbPath)
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err, "open test db")
+	// Close before TempDir cleanup: Windows cannot delete a database file
+	// that still has an open handle. Close is idempotent, so tests that
+	// close the writer themselves are unaffected.
+	t.Cleanup(func() { _ = db.Close() })
 	return dbPath, &OpenCodeSeeder{db: db, t: t}, db
+}
+
+// TestOpenCodeSingleSessionMtimeDoesNotScanContainer pins the query shape of
+// the single-session composite lookup. Reusing the streaming form's grouped
+// subqueries here materializes an aggregate over every message and part in the
+// container before the outer WHERE narrows to one session, so each per-session
+// lookup would scan the whole archive. Assert the plan touches the child tables
+// through their session_id indexes rather than a full scan.
+func TestOpenCodeSingleSessionMtimeDoesNotScanContainer(t *testing.T) {
+	root := t.TempDir()
+	_, seeder, db := newTestDBAt(t, filepath.Join(root, "opencode.db"))
+	seeder.AddProject("prj_1", "/home/user/code/app")
+	seeder.AddSession(
+		"ses_a", "prj_1", "", "A", 1700000000000, 1700000010000,
+	)
+	t.Cleanup(func() { _ = db.Close() })
+
+	query := "SELECT " + openCodeSessionCompositeMtimeExpr +
+		" FROM session s" + openCodeSessionCompositeMtimeJoins +
+		" WHERE s.id = ?"
+	rows, err := db.Query("EXPLAIN QUERY PLAN "+query, "ses_a")
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var plan strings.Builder
+	for rows.Next() {
+		var id, parent, notUsed int
+		var detail string
+		require.NoError(t, rows.Scan(&id, &parent, &notUsed, &detail))
+		plan.WriteString(detail)
+		plan.WriteString("\n")
+	}
+	require.NoError(t, rows.Err())
+
+	got := plan.String()
+	for _, table := range []string{"message", "part"} {
+		assert.NotContains(t, got, "SCAN "+table,
+			"single-session composite mtime must not full-scan %s; plan:\n%s",
+			table, got)
+		// SEARCH alone is not proof of a seek: SQLite reports SEARCH for some
+		// aggregate plans without an index, so require the index explicitly.
+		assert.Regexp(t,
+			`(?s)(SEARCH|SCAN) `+table+`[^\n]*USING (COVERING )?INDEX`,
+			got,
+			"single-session composite mtime must reach %s through an index; "+
+				"plan:\n%s", table, got)
+	}
+}
+
+// TestOpenCodeWatermarkOnlyQuerySkipsDigestScans pins that the mtime-only path
+// does not compute the digest aggregates. OpenCodeSourceMtime backs the session
+// watcher's 1.5s poll, so pulling the eight child COUNT/SUM/MIN/MAX subqueries
+// in there would burn child-range scans per tick for a discarded value.
+func TestOpenCodeWatermarkOnlyQuerySkipsDigestScans(t *testing.T) {
+	watermarkOnly := "SELECT " + openCodeSessionCompositeMtimeExpr +
+		" FROM session s" + openCodeSessionCompositeMtimeJoins +
+		" WHERE s.id = ?"
+	full := "SELECT " + openCodeSessionCompositeMtimeExpr + ", " +
+		openCodeSessionCompositeCountsExpr +
+		" FROM session s" + openCodeSessionCompositeMtimeJoins +
+		" WHERE s.id = ?"
+
+	assert.NotContains(t, watermarkOnly, "COUNT(",
+		"the mtime-only query must not compute child counts")
+	assert.NotContains(t, watermarkOnly, "group_concat(",
+		"the mtime-only query must not build child identities")
+	assert.Contains(t, full, "COUNT(",
+		"the fingerprint query must still compute the digest aggregates")
+
+	// Both must be executable, not merely string-shaped: assert against a real
+	// container so a query that only looks right still fails here.
+	root := t.TempDir()
+	_, seeder, db := newTestDBAt(t, filepath.Join(root, "opencode.db"))
+	seeder.AddProject("prj_1", "/home/user/code/app")
+	seeder.AddSession(
+		"ses_a", "prj_1", "", "A", 1700000000000, 1700000010000,
+	)
+	t.Cleanup(func() { _ = db.Close() })
+
+	var watermark int64
+	require.NoError(t,
+		db.QueryRow(watermarkOnly, "ses_a").Scan(&watermark),
+		"the mtime-only query must execute")
+	assert.Equal(t, int64(1700000010000), watermark)
+
+	var (
+		w, st, pt, mn, pn int64
+		mIdent, pIdent    string
+	)
+	require.NoError(t,
+		db.QueryRow(full, "ses_a").Scan(
+			&w, &st, &pt, &mn, &pn, &mIdent, &pIdent,
+		),
+		"the fingerprint query must execute")
+	assert.Equal(t, watermark, w,
+		"both queries must agree on the watermark")
+}
+
+// TestOpenCodeChangedPathWatermarkMergeEmitsOnlyUncovered pins the bounded
+// changed-path listing: with a stored-freshness pager supplied, the provider
+// merges the streamed watermark listing against paged stored authority and
+// emits only members whose watermark advanced. The pager here returns one
+// row per page, so the assertion that every member still resolves correctly
+// also proves the merge consumes the stored side incrementally instead of
+// materializing the container's membership.
+func TestOpenCodeChangedPathWatermarkMergeEmitsOnlyUncovered(t *testing.T) {
+	dbPath, seeder, _ := newTestDB(t)
+	seeder.AddProject("proj", "/home/user/app")
+	const base = int64(1779012000000)
+	seeder.AddSession("ses-a", "proj", "", "a", base, base)
+	seeder.AddSession("ses-b", "proj", "", "b", base, base+1000)
+	seeder.AddSession("ses-c", "proj", "", "c", base, base)
+
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{
+		Roots: []string{filepath.Dir(dbPath)}, Machine: "local",
+	})
+	require.True(t, ok)
+
+	// Stored authority covers ses-a fully and ses-b only through an older
+	// watermark; ses-c has no stored row and must be kept.
+	stored := []StoredMemberFreshness{
+		{Path: dbPath + "#ses-a", CoveredThroughNS: base * 1_000_000},
+		{Path: dbPath + "#ses-b", CoveredThroughNS: base * 1_000_000},
+	}
+	pagerCalls := 0
+	pager := func(
+		_ context.Context, after string, limit int,
+	) ([]StoredMemberFreshness, bool, error) {
+		pagerCalls++
+		require.Positive(t, limit, "pages must be bounded")
+		for _, row := range stored {
+			if row.Path > after {
+				return []StoredMemberFreshness{row}, false, nil
+			}
+		}
+		return nil, true, nil
+	}
+
+	sources, err := provider.SourcesForChangedPath(
+		t.Context(), ChangedPathRequest{
+			Path: dbPath, WatchRoot: filepath.Dir(dbPath),
+			AllowWatermarkOnlySources: true,
+			StoredMemberFreshnessPage: pager,
+		},
+	)
+	require.NoError(t, err)
+	var paths []string
+	for _, source := range sources {
+		paths = append(paths, source.DisplayPath)
+	}
+	assert.ElementsMatch(t,
+		[]string{dbPath + "#ses-b", dbPath + "#ses-c"}, paths,
+		"only the advanced member and the unknown member are emitted")
+	assert.GreaterOrEqual(t, pagerCalls, 2,
+		"the stored side is consumed page by page")
+}
+
+// TestOpenCodeChangedPathWatermarkMergeFailsOpenOnPagerError pins the
+// fail-open contract: a stored-side failure keeps every remaining source so
+// the caller's per-file gates decide, matching the pre-merge behavior of a
+// failed freshness query.
+func TestOpenCodeChangedPathWatermarkMergeFailsOpenOnPagerError(t *testing.T) {
+	dbPath, seeder, _ := newTestDB(t)
+	seeder.AddProject("proj", "/home/user/app")
+	const base = int64(1779012000000)
+	seeder.AddSession("ses-a", "proj", "", "a", base, base)
+	seeder.AddSession("ses-b", "proj", "", "b", base, base)
+
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{
+		Roots: []string{filepath.Dir(dbPath)}, Machine: "local",
+	})
+	require.True(t, ok)
+
+	pager := func(
+		context.Context, string, int,
+	) ([]StoredMemberFreshness, bool, error) {
+		return nil, false, errors.New("stored freshness unavailable")
+	}
+	sources, err := provider.SourcesForChangedPath(
+		t.Context(), ChangedPathRequest{
+			Path: dbPath, WatchRoot: filepath.Dir(dbPath),
+			AllowWatermarkOnlySources: true,
+			StoredMemberFreshnessPage: pager,
+		},
+	)
+	require.NoError(t, err)
+	assert.Len(t, sources, 2,
+		"a pager failure must keep every source for the per-file gates")
+}
+
+// TestOpenCodeChangedPathWatermarkMergeMaterializesOnlyChangedBatch is the
+// cardinality-scaling regression for the watcher fast path: a container with
+// many stored-covered sessions and one changed session must emit exactly the
+// changed batch. Before the merge, the listing materialized every session as
+// a SourceRef and the caller loaded every stored member into a map, so each
+// database event allocated O(total sessions); the emitted-length assertion
+// here fails against any regression to that shape, and the small/large
+// comparison pins that per-event output does not scale with the archive.
+func TestOpenCodeChangedPathWatermarkMergeMaterializesOnlyChangedBatch(
+	t *testing.T,
+) {
+	emittedForContainerOf := func(sessions int) int {
+		dbPath, seeder, _ := newTestDB(t)
+		seeder.AddProject("proj", "/home/user/app")
+		const base = int64(1779012000000)
+		var stored []StoredMemberFreshness
+		seeder.InTransaction(func(seeder *OpenCodeSeeder) {
+			for i := range sessions {
+				id := fmt.Sprintf("ses-%06d", i)
+				seeder.AddSession(id, "proj", "", id, base, base)
+				stored = append(stored, StoredMemberFreshness{
+					Path: dbPath + "#" + id, CoveredThroughNS: base * 1_000_000,
+				})
+			}
+		})
+		// One session advances past its stored coverage.
+		changed := fmt.Sprintf("ses-%06d", sessions/2)
+		_, err := seeder.db.ExecContext(t.Context(),
+			"UPDATE session SET time_updated = ? WHERE id = ?",
+			base+1000, changed,
+		)
+		require.NoError(t, err, "advance changed session")
+
+		provider, ok := NewProvider(AgentOpenCode, ProviderConfig{
+			Roots: []string{filepath.Dir(dbPath)}, Machine: "local",
+		})
+		require.True(t, ok)
+		pager := func(
+			_ context.Context, after string, limit int,
+		) ([]StoredMemberFreshness, bool, error) {
+			start := 0
+			for start < len(stored) && stored[start].Path <= after {
+				start++
+			}
+			end := min(start+limit, len(stored))
+			return stored[start:end], end == len(stored), nil
+		}
+		sources, err := provider.SourcesForChangedPath(
+			t.Context(), ChangedPathRequest{
+				Path: dbPath, WatchRoot: filepath.Dir(dbPath),
+				AllowWatermarkOnlySources: true,
+				StoredMemberFreshnessPage: pager,
+			},
+		)
+		require.NoError(t, err)
+		return len(sources)
+	}
+
+	small := emittedForContainerOf(8)
+	large := emittedForContainerOf(1200)
+	assert.Equal(t, 1, small)
+	assert.Equal(t, small, large,
+		"the emitted batch must not scale with container size")
 }

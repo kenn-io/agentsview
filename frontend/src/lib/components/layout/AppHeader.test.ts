@@ -27,7 +27,9 @@ vi.mock("../../utils/clipboard.js", () => ({
 
 import { sessions } from "../../stores/sessions.svelte.js";
 import { sync } from "../../stores/sync.svelte.js";
+import { settings } from "../../stores/settings.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
+import { router } from "../../stores/router.svelte.js";
 import { setLocale } from "../../i18n/index.js";
 import type { Session } from "../../api/types.js";
 
@@ -61,8 +63,13 @@ describe("AppHeader export actions", () => {
     sessions.activeSessionId = "sess-123";
     sessions.sessions = [testSession()];
     sync.serverVersion = null;
+    settings.loaded = true;
+    settings.readOnly = false;
+    settings.error = null;
     ui.isMobileViewport = false;
+    ui.sidebarOpen = true;
     ui.followLatest = false;
+    router.route = "sessions";
     setLocale("en");
   });
 
@@ -72,6 +79,12 @@ describe("AppHeader export actions", () => {
       component = undefined;
     }
     document.body.innerHTML = "";
+    ui.isMobileViewport = false;
+    ui.sidebarOpen = true;
+    router.route = "sessions";
+    settings.loaded = false;
+    settings.readOnly = false;
+    settings.error = null;
   });
 
   it("copies markdown export link from export menu", async () => {
@@ -158,7 +171,7 @@ describe("AppHeader export actions", () => {
     expect(followButton!.classList.contains("active")).toBe(false);
   });
 
-  it("labels compact title-bar actions with hover hints", async () => {
+  it("keeps the sidebar toggle out of the desktop title bar", async () => {
     component = mount(AppHeader, { target: document.body });
     await tick();
 
@@ -169,10 +182,53 @@ describe("AppHeader export actions", () => {
       'button[aria-label="Keyboard shortcuts"]',
     );
 
-    expect(sidebarButton).not.toBeNull();
-    expect(sidebarButton?.title).toBe("Toggle sidebar (b)");
+    expect(sidebarButton).toBeNull();
     expect(shortcutsButton).not.toBeNull();
     expect(shortcutsButton?.title).toBe("Keyboard shortcuts (?)");
+  });
+
+  it("keeps the mobile hamburger and its drawer behavior", async () => {
+    ui.isMobileViewport = true;
+    ui.sidebarOpen = true;
+
+    component = mount(AppHeader, { target: document.body });
+    await tick();
+
+    const sidebarButton = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Toggle sidebar"]',
+    );
+    expect(sidebarButton).not.toBeNull();
+    expect(sidebarButton?.title).toBe("Toggle sidebar (b)");
+
+    sidebarButton!.click();
+    await tick();
+
+    expect(ui.sidebarOpen).toBe(false);
+  });
+
+  it("opens the sessions drawer from another mobile route", async () => {
+    ui.isMobileViewport = true;
+    ui.sidebarOpen = false;
+    router.route = "usage";
+
+    component = mount(AppHeader, { target: document.body });
+    await tick();
+
+    const sidebarButton = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Toggle sidebar"]',
+    );
+
+    expect(sidebarButton).not.toBeNull();
+    expect(sidebarButton?.getAttribute("aria-controls")).toBe(
+      "session-sidebar",
+    );
+    expect(sidebarButton?.getAttribute("aria-expanded")).toBe("false");
+
+    sidebarButton!.click();
+    await tick();
+
+    expect(router.route).toBe("sessions");
+    expect(ui.sidebarOpen).toBe(true);
   });
 
   it("renders every route as a primary-nav tab", async () => {
@@ -191,9 +247,12 @@ describe("AppHeader export actions", () => {
       "Usage",
       "Activity",
       "Trends",
+      "Recall",
       "Pinned",
       "Insights",
       "Trash",
+      "Recent Edits",
+      "Data",
     ]) {
       expect(labels).toContain(expected);
     }
@@ -235,6 +294,23 @@ describe("AppHeader export actions", () => {
     expect(
       refreshButton?.querySelector("svg.lucide-database-backup"),
     ).not.toBeNull();
+    expect(document.body.textContent).not.toContain("Recall");
+  });
+
+  it("hides Recall when settings report a read-only backend", async () => {
+    sync.serverVersion = {
+      version: "dev",
+      commit: "unknown",
+      build_date: "",
+      read_only: false,
+    };
+    settings.readOnly = true;
+
+    component = mount(AppHeader, { target: document.body });
+    await tick();
+
+    expect(document.body.textContent).toContain("Sessions");
+    expect(document.body.textContent).not.toContain("Recall");
   });
 
   it("renders translated shell navigation when locale is Simplified Chinese", async () => {

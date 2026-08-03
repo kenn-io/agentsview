@@ -358,7 +358,36 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // instead of the generated checkout leaf, and generic hosting fragments defer
 // to an enclosing live repository. Existing rows need re-parsing so activity
 // is neither fragmented by worktree names nor claimed by nested fixture paths.)
-const dataVersion = 75
+// (76: Copilot CLI tool execution boundaries. Re-parsing persists
+// tool.execution_start and tool.execution_complete timestamps as result events
+// so Session Analysis excludes resumed-session idle time from completed calls.)
+// (77: Vibe usage reparse. The Vibe parser now reads
+// stats.session_cached_tokens, splitting the provider cache-hit count out of
+// input tokens into the usage event's cache-read field. Existing rows need
+// re-parsing so the cached prefix is priced at the discounted cache-read rate
+// instead of the full input rate. The same reparse replaces parser-source
+// project identity snapshots that older mapping behavior could persist with
+// the mapped target label before incremental ingestion is allowed to reuse
+// them.)
+//
+// (78: Devin timestamp reparse. The Devin parser read sessions.created_at,
+// sessions.last_activity_at, and message_nodes.created_at as epoch
+// milliseconds when Devin writes epoch seconds, so every existing Devin row
+// carries 1970-era started_at/ended_at and message timestamps that were
+// discarded as invalid. Existing rows need re-parsing to backfill real
+// timestamps. A fingerprint change alone cannot cover this: for a message-node
+// fallback session whose sessions row has no usable created_at or
+// last_activity_at, the Devin fingerprint hashes only raw epoch integers and
+// zero-time metadata, so it is byte-identical before and after the fix and
+// incremental sync would skip the correction.)
+// (79: Claude launch/prompt provenance. Re-parsing populates the new
+// sessions.session_kind and messages.prompt_source columns from top-level
+// sessionKind and promptSource fields on existing Claude rows.)
+// (80: Kimi Code tool-step usage reparse. Protocol-1.4 transcripts can persist
+// tool.result before step.end, so existing Kimi and Kimi Work rows may omit
+// per-message usage for tool-calling steps. Re-parsing attaches the trailing
+// step usage to the assistant tool-call message.)
+const dataVersion = 80
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -565,8 +594,9 @@ type DB struct {
 	cursorMu     sync.RWMutex
 	cursorSecret []byte
 
-	customPricing        map[string]config.CustomModelRate
-	customPricingSources map[string]export.PricingRowSource
+	customPricing       map[string]config.CustomModelRate
+	effectivePricing    map[string]export.ModelRates
+	emptyCatalogPricing map[string]export.ModelRates
 
 	checkpointMu   sync.Mutex
 	checkpointStop chan struct{}
@@ -811,17 +841,32 @@ func (db *DB) requireWritable() error {
 
 func (db *DB) SetCustomPricing(p map[string]config.CustomModelRate) {
 	db.customPricing = p
-	db.customPricingSources = nil
+	db.effectivePricing = nil
 }
 
 // SetEffectivePricing installs in-memory pricing rows with explicit provenance
 // sources for read-only fallback paths that cannot seed model_pricing.
 func (db *DB) SetEffectivePricing(
-	p map[string]config.CustomModelRate,
-	sources map[string]export.PricingRowSource,
+	p map[string]export.ModelRates,
 ) {
-	db.customPricing = p
-	db.customPricingSources = sources
+	db.customPricing = nil
+	db.effectivePricing = make(map[string]export.ModelRates, len(p))
+	for model, rates := range p {
+		rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
+		db.effectivePricing[model] = rates
+	}
+}
+
+// SetEmptyCatalogPricing installs in-memory rates that are used only when the
+// query source loading pricing sees no stored catalog rows.
+func (db *DB) SetEmptyCatalogPricing(
+	p map[string]export.ModelRates,
+) {
+	db.emptyCatalogPricing = make(map[string]export.ModelRates, len(p))
+	for model, rates := range p {
+		rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
+		db.emptyCatalogPricing[model] = rates
+	}
 }
 
 // SetCursorSecret updates the secret key used for cursor signing.
@@ -1139,6 +1184,11 @@ CREATE TABLE IF NOT EXISTS session_project_identity_snapshots (
     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
 
+CREATE INDEX IF NOT EXISTS idx_session_project_identity_snapshots_evidence
+    ON session_project_identity_snapshots(
+        machine, root_path, git_remote, observed_at DESC, session_id
+    );
+
 CREATE TABLE IF NOT EXISTS background_migrations (
     name            TEXT PRIMARY KEY,
     state           TEXT NOT NULL,
@@ -1386,6 +1436,7 @@ var readOnlyRequiredTables = []string{
 	"session_project_identity_snapshots",
 	"pg_sync_state",
 	"model_pricing",
+	"model_pricing_bands",
 	"secret_findings",
 	"recall_entries",
 	"recall_evidence",
@@ -1736,6 +1787,14 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE sessions ADD COLUMN display_name TEXT",
 		},
 		{
+			// Preserve the current parent exactly once when the private parser
+			// provenance column is introduced. Running the UPDATE on every open
+			// would let a later linker-derived effective parent overwrite it.
+			"sessions", "parser_parent_session_id",
+			"ALTER TABLE sessions ADD COLUMN parser_parent_session_id TEXT;" +
+				" UPDATE sessions SET parser_parent_session_id = parent_session_id",
+		},
+		{
 			"sessions", "session_name",
 			"ALTER TABLE sessions ADD COLUMN session_name TEXT",
 		},
@@ -1790,6 +1849,10 @@ func schemaColumnMigrations() []schemaColumnMigration {
 		{
 			"messages", "source_subtype",
 			"ALTER TABLE messages ADD COLUMN source_subtype TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"messages", "prompt_source",
+			"ALTER TABLE messages ADD COLUMN prompt_source TEXT NOT NULL DEFAULT ''",
 		},
 		{
 			"messages", "source_uuid",
@@ -1960,6 +2023,10 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE sessions ADD COLUMN entrypoint TEXT NOT NULL DEFAULT ''",
 		},
 		{
+			"sessions", "session_kind",
+			"ALTER TABLE sessions ADD COLUMN session_kind TEXT NOT NULL DEFAULT ''",
+		},
+		{
 			"sessions", "transcript_fidelity",
 			"ALTER TABLE sessions ADD COLUMN transcript_fidelity TEXT NOT NULL DEFAULT ''",
 		},
@@ -2078,6 +2145,10 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE worktree_project_mappings ADD COLUMN layout TEXT NOT NULL DEFAULT 'explicit'",
 		},
 		{
+			"worktree_project_mappings", "original_project",
+			"ALTER TABLE worktree_project_mappings ADD COLUMN original_project TEXT NOT NULL DEFAULT ''",
+		},
+		{
 			"project_identity_observations", "session_id",
 			"ALTER TABLE project_identity_observations ADD COLUMN session_id TEXT NOT NULL DEFAULT ''",
 		},
@@ -2120,15 +2191,31 @@ func schemaColumnMigrations() []schemaColumnMigration {
 	}
 }
 
-func applySchemaColumnMigrations(
-	queryRow func(string, ...any) rowScanner,
-	exec func(string, ...any) (sql.Result, error),
-) error {
-	if _, err := exec(provider_freshnessDDL); err != nil {
+func applySchemaColumnMigrations(w *writerHandle) error {
+	tx, err := w.BeginTx(context.Background(), nil)
+	if err != nil {
+		return fmt.Errorf("starting column migration transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(provider_freshnessDDL); err != nil {
 		return fmt.Errorf(
 			"creating provider_freshness side-table: %w", err)
 	}
-	return applyColumnMigrations(schemaColumnMigrations(), queryRow, exec)
+
+	if err := applyColumnMigrations(
+		schemaColumnMigrations(),
+		func(query string, args ...any) rowScanner {
+			return tx.QueryRow(query, args...)
+		},
+		tx.Exec,
+	); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing column migrations: %w", err)
+	}
+	return nil
 }
 
 func applyColumnMigrations(
@@ -2275,6 +2362,7 @@ WHEN (
     OLD.agent IS NOT NEW.agent OR
     OLD.agent_label IS NOT NEW.agent_label OR
     OLD.entrypoint IS NOT NEW.entrypoint OR
+    OLD.session_kind IS NOT NEW.session_kind OR
     OLD.first_message IS NOT NEW.first_message OR
     OLD.display_name IS NOT NEW.display_name OR
     OLD.session_name IS NOT NEW.session_name OR
@@ -2368,10 +2456,13 @@ func (db *DB) migrateColumns() error {
 	if err := migrateMoneyColumnsLocked(w); err != nil {
 		return err
 	}
+	if _, err := w.Exec(modelPricingBandsSchemaSQL); err != nil {
+		return fmt.Errorf("creating model pricing bands: %w", err)
+	}
 	if _, err := w.Exec(artifactSessionQueueTriggerDropsSQL); err != nil {
 		return fmt.Errorf("dropping artifact session queue triggers: %w", err)
 	}
-	if err := applySchemaColumnMigrations(w.QueryRow, w.Exec); err != nil {
+	if err := applySchemaColumnMigrations(w); err != nil {
 		return err
 	}
 	if _, err := w.Exec(artifactSessionQueueTriggerCreatesSQL); err != nil {
@@ -2450,6 +2541,7 @@ func (db *DB) migrateColumns() error {
 			path_prefix TEXT NOT NULL,
 			layout      TEXT NOT NULL DEFAULT 'explicit',
 			project     TEXT NOT NULL,
+			original_project TEXT NOT NULL DEFAULT '',
 			enabled     INTEGER NOT NULL DEFAULT 1,
 			created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
 			updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
@@ -2517,6 +2609,10 @@ func (db *DB) migrateColumns() error {
 			key                TEXT NOT NULL DEFAULT '',
 			FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 		);
+		CREATE INDEX IF NOT EXISTS idx_session_project_identity_snapshots_evidence
+			ON session_project_identity_snapshots(
+				machine, root_path, git_remote, observed_at DESC, session_id
+			);
 	`); err != nil {
 		return fmt.Errorf(
 			"creating project identity metadata: %w", err,
@@ -2557,6 +2653,20 @@ func (db *DB) migrateColumns() error {
 	}
 	return nil
 }
+
+const modelPricingBandsSchemaSQL = `
+CREATE TABLE IF NOT EXISTS model_pricing_bands (
+    model_pattern TEXT NOT NULL
+        REFERENCES model_pricing(model_pattern) ON DELETE CASCADE,
+    above_input_tokens INTEGER NOT NULL CHECK (above_input_tokens > 0),
+    input_microdollars_per_mtok INTEGER NOT NULL,
+    output_microdollars_per_mtok INTEGER NOT NULL,
+    cache_creation_microdollars_per_mtok INTEGER NOT NULL,
+    cache_read_microdollars_per_mtok INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (model_pattern, above_input_tokens)
+);`
 
 const (
 	bootstrapArtifactExportQueueSQL = `

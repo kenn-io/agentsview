@@ -592,7 +592,7 @@ func loadPushMessageTokenFingerprints(
 		SELECT session_id, ordinal, model, token_usage, context_tokens,
 			output_tokens, has_context_tokens, has_output_tokens,
 			claude_message_id, claude_request_id,
-			source_type, source_subtype, source_uuid,
+			source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain, is_compact_boundary
 		 FROM messages
 		WHERE session_id = ANY($1)
@@ -610,13 +610,13 @@ func loadPushMessageTokenFingerprints(
 		var model, tokenUsage string
 		var hasContextTokens, hasOutputTokens bool
 		var claudeMsgID, claudeReqID string
-		var srcType, srcSubtype, srcUUID, srcParentUUID string
+		var srcType, srcSubtype, promptSource, srcUUID, srcParentUUID string
 		var isSidechain, isCompactBoundary bool
 		if err := rows.Scan(
 			&sessionID, &ordinal, &model, &tokenUsage, &contextTokens,
 			&outputTokens, &hasContextTokens, &hasOutputTokens,
 			&claudeMsgID, &claudeReqID,
-			&srcType, &srcSubtype, &srcUUID, &srcParentUUID,
+			&srcType, &srcSubtype, &promptSource, &srcUUID, &srcParentUUID,
 			&isSidechain, &isCompactBoundary,
 		); err != nil {
 			return err
@@ -629,7 +629,7 @@ func loadPushMessageTokenFingerprints(
 		fmt.Fprintf(
 			b,
 			"%d|%d:%s|%d:%s|%d|%d|%t|%t|%s|%s|"+
-				"%d:%s|%d:%s|%d:%s|%d:%s|%t|%t;",
+				"%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%t|%t;",
 			ordinal,
 			len(model), model,
 			len(tokenUsage), tokenUsage,
@@ -638,6 +638,7 @@ func loadPushMessageTokenFingerprints(
 			claudeMsgID, claudeReqID,
 			len(srcType), srcType,
 			len(srcSubtype), srcSubtype,
+			len(promptSource), promptSource,
 			len(srcUUID), srcUUID,
 			len(srcParentUUID), srcParentUUID,
 			isSidechain, isCompactBoundary,

@@ -292,14 +292,22 @@ Every message parsed from a session file stores its raw `token_usage` JSON
 (input, output, cache creation, cache read) and the model name reported by the
 agent. The usage command:
 
-1. Loads the `model_pricing` table into memory once per invocation. The table
-   holds per-million-token rates for input, output, cache creation, and cache
-   read.
+1. Loads `model_pricing` and its `model_pricing_bands` children into memory
+   once per invocation. They hold base per-million-token rates and any
+   whole-request input thresholds published by the pricing catalog.
 1. Scans `messages` filtered by the requested date range and agent, parsing each
    row's `token_usage` blob in Go with `gjson` — faster than SQLite's per-row
    `json_extract`.
-1. Multiplies each row's tokens by the model's rates, buckets the result by
-   local-time day, and aggregates per model.
+1. Selects the applicable complete rate tuple for each request, multiplies that
+   row's tokens by the selected rates, then buckets and aggregates the result.
+
+Message usage and usage events tied to a `message_ordinal` represent individual
+requests. For those rows, AgentsView adds uncached input, cache creation, and
+cache-read input, then selects the highest catalog band whose threshold is
+strictly below that total. Exactly 272,000 tokens therefore retain a 272K base
+rate while 272,001 select its band. Unbound usage events may summarize several
+requests, so they conservatively use the base rate instead of applying a
+threshold to an aggregate.
 
 The default window is the last 30 days; pass `--all` to scan the full history.
 
@@ -321,6 +329,11 @@ to skip the fetch entirely and always use the embedded fallback.
 The embedded fallback is updated with AgentsView releases, so the numbers are as
 current as your installed version. For up-to-the-minute rates, leave `--offline`
 off.
+
+LiteLLM's standard whole-request 200K and 272K token rates are preserved in
+both fetched and embedded catalogs. Processing variants such as Batch, Flex,
+Priority, regional, and one-hour cache pricing are not inferred when the stored
+usage does not identify that service tier.
 
 As of 0.32.0, the embedded fallback includes `claude-opus-4-7` at the same Opus
 tier used for 4.6 and 4.8, so offline reports and fresh installs price Opus 4.7
@@ -359,7 +372,8 @@ special characters). Custom rates take precedence over both the LiteLLM fetch
 and the embedded fallback, and apply to the Usage dashboard, the
 `agentsview usage` CLI, and `pg serve` alike. A custom entry replaces the full
 rate row for that model, so omitted fields are treated as zero rather than
-falling through to LiteLLM. Models without a custom entry continue to resolve
+falling through to LiteLLM. A custom row is flat and suppresses any fetched
+request bands for that model. Models without a custom entry continue to resolve
 through LiteLLM as before.
 
 ### Copilot CLI Token Metrics
@@ -549,17 +563,33 @@ to X" still works.
       "models": []
     },
     "models": {
-      "claude-opus-4-6": {
+      "gpt-5.4": {
         "cost_source": "computed",
         "resolutions": [
           {
-            "priced_model": "claude-opus-4-6",
-            "matched_pattern": "claude-opus-4-6",
-            "input_cost_per_mtok": {"microdollars": 15000000},
-            "output_cost_per_mtok": {"microdollars": 75000000},
-            "cache_write_cost_per_mtok": {"microdollars": 18750000},
-            "cache_read_cost_per_mtok": {"microdollars": 1500000},
-            "cost_source": "computed"
+            "priced_model": "gpt-5.4",
+            "matched_pattern": "gpt-5.4",
+            "input_cost_per_mtok": {"microdollars": 2500000},
+            "output_cost_per_mtok": {"microdollars": 15000000},
+            "cache_write_cost_per_mtok": {"microdollars": 0},
+            "cache_read_cost_per_mtok": {"microdollars": 250000},
+            "cost_source": "computed",
+            "bands": [
+              {
+                "above_input_tokens": 272000,
+                "input_cost_per_mtok": {"microdollars": 5000000},
+                "output_cost_per_mtok": {"microdollars": 22500000},
+                "cache_write_cost_per_mtok": {"microdollars": 0},
+                "cache_read_cost_per_mtok": {"microdollars": 500000}
+              }
+            ],
+            "application": {
+              "base_request_count": 14,
+              "aggregate_row_count": 0,
+              "bands": [
+                {"above_input_tokens": 272000, "request_count": 2}
+              ]
+            }
           }
         ]
       }
@@ -640,11 +670,13 @@ Usage and activity already emitted `schema_version: 1` before 0.38, and the
 session-summary v1 contract shipped in 0.37.1. Releases 0.38.0 and 0.38.1
 emitted the substantially revised project-evidence shape while still reporting
 version 1. Version 2 corrected those markers, version 3 introduced exact
-microdollar money objects, and current builds emit version 4 with resolved-model
-pricing provenance. The two transitional releases must not be treated as
-v1-compatible. The commands do not provide an earlier-version output mode.
-Consumers should require the expected `schema_version` and ignore unknown
-additive fields.
+microdollar money objects, and version 4 adds resolved-model pricing provenance
+with request-pricing bands and application counts. Version 4 is a contract bump
+because band selection changes pricing semantics and bands participate in digest
+canonicalization, not merely because fields were added. The two transitional
+releases must not be treated as v1-compatible. The commands do not provide an
+earlier-version output mode. Consumers should require the expected
+`schema_version` and ignore unknown additive fields.
 
 | Change                                                                                | Requires `schema_version` bump? |
 | ------------------------------------------------------------------------------------- | ------------------------------- |
@@ -670,8 +702,25 @@ distinct model names reported in payload rows, not by canonical pricing names or
 every row in the pricing table. Each reported-model entry has an aggregate
 `cost_source` and a `resolutions` array. A resolution reports `priced_model`,
 `matched_pattern`, `input_cost_per_mtok`, `output_cost_per_mtok`,
-`cache_write_cost_per_mtok`, `cache_read_cost_per_mtok`, and `cost_source`.
-Resolutions are sorted by `priced_model` and then `matched_pattern`.
+`cache_write_cost_per_mtok`, `cache_read_cost_per_mtok`, `cost_source`, `bands`,
+and `application`. Resolutions are sorted by `priced_model` and then
+`matched_pattern`.
+
+Each `bands` item is a complete rate tuple with an exclusive
+`above_input_tokens` threshold. `application` reports how computed rows in this
+payload used those rates:
+
+- `base_request_count` counts request-scoped rows that selected no band.
+- `aggregate_row_count` counts unbound aggregate rows forced to base rates.
+- `bands` lists each selected threshold and its `request_count`.
+
+Reported-only rows do not increment application counts. These counts preserve
+the difference between one above-threshold request and several smaller requests
+after their tokens and costs have been aggregated.
+
+When no catalog bands or applied bands exist, their canonical JSON value is
+`null`, not `[]`. Consumers should accept future additive fields but can rely on
+that null-versus-nonempty-array representation within schema version 4.
 
 Ordinary models have one resolution whose `priced_model` is the reported model.
 Timestamp-aware aliases can have more than one resolution in a report. For
@@ -714,7 +763,12 @@ hashed with SHA-256 and prefixed with `sha256:`. The digest input is exactly a
 `{"rows":[...]}` object. Rows are sorted by `model_pattern` bytewise ascending,
 then row `source`, the four rate fields, and `updated_at`; each row contains
 exactly `model_pattern`, `input_per_mtok`, `output_per_mtok`,
-`cache_write_per_mtok`, `cache_read_per_mtok`, `source`, and `updated_at`.
+`cache_write_per_mtok`, `cache_read_per_mtok`, `source`, `updated_at`, and
+`bands`. Bands are sorted by `above_input_tokens`; each canonical band contains
+exactly `above_input_tokens`, `input_per_mtok`, `output_per_mtok`,
+`cache_write_per_mtok`, `cache_read_per_mtok`, and `updated_at`. Application
+counts describe one report and are deliberately excluded from the catalog
+digest.
 `updated_at` is `null` or a UTC RFC3339 timestamp such as
 `2026-07-03T12:00:00Z`. Digest canonicalization errors fail the export instead
 of emitting an empty digest. The digest uses the resolver's internal canonical

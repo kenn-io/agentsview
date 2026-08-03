@@ -16,6 +16,7 @@ type manifestSession struct {
 	Agent                string  `json:"agent"`
 	AgentLabel           string  `json:"agent_label,omitempty"`
 	Entrypoint           string  `json:"entrypoint,omitempty"`
+	SessionKind          string  `json:"session_kind,omitempty"`
 	FirstMessage         *string `json:"first_message"`
 	DisplayName          *string `json:"display_name,omitempty"`
 	StartedAt            *string `json:"started_at"`
@@ -95,6 +96,7 @@ func manifestSessionFromDB(s db.Session) manifestSession {
 		Agent:                s.Agent,
 		AgentLabel:           s.AgentLabel,
 		Entrypoint:           s.Entrypoint,
+		SessionKind:          s.SessionKind,
 		FirstMessage:         s.FirstMessage,
 		DisplayName:          s.DisplayName,
 		StartedAt:            s.StartedAt,
@@ -155,6 +157,7 @@ func (m manifestSession) dbSession() db.Session {
 		Agent:                m.Agent,
 		AgentLabel:           m.AgentLabel,
 		Entrypoint:           m.Entrypoint,
+		SessionKind:          m.SessionKind,
 		FirstMessage:         m.FirstMessage,
 		DisplayName:          m.DisplayName,
 		StartedAt:            m.StartedAt,

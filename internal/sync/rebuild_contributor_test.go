@@ -202,6 +202,67 @@ func TestResyncAbortsWhenContributorLosesHistoricalSource(t *testing.T) {
 	assert.NotNil(t, remote, "aborted rebuild must preserve the active archive")
 }
 
+func TestResyncAbortsWhenLabeledLocalSourceDisappearsAlongsideHealthyContributor(
+	t *testing.T,
+) {
+	localRoot := t.TempDir()
+	remoteRoot := t.TempDir()
+	localPath := filepath.Join(localRoot, "local", "local.jsonl")
+	remotePath := filepath.Join(remoteRoot, "remote", "remote.jsonl")
+	for path, content := range map[string]string{
+		localPath:  "labeled local source",
+		remotePath: "healthy contributor source",
+	} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().
+			AddClaudeUser("2026-01-01T00:00:00Z", content).String()), 0o644))
+	}
+	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {localRoot},
+		},
+		SourceMachines: map[parser.AgentType]map[string]string{
+			parser.AgentClaude: {localRoot: "archive-host"},
+		},
+		Machine: "collector-host",
+	})
+	t.Cleanup(engine.Close)
+	options := RebuildOptions{Contributors: []RebuildContributor{{
+		Name: "remote-host",
+		Config: EngineConfig{
+			AgentDirs: map[parser.AgentType][]string{
+				parser.AgentClaude: {remoteRoot},
+			},
+			Machine: "remote-host", IDPrefix: "remote-host~", Ephemeral: true,
+		},
+	}}}
+
+	initial, err := engine.ResyncAllWithOptions(context.Background(), nil, options)
+	require.NoError(t, err)
+	require.False(t, initial.Aborted, "initial rebuild aborted: %+v", initial)
+	local, err := database.GetSession(context.Background(), "local")
+	require.NoError(t, err)
+	require.NotNil(t, local)
+	require.Equal(t, "archive-host", local.Machine)
+	engine.sourceMachines[parser.AgentClaude][localRoot] = "renamed-archive-host"
+	require.NoError(t, os.Remove(localPath))
+
+	stats, err := engine.ResyncAllWithOptions(context.Background(), nil, options)
+
+	require.NoError(t, err)
+	assert.True(t, stats.Aborted,
+		"a healthy contributor must not mask a relabeled local source")
+	local, err = database.GetSession(context.Background(), "local")
+	require.NoError(t, err)
+	assert.NotNil(t, local, "aborted rebuild must preserve labeled local history")
+	remote, err := database.GetSession(context.Background(), "remote-host~remote")
+	require.NoError(t, err)
+	assert.NotNil(t, remote, "aborted rebuild must preserve contributor history")
+}
+
 func TestResyncDoesNotTreatSameNamedContributorAsLocalHistory(t *testing.T) {
 	localRoot := t.TempDir()
 	remoteRoot := t.TempDir()

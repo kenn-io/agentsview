@@ -458,6 +458,46 @@ func TestExecWithoutCancelDropsTempTableWithCanceledContext(t *testing.T) {
 	require.NoError(t, err, "recreate temp table after cleanup")
 }
 
+func TestCopyOrphanedDataPreservesSessionKindAndPromptSource(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "old.db")
+	srcDB := testDBAtPath(t, srcPath, "src")
+	insertSession(t, srcDB, "kind-orphan", "proj", func(s *Session) {
+		s.SessionKind = "bg"
+		s.MessageCount = 2
+	})
+	insertMessages(t, srcDB,
+		Message{
+			SessionID: "kind-orphan", Ordinal: 0, Role: "user",
+			Content: "first", PromptSource: "typed",
+		},
+		Message{
+			SessionID: "kind-orphan", Ordinal: 1, Role: "user",
+			Content: "second", PromptSource: "queued",
+		},
+	)
+	require.NoError(t, srcDB.Close(), "close source")
+
+	dstPath := filepath.Join(dir, "new.db")
+	dstDB := testDBAtPath(t, dstPath, "dst")
+	defer dstDB.Close()
+
+	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
+	require.NoError(t, err, "CopyOrphanedDataFrom")
+	require.Equal(t, 1, count, "expected one orphan")
+
+	session, err := dstDB.GetSession(ctx, "kind-orphan")
+	require.NoError(t, err, "get copied session")
+	assert.Equal(t, "bg", session.SessionKind)
+
+	msgs, err := dstDB.GetMessages(ctx, "kind-orphan", 0, 10, true)
+	require.NoError(t, err, "get copied messages")
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "typed", msgs[0].PromptSource)
+	assert.Equal(t, "queued", msgs[1].PromptSource)
+}
+
 func TestCopyOrphanedDataSanitizesCopiedContent(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

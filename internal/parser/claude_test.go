@@ -69,6 +69,54 @@ func TestClaudeSessionIdentityAbsent(t *testing.T) {
 	assert.Equal(t, AgentClaude, results[0].Session.Agent)
 }
 
+func TestClaudeSessionKindAndPromptSource(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "kind-prompt-source.jsonl")
+	content := strings.Join([]string{
+		`{"type":"user","sessionId":"kind-prompt-source","uuid":"u1","entrypoint":"cli","sessionKind":"bg","promptSource":"typed","message":{"content":"first"}}`,
+		`{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"text","text":"reply"}]}}`,
+		`{"type":"user","uuid":"u2","parentUuid":"a1","promptSource":"queued","message":{"content":"second"}}`,
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	results, _, err := claudeParseWithExclusions(path, "project", "local")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+
+	// sessionKind is a session-level field, first-non-empty-wins like
+	// entrypoint.
+	assert.Equal(t, "bg", results[0].Session.SessionKind)
+	assert.Equal(t, "cli", results[0].Session.Entrypoint)
+
+	// promptSource is captured per user turn.
+	bySource := map[string]string{}
+	for _, m := range results[0].Messages {
+		if m.Role == RoleUser {
+			bySource[m.Content] = m.PromptSource
+		}
+	}
+	assert.Equal(t, "typed", bySource["first"])
+	assert.Equal(t, "queued", bySource["second"])
+}
+
+func TestClaudeSessionKindAndPromptSourceAbsent(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "kind-prompt-source-absent.jsonl")
+	// Older transcripts predate sessionKind/promptSource; both must
+	// default to empty rather than a fabricated value.
+	content := strings.Join([]string{
+		`{"type":"user","sessionId":"kind-absent","uuid":"u1","message":{"content":"hello"}}`,
+		`{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"text","text":"hi"}]}}`,
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	results, _, err := claudeParseWithExclusions(path, "project", "local")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "", results[0].Session.SessionKind)
+	for _, m := range results[0].Messages {
+		assert.Equal(t, "", m.PromptSource, "ordinal %d", m.Ordinal)
+	}
+}
+
 func TestClaudeSessionIdentityLineage(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "lineage.jsonl")

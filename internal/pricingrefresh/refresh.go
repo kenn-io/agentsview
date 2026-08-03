@@ -14,6 +14,8 @@ import (
 const (
 	fallbackVersionMetaKey = "_fallback_version"
 	refreshAttemptMetaKey  = "_litellm_last_attempt"
+	pricingStorageMetaKey  = "_pricing_storage_version"
+	pricingStorageVersion  = "2"
 )
 
 type refreshGate struct {
@@ -66,7 +68,11 @@ func SeedFallback(database *db.DB) error {
 	if err != nil {
 		return err
 	}
-	if stored == pricing.SeedVersion {
+	storageVersion, err := database.GetPricingMeta(pricingStorageMetaKey)
+	if err != nil {
+		return err
+	}
+	if stored == pricing.SeedVersion && storageVersion == pricingStorageVersion {
 		return nil
 	}
 	if err := upsert(database, pricing.FallbackPricing()); err != nil {
@@ -80,9 +86,12 @@ func SeedFallback(database *db.DB) error {
 	); err != nil {
 		return err
 	}
-	return database.SetPricingMeta(
+	if err := database.SetPricingMeta(
 		fallbackVersionMetaKey, pricing.SeedVersion,
-	)
+	); err != nil {
+		return err
+	}
+	return database.SetPricingMeta(pricingStorageMetaKey, pricingStorageVersion)
 }
 
 // Refresh fetches and stores the upstream pricing catalog immediately.
@@ -250,12 +259,23 @@ func runCurrent(
 func upsert(database *db.DB, prices []pricing.ModelPricing) error {
 	dbPrices := make([]db.ModelPricing, len(prices))
 	for i, price := range prices {
+		bands := make([]db.PricingBand, len(price.Bands))
+		for j, band := range price.Bands {
+			bands[j] = db.PricingBand{
+				AboveInputTokens:     band.AboveInputTokens,
+				InputPerMTok:         band.InputPerMTok,
+				OutputPerMTok:        band.OutputPerMTok,
+				CacheCreationPerMTok: band.CacheCreationPerMTok,
+				CacheReadPerMTok:     band.CacheReadPerMTok,
+			}
+		}
 		dbPrices[i] = db.ModelPricing{
 			ModelPattern:         price.ModelPattern,
 			InputPerMTok:         price.InputPerMTok,
 			OutputPerMTok:        price.OutputPerMTok,
 			CacheCreationPerMTok: price.CacheCreationPerMTok,
 			CacheReadPerMTok:     price.CacheReadPerMTok,
+			Bands:                bands,
 		}
 	}
 	return database.UpsertModelPricing(dbPrices)

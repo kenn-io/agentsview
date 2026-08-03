@@ -660,6 +660,90 @@ func (db *DB) StreamArtifactPublications(
 	return revision, nil
 }
 
+// ArtifactPublicationPage returns a bounded canonical page after sessionID.
+// The revision and rows come from the same SQLite read snapshot, allowing a
+// caller to reject pages that no longer match its checkpoint head.
+func (db *DB) ArtifactPublicationPage(
+	ctx context.Context,
+	origin string,
+	afterSessionID string,
+	limit int,
+) ([]ArtifactPublication, int64, bool, error) {
+	if limit <= 0 || limit > 512 {
+		return nil, 0, false, errors.New(
+			"artifact publication page limit must be between 1 and 512",
+		)
+	}
+	db.connMu.RLock()
+	reader := db.reader.Load()
+	if reader == nil {
+		db.connMu.RUnlock()
+		return nil, 0, false, errors.New("database is closed")
+	}
+	tx, err := reader.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	db.connMu.RUnlock()
+	if err != nil {
+		return nil, 0, false, fmt.Errorf(
+			"beginning artifact publication page snapshot: %w",
+			err,
+		)
+	}
+	defer func() { _ = tx.Rollback() }()
+	revision, err := artifactPublicationRevisionTx(ctx, tx, origin, false)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT origin, session_id, manifest_hash, source_fingerprint
+		FROM artifact_publications
+		WHERE origin = ? AND session_id > ?
+		ORDER BY session_id
+		LIMIT ?`, origin, afterSessionID, limit+1)
+	if err != nil {
+		return nil, 0, false, fmt.Errorf("paging artifact publications: %w", err)
+	}
+	defer rows.Close()
+	publications := make([]ArtifactPublication, 0, limit+1)
+	for rows.Next() {
+		var publication ArtifactPublication
+		if err := rows.Scan(
+			&publication.Origin,
+			&publication.SessionID,
+			&publication.ManifestHash,
+			&publication.SourceFingerprint,
+		); err != nil {
+			return nil, 0, false, fmt.Errorf(
+				"scanning artifact publication page: %w",
+				err,
+			)
+		}
+		publications = append(publications, publication)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, false, fmt.Errorf(
+			"iterating artifact publication page: %w",
+			err,
+		)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, 0, false, fmt.Errorf(
+			"closing artifact publication page: %w",
+			err,
+		)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, 0, false, fmt.Errorf(
+			"committing artifact publication page snapshot: %w",
+			err,
+		)
+	}
+	more := len(publications) > limit
+	if more {
+		publications = publications[:limit]
+	}
+	return publications, revision, more, nil
+}
+
 // ReserveArtifactCheckpointSequence commits the next sequence in an immediate
 // transaction before returning. observedFloor is a stable vault traversal's
 // maximum sequence and can only raise, never lower, the retained authority.

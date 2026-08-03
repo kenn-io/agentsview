@@ -44,6 +44,148 @@ func TestPushIncrementalReplacesOnlyChangedSessions(t *testing.T) {
 	assertMirrorMessageCount(t, path, "sess-2", 3)
 }
 
+func TestMirroredSessionMachine(t *testing.T) {
+	tests := []struct {
+		name           string
+		sessionMachine string
+		want           string
+	}{
+		{
+			name:           "explicit source machine",
+			sessionMachine: "source-machine",
+			want:           "source-machine",
+		},
+		{
+			name:           "empty source machine",
+			sessionMachine: "",
+			want:           "push-machine",
+		},
+		{
+			name:           "local sentinel",
+			sessionMachine: "local",
+			want:           "push-machine",
+		},
+		{
+			name:           "explicit whitespace is preserved",
+			sessionMachine: " source-machine ",
+			want:           " source-machine ",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, mirroredSessionMachine(
+				db.Session{Machine: tt.sessionMachine}, "push-machine",
+			))
+		})
+	}
+}
+
+func TestPushPreservesFilesystemSourceMachineAndCuration(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 3)
+	require.NoError(t, local.Update(func(tx *sql.Tx) error {
+		if _, err := tx.Exec(
+			`UPDATE sessions SET machine = ? WHERE id = ?`,
+			"source-machine", "sess-2",
+		); err != nil {
+			return err
+		}
+		_, err := tx.Exec(
+			`UPDATE sessions SET machine = ? WHERE id = ?`,
+			" source-machine ", "sess-3",
+		)
+		return err
+	}))
+	_, err := Push(ctx, path, local, "push-machine", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+
+	conn, err := Open(path)
+	require.NoError(t, err)
+	var machine string
+	require.NoError(t, conn.QueryRow(
+		`SELECT machine FROM sessions WHERE id = ?`, "sess-2",
+	).Scan(&machine))
+	assert.Equal(t, "source-machine", machine)
+	require.NoError(t, conn.QueryRow(
+		`SELECT machine FROM sessions WHERE id = ?`, "sess-3",
+	).Scan(&machine))
+	assert.Equal(t, " source-machine ", machine)
+	require.NoError(t, conn.Close())
+
+	starred, err := local.StarSession("sess-2")
+	require.NoError(t, err)
+	require.True(t, starred)
+	msgs, err := local.GetAllMessages(ctx, "sess-2")
+	require.NoError(t, err)
+	require.NotEmpty(t, msgs)
+	pinID, err := local.PinMessage("sess-2", msgs[0].ID, nil)
+	require.NoError(t, err)
+	require.NotZero(t, pinID)
+
+	res, err := Push(
+		ctx, path, local, "push-machine", SyncOptions{}, false, nil,
+	)
+	require.NoError(t, err)
+	assert.True(t, res.Diagnostics.CurationRefreshed)
+
+	conn, err = Open(path)
+	require.NoError(t, err)
+	assertDuckDBCountWhere(
+		t, conn, "starred_sessions", "session_id = ?", "sess-2", 1,
+	)
+	assertDuckDBCountWhere(
+		t, conn, "pinned_messages", "session_id = ?", "sess-2", 1,
+	)
+	require.NoError(t, conn.Close())
+
+	require.NoError(t, local.UnstarSession("sess-2"))
+	require.NoError(t, local.UnpinMessage("sess-2", msgs[0].ID))
+	res, err = Push(
+		ctx, path, local, "push-machine", SyncOptions{}, false, nil,
+	)
+	require.NoError(t, err)
+	assert.True(t, res.Diagnostics.CurationRefreshed)
+
+	conn, err = Open(path)
+	require.NoError(t, err)
+	defer conn.Close()
+	assertDuckDBCountWhere(
+		t, conn, "starred_sessions", "session_id = ?", "sess-2", 0,
+	)
+	assertDuckDBCountWhere(
+		t, conn, "pinned_messages", "session_id = ?", "sess-2", 0,
+	)
+}
+
+func TestPushRepushesLegacySessionWhenResolvedMachineChanges(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	_, err := Push(ctx, path, local, "machine-a", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+
+	// Bypass the normal machine-change rebuild and widen the candidate window
+	// so only the resolved machine changes in the per-session fingerprint.
+	setMirrorMetadataValue(t, path, lastPushMachineMetadataKey, "machine-b")
+	setMirrorMetadataValue(
+		t, path, lastPushCutoffMetadataKey, "2020-01-01T00:00:00.000Z",
+	)
+
+	res, err := Push(ctx, path, local, "machine-b", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.False(t, res.Diagnostics.Full)
+	assert.Equal(t, 1, res.Diagnostics.PushedSessions.Total)
+
+	conn, err := Open(path)
+	require.NoError(t, err)
+	defer conn.Close()
+	var machine string
+	require.NoError(t, conn.QueryRow(
+		`SELECT machine FROM sessions WHERE id = ?`, "sess-1",
+	).Scan(&machine))
+	assert.Equal(t, "machine-b", machine)
+}
+
 // TestPushBoundaryEqualSessionIsNotLost regression-tests the inclusive
 // mirror window: an update whose sync_marker equals the stored cutoff must
 // still be selected and pushed when its fingerprint differs, not skipped
@@ -233,6 +375,47 @@ func TestPushRebuildTriggers(t *testing.T) {
 			assertMirrorMessageCount(t, path, "sess-1", 2)
 		})
 	}
+}
+
+func TestPushRebuildsV6MirrorToRestoreSourceMachine(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	require.NoError(t, local.Update(func(tx *sql.Tx) error {
+		_, err := tx.Exec(
+			`UPDATE sessions SET machine = ? WHERE id = ?`,
+			"source-machine", "sess-1",
+		)
+		return err
+	}))
+	_, err := Push(ctx, path, local, "push-machine", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+
+	// Recreate the relevant state of a v6 mirror: rows were attributed to
+	// the publisher, and this session predates the next incremental window.
+	conn, err := Open(path)
+	require.NoError(t, err)
+	_, err = conn.Exec(
+		`UPDATE sessions SET machine = ? WHERE id = ?`,
+		"push-machine", "sess-1",
+	)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	setMirrorMetadataValue(t, path, schemaVersionMetadataKey, "6")
+	setSessionSignalsTo(t, local, "sess-1", "2020-01-01T00:00:00.000Z")
+
+	res, err := Push(ctx, path, local, "push-machine", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.True(t, res.Diagnostics.Full)
+	assert.Contains(t, res.Diagnostics.RebuildReason, "schema version 6")
+
+	conn, err = Open(path)
+	require.NoError(t, err)
+	defer conn.Close()
+	var machine string
+	require.NoError(t, conn.QueryRow(
+		`SELECT machine FROM sessions WHERE id = ?`, "sess-1",
+	).Scan(&machine))
+	assert.Equal(t, "source-machine", machine)
 }
 
 // TestPushRefusesToReplaceUnrecognizedExistingFile is the fail-closed
@@ -725,16 +908,72 @@ func TestPushRebuildsWhenMirrorBuiltFromDifferentArchive(t *testing.T) {
 		"a matching source database id must allow the incremental path")
 }
 
-// TestPushRebuildsWhenMachineNameChanges is the FIX1 regression: mirror rows
-// are machine-stamped, and an incremental push only re-pushes sessions whose
-// LOCAL content changed within the current window. A session that has not
-// changed locally since the mirror's last push would otherwise stay
-// permanently labeled with the OLD machine name even after the client's
-// configured machine name (and so the mirror's LastPushMachine metadata)
-// changes, stranding it under a machine filter that will never select it
-// again (see readMachineStatus). The mirror's recorded LastPushMachine
-// differing from the currently configured machine name must force a
-// rebuild instead, so every session is re-pushed and relabeled.
+func TestPushRebuildsWhenArchiveIdentityIsRepaired(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	_, err := local.CreateWorktreeProjectMapping(
+		ctx, db.WorktreeProjectMapping{
+			Machine: "test-machine", PathPrefix: "/workspace/alpha",
+			Layout: db.WorktreeMappingLayoutExplicit, Project: "alpha",
+			Enabled: true,
+		},
+	)
+	require.NoError(t, err)
+
+	first, err := Push(ctx, path, local, "test-machine", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	require.True(t, first.Diagnostics.Full)
+	oldArchiveID, err := local.GetArchiveID(ctx)
+	require.NoError(t, err)
+	databaseID, err := local.GetDatabaseID(ctx)
+	require.NoError(t, err)
+
+	const repairedArchiveID = "repaired-archive-id"
+	require.NoError(t, local.SetArchiveIdentityForTest(
+		ctx, repairedArchiveID,
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	))
+	gotDatabaseID, err := local.GetDatabaseID(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, databaseID, gotDatabaseID,
+		"archive identity repair must not rely on a database generation change")
+
+	result, err := Push(ctx, path, local, "test-machine", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.True(t, result.Diagnostics.Full)
+	assert.Contains(t, result.Diagnostics.RebuildReason, "source archive id changed")
+
+	probe, err := ProbeMirror(ctx, path)
+	require.NoError(t, err)
+	assert.Equal(t, repairedArchiveID, probe.SourceArchiveID)
+	conn, err := Open(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	var sessionArchiveID string
+	require.NoError(t, conn.QueryRowContext(ctx, `
+		SELECT source_archive_id FROM sessions WHERE id = 'sess-1'`,
+	).Scan(&sessionArchiveID))
+	assert.Equal(t, repairedArchiveID, sessionArchiveID)
+	for _, archive := range []struct {
+		id   string
+		want int
+	}{
+		{oldArchiveID, 0},
+		{repairedArchiveID, 1},
+	} {
+		var count int
+		require.NoError(t, conn.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM source_worktree_project_mappings
+			WHERE source_archive_id = ?`, archive.id,
+		).Scan(&count))
+		assert.Equal(t, archive.want, count)
+	}
+}
+
+// TestPushRebuildsWhenMachineNameChanges guards legacy sessions whose source
+// machine is empty or "local". Those rows use the configured push machine, so
+// changing that name must rebuild the mirror and restamp every fallback row.
+// Sessions with explicit source-machine labels keep those labels unchanged.
 func TestPushRebuildsWhenMachineNameChanges(t *testing.T) {
 	ctx := context.Background()
 	local, path := newPushFixture(t, 1)
@@ -1078,7 +1317,7 @@ func TestDuckSessionFingerprintFieldsDiffer(t *testing.T) {
 func TestDuckSessionFingerprintCoversEveryMirroredColumn(t *testing.T) {
 	base := db.Session{CreatedAt: "2026-03-11T12:00:00Z"}
 	encodeArgs := func(s db.Session) string {
-		data, err := json.Marshal(sessionInsertArgs(s, "m", "fp"))
+		data, err := json.Marshal(sessionInsertArgs(s, "m", "archive", "fp"))
 		require.NoError(t, err)
 		return string(data)
 	}
@@ -1302,6 +1541,56 @@ func TestSyncModelPricingSkipsUnchangedMirrorRows(t *testing.T) {
 	assert.Equal(t, "kept", updatedAt)
 }
 
+func TestSyncModelPricingBandsPersistsAndRemovesCompleteSet(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	base := db.ModelPricing{
+		ModelPattern:         "banded-model",
+		InputPerMTok:         money.MustParseDollars("1"),
+		OutputPerMTok:        money.MustParseDollars("2"),
+		CacheCreationPerMTok: money.MustParseDollars("0.5"),
+		CacheReadPerMTok:     money.MustParseDollars("0.1"),
+	}
+	withBand := base
+	withBand.Bands = []db.PricingBand{{
+		AboveInputTokens:     200_000,
+		InputPerMTok:         money.MustParseDollars("2"),
+		OutputPerMTok:        money.MustParseDollars("3"),
+		CacheCreationPerMTok: money.MustParseDollars("1"),
+		CacheReadPerMTok:     money.MustParseDollars("0.2"),
+	}}
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{withBand}))
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+
+	require.NoError(t, syncer.syncModelPricing(ctx))
+	var threshold int
+	var input, output, cacheCreation, cacheRead int64
+	require.NoError(t, syncer.DB().QueryRowContext(ctx, `
+		SELECT above_input_tokens,
+			input_microdollars_per_mtok,
+			output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok,
+			cache_read_microdollars_per_mtok
+		FROM model_pricing_bands
+		WHERE model_pattern = ?`, "banded-model").Scan(
+		&threshold, &input, &output, &cacheCreation, &cacheRead,
+	))
+	assert.Equal(t, 200_000, threshold)
+	assert.Equal(t, int64(2_000_000), input)
+	assert.Equal(t, int64(3_000_000), output)
+	assert.Equal(t, int64(1_000_000), cacheCreation)
+	assert.Equal(t, int64(200_000), cacheRead)
+
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{base}))
+	require.NoError(t, syncer.syncModelPricing(ctx))
+	var count int
+	require.NoError(t, syncer.DB().QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM model_pricing_bands
+		WHERE model_pattern = ?`, "banded-model").Scan(&count))
+	assert.Zero(t, count)
+}
+
 func TestSyncMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 	t *testing.T,
 ) {
@@ -1329,7 +1618,7 @@ func TestSyncMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
-	rev, err := syncer.syncProjectIdentityObservations(ctx, 0, false)
+	rev, err := syncer.syncProjectIdentityObservations(ctx, 0, false, nil)
 	require.NoError(t, err)
 
 	var gotArchive, gotGeneration, gotSession, gotRemote string
@@ -1357,7 +1646,7 @@ func TestSyncMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 		SET git_remote = 'sentinel'
 		WHERE source_session_id = ?`, "snapshot-session")
 	require.NoError(t, err)
-	rev2, err := syncer.syncProjectIdentityObservations(ctx, rev, false)
+	rev2, err := syncer.syncProjectIdentityObservations(ctx, rev, false, nil)
 	require.NoError(t, err)
 	assert.Equal(t, rev, rev2, "unchanged local revision should not advance")
 	require.NoError(t, syncer.DB().QueryRowContext(ctx, `
@@ -1366,7 +1655,7 @@ func TestSyncMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 	assert.Equal(t, "sentinel", gotRemote,
 		"unchanged local revision should skip mirror publication")
 
-	rev3, err := syncer.syncProjectIdentityObservations(ctx, rev, true)
+	rev3, err := syncer.syncProjectIdentityObservations(ctx, rev, true, nil)
 	require.NoError(t, err)
 	require.NoError(t, syncer.DB().QueryRowContext(ctx, `
 		SELECT git_remote FROM source_session_project_identity_snapshots
@@ -1375,11 +1664,90 @@ func TestSyncMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 		"forced publication should rebuild mirror identity rows")
 
 	require.NoError(t, local.DeleteSession("snapshot-session"))
-	_, err = syncer.syncProjectIdentityObservations(ctx, rev3, false)
+	_, err = syncer.syncProjectIdentityObservations(ctx, rev3, false, nil)
 	require.NoError(t, err)
 	assertDuckDBCountWhere(t, syncer.DB(),
 		"source_session_project_identity_snapshots",
 		"source_archive_id = ?", archiveID, 0,
+	)
+}
+
+func TestFilteredIncrementalPushPublishesMovedSessionSourceSnapshot(t *testing.T) {
+	const (
+		sessionID     = "duck-filtered-project-move"
+		sourceProject = "source_project"
+		targetProject = "target_project"
+		root          = "/srv/custom-worktrees/sample-branch"
+	)
+	ctx := context.Background()
+	local := newLocalDB(t)
+	startedAt := "2026-07-16T12:00:00.000Z"
+	localModifiedAt := startedAt
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID: sessionID, Project: sourceProject, Machine: duckPushMachine,
+		Agent: "claude", Cwd: root, StartedAt: &startedAt,
+		LocalModifiedAt: &localModifiedAt, MessageCount: 1,
+		UserMessageCount: 1,
+	}))
+	require.NoError(t, local.InsertMessages([]db.Message{{
+		SessionID: sessionID, Ordinal: 0, Role: "user",
+		Content: "project move", ContentLength: len("project move"),
+		Timestamp: startedAt,
+	}}))
+	require.NoError(t, local.UpsertProjectIdentityObservation(
+		ctx, export.ProjectIdentityObservation{
+			SessionID: sessionID, Project: sourceProject, Machine: duckPushMachine,
+			RootPath: root, WorktreeRootPath: root,
+			RemoteResolution: export.ProjectResolutionResolved,
+			ObservedAt:       time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC),
+		},
+	))
+
+	path := filepath.Join(t.TempDir(), "filtered-project-move.duckdb")
+	opts := SyncOptions{Projects: []string{targetProject}}
+	_, err := Push(ctx, path, local, duckPushMachine, opts, true, nil)
+	require.NoError(t, err)
+
+	_, err = local.CreateWorktreeProjectMapping(ctx, db.WorktreeProjectMapping{
+		Machine: duckPushMachine, PathPrefix: "/srv/custom-worktrees",
+		Layout: db.WorktreeMappingLayoutExplicit, Project: targetProject,
+		OriginalProject: sourceProject, Enabled: true,
+	})
+	require.NoError(t, err)
+	applied, err := local.ApplyWorktreeProjectMappings(ctx, duckPushMachine)
+	require.NoError(t, err)
+	require.Equal(t, 1, applied.UpdatedSessions)
+
+	_, err = Push(ctx, path, local, duckPushMachine, opts, false, nil)
+	require.NoError(t, err)
+	mirror, err := OpenReadOnly(path)
+	require.NoError(t, err)
+
+	var gotProject string
+	require.NoError(t, mirror.QueryRowContext(ctx,
+		`SELECT project FROM sessions WHERE id = ?`, sessionID,
+	).Scan(&gotProject))
+	assert.Equal(t, targetProject, gotProject)
+
+	var snapshotProject string
+	require.NoError(t, mirror.QueryRowContext(ctx, `
+		SELECT project FROM source_session_project_identity_snapshots
+		WHERE source_session_id = ?`, sessionID,
+	).Scan(&snapshotProject))
+	assert.Equal(t, sourceProject, snapshotProject,
+		"the immutable snapshot keeps its source label while scope follows the session")
+	require.NoError(t, mirror.Close())
+
+	require.NoError(t, local.DeleteSession(sessionID))
+	deleted, err := Push(ctx, path, local, duckPushMachine, opts, false, nil)
+	require.NoError(t, err)
+	assert.False(t, deleted.Diagnostics.Full)
+	mirror, err = OpenReadOnly(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mirror.Close()) })
+	assertDuckDBCountWhere(t, mirror,
+		"source_session_project_identity_snapshots",
+		"source_session_id = ?", sessionID, 0,
 	)
 }
 
@@ -1404,7 +1772,7 @@ func TestSyncPreservesAmbiguousIdentityAlongsideResolvedRemote(t *testing.T) {
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
-	_, err := syncer.syncProjectIdentityObservations(ctx, 0, true)
+	_, err := syncer.syncProjectIdentityObservations(ctx, 0, true, nil)
 	require.NoError(t, err)
 
 	got, err := NewStoreFromDB(syncer.DB()).BuildProjectIdentityMap(
@@ -1440,7 +1808,7 @@ func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
 		Projects: []string{"alpha"},
 	})
 	require.NoError(t, createSchema(ctx, filtered.DB()))
-	rev, err := filtered.syncProjectIdentityObservations(ctx, 0, false)
+	rev, err := filtered.syncProjectIdentityObservations(ctx, 0, false, nil)
 	require.NoError(t, err)
 	_, err = filtered.DB().ExecContext(ctx, `
 		UPDATE source_project_identity_observations
@@ -1457,7 +1825,7 @@ func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
 			ObservedAt:       time.Date(2026, 7, 11, 13, 0, 0, 0, time.UTC),
 		},
 	))
-	_, err = filtered.syncProjectIdentityObservations(ctx, rev, false)
+	_, err = filtered.syncProjectIdentityObservations(ctx, rev, false, nil)
 	require.NoError(t, err)
 	var alphaRemoteName string
 	require.NoError(t, filtered.DB().QueryRowContext(ctx, `
@@ -1469,7 +1837,7 @@ func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
 
 	unfiltered := newTestSync(t, target, local, SyncOptions{})
 	require.NoError(t, createSchema(ctx, unfiltered.DB()))
-	_, err = unfiltered.syncProjectIdentityObservations(ctx, 0, false)
+	_, err = unfiltered.syncProjectIdentityObservations(ctx, 0, false, nil)
 	require.NoError(t, err)
 	assertDuckDBCountWhere(t, unfiltered.DB(),
 		"source_session_project_identity_snapshots",
@@ -1513,7 +1881,7 @@ func TestIdentityPublicationUpdatesOnlyChangedRowsAndAppliesTombstones(
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
-	rev, err := syncer.syncProjectIdentityObservations(ctx, 0, false)
+	rev, err := syncer.syncProjectIdentityObservations(ctx, 0, false, nil)
 	require.NoError(t, err)
 	_, err = syncer.DB().ExecContext(ctx, `
 		UPDATE source_project_identity_observations
@@ -1541,7 +1909,7 @@ func TestIdentityPublicationUpdatesOnlyChangedRowsAndAppliesTombstones(
 			ObservedAt:       observedAt.Add(time.Hour),
 		},
 	))
-	rev, err = syncer.syncProjectIdentityObservations(ctx, rev, false)
+	rev, err = syncer.syncProjectIdentityObservations(ctx, rev, false, nil)
 	require.NoError(t, err)
 
 	var alphaRemoteName, betaRemoteName string
@@ -1566,7 +1934,7 @@ func TestIdentityPublicationUpdatesOnlyChangedRowsAndAppliesTombstones(
 	assert.Equal(t, 1, gammaRemotes)
 
 	require.NoError(t, local.DeleteSession("identity-alpha"))
-	_, err = syncer.syncProjectIdentityObservations(ctx, rev, false)
+	_, err = syncer.syncProjectIdentityObservations(ctx, rev, false, nil)
 	require.NoError(t, err)
 	assertDuckDBCountWhere(t, syncer.DB(),
 		"source_session_project_identity_snapshots",
@@ -1696,8 +2064,8 @@ func TestReadStatusFromConfigReportsTargetPushMetadataAndCounts(t *testing.T) {
 	assert.Equal(t, SchemaVersion, status.SchemaVersion)
 	assert.Equal(t, db.CurrentDataVersion(), status.DataVersion)
 	assert.Empty(t, status.Scope, "unfiltered push canonicalizes to empty scope")
-	assert.Equal(t, 2, status.DuckDBSessions)
-	assert.Equal(t, 3, status.DuckDBMessages)
+	assert.Equal(t, 3, status.DuckDBSessions)
+	assert.Equal(t, 4, status.DuckDBMessages)
 
 	lastPushAt, err := time.Parse(time.RFC3339, status.LastPushAt)
 	require.NoError(t, err)
@@ -1767,17 +2135,10 @@ func TestReadStatusFromConfigDoesNotCreateMissingMirror(t *testing.T) {
 		"status must never create the mirror file")
 }
 
-// TestReadStatusFromConfigCountsByTargetMachineNotConfiguredMachine is the
-// FIX2 regression: readMachineStatus previously filtered its row counts by
-// the CLIENT's configured machine name, while the LastPushMachine it
-// displays comes from the target's own metadata. A remote Quack client is
-// normally configured under its own hostname, which almost never matches
-// whatever machine actually pushed the mirror it is reading, so filtering
-// counts by the configured name reports zero rows even though the mirror
-// plainly has data and the display line already shows a real
-// LastPushMachine. Counts must be keyed off the target's recorded
-// LastPushMachine when it is set.
-func TestReadStatusFromConfigCountsByTargetMachineNotConfiguredMachine(t *testing.T) {
+// Mirror status reports every resident source machine. LastPushMachine identifies
+// the process that published the mirror; it is not the source attribution shared
+// by every mirrored session.
+func TestReadStatusFromConfigCountsAllSourceMachines(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	seedDuckDBSyncFixture(t, local)
@@ -1786,6 +2147,11 @@ func TestReadStatusFromConfigCountsByTargetMachineNotConfiguredMachine(t *testin
 	_, err := Push(ctx, target, local, "actual-pusher", SyncOptions{}, true, nil)
 	require.NoError(t, err)
 
+	conn, err := Open(target)
+	require.NoError(t, err)
+	insertOtherMachineDuckSession(t, conn)
+	require.NoError(t, conn.Close())
+
 	status, err := ReadStatusFromConfig(ctx, config.DuckDBConfig{
 		Path:        target,
 		MachineName: "remote-client-hostname",
@@ -1793,9 +2159,8 @@ func TestReadStatusFromConfigCountsByTargetMachineNotConfiguredMachine(t *testin
 	require.NoError(t, err)
 	assert.Equal(t, "remote-client-hostname", status.Machine)
 	assert.Equal(t, "actual-pusher", status.LastPushMachine)
-	assert.Equal(t, 2, status.DuckDBSessions,
-		"counts must key off the target's LastPushMachine, not the client's configured name")
-	assert.Equal(t, 3, status.DuckDBMessages)
+	assert.Equal(t, 3, status.DuckDBSessions)
+	assert.Equal(t, 4, status.DuckDBMessages)
 }
 
 type syncFixture struct {
@@ -2209,4 +2574,52 @@ func TestSyncResultDurationIsSet(t *testing.T) {
 	result, err := Push(ctx, path, local, "test-machine", SyncOptions{}, true, nil)
 	require.NoError(t, err)
 	assert.Greater(t, result.Duration, time.Duration(0))
+}
+
+// TestDuckPushWritesSessionProvenance verifies that every pushed session row
+// carries the local archive's stable id in source_archive_id: stamped by the
+// rebuild path on the first push, and restored by the incremental
+// session-replace path when a changed session is re-pushed.
+func TestDuckPushWritesSessionProvenance(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+
+	archiveID, err := local.GetArchiveID(ctx)
+	require.NoError(t, err)
+	require.NotEmpty(t, archiveID)
+
+	readProvenance := func() string {
+		t.Helper()
+		conn, err := Open(path)
+		require.NoError(t, err)
+		defer conn.Close()
+		var got string
+		require.NoError(t, conn.QueryRowContext(ctx,
+			`SELECT source_archive_id FROM sessions WHERE id = ?`, "sess-1",
+		).Scan(&got))
+		return got
+	}
+	assert.Equal(t, archiveID, readProvenance(),
+		"rebuild push must stamp source_archive_id")
+
+	probe, err := ProbeMirror(ctx, path)
+	require.NoError(t, err)
+	setSessionSignalsTo(t, local, "sess-1", probe.LastPushCutoff)
+	conn, err := Open(path)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx,
+		`UPDATE sessions
+		 SET source_archive_id = '', agentsview_push_fingerprint = NULL
+		 WHERE id = ?`, "sess-1")
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.False(t, res.Diagnostics.Full,
+		"second push must be incremental to exercise the session-replace path")
+	assert.Equal(t, archiveID, readProvenance(),
+		"incremental re-push must restore source_archive_id")
 }

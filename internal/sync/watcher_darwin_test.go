@@ -414,16 +414,50 @@ func TestDarwinWatcherColdArchiveCardinalityUsesOneRecursiveStream(t *testing.T)
 			require.NoError(t, err)
 			_, err = appendFile.WriteString("{\"type\":\"assistant\"}\n")
 			require.NoError(t, err)
+			var appendBatch WatchBatch
+			observedBeforeClose := false
+			observationTimer := time.NewTimer(750 * time.Millisecond)
+		observeOpenAppend:
+			for {
+				select {
+				case batch := <-batches:
+					if slices.Contains(batch.Paths, changedPath) {
+						appendBatch = batch
+						observedBeforeClose = true
+						break observeOpenAppend
+					}
+				case <-observationTimer.C:
+					break observeOpenAppend
+				}
+			}
+			if !observationTimer.Stop() {
+				select {
+				case <-observationTimer.C:
+				default:
+				}
+			}
 			require.NoError(t, appendFile.Close())
-			appendBatch := waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
-				return slices.Contains(batch.Paths, changedPath)
-			})
+			if !observedBeforeClose {
+				appendBatch = waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
+					return slices.Contains(batch.Paths, changedPath)
+				})
+			}
+			t.Logf("recursive append observed before descriptor close: %t",
+				observedBeforeClose)
 			assert.False(t, appendBatch.FullSync)
 			assert.Empty(t, appendBatch.ReconcileRoots)
 			assert.Empty(t, appendBatch.Renames)
 			assert.Equal(t, []string{changedPath}, appendBatch.Paths)
 			got.appendPaths = len(appendBatch.Paths)
 			got.appendRenames = len(appendBatch.Renames)
+
+			// Establish an after-close delivery barrier so any duplicate append
+			// notification cannot be mistaken for the atomic replacement below.
+			closedBarrier := filepath.Join(root, ".append-closed")
+			require.NoError(t, os.WriteFile(closedBarrier, []byte("closed"), 0o600))
+			waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
+				return slices.Contains(batch.Paths, closedBarrier)
+			})
 
 			tempPath := filepath.Join(activeDir, ".changed-session.tmp")
 			require.NoError(t, os.WriteFile(
@@ -1449,7 +1483,11 @@ func TestDarwinWatcherFallbackRecoversNativeStreamsAndReleasesPolling(t *testing
 		}, backend, defaultWatchBatchMaxEntries, defaultWatchBatchMaxPathBytes,
 		WatcherOptions{
 			OnCoverageDegraded: func(roots []string) error {
-				polling <- PollingObligation{Key: "watcher-fallback", Roots: roots}
+				scopes := make([]PollingScope, len(roots))
+				for i, r := range roots {
+					scopes[i] = PollingScope{Root: r}
+				}
+				polling <- PollingObligation{Key: "watcher-fallback", Scopes: scopes}
 				return nil
 			},
 			OnPollingRequired: func(obligation PollingObligation) error {
@@ -1478,9 +1516,9 @@ func TestDarwinWatcherFallbackRecoversNativeStreamsAndReleasesPolling(t *testing
 	initialSink([]fsevents.Event{{Flags: fseventFlagKernelDropped}})
 
 	assert.Equal(t, PollingObligation{
-		Key:   darwinFallbackPollingObligationKey(root),
-		Roots: []string{root},
-		Probe: root,
+		Key:    darwinFallbackPollingObligationKey(root),
+		Scopes: []PollingScope{{Agent: "agent-a", Root: root}},
+		Probe:  root,
 	}, requireReceiveWithin(t, polling, time.Second))
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool { return batch.FullSync })
 	assert.Equal(t, darwinFallbackPollingObligationKey(root),
@@ -1551,9 +1589,9 @@ func TestDarwinWatcherFallbackKeepsPollingUntilNativeRetrySucceeds(t *testing.T)
 
 	backend.requestFallback(darwinFallbackNativeDrop)
 	assert.Equal(t, PollingObligation{
-		Key:   darwinFallbackPollingObligationKey(root),
-		Roots: []string{root},
-		Probe: root,
+		Key:    darwinFallbackPollingObligationKey(root),
+		Scopes: []PollingScope{{Root: root}},
+		Probe:  root,
 	}, requireReceiveWithin(t, polling, time.Second))
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool { return batch.FullSync })
 	requireReceiveWithin(t, failedRecovery, time.Second)
@@ -1687,19 +1725,19 @@ func TestDarwinWatcherFallbackTransfersMissingRootPollingBeforeRecovery(t *testi
 
 	backend.requestFallback(darwinFallbackNativeDrop)
 	assert.Equal(t, PollingObligation{
-		Key:   darwinFallbackPollingObligationKey(missing),
-		Roots: []string{missing},
-		Probe: missing,
+		Key:    darwinFallbackPollingObligationKey(missing),
+		Scopes: []PollingScope{{Root: missing}},
+		Probe:  missing,
 	}, requireReceiveWithin(t, polling, time.Second),
 		"each watch plan owns its own fallback obligation probed on its path")
 	assert.Equal(t, PollingObligation{
-		Key:   darwinFallbackPollingObligationKey(present),
-		Roots: []string{present},
-		Probe: present,
+		Key:    darwinFallbackPollingObligationKey(present),
+		Scopes: []PollingScope{{Root: present}},
+		Probe:  present,
 	}, requireReceiveWithin(t, polling, time.Second))
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool { return batch.FullSync })
 	assert.Equal(t,
-		PollingObligation{Key: missing, Roots: []string{missing}, Probe: missing},
+		PollingObligation{Key: missing, Scopes: []PollingScope{{Root: missing}}, Probe: missing},
 		requireReceiveWithin(t, polling, time.Second),
 		"the skipped root must own polling before generic fallback polling is released")
 	assert.Equal(t, darwinFallbackPollingObligationKey(missing),
@@ -1754,9 +1792,9 @@ func TestDarwinWatcherStartupCreateFailureSelectsRecursiveFallbackOnce(t *testin
 	}, results)
 	assert.Equal(t, int32(1), creates.Load(), "one failed stream selects global fallback")
 	assert.Equal(t, []darwinFallbackPollPlan{
-		{path: first, roots: []string{first}},
-		{path: missing, roots: []string{missing}},
-		{path: second, roots: []string{second}},
+		{path: first, scopes: []PollingScope{{Root: first}}},
+		{path: missing, scopes: []PollingScope{{Root: missing}}},
+		{path: second, scopes: []PollingScope{{Root: second}}},
 	}, backend.fallbackPollPlans)
 	assert.Equal(t, uint32(1), backend.fallbackActivations.Load())
 }
@@ -2334,7 +2372,7 @@ func TestDarwinWatcherMissingRecursiveSymlinkStaysPolled(t *testing.T) {
 		return slices.Contains(batch.ReconcileRoots, ancestor)
 	})
 	assert.Equal(t,
-		PollingObligation{Key: root, Roots: []string{ancestor}, Probe: root},
+		PollingObligation{Key: root, Scopes: []PollingScope{{Agent: "agent-a", Root: ancestor}}, Probe: root},
 		requireReceiveWithin(t, required, time.Second))
 	require.True(t, firstRootInspection.Load())
 	backend.mu.Lock()
@@ -2427,7 +2465,7 @@ func TestDarwinWatcherPendingLossWinsOverActivationAcknowledgement(t *testing.T)
 	assert.Equal(t, darwinRootLossCollecting, state.phase)
 	assert.False(t, state.active)
 	assert.Equal(t,
-		PollingObligation{Key: root, Roots: []string{ancestor}, Probe: root},
+		PollingObligation{Key: root, Scopes: []PollingScope{{Agent: "agent-a", Root: ancestor}}, Probe: root},
 		requireReceiveWithin(t, required, time.Second))
 	requireReceiveWithin(t, closed, time.Second)
 }

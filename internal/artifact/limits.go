@@ -7,9 +7,16 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-// ErrArtifactExportRejected identifies a deterministic session-shape failure
-// that can be finalized without retrying the same generation forever.
-var ErrArtifactExportRejected = errors.New("artifact export rejected")
+var (
+	// ErrArtifactExportRejected identifies a deterministic session-shape
+	// failure that can be finalized without retrying the same generation
+	// forever.
+	ErrArtifactExportRejected = errors.New("artifact export rejected")
+
+	// ErrArtifactExportUnsettled identifies a full export that made progress
+	// but reached its bounded drain-round limit while work remained queued.
+	ErrArtifactExportUnsettled = errors.New("artifact export queue did not settle")
+)
 
 const (
 	originStateKey    = "artifact_origin_id"

@@ -179,6 +179,7 @@ func SanitizeMessage(m *Message) ValidationStats {
 	sanitizeStringField(&m.ClaudeRequestID, &stats)
 	sanitizeStringField(&m.SourceType, &stats)
 	sanitizeStringField(&m.SourceSubtype, &stats)
+	sanitizeStringField(&m.PromptSource, &stats)
 	sanitizeStringField(&m.SourceUUID, &stats)
 	sanitizeStringField(&m.SourceParentUUID, &stats)
 
@@ -303,6 +304,7 @@ func SanitizeSession(s *Session) ValidationStats {
 	sanitizeStringField(&s.Agent, &stats)
 	sanitizeStringField(&s.AgentLabel, &stats)
 	sanitizeStringField(&s.Entrypoint, &stats)
+	sanitizeStringField(&s.SessionKind, &stats)
 	sanitizeStringField(&s.Cwd, &stats)
 	sanitizeStringField(&s.GitBranch, &stats)
 	sanitizeStringField(&s.SourceSessionID, &stats)

@@ -38,10 +38,17 @@ var errIncompleteArtifact = errors.New("incomplete artifact")
 const (
 	checkpointFormatVersion = 1
 	// Manifest v2 replaces usage_events[].cost_usd floats with exact
-	// integer-microdollar cost objects.
-	manifestFormatVersion       = 2
-	messageSegmentFormatVersion = 1
-	metadataEventFormatVersion  = 1
+	// integer-microdollar cost objects. Manifest v3 adds the optional
+	// session_kind provenance field; v2 manifests still decode, with the
+	// field defaulting to empty.
+	manifestFormatVersion    = 3
+	manifestMinDecodeVersion = 2
+	// Segment v2 adds the optional prompt_source provenance field on
+	// message records; v1 segments still decode, with the field defaulting
+	// to empty.
+	messageSegmentFormatVersion    = 2
+	messageSegmentMinDecodeVersion = 1
+	metadataEventFormatVersion     = 1
 )
 
 // metadataEventExtension is the file extension for metadata event artifacts.
@@ -193,6 +200,7 @@ type segmentMessage struct {
 	IsSystem          bool              `json:"is_system,omitempty"`
 	SourceType        string            `json:"source_type,omitempty"`
 	SourceSubtype     string            `json:"source_subtype,omitempty"`
+	PromptSource      string            `json:"prompt_source,omitempty"`
 	SourceUUID        string            `json:"source_uuid,omitempty"`
 	SourceParentUUID  string            `json:"source_parent_uuid,omitempty"`
 	IsSidechain       bool              `json:"is_sidechain,omitempty"`
@@ -300,6 +308,7 @@ func segmentMessageFromDB(msg db.Message) segmentMessage {
 		IsSystem:          msg.IsSystem,
 		SourceType:        msg.SourceType,
 		SourceSubtype:     msg.SourceSubtype,
+		PromptSource:      msg.PromptSource,
 		SourceUUID:        msg.SourceUUID,
 		SourceParentUUID:  msg.SourceParentUUID,
 		IsSidechain:       msg.IsSidechain,

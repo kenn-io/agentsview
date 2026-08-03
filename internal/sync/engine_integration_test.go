@@ -19,6 +19,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
@@ -694,11 +695,16 @@ func TestSyncEngineOpenCodeSQLiteSameMtimeContentChangeUsesFingerprint(
 		"local_modified_at before rewrite")
 
 	time.Sleep(20 * time.Millisecond)
+	// The session row's own time_updated deliberately stays at
+	// 1779012030000. Production OpenCode stamps time_updated on every child
+	// row it writes, so the replacement children carry a newer one; that is
+	// the per-session signal the composite mtime reads, and it must catch a
+	// content change the session row alone cannot show.
 	oc.replaceTextContent(
 		t, "same-mtime-sqlite",
 		"changed prompt with same session mtime",
 		"changed answer with same session mtime",
-		1779012000000,
+		1779012600000,
 	)
 
 	stats = env.engine.SyncAll(context.Background(), nil)
@@ -715,8 +721,11 @@ func TestSyncEngineOpenCodeSQLiteSameMtimeContentChangeUsesFingerprint(
 	require.NotNil(t, after.FileHash, "file_hash after rewrite")
 	require.NotNil(t, after.LocalModifiedAt,
 		"local_modified_at after rewrite")
-	assert.Equal(t, *before.FileMtime, *after.FileMtime,
-		"same-mtime rewrite keeps the OpenCode SQLite session mtime")
+	assert.Greater(t, *after.FileMtime, *before.FileMtime,
+		"child content newer than the session row must advance the stored "+
+			"composite mtime: that per-session signal is what detects the "+
+			"change without the shared container's stat invalidating every "+
+			"other session in the same opencode.db")
 	assert.NotEqual(t, *before.FileHash, *after.FileHash,
 		"changed SQLite child content must change the storage fingerprint")
 	assert.Greater(t, *after.LocalModifiedAt, *before.LocalModifiedAt,
@@ -799,7 +808,7 @@ func TestSyncEngineOpenCodeSQLiteStatIdenticalContentChangeStillReemits(
 	oc.replaceTextContent(
 		t, "stat-twin",
 		"replaced prompt", "replaced answer",
-		1779012000000,
+		1779012600000,
 	)
 	after, err := os.Stat(dbPath)
 	require.NoError(t, err, "stat opencode.db after rewrite")
@@ -908,8 +917,15 @@ func TestSyncEngineOpenCodeSQLiteCwdFilteredContainerStaysUntrusted(
 
 	stats = engine.SyncAll(context.Background(), nil)
 	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
-	assert.Equal(t, 0, stats.Skipped,
-		"a container with cwd-vetoed sessions must not be gate-skipped")
+	// Exactly one skip: the persisted allowed session rides its own
+	// per-session freshness check. The vetoed session was never written, so
+	// it has no stored row to be fresh against and must be processed again.
+	// A trusted-container gate skip would cover both sessions and make this
+	// 2, which is the promotion violation this test exists to catch.
+	assert.Equal(t, 1, stats.Skipped,
+		"a container with cwd-vetoed sessions must not be gate-skipped: "+
+			"only the persisted session may skip, and only on its own "+
+			"per-session freshness")
 
 	kept, err := database.GetSessionFull(
 		context.Background(), "opencode:keep-session",
@@ -1188,9 +1204,8 @@ func TestSyncEngineOpenCodeSQLiteSameMtimeMetadataChangeUsesFingerprint(
 	assert.Equal(t, "original_app", before.Project)
 
 	time.Sleep(20 * time.Millisecond)
-	oc.mustExec(t, "update project worktree",
-		"UPDATE project SET worktree = ? WHERE id = ?",
-		"/home/user/code/renamed-app", "proj",
+	oc.updateProjectWorktree(
+		t, "proj", "/home/user/code/renamed-app", 1779015630000,
 	)
 
 	stats = env.engine.SyncAll(context.Background(), nil)
@@ -1205,8 +1220,11 @@ func TestSyncEngineOpenCodeSQLiteSameMtimeMetadataChangeUsesFingerprint(
 	require.NotNil(t, after.FileHash, "file_hash after rewrite")
 	require.NotNil(t, after.LocalModifiedAt,
 		"local_modified_at after rewrite")
-	assert.Equal(t, *before.FileMtime, *after.FileMtime,
-		"metadata-only rewrite keeps the OpenCode SQLite session mtime")
+	assert.Greater(t, *after.FileMtime, *before.FileMtime,
+		"a project worktree rename must advance the session's composite "+
+			"mtime: project.time_updated is part of the per-session change "+
+			"signal, which is what re-resolves cwd without the shared "+
+			"container's stat invalidating every unrelated session")
 	assert.NotEqual(t, *before.FileHash, *after.FileHash,
 		"changed SQLite metadata must change the storage fingerprint")
 	assert.Greater(t, *after.LocalModifiedAt, *before.LocalModifiedAt,
@@ -2530,7 +2548,30 @@ func TestSyncEngineWorktreeProjectWhenPathMissing(t *testing.T) {
 	assertSessionProject(t, env.db, "offline-worktree", "agentsview")
 }
 
-func TestSyncEngineAppliesWorktreeProjectMapping(t *testing.T) {
+func TestRemoteGitHubWorktreeProjectWhenPathMissing(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+	sessionCwd := filepath.Join(
+		t.TempDir(), "missing", "worktrees", "github.com", "example-org",
+		"sample-service", "fix-123", "cmd", "server",
+	)
+	require.NoDirExists(t, sessionCwd, "fixture cwd must remain unavailable locally")
+
+	content := testjsonl.NewSessionBuilder().
+		AddRaw(fmt.Sprintf(`{"type":"user","timestamp":"2024-01-01T10:00:00Z","cwd":%q,"gitBranch":"fix-123","message":{"content":"hello"}}`, sessionCwd)).
+		AddClaudeAssistant(tsEarlyS5, "ok").
+		String()
+
+	env.writeClaudeSessionForProject(
+		t, "/remote/sessions/sample-service",
+		"remote-github-worktree.jsonl", content,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 1, Synced: 1, Skipped: 0})
+
+	assertSessionProject(t, env.db, "remote-github-worktree", "sample_service")
+}
+
+func TestSyncEngineMappingPreservesParserProjectIdentitySnapshot(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	assert.Equal(t, "local", env.engine.Machine())
@@ -2568,6 +2609,210 @@ func TestSyncEngineAppliesWorktreeProjectMapping(t *testing.T) {
 	assertSessionProject(
 		t, env.db, "mapped-worktree", "canonical_app",
 	)
+
+	observations, err := env.db.ListProjectIdentityObservations(
+		context.Background(), []string{"canonical_app"},
+	)
+	require.NoError(t, err, "ListProjectIdentityObservations")
+	require.Len(t, observations, 1)
+	assert.Equal(t, "canonical_app", observations[0].Project)
+	assert.Equal(t, filepath.ToSlash(sessionCwd), observations[0].RootPath)
+
+	snapshots, err := env.db.ListSessionProjectIdentitySnapshots(
+		context.Background(),
+	)
+	require.NoError(t, err, "ListSessionProjectIdentitySnapshots")
+	require.Len(t, snapshots, 1)
+	assert.Equal(t, "mapped-worktree", snapshots[0].SessionID)
+	assert.Equal(t, "feature_login", snapshots[0].Project)
+	assert.Equal(t, filepath.ToSlash(sessionCwd), snapshots[0].RootPath)
+}
+
+func TestDeletedLinkedWorktreeProjectSurvivesReparseAndResync(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
+	ctx := context.Background()
+
+	root := t.TempDir()
+	mainRoot := filepath.Join(root, "code", "asset-library")
+	worktreeRoot := filepath.Join(
+		root, "tmp", "asset-library-docs-assets-upload",
+	)
+	worktreeGitDir := filepath.Join(
+		mainRoot, ".git", "worktrees", "docs-assets-upload",
+	)
+	require.NoError(t, os.MkdirAll(worktreeGitDir, 0o755))
+	require.NoError(t, os.MkdirAll(worktreeRoot, 0o755))
+	dbtest.WriteTestFile(
+		t,
+		filepath.Join(worktreeRoot, ".git"),
+		[]byte("gitdir: "+worktreeGitDir+"\n"),
+	)
+	dbtest.WriteTestFile(
+		t,
+		filepath.Join(worktreeGitDir, "commondir"),
+		[]byte("../..\n"),
+	)
+	dbtest.WriteTestFile(
+		t,
+		filepath.Join(mainRoot, ".git", "config"),
+		[]byte("[core]\n\tbare = false\n"+
+			"[remote \"origin\"]\n"+
+			"\turl = https://github.com/example/asset-library.git\n"),
+	)
+
+	const sessionUUID = "019faa49-a61a-7282-8376-12dd025a5f0c"
+	initial := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, sessionUUID, worktreeRoot, "user").
+		AddCodexMessage(tsEarlyS1, "user", "upload the asset").
+		String()
+	env.writeCodexSession(
+		t,
+		filepath.Join("2026", "07", "28"),
+		"rollout-2026-07-28T14-53-01-"+sessionUUID+".jsonl",
+		initial,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+	})
+	sessionID := "codex:" + sessionUUID
+	assertSessionProject(t, env.db, sessionID, "asset_library")
+	initialSnapshots, err := env.db.ListSessionProjectIdentitySnapshots(ctx)
+	require.NoError(t, err)
+	require.Len(t, initialSnapshots, 1)
+	assert.Equal(t, "asset_library", initialSnapshots[0].Project)
+	assert.Equal(
+		t,
+		"https://github.com/example/asset-library.git",
+		initialSnapshots[0].GitRemote,
+	)
+
+	require.NoError(t, os.RemoveAll(worktreeRoot))
+	require.NoDirExists(t, worktreeRoot)
+
+	updated := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, sessionUUID, worktreeRoot, "user").
+		AddCodexMessage(tsEarlyS1, "user", "upload the asset").
+		AddCodexMessage(tsEarlyS5, "assistant", "uploaded").
+		String()
+	env.writeCodexSession(
+		t,
+		filepath.Join("2026", "07", "28"),
+		"rollout-2026-07-28T14-53-01-"+sessionUUID+".jsonl",
+		updated,
+	)
+
+	require.NoError(t, env.engine.SyncSingleSession(sessionID))
+	assertSessionProject(t, env.db, sessionID, "asset_library")
+
+	snapshots, err := env.db.ListSessionProjectIdentitySnapshots(ctx)
+	require.NoError(t, err)
+	require.Len(t, snapshots, 1)
+	assert.Equal(t, "asset_library", snapshots[0].Project)
+	assert.Equal(
+		t,
+		"https://github.com/example/asset-library.git",
+		snapshots[0].GitRemote,
+	)
+
+	stats := env.engine.ResyncAll(ctx, nil)
+	require.False(t, stats.Aborted, "ResyncAll aborted: %v", stats.Warnings)
+	assertSessionProject(t, env.db, sessionID, "asset_library")
+
+	snapshots, err = env.db.ListSessionProjectIdentitySnapshots(ctx)
+	require.NoError(t, err)
+	require.Len(t, snapshots, 1)
+	assert.Equal(t, "asset_library", snapshots[0].Project)
+}
+
+func TestResyncAllUpgradeKeepsFreshProjectSnapshotAndDropsLegacyOrphan(
+	t *testing.T,
+) {
+	const (
+		legacyDataVersion = 67
+		liveSessionID     = "mapped-worktree-upgrade"
+		orphanSessionID   = "mapped-orphan-upgrade"
+		targetProject     = "canonical_app"
+		sourceProject     = "feature_login"
+	)
+	ctx := context.Background()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+
+	root := t.TempDir()
+	worktreePrefix := filepath.Join(root, "my-app.worktrees")
+	sessionCwd := filepath.Join(worktreePrefix, "feature-login")
+	_, err := env.db.CreateWorktreeProjectMapping(
+		ctx,
+		db.WorktreeProjectMapping{
+			Machine: "local", PathPrefix: worktreePrefix,
+			Project: targetProject, Enabled: true,
+		},
+	)
+	require.NoError(t, err, "CreateWorktreeProjectMapping")
+
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "Upgrade mapped worktree", sessionCwd).
+		AddClaudeAssistant(tsEarlyS5, "ok").
+		String()
+	env.writeClaudeSessionForProject(
+		t, sessionCwd, liveSessionID+".jsonl", content,
+	)
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+	})
+	require.NoError(t, env.db.UpsertSessionWithProjectIdentity(
+		db.Session{
+			ID: orphanSessionID, Project: targetProject,
+			Machine: "local", Agent: "claude", Cwd: "/archived/worktree",
+		},
+		export.ProjectIdentityObservation{
+			SessionID: orphanSessionID, Project: targetProject,
+			Machine: "local", RootPath: "/archived/worktree",
+		},
+		targetProject,
+	))
+
+	dbPath := env.db.Path()
+	require.NoError(t, env.db.CloseConnections(), "CloseConnections")
+	raw, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err, "open legacy archive")
+	require.Less(t, legacyDataVersion, db.CurrentDataVersion(),
+		"fixture must predate the current data version to trigger an upgrade")
+	_, err = raw.ExecContext(ctx, fmt.Sprintf(`
+		UPDATE session_project_identity_snapshots
+		SET project = ?
+		WHERE session_id = ?;
+		PRAGMA user_version = %d`, legacyDataVersion),
+		targetProject, liveSessionID,
+	)
+	require.NoError(t, err, "simulate legacy mapped snapshots")
+	require.NoError(t, raw.Close(), "close legacy archive")
+	require.NoError(t, env.db.Reopen(), "Reopen")
+
+	before, err := env.db.ListSessionProjectIdentitySnapshots(ctx)
+	require.NoError(t, err, "list legacy snapshots")
+	require.Len(t, before, 2)
+	for _, snapshot := range before {
+		assert.Equal(t, targetProject, snapshot.Project,
+			"fixture must represent target-labelled legacy evidence")
+	}
+
+	stats := env.engine.ResyncAll(ctx, nil)
+	require.False(t, stats.Aborted, "ResyncAll aborted: %v", stats.Warnings)
+	require.Equal(t, 1, stats.Synced)
+	require.Equal(t, 1, stats.OrphanedCopied)
+	assertSessionProject(t, env.db, liveSessionID, targetProject)
+	assertSessionProject(t, env.db, orphanSessionID, targetProject)
+
+	after, err := env.db.ListSessionProjectIdentitySnapshots(ctx)
+	require.NoError(t, err, "list upgraded snapshots")
+	require.Len(t, after, 1,
+		"unreconstructable orphan evidence must be discarded")
+	assert.Equal(t, liveSessionID, after[0].SessionID)
+	assert.Equal(t, sourceProject, after[0].Project,
+		"metadata copy must retain the freshly parsed source label")
 }
 
 func TestSyncSingleSessionAppliesWorktreeProjectMapping(t *testing.T) {
@@ -2776,6 +3021,60 @@ func TestSyncPathsSkippedClaudeDoesNotApplyWorktreeProjectMapping(
 		after.LocalModifiedAt,
 		beforeFull.LocalModifiedAt,
 	)
+}
+
+func TestRunExclusiveSerializesWorktreeReclassification(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	ctx := context.Background()
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "session", Machine: "archive.example", Agent: "claude",
+		Project: "branch", Cwd: "/worktrees/service/branch",
+	}))
+	draft := db.WorktreeReclassificationDraft{
+		Machine: "archive.example", PathPrefix: "/worktrees/service",
+		Project: "service", Enabled: true,
+	}
+	preview, err := database.PreviewWorktreeReclassification(ctx, draft)
+	require.NoError(t, err)
+	engine := sync.NewEngine(database, sync.EngineConfig{Machine: "archive.example"})
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- engine.RunExclusive(func() error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+
+	applyAttempted := make(chan struct{})
+	applyDone := make(chan error, 1)
+	go func() {
+		close(applyAttempted)
+		_, _, applyErr := engine.ApplyWorktreeReclassification(
+			ctx, draft, preview.MappingToken, preview.ExistingMappingID,
+		)
+		applyDone <- applyErr
+	}()
+	<-applyAttempted
+	select {
+	case applyErr := <-applyDone:
+		require.Failf(t, "apply overlapped exclusive work", "error: %v", applyErr)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(release)
+	require.NoError(t, <-firstDone)
+	require.NoError(t, <-applyDone)
+
+	session, err := database.GetSession(ctx, "session")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "service", session.Project)
 }
 
 func TestSyncSingleSessionIncrementalAppliesWorktreeProjectMapping(
@@ -3272,6 +3571,202 @@ func (f usageParityFactory) Capabilities() parser.Capabilities {
 
 func (f usageParityFactory) NewProvider(parser.ProviderConfig) parser.Provider {
 	return f.provider
+}
+
+type mappingLifecycleProvider struct {
+	parser.ProviderBase
+	source  parser.SourceRef
+	results []parser.ParseResult
+}
+
+func (p *mappingLifecycleProvider) Discover(context.Context) ([]parser.SourceRef, error) {
+	return []parser.SourceRef{p.source}, nil
+}
+
+func (p *mappingLifecycleProvider) Fingerprint(
+	context.Context, parser.SourceRef,
+) (parser.SourceFingerprint, error) {
+	return parser.SourceFingerprint{
+		Key: p.source.FingerprintKey, Size: 256,
+		MTimeNS: 1_700_000_000_000_000_000,
+	}, nil
+}
+
+func (p *mappingLifecycleProvider) Parse(
+	context.Context, parser.ParseRequest,
+) (parser.ParseOutcome, error) {
+	outcomes := make([]parser.ParseResultOutcome, 0, len(p.results))
+	for _, result := range p.results {
+		outcomes = append(outcomes, parser.ParseResultOutcome{Result: result})
+	}
+	return parser.ParseOutcome{Results: outcomes, ResultSetComplete: true}, nil
+}
+
+type mappingLifecycleFactory struct{ provider *mappingLifecycleProvider }
+
+func (f mappingLifecycleFactory) Definition() parser.AgentDef {
+	return f.provider.Definition()
+}
+
+func (f mappingLifecycleFactory) Capabilities() parser.Capabilities {
+	return f.provider.Capabilities()
+}
+
+func (f mappingLifecycleFactory) NewProvider(parser.ProviderConfig) parser.Provider {
+	return f.provider
+}
+
+func TestReclassificationSurvivesRemoteResyncLifecycle(t *testing.T) {
+	const (
+		machine       = "remote-example-host"
+		sourceProject = "source_project"
+		targetProject = "target_project"
+		root          = "/srv/custom-worktrees/sample-branch"
+		orphanRoot    = "/srv/custom-worktrees/orphan-branch"
+	)
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name          string
+		mappingAction string
+		wantLive      string
+	}{
+		{name: "enabled mapping reclassifies reparsed live session", wantLive: targetProject},
+		{name: "disabled mapping lets live session revert", mappingAction: "disable", wantLive: sourceProject},
+		{name: "deleted mapping lets live session revert", mappingAction: "delete", wantLive: sourceProject},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sourcePath := filepath.Join(t.TempDir(), "mapping-lifecycle.fixture")
+			dbtest.WriteTestFile(t, sourcePath, []byte("fixture"))
+			newResult := func(id, cwd string) parser.ParseResult {
+				return parser.ParseResult{Session: parser.ParsedSession{
+					ID: id, Project: sourceProject, Machine: machine,
+					Agent: parser.AgentCowork, Cwd: cwd,
+					StartedAt:    time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC),
+					FirstMessage: "lifecycle fixture", MessageCount: 1,
+					UserMessageCount: 1,
+					File: parser.FileInfo{
+						Path: sourcePath, Size: 256,
+						Mtime: 1_700_000_000_000_000_000,
+					},
+				}, Messages: []parser.ParsedMessage{{
+					Ordinal: 0, Role: parser.RoleUser, Content: "lifecycle fixture",
+					Timestamp: time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC),
+				}}}
+			}
+			provider := &mappingLifecycleProvider{
+				ProviderBase: parser.ProviderBase{
+					Def: parser.AgentDef{Type: parser.AgentCowork, FileBased: true},
+					Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+						DiscoverSources:      parser.CapabilitySupported,
+						CompositeFingerprint: parser.CapabilitySupported,
+					}},
+				},
+				source: parser.SourceRef{
+					Provider: parser.AgentCowork, Key: sourcePath,
+					DisplayPath: sourcePath, FingerprintKey: sourcePath,
+				},
+				results: []parser.ParseResult{
+					newResult("live-empty-cwd", ""),
+					newResult("live-evidence", root),
+					newResult("orphaned", orphanRoot),
+				},
+			}
+			database := dbtest.OpenTestDB(t)
+			remoteConfig := sync.EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentCowork: {filepath.Dir(sourcePath)}},
+				Machine:   machine, IDPrefix: machine + "~", Ephemeral: true,
+				ProviderFactories: []parser.ProviderFactory{
+					mappingLifecycleFactory{provider: provider},
+				},
+				ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+					parser.AgentCowork: parser.ProviderMigrationProviderAuthoritative,
+				},
+			}
+			remoteEngine := sync.NewEngine(database, remoteConfig)
+			require.Equal(t, 3, remoteEngine.SyncAll(ctx, nil).Synced)
+			remoteEngine.Close()
+
+			mapping, err := database.CreateWorktreeProjectMapping(
+				ctx, db.WorktreeProjectMapping{
+					Machine: machine, PathPrefix: "/srv/custom-worktrees",
+					Layout: db.WorktreeMappingLayoutExplicit, Project: targetProject,
+					OriginalProject: sourceProject, Enabled: true,
+				},
+			)
+			require.NoError(t, err)
+			applied, err := database.ApplyWorktreeProjectMappings(ctx, machine)
+			require.NoError(t, err)
+			require.Equal(t, 3, applied.UpdatedSessions)
+			switch tc.mappingAction {
+			case "disable":
+				mapping.Enabled = false
+				_, err = database.UpdateWorktreeProjectMapping(ctx, machine, mapping.ID, mapping)
+				require.NoError(t, err)
+			case "delete":
+				require.NoError(t, database.DeleteWorktreeProjectMapping(
+					ctx, machine, mapping.ID,
+				))
+			}
+
+			provider.results = []parser.ParseResult{
+				newResult("live-empty-cwd", ""),
+				newResult("live-evidence", root),
+			}
+			engine := sync.NewEngine(database, sync.EngineConfig{Machine: "local"})
+			t.Cleanup(engine.Close)
+			stats, err := engine.ResyncAllWithOptions(ctx, nil,
+				sync.RebuildOptions{Contributors: []sync.RebuildContributor{{
+					Name: "remote-example", Config: remoteConfig,
+				}}},
+			)
+			require.NoError(t, err)
+			require.False(t, stats.Aborted, "resync aborted: %+v", stats)
+			assert.Equal(t, 1, stats.OrphanedCopied)
+			for id, wantProject := range map[string]string{
+				machine + "~live-empty-cwd": tc.wantLive,
+				machine + "~orphaned":       targetProject,
+			} {
+				session, getErr := database.GetSession(ctx, id)
+				require.NoError(t, getErr)
+				require.NotNil(t, session, id)
+				assert.Equal(t, wantProject, session.Project, id)
+			}
+			snapshots, err := database.ListSessionProjectIdentitySnapshots(ctx)
+			require.NoError(t, err)
+			for _, snapshot := range snapshots {
+				assert.Equal(t, sourceProject, snapshot.Project, snapshot.SessionID)
+			}
+			targetObservations, err := database.ListProjectIdentityObservations(
+				ctx, []string{targetProject},
+			)
+			require.NoError(t, err)
+			sourceObservations, err := database.ListProjectIdentityObservations(
+				ctx, []string{sourceProject},
+			)
+			require.NoError(t, err)
+			targetRoots := make(map[string]struct{}, len(targetObservations))
+			for _, observation := range targetObservations {
+				targetRoots[observation.RootPath] = struct{}{}
+			}
+			sourceRoots := make(map[string]struct{}, len(sourceObservations))
+			for _, observation := range sourceObservations {
+				sourceRoots[observation.RootPath] = struct{}{}
+			}
+			if tc.mappingAction == "" {
+				assert.Contains(t, targetRoots, root)
+				assert.Contains(t, targetRoots, orphanRoot)
+				assert.Empty(t, sourceRoots,
+					"former aggregate evidence must be tombstoned after every live row moves")
+			} else {
+				assert.Contains(t, sourceRoots, root,
+					"reverted live evidence must return to the source project")
+				assert.NotContains(t, targetRoots, root,
+					"reverted live evidence must leave no stale target aggregate")
+				assert.Contains(t, targetRoots, orphanRoot,
+					"the mapped orphan must retain its valid target aggregate")
+			}
+		})
+	}
 }
 
 func newUsageParityProvider(sourcePath, machine string) *usageParityProvider {
@@ -8957,6 +9452,88 @@ func TestResyncAllPreservesInsights(t *testing.T) {
 	assert.Equal(t, "test insight survives resync", insights[0].Content, "insight content = %q, want preserved", insights[0].Content)
 }
 
+func TestResyncAllConsumesCopiedHierarchyRepairs(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "hierarchy repair session").
+		AddClaudeAssistant(tsEarlyS5, "hierarchy repair reply").
+		String()
+	env.writeClaudeSession(t, "test-proj", "hierarchy-repair.jsonl", content)
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+	require.NoError(t, env.db.QueueSubagentParentRepairs(
+		[]string{"queued-relink"},
+	))
+	require.NoError(t, env.db.QueueSubagentParentCleanupRepairs(
+		[]string{"queued-cleanup"},
+	))
+
+	stats := env.engine.ResyncAll(context.Background(), nil)
+
+	require.False(t, stats.Aborted, "resync aborted: %v", stats.Warnings)
+	for _, table := range []string{
+		"subagent_parent_repair_queue",
+		"subagent_parent_cleanup_queue",
+	} {
+		var pending int
+		require.NoError(t, env.db.Reader().QueryRow(
+			"SELECT count(*) FROM "+table,
+		).Scan(&pending))
+		assert.Zero(t, pending, "%s must be consumed before swap", table)
+	}
+}
+
+func TestResyncAllAbortsWhenCopiedHierarchyRepairFails(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "original hierarchy repair session").
+		AddClaudeAssistant(tsEarlyS5, "original hierarchy repair reply").
+		String()
+	env.writeClaudeSession(
+		t, "test-proj", "hierarchy-repair-resync.jsonl", content,
+	)
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+	require.NoError(t, env.db.QueueSubagentParentRepairs(
+		[]string{"queued-hierarchy-repair"},
+	))
+
+	stats, err := env.engine.ResyncAllWithOptions(
+		context.Background(), nil,
+		sync.RebuildOptions{Contributors: []sync.RebuildContributor{{
+			Name: "repair-failure-fixture",
+			Config: sync.EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					parser.AgentClaude: {t.TempDir()},
+				},
+				Machine:   "repair-fixture",
+				IDPrefix:  "repair-fixture~",
+				Ephemeral: true,
+			},
+			AfterSync: func(_ *sync.Engine, tempDB *db.DB) error {
+				return tempDB.Update(func(tx *sql.Tx) error {
+					_, triggerErr := tx.Exec(`
+						CREATE TRIGGER fail_copied_hierarchy_repair
+						BEFORE DELETE ON subagent_parent_repair_queue
+						BEGIN
+							SELECT RAISE(FAIL, 'injected copied hierarchy repair failure');
+						END`)
+					return triggerErr
+				})
+			},
+		}}},
+	)
+
+	require.ErrorContains(t, err, "injected copied hierarchy repair failure")
+	assert.True(t, stats.Aborted)
+	assert.Contains(t, strings.Join(stats.Warnings, "\n"),
+		"hierarchy repair failed, aborting swap")
+	assertSessionMessageCount(t, env.db, "hierarchy-repair-resync", 2)
+	assert.NoFileExists(t, env.db.Path()+"-resync")
+}
+
 func TestResyncAllPreservesModelPricing(t *testing.T) {
 	env := setupTestEnv(t)
 
@@ -13800,4 +14377,446 @@ func testStringPtrValue(v *string) string {
 		return ""
 	}
 	return *v
+}
+
+// parentSessionIDOf returns the stored parent_session_id of id, failing the
+// test when the session is missing or its parent is unset.
+func parentSessionIDOf(t *testing.T, env *testEnv, id string) string {
+	t.Helper()
+	sess, err := env.db.GetSession(context.Background(), id)
+	require.NoError(t, err, "GetSession %s", id)
+	require.NotNil(t, sess, "session %s must exist", id)
+	require.NotNil(t, sess.ParentSessionID, "%s parent must be set", id)
+	return *sess.ParentSessionID
+}
+
+// TestSyncSingleSessionIncrementalAppendLinksSpawnedChild covers the
+// incremental branch of SyncSingleSessionContext: an append that introduces
+// a Task tool_use together with its subagent mapping stays on the
+// incremental path, and the spawn edge it stores must re-link the child in
+// the same sync rather than leaving the hierarchy stale until the next bulk
+// pass. The scenario is the depth-2 tree the linking fix exists for: the
+// orchestrator (itself a subagent, path-derived parent = main) spawns the
+// grandchild, whose path-derived parent also points at main.
+func TestSyncSingleSessionIncrementalAppendLinksSpawnedChild(t *testing.T) {
+	env := setupTestEnv(t)
+
+	env.writeClaudeSession(
+		t, "proj-inc-link", "main-inc-link.jsonl", testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T09:00:00Z","uuid":"m1","message":{"content":"root"},"cwd":"/tmp","sessionId":"main-inc-link"}`,
+		),
+	)
+	orchPath := env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-inc-link", "main-inc-link", "subagents",
+			"agent-orch.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"o1","message":{"content":"orchestrate"},"cwd":"/tmp","sessionId":"main-inc-link"}`,
+		),
+	)
+	env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-inc-link", "main-inc-link", "subagents",
+			"agent-kid.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T10:30:00Z","uuid":"k1","message":{"content":"grandchild work"},"cwd":"/tmp","sessionId":"main-inc-link"}`,
+		),
+	)
+
+	env.engine.SyncAll(context.Background(), nil)
+
+	// Path derivation pins every flat subagent to the main session.
+	require.Equal(t, "main-inc-link",
+		parentSessionIDOf(t, env, "agent-kid"),
+		"before the append the grandchild sits under main")
+
+	// The stored orchestrator row id proves the append stayed on the
+	// incremental path: a full replacement would delete and reinsert it.
+	var orchMsgID int64
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT id FROM messages
+		WHERE session_id = ? AND ordinal = 0`,
+		"agent-orch",
+	).Scan(&orchMsgID), "query orchestrator message id before append")
+
+	// One append introduces the Task tool_use AND its subagent mapping,
+	// so the incremental parser can link without a full parse.
+	appended := testjsonl.JoinJSONL(
+		`{"type":"assistant","timestamp":"2024-01-01T10:31:00Z","uuid":"o2","parentUuid":"o1","message":{"id":"msg_orch","content":[{"type":"tool_use","id":"toolu_inc","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:32:00Z","uuid":"o3","parentUuid":"o2","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_inc","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"kid"}}`,
+	) + "\n"
+	f, err := os.OpenFile(orchPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open orchestrator transcript for append")
+	_, writeErr := f.WriteString(appended)
+	f.Close()
+	require.NoError(t, writeErr, "append spawn edge")
+
+	require.NoError(t, env.engine.SyncSingleSession("agent-orch"),
+		"SyncSingleSession orchestrator")
+
+	var gotMsgID int64
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT id FROM messages
+		WHERE session_id = ? AND ordinal = 0`,
+		"agent-orch",
+	).Scan(&gotMsgID), "query orchestrator message id after append")
+	require.Equal(t, orchMsgID, gotMsgID,
+		"the append must stay on the incremental path for this test to "+
+			"pin the incremental branch (a full replace reinserts rows)")
+
+	assert.Equal(t, "agent-orch", parentSessionIDOf(t, env, "agent-kid"),
+		"an incrementally appended spawn edge must re-link the child in "+
+			"the same single-session sync")
+}
+
+// TestSyncSingleSessionNewEdgeLinkFailureRetriesFromDurableQueue covers the
+// inverse of edge removal: an incremental write can successfully store a new
+// spawn edge and then fail while linking its child. The next explicit sync is
+// fresh and does not rewrite messages, so the newly referenced child itself
+// must have been queued after the write for that retry to finish the link.
+func TestSyncSingleSessionNewEdgeLinkFailureRetriesFromDurableQueue(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+
+	env.writeClaudeSession(
+		t, "proj-new-edge-retry", "main-new-edge-retry.jsonl",
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T09:00:00Z","uuid":"m1","message":{"content":"root"},"cwd":"/tmp","sessionId":"main-new-edge-retry"}`,
+		),
+	)
+	orchPath := env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-new-edge-retry", "main-new-edge-retry", "subagents",
+			"agent-orch.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"o1","message":{"content":"orchestrate"},"cwd":"/tmp","sessionId":"main-new-edge-retry"}`,
+		),
+	)
+	env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-new-edge-retry", "main-new-edge-retry", "subagents",
+			"agent-kid.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T10:30:00Z","uuid":"k1","message":{"content":"child work"},"cwd":"/tmp","sessionId":"main-new-edge-retry"}`,
+		),
+	)
+	env.engine.SyncAll(t.Context(), nil)
+	require.Equal(t, "main-new-edge-retry",
+		parentSessionIDOf(t, env, "agent-kid"))
+
+	appended := testjsonl.JoinJSONL(
+		`{"type":"assistant","timestamp":"2024-01-01T10:31:00Z","uuid":"o2","parentUuid":"o1","message":{"id":"msg_orch","content":[{"type":"tool_use","id":"toolu_retry","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:32:00Z","uuid":"o3","parentUuid":"o2","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_retry","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"kid"}}`,
+	) + "\n"
+	f, err := os.OpenFile(orchPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, writeErr := f.WriteString(appended)
+	closeErr := f.Close()
+	require.NoError(t, writeErr)
+	require.NoError(t, closeErr)
+
+	raw, err := sql.Open("sqlite3", env.db.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	_, err = raw.Exec(`
+		CREATE TRIGGER fail_new_child_parent_link
+		BEFORE UPDATE OF parent_session_id ON sessions
+		WHEN NEW.id = 'agent-kid'
+		  AND NEW.parent_session_id = 'agent-orch'
+		BEGIN
+			SELECT RAISE(FAIL, 'injected new child link failure');
+		END`)
+	require.NoError(t, err)
+
+	firstErr := env.engine.SyncSingleSession("agent-orch")
+	require.ErrorContains(t, firstErr, "injected new child link failure")
+	assert.Equal(t, "main-new-edge-retry",
+		parentSessionIDOf(t, env, "agent-kid"))
+	var edgeCount int
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT count(*) FROM tool_calls
+		WHERE session_id = 'agent-orch'
+		  AND subagent_session_id = 'agent-kid'`,
+	).Scan(&edgeCount))
+	require.Equal(t, 1, edgeCount,
+		"the first sync must persist the new edge before linking fails")
+	var queuedRepairs int
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT count(*) FROM subagent_parent_repair_queue
+		WHERE session_id = 'agent-kid'`,
+	).Scan(&queuedRepairs))
+	require.Equal(t, 1, queuedRepairs,
+		"the new child must remain durably queued after linking fails")
+
+	_, err = raw.Exec("DROP TRIGGER fail_new_child_parent_link")
+	require.NoError(t, err)
+	require.NoError(t, env.engine.SyncSingleSession("agent-orch"),
+		"freshness retry must consume the durable new-child repair")
+	assert.Equal(t, "agent-orch", parentSessionIDOf(t, env, "agent-kid"))
+}
+
+// TestSyncSingleSessionRewriteRemovingEdgeRelinksFormerChild covers the
+// pre-write child capture in SyncSingleSessionContext: a full rewrite that
+// REMOVES a spawn edge cascades the tool_calls row away, so the scoped
+// linker can no longer discover the former child through post-write edges.
+// The child must still be re-resolved — here to the remaining spawner —
+// in the same sync instead of keeping the deleted edge's stale parent.
+func TestSyncSingleSessionRewriteRemovingEdgeRelinksFormerChild(t *testing.T) {
+	env := setupTestEnv(t)
+
+	env.writeClaudeSession(
+		t, "proj-edge-rm", "main-edge-rm.jsonl", testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T09:00:00Z","uuid":"m1","message":{"content":"root"},"cwd":"/tmp","sessionId":"main-edge-rm"}`,
+		),
+	)
+	// Both orchestrators claim the grandchild; orcha starts earlier, so
+	// the chronological resolution links the child under orcha.
+	orchaInitial := testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"a1","message":{"content":"orchestrate a"},"cwd":"/tmp","sessionId":"main-edge-rm"}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:01:00Z","uuid":"a2","parentUuid":"a1","message":{"id":"msg_a","content":[{"type":"tool_use","id":"toolu_a","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:02:00Z","uuid":"a3","parentUuid":"a2","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_a","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"kid"}}`,
+	)
+	orchaPath := env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-edge-rm", "main-edge-rm", "subagents",
+			"agent-orcha.jsonl",
+		),
+		orchaInitial,
+	)
+	env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-edge-rm", "main-edge-rm", "subagents",
+			"agent-orchb.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T11:00:00Z","uuid":"b1","message":{"content":"orchestrate b"},"cwd":"/tmp","sessionId":"main-edge-rm"}`,
+			`{"type":"assistant","timestamp":"2024-01-01T11:01:00Z","uuid":"b2","parentUuid":"b1","message":{"id":"msg_b","content":[{"type":"tool_use","id":"toolu_b","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+			`{"type":"user","timestamp":"2024-01-01T11:02:00Z","uuid":"b3","parentUuid":"b2","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_b","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"kid"}}`,
+		),
+	)
+	env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-edge-rm", "main-edge-rm", "subagents",
+			"agent-kid.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T11:30:00Z","uuid":"k1","message":{"content":"grandchild work"},"cwd":"/tmp","sessionId":"main-edge-rm"}`,
+		),
+	)
+
+	env.engine.SyncAll(context.Background(), nil)
+
+	require.Equal(t, "agent-orcha",
+		parentSessionIDOf(t, env, "agent-kid"),
+		"the earliest-started spawner wins while both edges exist")
+
+	// Rewrite orcha WITHOUT its spawn edge (same first message, so its
+	// start time is unchanged; the shrunk file forces a full replace,
+	// which cascades the toolu_a edge away).
+	require.NoError(t, os.WriteFile(orchaPath, []byte(testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"a1","message":{"content":"orchestrate a"},"cwd":"/tmp","sessionId":"main-edge-rm"}`,
+	)+"\n"), 0o644), "rewrite orcha without the spawn edge")
+
+	require.NoError(t, env.engine.SyncSingleSession("agent-orcha"),
+		"SyncSingleSession rewritten orchestrator")
+
+	assert.Equal(t, "agent-orchb", parentSessionIDOf(t, env, "agent-kid"),
+		"removing orcha's edge must re-resolve its former child to the "+
+			"remaining spawner in the same sync, not leave the stale parent")
+}
+
+func setupSingleSessionParentRepairRetry(
+	t *testing.T,
+) (*testEnv, string) {
+	t.Helper()
+	env := setupTestEnv(t)
+
+	env.writeClaudeSession(
+		t, "proj-repair-retry", "main-repair-retry.jsonl",
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T09:00:00Z","uuid":"m1","message":{"content":"root"},"cwd":"/tmp","sessionId":"main-repair-retry"}`,
+		),
+	)
+	orchaPath := env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-repair-retry", "main-repair-retry", "subagents",
+			"agent-orcha.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"a1","message":{"content":"orchestrate a"},"cwd":"/tmp","sessionId":"main-repair-retry"}`,
+			`{"type":"assistant","timestamp":"2024-01-01T10:01:00Z","uuid":"a2","parentUuid":"a1","message":{"id":"msg_a","content":[{"type":"tool_use","id":"toolu_a","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+			`{"type":"user","timestamp":"2024-01-01T10:02:00Z","uuid":"a3","parentUuid":"a2","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_a","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"kid"}}`,
+		),
+	)
+	env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-repair-retry", "main-repair-retry", "subagents",
+			"agent-orchb.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T11:00:00Z","uuid":"b1","message":{"content":"orchestrate b"},"cwd":"/tmp","sessionId":"main-repair-retry"}`,
+			`{"type":"assistant","timestamp":"2024-01-01T11:01:00Z","uuid":"b2","parentUuid":"b1","message":{"id":"msg_b","content":[{"type":"tool_use","id":"toolu_b","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+			`{"type":"user","timestamp":"2024-01-01T11:02:00Z","uuid":"b3","parentUuid":"b2","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_b","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"kid"}}`,
+		),
+	)
+	env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-repair-retry", "main-repair-retry", "subagents",
+			"agent-kid.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T11:30:00Z","uuid":"k1","message":{"content":"grandchild work"},"cwd":"/tmp","sessionId":"main-repair-retry"}`,
+		),
+	)
+
+	env.engine.SyncAll(t.Context(), nil)
+	var initialEdges int
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT count(*) FROM tool_calls WHERE subagent_session_id = 'agent-kid'`,
+	).Scan(&initialEdges))
+	require.Equal(t, 2, initialEdges, "test setup requires both spawn edges")
+	require.Equal(t, "agent-orcha", parentSessionIDOf(t, env, "agent-kid"))
+	require.NoError(t, os.WriteFile(orchaPath, []byte(testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"a1","message":{"content":"orchestrate a"},"cwd":"/tmp","sessionId":"main-repair-retry"}`,
+	)+"\n"), 0o644), "rewrite orcha without the spawn edge")
+	return env, orchaPath
+}
+
+func TestSyncSingleSessionWriteFailureStillRepairsFormerChild(t *testing.T) {
+	env, _ := setupSingleSessionParentRepairRetry(t)
+	raw, err := sql.Open("sqlite3", env.db.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	_, err = raw.Exec(fmt.Sprintf(`
+		CREATE TRIGGER fail_parent_repair_write_completion
+		BEFORE UPDATE OF data_version ON sessions
+		WHEN NEW.id = 'agent-orcha' AND NEW.data_version = %d
+		BEGIN
+			SELECT RAISE(FAIL, 'injected post-replacement failure');
+		END`, db.CurrentDataVersion()))
+	require.NoError(t, err)
+
+	syncErr := env.engine.SyncSingleSession("agent-orcha")
+
+	require.ErrorContains(t, syncErr, "injected post-replacement failure")
+	assert.Equal(t, "agent-orchb", parentSessionIDOf(t, env, "agent-kid"),
+		"a later write failure must not skip repair after removing an edge")
+}
+
+func TestSyncSingleSessionRepairFailurePersistsFormerChildForRetry(t *testing.T) {
+	env, _ := setupSingleSessionParentRepairRetry(t)
+	raw, err := sql.Open("sqlite3", env.db.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	_, err = raw.Exec(`
+		CREATE TRIGGER fail_parent_repair
+		BEFORE UPDATE OF parent_session_id ON sessions
+		WHEN NEW.id = 'agent-kid'
+		BEGIN
+			SELECT RAISE(FAIL, 'injected parent repair failure');
+		END`)
+	require.NoError(t, err)
+
+	firstErr := env.engine.SyncSingleSession("agent-orcha")
+
+	require.ErrorContains(t, firstErr, "injected parent repair failure")
+	assert.Equal(t, "agent-orcha", parentSessionIDOf(t, env, "agent-kid"))
+	var edgeCount int
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT count(*) FROM tool_calls
+		WHERE session_id = 'agent-orcha'
+		  AND subagent_session_id = 'agent-kid'`,
+	).Scan(&edgeCount), "count removed edge")
+	assert.Zero(t, edgeCount, "the first sync must remove the spawn edge")
+
+	_, err = raw.Exec("DROP TRIGGER fail_parent_repair")
+	require.NoError(t, err)
+	require.NoError(t, env.engine.SyncSingleSession("agent-orcha"),
+		"retry must consume the durable repair queue")
+	assert.Equal(t, "agent-orchb", parentSessionIDOf(t, env, "agent-kid"),
+		"retry must repair a child no longer discoverable from the removed edge")
+}
+
+// TestSyncSingleSessionChildCaptureFailurePreservesEdges pins the fail-closed
+// boundary before a full rewrite. The rewritten spawner transcript is about to
+// remove its sole spawn edge; if the engine cannot first capture the affected
+// child, it must return that read failure before any exclusion or replacement
+// can erase the evidence needed to repair the hierarchy.
+func TestSyncSingleSessionChildCaptureFailurePreservesEdges(t *testing.T) {
+	env := setupTestEnv(t)
+
+	env.writeClaudeSession(
+		t, "proj-capture-fail", "main-capture-fail.jsonl",
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T09:00:00Z","uuid":"m1","message":{"content":"root"},"cwd":"/tmp","sessionId":"main-capture-fail"}`,
+		),
+	)
+	spawnerPath := env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-capture-fail", "main-capture-fail", "subagents",
+			"agent-spawner.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"s1","message":{"content":"orchestrate"},"cwd":"/tmp","sessionId":"main-capture-fail"}`,
+			`{"type":"assistant","timestamp":"2024-01-01T10:01:00Z","uuid":"s2","parentUuid":"s1","message":{"id":"msg_spawner","content":[{"type":"tool_use","id":"toolu_spawn","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+			`{"type":"user","timestamp":"2024-01-01T10:02:00Z","uuid":"s3","parentUuid":"s2","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_spawn","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"kid"}}`,
+		),
+	)
+	env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-capture-fail", "main-capture-fail", "subagents",
+			"agent-kid.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T10:30:00Z","uuid":"k1","message":{"content":"child work"},"cwd":"/tmp","sessionId":"main-capture-fail"}`,
+		),
+	)
+
+	env.engine.SyncAll(context.Background(), nil)
+
+	var edgeCount int
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT count(*) FROM tool_calls
+		WHERE session_id = ? AND subagent_session_id = ?`,
+		"agent-spawner", "agent-kid",
+	).Scan(&edgeCount), "count initial spawn edge")
+	require.Equal(t, 1, edgeCount, "test setup requires one spawn edge")
+
+	// A successful full rewrite would cascade the existing tool call away.
+	require.NoError(t, os.WriteFile(spawnerPath, []byte(testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"s1","message":{"content":"orchestrate"},"cwd":"/tmp","sessionId":"main-capture-fail"}`,
+	)+"\n"), 0o644), "rewrite spawner without edge")
+
+	require.NoError(t, env.db.CloseConnections(), "close database connections")
+	syncErr := env.engine.SyncSingleSession("agent-spawner")
+	require.NoError(t, env.db.Reopen(), "reopen database")
+	require.ErrorContains(t, syncErr, "list pre-write subagent children")
+
+	spawner, err := env.db.GetSession(context.Background(), "agent-spawner")
+	require.NoError(t, err, "get spawner after failed sync")
+	assert.NotNil(t, spawner, "failed capture must not delete the spawner")
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT count(*) FROM tool_calls
+		WHERE session_id = ? AND subagent_session_id = ?`,
+		"agent-spawner", "agent-kid",
+	).Scan(&edgeCount), "count spawn edge after failed sync")
+	assert.Equal(t, 1, edgeCount,
+		"failed capture must not remove the sole spawn edge")
 }

@@ -205,7 +205,7 @@ func TestClassifyProviderChangedPathPreservesHintDependentTombstones(t *testing.
 			setup: func(t *testing.T) (string, string, string) {
 				root := t.TempDir()
 				path, _ := writeProcessProviderDevinFixture(
-					t, root, "deleted", "reply", 1710000000000, 1710000005000,
+					t, root, "deleted", "reply", 1710000000, 1710000005,
 				)
 				conn, err := sql.Open("sqlite3", path)
 				require.NoError(t, err)

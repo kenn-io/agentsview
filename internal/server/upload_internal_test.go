@@ -48,3 +48,23 @@ func TestSessionBatchWriteFromParsedPreservesSessionIdentity(t *testing.T) {
 	assert.Equal(t, "Claude Code", result.Session.AgentLabel)
 	assert.Equal(t, "claude-sdk", result.Session.Entrypoint)
 }
+
+func TestSessionBatchWriteFromParsedPreservesClaudeProvenance(t *testing.T) {
+	sess := parser.ParsedSession{
+		ID:          "test-claude-provenance",
+		Agent:       parser.AgentClaude,
+		SessionKind: "bg",
+	}
+	msgs := []parser.ParsedMessage{{
+		Ordinal:      1,
+		Role:         parser.RoleUser,
+		Content:      "queued prompt",
+		PromptSource: "queued",
+	}}
+
+	result := sessionBatchWriteFromParsed(sess, msgs)
+
+	assert.Equal(t, "bg", result.Session.SessionKind)
+	require.Len(t, result.Messages, 1)
+	assert.Equal(t, "queued", result.Messages[0].PromptSource)
+}

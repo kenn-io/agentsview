@@ -206,13 +206,14 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		if err := copySessionDataForIDs(ctx, tx, "_orphaned_ids"); err != nil {
 			return 0, fmt.Errorf("copying orphaned data: %w", err)
 		}
+		sourceVersion := copiedSourceDataVersion(ctx, tx)
 		if err := removeGeneratedIdentitySnapshotsWithoutSource(
-			ctx, tx, "_orphaned_ids",
+			ctx, tx, "_orphaned_ids", sourceVersion,
 		); err != nil {
 			return 0, fmt.Errorf("repairing orphan identity snapshots: %w", err)
 		}
 		if err := sanitizeCopiedSessionContent(
-			ctx, tx, "_orphaned_ids", copiedSourceDataVersion(ctx, tx),
+			ctx, tx, "_orphaned_ids", sourceVersion,
 		); err != nil {
 			return 0, fmt.Errorf("sanitizing orphaned data: %w", err)
 		}
@@ -306,13 +307,14 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) (int, error) {
 	if err := copySessionDataForIDs(ctx, tx, "_trashed_ids"); err != nil {
 		return 0, fmt.Errorf("copying trashed data: %w", err)
 	}
+	sourceVersion := copiedSourceDataVersion(ctx, tx)
 	if err := removeGeneratedIdentitySnapshotsWithoutSource(
-		ctx, tx, "_trashed_ids",
+		ctx, tx, "_trashed_ids", sourceVersion,
 	); err != nil {
 		return 0, fmt.Errorf("repairing trashed identity snapshots: %w", err)
 	}
 	if err := sanitizeCopiedSessionContent(
-		ctx, tx, "_trashed_ids", copiedSourceDataVersion(ctx, tx),
+		ctx, tx, "_trashed_ids", sourceVersion,
 	); err != nil {
 		return 0, fmt.Errorf("sanitizing trashed data: %w", err)
 	}
@@ -360,8 +362,23 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 			INSERT OR REPLACE INTO main.pg_sync_state (key, value)
 			SELECT key, value FROM old_db.pg_sync_state
 			WHERE key = 'pg_push_marker_id'
-			   OR key LIKE 'artifact\_%' ESCAPE '\'`); err != nil {
+			   OR key LIKE 'artifact\_%' ESCAPE '\'
+			   OR key = ?`, subagentParentRepairQueueStateKey); err != nil {
 			return fmt.Errorf("copying sync state: %w", err)
+		}
+	}
+	if oldDBHasTable(ctx, tx, "subagent_parent_repair_queue") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT OR IGNORE INTO main.subagent_parent_repair_queue (session_id)
+			SELECT session_id FROM old_db.subagent_parent_repair_queue`); err != nil {
+			return fmt.Errorf("copying subagent parent repair queue: %w", err)
+		}
+	}
+	if oldDBHasTable(ctx, tx, "subagent_parent_cleanup_queue") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT OR IGNORE INTO main.subagent_parent_cleanup_queue (session_id)
+			SELECT session_id FROM old_db.subagent_parent_cleanup_queue`); err != nil {
+			return fmt.Errorf("copying subagent parent cleanup queue: %w", err)
 		}
 	}
 
@@ -1062,7 +1079,8 @@ func (d *DB) CopyExcludedSessionsFrom(
 // source DB into sessions that were re-synced into this DB.
 // This preserves display_name, deleted_at, starred_sessions, pinned_messages,
 // archive metadata, project identity observations, and worktree project
-// mappings across full DB rebuilds.
+// mappings across full DB rebuilds. Immutable project snapshots are restored
+// only from source versions that recorded parser-source labels reliably.
 func (d *DB) CopySessionMetadataFrom(
 	sourcePath string,
 ) error {
@@ -1233,7 +1251,8 @@ func (d *DB) CopySessionMetadataFrom(
 			WHERE key NOT IN (
 				'database_id',
 				'project_identity_publication_revision',
-				'session_deletion_publication_revision'
+				'session_deletion_publication_revision',
+				'worktree_mapping_publication_revision'
 			)
 			ON CONFLICT(key) DO UPDATE SET
 				value = excluded.value,
@@ -1300,7 +1319,9 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 	}
 
-	if oldDBHasTable(ctx, tx, "session_project_identity_snapshots") {
+	sourceVersion := copiedSourceDataVersion(ctx, tx)
+	if sourceVersion >= projectIdentitySourceSnapshotDataVersion &&
+		oldDBHasTable(ctx, tx, "session_project_identity_snapshots") {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO main.session_project_identity_snapshots (
 				session_id, project, machine, root_path, git_remote,
@@ -1338,6 +1359,54 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 	}
 
+	if oldDBHasTable(ctx, tx, "sessions") {
+		rows, err := tx.QueryContext(ctx, `
+			SELECT current.id, previous.project, current.project
+			FROM main.sessions current
+			JOIN old_db.sessions previous ON previous.id = current.id
+			WHERE previous.project != current.project
+			ORDER BY current.id`)
+		if err != nil {
+			return fmt.Errorf("listing reparsed session project changes: %w", err)
+		}
+		type copiedProjectChange struct {
+			sessionID       string
+			previousProject string
+			currentProject  string
+		}
+		var projectChanges []copiedProjectChange
+		for rows.Next() {
+			var change copiedProjectChange
+			if err := rows.Scan(
+				&change.sessionID,
+				&change.previousProject,
+				&change.currentProject,
+			); err != nil {
+				rows.Close()
+				return fmt.Errorf("scanning reparsed session project change: %w", err)
+			}
+			projectChanges = append(projectChanges, change)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("iterating reparsed session project changes: %w", err)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("closing reparsed session project changes: %w", err)
+		}
+		for _, change := range projectChanges {
+			if err := reconcileSessionProjectIdentityAggregatesTx(
+				ctx, tx, change.sessionID,
+				[]string{change.previousProject, change.currentProject},
+			); err != nil {
+				return fmt.Errorf(
+					"reconciling reparsed session project change %s: %w",
+					change.sessionID, err,
+				)
+			}
+		}
+	}
+
 	// Copy persistent worktree project mappings. Omit id so
 	// primary-key values from old_db cannot shadow existing
 	// destination rows. ResyncAll may pre-copy mappings into
@@ -1348,25 +1417,38 @@ func (d *DB) CopySessionMetadataFrom(
 		if oldDBHasColumn(ctx, tx, "worktree_project_mappings", "layout") {
 			layoutSelect = "layout"
 		}
+		originalProjectSelect := "''"
+		if oldDBHasColumn(ctx, tx, "worktree_project_mappings", "original_project") {
+			originalProjectSelect = "original_project"
+		}
 		if _, err := tx.ExecContext(ctx, `
 			DELETE FROM main.worktree_project_mappings
 			WHERE NOT EXISTS (
 				SELECT 1
 				FROM old_db.worktree_project_mappings old_m
 				WHERE old_m.machine = main.worktree_project_mappings.machine
-				  AND old_m.path_prefix = main.worktree_project_mappings.path_prefix
+				  AND replace(old_m.path_prefix, char(92), '/') =
+					main.worktree_project_mappings.path_prefix
 			)`); err != nil {
 			return fmt.Errorf("reconciling worktree project mappings: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO main.worktree_project_mappings
-				(machine, path_prefix, layout, project, enabled, created_at, updated_at)
-			SELECT machine, path_prefix, `+layoutSelect+`, project, enabled, created_at, updated_at
+				(machine, path_prefix, layout, project, original_project,
+				 enabled, created_at, updated_at)
+			SELECT machine, replace(path_prefix, char(92), '/'),
+				`+layoutSelect+`, project,
+				`+originalProjectSelect+`, enabled, created_at, updated_at
 			FROM old_db.worktree_project_mappings
 			WHERE true
 			ON CONFLICT(machine, path_prefix) DO UPDATE SET
 				layout = excluded.layout,
 				project = excluded.project,
+				original_project = CASE
+					WHEN worktree_project_mappings.original_project = ''
+						THEN excluded.original_project
+					ELSE worktree_project_mappings.original_project
+				END,
 				enabled = excluded.enabled,
 				created_at = excluded.created_at,
 				updated_at = excluded.updated_at`); err != nil {
@@ -1410,7 +1492,10 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 		"file_mtime", "file_hash", "parent_session_id",
 		"relationship_type",
 	)
-	for _, c := range []string{"agent_label", "entrypoint"} {
+	if oldDBHasColumn(ctx, tx, "sessions", "parser_parent_session_id") {
+		cols = append(cols, "parser_parent_session_id")
+	}
+	for _, c := range []string{"agent_label", "entrypoint", "session_kind"} {
 		if oldDBHasColumn(ctx, tx, "sessions", c) {
 			cols = append(cols, c)
 		}
@@ -1470,7 +1555,7 @@ func reconcileTranscriptRevisionsTx(
 			"thinking_text", "is_system", "model",
 			"context_tokens", "output_tokens",
 			"has_context_tokens", "has_output_tokens",
-			"source_subtype", "is_compact_boundary",
+			"source_subtype", "prompt_source", "is_compact_boundary",
 		},
 		"tool_calls": {
 			"call_index", "result_content", "file_path",
@@ -1497,26 +1582,30 @@ func reconcileTranscriptRevisionsTx(
 					SELECT ordinal, role, content, thinking_text, timestamp,
 						has_thinking, has_tool_use, is_system, model,
 						context_tokens, output_tokens, has_context_tokens,
-						has_output_tokens, source_subtype, is_compact_boundary
+						has_output_tokens, source_subtype, prompt_source,
+						is_compact_boundary
 					FROM main.messages WHERE session_id = current.id
 					EXCEPT
 					SELECT ordinal, role, content, thinking_text, timestamp,
 						has_thinking, has_tool_use, is_system, model,
 						context_tokens, output_tokens, has_context_tokens,
-						has_output_tokens, source_subtype, is_compact_boundary
+						has_output_tokens, source_subtype, prompt_source,
+						is_compact_boundary
 					FROM old_db.messages WHERE session_id = current.id
 				)
 				AND NOT EXISTS (
 					SELECT ordinal, role, content, thinking_text, timestamp,
 						has_thinking, has_tool_use, is_system, model,
 						context_tokens, output_tokens, has_context_tokens,
-						has_output_tokens, source_subtype, is_compact_boundary
+						has_output_tokens, source_subtype, prompt_source,
+						is_compact_boundary
 					FROM old_db.messages WHERE session_id = current.id
 					EXCEPT
 					SELECT ordinal, role, content, thinking_text, timestamp,
 						has_thinking, has_tool_use, is_system, model,
 						context_tokens, output_tokens, has_context_tokens,
-						has_output_tokens, source_subtype, is_compact_boundary
+						has_output_tokens, source_subtype, prompt_source,
+						is_compact_boundary
 					FROM main.messages WHERE session_id = current.id
 				)
 				AND NOT EXISTS (
@@ -1617,7 +1706,7 @@ func copySessionDataForIDs(
 		"output_tokens", "has_context_tokens",
 		"has_output_tokens",
 		"claude_message_id", "claude_request_id",
-		"source_type", "source_subtype",
+		"source_type", "source_subtype", "prompt_source",
 		"source_uuid", "source_parent_uuid",
 		"is_sidechain", "is_compact_boundary",
 		"thinking_text",
@@ -1761,18 +1850,22 @@ func copySessionDataForIDs(
 	return nil
 }
 
-// removeGeneratedIdentitySnapshotsWithoutSource removes only placeholder
-// snapshots created by the session-insert trigger for the current copy batch.
-// Real source snapshots are overlaid later by CopySessionMetadataFrom. The
-// temporary ID table and both snapshot primary keys keep the work proportional
-// to copied rows rather than total archive size.
+// removeGeneratedIdentitySnapshotsWithoutSource removes placeholder snapshots
+// created by the session-insert trigger for the current copy batch. Sources
+// predating parser-source snapshots cannot provide trustworthy replacements,
+// so every generated snapshot in that batch is removed. Newer sources retain
+// placeholders only when CopySessionMetadataFrom will overlay real evidence.
+// The temporary ID table and both snapshot primary keys keep the work
+// proportional to copied rows rather than total archive size.
 func removeGeneratedIdentitySnapshotsWithoutSource(
 	ctx context.Context,
 	tx *sql.Tx,
 	tempIDsTable string,
+	sourceVersion int,
 ) error {
 	missingSourceSnapshot := "true"
-	if oldDBHasTable(ctx, tx, "session_project_identity_snapshots") {
+	if sourceVersion >= projectIdentitySourceSnapshotDataVersion &&
+		oldDBHasTable(ctx, tx, "session_project_identity_snapshots") {
 		missingSourceSnapshot = `NOT EXISTS (
 			SELECT 1 FROM old_db.session_project_identity_snapshots old_snapshot
 			WHERE old_snapshot.session_id =
@@ -1809,6 +1902,12 @@ const (
 	sanitizedSourceDataVersion      = 58
 	sanitizedInputSourceDataVersion = 59
 )
+
+// projectIdentitySourceSnapshotDataVersion is the first archive version whose
+// full reparse rebuilt immutable snapshots with the parser-source project
+// rather than a worktree mapping target. Older snapshots must not cross a
+// full-resync copy.
+const projectIdentitySourceSnapshotDataVersion = 77
 
 // copiedSourceDataVersion reads the attached old_db's data version.
 // Read errors are logged and returned as 0 so the copy conservatively

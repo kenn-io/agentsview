@@ -53,6 +53,37 @@ func TestEnsureSeedsFallbackAndFetchedModel(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("8"), fetched.OutputPerMTok)
 }
 
+func TestSeedFallbackReseedsBandsWhenStorageVersionIsMissing(t *testing.T) {
+	database := testDB(t)
+	fallback := pricing.FallbackPricing()
+	var gpt pricing.ModelPricing
+	for _, model := range fallback {
+		if model.ModelPattern == "gpt-5.5" {
+			gpt = model
+			break
+		}
+	}
+	require.NotEmpty(t, gpt.Bands)
+	require.NoError(t, database.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:         gpt.ModelPattern,
+		InputPerMTok:         gpt.InputPerMTok,
+		OutputPerMTok:        gpt.OutputPerMTok,
+		CacheCreationPerMTok: gpt.CacheCreationPerMTok,
+		CacheReadPerMTok:     gpt.CacheReadPerMTok,
+	}}))
+	require.NoError(t, database.SetPricingMeta(
+		fallbackVersionMetaKey,
+		pricing.FallbackVersion,
+	))
+
+	require.NoError(t, SeedFallback(database))
+	got, err := database.GetModelPricing("gpt-5.5")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+
+	assert.NotEmpty(t, got.Bands)
+}
+
 func TestRefreshIfStaleFreshAttemptSkipsFetch(t *testing.T) {
 	database := testDB(t)
 	now := pricingTestNow()
@@ -77,6 +108,13 @@ func TestRefreshIfStaleStaleTriggersFetch(t *testing.T) {
 		ModelPattern:  "new-model",
 		InputPerMTok:  money.MustParseDollars("1.25"),
 		OutputPerMTok: money.MustParseDollars("10"),
+		Bands: []pricing.PricingBand{{
+			AboveInputTokens:     200_000,
+			InputPerMTok:         money.MustParseDollars("2.50"),
+			OutputPerMTok:        money.MustParseDollars("15"),
+			CacheCreationPerMTok: money.MustParseDollars("3.125"),
+			CacheReadPerMTok:     money.MustParseDollars("0.25"),
+		}},
 	}}}
 
 	refreshed, err := RefreshIfStale(
@@ -89,6 +127,9 @@ func TestRefreshIfStaleStaleTriggersFetch(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, price)
 	assert.Equal(t, money.MustParseDollars("10"), price.OutputPerMTok)
+	require.Len(t, price.Bands, 1)
+	assert.Equal(t, 200_000, price.Bands[0].AboveInputTokens)
+	assert.Equal(t, money.MustParseDollars("15"), price.Bands[0].OutputPerMTok)
 	assertPricingAttemptMeta(t, database, now.Format(time.RFC3339))
 }
 

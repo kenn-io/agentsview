@@ -201,6 +201,7 @@ func retagQoderResult(
 	result.Session.Agent = AgentQoder
 	result.Session.AgentLabel = ""
 	result.Session.Entrypoint = ""
+	result.Session.SessionKind = ""
 	toolCallParentID := result.Session.ID
 	if !isSubagent {
 		toolCallParentID = qoderPrefixID(fileStem)

@@ -1113,24 +1113,71 @@ describe("SessionsStore", () => {
       });
     });
 
-    it("delete removes an index row locally and invalidates metadata", async () => {
-      mockSidebarIndex([
-        makeSkinnyRow({ id: "remove-me" }),
-        makeSkinnyRow({ id: "keep-me" }),
-      ]);
+    it("reloads the canonical group total after deleting a child", async () => {
+      vi.mocked(api.getSidebarSessionIndex)
+        .mockResolvedValueOnce({
+          sessions: [
+            makeSkinnyRow({ id: "root" }),
+            makeSkinnyRow({
+              id: "child",
+              parent_session_id: "root",
+            }),
+          ],
+          total: 1,
+          next_cursor: null,
+        })
+        .mockResolvedValueOnce({
+          sessions: [makeSkinnyRow({ id: "root" })],
+          total: 1,
+          next_cursor: null,
+        });
       vi.mocked((api as any).deleteSession).mockResolvedValue(undefined);
       vi.mocked(api.getProjects).mockResolvedValue({ projects: [] });
       vi.mocked(api.getAgents).mockResolvedValue({ agents: [] });
       vi.mocked((api as any).getMachines).mockResolvedValue({ machines: [] });
 
       await sessions.load();
-      await sessions.deleteSession("remove-me");
+      await sessions.deleteSession("child");
 
-      expect(sessions.sessions.map((s) => s.id)).toEqual(["keep-me"]);
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
+      expect(sessions.sessions.map((s) => s.id)).toEqual(["root"]);
       expect(sessions.total).toBe(1);
       expect(api.getProjects).toHaveBeenCalled();
       expect(api.getAgents).toHaveBeenCalled();
       expect((api as any).getMachines).toHaveBeenCalled();
+    });
+
+    it("reloads the canonical group after deleting its root", async () => {
+      vi.mocked(api.getSidebarSessionIndex)
+        .mockResolvedValueOnce({
+          sessions: [
+            makeSkinnyRow({ id: "root" }),
+            makeSkinnyRow({
+              id: "child",
+              parent_session_id: "root",
+            }),
+          ],
+          total: 1,
+          next_cursor: null,
+        })
+        .mockResolvedValueOnce({
+          sessions: [
+            makeSkinnyRow({
+              id: "child",
+              parent_session_id: "root",
+            }),
+          ],
+          total: 1,
+          next_cursor: null,
+        });
+      vi.mocked((api as any).deleteSession).mockResolvedValue(undefined);
+
+      await sessions.load();
+      await sessions.deleteSession("root");
+
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
+      expect(sessions.sessions.map((s) => s.id)).toEqual(["child"]);
+      expect(sessions.total).toBe(1);
     });
 
     it("batch delete creates one undo entry for the whole batch", async () => {
@@ -3296,6 +3343,42 @@ describe("SessionsStore live refresh", () => {
     detach();
     spy.mockRestore();
     vi.useRealTimers();
+  });
+
+  it("sessions events replace cached project filter options", async () => {
+    const { events } = await import("./events.svelte.js");
+    let registered: ((e: { scope: string }) => void) | null = null;
+    const spy = vi
+      .spyOn(events, "subscribe")
+      .mockImplementation((fn) => {
+        registered = fn as (e: { scope: string }) => void;
+        return () => {};
+      });
+
+    vi.mocked(api.getProjects)
+      .mockResolvedValueOnce({
+        projects: [{ name: "old-project", session_count: 1 }],
+      })
+      .mockResolvedValueOnce({
+        projects: [{ name: "new-project", session_count: 1 }],
+      });
+    const sessions = createSessionsStore();
+    const detach = sessions.attachSidebar();
+    await sessions.loadProjects();
+    expect(sessions.projects).toEqual([
+      { name: "old-project", session_count: 1 },
+    ]);
+
+    registered!({ scope: "sessions" });
+    await vi.waitFor(() => {
+      expect(sessions.projects).toEqual([
+        { name: "new-project", session_count: 1 },
+      ]);
+    });
+    expect(api.getProjects).toHaveBeenCalledTimes(2);
+
+    detach();
+    spy.mockRestore();
   });
 
   it("refetches on the 5-minute safety-net interval", async () => {

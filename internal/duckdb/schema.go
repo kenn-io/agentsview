@@ -11,10 +11,13 @@ import (
 )
 
 // SchemaVersion is the version of the DuckDB mirror schema created by
-// createSchema. Mirror schema v6 is create-only: there are no in-place
+// createSchema. The mirror schema is create-only: there are no in-place
 // migrations between versions. A version mismatch means the mirror file
-// must be rebuilt with 'agentsview duckdb push --full'.
-const SchemaVersion = 6
+// must be rebuilt with 'agentsview duckdb push --full'. v8 adds
+// sessions.source_archive_id and the source_worktree_project_mappings
+// mirror table on top of the schema-v7 mainline shape. v9 adds the
+// sessions.session_kind and messages.prompt_source columns.
+const SchemaVersion = 9
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -23,12 +26,14 @@ const schemaVersionMetadataKey = "agentsview_schema_version"
 const (
 	dataVersionMetadataKey      = "agentsview_source_data_version"
 	sourceDatabaseIDMetadataKey = "agentsview_source_database_id"
+	sourceArchiveIDMetadataKey  = "agentsview_source_archive_id"
 	pushScopeMetadataKey        = "agentsview_push_scope"
 	lastPushAtMetadataKey       = "agentsview_last_push_at"
 	lastPushMachineMetadataKey  = "agentsview_last_push_machine"
 	lastPushCutoffMetadataKey   = "agentsview_last_push_cutoff"
 	deletionRevisionMetadataKey = "agentsview_session_deletion_revision"
 	identityRevisionMetadataKey = "agentsview_project_identity_revision"
+	mappingRevisionMetadataKey  = "agentsview_worktree_mapping_revision"
 )
 
 // curationFingerprintMetadataKey stores a hash of the local in-scope
@@ -109,6 +114,7 @@ var mirrorTables = []tableSpec{
 			agent TEXT NOT NULL DEFAULT 'claude',
 			agent_label TEXT NOT NULL DEFAULT '',
 			entrypoint TEXT NOT NULL DEFAULT '',
+			session_kind TEXT NOT NULL DEFAULT '',
 			first_message TEXT,
 			display_name TEXT,
 			session_name TEXT,
@@ -169,7 +175,8 @@ var mirrorTables = []tableSpec{
 			termination_status TEXT,
 			secret_leak_count INTEGER NOT NULL DEFAULT 0,
 			secrets_rules_version TEXT NOT NULL DEFAULT '',
-			agentsview_push_fingerprint TEXT
+			agentsview_push_fingerprint TEXT,
+			source_archive_id TEXT NOT NULL DEFAULT ''
 		)`,
 		columns: []columnSpec{
 			{"id", "id TEXT"},
@@ -178,6 +185,7 @@ var mirrorTables = []tableSpec{
 			{"agent", "agent TEXT NOT NULL DEFAULT 'claude'"},
 			{"agent_label", "agent_label TEXT NOT NULL DEFAULT ''"},
 			{"entrypoint", "entrypoint TEXT NOT NULL DEFAULT ''"},
+			{"session_kind", "session_kind TEXT NOT NULL DEFAULT ''"},
 			{"first_message", "first_message TEXT"},
 			{"display_name", "display_name TEXT"},
 			{"session_name", "session_name TEXT"},
@@ -239,6 +247,7 @@ var mirrorTables = []tableSpec{
 			{"secret_leak_count", "secret_leak_count INTEGER NOT NULL DEFAULT 0"},
 			{"secrets_rules_version", "secrets_rules_version TEXT NOT NULL DEFAULT ''"},
 			{"agentsview_push_fingerprint", "agentsview_push_fingerprint TEXT"},
+			{"source_archive_id", "source_archive_id TEXT NOT NULL DEFAULT ''"},
 		},
 		indexes: []string{
 			"CREATE INDEX IF NOT EXISTS idx_sessions_ended ON sessions(ended_at, id)",
@@ -274,6 +283,7 @@ var mirrorTables = []tableSpec{
 			claude_request_id TEXT NOT NULL DEFAULT '',
 			source_type TEXT NOT NULL DEFAULT '',
 			source_subtype TEXT NOT NULL DEFAULT '',
+			prompt_source TEXT NOT NULL DEFAULT '',
 			source_uuid TEXT NOT NULL DEFAULT '',
 			source_parent_uuid TEXT NOT NULL DEFAULT '',
 			is_sidechain BOOLEAN NOT NULL DEFAULT FALSE,
@@ -302,6 +312,7 @@ var mirrorTables = []tableSpec{
 			{"claude_request_id", "claude_request_id TEXT NOT NULL DEFAULT ''"},
 			{"source_type", "source_type TEXT NOT NULL DEFAULT ''"},
 			{"source_subtype", "source_subtype TEXT NOT NULL DEFAULT ''"},
+			{"prompt_source", "prompt_source TEXT NOT NULL DEFAULT ''"},
 			{"source_uuid", "source_uuid TEXT NOT NULL DEFAULT ''"},
 			{"source_parent_uuid", "source_parent_uuid TEXT NOT NULL DEFAULT ''"},
 			{"is_sidechain", "is_sidechain BOOLEAN NOT NULL DEFAULT FALSE"},
@@ -415,6 +426,29 @@ var mirrorTables = []tableSpec{
 		},
 	},
 	{
+		name: "model_pricing_bands",
+		create: `CREATE TABLE IF NOT EXISTS model_pricing_bands (
+			model_pattern TEXT NOT NULL,
+			above_input_tokens BIGINT NOT NULL,
+			input_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
+			output_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
+			cache_creation_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
+			cache_read_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
+			updated_at TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (model_pattern, above_input_tokens),
+			FOREIGN KEY (model_pattern) REFERENCES model_pricing(model_pattern)
+		)`,
+		columns: []columnSpec{
+			{"model_pattern", "model_pattern TEXT"},
+			{"above_input_tokens", "above_input_tokens BIGINT NOT NULL"},
+			{"input_microdollars_per_mtok", "input_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0"},
+			{"output_microdollars_per_mtok", "output_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0"},
+			{"cache_creation_microdollars_per_mtok", "cache_creation_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0"},
+			{"cache_read_microdollars_per_mtok", "cache_read_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0"},
+			{"updated_at", "updated_at TEXT NOT NULL DEFAULT ''"},
+		},
+	},
+	{
 		name: "source_project_identity_observations",
 		create: `CREATE TABLE IF NOT EXISTS source_project_identity_observations (
 			source_archive_id TEXT NOT NULL DEFAULT '',
@@ -514,6 +548,30 @@ var mirrorTables = []tableSpec{
 		},
 		indexes: []string{
 			"CREATE INDEX IF NOT EXISTS idx_source_session_project_identity_snapshots_project ON source_session_project_identity_snapshots(source_archive_id, project)",
+		},
+	},
+	{
+		name: "source_worktree_project_mappings",
+		create: `CREATE TABLE IF NOT EXISTS source_worktree_project_mappings (
+			source_archive_id TEXT NOT NULL,
+			machine TEXT NOT NULL,
+			path_prefix TEXT NOT NULL,
+			layout TEXT NOT NULL DEFAULT 'explicit',
+			project TEXT NOT NULL DEFAULT '',
+			original_project TEXT NOT NULL DEFAULT '',
+			enabled BOOLEAN NOT NULL DEFAULT TRUE,
+			updated_at TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (source_archive_id, machine, path_prefix)
+		)`,
+		columns: []columnSpec{
+			{"source_archive_id", "source_archive_id TEXT NOT NULL"},
+			{"machine", "machine TEXT NOT NULL"},
+			{"path_prefix", "path_prefix TEXT NOT NULL"},
+			{"layout", "layout TEXT NOT NULL DEFAULT 'explicit'"},
+			{"project", "project TEXT NOT NULL DEFAULT ''"},
+			{"original_project", "original_project TEXT NOT NULL DEFAULT ''"},
+			{"enabled", "enabled BOOLEAN NOT NULL DEFAULT TRUE"},
+			{"updated_at", "updated_at TEXT NOT NULL DEFAULT ''"},
 		},
 	},
 	{
@@ -754,12 +812,17 @@ type mirrorMetadata struct {
 	// different archive's history and only a full rebuild is sound (see
 	// rebuildReason).
 	SourceDatabaseID string
+	// SourceArchiveID is the stable provenance identity stamped onto mirrored
+	// sessions and governance metadata. It may change independently when an
+	// archive identity is repaired.
+	SourceArchiveID  string
 	Scope            string
 	LastPushCutoff   string
 	LastPushAt       string
 	LastPushMachine  string
 	DeletionRevision int64
 	IdentityRevision int64
+	MappingRevision  int64
 }
 
 // writeMirrorMetadata upserts every mirrorMetadata field into sync_metadata.
@@ -771,12 +834,14 @@ func writeMirrorMetadata(ctx context.Context, db *sql.DB, meta mirrorMetadata) e
 		{schemaVersionMetadataKey, strconv.Itoa(meta.SchemaVersion)},
 		{dataVersionMetadataKey, strconv.Itoa(meta.DataVersion)},
 		{sourceDatabaseIDMetadataKey, meta.SourceDatabaseID},
+		{sourceArchiveIDMetadataKey, meta.SourceArchiveID},
 		{pushScopeMetadataKey, meta.Scope},
 		{lastPushCutoffMetadataKey, meta.LastPushCutoff},
 		{lastPushAtMetadataKey, meta.LastPushAt},
 		{lastPushMachineMetadataKey, meta.LastPushMachine},
 		{deletionRevisionMetadataKey, strconv.FormatInt(meta.DeletionRevision, 10)},
 		{identityRevisionMetadataKey, strconv.FormatInt(meta.IdentityRevision, 10)},
+		{mappingRevisionMetadataKey, strconv.FormatInt(meta.MappingRevision, 10)},
 	}
 	for _, field := range fields {
 		if err := recordMetadataKey(ctx, db, field.key, field.value); err != nil {
@@ -791,12 +856,14 @@ func writeMirrorMetadata(ctx context.Context, db *sql.DB, meta mirrorMetadata) e
 // errors so callers (ProbeMirror) can surface them as shape issues rather
 // than silently treating a corrupt mirror as version 0.
 func readMirrorMetadata(ctx context.Context, db *sql.DB) (mirrorMetadata, error) {
-	raw := make(map[string]string, 8)
+	raw := make(map[string]string, 11)
 	for _, key := range []string{
 		schemaVersionMetadataKey, dataVersionMetadataKey,
-		sourceDatabaseIDMetadataKey, pushScopeMetadataKey,
+		sourceDatabaseIDMetadataKey, sourceArchiveIDMetadataKey,
+		pushScopeMetadataKey,
 		lastPushCutoffMetadataKey, lastPushAtMetadataKey, lastPushMachineMetadataKey,
 		deletionRevisionMetadataKey, identityRevisionMetadataKey,
+		mappingRevisionMetadataKey,
 	} {
 		value, err := readMetadataKey(ctx, db, key)
 		if err != nil {
@@ -806,6 +873,7 @@ func readMirrorMetadata(ctx context.Context, db *sql.DB) (mirrorMetadata, error)
 	}
 	meta := mirrorMetadata{
 		SourceDatabaseID: raw[sourceDatabaseIDMetadataKey],
+		SourceArchiveID:  raw[sourceArchiveIDMetadataKey],
 		Scope:            raw[pushScopeMetadataKey],
 		LastPushCutoff:   raw[lastPushCutoffMetadataKey],
 		LastPushAt:       raw[lastPushAtMetadataKey],
@@ -829,6 +897,11 @@ func readMirrorMetadata(ctx context.Context, db *sql.DB) (mirrorMetadata, error)
 	}
 	if meta.IdentityRevision, err = parseMirrorMetadataInt64(
 		identityRevisionMetadataKey, raw[identityRevisionMetadataKey],
+	); err != nil {
+		return mirrorMetadata{}, err
+	}
+	if meta.MappingRevision, err = parseMirrorMetadataInt64(
+		mappingRevisionMetadataKey, raw[mappingRevisionMetadataKey],
 	); err != nil {
 		return mirrorMetadata{}, err
 	}

@@ -37,16 +37,17 @@ func deleteProjectIdentityDelta(
 	for start := 0; start < len(snapshotKeys); start += projectIdentityDeleteBatchSize {
 		end := min(start+projectIdentityDeleteBatchSize, len(snapshotKeys))
 		args := []any{archiveID, databaseGeneration}
-		placeholders := make([]string, 0, end-start)
+		tuples := make([]string, 0, end-start)
 		for _, key := range snapshotKeys[start:end] {
-			args = append(args, key.SessionID)
-			placeholders = append(placeholders, "?")
+			args = append(args, key.SessionID, key.Project)
+			tuples = append(tuples, "(?, ?)")
 		}
 		if err := exec(`
 			DELETE FROM source_session_project_identity_snapshots
 			WHERE source_archive_id = ?
 			  AND source_database_generation = ?
-			  AND source_session_id IN (`+strings.Join(placeholders, ", ")+`)`,
+			  AND (source_session_id, project) IN (`+
+			strings.Join(tuples, ", ")+`)`,
 			args...,
 		); err != nil {
 			return fmt.Errorf("deleting duckdb session identity snapshot delta: %w", err)
@@ -55,38 +56,46 @@ func deleteProjectIdentityDelta(
 	return nil
 }
 
-func deleteProjectIdentityScope(
+func deleteProjectIdentityArchive(
 	exec duckProjectIdentityExec,
 	archiveID string,
-	projects, excludeProjects []string,
 ) error {
-	args := []any{archiveID}
-	predicates := []string{"source_archive_id = ?"}
-	appendSet := func(column string, values []string, negate bool) {
-		if len(values) == 0 {
-			return
-		}
-		placeholders := make([]string, len(values))
-		for i, value := range values {
-			placeholders[i] = "?"
-			args = append(args, value)
-		}
-		op := "IN"
-		if negate {
-			op = "NOT IN"
-		}
-		predicates = append(predicates,
-			column+" "+op+" ("+strings.Join(placeholders, ",")+")")
-	}
-	appendSet("project", projects, false)
-	appendSet("project", excludeProjects, true)
-	where := strings.Join(predicates, " AND ")
 	for _, table := range []string{
 		"source_project_identity_observations",
 		"source_session_project_identity_snapshots",
 	} {
-		if err := exec("DELETE FROM "+table+" WHERE "+where, args...); err != nil {
-			return fmt.Errorf("clearing duckdb %s publication scope: %w", table, err)
+		if err := exec(
+			"DELETE FROM "+table+" WHERE source_archive_id = ?",
+			archiveID,
+		); err != nil {
+			return fmt.Errorf("clearing duckdb %s archive: %w", table, err)
+		}
+	}
+	return nil
+}
+
+func deleteSessionProjectIdentitySnapshotsBySessionID(
+	exec duckProjectIdentityExec,
+	archiveID string,
+	sessionIDs []string,
+) error {
+	for start := 0; start < len(sessionIDs); start += projectIdentityDeleteBatchSize {
+		end := min(start+projectIdentityDeleteBatchSize, len(sessionIDs))
+		args := []any{archiveID}
+		placeholders := make([]string, 0, end-start)
+		for _, sessionID := range sessionIDs[start:end] {
+			args = append(args, sessionID)
+			placeholders = append(placeholders, "?")
+		}
+		if err := exec(`
+			DELETE FROM source_session_project_identity_snapshots
+			WHERE source_archive_id = ?
+			  AND source_session_id IN (`+
+			strings.Join(placeholders, ", ")+`)`, args...); err != nil {
+			return fmt.Errorf(
+				"deleting duckdb session identity snapshots by session id: %w",
+				err,
+			)
 		}
 	}
 	return nil

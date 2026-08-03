@@ -17,6 +17,7 @@ export type DbSidebarSessionIndexRow = {
   parent_session_id?: string;
   project: string;
   relationship_type?: string;
+  session_kind?: string;
   started_at: string | null;
   termination_status?: string;
   transcript_revision?: string;

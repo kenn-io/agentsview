@@ -185,23 +185,29 @@ write-owner lock and exits when done.
 agentsview sync [flags]
 ```
 
-| Flag     | Default | Description                                    |
-| -------- | ------- | ---------------------------------------------- |
-| `--full` | `false` | Force a full resync regardless of data version |
-| `--host` |         | SSH hostname for deprecated remote sync        |
-| `--user` |         | SSH username for deprecated remote sync        |
-| `--port` | `22`    | SSH port for deprecated remote sync            |
+| Flag       | Default | Description                                         |
+| ---------- | ------- | --------------------------------------------------- |
+| `--full`   | `false` | Force a full resync regardless of data version      |
+| `--target` |         | Exchange normalized artifacts with a trusted folder |
+| `--host`   |         | SSH hostname for deprecated remote sync             |
+| `--user`   |         | SSH username for deprecated remote sync             |
+| `--port`   | `22`    | SSH port for deprecated remote sync                 |
 
 **Examples:**
 
 ```bash
 agentsview sync           # incremental sync and exit
 agentsview sync --full    # full resync and exit
+agentsview sync --target /path/to/shared-folder
 agentsview sync --host buildbox.local
 agentsview sync --host buildbox.local --user wes --port 2222
 ```
 
 After syncing, a summary of session and message counts is printed to stdout.
+With `--target`, AgentsView then performs one bounded normalized-artifact
+exchange. See [Artifact Folder Sync](/artifact-sync/) for the trust model,
+first-use requirements, and exclusions. `--target` cannot be combined with
+`--host`.
 
 When `--host` is set, AgentsView syncs only that remote host and fails fast on
 error. If the local daemon has a matching configured `[[remote_hosts]]` entry,
@@ -940,6 +946,27 @@ stdout empty, and exit with code 4:
 ```json
 {"error":"cursor_reset","message":"session export cursor is no longer valid; restart the export","database_id":"..."}
 ```
+
+______________________________________________________________________
+
+### `agentsview export hour|day|digest`
+
+Export canonical UTC-hour activity and usage documents, coherent UTC-day
+snapshots, or compact date-range digests from the local archive. See
+[Reporting Export](/reporting-export/) for the v1 wire schema, quiet-hour
+semantics, snapshot guarantee, and digest rules.
+
+```bash
+agentsview export hour 2026-07-28-13
+agentsview export day 2026-07-28
+agentsview export digest --from 2026-06-28 --to 2026-07-27
+```
+
+Hour and date keys must be exact, zero-padded UTC values. Open and future hours
+are rejected. The current UTC date contains only closed hours and has no day
+digest. Digest ranges are inclusive and limited to 31 dates. Integrations
+should validate the emitted `schema_version: 1` and content digest before
+accepting a document.
 
 ______________________________________________________________________
 

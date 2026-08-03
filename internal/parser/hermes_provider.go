@@ -13,6 +13,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -71,10 +72,19 @@ func (p *hermesProvider) SourcesForChangedPath(
 	return p.sources.SourcesForChangedPath(ctx, req)
 }
 
-func (p *hermesProvider) ReconciliationOwnershipScopes(
-	root string,
-) []StoredSourceHintScope {
-	return p.sources.ReconciliationOwnershipScopes(root)
+// ResolveReconciliationScopes overrides the generic directory topology with
+// Hermes archive topology: state.db and sessions/ are two spellings of one
+// archive, a profiles container fans out to per-profile archives, and any
+// requested path inside an archive resolves to that whole archive's scope.
+func (p *hermesProvider) ResolveReconciliationScopes(
+	_ context.Context, req ReconciliationScopeRequest,
+) (ReconciliationScopePlan, error) {
+	if err := ValidateReconciliationScopeRoots(
+		AgentHermes, p.sources.roots, req.Roots,
+	); err != nil {
+		return ReconciliationScopePlan{}, err
+	}
+	return p.sources.reconciliationScopePlan(req), nil
 }
 
 func (p *hermesProvider) SourceForReconciliation(
@@ -333,9 +343,9 @@ func isHermesProfilesContainer(root string) bool {
 // per-profile archive roots. A missing container simply means no profiles
 // exist yet; any other ReadDir failure (permissions, transient I/O) is
 // returned so callers report the expansion as incomplete discovery instead
-// of silently claiming zero profiles — ReconciliationOwnershipScopes still
-// claims the whole container, so a swallowed failure would let the engine
-// tombstone every stored hermes session under it as source_missing.
+// of silently claiming zero profiles — the resolved reconciliation scope
+// still proves the whole container, so a swallowed failure would let the
+// engine tombstone every stored hermes session under it as source_missing.
 func hermesProfileArchiveRoots(profilesRoot string) ([]string, error) {
 	entries, err := os.ReadDir(profilesRoot)
 	if err != nil {
@@ -662,31 +672,260 @@ func (s hermesSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 	return WatchPlan{Roots: roots}, nil
 }
 
-func (s hermesSourceSet) ReconciliationOwnershipScopes(
-	requestedRoot string,
-) []StoredSourceHintScope {
-	requestedRoot = filepath.Clean(requestedRoot)
-	requestedMatchRoot := absoluteHermesPath(requestedRoot)
-	var scopes []StoredSourceHintScope
-	for _, configuredRoot := range s.roots {
-		if !hermesPathWithinOrSame(
-			absoluteHermesPath(configuredRoot), requestedMatchRoot,
-		) {
-			continue
+// hermesReconciliationUnit is one atomic Hermes archive: the smallest scope a
+// reconciliation request can resolve to. Every alias spelling of the archive
+// resolves to the same identity and the same proof scopes, so no spelling can
+// omit the state.db members or the sessions/ transcripts.
+type hermesReconciliationUnit struct {
+	identity string
+	proofs   []StoredSourceHintScope
+	stateDB  string
+}
+
+// hermesArchiveReconciliationUnit derives the archive identity and physical
+// proof scopes for one archive root, mirroring the ownership scopes the
+// provider historically declared: virtual members of a present state.db plus
+// the transcript directory. A root that is not archive-shaped falls back to a
+// plain directory unit.
+func hermesArchiveReconciliationUnit(archiveRoot string) hermesReconciliationUnit {
+	stateDB, sessionsDir, ok := hermesArchiveRootPaths(archiveRoot)
+	if !ok {
+		clean := filepath.Clean(archiveRoot)
+		return hermesReconciliationUnit{
+			identity: absoluteHermesPath(clean),
+			proofs:   []StoredSourceHintScope{{Path: clean}},
 		}
-		stateDB, sessionsDir, ok := hermesArchiveRootPaths(configuredRoot)
-		if !ok {
-			scopes = append(scopes, StoredSourceHintScope{Path: configuredRoot})
-			continue
-		}
-		if IsRegularFile(stateDB) {
-			scopes = append(scopes, StoredSourceHintScope{
-				Path: stateDB, IncludeVirtualMembers: true,
-			})
-		}
-		scopes = append(scopes, StoredSourceHintScope{Path: sessionsDir})
 	}
-	return scopes
+	unit := hermesReconciliationUnit{stateDB: filepath.Clean(stateDB)}
+	unit.identity = absoluteHermesPath(filepath.Dir(unit.stateDB))
+	if IsRegularFile(unit.stateDB) {
+		unit.proofs = append(unit.proofs, StoredSourceHintScope{
+			Path: unit.stateDB, IncludeVirtualMembers: true,
+		})
+	}
+	unit.proofs = append(unit.proofs, StoredSourceHintScope{
+		Path: filepath.Clean(sessionsDir),
+	})
+	return unit
+}
+
+// hermesRequestDenotesArchive reports whether one requested root is inside or
+// an alias spelling of the archive anchored at stateDB: the archive directory,
+// the state.db file, the sessions/ directory, or any path beneath either.
+func hermesRequestDenotesArchive(requested, stateDB string) bool {
+	if stateDB == "" {
+		return false
+	}
+	absStateDB := absoluteHermesPath(stateDB)
+	if qStateDB, _, ok := hermesArchiveRootPaths(requested); ok &&
+		samePath(absoluteHermesPath(qStateDB), absStateDB) {
+		return true
+	}
+	if hermesPathWithinOrSame(requested, absStateDB) {
+		return true
+	}
+	sessionsDir := filepath.Join(filepath.Dir(absStateDB), "sessions")
+	return hermesPathWithinOrSame(requested, sessionsDir)
+}
+
+// hermesProfileScopeRoot resolves a request inside a profiles container to one
+// profile's archive root, spelled the way discovery stores it. Selection runs
+// against the absolute container so any request spelling picks the right
+// profile, but the returned root is always one the container enumerated, never
+// anything the caller spelled. That enumeration joins the configured container
+// with the on-disk directory name, which is the spelling discovery stores
+// under, so proof matches and no request can mint a second identity for one
+// profile by naming it differently.
+//
+// A request the container does not currently own returns false: a profile
+// already deleted, a symlinked or non-directory child, which the enumeration
+// deliberately skips, or a container that could not be read. The caller
+// widens those to the container itself rather than reconstructing a root from
+// the request.
+func hermesProfileScopeRoot(profiles []string, requested string) (string, bool) {
+	for _, candidate := range profiles {
+		if hermesPathWithinOrSame(requested, absoluteHermesPath(candidate)) {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+func (s hermesSourceSet) reconciliationScopePlan(
+	req ReconciliationScopeRequest,
+) ReconciliationScopePlan {
+	type hermesConfiguredScope struct {
+		root      string // configured spelling handed back for traversal
+		match     string // absolute cleaned form for containment checks
+		container bool
+		// profiles is the container's owned children in configured spelling,
+		// empty for a directly configured archive or an unreadable container.
+		profiles []string
+		unit     hermesReconciliationUnit
+	}
+	var configured []hermesConfiguredScope
+	var required []string
+	for _, root := range s.roots {
+		if strings.TrimSpace(root) == "" {
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(root), "s3://") {
+			required = append(required, root)
+			continue
+		}
+		cfg := hermesConfiguredScope{
+			root:  root,
+			match: absoluteHermesPath(root),
+		}
+		if isHermesProfilesContainer(root) {
+			// The container is one coverage identity: profile membership is
+			// dynamic, so a pass covers it only by traversing the container
+			// itself, and discovery reports an unreadable container as
+			// incomplete, which withholds deletion authority.
+			cfg.container = true
+			cfg.unit = hermesReconciliationUnit{
+				identity: cfg.match,
+				proofs:   []StoredSourceHintScope{{Path: filepath.Clean(root)}},
+			}
+			// Enumerated once per resolution rather than per request: a batch
+			// of paths under one container would otherwise re-read the same
+			// directory for each of them.
+			cfg.profiles, _ = hermesProfileArchiveRoots(filepath.Clean(root))
+		} else {
+			cfg.unit = hermesArchiveReconciliationUnit(root)
+		}
+		configured = append(configured, cfg)
+	}
+	for _, cfg := range configured {
+		required = append(required, cfg.unit.identity)
+	}
+	plan := ReconciliationScopePlan{RequiredCoverageIdentities: required}
+	scopeIndex := make(map[string]int)
+	addScope := func(key, raw string, scope ReconciliationScope) {
+		index, ok := scopeIndex[key]
+		if !ok {
+			scope.RetryRoots = []string{raw}
+			scopeIndex[key] = len(plan.Scopes)
+			plan.Scopes = append(plan.Scopes, scope)
+			return
+		}
+		// One archive can resolve through several branches — its own
+		// configured root and a container's profile enumeration — in any
+		// order, depending on how overlapping roots are configured and
+		// requested. The colliding scopes describe the same unit, so merge
+		// every authority rather than keeping the first arrival's: dropping
+		// a later CoverageIdentities would leave a required identity
+		// permanently uncovered and withhold aggregate-member deletion from
+		// a pass that requested every configured root.
+		existing := &plan.Scopes[index]
+		if !slices.Contains(existing.RetryRoots, raw) {
+			existing.RetryRoots = append(existing.RetryRoots, raw)
+		}
+		for _, root := range scope.TraversalRoots {
+			if !slices.Contains(existing.TraversalRoots, root) {
+				existing.TraversalRoots = append(existing.TraversalRoots, root)
+			}
+		}
+		for _, proof := range scope.PhysicalProofScopes {
+			if !slices.Contains(existing.PhysicalProofScopes, proof) {
+				existing.PhysicalProofScopes = append(
+					existing.PhysicalProofScopes, proof,
+				)
+			}
+		}
+		for _, identity := range scope.CoverageIdentities {
+			if !slices.Contains(existing.CoverageIdentities, identity) {
+				existing.CoverageIdentities = append(
+					existing.CoverageIdentities, identity,
+				)
+			}
+		}
+	}
+	for _, raw := range req.Roots {
+		if strings.TrimSpace(raw) == "" ||
+			strings.HasPrefix(strings.ToLower(raw), "s3://") {
+			continue
+		}
+		requested := absoluteHermesPath(raw)
+		for _, cfg := range configured {
+			if hermesPathWithinOrSame(cfg.match, requested) {
+				// The request names the configured root or an ancestor
+				// covering it: the whole configured unit is one atomic scope.
+				addScope(cfg.unit.identity, raw, ReconciliationScope{
+					TraversalRoots:      []string{cfg.root},
+					PhysicalProofScopes: cfg.unit.proofs,
+					CoverageIdentities:  []string{cfg.unit.identity},
+				})
+				continue
+			}
+			if cfg.container {
+				if _, inside := hermesProfileRootForPath(
+					cfg.match, requested,
+				); !inside {
+					continue
+				}
+				if profileRoot, ok := hermesProfileScopeRoot(
+					cfg.profiles, requested,
+				); ok {
+					// A request inside one profile resolves to that profile's
+					// archive only. The container identity stays uncovered, so
+					// sibling profiles keep their sessions and their authority.
+					unit := hermesArchiveReconciliationUnit(profileRoot)
+					addScope(unit.identity, raw, ReconciliationScope{
+						TraversalRoots:      []string{profileRoot},
+						PhysicalProofScopes: unit.proofs,
+					})
+					continue
+				}
+				// The container does not own that child: it was deleted, or it
+				// is a symlink or a plain file the enumeration skips, or the
+				// container could not be read. Reconstructing a root from the
+				// request is what four earlier rounds each got wrong, and
+				// resolving nothing loses the removal: a deleted profile's
+				// sessions would then stay active until the daily archive
+				// audit happens to run. The container itself is the nearest
+				// scope spelled entirely from configuration, so the request
+				// widens to it, proving the container without covering it.
+				// Deletion still requires a stat per stored row, so live
+				// sibling profiles are retained, and the withheld coverage
+				// identity keeps aggregate-member removal out of reach.
+				addScope(cfg.unit.identity+"\x00unowned", raw,
+					ReconciliationScope{
+						TraversalRoots:      []string{cfg.root},
+						PhysicalProofScopes: cfg.unit.proofs,
+					})
+				continue
+			}
+			if hermesRequestDenotesArchive(requested, cfg.unit.stateDB) {
+				// Any alias spelling or interior path of an archive resolves
+				// to the identical archive scope, so no spelling can omit the
+				// state.db members or the sessions/ transcripts.
+				addScope(cfg.unit.identity, raw, ReconciliationScope{
+					TraversalRoots:      []string{cfg.root},
+					PhysicalProofScopes: cfg.unit.proofs,
+					CoverageIdentities:  []string{cfg.unit.identity},
+				})
+				continue
+			}
+			if cfg.unit.stateDB == "" &&
+				hermesPathWithinOrSame(requested, cfg.match) {
+				// A plain transcript-directory root has no archive topology
+				// to widen into, so a requested descendant resolves
+				// generically: traverse the configured root, prove only the
+				// descendant in the configured spelling, claim no coverage.
+				// Resolving nothing instead would leave a deleted
+				// transcript's session active until the daily archive audit.
+				proof := descendantProofSpelling(
+					cfg.match, filepath.Clean(cfg.root), requested,
+				)
+				addScope("descendant\x00"+proof, raw, ReconciliationScope{
+					TraversalRoots:      []string{cfg.root},
+					PhysicalProofScopes: []StoredSourceHintScope{{Path: proof}},
+				})
+			}
+		}
+	}
+	return plan
 }
 
 func (s hermesSourceSet) SourceForReconciliation(
@@ -1023,6 +1262,7 @@ func hermesArchiveSourceRef(root, stateDB string) (SourceRef, bool) {
 	stateDB = filepath.Clean(stateDB)
 	return SourceRef{
 		Provider:       AgentHermes,
+		ConfiguredRoot: root,
 		Key:            stateDB,
 		DisplayPath:    stateDB,
 		FingerprintKey: stateDB,
@@ -1036,7 +1276,11 @@ func hermesArchiveSourceRef(root, stateDB string) (SourceRef, bool) {
 func hermesStateMemberSourceRef(root, stateDB, sessionID string) SourceRef {
 	path := VirtualSourcePath(stateDB, sessionID)
 	return SourceRef{
-		Provider: AgentHermes, Key: path, DisplayPath: path, FingerprintKey: path,
+		Provider:       AgentHermes,
+		ConfiguredRoot: filepath.Clean(root),
+		Key:            path,
+		DisplayPath:    path,
+		FingerprintKey: path,
 		Opaque: hermesSource{Root: filepath.Clean(root), Path: path,
 			StateDB: filepath.Clean(stateDB), SessionID: sessionID},
 	}
@@ -1047,6 +1291,7 @@ func hermesTranscriptSourceRef(root, path string) (SourceRef, bool) {
 	path = filepath.Clean(path)
 	return SourceRef{
 		Provider:       AgentHermes,
+		ConfiguredRoot: root,
 		Key:            path,
 		DisplayPath:    path,
 		FingerprintKey: path,

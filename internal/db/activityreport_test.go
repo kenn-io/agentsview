@@ -126,6 +126,11 @@ func TestGetActivityReport_UsageCostAndTokens(t *testing.T) {
 	assert.Equal(t, 500, r.Totals.OutputTokens)
 	// Cost = (1000*3 + 500*15) / 1e6 = 0.0105
 	assert.Equal(t, money.MustParseDollars("0.0105"), r.Totals.Cost)
+	require.NotNil(t, r.Pricing)
+	provenance := r.Pricing.Models["claude-sonnet-4-20250514"]
+	require.Len(t, provenance.Resolutions, 1)
+	assert.Equal(t, 1,
+		provenance.Resolutions[0].Application.BaseRequestCount)
 }
 
 func TestSQLiteActivityReportRowStatusCanonicalizesKimiAliasByTimestamp(t *testing.T) {
@@ -668,6 +673,47 @@ func TestGetActivityReport_UsageDedupSubSecondOrder(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 500, r.Totals.OutputTokens,
 		"first-seen dedup keeps the chronologically earlier whole-second row")
+}
+
+func TestGetActivityReport_UsageDedupEqualInstantUsesSessionOrder(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern:  "claude-sonnet-4-20250514",
+		InputPerMTok:  money.MustParseDollars("3.0"),
+		OutputPerMTok: money.MustParseDollars("15.0"),
+	}}), "UpsertModelPricing")
+
+	insertSession(t, d, "a-session", "project a", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = Ptr("2026-06-16T10:30:00Z")
+		s.EndedAt = Ptr("2026-06-16T10:30:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "a-session", Ordinal: 0, Role: "assistant", Content: "x",
+		Timestamp:       "2026-06-16T10:30:00Z",
+		Model:           "claude-sonnet-4-20250514",
+		ClaudeMessageID: "m-equal", ClaudeRequestID: "r-equal",
+		TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
+	})
+	insertSession(t, d, "z-session", "project z", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = Ptr("2026-06-16T10:30:00Z")
+		s.EndedAt = Ptr("2026-06-16T10:30:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "z-session", Ordinal: 0, Role: "assistant", Content: "x",
+		Timestamp:       "2026-06-16T05:30:00-05:00",
+		Model:           "claude-sonnet-4-20250514",
+		ClaudeMessageID: "m-equal", ClaudeRequestID: "r-equal",
+		TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":9000}`),
+	})
+
+	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
+		dayQuery(t, "2026-06-16", "UTC"))
+	require.NoError(t, err)
+	assert.Equal(t, 500, r.Totals.OutputTokens,
+		"equal parsed instants fall through to session ID ordering")
 }
 
 func TestGetActivityReport_UsageDedupFallsBackToSourceUUID(t *testing.T) {

@@ -1041,6 +1041,40 @@ func TestReplaceActiveSessionSourceBaselinesWarmPassWritesBounded(t *testing.T) 
 	}
 }
 
+func TestListActiveSessionSourceAttributionsReturnsEveryMachine(t *testing.T) {
+	d := testDB(t)
+	root := t.TempDir()
+	sharedPath := filepath.Join(root, "shared.db")
+	unrelatedPath := filepath.Join(root, "unrelated.db")
+	for _, seed := range []struct {
+		id      string
+		machine string
+		path    string
+	}{
+		{id: "shared-a", machine: "machine-a", path: sharedPath},
+		{id: "shared-b", machine: "machine-b", path: sharedPath},
+		{id: "unrelated", machine: "machine-c", path: unrelatedPath},
+	} {
+		path := seed.path
+		require.NoError(t, d.UpsertSession(Session{
+			ID: seed.id, Project: "project", Machine: seed.machine,
+			Agent: "shared-provider", FilePath: &path,
+		}))
+	}
+
+	got, err := d.ListActiveSessionSourceAttributions(
+		t.Context(), []SessionSourcePath{{
+			Agent: "shared-provider", FilePath: sharedPath,
+		}},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, []SessionSourceAttribution{
+		{Machine: "machine-a", Agent: "shared-provider", FilePath: sharedPath},
+		{Machine: "machine-b", Agent: "shared-provider", FilePath: sharedPath},
+	}, got)
+}
+
 // TestReplaceActiveSessionSourceBaselinesReplacesMovedOwnership pins the
 // delete-then-readmit end state for changed ownership: when a session's stored
 // source moves, replacing the old and new pairs leaves exactly one baseline

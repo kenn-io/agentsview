@@ -519,6 +519,7 @@ func copilotProviderCapabilities() Capabilities {
 			Thinking:             CapabilitySupported,
 			ToolCalls:            CapabilitySupported,
 			ToolResults:          CapabilitySupported,
+			ToolResultEvents:     CapabilitySupported,
 			PerMessageTokenUsage: CapabilitySupported,
 			AggregateUsageEvents: CapabilitySupported,
 			Model:                CapabilitySupported,

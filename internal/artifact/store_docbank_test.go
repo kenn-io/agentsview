@@ -19,6 +19,8 @@ import (
 )
 
 func TestDocbankStoreUsesCanonicalNamespaceAndMovesQuarantineNode(t *testing.T) {
+	t.Parallel()
+
 	vault, store := newTestDocbankStore(t, docbank.Config{})
 	ref := requireContractRef(t, contractOrigin, KindCheckpoints, "cp-0000000042.json")
 	body := []byte(`{"origin":"contract-a1b2c3","sequence":42}`)
@@ -50,6 +52,8 @@ func TestDocbankStoreUsesCanonicalNamespaceAndMovesQuarantineNode(t *testing.T) 
 }
 
 func TestDocbankStoreRejectsReferenceAndNodeIdentityMismatchBeforeRead(t *testing.T) {
+	t.Parallel()
+
 	vault, store := newTestDocbankStore(t, docbank.Config{})
 	body := []byte("catalog-authorized but incorrectly named content")
 	identity := identityForBytes(t, body)
@@ -70,6 +74,8 @@ func TestDocbankStoreRejectsReferenceAndNodeIdentityMismatchBeforeRead(t *testin
 }
 
 func TestDocbankStorePreservesTypedDocbankCauses(t *testing.T) {
+	t.Parallel()
+
 	_, store := newTestDocbankStore(t, docbank.Config{})
 	ref := requireContractRef(t, contractOrigin, KindCheckpoints, "cp-0000000001.json")
 
@@ -91,6 +97,8 @@ func TestDocbankStorePreservesTypedDocbankCauses(t *testing.T) {
 }
 
 func TestDocbankStoreClosedOperationsReturnErrClosed(t *testing.T) {
+	t.Parallel()
+
 	_, store := newTestDocbankStore(t, docbank.Config{})
 	ref := requireContractRef(t, contractOrigin, KindCheckpoints, "cp-0000000001.json")
 	body := []byte("closed store")
@@ -109,6 +117,8 @@ func TestDocbankStoreClosedOperationsReturnErrClosed(t *testing.T) {
 }
 
 func TestDocbankStoreIdempotentRetryDoesNotReportPhysicalWrite(t *testing.T) {
+	t.Parallel()
+
 	_, store := newTestDocbankStore(t, docbank.Config{})
 	ref := requireContractRef(t, contractOrigin, KindCheckpoints, "cp-0000000001.json")
 	body := []byte(`{"origin":"contract-a1b2c3","sequence":1}`)
@@ -127,6 +137,8 @@ func TestDocbankStoreIdempotentRetryDoesNotReportPhysicalWrite(t *testing.T) {
 }
 
 func TestDocbankStoreDistinctReferencesCountOnePhysicalWrite(t *testing.T) {
+	t.Parallel()
+
 	_, store := newTestDocbankStore(t, docbank.Config{})
 
 	body := []byte(`{"origin":"contract-a1b2c3","shared":"physical-content"}`)
@@ -140,6 +152,8 @@ func TestDocbankStoreDistinctReferencesCountOnePhysicalWrite(t *testing.T) {
 }
 
 func TestDocbankIteratorClosesWalkerExactlyOnce(t *testing.T) {
+	t.Parallel()
+
 	t.Run("explicit close", func(t *testing.T) {
 		walker := &docbankWalkerStub{}
 		iterator := &docbankOriginIterator{

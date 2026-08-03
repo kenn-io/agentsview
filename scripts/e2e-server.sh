@@ -9,6 +9,30 @@ DB_PATH="$TMPDIR/sessions.db"
 DUCKDB_PATH="$TMPDIR/sessions.duckdb"
 EMPTY_DIR="$TMPDIR/empty"
 BACKEND="${AGENTSVIEW_E2E_BACKEND:-sqlite}"
+raw_e2e_port="${AGENTSVIEW_E2E_PORT-}"
+if [[ -z "$raw_e2e_port" ]]; then
+  E2E_PORT=8090
+elif [[ ! "$raw_e2e_port" =~ ^[0-9]+$ ]]; then
+  printf 'AGENTSVIEW_E2E_PORT must be an integer from 1 to 65535 (got %q)\n' \
+    "$raw_e2e_port" >&2
+  exit 1
+else
+  normalized_e2e_port="${raw_e2e_port#"${raw_e2e_port%%[!0]*}"}"
+  if [[ -z "$normalized_e2e_port" ]]; then
+    normalized_e2e_port=0
+  fi
+  if [[ ${#normalized_e2e_port} -gt 5 ]]; then
+    printf 'AGENTSVIEW_E2E_PORT must be an integer from 1 to 65535 (got %q)\n' \
+      "$raw_e2e_port" >&2
+    exit 1
+  fi
+  E2E_PORT=$((10#$normalized_e2e_port))
+  if [[ "$E2E_PORT" -lt 1 || "$E2E_PORT" -gt 65535 ]]; then
+    printf 'AGENTSVIEW_E2E_PORT must be an integer from 1 to 65535 (got %q)\n' \
+      "$raw_e2e_port" >&2
+    exit 1
+  fi
+fi
 mkdir -p "$EMPTY_DIR"
 
 # Use pre-built binaries if available (CI sets these),
@@ -80,17 +104,17 @@ fi
 
 case "$BACKEND" in
   sqlite)
-    echo "Starting sqlite e2e server on :8090..."
+    echo "Starting sqlite e2e server on :$E2E_PORT..."
     exec env "${agent_env[@]}" "$SERVER" serve \
-      --port 8090 \
+      --port "$E2E_PORT" \
       --no-browser
     ;;
   duckdb)
-    echo "Starting duckdb e2e server on :8090..."
+    echo "Starting duckdb e2e server on :$E2E_PORT..."
     exec env "${agent_env[@]}" \
       AGENTSVIEW_DUCKDB_PATH="$DUCKDB_PATH" \
       "$SERVER" duckdb serve \
-      --port 8090 \
+      --port "$E2E_PORT" \
       --no-browser
     ;;
   *)

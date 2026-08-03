@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -2414,6 +2415,59 @@ func TestCopyRecallEntriesFrom(t *testing.T) {
 	require.NoError(t, err, "search copied recall")
 	require.Len(t, cands, 1, "fts finds copied recall")
 	assert.Equal(t, "m1", cands[0].ID)
+}
+
+func TestCopyRecallEntriesFromAdvancesQueryRevisionWhenAllEntriesSkipped(
+	t *testing.T,
+) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	srcPath := filepath.Join(dir, "old.db")
+	srcDB, err := Open(srcPath)
+	require.NoError(t, err)
+	insertSession(t, srcDB, "removed-session", "agentsview")
+	_, err = srcDB.InsertRecallEntry(RecallEntry{
+		ID:              "removed-entry",
+		Type:            "fact",
+		Scope:           "project",
+		Status:          "accepted",
+		Title:           "Removed during resync",
+		Body:            "The source session did not survive.",
+		SourceSessionID: "removed-session",
+	})
+	require.NoError(t, err)
+	sourceRevision, err := srcDB.RecallQueryRevision(ctx)
+	require.NoError(t, err)
+	require.NoError(t, srcDB.Close())
+
+	dstDB, err := Open(filepath.Join(dir, "new.db"))
+	require.NoError(t, err)
+	defer dstDB.Close()
+
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
+
+	entries, err := dstDB.ListRecallEntries(ctx, RecallQuery{})
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+
+	destinationRevision, err := dstDB.RecallQueryRevision(ctx)
+	require.NoError(t, err)
+	sourceRevisionNumber, ok := parseTestRecallQueryRevision(sourceRevision)
+	require.True(t, ok)
+	destinationRevisionNumber, ok := parseTestRecallQueryRevision(destinationRevision)
+	require.True(t, ok)
+	assert.Greater(t, destinationRevisionNumber, sourceRevisionNumber,
+		"replacing an archive must invalidate existing ranked cursors")
+}
+
+func parseTestRecallQueryRevision(revision string) (int64, bool) {
+	value, ok := strings.CutPrefix(revision, recallQueryRevisionPrefix)
+	if !ok {
+		return 0, false
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	return parsed, err == nil
 }
 
 func TestCopyRecallEntriesFromPreservesPendingArchivedEmbeddingChange(

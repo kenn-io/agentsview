@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -18,10 +20,27 @@ import (
 	agentsync "go.kenn.io/agentsview/internal/sync"
 )
 
+// reconcileGroupsSequentially adapts a per-group fake to the grouped syncer
+// interface, mirroring the engine contract pinned by
+// TestReconcileProviderRootsGrouped*: every group is attempted in order and
+// failures are joined.
+func reconcileGroupsSequentially(
+	ctx context.Context,
+	groups []agentsync.ProviderRootsGroup,
+	reconcile func(context.Context, parser.AgentType, []string) error,
+) error {
+	var errs []error
+	for _, group := range groups {
+		if err := reconcile(ctx, group.Agent, group.Roots); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 type recordingUnwatchedPollSyncer struct {
 	mu           sync.Mutex
 	calls        [][]string
-	full         []bool
 	wake         chan struct{}
 	reconcileErr error
 }
@@ -42,8 +61,8 @@ type cancelBlockingUnwatchedPollSyncer struct {
 	calls    int
 }
 
-func (s *cancelBlockingUnwatchedPollSyncer) ReconcileWatchRoots(
-	ctx context.Context, _ []string, _ bool,
+func (s *cancelBlockingUnwatchedPollSyncer) ReconcileProviderRoots(
+	ctx context.Context, _ parser.AgentType, _ []string,
 ) error {
 	s.mu.Lock()
 	s.calls++
@@ -54,14 +73,20 @@ func (s *cancelBlockingUnwatchedPollSyncer) ReconcileWatchRoots(
 	return ctx.Err()
 }
 
+func (s *cancelBlockingUnwatchedPollSyncer) ReconcileProviderRootsGrouped(
+	ctx context.Context, groups []agentsync.ProviderRootsGroup,
+) error {
+	return reconcileGroupsSequentially(ctx, groups, s.ReconcileProviderRoots)
+}
+
 func (s *cancelBlockingUnwatchedPollSyncer) callCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.calls
 }
 
-func (s *blockingUnwatchedPollSyncer) ReconcileWatchRoots(
-	_ context.Context, roots []string, _ bool,
+func (s *blockingUnwatchedPollSyncer) ReconcileProviderRoots(
+	_ context.Context, _ parser.AgentType, roots []string,
 ) error {
 	owned := append([]string(nil), roots...)
 	s.mu.Lock()
@@ -77,6 +102,12 @@ func (s *blockingUnwatchedPollSyncer) ReconcileWatchRoots(
 	return nil
 }
 
+func (s *blockingUnwatchedPollSyncer) ReconcileProviderRootsGrouped(
+	ctx context.Context, groups []agentsync.ProviderRootsGroup,
+) error {
+	return reconcileGroupsSequentially(ctx, groups, s.ReconcileProviderRoots)
+}
+
 func (s *blockingUnwatchedPollSyncer) snapshot() ([][]string, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -87,18 +118,23 @@ func (s *blockingUnwatchedPollSyncer) snapshot() ([][]string, int) {
 	return calls, s.maxActive
 }
 
-func (s *recordingUnwatchedPollSyncer) ReconcileWatchRoots(
-	_ context.Context, roots []string, full bool,
+func (s *recordingUnwatchedPollSyncer) ReconcileProviderRoots(
+	_ context.Context, _ parser.AgentType, roots []string,
 ) error {
 	s.mu.Lock()
 	s.calls = append(s.calls, append([]string(nil), roots...))
-	s.full = append(s.full, full)
 	s.mu.Unlock()
 	select {
 	case s.wake <- struct{}{}:
 	default:
 	}
 	return s.reconcileErr
+}
+
+func (s *recordingUnwatchedPollSyncer) ReconcileProviderRootsGrouped(
+	ctx context.Context, groups []agentsync.ProviderRootsGroup,
+) error {
+	return reconcileGroupsSequentially(ctx, groups, s.ReconcileProviderRoots)
 }
 
 func (s *recordingUnwatchedPollSyncer) snapshot() [][]string {
@@ -115,7 +151,7 @@ func TestUnwatchedPollConcurrentAddDeduplicatesUpdatedRootSet(t *testing.T) {
 	ticks := make(chan time.Time)
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 4)}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
-		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil,
+		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil, time.Now, time.After,
 	)
 	t.Cleanup(coordinator.Stop)
 	parent := t.TempDir()
@@ -123,17 +159,17 @@ func TestUnwatchedPollConcurrentAddDeduplicatesUpdatedRootSet(t *testing.T) {
 	rootB := requireExistingPollRoot(t, parent, "root-b")
 	rootC := requireExistingPollRoot(t, parent, "root-c")
 
-	additions := [][]string{
-		{rootB, rootA},
-		{rootA, rootC},
-		{rootC, rootB},
+	additions := [][]pollingScope{
+		{{Root: rootB}, {Root: rootA}},
+		{{Root: rootA}, {Root: rootC}},
+		{{Root: rootC}, {Root: rootB}},
 	}
 	var wg sync.WaitGroup
 	addErrors := make(chan error, len(additions))
-	for i, roots := range additions {
+	for i, scopes := range additions {
 		wg.Go(func() {
 			addErrors <- coordinator.AddObligation(pollingObligation{
-				Key: fmt.Sprintf("direct-%d", i), Roots: roots,
+				Key: fmt.Sprintf("direct-%d", i), Scopes: scopes,
 			})
 		})
 	}
@@ -152,25 +188,23 @@ func TestUnwatchedPollTickUsesRootsAddedAfterStart(t *testing.T) {
 	ticks := make(chan time.Time, 1)
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 2)}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
-		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil,
+		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil, time.Now, time.After,
 	)
 	t.Cleanup(coordinator.Stop)
 	parent := t.TempDir()
 	initial := requireExistingPollRoot(t, parent, "initial")
 	runtime := requireExistingPollRoot(t, parent, "runtime")
 	require.NoError(t, coordinator.AddObligation(pollingObligation{
-		Key: "initial", Roots: []string{initial},
+		Key: "initial", Scopes: []pollingScope{{Root: initial}},
 	}))
 	require.NoError(t, coordinator.AddObligation(pollingObligation{
-		Key: "runtime", Roots: []string{runtime},
+		Key: "runtime", Scopes: []pollingScope{{Root: runtime}},
 	}))
 
 	ticks <- time.Now()
 	requirePollWithin(t, syncer.wake, time.Second)
 
 	assert.Equal(t, [][]string{{initial, runtime}}, syncer.snapshot())
-	assert.Equal(t, []bool{false}, syncer.full,
-		"unwatched polling must reconcile the owned scopes authoritatively")
 }
 
 func TestUnwatchedPollSkipsAbsentObligatedRootUntilItReturns(t *testing.T) {
@@ -184,11 +218,16 @@ func TestUnwatchedPollSkipsAbsentObligatedRootUntilItReturns(t *testing.T) {
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 3)}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
 		t.Context(), syncer, make(chan time.Time), func() {},
-		func(run func()) { run() }, nil,
+		func(run func()) { run() }, nil, time.Now,
+		func(d time.Duration) <-chan time.Time {
+			ch := make(chan time.Time, 1)
+			ch <- time.Time{}
+			return ch
+		},
 	)
 	t.Cleanup(coordinator.Stop)
 	require.NoError(t, coordinator.AddObligation(pollingObligation{
-		Key: "provider-root", Roots: []string{root},
+		Key: "provider-root", Scopes: []pollingScope{{Root: root}},
 	}))
 
 	coordinator.requestPoll()
@@ -222,11 +261,16 @@ func TestUnwatchedPollDefersScopesWhileProbePathMissing(t *testing.T) {
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 3)}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
 		t.Context(), syncer, make(chan time.Time), func() {},
-		func(run func()) { run() }, nil,
+		func(run func()) { run() }, nil, time.Now,
+		func(d time.Duration) <-chan time.Time {
+			ch := make(chan time.Time, 1)
+			ch <- time.Time{}
+			return ch
+		},
 	)
 	t.Cleanup(coordinator.Stop)
 	require.NoError(t, coordinator.AddObligation(pollingObligation{
-		Key: physical, Roots: []string{configured}, Probe: physical,
+		Key: physical, Scopes: []pollingScope{{Root: configured}}, Probe: physical,
 	}))
 
 	coordinator.requestPoll()
@@ -261,14 +305,19 @@ func TestUnwatchedPollDefersSharedScopeWhileAnyProbeMissing(t *testing.T) {
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 3)}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
 		t.Context(), syncer, make(chan time.Time), func() {},
-		func(run func()) { run() }, nil,
+		func(run func()) { run() }, nil, time.Now,
+		func(d time.Duration) <-chan time.Time {
+			ch := make(chan time.Time, 1)
+			ch <- time.Time{}
+			return ch
+		},
 	)
 	t.Cleanup(coordinator.Stop)
 	require.NoError(t, coordinator.AddObligation(pollingObligation{
-		Key: configured, Roots: []string{configured}, Probe: configured,
+		Key: configured, Scopes: []pollingScope{{Root: configured}}, Probe: configured,
 	}))
 	require.NoError(t, coordinator.AddObligation(pollingObligation{
-		Key: sessions, Roots: []string{configured}, Probe: sessions,
+		Key: sessions, Scopes: []pollingScope{{Root: configured}}, Probe: sessions,
 	}))
 
 	coordinator.requestPoll()
@@ -310,31 +359,31 @@ func TestAvailableUnwatchedPollRootsDefersRootsOverlappingBlockedScopes(t *testi
 		{
 			name: "blocked descendant defers available ancestor",
 			obligations: []pollingObligation{
-				{Key: "base", Roots: []string{base, unrelated}},
-				{Key: "nested", Roots: []string{nested}, Probe: missingProbe},
+				{Key: "base", Scopes: []pollingScope{{Root: base}, {Root: unrelated}}},
+				{Key: "nested", Scopes: []pollingScope{{Root: nested}}, Probe: missingProbe},
 			},
 			want: []string{unrelated},
 		},
 		{
 			name: "blocked ancestor defers available descendant",
 			obligations: []pollingObligation{
-				{Key: "nested", Roots: []string{nested, unrelated}},
-				{Key: "base", Roots: []string{base}, Probe: filepath.Join(base, "gone")},
+				{Key: "nested", Scopes: []pollingScope{{Root: nested}, {Root: unrelated}}},
+				{Key: "base", Scopes: []pollingScope{{Root: base}}, Probe: filepath.Join(base, "gone")},
 			},
 			want: []string{unrelated},
 		},
 		{
 			name: "available probes keep overlapping roots pollable",
 			obligations: []pollingObligation{
-				{Key: "base", Roots: []string{base}},
-				{Key: "nested", Roots: []string{nested}, Probe: nested},
+				{Key: "base", Scopes: []pollingScope{{Root: base}}},
+				{Key: "nested", Scopes: []pollingScope{{Root: nested}}, Probe: nested},
 			},
 			want: []string{base, nested},
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, availableUnwatchedPollRoots(tc.obligations))
+			assert.Equal(t, tc.want, availableUnwatchedPollRootsFlat(tc.obligations))
 		})
 	}
 }
@@ -361,21 +410,21 @@ func TestAvailableUnwatchedPollRootsBlocksMixedRelativeAndAbsoluteScopes(t *test
 		{
 			name: "relative blocked scope defers absolute descendant",
 			obligations: []pollingObligation{
-				{Key: "blocked", Roots: []string{"scope"}, Probe: missingProbe},
-				{Key: "poll", Roots: []string{sub}},
+				{Key: "blocked", Scopes: []pollingScope{{Root: "scope"}}, Probe: missingProbe},
+				{Key: "poll", Scopes: []pollingScope{{Root: sub}}},
 			},
 		},
 		{
 			name: "absolute blocked scope defers relative descendant",
 			obligations: []pollingObligation{
-				{Key: "blocked", Roots: []string{scope}, Probe: missingProbe},
-				{Key: "poll", Roots: []string{filepath.Join("scope", "sub")}},
+				{Key: "blocked", Scopes: []pollingScope{{Root: scope}}, Probe: missingProbe},
+				{Key: "poll", Scopes: []pollingScope{{Root: filepath.Join("scope", "sub")}}},
 			},
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Empty(t, availableUnwatchedPollRoots(tc.obligations),
+			assert.Empty(t, availableUnwatchedPollRootsFlat(tc.obligations),
 				"a blocked scope must defer overlapping roots regardless of "+
 					"the path form each side was configured with")
 		})
@@ -390,11 +439,11 @@ func TestAvailableUnwatchedPollRootsBlocksScopesUnderFilesystemRoot(t *testing.T
 	candidate := t.TempDir()
 	fsRoot := filepath.VolumeName(candidate) + string(filepath.Separator)
 	obligations := []pollingObligation{
-		{Key: "blocked", Roots: []string{fsRoot},
+		{Key: "blocked", Scopes: []pollingScope{{Root: fsRoot}},
 			Probe: filepath.Join(candidate, "missing-probe")},
-		{Key: "poll", Roots: []string{candidate}},
+		{Key: "poll", Scopes: []pollingScope{{Root: candidate}}},
 	}
-	assert.Empty(t, availableUnwatchedPollRoots(obligations),
+	assert.Empty(t, availableUnwatchedPollRootsFlat(obligations),
 		"a blocked filesystem-root scope must defer every candidate beneath it")
 }
 
@@ -431,12 +480,15 @@ func TestUnwatchedPollPreservesSessionsUnderBlockedOverlappingScope(t *testing.T
 	t.Cleanup(engine.Close)
 
 	obligations := []pollingObligation{
-		{Key: "persistent:" + base, Roots: []string{base}, Probe: base},
-		{Key: "nested-gate", Roots: []string{nested},
+		{Key: "persistent:" + base, Scopes: []pollingScope{{Root: base}}, Probe: base},
+		{Key: "nested-gate", Scopes: []pollingScope{{Root: nested}},
 			Probe: filepath.Join(nested, "missing-subtree")},
 	}
-	roots := availableUnwatchedPollRoots(obligations)
-	pollUnwatchedRootsOnce(t.Context(), engine, roots)
+	groups := availableUnwatchedPollScopes(obligations)
+	if err := pollUnwatchedScopesOnce(t.Context(), engine, groups); err != nil {
+		t.Logf("pollUnwatchedScopesOnce: %v", err)
+	}
+	roots := availableUnwatchedPollRootsFlat(obligations)
 
 	assert.Empty(t, roots,
 		"an ancestor overlapping a blocked scope must not stay pollable")
@@ -455,7 +507,12 @@ func TestUnwatchedPollObligationUpdatesRemainResponsiveDuringReconciliation(
 		release: make(chan struct{}),
 	}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
-		context.Background(), syncer, ticks, func() {}, func(run func()) { run() }, nil,
+		context.Background(), syncer, ticks, func() {}, func(run func()) { run() }, nil, time.Now,
+		func(d time.Duration) <-chan time.Time {
+			ch := make(chan time.Time, 1)
+			ch <- time.Time{}
+			return ch
+		},
 	)
 	t.Cleanup(func() {
 		select {
@@ -469,7 +526,7 @@ func TestUnwatchedPollObligationUpdatesRemainResponsiveDuringReconciliation(
 	initial := requireExistingPollRoot(t, parent, "initial")
 	replacement := requireExistingPollRoot(t, parent, "replacement")
 	require.NoError(t, coordinator.AddObligation(pollingObligation{
-		Key: "initial", Roots: []string{initial},
+		Key: "initial", Scopes: []pollingScope{{Root: initial}},
 	}))
 
 	coordinator.requestPoll()
@@ -479,7 +536,7 @@ func TestUnwatchedPollObligationUpdatesRemainResponsiveDuringReconciliation(
 	addResult := make(chan error, 1)
 	go func() {
 		addResult <- coordinator.AddObligation(pollingObligation{
-			Key: "replacement", Roots: []string{replacement},
+			Key: "replacement", Scopes: []pollingScope{{Root: replacement}},
 		})
 	}()
 	require.NoError(t, requireReceivePollResult(t, addResult, time.Second),
@@ -509,7 +566,7 @@ func TestUnwatchedPollStopCancelsAndJoinsActiveReconciliation(t *testing.T) {
 	}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
 		parentCtx, syncer, make(chan time.Time), func() {},
-		func(run func()) { run() }, nil,
+		func(run func()) { run() }, nil, time.Now, time.After,
 	)
 	t.Cleanup(func() {
 		cancelParent()
@@ -517,7 +574,7 @@ func TestUnwatchedPollStopCancelsAndJoinsActiveReconciliation(t *testing.T) {
 	})
 	owned := requireExistingPollRoot(t, t.TempDir(), "owned")
 	require.NoError(t, coordinator.AddObligation(pollingObligation{
-		Key: "owned", Roots: []string{owned},
+		Key: "owned", Scopes: []pollingScope{{Root: owned}},
 	}))
 	coordinator.requestPoll()
 	requirePollWithin(t, syncer.started, time.Second)
@@ -549,7 +606,7 @@ func TestUnwatchedPollParentCancellationCancelsJoinsAndRejectsUpdates(
 	}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
 		parentCtx, syncer, make(chan time.Time), func() {},
-		func(run func()) { run() }, nil,
+		func(run func()) { run() }, nil, time.Now, time.After,
 	)
 	t.Cleanup(func() {
 		cancelParent()
@@ -557,7 +614,7 @@ func TestUnwatchedPollParentCancellationCancelsJoinsAndRejectsUpdates(
 	})
 	owned := requireExistingPollRoot(t, t.TempDir(), "owned")
 	require.NoError(t, coordinator.AddObligation(pollingObligation{
-		Key: "owned", Roots: []string{owned},
+		Key: "owned", Scopes: []pollingScope{{Root: owned}},
 	}))
 	coordinator.requestPoll()
 	requirePollWithin(t, syncer.started, time.Second)
@@ -573,7 +630,7 @@ func TestUnwatchedPollParentCancellationCancelsJoinsAndRejectsUpdates(
 	lateUpdate := make(chan error, 1)
 	go func() {
 		lateUpdate <- coordinator.AddObligation(pollingObligation{
-			Key: "late", Roots: []string{"/late"},
+			Key: "late", Scopes: []pollingScope{{Root: "/late"}},
 		})
 	}()
 	assert.ErrorIs(t, requireReceivePollResult(t, lateUpdate, time.Second),
@@ -585,17 +642,17 @@ func TestUnwatchedPollRemoveRootsStopsReconciliationAfterNativeRecovery(t *testi
 	ticks := make(chan time.Time, 1)
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 2)}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
-		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil,
+		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil, time.Now, time.After,
 	)
 	t.Cleanup(coordinator.Stop)
 	parent := t.TempDir()
 	recovered := requireExistingPollRoot(t, parent, "recovered")
 	stillUnwatched := requireExistingPollRoot(t, parent, "still-unwatched")
 	require.NoError(t, coordinator.AddObligation(pollingObligation{
-		Key: "recovered-watch", Roots: []string{recovered},
+		Key: "recovered-watch", Scopes: []pollingScope{{Root: recovered}},
 	}))
 	require.NoError(t, coordinator.AddObligation(pollingObligation{
-		Key: "still-unwatched", Roots: []string{stillUnwatched},
+		Key: "still-unwatched", Scopes: []pollingScope{{Root: stillUnwatched}},
 	}))
 	require.NoError(t, coordinator.RemoveObligation("recovered-watch"))
 
@@ -609,17 +666,17 @@ func TestUnwatchedPollRemovingOneOverlappingObligationKeepsSharedRoot(t *testing
 	ticks := make(chan time.Time)
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 2)}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
-		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil,
+		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil, time.Now, time.After,
 	)
 	t.Cleanup(coordinator.Stop)
 	parent := t.TempDir()
 	shared := requireExistingPollRoot(t, parent, "shared")
 	persistentOnly := requireExistingPollRoot(t, parent, "persistent-only")
 	require.NoError(t, coordinator.AddObligation(pollingObligation{
-		Key: "pending", Roots: []string{shared},
+		Key: "pending", Scopes: []pollingScope{{Root: shared}},
 	}))
 	require.NoError(t, coordinator.AddObligation(pollingObligation{
-		Key: "persistent", Roots: []string{shared, persistentOnly},
+		Key: "persistent", Scopes: []pollingScope{{Root: shared}, {Root: persistentOnly}},
 	}))
 	require.NoError(t, coordinator.RemoveObligation("pending"))
 
@@ -634,7 +691,7 @@ func TestUnwatchedPollEmptyObligationNeverExpandsToFullReconciliation(t *testing
 	ticks := make(chan time.Time)
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 1)}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
-		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil,
+		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil, time.Now, time.After,
 	)
 	t.Cleanup(coordinator.Stop)
 	require.NoError(t, coordinator.AddObligation(pollingObligation{Key: "empty"}))
@@ -649,10 +706,10 @@ func TestUnwatchedPollStopIsConcurrentAndRejectsLaterRoots(t *testing.T) {
 	ticks := make(chan time.Time)
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 1)}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
-		context.Background(), syncer, ticks, func() {}, func(run func()) { run() }, nil,
+		context.Background(), syncer, ticks, func() {}, func(run func()) { run() }, nil, time.Now, time.After,
 	)
 	require.NoError(t, coordinator.AddObligation(pollingObligation{
-		Key: "owned", Roots: []string{"/owned"},
+		Key: "owned", Scopes: []pollingScope{{Root: "/owned"}},
 	}))
 
 	var wg sync.WaitGroup
@@ -664,7 +721,7 @@ func TestUnwatchedPollStopIsConcurrentAndRejectsLaterRoots(t *testing.T) {
 	wg.Wait()
 
 	assert.ErrorIs(t, coordinator.AddObligation(pollingObligation{
-		Key: "late", Roots: []string{"/late"},
+		Key: "late", Scopes: []pollingScope{{Root: "/late"}},
 	}), errUnwatchedPollStopped)
 	coordinator.requestPoll()
 	assert.Empty(t, syncer.snapshot())
@@ -680,7 +737,7 @@ func TestUnwatchedPollAddObligationRacingStopReturnsOwnershipOrStopped(t *testin
 			context.Background(), syncer, ticks, func() {}, func(run func()) { run() },
 			func(roots []string) {
 				ownedSnapshots <- append([]string(nil), roots...)
-			},
+			}, time.Now, time.After,
 		)
 		start := make(chan struct{})
 		addResult := make(chan error, 1)
@@ -689,7 +746,7 @@ func TestUnwatchedPollAddObligationRacingStopReturnsOwnershipOrStopped(t *testin
 		go func() {
 			<-start
 			addResult <- coordinator.AddObligation(pollingObligation{
-				Key: root, Roots: []string{root},
+				Key: root, Scopes: []pollingScope{{Root: root}},
 			})
 		}()
 		go func() {
@@ -709,11 +766,133 @@ func TestUnwatchedPollAddObligationRacingStopReturnsOwnershipOrStopped(t *testin
 		}
 		assert.ErrorIs(t,
 			coordinator.AddObligation(pollingObligation{
-				Key:   fmt.Sprintf("/late-root-%d", i),
-				Roots: []string{fmt.Sprintf("/late-root-%d", i)},
+				Key:    fmt.Sprintf("/late-root-%d", i),
+				Scopes: []pollingScope{{Root: fmt.Sprintf("/late-root-%d", i)}},
 			}),
 			errUnwatchedPollStopped,
 		)
+	}
+}
+
+// availableUnwatchedPollRootsFlat is a test helper that flattens the
+// per-agent groups from availableUnwatchedPollScopes into one sorted []string.
+func availableUnwatchedPollRootsFlat(obligations []pollingObligation) []string {
+	groups := availableUnwatchedPollScopes(obligations)
+	unique := make(map[string]struct{})
+	for _, roots := range groups {
+		for _, r := range roots {
+			unique[r] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(unique))
+	for r := range unique {
+		result = append(result, r)
+	}
+	slices.Sort(result)
+	return result
+}
+
+// TestCrossAgentBlockingBothDirections verifies cross-agent deferral: the empty
+// agent means "every provider" for deferral purposes, so blocking must be
+// conservative in both directions.
+//
+//   - Direction A: a missing probe on an empty-agent obligation must also block
+//     a named-agent candidate for the same root.
+//   - Direction B: a missing probe on a named-agent obligation must also block
+//     an empty-agent candidate for the same root.
+//
+// Without the fix, availableUnwatchedPollScopes only checks blocked[scope.Agent]
+// for each candidate; cross-agent blocks (where the blocking obligation uses a
+// different agent) are invisible and the candidate is polled despite the gate.
+//
+// Ancestor and descendant cases are included in both directions so that
+// overlapsDeferredScope is load-bearing: plain string equality between the
+// blocked root and the candidate root would leave those cases unprotected.
+func TestCrossAgentBlockingBothDirections(t *testing.T) {
+	parent := t.TempDir()
+	dir := requireExistingPollRoot(t, parent, "shared-dir")
+	childDir := requireExistingPollRoot(t, dir, "child")
+	missingProbe := filepath.Join(parent, "missing-probe") // does not exist
+
+	tests := []struct {
+		name            string
+		obligations     []pollingObligation
+		wantAbsentAgent parser.AgentType
+		wantAbsentRoot  string
+	}{
+		// Exact-root cases (original coverage, kept for regression).
+		{
+			name: "empty_agent_blocked_defers_named_agent_exact",
+			obligations: []pollingObligation{
+				{Key: "k1", Probe: missingProbe, Scopes: []pollingScope{{Agent: parser.AgentType(""), Root: dir}}},
+				{Key: "k2", Scopes: []pollingScope{{Agent: parser.AgentGemini, Root: dir}}},
+			},
+			wantAbsentAgent: parser.AgentGemini,
+			wantAbsentRoot:  dir,
+		},
+		{
+			name: "named_agent_blocked_defers_empty_agent_exact",
+			obligations: []pollingObligation{
+				{Key: "k1", Probe: missingProbe, Scopes: []pollingScope{{Agent: parser.AgentGemini, Root: dir}}},
+				{Key: "k2", Scopes: []pollingScope{{Agent: parser.AgentType(""), Root: dir}}},
+			},
+			wantAbsentAgent: parser.AgentType(""),
+			wantAbsentRoot:  dir,
+		},
+		// Ancestor-blocked cases: the blocked scope's Root is an ancestor of the
+		// candidate's Root. Plain string equality would miss this relationship;
+		// overlapsDeferredScope must be called to detect it.
+		{
+			name: "empty_agent_ancestor_blocked_defers_named_agent_descendant",
+			obligations: []pollingObligation{
+				// empty agent blocked at parent; candidate is a child of parent
+				{Key: "k1", Probe: missingProbe, Scopes: []pollingScope{{Agent: parser.AgentType(""), Root: dir}}},
+				{Key: "k2", Scopes: []pollingScope{{Agent: parser.AgentGemini, Root: childDir}}},
+			},
+			wantAbsentAgent: parser.AgentGemini,
+			wantAbsentRoot:  childDir,
+		},
+		{
+			name: "named_agent_ancestor_blocked_defers_empty_agent_descendant",
+			obligations: []pollingObligation{
+				// named agent blocked at parent; candidate is a child of parent
+				{Key: "k1", Probe: missingProbe, Scopes: []pollingScope{{Agent: parser.AgentGemini, Root: dir}}},
+				{Key: "k2", Scopes: []pollingScope{{Agent: parser.AgentType(""), Root: childDir}}},
+			},
+			wantAbsentAgent: parser.AgentType(""),
+			wantAbsentRoot:  childDir,
+		},
+		// Descendant-blocked cases: the blocked scope's Root is a descendant of
+		// the candidate's Root. Plain string equality would miss this too.
+		{
+			name: "empty_agent_descendant_blocked_defers_named_agent_ancestor",
+			obligations: []pollingObligation{
+				// empty agent blocked at child; candidate is the parent of child
+				{Key: "k1", Probe: missingProbe, Scopes: []pollingScope{{Agent: parser.AgentType(""), Root: childDir}}},
+				{Key: "k2", Scopes: []pollingScope{{Agent: parser.AgentGemini, Root: dir}}},
+			},
+			wantAbsentAgent: parser.AgentGemini,
+			wantAbsentRoot:  dir,
+		},
+		{
+			name: "named_agent_descendant_blocked_defers_empty_agent_ancestor",
+			obligations: []pollingObligation{
+				// named agent blocked at child; candidate is the parent of child
+				{Key: "k1", Probe: missingProbe, Scopes: []pollingScope{{Agent: parser.AgentGemini, Root: childDir}}},
+				{Key: "k2", Scopes: []pollingScope{{Agent: parser.AgentType(""), Root: dir}}},
+			},
+			wantAbsentAgent: parser.AgentType(""),
+			wantAbsentRoot:  dir,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := availableUnwatchedPollScopes(tc.obligations)
+			roots := result[tc.wantAbsentAgent]
+			assert.NotContains(t, roots, tc.wantAbsentRoot,
+				"cross-agent blocking must prevent root from appearing in %q group",
+				tc.wantAbsentAgent)
+		})
 	}
 }
 

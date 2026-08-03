@@ -182,6 +182,12 @@ func (p *codebuffFingerprintCountingProvider) WatchRoots(
 	return planner.WatchRoots(ctx)
 }
 
+func (p *codebuffFingerprintCountingProvider) ResolveReconciliationScopes(
+	ctx context.Context, req parser.ReconciliationScopeRequest,
+) (parser.ReconciliationScopePlan, error) {
+	return p.inner.ResolveReconciliationScopes(ctx, req)
+}
+
 func (p *codebuffFingerprintCountingProvider) SourcesForChangedPath(
 	ctx context.Context, req parser.ChangedPathRequest,
 ) ([]parser.SourceRef, error) {

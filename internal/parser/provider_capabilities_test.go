@@ -22,6 +22,47 @@ func TestProviderCapabilitiesPersistentArchiveDefaultUnsupported(t *testing.T) {
 	assert.Equal(t, CapabilityUnsupported, (SourceCapabilities{}).PersistentArchive)
 }
 
+func TestProviderCapabilitiesActivityHintsMatchConsumers(t *testing.T) {
+	assert.Equal(t, CapabilityUnsupported, (SourceCapabilities{}).ActivityHints,
+		"new providers must opt in explicitly")
+
+	for _, factory := range ProviderFactories() {
+		agent := factory.Definition().Type
+		got := factory.Capabilities().Source.ActivityHints
+		if agent == AgentCodex {
+			assert.Equal(t, CapabilitySupported, got)
+			provider := factory.NewProvider(ProviderConfig{
+				Roots: []string{t.TempDir()},
+			})
+			assert.Implements(t, (*ActivityHintProvider)(nil), provider)
+			continue
+		}
+		assert.Equalf(t, CapabilityUnsupported, got,
+			"%s must not schedule activity hints", agent)
+	}
+}
+
+func TestProviderCapabilitiesChangedPathRelevanceMatchConsumers(t *testing.T) {
+	assert.Equal(t, CapabilityUnsupported, (SourceCapabilities{}).ChangedPathRelevance,
+		"new providers must opt in explicitly")
+
+	for _, factory := range ProviderFactories() {
+		agent := factory.Definition().Type
+		got := factory.Capabilities().Source.ChangedPathRelevance
+		if agent == AgentOpenCode || agent == AgentKilo ||
+			agent == AgentMiMoCode || agent == AgentIcodemate {
+			assert.Equal(t, CapabilitySupported, got)
+			provider := factory.NewProvider(ProviderConfig{
+				Roots: []string{t.TempDir()},
+			})
+			assert.Implements(t, (*ChangedPathRelevanceProvider)(nil), provider)
+			continue
+		}
+		assert.Equalf(t, CapabilityUnsupported, got,
+			"%s must not classify watch path relevance", agent)
+	}
+}
+
 func TestWatchSourceProvidersDiscoverEachDirectly(t *testing.T) {
 	for _, factory := range ProviderFactories() {
 		t.Run(string(factory.Definition().Type), func(t *testing.T) {

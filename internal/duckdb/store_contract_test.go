@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -61,7 +62,7 @@ func TestDuckDBSessionDateFilterIncludesOverlappingSessions(t *testing.T) {
 	assert.Equal(t, []string{"open", "spanning"}, ids)
 }
 
-func TestSessionIdentity(t *testing.T) {
+func TestClaudeProvenanceRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	startedAt := "2024-06-15T08:00:00Z"
@@ -74,6 +75,7 @@ func TestSessionIdentity(t *testing.T) {
 		Agent:            "claude",
 		AgentLabel:       "Claude Triage",
 		Entrypoint:       "sdk-cli",
+		SessionKind:      "bg",
 		SessionName:      &sessionName,
 		StartedAt:        &startedAt,
 		EndedAt:          &endedAt,
@@ -81,6 +83,14 @@ func TestSessionIdentity(t *testing.T) {
 		MessageCount:     1,
 		UserMessageCount: 1,
 	}), "upsert identity session")
+	require.NoError(t, local.InsertMessages([]db.Message{{
+		SessionID:     "duck-identity",
+		Ordinal:       0,
+		Role:          "user",
+		Content:       "hello",
+		ContentLength: 5,
+		PromptSource:  "typed",
+	}}), "insert identity message")
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
@@ -96,8 +106,68 @@ func TestSessionIdentity(t *testing.T) {
 	assert.Equal(t, "duck-identity", index.Sessions[0].ID)
 	assert.Equal(t, "Claude Triage", index.Sessions[0].AgentLabel)
 	assert.Equal(t, "sdk-cli", index.Sessions[0].Entrypoint)
+	assert.Equal(t, "bg", index.Sessions[0].SessionKind)
 	require.NotNil(t, index.Sessions[0].DisplayName)
 	assert.Equal(t, "Agent Title", *index.Sessions[0].DisplayName)
+
+	session, err := store.GetSession(ctx, "duck-identity")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "bg", session.SessionKind)
+
+	messages, err := store.GetMessages(ctx, "duck-identity", 0, 10, true)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "typed", messages[0].PromptSource)
+}
+
+func TestDuckDBSidebarIndexTotalCountsCanonicalRoots(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	rootID := "sidebar-root"
+	missingParentID := "missing-parent"
+	for _, session := range []db.Session{
+		{
+			ID: rootID, Project: "alpha", Machine: "local", Agent: "claude",
+			StartedAt: new("2026-07-01T10:00:00Z"), MessageCount: 2,
+		},
+		{
+			ID: "sidebar-subagent", Project: "child-source", Machine: "local",
+			Agent: "claude", StartedAt: new("2026-07-01T10:01:00Z"),
+			MessageCount: 2, ParentSessionID: &rootID, RelationshipType: "subagent",
+		},
+		{
+			ID: "sidebar-fork", Project: "child-source", Machine: "local",
+			Agent: "claude", StartedAt: new("2026-07-01T10:02:00Z"),
+			MessageCount: 2, ParentSessionID: &rootID, RelationshipType: "fork",
+		},
+		{
+			ID: "sidebar-orphan", Project: "alpha", Machine: "local",
+			Agent: "claude", StartedAt: new("2026-07-01T10:03:00Z"),
+			MessageCount: 2, ParentSessionID: &missingParentID,
+			RelationshipType: "subagent",
+		},
+	} {
+		require.NoError(t, local.UpsertSession(session), "upsert %s", session.ID)
+	}
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	pushDataReadMirror(t, ctx, syncer)
+	store := NewStoreFromDB(syncer.DB())
+
+	index, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{
+		Project: "alpha",
+	})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{
+		rootID,
+		"sidebar-subagent",
+		"sidebar-fork",
+		"sidebar-orphan",
+	}, duckSidebarSessionIDs(index.Sessions),
+		"the sidebar needs descendants to build each canonical root tree")
+	assert.Equal(t, 2, index.Total,
+		"only the root and the orphan are canonical roots")
 }
 
 func TestDuckDBStoreContract(t *testing.T) {
@@ -111,6 +181,7 @@ func TestDuckDBStoreContract(t *testing.T) {
 		{"read_only_curation", duckContractReadOnlyCuration},
 		{"analytics_trends_and_usage", duckContractAnalyticsTrendsAndUsage},
 		{"local_only_methods_read_only", duckContractLocalOnlyMethodsReadOnly},
+		{"data_inventory_rules_candidates", duckContractDataInventoryRulesCandidates},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -500,6 +571,45 @@ func duckContractLocalOnlyMethodsReadOnly(
 		Surface: db.RecallQuerySurfaceQuery,
 	})
 	requireReadOnlyDuck(t, err)
+}
+
+// duckContractDataInventoryRulesCandidates exercises the three Data reads
+// (GetProjectInventory, ListProjectRules, ListArchiveWorktreeCandidates)
+// against the shared sync fixture, which has no worktree mapping rules and
+// no session cwds. DuckDB push rewrites every session's machine to the
+// pushing machine's own identity ("test-machine" for newInMemoryTestSync),
+// so both fixture sessions land on one machine with no cwd, giving one
+// "unavailable" candidate group per project.
+func duckContractDataInventoryRulesCandidates(
+	t *testing.T, store *Store, _ syncFixture,
+) {
+	t.Helper()
+	ctx := context.Background()
+
+	inventory, err := store.GetProjectInventory(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 2, inventory.TotalProjects)
+	assert.Equal(t, 2, inventory.TotalSessions)
+	assert.Equal(t, 0, inventory.GovernedSessions, "no worktree mapping rules seeded")
+
+	rules, err := store.ListProjectRules(ctx, "test-machine")
+	require.NoError(t, err)
+	assert.Equal(t, "test-machine", rules.Machine)
+	assert.Empty(t, rules.Rules, "no worktree mapping rules seeded")
+	assert.Contains(t, rules.Machines, "test-machine")
+
+	projects, err := store.BuildProjectIdentityMap(ctx, []string{"alpha"})
+	require.NoError(t, err)
+	candidates, err := store.ListArchiveWorktreeCandidates(ctx, db.ArchiveWorktreeCandidateRequest{
+		ProjectLabel: export.SafeProjectDisplayLabel("alpha"),
+		ProjectKey:   projects["alpha"].ProjectKey,
+	})
+	require.NoError(t, err)
+	require.Len(t, candidates, 1, "the cwd-less alpha session forms one fallback group")
+	assert.Equal(t, "test-machine", candidates[0].Machine)
+	assert.Equal(t, "unavailable", candidates[0].EvidenceKind, "no cwd or identity evidence seeded")
+	assert.False(t, candidates[0].Available)
+	assert.Equal(t, 1, candidates[0].ContributingSessions)
 }
 
 func requireReadOnlyDuck(t *testing.T, err error) {

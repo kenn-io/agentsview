@@ -557,6 +557,7 @@ func TestExtractDBKeepsOnlyRootTrees(t *testing.T) {
 		"project_identity_observation_changes",
 		"session_project_identity_snapshot_changes",
 		"worktree_project_mappings",
+		"worktree_project_mapping_changes",
 	} {
 		var count int
 		require.NoError(t, outConn.QueryRow(
@@ -576,6 +577,82 @@ func TestExtractDBKeepsOnlyRootTrees(t *testing.T) {
 		   )`,
 	).Scan(&orphanChildCount))
 	assert.Zero(t, orphanChildCount)
+}
+
+// TestExtractDBSupportsArchivesBeforeMappingChangeJournals protects screenshot
+// generation from valid archives created before mapping publication journals
+// were added. The reducer must still complete when the source has project
+// mappings but no worktree_project_mapping_changes table or journal triggers.
+func TestExtractDBSupportsArchivesBeforeMappingChangeJournals(t *testing.T) {
+	if _, err := exec.LookPath("sqlite3"); err != nil {
+		t.Skip("sqlite3 CLI not available")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+
+	tempDir := t.TempDir()
+	srcPath := filepath.Join(tempDir, "source.db")
+	d, err := avdb.Open(srcPath)
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+
+	conn, err := sql.Open("sqlite3", srcPath)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	_, err = conn.Exec(`
+		DROP TRIGGER trg_worktree_project_mappings_revision_insert;
+		DROP TRIGGER trg_worktree_project_mappings_revision_update;
+		DROP TRIGGER trg_worktree_project_mappings_revision_delete;
+		DROP TABLE worktree_project_mapping_changes;
+		INSERT INTO sessions
+			(id, project, created_at, started_at, message_count,
+			 user_message_count, first_message)
+		VALUES
+			('s_keep', 'agentsview', '2026-06-01T12:00:00.000Z', '', 1, 1,
+			 'ordinary screenshot-safe notes');
+		INSERT INTO messages (session_id, ordinal, role, content)
+		VALUES ('s_keep', 0, 'user', 'clean transcript');
+		INSERT INTO worktree_project_mappings (machine, path_prefix, project)
+		VALUES ('dev-laptop', '/workspace', 'agentsview');
+	`)
+	require.NoError(t, err)
+	_, err = conn.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	ftsSQL := `
+		CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+			content,
+			content='messages',
+			content_rowid='id',
+			tokenize='porter unicode61'
+		);
+		INSERT INTO messages_fts(messages_fts) VALUES('rebuild');
+	`
+	out, err := exec.Command("sqlite3", srcPath, ftsSQL).CombinedOutput()
+	require.NoErrorf(t, err, "create FTS fixture: %s", out)
+
+	outPath := filepath.Join(tempDir, "out.db")
+	scriptPath := filepath.Join("..", "docs", "screenshots", "extract-db.sh")
+	cmd := exec.Command("bash", scriptPath, srcPath, outPath)
+	cmd.Env = append(
+		os.Environ(),
+		"SCREENSHOT_BLOCKED_TERMS=",
+		"SCREENSHOT_BLOCKED_TERMS_FILE="+filepath.Join(tempDir, "absent.txt"),
+	)
+	out, err = cmd.CombinedOutput()
+	require.NoErrorf(t, err, "extract-db.sh failed: %s", out)
+
+	outConn, err := sql.Open("sqlite3", outPath)
+	require.NoError(t, err)
+	defer outConn.Close()
+
+	var sessionCount int
+	require.NoError(t, outConn.QueryRow(
+		"SELECT COUNT(*) FROM sessions WHERE id = 's_keep'",
+	).Scan(&sessionCount))
+	assert.Equal(t, 1, sessionCount)
 }
 
 // TestExtractDBTermsFileSkipsCommentsAndBlanks pins the terms-file format:

@@ -19,6 +19,7 @@ export type DbMessage = {
   model: string;
   ordinal: number;
   output_tokens: number;
+  prompt_source?: string;
   role: string;
   session_id: string;
   source_parent_uuid?: string;

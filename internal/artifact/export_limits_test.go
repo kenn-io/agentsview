@@ -92,6 +92,8 @@ func assertFinalizedExportRejection(
 }
 
 func TestExportClassifiesBoundedLoadLimit(t *testing.T) {
+	t.Parallel()
+
 	ctx := t.Context()
 	database := testExportDB(t)
 	store := newTestArtifactStore(t)
@@ -113,6 +115,8 @@ func TestExportClassifiesBoundedLoadLimit(t *testing.T) {
 }
 
 func TestExportRejectsNativeSessionIDsImporterCannotRepresent(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name      string
 		sessionID string
@@ -153,6 +157,8 @@ func TestExportRejectsNativeSessionIDsImporterCannotRepresent(t *testing.T) {
 }
 
 func TestExportRejectsNestedAmplificationBeforePublication(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name      string
 		message   db.Message
@@ -200,6 +206,8 @@ func TestExportRejectsNestedAmplificationBeforePublication(t *testing.T) {
 }
 
 func TestExportChunksOnAggregateNestedLimitsWithSmallLimits(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name         string
 		resultEvents []db.ToolResultEvent
@@ -265,6 +273,8 @@ func TestExportChunksOnAggregateNestedLimitsWithSmallLimits(t *testing.T) {
 }
 
 func TestExportRejectsMessageThatCannotFitNestedSegmentLimits(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name      string
 		message   db.Message
@@ -322,6 +332,8 @@ func TestExportRejectsMessageThatCannotFitNestedSegmentLimits(t *testing.T) {
 }
 
 func TestExportRejectsSessionNestedLimitsBeforeWritingWithSmallLimits(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name      string
 		configure func(*artifactLimits)
@@ -376,6 +388,8 @@ func TestExportRejectsSessionNestedLimitsBeforeWritingWithSmallLimits(t *testing
 }
 
 func TestExportChunksOnMessageRecordLimit(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	database := testExportDB(t)
 	store := newTestArtifactStore(t)
@@ -396,6 +410,8 @@ func TestExportChunksOnMessageRecordLimit(t *testing.T) {
 }
 
 func TestExportRejectsOversizedGeneratedManifestBeforePublication(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	database := testExportDB(t)
 	store := newTestArtifactStore(t)
@@ -415,6 +431,8 @@ func TestExportRejectsOversizedGeneratedManifestBeforePublication(t *testing.T) 
 }
 
 func TestExportRejectsSessionMessageAmplificationBeforePublication(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	database := testExportDB(t)
 	store := newTestArtifactStore(t)
@@ -436,6 +454,8 @@ func TestExportRejectsSessionMessageAmplificationBeforePublication(t *testing.T)
 }
 
 func TestExportRejectsUsageEventAmplificationBeforePublication(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	database := testExportDB(t)
 	store := newTestArtifactStore(t)
@@ -461,6 +481,8 @@ func TestExportRejectsUsageEventAmplificationBeforePublication(t *testing.T) {
 }
 
 func TestExportSessionRejectsAggregateLimitsBeforeWritingWithSmallLimits(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name      string
 		configure func(*artifactLimits)
@@ -509,6 +531,8 @@ func TestExportSessionRejectsAggregateLimitsBeforeWritingWithSmallLimits(t *test
 }
 
 func TestExportChunksLargeMultiMessageSessionInOrder(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	database := testExportDB(t)
 	store := newTestArtifactStore(t)
@@ -542,6 +566,8 @@ func TestExportChunksLargeMultiMessageSessionInOrder(t *testing.T) {
 }
 
 func TestExportRejectsSingleEncodedRecordAboveReadableLimit(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	database := testExportDB(t)
 	store := newTestArtifactStore(t)
@@ -567,6 +593,8 @@ func TestExportRejectsSingleEncodedRecordAboveReadableLimit(t *testing.T) {
 }
 
 func TestExportPreservesSmallSingleSegmentHash(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	database := testExportDB(t)
 	store := newTestArtifactStore(t)

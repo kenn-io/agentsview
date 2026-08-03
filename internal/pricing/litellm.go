@@ -11,6 +11,10 @@ import (
 // command converts between the two.
 type ModelPricing = catalog.ModelPricing
 
+// PricingBand is a complete rate tuple applied above an exclusive input-token
+// threshold.
+type PricingBand = catalog.PricingBand
+
 // FetchLiteLLMPricing downloads the LiteLLM pricing JSON
 // and parses it into ModelPricing entries.
 func FetchLiteLLMPricing() ([]ModelPricing, error) {

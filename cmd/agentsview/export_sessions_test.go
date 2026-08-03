@@ -327,6 +327,45 @@ func TestMergeExportSessionsPricingCombinesReportedModelResolutions(t *testing.T
 		provenance.Resolutions[1].CostSource)
 }
 
+func TestMergeExportSessionsModelRateSumsPricingApplications(t *testing.T) {
+	base := export.EffectiveModelRate{
+		Bands: []export.PricingBand{{AboveInputTokens: 200_000}},
+		Application: export.PricingApplication{
+			BaseRequestCount:  1,
+			AggregateRowCount: 2,
+			Bands: []export.AppliedPricingBand{{
+				AboveInputTokens: 200_000,
+				RequestCount:     3,
+			}},
+		},
+	}
+	next := export.EffectiveModelRate{
+		Bands: []export.PricingBand{{AboveInputTokens: 200_000}},
+		Application: export.PricingApplication{
+			BaseRequestCount:  4,
+			AggregateRowCount: 5,
+			Bands: []export.AppliedPricingBand{
+				{AboveInputTokens: 200_000, RequestCount: 6},
+				{AboveInputTokens: 272_000, RequestCount: 7},
+			},
+		},
+	}
+
+	got := mergeExportSessionsModelRate(base, next)
+	next.Bands[0].AboveInputTokens = 1
+	next.Application.Bands[0].RequestCount = 99
+
+	assert.Equal(t, []export.PricingBand{{AboveInputTokens: 200_000}}, got.Bands)
+	assert.Equal(t, export.PricingApplication{
+		BaseRequestCount:  5,
+		AggregateRowCount: 7,
+		Bands: []export.AppliedPricingBand{
+			{AboveInputTokens: 200_000, RequestCount: 9},
+			{AboveInputTokens: 272_000, RequestCount: 7},
+		},
+	}, got.Application)
+}
+
 func TestExportSessionsAllNDJSONCursorNextEmpty(t *testing.T) {
 	seedExportSessionsArchive(t)
 

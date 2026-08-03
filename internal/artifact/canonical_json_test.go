@@ -9,6 +9,8 @@ import (
 )
 
 func TestCanonicalJSONSortsStructAndMapKeys(t *testing.T) {
+	t.Parallel()
+
 	type inner struct {
 		Zeta  string `json:"zeta"`
 		Alpha string `json:"alpha"`
@@ -30,6 +32,8 @@ func TestCanonicalJSONSortsStructAndMapKeys(t *testing.T) {
 }
 
 func TestCanonicalJSONPreservesSliceOrder(t *testing.T) {
+	t.Parallel()
+
 	v := struct {
 		Items []string `json:"items"`
 	}{Items: []string{"z", "a", "m"}}
@@ -40,6 +44,8 @@ func TestCanonicalJSONPreservesSliceOrder(t *testing.T) {
 }
 
 func TestCanonicalJSONRecanonicalizesRawMessage(t *testing.T) {
+	t.Parallel()
+
 	type wrapper struct {
 		Value json.RawMessage `json:"value"`
 	}
@@ -51,6 +57,8 @@ func TestCanonicalJSONRecanonicalizesRawMessage(t *testing.T) {
 }
 
 func TestCanonicalJSONRejectsTrailingRawMessageContent(t *testing.T) {
+	t.Parallel()
+
 	type wrapper struct {
 		Value json.RawMessage `json:"value"`
 	}
@@ -77,6 +85,8 @@ func TestCanonicalJSONRejectsTrailingRawMessageContent(t *testing.T) {
 }
 
 func TestCanonicalJSONEmptyRawMessageEncodesAsNull(t *testing.T) {
+	t.Parallel()
+
 	type wrapper struct {
 		Value json.RawMessage `json:"value"`
 	}
@@ -87,6 +97,8 @@ func TestCanonicalJSONEmptyRawMessageEncodesAsNull(t *testing.T) {
 }
 
 func TestCanonicalJSONPreservesLargeNumberPrecision(t *testing.T) {
+	t.Parallel()
+
 	type wrapper struct {
 		Value json.RawMessage `json:"value"`
 	}
@@ -100,6 +112,8 @@ func TestCanonicalJSONPreservesLargeNumberPrecision(t *testing.T) {
 }
 
 func TestCanonicalJSONNilPointerAndInterfaceEncodeAsNull(t *testing.T) {
+	t.Parallel()
+
 	var nilPointer *int
 	data, err := canonicalJSON(nilPointer)
 	require.NoError(t, err)
@@ -112,6 +126,8 @@ func TestCanonicalJSONNilPointerAndInterfaceEncodeAsNull(t *testing.T) {
 }
 
 func TestCanonicalJSONDereferencesPopulatedPointerFields(t *testing.T) {
+	t.Parallel()
+
 	name := "Fixture"
 	v := struct {
 		Name *string `json:"name"`
@@ -123,6 +139,8 @@ func TestCanonicalJSONDereferencesPopulatedPointerFields(t *testing.T) {
 }
 
 func TestCanonicalJSONOmitsEmptyFieldsAndKeepsZeroValuesWithoutTag(t *testing.T) {
+	t.Parallel()
+
 	type v struct {
 		Kept    int    `json:"kept"`
 		Skipped string `json:"skipped,omitempty"`
@@ -135,6 +153,8 @@ func TestCanonicalJSONOmitsEmptyFieldsAndKeepsZeroValuesWithoutTag(t *testing.T)
 }
 
 func TestCanonicalJSONRejectsNonStringMapKeys(t *testing.T) {
+	t.Parallel()
+
 	v := map[int]string{1: "a"}
 
 	_, err := canonicalJSON(v)
@@ -143,6 +163,8 @@ func TestCanonicalJSONRejectsNonStringMapKeys(t *testing.T) {
 }
 
 func TestCanonicalJSONRejectsUnsupportedKind(t *testing.T) {
+	t.Parallel()
+
 	v := struct {
 		Ch chan int `json:"ch"`
 	}{Ch: make(chan int)}

@@ -8,7 +8,7 @@ import {
   vi,
 } from "vitest";
 import { mount, tick, unmount } from "svelte";
-import { cleanup, render } from "@testing-library/svelte";
+import { cleanup, fireEvent, render, screen } from "@testing-library/svelte";
 import type { Session } from "../../api/types/core.js";
 import type { SessionTiming } from "../../api/types/timing.js";
 
@@ -140,11 +140,30 @@ describe("SessionVitals", () => {
     expect(
       document.querySelector('[title="agentsview"]'),
     ).not.toBeNull();
+  });
+
+  it("reveals the full worktree path in a tooltip", async () => {
+    component = mount(SessionVitals, {
+      target: document.body,
+      props: { sessionId: traceSession.id, session: traceSession },
+    });
+    await tick();
+    await tick();
+
+    const worktreeValue = document.querySelector<HTMLElement>(
+      ".context-value--path",
+    );
+    expect(worktreeValue).not.toBeNull();
+
+    const trigger = worktreeValue!.closest<HTMLElement>(
+      ".kit-tooltip-trigger",
+    );
+    expect(trigger).not.toBeNull();
+    await fireEvent.mouseEnter(trigger!);
+
     expect(
-      document.querySelector(
-        '[title="/repos/agentsview/.worktrees/trace-context"]',
-      ),
-    ).not.toBeNull();
+      (await screen.findByRole("tooltip")).textContent?.trim(),
+    ).toBe(traceSession.cwd);
   });
 
   it("keeps trace context visible when timing fails to load", async () => {

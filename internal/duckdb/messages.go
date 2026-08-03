@@ -28,7 +28,7 @@ func (s *Store) GetMessages(
 			timestamp, has_thinking, has_tool_use, content_length,
 			is_system, model, token_usage, context_tokens, output_tokens,
 			has_context_tokens, has_output_tokens, claude_message_id,
-			claude_request_id, source_type, source_subtype, source_uuid,
+			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain, is_compact_boundary
 		FROM messages
 		WHERE session_id = ? AND ordinal `+op+` ?
@@ -91,7 +91,7 @@ func (s *Store) getMessagesLinearRoleFiltered(
 			timestamp, has_thinking, has_tool_use, content_length,
 			is_system, model, token_usage, context_tokens, output_tokens,
 			has_context_tokens, has_output_tokens, claude_message_id,
-			claude_request_id, source_type, source_subtype, source_uuid,
+			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain, is_compact_boundary
 		FROM messages
 		WHERE session_id = ? AND ordinal ` + op + ` ?` + roleClause + `
@@ -128,7 +128,7 @@ func (s *Store) getMessagesAroundAnchor(
 			timestamp, has_thinking, has_tool_use, content_length,
 			is_system, model, token_usage, context_tokens, output_tokens,
 			has_context_tokens, has_output_tokens, claude_message_id,
-			claude_request_id, source_type, source_subtype, source_uuid,
+			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain, is_compact_boundary
 		FROM messages
 		WHERE session_id = ? AND ordinal < ?` + roleClause + `
@@ -146,7 +146,7 @@ func (s *Store) getMessagesAroundAnchor(
 			timestamp, has_thinking, has_tool_use, content_length,
 			is_system, model, token_usage, context_tokens, output_tokens,
 			has_context_tokens, has_output_tokens, claude_message_id,
-			claude_request_id, source_type, source_subtype, source_uuid,
+			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain, is_compact_boundary
 		FROM messages WHERE session_id = ? AND ordinal = ?`
 	anchorMsgs, err := s.queryMessageRows(ctx, anchorQuery, sessionID, anchor)
@@ -159,7 +159,7 @@ func (s *Store) getMessagesAroundAnchor(
 			timestamp, has_thinking, has_tool_use, content_length,
 			is_system, model, token_usage, context_tokens, output_tokens,
 			has_context_tokens, has_output_tokens, claude_message_id,
-			claude_request_id, source_type, source_subtype, source_uuid,
+			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain, is_compact_boundary
 		FROM messages
 		WHERE session_id = ? AND ordinal > ?` + roleClause + `
@@ -215,7 +215,7 @@ func (s *Store) GetAllMessages(ctx context.Context, sessionID string) ([]db.Mess
 			timestamp, has_thinking, has_tool_use, content_length,
 			is_system, model, token_usage, context_tokens, output_tokens,
 			has_context_tokens, has_output_tokens, claude_message_id,
-			claude_request_id, source_type, source_subtype, source_uuid,
+			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain, is_compact_boundary
 		FROM messages
 		WHERE session_id = ?
@@ -280,7 +280,7 @@ func scanMessages(rows *sql.Rows) ([]db.Message, error) {
 			&m.ContextTokens, &m.OutputTokens,
 			&m.HasContextTokens, &m.HasOutputTokens,
 			&m.ClaudeMessageID, &m.ClaudeRequestID,
-			&m.SourceType, &m.SourceSubtype, &m.SourceUUID,
+			&m.SourceType, &m.SourceSubtype, &m.PromptSource, &m.SourceUUID,
 			&m.SourceParentUUID, &m.IsSidechain, &m.IsCompactBoundary,
 		); err != nil {
 			return nil, fmt.Errorf("scanning duckdb message: %w", err)
@@ -525,8 +525,33 @@ func (s *Store) queryCallRows(
 		SELECT tc.message_id, COALESCE(tc.tool_use_id, ''),
 			tc.tool_name, tc.category, tc.skill_name,
 			tc.subagent_session_id, COALESCE(tc.input_json, ''),
+			(
+				SELECT tre.timestamp
+				FROM tool_result_events tre
+				WHERE tre.session_id = tc.session_id
+					AND tre.tool_call_message_ordinal = m.ordinal
+					AND tre.call_index = tc.call_index
+					AND tre.source = 'tool_execution'
+					AND tre.status = 'started'
+					AND tre.timestamp IS NOT NULL
+				ORDER BY tre.event_index ASC
+				LIMIT 1
+			) AS execution_started_at,
+			(
+				SELECT tre.timestamp
+				FROM tool_result_events tre
+				WHERE tre.session_id = tc.session_id
+					AND tre.tool_call_message_ordinal = m.ordinal
+					AND tre.call_index = tc.call_index
+					AND tre.source = 'tool_execution'
+					AND tre.status IN ('completed', 'errored')
+					AND tre.timestamp IS NOT NULL
+				ORDER BY tre.event_index DESC
+				LIMIT 1
+			) AS execution_completed_at,
 			s_sub.started_at, s_sub.ended_at
 		FROM tool_calls tc
+		JOIN messages m ON m.id = tc.message_id
 		LEFT JOIN sessions s_sub ON s_sub.id = tc.subagent_session_id
 		WHERE tc.session_id = ?
 		ORDER BY tc.message_id, tc.call_index`,
@@ -542,10 +567,11 @@ func (s *Store) queryCallRows(
 	for rows.Next() {
 		var r db.CallRow
 		var skill, sub sql.NullString
-		var startedAt, endedAt any
+		var executionStarted, executionCompleted, startedAt, endedAt any
 		if err := rows.Scan(
 			&r.MessageID, &r.ToolUseID, &r.ToolName, &r.Category,
-			&skill, &sub, &r.InputJSON, &startedAt, &endedAt,
+			&skill, &sub, &r.InputJSON, &executionStarted, &executionCompleted,
+			&startedAt, &endedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning duckdb timing call: %w", err)
 		}
@@ -558,6 +584,11 @@ func (s *Store) queryCallRows(
 			r.SubagentSessionID = &value
 			if dur, ok := timingMillis(formatDBTime(startedAt), firstNonEmpty(formatDBTime(endedAt), now)); ok {
 				r.DurationMs = &dur
+			}
+		} else if completedAt := formatDBTime(executionCompleted); completedAt != "" {
+			if dur, ok := timingMillis(formatDBTime(executionStarted), completedAt); ok {
+				r.DurationMs = &dur
+				r.CompletedAt = completedAt
 			}
 		}
 		out = append(out, r)

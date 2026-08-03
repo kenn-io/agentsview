@@ -1,6 +1,7 @@
 package db
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"fmt"
@@ -274,6 +275,17 @@ func activityReportProjectLabels(
 func (db *DB) activityReportSessions(
 	ctx context.Context, f AnalyticsFilter, rangeStartUTC, rangeEndUTC string,
 ) ([]activity.SessionMeta, []string, error) {
+	return db.activityReportSessionsFrom(
+		ctx, db.getReader(), f, rangeStartUTC, rangeEndUTC,
+	)
+}
+
+func (db *DB) activityReportSessionsFrom(
+	ctx context.Context,
+	q sessionExportQuerier,
+	f AnalyticsFilter,
+	rangeStartUTC, rangeEndUTC string,
+) ([]activity.SessionMeta, []string, error) {
 	where, args := f.buildWhereWithDate("", false, "s.id")
 	args = append(args, rangeStartUTC, rangeEndUTC)
 
@@ -298,7 +310,7 @@ func (db *DB) activityReportSessions(
 			NULLIF(s.started_at, ''), s.created_at) >= ?
 		AND COALESCE(NULLIF(s.started_at, ''), s.created_at) < ?`
 
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, nil, fmt.Errorf(
 			"querying activity report sessions: %w", err)
@@ -323,6 +335,13 @@ func (db *DB) activityReportSessions(
 		return nil, nil, fmt.Errorf(
 			"iterating activity report sessions: %w", err)
 	}
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].SessionID < sessions[j].SessionID
+	})
+	ids = ids[:0]
+	for _, session := range sessions {
+		ids = append(ids, session.SessionID)
+	}
 	return sessions, ids, nil
 }
 
@@ -331,6 +350,12 @@ func (db *DB) activityReportSessions(
 // interval walk.
 func (db *DB) activityReportActivity(
 	ctx context.Context, ids []string,
+) ([]activity.ActivityEvent, error) {
+	return db.activityReportActivityFrom(ctx, db.getReader(), ids)
+}
+
+func (db *DB) activityReportActivityFrom(
+	ctx context.Context, q sessionExportQuerier, ids []string,
 ) ([]activity.ActivityEvent, error) {
 	var out []activity.ActivityEvent
 	if len(ids) == 0 {
@@ -346,7 +371,7 @@ func (db *DB) activityReportActivity(
 			AND timestamp != ''
 		ORDER BY session_id, ordinal`
 
-		rows, err := db.getReader().QueryContext(ctx, query, args...)
+		rows, err := q.QueryContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf(
 				"querying activity report activity: %w", err)
@@ -369,6 +394,22 @@ func (db *DB) activityReportActivity(
 	if err != nil {
 		return nil, err
 	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.SessionID != b.SessionID {
+			return a.SessionID < b.SessionID
+		}
+		if a.Ordinal != b.Ordinal {
+			return a.Ordinal < b.Ordinal
+		}
+		if a.Timestamp != b.Timestamp {
+			return a.Timestamp < b.Timestamp
+		}
+		if a.Role != b.Role {
+			return a.Role < b.Role
+		}
+		return a.Model < b.Model
+	})
 	return out, nil
 }
 
@@ -384,39 +425,70 @@ func (db *DB) activityReportActivity(
 func (db *DB) activityReportUsage(
 	ctx context.Context, ids []string, lowerBound, upperBound string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
-	out := []activity.UsageRow{}
+	return db.activityReportUsageFrom(
+		ctx, db.getReader(), ids, lowerBound, upperBound, q,
+	)
+}
 
-	pricing, err := db.loadPricingMap(ctx)
+func (db *DB) activityReportUsageFrom(
+	ctx context.Context,
+	source sessionExportQuerier,
+	ids []string,
+	lowerBound, upperBound string,
+	q activity.Query,
+) ([]activity.UsageRow, *export.PricingBlock, error) {
+	candidates, rateResolver, err := db.loadActivityReportUsageCandidatesFrom(
+		ctx, source, ids, lowerBound, upperBound,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	sortActivityReportUsageCandidates(candidates)
+	baseRows := make([]activity.UsageRow, len(candidates))
+	for i, candidate := range candidates {
+		baseRows[i] = candidate.row
+	}
+	mask := activity.UsageSurvivorMask(
+		q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows,
+	)
+	return materializeActivityReportUsageCandidates(
+		candidates, mask, rateResolver,
+	)
+}
+
+// activityReportUsageCandidate retains the scanned source fields until the
+// survivor set is known. Pricing provenance is recorded only for survivors in
+// the ordinary activity report, while reporting export can materialize every
+// raw candidate and perform its one combined survivor pass later.
+type activityReportUsageCandidate struct {
+	row     activity.UsageRow
+	scan    dailyUsageScanRow
+	ts      time.Time
+	validTS bool
+	ordinal int64
+}
+
+func (db *DB) loadActivityReportUsageCandidatesFrom(
+	ctx context.Context,
+	source sessionExportQuerier,
+	ids []string,
+	lowerBound, upperBound string,
+) ([]activityReportUsageCandidate, *export.PricingResolver, error) {
+	pricing, err := db.loadPricingMapFrom(ctx, source)
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading pricing: %w", err)
 	}
 	rateResolver := export.NewPricingResolver(pricing)
 	if len(ids) == 0 {
-		block, err := rateResolver.BuildBlock()
-		if err != nil {
-			return nil, nil, fmt.Errorf("building pricing block: %w", err)
-		}
-		return out, &block, nil
+		return []activityReportUsageCandidate{}, rateResolver, nil
 	}
-
-	// Accumulate the parsed ts and dedup ordinal alongside each mapped row so
-	// we can impose one global (ts, session_id, ordinal) order across all
-	// chunks. The same (claude_message_id, claude_request_id) can recur in
-	// different sessions (resumed/forked) and thus different chunks, so
-	// per-chunk ordering is not enough for the aggregator's first-seen dedup.
-	type ordered struct {
-		row     activity.UsageRow
-		scan    dailyUsageScanRow
-		ts      time.Time
-		ordinal int64
-	}
-	var rowsAcc []ordered
 
 	// This query binds each id chunk twice (message-where and usage-event-where)
 	// plus two time bounds, so the generic maxSQLVars chunk (bound once) would
 	// emit 2*maxSQLVars+2 > 999 variables and overflow SQLite at ~500 candidate
 	// sessions. Cap the chunk so 2*chunk+2 stays within maxSQLVars.
 	const usageVarChunk = (maxSQLVars - 2) / 2
+	var candidates []activityReportUsageCandidate
 	err = queryChunkedSize(ids, usageVarChunk, func(chunk []string) error {
 		ph, chunkArgs := inPlaceholders(chunk)
 		// Apply the same eligibility filters as GetDailyUsage so empty
@@ -425,7 +497,7 @@ func (db *DB) activityReportUsage(
 		rowsSQL := dailyUsageRowsSQLWithWhere(
 			usageMessageEligibility+" AND m.session_id IN "+ph,
 			usageEventEligibility+" AND ue.session_id IN "+ph)
-		query := dailyUsageRowSelectFromRows(rowsSQL) + `
+		query := dailyUsageRowSelectFromRowsWithMachine(rowsSQL, true) + `
 			AND u.ts >= ? AND u.ts <= ?`
 
 		args := make([]any, 0, len(chunkArgs)*2+2)
@@ -433,14 +505,14 @@ func (db *DB) activityReportUsage(
 		args = append(args, chunkArgs...) // usage-event-where chunk
 		args = append(args, lowerBound, upperBound)
 
-		rows, err := db.getReader().QueryContext(ctx, query, args...)
+		rows, err := source.QueryContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("querying activity report usage: %w", err)
 		}
 		defer rows.Close()
 
 		for rows.Next() {
-			r, scanErr := scanDailyUsageRow(rows)
+			r, scanErr := scanDailyUsageRowWithMachine(rows, true)
 			if scanErr != nil {
 				return fmt.Errorf(
 					"scanning activity report usage: %w", scanErr)
@@ -449,15 +521,20 @@ func (db *DB) activityReportUsage(
 			if r.messageOrdinal.Valid {
 				ord = r.messageOrdinal.Int64
 			}
-			parsedTS, _ := parseTimestamp(r.ts)
-			rowsAcc = append(rowsAcc, ordered{
-				ts:      parsedTS,
+			parsedTS, tsErr := parseTimestamp(r.ts)
+			candidates = append(candidates, activityReportUsageCandidate{
 				ordinal: ord,
 				scan:    r,
+				ts:      parsedTS,
+				validTS: tsErr == nil,
 				row: activity.UsageRow{
 					SessionID:       r.sessionID,
 					Model:           r.model,
 					Timestamp:       r.ts,
+					Project:         r.project,
+					Machine:         r.machine,
+					MessageOrdinal:  ord,
+					UsageSource:     r.usageSource,
 					Agent:           r.agent,
 					ClaudeMessageID: r.claudeMessageID,
 					ClaudeRequestID: r.claudeRequestID,
@@ -471,36 +548,73 @@ func (db *DB) activityReportUsage(
 	if err != nil {
 		return nil, nil, err
 	}
+	return candidates, rateResolver, nil
+}
 
-	sort.SliceStable(rowsAcc, func(i, j int) bool {
-		a, b := rowsAcc[i], rowsAcc[j]
-		if !a.ts.Equal(b.ts) {
-			return a.ts.Before(b.ts)
+func sortActivityReportUsageCandidates(
+	candidates []activityReportUsageCandidate,
+) {
+	sort.SliceStable(candidates, func(i, j int) bool {
+		a, b := candidates[i], candidates[j]
+		if a.validTS && b.validTS {
+			if !a.ts.Equal(b.ts) {
+				return a.ts.Before(b.ts)
+			}
+		} else {
+			if a.validTS != b.validTS {
+				return a.validTS
+			}
+			if a.row.Timestamp != b.row.Timestamp {
+				return a.row.Timestamp < b.row.Timestamp
+			}
 		}
 		if a.row.SessionID != b.row.SessionID {
 			return a.row.SessionID < b.row.SessionID
 		}
-		return a.ordinal < b.ordinal
+		if a.ordinal != b.ordinal {
+			return a.ordinal < b.ordinal
+		}
+		return compareDailyUsageSemantic(a.scan, b.scan) < 0
 	})
-	baseRows := make([]activity.UsageRow, len(rowsAcc))
-	for i, o := range rowsAcc {
-		baseRows[i] = o.row
+}
+
+// activityReportUsageCandidatesFrom returns normalized padded-range rows
+// without sorting or applying a survivor mask. Reporting export merges these
+// rows with standalone candidates before imposing either operation.
+func (db *DB) activityReportUsageCandidatesFrom(
+	ctx context.Context,
+	source sessionExportQuerier,
+	ids []string,
+	lowerBound, upperBound string,
+) ([]activity.UsageRow, *export.PricingBlock, error) {
+	candidates, rateResolver, err := db.loadActivityReportUsageCandidatesFrom(
+		ctx, source, ids, lowerBound, upperBound,
+	)
+	if err != nil {
+		return nil, nil, err
 	}
-	mask := activity.UsageSurvivorMask(q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows)
-	out = make([]activity.UsageRow, 0, len(rowsAcc))
-	for i, o := range rowsAcc {
-		if !mask[i] {
+	return materializeActivityReportUsageCandidates(
+		candidates, nil, rateResolver,
+	)
+}
+
+func materializeActivityReportUsageCandidates(
+	candidates []activityReportUsageCandidate,
+	mask []bool,
+	rateResolver *export.PricingResolver,
+) ([]activity.UsageRow, *export.PricingBlock, error) {
+	out := make([]activity.UsageRow, 0, len(candidates))
+	for i, candidate := range candidates {
+		if mask != nil && !mask[i] {
 			continue
 		}
-		_, outputTok, _, _, _, _, priceErr :=
-			dailyUsageAmounts(o.scan, rateResolver)
-		if priceErr != nil {
-			return nil, nil, priceErr
-		}
-		costRow := o.scan
+		inputTok, outputTok, cacheCrTok, cacheRdTok, _ :=
+			dailyUsageRowTokens(candidate.scan)
+		costRow := candidate.scan
 		var sessionCost *money.Money
-		if o.scan.costSource == CopilotReportedCostSource && o.scan.cost.Valid {
-			v := money.Money{Microdollars: o.scan.cost.Int64}
+		if candidate.scan.costSource == CopilotReportedCostSource &&
+			candidate.scan.cost.Valid {
+			v := money.Money{Microdollars: candidate.scan.cost.Int64}
 			sessionCost = &v
 			costRow.cost = sql.NullInt64{}
 			rateResolver.RecordUnattributedReported()
@@ -514,8 +628,11 @@ func (db *DB) activityReportUsage(
 		if costRow.cost.Valid {
 			costSource = export.CostSourceReported
 		}
-		row := o.row
+		row := candidate.row
+		row.InputTokens = inputTok
 		row.OutputTokens = outputTok
+		row.CacheCreationTokens = cacheCrTok
+		row.CacheReadTokens = cacheRdTok
 		row.Cost = cost
 		row.CostSource = costSource
 		row.SessionCost = sessionCost
@@ -528,6 +645,47 @@ func (db *DB) activityReportUsage(
 		return nil, nil, fmt.Errorf("building pricing block: %w", err)
 	}
 	return out, &block, nil
+}
+
+func compareDailyUsageSemantic(a, b dailyUsageScanRow) int {
+	for _, compared := range []int{
+		cmp.Compare(a.usageSource, b.usageSource),
+		cmp.Compare(a.model, b.model),
+		cmp.Compare(a.tokenJSON, b.tokenJSON),
+		cmp.Compare(a.inputTokens, b.inputTokens),
+		cmp.Compare(a.outputTokens, b.outputTokens),
+		cmp.Compare(
+			a.cacheCreationInputTokens,
+			b.cacheCreationInputTokens,
+		),
+		cmp.Compare(a.cacheReadInputTokens, b.cacheReadInputTokens),
+		cmp.Compare(a.reasoningTokens, b.reasoningTokens),
+		compareNullInt64(a.cost, b.cost),
+		cmp.Compare(a.costSource, b.costSource),
+		cmp.Compare(a.claudeMessageID, b.claudeMessageID),
+		cmp.Compare(a.claudeRequestID, b.claudeRequestID),
+		cmp.Compare(a.sourceUUID, b.sourceUUID),
+		cmp.Compare(a.usageDedupKey, b.usageDedupKey),
+		cmp.Compare(a.project, b.project),
+		cmp.Compare(a.agent, b.agent),
+		cmp.Compare(a.machine, b.machine),
+		compareNullInt64(a.messageOrdinal, b.messageOrdinal),
+	} {
+		if compared != 0 {
+			return compared
+		}
+	}
+	return 0
+}
+
+func compareNullInt64(a, b sql.NullInt64) int {
+	if a.Valid != b.Valid {
+		if !a.Valid {
+			return -1
+		}
+		return 1
+	}
+	return cmp.Compare(a.Int64, b.Int64)
 }
 
 func sqliteActivityReportRowStatus(
@@ -559,12 +717,23 @@ func sqliteActivityReportRowStatus(
 		pricing.RecordResolvedComputed(r.model, pricedModel, lookup)
 		return money.Money{}, false, true, nil
 	}
-	cost, err = lookup.Rates.CostForTokens(
+	requestScoped := usageRowIsRequestScoped(r.usageSource, r.messageOrdinal)
+	cost, err = lookup.Rates.CostForTokensScoped(
+		requestScoped,
 		inTok, outTok, reasoningTok, crTok, rdTok)
 	if err != nil {
 		return money.Money{}, false, false,
 			fmt.Errorf("pricing activity usage for model %q: %w", r.model, err)
 	}
-	pricing.RecordResolvedComputed(r.model, pricedModel, lookup)
+	recordComputedUsagePricing(
+		pricing,
+		r.model,
+		pricedModel,
+		lookup,
+		requestScoped,
+		inTok,
+		crTok,
+		rdTok,
+	)
 	return cost, true, true, nil
 }

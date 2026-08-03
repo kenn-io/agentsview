@@ -677,6 +677,13 @@ func (e *Engine) parseDiffCollectFile(
 			usageEvents: pr.UsageEvents,
 			needsRetry:  job.needsRetryForSession(pr.Session.ID),
 		}
+		preserved, err := e.preserveUnavailableSourceProjects(
+			ctx, []pendingWrite{pw},
+		)
+		if err != nil {
+			return err
+		}
+		pw = preserved[0]
 		prepared, msgs, verdict := e.prepareSessionWrite(pw, resolver)
 		id := prepared.ID
 		if verdict != sessionWriteOK {

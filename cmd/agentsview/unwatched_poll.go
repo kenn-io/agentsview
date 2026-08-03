@@ -11,13 +11,18 @@ import (
 	"sync"
 	"time"
 
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/server"
+	agentsync "go.kenn.io/agentsview/internal/sync"
 )
 
 var errUnwatchedPollStopped = errors.New("unwatched poll coordinator stopped")
 
 type unwatchedPollSyncer interface {
-	ReconcileWatchRoots(context.Context, []string, bool) error
+	// ReconcileProviderRootsGrouped runs one bounded pass per provider group
+	// while sharing a single archive-sized epilogue across the batch; the
+	// coordinator issues exactly one grouped call per poll pass.
+	ReconcileProviderRootsGrouped(context.Context, []agentsync.ProviderRootsGroup) error
 }
 
 type unwatchedPollAdd struct {
@@ -26,16 +31,22 @@ type unwatchedPollAdd struct {
 	done       chan struct{}
 }
 
+// pollingScope identifies one configured provider root within a polling obligation.
+type pollingScope struct {
+	Agent parser.AgentType
+	Root  string
+}
+
 type pollingObligation struct {
-	Key   string
-	Roots []string
+	Key    string
+	Scopes []pollingScope
 	// Probe mirrors sync.PollingObligation.Probe: the physical watcher path
-	// whose availability gates this obligation's reconciliation Roots. When
-	// it is missing, the roots are deferred rather than reconciled
+	// whose availability gates this obligation's reconciliation scopes. When
+	// it is missing, the scopes are deferred rather than reconciled
 	// authoritatively — a nested physical root (Gemini's <root>/tmp) can
 	// vanish while its configured scope <root> still exists, and reconciling
 	// the scope then would tombstone every session under the missing
-	// subtree. Empty means the Roots themselves are probed.
+	// subtree. Empty means the Scopes' roots themselves are probed.
 	Probe string
 }
 
@@ -49,6 +60,8 @@ type sharedUnwatchedPollCoordinator struct {
 	doWork       func(func())
 	// onRootsOwned is a test observer invoked after installation and before ack.
 	onRootsOwned func([]string)
+	now          func() time.Time
+	after        func(time.Duration) <-chan time.Time
 	add          chan unwatchedPollAdd
 	// pollWake coalesces ticks and explicit wakes while the serialized worker runs.
 	pollWake chan struct{}
@@ -58,9 +71,12 @@ type sharedUnwatchedPollCoordinator struct {
 	// coordinator loop; each entry keeps its probe so availability is
 	// evaluated per obligation at poll time.
 	pollObligations []pollingObligation
-	stop            chan struct{}
-	done            chan struct{}
-	stopOnce        sync.Once
+	// lastCompletion is the wall-clock time the most recent pass completed.
+	// Zero means no prior pass; a zero value skips the cooldown on the first wake.
+	lastCompletion time.Time
+	stop           chan struct{}
+	done           chan struct{}
+	stopOnce       sync.Once
 }
 
 func newUnwatchedPollCoordinator(
@@ -70,7 +86,7 @@ func newUnwatchedPollCoordinator(
 ) *sharedUnwatchedPollCoordinator {
 	ticker := time.NewTicker(unwatchedPollInterval)
 	return newUnwatchedPollCoordinatorWithTicks(
-		ctx, engine, ticker.C, ticker.Stop, idleTracker.Do, nil,
+		ctx, engine, ticker.C, ticker.Stop, idleTracker.Do, nil, time.Now, time.After,
 	)
 }
 
@@ -81,6 +97,8 @@ func newUnwatchedPollCoordinatorWithTicks(
 	stopTicker func(),
 	doWork func(func()),
 	onRootsOwned func([]string),
+	now func() time.Time,
+	after func(time.Duration) <-chan time.Time,
 ) *sharedUnwatchedPollCoordinator {
 	workerCtx, workerCancel := context.WithCancel(ctx)
 	coordinator := &sharedUnwatchedPollCoordinator{
@@ -91,6 +109,8 @@ func newUnwatchedPollCoordinatorWithTicks(
 		ticks:        ticks,
 		stopTicker:   stopTicker,
 		doWork:       doWork,
+		now:          now,
+		after:        after,
 		add:          make(chan unwatchedPollAdd),
 		pollWake:     make(chan struct{}, 1),
 		pollDone:     make(chan struct{}),
@@ -120,9 +140,9 @@ func (c *sharedUnwatchedPollCoordinator) updateRoots(
 ) error {
 	request := unwatchedPollAdd{
 		obligation: pollingObligation{
-			Key:   obligation.Key,
-			Roots: append([]string(nil), obligation.Roots...),
-			Probe: obligation.Probe,
+			Key:    obligation.Key,
+			Scopes: append([]pollingScope(nil), obligation.Scopes...),
+			Probe:  obligation.Probe,
 		},
 		remove: remove,
 		done:   make(chan struct{}),
@@ -216,41 +236,70 @@ func (c *sharedUnwatchedPollCoordinator) runPollWorker() {
 			if c.workerCtx.Err() != nil {
 				return
 			}
-			roots := availableUnwatchedPollRoots(c.currentPollObligations())
-			if len(roots) == 0 {
+			// Cooldown gate: if the previous pass completed less than
+			// unwatchedPollInterval ago, wait out the remaining idle time.
+			// The gate is here (after consuming the wake) so every path into
+			// a pass crosses it. lastCompletion is zero on first construction,
+			// which means no prior pass and therefore no cooldown on startup.
+			c.pollMu.Lock()
+			last := c.lastCompletion
+			c.pollMu.Unlock()
+			if !last.IsZero() {
+				remaining := last.Add(unwatchedPollInterval).Sub(c.now())
+				if remaining > 0 {
+					select {
+					case <-c.workerCtx.Done():
+						return
+					case <-c.after(remaining):
+					}
+				}
+			}
+			groups := availableUnwatchedPollScopes(c.currentPollObligations())
+			totalRoots := countUniqueRoots(groups)
+			if totalRoots == 0 {
 				continue
 			}
-			log.Printf("polling %d unwatched root(s)", len(roots))
+			log.Printf("polling %d unwatched root(s)", totalRoots)
 			c.doWork(func() {
 				if c.workerCtx.Err() != nil {
 					return
 				}
-				pollUnwatchedRootsOnce(c.workerCtx, c.engine, roots)
+				if err := pollUnwatchedScopesOnce(c.workerCtx, c.engine, groups); err != nil {
+					log.Printf("polling unwatched roots: %v", err)
+				}
 			})
+			c.pollMu.Lock()
+			c.lastCompletion = c.now()
+			c.pollMu.Unlock()
 		}
 	}
 }
 
-// availableUnwatchedPollRoots selects the reconciliation roots whose
-// obligations are currently pollable. An obligation with a probe path is gated
-// on that physical path: while it is missing, its roots are deferred entirely
-// rather than authoritatively reconciled, because the configured scope can
-// still exist while the physical subtree holding every session is gone.
+// availableUnwatchedPollScopes selects the reconciliation scopes whose
+// obligations are currently pollable, grouped by agent. An obligation with a
+// probe path is gated on that physical path: while it is missing, its scopes
+// are deferred entirely rather than authoritatively reconciled.
 //
-// A root shared by several obligations is gated on every probe that references
-// it, not just one: Gemini's shallow <root> metadata plan and recursive
-// <root>/tmp plan both reconcile <root>, and the present shallow plan must not
-// make <root> pollable while the subtree holding every session is missing.
+// Blocking is conservative in both directions between the empty agent and named
+// agents. The empty agent means "every provider" for deferral (an unscoped
+// reconciliation pass walks all providers, including any deferred one) and
+// "unscoped" for reconciliation. Therefore:
+//   - A root blocked under the empty agent also defers every named-agent
+//     candidate for that root.
+//   - A root blocked under any named agent also defers the empty-agent
+//     candidate for that root.
 //
-// Blocking extends beyond exact root matches to every candidate overlapping a
-// blocked root in either direction (overlapsDeferredScope): ReconcileWatchRoots
-// expands each requested root to the configured dirs above and below it, so a
-// pollable ancestor or descendant of a blocked root would reconcile the
-// deferred scope as an authoritative empty discovery and tombstone its
-// sessions.
-func availableUnwatchedPollRoots(obligations []pollingObligation) []string {
-	candidates := make(map[string]struct{})
-	blocked := make(map[string]struct{})
+// Within each agent, overlap blocking extends beyond exact root matches
+// (overlapsDeferredScope), so a pollable ancestor or descendant of a blocked
+// root is also deferred for that agent.
+func availableUnwatchedPollScopes(
+	obligations []pollingObligation,
+) map[parser.AgentType][]string {
+	// blocked[agent][cleanRoot] = true when agent's probe is missing.
+	blocked := make(map[parser.AgentType]map[string]struct{})
+	// candidates[agent][root] = true when the root exists and probe is present.
+	candidates := make(map[parser.AgentType]map[string]struct{})
+
 	for _, obligation := range obligations {
 		probeMissing := false
 		if obligation.Probe != "" {
@@ -258,33 +307,86 @@ func availableUnwatchedPollRoots(obligations []pollingObligation) []string {
 				probeMissing = true
 			}
 		}
-		for _, root := range obligation.Roots {
-			if root == "" {
+		for _, scope := range obligation.Scopes {
+			if scope.Root == "" {
 				continue
 			}
+			agent := scope.Agent
 			if probeMissing {
-				blocked[filepath.Clean(root)] = struct{}{}
+				if blocked[agent] == nil {
+					blocked[agent] = make(map[string]struct{})
+				}
+				blocked[agent][filepath.Clean(scope.Root)] = struct{}{}
 				continue
 			}
-			if _, err := os.Stat(root); err == nil {
-				candidates[root] = struct{}{}
+			if _, err := os.Stat(scope.Root); err == nil {
+				if candidates[agent] == nil {
+					candidates[agent] = make(map[string]struct{})
+				}
+				candidates[agent][scope.Root] = struct{}{}
 			}
 		}
 	}
-	for root := range candidates {
-		if overlapsDeferredScope(filepath.Clean(root), blocked) {
-			delete(candidates, root)
+
+	// Pre-build the union of all named-agent blocked roots for the empty-agent
+	// cross-direction check below.
+	allNamedBlocked := make(map[string]struct{})
+	for namedAgent, namedBlocked := range blocked {
+		if namedAgent == "" {
+			continue
+		}
+		for root := range namedBlocked {
+			allNamedBlocked[root] = struct{}{}
 		}
 	}
-	return unwatchedPollRoots(candidates)
+	emptyAgentBlocked := blocked[parser.AgentType("")]
+
+	result := make(map[parser.AgentType][]string)
+	for agent, agentCandidates := range candidates {
+		agentBlocked := blocked[agent]
+		for root := range agentCandidates {
+			cleanRoot := filepath.Clean(root)
+			if agentBlocked != nil && overlapsDeferredScope(cleanRoot, agentBlocked) {
+				continue
+			}
+			// Cross-agent blocking: an unscoped reconciliation pass walks every
+			// provider, so a root deferred under either the empty agent or any
+			// named agent must also block the other side.
+			if agent != "" && emptyAgentBlocked != nil &&
+				overlapsDeferredScope(cleanRoot, emptyAgentBlocked) {
+				continue
+			}
+			if agent == "" && overlapsDeferredScope(cleanRoot, allNamedBlocked) {
+				continue
+			}
+			result[agent] = append(result[agent], root)
+		}
+		if len(result[agent]) > 0 {
+			slices.Sort(result[agent])
+		} else {
+			delete(result, agent)
+		}
+	}
+	return result
+}
+
+// countUniqueRoots returns the number of unique root paths across all agent groups.
+func countUniqueRoots(groups map[parser.AgentType][]string) int {
+	unique := make(map[string]struct{})
+	for _, roots := range groups {
+		for _, root := range roots {
+			unique[root] = struct{}{}
+		}
+	}
+	return len(unique)
 }
 
 func unwatchedPollObligationRoots(obligations map[string]pollingObligation) []string {
 	owned := make(map[string]struct{})
 	for _, obligation := range obligations {
-		for _, root := range obligation.Roots {
-			if root != "" {
-				owned[root] = struct{}{}
+		for _, scope := range obligation.Scopes {
+			if scope.Root != "" {
+				owned[scope.Root] = struct{}{}
 			}
 		}
 	}
@@ -300,13 +402,31 @@ func unwatchedPollRoots(owned map[string]struct{}) []string {
 	return roots
 }
 
-func pollUnwatchedRootsOnce(
-	ctx context.Context, engine unwatchedPollSyncer, roots []string,
-) {
-	if len(roots) == 0 {
-		return
+// pollUnwatchedScopesOnce issues one grouped reconcile call covering every
+// agent group, in agent order. The engine attempts every group even when an
+// earlier one errors and shares one archive-sized epilogue (subagent linking,
+// skip-cache persistence) across the batch, so per-pass database work does not
+// multiply with the number of providers holding obligations.
+func pollUnwatchedScopesOnce(
+	ctx context.Context,
+	engine unwatchedPollSyncer,
+	groups map[parser.AgentType][]string,
+) error {
+	if len(groups) == 0 {
+		return nil
 	}
-	if err := engine.ReconcileWatchRoots(ctx, roots, false); err != nil {
-		log.Printf("polling unwatched roots: %v", err)
+	agents := make([]parser.AgentType, 0, len(groups))
+	for agent := range groups {
+		agents = append(agents, agent)
 	}
+	slices.SortFunc(agents, func(a, b parser.AgentType) int {
+		return strings.Compare(string(a), string(b))
+	})
+	grouped := make([]agentsync.ProviderRootsGroup, 0, len(agents))
+	for _, agent := range agents {
+		grouped = append(grouped, agentsync.ProviderRootsGroup{
+			Agent: agent, Roots: groups[agent],
+		})
+	}
+	return engine.ReconcileProviderRootsGrouped(ctx, grouped)
 }

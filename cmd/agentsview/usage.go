@@ -312,6 +312,7 @@ func ensureFreshData(
 	if database.NeedsResync() {
 		engine := sync.NewEngine(database, sync.EngineConfig{
 			AgentDirs:          appCfg.AgentDirs,
+			SourceMachines:     appCfg.SourceMachines,
 			IncludeCwdPrefixes: appCfg.SyncIncludeCwdPrefixes,
 			Machine:            appCfg.LocalMachineName,
 		})
@@ -336,6 +337,7 @@ func ensureFreshData(
 
 	engine := sync.NewEngine(database, sync.EngineConfig{
 		AgentDirs:          appCfg.AgentDirs,
+		SourceMachines:     appCfg.SourceMachines,
 		IncludeCwdPrefixes: appCfg.SyncIncludeCwdPrefixes,
 		Machine:            appCfg.LocalMachineName,
 	})
@@ -420,26 +422,61 @@ func ensureUsagePricing(
 func applyFallbackPricing(
 	database *db.DB, custom map[string]config.CustomModelRate,
 ) {
-	rates := make(map[string]config.CustomModelRate)
-	sources := make(map[string]export.PricingRowSource)
+	database.SetEffectivePricing(fallbackPricingRates(custom))
+}
+
+func applyEmptyCatalogPricing(
+	database *db.DB, custom map[string]config.CustomModelRate,
+) {
+	database.SetEmptyCatalogPricing(fallbackPricingRates(custom))
+}
+
+func fallbackPricingRates(
+	custom map[string]config.CustomModelRate,
+) map[string]export.ModelRates {
+	rates := make(map[string]export.ModelRates)
 	for _, p := range pricing.FallbackPricing() {
 		// These keys are the same concrete model-pattern keys that the
 		// model_pricing table stores. SQLite usage lookups run the merged map
 		// through pricing.Resolve, so normalized/canonical aliases still match
 		// when this read-only path cannot seed model_pricing rows.
-		rates[p.ModelPattern] = config.CustomModelRate{
-			InputMicrodollarsPerMTok:         p.InputPerMTok.Microdollars,
-			OutputMicrodollarsPerMTok:        p.OutputPerMTok.Microdollars,
-			CacheCreationMicrodollarsPerMTok: p.CacheCreationPerMTok.Microdollars,
-			CacheReadMicrodollarsPerMTok:     p.CacheReadPerMTok.Microdollars,
+		bands := make([]export.PricingBand, len(p.Bands))
+		for i, band := range p.Bands {
+			bands[i] = export.PricingBand{
+				AboveInputTokens:  band.AboveInputTokens,
+				InputPerMTok:      band.InputPerMTok,
+				OutputPerMTok:     band.OutputPerMTok,
+				CacheWritePerMTok: band.CacheCreationPerMTok,
+				CacheReadPerMTok:  band.CacheReadPerMTok,
+			}
 		}
-		sources[p.ModelPattern] = export.PricingRowSourceEmbedded
+		rates[p.ModelPattern] = export.ModelRates{
+			InputPerMTok:      p.InputPerMTok,
+			OutputPerMTok:     p.OutputPerMTok,
+			CacheWritePerMTok: p.CacheCreationPerMTok,
+			CacheReadPerMTok:  p.CacheReadPerMTok,
+			Source:            export.PricingRowSourceEmbedded,
+			Bands:             bands,
+		}
 	}
 	for model, rate := range custom {
-		rates[model] = rate
-		sources[model] = export.PricingRowSourceCustom
+		rates[model] = export.ModelRates{
+			InputPerMTok: money.Money{
+				Microdollars: rate.InputMicrodollarsPerMTok,
+			},
+			OutputPerMTok: money.Money{
+				Microdollars: rate.OutputMicrodollarsPerMTok,
+			},
+			CacheWritePerMTok: money.Money{
+				Microdollars: rate.CacheCreationMicrodollarsPerMTok,
+			},
+			CacheReadPerMTok: money.Money{
+				Microdollars: rate.CacheReadMicrodollarsPerMTok,
+			},
+			Source: export.PricingRowSourceCustom,
+		}
 	}
-	database.SetEffectivePricing(rates, sources)
+	return rates
 }
 
 func fetchHTTPDailyUsage(

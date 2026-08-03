@@ -46,6 +46,23 @@ function suppressExpectedAbortLogging() {
   );
 }
 
+// openapi-typescript-codegen 0.31 treats OpenAPI 3.1 nullable array type
+// unions as untyped arrays. Normalize the pricing arrays added in schema v4
+// to the equivalent nullable form it understands before generation.
+function normalizeNullableArray(schema, label) {
+  if (!schema || !Array.isArray(schema.type) || !schema.type.includes("null")) {
+    throw new Error(`missing nullable OpenAPI array schema for ${label}`);
+  }
+  const concreteTypes = schema.type.filter((item) => item !== "null");
+  if (concreteTypes.length !== 1) {
+    throw new Error(
+      `cannot normalize nullable OpenAPI type for ${label}: ${JSON.stringify(schema.type)}`,
+    );
+  }
+  schema.type = concreteTypes[0];
+  schema.nullable = true;
+}
+
 function run(cmd, args, options = {}) {
   const result = spawnSync(cmd, args, {
     cwd: options.cwd,
@@ -66,7 +83,19 @@ try {
     cwd: repoRoot,
     capture: true,
   });
-  writeFileSync(specPath, spec);
+  const parsedSpec = JSON.parse(spec);
+  const schemas = parsedSpec.components?.schemas;
+  for (const [model, property] of [
+    ["ExportEffectiveModelRate", "bands"],
+    ["ExportPricingApplication", "bands"],
+    ["ExportModelPricingProvenance", "resolutions"],
+  ]) {
+    normalizeNullableArray(
+      schemas?.[model]?.properties?.[property],
+      `${model}.${property}`,
+    );
+  }
+  writeFileSync(specPath, JSON.stringify(parsedSpec));
   const openapiArgs = [
     "openapi",
     "-i",

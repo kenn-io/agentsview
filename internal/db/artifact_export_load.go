@@ -45,7 +45,8 @@ const artifactMessageRawBytesSQL = `
 	length(CAST(source_type AS BLOB)) +
 	length(CAST(source_subtype AS BLOB)) +
 	length(CAST(source_uuid AS BLOB)) +
-	length(CAST(source_parent_uuid AS BLOB))`
+	length(CAST(source_parent_uuid AS BLOB)) +
+	length(CAST(prompt_source AS BLOB))`
 
 const artifactToolCallRawBytesSQL = `
 	length(CAST(tool_name AS BLOB)) +

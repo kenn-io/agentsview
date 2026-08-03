@@ -102,21 +102,23 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		remoteSyncAuth := isRemoteSyncPath(r.URL.Path)
+		machineAuth := isRemoteSyncPath(r.URL.Path) ||
+			(s.artifactExchangeRunner != nil &&
+				isArtifactExchangePath(r.URL.Path))
 
 		// When auth is not required, skip token checks entirely
 		// except for machine-to-machine remote sync archive APIs,
 		// which must still set ctxKeyRemoteAuth before host/CORS
 		// middleware runs.
-		if !authRequired && !remoteSyncAuth {
+		if !authRequired && !machineAuth {
 			next.ServeHTTP(w, r)
 			return
 		}
 		// Auth required but no token configured — fail closed.
 		if token == "" {
-			if remoteSyncAuth {
+			if machineAuth {
 				http.Error(w,
-					"server misconfiguration: auth token required for remote sync",
+					"server misconfiguration: auth token required for machine API",
 					http.StatusInternalServerError)
 				return
 			}
@@ -165,6 +167,10 @@ func isSSEPath(path string) bool {
 
 func isRemoteSyncPath(path string) bool {
 	return strings.HasPrefix(path, "/api/v1/remote-sync/")
+}
+
+func isArtifactExchangePath(path string) bool {
+	return path == "/api/v1/artifacts/exchange"
 }
 
 // setCORSOnAuthError adds CORS headers to 401 responses so

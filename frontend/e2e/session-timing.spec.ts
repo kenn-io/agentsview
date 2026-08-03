@@ -12,6 +12,8 @@ import { test, expect, type Page } from "@playwright/test";
 // shape needed to cover all four section interactions.
 
 const SHOWCASE = "test-session-duration-showcase";
+const SHOWCASE_WORKTREE =
+  "/workspace/مشروع/.worktrees/שלוםfeaturewithalongcheckoutnamefortooltipwrappingwithoutbreakopportunities";
 
 // The conversation scrolls inside `.message-list-scroll`
 // (`SessionsPage.scroller`). The plan's sketch referenced
@@ -60,6 +62,152 @@ test.describe("Session Vital Signs", () => {
     await expect(
       page.locator(".v-section .v-h", { hasText: "Calls" }),
     ).toBeVisible();
+  });
+
+  test("keeps an absolute mixed-direction worktree path ordered", async ({
+    page,
+  }) => {
+    await gotoShowcase(page);
+
+    const path = page.locator(".context-value--path");
+    await expect(path).toHaveText(SHOWCASE_WORKTREE);
+
+    const layout = await path.evaluate((element, expectedPath) => {
+      const walker = document.createTreeWalker(
+        element,
+        NodeFilter.SHOW_TEXT,
+      );
+      let textNode = walker.nextNode();
+      while (
+        textNode &&
+        !textNode.textContent?.includes(expectedPath)
+      ) {
+        textNode = walker.nextNode();
+      }
+      if (!textNode?.textContent) {
+        throw new Error("worktree path text node not found");
+      }
+
+      const start = textNode.textContent.indexOf(expectedPath);
+      const firstCharacter = document.createRange();
+      firstCharacter.setStart(textNode, start);
+      firstCharacter.setEnd(textNode, start + 1);
+      const lastCharacter = document.createRange();
+      lastCharacter.setStart(
+        textNode,
+        start + expectedPath.length - 1,
+      );
+      lastCharacter.setEnd(textNode, start + expectedPath.length);
+
+      const container = element.getBoundingClientRect();
+      const first = firstCharacter.getBoundingClientRect();
+      const last = lastCharacter.getBoundingClientRect();
+      return {
+        overflows: element.scrollWidth > element.clientWidth,
+        containerLeft: container.left,
+        containerRight: container.right,
+        firstRight: first.right,
+        lastLeft: last.left,
+        lastRight: last.right,
+      };
+    }, SHOWCASE_WORKTREE);
+
+    expect(layout.overflows).toBe(true);
+    expect(layout.firstRight).toBeLessThanOrEqual(
+      layout.containerLeft,
+    );
+    expect(layout.lastLeft).toBeGreaterThanOrEqual(
+      layout.containerLeft,
+    );
+    expect(layout.lastRight).toBeLessThanOrEqual(
+      layout.containerRight,
+    );
+  });
+
+  test("uses available viewport width for the worktree tooltip", async ({
+    page,
+  }) => {
+    await gotoShowcase(page);
+
+    const panel = page.locator("aside.vitals");
+    const path = page.locator(".context-value--path");
+    const trigger = page.locator(".context-tooltip .kit-tooltip-trigger");
+    await path.hover();
+
+    const tooltip = page.getByRole("tooltip");
+    await expect(tooltip).toHaveText(SHOWCASE_WORKTREE);
+    const panelLeft = await panel.evaluate(
+      (element) => element.getBoundingClientRect().left,
+    );
+    const wideLayout = await tooltip.evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const lineTops = Array.from(
+        range.getClientRects(),
+        (rect) => Math.round(rect.top),
+      );
+      const rect = element.getBoundingClientRect();
+      const arrowStyle = getComputedStyle(element, "::before");
+      const arrowWidth = Number.parseFloat(arrowStyle.width);
+      const arrowCenter =
+        arrowStyle.left === "auto"
+          ? rect.right - Number.parseFloat(arrowStyle.right) - arrowWidth / 2
+          : rect.left + Number.parseFloat(arrowStyle.left) + arrowWidth / 2;
+      return {
+        arrowCenter,
+        left: rect.left,
+        lineCount: new Set(lineTops).size,
+        right: rect.right,
+        viewportWidth: window.innerWidth,
+        width: rect.width,
+      };
+    });
+    const triggerBounds = await trigger.boundingBox();
+    expect(triggerBounds).not.toBeNull();
+
+    expect(wideLayout.width).toBeLessThanOrEqual(
+      wideLayout.viewportWidth * 0.5 + 1,
+    );
+    expect(wideLayout.lineCount).toBe(1);
+    expect(wideLayout.left).toBeGreaterThanOrEqual(0);
+    expect(wideLayout.right).toBeLessThanOrEqual(wideLayout.viewportWidth);
+    expect(wideLayout.left).toBeLessThan(panelLeft);
+    expect(wideLayout.arrowCenter).toBeGreaterThanOrEqual(triggerBounds!.x);
+    expect(wideLayout.arrowCenter).toBeLessThanOrEqual(
+      triggerBounds!.x + triggerBounds!.width,
+    );
+
+    await page.setViewportSize({ width: 1000, height: 900 });
+    await expect(path).toBeVisible();
+    await path.hover();
+    const narrowLayout = await tooltip.evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const lineTops = Array.from(
+        range.getClientRects(),
+        (rect) => Math.round(rect.top),
+      );
+      const rect = element.getBoundingClientRect();
+      return {
+        clientWidth: element.clientWidth,
+        left: rect.left,
+        lineCount: new Set(lineTops).size,
+        right: rect.right,
+        scrollWidth: element.scrollWidth,
+        viewportWidth: window.innerWidth,
+        width: rect.width,
+      };
+    });
+
+    expect(narrowLayout.width).toBeLessThanOrEqual(
+      narrowLayout.viewportWidth * 0.5 + 1,
+    );
+    expect(narrowLayout.lineCount).toBeGreaterThan(1);
+    expect(narrowLayout.scrollWidth).toBeLessThanOrEqual(
+      narrowLayout.clientWidth + 1,
+    );
+    expect(narrowLayout.left).toBeGreaterThanOrEqual(0);
+    expect(narrowLayout.right).toBeLessThanOrEqual(narrowLayout.viewportWidth);
   });
 
   test("slowest-call link scrolls the conversation", async ({

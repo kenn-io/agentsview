@@ -24,6 +24,106 @@ func TestMigrationCreatesModelPricingTable(t *testing.T) {
 	assert.NotZero(t, count, "model_pricing table not created by schema")
 }
 
+func TestMigrationCreatesModelPricingBandsTable(t *testing.T) {
+	d := testDB(t)
+
+	rows, err := d.getReader().Query(
+		`SELECT name FROM pragma_table_info('model_pricing_bands') ORDER BY cid`,
+	)
+	require.NoError(t, err)
+	defer rows.Close()
+	var columns []string
+	for rows.Next() {
+		var column string
+		require.NoError(t, rows.Scan(&column))
+		columns = append(columns, column)
+	}
+	require.NoError(t, rows.Err())
+
+	assert.Equal(t, []string{
+		"model_pattern",
+		"above_input_tokens",
+		"input_microdollars_per_mtok",
+		"output_microdollars_per_mtok",
+		"cache_creation_microdollars_per_mtok",
+		"cache_read_microdollars_per_mtok",
+		"updated_at",
+	}, columns)
+}
+
+func TestUpsertModelPricingPricingBandsReplacesCompleteSet(t *testing.T) {
+	d := testDB(t)
+	initial := ModelPricing{
+		ModelPattern: "banded-model",
+		InputPerMTok: money.MustParseDollars("1"),
+		Bands: []PricingBand{
+			{AboveInputTokens: 272_000, InputPerMTok: money.MustParseDollars("4")},
+			{AboveInputTokens: 200_000, InputPerMTok: money.MustParseDollars("2")},
+		},
+	}
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{initial}))
+
+	got, err := d.GetModelPricing("banded-model")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Len(t, got.Bands, 2)
+	assert.Equal(t, 200_000, got.Bands[0].AboveInputTokens)
+	assert.Equal(t, 272_000, got.Bands[1].AboveInputTokens)
+	assert.NotEmpty(t, got.Bands[0].UpdatedAt)
+	require.NoError(t, d.SetPricingMeta("banded-model", "2000-01-01T00:00:00Z"))
+
+	updated := initial
+	updated.Bands = []PricingBand{{
+		AboveInputTokens: 200_000,
+		InputPerMTok:     money.MustParseDollars("3"),
+	}}
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{updated}))
+
+	got, err = d.GetModelPricing("banded-model")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Len(t, got.Bands, 1)
+	assert.Equal(t, 200_000, got.Bands[0].AboveInputTokens)
+	assert.Equal(t, money.MustParseDollars("3"), got.Bands[0].InputPerMTok)
+	assert.NotEqual(t, "2000-01-01T00:00:00Z", got.UpdatedAt)
+	firstRevision := got.UpdatedAt
+
+	removed := initial
+	removed.Bands = nil
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{removed}))
+	got, err = d.GetModelPricing("banded-model")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Empty(t, got.Bands)
+	assert.Greater(t, got.UpdatedAt, firstRevision)
+}
+
+func TestFilterChangedModelPricingDetectsPricingBandOnlyChange(t *testing.T) {
+	existing := []ModelPricing{{
+		ModelPattern: "model",
+		InputPerMTok: money.MustParseDollars("1"),
+		Bands: []PricingBand{{
+			AboveInputTokens: 200_000,
+			InputPerMTok:     money.MustParseDollars("2"),
+			UpdatedAt:        "old",
+		}},
+	}}
+	desired := []ModelPricing{{
+		ModelPattern: "model",
+		InputPerMTok: money.MustParseDollars("1"),
+		Bands: []PricingBand{{
+			AboveInputTokens: 200_000,
+			InputPerMTok:     money.MustParseDollars("3"),
+			UpdatedAt:        "new",
+		}},
+	}}
+
+	summary, changed := FilterChangedModelPricing(existing, desired)
+
+	assert.Equal(t, PricingChangeSummary{Total: 1, Changed: 1}, summary)
+	assert.Equal(t, desired, changed)
+}
+
 func TestUpsertModelPricing(t *testing.T) {
 	d := testDB(t)
 
@@ -237,6 +337,43 @@ func TestInsertMissingModelPricing_DoesNotOverwrite(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("2.5"), gpt.InputPerMTok, "gpt-5.4 InputPerMTok inserted")
 }
 
+func TestInsertMissingModelPricingDoesNotAttachBandsToExistingFlatModel(t *testing.T) {
+	d := testDB(t)
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern: "existing-model",
+		InputPerMTok: money.MustParseDollars("1"),
+	}}))
+
+	require.NoError(t, d.InsertMissingModelPricing([]ModelPricing{
+		{
+			ModelPattern: "existing-model",
+			InputPerMTok: money.MustParseDollars("99"),
+			Bands: []PricingBand{{
+				AboveInputTokens: 200_000,
+				InputPerMTok:     money.MustParseDollars("100"),
+			}},
+		},
+		{
+			ModelPattern: "new-model",
+			InputPerMTok: money.MustParseDollars("2"),
+			Bands: []PricingBand{{
+				AboveInputTokens: 200_000,
+				InputPerMTok:     money.MustParseDollars("4"),
+			}},
+		},
+	}))
+
+	existing, err := d.GetModelPricing("existing-model")
+	require.NoError(t, err)
+	require.NotNil(t, existing)
+	assert.Empty(t, existing.Bands)
+	added, err := d.GetModelPricing("new-model")
+	require.NoError(t, err)
+	require.NotNil(t, added)
+	require.Len(t, added.Bands, 1)
+	assert.Equal(t, money.MustParseDollars("4"), added.Bands[0].InputPerMTok)
+}
+
 func TestLoadPricingMapKeepsCustomSourceWhenRatesMatchFallback(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
@@ -260,6 +397,7 @@ func TestLoadPricingMapKeepsCustomSourceWhenRatesMatchFallback(t *testing.T) {
 	require.True(t, lookup.OK, "lookup custom fallback-rate row")
 	assert.Equal(t, export.PricingRowSourceCustom,
 		lookup.Rates.Source)
+	assert.Empty(t, lookup.Rates.Bands)
 
 	block, err := resolver.BuildBlock()
 	require.NoError(t, err)
@@ -307,4 +445,26 @@ func TestDeleteModelPricing(t *testing.T) {
 	require.NoError(t,
 		d.DeleteModelPricing([]string{"kimi-for-coding"}), "re-delete")
 	require.NoError(t, d.DeleteModelPricing(nil), "empty delete")
+}
+
+func TestLoadPricingMapTreatsBandOnlyFallbackMismatchAsFetched(t *testing.T) {
+	d := testDB(t)
+	fallback, ok := fallbackRateMap()["gpt-5.5"]
+	require.True(t, ok)
+	require.NotEmpty(t, fallback.Bands)
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern:         "gpt-5.5",
+		InputPerMTok:         fallback.InputPerMTok,
+		OutputPerMTok:        fallback.OutputPerMTok,
+		CacheCreationPerMTok: fallback.CacheWritePerMTok,
+		CacheReadPerMTok:     fallback.CacheReadPerMTok,
+	}}))
+
+	rows, err := d.loadPricingMap(context.Background())
+	require.NoError(t, err)
+	lookup := export.NewPricingResolver(rows).Lookup("gpt-5.5")
+	require.True(t, lookup.OK)
+
+	assert.Equal(t, export.PricingRowSourceFetched, lookup.Rates.Source)
+	assert.Empty(t, lookup.Rates.Bands)
 }

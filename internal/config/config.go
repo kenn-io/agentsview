@@ -469,6 +469,20 @@ type RemoteHost struct {
 	Interval  time.Duration   `toml:"interval,omitempty" json:"interval,omitempty"`
 }
 
+// SessionSource adds one agent session root with optional machine attribution.
+// Legacy per-agent directory settings are resolved into the same root set.
+type SessionSource struct {
+	Agent   parser.AgentType `toml:"agent" json:"agent"`
+	Dir     string           `toml:"dir" json:"dir"`
+	Machine string           `toml:"machine,omitempty" json:"machine,omitempty"`
+}
+
+type sessionSourceConfig struct {
+	Agent   string  `toml:"agent"`
+	Dir     string  `toml:"dir"`
+	Machine *string `toml:"machine"`
+}
+
 // Config holds all application configuration.
 type Config struct {
 	Host                 string                 `json:"host" toml:"host"`
@@ -511,6 +525,12 @@ type Config struct {
 	// directories. Single-dir agents store a one-element
 	// slice; unconfigured agents use nil.
 	AgentDirs map[parser.AgentType][]string `json:"-" toml:"-"`
+
+	// SessionSources contains resolved structured sources. SourceMachines maps
+	// each effective configured root to its machine label for sync.
+	SessionSources       []SessionSource                        `json:"-" toml:"-"`
+	SourceMachines       map[parser.AgentType]map[string]string `json:"-" toml:"-"`
+	sessionSourceConfigs []sessionSourceConfig
 
 	// agentDirSource tracks how each agent's dirs were
 	// set so loadFile doesn't override env-set values.
@@ -765,6 +785,7 @@ func Default() (Config, error) {
 		LocalMachineName:               hostname,
 		AgentDirs:                      agentDirs,
 		agentDirSource:                 agentDirSource,
+		SourceMachines:                 make(map[parser.AgentType]map[string]string),
 		WatchExcludePatterns:           []string{".git", "node_modules", "__pycache__", ".venv", "venv", "vendor", ".next"},
 		ResultContentBlockedCategories: []string{"Read", "Glob"},
 		EventsCoalesceInterval:         10 * time.Second,
@@ -1080,6 +1101,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		DaemonIdleTimeout              time.Duration              `toml:"daemon_idle_timeout"`
 		CustomModelPricing             map[string]CustomModelRate `toml:"custom_model_pricing"`
 		RemoteHosts                    []RemoteHost               `toml:"remote_hosts"`
+		SessionSources                 []sessionSourceConfig      `toml:"session_sources"`
 	}
 	meta, err := toml.Decode(data, &file)
 	if err != nil {
@@ -1320,6 +1342,9 @@ func (c *Config) applyConfigTOML(data string) error {
 			}
 		}
 		c.RemoteHosts = hosts
+	}
+	if meta.IsDefined("session_sources") {
+		c.sessionSourceConfigs = append([]sessionSourceConfig(nil), file.SessionSources...)
 	}
 
 	// Parse config-file dir arrays for agents that have a
@@ -1771,6 +1796,9 @@ func finalize(cfg *Config) error {
 	if strings.TrimSpace(cfg.LocalMachineName) == "" {
 		return fmt.Errorf("identify local sync machine: hostname is empty")
 	}
+	if err := cfg.resolveSessionSources(); err != nil {
+		return err
+	}
 	if err := normalizeProxyConfig(&cfg.Proxy); err != nil {
 		return err
 	}
@@ -1800,6 +1828,163 @@ func finalize(cfg *Config) error {
 		return err
 	}
 	return nil
+}
+
+func (c *Config) resolveSessionSources() error {
+	type rootState struct {
+		dir     string
+		machine string
+	}
+
+	resolved := make([]SessionSource, 0)
+	rootsByAgent := make(map[parser.AgentType]map[string]rootState, len(c.AgentDirs))
+	for _, def := range parser.Registry {
+		seen := make(map[string]rootState)
+		dirs := make([]string, 0, len(c.AgentDirs[def.Type]))
+		for _, rawDir := range c.AgentDirs[def.Type] {
+			value := strings.TrimSpace(rawDir)
+			if value == "" {
+				continue
+			}
+			key, err := sessionSourceComparisonKey(value)
+			if err != nil {
+				return fmt.Errorf(
+					"resolve %s session source %q: %w", def.Type, value, err,
+				)
+			}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = rootState{
+				dir:     value,
+				machine: c.LocalMachineName,
+			}
+			dirs = append(dirs, value)
+		}
+		c.AgentDirs[def.Type] = dirs
+		rootsByAgent[def.Type] = seen
+	}
+
+	var problems []string
+	for i, input := range c.sessionSourceConfigs {
+		entry := i + 1
+		agent := parser.AgentType(strings.TrimSpace(strings.ToLower(input.Agent)))
+		if agent == "" {
+			problems = append(problems,
+				fmt.Sprintf("entry %d: agent is required", entry))
+			continue
+		}
+		if _, ok := parser.AgentByType(agent); !ok {
+			problems = append(problems,
+				fmt.Sprintf("entry %d: unknown agent %q; use a registered parser name such as claude, codex, or copilot", entry, input.Agent))
+			continue
+		}
+		factory, hasFactory := parser.ProviderFactoryByType(agent)
+		if !hasFactory ||
+			factory.Capabilities().Source.DiscoverSources != parser.CapabilitySupported {
+			problems = append(problems,
+				fmt.Sprintf("entry %d (%s): session_sources requires a discoverable filesystem provider; %s is import-only", entry, agent, agent))
+			continue
+		}
+		rawDir := strings.TrimSpace(input.Dir)
+		if strings.HasPrefix(strings.ToLower(rawDir), "s3://") {
+			problems = append(problems,
+				fmt.Sprintf("entry %d (%s): dir %q is an S3 root; session_sources supports filesystem roots only, so configure S3 through the existing per-agent directory setting", entry, agent, input.Dir))
+			continue
+		}
+		dir, err := normalizeSessionSourceDir(input.Dir)
+		if err != nil {
+			problems = append(problems,
+				fmt.Sprintf("entry %d (%s): %v", entry, agent, err))
+			continue
+		}
+		machine := c.LocalMachineName
+		if input.Machine != nil {
+			machine = strings.TrimSpace(*input.Machine)
+			if machine == "" {
+				problems = append(problems,
+					fmt.Sprintf("entry %d (%s): machine must not be empty when set", entry, agent))
+				continue
+			}
+			if machine == "local" {
+				problems = append(problems,
+					fmt.Sprintf("entry %d (%s): machine %q is reserved for legacy local attribution; use the actual machine name or omit machine", entry, agent, machine))
+				continue
+			}
+		}
+
+		seen := rootsByAgent[agent]
+		if seen == nil {
+			seen = make(map[string]rootState)
+			rootsByAgent[agent] = seen
+		}
+		key, err := sessionSourceComparisonKey(dir)
+		if err != nil {
+			problems = append(problems,
+				fmt.Sprintf("entry %d (%s): %v", entry, agent, err))
+			continue
+		}
+		state, duplicate := seen[key]
+		if duplicate {
+			state.machine = machine
+			seen[key] = state
+		} else {
+			seen[key] = rootState{
+				dir:     dir,
+				machine: machine,
+			}
+			c.AgentDirs[agent] = append(c.AgentDirs[agent], dir)
+		}
+		c.agentDirSource[agent] = dirFile
+		resolved = append(resolved, SessionSource{
+			Agent: agent, Dir: dir, Machine: machine,
+		})
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("session_sources: %s", strings.Join(problems, "; "))
+	}
+
+	sourceMachines := make(map[parser.AgentType]map[string]string, len(rootsByAgent))
+	for agent, roots := range rootsByAgent {
+		machines := make(map[string]string, len(roots))
+		for _, state := range roots {
+			if strings.HasPrefix(strings.ToLower(state.dir), "s3://") {
+				continue
+			}
+			machines[state.dir] = state.machine
+		}
+		sourceMachines[agent] = machines
+	}
+	c.SessionSources = resolved
+	c.SourceMachines = sourceMachines
+	return nil
+}
+
+func sessionSourceComparisonKey(dir string) (string, error) {
+	if strings.HasPrefix(strings.ToLower(dir), "s3://") {
+		return dir, nil
+	}
+	return pathutil.LocalComparisonKey(dir)
+}
+
+func normalizeSessionSourceDir(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", fmt.Errorf("dir is required")
+	}
+	if strings.ContainsRune(value, '\x00') {
+		return "", fmt.Errorf("dir %q contains a NUL byte", raw)
+	}
+	// Structured sources resolve after expandLocalPaths has already expanded
+	// the legacy per-agent arrays, so expand here too. Without it a "~/..."
+	// root is never scanned and cannot deduplicate against, or relabel, the
+	// equivalent expanded legacy root. This resolves the path only; separator
+	// and case spelling are still left exactly as configured.
+	expanded, err := pathutil.ExpandHome(value)
+	if err != nil {
+		return "", fmt.Errorf("expanding dir %q: %w", raw, err)
+	}
+	return expanded, nil
 }
 
 func resolvePublicURL(value string, proxyCfg ProxyConfig) (string, error) {

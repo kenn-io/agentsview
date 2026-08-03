@@ -12,6 +12,7 @@ import { analyticsPageDates } from "../../stores/analyticsPageDates.js";
 import { insights } from "../../stores/insights.svelte.js";
 import { router } from "../../stores/router.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
+import { ui } from "../../stores/ui.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
 import sourceRaw from "./AnalyticsPage.svelte?raw";
 // @ts-ignore
@@ -71,6 +72,70 @@ afterEach(() => {
   sessions.filters.dateTo = "";
   yokedDates.setEnabled(false);
   analyticsPageDates.clear();
+  ui.sidebarOpen = true;
+  ui.isMobileViewport = false;
+});
+
+describe("AnalyticsPage sidebar controls", () => {
+  it("places the desktop expand control to the left of the relocated filter", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(analytics, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    ui.sidebarOpen = false;
+    ui.isMobileViewport = false;
+
+    component = mount(AnalyticsPage, { target: document.body });
+    await flushEffects();
+
+    const anchor = document.querySelector<HTMLElement>(
+      ".toolbar-filter-anchor",
+    );
+    const expandButton = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Open sidebar"]',
+    );
+    const filterButton = anchor?.querySelector<HTMLButtonElement>(
+      ".filter-btn",
+    );
+
+    expect(anchor).not.toBeNull();
+    expect(expandButton).not.toBeNull();
+    expect(filterButton).not.toBeNull();
+    expect(expandButton?.nextElementSibling).toBe(filterButton);
+    expect(expandButton?.title).toBe("Toggle sidebar (b)");
+
+    expandButton!.click();
+    await flushEffects();
+
+    expect(ui.sidebarOpen).toBe(true);
+  });
+
+  it("leaves collapsed mobile sidebar controls in the title bar", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(analytics, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    ui.sidebarOpen = false;
+    ui.isMobileViewport = true;
+
+    component = mount(AnalyticsPage, { target: document.body });
+    await flushEffects();
+
+    expect(document.querySelector(".toolbar-filter-anchor")).toBeNull();
+    expect(
+      document.querySelector('button[aria-label="Open sidebar"]'),
+    ).toBeNull();
+  });
 });
 
 describe("AnalyticsPage refresh behavior", () => {

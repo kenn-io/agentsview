@@ -16,6 +16,10 @@ import (
 	agentsync "go.kenn.io/agentsview/internal/sync"
 )
 
+// Resync may spend up to five seconds draining SQLite connections before a
+// swap, particularly on Windows where open handles prevent the rename.
+const pricingResyncTestTimeout = 10 * time.Second
+
 type pricingCatalogTransport struct {
 	requests chan *http.Request
 }
@@ -122,7 +126,7 @@ func TestStartPeriodicPricingRefreshWaitsForResyncSwap(t *testing.T) {
 		default:
 			return false
 		}
-	}, time.Second, time.Millisecond)
+	}, pricingResyncTestTimeout, time.Millisecond)
 
 	requests := make(chan *http.Request, 1)
 	originalTransport := http.DefaultTransport
@@ -146,7 +150,7 @@ func TestStartPeriodicPricingRefreshWaitsForResyncSwap(t *testing.T) {
 			default:
 				return false
 			}
-		}, time.Second, time.Millisecond)
+		}, pricingResyncTestTimeout, time.Millisecond)
 	})
 
 	assert.Never(t, func() bool {
@@ -162,12 +166,12 @@ func TestStartPeriodicPricingRefreshWaitsForResyncSwap(t *testing.T) {
 		default:
 			return false
 		}
-	}, time.Second, time.Millisecond)
+	}, pricingResyncTestTimeout, time.Millisecond)
 	require.NoError(t, swapErr)
 	require.Eventually(t, func() bool {
 		price, err := database.GetModelPricing("scheduled-model")
 		return err == nil && price != nil
-	}, time.Second, time.Millisecond)
+	}, pricingResyncTestTimeout, time.Millisecond)
 }
 
 func TestSeedPricingWaitsForResyncSwap(t *testing.T) {
@@ -208,7 +212,7 @@ func TestSeedPricingWaitsForResyncSwap(t *testing.T) {
 		default:
 			return false
 		}
-	}, time.Second, time.Millisecond)
+	}, pricingResyncTestTimeout, time.Millisecond)
 
 	seedDone := make(chan struct{})
 	go func() {
@@ -233,7 +237,7 @@ func TestSeedPricingWaitsForResyncSwap(t *testing.T) {
 		default:
 			return false
 		}
-	}, time.Second, time.Millisecond)
+	}, pricingResyncTestTimeout, time.Millisecond)
 	require.NoError(t, swapErr)
 	require.Eventually(t, func() bool {
 		select {
@@ -242,7 +246,7 @@ func TestSeedPricingWaitsForResyncSwap(t *testing.T) {
 		default:
 			return false
 		}
-	}, time.Second, time.Millisecond)
+	}, pricingResyncTestTimeout, time.Millisecond)
 	price, err = database.GetModelPricing("gpt-5.5")
 	require.NoError(t, err)
 	require.NotNil(t, price)

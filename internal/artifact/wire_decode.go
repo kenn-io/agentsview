@@ -27,7 +27,7 @@ func decodeManifestWithLimits(data []byte, limits artifactLimits) (manifest, err
 			Kind: KindManifests, Version: envelope.Version,
 		}
 	}
-	if envelope.Version != manifestFormatVersion {
+	if envelope.Version < manifestMinDecodeVersion {
 		return manifest{}, fmt.Errorf(
 			"manifest has unsupported artifact version %d", envelope.Version,
 		)
@@ -211,7 +211,7 @@ func preflightSegmentData(data []byte, limits artifactLimits) (segmentPreflight,
 					Kind: KindSegments, Version: version,
 				}
 			}
-			if version != messageSegmentFormatVersion {
+			if version < messageSegmentMinDecodeVersion {
 				return segmentPreflight{}, fmt.Errorf(
 					"message segment has unsupported artifact version %d",
 					version,
@@ -358,6 +358,7 @@ func (m segmentMessage) dbMessage() db.Message {
 		SourceParentUUID:  m.SourceParentUUID,
 		IsSidechain:       m.IsSidechain,
 		IsCompactBoundary: m.IsCompactBoundary,
+		PromptSource:      m.PromptSource,
 	}
 	if len(m.ToolCalls) > 0 {
 		msg.ToolCalls = make([]db.ToolCall, len(m.ToolCalls))

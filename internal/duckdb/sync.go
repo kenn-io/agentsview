@@ -28,6 +28,11 @@ type Sync struct {
 	excludeProjects []string
 	maintenance     duckDBMaintenance
 
+	// archiveID caches this local archive's stable identifier (see
+	// ensureArchiveID), stamped onto every pushed session's
+	// source_archive_id column and used to scope mapping publications.
+	archiveID string
+
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -171,6 +176,21 @@ func validateSyncInputs(local *db.DB, machine string) error {
 // DB returns the underlying DuckDB connection.
 func (s *Sync) DB() *sql.DB { return s.duck }
 
+// ensureArchiveID memoizes the local archive's stable identifier on the
+// Sync. Both push entry points (rebuild and incremental) call it before any
+// session or mapping write so provenance is stamped consistently.
+func (s *Sync) ensureArchiveID(ctx context.Context) error {
+	if s.archiveID != "" {
+		return nil
+	}
+	archiveID, err := s.local.GetArchiveID(ctx)
+	if err != nil {
+		return fmt.Errorf("reading archive id: %w", err)
+	}
+	s.archiveID = archiveID
+	return nil
+}
+
 // Close closes the DuckDB connection.
 func (s *Sync) Close() error {
 	s.closeOnce.Do(func() {
@@ -225,10 +245,14 @@ func Push(
 	if err != nil {
 		return PushResult{}, fmt.Errorf("reading local archive database id: %w", err)
 	}
+	localArchiveID, err := local.GetArchiveID(ctx)
+	if err != nil {
+		return PushResult{}, fmt.Errorf("reading local archive id: %w", err)
+	}
 
 	reason := rebuildReason(
 		probe, scope, db.CurrentDataVersion(), full, localDeletionRevision,
-		machine, localDatabaseID,
+		machine, localDatabaseID, localArchiveID,
 	)
 	if reason == "" {
 		result, err := incrementalPush(ctx, path, local, machine, opts, probe, onProgress)
@@ -338,6 +362,10 @@ func (s *Sync) runIncrementalPush(
 	start := time.Now()
 	var result PushResult
 
+	if err := s.ensureArchiveID(ctx); err != nil {
+		return result, err
+	}
+
 	if err := s.syncModelPricing(ctx); err != nil {
 		return result, err
 	}
@@ -366,12 +394,15 @@ func (s *Sync) runIncrementalPush(
 		}
 	}
 
-	pushed, err := s.pushChangedSessions(ctx, probe, onProgress, &result)
+	pushed, identityRefreshCandidates, err := s.pushChangedSessions(
+		ctx, probe, onProgress, &result,
+	)
 	if err != nil {
 		return result, err
 	}
 
 	identityRevision := probe.IdentityRevision
+	mappingRevision := probe.MappingRevision
 	if result.Errors == 0 {
 		refreshed, err := s.refreshCurationIfChanged(ctx)
 		if err != nil {
@@ -380,13 +411,20 @@ func (s *Sync) runIncrementalPush(
 		result.Diagnostics.CurationRefreshed = refreshed
 		identityRevision, err = s.syncProjectIdentityObservations(
 			ctx, probe.IdentityRevision, false,
+			sessionIDs(identityRefreshCandidates),
+		)
+		if err != nil {
+			return result, err
+		}
+		mappingRevision, err = s.syncWorktreeMappings(
+			ctx, probe.MappingRevision, false,
 		)
 		if err != nil {
 			return result, err
 		}
 	} else {
 		log.Printf(
-			"duckdbsync: skipping curation and identity refresh after %d session push errors",
+			"duckdbsync: skipping curation, identity, and mapping refresh after %d session push errors",
 			result.Errors,
 		)
 	}
@@ -399,7 +437,8 @@ func (s *Sync) runIncrementalPush(
 
 	if result.Errors == 0 {
 		if err := s.finalizeIncrementalPush(
-			ctx, opts, result.Diagnostics.Cutoff, through, identityRevision,
+			ctx, opts, result.Diagnostics.Cutoff, through,
+			identityRevision, mappingRevision,
 		); err != nil {
 			return result, err
 		}
@@ -427,26 +466,28 @@ func (s *Sync) runIncrementalPush(
 func (s *Sync) pushChangedSessions(
 	ctx context.Context, probe MirrorProbe, onProgress func(PushProgress),
 	result *PushResult,
-) ([]db.Session, error) {
+) ([]db.Session, []db.Session, error) {
 	cutoff := time.Now().UTC().Format(localSyncTimestampLayout)
 	result.Diagnostics.Cutoff = cutoff
 	candidates, err := s.local.ListSessionsForMirrorWindow(
 		ctx, probe.LastPushCutoff, nil, nil,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("listing sessions for duckdb incremental push: %w", err)
+		return nil, nil, fmt.Errorf(
+			"listing sessions for duckdb incremental push: %w", err,
+		)
 	}
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].ID < candidates[j].ID })
 
 	inScope, outOfScope := s.partitionPushScope(candidates)
 	result.Diagnostics.CandidateSessions = countPushSessions(inScope)
 	if err := s.deleteOutOfScopeMirrorSessions(ctx, outOfScope, result); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	changed, unchanged, fingerprints, err := s.selectChangedSessions(ctx, inScope)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	result.Diagnostics.SkippedUnchangedSessions = countPushSessions(unchanged)
 
@@ -457,11 +498,14 @@ func (s *Sync) pushChangedSessions(
 			ctx, changed[batchStart:end], batchStart, len(changed),
 			result, &pushed, onProgress, fingerprints,
 		); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	result.Diagnostics.PushedSessions = countPushSessions(pushed)
-	return pushed, nil
+	if !s.isFiltered() {
+		candidates = nil
+	}
+	return pushed, candidates, nil
 }
 
 // partitionPushScope splits window candidates by this Sync's project scope
@@ -597,7 +641,7 @@ func (s *Sync) readMirrorFingerprintBatch(
 }
 
 // mirrorResidentSessionIDs reports which of ids currently exist in the
-// mirror under this Sync's machine name. IDs are deduplicated and queried
+// mirror for this source archive. IDs are deduplicated and queried
 // in batches of 500, so cost tracks the caller's ID list (a candidate
 // window, a tombstone delta, the curation set), never total mirror size.
 func (s *Sync) mirrorResidentSessionIDs(
@@ -627,14 +671,13 @@ func (s *Sync) readMirrorResidentBatch(
 	ctx context.Context, batch []string, out map[string]bool,
 ) error {
 	placeholders := make([]string, len(batch))
-	args := make([]any, 0, len(batch)+1)
-	args = append(args, s.machine)
+	args := make([]any, 0, len(batch))
 	for i, id := range batch {
 		placeholders[i] = "?"
 		args = append(args, id)
 	}
 	rows, err := s.duck.QueryContext(ctx,
-		`SELECT id FROM sessions WHERE machine = ? AND id IN (`+
+		`SELECT id FROM sessions WHERE id IN (`+
 			strings.Join(placeholders, ",")+`)`, args...,
 	)
 	if err != nil {
@@ -657,7 +700,7 @@ func (s *Sync) readMirrorResidentBatch(
 // failed sessions silently fall out of the next incremental window.
 func (s *Sync) finalizeIncrementalPush(
 	ctx context.Context, opts SyncOptions, cutoff string,
-	deletionRevision, identityRevision int64,
+	deletionRevision, identityRevision, mappingRevision int64,
 ) error {
 	// The source database id is re-read rather than copied from the probe:
 	// an incremental push only runs when the probe's recorded id already
@@ -672,12 +715,14 @@ func (s *Sync) finalizeIncrementalPush(
 		SchemaVersion:    SchemaVersion,
 		DataVersion:      db.CurrentDataVersion(),
 		SourceDatabaseID: sourceDatabaseID,
+		SourceArchiveID:  s.archiveID,
 		Scope:            canonicalPushScope(opts.Projects, opts.ExcludeProjects),
 		LastPushCutoff:   cutoff,
 		LastPushAt:       time.Now().UTC().Format(time.RFC3339),
 		LastPushMachine:  s.machine,
 		DeletionRevision: deletionRevision,
 		IdentityRevision: identityRevision,
+		MappingRevision:  mappingRevision,
 	})
 }
 
@@ -938,7 +983,9 @@ func (s *Sync) sessionFingerprints(
 			SecretFindings []db.SecretFinding
 			Pins           []db.PinnedMessage
 		}{
-			SessionFields:  duckSessionFingerprintFields(sess, s.machine),
+			SessionFields: duckSessionFingerprintFields(
+				sess, mirroredSessionMachine(sess, s.machine),
+			),
 			Messages:       msgs,
 			Usage:          usage[sess.ID],
 			ToolCalls:      toolCalls,
@@ -969,8 +1016,8 @@ func (s *Sync) sessionFingerprints(
 // quality analytics stale until the next full rebuild.
 func duckSessionFingerprintFields(sess db.Session, machine string) []any {
 	return []any{
-		sess.ID, sess.Project, machine, sess.Agent,
-		sess.AgentLabel, sess.Entrypoint,
+		sess.ID, sess.Project, mirroredSessionMachine(sess, machine), sess.Agent,
+		sess.AgentLabel, sess.Entrypoint, sess.SessionKind,
 		nilString(sess.FirstMessage), nilString(sess.DisplayName),
 		nilString(sess.SessionName),
 		nilTime(sess.StartedAt), nilTime(sess.EndedAt),

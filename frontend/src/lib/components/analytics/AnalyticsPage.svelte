@@ -22,6 +22,7 @@
   import TopSessions from "./TopSessions.svelte";
   import ActiveFilters from "./ActiveFilters.svelte";
   import SessionFilterControl from "../filters/SessionFilterControl.svelte";
+  import SidebarToggleButton from "../layout/SidebarToggleButton.svelte";
   import FilterDropdown from "../usage/FilterDropdown.svelte";
   import { analytics } from "../../stores/analytics.svelte.js";
   import { analyticsPageDates } from "../../stores/analyticsPageDates.js";
@@ -508,8 +509,12 @@
 
 <div class="analytics-page">
   <div class="analytics-toolbar">
-    {#if !ui.sidebarOpen}
-      <div class="toolbar-filter-anchor">
+    {#if !ui.isMobileViewport && !ui.sidebarOpen}
+      <div
+        class="toolbar-filter-anchor"
+        data-sidebar-focus-region="content"
+      >
+        <SidebarToggleButton placement="content" />
         <SessionFilterControl
           showDisplay={false}
           showStarred={false}

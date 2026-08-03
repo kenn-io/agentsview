@@ -11,6 +11,8 @@ import (
 )
 
 func TestCanonicalCheckpointGolden(t *testing.T) {
+	t.Parallel()
+
 	cp := checkpoint{
 		Version:  checkpointFormatVersion,
 		Origin:   "laptop-a1b2c3",
@@ -32,6 +34,8 @@ func TestCanonicalCheckpointGolden(t *testing.T) {
 }
 
 func TestCanonicalManifestGolden(t *testing.T) {
+	t.Parallel()
+
 	ordinal := 2
 	parent := "parent-1"
 	name := "Fixture"
@@ -97,13 +101,15 @@ func TestCanonicalManifestGolden(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t,
-		"{\"data_version\":99,\"generation\":3,\"native_session_id\":\"sess-1\",\"origin\":\"laptop-a1b2c3\",\"raw_source\":{\"hash\":\"raw123\",\"media_type\":\"application/jsonl\",\"path\":\"claude/session.jsonl\",\"size\":4096},\"segments\":[\"seg222\",\"seg111\"],\"session\":{\"agent\":\"claude\",\"compaction_count\":0,\"consecutive_failure_max\":0,\"created_at\":\"2026-06-14T01:02:03Z\",\"edit_churn_count\":0,\"ended_at\":\"2026-06-14T01:03:03Z\",\"ended_with_role\":\"\",\"final_failure_streak\":0,\"first_message\":\"hello\",\"has_peak_context_tokens\":false,\"has_total_output_tokens\":false,\"id\":\"sess-1\",\"is_automated\":false,\"machine\":\"laptop-a1b2c3\",\"message_count\":2,\"mid_task_compaction_count\":0,\"outcome\":\"\",\"outcome_confidence\":\"\",\"parent_session_id\":\"parent-1\",\"peak_context_tokens\":0,\"project\":\"alpha\",\"relationship_type\":\"subagent\",\"secret_leak_count\":0,\"started_at\":\"2026-06-14T01:02:03Z\",\"tool_failure_signal_count\":0,\"tool_retry_count\":0,\"total_output_tokens\":42,\"user_message_count\":1},\"session_has_context_data\":true,\"session_has_tool_calls\":true,\"session_name\":\"Fixture\",\"session_quality_signals\":{\"duplicate_prompt_count\":6,\"missing_success_criteria_count\":4,\"missing_verification_count\":5,\"no_code_context_count\":7,\"runaway_tool_loop_count\":1,\"short_prompt_count\":2,\"unstructured_start\":true,\"version\":3},\"usage_events\":[{\"cost\":{\"microdollars\":31250},\"cost_source\":\"fixture\",\"cost_status\":\"known\",\"dedup_key\":\"usage-1\",\"input_tokens\":11,\"message_ordinal\":2,\"model\":\"claude-test\",\"occurred_at\":\"2026-06-14T01:02:04Z\",\"output_tokens\":7,\"source\":\"fixture\"}],\"v\":2}\n",
+		"{\"data_version\":99,\"generation\":3,\"native_session_id\":\"sess-1\",\"origin\":\"laptop-a1b2c3\",\"raw_source\":{\"hash\":\"raw123\",\"media_type\":\"application/jsonl\",\"path\":\"claude/session.jsonl\",\"size\":4096},\"segments\":[\"seg222\",\"seg111\"],\"session\":{\"agent\":\"claude\",\"compaction_count\":0,\"consecutive_failure_max\":0,\"created_at\":\"2026-06-14T01:02:03Z\",\"edit_churn_count\":0,\"ended_at\":\"2026-06-14T01:03:03Z\",\"ended_with_role\":\"\",\"final_failure_streak\":0,\"first_message\":\"hello\",\"has_peak_context_tokens\":false,\"has_total_output_tokens\":false,\"id\":\"sess-1\",\"is_automated\":false,\"machine\":\"laptop-a1b2c3\",\"message_count\":2,\"mid_task_compaction_count\":0,\"outcome\":\"\",\"outcome_confidence\":\"\",\"parent_session_id\":\"parent-1\",\"peak_context_tokens\":0,\"project\":\"alpha\",\"relationship_type\":\"subagent\",\"secret_leak_count\":0,\"started_at\":\"2026-06-14T01:02:03Z\",\"tool_failure_signal_count\":0,\"tool_retry_count\":0,\"total_output_tokens\":42,\"user_message_count\":1},\"session_has_context_data\":true,\"session_has_tool_calls\":true,\"session_name\":\"Fixture\",\"session_quality_signals\":{\"duplicate_prompt_count\":6,\"missing_success_criteria_count\":4,\"missing_verification_count\":5,\"no_code_context_count\":7,\"runaway_tool_loop_count\":1,\"short_prompt_count\":2,\"unstructured_start\":true,\"version\":3},\"usage_events\":[{\"cost\":{\"microdollars\":31250},\"cost_source\":\"fixture\",\"cost_status\":\"known\",\"dedup_key\":\"usage-1\",\"input_tokens\":11,\"message_ordinal\":2,\"model\":\"claude-test\",\"occurred_at\":\"2026-06-14T01:02:04Z\",\"output_tokens\":7,\"source\":\"fixture\"}],\"v\":3}\n",
 		string(data),
 	)
-	assert.Equal(t, "d84a3987c40f800f23ea943ebd50c0910c64444e6ff4b64b6f8a68782f7a32d6", hashHex(data))
+	assert.Equal(t, "855d1a7ed086095582cc94136837bcb93d74f4ad0cf446b0a77177d1b31aba23", hashHex(data))
 }
 
 func TestDecodeManifestRejectsUnsupportedOlderVersion(t *testing.T) {
+	t.Parallel()
+
 	data := []byte(`{
 		"v": 1,
 		"origin": "laptop-a1b2c3",
@@ -122,7 +128,44 @@ func TestDecodeManifestRejectsUnsupportedOlderVersion(t *testing.T) {
 	assert.Contains(t, err.Error(), "manifest has unsupported artifact version 1")
 }
 
+func TestDecodeManifestAcceptsPriorVersionWithoutSessionKind(t *testing.T) {
+	t.Parallel()
+
+	data := []byte(`{
+		"v": 2,
+		"origin": "laptop-a1b2c3",
+		"native_session_id": "sess-1",
+		"segments": [],
+		"session": {
+			"id": "sess-1",
+			"machine": "laptop-a1b2c3",
+			"agent": "claude",
+			"created_at": "2026-06-14T01:02:03Z"
+		}
+	}`)
+
+	decoded, err := decodeManifestWithLimits(data, productionArtifactLimits())
+	require.NoError(t, err)
+	assert.Equal(t, 2, decoded.Version)
+	assert.Empty(t, decoded.Session.SessionKind,
+		"v2 manifests predate session_kind and must decode with it empty")
+}
+
+func TestDecodeSegmentAcceptsPriorVersionWithoutPromptSource(t *testing.T) {
+	t.Parallel()
+
+	data := []byte("{\"content\":\"hello\",\"ordinal\":0,\"role\":\"user\",\"v\":1}\n")
+
+	msgs, err := decodeSegmentWithLimits(data, productionArtifactLimits())
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	assert.Empty(t, msgs[0].PromptSource,
+		"v1 segments predate prompt_source and must decode with it empty")
+}
+
 func TestCanonicalMessageSegmentGolden(t *testing.T) {
+	t.Parallel()
+
 	msgs := []db.Message{
 		{
 			ID:               99,
@@ -177,16 +220,46 @@ func TestCanonicalMessageSegmentGolden(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t,
-		"{\"claude_message_id\":\"msg-1\",\"claude_request_id\":\"req-1\",\"content\":\"world\",\"content_length\":5,\"has_output_tokens\":true,\"has_tool_use\":true,\"model\":\"claude-test\",\"ordinal\":2,\"output_tokens\":2,\"role\":\"assistant\",\"source_parent_uuid\":\"uuid-parent\",\"source_subtype\":\"assistant\",\"source_type\":\"jsonl\",\"source_uuid\":\"uuid-msg-1\",\"timestamp\":\"2026-06-14T01:02:05Z\",\"token_usage\":{\"input\":1,\"output\":2},\"tool_calls\":[{\"call_index\":0,\"category\":\"file\",\"file_path\":\"README.md\",\"input_json\":\"{\\\"file_path\\\":\\\"README.md\\\"}\",\"result_content\":\"file content\",\"result_content_length\":12,\"result_events\":[{\"agent_id\":\"agent-1\",\"content\":\"done\",\"content_length\":4,\"event_index\":0,\"source\":\"tool_result\",\"status\":\"success\",\"subagent_session_id\":\"child-1\",\"timestamp\":\"2026-06-14T01:02:06Z\",\"tool_use_id\":\"tool-1\"}],\"subagent_session_id\":\"child-1\",\"tool_name\":\"Read\",\"tool_use_id\":\"tool-1\"}],\"v\":1}\n",
+		"{\"claude_message_id\":\"msg-1\",\"claude_request_id\":\"req-1\",\"content\":\"world\",\"content_length\":5,\"has_output_tokens\":true,\"has_tool_use\":true,\"model\":\"claude-test\",\"ordinal\":2,\"output_tokens\":2,\"role\":\"assistant\",\"source_parent_uuid\":\"uuid-parent\",\"source_subtype\":\"assistant\",\"source_type\":\"jsonl\",\"source_uuid\":\"uuid-msg-1\",\"timestamp\":\"2026-06-14T01:02:05Z\",\"token_usage\":{\"input\":1,\"output\":2},\"tool_calls\":[{\"call_index\":0,\"category\":\"file\",\"file_path\":\"README.md\",\"input_json\":\"{\\\"file_path\\\":\\\"README.md\\\"}\",\"result_content\":\"file content\",\"result_content_length\":12,\"result_events\":[{\"agent_id\":\"agent-1\",\"content\":\"done\",\"content_length\":4,\"event_index\":0,\"source\":\"tool_result\",\"status\":\"success\",\"subagent_session_id\":\"child-1\",\"timestamp\":\"2026-06-14T01:02:06Z\",\"tool_use_id\":\"tool-1\"}],\"subagent_session_id\":\"child-1\",\"tool_name\":\"Read\",\"tool_use_id\":\"tool-1\"}],\"v\":2}\n",
 		string(data),
 	)
 	assert.NotContains(t, string(data), `"id"`)
 	assert.NotContains(t, string(data), `"session_id"`)
 	assert.NotContains(t, string(data), `"message_id"`)
-	assert.Equal(t, "f46c1edbc77dab4eb15f43bcb3ce196243c784445b07e9135c223b5d58c6dea5", hashHex(data))
+	assert.Equal(t, "e45219604ab58bb9685ac3dfb0f5cc5e865705e29dc8a985ccebe1b748a6d396", hashHex(data))
+}
+
+func TestEncodeSegmentPreservesPromptSource(t *testing.T) {
+	t.Parallel()
+
+	msgs := []db.Message{
+		{
+			ID:            1,
+			SessionID:     "sess-1",
+			Ordinal:       1,
+			Role:          "user",
+			Content:       "hello",
+			SourceType:    "jsonl",
+			SourceSubtype: "user",
+			PromptSource:  "typed",
+		},
+	}
+
+	data, err := encodeSegment(msgs)
+	require.NoError(t, err)
+
+	var decoded segmentMessage
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	assert.Equal(t, "typed", decoded.PromptSource)
+
+	restored := decoded.dbMessage()
+	assert.Equal(t, "typed", restored.PromptSource,
+		"import must carry prompt_source back into the db message")
 }
 
 func TestCanonicalMetadataEventGolden(t *testing.T) {
+	t.Parallel()
+
 	value := json.RawMessage(`{"display_name":"Renamed session"}`)
 	note := "remember this"
 	event := metadataEvent{

@@ -5,6 +5,120 @@ description: Release history for AgentsView
 
 ## Unreleased
 
+**Bug fixes**
+
+- Keep PostgreSQL serve startup audits compatible with valid multibyte text in
+  compressed rows on affected PostgreSQL minor releases.
+
+---
+
+## 0.40.0
+
+<small>2026-08-02</small>
+
+**New features**
+
+- Add a top-level **Data** workspace for inspecting the complete project
+  inventory, opening a project's observed folders, previewing full-archive
+  reclassification impact, and managing per-machine worktree mapping rules.
+- Add an experimental **Recall corpus browser** with extraction coverage,
+  project/type/generation/review-state filters, expandable entries, and links
+  from stored evidence to its source transcript. Recall remains local,
+  SQLite-only research functionality; see [Recall](/recall/) for its trust and
+  lifecycle limits.
+- Add an early, explicit **artifact folder transport** behind
+  `agentsview sync --target`: participating archives can publish normalized,
+  immutable session revisions, track target-specific progress, and import
+  supported peer checkpoints. This is not a finished general-purpose sync
+  service: it is manual, trusted-folder-only, excludes raw provider files and
+  mutable curation, and has no continuous scheduler or hosted transport. See
+  [Artifact Folder Sync](/artifact-sync/) for the current boundaries.
+- Add versioned `agentsview export hour`, `day`, and `digest` reporting
+  contracts with canonical JSON, exact UTC-hour correction, and content digests
+  for incremental reporting workflows.
+- Add `[[session_sources]]` for filesystem roots labeled by source machine.
+  Attribution is captured at first ingestion, survives local resync, and is
+  preserved when sessions are mirrored to PostgreSQL or DuckDB.
+- Add session support for **Omnigent** SQLite conversations and **Kimi Work**
+  desktop wire logs, including Kimi Work usage metrics when its logs provide
+  them.
+- Add server-wide **Agentsview** and **Matplotlib** chart color palettes under
+  **Settings > Appearance**.
+- Capture Claude Code's top-level `sessionKind` and per-prompt `promptSource`
+  metadata and preserve it through archive and artifact round trips.
+
+**Improvements**
+
+- Unify usage aggregation across reports and replace floating-point machine
+  money with exact integer microdollar values. Human-facing tables still render
+  ordinary dollar amounts; versioned JSON contracts use microdollar objects.
+- Show language choices by their native names and use Taiwan-specific
+  terminology throughout Traditional Chinese (`zh-TW`).
+- Replace the long Settings page with compact section navigation, and move the
+  session-sidebar toggle beside the filters it affects.
+- Present repository and worktree context more clearly, including readable path
+  labels and a wider tooltip for long or mixed-direction paths.
+- Let Recall extraction endpoints read API keys from named environment variables
+  instead of storing secrets in `config.toml`.
+- Refresh the daemon's LiteLLM pricing catalog daily and apply threshold-based
+  request pricing to each usage event before aggregation.
+
+**Bug fixes**
+
+- Preserve nested subagent hierarchies by linking every subagent to its actual
+  spawner instead of flattening deeper descendants under the root.
+- Keep active Codex sessions current across missing-path retries and repeated
+  stale-path resolutions.
+- Bound reconciliation, degraded-coverage polling, and remote sync to the
+  provider roots selected for that operation.
+- Preserve source-machine attribution in DuckDB mirrors.
+- Attribute sessions launched from Git worktrees to their repositories.
+- Interpret Devin CLI session timestamps as epoch seconds instead of
+  milliseconds.
+- Use Copilot execution events, rather than message boundaries, for tool timing.
+- Include Mistral Vibe provider cache-hit tokens in usage statistics.
+- Treat raw terminal API failures as errored outcomes.
+- Expand a leading `~` in DuckDB mirror paths.
+- Drop blank embedding inputs without reporting them as rejected records.
+- Preserve retry eligibility when synchronization repeatedly resolves an active
+  session through stale paths.
+
+**Acknowledgements**
+
+- Thanks to [Wes McKinney](https://github.com/wesm) for the Data and Recall
+  workspaces; artifact publication, peer import, and folder transport; Omnigent
+  support; nested-subagent, Codex freshness, repository attribution, and
+  remote-root fixes; and release documentation.
+- Thanks to [Marius van Niekerk](https://github.com/mariusvniekerk) for exact
+  microdollar accounting, chart palettes, compact Settings navigation, the
+  relocated sidebar toggle, path presentation, daily pricing refresh,
+  request-band pricing, and blank-embedding handling.
+- Thanks to [Matthew Jacobs](https://github.com/mjacobs) for versioned reporting
+  exports and preserved DuckDB source-machine attribution.
+- Thanks to [Erik Krogen](https://github.com/xkrogen) for machine-labeled
+  filesystem session sources.
+- Thanks to [潦草学者](https://github.com/liaocaoxuezhe) for unified usage metrics
+  and Kimi Work support.
+- Thanks to [Christo Wilken](https://github.com/TweedBeetle) for Claude Code
+  session-kind and prompt-source metadata.
+- Thanks to [BoX Fan](https://github.com/coffee0127) for native language names
+  and Taiwan-specific Traditional Chinese localization.
+- Thanks to [Rod Boev](https://github.com/rodboev) for scoped reconciliation,
+  degraded-coverage polling, and remote roots; terminal error outcomes; and
+  DuckDB path expansion.
+- Thanks to [John Riviello](https://github.com/JohnRiv) for correcting Devin
+  timestamps.
+- Thanks to [Grégoire](https://github.com/verdie-g) for Mistral Vibe cache-hit
+  usage.
+- Thanks to [Christina7](https://github.com/Christina7) for accurate Copilot
+  tool timing.
+- Thanks to [nb213](https://github.com/binyangzhu000-sudo) for Recall extraction
+  API-key environment variables.
+- Thanks to [cyre](https://github.com/diazMelgarejo) for keeping DuckDB
+  push-watch polling ownership scoped.
+- Thanks to [Alex Kreidler](https://github.com/alexkreidler) for bounding
+  persisted Claude tool-result reads.
+
 ---
 
 ## 0.39.0

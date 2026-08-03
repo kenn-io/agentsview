@@ -13,11 +13,15 @@
   import { router } from "../../stores/router.svelte.js";
   import type { Route } from "../../stores/router.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
+  import { sync } from "../../stores/sync.svelte.js";
+  import { settings } from "../../stores/settings.svelte.js";
   import {
     ActivityIcon,
     ChartColumnIcon,
+    DatabaseIcon,
     Grid2x2Icon,
     LayoutGridIcon,
+    LightbulbIcon,
     LogsIcon,
     PencilIcon,
     PinIcon,
@@ -73,6 +77,12 @@
           clampedLayoutWidth,
         )
       : SIDEBAR_WIDTH_DEFAULT,
+  );
+  const recallAvailable = $derived(
+    !sync.readOnly &&
+      !settings.readOnly &&
+      (sync.serverVersion !== null ||
+        (settings.loaded && settings.error === null)),
   );
 
   function handleBackdropClick() {
@@ -299,6 +309,7 @@
   {/if}
 
   <aside
+    id="session-sidebar"
     class="sidebar"
     class:open={ui.sidebarOpen}
     style:width={isDesktop ? `${sidebarWidth}px` : undefined}
@@ -336,6 +347,16 @@
         <ChartColumnIcon size="12" strokeWidth="2" aria-hidden="true" />
         {m.nav_trends()}
       </button>
+      {#if recallAvailable}
+        <button
+          class="mobile-nav-btn"
+          class:active={router.route === "recall"}
+          onclick={() => mobileNav("recall")}
+        >
+          <LightbulbIcon size="12" strokeWidth="2" aria-hidden="true" />
+          {m.nav_recall()}
+        </button>
+      {/if}
       <button
         class="mobile-nav-btn"
         class:active={router.route === "pinned"}
@@ -367,6 +388,14 @@
       >
         <PencilIcon size="12" strokeWidth="2" aria-hidden="true" />
         {m.nav_recent_edits()}
+      </button>
+      <button
+        class="mobile-nav-btn"
+        class:active={router.route === "data"}
+        onclick={() => mobileNav("data")}
+      >
+        <DatabaseIcon size="12" strokeWidth="2" aria-hidden="true" />
+        {m.nav_data()}
       </button>
     </nav>
     {@render sidebar()}

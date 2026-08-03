@@ -76,6 +76,14 @@ CREATE TABLE part (
 	data TEXT NOT NULL,
 	FOREIGN KEY (message_id) REFERENCES message(id)
 );
+
+-- SQLite does not index a foreign key automatically. Production OpenCode
+-- declares these, and the per-session freshness lookups depend on them, so the
+-- fixture must carry them or plan assertions prove nothing.
+CREATE INDEX message_session_time_created_id_idx
+	ON message (session_id, time_created, id);
+CREATE INDEX part_session_idx ON part (session_id);
+CREATE INDEX part_message_id_id_idx ON part (message_id, id);
 `
 
 func assertEq[T comparable](t *testing.T, name string, got, want T) {
@@ -83,14 +91,36 @@ func assertEq[T comparable](t *testing.T, name string, got, want T) {
 	assert.Equal(t, want, got, name)
 }
 
+type openCodeSeedExecer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
 type OpenCodeSeeder struct {
-	db *sql.DB
-	t  *testing.T
+	db   *sql.DB
+	exec openCodeSeedExecer
+	t    *testing.T
+}
+
+func (s *OpenCodeSeeder) executor() openCodeSeedExecer {
+	if s.exec != nil {
+		return s.exec
+	}
+	return s.db
+}
+
+func (s *OpenCodeSeeder) InTransaction(seed func(*OpenCodeSeeder)) {
+	s.t.Helper()
+	tx, err := s.db.Begin()
+	require.NoError(s.t, err, "begin seed transaction")
+	defer func() { _ = tx.Rollback() }()
+
+	seed(&OpenCodeSeeder{db: s.db, exec: tx, t: s.t})
+	require.NoError(s.t, tx.Commit(), "commit seed transaction")
 }
 
 func (s *OpenCodeSeeder) AddProject(id, worktree string) {
 	s.t.Helper()
-	_, err := s.db.Exec(`INSERT INTO project (id, worktree) VALUES (?, ?)`, id, worktree)
+	_, err := s.executor().Exec(`INSERT INTO project (id, worktree) VALUES (?, ?)`, id, worktree)
 	require.NoError(s.t, err, "add project")
 }
 
@@ -107,7 +137,7 @@ func (s *OpenCodeSeeder) AddSession(id, projectID, parentID, title string, timeC
 
 	// Omit directory so the same helper works on legacy schemas that
 	// lack the column; modern fixtures default directory to ''.
-	_, err := s.db.Exec(
+	_, err := s.executor().Exec(
 		`INSERT INTO session
 			(id, project_id, parent_id, title, time_created, time_updated)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
@@ -130,7 +160,7 @@ func (s *OpenCodeSeeder) AddSessionDirectory(
 		tStr = title
 	}
 
-	_, err := s.db.Exec(
+	_, err := s.executor().Exec(
 		`INSERT INTO session
 			(id, project_id, parent_id, title, directory,
 			 time_created, time_updated)
@@ -142,14 +172,14 @@ func (s *OpenCodeSeeder) AddSessionDirectory(
 
 func (s *OpenCodeSeeder) AddMessage(id, sessionID string, timeCreated, timeUpdated int64, data string) {
 	s.t.Helper()
-	_, err := s.db.Exec(`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`,
+	_, err := s.executor().Exec(`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`,
 		id, sessionID, timeCreated, timeUpdated, data)
 	require.NoError(s.t, err, "add message")
 }
 
 func (s *OpenCodeSeeder) AddPart(id, messageID, sessionID string, timeCreated, timeUpdated int64, data string) {
 	s.t.Helper()
-	_, err := s.db.Exec(`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`,
+	_, err := s.executor().Exec(`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`,
 		id, messageID, sessionID, timeCreated, timeUpdated, data)
 	require.NoError(s.t, err, "add part")
 }
@@ -160,6 +190,10 @@ func newTestDB(t *testing.T) (string, *OpenCodeSeeder, *sql.DB) {
 	copyOpenCodeSchemaTemplate(t, dbPath)
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err, "open test db")
+	// Close before TempDir cleanup: Windows cannot delete a database file
+	// that still has an open handle. Close is idempotent, so tests that
+	// close the writer themselves are unaffected.
+	t.Cleanup(func() { _ = db.Close() })
 
 	seeder := &OpenCodeSeeder{db: db, t: t}
 	return dbPath, seeder, db
@@ -1499,6 +1533,108 @@ func TestListOpenCodeSessionMeta_NonexistentDB(t *testing.T) {
 	metas, err := ListOpenCodeSessionMeta(dbPath)
 	require.NoError(t, err, "unexpected error")
 	assertEq(t, "metas len", len(metas), 0)
+}
+
+// TestListOpenCodeSessionWatermarkMeta pins the bounded changed-path listing:
+// on a composite-capable container it carries only the session-row watermark
+// (session and project time_updated, never child times) with no digest, so
+// listing every session touches no message or part rows.
+func TestListOpenCodeSessionWatermarkMeta(t *testing.T) {
+	dbPath, seeder, db := newTestDB(t)
+	defer db.Close()
+
+	seeder.AddProject("prj_1", "/home/user/code/app")
+	seeder.AddSession(
+		"ses_wm", "prj_1", "", "Watermark", 1700000000000, 1700000060000,
+	)
+	seeder.AddMessage(
+		"msg_1", "ses_wm", 1700000000000, 1700099999000, `{"role":"user"}`,
+	)
+	seeder.AddPart(
+		"prt_1", "msg_1", "ses_wm", 1700000000000, 1700099999000,
+		`{"type":"text","text":"hi"}`,
+	)
+	// Project row above the session row: the watermark is MAX(session,
+	// project). Child rows sit above both and must NOT be reflected.
+	_, err := db.Exec(
+		"UPDATE project SET time_updated = ? WHERE id = ?",
+		1700000070000, "prj_1",
+	)
+	require.NoError(t, err, "raise project time")
+
+	metas, err := ListOpenCodeSessionWatermarkMeta(dbPath)
+	require.NoError(t, err, "ListOpenCodeSessionWatermarkMeta")
+	require.Len(t, metas, 1)
+
+	m := metas[0]
+	assert.Equal(t, "ses_wm", m.SessionID)
+	assert.Equal(t, dbPath+"#ses_wm", m.VirtualPath)
+	assert.True(t, m.WatermarkOnly, "composite container must list watermark-only")
+	assert.True(t, m.CompositeMtime)
+	assert.Empty(t, m.ChildDigest, "watermark listing must not resolve the child digest")
+	assert.Equal(t, int64(1700000070000)*1_000_000, m.FileMtime,
+		"watermark must be MAX(session, project) and exclude child times")
+}
+
+// TestOpenCodeChildDigestMetadataWatermarkNS pins the digest round-trip the
+// watcher's like-for-like comparison depends on: the session/project times a
+// digest embeds must come back out as the metadata watermark, and every
+// other hash shape must be rejected so callers fall back to the composite.
+func TestOpenCodeChildDigestMetadataWatermarkNS(t *testing.T) {
+	agg := openCodeChildAggregate{
+		watermark:    1700000099000,
+		sessionTime:  1700000060000,
+		projectTime:  1700000070000,
+		messages:     2,
+		parts:        5,
+		messageIdent: "m1:1",
+		partIdent:    "p1:1",
+	}
+	got, ok := OpenCodeChildDigestMetadataWatermarkNS(agg.digest(true))
+	require.True(t, ok, "digest must round-trip its metadata watermark")
+	assert.Equal(t, int64(1700000070000)*1_000_000, got,
+		"metadata watermark must be MAX(session, project), not the composite")
+
+	for _, hash := range []string{
+		"",
+		agg.digest(false),
+		openCodeStorageFingerprintPrefix + "abcdef",
+		"opencode-child:v2:1:2:3:4:5:aabb",
+		"opencode-child:v1:1:2:3",
+		"opencode-child:v1:x:2:3:4:5:aabb",
+		"opencode-child:v1:1:x:3:4:5:aabb",
+		"opencode-child:v1:1:2:x:4:5:aabb",
+	} {
+		_, ok := OpenCodeChildDigestMetadataWatermarkNS(hash)
+		assert.False(t, ok, "hash %q must be rejected", hash)
+	}
+}
+
+// TestListOpenCodeSessionWatermarkMeta_LegacySchema pins that containers
+// without composite support keep the full listing's shape: session-only
+// mtime, no composite, and no watermark-only marker, so the engine never
+// watermark-skips a session whose only change signal is the container size.
+func TestListOpenCodeSessionWatermarkMeta_LegacySchema(t *testing.T) {
+	dbPath, seeder, db := newLegacyOpenCodeTestDB(t)
+	defer db.Close()
+
+	seeder.AddProject("prj_legacy", "/home/user/code/legacy-app")
+	seeder.AddSession(
+		"ses_legacy", "prj_legacy", "", "Legacy", 1700000000000, 1700000060000,
+	)
+
+	metas, err := ListOpenCodeSessionWatermarkMeta(dbPath)
+	require.NoError(t, err, "ListOpenCodeSessionWatermarkMeta legacy")
+	require.Len(t, metas, 1)
+
+	full, err := ListOpenCodeSessionMeta(dbPath)
+	require.NoError(t, err, "ListOpenCodeSessionMeta legacy")
+	require.Len(t, full, 1)
+
+	assert.False(t, metas[0].WatermarkOnly,
+		"legacy containers must not be marked watermark-only")
+	assert.Equal(t, full[0], metas[0],
+		"legacy watermark listing must match the full listing")
 }
 
 // TestParseOpenCodeDB_TokenUsage verifies that an assistant

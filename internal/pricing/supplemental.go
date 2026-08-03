@@ -49,6 +49,12 @@ var kimiAmbiguousDateAliases = []string{
 	"kimi-for-coding",
 }
 
+// kimiK26Aliases are explicit K2.6 model names reported by Kimi runtimes.
+// Unlike the aliases above, these never cross the K2.6/K3 date boundary.
+var kimiK26Aliases = []string{
+	"k2d6-agent",
+}
+
 // DateAliasedModels returns the sorted unqualified date-ambiguous
 // alias names, copied for caller safety. Used by the pricing seed
 // (deleting stale flat rows) and by SQL backends that must compute the
@@ -57,26 +63,40 @@ func DateAliasedModels() []string {
 	return slices.Clone(kimiAmbiguousDateAliases)
 }
 
+// KimiK26Aliases returns the sorted unqualified aliases that always resolve
+// to the canonical K2.6 pricing model.
+func KimiK26Aliases() []string {
+	return slices.Clone(kimiK26Aliases)
+}
+
 // isDateAliasedModel reports whether model is one of the
 // date-ambiguous aliases. A provider prefix is ignored
 // ("kimi-code/kimi-for-coding" is the same alias), matching how
 // ResolveMatch strips provider prefixes in its canonical fallback.
 func isDateAliasedModel(model string) bool {
-	name := model
-	if idx := strings.LastIndex(name, "/"); idx != -1 {
-		name = name[idx+1:]
-	}
-	return slices.Contains(kimiAmbiguousDateAliases, name)
+	return slices.Contains(kimiAmbiguousDateAliases, kimiAliasName(model))
 }
 
-// CanonicalModelForDate maps a date-ambiguous alias to the canonical
-// pricing model for timestamp t: KimiK26Canonical before
-// KimiModelEraCutoff, KimiK3Canonical at or after it. It returns ""
-// for any other model. A zero time (missing or unparseable row
-// timestamp) falls back to the post-cutoff K3 model so aggregated
-// paths without a usable timestamp price at current rates rather than
-// silently using the retired K2.6 era.
+func isKimiK26Alias(model string) bool {
+	return slices.Contains(kimiK26Aliases, kimiAliasName(model))
+}
+
+func kimiAliasName(model string) string {
+	if idx := strings.LastIndex(model, "/"); idx != -1 {
+		return model[idx+1:]
+	}
+	return model
+}
+
+// CanonicalModelForDate maps a Kimi runtime alias to its canonical pricing
+// model. Explicit K2.6 aliases always map to KimiK26Canonical. Date-ambiguous
+// aliases map to KimiK26Canonical before KimiModelEraCutoff and KimiK3Canonical
+// at or after it. It returns "" for any other model. A zero time falls back to
+// the post-cutoff K3 model only for date-ambiguous aliases.
 func CanonicalModelForDate(model string, t time.Time) string {
+	if isKimiK26Alias(model) {
+		return KimiK26Canonical
+	}
 	if !isDateAliasedModel(model) {
 		return ""
 	}
@@ -86,11 +106,14 @@ func CanonicalModelForDate(model string, t time.Time) string {
 	return KimiK26Canonical
 }
 
-// CanonicalModelForTimestamp is CanonicalModelForDate for rows whose
-// timestamp is stored as an RFC3339/RFC3339Nano string. An empty or
-// unparseable timestamp falls back to the post-cutoff K3 model, same
-// as a zero time.
+// CanonicalModelForTimestamp is CanonicalModelForDate for rows whose timestamp
+// is stored as RFC3339/RFC3339Nano. Fixed aliases do not require a timestamp;
+// an empty or unparseable timestamp falls back to K3 only for date-ambiguous
+// aliases.
 func CanonicalModelForTimestamp(model, ts string) string {
+	if isKimiK26Alias(model) {
+		return KimiK26Canonical
+	}
 	if !isDateAliasedModel(model) {
 		return ""
 	}

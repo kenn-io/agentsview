@@ -42,6 +42,13 @@ func ClassifyOutcome(in OutcomeInput) OutcomeResult {
 		return OutcomeResult{"unknown", "low", false}
 	}
 
+	if in.EndedWithRole == "assistant" && hasTerminalAPIErrorText(in.LastAssistantText) {
+		if isRecent(in.LastActivity) {
+			return OutcomeResult{"unknown", "low", true}
+		}
+		return OutcomeResult{"errored", "medium", false}
+	}
+
 	if in.MessageCount == 2 && in.EndedWithRole == "assistant" {
 		return OutcomeResult{"completed", "medium", false}
 	}
@@ -92,4 +99,9 @@ func hasGiveUpPattern(text string) bool {
 		}
 	}
 	return false
+}
+
+func hasTerminalAPIErrorText(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	return strings.HasPrefix(lower, "api error:")
 }

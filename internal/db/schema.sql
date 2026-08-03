@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     agent       TEXT NOT NULL DEFAULT 'claude',
     agent_label TEXT NOT NULL DEFAULT '',
     entrypoint  TEXT NOT NULL DEFAULT '',
+    session_kind TEXT NOT NULL DEFAULT '',
     first_message TEXT,
     display_name TEXT,
     session_name TEXT,
@@ -33,6 +34,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     local_modified_at TEXT,
     transcript_revision TEXT NOT NULL DEFAULT '0',
     parent_session_id TEXT,
+    parser_parent_session_id TEXT,
     relationship_type TEXT NOT NULL DEFAULT '',
     total_output_tokens INTEGER NOT NULL DEFAULT 0,
     peak_context_tokens INTEGER NOT NULL DEFAULT 0,
@@ -129,6 +131,7 @@ CREATE TABLE IF NOT EXISTS messages (
     claude_request_id TEXT NOT NULL DEFAULT '',
     source_type TEXT NOT NULL DEFAULT '',
     source_subtype TEXT NOT NULL DEFAULT '',
+    prompt_source TEXT NOT NULL DEFAULT '',
     source_uuid TEXT NOT NULL DEFAULT '',
     source_parent_uuid TEXT NOT NULL DEFAULT '',
     is_sidechain INTEGER NOT NULL DEFAULT 0,
@@ -457,6 +460,16 @@ CREATE TABLE IF NOT EXISTS recall_corpus_state (
 );
 INSERT OR IGNORE INTO recall_corpus_state (singleton, revision) VALUES (1, 0);
 
+-- Ranked Recall pagination must be invalidated by every entry or evidence
+-- mutation that can change query membership, ordering, or score. This is
+-- deliberately separate from recall_corpus_state: embedding freshness only
+-- tracks the accepted fields sent to the embedding provider.
+CREATE TABLE IF NOT EXISTS recall_query_state (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    revision  INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO recall_query_state (singleton, revision) VALUES (1, 0);
+
 -- Compact per-entry mutation sequence for bounded Recall vector refreshes.
 -- One row per identity is enough: an incremental reader needs only the latest
 -- state after its completed corpus revision, not every intermediate edit.
@@ -509,6 +522,22 @@ BEGIN
     ON CONFLICT(entry_id) DO UPDATE SET revision = excluded.revision;
 END;
 
+DROP TRIGGER IF EXISTS trg_recall_query_entry_insert;
+DROP TRIGGER IF EXISTS trg_recall_query_entry_update;
+DROP TRIGGER IF EXISTS trg_recall_query_entry_delete;
+CREATE TRIGGER IF NOT EXISTS trg_recall_query_entry_insert
+AFTER INSERT ON recall_entries BEGIN
+    UPDATE recall_query_state SET revision = revision + 1 WHERE singleton = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_recall_query_entry_update
+AFTER UPDATE ON recall_entries BEGIN
+    UPDATE recall_query_state SET revision = revision + 1 WHERE singleton = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_recall_query_entry_delete
+AFTER DELETE ON recall_entries BEGIN
+    UPDATE recall_query_state SET revision = revision + 1 WHERE singleton = 1;
+END;
+
 -- Recall-entry deletion journal: preserves the identity of hard-deleted
 -- entries long enough for an incremental vector refresh to remove their
 -- disposable mirror documents without scanning the complete served corpus.
@@ -559,6 +588,22 @@ CREATE INDEX IF NOT EXISTS idx_recall_evidence_entry
     ON recall_evidence(entry_id);
 CREATE INDEX IF NOT EXISTS idx_recall_evidence_session
     ON recall_evidence(session_id);
+
+DROP TRIGGER IF EXISTS trg_recall_query_evidence_insert;
+DROP TRIGGER IF EXISTS trg_recall_query_evidence_update;
+DROP TRIGGER IF EXISTS trg_recall_query_evidence_delete;
+CREATE TRIGGER IF NOT EXISTS trg_recall_query_evidence_insert
+AFTER INSERT ON recall_evidence BEGIN
+    UPDATE recall_query_state SET revision = revision + 1 WHERE singleton = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_recall_query_evidence_update
+AFTER UPDATE ON recall_evidence BEGIN
+    UPDATE recall_query_state SET revision = revision + 1 WHERE singleton = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_recall_query_evidence_delete
+AFTER DELETE ON recall_evidence BEGIN
+    UPDATE recall_query_state SET revision = revision + 1 WHERE singleton = 1;
+END;
 
 -- Append-only demand and exposure snapshots. Exposures deliberately do not
 -- reference recall_entries: measurements must survive recall/session deletion
@@ -707,14 +752,15 @@ CREATE TABLE IF NOT EXISTS remote_skipped_files (
 );
 
 CREATE TABLE IF NOT EXISTS worktree_project_mappings (
-    id          INTEGER PRIMARY KEY,
-    machine     TEXT NOT NULL,
-    path_prefix TEXT NOT NULL,
-    layout      TEXT NOT NULL DEFAULT 'explicit',
-    project     TEXT NOT NULL,
-    enabled     INTEGER NOT NULL DEFAULT 1,
-    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    id               INTEGER PRIMARY KEY,
+    machine          TEXT NOT NULL,
+    path_prefix      TEXT NOT NULL,
+    layout           TEXT NOT NULL DEFAULT 'explicit',
+    project          TEXT NOT NULL,
+    original_project TEXT NOT NULL DEFAULT '',
+    enabled          INTEGER NOT NULL DEFAULT 1,
+    created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     UNIQUE(machine, path_prefix)
 );
 
@@ -779,6 +825,11 @@ CREATE TABLE IF NOT EXISTS session_project_identity_snapshots (
     key                TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
+
+CREATE INDEX IF NOT EXISTS idx_session_project_identity_snapshots_evidence
+    ON session_project_identity_snapshots(
+        machine, root_path, git_remote, observed_at DESC, session_id
+    );
 
 CREATE TABLE IF NOT EXISTS background_migrations (
     name            TEXT PRIMARY KEY,
@@ -1000,11 +1051,102 @@ BEGIN
         project = excluded.project, revision = excluded.revision, deleted = 0;
 END;
 
+-- Compact publication journal for worktree project mappings, mirroring the
+-- project identity publication journal above. It retains the latest change
+-- per (machine, path_prefix) key so mirror pushes can publish bounded deltas
+-- while preserving tombstones for targets that have been offline.
+CREATE TABLE IF NOT EXISTS worktree_project_mapping_changes (
+    machine     TEXT NOT NULL,
+    path_prefix TEXT NOT NULL,
+    revision    INTEGER NOT NULL,
+    deleted     INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
+    PRIMARY KEY (machine, path_prefix)
+);
+
+CREATE INDEX IF NOT EXISTS idx_worktree_project_mapping_changes_revision
+    ON worktree_project_mapping_changes(revision);
+
+DROP TRIGGER IF EXISTS trg_worktree_project_mappings_revision_insert;
+DROP TRIGGER IF EXISTS trg_worktree_project_mappings_revision_update;
+DROP TRIGGER IF EXISTS trg_worktree_project_mappings_revision_delete;
+
+CREATE TRIGGER IF NOT EXISTS trg_worktree_project_mappings_revision_insert
+AFTER INSERT ON worktree_project_mappings
+BEGIN
+    INSERT INTO archive_metadata (key, value)
+    VALUES ('worktree_mapping_publication_revision', '1')
+    ON CONFLICT(key) DO UPDATE SET
+        value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+    INSERT INTO worktree_project_mapping_changes
+        (machine, path_prefix, revision, deleted)
+    VALUES (NEW.machine, NEW.path_prefix,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'worktree_mapping_publication_revision'), 0)
+    ON CONFLICT(machine, path_prefix) DO UPDATE SET
+        revision = excluded.revision, deleted = 0;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_worktree_project_mappings_revision_update
+AFTER UPDATE ON worktree_project_mappings
+BEGIN
+    INSERT INTO archive_metadata (key, value)
+    VALUES ('worktree_mapping_publication_revision', '1')
+    ON CONFLICT(key) DO UPDATE SET
+        value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+    INSERT INTO worktree_project_mapping_changes
+        (machine, path_prefix, revision, deleted)
+    VALUES (OLD.machine, OLD.path_prefix,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'worktree_mapping_publication_revision'), 1)
+    ON CONFLICT(machine, path_prefix) DO UPDATE SET
+        revision = excluded.revision, deleted = 1;
+    INSERT INTO worktree_project_mapping_changes
+        (machine, path_prefix, revision, deleted)
+    VALUES (NEW.machine, NEW.path_prefix,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'worktree_mapping_publication_revision'), 0)
+    ON CONFLICT(machine, path_prefix) DO UPDATE SET
+        revision = excluded.revision, deleted = 0;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_worktree_project_mappings_revision_delete
+AFTER DELETE ON worktree_project_mappings
+BEGIN
+    INSERT INTO archive_metadata (key, value)
+    VALUES ('worktree_mapping_publication_revision', '1')
+    ON CONFLICT(key) DO UPDATE SET
+        value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+    INSERT INTO worktree_project_mapping_changes
+        (machine, path_prefix, revision, deleted)
+    VALUES (OLD.machine, OLD.path_prefix,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'worktree_mapping_publication_revision'), 1)
+    ON CONFLICT(machine, path_prefix) DO UPDATE SET
+        revision = excluded.revision, deleted = 1;
+END;
+
 -- PG sync state: stores watermarks for push sync
 CREATE TABLE IF NOT EXISTS pg_sync_state (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- Durable child IDs awaiting spawn-edge hierarchy reconciliation. One row per
+-- child keeps queue additions O(changed children) instead of rewriting an
+-- accumulated JSON value on every source processed by bulk sync.
+CREATE TABLE IF NOT EXISTS subagent_parent_repair_queue (
+    session_id TEXT PRIMARY KEY
+) WITHOUT ROWID;
+
+-- Subset of queued hierarchy repairs whose pre-write spawn edge may have been
+-- removed. Only these captured former children are eligible for destructive
+-- dangling-parent cleanup; ordinary changed-session seeds are relink-only.
+CREATE TABLE IF NOT EXISTS subagent_parent_cleanup_queue (
+    session_id TEXT PRIMARY KEY
+) WITHOUT ROWID;
 
 -- Model pricing for cost calculation
 CREATE TABLE IF NOT EXISTS model_pricing (
@@ -1015,6 +1157,19 @@ CREATE TABLE IF NOT EXISTS model_pricing (
     cache_read_microdollars_per_mtok     INTEGER NOT NULL DEFAULT 0,
     updated_at       TEXT NOT NULL
         DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE TABLE IF NOT EXISTS model_pricing_bands (
+    model_pattern TEXT NOT NULL
+        REFERENCES model_pricing(model_pattern) ON DELETE CASCADE,
+    above_input_tokens INTEGER NOT NULL CHECK (above_input_tokens > 0),
+    input_microdollars_per_mtok INTEGER NOT NULL,
+    output_microdollars_per_mtok INTEGER NOT NULL,
+    cache_creation_microdollars_per_mtok INTEGER NOT NULL,
+    cache_read_microdollars_per_mtok INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (model_pattern, above_input_tokens)
 );
 
 -- Git aggregation TTL cache: memoizes `git log --numstat` and

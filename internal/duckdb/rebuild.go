@@ -81,7 +81,7 @@ func ensureMirrorWorkDir(path string) (string, error) {
 // rebuildMirror builds a fresh DuckDB mirror file from scratch in a
 // temporary file inside the mirror's work directory, then atomically swaps
 // it over path. It is
-// the only way a schema v6 mirror is created or repaired: unlike Sync.Push,
+// the only way a schema v8 mirror is created or repaired: unlike Sync.Push,
 // it never touches an existing mirror file in place, so a rebuild that
 // fails at any point leaves the previous mirror (if any) fully intact.
 func rebuildMirror(
@@ -268,6 +268,9 @@ type rebuildSnapshot struct {
 	// rebuild's *db.DB handle is open, so capturing it here is a convenience
 	// rather than a race guard.
 	sourceDatabaseID string
+	// sourceArchiveID is the stable provenance identity stamped onto every
+	// mirrored row. A repair can change it without changing database_id.
+	sourceArchiveID string
 }
 
 // captureRebuildSnapshot reads the state tokens rebuildMirror needs to seed
@@ -284,10 +287,17 @@ func captureRebuildSnapshot(ctx context.Context, local *db.DB) (rebuildSnapshot,
 			"reading local archive database id: %w", err,
 		)
 	}
+	sourceArchiveID, err := local.GetArchiveID(ctx)
+	if err != nil {
+		return rebuildSnapshot{}, fmt.Errorf(
+			"reading local archive id: %w", err,
+		)
+	}
 	return rebuildSnapshot{
 		cutoff:           time.Now().UTC().Format(localSyncTimestampLayout),
 		deletionRevision: deletionRevision,
 		sourceDatabaseID: sourceDatabaseID,
+		sourceArchiveID:  sourceArchiveID,
 	}, nil
 }
 
@@ -320,12 +330,18 @@ func buildMirrorInto(
 			"rebuild failed with %d session push errors", result.Errors,
 		)
 	}
-	identityRevision, err := s.syncProjectIdentityObservations(ctx, 0, true)
+	identityRevision, err := s.syncProjectIdentityObservations(ctx, 0, true, nil)
+	if err != nil {
+		return result, err
+	}
+	mappingRevision, err := s.syncWorktreeMappings(ctx, 0, true)
 	if err != nil {
 		return result, err
 	}
 	scope := canonicalPushScope(opts.Projects, opts.ExcludeProjects)
-	if err := s.writeRebuildMetadata(ctx, scope, snapshot, identityRevision); err != nil {
+	if err := s.writeRebuildMetadata(
+		ctx, scope, snapshot, identityRevision, mappingRevision,
+	); err != nil {
 		return result, err
 	}
 	if _, err := s.duck.ExecContext(ctx, "CHECKPOINT"); err != nil {
@@ -347,6 +363,9 @@ func (s *Sync) pushEverything(
 	ctx context.Context, onProgress func(PushProgress),
 ) (PushResult, error) {
 	var result PushResult
+	if err := s.ensureArchiveID(ctx); err != nil {
+		return result, err
+	}
 	if err := s.syncModelPricing(ctx); err != nil {
 		return result, err
 	}
@@ -428,18 +447,21 @@ func (s *Sync) pushEverything(
 // hard-deleted during the rebuild fall permanently outside the next
 // incremental push's window.
 func (s *Sync) writeRebuildMetadata(
-	ctx context.Context, scope string, snapshot rebuildSnapshot, identityRevision int64,
+	ctx context.Context, scope string, snapshot rebuildSnapshot,
+	identityRevision, mappingRevision int64,
 ) error {
 	return writeMirrorMetadata(ctx, s.duck, mirrorMetadata{
 		SchemaVersion:    SchemaVersion,
 		DataVersion:      db.CurrentDataVersion(),
 		SourceDatabaseID: snapshot.sourceDatabaseID,
+		SourceArchiveID:  snapshot.sourceArchiveID,
 		Scope:            scope,
 		LastPushCutoff:   snapshot.cutoff,
 		LastPushAt:       time.Now().UTC().Format(time.RFC3339),
 		LastPushMachine:  s.machine,
 		DeletionRevision: snapshot.deletionRevision,
 		IdentityRevision: identityRevision,
+		MappingRevision:  mappingRevision,
 	})
 }
 

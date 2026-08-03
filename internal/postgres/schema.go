@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     agent              TEXT NOT NULL,
     agent_label        TEXT NOT NULL DEFAULT '',
     entrypoint         TEXT NOT NULL DEFAULT '',
+    session_kind       TEXT NOT NULL DEFAULT '',
     first_message      TEXT,
     display_name       TEXT,
     source_display_name TEXT,
@@ -63,6 +64,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     message_count      INT NOT NULL DEFAULT 0,
     user_message_count INT NOT NULL DEFAULT 0,
     parent_session_id  TEXT,
+    parser_parent_session_id TEXT,
     relationship_type  TEXT NOT NULL DEFAULT '',
     total_output_tokens INT NOT NULL DEFAULT 0,
     peak_context_tokens INT NOT NULL DEFAULT 0,
@@ -93,6 +95,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     runaway_tool_loop_count   INT NOT NULL DEFAULT 0,
     termination_status        TEXT,
     transcript_revision       TEXT NOT NULL DEFAULT '0',
+    source_archive_id          TEXT NOT NULL DEFAULT '',
+    source_database_generation TEXT NOT NULL DEFAULT '',
+    file_path                  TEXT,
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -121,6 +126,7 @@ CREATE TABLE IF NOT EXISTS messages (
     claude_request_id  TEXT NOT NULL DEFAULT '',
     source_type        TEXT NOT NULL DEFAULT '',
     source_subtype     TEXT NOT NULL DEFAULT '',
+    prompt_source      TEXT NOT NULL DEFAULT '',
     source_uuid        TEXT NOT NULL DEFAULT '',
     source_parent_uuid TEXT NOT NULL DEFAULT '',
     is_sidechain       BOOLEAN NOT NULL DEFAULT FALSE,
@@ -243,6 +249,18 @@ CREATE TABLE IF NOT EXISTS model_pricing (
     updated_at TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS model_pricing_bands (
+    model_pattern TEXT NOT NULL
+        REFERENCES model_pricing(model_pattern) ON DELETE CASCADE,
+    above_input_tokens BIGINT NOT NULL CHECK (above_input_tokens > 0),
+    input_microdollars_per_mtok BIGINT NOT NULL,
+    output_microdollars_per_mtok BIGINT NOT NULL,
+    cache_creation_microdollars_per_mtok BIGINT NOT NULL,
+    cache_read_microdollars_per_mtok BIGINT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (model_pattern, above_input_tokens)
+);
+
 CREATE TABLE IF NOT EXISTS source_archives (
     source_archive_id   TEXT PRIMARY KEY,
     source_archive_salt TEXT NOT NULL
@@ -274,6 +292,29 @@ CREATE TABLE IF NOT EXISTS source_project_identity_observations (
 CREATE INDEX IF NOT EXISTS idx_source_project_identity_observations_project
     ON source_project_identity_observations (project);
 
+CREATE TABLE IF NOT EXISTS source_project_identity_observation_scopes (
+    source_archive_id TEXT NOT NULL,
+    project           TEXT NOT NULL,
+    machine           TEXT NOT NULL,
+    root_path         TEXT NOT NULL DEFAULT '',
+    git_remote        TEXT NOT NULL DEFAULT '',
+    publication_scope TEXT NOT NULL,
+    PRIMARY KEY (
+        source_archive_id, project, machine, root_path, git_remote,
+        publication_scope
+    ),
+    FOREIGN KEY (
+        source_archive_id, project, machine, root_path, git_remote
+    ) REFERENCES source_project_identity_observations (
+        source_archive_id, project, machine, root_path, git_remote
+    ) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_project_identity_observation_scopes_scope
+    ON source_project_identity_observation_scopes (
+        source_archive_id, publication_scope
+    );
+
 CREATE TABLE IF NOT EXISTS source_session_project_identity_snapshots (
     source_archive_id          TEXT NOT NULL,
     source_database_generation TEXT NOT NULL,
@@ -303,6 +344,59 @@ CREATE TABLE IF NOT EXISTS source_session_project_identity_snapshots (
 CREATE INDEX IF NOT EXISTS idx_source_session_project_identity_snapshots_project
     ON source_session_project_identity_snapshots (
         source_archive_id, project
+    );
+
+CREATE TABLE IF NOT EXISTS source_session_project_identity_snapshot_scopes (
+    source_archive_id          TEXT NOT NULL,
+    source_database_generation TEXT NOT NULL,
+    source_session_id          TEXT NOT NULL,
+    publication_scope          TEXT NOT NULL,
+    PRIMARY KEY (
+        source_archive_id, source_database_generation, source_session_id,
+        publication_scope
+    ),
+    FOREIGN KEY (
+        source_archive_id, source_database_generation, source_session_id
+    ) REFERENCES source_session_project_identity_snapshots (
+        source_archive_id, source_database_generation, source_session_id
+    ) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_session_project_identity_snapshot_scopes_scope
+    ON source_session_project_identity_snapshot_scopes (
+        source_archive_id, publication_scope
+    );
+
+CREATE TABLE IF NOT EXISTS source_worktree_project_mappings (
+    source_archive_id TEXT NOT NULL,
+    machine           TEXT NOT NULL,
+    path_prefix       TEXT NOT NULL,
+    layout            TEXT NOT NULL DEFAULT 'explicit',
+    project           TEXT NOT NULL DEFAULT '',
+    original_project  TEXT NOT NULL DEFAULT '',
+    enabled           BOOLEAN NOT NULL DEFAULT TRUE,
+    updated_at        TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (source_archive_id, machine, path_prefix)
+);
+
+CREATE TABLE IF NOT EXISTS source_worktree_project_mapping_scopes (
+    source_archive_id TEXT NOT NULL,
+    machine           TEXT NOT NULL,
+    path_prefix       TEXT NOT NULL,
+    publication_scope TEXT NOT NULL,
+    PRIMARY KEY (
+        source_archive_id, machine, path_prefix, publication_scope
+    ),
+    FOREIGN KEY (
+        source_archive_id, machine, path_prefix
+    ) REFERENCES source_worktree_project_mappings (
+        source_archive_id, machine, path_prefix
+    ) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_worktree_project_mapping_scopes_scope
+    ON source_worktree_project_mapping_scopes (
+        source_archive_id, publication_scope
     );
 
 CREATE TABLE IF NOT EXISTS tool_calls (
@@ -490,6 +584,7 @@ func migrateMoneyColumnsPG(
 	existingColumns, err = loadExistingColumns(
 		ctx, tx, nil,
 		"usage_events", "cursor_usage_events", "model_pricing",
+		"model_pricing_bands",
 	)
 	if err != nil {
 		return err
@@ -703,6 +798,11 @@ func EnsureSchema(
 			"sessions", "deletion_cause",
 			`deletion_cause TEXT`,
 			"adding sessions.deletion_cause",
+		},
+		{
+			"sessions", "parser_parent_session_id",
+			`parser_parent_session_id TEXT`,
+			"adding sessions.parser_parent_session_id",
 		},
 		{
 			"sessions", "total_output_tokens",
@@ -950,6 +1050,11 @@ func EnsureSchema(
 			"adding messages.source_subtype",
 		},
 		{
+			"messages", "prompt_source",
+			`prompt_source TEXT NOT NULL DEFAULT ''`,
+			"adding messages.prompt_source",
+		},
+		{
 			"messages", "source_uuid",
 			`source_uuid TEXT NOT NULL DEFAULT ''`,
 			"adding messages.source_uuid",
@@ -1005,6 +1110,11 @@ func EnsureSchema(
 			"adding sessions.entrypoint",
 		},
 		{
+			"sessions", "session_kind",
+			`session_kind TEXT NOT NULL DEFAULT ''`,
+			"adding sessions.session_kind",
+		},
+		{
 			"source_project_identity_observations", "source_archive_id",
 			`source_archive_id TEXT NOT NULL DEFAULT ''`,
 			"adding source_project_identity_observations.source_archive_id",
@@ -1044,11 +1154,27 @@ func EnsureSchema(
 			`remote_candidate_count INT NOT NULL DEFAULT 0`,
 			"adding source_project_identity_observations.remote_candidate_count",
 		},
+		{
+			"sessions", "source_archive_id",
+			`source_archive_id TEXT NOT NULL DEFAULT ''`,
+			"adding sessions.source_archive_id",
+		},
+		{
+			"sessions", "source_database_generation",
+			`source_database_generation TEXT NOT NULL DEFAULT ''`,
+			"adding sessions.source_database_generation",
+		},
+		{
+			"sessions", "file_path",
+			`file_path TEXT`,
+			"adding sessions.file_path",
+		},
 	}
 	step = time.Now()
 	existingColumns, err := loadExistingColumns(
 		ctx, db, alters,
 		"usage_events", "cursor_usage_events", "model_pricing",
+		"model_pricing_bands",
 	)
 	if err != nil {
 		return err
@@ -2142,7 +2268,7 @@ func CheckSchemaCompat(
 			context_tokens, output_tokens,
 			has_context_tokens, has_output_tokens,
 			claude_message_id, claude_request_id,
-			source_type, source_subtype, source_uuid,
+			source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain,
 			is_compact_boundary
 		 FROM messages LIMIT 0`)
@@ -2229,6 +2355,7 @@ func CheckSchemaCompat(
 	}
 	rows.Close()
 
+	hasModelPricing := true
 	rows, err = db.QueryContext(ctx,
 		`SELECT input_microdollars_per_mtok,
 			output_microdollars_per_mtok,
@@ -2242,7 +2369,24 @@ func CheckSchemaCompat(
 				err,
 			)
 		}
+		hasModelPricing = false
 	} else {
+		rows.Close()
+	}
+
+	if hasModelPricing {
+		rows, err = db.QueryContext(ctx,
+			`SELECT model_pattern, above_input_tokens,
+				input_microdollars_per_mtok, output_microdollars_per_mtok,
+				cache_creation_microdollars_per_mtok,
+				cache_read_microdollars_per_mtok, updated_at
+			 FROM model_pricing_bands LIMIT 0`)
+		if err != nil {
+			return fmt.Errorf(
+				"model_pricing_bands table missing required columns: %w",
+				err,
+			)
+		}
 		rows.Close()
 	}
 
@@ -2315,13 +2459,34 @@ func CheckSchemaCompat(
 		)
 	}
 	rows.Close()
+	rows, err = db.QueryContext(ctx,
+		`SELECT source_archive_id, source_database_generation, file_path
+		 FROM sessions LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"sessions table missing provenance columns: %w", err,
+		)
+	}
+	rows.Close()
+	rows, err = db.QueryContext(ctx,
+		`SELECT source_archive_id, machine, path_prefix, layout, project,
+			original_project, enabled, updated_at
+		 FROM source_worktree_project_mappings LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"source_worktree_project_mappings table missing required columns: %w",
+			err,
+		)
+	}
+	rows.Close()
 	return nil
 }
 
 // checkPushSchemaCompat verifies schema elements that only push needs. PG serve
-// never reads sync_metadata or owner_marker, so they live outside
-// CheckSchemaCompat (which gates read-only serve startup) and are checked only
-// on the push fast path.
+// never reads sync_metadata or sessions.owner_marker, so they live outside
+// CheckSchemaCompat (which gates read-only serve startup and now probes the
+// serve-read sessions.source_archive_id/file_path provenance columns itself)
+// and are checked only on the push fast path.
 func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
 	rows, err := db.QueryContext(ctx,
 		`SELECT key, value FROM sync_metadata LIMIT 0`)
@@ -2358,9 +2523,14 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 		return false
 	}
 	if !pgHasTable(ctx, db, "model_pricing") ||
+		!pgHasTable(ctx, db, "model_pricing_bands") ||
 		!pgHasTable(ctx, db, "source_archives") ||
 		!pgHasTable(ctx, db, "source_project_identity_observations") ||
+		!pgHasTable(ctx, db, "source_project_identity_observation_scopes") ||
 		!pgHasTable(ctx, db, "source_session_project_identity_snapshots") ||
+		!pgHasTable(ctx, db, "source_session_project_identity_snapshot_scopes") ||
+		!pgHasTable(ctx, db, "source_worktree_project_mappings") ||
+		!pgHasTable(ctx, db, "source_worktree_project_mapping_scopes") ||
 		!pgHasTable(ctx, db, "cursor_usage_events") {
 		return false
 	}

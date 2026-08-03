@@ -2612,54 +2612,28 @@ func TestGetSessionStats_OutcomeStats_Happy(t *testing.T) {
 	assert.Nil(t, out.PRsMerged, "PRsMerged want nil (no GHToken)")
 }
 
-// TestOutcomeStatsWriterCloseRaceDoesNotPanic guards the writer snapshot in
-// computeOutcomeStats: closing the writer for a maintenance pass concurrently
-// with the git outcome-stats path must fall back to the read-only cache and
-// never hand git.NewCache a nil writer pool (which would panic on first use).
-func TestOutcomeStatsWriterCloseRaceDoesNotPanic(t *testing.T) {
+// TestOutcomeStatsClosedWriterUsesReadOnlyCache guards the writer snapshot in
+// computeOutcomeStats: when a maintenance pass has closed the writer, the git
+// outcome-stats path must use the read-only cache and return the same result.
+// The concurrent close/reopen stress case lives in session_stats_race_test.go.
+func TestOutcomeStatsClosedWriterUsesReadOnlyCache(t *testing.T) {
 	skipIfNoGit(t)
 	d := testDB(t)
 	ctx := context.Background()
 	repo := statsOutcomeRepo(t)
 	insertSessionFixture(t, d, sessionFixture{
-		id: "race1", agent: "claude", userMsgs: 5,
+		id: "closed-writer", agent: "claude", userMsgs: 5,
 		startedAt: hoursAgo(5), cwd: repo,
 	})
 
-	done := make(chan struct{})
-	toggleErr := make(chan error, 1)
-	var wg sync.WaitGroup
-	wg.Go(func() {
-		for {
-			select {
-			case <-done:
-				return
-			default:
-			}
-			if err := d.CloseWriter(); err != nil {
-				toggleErr <- err
-				return
-			}
-			if err := d.ReopenWriter(); err != nil {
-				toggleErr <- err
-				return
-			}
-		}
+	require.NoError(t, d.CloseWriter(), "close writer")
+	stats, err := d.GetSessionStats(ctx, StatsFilter{
+		Since: "28d", IncludeGitOutcomes: true,
 	})
-
-	for range 300 {
-		// Must never panic; a transient error while the writer is closed is fine.
-		_, _ = d.GetSessionStats(ctx, StatsFilter{
-			Since: "28d", IncludeGitOutcomes: true,
-		})
-	}
-	close(done)
-	wg.Wait()
-	select {
-	case err := <-toggleErr:
-		require.NoError(t, err, "writer toggling failed")
-	default:
-	}
+	require.NoError(t, err, "GetSessionStats with closed writer")
+	require.NotNil(t, stats.OutcomeStats, "OutcomeStats")
+	assert.Equal(t, 1, stats.OutcomeStats.ReposActive, "ReposActive")
+	assert.Equal(t, 3, stats.OutcomeStats.Commits, "Commits")
 }
 
 // TestGetSessionStats_OutcomeStats_NoCwd verifies that sessions without

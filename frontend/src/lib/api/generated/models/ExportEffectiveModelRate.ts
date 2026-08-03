@@ -2,8 +2,12 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { ExportPricingApplication } from './ExportPricingApplication';
+import type { ExportPricingBand } from './ExportPricingBand';
 import type { MoneyMoney } from './MoneyMoney';
 export type ExportEffectiveModelRate = {
+  application: ExportPricingApplication;
+  bands: Array<ExportPricingBand> | null;
   cache_read_cost_per_mtok: MoneyMoney;
   cache_write_cost_per_mtok: MoneyMoney;
   cost_source: string;

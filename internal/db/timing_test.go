@@ -25,6 +25,22 @@ func TestGetSessionTiming_ReadOnlyFixture(t *testing.T) {
 	timingInsertMessage(t, d, "solo", 2, "user",
 		"ok", "2026-04-26T10:00:30Z", false)
 
+	timingInsertSession(t, d, "completed-call",
+		"2026-04-26T10:00:00Z", "2026-04-26T22:38:05Z")
+	timingInsertMessage(t, d, "completed-call", 0, "user",
+		"run", "2026-04-26T10:00:00Z", false)
+	timingInsertMessage(t, d, "completed-call", 1, "assistant",
+		"finishing", "2026-04-26T10:00:01Z", true)
+	completedCallMsgID := timingMsgID(t, d, "completed-call", 1)
+	timingInsertToolCall(t, d, "completed-call", completedCallMsgID,
+		"tu_done", "task_complete", "Other", "")
+	timingInsertToolResultEvent(t, d, "completed-call", 1, 0,
+		"tu_done", "started", "2026-04-26T10:00:01.100Z", 0)
+	timingInsertToolResultEvent(t, d, "completed-call", 1, 0,
+		"tu_done", "completed", "2026-04-26T10:00:04.825Z", 1)
+	timingInsertMessage(t, d, "completed-call", 2, "user",
+		"next request", "2026-04-26T22:38:05Z", false)
+
 	timingInsertSession(t, d, "fallback",
 		"2026-04-26T10:00:00Z", "2026-04-26T10:00:30Z")
 	timingInsertMessage(t, d, "fallback", 0, "user",
@@ -110,6 +126,23 @@ func TestGetSessionTiming_ReadOnlyFixture(t *testing.T) {
 		assert.Equal(t, int64(29_000), *got.Turns[0].DurationMs, "turn duration")
 		require.NotNil(t, got.Turns[0].Calls[0].DurationMs, "call duration")
 		assert.Equal(t, int64(29_000), *got.Turns[0].Calls[0].DurationMs, "call duration")
+	})
+
+	t.Run("completed call excludes idle time before next user message", func(t *testing.T) {
+		got, err := d.GetSessionTiming(ctx, "completed-call")
+		require.NoError(t, err, "GetSessionTiming")
+		require.Len(t, got.Turns, 1)
+		require.Len(t, got.Turns[0].Calls, 1)
+		require.NotNil(t, got.Turns[0].DurationMs)
+		assert.Equal(t, int64(3_825), *got.Turns[0].DurationMs)
+		require.NotNil(t, got.Turns[0].Calls[0].DurationMs)
+		assert.Equal(t, int64(3_725), *got.Turns[0].Calls[0].DurationMs)
+		assert.Equal(t, int64(3_825), got.ToolDurationMs)
+		require.NotNil(t, got.SlowestCall)
+		assert.Equal(t, "task_complete", got.SlowestCall.ToolName)
+		assert.Equal(t, int64(3_725), *got.SlowestCall.DurationMs)
+		require.Len(t, got.ByCategory, 1)
+		assert.Equal(t, int64(3_825), got.ByCategory[0].DurationMs)
 	})
 
 	t.Run("last message falls back to session end", func(t *testing.T) {
@@ -343,8 +376,24 @@ func timingInsertToolCall(
 	_, err := d.getWriter().ExecContext(context.Background(), `
 		INSERT INTO tool_calls
 			(session_id, message_id, tool_use_id, tool_name,
-			 category, input_json, subagent_session_id)
-		VALUES (?, ?, ?, ?, ?, '{}', ?)
+			 category, input_json, subagent_session_id, call_index)
+		VALUES (?, ?, ?, ?, ?, '{}', ?, 0)
 	`, sessionID, messageID, toolUseID, toolName, category, sub)
 	require.NoError(t, err, "timingInsertToolCall %s/%d", sessionID, messageID)
+}
+
+func timingInsertToolResultEvent(
+	t *testing.T, d *DB, sessionID string, messageOrdinal, callIndex int,
+	toolUseID, status, timestamp string, eventIndex int,
+) {
+	t.Helper()
+	_, err := d.getWriter().ExecContext(context.Background(), `
+		INSERT INTO tool_result_events
+			(session_id, tool_call_message_ordinal, call_index,
+			 tool_use_id, source, status, content, timestamp, event_index)
+		VALUES (?, ?, ?, ?, 'tool_execution', ?, '', ?, ?)
+	`, sessionID, messageOrdinal, callIndex, toolUseID, status, timestamp,
+		eventIndex)
+	require.NoError(t, err, "timingInsertToolResultEvent %s/%d", sessionID,
+		eventIndex)
 }

@@ -1,7 +1,7 @@
 <!-- ABOUTME: Session Vital Signs panel — replaces ActivityMinimap on the right column. -->
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { CopyButton } from "@kenn-io/kit-ui";
+  import { CopyButton, Tooltip } from "@kenn-io/kit-ui";
   import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
   import { liveTick } from "../../stores/liveTick.svelte.js";
   import { fetchSessionTiming } from "../../api/timing.js";
@@ -341,9 +341,22 @@
               <div class="context-label">
                 {m.session_vitals_worktree()}
               </div>
-              <div class="context-value" title={session.cwd || undefined}>
-                {session.cwd || "—"}
-              </div>
+              {#if session.cwd}
+                <div class="context-tooltip">
+                  <Tooltip
+                    text={session.cwd}
+                    focusable
+                    align="end"
+                    class="worktree-path-tooltip"
+                  >
+                    <div class="context-value context-value--path">
+                      <bdi dir="ltr">{session.cwd}</bdi>
+                    </div>
+                  </Tooltip>
+                </div>
+              {:else}
+                <div class="context-value">—</div>
+              {/if}
             </div>
             {#if session.cwd}
               <CopyButton
@@ -779,6 +792,25 @@
     line-height: 1.35;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .context-value--path {
+    direction: rtl;
+    text-align: left;
+  }
+
+  .context-tooltip {
+    min-width: 0;
+  }
+
+  .context-tooltip :global(.kit-tooltip-trigger) {
+    display: flex;
+    width: 100%;
+  }
+
+  .context-tooltip :global(.worktree-path-tooltip) {
+    max-width: min(50vw, calc(100vw - 32px));
+    overflow-wrap: anywhere;
   }
 
   /* Stat grid */

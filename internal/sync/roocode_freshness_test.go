@@ -52,7 +52,7 @@ func TestRooCodeFreshBeforeFingerprintUsesCompositeStat(t *testing.T) {
 		sess.ID, db.CurrentDataVersion(),
 	))
 
-	engine := &Engine{db: database}
+	engine := &Engine{db: database, machine: "local"}
 	source := parser.SourceRef{DisplayPath: historyPath}
 	file := parser.DiscoveredFile{
 		Agent: parser.AgentRooCode,

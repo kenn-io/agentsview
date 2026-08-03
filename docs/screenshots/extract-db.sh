@@ -444,9 +444,16 @@ Refactored the review submission API to accept batch requests. Previously each f
 
 One short session updated the API documentation in `docs/api.md` to reflect the new batch endpoint and its request/response schema.',
 '2026-02-18T16:20:00.000Z');
-
-VACUUM;
 SQL
+
+# The mapping delete above journals tombstones in current archives, so clear
+# that journal last. Older valid archives predate the table and its triggers.
+if [[ $(sqlite3 "$OUTPUT" \
+  "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'worktree_project_mapping_changes';") == "1" ]]; then
+  sqlite3 "$OUTPUT" "DELETE FROM worktree_project_mapping_changes;"
+fi
+
+sqlite3 "$OUTPUT" "VACUUM;"
 
 SESSIONS=$(sqlite3 "$OUTPUT" "SELECT COUNT(*) FROM sessions;")
 MESSAGES=$(sqlite3 "$OUTPUT" "SELECT COUNT(*) FROM messages;")

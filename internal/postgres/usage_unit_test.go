@@ -100,9 +100,16 @@ func (c *usageProbeConn) QueryContext(
 				"cache_creation_microdollars_per_mtok",
 				"cache_read_microdollars_per_mtok",
 				"updated_at",
+				"above_input_tokens",
+				"band_input_microdollars_per_mtok",
+				"band_output_microdollars_per_mtok",
+				"band_cache_creation_microdollars_per_mtok",
+				"band_cache_read_microdollars_per_mtok",
+				"band_updated_at",
 			},
 			values: [][]driver.Value{{
 				"claude-sonnet", int64(3000000), int64(15000000), int64(3750000), int64(300000), "2026-06-08",
+				nil, nil, nil, nil, nil, nil,
 			}},
 		}, nil
 	}
@@ -304,6 +311,71 @@ func TestPGUsageAmountsPreserveSessionSummaryUsageEventTokens(t *testing.T) {
 	require.True(t, priced, "priced")
 	require.True(t, contributes, "contributes")
 	assert.Equal(t, wantCost, cost, "session cost")
+}
+
+func TestPGDailyUsageAmountsPricingBandRequestScope(t *testing.T) {
+	tests := []struct {
+		name           string
+		messageOrdinal sql.NullInt64
+		wantCost       int64
+		wantAggregate  int
+		wantBand       int
+	}{
+		{
+			name:           "ordinal-bound request uses band",
+			messageOrdinal: sql.NullInt64{Int64: 1, Valid: true},
+			wantCost:       600_000,
+			wantBand:       1,
+		},
+		{
+			name:          "unbound aggregate uses base",
+			wantCost:      300_000,
+			wantAggregate: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolver := pgPricingBandTestResolver()
+			_, _, _, _, cost, _, err := pgDailyUsageAmounts(pgDailyUsageScanRow{
+				messageOrdinal: tt.messageOrdinal,
+				usageSource:    "usage-event",
+				model:          "banded-model",
+				inputTokens:    300_000,
+			}, resolver)
+			require.NoError(t, err)
+			block, err := resolver.BuildBlock()
+			require.NoError(t, err)
+			provenance := block.Models["banded-model"]
+			require.Len(t, provenance.Resolutions, 1)
+			application := provenance.Resolutions[0].Application
+
+			assert.Equal(t, money.Money{Microdollars: tt.wantCost}, cost)
+			assert.Equal(t, tt.wantAggregate, application.AggregateRowCount)
+			if tt.wantBand > 0 {
+				require.Len(t, application.Bands, 1)
+				assert.Equal(t, tt.wantBand, application.Bands[0].RequestCount)
+			}
+		})
+	}
+}
+
+func pgPricingBandTestResolver() *export.PricingResolver {
+	return export.NewPricingResolver([]export.EffectivePricingRow{{
+		ModelPattern: "banded-model",
+		Rates: export.ModelRates{
+			InputPerMTok:      money.MustParseDollars("1"),
+			OutputPerMTok:     money.MustParseDollars("2"),
+			CacheWritePerMTok: money.MustParseDollars("0.50"),
+			CacheReadPerMTok:  money.MustParseDollars("0.10"),
+			Bands: []export.PricingBand{{
+				AboveInputTokens:  200_000,
+				InputPerMTok:      money.MustParseDollars("2"),
+				OutputPerMTok:     money.MustParseDollars("3"),
+				CacheWritePerMTok: money.MustParseDollars("1"),
+				CacheReadPerMTok:  money.MustParseDollars("0.20"),
+			}},
+		},
+	}})
 }
 
 func TestPGUsageRowQueryPushesDateBoundsIntoUnion(t *testing.T) {

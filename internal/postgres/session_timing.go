@@ -110,6 +110,30 @@ func (s *Store) queryCallRows(
 		  tc.skill_name,
 		  tc.subagent_session_id,
 		  tc.input_json,
+		  (
+		    SELECT tre.timestamp
+		    FROM tool_result_events tre
+		    WHERE tre.session_id = tc.session_id
+		      AND tre.tool_call_message_ordinal = tc.message_ordinal
+		      AND tre.call_index = tc.call_index
+		      AND tre.source = 'tool_execution'
+		      AND tre.status = 'started'
+		      AND tre.timestamp IS NOT NULL
+		    ORDER BY tre.event_index ASC
+		    LIMIT 1
+		  ) AS execution_started_at,
+		  (
+		    SELECT tre.timestamp
+		    FROM tool_result_events tre
+		    WHERE tre.session_id = tc.session_id
+		      AND tre.tool_call_message_ordinal = tc.message_ordinal
+		      AND tre.call_index = tc.call_index
+		      AND tre.source = 'tool_execution'
+		      AND tre.status IN ('completed', 'errored')
+		      AND tre.timestamp IS NOT NULL
+		    ORDER BY tre.event_index DESC
+		    LIMIT 1
+		  ) AS execution_completed_at,
 		  CASE
 		    WHEN tc.subagent_session_id IS NOT NULL
 		         AND s_sub.started_at IS NOT NULL THEN
@@ -133,11 +157,13 @@ func (s *Store) queryCallRows(
 	for rows.Next() {
 		var msgOrdinal int
 		var toolUseID, inputJSON, skill, sub sql.NullString
+		var executionStarted, executionCompleted *time.Time
 		var toolName, category string
 		var subDur sql.NullInt64
 		if err := rows.Scan(
 			&msgOrdinal, &toolUseID, &toolName, &category,
-			&skill, &sub, &inputJSON, &subDur,
+			&skill, &sub, &inputJSON, &executionStarted, &executionCompleted,
+			&subDur,
 		); err != nil {
 			return nil, fmt.Errorf("scanning timing call: %w", err)
 		}
@@ -163,6 +189,11 @@ func (s *Store) queryCallRows(
 		if subDur.Valid {
 			v := subDur.Int64
 			r.DurationMs = &v
+		} else if executionStarted != nil && executionCompleted != nil &&
+			!executionCompleted.Before(*executionStarted) {
+			v := executionCompleted.Sub(*executionStarted).Milliseconds()
+			r.DurationMs = &v
+			r.CompletedAt = FormatISO8601(*executionCompleted)
 		}
 		out = append(out, r)
 	}

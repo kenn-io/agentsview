@@ -25,11 +25,51 @@ type ModelRates struct {
 	CacheReadPerMTok  money.Money
 	UpdatedAt         *time.Time
 	Source            PricingRowSource
+	Bands             []PricingBand
+}
+
+func (r ModelRates) RatesForTokens(
+	inputTokens, cacheWriteTokens, cacheReadTokens int,
+) ModelRates {
+	band, ok := r.pricingBandForTokens(inputTokens, cacheWriteTokens, cacheReadTokens)
+	if !ok {
+		return r
+	}
+	updatedAt := r.UpdatedAt
+	if band.UpdatedAt != nil {
+		updatedAt = band.UpdatedAt
+	}
+	return ModelRates{
+		InputPerMTok:      band.InputPerMTok,
+		OutputPerMTok:     band.OutputPerMTok,
+		CacheWritePerMTok: band.CacheWritePerMTok,
+		CacheReadPerMTok:  band.CacheReadPerMTok,
+		UpdatedAt:         updatedAt,
+		Source:            r.Source,
+		Bands:             r.Bands,
+	}
 }
 
 func (r ModelRates) CostForTokens(
 	inputTokens, outputTokens, reasoningTokens, cacheWriteTokens, cacheReadTokens int,
 ) (money.Money, error) {
+	return r.CostForTokensScoped(
+		true,
+		inputTokens,
+		outputTokens,
+		reasoningTokens,
+		cacheWriteTokens,
+		cacheReadTokens,
+	)
+}
+
+func (r ModelRates) CostForTokensScoped(
+	requestScoped bool,
+	inputTokens, outputTokens, reasoningTokens, cacheWriteTokens, cacheReadTokens int,
+) (money.Money, error) {
+	if requestScoped {
+		r = r.RatesForTokens(inputTokens, cacheWriteTokens, cacheReadTokens)
+	}
 	// reasoningTokens is a breakdown of outputTokens for current sources, not
 	// additional billable output. Reasoning-only rows still bill at output rate.
 	billableOutputTokens := outputTokens
@@ -42,6 +82,22 @@ func (r ModelRates) CostForTokens(
 		{Tokens: int64(cacheWriteTokens), Rate: r.CacheWritePerMTok},
 		{Tokens: int64(cacheReadTokens), Rate: r.CacheReadPerMTok},
 	})
+}
+
+func (r ModelRates) pricingBandForTokens(
+	inputTokens, cacheWriteTokens, cacheReadTokens int,
+) (PricingBand, bool) {
+	totalInput := int64(inputTokens) + int64(cacheWriteTokens) + int64(cacheReadTokens)
+	var selected PricingBand
+	var ok bool
+	for _, band := range r.Bands {
+		if totalInput > int64(band.AboveInputTokens) &&
+			(!ok || band.AboveInputTokens > selected.AboveInputTokens) {
+			selected = band
+			ok = true
+		}
+	}
+	return selected, ok
 }
 
 type EffectivePricingRow struct {
@@ -64,16 +120,20 @@ type PricingResolver struct {
 }
 
 type pricingRecord struct {
-	lookup   PricingLookup
-	computed bool
-	reported bool
+	lookup            PricingLookup
+	computed          bool
+	reported          bool
+	baseRequestCount  int
+	aggregateRowCount int
+	bandRequestCounts map[int]int
 }
 
 func NewPricingResolver(rows []EffectivePricingRow) *PricingResolver {
 	copied := make([]EffectivePricingRow, len(rows))
-	copy(copied, rows)
 	byModel := make(map[string]ModelRates, len(rows))
-	for _, row := range rows {
+	for i, row := range rows {
+		row.Rates.Bands = append([]PricingBand(nil), row.Rates.Bands...)
+		copied[i] = row
 		if row.ModelPattern == "" {
 			continue
 		}
@@ -92,7 +152,7 @@ func (r *PricingResolver) Lookup(model string) PricingLookup {
 		return PricingLookup{}
 	}
 	if lookup, ok := r.lookupCache[model]; ok {
-		return lookup
+		return clonePricingLookup(lookup)
 	}
 	match := pricingpkg.ResolveMatch(model, r.byModel)
 	lookup := PricingLookup{
@@ -100,7 +160,12 @@ func (r *PricingResolver) Lookup(model string) PricingLookup {
 		Pattern: match.Pattern,
 		OK:      match.OK,
 	}
-	r.lookupCache[model] = lookup
+	r.lookupCache[model] = clonePricingLookup(lookup)
+	return clonePricingLookup(lookup)
+}
+
+func clonePricingLookup(lookup PricingLookup) PricingLookup {
+	lookup.Rates.Bands = append([]PricingBand(nil), lookup.Rates.Bands...)
 	return lookup
 }
 
@@ -130,6 +195,67 @@ func (r *PricingResolver) Resolve(
 
 func (r *PricingResolver) RecordComputed(model string, lookup PricingLookup) {
 	r.RecordResolvedComputed(model, model, lookup)
+}
+
+func (r *PricingResolver) RecordComputedRequest(
+	model string,
+	lookup PricingLookup,
+	inputTokens, cacheWriteTokens, cacheReadTokens int,
+) {
+	r.RecordResolvedComputedRequest(
+		model,
+		model,
+		lookup,
+		inputTokens,
+		cacheWriteTokens,
+		cacheReadTokens,
+	)
+}
+
+func (r *PricingResolver) RecordResolvedComputedRequest(
+	reportedModel, pricedModel string,
+	lookup PricingLookup,
+	inputTokens, cacheWriteTokens, cacheReadTokens int,
+) {
+	if r == nil || reportedModel == "" || pricedModel == "" {
+		return
+	}
+	rec := r.record(reportedModel, pricedModel, lookup)
+	rec.computed = true
+	if !lookup.OK {
+		return
+	}
+	band, ok := lookup.Rates.pricingBandForTokens(
+		inputTokens,
+		cacheWriteTokens,
+		cacheReadTokens,
+	)
+	if !ok {
+		rec.baseRequestCount++
+		return
+	}
+	if rec.bandRequestCounts == nil {
+		rec.bandRequestCounts = make(map[int]int)
+	}
+	rec.bandRequestCounts[band.AboveInputTokens]++
+}
+
+func (r *PricingResolver) RecordComputedAggregate(model string, lookup PricingLookup) {
+	r.RecordResolvedComputedAggregate(model, model, lookup)
+}
+
+func (r *PricingResolver) RecordResolvedComputedAggregate(
+	reportedModel, pricedModel string, lookup PricingLookup,
+) {
+	if r == nil || reportedModel == "" || pricedModel == "" {
+		return
+	}
+	rec := r.record(reportedModel, pricedModel, lookup)
+	rec.computed = true
+	if !lookup.OK {
+		return
+	}
+	rec.aggregateRowCount++
 }
 
 func (r *PricingResolver) RecordReported(model string, lookup PricingLookup) {
@@ -177,7 +303,7 @@ func (r *PricingResolver) record(
 		rec = &pricingRecord{}
 		byPricedModel[pricedModel] = rec
 	}
-	rec.lookup = lookup
+	rec.lookup = clonePricingLookup(lookup)
 	return rec
 }
 
@@ -224,6 +350,9 @@ func (r *PricingResolver) BuildBlock() (PricingBlock, error) {
 				CacheWriteCostPerMTok: rec.lookup.Rates.CacheWritePerMTok,
 				CacheReadCostPerMTok:  rec.lookup.Rates.CacheReadPerMTok,
 				CostSource:            source,
+				Bands: append(
+					[]PricingBand(nil), rec.lookup.Rates.Bands...),
+				Application: pricingApplicationForRecord(rec),
 			}
 			if rec.lookup.OK {
 				pattern := rec.lookup.Pattern
@@ -266,6 +395,27 @@ func (r *PricingResolver) BuildBlock() (PricingBlock, error) {
 		},
 		Models: models,
 	}, nil
+}
+
+func pricingApplicationForRecord(rec *pricingRecord) PricingApplication {
+	application := PricingApplication{
+		BaseRequestCount:  rec.baseRequestCount,
+		AggregateRowCount: rec.aggregateRowCount,
+	}
+	thresholds := make([]int, 0, len(rec.bandRequestCounts))
+	for threshold, count := range rec.bandRequestCounts {
+		if count > 0 {
+			thresholds = append(thresholds, threshold)
+		}
+	}
+	sort.Ints(thresholds)
+	for _, threshold := range thresholds {
+		application.Bands = append(application.Bands, AppliedPricingBand{
+			AboveInputTokens: threshold,
+			RequestCount:     rec.bandRequestCounts[threshold],
+		})
+	}
+	return application
 }
 
 func pricingTableVersion(rows []EffectivePricingRow) string {
@@ -391,12 +541,20 @@ func customPricingRowCount(rows []EffectivePricingRow) int {
 func latestPricingRowUpdate(rows []EffectivePricingRow) *time.Time {
 	var latest *time.Time
 	for _, row := range rows {
-		if row.Rates.UpdatedAt == nil {
-			continue
+		if row.Rates.UpdatedAt != nil {
+			t := row.Rates.UpdatedAt.UTC()
+			if latest == nil || t.After(*latest) {
+				latest = &t
+			}
 		}
-		t := row.Rates.UpdatedAt.UTC()
-		if latest == nil || t.After(*latest) {
-			latest = &t
+		for _, band := range row.Rates.Bands {
+			if band.UpdatedAt == nil {
+				continue
+			}
+			t := band.UpdatedAt.UTC()
+			if latest == nil || t.After(*latest) {
+				latest = &t
+			}
 		}
 	}
 	return latest

@@ -353,6 +353,34 @@ type multiSessionContainerSourceSet struct {
 	cfg   multiSessionConfig
 }
 
+// ReconciliationContainer maps a requested reconciliation root to the
+// physical container that atomically owns it: the container file itself, a
+// member's virtual spelling, or a sidecar event path (SQLite WAL/SHM). The
+// scope planner widens such a request to the container's whole virtual
+// membership; the generic descendant proof would name only the bare path,
+// which admits no "<container>#<member>" source and pages no member row — a
+// successful no-op over the sessions the caller asked about. Classification
+// runs with allowMissing so a deleted container still resolves and its
+// members remain reclaimable. Requests arrive absolutized, so a relative
+// configured root is also tried in its absolute spelling.
+func (s multiSessionContainerSourceSet) ReconciliationContainer(
+	requested string,
+) (string, bool) {
+	for _, root := range s.roots {
+		spellings := []string{root}
+		if abs := cleanReconciliationScopeRoot(root); abs != filepath.Clean(root) {
+			spellings = append(spellings, abs)
+		}
+		for _, spelling := range spellings {
+			if match, ok := s.cfg.classifyPath(spelling, requested, true); ok &&
+				match.Container != "" {
+				return match.Container, true
+			}
+		}
+	}
+	return "", false
+}
+
 func (s multiSessionContainerSourceSet) Discover(
 	ctx context.Context,
 ) ([]SourceRef, error) {

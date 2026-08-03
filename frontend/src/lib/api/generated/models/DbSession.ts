@@ -46,6 +46,7 @@ export type DbSession = {
   quality_signals?: DbQualitySignals;
   relationship_type?: string;
   secret_leak_count: number;
+  session_kind?: string;
   signals_pending_since?: string;
   source_session_id?: string;
   source_version?: string;

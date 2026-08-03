@@ -482,7 +482,10 @@ func TestReconcileHermesDefaultSessionsRootTombstonesRemovedStateMember(t *testi
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentHermes: {sessionsDir},
 		},
-		Machine: "local",
+		SourceMachines: map[parser.AgentType]map[string]string{
+			parser.AgentHermes: {sessionsDir: "archivebox"},
+		},
+		Machine: "localbox",
 	})
 	t.Cleanup(engine.Close)
 
@@ -492,6 +495,10 @@ func TestReconcileHermesDefaultSessionsRootTombstonesRemovedStateMember(t *testi
 	stored, err := database.GetSession(t.Context(), "hermes:child")
 	require.NoError(t, err)
 	require.NotNil(t, stored, "initial reconciliation must store the state member")
+	assert.Equal(t, "archivebox", stored.Machine)
+	require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
+		t.Context(), []string{sessionsDir}, false,
+	))
 
 	conn, err := sql.Open("sqlite3", stateDB)
 	require.NoError(t, err)
@@ -506,6 +513,96 @@ func TestReconcileHermesDefaultSessionsRootTombstonesRemovedStateMember(t *testi
 	require.NoError(t, err)
 	assert.Nil(t, stored,
 		"authoritative reconciliation must tombstone a removed state.db member")
+}
+
+// TestReconcileHermesScopedArchiveTombstonesRemovedStateMember pins
+// aggregate-member authority for a pass scoped to one complete archive: the
+// scope's proof spans the archive's whole state.db membership, so a removed
+// member is reclaimed even though a second configured root stays uncovered
+// and full provider-root coverage is out of reach.
+func TestReconcileHermesScopedArchiveTombstonesRemovedStateMember(
+	t *testing.T,
+) {
+	archiveRoot := t.TempDir()
+	stateDB := writeHermesArchiveStateDB(t, archiveRoot)
+	sessionsDir := filepath.Join(archiveRoot, "sessions")
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+	otherRoot := t.TempDir()
+	writeHermesTranscriptFile(t, otherRoot, "keeper")
+
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentHermes: {sessionsDir, otherRoot},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
+		t.Context(), []string{sessionsDir, otherRoot}, false,
+	))
+	stored, err := database.GetSession(t.Context(), "hermes:child")
+	require.NoError(t, err)
+	require.NotNil(t, stored, "initial reconciliation must store the state member")
+
+	conn, err := sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), "DELETE FROM sessions WHERE id = 'child'")
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	// The pass is scoped to the archive only; the other configured root is
+	// deliberately not requested, so full provider-root coverage is absent.
+	require.NoError(t, engine.ReconcileProviderRoots(
+		t.Context(), parser.AgentHermes, []string{sessionsDir},
+	))
+
+	stored, err = database.GetSession(t.Context(), "hermes:child")
+	require.NoError(t, err)
+	assert.Nil(t, stored,
+		"an archive-scoped pass proves its own membership and reclaims the member")
+	survivor, err := database.GetSession(t.Context(), "hermes:keeper")
+	require.NoError(t, err)
+	assert.NotNil(t, survivor,
+		"the unrequested root's sessions are untouched")
+}
+
+func TestReconcileHermesLabeledStateDBRootTombstonesRemovedMember(t *testing.T) {
+	root := t.TempDir()
+	stateDB := writeHermesArchiveStateDB(t, root)
+
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentHermes: {stateDB},
+		},
+		SourceMachines: map[parser.AgentType]map[string]string{
+			parser.AgentHermes: {stateDB: "archivebox"},
+		},
+		Machine: "localbox",
+	})
+	t.Cleanup(engine.Close)
+
+	require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
+		t.Context(), []string{root}, false,
+	))
+	stored, err := database.GetSession(t.Context(), "hermes:child")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "archivebox", stored.Machine)
+
+	conn, err := sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), "DELETE FROM sessions WHERE id = 'child'")
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
+		t.Context(), []string{root}, false,
+	))
+	stored, err = database.GetSession(t.Context(), "hermes:child")
+	require.NoError(t, err)
+	assert.Nil(t, stored)
 }
 
 // Streamed discovery must open state.db a bounded number of times per pass:
@@ -1000,4 +1097,99 @@ func writeHermesArchiveStateDB(t *testing.T, root string) string {
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 	return stateDB
+}
+
+// TestReconcileHermesRemovedProfileTombstonesItsTranscripts pins what a
+// removal event under a profiles container reclaims. The profile directory is
+// gone by the time the pass resolves, so no owned profile matches and the
+// request widens to the container. That scope proves the container without
+// covering it, which is enough to stat the removed profile's stored
+// transcripts and tombstone them while a live sibling's are retained.
+func TestReconcileHermesRemovedProfileTombstonesItsTranscripts(t *testing.T) {
+	container := filepath.Join(t.TempDir(), ".hermes", "profiles")
+	writeHermesProfileTranscript(t, container, "research", "gone")
+	writeHermesProfileTranscript(t, container, "writing", "kept")
+
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentHermes: {container},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
+
+	removed := filepath.Join(container, "research")
+	require.NoError(t, os.RemoveAll(removed))
+	require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
+		t.Context(), []string{removed}, false,
+	))
+
+	stored, err := database.GetSession(t.Context(), "hermes:gone")
+	require.NoError(t, err)
+	assert.Nil(t, stored,
+		"a removal event must reclaim the deleted profile's transcripts")
+	survivor, err := database.GetSession(t.Context(), "hermes:kept")
+	require.NoError(t, err)
+	assert.NotNil(t, survivor, "a live sibling profile keeps its sessions")
+}
+
+// TestReconcileHermesFlatRootDescendantTombstonesRemovedTranscript pins
+// descendant resolution for a plain transcript-directory root: with no
+// state.db and no sessions/ subdirectory there is no archive topology, so a
+// requested transcript resolves generically — traverse the configured root,
+// prove only the requested file — and a deleted transcript is reclaimed
+// while its sibling keeps its session.
+func TestReconcileHermesFlatRootDescendantTombstonesRemovedTranscript(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	writeHermesTranscriptFile(t, root, "gone")
+	writeHermesTranscriptFile(t, root, "kept")
+
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentHermes: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
+
+	removed := filepath.Join(root, "gone.jsonl")
+	require.NoError(t, os.Remove(removed))
+	require.NoError(t, engine.ReconcileProviderRoots(
+		t.Context(), parser.AgentHermes, []string{removed},
+	))
+
+	stored, err := database.GetSession(t.Context(), "hermes:gone")
+	require.NoError(t, err)
+	assert.Nil(t, stored,
+		"a removed flat-root transcript must be reclaimed by its own request")
+	survivor, err := database.GetSession(t.Context(), "hermes:kept")
+	require.NoError(t, err)
+	assert.NotNil(t, survivor,
+		"a sibling transcript outside the proof keeps its session")
+}
+
+func writeHermesProfileTranscript(
+	t *testing.T, container, profile, sessionID string,
+) {
+	t.Helper()
+	writeHermesTranscriptFile(
+		t, filepath.Join(container, profile, "sessions"), sessionID,
+	)
+}
+
+func writeHermesTranscriptFile(t *testing.T, dir, sessionID string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, sessionID+".jsonl"), []byte(
+			`{"role":"session_meta","platform":"cli","timestamp":"2026-05-14T10:00:00Z"}`+"\n"+
+				`{"role":"user","content":"hello","timestamp":"2026-05-14T10:01:00Z"}`+"\n"+
+				`{"role":"assistant","content":"Done.","timestamp":"2026-05-14T10:02:00Z"}`+"\n",
+		), 0o600))
 }

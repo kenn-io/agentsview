@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 )
 
 // ExpandHome replaces a leading home shorthand ("~" or "~/") with the
@@ -25,4 +27,17 @@ func ExpandHome(path string) (string, error) {
 		return home, nil
 	}
 	return filepath.Join(home, path[2:]), nil
+}
+
+// LocalComparisonKey returns an absolute path key for comparing local paths.
+// It preserves case-sensitive platforms and folds case on Windows.
+func LocalComparisonKey(path string) (string, error) {
+	key, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolving path %q: %w", path, err)
+	}
+	if runtime.GOOS == "windows" {
+		key = strings.ToLower(key)
+	}
+	return key, nil
 }

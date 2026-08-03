@@ -3,6 +3,7 @@ package remotesync_test
 import (
 	"archive/tar"
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -18,6 +19,69 @@ import (
 	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/ssh"
 )
+
+func TestResolveTargetsExcludesNonLocalStructuredSessionSources(t *testing.T) {
+	localMachine, err := os.Hostname()
+	require.NoError(t, err)
+	require.NotEmpty(t, localMachine)
+	foreignMachine := localMachine + "-archive"
+	home := t.TempDir()
+	dataDir := filepath.Join(home, "data")
+	localRoot := filepath.Join(home, "local-copilot")
+	localStructuredRoot := filepath.Join(home, "local-structured-copilot")
+	foreignRoot := filepath.Join(localRoot, "foreign-copilot")
+	for _, dir := range []string{dataDir, localRoot, localStructuredRoot, foreignRoot} {
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+	}
+	localSession := filepath.Join(localRoot, "local.jsonl")
+	foreignSession := filepath.Join(foreignRoot, "foreign.jsonl")
+	require.NoError(t, os.WriteFile(localSession, []byte("local\n"), 0o600))
+	require.NoError(t, os.WriteFile(foreignSession, []byte("foreign\n"), 0o600))
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	for _, def := range parser.Registry {
+		if def.EnvVar != "" {
+			t.Setenv(def.EnvVar, "")
+		}
+	}
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dataDir, "config.toml"),
+		fmt.Appendf(nil, `
+copilot_dirs = [%q]
+
+[[session_sources]]
+agent = "copilot"
+dir = %q
+
+[[session_sources]]
+agent = "copilot"
+dir = %q
+machine = %q
+`, localRoot, localStructuredRoot, foreignRoot, foreignMachine),
+		0o600,
+	))
+
+	cfg, err := config.LoadMinimal()
+	require.NoError(t, err)
+	require.Equal(t, localMachine, cfg.LocalMachineName)
+	targets := remotesync.ResolveTargets(cfg)
+
+	assert.ElementsMatch(t, []string{localRoot, localStructuredRoot},
+		targets.Dirs[parser.AgentCopilot])
+	assert.NotContains(t, targets.Dirs[parser.AgentCopilot], foreignRoot,
+		"a source attributed to another machine must not be re-exported as local")
+	assert.Contains(t, targets.ForbiddenRoots, foreignRoot)
+	manifest, err := remotesync.BuildManifest(targets)
+	require.NoError(t, err)
+	var manifestPaths []string
+	for _, file := range manifest.Files {
+		manifestPaths = append(manifestPaths, file.Path)
+	}
+	assert.Contains(t, manifestPaths, localSession)
+	assert.NotContains(t, manifestPaths, foreignSession,
+		"an allowed ancestor must not re-export its nested foreign source")
+}
 
 func TestResolveTargetsFiltersAndIncludesSpecialFiles(t *testing.T) {
 	root := t.TempDir()

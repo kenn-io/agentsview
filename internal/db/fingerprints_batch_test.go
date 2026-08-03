@@ -22,6 +22,10 @@ func fingerprintBatchFixture(t *testing.T) (*DB, []string) {
 
 	sysMsg := userMsgAt("fp-a", 0, "system prompt", "2026-07-01T10:00:00Z")
 	sysMsg.IsSystem = true
+	// A non-empty prompt_source pins the batched/per-session identity for
+	// the newest token-fingerprint field; empty values hash identically
+	// whether or not the batched query selects the column.
+	sysMsg.PromptSource = "typed"
 	asst := asstMsgAt("fp-a", 1, "raw\x00bytes\x80here", "2026-07-01T10:00:05Z")
 	asst.ThinkingText = "thinking\x00text"
 	asst.HasThinking = true

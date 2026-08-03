@@ -51,6 +51,426 @@ func requireClassifyProviderChangedPath(
 	return files
 }
 
+func TestPreserveUnavailableSourceProjectsRetriesSnapshotLookupFailure(
+	t *testing.T,
+) {
+	const (
+		sessionID       = "unavailable-source"
+		originalProject = "resolved-project"
+		fallbackProject = "parser-fallback"
+		machine         = "test-machine"
+	)
+	database := openTestDB(t)
+	root := filepath.Join(t.TempDir(), "missing-checkout")
+	cwd := filepath.Join(root, "nested")
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: sessionID, Project: originalProject, Machine: machine,
+		Agent: string(parser.AgentClaude), Cwd: cwd,
+	}))
+	require.NoError(t, database.UpsertProjectIdentityObservationWithSnapshotProject(
+		t.Context(), export.ProjectIdentityObservation{
+			SessionID: sessionID, Project: originalProject, Machine: machine,
+			RootPath: root, GitRemote: "https://example.com/team/project.git",
+			RemoteResolution: export.ProjectResolutionResolved,
+			ObservedAt:       time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC),
+		}, originalProject,
+	))
+	engine := NewEngine(database, EngineConfig{Machine: machine})
+	t.Cleanup(engine.Close)
+	pending := []pendingWrite{{sess: parser.ParsedSession{
+		ID: sessionID, Project: fallbackProject, Machine: machine,
+		Agent: parser.AgentClaude, Cwd: cwd,
+	}}}
+
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	afterFailure, err := engine.preserveUnavailableSourceProjects(
+		canceled, pending,
+	)
+	require.Error(t, err)
+	assert.False(t, afterFailure[0].sourceProjectResolved,
+		"failed lookup must remain retryable")
+	assert.Equal(t, fallbackProject, afterFailure[0].sess.Project)
+
+	afterRetry, err := engine.preserveUnavailableSourceProjects(
+		t.Context(), afterFailure,
+	)
+	require.NoError(t, err)
+	assert.True(t, afterRetry[0].sourceProjectResolved)
+	assert.Equal(t, originalProject, afterRetry[0].sess.Project,
+		"successful retry must recover the durable resolved project")
+}
+
+func TestPreserveUnavailableSourceProjectsUsesDurableSnapshot(
+	t *testing.T,
+) {
+	for _, tc := range []struct {
+		name          string
+		parsedProject string
+		makeSource    bool
+		statErr       error
+		idPrefix      string
+		emptyMachine  bool
+	}{
+		{
+			name:          "missing source",
+			parsedProject: "parser-fallback",
+		},
+		{
+			name:          "source permission failure",
+			parsedProject: "parser-fallback",
+			statErr:       os.ErrPermission,
+		},
+		{
+			name:       "empty parser project",
+			makeSource: true,
+		},
+		{
+			name:          "remote prefixed session",
+			parsedProject: "parser-fallback",
+			idPrefix:      "remote~",
+		},
+		{
+			name:          "empty legacy machine",
+			parsedProject: "parser-fallback",
+			emptyMachine:  true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const (
+				sessionID       = "unavailable-source"
+				originalProject = "resolved-project"
+				machine         = "test-machine"
+			)
+			attributedMachine := machine
+			if tc.emptyMachine {
+				attributedMachine = ""
+			}
+			snapshotMachine := attributedMachine
+			if snapshotMachine == "" {
+				snapshotMachine = machine
+			}
+			database := openTestDB(t)
+			root := filepath.Join(t.TempDir(), "checkout")
+			cwd := filepath.Join(root, "nested")
+			storedSessionID := applyIDPrefixToID(tc.idPrefix, sessionID)
+			if tc.makeSource {
+				require.NoError(t, os.MkdirAll(cwd, 0o755))
+			}
+			require.NoError(t, database.UpsertSession(db.Session{
+				ID: storedSessionID, Project: originalProject,
+				Machine: attributedMachine,
+				Agent:   string(parser.AgentClaude), Cwd: cwd,
+			}))
+			require.NoError(t,
+				database.UpsertProjectIdentityObservationWithSnapshotProject(
+					t.Context(), export.ProjectIdentityObservation{
+						SessionID: storedSessionID, Project: originalProject,
+						Machine: snapshotMachine, RootPath: root,
+						GitRemote:        "https://example.com/team/project.git",
+						RemoteResolution: export.ProjectResolutionResolved,
+						ObservedAt: time.Date(
+							2026, 7, 31, 12, 0, 0, 0, time.UTC,
+						),
+					}, originalProject,
+				))
+			engine := NewEngine(database, EngineConfig{
+				Machine: machine, IDPrefix: tc.idPrefix,
+			})
+			t.Cleanup(engine.Close)
+			if tc.statErr != nil {
+				engine.stat = func(got string) (os.FileInfo, error) {
+					assert.Equal(t, cwd, got)
+					return nil, tc.statErr
+				}
+			}
+
+			result, err := engine.preserveUnavailableSourceProjects(
+				t.Context(), []pendingWrite{{sess: parser.ParsedSession{
+					ID: sessionID, Project: tc.parsedProject,
+					Machine: attributedMachine,
+					Agent:   parser.AgentClaude, Cwd: cwd,
+				}}},
+			)
+			require.NoError(t, err)
+			require.Len(t, result, 1)
+			assert.True(t, result[0].sourceProjectResolved)
+			assert.Equal(t, originalProject, result[0].sess.Project)
+			assert.Equal(t, sessionID, result[0].sess.ID,
+				"snapshot lookup must not mutate the parser session id")
+		})
+	}
+}
+
+func TestWriteBatchRelabelRecoversUnavailableSourceProject(t *testing.T) {
+	const (
+		sessionID       = "relabel-unavailable-source"
+		originalProject = "resolved-project"
+		fallbackProject = "parser-fallback"
+		storedMachine   = "local-machine"
+		configuredLabel = "renamed-machine"
+		idPrefix        = "remote~"
+	)
+	database := openTestDB(t)
+	root := filepath.Join(t.TempDir(), "missing-checkout")
+	cwd := filepath.Join(root, "nested")
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	recordedAt := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	storedSessionID := applyIDPrefixToID(idPrefix, sessionID)
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: storedSessionID, Project: originalProject, Machine: storedMachine,
+		Agent: string(parser.AgentClaude), Cwd: cwd, FilePath: &path,
+	}))
+	require.NoError(t, database.UpsertProjectIdentityObservationWithSnapshotProject(
+		t.Context(), export.ProjectIdentityObservation{
+			SessionID: storedSessionID, Project: originalProject, Machine: storedMachine,
+			RootPath: root, GitRemote: "https://example.com/team/project.git",
+			RemoteResolution: export.ProjectResolutionResolved,
+			ObservedAt:       recordedAt,
+		}, originalProject,
+	))
+	engine := NewEngine(database, EngineConfig{
+		Machine: storedMachine, IDPrefix: idPrefix,
+	})
+	t.Cleanup(engine.Close)
+
+	outcome := engine.writeBatchWithOutcome([]pendingWrite{{
+		sess: parser.ParsedSession{
+			ID: sessionID, Project: fallbackProject, Machine: configuredLabel,
+			Agent: parser.AgentClaude, Cwd: cwd,
+			StartedAt: recordedAt, EndedAt: recordedAt,
+			File: parser.FileInfo{Path: path, Mtime: recordedAt.UnixNano()},
+		},
+	}}, syncWriteDefault, true)
+
+	require.Equal(t, 1, outcome.writtenSessions)
+	stored, err := database.GetSessionFull(t.Context(), storedSessionID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, storedMachine, stored.Machine,
+		"a relabel must not rewrite immutable machine attribution")
+	assert.Equal(t, originalProject, stored.Project,
+		"project recovery must use the stored machine before the checkout lookup")
+}
+
+func TestWriteBatchLegacyLocalRecoversUnavailableSourceProject(t *testing.T) {
+	const (
+		sessionID       = "legacy-local-unavailable-source"
+		originalProject = "resolved-project"
+		fallbackProject = "parser-fallback"
+		currentMachine  = "current-machine"
+	)
+	database := openTestDB(t)
+	root := filepath.Join(t.TempDir(), "missing-checkout")
+	cwd := filepath.Join(root, "nested")
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	recordedAt := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: sessionID, Project: originalProject, Machine: "local",
+		Agent: string(parser.AgentClaude), Cwd: cwd, FilePath: &path,
+	}))
+	require.NoError(t, database.UpsertProjectIdentityObservationWithSnapshotProject(
+		t.Context(), export.ProjectIdentityObservation{
+			SessionID: sessionID, Project: originalProject, Machine: "local",
+			RootPath: root, GitRemote: "https://example.com/team/project.git",
+			RemoteResolution: export.ProjectResolutionResolved,
+			ObservedAt:       recordedAt,
+		}, originalProject,
+	))
+	engine := NewEngine(database, EngineConfig{Machine: currentMachine})
+	t.Cleanup(engine.Close)
+
+	outcome := engine.writeBatchWithOutcome([]pendingWrite{{
+		sess: parser.ParsedSession{
+			ID: sessionID, Project: fallbackProject, Machine: currentMachine,
+			Agent: parser.AgentClaude, Cwd: cwd,
+			StartedAt: recordedAt, EndedAt: recordedAt,
+			File: parser.FileInfo{Path: path, Mtime: recordedAt.UnixNano()},
+		},
+	}}, syncWriteDefault, true)
+
+	require.Equal(t, 1, outcome.writtenSessions)
+	stored, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "local", stored.Machine,
+		"legacy attribution must remain immutable")
+	assert.Equal(t, originalProject, stored.Project,
+		"legacy local attribution must still use local project recovery")
+}
+
+func TestWriteBatchDuplicateNewSessionIDKeepsFirstMachine(t *testing.T) {
+	const sessionID = "copied-session"
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{Machine: "local-machine"})
+	t.Cleanup(engine.Close)
+	startedAt := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	writes := []pendingWrite{
+		{sess: parser.ParsedSession{
+			ID: sessionID, Project: "first-copy", Machine: "machine-z",
+			Agent: parser.AgentCopilot, StartedAt: startedAt, EndedAt: startedAt,
+			File: parser.FileInfo{Path: "/sources/a/session.jsonl", Hash: "same-copy"},
+		}},
+		{sess: parser.ParsedSession{
+			ID: sessionID, Project: "second-copy", Machine: "machine-a",
+			Agent: parser.AgentCopilot, StartedAt: startedAt, EndedAt: startedAt,
+			File: parser.FileInfo{Path: "/sources/b/session.jsonl", Hash: "same-copy"},
+		}},
+	}
+
+	outcome := engine.writeBatchWithOutcome(writes, syncWriteDefault, true)
+
+	require.Equal(t, 2, outcome.writtenSessions)
+	require.Zero(t, outcome.failedSessions)
+	stored, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "machine-z", stored.Machine,
+		"every same-batch copy must use the machine of the first ingestion")
+}
+
+func TestWriteBatchUnverifiedCopyKeepsStoredIdentitySnapshot(t *testing.T) {
+	const sessionID = "shared-native-id"
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{Machine: "local-machine"})
+	t.Cleanup(engine.Close)
+	startedAt := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	write := func(machine, project, path, hash, content string) pendingWrite {
+		return pendingWrite{
+			sess: parser.ParsedSession{
+				ID: sessionID, Project: project, Machine: machine,
+				Agent: parser.AgentCopilot, Cwd: filepath.Dir(path),
+				StartedAt: startedAt, EndedAt: startedAt, MessageCount: 1,
+				File: parser.FileInfo{Path: path, Hash: hash},
+			},
+			msgs: []parser.ParsedMessage{{
+				Ordinal: 0, Role: parser.RoleUser, Content: content,
+				Timestamp: startedAt,
+			}},
+		}
+	}
+	localPath := filepath.Join(t.TempDir(), "local.jsonl")
+	foreignPath := filepath.Join(t.TempDir(), "foreign.jsonl")
+	initial := engine.writeBatchWithOutcome([]pendingWrite{
+		write("local-machine", "local-project", localPath, "local-hash", "local content"),
+	}, syncWriteDefault, true)
+	require.Equal(t, 1, initial.writtenSessions)
+	require.Zero(t, initial.failedSessions)
+
+	copyWrite := engine.writeBatchWithOutcome([]pendingWrite{
+		write("foreign-machine", "foreign-project", foreignPath, "foreign-hash", "foreign content"),
+	}, syncWriteBulk, true)
+
+	assert.Equal(t, 1, copyWrite.writtenSessions)
+	assert.Zero(t, copyWrite.failedSessions)
+	stored, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "local-machine", stored.Machine)
+	assert.Equal(t, "foreign-project", stored.Project)
+	require.NotNil(t, stored.FilePath)
+	assert.Equal(t, foreignPath, *stored.FilePath)
+	messages, err := database.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "foreign content", messages[0].Content)
+	snapshots, err := database.ListSessionProjectIdentitySnapshots(t.Context())
+	require.NoError(t, err)
+	require.Len(t, snapshots, 1)
+	assert.Equal(t, "local-project", snapshots[0].Project,
+		"an unverified copy must not rewrite local filesystem identity evidence")
+}
+
+func TestWriteBatchResyncDuplicateIDKeepsFirstReplacementMachine(t *testing.T) {
+	const sessionID = "copied-across-resync-batches"
+	original := openTestDB(t)
+	replacement := openTestDB(t)
+	engine := NewEngine(replacement, EngineConfig{Machine: "local-machine"})
+	engine.archiveStore = original
+	t.Cleanup(engine.Close)
+	startedAt := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	write := func(machine, project, path string) pendingWrite {
+		return pendingWrite{sess: parser.ParsedSession{
+			ID: sessionID, Project: project, Machine: machine,
+			Agent: parser.AgentCopilot, StartedAt: startedAt, EndedAt: startedAt,
+			File: parser.FileInfo{Path: path, Hash: "same-copy"},
+		}}
+	}
+
+	first := engine.writeBatchWithOutcome([]pendingWrite{
+		write("machine-a", "first-copy", "/sources/a/session.jsonl"),
+	}, syncWriteDefault, true)
+	require.Equal(t, 1, first.writtenSessions)
+	require.Zero(t, first.failedSessions)
+	second := engine.writeBatchWithOutcome([]pendingWrite{
+		write("machine-b", "second-copy", "/sources/b/session.jsonl"),
+	}, syncWriteDefault, true)
+	require.Equal(t, 1, second.writtenSessions)
+	require.Zero(t, second.failedSessions)
+
+	stored, err := replacement.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "machine-a", stored.Machine,
+		"a later rebuild batch must retain the first replacement write's machine")
+}
+
+func TestWriteBatchExistingEmptyMachineRemainsEmpty(t *testing.T) {
+	const sessionID = "legacy-empty-machine"
+	database := openTestDB(t)
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: sessionID, Project: "legacy", Machine: "",
+		Agent: string(parser.AgentCopilot), FilePath: strPtr("/sources/session.jsonl"),
+	}))
+	engine := NewEngine(database, EngineConfig{Machine: "local-machine"})
+	t.Cleanup(engine.Close)
+	startedAt := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+
+	outcome := engine.writeBatchWithOutcome([]pendingWrite{{
+		sess: parser.ParsedSession{
+			ID: sessionID, Project: "refreshed", Machine: "archivebox",
+			Agent: parser.AgentCopilot, StartedAt: startedAt, EndedAt: startedAt,
+			File: parser.FileInfo{Path: "/sources/session.jsonl"},
+		},
+	}}, syncWriteDefault, true)
+
+	require.Equal(t, 1, outcome.writtenSessions)
+	stored, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Empty(t, stored.Machine,
+		"refreshing a legacy row must retain its stored empty attribution")
+}
+
+func TestWriteBatchResyncReplacementEmptyMachineRemainsEmpty(t *testing.T) {
+	const sessionID = "replacement-empty-machine"
+	original := openTestDB(t)
+	replacement := openTestDB(t)
+	require.NoError(t, replacement.UpsertSession(db.Session{
+		ID: sessionID, Project: "legacy", Machine: "",
+		Agent: string(parser.AgentCopilot), FilePath: strPtr("/sources/session.jsonl"),
+	}))
+	engine := NewEngine(replacement, EngineConfig{Machine: "local-machine"})
+	engine.archiveStore = original
+	t.Cleanup(engine.Close)
+	startedAt := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+
+	outcome := engine.writeBatchWithOutcome([]pendingWrite{{
+		sess: parser.ParsedSession{
+			ID: sessionID, Project: "refreshed", Machine: "archivebox",
+			Agent: parser.AgentCopilot, StartedAt: startedAt, EndedAt: startedAt,
+			File: parser.FileInfo{Path: "/sources/session.jsonl"},
+		},
+	}}, syncWriteDefault, true)
+
+	require.Equal(t, 1, outcome.writtenSessions)
+	stored, err := replacement.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Empty(t, stored.Machine,
+		"a rebuild must retain an empty attribution already in the replacement")
+}
+
 func TestClaudeIDFreshnessRejectsSourceMissingTombstone(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
@@ -851,12 +1271,55 @@ func (factory manyStreamingFactory) Capabilities() parser.Capabilities {
 	return factory.provider.Capabilities()
 }
 
-func (factory manyStreamingFactory) NewProvider(parser.ProviderConfig) parser.Provider {
-	return factory.provider
+// perCallScopeProviderBase builds the ProviderBase a factory hands to its
+// per-call wrapper: the shared Def and Caps with this call's config. Shared
+// test providers must never have Config written by NewProvider — sync workers
+// construct providers concurrently, so the write races with the
+// value-receiver reads of the embedded base (Definition, Capabilities).
+func perCallScopeProviderBase(
+	shared parser.ProviderBase, cfg parser.ProviderConfig,
+) parser.ProviderBase {
+	return parser.ProviderBase{
+		Def: shared.Def, Caps: shared.Caps, Config: cfg.Clone(),
+	}
 }
 
-func (factory directStreamingFactory) NewProvider(parser.ProviderConfig) parser.Provider {
-	return factory.provider
+// manyStreamingScopedProvider overlays per-call reconciliation scope
+// resolution on the shared provider; behavior and counters stay shared.
+type manyStreamingScopedProvider struct {
+	*manyStreamingProvider
+	scopes parser.ProviderBase
+}
+
+func (p manyStreamingScopedProvider) ResolveReconciliationScopes(
+	ctx context.Context, req parser.ReconciliationScopeRequest,
+) (parser.ReconciliationScopePlan, error) {
+	return p.scopes.ResolveReconciliationScopes(ctx, req)
+}
+
+func (factory manyStreamingFactory) NewProvider(cfg parser.ProviderConfig) parser.Provider {
+	return manyStreamingScopedProvider{
+		manyStreamingProvider: factory.provider,
+		scopes:                perCallScopeProviderBase(factory.provider.ProviderBase, cfg),
+	}
+}
+
+type directStreamingScopedProvider struct {
+	*directStreamingProvider
+	scopes parser.ProviderBase
+}
+
+func (p directStreamingScopedProvider) ResolveReconciliationScopes(
+	ctx context.Context, req parser.ReconciliationScopeRequest,
+) (parser.ReconciliationScopePlan, error) {
+	return p.scopes.ResolveReconciliationScopes(ctx, req)
+}
+
+func (factory directStreamingFactory) NewProvider(cfg parser.ProviderConfig) parser.Provider {
+	return directStreamingScopedProvider{
+		directStreamingProvider: factory.provider,
+		scopes:                  perCallScopeProviderBase(factory.provider.ProviderBase, cfg),
+	}
 }
 
 type baselineDBBackedProvider struct {
@@ -1095,6 +1558,160 @@ func TestSyncProviderDBBackedBaselinesOnlyCompleteSuccessfulSources(t *testing.T
 	}
 }
 
+func TestSyncProviderDBBackedBatchesWarmSourceAttributionLookup(t *testing.T) {
+	for _, sourceCount := range []int{1, 100} {
+		t.Run(fmt.Sprintf("sources-%d", sourceCount), func(t *testing.T) {
+			const agent parser.AgentType = "warm-db-backed"
+			database := openTestDB(t)
+			root := t.TempDir()
+			sources := make([]parser.SourceRef, sourceCount)
+			for i := range sourceCount {
+				path := filepath.Join(root, fmt.Sprintf("session-%03d.db", i))
+				sources[i] = parser.SourceRef{
+					Provider: agent, Key: path,
+					DisplayPath: path, FingerprintKey: path,
+				}
+				mtime := int64(2)
+				require.NoError(t, database.UpsertSession(db.Session{
+					ID: fmt.Sprintf("session-%03d", i), Project: "project",
+					Machine: "local", Agent: string(agent),
+					FilePath: &path, FileMtime: &mtime,
+				}))
+				require.NoError(t, database.SetSessionDataVersion(
+					fmt.Sprintf("session-%03d", i), db.CurrentDataVersion(),
+				))
+			}
+			provider := &baselineDBBackedProvider{
+				ProviderBase: parser.ProviderBase{
+					Def: parser.AgentDef{Type: agent, FileBased: false},
+					Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+						StreamingDiscovery: parser.CapabilitySupported,
+					}},
+				},
+				sources:          sources,
+				outcomes:         make(map[string]parser.ParseOutcome),
+				fingerprintCalls: make(map[string]int),
+				parseCalls:       make(map[string]int),
+			}
+			engine := NewEngine(database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{agent: {root}},
+				SourceMachines: map[parser.AgentType]map[string]string{
+					agent: {root: "local"},
+				},
+				Machine: "local",
+				ProviderFactories: []parser.ProviderFactory{
+					baselineDBBackedFactory{provider: provider},
+				},
+				ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+					agent: parser.ProviderMigrationProviderAuthoritative,
+				},
+			})
+			t.Cleanup(engine.Close)
+			lookupCalls := 0
+			engine.sourceAttributionLookupOverride = func(
+				ctx context.Context, requested []db.SessionSourcePath,
+			) ([]db.SessionSourceAttribution, error) {
+				lookupCalls++
+				assert.Len(t, requested, sourceCount)
+				return database.ListActiveSessionSourceAttributions(ctx, requested)
+			}
+			stats := SyncStats{}
+
+			aborted := engine.syncProviderDBBackedAgent(
+				t.Context(), agent, string(agent), syncWriteBulk, false,
+				newRootSyncScope([]string{root}), &stats, func(int, int) {},
+			)
+
+			assert.False(t, aborted)
+			assert.Equal(t, 1, lookupCalls,
+				"one warm discovery page must use one attribution lookup")
+			assert.Empty(t, provider.parseCalls,
+				"current warm sources must not be reparsed")
+		})
+	}
+}
+
+func TestSyncProviderDBBackedBaselinesEveryStoredMachineForSharedSource(
+	t *testing.T,
+) {
+	const agent parser.AgentType = "shared-db-backed"
+	database := openTestDB(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "shared.db")
+	mtime := int64(2)
+	for _, seed := range []struct {
+		id      string
+		machine string
+	}{
+		{id: "shared-a", machine: "machine-a"},
+		{id: "shared-b", machine: "machine-b"},
+	} {
+		require.NoError(t, database.UpsertSession(db.Session{
+			ID: seed.id, Project: "project", Machine: seed.machine,
+			Agent: string(agent), FilePath: &path, FileMtime: &mtime,
+		}))
+		require.NoError(t, database.SetSessionDataVersion(
+			seed.id, db.CurrentDataVersion(),
+		))
+	}
+	provider := &baselineDBBackedProvider{
+		ProviderBase: parser.ProviderBase{
+			Def: parser.AgentDef{Type: agent, FileBased: false},
+			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+				StreamingDiscovery: parser.CapabilitySupported,
+			}},
+		},
+		sources: []parser.SourceRef{{
+			Provider: agent, Key: path,
+			DisplayPath: path, FingerprintKey: path,
+		}},
+		outcomes:         make(map[string]parser.ParseOutcome),
+		fingerprintCalls: make(map[string]int),
+		parseCalls:       make(map[string]int),
+	}
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{agent: {root}},
+		SourceMachines: map[parser.AgentType]map[string]string{
+			agent: {root: "renamed-machine"},
+		},
+		Machine: "local",
+		ProviderFactories: []parser.ProviderFactory{
+			baselineDBBackedFactory{provider: provider},
+		},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			agent: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	t.Cleanup(engine.Close)
+	stats := SyncStats{}
+
+	aborted := engine.syncProviderDBBackedAgent(
+		t.Context(), agent, string(agent), syncWriteBulk, false,
+		newRootSyncScope([]string{root}), &stats, func(int, int) {},
+	)
+
+	assert.False(t, aborted)
+	for _, machine := range []string{"machine-a", "machine-b"} {
+		ownership, err := database.ListActiveSessionSourceOwnershipScopesPage(
+			t.Context(), machine, string(agent),
+			[]db.StoredSourcePathHintScope{{Path: root}},
+			db.SessionSourceCursor{},
+		)
+		require.NoError(t, err)
+		require.Len(t, ownership, 1,
+			"shared source must keep proof for %s", machine)
+		assert.Equal(t, path, ownership[0].FilePath)
+	}
+	configured, err := database.ListActiveSessionSourceOwnershipScopesPage(
+		t.Context(), "renamed-machine", string(agent),
+		[]db.StoredSourcePathHintScope{{Path: root}},
+		db.SessionSourceCursor{},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, configured,
+		"configured relabel must not replace stored source attribution")
+}
+
 func TestSyncProviderDBBackedAgentFlushesEachSourceBeforeParsingNext(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
@@ -1266,12 +1883,23 @@ func TestProviderForceReplaceRewritesResolvedMultiSessionHintScopes(t *testing.T
 		pathRewriter: func(path string) string { return "host:" + path },
 	}
 
-	ids, err := engine.providerSourceSessionIDsForForceReplace(provider, parser.SourceRef{
-		Provider: "scope-provider", DisplayPath: container,
-	})
+	ids, err := engine.providerSourceSessionIDsForForceReplace(
+		t.Context(), provider, parser.SourceRef{
+			Provider: "scope-provider", DisplayPath: container,
+		},
+	)
 
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"remote-a", "remote-b"}, ids)
+
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = engine.providerSourceSessionIDsForForceReplace(
+		canceled, provider, parser.SourceRef{
+			Provider: "scope-provider", DisplayPath: container,
+		},
+	)
+	require.ErrorContains(t, err, "list provider force-replace session machines")
 }
 
 func TestProviderChangedPathEventKindTreatsExistingHashPathAsPhysical(t *testing.T) {
@@ -1685,8 +2313,22 @@ func (f failingDBBackedFactory) Capabilities() parser.Capabilities {
 	return f.provider.Capabilities()
 }
 
-func (f failingDBBackedFactory) NewProvider(parser.ProviderConfig) parser.Provider {
-	return f.provider
+type failingDBBackedScopedProvider struct {
+	*failingDBBackedProvider
+	scopes parser.ProviderBase
+}
+
+func (p failingDBBackedScopedProvider) ResolveReconciliationScopes(
+	ctx context.Context, req parser.ReconciliationScopeRequest,
+) (parser.ReconciliationScopePlan, error) {
+	return p.scopes.ResolveReconciliationScopes(ctx, req)
+}
+
+func (f failingDBBackedFactory) NewProvider(cfg parser.ProviderConfig) parser.Provider {
+	return failingDBBackedScopedProvider{
+		failingDBBackedProvider: f.provider,
+		scopes:                  perCallScopeProviderBase(f.provider.ProviderBase, cfg),
+	}
 }
 
 func TestReconcileWatchRootsFailsWhenDBBackedDiscoveryFails(t *testing.T) {
@@ -2218,13 +2860,14 @@ func TestTombstoneMissingWatchSourcesScopesSharedPathByAgent(t *testing.T) {
 			{Agent: "codex", FilePath: shared},
 		},
 	))
-	engine := &Engine{
-		db: database, machine: "local",
-		agentDirs: map[parser.AgentType][]string{
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {root},
 			parser.AgentCodex:  {root},
 		},
-	}
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
 
 	deleted, err := tombstoneMissingWatchSourcesUnderSyncLock(
 		t.Context(), engine, []string{root},
@@ -2327,12 +2970,13 @@ func TestTombstoneMissingWatchSourcesPaginatesLargeArchive(t *testing.T) {
 	require.NoError(t, database.BaselineActiveSessionSourcePaths(
 		t.Context(), "local", sources,
 	))
-	engine := &Engine{
-		db: database, machine: "local",
-		agentDirs: map[parser.AgentType][]string{
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {root},
 		},
-	}
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
 
 	deleted, err := tombstoneMissingWatchSourcesUnderSyncLock(
 		t.Context(), engine, []string{root},
@@ -2366,15 +3010,19 @@ func TestTombstoneMissingWatchSourcesDoesNotRediscoverEachOwnership(t *testing.T
 					Type: parser.AgentCowork, IDPrefix: "cowork:", FileBased: true,
 				},
 			}}
-			engine := &Engine{
-				db: database, machine: "local",
-				agentDirs: map[parser.AgentType][]string{
+			engine := NewEngine(database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentCowork: {root},
 				},
-				providerFactories: providerFactoryMap([]parser.ProviderFactory{
+				Machine: "local",
+				ProviderFactories: []parser.ProviderFactory{
 					lookupSourceFactory{provider: provider},
-				}),
-			}
+				},
+				ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+					parser.AgentCowork: parser.ProviderMigrationProviderAuthoritative,
+				},
+			})
+			t.Cleanup(engine.Close)
 
 			deleted, err := tombstoneMissingWatchSourcesUnderSyncLock(
 				t.Context(), engine, []string{root},
@@ -2411,18 +3059,19 @@ func TestTombstoneMissingWatchSourcesDoesNotInferUnvalidatedVirtualPaths(t *test
 		t.Context(), "local", sources,
 	))
 	var statCalls atomic.Int32
-	engine := &Engine{
-		db: database, machine: "local",
-		agentDirs: map[parser.AgentType][]string{
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {root},
 		},
-		lstat: func(path string) (os.FileInfo, error) {
-			statCalls.Add(1)
-			_, expected := wantPaths[path]
-			assert.True(t, expected, "only the exact stored path may be checked")
-			delete(wantPaths, path)
-			return nil, os.ErrNotExist
-		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	engine.lstat = func(path string) (os.FileInfo, error) {
+		statCalls.Add(1)
+		_, expected := wantPaths[path]
+		assert.True(t, expected, "only the exact stored path may be checked")
+		delete(wantPaths, path)
+		return nil, os.ErrNotExist
 	}
 
 	deleted, err := tombstoneMissingWatchSourcesUnderSyncLock(
@@ -2581,7 +3230,11 @@ func TestReconciliationSourceBaselineUsesStoredPathRewrite(t *testing.T) {
 	require.NoError(t, engine.baselineReconciliationCandidates(
 		t.Context(), []reconciliationCandidate{{
 			Provider: parser.AgentClaude, Identity: "session", Path: localPath,
-		}}, []db.SessionSourcePath{{Agent: "claude", FilePath: storedPath}},
+			Machine: "host",
+		}}, []machineSessionSource{{
+			Machine: "host",
+			Source:  db.SessionSourcePath{Agent: "claude", FilePath: storedPath},
+		}},
 	))
 	changed, err := database.SoftDeleteSessionSourceOwnership(
 		t.Context(), "host", "claude", "session", storedPath,
@@ -3699,7 +4352,13 @@ func TestPairToolResultEventSummaries(t *testing.T) {
 					Category:            "Read",
 					ResultContentLength: len("secret file body"),
 					ResultContent:       "",
-					ResultEvents:        nil,
+					ResultEvents: []db.ToolResultEvent{{
+						ToolUseID:     "call_read",
+						Source:        "wait_output",
+						Status:        "completed",
+						Content:       "",
+						ContentLength: len("secret file body"),
+					}},
 				}},
 			}},
 		},
@@ -4186,6 +4845,362 @@ func TestProjectIdentityWriteBatchDiscoversLocalGitRemote(t *testing.T) {
 	assert.Equal(t, "feature/export", observations[0].GitBranch)
 }
 
+func TestProjectIdentityBulkWriteMappingPreservesParserProjectSnapshot(
+	t *testing.T,
+) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	cwd := filepath.Join(root, "feature-login")
+	_, err := database.CreateWorktreeProjectMapping(
+		context.Background(),
+		db.WorktreeProjectMapping{
+			Machine:    "laptop",
+			PathPrefix: root,
+			Project:    "canonical-app",
+			Enabled:    true,
+		},
+	)
+	require.NoError(t, err, "CreateWorktreeProjectMapping")
+
+	e := NewEngine(database, EngineConfig{Machine: "laptop"})
+	written, _, failed, _ := e.writeBatch([]pendingWrite{{
+		sess: parser.ParsedSession{
+			ID:        "mapped-bulk-identity",
+			Project:   "feature_login",
+			Machine:   "laptop",
+			Agent:     parser.AgentCodex,
+			Cwd:       cwd,
+			StartedAt: time.Now(),
+		},
+	}}, syncWriteBulk, true)
+	require.Equal(t, 0, failed, "no session writes may fail")
+	require.Equal(t, 1, written)
+
+	session, err := database.GetSession(
+		context.Background(), "mapped-bulk-identity",
+	)
+	require.NoError(t, err, "GetSession")
+	require.NotNil(t, session)
+	assert.Equal(t, "canonical_app", session.Project)
+
+	observations, err := database.ListProjectIdentityObservations(
+		context.Background(), []string{"canonical_app"},
+	)
+	require.NoError(t, err, "ListProjectIdentityObservations")
+	require.Len(t, observations, 1)
+	assert.Equal(t, "canonical_app", observations[0].Project)
+	assert.Equal(t, filepath.ToSlash(cwd), observations[0].RootPath)
+
+	snapshots, err := database.ListSessionProjectIdentitySnapshots(
+		context.Background(),
+	)
+	require.NoError(t, err, "ListSessionProjectIdentitySnapshots")
+	require.Len(t, snapshots, 1)
+	assert.Equal(t, "mapped-bulk-identity", snapshots[0].SessionID)
+	assert.Equal(t, "feature_login", snapshots[0].Project)
+	assert.Equal(t, filepath.ToSlash(cwd), snapshots[0].RootPath)
+}
+
+func TestProjectIdentityFullSessionWriteMappingPreservesParserProjectSnapshot(
+	t *testing.T,
+) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	cwd := filepath.Join(root, "feature-login")
+	_, err := database.CreateWorktreeProjectMapping(
+		context.Background(),
+		db.WorktreeProjectMapping{
+			Machine:    "laptop",
+			PathPrefix: root,
+			Project:    "canonical-app",
+			Enabled:    true,
+		},
+	)
+	require.NoError(t, err, "CreateWorktreeProjectMapping")
+
+	e := NewEngine(database, EngineConfig{Machine: "laptop"})
+	err = e.writeSessionFull(pendingWrite{
+		sess: parser.ParsedSession{
+			ID:        "mapped-full-identity",
+			Project:   "feature_login",
+			Machine:   "laptop",
+			Agent:     parser.AgentCodex,
+			Cwd:       cwd,
+			StartedAt: time.Now(),
+		},
+	})
+	require.NoError(t, err, "writeSessionFull")
+
+	session, err := database.GetSession(
+		context.Background(), "mapped-full-identity",
+	)
+	require.NoError(t, err, "GetSession")
+	require.NotNil(t, session)
+	assert.Equal(t, "canonical_app", session.Project)
+
+	observations, err := database.ListProjectIdentityObservations(
+		context.Background(), []string{"canonical_app"},
+	)
+	require.NoError(t, err, "ListProjectIdentityObservations")
+	require.Len(t, observations, 1)
+	assert.Equal(t, "canonical_app", observations[0].Project)
+	assert.Equal(t, filepath.ToSlash(cwd), observations[0].RootPath)
+
+	snapshots, err := database.ListSessionProjectIdentitySnapshots(
+		context.Background(),
+	)
+	require.NoError(t, err, "ListSessionProjectIdentitySnapshots")
+	require.Len(t, snapshots, 1)
+	assert.Equal(t, "mapped-full-identity", snapshots[0].SessionID)
+	assert.Equal(t, "feature_login", snapshots[0].Project)
+	assert.Equal(t, filepath.ToSlash(cwd), snapshots[0].RootPath)
+}
+
+func TestProjectIdentityMappedWriteWithEmptyParserProjectOmitsSnapshot(
+	t *testing.T,
+) {
+	tests := []struct {
+		name string
+		mode syncWriteMode
+	}{
+		{name: "ordinary", mode: syncWriteDefault},
+		{name: "bulk", mode: syncWriteBulk},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database := openTestDB(t)
+			root := t.TempDir()
+			cwd := filepath.Join(root, "unclassified")
+			_, err := database.CreateWorktreeProjectMapping(
+				context.Background(),
+				db.WorktreeProjectMapping{
+					Machine:    "laptop",
+					PathPrefix: root,
+					Project:    "canonical-app",
+					Enabled:    true,
+				},
+			)
+			require.NoError(t, err, "CreateWorktreeProjectMapping")
+
+			e := NewEngine(database, EngineConfig{Machine: "laptop"})
+			written, _, failed, _ := e.writeBatch([]pendingWrite{{
+				sess: parser.ParsedSession{
+					ID:        "mapped-empty-" + tt.name,
+					Machine:   "laptop",
+					Agent:     parser.AgentCodex,
+					Cwd:       cwd,
+					StartedAt: time.Now(),
+				},
+			}}, tt.mode, true)
+			require.Equal(t, 0, failed, "no session writes may fail")
+			require.Equal(t, 1, written)
+
+			session, err := database.GetSession(
+				context.Background(), "mapped-empty-"+tt.name,
+			)
+			require.NoError(t, err, "GetSession")
+			require.NotNil(t, session)
+			assert.Equal(t, "canonical_app", session.Project)
+
+			observations, err := database.ListProjectIdentityObservations(
+				context.Background(), []string{"canonical_app"},
+			)
+			require.NoError(t, err, "ListProjectIdentityObservations")
+			require.Len(t, observations, 1)
+			assert.Equal(t, "canonical_app", observations[0].Project)
+			assert.Equal(t, filepath.ToSlash(cwd), observations[0].RootPath)
+
+			snapshots, err := database.ListSessionProjectIdentitySnapshots(
+				context.Background(),
+			)
+			require.NoError(t, err, "ListSessionProjectIdentitySnapshots")
+			assert.Empty(t, snapshots,
+				"empty parser project must not become target-labelled evidence")
+		})
+	}
+}
+
+func TestProjectIdentityEmptySourceReparsePreservesExistingSnapshot(
+	t *testing.T,
+) {
+	tests := []struct {
+		name          string
+		writePath     string
+		sourceProject string
+	}{
+		{name: "ordinary", writePath: "ordinary", sourceProject: "feature_login"},
+		{name: "full_session", writePath: "full", sourceProject: "feature_login"},
+		{name: "bulk", writePath: "bulk", sourceProject: "feature_login"},
+		{
+			name:          "bulk_source_equals_target",
+			writePath:     "bulk",
+			sourceProject: "canonical_app",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database := openTestDB(t)
+			root := t.TempDir()
+			cwd := filepath.Join(root, "feature-login")
+			_, err := database.CreateWorktreeProjectMapping(
+				context.Background(),
+				db.WorktreeProjectMapping{
+					Machine:    "laptop",
+					PathPrefix: root,
+					Project:    "canonical-app",
+					Enabled:    true,
+				},
+			)
+			require.NoError(t, err, "CreateWorktreeProjectMapping")
+
+			e := NewEngine(database, EngineConfig{Machine: "laptop"})
+			write := func(project string) {
+				t.Helper()
+				pw := pendingWrite{sess: parser.ParsedSession{
+					ID:        "mapped-reparse-" + tt.name,
+					Project:   project,
+					Machine:   "laptop",
+					Agent:     parser.AgentCodex,
+					Cwd:       cwd,
+					StartedAt: time.Now(),
+				}}
+				switch tt.writePath {
+				case "ordinary":
+					written, _, failed, _ := e.writeBatch(
+						[]pendingWrite{pw}, syncWriteDefault, true,
+					)
+					require.Equal(t, 0, failed, "ordinary write failures")
+					require.Equal(t, 1, written, "ordinary writes")
+				case "full":
+					require.NoError(t, e.writeSessionFull(pw), "writeSessionFull")
+				case "bulk":
+					written, _, failed, _ := e.writeBatch(
+						[]pendingWrite{pw}, syncWriteBulk, true,
+					)
+					require.Equal(t, 0, failed, "bulk write failures")
+					require.Equal(t, 1, written, "bulk writes")
+				default:
+					require.Fail(t, "unknown write path", tt.writePath)
+				}
+			}
+
+			write(tt.sourceProject)
+			write("")
+
+			session, err := database.GetSession(
+				context.Background(), "mapped-reparse-"+tt.name,
+			)
+			require.NoError(t, err, "GetSession")
+			require.NotNil(t, session)
+			assert.Equal(t, "canonical_app", session.Project)
+
+			observations, err := database.ListProjectIdentityObservations(
+				context.Background(), []string{"canonical_app"},
+			)
+			require.NoError(t, err, "ListProjectIdentityObservations")
+			require.Len(t, observations, 1)
+			assert.Equal(t, "canonical_app", observations[0].Project)
+			assert.Equal(t, filepath.ToSlash(cwd), observations[0].RootPath)
+
+			snapshots, err := database.ListSessionProjectIdentitySnapshots(
+				context.Background(),
+			)
+			require.NoError(t, err, "ListSessionProjectIdentitySnapshots")
+			require.Len(t, snapshots, 1)
+			assert.Equal(t, "mapped-reparse-"+tt.name, snapshots[0].SessionID)
+			assert.Equal(t, tt.sourceProject, snapshots[0].Project)
+			assert.Equal(t, filepath.ToSlash(cwd), snapshots[0].RootPath)
+		})
+	}
+}
+
+func TestProjectIdentityExplicitEmptyDeleteReinsertClearsNewFallback(
+	t *testing.T,
+) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	cwd := filepath.Join(root, "unclassified")
+	_, err := database.CreateWorktreeProjectMapping(
+		context.Background(),
+		db.WorktreeProjectMapping{
+			Machine:    "laptop",
+			PathPrefix: root,
+			Project:    "canonical-app",
+			Enabled:    true,
+		},
+	)
+	require.NoError(t, err, "CreateWorktreeProjectMapping")
+
+	e := NewEngine(database, EngineConfig{Machine: "laptop"})
+	pw := pendingWrite{sess: parser.ParsedSession{
+		ID:        "mapped-empty-reinsert",
+		Machine:   "laptop",
+		Agent:     parser.AgentCodex,
+		Cwd:       cwd,
+		StartedAt: time.Now(),
+	}}
+	write := func() {
+		t.Helper()
+		written, _, failed, _ := e.writeBatch(
+			[]pendingWrite{pw}, syncWriteDefault, true,
+		)
+		require.Equal(t, 0, failed, "ordinary write failures")
+		require.Equal(t, 1, written, "ordinary writes")
+	}
+
+	write()
+	deleted, err := database.DeleteParserExcludedSessions(
+		[]string{"mapped-empty-reinsert"},
+	)
+	require.NoError(t, err, "DeleteParserExcludedSessions")
+	require.Equal(t, 1, deleted)
+	write()
+
+	session, err := database.GetSession(
+		context.Background(), "mapped-empty-reinsert",
+	)
+	require.NoError(t, err, "GetSession")
+	require.NotNil(t, session)
+	assert.Equal(t, "canonical_app", session.Project)
+
+	observations, err := database.ListProjectIdentityObservations(
+		context.Background(), []string{"canonical_app"},
+	)
+	require.NoError(t, err, "ListProjectIdentityObservations")
+	require.Len(t, observations, 1)
+	assert.Equal(t, "canonical_app", observations[0].Project)
+	assert.Equal(t, filepath.ToSlash(cwd), observations[0].RootPath)
+
+	snapshots, err := database.ListSessionProjectIdentitySnapshots(
+		context.Background(),
+	)
+	require.NoError(t, err, "ListSessionProjectIdentitySnapshots")
+	assert.Empty(t, snapshots,
+		"reinsertion must remove the newly triggered mapped fallback")
+}
+
+func TestSessionWithoutIdentityStillUsesOrdinaryUpsert(t *testing.T) {
+	database := openTestDB(t)
+	e := NewEngine(database, EngineConfig{Machine: "laptop"})
+	t.Cleanup(e.Close)
+
+	written, _, failed, _ := e.writeBatch(
+		[]pendingWrite{{sess: parser.ParsedSession{
+			ID: "without-project", Machine: "laptop", Agent: parser.AgentCodex,
+			StartedAt: time.Now(),
+		}}},
+		syncWriteDefault,
+		true,
+	)
+	assert.Equal(t, 0, failed)
+	assert.Equal(t, 1, written)
+
+	stored, err := database.GetSession(context.Background(), "without-project")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Empty(t, stored.Project)
+}
+
 func TestProjectIdentityDiscoversLinkedWorktreeRepositoryContext(t *testing.T) {
 	database := openTestDB(t)
 	mainRoot := filepath.Join(t.TempDir(), "main")
@@ -4503,6 +5518,40 @@ func TestProjectIdentityObservationSkipsDiscoveryForRemoteMachine(t *testing.T) 
 		"root path must stay the raw cwd, not a locally resolved git root")
 }
 
+func TestProjectIdentityObservationDiscoversForLegacyLocalMachine(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, ".git", "config"),
+		[]byte("[remote \"origin\"]\n\turl = https://github.com/acme/remote.git\n"),
+		0o644,
+	))
+	cwd := filepath.Join(root, "subdir")
+	require.NoError(t, os.Mkdir(cwd, 0o755))
+	engine := NewEngine(database, EngineConfig{Machine: "current-machine"})
+	t.Cleanup(engine.Close)
+
+	require.NoError(t, engine.writeProjectIdentityObservation(
+		t.Context(), db.Session{
+			ID: "identity-legacy-local", Project: "legacy-local-project",
+			Machine: "local", Agent: "codex", Cwd: cwd,
+			StartedAt: strPtr(time.Now().UTC().Format(time.RFC3339Nano)),
+		},
+	))
+
+	observations, err := database.ListProjectIdentityObservations(
+		t.Context(), []string{"legacy-local-project"},
+	)
+	require.NoError(t, err)
+	require.Len(t, observations, 1)
+	assert.Equal(t, "https://github.com/acme/remote.git",
+		observations[0].GitRemote,
+		"legacy local attribution must still discover local git identity")
+	assert.Equal(t, "local", observations[0].Machine,
+		"discovery must not rewrite persisted attribution")
+}
+
 func TestProjectIdentitySafeLocalAbsolutePathHandlesWindowsDriveRootsByOS(t *testing.T) {
 	wantWindowsDriveLocal := runtime.GOOS == "windows"
 	assert.Equal(t, wantWindowsDriveLocal, safeLocalAbsolutePath(`C:\repo`))
@@ -4634,6 +5683,300 @@ func TestProjectIdentityIncrementalAppendPersistsObservation(t *testing.T) {
 	require.Len(t, observations, 1)
 	assert.Equal(t, "https://github.com/acme/inc.git", observations[0].GitRemote)
 	assert.Equal(t, "github.com/acme/inc", observations[0].NormalizedRemote)
+}
+
+func TestProjectIdentityIncrementalAppendUsesPersistedMappedProject(t *testing.T) {
+	const (
+		sessionID     = "mapped-incremental"
+		sourceProject = "source_project"
+		targetProject = "target_project"
+		machine       = "remote-example-host"
+		root          = "/srv/custom-worktrees/sample-branch"
+	)
+	for _, tc := range []struct {
+		name           string
+		removeSnapshot bool
+	}{
+		{name: "absent snapshot", removeSnapshot: true},
+		{name: "weak empty-key snapshot"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "incremental-identity.db")
+			database, err := db.Open(path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			recordedAt := time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC)
+			require.NoError(t, database.UpsertSession(db.Session{
+				ID: sessionID, Project: sourceProject, Machine: machine,
+				Agent: "claude", Cwd: root, MessageCount: 1,
+			}))
+			if tc.removeSnapshot {
+				raw, openErr := sql.Open("sqlite3", path)
+				require.NoError(t, openErr)
+				_, deleteErr := raw.ExecContext(ctx,
+					`DELETE FROM session_project_identity_snapshots WHERE session_id = ?`,
+					sessionID,
+				)
+				require.NoError(t, deleteErr)
+				require.NoError(t, raw.Close())
+			}
+			_, err = database.CreateWorktreeProjectMapping(ctx, db.WorktreeProjectMapping{
+				Machine: machine, PathPrefix: "/srv/custom-worktrees",
+				Layout: db.WorktreeMappingLayoutExplicit, Project: targetProject,
+				Enabled: true,
+			})
+			require.NoError(t, err)
+
+			e := NewEngine(database, EngineConfig{Machine: machine})
+			t.Cleanup(e.Close)
+			require.NoError(t, e.writeIncremental(&incrementalUpdate{
+				sessionID: sessionID, project: sourceProject,
+				sourceProject: sourceProject, machine: machine, cwd: root,
+				msgs: []parser.ParsedMessage{{
+					Role: parser.RoleAssistant, Content: "delta", Ordinal: 1,
+				}},
+				msgCount: 2, userMsgCount: 1,
+				fileSize: 100, fileMtime: recordedAt.Add(time.Minute).UnixNano(),
+			}))
+
+			persisted, err := database.GetSession(ctx, sessionID)
+			require.NoError(t, err)
+			require.NotNil(t, persisted)
+			assert.Equal(t, targetProject, persisted.Project)
+			targetObservations, err := database.ListProjectIdentityObservations(
+				ctx, []string{targetProject},
+			)
+			require.NoError(t, err)
+			require.Len(t, targetObservations, 1)
+			assert.Equal(t, root, targetObservations[0].RootPath)
+			snapshots, err := database.ListSessionProjectIdentitySnapshots(ctx)
+			require.NoError(t, err)
+			require.Len(t, snapshots, 1)
+			assert.Equal(t, sourceProject, snapshots[0].Project,
+				"new or upgraded snapshot must retain parser-time project evidence")
+			assert.NotEmpty(t, snapshots[0].Key,
+				"incremental evidence must create or upgrade the weak snapshot")
+		})
+	}
+}
+
+func TestProjectIdentityIncrementalStatePreservesExplicitSourceProject(
+	t *testing.T,
+) {
+	for _, tc := range []struct {
+		name          string
+		sourceProject string
+	}{
+		{name: "non-empty source", sourceProject: "parser_source"},
+		{name: "explicit empty source"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			database := openTestDB(t)
+			root := t.TempDir()
+			path := filepath.Join(root, "session.jsonl")
+			initial := []byte("initial-record\n")
+			require.NoError(t, os.WriteFile(path, initial, 0o600))
+			initialInfo, err := os.Stat(path)
+			require.NoError(t, err)
+			_, err = database.CreateWorktreeProjectMapping(
+				ctx,
+				db.WorktreeProjectMapping{
+					Machine: "laptop", PathPrefix: root,
+					Layout:  db.WorktreeMappingLayoutExplicit,
+					Project: "mapped_target", Enabled: true,
+				},
+			)
+			require.NoError(t, err)
+
+			e := NewEngine(database, EngineConfig{Machine: "laptop"})
+			t.Cleanup(e.Close)
+			written, _, failed, _ := e.writeBatch(
+				[]pendingWrite{{
+					sess: parser.ParsedSession{
+						ID: "incremental-source", Project: tc.sourceProject,
+						Machine: "laptop", Agent: parser.AgentClaude,
+						Cwd: root, StartedAt: initialInfo.ModTime(),
+						FirstMessage: "initial", MessageCount: 1,
+						File: parser.FileInfo{
+							Path: path, Size: int64(len(initial)),
+							Mtime: initialInfo.ModTime().UnixNano(),
+						},
+					},
+					msgs: []parser.ParsedMessage{{
+						Role: parser.RoleUser, Content: "initial", Ordinal: 0,
+					}},
+				}},
+				syncWriteDefault,
+				true,
+			)
+			require.Equal(t, 0, failed)
+			require.Equal(t, 1, written)
+			incrementalInfo, found := database.GetSessionForIncremental(path)
+			require.True(t, found)
+			assert.Equal(t, int64(len(initial)), incrementalInfo.FileSize)
+			assert.Equal(t, 1, incrementalInfo.MsgCount)
+			assert.Equal(t, db.CurrentDataVersion(),
+				database.GetSessionDataVersion("incremental-source"))
+
+			appended := []byte("appended-record\n")
+			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+			require.NoError(t, err)
+			_, err = f.Write(appended)
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
+			appendedInfo, err := os.Stat(path)
+			require.NoError(t, err)
+
+			result, ok := e.tryIncrementalJSONL(
+				context.Background(),
+				parser.DiscoveredFile{Agent: parser.AgentClaude, Path: path},
+				appendedInfo,
+				parser.AgentClaude,
+				func(
+					_ string,
+					inc *db.IncrementalInfo,
+				) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, time.Time, int64, *string, error) {
+					return []parser.ParsedMessage{{
+						Role: parser.RoleAssistant, Content: "appended",
+						Ordinal: inc.NextOrdinal,
+					}}, nil, appendedInfo.ModTime(), int64(len(appended)), nil, nil
+				},
+			)
+			require.True(t, ok)
+			require.NotNil(t, result.incremental)
+			require.NoError(t, e.writeIncremental(result.incremental))
+
+			persisted, err := database.GetSession(ctx, "incremental-source")
+			require.NoError(t, err)
+			require.NotNil(t, persisted)
+			assert.Equal(t, "mapped_target", persisted.Project)
+			observations, err := database.ListProjectIdentityObservations(
+				ctx, []string{"mapped_target"},
+			)
+			require.NoError(t, err)
+			require.Len(t, observations, 1)
+			snapshots, err := database.ListSessionProjectIdentitySnapshots(ctx)
+			require.NoError(t, err)
+			if tc.sourceProject == "" {
+				assert.Empty(t, snapshots,
+					"incremental append must not fabricate mapped source evidence")
+			} else {
+				require.Len(t, snapshots, 1)
+				assert.Equal(t, tc.sourceProject, snapshots[0].Project)
+			}
+		})
+	}
+}
+
+func TestProjectIdentityLegacyMappedSnapshotReparsesBeforeIncrementalAppend(
+	t *testing.T,
+) {
+	const (
+		legacyDataVersion = 67
+		sessionID         = "legacy-mapped-snapshot"
+		sourceProject     = "parser-source"
+		targetProject     = "mapped-target"
+		machine           = "laptop"
+	)
+	ctx := context.Background()
+	database := openTestDB(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "session.jsonl")
+	initial := []byte("initial-record\n")
+	require.NoError(t, os.WriteFile(path, initial, 0o600))
+	initialInfo, err := os.Stat(path)
+	require.NoError(t, err)
+	_, err = database.CreateWorktreeProjectMapping(
+		ctx,
+		db.WorktreeProjectMapping{
+			Machine: machine, PathPrefix: root,
+			Layout:  db.WorktreeMappingLayoutExplicit,
+			Project: targetProject, Enabled: true,
+		},
+	)
+	require.NoError(t, err)
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: sessionID, Project: targetProject, Machine: machine,
+		Agent: "claude", Cwd: root, FirstMessage: strPtr("initial"),
+		MessageCount: 1, UserMessageCount: 1,
+		FilePath: strPtr(path), FileSize: int64Ptr(initialInfo.Size()),
+		FileMtime: int64Ptr(initialInfo.ModTime().UnixNano()),
+	}))
+	require.NoError(t, database.UpsertProjectIdentityObservationWithSnapshotProject(
+		ctx,
+		export.ProjectIdentityObservation{
+			SessionID: sessionID, Project: targetProject,
+			Machine: machine, RootPath: root,
+		},
+		targetProject,
+	))
+	require.Greater(t, db.CurrentDataVersion(), legacyDataVersion,
+		"legacy target-labelled snapshots need a data-version upgrade")
+	require.NoError(t, database.SetSessionDataVersion(
+		sessionID, legacyDataVersion,
+	))
+
+	appended := []byte("appended-record\n")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	require.NoError(t, err)
+	_, err = f.Write(appended)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	appendedInfo, err := os.Stat(path)
+	require.NoError(t, err)
+
+	e := NewEngine(database, EngineConfig{Machine: machine})
+	t.Cleanup(e.Close)
+	parseCalled := false
+	_, ok := e.tryIncrementalJSONL(
+		context.Background(),
+		parser.DiscoveredFile{Agent: parser.AgentClaude, Path: path},
+		appendedInfo,
+		parser.AgentClaude,
+		func(
+			_ string,
+			_ *db.IncrementalInfo,
+		) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, time.Time, int64, *string, error) {
+			parseCalled = true
+			return nil, nil, time.Time{}, 0, nil, nil
+		},
+	)
+	assert.False(t, ok,
+		"legacy snapshots must fall through to a source-aware full parse")
+	assert.False(t, parseCalled,
+		"stale source evidence must be rejected before incremental parsing")
+
+	written, _, failed, _ := e.writeBatch(
+		[]pendingWrite{{
+			sess: parser.ParsedSession{
+				ID: sessionID, Project: sourceProject,
+				Machine: machine, Agent: parser.AgentClaude,
+				Cwd: root, FirstMessage: "initial", MessageCount: 2,
+				UserMessageCount: 1,
+				File: parser.FileInfo{
+					Path: path, Size: appendedInfo.Size(),
+					Mtime: appendedInfo.ModTime().UnixNano(),
+				},
+			},
+			msgs: []parser.ParsedMessage{
+				{Role: parser.RoleUser, Content: "initial", Ordinal: 0},
+				{Role: parser.RoleAssistant, Content: "appended", Ordinal: 1},
+			},
+		}},
+		syncWriteDefault,
+		true,
+	)
+	require.Equal(t, 0, failed)
+	require.Equal(t, 1, written)
+	assert.Equal(t, db.CurrentDataVersion(),
+		database.GetSessionDataVersion(sessionID))
+	snapshots, err := database.ListSessionProjectIdentitySnapshots(ctx)
+	require.NoError(t, err)
+	require.Len(t, snapshots, 1)
+	assert.Equal(t, sourceProject, snapshots[0].Project,
+		"the required full parse must replace fabricated mapped evidence")
 }
 
 func TestProjectIdentityIncrementalRemoteAppendSkipsLiveDiscovery(t *testing.T) {
@@ -5286,8 +6629,9 @@ func TestProcessFileSkipCacheReparsesStaleCodexProject(t *testing.T) {
 	}
 
 	res := e.processFile(context.Background(), parser.DiscoveredFile{
-		Agent: parser.AgentCodex,
-		Path:  path,
+		Agent:   parser.AgentCodex,
+		Path:    path,
+		Machine: "host",
 	})
 	require.NoError(t, res.err)
 	require.False(t, res.skip,
@@ -5630,8 +6974,9 @@ func TestProcessFileCodexDBFreshSkipIsNotCached(t *testing.T) {
 	}
 
 	res := e.processFile(context.Background(), parser.DiscoveredFile{
-		Agent: parser.AgentCodex,
-		Path:  path,
+		Agent:   parser.AgentCodex,
+		Path:    path,
+		Machine: "host",
 	})
 	require.NoError(t, res.err)
 	require.True(t, res.skip)
@@ -6099,6 +7444,49 @@ func TestCollectAndBatchPrefixesParserExcludedIDs(t *testing.T) {
 	assert.Nil(t, gotPrefixed, "prefixed remote session should be deleted")
 }
 
+func TestCollectAndBatchClearsDanglingParentAfterParserExclusion(t *testing.T) {
+	database := openTestDB(t)
+	parentID := "excluded-spawner"
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: parentID, Project: "project", Machine: "local", Agent: "claude",
+	}))
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "child", Project: "project", Machine: "local", Agent: "claude",
+		ParentSessionID: &parentID, RelationshipType: "subagent",
+	}))
+	require.NoError(t, database.InsertMessages([]db.Message{{
+		SessionID: parentID, Ordinal: 0, Role: "assistant",
+		Content: "spawn child", HasToolUse: true,
+		ToolCalls: []db.ToolCall{{
+			ToolName: "Task", Category: "Task", SubagentSessionID: "child",
+		}},
+	}}))
+
+	results := make(chan syncJob, 1)
+	results <- syncJob{
+		processResult: processResult{
+			excludedSessionIDs: []string{parentID},
+		},
+		path: "/archive/excluded-spawner.jsonl",
+	}
+	close(results)
+
+	engine := &Engine{db: database}
+	stats := engine.collectAndBatch(
+		t.Context(), results, 1, 1, nil, syncWriteDefault,
+	)
+
+	assert.Zero(t, stats.Failed)
+	spawner, err := database.GetSession(t.Context(), parentID)
+	require.NoError(t, err)
+	assert.Nil(t, spawner, "parser exclusion must delete the spawner")
+	child, err := database.GetSession(t.Context(), "child")
+	require.NoError(t, err)
+	require.NotNil(t, child)
+	assert.Nil(t, child.ParentSessionID,
+		"bulk exclusion must clear a child parent that no longer exists")
+}
+
 func TestShouldSkipByPathWithRewriter(t *testing.T) {
 	database := openTestDB(t)
 
@@ -6421,8 +7809,22 @@ func (f lookupSourceFactory) Capabilities() parser.Capabilities {
 	return f.provider.Capabilities()
 }
 
-func (f lookupSourceFactory) NewProvider(parser.ProviderConfig) parser.Provider {
-	return f.provider
+type lookupSourceScopedProvider struct {
+	*lookupSourceProvider
+	scopes parser.ProviderBase
+}
+
+func (p lookupSourceScopedProvider) ResolveReconciliationScopes(
+	ctx context.Context, req parser.ReconciliationScopeRequest,
+) (parser.ReconciliationScopePlan, error) {
+	return p.scopes.ResolveReconciliationScopes(ctx, req)
+}
+
+func (f lookupSourceFactory) NewProvider(cfg parser.ProviderConfig) parser.Provider {
+	return lookupSourceScopedProvider{
+		lookupSourceProvider: f.provider,
+		scopes:               perCallScopeProviderBase(f.provider.ProviderBase, cfg),
+	}
 }
 
 type lookupSourceProvider struct {

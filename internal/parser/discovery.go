@@ -54,7 +54,7 @@ type DiscoveredFile struct {
 	Path        string
 	Project     string    // pre-extracted project name
 	Agent       AgentType // which agent this file belongs to
-	Machine     string    // source machine (set for s3:// sources; empty = host machine)
+	Machine     string    // source machine override; empty = engine default
 	SourceSize  int64     // source object size for s3:// sources
 	SourceMtime int64     // source object mtime for s3:// sources, UnixNano
 	// SourceFingerprint is a durable object fingerprint for s3:// sources.

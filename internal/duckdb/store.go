@@ -277,7 +277,7 @@ func (s *Store) IngestEvalTrajectory(
 }
 
 const duckSessionCols = `id, project, machine, agent,
-	agent_label, entrypoint,
+	agent_label, entrypoint, session_kind,
 	first_message, COALESCE(display_name, session_name) AS display_name, created_at, started_at,
 	ended_at, message_count, user_message_count,
 	parent_session_id, relationship_type,
@@ -308,7 +308,7 @@ func scanSession(rs interface{ Scan(...any) error }) (db.Session, error) {
 	var startedAt, endedAt, deletedAt any
 	err := rs.Scan(
 		&s.ID, &s.Project, &s.Machine, &s.Agent,
-		&s.AgentLabel, &s.Entrypoint,
+		&s.AgentLabel, &s.Entrypoint, &s.SessionKind,
 		&s.FirstMessage, &s.DisplayName,
 		&createdAt, &startedAt, &endedAt,
 		&s.MessageCount, &s.UserMessageCount,
@@ -528,7 +528,24 @@ func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) 
 	f.Cursor = ""
 	f.Limit = 0
 
-	where, args := db.BuildSessionFilterSQL(f, db.DuckDBQueryDialect())
+	dialect := db.DuckDBQueryDialect()
+	where, args := db.BuildSessionFilterSQL(f, dialect)
+	rootFilter := f
+	rootFilter.IncludeChildren = false
+	rootWhere, rootArgs := db.BuildSessionBaseFilterSQL(rootFilter, dialect)
+	canonicalRootWhere := db.BuildCanonicalRootWhere(
+		dialect, "sessions", f.IncludeOrphans,
+	)
+	var total int
+	if err := s.queryRowContext(
+		ctx,
+		"SELECT COUNT(*) FROM sessions WHERE "+rootWhere+
+			" AND "+canonicalRootWhere,
+		rootArgs...,
+	).Scan(&total); err != nil {
+		return db.SidebarSessionIndex{},
+			fmt.Errorf("counting duckdb sidebar roots: %w", err)
+	}
 	query := `
 		SELECT
 			id,
@@ -539,6 +556,7 @@ func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) 
 			agent,
 			agent_label,
 			entrypoint,
+			session_kind,
 			COALESCE(display_name, session_name) AS display_name,
 			started_at,
 			ended_at,
@@ -564,6 +582,7 @@ func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) 
 
 	index := db.SidebarSessionIndex{
 		Sessions: []db.SidebarSessionIndexRow{},
+		Total:    total,
 	}
 	for rows.Next() {
 		var row db.SidebarSessionIndexRow
@@ -577,6 +596,7 @@ func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) 
 			&row.Agent,
 			&row.AgentLabel,
 			&row.Entrypoint,
+			&row.SessionKind,
 			&row.DisplayName,
 			&startedAt,
 			&endedAt,
@@ -607,8 +627,6 @@ func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) 
 		return db.SidebarSessionIndex{},
 			fmt.Errorf("iterating duckdb sidebar session index: %w", err)
 	}
-	index.Total = len(index.Sessions)
-
 	return index, nil
 }
 

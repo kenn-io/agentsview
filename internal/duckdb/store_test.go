@@ -1152,6 +1152,36 @@ func TestLoadPricingUsesFallbackWhenEffectiveTableEmpty(t *testing.T) {
 	assert.Equal(t, fallback.InputPerMTok, got["gpt-5.5"].input)
 	assert.Equal(t, fallback.OutputPerMTok, got["gpt-5.5"].output)
 	assert.Equal(t, export.PricingRowSourceEmbedded, got["gpt-5.5"].source)
+	assert.Equal(t, duckCatalogPricingBands(fallback.Bands), got["gpt-5.5"].bands)
+}
+
+func TestLoadPricingClassifiesBandOnlyFallbackMismatchAsFetched(t *testing.T) {
+	ctx := context.Background()
+	conn := openTestDuckDB(t)
+	require.NoError(t, EnsureSchema(ctx, conn))
+	store := NewStoreFromDB(conn)
+	fallback := pricingByPattern(t, pricingpkg.FallbackPricing(), "gpt-5.5")
+	require.NotEmpty(t, fallback.Bands)
+
+	_, err := conn.ExecContext(ctx, `
+		INSERT INTO model_pricing (
+			model_pattern, input_microdollars_per_mtok,
+			output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok,
+			cache_read_microdollars_per_mtok, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?)`,
+		fallback.ModelPattern,
+		fallback.InputPerMTok.Microdollars,
+		fallback.OutputPerMTok.Microdollars,
+		fallback.CacheCreationPerMTok.Microdollars,
+		fallback.CacheReadPerMTok.Microdollars,
+		"2026-07-29T12:00:00Z",
+	)
+	require.NoError(t, err)
+
+	got, err := store.loadPricing(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, export.PricingRowSourceFetched, got["gpt-5.5"].source)
 }
 
 func TestLoadPricingRetainsCustomOverrideSource(t *testing.T) {
@@ -1171,11 +1201,72 @@ func TestLoadPricingRetainsCustomOverrideSource(t *testing.T) {
 
 	got, err := store.loadPricing(ctx)
 	require.NoError(t, err)
+	assert.Empty(t, got["gpt-5.5"].bands)
 	block, err := export.NewPricingResolver(duckPricingRows(got)).BuildBlock()
 	require.NoError(t, err)
 
 	assert.Equal(t, "custom+embedded", block.Source)
 	assert.Equal(t, 1, block.CustomOverrideCount)
+}
+
+func TestDuckDailyAndSessionUsageApplyPricingBandsOnlyToRequests(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "banded-model",
+		InputPerMTok: money.MustParseDollars("1"),
+		Bands: []db.PricingBand{{
+			AboveInputTokens: 200_000,
+			InputPerMTok:     money.MustParseDollars("2"),
+		}},
+	}}))
+	sessionID := "duck-pricing-band"
+	msg := syncMessage(
+		sessionID, 0, "assistant", "request", "2026-03-12T10:00:00.000Z")
+	msg.Model = "banded-model"
+	msg.TokenUsage = json.RawMessage(`{"input_tokens":300000}`)
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session:  syncSession(sessionID, "proj", "banded", "2026-03-12T10:00:00.000Z", 1),
+		Messages: []db.Message{msg},
+		UsageEvents: []db.UsageEvent{{
+			Source: "aggregate", Model: "banded-model", InputTokens: 300_000,
+			OccurredAt: "2026-03-12T10:01:00.000Z", DedupKey: "aggregate",
+		}},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	daily, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-03-12", To: "2026-03-12", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 600_000, daily.Totals.InputTokens)
+	assert.Equal(t, money.Money{Microdollars: 900_000}, daily.Totals.TotalCost)
+	require.NotNil(t, daily.Pricing)
+	provenance := daily.Pricing.Models["banded-model"]
+	require.Len(t, provenance.Resolutions, 1)
+	assert.Equal(t, export.PricingApplication{
+		AggregateRowCount: 1,
+		Bands: []export.AppliedPricingBand{{
+			AboveInputTokens: 200_000,
+			RequestCount:     1,
+		}},
+	}, provenance.Resolutions[0].Application)
+
+	session, err := store.GetSessionUsage(ctx, sessionID, true)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.True(t, session.HasCost)
+	assert.Equal(t, money.Money{Microdollars: 900_000}, session.Cost)
+	require.Len(t, session.Breakdown, 2)
+	assert.Equal(t, money.Money{Microdollars: 600_000}, session.Breakdown[0].Cost)
+	assert.Equal(t, money.Money{Microdollars: 300_000}, session.Breakdown[1].Cost)
 }
 
 func pricingByPattern(t *testing.T, prices []pricingpkg.ModelPricing, pattern string) pricingpkg.ModelPricing {
@@ -1532,8 +1623,8 @@ func TestGetSessionTimingPopulatesSharedTimingPayload(t *testing.T) {
 	local := newLocalDB(t)
 	sessionID := "duck-timing"
 	startedAt := "2026-01-20T00:00:00.000Z"
-	endedAt := "2026-01-20T00:03:00.000Z"
-	sess := syncSession(sessionID, "alpha", "timing first", startedAt, 2)
+	endedAt := "2026-01-20T12:38:06.000Z"
+	sess := syncSession(sessionID, "alpha", "timing first", startedAt, 3)
 	sess.EndedAt = &endedAt
 	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
 		Session: sess,
@@ -1545,7 +1636,22 @@ func TestGetSessionTimingPopulatesSharedTimingPayload(t *testing.T) {
 					Category:  "Read",
 					ToolUseID: "tool-timing",
 					InputJSON: `{"file_path":"README.md"}`,
+					ResultEvents: []db.ToolResultEvent{
+						{
+							ToolUseID: "tool-timing",
+							Source:    "tool_execution",
+							Status:    "started",
+							Timestamp: "2026-01-20T00:01:00.100Z",
+						},
+						{
+							ToolUseID: "tool-timing",
+							Source:    "tool_execution",
+							Status:    "completed",
+							Timestamp: "2026-01-20T00:01:03.825Z",
+						},
+					},
 				}),
+			syncMessage(sessionID, 2, "user", "next request", "2026-01-20T12:38:05.000Z"),
 		},
 		DataVersion:     1,
 		ReplaceMessages: true,
@@ -1562,17 +1668,17 @@ func TestGetSessionTimingPopulatesSharedTimingPayload(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, timing)
 	assert.Equal(t, sessionID, timing.SessionID)
-	assert.Equal(t, int64(180000), timing.TotalDurationMs)
+	assert.Equal(t, int64(45_486_000), timing.TotalDurationMs)
 	assert.Equal(t, 1, timing.TurnCount)
 	assert.Equal(t, 1, timing.ToolCallCount)
 	assert.False(t, timing.Running)
 	require.Len(t, timing.Turns, 1)
 	assert.Equal(t, 1, timing.Turns[0].Ordinal)
 	require.NotNil(t, timing.Turns[0].DurationMs)
-	assert.Equal(t, int64(120000), *timing.Turns[0].DurationMs)
+	assert.Equal(t, int64(3_825), *timing.Turns[0].DurationMs)
 	require.Len(t, timing.Turns[0].Calls, 1)
 	require.NotNil(t, timing.Turns[0].Calls[0].DurationMs)
-	assert.Equal(t, int64(120000), *timing.Turns[0].Calls[0].DurationMs)
+	assert.Equal(t, int64(3_725), *timing.Turns[0].Calls[0].DurationMs)
 }
 
 func TestGetAllMessagesDoesNotTruncateAtDefaultLimit(t *testing.T) {

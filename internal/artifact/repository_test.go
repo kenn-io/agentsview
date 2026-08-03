@@ -16,6 +16,8 @@ import (
 )
 
 func TestOpenRepositoryOwnsCompressedDocbankContent(t *testing.T) {
+	t.Parallel()
+
 	dataDir := t.TempDir()
 	repository, err := OpenRepository(t.Context(), dataDir)
 	require.NoError(t, err)
@@ -30,6 +32,8 @@ func TestOpenRepositoryOwnsCompressedDocbankContent(t *testing.T) {
 }
 
 func TestOpenRepositorySupportsDocbankSQLiteDrivers(t *testing.T) {
+	t.Parallel()
+
 	for _, driver := range []docsqlite.Driver{mattn.Driver{}, modernc.Driver{}} {
 		t.Run(driver.Name(), func(t *testing.T) {
 			repository, err := openRepository(t.Context(), t.TempDir(), driver)
@@ -42,6 +46,8 @@ func TestOpenRepositorySupportsDocbankSQLiteDrivers(t *testing.T) {
 }
 
 func TestOpenRepositoryRejectsLegacyLooseLayoutWithoutMutation(t *testing.T) {
+	t.Parallel()
+
 	dataDir := t.TempDir()
 	artifactDir := filepath.Join(dataDir, "artifacts")
 	legacy := filepath.Join(artifactDir, contractOrigin, string(KindCheckpoints), "cp-0000000001.json")
@@ -59,6 +65,8 @@ func TestOpenRepositoryRejectsLegacyLooseLayoutWithoutMutation(t *testing.T) {
 }
 
 func TestOpenRepositoryUsesDocbankHierarchyLock(t *testing.T) {
+	t.Parallel()
+
 	dataDir := t.TempDir()
 	repository, err := OpenRepository(t.Context(), dataDir)
 	require.NoError(t, err)
@@ -74,6 +82,8 @@ func TestOpenRepositoryUsesDocbankHierarchyLock(t *testing.T) {
 }
 
 func TestOpenRepositoryFollowsFinalRootSymlink(t *testing.T) {
+	t.Parallel()
+
 	realDataDir := t.TempDir()
 	realRoot := filepath.Join(realDataDir, "artifacts")
 	realRepository, err := openRepository(t.Context(), realDataDir, modernc.Driver{})
@@ -91,6 +101,7 @@ func TestOpenRepositoryFollowsFinalRootSymlink(t *testing.T) {
 }
 
 func TestOpenRepositoryRetainsAbsoluteCanonicalRoot(t *testing.T) {
+	// Serial: Chdir changes the process-wide working directory.
 	dataDir := t.TempDir()
 	// Chdir to the temp dir's parent so the relative path stays on one
 	// volume; on Windows CI the checkout and temp dirs are on different
@@ -107,6 +118,8 @@ func TestOpenRepositoryRetainsAbsoluteCanonicalRoot(t *testing.T) {
 }
 
 func TestRepositoryCloseWaitsForReaderAndIsIdempotent(t *testing.T) {
+	t.Parallel()
+
 	repository, err := OpenRepository(t.Context(), t.TempDir())
 	require.NoError(t, err)
 	ref := requireContractRef(t, contractOrigin, KindCheckpoints, "cp-0000000001.json")

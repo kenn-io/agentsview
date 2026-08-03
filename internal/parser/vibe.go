@@ -60,9 +60,11 @@ type VibeStats struct {
 	Steps                    int   `json:"steps"`
 	SessionPromptTokens      int   `json:"session_prompt_tokens"`
 	SessionCompletionTokens  int   `json:"session_completion_tokens"`
+	SessionCachedTokens      int   `json:"session_cached_tokens"`
 	ContextTokens            int   `json:"context_tokens"`
 	LastTurnPromptTokens     int   `json:"last_turn_prompt_tokens"`
 	LastTurnCompletionTokens int   `json:"last_turn_completion_tokens"`
+	LastTurnCachedTokens     int   `json:"last_turn_cached_tokens"`
 	SessionTotalLLMTokens    int64 `json:"session_total_llm_tokens"`
 	LastTurnTotalTokens      int   `json:"last_turn_total_tokens"`
 }
@@ -100,21 +102,31 @@ func parseVibeResultFile(path string, fileInfo FileInfo) (ParseResult, error) {
 		// keep the directory-name fallback ID set above.
 	case metaErr != nil:
 		// meta.json exists but the full parse failed: a partial write or a
-		// single malformed optional field. Recover the canonical session_id
-		// from a tolerant minimal parse so a transient error does not abandon
-		// the canonical session row for the directory-name fallback (which
-		// would exclude and re-create the row, dropping pins and usage). If
-		// even the minimal parse fails, surface the error so the sync retries
-		// and leaves the existing row untouched rather than replacing it.
-		id, idErr := parseVibeSessionID(metaPath)
-		if idErr != nil {
+		// single malformed optional field. Recover the identity-bearing fields
+		// through a tolerant minimal parse so a transient error cannot replace
+		// the canonical row or its repository classification with fallbacks. If
+		// even the minimal parse fails, surface the error so sync retries and
+		// leaves the existing row untouched.
+		identity, identityErr := parseVibeIdentityMetadata(metaPath)
+		if identityErr != nil {
 			return result, fmt.Errorf(
 				"parsing Vibe meta.json %s: %w", metaPath, metaErr,
 			)
 		}
-		if id != "" {
-			result.Session.ID = "vibe:" + id
-			result.Session.SourceSessionID = id
+		if identity.SessionID != "" {
+			result.Session.ID = "vibe:" + identity.SessionID
+			result.Session.SourceSessionID = identity.SessionID
+		}
+		if identity.WorkingDir != "" {
+			result.Session.Cwd = identity.WorkingDir
+			if project := ExtractProjectFromCwdWithBranch(
+				identity.WorkingDir, identity.GitBranch,
+			); project != "" {
+				result.Session.Project = project
+			}
+		}
+		if identity.GitBranch != "" {
+			result.Session.GitBranch = identity.GitBranch
 		}
 	default:
 		hasMetaData = true
@@ -306,23 +318,33 @@ func parseVibeMetadata(path string) (VibeSessionMetadata, error) {
 	return meta, nil
 }
 
-// parseVibeSessionID extracts only the canonical session_id from meta.json
-// using a minimal tolerant struct. A malformed optional field (for example a
-// bad timestamp) fails the full VibeSessionMetadata parse but must not cost the
-// session its stable identity, so the id is recovered independently. Returns an
-// error when the file cannot be read or is not even minimally valid JSON.
-func parseVibeSessionID(path string) (string, error) {
+type vibeIdentityMetadata struct {
+	SessionID   string `json:"session_id"`
+	WorkingDir  string `json:"working_dir,omitempty"`
+	GitBranch   string `json:"git_branch,omitempty"`
+	Environment struct {
+		WorkingDirectory string `json:"working_directory,omitempty"`
+	} `json:"environment,omitempty"`
+}
+
+// parseVibeIdentityMetadata extracts the canonical id and repository-bearing
+// fields with a minimal tolerant struct. A malformed optional field (for
+// example a timestamp) can fail the full metadata parse without invalidating
+// these independent strings. Corrupt JSON still returns an error so sync leaves
+// the existing row untouched and retries the source later.
+func parseVibeIdentityMetadata(path string) (vibeIdentityMetadata, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", err
+		return vibeIdentityMetadata{}, err
 	}
-	var meta struct {
-		SessionID string `json:"session_id"`
-	}
+	var meta vibeIdentityMetadata
 	if err := json.Unmarshal(data, &meta); err != nil {
-		return "", err
+		return vibeIdentityMetadata{}, err
 	}
-	return meta.SessionID, nil
+	if meta.WorkingDir == "" {
+		meta.WorkingDir = meta.Environment.WorkingDirectory
+	}
+	return meta, nil
 }
 
 // convertVibeMessage converts a VibeMessage to a ParsedMessage
@@ -441,7 +463,13 @@ func vibeUsageEvents(
 	// Use SessionPromptTokens for input tokens and SessionCompletionTokens for output tokens.
 	// SessionTotalLLMTokens appears to be the sum of input + output tokens,
 	// so we don't use it as a direct source but it can serve as validation.
-	inputTokens := stats.SessionPromptTokens
+	//
+	// SessionCachedTokens is the provider cache-hit (read) count, reported as a
+	// subset of SessionPromptTokens (OpenAI/Mistral wire shape). Split it out
+	// so cache reads are priced at the discounted cache-read rate and not
+	// double-counted against the full input rate.
+	cacheReadTokens := max(stats.SessionCachedTokens, 0)
+	inputTokens := max(stats.SessionPromptTokens-cacheReadTokens, 0)
 	outputTokens := stats.SessionCompletionTokens
 
 	return []ParsedUsageEvent{{
@@ -450,9 +478,9 @@ func vibeUsageEvents(
 		Model:        model,
 		InputTokens:  inputTokens,
 		OutputTokens: outputTokens,
-		// Vibe doesn't currently expose cache token breakdown in meta.json
+		// Vibe doesn't currently expose cache-creation breakdown
 		CacheCreationInputTokens: 0,
-		CacheReadInputTokens:     0,
+		CacheReadInputTokens:     cacheReadTokens,
 		ReasoningTokens:          0,
 		// Vibe doesn't currently expose cost information
 		Cost:       nil,

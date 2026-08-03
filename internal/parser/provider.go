@@ -3,13 +3,19 @@ package parser
 import (
 	"context"
 	"errors"
+	"fmt"
+	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 )
 
 const (
-	ProviderFeatureFingerprint = "fingerprint"
-	ProviderFeatureParse       = "parse"
-	ProviderFeatureWatchRoots  = "watch roots"
+	ProviderFeatureFingerprint          = "fingerprint"
+	ProviderFeatureParse                = "parse"
+	ProviderFeatureWatchRoots           = "watch roots"
+	ProviderFeatureActivityHints        = "activity hints"
+	ProviderFeatureChangedPathRelevance = "changed path relevance"
 )
 
 // ErrUnsupportedProviderFeature identifies optional provider behavior that is
@@ -54,6 +60,17 @@ type ProviderConfig struct {
 	// path (Aider) use it to seed those IDs from the canonical remote path
 	// rather than the changing temp path. Most providers ignore it.
 	PathRewriter func(string) string
+	// SQLiteContainerUnchangedSinceTrust reports that the shared SQLite
+	// container at dbPath is byte-identical to the last pass that verified
+	// every one of its sessions, as captured before this discovery began.
+	// Providers that fan such a container out to per-session sources may
+	// answer discovery for it with the bounded watermark-only listing: the
+	// caller's container gate will skip every member before fingerprinting,
+	// so computing the full child digest would be archive-sized work for
+	// values nothing reads. Nil (the default, and every non-discovery
+	// construction) means no container is trusted and listings stay
+	// full-fidelity.
+	SQLiteContainerUnchangedSinceTrust func(dbPath string) bool
 }
 
 // Clone returns an independent config snapshot.
@@ -92,6 +109,53 @@ type Provider interface {
 		context.Context,
 		IncrementalRequest,
 	) (IncrementalOutcome, IncrementalStatus, error)
+
+	// ResolveReconciliationScopes maps one reconciliation request onto the
+	// provider's configured topology. The provider that owns the format is the
+	// only authority for alias, container, and gateway relationships between
+	// roots; callers consume the returned plan verbatim and never recompute
+	// ancestor/descendant, filename, or alias relationships themselves. A
+	// returned error means the topology could not be resolved and the request
+	// must fail closed: no coverage credit and no deletion authority.
+	ResolveReconciliationScopes(
+		context.Context, ReconciliationScopeRequest,
+	) (ReconciliationScopePlan, error)
+}
+
+// ReconciliationScopeRequest carries the reconciliation roots a caller asked
+// about, exactly as supplied. Callers must not pre-expand or normalize them;
+// the provider owns the mapping onto its configured topology.
+type ReconciliationScopeRequest struct {
+	Roots []string
+}
+
+// ReconciliationScope is one provider-resolved unit of reconciliation
+// authority. Its four fields are consumed independently: TraversalRoots are
+// the roots discovery must walk (a provider may require a wider gateway than
+// the request, such as a Claude projects directory for a requested project
+// child); PhysicalProofScopes bound which discovered sources and stored
+// ownership rows the pass may claim; CoverageIdentities are credited against
+// the plan's RequiredCoverageIdentities only once the scope's admitted stream
+// completes; RetryRoots are the caller's own requested roots, so a failed
+// scope retries at the width the caller asked for rather than the traversal
+// width.
+type ReconciliationScope struct {
+	TraversalRoots      []string
+	PhysicalProofScopes []StoredSourceHintScope
+	CoverageIdentities  []string
+	RetryRoots          []string
+}
+
+// ReconciliationScopePlan is the complete resolution of one request against
+// one provider's configured topology. An empty plan means the request touches
+// nothing the provider owns and the pass is a bounded no-op for it.
+// RequiredCoverageIdentities enumerate every coverage identity the provider's
+// full configured scope carries; a pass holds full-coverage deletion
+// authority only when the completed scopes' CoverageIdentities include all of
+// them.
+type ReconciliationScopePlan struct {
+	Scopes                     []ReconciliationScope
+	RequiredCoverageIdentities []string
 }
 
 // ReconciliationSourceResolver rebuilds the exact source emitted by streaming
@@ -161,15 +225,6 @@ type StoredSourceHintScope struct {
 // affect one changed path without reading the archive database.
 type StoredSourceHintScopeProvider interface {
 	StoredSourceHintScopes(ChangedPathRequest) []StoredSourceHintScope
-}
-
-// ReconciliationOwnershipScopeProvider maps one logical configured root to
-// the bounded stored-source scopes it physically owns. Providers whose stored
-// identities are virtual members of a sibling container use this to keep
-// deletion ownership paging within that container without broadening the scan
-// to the provider's full archive.
-type ReconciliationOwnershipScopeProvider interface {
-	ReconciliationOwnershipScopes(root string) []StoredSourceHintScope
 }
 
 // MultiFileStatHasher is an optional capability for providers whose on-disk
@@ -254,6 +309,288 @@ func (b ProviderBase) unsupported(feature string) error {
 	}
 }
 
+// ResolveReconciliationScopes supplies the generic directory topology every
+// provider inherits: each configured root is one atomic coverage unit, a
+// requested descendant traverses from its deepest configured ancestor while
+// proving only the descendant, and an ancestor request splits into the
+// configured roots it covers without claiming unrelated paths beneath it.
+func (b ProviderBase) ResolveReconciliationScopes(
+	_ context.Context, req ReconciliationScopeRequest,
+) (ReconciliationScopePlan, error) {
+	if err := ValidateReconciliationScopeRoots(
+		b.Def.Type, b.Config.Roots, req.Roots,
+	); err != nil {
+		return ReconciliationScopePlan{}, err
+	}
+	return directoryReconciliationScopePlan(b.Config.Roots, req.Roots), nil
+}
+
+// isRemoteReconciliationScopeRoot mirrors the sync engine's remote-root
+// filter: remote object roots are owned by the remote sync path and resolve
+// no local reconciliation scope.
+func isRemoteReconciliationScopeRoot(root string) bool {
+	return strings.HasPrefix(strings.ToLower(root), "s3://")
+}
+
+// ValidateReconciliationScopeRoots rejects a local root that cannot become a
+// bounded proof scope. A scope proves itself by matching stored source paths
+// against a path prefix, and discovery writes those paths by joining the
+// configured spelling with each relative source path. A root that cleans to
+// "." has no spelling to join: discovery emits bare filenames, so no prefix
+// bounds them and the stored-hint normalizer discards the scope, which would
+// credit coverage over zero rows. Every other spelling, relative or absolute,
+// yields a usable prefix. Remote roots are exempt; a local pass never covers
+// an object store.
+func ValidateReconciliationScopeRoots(
+	agent AgentType, configuredRoots, requestedRoots []string,
+) error {
+	for _, group := range [][]string{configuredRoots, requestedRoots} {
+		for _, root := range group {
+			if strings.TrimSpace(root) == "" ||
+				isRemoteReconciliationScopeRoot(root) ||
+				filepath.Clean(root) != "." {
+				continue
+			}
+			return fmt.Errorf(
+				"%s reconciliation root %q resolves to the working "+
+					"directory: sources discovered under it are stored "+
+					"without a directory prefix, so no reconciliation scope "+
+					"can prove what it covers",
+				agent, root,
+			)
+		}
+	}
+	return nil
+}
+
+// cleanReconciliationScopeRoot normalizes one local root for comparison and
+// coverage identity. Blank roots must be discarded before this runs: cleaning
+// "" resolves to the process working directory, which can encompass configured
+// roots. This is deliberately not the spelling a scope proves itself with; see
+// reconciliationProofSpelling.
+func cleanReconciliationScopeRoot(root string) string {
+	cleaned := filepath.Clean(root)
+	abs, err := filepath.Abs(cleaned)
+	if err != nil {
+		return cleaned
+	}
+	return abs
+}
+
+// reconciliationProofSpelling is the spelling a scope proves itself with:
+// the configured one, cleaned. Comparison and coverage identity absolutize so
+// a request naming the same directory differently still matches, but proof
+// matches stored source paths as a prefix, and those were written by joining
+// the configured spelling. Absolutizing proof would leave a relative root's
+// stored paths unreachable, and would rewrite a rooted-but-driveless root such
+// as "/sessions" onto the current Windows drive, which discovery never used.
+func reconciliationProofSpelling(root string) string {
+	return filepath.Clean(root)
+}
+
+// reconciliationScopeSamePath and reconciliationScopeWithinOrSame compare with
+// filepath.Rel semantics so equality matches the platform: case-folded per
+// element on Windows, byte-exact elsewhere.
+func reconciliationScopeSamePath(a, b string) bool {
+	rel, err := filepath.Rel(a, b)
+	return err == nil && rel == "."
+}
+
+func reconciliationScopeWithinOrSame(path, root string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." || rel != ".." &&
+		!strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// descendantProofSpelling re-expresses a requested descendant in the spelling
+// its gateway's stored sources carry. Requests arrive absolute because they
+// come from watch and polling roots, but a source discovered under a relative
+// configured root was stored relative, so an absolute descendant prefix would
+// match none of them.
+func descendantProofSpelling(gatewayClean, gatewayProof, descendant string) string {
+	rel, err := filepath.Rel(gatewayClean, descendant)
+	if err != nil {
+		return descendant
+	}
+	if rel == "." {
+		return gatewayProof
+	}
+	return filepath.Join(gatewayProof, rel)
+}
+
+// reconciliationContainerTopology reports the multi-member container that
+// atomically owns a requested path: the container file itself, a WAL or SHM
+// sidecar, or a virtual member spelling. The planner widens such a request to
+// the whole container so no scope can prove a strict subset of a container's
+// members: a partial proof would either admit nothing (a bare container path
+// matches no member row) or let a completed pass promote container-state
+// trust over members it never verified. Classification must not stat, so a
+// deleted container still resolves and its members stay reclaimable.
+type reconciliationContainerTopology func(requested string) (container string, ok bool)
+
+func directoryReconciliationScopePlan(
+	configuredRoots, requestedRoots []string,
+) ReconciliationScopePlan {
+	return containerAwareReconciliationScopePlan(
+		configuredRoots, requestedRoots, nil,
+	)
+}
+
+func containerAwareReconciliationScopePlan(
+	configuredRoots, requestedRoots []string,
+	containers reconciliationContainerTopology,
+) ReconciliationScopePlan {
+	type configuredScopeRoot struct {
+		// display is the configured spelling handed back for traversal so
+		// discovery sees exactly the roots it was configured with.
+		display string
+		// clean is the absolute form used for comparison and coverage
+		// identity; proof is the configured form stored sources carry.
+		clean string
+		proof string
+	}
+	var configured []configuredScopeRoot
+	var required []string
+	for _, root := range configuredRoots {
+		if strings.TrimSpace(root) == "" {
+			continue
+		}
+		if isRemoteReconciliationScopeRoot(root) {
+			// A remote root is never coverable by a local pass; keeping its
+			// identity required makes full-coverage authority unreachable.
+			required = append(required, root)
+			continue
+		}
+		clean := cleanReconciliationScopeRoot(root)
+		if slices.ContainsFunc(configured, func(existing configuredScopeRoot) bool {
+			return reconciliationScopeSamePath(existing.clean, clean)
+		}) {
+			continue
+		}
+		configured = append(configured, configuredScopeRoot{
+			display: root, clean: clean,
+			proof: reconciliationProofSpelling(root),
+		})
+		required = append(required, clean)
+	}
+	plan := ReconciliationScopePlan{RequiredCoverageIdentities: required}
+	fullIndex := make(map[string]int, len(configured))
+	appendRetry := func(index int, raw string) {
+		scope := &plan.Scopes[index]
+		if !slices.Contains(scope.RetryRoots, raw) {
+			scope.RetryRoots = append(scope.RetryRoots, raw)
+		}
+	}
+	type descendantScope struct {
+		gateway configuredScopeRoot
+		proof   string
+		virtual bool
+		retry   []string
+	}
+	var descendants []descendantScope
+	for _, raw := range requestedRoots {
+		if strings.TrimSpace(raw) == "" || isRemoteReconciliationScopeRoot(raw) {
+			continue
+		}
+		requested := cleanReconciliationScopeRoot(raw)
+		virtual := false
+		if containers != nil {
+			if container, ok := containers(requested); ok {
+				requested = cleanReconciliationScopeRoot(container)
+				virtual = true
+			}
+		}
+		exact := false
+		for _, cfg := range configured {
+			if !reconciliationScopeWithinOrSame(cfg.clean, requested) {
+				continue
+			}
+			// The request names the configured root exactly or an ancestor
+			// covering it: the whole configured root is one atomic scope.
+			exact = exact || reconciliationScopeSamePath(cfg.clean, requested)
+			if index, ok := fullIndex[cfg.clean]; ok {
+				appendRetry(index, raw)
+				continue
+			}
+			fullIndex[cfg.clean] = len(plan.Scopes)
+			plan.Scopes = append(plan.Scopes, ReconciliationScope{
+				TraversalRoots:      []string{cfg.display},
+				PhysicalProofScopes: []StoredSourceHintScope{{Path: cfg.proof}},
+				CoverageIdentities:  []string{cfg.clean},
+				RetryRoots:          []string{raw},
+			})
+		}
+		if exact {
+			continue
+		}
+		// A requested descendant traverses from its deepest configured
+		// ancestor (providers may treat the configured root as a layout
+		// gateway) while proving only the descendant, so coverage stays
+		// incomplete and no sibling is claimed. Covering some other
+		// configured root as an ancestor above does not discharge this:
+		// with roots /a and /a/b/c, a request for /a/b claims /a/b/c fully
+		// and still proves /a/b under /a, or removals under /a/b would
+		// silently stop reconciling. Only an exact configured-root match
+		// makes a descendant scope redundant.
+		var gateway *configuredScopeRoot
+		for i, cfg := range configured {
+			if reconciliationScopeSamePath(requested, cfg.clean) ||
+				!reconciliationScopeWithinOrSame(requested, cfg.clean) {
+				continue
+			}
+			if gateway == nil || reconciliationScopeWithinOrSame(
+				cfg.clean, gateway.clean,
+			) {
+				gateway = &configured[i]
+			}
+		}
+		if gateway == nil {
+			continue
+		}
+		merged := false
+		for i := range descendants {
+			if reconciliationScopeSamePath(descendants[i].proof, requested) {
+				if !slices.Contains(descendants[i].retry, raw) {
+					descendants[i].retry = append(descendants[i].retry, raw)
+				}
+				descendants[i].virtual = descendants[i].virtual || virtual
+				merged = true
+				break
+			}
+		}
+		if !merged {
+			descendants = append(descendants, descendantScope{
+				gateway: *gateway, proof: requested, virtual: virtual,
+				retry: []string{raw},
+			})
+		}
+	}
+	for _, descendant := range descendants {
+		gateway := descendant.gateway
+		if index, ok := fullIndex[gateway.clean]; ok {
+			// The same request set already claims the full gateway; the
+			// descendant is subsumed and only contributes retry identities.
+			for _, raw := range descendant.retry {
+				appendRetry(index, raw)
+			}
+			continue
+		}
+		plan.Scopes = append(plan.Scopes, ReconciliationScope{
+			TraversalRoots: []string{gateway.display},
+			PhysicalProofScopes: []StoredSourceHintScope{{
+				Path: descendantProofSpelling(gateway.clean, gateway.proof,
+					descendant.proof),
+				IncludeVirtualMembers: descendant.virtual,
+			}},
+			RetryRoots: descendant.retry,
+		})
+	}
+	return plan
+}
+
 // SourceRef is the engine-visible handle for provider-owned source data. It is
 // the only source identity the engine should carry between discovery, changed
 // path classification, lookup, fingerprinting, parsing, skip-cache checks, and
@@ -262,6 +599,10 @@ type SourceRef struct {
 	// Provider identifies the provider that created this source and must match
 	// the provider instance used for subsequent operations.
 	Provider AgentType
+	// ConfiguredRoot preserves the configured root that produced this source.
+	// It may differ from the canonical source path when a provider collapses a
+	// directory onto a sibling container file.
+	ConfiguredRoot string
 	// Key is stable within the provider across process restarts. It is suitable
 	// for dedupe and diagnostics, but not necessarily for DB freshness checks.
 	Key string
@@ -372,6 +713,80 @@ type WatchRoot struct {
 	DebounceKey  string
 }
 
+// ActivityHintSource is one bounded append-only signal a provider exposes to
+// identify sessions with newly submitted activity.
+type ActivityHintSource struct {
+	Path string
+}
+
+// ActivityHint identifies one recently active provider-native session.
+// Raw prompt content is intentionally absent from this cross-package contract.
+type ActivityHint struct {
+	RawSessionID string
+	Timestamp    time.Time
+}
+
+// ActivityHintProvider owns activity-hint path derivation and record decoding.
+// Scheduling, cursors, and retention remain sync-layer responsibilities.
+type ActivityHintProvider interface {
+	ActivityHintSources(context.Context) ([]ActivityHintSource, error)
+	DecodeActivityHint([]byte) (ActivityHint, bool)
+}
+
+// ResolveActivityHintProvider returns the optional activity-hint contract only
+// when the provider explicitly advertises it.
+func ResolveActivityHintProvider(
+	provider Provider,
+) (ActivityHintProvider, bool, error) {
+	if provider.Capabilities().Source.ActivityHints != CapabilitySupported {
+		return nil, false, nil
+	}
+	hints, ok := provider.(ActivityHintProvider)
+	if !ok {
+		return nil, false, UnsupportedProviderFeatureError{
+			Provider: provider.Definition().Type,
+			Feature:  ProviderFeatureActivityHints,
+		}
+	}
+	return hints, true, nil
+}
+
+// ChangedPathRelevance distinguishes paths that are known to carry no source
+// data from paths that should keep the watch-triggered push active.
+type ChangedPathRelevance uint8
+
+const (
+	ChangedPathUnclassified ChangedPathRelevance = iota
+	ChangedPathNonData
+	ChangedPathDataBearing
+)
+
+// ChangedPathRelevanceProvider owns the bounded, engine-free path decision
+// needed by watch-trigger adapters.
+type ChangedPathRelevanceProvider interface {
+	ChangedPathRelevance(context.Context, ChangedPathRequest) (ChangedPathRelevance, error)
+}
+
+// ResolveChangedPathRelevance returns the optional path-relevance contract
+// only when the provider explicitly advertises it.
+func ResolveChangedPathRelevance(
+	ctx context.Context,
+	provider Provider,
+	req ChangedPathRequest,
+) (ChangedPathRelevance, error) {
+	if provider.Capabilities().Source.ChangedPathRelevance != CapabilitySupported {
+		return ChangedPathUnclassified, nil
+	}
+	relevance, ok := provider.(ChangedPathRelevanceProvider)
+	if !ok {
+		return ChangedPathUnclassified, UnsupportedProviderFeatureError{
+			Provider: provider.Definition().Type,
+			Feature:  ProviderFeatureChangedPathRelevance,
+		}
+	}
+	return relevance.ChangedPathRelevance(ctx, req)
+}
+
 // ChangedPathRequest is passed back to providers for authoritative changed-path
 // classification.
 type ChangedPathRequest struct {
@@ -389,7 +804,44 @@ type ChangedPathRequest struct {
 	// still validate ownership against the changed path/watch root before
 	// emitting them.
 	StoredSourcePaths []string
+	// AllowWatermarkOnlySources tells providers that fan a shared container
+	// out to per-session virtual sources that the caller's downstream
+	// freshness gate can cheaply skip watermark-only sources, so the provider
+	// may answer with a bounded session-row listing instead of computing
+	// every session's full child digest. Callers that consume the returned
+	// sources directly (reconciliation, tombstoning) must leave this unset to
+	// keep full-fidelity fingerprint metadata.
+	AllowWatermarkOnlySources bool
+	// StoredMemberFreshnessPage, set only alongside AllowWatermarkOnlySources,
+	// pages the caller's stored freshness for the changed shared container in
+	// ascending virtual-path order. A provider answering with the bounded
+	// watermark listing merges against it during the stream and omits members
+	// whose carried watermark is already covered, so a one-session write
+	// emits one source without materializing the container's full membership.
+	// Nil means the caller holds no stored authority and every source must be
+	// returned. Callers gate this on a container capture taken before the
+	// listing and re-request unfiltered when that capture goes stale.
+	StoredMemberFreshnessPage StoredMemberFreshnessPager
 }
+
+// StoredMemberFreshness is one stored virtual member's coverage authority: a
+// listed source at Path whose carried watermark is at or below
+// CoveredThroughNS is provably unchanged and may be omitted from a
+// changed-path listing. Rows the caller cannot vouch for (a stale data
+// version, an unparseable stored identity) are simply not emitted, which
+// keeps their sources listed.
+type StoredMemberFreshness struct {
+	Path             string
+	CoveredThroughNS int64
+}
+
+// StoredMemberFreshnessPager returns stored freshness rows strictly after
+// afterPath in ascending path order, at most limit of them, and whether the
+// container's stored membership is exhausted. Implementations must be safe to
+// call repeatedly within one listing.
+type StoredMemberFreshnessPager func(
+	ctx context.Context, afterPath string, limit int,
+) ([]StoredMemberFreshness, bool, error)
 
 // FindSourceRequest contains lookup inputs and persisted source hints for
 // provider-owned source resolution. RawSessionID and FullSessionID identify the
@@ -516,14 +968,15 @@ type IncrementalRequest struct {
 	// appended tail forks away from the stored tip and must trigger a
 	// full reparse instead of a naive append.
 	LastEntryUUID string
-	// StoredAgentLabel and StoredEntrypoint are the session identity
-	// values already persisted for this session. Claude identity is
-	// first-non-empty-wins across the file, and real CLI transcripts
-	// carry a top-level entrypoint on most lines, so the incremental
-	// parser escalates to a full parse only when an appended non-empty
-	// value could fill a still-empty stored field.
-	StoredAgentLabel string
-	StoredEntrypoint string
+	// StoredAgentLabel, StoredEntrypoint and StoredSessionKind are the
+	// session identity values already persisted for this session. Claude
+	// identity is first-non-empty-wins across the file, and real CLI
+	// transcripts carry a top-level entrypoint on most lines, so the
+	// incremental parser escalates to a full parse only when an appended
+	// non-empty value could fill a still-empty stored field.
+	StoredAgentLabel  string
+	StoredEntrypoint  string
+	StoredSessionKind string
 	// StoredClaudeLinearParse mirrors the session's persisted
 	// claude_linear_parse flag: whether the last full parse fell back
 	// to linear processing. Linearity is monotonic across appends, so

@@ -302,6 +302,10 @@ agentsview stats --include-git-outcomes
 - **Recent Edits feed** -- the files your agents changed most recently across
   every session, grouped by project and path, each linking to the message that
   made the change
+- **Data workspace** -- inspect project inventory and observed folders, preview
+  reclassification impact, and manage worktree mapping rules
+- **Recall corpus browser** -- explore experimental distilled knowledge and jump
+  from entries to their supporting transcript evidence
 - **Live updates** via SSE as active sessions receive new messages
 - **Keyboard-first** navigation (`j`/`k`/`[`/`]`, `Cmd+K` search, `?` for all
   shortcuts)
@@ -339,7 +343,7 @@ thread JSON files.
 | Kilo                  | `~/.local/share/kilo/`                                                                                                                                                                                                                               |
 | Kilo (legacy)         | `~/Library/Application Support/Code/User/globalStorage/kilocode.kilo-code/` (macOS), `~/.config/Code/User/globalStorage/kilocode.kilo-code/` (Linux)                                                                                                 |
 | Kimi                  | `~/.kimi/sessions/`                                                                                                                                                                                                                                  |
-| Kimi Work             | `~/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions/` (macOS)                                                                                                                 |
+| Kimi Work             | `~/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions/` (macOS)                                                                                                                                            |
 | Kiro CLI              | `~/.kiro/sessions/cli/`, `~/.local/share/kiro-cli/`                                                                                                                                                                                                  |
 | Kiro IDE              | `~/Library/Application Support/Kiro/` (macOS)                                                                                                                                                                                                        |
 | MiMoCode              | `~/.local/share/mimocode/`                                                                                                                                                                                                                           |
@@ -479,6 +483,29 @@ covers both the Kilo CLI and the rebuilt Kilo Code VS Code extension (after
 March 2026), which shares that same database. *Kilo (legacy)* is the legacy
 RooCode-derived VS Code extension that wrote per-task JSON under
 `kilocode.kilo-code/tasks/`.
+
+## Filesystem Session Sync
+
+One primary AgentsView instance can ingest native agent session directories
+copied or mounted from other machines without PostgreSQL:
+
+```toml
+[[session_sources]]
+agent = "copilot"
+dir = "/srv/session-archive/buildbox/copilot"
+machine = "buildbox"
+```
+
+Structured sources are additive to existing `copilot_dirs`,
+`claude_project_dirs`, and other per-agent settings. They label sessions by
+source machine without namespacing native session IDs. Transport source session
+files only -- never copy `sessions.db` or its WAL files. Machine labels are
+captured at first ingestion; ordinary sync and `agentsview sync --full` preserve
+the stored label. Changing attribution for existing sessions is not currently
+supported.
+
+See the [Filesystem Session Sync guide](https://agentsview.io/filesystem-sync/)
+for Git, rsync, shared-mount, freshness, and operational guidance.
 
 ## PostgreSQL Sync
 
@@ -633,6 +660,7 @@ Full docs at **[agentsview.io](https://agentsview.io)**:
 [Usage Guide](https://agentsview.io/usage/) --
 [CLI Reference](https://agentsview.io/commands/) --
 [Configuration](https://agentsview.io/configuration/) --
+[Filesystem Sync](https://agentsview.io/filesystem-sync/) --
 [Architecture](https://agentsview.io/architecture/)
 
 ______________________________________________________________________

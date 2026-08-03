@@ -386,6 +386,23 @@ func TestParseClaudeSession_SkippedMessages(t *testing.T) {
 }
 
 func TestParseClaudeSession_QueuedCommand(t *testing.T) {
+	t.Run("carries top-level promptSource when present", func(t *testing.T) {
+		queued := `{"type":"attachment","timestamp":"` + tsZeroS2 + `",` +
+			`"promptSource":"queued","attachment":{"type":"queued_command",` +
+			`"commandMode":"prompt","prompt":"also do X"}}`
+		content := testjsonl.JoinJSONL(
+			testjsonl.ClaudeUserJSON("first request", tsZero),
+			testjsonl.ClaudeAssistantJSON([]map[string]any{
+				{"type": "text", "text": "starting work"},
+			}, tsZeroS1),
+			queued,
+		)
+		_, msgs := runClaudeParserTest(t, "test.jsonl", content)
+		require.Len(t, msgs, 3)
+		assert.Equal(t, "queued_command", msgs[2].SourceSubtype)
+		assert.Equal(t, "queued", msgs[2].PromptSource)
+	})
+
 	t.Run("surfaces as user message between turns", func(t *testing.T) {
 		content := testjsonl.JoinJSONL(
 			testjsonl.ClaudeUserJSON("first request", tsZero),
@@ -1429,6 +1446,33 @@ func TestParseClaudeSession_ResolvesPersistedToolResultOutput(
 	got := results[0].Messages[2].ToolResults[0]
 	assert.Equal(t, len(fullOutput), got.ContentLength)
 	assert.Equal(t, fullOutput, DecodeContent(got.ContentRaw))
+}
+
+func TestReadClaudePersistedToolResultTruncatesOversizedFile(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	sessionDir := filepath.Join(dir, "project", "parent-session")
+	resultPath := filepath.Join(sessionDir, "tool-results", "oversized.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(resultPath), 0o755))
+	require.NoError(t, os.WriteFile(resultPath, []byte("prefix"), 0o644))
+	require.NoError(t, os.Truncate(resultPath, maxPersistedToolResultSize+1))
+
+	sessionPath := filepath.Join(dir, "project", "parent-session.jsonl")
+	got, ok := readClaudePersistedToolResult(sessionPath, resultPath)
+	require.True(t, ok)
+	assert.True(t, strings.HasPrefix(got, "prefix"))
+	assert.Equal(
+		t,
+		maxPersistedToolResultSize+len("\n\n[agentsview: persisted tool result truncated at 16 MiB]"),
+		len(got),
+	)
+	assert.True(t, strings.HasSuffix(
+		got,
+		"[agentsview: persisted tool result truncated at 16 MiB]",
+	))
 }
 
 func TestParseClaudeSession_PersistedToolResultDoesNotOverwriteSiblings(

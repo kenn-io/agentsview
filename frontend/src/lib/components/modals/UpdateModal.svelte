@@ -9,7 +9,7 @@
   }
 </script>
 
-<Modal title={m.update_title()} width="400px" onclose={close}>
+<Modal title={m.update_title()} closeLabel={m.update_close()} width="400px" onclose={close}>
   {#if sync.updateAvailable && sync.latestVersion}
     <p class="update-text">
       {m.update_available({ version: sync.latestVersion })}

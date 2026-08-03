@@ -82,6 +82,7 @@ func requireOpenReadOnlyFails(
 	require.Error(t, err)
 	require.Nil(t, readonly)
 	assert.Contains(t, err.Error(), contains)
+	assert.True(t, IsSchemaUpgradeRequired(err))
 }
 
 func requireReadOnlyOp(t *testing.T, name string, op func() error) {
@@ -301,6 +302,7 @@ func TestReadOnlySchemaCompatibilityRejectsMissingReadColumn(t *testing.T) {
 		{"worktree mapping", "worktree_project_mappings", "updated_at"},
 		{"pg sync state", "pg_sync_state", "value"},
 		{"model pricing", "model_pricing", "updated_at"},
+		{"pricing band", "model_pricing_bands", "input_microdollars_per_mtok"},
 		{"secret finding", "secret_findings", "rules_version"},
 		{"recall entry", "recall_entries", "uncertainty"},
 		{"recall evidence", "recall_evidence", "snippet"},
@@ -332,6 +334,7 @@ func TestOpenReadOnlyRejectsMissingReadTable(t *testing.T) {
 		{"secret_findings", "id"},
 		{"pg_sync_state", "key"},
 		{"model_pricing", "model_pattern"},
+		{"model_pricing_bands", "model_pattern"},
 		{"recall_query_events", "id"},
 		{"recall_query_exposures", "query_id"},
 		{"recall_extract_generations", "fingerprint"},

@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,6 +25,168 @@ import (
 	"go.kenn.io/agentsview/internal/parsertest"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
+
+func TestDailyUsageAmountsPricingBandRequestScope(t *testing.T) {
+	tests := []struct {
+		name            string
+		messageOrdinal  sql.NullInt64
+		wantCost        int64
+		wantApplication export.PricingApplication
+	}{
+		{
+			name:           "ordinal-bound request uses band",
+			messageOrdinal: sql.NullInt64{Int64: 1, Valid: true},
+			wantCost:       600_000,
+			wantApplication: export.PricingApplication{
+				Bands: []export.AppliedPricingBand{{
+					AboveInputTokens: 200_000,
+					RequestCount:     1,
+				}},
+			},
+		},
+		{
+			name:     "unbound aggregate uses base",
+			wantCost: 300_000,
+			wantApplication: export.PricingApplication{
+				AggregateRowCount: 1,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolver := pricingBandTestResolver()
+			_, _, _, _, cost, _, err := dailyUsageAmounts(dailyUsageScanRow{
+				messageOrdinal: tt.messageOrdinal,
+				usageSource:    "usage-event",
+				model:          "banded-model",
+				inputTokens:    300_000,
+			}, resolver)
+			require.NoError(t, err)
+			block, err := resolver.BuildBlock()
+			require.NoError(t, err)
+			provenance := block.Models["banded-model"]
+			require.Len(t, provenance.Resolutions, 1)
+
+			assert.Equal(t, money.Money{Microdollars: tt.wantCost}, cost)
+			assert.Equal(t, tt.wantApplication,
+				provenance.Resolutions[0].Application)
+		})
+	}
+}
+
+func TestDailyUsageAmountsPricingBandSavings(t *testing.T) {
+	resolver := pricingBandTestResolver()
+	_, _, _, _, cost, savings, err := dailyUsageAmounts(dailyUsageScanRow{
+		messageOrdinal:           sql.NullInt64{Int64: 1, Valid: true},
+		usageSource:              "usage-event",
+		model:                    "banded-model",
+		inputTokens:              100_001,
+		cacheCreationInputTokens: 50_000,
+		cacheReadInputTokens:     50_000,
+	}, resolver)
+	require.NoError(t, err)
+
+	assert.Equal(t, money.Money{Microdollars: 260_002}, cost)
+	assert.Equal(t, money.Money{Microdollars: 140_000}, savings)
+}
+
+func TestDailyUsageAmountsPricingBandApplicationCounts(t *testing.T) {
+	resolver := pricingBandTestResolver()
+	rows := []dailyUsageScanRow{
+		{
+			messageOrdinal: sql.NullInt64{Int64: 1, Valid: true},
+			usageSource:    "usage-event",
+			model:          "banded-model",
+			inputTokens:    150_000,
+		},
+		{
+			messageOrdinal: sql.NullInt64{Int64: 2, Valid: true},
+			usageSource:    "usage-event",
+			model:          "banded-model",
+			inputTokens:    150_000,
+		},
+		{
+			usageSource: "message",
+			model:       "banded-model",
+			tokenJSON:   `{"input_tokens":300000}`,
+		},
+		{
+			usageSource: "session",
+			model:       "banded-model",
+			inputTokens: 300_000,
+		},
+	}
+	var total money.Money
+	for _, row := range rows {
+		_, _, _, _, cost, _, err := dailyUsageAmounts(row, resolver)
+		require.NoError(t, err)
+		total = money.MustAdd(total, cost)
+	}
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+	provenance := block.Models["banded-model"]
+	require.Len(t, provenance.Resolutions, 1)
+
+	assert.Equal(t, money.Money{Microdollars: 1_200_000}, total)
+	assert.Equal(t, export.PricingApplication{
+		BaseRequestCount:  2,
+		AggregateRowCount: 1,
+		Bands: []export.AppliedPricingBand{{
+			AboveInputTokens: 200_000,
+			RequestCount:     1,
+		}},
+	}, provenance.Resolutions[0].Application)
+}
+
+func TestSessionRowCostPricingBandRequestScope(t *testing.T) {
+	resolver := pricingBandTestResolver()
+	cost, priced, contributes, err := sessionRowCost(usageScanRow{
+		messageOrdinal: sql.NullInt64{Int64: 1, Valid: true},
+		usageSource:    "usage-event",
+		model:          "banded-model",
+		inputTokens:    300_000,
+	}, resolver)
+	require.NoError(t, err)
+
+	assert.Equal(t, money.Money{Microdollars: 600_000}, cost)
+	assert.True(t, priced)
+	assert.True(t, contributes)
+}
+
+func TestSQLiteActivityReportRowStatusPricingBandRequestScope(t *testing.T) {
+	resolver := pricingBandTestResolver()
+	cost, priced, contributes, err := sqliteActivityReportRowStatus(dailyUsageScanRow{
+		messageOrdinal: sql.NullInt64{Int64: 1, Valid: true},
+		usageSource:    "usage-event",
+		model:          "banded-model",
+		inputTokens:    300_000,
+	}, resolver)
+	require.NoError(t, err)
+
+	assert.Equal(t, money.Money{Microdollars: 600_000}, cost)
+	assert.True(t, priced)
+	assert.True(t, contributes)
+}
+
+func pricingBandTestResolver() *export.PricingResolver {
+	return export.NewPricingResolver([]export.EffectivePricingRow{{
+		ModelPattern: "banded-model",
+		Rates: export.ModelRates{
+			InputPerMTok:      money.MustParseDollars("1"),
+			OutputPerMTok:     money.MustParseDollars("2"),
+			CacheWritePerMTok: money.MustParseDollars("0.50"),
+			CacheReadPerMTok:  money.MustParseDollars("0.10"),
+			Bands: []export.PricingBand{{
+				AboveInputTokens:  200_000,
+				InputPerMTok:      money.MustParseDollars("2"),
+				OutputPerMTok:     money.MustParseDollars("3"),
+				CacheWritePerMTok: money.MustParseDollars("1"),
+				CacheReadPerMTok:  money.MustParseDollars("0.20"),
+			}},
+		},
+	}})
+}
 
 var (
 	dailyUsageFixtureOnce sync.Once
@@ -4065,14 +4228,13 @@ func TestGetDailyUsage_CodebuffCostOnly(t *testing.T) {
 		"the day's TotalCost must include the reported cost")
 }
   
-// TestGetDailyUsage_KimiDateAliasPricing proves the date-based pricing
-// path end to end on SQLite: the date-ambiguous Kimi aliases
+// TestGetDailyUsage_KimiAliasPricing proves Kimi alias pricing end to end on
+// SQLite: the date-ambiguous aliases
 // (kimi-for-coding, daimon-kimi-code, daimon-kimi-messages) price each
 // row by its timestamp — K2.6 rates before the 2026-07-19T00:00:00Z
-// UTC cutoff, K3 rates at and after it — while the static k3/k3-agent
-// rows price flat at K3 regardless of date, including before the
-// cutoff (proving the static rows don't break date-based precedence).
-func TestGetDailyUsage_KimiDateAliasPricing(t *testing.T) {
+// UTC cutoff and K3 rates at and after it. The explicit k2d6-agent alias stays
+// on K2.6, while static k3/k3-agent rows price flat at K3.
+func TestGetDailyUsage_KimiAliasPricing(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -4174,6 +4336,13 @@ func TestGetDailyUsage_KimiDateAliasPricing(t *testing.T) {
 			name:           "provider-prefixed alias before cutoff",
 			model:          "kimi-code/kimi-for-coding",
 			ts:             "2026-07-18T12:00:00Z",
+			wantCost:       k26Cost,
+			wantPriceModel: "moonshot/kimi-k2.6",
+		},
+		{
+			name:           "explicit k2d6-agent stays K2.6 after cutoff",
+			model:          "k2d6-agent",
+			ts:             "2026-07-20T12:00:00Z",
 			wantCost:       k26Cost,
 			wantPriceModel: "moonshot/kimi-k2.6",
 		},

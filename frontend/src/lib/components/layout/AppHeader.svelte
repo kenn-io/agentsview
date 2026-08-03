@@ -39,6 +39,7 @@
   } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
+  import { settings } from "../../stores/settings.svelte.js";
   import { router, type Route } from "../../stores/router.svelte.js";
   import {
     downloadExport,
@@ -86,21 +87,34 @@
     "usage",
     "activity",
     "trends",
+    "recall",
     "pinned",
     "insights",
     "trash",
     "recent-edits",
+    "data",
   ] as const;
+
+  const recallAvailable = $derived(
+    !sync.readOnly &&
+      !settings.readOnly &&
+      (sync.serverVersion !== null ||
+        (settings.loaded && settings.error === null)),
+  );
 
   const tabs: TopBarTab[] = $derived([
     { id: "sessions", label: m.nav_sessions() },
     { id: "usage", label: m.nav_usage() },
     { id: "activity", label: m.nav_activity() },
     { id: "trends", label: m.nav_trends() },
+    ...(recallAvailable
+      ? [{ id: "recall", label: m.nav_recall() }]
+      : []),
     { id: "pinned", label: m.nav_pinned() },
     { id: "insights", label: m.nav_insights() },
     { id: "trash", label: m.nav_trash() },
     { id: "recent-edits", label: m.nav_recent_edits() },
+    { id: "data", label: m.nav_data() },
   ]);
 
   const activeTab = $derived(
@@ -311,21 +325,26 @@
   ariaLabel={m.nav_primary()}
 >
   {#snippet left()}
-    <button
-      class="hamburger"
-      onclick={() => {
-        if (ui.isMobileViewport && router.route !== "sessions") {
-          router.navigate("sessions");
-          ui.sidebarOpen = true;
-        } else {
-          ui.toggleSidebar();
-        }
-      }}
-      title={m.nav_toggle_sidebar_shortcut()}
-      aria-label={m.nav_toggle_sidebar()}
-    >
-      <MenuIcon size="16" strokeWidth="2" aria-hidden="true" />
-    </button>
+    {#if ui.isMobileViewport}
+      <button
+        class="hamburger"
+        onclick={() => {
+          if (router.route !== "sessions") {
+            router.navigate("sessions");
+            ui.sidebarOpen = true;
+          } else {
+            ui.toggleSidebar();
+          }
+        }}
+        title={m.nav_toggle_sidebar_shortcut()}
+        aria-label={m.nav_toggle_sidebar()}
+        aria-expanded={ui.sidebarOpen}
+        aria-controls="session-sidebar"
+        data-sidebar-focus-target="mobile"
+      >
+        <MenuIcon size="16" strokeWidth="2" aria-hidden="true" />
+      </button>
+    {/if}
     <button
       class="header-home"
       onclick={() => router.navigate("sessions")}

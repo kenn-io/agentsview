@@ -48,12 +48,16 @@ type MirrorProbe struct {
 	// the mirror was built from (see mirrorMetadata.SourceDatabaseID). "" on
 	// mirrors written before the id was recorded.
 	SourceDatabaseID string
+	// SourceArchiveID is the provenance id stamped onto mirror rows. "" on
+	// mirrors written before the id was recorded.
+	SourceArchiveID  string
 	Scope            string // canonical scope string, see canonicalPushScope
 	LastPushCutoff   string
 	LastPushAt       string
 	LastPushMachine  string
 	DeletionRevision int64
 	IdentityRevision int64
+	MappingRevision  int64
 }
 
 // ProbeMirror inspects the mirror file at path without creating or mutating
@@ -159,12 +163,14 @@ func probeOpenMirror(ctx context.Context, conn *sql.DB) MirrorProbe {
 	probe.SchemaVersion = meta.SchemaVersion
 	probe.DataVersion = meta.DataVersion
 	probe.SourceDatabaseID = meta.SourceDatabaseID
+	probe.SourceArchiveID = meta.SourceArchiveID
 	probe.Scope = meta.Scope
 	probe.LastPushCutoff = meta.LastPushCutoff
 	probe.LastPushAt = meta.LastPushAt
 	probe.LastPushMachine = meta.LastPushMachine
 	probe.DeletionRevision = meta.DeletionRevision
 	probe.IdentityRevision = meta.IdentityRevision
+	probe.MappingRevision = meta.MappingRevision
 	return probe
 }
 
@@ -278,23 +284,18 @@ func (p MirrorProbe) NeedsRebuild(scope string, sourceDataVersion int) bool {
 // rebuilds: identity-less mirrors only come from earlier builds of this
 // unreleased branch, so they simply rebuild once and record the id.
 //
-// The machine-change check exists because mirror rows are machine-stamped
-// (see the sessions.machine column and duckSessionFingerprintFields): an
-// incremental push only rewrites sessions whose LOCAL content changed
-// within the current mirror window, so a session that has not changed
-// since the mirror's last push stays permanently labeled with the OLD
-// machine name even after the push metadata's LastPushMachine flips to the
-// new one — silently stranding it under a machine filter (see
-// readMachineStatus) that will never again select it. A full rebuild
-// re-pushes every session under the new machine name instead.
+// The machine-change check remains necessary for legacy sessions whose local
+// machine is empty or "local": mirroring substitutes the current push machine
+// for those values, so a full rebuild must restamp every such row when that
+// configured name changes. Explicit per-source machine labels remain unchanged.
 //
 // localDeletionRevision is the caller's local.SessionDeletionPublicationRevision
-// read, and localDatabaseID the caller's local.GetDatabaseID read; both are
-// passed in rather than threaded through NeedsRebuild's pure scope/version
-// signature.
+// read, localDatabaseID the caller's local.GetDatabaseID read, and
+// localArchiveID the caller's local.GetArchiveID read; they are passed in
+// rather than threaded through NeedsRebuild's pure scope/version signature.
 func rebuildReason(
 	probe MirrorProbe, scope string, sourceDataVersion int, full bool,
-	localDeletionRevision int64, machine string, localDatabaseID string,
+	localDeletionRevision int64, machine, localDatabaseID, localArchiveID string,
 ) string {
 	switch {
 	case full:
@@ -319,6 +320,8 @@ func rebuildReason(
 		)
 	case probe.SourceDatabaseID != localDatabaseID:
 		return "mirror was built from a different archive (source database id changed)"
+	case probe.SourceArchiveID != localArchiveID:
+		return "mirror provenance changed (source archive id changed)"
 	case probe.DeletionRevision > localDeletionRevision:
 		return "mirror deletion cursor ahead of archive; archive was rebuilt"
 	default:
