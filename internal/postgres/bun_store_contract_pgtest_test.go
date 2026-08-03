@@ -5,6 +5,7 @@ package postgres
 import (
 	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/storetest"
@@ -15,6 +16,7 @@ const bunIdentityContractSchema = "agentsview_bun_identity_contract"
 const bunDataContractSchema = "agentsview_bun_data_contract"
 const bunCurationContractSchema = "agentsview_bun_curation_contract"
 const bunInsightContractSchema = "agentsview_bun_insight_contract"
+const bunMutationContractSchema = "agentsview_bun_mutation_contract"
 
 func TestBunStoreCoreContract(t *testing.T) {
 	storetest.RunCoreContract(t, storetest.Backend{
@@ -126,6 +128,52 @@ func TestBunStoreInsightContract(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, store.DetectInsightGenerationAvailability(t.Context()))
 			return store.BunStore, fixture
+		},
+	})
+}
+
+func TestBunStoreMutationContract(t *testing.T) {
+	storetest.RunMutationContract(t, storetest.MutationBackend{
+		Name: "postgres", Writable: true,
+		Open: func(t *testing.T, extraTrashRows int) storetest.MutationHarness {
+			pgURL := testPGURL(t)
+			cleanupBunContractSchema(t, pgURL, bunMutationContractSchema)
+			t.Cleanup(func() {
+				cleanupBunContractSchema(t, pgURL, bunMutationContractSchema)
+			})
+			pg, err := Open(pgURL, bunMutationContractSchema, true)
+			require.NoError(t, err)
+			require.NoError(t, EnsureSchema(t.Context(), pg, bunMutationContractSchema))
+			store := newStore(pg)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			fixture, err := storetest.InsertBunMutationFixture(
+				t.Context(), store.bun, "bun-mutation-archive",
+				"bun-mutation-generation", extraTrashRows,
+			)
+			require.NoError(t, err)
+			_, err = store.bun.NewUpdate().Table("sessions").
+				Set("updated_at = ?", time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)).
+				Where("1 = 1").
+				Exec(t.Context())
+			require.NoError(t, err)
+			return storetest.MutationHarness{
+				Store: store.BunStore,
+				Rows:  fixture,
+				IsExcluded: func(t *testing.T, id string) bool {
+					t.Helper()
+					count, countErr := store.bun.NewSelect().
+						Table("excluded_sessions").Where("id = ?", id).Count(t.Context())
+					require.NoError(t, countErr)
+					return count > 0
+				},
+				OperationalTouchAfter: func(t *testing.T, id string) bool {
+					t.Helper()
+					var updatedAt time.Time
+					require.NoError(t, store.bun.NewSelect().Table("sessions").
+						Column("updated_at").Where("id = ?", id).Scan(t.Context(), &updatedAt))
+					return updatedAt.After(time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
+				},
+			}
 		},
 	})
 }

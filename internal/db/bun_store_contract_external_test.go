@@ -123,3 +123,42 @@ func TestBunStoreInsightContract(t *testing.T) {
 		},
 	})
 }
+
+func TestBunStoreMutationContract(t *testing.T) {
+	storetest.RunMutationContract(t, storetest.MutationBackend{
+		Name: "sqlite", Writable: true,
+		Open: func(t *testing.T, extraTrashRows int) storetest.MutationHarness {
+			database, err := db.Open(filepath.Join(t.TempDir(), "mutation-contract.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			archiveID, err := database.GetArchiveID(t.Context())
+			require.NoError(t, err)
+			generation, err := database.GetDatabaseID(t.Context())
+			require.NoError(t, err)
+			var fixture storetest.MutationFixture
+			require.NoError(t, database.Update(func(tx *sql.Tx) error {
+				var insertErr error
+				fixture, insertErr = storetest.InsertSQLiteMutationFixture(
+					t.Context(), tx, archiveID, generation, extraTrashRows,
+				)
+				return insertErr
+			}))
+			return storetest.MutationHarness{
+				Store: database.BunStore,
+				Rows:  fixture,
+				IsExcluded: func(t *testing.T, id string) bool {
+					t.Helper()
+					return database.IsSessionExcluded(id)
+				},
+				RestoreBaselinePresent: func(t *testing.T, id string) bool {
+					t.Helper()
+					var count int
+					require.NoError(t, database.Reader().QueryRowContext(t.Context(), `
+						SELECT count(*) FROM local_session_source_baselines
+						WHERE session_id = ?`, id).Scan(&count))
+					return count > 0
+				},
+			}
+		},
+	})
+}

@@ -42,8 +42,17 @@ const (
 // BackendCapabilities describes features that cannot be inferred from a
 // store's coarse public ReadOnly value.
 type BackendCapabilities struct {
-	Recall bool
-	Writes map[WriteOperation]bool
+	Recall           bool
+	Writes           map[WriteOperation]bool
+	SessionMutations SessionMutationCapabilities
+}
+
+// SessionMutationCapabilities identifies adapter-owned operational side
+// effects that accompany otherwise canonical session mutations.
+type SessionMutationCapabilities struct {
+	TouchUpdatedAt           bool
+	ClearLocalSourceBaseline bool
+	ClearProviderFreshness   bool
 }
 
 // AllowsWrite reports whether an operation family is authorized.
@@ -67,6 +76,10 @@ func (b *sqliteBunBackend) Capabilities() BackendCapabilities {
 	}
 	return BackendCapabilities{
 		Recall: true,
+		SessionMutations: SessionMutationCapabilities{
+			ClearLocalSourceBaseline: true,
+			ClearProviderFreshness:   true,
+		},
 		Writes: map[WriteOperation]bool{
 			WriteArchive:           true,
 			WriteCuration:          true,
