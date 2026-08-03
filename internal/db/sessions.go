@@ -2752,8 +2752,10 @@ func (db *DB) GetSessionForIncremental(
 			total_output_tokens, peak_context_tokens,
 			has_total_output_tokens, has_peak_context_tokens
 		 FROM sessions s
-		 LEFT JOIN session_project_identity_snapshots snap
-		   ON snap.session_id = s.id
+		 LEFT JOIN source_session_project_identity_snapshots snap
+		   ON snap.source_archive_id = s.source_archive_id
+		  AND snap.source_database_generation = s.source_database_generation
+		  AND snap.source_session_id = s.id
 		 WHERE s.file_path = ?
 		   AND s.agent = ?
 		   AND s.deleted_at IS NULL`,

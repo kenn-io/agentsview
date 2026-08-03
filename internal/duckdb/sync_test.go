@@ -1528,18 +1528,18 @@ func TestSyncModelPricingSkipsUnchangedMirrorRows(t *testing.T) {
 	require.NoError(t, syncer.syncModelPricing(ctx))
 	_, err := syncer.DB().ExecContext(ctx,
 		`UPDATE model_pricing SET updated_at = ? WHERE model_pattern = ?`,
-		time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC), "claude-test",
+		"2030-01-02T03:04:05Z", "claude-test",
 	)
 	require.NoError(t, err)
 
 	require.NoError(t, syncer.syncModelPricing(ctx))
 
-	var updatedAt time.Time
+	var updatedAt string
 	require.NoError(t, syncer.DB().QueryRowContext(ctx,
 		`SELECT updated_at FROM model_pricing WHERE model_pattern = ?`,
 		"claude-test",
 	).Scan(&updatedAt))
-	assert.Equal(t, time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC), updatedAt.UTC())
+	assert.Equal(t, "2030-01-02T03:04:05Z", updatedAt)
 }
 
 func TestSyncModelPricingBandsPersistsAndRemovesCompleteSet(t *testing.T) {

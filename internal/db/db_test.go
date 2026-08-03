@@ -817,7 +817,8 @@ func TestMigration_ResultContentColumn(t *testing.T) {
 			SELECT id, message_id, session_id, tool_name,
 			       category, tool_use_id, input_json,
 			       skill_name, result_content_length,
-			       subagent_session_id
+			       subagent_session_id, file_path, call_index,
+			       message_ordinal
 			FROM tool_calls;
 		DROP TABLE tool_calls;
 		ALTER TABLE tool_calls_old RENAME TO tool_calls;
@@ -7356,8 +7357,13 @@ func TestOpenRepairsLegacyCurrentSchemaTokenCoverageOnce(t *testing.T) {
 		`INSERT INTO sessions (
 			id, project, machine, agent, message_count,
 			total_output_tokens, peak_context_tokens,
-			has_total_output_tokens, has_peak_context_tokens
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			has_total_output_tokens, has_peak_context_tokens,
+			source_archive_id, source_database_generation
+		)
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, archive.value, generation.value
+		FROM archive_metadata archive
+		JOIN archive_metadata generation ON generation.key = 'database_id'
+		WHERE archive.key = 'archive_id'`,
 		"current", "proj", "local", "claude", 1,
 		0, 0, false, false,
 	)
@@ -8777,11 +8783,16 @@ func TestCopySessionMetadataScrubsProjectIdentityGitRemoteCredentials(t *testing
 	oldDB, err := Open(oldPath)
 	requireNoError(t, err, "open old")
 	_, err = oldDB.rawWriter().Exec(`
-		INSERT INTO project_identity_observations (
+		INSERT INTO source_project_identity_observations (
+			source_archive_id, source_archive_salt,
 			project, machine, root_path, git_remote, git_remote_name,
 			worktree_name, worktree_root_path, observed_at,
 			normalized_remote, key_source, key
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		)
+		SELECT archive.value, salt.value, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		FROM archive_metadata archive
+		JOIN archive_metadata salt ON salt.key = 'archive_salt'
+		WHERE archive.key = 'archive_id'`,
 		"alpha", "laptop", root,
 		"https://"+"user:token@"+"github.com/acme/alpha.git", "origin",
 		"", "", "2026-05-01T00:00:00Z",
