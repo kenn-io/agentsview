@@ -33,12 +33,9 @@ type BoundedCoverageBinding struct {
 // BoundedCoverageFileIdentity is the physical file fence carried by one
 // lease. It is value data so the worker process can enforce the same fence.
 type BoundedCoverageFileIdentity struct {
-	Path            string `json:"path"`
-	Inode           int64  `json:"inode"`
-	Device          int64  `json:"device"`
-	Size            int64  `json:"size"`
-	ModTimeUnixNano int64  `json:"mod_time_unix_nano"`
-	Mode            uint32 `json:"mode"`
+	Path   string `json:"path"`
+	Inode  int64  `json:"inode"`
+	Device int64  `json:"device"`
 }
 
 // BoundedCoverageLease is the immutable authority for one bounded lifecycle.
@@ -332,7 +329,7 @@ func boundedCoverageBindingKey(agent parser.AgentType, physicalDBPath, scope str
 
 func boundedCoverageFileIdentity(path string, info os.FileInfo) BoundedCoverageFileIdentity {
 	inode, device := getFileIdentity(path, info)
-	return BoundedCoverageFileIdentity{Path: filepath.Clean(path), Inode: inode, Device: device, Size: info.Size(), ModTimeUnixNano: info.ModTime().UnixNano(), Mode: uint32(info.Mode())}
+	return BoundedCoverageFileIdentity{Path: filepath.Clean(path), Inode: inode, Device: device}
 }
 
 func (e *Engine) AdmitBoundedCoverageLease(
@@ -405,6 +402,8 @@ func (e *Engine) DrainBoundedCoverageLease(
 func (e *Engine) ApplyBoundedCoverageSourcesLease(
 	ctx context.Context, lease *BoundedCoverageLease, sources []parser.SourceRef,
 ) (SyncStats, error) {
+	releaseGate := e.AcquireBoundedCoverageWriteGate()
+	defer releaseGate()
 	release := lease.AcquireApplyFence()
 	defer release()
 	if err := e.validateBoundedCoveragePhysicalLease(lease); err != nil {
@@ -419,6 +418,8 @@ func (e *Engine) ApplyBoundedCoverageSourcesLeaseCommit(
 	ctx context.Context, lease *BoundedCoverageLease, sources []parser.SourceRef,
 	commit func(SyncStats) error,
 ) error {
+	releaseGate := e.AcquireBoundedCoverageWriteGate()
+	defer releaseGate()
 	release := lease.AcquireApplyFence()
 	defer release()
 	if err := e.validateBoundedCoveragePhysicalLease(lease); err != nil {

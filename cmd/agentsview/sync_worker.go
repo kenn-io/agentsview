@@ -54,7 +54,24 @@ type workerResult struct {
 	// /sync and /resync responses keep result parity with in-process passes
 	// (total sessions, orphan counts, warnings, anomalies). The summary
 	// counters above remain the authoritative status inputs.
-	Stats *sync.SyncStats `json:"stats,omitempty"`
+	Stats                         *sync.SyncStats            `json:"stats,omitempty"`
+	BoundedCoverageLease          *sync.BoundedCoverageLease `json:"boundedCoverageLease,omitempty"`
+	BoundedCoverageRepairAccepted bool                       `json:"boundedCoverageRepairAccepted,omitempty"`
+}
+
+var registeredScopedWorkerModePrefixes = []string{
+	"audit-scoped|",
+	"audit-scoped-v2|",
+	"audit-scoped-v3|",
+}
+
+func registeredScopedWorkerMode(mode string) bool {
+	for _, prefix := range registeredScopedWorkerModePrefixes {
+		if strings.HasPrefix(mode, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // newSyncWorkerCommand registers the hidden self-exec'd worker. The daemon runs
@@ -130,11 +147,7 @@ func runSyncWorkerContext(
 		// under those readers; the real resync path is the resync-build flow,
 		// which swaps and resets caches daemon-side.
 		err = runSyncWorkerStartup(ctx, cfg, mode, emit, onProgress)
-	case strings.HasPrefix(mode, "audit-scoped|"):
-		err = runSyncWorkerStartup(ctx, cfg, mode, emit, onProgress)
-	case strings.HasPrefix(mode, "audit-scoped-v2|"):
-		err = runSyncWorkerStartup(ctx, cfg, mode, emit, onProgress)
-	case strings.HasPrefix(mode, "audit-scoped-v3|"):
+	case registeredScopedWorkerMode(mode):
 		err = runSyncWorkerStartup(ctx, cfg, mode, emit, onProgress)
 	case mode == "resync-build":
 		err = runSyncWorkerResyncBuild(ctx, cfg, mode, emit, onProgress)
@@ -183,6 +196,7 @@ func runSyncWorkerStartup(
 	}
 
 	var result workerResult
+	var repairedLease *sync.BoundedCoverageLease
 	switch {
 	case database.NeedsResync():
 		stats := engine.ResyncAll(ctx, onProgress)
@@ -220,6 +234,7 @@ func runSyncWorkerStartup(
 					auditErr = fmt.Errorf("invalid lease-bound scoped audit request")
 				}
 			} else {
+				repairedLease = request.Lease
 				auditErr = engine.ReconcileBoundedCoverageLease(ctx, request.Lease, request.Reason)
 			}
 		} else if strings.HasPrefix(mode, "audit-scoped-v2|") {
@@ -260,6 +275,10 @@ func runSyncWorkerStartup(
 		}
 	default:
 		result = workerResultFromStats(ctx, engine.SyncAll(ctx, onProgress))
+	}
+	if repairedLease != nil && result.Status == "ok" {
+		result.BoundedCoverageLease = repairedLease
+		result.BoundedCoverageRepairAccepted = true
 	}
 
 	emit(workerLine{Result: &result})

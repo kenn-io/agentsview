@@ -2328,6 +2328,10 @@ type watchSyncer interface {
 	ReconcileWatchRootsAfterLostEvents(context.Context, []string, bool) error
 }
 
+type groupedWatchSyncer interface {
+	ReconcileProviderRootsGrouped(context.Context, []sync.ProviderRootsGroup) error
+}
+
 type watchReconciliationError struct {
 	cause error
 	retry sync.WatchBatch
@@ -2390,6 +2394,7 @@ func (e *watchReconciliationError) WatchRetryBatch() sync.WatchBatch {
 	retry := e.retry
 	retry.Paths = append([]string(nil), retry.Paths...)
 	retry.ReconcileRoots = append([]string(nil), retry.ReconcileRoots...)
+	retry.ReconcileGroups = append([]sync.ProviderRootsGroup(nil), retry.ReconcileGroups...)
 	return retry
 }
 
@@ -2409,6 +2414,7 @@ func syncWatchBatch(
 	paths := append([]string(nil), batch.Paths...)
 	full := batch.FullSync
 	reconcileRoots := append([]string(nil), batch.ReconcileRoots...)
+	reconcileGroups := append([]sync.ProviderRootsGroup(nil), batch.ReconcileGroups...)
 	lostEvents := batch.LostEvents
 	type renameOwner struct {
 		path  string
@@ -2489,7 +2495,7 @@ func syncWatchBatch(
 	}
 	if len(paths) > 0 {
 		if err := engine.SyncPathsContext(ctx, paths); err != nil {
-			retry := sync.WatchBatch{FullSync: full, LostEvents: lostEvents}
+			retry := sync.WatchBatch{FullSync: full, LostEvents: lostEvents, ReconcileGroups: reconcileGroups}
 			if !full {
 				retry.Paths = append([]string(nil), paths...)
 				retry.ReconcileRoots = deduplicateStrings(reconcileRoots)
@@ -2497,6 +2503,18 @@ func syncWatchBatch(
 			return &watchReconciliationError{
 				cause: err,
 				retry: retry,
+			}
+		}
+	}
+	if len(reconcileGroups) > 0 {
+		grouped, ok := engine.(groupedWatchSyncer)
+		if !ok {
+			return fmt.Errorf("watch engine cannot preserve provider retry groups")
+		}
+		if err := grouped.ReconcileProviderRootsGrouped(ctx, reconcileGroups); err != nil {
+			return &watchReconciliationError{
+				cause: err,
+				retry: sync.WatchBatch{ReconcileGroups: reconcileGroups, LostEvents: lostEvents},
 			}
 		}
 	}
@@ -3092,6 +3110,13 @@ func runBoundedCoverageLeaseAudit(
 	}
 	mode := "audit-scoped-v3|" + base64.RawURLEncoding.EncodeToString(request)
 	result, err := runWorkerWritePass(ctx, recoveryCtx, cfg, engine, database, lock, mode, nil)
+	if err == nil && (!result.BoundedCoverageRepairAccepted || result.BoundedCoverageLease == nil ||
+		result.BoundedCoverageLease.Provider != lease.Provider ||
+		result.BoundedCoverageLease.Generation != lease.Generation ||
+		result.BoundedCoverageLease.FileIdentity != lease.FileIdentity ||
+		filepath.Clean(result.BoundedCoverageLease.ExactProviderScope) != filepath.Clean(lease.ExactProviderScope)) {
+		err = errors.New("bounded coverage worker returned a stale or incomplete repair result")
+	}
 	if (result.Synced > 0 || result.Tombstoned > 0) && emitter != nil {
 		emitter.Emit("sessions")
 	}

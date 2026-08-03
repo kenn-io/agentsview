@@ -82,6 +82,7 @@ type boundedCoverageState struct {
 	auditBoundary  parser.OpenCodeCoverageCheckpoint
 	mode           boundedBindingMode
 	wake           boundedWake
+	frozen         bool
 }
 
 func sameBoundedFile(a, b os.FileInfo) bool {
@@ -128,6 +129,10 @@ type sharedUnwatchedPollCoordinator struct {
 	stop           chan struct{}
 	done           chan struct{}
 	stopOnce       sync.Once
+}
+
+type boundedCoverageWriteGater interface {
+	AcquireBoundedCoverageWriteGate() func()
 }
 
 func newUnwatchedPollCoordinator(
@@ -270,15 +275,24 @@ func (c *sharedUnwatchedPollCoordinator) admitBoundedCoverage(
 		oldKey := ""
 		oldLease := (*agentsync.BoundedCoverageLease)(nil)
 		if needsLease {
+			if state != nil {
+				state.frozen = true
+				oldKey, oldLease = binding.Key, state.lease
+			}
 			for key, candidate := range c.coverageState {
 				if filepath.Clean(candidate.binding.PhysicalDBPath) == filepath.Clean(binding.PhysicalDBPath) &&
 					filepath.Clean(candidate.binding.Scope) != filepath.Clean(binding.Scope) {
 					oldKey, oldLease = key, candidate.lease
+					candidate.frozen = true
 					break
 				}
 			}
 		}
 		c.coverageMu.Unlock()
+		releaseGate := func() {}
+		if gater, ok := c.coverage.(boundedCoverageWriteGater); ok && needsLease {
+			releaseGate = gater.AcquireBoundedCoverageWriteGate()
+		}
 		releaseOld := func() {}
 		if oldLease != nil {
 			releaseOld = oldLease.AcquireApplyFence()
@@ -299,6 +313,7 @@ func (c *sharedUnwatchedPollCoordinator) admitBoundedCoverage(
 			}
 			if err != nil {
 				releaseOld()
+				releaseGate()
 				return admitted, err
 			}
 		}
@@ -317,6 +332,7 @@ func (c *sharedUnwatchedPollCoordinator) admitBoundedCoverage(
 			admitted = append(admitted, state.binding)
 			c.coverageMu.Unlock()
 			releaseOld()
+			releaseGate()
 			continue
 		}
 		state = &boundedCoverageState{lease: lease, binding: binding, checkpoint: lease.AdmissionCheckpoint,
@@ -344,6 +360,7 @@ func (c *sharedUnwatchedPollCoordinator) admitBoundedCoverage(
 		admitted = append(admitted, binding)
 		c.coverageMu.Unlock()
 		releaseOld()
+		releaseGate()
 	}
 	c.requestPoll()
 	return admitted, nil
@@ -353,14 +370,12 @@ func (c *sharedUnwatchedPollCoordinator) invalidateBoundedCoverageReplacementsLo
 	binding agentsync.BoundedCoverageBinding,
 ) {
 	physical := filepath.Clean(binding.PhysicalDBPath)
-	for key, state := range c.coverageState {
+	for _, state := range c.coverageState {
 		if filepath.Clean(state.binding.PhysicalDBPath) == physical &&
 			filepath.Clean(state.binding.Scope) != filepath.Clean(binding.Scope) {
-			if state.lease != nil {
-				release := state.lease.AcquireApplyFence()
-				defer release()
-			}
-			delete(c.coverageState, key)
+			// Freeze under coverageMu. The write gate is acquired by the
+			// replacement handoff after this lock is released.
+			state.frozen = true
 		}
 	}
 }
@@ -787,7 +802,7 @@ func (c *sharedUnwatchedPollCoordinator) pollBoundedCoverageOnce(ctx context.Con
 	}
 	states := make([]workItem, 0, len(c.coverageState))
 	for _, state := range c.coverageState {
-		if (state.nativeAdmitted || state.pollOwned) && (state.pendingWake || state.auditPending || state.retry) {
+		if !state.frozen && (state.nativeAdmitted || state.pollOwned) && (state.pendingWake || state.auditPending || state.retry) {
 			state.running = true
 			state.pendingWake = false
 			binding := state.binding

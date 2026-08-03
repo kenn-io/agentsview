@@ -316,10 +316,12 @@ type Engine struct {
 	blockedResultCategories map[string]bool
 	cwdFilter               cwdPrefixFilter
 	syncMu                  gosync.Mutex // serializes all sync operations
-	mu                      gosync.RWMutex
-	lastSync                time.Time
-	lastSyncStats           SyncStats
-	currentProgress         *Progress
+	// boundedCoverageWriteMu is the ordered handoff gate shared by the coordinator and source application.
+	boundedCoverageWriteMu gosync.RWMutex
+	mu                     gosync.RWMutex
+	lastSync               time.Time
+	lastSyncStats          SyncStats
+	currentProgress        *Progress
 	// skipCache tracks paths that should be skipped on
 	// subsequent syncs, keyed by path with the file mtime
 	// at time of caching. Covers parse errors and
@@ -444,6 +446,12 @@ type Engine struct {
 	reconciliationMu           gosync.RWMutex
 	lastReconciliation         ReconciliationResult
 	reconciliationSpoolFactory func(string) (reconciliationSpoolStore, error)
+}
+
+// AcquireBoundedCoverageWriteGate returns the exclusive bounded-coverage handoff.
+func (e *Engine) AcquireBoundedCoverageWriteGate() func() {
+	e.boundedCoverageWriteMu.Lock()
+	return e.boundedCoverageWriteMu.Unlock
 }
 
 // ReconciliationResult is the structured acknowledgement for the most recent
