@@ -76,15 +76,7 @@ type probeRecallEvidence struct {
 	Snippets     []string `json:"snippets"`
 }
 
-func (db *DB) ImportAcceptedRecallEntriesJSONL(
-	ctx context.Context, r io.Reader,
-) (RecallImportResult, error) {
-	return db.ImportAcceptedRecallEntriesJSONLWithOptions(
-		ctx, r, RecallImportOptions{},
-	)
-}
-
-func (db *DB) ImportAcceptedRecallEntriesJSONLWithOptions(
+func (db *DB) importAcceptedRecallEntriesJSONLWithOptions(
 	ctx context.Context, r io.Reader, opts RecallImportOptions,
 ) (RecallImportResult, error) {
 	var result RecallImportResult
@@ -455,7 +447,7 @@ func (db *DB) importAcceptedRecallEntry(
 		); err != nil {
 			return false, err
 		}
-	} else if err := insertRecallEntryTx(tx, recall); err != nil {
+	} else if err := insertRecallEntryTx(ctx, tx, recall); err != nil {
 		return false, err
 	}
 

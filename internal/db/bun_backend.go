@@ -74,7 +74,7 @@ func (b *sqliteBunBackend) ReadOnly() bool { return b.store.readOnly }
 
 func (b *sqliteBunBackend) Capabilities() BackendCapabilities {
 	if b.store.readOnly {
-		return BackendCapabilities{}
+		return BackendCapabilities{Recall: true}
 	}
 	return BackendCapabilities{
 		Recall:           true,

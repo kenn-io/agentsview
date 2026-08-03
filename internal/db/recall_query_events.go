@@ -47,87 +47,9 @@ type RecallQueryExposure struct {
 	Packed  bool    `json:"packed"`
 }
 
-// RecordRecallQueryEvent inserts an event and all exposures atomically. An
-// empty query ID receives a cryptographically random UUID.
-func (db *DB) RecordRecallQueryEvent(
-	ctx context.Context,
-	event RecallQueryEvent,
-) (string, error) {
-	if err := db.requireWritable(); err != nil {
-		return "", err
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	event.QueryID = strings.TrimSpace(event.QueryID)
-	event.Surface = strings.TrimSpace(event.Surface)
-	event.ScorePolicyVersion = strings.TrimSpace(event.ScorePolicyVersion)
-	if event.Surface == "" {
-		return "", fmt.Errorf("recall query surface is required")
-	}
-	if event.FiltersJSON == "" {
-		event.FiltersJSON = "{}"
-	}
-	if event.ScorePolicyVersion == "" {
-		event.ScorePolicyVersion = RecallLexicalScorePolicyVersion
-	}
-	if event.QueryID == "" {
-		id, err := newUUIDv4()
-		if err != nil {
-			return "", fmt.Errorf("generating recall query id: %w", err)
-		}
-		event.QueryID = id
-	}
-
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	tx, err := db.getWriter().BeginTx(ctx, nil)
-	if err != nil {
-		return "", fmt.Errorf("beginning recall query event: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO recall_query_events (
-			id, query_text, surface, filters_json, trusted_only,
-			score_policy_version, result_count, packed_count,
-			top_score, miss_reason
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		event.QueryID,
-		event.Query,
-		event.Surface,
-		event.FiltersJSON,
-		event.TrustedOnly,
-		event.ScorePolicyVersion,
-		event.ResultCount,
-		event.PackedCount,
-		event.TopScore,
-		event.MissReason,
-	); err != nil {
-		return "", fmt.Errorf("inserting recall query event: %w", err)
-	}
-	for start := 0; start < len(event.Exposures); start += recallExposureInsertBatchSize {
-		end := min(start+recallExposureInsertBatchSize, len(event.Exposures))
-		batch := event.Exposures[start:end]
-		if err := insertRecallQueryExposureBatch(
-			ctx, tx, event.QueryID, batch,
-		); err != nil {
-			return "", fmt.Errorf(
-				"inserting recall query exposure ranks %d through %d: %w",
-				batch[0].Rank,
-				batch[len(batch)-1].Rank,
-				err,
-			)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return "", fmt.Errorf("committing recall query event: %w", err)
-	}
-	return event.QueryID, nil
-}
-
 func insertRecallQueryExposureBatch(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx recallExecer,
 	queryID string,
 	exposures []RecallQueryExposure,
 ) error {

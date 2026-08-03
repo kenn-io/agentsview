@@ -171,36 +171,6 @@ func scanRecallEvidenceRow(rs rowScanner) (RecallEvidence, error) {
 	return e, err
 }
 
-func (db *DB) InsertRecallEntry(m RecallEntry) (string, error) {
-	if err := normalizeRecallEntryReviewState(&m); err != nil {
-		return "", err
-	}
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	if m.ID == "" {
-		return "", fmt.Errorf("recall entry id is required")
-	}
-	if m.Status == "" {
-		m.Status = corerecall.StatusAccepted
-	}
-
-	tx, err := db.getWriter().Begin()
-	if err != nil {
-		return "", fmt.Errorf("begin recall insert: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	if err := insertRecallEntryTx(tx, m); err != nil {
-		return "", err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return "", fmt.Errorf("commit recall insert: %w", err)
-	}
-	return m.ID, nil
-}
-
 // CopyRecallEntriesFrom copies entries and their evidence from a source database
 // into this database. A full resync rebuilds the DB from source files, which
 // never contain entries, so without this copy every accepted entry is
@@ -558,7 +528,7 @@ func supersedeRecallEntryTx(
 		return err
 	}
 
-	if err := insertRecallEntryTx(tx, replacement); err != nil {
+	if err := insertRecallEntryTx(ctx, tx, replacement); err != nil {
 		return err
 	}
 	result, err := tx.ExecContext(ctx, `
@@ -606,14 +576,20 @@ func requireActiveRecallSupersessionTarget(
 	return nil
 }
 
-func insertRecallEntryTx(tx *sql.Tx, m RecallEntry) error {
+type recallExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func insertRecallEntryTx(
+	ctx context.Context, tx recallExecer, m RecallEntry,
+) error {
 	if err := normalizeRecallEntryReviewState(&m); err != nil {
 		return err
 	}
 	if err := validateRecallEvidenceOwnership(m); err != nil {
 		return err
 	}
-	_, err := tx.Exec(`
+	_, err := tx.ExecContext(ctx, `
 		INSERT INTO recall_entries (
 			id, type, scope, status, review_state, title, body, trigger,
 			confidence, uncertainty, project, cwd, git_branch, agent,
@@ -632,7 +608,7 @@ func insertRecallEntryTx(tx *sql.Tx, m RecallEntry) error {
 	}
 
 	for _, e := range m.Evidence {
-		_, err = tx.Exec(`
+		_, err = tx.ExecContext(ctx, `
 			INSERT INTO recall_evidence (
 				entry_id, session_id, message_start_ordinal,
 				message_end_ordinal, message_start_source_uuid,
@@ -676,67 +652,6 @@ func normalizeRecallEntryReviewState(m *RecallEntry) error {
 	}
 	m.ReviewState = state
 	return nil
-}
-
-func (db *DB) GetRecallEntry(ctx context.Context, id string) (*RecallEntry, error) {
-	row := db.getReader().QueryRowContext(
-		ctx,
-		"SELECT "+recallBaseCols+" FROM recall_entries WHERE id = ?",
-		id,
-	)
-	m, err := scanRecallEntryRow(row)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("getting recall entry %s: %w", id, err)
-	}
-	evidence, err := db.listRecallEvidence(ctx, []string{id})
-	if err != nil {
-		return nil, err
-	}
-	m.Evidence = evidence[id]
-	return &m, nil
-}
-
-func (db *DB) ListRecallEntries(
-	ctx context.Context, q RecallQuery,
-) ([]RecallEntry, error) {
-	if err := ValidateRecallQuery(q); err != nil {
-		return nil, err
-	}
-	q = NormalizeRecallQuery(q)
-	where, args := buildRecallEntryWhere(q, false)
-	limit := recallLimit(q.Limit)
-	if q.ProbeNext {
-		limit++
-	}
-	query := "SELECT " + recallBaseCols +
-		" FROM recall_entries WHERE " + where +
-		" ORDER BY updated_at DESC, id ASC LIMIT ?"
-	args = append(args, limit)
-
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("querying entries: %w", err)
-	}
-	defer rows.Close()
-
-	entries, err := scanRecallEntryRows(rows)
-	if err != nil {
-		return nil, err
-	}
-	if len(entries) == 0 {
-		return nil, nil
-	}
-	evidence, err := db.listRecallEvidence(ctx, recallIDs(entries))
-	if err != nil {
-		return nil, err
-	}
-	for i := range entries {
-		entries[i].Evidence = evidence[entries[i].ID]
-	}
-	return entries, nil
 }
 
 // ListServedRecallSourceRuns returns the extraction/import source runs that
@@ -1131,7 +1046,7 @@ func (db *DB) listRecallEvidenceLikeCandidates(
 	return scanRecallEntryRowsWithEvidence(ctx, db, rows)
 }
 
-func (db *DB) QueryRecallEntries(
+func (db *DB) queryRecallEntries(
 	ctx context.Context, q RecallQuery,
 ) (RecallPage, error) {
 	if err := ValidateRecallQuery(q); err != nil {

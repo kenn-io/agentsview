@@ -17,6 +17,7 @@ const bunDataContractSchema = "agentsview_bun_data_contract"
 const bunCurationContractSchema = "agentsview_bun_curation_contract"
 const bunInsightContractSchema = "agentsview_bun_insight_contract"
 const bunMutationContractSchema = "agentsview_bun_mutation_contract"
+const bunRecallContractSchema = "agentsview_bun_recall_contract"
 
 func TestBunStoreCoreContract(t *testing.T) {
 	storetest.RunCoreContract(t, storetest.Backend{
@@ -175,6 +176,25 @@ func TestBunStoreMutationContract(t *testing.T) {
 					return updatedAt.After(futureRevision)
 				},
 			}
+		},
+	})
+}
+
+func TestBunStoreRecallContract(t *testing.T) {
+	storetest.RunRecallContract(t, storetest.RecallBackend{
+		Name: "postgres", Writable: false,
+		Open: func(t *testing.T) storetest.RecallStore {
+			pgURL := testPGURL(t)
+			cleanupBunContractSchema(t, pgURL, bunRecallContractSchema)
+			t.Cleanup(func() {
+				cleanupBunContractSchema(t, pgURL, bunRecallContractSchema)
+			})
+			pg, err := Open(pgURL, bunRecallContractSchema, true)
+			require.NoError(t, err)
+			require.NoError(t, EnsureSchema(t.Context(), pg, bunRecallContractSchema))
+			store := newStore(pg)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			return store.BunStore
 		},
 	})
 }
