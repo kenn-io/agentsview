@@ -1049,6 +1049,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newHermesProviderFactory(def)
 	case AgentGrok:
 		return newGrokProviderFactory(def)
+	case AgentGoose:
+		return newGooseProviderFactory(def)
 	case AgentIflow:
 		return newIflowProviderFactory(def)
 	case AgentGptme:

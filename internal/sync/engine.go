@@ -1552,6 +1552,14 @@ func providerChangedPathForceParse(
 	mode parser.ProviderMigrationMode,
 ) bool {
 	if processFileUsesProvider(agent) {
+		if agent == parser.AgentGoose &&
+			!providerDeletedPhysicalSQLiteSource(agent, sourcePath) {
+			// Goose's change cursor returns only sessions touched by new rows.
+			// Force those bounded candidates through Parse because Goose stores
+			// timestamps with one-second precision and multiple commits can share
+			// the same logical mtime.
+			return true
+		}
 		return eventKind == "remove" &&
 			providerDeletedPhysicalSQLiteSource(agent, sourcePath)
 	}
@@ -1647,6 +1655,8 @@ func providerDeletedPhysicalSQLiteSource(
 		return filepath.Base(path) == "threads.db"
 	case parser.AgentZCode:
 		return filepath.Base(path) == parser.ZCodeDBName
+	case parser.AgentGoose:
+		return filepath.Base(path) == parser.GooseDBName
 	case parser.AgentShelley:
 		return filepath.Base(path) == shelleyDBFile
 	default:
@@ -5660,9 +5670,10 @@ func (e *Engine) syncAllLocked(
 	// through the provider facade in the file-sync phase above, so no
 	// dedicated DB-backed sync pass is needed here.
 
-	// Sync Warp, Forge, Piebald, and ZCode sessions. These are provider-authoritative
-	// DB-backed providers: a shared SQLite DB hosts every session, so the
-	// provider facade enumerates sources and parses only the changed ones.
+	// Sync Warp, Forge, Piebald, ZCode, and Goose sessions. These are
+	// provider-authoritative DB-backed providers: a shared SQLite DB hosts every
+	// session, so the provider facade enumerates sources and parses only the
+	// changed ones.
 	if scope.includesAny(e.agentDirs[parser.AgentWarp]) {
 		if e.syncProviderDBBackedAgent(
 			ctx, parser.AgentWarp, "warp",
@@ -5699,8 +5710,18 @@ func (e *Engine) syncAllLocked(
 			return stats
 		}
 	}
+	if scope.includesAny(e.agentDirs[parser.AgentGoose]) {
+		if e.syncProviderDBBackedAgent(
+			ctx, parser.AgentGoose, "goose",
+			writeMode, verbose, scope, &stats, advanceDBProgress,
+		) {
+			stats.Aborted = true
+			return stats
+		}
+	}
 	// Link subagent child sessions to their parents after all DB-backed
-	// agent writes (including provider-authoritative Forge, Piebald, and ZCode).
+	// agent writes (including provider-authoritative Forge, Goose, Piebald,
+	// and ZCode).
 	// LinkSubagentSessions is idempotent — its WHERE filter and partial index
 	// make it a cheap no-op when nothing new was written — so no guard is
 	// needed.
@@ -6869,7 +6890,7 @@ func (e *Engine) syncProviderDBBacked(
 		machine := e.machineForProviderSource(
 			agent, source, providerDiscoveredPath(source),
 		)
-		if e.providerDBBackedSourceFresh(source, fingerprint) {
+		if e.providerDBBackedSourceFresh(agent, source, fingerprint) {
 			return queueBaseline(source)
 		}
 		outcome, err := provider.Parse(ctx, parser.ParseRequest{
@@ -6917,10 +6938,11 @@ func (e *Engine) syncProviderDBBacked(
 }
 
 // providerDBBackedSourceFresh reports whether a DB-backed provider source is
-// already stored at the current data version with an unchanged source mtime, so
-// it can be skipped during a full sync. This is the change-detection half of
-// the legacy *PendingSessionIDs helpers.
+// already stored at the current data version with an unchanged source mtime
+// and, when required by the provider, an unchanged content hash. This is the
+// change-detection half of the legacy *PendingSessionIDs helpers.
 func (e *Engine) providerDBBackedSourceFresh(
+	agent parser.AgentType,
 	source parser.SourceRef,
 	fingerprint parser.SourceFingerprint,
 ) bool {
@@ -6955,11 +6977,20 @@ func (e *Engine) providerDBBackedSourceFresh(
 	if storedMtime != fingerprint.MTimeNS {
 		return false
 	}
+	if factory, ok := e.providerFactories[agent]; ok && factory != nil &&
+		!e.providerFingerprintHashMatchesDB(
+			lookupPath,
+			fingerprint,
+			factory.Capabilities().Sync.FingerprintHashRequiredForFreshness,
+		) {
+		return false
+	}
 	return e.db.GetDataVersionByPath(lookupPath) >= db.CurrentDataVersion()
 }
 
 // syncProviderDBBackedAgent runs the full-sync phase for a provider-authoritative
-// DB-backed agent (Forge, Piebald, Warp). It mirrors syncOpenCodeFormatAgent:
+// DB-backed agent (Forge, Goose, Piebald, Warp, ZCode). It mirrors
+// syncOpenCodeFormatAgent:
 // only changed sessions are parsed (so the second sync of unchanged data is a
 // no-op), and the per-session write semantics match the legacy DB sync.
 func (e *Engine) syncProviderDBBackedAgent(
@@ -9003,7 +9034,8 @@ func (e *Engine) providerSkipCacheEntryFreshInDB(
 
 func processFileUsesProvider(agent parser.AgentType) bool {
 	switch agent {
-	case parser.AgentForge, parser.AgentPiebald, parser.AgentWarp, parser.AgentZCode:
+	case parser.AgentForge, parser.AgentGoose, parser.AgentPiebald,
+		parser.AgentWarp, parser.AgentZCode:
 		return true
 	default:
 		return false
@@ -9054,7 +9086,7 @@ func (e *Engine) shouldSkipProviderSource(
 
 func providerSourceSupportsPersistedFreshness(agent parser.AgentType) bool {
 	switch agent {
-	case parser.AgentForge, parser.AgentWarp, parser.AgentZCode:
+	case parser.AgentForge, parser.AgentGoose, parser.AgentWarp, parser.AgentZCode:
 		return true
 	default:
 		return false
@@ -9104,6 +9136,16 @@ func (e *Engine) shouldCacheSkip(
 			return false
 		}
 		if _, _, ok := parser.ParseVirtualSourcePathForBase(file.Path, parser.ZCodeDBName); ok {
+			return false
+		}
+	}
+	if file.Agent == parser.AgentGoose {
+		if filepath.Base(file.Path) == parser.GooseDBName {
+			return false
+		}
+		if _, _, ok := parser.ParseVirtualSourcePathForBase(
+			file.Path, parser.GooseDBName,
+		); ok {
 			return false
 		}
 	}

@@ -338,6 +338,7 @@ thread JSON files.
 | Gemini CLI            | `~/.gemini/`                                                                                                                                                                                                                                         |
 | gptme                 | `~/.local/share/gptme/logs/`                                                                                                                                                                                                                         |
 | Grok                  | `~/.grok/sessions/`                                                                                                                                                                                                                                  |
+| Goose                 | `~/.local/share/goose/sessions/` (macOS and Linux), `%APPDATA%\\Block\\goose\\sessions\\` (Windows)                                                                                                                                            |
 | Hermes Agent          | `~/.hermes/sessions/`                                                                                                                                                                                                                                |
 | iFlow                 | `~/.iflow/projects/`                                                                                                                                                                                                                                 |
 | Kilo                  | `~/.local/share/kilo/`                                                                                                                                                                                                                               |
@@ -380,6 +381,11 @@ for the full transcript (user turns, assistant replies, thinking, and tool
 calls). If `chat_history.jsonl` is missing, AgentsView falls back to
 summary-only mode. Set `GROK_DIR` or `grok_dirs` to override the default
 directory.
+
+Goose sessions are read from its shared SQLite `sessions.db`, including
+transcript content, thinking, tool calls and results, session relationships,
+models, token usage, and recorded costs. Set `GOOSE_PATH_ROOT` to a Goose data
+root, or `goose_dirs` to one or more data or sessions directories.
 
 Each directory can be overridden with an environment variable. See the
 [configuration docs](https://agentsview.io/configuration/) for details. Cursor

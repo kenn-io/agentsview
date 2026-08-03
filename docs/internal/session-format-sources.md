@@ -1045,6 +1045,32 @@ Grok section and remove the explicit registry exception in the coverage test.
 - **Agentsview:** `internal/parser/zcode.go`; table and column semantics remain
   reverse-engineered implementation evidence.
 
+## Goose (`goose`)
+
+- **Format:** A shared SQLite `sessions.db`. Schema version 15 stores session
+  metadata in `sessions`, ordered role messages with tagged JSON content in
+  `messages`, and request-scoped token and cost records in `usage_ledger`.
+- **Evidence:** `source`.
+- **Upstream:** Clone `https://github.com/aaif-goose/goose.git` at
+  `5ab0e6df34e69444f6f2016de40717a9f54bf816`; see the pinned
+  [session manager](https://github.com/aaif-goose/goose/blob/5ab0e6df34e69444f6f2016de40717a9f54bf816/crates/goose/src/session/session_manager.rs),
+  [message model](https://github.com/aaif-goose/goose/blob/5ab0e6df34e69444f6f2016de40717a9f54bf816/crates/goose-provider-types/src/conversation/message.rs),
+  and
+  [tool-result serialization](https://github.com/aaif-goose/goose/blob/5ab0e6df34e69444f6f2016de40717a9f54bf816/crates/goose-provider-types/src/conversation/tool_result_serde.rs).
+  The first-party [session-management
+  guide](https://goose-docs.ai/docs/guides/sessions/session-management/) and an
+  isolated observed schema-version-15 database were also checked 2026-08-03.
+- **Usage and cost:** `usage_ledger` rows provide model, input, output,
+  cache-read, cache-write, compaction, cost, and cost-source data without a
+  stable message ordinal. Agentsview emits request-scoped usage events and
+  preserves reported or estimated costs. Older schemas without the ledger
+  fall back to the session's accumulated counters and cost.
+- **Agentsview:** `internal/parser/goose.go` and
+  `internal/parser/goose_provider.go`; the provider uses per-session content
+  fingerprints and bounded SQLite row cursors for watcher events, while a
+  periodic full reconciliation covers metadata-only edits and non-tail
+  deletes.
+
 ## Zed (`zed`)
 
 - **Format:** `threads/threads.db`, whose thread payload is JSON or zstd-

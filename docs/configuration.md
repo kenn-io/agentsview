@@ -253,6 +253,7 @@ can still be parsed.
 | Gemini CLI            | `~/.gemini/`                                                                     | JSONL in `tmp/` subdirectory                                                                                                    |
 | gptme                 | `~/.local/share/gptme/logs/`                                                     | JSONL logs                                                                                                                      |
 | Grok                  | `~/.grok/sessions/`                                                              | `summary.json` + optional `signals.json` + `chat_history.jsonl` transcript when present                                         |
+| Goose                 | (platform-specific, see below)                                                   | SQLite `sessions.db` with transcripts, tool activity, relationships, usage, and recorded costs                                 |
 | Hermes Agent          | `~/.hermes/sessions/`                                                            | JSONL / JSON per session                                                                                                        |
 | iFlow                 | `~/.iflow/projects/`                                                             | JSONL per session                                                                                                               |
 | Kilo                  | `~/.local/share/kilo/`                                                           | SQLite DB or `storage/` JSON files                                                                                              |
@@ -296,6 +297,16 @@ present for the full transcript (user turns, assistant replies, thinking,
 and tool calls). If `chat_history.jsonl` is missing, AgentsView falls back
 to summary-only mode. Set `GROK_DIR` or `grok_dirs` to override the default
 directory.
+
+**Goose default directories** are:
+
+- **macOS and Linux:** `~/.local/share/goose/sessions/`
+- **Windows:** `%APPDATA%/Block/goose/sessions/`
+
+`GOOSE_PATH_ROOT` follows Goose's own path-root convention and resolves
+`<root>/data/sessions/sessions.db`. A `goose_dirs` entry may instead point
+directly to that sessions directory, its parent data directory, or the
+database file.
 
 Omnigent sessions are read from `~/.omnigent/chat.db`. Set `OMNIGENT_DIR` or
 `omnigent_dirs` to override the default directory. AgentsView creates one
@@ -586,6 +597,7 @@ export FORGE_DIR=~/custom/forge
 export GEMINI_DIR=~/custom/gemini
 export GPTME_DIR=~/custom/gptme/logs
 export GROK_DIR=~/custom/grok/sessions
+export GOOSE_PATH_ROOT=~/custom/goose
 export HERMES_SESSIONS_DIR=~/custom/hermes
 export IFLOW_DIR=~/custom/iflow
 export KILO_DIR=~/custom/kilo
@@ -644,7 +656,7 @@ The corresponding fields are `aider_dirs`, `amp_dirs`, `antigravity_dirs`,
 `cowork_dirs`, `devin_dirs`, `codex_sessions_dirs`, `commandcode_project_dirs`,
 `copilot_dirs`, `cortex_dirs`, `cursor_project_dirs`,
 `deepseek_tui_sessions_dirs`, `forge_dirs`, `gemini_dirs`, `gptme_dirs`,
-`grok_dirs`, `hermes_sessions_dirs`, `iflow_dirs`, `kilo_dirs`,
+`grok_dirs`, `goose_dirs`, `hermes_sessions_dirs`, `iflow_dirs`, `kilo_dirs`,
 `kilo_legacy_dirs`, `kimi_dirs`, `kimi_work_dirs`, `kiro_dirs`, `kiro_ide_dirs`,
 `mimocode_dirs`, `vibe_session_dirs`, `omp_dirs`, `openclaw_dirs`,
 `opencode_dirs`, `openhands_dirs`, `pi_dirs`, `piebald_dirs`,

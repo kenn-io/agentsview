@@ -47,6 +47,7 @@ const (
 	AgentCortex         AgentType = "cortex"
 	AgentHermes         AgentType = "hermes"
 	AgentGrok           AgentType = "grok"
+	AgentGoose          AgentType = "goose"
 	AgentWorkBuddy      AgentType = "workbuddy"
 	AgentForge          AgentType = "forge"
 	AgentDevin          AgentType = "devin"
@@ -581,6 +582,19 @@ var Registry = []AgentDef{
 		DefaultDirs: []string{".grok/sessions"},
 		IDPrefix:    "grok:",
 		FileBased:   true,
+	},
+	{
+		Type:              AgentGoose,
+		DisplayName:       "Goose",
+		EnvVar:            "GOOSE_PATH_ROOT",
+		ConfigKey:         "goose_dirs",
+		DefaultDirs:       gooseDefaultDirs(),
+		IDPrefix:          "goose:",
+		FileBased:         false,
+		PeriodicReconcile: true,
+		Usage: UsageCapabilities{
+			NoPerMessageTokenData: true,
+		},
 	},
 	{
 		Type:        AgentWorkBuddy,

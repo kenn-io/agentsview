@@ -460,6 +460,7 @@ func TestProcessFileUsesProviderDBBackedFamily(t *testing.T) {
 
 	for _, agent := range []parser.AgentType{
 		parser.AgentForge,
+		parser.AgentGoose,
 		parser.AgentPiebald,
 		parser.AgentWarp,
 		parser.AgentZCode,

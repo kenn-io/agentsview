@@ -1220,6 +1220,7 @@ agentsview help
 | `GEMINI_DIR`                      | `~/.gemini`                                          | Gemini CLI directory                                                                                |
 | `GPTME_DIR`                       | `~/.local/share/gptme/logs`                          | gptme logs directory                                                                                |
 | `GROK_DIR`                        | `~/.grok/sessions`                                   | Grok sessions directory                                                                             |
+| `GOOSE_PATH_ROOT`                 | (platform-specific)                                  | Goose path root; sessions are read from `<root>/data/sessions/sessions.db`                          |
 | `HERMES_SESSIONS_DIR`             | `~/.hermes/sessions`                                 | Hermes Agent sessions directory                                                                     |
 | `IFLOW_DIR`                       | `~/.iflow/projects`                                  | iFlow projects directory                                                                            |
 | `KILO_DIR`                        | `~/.local/share/kilo`                                | Kilo data directory                                                                                 |
