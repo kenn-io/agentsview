@@ -139,6 +139,15 @@ The convergence uses this ownership matrix:
 | Identity and mappings                  | `source_archives` and the three `source_*` identity/mapping tables, including source archive and generation keys | SQLite change journals and publication revisions; PostgreSQL publication-scope ownership tables           |
 | Usage, pricing, curation, and insights | One common column set and logical key per registered Bun model                                                   | Provider import cursors and backend capability probes                                                     |
 
+Canonical generated message DDL uses `(session_id, ordinal)` as its composite
+primary key and keeps `id` as an optional source row identifier. The shipped
+SQLite archive is the one physical compatibility alias: it retains
+`id INTEGER PRIMARY KEY` and its existing unique `(session_id, ordinal)`
+constraint. Schema validation accepts that pair as logically equivalent and
+never rebuilds the persistent table. PostgreSQL already uses the composite key;
+DuckDB adopts it on the version-10 rebuild. No common query or relationship may
+depend on SQLite rowid identity.
+
 Existing SQLite `project_identity_observations`,
 `session_project_identity_snapshots`, and `worktree_project_mappings` are
 one-time migration inputs. The convergence transaction backfills the canonical
@@ -146,6 +155,13 @@ one-time migration inputs. The convergence transaction backfills the canonical
 same cutover redirects subsequent writes, so the old tables are not a runtime
 fallback or dual-write path. PostgreSQL and DuckDB already use the canonical
 source-scoped identity shape.
+
+`sessions.source_archive_id` and `sessions.source_database_generation` are
+required canonical provenance. The SQLite adapter reads the stable archive ID
+and database ID under its guarded handle and stamps every parser batch before
+conversion. The convergence migration backfills both columns on legacy sessions
+in the same transaction as the source-scoped identity tables; empty values fail
+compatibility validation after cutover.
 
 ## Schema Creation and Migration
 
