@@ -290,8 +290,6 @@ DELETE FROM session_project_identity_snapshots;
 DELETE FROM project_identity_observation_changes;
 DELETE FROM session_project_identity_snapshot_changes;
 DELETE FROM worktree_project_mappings;
--- The mapping delete above journals tombstones, so clear that journal last.
-DELETE FROM worktree_project_mapping_changes;
 
 -- Keep generated screenshots independent of the source machine's hostname.
 -- The PostgreSQL fixture relabels a subset as work-desktop after push so the
@@ -446,9 +444,16 @@ Refactored the review submission API to accept batch requests. Previously each f
 
 One short session updated the API documentation in `docs/api.md` to reflect the new batch endpoint and its request/response schema.',
 '2026-02-18T16:20:00.000Z');
-
-VACUUM;
 SQL
+
+# The mapping delete above journals tombstones in current archives, so clear
+# that journal last. Older valid archives predate the table and its triggers.
+if [[ $(sqlite3 "$OUTPUT" \
+  "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'worktree_project_mapping_changes';") == "1" ]]; then
+  sqlite3 "$OUTPUT" "DELETE FROM worktree_project_mapping_changes;"
+fi
+
+sqlite3 "$OUTPUT" "VACUUM;"
 
 SESSIONS=$(sqlite3 "$OUTPUT" "SELECT COUNT(*) FROM sessions;")
 MESSAGES=$(sqlite3 "$OUTPUT" "SELECT COUNT(*) FROM messages;")

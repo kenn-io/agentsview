@@ -54,6 +54,7 @@ cursor_secret = "base64-encoded-secret"
 require_auth = true
 cursor_admin_api_key = "key_xxxxx"
 daemon_idle_timeout = "20m"
+chart_palette = "agentsview"
 ```
 
 | Field                               | Description                                                                                                                                                                                                                                          |
@@ -70,6 +71,7 @@ daemon_idle_timeout = "20m"
 | `public_url`                        | Public URL for hostname/proxy access and origin validation                                                                                                                                                                                           |
 | `public_origins`                    | Array of additional trusted CORS origins                                                                                                                                                                                                             |
 | `daemon_idle_timeout`               | Idle timeout for detached writable daemons; set to `"0s"` to keep them alive                                                                                                                                                                         |
+| `chart_palette`                     | Server-wide categorical chart colors: `"agentsview"` (default) or `"matplotlib"`; also configurable under **Settings > Appearance**                                                                                                                  |
 | `[proxy]`                           | Managed proxy configuration table — see [Remote Access](/remote-access/)                                                                                                                                                                             |
 | `disable_update_check`              | Disable the automatic update check (see [Privacy](#privacy-and-telemetry))                                                                                                                                                                           |
 | `[pg]`                              | PostgreSQL sync configuration — see [PostgreSQL Sync](/pg-sync/)                                                                                                                                                                                     |

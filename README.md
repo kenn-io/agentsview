@@ -302,6 +302,10 @@ agentsview stats --include-git-outcomes
 - **Recent Edits feed** -- the files your agents changed most recently across
   every session, grouped by project and path, each linking to the message that
   made the change
+- **Data workspace** -- inspect project inventory and observed folders, preview
+  reclassification impact, and manage worktree mapping rules
+- **Recall corpus browser** -- explore experimental distilled knowledge and jump
+  from entries to their supporting transcript evidence
 - **Live updates** via SSE as active sessions receive new messages
 - **Keyboard-first** navigation (`j`/`k`/`[`/`]`, `Cmd+K` search, `?` for all
   shortcuts)
@@ -339,7 +343,7 @@ thread JSON files.
 | Kilo                  | `~/.local/share/kilo/`                                                                                                                                                                                                                               |
 | Kilo (legacy)         | `~/Library/Application Support/Code/User/globalStorage/kilocode.kilo-code/` (macOS), `~/.config/Code/User/globalStorage/kilocode.kilo-code/` (Linux)                                                                                                 |
 | Kimi                  | `~/.kimi/sessions/`                                                                                                                                                                                                                                  |
-| Kimi Work             | `~/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions/` (macOS)                                                                                                                 |
+| Kimi Work             | `~/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions/` (macOS)                                                                                                                                            |
 | Kiro CLI              | `~/.kiro/sessions/cli/`, `~/.local/share/kiro-cli/`                                                                                                                                                                                                  |
 | Kiro IDE              | `~/Library/Application Support/Kiro/` (macOS)                                                                                                                                                                                                        |
 | MiMoCode              | `~/.local/share/mimocode/`                                                                                                                                                                                                                           |

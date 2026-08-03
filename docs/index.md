@@ -64,6 +64,7 @@ across every project, model, and tool.
   <a class="agent-chip" data-agent="kilo-legacy" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">KL</span><span class="agent-chip__name">Kilo (legacy)</span></a>
   <a class="agent-chip" data-agent="kimi" href="https://www.kimi.com" target="_blank" rel="noopener"><span class="agent-chip__glyph agent-chip__glyph--mono">Km</span><span class="agent-chip__name">Kimi</span></a>
   <a class="agent-chip" data-agent="kimi-work" href="https://www.kimi.com" target="_blank" rel="noopener"><span class="agent-chip__glyph agent-chip__glyph--mono">Kw</span><span class="agent-chip__name">Kimi Work</span></a>
+  <a class="agent-chip" data-agent="omnigent" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Og</span><span class="agent-chip__name">Omnigent</span></a>
   <a class="agent-chip" data-agent="kiro" href="https://kiro.dev" target="_blank" rel="noopener"><span class="agent-chip__glyph agent-chip__glyph--mono">Kr</span><span class="agent-chip__name">Kiro</span></a>
   <a class="agent-chip" data-agent="openhands" href="https://github.com/All-Hands-AI/OpenHands" target="_blank" rel="noopener"><span class="agent-chip__glyph agent-chip__glyph--mono">OH</span><span class="agent-chip__name">OpenHands</span></a>
   <a class="agent-chip" data-agent="zcode" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Zc</span><span class="agent-chip__name">ZCode</span></a>
@@ -205,6 +206,12 @@ read [out-of-band filesystem copies](/filesystem-sync/), or
     responses, thinking blocks, and tool calls. Filter by
     project, agent, date, or message count.
 
+-   **Manage Project Data**
+
+    Inspect the archive-wide [project inventory](/data/), open
+    observed folders, preview reclassification impact, and manage
+    per-machine worktree mapping rules from one workspace.
+
 -   **Search Everything**
 
     Full-text search across all message content. Find that
@@ -213,6 +220,12 @@ read [out-of-band filesystem copies](/filesystem-sync/), or
     Opt-in [semantic search](/semantic-search/) matches by
     meaning when you don't remember the exact words, and every
     match cites the conversation unit it came from.
+
+-   **Browse Recall**
+
+    Explore the experimental [Recall corpus](/recall/) with extraction
+    coverage, filters, expandable entries, and evidence links back to
+    source transcripts.
 
 -   **Recent Edits**
 
@@ -256,10 +269,10 @@ read [out-of-band filesystem copies](/filesystem-sync/), or
     Works with [dozens of AI coding session sources](/configuration/#session-discovery)
     including Claude Code, OpenClaude, Codex, Copilot, Cursor,
     Gemini, OpenHands, Aider, Claude Cowork, DeepSeek TUI, gptme,
-    Grok, Kilo, Kilo (legacy), MiMoCode, Mistral Vibe, OhMyPi,
-    Poolside, QwenPaw, Reasonix, RooCode, Shelley, Trae, Visual
-    Studio Copilot, and ZCode. Auto-discovers session directories
-    so there's nothing to configure.
+    Grok, Kilo, Kilo (legacy), Kimi Work, MiMoCode, Mistral Vibe,
+    OhMyPi, Omnigent, Poolside, QwenPaw, Reasonix, RooCode, Shelley,
+    Trae, Visual Studio Copilot, and ZCode. Auto-discovers session
+    directories so there's nothing to configure.
 
 -   **Import Chat History**
 

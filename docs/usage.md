@@ -1222,7 +1222,7 @@ Settings are organized into sections:
 | Section | What You Can Configure |
 |---------|----------------------|
 | Language | Interface language (English, French, Simplified Chinese, Traditional Chinese, or Korean) |
-| Appearance | Theme (light/dark), high-contrast mode, message layout, text size, block visibility, desktop zoom level |
+| Appearance | Theme (light/dark), high-contrast mode, chart colors, message layout, text size, block visibility, desktop zoom level |
 | Date ranges | Browser-local checkbox for linking date selections across Sessions, Usage, Activity, Trends, and Insights |
 | Agent Directories | Custom paths for each agent's session files. For Devin CLI, point at the local root that contains `cli/` (for example a redacted `.../Application Support/devin` path), not copied config or OAuth files. |
 | Terminal | Default terminal emulator for session resume |
@@ -1234,13 +1234,17 @@ Settings are organized into sections:
 
 ![Settings remote access section](/assets/generated/screenshots/settings-remote.png)
 
-Language, Appearance, and Date ranges preferences are stored in the browser and
-do not write `~/.agentsview/config.toml`. Agent directory overrides, terminal
-settings, the saved GitHub token, and the local server's remote-access
-authentication settings use `~/.agentsview/config.toml`. Worktree mapping
+![Chart color palette setting](/assets/generated/screenshots/settings-chart-colors.png)
+
+Language, theme, high contrast, message layout, text size, block visibility,
+desktop zoom, and Date ranges preferences are stored in the browser. **Chart
+colors** are the exception within Appearance: the selected palette is saved
+server-wide as `chart_palette` in `~/.agentsview/config.toml`. Agent directory
+overrides, terminal settings, the saved GitHub token, and the local server's
+remote-access authentication settings also use that file. Worktree mapping
 rules moved to the [Data page](/data/#rules) and live in the local archive
-database. See [Remote Access](/remote-access/) for details on the remote
-access settings.
+database. See [Remote Access](/remote-access/) for details on the remote access
+settings.
 
 ---
 
@@ -1278,6 +1282,12 @@ Settings > Appearance also offers a **high-contrast** mode for
 greater legibility and a **text size** control (90–130%) that
 scales message and interface text. Both preferences are saved
 and persist across sessions.
+
+The **Chart colors** control selects the categorical palette used by the
+dashboard skill trend, Trends, and Usage charts. Choose **Agentsview** for the
+project palette or **Matplotlib** for its gray-free categorical families. This
+setting is server-wide rather than browser-local, so all clients connected to
+the same writable server use the same palette.
 
 ### Iframe Embedding
 

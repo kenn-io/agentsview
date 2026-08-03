@@ -33,16 +33,25 @@ The current implementation is local and SQLite-only. The CLI provides:
   `recall extract preview` for previewing deterministic session chunks; and
 - `recall import --dry-run` for validating reviewed JSONL candidates.
 
+The top-level **Recall** page provides a read-only corpus browser. Open it from
+the header or navigate directly to `/recall`. The page shows extraction coverage
+and generation state, and filters entries by text, project, entry type,
+generation, and review state. Expand an entry to inspect its body, trigger,
+uncertainty, provenance metadata, and evidence links back to the source
+transcript.
+
+![Recall corpus browser](/assets/generated/screenshots/recall-corpus.png)
+
 Reviewed JSONL import is a guarded laboratory inlet, not a stable or recommended
 end-user workflow. Use an isolated `AGENTSVIEW_DATA_DIR` for experiments. The
 import command refuses the default data directory unless the operator explicitly
 overrides that guard.
 
-Recall is not available through PostgreSQL or DuckDB stores. The web UI is
-limited to a read-only panel in Session Vital Signs: it lists entries sourced
-from the open session and links their evidence ranges back to the transcript.
-Recall population, corpus management, and general querying remain CLI and HTTP
-API workflows.
+Recall is not available through PostgreSQL or DuckDB stores, so those read-only
+servers omit the corpus browser. On the local SQLite UI, Session Vital Signs
+also includes a read-only Recall panel for the open session and links each
+evidence range back to the transcript. Corpus population, review, generation
+management, and ranked querying remain CLI and HTTP API workflows.
 
 The daemon exposes the same inspection and query operations over its HTTP API.
 Ordinary queries record measurement data when the SQLite store is writable, but

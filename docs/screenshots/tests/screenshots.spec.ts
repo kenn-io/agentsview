@@ -392,7 +392,220 @@ test.describe('Activity dashboard', () => {
   });
 });
 
-// ── Session browser ─────────────────────────────────────
+// ── Data workspace ───────────────────────────────────────
+
+test.describe('Data workspace', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.setViewportSize(FULL);
+    await waitForApp(page);
+    await page.goto('/data');
+    await expect(page.locator('.data-page')).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(page.locator('.project-row').first()).toBeVisible({
+      timeout: 10_000,
+    });
+  });
+
+  test('project inventory', async ({ page }) => {
+    await expect(page.locator('.summary-strip')).toContainText(
+      'projects'
+    );
+    await snap(page, 'data-inventory');
+  });
+
+  test('selected project workspace', async ({ page }) => {
+    await page.route(
+      '**/api/v1/data/project-reclassification/candidates?*',
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            candidates: [
+              {
+                id: 'agentsview-main',
+                machine: 'dev-laptop',
+                suggested_prefix: '/workspace/agentsview/main',
+                evidence_kind: 'worktree_root',
+                evidence_root: '/workspace/agentsview/main',
+                contributing_sessions: 126,
+                distinct_cwds: 4,
+                available: true,
+                examples: [
+                  {
+                    session_id: 'data-session-1',
+                    cwd: '/workspace/agentsview/main',
+                  },
+                ],
+              },
+              {
+                id: 'agentsview-release-docs',
+                machine: 'dev-laptop',
+                suggested_prefix: '/workspace/agentsview/release-docs',
+                evidence_kind: 'worktree_root',
+                evidence_root: '/workspace/agentsview/release-docs',
+                contributing_sessions: 38,
+                distinct_cwds: 2,
+                available: true,
+                examples: [
+                  {
+                    session_id: 'data-session-2',
+                    cwd: '/workspace/agentsview/release-docs',
+                  },
+                ],
+              },
+              {
+                id: 'agentsview-recall-browser',
+                machine: 'dev-laptop',
+                suggested_prefix: '/workspace/agentsview/recall-browser',
+                evidence_kind: 'worktree_root',
+                evidence_root: '/workspace/agentsview/recall-browser',
+                contributing_sessions: 17,
+                distinct_cwds: 1,
+                available: true,
+                examples: [
+                  {
+                    session_id: 'data-session-3',
+                    cwd: '/workspace/agentsview/recall-browser',
+                  },
+                ],
+              },
+            ],
+          }),
+        });
+      }
+    );
+    const agentsviewRow = page.locator('.project-row', {
+      hasText: 'agentsview',
+    }).first();
+    await expect(agentsviewRow).toBeVisible();
+    await agentsviewRow.click();
+    await expect(page.locator('.pane-detail')).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(
+      page.getByText('Finding session folders…', { exact: true })
+    ).toBeHidden({ timeout: 10_000 });
+    await snap(page, 'data-workspace');
+  });
+});
+
+// ── Recall corpus browser ───────────────────────────────────
+
+test.describe('Recall corpus browser', () => {
+  test('corpus entries and extraction coverage', async ({ page }) => {
+    await page.setViewportSize(FULL);
+    await page.route('**/api/v1/recall/entries?*', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          entries: [
+            {
+              id: 'recall-docs-1',
+              type: 'procedure',
+              scope: 'project',
+              status: 'accepted',
+              review_state: 'human_reviewed',
+              title: 'Verify docs against source behavior',
+              body: 'Trace user-facing claims to implementation and tests before publishing release documentation.',
+              trigger: 'When documenting a release.',
+              uncertainty: 'Screenshots still require visual review.',
+              project: 'agentsview',
+              agent: 'claude',
+              source_session_id: 'docs-session-1',
+              source_run_id: 'release-docs-2026-08',
+              extractor_method: 'reviewed_import',
+              model: 'local-review-model',
+              transferable: true,
+              provenance_ok: true,
+              created_at: '2026-08-01T16:00:00Z',
+              updated_at: '2026-08-01T16:00:00Z',
+              evidence: [
+                {
+                  id: 1,
+                  entry_id: 'recall-docs-1',
+                  session_id: 'docs-session-1',
+                  message_start_ordinal: 12,
+                  message_end_ordinal: 18,
+                },
+              ],
+            },
+            {
+              id: 'recall-docs-2',
+              type: 'warning',
+              scope: 'global',
+              status: 'accepted',
+              review_state: 'unreviewed_auto',
+              title: 'Keep artifact transport limits visible',
+              body: 'Describe folder transport as an early workflow.',
+              source_session_id: 'docs-session-2',
+              transferable: false,
+              provenance_ok: true,
+              created_at: '2026-08-01T15:00:00Z',
+              updated_at: '2026-08-01T15:00:00Z',
+            },
+          ],
+          trusted_only: false,
+          next_cursor: '',
+        }),
+      });
+    });
+    await page.route(
+      '**/api/v1/recall/extraction/status',
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            configured: true,
+            fingerprint: 'release-docs-2026-08',
+            generations: [
+              {
+                fingerprint: 'release-docs-2026-08',
+                state: 'active',
+                model: 'local-review-model',
+                segmenter: 'conversation-v1',
+                created_at: '2026-08-01T14:00:00Z',
+                updated_at: '2026-08-01T16:00:00Z',
+              },
+            ],
+            source_runs: ['release-docs-2026-08'],
+            stats: {
+              pending: 3,
+              partial: 1,
+              done: 42,
+              failed: 0,
+              units_done: 128,
+              units_total: 132,
+              entries: 57,
+            },
+            eligible_backlog: 4,
+          }),
+        });
+      }
+    );
+
+    await page.goto('/recall');
+    const pageRoot = page.locator('.recall-page');
+    await expect(pageRoot).toBeVisible({ timeout: 10_000 });
+    await expect(pageRoot).toContainText(
+      'Verify docs against source behavior'
+    );
+    await expect(pageRoot).toContainText('42 done');
+
+    await page.getByRole('button', {
+      name: 'Expand Verify docs against source behavior',
+    }).click();
+    await expect(pageRoot).toContainText(
+      'Trace user-facing claims to implementation and tests'
+    );
+    await snap(page, 'recall-corpus');
+  });
+});
+
+// ── Session browser ─────────────────────────────────────────
 
 test.describe('Session browser', () => {
   test.beforeEach(async ({ page }) => {
@@ -881,8 +1094,10 @@ test.describe('Modals', () => {
     // Resync now lives in Settings: open it, then trigger the modal.
     await page.goto('/settings');
     await page.waitForSelector('.settings-page', { timeout: 5_000 });
-    await page.waitForSelector('.resync-btn', { timeout: 5_000 });
-    await page.locator('.resync-btn').click();
+    await page.getByRole('button', {
+      name: 'Full Resync',
+      exact: true,
+    }).click();
     const dialog = page.getByRole('dialog', { name: 'Full Resync' });
     await expect(dialog).toBeVisible({ timeout: 5_000 });
     await page.waitForTimeout(300);
@@ -1091,6 +1306,24 @@ test.describe('Settings', () => {
     await page.waitForTimeout(500);
 
     await snapEl(remoteSection, 'settings-remote');
+  });
+
+  test('settings chart color palette', async ({ page }) => {
+    await openSettings(page);
+    const appearanceSection = await openSettingsPanel(
+      page,
+      'Appearance'
+    );
+    await appearanceSection.scrollIntoViewIfNeeded();
+    await expect(
+      appearanceSection.getByText('Chart colors', { exact: true })
+    ).toBeVisible();
+    await expect(
+      appearanceSection.getByRole('radio', {
+        name: 'Matplotlib',
+      })
+    ).toBeVisible();
+    await snapEl(appearanceSection, 'settings-chart-colors');
   });
 
   test('settings embedding build progress', async ({ page }) => {

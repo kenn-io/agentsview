@@ -7,6 +7,13 @@ Artifact folder sync exchanges normalized AgentsView sessions between machines
 through a folder that both machines can access. The folder can be a mounted NAS,
 an external drive, or another trusted filesystem location.
 
+!!! warning "Early workflow"
+
+    This is an initial manual transport, not a complete synchronization product. It
+    has no watcher, schedule, hosted peer, or object-storage mode; it does not
+    exchange raw provider files or mutable curation. Use it only for controlled
+    experiments between archives whose folder storage and operators you trust.
+
 ```bash
 agentsview sync --target /path/to/shared-folder
 ```

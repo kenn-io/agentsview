@@ -12,6 +12,8 @@ Open it from the **Data** tab in the header, or follow a project link from the
 `/data?project_key=<key>` selects a project, and `/data?view=rules` opens the
 [Rules view](#rules).
 
+![Project inventory in the Data workspace](/assets/generated/screenshots/data-inventory.png)
+
 ## Project Inventory
 
 The default view lists every project in the archive with its session, machine,
@@ -30,10 +32,12 @@ by classification rules.
 Selecting a row opens the project workspace. Unknown `project_key` deep links
 show the full inventory with a non-blocking notice.
 
+![Observed folders for a selected project](/assets/generated/screenshots/data-workspace.png)
+
 ## Create A Project Mapping
 
-The workspace creates [worktree project
-mappings](/configuration/#worktree-project-mappings) directly:
+The workspace creates
+[worktree project mappings](/configuration/#worktree-project-mappings) directly:
 
 - **Observed folders** lists every session folder associated with the selected
   project. Each folder stays visible instead of being hidden behind a worktree
@@ -41,8 +45,8 @@ mappings](/configuration/#worktree-project-mappings) directly:
 - Selecting a folder opens one mapping row: **Folder path → Project**. The
   suggested folder path covers that group's working directories and remains
   editable, so it can be shortened to cover sibling folders when appropriate.
-- The **Project** typeahead suggests known projects and accepts a new name.
-  When the server normalizes the name (for example `sample-service` becomes
+- The **Project** typeahead suggests known projects and accepts a new name. When
+  the server normalizes the name (for example `sample-service` becomes
   `sample_service`), the editor shows the stored form before you apply.
 - The **full archive impact** preview is live and authoritative: it counts
   matching sessions across all dates for that machine. A prefix that touches
@@ -64,8 +68,8 @@ offered — see
 [Worktree Project Mappings](/configuration/#worktree-project-mappings) for the
 full rule semantics. Each rule row also shows its **governed sessions** count
 (how many sessions the rule currently classifies) and the **original label**
-recorded when the rule was created through the mapping editor. Rule
-targets link back to the corresponding inventory row.
+recorded when the rule was created through the mapping editor. Rule targets link
+back to the corresponding inventory row.
 
 ## Read-Only Servers
 
