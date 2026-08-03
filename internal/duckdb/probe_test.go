@@ -136,6 +136,23 @@ func TestProbeMirrorToleratesMissingMetadataKeysAsZeroValues(t *testing.T) {
 	assert.True(t, p.NeedsRebuild("", 68), "zero data version must not match a real source version")
 }
 
+func TestProbeMirrorRejectsMissingGeneration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing-generation.duckdb")
+	conn, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, createSchema(t.Context(), conn))
+	_, err = conn.ExecContext(t.Context(),
+		`DELETE FROM sync_metadata WHERE key = ?`, mirrorGenerationMetadataKey)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	probe, err := ProbeMirror(t.Context(), path)
+	require.NoError(t, err)
+	assert.True(t, probe.FileExists)
+	assert.False(t, probe.ShapeOK)
+	assert.Contains(t, probe.ShapeIssue, mirrorGenerationMetadataKey)
+}
+
 // TestProbeMirrorRecognitionRequiresSentinel pins RecognizedMirror to the
 // agentsview sentinel (the agentsview_schema_version row in sync_metadata)
 // rather than generic table names: a foreign DuckDB database that happens to

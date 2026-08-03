@@ -140,11 +140,31 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 	); err != nil {
 		return fmt.Errorf("recording duckdb schema version: %w", err)
 	}
+	generation, err := readMetadataKey(ctx, db, mirrorGenerationMetadataKey)
+	if err != nil {
+		return err
+	}
+	if generation == "" {
+		generation, err = newMirrorGenerationToken()
+		if err != nil {
+			return err
+		}
+		if err := recordMetadataKey(
+			ctx, db, mirrorGenerationMetadataKey, generation,
+		); err != nil {
+			return fmt.Errorf("recording initial duckdb mirror generation: %w", err)
+		}
+	}
 	return nil
 }
 
+type metadataStore interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
 func recordMetadataKey(
-	ctx context.Context, db *sql.DB, key string, value string,
+	ctx context.Context, db metadataStore, key string, value string,
 ) error {
 	var existing string
 	err := db.QueryRowContext(ctx,
@@ -197,6 +217,7 @@ type mirrorMetadata struct {
 	DeletionRevision int64
 	IdentityRevision int64
 	MappingRevision  int64
+	MirrorGeneration string
 }
 
 // writeMirrorMetadata upserts every mirrorMetadata field into sync_metadata.
@@ -224,10 +245,18 @@ func writeMirrorMetadata(ctx context.Context, db *sql.DB, meta mirrorMetadata) e
 		// until every descriptive metadata field has been finalized.
 		{mirrorGenerationMetadataKey, generation},
 	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning duckdb mirror metadata update: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
 	for _, field := range fields {
-		if err := recordMetadataKey(ctx, db, field.key, field.value); err != nil {
+		if err := recordMetadataKey(ctx, tx, field.key, field.value); err != nil {
 			return err
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing duckdb mirror metadata update: %w", err)
 	}
 	return nil
 }
@@ -245,14 +274,14 @@ func newMirrorGenerationToken() (string, error) {
 // errors so callers (ProbeMirror) can surface them as shape issues rather
 // than silently treating a corrupt mirror as version 0.
 func readMirrorMetadata(ctx context.Context, db *sql.DB) (mirrorMetadata, error) {
-	raw := make(map[string]string, 11)
+	raw := make(map[string]string, 12)
 	for _, key := range []string{
 		schemaVersionMetadataKey, dataVersionMetadataKey,
 		sourceDatabaseIDMetadataKey, sourceArchiveIDMetadataKey,
 		pushScopeMetadataKey,
 		lastPushCutoffMetadataKey, lastPushAtMetadataKey, lastPushMachineMetadataKey,
 		deletionRevisionMetadataKey, identityRevisionMetadataKey,
-		mappingRevisionMetadataKey,
+		mappingRevisionMetadataKey, mirrorGenerationMetadataKey,
 	} {
 		value, err := readMetadataKey(ctx, db, key)
 		if err != nil {
@@ -267,6 +296,12 @@ func readMirrorMetadata(ctx context.Context, db *sql.DB) (mirrorMetadata, error)
 		LastPushCutoff:   raw[lastPushCutoffMetadataKey],
 		LastPushAt:       raw[lastPushAtMetadataKey],
 		LastPushMachine:  raw[lastPushMachineMetadataKey],
+		MirrorGeneration: raw[mirrorGenerationMetadataKey],
+	}
+	if meta.MirrorGeneration == "" {
+		return mirrorMetadata{}, fmt.Errorf(
+			"missing required duckdb metadata key %s", mirrorGenerationMetadataKey,
+		)
 	}
 	var err error
 	if meta.SchemaVersion, err = parseMirrorMetadataInt(
@@ -435,6 +470,16 @@ func checkSchemaShapeCompat(
 			"mirror schema version %d does not match this build's %d; "+
 				"rebuild with 'agentsview duckdb push --full'",
 			got, SchemaVersion,
+		)
+	}
+	generation, err := readMetadataKey(ctx, db, mirrorGenerationMetadataKey)
+	if err != nil {
+		return fmt.Errorf("checking duckdb mirror generation: %w", err)
+	}
+	if strings.TrimSpace(generation) == "" {
+		return fmt.Errorf(
+			"duckdb schema incompatible; missing or empty %s in sync_metadata",
+			mirrorGenerationMetadataKey,
 		)
 	}
 

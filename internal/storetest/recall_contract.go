@@ -31,6 +31,7 @@ type RecallStore interface {
 type RecallBackend struct {
 	Name     string
 	Open     func(*testing.T) RecallStore
+	Readable bool
 	Writable bool
 }
 
@@ -40,15 +41,19 @@ func RunRecallContract(t *testing.T, backend RecallBackend) {
 	t.Helper()
 	t.Run(backend.Name, func(t *testing.T) {
 		store := backend.Open(t)
-		if !backend.Writable {
-			assertReadOnlyRecall(t, store)
+		if backend.Writable {
+			assertWritableRecall(t, store)
 			return
 		}
-		assertWritableRecall(t, store)
+		if backend.Readable {
+			assertReadableRecall(t, store)
+			return
+		}
+		assertUnsupportedRecall(t, store)
 	})
 }
 
-func assertReadOnlyRecall(t *testing.T, store RecallStore) {
+func assertUnsupportedRecall(t *testing.T, store RecallStore) {
 	t.Helper()
 	ctx := t.Context()
 	entries, err := store.ListRecallEntries(ctx, db.RecallQuery{})
@@ -76,6 +81,51 @@ func assertReadOnlyRecall(t *testing.T, store RecallStore) {
 	)
 	assert.Empty(t, imported)
 	require.ErrorIs(t, err, db.ErrReadOnly)
+	ingested, err := store.IngestEvalTrajectory(ctx, db.EvalTrajectoryIngest{})
+	assert.Empty(t, ingested)
+	require.ErrorIs(t, err, db.ErrReadOnly)
+}
+
+func assertReadableRecall(t *testing.T, store RecallStore) {
+	t.Helper()
+	ctx := t.Context()
+	entry, err := store.GetRecallEntry(ctx, "bun-recall-entry")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	assert.Equal(t, "Canonical Recall entry", entry.Title)
+	entries, err := store.ListRecallEntries(ctx, db.RecallQuery{
+		SourceSessionID: "bun-recall-source",
+	})
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "bun-recall-entry", entries[0].ID)
+	page, err := store.QueryRecallEntries(ctx, db.RecallQuery{
+		SourceSessionID: "bun-recall-source",
+	})
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "bun-recall-entry", page.RecallEntries[0].ID)
+
+	id, err := store.RecordRecallQueryEvent(ctx, db.RecallQueryEvent{})
+	assert.Empty(t, id)
+	require.ErrorIs(t, err, db.ErrReadOnly)
+	id, err = store.InsertRecallEntry(db.RecallEntry{})
+	assert.Empty(t, id)
+	require.ErrorIs(t, err, db.ErrReadOnly)
+	imported, err := store.ImportAcceptedRecallEntriesJSONL(
+		ctx, strings.NewReader(recallContractImportJSONL),
+	)
+	assert.Empty(t, imported)
+	require.ErrorIs(t, err, db.ErrReadOnly)
+	dryRun, err := store.ImportAcceptedRecallEntriesJSONLWithOptions(
+		ctx, strings.NewReader(recallContractImportJSONL),
+		db.RecallImportOptions{DryRun: true},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, dryRun.WouldImport)
+	notWritten, err := store.GetRecallEntry(ctx, "bun-recall-import")
+	require.NoError(t, err)
+	assert.Nil(t, notWritten)
 	ingested, err := store.IngestEvalTrajectory(ctx, db.EvalTrajectoryIngest{})
 	assert.Empty(t, ingested)
 	require.ErrorIs(t, err, db.ErrReadOnly)
@@ -117,9 +167,7 @@ func assertWritableRecall(t *testing.T, store RecallStore) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, queryID)
 
-	input := strings.NewReader(`
-{"candidate_id":"bun-recall-import","type":"fact","scope":"project","title":"Imported Recall entry","body":"Imported through the common Store surface.","project":"recall-contract","session_id":"bun-recall-import-source","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":0}}
-`)
+	input := strings.NewReader(recallContractImportJSONL)
 	imported, err := store.ImportAcceptedRecallEntriesJSONL(ctx, input)
 	require.NoError(t, err)
 	assert.Equal(t, 1, imported.Imported)
@@ -137,3 +185,7 @@ func assertWritableRecall(t *testing.T, store RecallStore) {
 	assert.Equal(t, 1, ingested.EntriesIndexed)
 	assert.NotEmpty(t, ingested.CorpusID)
 }
+
+const recallContractImportJSONL = `
+{"candidate_id":"bun-recall-import","type":"fact","scope":"project","title":"Imported Recall entry","body":"Imported through the common Store surface.","project":"recall-contract","session_id":"bun-recall-import-source","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":0}}
+`

@@ -258,22 +258,35 @@ func TestUpsertPinnedMessageRowsPreservesSourceIDForMirrorPolicy(t *testing.T) {
 	}).Exec(t.Context())
 	require.NoError(t, err)
 	created := bunmodel.NewTimestamp(time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC))
-	_, err = store.NewInsert().Model(&bunmodel.Session{
-		ID: "mirror-session", Project: "mirror", Machine: "host", Agent: "codex",
-		CreatedAt: created, SourceArchiveID: "mirror-archive",
-		SourceDatabaseGeneration: "mirror-generation",
-	}).Exec(t.Context())
-	require.NoError(t, err)
+	for _, sessionID := range []string{"mirror-session", "stale-session"} {
+		_, err = store.NewInsert().Model(&bunmodel.Session{
+			ID: sessionID, Project: "mirror", Machine: "host", Agent: "codex",
+			CreatedAt: created, SourceArchiveID: "mirror-archive",
+			SourceDatabaseGeneration: "mirror-generation",
+		}).Exec(t.Context())
+		require.NoError(t, err)
+	}
 	messageID := int64(501)
-	_, err = store.NewInsert().Model(&bunmodel.Message{
-		ID: &messageID, SessionID: "mirror-session", Ordinal: 1,
-		Role: "assistant", Content: "mirror pin",
-	}).Exec(t.Context())
-	require.NoError(t, err)
+	staleMessageID := int64(502)
+	for _, message := range []bunmodel.Message{
+		{ID: &messageID, SessionID: "mirror-session", Ordinal: 1,
+			Role: "assistant", Content: "mirror pin"},
+		{ID: &staleMessageID, SessionID: "stale-session", Ordinal: 1,
+			Role: "assistant", Content: "stale pin"},
+	} {
+		_, err = store.NewInsert().Model(&message).Exec(t.Context())
+		require.NoError(t, err)
+	}
 
 	require.NoError(t, UpsertPinnedMessageRows(
 		t.Context(), store, []bunmodel.PinnedMessage{{
 			ID: 7001, SessionID: "mirror-session", MessageID: &messageID,
+			Ordinal: 1, CreatedAt: created,
+		}}, PreservePinRowIDs,
+	))
+	require.NoError(t, UpsertPinnedMessageRows(
+		t.Context(), store, []bunmodel.PinnedMessage{{
+			ID: 7002, SessionID: "stale-session", MessageID: &staleMessageID,
 			Ordinal: 1, CreatedAt: created,
 		}}, PreservePinRowIDs,
 	))
@@ -288,6 +301,11 @@ func TestUpsertPinnedMessageRowsPreservesSourceIDForMirrorPolicy(t *testing.T) {
 		Where("session_id = ?", "mirror-session").Scan(t.Context()))
 	assert.Equal(t, int64(7002), pin.ID,
 		"a replacement mirror row adopts the current source identity")
+	staleCount, err := store.NewSelect().Table("pinned_messages").
+		Where("session_id = ?", "stale-session").Count(t.Context())
+	require.NoError(t, err)
+	assert.Zero(t, staleCount,
+		"the stale mirror row no longer owns the reused source identity")
 }
 
 func TestUpsertPinnedMessageRowsRollsBackGeneratedBatch(t *testing.T) {

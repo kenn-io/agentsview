@@ -64,33 +64,31 @@ func (s *BunStore) GetRecallEntry(
 	if !s.backend.Capabilities().Recall {
 		return nil, ErrReadOnly
 	}
-	var entry RecallEntry
-	found := false
+	var staged *RecallEntry
 	err := s.consistentView(ctx, func(store bun.IDB) error {
+		var entry RecallEntry
 		err := store.NewRaw(
 			"SELECT "+recallBaseCols+" FROM recall_entries WHERE id = ?", id,
 		).Scan(ctx, &entry)
 		if err == sql.ErrNoRows {
+			staged = nil
 			return nil
 		}
 		if err != nil {
 			return fmt.Errorf("getting recall entry %s: %w", id, err)
 		}
-		found = true
 		evidence, err := listRecallEvidenceBun(ctx, store, []string{id})
 		if err != nil {
 			return err
 		}
 		entry.Evidence = evidence[id]
+		staged = &entry
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	if !found {
-		return nil, nil
-	}
-	return &entry, nil
+	return staged, nil
 }
 
 // ListRecallEntries returns canonical Recall rows and evidence through one
@@ -255,7 +253,7 @@ func (s *BunStore) ImportAcceptedRecallEntriesJSONL(
 func (s *BunStore) ImportAcceptedRecallEntriesJSONLWithOptions(
 	ctx context.Context, reader io.Reader, options RecallImportOptions,
 ) (RecallImportResult, error) {
-	if !s.backend.Capabilities().AllowsWrite(WriteRecall) {
+	if !options.DryRun && !s.backend.Capabilities().AllowsWrite(WriteRecall) {
 		return RecallImportResult{}, ErrReadOnly
 	}
 	capability, err := s.recallCapability()
