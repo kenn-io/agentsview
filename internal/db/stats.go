@@ -79,6 +79,71 @@ func (db *DB) FileBackedSessionCountForSource(
 	return db.fileBackedSessionCount(ctx, machine, idPrefix, true)
 }
 
+// FileBackedSessionCountForRebuildOwner returns the protected root-session
+// count owned by the local rebuild phase. Current, empty, and legacy local
+// machine values cover archives created before source baselines; exact
+// baseline rows preserve ownership after a structured root is relabeled.
+// Contributor namespaces and agents whose source format can legitimately move
+// between storage backends are excluded by the coordinator.
+func (db *DB) FileBackedSessionCountForRebuildOwner(
+	ctx context.Context,
+	localMachine string,
+	excludedIDPrefixes []string,
+	excludedAgents []string,
+) (int, error) {
+	conditions := []string{`(
+		machine = ? OR machine = '' OR machine = 'local' OR EXISTS (
+			SELECT 1
+			FROM local_session_source_baselines AS b
+			WHERE b.session_id = sessions.id
+			  AND b.machine = sessions.machine
+			  AND b.agent = sessions.agent
+			  AND b.file_path = sessions.file_path
+		)
+	)`}
+	args := nonSourceBackedAgentArgs()
+	args = append(args, localMachine)
+	seenPrefixes := make(map[string]struct{}, len(excludedIDPrefixes))
+	for _, prefix := range excludedIDPrefixes {
+		if prefix == "" {
+			continue
+		}
+		if _, seen := seenPrefixes[prefix]; seen {
+			continue
+		}
+		seenPrefixes[prefix] = struct{}{}
+		conditions = append(conditions, `substr(id, 1, length(?)) <> ?`)
+		args = append(args, prefix, prefix)
+	}
+	seenAgents := make(map[string]struct{}, len(excludedAgents))
+	for _, agent := range excludedAgents {
+		if agent == "" {
+			continue
+		}
+		if _, seen := seenAgents[agent]; seen {
+			continue
+		}
+		seenAgents[agent] = struct{}{}
+		conditions = append(conditions, `agent <> ?`)
+		args = append(args, agent)
+	}
+
+	var count int
+	err := db.getReader().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sessions
+		 WHERE agent NOT IN (`+nonSourceBackedAgentPlaceholders()+`)
+		 AND `+rootSessionFilter+`
+		 AND `+strings.Join(conditions, "\n AND "),
+		args...,
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"counting local rebuild-owned file sessions: %w", err,
+		)
+	}
+	return count, nil
+}
+
 func (db *DB) fileBackedSessionCount(
 	ctx context.Context, machine, idPrefix string, scoped bool,
 ) (int, error) {

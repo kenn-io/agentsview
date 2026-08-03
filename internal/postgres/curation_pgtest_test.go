@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,6 +12,16 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 )
+
+func reconcilePinnedMessages(
+	ctx context.Context, tx *sql.Tx, sessionID string,
+) error {
+	pins, err := snapshotPinnedMessages(ctx, tx, sessionID)
+	if err != nil {
+		return err
+	}
+	return restorePinnedMessages(ctx, tx, sessionID, pins)
+}
 
 func TestStoreStarsAndPins(t *testing.T) {
 	pgURL := testPGURL(t)

@@ -214,9 +214,12 @@ func sessionBatchWriteFromParsed(
 			HasThinking:      m.HasThinking,
 			HasToolUse:       m.HasToolUse,
 			ContentLength:    m.ContentLength,
+			IsSystem:         m.IsSystem,
 			Model:            m.Model,
 			TokenUsage:       m.TokenUsage,
 			PromptSource:     m.PromptSource,
+			SourceUUID:       m.SourceUUID,
+			SourceParentUUID: m.SourceParentUUID,
 			ContextTokens:    m.ContextTokens,
 			OutputTokens:     m.OutputTokens,
 			HasContextTokens: hasCtx,
@@ -229,9 +232,10 @@ func sessionBatchWriteFromParsed(
 	// pipeline, so zero-valued signal columns and no findings rows are
 	// the expected state for freshly uploaded sessions.
 	return db.SessionBatchWrite{
-		Session:         dbSess,
-		Messages:        dbMsgs,
-		ReplaceMessages: true,
+		Session:                     dbSess,
+		Messages:                    dbMsgs,
+		ReplaceMessages:             true,
+		PreserveLegacyPinsByOrdinal: true,
 	}
 }
 

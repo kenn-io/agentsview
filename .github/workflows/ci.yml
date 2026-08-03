@@ -164,8 +164,24 @@ jobs:
       - name: Restore pricing snapshot
         run: go run ./internal/pricing/cmd/litellm-snapshot -restore
 
-      - name: Run Go tests
-        run: go test -tags "fts5" ${{ runner.os == 'Linux' && '-coverprofile=coverage.out' || '' }} ./... -v -count=1 -timeout=20m
+      - name: Run Go tests (Linux)
+        if: runner.os == 'Linux'
+        run: go test -tags "fts5" -coverprofile=coverage.out ./... -v -count=1 -timeout=20m
+        env:
+          CGO_ENABLED: "1"
+
+      - name: Run Go tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # DuckDB runs in its own job below so its CGo-heavy package does not
+          # occupy one of this four-core runner's package workers for minutes.
+          $packages = @(go list ./...)
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+          $packages = $packages | Where-Object { $_ -ne 'go.kenn.io/agentsview/internal/duckdb' }
+          go test -tags "fts5" $packages -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
@@ -184,6 +200,47 @@ jobs:
       - name: Warn on coverage upload failure
         if: runner.os == 'Linux' && steps.codecov.outcome == 'failure'
         run: echo "::warning::Codecov upload failed"
+
+  # Keep the derived-mirror suite concurrent with the main Windows package set.
+  test-duckdb-windows:
+    name: Go Test (windows-latest, DuckDB)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        with:
+          go-version-file: go.mod
+
+      - name: Setup MinGW
+        id: setup_mingw
+        continue-on-error: true
+        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884  # v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-gcc
+          path-type: inherit
+
+      - name: Setup MinGW (retry on transient failure)
+        if: steps.setup_mingw.outcome == 'failure'
+        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884  # v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-gcc
+          path-type: inherit
+
+      - name: Restore pricing snapshot
+        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
+
+      - name: Run DuckDB tests
+        run: go test -tags "fts5" ./internal/duckdb -count=1 -timeout=20m
+        env:
+          CGO_ENABLED: "1"
 
   test-race:
     name: Go Test (race detector)
@@ -217,6 +274,10 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           persist-credentials: false
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          workspaces: desktop/src-tauri
 
       - name: Prepare placeholder sidecar resource
         shell: pwsh
@@ -354,8 +415,38 @@ jobs:
         env:
           CGO_ENABLED: "1"
 
+      - name: Resolve Playwright version
+        id: playwright-version
+        run: |
+          version=$(node -p "require('./package-lock.json').packages['node_modules/@playwright/test'].version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+        working-directory: frontend
+
+      - name: Resolve Playwright runner platform
+        id: playwright-platform
+        run: |
+          . /etc/os-release
+          echo "linux-distribution=${ID:-unknown}-${VERSION_ID:-unknown}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-browsers-${{ runner.os }}-${{ runner.arch }}-${{ runner.environment }}-${{ steps.playwright-platform.outputs.linux-distribution }}-${{ steps.playwright-version.outputs.version }}
+
       - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps chromium webkit
+        working-directory: frontend
+
+      # Cache hit: browser binaries are already present, but the runner
+      # image itself isn't guaranteed to have the OS packages Playwright
+      # needs (e.g. after a fresh self-hosted runner or an ubuntu-latest
+      # image bump), so make sure those are still installed.
+      - name: Install Playwright system dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium webkit
         working-directory: frontend
 
       - name: Run E2E tests

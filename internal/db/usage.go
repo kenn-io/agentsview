@@ -1447,8 +1447,8 @@ func clampedUsageTokenCountersWithReasoning(
 }
 
 // usageLookupModel returns the canonical model used to price a usage row.
-// Date-ambiguous Kimi aliases resolve according to the row timestamp; all
-// other model names pass through unchanged.
+// Kimi runtime aliases resolve to their fixed or timestamp-selected model;
+// all other model names pass through unchanged.
 func usageLookupModel(model, ts string) string {
 	if canonical := pricingpkg.CanonicalModelForTimestamp(model, ts); canonical != "" {
 		return canonical

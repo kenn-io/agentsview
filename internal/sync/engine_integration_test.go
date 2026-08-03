@@ -9452,6 +9452,88 @@ func TestResyncAllPreservesInsights(t *testing.T) {
 	assert.Equal(t, "test insight survives resync", insights[0].Content, "insight content = %q, want preserved", insights[0].Content)
 }
 
+func TestResyncAllConsumesCopiedHierarchyRepairs(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "hierarchy repair session").
+		AddClaudeAssistant(tsEarlyS5, "hierarchy repair reply").
+		String()
+	env.writeClaudeSession(t, "test-proj", "hierarchy-repair.jsonl", content)
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+	require.NoError(t, env.db.QueueSubagentParentRepairs(
+		[]string{"queued-relink"},
+	))
+	require.NoError(t, env.db.QueueSubagentParentCleanupRepairs(
+		[]string{"queued-cleanup"},
+	))
+
+	stats := env.engine.ResyncAll(context.Background(), nil)
+
+	require.False(t, stats.Aborted, "resync aborted: %v", stats.Warnings)
+	for _, table := range []string{
+		"subagent_parent_repair_queue",
+		"subagent_parent_cleanup_queue",
+	} {
+		var pending int
+		require.NoError(t, env.db.Reader().QueryRow(
+			"SELECT count(*) FROM "+table,
+		).Scan(&pending))
+		assert.Zero(t, pending, "%s must be consumed before swap", table)
+	}
+}
+
+func TestResyncAllAbortsWhenCopiedHierarchyRepairFails(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "original hierarchy repair session").
+		AddClaudeAssistant(tsEarlyS5, "original hierarchy repair reply").
+		String()
+	env.writeClaudeSession(
+		t, "test-proj", "hierarchy-repair-resync.jsonl", content,
+	)
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+	require.NoError(t, env.db.QueueSubagentParentRepairs(
+		[]string{"queued-hierarchy-repair"},
+	))
+
+	stats, err := env.engine.ResyncAllWithOptions(
+		context.Background(), nil,
+		sync.RebuildOptions{Contributors: []sync.RebuildContributor{{
+			Name: "repair-failure-fixture",
+			Config: sync.EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					parser.AgentClaude: {t.TempDir()},
+				},
+				Machine:   "repair-fixture",
+				IDPrefix:  "repair-fixture~",
+				Ephemeral: true,
+			},
+			AfterSync: func(_ *sync.Engine, tempDB *db.DB) error {
+				return tempDB.Update(func(tx *sql.Tx) error {
+					_, triggerErr := tx.Exec(`
+						CREATE TRIGGER fail_copied_hierarchy_repair
+						BEFORE DELETE ON subagent_parent_repair_queue
+						BEGIN
+							SELECT RAISE(FAIL, 'injected copied hierarchy repair failure');
+						END`)
+					return triggerErr
+				})
+			},
+		}}},
+	)
+
+	require.ErrorContains(t, err, "injected copied hierarchy repair failure")
+	assert.True(t, stats.Aborted)
+	assert.Contains(t, strings.Join(stats.Warnings, "\n"),
+		"hierarchy repair failed, aborting swap")
+	assertSessionMessageCount(t, env.db, "hierarchy-repair-resync", 2)
+	assert.NoFileExists(t, env.db.Path()+"-resync")
+}
+
 func TestResyncAllPreservesModelPricing(t *testing.T) {
 	env := setupTestEnv(t)
 
@@ -14295,4 +14377,446 @@ func testStringPtrValue(v *string) string {
 		return ""
 	}
 	return *v
+}
+
+// parentSessionIDOf returns the stored parent_session_id of id, failing the
+// test when the session is missing or its parent is unset.
+func parentSessionIDOf(t *testing.T, env *testEnv, id string) string {
+	t.Helper()
+	sess, err := env.db.GetSession(context.Background(), id)
+	require.NoError(t, err, "GetSession %s", id)
+	require.NotNil(t, sess, "session %s must exist", id)
+	require.NotNil(t, sess.ParentSessionID, "%s parent must be set", id)
+	return *sess.ParentSessionID
+}
+
+// TestSyncSingleSessionIncrementalAppendLinksSpawnedChild covers the
+// incremental branch of SyncSingleSessionContext: an append that introduces
+// a Task tool_use together with its subagent mapping stays on the
+// incremental path, and the spawn edge it stores must re-link the child in
+// the same sync rather than leaving the hierarchy stale until the next bulk
+// pass. The scenario is the depth-2 tree the linking fix exists for: the
+// orchestrator (itself a subagent, path-derived parent = main) spawns the
+// grandchild, whose path-derived parent also points at main.
+func TestSyncSingleSessionIncrementalAppendLinksSpawnedChild(t *testing.T) {
+	env := setupTestEnv(t)
+
+	env.writeClaudeSession(
+		t, "proj-inc-link", "main-inc-link.jsonl", testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T09:00:00Z","uuid":"m1","message":{"content":"root"},"cwd":"/tmp","sessionId":"main-inc-link"}`,
+		),
+	)
+	orchPath := env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-inc-link", "main-inc-link", "subagents",
+			"agent-orch.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"o1","message":{"content":"orchestrate"},"cwd":"/tmp","sessionId":"main-inc-link"}`,
+		),
+	)
+	env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-inc-link", "main-inc-link", "subagents",
+			"agent-kid.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T10:30:00Z","uuid":"k1","message":{"content":"grandchild work"},"cwd":"/tmp","sessionId":"main-inc-link"}`,
+		),
+	)
+
+	env.engine.SyncAll(context.Background(), nil)
+
+	// Path derivation pins every flat subagent to the main session.
+	require.Equal(t, "main-inc-link",
+		parentSessionIDOf(t, env, "agent-kid"),
+		"before the append the grandchild sits under main")
+
+	// The stored orchestrator row id proves the append stayed on the
+	// incremental path: a full replacement would delete and reinsert it.
+	var orchMsgID int64
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT id FROM messages
+		WHERE session_id = ? AND ordinal = 0`,
+		"agent-orch",
+	).Scan(&orchMsgID), "query orchestrator message id before append")
+
+	// One append introduces the Task tool_use AND its subagent mapping,
+	// so the incremental parser can link without a full parse.
+	appended := testjsonl.JoinJSONL(
+		`{"type":"assistant","timestamp":"2024-01-01T10:31:00Z","uuid":"o2","parentUuid":"o1","message":{"id":"msg_orch","content":[{"type":"tool_use","id":"toolu_inc","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:32:00Z","uuid":"o3","parentUuid":"o2","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_inc","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"kid"}}`,
+	) + "\n"
+	f, err := os.OpenFile(orchPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open orchestrator transcript for append")
+	_, writeErr := f.WriteString(appended)
+	f.Close()
+	require.NoError(t, writeErr, "append spawn edge")
+
+	require.NoError(t, env.engine.SyncSingleSession("agent-orch"),
+		"SyncSingleSession orchestrator")
+
+	var gotMsgID int64
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT id FROM messages
+		WHERE session_id = ? AND ordinal = 0`,
+		"agent-orch",
+	).Scan(&gotMsgID), "query orchestrator message id after append")
+	require.Equal(t, orchMsgID, gotMsgID,
+		"the append must stay on the incremental path for this test to "+
+			"pin the incremental branch (a full replace reinserts rows)")
+
+	assert.Equal(t, "agent-orch", parentSessionIDOf(t, env, "agent-kid"),
+		"an incrementally appended spawn edge must re-link the child in "+
+			"the same single-session sync")
+}
+
+// TestSyncSingleSessionNewEdgeLinkFailureRetriesFromDurableQueue covers the
+// inverse of edge removal: an incremental write can successfully store a new
+// spawn edge and then fail while linking its child. The next explicit sync is
+// fresh and does not rewrite messages, so the newly referenced child itself
+// must have been queued after the write for that retry to finish the link.
+func TestSyncSingleSessionNewEdgeLinkFailureRetriesFromDurableQueue(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+
+	env.writeClaudeSession(
+		t, "proj-new-edge-retry", "main-new-edge-retry.jsonl",
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T09:00:00Z","uuid":"m1","message":{"content":"root"},"cwd":"/tmp","sessionId":"main-new-edge-retry"}`,
+		),
+	)
+	orchPath := env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-new-edge-retry", "main-new-edge-retry", "subagents",
+			"agent-orch.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"o1","message":{"content":"orchestrate"},"cwd":"/tmp","sessionId":"main-new-edge-retry"}`,
+		),
+	)
+	env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-new-edge-retry", "main-new-edge-retry", "subagents",
+			"agent-kid.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T10:30:00Z","uuid":"k1","message":{"content":"child work"},"cwd":"/tmp","sessionId":"main-new-edge-retry"}`,
+		),
+	)
+	env.engine.SyncAll(t.Context(), nil)
+	require.Equal(t, "main-new-edge-retry",
+		parentSessionIDOf(t, env, "agent-kid"))
+
+	appended := testjsonl.JoinJSONL(
+		`{"type":"assistant","timestamp":"2024-01-01T10:31:00Z","uuid":"o2","parentUuid":"o1","message":{"id":"msg_orch","content":[{"type":"tool_use","id":"toolu_retry","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:32:00Z","uuid":"o3","parentUuid":"o2","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_retry","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"kid"}}`,
+	) + "\n"
+	f, err := os.OpenFile(orchPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, writeErr := f.WriteString(appended)
+	closeErr := f.Close()
+	require.NoError(t, writeErr)
+	require.NoError(t, closeErr)
+
+	raw, err := sql.Open("sqlite3", env.db.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	_, err = raw.Exec(`
+		CREATE TRIGGER fail_new_child_parent_link
+		BEFORE UPDATE OF parent_session_id ON sessions
+		WHEN NEW.id = 'agent-kid'
+		  AND NEW.parent_session_id = 'agent-orch'
+		BEGIN
+			SELECT RAISE(FAIL, 'injected new child link failure');
+		END`)
+	require.NoError(t, err)
+
+	firstErr := env.engine.SyncSingleSession("agent-orch")
+	require.ErrorContains(t, firstErr, "injected new child link failure")
+	assert.Equal(t, "main-new-edge-retry",
+		parentSessionIDOf(t, env, "agent-kid"))
+	var edgeCount int
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT count(*) FROM tool_calls
+		WHERE session_id = 'agent-orch'
+		  AND subagent_session_id = 'agent-kid'`,
+	).Scan(&edgeCount))
+	require.Equal(t, 1, edgeCount,
+		"the first sync must persist the new edge before linking fails")
+	var queuedRepairs int
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT count(*) FROM subagent_parent_repair_queue
+		WHERE session_id = 'agent-kid'`,
+	).Scan(&queuedRepairs))
+	require.Equal(t, 1, queuedRepairs,
+		"the new child must remain durably queued after linking fails")
+
+	_, err = raw.Exec("DROP TRIGGER fail_new_child_parent_link")
+	require.NoError(t, err)
+	require.NoError(t, env.engine.SyncSingleSession("agent-orch"),
+		"freshness retry must consume the durable new-child repair")
+	assert.Equal(t, "agent-orch", parentSessionIDOf(t, env, "agent-kid"))
+}
+
+// TestSyncSingleSessionRewriteRemovingEdgeRelinksFormerChild covers the
+// pre-write child capture in SyncSingleSessionContext: a full rewrite that
+// REMOVES a spawn edge cascades the tool_calls row away, so the scoped
+// linker can no longer discover the former child through post-write edges.
+// The child must still be re-resolved — here to the remaining spawner —
+// in the same sync instead of keeping the deleted edge's stale parent.
+func TestSyncSingleSessionRewriteRemovingEdgeRelinksFormerChild(t *testing.T) {
+	env := setupTestEnv(t)
+
+	env.writeClaudeSession(
+		t, "proj-edge-rm", "main-edge-rm.jsonl", testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T09:00:00Z","uuid":"m1","message":{"content":"root"},"cwd":"/tmp","sessionId":"main-edge-rm"}`,
+		),
+	)
+	// Both orchestrators claim the grandchild; orcha starts earlier, so
+	// the chronological resolution links the child under orcha.
+	orchaInitial := testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"a1","message":{"content":"orchestrate a"},"cwd":"/tmp","sessionId":"main-edge-rm"}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:01:00Z","uuid":"a2","parentUuid":"a1","message":{"id":"msg_a","content":[{"type":"tool_use","id":"toolu_a","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:02:00Z","uuid":"a3","parentUuid":"a2","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_a","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"kid"}}`,
+	)
+	orchaPath := env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-edge-rm", "main-edge-rm", "subagents",
+			"agent-orcha.jsonl",
+		),
+		orchaInitial,
+	)
+	env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-edge-rm", "main-edge-rm", "subagents",
+			"agent-orchb.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T11:00:00Z","uuid":"b1","message":{"content":"orchestrate b"},"cwd":"/tmp","sessionId":"main-edge-rm"}`,
+			`{"type":"assistant","timestamp":"2024-01-01T11:01:00Z","uuid":"b2","parentUuid":"b1","message":{"id":"msg_b","content":[{"type":"tool_use","id":"toolu_b","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+			`{"type":"user","timestamp":"2024-01-01T11:02:00Z","uuid":"b3","parentUuid":"b2","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_b","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"kid"}}`,
+		),
+	)
+	env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-edge-rm", "main-edge-rm", "subagents",
+			"agent-kid.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T11:30:00Z","uuid":"k1","message":{"content":"grandchild work"},"cwd":"/tmp","sessionId":"main-edge-rm"}`,
+		),
+	)
+
+	env.engine.SyncAll(context.Background(), nil)
+
+	require.Equal(t, "agent-orcha",
+		parentSessionIDOf(t, env, "agent-kid"),
+		"the earliest-started spawner wins while both edges exist")
+
+	// Rewrite orcha WITHOUT its spawn edge (same first message, so its
+	// start time is unchanged; the shrunk file forces a full replace,
+	// which cascades the toolu_a edge away).
+	require.NoError(t, os.WriteFile(orchaPath, []byte(testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"a1","message":{"content":"orchestrate a"},"cwd":"/tmp","sessionId":"main-edge-rm"}`,
+	)+"\n"), 0o644), "rewrite orcha without the spawn edge")
+
+	require.NoError(t, env.engine.SyncSingleSession("agent-orcha"),
+		"SyncSingleSession rewritten orchestrator")
+
+	assert.Equal(t, "agent-orchb", parentSessionIDOf(t, env, "agent-kid"),
+		"removing orcha's edge must re-resolve its former child to the "+
+			"remaining spawner in the same sync, not leave the stale parent")
+}
+
+func setupSingleSessionParentRepairRetry(
+	t *testing.T,
+) (*testEnv, string) {
+	t.Helper()
+	env := setupTestEnv(t)
+
+	env.writeClaudeSession(
+		t, "proj-repair-retry", "main-repair-retry.jsonl",
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T09:00:00Z","uuid":"m1","message":{"content":"root"},"cwd":"/tmp","sessionId":"main-repair-retry"}`,
+		),
+	)
+	orchaPath := env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-repair-retry", "main-repair-retry", "subagents",
+			"agent-orcha.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"a1","message":{"content":"orchestrate a"},"cwd":"/tmp","sessionId":"main-repair-retry"}`,
+			`{"type":"assistant","timestamp":"2024-01-01T10:01:00Z","uuid":"a2","parentUuid":"a1","message":{"id":"msg_a","content":[{"type":"tool_use","id":"toolu_a","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+			`{"type":"user","timestamp":"2024-01-01T10:02:00Z","uuid":"a3","parentUuid":"a2","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_a","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"kid"}}`,
+		),
+	)
+	env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-repair-retry", "main-repair-retry", "subagents",
+			"agent-orchb.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T11:00:00Z","uuid":"b1","message":{"content":"orchestrate b"},"cwd":"/tmp","sessionId":"main-repair-retry"}`,
+			`{"type":"assistant","timestamp":"2024-01-01T11:01:00Z","uuid":"b2","parentUuid":"b1","message":{"id":"msg_b","content":[{"type":"tool_use","id":"toolu_b","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+			`{"type":"user","timestamp":"2024-01-01T11:02:00Z","uuid":"b3","parentUuid":"b2","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_b","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"kid"}}`,
+		),
+	)
+	env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-repair-retry", "main-repair-retry", "subagents",
+			"agent-kid.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T11:30:00Z","uuid":"k1","message":{"content":"grandchild work"},"cwd":"/tmp","sessionId":"main-repair-retry"}`,
+		),
+	)
+
+	env.engine.SyncAll(t.Context(), nil)
+	var initialEdges int
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT count(*) FROM tool_calls WHERE subagent_session_id = 'agent-kid'`,
+	).Scan(&initialEdges))
+	require.Equal(t, 2, initialEdges, "test setup requires both spawn edges")
+	require.Equal(t, "agent-orcha", parentSessionIDOf(t, env, "agent-kid"))
+	require.NoError(t, os.WriteFile(orchaPath, []byte(testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"a1","message":{"content":"orchestrate a"},"cwd":"/tmp","sessionId":"main-repair-retry"}`,
+	)+"\n"), 0o644), "rewrite orcha without the spawn edge")
+	return env, orchaPath
+}
+
+func TestSyncSingleSessionWriteFailureStillRepairsFormerChild(t *testing.T) {
+	env, _ := setupSingleSessionParentRepairRetry(t)
+	raw, err := sql.Open("sqlite3", env.db.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	_, err = raw.Exec(fmt.Sprintf(`
+		CREATE TRIGGER fail_parent_repair_write_completion
+		BEFORE UPDATE OF data_version ON sessions
+		WHEN NEW.id = 'agent-orcha' AND NEW.data_version = %d
+		BEGIN
+			SELECT RAISE(FAIL, 'injected post-replacement failure');
+		END`, db.CurrentDataVersion()))
+	require.NoError(t, err)
+
+	syncErr := env.engine.SyncSingleSession("agent-orcha")
+
+	require.ErrorContains(t, syncErr, "injected post-replacement failure")
+	assert.Equal(t, "agent-orchb", parentSessionIDOf(t, env, "agent-kid"),
+		"a later write failure must not skip repair after removing an edge")
+}
+
+func TestSyncSingleSessionRepairFailurePersistsFormerChildForRetry(t *testing.T) {
+	env, _ := setupSingleSessionParentRepairRetry(t)
+	raw, err := sql.Open("sqlite3", env.db.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	_, err = raw.Exec(`
+		CREATE TRIGGER fail_parent_repair
+		BEFORE UPDATE OF parent_session_id ON sessions
+		WHEN NEW.id = 'agent-kid'
+		BEGIN
+			SELECT RAISE(FAIL, 'injected parent repair failure');
+		END`)
+	require.NoError(t, err)
+
+	firstErr := env.engine.SyncSingleSession("agent-orcha")
+
+	require.ErrorContains(t, firstErr, "injected parent repair failure")
+	assert.Equal(t, "agent-orcha", parentSessionIDOf(t, env, "agent-kid"))
+	var edgeCount int
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT count(*) FROM tool_calls
+		WHERE session_id = 'agent-orcha'
+		  AND subagent_session_id = 'agent-kid'`,
+	).Scan(&edgeCount), "count removed edge")
+	assert.Zero(t, edgeCount, "the first sync must remove the spawn edge")
+
+	_, err = raw.Exec("DROP TRIGGER fail_parent_repair")
+	require.NoError(t, err)
+	require.NoError(t, env.engine.SyncSingleSession("agent-orcha"),
+		"retry must consume the durable repair queue")
+	assert.Equal(t, "agent-orchb", parentSessionIDOf(t, env, "agent-kid"),
+		"retry must repair a child no longer discoverable from the removed edge")
+}
+
+// TestSyncSingleSessionChildCaptureFailurePreservesEdges pins the fail-closed
+// boundary before a full rewrite. The rewritten spawner transcript is about to
+// remove its sole spawn edge; if the engine cannot first capture the affected
+// child, it must return that read failure before any exclusion or replacement
+// can erase the evidence needed to repair the hierarchy.
+func TestSyncSingleSessionChildCaptureFailurePreservesEdges(t *testing.T) {
+	env := setupTestEnv(t)
+
+	env.writeClaudeSession(
+		t, "proj-capture-fail", "main-capture-fail.jsonl",
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T09:00:00Z","uuid":"m1","message":{"content":"root"},"cwd":"/tmp","sessionId":"main-capture-fail"}`,
+		),
+	)
+	spawnerPath := env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-capture-fail", "main-capture-fail", "subagents",
+			"agent-spawner.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"s1","message":{"content":"orchestrate"},"cwd":"/tmp","sessionId":"main-capture-fail"}`,
+			`{"type":"assistant","timestamp":"2024-01-01T10:01:00Z","uuid":"s2","parentUuid":"s1","message":{"id":"msg_spawner","content":[{"type":"tool_use","id":"toolu_spawn","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+			`{"type":"user","timestamp":"2024-01-01T10:02:00Z","uuid":"s3","parentUuid":"s2","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_spawn","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"kid"}}`,
+		),
+	)
+	env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-capture-fail", "main-capture-fail", "subagents",
+			"agent-kid.jsonl",
+		),
+		testjsonl.JoinJSONL(
+			`{"type":"user","timestamp":"2024-01-01T10:30:00Z","uuid":"k1","message":{"content":"child work"},"cwd":"/tmp","sessionId":"main-capture-fail"}`,
+		),
+	)
+
+	env.engine.SyncAll(context.Background(), nil)
+
+	var edgeCount int
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT count(*) FROM tool_calls
+		WHERE session_id = ? AND subagent_session_id = ?`,
+		"agent-spawner", "agent-kid",
+	).Scan(&edgeCount), "count initial spawn edge")
+	require.Equal(t, 1, edgeCount, "test setup requires one spawn edge")
+
+	// A successful full rewrite would cascade the existing tool call away.
+	require.NoError(t, os.WriteFile(spawnerPath, []byte(testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"s1","message":{"content":"orchestrate"},"cwd":"/tmp","sessionId":"main-capture-fail"}`,
+	)+"\n"), 0o644), "rewrite spawner without edge")
+
+	require.NoError(t, env.db.CloseConnections(), "close database connections")
+	syncErr := env.engine.SyncSingleSession("agent-spawner")
+	require.NoError(t, env.db.Reopen(), "reopen database")
+	require.ErrorContains(t, syncErr, "list pre-write subagent children")
+
+	spawner, err := env.db.GetSession(context.Background(), "agent-spawner")
+	require.NoError(t, err, "get spawner after failed sync")
+	assert.NotNil(t, spawner, "failed capture must not delete the spawner")
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT count(*) FROM tool_calls
+		WHERE session_id = ? AND subagent_session_id = ?`,
+		"agent-spawner", "agent-kid",
+	).Scan(&edgeCount), "count spawn edge after failed sync")
+	assert.Equal(t, 1, edgeCount,
+		"failed capture must not remove the sole spawn edge")
 }

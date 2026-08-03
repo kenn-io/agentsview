@@ -766,6 +766,81 @@ func TestParseKimiSession_NativeKimiCodeToolCall(t *testing.T) {
 	assert.Equal(t, 75, msgs[3].ContextTokens)
 }
 
+func TestParseKimiSession_NativeKimiCodeToolResultsBeforeStepEnd(
+	t *testing.T,
+) {
+	path := writeKimiCodeWireJSONL(t,
+		"wd_myproject_a1b2c3d4", "session_uuid-late-usage", "main",
+		[]string{
+			`{"type":"metadata","protocol_version":"1.4","created_at":1785720000000}`,
+			`{"type":"config.update","modelAlias":"k3-agent","time":1785720000001}`,
+			`{"type":"turn.prompt","input":[{"type":"text","text":"Run tools"}],"time":1785720000002}`,
+			`{"type":"context.append_loop_event","event":{"type":"step.begin","uuid":"step-1"},"time":1785720000003}`,
+			`{"type":"context.append_loop_event","event":{"type":"tool.call","toolCallId":"tool-1","name":"Shell","args":{"command":"first"}},"time":1785720000004}`,
+			`{"type":"context.append_loop_event","event":{"type":"tool.call","toolCallId":"tool-2","name":"Shell","args":{"command":"second"}},"time":1785720000005}`,
+			`{"type":"context.append_loop_event","event":{"type":"tool.result","toolCallId":"tool-1","result":{"output":"one","isError":false}},"time":1785720000006}`,
+			`{"type":"context.append_loop_event","event":{"type":"tool.result","toolCallId":"tool-2","result":{"output":"two","isError":false}},"time":1785720000007}`,
+			`{"type":"context.append_loop_event","event":{"type":"step.end","uuid":"step-1","finishReason":"tool_use","usage":{"inputOther":100,"output":20,"inputCacheRead":300,"inputCacheCreation":4}},"time":1785720000008}`,
+			`{"type":"usage.record","model":"k3-agent","usage":{"inputOther":100,"output":20,"inputCacheRead":300,"inputCacheCreation":4},"usageScope":"turn","time":1785720000008}`,
+		},
+	)
+
+	sess, msgs, err := parseKimiSessionForTest(t, path, "myproject", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, msgs, 4)
+
+	toolStep := msgs[1]
+	require.Equal(t, RoleAssistant, toolStep.Role)
+	require.Len(t, toolStep.ToolCalls, 2)
+	assert.Equal(t, "k3-agent", toolStep.Model)
+	assert.Equal(t, "tool_use", toolStep.StopReason)
+	assert.True(t, toolStep.HasOutputTokens)
+	assert.True(t, toolStep.HasContextTokens)
+	assert.Equal(t, 20, toolStep.OutputTokens)
+	assert.Equal(t, 404, toolStep.ContextTokens)
+	assert.JSONEq(t,
+		`{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":300,"cache_creation_input_tokens":4}`,
+		string(toolStep.TokenUsage))
+	assert.Equal(t, 20, sess.TotalOutputTokens)
+	assert.Equal(t, 404, sess.PeakContextTokens)
+	assert.Empty(t, sess.UsageEvents,
+		"the following usage.record must not double-count step.end usage")
+}
+
+func TestParseKimiSession_NativeKimiCodeUsageRecordAfterToolResult(
+	t *testing.T,
+) {
+	path := writeKimiCodeWireJSONL(t,
+		"wd_myproject_a1b2c3d4", "session_uuid-usage-fallback", "main",
+		[]string{
+			`{"type":"metadata","protocol_version":"1.4","created_at":1785720000000}`,
+			`{"type":"turn.prompt","input":[{"type":"text","text":"Run a tool"}],"time":1785720000001}`,
+			`{"type":"context.append_loop_event","event":{"type":"step.begin","uuid":"step-1"},"time":1785720000002}`,
+			`{"type":"context.append_loop_event","event":{"type":"tool.call","toolCallId":"tool-1","name":"Shell","args":{}},"time":1785720000003}`,
+			`{"type":"context.append_loop_event","event":{"type":"tool.result","toolCallId":"tool-1","result":{"output":"ok","isError":false}},"time":1785720000004}`,
+			`{"type":"context.append_loop_event","event":{"type":"step.end","uuid":"step-1","finishReason":"tool_use"},"time":1785720000005}`,
+			`{"type":"usage.record","model":"k3-agent","usage":{"inputOther":10,"output":11,"inputCacheRead":12,"inputCacheCreation":13},"usageScope":"turn","time":1785720000005}`,
+		},
+	)
+
+	sess, msgs, err := parseKimiSessionForTest(t, path, "myproject", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, msgs, 3)
+
+	toolStep := msgs[1]
+	assert.Equal(t, "k3-agent", toolStep.Model)
+	assert.Equal(t, "tool_use", toolStep.StopReason)
+	assert.Equal(t, 11, toolStep.OutputTokens)
+	assert.Equal(t, 35, toolStep.ContextTokens)
+	assert.JSONEq(t,
+		`{"input_tokens":10,"output_tokens":11,"cache_read_input_tokens":12,"cache_creation_input_tokens":13}`,
+		string(toolStep.TokenUsage))
+	assert.Equal(t, 11, sess.TotalOutputTokens)
+	assert.Equal(t, 35, sess.PeakContextTokens)
+}
+
 func TestParseKimiSession_NewLayout_AgentZero(t *testing.T) {
 	path := writeKimiCodeWireJSONL(t,
 		"wd_myproject_a1b2c3d4", "session_uuid-5678", "agent-0",

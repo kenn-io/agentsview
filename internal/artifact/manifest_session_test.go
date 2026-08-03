@@ -23,6 +23,8 @@ import (
 // contract; otherwise leave the DTO alone and update populateWireFixture's
 // expectations here.
 func TestManifestSessionMatchesDBSessionWireFormat(t *testing.T) {
+	t.Parallel()
+
 	var sess db.Session
 	populateWireFixture(t, reflect.ValueOf(&sess).Elem(), 1)
 
@@ -52,6 +54,8 @@ func TestManifestSessionMatchesDBSessionWireFormat(t *testing.T) {
 }
 
 func TestManifestQualitySignalsMatchesDBWireFormat(t *testing.T) {
+	t.Parallel()
+
 	var qs db.QualitySignals
 	populateWireFixture(t, reflect.ValueOf(&qs).Elem(), 100)
 

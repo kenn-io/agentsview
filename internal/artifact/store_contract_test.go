@@ -25,6 +25,8 @@ import (
 const contractOrigin = "contract-a1b2c3"
 
 func TestNewRefValidatesCanonicalReferences(t *testing.T) {
+	t.Parallel()
+
 	hash := strings.Repeat("a", 64)
 	tests := []struct {
 		name string
@@ -47,6 +49,8 @@ func TestNewRefValidatesCanonicalReferences(t *testing.T) {
 }
 
 func TestNewRefRejectsNoncanonicalReferences(t *testing.T) {
+	t.Parallel()
+
 	hash := strings.Repeat("a", 64)
 	tests := []struct {
 		name   string
@@ -72,6 +76,8 @@ func TestNewRefRejectsNoncanonicalReferences(t *testing.T) {
 }
 
 func TestNewIdentityValidatesCanonicalSHA256AndSize(t *testing.T) {
+	t.Parallel()
+
 	hash := strings.Repeat("a", 64)
 	identity, err := NewIdentity(hash, 0)
 	require.NoError(t, err)
@@ -96,6 +102,8 @@ func TestNewIdentityValidatesCanonicalSHA256AndSize(t *testing.T) {
 }
 
 func TestArtifactOpErrorPreservesCause(t *testing.T) {
+	t.Parallel()
+
 	ref := requireContractRef(t, contractOrigin, KindCheckpoints, "cp-0000000001.json")
 	err := &ArtifactOpError{Op: "open", Ref: ref, Err: context.Canceled}
 
@@ -111,6 +119,8 @@ func TestArtifactOpErrorPreservesCause(t *testing.T) {
 type artifactStoreFactory func(t *testing.T) ArtifactStore
 
 func TestArtifactStoreContractDocbank(t *testing.T) {
+	t.Parallel()
+
 	for _, driver := range []docsqlite.Driver{mattn.Driver{}, modernc.Driver{}} {
 		t.Run(driver.Name(), func(t *testing.T) {
 			runArtifactStoreContract(t, func(t *testing.T) ArtifactStore {
@@ -126,6 +136,8 @@ func TestArtifactStoreContractDocbank(t *testing.T) {
 }
 
 func TestArtifactStoreIteratorContractDocbank(t *testing.T) {
+	t.Parallel()
+
 	for _, driver := range []docsqlite.Driver{mattn.Driver{}, modernc.Driver{}} {
 		t.Run(driver.Name(), func(t *testing.T) {
 			store := newContractStore(t, func(t *testing.T) ArtifactStore {

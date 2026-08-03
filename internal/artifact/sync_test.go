@@ -299,6 +299,8 @@ func TestArtifactSyncDoesNotPublishUnrecordedLocalOriginObjects(t *testing.T) {
 }
 
 func TestArtifactSyncValidatesBeforeCreatingOwnedStorage(t *testing.T) {
+	t.Parallel()
+
 	t.Run("missing target", func(t *testing.T) {
 		dataDir := t.TempDir()
 		_, err := Sync(
@@ -366,6 +368,43 @@ func TestArtifactSyncQuarantinesInvalidCheckpointInFolderAndDocbank(
 	assert.ErrorIs(t, err, ErrArtifactNotFound)
 }
 
+func TestArtifactSyncCountsTransportQuarantine(t *testing.T) {
+	t.Parallel()
+
+	target := t.TempDir()
+	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
+	require.NoError(t, err)
+	require.NoError(t, transport.Close())
+
+	origin := "peer-a1b2c3"
+	body := []byte(`{"v":2}`)
+	ref := testContentRef(t, origin, KindManifests, body, ".json")
+	wire, err := ToWireRef(ref)
+	require.NoError(t, err)
+	wireDirectory := filepath.Join(target, origin, string(KindManifests))
+	require.NoError(t, os.MkdirAll(wireDirectory, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(wireDirectory, wire.Name),
+		[]byte("not zstd"),
+		0o600,
+	))
+	appendFolderJournalTestEntry(t, target, Entry{
+		Ref: ref, Identity: identityForBytes(t, body),
+	})
+
+	repository, err := OpenRepository(t.Context(), t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, repository.Close()) })
+	result, err := SyncWithRepository(
+		t.Context(),
+		testDB(t),
+		repository,
+		SyncOptions{Target: target, Origin: "local-d4e5f6"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Quarantined)
+}
+
 func TestCoordinatedQuarantineDropsStaleLocalAfterRemoteReplacement(
 	t *testing.T,
 ) {
@@ -431,6 +470,8 @@ func (replacementQuarantineTransport) QuarantineTransportArtifact(
 }
 
 func TestDrainArtifactSyncExportsReturnsMoreAtRoundBudget(t *testing.T) {
+	t.Parallel()
+
 	database := testDB(t)
 	origin := "local-a1b2c3"
 	require.NoError(t, AdoptOrigin(database, origin))
@@ -458,6 +499,10 @@ func TestDrainArtifactSyncExportsReturnsMoreAtRoundBudget(t *testing.T) {
 func TestDrainArtifactSyncFullExportReturnsMoreWhenQueueDoesNotSettle(
 	t *testing.T,
 ) {
+	// Serial: this exercises the full drain cap through real SQLite and
+	// Docbank writes under a fixed deadline. Package-wide I/O contention can
+	// otherwise consume the deadline without the drain being stuck.
+
 	database := testExportDB(t)
 	seedSession(t, database, "sess-1", "alpha")
 	store := newTestArtifactStore(t)
@@ -489,6 +534,8 @@ func (f *repeatingImportFinalizer) Finalize(context.Context) (ImportResult, erro
 }
 
 func TestDrainArtifactSyncImportsReturnsMoreAtRoundBudget(t *testing.T) {
+	t.Parallel()
+
 	finalizer := &repeatingImportFinalizer{}
 	var result SyncResult
 

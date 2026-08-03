@@ -250,6 +250,7 @@ func (b localArchiveQueryBackend) SessionUsage(
 	if known && !b.skipFreshData {
 		engine := sync.NewEngine(b.database, sync.EngineConfig{
 			AgentDirs:               b.cfg.AgentDirs,
+			SourceMachines:          b.cfg.SourceMachines,
 			IncludeCwdPrefixes:      b.cfg.SyncIncludeCwdPrefixes,
 			Machine:                 b.cfg.LocalMachineName,
 			BlockedResultCategories: b.cfg.ResultContentBlockedCategories,

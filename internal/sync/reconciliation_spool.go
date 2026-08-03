@@ -25,6 +25,7 @@ type reconciliationCandidate struct {
 	StoredPath     string
 	MemberIdentity string
 	WatchRoot      string
+	Machine        string
 	Project        string
 	Preference1    int64
 	Preference2    int64
@@ -93,14 +94,14 @@ func (spool *reconciliationSpool) Candidate(
 	var candidate reconciliationCandidate
 	var providerName string
 	err := spool.db.QueryRowContext(ctx, `
-		SELECT provider, identity, path, stored_path, member_identity, watch_root, project,
+		SELECT provider, identity, path, stored_path, member_identity, watch_root, machine, project,
 		       preference_1, preference_2, preference_3
 		FROM candidates
 		WHERE provider = ? AND identity = ?
 	`, string(provider), identity).Scan(
 		&providerName, &candidate.Identity, &candidate.Path, &candidate.StoredPath,
 		&candidate.MemberIdentity,
-		&candidate.WatchRoot, &candidate.Project,
+		&candidate.WatchRoot, &candidate.Machine, &candidate.Project,
 		&candidate.Preference1, &candidate.Preference2,
 		&candidate.Preference3,
 	)
@@ -237,6 +238,7 @@ func (spool *reconciliationSpool) initialize() error {
 			stored_path TEXT NOT NULL,
 			member_identity TEXT NOT NULL,
 			watch_root TEXT NOT NULL,
+			machine TEXT NOT NULL,
 			project TEXT NOT NULL,
 			preference_1 INTEGER NOT NULL,
 			preference_2 INTEGER NOT NULL,
@@ -267,14 +269,15 @@ func (spool *reconciliationSpool) Add(
 	}
 	_, err := spool.db.ExecContext(ctx, `
 		INSERT INTO candidates (
-			provider, identity, path, stored_path, member_identity, watch_root, project,
-			preference_1, preference_2, preference_3
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			provider, identity, path, stored_path, member_identity, watch_root, machine,
+			project, preference_1, preference_2, preference_3
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(provider, identity) DO UPDATE SET
 			path = excluded.path,
 			stored_path = excluded.stored_path,
 			member_identity = excluded.member_identity,
 			watch_root = excluded.watch_root,
+			machine = excluded.machine,
 			project = excluded.project,
 			preference_1 = excluded.preference_1,
 			preference_2 = excluded.preference_2,
@@ -291,7 +294,7 @@ func (spool *reconciliationSpool) Add(
 		       AND excluded.path < candidates.path)
 	`, string(candidate.Provider), candidate.Identity, candidate.Path,
 		candidate.StoredPath, candidate.MemberIdentity,
-		candidate.WatchRoot, candidate.Project, candidate.Preference1,
+		candidate.WatchRoot, candidate.Machine, candidate.Project, candidate.Preference1,
 		candidate.Preference2, candidate.Preference3)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -315,7 +318,7 @@ func (spool *reconciliationSpool) Page(
 		limit = reconciliationPageSize
 	}
 	rows, err := spool.db.QueryContext(ctx, `
-		SELECT provider, identity, path, stored_path, member_identity, watch_root, project,
+		SELECT provider, identity, path, stored_path, member_identity, watch_root, machine, project,
 		       preference_1, preference_2, preference_3
 		FROM candidates
 		WHERE provider > ? OR (provider = ? AND identity > ?)
@@ -337,7 +340,7 @@ func (spool *reconciliationSpool) Page(
 		if err := rows.Scan(
 			&provider, &candidate.Identity, &candidate.Path, &candidate.StoredPath,
 			&candidate.MemberIdentity,
-			&candidate.WatchRoot, &candidate.Project,
+			&candidate.WatchRoot, &candidate.Machine, &candidate.Project,
 			&candidate.Preference1, &candidate.Preference2,
 			&candidate.Preference3,
 		); err != nil {

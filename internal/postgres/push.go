@@ -29,7 +29,7 @@ const (
 	legacyProjectIdentityStateKey      = "project_identity_publication_revision_v2"
 	projectIdentityPublicationStateKey = "project_identity_publication_revision_v3"
 	transcriptRevisionBackfillStateKey = "pg_transcript_revision_backfill_v1"
-	sessionProvenanceBackfillStateKey  = "pg_session_provenance_backfill_v1"
+	sessionProvenanceBackfillStateKey  = "pg_session_provenance_backfill_v2"
 	unfilteredPublicationScope         = "all-projects"
 )
 
@@ -2045,6 +2045,7 @@ func sessionPushFingerprint(
 		fmt.Sprintf("%t", sess.HasTotalOutputTokens),
 		fmt.Sprintf("%t", sess.HasPeakContextTokens),
 		stringValue(sess.ParentSessionID),
+		stringValue(sess.ParserParentSessionID),
 		sess.RelationshipType,
 		stringValue(sess.FilePath),
 		stringValue(sess.FileHash),
@@ -2231,7 +2232,7 @@ func (s *Sync) pushSession(
 			cwd, git_branch, source_session_id,
 			source_version, parser_malformed_lines,
 			is_truncated, termination_status,
-			parent_session_id, relationship_type,
+			parent_session_id, parser_parent_session_id, relationship_type,
 			tool_failure_signal_count, tool_retry_count,
 			edit_churn_count, consecutive_failure_max,
 			outcome, outcome_confidence,
@@ -2258,16 +2259,16 @@ func (s *Sync) pushSession(
 				$16, $17, $18, $19,
 				$20, $21, $22, $23,
 				$24, $25, $26, $27, $28, $29, $30,
-				$31, $32,
-				$33, $34, $35, $36,
-				$37, $38, $39, $40,
-				$41,
-				$42, $43,
-				$44,
-				$45, $46, $47, $48,
-				$49, $50,
-				$51, $52, $53, $54, $55, $56, $57, $58, $59, $60,
-				$61, $62, $63, $64, $65, $66,
+				$31, $32, $33,
+				$34, $35, $36, $37,
+				$38, $39, $40, $41,
+				$42,
+				$43, $44,
+				$45,
+				$46, $47, $48, $49,
+				$50, $51,
+				$52, $53, $54, $55, $56, $57, $58, $59, $60, $61,
+				$62, $63, $64, $65, $66, $67,
 				NOW()
 			WHERE NOT EXISTS (
 				SELECT 1 FROM excluded_sessions WHERE id = $1
@@ -2323,6 +2324,7 @@ func (s *Sync) pushSession(
 			is_truncated = EXCLUDED.is_truncated,
 			termination_status = EXCLUDED.termination_status,
 			parent_session_id = EXCLUDED.parent_session_id,
+			parser_parent_session_id = EXCLUDED.parser_parent_session_id,
 			relationship_type = EXCLUDED.relationship_type,
 			tool_failure_signal_count = EXCLUDED.tool_failure_signal_count,
 			tool_retry_count = EXCLUDED.tool_retry_count,
@@ -2357,7 +2359,7 @@ func (s *Sync) pushSession(
 					OR sessions.machine = 'local'
 					OR sessions.machine = ''
 					OR sessions.machine IN (
-						SELECT jsonb_array_elements_text($67::jsonb)
+						SELECT jsonb_array_elements_text($68::jsonb)
 					))
 			)
 			OR sessions.owner_marker = EXCLUDED.owner_marker)
@@ -2403,6 +2405,7 @@ func (s *Sync) pushSession(
 			OR sessions.is_truncated IS DISTINCT FROM EXCLUDED.is_truncated
 			OR sessions.termination_status IS DISTINCT FROM EXCLUDED.termination_status
 			OR sessions.parent_session_id IS DISTINCT FROM EXCLUDED.parent_session_id
+			OR sessions.parser_parent_session_id IS DISTINCT FROM EXCLUDED.parser_parent_session_id
 			OR sessions.relationship_type IS DISTINCT FROM EXCLUDED.relationship_type
 			OR sessions.tool_failure_signal_count IS DISTINCT FROM EXCLUDED.tool_failure_signal_count
 			OR sessions.tool_retry_count IS DISTINCT FROM EXCLUDED.tool_retry_count
@@ -2453,6 +2456,7 @@ func (s *Sync) pushSession(
 		sess.ParserMalformedLines,
 		sess.IsTruncated, nilStr(sess.TerminationStatus),
 		nilStr(sess.ParentSessionID),
+		nilStr(sess.ParserParentSessionID),
 		sess.RelationshipType,
 		sess.ToolFailureSignalCount, sess.ToolRetryCount,
 		sess.EditChurnCount, sess.ConsecutiveFailureMax,
@@ -2938,16 +2942,6 @@ type resolvedPostgresPin struct {
 	saved      savedPostgresPin
 	target     int
 	sourceUUID string
-}
-
-func reconcilePinnedMessages(
-	ctx context.Context, tx *sql.Tx, sessionID string,
-) error {
-	pins, err := snapshotPinnedMessages(ctx, tx, sessionID)
-	if err != nil {
-		return err
-	}
-	return restorePinnedMessages(ctx, tx, sessionID, pins)
 }
 
 func snapshotPinnedMessages(

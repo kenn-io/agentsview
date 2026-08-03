@@ -227,6 +227,96 @@ func TestOpenLegacySchemasPreservesArchiveAndRequestsResync(t *testing.T) {
 	}
 }
 
+func TestParserParentSessionIDMigrationBackfillsCurrentParent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	conn, err := sql.Open("sqlite3", makeDSN(path, false))
+	require.NoError(t, err)
+	conn.SetMaxOpenConns(1)
+
+	_, err = conn.Exec(v06LegacySchema)
+	require.NoError(t, err, "create legacy schema")
+	_, err = conn.Exec(`
+		INSERT INTO sessions (
+			id, project, machine, agent, parent_session_id
+		) VALUES (
+			'kid', 'project-a', 'local', 'claude', 'parsed-parent'
+		)`)
+	require.NoError(t, err, "insert legacy child")
+	_, err = conn.Exec(fmt.Sprintf(
+		"PRAGMA user_version = %d", dataVersion,
+	))
+	require.NoError(t, err, "set current data version")
+	require.NoError(t, conn.Close(), "close legacy database")
+
+	d, err := Open(path)
+	require.NoError(t, err, "open migrated database")
+	defer d.Close()
+
+	var got sql.NullString
+	err = d.getReader().QueryRow(`
+		SELECT parser_parent_session_id FROM sessions WHERE id = 'kid'
+	`).Scan(&got)
+	require.NoError(t, err, "query migrated parser parent")
+	require.True(t, got.Valid, "migrated parser parent must be set")
+	assert.Equal(t, "parsed-parent", got.String, "migrated parser parent")
+}
+
+func TestParserParentSessionIDMigrationRollsBackWhenBackfillFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	conn, err := sql.Open("sqlite3", makeDSN(path, false))
+	require.NoError(t, err)
+	conn.SetMaxOpenConns(1)
+
+	_, err = conn.Exec(v06LegacySchema)
+	require.NoError(t, err, "create legacy schema")
+	_, err = conn.Exec(`
+		INSERT INTO sessions (
+			id, project, machine, agent, parent_session_id
+		) VALUES (
+			'kid', 'project-a', 'local', 'claude', 'parsed-parent'
+		);
+		CREATE TRIGGER fail_parser_parent_backfill
+		BEFORE UPDATE OF parser_parent_session_id ON sessions BEGIN
+			SELECT RAISE(ABORT, 'injected parser parent backfill failure');
+		END;`)
+	require.NoError(t, err, "prepare failing legacy migration")
+	_, err = conn.Exec(fmt.Sprintf(
+		"PRAGMA user_version = %d", dataVersion,
+	))
+	require.NoError(t, err, "set current data version")
+	require.NoError(t, conn.Close(), "close legacy database")
+
+	d, err := Open(path)
+	require.ErrorContains(t, err, "injected parser parent backfill failure")
+	require.Nil(t, d)
+
+	conn, err = sql.Open("sqlite3", makeDSN(path, false))
+	require.NoError(t, err, "reopen failed migration")
+	conn.SetMaxOpenConns(1)
+	var columnCount int
+	err = conn.QueryRow(`
+		SELECT count(*) FROM pragma_table_info('sessions')
+		WHERE name = 'parser_parent_session_id'
+	`).Scan(&columnCount)
+	require.NoError(t, err, "inspect schema after failed migration")
+	assert.Zero(t, columnCount, "failed migration must roll back added column")
+	_, err = conn.Exec(`DROP TRIGGER fail_parser_parent_backfill`)
+	require.NoError(t, err, "remove injected migration failure")
+	require.NoError(t, conn.Close(), "close failed migration database")
+
+	d, err = Open(path)
+	require.NoError(t, err, "retry migration")
+	defer d.Close()
+
+	var got sql.NullString
+	err = d.getReader().QueryRow(`
+		SELECT parser_parent_session_id FROM sessions WHERE id = 'kid'
+	`).Scan(&got)
+	require.NoError(t, err, "query retried parser parent")
+	require.True(t, got.Valid, "retried parser parent must be set")
+	assert.Equal(t, "parsed-parent", got.String, "retried parser parent")
+}
+
 func TestLegacySchemaAddsArtifactImportAuthorityNonDestructively(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy.db")
 	conn, err := sql.Open("sqlite3", makeDSN(path, false))

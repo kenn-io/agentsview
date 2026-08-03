@@ -672,14 +672,14 @@ func TestPushSessionCarriesDeletionCauseInStableParameterOrder(t *testing.T) {
 		"marker", nil,
 	)
 	require.NoError(t, err)
-	require.Len(t, state.upsertArgs, 67)
+	require.Len(t, state.upsertArgs, 68)
 	assert.IsType(t, time.Time{}, state.upsertArgs[12].Value)
 	assert.IsType(t, time.Time{}, state.upsertArgs[13].Value)
 	assert.Equal(t, cause, state.upsertArgs[14].Value)
 	// session_kind sits between entrypoint and the archive-provenance
 	// parameters; it is empty when the session carries no kind marker.
-	assert.Equal(t, "", state.upsertArgs[62].Value)
-	assert.Equal(t, "[]", state.upsertArgs[66].Value)
+	assert.Equal(t, "", state.upsertArgs[63].Value)
+	assert.Equal(t, "[]", state.upsertArgs[67].Value)
 
 	query := strings.ToLower(strings.Join(strings.Fields(state.upsertQuery), " "))
 	assert.Contains(t, query,
@@ -1135,6 +1135,14 @@ func TestSessionPushFingerprintDiffers(t *testing.T) {
 			modify: func(s db.Session) db.Session {
 				ts := "tool_call_pending"
 				s.TerminationStatus = &ts
+				return s
+			},
+		},
+		{
+			name: "parser parent provenance change",
+			modify: func(s db.Session) db.Session {
+				parentID := "parser-parent"
+				s.ParserParentSessionID = &parentID
 				return s
 			},
 		},

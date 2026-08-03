@@ -68,3 +68,24 @@ func TestSessionBatchWriteFromParsedPreservesClaudeProvenance(t *testing.T) {
 	require.Len(t, result.Messages, 1)
 	assert.Equal(t, "queued", result.Messages[0].PromptSource)
 }
+
+func TestSessionBatchWriteFromParsedPreservesMessageIdentity(t *testing.T) {
+	sess := parser.ParsedSession{ID: "test-message-identity"}
+	msgs := []parser.ParsedMessage{{
+		Ordinal:          1,
+		Role:             parser.RoleUser,
+		Content:          "hidden context",
+		IsSystem:         true,
+		SourceUUID:       "entry-1:ide-context",
+		SourceParentUUID: "parent-1",
+	}}
+
+	result := sessionBatchWriteFromParsed(sess, msgs)
+
+	require.Len(t, result.Messages, 1)
+	assert.True(t, result.Messages[0].IsSystem)
+	assert.Equal(t, "entry-1:ide-context", result.Messages[0].SourceUUID)
+	assert.Equal(t, "parent-1", result.Messages[0].SourceParentUUID)
+	assert.True(t, result.PreserveLegacyPinsByOrdinal,
+		"explicit re-uploads preserve existing UUID-less pins by ordinal")
+}

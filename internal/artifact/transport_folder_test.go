@@ -577,7 +577,7 @@ func TestFolderTransportQuarantinesCompleteCorruptWireAndContinues(t *testing.T)
 		testFolderPublishOrigin,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, ExchangeResult{Received: 1}, result)
+	assert.Equal(t, ExchangeResult{Received: 1, Quarantined: 1}, result)
 	assert.NoFileExists(t, corruptPath)
 	quarantined, err := filepath.Glob(corruptPath + folderCorruptSeparator + "*")
 	require.NoError(t, err)
@@ -632,7 +632,7 @@ func TestFolderTransportQuarantineLetsFreshConsumerAdvanceWhenArtifactExistsLoca
 		t.Context(), store, testFolderPublishOrigin,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, ExchangeResult{Received: 1}, result)
+	assert.Equal(t, ExchangeResult{Received: 1, Quarantined: 1}, result)
 	assertArtifactBody(t, store, ref, localBody)
 	require.NoError(t, transport.Close())
 
@@ -693,7 +693,7 @@ func TestFolderTransportWritesRejectionBeforeQuarantiningWire(t *testing.T) {
 	transport.quarantineEntry = nil
 	result, err := transport.Exchange(t.Context(), store, testFolderPublishOrigin)
 	require.NoError(t, err)
-	assert.Equal(t, ExchangeResult{}, result)
+	assert.Equal(t, ExchangeResult{Quarantined: 1}, result)
 	assert.NoFileExists(t, wirePath)
 	quarantined, err := filepath.Glob(wirePath + folderCorruptSeparator + "*")
 	require.NoError(t, err)
@@ -855,6 +855,8 @@ func TestFolderTransportRejectsSymlinkedWireEntry(t *testing.T) {
 }
 
 func TestFolderTransportPullExchangeWorkStaysBounded(t *testing.T) {
+	t.Parallel()
+
 	target := t.TempDir()
 	opened, err := OpenFolderTransport(target, FolderTransportOptions{})
 	require.NoError(t, err)
@@ -889,6 +891,8 @@ func TestFolderTransportPullExchangeWorkStaysBounded(t *testing.T) {
 }
 
 func TestFolderTransportPullResumesWithinObjectBudget(t *testing.T) {
+	t.Parallel()
+
 	target := t.TempDir()
 	state := &testFolderTransportStateStore{}
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{
@@ -1031,6 +1035,8 @@ func TestFolderTransportPushesWireObjectsBeforeCheckpointAndRetriesUnchanged(
 func TestFolderTransportDirectorySyncFailureStopsPublicationAuthority(
 	t *testing.T,
 ) {
+	t.Parallel()
+
 	body := []byte("directory-sync-segment")
 	ref := testContentRef(
 		t,
@@ -1160,6 +1166,8 @@ func TestFolderTransportDirectorySyncFailureStopsPublicationAuthority(
 }
 
 func TestFolderTransportRetrySyncsVisibleObjectBeforeJournal(t *testing.T) {
+	t.Parallel()
+
 	target := t.TempDir()
 	opened, err := OpenFolderTransport(target, FolderTransportOptions{})
 	require.NoError(t, err)
@@ -1227,6 +1235,8 @@ func TestFolderTransportRetrySyncsVisibleObjectBeforeJournal(t *testing.T) {
 }
 
 func TestFolderTransportDirectorySyncFailureStopsSubdirectoryUse(t *testing.T) {
+	t.Parallel()
+
 	target := t.TempDir()
 	opened, err := OpenFolderTransport(target, FolderTransportOptions{})
 	require.NoError(t, err)
@@ -1482,6 +1492,8 @@ func TestFolderTransportQuarantinePreservesDifferentReplacementIdentity(
 }
 
 func TestFolderTransportPushExchangeWorkStaysBounded(t *testing.T) {
+	t.Parallel()
+
 	target := t.TempDir()
 	opened, err := OpenFolderTransport(target, FolderTransportOptions{})
 	require.NoError(t, err)
@@ -1522,6 +1534,8 @@ func TestFolderTransportPushExchangeWorkStaysBounded(t *testing.T) {
 }
 
 func TestFolderTransportPushSharesLimitsAcrossKinds(t *testing.T) {
+	t.Parallel()
+
 	segmentBody := []byte("segment-fills-the-exchange-budget")
 	tests := []struct {
 		name       string
@@ -1579,6 +1593,8 @@ func TestFolderTransportPushSharesLimitsAcrossKinds(t *testing.T) {
 }
 
 func TestFolderTransportExchangeResumesWithinObjectBudget(t *testing.T) {
+	t.Parallel()
+
 	target := t.TempDir()
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{
 		MaxObjects: 2,
@@ -1625,6 +1641,8 @@ func TestFolderTransportExchangeResumesWithinObjectBudget(t *testing.T) {
 }
 
 func TestFolderTransportExchangeCursorSurvivesReopen(t *testing.T) {
+	t.Parallel()
+
 	target := t.TempDir()
 	state := &testFolderTransportStateStore{}
 	store := newTestArtifactStore(t)
@@ -1658,6 +1676,8 @@ func TestFolderTransportExchangeCursorSurvivesReopen(t *testing.T) {
 }
 
 func TestFolderTransportRecoversJournalEventBeforeHeadAdvance(t *testing.T) {
+	t.Parallel()
+
 	target := t.TempDir()
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
 	require.NoError(t, err)

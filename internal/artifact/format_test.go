@@ -11,6 +11,8 @@ import (
 )
 
 func TestCanonicalCheckpointGolden(t *testing.T) {
+	t.Parallel()
+
 	cp := checkpoint{
 		Version:  checkpointFormatVersion,
 		Origin:   "laptop-a1b2c3",
@@ -32,6 +34,8 @@ func TestCanonicalCheckpointGolden(t *testing.T) {
 }
 
 func TestCanonicalManifestGolden(t *testing.T) {
+	t.Parallel()
+
 	ordinal := 2
 	parent := "parent-1"
 	name := "Fixture"
@@ -104,6 +108,8 @@ func TestCanonicalManifestGolden(t *testing.T) {
 }
 
 func TestDecodeManifestRejectsUnsupportedOlderVersion(t *testing.T) {
+	t.Parallel()
+
 	data := []byte(`{
 		"v": 1,
 		"origin": "laptop-a1b2c3",
@@ -123,6 +129,8 @@ func TestDecodeManifestRejectsUnsupportedOlderVersion(t *testing.T) {
 }
 
 func TestDecodeManifestAcceptsPriorVersionWithoutSessionKind(t *testing.T) {
+	t.Parallel()
+
 	data := []byte(`{
 		"v": 2,
 		"origin": "laptop-a1b2c3",
@@ -144,6 +152,8 @@ func TestDecodeManifestAcceptsPriorVersionWithoutSessionKind(t *testing.T) {
 }
 
 func TestDecodeSegmentAcceptsPriorVersionWithoutPromptSource(t *testing.T) {
+	t.Parallel()
+
 	data := []byte("{\"content\":\"hello\",\"ordinal\":0,\"role\":\"user\",\"v\":1}\n")
 
 	msgs, err := decodeSegmentWithLimits(data, productionArtifactLimits())
@@ -154,6 +164,8 @@ func TestDecodeSegmentAcceptsPriorVersionWithoutPromptSource(t *testing.T) {
 }
 
 func TestCanonicalMessageSegmentGolden(t *testing.T) {
+	t.Parallel()
+
 	msgs := []db.Message{
 		{
 			ID:               99,
@@ -218,6 +230,8 @@ func TestCanonicalMessageSegmentGolden(t *testing.T) {
 }
 
 func TestEncodeSegmentPreservesPromptSource(t *testing.T) {
+	t.Parallel()
+
 	msgs := []db.Message{
 		{
 			ID:            1,
@@ -244,6 +258,8 @@ func TestEncodeSegmentPreservesPromptSource(t *testing.T) {
 }
 
 func TestCanonicalMetadataEventGolden(t *testing.T) {
+	t.Parallel()
+
 	value := json.RawMessage(`{"display_name":"Renamed session"}`)
 	note := "remember this"
 	event := metadataEvent{

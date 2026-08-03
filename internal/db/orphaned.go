@@ -362,8 +362,23 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 			INSERT OR REPLACE INTO main.pg_sync_state (key, value)
 			SELECT key, value FROM old_db.pg_sync_state
 			WHERE key = 'pg_push_marker_id'
-			   OR key LIKE 'artifact\_%' ESCAPE '\'`); err != nil {
+			   OR key LIKE 'artifact\_%' ESCAPE '\'
+			   OR key = ?`, subagentParentRepairQueueStateKey); err != nil {
 			return fmt.Errorf("copying sync state: %w", err)
+		}
+	}
+	if oldDBHasTable(ctx, tx, "subagent_parent_repair_queue") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT OR IGNORE INTO main.subagent_parent_repair_queue (session_id)
+			SELECT session_id FROM old_db.subagent_parent_repair_queue`); err != nil {
+			return fmt.Errorf("copying subagent parent repair queue: %w", err)
+		}
+	}
+	if oldDBHasTable(ctx, tx, "subagent_parent_cleanup_queue") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT OR IGNORE INTO main.subagent_parent_cleanup_queue (session_id)
+			SELECT session_id FROM old_db.subagent_parent_cleanup_queue`); err != nil {
+			return fmt.Errorf("copying subagent parent cleanup queue: %w", err)
 		}
 	}
 
@@ -1566,6 +1581,9 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 		"file_mtime", "file_hash", "parent_session_id",
 		"relationship_type",
 	)
+	if oldDBHasColumn(ctx, tx, "sessions", "parser_parent_session_id") {
+		cols = append(cols, "parser_parent_session_id")
+	}
 	for _, c := range []string{"agent_label", "entrypoint", "session_kind"} {
 		if oldDBHasColumn(ctx, tx, "sessions", c) {
 			cols = append(cols, c)

@@ -937,8 +937,8 @@ func pgFloorNegativeTokens(v int) int {
 	return v
 }
 
-// pgUsageLookupModel mirrors internal/db usage pricing: date-ambiguous Kimi
-// aliases resolve according to the usage row timestamp.
+// pgUsageLookupModel mirrors internal/db usage pricing: Kimi runtime aliases
+// resolve to their fixed or timestamp-selected canonical model.
 func pgUsageLookupModel(model string, ts sql.NullTime) string {
 	var timestamp time.Time
 	if ts.Valid {

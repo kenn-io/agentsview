@@ -1260,7 +1260,7 @@ func replaceSessionMessagesTx(
 		}
 	}
 
-	return restorePinsTx(tx, sessionID, pins)
+	return restorePinsTx(tx, sessionID, pins, false)
 }
 
 func bumpTranscriptRevisionTx(tx *sql.Tx, sessionID string) error {
@@ -1604,6 +1604,7 @@ func savePinsTx(tx *sql.Tx, sessionID string) ([]savedPin, error) {
 
 func restorePinsTx(
 	tx *sql.Tx, sessionID string, pins []savedPin,
+	preserveLegacyByOrdinal bool,
 ) error {
 	// Re-attach saved pins only when the old and new message identities
 	// are both unambiguous. A unique source_uuid may move to another
@@ -1675,6 +1676,22 @@ func restorePinsTx(
 				return fmt.Errorf(
 					"restoring ambiguous pin uuid=%s ord=%d: %w",
 					sp.sourceUUID, sp.ordinal, err,
+				)
+			}
+			continue
+		}
+		if preserveLegacyByOrdinal {
+			if _, err := tx.Exec(`
+				INSERT OR IGNORE INTO pinned_messages
+					(session_id, message_id, ordinal, note, created_at)
+				SELECT ?, m.id, m.ordinal, ?, ?
+				FROM messages m
+				WHERE m.session_id = ? AND m.ordinal = ?`,
+				sessionID, sp.note, sp.createdAt,
+				sessionID, sp.ordinal,
+			); err != nil {
+				return fmt.Errorf(
+					"restoring legacy pin ord=%d: %w", sp.ordinal, err,
 				)
 			}
 			continue

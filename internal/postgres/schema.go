@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     message_count      INT NOT NULL DEFAULT 0,
     user_message_count INT NOT NULL DEFAULT 0,
     parent_session_id  TEXT,
+    parser_parent_session_id TEXT,
     relationship_type  TEXT NOT NULL DEFAULT '',
     total_output_tokens INT NOT NULL DEFAULT 0,
     peak_context_tokens INT NOT NULL DEFAULT 0,
@@ -797,6 +798,11 @@ func EnsureSchema(
 			"sessions", "deletion_cause",
 			`deletion_cause TEXT`,
 			"adding sessions.deletion_cause",
+		},
+		{
+			"sessions", "parser_parent_session_id",
+			`parser_parent_session_id TEXT`,
+			"adding sessions.parser_parent_session_id",
 		},
 		{
 			"sessions", "total_output_tokens",

@@ -427,7 +427,7 @@ func TestUnwatchedPollCooldownIsExactlyOneInterval(t *testing.T) {
 		return ch
 	}
 
-	firstCallDone := make(chan struct{})
+	firstCallDone := make(chan struct{}, 1)
 	var callMu sync.Mutex
 	var callCount int
 	syncer := &manualProviderPollSyncer{

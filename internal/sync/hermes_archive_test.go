@@ -482,7 +482,10 @@ func TestReconcileHermesDefaultSessionsRootTombstonesRemovedStateMember(t *testi
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentHermes: {sessionsDir},
 		},
-		Machine: "local",
+		SourceMachines: map[parser.AgentType]map[string]string{
+			parser.AgentHermes: {sessionsDir: "archivebox"},
+		},
+		Machine: "localbox",
 	})
 	t.Cleanup(engine.Close)
 
@@ -492,6 +495,10 @@ func TestReconcileHermesDefaultSessionsRootTombstonesRemovedStateMember(t *testi
 	stored, err := database.GetSession(t.Context(), "hermes:child")
 	require.NoError(t, err)
 	require.NotNil(t, stored, "initial reconciliation must store the state member")
+	assert.Equal(t, "archivebox", stored.Machine)
+	require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
+		t.Context(), []string{sessionsDir}, false,
+	))
 
 	conn, err := sql.Open("sqlite3", stateDB)
 	require.NoError(t, err)
@@ -558,6 +565,44 @@ func TestReconcileHermesScopedArchiveTombstonesRemovedStateMember(
 	require.NoError(t, err)
 	assert.NotNil(t, survivor,
 		"the unrequested root's sessions are untouched")
+}
+
+func TestReconcileHermesLabeledStateDBRootTombstonesRemovedMember(t *testing.T) {
+	root := t.TempDir()
+	stateDB := writeHermesArchiveStateDB(t, root)
+
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentHermes: {stateDB},
+		},
+		SourceMachines: map[parser.AgentType]map[string]string{
+			parser.AgentHermes: {stateDB: "archivebox"},
+		},
+		Machine: "localbox",
+	})
+	t.Cleanup(engine.Close)
+
+	require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
+		t.Context(), []string{root}, false,
+	))
+	stored, err := database.GetSession(t.Context(), "hermes:child")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "archivebox", stored.Machine)
+
+	conn, err := sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), "DELETE FROM sessions WHERE id = 'child'")
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
+		t.Context(), []string{root}, false,
+	))
+	stored, err = database.GetSession(t.Context(), "hermes:child")
+	require.NoError(t, err)
+	assert.Nil(t, stored)
 }
 
 // Streamed discovery must open state.db a bounded number of times per pass:

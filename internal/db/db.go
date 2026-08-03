@@ -364,12 +364,16 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // (79: Claude launch/prompt provenance. Re-parsing populates the new
 // sessions.session_kind and messages.prompt_source columns from top-level
 // sessionKind and promptSource fields on existing Claude rows.)
-// (80: Claude Code IDE context wrappers prepended onto a real prompt in
+// (80: Kimi Code tool-step usage reparse. Protocol-1.4 transcripts can persist
+// tool.result before step.end, so existing Kimi and Kimi Work rows may omit
+// per-message usage for tool-calling steps. Re-parsing attaches the trailing
+// step usage to the assistant tool-call message.)
+// (81: Claude Code IDE context wrappers prepended onto a real prompt in
 // the same entry are now split into a hidden system-metadata message plus
 // the real prompt, instead of leaving the raw wrapper in first_message and
 // the visible transcript. Existing rows need re-parsing so first_message
 // and message content drop the leading markup.)
-const dataVersion = 80
+const dataVersion = 81
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -1769,6 +1773,14 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE sessions ADD COLUMN display_name TEXT",
 		},
 		{
+			// Preserve the current parent exactly once when the private parser
+			// provenance column is introduced. Running the UPDATE on every open
+			// would let a later linker-derived effective parent overwrite it.
+			"sessions", "parser_parent_session_id",
+			"ALTER TABLE sessions ADD COLUMN parser_parent_session_id TEXT;" +
+				" UPDATE sessions SET parser_parent_session_id = parent_session_id",
+		},
+		{
 			"sessions", "session_name",
 			"ALTER TABLE sessions ADD COLUMN session_name TEXT",
 		},
@@ -2165,11 +2177,26 @@ func schemaColumnMigrations() []schemaColumnMigration {
 	}
 }
 
-func applySchemaColumnMigrations(
-	queryRow func(string, ...any) rowScanner,
-	exec func(string, ...any) (sql.Result, error),
-) error {
-	return applyColumnMigrations(schemaColumnMigrations(), queryRow, exec)
+func applySchemaColumnMigrations(w *writerHandle) error {
+	tx, err := w.BeginTx(context.Background(), nil)
+	if err != nil {
+		return fmt.Errorf("starting column migration transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := applyColumnMigrations(
+		schemaColumnMigrations(),
+		func(query string, args ...any) rowScanner {
+			return tx.QueryRow(query, args...)
+		},
+		tx.Exec,
+	); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing column migrations: %w", err)
+	}
+	return nil
 }
 
 func applyColumnMigrations(
@@ -2416,7 +2443,7 @@ func (db *DB) migrateColumns() error {
 	if _, err := w.Exec(artifactSessionQueueTriggerDropsSQL); err != nil {
 		return fmt.Errorf("dropping artifact session queue triggers: %w", err)
 	}
-	if err := applySchemaColumnMigrations(w.QueryRow, w.Exec); err != nil {
+	if err := applySchemaColumnMigrations(w); err != nil {
 		return err
 	}
 	if _, err := w.Exec(artifactSessionQueueTriggerCreatesSQL); err != nil {

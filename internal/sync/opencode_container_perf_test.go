@@ -34,13 +34,15 @@ func TestOpenCodeSharedContainerChangeIsPerSessionBounded(t *testing.T) {
 			env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 			oc := createOpenCodeDB(t, env.opencodeDir)
 			oc.addProject(t, "proj", "/home/user/code/app")
-			for i := range n {
-				seedOpenCodeSQLiteTextSession(
-					t, oc, "proj", fmt.Sprintf("ses%05d", i),
-					1779012000000, 1779012030000,
-					"prompt", "answer",
-				)
-			}
+			oc.inTransaction(t, func(oc *openCodeTestDB) {
+				for i := range n {
+					seedOpenCodeSQLiteTextSession(
+						t, oc, "proj", fmt.Sprintf("ses%05d", i),
+						1779012000000, 1779012030000,
+						"prompt", "answer",
+					)
+				}
+			})
 			require.Equal(t, n,
 				env.engine.SyncAll(context.Background(), nil).Synced)
 
@@ -88,13 +90,15 @@ func TestOpenCodeWatcherEventIsWatermarkBounded(t *testing.T) {
 			env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 			oc := createOpenCodeDB(t, env.opencodeDir)
 			oc.addProject(t, "proj", "/home/user/code/app")
-			for i := range n {
-				seedOpenCodeSQLiteTextSession(
-					t, oc, "proj", fmt.Sprintf("ses%05d", i),
-					1779012000000, 1779012030000,
-					"prompt", "answer",
-				)
-			}
+			oc.inTransaction(t, func(oc *openCodeTestDB) {
+				for i := range n {
+					seedOpenCodeSQLiteTextSession(
+						t, oc, "proj", fmt.Sprintf("ses%05d", i),
+						1779012000000, 1779012030000,
+						"prompt", "answer",
+					)
+				}
+			})
 			require.Equal(t, n,
 				env.engine.SyncAll(context.Background(), nil).Synced)
 

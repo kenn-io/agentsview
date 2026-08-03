@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     local_modified_at TEXT,
     transcript_revision TEXT NOT NULL DEFAULT '0',
     parent_session_id TEXT,
+    parser_parent_session_id TEXT,
     relationship_type TEXT NOT NULL DEFAULT '',
     total_output_tokens INTEGER NOT NULL DEFAULT 0,
     peak_context_tokens INTEGER NOT NULL DEFAULT 0,
@@ -1114,6 +1115,20 @@ CREATE TABLE IF NOT EXISTS pg_sync_state (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- Durable child IDs awaiting spawn-edge hierarchy reconciliation. One row per
+-- child keeps queue additions O(changed children) instead of rewriting an
+-- accumulated JSON value on every source processed by bulk sync.
+CREATE TABLE IF NOT EXISTS subagent_parent_repair_queue (
+    session_id TEXT PRIMARY KEY
+) WITHOUT ROWID;
+
+-- Subset of queued hierarchy repairs whose pre-write spawn edge may have been
+-- removed. Only these captured former children are eligible for destructive
+-- dangling-parent cleanup; ordinary changed-session seeds are relink-only.
+CREATE TABLE IF NOT EXISTS subagent_parent_cleanup_queue (
+    session_id TEXT PRIMARY KEY
+) WITHOUT ROWID;
 
 -- Model pricing for cost calculation
 CREATE TABLE IF NOT EXISTS model_pricing (

@@ -23,6 +23,8 @@ import (
 const wireCodecTestOrigin = "contract-a1b2c3"
 
 func TestWireRefMappings(t *testing.T) {
+	t.Parallel()
+
 	hash := strings.Repeat("a", 64)
 	tests := []struct {
 		name          string
@@ -84,6 +86,8 @@ func TestWireRefMappings(t *testing.T) {
 }
 
 func TestWireRefRejectsInvalidOrNonWireNames(t *testing.T) {
+	t.Parallel()
+
 	hash := strings.Repeat("a", 64)
 	tests := []struct {
 		name   string
@@ -110,6 +114,8 @@ func TestWireRefRejectsInvalidOrNonWireNames(t *testing.T) {
 }
 
 func TestWireCodecRoundTripsIdentityAndZstd(t *testing.T) {
+	t.Parallel()
+
 	hash := strings.Repeat("a", 64)
 	tests := []struct {
 		name string
@@ -176,6 +182,8 @@ func (r *failingWireReader) Read(p []byte) (int, error) {
 }
 
 func TestWireDecodePreservesSourceReadErrors(t *testing.T) {
+	t.Parallel()
+
 	hash := strings.Repeat("a", 64)
 	tests := []struct {
 		name string
@@ -216,6 +224,8 @@ func TestWireDecodePreservesSourceReadErrors(t *testing.T) {
 }
 
 func TestWireDecodeClassifiesCleanTruncationAsCorrupt(t *testing.T) {
+	t.Parallel()
+
 	hash := strings.Repeat("a", 64)
 	ref := Ref{Origin: wireCodecTestOrigin, Kind: KindManifests, Name: hash + ".json"}
 	wireRef, err := ToWireRef(ref)
@@ -234,6 +244,8 @@ func TestWireDecodeClassifiesCleanTruncationAsCorrupt(t *testing.T) {
 }
 
 func TestWireDecodePreservesDestinationWriteErrors(t *testing.T) {
+	t.Parallel()
+
 	hash := strings.Repeat("a", 64)
 	tests := []struct {
 		name string
@@ -270,6 +282,8 @@ func TestWireDecodePreservesDestinationWriteErrors(t *testing.T) {
 }
 
 func TestWireZstdEncodingIsDeterministic(t *testing.T) {
+	t.Parallel()
+
 	ref := Ref{
 		Origin: wireCodecTestOrigin,
 		Kind:   KindSegments,
@@ -285,6 +299,8 @@ func TestWireZstdEncodingIsDeterministic(t *testing.T) {
 }
 
 func TestWireDecodeEnforcesEncodedAndDecodedLimits(t *testing.T) {
+	t.Parallel()
+
 	rawRef := Ref{Origin: wireCodecTestOrigin, Kind: KindRaw, Name: strings.Repeat("a", 64)}
 	rawWire, err := ToWireRef(rawRef)
 	require.NoError(t, err)
@@ -334,6 +350,8 @@ func TestWireDecodeEnforcesEncodedAndDecodedLimits(t *testing.T) {
 }
 
 func TestWireDecodeRejectsLargeZstdWindow(t *testing.T) {
+	t.Parallel()
+
 	body := bytes.Repeat([]byte("windowed-record\n"), 700_000)
 	var encoded bytes.Buffer
 	enc, err := zstd.NewWriter(
@@ -361,6 +379,8 @@ func TestWireDecodeRejectsLargeZstdWindow(t *testing.T) {
 }
 
 func TestWireDecodeRejectsCorruptAndTruncatedZstd(t *testing.T) {
+	t.Parallel()
+
 	ref := Ref{
 		Origin: wireCodecTestOrigin,
 		Kind:   KindManifests,
@@ -392,6 +412,8 @@ func TestWireDecodeRejectsCorruptAndTruncatedZstd(t *testing.T) {
 }
 
 func TestWireDecodeRejectsNonPositiveLimits(t *testing.T) {
+	t.Parallel()
+
 	wireRef := requireWireRef(t, Ref{
 		Origin: wireCodecTestOrigin,
 		Kind:   KindRaw,
@@ -443,6 +465,8 @@ func TestWireDecodeRejectsNonPositiveLimits(t *testing.T) {
 }
 
 func TestWireCodecHonorsCancellation(t *testing.T) {
+	t.Parallel()
+
 	ref := Ref{
 		Origin: wireCodecTestOrigin,
 		Kind:   KindSegments,
@@ -514,6 +538,8 @@ func TestWireCodecHonorsCancellation(t *testing.T) {
 }
 
 func TestWireCodecDetectsCancellationDuringFinalSuccessfulWrite(t *testing.T) {
+	t.Parallel()
+
 	body := []byte("one final successful destination write")
 	rawRef := Ref{
 		Origin: wireCodecTestOrigin,
@@ -586,6 +612,8 @@ func TestWireCodecDetectsCancellationDuringFinalSuccessfulWrite(t *testing.T) {
 }
 
 func TestWireCodecStreamsMultiMegabyteArtifactsWithBoundedBuffers(t *testing.T) {
+	t.Parallel()
+
 	const size = int64(6 << 20)
 	ref := Ref{
 		Origin: wireCodecTestOrigin,
@@ -623,6 +651,7 @@ func TestWireCodecStreamsMultiMegabyteArtifactsWithBoundedBuffers(t *testing.T) 
 }
 
 func TestWireCodecAllocatedBytesStayBoundedAsArtifactsGrow(t *testing.T) {
+	// Serial: Benchmark reads process-global allocation statistics.
 	const (
 		smallSize = int64(32 << 10)
 		largeSize = int64(12 << 20)

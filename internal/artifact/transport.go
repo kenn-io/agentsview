@@ -20,9 +20,10 @@ type Transport interface {
 
 // ExchangeResult reports the logical effects of one transport exchange.
 type ExchangeResult struct {
-	Received  int
-	Published int
-	More      bool
+	Received    int
+	Published   int
+	Quarantined int
+	More        bool
 }
 
 // FolderTransportOptions configures a bounded folder exchange. RepairPublished

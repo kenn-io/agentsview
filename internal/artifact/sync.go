@@ -149,6 +149,7 @@ func SyncWithRepository(
 	}
 	result.ReceivedArtifacts = exchanged.Received
 	result.PublishedArtifacts = exchanged.Published
+	result.Quarantined += exchanged.Quarantined
 
 	importMore, err := drainArtifactSyncImports(
 		ctx,

@@ -164,9 +164,14 @@ func (e *testEnv) updateSessionProject(
 }
 
 // openCodeTestDB manages an OpenCode SQLite database for tests.
+type openCodeTestExecer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
 type openCodeTestDB struct {
 	path string
 	db   *sql.DB
+	exec openCodeTestExecer
 }
 
 type kiroSQLiteTestDB struct {
@@ -433,8 +438,25 @@ func writeLegacyKiroSession(
 
 func (oc *openCodeTestDB) mustExec(t *testing.T, msg, query string, args ...any) {
 	t.Helper()
-	_, err := oc.db.Exec(query, args...)
+	executor := oc.exec
+	if executor == nil {
+		executor = oc.db
+	}
+	_, err := executor.Exec(query, args...)
 	require.NoError(t, err, msg)
+}
+
+func (oc *openCodeTestDB) inTransaction(
+	t *testing.T,
+	seed func(*openCodeTestDB),
+) {
+	t.Helper()
+	tx, err := oc.db.Begin()
+	require.NoError(t, err, "begin OpenCode seed transaction")
+	defer func() { _ = tx.Rollback() }()
+
+	seed(&openCodeTestDB{path: oc.path, db: oc.db, exec: tx})
+	require.NoError(t, tx.Commit(), "commit OpenCode seed transaction")
 }
 
 func (oc *openCodeTestDB) addProject(

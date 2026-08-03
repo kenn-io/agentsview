@@ -20,6 +20,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/pathutil"
 	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/timeutil"
@@ -65,13 +66,20 @@ type passEpilogueEligibility struct {
 }
 
 type reconciliationBaselineTracker struct {
-	sources     map[db.SessionSourcePath]struct{}
+	sources     map[machineSessionSource]struct{}
 	cacheWrites map[string]skipCacheWrite
+}
+
+type machineSessionSource struct {
+	// Machine is an exact stored ownership key. Empty remains valid for
+	// sessions written before machine attribution was introduced.
+	Machine string
+	Source  db.SessionSourcePath
 }
 
 func newReconciliationBaselineTracker() *reconciliationBaselineTracker {
 	return &reconciliationBaselineTracker{
-		sources:     make(map[db.SessionSourcePath]struct{}, reconciliationPageSize),
+		sources:     make(map[machineSessionSource]struct{}, reconciliationPageSize),
 		cacheWrites: make(map[string]skipCacheWrite),
 	}
 }
@@ -109,16 +117,16 @@ func reconciliationBaselineTrackerFor(
 }
 
 func (tracker *reconciliationBaselineTracker) add(
-	source db.SessionSourcePath,
+	source machineSessionSource,
 ) {
-	if source.Agent == "" || source.FilePath == "" {
+	if source.Source.Agent == "" || source.Source.FilePath == "" {
 		return
 	}
 	tracker.sources[source] = struct{}{}
 }
 
-func (tracker *reconciliationBaselineTracker) list() []db.SessionSourcePath {
-	sources := make([]db.SessionSourcePath, 0, len(tracker.sources))
+func (tracker *reconciliationBaselineTracker) list() []machineSessionSource {
+	sources := make([]machineSessionSource, 0, len(tracker.sources))
 	for source := range tracker.sources {
 		sources = append(sources, source)
 	}
@@ -249,6 +257,7 @@ type Emitter interface {
 // engine, replacing per-agent positional parameters.
 type EngineConfig struct {
 	AgentDirs               map[parser.AgentType][]string
+	SourceMachines          map[parser.AgentType]map[string]string
 	Machine                 string
 	BlockedResultCategories []string
 	// IncludeCwdPrefixes, when non-empty, restricts ingestion to
@@ -302,6 +311,7 @@ type Engine struct {
 	// e.db points at the fresh one; nil means e.db is the archive.
 	archiveStore            db.Store
 	agentDirs               map[parser.AgentType][]string
+	sourceMachines          map[parser.AgentType]map[string]string
 	machine                 string
 	blockedResultCategories map[string]bool
 	cwdFilter               cwdPrefixFilter
@@ -352,6 +362,11 @@ type Engine struct {
 	// writeBatchOverride is a test seam for exercising reconciliation archive
 	// write failures after discovery and parse have succeeded.
 	writeBatchOverride func([]pendingWrite, syncWriteMode, bool) (int, int, int, int)
+	// sourceAttributionLookupOverride observes or replaces bounded source
+	// attribution queries in sync tests.
+	sourceAttributionLookupOverride func(
+		context.Context, []db.SessionSourcePath,
+	) ([]db.SessionSourceAttribution, error)
 	// workerCountOverride is a test seam for exercising the production worker
 	// floor and cap independently of the host CPU count.
 	workerCountOverride  int
@@ -520,6 +535,10 @@ func NewEngine(
 	for k, v := range cfg.AgentDirs {
 		dirs[k] = append([]string(nil), v...)
 	}
+	sourceMachines := make(map[parser.AgentType]map[string]string, len(cfg.SourceMachines))
+	for agent, roots := range cfg.SourceMachines {
+		sourceMachines[agent] = maps.Clone(roots)
+	}
 	providerFactories := parser.ProviderFactories()
 	if cfg.ProviderFactories != nil {
 		providerFactories = cfg.ProviderFactories
@@ -534,6 +553,7 @@ func NewEngine(
 		stat:                    os.Stat,
 		lstat:                   os.Lstat,
 		agentDirs:               dirs,
+		sourceMachines:          sourceMachines,
 		machine:                 cfg.Machine,
 		blockedResultCategories: blockedCategorySet(cfg.BlockedResultCategories),
 		cwdFilter:               newCwdPrefixFilter(cfg.IncludeCwdPrefixes),
@@ -586,6 +606,115 @@ func NewEngine(
 		},
 	)
 	return e
+}
+
+func (e *Engine) machineForPath(agent parser.AgentType, path string) string {
+	if machine, ok := e.configuredMachineForPath(agent, path); ok {
+		return machine
+	}
+	return e.machine
+}
+
+func (e *Engine) configuredMachineForPath(
+	agent parser.AgentType, path string,
+) (string, bool) {
+	path, err := pathutil.LocalComparisonKey(path)
+	if err != nil {
+		return "", false
+	}
+	bestRoot := ""
+	machine := ""
+	for root, candidate := range e.sourceMachines[agent] {
+		cleanRoot, err := pathutil.LocalComparisonKey(root)
+		if err != nil {
+			continue
+		}
+		if !pathWithinRoot(path, cleanRoot) || len(cleanRoot) <= len(bestRoot) {
+			continue
+		}
+		bestRoot = cleanRoot
+		machine = candidate
+	}
+	return machine, bestRoot != ""
+}
+
+func (e *Engine) machineForFile(file parser.DiscoveredFile) string {
+	if file.Machine != "" {
+		return file.Machine
+	}
+	return e.machineForPath(file.Agent, file.Path)
+}
+
+func (e *Engine) machineForProviderSource(
+	agent parser.AgentType, source parser.SourceRef, fallbackPath string,
+) string {
+	if source.ConfiguredRoot != "" {
+		return e.machineForPath(agent, source.ConfiguredRoot)
+	}
+	return e.machineForPath(agent, fallbackPath)
+}
+
+// reconciliationOwnershipMachines returns the distinct machines whose stored
+// ownership rows can fall inside roots. A row keeps the machine it was admitted
+// under, so a root that has since been relabeled still needs its older machine
+// queried or its deletions would never be discovered.
+func (e *Engine) reconciliationOwnershipMachines(
+	agent parser.AgentType, roots []string, archiveMachines []string,
+) []string {
+	seen := make(map[string]bool, len(roots)+len(archiveMachines)+1)
+	machines := make([]string, 0, len(roots)+len(archiveMachines)+1)
+	add := func(machine string) {
+		if seen[machine] {
+			return
+		}
+		seen[machine] = true
+		machines = append(machines, machine)
+	}
+	configured := make([]string, 0, len(e.sourceMachines[agent]))
+	for root := range e.sourceMachines[agent] {
+		configured = append(configured, root)
+	}
+	// Map iteration is unordered; sort so the query sequence is deterministic.
+	slices.Sort(configured)
+	for _, root := range roots {
+		add(e.machineForPath(agent, root))
+		clean, err := pathutil.LocalComparisonKey(root)
+		if err != nil {
+			continue
+		}
+		// A reconciliation scope is a watched directory, which may sit above
+		// (or below) the labeled root itself — a container file such as
+		// Hermes's state.db is configured directly but watched via its parent.
+		for _, cfg := range configured {
+			cleanCfg, err := pathutil.LocalComparisonKey(cfg)
+			if err != nil {
+				continue
+			}
+			if pathWithinRoot(cleanCfg, clean) || pathWithinRoot(clean, cleanCfg) {
+				add(e.sourceMachines[agent][cfg])
+			}
+		}
+	}
+	// Unlabeled roots, and rows admitted before a label existed, are stored
+	// under the local machine, so it always stays in the query set.
+	add(e.machine)
+	// A label the user has since edited away is still stored on the rows it
+	// admitted, and is no longer derivable from configuration. The archive's
+	// own machine list is small and closes that gap; each entry still queries
+	// through the (machine, agent, file_path) ownership index.
+	for _, machine := range archiveMachines {
+		add(machine)
+	}
+	return machines
+}
+
+func pathWithinRoot(path, root string) bool {
+	root = filepath.Clean(root)
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // Close flushes any pending debounced signal recomputes and stops
@@ -831,6 +960,7 @@ type syncJob struct {
 	processResult
 	agent          parser.AgentType
 	path           string
+	machine        string
 	retentionLease *parseRetentionLease
 }
 
@@ -1024,6 +1154,9 @@ func mergeChangedPathDiscoveredFile(
 	current.ProviderProcess = current.ProviderProcess || next.ProviderProcess
 	if current.Project == "" {
 		current.Project = next.Project
+	}
+	if current.Machine == "" {
+		current.Machine = next.Machine
 	}
 	if current.ProviderSource == nil && next.ProviderSource != nil {
 		current.ProviderSource = next.ProviderSource
@@ -1230,6 +1363,11 @@ func (e *Engine) classifyProviderChangedPath(
 					ProviderSource:  &sourceCopy,
 					ProviderProcess: mode == parser.ProviderMigrationProviderAuthoritative,
 				}
+				if !isS3SourcePath(sourcePath) {
+					discovered.Machine = e.machineForProviderSource(
+						agent, source, sourcePath,
+					)
+				}
 				// A watcher event names a concrete change even when the
 				// session's stat signature cannot see it (a same-size,
 				// same-mtime child rewrite), so the storage gate must
@@ -1258,11 +1396,13 @@ func (e *Engine) expandOmnigentInheritedMetadataSources(
 	}
 	agent := provider.Definition().Type
 	seenSources := make(map[string]struct{}, len(sources))
-	parentIDs := make([]string, 0, len(sources))
 	seenParents := make(map[string]struct{}, len(sources))
+	parentIDs := make([]string, 0, len(sources))
+	configuredMachines := make(map[string]string, len(sources))
 	for _, source := range sources {
-		if path := providerDiscoveredPath(source); path != "" {
-			seenSources[path] = struct{}{}
+		sourcePath := providerDiscoveredPath(source)
+		if sourcePath != "" {
+			seenSources[sourcePath] = struct{}{}
 		}
 		rawID, found := parser.OmnigentMemberSessionID(source)
 		if !found {
@@ -1274,15 +1414,41 @@ func (e *Engine) expandOmnigentInheritedMetadataSources(
 		}
 		seenParents[parentID] = struct{}{}
 		parentIDs = append(parentIDs, parentID)
+		configuredMachines[parentID] = e.machineForProviderSource(
+			agent, source, sourcePath,
+		)
 	}
 	if len(parentIDs) == 0 {
 		return sources, nil
 	}
-	paths, err := e.db.ListActiveDescendantSessionSourcePaths(
-		ctx, e.machine, string(agent), parentIDs,
-	)
+	storedMachines, err := e.db.ListSessionMachinesByID(ctx, parentIDs)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list omnigent parent session machines: %w", err)
+	}
+	// A descendant is stored under the machine its parent was admitted under,
+	// which is not necessarily the local one, so group the lookup by each
+	// parent's stored attribution instead of assuming e.machine.
+	parentsByMachine := make(map[string][]string, 1)
+	machineOrder := make([]string, 0, 1)
+	for _, parentID := range parentIDs {
+		machine := configuredMachines[parentID]
+		if stored, exists := storedMachines[parentID]; exists {
+			machine = stored
+		}
+		if _, exists := parentsByMachine[machine]; !exists {
+			machineOrder = append(machineOrder, machine)
+		}
+		parentsByMachine[machine] = append(parentsByMachine[machine], parentID)
+	}
+	var paths []string
+	for _, machine := range machineOrder {
+		machinePaths, err := e.db.ListActiveDescendantSessionSourcePaths(
+			ctx, machine, string(agent), parentsByMachine[machine],
+		)
+		if err != nil {
+			return nil, err
+		}
+		paths = append(paths, machinePaths...)
 	}
 	for _, path := range paths {
 		if _, exists := seenSources[path]; exists {
@@ -1966,11 +2132,25 @@ func (e *Engine) resyncBuildLocked(
 	rebuildOldFileSessions := oldFileSessions
 	contributorOldFileSessions := make([]int, len(opts.Contributors))
 	if len(opts.Contributors) > 0 {
-		localOldFileSessions, err = e.protectedFileSessionCount(
-			origDB, e.machine, "", e.machine != "",
+		contributorPrefixes := make([]string, 0, len(opts.Contributors))
+		for _, contributor := range opts.Contributors {
+			if contributor.Config.IDPrefix != "" {
+				contributorPrefixes = append(
+					contributorPrefixes, contributor.Config.IDPrefix,
+				)
+			}
+		}
+		excludedAgents := []string{
+			string(parser.AgentOpenCode),
+			string(parser.AgentKilo),
+			string(parser.AgentMiMoCode),
+			string(parser.AgentIcodemate),
+		}
+		localOldFileSessions, err = origDB.FileBackedSessionCountForRebuildOwner(
+			context.Background(), e.machine, contributorPrefixes, excludedAgents,
 		)
 		if err != nil {
-			log.Printf("resync: get old local file count: %v", err)
+			log.Printf("resync: get old local rebuild file count: %v", err)
 			localOldFileSessions = 1
 		}
 		for i, contributor := range opts.Contributors {
@@ -1987,13 +2167,6 @@ func (e *Engine) resyncBuildLocked(
 				count = 1
 			}
 			contributorOldFileSessions[i] = count
-			if contributor.Config.Machine == e.machine &&
-				contributor.Config.IDPrefix != "" {
-				localOldFileSessions -= count
-				if localOldFileSessions < 0 {
-					localOldFileSessions = 0
-				}
-			}
 		}
 		rebuildOldFileSessions = localOldFileSessions
 		for _, count := range contributorOldFileSessions {
@@ -2377,6 +2550,26 @@ func (e *Engine) resyncBuildLocked(
 		if err := newDB.LinkSubagentSessions(); err != nil {
 			log.Printf("resync: relink subagent sessions: %v", err)
 		}
+	}
+
+	// CopySyncStateFrom runs after the fresh archive's normal linking pass so
+	// pending hierarchy work from the original must be consumed explicitly.
+	// Wait until orphan restoration is complete so every queued session and
+	// copied spawn edge is present. A failed repair leaves hierarchy state
+	// uncertain and must abort before the replacement can be installed.
+	if err := newDB.RepairQueuedSubagentParents(); err != nil {
+		log.Printf("resync: repair copied subagent parents: %v", err)
+		stats.Aborted = true
+		stats.Warnings = append(stats.Warnings,
+			"hierarchy repair failed, aborting swap: "+err.Error(),
+		)
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats, err
 	}
 
 	// Copy recall entries and their evidence from the quiesced old DB.
@@ -3892,17 +4085,27 @@ func (e *Engine) tombstoneCompletedReconciliationScopesLocked(
 func (e *Engine) baselineReconciliationCandidates(
 	ctx context.Context,
 	candidates []reconciliationCandidate,
-	admitted []db.SessionSourcePath,
+	admitted []machineSessionSource,
 ) error {
-	sources := make([]db.SessionSourcePath, 0, len(candidates))
+	sources := make([]machineSessionSource, 0, len(candidates))
 	for _, candidate := range candidates {
-		sources = append(sources, db.SessionSourcePath{
-			Agent:    string(candidate.Provider),
-			FilePath: e.effectiveSourcePath(candidate.Path),
+		sources = append(sources, machineSessionSource{
+			Machine: candidate.Machine,
+			Source: db.SessionSourcePath{
+				Agent:    string(candidate.Provider),
+				FilePath: e.effectiveSourcePath(candidate.Path),
+			},
 		})
 	}
-	if err := e.db.ReplaceActiveSessionSourceBaselines(
-		ctx, e.machine, sources, admitted,
+	var err error
+	sources, admitted, err = e.expandSourceBaselinesByStoredAttribution(
+		ctx, sources, admitted,
+	)
+	if err != nil {
+		return fmt.Errorf("load reconciliation source attributions: %w", err)
+	}
+	if err := e.replaceActiveSessionSourceBaselinesByMachine(
+		ctx, sources, admitted,
 	); err != nil {
 		return fmt.Errorf("reconcile source baseline page: %w", err)
 	}
@@ -3911,9 +4114,9 @@ func (e *Engine) baselineReconciliationCandidates(
 
 func eligibleReconciliationBaselines(
 	candidates []reconciliationCandidate,
-	admitted []db.SessionSourcePath,
+	admitted []machineSessionSource,
 	eligibleProviders map[parser.AgentType]struct{},
-) ([]reconciliationCandidate, []db.SessionSourcePath) {
+) ([]reconciliationCandidate, []machineSessionSource) {
 	eligibleCandidates := make([]reconciliationCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
 		if _, eligible := eligibleProviders[candidate.Provider]; !eligible {
@@ -3921,13 +4124,67 @@ func eligibleReconciliationBaselines(
 		}
 		eligibleCandidates = append(eligibleCandidates, candidate)
 	}
-	eligibleAdmitted := make([]db.SessionSourcePath, 0, len(admitted))
+	eligibleAdmitted := make([]machineSessionSource, 0, len(admitted))
 	for _, source := range admitted {
-		if _, eligible := eligibleProviders[parser.AgentType(source.Agent)]; eligible {
+		if _, eligible := eligibleProviders[parser.AgentType(source.Source.Agent)]; eligible {
 			eligibleAdmitted = append(eligibleAdmitted, source)
 		}
 	}
 	return eligibleCandidates, eligibleAdmitted
+}
+
+func (e *Engine) replaceActiveSessionSourceBaselinesByMachine(
+	ctx context.Context,
+	candidates []machineSessionSource,
+	admitted []machineSessionSource,
+) error {
+	candidatesByMachine := make(map[string]map[db.SessionSourcePath]struct{})
+	admittedByMachine := make(map[string]map[db.SessionSourcePath]struct{})
+	add := func(
+		byMachine map[string]map[db.SessionSourcePath]struct{},
+		source machineSessionSource,
+	) {
+		if source.Source.Agent == "" || source.Source.FilePath == "" {
+			return
+		}
+		if byMachine[source.Machine] == nil {
+			byMachine[source.Machine] = make(map[db.SessionSourcePath]struct{})
+		}
+		byMachine[source.Machine][source.Source] = struct{}{}
+	}
+	for _, source := range candidates {
+		add(candidatesByMachine, source)
+	}
+	for _, source := range admitted {
+		add(admittedByMachine, source)
+		// An admitted source may carry immutable attribution that differs from
+		// the currently configured candidate. Make it a candidate under its own
+		// machine so replacement visits that machine as well.
+		add(candidatesByMachine, source)
+	}
+	machines := make([]string, 0, len(candidatesByMachine))
+	for machine := range candidatesByMachine {
+		machines = append(machines, machine)
+	}
+	slices.Sort(machines)
+	for _, machine := range machines {
+		sources := make([]db.SessionSourcePath, 0, len(candidatesByMachine[machine]))
+		for source := range candidatesByMachine[machine] {
+			sources = append(sources, source)
+		}
+		admittedSources := make(
+			[]db.SessionSourcePath, 0, len(admittedByMachine[machine]),
+		)
+		for source := range admittedByMachine[machine] {
+			admittedSources = append(admittedSources, source)
+		}
+		if err := e.db.ReplaceActiveSessionSourceBaselines(
+			ctx, machine, sources, admittedSources,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (e *Engine) streamReconciliationCandidates(
@@ -4247,6 +4504,7 @@ func (e *Engine) reconciliationCandidate(
 		StoredPath: canonicalReconciliationSourceIdentity(
 			e.effectiveSourcePath(path),
 		), MemberIdentity: source.ReconciliationIdentity, WatchRoot: root,
+		Machine: e.machineForProviderSource(agent, source, path),
 		Project: source.ProjectHint, Preference1: preference1,
 		Preference2: preference2, Preference3: preference3,
 	}, true
@@ -4334,6 +4592,7 @@ func (e *Engine) rehydrateReconciliationPage(
 				files = append(files, parser.DiscoveredFile{
 					Path: candidate.Path, Project: source.ProjectHint,
 					Agent: candidate.Provider, ForceParse: forceCandidate,
+					Machine:        candidate.Machine,
 					ProviderSource: &source, ProviderProcess: true,
 				})
 				continue
@@ -4360,6 +4619,10 @@ func (e *Engine) rehydrateReconciliationPage(
 		files = append(files, parser.DiscoveredFile{
 			Path: candidate.Path, Project: source.ProjectHint,
 			Agent: candidate.Provider, ForceParse: forceCandidate,
+			// Carry the candidate's stored attribution: recomputing it from the
+			// physical path is wrong for providers whose source can sit outside
+			// the labeled root it was configured under.
+			Machine:        candidate.Machine,
 			ProviderSource: &source, ProviderProcess: true,
 		})
 	}
@@ -4624,6 +4887,12 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 		}
 		scopesByAgent[scope.agent] = append(scopesByAgent[scope.agent], scope)
 	}
+	// Read once per pass, not per scope: the list is bounded by how many
+	// machines the archive holds, which is independent of its session count.
+	archiveMachines, err := e.db.GetMachines(ctx, false, false)
+	if err != nil {
+		return 0, fmt.Errorf("list archive machines for watch reconciliation: %w", err)
+	}
 	for _, agent := range agents {
 		agentScopes := scopesByAgent[agent]
 		var provider parser.Provider
@@ -4641,13 +4910,24 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 			if len(ownershipScopes) == 0 {
 				continue
 			}
+			// A scope proves absence for its own roots, but a stored row carries
+			// the machine it was admitted under. Query every machine those roots
+			// can hold so a relabeled root still reconciles its older rows.
+			ownershipMachines := e.reconciliationOwnershipMachines(
+				agent, scope.roots, archiveMachines,
+			)
+			if len(ownershipMachines) == 0 {
+				continue
+			}
+			queryIndex := 0
 			var cursor db.SessionSourceCursor
-			for {
+			for queryIndex < len(ownershipMachines) {
+				ownershipMachine := ownershipMachines[queryIndex]
 				if err := ctx.Err(); err != nil {
 					return deleted, err
 				}
 				page, err := e.db.ListActiveSessionSourceOwnershipScopesPage(
-					ctx, e.machine, string(agent),
+					ctx, ownershipMachine, string(agent),
 					ownershipScopes, cursor,
 				)
 				if err != nil {
@@ -4656,7 +4936,9 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 					)
 				}
 				if len(page) == 0 {
-					break
+					queryIndex++
+					cursor = db.SessionSourceCursor{}
+					continue
 				}
 				missingByPath := make(map[string]bool, len(page))
 				for _, ownership := range page {
@@ -4954,7 +5236,8 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 				}
 				cursor = page[len(page)-1].Cursor()
 				if len(page) < db.WatchReconcileSourcePageSize {
-					break
+					queryIndex++
+					cursor = db.SessionSourceCursor{}
 				}
 			}
 		}
@@ -5573,6 +5856,11 @@ func (e *Engine) discoverProviderSources(
 				ProviderSource:  &sourceCopy,
 				ProviderProcess: true,
 			}
+			if !isS3SourcePath(sourcePath) {
+				discovered.Machine = e.machineForProviderSource(
+					agent, source, sourcePath,
+				)
+			}
 			if forceParseSource(sourcePath) {
 				discovered.ForceParse = true
 			}
@@ -5791,6 +6079,7 @@ func (e *Engine) expandCodexProviderDuplicates(
 			out = append(out, parser.DiscoveredFile{
 				Path:            dup,
 				Agent:           parser.AgentCodex,
+				Machine:         e.machineForPath(parser.AgentCodex, dup),
 				ProviderProcess: true,
 				ProviderSource:  e.codexPinnedProviderSource(dup),
 			})
@@ -6414,6 +6703,78 @@ func shelleyDBCompositeMtime(dbPath string) (int64, error) {
 	return maxMtime, nil
 }
 
+func (e *Engine) listActiveSessionSourceAttributions(
+	ctx context.Context,
+	sources []db.SessionSourcePath,
+) ([]db.SessionSourceAttribution, error) {
+	if e.sourceAttributionLookupOverride != nil {
+		return e.sourceAttributionLookupOverride(ctx, sources)
+	}
+	return e.db.ListActiveSessionSourceAttributions(ctx, sources)
+}
+
+// expandSourceBaselinesByStoredAttribution applies one source-level admission
+// decision to every immutable machine currently represented at that source.
+// This is for no-write outcomes, where there is no normalized pending session
+// to carry the stored machine through baseline replacement.
+func (e *Engine) expandSourceBaselinesByStoredAttribution(
+	ctx context.Context,
+	candidates []machineSessionSource,
+	admitted []machineSessionSource,
+) ([]machineSessionSource, []machineSessionSource, error) {
+	requestedSet := make(map[db.SessionSourcePath]struct{}, len(candidates))
+	requested := make([]db.SessionSourcePath, 0, len(candidates))
+	candidateSet := make(map[machineSessionSource]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		candidateSet[candidate] = struct{}{}
+		if candidate.Source.Agent == "" || candidate.Source.FilePath == "" {
+			continue
+		}
+		if _, exists := requestedSet[candidate.Source]; exists {
+			continue
+		}
+		requestedSet[candidate.Source] = struct{}{}
+		requested = append(requested, candidate.Source)
+	}
+	if len(requested) == 0 {
+		return candidates, admitted, nil
+	}
+
+	admittedSources := make(map[db.SessionSourcePath]struct{}, len(admitted))
+	admittedSet := make(map[machineSessionSource]struct{}, len(admitted))
+	for _, source := range admitted {
+		admittedSources[source.Source] = struct{}{}
+		admittedSet[source] = struct{}{}
+	}
+	attributions, err := e.listActiveSessionSourceAttributions(ctx, requested)
+	if err != nil {
+		return candidates, admitted, err
+	}
+	for _, attribution := range attributions {
+		source := machineSessionSource{
+			Machine: attribution.Machine,
+			Source: db.SessionSourcePath{
+				Agent: attribution.Agent, FilePath: attribution.FilePath,
+			},
+		}
+		if _, requested := requestedSet[source.Source]; !requested {
+			continue
+		}
+		if _, exists := candidateSet[source]; !exists {
+			candidateSet[source] = struct{}{}
+			candidates = append(candidates, source)
+		}
+		if _, sourceAdmitted := admittedSources[source.Source]; !sourceAdmitted {
+			continue
+		}
+		if _, exists := admittedSet[source]; !exists {
+			admittedSet[source] = struct{}{}
+			admitted = append(admitted, source)
+		}
+	}
+	return candidates, admitted, nil
+}
+
 // syncProviderDBBacked enumerates a DB-backed provider's sources, parses only
 // the changed ones through the provider facade, and flushes each source before
 // parsing the next. Change detection compares the provider fingerprint mtime
@@ -6445,13 +6806,32 @@ func (e *Engine) syncProviderDBBacked(
 	if !ok || provider.Capabilities().Source.StreamingDiscovery != parser.CapabilitySupported {
 		return 0, 0, fmt.Errorf("sync %s: provider lacks streaming discovery", agent)
 	}
-	baselines := make([]db.SessionSourcePath, 0, reconciliationPageSize)
+	baselines := make([]machineSessionSource, 0, reconciliationPageSize)
 	flushBaselines := func() error {
 		if len(baselines) == 0 {
 			return nil
 		}
-		if err := e.db.BaselineActiveSessionSourcePaths(
-			ctx, e.machine, baselines,
+		sources := make([]db.SessionSourcePath, 0, len(baselines))
+		for _, candidate := range baselines {
+			sources = append(sources, candidate.Source)
+		}
+		attributions, err := e.listActiveSessionSourceAttributions(ctx, sources)
+		if err != nil {
+			return fmt.Errorf(
+				"load %s streaming source attributions: %w", agent, err,
+			)
+		}
+		admitted := make([]machineSessionSource, 0, len(attributions))
+		for _, attribution := range attributions {
+			admitted = append(admitted, machineSessionSource{
+				Machine: attribution.Machine,
+				Source: db.SessionSourcePath{
+					Agent: attribution.Agent, FilePath: attribution.FilePath,
+				},
+			})
+		}
+		if err := e.replaceActiveSessionSourceBaselinesByMachine(
+			ctx, baselines, admitted,
 		); err != nil {
 			return fmt.Errorf("baseline %s streaming sources: %w", agent, err)
 		}
@@ -6463,8 +6843,13 @@ func (e *Engine) syncProviderDBBacked(
 		if path == "" {
 			return nil
 		}
-		baselines = append(baselines, db.SessionSourcePath{
-			Agent: string(agent), FilePath: e.effectiveSourcePath(path),
+		storedPath := e.effectiveSourcePath(path)
+		machine := e.machineForProviderSource(agent, source, path)
+		baselines = append(baselines, machineSessionSource{
+			Machine: machine,
+			Source: db.SessionSourcePath{
+				Agent: string(agent), FilePath: storedPath,
+			},
 		})
 		if len(baselines) == reconciliationPageSize {
 			return flushBaselines()
@@ -6481,13 +6866,16 @@ func (e *Engine) syncProviderDBBacked(
 			sourceFailures++
 			return nil
 		}
+		machine := e.machineForProviderSource(
+			agent, source, providerDiscoveredPath(source),
+		)
 		if e.providerDBBackedSourceFresh(source, fingerprint) {
 			return queueBaseline(source)
 		}
 		outcome, err := provider.Parse(ctx, parser.ParseRequest{
 			Source:      source,
 			Fingerprint: fingerprint,
-			Machine:     e.machine,
+			Machine:     machine,
 		})
 		if err != nil {
 			log.Printf("sync %s parse: %v", agent, err)
@@ -6711,8 +7099,9 @@ func (e *Engine) startWorkers(
 						processResult: processResult{
 							err: ctx.Err(),
 						},
-						agent: file.Agent,
-						path:  file.Path,
+						agent:   file.Agent,
+						path:    file.Path,
+						machine: e.machineForFile(file),
 					})
 					continue
 				}
@@ -6721,6 +7110,7 @@ func (e *Engine) startWorkers(
 					processResult:  result,
 					agent:          file.Agent,
 					path:           file.Path,
+					machine:        e.machineForFile(file),
 					retentionLease: result.retentionLease,
 				})
 			}
@@ -6801,7 +7191,7 @@ func (e *Engine) collectAndBatch(
 	var pendingLeases []*parseRetentionLease
 	var pendingCacheWrites []skipCacheWrite
 	baselineCacheWrites := make(
-		map[db.SessionSourcePath]map[string]skipCacheWrite,
+		map[machineSessionSource]map[string]skipCacheWrite,
 	)
 	// Size baseline bookkeeping by the batch, capped at one flush page:
 	// a single-path watcher sync must not pay for page-sized structures
@@ -6809,15 +7199,19 @@ func (e *Engine) collectAndBatch(
 	// Appends and map inserts still grow past the hint when providers
 	// fan one changed file out to multiple sessions.
 	baselineHint := min(total, reconciliationPageSize)
-	baselineCandidates := make([]db.SessionSourcePath, 0, baselineHint)
-	baselineAdmitted := make([]db.SessionSourcePath, 0, baselineHint)
-	baselineAdmission := make(map[db.SessionSourcePath]bool, baselineHint)
+	baselineCandidates := make([]machineSessionSource, 0, baselineHint)
+	baselineAdmitted := make([]machineSessionSource, 0, baselineHint)
+	baselineAdmission := make(map[machineSessionSource]bool, baselineHint)
 	runtimeMetrics := reconciliationRuntimeMetricsFor(ctx)
-	baselineSourceForJob := func(job syncJob) (db.SessionSourcePath, bool) {
-		source := db.SessionSourcePath{
-			Agent: string(job.agent), FilePath: e.effectiveSourcePath(job.path),
+	baselineSourceForJob := func(job syncJob) (machineSessionSource, bool) {
+		source := machineSessionSource{
+			Machine: job.machine,
+			Source: db.SessionSourcePath{
+				Agent: string(job.agent), FilePath: e.effectiveSourcePath(job.path),
+			},
 		}
-		return source, source.Agent != "" && source.FilePath != ""
+		return source,
+			source.Source.Agent != "" && source.Source.FilePath != ""
 	}
 	flushBaselineSources := func() {
 		if len(baselineCandidates) == 0 {
@@ -6840,9 +7234,16 @@ func (e *Engine) collectAndBatch(
 			}
 			delete(baselineCacheWrites, source)
 		}
-		if err := e.db.ReplaceActiveSessionSourceBaselines(
-			ctx, e.machine, baselineCandidates, baselineAdmitted,
-		); err != nil {
+		resolvedCandidates, resolvedAdmitted, err :=
+			e.expandSourceBaselinesByStoredAttribution(
+				ctx, baselineCandidates, baselineAdmitted,
+			)
+		if err == nil {
+			err = e.replaceActiveSessionSourceBaselinesByMachine(
+				ctx, resolvedCandidates, resolvedAdmitted,
+			)
+		}
+		if err != nil {
 			log.Printf("replace successful non-write source baselines: %v", err)
 			stats.RecordFailed()
 			e.poisonSQLiteContainerPass()
@@ -7032,6 +7433,39 @@ func (e *Engine) collectAndBatch(
 		sourceAllowsParserExclusions := e.sourceAllowsParserExclusions(
 			r.processResult,
 		)
+		// Capture children before exclusions or full replacements cascade the
+		// current spawn edges away. The global linker below can resolve only
+		// children still named by an edge, so carry former children into its
+		// scoped dangling-parent cleanup explicitly.
+		excluded := e.applyIDPrefixToSessionIDs(r.excludedSessionIDs)
+		if !sourceAllowsParserExclusions {
+			excluded = nil
+		}
+		resultIDs := make([]string, 0, len(r.results))
+		for _, result := range r.results {
+			resultIDs = append(resultIDs, result.Session.ID)
+		}
+		resultIDs = e.applyIDPrefixToSessionIDs(resultIDs)
+		children, err := e.db.SubagentChildSessionIDs(append(
+			append([]string{}, excluded...), resultIDs...,
+		))
+		if err != nil {
+			log.Printf("list pre-write subagent children: %v", err)
+			stats.RecordFailed()
+			e.noteSQLiteContainerResult(r.path, false)
+			r.releaseRetention()
+			continue
+		}
+		// Persist affected IDs before any exclusion or replacement can
+		// cascade their only spawn edge away. The queue is cleared only in
+		// the same transaction that successfully repairs the hierarchy.
+		if err := e.db.QueueSubagentParentCleanupRepairs(children); err != nil {
+			log.Printf("queue subagent parent repairs: %v", err)
+			stats.RecordFailed()
+			e.noteSQLiteContainerResult(r.path, false)
+			r.releaseRetention()
+			continue
+		}
 		excludedSessionIDs, err := e.deleteParserExcludedSessions(
 			r.processResult, sourceAllowsParserExclusions,
 		)
@@ -7069,7 +7503,7 @@ func (e *Engine) collectAndBatch(
 					continue
 				}
 				changed, err := e.tombstoneSessionSourceOwnership(
-					ctx, e.machine, string(r.agent),
+					ctx, member.machine, string(r.agent),
 					member.sessionID, member.filePath,
 				)
 				if err != nil {
@@ -7171,7 +7605,9 @@ func (e *Engine) collectAndBatch(
 			}
 			stats.RecordSynced(1)
 			if r.providerFailureCount == 0 {
-				baselineProcessedSource(r, true)
+				baselineJob := r
+				baselineJob.machine = r.incremental.machine
+				baselineProcessedSource(baselineJob, true)
 			}
 			progress.MessagesIndexed += len(
 				r.incremental.msgs,
@@ -7243,6 +7679,10 @@ flush:
 			stats.RecordFailed()
 		}
 	}
+	if err := e.db.RepairQueuedSubagentParents(); err != nil {
+		log.Printf("repair queued subagent parents: %v", err)
+		stats.RecordFailed()
+	}
 
 	// PhaseDone is emitted by syncAllLocked after DB-backed
 	// agents finish, so this stage stays in PhaseSyncing.
@@ -7253,15 +7693,18 @@ func (e *Engine) baselinePendingWriteSources(
 	ctx context.Context, pending []pendingWrite, written []bool,
 ) error {
 	eligible := make(
-		map[db.SessionSourcePath]bool,
+		map[machineSessionSource]bool,
 		min(len(pending), reconciliationPageSize),
 	)
 	for i, write := range pending {
 		path := e.effectiveSourcePath(write.sess.File.Path)
-		source := db.SessionSourcePath{
-			Agent: string(write.sess.Agent), FilePath: path,
+		source := machineSessionSource{
+			Machine: write.sess.Machine,
+			Source: db.SessionSourcePath{
+				Agent: string(write.sess.Agent), FilePath: path,
+			},
 		}
-		if source.Agent == "" || source.FilePath == "" {
+		if source.Source.Agent == "" || source.Source.FilePath == "" {
 			continue
 		}
 		if _, seen := eligible[source]; !seen {
@@ -7272,8 +7715,8 @@ func (e *Engine) baselinePendingWriteSources(
 		}
 	}
 
-	candidates := make([]db.SessionSourcePath, 0, len(eligible))
-	admitted := make([]db.SessionSourcePath, 0, len(eligible))
+	candidates := make([]machineSessionSource, 0, len(eligible))
+	admitted := make([]machineSessionSource, 0, len(eligible))
 	tracker := reconciliationBaselineTrackerFor(ctx)
 	for source, ok := range eligible {
 		candidates = append(candidates, source)
@@ -7290,38 +7733,12 @@ func (e *Engine) baselinePendingWriteSources(
 		return nil
 	}
 
-	sources := make([]db.SessionSourcePath, 0, reconciliationPageSize)
-	admittedSet := make(map[db.SessionSourcePath]struct{}, len(admitted))
-	for _, source := range admitted {
-		admittedSet[source] = struct{}{}
+	if err := e.replaceActiveSessionSourceBaselinesByMachine(
+		ctx, candidates, admitted,
+	); err != nil {
+		return fmt.Errorf("replace parsed source baseline batch: %w", err)
 	}
-	flush := func() error {
-		if len(sources) == 0 {
-			return nil
-		}
-		pageAdmitted := make([]db.SessionSourcePath, 0, len(sources))
-		for _, source := range sources {
-			if _, ok := admittedSet[source]; ok {
-				pageAdmitted = append(pageAdmitted, source)
-			}
-		}
-		if err := e.db.ReplaceActiveSessionSourceBaselines(
-			ctx, e.machine, sources, pageAdmitted,
-		); err != nil {
-			return fmt.Errorf("replace parsed source baseline batch: %w", err)
-		}
-		sources = sources[:0]
-		return nil
-	}
-	for _, source := range candidates {
-		sources = append(sources, source)
-		if len(sources) == reconciliationPageSize {
-			if err := flush(); err != nil {
-				return err
-			}
-		}
-	}
-	return flush()
+	return nil
 }
 
 // skippedSourceAllowsCwdFilter determines whether an unchanged source may
@@ -7409,6 +7826,7 @@ type sessionParseError struct {
 type sourceMissingMember struct {
 	sessionID string
 	filePath  string
+	machine   string
 }
 
 type processResult struct {
@@ -7662,9 +8080,10 @@ func (e *Engine) processProviderFile(
 			err: fmt.Errorf("provider not found for agent type: %s", file.Agent),
 		}, true
 	}
+	machine := e.machineForFile(file)
 	provider := factory.NewProvider(parser.ProviderConfig{
 		Roots:        e.agentDirs[file.Agent],
-		Machine:      e.machine,
+		Machine:      machine,
 		PathRewriter: e.pathRewriter,
 	})
 
@@ -7690,6 +8109,16 @@ func (e *Engine) processProviderFile(
 			),
 		}, true
 	}
+	if source.ConfiguredRoot != "" {
+		if sourceMachine, ok := e.configuredMachineForPath(
+			file.Agent, source.ConfiguredRoot,
+		); ok {
+			machine = sourceMachine
+		}
+	} else if file.Machine == "" {
+		machine = e.machineForProviderSource(file.Agent, source, file.Path)
+	}
+	file.Machine = machine
 	providerSemantics := provider.Capabilities().Sync
 
 	// SyncSingleSession resolves a single session by ID and carries the
@@ -7770,7 +8199,7 @@ func (e *Engine) processProviderFile(
 			errors.Is(err, os.ErrNotExist) {
 			excludedSessionIDs, ownershipErr :=
 				e.providerSourceSessionIDsForForceReplace(
-					provider, source,
+					ctx, provider, source,
 				)
 			if ownershipErr != nil {
 				return processResult{
@@ -7955,7 +8384,7 @@ func (e *Engine) processProviderFile(
 	outcome, err := provider.Parse(ctx, parser.ParseRequest{
 		Source:      source,
 		Fingerprint: fingerprint,
-		Machine:     e.machine,
+		Machine:     machine,
 		ForceParse:  e.forceParse || file.ForceParse,
 	})
 	if err != nil {
@@ -7998,7 +8427,7 @@ func (e *Engine) processProviderFile(
 		if outcome.ForceReplace && outcome.ResultSetComplete {
 			owned, ownershipErr :=
 				e.providerSourceSessionOwnershipsForForceReplace(
-					provider, source,
+					ctx, provider, source,
 				)
 			if ownershipErr != nil {
 				return processResult{
@@ -8057,7 +8486,7 @@ func (e *Engine) processProviderFile(
 		outcome.ResultSetComplete && len(outcome.SourceErrors) == 0 {
 		missingMembers, err =
 			e.providerSourceMissingSessionOwnershipsForCompleteResult(
-				provider, source, parsedResults,
+				ctx, provider, source, parsedResults,
 			)
 		if err != nil {
 			return processResult{
@@ -8185,11 +8614,12 @@ func (e *Engine) dropUnchangedSharedSQLiteResults(
 }
 
 func (e *Engine) providerSourceSessionIDsForForceReplace(
+	ctx context.Context,
 	provider parser.Provider,
 	source parser.SourceRef,
 ) ([]string, error) {
 	members, err := e.providerSourceSessionOwnershipsForForceReplace(
-		provider, source,
+		ctx, provider, source,
 	)
 	if err != nil {
 		return nil, err
@@ -8206,6 +8636,7 @@ func (e *Engine) providerSourceSessionIDsForForceReplace(
 // file path each row is tracked under, so callers can either hard-delete
 // them as parser exclusions or tombstone their exact source ownership.
 func (e *Engine) providerSourceSessionOwnershipsForForceReplace(
+	ctx context.Context,
 	provider parser.Provider,
 	source parser.SourceRef,
 ) ([]sourceMissingMember, error) {
@@ -8241,6 +8672,7 @@ func (e *Engine) providerSourceSessionOwnershipsForForceReplace(
 	}
 	seen := make(map[string]struct{})
 	var members []sourceMissingMember
+	var sessionIDs []string
 	for _, sourcePath := range sourcePaths {
 		pathIDs, err := e.db.ListSessionIDsByFilePath(sourcePath, string(agent))
 		if err != nil {
@@ -8257,13 +8689,29 @@ func (e *Engine) providerSourceSessionOwnershipsForForceReplace(
 			members = append(members, sourceMissingMember{
 				sessionID: id,
 				filePath:  sourcePath,
+				machine: e.machineForProviderSource(
+					agent, source, sourcePath,
+				),
 			})
+			sessionIDs = append(sessionIDs, id)
+		}
+	}
+	storedMachines, err := e.db.ListSessionMachinesByID(ctx, sessionIDs)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"list provider force-replace session machines: %w", err,
+		)
+	}
+	for i := range members {
+		if machine, exists := storedMachines[members[i].sessionID]; exists {
+			members[i].machine = machine
 		}
 	}
 	return members, nil
 }
 
 func (e *Engine) providerSourceMissingSessionOwnershipsForCompleteResult(
+	ctx context.Context,
 	provider parser.Provider,
 	source parser.SourceRef,
 	results []parser.ParseResult,
@@ -8276,7 +8724,7 @@ func (e *Engine) providerSourceMissingSessionOwnershipsForCompleteResult(
 		}
 	}
 	stored, err := e.providerSourceSessionOwnershipsForForceReplace(
-		provider, source,
+		ctx, provider, source,
 	)
 	if err != nil {
 		return nil, err
@@ -8582,7 +9030,9 @@ func (e *Engine) shouldSkipProviderSource(
 	if e.pathRewriter != nil {
 		lookupPath = e.pathRewriter(lookupPath)
 	}
-	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
+	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(
+		lookupPath,
+	)
 	if !ok {
 		return false
 	}
@@ -9049,9 +9499,7 @@ func (e *Engine) shouldSkipByPath(
 	if e.pathRewriter != nil {
 		lookupPath = e.pathRewriter(path)
 	}
-	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(
-		lookupPath,
-	)
+	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
 	if !ok {
 		return false
 	}
@@ -9408,7 +9856,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 				SessionID:                 inc.ID,
 				Offset:                    inc.FileSize,
 				StartOrdinal:              inc.NextOrdinal,
-				Machine:                   e.machine,
+				Machine:                   inc.Machine,
 				LastEntryUUID:             inc.LastEntryUUID,
 				StoredAgentLabel:          inc.AgentLabel,
 				StoredEntrypoint:          inc.Entrypoint,
@@ -9932,8 +10380,9 @@ func (e *Engine) classifyCodexIndexPath(
 		for _, root := range sessionRoots {
 			if src := e.codexSourceFileForUUID(root, uuid); src != "" {
 				candidates = append(candidates, parser.DiscoveredFile{
-					Path:  src,
-					Agent: parser.AgentCodex,
+					Path:    src,
+					Agent:   parser.AgentCodex,
+					Machine: e.machineForPath(parser.AgentCodex, src),
 				})
 			}
 		}
@@ -10455,6 +10904,11 @@ type pendingWrite struct {
 	usageEvents  []parser.ParsedUsageEvent
 	needsRetry   bool
 	forceReplace bool
+	// sourceIdentityUnverified marks a copy that shares a native session ID
+	// without matching the stored machine, source path, or content hash. The
+	// copy still follows native-ID deduplication, but it cannot borrow the
+	// stored attribution for local filesystem identity discovery.
+	sourceIdentityUnverified bool
 	// sourceProjectResolved marks writes whose parser project has already
 	// been reconciled with durable identity for an unavailable local cwd.
 	sourceProjectResolved bool
@@ -10467,6 +10921,127 @@ type pendingWrite struct {
 	storageTrustPath  string
 	storageTrustState string
 	storageTrustSnap  storageTrustSnapshot
+}
+
+type sessionWriteIdentityReader interface {
+	ListSessionWriteIdentitiesByID(
+		context.Context, []string,
+	) (map[string]db.SessionWriteIdentity, error)
+}
+
+func (e *Engine) pendingWriteIdentity(pw pendingWrite) db.SessionWriteIdentity {
+	return db.SessionWriteIdentity{
+		Machine:  pw.sess.Machine,
+		Agent:    string(pw.sess.Agent),
+		FilePath: e.effectiveSourcePath(pw.sess.File.Path),
+		FileHash: pw.sess.File.Hash,
+	}
+}
+
+func sessionWriteIdentitySupportsStoredAttribution(
+	left, right db.SessionWriteIdentity,
+) bool {
+	if left.Agent != right.Agent {
+		return false
+	}
+	if left.Machine == right.Machine {
+		return true
+	}
+	if left.FilePath != "" && right.FilePath != "" &&
+		sameReconciliationSourcePath(left.FilePath, right.FilePath) {
+		return true
+	}
+	return left.FileHash != "" && right.FileHash != "" &&
+		left.FileHash == right.FileHash
+}
+
+// normalizePendingWriteMachines resolves immutable attribution before any
+// consumer can make a project, worktree, baseline, or persistence decision.
+// Existing sessions keep the archive's machine. Native IDs continue to
+// deduplicate across copied roots, while unverified copies cannot borrow the
+// stored attribution for local filesystem identity discovery.
+func (e *Engine) normalizePendingWriteMachines(
+	ctx context.Context,
+	batch []pendingWrite,
+) ([]pendingWrite, error) {
+	indexes := make(map[string][]int, len(batch))
+	ids := make([]string, 0, len(batch))
+	for i := range batch {
+		if batch[i].sess.ID == "" {
+			continue
+		}
+		id := applyIDPrefixToID(e.idPrefix, batch[i].sess.ID)
+		if _, exists := indexes[id]; !exists {
+			ids = append(ids, id)
+		}
+		indexes[id] = append(indexes[id], i)
+	}
+	if len(ids) == 0 {
+		return batch, nil
+	}
+
+	var archive any = e.db
+	if e.archiveStore != nil {
+		archive = e.archiveStore
+	}
+	reader, ok := archive.(sessionWriteIdentityReader)
+	if !ok {
+		return batch, fmt.Errorf(
+			"archive %T does not support session write identity lookup", archive,
+		)
+	}
+	identities, err := reader.ListSessionWriteIdentitiesByID(ctx, ids)
+	if err != nil {
+		return batch, fmt.Errorf("load immutable session write identities: %w", err)
+	}
+	// A rebuild reads preexisting attribution from archiveStore while writing
+	// into e.db. An ID first seen earlier in this rebuild is absent from the old
+	// archive, so consult the replacement before treating it as a new ingestion.
+	if e.archiveStore != nil {
+		unresolved := make([]string, 0, len(ids))
+		for _, id := range ids {
+			if _, exists := identities[id]; !exists {
+				unresolved = append(unresolved, id)
+			}
+		}
+		if len(unresolved) > 0 {
+			replacementIdentities, err := e.db.ListSessionWriteIdentitiesByID(
+				ctx, unresolved,
+			)
+			if err != nil {
+				return batch, fmt.Errorf(
+					"load replacement session write identities: %w", err,
+				)
+			}
+			maps.Copy(identities, replacementIdentities)
+		}
+	}
+	for _, id := range ids {
+		matchingIndexes := indexes[id]
+		if len(matchingIndexes) == 0 {
+			continue
+		}
+		stored, exists := identities[id]
+		if exists {
+			for _, i := range matchingIndexes {
+				incoming := e.pendingWriteIdentity(batch[i])
+				batch[i].sourceIdentityUnverified =
+					!sessionWriteIdentitySupportsStoredAttribution(stored, incoming)
+				batch[i].sess.Machine = stored.Machine
+			}
+			continue
+		}
+
+		first := e.pendingWriteIdentity(batch[matchingIndexes[0]])
+		for _, i := range matchingIndexes {
+			batch[i].sourceIdentityUnverified =
+				!sessionWriteIdentitySupportsStoredAttribution(
+					first, e.pendingWriteIdentity(batch[i]),
+				)
+			batch[i].sess.Machine = first.Machine
+		}
+	}
+	return batch, nil
 }
 
 type writeBatchOutcome struct {
@@ -10580,7 +11155,8 @@ func (e *Engine) preserveUnavailableSourceProjects(
 		}
 		sess := batch[i].sess
 		if sess.ID == "" || sess.Cwd == "" ||
-			sess.Machine != e.machine ||
+			batch[i].sourceIdentityUnverified ||
+			!e.isLocalMachineAttribution(sess.Machine) ||
 			!safeLocalAbsolutePath(sess.Cwd) ||
 			export.IsAutomountNamespacePath(runtime.GOOS, filepath.Clean(sess.Cwd)) {
 			batch[i].sourceProjectResolved = true
@@ -10625,7 +11201,7 @@ func (e *Engine) preserveUnavailableSourceProjects(
 		}
 		for _, i := range indexes[id] {
 			sess := &batch[i].sess
-			if snapshot.Machine != sess.Machine ||
+			if !e.sameLocalMachineAttribution(snapshot.Machine, sess.Machine) ||
 				!pathContains(snapshot.RootPath, sess.Cwd) {
 				continue
 			}
@@ -10633,6 +11209,17 @@ func (e *Engine) preserveUnavailableSourceProjects(
 		}
 	}
 	return batch, nil
+}
+
+// isLocalMachineAttribution recognizes empty and the legacy "local" sentinel
+// as this machine without rewriting the immutable stored value.
+func (e *Engine) isLocalMachineAttribution(machine string) bool {
+	return machine == "" || machine == "local" || machine == e.machine
+}
+
+func (e *Engine) sameLocalMachineAttribution(left, right string) bool {
+	return left == right ||
+		(e.isLocalMachineAttribution(left) && e.isLocalMachineAttribution(right))
 }
 
 func pathContains(root, path string) bool {
@@ -10682,6 +11269,18 @@ func (e *Engine) writeBatchWithOutcome(
 	forceReplace bool,
 ) writeBatchOutcome {
 	var err error
+	batch, err = e.normalizePendingWriteMachines(
+		context.Background(), batch,
+	)
+	if err != nil {
+		log.Printf("normalize pending write machines: %v", err)
+		outcome := writeBatchOutcome{written: make([]bool, len(batch))}
+		for _, pw := range batch {
+			e.markStaleFailedMemberWrite(pw)
+		}
+		outcome.failedSessions = len(batch)
+		return outcome
+	}
 	batch, err = e.preserveUnavailableSourceProjects(
 		context.Background(), batch,
 	)
@@ -10710,7 +11309,6 @@ func (e *Engine) writeBatchWithOutcome(
 			}
 			continue
 		}
-
 		// Detect stale parser version BEFORE UpsertSession
 		// overwrites it. Existing message rows from an
 		// older parser lack new metadata columns, and newly
@@ -10729,9 +11327,7 @@ func (e *Engine) writeBatchWithOutcome(
 		// (writeIncremental), messages are written first since the session
 		// already exists.
 		revivingSourceMissing, err :=
-			e.upsertSessionPendingContentWithProjectIdentity(
-				s, pw.sess.Project,
-			)
+			e.upsertSessionPendingContentForWrite(pw, s)
 		if err != nil {
 			if isIntentionalSessionSkip(err) {
 				if pw.sess.File.Path != "" {
@@ -10846,7 +11442,8 @@ func (e *Engine) prepareSessionWrite(
 		pw.sess.CountsAuthoritative,
 	)
 	e.applyRemoteRewrites(&s, msgs)
-	if s.Cwd != "" && resolveWorktreeProject != nil {
+	if !pw.sourceIdentityUnverified &&
+		s.Cwd != "" && resolveWorktreeProject != nil {
 		if mapped, ok := resolveWorktreeProject(
 			s.Machine, s.Cwd, s.Project,
 		); ok {
@@ -11683,7 +12280,7 @@ func (e *Engine) writeBatchBulkWithOutcome(
 			Messages:    msgs,
 			UsageEvents: e.usageEventsForWrite(s.ID, pw.usageEvents),
 			IdentityObservation: identityObservationOrZero(
-				e.projectIdentityObservation(s),
+				e.projectIdentityObservationForWrite(pw, s),
 			),
 			IdentitySnapshotProject: &snapshotProject,
 			Signals:                 update,
@@ -11716,7 +12313,7 @@ func (e *Engine) writeBatchBulkWithOutcome(
 		for _, pw := range pendingByID {
 			e.markStaleFailedMemberWrite(pw)
 		}
-		outcome.failedSessions = len(writes)
+		outcome.failedSessions += len(writes)
 		return outcome
 	}
 	for _, writtenIndex := range result.WrittenIndexes {
@@ -11741,7 +12338,7 @@ func (e *Engine) writeBatchBulkWithOutcome(
 	}
 	outcome.writtenSessions = result.WrittenSessions
 	outcome.writtenMessages = result.WrittenMessages
-	outcome.failedSessions = result.FailedSessions
+	outcome.failedSessions += result.FailedSessions
 	return outcome
 }
 
@@ -11790,6 +12387,16 @@ func (e *Engine) projectIdentityObservation(
 	return obs, true
 }
 
+func (e *Engine) projectIdentityObservationForWrite(
+	pw pendingWrite,
+	s db.Session,
+) (export.ProjectIdentityObservation, bool) {
+	if pw.sourceIdentityUnverified {
+		return export.ProjectIdentityObservation{}, false
+	}
+	return e.projectIdentityObservation(s)
+}
+
 func (e *Engine) cachedProjectIdentity(machine, rootPath string) projectIdentityCacheEntry {
 	e.projectIdentityMu.Lock()
 	defer e.projectIdentityMu.Unlock()
@@ -11809,7 +12416,8 @@ func (e *Engine) cachedProjectIdentity(machine, rootPath string) projectIdentity
 	// wakes the /home automounter — with tens of thousands of remote
 	// sessions and a one-minute cache TTL that becomes a sustained
 	// automountd/opendirectoryd CPU storm.
-	if e.idPrefix == "" && e.pathRewriter == nil && machine == e.machine {
+	if e.idPrefix == "" && e.pathRewriter == nil &&
+		e.isLocalMachineAttribution(machine) {
 		if normalized, ok, err := export.NormalizeRootPath(rootPath); err == nil && ok {
 			identity.rootPath = normalized
 		}
@@ -11895,6 +12503,18 @@ func (e *Engine) upsertSessionPendingContentWithProjectIdentity(
 	}
 	return e.db.UpsertSessionPendingContentWithProjectIdentity(
 		s, obs, snapshotProject,
+	)
+}
+
+func (e *Engine) upsertSessionPendingContentForWrite(
+	pw pendingWrite,
+	s db.Session,
+) (bool, error) {
+	if pw.sourceIdentityUnverified {
+		return e.db.UpsertSessionPendingContent(s)
+	}
+	return e.upsertSessionPendingContentWithProjectIdentity(
+		s, pw.sess.Project,
 	)
 }
 
@@ -12373,8 +12993,14 @@ func (e *Engine) writeSessionFullWithResolver(
 	pw pendingWrite,
 	resolveWorktreeProject worktreeProjectResolver,
 ) error {
-	preserved, err := e.preserveUnavailableSourceProjects(
+	normalized, err := e.normalizePendingWriteMachines(
 		context.Background(), []pendingWrite{pw},
+	)
+	if err != nil {
+		return err
+	}
+	preserved, err := e.preserveUnavailableSourceProjects(
+		context.Background(), normalized,
 	)
 	if err != nil {
 		return err
@@ -12386,9 +13012,7 @@ func (e *Engine) writeSessionFullWithResolver(
 	if verdict != sessionWriteOK {
 		return errSessionPreserved
 	}
-	_, err = e.upsertSessionPendingContentWithProjectIdentity(
-		s, pw.sess.Project,
-	)
+	_, err = e.upsertSessionPendingContentForWrite(pw, s)
 	if err != nil {
 		if isIntentionalSessionSkip(err) {
 			if pw.sess.File.Path != "" {
@@ -13109,9 +13733,10 @@ func (e *Engine) findProviderSourceFile(
 	// chat source. Confirm the requested fork is actually produced before
 	// treating the chat source as a hit, mirroring the legacy parse-verify.
 	if providerSessionIsFork(def, sessionID, rawSessionID) {
+		machine := e.machineForPath(def.Type, providerDiscoveredPath(source))
 		outcome, err := provider.Parse(ctx, parser.ParseRequest{
 			Source:  source,
-			Machine: e.machine,
+			Machine: machine,
 		})
 		if err != nil || !providerOutcomeContainsSession(outcome, sessionID) {
 			return ""
@@ -13168,9 +13793,10 @@ func (e *Engine) providerSessionSourceMtime(
 	// A fork session ID resolves to its base chat source. Confirm the
 	// requested fork exists before treating the chat mtime as authoritative.
 	if providerSessionIsFork(def, sessionID, rawSessionID) {
+		machine := e.machineForPath(def.Type, providerDiscoveredPath(source))
 		outcome, err := provider.Parse(ctx, parser.ParseRequest{
 			Source:  source,
-			Machine: e.machine,
+			Machine: machine,
 		})
 		if err != nil || !providerOutcomeContainsSession(outcome, sessionID) {
 			return 0
@@ -13529,6 +14155,9 @@ func (e *Engine) SyncSingleSessionContext(
 		ForceParse: true,
 	}
 	e.hydrateS3DiscoveredFile(ctx, sessionID, &file)
+	if file.Machine == "" && !isS3SourcePath(file.Path) {
+		file.Machine = e.machineForPath(file.Agent, file.Path)
+	}
 	if e.shouldCacheSkip(file) {
 		e.clearSkip(path)
 	}
@@ -13655,6 +14284,16 @@ func (e *Engine) SyncSingleSessionContext(
 		return res.err
 	}
 	if res.skip {
+		if err := e.db.RepairQueuedSubagentParents(); err != nil {
+			return fmt.Errorf("repair queued subagent parents: %w", err)
+		}
+		// A previous write may have stored a new spawn edge but failed
+		// before its child could be durably queued. The requested session is
+		// still a bounded repair seed on the freshness path because its
+		// surviving edges identify those children directly.
+		if err := e.db.LinkSubagentSessionsForSessions([]string{sessionID}); err != nil {
+			return fmt.Errorf("link fresh subagent sessions: %w", err)
+		}
 		return nil
 	}
 	if res.cacheSkip {
@@ -13662,6 +14301,62 @@ func (e *Engine) SyncSingleSessionContext(
 	}
 
 	sourceAllowsParserExclusions := e.sourceAllowsParserExclusions(res)
+
+	// Capture the children this batch's PRE-write spawn edges reference.
+	// The parser-exclusion delete below and the full message replacement
+	// in the write loop both cascade tool_calls away, and the scoped
+	// linker discovers children only through post-write edges — so a
+	// child whose edge is about to be removed must be carried into the
+	// linking batch explicitly, or it could never re-resolve to a
+	// remaining spawner until the next bulk sync.
+	excluded := e.applyIDPrefixToSessionIDs(res.excludedSessionIDs)
+	resultIDs := make([]string, 0, len(res.results))
+	for _, pr := range res.results {
+		resultIDs = append(resultIDs, pr.Session.ID)
+	}
+	resultIDs = e.applyIDPrefixToSessionIDs(resultIDs)
+	priorChildren, childErr := e.db.SubagentChildSessionIDs(
+		append(append([]string{}, excluded...), resultIDs...),
+	)
+	if childErr != nil {
+		return fmt.Errorf("list pre-write subagent children: %w", childErr)
+	}
+	// A prior sync may have removed an edge and then failed before repairing
+	// its child. Retry that durable work after this sync's read-only capture
+	// but before making any new mutations.
+	if err := e.db.RepairQueuedSubagentParents(); err != nil {
+		return fmt.Errorf("repair queued subagent parents: %w", err)
+	}
+	if err := e.db.QueueSubagentParentCleanupRepairs(priorChildren); err != nil {
+		return fmt.Errorf("queue subagent parent repairs: %w", err)
+	}
+	// Always attempt queued work after mutations begin, including when a later
+	// write or scoped link fails. Post-write capture below expands this flag
+	// when the write introduces children that did not exist before it.
+	repairQueued := len(priorChildren) > 0
+	defer func() {
+		if !repairQueued {
+			return
+		}
+		if repairErr := e.db.RepairQueuedSubagentParents(); repairErr != nil {
+			err = errors.Join(err, fmt.Errorf(
+				"repair queued subagent parents: %w", repairErr,
+			))
+		}
+	}()
+	queueWrittenChildren := func(spawnerIDs []string) error {
+		children, childErr := e.db.SubagentChildSessionIDs(spawnerIDs)
+		if childErr != nil {
+			return fmt.Errorf("list post-write subagent children: %w", childErr)
+		}
+		if err := e.db.QueueSubagentParentRepairs(children); err != nil {
+			return fmt.Errorf("queue post-write subagent parent repairs: %w", err)
+		}
+		if len(children) > 0 {
+			repairQueued = true
+		}
+		return nil
+	}
 
 	// Delete parser-excluded sessions before writing the parsed
 	// results, mirroring collectAndBatch. Vibe promotes a session
@@ -13696,7 +14391,7 @@ func (e *Engine) SyncSingleSessionContext(
 				continue
 			}
 			if _, err := e.tombstoneSessionSourceOwnership(
-				ctx, e.machine, string(file.Agent),
+				ctx, member.machine, string(file.Agent),
 				member.sessionID, member.filePath,
 			); err != nil {
 				return fmt.Errorf(
@@ -13713,6 +14408,16 @@ func (e *Engine) SyncSingleSessionContext(
 		if err := e.writeIncremental(res.incremental); err != nil {
 			return err
 		}
+		if err := queueWrittenChildren(
+			[]string{res.incremental.sessionID},
+		); err != nil {
+			return err
+		}
+		if err := e.db.LinkSubagentSessionsForSessions(
+			[]string{res.incremental.sessionID},
+		); err != nil {
+			return fmt.Errorf("link incremental subagent sessions: %w", err)
+		}
 		return nil
 	}
 
@@ -13720,7 +14425,7 @@ func (e *Engine) SyncSingleSessionContext(
 		return nil
 	}
 
-	for _, pr := range res.results {
+	for i, pr := range res.results {
 		write := pendingWrite{
 			sess:         pr.Session,
 			msgs:         pr.Messages,
@@ -13728,26 +14433,47 @@ func (e *Engine) SyncSingleSessionContext(
 			needsRetry:   res.needsRetryForSession(pr.Session.ID),
 			forceReplace: res.forceReplace,
 		}
-		if err := e.writeSessionFull(write); err != nil &&
-			!isIntentionalSessionSkip(err) &&
-			!errors.Is(err, errSessionPreserved) {
+		// The session upsert commits parser-derived parent provenance before
+		// the later content, usage, and completion stages. Queue the attempted
+		// session itself first so a failure after that upsert still re-resolves
+		// its incoming spawn edges in the deferred repair pass.
+		if err := e.db.QueueSubagentParentRepairs(
+			[]string{resultIDs[i]},
+		); err != nil {
+			return fmt.Errorf(
+				"queue attempted session parent repair: %w", err,
+			)
+		}
+		repairQueued = true
+		writeErr := e.writeSessionFull(write)
+		// Full-write stages commit independently. Message content (and a new
+		// spawn edge) can persist even when a later usage, data-version, or
+		// sibling write fails, so discover and queue children after every
+		// attempt rather than waiting for the entire result set to finish.
+		queueErr := queueWrittenChildren([]string{resultIDs[i]})
+		if writeErr != nil &&
+			!isIntentionalSessionSkip(writeErr) &&
+			!errors.Is(writeErr, errSessionPreserved) {
 			// Mirror the batch write paths: a partial write (session
 			// row updated, messages or usage not) must demote the
 			// stored data version, or the next container parse would
 			// compare the member as unchanged and never repair it.
 			e.markStaleFailedMemberWrite(write)
+			if queueErr != nil {
+				writeErr = errors.Join(writeErr, queueErr)
+			}
 			return fmt.Errorf("write session %s: %w",
-				pr.Session.ID, err)
-		} else if errors.Is(err, errSessionPreserved) {
+				pr.Session.ID, writeErr)
+		}
+		if queueErr != nil {
+			return queueErr
+		}
+		if errors.Is(writeErr, errSessionPreserved) {
 			preserved = true
 		}
 	}
-
-	// Link subagent child sessions to their parents.
-	// Required for Zencoder sessions that reference subagent
-	// session IDs in tool_calls.subagent_session_id.
-	if err := e.db.LinkSubagentSessions(); err != nil {
-		log.Printf("link subagent sessions: %v", err)
+	if err := e.db.LinkSubagentSessionsForSessions(resultIDs); err != nil {
+		return fmt.Errorf("link changed subagent sessions: %w", err)
 	}
 
 	return nil

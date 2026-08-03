@@ -214,17 +214,20 @@ func TestSyncAllCwdFilterChangeRevokesSkippedSourceDeletionProof(t *testing.T) {
 	}
 
 	env := &testEnv{db: dbtest.OpenTestDB(t), claudeDir: t.TempDir()}
-	newEngine := func(prefixes []string) *sync.Engine {
+	newEngine := func(sourceMachine string, prefixes []string) *sync.Engine {
 		return sync.NewEngine(env.db, sync.EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentClaude: {env.claudeDir},
+			},
+			SourceMachines: map[parser.AgentType]map[string]string{
+				parser.AgentClaude: {env.claudeDir: sourceMachine},
 			},
 			Machine:            "local",
 			IncludeCwdPrefixes: prefixes,
 		})
 	}
 
-	env.engine = newEngine(nil)
+	env.engine = newEngine("archivebox", nil)
 	t.Cleanup(func() { env.engine.Close() })
 	content := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsEarly, "Outside", "/workspace/personal/blog").
@@ -240,10 +243,10 @@ func TestSyncAllCwdFilterChangeRevokesSkippedSourceDeletionProof(t *testing.T) {
 	// ordinary discovery takes its freshness-skip path. The skipped source must
 	// lose the deletion proof established before the filter changed.
 	env.engine.Close()
-	env.engine = newEngine([]string{"/workspace/work"})
+	env.engine = newEngine("renamedbox", []string{"/workspace/work"})
 	env.engine.SyncAll(t.Context(), nil)
 	ownership, err := env.db.ListActiveSessionSourceOwnershipScopesPage(
-		t.Context(), "local", string(parser.AgentClaude),
+		t.Context(), "archivebox", string(parser.AgentClaude),
 		[]db.StoredSourcePathHintScope{{Path: env.claudeDir}},
 		db.SessionSourceCursor{},
 	)

@@ -1386,13 +1386,15 @@ func TestOpenCodeChangedPathWatermarkMergeMaterializesOnlyChangedBatch(
 		seeder.AddProject("proj", "/home/user/app")
 		const base = int64(1779012000000)
 		var stored []StoredMemberFreshness
-		for i := range sessions {
-			id := fmt.Sprintf("ses-%06d", i)
-			seeder.AddSession(id, "proj", "", id, base, base)
-			stored = append(stored, StoredMemberFreshness{
-				Path: dbPath + "#" + id, CoveredThroughNS: base * 1_000_000,
-			})
-		}
+		seeder.InTransaction(func(seeder *OpenCodeSeeder) {
+			for i := range sessions {
+				id := fmt.Sprintf("ses-%06d", i)
+				seeder.AddSession(id, "proj", "", id, base, base)
+				stored = append(stored, StoredMemberFreshness{
+					Path: dbPath + "#" + id, CoveredThroughNS: base * 1_000_000,
+				})
+			}
+		})
 		// One session advances past its stored coverage.
 		changed := fmt.Sprintf("ses-%06d", sessions/2)
 		_, err := seeder.db.ExecContext(t.Context(),

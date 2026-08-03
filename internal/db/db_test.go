@@ -1009,8 +1009,8 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 }
 
 func TestCurrentDataVersionClaudeIDEEnvelopeSplit(t *testing.T) {
-	assert.Equal(t, 80, CurrentDataVersion(),
-		"version 80 splits Claude IDE envelopes off mixed prompts after "+
+	assert.Equal(t, 81, CurrentDataVersion(),
+		"version 81 splits Claude IDE envelopes off mixed prompts after "+
 			"the Claude launch provenance reparse")
 }
 
@@ -1284,6 +1284,35 @@ func TestSessionParentSessionID(t *testing.T) {
 		assert.Equal(t, "parent-uuid", *got.ParentSessionID,
 			"parent_session_id")
 	})
+}
+
+func TestUpsertSessionRefreshesParserParentSessionID(t *testing.T) {
+	d := testDB(t)
+	s := Session{
+		ID:              "kid",
+		Project:         "proj",
+		Machine:         defaultMachine,
+		Agent:           defaultAgent,
+		ParentSessionID: Ptr("first-parent"),
+	}
+	require.NoError(t, d.UpsertSession(s), "insert session")
+
+	assertParserParent := func(want string) {
+		t.Helper()
+		var got sql.NullString
+		err := d.getReader().QueryRow(
+			`SELECT parser_parent_session_id FROM sessions WHERE id = ?`,
+			"kid",
+		).Scan(&got)
+		require.NoError(t, err, "query parser parent")
+		require.True(t, got.Valid, "parser parent must be set")
+		assert.Equal(t, want, got.String, "parser parent")
+	}
+
+	assertParserParent("first-parent")
+	s.ParentSessionID = Ptr("second-parent")
+	require.NoError(t, d.UpsertSession(s), "update session")
+	assertParserParent("second-parent")
 }
 
 func TestGetChildSessions(t *testing.T) {
@@ -5788,7 +5817,7 @@ func TestCopySyncStateFrom_NoSourceTable(t *testing.T) {
 	assert.Equal(t, "marker-123", got)
 }
 
-func TestCopySyncStateFrom_OnlyCopiesDurablePGKeys(t *testing.T) {
+func TestCopySyncStateFrom_OnlyCopiesDurableKeys(t *testing.T) {
 	dir := t.TempDir()
 
 	srcPath := filepath.Join(dir, "src.db")
@@ -5801,6 +5830,11 @@ func TestCopySyncStateFrom_OnlyCopiesDurablePGKeys(t *testing.T) {
 		"seed source started")
 	require.NoError(t, srcDB.SetSyncState("last_sync_finished_at", "old-finish"),
 		"seed source finished")
+	require.NoError(t, srcDB.QueueSubagentParentRepairs([]string{"queued-child"}),
+		"seed durable hierarchy repair")
+	require.NoError(t, srcDB.QueueSubagentParentCleanupRepairs(
+		[]string{"queued-former-child"},
+	), "seed durable hierarchy cleanup")
 	require.NoError(t, srcDB.UpsertSession(Session{
 		ID: "queued-session", Project: "p", Machine: "local", Agent: "claude",
 	}), "seed source queued session")
@@ -5828,6 +5862,21 @@ func TestCopySyncStateFrom_OnlyCopiesDurablePGKeys(t *testing.T) {
 
 	assert.Contains(t, artifactExportQueueIDs(t, dstDB), "queued-session",
 		"artifact export queue rows must survive the copy")
+
+	var queuedRepairs int
+	require.NoError(t, dstDB.Reader().QueryRow(`
+		SELECT count(*) FROM subagent_parent_repair_queue
+		WHERE session_id = 'queued-child'`,
+	).Scan(&queuedRepairs), "query copied subagent repair queue")
+	assert.Equal(t, 1, queuedRepairs,
+		"pending hierarchy repairs must survive an archive rebuild")
+	var queuedCleanups int
+	require.NoError(t, dstDB.Reader().QueryRow(`
+		SELECT count(*) FROM subagent_parent_cleanup_queue
+		WHERE session_id = 'queued-former-child'`,
+	).Scan(&queuedCleanups), "query copied subagent cleanup queue")
+	assert.Equal(t, 1, queuedCleanups,
+		"pending destructive cleanup intent must survive an archive rebuild")
 
 	gotStarted, err := dstDB.GetSyncState("last_sync_started_at")
 	require.NoError(t, err, "GetSyncState last_sync_started_at")
