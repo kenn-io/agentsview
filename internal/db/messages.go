@@ -1111,15 +1111,16 @@ func (db *DB) LastClaudeMessageID(sessionID string) string {
 // it survives ordinal shifts. Role and content guard the ordinal
 // fallback used for legacy rows and ambiguous source UUIDs.
 type savedPin struct {
-	sourceUUID          string
-	role                string
-	content             string
-	ordinal             int
-	sourceUUIDCount     int
-	sourceIdentityCount int
-	messageFound        int
-	note                *string
-	createdAt           string
+	sourceUUID           string
+	role                 string
+	content              string
+	ordinal              int
+	sourceUUIDCount      int
+	sourceIdentityCount  int
+	hiddenRowsThroughPin int
+	messageFound         int
+	note                 *string
+	createdAt            string
 }
 
 // ReplaceSessionMessages deletes existing and inserts new messages
@@ -1574,6 +1575,13 @@ func savePinsTx(tx *sql.Tx, sessionID string) ([]savedPin, error) {
 					AND same_identity.content = m.content
 					AND m.source_uuid != ''
 			),
+			(
+				SELECT COUNT(*)
+				FROM messages hidden
+				WHERE hidden.session_id = m.session_id
+					AND hidden.ordinal <= p.ordinal
+					AND hidden.is_system = 1
+			),
 			p.note, p.created_at
 		FROM pinned_messages p
 		LEFT JOIN messages m ON m.id = p.message_id
@@ -1590,7 +1598,8 @@ func savePinsTx(tx *sql.Tx, sessionID string) ([]savedPin, error) {
 		if err := pinRows.Scan(
 			&sp.ordinal, &sp.sourceUUID, &sp.role, &sp.content,
 			&sp.messageFound, &sp.sourceUUIDCount,
-			&sp.sourceIdentityCount, &sp.note, &sp.createdAt,
+			&sp.sourceIdentityCount, &sp.hiddenRowsThroughPin,
+			&sp.note, &sp.createdAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning pin: %w", err)
 		}
@@ -1682,17 +1691,25 @@ func restorePinsTx(
 		}
 		if preserveLegacyByOrdinal {
 			// Explicit re-uploads define ordinal continuity for visible legacy
-			// rows, but a parser upgrade may insert hidden metadata at the old
-			// ordinal. Never move a user pin onto that system-only replacement.
+			// rows. Preserve that continuity only while the hidden-row layout
+			// through the saved ordinal is unchanged; inserted metadata can shift
+			// both the hidden row and every later visible row onto another message.
 			if _, err := tx.Exec(`
 				INSERT OR IGNORE INTO pinned_messages
 					(session_id, message_id, ordinal, note, created_at)
 				SELECT ?, m.id, m.ordinal, ?, ?
 				FROM messages m
 				WHERE m.session_id = ? AND m.ordinal = ?
-					AND m.is_system = 0`,
+					AND m.is_system = 0
+					AND (
+						SELECT COUNT(*)
+						FROM messages hidden
+						WHERE hidden.session_id = m.session_id
+							AND hidden.ordinal <= m.ordinal
+							AND hidden.is_system = 1
+					) = ?`,
 				sessionID, sp.note, sp.createdAt,
-				sessionID, sp.ordinal,
+				sessionID, sp.ordinal, sp.hiddenRowsThroughPin,
 			); err != nil {
 				return fmt.Errorf(
 					"restoring legacy pin ord=%d: %w", sp.ordinal, err,

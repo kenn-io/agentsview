@@ -4039,6 +4039,51 @@ func TestUploadSession_ReuploadDoesNotMoveLegacyPinToIDEEnvelope(t *testing.T) {
 	assert.Equal(t, "Explain this file.", msgs[1].Content)
 }
 
+func TestUploadSession_ReuploadDoesNotShiftLaterLegacyPinPastIDEEnvelope(t *testing.T) {
+	te := setup(t)
+	const sessionID = "upload-pinned-after-envelope"
+	const mixedPrompt = "<ide_opened_file>The user opened /workspace/app/README.md.</ide_opened_file> Explain this file."
+
+	require.NoError(t, te.db.UpsertSession(db.Session{
+		ID: sessionID, Project: "myproj", Machine: "remote", Agent: "claude",
+	}), "seed legacy uploaded session")
+	require.NoError(t, te.db.ReplaceSessionMessages(sessionID, []db.Message{
+		{
+			SessionID: sessionID, Ordinal: 0, Role: "user",
+			Content: mixedPrompt, ContentLength: len(mixedPrompt),
+		},
+		{
+			SessionID: sessionID, Ordinal: 1, Role: "assistant",
+			Content: "Legacy reply", ContentLength: len("Legacy reply"),
+		},
+	}), "seed legacy messages")
+	msgs, err := te.db.GetAllMessages(context.Background(), sessionID)
+	require.NoError(t, err, "GetAllMessages before re-upload")
+	require.Len(t, msgs, 2, "legacy messages")
+	_, err = te.db.PinMessage(sessionID, msgs[1].ID, nil)
+	require.NoError(t, err, "PinMessage")
+
+	updated := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, mixedPrompt).
+		AddClaudeAssistant(tsEarlyS5, "Legacy reply").
+		String()
+	w := te.upload(t, sessionID+".jsonl", updated,
+		"project=myproj&machine=remote")
+	assertStatus(t, w, http.StatusOK)
+
+	pins, err := te.db.ListPinnedMessages(context.Background(), sessionID, "")
+	require.NoError(t, err, "ListPinnedMessages")
+	assert.Empty(t, pins,
+		"legacy assistant pin must not shift onto the visible prompt")
+
+	msgs, err = te.db.GetAllMessages(context.Background(), sessionID)
+	require.NoError(t, err, "GetAllMessages after re-upload")
+	require.Len(t, msgs, 3, "split messages")
+	assert.True(t, msgs[0].IsSystem, "IDE envelope must remain hidden")
+	assert.Equal(t, "Explain this file.", msgs[1].Content)
+	assert.Equal(t, "Legacy reply", msgs[2].Content)
+}
+
 func TestUploadSession_EmptyFile(t *testing.T) {
 	te := setup(t)
 
