@@ -1,20 +1,7 @@
 package duckdb
 
-import (
-	"context"
+import "go.kenn.io/agentsview/internal/db"
 
-	"go.kenn.io/agentsview/internal/db"
-)
-
-func (s *Store) InsertInsight(_ db.Insight) (int64, error) { return 0, db.ErrReadOnly }
-func (s *Store) DeleteInsight(_ int64) error               { return db.ErrReadOnly }
-func (s *Store) ListInsights(_ context.Context, _ db.InsightFilter) ([]db.Insight, error) {
-	return []db.Insight{}, nil
-}
-func (s *Store) GetInsight(_ context.Context, _ int64) (*db.Insight, error) { return nil, nil }
-func (s *Store) GetCachedInsight(_ context.Context, _ string) (*db.Insight, error) {
-	return nil, nil
-}
 func (s *Store) RenameSession(_ string, _ *string) error               { return db.ErrReadOnly }
 func (s *Store) SoftDeleteSession(_ string) error                      { return db.ErrReadOnly }
 func (s *Store) SoftDeleteSessions(_ []string) (int, error)            { return 0, db.ErrReadOnly }

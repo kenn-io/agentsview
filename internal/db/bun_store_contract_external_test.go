@@ -105,3 +105,21 @@ func TestBunStoreCurationContract(t *testing.T) {
 		},
 	})
 }
+
+func TestBunStoreInsightContract(t *testing.T) {
+	storetest.RunInsightContract(t, storetest.InsightBackend{
+		Name: "sqlite", Writable: true,
+		Open: func(t *testing.T) (storetest.InsightStore, storetest.InsightFixture) {
+			database, err := db.Open(filepath.Join(t.TempDir(), "insight-contract.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			var fixture storetest.InsightFixture
+			require.NoError(t, database.Update(func(tx *sql.Tx) error {
+				var insertErr error
+				fixture, insertErr = storetest.InsertSQLiteInsightFixture(t.Context(), tx)
+				return insertErr
+			}))
+			return database.BunStore, fixture
+		},
+	})
+}
