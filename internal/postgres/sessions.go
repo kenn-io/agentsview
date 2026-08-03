@@ -12,6 +12,7 @@ import (
 	"github.com/uptrace/bun/dialect/pgdialect"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
 
 // Store wraps a PostgreSQL connection for read-only session
@@ -64,11 +65,40 @@ func (b *postgresBunBackend) Capabilities() db.BackendCapabilities {
 		writes[db.WriteInsightDelete] = true
 	}
 	return db.BackendCapabilities{
-		Writes: writes,
-		SessionMutations: db.SessionMutationCapabilities{
-			TouchUpdatedAt: true,
-		},
+		Writes:           writes,
+		SessionMutations: postgresSessionMutationAdapter{},
 	}
+}
+
+type postgresSessionMutationAdapter struct{}
+
+func (postgresSessionMutationAdapter) ApplyTouch(
+	query *bun.UpdateQuery, _ bunmodel.Timestamp,
+) {
+	query.Set("local_modified_at = CURRENT_TIMESTAMP")
+	query.Set(`updated_at = GREATEST(
+		CURRENT_TIMESTAMP,
+		updated_at + INTERVAL '1 microsecond'
+	)`)
+}
+
+func (adapter postgresSessionMutationAdapter) ApplySoftDelete(
+	query *bun.UpdateQuery, now bunmodel.Timestamp,
+) {
+	query.Set("deleted_at = CURRENT_TIMESTAMP")
+	adapter.ApplyTouch(query, now)
+}
+
+func (postgresSessionMutationAdapter) AfterRestore(
+	context.Context, bun.Tx, string,
+) error {
+	return nil
+}
+
+func (postgresSessionMutationAdapter) BeforeDelete(
+	context.Context, bun.Tx, []string,
+) error {
+	return nil
 }
 
 func (*postgresBunBackend) SessionQueryDialect() db.QueryDialect {

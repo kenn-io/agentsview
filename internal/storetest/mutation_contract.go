@@ -38,23 +38,25 @@ type MutationStore interface {
 // contract. Each behavior opens a fresh fixture so mutations cannot mask one
 // another.
 type MutationFixture struct {
-	Rename              string
-	SoftActive          string
-	SoftSourceMissing   string
-	BatchActive         string
-	BatchSourceMissing  string
-	BatchAlreadyTrashed string
-	RestoreUserTrash    string
-	RestoreSource       string
-	DeleteCanonical     string
-	DeleteAlias         string
-	DeleteVibe          string
-	EmptyA              string
-	EmptyB              string
-	ListNewest          string
-	ListOlder           string
-	ListSourceMissing   string
-	Keep                string
+	SourceArchiveID          string
+	SourceDatabaseGeneration string
+	Rename                   string
+	SoftActive               string
+	SoftSourceMissing        string
+	BatchActive              string
+	BatchSourceMissing       string
+	BatchAlreadyTrashed      string
+	RestoreUserTrash         string
+	RestoreSource            string
+	DeleteCanonical          string
+	DeleteAlias              string
+	DeleteVibe               string
+	EmptyA                   string
+	EmptyB                   string
+	ListNewest               string
+	ListOlder                string
+	ListSourceMissing        string
+	Keep                     string
 }
 
 // MutationHarness exposes persisted boundary state that is intentionally not
@@ -88,6 +90,15 @@ func RunMutationContract(t *testing.T, backend MutationBackend) {
 		require.Len(t, trashed, 500)
 		assert.Equal(t, harness.Rows.ListNewest, trashed[0].ID)
 		assert.Equal(t, harness.Rows.ListOlder, trashed[1].ID)
+		require.NotNil(t, trashed[0].FilePath)
+		assert.Equal(t, "/tmp/mutation-list-newest.jsonl", *trashed[0].FilePath)
+		require.NotNil(t, trashed[0].DisplayName)
+		assert.Equal(t, "Trash fallback title", *trashed[0].DisplayName)
+		require.NotNil(t, trashed[0].DeletedAt)
+		assert.Equal(t, "2100-01-01T00:00:00Z", *trashed[0].DeletedAt)
+		assert.Equal(t, harness.Rows.SourceArchiveID, trashed[0].SourceArchiveID)
+		assert.Equal(t, harness.Rows.SourceDatabaseGeneration,
+			trashed[0].SourceDatabaseGeneration)
 		assert.NotContains(t, mutationSessionIDs(trashed), harness.Rows.ListSourceMissing)
 		assert.NotContains(t, mutationSessionIDs(trashed), harness.Rows.RestoreSource)
 	})
@@ -327,23 +338,25 @@ func mutationFixtureRows(
 	archiveID string, generation string, extraTrashRows int,
 ) (MutationFixture, []bunmodel.Session) {
 	fixture := MutationFixture{
-		Rename:              "mutation-rename",
-		SoftActive:          "mutation-soft-active",
-		SoftSourceMissing:   "mutation-soft-source",
-		BatchActive:         "mutation-batch-active",
-		BatchSourceMissing:  "mutation-batch-source",
-		BatchAlreadyTrashed: "mutation-batch-trashed",
-		RestoreUserTrash:    "mutation-restore-user",
-		RestoreSource:       "mutation-restore-source",
-		DeleteCanonical:     "mutation-delete-canonical",
-		DeleteAlias:         "mutation-delete-alias",
-		DeleteVibe:          "vibe:00000000-0000-0000-0000-000000000001",
-		EmptyA:              "mutation-empty-a",
-		EmptyB:              "mutation-empty-b",
-		ListNewest:          "mutation-list-newest",
-		ListOlder:           "mutation-list-older",
-		ListSourceMissing:   "mutation-list-source",
-		Keep:                "mutation-keep",
+		SourceArchiveID:          archiveID,
+		SourceDatabaseGeneration: generation,
+		Rename:                   "mutation-rename",
+		SoftActive:               "mutation-soft-active",
+		SoftSourceMissing:        "mutation-soft-source",
+		BatchActive:              "mutation-batch-active",
+		BatchSourceMissing:       "mutation-batch-source",
+		BatchAlreadyTrashed:      "mutation-batch-trashed",
+		RestoreUserTrash:         "mutation-restore-user",
+		RestoreSource:            "mutation-restore-source",
+		DeleteCanonical:          "mutation-delete-canonical",
+		DeleteAlias:              "mutation-delete-alias",
+		DeleteVibe:               "vibe:00000000-0000-0000-0000-000000000001",
+		EmptyA:                   "mutation-empty-a",
+		EmptyB:                   "mutation-empty-b",
+		ListNewest:               "mutation-list-newest",
+		ListOlder:                "mutation-list-older",
+		ListSourceMissing:        "mutation-list-source",
+		Keep:                     "mutation-keep",
 	}
 	sourceMissing := "source_missing"
 	userTrash := mutationTimestampPointer("2026-08-03T10:00:00Z")
@@ -369,6 +382,10 @@ func mutationFixtureRows(
 		mutationSessionRow(fixture.Keep, archiveID, generation, nil, nil),
 	}
 	rows[0].SessionName = &agentTitle
+	trashTitle := "Trash fallback title"
+	trashPath := "/tmp/mutation-list-newest.jsonl"
+	rows[13].SessionName = &trashTitle
+	rows[13].FilePath = &trashPath
 	rows[10].Agent = "vibe"
 	vibePath := "/tmp/vibe/session_20260803_contract/messages.jsonl"
 	rows[10].FilePath = &vibePath

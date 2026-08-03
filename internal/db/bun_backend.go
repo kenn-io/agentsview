@@ -3,11 +3,16 @@ package db
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	"github.com/uptrace/bun"
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
 
-// BunBackend owns one engine's guarded Bun handle lifecycle.
+// BunBackend owns one engine's guarded Bun handle lifecycle. ConsistentView
+// callbacks may be replayed by adapters that cannot hold one remote snapshot;
+// callbacks must stage results and publish them only after ConsistentView
+// returns successfully.
 type BunBackend interface {
 	Name() string
 	ReadOnly() bool
@@ -40,14 +45,16 @@ const (
 type BackendCapabilities struct {
 	Recall           bool
 	Writes           map[WriteOperation]bool
-	SessionMutations SessionMutationCapabilities
+	SessionMutations SessionMutationAdapter
 }
 
-// SessionMutationCapabilities identifies adapter-owned operational side
-// effects that accompany otherwise canonical session mutations.
-type SessionMutationCapabilities struct {
-	TouchUpdatedAt           bool
-	ClearLocalSourceBaseline bool
+// SessionMutationAdapter owns engine-specific timestamp expressions and
+// transaction-scoped side effects around the canonical session mutations.
+type SessionMutationAdapter interface {
+	ApplyTouch(*bun.UpdateQuery, bunmodel.Timestamp)
+	ApplySoftDelete(*bun.UpdateQuery, bunmodel.Timestamp)
+	AfterRestore(context.Context, bun.Tx, string) error
+	BeforeDelete(context.Context, bun.Tx, []string) error
 }
 
 // AllowsWrite reports whether an operation family is authorized.
@@ -70,10 +77,8 @@ func (b *sqliteBunBackend) Capabilities() BackendCapabilities {
 		return BackendCapabilities{}
 	}
 	return BackendCapabilities{
-		Recall: true,
-		SessionMutations: SessionMutationCapabilities{
-			ClearLocalSourceBaseline: true,
-		},
+		Recall:           true,
+		SessionMutations: sqliteSessionMutationAdapter{},
 		Writes: map[WriteOperation]bool{
 			WriteArchive:           true,
 			WriteCuration:          true,
@@ -83,6 +88,42 @@ func (b *sqliteBunBackend) Capabilities() BackendCapabilities {
 			WriteRecall:            true,
 		},
 	}
+}
+
+type sqliteSessionMutationAdapter struct{}
+
+func (sqliteSessionMutationAdapter) ApplyTouch(
+	query *bun.UpdateQuery, now bunmodel.Timestamp,
+) {
+	query.Set("local_modified_at = ?", now)
+}
+
+func (adapter sqliteSessionMutationAdapter) ApplySoftDelete(
+	query *bun.UpdateQuery, now bunmodel.Timestamp,
+) {
+	query.Set("deleted_at = ?", now)
+	adapter.ApplyTouch(query, now)
+}
+
+func (sqliteSessionMutationAdapter) AfterRestore(
+	ctx context.Context, tx bun.Tx, id string,
+) error {
+	if _, err := tx.NewDelete().Table("local_session_source_baselines").
+		Where("session_id = ?", id).Exec(ctx); err != nil {
+		return fmt.Errorf("clearing restored session %s source baseline: %w", id, err)
+	}
+	return nil
+}
+
+func (sqliteSessionMutationAdapter) BeforeDelete(
+	_ context.Context, tx bun.Tx, ids []string,
+) error {
+	for _, id := range ids {
+		if err := deleteSessionMessagesTx(tx.Tx, id); err != nil {
+			return fmt.Errorf("pre-deleting session %s messages: %w", id, err)
+		}
+	}
+	return nil
 }
 
 func (*sqliteBunBackend) SessionQueryDialect() QueryDialect {

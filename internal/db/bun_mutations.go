@@ -22,7 +22,9 @@ func (s *BunStore) RenameSession(id string, displayName *string) error {
 			Set("display_name = ?", displayName).
 			Where("id = ?", id).
 			Where("deleted_at IS NULL")
-		s.applySessionMutationTouch(query, bunmodel.NewTimestamp(time.Now().UTC()))
+		s.backend.Capabilities().SessionMutations.ApplyTouch(
+			query, bunmodel.NewTimestamp(time.Now().UTC()),
+		)
 		if _, err := query.Exec(ctx); err != nil {
 			return fmt.Errorf("renaming session %s: %w", id, err)
 		}
@@ -39,11 +41,10 @@ func (s *BunStore) SoftDeleteSession(id string) error {
 	err := s.update(ctx, WriteSessionManagement, func(store bun.IDB) error {
 		now := bunmodel.NewTimestamp(time.Now().UTC())
 		query := store.NewUpdate().Model((*bunmodel.Session)(nil)).
-			Set("deleted_at = ?", now).
 			Set("deletion_cause = NULL").
 			Where("id = ?", id).
 			Where("(deleted_at IS NULL OR deletion_cause = ?)", deletionCauseSourceMissing)
-		s.applySessionMutationTouch(query, now)
+		s.backend.Capabilities().SessionMutations.ApplySoftDelete(query, now)
 		if _, err := query.Exec(ctx); err != nil {
 			return fmt.Errorf("soft deleting session %s: %w", id, err)
 		}
@@ -61,16 +62,16 @@ func (s *BunStore) SoftDeleteSessions(ids []string) (int, error) {
 		if len(ids) == 0 {
 			return nil
 		}
-		return store.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		transactionTotal := 0
+		err := store.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 			now := bunmodel.NewTimestamp(time.Now().UTC())
 			for start := 0; start < len(ids); start += bunMutationBatchSize {
 				end := min(start+bunMutationBatchSize, len(ids))
 				query := tx.NewUpdate().Model((*bunmodel.Session)(nil)).
-					Set("deleted_at = ?", now).
 					Set("deletion_cause = NULL").
 					Where("id IN (?)", bun.List(ids[start:end])).
 					Where("(deleted_at IS NULL OR deletion_cause = ?)", deletionCauseSourceMissing)
-				s.applySessionMutationTouch(query, now)
+				s.backend.Capabilities().SessionMutations.ApplySoftDelete(query, now)
 				result, err := query.Exec(ctx)
 				if err != nil {
 					return fmt.Errorf("soft deleting sessions: %w", err)
@@ -79,12 +80,19 @@ func (s *BunStore) SoftDeleteSessions(ids []string) (int, error) {
 				if err != nil {
 					return fmt.Errorf("counting soft deleted sessions: %w", err)
 				}
-				total += int(count)
+				transactionTotal += int(count)
 			}
 			return nil
 		})
+		if err == nil {
+			total = transactionTotal
+		}
+		return err
 	})
-	return total, err
+	if err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 
 // RestoreSession restores one user-trashed session. Source-missing tombstones
@@ -93,32 +101,39 @@ func (s *BunStore) RestoreSession(id string) (int64, error) {
 	ctx := context.Background()
 	var restored int64
 	err := s.update(ctx, WriteSessionManagement, func(store bun.IDB) error {
-		return store.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		var transactionRestored int64
+		err := store.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 			query := tx.NewUpdate().Model((*bunmodel.Session)(nil)).
 				Set("deleted_at = NULL").
 				Set("deletion_cause = NULL").
 				Where("id = ?", id).
 				Where("deleted_at IS NOT NULL").
 				Where("deletion_cause IS NULL")
-			s.applySessionMutationTouch(query, bunmodel.NewTimestamp(time.Now().UTC()))
+			s.backend.Capabilities().SessionMutations.ApplyTouch(
+				query, bunmodel.NewTimestamp(time.Now().UTC()),
+			)
 			result, err := query.Exec(ctx)
 			if err != nil {
 				return fmt.Errorf("restoring session %s: %w", id, err)
 			}
-			restored, err = result.RowsAffected()
+			transactionRestored, err = result.RowsAffected()
 			if err != nil {
 				return fmt.Errorf("counting restored session %s: %w", id, err)
 			}
-			if restored > 0 && s.backend.Capabilities().SessionMutations.ClearLocalSourceBaseline {
-				if _, err := tx.NewDelete().Table("local_session_source_baselines").
-					Where("session_id = ?", id).Exec(ctx); err != nil {
-					return fmt.Errorf("clearing restored session %s source baseline: %w", id, err)
-				}
+			if transactionRestored > 0 {
+				return s.backend.Capabilities().SessionMutations.AfterRestore(ctx, tx, id)
 			}
 			return nil
 		})
+		if err == nil {
+			restored = transactionRestored
+		}
+		return err
 	})
-	return restored, err
+	if err != nil {
+		return 0, err
+	}
+	return restored, nil
 }
 
 // ListTrashedSessions returns user-trashed sessions newest first. Recoverable
@@ -140,7 +155,7 @@ func (s *BunStore) ListTrashedSessions(ctx context.Context) ([]Session, error) {
 		}
 		sessions = make([]Session, 0, len(rows))
 		for _, row := range rows {
-			sessions = append(sessions, baseSessionFromBunRow(row))
+			sessions = append(sessions, visibleSessionFromBunRow(row))
 		}
 		return nil
 	})
@@ -156,7 +171,8 @@ func (s *BunStore) DeleteSessionIfTrashed(id string) (int64, error) {
 	ctx := context.Background()
 	var deleted int64
 	err := s.update(ctx, WriteSessionManagement, func(store bun.IDB) error {
-		return store.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		var transactionDeleted int64
+		err := store.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 			result, err := tx.NewUpdate().Model((*bunmodel.Session)(nil)).
 				Set("deleted_at = deleted_at").
 				Where("id = ?", id).
@@ -176,14 +192,21 @@ func (s *BunStore) DeleteSessionIfTrashed(id string) (int64, error) {
 			if err != nil {
 				return fmt.Errorf("loading trashed session %s: %w", id, err)
 			}
-			if err := permanentlyDeleteSessionRows(ctx, tx, rows); err != nil {
+			if err := s.permanentlyDeleteSessionRows(ctx, tx, rows); err != nil {
 				return fmt.Errorf("permanently deleting trashed session %s: %w", id, err)
 			}
-			deleted = int64(len(rows))
+			transactionDeleted = int64(len(rows))
 			return nil
 		})
+		if err == nil {
+			deleted = transactionDeleted
+		}
+		return err
 	})
-	return deleted, err
+	if err != nil {
+		return 0, err
+	}
+	return deleted, nil
 }
 
 // EmptyTrash permanently deletes every user-trashed session and records its
@@ -192,7 +215,8 @@ func (s *BunStore) EmptyTrash() (int, error) {
 	ctx := context.Background()
 	deleted := 0
 	err := s.update(ctx, WriteSessionManagement, func(store bun.IDB) error {
-		return store.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		transactionDeleted := 0
+		err := store.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 			if _, err := tx.NewUpdate().Model((*bunmodel.Session)(nil)).
 				Set("deleted_at = deleted_at").
 				Where("deleted_at IS NOT NULL").
@@ -203,23 +227,21 @@ func (s *BunStore) EmptyTrash() (int, error) {
 			if err != nil {
 				return fmt.Errorf("loading trashed sessions: %w", err)
 			}
-			if err := permanentlyDeleteSessionRows(ctx, tx, rows); err != nil {
+			if err := s.permanentlyDeleteSessionRows(ctx, tx, rows); err != nil {
 				return fmt.Errorf("emptying trash: %w", err)
 			}
-			deleted = len(rows)
+			transactionDeleted = len(rows)
 			return nil
 		})
+		if err == nil {
+			deleted = transactionDeleted
+		}
+		return err
 	})
-	return deleted, err
-}
-
-func (s *BunStore) applySessionMutationTouch(
-	query *bun.UpdateQuery, now bunmodel.Timestamp,
-) {
-	query.Set("local_modified_at = ?", now)
-	if s.backend.Capabilities().SessionMutations.TouchUpdatedAt {
-		query.Set("updated_at = ?", now)
+	if err != nil {
+		return 0, err
 	}
+	return deleted, nil
 }
 
 func selectUserTrashRows(
@@ -235,8 +257,8 @@ func selectUserTrashRows(
 	return rows, err
 }
 
-func permanentlyDeleteSessionRows(
-	ctx context.Context, store bun.IDB, rows []bunmodel.Session,
+func (s *BunStore) permanentlyDeleteSessionRows(
+	ctx context.Context, store bun.Tx, rows []bunmodel.Session,
 ) error {
 	if len(rows) == 0 {
 		return nil
@@ -270,6 +292,11 @@ func permanentlyDeleteSessionRows(
 			On("CONFLICT (id) DO NOTHING").Exec(ctx); err != nil {
 			return fmt.Errorf("recording excluded session ids: %w", err)
 		}
+	}
+	if err := s.backend.Capabilities().SessionMutations.BeforeDelete(
+		ctx, store, excludedIDs,
+	); err != nil {
+		return err
 	}
 	for start := 0; start < len(excludedIDs); start += bunMutationBatchSize {
 		end := min(start+bunMutationBatchSize, len(excludedIDs))

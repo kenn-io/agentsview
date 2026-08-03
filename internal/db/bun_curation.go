@@ -310,8 +310,11 @@ func UpsertPinnedMessageRows(
 			default:
 				return fmt.Errorf("upserting pinned message rows: unknown id policy %d", idPolicy)
 			}
+			query = query.On("CONFLICT (session_id, ordinal) DO UPDATE")
+			if idPolicy == PreservePinRowIDs {
+				query = query.Set("id = EXCLUDED.id")
+			}
 			if _, err := query.
-				On("CONFLICT (session_id, ordinal) DO UPDATE").
 				Set("message_id = EXCLUDED.message_id").
 				Set("source_uuid = EXCLUDED.source_uuid").
 				Set("note = EXCLUDED.note").
