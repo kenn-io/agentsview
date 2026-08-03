@@ -59,8 +59,30 @@ func TestBunRowSessionRoundTripPreservesCanonicalFields(t *testing.T) {
 		SourceArchiveID: "archive-1", SourceDatabaseGeneration: "database-7",
 	}
 
-	got := sessionFromBunRow(sessionToBunRow(want))
+	row, err := sessionToBunRow(want)
+	require.NoError(t, err)
+	got := sessionFromBunRow(row)
 	assert.Equal(t, want, got)
+}
+
+func TestBunRowSessionConversionRejectsMalformedOptionalTimestamp(t *testing.T) {
+	malformed := "not-a-timestamp"
+	_, err := sessionToBunRow(Session{
+		ID: "session-1", CreatedAt: "2026-08-02T11:59:00Z",
+		StartedAt: &malformed,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "started_at")
+	assert.Contains(t, err.Error(), malformed)
+}
+
+func TestBunRowSessionConversionRejectsMalformedRequiredTimestamp(t *testing.T) {
+	_, err := sessionToBunRow(Session{
+		ID: "session-1", CreatedAt: "not-a-created-at",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "created_at")
+	assert.Contains(t, err.Error(), "not-a-created-at")
 }
 
 func TestBunRowMessageRoundTripPreservesJSONAndOptionalID(t *testing.T) {
@@ -79,7 +101,8 @@ func TestBunRowMessageRoundTripPreservesJSONAndOptionalID(t *testing.T) {
 				SourceParentUUID: "uuid-0", IsSidechain: true, IsCompactBoundary: true,
 			}
 
-			row := messageToBunRow(want)
+			row, err := messageToBunRow(want)
+			require.NoError(t, err)
 			if id == 0 {
 				assert.Nil(t, row.ID)
 			} else {
@@ -89,6 +112,15 @@ func TestBunRowMessageRoundTripPreservesJSONAndOptionalID(t *testing.T) {
 			assert.Equal(t, want, messageFromBunRow(row))
 		})
 	}
+}
+
+func TestBunRowMessageConversionRejectsMalformedTimestamp(t *testing.T) {
+	_, err := messageToBunRow(Message{
+		SessionID: "session-1", Ordinal: 7, Timestamp: "malformed",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "timestamp")
+	assert.Contains(t, err.Error(), "malformed")
 }
 
 func TestBunRowPriorSQLiteMessageKeyAliasRemainsReadable(t *testing.T) {

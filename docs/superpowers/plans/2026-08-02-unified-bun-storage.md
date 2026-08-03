@@ -291,7 +291,7 @@ ______________________________________________________________________
   column names registered for one canonical model in sorted order.
 
 - Produces lossless converters such as
-  `func sessionToBunRow(Session) bunmodel.Session` and
+  `func sessionToBunRow(Session) (bunmodel.Session, error)` and
   `func sessionFromBunRow(bunmodel.Session) Session` in package `db`.
   `db.Session` gains internal `SourceArchiveID` and `SourceDatabaseGeneration`
   fields, and `ArchiveIdentity` carries the stable archive ID/database ID that
@@ -327,7 +327,8 @@ ______________________________________________________________________
 
     Add literal round-trip cases for nullable timestamps, SQLite integer booleans,
     native booleans, JSON, and optional IDs. Name the production break each case
-    catches in the test name.
+    catches in the test name. Unsupported non-empty timestamps must return a
+    field-qualified error; they must never become `NULL` or a zero timestamp.
 
     Generate `messages` DDL for every dialect and assert the canonical composite
     logical key. Separately characterize the prior SQLite shape as the accepted
@@ -358,6 +359,12 @@ ______________________________________________________________________
     Keep engine-operational tables out of `CommonTables`; list them only in the
     schema extension packages that own them.
 
+    Register canonical foreign keys, cascade intent, conditional dedup indexes,
+    and ordinal-based tool/pin relationships. Cursor-usage and secret-finding
+    IDs are optional source data because DuckDB writers do not allocate archive
+    sequences. Use portable `CASE` expression indexes to permit repeated empty
+    dedup keys and reject repeated non-empty keys on all three engines.
+
 - [ ] **Step 4: Verify generated schema independently of current physical
   schemas**
 
@@ -366,7 +373,10 @@ ______________________________________________________________________
     `pgdialect.New` without executing it. Assert each model's hand-listed
     critical columns occur in all three generated forms. Do not compare the
     registry with the existing DuckDB/PostgreSQL schema yet; Task 4 owns
-    physical convergence.
+    physical convergence. Execute every registered ordinary index, exercise
+    non-empty dedup rejection, and prove session/message cascades on SQLite.
+    DuckDB omits only the unsupported cascade action while retaining each foreign
+    key; its mirror writer already deletes children explicitly.
 
 - [ ] **Step 5: Verify GREEN**
 
@@ -464,6 +474,14 @@ ______________________________________________________________________
     Task 7 moves the existing setters onto `BunStore` and protects them with
     `pricingMu`.
 
+    During the staged cutover, the concrete cursor/pricing fields remain
+    authoritative for legacy consumers and every setter updates both copies.
+    SQLite injects its constructor-generated cursor secret into `BunStore`;
+    PostgreSQL and DuckDB synchronize through their existing configured-secret
+    setters. Tasks 5-7 move consumers family by family, and Task 9 removes the
+    concrete fields only after no legacy consumer remains. `BunStore` does not
+    silently generate an independent fallback secret.
+
 - Produces thin composition: SQLite `DB`, `postgres.Store`, and `duckdb.Store`
   embed `*BunStore` but retain their current concrete public types and
   lifecycle APIs.
@@ -503,14 +521,20 @@ ______________________________________________________________________
 
     Extend SQLite reopen and DuckDB mirror-reopen tests to execute a Bun read
     before and after the handle swap and assert both the new data and the
-    absence of `database is closed` errors.
+    absence of `database is closed` errors. Add coordinated cases that block an
+    in-flight Bun callback, start `Reopen`/mirror adoption, prove the swap
+    waits, release the callback, and then read from the replacement. Existing
+    raw-pool lifecycle tests continue to cover writer close/reopen, connection
+    close, full close, and drain failures.
 
     Add a Quack resolver unit test with a recording `bun.IConn` seam: a generated
     `SELECT id FROM sessions WHERE project = 'alpha'` must be handed to
     `query(?)` as one SQL argument, not executed against the in-memory catalog.
     Add a `duckdbtest` integration case that executes a Bun-generated quoted
     predicate and scans JSON/timestamp data through a real Quack `query()`
-    attachment. Reuse the existing stale-attachment and error-redaction harness.
+    attachment. After a server restart, run a Bun `Count` or `Exists` operation
+    so the `QueryRowContext` path proves it uses the same stale-attachment
+    retry. Reuse the existing stale-attachment and error-redaction harness.
 
 - [ ] **Step 2: Verify RED**
 
@@ -539,8 +563,10 @@ ______________________________________________________________________
 
     The Quack resolver returns an `IConn` that formats no values itself: Bun has
     already produced safe DuckDB SQL. `QueryContext` and `QueryRowContext` pass
-    that complete SQL as the argument to the existing `query()` table function;
-    `ExecContext` returns `db.ErrReadOnly`.
+    that complete SQL through the existing reattachment-aware `query()` path;
+    the row path eagerly bridges its single result back to `*sql.Row` because
+    Bun's `IConn` requires that concrete return type. `ExecContext` returns
+    `db.ErrReadOnly`.
 
 - [ ] **Step 4: Verify GREEN and lifecycle behavior**
 
@@ -580,6 +606,9 @@ ______________________________________________________________________
 - Create: `internal/db/bun_schema_test.go`
 - Modify: `internal/db/db.go`
 - Modify: `internal/db/schema.sql`
+- Modify: `internal/db/sessions.go`
+- Modify: `internal/db/session_batch.go`
+- Modify: `internal/db/project_identity.go`
 - Modify: `internal/db/legacy_schema_test.go`
 - Modify: `internal/postgres/schema.go`
 - Modify: `internal/postgres/schema_test.go`
@@ -634,17 +663,24 @@ ______________________________________________________________________
        named session under `pgtest`.
 
     Seed the prior SQLite fixture with an aggregate identity observation, a
-    session snapshot, and a worktree mapping. Assert that convergence backfills
-    the source-scoped tables with the archive ID/generation before canonical
-    reads switch, and that subsequent writes target only those canonical tables.
-    Inject a failure before the compatibility stamp on SQLite and PostgreSQL;
-    assert the new rows, stamp, and all intermediate DDL roll back together.
+    session snapshot, a worktree mapping, a tool call, and a pinned message.
+    Assert that convergence backfills the source-scoped tables with the archive
+    ID/generation before canonical reads switch, and that subsequent writes
+    target only those canonical tables. Inject a failure before the
+    compatibility stamp on SQLite and PostgreSQL; assert the new rows, stamp,
+    and all intermediate DDL roll back together.
 
     Give the legacy session empty provenance and assert migration fills
     `source_archive_id` from `GetArchiveID` and `source_database_generation`
     from `GetDatabaseID`. After migration, write a newly parsed session through
     the normal batch API and assert both required values are stamped before its
     canonical identity joins are queried.
+
+    Resolve the shipped SQLite `tool_calls.message_id` and
+    `pinned_messages.message_id` aliases from canonical message ordinals in the
+    same write transaction. Retain the seeded dependent rows and prove a new
+    ordinal-based tool/pin write satisfies both the canonical relationship and
+    the non-null physical aliases.
 
     Update the DuckDB rebuild test to expect schema version 10, the full canonical
     common table/column set, preserved source rows, and atomic replacement.
@@ -677,6 +713,13 @@ ______________________________________________________________________
     compatibility only in the same transaction as all convergence statements.
     Retain SQLite's old non-source identity tables as inert migration history;
     do not read, write, drop, or use them as a fallback after the cutover.
+
+    Move archive-identity retrieval and session provenance stamping into this
+    task. Route every SQLite session insertion path, including batch, pending-
+    content, project-identity, and placeholder writes, through the same helper
+    before shared reads are enabled. Empty archive identity is an error. Task 10
+    later replaces the SQL implementation with Bun but does not introduce this
+    invariant.
 
     Replace DuckDB's duplicated common `mirrorTables` declarations with registry
     creation. Keep only `sync_metadata`, provenance, and DuckDB-specific indexes
@@ -1404,8 +1447,9 @@ ______________________________________________________________________
     owners and preserves target-owned display-name/deletion baselines. This is
     an operational replication policy, not a duplicate common Store query.
 
-    SQLite obtains `ArchiveIdentity` from its existing archive metadata under the
-    write guard and rejects an empty identity before converting parser rows.
+    SQLite uses the archive-identity stamping invariant established in Task 4;
+    this task replaces its SQL implementation with Bun without adding a second
+    retrieval or compatibility path.
 
 - Consumes the canonical pricing/band and star/pin write helpers defined in
   Tasks 6-7; the cross-target fixture never relies on an undefined test-only

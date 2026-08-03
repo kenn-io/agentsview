@@ -127,8 +127,12 @@ The following remain documented extensions rather than canonical data tables:
 - FTS tables, generated search columns, and search indexes; and
 - vector generation tables and vector indexes.
 
-The common table definitions, columns, constraints, and ordinary indexes do not
-otherwise fork by engine.
+The common table definitions, columns, relationships, and ordinary-index
+semantics do not otherwise fork by engine. DuckDB is the narrow constraint
+syntax exception: it enforces canonical foreign keys but rejects cascading
+actions, so its read-only mirror writer keeps its existing explicit child-first
+deletion order. SQLite and PostgreSQL generate `ON DELETE CASCADE` from the same
+relationship metadata.
 
 The convergence uses this ownership matrix:
 
@@ -148,6 +152,25 @@ never rebuilds the persistent table. PostgreSQL already uses the composite key;
 DuckDB adopts it on the version-10 rebuild. No common query or relationship may
 depend on SQLite rowid identity.
 
+The same rule applies to dependent rows. Canonical tool calls use
+`(session_id, message_ordinal, call_index)`, tool-result events extend that key
+with `event_index`, and pins relate to messages through `(session_id, ordinal)`.
+The shipped SQLite `tool_calls.message_id` and `pinned_messages.message_id`
+columns remain non-null physical aliases because removing them would require
+destructive table rebuilds. The SQLite adapter resolves those aliases from the
+inserted message inside the same transaction; shared queries and every other
+backend use only the canonical ordinal keys. Migration tests retain existing
+tool calls and pins and prove new writes satisfy both representations.
+
+Canonical foreign-key metadata preserves session/message deletion behavior for
+fresh schemas. Canonical usage dedup indexes use portable `CASE` expressions so
+empty keys may repeat while non-empty keys remain unique on all engines; shipped
+SQLite/PostgreSQL partial indexes are accepted as physically equivalent.
+Mirror-only source IDs, including cursor-usage and secret-finding IDs, are
+nullable data rather than generated canonical keys. Conversion of a non-empty
+timestamp that is not one of the proven persistent forms returns an error and
+aborts the enclosing write instead of silently producing `NULL` or a zero time.
+
 Existing SQLite `project_identity_observations`,
 `session_project_identity_snapshots`, and `worktree_project_mappings` are
 one-time migration inputs. The convergence transaction backfills the canonical
@@ -158,10 +181,12 @@ source-scoped identity shape.
 
 `sessions.source_archive_id` and `sessions.source_database_generation` are
 required canonical provenance. The SQLite adapter reads the stable archive ID
-and database ID under its guarded handle and stamps every parser batch before
-conversion. The convergence migration backfills both columns on legacy sessions
-in the same transaction as the source-scoped identity tables; empty values fail
-compatibility validation after cutover.
+and database ID under its guarded handle and stamps every session write before
+the first shared-query cutover. This stamping lands with schema convergence, not
+the later canonical-write rewrite, so Tasks 5-9 cannot create sessions with
+empty provenance. The convergence migration backfills both columns on legacy
+sessions in the same transaction as the source-scoped identity tables; empty
+values fail compatibility validation after cutover.
 
 ## Schema Creation and Migration
 

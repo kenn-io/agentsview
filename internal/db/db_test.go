@@ -3807,6 +3807,50 @@ func TestSQLiteBunReopenUsesCurrentGuardedHandle(t *testing.T) {
 	assert.Equal(t, "after", project)
 }
 
+func TestSQLiteBunViewKeepsReopenBehindInFlightCallback(t *testing.T) {
+	d := testDB(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	viewDone := make(chan error, 1)
+	go func() {
+		viewDone <- d.view(t.Context(), func(bun.IDB) error {
+			close(started)
+			<-release
+			return nil
+		})
+	}()
+	<-started
+
+	reopenDone := make(chan error, 1)
+	go func() { reopenDone <- d.Reopen() }()
+	select {
+	case err := <-reopenDone:
+		close(release)
+		require.Failf(t, "Reopen returned during guarded Bun view", "error: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	require.NoError(t, <-viewDone)
+	require.NoError(t, <-reopenDone)
+}
+
+func TestSQLiteCursorSecretUpdatesLegacyAndSharedState(t *testing.T) {
+	d := testDB(t)
+	secret := []byte("configured-cursor-secret")
+	d.SetCursorSecret(secret)
+	secret[0] = 'X'
+
+	d.cursorMu.RLock()
+	legacy := append([]byte(nil), d.cursorSecret...)
+	d.cursorMu.RUnlock()
+	d.BunStore.cursorMu.RLock()
+	shared := append([]byte(nil), d.BunStore.cursorSecret...)
+	d.BunStore.cursorMu.RUnlock()
+
+	assert.Equal(t, []byte("configured-cursor-secret"), legacy)
+	assert.Equal(t, legacy, shared)
+}
+
 func TestReopenAfterSwap(t *testing.T) {
 
 	dir := t.TempDir()

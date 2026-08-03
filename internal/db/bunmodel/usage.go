@@ -27,7 +27,7 @@ type UsageEvent struct {
 type CursorUsageEvent struct {
 	bun.BaseModel `bun:"table:cursor_usage_events"`
 
-	ID                         int64     `bun:"id,pk,autoincrement"`
+	ID                         *int64    `bun:"id,nullzero"`
 	OccurredAt                 Timestamp `bun:"occurred_at,type:TIMESTAMPTZ,notnull"`
 	Model                      string    `bun:"model,notnull"`
 	Kind                       string    `bun:"kind,notnull,default:''"`

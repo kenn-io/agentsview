@@ -63,7 +63,7 @@ type Insight struct {
 type SecretFinding struct {
 	bun.BaseModel `bun:"table:secret_findings"`
 
-	ID             int64     `bun:"id,pk,autoincrement"`
+	ID             *int64    `bun:"id,nullzero"`
 	SessionID      string    `bun:"session_id,notnull"`
 	RuleName       string    `bun:"rule_name,notnull"`
 	Confidence     string    `bun:"confidence,notnull"`
