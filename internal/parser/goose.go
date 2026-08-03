@@ -319,7 +319,7 @@ func buildGooseParseResult(
 
 	userMessages := 0
 	for _, message := range messages {
-		if message.Role == RoleUser {
+		if message.Role == RoleUser && len(message.ToolResults) == 0 {
 			userMessages++
 		}
 	}

@@ -247,7 +247,7 @@ func TestGooseProviderParsesTranscriptToolsRelationshipsAndUsage(t *testing.T) {
 	assert.Equal(t, RelSubagent, session.RelationshipType)
 	assert.Equal(t, "goose-sqlite-v15", session.SourceVersion)
 	assert.Equal(t, 4, session.MessageCount)
-	assert.Equal(t, 2, session.UserMessageCount)
+	assert.Equal(t, 1, session.UserMessageCount)
 	assert.Equal(t, fixture.dbPath+"#child", session.File.Path)
 	assert.Equal(t, fingerprint.Hash, session.File.Hash)
 	assert.Equal(t, 25, session.TotalOutputTokens)
