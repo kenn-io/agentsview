@@ -2,10 +2,7 @@ package db
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +10,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/uptrace/bun"
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
 
 // ErrInvalidCursor is returned when a cursor cannot be decoded or verified.
@@ -427,71 +427,6 @@ func (cur SessionCursor) resolvedKeys() []SessionCursorKey {
 	return []SessionCursorKey{{Sort: defaultSortKey, Desc: true, Value: cur.EndedAt}}
 }
 
-// EncodeCursor returns a base64-encoded, HMAC-signed cursor string.
-func (db *DB) EncodeCursor(c SessionCursor) string {
-	data, _ := json.Marshal(c)
-
-	db.cursorMu.RLock()
-	mac := hmac.New(sha256.New, db.cursorSecret)
-	db.cursorMu.RUnlock()
-
-	mac.Write(data)
-	sig := mac.Sum(nil)
-
-	return base64.RawURLEncoding.EncodeToString(data) + "." +
-		base64.RawURLEncoding.EncodeToString(sig)
-}
-
-// DecodeCursor parses a base64-encoded cursor string.
-func (db *DB) DecodeCursor(s string) (SessionCursor, error) {
-	parts := strings.Split(s, ".")
-	if len(parts) == 1 {
-		// Legacy cursor (unsigned). Trust nothing about the Total.
-		data, err := base64.RawURLEncoding.DecodeString(parts[0])
-		if err != nil {
-			return SessionCursor{}, fmt.Errorf("%w: %v", ErrInvalidCursor, err)
-		}
-		var c SessionCursor
-		if err := json.Unmarshal(data, &c); err != nil {
-			return SessionCursor{}, fmt.Errorf("%w: %v", ErrInvalidCursor, err)
-		}
-		c.Total = 0 // Force re-computation
-		return c, nil
-	} else if len(parts) != 2 {
-		return SessionCursor{}, fmt.Errorf("%w: invalid format", ErrInvalidCursor)
-	}
-
-	payload := parts[0]
-	sigStr := parts[1]
-
-	data, err := base64.RawURLEncoding.DecodeString(payload)
-	if err != nil {
-		return SessionCursor{}, fmt.Errorf("%w: invalid payload: %v", ErrInvalidCursor, err)
-	}
-
-	sig, err := base64.RawURLEncoding.DecodeString(sigStr)
-	if err != nil {
-		return SessionCursor{}, fmt.Errorf("%w: invalid signature encoding: %v", ErrInvalidCursor, err)
-	}
-
-	db.cursorMu.RLock()
-	mac := hmac.New(sha256.New, db.cursorSecret)
-	db.cursorMu.RUnlock()
-
-	mac.Write(data)
-	expectedSig := mac.Sum(nil)
-
-	if !hmac.Equal(sig, expectedSig) {
-		return SessionCursor{}, fmt.Errorf("%w: signature mismatch", ErrInvalidCursor)
-	}
-
-	var c SessionCursor
-	if err := json.Unmarshal(data, &c); err != nil {
-		return SessionCursor{}, fmt.Errorf("%w: invalid json: %v", ErrInvalidCursor, err)
-	}
-	return c, nil
-}
-
 // SessionFilter specifies how to query sessions.
 type SessionFilter struct {
 	Project        string
@@ -567,35 +502,6 @@ const staleWindow = 60 * time.Minute
 const activityExprSQLite = "CAST(strftime('%s', " +
 	"COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), created_at)) AS INTEGER)"
 
-const sidebarActivityExprSQLiteS = "COALESCE(" +
-	"NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''), s.created_at)"
-
-func sidebarStarredRootCTE(enabled bool) string {
-	if !enabled {
-		return ""
-	}
-	return `,
-		eligible_roots(id) AS (
-			SELECT DISTINCT t.root_id
-			FROM tree t
-			JOIN starred_sessions ss ON ss.session_id = t.id
-		)`
-}
-
-func sidebarStarredRootJoin(enabled bool) string {
-	if !enabled {
-		return ""
-	}
-	return "JOIN eligible_roots e ON e.id = t.root_id"
-}
-
-// buildCanonicalRootWhere returns a WHERE fragment that identifies canonical root
-// sessions for sidebar pagination. Child rows remain nested under their parent
-// unless IncludeOrphans explicitly promotes missing-parent child rows to roots.
-func buildCanonicalRootWhere(includeOrphans bool) string {
-	return BuildCanonicalRootWhere(SQLiteQueryDialect(), "sessions", includeOrphans)
-}
-
 // buildTerminationPredSQLite returns a WHERE fragment and args for
 // the multi-state termination filter (active / stale / unclean).
 // The status value may be comma-separated to OR multiple states
@@ -658,545 +564,23 @@ func buildSessionFilter(f SessionFilter) (string, []any) {
 	return BuildSessionFilterSQL(f, SQLiteQueryDialect())
 }
 
-// ListSessions returns a cursor-paginated list of sessions.
-func (db *DB) ListSessions(
-	ctx context.Context, f SessionFilter,
-) (SessionPage, error) {
-	if f.Limit <= 0 || f.Limit > MaxSessionLimit {
-		f.Limit = DefaultSessionLimit
-	}
-
-	where, args := buildSessionFilter(f)
-
-	dialect := SQLiteQueryDialect()
-	rs := ResolveSort(f)
-
-	var total int
-	var cur SessionCursor
-	if f.Cursor != "" {
-		var err error
-		cur, err = db.DecodeCursor(f.Cursor)
-		if err != nil {
-			return SessionPage{}, err
-		}
-		total = cur.Total
-	}
-	// Total count applies filters but not cursor. To avoid
-	// re-counting on every pagination request, newer cursors carry
-	// the first-page total and we reuse it here.
-	if total <= 0 {
-		countQuery := "SELECT COUNT(*) FROM sessions WHERE " + where
-		if err := db.getReader().QueryRowContext(
-			ctx, countQuery, args...,
-		).Scan(&total); err != nil {
-			return SessionPage{},
-				fmt.Errorf("counting sessions: %w", err)
-		}
-	}
-
-	// Paginated results
-	cursorArgs := append([]any{}, args...)
-	pageBuilder := NewQueryBuilder(dialect, len(args))
-	cursorWhere := where
-	if f.Cursor != "" {
-		vals, err := CursorPredicateValues(cur, rs)
-		if err != nil {
-			return SessionPage{}, err
-		}
-		cursorWhere += " AND " + pageBuilder.CursorPredicate(
-			rs, f, vals, cur.ID,
-		)
-	}
-
-	query := "SELECT " + sessionBaseCols +
-		" FROM sessions WHERE " + cursorWhere + " " +
-		pageBuilder.OrderByClause(rs, f) + " " +
-		pageBuilder.Limit(f.Limit+1)
-	cursorArgs = append(cursorArgs, pageBuilder.Args()...)
-
-	rows, err := db.getReader().QueryContext(ctx, query, cursorArgs...)
-	if err != nil {
-		return SessionPage{},
-			fmt.Errorf("querying sessions: %w", err)
-	}
-	defer rows.Close()
-
-	sessions, err := scanSessionRows(rows)
-	if err != nil {
-		return SessionPage{}, err
-	}
-
-	page := SessionPage{Sessions: sessions, Total: total}
-	if len(sessions) > f.Limit {
-		page.Sessions = sessions[:f.Limit]
-		last := page.Sessions[f.Limit-1]
-		page.NextCursor = db.EncodeCursor(
-			NextSessionCursor(&last, rs, total, f),
-		)
-	}
-
-	return page, nil
-}
-
-// GetSidebarSessionIndex returns the skinny session rows needed by
-// the sidebar grouper. Paginated calls page root sessions and include
-// each root's descendants so grouped sidebar trees stay complete.
-func (db *DB) GetSidebarSessionIndex(
-	ctx context.Context, f SessionFilter,
-) (SidebarSessionIndex, error) {
-	f.IncludeChildren = true
-	f.IncludeOrphans = true
-
-	if f.Limit > 0 || f.Cursor != "" || f.Starred {
-		return db.getSidebarSessionIndexPage(ctx, f)
-	}
-
-	f.Cursor = ""
-	rootFilter := f
-	rootFilter.IncludeChildren = false
-	rootWhere, rootArgs := buildSessionBaseFilter(rootFilter)
-	canonicalRootWhere := buildCanonicalRootWhere(f.IncludeOrphans)
-	var total int
-	countQuery := "SELECT COUNT(*) FROM sessions WHERE " +
-		rootWhere + " AND " + canonicalRootWhere
-	if err := db.getReader().QueryRowContext(
-		ctx, countQuery, rootArgs...,
-	).Scan(&total); err != nil {
-		return SidebarSessionIndex{},
-			fmt.Errorf("counting sidebar roots: %w", err)
-	}
-
-	where, args := buildSessionFilter(f)
-	query := `
-		SELECT
-			id,
-			parent_session_id,
-			relationship_type,
-			project,
-			machine,
-			agent,
-			agent_label,
-			entrypoint,
-			session_kind,
-			COALESCE(display_name, session_name) AS display_name,
-			started_at,
-			ended_at,
-			created_at,
-			termination_status,
-			message_count,
-			user_message_count,
-			transcript_revision,
-			is_automated,
-			INSTR(COALESCE(first_message, ''), '<teammate-message') > 0
-		FROM sessions
-		WHERE ` + where + `
-		ORDER BY COALESCE(
-			NULLIF(ended_at, ''),
-			NULLIF(started_at, ''),
-			created_at
-		) DESC, id DESC`
-
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
-	if err != nil {
-		return SidebarSessionIndex{},
-			fmt.Errorf("querying sidebar session index: %w", err)
-	}
-	defer rows.Close()
-
-	index := SidebarSessionIndex{
-		Sessions: []SidebarSessionIndexRow{},
-		Total:    total,
-	}
-	for rows.Next() {
-		var row SidebarSessionIndexRow
-		if err := rows.Scan(
-			&row.ID,
-			&row.ParentSessionID,
-			&row.RelationshipType,
-			&row.Project,
-			&row.Machine,
-			&row.Agent,
-			&row.AgentLabel,
-			&row.Entrypoint,
-			&row.SessionKind,
-			&row.DisplayName,
-			&row.StartedAt,
-			&row.EndedAt,
-			&row.CreatedAt,
-			&row.TerminationStatus,
-			&row.MessageCount,
-			&row.UserMessageCount,
-			&row.TranscriptRevision,
-			&row.IsAutomated,
-			&row.IsTeammate,
-		); err != nil {
-			return SidebarSessionIndex{},
-				fmt.Errorf("scanning sidebar session index: %w", err)
-		}
-		index.Sessions = append(index.Sessions, row)
-	}
-	if err := rows.Err(); err != nil {
-		return SidebarSessionIndex{},
-			fmt.Errorf("iterating sidebar session index: %w", err)
-	}
-	return index, nil
-}
-
-func (db *DB) getSidebarSessionIndexPage(
-	ctx context.Context, f SessionFilter,
-) (SidebarSessionIndex, error) {
-	if f.Limit <= 0 || f.Limit > MaxSessionLimit {
-		f.Limit = DefaultSessionLimit
-	}
-
-	rootFilter := f
-	rootFilter.Cursor = ""
-	rootFilter.Starred = false
-	rootFilter.IncludeChildren = false
-	rootWhere, rootArgs := buildSessionBaseFilter(rootFilter)
-	canonicalRootWhere := buildCanonicalRootWhere(f.IncludeOrphans)
-	childAutomationPred := automationScopePredicate(f, SQLiteQueryDialect(), "s")
-	childAutomationWhere := ""
-	if childAutomationPred != "" {
-		childAutomationWhere = " AND " + childAutomationPred
-	}
-
-	var total int
-	var cur SessionCursor
-	if f.Cursor != "" {
-		var err error
-		cur, err = db.DecodeCursor(f.Cursor)
-		if err != nil {
-			return SidebarSessionIndex{}, err
-		}
-		total = cur.Total
-	}
-	if total <= 0 {
-		if f.Starred {
-			countQuery := `
-				WITH RECURSIVE root_candidates(id) AS (
-					SELECT id
-					FROM sessions
-					WHERE ` + rootWhere + `
-					  AND ` + canonicalRootWhere + `
-				),
-				tree(root_id, id) AS (
-					SELECT id, id FROM root_candidates
-					UNION
-					SELECT t.root_id, s.id
-					FROM sessions s
-					JOIN tree t ON s.parent_session_id = t.id
-					WHERE s.message_count > 0
-					  AND s.deleted_at IS NULL
-					  ` + childAutomationWhere + `
-				),
-				eligible_roots(id) AS (
-					SELECT DISTINCT t.root_id
-					FROM tree t
-					JOIN starred_sessions ss ON ss.session_id = t.id
-				)
-				SELECT COUNT(*) FROM eligible_roots`
-			if err := db.getReader().QueryRowContext(
-				ctx, countQuery, rootArgs...,
-			).Scan(&total); err != nil {
-				return SidebarSessionIndex{},
-					fmt.Errorf("counting sidebar roots: %w", err)
-			}
-		} else {
-			countQuery := "SELECT COUNT(*) FROM sessions WHERE " +
-				rootWhere + " AND " + canonicalRootWhere
-			if err := db.getReader().QueryRowContext(
-				ctx, countQuery, rootArgs...,
-			).Scan(&total); err != nil {
-				return SidebarSessionIndex{},
-					fmt.Errorf("counting sidebar roots: %w", err)
-			}
-		}
-	}
-
-	pageBuilder := NewQueryBuilder(SQLiteQueryDialect(), len(rootArgs))
-	cursorWhere := ""
-	if f.Cursor != "" {
-		cursorWhere = "WHERE (activity, id) < (" +
-			pageBuilder.Add(cur.EndedAt) + ", " +
-			pageBuilder.Add(cur.ID) + ")"
-	}
-	rootQuery := `
-		WITH RECURSIVE root_candidates(id) AS (
-			SELECT id
-			FROM sessions
-			WHERE ` + rootWhere + `
-			  AND ` + canonicalRootWhere + `
-		),
-		tree(root_id, id) AS (
-			SELECT id, id FROM root_candidates
-			UNION
-			SELECT t.root_id, s.id
-			FROM sessions s
-			JOIN tree t ON s.parent_session_id = t.id
-			WHERE s.message_count > 0
-			  AND s.deleted_at IS NULL
-			  ` + childAutomationWhere + `
-		)
-		` + sidebarStarredRootCTE(f.Starred) + `,
-		root_activity(id, activity) AS (
-			SELECT t.root_id AS id, MAX(` + sidebarActivityExprSQLiteS + `) AS activity
-			FROM tree t
-			` + sidebarStarredRootJoin(f.Starred) + `
-			JOIN sessions s ON s.id = t.id
-			GROUP BY t.root_id
-		)
-		SELECT id, activity
-		FROM root_activity
-		` + cursorWhere + `
-		ORDER BY activity DESC, id DESC
-		` + pageBuilder.Limit(f.Limit+1)
-	rootQueryArgs := append([]any{}, rootArgs...)
-	rootQueryArgs = append(rootQueryArgs, pageBuilder.Args()...)
-
-	rows, err := db.getReader().QueryContext(ctx, rootQuery, rootQueryArgs...)
-	if err != nil {
-		return SidebarSessionIndex{},
-			fmt.Errorf("querying sidebar root page: %w", err)
-	}
-	defer rows.Close()
-
-	type rootRow struct {
-		id       string
-		activity string
-	}
-	roots := []rootRow{}
-	for rows.Next() {
-		var row rootRow
-		if err := rows.Scan(&row.id, &row.activity); err != nil {
-			return SidebarSessionIndex{},
-				fmt.Errorf("scanning sidebar root page: %w", err)
-		}
-		roots = append(roots, row)
-	}
-	if err := rows.Err(); err != nil {
-		return SidebarSessionIndex{},
-			fmt.Errorf("iterating sidebar root page: %w", err)
-	}
-
-	index := SidebarSessionIndex{
-		Sessions: []SidebarSessionIndexRow{},
-		Total:    total,
-	}
-	if len(roots) == 0 {
-		return index, nil
-	}
-	selected := roots
-	if len(roots) > f.Limit {
-		selected = roots[:f.Limit]
-		last := selected[f.Limit-1]
-		index.NextCursor = db.EncodeCursor(SessionCursor{
-			EndedAt: last.activity, ID: last.id, Total: total,
-		})
-	}
-
-	cteParts := make([]string, 0, len(selected))
-	treeArgs := make([]any, 0, len(selected)*2)
-	for i, root := range selected {
-		if i == 0 {
-			cteParts = append(cteParts, "SELECT ? AS id, ? AS ord")
-		} else {
-			cteParts = append(cteParts, "UNION ALL SELECT ?, ?")
-		}
-		treeArgs = append(treeArgs, root.id, i)
-	}
-
-	treeQuery := `
-		WITH RECURSIVE root_page(id, ord) AS (
-			` + strings.Join(cteParts, "\n") + `
-		),
-		tree(id, ord) AS (
-			SELECT id, ord FROM root_page
-			UNION
-			SELECT s.id, t.ord
-			FROM sessions s
-			JOIN tree t ON s.parent_session_id = t.id
-			WHERE s.message_count > 0
-			  AND s.deleted_at IS NULL
-			  ` + childAutomationWhere + `
-		),
-		ranked_tree(id, ord) AS (
-			SELECT id, MIN(ord) AS ord
-			FROM tree
-			GROUP BY id
-		)
-		SELECT
-			s.id,
-			s.parent_session_id,
-			s.relationship_type,
-			s.project,
-			s.machine,
-			s.agent,
-			s.agent_label,
-			s.entrypoint,
-			s.session_kind,
-			COALESCE(s.display_name, s.session_name) AS display_name,
-			s.started_at,
-			s.ended_at,
-			s.created_at,
-			s.termination_status,
-			s.message_count,
-			s.user_message_count,
-			s.transcript_revision,
-			s.is_automated,
-			INSTR(COALESCE(s.first_message, ''), '<teammate-message') > 0
-		FROM sessions s
-		JOIN ranked_tree t ON s.id = t.id
-		ORDER BY
-			t.ord ASC,
-			` + sidebarActivityExprSQLiteS + ` DESC,
-			s.id DESC`
-
-	rows, err = db.getReader().QueryContext(ctx, treeQuery, treeArgs...)
-	if err != nil {
-		return SidebarSessionIndex{},
-			fmt.Errorf("querying sidebar tree page: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var row SidebarSessionIndexRow
-		if err := rows.Scan(
-			&row.ID,
-			&row.ParentSessionID,
-			&row.RelationshipType,
-			&row.Project,
-			&row.Machine,
-			&row.Agent,
-			&row.AgentLabel,
-			&row.Entrypoint,
-			&row.SessionKind,
-			&row.DisplayName,
-			&row.StartedAt,
-			&row.EndedAt,
-			&row.CreatedAt,
-			&row.TerminationStatus,
-			&row.MessageCount,
-			&row.UserMessageCount,
-			&row.TranscriptRevision,
-			&row.IsAutomated,
-			&row.IsTeammate,
-		); err != nil {
-			return SidebarSessionIndex{},
-				fmt.Errorf("scanning sidebar tree page: %w", err)
-		}
-		index.Sessions = append(index.Sessions, row)
-	}
-	if err := rows.Err(); err != nil {
-		return SidebarSessionIndex{},
-			fmt.Errorf("iterating sidebar tree page: %w", err)
-	}
-
-	return index, nil
-}
-
-// GetSession returns a single session by ID, excluding
-// soft-deleted (trashed) sessions.
-func (db *DB) GetSession(
-	ctx context.Context, id string,
-) (*Session, error) {
-	row := db.getReader().QueryRowContext(
-		ctx,
-		"SELECT "+sessionBaseCols+" FROM sessions WHERE id = ? AND deleted_at IS NULL",
-		id,
-	)
-
-	s, err := scanSessionRow(row)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("getting session %s: %w", id, err)
-	}
-	return &s, nil
-}
-
-// GetSessionFull returns a single session by ID with all file metadata.
-func (db *DB) GetSessionFull(
-	ctx context.Context, id string,
-) (*Session, error) {
-	s, err := db.getSessionFullUncoalesced(ctx, id)
-	if err != nil || s == nil {
-		return s, err
-	}
-	// Expose the visible name (user rename, else agent session name)
-	// like the PG and DuckDB GetSessionFull and the sqlite base reads.
-	// The coalesce happens post-scan because sessionFullCols is shared
-	// with ListSessionsModifiedBetween, whose push consumers must see
-	// display_name and session_name unmerged.
-	if s.DisplayName == nil {
-		s.DisplayName = s.SessionName
-	}
-	return s, nil
-}
-
 // GetArtifactExportSession returns raw user- and agent-owned session names so
 // canonical manifests do not publish session_name as a user display_name.
 func (db *DB) GetArtifactExportSession(
 	ctx context.Context, id string,
 ) (*Session, error) {
-	return db.getSessionFullUncoalesced(ctx, id)
-}
-
-func (db *DB) getSessionFullUncoalesced(
-	ctx context.Context, id string,
-) (*Session, error) {
-	row := db.getReader().QueryRowContext(
-		ctx,
-		"SELECT "+sessionFullCols+" FROM sessions WHERE id = ?",
-		id,
-	)
-
-	var s Session
-	err := row.Scan(
-		&s.ID, &s.Project, &s.Machine, &s.Agent,
-		&s.AgentLabel, &s.Entrypoint, &s.SessionKind,
-		&s.FirstMessage, &s.DisplayName, &s.SessionName, &s.StartedAt, &s.EndedAt,
-		&s.MessageCount, &s.UserMessageCount,
-		&s.ParentSessionID, &s.ParserParentSessionID, &s.RelationshipType,
-		&s.TotalOutputTokens, &s.PeakContextTokens,
-		&s.HasTotalOutputTokens, &s.HasPeakContextTokens,
-		&s.IsAutomated,
-		&s.ToolFailureSignalCount, &s.ToolRetryCount,
-		&s.EditChurnCount, &s.ConsecutiveFailureMax,
-		&s.Outcome, &s.OutcomeConfidence,
-		&s.EndedWithRole, &s.FinalFailureStreak,
-		&s.SignalsPendingSince,
-		&s.CompactionCount, &s.MidTaskCompactionCount,
-		&s.ContextPressureMax,
-		&s.HealthScore, &s.HealthGrade,
-		&s.HasToolCalls, &s.HasContextData,
-		&s.SecretLeakCount, &s.SecretsRulesVersion,
-		&s.QualitySignalVersion,
-		&s.ShortPromptCount, &s.UnstructuredStart,
-		&s.MissingSuccessCriteriaCount,
-		&s.MissingVerificationCount, &s.DuplicatePromptCount,
-		&s.NoCodeContextCount, &s.RunawayToolLoopCount,
-		&s.DataVersion,
-		&s.Cwd, &s.GitBranch,
-		&s.SourceSessionID, &s.SourceVersion,
-		&s.TranscriptFidelity,
-		&s.ParserMalformedLines, &s.IsTruncated,
-		&s.LastWriteIncremental,
-		&s.DeletedAt, &s.DeletionCause,
-		&s.TerminationStatus, &s.FilePath, &s.FileSize,
-		&s.FileMtime, &s.NextOrdinal, &s.LastEntryUUID,
-		&s.FileInode, &s.FileDevice,
-		&s.FileHash, &s.LocalModifiedAt,
-		&s.TranscriptRevision, &s.CreatedAt,
-	)
-	if err == sql.ErrNoRows {
+	var row bunmodel.Session
+	err := db.view(ctx, func(store bun.IDB) error {
+		return store.NewSelect().Model(&row).Where("id = ?", id).Scan(ctx)
+	})
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("getting session full %s: %w", id, err)
+		return nil, fmt.Errorf("getting artifact export session %s: %w", id, err)
 	}
-	return &s, nil
+	session := sessionFromBunRow(row)
+	return &session, nil
 }
 
 // GetSessionName returns the raw agent-provided session name without loading
@@ -1661,26 +1045,6 @@ func (db *DB) insertSessionIfAbsent(ctx context.Context, s Session) error {
 		return fmt.Errorf("inserting session %s if absent: %w", s.ID, err)
 	}
 	return nil
-}
-
-// GetChildSessions returns sessions whose parent_session_id
-// matches the given parentID, ordered by started_at ascending.
-func (db *DB) GetChildSessions(
-	ctx context.Context, parentID string,
-) ([]Session, error) {
-	query := "SELECT " + sessionBaseCols +
-		" FROM sessions WHERE parent_session_id = ?" +
-		" AND deleted_at IS NULL" +
-		" ORDER BY started_at"
-	rows, err := db.getReader().QueryContext(ctx, query, parentID)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"querying child sessions for %s: %w", parentID, err,
-		)
-	}
-	defer rows.Close()
-
-	return scanSessionRows(rows)
 }
 
 // subagentSpawnerExpr resolves the parent of the session aliased `s`
@@ -2288,50 +1652,6 @@ func (db *DB) RefreshSessionName(id string, sessionName *string) error {
 	return err
 }
 
-// FindSessionIDsByPartial returns up to limit session IDs that contain the
-// given literal, case-sensitive substring. Used by CLI lookups so users can
-// reference sessions by a short prefix shown in list output.
-// Excludes soft-deleted sessions.
-func (db *DB) FindSessionIDsByPartial(
-	ctx context.Context, partial string, limit int,
-) ([]string, error) {
-	if partial == "" {
-		return nil, nil
-	}
-	if limit <= 0 {
-		limit = 5
-	}
-	rows, err := db.getReader().QueryContext(ctx,
-		`SELECT id FROM sessions
-		 WHERE instr(id, ?) > 0 AND deleted_at IS NULL
-		 ORDER BY COALESCE(
-		     NULLIF(ended_at, ''),
-		     NULLIF(started_at, ''),
-		     created_at
-		 ) DESC
-		 LIMIT ?`,
-		partial, limit,
-	)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"finding sessions by partial id %q: %w",
-			partial, err,
-		)
-	}
-	defer rows.Close()
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf(
-				"scanning session id: %w", err,
-			)
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
-}
-
 // FindSessionIDsByRawSuffix returns up to limit session IDs whose
 // stored id is either the exact raw input or the raw input
 // preceded by an agent prefix (e.g. "codex:<uuid>"). The suffix
@@ -2455,29 +1775,6 @@ func SessionVersionMarker(parts ...string) int64 {
 		write(part)
 	}
 	return int64(h)
-}
-
-// GetSessionVersion returns the message count and a compact version
-// marker for change detection in SSE watchers.
-func (db *DB) GetSessionVersion(
-	id string,
-) (count int, version int64, ok bool) {
-	var fileMtime int64
-	var fileHash, localModifiedAt string
-	err := db.getReader().QueryRow(
-		"SELECT message_count, COALESCE(file_mtime, 0),"+
-			" COALESCE(file_hash, ''), COALESCE(local_modified_at, '')"+
-			" FROM sessions WHERE id = ?",
-		id,
-	).Scan(&count, &fileMtime, &fileHash, &localModifiedAt)
-	if err != nil {
-		return 0, 0, false
-	}
-	return count, SessionVersionMarker(
-		fmt.Sprintf("%d", fileMtime),
-		fileHash,
-		localModifiedAt,
-	), true
 }
 
 // IncrementalInfo holds the data needed for incremental
@@ -4165,111 +3462,10 @@ func (db *DB) DeleteSessionIfTrashed(id string) (int64, error) {
 	return n, nil
 }
 
-// GetProjects returns project names with session counts.
-func (db *DB) GetProjects(
-	ctx context.Context,
-	excludeOneShot, excludeAutomated bool,
-) ([]ProjectInfo, error) {
-	q := `SELECT project, COUNT(*) as session_count
-		FROM sessions
-		WHERE message_count > 0
-		  AND relationship_type NOT IN ('subagent', 'fork')
-		  AND deleted_at IS NULL`
-	if excludeOneShot {
-		if !excludeAutomated {
-			q += " AND (user_message_count > 1 OR is_automated = 1)"
-		} else {
-			q += " AND user_message_count > 1"
-		}
-	}
-	if excludeAutomated {
-		q += " AND is_automated = 0"
-	}
-	q += " GROUP BY project ORDER BY project"
-	rows, err := db.getReader().QueryContext(ctx, q)
-	if err != nil {
-		return nil, fmt.Errorf("querying projects: %w", err)
-	}
-	defer rows.Close()
-
-	var projects []ProjectInfo
-	for rows.Next() {
-		var p ProjectInfo
-		if err := rows.Scan(&p.Name, &p.SessionCount); err != nil {
-			return nil, fmt.Errorf("scanning project: %w", err)
-		}
-		projects = append(projects, p)
-	}
-	return projects, rows.Err()
-}
-
-// GetActiveProjectLabels returns every project attached to a non-deleted
-// session, including fork and subagent sessions whose unique usage is eligible
-// for aggregation.
-func (db *DB) GetActiveProjectLabels(ctx context.Context) ([]string, error) {
-	rows, err := db.getReader().QueryContext(ctx,
-		`SELECT DISTINCT project
-		 FROM sessions
-		 WHERE deleted_at IS NULL
-		 ORDER BY project`)
-	if err != nil {
-		return nil, fmt.Errorf("querying active project labels: %w", err)
-	}
-	defer rows.Close()
-
-	var labels []string
-	for rows.Next() {
-		var label string
-		if err := rows.Scan(&label); err != nil {
-			return nil, fmt.Errorf("scanning active project label: %w", err)
-		}
-		labels = append(labels, label)
-	}
-	return labels, rows.Err()
-}
-
 // ProjectInfo holds a project name and its session count.
 type ProjectInfo struct {
 	Name         string `json:"name"`
 	SessionCount int    `json:"session_count"`
-}
-
-// GetAgents returns distinct agent names with session counts.
-func (db *DB) GetAgents(
-	ctx context.Context,
-	excludeOneShot, excludeAutomated bool,
-) ([]AgentInfo, error) {
-	q := `SELECT agent, COUNT(*) as session_count
-		FROM sessions
-		WHERE message_count > 0 AND agent <> ''
-		  AND deleted_at IS NULL
-		  AND relationship_type NOT IN ('subagent', 'fork')`
-	if excludeOneShot {
-		if !excludeAutomated {
-			q += " AND (user_message_count > 1 OR is_automated = 1)"
-		} else {
-			q += " AND user_message_count > 1"
-		}
-	}
-	if excludeAutomated {
-		q += " AND is_automated = 0"
-	}
-	q += " GROUP BY agent ORDER BY agent"
-	rows, err := db.getReader().QueryContext(ctx, q)
-	if err != nil {
-		return nil, fmt.Errorf("querying agents: %w", err)
-	}
-	defer rows.Close()
-
-	agents := []AgentInfo{}
-	for rows.Next() {
-		var a AgentInfo
-		if err := rows.Scan(&a.Name, &a.SessionCount); err != nil {
-			return nil, fmt.Errorf("scanning agent: %w", err)
-		}
-		agents = append(agents, a)
-	}
-	return agents, rows.Err()
 }
 
 // AgentInfo holds an agent name and its session count.
@@ -4278,88 +3474,12 @@ type AgentInfo struct {
 	SessionCount int    `json:"session_count"`
 }
 
-// GetMachines returns distinct machine names.
-func (db *DB) GetMachines(
-	ctx context.Context,
-	excludeOneShot, excludeAutomated bool,
-) ([]string, error) {
-	q := "SELECT DISTINCT machine FROM sessions WHERE deleted_at IS NULL"
-	if excludeOneShot {
-		if !excludeAutomated {
-			q += " AND (user_message_count > 1 OR is_automated = 1)"
-		} else {
-			q += " AND user_message_count > 1"
-		}
-	}
-	if excludeAutomated {
-		q += " AND is_automated = 0"
-	}
-	q += " ORDER BY machine"
-	rows, err := db.getReader().QueryContext(ctx, q)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	machines := []string{}
-	for rows.Next() {
-		var m string
-		if err := rows.Scan(&m); err != nil {
-			return nil, err
-		}
-		machines = append(machines, m)
-	}
-	return machines, rows.Err()
-}
-
 // BranchInfo is a (project, branch) pair, keyed by project so same-named
 // branches across repos stay distinct.
 type BranchInfo struct {
 	Project string `json:"project"`
 	Branch  string `json:"branch"`
 	Token   string `json:"token"`
-}
-
-// GetBranches returns distinct (project, git_branch) pairs, including the empty
-// branch used for sessions with no recorded branch. Scoping matches
-// GetProjects/GetAgents (root sessions with messages) so the dropdown reflects
-// real work rather than subagents.
-func (db *DB) GetBranches(
-	ctx context.Context,
-	excludeOneShot, excludeAutomated bool,
-) ([]BranchInfo, error) {
-	q := `SELECT DISTINCT project, git_branch
-		FROM sessions
-		WHERE message_count > 0
-		  AND relationship_type NOT IN ('subagent', 'fork')
-		  AND deleted_at IS NULL`
-	if excludeOneShot {
-		if !excludeAutomated {
-			q += " AND (user_message_count > 1 OR is_automated = 1)"
-		} else {
-			q += " AND user_message_count > 1"
-		}
-	}
-	if excludeAutomated {
-		q += " AND is_automated = 0"
-	}
-	q += " ORDER BY project, git_branch"
-	rows, err := db.getReader().QueryContext(ctx, q)
-	if err != nil {
-		return nil, fmt.Errorf("querying branches: %w", err)
-	}
-	defer rows.Close()
-
-	branches := []BranchInfo{}
-	for rows.Next() {
-		var bi BranchInfo
-		if err := rows.Scan(&bi.Project, &bi.Branch); err != nil {
-			return nil, fmt.Errorf("scanning branch: %w", err)
-		}
-		bi.Token = EncodeBranchFilterToken(bi.Project, bi.Branch)
-		branches = append(branches, bi)
-	}
-	return branches, rows.Err()
 }
 
 // scanSessionRows iterates rows and scans each using
