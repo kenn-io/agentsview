@@ -17,8 +17,8 @@ import (
 func activitySeed(id string, ago time.Duration) sessionSeed {
 	ts := time.Now().Add(-ago).UTC().Format(time.RFC3339)
 	return sessionSeed{id: id, project: "p", mut: func(s *db.Session) {
-		s.StartedAt = new(ts)
-		s.EndedAt = new(ts)
+		s.StartedAt = &ts
+		s.EndedAt = &ts
 	}}
 }
 

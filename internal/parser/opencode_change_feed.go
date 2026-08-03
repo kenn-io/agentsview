@@ -42,6 +42,11 @@ const (
 	// openCodeMinAnchorAggregates is the minimum number of distinct aggregate
 	// IDs that committed anchors must span.
 	openCodeMinAnchorAggregates = 2
+
+	// openCodeAnchorSampleWindow bounds the rebaseline diversity scan. The
+	// normal newest-row sample remains the cursor; this tail window only adds
+	// nearby aggregate witnesses without grouping the archive.
+	openCodeAnchorSampleWindow = openCodeMaxAnchors * openCodeMaxAnchors
 )
 
 // ErrOpenCodeCoverageDatabaseMissing identifies a coverage unit that
@@ -292,6 +297,73 @@ func InitializeOpenCodeCoverageCheckpoint(ctx context.Context, dbPath string) (O
 		return OpenCodeCoverageCheckpoint{}, openCodeJournalContextError(ctx, err)
 	}
 	return OpenCodeCoverageCheckpoint{Initialized: true, SchemaVersion: schemaVersion, SchemaFingerprint: fingerprint}, nil
+}
+
+// RebaselineOpenCodeCoverageCheckpoint records the repaired journal boundary
+// and fresh row witnesses after an authoritative repair. When prior carries an
+// observed high-water, the snapshot is capped there so events committed while
+// repair runs remain eligible for the next bounded drain.
+func RebaselineOpenCodeCoverageCheckpoint(
+	ctx context.Context, dbPath string, prior OpenCodeCoverageCheckpoint,
+) (OpenCodeCoverageCheckpoint, error) {
+	schemaVersion, compatible, err := ProbeOpenCodeJournalCapability(ctx, dbPath)
+	if err != nil {
+		return OpenCodeCoverageCheckpoint{}, err
+	}
+	if !compatible {
+		return OpenCodeCoverageCheckpoint{}, fmt.Errorf("opencode journal is not compatible: %s", dbPath)
+	}
+	db, err := openOpenCodeDB(dbPath)
+	if err != nil {
+		return OpenCodeCoverageCheckpoint{}, opencodeCoverageDatabaseError(dbPath, err)
+	}
+	defer db.Close()
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return OpenCodeCoverageCheckpoint{}, openCodeJournalContextError(ctx, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	fingerprint, err := openCodeJournalSchemaFingerprint(ctx, tx)
+	if err != nil {
+		return OpenCodeCoverageCheckpoint{}, openCodeJournalContextError(ctx, err)
+	}
+	var maxRowID int64
+	if err := tx.QueryRowContext(ctx,
+		"SELECT COALESCE(MAX(rowid), 0) FROM event",
+	).Scan(&maxRowID); err != nil {
+		return OpenCodeCoverageCheckpoint{}, openCodeJournalContextError(ctx, err)
+	}
+	if prior.HighWaterKnown && prior.HighWaterRowID > 0 &&
+		prior.HighWaterRowID < maxRowID {
+		maxRowID = prior.HighWaterRowID
+	}
+	var anchors []OpenCodeJournalAnchor
+	if maxRowID > 0 {
+		newest, _, newestErr := sampleAnchors(ctx, tx, 0, maxRowID, openCodeMaxAnchors)
+		if newestErr != nil {
+			return OpenCodeCoverageCheckpoint{}, newestErr
+		}
+		diverse, _, diverseErr := sampleLatestAggregateAnchors(
+			ctx, tx, maxRowID, openCodeMaxAnchors,
+		)
+		if diverseErr != nil {
+			return OpenCodeCoverageCheckpoint{}, diverseErr
+		}
+		anchors = mergeAnchors(nil, append(newest, diverse...))
+	}
+	next := prior
+	next.Initialized = true
+	next.SchemaVersion = schemaVersion
+	next.SchemaFingerprint = fingerprint
+	next.Anchors = anchors
+	next.AuditLatched = false
+	next.HighWaterKnown = false
+	next.HighWaterRowID = 0
+	next.HighWaterEventID = ""
+	next.HighWaterAggregateID = ""
+	next.PendingIDs = nil
+	next.ReadyIDs = nil
+	return next, nil
 }
 
 func openCodeJournalSchemaFingerprint(
@@ -1026,6 +1098,44 @@ func sampleAnchors(
 	// Return in ascending order.
 	for i, j := 0, len(anchors)-1; i < j; i, j = i+1, j-1 {
 		anchors[i], anchors[j] = anchors[j], anchors[i]
+	}
+	return anchors, true, nil
+}
+
+func sampleLatestAggregateAnchors(
+	ctx context.Context, tx *sql.Tx, upToRowID int64, n int,
+) ([]OpenCodeJournalAnchor, bool, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT recent.rowid, recent.id, recent.aggregate_id
+		  FROM event AS recent
+		  JOIN (
+			SELECT aggregate_id, MAX(rowid) AS rowid
+			  FROM (
+				SELECT rowid, id, aggregate_id
+				  FROM event
+				 WHERE rowid <= ?
+				 ORDER BY rowid DESC
+				 LIMIT ?
+			  ) AS tail
+			 GROUP BY aggregate_id
+		  ) AS latest ON latest.rowid = recent.rowid
+		 ORDER BY recent.rowid DESC
+		 LIMIT ?
+		`, upToRowID, openCodeAnchorSampleWindow, n)
+	if err != nil {
+		return nil, false, openCodeJournalContextError(ctx, err)
+	}
+	defer rows.Close()
+	anchors := make([]OpenCodeJournalAnchor, 0, n)
+	for rows.Next() {
+		var a OpenCodeJournalAnchor
+		if err := rows.Scan(&a.RowID, &a.EventID, &a.AggregateID); err != nil {
+			return nil, false, openCodeJournalContextError(ctx, err)
+		}
+		anchors = append(anchors, a)
+	}
+	if rows.Err() != nil {
+		return nil, false, openCodeJournalContextError(ctx, rows.Err())
 	}
 	return anchors, true, nil
 }

@@ -554,7 +554,7 @@ func TestCompareSessionFieldsTruncatesLongValues(t *testing.T) {
 	long := strings.Repeat("x", 200)
 	stored := pdBaseSession()
 	prepared := pdBaseSession()
-	prepared.FirstMessage = new(long)
+	prepared.FirstMessage = &long
 
 	diffs := compareSessionFields(&stored, prepared)
 	require.Len(t, diffs, 1)

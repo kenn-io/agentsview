@@ -1654,8 +1654,7 @@ func TestOpenCodeFormatMissingRootsUseNativeLifecycleWithoutPolling(t *testing.T
 			roots, unwatched, _, persistentDirAgents := collectWatchRoots(cfg)
 			require.Len(t, roots, rootCount*2,
 				"bounded database and recursive storage roots remain separate")
-			results := make([]agentsync.RecursiveWatchResult, rootCount)
-			results = make([]agentsync.RecursiveWatchResult, len(roots))
+			results := make([]agentsync.RecursiveWatchResult, len(roots))
 			for i := range results {
 				results[i] = agentsync.RecursiveWatchResult{
 					Watched:                   1,

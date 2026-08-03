@@ -156,6 +156,7 @@ func createProjectReclassificationFixture(
 		sessionID := "test-session-project-reclassification-" + item.suffix
 		startedAt := start.Add(time.Duration(index) * time.Hour)
 		endedAt := startedAt.Add(12 * time.Minute)
+		endedAtText := endedAt.Format(time.RFC3339Nano)
 		firstMessage := "Inspect the sample service worktree."
 		session := db.Session{
 			ID:               sessionID,
@@ -163,7 +164,7 @@ func createProjectReclassificationFixture(
 			Machine:          machine,
 			Agent:            "claude",
 			StartedAt:        new(startedAt.Format(time.RFC3339Nano)),
-			EndedAt:          new(endedAt.Format(time.RFC3339Nano)),
+			EndedAt:          &endedAtText,
 			MessageCount:     2,
 			UserMessageCount: 1,
 			FirstMessage:     new(firstMessage),
@@ -238,6 +239,7 @@ func createSessionFixture(
 	endedAt := startedAt.Add(
 		time.Duration(spec.msgCount) * time.Minute,
 	)
+	endedAtText := endedAt.Format(time.RFC3339Nano)
 
 	sess := db.Session{
 		ID:               sessionID,
@@ -245,7 +247,7 @@ func createSessionFixture(
 		Machine:          "test-machine",
 		Agent:            "claude",
 		StartedAt:        new(startedAt.Format(time.RFC3339Nano)),
-		EndedAt:          new(endedAt.Format(time.RFC3339Nano)),
+		EndedAt:          &endedAtText,
 		MessageCount:     spec.msgCount,
 		UserMessageCount: spec.userMsgCount,
 		RelationshipType: spec.relationshipType,
@@ -479,6 +481,7 @@ func createDurationShowcaseFixture(
 	t5 := start.Add(2*time.Minute + 24*time.Second)
 	t6 := start.Add(2*time.Minute + 52*time.Second)
 	endParent := start.Add(2*time.Minute + 55*time.Second)
+	endParentText := endParent.Format(time.RFC3339Nano)
 
 	// Sub-agent runs alongside the parallel turn so its
 	// duration covers the full ~2 minutes of that turn.
@@ -532,7 +535,7 @@ func createDurationShowcaseFixture(
 		Agent:            "claude",
 		Cwd:              "/workspace/مشروع/.worktrees/שלוםfeaturewithalongcheckoutnamefortooltipwrappingwithoutbreakopportunities",
 		StartedAt:        new(t0.Format(time.RFC3339Nano)),
-		EndedAt:          new(endParent.Format(time.RFC3339Nano)),
+		EndedAt:          &endParentText,
 		MessageCount:     len(parentMessages),
 		UserMessageCount: countUserMessages(parentMessages),
 		FirstMessage: new(
@@ -871,6 +874,7 @@ func createRecentEditsFixture(
 	)
 
 	endedAt := start.Add(5 * time.Minute)
+	endedAtText := endedAt.Format(time.RFC3339Nano)
 	firstMsg := "Add request logging to the HTTP handler."
 
 	sess := db.Session{
@@ -879,7 +883,7 @@ func createRecentEditsFixture(
 		Machine:          "test-machine",
 		Agent:            "claude",
 		StartedAt:        new(start.Format(time.RFC3339Nano)),
-		EndedAt:          new(endedAt.Format(time.RFC3339Nano)),
+		EndedAt:          &endedAtText,
 		MessageCount:     3,
 		UserMessageCount: 1,
 		FirstMessage:     new(firstMsg),

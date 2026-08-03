@@ -2,6 +2,8 @@ package sync_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -34,8 +36,14 @@ func seedOpenCodeContainerSessions(
 func TestReconcileProviderRootsOpenCodeContainerSyncsAndTombstonesMembers(
 	t *testing.T,
 ) {
-	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
-	oc := createOpenCodeDB(t, env.opencodeDir)
+	physicalRoot := t.TempDir()
+	aliasParent := t.TempDir()
+	aliasRoot := filepath.Join(aliasParent, "opencode-root")
+	if err := os.Symlink(physicalRoot, aliasRoot); err != nil {
+		t.Skipf("directory symlinks unavailable: %v", err)
+	}
+	env := setupSingleAgentTestEnvWithDirs(t, parser.AgentOpenCode, []string{aliasRoot})
+	oc := createOpenCodeDB(t, physicalRoot)
 	base := int64(1704067200000)
 	seedOpenCodeContainerSessions(
 		t, oc, base, "oc-container-kept", "oc-container-removed",
@@ -66,6 +74,56 @@ func TestReconcileProviderRootsOpenCodeContainerSyncsAndTombstonesMembers(
 	require.NoError(t, err)
 	assert.Nil(t, removed,
 		"a container-scoped pass reclaims a removed member")
+}
+
+func TestReconcileBoundedCoverageSourceLeaseTombstonesDeletedMembers(
+	t *testing.T,
+) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	base := int64(1704067200000)
+	seedOpenCodeContainerSessions(
+		t, oc, base, "oc-lease-kept", "oc-lease-removed",
+	)
+	oc.mustExec(t, "bounded journal event table", `
+		CREATE TABLE event (
+			id TEXT NOT NULL PRIMARY KEY, aggregate_id TEXT NOT NULL,
+			seq INTEGER NOT NULL, type TEXT NOT NULL, data BLOB NOT NULL
+		);
+		CREATE TABLE event_sequence (id TEXT NOT NULL PRIMARY KEY, owner_id TEXT);
+	`)
+	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 2, Synced: 2})
+
+	bindings, err := env.engine.BoundedCoverageBindings(
+		t.Context(), []sync.BoundedCoverageRoot{{
+			Agent: parser.AgentOpenCode, Root: env.opencodeDir,
+		}},
+	)
+	require.NoError(t, err)
+	require.Len(t, bindings, 1)
+	bindings[0].Generation = 1
+	lease, err := env.engine.AdmitBoundedCoverageLease(t.Context(), bindings[0])
+	require.NoError(t, err)
+	_, err = env.engine.TransitionBoundedCoverageRequest(
+		t.Context(), lease, nil, lease.AdmissionCheckpoint, true,
+	)
+	require.NoError(t, err)
+
+	oc.deleteParts(t, "oc-lease-removed")
+	oc.deleteMessages(t, "oc-lease-removed")
+	oc.mustExec(t, "delete session",
+		"DELETE FROM session WHERE id = ?", "oc-lease-removed")
+	require.NoError(t, env.engine.ReconcileBoundedCoverageSourceLease(
+		t.Context(), lease, "structural journal evidence",
+	))
+
+	removed, err := env.db.GetSession(t.Context(), "opencode:oc-lease-removed")
+	require.NoError(t, err)
+	assert.Nil(t, removed,
+		"lease-bound repair must reconcile container membership, including tombstones")
+	kept, err := env.db.GetSession(t.Context(), "opencode:oc-lease-kept")
+	require.NoError(t, err)
+	assert.NotNil(t, kept)
 }
 
 // TestReconcileProviderRootsOpenCodeMemberPassCannotTrustPartialMembership

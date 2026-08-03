@@ -574,6 +574,71 @@ func TestOpenCodeDeletedCursorAnchorRewindsOnRowIDReuse(t *testing.T) {
 		"rewinding below a reused cursor row must replay the replacement event")
 }
 
+func TestRebaselineOpenCodeCoverageCheckpointReplacesDeletedAnchors(t *testing.T) {
+	f := newOpenCodeJournalFixture(t)
+	for i := 1; i <= 3; i++ {
+		f.insertEvent(t,
+			fmt.Sprintf("evt-a%d", i), "ses-a", "session.created.1", []byte(`{}`),
+		)
+	}
+	for i := 1; i <= 3; i++ {
+		f.insertEvent(t,
+			fmt.Sprintf("evt-b%d", i), "ses-b", "session.created.1", []byte(`{}`),
+		)
+	}
+	checkpoint := initDrain(t, f.path)
+	checkpoint.Anchors = []OpenCodeJournalAnchor{
+		{RowID: 3, EventID: "evt-a3", AggregateID: "ses-a"},
+	}
+	f.deleteEventsForSession(t, "ses-a")
+
+	rebased, err := RebaselineOpenCodeCoverageCheckpoint(
+		context.Background(), f.path, checkpoint,
+	)
+	require.NoError(t, err)
+	assert.False(t, rebased.AuditLatched)
+	assert.NotEmpty(t, rebased.Anchors,
+		"an authoritative repair must install witnesses from the repaired high-water")
+
+	f.insertSettledEvent(t, "evt-after-repair", "ses-c")
+	result, err := DrainOpenCodeJournal(context.Background(), f.path, rebased)
+	require.NoError(t, err)
+	assert.False(t, result.AuditRequired,
+		"the fresh post-audit witnesses must not trigger another audit")
+	assert.Contains(t, result.ReadyIDs, "ses-c",
+		"events committed after rebaseline must remain in the next drain")
+}
+
+func TestRebaselineOpenCodeCoverageCheckpointPreservesAnchorDiversity(t *testing.T) {
+	f := newOpenCodeJournalFixture(t)
+	for i := 1; i <= 3; i++ {
+		f.insertEvent(t,
+			fmt.Sprintf("evt-first%d", i), "ses-first", "session.created.1", []byte(`{}`),
+		)
+	}
+	for i := 1; i <= 2; i++ {
+		f.insertEvent(t,
+			fmt.Sprintf("evt-middle%d", i), "ses-middle", "session.created.1", []byte(`{}`),
+		)
+	}
+	for i := 1; i <= openCodeMaxAnchors+4; i++ {
+		f.insertEvent(t,
+			fmt.Sprintf("evt-last%d", i), "ses-last", "session.created.1", []byte(`{}`),
+		)
+	}
+
+	rebased, err := RebaselineOpenCodeCoverageCheckpoint(
+		context.Background(), f.path, OpenCodeCoverageCheckpoint{Initialized: true},
+	)
+	require.NoError(t, err)
+	aggregates := make(map[string]struct{})
+	for _, anchor := range rebased.Anchors {
+		aggregates[anchor.AggregateID] = struct{}{}
+	}
+	assert.GreaterOrEqual(t, len(aggregates), 2,
+		"post-audit anchors must retain multiple aggregate witnesses when available")
+}
+
 // TestOpenCodeReplacementStillAudits verifies proof matrix row 11:
 // even when MAX(rowid) is above the committed max (which would normally
 // indicate ordinary deletion), a changed file identity overrides the inference

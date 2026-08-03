@@ -365,16 +365,42 @@ func reconciliationProofSpelling(root string) string {
 	return filepath.Clean(root)
 }
 
-// reconciliationScopeSamePath and reconciliationScopeWithinOrSame compare with
-// filepath.Rel semantics so equality matches the platform: case-folded per
-// element on Windows, byte-exact elsewhere.
+// reconciliationScopeIdentity resolves existing aliases before comparing them.
+// When the leaf is deleted, resolve the longest existing parent and append the
+// missing suffix so an alias-spelled container still matches its physical
+// counterpart during removal reconciliation.
+func reconciliationScopeIdentity(path string) string {
+	cleaned := cleanReconciliationScopeRoot(path)
+	missing := make([]string, 0, 2)
+	for candidate := cleaned; ; candidate = filepath.Dir(candidate) {
+		if resolved, err := filepath.EvalSymlinks(candidate); err == nil {
+			identity := cleanReconciliationScopeRoot(resolved)
+			for i := len(missing) - 1; i >= 0; i-- {
+				identity = filepath.Join(identity, missing[i])
+			}
+			return cleanReconciliationScopeRoot(identity)
+		}
+		parent := filepath.Dir(candidate)
+		if parent == candidate {
+			break
+		}
+		missing = append(missing, filepath.Base(candidate))
+	}
+	return cleaned
+}
+
+// reconciliationScopeSamePath and reconciliationScopeWithinOrSame compare
+// with filepath.Rel semantics so equality matches the platform: case-folded
+// per element on Windows, byte-exact elsewhere.
 func reconciliationScopeSamePath(a, b string) bool {
-	rel, err := filepath.Rel(a, b)
+	rel, err := filepath.Rel(reconciliationScopeIdentity(a), reconciliationScopeIdentity(b))
 	return err == nil && rel == "."
 }
 
 func reconciliationScopeWithinOrSame(path, root string) bool {
-	rel, err := filepath.Rel(root, path)
+	rel, err := filepath.Rel(
+		reconciliationScopeIdentity(root), reconciliationScopeIdentity(path),
+	)
 	if err != nil {
 		return false
 	}

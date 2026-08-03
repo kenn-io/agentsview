@@ -93,19 +93,20 @@ func sameBoundedFile(a, b os.FileInfo) bool {
 }
 
 type sharedUnwatchedPollCoordinator struct {
-	ctx               context.Context
-	workerCtx         context.Context
-	workerCancel      context.CancelFunc
-	engine            unwatchedPollSyncer
-	coverage          agentsync.BoundedCoverageResolver
-	coverageMu        sync.Mutex
-	coverageState     map[string]*boundedCoverageState
-	coverageEpoch     map[string]uint64
-	requestAudit      func(context.Context, agentsync.BoundedCoverageBinding, string) error
-	requestLeaseAudit func(context.Context, *agentsync.BoundedCoverageLease, string) error
-	ticks             <-chan time.Time
-	stopTicker        func()
-	doWork            func(func())
+	ctx                 context.Context
+	workerCtx           context.Context
+	workerCancel        context.CancelFunc
+	engine              unwatchedPollSyncer
+	coverage            agentsync.BoundedCoverageResolver
+	coverageMu          sync.Mutex
+	coverageAdmissionMu sync.Mutex
+	coverageState       map[string]*boundedCoverageState
+	coverageEpoch       map[string]uint64
+	requestAudit        func(context.Context, agentsync.BoundedCoverageBinding, string) error
+	requestLeaseAudit   func(context.Context, *agentsync.BoundedCoverageLease, string) error
+	ticks               <-chan time.Time
+	stopTicker          func()
+	doWork              func(func())
 	// onRootsOwned is a test observer invoked after installation and before ack.
 	onRootsOwned func([]string)
 	// onBoundedCoveragePage is a test observer for bounded work counters.
@@ -251,6 +252,8 @@ func (c *sharedUnwatchedPollCoordinator) AdmitBoundedCoverage(
 func (c *sharedUnwatchedPollCoordinator) admitBoundedCoverage(
 	ctx context.Context, bindings []agentsync.BoundedCoverageBinding, native bool,
 ) ([]agentsync.BoundedCoverageBinding, error) {
+	c.coverageAdmissionMu.Lock()
+	defer c.coverageAdmissionMu.Unlock()
 	if c.coverage == nil {
 		return nil, nil
 	}
@@ -260,17 +263,19 @@ func (c *sharedUnwatchedPollCoordinator) admitBoundedCoverage(
 	}
 	admitted := make([]agentsync.BoundedCoverageBinding, 0, len(bindings))
 	for _, binding := range bindings {
-		c.coverageMu.Lock()
-		passRunning := c.coveragePassRunning
-		passDone := c.coveragePassDone
-		c.coverageMu.Unlock()
-		if passRunning {
+		for {
+			c.coverageMu.Lock()
+			passRunning := c.coveragePassRunning
+			passDone := c.coveragePassDone
+			c.coverageMu.Unlock()
+			if !passRunning {
+				break
+			}
 			select {
 			case <-ctx.Done():
 				return admitted, ctx.Err()
 			case <-passDone:
 			}
-			continue
 		}
 		file, err := os.Stat(binding.DBPath)
 		if err != nil {
@@ -278,7 +283,30 @@ func (c *sharedUnwatchedPollCoordinator) admitBoundedCoverage(
 		}
 		c.coverageMu.Lock()
 		state := c.coverageState[binding.Key]
-		needsLease := state == nil || state.dbFile == nil || !sameBoundedFile(state.dbFile, file)
+		needsLease := state == nil || state.lease == nil || state.dbFile == nil ||
+			!sameBoundedFile(state.dbFile, file)
+		existingLease := (*agentsync.BoundedCoverageLease)(nil)
+		existingCheckpoint := parser.OpenCodeCoverageCheckpoint{}
+		if !needsLease {
+			existingLease = state.lease
+			existingCheckpoint = state.checkpoint
+		}
+		c.coverageMu.Unlock()
+		if !needsLease {
+			if leaseResolver, ok := c.coverage.(agentsync.BoundedCoverageLeaseResolver); ok {
+				if _, validateErr := leaseResolver.TransitionBoundedCoverageRequest(
+					ctx, existingLease, nil, existingCheckpoint, false,
+				); validateErr != nil {
+					needsLease = true
+				}
+			}
+		}
+		c.coverageMu.Lock()
+		state = c.coverageState[binding.Key]
+		if state == nil || state.lease == nil || state.dbFile == nil ||
+			!sameBoundedFile(state.dbFile, file) {
+			needsLease = true
+		}
 		generation := uint64(0)
 		if needsLease {
 			generation = c.nextCoverageGenerationLocked(boundedCoverageGenerationKey(binding))
@@ -304,6 +332,7 @@ func (c *sharedUnwatchedPollCoordinator) admitBoundedCoverage(
 		}
 		c.coverageMu.Unlock()
 		var lease *agentsync.BoundedCoverageLease
+		admissionCheckpoint := parser.OpenCodeCoverageCheckpoint{}
 		if needsLease {
 			binding.Generation = generation
 			if leaseResolver, ok := c.coverage.(agentsync.BoundedCoverageLeaseResolver); ok {
@@ -321,6 +350,11 @@ func (c *sharedUnwatchedPollCoordinator) admitBoundedCoverage(
 				restoreFrozen()
 				return admitted, err
 			}
+			if lease == nil {
+				restoreFrozen()
+				return admitted, errors.New("bounded coverage admission returned a nil lease")
+			}
+			admissionCheckpoint = lease.AdmissionCheckpoint
 			if leaseResolver, ok := c.coverage.(agentsync.BoundedCoverageLeaseResolver); ok {
 				if _, err = leaseResolver.TransitionBoundedCoverageRequest(
 					ctx, lease, nil, lease.AdmissionCheckpoint, true,
@@ -332,7 +366,13 @@ func (c *sharedUnwatchedPollCoordinator) admitBoundedCoverage(
 		}
 		c.coverageMu.Lock()
 		state = c.coverageState[binding.Key]
-		if state != nil && state.dbFile != nil && sameBoundedFile(state.dbFile, file) {
+		if needsLease && state != nil && state.generation > generation {
+			state.nativeAdmitted = state.nativeAdmitted || native
+			state.pollOwned = true
+			c.coverageMu.Unlock()
+			continue
+		}
+		if !needsLease && state != nil && state.dbFile != nil && sameBoundedFile(state.dbFile, file) {
 			state.nativeAdmitted = state.nativeAdmitted || native
 			state.pollOwned = true
 			if native {
@@ -346,7 +386,15 @@ func (c *sharedUnwatchedPollCoordinator) admitBoundedCoverage(
 			c.coverageMu.Unlock()
 			continue
 		}
-		state = &boundedCoverageState{lease: lease, binding: binding, checkpoint: lease.AdmissionCheckpoint,
+		if !needsLease {
+			if state == nil || state.lease == nil {
+				c.coverageMu.Unlock()
+				return admitted, errors.New("bounded coverage admission lost its active lease")
+			}
+			lease = state.lease
+			admissionCheckpoint = state.checkpoint
+		}
+		state = &boundedCoverageState{lease: lease, binding: binding, checkpoint: admissionCheckpoint,
 			dbFile: file, generation: generation, pendingWake: true,
 			wake: boundedWakePending, nativeAdmitted: native, pollOwned: true}
 		state.mode = boundedModePolling
@@ -738,31 +786,15 @@ func (c *sharedUnwatchedPollCoordinator) retireCoverageState(
 	return true
 }
 
-func checkpointAfterBoundedAudit(
+func checkpointBeforeBoundedAudit(
+	ctx context.Context, binding agentsync.BoundedCoverageBinding,
 	boundary parser.OpenCodeCoverageCheckpoint,
-) parser.OpenCodeCoverageCheckpoint {
-	if boundary.HighWaterRowID > 0 && boundary.HighWaterEventID != "" {
-		known := false
-		for _, anchor := range boundary.Anchors {
-			if anchor.RowID == boundary.HighWaterRowID {
-				known = true
-				break
-			}
-		}
-		if !known {
-			boundary.Anchors = append(boundary.Anchors, parser.OpenCodeJournalAnchor{
-				RowID: boundary.HighWaterRowID, EventID: boundary.HighWaterEventID,
-				AggregateID: boundary.HighWaterAggregateID,
-			})
-		}
+) (parser.OpenCodeCoverageCheckpoint, error) {
+	dbPath := binding.PhysicalDBPath
+	if dbPath == "" {
+		dbPath = binding.DBPath
 	}
-	boundary.AuditLatched = false
-	boundary.HighWaterKnown = false
-	boundary.HighWaterRowID = 0
-	boundary.HighWaterEventID = ""
-	boundary.HighWaterAggregateID = ""
-	boundary.ReadyIDs = nil
-	return boundary
+	return parser.RebaselineOpenCodeCoverageCheckpoint(ctx, dbPath, boundary)
 }
 
 func (c *sharedUnwatchedPollCoordinator) pollBoundedCoverageOnce(ctx context.Context) error {
@@ -790,6 +822,7 @@ func (c *sharedUnwatchedPollCoordinator) pollBoundedCoverageOnce(ctx context.Con
 		dbFile        os.FileInfo
 		auditPending  bool
 		auditBoundary parser.OpenCodeCoverageCheckpoint
+		auditRebased  bool
 		retired       bool
 	}
 	states := make([]workItem, 0, len(c.coverageState))
@@ -811,6 +844,20 @@ func (c *sharedUnwatchedPollCoordinator) pollBoundedCoverageOnce(ctx context.Con
 	for _, work := range states {
 		leaseResolver, hasLeaseResolver := c.coverage.(agentsync.BoundedCoverageLeaseResolver)
 		if work.auditPending {
+			var rebaseErr error
+			work.checkpoint, rebaseErr = checkpointBeforeBoundedAudit(
+				ctx, work.binding, work.auditBoundary,
+			)
+			if rebaseErr != nil {
+				c.commitCoverageState(work.key, work.generation, func(s *boundedCoverageState) {
+					s.running = false
+					s.retry = true
+					s.auditPending = true
+					s.auditBoundary = work.auditBoundary
+				})
+				return rebaseErr
+			}
+			work.auditRebased = true
 			if requestLeaseAudit != nil && work.lease != nil {
 				if err := requestLeaseAudit(ctx, work.lease, "bounded coverage repair"); err != nil {
 					c.commitCoverageState(work.key, work.generation, func(s *boundedCoverageState) { s.running = false; s.retry = true })
@@ -823,7 +870,6 @@ func (c *sharedUnwatchedPollCoordinator) pollBoundedCoverageOnce(ctx context.Con
 				c.commitCoverageState(work.key, work.generation, func(s *boundedCoverageState) { s.running = false; s.retry = true })
 				return err
 			}
-			work.checkpoint = checkpointAfterBoundedAudit(work.auditBoundary)
 			work.auditPending = false
 		}
 		more := false
@@ -854,14 +900,11 @@ func (c *sharedUnwatchedPollCoordinator) pollBoundedCoverageOnce(ctx context.Con
 							c.commitCoverageState(work.key, work.generation, func(s *boundedCoverageState) { s.running = false; s.retry = true })
 							return auditErr
 						}
-						work.checkpoint = checkpointAfterBoundedAudit(work.auditBoundary)
-						work.auditPending = false
 						if errors.Is(err, parser.ErrOpenCodeCoverageDatabaseMissing) {
 							c.retireCoverageState(work.key, work.generation)
 							work.retired = true
 							break
 						}
-						continue
 					}
 				}
 				if errors.Is(err, agentsync.ErrBoundedCoverageUnresolved) {
@@ -896,6 +939,22 @@ func (c *sharedUnwatchedPollCoordinator) pollBoundedCoverageOnce(ctx context.Con
 					})
 					continue
 				}
+				if !work.auditRebased {
+					var rebaseErr error
+					work.checkpoint, rebaseErr = checkpointBeforeBoundedAudit(
+						ctx, work.binding, work.auditBoundary,
+					)
+					if rebaseErr != nil {
+						c.commitCoverageState(work.key, work.generation, func(s *boundedCoverageState) {
+							s.running = false
+							s.retry = true
+							s.auditPending = true
+							s.auditBoundary = work.auditBoundary
+						})
+						return rebaseErr
+					}
+					work.auditRebased = true
+				}
 				var auditErr error
 				if requestLeaseAudit != nil && work.lease != nil {
 					auditErr = requestLeaseAudit(ctx, work.lease, "structural journal evidence")
@@ -906,7 +965,6 @@ func (c *sharedUnwatchedPollCoordinator) pollBoundedCoverageOnce(ctx context.Con
 					c.commitCoverageState(work.key, work.generation, func(s *boundedCoverageState) { s.running = false; s.retry = true; s.auditBoundary = work.auditBoundary })
 					return auditErr
 				}
-				work.checkpoint = checkpointAfterBoundedAudit(work.auditBoundary)
 				work.auditPending = false
 				continue
 			}

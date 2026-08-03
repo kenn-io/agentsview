@@ -14,7 +14,11 @@ GOLANGCI_LINT_VERSION ?= v2.11.4
 # Isolate each checkout from stale sibling-worktree fixes and issue positions.
 GOLANGCI_LINT_CACHE ?= $(CURDIR)/.golangci-cache
 export GOLANGCI_LINT_CACHE
+ifeq ($(findstring NT-,$(shell uname -s 2>/dev/null)),NT-)
+CUSTOM_GCL := ./custom-gcl.exe
+else
 CUSTOM_GCL := ./custom-gcl
+endif
 PRICING_SNAPSHOT_FILE := internal/pricing/snapshot/litellm_snapshot.json.gz
 
 # sqlite-vec's cgo bindings #include "sqlite3.h". Without an override the
@@ -424,7 +428,7 @@ nilaway-golangci-build:
 		exit 1; \
 	fi
 	@unset_args=$$(git rev-parse --local-env-vars 2>/dev/null | sed 's/^/-u /' | tr '\n' ' '); \
-	env $$unset_args GOFLAGS=-buildvcs=false \
+	env $$unset_args GOFLAGS=-buildvcs=false GOTOOLCHAIN=$(shell go env GOVERSION) \
 		golangci-lint custom --version "$(GOLANGCI_LINT_VERSION)" --name custom-gcl
 
 # Run NilAway through the custom golangci-lint module plugin.
@@ -461,6 +465,9 @@ nilaway: pricing-snapshot ensure-embed-dir nilaway-golangci-build
 	root=$$(pwd); \
 	dirs=$$(go list -f '{{.Dir}}' ./...); \
 	pkgs=$$(for dir in $$dirs; do \
+		case "$$(uname -s 2>/dev/null)" in \
+			*_NT-*) dir=$$(cygpath -u "$$dir");; \
+		esac; \
 		if [ "$$dir" = "$$root" ]; then \
 			printf '%s\n' "."; \
 		else \
@@ -468,6 +475,7 @@ nilaway: pricing-snapshot ensure-embed-dir nilaway-golangci-build
 		fi; \
 	done); \
 	if [ -z "$$pkgs" ]; then echo "nilaway: no packages to lint" >&2; exit 1; fi; \
+	count=$$(printf '%s\n' "$$pkgs" | awk 'END { print NR }'); \
 	NILAWAY_OUT_DIR=$$(mktemp -d); \
 	export NILAWAY_OUT_DIR; \
 	trap 'rm -f "$$NILAWAY_OUT_DIR"/*; rmdir "$$NILAWAY_OUT_DIR"' EXIT HUP INT TERM; \
@@ -487,8 +495,10 @@ nilaway: pricing-snapshot ensure-embed-dir nilaway-golangci-build
 		exit $$status' sh; \
 	rc=$$?; \
 	set -e; \
-	ls "$$NILAWAY_OUT_DIR" | sort -n | while IFS= read -r n; do \
-		cat "$$NILAWAY_OUT_DIR/$$n"; \
+	n=1; \
+	while [ "$$n" -le "$$count" ]; do \
+		if [ -f "$$NILAWAY_OUT_DIR/$$n" ]; then cat "$$NILAWAY_OUT_DIR/$$n"; fi; \
+		n=$$((n + 1)); \
 	done; \
 	exit $$rc
 

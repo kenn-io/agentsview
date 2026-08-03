@@ -228,8 +228,8 @@ func sessionSet(t *testing.T, d *DB) {
 		end := fmt.Sprintf("2024-06-0%dT11:00:00Z", i+1)
 		insertSession(t, d, fmt.Sprintf("s%d", i+1),
 			"proj", func(s *Session) {
-				s.StartedAt = new(day)
-				s.EndedAt = new(end)
+				s.StartedAt = &day
+				s.EndedAt = &end
 				s.MessageCount = mc
 			})
 	}
@@ -1407,7 +1407,7 @@ func TestListSessions(t *testing.T) {
 		insertSession(t, d,
 			fmt.Sprintf("session-%c", 'a'+i), "proj",
 			func(s *Session) {
-				s.EndedAt = new(ea)
+				s.EndedAt = &ea
 				s.MessageCount = i + 1
 			},
 		)
@@ -1443,7 +1443,7 @@ func TestListSessionsPaginationNoDuplicates(t *testing.T) {
 	for i, ea := range times {
 		insertSession(t, d,
 			fmt.Sprintf("page-%c", 'a'+i), "proj",
-			func(s *Session) { s.EndedAt = new(ea) },
+			func(s *Session) { s.EndedAt = &ea },
 		)
 	}
 
@@ -1520,7 +1520,7 @@ func TestListSessionsProjectFilter(t *testing.T) {
 		ea := fmt.Sprintf("2024-01-01T00:00:0%dZ", i)
 		insertSession(t, d,
 			fmt.Sprintf("%s-%d", proj, i), proj,
-			func(s *Session) { s.EndedAt = new(ea) },
+			func(s *Session) { s.EndedAt = &ea },
 		)
 	}
 

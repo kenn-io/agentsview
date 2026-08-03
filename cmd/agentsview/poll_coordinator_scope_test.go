@@ -187,6 +187,27 @@ type coverageCoordinatorFixture struct {
 	checkpoint parser.OpenCodeCoverageCheckpoint
 }
 
+type concurrentAdmissionCoverageFixture struct {
+	coverageCoordinatorFixture
+	mu      sync.Mutex
+	calls   int
+	started chan struct{}
+	release chan struct{}
+}
+
+func (f *concurrentAdmissionCoverageFixture) InitializeBoundedCoverage(
+	context.Context, agentsync.BoundedCoverageBinding,
+) (parser.OpenCodeCoverageCheckpoint, error) {
+	f.mu.Lock()
+	f.calls++
+	if f.calls == 1 {
+		close(f.started)
+	}
+	f.mu.Unlock()
+	<-f.release
+	return parser.OpenCodeCoverageCheckpoint{Initialized: true, SchemaVersion: 7}, nil
+}
+
 func (f *coverageCoordinatorFixture) BoundedCoverageBindings(
 	context.Context, []agentsync.BoundedCoverageRoot,
 ) ([]agentsync.BoundedCoverageBinding, error) {
@@ -234,6 +255,97 @@ func TestBoundedCoverageAdmissionInstallsRowZeroLease(t *testing.T) {
 	assert.Empty(t, state.checkpoint.Anchors)
 	assert.True(t, state.pendingWake)
 	assert.Equal(t, uint64(1), state.generation)
+}
+
+func TestBoundedCoverageAdmissionRetriesBindingAfterCoveragePass(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "opencode.db")
+	require.NoError(t, os.WriteFile(dbPath, []byte("journal"), 0o600))
+	binding := agentsync.BoundedCoverageBinding{
+		Key: "db", DBPath: dbPath, PhysicalDBPath: dbPath,
+		Scope: filepath.Dir(dbPath),
+	}
+	coordinator := &sharedUnwatchedPollCoordinator{
+		coverage:      &coverageCoordinatorFixture{},
+		coverageState: make(map[string]*boundedCoverageState),
+	}
+	passDone := make(chan struct{})
+	coordinator.coverageMu.Lock()
+	coordinator.coveragePassRunning = true
+	coordinator.coveragePassDone = passDone
+	coordinator.coverageMu.Unlock()
+
+	type admissionResult struct {
+		admitted []agentsync.BoundedCoverageBinding
+		err      error
+	}
+	resultCh := make(chan admissionResult, 1)
+	go func() {
+		admitted, err := coordinator.AdmitBoundedCoverage(
+			context.Background(), []agentsync.BoundedCoverageBinding{binding}, false,
+		)
+		resultCh <- admissionResult{admitted: admitted, err: err}
+	}()
+	select {
+	case result := <-resultCh:
+		t.Fatalf("admission skipped the binding during the active pass: %+v", result)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	coordinator.coverageMu.Lock()
+	coordinator.coveragePassRunning = false
+	close(passDone)
+	coordinator.coveragePassDone = nil
+	coordinator.coverageMu.Unlock()
+	select {
+	case result := <-resultCh:
+		require.NoError(t, result.err)
+		require.Len(t, result.admitted, 1)
+	case <-time.After(time.Second):
+		t.Fatal("admission did not retry the binding after the coverage pass")
+	}
+}
+
+func TestBoundedCoverageAdmissionSerializesConcurrentReplacements(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "opencode.db")
+	require.NoError(t, os.WriteFile(dbPath, []byte("journal"), 0o600))
+	binding := agentsync.BoundedCoverageBinding{
+		Key: "db", DBPath: dbPath, PhysicalDBPath: dbPath,
+		Scope: filepath.Dir(dbPath),
+	}
+	fixture := &concurrentAdmissionCoverageFixture{
+		started: make(chan struct{}), release: make(chan struct{}),
+	}
+	coordinator := &sharedUnwatchedPollCoordinator{
+		coverage: fixture, coverageState: make(map[string]*boundedCoverageState),
+	}
+	results := make(chan error, 2)
+	for range 2 {
+		go func() {
+			_, err := coordinator.AdmitBoundedCoverage(
+				context.Background(), []agentsync.BoundedCoverageBinding{binding}, false,
+			)
+			results <- err
+		}()
+	}
+	select {
+	case <-fixture.started:
+	case <-time.After(time.Second):
+		t.Fatal("concurrent admission did not start")
+	}
+	select {
+	case <-time.After(25 * time.Millisecond):
+	case <-results:
+		t.Fatal("the first admission completed before its release")
+	}
+	close(fixture.release)
+	for range 2 {
+		require.NoError(t, <-results)
+	}
+	fixture.mu.Lock()
+	calls := fixture.calls
+	fixture.mu.Unlock()
+	assert.Equal(t, 1, calls,
+		"one physical lease must be admitted when callbacks overlap")
 }
 
 func TestBoundedCoverageSameKeyReplacementKeepsNewState(t *testing.T) {
