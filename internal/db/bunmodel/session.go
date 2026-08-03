@@ -75,9 +75,9 @@ type Session struct {
 	FileDevice         *int64     `bun:"file_device,nullzero"`
 	FileHash           *string    `bun:"file_hash,nullzero"`
 	LocalModifiedAt    *Timestamp `bun:"local_modified_at,type:TIMESTAMPTZ,nullzero"`
-	TranscriptRevision *string    `bun:"transcript_revision,nullzero"`
+	TranscriptRevision string     `bun:"transcript_revision,notnull,default:'0'"`
 	CreatedAt          Timestamp  `bun:"created_at,type:TIMESTAMPTZ,notnull"`
 
-	SourceArchiveID          string `bun:"source_archive_id,notnull"`
-	SourceDatabaseGeneration string `bun:"source_database_generation,notnull"`
+	SourceArchiveID          string `bun:"source_archive_id,notnull,default:''"`
+	SourceDatabaseGeneration string `bun:"source_database_generation,notnull,default:''"`
 }

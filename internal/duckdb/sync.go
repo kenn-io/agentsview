@@ -31,7 +31,9 @@ type Sync struct {
 	// archiveID caches this local archive's stable identifier (see
 	// ensureArchiveID), stamped onto every pushed session's
 	// source_archive_id column and used to scope mapping publications.
-	archiveID string
+	archiveID          string
+	archiveSalt        string
+	databaseGeneration string
 
 	closeOnce sync.Once
 	closeErr  error
@@ -180,7 +182,7 @@ func (s *Sync) DB() *sql.DB { return s.duck }
 // Sync. Both push entry points (rebuild and incremental) call it before any
 // session or mapping write so provenance is stamped consistently.
 func (s *Sync) ensureArchiveID(ctx context.Context) error {
-	if s.archiveID != "" {
+	if s.archiveID != "" && s.archiveSalt != "" && s.databaseGeneration != "" {
 		return nil
 	}
 	archiveID, err := s.local.GetArchiveID(ctx)
@@ -188,6 +190,28 @@ func (s *Sync) ensureArchiveID(ctx context.Context) error {
 		return fmt.Errorf("reading archive id: %w", err)
 	}
 	s.archiveID = archiveID
+	archiveSalt, err := s.local.GetArchiveSalt(ctx)
+	if err != nil {
+		return fmt.Errorf("reading archive salt: %w", err)
+	}
+	s.archiveSalt = archiveSalt
+	databaseGeneration, err := s.local.GetDatabaseID(ctx)
+	if err != nil {
+		return fmt.Errorf("reading database generation: %w", err)
+	}
+	s.databaseGeneration = databaseGeneration
+	if err := upsertSourceArchiveScope(
+		func(query string, args ...any) error {
+			_, execErr := s.duck.ExecContext(ctx, query, args...)
+			return execErr
+		},
+		func(query string, args ...any) *sql.Row {
+			return s.duck.QueryRowContext(ctx, query, args...)
+		},
+		s.archiveID, s.archiveSalt,
+	); err != nil {
+		return err
+	}
 	return nil
 }
 

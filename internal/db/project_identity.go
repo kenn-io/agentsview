@@ -803,6 +803,11 @@ func (db *DB) upsertSessionWithProjectIdentity(
 		)
 	}
 	obs = normalized
+	identity, err := db.localArchiveIdentity(context.Background())
+	if err != nil {
+		return sessionUpsertResult{}, err
+	}
+	stampSessionArchiveIdentity(&s, identity)
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	tx, err := db.getWriter().Begin()

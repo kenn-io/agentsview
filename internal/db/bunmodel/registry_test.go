@@ -19,11 +19,13 @@ import (
 )
 
 func registeredCreateTable(
-	db *bun.DB, table Table, includeCascade bool,
+	db *bun.DB, table Table, includeForeignKeys bool,
 ) *bun.CreateTableQuery {
 	query := db.NewCreateTable().Model(table.Model).IfNotExists()
-	for _, foreignKey := range table.ForeignKeys {
-		query.ForeignKey(ForeignKeyDefinition(foreignKey, includeCascade))
+	if includeForeignKeys {
+		for _, foreignKey := range table.ForeignKeys {
+			query.ForeignKey(ForeignKeyDefinition(foreignKey, true))
+		}
 	}
 	return query
 }

@@ -1640,9 +1640,10 @@ func TestDuckAnalyticsVelocityModelFilterCountsNullTimestampToolCallsWithoutTime
 	require.NoError(t, err, "insert null-timestamp message")
 	_, err = store.duck.ExecContext(ctx, `
 		INSERT INTO tool_calls (
-			id, message_id, session_id, tool_name, category, call_index
+			id, message_id, session_id, message_ordinal,
+			tool_name, category, call_index
 		) VALUES
-			(9203, 9103, 'duck-velocity-null-ts', 'Search', 'Search', 0)`)
+			(9203, 9103, 'duck-velocity-null-ts', 4, 'Search', 'Search', 0)`)
 	require.NoError(t, err, "insert tool call")
 
 	resp, err := store.GetAnalyticsVelocity(ctx, db.AnalyticsFilter{

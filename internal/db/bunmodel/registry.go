@@ -17,9 +17,9 @@ type Index struct {
 	Unique      bool
 }
 
-// ForeignKey is one canonical relationship. DuckDB enforces the relationship
-// but cannot express cascading actions; its read-only mirror writer deletes
-// dependent rows explicitly before parent rows.
+// ForeignKey is one canonical relationship. DuckDB cannot use foreign keys on
+// mutable mirror tables because it rejects parent updates and cascading
+// actions; its mirror writer preserves the relationship explicitly.
 type ForeignKey struct {
 	Columns           []string
 	ReferencedTable   string
@@ -35,9 +35,9 @@ type Table struct {
 	ForeignKeys []ForeignKey
 }
 
-// ForeignKeyDefinition renders the portable Bun ForeignKey clause. Callers
-// omit cascading actions only for engines, currently DuckDB, that reject the
-// syntax and already own explicit child-first deletion.
+// ForeignKeyDefinition renders the portable Bun ForeignKey clause. Adapters
+// that cannot use foreign-key DDL on mutable tables omit the clause and enforce
+// the registered relationship through their atomic writer.
 func ForeignKeyDefinition(foreignKey ForeignKey, includeCascade bool) string {
 	definition := fmt.Sprintf(
 		"%s REFERENCES %s %s",

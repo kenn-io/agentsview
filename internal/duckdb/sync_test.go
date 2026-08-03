@@ -1316,7 +1316,9 @@ func TestDuckSessionFingerprintFieldsDiffer(t *testing.T) {
 func TestDuckSessionFingerprintCoversEveryMirroredColumn(t *testing.T) {
 	base := db.Session{CreatedAt: "2026-03-11T12:00:00Z"}
 	encodeArgs := func(s db.Session) string {
-		data, err := json.Marshal(sessionInsertArgs(s, "m", "archive", "fp"))
+		data, err := json.Marshal(sessionInsertArgs(
+			s, "m", "archive", "generation", "fp",
+		))
 		require.NoError(t, err)
 		return string(data)
 	}
@@ -1526,18 +1528,18 @@ func TestSyncModelPricingSkipsUnchangedMirrorRows(t *testing.T) {
 	require.NoError(t, syncer.syncModelPricing(ctx))
 	_, err := syncer.DB().ExecContext(ctx,
 		`UPDATE model_pricing SET updated_at = ? WHERE model_pattern = ?`,
-		"kept", "claude-test",
+		time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC), "claude-test",
 	)
 	require.NoError(t, err)
 
 	require.NoError(t, syncer.syncModelPricing(ctx))
 
-	var updatedAt string
+	var updatedAt time.Time
 	require.NoError(t, syncer.DB().QueryRowContext(ctx,
 		`SELECT updated_at FROM model_pricing WHERE model_pattern = ?`,
 		"claude-test",
 	).Scan(&updatedAt))
-	assert.Equal(t, "kept", updatedAt)
+	assert.Equal(t, time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC), updatedAt.UTC())
 }
 
 func TestSyncModelPricingBandsPersistsAndRemovesCompleteSet(t *testing.T) {
@@ -2365,9 +2367,9 @@ func insertDuckSkillCollision(
 	}
 	_, err = duck.ExecContext(ctx, `
 		INSERT INTO tool_calls (
-			id, message_id, session_id, tool_name, category,
+			id, message_id, session_id, message_ordinal, tool_name, category,
 			call_index, tool_use_id, skill_name
-		) VALUES (?, ?, ?, 'Skill', 'Skill', 0, ?, ?)`,
+		) VALUES (?, ?, ?, 0, 'Skill', 'Skill', 0, ?, ?)`,
 		msgID, msgID, sessionID, sessionID+"-tu", skill)
 	require.NoError(t, err)
 }
@@ -2394,10 +2396,10 @@ func insertOtherMachineDuckSession(t *testing.T, duck *sql.DB) {
 	require.NoError(t, err)
 	_, err = duck.ExecContext(ctx, `
 		INSERT INTO tool_calls (
-			id, message_id, session_id, tool_name, category,
+			id, message_id, session_id, message_ordinal, tool_name, category,
 			call_index, tool_use_id, input_json
 		) VALUES (
-			9001, 2, 'other-session', 'wrong-session-tool', 'other',
+			9001, 2, 'other-session', 0, 'wrong-session-tool', 'other',
 			0, 'other-tool-use', '{"cmd":"wrong-session-tool"}'
 		)`)
 	require.NoError(t, err)

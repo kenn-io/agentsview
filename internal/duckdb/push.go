@@ -827,15 +827,6 @@ func (s *Sync) replaceCuration(
 	}
 
 	err = s.withDuckTx(ctx, "replace curation rows", func(tx *sql.Tx) error {
-		for _, table := range []string{"pinned_messages", "starred_sessions"} {
-			if err := s.execMutation(ctx, tx, `
-				DELETE FROM `+table+`
-				WHERE session_id IN (
-					SELECT id FROM sessions
-				)`); err != nil {
-				return fmt.Errorf("clearing duckdb %s: %w", table, err)
-			}
-		}
 		for _, id := range residentPinned {
 			if err := insertPinnedMessages(ctx, tx, written.pinsBySession[id]); err != nil {
 				return err
@@ -844,11 +835,20 @@ func (s *Sync) replaceCuration(
 		for _, id := range written.starred {
 			if _, err := tx.ExecContext(ctx,
 				`INSERT INTO starred_sessions (session_id, created_at)
-				 VALUES (?, current_timestamp)`,
+				 VALUES (?, current_timestamp)
+				 ON CONFLICT (session_id) DO NOTHING`,
 				id,
 			); err != nil {
 				return fmt.Errorf("syncing starred session %s: %w", id, err)
 			}
+		}
+		pinDelete, pinArgs := stalePinnedMessageDelete(written.pinsBySession)
+		if err := s.execMutation(ctx, tx, pinDelete, pinArgs...); err != nil {
+			return fmt.Errorf("clearing stale duckdb pinned_messages: %w", err)
+		}
+		starDelete, starArgs := staleStarredSessionDelete(written.starred)
+		if err := s.execMutation(ctx, tx, starDelete, starArgs...); err != nil {
+			return fmt.Errorf("clearing stale duckdb starred_sessions: %w", err)
 		}
 		return nil
 	})
@@ -856,6 +856,44 @@ func (s *Sync) replaceCuration(
 		return "", err
 	}
 	return fingerprint, nil
+}
+
+func stalePinnedMessageDelete(pinsBySession map[string][]db.PinnedMessage) (string, []any) {
+	var values []string
+	var args []any
+	for _, pins := range pinsBySession {
+		for _, pin := range pins {
+			values = append(values, "(?, ?)")
+			args = append(args, pin.SessionID, pin.Ordinal)
+		}
+	}
+	query := `DELETE FROM pinned_messages AS pin
+		WHERE pin.session_id IN (SELECT id FROM sessions)`
+	if len(values) > 0 {
+		query += ` AND NOT EXISTS (
+			SELECT 1 FROM (VALUES ` + strings.Join(values, ", ") + `)
+				AS current_pin(session_id, ordinal)
+			WHERE current_pin.session_id = pin.session_id
+				AND current_pin.ordinal = pin.ordinal
+		)`
+	}
+	return query, args
+}
+
+func staleStarredSessionDelete(sessionIDs []string) (string, []any) {
+	query := `DELETE FROM starred_sessions
+		WHERE session_id IN (SELECT id FROM sessions)`
+	if len(sessionIDs) == 0 {
+		return query, nil
+	}
+	placeholders := make([]string, len(sessionIDs))
+	args := make([]any, len(sessionIDs))
+	for i, sessionID := range sessionIDs {
+		placeholders[i] = "?"
+		args[i] = sessionID
+	}
+	return query + ` AND session_id NOT IN (` +
+		strings.Join(placeholders, ", ") + `)`, args
 }
 
 // refreshCurationIfChanged skips replaceCuration's delete+reinsert when
@@ -1013,12 +1051,13 @@ func (s *Sync) upsertSession(
 			cwd, git_branch, source_session_id, source_version, transcript_fidelity,
 			parser_malformed_lines, is_truncated, deleted_at, deletion_cause, created_at,
 			termination_status, secret_leak_count, secrets_rules_version,
-			agentsview_push_fingerprint, source_archive_id
+			agentsview_push_fingerprint, source_archive_id,
+			source_database_generation
 		) VALUES (
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		)`
 	query += `
 		ON CONFLICT(id) DO UPDATE SET
@@ -1089,10 +1128,11 @@ func (s *Sync) upsertSession(
 			secret_leak_count = excluded.secret_leak_count,
 			secrets_rules_version = excluded.secrets_rules_version,
 			agentsview_push_fingerprint = excluded.agentsview_push_fingerprint,
-			source_archive_id = excluded.source_archive_id`
+			source_archive_id = excluded.source_archive_id,
+			source_database_generation = excluded.source_database_generation`
 
 	args := sessionInsertArgs(
-		sess, s.machine, s.archiveID, fingerprint,
+		sess, s.machine, s.archiveID, s.databaseGeneration, fingerprint,
 	)
 	if err := s.execMutation(ctx, exec, query, args...); err != nil {
 		return fmt.Errorf("writing duckdb session %s: %w", sess.ID, err)
@@ -1104,6 +1144,7 @@ func sessionInsertArgs(
 	sess db.Session,
 	fallbackMachine string,
 	archiveID string,
+	databaseGeneration string,
 	fingerprint string,
 ) []any {
 	return []any{
@@ -1140,7 +1181,7 @@ func sessionInsertArgs(
 		sess.IsTruncated, nilTime(sess.DeletedAt), nilString(sess.DeletionCause),
 		timeValue(sess.CreatedAt), nilString(sess.TerminationStatus),
 		sess.SecretLeakCount, sess.SecretsRulesVersion,
-		nilEmpty(fingerprint), archiveID,
+		nilEmpty(fingerprint), archiveID, databaseGeneration,
 	}
 }
 
@@ -1214,12 +1255,12 @@ func insertToolCalls(
 		for i, tc := range m.ToolCalls {
 			if _, err := exec.ExecContext(ctx, `
 				INSERT INTO tool_calls (
-					message_id, session_id, tool_name, category,
+					message_id, session_id, message_ordinal, tool_name, category,
 					call_index, tool_use_id, input_json, skill_name,
 					result_content_length, result_content,
 					subagent_session_id, file_path
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				m.ID, m.SessionID, tc.ToolName, tc.Category,
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				m.ID, m.SessionID, m.Ordinal, tc.ToolName, tc.Category,
 				i, tc.ToolUseID, nilEmpty(tc.InputJSON),
 				nilEmpty(tc.SkillName), nilZero(tc.ResultContentLength),
 				nilEmpty(tc.ResultContent), nilEmpty(tc.SubagentSessionID),
@@ -1422,7 +1463,12 @@ func insertPinnedMessages(
 		if _, err := exec.ExecContext(ctx, `
 			INSERT INTO pinned_messages (
 				id, session_id, message_id, ordinal, note, created_at
-			) VALUES (?, ?, ?, ?, ?, ?)`,
+			) VALUES (?, ?, ?, ?, ?, ?)
+			ON CONFLICT (session_id, ordinal) DO UPDATE SET
+				id = excluded.id,
+				message_id = excluded.message_id,
+				note = excluded.note,
+				created_at = excluded.created_at`,
 			p.ID, p.SessionID, p.MessageID, p.Ordinal,
 			p.Note, timeValue(p.CreatedAt),
 		); err != nil {

@@ -99,7 +99,7 @@ func buildAnalyticsWhere(
 	pb *paramBuilder,
 ) string {
 	return buildAnalyticsWhereWithDate(
-		f, dateCol, pb, true, "id",
+		f, dateCol, pb, true, "sessions.id",
 	)
 }
 
@@ -112,7 +112,7 @@ func buildAnalyticsWhereWithoutDate(
 	pb *paramBuilder,
 ) string {
 	return buildAnalyticsWhereWithDate(
-		f, "", pb, false, "id",
+		f, "", pb, false, "sessions.id",
 	)
 }
 
@@ -124,7 +124,7 @@ func buildAnalyticsWhereWithDate(
 	sessionIDExpr string,
 ) string {
 	if sessionIDExpr == "" {
-		sessionIDExpr = "id"
+		sessionIDExpr = "sessions.id"
 	}
 	preds := []string{
 		"message_count > 0",
@@ -1730,7 +1730,7 @@ func (s *Store) analyticsModelCandidateSessionIDs(
 	loc := analyticsLocation(f)
 	pb := &paramBuilder{}
 	where := buildAnalyticsWhereWithDate(
-		f, pgDateCol, pb, true, "id",
+		f, pgDateCol, pb, true, "sessions.id",
 	)
 
 	rows, err := s.pg.QueryContext(ctx, `SELECT id, `+pgDateCol+`
