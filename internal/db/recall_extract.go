@@ -1563,10 +1563,10 @@ func verifyExtractSessionGuardTx(
 	case !nullableStringEqual(revision, u.TranscriptRevision):
 		return extractDriftErrorf(
 			"session %s transcript revision changed", u.SessionID)
-	case !nullableStringEqual(localModified, u.LocalModifiedAt):
+	case !nullableTimestampEqual(localModified, u.LocalModifiedAt):
 		return extractDriftErrorf(
 			"session %s was written to during distillation", u.SessionID)
-	case !nullableStringEqual(endedAt, u.EndedAt):
+	case !nullableTimestampEqual(endedAt, u.EndedAt):
 		// A bare session-row update can reopen or re-date a session
 		// without moving any other guarded field; eligibility treats
 		// ended_at as state, so the commit must too.
@@ -1594,6 +1594,18 @@ func nullableStringEqual(stored sql.NullString, expected *string) bool {
 		return !stored.Valid && expected == nil
 	}
 	return stored.String == *expected
+}
+
+func nullableTimestampEqual(stored sql.NullString, expected *string) bool {
+	if nullableStringEqual(stored, expected) {
+		return true
+	}
+	if !stored.Valid || expected == nil {
+		return false
+	}
+	storedTime, storedOK := ParseStoredTimestamp(stored.String)
+	expectedTime, expectedOK := ParseStoredTimestamp(*expected)
+	return storedOK && expectedOK && storedTime.Equal(expectedTime)
 }
 
 // bindExtractedEvidenceTx stamps host-derived provenance onto each entry's

@@ -37,15 +37,15 @@ func OpenPreparedTestDB(path string) (*DB, error) {
 	db.bunReader = bun.NewDB(reader, sqlitedialect.New())
 	db.BunStore = NewBunStore(&sqliteBunBackend{store: db})
 
-	db.cursorSecret = make([]byte, 32)
-	if _, err := rand.Read(db.cursorSecret); err != nil {
+	cursorSecret := make([]byte, 32)
+	if _, err := rand.Read(cursorSecret); err != nil {
 		writer.Close()
 		reader.Close()
 		return nil, fmt.Errorf(
 			"generating prepared test cursor secret: %w", err,
 		)
 	}
-	db.BunStore.SetCursorSecret(db.cursorSecret)
+	db.SetCursorSecret(cursorSecret)
 
 	db.startWALCheckpointLoop()
 	return db, nil

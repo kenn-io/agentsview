@@ -25,6 +25,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
+	"go.kenn.io/agentsview/internal/duckdb/bundialect"
 )
 
 type sessionVersionProbeDriver struct{}
@@ -47,10 +49,17 @@ func newSessionVersionProbeStore(t *testing.T) *Store {
 	duck, err := sql.Open("agentsview_session_version_probe", t.Name())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, duck.Close()) })
-	return &Store{
+	store := &Store{
 		duck:           duck,
 		connectionKind: duckDBQuackClientConnection,
 	}
+	store.bun = bun.NewDB(
+		duck,
+		bundialect.New(),
+		bun.WithConnResolver(newQuackBunResolver(duck, nil)),
+	)
+	store.BunStore = db.NewBunStore(&duckBunBackend{store: store})
+	return store
 }
 
 func (sessionVersionProbeDriver) Open(string) (driver.Conn, error) {
@@ -80,12 +89,13 @@ func (sessionVersionProbeConn) QueryContext(
 	if !ok {
 		return nil, fmt.Errorf("remote query arg has type %T", args[0].Value)
 	}
-	if !strings.Contains(sqlText, "FROM sessions WHERE id") {
+	if !strings.Contains(sqlText, `FROM "sessions"`) ||
+		!strings.Contains(sqlText, `quoted '' session`) {
 		return nil, fmt.Errorf("unexpected remote query: %s", sqlText)
 	}
 	return &sessionVersionProbeRows{
 		columns: []string{
-			"message_count", "file_mtime", "file_hash", "updated_at",
+			"message_count", "file_mtime", "file_hash", "local_modified_at",
 		},
 		values: [][]driver.Value{{
 			int64(7), int64(123), "hash",

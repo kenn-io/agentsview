@@ -53,16 +53,6 @@ func (s *Store) SetCustomPricing(p map[string]config.CustomModelRate) {
 	s.forgetPricingLoad()
 }
 
-// SetCursorSecret sets the HMAC key used for cursor signing.
-func (s *Store) SetCursorSecret(secret []byte) {
-	if s.BunStore != nil {
-		s.BunStore.SetCursorSecret(secret)
-	}
-	s.cursorMu.Lock()
-	defer s.cursorMu.Unlock()
-	s.cursorSecret = append([]byte(nil), secret...)
-}
-
 // ReadOnly returns true because PG serve still treats the remote
 // session store as remote; local file, upload, and batch-ingest
 // paths stay blocked while dashboard curation uses dedicated methods.
@@ -122,24 +112,6 @@ func probeInsightGenerationAvailabilityTx(
 		)
 	}
 	return true, nil
-}
-
-// GetSessionVersion returns the message count and a compact version
-// marker for SSE change detection.
-func (s *Store) GetSessionVersion(
-	id string,
-) (int, int64, bool) {
-	var count int
-	var updatedAt time.Time
-	err := s.pg.QueryRow(
-		`SELECT message_count, COALESCE(updated_at, created_at)
-		 FROM sessions WHERE id = $1`,
-		id,
-	).Scan(&count, &updatedAt)
-	if err != nil {
-		return 0, 0, false
-	}
-	return count, db.SessionVersionMarker(FormatISO8601(updatedAt)), true
 }
 
 // ------------------------------------------------------------
