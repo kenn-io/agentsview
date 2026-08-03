@@ -93,3 +93,19 @@ func TestSessionBatchWriteFromParsedPreservesMessageIdentity(t *testing.T) {
 	assert.True(t, result.PreserveLegacyPinsByOrdinal,
 		"explicit re-uploads preserve existing UUID-less pins by ordinal")
 }
+
+func TestSessionBatchWriteFromParsedPreservesCompactBoundary(t *testing.T) {
+	sess := parser.ParsedSession{ID: "test-compact-boundary"}
+	msgs := []parser.ParsedMessage{{
+		Ordinal:           1,
+		Role:              parser.RoleSystem,
+		Content:           "Conversation compacted",
+		IsSystem:          true,
+		IsCompactBoundary: true,
+	}}
+
+	result := sessionBatchWriteFromParsed(sess, msgs)
+
+	require.Len(t, result.Messages, 1)
+	assert.True(t, result.Messages[0].IsCompactBoundary)
+}
