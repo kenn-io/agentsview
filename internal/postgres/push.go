@@ -2947,32 +2947,79 @@ type resolvedPostgresPin struct {
 func snapshotPinnedMessages(
 	ctx context.Context, tx *sql.Tx, sessionID string,
 ) ([]savedPostgresPin, error) {
+	// A populated pin source_uuid is the durable anchor and may legitimately
+	// disagree with message_id after an older ordinal-shifting reconciliation.
+	// Resolve it when unique; for duplicates, accept only the row still at the
+	// recorded ordinal. UUID-less legacy pins continue to anchor by message_id.
 	rows, err := tx.QueryContext(ctx, `
 		SELECT p.id, p.message_id, p.note, p.created_at,
-			m.ordinal IS NOT NULL,
-			COALESCE(m.source_uuid, ''),
-			COALESCE(m.role, ''), COALESCE(m.content, ''),
-			(
+			CASE WHEN p.source_uuid <> ''
+				THEN anchored.ordinal IS NOT NULL
+				ELSE current_message.ordinal IS NOT NULL
+			END,
+			CASE WHEN p.source_uuid <> ''
+				THEN p.source_uuid
+				ELSE COALESCE(current_message.source_uuid, '')
+			END,
+			COALESCE(
+				CASE WHEN p.source_uuid <> ''
+					THEN anchored.role
+					ELSE current_message.role
+				END,
+				''
+			),
+			COALESCE(
+				CASE WHEN p.source_uuid <> ''
+					THEN anchored.content
+					ELSE current_message.content
+				END,
+				''
+			),
+			CASE WHEN p.source_uuid <> '' THEN (
 				SELECT COUNT(*)
 				FROM messages same_uuid
-				WHERE same_uuid.session_id = m.session_id
-					AND same_uuid.source_uuid = m.source_uuid
-					AND m.source_uuid <> ''
-			),
-			(
+				WHERE same_uuid.session_id = p.session_id
+					AND same_uuid.source_uuid = p.source_uuid
+			) ELSE (
+				SELECT COUNT(*)
+				FROM messages same_uuid
+				WHERE same_uuid.session_id = p.session_id
+					AND same_uuid.source_uuid = current_message.source_uuid
+					AND current_message.source_uuid <> ''
+			) END,
+			CASE WHEN p.source_uuid <> '' THEN (
 				SELECT COUNT(*)
 				FROM messages same_identity
-				WHERE same_identity.session_id = m.session_id
-					AND same_identity.source_uuid = m.source_uuid
-					AND same_identity.role = m.role
-					AND same_identity.content = m.content
-					AND m.source_uuid <> ''
-			),
-			p.source_uuid
+				WHERE same_identity.session_id = p.session_id
+					AND same_identity.source_uuid = p.source_uuid
+					AND same_identity.role = anchored.role
+					AND same_identity.content = anchored.content
+			) ELSE (
+				SELECT COUNT(*)
+				FROM messages same_identity
+				WHERE same_identity.session_id = p.session_id
+					AND same_identity.source_uuid = current_message.source_uuid
+					AND same_identity.role = current_message.role
+					AND same_identity.content = current_message.content
+					AND current_message.source_uuid <> ''
+			) END
 		FROM pinned_messages p
-		LEFT JOIN messages m
-			ON m.session_id = p.session_id
-			AND m.ordinal = p.message_id
+		LEFT JOIN messages current_message
+			ON current_message.session_id = p.session_id
+			AND current_message.ordinal = p.message_id
+		LEFT JOIN messages anchored
+			ON anchored.session_id = p.session_id
+			AND p.source_uuid <> ''
+			AND anchored.source_uuid = p.source_uuid
+			AND (
+				anchored.ordinal = p.message_id
+				OR (
+					SELECT COUNT(*)
+					FROM messages anchor_count
+					WHERE anchor_count.session_id = p.session_id
+						AND anchor_count.source_uuid = p.source_uuid
+				) = 1
+			)
 		WHERE p.session_id = $1
 		ORDER BY p.id
 		FOR UPDATE OF p`,
@@ -2986,19 +3033,13 @@ func snapshotPinnedMessages(
 	var pins []savedPostgresPin
 	for rows.Next() {
 		var pin savedPostgresPin
-		var storedSourceUUID string
 		if err := rows.Scan(
 			&pin.id, &pin.ordinal, &pin.note, &pin.createdAt,
 			&pin.messageFound, &pin.sourceUUID,
 			&pin.role, &pin.content,
 			&pin.sourceUUIDCount, &pin.sourceIdentityCount,
-			&storedSourceUUID,
 		); err != nil {
 			return nil, fmt.Errorf("scanning pg pin snapshot: %w", err)
-		}
-		if storedSourceUUID != "" &&
-			storedSourceUUID != pin.sourceUUID {
-			pin.messageFound = false
 		}
 		pins = append(pins, pin)
 	}

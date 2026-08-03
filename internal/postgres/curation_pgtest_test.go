@@ -623,6 +623,75 @@ func TestReconcilePinnedMessagesPrefersCurrentTargetPin(t *testing.T) {
 	assert.Equal(t, "current note", *pins[0].Note)
 }
 
+func TestReconcilePinnedMessagesFollowsStoredUniqueSourceUUID(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_pin_shifted_uuid_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+	defer func() {
+		_, _ = pg.ExecContext(
+			context.Background(),
+			`DROP SCHEMA IF EXISTS `+schema+` CASCADE`,
+		)
+	}()
+
+	ctx := context.Background()
+	_, err = pg.ExecContext(ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	_, err = pg.ExecContext(ctx, `
+		INSERT INTO sessions
+			(id, machine, project, agent, first_message,
+			 started_at, message_count, user_message_count)
+		VALUES
+			('pg-pin-shifted-uuid', 'machine-a', 'proj-curation',
+			 'claude', 'shifted source uuid',
+			 '2026-05-01T00:00:00Z'::timestamptz, 2, 1);
+		INSERT INTO messages
+			(session_id, ordinal, role, content, timestamp,
+			 content_length, source_uuid)
+		VALUES
+			('pg-pin-shifted-uuid', 0, 'user', '[context]',
+			 '2026-05-01T00:00:00Z'::timestamptz, 9,
+			 'uuid-context'),
+			('pg-pin-shifted-uuid', 1, 'user', 'question',
+			 '2026-05-01T00:00:01Z'::timestamptz, 8,
+			 'uuid-question');
+		INSERT INTO pinned_messages
+			(session_id, message_id, ordinal, source_uuid,
+			 note, created_at)
+		VALUES
+			('pg-pin-shifted-uuid', 0, 0, 'uuid-question',
+			 'keep shifted pin',
+			 '2026-05-01T00:01:00Z'::timestamptz)`)
+	require.NoError(t, err, "seed shifted pin")
+
+	tx, err := pg.BeginTx(ctx, nil)
+	require.NoError(t, err, "begin tx")
+	if err := reconcilePinnedMessages(
+		ctx, tx, "pg-pin-shifted-uuid",
+	); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("reconcilePinnedMessages: %v", err)
+	}
+	require.NoError(t, tx.Commit(), "commit tx")
+
+	store, err := NewStore(pgURL, schema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	pins, err := store.ListPinnedMessages(ctx, "pg-pin-shifted-uuid", "")
+	require.NoError(t, err, "ListPinnedMessages")
+	require.Len(t, pins, 1, "pins = %v", pins)
+	assert.Equal(t, int64(1), pins[0].MessageID)
+	assert.Equal(t, 1, pins[0].Ordinal)
+	require.NotNil(t, pins[0].Note)
+	assert.Equal(t, "keep shifted pin", *pins[0].Note)
+}
+
 // TestReconcilePinnedMessagesPrunesPinWhenSourceUUIDGone covers the
 // case where a source-backed pin's source_uuid no longer exists in
 // the messages table, but a different message now occupies the
