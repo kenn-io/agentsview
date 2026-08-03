@@ -227,15 +227,19 @@ func runSyncWorkerStartup(
 			}
 			if decodeErr != nil {
 				auditErr = decodeErr
-			} else if unmarshalErr := json.Unmarshal(payload, &request); unmarshalErr != nil || request.Lease == nil || request.Reason == "" {
+			} else if unmarshalErr := json.Unmarshal(payload, &request); unmarshalErr != nil {
 				if unmarshalErr != nil {
 					auditErr = unmarshalErr
-				} else {
-					auditErr = fmt.Errorf("invalid lease-bound scoped audit request")
 				}
 			} else {
-				repairedLease = request.Lease
-				auditErr = engine.ReconcileBoundedCoverageSourceLease(ctx, request.Lease, request.Reason)
+				if request.Reason == "" {
+					auditErr = fmt.Errorf("invalid lease-bound scoped audit request")
+				} else if identityErr := sync.ValidateBoundedCoverageLeaseIdentity(request.Lease); identityErr != nil {
+					auditErr = identityErr
+				} else {
+					repairedLease = request.Lease
+					auditErr = engine.ReconcileBoundedCoverageSourceLease(ctx, request.Lease, request.Reason)
+				}
 			}
 		} else if strings.HasPrefix(mode, "audit-scoped-v2|") {
 			encoded := strings.TrimPrefix(mode, "audit-scoped-v2|")

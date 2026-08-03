@@ -302,7 +302,6 @@ func (c *sharedUnwatchedPollCoordinator) admitBoundedCoverage(
 		if needsLease {
 			if state != nil {
 				freeze(state)
-				oldKey = binding.Key
 			}
 			for key, candidate := range c.coverageState {
 				if filepath.Clean(candidate.binding.PhysicalDBPath) == filepath.Clean(binding.PhysicalDBPath) &&

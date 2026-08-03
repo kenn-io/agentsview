@@ -236,6 +236,33 @@ func TestBoundedCoverageAdmissionInstallsRowZeroLease(t *testing.T) {
 	assert.Equal(t, uint64(1), state.generation)
 }
 
+func TestBoundedCoverageSameKeyReplacementKeepsNewState(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "opencode.db")
+	oldPath := filepath.Join(dir, "opencode.old.db")
+	require.NoError(t, os.WriteFile(dbPath, []byte("old"), 0o600))
+	oldInfo, err := os.Stat(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, os.Rename(dbPath, oldPath))
+	require.NoError(t, os.WriteFile(dbPath, []byte("new"), 0o600))
+	newInfo, err := os.Stat(dbPath)
+	require.NoError(t, err)
+	binding := agentsync.BoundedCoverageBinding{
+		Key: "db", DBPath: dbPath, PhysicalDBPath: dbPath, Scope: dir,
+	}
+	coordinator := &sharedUnwatchedPollCoordinator{
+		coverage: &coverageCoordinatorFixture{},
+		coverageState: map[string]*boundedCoverageState{
+			binding.Key: {binding: binding, dbFile: oldInfo, generation: 1, pollOwned: true},
+		},
+	}
+	_, err = coordinator.AdmitBoundedCoverage(t.Context(), []agentsync.BoundedCoverageBinding{binding}, false)
+	require.NoError(t, err)
+	state := coordinator.coverageState[binding.Key]
+	require.NotNil(t, state, "same-key replacement must retain the newly installed state")
+	assert.True(t, sameBoundedFile(state.dbFile, newInfo))
+}
+
 func TestOrdinaryRefreshKeepsRunningLeaseGeneration(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "opencode.db")
 	require.NoError(t, os.WriteFile(dbPath, []byte("journal"), 0o600))

@@ -222,6 +222,9 @@ func (p *pendingWatchBatch) AddReconcileGroup(
 	if agent == "" || root == "" {
 		return
 	}
+	if p.fullSync {
+		return
+	}
 	if roots, ok := p.groups[agent]; ok {
 		if _, exists := roots[root]; exists {
 			return

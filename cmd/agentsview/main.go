@@ -2376,10 +2376,12 @@ func newWatchReconciliationError(
 	var scoped interface{ ReconciliationRetryRoots() []string }
 	if errors.As(cause, &scoped) {
 		if failedRoots := deduplicateStrings(scoped.ReconciliationRetryRoots()); len(failedRoots) > 0 {
+			mergedRoots := append([]string(nil), roots...)
+			mergedRoots = append(mergedRoots, failedRoots...)
 			return &watchReconciliationError{
 				cause: cause,
 				retry: sync.WatchBatch{
-					ReconcileRoots:  failedRoots,
+					ReconcileRoots:  deduplicateStrings(mergedRoots),
 					ReconcileGroups: groups,
 					LostEvents:      lostEvents,
 				},
@@ -3148,8 +3150,11 @@ func runBoundedCoverageLeaseAudit(
 	lease *sync.BoundedCoverageLease,
 	reason string,
 ) error {
-	if lease == nil || lease.Binding.Agent == "" || lease.ExactProviderScope == "" || lease.PhysicalDBPath == "" || lease.Generation == 0 || reason == "" {
+	if reason == "" {
 		return errors.New("invalid bounded coverage lease audit request")
+	}
+	if err := sync.ValidateBoundedCoverageLeaseIdentity(lease); err != nil {
+		return err
 	}
 	request, err := json.Marshal(struct {
 		Lease  *sync.BoundedCoverageLease `json:"lease"`
@@ -3161,6 +3166,11 @@ func runBoundedCoverageLeaseAudit(
 	mode := "audit-scoped-v3|" + base64.RawURLEncoding.EncodeToString(request)
 	result, err := runWorkerWritePass(ctx, recoveryCtx, cfg, engine, database, lock, mode, nil)
 	if err == nil && (!result.BoundedCoverageRepairAccepted || result.BoundedCoverageLease == nil ||
+		sync.ValidateBoundedCoverageLeaseIdentity(result.BoundedCoverageLease) != nil ||
+		result.BoundedCoverageLease.Binding.Agent != lease.Binding.Agent ||
+		filepath.Clean(result.BoundedCoverageLease.Binding.PhysicalDBPath) != filepath.Clean(lease.Binding.PhysicalDBPath) ||
+		filepath.Clean(result.BoundedCoverageLease.Binding.Scope) != filepath.Clean(lease.Binding.Scope) ||
+		result.BoundedCoverageLease.Binding.Generation != lease.Binding.Generation ||
 		result.BoundedCoverageLease.Provider != lease.Provider ||
 		filepath.Clean(result.BoundedCoverageLease.PhysicalDBPath) != filepath.Clean(lease.PhysicalDBPath) ||
 		result.BoundedCoverageLease.Generation != lease.Generation ||

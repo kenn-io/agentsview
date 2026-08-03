@@ -338,14 +338,22 @@ func (e *Engine) AdmitBoundedCoverageLease(
 	}, nil
 }
 
-func (e *Engine) validateBoundedCoverageLease(lease *BoundedCoverageLease) error {
+func ValidateBoundedCoverageLeaseIdentity(lease *BoundedCoverageLease) error {
 	if lease == nil || lease.Provider == "" || lease.Provider != lease.Binding.Agent ||
+		lease.PhysicalDBPath == "" || lease.Binding.PhysicalDBPath == "" ||
 		filepath.Clean(lease.PhysicalDBPath) != filepath.Clean(lease.Binding.PhysicalDBPath) ||
 		lease.ExactProviderScope == "" || lease.Binding.Scope == "" ||
 		filepath.Clean(lease.ExactProviderScope) != filepath.Clean(lease.Binding.Scope) ||
 		lease.Generation == 0 || lease.Binding.Generation == 0 ||
 		lease.Generation != lease.Binding.Generation {
 		return errors.New("bounded coverage lease identity mismatch")
+	}
+	return nil
+}
+
+func (e *Engine) validateBoundedCoverageLease(lease *BoundedCoverageLease) error {
+	if err := ValidateBoundedCoverageLeaseIdentity(lease); err != nil {
+		return err
 	}
 	return e.validateBoundedCoveragePhysicalLease(lease)
 }
