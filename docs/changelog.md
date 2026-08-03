@@ -5,10 +5,27 @@ description: Release history for AgentsView
 
 ## Unreleased
 
+---
+
+## 0.40.1
+
+<small>2026-08-03</small>
+
 **Bug fixes**
 
+- Preserve Kimi Work token usage when protocol 1.4 writes a tool result before
+  the step's trailing usage record, and price the explicit `k2d6-agent` model
+  alias at K2.6 rates across SQLite, PostgreSQL, and DuckDB. Existing affected
+  sessions are repaired on resync.
 - Keep PostgreSQL serve startup audits compatible with valid multibyte text in
   compressed rows on affected PostgreSQL minor releases.
+
+**Acknowledgements**
+
+- Thanks to [Cafeynman](https://github.com/Cafeynman) for preserving Kimi Work
+  tool-step usage and correcting K2.6 alias pricing.
+- Thanks to [Wes McKinney](https://github.com/wesm) for PostgreSQL startup
+  compatibility and release documentation.
 
 ---
 
