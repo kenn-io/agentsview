@@ -4644,6 +4644,49 @@ func TestCopyOrphanedDataFrom(t *testing.T) {
 		"expected 0 tool_calls for s2, got %d", tcCount)
 }
 
+func TestCopyOrphanedDataFrom_DuplicateSourceUUIDKeepsOnePin(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	srcPath := filepath.Join(dir, "old.db")
+	srcDB := testDBAtPath(t, srcPath, "src")
+	insertSession(t, srcDB, "orphan", "proj")
+	insertMessages(t, srcDB,
+		Message{
+			SessionID: "orphan", Ordinal: 0, Role: "user",
+			Content: "pinned", ContentLength: 6,
+			SourceUUID: "duplicate",
+		},
+		Message{
+			SessionID: "orphan", Ordinal: 1, Role: "assistant",
+			Content: "not pinned", ContentLength: 10,
+			SourceUUID: "duplicate",
+		},
+	)
+	var pinnedMessageID int64
+	require.NoError(t, srcDB.getReader().QueryRow(`
+		SELECT id FROM messages
+		WHERE session_id = 'orphan' AND ordinal = 0`,
+	).Scan(&pinnedMessageID), "resolve pinned source message")
+	_, err := srcDB.PinMessage("orphan", pinnedMessageID, nil)
+	require.NoError(t, err, "pin source message")
+	require.NoError(t, srcDB.Close(), "close source database")
+
+	dstPath := filepath.Join(dir, "new.db")
+	dstDB := testDBAtPath(t, dstPath, "dst")
+	defer dstDB.Close()
+
+	copied, err := dstDB.CopyOrphanedDataFrom(srcPath)
+	require.NoError(t, err, "CopyOrphanedDataFrom")
+	require.Equal(t, 1, copied, "copied orphaned sessions")
+
+	pins, err := dstDB.ListPinnedMessages(ctx, "orphan", "")
+	require.NoError(t, err, "ListPinnedMessages")
+	require.Len(t, pins, 1,
+		"a duplicated source UUID must not duplicate the source pin")
+	assert.Equal(t, 0, pins[0].Ordinal, "pin stays on its copied ordinal")
+}
+
 // TestCopyOrphanedDataFrom_SkipsStaleCodexForkRows covers the
 // dataVersion 40 upgrade path (#643): a pre-fix DB stored a forked
 // Codex rollout under the replayed parent's id with double-counted
