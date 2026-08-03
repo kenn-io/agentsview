@@ -26,6 +26,7 @@ type BoundedCoverageBinding struct {
 	DBPath         string
 	PhysicalDBPath string
 	Scope          string
+	Generation     uint64
 }
 
 type boundedCoverageIdentityProvider interface {
@@ -46,11 +47,11 @@ type BoundedCoverageResolver interface {
 	ApplyBoundedCoverageSources(context.Context, []parser.SourceRef) (SyncStats, error)
 }
 
-// BoundedCoveragePrimer establishes the journal cursor before a watcher can
-// deliver the event that caused admission. It is separate from the resolver
-// interface so existing test and auxiliary resolvers remain source compatible.
-type BoundedCoveragePrimer interface {
-	PrimeBoundedCoverage(context.Context, BoundedCoverageBinding) (parser.OpenCodeCoverageCheckpoint, error)
+// BoundedCoverageAdmitter owns the row-zero admission transition. It is kept
+// separate from the read/apply resolver so test and generic providers cannot
+// accidentally acquire lifecycle authority.
+type BoundedCoverageAdmitter interface {
+	InitializeBoundedCoverage(context.Context, BoundedCoverageBinding) (parser.OpenCodeCoverageCheckpoint, error)
 }
 
 var (
@@ -242,16 +243,14 @@ func boundedCoverageIdentity(
 	return "", "", errors.New("provider does not resolve bounded coverage identity")
 }
 
-func (e *Engine) PrimeBoundedCoverage(
+func (e *Engine) InitializeBoundedCoverage(
 	ctx context.Context, binding BoundedCoverageBinding,
 ) (parser.OpenCodeCoverageCheckpoint, error) {
-	result, _, err := e.DrainBoundedCoverage(
-		ctx, binding, parser.OpenCodeCoverageCheckpoint{},
-	)
-	if err != nil {
-		return parser.OpenCodeCoverageCheckpoint{}, err
+	path := binding.PhysicalDBPath
+	if path == "" {
+		path = binding.DBPath
 	}
-	return result.Next, nil
+	return parser.InitializeOpenCodeCoverageCheckpoint(ctx, path)
 }
 
 func (e *Engine) ApplyBoundedCoverageSources(

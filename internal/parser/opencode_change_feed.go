@@ -266,6 +266,34 @@ func ProbeOpenCodeJournalCapability(
 	return schemaVersion, true, nil
 }
 
+// InitializeOpenCodeCoverageCheckpoint installs a row-zero checkpoint for a
+// newly admitted physical journal. The first bounded drain owns all existing
+// and triggering rows, so admission never captures a high-water baseline.
+func InitializeOpenCodeCoverageCheckpoint(ctx context.Context, dbPath string) (OpenCodeCoverageCheckpoint, error) {
+	schemaVersion, compatible, err := ProbeOpenCodeJournalCapability(ctx, dbPath)
+	if err != nil {
+		return OpenCodeCoverageCheckpoint{}, err
+	}
+	if !compatible {
+		return OpenCodeCoverageCheckpoint{}, fmt.Errorf("opencode journal is not compatible: %s", dbPath)
+	}
+	db, err := openOpenCodeDB(dbPath)
+	if err != nil {
+		return OpenCodeCoverageCheckpoint{}, opencodeCoverageDatabaseError(dbPath, err)
+	}
+	defer db.Close()
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return OpenCodeCoverageCheckpoint{}, openCodeJournalContextError(ctx, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	fingerprint, err := openCodeJournalSchemaFingerprint(ctx, tx)
+	if err != nil {
+		return OpenCodeCoverageCheckpoint{}, openCodeJournalContextError(ctx, err)
+	}
+	return OpenCodeCoverageCheckpoint{Initialized: true, SchemaVersion: schemaVersion, SchemaFingerprint: fingerprint}, nil
+}
+
 func openCodeJournalSchemaFingerprint(
 	ctx context.Context, tx *sql.Tx,
 ) (string, error) {

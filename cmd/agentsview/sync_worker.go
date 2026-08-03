@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -131,6 +132,8 @@ func runSyncWorkerContext(
 		err = runSyncWorkerStartup(ctx, cfg, mode, emit, onProgress)
 	case strings.HasPrefix(mode, "audit-scoped|"):
 		err = runSyncWorkerStartup(ctx, cfg, mode, emit, onProgress)
+	case strings.HasPrefix(mode, "audit-scoped-v2|"):
+		err = runSyncWorkerStartup(ctx, cfg, mode, emit, onProgress)
 	case mode == "resync-build":
 		err = runSyncWorkerResyncBuild(ctx, cfg, mode, emit, onProgress)
 	default:
@@ -189,7 +192,7 @@ func runSyncWorkerStartup(
 			stats = engine.SyncAll(ctx, onProgress)
 		}
 		result = workerResultFromStats(ctx, stats)
-	case mode == "audit" || strings.HasPrefix(mode, "audit-scoped|"):
+	case mode == "audit" || strings.HasPrefix(mode, "audit-scoped|") || strings.HasPrefix(mode, "audit-scoped-v2|"):
 		// The audit is the safety net for watcher deletions the daemon
 		// missed, so it must run the authoritative reconciliation that
 		// tombstones sessions whose sources disappeared; SyncAll never
@@ -199,7 +202,25 @@ func runSyncWorkerStartup(
 		var stats sync.SyncStats
 		var tombstoned int
 		var auditErr error
-		if strings.HasPrefix(mode, "audit-scoped|") {
+		if strings.HasPrefix(mode, "audit-scoped-v2|") {
+			encoded := strings.TrimPrefix(mode, "audit-scoped-v2|")
+			payload, decodeErr := base64.RawURLEncoding.DecodeString(encoded)
+			var request struct {
+				Binding sync.BoundedCoverageBinding `json:"binding"`
+				Reason  string                      `json:"reason"`
+			}
+			if decodeErr != nil {
+				auditErr = decodeErr
+			} else if unmarshalErr := json.Unmarshal(payload, &request); unmarshalErr != nil || request.Binding.Agent == "" || request.Binding.Scope == "" || request.Binding.PhysicalDBPath == "" || request.Binding.Generation == 0 {
+				if unmarshalErr != nil {
+					auditErr = unmarshalErr
+				} else {
+					auditErr = fmt.Errorf("invalid structured scoped audit request")
+				}
+			} else {
+				auditErr = engine.ReconcileProviderRoots(ctx, request.Binding.Agent, []string{request.Binding.Scope})
+			}
+		} else if strings.HasPrefix(mode, "audit-scoped|") {
 			parts := strings.SplitN(strings.TrimPrefix(mode, "audit-scoped|"), "|", 2)
 			if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 				auditErr = fmt.Errorf("invalid scoped audit request %q", mode)

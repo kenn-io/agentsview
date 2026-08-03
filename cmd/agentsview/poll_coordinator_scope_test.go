@@ -183,11 +183,8 @@ func TestUnwatchedPollCoverageFilteringKeepsUncoveredUnits(t *testing.T) {
 }
 
 type coverageCoordinatorFixture struct {
-	bindings     []agentsync.BoundedCoverageBinding
-	checkpoint   parser.OpenCodeCoverageCheckpoint
-	primes       int
-	primeStarted chan struct{}
-	primeRelease chan struct{}
+	bindings   []agentsync.BoundedCoverageBinding
+	checkpoint parser.OpenCodeCoverageCheckpoint
 }
 
 func (f *coverageCoordinatorFixture) BoundedCoverageBindings(
@@ -215,114 +212,58 @@ func (f *coverageCoordinatorFixture) ApplyBoundedCoverageSources(
 	return agentsync.SyncStats{}, nil
 }
 
-func (f *coverageCoordinatorFixture) PrimeBoundedCoverage(
+func (f *coverageCoordinatorFixture) InitializeBoundedCoverage(
 	context.Context, agentsync.BoundedCoverageBinding,
 ) (parser.OpenCodeCoverageCheckpoint, error) {
-	f.primes++
-	if f.primeStarted != nil {
-		close(f.primeStarted)
-		<-f.primeRelease
-	}
-	return f.checkpoint, nil
+	return parser.OpenCodeCoverageCheckpoint{Initialized: true, SchemaVersion: 7}, nil
 }
 
-func TestBoundedCoveragePrimeCannotOverwriteReplacementState(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "opencode.db")
-	require.NoError(t, os.WriteFile(dbPath, []byte("old"), 0o600))
-	binding := agentsync.BoundedCoverageBinding{Key: "db", DBPath: dbPath}
-	fixture := &coverageCoordinatorFixture{
-		bindings:     []agentsync.BoundedCoverageBinding{binding},
-		checkpoint:   parser.OpenCodeCoverageCheckpoint{Initialized: true, SchemaVersion: 7},
-		primeStarted: make(chan struct{}),
-		primeRelease: make(chan struct{}),
-	}
+func TestBoundedCoverageAdmissionInstallsRowZeroLease(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "opencode.db")
+	require.NoError(t, os.WriteFile(dbPath, []byte("journal"), 0o600))
+	binding := agentsync.BoundedCoverageBinding{Key: "db", DBPath: dbPath, PhysicalDBPath: dbPath, Scope: filepath.Dir(dbPath)}
 	coordinator := &sharedUnwatchedPollCoordinator{
-		coverage: fixture, coverageState: make(map[string]*boundedCoverageState),
+		coverage: &coverageCoordinatorFixture{}, coverageState: make(map[string]*boundedCoverageState),
 	}
-	primeStarted := fixture.primeStarted
-	primeDone := make(chan error, 1)
-	go func() { primeDone <- coordinator.PrimeBoundedCoverageBindings(t.Context(), fixture.bindings) }()
-	select {
-	case <-primeStarted:
-	case <-time.After(time.Second):
-		t.Fatal("prime did not reach provider I/O")
-	}
-	replacementPath := filepath.Join(dir, "replacement.db")
-	require.NoError(t, os.WriteFile(replacementPath, []byte("new"), 0o600))
-	replacement := binding
-	replacement.DBPath = replacementPath
-	coordinator.WakeBoundedCoverage([]agentsync.BoundedCoverageBinding{replacement})
-	close(fixture.primeRelease)
-	require.NoError(t, <-primeDone)
-
+	admitted, err := coordinator.AdmitBoundedCoverage(t.Context(), []agentsync.BoundedCoverageBinding{binding}, false)
+	require.NoError(t, err)
+	require.Len(t, admitted, 1)
 	state := coordinator.coverageState[binding.Key]
 	require.NotNil(t, state)
-	assert.True(t, state.nativeAdmitted)
-	assert.False(t, state.checkpoint.Initialized,
-		"a stale prime completion must not install the old database checkpoint")
-}
-
-func TestNativeWakeAfterStartupPrimeDoesNotOwnPolling(t *testing.T) {
-	binding := agentsync.BoundedCoverageBinding{Key: "native", DBPath: "/data/opencode.db"}
-	fixture := &coverageCoordinatorFixture{
-		bindings:   []agentsync.BoundedCoverageBinding{binding},
-		checkpoint: parser.OpenCodeCoverageCheckpoint{Initialized: true},
-	}
-	coordinator := &sharedUnwatchedPollCoordinator{
-		coverage: fixture, coverageState: make(map[string]*boundedCoverageState),
-	}
-	require.NoError(t, coordinator.PrimeBoundedCoverage(t.Context(), nil))
-	coordinator.WakeBoundedCoverage([]agentsync.BoundedCoverageBinding{binding})
-
-	state := coordinator.coverageState[binding.Key]
-	require.NotNil(t, state)
-	assert.True(t, state.nativeAdmitted)
-	assert.False(t, state.pollOwned,
-		"a native wake must not acquire degraded polling ownership")
+	assert.True(t, state.checkpoint.Initialized)
+	assert.Empty(t, state.checkpoint.Anchors)
 	assert.True(t, state.pendingWake)
-	assert.Equal(t, 1, fixture.primes)
+	assert.Equal(t, uint64(1), state.generation)
 }
 
-func TestRefreshPrimesNewPollingBindingsAndPreservesNativeState(t *testing.T) {
-	dir := t.TempDir()
-	binding := agentsync.BoundedCoverageBinding{Key: "poll", DBPath: filepath.Join(dir, "opencode.db")}
-	other := agentsync.BoundedCoverageBinding{Key: "native", DBPath: filepath.Join(dir, "other.db")}
-	require.NoError(t, os.WriteFile(binding.DBPath, []byte("poll"), 0o600))
-	require.NoError(t, os.WriteFile(other.DBPath, []byte("native"), 0o600))
-	fixture := &coverageCoordinatorFixture{
-		bindings:   []agentsync.BoundedCoverageBinding{binding},
-		checkpoint: parser.OpenCodeCoverageCheckpoint{Initialized: true},
-	}
+func TestOrdinaryRefreshKeepsRunningLeaseGeneration(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "opencode.db")
+	require.NoError(t, os.WriteFile(dbPath, []byte("journal"), 0o600))
+	binding := agentsync.BoundedCoverageBinding{Key: "db", DBPath: dbPath, PhysicalDBPath: dbPath, Scope: filepath.Dir(dbPath)}
+	file, err := os.Stat(dbPath)
+	require.NoError(t, err)
 	coordinator := &sharedUnwatchedPollCoordinator{
-		coverage: fixture,
+		coverage: &coverageCoordinatorFixture{bindings: []agentsync.BoundedCoverageBinding{binding}},
 		coverageState: map[string]*boundedCoverageState{
-			other.Key: {binding: other, nativeAdmitted: true,
-				checkpoint: parser.OpenCodeCoverageCheckpoint{SchemaVersion: 7}},
+			binding.Key: {binding: binding, dbFile: file, generation: 9, running: true,
+				pollOwned: true, checkpoint: parser.OpenCodeCoverageCheckpoint{Initialized: true}},
 		},
 	}
 	require.NoError(t, coordinator.refreshBoundedCoverage(map[string]pollingObligation{
-		"degraded": {Key: "degraded", Scopes: []pollingScope{{Root: dir}}},
+		"degraded": {Key: "degraded", Scopes: []pollingScope{{Agent: parser.AgentOpenCode, Root: filepath.Dir(dbPath)}}},
 	}))
+	assert.Equal(t, uint64(9), coordinator.coverageState[binding.Key].generation)
+	assert.True(t, coordinator.coverageState[binding.Key].running)
+}
 
-	pollState := coordinator.coverageState[binding.Key]
-	require.NotNil(t, pollState)
-	assert.False(t, pollState.pollOwned,
-		"a newly visible unit stays ordinary until its current pass completes")
-	assert.True(t, pollState.admissionPending)
-	assert.Equal(t, 0, fixture.primes,
-		"admission must not baseline a database before ordinary ownership completes")
-	coordinator.setPollObligations(map[string]pollingObligation{
-		"degraded": {Key: "degraded", Scopes: []pollingScope{{Root: dir}}},
-	})
-	require.NoError(t, coordinator.primeAfterOrdinaryPoll(t.Context()))
-	assert.True(t, coordinator.coverageState[binding.Key].pollOwned)
-	assert.True(t, coordinator.coverageState[binding.Key].admissionPending,
-		"ordinary ownership must leave the row-zero bounded drain pending")
-	assert.Equal(t, parser.OpenCodeCoverageCheckpoint{SchemaVersion: 7},
-		coordinator.coverageState[other.Key].checkpoint,
-		"refresh must retain unaffected native state")
-	assert.False(t, coordinator.coverageState[other.Key].pollOwned)
+func TestStaleDrainCompletionRetainsCurrentWake(t *testing.T) {
+	coordinator := &sharedUnwatchedPollCoordinator{coverageState: make(map[string]*boundedCoverageState)}
+	coordinator.coverageState["db"] = &boundedCoverageState{generation: 2, pendingWake: true}
+	assert.False(t, coordinator.commitCoverageState("db", 1, func(state *boundedCoverageState) {
+		state.running = false
+		state.pendingWake = false
+	}))
+	assert.True(t, coordinator.coverageState["db"].pendingWake)
 }
 
 // TestUnwatchedPollDoesNotDragUnrelatedProvidersThroughOneProvidersGap is the

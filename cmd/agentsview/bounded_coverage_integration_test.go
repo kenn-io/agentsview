@@ -74,7 +74,10 @@ func TestBoundedCoverageCoordinatorCardinality(t *testing.T) {
 				applied += stats.Synced
 			}
 			roots := []agentsync.BoundedCoverageRoot{{Agent: parser.AgentOpenCode, Root: root}}
-			require.NoError(t, coordinator.PrimeBoundedCoverage(t.Context(), roots))
+			bindings, err := engine.BoundedCoverageBindings(t.Context(), roots)
+			require.NoError(t, err)
+			_, err = coordinator.AdmitBoundedCoverage(t.Context(), bindings, false)
+			require.NoError(t, err)
 			_, err = journal.Exec(`INSERT INTO event
 			(id, aggregate_id, seq, type, data)
 			VALUES ('event-0', 'ses00000', 1, 'session.updated.1', '{}')`)

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -332,30 +333,28 @@ func runServe(cfg config.Config, opts serveOptions) {
 					if err != nil {
 						return &WatchRetryError{cause: err, paths: originalPaths}
 					}
-					primed := unwatchedPoller.PrimedBoundedCoverage(bindings)
-					var unprimed []sync.BoundedCoverageBinding
+					admitted, err := unwatchedPoller.AdmitBoundedCoverage(ctx, bindings, true)
+					if err != nil {
+						return &WatchRetryError{cause: err, paths: originalPaths}
+					}
 					for _, binding := range bindings {
-						if slices.ContainsFunc(primed, func(admitted sync.BoundedCoverageBinding) bool {
-							return admitted.Key == binding.Key
+						if slices.ContainsFunc(admitted, func(current sync.BoundedCoverageBinding) bool {
+							return current.Key == binding.Key
 						}) {
-							continue
-						}
-						unprimed = append(unprimed, binding)
-						for _, path := range batch.Paths {
-							if sameCoverageEventPath(path, binding.DBPath) {
-								remaining = appendUniqueString(remaining, path)
+							for _, path := range batch.Paths {
+								if sameCoverageEventPath(path, binding.DBPath) {
+									remaining = appendUniqueString(remaining, path)
+								}
 							}
 						}
 					}
 					unwatchedPoller.RetireBoundedCoveragePaths(originalPaths)
-					unwatchedPoller.WakeBoundedCoverage(primed)
 					batch.Paths = remaining
 					if err := syncWatchBatch(ctx, engine, batch, func() watchRecoveryScope {
 						return probeWatchRecoveryScope(cfg)
 					}); err != nil {
 						return err
 					}
-					unwatchedPoller.admitPendingBoundedCoverage(unprimed)
 					return nil
 				}
 				return syncWatchBatch(ctx, engine, batch, func() watchRecoveryScope {
@@ -386,8 +385,12 @@ func runServe(cfg config.Config, opts serveOptions) {
 					roots = append(roots, sync.BoundedCoverageRoot{Agent: scope.agent, Root: watchRoot.path})
 				}
 			}
-			if err := unwatchedPoller.PrimeBoundedCoverage(ctx, roots); err != nil && ctx.Err() == nil {
-				log.Printf("bounded coverage startup prime: %v", err)
+			if bindings, err := engine.BoundedCoverageBindings(ctx, roots); err == nil {
+				if _, err := unwatchedPoller.AdmitBoundedCoverage(ctx, bindings, true); err != nil && ctx.Err() == nil {
+					log.Printf("bounded coverage startup admission: %v", err)
+				}
+			} else if ctx.Err() == nil {
+				log.Printf("bounded coverage startup admission: %v", err)
 			}
 		}
 		onStartupReconciled = newStartupReconciliationHandler(
@@ -3042,9 +3045,17 @@ func runBoundedCoverageAudit(
 	log.Printf("bounded coverage scoped audit %s: %s", binding.Key, reason)
 	operationCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	request, err := json.Marshal(struct {
+		Binding sync.BoundedCoverageBinding `json:"binding"`
+		Reason  string                      `json:"reason"`
+	}{Binding: binding, Reason: reason})
+	if err != nil {
+		return err
+	}
+	mode := "audit-scoped-v2|" + base64.RawURLEncoding.EncodeToString(request)
 	result, err := runWorkerWritePass(
 		operationCtx, recoveryCtx, cfg, engine, database, lock,
-		fmt.Sprintf("audit-scoped|%s|%s", binding.Agent, binding.DBPath), nil,
+		mode, nil,
 	)
 	if (result.Synced > 0 || result.Tombstoned > 0) && emitter != nil {
 		emitter.Emit("sessions")
