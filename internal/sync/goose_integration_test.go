@@ -143,6 +143,32 @@ func TestSyncGooseTranscriptAndChangedDatabase(t *testing.T) {
 	assert.Equal(t, "source_missing", *archived.DeletionCause)
 }
 
+func TestReconcileProviderRootsGooseSkipsUnchangedSession(t *testing.T) {
+	pathRoot, _, _ := writeSyncGooseDB(t)
+	engine := NewEngine(openTestDB(t), EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentGoose: {pathRoot},
+		},
+		Machine: "devbox",
+	})
+	t.Cleanup(engine.Close)
+	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1})
+
+	writtenSessions := 0
+	engine.writeBatchOverride = func(
+		batch []pendingWrite, _ syncWriteMode, _ bool,
+	) (int, int, int, int) {
+		writtenSessions += len(batch)
+		return len(batch), 0, 0, 0
+	}
+
+	require.NoError(t, engine.ReconcileProviderRoots(
+		context.Background(), parser.AgentGoose, []string{pathRoot},
+	))
+	assert.Zero(t, writtenSessions,
+		"unchanged Goose sessions must not be rewritten during reconciliation")
+}
+
 func TestProcessFileGooseChangedDatabaseUsesOneVirtualSource(t *testing.T) {
 	pathRoot, dbPath, sourceDB := writeSyncGooseDB(t)
 	engine := NewEngine(openTestDB(t), EngineConfig{

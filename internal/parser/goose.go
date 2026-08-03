@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"hash"
 	"math"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -351,10 +350,6 @@ func buildGooseParseResult(
 		session.ParentSessionID = "goose:" + parentID
 		session.RelationshipType = RelSubagent
 	}
-	if info, err := os.Stat(dbPath); err == nil {
-		session.File.Size = info.Size()
-	}
-
 	usageEvents, err := listGooseUsageEvents(db, row, startedAt, endedAt)
 	if err != nil {
 		return ParseResult{}, err
