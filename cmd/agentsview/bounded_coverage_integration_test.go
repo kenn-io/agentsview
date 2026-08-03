@@ -62,6 +62,7 @@ func TestBoundedCoverageCoordinatorCardinality(t *testing.T) {
 				Machine:   "local",
 			})
 			t.Cleanup(engine.Close)
+			native := sessions == 10
 			coordinator := &sharedUnwatchedPollCoordinator{
 				ctx: context.Background(), coverage: engine,
 				coverageState: make(map[string]*boundedCoverageState),
@@ -76,11 +77,11 @@ func TestBoundedCoverageCoordinatorCardinality(t *testing.T) {
 			roots := []agentsync.BoundedCoverageRoot{{Agent: parser.AgentOpenCode, Root: root}}
 			bindings, err := engine.BoundedCoverageBindings(t.Context(), roots)
 			require.NoError(t, err)
-			_, err = coordinator.AdmitBoundedCoverage(t.Context(), bindings, false)
+			_, err = coordinator.AdmitBoundedCoverage(t.Context(), bindings, native)
 			require.NoError(t, err)
 			_, err = journal.Exec(`INSERT INTO event
-			(id, aggregate_id, seq, type, data)
-			VALUES ('event-0', 'ses00000', 1, 'session.updated.1', '{}')`)
+				(id, aggregate_id, seq, type, data)
+				VALUES ('event-0', 'ses00000', 1, 'session.updated', '{}')`)
 			require.NoError(t, err)
 			walInfo, err := os.Stat(dbPath + "-wal")
 			require.NoError(t, err)
@@ -98,6 +99,40 @@ func TestBoundedCoverageCoordinatorCardinality(t *testing.T) {
 			require.LessOrEqual(t, rows, parser.OpenCodeCoverageMaxRows)
 		})
 	}
+}
+
+func TestBoundedCoverageLeaseRejectsReplacedDatabase(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "opencode.db")
+	journal, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = journal.Exec(boundedCoverageFixtureSchema)
+	require.NoError(t, err)
+	require.NoError(t, journal.Close())
+
+	archive := dbtest.OpenTestDB(t)
+	engine := agentsync.NewEngine(archive, agentsync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentOpenCode: {root}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+	bindings, err := engine.BoundedCoverageBindings(t.Context(), []agentsync.BoundedCoverageRoot{{Agent: parser.AgentOpenCode, Root: root}})
+	require.NoError(t, err)
+	require.Len(t, bindings, 1)
+	bindings[0].Generation = 1
+	lease, err := engine.AdmitBoundedCoverageLease(t.Context(), bindings[0])
+	require.NoError(t, err)
+
+	backup := filepath.Join(root, "opencode.old.db")
+	require.NoError(t, os.Rename(dbPath, backup))
+	replacement, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = replacement.Exec(boundedCoverageFixtureSchema)
+	require.NoError(t, err)
+	require.NoError(t, replacement.Close())
+
+	_, err = engine.ApplyBoundedCoverageSourcesLease(t.Context(), lease, nil)
+	require.Error(t, err, "replacement must invalidate the old physical lease before commit")
 }
 
 func TestBoundedCoverageBindingsDeduplicateSymlinkedRoots(t *testing.T) {

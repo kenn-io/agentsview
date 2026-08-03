@@ -192,7 +192,7 @@ func runSyncWorkerStartup(
 			stats = engine.SyncAll(ctx, onProgress)
 		}
 		result = workerResultFromStats(ctx, stats)
-	case mode == "audit" || strings.HasPrefix(mode, "audit-scoped|") || strings.HasPrefix(mode, "audit-scoped-v2|"):
+	case mode == "audit" || strings.HasPrefix(mode, "audit-scoped|") || strings.HasPrefix(mode, "audit-scoped-v2|") || strings.HasPrefix(mode, "audit-scoped-v3|"):
 		// The audit is the safety net for watcher deletions the daemon
 		// missed, so it must run the authoritative reconciliation that
 		// tombstones sessions whose sources disappeared; SyncAll never
@@ -202,7 +202,25 @@ func runSyncWorkerStartup(
 		var stats sync.SyncStats
 		var tombstoned int
 		var auditErr error
-		if strings.HasPrefix(mode, "audit-scoped-v2|") {
+		if strings.HasPrefix(mode, "audit-scoped-v3|") {
+			encoded := strings.TrimPrefix(mode, "audit-scoped-v3|")
+			payload, decodeErr := base64.RawURLEncoding.DecodeString(encoded)
+			var request struct {
+				Lease  *sync.BoundedCoverageLease `json:"lease"`
+				Reason string                     `json:"reason"`
+			}
+			if decodeErr != nil {
+				auditErr = decodeErr
+			} else if unmarshalErr := json.Unmarshal(payload, &request); unmarshalErr != nil || request.Lease == nil || request.Reason == "" {
+				if unmarshalErr != nil {
+					auditErr = unmarshalErr
+				} else {
+					auditErr = fmt.Errorf("invalid lease-bound scoped audit request")
+				}
+			} else {
+				auditErr = engine.ReconcileBoundedCoverageLease(ctx, request.Lease, request.Reason)
+			}
+		} else if strings.HasPrefix(mode, "audit-scoped-v2|") {
 			encoded := strings.TrimPrefix(mode, "audit-scoped-v2|")
 			payload, decodeErr := base64.RawURLEncoding.DecodeString(encoded)
 			var request struct {

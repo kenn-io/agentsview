@@ -318,6 +318,12 @@ func runServe(cfg config.Config, opts serveOptions) {
 				return runBoundedCoverageAudit(auditCtx, unwatchedPoller.workerCtx, cfg, engine, database, writeLock, emitter, binding, reason)
 			},
 		)
+		unwatchedPoller.SetBoundedCoverageLeaseAuditRequester(
+			func(auditCtx context.Context, lease *sync.BoundedCoverageLease, reason string) error {
+				log.Printf("bounded coverage lease audit for %s: %s", lease.Binding.Key, reason)
+				return runBoundedCoverageLeaseAudit(auditCtx, unwatchedPoller.workerCtx, cfg, engine, database, writeLock, emitter, lease, reason)
+			},
+		)
 		stopWatcher, openWatcherDispatch, _, queueWatchRetry = startFileWatcher(
 			cfg, engine, func(_ context.Context, batch sync.WatchBatch) error {
 				done, ok := idleTracker.BeginWork()
@@ -3057,6 +3063,35 @@ func runBoundedCoverageAudit(
 		operationCtx, recoveryCtx, cfg, engine, database, lock,
 		mode, nil,
 	)
+	if (result.Synced > 0 || result.Tombstoned > 0) && emitter != nil {
+		emitter.Emit("sessions")
+	}
+	return err
+}
+
+func runBoundedCoverageLeaseAudit(
+	ctx context.Context,
+	recoveryCtx context.Context,
+	cfg config.Config,
+	engine *sync.Engine,
+	database *db.DB,
+	lock *writeOwnerLock,
+	emitter sync.Emitter,
+	lease *sync.BoundedCoverageLease,
+	reason string,
+) error {
+	if lease == nil || lease.Binding.Agent == "" || lease.ExactProviderScope == "" || lease.PhysicalDBPath == "" || lease.Generation == 0 || reason == "" {
+		return errors.New("invalid bounded coverage lease audit request")
+	}
+	request, err := json.Marshal(struct {
+		Lease  *sync.BoundedCoverageLease `json:"lease"`
+		Reason string                     `json:"reason"`
+	}{Lease: lease, Reason: reason})
+	if err != nil {
+		return err
+	}
+	mode := "audit-scoped-v3|" + base64.RawURLEncoding.EncodeToString(request)
+	result, err := runWorkerWritePass(ctx, recoveryCtx, cfg, engine, database, lock, mode, nil)
 	if (result.Synced > 0 || result.Tombstoned > 0) && emitter != nil {
 		emitter.Emit("sessions")
 	}

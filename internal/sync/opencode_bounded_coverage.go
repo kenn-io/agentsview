@@ -29,6 +29,48 @@ type BoundedCoverageBinding struct {
 	Generation     uint64
 }
 
+// BoundedCoverageFileIdentity is the physical file fence carried by one
+// lease. It is value data so the worker process can enforce the same fence.
+type BoundedCoverageFileIdentity struct {
+	Path            string `json:"path"`
+	Size            int64  `json:"size"`
+	ModTimeUnixNano int64  `json:"mod_time_unix_nano"`
+	Mode            uint32 `json:"mode"`
+}
+
+// BoundedCoverageLease is the immutable authority for one bounded lifecycle.
+// Coordinator status stays outside this value; consumers receive this lease
+// unchanged from admission through source application and repair.
+type BoundedCoverageLease struct {
+	Binding             BoundedCoverageBinding            `json:"binding"`
+	Provider            parser.AgentType                  `json:"provider"`
+	PhysicalDBPath      string                            `json:"physical_db_path"`
+	ExactProviderScope  string                            `json:"exact_provider_scope"`
+	Generation          uint64                            `json:"generation"`
+	FileIdentity        BoundedCoverageFileIdentity       `json:"file_identity"`
+	AdmissionCheckpoint parser.OpenCodeCoverageCheckpoint `json:"admission_checkpoint"`
+	PendingWork         []string                          `json:"pending_work,omitempty"`
+	AdmissionRowZero    bool                              `json:"admission_row_zero"`
+	validate            func() error                      `json:"-"`
+	fileInfo            os.FileInfo                       `json:"-"`
+}
+
+func (l *BoundedCoverageLease) Validate() error {
+	if l == nil {
+		return errors.New("nil bounded coverage lease")
+	}
+	if l.validate != nil {
+		return l.validate()
+	}
+	return nil
+}
+
+func (l *BoundedCoverageLease) SetValidator(validate func() error) {
+	if l != nil {
+		l.validate = validate
+	}
+}
+
 type boundedCoverageIdentityProvider interface {
 	BoundedCoverageIdentity(context.Context, string, string) (string, string, error)
 }
@@ -45,6 +87,13 @@ type BoundedCoverageResolver interface {
 	BoundedCoverageBindingsForPaths(context.Context, []string) ([]BoundedCoverageBinding, []string, error)
 	DrainBoundedCoverage(context.Context, BoundedCoverageBinding, parser.OpenCodeCoverageCheckpoint) (parser.OpenCodeFeedResult, []parser.SourceRef, error)
 	ApplyBoundedCoverageSources(context.Context, []parser.SourceRef) (SyncStats, error)
+}
+
+type BoundedCoverageLeaseResolver interface {
+	AdmitBoundedCoverageLease(context.Context, BoundedCoverageBinding) (*BoundedCoverageLease, error)
+	DrainBoundedCoverageLease(context.Context, *BoundedCoverageLease, parser.OpenCodeCoverageCheckpoint) (parser.OpenCodeFeedResult, []parser.SourceRef, error)
+	ApplyBoundedCoverageSourcesLease(context.Context, *BoundedCoverageLease, []parser.SourceRef) (SyncStats, error)
+	ReconcileBoundedCoverageLease(context.Context, *BoundedCoverageLease, string) error
 }
 
 // BoundedCoverageAdmitter owns the row-zero admission transition. It is kept
@@ -99,7 +148,7 @@ func (e *Engine) BoundedCoverageBindings(
 				if err != nil {
 					return nil, err
 				}
-				key := string(requested.Agent) + "\x00" + physicalDBPath
+				key := boundedCoverageBindingKey(requested.Agent, physicalDBPath, scope)
 				if _, ok := seen[key]; ok {
 					continue
 				}
@@ -163,7 +212,7 @@ func (e *Engine) BoundedCoverageBindingsForPaths(
 					if err != nil {
 						return nil, nil, err
 					}
-					key := string(agent) + "\x00" + physicalDBPath
+					key := boundedCoverageBindingKey(agent, physicalDBPath, scope)
 					if _, ok := seen[key]; !ok {
 						seen[key] = struct{}{}
 						bindings = append(bindings, BoundedCoverageBinding{
@@ -257,6 +306,106 @@ func (e *Engine) ApplyBoundedCoverageSources(
 	ctx context.Context, sources []parser.SourceRef,
 ) (SyncStats, error) {
 	return e.SyncSourceRefsContext(ctx, sources)
+}
+
+func boundedCoverageBindingKey(agent parser.AgentType, physicalDBPath, scope string) string {
+	return string(agent) + "\x00" + filepath.Clean(physicalDBPath) + "\x00" + filepath.Clean(scope)
+}
+
+func boundedCoverageFileIdentity(path string, info os.FileInfo) BoundedCoverageFileIdentity {
+	return BoundedCoverageFileIdentity{Path: filepath.Clean(path), Size: info.Size(), ModTimeUnixNano: info.ModTime().UnixNano(), Mode: uint32(info.Mode())}
+}
+
+func (e *Engine) AdmitBoundedCoverageLease(
+	ctx context.Context, binding BoundedCoverageBinding,
+) (*BoundedCoverageLease, error) {
+	path := binding.PhysicalDBPath
+	if path == "" {
+		path = binding.DBPath
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	checkpoint, err := e.InitializeBoundedCoverage(ctx, binding)
+	if err != nil {
+		return nil, err
+	}
+	return &BoundedCoverageLease{
+		Binding: binding, Provider: binding.Agent, PhysicalDBPath: path,
+		ExactProviderScope: binding.Scope, Generation: binding.Generation,
+		FileIdentity:        boundedCoverageFileIdentity(path, info),
+		AdmissionCheckpoint: checkpoint, AdmissionRowZero: true,
+		fileInfo: info,
+	}, nil
+}
+
+func (e *Engine) validateBoundedCoverageLease(lease *BoundedCoverageLease) error {
+	if err := lease.Validate(); err != nil {
+		return err
+	}
+	info, err := os.Stat(lease.PhysicalDBPath)
+	if err != nil {
+		return err
+	}
+	current := boundedCoverageFileIdentity(lease.PhysicalDBPath, info)
+	if lease.fileInfo != nil && !os.SameFile(lease.fileInfo, info) {
+		return fmt.Errorf("bounded coverage lease physical identity changed: %s", lease.PhysicalDBPath)
+	}
+	if current != lease.FileIdentity {
+		return fmt.Errorf("bounded coverage lease file identity changed: %s", lease.PhysicalDBPath)
+	}
+	return nil
+}
+
+func (e *Engine) DrainBoundedCoverageLease(
+	ctx context.Context, lease *BoundedCoverageLease, checkpoint parser.OpenCodeCoverageCheckpoint,
+) (parser.OpenCodeFeedResult, []parser.SourceRef, error) {
+	if err := e.validateBoundedCoverageLease(lease); err != nil {
+		return parser.OpenCodeFeedResult{Next: checkpoint}, nil, err
+	}
+	result, sources, err := e.DrainBoundedCoverage(ctx, lease.Binding, checkpoint)
+	if err != nil {
+		return result, nil, err
+	}
+	if err := e.validateBoundedCoverageLease(lease); err != nil {
+		return result, nil, err
+	}
+	return result, sources, nil
+}
+
+func (e *Engine) ApplyBoundedCoverageSourcesLease(
+	ctx context.Context, lease *BoundedCoverageLease, sources []parser.SourceRef,
+) (SyncStats, error) {
+	if err := e.validateBoundedCoverageLease(lease); err != nil {
+		return SyncStats{}, err
+	}
+	stats, err := e.ApplyBoundedCoverageSources(ctx, sources)
+	if err != nil {
+		return stats, err
+	}
+	if err := e.validateBoundedCoverageLease(lease); err != nil {
+		return stats, err
+	}
+	return stats, nil
+}
+
+func (e *Engine) ReconcileBoundedCoverageLease(
+	ctx context.Context, lease *BoundedCoverageLease, reason string,
+) error {
+	if reason == "" {
+		return errors.New("bounded coverage audit reason is empty")
+	}
+	if lease == nil || lease.Provider != lease.Binding.Agent ||
+		filepath.Clean(lease.PhysicalDBPath) != filepath.Clean(lease.Binding.PhysicalDBPath) ||
+		filepath.Clean(lease.ExactProviderScope) != filepath.Clean(lease.Binding.Scope) ||
+		lease.Generation == 0 || lease.Generation != lease.Binding.Generation {
+		return errors.New("bounded coverage audit lease identity mismatch")
+	}
+	if err := e.validateBoundedCoverageLease(lease); err != nil {
+		return err
+	}
+	return e.ReconcileProviderRoots(ctx, lease.Provider, []string{lease.ExactProviderScope})
 }
 
 func withinOrEqual(path, root string) bool {
