@@ -327,3 +327,18 @@ func TestReplaceSessionMessagesDropsPinOnAmbiguousChangedRow(t *testing.T) {
 		})
 	}
 }
+
+func TestMessagePinIdentityStableRequiresSameUniqueUUID(t *testing.T) {
+	old := diffTestMsg("pin-identity", 1, "assistant", "old content",
+		func(m *Message) { m.SourceUUID = "uuid-old" })
+	incoming := diffTestMsg(
+		"pin-identity", 1, "assistant", "replacement content",
+		func(m *Message) { m.SourceUUID = "uuid-new" },
+	)
+
+	assert.False(t, messagePinIdentityStable(
+		old, incoming,
+		map[string]int{"uuid-old": 1},
+		map[string]int{"uuid-new": 1},
+	), "different unique UUIDs are different pin identities")
+}

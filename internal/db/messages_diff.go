@@ -259,6 +259,7 @@ func messagePinIdentityStable(
 	oldUUIDCounts, incomingUUIDCounts map[string]int,
 ) bool {
 	if old.SourceUUID != "" &&
+		old.SourceUUID == incoming.SourceUUID &&
 		oldUUIDCounts[old.SourceUUID] == 1 &&
 		incomingUUIDCounts[incoming.SourceUUID] == 1 {
 		return true
