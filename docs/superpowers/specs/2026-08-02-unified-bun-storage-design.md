@@ -219,10 +219,12 @@ source-scoped identity shape.
 
 Opaque project selector keys use the aggregate identity scope derived from the
 complete canonical `source_archives` set on every backend. SQLite does not keep
-its former local-archive-only scope after cutover. An archive that already
-contains multiple source archives may therefore receive new opaque selector keys
-once at cutover; callers must treat those keys as response-scoped opaque
-identifiers, not durable aliases. No dual key or compatibility lookup remains.
+its former local-archive-only scope after cutover. Unresolved or ambiguous
+response-scoped selector keys may change whenever canonical `source_archives`
+membership changes through archive addition, retirement, or replacement.
+Resolved repository identity keys remain stable. Callers must treat selector
+keys as response-scoped opaque identifiers, not durable aliases; no dual key or
+compatibility lookup remains.
 
 `sessions.source_archive_id` and `sessions.source_database_generation` are
 required publication provenance. Normal SQLite session writers read the stable

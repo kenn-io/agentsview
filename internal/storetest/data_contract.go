@@ -90,7 +90,7 @@ func RunDataContract(t *testing.T, backend DataBackend) {
 		require.Len(t, candidates, 1)
 		candidate := candidates[0]
 		assert.Equal(t, "identity-host-a", candidate.Machine)
-		assert.Equal(t, "aggregate", candidate.EvidenceKind)
+		assert.Equal(t, "snapshot", candidate.EvidenceKind)
 		assert.Equal(t, "/workspace/alpha", candidate.EvidenceRoot)
 		assert.Equal(t, "/workspace/alpha", candidate.SuggestedPrefix)
 		assert.Equal(t, 2, candidate.ContributingSessions)

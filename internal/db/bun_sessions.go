@@ -88,6 +88,8 @@ func SQLiteBunSessionQueryDialect() QueryDialect {
 		}
 		return placeholder
 	}
+	dialect.terminationExpr = sqlite.terminationExpr
+	dialect.terminationKind = sqlite.terminationKind
 	return dialect
 }
 
@@ -428,6 +430,10 @@ func bunSessionActivityExpr(alias string) string {
 		qualify("created_at") + ")"
 }
 
+func bunSessionActivityOrderExpr(alias string, dialect QueryDialect) string {
+	return dialect.timestampExpr(bunSessionActivityExpr(alias))
+}
+
 func sidebarRootTreeSQL(
 	rootWhere, childAutomationWhere string, starred bool,
 ) string {
@@ -491,7 +497,7 @@ func (s *BunStore) getSidebarSessionIndexAll(
 	query := store.NewSelect().Model(&rows)
 	query = applyBunWhere(query, where, args)
 	if err := query.
-		OrderExpr(bunSessionActivityExpr("") + " DESC").
+		OrderExpr(bunSessionActivityOrderExpr("", dialect) + " DESC").
 		OrderExpr("id DESC").Scan(ctx); err != nil {
 		return SidebarSessionIndex{}, fmt.Errorf(
 			"querying sidebar session index: %w", err,
@@ -543,13 +549,25 @@ func (s *BunStore) getSidebarSessionIndexPage(
 		Activity bunmodel.Timestamp `bun:"activity"`
 	}
 	rootActivityJoin := sidebarStarredRootJoin(filter.Starred)
+	rootActivityExpr := bunSessionActivityExpr("session")
+	rootActivityOrderExpr := bunSessionActivityOrderExpr("session", dialect)
 	rootPageSQL := treeSQL + `,
-		root_activity(id, activity) AS (
-			SELECT t.root_id AS id, MAX(` + bunSessionActivityExpr("session") + `) AS activity
+		ranked_root_activity(id, activity, activity_order, activity_rank) AS (
+			SELECT t.root_id AS id,
+				` + rootActivityExpr + ` AS activity,
+				` + rootActivityOrderExpr + ` AS activity_order,
+				ROW_NUMBER() OVER (
+					PARTITION BY t.root_id
+					ORDER BY ` + rootActivityOrderExpr + ` DESC, session.id DESC
+				) AS activity_rank
 			FROM tree AS t
 			` + rootActivityJoin + `
 			JOIN sessions AS session ON session.id = t.id
-			GROUP BY t.root_id
+		),
+		root_activity(id, activity, activity_order) AS (
+			SELECT id, activity, activity_order
+			FROM ranked_root_activity
+			WHERE activity_rank = 1
 		)
 		SELECT id, activity
 		FROM root_activity`
@@ -561,12 +579,16 @@ func (s *BunStore) getSidebarSessionIndexPage(
 				"%w: invalid sidebar activity: %v", ErrInvalidCursor, err,
 			)
 		}
+		activityParam := dialect.dateParam("?")
 		rootPageSQL += `
-		WHERE activity < ? OR (activity = ? AND id < ?)`
-		rootPageArgs = append(rootPageArgs, activity, activity, cursor.ID)
+		WHERE activity_order < ` + activityParam + `
+		   OR (activity_order = ` + activityParam + ` AND id < ?)`
+		rootPageArgs = append(
+			rootPageArgs, activity.Time, activity.Time, cursor.ID,
+		)
 	}
 	rootPageSQL += `
-		ORDER BY activity DESC, id DESC
+		ORDER BY activity_order DESC, id DESC
 		LIMIT ?`
 	rootPageArgs = append(rootPageArgs, filter.Limit+1)
 	var roots []rootRow
@@ -620,7 +642,8 @@ func (s *BunStore) getSidebarSessionIndexPage(
 		SELECT ` + bunModelColumns("session", (*bunmodel.Session)(nil)) + `
 		FROM sessions AS session
 		JOIN ranked_tree AS ranked ON session.id = ranked.id
-		ORDER BY ranked.ord ASC, ` + bunSessionActivityExpr("session") + ` DESC,
+		ORDER BY ranked.ord ASC, ` +
+		bunSessionActivityOrderExpr("session", dialect) + ` DESC,
 			session.id DESC`
 	var rows []bunmodel.Session
 	if err := store.NewRaw(treePageSQL, treeArgs...).Scan(ctx, &rows); err != nil {

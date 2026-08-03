@@ -212,17 +212,37 @@ func bunObservationIdentityScope(
 	return export.AggregateIdentityScope(scopes)
 }
 
-type bunDataSessionRow struct {
-	ID                       string              `bun:"id"`
-	Project                  string              `bun:"project"`
-	Machine                  string              `bun:"machine"`
-	Agent                    string              `bun:"agent"`
-	Cwd                      string              `bun:"cwd"`
-	StartedAt                *bunmodel.Timestamp `bun:"started_at"`
-	EndedAt                  *bunmodel.Timestamp `bun:"ended_at"`
-	FilePath                 *string             `bun:"file_path"`
-	SourceArchiveID          string              `bun:"source_archive_id"`
-	SourceDatabaseGeneration string              `bun:"source_database_generation"`
+type bunProjectInventoryAggregateRow struct {
+	Project       string              `bun:"project"`
+	Sessions      int                 `bun:"sessions"`
+	Machines      int                 `bun:"machines"`
+	Agents        int                 `bun:"agents"`
+	DistinctCwds  int                 `bun:"distinct_cwds"`
+	FirstActivity *bunmodel.Timestamp `bun:"first_activity"`
+	LastActivity  *bunmodel.Timestamp `bun:"last_activity"`
+}
+
+type bunGovernanceSessionRow struct {
+	ID              string `bun:"id"`
+	Machine         string `bun:"machine"`
+	Project         string `bun:"project"`
+	Cwd             string `bun:"cwd"`
+	FilePath        string `bun:"file_path"`
+	SourceArchiveID string `bun:"source_archive_id"`
+}
+
+type bunCandidateSessionRef struct {
+	ID      string `bun:"id"`
+	Project string `bun:"project"`
+}
+
+type bunCandidateSessionRow struct {
+	ID                       string `bun:"id"`
+	Project                  string `bun:"project"`
+	Machine                  string `bun:"machine"`
+	Cwd                      string `bun:"cwd"`
+	SourceArchiveID          string `bun:"source_archive_id"`
+	SourceDatabaseGeneration string `bun:"source_database_generation"`
 }
 
 type bunProjectMappingRow struct {
@@ -237,17 +257,13 @@ func (s *BunStore) GetProjectInventory(ctx context.Context) (ProjectInventory, e
 		ctx = context.Background()
 	}
 	var inventory ProjectInventory
-	err := s.view(ctx, func(store bun.IDB) error {
-		sessions, err := listBunDataSessions(ctx, store)
+	err := s.consistentView(ctx, func(store bun.IDB) error {
+		agg, err := listBunProjectInventoryAggregates(
+			ctx, store, s.backend.SessionQueryDialect(),
+		)
 		if err != nil {
 			return err
 		}
-		mappingRows, err := listBunProjectMappings(ctx, store)
-		if err != nil {
-			return err
-		}
-
-		agg := aggregateBunProjectInventory(sessions)
 		rawProjects := make([]string, 0, len(agg))
 		for project := range agg {
 			rawProjects = append(rawProjects, project)
@@ -257,23 +273,27 @@ func (s *BunStore) GetProjectInventory(ctx context.Context) (ProjectInventory, e
 			return err
 		}
 
-		visibleArchives := make(map[string]struct{})
-		for _, session := range sessions {
-			if session.SourceArchiveID != "" {
-				visibleArchives[session.SourceArchiveID] = struct{}{}
-			}
+		visibleArchives, err := listBunVisibleArchiveIDs(ctx, store)
+		if err != nil {
+			return err
 		}
-		visibleMappings := filterBunProjectMappings(mappingRows, func(row bunProjectMappingRow) bool {
-			_, ok := visibleArchives[row.archiveID]
-			return ok
-		})
-		archiveMappings := bunArchiveMappings(visibleMappings)
+		mappingRows, err := listBunProjectMappings(
+			ctx, store, nil, visibleArchives,
+		)
+		if err != nil {
+			return err
+		}
+		governanceRows, err := listBunGovernanceSessions(ctx, store, nil)
+		if err != nil {
+			return err
+		}
+		archiveMappings := bunArchiveMappings(mappingRows)
 		eval := EvaluateGovernedSessions(
 			archiveMappings,
-			bunMappingEvaluationRows(sessions, visibleMappings, ""),
+			bunMappingEvaluationRows(governanceRows),
 		)
-		mappings := make([]WorktreeProjectMapping, len(visibleMappings))
-		for i, row := range visibleMappings {
+		mappings := make([]WorktreeProjectMapping, len(mappingRows))
+		for i, row := range mappingRows {
 			mappings[i] = row.mapping
 		}
 
@@ -301,42 +321,25 @@ func (s *BunStore) ListProjectRules(
 	}
 	machine = strings.TrimSpace(machine)
 	var result ProjectRules
-	err := s.view(ctx, func(store bun.IDB) error {
-		sessions, err := listBunDataSessions(ctx, store)
+	err := s.consistentView(ctx, func(store bun.IDB) error {
+		machines, err := listBunProjectRuleMachines(ctx, store)
 		if err != nil {
 			return err
 		}
-		mappingRows, err := listBunProjectMappings(ctx, store)
+		mappingRows, err := listBunProjectMappings(ctx, store, &machine, nil)
 		if err != nil {
 			return err
 		}
-
-		machineSet := make(map[string]struct{})
-		for _, session := range sessions {
-			if session.Machine != "" {
-				machineSet[session.Machine] = struct{}{}
-			}
+		governanceRows, err := listBunGovernanceSessions(ctx, store, &machine)
+		if err != nil {
+			return err
 		}
-		for _, row := range mappingRows {
-			if row.mapping.Machine != "" {
-				machineSet[row.mapping.Machine] = struct{}{}
-			}
-		}
-		selected := filterBunProjectMappings(mappingRows, func(row bunProjectMappingRow) bool {
-			return row.mapping.Machine == machine
-		})
-		sort.SliceStable(selected, func(i, j int) bool {
-			if selected[i].mapping.PathPrefix != selected[j].mapping.PathPrefix {
-				return selected[i].mapping.PathPrefix < selected[j].mapping.PathPrefix
-			}
-			return selected[i].archiveID < selected[j].archiveID
-		})
 		eval := EvaluateGovernedSessions(
-			bunArchiveMappings(selected),
-			bunMappingEvaluationRows(sessions, selected, machine),
+			bunArchiveMappings(mappingRows),
+			bunMappingEvaluationRows(governanceRows),
 		)
-		rules := make([]ProjectRule, len(selected))
-		for i, row := range selected {
+		rules := make([]ProjectRule, len(mappingRows))
+		for i, row := range mappingRows {
 			rules[i] = ProjectRule{
 				WorktreeProjectMapping: row.mapping,
 				SourceArchiveID:        row.archiveID,
@@ -348,7 +351,7 @@ func (s *BunStore) ListProjectRules(
 			}
 		}
 		result = ProjectRules{
-			Machine: machine, Machines: sortedSetKeys(machineSet), Rules: rules,
+			Machine: machine, Machines: machines, Rules: rules,
 		}
 		return nil
 	})
@@ -371,8 +374,8 @@ func (s *BunStore) ListArchiveWorktreeCandidates(
 		ctx = context.Background()
 	}
 	var candidates []WorktreeReclassificationCandidate
-	err := s.view(ctx, func(store bun.IDB) error {
-		sessions, err := listBunDataSessions(ctx, store)
+	err := s.consistentView(ctx, func(store bun.IDB) error {
+		sessions, err := listBunCandidateSessionRefs(ctx, store)
 		if err != nil {
 			return err
 		}
@@ -380,7 +383,7 @@ func (s *BunStore) ListArchiveWorktreeCandidates(
 		for _, session := range sessions {
 			labels[session.Project] = struct{}{}
 		}
-		projects, observations, err := buildBunProjectIdentityMap(
+		projects, _, err := buildBunProjectIdentityMap(
 			ctx, store, sortedSetKeys(labels),
 		)
 		if err != nil {
@@ -392,16 +395,24 @@ func (s *BunStore) ListArchiveWorktreeCandidates(
 			return nil
 		}
 
-		selected := make([]bunDataSessionRow, 0)
 		selectedIDs := make([]string, 0)
 		for _, session := range sessions {
 			if _, ok := selectedProjects[session.Project]; !ok {
 				continue
 			}
-			selected = append(selected, session)
 			selectedIDs = append(selectedIDs, session.ID)
 		}
+		selected, err := listBunCandidateSessions(ctx, store, selectedIDs)
+		if err != nil {
+			return err
+		}
 		snapshots, err := listBunProjectIdentitySnapshots(ctx, store, selectedIDs)
+		if err != nil {
+			return err
+		}
+		observations, err := listBunProjectIdentityObservations(
+			ctx, store, sortedSetKeys(selectedProjects),
+		)
 		if err != nil {
 			return err
 		}
@@ -430,76 +441,142 @@ func (s *BunStore) ListArchiveWorktreeCandidates(
 	return candidates, nil
 }
 
-func listBunDataSessions(
-	ctx context.Context, store bun.IDB,
-) ([]bunDataSessionRow, error) {
-	var rows []bunDataSessionRow
-	if err := store.NewSelect().Table("sessions").Column(
-		"id", "project", "machine", "agent", "cwd", "started_at", "ended_at",
-		"file_path", "source_archive_id", "source_database_generation",
-	).Where("deleted_at IS NULL").OrderExpr("id ASC").Scan(ctx, &rows); err != nil {
-		return nil, fmt.Errorf("listing canonical data sessions: %w", err)
+func listBunProjectInventoryAggregates(
+	ctx context.Context, store bun.IDB, dialect QueryDialect,
+) (map[string]projectInventoryAgg, error) {
+	startedOrder := dialect.timestampExpr("started_at")
+	activityOrder := "COALESCE(" + dialect.timestampExpr("ended_at") + ", " +
+		dialect.timestampExpr("started_at") + ")"
+	startedRaw := bunNullableTimestamp("started_at")
+	activityRaw := "COALESCE(" + bunNullableTimestamp("ended_at") + ", " +
+		bunNullableTimestamp("started_at") + ")"
+	query := fmt.Sprintf(`
+		WITH visible AS (
+			SELECT id, project, machine, agent,
+				CASE WHEN cwd IS NOT NULL AND cwd != ''
+					THEN replace(cwd, '\', '/') END AS normalized_cwd,
+				%s AS started_order, %s AS started_raw,
+				%s AS activity_order, %s AS activity_raw
+			FROM sessions
+			WHERE deleted_at IS NULL
+		), ranked AS (
+			SELECT *,
+				ROW_NUMBER() OVER (
+					PARTITION BY project
+					ORDER BY (started_order IS NULL) ASC,
+						started_order ASC, id ASC
+				) AS first_rank,
+				ROW_NUMBER() OVER (
+					PARTITION BY project
+					ORDER BY (activity_order IS NULL) ASC,
+						activity_order DESC, id DESC
+				) AS last_rank
+			FROM visible
+		)
+		SELECT project, COUNT(*) AS sessions,
+			COUNT(DISTINCT machine) AS machines,
+			COUNT(DISTINCT agent) AS agents,
+			COUNT(DISTINCT normalized_cwd) AS distinct_cwds,
+			MAX(CASE WHEN first_rank = 1 THEN started_raw END) AS first_activity,
+			MAX(CASE WHEN last_rank = 1 THEN activity_raw END) AS last_activity
+		FROM ranked
+		GROUP BY project
+		ORDER BY project`, startedOrder, startedRaw, activityOrder, activityRaw)
+	var rows []bunProjectInventoryAggregateRow
+	if err := store.NewRaw(query).Scan(ctx, &rows); err != nil {
+		return nil, fmt.Errorf("aggregating canonical project inventory: %w", err)
 	}
-	return rows, nil
+	result := make(map[string]projectInventoryAgg, len(rows))
+	for _, row := range rows {
+		agg := projectInventoryAgg{
+			sessions: row.Sessions, machines: row.Machines,
+			agents: row.Agents, distinctCwds: row.DistinctCwds,
+		}
+		if row.FirstActivity != nil && !row.FirstActivity.IsZero() {
+			value := row.FirstActivity.UTC()
+			agg.first = &value
+		}
+		if row.LastActivity != nil && !row.LastActivity.IsZero() {
+			value := row.LastActivity.UTC()
+			agg.last = &value
+		}
+		result[row.Project] = agg
+	}
+	return result, nil
 }
 
-func aggregateBunProjectInventory(
-	sessions []bunDataSessionRow,
-) map[string]projectInventoryAgg {
-	type accumulator struct {
-		projectInventoryAgg
-		machines map[string]struct{}
-		agents   map[string]struct{}
-		cwds     map[string]struct{}
+func listBunVisibleArchiveIDs(
+	ctx context.Context, store bun.IDB,
+) (map[string]struct{}, error) {
+	var rows []struct {
+		SourceArchiveID string `bun:"source_archive_id"`
 	}
-	accumulators := make(map[string]*accumulator)
-	for _, session := range sessions {
-		acc := accumulators[session.Project]
-		if acc == nil {
-			acc = &accumulator{
-				machines: make(map[string]struct{}), agents: make(map[string]struct{}),
-				cwds: make(map[string]struct{}),
-			}
-			accumulators[session.Project] = acc
-		}
-		acc.sessions++
-		acc.machines[session.Machine] = struct{}{}
-		acc.agents[session.Agent] = struct{}{}
-		if cwd := strings.ReplaceAll(session.Cwd, `\`, "/"); cwd != "" {
-			acc.cwds[cwd] = struct{}{}
-		}
-		if session.StartedAt != nil && !session.StartedAt.IsZero() {
-			started := session.StartedAt.UTC()
-			acc.first = minTimePtr(acc.first, &started)
-		}
-		activity := session.EndedAt
-		if activity == nil || activity.IsZero() {
-			activity = session.StartedAt
-		}
-		if activity != nil && !activity.IsZero() {
-			ended := activity.UTC()
-			acc.last = maxTimePtr(acc.last, &ended)
-		}
+	if err := store.NewSelect().Table("sessions").Column("source_archive_id").
+		Where("deleted_at IS NULL").Where("source_archive_id != ''").
+		Group("source_archive_id").OrderExpr("source_archive_id ASC").
+		Scan(ctx, &rows); err != nil {
+		return nil, fmt.Errorf("listing canonical visible source archives: %w", err)
 	}
-	out := make(map[string]projectInventoryAgg, len(accumulators))
-	for project, acc := range accumulators {
-		acc.projectInventoryAgg.machines = len(acc.machines)
-		acc.projectInventoryAgg.agents = len(acc.agents)
-		acc.distinctCwds = len(acc.cwds)
-		out[project] = acc.projectInventoryAgg
+	result := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		result[row.SourceArchiveID] = struct{}{}
 	}
-	return out
+	return result, nil
 }
 
 func listBunProjectMappings(
-	ctx context.Context, store bun.IDB,
+	ctx context.Context,
+	store bun.IDB,
+	machine *string,
+	visibleArchives map[string]struct{},
 ) ([]bunProjectMappingRow, error) {
-	var rows []bunmodel.SourceWorktreeProjectMapping
-	if err := store.NewSelect().Model(&rows).
-		OrderExpr("source_archive_id ASC").OrderExpr("machine ASC").
-		OrderExpr("path_prefix ASC").Scan(ctx); err != nil {
-		return nil, fmt.Errorf("listing canonical worktree mappings: %w", err)
+	if visibleArchives != nil && len(visibleArchives) == 0 {
+		return []bunProjectMappingRow{}, nil
 	}
+	archiveIDs := sortedSetKeys(visibleArchives)
+	var rows []bunmodel.SourceWorktreeProjectMapping
+	load := func(chunk []string) error {
+		var batch []bunmodel.SourceWorktreeProjectMapping
+		query := store.NewSelect().Model(&batch)
+		if machine != nil {
+			query = query.Where("machine = ?", *machine)
+		}
+		if visibleArchives != nil {
+			query = query.Where("source_archive_id IN (?)", bun.List(chunk))
+		}
+		if err := query.Scan(ctx); err != nil {
+			return fmt.Errorf("listing canonical worktree mappings: %w", err)
+		}
+		rows = append(rows, batch...)
+		return nil
+	}
+	if visibleArchives == nil {
+		if err := load(nil); err != nil {
+			return nil, err
+		}
+	} else {
+		for start := 0; start < len(archiveIDs); start += bunDataListBatchSize {
+			end := min(start+bunDataListBatchSize, len(archiveIDs))
+			if err := load(archiveIDs[start:end]); err != nil {
+				return nil, err
+			}
+		}
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		if machine != nil {
+			if rows[i].PathPrefix != rows[j].PathPrefix {
+				return rows[i].PathPrefix < rows[j].PathPrefix
+			}
+			return rows[i].SourceArchiveID < rows[j].SourceArchiveID
+		}
+		if rows[i].SourceArchiveID != rows[j].SourceArchiveID {
+			return rows[i].SourceArchiveID < rows[j].SourceArchiveID
+		}
+		if rows[i].Machine != rows[j].Machine {
+			return rows[i].Machine < rows[j].Machine
+		}
+		return rows[i].PathPrefix < rows[j].PathPrefix
+	})
 	result := make([]bunProjectMappingRow, len(rows))
 	for i, row := range rows {
 		result[i] = bunProjectMappingRow{
@@ -516,24 +593,106 @@ func listBunProjectMappings(
 	return result, nil
 }
 
+func listBunProjectRuleMachines(
+	ctx context.Context, store bun.IDB,
+) ([]string, error) {
+	var rows []struct {
+		Machine string `bun:"machine"`
+	}
+	if err := store.NewRaw(`
+		SELECT machine FROM sessions
+		WHERE deleted_at IS NULL AND machine != ''
+		UNION
+		SELECT machine FROM source_worktree_project_mappings
+		WHERE machine != ''
+		ORDER BY machine`).Scan(ctx, &rows); err != nil {
+		return nil, fmt.Errorf("listing canonical project rule machines: %w", err)
+	}
+	machines := make([]string, len(rows))
+	for i, row := range rows {
+		machines[i] = row.Machine
+	}
+	return machines, nil
+}
+
+func listBunGovernanceSessions(
+	ctx context.Context, store bun.IDB, machine *string,
+) ([]bunGovernanceSessionRow, error) {
+	var rows []bunGovernanceSessionRow
+	query := store.NewSelect().TableExpr("sessions AS session").
+		ColumnExpr("session.id AS id").
+		ColumnExpr("session.machine AS machine").
+		ColumnExpr("session.project AS project").
+		ColumnExpr("session.cwd AS cwd").
+		ColumnExpr("COALESCE(session.file_path, '') AS file_path").
+		ColumnExpr("session.source_archive_id AS source_archive_id").
+		Where("session.deleted_at IS NULL").
+		Where("session.source_archive_id != ''").
+		Where(`EXISTS (
+			SELECT 1 FROM source_worktree_project_mappings AS mapping
+			WHERE mapping.source_archive_id = session.source_archive_id
+			  AND mapping.machine = session.machine
+			  AND mapping.enabled = TRUE
+		)`)
+	if machine != nil {
+		query = query.Where("session.machine = ?", *machine)
+	}
+	if err := query.OrderExpr("session.id ASC").Scan(ctx, &rows); err != nil {
+		return nil, fmt.Errorf("listing canonical governance sessions: %w", err)
+	}
+	return rows, nil
+}
+
+func bunMappingEvaluationRows(
+	rows []bunGovernanceSessionRow,
+) []MappingEvaluationRow {
+	result := make([]MappingEvaluationRow, len(rows))
+	for i, row := range rows {
+		result[i] = MappingEvaluationRow{
+			SessionID: row.ID, Machine: row.Machine, Project: row.Project,
+			Cwd: row.Cwd, FilePath: row.FilePath,
+			SourceArchiveID: row.SourceArchiveID,
+		}
+	}
+	return result
+}
+
+func listBunCandidateSessionRefs(
+	ctx context.Context, store bun.IDB,
+) ([]bunCandidateSessionRef, error) {
+	var rows []bunCandidateSessionRef
+	if err := store.NewSelect().Table("sessions").Column("id", "project").
+		Where("deleted_at IS NULL").OrderExpr("id ASC").Scan(ctx, &rows); err != nil {
+		return nil, fmt.Errorf("listing canonical candidate session references: %w", err)
+	}
+	return rows, nil
+}
+
+func listBunCandidateSessions(
+	ctx context.Context, store bun.IDB, sessionIDs []string,
+) ([]bunCandidateSessionRow, error) {
+	rows := make([]bunCandidateSessionRow, 0, len(sessionIDs))
+	for start := 0; start < len(sessionIDs); start += bunDataListBatchSize {
+		end := min(start+bunDataListBatchSize, len(sessionIDs))
+		var batch []bunCandidateSessionRow
+		if err := store.NewSelect().Table("sessions").Column(
+			"id", "project", "machine", "cwd", "source_archive_id",
+			"source_database_generation",
+		).Where("deleted_at IS NULL").
+			Where("id IN (?)", bun.List(sessionIDs[start:end])).
+			OrderExpr("id ASC").Scan(ctx, &batch); err != nil {
+			return nil, fmt.Errorf("listing canonical candidate sessions: %w", err)
+		}
+		rows = append(rows, batch...)
+	}
+	return rows, nil
+}
+
 func formatBunDataTime(value time.Time) string {
 	if value.IsZero() {
 		return ""
 	}
 	return value.UTC().Format(time.RFC3339Nano)
-}
-
-func filterBunProjectMappings(
-	rows []bunProjectMappingRow,
-	keep func(bunProjectMappingRow) bool,
-) []bunProjectMappingRow {
-	result := make([]bunProjectMappingRow, 0, len(rows))
-	for _, row := range rows {
-		if keep(row) {
-			result = append(result, row)
-		}
-	}
-	return result
 }
 
 func bunArchiveMappings(rows []bunProjectMappingRow) []ArchiveMappings {
@@ -550,44 +709,6 @@ func bunArchiveMappings(rows []bunProjectMappingRow) []ArchiveMappings {
 		result[i] = ArchiveMappings{
 			SourceArchiveID: archiveID, Mappings: byArchive[archiveID],
 		}
-	}
-	return result
-}
-
-func bunMappingEvaluationRows(
-	sessions []bunDataSessionRow,
-	mappings []bunProjectMappingRow,
-	machine string,
-) []MappingEvaluationRow {
-	type scope struct{ archiveID, machine string }
-	enabled := make(map[scope]struct{})
-	for _, row := range mappings {
-		if row.mapping.Enabled {
-			enabled[scope{archiveID: row.archiveID, machine: row.mapping.Machine}] = struct{}{}
-		}
-	}
-	result := make([]MappingEvaluationRow, 0)
-	for _, session := range sessions {
-		if machine != "" && session.Machine != machine {
-			continue
-		}
-		if session.SourceArchiveID == "" {
-			continue
-		}
-		if _, ok := enabled[scope{
-			archiveID: session.SourceArchiveID, machine: session.Machine,
-		}]; !ok {
-			continue
-		}
-		filePath := ""
-		if session.FilePath != nil {
-			filePath = *session.FilePath
-		}
-		result = append(result, MappingEvaluationRow{
-			SessionID: session.ID, Machine: session.Machine,
-			Project: session.Project, Cwd: session.Cwd, FilePath: filePath,
-			SourceArchiveID: session.SourceArchiveID,
-		})
 	}
 	return result
 }
@@ -623,11 +744,18 @@ func listBunProjectIdentitySnapshots(
 	for start := 0; start < len(sessionIDs); start += bunDataListBatchSize {
 		end := min(start+bunDataListBatchSize, len(sessionIDs))
 		var rows []bunmodel.SourceSessionProjectIdentitySnapshot
-		if err := store.NewSelect().Model(&rows).
-			Where("source_session_id IN (?)", bun.List(sessionIDs[start:end])).
-			OrderExpr("source_archive_id ASC").
-			OrderExpr("source_database_generation ASC").
-			OrderExpr("source_session_id ASC").Scan(ctx); err != nil {
+		if err := store.NewSelect().
+			TableExpr("source_session_project_identity_snapshots AS snapshot").
+			ColumnExpr("snapshot.*").
+			Join("JOIN sessions AS session").
+			JoinOn("session.source_archive_id = snapshot.source_archive_id").
+			JoinOn("session.source_database_generation = snapshot.source_database_generation").
+			JoinOn("session.id = snapshot.source_session_id").
+			Where("session.deleted_at IS NULL").
+			Where("session.id IN (?)", bun.List(sessionIDs[start:end])).
+			OrderExpr("snapshot.source_archive_id ASC").
+			OrderExpr("snapshot.source_database_generation ASC").
+			OrderExpr("snapshot.source_session_id ASC").Scan(ctx, &rows); err != nil {
 			return nil, fmt.Errorf("listing canonical project identity snapshots: %w", err)
 		}
 		for _, row := range rows {
