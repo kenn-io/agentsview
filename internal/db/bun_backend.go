@@ -11,6 +11,8 @@ type BunBackend interface {
 	Name() string
 	ReadOnly() bool
 	Capabilities() BackendCapabilities
+	SessionQueryDialect() QueryDialect
+	SessionVersion(context.Context, bun.IDB, string) (int, int64, error)
 	View(context.Context, func(bun.IDB) error) error
 	Update(context.Context, func(bun.IDB) error) error
 }
@@ -62,6 +64,16 @@ func (b *sqliteBunBackend) Capabilities() BackendCapabilities {
 			WriteRecall:            true,
 		},
 	}
+}
+
+func (*sqliteBunBackend) SessionQueryDialect() QueryDialect {
+	return SQLiteBunSessionQueryDialect()
+}
+
+func (*sqliteBunBackend) SessionVersion(
+	ctx context.Context, store bun.IDB, id string,
+) (int, int64, error) {
+	return FileSessionVersion(ctx, store, id)
 }
 
 func (b *sqliteBunBackend) View(

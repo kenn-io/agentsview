@@ -259,6 +259,85 @@ func TestLegacySchemaCommonCutoverWritesCanonicalRowsAndDoesNotReplay(t *testing
 	assert.Equal(t, "canonical-after-cutover", mappingProject)
 }
 
+func TestLegacySchemaCommonConvergenceAddsCompleteMappingShape(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-common-mapping-shape.db")
+	createPriorCommonSQLiteArchive(t, path)
+	conn, err := sql.Open("sqlite3", makeDSN(path, false))
+	require.NoError(t, err)
+	conn.SetMaxOpenConns(1)
+	_, err = conn.ExecContext(t.Context(), `
+		CREATE TABLE source_worktree_project_mappings (
+			source_archive_id TEXT NOT NULL,
+			machine TEXT NOT NULL,
+			path_prefix TEXT NOT NULL,
+			layout TEXT NOT NULL DEFAULT 'explicit',
+			project TEXT NOT NULL DEFAULT '',
+			original_project TEXT NOT NULL DEFAULT '',
+			enabled INTEGER NOT NULL DEFAULT 1,
+			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			PRIMARY KEY (source_archive_id, machine, path_prefix)
+		)`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	database, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	conn, err = sql.Open("sqlite3", makeDSN(path, true))
+	require.NoError(t, err)
+	defer conn.Close()
+	for _, column := range []string{"id", "created_at"} {
+		var count int
+		require.NoError(t, conn.QueryRowContext(t.Context(), `
+			SELECT count(*) FROM pragma_table_info('source_worktree_project_mappings')
+			WHERE name = ?`, column).Scan(&count))
+		assert.Equal(t, 1, count, column)
+	}
+}
+
+func TestLegacySchemaStampedCommonSchemaRejectsTriggerDriftWithoutRepair(
+	t *testing.T,
+) {
+	path := filepath.Join(t.TempDir(), "stamped-common-trigger-drift.db")
+	database, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	const triggerName = "trg_project_identity_observations_revision_insert"
+	conn, err := sql.Open("sqlite3", makeDSN(path, false))
+	require.NoError(t, err)
+	conn.SetMaxOpenConns(1)
+	_, err = conn.ExecContext(t.Context(), `
+		DROP TRIGGER `+triggerName+`;
+		CREATE TRIGGER `+triggerName+`
+		AFTER INSERT ON source_project_identity_observations BEGIN
+			SELECT 1;
+		END`)
+	require.NoError(t, err)
+	var driftedSQL string
+	require.NoError(t, conn.QueryRowContext(t.Context(), `
+		SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?`,
+		triggerName,
+	).Scan(&driftedSQL))
+	require.NoError(t, conn.Close())
+
+	database, err = Open(path)
+	require.Error(t, err)
+	assert.Nil(t, database)
+	assert.Contains(t, err.Error(), "canonical SQLite trigger")
+
+	conn, err = sql.Open("sqlite3", makeDSN(path, true))
+	require.NoError(t, err)
+	defer conn.Close()
+	var afterSQL string
+	require.NoError(t, conn.QueryRowContext(t.Context(), `
+		SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?`,
+		triggerName,
+	).Scan(&afterSQL))
+	assert.Equal(t, driftedSQL, afterSQL)
+}
+
 func TestLegacySchemaCommonConvergenceRollsBackDDLDataAndStamp(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy-common-rollback.db")
 	createPriorCommonSQLiteArchive(t, path)

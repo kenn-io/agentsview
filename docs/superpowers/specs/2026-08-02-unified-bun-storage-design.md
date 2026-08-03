@@ -269,6 +269,13 @@ columns, while read-only serve and stamped drift fail closed. SQLite's writer
 transaction/busy timeout and PostgreSQL's advisory lock serialize concurrent
 openers.
 
+Fail-closed validation checks the exact compatibility-stamp value, every column
+selected by a canonical Bun model, logical-key uniqueness, registered parent
+rows and indexes, SQLite's canonical trigger definitions, and PostgreSQL's
+nullable `pinned_messages.message_id` compatibility constraint. Validation
+executes no repair DDL; an unstamped migration establishes the same invariants
+before writing the stamp.
+
 Downgrading a database after this cutover is unsupported. Older released
 binaries cannot recognize the new stamp and no trigger, shim, or dual-schema
 path attempts to police them. Before upgrading a persistent archive, operators
@@ -293,8 +300,11 @@ Bun.
 Those fragments use only the portable SQL subset exercised by all three
 backends. UTC parsing, calendar bucketing, percentiles, regex normalization, and
 JSON interpretation move to shared Go reducers whenever the engines do not share
-semantics. Non-search methods do not gain a backend expression switch; an
-operation that cannot be expressed portably requires a design update.
+semantics. The one non-search rendering exception is chronological filtering of
+SQLite's shipped text timestamps: the SQLite adapter supplies `julianday`
+expressions while PostgreSQL and DuckDB compare native timestamps. The shared
+method still owns the query and result contract and does not branch on backend
+identity. Any further non-search expression difference requires a design update.
 
 Parser ingestion writes canonical rows through the SQLite adapter. PostgreSQL
 push and DuckDB mirror population consume the same row models and common batch

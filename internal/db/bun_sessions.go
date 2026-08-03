@@ -53,6 +53,35 @@ var bunSessionQueryDialect = QueryDialect{
 	canonicalChildRelationships: []string{"subagent", "fork", "continuation"},
 }
 
+// PortableBunSessionQueryDialect returns the Bun-placeholder session dialect
+// used by engines with native timestamp comparison semantics.
+func PortableBunSessionQueryDialect() QueryDialect {
+	return bunSessionQueryDialect
+}
+
+// SQLiteBunSessionQueryDialect preserves chronological comparisons for the
+// shipped SQLite text timestamp representation while retaining Bun's portable
+// question-mark placeholders and common non-time predicates.
+func SQLiteBunSessionQueryDialect() QueryDialect {
+	dialect := bunSessionQueryDialect
+	sqlite := SQLiteQueryDialect()
+	dialect.dateStartExpr = sqlite.dateStartExpr
+	dialect.dateEndExpr = func(q func(string) string) string {
+		outerID := q("id")
+		if outerID == "id" {
+			outerID = "session.id"
+		}
+		return "julianday(COALESCE(NULLIF(" + q("ended_at") +
+			", ''), (SELECT m.timestamp FROM messages m" +
+			" WHERE m.session_id = " + outerID +
+			" AND m.timestamp != '' ORDER BY julianday(m.timestamp)" +
+			" DESC, m.timestamp DESC LIMIT 1), NULLIF(" + q("started_at") +
+			", ''), " + q("created_at") + "))"
+	}
+	dialect.dateParam = sqlite.dateParam
+	return dialect
+}
+
 func bunNullableTimestamp(column string) string {
 	return "CASE WHEN CAST(" + column + " AS VARCHAR) = '' THEN NULL ELSE " +
 		column + " END"
@@ -133,7 +162,8 @@ func (s *BunStore) ListSessions(
 
 	var page SessionPage
 	err := s.view(ctx, func(store bun.IDB) error {
-		where, args := BuildSessionFilterSQL(filter, bunSessionQueryDialect)
+		dialect := s.backend.SessionQueryDialect()
+		where, args := BuildSessionFilterSQL(filter, dialect)
 		base := store.NewSelect().Model((*bunmodel.Session)(nil))
 		base = applyBunWhere(base, where, args)
 		if total <= 0 {
@@ -149,13 +179,13 @@ func (s *BunStore) ListSessions(
 			if err != nil {
 				return err
 			}
-			builder := NewQueryBuilder(bunSessionQueryDialect, 0)
+			builder := NewQueryBuilder(dialect, 0)
 			query = query.Where(
 				builder.CursorPredicate(resolvedSort, filter, values, cursor.ID),
 				builder.Args()...,
 			)
 		}
-		orderBuilder := NewQueryBuilder(bunSessionQueryDialect, 0)
+		orderBuilder := NewQueryBuilder(dialect, 0)
 		order := strings.TrimPrefix(
 			orderBuilder.OrderByClause(resolvedSort, filter), "ORDER BY ",
 		)
@@ -343,9 +373,13 @@ func (s *BunStore) GetSidebarSessionIndex(
 	err := s.view(ctx, func(store bun.IDB) error {
 		var err error
 		if filter.Limit > 0 || filter.Cursor != "" || filter.Starred {
-			index, err = s.getSidebarSessionIndexPage(ctx, store, filter)
+			index, err = s.getSidebarSessionIndexPage(
+				ctx, store, filter, s.backend.SessionQueryDialect(),
+			)
 		} else {
-			index, err = s.getSidebarSessionIndexAll(ctx, store, filter)
+			index, err = s.getSidebarSessionIndexAll(
+				ctx, store, filter, s.backend.SessionQueryDialect(),
+			)
 		}
 		return err
 	})
@@ -355,14 +389,14 @@ func (s *BunStore) GetSidebarSessionIndex(
 	return index, nil
 }
 
-func sidebarRootFilter(filter SessionFilter) (string, []any) {
+func sidebarRootFilter(filter SessionFilter, dialect QueryDialect) (string, []any) {
 	rootFilter := filter
 	rootFilter.IncludeChildren = false
 	rootFilter.Cursor = ""
 	rootFilter.Starred = false
-	where, args := BuildSessionBaseFilterSQL(rootFilter, bunSessionQueryDialect)
+	where, args := BuildSessionBaseFilterSQL(rootFilter, dialect)
 	where += " AND " + BuildCanonicalRootWhere(
-		bunSessionQueryDialect, "session", filter.IncludeOrphans,
+		dialect, "session", filter.IncludeOrphans,
 	)
 	return where, args
 }
@@ -417,8 +451,8 @@ func sidebarStarredRootJoin(enabled bool) string {
 	return "JOIN eligible_roots AS eligible ON eligible.id = t.root_id"
 }
 
-func sidebarChildAutomationWhere(filter SessionFilter) string {
-	predicate := automationScopePredicate(filter, bunSessionQueryDialect, "child")
+func sidebarChildAutomationWhere(filter SessionFilter, dialect QueryDialect) string {
+	predicate := automationScopePredicate(filter, dialect, "child")
 	if predicate == "" {
 		return ""
 	}
@@ -426,9 +460,9 @@ func sidebarChildAutomationWhere(filter SessionFilter) string {
 }
 
 func (s *BunStore) getSidebarSessionIndexAll(
-	ctx context.Context, store bun.IDB, filter SessionFilter,
+	ctx context.Context, store bun.IDB, filter SessionFilter, dialect QueryDialect,
 ) (SidebarSessionIndex, error) {
-	rootWhere, rootArgs := sidebarRootFilter(filter)
+	rootWhere, rootArgs := sidebarRootFilter(filter, dialect)
 	var total int
 	if err := store.NewRaw(
 		"SELECT COUNT(*) FROM sessions AS session WHERE "+rootWhere,
@@ -437,7 +471,7 @@ func (s *BunStore) getSidebarSessionIndexAll(
 		return SidebarSessionIndex{}, fmt.Errorf("counting sidebar roots: %w", err)
 	}
 
-	where, args := BuildSessionFilterSQL(filter, bunSessionQueryDialect)
+	where, args := BuildSessionFilterSQL(filter, dialect)
 	var rows []bunmodel.Session
 	query := store.NewSelect().Model(&rows)
 	query = applyBunWhere(query, where, args)
@@ -455,13 +489,13 @@ func (s *BunStore) getSidebarSessionIndexAll(
 }
 
 func (s *BunStore) getSidebarSessionIndexPage(
-	ctx context.Context, store bun.IDB, filter SessionFilter,
+	ctx context.Context, store bun.IDB, filter SessionFilter, dialect QueryDialect,
 ) (SidebarSessionIndex, error) {
 	if filter.Limit <= 0 || filter.Limit > MaxSessionLimit {
 		filter.Limit = DefaultSessionLimit
 	}
-	rootWhere, rootArgs := sidebarRootFilter(filter)
-	childAutomationWhere := sidebarChildAutomationWhere(filter)
+	rootWhere, rootArgs := sidebarRootFilter(filter, dialect)
+	childAutomationWhere := sidebarChildAutomationWhere(filter, dialect)
 	treeSQL := sidebarRootTreeSQL(
 		rootWhere, childAutomationWhere, filter.Starred,
 	)
@@ -631,19 +665,37 @@ func sidebarRowFromBun(row bunmodel.Session) SidebarSessionIndexRow {
 
 // GetSessionVersion returns the canonical message count and source marker.
 func (s *BunStore) GetSessionVersion(id string) (int, int64, bool) {
+	var count int
+	var marker int64
+	err := s.view(context.Background(), func(store bun.IDB) error {
+		var versionErr error
+		count, marker, versionErr = s.backend.SessionVersion(
+			context.Background(), store, id,
+		)
+		return versionErr
+	})
+	if err != nil {
+		return 0, 0, false
+	}
+	return count, marker, true
+}
+
+// FileSessionVersion returns the portable file-fingerprint marker used by the
+// SQLite archive and DuckDB mirror.
+func FileSessionVersion(
+	ctx context.Context, store bun.IDB, id string,
+) (int, int64, error) {
 	var row struct {
 		MessageCount    int                 `bun:"message_count"`
 		FileMtime       *int64              `bun:"file_mtime"`
 		FileHash        *string             `bun:"file_hash"`
 		LocalModifiedAt *bunmodel.Timestamp `bun:"local_modified_at"`
 	}
-	err := s.view(context.Background(), func(store bun.IDB) error {
-		return store.NewSelect().Table("sessions").
-			Column("message_count", "file_mtime", "file_hash", "local_modified_at").
-			Where("id = ?", id).Scan(context.Background(), &row)
-	})
+	err := store.NewSelect().Table("sessions").
+		Column("message_count", "file_mtime", "file_hash", "local_modified_at").
+		Where("id = ?", id).Scan(ctx, &row)
 	if err != nil {
-		return 0, 0, false
+		return 0, 0, err
 	}
 	mtime := int64(0)
 	if row.FileMtime != nil {
@@ -656,7 +708,7 @@ func (s *BunStore) GetSessionVersion(id string) (int, int64, bool) {
 	modified := requiredTimestampFromBunRowPtr(row.LocalModifiedAt)
 	return row.MessageCount, SessionVersionMarker(
 		fmt.Sprintf("%d", mtime), hash, modified,
-	), true
+	), nil
 }
 
 func applyBunRootVisibility(
