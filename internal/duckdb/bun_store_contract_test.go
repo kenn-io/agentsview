@@ -48,7 +48,7 @@ func TestBunStoreIdentityContract(t *testing.T) {
 			require.NoError(t, err)
 			store := NewStoreFromDB(conn)
 			t.Cleanup(func() { require.NoError(t, store.Close()) })
-			return store.BunStore, fixture
+			return store, fixture
 		},
 	})
 }

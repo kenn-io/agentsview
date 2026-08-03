@@ -1004,7 +1004,6 @@ func Open(path string) (*DB, error) {
 		d.Close()
 		return nil, fmt.Errorf("queueing project identity backfill: %w", err)
 	}
-
 	if dataStale || schemaRepairNeeded {
 		d.dataStale.Store(true)
 		log.Printf(
@@ -1047,112 +1046,6 @@ CREATE TABLE IF NOT EXISTS session_project_identity_snapshot_changes (
 );
 CREATE INDEX IF NOT EXISTS idx_session_project_identity_snapshot_changes_revision
     ON session_project_identity_snapshot_changes(revision);
-DROP TRIGGER IF EXISTS trg_project_identity_observations_revision_insert;
-DROP TRIGGER IF EXISTS trg_project_identity_observations_revision_update;
-DROP TRIGGER IF EXISTS trg_project_identity_observations_revision_delete;
-DROP TRIGGER IF EXISTS trg_session_project_identity_snapshots_revision_insert;
-DROP TRIGGER IF EXISTS trg_session_project_identity_snapshots_revision_update;
-DROP TRIGGER IF EXISTS trg_session_project_identity_snapshots_revision_delete;
-CREATE TRIGGER IF NOT EXISTS trg_project_identity_observations_revision_insert
-AFTER INSERT ON project_identity_observations BEGIN
-    INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
-    INSERT INTO project_identity_observation_changes (
-        project, machine, root_path, git_remote, revision, deleted
-    ) VALUES (
-        NEW.project, NEW.machine, NEW.root_path, NEW.git_remote,
-        (SELECT CAST(value AS INTEGER) FROM archive_metadata
-         WHERE key = 'project_identity_publication_revision'), 0
-    ) ON CONFLICT(project, machine, root_path, git_remote) DO UPDATE SET
-        revision = excluded.revision, deleted = 0;
-END;
-CREATE TRIGGER IF NOT EXISTS trg_project_identity_observations_revision_update
-AFTER UPDATE ON project_identity_observations BEGIN
-    INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
-    INSERT INTO project_identity_observation_changes (
-        project, machine, root_path, git_remote, revision, deleted
-    ) VALUES (
-        OLD.project, OLD.machine, OLD.root_path, OLD.git_remote,
-        (SELECT CAST(value AS INTEGER) FROM archive_metadata
-         WHERE key = 'project_identity_publication_revision'), 1
-    ) ON CONFLICT(project, machine, root_path, git_remote) DO UPDATE SET
-        revision = excluded.revision, deleted = 1;
-    INSERT INTO project_identity_observation_changes (
-        project, machine, root_path, git_remote, revision, deleted
-    ) VALUES (
-        NEW.project, NEW.machine, NEW.root_path, NEW.git_remote,
-        (SELECT CAST(value AS INTEGER) FROM archive_metadata
-         WHERE key = 'project_identity_publication_revision'), 0
-    ) ON CONFLICT(project, machine, root_path, git_remote) DO UPDATE SET
-        revision = excluded.revision, deleted = 0;
-END;
-CREATE TRIGGER IF NOT EXISTS trg_project_identity_observations_revision_delete
-AFTER DELETE ON project_identity_observations BEGIN
-    INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
-    INSERT INTO project_identity_observation_changes (
-        project, machine, root_path, git_remote, revision, deleted
-    ) VALUES (
-        OLD.project, OLD.machine, OLD.root_path, OLD.git_remote,
-        (SELECT CAST(value AS INTEGER) FROM archive_metadata
-         WHERE key = 'project_identity_publication_revision'), 1
-    ) ON CONFLICT(project, machine, root_path, git_remote) DO UPDATE SET
-        revision = excluded.revision, deleted = 1;
-END;
-CREATE TRIGGER IF NOT EXISTS trg_session_project_identity_snapshots_revision_insert
-AFTER INSERT ON session_project_identity_snapshots BEGIN
-    INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
-    INSERT INTO session_project_identity_snapshot_changes (
-        session_id, project, revision, deleted
-    ) VALUES (
-        NEW.session_id, NEW.project,
-        (SELECT CAST(value AS INTEGER) FROM archive_metadata
-         WHERE key = 'project_identity_publication_revision'), 0
-    ) ON CONFLICT(session_id, project) DO UPDATE SET
-        revision = excluded.revision, deleted = 0;
-END;
-CREATE TRIGGER IF NOT EXISTS trg_session_project_identity_snapshots_revision_update
-AFTER UPDATE ON session_project_identity_snapshots BEGIN
-    INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
-    INSERT INTO session_project_identity_snapshot_changes (
-        session_id, project, revision, deleted
-    ) VALUES (
-        OLD.session_id, OLD.project,
-        (SELECT CAST(value AS INTEGER) FROM archive_metadata
-         WHERE key = 'project_identity_publication_revision'), 1
-    ) ON CONFLICT(session_id, project) DO UPDATE SET
-        revision = excluded.revision, deleted = 1;
-    INSERT INTO session_project_identity_snapshot_changes (
-        session_id, project, revision, deleted
-    ) VALUES (
-        NEW.session_id, NEW.project,
-        (SELECT CAST(value AS INTEGER) FROM archive_metadata
-         WHERE key = 'project_identity_publication_revision'), 0
-    ) ON CONFLICT(session_id, project) DO UPDATE SET
-        revision = excluded.revision, deleted = 0;
-END;
-CREATE TRIGGER IF NOT EXISTS trg_session_project_identity_snapshots_revision_delete
-AFTER DELETE ON session_project_identity_snapshots BEGIN
-    INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
-    INSERT INTO session_project_identity_snapshot_changes (
-        session_id, project, revision, deleted
-    ) VALUES (
-        OLD.session_id, OLD.project,
-        (SELECT CAST(value AS INTEGER) FROM archive_metadata
-         WHERE key = 'project_identity_publication_revision'), 1
-    ) ON CONFLICT(session_id, project) DO UPDATE SET
-        revision = excluded.revision, deleted = 1;
-END;
 `
 
 const projectIdentitySnapshotInvariantSchemaSQL = `

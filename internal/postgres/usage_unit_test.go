@@ -113,13 +113,13 @@ func (c *usageProbeConn) QueryContext(
 			}},
 		}, nil
 	}
-	if strings.Contains(normalized, "from source_archives") {
+	if strings.Contains(normalized, "source_archives") {
 		return &usageProbeRows{
 			columns: []string{"source_archive_id", "source_archive_salt"},
 			values:  [][]driver.Value{{"probe-archive", "probe-salt"}},
 		}, nil
 	}
-	if strings.Contains(normalized, "from source_project_identity_observations") {
+	if strings.Contains(normalized, "source_project_identity_observations") {
 		return &usageProbeRows{
 			columns: []string{
 				"project",
@@ -236,9 +236,7 @@ func (r *usageProbeRows) Next(dest []driver.Value) error {
 }
 
 func TestPGGetDailyUsageReturnsDedupedSessionCounts(t *testing.T) {
-	store := &Store{
-		pg: newUsageProbeDB(t, &usageProbeState{}),
-	}
+	store := newStore(newUsageProbeDB(t, &usageProbeState{}))
 
 	result, err := store.GetDailyUsage(context.Background(), db.UsageFilter{
 		From: "2024-06-15",

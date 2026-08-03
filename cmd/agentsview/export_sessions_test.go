@@ -574,7 +574,11 @@ func TestExportSessionsUpgradeRequiresBackgroundEvidenceBackfill(t *testing.T) {
 	require.NoError(t, database.Close())
 	raw, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = raw.Exec(`DROP TABLE session_project_identity_snapshots`)
+	_, err = raw.Exec(`
+		DROP TABLE session_project_identity_snapshots;
+		DELETE FROM source_session_project_identity_snapshots
+		WHERE source_session_id = 'legacy'
+	`)
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 
