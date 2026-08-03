@@ -165,7 +165,7 @@ func TestBunStoreMutationContract(t *testing.T) {
 
 func TestBunStoreRecallContract(t *testing.T) {
 	storetest.RunRecallContract(t, storetest.RecallBackend{
-		Name: "sqlite", Writable: true,
+		Name: "sqlite", Readable: true, Writable: true,
 		Open: func(t *testing.T) storetest.RecallStore {
 			database, err := db.Open(filepath.Join(t.TempDir(), "recall-contract.db"))
 			require.NoError(t, err)
@@ -175,6 +175,35 @@ func TestBunStoreRecallContract(t *testing.T) {
 				Machine: "contract-machine", Agent: "codex",
 			}))
 			return database.BunStore
+		},
+	})
+}
+
+func TestBunStoreReadOnlyRecallContract(t *testing.T) {
+	storetest.RunRecallContract(t, storetest.RecallBackend{
+		Name: "sqlite-read-only", Readable: true,
+		Open: func(t *testing.T) storetest.RecallStore {
+			path := filepath.Join(t.TempDir(), "read-only-recall-contract.db")
+			database, err := db.Open(path)
+			require.NoError(t, err)
+			require.NoError(t, database.UpsertSession(db.Session{
+				ID: "bun-recall-source", Project: "recall-contract",
+				Machine: "contract-machine", Agent: "codex",
+			}))
+			_, err = database.InsertRecallEntry(db.RecallEntry{
+				ID: "bun-recall-entry", Type: "fact", Scope: "project",
+				Title:   "Canonical Recall entry",
+				Body:    "Recall reads remain available from a read-only archive.",
+				Project: "recall-contract", SourceSessionID: "bun-recall-source",
+				Transferable: true, ProvenanceOK: true,
+			})
+			require.NoError(t, err)
+			require.NoError(t, database.Close())
+
+			readOnly, err := db.OpenReadOnly(path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, readOnly.Close()) })
+			return readOnly.BunStore
 		},
 	})
 }
