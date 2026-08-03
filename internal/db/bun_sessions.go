@@ -79,6 +79,15 @@ func SQLiteBunSessionQueryDialect() QueryDialect {
 			", ''), " + q("created_at") + "))"
 	}
 	dialect.dateParam = sqlite.dateParam
+	dialect.timestampOrderExpr = func(column string) string {
+		return "julianday(NULLIF(" + column + ", ''))"
+	}
+	dialect.castCursor = func(placeholder string, kind valueKind) string {
+		if kind == kindTimestamp {
+			return "julianday(" + placeholder + ")"
+		}
+		return placeholder
+	}
 	return dialect
 }
 
@@ -252,24 +261,30 @@ func (s *BunStore) getSession(
 	ctx context.Context, id string, includeDeleted bool,
 ) (*Session, error) {
 	var row bunmodel.Session
+	var session Session
 	err := s.view(ctx, func(store bun.IDB) error {
 		query := store.NewSelect().Model(&row).Where("id = ?", id)
 		if !includeDeleted {
 			query = query.Where("deleted_at IS NULL")
 		}
-		return query.Scan(ctx)
+		if err := query.Scan(ctx); err != nil {
+			return err
+		}
+		if includeDeleted {
+			session = visibleSessionFromBunRow(row)
+			if hydrator, ok := s.backend.(bunSessionFullHydrator); ok {
+				return hydrator.HydrateSessionFull(ctx, store, &session)
+			}
+			return nil
+		}
+		session = baseSessionFromBunRow(row)
+		return nil
 	})
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("getting session %s: %w", id, err)
-	}
-	var session Session
-	if includeDeleted {
-		session = visibleSessionFromBunRow(row)
-	} else {
-		session = baseSessionFromBunRow(row)
 	}
 	return &session, nil
 }

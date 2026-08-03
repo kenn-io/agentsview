@@ -47,7 +47,11 @@ type QueryDialect struct {
 	// portableEmptyTimestamp uses a CASE/CAST expression accepted by all Bun
 	// backends so shared queries can read shipped SQLite empty strings while
 	// retaining native timestamp values on PostgreSQL and DuckDB.
-	portableEmptyTimestamp      bool
+	portableEmptyTimestamp bool
+	// timestampOrderExpr renders one timestamp sort operand. SQLite uses
+	// julianday so ordering and cursor predicates compare instants rather than
+	// the archive's mixed textual representations.
+	timestampOrderExpr          func(string) string
 	terminationExpr             string
 	terminationKind             timestampKind
 	caseInsensitiveLike         string
@@ -329,6 +333,9 @@ func duckCastCursor(ph string, kind valueKind) string {
 // SQLite stores empty strings for missing timestamps; other backends use real
 // NULLs, so the column reference passes through unchanged.
 func (d QueryDialect) timestampExpr(col string) string {
+	if d.timestampOrderExpr != nil {
+		return d.timestampOrderExpr(col)
+	}
 	if d.portableEmptyTimestamp {
 		return "CASE WHEN CAST(" + col + " AS VARCHAR) = '' THEN NULL ELSE " + col + " END"
 	}

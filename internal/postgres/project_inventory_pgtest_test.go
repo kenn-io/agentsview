@@ -175,7 +175,7 @@ func TestPGProjectInventoryMatchesSQLite(t *testing.T) {
 	localInv, err := localDB.GetProjectInventory(ctx)
 	require.NoError(t, err, "local GetProjectInventory")
 
-	pgStore := &Store{pg: pg}
+	pgStore := newStore(pg)
 	pgInv, err := pgStore.GetProjectInventory(ctx)
 	require.NoError(t, err, "pg GetProjectInventory")
 
@@ -224,7 +224,7 @@ func TestPGProjectInventoryKeepsSanitizedLabelCollisionsDistinct(t *testing.T) {
 	_, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err, "Push")
 
-	inv, err := (&Store{pg: pg}).GetProjectInventory(ctx)
+	inv, err := newStore(pg).GetProjectInventory(ctx)
 	require.NoError(t, err)
 	require.Len(t, inv.Projects, 2)
 	assert.Equal(t, 2, inv.TotalProjects)
@@ -256,7 +256,7 @@ func TestPGProjectInventoryIgnoresUnattributedSessions(t *testing.T) {
 	_, err := sync.Push(ctx, false, nil)
 	require.NoError(t, err, "Push")
 
-	pgStore := &Store{pg: pg}
+	pgStore := newStore(pg)
 	before, err := pgStore.GetProjectInventory(ctx)
 	require.NoError(t, err, "GetProjectInventory before")
 	require.Equal(t, 2, before.GovernedSessions,
@@ -360,7 +360,7 @@ func TestPGProjectInventoryCrossArchiveIsolation(t *testing.T) {
 		 '/repos/shared', '2024-03-02T00:00:00Z', $1)`, archiveC)
 	require.NoError(t, err, "seed archive C session")
 
-	pgStore := &Store{pg: pg}
+	pgStore := newStore(pg)
 	inv, err := pgStore.GetProjectInventory(ctx)
 	require.NoError(t, err, "GetProjectInventory")
 

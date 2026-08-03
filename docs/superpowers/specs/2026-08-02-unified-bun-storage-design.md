@@ -217,6 +217,13 @@ same cutover redirects subsequent writes, so the old tables are not a runtime
 fallback or dual-write path. PostgreSQL and DuckDB already use the canonical
 source-scoped identity shape.
 
+Opaque project selector keys use the aggregate identity scope derived from the
+complete canonical `source_archives` set on every backend. SQLite does not keep
+its former local-archive-only scope after cutover. An archive that already
+contains multiple source archives may therefore receive new opaque selector keys
+once at cutover; callers must treat those keys as response-scoped opaque
+identifiers, not durable aliases. No dual key or compatibility lookup remains.
+
 `sessions.source_archive_id` and `sessions.source_database_generation` are
 required publication provenance. Normal SQLite session writers read the stable
 archive ID and database ID under the guarded handle and stamp both values in the

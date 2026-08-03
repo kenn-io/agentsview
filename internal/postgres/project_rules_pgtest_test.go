@@ -71,7 +71,7 @@ func TestPGProjectRulesMatchesSQLite(t *testing.T) {
 	localRules, err := localDB.ListProjectRules(ctx, "m1")
 	require.NoError(t, err, "local ListProjectRules")
 
-	pgStore := &Store{pg: pg}
+	pgStore := newStore(pg)
 	pgRules, err := pgStore.ListProjectRules(ctx, "m1")
 	require.NoError(t, err, "pg ListProjectRules")
 
@@ -140,7 +140,7 @@ func TestPGProjectRulesEmptyMachineMatchesSQLite(t *testing.T) {
 	require.NotEmpty(t, localRules.Machines,
 		"sanity: SQLite's machine list stays populated regardless of the filter")
 
-	pgStore := &Store{pg: pg}
+	pgStore := newStore(pg)
 	pgRules, err := pgStore.ListProjectRules(ctx, "")
 	require.NoError(t, err, "pg ListProjectRules")
 
@@ -204,7 +204,7 @@ func TestPGProjectRulesCrossArchiveIsolation(t *testing.T) {
 	localArchiveID, err := localDB.GetArchiveID(ctx)
 	require.NoError(t, err, "GetArchiveID")
 
-	pgStore := &Store{pg: pg}
+	pgStore := newStore(pg)
 	rules, err := pgStore.ListProjectRules(ctx, "shared-machine")
 	require.NoError(t, err, "ListProjectRules")
 

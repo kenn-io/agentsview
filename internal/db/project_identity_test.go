@@ -18,7 +18,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
 
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 	"go.kenn.io/agentsview/internal/export"
 )
 
@@ -318,6 +320,16 @@ func TestCopyArchiveIdentityFromPreservesLogicalArchiveAndNewGeneration(
 	databaseID, err := target.GetDatabaseID(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, "new-generation", databaseID)
+
+	var sourceArchives []bunmodel.SourceArchive
+	require.NoError(t, target.view(ctx, func(store bun.IDB) error {
+		return store.NewSelect().Model(&sourceArchives).
+			OrderExpr("source_archive_id ASC").Scan(ctx)
+	}))
+	assert.Equal(t, []bunmodel.SourceArchive{{
+		SourceArchiveID: "stable-archive", SourceArchiveSalt: strings.Repeat("a", 64),
+	}}, sourceArchives,
+		"copying the logical archive identity must retire the temporary identity")
 }
 
 func TestProjectObservationArchiveSaltIsCreatedAndStable(t *testing.T) {

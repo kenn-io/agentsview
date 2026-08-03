@@ -53,7 +53,7 @@ func TestBunStoreIdentityContract(t *testing.T) {
 				)
 				return insertErr
 			}))
-			return database.BunStore, fixture
+			return database, fixture
 		},
 	})
 }

@@ -276,6 +276,12 @@ func TestLegacySchemaCommonConvergenceAddsCompleteMappingShape(t *testing.T) {
 			enabled INTEGER NOT NULL DEFAULT 1,
 			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
 			PRIMARY KEY (source_archive_id, machine, path_prefix)
+		);
+		INSERT INTO worktree_project_mappings (
+			id, machine, path_prefix, layout, project, enabled
+		) VALUES (
+			72, 'legacy-machine', '/work/legacy-second',
+			'explicit', 'legacy-project', 1
 		)`)
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
@@ -294,6 +300,28 @@ func TestLegacySchemaCommonConvergenceAddsCompleteMappingShape(t *testing.T) {
 			WHERE name = ?`, column).Scan(&count))
 		assert.Equal(t, 1, count, column)
 	}
+	rows, err := conn.QueryContext(t.Context(), `
+		SELECT id, path_prefix
+		FROM source_worktree_project_mappings
+		WHERE machine = 'legacy-machine'
+		ORDER BY id`)
+	require.NoError(t, err)
+	defer rows.Close()
+	type mappingIdentity struct {
+		id     int64
+		prefix string
+	}
+	var mappings []mappingIdentity
+	for rows.Next() {
+		var mapping mappingIdentity
+		require.NoError(t, rows.Scan(&mapping.id, &mapping.prefix))
+		mappings = append(mappings, mapping)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []mappingIdentity{
+		{id: 71, prefix: "/work/legacy"},
+		{id: 72, prefix: "/work/legacy-second"},
+	}, mappings)
 }
 
 func TestLegacySchemaStampedCommonSchemaRejectsTriggerDriftWithoutRepair(
