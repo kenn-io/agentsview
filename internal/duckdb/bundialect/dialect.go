@@ -11,7 +11,7 @@ import (
 	"github.com/uptrace/bun/schema"
 )
 
-const duckDBName dialect.Name = 100
+const duckDBName dialect.Name = -1
 
 const features = feature.CTE |
 	feature.WithValues |

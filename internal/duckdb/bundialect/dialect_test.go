@@ -32,6 +32,7 @@ func TestDialectIdentityIsDuckDBSpecific(t *testing.T) {
 	d := New()
 
 	assert.Equal(t, "custom", d.Name().String())
+	assert.NotEqual(t, dialect.Invalid, d.Name())
 	assert.NotEqual(t, dialect.SQLite, d.Name())
 	assert.NotEqual(t, dialect.PG, d.Name())
 	assert.Equal(t, "main", d.DefaultSchema())

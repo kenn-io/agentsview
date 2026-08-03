@@ -89,6 +89,45 @@ func TestDialectExecutesCanonicalBunQueries(t *testing.T) {
 	assert.Equal(t, want.OccurredAt, got.OccurredAt)
 }
 
+func TestDialectAutoincrementTagRemainsSourceAssigned(t *testing.T) {
+	store := openDialectTestDB(t)
+	ctx := t.Context()
+
+	_, err := store.NewCreateTable().Model((*dialectTypeFixture)(nil)).Exec(ctx)
+	require.NoError(t, err)
+	_, err = store.NewInsert().Model(&dialectTypeFixture{
+		ID: 41, Name: "source-id",
+	}).Exec(ctx)
+	require.NoError(t, err)
+
+	var gotID int64
+	err = store.NewSelect().Model((*dialectTypeFixture)(nil)).
+		Column("id").Where("id = ?", 41).Scan(ctx, &gotID)
+	require.NoError(t, err)
+	assert.Equal(t, int64(41), gotID)
+
+	var defaultExpression *string
+	err = store.NewRaw(`
+		SELECT column_default
+		FROM information_schema.columns
+		WHERE table_schema = 'main'
+		  AND table_name = 'dialect_type_fixtures'
+		  AND column_name = 'id'
+	`).Scan(ctx, &defaultExpression)
+	require.NoError(t, err)
+	assert.Nil(t, defaultExpression)
+
+	var sequenceCount int
+	err = store.NewRaw(`
+		SELECT count(*)
+		FROM duckdb_sequences()
+		WHERE schema_name = 'main'
+		  AND sequence_name LIKE 'dialect_type_fixtures%'
+	`).Scan(ctx, &sequenceCount)
+	require.NoError(t, err)
+	assert.Zero(t, sequenceCount)
+}
+
 func TestDialectAdvertisedFeaturesExecute(t *testing.T) {
 	store := openDialectTestDB(t)
 	ctx := t.Context()
