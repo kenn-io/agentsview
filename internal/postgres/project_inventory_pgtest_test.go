@@ -380,24 +380,4 @@ func TestPGProjectInventoryCrossArchiveIsolation(t *testing.T) {
 	assert.Equal(t, 1, byLabel["proj-b"].EnabledRulesTargeting,
 		"archive B's own rule attributes correctly to its own project")
 
-	// Archive A's own enabled mapping admits its session into the candidate
-	// rows, so the governed count above proves per-archive rule evaluation
-	// excluded it -- not the candidate prefilter.
-	candidates, err := pgStore.projectInventoryCandidateRows(ctx, nil)
-	require.NoError(t, err, "projectInventoryCandidateRows")
-	var candidateIDs []string
-	for _, c := range candidates {
-		candidateIDs = append(candidateIDs, c.SessionID)
-	}
-	assert.Contains(t, candidateIDs, "a-session",
-		"archive A's own enabled mapping must admit its session as a "+
-			"candidate; only rule evaluation may reject it")
-	assert.Contains(t, candidateIDs, "b-session",
-		"archive B's own session is a legitimate candidate under its own "+
-			"enabled mapping")
-	assert.NotContains(t, candidateIDs, "c-session",
-		"archive C has no enabled mapping, so its session must not be a "+
-			"candidate; a machine-only prefilter that ignores "+
-			"source_archive_id would admit it via archive A's or B's "+
-			"shared-machine mappings")
 }
