@@ -32,7 +32,10 @@ type fsnotifyBackend struct {
 	runtimeBudget     int
 	rootScopes        map[string][]PollingScope
 	degradedRoots     map[string]struct{}
+	pending           map[string]struct{}
+	lifecycleOwned    map[string]struct{}
 	onPollingRequired func(PollingObligation) error
+	onPollingReleased func(string) error
 	lifecycleMu       sync.Mutex
 	lifecycle         fsnotifyBackendLifecycle
 	stop              chan struct{}
@@ -69,6 +72,8 @@ func newFSNotifyBackend(excludes []string) (*fsnotifyBackend, error) {
 		watchBudgetCost: make(map[string]int),
 		rootScopes:      make(map[string][]PollingScope),
 		degradedRoots:   make(map[string]struct{}),
+		pending:         make(map[string]struct{}),
+		lifecycleOwned:  make(map[string]struct{}),
 		stop:            make(chan struct{}),
 		done:            make(chan struct{}),
 	}, nil
@@ -76,6 +81,20 @@ func newFSNotifyBackend(excludes []string) (*fsnotifyBackend, error) {
 
 func (b *fsnotifyBackend) Events() <-chan backendEvent { return b.events }
 func (b *fsnotifyBackend) Errors() <-chan error        { return b.errors }
+
+func (b *fsnotifyBackend) ownPendingRecursiveRoot(path string) {
+	b.watchMu.Lock()
+	defer b.watchMu.Unlock()
+	path = filepath.Clean(path)
+	b.pending[path] = struct{}{}
+	b.lifecycleOwned[path] = struct{}{}
+}
+
+func (b *fsnotifyBackend) setRuntimeWatchBudget(budget int) {
+	b.watchMu.Lock()
+	defer b.watchMu.Unlock()
+	b.runtimeBudget = max(budget, 0)
+}
 
 func (b *fsnotifyBackend) AddRecursive(root string, budget int) RecursiveWatchResult {
 	b.watchMu.Lock()
@@ -157,11 +176,12 @@ func (b *fsnotifyBackend) setWatchRootPlan(roots []WatchRoot) {
 
 func (b *fsnotifyBackend) bindPollingOwnership(
 	required func(PollingObligation) error,
-	_ func(string) error,
+	released func(string) error,
 ) {
 	b.watchMu.Lock()
 	defer b.watchMu.Unlock()
 	b.onPollingRequired = required
+	b.onPollingReleased = released
 }
 
 func (b *fsnotifyBackend) AddShallow(root string) error {
@@ -366,6 +386,19 @@ func (b *fsnotifyBackend) watchCreatedPath(path string) (backendItemType, bool) 
 	}
 
 	b.watchMu.Lock()
+	path = filepath.Clean(path)
+	if _, pending := b.pending[path]; pending {
+		delete(b.pending, path)
+		b.addRecursiveRoot(path)
+		degraded := b.addRuntimeSubtreeLocked(path, []string{path})
+		b.watchMu.Unlock()
+		if len(degraded) > 0 {
+			b.requireRuntimePolling(degraded)
+		} else {
+			b.releaseRuntimePolling(path)
+		}
+		return backendItemDirectory, false
+	}
 	if b.isUnderShallowRoot(path) {
 		b.watchMu.Unlock()
 		return backendItemDirectory, false
@@ -451,6 +484,13 @@ func (b *fsnotifyBackend) forgetRemovedSubtree(path string) (bool, []string) {
 	path = filepath.Clean(path)
 	removed := make([]string, 0)
 	lostRoots := make(map[string]struct{})
+	lifecycleRemoved := false
+	for root := range b.lifecycleOwned {
+		if pathAtOrBelow(path, root) {
+			b.pending[root] = struct{}{}
+			lifecycleRemoved = true
+		}
+	}
 	for watched := range b.watchOwners {
 		if pathAtOrBelow(path, watched) {
 			removed = append(removed, watched)
@@ -462,7 +502,7 @@ func (b *fsnotifyBackend) forgetRemovedSubtree(path string) (bool, []string) {
 		}
 	}
 	if len(removed) == 0 {
-		return false, nil
+		return lifecycleRemoved, nil
 	}
 	slices.Sort(removed)
 	for _, watched := range removed {
@@ -474,6 +514,13 @@ func (b *fsnotifyBackend) forgetRemovedSubtree(path string) (bool, []string) {
 			))
 		}
 		b.reclaimWatchBudgetLocked(watched)
+	}
+	for root := range lostRoots {
+		if _, owned := b.lifecycleOwned[root]; !owned {
+			continue
+		}
+		b.pending[root] = struct{}{}
+		delete(lostRoots, root)
 	}
 	roots := make([]string, 0, len(lostRoots))
 	for root := range lostRoots {
@@ -523,6 +570,26 @@ func (b *fsnotifyBackend) requireRuntimePolling(roots []string) {
 		b.watchMu.Lock()
 		b.degradedRoots[root] = struct{}{}
 		b.watchMu.Unlock()
+	}
+}
+
+func (b *fsnotifyBackend) releaseRuntimePolling(root string) {
+	root = filepath.Clean(root)
+	b.watchMu.Lock()
+	if _, required := b.degradedRoots[root]; !required {
+		b.watchMu.Unlock()
+		return
+	}
+	delete(b.degradedRoots, root)
+	released := b.onPollingReleased
+	b.watchMu.Unlock()
+	if released == nil {
+		return
+	}
+	if err := released("fsnotify-runtime:" + root); err != nil {
+		b.reportError(fmt.Errorf(
+			"release fsnotify polling for %s: %w", root, err,
+		))
 	}
 }
 

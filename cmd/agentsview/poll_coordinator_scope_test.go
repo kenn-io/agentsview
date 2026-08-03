@@ -145,6 +145,138 @@ func TestUnwatchedPollIssuesOneGroupedReconcilePerPass(t *testing.T) {
 	}
 }
 
+func TestUnwatchedPollCoverageFilteringKeepsUncoveredUnits(t *testing.T) {
+	coordinator := &sharedUnwatchedPollCoordinator{
+		coverageState: map[string]*boundedCoverageState{
+			"opencode-db": {
+				binding: agentsync.BoundedCoverageBinding{
+					Key: "opencode-db", Agent: parser.AgentOpenCode,
+					DBPath: filepath.Join("/data", "opencode.db"),
+				}, nativeAdmitted: true,
+			},
+			"poll-owned": {
+				binding: agentsync.BoundedCoverageBinding{
+					Key: "poll-owned", Agent: parser.AgentOpenCode,
+					DBPath: filepath.Join("/data", "poll.db"),
+				}, pollOwned: true,
+			},
+		},
+	}
+	groups := map[parser.AgentType][]string{
+		"":                   {filepath.Join("/data")},
+		parser.AgentOpenCode: {filepath.Join("/data")},
+		parser.AgentClaude:   {filepath.Join("/data")},
+	}
+	filtered := coordinator.excludeAdmittedCoverageScopes(groups)
+	assert.Contains(t, filtered[""], filepath.Join("/data"),
+		"an empty-agent pass must retain providers and units not covered by one binding")
+	assert.Contains(t, filtered[parser.AgentOpenCode], filepath.Join("/data"),
+		"a provider root must remain when only a child DB unit is admitted")
+	assert.Contains(t, filtered[parser.AgentClaude], filepath.Join("/data"),
+		"an unrelated provider must remain pollable")
+
+	filtered = coordinator.excludeAdmittedCoverageScopes(map[parser.AgentType][]string{
+		parser.AgentOpenCode: {filepath.Join("/data", "poll.db")},
+	})
+	assert.Empty(t, filtered[parser.AgentOpenCode],
+		"only the exact admitted physical unit may be excluded")
+}
+
+type coverageCoordinatorFixture struct {
+	bindings   []agentsync.BoundedCoverageBinding
+	checkpoint parser.OpenCodeCoverageCheckpoint
+	primes     int
+}
+
+func (f *coverageCoordinatorFixture) BoundedCoverageBindings(
+	context.Context, []agentsync.BoundedCoverageRoot,
+) ([]agentsync.BoundedCoverageBinding, error) {
+	return append([]agentsync.BoundedCoverageBinding(nil), f.bindings...), nil
+}
+
+func (f *coverageCoordinatorFixture) BoundedCoverageBindingsForPaths(
+	context.Context, []string,
+) ([]agentsync.BoundedCoverageBinding, []string, error) {
+	return append([]agentsync.BoundedCoverageBinding(nil), f.bindings...), nil, nil
+}
+
+func (f *coverageCoordinatorFixture) DrainBoundedCoverage(
+	context.Context, agentsync.BoundedCoverageBinding,
+	parser.OpenCodeCoverageCheckpoint,
+) (parser.OpenCodeFeedResult, []parser.SourceRef, error) {
+	return parser.OpenCodeFeedResult{Next: f.checkpoint}, nil, nil
+}
+
+func (f *coverageCoordinatorFixture) ApplyBoundedCoverageSources(
+	context.Context, []parser.SourceRef,
+) (agentsync.SyncStats, error) {
+	return agentsync.SyncStats{}, nil
+}
+
+func (f *coverageCoordinatorFixture) PrimeBoundedCoverage(
+	context.Context, agentsync.BoundedCoverageBinding,
+) (parser.OpenCodeCoverageCheckpoint, error) {
+	f.primes++
+	return f.checkpoint, nil
+}
+
+func TestNativeWakeAfterStartupPrimeDoesNotOwnPolling(t *testing.T) {
+	binding := agentsync.BoundedCoverageBinding{Key: "native", DBPath: "/data/opencode.db"}
+	fixture := &coverageCoordinatorFixture{
+		bindings:   []agentsync.BoundedCoverageBinding{binding},
+		checkpoint: parser.OpenCodeCoverageCheckpoint{Initialized: true},
+	}
+	coordinator := &sharedUnwatchedPollCoordinator{
+		coverage: fixture, coverageState: make(map[string]*boundedCoverageState),
+	}
+	require.NoError(t, coordinator.PrimeBoundedCoverage(t.Context(), nil))
+	coordinator.WakeBoundedCoverage([]agentsync.BoundedCoverageBinding{binding})
+
+	state := coordinator.coverageState[binding.Key]
+	require.NotNil(t, state)
+	assert.True(t, state.nativeAdmitted)
+	assert.False(t, state.pollOwned,
+		"a native wake must not acquire degraded polling ownership")
+	assert.True(t, state.pendingWake)
+	assert.Equal(t, 1, fixture.primes)
+}
+
+func TestRefreshPrimesNewPollingBindingsAndPreservesNativeState(t *testing.T) {
+	binding := agentsync.BoundedCoverageBinding{Key: "poll", DBPath: "/data/opencode.db"}
+	other := agentsync.BoundedCoverageBinding{Key: "native", DBPath: "/data/other.db"}
+	fixture := &coverageCoordinatorFixture{
+		bindings:   []agentsync.BoundedCoverageBinding{binding},
+		checkpoint: parser.OpenCodeCoverageCheckpoint{Initialized: true},
+	}
+	coordinator := &sharedUnwatchedPollCoordinator{
+		coverage: fixture,
+		coverageState: map[string]*boundedCoverageState{
+			other.Key: {binding: other, nativeAdmitted: true,
+				checkpoint: parser.OpenCodeCoverageCheckpoint{SchemaVersion: 7}},
+		},
+	}
+	require.NoError(t, coordinator.refreshBoundedCoverage(map[string]pollingObligation{
+		"degraded": {Key: "degraded", Scopes: []pollingScope{{Root: "/data"}}},
+	}))
+
+	pollState := coordinator.coverageState[binding.Key]
+	require.NotNil(t, pollState)
+	assert.False(t, pollState.pollOwned,
+		"a newly visible unit stays ordinary until its current pass completes")
+	assert.True(t, pollState.admissionPending)
+	assert.Equal(t, 1, fixture.primes)
+	coordinator.setPollObligations(map[string]pollingObligation{
+		"degraded": {Key: "degraded", Scopes: []pollingScope{{Root: "/data"}}},
+	})
+	require.NoError(t, coordinator.primeAfterOrdinaryPoll(t.Context()))
+	assert.True(t, coordinator.coverageState[binding.Key].pollOwned)
+	assert.False(t, coordinator.coverageState[binding.Key].admissionPending)
+	assert.Equal(t, parser.OpenCodeCoverageCheckpoint{SchemaVersion: 7},
+		coordinator.coverageState[other.Key].checkpoint,
+		"refresh must retain unaffected native state")
+	assert.False(t, coordinator.coverageState[other.Key].pollOwned)
+}
+
 // TestUnwatchedPollDoesNotDragUnrelatedProvidersThroughOneProvidersGap is the
 // reproduction test: one provider's degraded coverage must not cause an
 // authoritative pass for any other provider.

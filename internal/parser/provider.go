@@ -672,6 +672,7 @@ func watchRootMetadata(roots []WatchRoot) []WatchRoot {
 		out = append(out, WatchRoot{
 			Path:        root.Path,
 			Recursive:   root.Recursive,
+			Optional:    root.Optional,
 			DebounceKey: root.DebounceKey,
 		})
 	}
@@ -685,6 +686,7 @@ func watchRootMetadata(roots []WatchRoot) []WatchRoot {
 type WatchRoot struct {
 	Path         string
 	Recursive    bool
+	Optional     bool
 	IncludeGlobs []string
 	ExcludeGlobs []string
 	DebounceKey  string

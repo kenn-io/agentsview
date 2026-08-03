@@ -106,10 +106,12 @@ func newArchivePushUnwatchedPoller(
 		return hooks.newUnwatchedPoller(ctx, engine)
 	}
 	ticker := time.NewTicker(unwatchedPollInterval)
-	return newUnwatchedPollCoordinatorWithTicks(
+	poller := newUnwatchedPollCoordinatorWithTicks(
 		ctx, engine, ticker.C, ticker.Stop, func(work func()) { work() }, nil,
 		time.Now, time.After,
 	)
+	poller.DisableBoundedCoverage()
+	return poller
 }
 
 func startArchivePushWatcher(

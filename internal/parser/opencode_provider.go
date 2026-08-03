@@ -59,7 +59,7 @@ func (f openCodeFormatProviderFactory) Definition() AgentDef {
 }
 
 func (f openCodeFormatProviderFactory) Capabilities() Capabilities {
-	return openCodeFormatProviderCapabilities()
+	return openCodeFormatProviderCapabilities(f.def.Type)
 }
 
 func (f openCodeFormatProviderFactory) NewProvider(cfg ProviderConfig) Provider {
@@ -67,7 +67,7 @@ func (f openCodeFormatProviderFactory) NewProvider(cfg ProviderConfig) Provider 
 	return &openCodeFormatProvider{
 		ProviderBase: ProviderBase{
 			Def:    cloneAgentDef(f.def),
-			Caps:   openCodeFormatProviderCapabilities(),
+			Caps:   openCodeFormatProviderCapabilities(f.def.Type),
 			Config: cfg,
 		},
 		sources: newOpenCodeFormatSourceSet(
@@ -331,12 +331,6 @@ func (spec openCodeProviderSpec) discover(root string) []DiscoveredFile {
 // path) by raw session ID under a root.
 func (spec openCodeProviderSpec) find(root, sessionID string) string {
 	return findOpenCodeFormatSourceFile(spec.format, root, sessionID)
-}
-
-// watchRoots returns the directories that should be watched for live
-// updates under a configured root.
-func (spec openCodeProviderSpec) watchRoots(root string) []string {
-	return resolveOpenCodeFormatWatchRoots(spec.format, root)
 }
 
 // storageIDs returns the set of session IDs present as storage JSON
@@ -666,20 +660,37 @@ func (s openCodeFormatSourceSet) discoverStorageEach(
 func (s openCodeFormatSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 	roots := make([]WatchRoot, 0, len(s.roots))
 	for _, root := range s.roots {
-		for _, watchRoot := range s.spec.watchRoots(root) {
-			roots = append(roots, WatchRoot{
-				Path:      watchRoot,
-				Recursive: true,
-				IncludeGlobs: []string{
-					"*.json",
-					s.spec.dbName,
-					s.spec.dbName + "-wal",
-				},
-				DebounceKey: string(s.spec.agent) + ":opencode:" + watchRoot,
-			})
-		}
+		roots = append(roots, s.watchUnits(root)...)
 	}
 	return WatchPlan{Roots: roots}, nil
+}
+
+// watchUnits returns the coverage units for one configured root. The shallow
+// container unit is always emitted: the SQLite database, its WAL, and the
+// storage/ directory lifecycle are all direct children of the root, and a
+// non-recursive watch never competes for the shared recursive watch budget,
+// so SQLite coverage cannot be starved by archive size. The recursive storage
+// unit is emitted from the configured plan even when <root>/storage is absent.
+// It remains observable for creation and removal, but its absence does not
+// make the SQLite container unavailable.
+func (s openCodeFormatSourceSet) watchUnits(root string) []WatchRoot {
+	units := []WatchRoot{{
+		Path:      root,
+		Recursive: false,
+		IncludeGlobs: []string{
+			s.spec.dbName,
+			s.spec.dbName + "-wal",
+		},
+		DebounceKey: string(s.spec.agent) + ":container:" + root,
+	}}
+	units = append(units, WatchRoot{
+		Path:         filepath.Join(root, "storage"),
+		Recursive:    true,
+		Optional:     true,
+		IncludeGlobs: []string{"*.json"},
+		DebounceKey:  string(s.spec.agent) + ":storage:" + root,
+	})
+	return units
 }
 
 // reconciliationContainer maps a requested path to the SQLite container that
@@ -715,6 +726,9 @@ func (s openCodeFormatSourceSet) SourcesForChangedPath(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if !s.unitScopeAllows(req) {
+		return nil, nil
+	}
 	if dbPath, _, virtual := s.spec.parseVirtual(req.Path); virtual {
 		for _, root := range s.roots {
 			if _, under := relUnder(root, dbPath); !under {
@@ -744,6 +758,47 @@ func (s openCodeFormatSourceSet) SourcesForChangedPath(
 		}
 	}
 	return nil, nil
+}
+
+// unitScopeAllows scopes changed-path classification to the coverage unit
+// that observed the path. The engine calls SourcesForChangedPath once per
+// emitted watch root per event, so with two units per root an unscoped WAL
+// event would run the SQLite fan-out twice. A request whose path (or, for a
+// virtual path, its physical database path) lies outside req.WatchRoot is
+// another unit's event and yields no sources; when the container unit's root
+// also emits a recursive storage unit, paths inside that storage subtree
+// belong to the storage unit so exactly one unit claims each changed path.
+// An empty req.WatchRoot preserves unscoped behavior for callers that do not
+// dispatch per watch root.
+func (s openCodeFormatSourceSet) unitScopeAllows(req ChangedPathRequest) bool {
+	if req.WatchRoot == "" {
+		return true
+	}
+	path := req.Path
+	if dbPath, _, virtual := s.spec.parseVirtual(req.Path); virtual {
+		path = dbPath
+	}
+	if !pathAtOrUnder(req.WatchRoot, path) {
+		return false
+	}
+	watchRoot := filepath.Clean(req.WatchRoot)
+	for _, root := range s.roots {
+		if watchRoot != filepath.Clean(root) {
+			continue
+		}
+		_, insideStorage := relUnder(filepath.Join(root, "storage"), path)
+		return !insideStorage
+	}
+	return true
+}
+
+// pathAtOrUnder reports whether path is root itself or contained within it.
+func pathAtOrUnder(root, path string) bool {
+	if filepath.Clean(root) == filepath.Clean(path) {
+		return true
+	}
+	_, under := relUnder(root, path)
+	return under
 }
 
 func (s openCodeFormatSourceSet) SourceForReconciliation(
@@ -1500,12 +1555,18 @@ func findOpenCodeProviderStorageSessionIDByMessageID(
 	return ""
 }
 
-func openCodeFormatProviderCapabilities() Capabilities {
+func openCodeFormatProviderCapabilities(_ AgentType) Capabilities {
+	// All opencode-format providers declare BoundedCoverage as supported,
+	// regardless of agent name. Per-container schema admission happens at
+	// coverage unit creation time via ProbeOpenCodeJournalCapability, so
+	// containers that do not carry the live event journal (Kilo, MiMoCode,
+	// ICodeMate) are gated by schema evidence rather than agent name.
 	return Capabilities{
 		Source: SourceCapabilities{
 			DiscoverSources:       CapabilitySupported,
 			StreamingDiscovery:    CapabilitySupported,
 			WatchSources:          CapabilitySupported,
+			BoundedCoverage:       CapabilitySupported,
 			ClassifyChangedPath:   CapabilitySupported,
 			ChangedPathRelevance:  CapabilitySupported,
 			FindSource:            CapabilitySupported,

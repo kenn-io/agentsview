@@ -26,6 +26,200 @@ func testFSNotifyBackend(t *testing.T) *fsnotifyBackend {
 	return backend
 }
 
+func TestFSNotifyPendingRoot(t *testing.T) {
+	backend := testFSNotifyBackend(t)
+	parent := t.TempDir()
+	missing := filepath.Join(parent, "storage")
+	polling := make(chan PollingObligation, 1)
+	watcher, err := newWatcherWithBackendOptions(
+		0, 0, func(context.Context, WatchBatch) error { return nil },
+		backend, 8, 1_000,
+		WatcherOptions{OnPollingRequired: func(obligation PollingObligation) error {
+			polling <- obligation
+			return nil
+		}},
+	)
+	require.NoError(t, err)
+	results := watcher.RegisterRoots([]WatchRoot{
+		{Path: parent, Exists: true, Scopes: []WatchScope{{SyncDir: parent}}},
+		{Path: missing, Recursive: true, Scopes: []WatchScope{{SyncDir: missing}}},
+	}, 8)
+	require.Equal(t, []RecursiveWatchResult{{Watched: 1}, {MissingRootLifecycleOwned: true}}, results)
+	backend.watchMu.Lock()
+	_, pending := backend.pending[missing]
+	_, owned := backend.lifecycleOwned[missing]
+	backend.watchMu.Unlock()
+	assert.True(t, pending)
+	assert.True(t, owned)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(missing, "nested"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(missing, "nested", "session.jsonl"), []byte("x"), 0o644))
+	event, relevant := backend.translateEvent(fsnotify.Event{Name: missing, Op: fsnotify.Create})
+	require.True(t, relevant)
+	assert.Equal(t, backendItemDirectory, event.ItemType)
+	assert.Contains(t, backend.watcher.WatchList(), missing)
+	backend.watchMu.Lock()
+	_, pending = backend.pending[missing]
+	backend.watchMu.Unlock()
+	assert.False(t, pending)
+	select {
+	case obligation := <-polling:
+		t.Fatalf("activated lifecycle root unexpectedly degraded: %+v", obligation)
+	default:
+	}
+	fileEvent, relevant := backend.translateEvent(fsnotify.Event{
+		Name: filepath.Join(missing, "nested", "session.jsonl"),
+		Op:   fsnotify.Remove,
+	})
+	require.True(t, relevant)
+	assert.Equal(t, backendItemUnknown, fileEvent.ItemType)
+
+	_, relevant = backend.translateEvent(fsnotify.Event{Name: missing, Op: fsnotify.Remove})
+	require.True(t, relevant)
+	backend.watchMu.Lock()
+	_, pending = backend.pending[missing]
+	backend.watchMu.Unlock()
+	assert.True(t, pending, "removal must return the lifecycle-owned root to pending")
+	select {
+	case obligation := <-polling:
+		t.Fatalf("pending lifecycle root unexpectedly became a polling obligation: %+v", obligation)
+	default:
+	}
+}
+
+func TestFSNotifyPendingRootKeepsPollingWhenAncestorBudgetDegraded(t *testing.T) {
+	backend := testFSNotifyBackend(t)
+	parent := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(parent, "existing"), 0o755))
+	missing := filepath.Join(parent, "missing")
+	watcher, err := newWatcherWithBackend(
+		0, 0, func(context.Context, WatchBatch) error { return nil },
+		backend, 8, 1_000,
+	)
+	require.NoError(t, err)
+
+	results := watcher.RegisterRoots([]WatchRoot{
+		{Path: parent, Recursive: true, Exists: true},
+		{Path: missing, Recursive: true, Exists: false},
+	}, 1)
+	require.Len(t, results, 2)
+	assert.True(t, results[0].BudgetExhausted)
+	assert.False(t, results[1].MissingRootLifecycleOwned,
+		"an incomplete ancestor watch cannot own a missing child root")
+	backend.watchMu.Lock()
+	_, pending := backend.pending[missing]
+	_, owned := backend.lifecycleOwned[missing]
+	backend.watchMu.Unlock()
+	assert.False(t, pending)
+	assert.False(t, owned)
+}
+
+func TestFSNotifyLifecycleRootReleasesPollingAfterRecreation(t *testing.T) {
+	backend := testFSNotifyBackend(t)
+	parent := t.TempDir()
+	root := filepath.Join(parent, "storage")
+	required := make(chan PollingObligation, 1)
+	released := make(chan string, 1)
+	watcher, err := newWatcherWithBackendOptions(
+		0, 0, func(context.Context, WatchBatch) error { return nil },
+		backend, 8, 1_000,
+		WatcherOptions{
+			OnPollingRequired: func(obligation PollingObligation) error {
+				required <- obligation
+				return nil
+			},
+			OnPollingReleased: func(key string) error {
+				released <- key
+				return nil
+			},
+		},
+	)
+	require.NoError(t, err)
+	results := watcher.RegisterRoots([]WatchRoot{
+		{Path: parent, Exists: true},
+		{Path: root, Recursive: true, Exists: false,
+			Scopes: []WatchScope{{Agent: "opencode", SyncDir: root}}},
+	}, 8)
+	require.True(t, results[1].MissingRootLifecycleOwned)
+
+	backend.setRuntimeWatchBudget(0)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "nested"), 0o755))
+	_, relevant := backend.translateEvent(fsnotify.Event{Name: root, Op: fsnotify.Create})
+	require.True(t, relevant)
+	require.Equal(t, "fsnotify-runtime:"+root,
+		requireReceiveWithin(t, required, time.Second).Key)
+
+	require.NoError(t, os.RemoveAll(root))
+	_, relevant = backend.translateEvent(fsnotify.Event{Name: root, Op: fsnotify.Remove})
+	require.True(t, relevant)
+	backend.setRuntimeWatchBudget(8)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "nested"), 0o755))
+	_, relevant = backend.translateEvent(fsnotify.Event{Name: root, Op: fsnotify.Create})
+	require.True(t, relevant)
+	assert.Equal(t, "fsnotify-runtime:"+root,
+		requireReceiveWithin(t, released, time.Second))
+	backend.watchMu.Lock()
+	_, retained := backend.degradedRoots[root]
+	backend.watchMu.Unlock()
+	assert.False(t, retained)
+}
+
+func TestFSNotifyPendingRootResolvesOwnershipAfterAllRootsRegister(t *testing.T) {
+	backend := testFSNotifyBackend(t)
+	parent := t.TempDir()
+	missing := filepath.Join(parent, "missing")
+	watcher, err := newWatcherWithBackend(
+		0, 0, func(context.Context, WatchBatch) error { return nil },
+		backend, 8, 1_000,
+	)
+	require.NoError(t, err)
+
+	results := watcher.RegisterRoots([]WatchRoot{
+		{Path: missing, Recursive: true, Exists: false},
+		{Path: parent, Exists: true},
+	}, 1)
+	require.Len(t, results, 2)
+	assert.True(t, results[0].MissingRootLifecycleOwned,
+		"pending ownership must use the completed covering-watch result")
+}
+
+func TestWatcherCreatedSubtreeEnumeratesActivatedRoot(t *testing.T) {
+	backend := testFSNotifyBackend(t)
+	parent := t.TempDir()
+	missing := filepath.Join(parent, "storage")
+	batches := make(chan WatchBatch, 1)
+	watcher, err := newWatcherWithBackendOptions(
+		0, 0, func(_ context.Context, batch WatchBatch) error {
+			batches <- batch
+			return nil
+		}, backend, 16, 1_000, WatcherOptions{},
+	)
+	require.NoError(t, err)
+	watcher.RegisterRoots([]WatchRoot{
+		{Path: parent, Exists: true},
+		{Path: missing, Recursive: true},
+	}, 16)
+	require.NoError(t, watcher.Start())
+	defer watcher.Stop()
+	require.NoError(t, os.MkdirAll(filepath.Join(missing, "nested"), 0o755))
+	file := filepath.Join(missing, "nested", "session.jsonl")
+	require.NoError(t, os.WriteFile(file, []byte("x"), 0o644))
+
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	for {
+		select {
+		case batch := <-batches:
+			if slices.Contains(batch.Paths, file) {
+				assert.Contains(t, batch.Paths, file)
+				return
+			}
+		case <-deadline.C:
+			t.Fatalf("activated subtree did not enumerate %s", file)
+		}
+	}
+}
+
 func TestFSNotifyBackendOverflowRequestsLostEventRecovery(t *testing.T) {
 	backend := testFSNotifyBackend(t)
 	errorInput := make(chan error, 1)

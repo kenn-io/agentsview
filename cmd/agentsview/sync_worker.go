@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 )
 
@@ -117,8 +119,8 @@ func runSyncWorkerContext(
 	}
 	onProgress := func(p sync.Progress) { emit(workerLine{Progress: &p}) }
 	var err error
-	switch mode {
-	case "startup", "sync", "audit":
+	switch {
+	case mode == "startup" || mode == "sync" || mode == "audit":
 		// All three share the sync body. Only "startup" may resync-and-swap: it
 		// runs before the daemon opens the DB, so no live reader pins the old
 		// inode. "sync" (live foreground pass) and "audit" (daily safety net)
@@ -127,7 +129,9 @@ func runSyncWorkerContext(
 		// under those readers; the real resync path is the resync-build flow,
 		// which swaps and resets caches daemon-side.
 		err = runSyncWorkerStartup(ctx, cfg, mode, emit, onProgress)
-	case "resync-build":
+	case strings.HasPrefix(mode, "audit-scoped|"):
+		err = runSyncWorkerStartup(ctx, cfg, mode, emit, onProgress)
+	case mode == "resync-build":
 		err = runSyncWorkerResyncBuild(ctx, cfg, mode, emit, onProgress)
 	default:
 		return fmt.Errorf("unknown sync-worker mode %q", mode)
@@ -185,7 +189,7 @@ func runSyncWorkerStartup(
 			stats = engine.SyncAll(ctx, onProgress)
 		}
 		result = workerResultFromStats(ctx, stats)
-	case mode == "audit":
+	case mode == "audit" || strings.HasPrefix(mode, "audit-scoped|"):
 		// The audit is the safety net for watcher deletions the daemon
 		// missed, so it must run the authoritative reconciliation that
 		// tombstones sessions whose sources disappeared; SyncAll never
@@ -195,7 +199,14 @@ func runSyncWorkerStartup(
 		var stats sync.SyncStats
 		var tombstoned int
 		var auditErr error
-		if auditRoots := reconcileRootPaths(cfg); len(auditRoots) > 0 {
+		if strings.HasPrefix(mode, "audit-scoped|") {
+			parts := strings.SplitN(strings.TrimPrefix(mode, "audit-scoped|"), "|", 2)
+			if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+				auditErr = fmt.Errorf("invalid scoped audit request %q", mode)
+			} else {
+				auditErr = engine.ReconcileProviderRoots(ctx, parser.AgentType(parts[0]), []string{parts[1]})
+			}
+		} else if auditRoots := reconcileRootPaths(cfg); len(auditRoots) > 0 {
 			stats, tombstoned, auditErr = engine.ReconcileWatchRootsWithStats(
 				ctx, auditRoots, false,
 			)

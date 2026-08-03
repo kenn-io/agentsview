@@ -1,6 +1,9 @@
 package sync
 
-import "slices"
+import (
+	"path/filepath"
+	"slices"
+)
 
 // WatchScope identifies one configured provider root whose changes are covered
 // by a logical watcher root. A physical root may cover multiple configured
@@ -21,9 +24,8 @@ type WatchRoot struct {
 }
 
 // RegisterRoots passes the complete desired root plan to the watcher before
-// its backend starts. The current fsnotify backend activates existing roots;
-// later lifecycle-aware backends can also retain pending missing roots without
-// changing the daemon-side plan contract.
+// its backend starts. Portable lifecycle-aware backends retain missing
+// recursive roots when an existing plan root observes their creation.
 func (w *Watcher) RegisterRoots(
 	roots []WatchRoot,
 	recursiveBudget int,
@@ -55,6 +57,9 @@ func (w *Watcher) RegisterRoots(
 	}
 	results := make([]RecursiveWatchResult, len(roots))
 	remaining := recursiveBudget
+	if initializer, ok := w.backend.(watchBudgetInitializer); ok {
+		initializer.setRuntimeWatchBudget(recursiveBudget)
+	}
 	for i, root := range roots {
 		agents := make([]string, 0, len(root.Scopes))
 		for _, scope := range root.Scopes {
@@ -80,7 +85,66 @@ func (w *Watcher) RegisterRoots(
 		results[i] = w.backend.AddRecursive(root.Path, remaining)
 		remaining -= results[i].Watched
 	}
+	if owner, ok := w.backend.(pendingRootOwner); ok {
+		resolvePendingRootOwnership(owner, roots, results)
+	}
 	return results
+}
+
+// pendingRootOwner retains a missing recursive root whose creation is covered
+// by an existing watch plan, so the backend can activate it on the create event.
+type pendingRootOwner interface {
+	ownPendingRecursiveRoot(path string)
+}
+
+type watchBudgetInitializer interface {
+	setRuntimeWatchBudget(int)
+}
+
+func resolvePendingRootOwnership(
+	owner pendingRootOwner, roots []WatchRoot, results []RecursiveWatchResult,
+) {
+	for i, root := range roots {
+		if root.Exists || !root.Recursive ||
+			!registeredWatchCoversCreation(root, roots, results) {
+			continue
+		}
+		owner.ownPendingRecursiveRoot(root.Path)
+		results[i].MissingRootLifecycleOwned = true
+	}
+}
+
+func registeredWatchCoversCreation(
+	target WatchRoot, roots []WatchRoot, results []RecursiveWatchResult,
+) bool {
+	targetPath := filepath.Clean(target.Path)
+	for i, root := range roots {
+		if !root.Exists {
+			continue
+		}
+		if i >= len(results) || !watchResultCoversCreation(results[i]) {
+			continue
+		}
+		rootPath := filepath.Clean(root.Path)
+		if !root.Recursive {
+			if filepath.Dir(targetPath) == rootPath {
+				return true
+			}
+			continue
+		}
+		if pathAtOrBelow(rootPath, targetPath) {
+			return true
+		}
+	}
+	return false
+}
+
+func watchResultCoversCreation(result RecursiveWatchResult) bool {
+	if result.Err != nil || result.Unwatched > 0 || result.BudgetExhausted ||
+		result.ResourceExhausted {
+		return false
+	}
+	return result.Watched > 0
 }
 
 type backendItemType uint8

@@ -311,6 +311,12 @@ func runServe(cfg config.Config, opts serveOptions) {
 		defer engine.Close()
 		unwatchedPoller = newUnwatchedPollCoordinator(ctx, engine, idleTracker)
 		defer unwatchedPoller.Stop()
+		unwatchedPoller.SetBoundedCoverageAuditRequester(
+			func(auditCtx context.Context, binding sync.BoundedCoverageBinding, reason string) error {
+				log.Printf("bounded coverage audit for %s: %s", binding.Key, reason)
+				return runBoundedCoverageAudit(ctx, cfg, engine, database, writeLock, emitter, binding, reason)
+			},
+		)
 		stopWatcher, openWatcherDispatch, _, queueWatchRetry = startFileWatcher(
 			cfg, engine, func(_ context.Context, batch sync.WatchBatch) error {
 				done, ok := idleTracker.BeginWork()
@@ -320,6 +326,42 @@ func runServe(cfg config.Config, opts serveOptions) {
 				defer done()
 				// The serve ctx reaches watcher-driven syncs so SIGTERM can
 				// interrupt database reconciliation before Stop waits for it.
+				if resolver, ok := any(engine).(sync.BoundedCoverageResolver); ok {
+					originalPaths := append([]string(nil), batch.Paths...)
+					bindings, remaining, err := resolver.BoundedCoverageBindingsForPaths(ctx, batch.Paths)
+					if err != nil {
+						return &WatchRetryError{cause: err, paths: originalPaths}
+					}
+					primed := unwatchedPoller.PrimedBoundedCoverage(bindings)
+					var unprimed []sync.BoundedCoverageBinding
+					for _, binding := range bindings {
+						if slices.ContainsFunc(primed, func(admitted sync.BoundedCoverageBinding) bool {
+							return admitted.Key == binding.Key
+						}) {
+							continue
+						}
+						unprimed = append(unprimed, binding)
+						for _, path := range batch.Paths {
+							if sameCoverageEventPath(path, binding.DBPath) {
+								remaining = appendUniqueString(remaining, path)
+							}
+						}
+					}
+					unwatchedPoller.RetireBoundedCoveragePaths(originalPaths)
+					unwatchedPoller.WakeBoundedCoverage(primed)
+					batch.Paths = remaining
+					if err := syncWatchBatch(ctx, engine, batch, func() watchRecoveryScope {
+						return probeWatchRecoveryScope(cfg)
+					}); err != nil {
+						return err
+					}
+					if len(unprimed) > 0 {
+						if err := unwatchedPoller.PrimeBoundedCoverageBindings(ctx, unprimed); err != nil {
+							return &WatchRetryError{cause: err, paths: batch.Paths}
+						}
+					}
+					return nil
+				}
 				return syncWatchBatch(ctx, engine, batch, func() watchRecoveryScope {
 					return probeWatchRecoveryScope(cfg)
 				})
@@ -341,6 +383,17 @@ func runServe(cfg config.Config, opts serveOptions) {
 			},
 		)
 		defer stopWatcher()
+		if bindings, _, _, _ := collectWatchRoots(cfg); len(bindings) > 0 {
+			roots := make([]sync.BoundedCoverageRoot, 0)
+			for _, watchRoot := range bindings {
+				for _, scope := range watchRoot.scopes {
+					roots = append(roots, sync.BoundedCoverageRoot{Agent: scope.agent, Root: watchRoot.path})
+				}
+			}
+			if err := unwatchedPoller.PrimeBoundedCoverage(ctx, roots); err != nil && ctx.Err() == nil {
+				log.Printf("bounded coverage startup prime: %v", err)
+			}
+		}
 		onStartupReconciled = newStartupReconciliationHandler(
 			ctx,
 			database.CheckpointWALTruncateWithRetry,
@@ -899,6 +952,12 @@ func overlapsDeferredScope(path string, deferred map[string]struct{}) bool {
 // key collision.
 func pollingObligationKey(reason, path string) string {
 	return reason + ":" + path
+}
+
+func sameCoverageEventPath(path, dbPath string) bool {
+	clean := filepath.Clean(path)
+	base := filepath.Clean(dbPath)
+	return clean == base || clean == base+"-wal" || clean == base+"-shm"
 }
 
 // syncObligationToPoller converts a sync.PollingObligation to the local
@@ -1952,6 +2011,9 @@ func watchPollingObligations(
 		if _, ok := byKey[key]; !ok {
 			byKey[key] = &draft{probe: probe}
 		}
+		if probe != "" {
+			represented[filepath.Clean(probe)] = struct{}{}
+		}
 		for _, scope := range scopes {
 			if scope.Root == "" {
 				continue
@@ -1971,7 +2033,8 @@ func watchPollingObligations(
 		}
 		if !result.MissingRootLifecycleOwned {
 			// Pending dirs: keyed on the physical root path; derive agent from scopes.
-			addScope(root.path, root.path, root.pollingScopesForDirs(root.pendingPollingDirs)...)
+			addScope(root.path, root.path,
+				pollingScopesForWatchUnit(root, root.pollingScopesForDirs(root.pendingPollingDirs))...)
 		}
 		for _, dir := range root.persistentPollingDirs {
 			cleanDir := filepath.Clean(dir)
@@ -1981,8 +2044,9 @@ func watchPollingObligations(
 					pollingScope{Root: dir})
 			} else {
 				for _, agent := range agents {
+					ps := pollingScope{Agent: agent, Root: dir}
 					addScope(pollingObligationKey("persistent", cleanDir), dir,
-						pollingScope{Agent: agent, Root: dir})
+						pollingScopesForWatchUnit(root, []pollingScope{ps})...)
 				}
 			}
 		}
@@ -1991,7 +2055,9 @@ func watchPollingObligations(
 			// one obligation per agent so releases are independent.
 			for _, scope := range root.scopes {
 				key := pollingObligationKey("nowatcher:"+string(scope.agent), root.path)
-				addScope(key, root.path, pollingScope{Agent: scope.agent, Root: scope.syncDir})
+				ps := pollingScope{Agent: scope.agent, Root: scope.syncDir}
+				addScope(key, root.path,
+					pollingScopesForWatchUnit(root, []pollingScope{ps})...)
 			}
 			continue
 		}
@@ -1999,7 +2065,9 @@ func watchPollingObligations(
 			result.ResourceExhausted || result.Err != nil {
 			for _, scope := range root.scopes {
 				key := pollingObligationKey("degraded:"+string(scope.agent), root.path)
-				addScope(key, root.path, pollingScope{Agent: scope.agent, Root: scope.syncDir})
+				ps := pollingScope{Agent: scope.agent, Root: scope.syncDir}
+				addScope(key, root.path,
+					pollingScopesForWatchUnit(root, []pollingScope{ps})...)
 			}
 		}
 	}
@@ -2012,8 +2080,11 @@ func watchPollingObligations(
 					pollingScope{Root: dir})
 			} else {
 				for _, agent := range agents {
+					ps := pollingScope{Agent: agent, Root: dir}
 					addScope(pollingObligationKey("persistent", cleanDir), cleanDir,
-						pollingScope{Agent: agent, Root: dir})
+						pollingScopesForWatchUnit(
+							watchRoot{path: cleanDir}, []pollingScope{ps},
+						)...)
 				}
 			}
 		}
@@ -2042,6 +2113,50 @@ func watchPollingObligations(
 		return strings.Compare(a.Key, b.Key)
 	})
 	return obligations
+}
+
+func pollingScopesForWatchUnit(
+	root watchRoot, scopes []pollingScope,
+) []pollingScope {
+	for i := range scopes {
+		if physical, ok := boundedWatchUnitPath(root, scopes[i]); ok {
+			scopes[i].Root = physical
+		}
+	}
+	return scopes
+}
+
+func boundedWatchUnitPath(root watchRoot, scope pollingScope) (string, bool) {
+	if scope.Agent == "" {
+		return "", false
+	}
+	factory, ok := parser.ProviderFactoryByType(scope.Agent)
+	if !ok || factory.Capabilities().Source.BoundedCoverage != parser.CapabilitySupported {
+		return "", false
+	}
+	if root.recursive {
+		return filepath.Clean(root.path), true
+	}
+	provider := factory.NewProvider(parser.ProviderConfig{Roots: []string{scope.Root}})
+	plan, err := provider.WatchPlan(context.Background())
+	if err != nil {
+		return "", false
+	}
+	for _, watchRoot := range plan.Roots {
+		if watchRoot.Recursive || filepath.Clean(watchRoot.Path) != filepath.Clean(root.path) {
+			continue
+		}
+		for _, include := range watchRoot.IncludeGlobs {
+			path := filepath.Clean(filepath.Join(watchRoot.Path, include))
+			for _, suffix := range []string{"-wal", "-shm"} {
+				if strings.HasSuffix(path, suffix) {
+					path = strings.TrimSuffix(path, suffix)
+				}
+			}
+			return path, true
+		}
+	}
+	return "", false
 }
 
 // registerWatcherUnavailableObligations installs the polling obligations for
@@ -2095,6 +2210,7 @@ func registerWatcherUnavailableObligations(
 		probeGated := make(map[string]struct{})
 		for _, ob := range obligations {
 			if ob.Probe != "" {
+				probeGated[filepath.Clean(ob.Probe)] = struct{}{}
 				for _, scope := range ob.Scopes {
 					probeGated[scope.Root] = struct{}{}
 				}
@@ -2129,12 +2245,18 @@ func symlinkPollingObligations(
 	for symRoot, gatedScopes := range symlinkGatedDirs {
 		scopes := make([]sync.PollingScope, 0, len(gatedScopes))
 		for _, scope := range gatedScopes {
-			ps := sync.PollingScope{
-				Agent: string(scope.agent),
-				Root:  filepath.Clean(scope.syncDir),
+			pollScope := pollingScope{Agent: scope.agent, Root: scope.syncDir}
+			if physical, ok := boundedWatchUnitPath(
+				watchRoot{path: symRoot, recursive: true}, pollScope,
+			); ok {
+				pollScope.Root = physical
 			}
-			if !slices.Contains(scopes, ps) {
-				scopes = append(scopes, ps)
+			syncScope := sync.PollingScope{
+				Agent: string(scope.agent),
+				Root:  filepath.Clean(pollScope.Root),
+			}
+			if !slices.Contains(scopes, syncScope) {
+				scopes = append(scopes, syncScope)
 			}
 		}
 		slices.SortFunc(scopes, func(a, b sync.PollingScope) int {
@@ -2204,6 +2326,17 @@ type watchSyncer interface {
 type watchReconciliationError struct {
 	cause error
 	retry sync.WatchBatch
+}
+
+type WatchRetryError struct {
+	cause error
+	paths []string
+}
+
+func (e *WatchRetryError) Error() string { return e.cause.Error() }
+func (e *WatchRetryError) Unwrap() error { return e.cause }
+func (e *WatchRetryError) WatchRetryBatch() sync.WatchBatch {
+	return sync.WatchBatch{Paths: append([]string(nil), e.paths...)}
 }
 
 func newWatchReconciliationError(
@@ -2637,7 +2770,7 @@ func collectProviderWatchRoots(
 		_, err := os.Stat(root)
 		exists := err == nil
 		addRoot(dir, root, providerRoot.Recursive, exists)
-		if exists {
+		if exists || providerRoot.Optional {
 			continue
 		}
 		missingRoots = append(missingRoots, root)
@@ -2892,6 +3025,27 @@ func runArchiveAudit(
 ) error {
 	result, err := runWorkerWritePass(
 		ctx, ctx, cfg, engine, database, lock, "audit", nil,
+	)
+	if (result.Synced > 0 || result.Tombstoned > 0) && emitter != nil {
+		emitter.Emit("sessions")
+	}
+	return err
+}
+
+func runBoundedCoverageAudit(
+	ctx context.Context,
+	cfg config.Config,
+	engine *sync.Engine,
+	database *db.DB,
+	lock *writeOwnerLock,
+	emitter sync.Emitter,
+	binding sync.BoundedCoverageBinding,
+	reason string,
+) error {
+	log.Printf("bounded coverage scoped audit %s: %s", binding.Key, reason)
+	result, err := runWorkerWritePass(
+		ctx, ctx, cfg, engine, database, lock,
+		fmt.Sprintf("audit-scoped|%s|%s", binding.Agent, binding.DBPath), nil,
 	)
 	if (result.Synced > 0 || result.Tombstoned > 0) && emitter != nil {
 		emitter.Emit("sessions")

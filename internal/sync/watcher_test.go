@@ -1474,6 +1474,15 @@ func TestWatcherUsesCallbackReconciliationScopeForRetry(t *testing.T) {
 			retry: WatchBatch{ReconcileRoots: []string{"/sessions", "/sessions"}},
 		},
 		{
+			name: "provider-owned retry preserves group",
+			retry: WatchBatch{
+				ReconcileRoots: []string{"/sessions"},
+				ReconcileGroups: []ProviderRootsGroup{{
+					Agent: "codex", Roots: []string{"/sessions"},
+				}},
+			},
+		},
+		{
 			name:  "classified authoritative rename retries full sync",
 			retry: WatchBatch{FullSync: true},
 		},
@@ -1514,6 +1523,7 @@ func TestWatcherUsesCallbackReconciliationScopeForRetry(t *testing.T) {
 				assert.Empty(t, second.Paths)
 				assert.Empty(t, second.Renames)
 				assert.Equal(t, []string{"/sessions"}, second.ReconcileRoots)
+				assert.Equal(t, tc.retry.ReconcileGroups, second.ReconcileGroups)
 			}
 		})
 	}

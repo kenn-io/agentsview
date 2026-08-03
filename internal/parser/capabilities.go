@@ -48,11 +48,17 @@ type ProviderSyncSemantics struct {
 // SourceCapabilities declares optional source mechanics implemented by a
 // provider.
 type SourceCapabilities struct {
-	DiscoverSources      CapabilitySupport
-	StreamingDiscovery   CapabilitySupport
-	WatchSources         CapabilitySupport
-	WatchRoots           CapabilitySupport
-	ActivityHints        CapabilitySupport
+	DiscoverSources    CapabilitySupport
+	StreamingDiscovery CapabilitySupport
+	WatchSources       CapabilitySupport
+	WatchRoots         CapabilitySupport
+	ActivityHints      CapabilitySupport
+	// BoundedCoverage means the provider can construct a bounded journal
+	// change feed for its shared SQLite container, so recurring work is
+	// proportional to the changed batch rather than the archive. The feed
+	// is constructed per coverage unit; providers that do not declare this
+	// keep their existing provider-scoped discovery strategy.
+	BoundedCoverage      CapabilitySupport
 	ClassifyChangedPath  CapabilitySupport
 	ChangedPathRelevance CapabilitySupport
 	StoredSourceHints    CapabilitySupport

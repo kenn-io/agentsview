@@ -1014,6 +1014,46 @@ func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) error {
 	if len(files) == 0 && len(missingPaths) == 0 {
 		return classificationErr
 	}
+	_, err := e.syncDiscoveredFilesContext(
+		ctx, files, missingPaths, classificationErr, preContainerStates,
+	)
+	return err
+}
+
+// SyncSourceRefsContext applies a provider-resolved ready set through the same
+// write stage as changed-path synchronization. It deliberately does not
+// reclassify virtual paths or advance a feed checkpoint itself.
+func (e *Engine) SyncSourceRefsContext(
+	ctx context.Context, sources []parser.SourceRef,
+) (SyncStats, error) {
+	if e.refuseWriteInForceParse("SyncSourceRefs") || len(sources) == 0 {
+		return SyncStats{}, nil
+	}
+	files := make([]parser.DiscoveredFile, 0, len(sources))
+	paths := make([]string, 0, len(sources))
+	for i := range sources {
+		source := sources[i]
+		if source.Provider == "" || source.DisplayPath == "" {
+			return SyncStats{}, fmt.Errorf("bounded coverage source %q is incomplete", source.Key)
+		}
+		files = append(files, parser.DiscoveredFile{
+			Path: source.DisplayPath, Agent: source.Provider,
+			ProviderSource: &source, ProviderProcess: true,
+		})
+		paths = append(paths, source.DisplayPath)
+	}
+	return e.syncDiscoveredFilesContext(
+		ctx, files, nil, nil, e.captureSQLiteContainerStates(paths),
+	)
+}
+
+func (e *Engine) syncDiscoveredFilesContext(
+	ctx context.Context,
+	files []parser.DiscoveredFile,
+	missingPaths []string,
+	classificationErr error,
+	preContainerStates map[string]parser.SQLiteContainerState,
+) (SyncStats, error) {
 
 	e.syncMu.Lock()
 	// Defers run LIFO: the emit closure (declared first) runs AFTER
@@ -1056,7 +1096,7 @@ func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) error {
 		var err error
 		tombstoned, err = e.tombstoneMissingWatchSourcesLocked(ctx, missingPaths, nil)
 		if err != nil {
-			return fmt.Errorf("watcher source tombstone: %w", err)
+			return stats, fmt.Errorf("watcher source tombstone: %w", err)
 		}
 	}
 	e.mu.Lock()
@@ -1070,15 +1110,15 @@ func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) error {
 		)
 	}
 	if err := errors.Join(classificationErr, ctx.Err()); err != nil {
-		return err
+		return stats, err
 	}
 	if !complete {
-		return fmt.Errorf(
+		return stats, fmt.Errorf(
 			"changed-path sync incomplete: %d source or archive failures",
 			stats.Failed,
 		)
 	}
-	return nil
+	return stats, nil
 }
 
 // omitMissingPersistentContainerPaths drops missing changed paths that are
@@ -4455,7 +4495,7 @@ func (e *Engine) reconciliationCandidate(
 	if agent == "" {
 		agent = provider.Definition().Type
 	}
-	identity := reconciliationSourceIdentity(agent, source)
+	identity := reconciliationSourceIdentity(provider, source)
 	if identity == "" {
 		return reconciliationCandidate{}, false
 	}
@@ -4479,11 +4519,7 @@ func (e *Engine) reconciliationCandidate(
 	if agent == parser.AgentCodex && codexLayoutForPath(path) == parser.CodexLayoutDated {
 		preference1 = 1
 	}
-	if isOpenCodeFormatAgent(agent) {
-		if statPath == path {
-			preference1 = 1
-		}
-	} else if agent != parser.AgentClaude && agent != parser.AgentCodex {
+	if agent != parser.AgentClaude && agent != parser.AgentCodex {
 		for i, configured := range roots {
 			if samePathOrDescendant(statPath, configured) {
 				preference1 = int64(len(roots) - i)
@@ -4517,19 +4553,17 @@ func boolPreference(value bool) int64 {
 	return 0
 }
 
-func reconciliationSourceIdentity(agent parser.AgentType, source parser.SourceRef) string {
+func reconciliationSourceIdentity(provider parser.Provider, source parser.SourceRef) string {
+	if resolver, ok := provider.(parser.ReconciliationMemberIdentityResolver); ok {
+		for _, candidate := range []string{source.Key, source.FingerprintKey, source.DisplayPath} {
+			if identity := resolver.ReconciliationMemberIdentity(candidate); identity != "" {
+				return identity
+			}
+		}
+	}
+	agent := provider.Definition().Type
 	if agent == parser.AgentClaude {
 		return claudeSessionIDFromPath(providerDiscoveredPath(source))
-	}
-	if isOpenCodeFormatAgent(agent) {
-		path := providerDiscoveredPath(source)
-		if statPath := validatedProviderSourceStatPath(path); statPath != path {
-			_, sessionID, _ := parser.ParseVirtualSourcePath(path)
-			return sessionID
-		}
-		if strings.EqualFold(filepath.Ext(path), ".json") {
-			return strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-		}
 	}
 	for _, candidate := range []string{source.Key, source.FingerprintKey, source.DisplayPath} {
 		if candidate != "" {
@@ -4537,15 +4571,6 @@ func reconciliationSourceIdentity(agent parser.AgentType, source parser.SourceRe
 		}
 	}
 	return ""
-}
-
-func isOpenCodeFormatAgent(agent parser.AgentType) bool {
-	switch agent {
-	case parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode, parser.AgentIcodemate:
-		return true
-	default:
-		return false
-	}
 }
 
 func reconciliationWatchRoot(
@@ -4588,7 +4613,7 @@ func (e *Engine) rehydrateReconciliationPage(
 			if err != nil {
 				return nil, fmt.Errorf("rehydrate %s source %s: %w", candidate.Provider, candidate.Path, err)
 			}
-			if found && reconciliationSourceIdentity(candidate.Provider, source) == candidate.Identity {
+			if found && reconciliationSourceIdentity(provider, source) == candidate.Identity {
 				files = append(files, parser.DiscoveredFile{
 					Path: candidate.Path, Project: source.ProjectHint,
 					Agent: candidate.Provider, ForceParse: forceCandidate,
@@ -4606,7 +4631,7 @@ func (e *Engine) rehydrateReconciliationPage(
 		}
 		var matched *parser.SourceRef
 		for i := range sources {
-			if reconciliationSourceIdentity(candidate.Provider, sources[i]) == candidate.Identity &&
+			if reconciliationSourceIdentity(provider, sources[i]) == candidate.Identity &&
 				sameReconciliationSourcePath(providerDiscoveredPath(sources[i]), candidate.Path) {
 				matched = &sources[i]
 				break

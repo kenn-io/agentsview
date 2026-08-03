@@ -13,6 +13,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 type RecursiveWatchResult struct {
@@ -60,6 +62,7 @@ type WatchBatch struct {
 	Paths           []string
 	Renames         []WatchRename
 	ReconcileRoots  []string
+	ReconcileGroups []ProviderRootsGroup
 	FullSync        bool
 	LostEvents      bool
 	lifecycleTokens []backendLifecycleToken
@@ -98,8 +101,8 @@ type WatcherOptions struct {
 
 // WatchRetryError carries the authoritative reconciliation scope selected by a
 // callback after it classifies a batch. The watcher consumes only FullSync and
-// ReconcileRoots from WatchRetryBatch; ordinary paths and rename metadata are
-// never replayed through this protocol.
+// ReconcileRoots and ReconcileGroups from WatchRetryBatch; ordinary paths and
+// rename metadata are never replayed through this protocol.
 type WatchRetryError interface {
 	error
 	WatchRetryBatch() WatchBatch
@@ -114,6 +117,7 @@ type pendingWatchBatch struct {
 	renames        map[WatchRename]struct{}
 	backendRenames map[pendingBackendRename]struct{}
 	roots          map[string]struct{}
+	groups         map[parser.AgentType]map[string]struct{}
 	strings        map[string]struct{}
 	lifecycle      map[backendLifecycleToken]struct{}
 	pathBytes      int
@@ -136,6 +140,7 @@ func newPendingWatchBatch(maxEntries, maxPathBytes int) *pendingWatchBatch {
 		renames:        make(map[WatchRename]struct{}),
 		backendRenames: make(map[pendingBackendRename]struct{}),
 		roots:          make(map[string]struct{}),
+		groups:         make(map[parser.AgentType]map[string]struct{}),
 		strings:        make(map[string]struct{}),
 		lifecycle:      make(map[backendLifecycleToken]struct{}),
 		maxEntries:     maxEntries,
@@ -145,7 +150,8 @@ func newPendingWatchBatch(maxEntries, maxPathBytes int) *pendingWatchBatch {
 
 func (p *pendingWatchBatch) Empty() bool {
 	return !p.fullSync && len(p.paths) == 0 && len(p.renames) == 0 &&
-		len(p.backendRenames) == 0 && len(p.roots) == 0 && len(p.lifecycle) == 0
+		len(p.backendRenames) == 0 && len(p.roots) == 0 && len(p.groups) == 0 &&
+		len(p.lifecycle) == 0
 }
 
 func (p *pendingWatchBatch) Add(path string) {
@@ -206,6 +212,25 @@ func (p *pendingWatchBatch) AddReconcileRoot(root string) {
 		return
 	}
 	p.roots[root] = struct{}{}
+}
+
+func (p *pendingWatchBatch) AddReconcileGroup(
+	agent parser.AgentType, root string,
+) {
+	if agent == "" || root == "" {
+		return
+	}
+	if _, ok := p.groups[agent]; !ok {
+		p.groups[agent] = make(map[string]struct{})
+	}
+	if _, exists := p.groups[agent][root]; exists {
+		return
+	}
+	if !p.retainStrings(string(agent), root) {
+		return
+	}
+	p.groups[agent][root] = struct{}{}
+	p.AddReconcileRoot(root)
 }
 
 func (p *pendingWatchBatch) AddBackendEvent(event backendEvent) bool {
@@ -305,6 +330,11 @@ func (p *pendingWatchBatch) merge(other *pendingWatchBatch) {
 	for root := range other.roots {
 		p.AddReconcileRoot(root)
 	}
+	for agent, roots := range other.groups {
+		for root := range roots {
+			p.AddReconcileGroup(agent, root)
+		}
+	}
 	for token := range other.lifecycle {
 		p.AddLifecycle(token)
 	}
@@ -364,6 +394,7 @@ func (p *pendingWatchBatch) makeFullSync(lostEvents bool) {
 	clear(p.renames)
 	clear(p.backendRenames)
 	clear(p.roots)
+	clear(p.groups)
 	clear(p.strings)
 	p.pathBytes = 0
 	p.fullSync = true
@@ -442,10 +473,32 @@ func (p *pendingWatchBatch) TakeWithRootAgents(
 		roots = append(roots, root)
 	}
 	slices.Sort(roots)
+	agents := make([]parser.AgentType, 0, len(p.groups))
+	for agent := range p.groups {
+		agents = append(agents, agent)
+	}
+	slices.SortFunc(agents, func(a, b parser.AgentType) int {
+		return strings.Compare(string(a), string(b))
+	})
+	groups := make([]ProviderRootsGroup, 0, len(agents))
+	for _, agent := range agents {
+		groupRoots := make([]string, 0, len(p.groups[agent]))
+		for root := range p.groups[agent] {
+			groupRoots = append(groupRoots, root)
+		}
+		slices.Sort(groupRoots)
+		groups = append(groups, ProviderRootsGroup{
+			Agent: agent, Roots: groupRoots,
+		})
+	}
+	if len(groups) == 0 {
+		groups = nil
+	}
 	clear(p.paths)
 	clear(p.renames)
 	clear(p.backendRenames)
 	clear(p.roots)
+	clear(p.groups)
 	clear(p.strings)
 	tokens := p.takeLifecycleTokens()
 	p.pathBytes = 0
@@ -453,7 +506,8 @@ func (p *pendingWatchBatch) TakeWithRootAgents(
 	p.lostEvents = false
 	return WatchBatch{
 		Paths: paths, Renames: renames, ReconcileRoots: roots,
-		LostEvents: lostEvents, lifecycleTokens: tokens,
+		ReconcileGroups: groups,
+		LostEvents:      lostEvents, lifecycleTokens: tokens,
 	}, true
 }
 
@@ -997,7 +1051,7 @@ func (w *Watcher) start(openDispatch bool) error {
 // unrelated event, manual sync, or audit.
 func (w *Watcher) QueueRetryBatch(batch WatchBatch) {
 	if !batch.FullSync && len(batch.ReconcileRoots) == 0 &&
-		len(batch.Paths) == 0 {
+		len(batch.ReconcileGroups) == 0 && len(batch.Paths) == 0 {
 		return
 	}
 	w.eventSink.RetainRetry(batch)
@@ -1334,13 +1388,32 @@ func callbackRetryBatch(err error) (WatchBatch, bool) {
 		return WatchBatch{FullSync: true, LostEvents: retry.LostEvents}, true
 	}
 	if len(retry.Paths) == 0 && len(retry.ReconcileRoots) == 0 {
-		return WatchBatch{}, false
+		if len(retry.ReconcileGroups) == 0 {
+			return WatchBatch{}, false
+		}
 	}
 	return WatchBatch{
-		Paths:          append([]string(nil), retry.Paths...),
-		ReconcileRoots: append([]string(nil), retry.ReconcileRoots...),
-		LostEvents:     retry.LostEvents,
+		Paths:           append([]string(nil), retry.Paths...),
+		ReconcileRoots:  append([]string(nil), retry.ReconcileRoots...),
+		ReconcileGroups: cloneProviderRootsGroups(retry.ReconcileGroups),
+		LostEvents:      retry.LostEvents,
 	}, true
+}
+
+func cloneProviderRootsGroups(
+	groups []ProviderRootsGroup,
+) []ProviderRootsGroup {
+	if len(groups) == 0 {
+		return nil
+	}
+	cloned := make([]ProviderRootsGroup, 0, len(groups))
+	for _, group := range groups {
+		cloned = append(cloned, ProviderRootsGroup{
+			Agent: group.Agent,
+			Roots: append([]string(nil), group.Roots...),
+		})
+	}
+	return cloned
 }
 
 func retainWatchRetry(pending *pendingWatchBatch, retry WatchBatch) {
@@ -1352,6 +1425,11 @@ func retainWatchRetry(pending *pendingWatchBatch, retry WatchBatch) {
 		}
 		for _, root := range retry.ReconcileRoots {
 			pending.AddReconcileRoot(root)
+		}
+		for _, group := range retry.ReconcileGroups {
+			for _, root := range group.Roots {
+				pending.AddReconcileGroup(group.Agent, root)
+			}
 		}
 	}
 	pending.lostEvents = pending.lostEvents || retry.LostEvents
