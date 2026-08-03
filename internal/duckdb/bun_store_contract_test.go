@@ -234,3 +234,18 @@ func TestBunStoreMutationContract(t *testing.T) {
 		},
 	})
 }
+
+func TestBunStoreRecallContract(t *testing.T) {
+	storetest.RunRecallContract(t, storetest.RecallBackend{
+		Name: "duckdb", Writable: false,
+		Open: func(t *testing.T) storetest.RecallStore {
+			conn, err := Open(filepath.Join(t.TempDir(), "recall-contract.duckdb"))
+			require.NoError(t, err)
+			common := bun.NewDB(conn, bundialect.New())
+			require.NoError(t, db.CreateCommonSchema(t.Context(), common))
+			store := NewStoreFromDB(conn)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			return store.BunStore
+		},
+	})
+}

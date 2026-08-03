@@ -162,3 +162,19 @@ func TestBunStoreMutationContract(t *testing.T) {
 		},
 	})
 }
+
+func TestBunStoreRecallContract(t *testing.T) {
+	storetest.RunRecallContract(t, storetest.RecallBackend{
+		Name: "sqlite", Writable: true,
+		Open: func(t *testing.T) storetest.RecallStore {
+			database, err := db.Open(filepath.Join(t.TempDir(), "recall-contract.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			require.NoError(t, database.UpsertSession(db.Session{
+				ID: "bun-recall-source", Project: "recall-contract",
+				Machine: "contract-machine", Agent: "codex",
+			}))
+			return database.BunStore
+		},
+	})
+}
