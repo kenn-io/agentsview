@@ -71,6 +71,16 @@ func (*duckBunBackend) Capabilities() db.BackendCapabilities {
 	return db.BackendCapabilities{}
 }
 
+func (*duckBunBackend) SessionQueryDialect() db.QueryDialect {
+	return db.PortableBunSessionQueryDialect()
+}
+
+func (*duckBunBackend) SessionVersion(
+	ctx context.Context, store bun.IDB, id string,
+) (int, int64, error) {
+	return db.FileSessionVersion(ctx, store, id)
+}
+
 func (b *duckBunBackend) View(
 	_ context.Context, fn func(bun.IDB) error,
 ) error {

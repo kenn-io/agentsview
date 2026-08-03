@@ -162,12 +162,12 @@ func (c *schemaProbeConn) QueryContext(
 	normalized := strings.ToLower(query)
 	c.state.mu.Lock()
 	c.state.queries = append(c.state.queries, query)
+	executed := strings.ToLower(strings.Join(c.state.execs, "\n"))
 	c.state.mu.Unlock()
 	for _, queryErr := range c.state.queryErrors {
-		if strings.Contains(
-			normalized,
-			strings.ToLower(queryErr.contains),
-		) {
+		fragment := strings.ToLower(queryErr.contains)
+		if strings.Contains(normalized, fragment) &&
+			!strings.Contains(executed, fragment) {
 			return nil, queryErr.err
 		}
 	}
@@ -187,6 +187,11 @@ func (c *schemaProbeConn) QueryContext(
 		}
 		return &schemaProbeRows{columns: []string{"exists"}}, nil
 	case strings.Contains(normalized, "pg_indexes"):
+		if strings.Contains(normalized, "select exists") {
+			return &schemaProbeRows{
+				columns: []string{"exists"}, values: [][]driver.Value{{true}},
+			}, nil
+		}
 		name := ""
 		if len(args) > 0 {
 			if v, ok := args[0].Value.(string); ok {
@@ -214,6 +219,11 @@ func (c *schemaProbeConn) QueryContext(
 			return &schemaProbeRows{
 				columns: []string{"exists"},
 				values:  [][]driver.Value{{true}},
+			}, nil
+		}
+		if strings.Contains(normalized, "is_nullable") {
+			return &schemaProbeRows{
+				columns: []string{"is_nullable"}, values: [][]driver.Value{{"YES"}},
 			}, nil
 		}
 		var values [][]driver.Value
@@ -284,6 +294,12 @@ func (c *schemaProbeConn) QueryContext(
 		(strings.Contains(normalized, "trim(source_archive_id)") ||
 			strings.Contains(normalized, "message_ordinal is null") ||
 			strings.Contains(normalized, "having count(*) > 1")):
+		return &schemaProbeRows{
+			columns: []string{"exists"},
+			values:  [][]driver.Value{{false}},
+		}, nil
+	case strings.Contains(normalized, "select exists") &&
+		strings.Contains(normalized, "left join"):
 		return &schemaProbeRows{
 			columns: []string{"exists"},
 			values:  [][]driver.Value{{false}},
@@ -917,6 +933,41 @@ func TestCheckSchemaCompatRequiresSessionProvenanceColumns(t *testing.T) {
 		"sessions table missing provenance columns")
 }
 
+func TestCheckSchemaCompatRequiresEveryCoreBunProjectionColumn(t *testing.T) {
+	tests := []struct {
+		name, queryFragment, databaseError, wantError string
+	}{
+		{
+			name: "session file device", queryFragment: "file_device",
+			databaseError: `ERROR: column "file_device" does not exist (SQLSTATE 42703)`,
+			wantError:     "sessions table missing Bun model columns",
+		},
+		{
+			name: "message source id", queryFragment: "id, is_compact_boundary",
+			databaseError: `ERROR: column "id" does not exist (SQLSTATE 42703)`,
+			wantError:     "messages table missing Bun model columns",
+		},
+		{
+			name: "tool call message alias", queryFragment: "message_id, message_ordinal",
+			databaseError: `ERROR: column "message_id" does not exist (SQLSTATE 42703)`,
+			wantError:     "tool_calls table missing Bun model columns",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pg, state := newSchemaProbeDB(t, nil)
+			state.queryErrors = []schemaProbeQueryError{{
+				contains: tt.queryFragment, err: errors.New(tt.databaseError),
+			}}
+
+			err := CheckSchemaCompat(t.Context(), pg)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantError)
+		})
+	}
+}
+
 func TestCheckSchemaCompatRequiresWorktreeProjectMappings(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
 	state.queryErrors = []schemaProbeQueryError{{
@@ -1174,11 +1225,16 @@ func TestEnsureSchemaGroupsMissingColumnMigrationsByTable(t *testing.T) {
 
 	require.NoError(t, EnsureSchema(context.Background(), db, "agentsview"))
 
-	// Three tables have missing columns (sessions: termination_status;
-	// messages: source_parent_uuid, is_sidechain, is_compact_boundary,
-	// thinking_text; source_project_identity_observations: repository/worktree/
-	// checkout/remote context). Per-table batching means one ALTER each. tool_calls
-	// lists all its migration columns (call_index, file_path) as present, so
-	// it contributes no ALTER.
-	assert.Equal(t, 3, state.alterTableExecCount(), "ALTER TABLE execs")
+	// Three legacy migration groups have missing columns (sessions:
+	// termination_status; messages: source_parent_uuid, is_sidechain,
+	// is_compact_boundary, thinking_text; source_project_identity_observations:
+	// repository/worktree/checkout/remote context). The separate common-schema
+	// convergence also emits additive ALTERs, so identify these owned groups by
+	// their literal boundary columns instead of counting unrelated statements.
+	alterSQL := strings.ToLower(state.alterTableSQL())
+	for _, boundaryColumn := range []string{
+		"termination_status", "source_parent_uuid", "repository_path",
+	} {
+		assert.Equal(t, 1, strings.Count(alterSQL, boundaryColumn), boundaryColumn)
+	}
 }

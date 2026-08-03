@@ -979,10 +979,11 @@ ______________________________________________________________________
 
 - [ ] **Step 5: Implement common message and metadata queries**
 
-    Query `bunmodel.Message` once, batch-load tool calls and result events with
-    `bun.List(sessionIDs)`, and hydrate through shared maps. Use portable
-    timestamp/order expressions for activity and timing. Implement stats and
-    dimension lists once from canonical rows.
+    Query `bunmodel.Message` once, batch-load tool calls and result events in
+    at-most-500-ordinal `bun.List` chunks, and hydrate through shared maps. Use
+    the adapter's narrow timestamp renderer for SQLite text chronology versus
+    native PostgreSQL/DuckDB timestamps; activity and timing reduction remains
+    shared Go. Implement stats and dimension lists once from canonical rows.
 
 - [ ] **Step 6: Verify the common methods on every backend before deletion**
 

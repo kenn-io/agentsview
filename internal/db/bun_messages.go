@@ -169,13 +169,19 @@ func attachBunToolData(
 		messageIndex[message.Ordinal] = i
 		ordinals = append(ordinals, message.Ordinal)
 	}
-	var calls []bunmodel.ToolCall
-	if err := store.NewSelect().Model(&calls).
-		Where("session_id = ?", messages[0].SessionID).
-		Where("message_ordinal IN (?)", bun.List(ordinals)).
-		OrderExpr("message_ordinal ASC").OrderExpr("call_index ASC").
-		Scan(ctx); err != nil {
-		return fmt.Errorf("querying tool calls: %w", err)
+	const hydrationBatchSize = 500
+	calls := make([]bunmodel.ToolCall, 0)
+	for start := 0; start < len(ordinals); start += hydrationBatchSize {
+		end := min(start+hydrationBatchSize, len(ordinals))
+		var batch []bunmodel.ToolCall
+		if err := store.NewSelect().Model(&batch).
+			Where("session_id = ?", messages[0].SessionID).
+			Where("message_ordinal IN (?)", bun.List(ordinals[start:end])).
+			OrderExpr("message_ordinal ASC").OrderExpr("call_index ASC").
+			Scan(ctx); err != nil {
+			return fmt.Errorf("querying tool calls: %w", err)
+		}
+		calls = append(calls, batch...)
 	}
 	for _, row := range calls {
 		messagePosition, ok := messageIndex[row.MessageOrdinal]
@@ -189,14 +195,19 @@ func attachBunToolData(
 		}
 		messages[messagePosition].ToolCalls[row.CallIndex] = toolCallFromBunRow(row)
 	}
-	var events []bunmodel.ToolResultEvent
-	if err := store.NewSelect().Model(&events).
-		Where("session_id = ?", messages[0].SessionID).
-		Where("tool_call_message_ordinal IN (?)", bun.List(ordinals)).
-		OrderExpr("tool_call_message_ordinal ASC").
-		OrderExpr("call_index ASC").OrderExpr("event_index ASC").
-		Scan(ctx); err != nil {
-		return fmt.Errorf("querying tool result events: %w", err)
+	events := make([]bunmodel.ToolResultEvent, 0)
+	for start := 0; start < len(ordinals); start += hydrationBatchSize {
+		end := min(start+hydrationBatchSize, len(ordinals))
+		var batch []bunmodel.ToolResultEvent
+		if err := store.NewSelect().Model(&batch).
+			Where("session_id = ?", messages[0].SessionID).
+			Where("tool_call_message_ordinal IN (?)", bun.List(ordinals[start:end])).
+			OrderExpr("tool_call_message_ordinal ASC").
+			OrderExpr("call_index ASC").OrderExpr("event_index ASC").
+			Scan(ctx); err != nil {
+			return fmt.Errorf("querying tool result events: %w", err)
+		}
+		events = append(events, batch...)
 	}
 	for _, row := range events {
 		messagePosition, ok := messageIndex[row.ToolCallMessageOrdinal]
@@ -210,6 +221,38 @@ func attachBunToolData(
 		)
 	}
 	return nil
+}
+
+type bunTimingSessionRow struct {
+	ID        string              `bun:"id"`
+	StartedAt *bunmodel.Timestamp `bun:"started_at"`
+	EndedAt   *bunmodel.Timestamp `bun:"ended_at"`
+}
+
+type bunTimingMessageRow struct {
+	Ordinal    int                 `bun:"ordinal"`
+	Timestamp  *bunmodel.Timestamp `bun:"timestamp"`
+	HasToolUse bool                `bun:"has_tool_use"`
+}
+
+type bunTimingCallRow struct {
+	MessageOrdinal    int     `bun:"message_ordinal"`
+	CallIndex         int     `bun:"call_index"`
+	ToolUseID         string  `bun:"tool_use_id"`
+	ToolName          string  `bun:"tool_name"`
+	Category          string  `bun:"category"`
+	SkillName         *string `bun:"skill_name"`
+	SubagentSessionID *string `bun:"subagent_session_id"`
+	InputJSON         *string `bun:"input_json"`
+}
+
+type bunTimingEventRow struct {
+	ToolCallMessageOrdinal int                 `bun:"tool_call_message_ordinal"`
+	CallIndex              int                 `bun:"call_index"`
+	Source                 string              `bun:"source"`
+	Status                 string              `bun:"status"`
+	Timestamp              *bunmodel.Timestamp `bun:"timestamp"`
+	EventIndex             int                 `bun:"event_index"`
 }
 
 func toolCallFromBunRow(row bunmodel.ToolCall) ToolCall {
@@ -388,22 +431,31 @@ func (s *BunStore) GetSessionTiming(
 	ctx context.Context, sessionID string,
 ) (*SessionTiming, error) {
 	now := time.Now().UTC()
-	var sessionRow bunmodel.Session
-	var messages []bunmodel.Message
-	var calls []bunmodel.ToolCall
-	var events []bunmodel.ToolResultEvent
-	subagents := make(map[string]bunmodel.Session)
+	var sessionRow bunTimingSessionRow
+	var messages []bunTimingMessageRow
+	var calls []bunTimingCallRow
+	var events []bunTimingEventRow
+	subagents := make(map[string]bunTimingSessionRow)
 	err := s.view(ctx, func(store bun.IDB) error {
-		if err := store.NewSelect().Model(&sessionRow).Where("id = ?", sessionID).
-			Where("deleted_at IS NULL").Scan(ctx); err != nil {
+		if err := store.NewSelect().Table("sessions").
+			Column("id", "started_at", "ended_at").Where("id = ?", sessionID).
+			Where("deleted_at IS NULL").Scan(ctx, &sessionRow); err != nil {
 			return err
 		}
-		if err := store.NewSelect().Model(&messages).Where("session_id = ?", sessionID).
-			OrderExpr("ordinal ASC").Scan(ctx); err != nil {
+		if err := store.NewSelect().Table("messages").
+			Column("ordinal", "timestamp", "has_tool_use").
+			Where("session_id = ?", sessionID).
+			OrderExpr("ordinal ASC").Scan(ctx, &messages); err != nil {
 			return err
 		}
-		if err := store.NewSelect().Model(&calls).Where("session_id = ?", sessionID).
-			OrderExpr("message_ordinal ASC").OrderExpr("call_index ASC").Scan(ctx); err != nil {
+		if err := store.NewSelect().Table("tool_calls").
+			Column(
+				"message_ordinal", "call_index", "tool_use_id", "tool_name",
+				"category", "skill_name", "subagent_session_id", "input_json",
+			).
+			Where("session_id = ?", sessionID).
+			OrderExpr("message_ordinal ASC").OrderExpr("call_index ASC").
+			Scan(ctx, &calls); err != nil {
 			return err
 		}
 		subagentIDs := make([]string, 0)
@@ -413,18 +465,24 @@ func (s *BunStore) GetSessionTiming(
 			}
 		}
 		if len(subagentIDs) > 0 {
-			var rows []bunmodel.Session
-			if err := store.NewSelect().Model(&rows).
-				Where("id IN (?)", bun.List(subagentIDs)).Scan(ctx); err != nil {
+			var rows []bunTimingSessionRow
+			if err := store.NewSelect().Table("sessions").
+				Column("id", "started_at", "ended_at").
+				Where("id IN (?)", bun.List(subagentIDs)).Scan(ctx, &rows); err != nil {
 				return fmt.Errorf("querying timing subagents: %w", err)
 			}
 			for _, row := range rows {
 				subagents[row.ID] = row
 			}
 		}
-		return store.NewSelect().Model(&events).Where("session_id = ?", sessionID).
+		return store.NewSelect().Table("tool_result_events").
+			Column(
+				"tool_call_message_ordinal", "call_index", "source", "status",
+				"timestamp", "event_index",
+			).
+			Where("session_id = ?", sessionID).
 			OrderExpr("tool_call_message_ordinal ASC").OrderExpr("call_index ASC").
-			OrderExpr("event_index ASC").Scan(ctx)
+			OrderExpr("event_index ASC").Scan(ctx, &events)
 	})
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -432,7 +490,10 @@ func (s *BunStore) GetSessionTiming(
 	if err != nil {
 		return nil, fmt.Errorf("querying session timing: %w", err)
 	}
-	session := visibleSessionFromBunRow(sessionRow)
+	session := Session{
+		ID: sessionRow.ID, StartedAt: timestampFromBunRow(sessionRow.StartedAt),
+		EndedAt: timestampFromBunRow(sessionRow.EndedAt),
+	}
 	turnRows := make([]TurnRow, 0, len(messages))
 	for index, message := range messages {
 		turn := TurnRow{
@@ -453,7 +514,7 @@ func (s *BunStore) GetSessionTiming(
 		}
 		turnRows = append(turnRows, turn)
 	}
-	eventsByCall := make(map[[2]int][]bunmodel.ToolResultEvent)
+	eventsByCall := make(map[[2]int][]bunTimingEventRow)
 	for _, event := range events {
 		key := [2]int{event.ToolCallMessageOrdinal, event.CallIndex}
 		eventsByCall[key] = append(eventsByCall[key], event)
@@ -468,6 +529,7 @@ func (s *BunStore) GetSessionTiming(
 		if call.InputJSON != nil {
 			row.InputJSON = *call.InputJSON
 		}
+		usedSubagentTiming := false
 		if call.SubagentSessionID != nil {
 			if subagent, ok := subagents[*call.SubagentSessionID]; ok {
 				start := requiredTimestampFromBunRowPtr(subagent.StartedAt)
@@ -477,9 +539,11 @@ func (s *BunStore) GetSessionTiming(
 				}
 				if duration, valid := bunTimingMillis(start, end); valid {
 					row.DurationMs = &duration
+					usedSubagentTiming = true
 				}
 			}
-		} else {
+		}
+		if !usedSubagentTiming {
 			var started, completed string
 			for _, event := range eventsByCall[[2]int{call.MessageOrdinal, call.CallIndex}] {
 				if event.Source != "tool_execution" || event.Timestamp == nil {

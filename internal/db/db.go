@@ -387,7 +387,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (80: Kimi Code tool-step usage reparse. Protocol-1.4 transcripts can persist
 // tool.result before step.end, so existing Kimi and Kimi Work rows may omit
 // per-message usage for tool-calling steps. Re-parsing attaches the trailing
-// step usage to the assistant tool-call message.)
+// step usage to the assistant tool-call message. The same release performs the
+// canonical Bun schema cutover, so this gate also prevents an older binary from
+// reopening the archive after its compatibility stamp is committed.)
 // (81: Pi-family flat cache-write usage reparse. Existing Pi and OMP rows can
 // persist cache creation under cacheWrite, which older parses ignored.
 // Re-parsing restores those tokens to per-message usage and computed cost.)
@@ -2672,12 +2674,6 @@ func (db *DB) migrateColumns() error {
 		return fmt.Errorf(
 			"creating project identity metadata: %w", err,
 		)
-	}
-	if _, err := w.Exec(projectIdentityRevisionSchemaSQL); err != nil {
-		return fmt.Errorf("creating project identity revision triggers: %w", err)
-	}
-	if _, err := w.Exec(projectIdentitySnapshotInvariantSchemaSQL); err != nil {
-		return fmt.Errorf("creating project identity snapshot trigger: %w", err)
 	}
 	if err := db.convergeSQLiteCommonSchemaLocked(
 		context.Background(), nil,

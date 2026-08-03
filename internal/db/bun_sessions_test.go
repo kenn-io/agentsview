@@ -28,6 +28,16 @@ func (*sessionContractBackend) Capabilities() BackendCapabilities {
 	return BackendCapabilities{}
 }
 
+func (*sessionContractBackend) SessionQueryDialect() QueryDialect {
+	return SQLiteBunSessionQueryDialect()
+}
+
+func (*sessionContractBackend) SessionVersion(
+	ctx context.Context, store bun.IDB, id string,
+) (int, int64, error) {
+	return FileSessionVersion(ctx, store, id)
+}
+
 func (b *sessionContractBackend) View(
 	_ context.Context, fn func(bun.IDB) error,
 ) error {
@@ -162,4 +172,44 @@ func TestBunStoreListSessionsKeepsQueriesAndResultsBounded(t *testing.T) {
 			assert.Equal(t, 2, hook.selects, "count plus bounded page query")
 		})
 	}
+}
+
+func TestBunStoreListSessionsUsesChronologicalSQLiteActivity(t *testing.T) {
+	raw, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	raw.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	store := bun.NewDB(raw, sqlitedialect.New())
+	require.NoError(t, CreateCommonSchema(t.Context(), store))
+	_, err = store.NewInsert().Model(&bunmodel.SourceArchive{
+		SourceArchiveID: "archive", SourceArchiveSalt: "salt",
+	}).Exec(t.Context())
+	require.NoError(t, err)
+	_, err = raw.ExecContext(t.Context(), `
+		INSERT INTO sessions (
+			id, project, machine, agent, message_count, created_at,
+			started_at, ended_at, source_archive_id, source_database_generation
+		) VALUES
+			('fractional-activity', 'time', 'host', 'codex', 2,
+			 '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', NULL,
+			 'archive', 'generation'),
+			('offset-before-cutoff', 'time', 'host', 'codex', 1,
+			 '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z',
+			 '2024-01-01T01:00:00+01:00', 'archive', 'generation');
+		INSERT INTO messages (session_id, ordinal, role, content, timestamp, token_usage)
+		VALUES
+			('fractional-activity', 0, 'assistant', '',
+			 '2024-01-01T00:00:01Z', '{}'),
+			('fractional-activity', 1, 'assistant', '',
+			 '2024-01-01T00:00:01.500Z', '{}')`)
+	require.NoError(t, err)
+
+	page, err := NewBunStore(&sessionContractBackend{store: store}).ListSessions(
+		t.Context(), SessionFilter{
+			Project: "time", ActiveSince: "2024-01-01T00:00:01.250Z", Limit: 10,
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 1)
+	assert.Equal(t, "fractional-activity", page.Sessions[0].ID)
 }
