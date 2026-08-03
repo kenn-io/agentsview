@@ -265,6 +265,7 @@ ______________________________________________________________________
 - Create: `internal/db/bunmodel/registry_test.go`
 - Create: `internal/db/bun_rows.go`
 - Create: `internal/db/bun_rows_test.go`
+- Modify: `internal/db/sessions.go`
 
 **Interfaces:**
 
@@ -292,6 +293,9 @@ ______________________________________________________________________
 - Produces lossless converters such as
   `func sessionToBunRow(Session) bunmodel.Session` and
   `func sessionFromBunRow(bunmodel.Session) Session` in package `db`.
+  `db.Session` gains internal `SourceArchiveID` and `SourceDatabaseGeneration`
+  fields, and `ArchiveIdentity` carries the stable archive ID/database ID that
+  the SQLite adapter stamps before parser writes.
 
 - [ ] **Step 1: Write failing canonical-registry tests**
 
@@ -304,6 +308,7 @@ ______________________________________________________________________
         assert.Subset(t, sessionColumns, []string{
             "agent", "created_at", "deleted_at", "ended_at", "id", "machine",
             "message_count", "project", "started_at", "transcript_revision",
+            "source_archive_id", "source_database_generation",
         })
         assert.Subset(t, servingTableNames(CommonTables()), []string{
             "cursor_usage_events", "excluded_sessions", "insights", "messages",
@@ -323,6 +328,11 @@ ______________________________________________________________________
     Add literal round-trip cases for nullable timestamps, SQLite integer booleans,
     native booleans, JSON, and optional IDs. Name the production break each case
     catches in the test name.
+
+    Generate `messages` DDL for every dialect and assert the canonical composite
+    logical key. Separately characterize the prior SQLite shape as the accepted
+    `id INTEGER PRIMARY KEY` plus unique composite alias; do not require or
+    perform a table rebuild.
 
 - [ ] **Step 2: Verify RED**
 
@@ -629,6 +639,12 @@ ______________________________________________________________________
     reads switch, and that subsequent writes target only those canonical tables.
     Inject a failure before the compatibility stamp on SQLite and PostgreSQL;
     assert the new rows, stamp, and all intermediate DDL roll back together.
+
+    Give the legacy session empty provenance and assert migration fills
+    `source_archive_id` from `GetArchiveID` and `source_database_generation`
+    from `GetDatabaseID`. After migration, write a newly parsed session through
+    the normal batch API and assert both required values are stamped before its
+    canonical identity joins are queried.
 
     Update the DuckDB rebuild test to expect schema version 10, the full canonical
     common table/column set, preserved source rows, and atomic replacement.
@@ -1374,7 +1390,7 @@ ______________________________________________________________________
 - Produces shared write helpers:
 
     ```go
-    func ReplaceSessionRows(ctx context.Context, tx bun.IDB, write SessionBatchWrite) error
+    func ReplaceSessionRows(ctx context.Context, tx bun.IDB, archive ArchiveIdentity, write SessionBatchWrite) error
     func UpsertSessionRows(ctx context.Context, tx bun.IDB, write ReplicationSessionWrite, policy SessionConflictPolicy) error
     func ReplaceMessageRows(ctx context.Context, tx bun.IDB, sessionID string, rows []bunmodel.Message) error
     func ReplaceUsageEventRows(ctx context.Context, tx bun.IDB, sessionID string, rows []bunmodel.UsageEvent) error
@@ -1387,6 +1403,9 @@ ______________________________________________________________________
     uses a Bun-built conflict clause that rejects excluded IDs and foreign
     owners and preserves target-owned display-name/deletion baselines. This is
     an operational replication policy, not a duplicate common Store query.
+
+    SQLite obtains `ArchiveIdentity` from its existing archive metadata under the
+    write guard and rejects an empty identity before converting parser rows.
 
 - Consumes the canonical pricing/band and star/pin write helpers defined in
   Tasks 6-7; the cross-target fixture never relies on an undefined test-only
