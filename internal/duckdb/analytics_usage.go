@@ -3460,9 +3460,14 @@ func duckDailyUsageCTE(f db.UsageFilter) (string, []any) {
 	return duckUsageCTEFromRaw(f, rawSQL, args)
 }
 
-// duckPriceModelCaseSQL renders the timestamp-aware Kimi canonicalization as
-// SQL so each usage row carries the model whose rates apply to that instant.
+// duckPriceModelCaseSQL renders Kimi alias canonicalization as SQL so each
+// usage row carries the fixed or timestamp-selected model whose rates apply.
 func duckPriceModelCaseSQL() string {
+	fixedK26Aliases := pricingpkg.KimiK26Aliases()
+	fixedK26Quoted := make([]string, len(fixedK26Aliases))
+	for i, alias := range fixedK26Aliases {
+		fixedK26Quoted[i] = "'" + alias + "'"
+	}
 	aliases := pricingpkg.DateAliasedModels()
 	quoted := make([]string, len(aliases))
 	for i, alias := range aliases {
@@ -3471,14 +3476,16 @@ func duckPriceModelCaseSQL() string {
 	cutoff := pricingpkg.KimiModelEraCutoff.UTC().Format("2006-01-02 15:04:05")
 	return fmt.Sprintf(`CASE
 		WHEN regexp_replace(model, '^.*/', '') IN (%[1]s)
-			AND (ts IS NULL OR ts >= TIMESTAMP '%[2]s')
-			THEN '%[3]s'
-		WHEN regexp_replace(model, '^.*/', '') IN (%[1]s)
-			THEN '%[4]s'
+			THEN '%[2]s'
+		WHEN regexp_replace(model, '^.*/', '') IN (%[3]s)
+			AND (ts IS NULL OR ts >= TIMESTAMP '%[4]s')
+			THEN '%[5]s'
+		WHEN regexp_replace(model, '^.*/', '') IN (%[3]s)
+			THEN '%[2]s'
 		ELSE model
 	END`,
-		strings.Join(quoted, ", "), cutoff,
-		pricingpkg.KimiK3Canonical, pricingpkg.KimiK26Canonical,
+		strings.Join(fixedK26Quoted, ", "), pricingpkg.KimiK26Canonical,
+		strings.Join(quoted, ", "), cutoff, pricingpkg.KimiK3Canonical,
 	)
 }
 

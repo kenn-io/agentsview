@@ -4185,14 +4185,13 @@ func TestAICreditsFromCost(t *testing.T) {
 	}
 }
 
-// TestGetDailyUsage_KimiDateAliasPricing proves the date-based pricing
-// path end to end on SQLite: the date-ambiguous Kimi aliases
+// TestGetDailyUsage_KimiAliasPricing proves Kimi alias pricing end to end on
+// SQLite: the date-ambiguous aliases
 // (kimi-for-coding, daimon-kimi-code, daimon-kimi-messages) price each
 // row by its timestamp — K2.6 rates before the 2026-07-19T00:00:00Z
-// UTC cutoff, K3 rates at and after it — while the static k3/k3-agent
-// rows price flat at K3 regardless of date, including before the
-// cutoff (proving the static rows don't break date-based precedence).
-func TestGetDailyUsage_KimiDateAliasPricing(t *testing.T) {
+// UTC cutoff and K3 rates at and after it. The explicit k2d6-agent alias stays
+// on K2.6, while static k3/k3-agent rows price flat at K3.
+func TestGetDailyUsage_KimiAliasPricing(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -4294,6 +4293,13 @@ func TestGetDailyUsage_KimiDateAliasPricing(t *testing.T) {
 			name:           "provider-prefixed alias before cutoff",
 			model:          "kimi-code/kimi-for-coding",
 			ts:             "2026-07-18T12:00:00Z",
+			wantCost:       k26Cost,
+			wantPriceModel: "moonshot/kimi-k2.6",
+		},
+		{
+			name:           "explicit k2d6-agent stays K2.6 after cutoff",
+			model:          "k2d6-agent",
+			ts:             "2026-07-20T12:00:00Z",
 			wantCost:       k26Cost,
 			wantPriceModel: "moonshot/kimi-k2.6",
 		},

@@ -756,12 +756,19 @@ Grok section and remove the explicit registry exception in the coverage test.
   the desktop directory wrapper and auxiliary-session prefixes.
 - **Usage and cost:** The shared wire records expose input, output, cache-read,
   and cache-creation token counts. Kimi Work can report the internal model
-  aliases `daimon-kimi-code`, `daimon-kimi-messages`, and `k3-agent`; Agentsview
-  catalog-prices those tokens. The date-ambiguous `daimon-*` aliases resolve to
-  K2.6 before the 2026-07-19 UTC cutoff and K3 at or after it. When a transcript
-  omits model metadata, Agentsview uses the date-ambiguous `daimon-kimi-code`
-  alias so the same timestamp rule applies instead of assuming one model era. No
-  authoritative persisted USD cost is consumed.
+  aliases `daimon-kimi-code`, `daimon-kimi-messages`, `k2d6-agent`, and
+  `k3-agent`; Agentsview catalog-prices those tokens. The explicit
+  `k2d6-agent` alias resolves to K2.6. The date-ambiguous `daimon-*` aliases
+  resolve to K2.6 before the 2026-07-19 UTC cutoff and K3 at or after it. When a
+  transcript omits model metadata, Agentsview uses the date-ambiguous
+  `daimon-kimi-code` alias so the same timestamp rule applies instead of
+  assuming one model era. No authoritative persisted USD cost is consumed.
+- **Event ordering reverified 2026-08-03:** observed protocol-1.4 transcripts
+  can persist `tool.call`, then `tool.result`, then `step.end` for one model
+  step. The following `usage.record` repeats the same native usage values.
+  Agentsview keeps the assistant tool-call message as the pending usage target
+  across the user-role tool result, attaches the trailing `step.end` usage, and
+  treats `usage.record` only as a fallback so the step is counted once.
 - **Agentsview:** `internal/parser/kimi_work_provider.go` constrains discovery
   to user conversations, delegates wire decoding to `internal/parser/kimi.go`,
   and rewrites the provider identity and aggregate usage-event keys to

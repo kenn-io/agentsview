@@ -364,7 +364,11 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // (79: Claude launch/prompt provenance. Re-parsing populates the new
 // sessions.session_kind and messages.prompt_source columns from top-level
 // sessionKind and promptSource fields on existing Claude rows.)
-const dataVersion = 79
+// (80: Kimi Code tool-step usage reparse. Protocol-1.4 transcripts can persist
+// tool.result before step.end, so existing Kimi and Kimi Work rows may omit
+// per-message usage for tool-calling steps. Re-parsing attaches the trailing
+// step usage to the assistant tool-call message.)
+const dataVersion = 80
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
