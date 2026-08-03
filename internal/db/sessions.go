@@ -1357,8 +1357,9 @@ const insertSessionSQL = `
 			last_write_incremental,
 			file_path, file_size, file_mtime,
 			next_ordinal, last_entry_uuid, claude_linear_parse,
-			file_inode, file_device, file_hash
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			file_inode, file_device, file_hash,
+			source_archive_id, source_database_generation
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // insertSessionIfAbsentSQL inserts a session only when its id does not already
 // exist, leaving an existing row untouched.
@@ -1417,7 +1418,9 @@ const upsertSessionBaseSQL = insertSessionSQL + `
 				excluded.claude_linear_parse, sessions.claude_linear_parse),
 			file_inode = excluded.file_inode,
 			file_device = excluded.file_device,
-			file_hash = excluded.file_hash`
+			file_hash = excluded.file_hash,
+			source_archive_id = excluded.source_archive_id,
+			source_database_generation = excluded.source_database_generation`
 
 const upsertSessionSQL = upsertSessionBaseSQL + `,
 			deleted_at = CASE
@@ -1466,7 +1469,32 @@ func upsertSessionArgs(s Session) []any {
 		s.FilePath, s.FileSize, s.FileMtime,
 		s.NextOrdinal, s.LastEntryUUID, s.ClaudeLinearParse,
 		s.FileInode, s.FileDevice, s.FileHash,
+		s.SourceArchiveID, s.SourceDatabaseGeneration,
 	}
+}
+
+func (db *DB) localArchiveIdentity(ctx context.Context) (ArchiveIdentity, error) {
+	archiveID, err := db.GetArchiveID(ctx)
+	if err != nil {
+		return ArchiveIdentity{}, err
+	}
+	databaseGeneration, err := db.GetDatabaseID(ctx)
+	if err != nil {
+		return ArchiveIdentity{}, err
+	}
+	identity := ArchiveIdentity{
+		SourceArchiveID:          strings.TrimSpace(archiveID),
+		SourceDatabaseGeneration: strings.TrimSpace(databaseGeneration),
+	}
+	if identity.SourceArchiveID == "" || identity.SourceDatabaseGeneration == "" {
+		return ArchiveIdentity{}, fmt.Errorf("SQLite archive identity is required")
+	}
+	return identity, nil
+}
+
+func stampSessionArchiveIdentity(session *Session, identity ArchiveIdentity) {
+	session.SourceArchiveID = identity.SourceArchiveID
+	session.SourceDatabaseGeneration = identity.SourceDatabaseGeneration
 }
 
 // UpsertSession inserts or updates a session.
@@ -1490,6 +1518,11 @@ func (db *DB) UpsertSessionPendingContent(s Session) (bool, error) {
 func (db *DB) upsertSession(
 	s Session, reviveSourceMissing bool,
 ) (sessionUpsertResult, error) {
+	identity, err := db.localArchiveIdentity(context.Background())
+	if err != nil {
+		return sessionUpsertResult{}, err
+	}
+	stampSessionArchiveIdentity(&s, identity)
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	writer := db.getWriter()
@@ -1596,6 +1629,11 @@ func (db *DB) ReviveSourceMissingSession(id string) error {
 // session synced concurrently. Permanently-excluded sessions are still
 // rejected so a placeholder cannot resurrect them.
 func (db *DB) insertSessionIfAbsent(ctx context.Context, s Session) error {
+	identity, err := db.localArchiveIdentity(ctx)
+	if err != nil {
+		return err
+	}
+	stampSessionArchiveIdentity(&s, identity)
 	db.mu.Lock()
 	defer db.mu.Unlock()
 

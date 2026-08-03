@@ -52,7 +52,7 @@ const (
 	// 999-variable limit so binaries built against older SQLite
 	// versions still work.
 	messageInsertRowsPerStmt         = 38 // 26 params per row
-	toolCallInsertRowsPerStmt        = 83 // 12 params per row (999/12 = 83)
+	toolCallInsertRowsPerStmt        = 76 // 13 params per row (999/13 = 76)
 	toolResultEventInsertRowsPerStmt = 80 // 12 params per row
 )
 
@@ -61,6 +61,7 @@ const (
 type ToolCall struct {
 	MessageID           int64             `json:"-"`
 	SessionID           string            `json:"-"`
+	MessageOrdinal      int               `json:"-"`
 	ToolName            string            `json:"tool_name"`
 	Category            string            `json:"category"`
 	ToolUseID           string            `json:"tool_use_id,omitempty"`
@@ -796,10 +797,10 @@ func multiRowPlaceholders(rows, cols int) string {
 func insertToolCallsChunkTx(
 	tx *sql.Tx, calls []ToolCall,
 ) error {
-	args := make([]any, 0, len(calls)*12)
+	args := make([]any, 0, len(calls)*13)
 	for _, tc := range calls {
 		args = append(args,
-			tc.MessageID, tc.SessionID,
+			tc.MessageID, tc.SessionID, tc.MessageOrdinal,
 			tc.ToolName, tc.Category,
 			nilIfEmpty(tc.ToolUseID),
 			nilIfEmpty(tc.InputJSON),
@@ -813,11 +814,11 @@ func insertToolCallsChunkTx(
 	}
 	query := `
 		INSERT INTO tool_calls
-			(message_id, session_id, tool_name, category,
+			(message_id, session_id, message_ordinal, tool_name, category,
 			 tool_use_id, input_json, skill_name,
 			 result_content_length, result_content, subagent_session_id,
 			 file_path, call_index)
-		VALUES ` + multiRowPlaceholders(len(calls), 12)
+		VALUES ` + multiRowPlaceholders(len(calls), 13)
 	if _, err := tx.Exec(query, args...); err != nil {
 		return fmt.Errorf(
 			"inserting tool_calls batch (%d rows): %w",
@@ -2443,6 +2444,7 @@ func resolveToolCalls(
 			calls = append(calls, ToolCall{
 				MessageID:           ids[i],
 				SessionID:           m.SessionID,
+				MessageOrdinal:      m.Ordinal,
 				ToolName:            tc.ToolName,
 				Category:            tc.Category,
 				ToolUseID:           tc.ToolUseID,

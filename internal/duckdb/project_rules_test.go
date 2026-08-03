@@ -194,7 +194,7 @@ func TestDuckProjectRulesCrossArchiveIsolation(t *testing.T) {
 		(source_archive_id, machine, path_prefix, layout, project,
 		 original_project, enabled, updated_at)
 		VALUES (?, ?, '/repos/shared', 'explicit', 'projb',
-		 '', TRUE, '')`, archiveB, duckPushMachine)
+		 '', TRUE, current_timestamp)`, archiveB, duckPushMachine)
 	require.NoError(t, err, "seed archive B mapping")
 	_, err = syncer.DB().ExecContext(ctx, `
 		INSERT INTO sessions

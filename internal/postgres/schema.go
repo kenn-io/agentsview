@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
@@ -761,7 +763,6 @@ func EnsureSchema(
 		"pg schema: core DDL step completed in %s",
 		time.Since(step).Round(time.Millisecond),
 	)
-
 	// Idempotent column additions for forward compatibility.
 	alters := []columnMigration{
 		{
@@ -1208,6 +1209,9 @@ func EnsureSchema(
 		time.Since(step).Round(time.Millisecond),
 		len(addedColumns),
 	)
+	if err := convergePostgresCommonSchema(ctx, db, nil); err != nil {
+		return err
+	}
 	step = time.Now()
 	sourceBackfilled, err := runSourceCurationBackfill(
 		ctx, db, sourceCurationColumnsAdded,
@@ -1322,6 +1326,83 @@ func EnsureSchema(
 		"pg schema: EnsureSchema completed in %s",
 		time.Since(start).Round(time.Millisecond),
 	)
+	return nil
+}
+
+var postgresCommonColumnMigrations = []struct {
+	table      string
+	column     string
+	definition string
+}{
+	{"sessions", "file_size", "BIGINT"},
+	{"sessions", "file_mtime", "BIGINT"},
+	{"sessions", "file_inode", "BIGINT"},
+	{"sessions", "file_device", "BIGINT"},
+	{"sessions", "file_hash", "TEXT"},
+	{"sessions", "local_modified_at", "TIMESTAMPTZ"},
+	{"messages", "id", "BIGINT"},
+	{"tool_calls", "message_id", "BIGINT"},
+}
+
+func convergePostgresCommonSchema(
+	ctx context.Context, conn *sql.DB, beforeStamp func() error,
+) error {
+	var complete bool
+	if err := conn.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM sync_metadata WHERE key = $1
+		)`, db.CommonSchemaCompatibilityMetadataKey,
+	).Scan(&complete); err != nil {
+		return fmt.Errorf("probing common PostgreSQL schema stamp: %w", err)
+	}
+	if complete {
+		return nil
+	}
+	store := bun.NewDB(conn, pgdialect.New())
+	tx, err := store.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("starting common PostgreSQL schema migration: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(
+		hashtext(current_database()), hashtext(current_schema())
+	)`); err != nil {
+		return fmt.Errorf("locking common PostgreSQL schema migration: %w", err)
+	}
+	for _, migration := range postgresCommonColumnMigrations {
+		query := fmt.Sprintf(
+			"ALTER TABLE %s ADD COLUMN IF NOT EXISTS %s %s",
+			migration.table, migration.column, migration.definition,
+		)
+		if _, err := tx.ExecContext(ctx, query); err != nil {
+			return fmt.Errorf(
+				"adding common PostgreSQL column %s.%s: %w",
+				migration.table, migration.column, err,
+			)
+		}
+	}
+	if err := db.CreateCommonSchema(ctx, tx); err != nil {
+		return err
+	}
+	if err := db.CheckCommonSchema(ctx, tx); err != nil {
+		return err
+	}
+	if beforeStamp != nil {
+		if err := beforeStamp(); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO sync_metadata (key, value)
+		VALUES (?, '1')
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+		db.CommonSchemaCompatibilityMetadataKey,
+	); err != nil {
+		return fmt.Errorf("stamping common PostgreSQL schema: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing common PostgreSQL schema migration: %w", err)
+	}
 	return nil
 }
 

@@ -13,7 +13,7 @@ type SourceProjectIdentityObservation struct {
 	bun.BaseModel `bun:"table:source_project_identity_observations"`
 
 	SourceArchiveID      string    `bun:"source_archive_id,pk"`
-	SourceArchiveSalt    string    `bun:"source_archive_salt,notnull"`
+	SourceArchiveSalt    string    `bun:"source_archive_salt,notnull,default:''"`
 	Project              string    `bun:"project,pk"`
 	Machine              string    `bun:"machine,pk"`
 	RootPath             string    `bun:"root_path,pk"`

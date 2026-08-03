@@ -117,10 +117,13 @@ func sessionToBunRow(session Session) (bunmodel.Session, error) {
 		FileInode:          session.FileInode,
 		FileDevice:         session.FileDevice,
 		FileHash:           session.FileHash,
-		TranscriptRevision: session.TranscriptRevision,
+		TranscriptRevision: "0",
 
 		SourceArchiveID:          session.SourceArchiveID,
 		SourceDatabaseGeneration: session.SourceDatabaseGeneration,
+	}
+	if session.TranscriptRevision != nil {
+		row.TranscriptRevision = *session.TranscriptRevision
 	}
 
 	optionalTimestamps := []struct {
@@ -223,7 +226,7 @@ func sessionFromBunRow(row bunmodel.Session) Session {
 		FileDevice:         row.FileDevice,
 		FileHash:           row.FileHash,
 		LocalModifiedAt:    timestampFromBunRow(row.LocalModifiedAt),
-		TranscriptRevision: row.TranscriptRevision,
+		TranscriptRevision: &row.TranscriptRevision,
 		CreatedAt:          requiredTimestampFromBunRow(row.CreatedAt),
 
 		SourceArchiveID:          row.SourceArchiveID,
