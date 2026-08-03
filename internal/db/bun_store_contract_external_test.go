@@ -81,3 +81,27 @@ func TestBunStoreDataContract(t *testing.T) {
 		},
 	})
 }
+
+func TestBunStoreCurationContract(t *testing.T) {
+	storetest.RunCurationContract(t, storetest.CurationBackend{
+		Name: "sqlite", Writable: true,
+		Open: func(t *testing.T) (storetest.CurationStore, storetest.CurationFixture) {
+			database, err := db.Open(filepath.Join(t.TempDir(), "curation-contract.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			archiveID, err := database.GetArchiveID(t.Context())
+			require.NoError(t, err)
+			generation, err := database.GetDatabaseID(t.Context())
+			require.NoError(t, err)
+			var fixture storetest.CurationFixture
+			require.NoError(t, database.Update(func(tx *sql.Tx) error {
+				var insertErr error
+				fixture, insertErr = storetest.InsertSQLiteCurationFixture(
+					t.Context(), tx, archiveID, generation,
+				)
+				return insertErr
+			}))
+			return database.BunStore, fixture
+		},
+	})
+}
