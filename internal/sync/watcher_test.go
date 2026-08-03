@@ -48,6 +48,18 @@ func TestPendingWatchBatchFullSyncAfterRenameOverflowKeepsProviderGroups(t *test
 	assert.Equal(t, []string{`C:\provider\root`}, batch.ReconcileGroups[0].Roots)
 }
 
+func TestPendingWatchBatchGroupBudgetOverflowFallsBackToGenericFullSync(t *testing.T) {
+	pending := newPendingWatchBatch(1, defaultWatchBatchMaxPathBytes)
+	pending.AddReconcileGroup("opencode", `C:\provider\first`)
+	pending.AddReconcileGroup("opencode", `C:\provider\second`)
+
+	batch, ok := pending.Take()
+	require.True(t, ok)
+	require.True(t, batch.FullSync)
+	assert.Empty(t, batch.ReconcileGroups,
+		"an over-budget provider group must not suppress its generic full recovery")
+}
+
 func requireReceiveWithin[T any](t *testing.T, ch <-chan T, timeout time.Duration) T {
 	t.Helper()
 	select {

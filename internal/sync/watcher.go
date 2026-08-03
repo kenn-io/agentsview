@@ -122,6 +122,7 @@ type pendingWatchBatch struct {
 	lifecycle      map[backendLifecycleToken]struct{}
 	pathBytes      int
 	groupBytes     int
+	groupEntries   int
 	maxEntries     int
 	maxPathBytes   int
 	fullSync       bool
@@ -221,19 +222,31 @@ func (p *pendingWatchBatch) AddReconcileGroup(
 	if agent == "" || root == "" {
 		return
 	}
-	if _, ok := p.groups[agent]; !ok {
-		p.groups[agent] = make(map[string]struct{})
-	}
-	if _, exists := p.groups[agent][root]; exists {
-		return
+	if roots, ok := p.groups[agent]; ok {
+		if _, exists := roots[root]; exists {
+			return
+		}
 	}
 	groupBytes := len(string(agent)) + len(root)
-	if p.groupBytes+groupBytes > p.maxPathBytes {
+	if p.groupEntries+1 > p.maxEntries || p.groupBytes+groupBytes > p.maxPathBytes {
+		p.discardProviderGroup(agent)
 		p.overflow()
 		return
 	}
+	if _, ok := p.groups[agent]; !ok {
+		p.groups[agent] = make(map[string]struct{})
+	}
 	p.groups[agent][root] = struct{}{}
 	p.groupBytes += groupBytes
+	p.groupEntries++
+}
+
+func (p *pendingWatchBatch) discardProviderGroup(agent parser.AgentType) {
+	for root := range p.groups[agent] {
+		p.groupBytes -= len(string(agent)) + len(root)
+		p.groupEntries--
+	}
+	delete(p.groups, agent)
 }
 
 func (p *pendingWatchBatch) AddBackendEvent(event backendEvent) bool {
@@ -507,6 +520,7 @@ func (p *pendingWatchBatch) TakeWithRootAgents(
 	tokens := p.takeLifecycleTokens()
 	p.pathBytes = 0
 	p.groupBytes = 0
+	p.groupEntries = 0
 	lostEvents := p.lostEvents
 	p.lostEvents = false
 	return WatchBatch{
@@ -536,6 +550,7 @@ func (p *pendingWatchBatch) takeProviderGroups() []ProviderRootsGroup {
 	}
 	clear(p.groups)
 	p.groupBytes = 0
+	p.groupEntries = 0
 	return groups
 }
 

@@ -2363,20 +2363,30 @@ func (e *WatchRetryError) WatchRetryBatch() sync.WatchBatch {
 
 func newWatchReconciliationError(
 	cause error, roots []string, full, lostEvents bool,
+	groupSets ...[]sync.ProviderRootsGroup,
 ) error {
+	var groups []sync.ProviderRootsGroup
+	if len(groupSets) > 0 {
+		for _, group := range groupSets[0] {
+			groups = append(groups, sync.ProviderRootsGroup{
+				Agent: group.Agent, Roots: append([]string(nil), group.Roots...),
+			})
+		}
+	}
 	var scoped interface{ ReconciliationRetryRoots() []string }
 	if errors.As(cause, &scoped) {
 		if failedRoots := deduplicateStrings(scoped.ReconciliationRetryRoots()); len(failedRoots) > 0 {
 			return &watchReconciliationError{
 				cause: cause,
 				retry: sync.WatchBatch{
-					ReconcileRoots: failedRoots,
-					LostEvents:     lostEvents,
+					ReconcileRoots:  failedRoots,
+					ReconcileGroups: groups,
+					LostEvents:      lostEvents,
 				},
 			}
 		}
 	}
-	retry := sync.WatchBatch{FullSync: full}
+	retry := sync.WatchBatch{FullSync: full, ReconcileGroups: groups}
 	retry.LostEvents = lostEvents
 	if !full {
 		retry.ReconcileRoots = append([]string(nil), roots...)
@@ -2531,7 +2541,10 @@ func syncWatchBatch(
 		if err := grouped.ReconcileProviderRootsGrouped(ctx, reconcileGroups); err != nil {
 			return &watchReconciliationError{
 				cause: err,
-				retry: sync.WatchBatch{ReconcileGroups: reconcileGroups, LostEvents: lostEvents},
+				retry: sync.WatchBatch{
+					FullSync: full, ReconcileRoots: deduplicateStrings(reconcileRoots),
+					ReconcileGroups: reconcileGroups, LostEvents: lostEvents,
+				},
 			}
 		}
 	}
@@ -2562,7 +2575,7 @@ func syncWatchBatch(
 		}
 		err := reconcileGeneric(fullRoots)
 		if err != nil {
-			return newWatchReconciliationError(err, nil, true, lostEvents)
+			return newWatchReconciliationError(err, nil, true, lostEvents, reconcileGroups)
 		}
 		return nil
 	}
@@ -2570,7 +2583,7 @@ func syncWatchBatch(
 	if len(roots) > 0 {
 		err := reconcileGeneric(roots)
 		if err != nil {
-			return newWatchReconciliationError(err, roots, false, lostEvents)
+			return newWatchReconciliationError(err, roots, false, lostEvents, reconcileGroups)
 		}
 	}
 	return nil

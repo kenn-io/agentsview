@@ -34,9 +34,11 @@ import (
 )
 
 type groupedRootDispatchRecorder struct {
-	groups   []agentsync.ProviderRootsGroup
-	generic  [][]string
-	excluded [][]parser.AgentType
+	groups     []agentsync.ProviderRootsGroup
+	generic    [][]string
+	excluded   [][]parser.AgentType
+	groupErr   error
+	genericErr error
 }
 
 func (r *groupedRootDispatchRecorder) SyncPathsContext(context.Context, []string) error {
@@ -68,7 +70,7 @@ func (r *groupedRootDispatchRecorder) ReconcileProviderRootsGrouped(
 	_ context.Context, groups []agentsync.ProviderRootsGroup,
 ) error {
 	r.groups = append(r.groups, groups...)
-	return nil
+	return r.groupErr
 }
 
 func (r *groupedRootDispatchRecorder) ReconcileWatchRootsExcludingAgents(
@@ -76,7 +78,7 @@ func (r *groupedRootDispatchRecorder) ReconcileWatchRootsExcludingAgents(
 ) error {
 	r.generic = append(r.generic, append([]string(nil), roots...))
 	r.excluded = append(r.excluded, append([]parser.AgentType(nil), excluded...))
-	return nil
+	return r.genericErr
 }
 
 func TestSyncWatchBatchKeepsSharedRootsForOtherProviders(t *testing.T) {
@@ -95,6 +97,31 @@ func TestSyncWatchBatchKeepsSharedRootsForOtherProviders(t *testing.T) {
 	require.Len(t, recorder.groups, 1)
 	require.Equal(t, []string{sharedRoot}, recorder.generic[0])
 	require.Equal(t, []parser.AgentType{parser.AgentOpenCode}, recorder.excluded[0])
+}
+
+func TestSyncWatchBatchRetriesGroupedAndGenericScopesTogether(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "shared")
+	group := agentsync.ProviderRootsGroup{Agent: parser.AgentOpenCode, Roots: []string{root}}
+
+	t.Run("grouped failure retains both scopes", func(t *testing.T) {
+		recorder := &groupedRootDispatchRecorder{groupErr: errors.New("grouped failed")}
+		err := syncWatchBatch(t.Context(), recorder, agentsync.WatchBatch{
+			ReconcileRoots: []string{root}, ReconcileGroups: []agentsync.ProviderRootsGroup{group},
+		}, staticFullRoots())
+		retry := requireWatchRetryBatch(t, err)
+		assert.Equal(t, []string{root}, retry.ReconcileRoots)
+		assert.Equal(t, []agentsync.ProviderRootsGroup{group}, retry.ReconcileGroups)
+	})
+
+	t.Run("generic failure retains both scopes", func(t *testing.T) {
+		recorder := &groupedRootDispatchRecorder{genericErr: errors.New("generic failed")}
+		err := syncWatchBatch(t.Context(), recorder, agentsync.WatchBatch{
+			ReconcileRoots: []string{root}, ReconcileGroups: []agentsync.ProviderRootsGroup{group},
+		}, staticFullRoots())
+		retry := requireWatchRetryBatch(t, err)
+		assert.Equal(t, []string{root}, retry.ReconcileRoots)
+		assert.Equal(t, []agentsync.ProviderRootsGroup{group}, retry.ReconcileGroups)
+	})
 }
 
 func TestRuntimeWarningHelper(t *testing.T) {

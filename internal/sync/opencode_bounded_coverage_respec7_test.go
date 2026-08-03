@@ -66,8 +66,12 @@ func TestBoundedCoverageTransitionRetiresBeforeApply(t *testing.T) {
 	}
 	engine := &Engine{boundedCoverageGenerations: make(map[string]uint64)}
 	lease := &BoundedCoverageLease{
-		Binding:  BoundedCoverageBinding{Agent: parser.AgentOpenCode, PhysicalDBPath: path, Generation: 1},
-		Provider: parser.AgentOpenCode, PhysicalDBPath: path, Generation: 1,
+		Binding: BoundedCoverageBinding{
+			Agent: parser.AgentOpenCode, PhysicalDBPath: path,
+			Scope: filepath.Dir(path), Generation: 1,
+		},
+		Provider: parser.AgentOpenCode, PhysicalDBPath: path,
+		ExactProviderScope: filepath.Dir(path), Generation: 1,
 		FileIdentity: boundedCoverageFileIdentity(path, info), fileInfo: info,
 	}
 	if _, err := engine.TransitionBoundedCoverageRequest(t.Context(), lease, nil, parser.OpenCodeCoverageCheckpoint{}, true); err != nil {
@@ -108,5 +112,30 @@ func TestBoundedCoverageTransitionRejectsMismatchedSourceProvider(t *testing.T) 
 		t.Context(), lease, []parser.SourceRef{source}, parser.OpenCodeCoverageCheckpoint{}, false,
 	); err == nil {
 		t.Fatal("source from another provider crossed the bounded write boundary")
+	}
+}
+
+func TestBoundedCoverageTransitionRequiresScopedGenerationBinding(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "opencode.db")
+	if err := os.WriteFile(path, []byte("db"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := &Engine{boundedCoverageGenerations: make(map[string]uint64)}
+	lease := &BoundedCoverageLease{
+		Binding: BoundedCoverageBinding{
+			Agent: parser.AgentOpenCode, PhysicalDBPath: path, Generation: 1,
+		},
+		Provider: parser.AgentOpenCode, PhysicalDBPath: path, Generation: 1,
+		FileIdentity: boundedCoverageFileIdentity(path, info), fileInfo: info,
+	}
+	if _, err := engine.TransitionBoundedCoverageRequest(
+		t.Context(), lease, nil, parser.OpenCodeCoverageCheckpoint{}, true,
+	); err == nil {
+		t.Fatal("bounded transition accepted a lease without exact scope binding")
 	}
 }
