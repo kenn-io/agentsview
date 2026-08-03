@@ -337,11 +337,11 @@ func runServe(cfg config.Config, opts serveOptions) {
 					originalPaths := append([]string(nil), batch.Paths...)
 					bindings, remaining, err := resolver.BoundedCoverageBindingsForPaths(ctx, batch.Paths)
 					if err != nil {
-						return &WatchRetryError{cause: err, paths: originalPaths}
+						return &WatchRetryError{cause: err, batch: sync.WatchBatch{Paths: originalPaths, FullSync: batch.FullSync, LostEvents: batch.LostEvents, ReconcileRoots: append([]string(nil), batch.ReconcileRoots...), ReconcileGroups: append([]sync.ProviderRootsGroup(nil), batch.ReconcileGroups...)}}
 					}
 					admitted, err := unwatchedPoller.AdmitBoundedCoverage(ctx, bindings, true)
 					if err != nil {
-						return &WatchRetryError{cause: err, paths: originalPaths}
+						return &WatchRetryError{cause: err, batch: sync.WatchBatch{Paths: originalPaths, FullSync: batch.FullSync, LostEvents: batch.LostEvents, ReconcileRoots: append([]string(nil), batch.ReconcileRoots...), ReconcileGroups: append([]sync.ProviderRootsGroup(nil), batch.ReconcileGroups...)}}
 					}
 					for _, binding := range bindings {
 						if slices.ContainsFunc(admitted, func(current sync.BoundedCoverageBinding) bool {
@@ -2339,13 +2339,20 @@ type watchReconciliationError struct {
 
 type WatchRetryError struct {
 	cause error
-	paths []string
+	batch sync.WatchBatch
 }
 
 func (e *WatchRetryError) Error() string { return e.cause.Error() }
 func (e *WatchRetryError) Unwrap() error { return e.cause }
 func (e *WatchRetryError) WatchRetryBatch() sync.WatchBatch {
-	return sync.WatchBatch{Paths: append([]string(nil), e.paths...)}
+	retry := e.batch
+	retry.Paths = append([]string(nil), retry.Paths...)
+	retry.ReconcileRoots = append([]string(nil), retry.ReconcileRoots...)
+	retry.ReconcileGroups = append([]sync.ProviderRootsGroup(nil), retry.ReconcileGroups...)
+	for i := range retry.ReconcileGroups {
+		retry.ReconcileGroups[i].Roots = append([]string(nil), retry.ReconcileGroups[i].Roots...)
+	}
+	return retry
 }
 
 func newWatchReconciliationError(
@@ -2395,6 +2402,9 @@ func (e *watchReconciliationError) WatchRetryBatch() sync.WatchBatch {
 	retry.Paths = append([]string(nil), retry.Paths...)
 	retry.ReconcileRoots = append([]string(nil), retry.ReconcileRoots...)
 	retry.ReconcileGroups = append([]sync.ProviderRootsGroup(nil), retry.ReconcileGroups...)
+	for i := range retry.ReconcileGroups {
+		retry.ReconcileGroups[i].Roots = append([]string(nil), retry.ReconcileGroups[i].Roots...)
+	}
 	return retry
 }
 
@@ -3112,6 +3122,7 @@ func runBoundedCoverageLeaseAudit(
 	result, err := runWorkerWritePass(ctx, recoveryCtx, cfg, engine, database, lock, mode, nil)
 	if err == nil && (!result.BoundedCoverageRepairAccepted || result.BoundedCoverageLease == nil ||
 		result.BoundedCoverageLease.Provider != lease.Provider ||
+		filepath.Clean(result.BoundedCoverageLease.PhysicalDBPath) != filepath.Clean(lease.PhysicalDBPath) ||
 		result.BoundedCoverageLease.Generation != lease.Generation ||
 		result.BoundedCoverageLease.FileIdentity != lease.FileIdentity ||
 		filepath.Clean(result.BoundedCoverageLease.ExactProviderScope) != filepath.Clean(lease.ExactProviderScope)) {

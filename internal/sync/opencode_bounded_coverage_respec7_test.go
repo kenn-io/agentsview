@@ -32,23 +32,23 @@ func TestBoundedCoverageFileIdentityIgnoresMutableObservations(t *testing.T) {
 	}
 }
 
-func TestBoundedCoverageWriteGateSerializesHandoffs(t *testing.T) {
+func TestBoundedCoverageUsesEngineWriteOwner(t *testing.T) {
 	engine := &Engine{}
-	release := engine.AcquireBoundedCoverageWriteGate()
+	engine.syncMu.Lock()
 	acquired := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		unlock := engine.AcquireBoundedCoverageWriteGate()
+		engine.syncMu.Lock()
 		close(acquired)
-		unlock()
+		engine.syncMu.Unlock()
 	}()
 	select {
 	case <-acquired:
-		t.Fatal("replacement acquired the write gate before the source handoff released it")
+		t.Fatal("bounded source operation bypassed the engine write owner")
 	default:
 	}
-	release()
+	engine.syncMu.Unlock()
 	<-acquired
 	<-done
 }

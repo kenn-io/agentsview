@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	stdsync "sync"
 
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -52,37 +51,7 @@ type BoundedCoverageLease struct {
 	PendingWork         []string                          `json:"pending_work,omitempty"`
 	AdmissionRowZero    bool                              `json:"admission_row_zero"`
 	Reason              string                            `json:"reason"`
-	validate            func() error                      `json:"-"`
 	fileInfo            os.FileInfo                       `json:"-"`
-	applyFence          *stdsync.Mutex                    `json:"-"`
-}
-
-// AcquireApplyFence is shared by replacement and source application.
-func (l *BoundedCoverageLease) AcquireApplyFence() func() {
-	if l == nil {
-		return func() {}
-	}
-	if l.applyFence == nil {
-		l.applyFence = &stdsync.Mutex{}
-	}
-	l.applyFence.Lock()
-	return l.applyFence.Unlock
-}
-
-func (l *BoundedCoverageLease) Validate() error {
-	if l == nil {
-		return errors.New("nil bounded coverage lease")
-	}
-	if l.validate != nil {
-		return l.validate()
-	}
-	return nil
-}
-
-func (l *BoundedCoverageLease) SetValidator(validate func() error) {
-	if l != nil {
-		l.validate = validate
-	}
 }
 
 type boundedCoverageIdentityProvider interface {
@@ -352,16 +321,12 @@ func (e *Engine) AdmitBoundedCoverageLease(
 		ExactProviderScope: binding.Scope, Generation: binding.Generation,
 		FileIdentity:        boundedCoverageFileIdentity(path, info),
 		AdmissionCheckpoint: checkpoint, AdmissionRowZero: true,
-		Reason:     "bounded coverage admission",
-		applyFence: &stdsync.Mutex{},
-		fileInfo:   info,
+		Reason:   "bounded coverage admission",
+		fileInfo: info,
 	}, nil
 }
 
 func (e *Engine) validateBoundedCoverageLease(lease *BoundedCoverageLease) error {
-	if err := lease.Validate(); err != nil {
-		return err
-	}
 	return e.validateBoundedCoveragePhysicalLease(lease)
 }
 
@@ -402,10 +367,6 @@ func (e *Engine) DrainBoundedCoverageLease(
 func (e *Engine) ApplyBoundedCoverageSourcesLease(
 	ctx context.Context, lease *BoundedCoverageLease, sources []parser.SourceRef,
 ) (SyncStats, error) {
-	releaseGate := e.AcquireBoundedCoverageWriteGate()
-	defer releaseGate()
-	release := lease.AcquireApplyFence()
-	defer release()
 	if err := e.validateBoundedCoveragePhysicalLease(lease); err != nil {
 		return SyncStats{}, err
 	}
@@ -418,10 +379,6 @@ func (e *Engine) ApplyBoundedCoverageSourcesLeaseCommit(
 	ctx context.Context, lease *BoundedCoverageLease, sources []parser.SourceRef,
 	commit func(SyncStats) error,
 ) error {
-	releaseGate := e.AcquireBoundedCoverageWriteGate()
-	defer releaseGate()
-	release := lease.AcquireApplyFence()
-	defer release()
 	if err := e.validateBoundedCoveragePhysicalLease(lease); err != nil {
 		return err
 	}

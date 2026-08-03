@@ -77,6 +77,10 @@ func TestBoundedCoverageCoordinatorCardinality(t *testing.T) {
 			roots := []agentsync.BoundedCoverageRoot{{Agent: parser.AgentOpenCode, Root: root}}
 			bindings, err := engine.BoundedCoverageBindings(t.Context(), roots)
 			require.NoError(t, err)
+			_, err = journal.Exec(`INSERT INTO event
+				(id, aggregate_id, seq, type, data)
+				VALUES ('event-before-admission', 'ses00000', 1, 'session.updated', '{}')`)
+			require.NoError(t, err)
 			_, err = coordinator.AdmitBoundedCoverage(t.Context(), bindings, native)
 			require.NoError(t, err)
 			_, err = journal.Exec(`INSERT INTO event
@@ -94,7 +98,7 @@ func TestBoundedCoverageCoordinatorCardinality(t *testing.T) {
 			_, err = archive.GetSession(t.Context(), "ses00000")
 			require.NoError(t, err)
 			t.Logf("bounded_cardinality sessions=%d observed_journal_rows=%d applied_sources=%d", sessions, rows, applied)
-			require.Equal(t, 1, rows)
+			require.Equal(t, 2, rows, "row-zero admission must retain pre-admission and triggering rows")
 			require.Equal(t, 1, applied)
 			require.LessOrEqual(t, rows, parser.OpenCodeCoverageMaxRows)
 		})

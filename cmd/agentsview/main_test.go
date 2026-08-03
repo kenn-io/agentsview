@@ -2349,6 +2349,21 @@ func (e scopedReconciliationError) ReconciliationRetryRoots() []string {
 	return append([]string(nil), e.roots...)
 }
 
+func TestWatchRetryErrorRetainsProviderGroups(t *testing.T) {
+	group := agentsync.ProviderRootsGroup{Agent: parser.AgentOpenCode, Roots: []string{"/provider/root"}}
+	err := &WatchRetryError{cause: errors.New("admission failed"), batch: agentsync.WatchBatch{
+		Paths: []string{"/provider/opencode.db"}, ReconcileGroups: []agentsync.ProviderRootsGroup{group}, LostEvents: true,
+	}}
+	retry := err.WatchRetryBatch()
+	assert.Equal(t, []agentsync.ProviderRootsGroup{group}, retry.ReconcileGroups)
+	assert.Equal(t, []string{"/provider/opencode.db"}, retry.Paths)
+	assert.True(t, retry.LostEvents)
+
+	retry.ReconcileGroups[0].Roots[0] = "/mutated"
+	assert.Equal(t, "/provider/root", err.batch.ReconcileGroups[0].Roots[0],
+		"retry snapshots must not let a later accumulation mutate provider-owned work")
+}
+
 // staticFullRoots stubs syncWatchBatch's probed recovery scope with a fixed
 // available root list; no arguments means no scope is physically available.
 func staticFullRoots(roots ...string) func() watchRecoveryScope {
