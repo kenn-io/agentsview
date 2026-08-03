@@ -301,6 +301,22 @@ driver-specific connection setup, pool configuration, handle draining, and
 handle replacement. Application queries, schema operations, and transactions
 flow through Bun.
 
+PostgreSQL probes insight insertion and deletion independently because roles may
+grant only one privilege. Those results authorize distinct write operations; if
+permissions or transaction read-only state change after probing, the adapter
+maps SQLSTATE `25006` and `42501` back to `db.ErrReadOnly` while retaining the
+driver error in the chain.
+
+`BunBackend.ConsistentView` is mandatory for composite reads. SQLite uses one
+read transaction, PostgreSQL uses a repeatable-read transaction, and a local
+DuckDB serving mirror holds one immutable guarded handle. A mutable direct
+DuckDB handle uses one transaction. Quack cannot carry a remote transaction
+across separate `query()` requests, so its adapter reads the mirror metadata
+token before and after the callback and retries the complete callback when a
+server-side mirror replacement changes that token; repeated instability returns
+an error rather than a mixed-generation result. There is no non-snapshot
+fallback for adapters.
+
 Common store methods use Bun models and query builders. Complex CTEs and
 aggregates may use parameterized Bun raw fragments, but query composition,
 literal formatting, execution, transactions, and model scanning remain under

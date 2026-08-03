@@ -1,8 +1,10 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +14,24 @@ import (
 	"github.com/uptrace/bun/dialect/sqlitedialect"
 	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
+
+type candidateQueryHook struct {
+	queries []string
+}
+
+func (*candidateQueryHook) BeforeQuery(
+	ctx context.Context, _ *bun.QueryEvent,
+) context.Context {
+	return ctx
+}
+
+func (h *candidateQueryHook) AfterQuery(
+	_ context.Context, event *bun.QueryEvent,
+) {
+	if event.Operation() == "SELECT" {
+		h.queries = append(h.queries, event.Query)
+	}
+}
 
 func TestBunProjectRuleSessionsHydrateOnlyEnabledArchiveMachineScopes(t *testing.T) {
 	raw, err := sql.Open("sqlite3", ":memory:")
@@ -66,6 +86,69 @@ func TestBunProjectRuleSessionsHydrateOnlyEnabledArchiveMachineScopes(t *testing
 	assert.Equal(t, "archive-a", rows[0].SourceArchiveID)
 }
 
+func TestBunWorktreeCandidatesHydrateOnlySelectedProjects(t *testing.T) {
+	raw, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	raw.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	store := bun.NewDB(raw, sqlitedialect.New())
+	require.NoError(t, CreateCommonSchema(t.Context(), store))
+	_, err = store.NewInsert().Model(&bunmodel.SourceArchive{
+		SourceArchiveID: "candidate-archive", SourceArchiveSalt: "candidate-salt",
+	}).Exec(t.Context())
+	require.NoError(t, err)
+
+	created := bunmodel.NewTimestamp(time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC))
+	sessions := []bunmodel.Session{{
+		ID: "selected-session", Project: "selected-project", Machine: "selected-host",
+		Agent: "codex", Cwd: "/workspace/selected", CreatedAt: created,
+		SourceArchiveID: "candidate-archive", SourceDatabaseGeneration: "candidate-generation",
+	}}
+	for i := range 500 {
+		sessions = append(sessions, bunmodel.Session{
+			ID: fmt.Sprintf("unrelated-session-%03d", i), Project: "unrelated-project",
+			Machine: "unrelated-host", Agent: "codex", Cwd: "/workspace/unrelated",
+			CreatedAt: created, SourceArchiveID: "candidate-archive",
+			SourceDatabaseGeneration: "candidate-generation",
+		})
+	}
+	_, err = store.NewInsert().Model(&sessions).Exec(t.Context())
+	require.NoError(t, err)
+
+	base := NewBunStore(&sessionContractBackend{store: store})
+	projects, err := base.BuildProjectIdentityMap(
+		t.Context(), []string{"selected-project", "unrelated-project"},
+	)
+	require.NoError(t, err)
+
+	hook := new(candidateQueryHook)
+	common := NewBunStore(&sessionContractBackend{store: store.WithQueryHook(hook)})
+	candidates, err := common.ListArchiveWorktreeCandidates(
+		t.Context(), ArchiveWorktreeCandidateRequest{
+			ProjectLabel: "selected-project",
+			ProjectKey:   projects["selected-project"].ProjectKey,
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, candidates, 1)
+	assert.Equal(t, 1, candidates[0].ContributingSessions)
+	assert.Equal(t, "selected-session", candidates[0].Examples[0].SessionID)
+
+	selectedSessionQueries := 0
+	for _, query := range hook.queries {
+		normalized := strings.ToLower(query)
+		if !strings.Contains(normalized, `from "sessions"`) ||
+			!strings.Contains(normalized, `"id"`) {
+			continue
+		}
+		selectedSessionQueries++
+		assert.Contains(t, normalized, "project in",
+			"session hydration must be constrained by the selected project")
+	}
+	assert.Equal(t, 1, selectedSessionQueries,
+		"candidate reads should hydrate selected session details once")
+}
+
 func TestSQLiteConsistentViewKeepsOneReadSnapshot(t *testing.T) {
 	database := testDB(t)
 	backend := &sqliteBunBackend{store: database}
@@ -92,6 +175,9 @@ func TestSQLiteConsistentViewKeepsOneReadSnapshot(t *testing.T) {
 			)
 			inserted <- insertErr
 		}()
+		if insertErr := <-inserted; insertErr != nil {
+			return fmt.Errorf("committing concurrent SQLite insert: %w", insertErr)
+		}
 		var after int
 		if err := store.NewSelect().Table("sessions").ColumnExpr("COUNT(*)").
 			Scan(t.Context(), &after); err != nil {
@@ -101,5 +187,4 @@ func TestSQLiteConsistentViewKeepsOneReadSnapshot(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, err)
-	require.NoError(t, <-inserted)
 }

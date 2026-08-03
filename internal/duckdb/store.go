@@ -89,13 +89,73 @@ func (b *duckBunBackend) View(
 	return fn(b.store.bun)
 }
 
-// ConsistentView holds the immutable mirror handle for the complete composite
-// read. DuckDB push installs a new mirror by swapping that handle, so no
-// transaction is needed to keep one callback on one validated snapshot.
+// ConsistentView keeps one coherent database image for a composite read. Local
+// serving mirrors are immutable for the lifetime of their guarded handle,
+// direct mutable connections use a read transaction, and Quack retries across
+// a server-side mirror replacement detected through its metadata token.
 func (b *duckBunBackend) ConsistentView(
 	ctx context.Context, fn func(bun.IDB) error,
 ) error {
-	return b.View(ctx, fn)
+	b.store.handleMu.RLock()
+	defer b.store.handleMu.RUnlock()
+	if b.store.connectionKind == duckDBQuackClientConnection {
+		return stableDuckDBView(
+			ctx,
+			func(ctx context.Context) (string, error) {
+				return b.store.mirrorReadToken(ctx)
+			},
+			func() error { return fn(b.store.bun) },
+		)
+	}
+	if b.store.path != "" {
+		return fn(b.store.bun)
+	}
+	return b.store.bun.RunInTx(
+		ctx, nil,
+		func(_ context.Context, tx bun.Tx) error { return fn(tx) },
+	)
+}
+
+func (s *Store) mirrorReadToken(ctx context.Context) (string, error) {
+	var token string
+	err := queryDuckDBRowContext(
+		ctx, s.duck, s.connectionKind, s.quack,
+		`SELECT COALESCE(
+			string_agg(key || '=' || value, '|' ORDER BY key),
+			''
+		) FROM sync_metadata`,
+	).Scan(&token)
+	if err != nil {
+		return "", fmt.Errorf("reading duckdb mirror consistency token: %w", err)
+	}
+	return token, nil
+}
+
+const stableDuckDBViewAttempts = 3
+
+func stableDuckDBView(
+	ctx context.Context,
+	readToken func(context.Context) (string, error),
+	view func() error,
+) error {
+	for range stableDuckDBViewAttempts {
+		before, err := readToken(ctx)
+		if err != nil {
+			return err
+		}
+		viewErr := view()
+		after, err := readToken(ctx)
+		if err != nil {
+			return err
+		}
+		if before == after {
+			return viewErr
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	return fmt.Errorf("duckdb mirror changed during %d read attempts", stableDuckDBViewAttempts)
 }
 
 func (*duckBunBackend) Update(

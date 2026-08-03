@@ -11,11 +11,12 @@ import (
 )
 
 type recordingBunBackend struct {
-	readOnly     bool
-	capabilities BackendCapabilities
-	insideGuard  bool
-	viewCalls    int
-	updateCalls  int
+	readOnly            bool
+	capabilities        BackendCapabilities
+	insideGuard         bool
+	viewCalls           int
+	consistentViewCalls int
+	updateCalls         int
 }
 
 func (*recordingBunBackend) Name() string { return "recording" }
@@ -40,6 +41,15 @@ func (b *recordingBunBackend) View(
 	_ context.Context, fn func(bun.IDB) error,
 ) error {
 	b.viewCalls++
+	b.insideGuard = true
+	defer func() { b.insideGuard = false }()
+	return fn(nil)
+}
+
+func (b *recordingBunBackend) ConsistentView(
+	_ context.Context, fn func(bun.IDB) error,
+) error {
+	b.consistentViewCalls++
 	b.insideGuard = true
 	defer func() { b.insideGuard = false }()
 	return fn(nil)

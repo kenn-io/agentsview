@@ -570,7 +570,7 @@ func (db *DB) PinnedMessagesBySession(
 		rows, err := db.getReader().QueryContext(ctx,
 			"SELECT "+pinnedBaseCols+
 				" FROM pinned_messages WHERE session_id IN ("+ph+")"+
-				" ORDER BY session_id, created_at DESC",
+				" ORDER BY session_id, created_at DESC, id DESC",
 			args...,
 		)
 		if err != nil {

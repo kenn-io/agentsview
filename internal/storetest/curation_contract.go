@@ -146,6 +146,28 @@ func assertWritableCuration(
 	require.Len(t, pins, 1)
 	require.NotNil(t, pins[0].Note)
 	assert.Equal(t, updatedNote, *pins[0].Note)
+	newPinID, err := store.PinMessage(
+		fixture.Core.RootNewID, fixture.WriteMessageID, nil,
+	)
+	require.NoError(t, err)
+	assert.Positive(t, newPinID)
+	assert.NotEqual(t, fixture.InitialPinRowID, newPinID)
+	pins, err = store.ListPinnedMessages(ctx, fixture.Core.RootNewID, "")
+	require.NoError(t, err)
+	require.Len(t, pins, 2)
+	var newPin *db.PinnedMessage
+	for i := range pins {
+		if pins[i].ID == newPinID {
+			newPin = &pins[i]
+			break
+		}
+	}
+	require.NotNil(t, newPin)
+	assert.Equal(t, fixture.WriteMessageID, newPin.MessageID)
+	assert.Equal(t, 2, newPin.Ordinal)
+	require.NoError(t,
+		store.UnpinMessage(fixture.Core.RootNewID, fixture.WriteMessageID),
+	)
 
 	require.NoError(t,
 		store.UnpinMessage(fixture.Core.RootNewID, fixture.PinnedMessageID),

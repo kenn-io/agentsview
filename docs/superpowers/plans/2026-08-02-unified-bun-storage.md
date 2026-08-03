@@ -452,6 +452,7 @@ ______________________________________________________________________
         ReadOnly() bool
         Capabilities() BackendCapabilities
         View(context.Context, func(bun.IDB) error) error
+        ConsistentView(context.Context, func(bun.IDB) error) error
         Update(context.Context, func(bun.IDB) error) error
     }
 
@@ -461,6 +462,7 @@ ______________________________________________________________________
         WriteArchive WriteOperation = iota
         WriteCuration
         WriteInsight
+        WriteInsightDelete
         WriteSessionManagement
         WriteRecall
     )
@@ -1130,8 +1132,9 @@ ______________________________________________________________________
 
     Use Bun transactions and `RETURNING` for generated IDs on writable engines.
     Place the read-only policy before opening a write callback. Preserve
-    PostgreSQL's capability probe for insight generation as an adapter concern,
-    but use the shared insight queries after it succeeds.
+    PostgreSQL's independent capability probes for insight generation and
+    deletion as adapter concerns, but use the shared insight queries after each
+    authorized operation succeeds.
 
     Move Recall Store entry/query/import/event methods onto `BunStore`. Run them
     through the canonical SQLite Bun handle when `Capabilities().Recall` is

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -35,10 +37,28 @@ func TestStoreBunBackendCapabilitiesFollowInsightProbe(t *testing.T) {
 	assert.False(t, capabilities.AllowsWrite(db.WriteArchive))
 	assert.False(t, capabilities.AllowsWrite(db.WriteRecall))
 	assert.False(t, capabilities.AllowsWrite(db.WriteInsight))
+	assert.False(t, capabilities.AllowsWrite(db.WriteInsightDelete))
 	assert.False(t, capabilities.Recall)
 
-	store.setInsightGenerationAvailable(true)
+	store.setInsightCapabilities(true, false)
 	assert.True(t, backend.Capabilities().AllowsWrite(db.WriteInsight))
+	assert.False(t, backend.Capabilities().AllowsWrite(db.WriteInsightDelete))
+	store.setInsightCapabilities(false, true)
+	assert.False(t, backend.Capabilities().AllowsWrite(db.WriteInsight))
+	assert.True(t, backend.Capabilities().AllowsWrite(db.WriteInsightDelete))
+}
+
+func TestPostgresBunBackendUpdatePreservesReadOnlySentinel(t *testing.T) {
+	backend := &postgresBunBackend{store: &Store{}}
+	cause := &pgconn.PgError{Code: "42501", Message: "permission denied"}
+
+	err := backend.Update(t.Context(), func(bun.IDB) error {
+		return fmt.Errorf("deleting insight: %w", cause)
+	})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, db.ErrReadOnly)
+	assert.ErrorIs(t, err, cause)
 }
 
 // TestStoreSearchContentSemanticModesUnavailable pins that "semantic" and
