@@ -3064,6 +3064,11 @@ func (db *DB) migrateColumns(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := db.convergeSQLiteCommonSchemaLocked(
+		ctx, nil,
+	); err != nil {
+		return err
+	}
 	if err := db.scrubProjectIdentityGitRemoteCredentialsLocked(w); err != nil {
 		return err
 	}
@@ -3086,12 +3091,6 @@ func (db *DB) migrateColumns(ctx context.Context) error {
 	if err := requeueInvalidArtifactPublicationsLocked(w); err != nil {
 		return err
 	}
-	if err := db.convergeSQLiteCommonSchemaLocked(
-		context.Background(), nil,
-	); err != nil {
-		return err
-	}
-
 	runRepair, err := db.shouldRunTokenCoverageRepairLocked(w)
 	if err != nil {
 		return err
@@ -3456,13 +3455,16 @@ func (db *DB) scrubProjectIdentityGitRemoteCredentialsLocked(
 	}
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.Exec(`
-		DELETE FROM project_identity_observations
+		DELETE FROM source_project_identity_observations
 		WHERE git_remote = ''
 		  AND EXISTS (
-			SELECT 1 FROM project_identity_observations remote
-			WHERE remote.project = project_identity_observations.project
-			  AND remote.machine = project_identity_observations.machine
-			  AND remote.root_path = project_identity_observations.root_path
+			SELECT 1 FROM source_project_identity_observations remote
+			WHERE remote.source_archive_id =
+				source_project_identity_observations.source_archive_id
+			  AND remote.project = source_project_identity_observations.project
+			  AND remote.machine = source_project_identity_observations.machine
+			  AND remote.root_path =
+				source_project_identity_observations.root_path
 			  AND remote.git_remote != ''
 		  )`); err != nil {
 		return fmt.Errorf("removing stale project identity root fallbacks: %w", err)

@@ -2894,8 +2894,10 @@ func (db *DB) GetSessionForIncremental(
 			 ORDER BY m.ordinal DESC
 			 LIMIT 1)
 		 FROM sessions s
-		 LEFT JOIN session_project_identity_snapshots snap
-		   ON snap.session_id = s.id
+		 LEFT JOIN source_session_project_identity_snapshots snap
+		   ON snap.source_archive_id = s.source_archive_id
+		  AND snap.source_database_generation = s.source_database_generation
+		  AND snap.source_session_id = s.id
 		 WHERE s.file_path = ?
 		   AND s.agent = ?
 		   AND s.deleted_at IS NULL

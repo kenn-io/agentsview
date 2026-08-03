@@ -161,8 +161,30 @@ The shipped SQLite `tool_calls.message_id` and `pinned_messages.message_id`
 columns remain non-null physical aliases because removing them would require
 destructive table rebuilds. The SQLite adapter resolves those aliases from the
 inserted message inside the same transaction; shared queries and every other
-backend use only the canonical ordinal keys. Migration tests retain existing
-tool calls and pins and prove new writes satisfy both representations.
+backend use only the canonical ordinal keys. PostgreSQL's prior
+`pinned_messages.message_id` column is a nullable data alias after convergence;
+the canonical `(session_id, ordinal)` key is authoritative there. Migration
+tests retain existing tool calls and pins and prove new writes satisfy the
+accepted representation on each persistent backend.
+
+Upgraded SQLite archives cannot gain table-level foreign keys through additive
+`ALTER TABLE`, so compatibility is behavioral rather than a claim that fresh and
+shipped DDL text are identical. The accepted legacy relationship matrix is:
+
+- shipped `messages.id` plus unique `(session_id, ordinal)` represents the
+  canonical message key;
+- `tool_calls.message_id` retains message-delete cascade behavior while the
+  backfilled/triggered `message_ordinal` and canonical unique index represent
+  the logical tool key;
+- `pinned_messages.message_id` retains message-delete cascade behavior while the
+  canonical ordinal index represents the logical pin key; and
+- shipped tool-result rows retain their session cascade, while every
+  replacement/delete transaction removes result events before calls/messages.
+
+Fresh SQLite and PostgreSQL schemas receive the full canonical foreign-key
+metadata. Compatibility checks accept only the legacy forms above and validate
+their data invariants; no persistent table is rebuilt to make catalog text
+match.
 
 Canonical foreign-key metadata preserves session/message deletion behavior for
 fresh schemas. Canonical usage dedup indexes use portable `CASE` expressions so
@@ -213,6 +235,21 @@ schema-convergence migration and follows these rules:
 Where an existing physical type is a valid engine-specific representation of the
 canonical logical type, compatibility validation treats it as an explicit alias
 rather than rewriting stored data without benefit.
+
+The SQLite compatibility stamp is checked inside the convergence transaction. An
+unstamped archive copies the three legacy identity inputs exactly once, installs
+canonical change-journal triggers, validates invariants, and stamps the same
+commit. A stamped archive validates and fails closed on drift; it never replays
+legacy inputs or attempts an implicit repair. PostgreSQL rechecks its stamp
+after acquiring the advisory transaction lock and follows the same fail-closed
+rule. SQLite's writer transaction/busy timeout and PostgreSQL's advisory lock
+serialize concurrent openers.
+
+Downgrading a database after this cutover is unsupported: older binaries may
+observe stale legacy identity inputs. They must not be used to write an archive
+that has the canonical compatibility stamp. Read-only open requires the
+canonical source-scoped tables and therefore reports an incompatible schema
+rather than silently falling back.
 
 ## Query and Write Flow
 

@@ -61,6 +61,7 @@ type SourceSessionProjectIdentitySnapshot struct {
 type SourceWorktreeProjectMapping struct {
 	bun.BaseModel `bun:"table:source_worktree_project_mappings"`
 
+	ID              int64     `bun:"id,notnull,default:0"`
 	SourceArchiveID string    `bun:"source_archive_id,pk"`
 	Machine         string    `bun:"machine,pk"`
 	PathPrefix      string    `bun:"path_prefix,pk"`
@@ -68,5 +69,6 @@ type SourceWorktreeProjectMapping struct {
 	Project         string    `bun:"project,notnull,default:''"`
 	OriginalProject string    `bun:"original_project,notnull,default:''"`
 	Enabled         bool      `bun:"enabled,notnull,default:true"`
-	UpdatedAt       Timestamp `bun:"updated_at,type:TIMESTAMPTZ,notnull"`
+	CreatedAt       Timestamp `bun:"created_at,type:TIMESTAMPTZ,notnull,default:CURRENT_TIMESTAMP"`
+	UpdatedAt       Timestamp `bun:"updated_at,type:TIMESTAMPTZ,notnull,default:CURRENT_TIMESTAMP"`
 }

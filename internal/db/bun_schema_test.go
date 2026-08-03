@@ -127,3 +127,27 @@ func TestBunSchemaSessionBatchStampsArchiveProvenance(t *testing.T) {
 	assert.NotEmpty(t, archiveID)
 	assert.NotEmpty(t, generation)
 }
+
+func TestCheckCommonSchemaRejectsEmptyRequiredSessionProvenance(t *testing.T) {
+	raw, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	raw.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	store := bun.NewDB(raw, sqlitedialect.New())
+	require.NoError(t, CreateCommonSchema(t.Context(), store))
+	_, err = store.NewInsert().Model(&bunmodel.SourceArchive{
+		SourceArchiveID: "", SourceArchiveSalt: "salt",
+	}).Exec(t.Context())
+	require.NoError(t, err)
+	_, err = store.NewInsert().Model(&bunmodel.Session{
+		ID: "missing-provenance", Project: "project", Machine: "machine",
+		Agent: "agent", CreatedAt: bunmodel.NewTimestamp(
+			time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC),
+		),
+	}).Exec(t.Context())
+	require.NoError(t, err)
+
+	err = CheckCommonSchema(t.Context(), store)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "session provenance")
+}

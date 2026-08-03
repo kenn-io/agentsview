@@ -274,6 +274,14 @@ func (c *schemaProbeConn) QueryContext(
 			columns: []string{"exists"},
 			values:  [][]driver.Value{{done}},
 		}, nil
+	case strings.Contains(normalized, "select exists") &&
+		(strings.Contains(normalized, "trim(source_archive_id)") ||
+			strings.Contains(normalized, "message_ordinal is null") ||
+			strings.Contains(normalized, "having count(*) > 1")):
+		return &schemaProbeRows{
+			columns: []string{"exists"},
+			values:  [][]driver.Value{{false}},
+		}, nil
 	case strings.Contains(normalized, "select exists"):
 		return &schemaProbeRows{
 			columns: []string{"exists"},

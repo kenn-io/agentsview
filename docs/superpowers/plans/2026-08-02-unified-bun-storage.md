@@ -375,8 +375,10 @@ ______________________________________________________________________
     registry with the existing DuckDB/PostgreSQL schema yet; Task 4 owns
     physical convergence. Execute every registered ordinary index, exercise
     non-empty dedup rejection, and prove session/message cascades on SQLite.
-    DuckDB omits only the unsupported cascade action while retaining each foreign
-    key; its mirror writer already deletes children explicitly.
+    DuckDB omits foreign-key DDL on mutable mirror tables and its atomic writer
+    proves the registered relationships through explicit child-first deletion and
+    whole-session replacement. SQLite and rendered PostgreSQL DDL retain the
+    canonical foreign keys.
 
 - [ ] **Step 5: Verify GREEN**
 
@@ -478,9 +480,9 @@ ______________________________________________________________________
     authoritative for legacy consumers and every setter updates both copies.
     SQLite injects its constructor-generated cursor secret into `BunStore`;
     PostgreSQL and DuckDB synchronize through their existing configured-secret
-    setters. Tasks 5-7 move consumers family by family, and Task 9 removes the
-    concrete fields only after no legacy consumer remains. `BunStore` does not
-    silently generate an independent fallback secret.
+    setters. Task 5 moves every cursor consumer and removes the concrete cursor
+    fields/setters in its cleanup commit. Task 7 does the same for pricing
+    state. `BunStore` does not silently generate an independent fallback secret.
 
 - Produces thin composition: SQLite `DB`, `postgres.Store`, and `duckdb.Store`
   embed `*BunStore` but retain their current concrete public types and
@@ -522,10 +524,11 @@ ______________________________________________________________________
     Extend SQLite reopen and DuckDB mirror-reopen tests to execute a Bun read
     before and after the handle swap and assert both the new data and the
     absence of `database is closed` errors. Add coordinated cases that block an
-    in-flight Bun callback, start `Reopen`/mirror adoption, prove the swap
-    waits, release the callback, and then read from the replacement. Existing
-    raw-pool lifecycle tests continue to cover writer close/reopen, connection
-    close, full close, and drain failures.
+    in-flight Bun callback, signal on a channel immediately before
+    `Reopen`/mirror adoption attempts to acquire the guarded handle, prove the
+    swap cannot signal completion, release the callback, and then read from the
+    replacement. Existing raw-pool lifecycle tests continue to cover writer
+    close/reopen, connection close, full close, and drain failures.
 
     Add a Quack resolver unit test with a recording `bun.IConn` seam: a generated
     `SELECT id FROM sessions WHERE project = 'alpha'` must be handed to
@@ -670,6 +673,11 @@ ______________________________________________________________________
     compatibility stamp on SQLite and PostgreSQL; assert the new rows, stamp,
     and all intermediate DDL roll back together.
 
+    Reopen the stamped SQLite fixture after deliberately diverging its legacy and
+    canonical identity rows. Assert canonical rows are unchanged so the one-time
+    inputs cannot overwrite or resurrect post-cutover state. A stamped schema
+    that fails validation must fail closed rather than replay or repair.
+
     Give the legacy session empty provenance and assert migration fills
     `source_archive_id` from `GetArchiveID` and `source_database_generation`
     from `GetDatabaseID`. After migration, write a newly parsed session through
@@ -680,7 +688,9 @@ ______________________________________________________________________
     `pinned_messages.message_id` aliases from canonical message ordinals in the
     same write transaction. Retain the seeded dependent rows and prove a new
     ordinal-based tool/pin write satisfies both the canonical relationship and
-    the non-null physical aliases.
+    the non-null SQLite physical aliases. The PostgreSQL prior-schema fixture
+    proves convergence drops the old pin alias's NOT NULL constraint and accepts
+    an ordinal-only canonical pin.
 
     Update the DuckDB rebuild test to expect schema version 10, the full canonical
     common table/column set, preserved source rows, and atomic replacement.
@@ -713,6 +723,11 @@ ______________________________________________________________________
     compatibility only in the same transaction as all convergence statements.
     Retain SQLite's old non-source identity tables as inert migration history;
     do not read, write, drop, or use them as a fallback after the cutover.
+
+    Check the SQLite stamp inside the transaction. Copy legacy identity inputs and
+    install canonical publication triggers only when unstamped; stamped archives
+    validate and fail closed without replaying inputs. PostgreSQL rechecks its
+    stamp after acquiring the advisory transaction lock.
 
     Move archive-identity retrieval and session provenance stamping into this
     task. Route every SQLite session insertion path, including batch, pending-
@@ -755,11 +770,19 @@ ______________________________________________________________________
 
     ```bash
     git add internal/db/bun_schema.go internal/db/bun_schema_test.go \
-      internal/db/db.go internal/db/schema.sql internal/db/legacy_schema_test.go \
+      internal/db/bun_rows.go internal/db/db.go internal/db/schema.sql \
+      internal/db/legacy_schema_test.go internal/db/messages.go \
+      internal/db/project_identity.go internal/db/session_batch.go \
+      internal/db/sessions.go internal/db/recall_eval_ingest.go \
+      internal/db/recall_import.go internal/db/worktree_mappings.go \
+      internal/db/worktree_mapping_publication.go \
+      internal/db/worktree_reclassification.go \
       internal/postgres/schema.go internal/postgres/schema_test.go \
-      internal/postgres/schema_pgtest_test.go internal/duckdb/schema.go \
-      internal/duckdb/schema_test.go internal/duckdb/rebuild.go \
-      internal/duckdb/rebuild_test.go internal/duckdb/probe_test.go
+      internal/postgres/schema_pgtest_test.go internal/postgres/analytics.go \
+      internal/duckdb/schema.go internal/duckdb/schema_test.go \
+      internal/duckdb/rebuild.go internal/duckdb/rebuild_test.go \
+      internal/duckdb/probe.go internal/duckdb/probe_test.go \
+      internal/duckdb/push.go internal/duckdb/sync.go
     git commit -m "refactor(storage): converge Bun schemas"
     ```
 
@@ -887,7 +910,10 @@ ______________________________________________________________________
     Remove the duplicate PostgreSQL and DuckDB query/scan helpers and the SQLite
     receiver methods that shadow the embedded `BunStore`. Retain local-only sync
     helpers in `sessions.go`/`messages.go`; rename them around their archive
-    responsibility when a removed Store method shared their old helper.
+    responsibility when a removed Store method shared their old helper. Remove
+    each concrete cursor field and encode/decode implementation only after all
+    cursor consumers resolve to `BunStore`; concrete setters then forward
+    directly without retaining a second key.
 
 - [ ] **Step 8: Re-run final backend contracts and commit**
 
@@ -1138,7 +1164,9 @@ ______________________________________________________________________
 
     Delete PostgreSQL and DuckDB Store receivers and duplicate scanners from
     `pricing.go`, `usage.go`, and `analytics_usage.go`; retain push/population
-    helpers until Task 10 moves writes.
+    helpers until Task 10 moves writes. Remove concrete pricing maps, locks, and
+    duplicated setters in the same cleanup after all consumers resolve to
+    `BunStore`'s synchronized pricing state.
 
 - [ ] **Step 7: Re-run final contracts and commit**
 
