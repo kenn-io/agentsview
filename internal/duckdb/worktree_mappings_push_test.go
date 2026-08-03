@@ -151,14 +151,14 @@ func TestDuckFullPublicationClearsOnlyOwnArchive(t *testing.T) {
 		(source_archive_id, machine, path_prefix, layout, project,
 		 original_project, enabled, updated_at)
 		VALUES ('foreign-archive', 'workstation', '/work/stale',
-		 'explicit', 'other', '', TRUE, '')`)
+			'explicit', 'other', '', TRUE, current_timestamp)`)
 	require.NoError(t, err, "seed foreign archive mapping")
 	_, err = conn.ExecContext(ctx, `
 		INSERT INTO source_worktree_project_mappings
 		(source_archive_id, machine, path_prefix, layout, project,
 		 original_project, enabled, updated_at)
 		VALUES (?, 'workstation', '/work/stale', 'explicit', 'stale',
-		 '', TRUE, '')`, archiveID)
+			'', TRUE, current_timestamp)`, archiveID)
 	require.NoError(t, err, "seed own stale mapping")
 	// Zero the mirror-resident cursor so the next incremental push runs a
 	// full mapping publication against a mirror that already holds rows.
@@ -231,7 +231,7 @@ func TestDuckMappingDeleteTombstones(t *testing.T) {
 		(source_archive_id, machine, path_prefix, layout, project,
 		 original_project, enabled, updated_at)
 		VALUES (?, 'workstation', '/work/sentinel', 'explicit', 'sentinel',
-		 '', TRUE, '')`, archiveID)
+			'', TRUE, current_timestamp)`, archiveID)
 	require.NoError(t, err, "seed same-archive sentinel row")
 	require.NoError(t, conn.Close())
 

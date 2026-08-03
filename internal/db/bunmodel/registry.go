@@ -17,9 +17,9 @@ type Index struct {
 	Unique      bool
 }
 
-// ForeignKey is one canonical relationship. DuckDB enforces the relationship
-// but cannot express cascading actions; its read-only mirror writer deletes
-// dependent rows explicitly before parent rows.
+// ForeignKey is one canonical relationship. DuckDB cannot use foreign keys on
+// mutable mirror tables because it rejects parent updates and cascading
+// actions; its mirror writer preserves the relationship explicitly.
 type ForeignKey struct {
 	Columns           []string
 	ReferencedTable   string
@@ -31,13 +31,14 @@ type ForeignKey struct {
 type Table struct {
 	Name        string
 	Model       any
+	Constraints []string
 	Indexes     []Index
 	ForeignKeys []ForeignKey
 }
 
-// ForeignKeyDefinition renders the portable Bun ForeignKey clause. Callers
-// omit cascading actions only for engines, currently DuckDB, that reject the
-// syntax and already own explicit child-first deletion.
+// ForeignKeyDefinition renders the portable Bun ForeignKey clause. Adapters
+// that cannot use foreign-key DDL on mutable tables omit the clause and enforce
+// the registered relationship through their atomic writer.
 func ForeignKeyDefinition(foreignKey ForeignKey, includeCascade bool) string {
 	definition := fmt.Sprintf(
 		"%s REFERENCES %s %s",
@@ -104,6 +105,10 @@ var commonTables = []Table{
 	{Name: "model_pricing_bands", Model: (*ModelPricingBand)(nil), ForeignKeys: []ForeignKey{
 		{Columns: []string{"model_pattern"}, ReferencedTable: "model_pricing", ReferencedColumns: []string{"model_pattern"}, OnDeleteCascade: true},
 	}},
+	{Name: "genai_pricing", Model: (*GenAIPricing)(nil), Constraints: []string{
+		`CHECK ("singleton" = 1)`,
+		`CHECK ("source" IN ('embedded', 'fetched'))`,
+	}},
 	{Name: "source_project_identity_observations", Model: (*SourceProjectIdentityObservation)(nil), ForeignKeys: []ForeignKey{
 		{Columns: []string{"source_archive_id"}, ReferencedTable: "source_archives", ReferencedColumns: []string{"source_archive_id"}, OnDeleteCascade: true},
 	}, Indexes: []Index{
@@ -165,6 +170,7 @@ func CommonTables() []Table {
 	tables := make([]Table, len(commonTables))
 	for i := range commonTables {
 		tables[i] = commonTables[i]
+		tables[i].Constraints = slices.Clone(commonTables[i].Constraints)
 		tables[i].Indexes = slices.Clone(commonTables[i].Indexes)
 		for j := range tables[i].Indexes {
 			tables[i].Indexes[j].Columns = slices.Clone(tables[i].Indexes[j].Columns)

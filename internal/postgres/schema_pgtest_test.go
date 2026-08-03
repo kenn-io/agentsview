@@ -5,14 +5,108 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
+	commondb "go.kenn.io/agentsview/internal/db"
 )
 
 const schemaTestSchema = "agentsview_schema_test"
+
+func TestEnsureSchemaConvergesCommonColumnsAndRetainsPriorRows(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanSchemaTestPG(t, pgURL)
+	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
+	pg, err := Open(pgURL, schemaTestSchema, true)
+	require.NoError(t, err)
+	defer pg.Close()
+	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
+	_, err = pg.ExecContext(t.Context(), `
+		INSERT INTO sessions (
+			id, machine, project, agent, created_at,
+			source_archive_id, source_database_generation
+		) VALUES (
+			'prior-common-session', 'machine', 'project', 'agent', NOW(),
+			'archive-1', 'generation-1'
+		);
+		ALTER TABLE sessions DROP COLUMN IF EXISTS file_size;
+		ALTER TABLE messages DROP COLUMN IF EXISTS id;
+		ALTER TABLE tool_calls DROP COLUMN IF EXISTS message_id;
+		DELETE FROM sync_metadata WHERE key = 'bun_common_schema_v1';
+	`)
+	require.NoError(t, err)
+
+	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
+	store := bun.NewDB(pg, pgdialect.New())
+	require.NoError(t, commondb.CheckCommonSchema(t.Context(), store))
+	var project string
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
+		SELECT project FROM sessions WHERE id = 'prior-common-session'`,
+	).Scan(&project))
+	assert.Equal(t, "project", project)
+	var stamp string
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
+		SELECT value FROM sync_metadata WHERE key = 'bun_common_schema_v1'`,
+	).Scan(&stamp))
+	assert.Equal(t, "1", stamp)
+}
+
+func TestPostgresCommonConvergenceRollsBackDDLAndStamp(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanSchemaTestPG(t, pgURL)
+	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
+	pg, err := Open(pgURL, schemaTestSchema, true)
+	require.NoError(t, err)
+	defer pg.Close()
+	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
+	_, err = pg.ExecContext(t.Context(), `
+		INSERT INTO sessions (
+			id, machine, project, agent, created_at,
+			source_archive_id, source_database_generation
+		) VALUES (
+			'rollback-common-session', 'machine', 'project', 'agent', NOW(),
+			'archive-1', 'generation-1'
+		);
+		ALTER TABLE sessions DROP COLUMN IF EXISTS file_size;
+		ALTER TABLE messages DROP COLUMN IF EXISTS id;
+		ALTER TABLE tool_calls DROP COLUMN IF EXISTS message_id;
+		DELETE FROM sync_metadata WHERE key = 'bun_common_schema_v1';
+	`)
+	require.NoError(t, err)
+
+	injected := errors.New("injected PostgreSQL common convergence failure")
+	err = convergePostgresCommonSchema(t.Context(), pg, func() error {
+		return injected
+	})
+	require.ErrorIs(t, err, injected)
+
+	for table, column := range map[string]string{
+		"sessions": "file_size", "messages": "id", "tool_calls": "message_id",
+	} {
+		var exists bool
+		require.NoError(t, pg.QueryRowContext(t.Context(), `
+			SELECT EXISTS (
+				SELECT 1 FROM information_schema.columns
+				WHERE table_schema = $1 AND table_name = $2 AND column_name = $3
+			)`, schemaTestSchema, table, column,
+		).Scan(&exists))
+		assert.False(t, exists, "%s.%s", table, column)
+	}
+	var stampCount, sessionCount int
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
+		SELECT count(*) FROM sync_metadata WHERE key = 'bun_common_schema_v1'`,
+	).Scan(&stampCount))
+	assert.Zero(t, stampCount)
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
+		SELECT count(*) FROM sessions WHERE id = 'rollback-common-session'`,
+	).Scan(&sessionCount))
+	assert.Equal(t, 1, sessionCount)
+}
 
 func cleanSchemaTestPG(t *testing.T, pgURL string) {
 	t.Helper()

@@ -32,7 +32,7 @@ func TestDuckListProjectIdentityObservationsChunksLargeLabelLists(t *testing.T) 
 		end := min(start+batch, labelCount)
 		var sb strings.Builder
 		sb.WriteString(`INSERT INTO source_project_identity_observations
-			(source_archive_id, project, machine, root_path, observed_at) VALUES `)
+			(source_archive_id, project, machine, root_path, git_remote, observed_at) VALUES `)
 		args := make([]any, 0, (end-start)*3)
 		for i := start; i < end; i++ {
 			label := fmt.Sprintf("chunked-project-%04d", i)
@@ -44,7 +44,7 @@ func TestDuckListProjectIdentityObservationsChunksLargeLabelLists(t *testing.T) 
 			if i > start {
 				sb.WriteString(",")
 			}
-			sb.WriteString("(?, ?, 'host.example', '/srv/app', ?)")
+			sb.WriteString("(?, ?, 'host.example', '/srv/app', '', ?)")
 			args = append(args, archive, label, observedAt)
 		}
 		_, err := database.ExecContext(ctx, sb.String(), args...)

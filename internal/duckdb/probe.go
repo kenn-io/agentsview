@@ -215,19 +215,20 @@ func classifyProbeError(err error) (shapeIssue string, lockConflict bool) {
 }
 
 // mirrorShapeIssueFromColumns reports the first missing table/column found
-// in an already-loaded column map, or "" when the mirror has every table
-// and column mirrorTables declares.
+// in an already-loaded column map, or "" when the mirror has every canonical
+// and adapter-owned column.
 func mirrorShapeIssueFromColumns(existing map[string]map[string]bool) string {
 	var missing []string
-	for _, table := range mirrorTables {
-		have, ok := existing[table.name]
+	expected := expectedMirrorColumns()
+	for table, columns := range expected {
+		have, ok := existing[table]
 		if !ok || len(have) == 0 {
-			missing = append(missing, "missing table "+table.name)
+			missing = append(missing, "missing table "+table)
 			continue
 		}
-		for _, column := range table.columns {
-			if !have[column.name] {
-				missing = append(missing, table.name+"."+column.name)
+		for _, column := range columns {
+			if !have[column] {
+				missing = append(missing, table+"."+column)
 			}
 		}
 	}

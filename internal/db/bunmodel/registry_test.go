@@ -19,11 +19,16 @@ import (
 )
 
 func registeredCreateTable(
-	db *bun.DB, table Table, includeCascade bool,
+	db *bun.DB, table Table, includeForeignKeys bool,
 ) *bun.CreateTableQuery {
 	query := db.NewCreateTable().Model(table.Model).IfNotExists()
-	for _, foreignKey := range table.ForeignKeys {
-		query.ForeignKey(ForeignKeyDefinition(foreignKey, includeCascade))
+	for _, constraint := range table.Constraints {
+		query.ColumnExpr(constraint)
+	}
+	if includeForeignKeys {
+		for _, foreignKey := range table.ForeignKeys {
+			query.ForeignKey(ForeignKeyDefinition(foreignKey, true))
+		}
 	}
 	return query
 }
@@ -65,6 +70,7 @@ var criticalTableColumns = map[string][]string{
 	"secret_findings":     {"session_id", "message_ordinal", "redacted_match"},
 	"model_pricing":       {"model_pattern", "input_microdollars_per_mtok", "updated_at"},
 	"model_pricing_bands": {"model_pattern", "above_input_tokens", "updated_at"},
+	"genai_pricing":       {"singleton", "version", "source", "data_json", "updated_at"},
 	"starred_sessions":    {"session_id", "created_at"},
 	"pinned_messages":     {"session_id", "ordinal", "source_uuid"},
 	"excluded_sessions":   {"id", "created_at"},
@@ -87,6 +93,7 @@ func TestCommonTablesContainCanonicalServingSchema(t *testing.T) {
 	want := []string{
 		"cursor_usage_events",
 		"excluded_sessions",
+		"genai_pricing",
 		"insights",
 		"messages",
 		"model_pricing",

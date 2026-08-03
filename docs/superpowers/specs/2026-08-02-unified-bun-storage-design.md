@@ -129,9 +129,11 @@ The following remain documented extensions rather than canonical data tables:
 
 The common table definitions, columns, relationships, and ordinary-index
 semantics do not otherwise fork by engine. DuckDB is the narrow constraint
-syntax exception: it enforces canonical foreign keys but rejects cascading
-actions, so its read-only mirror writer keeps its existing explicit child-first
-deletion order. SQLite and PostgreSQL generate `ON DELETE CASCADE` from the same
+syntax exception: its mutable mirror tables omit foreign-key DDL because DuckDB
+rejects parent updates and same-transaction child-first replacement even when
+cascading actions are absent. The read-only mirror writer enforces the same
+relationships through atomic whole-session replacement and explicit child-first
+deletion. SQLite and PostgreSQL generate `ON DELETE CASCADE` from the shared
 relationship metadata.
 
 The convergence uses this ownership matrix:

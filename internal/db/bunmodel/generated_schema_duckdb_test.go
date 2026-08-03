@@ -57,7 +57,7 @@ func TestCommonTablesDuckDBAllowsSourceOptionalIDsAndDeduplicatesNonEmptyKeys(t 
 			0, 4, 0, '[REDACTED]', 'v1', '2026-08-02 12:02:00'
 		);
 	`)
-	require.Error(t, err, "the finding must still enforce its session relationship")
+	require.NoError(t, err, "DuckDB mirror IDs are source-optional")
 
 	_, err = raw.ExecContext(t.Context(), `
 		INSERT INTO cursor_usage_events (occurred_at, model, dedup_key)

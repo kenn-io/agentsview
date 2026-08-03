@@ -3721,7 +3721,7 @@ func TestToolCallNewColumns(t *testing.T) {
 	insertSession(t, d, "s1", "proj")
 	insertMessages(t, d, Message{
 		SessionID:     "s1",
-		Ordinal:       0,
+		Ordinal:       4,
 		Role:          "assistant",
 		Content:       "[Read: main.go]",
 		ContentLength: 15,
@@ -3738,10 +3738,11 @@ func TestToolCallNewColumns(t *testing.T) {
 
 	var toolUseID, inputJSON sql.NullString
 	var resultLen sql.NullInt64
+	var messageOrdinal int
 	err := d.Reader().QueryRow(`
-        SELECT tool_use_id, input_json, result_content_length
+		SELECT tool_use_id, input_json, result_content_length, message_ordinal
         FROM tool_calls WHERE session_id = 's1'
-    `).Scan(&toolUseID, &inputJSON, &resultLen)
+	`).Scan(&toolUseID, &inputJSON, &resultLen, &messageOrdinal)
 	requireNoError(t, err, "query tool_calls")
 	require.True(t, toolUseID.Valid, "tool_use_id valid")
 	assert.Equal(t, "toolu_abc", toolUseID.String, "tool_use_id")
@@ -3749,6 +3750,7 @@ func TestToolCallNewColumns(t *testing.T) {
 	assert.Equal(t, `{"file_path":"main.go"}`, inputJSON.String, "input_json")
 	require.True(t, resultLen.Valid, "result_content_length valid")
 	assert.Equal(t, int64(500), resultLen.Int64, "result_content_length")
+	assert.Equal(t, 4, messageOrdinal, "message_ordinal")
 }
 
 func TestToolCallSkillName(t *testing.T) {
@@ -6398,6 +6400,8 @@ func TestCopyOrphanedDataFrom_LegacyNoIsSystem(t *testing.T) {
 			content_length
 		FROM messages`)
 	requireNoError(t, err, "copy to messages_new")
+	_, err = raw.Exec("DROP TRIGGER IF EXISTS tool_calls_fill_message_ordinal")
+	requireNoError(t, err, "drop tool call ordinal trigger")
 	_, err = raw.Exec("DROP TABLE messages")
 	requireNoError(t, err, "drop messages")
 	_, err = raw.Exec(

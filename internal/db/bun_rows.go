@@ -117,10 +117,13 @@ func sessionToBunRow(session Session) (bunmodel.Session, error) {
 		FileInode:          session.FileInode,
 		FileDevice:         session.FileDevice,
 		FileHash:           session.FileHash,
-		TranscriptRevision: session.TranscriptRevision,
+		TranscriptRevision: "0",
 
 		SourceArchiveID:          session.SourceArchiveID,
 		SourceDatabaseGeneration: session.SourceDatabaseGeneration,
+	}
+	if session.TranscriptRevision != nil {
+		row.TranscriptRevision = *session.TranscriptRevision
 	}
 
 	optionalTimestamps := []struct {
@@ -223,7 +226,7 @@ func sessionFromBunRow(row bunmodel.Session) Session {
 		FileDevice:         row.FileDevice,
 		FileHash:           row.FileHash,
 		LocalModifiedAt:    timestampFromBunRow(row.LocalModifiedAt),
-		TranscriptRevision: row.TranscriptRevision,
+		TranscriptRevision: &row.TranscriptRevision,
 		CreatedAt:          requiredTimestampFromBunRow(row.CreatedAt),
 
 		SourceArchiveID:          row.SourceArchiveID,
@@ -259,6 +262,7 @@ func messageToBunRow(message Message) (bunmodel.Message, error) {
 		TokenUsage:        append(json.RawMessage(nil), message.TokenUsage...),
 		ContextTokens:     message.ContextTokens,
 		OutputTokens:      message.OutputTokens,
+		ProviderID:        message.ProviderID,
 		HasContextTokens:  message.HasContextTokens,
 		HasOutputTokens:   message.HasOutputTokens,
 		ClaudeMessageID:   message.ClaudeMessageID,
@@ -294,6 +298,7 @@ func messageFromBunRow(row bunmodel.Message) Message {
 		TokenUsage:        append(json.RawMessage(nil), row.TokenUsage...),
 		ContextTokens:     row.ContextTokens,
 		OutputTokens:      row.OutputTokens,
+		ProviderID:        row.ProviderID,
 		HasContextTokens:  row.HasContextTokens,
 		HasOutputTokens:   row.HasOutputTokens,
 		ClaudeMessageID:   row.ClaudeMessageID,

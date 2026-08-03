@@ -29,6 +29,8 @@ require (
 	github.com/thlib/go-timezone-local v0.0.8
 	github.com/tidwall/gjson v1.19.0
 	github.com/uptrace/bun v1.2.18
+	github.com/uptrace/bun/dialect/pgdialect v1.2.18
+	github.com/uptrace/bun/dialect/sqlitedialect v1.2.18
 	go.kenn.io/docbank v0.13.0
 	go.kenn.io/kit v0.24.2-0.20260908151812-b9d6bb63077d
 	golang.org/x/mod v0.40.0

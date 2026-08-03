@@ -11,6 +11,7 @@ type UsageEvent struct {
 	MessageOrdinal           *int       `bun:"message_ordinal,nullzero"`
 	Source                   string     `bun:"source,notnull"`
 	Model                    string     `bun:"model,notnull"`
+	ProviderID               string     `bun:"provider_id,notnull,default:''"`
 	InputTokens              int        `bun:"input_tokens,notnull,default:0"`
 	OutputTokens             int        `bun:"output_tokens,notnull,default:0"`
 	CacheCreationInputTokens int        `bun:"cache_creation_input_tokens,notnull,default:0"`

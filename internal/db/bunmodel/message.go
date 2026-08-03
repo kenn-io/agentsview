@@ -26,6 +26,7 @@ type Message struct {
 	TokenUsage        json.RawMessage `bun:"token_usage,type:TEXT,notnull,default:''"`
 	ContextTokens     int             `bun:"context_tokens,notnull,default:0"`
 	OutputTokens      int             `bun:"output_tokens,notnull,default:0"`
+	ProviderID        string          `bun:"provider_id,notnull,default:''"`
 	HasContextTokens  bool            `bun:"has_context_tokens,notnull,default:false"`
 	HasOutputTokens   bool            `bun:"has_output_tokens,notnull,default:false"`
 	ClaudeMessageID   string          `bun:"claude_message_id,notnull,default:''"`

@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
 
 func seedRebuildFixture(t *testing.T, local *db.DB) []string {
@@ -39,7 +40,7 @@ func seedRebuildFixture(t *testing.T, local *db.DB) []string {
 	return ids
 }
 
-func TestRebuildMirrorCreatesFreshMirrorWithFingerprintsAndMetadata(t *testing.T) {
+func TestRebuildMirrorCreatesCanonicalSchemaVersion10(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	ids := seedRebuildFixture(t, local)
@@ -58,7 +59,7 @@ func TestRebuildMirrorCreatesFreshMirrorWithFingerprintsAndMetadata(t *testing.T
 	require.NoError(t, err)
 	assert.True(t, probe.FileExists)
 	assert.True(t, probe.ShapeOK)
-	assert.Equal(t, SchemaVersion, probe.SchemaVersion)
+	assert.Equal(t, 10, probe.SchemaVersion)
 	assert.Equal(t, db.CurrentDataVersion(), probe.DataVersion)
 	assert.Equal(t, "", probe.Scope)
 	assert.NotEmpty(t, probe.LastPushCutoff)
@@ -70,6 +71,31 @@ func TestRebuildMirrorCreatesFreshMirrorWithFingerprintsAndMetadata(t *testing.T
 	assertDuckDBCount(t, conn, "sessions", len(ids))
 	assertDuckDBCount(t, conn, "messages", len(ids))
 	assertDuckDBCount(t, conn, "starred_sessions", 1)
+
+	columns, err := loadColumns(ctx, conn)
+	require.NoError(t, err)
+	for _, table := range bunmodel.CommonTables() {
+		require.Contains(t, columns, table.Name, "canonical table %s", table.Name)
+		for _, column := range bunmodel.ModelColumns(table.Model) {
+			assert.True(t, columns[table.Name][column], "%s.%s", table.Name, column)
+		}
+	}
+
+	var messagePrimaryKey string
+	require.NoError(t, conn.QueryRowContext(ctx, `
+		SELECT array_to_string(constraint_column_names, ',')
+		FROM duckdb_constraints()
+		WHERE table_name = 'messages' AND constraint_type = 'PRIMARY KEY'`,
+	).Scan(&messagePrimaryKey))
+	assert.Equal(t, "session_id,ordinal", messagePrimaryKey)
+
+	var sourceArchiveID, sourceDatabaseGeneration string
+	require.NoError(t, conn.QueryRowContext(ctx, `
+		SELECT source_archive_id, source_database_generation
+		FROM sessions WHERE id = ?`, ids[0],
+	).Scan(&sourceArchiveID, &sourceDatabaseGeneration))
+	assert.NotEmpty(t, sourceArchiveID)
+	assert.NotEmpty(t, sourceDatabaseGeneration)
 
 	var fingerprintCount int
 	require.NoError(t, conn.QueryRowContext(ctx, `
