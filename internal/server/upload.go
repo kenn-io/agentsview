@@ -218,6 +218,8 @@ func sessionBatchWriteFromParsed(
 			Model:            m.Model,
 			TokenUsage:       m.TokenUsage,
 			PromptSource:     m.PromptSource,
+			SourceType:       m.SourceType,
+			SourceSubtype:    m.SourceSubtype,
 			SourceUUID:       m.SourceUUID,
 			SourceParentUUID: m.SourceParentUUID,
 			ContextTokens:    m.ContextTokens,

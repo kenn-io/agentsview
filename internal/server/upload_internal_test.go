@@ -76,6 +76,8 @@ func TestSessionBatchWriteFromParsedPreservesMessageIdentity(t *testing.T) {
 		Role:             parser.RoleUser,
 		Content:          "hidden context",
 		IsSystem:         true,
+		SourceType:       "system",
+		SourceSubtype:    "ide_opened_file",
 		SourceUUID:       "entry-1:ide-context",
 		SourceParentUUID: "parent-1",
 	}}
@@ -84,6 +86,8 @@ func TestSessionBatchWriteFromParsedPreservesMessageIdentity(t *testing.T) {
 
 	require.Len(t, result.Messages, 1)
 	assert.True(t, result.Messages[0].IsSystem)
+	assert.Equal(t, "system", result.Messages[0].SourceType)
+	assert.Equal(t, "ide_opened_file", result.Messages[0].SourceSubtype)
 	assert.Equal(t, "entry-1:ide-context", result.Messages[0].SourceUUID)
 	assert.Equal(t, "parent-1", result.Messages[0].SourceParentUUID)
 	assert.True(t, result.PreserveLegacyPinsByOrdinal,
