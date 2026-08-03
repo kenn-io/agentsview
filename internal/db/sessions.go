@@ -279,6 +279,13 @@ func (s *Session) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// ArchiveIdentity is the stable provenance stamped on canonical session and
+// identity rows before they enter a shared store.
+type ArchiveIdentity struct {
+	SourceArchiveID          string
+	SourceDatabaseGeneration string
+}
+
 // Session represents a row in the sessions table.
 type Session struct {
 	ID                    string  `json:"id"`
@@ -339,6 +346,8 @@ type Session struct {
 	GitBranch                   string          `json:"git_branch,omitempty"`
 	SourceSessionID             string          `json:"source_session_id,omitempty"`
 	SourceVersion               string          `json:"source_version,omitempty"`
+	SourceArchiveID             string          `json:"-"`
+	SourceDatabaseGeneration    string          `json:"-"`
 	TranscriptFidelity          string          `json:"transcript_fidelity,omitempty"`
 	ParserMalformedLines        int             `json:"parser_malformed_lines,omitempty"`
 	IsTruncated                 bool            `json:"is_truncated,omitempty"`
