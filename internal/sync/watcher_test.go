@@ -1250,6 +1250,21 @@ func TestRetriedFullSyncPreservesChangesArrivingDuringCallback(t *testing.T) {
 	assert.Equal(t, []string{"/sessions/new.jsonl"}, changed.Paths)
 }
 
+func TestRetainWatchRetryPreservesMixedRenameObligations(t *testing.T) {
+	pending := newPendingWatchBatch(8, 1_000)
+	retainWatchRetry(pending, WatchBatch{
+		Paths: []string{"/sessions/file.jsonl"},
+		Renames: []WatchRename{
+			{Path: "/sessions/file.jsonl", ItemType: ItemIsFile},
+			{Path: "/sessions/child", ItemType: ItemIsUnknown},
+		},
+	})
+	batch, ok := pending.Take()
+	require.True(t, ok)
+	assert.Equal(t, []string{"/sessions/file.jsonl"}, batch.Paths)
+	assert.Len(t, batch.Renames, 2)
+}
+
 func TestRetriedLostEventReconciliationPreservesRecoveryMode(t *testing.T) {
 	pending := newPendingWatchBatch(8, 1_000)
 

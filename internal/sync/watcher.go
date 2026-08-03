@@ -1497,6 +1497,9 @@ func retainWatchRetry(pending *pendingWatchBatch, retry WatchBatch) {
 		for _, path := range retry.Paths {
 			pending.Add(path)
 		}
+		for _, rename := range retry.Renames {
+			pending.AddRename(rename)
+		}
 		for _, root := range retry.ReconcileRoots {
 			pending.AddReconcileRoot(root)
 		}
