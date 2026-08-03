@@ -223,6 +223,7 @@ func sessionBatchWriteFromParsed(
 			SourceSubtype:     m.SourceSubtype,
 			SourceUUID:        m.SourceUUID,
 			SourceParentUUID:  m.SourceParentUUID,
+			IsSidechain:       m.IsSidechain,
 			ContextTokens:     m.ContextTokens,
 			OutputTokens:      m.OutputTokens,
 			HasContextTokens:  hasCtx,

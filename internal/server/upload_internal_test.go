@@ -80,6 +80,7 @@ func TestSessionBatchWriteFromParsedPreservesMessageIdentity(t *testing.T) {
 		SourceSubtype:    "ide_opened_file",
 		SourceUUID:       "entry-1:ide-context",
 		SourceParentUUID: "parent-1",
+		IsSidechain:      true,
 	}}
 
 	result := sessionBatchWriteFromParsed(sess, msgs)
@@ -90,6 +91,7 @@ func TestSessionBatchWriteFromParsedPreservesMessageIdentity(t *testing.T) {
 	assert.Equal(t, "ide_opened_file", result.Messages[0].SourceSubtype)
 	assert.Equal(t, "entry-1:ide-context", result.Messages[0].SourceUUID)
 	assert.Equal(t, "parent-1", result.Messages[0].SourceParentUUID)
+	assert.True(t, result.Messages[0].IsSidechain)
 	assert.True(t, result.PreserveLegacyPinsByOrdinal,
 		"explicit re-uploads preserve existing UUID-less pins by ordinal")
 }
