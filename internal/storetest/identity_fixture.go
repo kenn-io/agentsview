@@ -65,6 +65,14 @@ func InsertBunIdentityFixture(
 			)
 		}
 	}
+	for _, row := range bunIdentitySnapshotRows(archiveAID) {
+		if _, err := store.NewInsert().Model(&row).Exec(ctx); err != nil {
+			return IdentityFixture{}, fmt.Errorf(
+				"inserting identity snapshot %s/%s: %w",
+				row.SourceSessionID, row.SourceDatabaseGeneration, err,
+			)
+		}
+	}
 	for _, row := range bunIdentityMappingRows(archiveAID) {
 		query := store.NewInsert().Model(&row).
 			Column(
@@ -130,6 +138,33 @@ func InsertSQLiteIdentityFixture(
 		if err != nil {
 			return IdentityFixture{}, fmt.Errorf(
 				"inserting SQLite identity session %s: %w", row.ID, err,
+			)
+		}
+	}
+	for _, row := range bunIdentitySnapshotRows(archiveAID) {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO source_session_project_identity_snapshots (
+				source_archive_id, source_database_generation, source_session_id,
+				project, machine, root_path, worktree_root_path, key_source,
+				observed_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT (
+				source_archive_id, source_database_generation, source_session_id
+			) DO UPDATE SET
+				project = excluded.project,
+				machine = excluded.machine,
+				root_path = excluded.root_path,
+				worktree_root_path = excluded.worktree_root_path,
+				key_source = excluded.key_source,
+				observed_at = excluded.observed_at`,
+			row.SourceArchiveID, row.SourceDatabaseGeneration, row.SourceSessionID,
+			row.Project, row.Machine, row.RootPath, row.WorktreeRootPath,
+			row.KeySource, row.ObservedAt,
+		)
+		if err != nil {
+			return IdentityFixture{}, fmt.Errorf(
+				"inserting SQLite identity snapshot %s/%s: %w",
+				row.SourceSessionID, row.SourceDatabaseGeneration, err,
 			)
 		}
 	}
@@ -219,6 +254,37 @@ func bunIdentityMappingRows(archiveAID string) []bunmodel.SourceWorktreeProjectM
 			CreatedAt: timestamp, UpdatedAt: timestamp,
 		},
 	}
+}
+
+func bunIdentitySnapshotRows(
+	archiveAID string,
+) []bunmodel.SourceSessionProjectIdentitySnapshot {
+	exactObserved := bunmodel.NewTimestamp(
+		time.Date(2026, 8, 1, 14, 0, 0, 0, time.UTC),
+	)
+	competingObserved := bunmodel.NewTimestamp(
+		time.Date(2026, 8, 3, 14, 0, 0, 0, time.UTC),
+	)
+	rows := make([]bunmodel.SourceSessionProjectIdentitySnapshot, 0, 4)
+	for _, sessionID := range []string{identityAlphaAID, identityAlphaBID} {
+		rows = append(rows,
+			bunmodel.SourceSessionProjectIdentitySnapshot{
+				SourceArchiveID: archiveAID, SourceDatabaseGeneration: "identity-generation-a",
+				SourceSessionID: sessionID, Project: identityAlphaProject,
+				Machine: "identity-host-a", RootPath: "/workspace/alpha",
+				WorktreeRootPath: "/workspace/alpha", KeySource: "git_remote",
+				ObservedAt: exactObserved,
+			},
+			bunmodel.SourceSessionProjectIdentitySnapshot{
+				SourceArchiveID: archiveAID, SourceDatabaseGeneration: "zzzz-newer-generation",
+				SourceSessionID: sessionID, Project: identityAlphaProject,
+				Machine: "identity-host-a", RootPath: "/wrong/newer",
+				WorktreeRootPath: "/wrong/newer", KeySource: "git_remote",
+				ObservedAt: competingObserved,
+			},
+		)
+	}
+	return rows
 }
 
 func bunIdentityObservationRows(

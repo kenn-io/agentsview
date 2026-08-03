@@ -89,6 +89,15 @@ func (b *duckBunBackend) View(
 	return fn(b.store.bun)
 }
 
+// ConsistentView holds the immutable mirror handle for the complete composite
+// read. DuckDB push installs a new mirror by swapping that handle, so no
+// transaction is needed to keep one callback on one validated snapshot.
+func (b *duckBunBackend) ConsistentView(
+	ctx context.Context, fn func(bun.IDB) error,
+) error {
+	return b.View(ctx, fn)
+}
+
 func (*duckBunBackend) Update(
 	context.Context, func(bun.IDB) error,
 ) error {

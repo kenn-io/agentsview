@@ -255,3 +255,78 @@ func TestBunStoreListSessionsPaginatesSQLiteTimestampsChronologically(t *testing
 	assert.Equal(t, "lexical-new", second.Sessions[0].ID)
 	assert.Empty(t, second.NextCursor)
 }
+
+func TestBunStoreTerminationFilterUsesSQLiteInstants(t *testing.T) {
+	raw, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	raw.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	store := bun.NewDB(raw, sqlitedialect.New())
+	require.NoError(t, CreateCommonSchema(t.Context(), store))
+	_, err = store.NewInsert().Model(&bunmodel.SourceArchive{
+		SourceArchiveID: "archive", SourceArchiveSalt: "salt",
+	}).Exec(t.Context())
+	require.NoError(t, err)
+
+	oldInstant := time.Now().UTC().Add(-2 * time.Hour)
+	offsetText := oldInstant.In(time.FixedZone("plus-three", 3*60*60)).
+		Format(time.RFC3339Nano)
+	_, err = raw.ExecContext(t.Context(), `
+		INSERT INTO sessions (
+			id, project, machine, agent, message_count, created_at, ended_at,
+			termination_status, source_archive_id, source_database_generation
+		) VALUES (?, 'time', 'host', 'codex', 1, ?, ?, 'tool_call_pending',
+			'archive', 'generation')`,
+		"offset-unclean", offsetText, offsetText,
+	)
+	require.NoError(t, err)
+
+	page, err := NewBunStore(&sessionContractBackend{store: store}).ListSessions(
+		t.Context(), SessionFilter{Project: "time", Termination: "unclean", Limit: 10},
+	)
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 1)
+	assert.Equal(t, "offset-unclean", page.Sessions[0].ID)
+}
+
+func TestBunStoreSidebarPaginatesSQLiteActivityChronologically(t *testing.T) {
+	raw, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	raw.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	store := bun.NewDB(raw, sqlitedialect.New())
+	require.NoError(t, CreateCommonSchema(t.Context(), store))
+	_, err = store.NewInsert().Model(&bunmodel.SourceArchive{
+		SourceArchiveID: "archive", SourceArchiveSalt: "salt",
+	}).Exec(t.Context())
+	require.NoError(t, err)
+	_, err = raw.ExecContext(t.Context(), `
+		INSERT INTO sessions (
+			id, project, machine, agent, message_count, created_at, ended_at,
+			source_archive_id, source_database_generation
+		) VALUES
+			('chronological-new', 'time', 'host', 'codex', 1,
+			 '2024-01-01T00:30:00Z', '2024-01-01T00:30:00Z',
+			 'archive', 'generation'),
+			('lexical-new', 'time', 'host', 'codex', 1,
+			 '2024-01-01T01:00:00+01:00', '2024-01-01T01:00:00+01:00',
+			 'archive', 'generation')`)
+	require.NoError(t, err)
+
+	common := NewBunStore(&sessionContractBackend{store: store})
+	first, err := common.GetSidebarSessionIndex(t.Context(), SessionFilter{
+		Project: "time", Limit: 1,
+	})
+	require.NoError(t, err)
+	require.Len(t, first.Sessions, 1)
+	assert.Equal(t, "chronological-new", first.Sessions[0].ID)
+	assert.NotEmpty(t, first.NextCursor)
+
+	second, err := common.GetSidebarSessionIndex(t.Context(), SessionFilter{
+		Project: "time", Limit: 1, Cursor: first.NextCursor,
+	})
+	require.NoError(t, err)
+	require.Len(t, second.Sessions, 1)
+	assert.Equal(t, "lexical-new", second.Sessions[0].ID)
+	assert.Empty(t, second.NextCursor)
+}

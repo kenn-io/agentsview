@@ -1119,8 +1119,12 @@ ______________________________________________________________________
     normalization and identity merge algorithms in their existing pure helpers;
     only database access moves. Opaque project selectors use the complete
     canonical `source_archives` aggregate scope on every backend; SQLite does not
-    retain a local-only selector-key path. Task 11 owns the final application-
-    write centralization and removal of trigger-based publication bookkeeping.
+    retain a local-only selector-key path. Unresolved or ambiguous response-
+    scoped keys may change whenever archive membership changes through addition,
+    retirement, or replacement; resolved repository identity keys remain stable.
+    Do not add a compatibility lookup for prior response-scoped keys. Task 11
+    owns the final application-write centralization and removal of trigger-based
+    publication bookkeeping.
 
 - [ ] **Step 4: Implement shared curation, insight, and session mutations**
 

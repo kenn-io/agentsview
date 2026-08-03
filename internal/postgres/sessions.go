@@ -90,6 +90,15 @@ func (b *postgresBunBackend) View(
 	return fn(b.store.bun)
 }
 
+func (b *postgresBunBackend) ConsistentView(
+	ctx context.Context, fn func(bun.IDB) error,
+) error {
+	return b.store.bun.RunInTx(
+		ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead},
+		func(_ context.Context, tx bun.Tx) error { return fn(tx) },
+	)
+}
+
 func (b *postgresBunBackend) Update(
 	_ context.Context, fn func(bun.IDB) error,
 ) error {
