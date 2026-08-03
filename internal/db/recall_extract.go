@@ -1397,7 +1397,7 @@ func insertExtractedRecallEntriesTx(
 				"checking extracted entry %s: %w", entry.ID, err,
 			)
 		}
-		if err := insertRecallEntryTx(tx, entry); err != nil {
+		if err := insertRecallEntryTx(ctx, tx, entry); err != nil {
 			return 0, err
 		}
 		inserted++
