@@ -26,6 +26,10 @@ type bunConsistentViewer interface {
 	ConsistentView(context.Context, func(bun.IDB) error) error
 }
 
+type bunCurationSessionLocker interface {
+	LockCurationSession(context.Context, bun.IDB, string) error
+}
+
 // WriteOperation identifies a separately authorized family of mutations.
 type WriteOperation uint8
 
