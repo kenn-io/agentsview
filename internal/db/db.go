@@ -17,6 +17,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/sqlitedialect"
+
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
@@ -738,9 +741,15 @@ END;
 // concurrent HTTP handler goroutines can safely read while
 // Reopen/CloseConnections swap the underlying *sql.DB.
 type DB struct {
-	path                 string
-	writer               atomic.Pointer[sql.DB]
-	reader               atomic.Pointer[sql.DB]
+	*BunStore
+
+	path   string
+	writer atomic.Pointer[sql.DB]
+	reader atomic.Pointer[sql.DB]
+	// bunReader and bunWriter are swapped with the raw pools under connMu.
+	// Bun does not own or close those pools.
+	bunReader            *bun.DB
+	bunWriter            *bun.DB
 	usageCache           *usageCacheManager
 	usageBackfillMu      sync.Mutex
 	usageBackfillCancel  context.CancelFunc
@@ -1049,6 +1058,9 @@ func (db *DB) requireWritable() error {
 }
 
 func (db *DB) SetCustomPricing(p map[string]config.CustomModelRate) {
+	if db.BunStore != nil {
+		db.BunStore.SetCustomPricing(p)
+	}
 	db.customPricing = p
 	db.effectivePricing = nil
 }
@@ -1058,6 +1070,9 @@ func (db *DB) SetCustomPricing(p map[string]config.CustomModelRate) {
 func (db *DB) SetEffectivePricing(
 	p map[string]export.ModelRates,
 ) {
+	if db.BunStore != nil {
+		db.BunStore.SetEffectivePricing(p)
+	}
 	db.customPricing = nil
 	db.effectivePricing = make(map[string]export.ModelRates, len(p))
 	for model, rates := range p {
@@ -1071,6 +1086,9 @@ func (db *DB) SetEffectivePricing(
 func (db *DB) SetEmptyCatalogPricing(
 	p map[string]export.ModelRates,
 ) {
+	if db.BunStore != nil {
+		db.BunStore.SetEmptyCatalogPricing(p)
+	}
 	db.emptyCatalogPricing = make(map[string]export.ModelRates, len(p))
 	for model, rates := range p {
 		rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
@@ -1724,6 +1742,8 @@ func OpenReadOnly(path string) (*DB, error) {
 	}
 	db.usageCache.attachArchive(db)
 	db.reader.Store(reader)
+	db.bunReader = bun.NewDB(reader, sqlitedialect.New())
+	db.BunStore = NewBunStore(&sqliteBunBackend{store: db})
 	db.cursorSecret = make([]byte, 32)
 	if _, err := rand.Read(db.cursorSecret); err != nil {
 		reader.Close()
@@ -4262,6 +4282,9 @@ func openAndInit(
 	db.usageCache.attachArchive(db)
 	db.writer.Store(writer)
 	db.reader.Store(reader)
+	db.bunWriter = bun.NewDB(writer, sqlitedialect.New())
+	db.bunReader = bun.NewDB(reader, sqlitedialect.New())
+	db.BunStore = NewBunStore(&sqliteBunBackend{store: db})
 
 	db.cursorSecret = make([]byte, 32)
 	if _, err := rand.Read(db.cursorSecret); err != nil {
@@ -5051,6 +5074,8 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 	retired := append([]*sql.DB(nil), db.retired...)
 	oldWriter := db.writer.Swap(writer)
 	oldReader := db.reader.Swap(reader)
+	db.bunWriter = bun.NewDB(writer, sqlitedialect.New())
+	db.bunReader = bun.NewDB(reader, sqlitedialect.New())
 	// Reopen fully restores the writer pool, so clear any writer-closed barrier
 	// a prior CloseWriter set unless the caller keeps it. Without the clear a
 	// resync swap that ran behind the worker write barrier would reopen the
@@ -5111,6 +5136,7 @@ func (db *DB) CloseWriter() error {
 	defer db.mu.Unlock()
 	db.connMu.Lock()
 	old := db.writer.Swap(nil)
+	db.bunWriter = nil
 	db.writerClosed.Store(true)
 	pending := db.undrainedPools
 	db.undrainedPools = nil
@@ -5175,6 +5201,7 @@ func (db *DB) ReopenWriter() error {
 
 	db.connMu.Lock()
 	old := db.writer.Swap(writer)
+	db.bunWriter = bun.NewDB(writer, sqlitedialect.New())
 	db.writerClosed.Store(false)
 	db.connMu.Unlock()
 
