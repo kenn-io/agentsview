@@ -641,9 +641,11 @@ func TestPinMessageSerializesWithSessionReplacement(t *testing.T) {
 
 	lockTx, err := pg.BeginTx(ctx, nil)
 	require.NoError(t, err, "begin lock tx")
-	require.NoError(t,
-		lockPinnedMessagesSession(ctx, lockTx, "pg-pin-session-lock"),
-		"lock session pins")
+	var lockedSessionID string
+	require.NoError(t, lockTx.QueryRowContext(ctx, `
+		SELECT id FROM sessions WHERE id = $1 FOR UPDATE`,
+		"pg-pin-session-lock",
+	).Scan(&lockedSessionID), "lock session pins")
 
 	_, err = store.PinMessage("pg-pin-session-lock", 0, nil)
 	require.Error(t, err,

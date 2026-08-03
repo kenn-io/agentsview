@@ -13,6 +13,7 @@ import (
 const bunCoreContractSchema = "agentsview_bun_core_contract"
 const bunIdentityContractSchema = "agentsview_bun_identity_contract"
 const bunDataContractSchema = "agentsview_bun_data_contract"
+const bunCurationContractSchema = "agentsview_bun_curation_contract"
 
 func TestBunStoreCoreContract(t *testing.T) {
 	storetest.RunCoreContract(t, storetest.Backend{
@@ -76,6 +77,29 @@ func TestBunStoreDataContract(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, store.Close()) })
 			fixture, err := storetest.InsertBunIdentityFixture(
 				t.Context(), store.bun, "bun-identity-archive-a", "bun-identity-salt-a",
+			)
+			require.NoError(t, err)
+			return store.BunStore, fixture
+		},
+	})
+}
+
+func TestBunStoreCurationContract(t *testing.T) {
+	storetest.RunCurationContract(t, storetest.CurationBackend{
+		Name: "postgres", Writable: true,
+		Open: func(t *testing.T) (storetest.CurationStore, storetest.CurationFixture) {
+			pgURL := testPGURL(t)
+			cleanupBunContractSchema(t, pgURL, bunCurationContractSchema)
+			t.Cleanup(func() {
+				cleanupBunContractSchema(t, pgURL, bunCurationContractSchema)
+			})
+			pg, err := Open(pgURL, bunCurationContractSchema, true)
+			require.NoError(t, err)
+			require.NoError(t, EnsureSchema(t.Context(), pg, bunCurationContractSchema))
+			store := newStore(pg)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			fixture, err := storetest.InsertBunCurationFixture(
+				t.Context(), store.bun, "bun-curation-archive", "bun-curation-generation",
 			)
 			require.NoError(t, err)
 			return store.BunStore, fixture

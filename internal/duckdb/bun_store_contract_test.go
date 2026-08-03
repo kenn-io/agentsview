@@ -71,3 +71,22 @@ func TestBunStoreDataContract(t *testing.T) {
 		},
 	})
 }
+
+func TestBunStoreCurationContract(t *testing.T) {
+	storetest.RunCurationContract(t, storetest.CurationBackend{
+		Name: "duckdb", Writable: false,
+		Open: func(t *testing.T) (storetest.CurationStore, storetest.CurationFixture) {
+			conn, err := Open(filepath.Join(t.TempDir(), "curation-contract.duckdb"))
+			require.NoError(t, err)
+			common := bun.NewDB(conn, bundialect.New())
+			require.NoError(t, db.CreateCommonSchema(t.Context(), common))
+			fixture, err := storetest.InsertBunCurationFixture(
+				t.Context(), common, "bun-curation-archive", "bun-curation-generation",
+			)
+			require.NoError(t, err)
+			store := NewStoreFromDB(conn)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			return store.BunStore, fixture
+		},
+	})
+}
