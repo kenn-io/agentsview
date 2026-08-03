@@ -5,6 +5,11 @@ description: Release history for AgentsView
 
 ## Unreleased
 
+**Bug fixes**
+
+- Keep PostgreSQL serve startup audits compatible with valid multibyte text in
+  compressed rows on affected PostgreSQL minor releases.
+
 ---
 
 ## 0.40.0

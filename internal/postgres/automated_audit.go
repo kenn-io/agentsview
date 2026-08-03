@@ -120,13 +120,18 @@ func auditAutomatedMatchingHashPG(
 	classifier db.AutomationClassifier,
 	progress *automatedAuditPGProgress,
 ) (setIDs, clearIDs []string, err error) {
+	// Fetch bytea prefixes because the classifier's evidence limit is bytes,
+	// not characters. This also avoids affected PostgreSQL minors rejecting
+	// valid multibyte text when text substring operates on compressed TOAST.
 	rows, err := pg.QueryContext(ctx,
 		`SELECT
 			s.id,
 			s.user_message_count,
 			s.is_automated,
 			CASE WHEN s.user_message_count <= 1
-				THEN left(first_user.content, $1)
+				THEN substring(
+					convert_to(first_user.content, 'UTF8') FROM 1 FOR $1
+				)
 			END AS first_user_prefix,
 			CASE WHEN s.user_message_count <= 1
 				THEN octet_length(first_user.content)
@@ -134,7 +139,9 @@ func auditAutomatedMatchingHashPG(
 			CASE
 				WHEN s.user_message_count <= 1
 				 AND s.first_message IS NOT NULL
-				THEN left(s.first_message, $1)
+				THEN substring(
+					convert_to(s.first_message, 'UTF8') FROM 1 FOR $1
+				)
 			END AS first_message_prefix,
 			CASE
 				WHEN s.user_message_count <= 1
@@ -166,9 +173,9 @@ func auditAutomatedMatchingHashPG(
 			id                 string
 			userMessageCount   int
 			rowAutomated       bool
-			firstUserPrefix    sql.NullString
+			firstUserPrefix    []byte
 			firstUserLength    sql.NullInt64
-			firstMessagePrefix sql.NullString
+			firstMessagePrefix []byte
 			firstMessageLength sql.NullInt64
 		)
 		if err := rows.Scan(
@@ -277,11 +284,11 @@ func scanFullAutomationCandidatesPG(
 }
 
 func automationEvidencePG(
-	prefix sql.NullString,
+	prefix []byte,
 	fullByteLength sql.NullInt64,
 ) db.AutomationTextEvidence {
 	return db.AutomationTextEvidence{
-		Prefix:         []byte(prefix.String),
+		Prefix:         prefix,
 		FullByteLength: fullByteLength.Int64,
 		Valid:          fullByteLength.Valid,
 	}

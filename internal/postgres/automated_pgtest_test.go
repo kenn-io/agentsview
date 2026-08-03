@@ -35,6 +35,8 @@ func TestBackfillIsAutomatedPGMatchingHashUsesBoundedEvidence(t *testing.T) {
 	largePrefix := "You are a code reviewer." + strings.Repeat("x", 4<<10)
 	lateSubstring := strings.Repeat("z", 2<<10) +
 		" invoked by roborev to perform this review"
+	multibyteLateSubstring := strings.Repeat("日\\", 450) +
+		" invoked by roborev to perform this review"
 	largeHuman := strings.Repeat("h", 2<<10)
 	rows := []struct {
 		id               string
@@ -45,6 +47,10 @@ func TestBackfillIsAutomatedPGMatchingHashUsesBoundedEvidence(t *testing.T) {
 		{id: "prefix-first-message", firstMessage: largePrefix, userMessageCount: 1},
 		{id: "prefix-first-user", firstMessage: "Generated title", userMessageCount: 1},
 		{id: "late-substring", firstMessage: lateSubstring, userMessageCount: 1},
+		{
+			id: "multibyte-late-substring", firstMessage: multibyteLateSubstring,
+			userMessageCount: 1,
+		},
 		{id: "unicode-exact", firstMessage: "\u2003Warmup\u00a0", userMessageCount: 1},
 		{
 			id: "stale-multi-turn", firstMessage: "# Fix Request for login flow",
@@ -78,16 +84,17 @@ func TestBackfillIsAutomatedPGMatchingHashUsesBoundedEvidence(t *testing.T) {
 	progress, err := backfillIsAutomatedPGWithProgress(ctx, ps.DB())
 	require.NoError(t, err, "bounded matching-hash audit")
 	assert.Equal(t, len(rows), progress.RowsPrefetched)
-	assert.Equal(t, 2, progress.RowsFullText,
+	assert.Equal(t, 3, progress.RowsFullText,
 		"only truncated non-matches should require complete text")
 
 	for id, want := range map[string]bool{
-		"prefix-first-message": true,
-		"prefix-first-user":    true,
-		"late-substring":       true,
-		"unicode-exact":        true,
-		"stale-multi-turn":     false,
-		"large-human":          false,
+		"prefix-first-message":     true,
+		"prefix-first-user":        true,
+		"late-substring":           true,
+		"multibyte-late-substring": true,
+		"unicode-exact":            true,
+		"stale-multi-turn":         false,
+		"large-human":              false,
 	} {
 		var got bool
 		require.NoError(t, ps.DB().QueryRowContext(ctx,
