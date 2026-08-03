@@ -22,6 +22,7 @@ func TestStoreInsightCRUD(t *testing.T) {
 	defer store.Close()
 
 	ctx := context.Background()
+	require.NoError(t, store.DetectInsightGenerationAvailability(ctx))
 	project := "insight-project"
 	cacheKey := "insight-cache-key"
 

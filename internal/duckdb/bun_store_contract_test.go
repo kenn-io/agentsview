@@ -90,3 +90,20 @@ func TestBunStoreCurationContract(t *testing.T) {
 		},
 	})
 }
+
+func TestBunStoreInsightContract(t *testing.T) {
+	storetest.RunInsightContract(t, storetest.InsightBackend{
+		Name: "duckdb", Writable: false,
+		Open: func(t *testing.T) (storetest.InsightStore, storetest.InsightFixture) {
+			conn, err := Open(filepath.Join(t.TempDir(), "insight-contract.duckdb"))
+			require.NoError(t, err)
+			common := bun.NewDB(conn, bundialect.New())
+			require.NoError(t, db.CreateCommonSchema(t.Context(), common))
+			fixture, err := storetest.InsertBunInsightFixture(t.Context(), common)
+			require.NoError(t, err)
+			store := NewStoreFromDB(conn)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			return store.BunStore, fixture
+		},
+	})
+}

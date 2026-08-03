@@ -14,6 +14,7 @@ const bunCoreContractSchema = "agentsview_bun_core_contract"
 const bunIdentityContractSchema = "agentsview_bun_identity_contract"
 const bunDataContractSchema = "agentsview_bun_data_contract"
 const bunCurationContractSchema = "agentsview_bun_curation_contract"
+const bunInsightContractSchema = "agentsview_bun_insight_contract"
 
 func TestBunStoreCoreContract(t *testing.T) {
 	storetest.RunCoreContract(t, storetest.Backend{
@@ -102,6 +103,28 @@ func TestBunStoreCurationContract(t *testing.T) {
 				t.Context(), store.bun, "bun-curation-archive", "bun-curation-generation",
 			)
 			require.NoError(t, err)
+			return store.BunStore, fixture
+		},
+	})
+}
+
+func TestBunStoreInsightContract(t *testing.T) {
+	storetest.RunInsightContract(t, storetest.InsightBackend{
+		Name: "postgres", Writable: true,
+		Open: func(t *testing.T) (storetest.InsightStore, storetest.InsightFixture) {
+			pgURL := testPGURL(t)
+			cleanupBunContractSchema(t, pgURL, bunInsightContractSchema)
+			t.Cleanup(func() {
+				cleanupBunContractSchema(t, pgURL, bunInsightContractSchema)
+			})
+			pg, err := Open(pgURL, bunInsightContractSchema, true)
+			require.NoError(t, err)
+			require.NoError(t, EnsureSchema(t.Context(), pg, bunInsightContractSchema))
+			store := newStore(pg)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			fixture, err := storetest.InsertBunInsightFixture(t.Context(), store.bun)
+			require.NoError(t, err)
+			store.setInsightGenerationAvailable(true)
 			return store.BunStore, fixture
 		},
 	})
