@@ -13,6 +13,7 @@ import (
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/pgdialect"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -1364,21 +1365,27 @@ func convergePostgresCommonSchema(
 	)`); err != nil {
 		return fmt.Errorf("locking common PostgreSQL schema migration: %w", err)
 	}
-	var complete bool
-	if err := tx.QueryRowContext(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM sync_metadata WHERE key = ?
-		)`, db.CommonSchemaCompatibilityMetadataKey,
-	).Scan(&complete); err != nil {
+	var stampValue string
+	err = tx.QueryRowContext(ctx, `
+		SELECT value FROM sync_metadata WHERE key = ?`,
+		db.CommonSchemaCompatibilityMetadataKey,
+	).Scan(&stampValue)
+	complete := err == nil
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("rechecking common PostgreSQL schema stamp: %w", err)
 	}
 	if complete {
+		if stampValue != "1" {
+			return fmt.Errorf(
+				"common PostgreSQL schema stamp has invalid value %q", stampValue,
+			)
+		}
 		if err := checkPostgresPricingTimestampTypes(ctx, tx); err != nil {
 			return fmt.Errorf(
 				"validating stamped common PostgreSQL schema: %w", err,
 			)
 		}
-		if err := db.CheckCommonSchemaStructure(ctx, tx); err != nil {
+		if err := validatePostgresCommonSchemaStructure(ctx, tx); err != nil {
 			return fmt.Errorf("validating stamped common PostgreSQL schema: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -1412,7 +1419,7 @@ func convergePostgresCommonSchema(
 	if err := checkPostgresPricingTimestampTypes(ctx, tx); err != nil {
 		return err
 	}
-	if err := db.CheckCommonSchema(ctx, tx); err != nil {
+	if err := validatePostgresCommonSchema(ctx, tx); err != nil {
 		return err
 	}
 	if beforeStamp != nil {
@@ -1494,6 +1501,55 @@ func checkPostgresPricingTimestampTypes(
 				table, dataType,
 			)
 		}
+	}
+	return nil
+}
+
+func validatePostgresCommonSchema(ctx context.Context, tx bun.Tx) error {
+	if err := db.CheckCommonSchema(ctx, tx); err != nil {
+		return err
+	}
+	return validatePostgresCommonSchemaObjects(ctx, tx)
+}
+
+func validatePostgresCommonSchemaStructure(ctx context.Context, tx bun.Tx) error {
+	if err := db.CheckCommonSchemaStructure(ctx, tx); err != nil {
+		return err
+	}
+	return validatePostgresCommonSchemaObjects(ctx, tx)
+}
+
+func validatePostgresCommonSchemaObjects(ctx context.Context, tx bun.Tx) error {
+	for _, table := range bunmodel.CommonTables() {
+		for _, index := range table.Indexes {
+			var exists bool
+			if err := tx.NewRaw(`SELECT EXISTS (
+				SELECT 1 FROM pg_indexes
+				WHERE schemaname = current_schema()
+				  AND tablename = ? AND indexname = ?
+			)`, table.Name, index.Name).Scan(ctx, &exists); err != nil {
+				return fmt.Errorf("checking common PostgreSQL index %s: %w", index.Name, err)
+			}
+			if !exists {
+				return fmt.Errorf("common PostgreSQL index %s is missing", index.Name)
+			}
+		}
+	}
+	var nullable bool
+	if err := tx.NewRaw(`SELECT EXISTS (
+		SELECT 1
+		FROM pg_attribute AS attribute
+		JOIN pg_class AS relation ON relation.oid = attribute.attrelid
+		JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+		WHERE namespace.nspname = current_schema()
+		  AND relation.relname = 'pinned_messages'
+		  AND attribute.attname = 'message_id'
+		  AND NOT attribute.attnotnull
+	)`).Scan(ctx, &nullable); err != nil {
+		return fmt.Errorf("checking common PostgreSQL pin alias constraint: %w", err)
+	}
+	if !nullable {
+		return fmt.Errorf("common PostgreSQL pinned_messages.message_id remains required")
 	}
 	return nil
 }
@@ -2452,6 +2508,25 @@ func CheckSchemaCompat(
 		)
 	}
 	rows.Close()
+
+	for _, projection := range []struct {
+		table string
+		model any
+	}{
+		{table: "sessions", model: (*bunmodel.Session)(nil)},
+		{table: "messages", model: (*bunmodel.Message)(nil)},
+		{table: "tool_calls", model: (*bunmodel.ToolCall)(nil)},
+	} {
+		rows, err = db.QueryContext(ctx,
+			"SELECT "+strings.Join(bunmodel.ModelColumns(projection.model), ", ")+
+				" FROM "+projection.table+" LIMIT 0")
+		if err != nil {
+			return fmt.Errorf(
+				"%s table missing Bun model columns: %w", projection.table, err,
+			)
+		}
+		rows.Close()
+	}
 	rows, err = db.QueryContext(ctx,
 		`SELECT source_archive_id, source_archive_salt
 		 FROM source_archives LIMIT 0`)

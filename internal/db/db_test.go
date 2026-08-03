@@ -1015,7 +1015,7 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 
 func TestCurrentDataVersionPrimeAgentCacheWriteUsage(t *testing.T) {
 	assert.Equal(t, 81, CurrentDataVersion(),
-		"Pi cacheWrite usage backfill requires a data version bump")
+		"schema cutover and usage reparsing require a data version bump")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {

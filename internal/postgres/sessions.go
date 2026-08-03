@@ -62,6 +62,28 @@ func (b *postgresBunBackend) Capabilities() db.BackendCapabilities {
 	return db.BackendCapabilities{Writes: writes}
 }
 
+func (*postgresBunBackend) SessionQueryDialect() db.QueryDialect {
+	return db.PortableBunSessionQueryDialect()
+}
+
+func (*postgresBunBackend) SessionVersion(
+	ctx context.Context, store bun.IDB, id string,
+) (int, int64, error) {
+	var row struct {
+		MessageCount int       `bun:"message_count"`
+		UpdatedAt    time.Time `bun:"updated_at"`
+	}
+	err := store.NewSelect().Table("sessions").
+		Column("message_count").
+		ColumnExpr("COALESCE(updated_at, created_at) AS updated_at").
+		Where("id = ?", id).Scan(ctx, &row)
+	if err != nil {
+		return 0, 0, err
+	}
+	return row.MessageCount,
+		db.SessionVersionMarker(FormatISO8601(row.UpdatedAt)), nil
+}
+
 func (b *postgresBunBackend) View(
 	_ context.Context, fn func(bun.IDB) error,
 ) error {

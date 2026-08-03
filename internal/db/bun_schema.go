@@ -35,6 +35,14 @@ var sqliteCommonSchemaColumnMigrations = []schemaColumnMigration{
 		"pinned_messages", "source_uuid",
 		"ALTER TABLE pinned_messages ADD COLUMN source_uuid TEXT NOT NULL DEFAULT ''",
 	},
+	{
+		"source_worktree_project_mappings", "id",
+		"ALTER TABLE source_worktree_project_mappings ADD COLUMN id INTEGER NOT NULL DEFAULT 0",
+	},
+	{
+		"source_worktree_project_mappings", "created_at",
+		"ALTER TABLE source_worktree_project_mappings ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
+	},
 }
 
 // CreateCommonSchema creates the canonical serving tables and ordinary indexes
@@ -149,7 +157,35 @@ func checkCommonSchemaRows(ctx context.Context, db bun.IDB) error {
 			return fmt.Errorf("common %s is invalid", check.name)
 		}
 	}
+	for _, table := range bunmodel.CommonTables() {
+		for _, foreignKey := range table.ForeignKeys {
+			join := make([]string, len(foreignKey.Columns))
+			for index := range foreignKey.Columns {
+				join[index] = "child." + quoteCommonIdentifier(foreignKey.Columns[index]) +
+					" = parent." + quoteCommonIdentifier(foreignKey.ReferencedColumns[index])
+			}
+			query := "SELECT EXISTS (SELECT 1 FROM " + quoteCommonIdentifier(table.Name) +
+				" AS child LEFT JOIN " + quoteCommonIdentifier(foreignKey.ReferencedTable) +
+				" AS parent ON " + strings.Join(join, " AND ") +
+				" WHERE parent." + quoteCommonIdentifier(foreignKey.ReferencedColumns[0]) +
+				" IS NULL)"
+			var invalid bool
+			if err := db.NewRaw(query).Scan(ctx, &invalid); err != nil {
+				return fmt.Errorf("checking common %s canonical parent: %w", table.Name, err)
+			}
+			if invalid {
+				return fmt.Errorf(
+					"common %s canonical parent %s is missing",
+					table.Name, foreignKey.ReferencedTable,
+				)
+			}
+		}
+	}
 	return nil
+}
+
+func quoteCommonIdentifier(identifier string) string {
+	return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
 }
 
 func (db *DB) convergeSQLiteCommonSchemaLocked(
@@ -196,17 +232,7 @@ func (db *DB) convergeSQLiteCommonSchemaLocked(
 		WHERE message_ordinal IS NULL`); err != nil {
 		return fmt.Errorf("backfilling tool call message ordinals: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `
-		CREATE TRIGGER IF NOT EXISTS tool_calls_fill_message_ordinal
-		AFTER INSERT ON tool_calls
-		WHEN NEW.message_ordinal IS NULL
-		BEGIN
-			UPDATE tool_calls
-			SET message_ordinal = (
-				SELECT ordinal FROM messages WHERE messages.id = NEW.message_id
-			)
-			WHERE id = NEW.id;
-		END`); err != nil {
+	if _, err := tx.ExecContext(ctx, sqliteToolCallOrdinalTriggerDDL); err != nil {
 		return fmt.Errorf("installing tool call message ordinal trigger: %w", err)
 	}
 	if err := convergeSQLitePricingMetadata(ctx, tx); err != nil {
@@ -214,6 +240,12 @@ func (db *DB) convergeSQLiteCommonSchemaLocked(
 	}
 	if err := CreateCommonSchema(ctx, tx); err != nil {
 		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE source_worktree_project_mappings
+		SET created_at = updated_at
+		WHERE created_at = ''`); err != nil {
+		return fmt.Errorf("backfilling source worktree mapping creation times: %w", err)
 	}
 
 	databaseGeneration, err := sqliteMetadataValue(
@@ -538,6 +570,22 @@ var sqliteCanonicalIdentityTriggerNames = []string{
 	"trg_source_worktree_project_mappings_revision_delete",
 }
 
+const sqliteToolCallOrdinalTriggerDefinition = `
+CREATE TRIGGER tool_calls_fill_message_ordinal
+AFTER INSERT ON tool_calls
+WHEN NEW.message_ordinal IS NULL
+BEGIN
+	UPDATE tool_calls
+	SET message_ordinal = (
+		SELECT ordinal FROM messages WHERE messages.id = NEW.message_id
+	)
+	WHERE id = NEW.id;
+END`
+
+const sqliteToolCallOrdinalTriggerDDL = `
+DROP TRIGGER IF EXISTS tool_calls_fill_message_ordinal;
+` + sqliteToolCallOrdinalTriggerDefinition
+
 func installSQLiteCanonicalIdentityTriggers(ctx context.Context, db bun.IDB) error {
 	if _, err := db.ExecContext(ctx, sqliteCanonicalIdentityTriggerDDL); err != nil {
 		return fmt.Errorf("installing canonical SQLite identity triggers: %w", err)
@@ -547,6 +595,9 @@ func installSQLiteCanonicalIdentityTriggers(ctx context.Context, db bun.IDB) err
 
 func checkSQLiteCanonicalSchemaObjects(ctx context.Context, db bun.IDB) error {
 	if err := checkSQLiteCanonicalIdentityTriggers(ctx, db); err != nil {
+		return err
+	}
+	if err := checkSQLiteToolCallOrdinalTrigger(ctx, db); err != nil {
 		return err
 	}
 	return checkSQLiteCanonicalIndexes(ctx, db)
@@ -568,6 +619,21 @@ func checkSQLiteCanonicalIdentityTriggers(ctx context.Context, db bun.IDB) error
 		if normalizeSQLiteSchemaSQL(got) != normalizeSQLiteSchemaSQL(want) {
 			return fmt.Errorf("canonical SQLite trigger %s has drifted", name)
 		}
+	}
+	return nil
+}
+
+func checkSQLiteToolCallOrdinalTrigger(ctx context.Context, db bun.IDB) error {
+	var got string
+	if err := db.NewRaw(`
+		SELECT sql FROM sqlite_schema
+		WHERE type = 'trigger' AND name = 'tool_calls_fill_message_ordinal'`,
+	).Scan(ctx, &got); err != nil {
+		return fmt.Errorf("checking canonical SQLite trigger tool_calls_fill_message_ordinal: %w", err)
+	}
+	if normalizeSQLiteSchemaSQL(got) !=
+		normalizeSQLiteSchemaSQL(sqliteToolCallOrdinalTriggerDefinition) {
+		return fmt.Errorf("canonical SQLite trigger tool_calls_fill_message_ordinal has drifted")
 	}
 	return nil
 }
@@ -668,13 +734,19 @@ func normalizeSQLiteSchemaSQL(query string) string {
 }
 
 func sqliteCommonSchemaStamped(ctx context.Context, db bun.IDB) (bool, error) {
-	complete, err := db.NewSelect().Table("archive_metadata").
-		Where("key = ?", CommonSchemaCompatibilityMetadataKey).
-		Exists(ctx)
+	var value string
+	err := db.NewSelect().Table("archive_metadata").Column("value").
+		Where("key = ?", CommonSchemaCompatibilityMetadataKey).Scan(ctx, &value)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
 	if err != nil {
 		return false, fmt.Errorf("probing common SQLite schema stamp: %w", err)
 	}
-	return complete, nil
+	if value != "1" {
+		return false, fmt.Errorf("common SQLite schema stamp has invalid value %q", value)
+	}
+	return true, nil
 }
 
 func sqliteMetadataValue(

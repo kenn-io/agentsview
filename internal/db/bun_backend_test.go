@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,6 +24,16 @@ func (b *recordingBunBackend) ReadOnly() bool { return b.readOnly }
 
 func (b *recordingBunBackend) Capabilities() BackendCapabilities {
 	return b.capabilities
+}
+
+func (*recordingBunBackend) SessionQueryDialect() QueryDialect {
+	return PortableBunSessionQueryDialect()
+}
+
+func (*recordingBunBackend) SessionVersion(
+	context.Context, bun.IDB, string,
+) (int, int64, error) {
+	return 0, 0, sql.ErrNoRows
 }
 
 func (b *recordingBunBackend) View(
