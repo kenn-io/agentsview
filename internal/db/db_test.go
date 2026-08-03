@@ -1936,6 +1936,46 @@ func TestReplaceSessionContentDuplicateSourceUUIDRestoresOnePin(t *testing.T) {
 	assert.Equal(t, 0, pins[0].Ordinal, "pin stays on its original message")
 }
 
+func TestReplaceSessionContentSourceUUIDBecomesDuplicateRestoresOnePin(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "s1", "p")
+	insertMessages(t, d,
+		Message{
+			SessionID: "s1", Ordinal: 0, Role: "user",
+			Content: "pinned", SourceUUID: "becomes-duplicate",
+		},
+		Message{
+			SessionID: "s1", Ordinal: 1, Role: "assistant",
+			Content: "old tail", SourceUUID: "old-tail",
+		},
+	)
+	msgs, err := d.GetAllMessages(ctx, "s1")
+	require.NoError(t, err, "GetAllMessages")
+	_, err = d.PinMessage("s1", msgs[0].ID, nil)
+	require.NoError(t, err, "PinMessage")
+
+	require.NoError(t, d.ReplaceSessionContent("s1", []Message{
+		{
+			SessionID: "s1", Ordinal: 0, Role: "user",
+			Content: "pinned", SourceUUID: "becomes-duplicate",
+		},
+		{
+			SessionID: "s1", Ordinal: 1, Role: "assistant",
+			Content: "new duplicate", SourceUUID: "becomes-duplicate",
+		},
+	}, SessionSignalUpdate{}, nil), "ReplaceSessionContent")
+
+	pins, err := d.ListPinnedMessages(ctx, "s1", "")
+	require.NoError(t, err, "ListPinnedMessages")
+	require.Len(t, pins, 1,
+		"a newly duplicated UUID must use the guarded identity fallback")
+	assert.Equal(t, 0, pins[0].Ordinal, "pin stays on its original message")
+}
+
 func TestReplaceSessionContentMissingSourceUUIDDropsPin(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

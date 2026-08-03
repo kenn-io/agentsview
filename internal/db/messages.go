@@ -1598,7 +1598,7 @@ func restorePinsTx(
 		}
 		if sp.sourceUUID != "" {
 			if sp.sourceUUIDCount == 1 {
-				_, err := tx.Exec(`
+				res, err := tx.Exec(`
 				INSERT OR IGNORE INTO pinned_messages
 					(session_id, message_id, ordinal, note, created_at)
 				SELECT ?, m.id, m.ordinal, ?, ?
@@ -1619,7 +1619,16 @@ func restorePinsTx(
 						sp.sourceUUID, err,
 					)
 				}
-				continue
+				n, err := res.RowsAffected()
+				if err != nil {
+					return fmt.Errorf(
+						"checking restored pin uuid=%s: %w",
+						sp.sourceUUID, err,
+					)
+				}
+				if n > 0 {
+					continue
+				}
 			}
 			if sp.sourceIdentityCount != 1 {
 				continue
