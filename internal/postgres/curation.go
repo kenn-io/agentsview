@@ -9,15 +9,21 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-const pinnedMessagesSessionLockPrefix = "agentsview:pinned_messages:"
-
 func lockPinnedMessagesSession(
 	ctx context.Context, tx *sql.Tx, sessionID string,
 ) error {
-	if _, err := tx.ExecContext(ctx,
-		`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
-		pinnedMessagesSessionLockPrefix+sessionID,
-	); err != nil {
+	var lockedSessionID string
+	err := tx.QueryRowContext(ctx, `
+		SELECT id
+		FROM sessions
+		WHERE id = $1
+		FOR UPDATE`,
+		sessionID,
+	).Scan(&lockedSessionID)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
 		return fmt.Errorf(
 			"locking pg pins for session %s: %w", sessionID, err,
 		)
