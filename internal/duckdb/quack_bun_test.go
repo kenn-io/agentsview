@@ -64,3 +64,28 @@ func TestQuackBunResolverRejectsExec(t *testing.T) {
 	_, err := conn.ExecContext(t.Context(), "DELETE FROM sessions")
 	assert.ErrorIs(t, err, db.ErrReadOnly)
 }
+
+func TestQuackBunResolverRoutesQueryRowThroughRecoverableQueryPath(t *testing.T) {
+	raw, err := sql.Open("duckdb", "")
+	require.NoError(t, err)
+	raw.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+
+	var forwarded string
+	resolver := newQuackBunResolver(raw, func(
+		ctx context.Context, query string,
+	) (*sql.Rows, error) {
+		forwarded = query
+		return raw.QueryContext(ctx, "SELECT CAST(7 AS INTEGER), true")
+	})
+	conn := resolver.ResolveConn(t.Context(), nil)
+	var count int
+	var exists bool
+	err = conn.QueryRowContext(
+		t.Context(), "SELECT count(*) FROM sessions",
+	).Scan(&count, &exists)
+	require.NoError(t, err)
+	assert.Equal(t, "SELECT count(*) FROM sessions", forwarded)
+	assert.Equal(t, 7, count)
+	assert.True(t, exists)
+}

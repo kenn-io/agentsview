@@ -144,6 +144,51 @@ func TestStoreBunReopensAfterMirrorReplacement(t *testing.T) {
 	assert.Equal(t, []string{"new-session"}, listMirrorSessionIDsWithBun(t, store))
 }
 
+func TestStoreBunViewKeepsHandleSwapBehindInFlightCallback(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.duckdb")
+	nextPath := filepath.Join(dir, "next.duckdb")
+	buildMirrorFixture(t, oldPath, "old-session")
+	buildMirrorFixture(t, nextPath, "new-session")
+
+	store, err := NewStore(oldPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	next, err := Open(nextPath)
+	require.NoError(t, err)
+	info, err := os.Stat(nextPath)
+	require.NoError(t, err)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	viewDone := make(chan error, 1)
+	go func() {
+		viewDone <- store.viewBun(t.Context(), func(bun.IDB) error {
+			close(started)
+			<-release
+			return nil
+		})
+	}()
+	<-started
+
+	swapDone := make(chan struct{})
+	go func() {
+		store.swapHandle(next, "", info)
+		close(swapDone)
+	}()
+	select {
+	case <-swapDone:
+		close(release)
+		require.Fail(t, "handle swap returned during guarded Bun view")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	require.NoError(t, <-viewDone)
+	<-swapDone
+	assert.Equal(t, []string{"new-session"}, listMirrorSessionIDsWithBun(t, store))
+}
+
 func TestStoreKeepsOldHandleWhenReplacementIncompatible(t *testing.T) {
 	skipReopenTestOnWindows(t)
 	dir := t.TempDir()

@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"crypto/rand"
 	"sync"
 
 	"github.com/uptrace/bun"
@@ -29,12 +28,7 @@ type BunStore struct {
 
 // NewBunStore creates a shared store over one guarded backend.
 func NewBunStore(backend BunBackend) *BunStore {
-	store := &BunStore{
-		backend:      backend,
-		cursorSecret: make([]byte, 32),
-	}
-	_, _ = rand.Read(store.cursorSecret)
-	return store
+	return &BunStore{backend: backend}
 }
 
 // SetCursorSecret updates the shared cursor signing key.

@@ -1,7 +1,9 @@
 package bunmodel
 
 import (
+	"context"
 	"database/sql"
+	"fmt"
 	"sort"
 	"strings"
 	"testing"
@@ -15,6 +17,38 @@ import (
 	"github.com/uptrace/bun/dialect/sqlitedialect"
 	"github.com/uptrace/bun/schema"
 )
+
+func registeredCreateTable(
+	db *bun.DB, table Table, includeCascade bool,
+) *bun.CreateTableQuery {
+	query := db.NewCreateTable().Model(table.Model).IfNotExists()
+	for _, foreignKey := range table.ForeignKeys {
+		query.ForeignKey(ForeignKeyDefinition(foreignKey, includeCascade))
+	}
+	return query
+}
+
+func createRegisteredIndexes(
+	ctx context.Context, db *bun.DB, table Table,
+) error {
+	for _, index := range table.Indexes {
+		query := db.NewCreateIndex().Model(table.Model).
+			Index(index.Name).IfNotExists()
+		if index.Unique {
+			query.Unique()
+		}
+		for _, column := range index.Columns {
+			query.Column(column)
+		}
+		for _, expression := range index.Expressions {
+			query.ColumnExpr(expression)
+		}
+		if _, err := query.Exec(ctx); err != nil {
+			return fmt.Errorf("creating index %s: %w", index.Name, err)
+		}
+	}
+	return nil
+}
 
 var criticalTableColumns = map[string][]string{
 	"sessions": {
@@ -104,6 +138,49 @@ func TestCommonTablesGenerateCanonicalMessageCompositeKey(t *testing.T) {
 	}
 }
 
+func TestCommonTablesDeclareMessageRelationshipsAndDedupConstraints(t *testing.T) {
+	tables := make(map[string]Table)
+	for _, table := range CommonTables() {
+		tables[table.Name] = table
+	}
+
+	assert.Contains(t, tables["messages"].ForeignKeys, ForeignKey{
+		Columns:           []string{"session_id"},
+		ReferencedTable:   "sessions",
+		ReferencedColumns: []string{"id"},
+		OnDeleteCascade:   true,
+	})
+	assert.Contains(t, tables["tool_calls"].ForeignKeys, ForeignKey{
+		Columns:           []string{"session_id", "message_ordinal"},
+		ReferencedTable:   "messages",
+		ReferencedColumns: []string{"session_id", "ordinal"},
+		OnDeleteCascade:   true,
+	})
+	assert.Contains(t, tables["pinned_messages"].ForeignKeys, ForeignKey{
+		Columns:           []string{"session_id", "ordinal"},
+		ReferencedTable:   "messages",
+		ReferencedColumns: []string{"session_id", "ordinal"},
+		OnDeleteCascade:   true,
+	})
+
+	assert.Contains(t, tables["usage_events"].Indexes, Index{
+		Name: "idx_usage_events_dedup",
+		Expressions: []string{
+			"(CASE WHEN dedup_key <> '' THEN session_id END)",
+			"(CASE WHEN dedup_key <> '' THEN source END)",
+			"(CASE WHEN dedup_key <> '' THEN dedup_key END)",
+		},
+		Unique: true,
+	})
+	assert.Contains(t, tables["cursor_usage_events"].Indexes, Index{
+		Name: "idx_cursor_usage_events_dedup",
+		Expressions: []string{
+			"(CASE WHEN dedup_key <> '' THEN dedup_key END)",
+		},
+		Unique: true,
+	})
+}
+
 func TestCommonTablesGeneratedSchemaExecutesInSQLite(t *testing.T) {
 	raw, err := sql.Open("sqlite3", ":memory:")
 	require.NoError(t, err)
@@ -112,12 +189,70 @@ func TestCommonTablesGeneratedSchemaExecutesInSQLite(t *testing.T) {
 	store := bun.NewDB(raw, sqlitedialect.New())
 
 	for _, table := range CommonTables() {
-		ddl := store.NewCreateTable().Model(table.Model).IfNotExists().String()
+		ddl := registeredCreateTable(store, table, true).String()
 		for _, column := range criticalTableColumns[table.Name] {
 			assert.Contains(t, ddl, `"`+column+`"`, "%s.%s", table.Name, column)
 		}
-		_, err := store.NewCreateTable().Model(table.Model).IfNotExists().Exec(t.Context())
+		_, err := registeredCreateTable(store, table, true).Exec(t.Context())
 		require.NoError(t, err, table.Name)
+		require.NoError(t, createRegisteredIndexes(t.Context(), store, table))
+	}
+}
+
+func TestCommonTablesGeneratedSQLiteSchemaEnforcesCascadeAndDedupBehavior(t *testing.T) {
+	raw, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	raw.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	_, err = raw.Exec("PRAGMA foreign_keys = ON")
+	require.NoError(t, err)
+	store := bun.NewDB(raw, sqlitedialect.New())
+	for _, table := range CommonTables() {
+		_, err := registeredCreateTable(store, table, true).Exec(t.Context())
+		require.NoError(t, err, table.Name)
+		require.NoError(t, createRegisteredIndexes(t.Context(), store, table))
+	}
+
+	_, err = raw.ExecContext(t.Context(), `
+		INSERT INTO source_archives VALUES ('archive-1', 'salt-1');
+		INSERT INTO sessions (
+			id, project, machine, agent, created_at,
+			source_archive_id, source_database_generation
+		) VALUES (
+			'session-1', 'project', 'machine', 'agent',
+			'2026-08-02T12:00:00Z', 'archive-1', 'generation-1'
+		);
+		INSERT INTO messages (session_id, ordinal, role, content)
+		VALUES ('session-1', 4, 'assistant', 'done');
+		INSERT INTO tool_calls (
+			session_id, message_ordinal, tool_name, category, call_index
+		) VALUES ('session-1', 4, 'Read', 'Read', 0);
+		INSERT INTO pinned_messages (session_id, ordinal, created_at)
+		VALUES ('session-1', 4, '2026-08-02T12:01:00Z');
+		INSERT INTO usage_events (session_id, source, model, dedup_key)
+		VALUES
+			('session-1', 'parser', 'model', ''),
+			('session-1', 'parser', 'model', '');
+	`)
+	require.NoError(t, err)
+
+	_, err = raw.ExecContext(t.Context(), `
+		INSERT INTO usage_events (session_id, source, model, dedup_key)
+		VALUES ('session-1', 'parser', 'model', 'same')`)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(t.Context(), `
+		INSERT INTO usage_events (session_id, source, model, dedup_key)
+		VALUES ('session-1', 'parser', 'model', 'same')`)
+	require.Error(t, err)
+
+	_, err = raw.ExecContext(t.Context(), `DELETE FROM sessions WHERE id = 'session-1'`)
+	require.NoError(t, err)
+	for _, table := range []string{"messages", "tool_calls", "pinned_messages", "usage_events"} {
+		var count int
+		require.NoError(t, raw.QueryRowContext(
+			t.Context(), "SELECT count(*) FROM "+table,
+		).Scan(&count))
+		assert.Zero(t, count, table)
 	}
 }
 
@@ -128,7 +263,7 @@ func TestCommonTablesGeneratedSchemaRendersForPostgreSQL(t *testing.T) {
 	store := bun.NewDB(raw, pgdialect.New())
 
 	for _, table := range CommonTables() {
-		ddl := store.NewCreateTable().Model(table.Model).IfNotExists().String()
+		ddl := registeredCreateTable(store, table, true).String()
 		assert.True(t, strings.HasPrefix(ddl, "CREATE TABLE IF NOT EXISTS "))
 		for _, column := range criticalTableColumns[table.Name] {
 			assert.Contains(t, ddl, `"`+column+`"`, "%s.%s", table.Name, column)
