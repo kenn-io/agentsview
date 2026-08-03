@@ -46,11 +46,11 @@ type ToolCall struct {
 
 	ID                  *int64  `bun:"id,nullzero"`
 	MessageID           *int64  `bun:"message_id,nullzero"`
-	SessionID           string  `bun:"session_id,notnull"`
-	MessageOrdinal      int     `bun:"message_ordinal,notnull"`
+	SessionID           string  `bun:"session_id,pk"`
+	MessageOrdinal      int     `bun:"message_ordinal,pk"`
 	ToolName            string  `bun:"tool_name,notnull"`
 	Category            string  `bun:"category,notnull"`
-	CallIndex           int     `bun:"call_index,notnull,default:0"`
+	CallIndex           int     `bun:"call_index,pk,default:0"`
 	ToolUseID           string  `bun:"tool_use_id,notnull,default:''"`
 	InputJSON           *string `bun:"input_json,nullzero"`
 	SkillName           *string `bun:"skill_name,nullzero"`
@@ -65,9 +65,9 @@ type ToolResultEvent struct {
 	bun.BaseModel `bun:"table:tool_result_events"`
 
 	ID                     *int64     `bun:"id,nullzero"`
-	SessionID              string     `bun:"session_id,notnull"`
-	ToolCallMessageOrdinal int        `bun:"tool_call_message_ordinal,notnull"`
-	CallIndex              int        `bun:"call_index,notnull,default:0"`
+	SessionID              string     `bun:"session_id,pk"`
+	ToolCallMessageOrdinal int        `bun:"tool_call_message_ordinal,pk"`
+	CallIndex              int        `bun:"call_index,pk,default:0"`
 	ToolUseID              *string    `bun:"tool_use_id,nullzero"`
 	AgentID                *string    `bun:"agent_id,nullzero"`
 	SubagentSessionID      *string    `bun:"subagent_session_id,nullzero"`
@@ -76,5 +76,5 @@ type ToolResultEvent struct {
 	Content                string     `bun:"content,notnull"`
 	ContentLength          int        `bun:"content_length,notnull,default:0"`
 	Timestamp              *Timestamp `bun:"timestamp,type:TIMESTAMPTZ,nullzero"`
-	EventIndex             int        `bun:"event_index,notnull,default:0"`
+	EventIndex             int        `bun:"event_index,pk,default:0"`
 }

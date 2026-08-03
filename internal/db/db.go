@@ -1098,6 +1098,9 @@ func (db *DB) SetEmptyCatalogPricing(
 
 // SetCursorSecret updates the secret key used for cursor signing.
 func (db *DB) SetCursorSecret(secret []byte) {
+	if db.BunStore != nil {
+		db.BunStore.SetCursorSecret(secret)
+	}
 	db.cursorMu.Lock()
 	defer db.cursorMu.Unlock()
 	db.cursorSecret = append([]byte(nil), secret...)
@@ -1751,6 +1754,7 @@ func OpenReadOnly(path string) (*DB, error) {
 			"generating cursor secret: %w", err,
 		)
 	}
+	db.BunStore.SetCursorSecret(db.cursorSecret)
 	return db, nil
 }
 
@@ -4294,6 +4298,7 @@ func openAndInit(
 			"generating cursor secret: %w", err,
 		)
 	}
+	db.BunStore.SetCursorSecret(db.cursorSecret)
 	if schemaRepairNeeded {
 		if err := ctx.Err(); err != nil {
 			_ = db.CloseContext(ctx)

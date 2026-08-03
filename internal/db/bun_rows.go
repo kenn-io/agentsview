@@ -2,25 +2,26 @@ package db
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
 
-func timestampToBunRow(value string) *bunmodel.Timestamp {
+func timestampToBunRow(value string) (*bunmodel.Timestamp, error) {
 	if value == "" {
-		return nil
+		return nil, nil
 	}
 	timestamp, err := bunmodel.ParseTimestamp(value)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return &timestamp
+	return &timestamp, nil
 }
 
-func timestampPtrToBunRow(value *string) *bunmodel.Timestamp {
+func timestampPtrToBunRow(value *string) (*bunmodel.Timestamp, error) {
 	if value == nil {
-		return nil
+		return nil, nil
 	}
 	return timestampToBunRow(*value)
 }
@@ -33,11 +34,15 @@ func timestampFromBunRow(value *bunmodel.Timestamp) *string {
 	return &formatted
 }
 
-func requiredTimestampToBunRow(value string) bunmodel.Timestamp {
-	if timestamp := timestampToBunRow(value); timestamp != nil {
-		return *timestamp
+func requiredTimestampToBunRow(value string) (bunmodel.Timestamp, error) {
+	timestamp, err := timestampToBunRow(value)
+	if err != nil {
+		return bunmodel.Timestamp{}, err
 	}
-	return bunmodel.Timestamp{}
+	if timestamp == nil {
+		return bunmodel.Timestamp{}, fmt.Errorf("timestamp is empty")
+	}
+	return *timestamp, nil
 }
 
 func requiredTimestampFromBunRow(value bunmodel.Timestamp) string {
@@ -47,8 +52,8 @@ func requiredTimestampFromBunRow(value bunmodel.Timestamp) string {
 	return value.Time.UTC().Format(time.RFC3339Nano)
 }
 
-func sessionToBunRow(session Session) bunmodel.Session {
-	return bunmodel.Session{
+func sessionToBunRow(session Session) (bunmodel.Session, error) {
+	row := bunmodel.Session{
 		ID:                    session.ID,
 		Project:               session.Project,
 		Machine:               session.Machine,
@@ -59,8 +64,6 @@ func sessionToBunRow(session Session) bunmodel.Session {
 		FirstMessage:          session.FirstMessage,
 		DisplayName:           session.DisplayName,
 		SessionName:           session.SessionName,
-		StartedAt:             timestampPtrToBunRow(session.StartedAt),
-		EndedAt:               timestampPtrToBunRow(session.EndedAt),
 		MessageCount:          session.MessageCount,
 		UserMessageCount:      session.UserMessageCount,
 		ParentSessionID:       session.ParentSessionID,
@@ -80,7 +83,6 @@ func sessionToBunRow(session Session) bunmodel.Session {
 		OutcomeConfidence:           session.OutcomeConfidence,
 		EndedWithRole:               session.EndedWithRole,
 		FinalFailureStreak:          session.FinalFailureStreak,
-		SignalsPendingSince:         timestampPtrToBunRow(session.SignalsPendingSince),
 		CompactionCount:             session.CompactionCount,
 		MidTaskCompactionCount:      session.MidTaskCompactionCount,
 		ContextPressureMax:          session.ContextPressureMax,
@@ -107,7 +109,6 @@ func sessionToBunRow(session Session) bunmodel.Session {
 		ParserMalformedLines:        session.ParserMalformedLines,
 		IsTruncated:                 session.IsTruncated,
 
-		DeletedAt:          timestampPtrToBunRow(session.DeletedAt),
 		DeletionCause:      session.DeletionCause,
 		TerminationStatus:  session.TerminationStatus,
 		FilePath:           session.FilePath,
@@ -116,13 +117,40 @@ func sessionToBunRow(session Session) bunmodel.Session {
 		FileInode:          session.FileInode,
 		FileDevice:         session.FileDevice,
 		FileHash:           session.FileHash,
-		LocalModifiedAt:    timestampPtrToBunRow(session.LocalModifiedAt),
 		TranscriptRevision: session.TranscriptRevision,
-		CreatedAt:          requiredTimestampToBunRow(session.CreatedAt),
 
 		SourceArchiveID:          session.SourceArchiveID,
 		SourceDatabaseGeneration: session.SourceDatabaseGeneration,
 	}
+
+	optionalTimestamps := []struct {
+		name  string
+		value *string
+		dest  **bunmodel.Timestamp
+	}{
+		{"started_at", session.StartedAt, &row.StartedAt},
+		{"ended_at", session.EndedAt, &row.EndedAt},
+		{"signals_pending_since", session.SignalsPendingSince, &row.SignalsPendingSince},
+		{"deleted_at", session.DeletedAt, &row.DeletedAt},
+		{"local_modified_at", session.LocalModifiedAt, &row.LocalModifiedAt},
+	}
+	for _, field := range optionalTimestamps {
+		value, err := timestampPtrToBunRow(field.value)
+		if err != nil {
+			return bunmodel.Session{}, fmt.Errorf(
+				"session %q %s: %w", session.ID, field.name, err,
+			)
+		}
+		*field.dest = value
+	}
+	createdAt, err := requiredTimestampToBunRow(session.CreatedAt)
+	if err != nil {
+		return bunmodel.Session{}, fmt.Errorf(
+			"session %q created_at: %w", session.ID, err,
+		)
+	}
+	row.CreatedAt = createdAt
+	return row, nil
 }
 
 func sessionFromBunRow(row bunmodel.Session) Session {
@@ -203,10 +231,17 @@ func sessionFromBunRow(row bunmodel.Session) Session {
 	}
 }
 
-func messageToBunRow(message Message) bunmodel.Message {
+func messageToBunRow(message Message) (bunmodel.Message, error) {
 	var id *int64
 	if message.ID != 0 {
 		id = &message.ID
+	}
+	timestamp, err := timestampToBunRow(message.Timestamp)
+	if err != nil {
+		return bunmodel.Message{}, fmt.Errorf(
+			"message %q ordinal %d timestamp: %w",
+			message.SessionID, message.Ordinal, err,
+		)
 	}
 	return bunmodel.Message{
 		ID:                id,
@@ -215,7 +250,7 @@ func messageToBunRow(message Message) bunmodel.Message {
 		Role:              message.Role,
 		Content:           message.Content,
 		ThinkingText:      message.ThinkingText,
-		Timestamp:         timestampToBunRow(message.Timestamp),
+		Timestamp:         timestamp,
 		HasThinking:       message.HasThinking,
 		HasToolUse:        message.HasToolUse,
 		ContentLength:     message.ContentLength,
@@ -235,7 +270,7 @@ func messageToBunRow(message Message) bunmodel.Message {
 		SourceParentUUID:  message.SourceParentUUID,
 		IsSidechain:       message.IsSidechain,
 		IsCompactBoundary: message.IsCompactBoundary,
-	}
+	}, nil
 }
 
 func messageFromBunRow(row bunmodel.Message) Message {

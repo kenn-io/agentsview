@@ -66,5 +66,15 @@ func TestQuackBunScansQuotedPredicateJSONAndTimestampAfterReattach(t *testing.T)
 	require.NoError(t, err)
 	_, err = server.ExecContext(ctx, `CALL quack_serve(?, token => ?)`, uri, token)
 	require.NoError(t, err)
+
+	var count int
+	err = store.viewBun(ctx, func(q bun.IDB) error {
+		var queryErr error
+		count, queryErr = q.NewSelect().Model((*bunmodel.Message)(nil)).
+			Where("content = ?", "O'Reilly").Count(ctx)
+		return queryErr
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
 	assert.Equal(t, "session-1", read().SessionID)
 }
