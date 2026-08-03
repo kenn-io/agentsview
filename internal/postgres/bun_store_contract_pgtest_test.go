@@ -11,6 +11,7 @@ import (
 )
 
 const bunCoreContractSchema = "agentsview_bun_core_contract"
+const bunIdentityContractSchema = "agentsview_bun_identity_contract"
 
 func TestBunStoreCoreContract(t *testing.T) {
 	storetest.RunCoreContract(t, storetest.Backend{
@@ -35,11 +36,38 @@ func TestBunStoreCoreContract(t *testing.T) {
 	})
 }
 
+func TestBunStoreIdentityContract(t *testing.T) {
+	storetest.RunIdentityContract(t, storetest.IdentityBackend{
+		Name: "postgres",
+		Open: func(t *testing.T) (storetest.IdentityStore, storetest.IdentityFixture) {
+			pgURL := testPGURL(t)
+			cleanupBunContractSchema(t, pgURL, bunIdentityContractSchema)
+			t.Cleanup(func() {
+				cleanupBunContractSchema(t, pgURL, bunIdentityContractSchema)
+			})
+			pg, err := Open(pgURL, bunIdentityContractSchema, true)
+			require.NoError(t, err)
+			require.NoError(t, EnsureSchema(t.Context(), pg, bunIdentityContractSchema))
+			store := newStore(pg)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			fixture, err := storetest.InsertBunIdentityFixture(
+				t.Context(), store.bun, "bun-identity-archive-a", "bun-identity-salt-a",
+			)
+			require.NoError(t, err)
+			return store.BunStore, fixture
+		},
+	})
+}
+
 func cleanupBunCoreContractSchema(t *testing.T, pgURL string) {
+	cleanupBunContractSchema(t, pgURL, bunCoreContractSchema)
+}
+
+func cleanupBunContractSchema(t *testing.T, pgURL string, schema string) {
 	t.Helper()
 	pg, err := sql.Open("pgx", pgURL)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, pg.Close()) }()
-	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + bunCoreContractSchema + ` CASCADE`)
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
 	require.NoError(t, err)
 }
