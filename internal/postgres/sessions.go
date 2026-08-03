@@ -24,6 +24,7 @@ type Store struct {
 
 	insightCapabilityMu        sync.RWMutex
 	insightGenerationAvailable bool
+	insightDeletionAvailable   bool
 
 	pricingMu     sync.Mutex
 	pricingLoadMu sync.Mutex
@@ -58,6 +59,9 @@ func (b *postgresBunBackend) Capabilities() db.BackendCapabilities {
 	}
 	if b.store.InsightGenerationAvailable() {
 		writes[db.WriteInsight] = true
+	}
+	if b.store.InsightDeletionAvailable() {
+		writes[db.WriteInsightDelete] = true
 	}
 	return db.BackendCapabilities{Writes: writes}
 }
@@ -102,7 +106,11 @@ func (b *postgresBunBackend) ConsistentView(
 func (b *postgresBunBackend) Update(
 	_ context.Context, fn func(bun.IDB) error,
 ) error {
-	return fn(b.store.bun)
+	err := fn(b.store.bun)
+	if IsReadOnlyError(err) {
+		return fmt.Errorf("postgres write: %w: %w", db.ErrReadOnly, err)
+	}
+	return err
 }
 
 func newStore(pg *sql.DB) *Store {

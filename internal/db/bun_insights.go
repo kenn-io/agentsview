@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/db/bunmodel"
@@ -15,11 +16,12 @@ import (
 func (s *BunStore) InsertInsight(insight Insight) (int64, error) {
 	ctx := context.Background()
 	row := insightToBunRow(insight)
+	row.CreatedAt = bunmodel.NewTimestamp(time.Now())
 	var id int64
 	err := s.update(ctx, WriteInsight, func(store bun.IDB) error {
 		return store.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 			if err := tx.NewInsert().Model(&row).
-				ExcludeColumn("id", "created_at").Returning("id").
+				ExcludeColumn("id").Returning("id").
 				Scan(ctx, &id); err != nil {
 				return fmt.Errorf("inserting insight: %w", err)
 			}
@@ -35,7 +37,7 @@ func (s *BunStore) InsertInsight(insight Insight) (int64, error) {
 // DeleteInsight removes a dashboard insight by canonical ID.
 func (s *BunStore) DeleteInsight(id int64) error {
 	ctx := context.Background()
-	return s.update(ctx, WriteInsight, func(store bun.IDB) error {
+	return s.update(ctx, WriteInsightDelete, func(store bun.IDB) error {
 		if _, err := store.NewDelete().Model((*bunmodel.Insight)(nil)).
 			Where("id = ?", id).Exec(ctx); err != nil {
 			return fmt.Errorf("deleting insight %d: %w", id, err)

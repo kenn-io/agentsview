@@ -124,7 +124,7 @@ func TestBunStoreInsightContract(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, store.Close()) })
 			fixture, err := storetest.InsertBunInsightFixture(t.Context(), store.bun)
 			require.NoError(t, err)
-			store.setInsightGenerationAvailable(true)
+			require.NoError(t, store.DetectInsightGenerationAvailability(t.Context()))
 			return store.BunStore, fixture
 		},
 	})

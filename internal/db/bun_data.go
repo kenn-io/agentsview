@@ -231,11 +231,6 @@ type bunGovernanceSessionRow struct {
 	SourceArchiveID string `bun:"source_archive_id"`
 }
 
-type bunCandidateSessionRef struct {
-	ID      string `bun:"id"`
-	Project string `bun:"project"`
-}
-
 type bunCandidateSessionRow struct {
 	ID                       string `bun:"id"`
 	Project                  string `bun:"project"`
@@ -375,13 +370,9 @@ func (s *BunStore) ListArchiveWorktreeCandidates(
 	}
 	var candidates []WorktreeReclassificationCandidate
 	err := s.consistentView(ctx, func(store bun.IDB) error {
-		sessions, err := listBunCandidateSessionRefs(ctx, store)
+		labels, err := listBunCandidateProjectLabels(ctx, store)
 		if err != nil {
 			return err
-		}
-		labels := make(map[string]struct{})
-		for _, session := range sessions {
-			labels[session.Project] = struct{}{}
 		}
 		projects, _, err := buildBunProjectIdentityMap(
 			ctx, store, sortedSetKeys(labels),
@@ -395,16 +386,15 @@ func (s *BunStore) ListArchiveWorktreeCandidates(
 			return nil
 		}
 
-		selectedIDs := make([]string, 0)
-		for _, session := range sessions {
-			if _, ok := selectedProjects[session.Project]; !ok {
-				continue
-			}
-			selectedIDs = append(selectedIDs, session.ID)
-		}
-		selected, err := listBunCandidateSessions(ctx, store, selectedIDs)
+		selected, err := listBunCandidateSessions(
+			ctx, store, sortedSetKeys(selectedProjects),
+		)
 		if err != nil {
 			return err
+		}
+		selectedIDs := make([]string, len(selected))
+		for i, session := range selected {
+			selectedIDs[i] = session.ID
 		}
 		snapshots, err := listBunProjectIdentitySnapshots(ctx, store, selectedIDs)
 		if err != nil {
@@ -657,34 +647,42 @@ func bunMappingEvaluationRows(
 	return result
 }
 
-func listBunCandidateSessionRefs(
+func listBunCandidateProjectLabels(
 	ctx context.Context, store bun.IDB,
-) ([]bunCandidateSessionRef, error) {
-	var rows []bunCandidateSessionRef
-	if err := store.NewSelect().Table("sessions").Column("id", "project").
-		Where("deleted_at IS NULL").OrderExpr("id ASC").Scan(ctx, &rows); err != nil {
-		return nil, fmt.Errorf("listing canonical candidate session references: %w", err)
+) (map[string]struct{}, error) {
+	var rows []struct {
+		Project string `bun:"project"`
 	}
-	return rows, nil
+	if err := store.NewSelect().Table("sessions").Column("project").
+		Where("deleted_at IS NULL").Group("project").OrderExpr("project ASC").
+		Scan(ctx, &rows); err != nil {
+		return nil, fmt.Errorf("listing canonical candidate projects: %w", err)
+	}
+	labels := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		labels[row.Project] = struct{}{}
+	}
+	return labels, nil
 }
 
 func listBunCandidateSessions(
-	ctx context.Context, store bun.IDB, sessionIDs []string,
+	ctx context.Context, store bun.IDB, projects []string,
 ) ([]bunCandidateSessionRow, error) {
-	rows := make([]bunCandidateSessionRow, 0, len(sessionIDs))
-	for start := 0; start < len(sessionIDs); start += bunDataListBatchSize {
-		end := min(start+bunDataListBatchSize, len(sessionIDs))
+	rows := make([]bunCandidateSessionRow, 0)
+	for start := 0; start < len(projects); start += bunDataListBatchSize {
+		end := min(start+bunDataListBatchSize, len(projects))
 		var batch []bunCandidateSessionRow
 		if err := store.NewSelect().Table("sessions").Column(
 			"id", "project", "machine", "cwd", "source_archive_id",
 			"source_database_generation",
 		).Where("deleted_at IS NULL").
-			Where("id IN (?)", bun.List(sessionIDs[start:end])).
+			Where("project IN (?)", bun.List(projects[start:end])).
 			OrderExpr("id ASC").Scan(ctx, &batch); err != nil {
 			return nil, fmt.Errorf("listing canonical candidate sessions: %w", err)
 		}
 		rows = append(rows, batch...)
 	}
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
 	return rows, nil
 }
 
