@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/uptrace/bun"
 )
@@ -19,6 +20,10 @@ type BunBackend interface {
 
 type bunSessionFullHydrator interface {
 	HydrateSessionFull(context.Context, bun.IDB, *Session) error
+}
+
+type bunConsistentViewer interface {
+	ConsistentView(context.Context, func(bun.IDB) error) error
 }
 
 // WriteOperation identifies a separately authorized family of mutations.
@@ -107,6 +112,17 @@ func (b *sqliteBunBackend) View(
 	b.store.connMu.RLock()
 	defer b.store.connMu.RUnlock()
 	return fn(b.store.bunReader)
+}
+
+func (b *sqliteBunBackend) ConsistentView(
+	ctx context.Context, fn func(bun.IDB) error,
+) error {
+	b.store.connMu.RLock()
+	defer b.store.connMu.RUnlock()
+	return b.store.bunReader.RunInTx(
+		ctx, &sql.TxOptions{ReadOnly: true},
+		func(_ context.Context, tx bun.Tx) error { return fn(tx) },
+	)
 }
 
 func (b *sqliteBunBackend) Update(

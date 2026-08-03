@@ -385,6 +385,42 @@ func TestResyncContributorPostSwapReopenRecoversOnRetry(t *testing.T) {
 	require.NotNil(t, session)
 }
 
+func TestResyncContributorCancellationAfterInstallKeepsReplacementCurrent(t *testing.T) {
+	root := t.TempDir()
+	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+	path := filepath.Join(root, "project", "session.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().
+		AddClaudeUser("2026-01-01T00:00:00Z", "installed cancellation fixture").String()), 0o644))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stats, err := engine.resyncAllWithOptionsAndOperations(
+		ctx, nil, RebuildOptions{}, rebuildOperations{
+			rebuildFTS: productionRebuildOperations.rebuildFTS,
+			reopen: func(database *db.DB) error {
+				reopenErr := database.Reopen()
+				cancel()
+				return reopenErr
+			},
+		},
+	)
+
+	require.NoError(t, err)
+	assert.False(t, stats.Aborted)
+	assert.False(t, database.NeedsResync(),
+		"the installed replacement was finalized before rename")
+	session, getErr := database.GetSession(context.Background(), "session")
+	require.NoError(t, getErr)
+	require.NotNil(t, session)
+}
+
 func TestResyncContributorFTSFailureAbortsAndCleansTempDB(t *testing.T) {
 	root := t.TempDir()
 	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
