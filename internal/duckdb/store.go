@@ -404,94 +404,6 @@ func (s *Store) IngestEvalTrajectory(
 	return db.EvalTrajectoryIngestResult{}, db.ErrReadOnly
 }
 
-const duckSessionCols = `id, project, machine, agent,
-	agent_label, entrypoint, session_kind,
-	first_message, COALESCE(display_name, session_name) AS display_name, created_at, started_at,
-	ended_at, message_count, user_message_count,
-	parent_session_id, relationship_type,
-	total_output_tokens, peak_context_tokens,
-	has_total_output_tokens, has_peak_context_tokens,
-	is_automated,
-	tool_failure_signal_count, tool_retry_count,
-	edit_churn_count, consecutive_failure_max,
-	outcome, outcome_confidence,
-	ended_with_role, final_failure_streak,
-	signals_pending_since,
-	compaction_count, mid_task_compaction_count,
-	context_pressure_max,
-	health_score, health_grade,
-	has_tool_calls, has_context_data,
-	quality_signal_version, short_prompt_count, unstructured_start,
-	missing_success_criteria_count, missing_verification_count,
-	duplicate_prompt_count, no_code_context_count, runaway_tool_loop_count,
-	data_version,
-	cwd, git_branch, source_session_id, source_version, transcript_fidelity,
-	parser_malformed_lines, is_truncated,
-	secret_leak_count, secrets_rules_version,
-	deleted_at, deletion_cause, termination_status, transcript_revision`
-
-func scanSession(rs interface{ Scan(...any) error }) (db.Session, error) {
-	var s db.Session
-	var createdAt any
-	var startedAt, endedAt, deletedAt any
-	err := rs.Scan(
-		&s.ID, &s.Project, &s.Machine, &s.Agent,
-		&s.AgentLabel, &s.Entrypoint, &s.SessionKind,
-		&s.FirstMessage, &s.DisplayName,
-		&createdAt, &startedAt, &endedAt,
-		&s.MessageCount, &s.UserMessageCount,
-		&s.ParentSessionID, &s.RelationshipType,
-		&s.TotalOutputTokens, &s.PeakContextTokens,
-		&s.HasTotalOutputTokens, &s.HasPeakContextTokens,
-		&s.IsAutomated,
-		&s.ToolFailureSignalCount, &s.ToolRetryCount,
-		&s.EditChurnCount, &s.ConsecutiveFailureMax,
-		&s.Outcome, &s.OutcomeConfidence,
-		&s.EndedWithRole, &s.FinalFailureStreak,
-		&s.SignalsPendingSince,
-		&s.CompactionCount, &s.MidTaskCompactionCount,
-		&s.ContextPressureMax,
-		&s.HealthScore, &s.HealthGrade,
-		&s.HasToolCalls, &s.HasContextData,
-		&s.QualitySignalVersion, &s.ShortPromptCount,
-		&s.UnstructuredStart, &s.MissingSuccessCriteriaCount,
-		&s.MissingVerificationCount, &s.DuplicatePromptCount,
-		&s.NoCodeContextCount, &s.RunawayToolLoopCount,
-		&s.DataVersion,
-		&s.Cwd, &s.GitBranch,
-		&s.SourceSessionID, &s.SourceVersion, &s.TranscriptFidelity,
-		&s.ParserMalformedLines, &s.IsTruncated,
-		&s.SecretLeakCount, &s.SecretsRulesVersion,
-		&deletedAt, &s.DeletionCause, &s.TerminationStatus, &s.TranscriptRevision,
-	)
-	if err != nil {
-		return s, err
-	}
-	s.CreatedAt = formatDBTime(createdAt)
-	if v := formatDBTime(startedAt); v != "" {
-		s.StartedAt = &v
-	}
-	if v := formatDBTime(endedAt); v != "" {
-		s.EndedAt = &v
-	}
-	if v := formatDBTime(deletedAt); v != "" {
-		s.DeletedAt = &v
-	}
-	return s, nil
-}
-
-func scanSessionRows(rows *sql.Rows) ([]db.Session, error) {
-	sessions := []db.Session{}
-	for rows.Next() {
-		s, err := scanSession(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scanning duckdb session: %w", err)
-		}
-		sessions = append(sessions, s)
-	}
-	return sessions, rows.Err()
-}
-
 func formatDBTime(v any) string {
 	switch t := v.(type) {
 	case nil:
@@ -505,20 +417,6 @@ func formatDBTime(v any) string {
 	default:
 		return fmt.Sprint(t)
 	}
-}
-
-func (s *Store) ListTrashedSessions(ctx context.Context) ([]db.Session, error) {
-	rows, err := s.queryContext(ctx,
-		"SELECT "+duckSessionCols+
-			" FROM sessions WHERE deleted_at IS NOT NULL"+
-			" AND deletion_cause IS NULL"+
-			" ORDER BY deleted_at DESC LIMIT 500",
-	)
-	if err != nil {
-		return nil, fmt.Errorf("listing duckdb trash: %w", err)
-	}
-	defer rows.Close()
-	return scanSessionRows(rows)
 }
 
 func (s *Store) HasFTS() bool { return true }

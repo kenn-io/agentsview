@@ -63,7 +63,12 @@ func (b *postgresBunBackend) Capabilities() db.BackendCapabilities {
 	if b.store.InsightDeletionAvailable() {
 		writes[db.WriteInsightDelete] = true
 	}
-	return db.BackendCapabilities{Writes: writes}
+	return db.BackendCapabilities{
+		Writes: writes,
+		SessionMutations: db.SessionMutationCapabilities{
+			TouchUpdatedAt: true,
+		},
+	}
 }
 
 func (*postgresBunBackend) SessionQueryDialect() db.QueryDialect {
@@ -250,84 +255,6 @@ func pgTerminationPred(status string, pb *paramBuilder) string {
 		return preds[0]
 	}
 	return "(" + strings.Join(preds, " OR ") + ")"
-}
-
-// scanPGSession scans a row with pgSessionCols into a
-// db.Session, converting TIMESTAMPTZ columns to string.
-func scanPGSession(
-	rs interface{ Scan(...any) error },
-) (db.Session, error) {
-	var s db.Session
-	var createdAt *time.Time
-	var startedAt, endedAt, deletedAt *time.Time
-	err := rs.Scan(
-		&s.ID, &s.Project, &s.Machine, &s.Agent,
-		&s.AgentLabel, &s.Entrypoint, &s.SessionKind,
-		&s.FirstMessage, &s.DisplayName,
-		&createdAt, &startedAt, &endedAt,
-		&s.MessageCount, &s.UserMessageCount,
-		&s.ParentSessionID, &s.ParserParentSessionID, &s.RelationshipType,
-		&s.TotalOutputTokens, &s.PeakContextTokens,
-		&s.HasTotalOutputTokens, &s.HasPeakContextTokens,
-		&s.IsAutomated,
-		&s.ToolFailureSignalCount, &s.ToolRetryCount,
-		&s.EditChurnCount, &s.ConsecutiveFailureMax,
-		&s.Outcome, &s.OutcomeConfidence,
-		&s.EndedWithRole, &s.FinalFailureStreak,
-		&s.SignalsPendingSince,
-		&s.CompactionCount, &s.MidTaskCompactionCount,
-		&s.ContextPressureMax,
-		&s.HealthScore, &s.HealthGrade,
-		&s.HasToolCalls, &s.HasContextData,
-		&s.QualitySignalVersion,
-		&s.ShortPromptCount, &s.UnstructuredStart,
-		&s.MissingSuccessCriteriaCount,
-		&s.MissingVerificationCount, &s.DuplicatePromptCount,
-		&s.NoCodeContextCount, &s.RunawayToolLoopCount,
-		&s.DataVersion,
-		&s.Cwd, &s.GitBranch,
-		&s.SourceSessionID, &s.SourceVersion,
-		&s.TranscriptFidelity, &s.ParserMalformedLines, &s.IsTruncated,
-		&s.SecretLeakCount, &s.SecretsRulesVersion,
-		&deletedAt, &s.DeletionCause, &s.TerminationStatus, &s.TranscriptRevision,
-		&s.FilePath,
-	)
-	if err != nil {
-		return s, err
-	}
-	if createdAt != nil {
-		s.CreatedAt = FormatISO8601(*createdAt)
-	}
-	if startedAt != nil {
-		str := FormatISO8601(*startedAt)
-		s.StartedAt = &str
-	}
-	if endedAt != nil {
-		str := FormatISO8601(*endedAt)
-		s.EndedAt = &str
-	}
-	if deletedAt != nil {
-		str := FormatISO8601(*deletedAt)
-		s.DeletedAt = &str
-	}
-	return s, nil
-}
-
-// scanPGSessionRows iterates rows and scans each.
-func scanPGSessionRows(
-	rows *sql.Rows,
-) ([]db.Session, error) {
-	sessions := []db.Session{}
-	for rows.Next() {
-		s, err := scanPGSession(rows)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"scanning session: %w", err,
-			)
-		}
-		sessions = append(sessions, s)
-	}
-	return sessions, rows.Err()
 }
 
 // buildPGSessionFilter returns a WHERE clause with $N
