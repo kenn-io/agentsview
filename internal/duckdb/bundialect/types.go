@@ -31,6 +31,40 @@ func onField(field *schema.Field) {
 
 	if field.StructField.Type == jsonRawMessageType {
 		field.Scan = scanJSONRawMessage
+		return
+	}
+	if isIntegerKind(field.IndirectType.Kind()) {
+		scan := field.Scan
+		field.Scan = func(dest reflect.Value, src any) error {
+			return scan(dest, normalizeIntegerSource(src))
+		}
+	}
+}
+
+func isIntegerKind(kind reflect.Kind) bool {
+	return kind >= reflect.Int && kind <= reflect.Uint64
+}
+
+func normalizeIntegerSource(src any) any {
+	switch value := src.(type) {
+	case int:
+		return int64(value)
+	case int8:
+		return int64(value)
+	case int16:
+		return int64(value)
+	case int32:
+		return int64(value)
+	case uint:
+		return uint64(value)
+	case uint8:
+		return uint64(value)
+	case uint16:
+		return uint64(value)
+	case uint32:
+		return uint64(value)
+	default:
+		return src
 	}
 }
 

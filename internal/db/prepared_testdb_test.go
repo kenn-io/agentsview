@@ -4,6 +4,9 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"fmt"
+
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/sqlitedialect"
 )
 
 // OpenPreparedTestDB opens a private test database file that has already been
@@ -30,6 +33,9 @@ func OpenPreparedTestDB(path string) (*DB, error) {
 	db := &DB{path: path}
 	db.writer.Store(writer)
 	db.reader.Store(reader)
+	db.bunWriter = bun.NewDB(writer, sqlitedialect.New())
+	db.bunReader = bun.NewDB(reader, sqlitedialect.New())
+	db.BunStore = NewBunStore(&sqliteBunBackend{store: db})
 
 	db.cursorSecret = make([]byte, 32)
 	if _, err := rand.Read(db.cursorSecret); err != nil {
