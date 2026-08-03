@@ -134,6 +134,8 @@ func runSyncWorkerContext(
 		err = runSyncWorkerStartup(ctx, cfg, mode, emit, onProgress)
 	case strings.HasPrefix(mode, "audit-scoped-v2|"):
 		err = runSyncWorkerStartup(ctx, cfg, mode, emit, onProgress)
+	case strings.HasPrefix(mode, "audit-scoped-v3|"):
+		err = runSyncWorkerStartup(ctx, cfg, mode, emit, onProgress)
 	case mode == "resync-build":
 		err = runSyncWorkerResyncBuild(ctx, cfg, mode, emit, onProgress)
 	default:
