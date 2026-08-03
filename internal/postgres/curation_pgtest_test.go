@@ -247,6 +247,153 @@ func TestPushPreservesMultiplePGPinsBySourceUUID(t *testing.T) {
 	assert.Equal(t, 3, pin.Ordinal)
 }
 
+func TestPushReconcilesPGPinsByPriorMessageIdentity(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	tests := []struct {
+		name        string
+		oldMessages []db.Message
+		newMessages []db.Message
+		wantPin     bool
+		wantOrdinal int
+	}{
+		{
+			name: "duplicate UUID target removed",
+			oldMessages: []db.Message{
+				{
+					Ordinal: 0, Role: "user", Content: "pinned",
+					SourceUUID: "duplicate",
+				},
+				{
+					Ordinal: 1, Role: "assistant", Content: "other",
+					SourceUUID: "duplicate",
+				},
+				{
+					Ordinal: 2, Role: "user", Content: "tail",
+					SourceUUID: "tail",
+				},
+			},
+			newMessages: []db.Message{
+				{
+					Ordinal: 0, Role: "assistant", Content: "other",
+					SourceUUID: "duplicate",
+				},
+				{
+					Ordinal: 1, Role: "user", Content: "tail",
+					SourceUUID: "tail",
+				},
+			},
+		},
+		{
+			name: "UUID-less prompt split by IDE envelope",
+			oldMessages: []db.Message{
+				{
+					Ordinal: 0, Role: "user",
+					Content: "<ide_opened_file>ctx</ide_opened_file>prompt",
+				},
+				{
+					Ordinal: 1, Role: "assistant", Content: "answer",
+					SourceUUID: "answer",
+				},
+			},
+			newMessages: []db.Message{
+				{
+					Ordinal: 0, Role: "user",
+					Content:    "<ide_opened_file>ctx</ide_opened_file>",
+					SourceUUID: "entry:ide-context", IsSystem: true,
+				},
+				{
+					Ordinal: 1, Role: "user", Content: "prompt",
+					SourceUUID: "entry",
+				},
+				{
+					Ordinal: 2, Role: "assistant", Content: "answer",
+					SourceUUID: "answer",
+				},
+			},
+		},
+		{
+			name: "UUID enrichment",
+			oldMessages: []db.Message{
+				{Ordinal: 0, Role: "user", Content: "pinned"},
+				{Ordinal: 1, Role: "assistant", Content: "answer"},
+			},
+			newMessages: []db.Message{
+				{
+					Ordinal: 0, Role: "user", Content: "pinned",
+					SourceUUID: "new-provider-uuid",
+				},
+				{Ordinal: 1, Role: "assistant", Content: "answer"},
+			},
+			wantPin:     true,
+			wantOrdinal: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cleanPGSchema(t, pgURL)
+			t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+
+			local := testDB(t)
+			ps, err := New(
+				pgURL, "agentsview", local,
+				"curation-machine", true, SyncOptions{},
+			)
+			require.NoError(t, err, "New sync")
+			defer ps.Close()
+
+			ctx := context.Background()
+			require.NoError(t, ps.EnsureSchema(ctx), "EnsureSchema")
+
+			const sessionID = "pg-pin-prior-identity"
+			sess := db.Session{
+				ID: sessionID, Project: "proj-curation",
+				Machine: "local", Agent: "claude",
+				MessageCount: len(tt.oldMessages),
+				CreatedAt:    "2026-05-01T00:00:00Z",
+			}
+			require.NoError(t, local.UpsertSession(sess), "UpsertSession old")
+			oldMessages := append([]db.Message(nil), tt.oldMessages...)
+			for i := range oldMessages {
+				oldMessages[i].SessionID = sessionID
+			}
+			require.NoError(t, local.InsertMessages(oldMessages),
+				"InsertMessages old")
+			_, err = ps.Push(ctx, false, nil)
+			require.NoError(t, err, "Push old")
+
+			store, err := NewStore(pgURL, "agentsview", true)
+			require.NoError(t, err, "NewStore")
+			defer store.Close()
+			_, err = store.PinMessage(sessionID, 0, nil)
+			require.NoError(t, err, "PinMessage")
+
+			newMessages := append([]db.Message(nil), tt.newMessages...)
+			for i := range newMessages {
+				newMessages[i].SessionID = sessionID
+			}
+			sess.MessageCount = len(newMessages)
+			require.NoError(t, local.UpsertSession(sess), "UpsertSession new")
+			require.NoError(t,
+				local.ReplaceSessionMessages(sessionID, newMessages),
+				"ReplaceSessionMessages")
+			_, err = ps.Push(ctx, true, nil)
+			require.NoError(t, err, "Push new")
+
+			pins, err := store.ListPinnedMessages(ctx, sessionID, "")
+			require.NoError(t, err, "ListPinnedMessages")
+			if !tt.wantPin {
+				assert.Empty(t, pins,
+					"an ambiguous old identity must not retain a pin")
+				return
+			}
+			require.Len(t, pins, 1, "pins = %v", pins)
+			assert.Equal(t, tt.wantOrdinal, pins[0].Ordinal)
+		})
+	}
+}
+
 func TestReconcilePinnedMessagesPrefersCurrentTargetPin(t *testing.T) {
 	pgURL := testPGURL(t)
 

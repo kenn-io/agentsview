@@ -2548,6 +2548,10 @@ func (s *Sync) pushMessages(
 		)
 	}
 	if localCount == 0 {
+		savedPins, err := snapshotPinnedMessages(ctx, tx, sessionID)
+		if err != nil {
+			return 0, err
+		}
 		if _, err := tx.ExecContext(ctx,
 			`DELETE FROM tool_result_events WHERE session_id = $1`,
 			sessionID,
@@ -2580,8 +2584,8 @@ func (s *Sync) pushMessages(
 		if err := s.replaceUsageEvents(ctx, tx, sessionID); err != nil {
 			return 0, err
 		}
-		if err := reconcilePinnedMessages(
-			ctx, tx, sessionID,
+		if err := restorePinnedMessages(
+			ctx, tx, sessionID, savedPins,
 		); err != nil {
 			return 0, err
 		}
@@ -2800,6 +2804,10 @@ func (s *Sync) pushMessages(
 		}
 	}
 
+	savedPins, err := snapshotPinnedMessages(ctx, tx, sessionID)
+	if err != nil {
+		return 0, err
+	}
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM tool_result_events
 		WHERE session_id = $1
@@ -2873,7 +2881,9 @@ func (s *Sync) pushMessages(
 		startOrdinal = nextOrdinal
 	}
 
-	if err := reconcilePinnedMessages(ctx, tx, sessionID); err != nil {
+	if err := restorePinnedMessages(
+		ctx, tx, sessionID, savedPins,
+	); err != nil {
 		return count, err
 	}
 
@@ -2905,177 +2915,270 @@ func (s *Sync) replaceUsageEvents(
 	return nil
 }
 
+type savedPostgresPin struct {
+	id                  int64
+	ordinal             int
+	sourceUUID          string
+	role                string
+	content             string
+	sourceUUIDCount     int
+	sourceIdentityCount int
+	messageFound        bool
+	note                sql.NullString
+	createdAt           time.Time
+}
+
+type resolvedPostgresPin struct {
+	saved      savedPostgresPin
+	target     int
+	sourceUUID string
+}
+
 func reconcilePinnedMessages(
 	ctx context.Context, tx *sql.Tx, sessionID string,
 ) error {
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE pinned_messages p
-		SET source_uuid = m.source_uuid
-		FROM messages m
-		WHERE p.session_id = $1
-			AND m.session_id = p.session_id
+	pins, err := snapshotPinnedMessages(ctx, tx, sessionID)
+	if err != nil {
+		return err
+	}
+	return restorePinnedMessages(ctx, tx, sessionID, pins)
+}
+
+func snapshotPinnedMessages(
+	ctx context.Context, tx *sql.Tx, sessionID string,
+) ([]savedPostgresPin, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT p.id, p.message_id, p.note, p.created_at,
+			m.ordinal IS NOT NULL,
+			COALESCE(m.source_uuid, ''),
+			COALESCE(m.role, ''), COALESCE(m.content, ''),
+			(
+				SELECT COUNT(*)
+				FROM messages same_uuid
+				WHERE same_uuid.session_id = m.session_id
+					AND same_uuid.source_uuid = m.source_uuid
+					AND m.source_uuid <> ''
+			),
+			(
+				SELECT COUNT(*)
+				FROM messages same_identity
+				WHERE same_identity.session_id = m.session_id
+					AND same_identity.source_uuid = m.source_uuid
+					AND same_identity.role = m.role
+					AND same_identity.content = m.content
+					AND m.source_uuid <> ''
+			),
+			p.source_uuid
+		FROM pinned_messages p
+		LEFT JOIN messages m
+			ON m.session_id = p.session_id
 			AND m.ordinal = p.message_id
-			AND p.source_uuid = ''
-			AND m.source_uuid <> ''`,
-		sessionID,
-	); err != nil {
-		return fmt.Errorf(
-			"backfilling pg pin source_uuid: %w", err,
-		)
-	}
-
-	// Move shifted source-backed pins out of the real ordinal range
-	// first. Pins already on their resolved target stay in place so
-	// duplicate repairs prefer the current target row's metadata.
-	// When multiple messages share a source_uuid (the schema allows
-	// it), prefer the message at the pin's current message_id so a
-	// correctly-placed pin is not relocated to a different duplicate.
-	if _, err := tx.ExecContext(ctx, `
-		WITH matched AS (
-			SELECT DISTINCT ON (p.id)
-				p.id, p.message_id, p.ordinal,
-				m.ordinal AS target_ordinal
-			FROM pinned_messages p
-			JOIN messages m
-				ON m.session_id = p.session_id
-				AND m.source_uuid = p.source_uuid
-			WHERE p.session_id = $1
-				AND p.source_uuid <> ''
-			ORDER BY p.id,
-				CASE WHEN m.ordinal = p.message_id THEN 0 ELSE 1 END,
-				m.ordinal
-		),
-		numbered AS (
-			SELECT id,
-				ROW_NUMBER() OVER (ORDER BY id) AS temp_ordinal
-			FROM matched
-			WHERE target_ordinal <> message_id
-				OR target_ordinal <> ordinal
-		)
-		UPDATE pinned_messages p
-		SET message_id = (-2000000000 + numbered.temp_ordinal::INT),
-			ordinal = (-2000000000 + numbered.temp_ordinal::INT)
-		FROM numbered
-		WHERE p.id = numbered.id`,
-		sessionID,
-	); err != nil {
-		return fmt.Errorf(
-			"staging pg pins for source_uuid realignment: %w", err,
-		)
-	}
-
-	if _, err := tx.ExecContext(ctx, `
-		WITH matched AS (
-			SELECT DISTINCT ON (p.id)
-				p.id, p.message_id, p.created_at,
-				m.ordinal AS target_ordinal
-			FROM pinned_messages p
-			JOIN messages m
-				ON m.session_id = p.session_id
-				AND m.source_uuid = p.source_uuid
-			WHERE p.session_id = $1
-				AND p.source_uuid <> ''
-			ORDER BY p.id,
-				CASE WHEN m.ordinal = p.message_id THEN 0 ELSE 1 END,
-				m.ordinal
-		),
-		ranked AS (
-			SELECT id, target_ordinal,
-				ROW_NUMBER() OVER (
-					PARTITION BY target_ordinal
-					ORDER BY
-						(message_id = target_ordinal) DESC,
-						created_at DESC,
-						id DESC
-				) AS target_rank
-			FROM matched
-		)
-		DELETE FROM pinned_messages p
-		USING ranked r
 		WHERE p.session_id = $1
-			AND r.target_rank = 1
-			AND p.message_id = r.target_ordinal
-			AND p.id <> r.id`,
+		ORDER BY p.id
+		FOR UPDATE OF p`,
+		sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("snapshotting pg pins: %w", err)
+	}
+	defer rows.Close()
+
+	var pins []savedPostgresPin
+	for rows.Next() {
+		var pin savedPostgresPin
+		var storedSourceUUID string
+		if err := rows.Scan(
+			&pin.id, &pin.ordinal, &pin.note, &pin.createdAt,
+			&pin.messageFound, &pin.sourceUUID,
+			&pin.role, &pin.content,
+			&pin.sourceUUIDCount, &pin.sourceIdentityCount,
+			&storedSourceUUID,
+		); err != nil {
+			return nil, fmt.Errorf("scanning pg pin snapshot: %w", err)
+		}
+		if storedSourceUUID != "" &&
+			storedSourceUUID != pin.sourceUUID {
+			pin.messageFound = false
+		}
+		pins = append(pins, pin)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating pg pin snapshots: %w", err)
+	}
+	return pins, nil
+}
+
+func restorePinnedMessages(
+	ctx context.Context, tx *sql.Tx, sessionID string,
+	pins []savedPostgresPin,
+) error {
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM pinned_messages WHERE session_id = $1`,
 		sessionID,
 	); err != nil {
-		return fmt.Errorf(
-			"clearing pg pin target conflicts: %w", err,
-		)
+		return fmt.Errorf("clearing pg pins before restoration: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `
-		WITH matched AS (
-			SELECT DISTINCT ON (p.id)
-				p.id, p.message_id, p.created_at,
-				m.ordinal AS target_ordinal
-			FROM pinned_messages p
-			JOIN messages m
-				ON m.session_id = p.session_id
-				AND m.source_uuid = p.source_uuid
-			WHERE p.session_id = $1
-				AND p.source_uuid <> ''
-			ORDER BY p.id,
-				CASE WHEN m.ordinal = p.message_id THEN 0 ELSE 1 END,
-				m.ordinal
-		),
-		ranked AS (
-			SELECT id, target_ordinal,
-				ROW_NUMBER() OVER (
-					PARTITION BY target_ordinal
-					ORDER BY
-						(message_id = target_ordinal) DESC,
-						created_at DESC,
-						id DESC
-				) AS target_rank
-			FROM matched
+	resolved := make(map[int]resolvedPostgresPin)
+	for _, pin := range pins {
+		target, sourceUUID, ok, err := resolvePinnedMessageTarget(
+			ctx, tx, sessionID, pin,
 		)
-		UPDATE pinned_messages p
-		SET message_id = r.target_ordinal,
-			ordinal = r.target_ordinal
-		FROM ranked r
-		WHERE p.id = r.id
-			AND r.target_rank = 1`,
-		sessionID,
-	); err != nil {
-		return fmt.Errorf(
-			"realigning pg pins by source_uuid: %w", err,
-		)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			continue
+		}
+		candidate := resolvedPostgresPin{
+			saved: pin, target: target, sourceUUID: sourceUUID,
+		}
+		current, exists := resolved[target]
+		if !exists || preferResolvedPostgresPin(candidate, current) {
+			resolved[target] = candidate
+		}
 	}
 
-	// Prune pins whose anchor no longer exists. For source-backed
-	// pins (source_uuid <> '') the canonical anchor is source_uuid,
-	// so a pin must be dropped when no message in this session has
-	// that source_uuid — otherwise a stale pin can survive on top
-	// of an unrelated message that now occupies the same ordinal.
-	// The ordinal-NOT-EXISTS clause additionally removes legacy
-	// pins (source_uuid = '') with a stale ordinal and clears any
-	// non-rank-1 duplicate left at the sentinel ordinal by step 2.
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM pinned_messages p
-		WHERE p.session_id = $1
-			AND (
-				(
-					p.source_uuid <> ''
-					AND NOT EXISTS (
-						SELECT 1 FROM messages m
-						WHERE m.session_id = p.session_id
-							AND m.source_uuid = p.source_uuid
-					)
-				)
-				OR NOT EXISTS (
-					SELECT 1 FROM messages m
-					WHERE m.session_id = p.session_id
-						AND m.ordinal = p.message_id
-				)
-			)`,
-		sessionID,
-	); err != nil {
-		return fmt.Errorf(
-			"pruning stale pg pins: %w", err,
-		)
+	ordinals := make([]int, 0, len(resolved))
+	for ordinal := range resolved {
+		ordinals = append(ordinals, ordinal)
 	}
-
+	sort.Ints(ordinals)
+	for _, ordinal := range ordinals {
+		pin := resolved[ordinal]
+		var note any
+		if pin.saved.note.Valid {
+			note = pin.saved.note.String
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO pinned_messages (
+				id, session_id, message_id, ordinal,
+				source_uuid, note, created_at
+			)
+			VALUES ($1, $2, $3, $3, $4, $5, $6)`,
+			pin.saved.id, sessionID, pin.target,
+			pin.sourceUUID, note, pin.saved.createdAt,
+		); err != nil {
+			return fmt.Errorf(
+				"restoring pg pin ord=%d: %w", pin.target, err,
+			)
+		}
+	}
 	return nil
+}
+
+func resolvePinnedMessageTarget(
+	ctx context.Context, tx *sql.Tx, sessionID string,
+	pin savedPostgresPin,
+) (int, string, bool, error) {
+	if !pin.messageFound {
+		return 0, "", false, nil
+	}
+	if pin.sourceUUID != "" {
+		if pin.sourceUUIDCount == 1 {
+			target, sourceUUID, ok, err := scanPinnedMessageTarget(
+				tx.QueryRowContext(ctx, `
+					SELECT m.ordinal, m.source_uuid
+					FROM messages m
+					WHERE m.session_id = $1
+						AND m.source_uuid = $2
+						AND (
+							SELECT COUNT(*)
+							FROM messages same_uuid
+							WHERE same_uuid.session_id = m.session_id
+								AND same_uuid.source_uuid = m.source_uuid
+						) = 1`,
+					sessionID, pin.sourceUUID,
+				),
+			)
+			if err != nil {
+				return 0, "", false, fmt.Errorf(
+					"resolving unique pg pin uuid=%s: %w",
+					pin.sourceUUID, err,
+				)
+			}
+			if ok {
+				return target, sourceUUID, true, nil
+			}
+		}
+		if pin.sourceIdentityCount != 1 {
+			return 0, "", false, nil
+		}
+		target, sourceUUID, ok, err := scanPinnedMessageTarget(
+			tx.QueryRowContext(ctx, `
+				SELECT m.ordinal, m.source_uuid
+				FROM messages m
+				WHERE m.session_id = $1
+					AND m.ordinal = $2
+					AND m.source_uuid = $3
+					AND m.role = $4
+					AND m.content = $5
+					AND (
+						SELECT COUNT(*)
+						FROM messages same_identity
+						WHERE same_identity.session_id = m.session_id
+							AND same_identity.source_uuid = m.source_uuid
+							AND same_identity.role = m.role
+							AND same_identity.content = m.content
+					) = 1`,
+				sessionID, pin.ordinal, pin.sourceUUID,
+				pin.role, pin.content,
+			),
+		)
+		if err != nil {
+			return 0, "", false, fmt.Errorf(
+				"resolving ambiguous pg pin uuid=%s ord=%d: %w",
+				pin.sourceUUID, pin.ordinal, err,
+			)
+		}
+		return target, sourceUUID, ok, nil
+	}
+
+	target, sourceUUID, ok, err := scanPinnedMessageTarget(
+		tx.QueryRowContext(ctx, `
+			SELECT m.ordinal, m.source_uuid
+			FROM messages m
+			WHERE m.session_id = $1
+				AND m.ordinal = $2
+				AND m.role = $3
+				AND m.content = $4`,
+			sessionID, pin.ordinal, pin.role, pin.content,
+		),
+	)
+	if err != nil {
+		return 0, "", false, fmt.Errorf(
+			"resolving legacy pg pin ord=%d: %w", pin.ordinal, err,
+		)
+	}
+	return target, sourceUUID, ok, nil
+}
+
+func scanPinnedMessageTarget(
+	row *sql.Row,
+) (int, string, bool, error) {
+	var ordinal int
+	var sourceUUID string
+	if err := row.Scan(&ordinal, &sourceUUID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, "", false, nil
+		}
+		return 0, "", false, err
+	}
+	return ordinal, sourceUUID, true, nil
+}
+
+func preferResolvedPostgresPin(
+	candidate, current resolvedPostgresPin,
+) bool {
+	candidateAtTarget := candidate.saved.ordinal == candidate.target
+	currentAtTarget := current.saved.ordinal == current.target
+	if candidateAtTarget != currentAtTarget {
+		return candidateAtTarget
+	}
+	if !candidate.saved.createdAt.Equal(current.saved.createdAt) {
+		return candidate.saved.createdAt.After(current.saved.createdAt)
+	}
+	return candidate.saved.id > current.saved.id
 }
 
 func pgMessageTokenFingerprint(
