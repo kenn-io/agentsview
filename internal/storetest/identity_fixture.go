@@ -15,15 +15,20 @@ const (
 	identityArchiveBSalt = "bun-identity-salt-b"
 	identityAlphaProject = "identity-alpha"
 	identityBetaProject  = "identity-beta"
+	identityAlphaAID     = "bun-identity-alpha-a"
+	identityAlphaBID     = "bun-identity-alpha-b"
+	identityBetaID       = "bun-identity-beta"
 )
 
 // IdentityFixture names the literal source-scoped identity rows used by every
 // Task 6 backend contract.
 type IdentityFixture struct {
-	ArchiveAID   string
-	ArchiveBID   string
-	AlphaProject string
-	BetaProject  string
+	ArchiveAID      string
+	ArchiveBID      string
+	AlphaProject    string
+	BetaProject     string
+	AlphaSessionAID string
+	AlphaSessionBID string
 }
 
 // InsertBunIdentityFixture inserts two observations owned by distinct source
@@ -50,6 +55,26 @@ func InsertBunIdentityFixture(
 		if _, err := store.NewInsert().Model(&row).Exec(ctx); err != nil {
 			return IdentityFixture{}, fmt.Errorf(
 				"inserting identity observation %s: %w", row.Project, err,
+			)
+		}
+	}
+	for _, row := range bunIdentitySessionRows(archiveAID) {
+		if _, err := store.NewInsert().Model(&row).Exec(ctx); err != nil {
+			return IdentityFixture{}, fmt.Errorf(
+				"inserting identity session %s: %w", row.ID, err,
+			)
+		}
+	}
+	for _, row := range bunIdentityMappingRows(archiveAID) {
+		query := store.NewInsert().Model(&row).
+			Column(
+				"id", "source_archive_id", "machine", "path_prefix", "layout",
+				"project", "original_project", "enabled", "created_at", "updated_at",
+			).
+			Value("enabled", "?", row.Enabled)
+		if _, err := query.Exec(ctx); err != nil {
+			return IdentityFixture{}, fmt.Errorf(
+				"inserting identity mapping %s: %w", row.PathPrefix, err,
 			)
 		}
 	}
@@ -92,6 +117,37 @@ func InsertSQLiteIdentityFixture(
 			)
 		}
 	}
+	for _, row := range bunIdentitySessionRows(archiveAID) {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO sessions (
+				id, project, machine, agent, cwd, started_at, ended_at, created_at,
+				source_archive_id, source_database_generation
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			row.ID, row.Project, row.Machine, row.Agent, row.Cwd,
+			row.StartedAt, row.EndedAt, row.CreatedAt,
+			row.SourceArchiveID, row.SourceDatabaseGeneration,
+		)
+		if err != nil {
+			return IdentityFixture{}, fmt.Errorf(
+				"inserting SQLite identity session %s: %w", row.ID, err,
+			)
+		}
+	}
+	for _, row := range bunIdentityMappingRows(archiveAID) {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO source_worktree_project_mappings (
+				id, source_archive_id, machine, path_prefix, layout, project,
+				original_project, enabled, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			row.ID, row.SourceArchiveID, row.Machine, row.PathPrefix, row.Layout,
+			row.Project, row.OriginalProject, row.Enabled, row.CreatedAt, row.UpdatedAt,
+		)
+		if err != nil {
+			return IdentityFixture{}, fmt.Errorf(
+				"inserting SQLite identity mapping %s: %w", row.PathPrefix, err,
+			)
+		}
+	}
 	return identityFixture(archiveAID), nil
 }
 
@@ -99,6 +155,69 @@ func identityFixture(archiveAID string) IdentityFixture {
 	return IdentityFixture{
 		ArchiveAID: archiveAID, ArchiveBID: identityArchiveBID,
 		AlphaProject: identityAlphaProject, BetaProject: identityBetaProject,
+		AlphaSessionAID: identityAlphaAID, AlphaSessionBID: identityAlphaBID,
+	}
+}
+
+func bunIdentitySessionRows(archiveAID string) []bunmodel.Session {
+	timestamp := func(day, hour, minute int) *bunmodel.Timestamp {
+		value := bunmodel.NewTimestamp(
+			time.Date(2026, 8, day, hour, minute, 0, 0, time.UTC),
+		)
+		return &value
+	}
+	requiredTimestamp := func(day, hour int) bunmodel.Timestamp {
+		return *timestamp(day, hour, 0)
+	}
+	return []bunmodel.Session{
+		{
+			ID: identityAlphaAID, Project: identityAlphaProject,
+			Machine: "identity-host-a", Agent: "codex", Cwd: "/workspace/alpha/cmd",
+			StartedAt: timestamp(1, 12, 0), EndedAt: timestamp(1, 12, 30),
+			CreatedAt: requiredTimestamp(1, 12), SourceArchiveID: archiveAID,
+			SourceDatabaseGeneration: "identity-generation-a",
+		},
+		{
+			ID: identityAlphaBID, Project: identityAlphaProject,
+			Machine: "identity-host-a", Agent: "claude",
+			Cwd:       `\workspace\alpha\frontend`,
+			StartedAt: timestamp(1, 13, 0), EndedAt: timestamp(1, 13, 30),
+			CreatedAt: requiredTimestamp(1, 13), SourceArchiveID: archiveAID,
+			SourceDatabaseGeneration: "identity-generation-a",
+		},
+		{
+			ID: identityBetaID, Project: identityBetaProject,
+			Machine: "identity-host-b", Agent: "codex", Cwd: "/workspace/beta/service",
+			StartedAt: timestamp(2, 12, 0), CreatedAt: requiredTimestamp(2, 12),
+			SourceArchiveID:          identityArchiveBID,
+			SourceDatabaseGeneration: "identity-generation-b",
+		},
+	}
+}
+
+func bunIdentityMappingRows(archiveAID string) []bunmodel.SourceWorktreeProjectMapping {
+	timestamp := bunmodel.NewTimestamp(
+		time.Date(2026, 8, 1, 11, 0, 0, 0, time.UTC),
+	)
+	return []bunmodel.SourceWorktreeProjectMapping{
+		{
+			ID: 1, SourceArchiveID: archiveAID, Machine: "identity-host-a",
+			PathPrefix: "/workspace/alpha", Layout: "explicit",
+			Project: identityAlphaProject, Enabled: true,
+			CreatedAt: timestamp, UpdatedAt: timestamp,
+		},
+		{
+			ID: 2, SourceArchiveID: archiveAID, Machine: "identity-host-a",
+			PathPrefix: "/workspace/disabled", Layout: "explicit",
+			Project: identityBetaProject, OriginalProject: identityAlphaProject,
+			Enabled: false, CreatedAt: timestamp, UpdatedAt: timestamp,
+		},
+		{
+			ID: 3, SourceArchiveID: identityArchiveBID, Machine: "identity-host-b",
+			PathPrefix: "/workspace/beta", Layout: "explicit",
+			Project: identityBetaProject, Enabled: true,
+			CreatedAt: timestamp, UpdatedAt: timestamp,
+		},
 	}
 }
 

@@ -57,3 +57,27 @@ func TestBunStoreIdentityContract(t *testing.T) {
 		},
 	})
 }
+
+func TestBunStoreDataContract(t *testing.T) {
+	storetest.RunDataContract(t, storetest.DataBackend{
+		Name: "sqlite",
+		Open: func(t *testing.T) (storetest.DataStore, storetest.IdentityFixture) {
+			database, err := db.Open(filepath.Join(t.TempDir(), "data-contract.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			archiveID, err := database.GetArchiveID(t.Context())
+			require.NoError(t, err)
+			archiveSalt, err := database.GetArchiveSalt(t.Context())
+			require.NoError(t, err)
+			var fixture storetest.IdentityFixture
+			require.NoError(t, database.Update(func(tx *sql.Tx) error {
+				var insertErr error
+				fixture, insertErr = storetest.InsertSQLiteIdentityFixture(
+					t.Context(), tx, archiveID, archiveSalt,
+				)
+				return insertErr
+			}))
+			return database.BunStore, fixture
+		},
+	})
+}

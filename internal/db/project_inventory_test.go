@@ -2,9 +2,7 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"sort"
-	"strings"
 	"testing"
 	"time"
 
@@ -275,53 +273,4 @@ func TestGetProjectInventoryManyDistinctProjects(t *testing.T) {
 	assert.Equal(t, projectCount, inv.TotalProjects)
 	assert.Equal(t, projectCount, inv.TotalSessions)
 	assert.Len(t, inv.Projects, projectCount)
-}
-
-func TestProjectInventorySingleAggregationPass(t *testing.T) {
-	t.Run("aggregation query is a single sessions scan", func(t *testing.T) {
-		d := testDB(t)
-		rows, err := d.getReader().Query(
-			"EXPLAIN QUERY PLAN " + projectInventoryAggregateQuery(),
-		)
-		require.NoError(t, err)
-		defer rows.Close()
-
-		details := explainQueryPlanDetails(t, rows)
-		sessionsScans := 0
-		for _, detail := range details {
-			if strings.Contains(detail, "sessions") {
-				sessionsScans++
-			}
-		}
-		assert.Equal(t, 1, sessionsScans,
-			"aggregation must scan sessions exactly once, got plan: %s",
-			strings.Join(details, "; "))
-	})
-
-	t.Run("candidate query uses the sessions machine index", func(t *testing.T) {
-		d := testDB(t)
-		query, args := projectInventoryCandidateQuery([]string{"ws"})
-		rows, err := d.getReader().Query("EXPLAIN QUERY PLAN "+query, args...)
-		require.NoError(t, err)
-		defer rows.Close()
-
-		details := explainQueryPlanDetails(t, rows)
-		assert.Contains(t, strings.Join(details, "\n"), "idx_sessions_machine",
-			"candidate fetch must use the sessions machine index, not a full scan")
-	})
-}
-
-// explainQueryPlanDetails scans the detail column of an EXPLAIN QUERY PLAN
-// result set.
-func explainQueryPlanDetails(t *testing.T, rows *sql.Rows) []string {
-	t.Helper()
-	var details []string
-	for rows.Next() {
-		var id, parent, notused int
-		var detail string
-		require.NoError(t, rows.Scan(&id, &parent, &notused, &detail))
-		details = append(details, detail)
-	}
-	require.NoError(t, rows.Err())
-	return details
 }

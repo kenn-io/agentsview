@@ -1,10 +1,8 @@
 package db
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -56,45 +54,6 @@ type worktreeCandidateGroup struct {
 	sessions []WorktreeCandidateSession
 }
 
-// ListArchiveWorktreeCandidates returns the machine/path groups for a
-// project selected by (display label, project key) across every visible
-// session in the archive, with no Activity date range or filter scoping.
-func (db *DB) ListArchiveWorktreeCandidates(
-	ctx context.Context,
-	request ArchiveWorktreeCandidateRequest,
-) ([]WorktreeReclassificationCandidate, error) {
-	if strings.TrimSpace(request.ProjectKey) == "" {
-		return nil, fmt.Errorf("project_key is required")
-	}
-	sessions, err := db.archiveWorktreeCandidateSessions(ctx)
-	if err != nil {
-		return nil, err
-	}
-	labels := make(map[string]struct{})
-	for _, session := range sessions {
-		labels[session.project] = struct{}{}
-	}
-	projects, err := db.BuildProjectIdentityMap(ctx, sortedSetKeys(labels))
-	if err != nil {
-		return nil, err
-	}
-	selectedProjects := SelectWorktreeCandidateProjects(
-		request, labels, projects,
-	)
-	if len(selectedProjects) == 0 {
-		return []WorktreeReclassificationCandidate{}, nil
-	}
-
-	selectedIDs := make([]string, 0, len(sessions))
-	for _, session := range sessions {
-		if _, ok := selectedProjects[session.project]; !ok {
-			continue
-		}
-		selectedIDs = append(selectedIDs, session.id)
-	}
-	return db.worktreeCandidatesFromSelection(ctx, selectedIDs, selectedProjects)
-}
-
 // SelectWorktreeCandidateProjects validates that the requested display label
 // identifies the requested opaque project key, then expands the selection to
 // raw labels with the same resolved project identity. The display label
@@ -140,66 +99,6 @@ func SelectWorktreeCandidateProjects(
 		}
 	}
 	return selected
-}
-
-// archiveCandidateSessionRef is the minimal (id, project) pair the
-// archive-wide selection query needs; the shared grouping pipeline only
-// ever reads a session's ID and project label from the selection step.
-type archiveCandidateSessionRef struct {
-	id, project string
-}
-
-// archiveWorktreeCandidateSessions returns every archive-wide visible
-// session (deleted_at IS NULL) with no date or relationship-type bound.
-// Data inventory counts these same rows, including zero-message sessions,
-// so the selected project's session count and its folder groups stay
-// reconcilable.
-func (db *DB) archiveWorktreeCandidateSessions(
-	ctx context.Context,
-) ([]archiveCandidateSessionRef, error) {
-	rows, err := db.getReader().QueryContext(ctx, `
-		SELECT id, project
-		FROM sessions
-		WHERE deleted_at IS NULL
-		ORDER BY id`)
-	if err != nil {
-		return nil, fmt.Errorf("querying archive worktree candidate sessions: %w", err)
-	}
-	defer rows.Close()
-	var sessions []archiveCandidateSessionRef
-	for rows.Next() {
-		var session archiveCandidateSessionRef
-		if err := rows.Scan(&session.id, &session.project); err != nil {
-			return nil, fmt.Errorf("scanning archive worktree candidate session: %w", err)
-		}
-		sessions = append(sessions, session)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating archive worktree candidate sessions: %w", err)
-	}
-	return sessions, nil
-}
-
-// worktreeCandidatesFromSelection runs the shared grouping pipeline
-// (snapshot/aggregate/fallback evidence, then deterministic ordering)
-// over an already-selected set of session IDs.
-// ListArchiveWorktreeCandidates calls it after selecting the archive-wide
-// session set.
-func (db *DB) worktreeCandidatesFromSelection(
-	ctx context.Context,
-	selectedIDs []string,
-	selectedProjects map[string]struct{},
-) ([]WorktreeReclassificationCandidate, error) {
-	details, err := db.loadWorktreeCandidateSessions(ctx, selectedIDs)
-	if err != nil {
-		return nil, err
-	}
-	observations, err := db.ListProjectIdentityObservations(
-		ctx, sortedSetKeys(selectedProjects))
-	if err != nil {
-		return nil, err
-	}
-	return BuildWorktreeCandidates(details, observations), nil
 }
 
 // BuildWorktreeCandidates groups an already-selected set of sessions into
@@ -251,60 +150,6 @@ func BuildWorktreeCandidates(
 		return left.ID < right.ID
 	})
 	return result
-}
-
-func (db *DB) loadWorktreeCandidateSessions(
-	ctx context.Context,
-	ids []string,
-) ([]WorktreeCandidateSession, error) {
-	byID := make(map[string]WorktreeCandidateSession, len(ids))
-	err := queryChunked(ids, func(chunk []string) error {
-		placeholders, args := inPlaceholders(chunk)
-		rows, err := db.getReader().QueryContext(ctx, `
-			SELECT s.id, s.project, s.machine, s.cwd,
-				COALESCE(snap.source_session_id, ''), COALESCE(snap.project, ''),
-				COALESCE(snap.machine, ''), COALESCE(snap.root_path, ''),
-				COALESCE(snap.worktree_root_path, ''), COALESCE(snap.key_source, '')
-			FROM sessions s
-			LEFT JOIN source_session_project_identity_snapshots snap
-			  ON snap.source_archive_id = s.source_archive_id
-			 AND snap.source_database_generation = s.source_database_generation
-			 AND snap.source_session_id = s.id
-			WHERE s.id IN `+placeholders+` AND s.deleted_at IS NULL
-			ORDER BY s.id`, args...)
-		if err != nil {
-			return fmt.Errorf("querying worktree candidate sessions: %w", err)
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var session WorktreeCandidateSession
-			var snapshotSessionID string
-			if err := rows.Scan(
-				&session.ID, &session.Project, &session.Machine, &session.Cwd,
-				&snapshotSessionID, &session.Snapshot.Project,
-				&session.Snapshot.Machine, &session.Snapshot.RootPath,
-				&session.Snapshot.WorktreeRootPath, &session.Snapshot.KeySource,
-			); err != nil {
-				return fmt.Errorf("scanning worktree candidate session: %w", err)
-			}
-			session.HasSnapshot = snapshotSessionID != ""
-			byID[session.ID] = session
-		}
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("iterating worktree candidate sessions: %w", err)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	result := make([]WorktreeCandidateSession, 0, len(byID))
-	for _, id := range ids {
-		if session, ok := byID[id]; ok {
-			result = append(result, session)
-		}
-	}
-	return result, nil
 }
 
 func candidateSnapshotRoot(session WorktreeCandidateSession) string {

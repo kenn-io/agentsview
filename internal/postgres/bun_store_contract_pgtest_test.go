@@ -12,6 +12,7 @@ import (
 
 const bunCoreContractSchema = "agentsview_bun_core_contract"
 const bunIdentityContractSchema = "agentsview_bun_identity_contract"
+const bunDataContractSchema = "agentsview_bun_data_contract"
 
 func TestBunStoreCoreContract(t *testing.T) {
 	storetest.RunCoreContract(t, storetest.Backend{
@@ -55,6 +56,29 @@ func TestBunStoreIdentityContract(t *testing.T) {
 			)
 			require.NoError(t, err)
 			return store, fixture
+		},
+	})
+}
+
+func TestBunStoreDataContract(t *testing.T) {
+	storetest.RunDataContract(t, storetest.DataBackend{
+		Name: "postgres",
+		Open: func(t *testing.T) (storetest.DataStore, storetest.IdentityFixture) {
+			pgURL := testPGURL(t)
+			cleanupBunContractSchema(t, pgURL, bunDataContractSchema)
+			t.Cleanup(func() {
+				cleanupBunContractSchema(t, pgURL, bunDataContractSchema)
+			})
+			pg, err := Open(pgURL, bunDataContractSchema, true)
+			require.NoError(t, err)
+			require.NoError(t, EnsureSchema(t.Context(), pg, bunDataContractSchema))
+			store := newStore(pg)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			fixture, err := storetest.InsertBunIdentityFixture(
+				t.Context(), store.bun, "bun-identity-archive-a", "bun-identity-salt-a",
+			)
+			require.NoError(t, err)
+			return store.BunStore, fixture
 		},
 	})
 }
