@@ -12,6 +12,15 @@ import (
 
 const bunCurationBatchSize = 500
 
+// PinRowIDPolicy declares whether replicated pin identities belong to the
+// target curation store or to a source-assigned read mirror.
+type PinRowIDPolicy uint8
+
+const (
+	GeneratePinRowIDs PinRowIDPolicy = iota
+	PreservePinRowIDs
+)
+
 type bunPinnedMessageReadRow struct {
 	ID                  int64              `bun:"id"`
 	SessionID           string             `bun:"session_id"`
@@ -31,16 +40,17 @@ type bunPinnedMessageReadRow struct {
 // operation-scoped curation writer. Repeating the operation is idempotent.
 func (s *BunStore) StarSession(sessionID string) (bool, error) {
 	ctx := context.Background()
+	createdAt := bunmodel.NewTimestamp(time.Now())
 	starred := false
 	err := s.update(ctx, WriteCuration, func(store bun.IDB) error {
 		return store.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 			result, err := tx.NewRaw(`
-				INSERT INTO starred_sessions (session_id)
-				SELECT ? WHERE EXISTS (
+				INSERT INTO starred_sessions (session_id, created_at)
+				SELECT ?, ? WHERE EXISTS (
 					SELECT 1 FROM sessions WHERE id = ?
 				)
 				ON CONFLICT (session_id) DO NOTHING`,
-				sessionID, sessionID,
+				sessionID, createdAt, sessionID,
 			).Exec(ctx)
 			if err != nil {
 				return fmt.Errorf("starring session %s: %w", sessionID, err)
@@ -106,6 +116,7 @@ func (s *BunStore) ListStarredSessionIDs(
 // ignored so stale client-side curation cannot abort the batch.
 func (s *BunStore) BulkStarSessions(sessionIDs []string) error {
 	ctx := context.Background()
+	createdAt := bunmodel.NewTimestamp(time.Now())
 	return s.update(ctx, WriteCuration, func(store bun.IDB) error {
 		if len(sessionIDs) == 0 {
 			return nil
@@ -113,12 +124,12 @@ func (s *BunStore) BulkStarSessions(sessionIDs []string) error {
 		return store.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 			for _, sessionID := range sessionIDs {
 				if _, err := tx.NewRaw(`
-					INSERT INTO starred_sessions (session_id)
-					SELECT ? WHERE EXISTS (
+					INSERT INTO starred_sessions (session_id, created_at)
+					SELECT ?, ? WHERE EXISTS (
 						SELECT 1 FROM sessions WHERE id = ?
 					)
 					ON CONFLICT (session_id) DO NOTHING`,
-					sessionID, sessionID,
+					sessionID, createdAt, sessionID,
 				).Exec(ctx); err != nil {
 					return fmt.Errorf("starring session %s: %w", sessionID, err)
 				}
@@ -135,15 +146,16 @@ func (s *BunStore) PinMessage(
 	sessionID string, messageID int64, note *string,
 ) (int64, error) {
 	ctx := context.Background()
+	createdAt := bunmodel.NewTimestamp(time.Now())
 	var pinID int64
 	err := s.update(ctx, WriteCuration, func(store bun.IDB) error {
 		return store.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 			err := tx.NewRaw(`
 				INSERT INTO pinned_messages (
-					session_id, message_id, ordinal, source_uuid, note
+					session_id, message_id, ordinal, source_uuid, note, created_at
 				)
 				SELECT ?, COALESCE(m.id, CAST(m.ordinal AS BIGINT)),
-					m.ordinal, m.source_uuid, ?
+					m.ordinal, m.source_uuid, ?, ?
 				FROM messages AS m
 				WHERE m.session_id = ?
 				  AND (m.id = ? OR (m.id IS NULL AND m.ordinal = ?))
@@ -152,7 +164,7 @@ func (s *BunStore) PinMessage(
 					source_uuid = excluded.source_uuid,
 					note = excluded.note
 				RETURNING id`,
-				sessionID, note, sessionID, messageID, messageID,
+				sessionID, note, createdAt, sessionID, messageID, messageID,
 			).Scan(ctx, &pinID)
 			if err == sql.ErrNoRows {
 				pinID = 0
@@ -174,10 +186,14 @@ func (s *BunStore) PinMessage(
 func (s *BunStore) UnpinMessage(sessionID string, messageID int64) error {
 	ctx := context.Background()
 	return s.update(ctx, WriteCuration, func(store bun.IDB) error {
-		if _, err := store.NewDelete().Model((*bunmodel.PinnedMessage)(nil)).
-			Where("session_id = ?", sessionID).
-			Where("COALESCE(message_id, CAST(ordinal AS BIGINT)) = ?", messageID).
-			Exec(ctx); err != nil {
+		if _, err := store.NewRaw(`
+			DELETE FROM pinned_messages
+			WHERE session_id = ?
+			  AND ordinal IN (
+				SELECT ordinal FROM messages
+				WHERE session_id = ?
+				  AND COALESCE(id, CAST(ordinal AS BIGINT)) = ?
+			  )`, sessionID, sessionID, messageID).Exec(ctx); err != nil {
 			return fmt.Errorf("unpinning message: %w", err)
 		}
 		return nil
@@ -193,10 +209,13 @@ func (s *BunStore) ListPinnedMessages(
 		query := store.NewSelect().TableExpr("pinned_messages AS pin").
 			ColumnExpr("pin.id AS id").
 			ColumnExpr("pin.session_id AS session_id").
-			ColumnExpr("COALESCE(pin.message_id, CAST(pin.ordinal AS BIGINT)) AS message_id").
+			ColumnExpr("COALESCE(message.id, CAST(pin.ordinal AS BIGINT)) AS message_id").
 			ColumnExpr("pin.ordinal AS ordinal").
 			ColumnExpr("pin.note AS note").
-			ColumnExpr("pin.created_at AS created_at")
+			ColumnExpr("pin.created_at AS created_at").
+			Join("LEFT JOIN messages AS message").
+			JoinOn("message.session_id = pin.session_id").
+			JoinOn("message.ordinal = pin.ordinal")
 		if sessionID != "" {
 			return query.Where("pin.session_id = ?", sessionID).
 				OrderExpr("pin.created_at DESC").OrderExpr("pin.id DESC").
@@ -211,10 +230,7 @@ func (s *BunStore) ListPinnedMessages(
 			ColumnExpr("session.first_message AS session_first_message").
 			Join("JOIN sessions AS session").
 			JoinOn("session.id = pin.session_id").
-			JoinOn("session.deleted_at IS NULL").
-			Join("LEFT JOIN messages AS message").
-			JoinOn("message.session_id = pin.session_id").
-			JoinOn("message.ordinal = pin.ordinal")
+			JoinOn("session.deleted_at IS NULL")
 		if project != "" {
 			query = query.Where("session.project = ?", project)
 		}
@@ -276,6 +292,7 @@ func UpsertStarredSessionRows(
 // pre-existing target row keeps its generated ID while curation fields refresh.
 func UpsertPinnedMessageRows(
 	ctx context.Context, store bun.IDB, rows []bunmodel.PinnedMessage,
+	idPolicy PinRowIDPolicy,
 ) error {
 	if len(rows) == 0 {
 		return nil
@@ -283,8 +300,15 @@ func UpsertPinnedMessageRows(
 	return store.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		for _, row := range rows {
 			query := tx.NewInsert().Model(&row)
-			if row.ID == 0 {
+			switch idPolicy {
+			case GeneratePinRowIDs:
 				query = query.ExcludeColumn("id")
+			case PreservePinRowIDs:
+				if row.ID == 0 {
+					return fmt.Errorf("preserving replicated pin id: source id is zero")
+				}
+			default:
+				return fmt.Errorf("upserting pinned message rows: unknown id policy %d", idPolicy)
 			}
 			if _, err := query.
 				On("CONFLICT (session_id, ordinal) DO UPDATE").

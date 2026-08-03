@@ -3,6 +3,8 @@ package db
 import (
 	"context"
 	"fmt"
+
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
 
 // PinnedMessage represents a row in the pinned_messages table.
@@ -27,10 +29,14 @@ const pinnedBaseCols = `id, session_id, message_id, ordinal, note, created_at`
 
 func scanPinnedRow(rs rowScanner) (PinnedMessage, error) {
 	var p PinnedMessage
+	var createdAt bunmodel.Timestamp
 	err := rs.Scan(
 		&p.ID, &p.SessionID, &p.MessageID,
-		&p.Ordinal, &p.Note, &p.CreatedAt,
+		&p.Ordinal, &p.Note, &createdAt,
 	)
+	if err == nil {
+		p.CreatedAt = requiredTimestampFromBunRow(createdAt)
+	}
 	return p, err
 }
 

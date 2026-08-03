@@ -66,6 +66,23 @@ func RunInsightContract(t *testing.T, backend InsightBackend) {
 		blank, err := store.GetCachedInsight(ctx, "   ")
 		require.NoError(t, err)
 		assert.Nil(t, blank)
+		global, err := store.ListInsights(ctx, db.InsightFilter{
+			Type: "daily_activity", GlobalOnly: true,
+			DateFrom: "2026-08-03", DateTo: "2026-08-03",
+		})
+		require.NoError(t, err)
+		require.Len(t, global, 1)
+		assert.Equal(t, int64(4102), global[0].ID)
+		assert.Nil(t, global[0].Project)
+		ordered, err := store.ListInsights(ctx, db.InsightFilter{
+			Type: "ordering", Project: fixture.Project,
+		})
+		require.NoError(t, err)
+		require.Len(t, ordered, 2)
+		assert.Equal(t, []int64{4202, 4201}, []int64{ordered[0].ID, ordered[1].ID})
+		empty, err := store.ListInsights(ctx, db.InsightFilter{Type: "missing-type"})
+		require.NoError(t, err)
+		assert.Empty(t, empty)
 
 		if !backend.Writable {
 			inserted, err := store.InsertInsight(db.Insight{Content: "forbidden"})
@@ -106,24 +123,55 @@ func assertSeededInsight(t *testing.T, insight db.Insight, fixture InsightFixtur
 	require.NotNil(t, insight.Project)
 	assert.Equal(t, fixture.Project, *insight.Project)
 	assert.Equal(t, insightContractCacheKey, insight.CacheKey)
-	assert.Equal(t, "2026-08-03T12:00:00Z", insight.CreatedAt)
+	require.NotNil(t, insight.Model)
+	assert.Equal(t, "fixture-model", *insight.Model)
+	require.NotNil(t, insight.Prompt)
+	assert.Equal(t, "fixture prompt", *insight.Prompt)
+	assert.Equal(t, "report", insight.Kind)
+	assert.Equal(t, "v1", insight.SchemaVersion)
+	assert.JSONEq(t, `{"source":"fixture"}`, insight.ProvenanceJSON)
+	assert.JSONEq(t, `{"summary":"literal"}`, insight.StructuredJSON)
+	assert.Equal(t, "2000-01-01T00:00:00Z", insight.CreatedAt)
 }
 
 func InsertBunInsightFixture(
 	ctx context.Context, store bun.IDB,
 ) (InsightFixture, error) {
 	project := "insight-project"
-	created := bunmodel.NewTimestamp(time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC))
-	row := bunmodel.Insight{
-		ID: 4101, Type: "daily_activity", DateFrom: "2026-08-03",
-		DateTo: "2026-08-03", Project: &project, Agent: "claude",
-		Content: "seeded common insight", CacheKey: insightContractCacheKey,
-		CacheStatus: "fresh", CreatedAt: created,
+	model := "fixture-model"
+	prompt := "fixture prompt"
+	created := bunmodel.NewTimestamp(time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
+	rows := []bunmodel.Insight{
+		{
+			ID: 4101, Type: "daily_activity", DateFrom: "2026-08-03",
+			DateTo: "2026-08-03", Project: &project, Agent: "claude",
+			Model: &model, Prompt: &prompt, Content: "seeded common insight",
+			Kind: "report", SchemaVersion: "v1", TemplateID: "daily",
+			TemplateVersion: "1", AggregateHash: "fixture-hash",
+			CacheKey: insightContractCacheKey, CacheStatus: "fresh",
+			ProvenanceJSON: `{"source":"fixture"}`,
+			StructuredJSON: `{"summary":"literal"}`, CreatedAt: created,
+		},
+		{
+			ID: 4102, Type: "daily_activity", DateFrom: "2026-08-03",
+			DateTo: "2026-08-03", Agent: "codex", Content: "global insight",
+			CreatedAt: created,
+		},
+		{
+			ID: 4201, Type: "ordering", DateFrom: "2026-08-01",
+			DateTo: "2026-08-03", Project: &project, Agent: "codex",
+			Content: "ordering lower id", CreatedAt: created,
+		},
+		{
+			ID: 4202, Type: "ordering", DateFrom: "2026-08-01",
+			DateTo: "2026-08-03", Project: &project, Agent: "codex",
+			Content: "ordering higher id", CreatedAt: created,
+		},
 	}
-	if _, err := store.NewInsert().Model(&row).Exec(ctx); err != nil {
+	if _, err := store.NewInsert().Model(&rows).Exec(ctx); err != nil {
 		return InsightFixture{}, fmt.Errorf("inserting Bun insight fixture: %w", err)
 	}
-	return InsightFixture{ID: row.ID, Project: project}, nil
+	return InsightFixture{ID: rows[0].ID, Project: project}, nil
 }
 
 func InsertSQLiteInsightFixture(
@@ -134,13 +182,40 @@ func InsertSQLiteInsightFixture(
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO insights (
 			id, type, date_from, date_to, project, agent, content,
-			cache_key, cache_status, created_at
-		) VALUES (?, 'daily_activity', '2026-08-03', '2026-08-03', ?,
-			'claude', 'seeded common insight', ?, 'fresh', ?)`,
-		id, project, insightContractCacheKey, "2026-08-03T12:00:00Z",
+			model, prompt, kind, schema_version, template_id, template_version,
+			aggregate_hash, cache_key, cache_status, provenance_json,
+			structured_json, created_at
+		) VALUES (?, 'daily_activity', '2026-08-03', '2026-08-03', ?, 'claude',
+			'seeded common insight', 'fixture-model', 'fixture prompt', 'report',
+			'v1', 'daily', '1', 'fixture-hash', ?, 'fresh',
+			'{"source":"fixture"}', '{"summary":"literal"}', ?)`,
+		id, project, insightContractCacheKey, "2000-01-01T00:00:00Z",
 	)
 	if err != nil {
 		return InsightFixture{}, fmt.Errorf("inserting SQLite insight fixture: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO insights (
+			id, type, date_from, date_to, agent, content, created_at
+		) VALUES (4102, 'daily_activity', '2026-08-03', '2026-08-03',
+			'codex', 'global insight', ?)`,
+		"2000-01-01T00:00:00Z",
+	)
+	if err != nil {
+		return InsightFixture{}, fmt.Errorf("inserting SQLite global insight fixture: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO insights (
+			id, type, date_from, date_to, project, agent, content, created_at
+		) VALUES
+			(4201, 'ordering', '2026-08-01', '2026-08-03', ?, 'codex',
+				'ordering lower id', ?),
+			(4202, 'ordering', '2026-08-01', '2026-08-03', ?, 'codex',
+				'ordering higher id', ?)`,
+		project, "2000-01-01T00:00:00Z", project, "2000-01-01T00:00:00Z",
+	)
+	if err != nil {
+		return InsightFixture{}, fmt.Errorf("inserting SQLite ordered insight fixture: %w", err)
 	}
 	return InsightFixture{ID: id, Project: project}, nil
 }

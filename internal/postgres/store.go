@@ -65,35 +65,54 @@ func (s *Store) InsightGenerationAvailable() bool {
 	return s.insightGenerationAvailable
 }
 
-func (s *Store) setInsightGenerationAvailable(available bool) {
+// InsightDeletionAvailable reports whether startup proved this PG role can
+// delete persisted insights independently of generation privileges.
+func (s *Store) InsightDeletionAvailable() bool {
+	s.insightCapabilityMu.RLock()
+	defer s.insightCapabilityMu.RUnlock()
+	return s.insightDeletionAvailable
+}
+
+func (s *Store) setInsightCapabilities(insertAvailable, deleteAvailable bool) {
 	s.insightCapabilityMu.Lock()
 	defer s.insightCapabilityMu.Unlock()
-	s.insightGenerationAvailable = available
+	s.insightGenerationAvailable = insertAvailable
+	s.insightDeletionAvailable = deleteAvailable
 }
 
 // DetectInsightGenerationAvailability probes whether this PG connection can
-// insert into insights. PG serve uses it to expose generate routes only when
-// the configured role can actually persist the result.
+// insert and delete insights. PG serve uses generation availability to expose
+// generate routes, while the shared store authorizes deletion independently.
 func (s *Store) DetectInsightGenerationAvailability(
 	ctx context.Context,
 ) error {
-	tx, err := s.pg.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf(
-			"beginning insight generation capability probe: %w",
-			err,
-		)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	available, err := probeInsightGenerationAvailabilityTx(
-		ctx, tx,
+	insertAvailable, err := runInsightCapabilityProbe(
+		ctx, s.pg, probeInsightGenerationAvailabilityTx,
 	)
 	if err != nil {
 		return err
 	}
-	s.setInsightGenerationAvailable(available)
+	deleteAvailable, err := runInsightCapabilityProbe(
+		ctx, s.pg, probeInsightDeletionAvailabilityTx,
+	)
+	if err != nil {
+		return err
+	}
+	s.setInsightCapabilities(insertAvailable, deleteAvailable)
 	return nil
+}
+
+func runInsightCapabilityProbe(
+	ctx context.Context,
+	pg *sql.DB,
+	probe func(context.Context, *sql.Tx) (bool, error),
+) (bool, error) {
+	tx, err := pg.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("beginning insight capability probe: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	return probe(ctx, tx)
 }
 
 func probeInsightGenerationAvailabilityTx(
@@ -109,6 +128,18 @@ func probeInsightGenerationAvailabilityTx(
 		return false, fmt.Errorf(
 			"probing insight generation capability: %w", err,
 		)
+	}
+	return true, nil
+}
+
+func probeInsightDeletionAvailabilityTx(
+	ctx context.Context, tx *sql.Tx,
+) (bool, error) {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM insights WHERE FALSE`); err != nil {
+		if IsReadOnlyError(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("probing insight deletion capability: %w", err)
 	}
 	return true, nil
 }

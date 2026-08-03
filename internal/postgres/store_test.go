@@ -138,6 +138,7 @@ func TestDetectInsightGenerationAvailability(t *testing.T) {
 		context.Background(),
 	), "DetectInsightGenerationAvailability")
 	assert.True(t, store.InsightGenerationAvailable())
+	assert.True(t, store.InsightDeletionAvailable())
 }
 
 func TestProbeInsightGenerationAvailabilityTx_ReadOnly(t *testing.T) {
@@ -159,6 +160,28 @@ func TestProbeInsightGenerationAvailabilityTx_ReadOnly(t *testing.T) {
 		context.Background(), tx,
 	)
 	require.NoError(t, err, "probeInsightGenerationAvailabilityTx")
+	assert.False(t, available)
+}
+
+func TestProbeInsightDeletionAvailabilityTx_ReadOnly(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+
+	pg, err := Open(pgURL, testSchema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	tx, err := pg.BeginTx(
+		context.Background(),
+		&sql.TxOptions{ReadOnly: true},
+	)
+	require.NoError(t, err, "BeginTx")
+	defer func() { _ = tx.Rollback() }()
+
+	available, err := probeInsightDeletionAvailabilityTx(
+		context.Background(), tx,
+	)
+	require.NoError(t, err, "probeInsightDeletionAvailabilityTx")
 	assert.False(t, available)
 }
 
@@ -1491,6 +1514,19 @@ func TestStoreWriteSurfaceSplitByCapability(t *testing.T) {
 	batchTrashID := "store-capability-004"
 
 	insightID, err := store.InsertInsight(db.Insight{
+		Type:     "dashboard",
+		DateFrom: "2026-03-12",
+		DateTo:   "2026-03-12",
+		Project:  &project,
+		Agent:    "claude",
+		Content:  "insight content",
+		CacheKey: "capability-cache",
+	})
+	assert.Zero(t, insightID)
+	require.ErrorIs(t, err, db.ErrReadOnly,
+		"unprobed insight writes must stop before SQL")
+	require.NoError(t, store.DetectInsightGenerationAvailability(ctx))
+	insightID, err = store.InsertInsight(db.Insight{
 		Type:     "dashboard",
 		DateFrom: "2026-03-12",
 		DateTo:   "2026-03-12",

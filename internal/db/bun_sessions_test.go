@@ -45,6 +45,13 @@ func (b *sessionContractBackend) View(
 	return fn(b.store)
 }
 
+func (b *sessionContractBackend) ConsistentView(
+	_ context.Context, fn func(bun.IDB) error,
+) error {
+	b.viewCalls++
+	return fn(b.store)
+}
+
 func (*sessionContractBackend) Update(
 	context.Context, func(bun.IDB) error,
 ) error {
@@ -268,25 +275,44 @@ func TestBunStoreTerminationFilterUsesSQLiteInstants(t *testing.T) {
 	}).Exec(t.Context())
 	require.NoError(t, err)
 
-	oldInstant := time.Now().UTC().Add(-2 * time.Hour)
-	offsetText := oldInstant.In(time.FixedZone("plus-three", 3*60*60)).
-		Format(time.RFC3339Nano)
+	now := time.Now().UTC()
+	offset := time.FixedZone("plus-three", 3*60*60)
+	activeText := now.Add(-5 * time.Minute).In(offset).Format(time.RFC3339Nano)
+	staleText := now.Add(-30 * time.Minute).In(offset).Format(time.RFC3339Nano)
+	uncleanText := now.Add(-2 * time.Hour).In(offset).Format(time.RFC3339Nano)
 	_, err = raw.ExecContext(t.Context(), `
 		INSERT INTO sessions (
 			id, project, machine, agent, message_count, created_at, ended_at,
 			termination_status, source_archive_id, source_database_generation
-		) VALUES (?, 'time', 'host', 'codex', 1, ?, ?, 'tool_call_pending',
-			'archive', 'generation')`,
-		"offset-unclean", offsetText, offsetText,
+		) VALUES
+			('offset-active', 'time', 'host', 'codex', 1, ?, ?, 'tool_call_pending',
+				'archive', 'generation'),
+			('offset-stale', 'time', 'host', 'codex', 1, ?, ?, 'tool_call_pending',
+				'archive', 'generation'),
+			('offset-unclean', 'time', 'host', 'codex', 1, ?, ?, 'tool_call_pending',
+				'archive', 'generation')`,
+		activeText, activeText, staleText, staleText, uncleanText, uncleanText,
 	)
 	require.NoError(t, err)
 
-	page, err := NewBunStore(&sessionContractBackend{store: store}).ListSessions(
-		t.Context(), SessionFilter{Project: "time", Termination: "unclean", Limit: 10},
-	)
-	require.NoError(t, err)
-	require.Len(t, page.Sessions, 1)
-	assert.Equal(t, "offset-unclean", page.Sessions[0].ID)
+	common := NewBunStore(&sessionContractBackend{store: store})
+	for _, test := range []struct {
+		termination string
+		wantID      string
+	}{
+		{termination: "active", wantID: "offset-active"},
+		{termination: "stale", wantID: "offset-stale"},
+		{termination: "unclean", wantID: "offset-unclean"},
+	} {
+		t.Run(test.termination, func(t *testing.T) {
+			page, err := common.ListSessions(t.Context(), SessionFilter{
+				Project: "time", Termination: test.termination, Limit: 10,
+			})
+			require.NoError(t, err)
+			require.Len(t, page.Sessions, 1)
+			assert.Equal(t, test.wantID, page.Sessions[0].ID)
+		})
+	}
 }
 
 func TestBunStoreSidebarPaginatesSQLiteActivityChronologically(t *testing.T) {

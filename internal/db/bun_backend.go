@@ -15,15 +15,12 @@ type BunBackend interface {
 	SessionQueryDialect() QueryDialect
 	SessionVersion(context.Context, bun.IDB, string) (int, int64, error)
 	View(context.Context, func(bun.IDB) error) error
+	ConsistentView(context.Context, func(bun.IDB) error) error
 	Update(context.Context, func(bun.IDB) error) error
 }
 
 type bunSessionFullHydrator interface {
 	HydrateSessionFull(context.Context, bun.IDB, *Session) error
-}
-
-type bunConsistentViewer interface {
-	ConsistentView(context.Context, func(bun.IDB) error) error
 }
 
 // WriteOperation identifies a separately authorized family of mutations.
@@ -32,7 +29,8 @@ type WriteOperation uint8
 const (
 	WriteArchive WriteOperation = iota
 	WriteCuration
-	WriteInsight
+	WriteInsight // insertion/generation
+	WriteInsightDelete
 	WriteSessionManagement
 	WriteRecall
 )
@@ -69,6 +67,7 @@ func (b *sqliteBunBackend) Capabilities() BackendCapabilities {
 			WriteArchive:           true,
 			WriteCuration:          true,
 			WriteInsight:           true,
+			WriteInsightDelete:     true,
 			WriteSessionManagement: true,
 			WriteRecall:            true,
 		},

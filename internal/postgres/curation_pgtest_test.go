@@ -119,7 +119,19 @@ func TestStoreStarsAndPins(t *testing.T) {
 	require.NotNil(t, allPins[0].SessionProject)
 	assert.Equal(t, "proj-curation", *allPins[0].SessionProject)
 
-	require.NoError(t, store.UnpinMessage("cur-pin-1", 1), "UnpinMessage")
+	// The canonical schema can populate a source message ID after a pin was
+	// created with PostgreSQL's former ordinal-only public identity. Pin reads
+	// and deletes must continue through the authoritative session/ordinal key.
+	_, err = pg.ExecContext(ctx, `
+		UPDATE messages SET id = 1001
+		WHERE session_id = 'cur-pin-1' AND ordinal = 1`)
+	require.NoError(t, err, "populate canonical source message id")
+	pins, err = store.ListPinnedMessages(ctx, "cur-pin-1", "")
+	require.NoError(t, err, "ListPinnedMessages after source id population")
+	require.Len(t, pins, 1)
+	assert.Equal(t, int64(1001), pins[0].MessageID)
+
+	require.NoError(t, store.UnpinMessage("cur-pin-1", 1001), "UnpinMessage")
 	pins, err = store.ListPinnedMessages(ctx, "cur-pin-1", "")
 	require.NoError(t, err, "ListPinnedMessages after unpin")
 	assert.Empty(t, pins)

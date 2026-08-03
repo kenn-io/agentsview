@@ -79,10 +79,7 @@ func (s *BunStore) view(
 func (s *BunStore) consistentView(
 	ctx context.Context, fn func(bun.IDB) error,
 ) error {
-	if backend, ok := s.backend.(bunConsistentViewer); ok {
-		return backend.ConsistentView(ctx, fn)
-	}
-	return s.view(ctx, fn)
+	return s.backend.ConsistentView(ctx, fn)
 }
 
 func (s *BunStore) update(
