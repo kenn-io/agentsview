@@ -1681,12 +1681,16 @@ func restorePinsTx(
 			continue
 		}
 		if preserveLegacyByOrdinal {
+			// Explicit re-uploads define ordinal continuity for visible legacy
+			// rows, but a parser upgrade may insert hidden metadata at the old
+			// ordinal. Never move a user pin onto that system-only replacement.
 			if _, err := tx.Exec(`
 				INSERT OR IGNORE INTO pinned_messages
 					(session_id, message_id, ordinal, note, created_at)
 				SELECT ?, m.id, m.ordinal, ?, ?
 				FROM messages m
-				WHERE m.session_id = ? AND m.ordinal = ?`,
+				WHERE m.session_id = ? AND m.ordinal = ?
+					AND m.is_system = 0`,
 				sessionID, sp.note, sp.createdAt,
 				sessionID, sp.ordinal,
 			); err != nil {
