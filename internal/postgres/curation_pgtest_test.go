@@ -473,6 +473,66 @@ func TestRestorePinnedMessagesPreservesPinCreatedAfterSnapshot(t *testing.T) {
 	assert.Contains(t, byOrdinal, 1, "post-snapshot pin preserved")
 }
 
+func TestPinMessageSerializesWithSessionReplacement(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_pin_session_lock_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+	defer func() {
+		_, _ = pg.ExecContext(
+			context.Background(),
+			`DROP SCHEMA IF EXISTS `+schema+` CASCADE`,
+		)
+	}()
+
+	ctx := context.Background()
+	_, err = pg.ExecContext(ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+	_, err = pg.ExecContext(ctx, `
+		INSERT INTO sessions
+			(id, machine, project, agent, first_message,
+			 started_at, message_count, user_message_count)
+		VALUES
+			('pg-pin-session-lock', 'machine-a', 'proj-curation',
+			 'codex', 'session lock',
+			 '2026-05-01T00:00:00Z'::timestamptz, 1, 1);
+		INSERT INTO messages
+			(session_id, ordinal, role, content, timestamp,
+			 content_length, source_uuid)
+		VALUES
+			('pg-pin-session-lock', 0, 'user', 'message',
+			 '2026-05-01T00:00:00Z'::timestamptz, 7, 'uuid-message')`)
+	require.NoError(t, err, "seed session")
+
+	store, err := NewStore(pgURL, schema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+	store.pg.SetMaxOpenConns(1)
+	_, err = store.pg.ExecContext(ctx, `SET lock_timeout = '50ms'`)
+	require.NoError(t, err, "set lock timeout")
+
+	lockTx, err := pg.BeginTx(ctx, nil)
+	require.NoError(t, err, "begin lock tx")
+	require.NoError(t,
+		lockPinnedMessagesSession(ctx, lockTx, "pg-pin-session-lock"),
+		"lock session pins")
+
+	_, err = store.PinMessage("pg-pin-session-lock", 0, nil)
+	require.Error(t, err,
+		"pin mutation must wait while replacement owns the session lock")
+	assert.ErrorContains(t, err, "locking pg pins for session")
+	require.NoError(t, lockTx.Rollback(), "release session lock")
+
+	_, err = store.pg.ExecContext(ctx, `SET lock_timeout = 0`)
+	require.NoError(t, err, "clear lock timeout")
+	pinID, err := store.PinMessage("pg-pin-session-lock", 0, nil)
+	require.NoError(t, err, "PinMessage after replacement lock")
+	assert.NotZero(t, pinID, "PinMessage after replacement lock")
+}
+
 func TestReconcilePinnedMessagesPrefersCurrentTargetPin(t *testing.T) {
 	pgURL := testPGURL(t)
 

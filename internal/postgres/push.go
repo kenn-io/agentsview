@@ -2548,6 +2548,9 @@ func (s *Sync) pushMessages(
 		)
 	}
 	if localCount == 0 {
+		if err := lockPinnedMessagesSession(ctx, tx, sessionID); err != nil {
+			return 0, err
+		}
 		savedPins, err := snapshotPinnedMessages(ctx, tx, sessionID)
 		if err != nil {
 			return 0, err
@@ -2804,6 +2807,9 @@ func (s *Sync) pushMessages(
 		}
 	}
 
+	if err := lockPinnedMessagesSession(ctx, tx, sessionID); err != nil {
+		return 0, err
+	}
 	savedPins, err := snapshotPinnedMessages(ctx, tx, sessionID)
 	if err != nil {
 		return 0, err
