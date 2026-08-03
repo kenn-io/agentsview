@@ -485,6 +485,29 @@ func TestOpenCodeProviderStorageSourceMethods(t *testing.T) {
 	assert.Equal(t, "global", removed[0].ProjectHint)
 }
 
+func TestOpenCodeFindSourceHonorsBoundedPhysicalBinding(t *testing.T) {
+	dbPath, seeder, db := newTestDB(t)
+	root := filepath.Dir(dbPath)
+	seeder.AddProject("project", root)
+	seeder.AddSession("same", "project", "", "same", 1, 1)
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	binder, ok := provider.(OpenCodeBoundedSourceBinder)
+	require.True(t, ok)
+	_, found, err := binder.FindBoundedSource(context.Background(), OpenCodeBoundedSourceRequest{
+		RawSessionID: "same", PhysicalDBPath: dbPath, ProviderScope: root,
+	})
+	require.NoError(t, err)
+	assert.True(t, found)
+	_, found, err = binder.FindBoundedSource(context.Background(), OpenCodeBoundedSourceRequest{
+		RawSessionID: "same", PhysicalDBPath: filepath.Join(t.TempDir(), "other.db"), ProviderScope: root,
+	})
+	require.NoError(t, err)
+	assert.False(t, found, "a raw ID must not cross the admitted physical database")
+	_ = db
+}
+
 func TestOpenCodeProviderSQLiteSourceMethods(t *testing.T) {
 
 	fixture := openCodeSQLiteProviderReadFixture(t)

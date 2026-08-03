@@ -2425,6 +2425,7 @@ func syncWatchBatch(
 	full := batch.FullSync
 	reconcileRoots := append([]string(nil), batch.ReconcileRoots...)
 	reconcileGroups := append([]sync.ProviderRootsGroup(nil), batch.ReconcileGroups...)
+	groupedRoots := providerGroupRoots(reconcileGroups)
 	lostEvents := batch.LostEvents
 	type renameOwner struct {
 		path  string
@@ -2508,7 +2509,7 @@ func syncWatchBatch(
 			retry := sync.WatchBatch{FullSync: full, LostEvents: lostEvents, ReconcileGroups: reconcileGroups}
 			if !full {
 				retry.Paths = append([]string(nil), paths...)
-				retry.ReconcileRoots = deduplicateStrings(reconcileRoots)
+				retry.ReconcileRoots = removeGroupedRoots(deduplicateStrings(reconcileRoots), groupedRoots)
 			}
 			return &watchReconciliationError{
 				cause: err,
@@ -2536,7 +2537,7 @@ func syncWatchBatch(
 		// discovery, and tombstone every baselined session beneath it.
 		// Unavailable scopes are deferred to their polling probes instead; a
 		// failed recovery retries as a full batch so availability is re-probed.
-		fullRoots := probeScope().available
+		fullRoots := removeGroupedRoots(probeScope().available, groupedRoots)
 		if len(fullRoots) == 0 {
 			return nil
 		}
@@ -2551,7 +2552,7 @@ func syncWatchBatch(
 		}
 		return nil
 	}
-	roots := deduplicateStrings(reconcileRoots)
+	roots := removeGroupedRoots(deduplicateStrings(reconcileRoots), groupedRoots)
 	if len(roots) > 0 {
 		var err error
 		if lostEvents {
@@ -2564,6 +2565,43 @@ func syncWatchBatch(
 		}
 	}
 	return nil
+}
+
+func providerGroupRoots(groups []sync.ProviderRootsGroup) map[string]struct{} {
+	roots := make(map[string]struct{})
+	for _, group := range groups {
+		for _, root := range group.Roots {
+			roots[root] = struct{}{}
+		}
+	}
+	return roots
+}
+
+func removeGroupedRoots(roots []string, grouped map[string]struct{}) []string {
+	if len(grouped) == 0 {
+		return roots
+	}
+	return slices.DeleteFunc(roots, func(root string) bool {
+		for groupedRoot := range grouped {
+			if pathsOverlap(root, groupedRoot) {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+func pathsOverlap(a, b string) bool {
+	a = filepath.Clean(a)
+	b = filepath.Clean(b)
+	if a == b {
+		return true
+	}
+	under := func(path, root string) bool {
+		rel, err := filepath.Rel(root, path)
+		return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	}
+	return under(a, b) || under(b, a)
 }
 
 func removeString(values []string, remove string) []string {

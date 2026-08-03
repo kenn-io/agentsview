@@ -235,7 +235,7 @@ func runSyncWorkerStartup(
 				}
 			} else {
 				repairedLease = request.Lease
-				auditErr = engine.ReconcileBoundedCoverageLease(ctx, request.Lease, request.Reason)
+				auditErr = engine.ReconcileBoundedCoverageSourceLease(ctx, request.Lease, request.Reason)
 			}
 		} else if strings.HasPrefix(mode, "audit-scoped-v2|") {
 			encoded := strings.TrimPrefix(mode, "audit-scoped-v2|")

@@ -33,6 +33,16 @@ import (
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
+func TestRemoveGroupedRootsExcludesOverlappingGenericRoots(t *testing.T) {
+	groupRoot := filepath.Join(t.TempDir(), "provider", "nested")
+	grouped := providerGroupRoots([]agentsync.ProviderRootsGroup{{
+		Agent: parser.AgentOpenCode,
+		Roots: []string{groupRoot},
+	}})
+	roots := []string{groupRoot, filepath.Dir(groupRoot), filepath.Join(groupRoot, "child"), filepath.Join(filepath.Dir(groupRoot), "sibling")}
+	assert.Equal(t, []string{filepath.Join(filepath.Dir(groupRoot), "sibling")}, removeGroupedRoots(roots, grouped))
+}
+
 func TestRuntimeWarningHelper(t *testing.T) {
 	logOutput := captureLogOutput(t)
 	var visible bytes.Buffer

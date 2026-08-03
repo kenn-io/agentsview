@@ -20,6 +20,36 @@ import (
 	agentsync "go.kenn.io/agentsview/internal/sync"
 )
 
+func TestPollingOwnershipRebuildPreservesOverlapAndNativeAdmission(t *testing.T) {
+	coordinator := &sharedUnwatchedPollCoordinator{
+		coverageState: make(map[string]*boundedCoverageState),
+		ownedBindings: map[string]map[string]struct{}{
+			"one": {"shared": {}, "one-only": {}},
+			"two": {"shared": {}},
+		},
+	}
+	coordinator.coverageState["shared"] = &boundedCoverageState{}
+	coordinator.coverageState["one-only"] = &boundedCoverageState{}
+	coordinator.coverageState["native"] = &boundedCoverageState{nativeAdmitted: true}
+	coordinator.coverageState["retired"] = &boundedCoverageState{}
+	coordinator.rebuildPollingOwnershipLocked()
+
+	assert.True(t, coordinator.coverageState["shared"].pollOwned)
+	assert.True(t, coordinator.coverageState["one-only"].pollOwned)
+	assert.False(t, coordinator.coverageState["native"].pollOwned)
+	_, exists := coordinator.coverageState["retired"]
+	assert.False(t, exists)
+
+	delete(coordinator.ownedBindings, "one")
+	coordinator.rebuildPollingOwnershipLocked()
+	assert.True(t, coordinator.coverageState["shared"].pollOwned)
+	delete(coordinator.ownedBindings, "two")
+	coordinator.rebuildPollingOwnershipLocked()
+	if state := coordinator.coverageState["shared"]; state != nil {
+		assert.False(t, state.pollOwned)
+	}
+}
+
 // reconcileGroupsSequentially adapts a per-group fake to the grouped syncer
 // interface, mirroring the engine contract pinned by
 // TestReconcileProviderRootsGrouped*: every group is attempted in order and

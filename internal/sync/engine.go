@@ -316,10 +316,13 @@ type Engine struct {
 	blockedResultCategories map[string]bool
 	cwdFilter               cwdPrefixFilter
 	syncMu                  gosync.Mutex // serializes all sync operations
-	mu                      gosync.RWMutex
-	lastSync                time.Time
-	lastSyncStats           SyncStats
-	currentProgress         *Progress
+	// boundedCoverageGenerations is owned only by syncMu. It is the engine's
+	// acceptance point for replacement and apply, not coordinator metadata.
+	boundedCoverageGenerations map[string]uint64
+	mu                         gosync.RWMutex
+	lastSync                   time.Time
+	lastSyncStats              SyncStats
+	currentProgress            *Progress
 	// skipCache tracks paths that should be skipped on
 	// subsequent syncs, keyed by path with the file mtime
 	// at time of caching. Covers parse errors and
@@ -549,31 +552,32 @@ func NewEngine(
 	}
 
 	e := &Engine{
-		db:                      database,
-		stat:                    os.Stat,
-		lstat:                   os.Lstat,
-		agentDirs:               dirs,
-		sourceMachines:          sourceMachines,
-		machine:                 cfg.Machine,
-		blockedResultCategories: blockedCategorySet(cfg.BlockedResultCategories),
-		cwdFilter:               newCwdPrefixFilter(cfg.IncludeCwdPrefixes),
-		skipCache:               skipCache,
-		skipFingerprints:        make(map[string]string),
-		skipHashKeys:            skipHashKeys,
-		s3CodexIndexCache:       make(map[string]s3CodexIndexSnapshot),
-		ephemeral:               cfg.Ephemeral,
-		idPrefix:                cfg.IDPrefix,
-		pathRewriter:            cfg.PathRewriter,
-		emitter:                 cfg.Emitter,
-		providerFactories:       providerFactoryMap(providerFactories),
-		providerMigrationModes:  providerModes,
-		providerWatchRoots:      make(map[parser.AgentType][]parser.WatchRoot),
-		projectIdentityCache:    make(map[string]projectIdentityCacheEntry),
-		projectIdentityWritten:  make(map[string]struct{}),
-		startupMaintenanceReady: make(chan struct{}),
-		startupReconciledReady:  make(chan struct{}),
-		startupAttemptReady:     make(chan struct{}),
-		onStartupReconciled:     cfg.OnStartupReconciled,
+		db:                         database,
+		stat:                       os.Stat,
+		lstat:                      os.Lstat,
+		agentDirs:                  dirs,
+		sourceMachines:             sourceMachines,
+		machine:                    cfg.Machine,
+		blockedResultCategories:    blockedCategorySet(cfg.BlockedResultCategories),
+		cwdFilter:                  newCwdPrefixFilter(cfg.IncludeCwdPrefixes),
+		skipCache:                  skipCache,
+		boundedCoverageGenerations: make(map[string]uint64),
+		skipFingerprints:           make(map[string]string),
+		skipHashKeys:               skipHashKeys,
+		s3CodexIndexCache:          make(map[string]s3CodexIndexSnapshot),
+		ephemeral:                  cfg.Ephemeral,
+		idPrefix:                   cfg.IDPrefix,
+		pathRewriter:               cfg.PathRewriter,
+		emitter:                    cfg.Emitter,
+		providerFactories:          providerFactoryMap(providerFactories),
+		providerMigrationModes:     providerModes,
+		providerWatchRoots:         make(map[parser.AgentType][]parser.WatchRoot),
+		projectIdentityCache:       make(map[string]projectIdentityCacheEntry),
+		projectIdentityWritten:     make(map[string]struct{}),
+		startupMaintenanceReady:    make(chan struct{}),
+		startupReconciledReady:     make(chan struct{}),
+		startupAttemptReady:        make(chan struct{}),
+		onStartupReconciled:        cfg.OnStartupReconciled,
 		reconciliationSpoolFactory: func(path string) (reconciliationSpoolStore, error) {
 			return newReconciliationSpool(path)
 		},
@@ -1047,6 +1051,31 @@ func (e *Engine) SyncSourceRefsContext(
 	)
 }
 
+func (e *Engine) syncSourceRefsContextLocked(
+	ctx context.Context, sources []parser.SourceRef,
+) (SyncStats, error) {
+	if e.refuseWriteInForceParse("SyncSourceRefs") || len(sources) == 0 {
+		return SyncStats{}, nil
+	}
+	files := make([]parser.DiscoveredFile, 0, len(sources))
+	paths := make([]string, 0, len(sources))
+	for i := range sources {
+		source := sources[i]
+		if source.Provider == "" || source.DisplayPath == "" {
+			return SyncStats{}, fmt.Errorf("bounded coverage source %q is incomplete", source.Key)
+		}
+		files = append(files, parser.DiscoveredFile{
+			Path: source.DisplayPath, Agent: source.Provider,
+			ProviderSource: &source, ProviderProcess: true,
+		})
+		paths = append(paths, source.DisplayPath)
+	}
+	stats, _, err := e.syncDiscoveredFilesContextLocked(
+		ctx, files, nil, nil, e.captureSQLiteContainerStates(paths),
+	)
+	return stats, err
+}
+
 func (e *Engine) syncDiscoveredFilesContext(
 	ctx context.Context,
 	files []parser.DiscoveredFile,
@@ -1054,21 +1083,25 @@ func (e *Engine) syncDiscoveredFilesContext(
 	classificationErr error,
 	preContainerStates map[string]parser.SQLiteContainerState,
 ) (SyncStats, error) {
-
 	e.syncMu.Lock()
-	// Defers run LIFO: the emit closure (declared first) runs AFTER
-	// syncMu.Unlock, so an Emitter implementation cannot widen the
-	// critical section or deadlock by re-entering sync code. The
-	// stats variable is captured by the closure and populated below.
+	stats, tombstoned, err := e.syncDiscoveredFilesContextLocked(ctx, files, missingPaths, classificationErr, preContainerStates)
+	e.syncMu.Unlock()
+	if stats.Synced > 0 || tombstoned > 0 || stats.sourceMissingTombstoned > 0 {
+		e.emit("sessions")
+	}
+	return stats, err
+}
+
+func (e *Engine) syncDiscoveredFilesContextLocked(
+	ctx context.Context,
+	files []parser.DiscoveredFile,
+	missingPaths []string,
+	classificationErr error,
+	preContainerStates map[string]parser.SQLiteContainerState,
+) (SyncStats, int, error) {
+
 	var stats SyncStats
 	var tombstoned int
-	defer func() {
-		if stats.Synced > 0 || tombstoned > 0 ||
-			stats.sourceMissingTombstoned > 0 {
-			e.emit("sessions")
-		}
-	}()
-	defer e.syncMu.Unlock()
 	defer e.clearCurrentProgress()
 	e.resetS3CodexIndexCache()
 
@@ -1096,7 +1129,7 @@ func (e *Engine) syncDiscoveredFilesContext(
 		var err error
 		tombstoned, err = e.tombstoneMissingWatchSourcesLocked(ctx, missingPaths, nil)
 		if err != nil {
-			return stats, fmt.Errorf("watcher source tombstone: %w", err)
+			return stats, tombstoned, fmt.Errorf("watcher source tombstone: %w", err)
 		}
 	}
 	e.mu.Lock()
@@ -1110,15 +1143,15 @@ func (e *Engine) syncDiscoveredFilesContext(
 		)
 	}
 	if err := errors.Join(classificationErr, ctx.Err()); err != nil {
-		return stats, err
+		return stats, tombstoned, err
 	}
 	if !complete {
-		return stats, fmt.Errorf(
+		return stats, tombstoned, fmt.Errorf(
 			"changed-path sync incomplete: %d source or archive failures",
 			stats.Failed,
 		)
 	}
-	return stats, nil
+	return stats, tombstoned, nil
 }
 
 // omitMissingPersistentContainerPaths drops missing changed paths that are

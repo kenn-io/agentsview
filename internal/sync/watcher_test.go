@@ -17,9 +17,36 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 const watcherTestTimeout = 5 * time.Second
+
+func TestPendingWatchBatchKeepsProviderGroupsIndependentFromGenericRoots(t *testing.T) {
+	pending := newPendingWatchBatch(defaultWatchBatchMaxEntries, defaultWatchBatchMaxPathBytes)
+	pending.AddReconcileGroup("opencode", `C:\provider\root`)
+	pending.AddFullSync()
+
+	batch, ok := pending.Take()
+	require.True(t, ok)
+	require.True(t, batch.FullSync)
+	require.Len(t, batch.ReconcileGroups, 1)
+	assert.Empty(t, batch.ReconcileRoots)
+	assert.Equal(t, parser.AgentType("opencode"), batch.ReconcileGroups[0].Agent)
+	assert.Equal(t, []string{`C:\provider\root`}, batch.ReconcileGroups[0].Roots)
+}
+
+func TestPendingWatchBatchFullSyncAfterRenameOverflowKeepsProviderGroups(t *testing.T) {
+	pending := newPendingWatchBatch(2, defaultWatchBatchMaxPathBytes)
+	pending.AddReconcileGroup("opencode", `C:\provider\root`)
+	pending.AddRename(WatchRename{Path: `C:\provider\root\nested\rename`, Root: `C:\provider\root`})
+
+	batch, ok := pending.TakeWithRootAgents(nil)
+	require.True(t, ok)
+	require.True(t, batch.FullSync)
+	require.Len(t, batch.ReconcileGroups, 1)
+	assert.Equal(t, []string{`C:\provider\root`}, batch.ReconcileGroups[0].Roots)
+}
 
 func requireReceiveWithin[T any](t *testing.T, ch <-chan T, timeout time.Duration) T {
 	t.Helper()

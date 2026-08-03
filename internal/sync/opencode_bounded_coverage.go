@@ -75,9 +75,15 @@ type BoundedCoverageResolver interface {
 type BoundedCoverageLeaseResolver interface {
 	AdmitBoundedCoverageLease(context.Context, BoundedCoverageBinding) (*BoundedCoverageLease, error)
 	DrainBoundedCoverageLease(context.Context, *BoundedCoverageLease, parser.OpenCodeCoverageCheckpoint) (parser.OpenCodeFeedResult, []parser.SourceRef, error)
-	ApplyBoundedCoverageSourcesLease(context.Context, *BoundedCoverageLease, []parser.SourceRef) (SyncStats, error)
-	ApplyBoundedCoverageSourcesLeaseCommit(context.Context, *BoundedCoverageLease, []parser.SourceRef, func(SyncStats) error) error
+	TransitionBoundedCoverageRequest(context.Context, *BoundedCoverageLease, []parser.SourceRef, parser.OpenCodeCoverageCheckpoint, bool) (BoundedCoverageTransitionResult, error)
 	ReconcileBoundedCoverageLease(context.Context, *BoundedCoverageLease, string) error
+	ReconcileBoundedCoverageSourceLease(context.Context, *BoundedCoverageLease, string) error
+}
+
+type BoundedCoverageTransitionResult struct {
+	Stats      SyncStats
+	Checkpoint parser.OpenCodeCoverageCheckpoint
+	Generation uint64
 }
 
 // BoundedCoverageAdmitter owns the row-zero admission transition. It is kept
@@ -255,7 +261,13 @@ func (e *Engine) DrainBoundedCoverage(
 	}
 	sources := make([]parser.SourceRef, 0, len(result.ReadyIDs))
 	for _, id := range result.ReadyIDs {
-		source, found, err := provider.FindSource(ctx, parser.FindSourceRequest{RawSessionID: id})
+		binder, ok := provider.(parser.OpenCodeBoundedSourceBinder)
+		if !ok {
+			return result, nil, errors.New("provider does not support exact bounded source binding")
+		}
+		source, found, err := binder.FindBoundedSource(ctx, parser.OpenCodeBoundedSourceRequest{
+			RawSessionID: id, PhysicalDBPath: binding.PhysicalDBPath, ProviderScope: binding.Scope,
+		})
 		if err != nil {
 			return result, nil, err
 		}
@@ -364,32 +376,45 @@ func (e *Engine) DrainBoundedCoverageLease(
 	return result, sources, nil
 }
 
-func (e *Engine) ApplyBoundedCoverageSourcesLease(
+// TransitionBoundedCoverageRequest is the sole engine-owned bounded lifecycle
+// transition. Replacement and apply serialize on syncMu, so a retired request
+// is rejected before source writes and an accepted write returns its commit.
+func (e *Engine) TransitionBoundedCoverageRequest(
 	ctx context.Context, lease *BoundedCoverageLease, sources []parser.SourceRef,
-) (SyncStats, error) {
-	if err := e.validateBoundedCoveragePhysicalLease(lease); err != nil {
-		return SyncStats{}, err
+	checkpoint parser.OpenCodeCoverageCheckpoint,
+	replace bool,
+) (BoundedCoverageTransitionResult, error) {
+	if lease == nil {
+		return BoundedCoverageTransitionResult{}, errors.New("nil bounded coverage lease")
 	}
-	return e.ApplyBoundedCoverageSources(ctx, sources)
-}
-
-// ApplyBoundedCoverageSourcesLeaseCommit keeps the coordinator's checkpoint
-// publication inside the same fence as the archive write.
-func (e *Engine) ApplyBoundedCoverageSourcesLeaseCommit(
-	ctx context.Context, lease *BoundedCoverageLease, sources []parser.SourceRef,
-	commit func(SyncStats) error,
-) error {
-	if err := e.validateBoundedCoveragePhysicalLease(lease); err != nil {
-		return err
+	key := boundedCoverageBindingKey(lease.Provider, lease.PhysicalDBPath, "")
+	e.syncMu.Lock()
+	defer e.syncMu.Unlock()
+	current := e.boundedCoverageGenerations[key]
+	if replace {
+		if lease.Generation == 0 || lease.Generation <= current {
+			return BoundedCoverageTransitionResult{}, fmt.Errorf("bounded coverage generation %d is retired", lease.Generation)
+		}
+		if err := e.validateBoundedCoveragePhysicalLease(lease); err != nil {
+			return BoundedCoverageTransitionResult{}, err
+		}
+		e.boundedCoverageGenerations[key] = lease.Generation
+		return BoundedCoverageTransitionResult{Checkpoint: lease.AdmissionCheckpoint, Generation: lease.Generation}, nil
 	}
-	stats, err := e.ApplyBoundedCoverageSources(ctx, sources)
+	if current != lease.Generation {
+		if current != 0 {
+			return BoundedCoverageTransitionResult{}, fmt.Errorf("bounded coverage generation %d is retired", lease.Generation)
+		}
+		e.boundedCoverageGenerations[key] = lease.Generation
+	}
+	if err := e.validateBoundedCoveragePhysicalLease(lease); err != nil {
+		return BoundedCoverageTransitionResult{}, err
+	}
+	stats, err := e.syncSourceRefsContextLocked(ctx, sources)
 	if err != nil {
-		return err
+		return BoundedCoverageTransitionResult{}, err
 	}
-	if commit != nil {
-		return commit(stats)
-	}
-	return nil
+	return BoundedCoverageTransitionResult{Stats: stats, Checkpoint: checkpoint, Generation: lease.Generation}, nil
 }
 
 func (e *Engine) ReconcileBoundedCoverageLease(
@@ -407,7 +432,48 @@ func (e *Engine) ReconcileBoundedCoverageLease(
 	if err := e.validateBoundedCoverageLease(lease); err != nil {
 		return err
 	}
-	return e.ReconcileProviderRoots(ctx, lease.Provider, []string{lease.ExactProviderScope})
+	return e.ReconcileBoundedCoverageSourceLease(ctx, lease, reason)
+}
+
+// ReconcileBoundedCoverageSourceLease repairs only the admitted physical
+// container; generic provider-root reconciliation would widen the request.
+func (e *Engine) ReconcileBoundedCoverageSourceLease(
+	ctx context.Context, lease *BoundedCoverageLease, reason string,
+) error {
+	if reason == "" {
+		return errors.New("bounded coverage source repair reason is empty")
+	}
+	if err := e.validateBoundedCoverageLease(lease); err != nil {
+		return err
+	}
+	factory := e.providerFactories[lease.Provider]
+	if factory == nil {
+		return fmt.Errorf("bounded coverage provider %q is unavailable", lease.Provider)
+	}
+	provider := factory.NewProvider(parser.ProviderConfig{Roots: []string{lease.ExactProviderScope}, Machine: e.machine})
+	sources, err := provider.SourcesForChangedPath(ctx, parser.ChangedPathRequest{
+		Path: lease.PhysicalDBPath, WatchRoot: lease.ExactProviderScope,
+	})
+	if err != nil {
+		return err
+	}
+	if len(sources) == 0 {
+		return nil
+	}
+	for _, source := range sources {
+		path := source.DisplayPath
+		if dbPath, _, virtual := strings.Cut(source.DisplayPath, "#"); virtual {
+			path = dbPath
+		}
+		physical, err := filepath.EvalSymlinks(path)
+		if err != nil || filepath.Clean(physical) != filepath.Clean(lease.PhysicalDBPath) {
+			return fmt.Errorf("bounded coverage source identity mismatch: %s", source.DisplayPath)
+		}
+	}
+	_, err = e.TransitionBoundedCoverageRequest(
+		ctx, lease, sources, lease.AdmissionCheckpoint, false,
+	)
+	return err
 }
 
 func withinOrEqual(path, root string) bool {

@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func TestBoundedCoverageFileIdentityIgnoresMutableObservations(t *testing.T) {
@@ -51,4 +53,33 @@ func TestBoundedCoverageUsesEngineWriteOwner(t *testing.T) {
 	engine.syncMu.Unlock()
 	<-acquired
 	<-done
+}
+
+func TestBoundedCoverageTransitionRetiresBeforeApply(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "opencode.db")
+	if err := os.WriteFile(path, []byte("db"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := &Engine{boundedCoverageGenerations: make(map[string]uint64)}
+	lease := &BoundedCoverageLease{
+		Binding:  BoundedCoverageBinding{Agent: parser.AgentOpenCode, PhysicalDBPath: path, Generation: 1},
+		Provider: parser.AgentOpenCode, PhysicalDBPath: path, Generation: 1,
+		FileIdentity: boundedCoverageFileIdentity(path, info), fileInfo: info,
+	}
+	if _, err := engine.TransitionBoundedCoverageRequest(t.Context(), lease, nil, parser.OpenCodeCoverageCheckpoint{}, true); err != nil {
+		t.Fatal(err)
+	}
+	retired := *lease
+	retired.Generation = 2
+	retired.Binding.Generation = 2
+	if _, err := engine.TransitionBoundedCoverageRequest(t.Context(), &retired, nil, parser.OpenCodeCoverageCheckpoint{}, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.TransitionBoundedCoverageRequest(t.Context(), lease, nil, parser.OpenCodeCoverageCheckpoint{}, false); err == nil {
+		t.Fatal("retired generation was accepted for apply")
+	}
 }

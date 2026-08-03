@@ -81,6 +81,16 @@ type openCodeFormatProvider struct {
 	sources openCodeFormatSourceSet
 }
 
+type OpenCodeBoundedSourceRequest struct {
+	RawSessionID   string
+	PhysicalDBPath string
+	ProviderScope  string
+}
+
+type OpenCodeBoundedSourceBinder interface {
+	FindBoundedSource(context.Context, OpenCodeBoundedSourceRequest) (SourceRef, bool, error)
+}
+
 func (p *openCodeFormatProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 	return p.sources.Discover(ctx)
 }
@@ -155,7 +165,13 @@ func (p *openCodeFormatProvider) FindSource(
 	req FindSourceRequest,
 ) (SourceRef, bool, error) {
 	req = ProviderFindRequestWithRawSessionID(p.Def, req)
-	return p.sources.FindSource(ctx, req)
+	return p.sources.findSource(ctx, req, "", "")
+}
+
+func (p *openCodeFormatProvider) FindBoundedSource(
+	ctx context.Context, req OpenCodeBoundedSourceRequest,
+) (SourceRef, bool, error) {
+	return p.sources.findSource(ctx, FindSourceRequest{RawSessionID: req.RawSessionID}, req.PhysicalDBPath, req.ProviderScope)
 }
 
 func (p *openCodeFormatProvider) Fingerprint(
@@ -877,6 +893,12 @@ func (s openCodeFormatSourceSet) FindSource(
 	ctx context.Context,
 	req FindSourceRequest,
 ) (SourceRef, bool, error) {
+	return s.findSource(ctx, req, "", "")
+}
+
+func (s openCodeFormatSourceSet) findSource(
+	ctx context.Context, req FindSourceRequest, physicalDBPath, providerScope string,
+) (SourceRef, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return SourceRef{}, false, err
 	}
@@ -886,6 +908,9 @@ func (s openCodeFormatSourceSet) FindSource(
 		}
 		for _, root := range s.roots {
 			if source, ok := s.sourceRef(root, path, true); ok {
+				if !s.matchesBoundedSource(source, physicalDBPath, providerScope) {
+					continue
+				}
 				return source, true, nil
 			}
 		}
@@ -899,10 +924,48 @@ func (s openCodeFormatSourceSet) FindSource(
 			continue
 		}
 		if source, ok := s.sourceRef(root, path, false); ok {
+			if !s.matchesBoundedSource(source, physicalDBPath, providerScope) {
+				continue
+			}
 			return source, true, nil
 		}
 	}
 	return SourceRef{}, false, nil
+}
+
+func (s openCodeFormatSourceSet) matchesBoundedSource(source SourceRef, physicalDBPath, providerScope string) bool {
+	if physicalDBPath == "" && providerScope == "" {
+		return true
+	}
+	if providerScope != "" {
+		matched := false
+		for _, root := range s.roots {
+			if filepath.Clean(root) == filepath.Clean(providerScope) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	if physicalDBPath == "" {
+		return true
+	}
+	path, ok := s.pathFromSource(source)
+	if !ok {
+		return false
+	}
+	dbPath := path
+	if resolved, _, virtual := s.spec.parseVirtual(path); virtual {
+		dbPath = resolved
+	}
+	physical, err := filepath.EvalSymlinks(dbPath)
+	if err != nil {
+		return false
+	}
+	requested, err := filepath.EvalSymlinks(physicalDBPath)
+	return err == nil && filepath.Clean(physical) == filepath.Clean(requested)
 }
 
 // sourceMtimeWithComposite resolves a source's change signal when discovery did

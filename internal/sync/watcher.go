@@ -230,7 +230,6 @@ func (p *pendingWatchBatch) AddReconcileGroup(
 		return
 	}
 	p.groups[agent][root] = struct{}{}
-	p.AddReconcileRoot(root)
 }
 
 func (p *pendingWatchBatch) AddBackendEvent(event backendEvent) bool {
@@ -394,7 +393,6 @@ func (p *pendingWatchBatch) makeFullSync(lostEvents bool) {
 	clear(p.renames)
 	clear(p.backendRenames)
 	clear(p.roots)
-	clear(p.groups)
 	clear(p.strings)
 	p.pathBytes = 0
 	p.fullSync = true
@@ -416,9 +414,9 @@ func (p *pendingWatchBatch) TakeWithRootAgents(
 		lostEvents := p.lostEvents
 		p.lostEvents = false
 		tokens := p.takeLifecycleTokens()
-		return WatchBatch{
-			FullSync: true, LostEvents: lostEvents, lifecycleTokens: tokens,
-		}, true
+		groups := p.takeProviderGroups()
+		return WatchBatch{FullSync: true, LostEvents: lostEvents,
+			ReconcileGroups: groups, lifecycleTokens: tokens}, true
 	}
 	for rename := range p.backendRenames {
 		agents := []string{""}
@@ -440,8 +438,10 @@ func (p *pendingWatchBatch) TakeWithRootAgents(
 				lostEvents := p.lostEvents
 				p.lostEvents = false
 				tokens := p.takeLifecycleTokens()
+				groups := p.takeProviderGroups()
 				return WatchBatch{
-					FullSync: true, LostEvents: lostEvents, lifecycleTokens: tokens,
+					FullSync: true, LostEvents: lostEvents, ReconcileGroups: groups,
+					lifecycleTokens: tokens,
 				}, true
 			}
 		}
@@ -509,6 +509,28 @@ func (p *pendingWatchBatch) TakeWithRootAgents(
 		ReconcileGroups: groups,
 		LostEvents:      lostEvents, lifecycleTokens: tokens,
 	}, true
+}
+
+func (p *pendingWatchBatch) takeProviderGroups() []ProviderRootsGroup {
+	if len(p.groups) == 0 {
+		return nil
+	}
+	agents := make([]parser.AgentType, 0, len(p.groups))
+	for agent := range p.groups {
+		agents = append(agents, agent)
+	}
+	slices.SortFunc(agents, func(a, b parser.AgentType) int { return strings.Compare(string(a), string(b)) })
+	groups := make([]ProviderRootsGroup, 0, len(agents))
+	for _, agent := range agents {
+		roots := make([]string, 0, len(p.groups[agent]))
+		for root := range p.groups[agent] {
+			roots = append(roots, root)
+		}
+		slices.Sort(roots)
+		groups = append(groups, ProviderRootsGroup{Agent: agent, Roots: roots})
+	}
+	clear(p.groups)
+	return groups
 }
 
 func (p *pendingWatchBatch) takeLifecycleTokens() []backendLifecycleToken {
@@ -1385,7 +1407,8 @@ func callbackRetryBatch(err error) (WatchBatch, bool) {
 	}
 	retry := retryErr.WatchRetryBatch()
 	if retry.FullSync {
-		return WatchBatch{FullSync: true, LostEvents: retry.LostEvents}, true
+		return WatchBatch{FullSync: true, LostEvents: retry.LostEvents,
+			ReconcileGroups: cloneProviderRootsGroups(retry.ReconcileGroups)}, true
 	}
 	if len(retry.Paths) == 0 && len(retry.ReconcileRoots) == 0 {
 		if len(retry.ReconcileGroups) == 0 {
