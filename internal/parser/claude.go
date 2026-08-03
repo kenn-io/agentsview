@@ -2080,6 +2080,13 @@ func isCountedClaudeUserTurn(entry dagEntry) bool {
 	if skip || strings.TrimSpace(text) == "" {
 		return false
 	}
+	if _, _, remainder, ok := splitLeadingClaudeIDEEnvelope(text); ok {
+		remainder, skip = preprocessClaudeUserText(remainder)
+		if skip || strings.TrimSpace(remainder) == "" {
+			return false
+		}
+		text = remainder
+	}
 	return !isClaudeSystemMessage(text)
 }
 
