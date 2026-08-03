@@ -54,7 +54,7 @@ func TestBunStoreIdentityContract(t *testing.T) {
 				t.Context(), store.bun, "bun-identity-archive-a", "bun-identity-salt-a",
 			)
 			require.NoError(t, err)
-			return store.BunStore, fixture
+			return store, fixture
 		},
 	})
 }

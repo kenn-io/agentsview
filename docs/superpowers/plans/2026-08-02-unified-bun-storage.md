@@ -1117,8 +1117,10 @@ ______________________________________________________________________
     Port identity observations/snapshots, inventory aggregation, project rules,
     and worktree candidates to canonical source-scoped Bun rows. Keep path
     normalization and identity merge algorithms in their existing pure helpers;
-    only database access moves. Task 11 owns the final application-write
-    centralization and removal of trigger-based publication bookkeeping.
+    only database access moves. Opaque project selectors use the complete
+    canonical `source_archives` aggregate scope on every backend; SQLite does not
+    retain a local-only selector-key path. Task 11 owns the final application-
+    write centralization and removal of trigger-based publication bookkeeping.
 
 - [ ] **Step 4: Implement shared curation, insight, and session mutations**
 

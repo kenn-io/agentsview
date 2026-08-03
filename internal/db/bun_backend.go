@@ -17,6 +17,10 @@ type BunBackend interface {
 	Update(context.Context, func(bun.IDB) error) error
 }
 
+type bunSessionFullHydrator interface {
+	HydrateSessionFull(context.Context, bun.IDB, *Session) error
+}
+
 // WriteOperation identifies a separately authorized family of mutations.
 type WriteOperation uint8
 
@@ -74,6 +78,27 @@ func (*sqliteBunBackend) SessionVersion(
 	ctx context.Context, store bun.IDB, id string,
 ) (int, int64, error) {
 	return FileSessionVersion(ctx, store, id)
+}
+
+func (*sqliteBunBackend) HydrateSessionFull(
+	ctx context.Context, store bun.IDB, session *Session,
+) error {
+	var operational struct {
+		NextOrdinal          int     `bun:"next_ordinal"`
+		LastEntryUUID        *string `bun:"last_entry_uuid"`
+		ClaudeLinearParse    *bool   `bun:"claude_linear_parse"`
+		LastWriteIncremental bool    `bun:"last_write_incremental"`
+	}
+	if err := store.NewSelect().Table("sessions").
+		Column("next_ordinal", "last_entry_uuid", "claude_linear_parse", "last_write_incremental").
+		Where("id = ?", session.ID).Scan(ctx, &operational); err != nil {
+		return err
+	}
+	session.NextOrdinal = operational.NextOrdinal
+	session.LastEntryUUID = operational.LastEntryUUID
+	session.ClaudeLinearParse = operational.ClaudeLinearParse
+	session.LastWriteIncremental = operational.LastWriteIncremental
+	return nil
 }
 
 func (b *sqliteBunBackend) View(
