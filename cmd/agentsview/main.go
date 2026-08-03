@@ -334,14 +334,18 @@ func runServe(cfg config.Config, opts serveOptions) {
 				// The serve ctx reaches watcher-driven syncs so SIGTERM can
 				// interrupt database reconciliation before Stop waits for it.
 				if resolver, ok := any(engine).(sync.BoundedCoverageResolver); ok {
+					batch = sync.CanonicalizeWatchBatch(batch)
+					originalBatch := batch
 					originalPaths := append([]string(nil), batch.Paths...)
 					bindings, remaining, err := resolver.BoundedCoverageBindingsForPaths(ctx, batch.Paths)
 					if err != nil {
-						return &WatchRetryError{cause: err, batch: sync.WatchBatch{Paths: originalPaths, FullSync: batch.FullSync, LostEvents: batch.LostEvents, ReconcileRoots: append([]string(nil), batch.ReconcileRoots...), ReconcileGroups: append([]sync.ProviderRootsGroup(nil), batch.ReconcileGroups...)}}
+						originalBatch.Paths = originalPaths
+						return &WatchRetryError{cause: err, batch: originalBatch}
 					}
 					admitted, err := unwatchedPoller.AdmitBoundedCoverage(ctx, bindings, true)
 					if err != nil {
-						return &WatchRetryError{cause: err, batch: sync.WatchBatch{Paths: originalPaths, FullSync: batch.FullSync, LostEvents: batch.LostEvents, ReconcileRoots: append([]string(nil), batch.ReconcileRoots...), ReconcileGroups: append([]sync.ProviderRootsGroup(nil), batch.ReconcileGroups...)}}
+						originalBatch.Paths = originalPaths
+						return &WatchRetryError{cause: err, batch: originalBatch}
 					}
 					for _, binding := range bindings {
 						if slices.ContainsFunc(admitted, func(current sync.BoundedCoverageBinding) bool {
@@ -2351,14 +2355,7 @@ type WatchRetryError struct {
 func (e *WatchRetryError) Error() string { return e.cause.Error() }
 func (e *WatchRetryError) Unwrap() error { return e.cause }
 func (e *WatchRetryError) WatchRetryBatch() sync.WatchBatch {
-	retry := e.batch
-	retry.Paths = append([]string(nil), retry.Paths...)
-	retry.ReconcileRoots = append([]string(nil), retry.ReconcileRoots...)
-	retry.ReconcileGroups = append([]sync.ProviderRootsGroup(nil), retry.ReconcileGroups...)
-	for i := range retry.ReconcileGroups {
-		retry.ReconcileGroups[i].Roots = append([]string(nil), retry.ReconcileGroups[i].Roots...)
-	}
-	return retry
+	return sync.CanonicalizeWatchBatch(e.batch)
 }
 
 func newWatchReconciliationError(
@@ -2530,6 +2527,11 @@ func syncWatchBatch(
 				}
 			}
 		}
+	}
+	if full {
+		reconcileRoots = nil
+		reconcileGroups = nil
+		groupedAgents = nil
 	}
 	if len(paths) > 0 {
 		if err := engine.SyncPathsContext(ctx, paths); err != nil {

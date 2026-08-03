@@ -53,8 +53,16 @@ func TestCanonicalizeWatchBatchFullSyncDropsPartialObligations(t *testing.T) {
 	})
 	assert.True(t, batch.FullSync)
 	assert.Empty(t, batch.Paths)
+	assert.Empty(t, batch.Renames)
 	assert.Empty(t, batch.ReconcileRoots)
 	assert.Empty(t, batch.ReconcileGroups)
+}
+
+func TestCanonicalizeWatchBatchPromotesFileRenamesToBoundedPaths(t *testing.T) {
+	batch := CanonicalizeWatchBatch(WatchBatch{
+		Renames: []WatchRename{{Path: "/sessions/changed.jsonl", ItemType: ItemIsFile}},
+	})
+	assert.Equal(t, []string{"/sessions/changed.jsonl"}, batch.Paths)
 }
 
 func TestPendingWatchBatchGroupBudgetOverflowFallsBackToGenericFullSync(t *testing.T) {

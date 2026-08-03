@@ -124,6 +124,22 @@ func TestSyncWatchBatchRetriesGroupedAndGenericScopesTogether(t *testing.T) {
 	})
 }
 
+func TestSyncWatchBatchLateFullSyncPromotionDropsProviderGroups(t *testing.T) {
+	recorder := new(groupedRootDispatchRecorder)
+	root := filepath.Join(t.TempDir(), "shared")
+	err := syncWatchBatch(t.Context(), recorder, agentsync.WatchBatch{
+		ReconcileGroups: []agentsync.ProviderRootsGroup{{
+			Agent: parser.AgentOpenCode, Roots: []string{root},
+		}},
+		Renames: []agentsync.WatchRename{{
+			Path: filepath.Join(root, "renamed"), Root: root, ItemType: agentsync.ItemIsDir,
+		}},
+	}, staticFullRoots(root))
+	require.NoError(t, err)
+	assert.Empty(t, recorder.groups)
+	assert.Equal(t, [][]string{{root}}, recorder.generic)
+}
+
 func TestRuntimeWarningHelper(t *testing.T) {
 	logOutput := captureLogOutput(t)
 	var visible bytes.Buffer
@@ -2443,11 +2459,14 @@ func (e scopedReconciliationError) ReconciliationRetryRoots() []string {
 func TestWatchRetryErrorRetainsProviderGroups(t *testing.T) {
 	group := agentsync.ProviderRootsGroup{Agent: parser.AgentOpenCode, Roots: []string{"/provider/root"}}
 	err := &WatchRetryError{cause: errors.New("admission failed"), batch: agentsync.WatchBatch{
-		Paths: []string{"/provider/opencode.db"}, ReconcileGroups: []agentsync.ProviderRootsGroup{group}, LostEvents: true,
+		Paths:           []string{"/provider/opencode.db"},
+		Renames:         []agentsync.WatchRename{{Path: "/provider/opencode.db", ItemType: agentsync.ItemIsFile}},
+		ReconcileGroups: []agentsync.ProviderRootsGroup{group}, LostEvents: true,
 	}}
 	retry := err.WatchRetryBatch()
 	assert.Equal(t, []agentsync.ProviderRootsGroup{group}, retry.ReconcileGroups)
 	assert.Equal(t, []string{"/provider/opencode.db"}, retry.Paths)
+	assert.Len(t, retry.Renames, 1)
 	assert.True(t, retry.LostEvents)
 
 	retry.ReconcileGroups[0].Roots[0] = "/mutated"

@@ -426,14 +426,29 @@ func (p *pendingWatchBatch) makeFullSync(lostEvents bool) {
 // obligations that could exclude a provider from the generic pass.
 func CanonicalizeWatchBatch(batch WatchBatch) WatchBatch {
 	batch.Paths = append([]string(nil), batch.Paths...)
+	batch.Renames = append([]WatchRename(nil), batch.Renames...)
 	batch.ReconcileRoots = append([]string(nil), batch.ReconcileRoots...)
 	batch.ReconcileGroups = cloneProviderRootsGroups(batch.ReconcileGroups)
 	if batch.FullSync {
 		batch.Paths = nil
+		batch.Renames = nil
 		batch.ReconcileRoots = nil
 		batch.ReconcileGroups = nil
+	} else {
+		for _, rename := range batch.Renames {
+			if rename.ItemType == ItemIsFile {
+				batch.Paths = appendUniqueWatchPath(batch.Paths, rename.Path)
+			}
+		}
 	}
 	return batch
+}
+
+func appendUniqueWatchPath(paths []string, path string) []string {
+	if path == "" || slices.Contains(paths, path) {
+		return paths
+	}
+	return append(paths, path)
 }
 
 func (p *pendingWatchBatch) Take() (WatchBatch, bool) {
