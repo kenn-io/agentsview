@@ -468,8 +468,9 @@ ______________________________________________________________________
     )
 
     type BackendCapabilities struct {
-        Recall bool
-        Writes map[WriteOperation]bool
+        Recall           bool
+        Writes           map[WriteOperation]bool
+        SessionMutations SessionMutationAdapter
     }
 
     func (c BackendCapabilities) AllowsWrite(op WriteOperation) bool
@@ -500,6 +501,12 @@ ______________________________________________________________________
     setters. Task 5 moves every cursor consumer and removes the concrete cursor
     fields/setters in its cleanup commit. Task 7 does the same for pricing
     state. `BunStore` does not silently generate an independent fallback secret.
+
+    Session mutation adapters own engine-specific clocks and side effects: SQLite
+    supplies application UTC timestamps, clears restore baselines, and removes
+    FTS-backed messages before permanent deletion; PostgreSQL uses database time
+    and advances revisions monotonically. Adapter hooks run inside the shared
+    transaction, and result counts publish only after it succeeds.
 
 - Produces thin composition: SQLite `DB`, `postgres.Store`, and `duckdb.Store`
   embed `*BunStore` but retain their current concrete public types and
@@ -581,6 +588,11 @@ ______________________________________________________________________
     and session-management writes but reject archive/Recall ingestion. DuckDB
     wraps each mirror generation with `bundialect.New()` and swaps raw/Bun
     handles together under `handleMu`.
+
+    Quack `ConsistentView` reads an opaque mirror-generation token before and
+    after a callback and may replay that callback when the token changes.
+    Callbacks stage attempt-local results and publish only after the guarded
+    view succeeds.
 
     The Quack resolver returns an `IConn` that formats no values itself: Bun has
     already produced safe DuckDB SQL. `QueryContext` and `QueryRowContext` pass
@@ -760,7 +772,11 @@ ______________________________________________________________________
     an ordinal-only canonical pin.
 
     Update the DuckDB rebuild test to expect schema version 11, the full canonical
-    common table/column set, preserved source rows, and atomic replacement.
+    common table/column set, preserved source rows, and atomic replacement. A
+    fresh schema carries a nonempty opaque mirror-generation token.
+    Compatibility checks and probes reject version-11 mirrors with a missing or
+    empty token, and a metadata failure rolls back every field without
+    publishing a new generation.
 
 - [ ] **Step 3: Verify RED**
 
@@ -821,6 +837,12 @@ ______________________________________________________________________
     Replace DuckDB's duplicated common `mirrorTables` declarations with registry
     creation. Keep only `sync_metadata`, provenance, and DuckDB-specific indexes
     in `internal/duckdb/schema.go`.
+
+    Create the initial opaque mirror-generation token with the fresh schema.
+    Publish later mirror metadata fields and a fresh token in one DuckDB
+    transaction so readers never observe new descriptive metadata under the
+    previous generation. Missing or empty generation metadata is an incompatible
+    schema for local checks, Quack checks, and mirror probing.
 
 - [ ] **Step 5: Verify GREEN on fresh and local upgrade paths**
 
@@ -1040,8 +1062,14 @@ ______________________________________________________________________
 - Create: `internal/db/bun_curation.go`
 - Create: `internal/db/bun_insights.go`
 - Create: `internal/db/bun_mutations.go`
+- Create: `internal/db/bun_recall.go`
 - Create: `internal/db/bun_data_test.go`
 - Create: `internal/db/bun_curation_test.go`
+- Create: `internal/db/bun_recall_test.go`
+- Create: `internal/storetest/recall_contract.go`
+- Modify: `internal/db/bun_store_contract_external_test.go`
+- Modify: `internal/postgres/bun_store_contract_pgtest_test.go`
+- Modify: `internal/duckdb/bun_store_contract_test.go`
 - Modify: `internal/storetest/contract.go`
 - Modify: `internal/db/project_identity.go`
 - Modify: `internal/db/project_inventory.go`
@@ -1101,7 +1129,10 @@ ______________________________________________________________________
     `ErrorIs(db.ErrReadOnly)` and assert reads still return
     mirrored/synchronized curation. Explicitly assert that PostgreSQL remains
     publicly read-only while star, pin, rename, trash, and available insight
-    writes succeed.
+    writes succeed. Run Recall contracts for writable SQLite, read-only SQLite,
+    and unsupported PostgreSQL/DuckDB: read-only SQLite retains canonical reads
+    and non-mutating import dry-runs while every Recall mutation is rejected
+    before SQL.
 
 - [ ] **Step 2: Verify RED**
 
@@ -1141,13 +1172,16 @@ ______________________________________________________________________
     through the canonical SQLite Bun handle when `Capabilities().Recall` is
     true; otherwise return `db.ErrReadOnly` before issuing SQL. Keep extraction
     jobs, evidence reconciliation, and Recall FTS/vector internals local to
-    SQLite.
+    SQLite. Require `WriteRecall` only for imports that can persist rows;
+    dry-run validation uses the read capability. Composite entry/evidence reads
+    stage a fresh result on every `ConsistentView` attempt, including not-found,
+    and publish only the accepted attempt.
 
 - [ ] **Step 5: Verify the common methods on every backend before deletion**
 
     ```bash
     CGO_ENABLED=1 go test -tags fts5 ./internal/db ./internal/duckdb \
-      -run 'Test.*(Data|Curation)Contract|Test(ProjectIdentity|Inventory|Pins|Stars|Insights|SessionMgmt)' -count=1
+      -run 'Test.*(Data|Curation|Recall)Contract|Test(ProjectIdentity|Inventory|Pins|Stars|Insights|SessionMgmt|GetRecallEntry)' -count=1
     make test-postgres
     go fmt ./...
     go vet ./...
@@ -1160,8 +1194,8 @@ ______________________________________________________________________
 - [ ] **Step 6: Remove concrete duplicates and stubs**
 
     Delete common-method bodies from PostgreSQL/DuckDB curation, identity,
-    inventory, project-rule, candidate, and stub files. Retain operational push
-    functions and adapter capability probes only.
+    inventory, project-rule, candidate, Recall-stub, and stub files. Retain
+    operational push functions and adapter capability probes only.
 
 - [ ] **Step 7: Re-run final contracts and commit**
 

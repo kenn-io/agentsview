@@ -288,8 +288,9 @@ func UpsertStarredSessionRows(
 	})
 }
 
-// UpsertPinnedMessageRows writes canonical replicated pin rows atomically. A
-// pre-existing target row keeps its generated ID while curation fields refresh.
+// UpsertPinnedMessageRows writes canonical replicated pin rows atomically.
+// Generated target IDs stay stable on logical-key conflicts. Mirror rows adopt
+// source IDs after removing any stale logical row that still owns a reused ID.
 func UpsertPinnedMessageRows(
 	ctx context.Context, store bun.IDB, rows []bunmodel.PinnedMessage,
 	idPolicy PinRowIDPolicy,
@@ -306,6 +307,12 @@ func UpsertPinnedMessageRows(
 			case PreservePinRowIDs:
 				if row.ID == 0 {
 					return fmt.Errorf("preserving replicated pin id: source id is zero")
+				}
+				if _, err := tx.NewDelete().Table("pinned_messages").
+					Where("id = ?", row.ID).
+					Where("(session_id != ? OR ordinal != ?)", row.SessionID, row.Ordinal).
+					Exec(ctx); err != nil {
+					return fmt.Errorf("reconciling preserved pin id %d: %w", row.ID, err)
 				}
 			default:
 				return fmt.Errorf("upserting pinned message rows: unknown id policy %d", idPolicy)
