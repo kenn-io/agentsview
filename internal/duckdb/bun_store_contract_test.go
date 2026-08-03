@@ -249,3 +249,21 @@ func TestBunStoreRecallContract(t *testing.T) {
 		},
 	})
 }
+
+func TestBunStoreUsageContract(t *testing.T) {
+	storetest.RunUsageContract(t, storetest.UsageBackend{
+		Name: "duckdb",
+		Open: func(t *testing.T) storetest.UsageStore {
+			conn, err := Open(filepath.Join(t.TempDir(), "usage-contract.duckdb"))
+			require.NoError(t, err)
+			common := bun.NewDB(conn, bundialect.New())
+			require.NoError(t, db.CreateCommonSchema(t.Context(), common))
+			require.NoError(t, storetest.InsertBunUsageFixture(
+				t.Context(), common, "bun-usage-archive", "bun-usage-generation",
+			))
+			store := NewStoreFromDB(conn)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			return store.BunStore
+		},
+	})
+}

@@ -980,7 +980,7 @@ func TestStoreAnalyticsUsageAndTrends(t *testing.T) {
 	assert.Equal(t, []string{"claude-test"}, sessionUsage.Models)
 }
 
-func TestLoadPricingUsesDBRowsAsEffectiveTableAndOverlaysOverrides(t *testing.T) {
+func TestBunPricingUsesDBRowsAsEffectiveTableAndOverlaysOverrides(t *testing.T) {
 	ctx := context.Background()
 	conn := openTestDuckDB(t)
 	require.NoError(t, EnsureSchema(ctx, conn))
@@ -999,19 +999,25 @@ func TestLoadPricingUsesDBRowsAsEffectiveTableAndOverlaysOverrides(t *testing.T)
 			('claude-sonnet-4-6', 30000000, 150000000, 37500000, 3000000, '2026-06-08T12:00:00Z')`)
 	require.NoError(t, err)
 
-	got, err := store.loadPricing(ctx)
+	rows, err := store.LoadPricingMap(ctx)
 	require.NoError(t, err)
+	resolver := export.NewPricingResolver(rows)
 
-	assert.NotContains(t, got, "gpt-5.5")
-	assert.Equal(t, duckRates{
-		input: money.MustParseDollars("30"), output: money.MustParseDollars("150"), cacheCreation: money.MustParseDollars("37.5"), cacheRead: money.MustParseDollars("3"),
-		updatedAt: ptrTime(t, "2026-06-08T12:00:00Z"),
-		source:    export.PricingRowSourceFetched,
-	}, got["claude-sonnet-4-6"])
-	assert.Equal(t, duckRates{
-		input: money.MustParseDollars("9"), output: money.MustParseDollars("10"), cacheCreation: money.MustParseDollars("11"), cacheRead: money.MustParseDollars("12"),
-		source: export.PricingRowSourceCustom,
-	}, got["custom-model"])
+	assert.False(t, resolver.Lookup("gpt-5.5").OK)
+	stored := resolver.Lookup("claude-sonnet-4-6")
+	require.True(t, stored.OK)
+	assert.Equal(t, money.MustParseDollars("30"), stored.Rates.InputPerMTok)
+	assert.Equal(t, money.MustParseDollars("150"), stored.Rates.OutputPerMTok)
+	assert.Equal(t, money.MustParseDollars("37.5"), stored.Rates.CacheWritePerMTok)
+	assert.Equal(t, money.MustParseDollars("3"), stored.Rates.CacheReadPerMTok)
+	assert.Equal(t, export.PricingRowSourceFetched, stored.Rates.Source)
+	custom := resolver.Lookup("custom-model")
+	require.True(t, custom.OK)
+	assert.Equal(t, money.MustParseDollars("9"), custom.Rates.InputPerMTok)
+	assert.Equal(t, money.MustParseDollars("10"), custom.Rates.OutputPerMTok)
+	assert.Equal(t, money.MustParseDollars("11"), custom.Rates.CacheWritePerMTok)
+	assert.Equal(t, money.MustParseDollars("12"), custom.Rates.CacheReadPerMTok)
+	assert.Equal(t, export.PricingRowSourceCustom, custom.Rates.Source)
 }
 
 func TestProjectIdentityMapLegacyFallbackUsesFilePath(t *testing.T) {
@@ -1149,24 +1155,33 @@ func TestSourceArchiveScopeRejectsSaltMismatch(t *testing.T) {
 	require.ErrorContains(t, err, "archive salt mismatch")
 }
 
-func TestLoadPricingUsesFallbackWhenEffectiveTableEmpty(t *testing.T) {
+func TestBunPricingUsesFallbackWhenEffectiveTableEmpty(t *testing.T) {
 	ctx := context.Background()
 	conn := openTestDuckDB(t)
 	require.NoError(t, EnsureSchema(ctx, conn))
 	store := NewStoreFromDB(conn)
 
-	got, err := store.loadPricing(ctx)
+	rows, err := store.LoadPricingMap(ctx)
 	require.NoError(t, err)
 
 	fallback := pricingByPattern(t, pricingpkg.FallbackPricing(), "gpt-5.5")
-	require.Contains(t, got, "gpt-5.5")
-	assert.Equal(t, fallback.InputPerMTok, got["gpt-5.5"].input)
-	assert.Equal(t, fallback.OutputPerMTok, got["gpt-5.5"].output)
-	assert.Equal(t, export.PricingRowSourceEmbedded, got["gpt-5.5"].source)
-	assert.Equal(t, duckCatalogPricingBands(fallback.Bands), got["gpt-5.5"].bands)
+	lookup := export.NewPricingResolver(rows).Lookup("gpt-5.5")
+	require.True(t, lookup.OK)
+	assert.Equal(t, fallback.InputPerMTok, lookup.Rates.InputPerMTok)
+	assert.Equal(t, fallback.OutputPerMTok, lookup.Rates.OutputPerMTok)
+	assert.Equal(t, export.PricingRowSourceEmbedded, lookup.Rates.Source)
+	require.Len(t, lookup.Rates.Bands, len(fallback.Bands))
+	for i := range fallback.Bands {
+		assert.Equal(t, fallback.Bands[i].AboveInputTokens,
+			lookup.Rates.Bands[i].AboveInputTokens)
+		assert.Equal(t, fallback.Bands[i].InputPerMTok,
+			lookup.Rates.Bands[i].InputPerMTok)
+		assert.Equal(t, fallback.Bands[i].OutputPerMTok,
+			lookup.Rates.Bands[i].OutputPerMTok)
+	}
 }
 
-func TestLoadPricingClassifiesBandOnlyFallbackMismatchAsFetched(t *testing.T) {
+func TestBunPricingClassifiesBandOnlyFallbackMismatchAsFetched(t *testing.T) {
 	ctx := context.Background()
 	conn := openTestDuckDB(t)
 	require.NoError(t, EnsureSchema(ctx, conn))
@@ -1190,12 +1205,14 @@ func TestLoadPricingClassifiesBandOnlyFallbackMismatchAsFetched(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	got, err := store.loadPricing(ctx)
+	rows, err := store.LoadPricingMap(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, export.PricingRowSourceFetched, got["gpt-5.5"].source)
+	lookup := export.NewPricingResolver(rows).Lookup("gpt-5.5")
+	require.True(t, lookup.OK)
+	assert.Equal(t, export.PricingRowSourceFetched, lookup.Rates.Source)
 }
 
-func TestLoadPricingRetainsCustomOverrideSource(t *testing.T) {
+func TestBunPricingRetainsCustomOverrideSource(t *testing.T) {
 	ctx := context.Background()
 	conn := openTestDuckDB(t)
 	require.NoError(t, EnsureSchema(ctx, conn))
@@ -1210,10 +1227,12 @@ func TestLoadPricingRetainsCustomOverrideSource(t *testing.T) {
 		},
 	})
 
-	got, err := store.loadPricing(ctx)
+	rows, err := store.LoadPricingMap(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, got["gpt-5.5"].bands)
-	block, err := export.NewPricingResolver(duckPricingRows(got)).BuildBlock()
+	lookup := export.NewPricingResolver(rows).Lookup("gpt-5.5")
+	require.True(t, lookup.OK)
+	assert.Empty(t, lookup.Rates.Bands)
+	block, err := export.NewPricingResolver(rows).BuildBlock()
 	require.NoError(t, err)
 
 	assert.Equal(t, "custom+embedded", block.Source)
@@ -1293,14 +1312,6 @@ func pricingByPattern(t *testing.T, prices []pricingpkg.ModelPricing, pattern st
 	}
 	t.Fatalf("missing fallback pricing for %s", pattern)
 	return pricingpkg.ModelPricing{}
-}
-
-func ptrTime(t *testing.T, value string) *time.Time {
-	t.Helper()
-	parsed, err := time.Parse(time.RFC3339Nano, value)
-	require.NoError(t, err)
-	utc := parsed.UTC()
-	return &utc
 }
 
 func TestAnalyticsTopSessionsFiltersMetricEligibility(t *testing.T) {

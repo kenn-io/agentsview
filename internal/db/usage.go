@@ -5,12 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/uptrace/bun"
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
@@ -238,47 +239,6 @@ func (f UsageFilter) appendUsageSessionFilterClauses(
 	return where, args
 }
 
-// appendUsageMatchingActivityClauses requires the session to have at
-// least one row that GetUsageMatchingSessionCount's bounded branch would
-// count: an assistant, non-synthetic message (model optional — some
-// Copilot assistant messages parse before a model name is known) or a
-// usage_events row with a model. Model/ExcludeModel narrow those same
-// rows. Seeding the EXISTS subqueries with the matching eligibility
-// predicates keeps the unbounded branch's semantics aligned with the
-// bounded branch's per-row predicates, so the same filter matches the
-// same sessions whether or not a date range is set.
-func (f UsageFilter) appendUsageMatchingActivityClauses(
-	where string, args []any,
-) (string, []any) {
-	var messageArgs []any
-	messageWhere, messageArgs := f.appendUsageSourceFilterClauses(
-		usageMatchingMessageSourceEligibility, messageArgs, "m.model",
-	)
-	var eventArgs []any
-	eventWhere, eventArgs := f.appendUsageSourceFilterClauses(
-		usageEventSourceEligibility, eventArgs, "ue.model",
-	)
-
-	where += `
-	AND (
-		EXISTS (
-			SELECT 1
-			FROM messages m
-			WHERE m.session_id = s.id
-				AND ` + messageWhere + `
-		)
-		OR EXISTS (
-			SELECT 1
-			FROM usage_events ue
-			WHERE ue.session_id = s.id
-				AND ` + eventWhere + `
-		)
-	)`
-	args = append(args, messageArgs...)
-	args = append(args, eventArgs...)
-	return where, args
-}
-
 func buildUsageTerminationPredSQLite(status string) (string, []any) {
 	if status == "" || status == "all" {
 		return "", nil
@@ -358,24 +318,6 @@ const usageMessageSourceEligibility = `
     AND m.model != '<synthetic>'`
 
 // usageMatchingMessageEligibility is usageMessageEligibility with the
-// token-presence requirement removed and the model-presence requirement
-// relaxed to a role check. GetUsageMatchingSessionCount counts sessions
-// that have usage-shaped activity even when the agent (e.g. Copilot)
-// never records per-message tokens or, for some assistant messages, a
-// model name, so it must not gate on m.token_usage or m.model != ” the
-// way every token/cost query does; Model/ExcludeModel filters are applied
-// separately and still narrow the match when set. Do not reuse this for
-// usageRowQuery or its callers — see the usageMessageEligibility doc
-// comment above.
-const usageMatchingMessageEligibility = `
-    m.role = 'assistant'
-    AND m.model != '<synthetic>'
-    AND s.deleted_at IS NULL`
-
-const usageMatchingMessageSourceEligibility = `
-    m.role = 'assistant'
-    AND m.model != '<synthetic>'`
-
 const usageEventEligibility = `
     ue.model != ''
     AND s.deleted_at IS NULL`
@@ -933,19 +875,6 @@ func usageBoundedRowsSQL(
 	return rowsSQL, args
 }
 
-// usageMatchingSessionRowsSQLForBounds is usageRowsSQLForBounds's bounded
-// branch built from the relaxed usageMatchingMessageEligibility predicates,
-// so GetUsageMatchingSessionCount only relaxes the token-usage and
-// model-presence requirements and keeps the same per-row
-// Model/ExcludeModel filtering as the normal bounded path.
-func usageMatchingSessionRowsSQLForBounds(
-	f UsageFilter, b usageBounds,
-) (string, []any) {
-	return usageBoundedRowsSQL(
-		f, b,
-		usageMatchingMessageSourceEligibility, usageMatchingMessageEligibility)
-}
-
 func usageRowQuery(f UsageFilter) (string, []any) {
 	rowsSQL, args := usageRowsSQLForBounds(f, usageBoundsForFilter(f))
 	query := dailyUsageRowSelectFromRows(rowsSQL)
@@ -954,96 +883,6 @@ func usageRowQuery(f UsageFilter) (string, []any) {
 
 func topSessionsUsageRowQuery(f UsageFilter) (string, []any) {
 	return usageRowQuery(f)
-}
-
-const dailyCursorUsageRowsSQLTemplate = `
-SELECT
-	'' AS session_id,
-	NULL AS message_ordinal,
-	'cursor' AS usage_source,
-	cu.occurred_at AS ts,
-	cu.model,
-	'' AS token_usage,
-	cu.input_tokens,
-	cu.output_tokens,
-	cu.cache_write_tokens AS cache_creation_input_tokens,
-	cu.cache_read_tokens AS cache_read_input_tokens,
-	0 AS reasoning_tokens,
-	cu.charged_microdollars AS cost_microdollars,
-	'cursor-reported' AS cost_source,
-	'' AS claude_message_id,
-	'' AS claude_request_id,
-	'' AS source_uuid,
-	cu.dedup_key AS usage_dedup_key,
-	'' AS project,
-	'cursor' AS agent,
-	'' AS machine
-FROM cursor_usage_events cu
-WHERE %s`
-
-func cursorUsageRowsSQLForBounds(
-	f UsageFilter, b usageBounds,
-) (string, []any, bool) {
-	termPred, _ := buildUsageTerminationPredSQLite(f.Termination)
-	// Cursor usage rows carry no project or git branch and bypass the session
-	// filter, so any filter they cannot satisfy (project, machine, branch)
-	// must exclude them entirely rather than let them leak into totals.
-	if len(f.ProjectFilterLabels()) > 0 ||
-		len(f.ExcludedProjectFilterLabels()) > 0 ||
-		f.Machine != "" || f.GitBranch != "" || f.MinUserMessages > 0 ||
-		f.ExcludeOneShot || termPred != "" ||
-		f.ActiveSince != "" {
-		return "", nil, false
-	}
-	if f.Agent != "" {
-		vals := strings.Split(f.Agent, ",")
-		for i := range vals {
-			vals[i] = strings.TrimSpace(vals[i])
-		}
-		if !slices.Contains(vals, "cursor") {
-			return "", nil, false
-		}
-	}
-	if f.ExcludeAgent != "" {
-		vals := strings.Split(f.ExcludeAgent, ",")
-		for i := range vals {
-			vals[i] = strings.TrimSpace(vals[i])
-		}
-		if slices.Contains(vals, "cursor") {
-			return "", nil, false
-		}
-	}
-
-	where := "cu.model != ''"
-	var args []any
-	scope := normalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
-	if pred := automatedScopePredicate(scope, "cu.is_headless"); pred != "" {
-		where += "\n\tAND " + pred
-	}
-	where, args = f.appendUsageSourceFilterClauses(
-		where, args, "cu.model",
-	)
-	where, args = appendUsageColumnBounds(where, "cu.occurred_at", b, args)
-	rowsSQL := fmt.Sprintf(dailyCursorUsageRowsSQLTemplate, where)
-	return rowsSQL, args, true
-}
-
-func dailyUsageRowsSQLForBounds(
-	f UsageFilter, b usageBounds, hasCursorTable bool,
-) (string, []any) {
-	sessionRowsSQL, sessionArgs := usageRowsSQLForBounds(f, b)
-	if !hasCursorTable {
-		return sessionRowsSQL, sessionArgs
-	}
-	cursorRowsSQL, cursorArgs, ok := cursorUsageRowsSQLForBounds(f, b)
-	if !ok {
-		return sessionRowsSQL, sessionArgs
-	}
-	rowsSQL := sessionRowsSQL + "\n\nUNION ALL\n\n" + cursorRowsSQL
-	args := make([]any, 0, len(sessionArgs)+len(cursorArgs))
-	args = append(args, sessionArgs...)
-	args = append(args, cursorArgs...)
-	return rowsSQL, args
 }
 
 func scanUsageRow(rows *sql.Rows) (usageScanRow, error) {
@@ -1078,10 +917,6 @@ func scanUsageRow(rows *sql.Rows) (usageScanRow, error) {
 		&r.startedAt,
 	)
 	return r, err
-}
-
-func scanDailyUsageRow(rows *sql.Rows) (dailyUsageScanRow, error) {
-	return scanDailyUsageRowWithMachine(rows, false)
 }
 
 func scanDailyUsageRowWithMachine(
@@ -1605,54 +1440,34 @@ func usageDedupTokenForRow(
 	return usageDedupToken{}, false
 }
 
-func (db *DB) loadTopSessionMetadata(
+func (s *BunStore) loadTopSessionMetadata(
 	ctx context.Context, sessionIDs []string,
 ) (map[string]topSessionMetadata, error) {
 	out := make(map[string]topSessionMetadata, len(sessionIDs))
 	if len(sessionIDs) == 0 {
 		return out, nil
 	}
-
-	placeholders := make([]string, len(sessionIDs))
-	args := make([]any, len(sessionIDs))
-	for i, id := range sessionIDs {
-		placeholders[i] = "?"
-		args[i] = id
-	}
-
-	query := `
-SELECT
-	id,
-	COALESCE(NULLIF(COALESCE(display_name, session_name), ''), NULLIF(first_message, ''), NULLIF(project, ''), id) AS display_name,
-	agent,
-	project,
-	COALESCE(started_at, '') AS started_at
-FROM sessions
-WHERE id IN (` + strings.Join(placeholders, ",") + `)`
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("querying top session metadata: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var id string
-		var meta topSessionMetadata
-		if err := rows.Scan(
-			&id,
-			&meta.displayName,
-			&meta.agent,
-			&meta.project,
-			&meta.startedAt,
-		); err != nil {
-			return nil, fmt.Errorf("scanning top session metadata: %w", err)
+	err := s.view(ctx, func(store bun.IDB) error {
+		var rows []bunmodel.Session
+		if err := store.NewSelect().Model(&rows).
+			Where("id IN (?)", bun.List(sessionIDs)).Scan(ctx); err != nil {
+			return fmt.Errorf("querying top session metadata: %w", err)
 		}
-		out[id] = meta
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating top session metadata: %w", err)
-	}
-	return out, nil
+		for _, row := range rows {
+			projection := bunUsageProjection{
+				SessionID: row.ID, Project: row.Project, Agent: row.Agent,
+				DisplayName: row.DisplayName, SessionName: row.SessionName,
+				FirstMessage: row.FirstMessage, SessionStartedAt: row.StartedAt,
+			}
+			out[row.ID] = topSessionMetadata{
+				displayName: usageSessionDisplayName(projection),
+				agent:       row.Agent, project: row.Project,
+				startedAt: formatUsageTimestamp(row.StartedAt),
+			}
+		}
+		return nil
+	})
+	return out, err
 }
 
 // DailyUsageEntry holds token counts and cost for one day.
@@ -1783,64 +1598,6 @@ func SanitizeDailyUsageProjectLabelsWithCatalog(
 		}
 		result.SessionCounts.ByProject = byProject
 	}
-}
-
-// loadPricingMap reads the model_pricing table into a map for
-// in-memory joins. This is much faster than a SQL LEFT JOIN
-// on every row of the daily usage scan, since the pricing
-// table is tiny and repeated resolver lookups are cached.
-func (db *DB) loadPricingMap(
-	ctx context.Context,
-) ([]export.EffectivePricingRow, error) {
-	return db.loadPricingMapFrom(ctx, db.getReader())
-}
-
-func (db *DB) loadPricingMapFrom(
-	ctx context.Context, q sessionExportQuerier,
-) ([]export.EffectivePricingRow, error) {
-	prices, err := listModelPricingFrom(ctx, q)
-	if err != nil {
-		return nil, err
-	}
-
-	fallback := fallbackRateMap()
-	out := make(map[string]export.ModelRates)
-	for _, p := range prices {
-		rates := modelPricingRates(p)
-		rates.Source = modelPricingSource(p, fallback)
-		out[p.ModelPattern] = rates
-	}
-
-	if len(out) == 0 {
-		for model, rates := range db.emptyCatalogPricing {
-			rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
-			out[model] = rates
-		}
-	}
-	for model, cp := range db.customPricing {
-		rates := export.ModelRates{
-			InputPerMTok: money.Money{
-				Microdollars: cp.InputMicrodollarsPerMTok,
-			},
-			OutputPerMTok: money.Money{
-				Microdollars: cp.OutputMicrodollarsPerMTok,
-			},
-			CacheWritePerMTok: money.Money{
-				Microdollars: cp.CacheCreationMicrodollarsPerMTok,
-			},
-			CacheReadPerMTok: money.Money{
-				Microdollars: cp.CacheReadMicrodollarsPerMTok,
-			},
-		}
-		rates.Source = customPricingSource()
-		out[model] = rates
-	}
-	for model, rates := range db.effectivePricing {
-		rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
-		out[model] = rates
-	}
-
-	return pricingMapRows(out), nil
 }
 
 func customPricingSource() export.PricingRowSource {
@@ -1974,33 +1731,23 @@ func paddedUTCBound(ts string, hours int) string {
 // parses them in Go (faster than SQLite's json_extract per row),
 // joins against an in-memory pricing map, and buckets by
 // local date.
-func (db *DB) GetDailyUsage(
+func (s *BunStore) GetDailyUsage(
 	ctx context.Context, f UsageFilter,
 ) (DailyUsageResult, error) {
 	loc := f.location()
 
-	pricing, err := db.loadPricingMap(ctx)
+	pricing, err := s.loadPricingMap(ctx)
 	if err != nil {
 		return DailyUsageResult{},
 			fmt.Errorf("loading pricing: %w", err)
 	}
 	rateResolver := export.NewPricingResolver(pricing)
 
-	// Filter on usage timestamp (not only session started_at) so
-	// long-lived sessions that span date boundaries are included.
-	// Pad by +/-14h to cover all timezone offsets; the actual
-	// date filtering happens post-query via localDate.
-	query, args := dailyUsageRowsSQLForBounds(f, usageBoundsForFilter(f), db.hasCursorUsageTable())
-	query = dailyUsageRowSelectFromRowsWithMachine(query, f.Breakdowns)
-	query += ` ORDER BY u.ts ASC, u.session_id ASC,
-		COALESCE(u.message_ordinal, -1) ASC`
-
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	rows, err := s.loadDailyUsageRows(ctx, f, true, false)
 	if err != nil {
 		return DailyUsageResult{},
 			fmt.Errorf("querying daily usage: %w", err)
 	}
-	defer rows.Close()
 
 	type bucket struct {
 		inputTok  int
@@ -2032,13 +1779,7 @@ func (db *DB) GetDailyUsage(
 	// single fallback rate would misreport mixed-model periods.
 	var totalSavings money.Money
 
-	for rows.Next() {
-		r, scanErr := scanDailyUsageRowWithMachine(rows, f.Breakdowns)
-		if scanErr != nil {
-			return DailyUsageResult{},
-				fmt.Errorf("scanning daily usage row: %w", scanErr)
-		}
-
+	for _, r := range rows {
 		date := localDate(r.ts, loc)
 		if f.From != "" && date < f.From {
 			continue
@@ -2114,11 +1855,6 @@ func (db *DB) GetDailyUsage(
 		}
 		sessionCosts[r.sessionID] = sc
 	}
-	if err := rows.Err(); err != nil {
-		return DailyUsageResult{},
-			fmt.Errorf("iterating daily usage rows: %w", err)
-	}
-
 	sessionIDs := make([]string, 0, len(sessionCosts))
 	for sessionID := range sessionCosts {
 		sessionIDs = append(sessionIDs, sessionID)
@@ -2299,7 +2035,7 @@ func (db *DB) GetDailyUsage(
 		if seenSessions != nil {
 			sessionCounts = NewUsageSessionCounts(seenSessions)
 		}
-		projects, err := db.BuildProjectIdentityMap(ctx,
+		projects, err := s.BuildProjectIdentityMap(ctx,
 			sortedSetKeys(projectLabels))
 		if err != nil {
 			return DailyUsageResult{}, err
@@ -2547,7 +2283,7 @@ func (db *DB) GetDailyUsage(
 	if seenSessions != nil {
 		sessionCounts = NewUsageSessionCounts(seenSessions)
 	}
-	projects, err := db.BuildProjectIdentityMap(ctx, sortedSetKeys(projectLabels))
+	projects, err := s.BuildProjectIdentityMap(ctx, sortedSetKeys(projectLabels))
 	if err != nil {
 		return DailyUsageResult{}, err
 	}
@@ -2635,31 +2371,21 @@ func SortAndLimitTopSessions(
 // GetTopSessionsByCost returns sessions ranked by total cost, or by total
 // tokens when f.TopSessionsSort is "tokens",
 // over the filter range. Default limit 20, max 100.
-func (db *DB) GetTopSessionsByCost(
+func (s *BunStore) GetTopSessionsByCost(
 	ctx context.Context, f UsageFilter, limit int,
 ) ([]TopSessionEntry, error) {
-	pricing, err := db.loadPricingMap(ctx)
+	pricing, err := s.loadPricingMap(ctx)
 	if err != nil {
 		return nil,
 			fmt.Errorf("loading pricing: %w", err)
 	}
 	rateResolver := export.NewPricingResolver(pricing)
 
-	query, args := topSessionsUsageRowQuery(f)
-	// Deterministic order so the dedup "winner" (the session
-	// that gets credit for a duplicate message.id + request.id
-	// pair) is stable across runs: earliest timestamp wins,
-	// then session_id, then message ordinal.
-	query += ` ORDER BY u.ts ASC, u.session_id ASC,
-		COALESCE(u.message_ordinal, -1) ASC`
-
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	rows, err := s.loadDailyUsageRows(ctx, f, false, false)
 	if err != nil {
 		return nil,
 			fmt.Errorf("querying top sessions: %w", err)
 	}
-	defer rows.Close()
-
 	loc := f.location()
 
 	type sessAccum struct {
@@ -2681,13 +2407,7 @@ func (db *DB) GetTopSessionsByCost(
 	// totals from GetDailyUsage. Same key and ordering rules.
 	seen := make(map[usageDedupToken]struct{})
 
-	for rows.Next() {
-		r, err := scanDailyUsageRow(rows)
-		if err != nil {
-			return nil,
-				fmt.Errorf("scanning top sessions row: %w", err)
-		}
-
+	for _, r := range rows {
 		// Post-query date filter (same as GetDailyUsage).
 		date := localDate(r.ts, loc)
 		if f.From != "" && date < f.From {
@@ -2737,11 +2457,6 @@ func (db *DB) GetTopSessionsByCost(
 			sa.authoritativeCost = &v
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return nil,
-			fmt.Errorf("iterating top sessions rows: %w", err)
-	}
-
 	result := make([]TopSessionEntry, 0, len(order))
 	for _, id := range order {
 		sa, ok := accum[id]
@@ -2773,7 +2488,7 @@ func (db *DB) GetTopSessionsByCost(
 	for i := range result {
 		sessionIDs[i] = result[i].SessionID
 	}
-	metadata, err := db.loadTopSessionMetadata(ctx, sessionIDs)
+	metadata, err := s.loadTopSessionMetadata(ctx, sessionIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -2940,10 +2655,10 @@ func sessionUsageBreakdownLabel(r usageScanRow) string {
 // the session does not exist. BreakdownCount is always populated;
 // per-row Breakdown entries are built only when includeBreakdown is
 // true so callers that need just the totals avoid the row payload.
-func (db *DB) GetSessionUsage(
+func (s *BunStore) GetSessionUsage(
 	ctx context.Context, sessionID string, includeBreakdown bool,
 ) (*SessionUsage, error) {
-	sess, err := db.GetSession(ctx, sessionID)
+	sess, err := s.GetSession(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -2951,23 +2666,16 @@ func (db *DB) GetSessionUsage(
 		return nil, nil
 	}
 
-	pricing, err := db.loadPricingMap(ctx)
+	pricing, err := s.loadPricingMap(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("loading pricing: %w", err)
 	}
 	rateResolver := export.NewPricingResolver(pricing)
 
-	query := usageRowSelect() + ` AND u.session_id = ?
-		ORDER BY u.ts ASC, u.session_id ASC,
-		COALESCE(u.message_ordinal, -1) ASC,
-		u.usage_source ASC,
-		COALESCE(u.usage_dedup_key, '') ASC`
-	rows, err := db.getReader().QueryContext(ctx, query, sessionID)
+	rows, err := s.loadSessionUsageRows(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("querying session usage: %w", err)
 	}
-	defer rows.Close()
-
 	var cost money.Money
 	var authoritativeCost *money.Money
 	var hasComputedCost, hasReportedCost bool
@@ -2980,11 +2688,7 @@ func (db *DB) GetSessionUsage(
 
 	seen := make(map[usageDedupToken]struct{})
 
-	for rows.Next() {
-		r, scanErr := scanUsageRow(rows)
-		if scanErr != nil {
-			return nil, fmt.Errorf("scanning session usage row: %w", scanErr)
-		}
+	for _, r := range rows {
 		if key, ok := usageDedupTokenForRow(
 			r.usageSource, r.agent, r.claudeMessageID,
 			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
@@ -3032,9 +2736,6 @@ func (db *DB) GetSessionUsage(
 			breakdown = append(breakdown, sessionUsageBreakdownEntry(
 				r, breakdownCount, c, priced))
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating session usage rows: %w", err)
 	}
 	if authoritativeCost != nil && len(breakdown) > 0 {
 		weights := make([]money.Money, len(breakdown))
@@ -3123,24 +2824,14 @@ func NewUsageSessionCounts(
 // Like GetDailyUsage and GetTopSessionsByCost, this query pads
 // the UTC bounds by +/-14h and applies a post-query localDate
 // filter so timezone-boundary messages are counted correctly.
-func (db *DB) GetUsageSessionCounts(
+func (s *BunStore) GetUsageSessionCounts(
 	ctx context.Context, f UsageFilter,
 ) (UsageSessionCounts, error) {
-	query, args := usageRowQuery(f)
-	// Deterministic ordering so the Claude dedup winner — the
-	// session that "owns" a shared message — is stable across
-	// runs. Matches GetDailyUsage / GetTopSessionsByCost so all
-	// three queries agree on which session gets credit.
-	query += ` ORDER BY u.ts ASC, u.session_id ASC,
-		COALESCE(u.message_ordinal, -1) ASC`
-
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	rows, err := s.loadDailyUsageRows(ctx, f, false, false)
 	if err != nil {
 		return UsageSessionCounts{},
 			fmt.Errorf("querying session counts: %w", err)
 	}
-	defer rows.Close()
-
 	loc := f.location()
 
 	// Track which sessions pass the localDate filter via a
@@ -3159,13 +2850,7 @@ func (db *DB) GetUsageSessionCounts(
 	// disagree with the deduped token totals.
 	dedup := make(map[usageDedupToken]struct{})
 
-	for rows.Next() {
-		r, err := scanDailyUsageRow(rows)
-		if err != nil {
-			return UsageSessionCounts{},
-				fmt.Errorf("scanning session counts: %w", err)
-		}
-
+	for _, r := range rows {
 		// Post-query date filter (same as GetDailyUsage).
 		date := localDate(r.ts, loc)
 		if f.From != "" && date < f.From {
@@ -3194,11 +2879,6 @@ func (db *DB) GetUsageSessionCounts(
 			}
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return UsageSessionCounts{},
-			fmt.Errorf("iterating session counts: %w", err)
-	}
-
 	out := UsageSessionCounts{
 		Total:     len(seen),
 		ByProject: make(map[string]int),
@@ -3219,42 +2899,19 @@ func (db *DB) GetUsageSessionCounts(
 // own), the same shape usageRowsSQLForBounds uses, so a session whose
 // started_at/ended_at fall outside the window but whose message activity
 // falls inside it is still counted.
-func (db *DB) GetUsageMatchingSessionCount(
+func (s *BunStore) GetUsageMatchingSessionCount(
 	ctx context.Context, f UsageFilter,
 ) (int, error) {
-	bounds := usageBoundsForFilter(f)
-
-	if !bounds.bounded() {
-		where, args := f.appendUsageSessionFilterClauses(usageSessionEligibility, nil)
-		where, args = f.appendUsageMatchingActivityClauses(where, args)
-
-		var count int
-		err := db.getReader().QueryRowContext(ctx, `
-			SELECT COUNT(*)
-			FROM sessions s WHERE `+where, args...).Scan(&count)
-		if err != nil {
-			return 0, fmt.Errorf("querying matching usage sessions: %w", err)
-		}
-		return count, nil
-	}
-
-	rowsSQL, args := usageMatchingSessionRowsSQLForBounds(f, bounds)
-	rows, err := db.getReader().QueryContext(
-		ctx, dailyUsageRowSelectFromRows(rowsSQL), args...)
+	rows, err := s.loadDailyUsageRows(ctx, f, false, true)
 	if err != nil {
 		return 0, fmt.Errorf("querying matching usage sessions: %w", err)
 	}
-	defer rows.Close()
 
 	loc := f.location()
 	seen := make(map[string]struct{})
-	for rows.Next() {
-		r, err := scanDailyUsageRow(rows)
-		if err != nil {
-			return 0, fmt.Errorf("scanning matching usage session: %w", err)
-		}
+	for _, r := range rows {
 		date := localDate(r.ts, loc)
-		if date == "" {
+		if usageBoundsForFilter(f).bounded() && date == "" {
 			continue
 		}
 		if f.From != "" && date < f.From {
@@ -3264,9 +2921,6 @@ func (db *DB) GetUsageMatchingSessionCount(
 			continue
 		}
 		seen[r.sessionID] = struct{}{}
-	}
-	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("iterating matching usage sessions: %w", err)
 	}
 	return len(seen), nil
 }

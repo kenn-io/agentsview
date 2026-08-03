@@ -415,6 +415,9 @@ func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 	if err := CheckDataVersionCompat(ctx, s.pg); err != nil {
 		return err
 	}
+	if err := validateStampedPostgresCommonSchema(ctx, s.pg); err != nil {
+		return err
+	}
 	if pushSchemaCurrent(ctx, s.pg) {
 		// Schema DDL is current, so skip the index and column
 		// maintenance that can lock against concurrent pg serve

@@ -18,6 +18,7 @@ const bunCurationContractSchema = "agentsview_bun_curation_contract"
 const bunInsightContractSchema = "agentsview_bun_insight_contract"
 const bunMutationContractSchema = "agentsview_bun_mutation_contract"
 const bunRecallContractSchema = "agentsview_bun_recall_contract"
+const bunUsageContractSchema = "agentsview_bun_usage_contract"
 
 func TestBunStoreCoreContract(t *testing.T) {
 	storetest.RunCoreContract(t, storetest.Backend{
@@ -194,6 +195,28 @@ func TestBunStoreRecallContract(t *testing.T) {
 			require.NoError(t, EnsureSchema(t.Context(), pg, bunRecallContractSchema))
 			store := newStore(pg)
 			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			return store.BunStore
+		},
+	})
+}
+
+func TestBunStoreUsageContract(t *testing.T) {
+	storetest.RunUsageContract(t, storetest.UsageBackend{
+		Name: "postgres",
+		Open: func(t *testing.T) storetest.UsageStore {
+			pgURL := testPGURL(t)
+			cleanupBunContractSchema(t, pgURL, bunUsageContractSchema)
+			t.Cleanup(func() {
+				cleanupBunContractSchema(t, pgURL, bunUsageContractSchema)
+			})
+			pg, err := Open(pgURL, bunUsageContractSchema, true)
+			require.NoError(t, err)
+			require.NoError(t, EnsureSchema(t.Context(), pg, bunUsageContractSchema))
+			store := newStore(pg)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			require.NoError(t, storetest.InsertBunUsageFixture(
+				t.Context(), store.bun, "bun-usage-archive", "bun-usage-generation",
+			))
 			return store.BunStore
 		},
 	})

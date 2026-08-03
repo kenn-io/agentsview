@@ -1441,6 +1441,27 @@ func convergePostgresCommonSchema(
 	return nil
 }
 
+func validateStampedPostgresCommonSchema(
+	ctx context.Context, conn *sql.DB,
+) error {
+	var complete bool
+	err := conn.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM sync_metadata WHERE key = $1
+		)`, db.CommonSchemaCompatibilityMetadataKey,
+	).Scan(&complete)
+	if err != nil {
+		if isUndefinedTable(err) {
+			return nil
+		}
+		return fmt.Errorf("checking common PostgreSQL schema stamp: %w", err)
+	}
+	if !complete {
+		return nil
+	}
+	return convergePostgresCommonSchema(ctx, conn, nil)
+}
+
 func convergePostgresPricingTimestamps(ctx context.Context, store bun.IDB) error {
 	if _, err := store.ExecContext(ctx, `
 		DELETE FROM model_pricing

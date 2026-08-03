@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
@@ -112,7 +113,7 @@ func (db *DB) GetSessionUsageRows(
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	pricing, err := db.loadPricingMap(ctx)
+	pricing, err := db.LoadPricingMap(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("loading pricing: %w", err)
 	}
@@ -425,14 +426,21 @@ func (db *DB) activityReportActivityFrom(
 func (db *DB) activityReportUsage(
 	ctx context.Context, ids []string, lowerBound, upperBound string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
-	return db.activityReportUsageFrom(
-		ctx, db.getReader(), ids, lowerBound, upperBound, q,
-	)
+	var rows []activity.UsageRow
+	var pricing *export.PricingBlock
+	err := db.consistentView(ctx, func(store bun.IDB) error {
+		var err error
+		rows, pricing, err = db.activityReportUsageFrom(
+			ctx, store, ids, lowerBound, upperBound, q,
+		)
+		return err
+	})
+	return rows, pricing, err
 }
 
 func (db *DB) activityReportUsageFrom(
 	ctx context.Context,
-	source sessionExportQuerier,
+	source bun.IDB,
 	ids []string,
 	lowerBound, upperBound string,
 	q activity.Query,
@@ -470,7 +478,7 @@ type activityReportUsageCandidate struct {
 
 func (db *DB) loadActivityReportUsageCandidatesFrom(
 	ctx context.Context,
-	source sessionExportQuerier,
+	source bun.IDB,
 	ids []string,
 	lowerBound, upperBound string,
 ) ([]activityReportUsageCandidate, *export.PricingResolver, error) {
@@ -583,7 +591,7 @@ func sortActivityReportUsageCandidates(
 // rows with standalone candidates before imposing either operation.
 func (db *DB) activityReportUsageCandidatesFrom(
 	ctx context.Context,
-	source sessionExportQuerier,
+	source bun.IDB,
 	ids []string,
 	lowerBound, upperBound string,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
