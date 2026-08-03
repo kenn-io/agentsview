@@ -1162,6 +1162,15 @@ func (db *DB) ReplaceSessionMessages(
 		return fmt.Errorf("beginning tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if useDiff {
+		needsPinRemap, err := messageDiffNeedsPinRemapTx(tx, plan)
+		if err != nil {
+			return err
+		}
+		if needsPinRemap {
+			useDiff = false
+		}
+	}
 	queueGenerationBefore, queueExistedBefore, err := artifactExportGenerationTx(
 		tx, sessionID,
 	)
@@ -1380,6 +1389,15 @@ func (db *DB) ReplaceSessionContent(
 		return fmt.Errorf("beginning tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if useDiff {
+		needsPinRemap, err := messageDiffNeedsPinRemapTx(tx, plan)
+		if err != nil {
+			return err
+		}
+		if needsPinRemap {
+			useDiff = false
+		}
+	}
 	queueGenerationBefore, queueExistedBefore, err := artifactExportGenerationTx(
 		tx, sessionID,
 	)
@@ -1590,8 +1608,10 @@ func restorePinsTx(
 	// Re-attach saved pins only when the old and new message identities
 	// are both unambiguous. A unique source_uuid may move to another
 	// ordinal. Duplicate UUIDs and legacy UUID-less rows must retain the
-	// old ordinal, role, and content. Otherwise the pin is dropped rather
-	// than duplicated or attached to an unrelated message.
+	// old ordinal, role, and content. A legacy UUID-less row may gain a
+	// provider UUID while retaining that fallback identity. Otherwise the
+	// pin is dropped rather than duplicated or attached to an unrelated
+	// message.
 	for _, sp := range pins {
 		if sp.messageFound == 0 {
 			continue
@@ -1665,7 +1685,6 @@ func restorePinsTx(
 			SELECT ?, m.id, m.ordinal, ?, ?
 			FROM messages m
 			WHERE m.session_id = ? AND m.ordinal = ?
-				AND COALESCE(m.source_uuid, '') = ''
 				AND m.role = ? AND m.content = ?`,
 			sessionID, sp.note, sp.createdAt, sessionID, sp.ordinal,
 			sp.role, sp.content,

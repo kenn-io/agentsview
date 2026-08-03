@@ -256,7 +256,8 @@ func TestReplaceSessionMessagesKeepsPinOnMergedRow(t *testing.T) {
 	d := testDB(t)
 	v1 := []Message{
 		diffTestMsg("pin-s", 0, "user", "hello"),
-		diffTestMsg("pin-s", 1, "assistant", "partial"),
+		diffTestMsg("pin-s", 1, "assistant", "partial",
+			func(m *Message) { m.SourceUUID = "pin-tail" }),
 	}
 	seedDiffSession(t, d, "pin-s", v1)
 	ids := messageIDsByOrdinal(t, d, "pin-s")
@@ -267,7 +268,8 @@ func TestReplaceSessionMessagesKeepsPinOnMergedRow(t *testing.T) {
 
 	v2 := []Message{
 		v1[0],
-		diffTestMsg("pin-s", 1, "assistant", "partial now complete"),
+		diffTestMsg("pin-s", 1, "assistant", "partial now complete",
+			func(m *Message) { m.SourceUUID = "pin-tail" }),
 		diffTestMsg("pin-s", 2, "user", "more"),
 	}
 	require.NoError(t, d.ReplaceSessionMessages("pin-s", v2))
@@ -279,4 +281,49 @@ func TestReplaceSessionMessagesKeepsPinOnMergedRow(t *testing.T) {
 		note,
 	).Scan(&n))
 	assert.Equal(t, 1, n, "pin on the merged row must survive")
+}
+
+func TestReplaceSessionMessagesDropsPinOnAmbiguousChangedRow(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		sourceUUIDs []string
+	}{
+		{
+			name:        "empty UUID",
+			sourceUUIDs: []string{"", "", ""},
+		},
+		{
+			name:        "duplicate UUID",
+			sourceUUIDs: []string{"duplicate", "duplicate", "tail"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			v1 := []Message{
+				diffTestMsg("pin-ambiguous", 0, "user", "first"),
+				diffTestMsg("pin-ambiguous", 1, "assistant", "pinned"),
+				diffTestMsg("pin-ambiguous", 2, "user", "last"),
+			}
+			for i := range v1 {
+				v1[i].SourceUUID = tc.sourceUUIDs[i]
+			}
+			seedDiffSession(t, d, "pin-ambiguous", v1)
+			ids := messageIDsByOrdinal(t, d, "pin-ambiguous")
+			_, err := d.PinMessage("pin-ambiguous", ids[1], nil)
+			require.NoError(t, err, "PinMessage")
+
+			v2 := append([]Message(nil), v1...)
+			v2[1].Content = "unrelated replacement"
+			v2[1].ContentLength = len(v2[1].Content)
+			require.NoError(t,
+				d.ReplaceSessionMessages("pin-ambiguous", v2))
+
+			pins, err := d.ListPinnedMessages(
+				context.Background(), "pin-ambiguous", "",
+			)
+			require.NoError(t, err, "ListPinnedMessages")
+			assert.Empty(t, pins,
+				"an ambiguous identity change must not inherit the pin")
+		})
+	}
 }

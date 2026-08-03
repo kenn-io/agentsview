@@ -1895,6 +1895,35 @@ func TestReplaceSessionMessagesPinFallsBackToOrdinal(t *testing.T) {
 	assert.Equal(t, 1, pins[0].Ordinal, "pin ordinal")
 }
 
+func TestReplaceSessionMessagesPinFallbackAllowsSourceUUIDEnrichment(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "s1", "p")
+	insertMessages(t, d,
+		userMsg("s1", 0, "msg0"),
+		asstMsg("s1", 1, "msg1"),
+	)
+	msgs, err := d.GetAllMessages(ctx, "s1")
+	require.NoError(t, err, "GetAllMessages")
+	_, err = d.PinMessage("s1", msgs[1].ID, nil)
+	require.NoError(t, err, "PinMessage")
+
+	enriched := asstMsg("s1", 1, "msg1")
+	enriched.SourceUUID = "new-provider-uuid"
+	require.NoError(t, d.ReplaceSessionMessages("s1", []Message{
+		userMsg("s1", 0, "msg0"),
+		enriched,
+	}), "ReplaceSessionMessages")
+
+	pins, err := d.ListPinnedMessages(ctx, "s1", "")
+	require.NoError(t, err, "ListPinnedMessages")
+	require.Len(t, pins, 1, "UUID enrichment must preserve the pin")
+	assert.Equal(t, 1, pins[0].Ordinal, "pin ordinal")
+}
+
 func TestReplaceSessionContentDuplicateSourceUUIDRestoresOnePin(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
