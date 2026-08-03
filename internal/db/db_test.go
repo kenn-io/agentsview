@@ -23,6 +23,8 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 )
@@ -3775,6 +3777,34 @@ func TestReopen(t *testing.T) {
 	// Writes should work after reopen.
 	insertSession(t, d, "s2", "proj2")
 	requireSessionExists(t, d, "s2")
+}
+
+func TestSQLiteBunReopenUsesCurrentGuardedHandle(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "bun-reopen", "before")
+
+	readProject := func() (string, error) {
+		var project string
+		err := d.view(t.Context(), func(store bun.IDB) error {
+			return store.NewSelect().Model((*bunmodel.Session)(nil)).
+				Column("project").Where("id = ?", "bun-reopen").
+				Scan(t.Context(), &project)
+		})
+		return project, err
+	}
+
+	project, err := readProject()
+	require.NoError(t, err)
+	assert.Equal(t, "before", project)
+	_, err = d.getWriter().Exec(
+		`UPDATE sessions SET project = ? WHERE id = ?`, "after", "bun-reopen",
+	)
+	require.NoError(t, err)
+	require.NoError(t, d.Reopen())
+
+	project, err = readProject()
+	require.NoError(t, err)
+	assert.Equal(t, "after", project)
 }
 
 func TestReopenAfterSwap(t *testing.T) {
