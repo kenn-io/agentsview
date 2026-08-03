@@ -8735,7 +8735,7 @@ func (e *Engine) processProviderFile(
 	// earlier freshness checks; this is the generic fallback for the rest.
 	if !incForceReplace && !e.forceParse && !file.ForceParse &&
 		e.providerSourceUnchangedInDB(
-			source, fingerprint, providerSemantics,
+			ctx, source, fingerprint, providerSemantics,
 		) {
 		return processResult{
 			skip:      true,
@@ -9899,6 +9899,7 @@ func (e *Engine) shouldSkipFile(
 // an empty key, or a non-fingerprint identity (no size, e.g. a tombstone)
 // never matches and therefore reparses.
 func (e *Engine) providerSourceUnchangedInDB(
+	ctx context.Context,
 	source parser.SourceRef,
 	fingerprint parser.SourceFingerprint,
 	semantics parser.ProviderSyncSemantics,
@@ -9938,7 +9939,51 @@ func (e *Engine) providerSourceUnchangedInDB(
 		parser.NeedsProjectReparse(project) {
 		return false
 	}
-	return e.db.GetDataVersionByPath(lookupPath) >= db.CurrentDataVersion()
+	// Only a source confirmed unchanged against an existing current session
+	// row may earn a provider_freshness side-table stamp. This is the
+	// DB-confirmed skip site the cold-start branch of
+	// providerSourceFreshBeforeFingerprint closes its loop through: a
+	// content-unchanged source with no stored digest flows fingerprint →
+	// this skip → stamp, without ever persisting a digest before an outcome
+	// the engine can trust.
+	fresh := e.db.GetDataVersionByPath(lookupPath) >= db.CurrentDataVersion()
+	if fresh {
+		e.stampProviderStatHashForConfirmedSource(ctx, source, lookupPath)
+	}
+	return fresh
+}
+
+// stampProviderStatHashForConfirmedSource persists the per-component stat
+// digest for a source whose provider.Fingerprint was just verified against
+// an existing current session row (the providerSourceUnchangedInDB skip).
+// This is the only pre-write moment a digest may safely be written: a
+// transient failure between an eager stamp and the fingerprint/parse/write
+// that follows would leave a matching digest that permanently suppresses
+// every later retry. The physical on-disk path is hashed while the DB key
+// uses the pathRewriter's logical key, mirroring the write path. Providers
+// without a MultiFileStatHasher carry no digest and are skipped here; their
+// freshness is owned by the engine's existing stat and skip-cache paths.
+func (e *Engine) stampProviderStatHashForConfirmedSource(
+	ctx context.Context,
+	source parser.SourceRef,
+	lookupPath string,
+) {
+	hasher, ok := e.providerStatHashers[source.Provider]
+	if !ok {
+		return
+	}
+	digest := hasher.ComputeMultiFileStatHash(providerDiscoveredPath(source))
+	if digest == 0 {
+		return
+	}
+	if err := e.db.UpsertProviderStatHash(
+		ctx, source.Provider, lookupPath, digest,
+	); err != nil {
+		log.Printf(
+			"provider_freshness write for %s/%s: %v",
+			source.Provider, lookupPath, err,
+		)
+	}
 }
 
 func (e *Engine) providerFingerprintHashMatchesDB(
@@ -10223,59 +10268,57 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 	// composite can miss same-size sibling rewrites whose mtime
 	// stays below the existing max (or offsetting size deltas that
 	// cancel out in sum-of-sizes). The side-table is populated
-	// either by a successful write's flushPending, by a single-session
-	// writeSessionFull commit, or by the cold-start fall-through in
-	// the !hasStored arm below (which stamps directly so a content-
-	// unchanged warm pass can still engage the per-component gate).
+	// only after an outcome the engine can trust: a successful
+	// write's flushPending, a single-session writeSessionFull
+	// commit, or the DB-confirmed unchanged skip in processFile
+	// (stampProviderStatHashForConfirmedSource, which runs only
+	// after the current fingerprint was verified against an
+	// existing current session row). Nothing here ever persists
+	// the digest before fingerprinting, parsing, or session
+	// writing succeeds — a transient failure must not leave a
+	// matching digest that suppresses every later retry.
 	if hasher, ok := e.providerStatHashers[file.Agent]; ok {
 		stored, hasStored, hashErr :=
 			e.db.GetProviderStatHash(ctx, file.Agent, lookupPath)
 		switch {
+		case hashErr != nil:
+			// A read error must be handled before !hasStored: the DB
+			// layer reports failures as (0, false, err), so a naive
+			// !hasStored-first ordering would swallow the error into
+			// the cold-start arm and could persist a digest that never
+			// should have been written. On read error force a real
+			// re-verification rather than falling through to the lossy
+			// size/mtime composite: a persistent read error that
+			// started this turn should not silently skip a stale
+			// source indefinitely.
+			log.Printf(
+				"provider_freshness read for %s/%s: %v",
+				file.Agent, lookupPath, hashErr)
+			return 0, false
 		case !hasStored:
 			// Cold-start (no side-table row yet) or post-tombstone
 			// (provider_freshness was cleared): force a real
 			// fingerprint so a content-unchanged source still flows
 			// through provider.Fingerprint → engine skip → no write →
 			// no flushPending → no recordProviderStatHash => the
-			// side-table row never gets re-populated and !hasStored
-			// would persist forever on its own. Closing that loop
-			// requires a synchronous digest write that runs BEFORE
-			// the parse/write outcome is known — but doing so here
-			// unconditionally would override the per-row gate at
-			// flushPending that holds for CWD-filtered sources
+			// side-table row would never get re-populated on its own
+			// and !hasStored would persist forever. Closing that loop
+			// must NOT use a synchronous pre-parse digest write (the
+			// old cold-stamp): a transient failure after the stamp
+			// would leave a matching digest that suppresses every
+			// later retry. Instead the loop is closed at the
+			// DB-confirmed unchanged skip in processFile, which runs
+			// after provider.Fingerprint verified the current source
+			// against an existing current session row — the only
+			// pre-write moment the digest may safely be persisted.
+			// A genuinely new or changed source flows through a
+			// successful write whose flushPending (or writeSessionFull)
+			// persists the digest; CWD-filtered sources stay absent
+			// because their session write never commits
 			// (TestSyncCodebuffCwdFilteredSourceDoesNotPersistStatHash).
-			// Since the freshness gate cannot read the session's
-			// recorded cwd (that is parsed only later), the gate is
-			// skipped whenever CWD filtering is active and deferred to
-			// the per-row write path. Production has cwdFilter.empty
-			// and the cold-loop break still applies; tests that pin
-			// the CWD-filter side-effect (IncludeCwdPrefixes set)
-			// take the persisting-only-via-flushPending path so the
-			// side-table row stays absent for sources that never
-			// reach a successful session write. The fingerprint call
-			// still runs so size/mtime/data-version freshness checks
-			// proceed normally; the digest just lives somewhere
-			// gated by the post-parse write outcome.
-			if e.db != nil && e.cwdFilter.empty() {
-				digest := hasher.ComputeMultiFileStatHash(path)
-				if err := e.db.UpsertProviderStatHash(
-					ctx, file.Agent, lookupPath, digest,
-				); err != nil {
-					log.Printf(
-						"provider_freshness cold-stamp for %s/%s: %v",
-						file.Agent, lookupPath, err,
-					)
-				}
-			}
-			return 0, false
-		case hashErr != nil:
-			log.Printf(
-				"provider_freshness read for %s/%s: %v",
-				file.Agent, lookupPath, hashErr)
-			// On read error force a real re-verification rather than
-			// falling through to the lossy size/mtime composite: a
-			// persistent read error that started this turn should not
-			// silently skip a stale source indefinitely.
+			// The fingerprint call still runs so size/mtime/data-
+			// version freshness checks proceed normally; the digest
+			// just lives somewhere gated by a confirmed outcome.
 			return 0, false
 		case stored == hasher.ComputeMultiFileStatHash(path):
 			// Cold writes stamp fingerprint.MTimeNS as the max of

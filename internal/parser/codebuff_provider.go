@@ -89,24 +89,33 @@ type codebuffSourceSet struct {
 }
 
 // ComputeMultiFileStatHash implements parser.MultiFileStatHasher. The
-// digest is FNV-1a 64 over (size, mtime) tuples for chat-messages.json
-// plus its sibling companions run-state.json and chat-meta.json, plus
-// (0, dir.MTime) to fold directory-level create/rename/delete into the
-// key. The 0xCB domain separator keeps the digest from colliding with
-// any other FNV digest the engine computes. Missing companions are
-// encoded as (0, 0); that means a deleted companion changes the digest
-// from whatever its prior non-zero tuple was to (0, 0). The chat
-// file's size/mtime are always written first so the resulting digest
-// is fully deterministic across process restarts.
+// digest is FNV-1a 64 over (size, mtime, ctime) tuples for
+// chat-messages.json plus its sibling companions run-state.json and
+// chat-meta.json, plus (0, dir.MTime, dir.ctime) to fold
+// directory-level create/rename/delete into the key. The ctime term is
+// the reliable content-change signal a pure (size, mtime) tuple lacks:
+// a same-size rewrite that preserves (or carries a coarse-grained)
+// mtime still bumps ctime on Unix and change-time on Windows, so a
+// matching digest cannot mask an in-place rewrite with unchanged stat
+// tuples. codexIndexChangeTime is reused because it is the parser
+// package's cross-platform ctime getter; it degrades to (0, false) on
+// unsupported platforms, which keeps the tuple stable there. The 0xCB
+// domain separator keeps the digest from colliding with any other FNV
+// digest the engine computes. Missing companions are encoded as
+// (0, 0, 0); that means a deleted companion changes the digest from
+// whatever its prior non-zero tuple was to (0, 0, 0). The chat file's
+// tuple is always written first so the resulting digest is fully
+// deterministic across process restarts.
 func (s codebuffSourceSet) ComputeMultiFileStatHash(
 	chatPath string,
 ) uint64 {
 	h := fnv.New64a()
 	h.Write([]byte{0xCB})
-	var buf [16]byte
-	writeTuple := func(size, mtime int64) {
+	var buf [24]byte
+	writeTuple := func(size, mtime, ctime int64) {
 		binary.LittleEndian.PutUint64(buf[:8], uint64(size))
 		binary.LittleEndian.PutUint64(buf[8:16], uint64(mtime))
+		binary.LittleEndian.PutUint64(buf[16:24], uint64(ctime))
 		_, _ = h.Write(buf[:])
 	}
 	chatInfo, err := os.Stat(chatPath)
@@ -114,23 +123,26 @@ func (s codebuffSourceSet) ComputeMultiFileStatHash(
 		chatInfo = nil
 	}
 	if chatInfo != nil {
-		writeTuple(chatInfo.Size(), chatInfo.ModTime().UnixNano())
+		ctime, _ := codexIndexChangeTime(chatPath, chatInfo)
+		writeTuple(chatInfo.Size(), chatInfo.ModTime().UnixNano(), ctime)
 	} else {
-		writeTuple(0, 0)
+		writeTuple(0, 0, 0)
 	}
 	dir := filepath.Dir(chatPath)
 	for _, name := range CodebuffCompanionFilenames {
 		companion := filepath.Join(dir, name)
 		if ci, err := os.Stat(companion); err == nil {
-			writeTuple(ci.Size(), ci.ModTime().UnixNano())
+			ctime, _ := codexIndexChangeTime(companion, ci)
+			writeTuple(ci.Size(), ci.ModTime().UnixNano(), ctime)
 		} else {
-			writeTuple(0, 0)
+			writeTuple(0, 0, 0)
 		}
 	}
 	if di, err := os.Stat(dir); err == nil {
-		writeTuple(0, di.ModTime().UnixNano())
+		ctime, _ := codexIndexChangeTime(dir, di)
+		writeTuple(0, di.ModTime().UnixNano(), ctime)
 	} else {
-		writeTuple(0, 0)
+		writeTuple(0, 0, 0)
 	}
 	return h.Sum64()
 }

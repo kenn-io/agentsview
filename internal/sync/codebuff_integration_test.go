@@ -1,6 +1,7 @@
 package sync_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -1126,9 +1127,13 @@ func TestSyncCodebuffColdStartForcesFingerprintUntilStamped(t *testing.T) {
 
 	// Manual delete simulates the post-tombstone / cold-warm
 	// transition. A correct implementation forces provider.Fingerprint
-	// on the next SyncAll because the freshness gate sees !hasStored,
-	// so the staging block at applyProviderFilePathPolicies
-	// recomputes and persists a fresh digest.
+	// on the next SyncAll because the freshness gate sees !hasStored;
+	// the fingerprint is then verified against the existing session row
+	// and the DB-confirmed unchanged skip (providerSourceUnchangedInDB)
+	// re-stamps the digest via stampProviderStatHashForConfirmedSource.
+	// No digest may be persisted before fingerprinting, parsing, or
+	// writing succeeds, so the re-stamp must ride on that confirmed
+	// skip rather than a pre-parse cold-stamp.
 	require.NoError(t, database.DeleteProviderStatHash(
 		context.Background(), parser.AgentCodebuff, chatPath,
 	))
@@ -1152,6 +1157,94 @@ func TestSyncCodebuffColdStartForcesFingerprintUntilStamped(t *testing.T) {
 			"per-component gate fell through to the legacy "+
 			"size/mtime composite and the cold-start branch was "+
 			"never forced through provider.Fingerprint")
+}
+
+// TestSyncCodebuffSameSizeSameMtimeRewriteIsDetected pins the
+// roborev-medium finding: the provider_freshness digest folds in ctime, so a
+// same-size companion rewrite that preserves (or coarse-grains) mtime still
+// changes the digest and forces provider.Fingerprint, whose SHA-256 content
+// hash then detects the rewrite. The old (size, mtime)-only digest would
+// match and short-circuit the source, leaving classification, costs, or
+// metadata stale despite FingerprintHashRequiredForFreshness.
+func TestSyncCodebuffSameSizeSameMtimeRewriteIsDetected(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	database := dbtest.OpenTestDB(t)
+	root, chatPath := createCodebuffSingleSession(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	require.Equal(t, 1,
+		engine.SyncAll(context.Background(), nil).Synced,
+		"cold sync must parse the seeded Codebuff session")
+
+	// Digest-level pin. Rewrite run-state.json with byte-identical length
+	// but different content, then restore its mtime so only ctime (and
+	// content) change. A digest over (size, mtime) alone would be unchanged;
+	// the ctime term must move it.
+	dir := filepath.Dir(chatPath)
+	runStatePath := filepath.Join(dir, "run-state.json")
+	original, err := os.ReadFile(runStatePath)
+	require.NoError(t, err)
+	info, err := os.Stat(runStatePath)
+	require.NoError(t, err)
+	originalMtime := info.ModTime()
+
+	hasher := engine.ProviderStatHasher(parser.AgentCodebuff)
+	require.NotNil(t, hasher,
+		"Codebuff must register a MultiFileStatHasher")
+	digestBefore := hasher.ComputeMultiFileStatHash(chatPath)
+	require.NotZero(t, digestBefore)
+
+	replacement := bytes.Replace(
+		original,
+		[]byte("base2-free-deepseek"),
+		[]byte("base3-free-deepseek"),
+		1,
+	)
+	require.Equal(t, len(original), len(replacement),
+		"the rewrite must preserve byte length so only ctime "+
+			"distinguishes the new content")
+	require.NotEqual(t, original, replacement,
+		"the rewrite must change content so the fingerprint hash "+
+			"can detect it")
+
+	time.Sleep(10 * time.Millisecond) // distinct ctime tick across platforms
+	require.NoError(t, os.WriteFile(runStatePath, replacement, 0o644))
+	require.NoError(t, os.Chtimes(runStatePath, originalMtime, originalMtime))
+
+	digestAfter := hasher.ComputeMultiFileStatHash(chatPath)
+	assert.NotEqual(t, digestBefore, digestAfter,
+		"the ctime term must fold into the digest so a same-size, "+
+			"mtime-preserved rewrite is not invisible to the freshness gate")
+
+	// End-to-end pin: the digest mismatch forces provider.Fingerprint,
+	// whose content hash detects the rewrite, so the session must be
+	// reparsed and rewritten rather than skipped. This is the load-bearing
+	// assertion — the third-sync check below is only meaningful after the
+	// rewrite was actually synced, so a regression here surfaces as a single
+	// clean failure. Note the ctime term comes from codexIndexChangeTime,
+	// which returns non-zero only on darwin/linux/windows (the project's CI
+	// matrix); on other platforms the digest cannot move and this test would
+	// not be representative.
+	second := engine.SyncAll(context.Background(), nil)
+	require.Equal(t, 1, second.Synced,
+		"a same-size, mtime-preserved companion rewrite must be "+
+			"detected and re-synced; a skip means the freshness gate "+
+			"never re-verified the content")
+
+	// The re-stamped digest must now short-circuit the unchanged source.
+	third := engine.SyncAll(context.Background(), nil)
+	assert.Zero(t, third.Synced,
+		"after the rewrite is synced the digest must match again and "+
+			"the source must short-circuit")
 }
 
 // TestSyncCodebuffSingleSessionWritesProviderStatHash pins Issue 4b:
