@@ -2158,8 +2158,8 @@ func boundedWatchUnitPath(root watchRoot, scope pollingScope) (string, bool) {
 		for _, include := range watchRoot.IncludeGlobs {
 			path := filepath.Clean(filepath.Join(watchRoot.Path, include))
 			for _, suffix := range []string{"-wal", "-shm"} {
-				if strings.HasSuffix(path, suffix) {
-					path = strings.TrimSuffix(path, suffix)
+				if before, ok0 := strings.CutSuffix(path, suffix); ok0 {
+					path = before
 				}
 			}
 			return path, true

@@ -218,8 +218,8 @@ func runSyncWorkerStartup(
 		var stats sync.SyncStats
 		var tombstoned int
 		var auditErr error
-		if strings.HasPrefix(mode, "audit-scoped-v3|") {
-			encoded := strings.TrimPrefix(mode, "audit-scoped-v3|")
+		if after, ok := strings.CutPrefix(mode, "audit-scoped-v3|"); ok {
+			encoded := after
 			payload, decodeErr := base64.RawURLEncoding.DecodeString(encoded)
 			var request struct {
 				Lease  *sync.BoundedCoverageLease `json:"lease"`
@@ -241,8 +241,8 @@ func runSyncWorkerStartup(
 					auditErr = engine.ReconcileBoundedCoverageSourceLease(ctx, request.Lease, request.Reason)
 				}
 			}
-		} else if strings.HasPrefix(mode, "audit-scoped-v2|") {
-			encoded := strings.TrimPrefix(mode, "audit-scoped-v2|")
+		} else if after, ok := strings.CutPrefix(mode, "audit-scoped-v2|"); ok {
+			encoded := after
 			payload, decodeErr := base64.RawURLEncoding.DecodeString(encoded)
 			var request struct {
 				Binding sync.BoundedCoverageBinding `json:"binding"`
@@ -259,8 +259,8 @@ func runSyncWorkerStartup(
 			} else {
 				auditErr = engine.ReconcileProviderRoots(ctx, request.Binding.Agent, []string{request.Binding.Scope})
 			}
-		} else if strings.HasPrefix(mode, "audit-scoped|") {
-			parts := strings.SplitN(strings.TrimPrefix(mode, "audit-scoped|"), "|", 2)
+		} else if after, ok := strings.CutPrefix(mode, "audit-scoped|"); ok {
+			parts := strings.SplitN(after, "|", 2)
 			if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 				auditErr = fmt.Errorf("invalid scoped audit request %q", mode)
 			} else {

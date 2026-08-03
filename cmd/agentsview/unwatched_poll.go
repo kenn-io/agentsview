@@ -685,11 +685,6 @@ func (c *sharedUnwatchedPollCoordinator) excludeAdmittedCoverageScopes(
 	return filtered
 }
 
-func withinOrEqualForPoll(path, root string) bool {
-	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
-	return err == nil && (rel == "." || rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
-}
-
 func sameCoverageEventPathForPoll(path, dbPath string) bool {
 	cleanPath := filepath.Clean(path)
 	cleanDB := filepath.Clean(dbPath)
@@ -832,7 +827,7 @@ func (c *sharedUnwatchedPollCoordinator) pollBoundedCoverageOnce(ctx context.Con
 			work.auditPending = false
 		}
 		more := false
-		for page := 0; page < 32; page++ {
+		for range 32 {
 			var result parser.OpenCodeFeedResult
 			var sources []parser.SourceRef
 			var err error

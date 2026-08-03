@@ -539,8 +539,8 @@ func sameCoveragePath(a, b string) bool { return filepath.Clean(a) == filepath.C
 func coverageDBPath(root, include string) string {
 	path := filepath.Clean(filepath.Join(root, include))
 	for _, suffix := range []string{"-wal", "-shm"} {
-		if strings.HasSuffix(path, suffix) {
-			return strings.TrimSuffix(path, suffix)
+		if before, ok := strings.CutSuffix(path, suffix); ok {
+			return before
 		}
 	}
 	return path
