@@ -692,6 +692,100 @@ func TestReconcilePinnedMessagesFollowsStoredUniqueSourceUUID(t *testing.T) {
 	assert.Equal(t, "keep shifted pin", *pins[0].Note)
 }
 
+func TestRestorePinnedMessagesUsesResolvedAnchorOrdinalForNewDuplicateUUID(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_pin_shifted_duplicate_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+	defer func() {
+		_, _ = pg.ExecContext(
+			context.Background(),
+			`DROP SCHEMA IF EXISTS `+schema+` CASCADE`,
+		)
+	}()
+
+	ctx := context.Background()
+	_, err = pg.ExecContext(ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	_, err = pg.ExecContext(ctx, `
+		INSERT INTO sessions
+			(id, machine, project, agent, first_message,
+			 started_at, message_count, user_message_count)
+		VALUES
+			('pg-pin-shifted-duplicate', 'machine-a', 'proj-curation',
+			 'claude', 'shifted source becomes duplicate',
+			 '2026-05-01T00:00:00Z'::timestamptz, 2, 1);
+		INSERT INTO messages
+			(session_id, ordinal, role, content, timestamp,
+			 content_length, source_uuid)
+		VALUES
+			('pg-pin-shifted-duplicate', 0, 'user', '[context]',
+			 '2026-05-01T00:00:00Z'::timestamptz, 9,
+			 'uuid-context'),
+			('pg-pin-shifted-duplicate', 1, 'assistant', 'answer',
+			 '2026-05-01T00:00:01Z'::timestamptz, 6,
+			 'uuid-answer');
+		INSERT INTO pinned_messages
+			(session_id, message_id, ordinal, source_uuid,
+			 note, created_at)
+		VALUES
+			('pg-pin-shifted-duplicate', 0, 0, 'uuid-answer',
+			 'keep shifted duplicate pin',
+			 '2026-05-01T00:01:00Z'::timestamptz)`)
+	require.NoError(t, err, "seed shifted pin")
+
+	tx, err := pg.BeginTx(ctx, nil)
+	require.NoError(t, err, "begin tx")
+	pins, err := snapshotPinnedMessages(
+		ctx, tx, "pg-pin-shifted-duplicate",
+	)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("snapshotPinnedMessages: %v", err)
+	}
+	_, err = tx.ExecContext(ctx, `
+		DELETE FROM messages
+		WHERE session_id = 'pg-pin-shifted-duplicate';
+		INSERT INTO messages
+			(session_id, ordinal, role, content, timestamp,
+			 content_length, source_uuid)
+		VALUES
+			('pg-pin-shifted-duplicate', 0, 'assistant', 'retry',
+			 '2026-05-01T00:00:00Z'::timestamptz, 5,
+			 'uuid-answer'),
+			('pg-pin-shifted-duplicate', 1, 'assistant', 'answer',
+			 '2026-05-01T00:00:01Z'::timestamptz, 6,
+			 'uuid-answer')`)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("replace messages: %v", err)
+	}
+	if err := restorePinnedMessages(
+		ctx, tx, "pg-pin-shifted-duplicate", pins,
+	); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("restorePinnedMessages: %v", err)
+	}
+	require.NoError(t, tx.Commit(), "commit tx")
+
+	store, err := NewStore(pgURL, schema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	got, err := store.ListPinnedMessages(
+		ctx, "pg-pin-shifted-duplicate", "",
+	)
+	require.NoError(t, err, "ListPinnedMessages")
+	require.Len(t, got, 1, "pins = %v", got)
+	assert.Equal(t, 1, got[0].Ordinal)
+	require.NotNil(t, got[0].Note)
+	assert.Equal(t, "keep shifted duplicate pin", *got[0].Note)
+}
+
 // TestReconcilePinnedMessagesPrunesPinWhenSourceUUIDGone covers the
 // case where a source-backed pin's source_uuid no longer exists in
 // the messages table, but a different message now occupies the

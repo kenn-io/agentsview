@@ -2949,10 +2949,12 @@ func snapshotPinnedMessages(
 ) ([]savedPostgresPin, error) {
 	// A populated pin source_uuid is the durable anchor and may legitimately
 	// disagree with message_id after an older ordinal-shifting reconciliation.
-	// Resolve it when unique; for duplicates, accept only the row still at the
-	// recorded ordinal. UUID-less legacy pins continue to anchor by message_id.
+	// Resolve it when unique and snapshot that resolved row's ordinal; for
+	// duplicates, accept only the row still at the recorded ordinal. UUID-less
+	// legacy pins continue to anchor by message_id.
 	rows, err := tx.QueryContext(ctx, `
-		SELECT p.id, p.message_id, p.note, p.created_at,
+		SELECT p.id, COALESCE(anchored.ordinal, p.message_id),
+			p.note, p.created_at,
 			CASE WHEN p.source_uuid <> ''
 				THEN anchored.ordinal IS NOT NULL
 				ELSE current_message.ordinal IS NOT NULL
