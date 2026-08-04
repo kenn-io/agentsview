@@ -210,6 +210,10 @@ func TestBunRecentEditsHydratesOnlyRequestedGroups(t *testing.T) {
 	assert.NotContains(t, hook.queries[0], "input_json")
 	assert.NotContains(t, hook.queries[0], "result_content")
 	assert.NotContains(t, hook.queries[0], "messages.content")
+	assert.Contains(t, hook.queries[0],
+		"CASE WHEN CAST(m.timestamp AS VARCHAR) = '' THEN NULL ELSE m.timestamp END",
+		"nullable timestamp normalization must be explicit before ordering",
+	)
 }
 
 func TestBunContentAnalyticsStreamsAcrossSessionBatches(t *testing.T) {
