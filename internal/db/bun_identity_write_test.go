@@ -150,3 +150,60 @@ func TestCanonicalProjectIdentityRowsReplacePortableState(t *testing.T) {
 		ctx, database.bunWriter, "archive", "different-salt",
 	), "archive salt mismatch")
 }
+
+func TestCanonicalIdentityBatchWritesPreserveLaterNonDefaultFields(t *testing.T) {
+	database := testDB(t)
+	ctx := t.Context()
+	observedAt := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	observations := []export.ProjectIdentityObservation{
+		{
+			SessionID: "minimal-session", Project: "minimal", Machine: "machine",
+			RootPath: "/repo/minimal", ObservedAt: observedAt,
+		},
+		{
+			SessionID: "rich-session", Project: "rich", Machine: "machine",
+			RootPath: "/repo/rich", GitRemote: "https://example.com/acme/rich.git",
+			GitRemoteName: "origin", RepositoryPath: "rich",
+			WorktreeName: "feature", WorktreeRootPath: "/repo/rich",
+			WorktreeRelationship: export.WorktreeLinked,
+			CheckoutState:        export.CheckoutBranch, GitBranch: "feature",
+			RemoteResolution:     export.ProjectResolutionResolved,
+			RemoteCandidateCount: 2, ObservedAt: observedAt,
+		},
+	}
+	observationRows, err := CanonicalProjectIdentityObservationRows(
+		"archive", "salt", observations,
+	)
+	require.NoError(t, err)
+	snapshotRows, err := CanonicalSessionProjectIdentitySnapshotRows(
+		"archive", "generation", observations,
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, database.bunWriter.RunInTx(ctx, nil,
+		func(ctx context.Context, tx bun.Tx) error {
+			if err := UpsertSourceArchiveRow(ctx, tx, "archive", "salt"); err != nil {
+				return err
+			}
+			if err := UpsertProjectIdentityObservationRows(ctx, tx, observationRows); err != nil {
+				return err
+			}
+			return UpsertSessionProjectIdentitySnapshotRows(ctx, tx, snapshotRows)
+		}))
+
+	var gotObservation bunmodel.SourceProjectIdentityObservation
+	require.NoError(t, database.bunReader.NewSelect().Model(&gotObservation).
+		Where("source_archive_id = ?", "archive").
+		Where("project = ?", "rich").Scan(ctx))
+	assert.Equal(t, "feature", gotObservation.GitBranch)
+	assert.Equal(t, 2, gotObservation.RemoteCandidateCount)
+	assert.Equal(t, "origin", gotObservation.GitRemoteName)
+
+	var gotSnapshot bunmodel.SourceSessionProjectIdentitySnapshot
+	require.NoError(t, database.bunReader.NewSelect().Model(&gotSnapshot).
+		Where("source_archive_id = ?", "archive").
+		Where("source_session_id = ?", "rich-session").Scan(ctx))
+	assert.Equal(t, "feature", gotSnapshot.GitBranch)
+	assert.Equal(t, 2, gotSnapshot.RemoteCandidateCount)
+	assert.Equal(t, "origin", gotSnapshot.GitRemoteName)
+}

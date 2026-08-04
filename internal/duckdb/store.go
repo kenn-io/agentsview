@@ -356,18 +356,11 @@ func (r duckSingleRow) Scan(dest ...any) error {
 
 type duckFullTextCapability struct{}
 
-type duckSearchHitProjection struct {
-	SessionID string  `bun:"session_id"`
-	Ordinal   int     `bun:"ordinal"`
-	Snippet   string  `bun:"snippet"`
-	Rank      float64 `bun:"rank"`
-}
-
 func (duckFullTextCapability) Available() bool { return true }
 
 func (duckFullTextCapability) Search(
 	ctx context.Context, store bun.IDB, f db.SearchFilter,
-) ([]db.SearchHit, error) {
+) ([]db.SearchResult, error) {
 	if f.Query == "" {
 		return nil, nil
 	}
@@ -468,7 +461,9 @@ func (duckFullTextCapability) Search(
 				AND s.id NOT IN (SELECT session_id FROM msg_matches)
 				` + nameProject + `
 		)
-		SELECT session_id, ordinal, snippet, rank
+		SELECT session_id, project, agent, name,
+			session_ended_at,
+			ordinal, snippet, rank
 		FROM (
 			SELECT * FROM msg_matches
 			UNION ALL
@@ -476,16 +471,9 @@ func (duckFullTextCapability) Search(
 		) combined
 		ORDER BY ` + orderBy + `
 		LIMIT ? OFFSET ?`
-	var rows []duckSearchHitProjection
-	if err := store.NewRaw(query, args...).Scan(ctx, &rows); err != nil {
+	hits, err := db.ScanSearchResults(ctx, store.NewRaw(query, args...), f.Limit)
+	if err != nil {
 		return nil, fmt.Errorf("duckdb search: %w", err)
-	}
-	hits := make([]db.SearchHit, len(rows))
-	for i, row := range rows {
-		hits[i] = db.SearchHit{
-			SessionID: row.SessionID, Ordinal: row.Ordinal,
-			Snippet: row.Snippet, Rank: row.Rank,
-		}
 	}
 	return hits, nil
 }

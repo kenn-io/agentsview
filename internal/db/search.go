@@ -332,14 +332,6 @@ type sqliteFullTextCapability struct {
 	store *DB
 }
 
-type sqliteSearchHitProjection struct {
-	SessionID string  `bun:"session_id"`
-	Ordinal   int     `bun:"ordinal"`
-	Snippet   string  `bun:"snippet"`
-	Rank      float64 `bun:"rank"`
-	MatchPos  int     `bun:"match_pos"`
-}
-
 // Search performs FTS5 full-text search across messages, grouped by session,
 // plus a LIKE-based search on session display names and first messages.
 //
@@ -355,7 +347,7 @@ type sqliteSearchHitProjection struct {
 //     to navigate to).
 func (capability sqliteFullTextCapability) Search(
 	ctx context.Context, store bun.IDB, f SearchFilter,
-) ([]SearchHit, error) {
+) ([]SearchResult, error) {
 	f.Query = PrepareFTSQuery(f.Query)
 
 	// ORDER BY for the outer query. FTS5 ranks are negative (lower = better),
@@ -418,7 +410,8 @@ func (capability sqliteFullTextCapability) Search(
 	//   8  | WHERE messages_fts MATCH ? (NOT IN)         | ftsArgs[0]
 	//  [8+]| AND s2.project = ? (NOT IN, if set)         | ftsArgs[1]
 	//   9  | LIMIT ? OFFSET ?                            | f.Limit+1, f.Cursor
-	args := make([]any, 0, len(ftsArgs)*2+6+len(nameProjectArgs))
+	args := make([]any, 0, len(ftsArgs)*2+7+len(nameProjectArgs))
+	args = append(args, plainQuery)         // (0) ROW_NUMBER best_query
 	args = append(args, ftsArgs...)         // (1) ROW_NUMBER WHERE
 	args = append(args, f.Query)            // (2) outer MATCH re-filter
 	args = append(args, likePattern)        // (3) CASE COALESCE(display_name,session_name) LIKE
@@ -430,9 +423,9 @@ func (capability sqliteFullTextCapability) Search(
 	args = append(args, f.Limit, f.Cursor)  // (9) LIMIT / OFFSET
 
 	query := fmt.Sprintf(`
-		SELECT session_id, ordinal, snippet, rank, match_pos
+		SELECT session_id, project, agent, name, session_ended_at,
+			ordinal, snippet, rank
 		FROM (
-			-- FTS branch: message content matches
 			SELECT m.session_id, s.project, s.agent,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''),
@@ -470,7 +463,6 @@ func (capability sqliteFullTextCapability) Search(
 
 			UNION ALL
 
-			-- Name branch: display_name / session_name / first_message matches not in FTS branch
 			SELECT s.id, s.project, s.agent,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''),
@@ -513,28 +505,9 @@ func (capability sqliteFullTextCapability) Search(
 		orderBy,           // ORDER BY (%s)
 	)
 
-	// Replace the ROW_NUMBER inner subquery's ? for best_query with args
-	// re-ordered: the first innerWhere param (f.Query) was already included in
-	// ftsArgs above at position (1); best_query needs a second copy of f.Query
-	// injected at the right position. Re-build args with the extra copy.
-	//
-	// The inner subquery's SELECT has `? AS best_query` before the WHERE, so
-	// its ? comes before innerWhere's ?s. Rebuild:
-	args2 := make([]any, 0, len(args)+1)
-	args2 = append(args2, plainQuery) // best_query: plain text for instr()
-	args2 = append(args2, args...)
-	args = args2
-
-	var rows []sqliteSearchHitProjection
-	if err := store.NewRaw(query, args...).Scan(ctx, &rows); err != nil {
+	hits, err := ScanSQLiteSearchResults(ctx, store.NewRaw(query, args...), f.Limit)
+	if err != nil {
 		return nil, fmt.Errorf("searching: %w", err)
-	}
-	hits := make([]SearchHit, len(rows))
-	for i, row := range rows {
-		hits[i] = SearchHit{
-			SessionID: row.SessionID, Ordinal: row.Ordinal,
-			Snippet: row.Snippet, Rank: row.Rank,
-		}
 	}
 	return hits, nil
 }
