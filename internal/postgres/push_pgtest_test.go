@@ -3560,6 +3560,117 @@ func TestSessionProvenanceBackfillForcesOneFullPush(t *testing.T) {
 		"unchanged session must not be re-pushed after backfill completion")
 }
 
+func TestCanonicalSessionWriteContractUpgradesPreviousTargetProjection(t *testing.T) {
+	const schema = "agentsview_canonical_write_contract_upgrade_test"
+	pgURL := testPGURL(t)
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, localDB.Close()) })
+
+	fileSize := int64(1234)
+	fileMtime := int64(5678)
+	fileInode := int64(9012)
+	fileDevice := int64(34)
+	fileHash := "canonical-hash"
+	source := db.Session{
+		ID: "upgrade-session", Project: "project", Machine: "workstation",
+		Agent: "codex", AgentLabel: "Codex CLI", Entrypoint: "cli",
+		FileSize: &fileSize, FileMtime: &fileMtime, FileInode: &fileInode,
+		FileDevice: &fileDevice, FileHash: &fileHash,
+	}
+	require.NoError(t, localDB.UpsertSession(source))
+
+	syncer, err := New(pgURL, schema, localDB, "workstation", true, SyncOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+	ctx := t.Context()
+	_, err = syncer.pg.ExecContext(ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
+	require.NoError(t, err)
+	require.NoError(t, syncer.EnsureSchema(ctx))
+	markerID, err := syncer.pushMarkerID()
+	require.NoError(t, err)
+	require.NoError(t, syncer.writePushMarker(ctx, markerID, "", nil))
+	_, err = syncer.pg.ExecContext(ctx, `
+		INSERT INTO sessions (id, machine, owner_marker, project, agent, created_at)
+		VALUES ($1, $2, $3, $4, $5, NOW())`,
+		source.ID, "workstation", markerID, source.Project, source.Agent)
+	require.NoError(t, err)
+
+	require.NoError(t, markSessionAliasBackfillDone(
+		syncer.aliasBackfillSyncStateOrDefault()))
+	require.NoError(t, markSessionProvenanceBackfillDone(
+		syncer.aliasBackfillSyncStateOrDefault()))
+	require.NoError(t, markTranscriptRevisionBackfillDone(syncer.effectiveSyncState()))
+	oldTargetFingerprint, err := pgTargetFingerprintForContract(
+		pgURL, schema, "v1",
+	)
+	require.NoError(t, err)
+	state := syncer.effectiveSyncState()
+	const cutoff = "2030-01-01T00:00:00Z"
+	require.NoError(t, state.SetSyncState("last_push_at", cutoff))
+	require.NoError(t, state.SetSyncState(
+		lastPushTargetFingerprintKey, oldTargetFingerprint,
+	))
+	snapshot, err := localDB.ReadSessionReplicationSnapshot(ctx, source.ID)
+	require.NoError(t, err)
+	syncer.stampReplicationSnapshot(&snapshot)
+	fingerprint, err := postgresSessionReplicationFingerprint(snapshot, markerID)
+	require.NoError(t, err)
+	require.NoError(t, writePushBoundaryState(
+		state, cutoff, []db.Session{snapshot.Session}, nil,
+		map[string]string{source.ID: fingerprint},
+	))
+
+	result, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.SessionsPushed,
+		"the previous write contract must force a canonical-row backfill")
+	var got struct {
+		AgentLabel string
+		Entrypoint string
+		FileSize   *int64
+		FileMtime  *int64
+		FileInode  *int64
+		FileDevice *int64
+		FileHash   *string
+	}
+	require.NoError(t, syncer.bunDB().NewSelect().Table("sessions").
+		Column("agent_label", "entrypoint", "file_size", "file_mtime",
+			"file_inode", "file_device", "file_hash").
+		Where("id = ?", source.ID).Scan(ctx, &got))
+	assert.Equal(t, source.AgentLabel, got.AgentLabel)
+	assert.Equal(t, source.Entrypoint, got.Entrypoint)
+	assert.Equal(t, source.FileSize, got.FileSize)
+	assert.Equal(t, source.FileMtime, got.FileMtime)
+	assert.Equal(t, source.FileInode, got.FileInode)
+	assert.Equal(t, source.FileDevice, got.FileDevice)
+	assert.Equal(t, source.FileHash, got.FileHash)
+
+	result, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Zero(t, result.SessionsPushed,
+		"the completed write-contract backfill must be a one-time repair")
+}
+
+func TestFullPushReadsEachSessionReplicationSnapshotOnce(t *testing.T) {
+	const schema = "agentsview_full_push_snapshot_cardinality_test"
+	syncer, localDB, _, ctx := newSessionProvenancePushSync(t, schema)
+	for _, id := range []string{"snapshot-a", "snapshot-b", "snapshot-c"} {
+		seedProvenanceSession(t, localDB, id, "workstation", "project", "")
+	}
+	reads := make(map[string]int)
+	syncer.afterSessionReplicationSnapshotRead = func(sessionID string) {
+		reads[sessionID]++
+	}
+
+	result, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 3, result.SessionsPushed)
+	assert.Equal(t, map[string]int{
+		"snapshot-a": 1, "snapshot-b": 1, "snapshot-c": 1,
+	}, reads, "a full push must not materialize transcripts in preflight")
+}
+
 // TestSessionProvenanceBackfillMarkerNotWrittenOnFailure verifies that a
 // failed push leaves the provenance backfill marker unset, so the next push
 // retries the one-time backfill instead of silently skipping it.

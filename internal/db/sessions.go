@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -756,7 +757,10 @@ func upsertArchiveSessionRow(
 	}
 
 	var current bunmodel.Session
-	err = store.NewSelect().Model(&current).Where("id = ?", s.ID).Scan(ctx)
+	err = store.NewSelect().Model(&current).
+		Column("project").
+		Column(bunmodel.SessionColumnsOwnedBy(bunmodel.SessionColumnArchive)...).
+		Where("id = ?", s.ID).Scan(ctx)
 	inserted := errors.Is(err, sql.ErrNoRows)
 	if err != nil && !inserted {
 		return sessionUpsertResult{}, fmt.Errorf("checking session %s: %w", s.ID, err)
@@ -787,18 +791,19 @@ func upsertArchiveSessionRow(
 		return sessionUpsertResult{}, err
 	}
 	if inserted {
-		row.DataVersion = 0
-		row.TranscriptRevision = "0"
-		row.DeletedAt = nil
-		row.DeletionCause = nil
-		resetArchiveManagedSessionFields(&row)
+		if err := resetArchiveManagedSessionFields(&row); err != nil {
+			return sessionUpsertResult{}, err
+		}
 	} else {
-		preserveArchiveManagedSessionFields(&row, current)
+		if err := preserveArchiveManagedSessionFields(&row, current); err != nil {
+			return sessionUpsertResult{}, err
+		}
 		if result.sourceMissing && reviveSourceMissing {
 			row.DeletedAt = nil
 			row.DeletionCause = nil
 		}
 	}
+	normalizeCanonicalSessionTimestampPrecision(&row)
 	if err := UpsertSessionRow(ctx, store, row); err != nil {
 		return sessionUpsertResult{}, err
 	}
@@ -820,72 +825,53 @@ func upsertArchiveSessionRow(
 	return result, nil
 }
 
-func resetArchiveManagedSessionFields(row *bunmodel.Session) {
-	row.DisplayName = nil
-	row.ToolFailureSignalCount = 0
-	row.ToolRetryCount = 0
-	row.EditChurnCount = 0
-	row.ConsecutiveFailureMax = 0
-	row.Outcome = "unknown"
-	row.OutcomeConfidence = "low"
-	row.EndedWithRole = ""
-	row.FinalFailureStreak = 0
-	row.SignalsPendingSince = nil
-	row.CompactionCount = 0
-	row.MidTaskCompactionCount = 0
-	row.ContextPressureMax = nil
-	row.HealthScore = nil
-	row.HealthGrade = nil
-	row.HasToolCalls = false
-	row.HasContextData = false
-	row.SecretLeakCount = 0
-	row.SecretsRulesVersion = ""
-	row.QualitySignalVersion = 0
-	row.ShortPromptCount = 0
-	row.UnstructuredStart = false
-	row.MissingSuccessCriteriaCount = 0
-	row.MissingVerificationCount = 0
-	row.DuplicatePromptCount = 0
-	row.NoCodeContextCount = 0
-	row.RunawayToolLoopCount = 0
+var canonicalSessionFieldIndexByColumn = func() map[string]int {
+	typeOfSession := reflect.TypeFor[bunmodel.Session]()
+	indexes := make(map[string]int, typeOfSession.NumField())
+	for index := range typeOfSession.NumField() {
+		field := typeOfSession.Field(index)
+		column, _, _ := strings.Cut(field.Tag.Get("bun"), ",")
+		if column == "" || strings.HasPrefix(column, "table:") {
+			continue
+		}
+		indexes[column] = index
+	}
+	return indexes
+}()
+
+func resetArchiveManagedSessionFields(row *bunmodel.Session) error {
+	defaults := bunmodel.Session{
+		CreatedAt: row.CreatedAt, Outcome: "unknown", OutcomeConfidence: "low",
+		TranscriptRevision: "0",
+	}
+	return copyCanonicalSessionColumns(
+		row, &defaults,
+		bunmodel.SessionColumnsOwnedBy(bunmodel.SessionColumnArchive),
+	)
 }
 
 func preserveArchiveManagedSessionFields(
 	row *bunmodel.Session, current bunmodel.Session,
-) {
-	row.DisplayName = current.DisplayName
-	row.CreatedAt = current.CreatedAt
-	row.DeletedAt = current.DeletedAt
-	row.DeletionCause = current.DeletionCause
-	row.LocalModifiedAt = current.LocalModifiedAt
-	row.TranscriptRevision = current.TranscriptRevision
-	row.DataVersion = current.DataVersion
-	row.ToolFailureSignalCount = current.ToolFailureSignalCount
-	row.ToolRetryCount = current.ToolRetryCount
-	row.EditChurnCount = current.EditChurnCount
-	row.ConsecutiveFailureMax = current.ConsecutiveFailureMax
-	row.Outcome = current.Outcome
-	row.OutcomeConfidence = current.OutcomeConfidence
-	row.EndedWithRole = current.EndedWithRole
-	row.FinalFailureStreak = current.FinalFailureStreak
-	row.SignalsPendingSince = current.SignalsPendingSince
-	row.CompactionCount = current.CompactionCount
-	row.MidTaskCompactionCount = current.MidTaskCompactionCount
-	row.ContextPressureMax = current.ContextPressureMax
-	row.HealthScore = current.HealthScore
-	row.HealthGrade = current.HealthGrade
-	row.HasToolCalls = current.HasToolCalls
-	row.HasContextData = current.HasContextData
-	row.SecretLeakCount = current.SecretLeakCount
-	row.SecretsRulesVersion = current.SecretsRulesVersion
-	row.QualitySignalVersion = current.QualitySignalVersion
-	row.ShortPromptCount = current.ShortPromptCount
-	row.UnstructuredStart = current.UnstructuredStart
-	row.MissingSuccessCriteriaCount = current.MissingSuccessCriteriaCount
-	row.MissingVerificationCount = current.MissingVerificationCount
-	row.DuplicatePromptCount = current.DuplicatePromptCount
-	row.NoCodeContextCount = current.NoCodeContextCount
-	row.RunawayToolLoopCount = current.RunawayToolLoopCount
+) error {
+	return copyCanonicalSessionColumns(
+		row, &current,
+		bunmodel.SessionColumnsOwnedBy(bunmodel.SessionColumnArchive),
+	)
+}
+
+func copyCanonicalSessionColumns(
+	destination, source *bunmodel.Session, columns []string,
+) error {
+	destinationValue := reflect.ValueOf(destination).Elem()
+	sourceValue := reflect.ValueOf(source).Elem()
+	for _, column := range columns {
+		index, ok := canonicalSessionFieldIndexByColumn[column]
+		if !ok {
+			return fmt.Errorf("canonical session ownership column %q is unknown", column)
+		}
+		destinationValue.Field(index).Set(sourceValue.Field(index))
+	}
+	return nil
 }
 
 func insertArchiveSessionIfAbsentRow(
@@ -903,7 +889,8 @@ func insertArchiveSessionIfAbsentRow(
 	}
 
 	var current bunmodel.Session
-	err = store.NewSelect().Model(&current).Where("id = ?", s.ID).Scan(ctx)
+	err = store.NewSelect().Model(&current).
+		Column("id", "deleted_at").Where("id = ?", s.ID).Scan(ctx)
 	if err == nil {
 		if current.DeletedAt != nil {
 			return ErrSessionTrashed
@@ -921,11 +908,10 @@ func insertArchiveSessionIfAbsentRow(
 	if err != nil {
 		return err
 	}
-	row.DataVersion = 0
-	row.TranscriptRevision = "0"
-	row.DeletedAt = nil
-	row.DeletionCause = nil
-	resetArchiveManagedSessionFields(&row)
+	if err := resetArchiveManagedSessionFields(&row); err != nil {
+		return err
+	}
+	normalizeCanonicalSessionTimestampPrecision(&row)
 	if _, err := store.NewInsert().Model(&row).
 		On("CONFLICT (id) DO NOTHING").Returning("").Exec(ctx); err != nil {
 		return fmt.Errorf("inserting session %s if absent: %w", s.ID, err)

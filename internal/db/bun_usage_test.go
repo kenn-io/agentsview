@@ -281,33 +281,26 @@ func TestCanonicalModelPricingRowsRejectInvalidTimestamp(t *testing.T) {
 	require.ErrorContains(t, err, "model pricing timestamp")
 }
 
-func TestCanonicalModelPricingRowsKeepMetadataBandless(t *testing.T) {
-	prices, bands, err := CanonicalModelPricingRows([]ModelPricing{{
-		ModelPattern: "_fallback_version", UpdatedAt: "2026-08-04T01:00:00Z",
-		Bands: []PricingBand{{AboveInputTokens: 1}},
-	}})
-	require.NoError(t, err)
-	require.Len(t, prices, 1)
-	assert.Empty(t, bands)
-}
-
 func TestUpsertModelPricingRowsAdvancesTargetRevision(t *testing.T) {
 	database := testDB(t)
 	ctx := t.Context()
 	initial := []bunmodel.ModelPricing{{
 		ModelPattern: "model", InputMicrodollarsPerMTok: 1,
-		UpdatedAt: "2026-08-04T02:00:00Z",
+		UpdatedAt: mustBunTimestamp(t, "2026-08-04T02:00:00Z"),
 	}}
 	require.NoError(t, UpsertModelPricingRows(ctx, database.bunWriter, initial, nil))
 	changed := []bunmodel.ModelPricing{{
 		ModelPattern: "model", InputMicrodollarsPerMTok: 2,
-		UpdatedAt: "2026-08-04T01:00:00Z",
+		UpdatedAt: mustBunTimestamp(t, "2026-08-04T01:00:00Z"),
 	}}
 	require.NoError(t, UpsertModelPricingRows(ctx, database.bunWriter, changed, nil))
 	var stored bunmodel.ModelPricing
 	require.NoError(t, database.bunReader.NewSelect().Model(&stored).
 		Where("model_pattern = ?", "model").Scan(ctx))
-	assert.Equal(t, "2026-08-04T02:00:00.000001Z", stored.UpdatedAt)
+	assert.Equal(t,
+		mustBunTimestamp(t, "2026-08-04T02:00:00.000001Z"),
+		stored.UpdatedAt,
+	)
 }
 
 func TestUpsertModelPricingRowsPreservesUnchangedRevisions(t *testing.T) {
@@ -315,13 +308,15 @@ func TestUpsertModelPricingRowsPreservesUnchangedRevisions(t *testing.T) {
 	ctx := t.Context()
 	initial := []bunmodel.ModelPricing{{
 		ModelPattern: "model", InputMicrodollarsPerMTok: 1,
-		UpdatedAt: "2026-08-04T02:00:00Z",
+		UpdatedAt: mustBunTimestamp(t, "2026-08-04T02:00:00Z"),
 	}}
 	initialBands := []bunmodel.ModelPricingBand{
 		{ModelPattern: "model", AboveInputTokens: 100,
-			InputMicrodollarsPerMTok: 10, UpdatedAt: "2026-08-04T02:00:00Z"},
+			InputMicrodollarsPerMTok: 10,
+			UpdatedAt:                mustBunTimestamp(t, "2026-08-04T02:00:00Z")},
 		{ModelPattern: "model", AboveInputTokens: 200,
-			InputMicrodollarsPerMTok: 20, UpdatedAt: "2026-08-04T02:00:00Z"},
+			InputMicrodollarsPerMTok: 20,
+			UpdatedAt:                mustBunTimestamp(t, "2026-08-04T02:00:00Z")},
 	}
 	require.NoError(t, UpsertModelPricingRows(
 		ctx, database.bunWriter, initial, initialBands,
@@ -329,13 +324,15 @@ func TestUpsertModelPricingRowsPreservesUnchangedRevisions(t *testing.T) {
 
 	incoming := []bunmodel.ModelPricing{{
 		ModelPattern: "model", InputMicrodollarsPerMTok: 1,
-		UpdatedAt: "2026-08-04T03:00:00Z",
+		UpdatedAt: mustBunTimestamp(t, "2026-08-04T03:00:00Z"),
 	}}
 	incomingBands := []bunmodel.ModelPricingBand{
 		{ModelPattern: "model", AboveInputTokens: 100,
-			InputMicrodollarsPerMTok: 10, UpdatedAt: "2026-08-04T03:00:00Z"},
+			InputMicrodollarsPerMTok: 10,
+			UpdatedAt:                mustBunTimestamp(t, "2026-08-04T03:00:00Z")},
 		{ModelPattern: "model", AboveInputTokens: 200,
-			InputMicrodollarsPerMTok: 21, UpdatedAt: "2026-08-04T01:00:00Z"},
+			InputMicrodollarsPerMTok: 21,
+			UpdatedAt:                mustBunTimestamp(t, "2026-08-04T01:00:00Z")},
 	}
 	require.NoError(t, UpsertModelPricingRows(
 		ctx, database.bunWriter, incoming, incomingBands,
@@ -344,33 +341,28 @@ func TestUpsertModelPricingRowsPreservesUnchangedRevisions(t *testing.T) {
 	var stored bunmodel.ModelPricing
 	require.NoError(t, database.bunReader.NewSelect().Model(&stored).
 		Where("model_pattern = ?", "model").Scan(ctx))
-	assert.Equal(t, "2026-08-04T03:00:00Z", stored.UpdatedAt,
+	assert.Equal(t, mustBunTimestamp(t, "2026-08-04T03:00:00Z"), stored.UpdatedAt,
 		"a changed band advances the model catalog revision")
 	var bands []bunmodel.ModelPricingBand
 	require.NoError(t, database.bunReader.NewSelect().Model(&bands).
 		Where("model_pattern = ?", "model").OrderExpr("above_input_tokens ASC").
 		Scan(ctx))
 	require.Len(t, bands, 2)
-	assert.Equal(t, "2026-08-04T02:00:00Z", bands[0].UpdatedAt)
-	assert.Equal(t, "2026-08-04T02:00:00.000001Z", bands[1].UpdatedAt)
+	assert.Equal(t, mustBunTimestamp(t, "2026-08-04T02:00:00Z"),
+		bands[0].UpdatedAt)
+	assert.Equal(t, mustBunTimestamp(t, "2026-08-04T02:00:00.000001Z"),
+		bands[1].UpdatedAt)
 
-	incoming[0].UpdatedAt = "2026-08-04T04:00:00Z"
-	incomingBands[0].UpdatedAt = "2026-08-04T04:00:00Z"
-	incomingBands[1].UpdatedAt = "2026-08-04T04:00:00Z"
+	incoming[0].UpdatedAt = mustBunTimestamp(t, "2026-08-04T04:00:00Z")
+	incomingBands[0].UpdatedAt = mustBunTimestamp(t, "2026-08-04T04:00:00Z")
+	incomingBands[1].UpdatedAt = mustBunTimestamp(t, "2026-08-04T04:00:00Z")
 	require.NoError(t, UpsertModelPricingRows(
 		ctx, database.bunWriter, incoming, incomingBands,
 	))
 	require.NoError(t, database.bunReader.NewSelect().Model(&stored).
 		Where("model_pattern = ?", "model").Scan(ctx))
-	assert.Equal(t, "2026-08-04T03:00:00Z", stored.UpdatedAt,
+	assert.Equal(t, mustBunTimestamp(t, "2026-08-04T03:00:00Z"), stored.UpdatedAt,
 		"repeating identical catalog content preserves its revision")
-}
-
-func TestNextPricingRevisionDoesNotPersistMalformedProposal(t *testing.T) {
-	got := nextPricingRevision(
-		"2026-08-04T02:00:00Z", "not-a-timestamp", "2026-08-04T03:00:00Z",
-	)
-	assert.Equal(t, "2026-08-04T03:00:00Z", got)
 }
 
 func TestAppendCursorUsageEventRowsDeduplicatesPortableRows(t *testing.T) {

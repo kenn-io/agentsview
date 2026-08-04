@@ -121,6 +121,25 @@ func TestCommonTablesContainCanonicalServingSchema(t *testing.T) {
 	})
 }
 
+func TestSessionColumnOwnershipClassifiesEveryCanonicalColumn(t *testing.T) {
+	owners := SessionColumnOwnerships()
+	classified := make([]string, 0, len(owners))
+	for column, owner := range owners {
+		classified = append(classified, column)
+		assert.Contains(t, []SessionColumnOwner{
+			SessionColumnSource, SessionColumnArchive,
+		}, owner, column)
+	}
+	sort.Strings(classified)
+	assert.Equal(t, ModelColumns((*Session)(nil)), classified)
+
+	owner, ok := SessionColumnOwnership("local_modified_at")
+	require.True(t, ok)
+	assert.Equal(t, SessionColumnArchive, owner)
+	_, ok = SessionColumnOwnership("new_unclassified_column")
+	assert.False(t, ok)
+}
+
 func TestCommonTablesGenerateCanonicalMessageCompositeKey(t *testing.T) {
 	for name, dialect := range map[string]schema.Dialect{
 		"postgresql": pgdialect.New(),

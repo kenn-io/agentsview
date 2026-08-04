@@ -46,6 +46,12 @@ const (
 var errSessionOwnershipConflict = errors.New("session ownership conflict")
 var errSessionExcluded = errors.New("session excluded")
 
+type pgSessionOwnershipLockRow struct {
+	bun.BaseModel `bun:"table:sync_metadata"`
+	Key           string `bun:"key,pk"`
+	Value         string `bun:"value,notnull"`
+}
+
 type pushBoundaryState struct {
 	Cutoff       string            `json:"cutoff"`
 	Fingerprints map[string]string `json:"fingerprints"`
@@ -458,6 +464,9 @@ func (s *Sync) PushWithOptions(
 				return result, fmt.Errorf(
 					"reading local fingerprint snapshot %s: %w", id, err,
 				)
+			}
+			if s.afterSessionReplicationSnapshotRead != nil {
+				s.afterSessionReplicationSnapshotRead(id)
 			}
 			s.stampReplicationSnapshot(&snapshot)
 			sessionFingerprints[id], err =
@@ -1231,6 +1240,9 @@ func (s *Sync) pushBatch(
 			_ = tx.Rollback()
 			*pushed = (*pushed)[:len(*pushed)-n]
 			return batchResult{}, nil
+		}
+		if s.afterSessionReplicationSnapshotRead != nil {
+			s.afterSessionReplicationSnapshotRead(sess.ID)
 		}
 		s.stampReplicationSnapshot(&snapshot)
 		fingerprint, err := postgresSessionReplicationFingerprint(snapshot, markerID)
@@ -2167,10 +2179,16 @@ func (s *Sync) lockSessionOwnership(
 	if s.beforeSessionOwnershipLock != nil {
 		s.beforeSessionOwnershipLock()
 	}
-	lockKey := s.schema + "\x00" + sessionID
-	if _, err := store.NewRaw(
-		"SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", lockKey,
-	).Exec(ctx); err != nil {
+	digest := sha256.Sum256([]byte(s.schema + "\x00" + sessionID))
+	lockKey := "session_ownership_lock_v1:" + hex.EncodeToString(digest[:2])
+	row := pgSessionOwnershipLockRow{Key: lockKey, Value: "1"}
+	if _, err := store.NewInsert().Model(&row).
+		On("CONFLICT (key) DO NOTHING").Returning("").Exec(ctx); err != nil {
+		return fmt.Errorf("creating session ownership lock %s: %w", sessionID, err)
+	}
+	var value string
+	if err := store.NewSelect().Model((*pgSessionOwnershipLockRow)(nil)).
+		Column("value").Where("key = ?", lockKey).For("UPDATE").Scan(ctx, &value); err != nil {
 		return fmt.Errorf("locking pg session ownership %s: %w", sessionID, err)
 	}
 	if s.afterSessionOwnershipLock != nil {
