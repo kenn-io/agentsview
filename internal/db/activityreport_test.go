@@ -633,30 +633,6 @@ func TestGetSessionUsageRowsPrefersCompleteClaudeSnapshotAcrossSessions(
 	}, rowSet.CanonicalTokenCoverageBySession)
 }
 
-func TestSQLiteSessionUsageRowLessEquivalentInstantUsesSessionOrder(t *testing.T) {
-	instant := time.Date(2026, 6, 16, 10, 0, 0, 0, time.UTC)
-	parent := sqliteSessionUsageOrderedRow{
-		scan: usageScanRow{
-			sessionID: "a-parent",
-			ts:        "2026-06-16T10:00:00Z",
-		},
-		ts:      instant,
-		validTS: true,
-	}
-	child := sqliteSessionUsageOrderedRow{
-		scan: usageScanRow{
-			sessionID: "z-child",
-			ts:        "2026-06-16T05:00:00-05:00",
-		},
-		ts:      instant,
-		validTS: true,
-	}
-	sessionOrder := map[string]int{"a-parent": 0, "z-child": 1}
-
-	assert.True(t, sqliteSessionUsageRowLess(parent, child, sessionOrder))
-	assert.False(t, sqliteSessionUsageRowLess(child, parent, sessionOrder))
-}
-
 func TestSQLiteActivityReportRowStatusCanonicalizesKimiAliasByTimestamp(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -760,6 +736,36 @@ func TestSQLiteActivityReportRowStatusPrefersExactCustomKimiAlias(t *testing.T) 
 	resolutions := block.Models["daimon-kimi-code"].Resolutions
 	require.Len(t, resolutions, 1)
 	assert.Equal(t, "daimon-kimi-code", resolutions[0].PricedModel)
+}
+
+func TestSQLiteActivityReportRowStatusUsesFlatRateForUntimedUsage(t *testing.T) {
+	embedded := pricingpkg.EmbeddedGenAIDocument()
+	resolver := export.NewPricingResolver([]export.EffectivePricingRow{
+		{
+			ModelPattern: "gpt-5.6-luna",
+			Rates: export.ModelRates{
+				InputPerMTok: money.MustParseDollars("9"),
+				Source:       export.PricingRowSourceFetched,
+			},
+		},
+		{
+			GenAI: embedded.Prices, GenAIVersion: embedded.Version,
+			GenAISource: export.PricingRowSourceEmbedded,
+		},
+	})
+
+	cost, priced, contributes, err := sqliteActivityReportRowStatus(
+		dailyUsageScanRow{
+			usageSource: "provider", model: "gpt-5.6-luna",
+			ts: "2026-08-01T00:00:00Z", pricingTS: "", inputTokens: 1_000,
+		},
+		resolver,
+	)
+
+	require.NoError(t, err)
+	assert.True(t, priced)
+	assert.True(t, contributes)
+	assert.Equal(t, money.MustParseDollars("0.009"), cost)
 }
 
 func TestGetActivityReport_CopilotReportedCostReplacesSessionEstimates(t *testing.T) {

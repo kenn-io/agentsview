@@ -601,10 +601,11 @@ func ReplaceUsageEventRows(
 	for start := 0; start < len(rows); start += canonicalWriteBatchSize {
 		end := min(start+canonicalWriteBatchSize, len(rows))
 		batch := rows[start:end]
-		query := tx.NewInsert().Model(&batch).Returning("")
+		columns := canonicalReplacementColumns((*bunmodel.UsageEvent)(nil))
 		if tx.Dialect().Name().String() != "custom" {
-			query = query.ExcludeColumn("id")
+			columns = canonicalReplacementColumns((*bunmodel.UsageEvent)(nil), "id")
 		}
+		query := tx.NewInsert().Model(&batch).Column(columns...).Returning("")
 		if _, err := query.Exec(ctx); err != nil {
 			return fmt.Errorf("inserting canonical usage events for %s: %w", sessionID, err)
 		}
