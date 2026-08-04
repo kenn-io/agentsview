@@ -11,14 +11,6 @@ import (
 
 type postgresFullTextCapability struct{}
 
-type postgresSearchHitProjection struct {
-	SessionID string  `bun:"session_id"`
-	Ordinal   int     `bun:"ordinal"`
-	Snippet   string  `bun:"snippet"`
-	Rank      float64 `bun:"rank"`
-	MatchPos  int     `bun:"match_pos"`
-}
-
 // SearchSession performs ILIKE substring search within a single
 // session's messages, returning matching ordinals.
 func (postgresFullTextCapability) SearchSession(
@@ -71,7 +63,7 @@ func escapeLike(v string) string {
 // session name (display_name / first_message) branch.
 func (postgresFullTextCapability) Search(
 	ctx context.Context, store bun.IDB, f db.SearchFilter,
-) ([]db.SearchHit, error) {
+) ([]db.SearchResult, error) {
 	// plainTerm is the de-quoted query joined back into one string. It feeds
 	// the name-branch ILIKE (matching the typed text against the short session
 	// name) and centers the message snippet, mirroring SQLite's plainQuery.
@@ -195,8 +187,9 @@ func (postgresFullTextCapability) Search(
 		-- rank is a constant 1.0 because PostgreSQL ILIKE has no
 	-- relevance scoring engine (unlike SQLite FTS5). Ordering
 	-- uses match_pos and session_ended_at instead.
-	SELECT session_id, ordinal,
-			snippet, 1.0::double precision AS rank, match_pos
+	SELECT session_id, project, agent, name,
+			session_ended_at,
+			ordinal, snippet, 1.0::double precision AS rank
 		FROM (
 			SELECT *, 1 AS match_priority FROM msg_matches
 			UNION ALL
@@ -212,17 +205,10 @@ func (postgresFullTextCapability) Search(
 	)
 	args = append(args, f.Limit, f.Cursor)
 
-	var rows []postgresSearchHitProjection
-	if err := store.NewRaw(query, args...).Scan(ctx, &rows); err != nil {
+	hits, err := db.ScanSearchResults(ctx, store.NewRaw(query, args...), f.Limit)
+	if err != nil {
 		return nil,
 			fmt.Errorf("searching: %w", err)
-	}
-	hits := make([]db.SearchHit, len(rows))
-	for i, row := range rows {
-		hits[i] = db.SearchHit{
-			SessionID: row.SessionID, Ordinal: row.Ordinal,
-			Snippet: row.Snippet, Rank: row.Rank,
-		}
 	}
 	return hits, nil
 }

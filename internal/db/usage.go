@@ -661,6 +661,7 @@ type dailyUsageScanRow struct {
 	messageOrdinal           sql.NullInt64
 	usageSource              string
 	ts                       string
+	usageTime                time.Time
 	model                    string
 	tokenJSON                string
 	webSearchRequests        sql.NullInt64
@@ -1247,14 +1248,19 @@ func parseJSONString(tokenJSON string, i int) (string, int, bool) {
 	if i >= len(tokenJSON) || tokenJSON[i] != '"' {
 		return "", i, false
 	}
+	escaped := false
 	for j := i + 1; j < len(tokenJSON); j++ {
 		switch tokenJSON[j] {
 		case '\\':
 			if j+1 >= len(tokenJSON) {
 				return "", len(tokenJSON), false
 			}
+			escaped = true
 			j++
 		case '"':
+			if !escaped {
+				return tokenJSON[i+1 : j], j + 1, true
+			}
 			raw := tokenJSON[i : j+1]
 			var value string
 			err := json.Unmarshal([]byte(raw), &value)
@@ -1490,6 +1496,25 @@ func usageLookupModel(model, ts string) string {
 	return model
 }
 
+func dailyUsageLookupModel(r dailyUsageScanRow) string {
+	if !r.usageTime.IsZero() {
+		if canonical := pricingpkg.CanonicalModelForDate(
+			r.model, r.usageTime,
+		); canonical != "" {
+			return canonical
+		}
+		return r.model
+	}
+	return usageLookupModel(r.model, r.ts)
+}
+
+func dailyUsageLocalDate(r dailyUsageScanRow, loc *time.Location) string {
+	if !r.usageTime.IsZero() {
+		return r.usageTime.In(loc).Format("2006-01-02")
+	}
+	return localDate(r.ts, loc)
+}
+
 func dailyUsageAmounts(
 	r dailyUsageScanRow, pricing *export.PricingResolver,
 ) (
@@ -1501,8 +1526,7 @@ func dailyUsageAmounts(
 	inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok =
 		dailyUsageRowTokens(r)
 
-	pricedModel, lookup := pricing.Resolve(
-		r.model, usageLookupModel(r.model, r.ts))
+	pricedModel, lookup := pricing.Resolve(r.model, dailyUsageLookupModel(r))
 	rates := lookup.Rates
 	requestScoped := usageRowIsRequestScoped(r.usageSource, r.messageOrdinal)
 	if r.cost.Valid && r.costSource != CopilotReportedCostSource {
@@ -1961,12 +1985,6 @@ func (s *BunStore) getDailyUsageFrom(
 	}
 	rateResolver := export.NewPricingResolver(pricing)
 
-	rows, err := s.loadDailyUsageRowsFrom(ctx, store, f, true, false)
-	if err != nil {
-		return DailyUsageResult{},
-			fmt.Errorf("querying daily usage: %w", err)
-	}
-
 	type bucket struct {
 		inputTok  int
 		outputTok int
@@ -1997,13 +2015,13 @@ func (s *BunStore) getDailyUsageFrom(
 	// single fallback rate would misreport mixed-model periods.
 	var totalSavings money.Money
 
-	for _, r := range rows {
-		date := localDate(r.ts, loc)
+	processRow := func(r dailyUsageScanRow) error {
+		date := dailyUsageLocalDate(r, loc)
 		if f.From != "" && date < f.From {
-			continue
+			return nil
 		}
 		if f.To != "" && date > f.To {
-			continue
+			return nil
 		}
 		// Dedup AFTER the date filter so out-of-range rows
 		// (pulled in by the ±14h timezone padding) don't mark
@@ -2013,7 +2031,7 @@ func (s *BunStore) getDailyUsageFrom(
 			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
 		); ok {
 			if _, dup := seen[key]; dup {
-				continue
+				return nil
 			}
 			seen[key] = struct{}{}
 		}
@@ -2033,11 +2051,11 @@ func (s *BunStore) getDailyUsageFrom(
 		inputTok, outputTok, cacheCrTok, cacheRdTok, cost, savings, priceErr :=
 			dailyUsageAmounts(r, rateResolver)
 		if priceErr != nil {
-			return DailyUsageResult{}, priceErr
+			return priceErr
 		}
 		totalSavings, priceErr = money.Add(totalSavings, savings)
 		if priceErr != nil {
-			return DailyUsageResult{}, fmt.Errorf(
+			return fmt.Errorf(
 				"summing daily usage cache savings: %w", priceErr)
 		}
 
@@ -2061,7 +2079,7 @@ func (s *BunStore) getDailyUsageFrom(
 		}
 		sc.estimated[key], priceErr = money.Add(sc.estimated[key], cost)
 		if priceErr != nil {
-			return DailyUsageResult{}, fmt.Errorf(
+			return fmt.Errorf(
 				"summing daily usage session cost: %w", priceErr)
 		}
 		if useAuthoritativeCost &&
@@ -2071,6 +2089,12 @@ func (s *BunStore) getDailyUsageFrom(
 			rateResolver.RecordUnattributedReported()
 		}
 		sessionCosts[r.sessionID] = sc
+		return nil
+	}
+	if err := s.streamDailyUsageRowsFrom(
+		ctx, store, f, true, false, processRow,
+	); err != nil {
+		return DailyUsageResult{}, fmt.Errorf("querying daily usage: %w", err)
 	}
 	sessionIDs := make([]string, 0, len(sessionCosts))
 	for sessionID := range sessionCosts {
