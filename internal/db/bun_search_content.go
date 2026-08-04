@@ -252,16 +252,28 @@ func (s *BunStore) searchContentHybrid(
 		if err != nil {
 			return err
 		}
+		eligibleSemanticHits, err = filterContentHitsByLiveAnchor(
+			ctx, store, eligibleSemanticHits,
+		)
+		if err != nil {
+			return err
+		}
 		semanticLeg := contentHybridLegFromHits(
 			eligibleSemanticHits, filter.Scope, candidateLimit,
 		)
+		liveLexicalLeg, err := filterContentHybridLegByLiveAnchor(
+			ctx, store, lexicalLeg,
+		)
+		if err != nil {
+			return err
+		}
 
 		merged := RRFMerge(
-			[][]RankedUnit{semanticLeg.ranked, lexicalLeg.ranked}, filter.Limit,
+			[][]RankedUnit{semanticLeg.ranked, liveLexicalLeg.ranked}, filter.Limit,
 		)
 		fusedHits := make([]ContentSearchHit, 0, len(merged))
 		for _, fused := range merged {
-			hit, ok := lexicalLeg.display[fused.Unit.Key]
+			hit, ok := liveLexicalLeg.display[fused.Unit.Key]
 			if !ok {
 				hit = semanticLeg.display[fused.Unit.Key]
 			}
@@ -273,6 +285,53 @@ func (s *BunStore) searchContentHybrid(
 		return err
 	})
 	return page, err
+}
+
+func filterContentHitsByLiveAnchor(
+	ctx context.Context, store bun.IDB, hits []ContentSearchHit,
+) ([]ContentSearchHit, error) {
+	messages, err := bunContentMessagesForHits(ctx, store, hits)
+	if err != nil {
+		return nil, err
+	}
+	live := make([]ContentSearchHit, 0, len(hits))
+	for _, hit := range hits {
+		if _, ok := messages[bunContentMessageKey{hit.SessionID, hit.Ordinal}]; ok {
+			live = append(live, hit)
+		}
+	}
+	return live, nil
+}
+
+func filterContentHybridLegByLiveAnchor(
+	ctx context.Context, store bun.IDB, leg contentHybridLeg,
+) (contentHybridLeg, error) {
+	hits := make([]ContentSearchHit, 0, len(leg.ranked))
+	for _, ranked := range leg.ranked {
+		if hit, ok := leg.display[ranked.Key]; ok {
+			hits = append(hits, hit)
+		}
+	}
+	liveHits, err := filterContentHitsByLiveAnchor(ctx, store, hits)
+	if err != nil {
+		return contentHybridLeg{}, err
+	}
+	liveKeys := make(map[string]struct{}, len(liveHits))
+	for _, hit := range liveHits {
+		liveKeys[hit.DocKey] = struct{}{}
+	}
+	live := contentHybridLeg{
+		ranked:  make([]RankedUnit, 0, len(liveHits)),
+		display: make(map[string]ContentSearchHit, len(liveHits)),
+	}
+	for _, ranked := range leg.ranked {
+		if _, ok := liveKeys[ranked.Key]; !ok {
+			continue
+		}
+		live.ranked = append(live.ranked, ranked)
+		live.display[ranked.Key] = leg.display[ranked.Key]
+	}
+	return live, nil
 }
 
 func contentHybridLegFromHits(
@@ -655,6 +714,11 @@ func (s *BunStore) hydrateContentSearchHits(
 func (s *BunStore) bunContentSubstringHits(
 	ctx context.Context, store bun.IDB, filter ContentSearchFilter,
 ) ([]ContentSearchHit, error) {
+	if s.backend.Name() == "sqlite" && strings.IndexFunc(
+		filter.Pattern, func(r rune) bool { return r > 127 },
+	) >= 0 {
+		return s.bunContentUnicodeSubstringHits(ctx, store, filter)
+	}
 	rows, err := s.bunContentCandidateRows(
 		ctx, store, filter, filter.Pattern, false,
 	)
@@ -666,6 +730,49 @@ func (s *BunStore) bunContentSubstringHits(
 		hits[i] = bunContentHitFromCandidate(
 			row, filter.substringSnippet(row.Body),
 		)
+	}
+	return hits, nil
+}
+
+func (s *BunStore) bunContentUnicodeSubstringHits(
+	ctx context.Context, store bun.IDB, filter ContentSearchFilter,
+) ([]ContentSearchHit, error) {
+	query, args := s.bunContentCandidateQuery(filter, "", true, false)
+	if query == "" {
+		return nil, nil
+	}
+	rows, err := store.QueryContext(ctx, store.NewRaw(query, args...).String())
+	if err != nil {
+		return nil, fmt.Errorf("streaming Bun Unicode substring candidates: %w", err)
+	}
+	defer rows.Close()
+	confirmed := 0
+	hits := make([]ContentSearchHit, 0, filter.Limit)
+	for rows.Next() && len(hits) < filter.Limit {
+		var row bunContentCandidate
+		var timestamp sql.NullString
+		if err := rows.Scan(
+			&row.SessionID, &row.Ordinal, &row.Location, &row.ToolName,
+			&row.Body, &timestamp, &row.CallIndex, &row.EventIndex,
+		); err != nil {
+			return nil, fmt.Errorf("scanning Bun Unicode substring candidate: %w", err)
+		}
+		if timestamp.Valid {
+			row.Timestamp = &timestamp.String
+		}
+		if CaseInsensitiveIndex(row.Body, filter.Pattern) < 0 {
+			continue
+		}
+		if confirmed < filter.Cursor {
+			confirmed++
+			continue
+		}
+		hits = append(hits, bunContentHitFromCandidate(
+			row, filter.substringSnippet(row.Body),
+		))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating Bun Unicode substring candidates: %w", err)
 	}
 	return hits, nil
 }

@@ -459,8 +459,8 @@ func (s *Sync) PushWithOptions(
 	reportPrepare(0)
 	prepared := 0
 	candidateIDs := mapKeys(sessionByID)
-	for start := 0; start < len(candidateIDs); start += pushComparisonBatchSize {
-		end := min(start+pushComparisonBatchSize, len(candidateIDs))
+	for start := 0; start < len(candidateIDs); start += pushFingerprintBatchSize {
+		end := min(start+pushFingerprintBatchSize, len(candidateIDs))
 		chunk := candidateIDs[start:end]
 		depState, err := readLocalPushDependencyState(ctx, s.local, chunk)
 		if err != nil {
@@ -598,8 +598,7 @@ func (s *Sync) PushWithOptions(
 		batch := sessions[i:end]
 
 		batchResult, err := s.pushBatch(
-			ctx, batch, full, markerID, legacyMarkerMachines,
-			usageFingerprints, &pushed,
+			ctx, batch, markerID, legacyMarkerMachines, &pushed,
 		)
 		if err != nil {
 			return result, err
@@ -614,8 +613,7 @@ func (s *Sync) PushWithOptions(
 			for _, sess := range batch {
 				sr, retryErr := s.pushBatch(
 					ctx, []db.Session{sess},
-					full, markerID, legacyMarkerMachines,
-					usageFingerprints, &pushed,
+					markerID, legacyMarkerMachines, &pushed,
 				)
 				if retryErr != nil {
 					return result, retryErr
@@ -1215,10 +1213,6 @@ type batchResult struct {
 	skippedConflicts int
 }
 
-var errPushComparisonPreload = errors.New(
-	"push comparison preload failed",
-)
-
 // pushBatch pushes a slice of sessions within a single
 // transaction. On success it appends to pushed and returns
 // ok=true with session/message counts. On a session-level
@@ -1228,40 +1222,9 @@ var errPushComparisonPreload = errors.New(
 func (s *Sync) pushBatch(
 	ctx context.Context,
 	batch []db.Session,
-	full bool,
 	markerID string,
 	legacyMarkerMachines []string,
-	sessionUsageFingerprints map[string]string,
 	pushed *[]db.Session,
-) (batchResult, error) {
-	preloadComparisons := len(batch) > 0 && !full
-	result, err := s.pushBatchAttempt(
-		ctx, batch, full, markerID, legacyMarkerMachines,
-		sessionUsageFingerprints, pushed, preloadComparisons,
-	)
-	if err == nil || !errors.Is(err, errPushComparisonPreload) {
-		return result, err
-	}
-	log.Printf(
-		"pgsync: preloading pg comparison fingerprints failed, "+
-			"retrying batch without preload: %v",
-		err,
-	)
-	return s.pushBatchAttempt(
-		ctx, batch, full, markerID, legacyMarkerMachines,
-		sessionUsageFingerprints, pushed, false,
-	)
-}
-
-func (s *Sync) pushBatchAttempt(
-	ctx context.Context,
-	batch []db.Session,
-	full bool,
-	markerID string,
-	legacyMarkerMachines []string,
-	sessionUsageFingerprints map[string]string,
-	pushed *[]db.Session,
-	preloadComparisons bool,
 ) (batchResult, error) {
 	bunTx, err := s.bunDB().BeginTx(ctx, nil)
 	if err != nil {
@@ -1274,27 +1237,16 @@ func (s *Sync) pushBatchAttempt(
 	n := 0
 	msgs := 0
 	skippedConflicts := 0
-	sessionIDs := make([]string, 0, len(batch))
 	for _, sess := range batch {
-		sessionIDs = append(sessionIDs, sess.ID)
-	}
-	comparisons := (*pushMessageComparison)(nil)
-	if preloadComparisons && len(sessionIDs) > 0 {
-		comparisonsBatch, err := readPushSessionMessageComparisons(
-			ctx, tx, sessionIDs,
-		)
+		snapshot, err := s.local.ReadSessionReplicationSnapshot(ctx, sess.ID)
 		if err != nil {
+			log.Printf("pgsync: session %s snapshot: %v", sess.ID, err)
 			_ = tx.Rollback()
-			return batchResult{}, fmt.Errorf(
-				"%w: %w", errPushComparisonPreload, err,
-			)
+			*pushed = (*pushed)[:len(*pushed)-n]
+			return batchResult{}, nil
 		}
-		comparisons = comparisonsBatch
-	}
-
-	for _, sess := range batch {
 		if err := s.pushSession(
-			ctx, tx, sess, markerID, legacyMarkerMachines,
+			ctx, tx, snapshot.Session, markerID, legacyMarkerMachines,
 		); err != nil {
 			if errors.Is(err, errSessionOwnershipConflict) {
 				skippedConflicts++
@@ -1312,9 +1264,8 @@ func (s *Sync) pushBatchAttempt(
 			return batchResult{}, nil
 		}
 
-		msgCount, err := s.pushMessages(
-			ctx, tx, bunTx, sess.ID, full,
-			sessionUsageFingerprints, comparisons,
+		msgCount, err := s.replacePGReplicationSnapshot(
+			ctx, tx, bunTx, snapshot,
 		)
 		if err != nil {
 			log.Printf(
@@ -1326,7 +1277,9 @@ func (s *Sync) pushBatchAttempt(
 			return batchResult{}, nil
 		}
 
-		findingsChanged, err := s.pushSecretFindings(ctx, bunTx, sess.ID)
+		findingsChanged, err := s.pushSecretFindings(
+			ctx, bunTx, sess.ID, snapshot.SecretFindings,
+		)
 		if err != nil {
 			log.Printf(
 				"pgsync: secret findings %s: %v",
@@ -1358,7 +1311,7 @@ func (s *Sync) pushBatchAttempt(
 			}
 		}
 
-		*pushed = append(*pushed, sess)
+		*pushed = append(*pushed, snapshot.Session)
 		n++
 		msgs += msgCount
 	}
@@ -1371,6 +1324,51 @@ func (s *Sync) pushBatchAttempt(
 		return batchResult{}, nil
 	}
 	return batchResult{ok: true, sessions: n, messages: msgs, skippedConflicts: skippedConflicts}, nil
+}
+
+func (s *Sync) replacePGReplicationSnapshot(
+	ctx context.Context, tx *sql.Tx, bunTx bun.IDB,
+	snapshot db.SessionReplicationSnapshot,
+) (int, error) {
+	messageRows, callRows, resultRows, err := db.CanonicalMessageRows(snapshot.Messages)
+	if err != nil {
+		return 0, err
+	}
+	usageRows, err := db.CanonicalUsageEventRows(snapshot.UsageEvents)
+	if err != nil {
+		return 0, err
+	}
+	matches, err := db.CanonicalSessionDependentRowsMatch(
+		ctx, bunTx, snapshot.Session.ID, messageRows, callRows, resultRows, usageRows,
+	)
+	if err != nil {
+		return 0, err
+	}
+	if matches {
+		if err := reconcilePinnedMessages(ctx, tx, snapshot.Session.ID); err != nil {
+			return 0, err
+		}
+		return 0, nil
+	}
+	if err := db.ReplaceMessageRows(
+		ctx, bunTx, snapshot.Session.ID, messageRows,
+	); err != nil {
+		return 0, err
+	}
+	if err := db.ReplaceToolRows(
+		ctx, bunTx, snapshot.Session.ID, callRows, resultRows,
+	); err != nil {
+		return 0, err
+	}
+	if err := db.ReplaceUsageEventRows(
+		ctx, bunTx, snapshot.Session.ID, usageRows,
+	); err != nil {
+		return 0, err
+	}
+	if err := reconcilePinnedMessages(ctx, tx, snapshot.Session.ID); err != nil {
+		return 0, err
+	}
+	return len(snapshot.Messages), nil
 }
 
 func finalizePushState(
@@ -2536,292 +2534,6 @@ func (s *Sync) pushSession(
 	return nil
 }
 
-// pushMessages replaces a session's messages and tool calls
-// in PG. It skips the replacement when the PG message count
-// already matches the local count, avoiding redundant work
-// for metadata-only changes.
-func (s *Sync) pushMessages(
-	ctx context.Context,
-	tx *sql.Tx,
-	bunTx bun.IDB,
-	sessionID string,
-	full bool,
-	sessionUsageFingerprints map[string]string,
-	comparisons *pushMessageComparison,
-) (int, error) {
-	localCount, err := s.local.MessageCount(sessionID)
-	if err != nil {
-		return 0, fmt.Errorf(
-			"counting local messages: %w", err,
-		)
-	}
-	if localCount == 0 {
-		if err := s.replaceCanonicalPGMessageRows(
-			ctx, bunTx, sessionID, nil,
-		); err != nil {
-			return 0, err
-		}
-		if err := reconcilePinnedMessages(
-			ctx, tx, sessionID,
-		); err != nil {
-			return 0, err
-		}
-		return 0, nil
-	}
-
-	pgAgg, pgToolAgg, hasPreloadedComparisons := comparisonAggregates(
-		sessionID, comparisons,
-	)
-	if !hasPreloadedComparisons {
-		if err := tx.QueryRowContext(ctx,
-			`SELECT COUNT(*),
-				COALESCE(SUM(content_length), 0),
-				COALESCE(MAX(content_length), 0),
-				COALESCE(MIN(content_length), 0),
-				COALESCE(
-					STRING_AGG(ordinal::text, ',' ORDER BY ordinal)
-						FILTER (WHERE is_system),
-					''
-				)
-			 FROM messages
-			 WHERE session_id = $1`,
-			sessionID,
-		).Scan(
-			&pgAgg.Count, &pgAgg.Sum,
-			&pgAgg.Max, &pgAgg.Min,
-			&pgAgg.SysFP,
-		); err != nil {
-			return 0, fmt.Errorf(
-				"counting pg messages: %w", err,
-			)
-		}
-		if err := tx.QueryRowContext(ctx,
-			`SELECT COUNT(*),
-				COALESCE(SUM(result_content_length), 0)
-			 FROM tool_calls
-			 WHERE session_id = $1`,
-			sessionID,
-		).Scan(&pgToolAgg.Count, &pgToolAgg.Sum); err != nil {
-			return 0, fmt.Errorf(
-				"counting pg tool_calls: %w", err,
-			)
-		}
-	}
-
-	if !full && pgAgg.Count == localCount && pgAgg.Count > 0 {
-		localFP := pushLocalMessageFingerprint{}
-
-		localFP.Sum, localFP.Max, localFP.Min, err = s.local.MessageContentFingerprint(
-			sessionID,
-		)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local content fingerprint: %w",
-				err,
-			)
-		}
-		localFP.ContentHashFP, err = s.local.MessageContentHashFingerprint(
-			sessionID,
-		)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local content hash fingerprint: %w",
-				err,
-			)
-		}
-		localFP.RoleTimeFP, err = localMessageRoleTimePGFingerprint(
-			s.local, sessionID,
-		)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local role/time fingerprint: %w",
-				err,
-			)
-		}
-		localFP.FlagsFP, err = s.local.MessageFlagsFingerprint(sessionID)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local message flags fingerprint: %w",
-				err,
-			)
-		}
-		localFP.SystemFP, err = s.local.SystemMessageFingerprint(sessionID)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local system message fingerprint: %w", err,
-			)
-		}
-		localFP.ToolCallCount, err = s.local.ToolCallCount(sessionID)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"counting local tool_calls: %w", err,
-			)
-		}
-		localFP.ToolCallSum, err = s.local.ToolCallContentFingerprint(
-			sessionID,
-		)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local tool_call content fingerprint: %w",
-				err,
-			)
-		}
-		localFP.ToolCallFP, err = s.local.ToolCallFingerprint(sessionID)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local tool_call fingerprint: %w", err,
-			)
-		}
-		localFP.ToolResultFP, err = localToolResultEventPGFingerprint(
-			s.local, sessionID,
-		)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local tool_result_event fingerprint: %w", err,
-			)
-		}
-		localFP.TokenFP, err = s.local.MessageTokenFingerprint(sessionID)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local token fingerprint: %w",
-				err,
-			)
-		}
-
-		usageFromMap := false
-		if sessionUsageFingerprints != nil {
-			var ok bool
-			localFP.UsageEventFP, ok = sessionUsageFingerprints[sessionID]
-			usageFromMap = ok
-		}
-		if !usageFromMap {
-			localFP.UsageEventFP, err = s.local.UsageEventFingerprint(sessionID)
-			if err != nil {
-				return 0, fmt.Errorf(
-					"computing local usage event fingerprint: %w",
-					err,
-				)
-			}
-		}
-
-		if comparisons == nil {
-			pgContentHashFP, err := pgMessageContentHashFingerprint(
-				ctx, tx, sessionID,
-			)
-			if err != nil {
-				return 0, fmt.Errorf(
-					"computing pg content hash fingerprint: %w",
-					err,
-				)
-			}
-			pgRoleTimeFP, err := pgMessageRoleTimeFingerprint(
-				ctx, tx, sessionID,
-			)
-			if err != nil {
-				return 0, fmt.Errorf(
-					"computing pg role/time fingerprint: %w",
-					err,
-				)
-			}
-			pgFlagsFP, err := pgMessageFlagsFingerprint(ctx, tx, sessionID)
-			if err != nil {
-				return 0, fmt.Errorf(
-					"computing pg message flags fingerprint: %w",
-					err,
-				)
-			}
-			pgTokenFP, err := pgMessageTokenFingerprint(ctx, tx, sessionID)
-			if err != nil {
-				return 0, fmt.Errorf(
-					"computing pg token fingerprint: %w",
-					err,
-				)
-			}
-			pgTCFP, err := pgToolCallFingerprint(ctx, tx, sessionID)
-			if err != nil {
-				return 0, fmt.Errorf(
-					"computing pg tool_call fingerprint: %w",
-					err,
-				)
-			}
-			pgResultFP, err := pgToolResultEventFingerprint(ctx, tx, sessionID)
-			if err != nil {
-				return 0, fmt.Errorf(
-					"computing pg tool_result_event fingerprint: %w",
-					err,
-				)
-			}
-			pgUsageFP, err := pgUsageEventFingerprint(ctx, tx, sessionID)
-			if err != nil {
-				return 0, fmt.Errorf(
-					"computing pg usage event fingerprint: %w",
-					err,
-				)
-			}
-
-			if localFP.Sum == pgAgg.Sum &&
-				localFP.Max == pgAgg.Max &&
-				localFP.Min == pgAgg.Min &&
-				localFP.ContentHashFP == pgContentHashFP &&
-				localFP.RoleTimeFP == pgRoleTimeFP &&
-				localFP.FlagsFP == pgFlagsFP &&
-				localFP.SystemFP == pgAgg.SysFP &&
-				localFP.ToolCallCount == pgToolAgg.Count &&
-				localFP.ToolCallSum == pgToolAgg.Sum &&
-				localFP.ToolCallFP == pgTCFP &&
-				localFP.ToolResultFP == pgResultFP &&
-				localFP.TokenFP == pgTokenFP &&
-				localFP.UsageEventFP == pgUsageFP {
-				return 0, nil
-			}
-		} else if shouldSkipSessionMessages(
-			sessionID, localCount, localFP, full, comparisons,
-		) {
-			return 0, nil
-		}
-	}
-
-	messages, err := s.local.GetAllMessages(ctx, sessionID)
-	if err != nil {
-		return 0, fmt.Errorf("reading local messages: %w", err)
-	}
-	if err := s.replaceCanonicalPGMessageRows(
-		ctx, bunTx, sessionID, messages,
-	); err != nil {
-		return 0, err
-	}
-
-	if err := reconcilePinnedMessages(ctx, tx, sessionID); err != nil {
-		return 0, err
-	}
-
-	return len(messages), nil
-}
-
-func (s *Sync) replaceCanonicalPGMessageRows(
-	ctx context.Context, bunTx bun.IDB, sessionID string, messages []db.Message,
-) error {
-	messageRows, callRows, resultRows, err := db.CanonicalMessageRows(messages)
-	if err != nil {
-		return err
-	}
-	usageEvents, err := s.local.GetUsageEvents(ctx, sessionID)
-	if err != nil {
-		return fmt.Errorf("reading local usage events: %w", err)
-	}
-	usageRows, err := db.CanonicalUsageEventRows(usageEvents)
-	if err != nil {
-		return err
-	}
-	if err := db.ReplaceMessageRows(ctx, bunTx, sessionID, messageRows); err != nil {
-		return err
-	}
-	if err := db.ReplaceToolRows(ctx, bunTx, sessionID, callRows, resultRows); err != nil {
-		return err
-	}
-	return db.ReplaceUsageEventRows(ctx, bunTx, sessionID, usageRows)
-}
-
 func reconcilePinnedMessages(
 	ctx context.Context, tx *sql.Tx, sessionID string,
 ) error {
@@ -2995,92 +2707,6 @@ func reconcilePinnedMessages(
 	return nil
 }
 
-func pgMessageTokenFingerprint(
-	ctx context.Context, tx *sql.Tx, sessionID string,
-) (string, error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT ordinal, model, token_usage, context_tokens,
-			output_tokens, has_context_tokens, has_output_tokens,
-			claude_message_id, claude_request_id,
-			source_type, source_subtype, prompt_source, source_uuid,
-			source_parent_uuid, is_sidechain, is_compact_boundary
-		 FROM messages
-		 WHERE session_id = $1
-		 ORDER BY ordinal ASC`,
-		sessionID,
-	)
-	if err != nil {
-		return "", err
-	}
-	defer rows.Close()
-
-	var b strings.Builder
-	for rows.Next() {
-		var ordinal, contextTokens, outputTokens int
-		var model, tokenUsage string
-		var hasContextTokens, hasOutputTokens bool
-		var claudeMsgID, claudeReqID string
-		var srcType, srcSubtype, promptSource, srcUUID, srcParentUUID string
-		var isSidechain, isCompactBoundary bool
-		if err := rows.Scan(
-			&ordinal, &model, &tokenUsage, &contextTokens,
-			&outputTokens, &hasContextTokens, &hasOutputTokens,
-			&claudeMsgID, &claudeReqID,
-			&srcType, &srcSubtype, &promptSource, &srcUUID, &srcParentUUID,
-			&isSidechain, &isCompactBoundary,
-		); err != nil {
-			return "", err
-		}
-		fmt.Fprintf(&b,
-			"%d|%d:%s|%d:%s|%d|%d|%t|%t|%s|%s|"+
-				"%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%t|%t;",
-			ordinal,
-			len(model), model,
-			len(tokenUsage), tokenUsage,
-			contextTokens, outputTokens,
-			hasContextTokens, hasOutputTokens,
-			claudeMsgID, claudeReqID,
-			len(srcType), srcType,
-			len(srcSubtype), srcSubtype,
-			len(promptSource), promptSource,
-			len(srcUUID), srcUUID,
-			len(srcParentUUID), srcParentUUID,
-			isSidechain, isCompactBoundary,
-		)
-	}
-	return b.String(), rows.Err()
-}
-
-func pgMessageContentHashFingerprint(
-	ctx context.Context, tx *sql.Tx, sessionID string,
-) (string, error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT ordinal, COALESCE(content, ''), content_length
-		 FROM messages
-		 WHERE session_id = $1
-		 ORDER BY ordinal ASC`,
-		sessionID,
-	)
-	if err != nil {
-		return "", err
-	}
-	defer rows.Close()
-
-	var b strings.Builder
-	for rows.Next() {
-		var ordinal, contentLength int
-		var content string
-		if err := rows.Scan(
-			&ordinal, &content, &contentLength,
-		); err != nil {
-			return "", err
-		}
-		sum := sha256.Sum256([]byte(db.SanitizeUTF8(content)))
-		fmt.Fprintf(&b, "%d|%d|%x;", ordinal, contentLength, sum)
-	}
-	return b.String(), rows.Err()
-}
-
 func localMessageRoleTimePGFingerprint(
 	local *db.DB, sessionID string,
 ) (string, error) {
@@ -3096,191 +2722,6 @@ func pgPushTimestampFingerprintText(value string) string {
 		return ""
 	}
 	return FormatISO8601(t.Truncate(time.Microsecond))
-}
-
-func pgMessageRoleTimeFingerprint(
-	ctx context.Context, tx *sql.Tx, sessionID string,
-) (string, error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT ordinal, role, timestamp
-		 FROM messages
-		 WHERE session_id = $1
-		 ORDER BY ordinal ASC`,
-		sessionID,
-	)
-	if err != nil {
-		return "", err
-	}
-	defer rows.Close()
-
-	var b strings.Builder
-	for rows.Next() {
-		var ordinal int
-		var role string
-		var timestamp sql.NullTime
-		if err := rows.Scan(
-			&ordinal, &role, &timestamp,
-		); err != nil {
-			return "", err
-		}
-		role = db.SanitizeUTF8(role)
-		timestampText := ""
-		if timestamp.Valid {
-			timestampText = FormatISO8601(timestamp.Time)
-		}
-		fmt.Fprintf(&b, "%d|%d:%s|%d:%s;",
-			ordinal, len(role), role,
-			len(timestampText), timestampText,
-		)
-	}
-	return b.String(), rows.Err()
-}
-
-func pgMessageFlagsFingerprint(
-	ctx context.Context, tx *sql.Tx, sessionID string,
-) (string, error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT ordinal, is_system, has_thinking, has_tool_use,
-			COALESCE(thinking_text, '')
-		 FROM messages
-		 WHERE session_id = $1
-		 ORDER BY ordinal ASC`,
-		sessionID,
-	)
-	if err != nil {
-		return "", err
-	}
-	defer rows.Close()
-
-	var b strings.Builder
-	for rows.Next() {
-		var ordinal int
-		var isSystem, hasThinking, hasToolUse bool
-		var thinkingText string
-		if err := rows.Scan(
-			&ordinal, &isSystem, &hasThinking, &hasToolUse,
-			&thinkingText,
-		); err != nil {
-			return "", err
-		}
-		sum := sha256.Sum256([]byte(db.SanitizeUTF8(thinkingText)))
-		fmt.Fprintf(&b, "%d|%t|%t|%t|%x;",
-			ordinal, isSystem, hasThinking, hasToolUse, sum)
-	}
-	return b.String(), rows.Err()
-}
-
-func pgToolCallFingerprint(
-	ctx context.Context, tx *sql.Tx, sessionID string,
-) (string, error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT message_ordinal, call_index, tool_name, category,
-			tool_use_id, COALESCE(input_json, ''),
-			COALESCE(skill_name, ''), COALESCE(subagent_session_id, ''),
-			COALESCE(result_content_length, 0),
-			COALESCE(result_content, ''),
-			COALESCE(file_path, '')
-		 FROM tool_calls
-		 WHERE session_id = $1
-		 ORDER BY message_ordinal ASC, call_index ASC`,
-		sessionID,
-	)
-	if err != nil {
-		return "", err
-	}
-	defer rows.Close()
-
-	var b strings.Builder
-	for rows.Next() {
-		var messageOrdinal, callIndex, resultContentLength int
-		var toolName, category, toolUseID, inputJSON string
-		var skillName, subagentSessionID, resultContent, filePath string
-		if err := rows.Scan(
-			&messageOrdinal, &callIndex, &toolName, &category,
-			&toolUseID, &inputJSON, &skillName, &subagentSessionID,
-			&resultContentLength, &resultContent, &filePath,
-		); err != nil {
-			return "", err
-		}
-		fmt.Fprintf(&b,
-			"%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d:%s|%d:%s;",
-			messageOrdinal, callIndex,
-			len(toolName), toolName,
-			len(category), category,
-			len(toolUseID), toolUseID,
-			len(inputJSON), inputJSON,
-			len(skillName), skillName,
-			len(subagentSessionID), subagentSessionID,
-			resultContentLength,
-			len(resultContent), resultContent,
-			len(filePath), filePath,
-		)
-	}
-	return b.String(), rows.Err()
-}
-
-func pgUsageEventFingerprint(
-	ctx context.Context, tx *sql.Tx, sessionID string,
-) (string, error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT message_ordinal, source, model,
-			input_tokens, output_tokens,
-			cache_creation_input_tokens, cache_read_input_tokens,
-			reasoning_tokens, cost_microdollars, cost_status, cost_source,
-			occurred_at, dedup_key
-		 FROM usage_events
-		 WHERE session_id = $1
-		 ORDER BY occurred_at NULLS FIRST, id`,
-		sessionID,
-	)
-	if err != nil {
-		return "", err
-	}
-	defer rows.Close()
-
-	var b strings.Builder
-	for rows.Next() {
-		var ordinal sql.NullInt64
-		var source, model, costStatus, costSource string
-		var inputTokens, outputTokens int
-		var cacheCreationInputTokens, cacheReadInputTokens int
-		var reasoningTokens int
-		var cost sql.NullInt64
-		var occurredAt sql.NullTime
-		var dedupKey sql.NullString
-		if err := rows.Scan(
-			&ordinal, &source, &model,
-			&inputTokens, &outputTokens,
-			&cacheCreationInputTokens, &cacheReadInputTokens,
-			&reasoningTokens, &cost, &costStatus, &costSource,
-			&occurredAt, &dedupKey,
-		); err != nil {
-			return "", err
-		}
-		occurred := ""
-		if occurredAt.Valid {
-			occurred = FormatISO8601(occurredAt.Time)
-		}
-		fmt.Fprintf(&b,
-			"%t|%d|%d:%s|%d:%s|%d|%d|%d|%d|%d|%t|%d|%d:%s|%d:%s|%d:%s|%d:%s;",
-			ordinal.Valid,
-			ordinal.Int64,
-			len(source), source,
-			len(model), model,
-			inputTokens,
-			outputTokens,
-			cacheCreationInputTokens,
-			cacheReadInputTokens,
-			reasoningTokens,
-			cost.Valid,
-			cost.Int64,
-			len(costStatus), costStatus,
-			len(costSource), costSource,
-			len(occurred), occurred,
-			len(dedupKey.String), dedupKey.String,
-		)
-	}
-	return b.String(), rows.Err()
 }
 
 func bulkInsertCursorUsageEvents(
@@ -3352,18 +2793,12 @@ func bulkInsertCursorUsageEvents(
 // the rest of the session columns.
 func (s *Sync) pushSecretFindings(
 	ctx context.Context, bunTx bun.IDB, sessionID string,
+	findings []db.SecretFinding,
 ) (bool, error) {
 	existing, err := bunTx.NewSelect().Model((*bunmodel.SecretFinding)(nil)).
 		Where("session_id = ?", sessionID).Count(ctx)
 	if err != nil {
 		return false, fmt.Errorf("counting pg secret findings for %s: %w", sessionID, err)
-	}
-	findings, err := s.local.SessionSecretFindings(ctx, sessionID)
-	if err != nil {
-		return false, fmt.Errorf(
-			"reading local secret_findings for %s: %w",
-			sessionID, err,
-		)
 	}
 	if err := db.ReplaceSecretFindingRows(
 		ctx, bunTx, sessionID, db.CanonicalSecretFindingRows(findings),
