@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"reflect"
 	"time"
@@ -32,7 +33,12 @@ func (db *DB) beginBunWriteTx(
 
 // CanonicalSessionRow converts one public session into its portable Bun row.
 func CanonicalSessionRow(session Session) (bunmodel.Session, error) {
-	return sessionToBunRow(session)
+	row, err := sessionToBunRow(session)
+	if err != nil {
+		return bunmodel.Session{}, err
+	}
+	normalizeCanonicalSessionTimestampPrecision(&row)
+	return row, nil
 }
 
 // UpsertSessionRow writes the complete canonical session shape with exact
@@ -56,6 +62,38 @@ func UpsertSessionRow(
 		return fmt.Errorf("upserting canonical session %s: %w", row.ID, err)
 	}
 	return nil
+}
+
+// CanonicalSessionRowMatches reports whether the complete portable session row
+// already has the requested value. Timestamp precision is normalized to the
+// microseconds shared by PostgreSQL and DuckDB before comparison.
+func CanonicalSessionRowMatches(
+	ctx context.Context, store bun.IDB, row bunmodel.Session,
+) (bool, error) {
+	var stored bunmodel.Session
+	if err := store.NewSelect().Model(&stored).
+		Where("id = ?", row.ID).Scan(ctx); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("reading canonical session %s: %w", row.ID, err)
+	}
+	normalizeCanonicalSessionTimestampPrecision(&stored)
+	normalizeCanonicalSessionTimestampPrecision(&row)
+	return reflect.DeepEqual(stored, row), nil
+}
+
+func normalizeCanonicalSessionTimestampPrecision(row *bunmodel.Session) {
+	for _, value := range []*bunmodel.Timestamp{
+		row.StartedAt,
+		row.EndedAt,
+		row.SignalsPendingSince,
+		row.DeletedAt,
+		row.LocalModifiedAt,
+	} {
+		truncateCanonicalTimestamp(value)
+	}
+	row.CreatedAt.Time = row.CreatedAt.Truncate(time.Microsecond)
 }
 
 // CanonicalMessageRows converts messages and their nested tool payloads once

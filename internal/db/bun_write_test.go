@@ -224,6 +224,50 @@ func TestUpsertSessionRowUsesCanonicalReplacementColumns(t *testing.T) {
 	assert.Equal(t, "generation-b", stored.SourceDatabaseGeneration)
 }
 
+func TestCanonicalSessionRowSanitizesPortableText(t *testing.T) {
+	firstMessage := "first\x00message"
+	displayName := "display\x00name"
+	deletionCause := "source\x00missing"
+	filePath := "/tmp/session\x00.jsonl"
+	row, err := CanonicalSessionRow(Session{
+		ID: "session-text", Project: "pro\x00ject", Machine: "ma\x00chine",
+		Agent: "co\x00dex", AgentLabel: "Co\x00dex", Entrypoint: "c\x00li",
+		SessionKind: "inter\x00active", FirstMessage: &firstMessage,
+		DisplayName: &displayName, RelationshipType: "sub\x00agent",
+		Outcome: "suc\x00cess", OutcomeConfidence: "h\x00igh",
+		EndedWithRole: "assis\x00tant", Cwd: "/work\x00space",
+		GitBranch: "ma\x00in", SourceSessionID: "source\x00-session",
+		SourceVersion: "1.\x002", TranscriptFidelity: "ex\x00act",
+		DeletionCause: &deletionCause, FilePath: &filePath,
+		CreatedAt: "2026-08-04T10:00:00Z",
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, "project", row.Project)
+	assert.Equal(t, "machine", row.Machine)
+	assert.Equal(t, "codex", row.Agent)
+	assert.Equal(t, "Codex", row.AgentLabel)
+	assert.Equal(t, "cli", row.Entrypoint)
+	assert.Equal(t, "interactive", row.SessionKind)
+	require.NotNil(t, row.FirstMessage)
+	assert.Equal(t, "firstmessage", *row.FirstMessage)
+	require.NotNil(t, row.DisplayName)
+	assert.Equal(t, "displayname", *row.DisplayName)
+	assert.Equal(t, "subagent", row.RelationshipType)
+	assert.Equal(t, "success", row.Outcome)
+	assert.Equal(t, "high", row.OutcomeConfidence)
+	assert.Equal(t, "assistant", row.EndedWithRole)
+	assert.Equal(t, "/workspace", row.Cwd)
+	assert.Equal(t, "main", row.GitBranch)
+	assert.Equal(t, "source-session", row.SourceSessionID)
+	assert.Equal(t, "1.2", row.SourceVersion)
+	assert.Equal(t, "exact", row.TranscriptFidelity)
+	require.NotNil(t, row.DeletionCause)
+	assert.Equal(t, "sourcemissing", *row.DeletionCause)
+	require.NotNil(t, row.FilePath)
+	assert.Equal(t, "/tmp/session.jsonl", *row.FilePath)
+}
+
 func TestCanonicalBunWriteSessionBatchUsesPortableTimestampPrecision(t *testing.T) {
 	database := testDB(t)
 	const (
