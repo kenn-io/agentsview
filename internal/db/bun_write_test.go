@@ -355,3 +355,58 @@ func TestCanonicalBunWriteSessionPlaceholderUsesPortableTimestampPrecision(
 	assert.Equal(t, "alpha", got.Project,
 		"placeholder insertion must not overwrite an existing session")
 }
+
+func TestCanonicalBunWriteSessionRepairsMalformedLegacySourceTimestamp(t *testing.T) {
+	database := testDB(t)
+	require.NoError(t, database.UpsertSession(Session{
+		ID: "repair-malformed-time", Project: "alpha", Machine: defaultMachine,
+		Agent: defaultAgent, StartedAt: Ptr("2026-08-04T10:00:00Z"),
+	}))
+	_, err := database.getWriter().ExecContext(t.Context(), `
+		UPDATE sessions SET started_at = 'not-a-time'
+		WHERE id = 'repair-malformed-time'`)
+	require.NoError(t, err)
+
+	require.NoError(t, database.UpsertSession(Session{
+		ID: "repair-malformed-time", Project: "beta", Machine: defaultMachine,
+		Agent: defaultAgent, StartedAt: Ptr("2026-08-04T11:00:00.123456789Z"),
+	}))
+	got, err := database.GetSessionFull(t.Context(), "repair-malformed-time")
+	require.NoError(t, err)
+	require.NotNil(t, got.StartedAt)
+	assert.Equal(t, "2026-08-04T11:00:00.123456Z", *got.StartedAt)
+	assert.Equal(t, "beta", got.Project)
+}
+
+func TestCanonicalBunWriteSessionAppliesArchiveTimestampOwnership(t *testing.T) {
+	database := testDB(t)
+	require.NoError(t, database.UpsertSession(Session{
+		ID: "archive-time-ownership", Project: "alpha", Machine: defaultMachine,
+		Agent:           defaultAgent,
+		LocalModifiedAt: Ptr("2030-01-01T00:00:00Z"),
+	}))
+	got, err := database.GetSessionFull(t.Context(), "archive-time-ownership")
+	require.NoError(t, err)
+	assert.Nil(t, got.LocalModifiedAt,
+		"fresh archive ingestion must clear caller-supplied local state")
+
+	_, err = database.getWriter().ExecContext(t.Context(), `
+		UPDATE sessions
+		SET local_modified_at = '2026-08-04T10:00:00.123456789Z',
+		    signals_pending_since = '2026-08-04T10:01:00.987654321Z'
+		WHERE id = 'archive-time-ownership'`)
+	require.NoError(t, err)
+	require.NoError(t, database.UpsertSession(Session{
+		ID: "archive-time-ownership", Project: "beta", Machine: defaultMachine,
+		Agent:               defaultAgent,
+		LocalModifiedAt:     Ptr("2030-01-01T00:00:00Z"),
+		SignalsPendingSince: Ptr("2030-01-01T00:00:00Z"),
+	}))
+	got, err = database.GetSessionFull(t.Context(), "archive-time-ownership")
+	require.NoError(t, err)
+	require.NotNil(t, got.LocalModifiedAt)
+	require.NotNil(t, got.SignalsPendingSince)
+	assert.Equal(t, "2026-08-04T10:00:00.123456Z", *got.LocalModifiedAt)
+	assert.Equal(t, "2026-08-04T10:01:00.987654Z", *got.SignalsPendingSince)
+	assert.Equal(t, "beta", got.Project)
+}

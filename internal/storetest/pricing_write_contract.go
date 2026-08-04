@@ -63,36 +63,61 @@ func RunPricingWriteContract(t *testing.T, name string, store bun.IDB) {
 		require.NoError(t, db.UpsertModelPricingRows(ctx, store,
 			[]bunmodel.ModelPricing{{
 				ModelPattern: "atomic-contract", InputMicrodollarsPerMTok: 10,
-				UpdatedAt: "2026-08-03T12:00:00Z",
+				UpdatedAt: mustPricingTimestamp(t, "2026-08-03T12:00:00Z"),
 			}}, []bunmodel.ModelPricingBand{{
 				ModelPattern: "atomic-contract", AboveInputTokens: 500,
-				UpdatedAt: "2026-08-03T12:00:00Z",
+				UpdatedAt: mustPricingTimestamp(t, "2026-08-03T12:00:00Z"),
 			}}))
 		require.NoError(t, store.NewSelect().Model(&price).
 			Where("model_pattern = ?", "atomic-contract").Scan(ctx))
-		assert.Equal(t, "2026-08-03T13:00:00.000001Z", price.UpdatedAt)
+		assert.Equal(t, mustPricingTimestamp(t, "2026-08-03T13:00:00.000001Z"), price.UpdatedAt)
 
-		metadata := bunmodel.ModelPricing{
-			ModelPattern: "_fallback_version", UpdatedAt: "2026-08-03T10:00:00Z",
+		revisionPrice := bunmodel.ModelPricing{
+			ModelPattern: "revision-contract", InputMicrodollarsPerMTok: 11,
+			UpdatedAt: mustPricingTimestamp(t, "2026-08-03T15:00:00Z"),
+		}
+		revisionBands := []bunmodel.ModelPricingBand{
+			{ModelPattern: "revision-contract", AboveInputTokens: 100,
+				InputMicrodollarsPerMTok: 21, UpdatedAt: mustPricingTimestamp(t, "2026-08-03T15:00:00Z")},
+			{ModelPattern: "revision-contract", AboveInputTokens: 200,
+				InputMicrodollarsPerMTok: 22, UpdatedAt: mustPricingTimestamp(t, "2026-08-03T15:00:00Z")},
 		}
 		require.NoError(t, db.UpsertModelPricingRows(
-			ctx, store, []bunmodel.ModelPricing{metadata}, nil,
+			ctx, store, []bunmodel.ModelPricing{revisionPrice}, revisionBands,
 		))
-		metadataBand := bunmodel.ModelPricingBand{
-			ModelPattern: "_fallback_version", AboveInputTokens: 1,
-			UpdatedAt: "2026-08-03T10:00:00Z",
+		revisionPrice.UpdatedAt = mustPricingTimestamp(t, "2026-08-03T16:00:00Z")
+		for i := range revisionBands {
+			revisionBands[i].UpdatedAt = mustPricingTimestamp(t, "2026-08-03T16:00:00Z")
 		}
-		_, err = store.NewInsert().Model(&metadataBand).Exec(ctx)
-		require.NoError(t, err)
-		metadata.UpdatedAt = "2026-08-03T11:00:00Z"
 		require.NoError(t, db.UpsertModelPricingRows(
-			ctx, store, []bunmodel.ModelPricing{metadata}, nil,
+			ctx, store, []bunmodel.ModelPricing{revisionPrice}, revisionBands,
 		))
-		metadataBandCount, err := store.NewSelect().
-			Model((*bunmodel.ModelPricingBand)(nil)).
-			Where("model_pattern = ?", "_fallback_version").Count(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, 1, metadataBandCount)
+		require.NoError(t, store.NewSelect().Model(&price).
+			Where("model_pattern = ?", revisionPrice.ModelPattern).Scan(ctx))
+		assert.Equal(t, mustPricingTimestamp(t, "2026-08-03T15:00:00Z"), price.UpdatedAt)
+		bands = nil
+		require.NoError(t, store.NewSelect().Model(&bands).
+			Where("model_pattern = ?", revisionPrice.ModelPattern).
+			OrderExpr("above_input_tokens ASC").Scan(ctx))
+		require.Len(t, bands, 2)
+		assert.Equal(t, mustPricingTimestamp(t, "2026-08-03T15:00:00Z"), bands[0].UpdatedAt)
+		assert.Equal(t, mustPricingTimestamp(t, "2026-08-03T15:00:00Z"), bands[1].UpdatedAt)
+
+		revisionBands[1].InputMicrodollarsPerMTok = 23
+		revisionBands[1].UpdatedAt = mustPricingTimestamp(t, "2026-08-03T14:00:00Z")
+		require.NoError(t, db.UpsertModelPricingRows(
+			ctx, store, []bunmodel.ModelPricing{revisionPrice}, revisionBands,
+		))
+		require.NoError(t, store.NewSelect().Model(&price).
+			Where("model_pattern = ?", revisionPrice.ModelPattern).Scan(ctx))
+		assert.Equal(t, mustPricingTimestamp(t, "2026-08-03T16:00:00Z"), price.UpdatedAt)
+		bands = nil
+		require.NoError(t, store.NewSelect().Model(&bands).
+			Where("model_pattern = ?", revisionPrice.ModelPattern).
+			OrderExpr("above_input_tokens ASC").Scan(ctx))
+		require.Len(t, bands, 2)
+		assert.Equal(t, mustPricingTimestamp(t, "2026-08-03T15:00:00Z"), bands[0].UpdatedAt)
+		assert.Equal(t, mustPricingTimestamp(t, "2026-08-03T15:00:00.000001Z"), bands[1].UpdatedAt)
 	})
 }
 

@@ -197,6 +197,8 @@ type Sync struct {
 	beforeSessionOwnershipLock func()
 	afterSessionOwnershipLock  func()
 	afterSessionRowWrite       func()
+	// afterSessionReplicationSnapshotRead observes transcript materialization.
+	afterSessionReplicationSnapshotRead func(string)
 
 	closeOnce sync.Once
 	closeErr  error
