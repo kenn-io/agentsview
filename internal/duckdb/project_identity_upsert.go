@@ -1,11 +1,12 @@
 package duckdb
 
 import (
+	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 )
@@ -104,105 +105,32 @@ func deleteSessionProjectIdentitySnapshotsBySessionID(
 type duckProjectIdentityExec func(string, ...any) error
 type duckProjectIdentityQueryRow func(string, ...any) *sql.Row
 
-const projectIdentitySnapshotInsertBatchSize = 500
-
 func upsertSourceArchiveScope(
-	exec duckProjectIdentityExec,
-	queryRow duckProjectIdentityQueryRow,
+	ctx context.Context,
+	store bun.IDB,
 	archiveID, archiveSalt string,
 ) error {
-	var existingSalt string
-	err := queryRow(`
-		SELECT source_archive_salt
-		FROM source_archives
-		WHERE source_archive_id = ?`, archiveID).Scan(&existingSalt)
-	if err == nil {
-		if existingSalt != archiveSalt {
-			return fmt.Errorf("archive salt mismatch for %q", archiveID)
-		}
-		return nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("reading duckdb source archive scope: %w", err)
-	}
-	if err := exec(`
-		INSERT INTO source_archives (source_archive_id, source_archive_salt)
-		VALUES (?, ?)
-		ON CONFLICT(source_archive_id) DO NOTHING`,
-		archiveID, archiveSalt,
-	); err != nil {
-		return fmt.Errorf("upserting duckdb source archive scope: %w", err)
-	}
-	if err := queryRow(`
-		SELECT source_archive_salt
-		FROM source_archives
-		WHERE source_archive_id = ?`, archiveID).Scan(&existingSalt); err != nil {
-		return fmt.Errorf("verifying duckdb source archive scope: %w", err)
-	}
-	if existingSalt != archiveSalt {
-		return fmt.Errorf("archive salt mismatch for %q", archiveID)
-	}
-	return nil
+	return db.UpsertSourceArchiveRow(ctx, store, archiveID, archiveSalt)
 }
 
 func upsertSessionProjectIdentitySnapshots(
-	exec duckProjectIdentityExec,
+	ctx context.Context,
+	store bun.IDB,
 	archiveID, databaseGeneration string,
 	snapshots []export.ProjectIdentityObservation,
 ) error {
-	for start := 0; start < len(snapshots); start += projectIdentitySnapshotInsertBatchSize {
-		end := min(start+projectIdentitySnapshotInsertBatchSize, len(snapshots))
-		chunk := snapshots[start:end]
-		valueRows := make([]string, len(chunk))
-		args := make([]any, 0, len(chunk)*20)
-		for i, obs := range chunk {
-			valueRows[i] = "(" + strings.TrimSuffix(strings.Repeat("?, ", 20), ", ") + ")"
-			args = append(args,
-				archiveID, databaseGeneration, obs.SessionID,
-				obs.Project, obs.Machine, obs.RootPath, obs.GitRemote,
-				obs.GitRemoteName, obs.RepositoryPath, obs.WorktreeName,
-				obs.WorktreeRootPath, string(obs.WorktreeRelationship),
-				string(obs.CheckoutState),
-				obs.GitBranch, string(obs.RemoteResolution), obs.RemoteCandidateCount,
-				obs.ObservedAt, obs.NormalizedRemote, obs.KeySource, obs.Key,
-			)
-		}
-		if err := exec(`
-			INSERT INTO source_session_project_identity_snapshots (
-				source_archive_id, source_database_generation, source_session_id,
-				project, machine, root_path, git_remote, git_remote_name,
-				repository_path, worktree_name, worktree_root_path,
-				worktree_relationship, checkout_state, git_branch,
-				remote_resolution, remote_candidate_count, observed_at,
-				normalized_remote, key_source, key
-			) VALUES `+strings.Join(valueRows, ",\n\t\t\t")+`
-			ON CONFLICT(
-				source_archive_id, source_database_generation, source_session_id
-			) DO UPDATE SET
-				project = excluded.project,
-				machine = excluded.machine,
-				root_path = excluded.root_path,
-				git_remote = excluded.git_remote,
-				git_remote_name = excluded.git_remote_name,
-				repository_path = excluded.repository_path,
-				worktree_name = excluded.worktree_name,
-				worktree_root_path = excluded.worktree_root_path,
-				worktree_relationship = excluded.worktree_relationship,
-				checkout_state = excluded.checkout_state,
-				git_branch = excluded.git_branch,
-				remote_resolution = excluded.remote_resolution,
-				remote_candidate_count = excluded.remote_candidate_count,
-				observed_at = excluded.observed_at,
-				normalized_remote = excluded.normalized_remote,
-				key_source = excluded.key_source,
-				key = excluded.key`, args...); err != nil {
-			return fmt.Errorf("upserting duckdb session project identity snapshots: %w", err)
-		}
+	rows, err := db.CanonicalSessionProjectIdentitySnapshotRows(
+		archiveID, databaseGeneration, snapshots,
+	)
+	if err != nil {
+		return err
 	}
-	return nil
+	return db.UpsertSessionProjectIdentitySnapshotRows(ctx, store, rows)
 }
 
 func upsertProjectIdentityObservation(
+	ctx context.Context,
+	store bun.IDB,
 	exec duckProjectIdentityExec,
 	queryRow duckProjectIdentityQueryRow,
 	obs export.ProjectIdentityObservation,
@@ -240,40 +168,12 @@ func upsertProjectIdentityObservation(
 		)
 	}
 
-	if err := exec(`
-		INSERT INTO source_project_identity_observations (
-			source_archive_id, source_archive_salt,
-			project, machine, root_path, git_remote, git_remote_name,
-			repository_path, worktree_name, worktree_root_path,
-			worktree_relationship, checkout_state, git_branch,
-			remote_resolution, remote_candidate_count, observed_at,
-			normalized_remote, key_source, key
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(source_archive_id, project, machine, root_path, git_remote) DO UPDATE SET
-			source_archive_id = excluded.source_archive_id,
-			source_archive_salt = excluded.source_archive_salt,
-			git_remote_name = excluded.git_remote_name,
-			repository_path = excluded.repository_path,
-			worktree_name = excluded.worktree_name,
-			worktree_root_path = excluded.worktree_root_path,
-			worktree_relationship = excluded.worktree_relationship,
-			checkout_state = excluded.checkout_state,
-			git_branch = excluded.git_branch,
-			remote_resolution = excluded.remote_resolution,
-			remote_candidate_count = excluded.remote_candidate_count,
-			observed_at = excluded.observed_at,
-			normalized_remote = excluded.normalized_remote,
-			key_source = excluded.key_source,
-			key = excluded.key`,
+	rows, err := db.CanonicalProjectIdentityObservationRows(
 		obs.SourceArchiveID, obs.SourceArchiveSalt,
-		obs.Project, obs.Machine, obs.RootPath, obs.GitRemote,
-		obs.GitRemoteName, obs.RepositoryPath, obs.WorktreeName,
-		obs.WorktreeRootPath, string(obs.WorktreeRelationship),
-		string(obs.CheckoutState),
-		obs.GitBranch, string(obs.RemoteResolution), obs.RemoteCandidateCount,
-		obs.ObservedAt, obs.NormalizedRemote, obs.KeySource, obs.Key,
-	); err != nil {
-		return fmt.Errorf("upserting duckdb project identity observation: %w", err)
+		[]export.ProjectIdentityObservation{obs},
+	)
+	if err != nil {
+		return err
 	}
-	return nil
+	return db.UpsertProjectIdentityObservationRows(ctx, store, rows)
 }

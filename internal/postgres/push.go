@@ -891,12 +891,14 @@ func (s *Sync) syncProjectIdentityObservations(
 		len(observations), len(snapshots),
 		len(delta.ObservationDeletes)+len(delta.SnapshotDeletes),
 	)
-	tx, err := s.pg.BeginTx(ctx, nil)
+	tx, err := s.bunDB().BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning project identity observation sync: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := upsertSourceArchiveScope(ctx, tx, archiveID, archiveSalt); err != nil {
+	if err := db.UpsertSourceArchiveRow(
+		ctx, tx, archiveID, archiveSalt,
+	); err != nil {
 		return err
 	}
 	publicationScope := unfilteredPublicationScope
@@ -905,7 +907,7 @@ func (s *Sync) syncProjectIdentityObservations(
 			"", s.projects, s.excludeProjects,
 		)
 		if err := prepareFilteredProjectIdentityPublication(
-			ctx, tx, archiveID, databaseGeneration, publicationScope,
+			ctx, tx.Tx, archiveID, databaseGeneration, publicationScope,
 			fullPublication, adoptLegacyFilteredScope,
 			s.projects, s.excludeProjects,
 			delta.ObservationDeletes, delta.SnapshotDeletes, refreshSessionIDs,
@@ -917,19 +919,19 @@ func (s *Sync) syncProjectIdentityObservations(
 		// stale out-of-scope identity without loading or transmitting
 		// excluded-project tombstone metadata.
 		if err := deleteProjectIdentityArchive(
-			ctx, tx, archiveID,
+			ctx, tx.Tx, archiveID,
 		); err != nil {
 			return err
 		}
 	} else if err := deleteProjectIdentityDelta(
-		ctx, tx, archiveID, databaseGeneration,
+		ctx, tx.Tx, archiveID, databaseGeneration,
 		delta.ObservationDeletes, delta.SnapshotDeletes,
 	); err != nil {
 		return err
 	}
 	if !s.isFiltered() {
 		if err := deleteSessionProjectIdentitySnapshotsBySessionID(
-			ctx, tx, archiveID, refreshSessionIDs,
+			ctx, tx.Tx, archiveID, refreshSessionIDs,
 		); err != nil {
 			return err
 		}
@@ -940,12 +942,12 @@ func (s *Sync) syncProjectIdentityObservations(
 		observations[i] = export.SanitizeStoredProjectIdentityObservation(obs)
 	}
 	if err := syncProjectIdentityObservationsBatch(
-		ctx, tx, observations,
+		ctx, tx.Tx, tx, archiveID, archiveSalt, observations,
 	); err != nil {
 		return fmt.Errorf("syncing project identity observations: %w", err)
 	}
 	if err := ownProjectIdentityObservations(
-		ctx, tx, archiveID, publicationScope, observations,
+		ctx, tx.Tx, archiveID, publicationScope, observations,
 	); err != nil {
 		return err
 	}
@@ -958,7 +960,7 @@ func (s *Sync) syncProjectIdentityObservations(
 		return fmt.Errorf("syncing session project identity snapshots: %w", err)
 	}
 	if err := ownSessionProjectIdentitySnapshots(
-		ctx, tx, archiveID, databaseGeneration, publicationScope, snapshots,
+		ctx, tx.Tx, archiveID, databaseGeneration, publicationScope, snapshots,
 	); err != nil {
 		return err
 	}

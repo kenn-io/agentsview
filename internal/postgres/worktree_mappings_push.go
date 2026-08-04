@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -118,7 +119,11 @@ func (s *Sync) commitWorktreeMappingPublication(
 	mappings []db.WorktreeProjectMapping,
 	deletes []db.WorktreeMappingKey,
 ) error {
-	tx, err := s.pg.BeginTx(ctx, nil)
+	rows, err := db.CanonicalWorktreeProjectMappingRows(s.archiveID, mappings)
+	if err != nil {
+		return fmt.Errorf("converting pg worktree mappings: %w", err)
+	}
+	tx, err := s.bunDB().BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning mapping publication tx: %w", err)
 	}
@@ -133,63 +138,50 @@ func (s *Sync) commitWorktreeMappingPublication(
 	if fullPublication {
 		if s.isFiltered() {
 			if err := releaseFilteredWorktreeMappingFullOwnership(
-				ctx, tx, s.archiveID, publicationScope,
+				ctx, tx.Tx, s.archiveID, publicationScope,
 			); err != nil {
 				return err
 			}
-		} else if _, err := tx.ExecContext(ctx, `
-				DELETE FROM source_worktree_project_mappings
-				WHERE source_archive_id = $1`, s.archiveID); err != nil {
+		} else if err := db.ClearWorktreeProjectMappingRows(
+			ctx, tx, s.archiveID,
+		); err != nil {
 			return fmt.Errorf("clearing mapping mirror scope: %w", err)
 		}
-	} else {
-		for _, key := range deletes {
-			if _, err := tx.ExecContext(ctx, `
-				DELETE FROM source_worktree_project_mappings
-				WHERE source_archive_id = $1
-				  AND machine = $2 AND path_prefix = $3`,
-				s.archiveID, key.Machine, key.PathPrefix); err != nil {
-				return fmt.Errorf("deleting mapping tombstone: %w", err)
-			}
+	} else if err := db.DeleteWorktreeProjectMappingRows(
+		ctx, tx, s.archiveID, deletes,
+	); err != nil {
+		return fmt.Errorf("deleting mapping tombstones: %w", err)
+	}
+	var policy db.WorktreeMappingConflictPolicy
+	if s.isFiltered() {
+		policy = func(query *bun.InsertQuery) *bun.InsertQuery {
+			return query.Set(`original_project = CASE
+				WHEN EXCLUDED.original_project = ''
+				 AND EXISTS (
+					SELECT 1
+					FROM source_worktree_project_mapping_scopes owner
+					WHERE owner.source_archive_id = EXCLUDED.source_archive_id
+					  AND owner.machine = EXCLUDED.machine
+					  AND owner.path_prefix = EXCLUDED.path_prefix
+					  AND owner.publication_scope <> ?
+				 )
+				THEN source_worktree_project_mapping.original_project
+				ELSE EXCLUDED.original_project
+			END`, publicationScope)
 		}
 	}
-	for _, m := range mappings {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO source_worktree_project_mappings
-			(source_archive_id, machine, path_prefix, layout, project,
-			 original_project, enabled, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-			ON CONFLICT (source_archive_id, machine, path_prefix)
-			DO UPDATE SET
-				layout = EXCLUDED.layout,
-				project = EXCLUDED.project,
-				original_project = CASE
-					WHEN $9
-					 AND EXCLUDED.original_project = ''
-					 AND EXISTS (
-						SELECT 1
-						FROM source_worktree_project_mapping_scopes owner
-						WHERE owner.source_archive_id = EXCLUDED.source_archive_id
-						  AND owner.machine = EXCLUDED.machine
-						  AND owner.path_prefix = EXCLUDED.path_prefix
-						  AND owner.publication_scope <> $10
-					 )
-					THEN source_worktree_project_mappings.original_project
-					ELSE EXCLUDED.original_project
-				END,
-				enabled = EXCLUDED.enabled,
-				updated_at = EXCLUDED.updated_at`,
-			s.archiveID, m.Machine, m.PathPrefix, m.Layout, m.Project,
-			m.OriginalProject, m.Enabled, m.UpdatedAt,
-			s.isFiltered(), publicationScope); err != nil {
-			return fmt.Errorf("upserting mapping mirror row: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `
+	if err := db.UpsertWorktreeProjectMappingRows(
+		ctx, tx, rows, policy,
+	); err != nil {
+		return fmt.Errorf("upserting mapping mirror rows: %w", err)
+	}
+	for _, row := range rows {
+		if _, err := tx.Tx.ExecContext(ctx, `
 			INSERT INTO source_worktree_project_mapping_scopes (
 				source_archive_id, machine, path_prefix, publication_scope
 			) VALUES ($1, $2, $3, $4)
 			ON CONFLICT DO NOTHING`,
-			s.archiveID, m.Machine, m.PathPrefix, publicationScope,
+			s.archiveID, row.Machine, row.PathPrefix, publicationScope,
 		); err != nil {
 			return fmt.Errorf("owning mapping mirror row: %w", err)
 		}

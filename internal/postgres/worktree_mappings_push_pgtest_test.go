@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,7 +19,7 @@ func TestPushReplicatesWorktreeMappings(t *testing.T) {
 	const schema = "agentsview_push_mapping_test"
 	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 
-	_, err := localDB.CreateWorktreeProjectMapping(ctx,
+	created, err := localDB.CreateWorktreeProjectMapping(ctx,
 		db.WorktreeProjectMapping{
 			Machine: "workstation", PathPrefix: "/work/repos/sample",
 			Layout: db.WorktreeMappingLayoutExplicit, Project: "sample",
@@ -31,15 +32,22 @@ func TestPushReplicatesWorktreeMappings(t *testing.T) {
 
 	archiveID, err := localDB.GetArchiveID(ctx)
 	require.NoError(t, err, "GetArchiveID")
+	var id int64
 	var project string
 	var enabled bool
+	var createdAt time.Time
 	require.NoError(t, pg.QueryRowContext(ctx, `
-		SELECT project, enabled FROM source_worktree_project_mappings
+		SELECT id, project, enabled, created_at
+		FROM source_worktree_project_mappings
 		WHERE source_archive_id = $1 AND machine = $2 AND path_prefix = $3`,
 		archiveID, "workstation", "/work/repos/sample",
-	).Scan(&project, &enabled), "read back mirrored mapping")
+	).Scan(&id, &project, &enabled, &createdAt), "read back mirrored mapping")
+	wantCreatedAt, err := time.Parse(time.RFC3339Nano, created.CreatedAt)
+	require.NoError(t, err)
+	assert.Equal(t, created.ID, id)
 	assert.Equal(t, "sample", project)
 	assert.True(t, enabled)
+	assert.Equal(t, wantCreatedAt.Truncate(time.Microsecond), createdAt.UTC())
 }
 
 // TestPushMappingDeleteTombstones verifies that deleting a local mapping and

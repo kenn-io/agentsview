@@ -6,7 +6,175 @@ import (
 
 	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/db/bunmodel"
+	"go.kenn.io/agentsview/internal/export"
 )
+
+// CanonicalProjectIdentityObservationRows converts source observations into
+// their complete portable representation, including credential-safe remotes.
+func CanonicalProjectIdentityObservationRows(
+	archiveID, archiveSalt string,
+	observations []export.ProjectIdentityObservation,
+) ([]bunmodel.SourceProjectIdentityObservation, error) {
+	if archiveID == "" {
+		return nil, fmt.Errorf("converting project identity observations: empty archive id")
+	}
+	rows := make([]bunmodel.SourceProjectIdentityObservation, 0, len(observations))
+	for _, observation := range observations {
+		observation.SourceArchiveID = archiveID
+		observation.SourceArchiveSalt = archiveSalt
+		observation = export.SanitizeStoredProjectIdentityObservation(observation)
+		observedAt := bunmodel.NewTimestamp(observation.ObservedAt)
+		truncateCanonicalTimestamp(&observedAt)
+		rows = append(rows, bunmodel.SourceProjectIdentityObservation{
+			SourceArchiveID: archiveID, SourceArchiveSalt: archiveSalt,
+			Project:              SanitizeUTF8(observation.Project),
+			Machine:              SanitizeUTF8(observation.Machine),
+			RootPath:             SanitizeUTF8(observation.RootPath),
+			GitRemote:            SanitizeUTF8(observation.GitRemote),
+			GitRemoteName:        SanitizeUTF8(observation.GitRemoteName),
+			RepositoryPath:       SanitizeUTF8(observation.RepositoryPath),
+			WorktreeName:         SanitizeUTF8(observation.WorktreeName),
+			WorktreeRootPath:     SanitizeUTF8(observation.WorktreeRootPath),
+			WorktreeRelationship: SanitizeUTF8(string(observation.WorktreeRelationship)),
+			CheckoutState:        SanitizeUTF8(string(observation.CheckoutState)),
+			GitBranch:            SanitizeUTF8(observation.GitBranch),
+			RemoteResolution:     SanitizeUTF8(string(observation.RemoteResolution)),
+			RemoteCandidateCount: observation.RemoteCandidateCount,
+			ObservedAt:           observedAt,
+			NormalizedRemote:     SanitizeUTF8(observation.NormalizedRemote),
+			KeySource:            SanitizeUTF8(observation.KeySource),
+			Key:                  SanitizeUTF8(observation.Key),
+		})
+	}
+	return rows, nil
+}
+
+// CanonicalSessionProjectIdentitySnapshotRows converts immutable per-session
+// source snapshots into their complete portable representation.
+func CanonicalSessionProjectIdentitySnapshotRows(
+	archiveID, databaseGeneration string,
+	snapshots []export.ProjectIdentityObservation,
+) ([]bunmodel.SourceSessionProjectIdentitySnapshot, error) {
+	if archiveID == "" {
+		return nil, fmt.Errorf("converting session identity snapshots: empty archive id")
+	}
+	if databaseGeneration == "" {
+		return nil, fmt.Errorf(
+			"converting session identity snapshots: empty database generation",
+		)
+	}
+	rows := make([]bunmodel.SourceSessionProjectIdentitySnapshot, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		snapshot = export.SanitizeStoredProjectIdentityObservation(snapshot)
+		observedAt := bunmodel.NewTimestamp(snapshot.ObservedAt)
+		truncateCanonicalTimestamp(&observedAt)
+		rows = append(rows, bunmodel.SourceSessionProjectIdentitySnapshot{
+			SourceArchiveID:          archiveID,
+			SourceDatabaseGeneration: databaseGeneration,
+			SourceSessionID:          SanitizeUTF8(snapshot.SessionID),
+			Project:                  SanitizeUTF8(snapshot.Project),
+			Machine:                  SanitizeUTF8(snapshot.Machine),
+			RootPath:                 SanitizeUTF8(snapshot.RootPath),
+			GitRemote:                SanitizeUTF8(snapshot.GitRemote),
+			GitRemoteName:            SanitizeUTF8(snapshot.GitRemoteName),
+			RepositoryPath:           SanitizeUTF8(snapshot.RepositoryPath),
+			WorktreeName:             SanitizeUTF8(snapshot.WorktreeName),
+			WorktreeRootPath:         SanitizeUTF8(snapshot.WorktreeRootPath),
+			WorktreeRelationship:     SanitizeUTF8(string(snapshot.WorktreeRelationship)),
+			CheckoutState:            SanitizeUTF8(string(snapshot.CheckoutState)),
+			GitBranch:                SanitizeUTF8(snapshot.GitBranch),
+			RemoteResolution:         SanitizeUTF8(string(snapshot.RemoteResolution)),
+			RemoteCandidateCount:     snapshot.RemoteCandidateCount,
+			ObservedAt:               observedAt,
+			NormalizedRemote:         SanitizeUTF8(snapshot.NormalizedRemote),
+			KeySource:                SanitizeUTF8(snapshot.KeySource),
+			Key:                      SanitizeUTF8(snapshot.Key),
+		})
+	}
+	return rows, nil
+}
+
+// UpsertSourceArchiveRow establishes one immutable archive identity scope.
+func UpsertSourceArchiveRow(
+	ctx context.Context, store bun.IDB, archiveID, archiveSalt string,
+) error {
+	if archiveID == "" {
+		return fmt.Errorf("upserting source archive: empty archive id")
+	}
+	row := bunmodel.SourceArchive{
+		SourceArchiveID: archiveID, SourceArchiveSalt: archiveSalt,
+	}
+	if _, err := store.NewInsert().Model(&row).
+		On("CONFLICT (source_archive_id) DO NOTHING").Returning("").Exec(ctx); err != nil {
+		return fmt.Errorf("upserting source archive %q: %w", archiveID, err)
+	}
+	var existingSalt string
+	if err := store.NewSelect().Model((*bunmodel.SourceArchive)(nil)).
+		Column("source_archive_salt").
+		Where("source_archive_id = ?", archiveID).Scan(ctx, &existingSalt); err != nil {
+		return fmt.Errorf("verifying source archive %q: %w", archiveID, err)
+	}
+	if existingSalt != archiveSalt {
+		return fmt.Errorf("archive salt mismatch for %q", archiveID)
+	}
+	return nil
+}
+
+// UpsertProjectIdentityObservationRows writes complete canonical observation
+// rows; adapters own only fallback selection and publication-scope policy.
+func UpsertProjectIdentityObservationRows(
+	ctx context.Context,
+	store bun.IDB,
+	rows []bunmodel.SourceProjectIdentityObservation,
+) error {
+	for start := 0; start < len(rows); start += canonicalWriteBatchSize {
+		end := min(start+canonicalWriteBatchSize, len(rows))
+		chunk := rows[start:end]
+		query := store.NewInsert().Model(&chunk).
+			On("CONFLICT (source_archive_id, project, machine, root_path, git_remote) DO UPDATE")
+		for _, column := range []string{
+			"source_archive_salt", "git_remote_name", "repository_path",
+			"worktree_name", "worktree_root_path", "worktree_relationship",
+			"checkout_state", "git_branch", "remote_resolution",
+			"remote_candidate_count", "observed_at", "normalized_remote",
+			"key_source", "key",
+		} {
+			query = query.Set("? = EXCLUDED.?", bun.Ident(column), bun.Ident(column))
+		}
+		if _, err := query.Returning("").Exec(ctx); err != nil {
+			return fmt.Errorf("upserting canonical project identity observations: %w", err)
+		}
+	}
+	return nil
+}
+
+// UpsertSessionProjectIdentitySnapshotRows writes complete canonical source
+// snapshots using the portable archive/generation/session identity.
+func UpsertSessionProjectIdentitySnapshotRows(
+	ctx context.Context,
+	store bun.IDB,
+	rows []bunmodel.SourceSessionProjectIdentitySnapshot,
+) error {
+	for start := 0; start < len(rows); start += canonicalWriteBatchSize {
+		end := min(start+canonicalWriteBatchSize, len(rows))
+		chunk := rows[start:end]
+		query := store.NewInsert().Model(&chunk).
+			On("CONFLICT (source_archive_id, source_database_generation, source_session_id) DO UPDATE")
+		for _, column := range []string{
+			"project", "machine", "root_path", "git_remote", "git_remote_name",
+			"repository_path", "worktree_name", "worktree_root_path",
+			"worktree_relationship", "checkout_state", "git_branch",
+			"remote_resolution", "remote_candidate_count", "observed_at",
+			"normalized_remote", "key_source", "key",
+		} {
+			query = query.Set("? = EXCLUDED.?", bun.Ident(column), bun.Ident(column))
+		}
+		if _, err := query.Returning("").Exec(ctx); err != nil {
+			return fmt.Errorf("upserting canonical session identity snapshots: %w", err)
+		}
+	}
+	return nil
+}
 
 // WorktreeMappingConflictPolicy supplies the narrow target-ownership rule for
 // original_project. All other canonical columns use complete replacement.
