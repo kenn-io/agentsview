@@ -145,7 +145,7 @@ func (postgresFullTextCapability) Search(
 				s.project,
 				s.agent,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
-				COALESCE(s.ended_at, s.started_at) AS session_ended_at,
+				COALESCE(s.ended_at, s.started_at, s.created_at) AS session_ended_at,
 				m.ordinal,
 				POSITION(LOWER(?1) IN LOWER(m.content)) AS match_pos,
 				CASE
@@ -175,7 +175,7 @@ func (postgresFullTextCapability) Search(
 				s.project,
 				s.agent,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
-				COALESCE(s.ended_at, s.started_at) AS session_ended_at,
+				COALESCE(s.ended_at, s.started_at, s.created_at) AS session_ended_at,
 				-1 AS ordinal,
 				0 AS match_pos,
 				CASE

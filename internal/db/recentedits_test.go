@@ -150,6 +150,13 @@ func TestRecentEditsSearchFilter(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, res.Files, 1, "project and search both apply")
 	assert.Equal(t, "proj", res.Files[0].Project)
+
+	// SQLite LOWER is ASCII-only; the shared contract remains Unicode-aware.
+	seedEdit(t, d, "proj", "s6", 1, 0, "src/ÜBER.go", "2026-06-24T05:00:00Z")
+	res, err = d.RecentEdits(ctx, RecentEditsParams{Search: "über"})
+	require.NoError(t, err)
+	require.Len(t, res.Files, 1, "search case-folds non-ASCII paths")
+	assert.Equal(t, "src/ÜBER.go", res.Files[0].FilePath)
 }
 
 func TestRecentEditsTruncationAndHasMore(t *testing.T) {

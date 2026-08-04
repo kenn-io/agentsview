@@ -182,6 +182,55 @@ func TestBunStoreSearchSessionUsesFullTextCapability(t *testing.T) {
 	assert.Equal(t, 1, backend.viewCalls)
 }
 
+func TestBunStoreSearchSessionDoesNotRequireGlobalFTS(t *testing.T) {
+	database := testDB(t)
+	capability := &literalFullTextCapability{
+		available: false, sessionOrdinals: []int{2, 4},
+	}
+	backend := &searchTestBackend{store: database.bunReader, fullText: capability}
+	capability.insideGuard = func() bool { return backend.insideGuard }
+
+	ordinals, err := NewBunStore(backend).SearchSession(
+		t.Context(), "session-id", "needle",
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, []int{2, 4}, ordinals)
+	assert.Equal(t, 1, backend.viewCalls)
+}
+
+func TestSQLiteBunStoreSearchRecencyUsesCreatedAtFallback(t *testing.T) {
+	database := testDB(t)
+	requireFTS(t, database)
+	for _, fixture := range []struct {
+		id        string
+		createdAt string
+	}{
+		{id: "created-old", createdAt: "2026-01-01T00:00:00Z"},
+		{id: "created-new", createdAt: "2026-02-01T00:00:00Z"},
+	} {
+		insertSession(t, database, fixture.id, "alpha", func(session *Session) {
+			session.CreatedAt = fixture.createdAt
+		})
+		_, err := database.getWriter().ExecContext(t.Context(),
+			"UPDATE sessions SET created_at = ?, started_at = '', ended_at = '' WHERE id = ?",
+			fixture.createdAt, fixture.id,
+		)
+		require.NoError(t, err)
+		insertMessages(t, database, userMsg(fixture.id, 0, "created fallback needle"))
+	}
+
+	common := database.BunStore
+	page, err := common.Search(t.Context(), SearchFilter{
+		Query: "needle", Sort: "recency", Limit: 10,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Results, 2)
+	assert.Equal(t, "created-new", page.Results[0].SessionID)
+	assert.Equal(t, "2026-02-01T00:00:00Z", page.Results[0].SessionEndedAt)
+}
+
 func TestSQLiteBunStoreSearchUsesFTSCapability(t *testing.T) {
 	database := testDB(t)
 	requireFTS(t, database)
@@ -324,4 +373,52 @@ func TestSQLiteBunStoreSearchContentUsesFTSCapability(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, page.Matches, 1)
 	assert.Equal(t, "sqlite-content-fts", page.Matches[0].SessionID)
+}
+
+func TestBunStoreSearchContentFTSRejectsNonMessageSources(t *testing.T) {
+	database := testDB(t)
+	capability := &literalFullTextCapability{available: true}
+	backend := &searchTestBackend{
+		store: database.bunReader, fullText: capability, contentSearch: capability,
+	}
+
+	_, err := NewBunStore(backend).SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "needle", Mode: "fts", Sources: []string{"tool_result"},
+		Limit: 10,
+	})
+
+	var inputErr *SearchInputError
+	require.ErrorAs(t, err, &inputErr)
+	assert.Contains(t, inputErr.Error(), "only supports the messages source")
+}
+
+func TestSQLiteBunStoreSearchContentFTSOrdersByCanonicalRecency(t *testing.T) {
+	database := testDB(t)
+	requireFTS(t, database)
+	for _, fixture := range []struct {
+		id      string
+		endedAt string
+	}{
+		{id: "fts-older", endedAt: "2026-01-01T00:00:00Z"},
+		{id: "fts-newer", endedAt: "2026-02-01T00:00:00Z"},
+	} {
+		seedSearchSession(t, database, fixture.id, "alpha", [][2]string{
+			{"user", "canonical recency needle"},
+		})
+		_, err := database.getWriter().ExecContext(t.Context(),
+			"UPDATE sessions SET ended_at = ? WHERE id = ?",
+			fixture.endedAt, fixture.id,
+		)
+		require.NoError(t, err)
+	}
+
+	page, err := database.BunStore.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "needle", Mode: "fts", Sources: []string{"messages"},
+		IncludeOneShot: true, Limit: 1,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "fts-newer", page.Matches[0].SessionID)
+	assert.Equal(t, 1, page.NextCursor)
 }
