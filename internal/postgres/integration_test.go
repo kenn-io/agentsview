@@ -161,9 +161,11 @@ func TestPushSecretFindingsReportsChange(t *testing.T) {
 	// pushOnce runs pushSecretFindings in its own transaction and returns
 	// whether it reported a change.
 	pushOnce := func() bool {
+		findings, err := local.SessionSecretFindings(ctx, sessID)
+		require.NoError(t, err, "read source findings")
 		tx, err := ps.bunDB().BeginTx(ctx, nil)
 		require.NoError(t, err, "begin tx")
-		changed, err := ps.pushSecretFindings(ctx, tx, sessID)
+		changed, err := ps.pushSecretFindings(ctx, tx, sessID, findings)
 		if err != nil {
 			_ = tx.Rollback()
 			t.Fatalf("pushSecretFindings: %v", err)

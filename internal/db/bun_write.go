@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -197,6 +198,81 @@ func ReplaceMessageRows(
 	return appendMessageRows(ctx, tx, sessionID, rows)
 }
 
+// CanonicalSessionDependentRowsMatch reports whether a target already stores
+// the canonical message, tool, result, and usage rows for one source snapshot.
+// Storage-assigned identifiers are ignored.
+func CanonicalSessionDependentRowsMatch(
+	ctx context.Context, store bun.IDB, sessionID string,
+	messages []bunmodel.Message, calls []bunmodel.ToolCall,
+	results []bunmodel.ToolResultEvent, usage []bunmodel.UsageEvent,
+) (bool, error) {
+	var storedMessages []bunmodel.Message
+	if err := store.NewSelect().Model(&storedMessages).
+		Where("session_id = ?", sessionID).OrderExpr("ordinal ASC").Scan(ctx); err != nil {
+		return false, fmt.Errorf("reading canonical messages for comparison: %w", err)
+	}
+	var storedCalls []bunmodel.ToolCall
+	if err := store.NewSelect().Model(&storedCalls).
+		Where("session_id = ?", sessionID).
+		OrderExpr("message_ordinal ASC").OrderExpr("call_index ASC").Scan(ctx); err != nil {
+		return false, fmt.Errorf("reading canonical tool calls for comparison: %w", err)
+	}
+	var storedResults []bunmodel.ToolResultEvent
+	if err := store.NewSelect().Model(&storedResults).
+		Where("session_id = ?", sessionID).
+		OrderExpr("tool_call_message_ordinal ASC").OrderExpr("call_index ASC").
+		OrderExpr("event_index ASC").Scan(ctx); err != nil {
+		return false, fmt.Errorf("reading canonical tool results for comparison: %w", err)
+	}
+	var storedUsage []bunmodel.UsageEvent
+	if err := store.NewSelect().Model(&storedUsage).
+		Where("session_id = ?", sessionID).
+		OrderExpr("COALESCE(occurred_at, 'epoch') ASC").OrderExpr("id ASC").Scan(ctx); err != nil {
+		return false, fmt.Errorf("reading canonical usage events for comparison: %w", err)
+	}
+
+	messages = append([]bunmodel.Message(nil), messages...)
+	calls = append([]bunmodel.ToolCall(nil), calls...)
+	results = append([]bunmodel.ToolResultEvent(nil), results...)
+	usage = append([]bunmodel.UsageEvent(nil), usage...)
+	for i := range storedMessages {
+		storedMessages[i].ID = nil
+		if len(storedMessages[i].TokenUsage) == 0 {
+			storedMessages[i].TokenUsage = nil
+		}
+	}
+	for i := range messages {
+		messages[i].ID = nil
+		if len(messages[i].TokenUsage) == 0 {
+			messages[i].TokenUsage = nil
+		}
+	}
+	for i := range storedCalls {
+		storedCalls[i].ID = nil
+		storedCalls[i].MessageID = nil
+	}
+	for i := range calls {
+		calls[i].ID = nil
+		calls[i].MessageID = nil
+	}
+	for i := range storedResults {
+		storedResults[i].ID = nil
+	}
+	for i := range results {
+		results[i].ID = nil
+	}
+	for i := range storedUsage {
+		storedUsage[i].ID = 0
+	}
+	for i := range usage {
+		usage[i].ID = 0
+	}
+	return reflect.DeepEqual(storedMessages, messages) &&
+		reflect.DeepEqual(storedCalls, calls) &&
+		reflect.DeepEqual(storedResults, results) &&
+		reflect.DeepEqual(storedUsage, usage), nil
+}
+
 // AppendMessageRows appends canonical messages without disturbing rows already
 // stored for the session. SQLite's append-only parser path uses this after
 // selecting only ordinals newer than the durable transcript.
@@ -255,21 +331,8 @@ func appendToolRows(
 	calls []bunmodel.ToolCall, results []bunmodel.ToolResultEvent,
 ) error {
 	calls = append([]bunmodel.ToolCall(nil), calls...)
-	var messages []bunmodel.Message
-	if len(calls) > 0 {
-		if err := tx.NewSelect().Model(&messages).Column("id", "ordinal").
-			Where("session_id = ?", sessionID).Scan(ctx); err != nil {
-			return fmt.Errorf("resolving canonical tool message ids for %s: %w", sessionID, err)
-		}
-	}
-	messageIDs := make(map[int]*int64, len(messages))
-	for _, message := range messages {
-		messageIDs[message.Ordinal] = message.ID
-	}
-	for i := range calls {
-		if calls[i].MessageID == nil {
-			calls[i].MessageID = messageIDs[calls[i].MessageOrdinal]
-		}
+	if err := resolveCanonicalToolMessageIDs(ctx, tx, sessionID, calls); err != nil {
+		return err
 	}
 	for start := 0; start < len(calls); start += canonicalWriteBatchSize {
 		end := min(start+canonicalWriteBatchSize, len(calls))
@@ -414,7 +477,14 @@ func resolveCanonicalToolMessageIDs(
 	}
 	for i := range calls {
 		if calls[i].MessageID == nil {
-			calls[i].MessageID = messageIDs[calls[i].MessageOrdinal]
+			messageID, ok := messageIDs[calls[i].MessageOrdinal]
+			if !ok {
+				return fmt.Errorf(
+					"canonical tool call for %s has missing message ordinal %d",
+					sessionID, calls[i].MessageOrdinal,
+				)
+			}
+			calls[i].MessageID = messageID
 		}
 	}
 	return nil
@@ -484,15 +554,47 @@ func validateMessageWriteScope(sessionID string, rows []bunmodel.Message) error 
 func validateToolWriteScope(
 	sessionID string, calls []bunmodel.ToolCall, results []bunmodel.ToolResultEvent,
 ) error {
+	callKeys := make(map[canonicalToolCallKey]struct{}, len(calls))
 	for _, row := range calls {
 		if row.SessionID != sessionID {
 			return fmt.Errorf("tool call session %q does not match %q", row.SessionID, sessionID)
 		}
+		key := canonicalToolCallKey{
+			MessageOrdinal: row.MessageOrdinal, CallIndex: row.CallIndex,
+		}
+		if _, exists := callKeys[key]; exists {
+			return fmt.Errorf(
+				"duplicate canonical tool call (%d, %d) for %s",
+				key.MessageOrdinal, key.CallIndex, sessionID,
+			)
+		}
+		callKeys[key] = struct{}{}
 	}
+	resultKeys := make(map[canonicalToolResultKey]struct{}, len(results))
 	for _, row := range results {
 		if row.SessionID != sessionID {
 			return fmt.Errorf("tool result session %q does not match %q", row.SessionID, sessionID)
 		}
+		parent := canonicalToolCallKey{
+			MessageOrdinal: row.ToolCallMessageOrdinal, CallIndex: row.CallIndex,
+		}
+		if _, exists := callKeys[parent]; !exists {
+			return fmt.Errorf(
+				"canonical tool result for %s has missing tool call (%d, %d)",
+				sessionID, parent.MessageOrdinal, parent.CallIndex,
+			)
+		}
+		key := canonicalToolResultKey{
+			MessageOrdinal: row.ToolCallMessageOrdinal,
+			CallIndex:      row.CallIndex, EventIndex: row.EventIndex,
+		}
+		if _, exists := resultKeys[key]; exists {
+			return fmt.Errorf(
+				"duplicate canonical tool result (%d, %d, %d) for %s",
+				key.MessageOrdinal, key.CallIndex, key.EventIndex, sessionID,
+			)
+		}
+		resultKeys[key] = struct{}{}
 	}
 	return nil
 }

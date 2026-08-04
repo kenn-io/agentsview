@@ -107,7 +107,7 @@ func TestPushPreservesLegacyOffsetTimestamps(t *testing.T) {
 	assert.Equal(t, "1", marker)
 }
 
-func TestPGUsageEventFingerprintsPreserveExactMicrodollars(t *testing.T) {
+func TestPGBatchedUsageEventFingerprintsPreserveExactMicrodollars(t *testing.T) {
 	pgURL := testPGURL(t)
 	const schema = "agentsview_usage_fingerprint_money_test"
 	cleanNamedPGSchema(t, pgURL, schema)
@@ -151,10 +151,6 @@ func TestPGUsageEventFingerprintsPreserveExactMicrodollars(t *testing.T) {
 	tx, err := pg.BeginTx(ctx, nil)
 	require.NoError(t, err)
 	defer tx.Rollback()
-	got, err := pgUsageEventFingerprint(ctx, tx, "exact-money")
-	require.NoError(t, err)
-	assert.Equal(t, want, got)
-
 	batched := map[string]string{}
 	require.NoError(t, loadPushUsageEventFingerprints(
 		ctx, tx, []string{"exact-money"}, batched,
