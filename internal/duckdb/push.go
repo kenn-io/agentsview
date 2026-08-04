@@ -948,33 +948,25 @@ func (s *Sync) refreshCurationIfChanged(ctx context.Context) (bool, error) {
 func (s *Sync) pushSession(
 	ctx context.Context, tx bun.IDB, sess db.Session, fingerprint string,
 ) (int, error) {
-	if err := s.upsertSession(ctx, tx, sess, fingerprint); err != nil {
+	snapshot, err := s.local.ReadSessionReplicationSnapshot(ctx, sess.ID)
+	if err != nil {
+		return 0, fmt.Errorf("reading local replication snapshot for %s: %w", sess.ID, err)
+	}
+	if err := s.upsertSession(ctx, tx, snapshot.Session, fingerprint); err != nil {
 		return 0, err
 	}
-	msgs, err := s.local.GetAllMessages(ctx, sess.ID)
-	if err != nil {
-		return 0, fmt.Errorf("reading local messages for %s: %w", sess.ID, err)
-	}
-	messageRows, callRows, resultRows, err := db.CanonicalMessageRows(msgs)
+	messageRows, callRows, resultRows, err := db.CanonicalMessageRows(snapshot.Messages)
 	if err != nil {
 		return 0, err
 	}
 	for i := range messageRows {
-		if msgs[i].ID <= 0 {
+		if snapshot.Messages[i].ID <= 0 {
 			continue
 		}
-		id := msgs[i].ID
+		id := snapshot.Messages[i].ID
 		messageRows[i].ID = &id
 	}
-	usageEvents, err := s.local.GetUsageEvents(ctx, sess.ID)
-	if err != nil {
-		return 0, err
-	}
-	usageRows, err := db.CanonicalUsageEventRows(usageEvents)
-	if err != nil {
-		return 0, err
-	}
-	findings, err := s.local.SessionSecretFindings(ctx, sess.ID)
+	usageRows, err := db.CanonicalUsageEventRows(snapshot.UsageEvents)
 	if err != nil {
 		return 0, err
 	}
@@ -995,7 +987,7 @@ func (s *Sync) pushSession(
 		return 0, err
 	}
 	if err := db.ReplaceSecretFindingRows(
-		ctx, tx, sess.ID, db.CanonicalSecretFindingRows(findings),
+		ctx, tx, sess.ID, db.CanonicalSecretFindingRows(snapshot.SecretFindings),
 	); err != nil {
 		return 0, err
 	}
@@ -1004,10 +996,10 @@ func (s *Sync) pushSession(
 	); err != nil {
 		return 0, fmt.Errorf("clearing duckdb pinned messages for %s: %w", sess.ID, err)
 	}
-	if err := s.replacePinnedMessages(ctx, tx, sess.ID); err != nil {
+	if err := insertPinnedMessages(ctx, tx, snapshot.PinnedMessages); err != nil {
 		return 0, err
 	}
-	return len(msgs), nil
+	return len(snapshot.Messages), nil
 }
 
 func (s *Sync) replaceSessionDependents(
@@ -1282,21 +1274,9 @@ func (s *Sync) bulkInsertCursorUsageEvents(
 	return nil
 }
 
-func (s *Sync) replacePinnedMessages(
-	ctx context.Context, exec duckMutationExecutor, sessionID string,
-) error {
-	pins, err := s.local.ListPinnedMessages(ctx, sessionID, "")
-	if err != nil {
-		return err
-	}
-	return insertPinnedMessages(ctx, exec, pins)
-}
-
 // insertPinnedMessages inserts pins already loaded from the local archive.
-// It is the shared write side for both the single-session push path
-// (replacePinnedMessages, one local query per pushed session) and the
-// curation refresh (replaceCuration, one batched local query for the
-// curation-sized pinned session set).
+// It is the shared write side for both a session replication snapshot and the
+// batched curation refresh.
 func insertPinnedMessages(
 	ctx context.Context, exec duckMutationExecutor, pins []db.PinnedMessage,
 ) error {

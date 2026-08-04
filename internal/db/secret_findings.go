@@ -133,7 +133,13 @@ func updateSessionSecretSummaryTx(
 func (db *DB) SessionSecretFindings(
 	ctx context.Context, sessionID string,
 ) ([]SecretFinding, error) {
-	rows, err := db.getReader().QueryContext(ctx, `
+	return sessionSecretFindingsWithQuerier(ctx, db.getReader(), sessionID)
+}
+
+func sessionSecretFindingsWithQuerier(
+	ctx context.Context, q messageRowsQuerier, sessionID string,
+) ([]SecretFinding, error) {
+	rows, err := q.QueryContext(ctx, `
 		SELECT session_id, rule_name, confidence,
 		       location_kind, message_ordinal, call_index, event_index,
 		       match_start, match_end, match_index,

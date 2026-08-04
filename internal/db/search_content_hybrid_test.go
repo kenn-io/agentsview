@@ -125,6 +125,29 @@ func TestSearchContentHybridVectorOnlyAndFTSOnlyBothAppear(t *testing.T) {
 	assert.ElementsMatch(t, []string{"fts-only", "vec-only"}, ids)
 }
 
+func TestSearchContentHybridStaleTopAnchorDoesNotConsumeLimit(t *testing.T) {
+	d := testDB(t)
+	if !d.HasFTS() {
+		t.Skip("fts5 not available")
+	}
+	seedSearchSession(t, d, "live", "proj", [][2]string{
+		{"user", "live semantic result"},
+	})
+	d.SetVectorSearcher(&fakeVectorSearcher{hits: []VectorHit{
+		{SessionID: "live", Ordinal: 99, OrdinalStart: 99, OrdinalEnd: 99,
+			Score: 0.9, Snippet: "stale top result"},
+		{SessionID: "live", Ordinal: 0, OrdinalStart: 0, OrdinalEnd: 0,
+			Score: 0.8, Snippet: "live semantic result"},
+	}})
+
+	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "not-in-fts", Mode: "hybrid", Limit: 1,
+	})
+	require.NoError(t, err, "SearchContent hybrid")
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, 0, page.Matches[0].Ordinal)
+}
+
 // TestSearchContentHybridScoresStrictlyDescending pins that fused RRF scores
 // order the page strictly descending, with no inversions or unexpected ties
 // across a mix of a double-leg hit and single-leg (vector-only) hits.

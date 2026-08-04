@@ -83,6 +83,84 @@ func TestCanonicalBunWriteReplacesDependentRowsAtomically(t *testing.T) {
 	assert.Zero(t, findingCount)
 }
 
+func TestCanonicalToolRowsRejectMissingLogicalParents(t *testing.T) {
+	database := testDB(t)
+	insertSession(t, database, "canonical-parent", "alpha")
+	ctx := t.Context()
+
+	err := database.bunWriter.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		return ReplaceToolRows(ctx, tx, "canonical-parent", []bunmodel.ToolCall{{
+			SessionID: "canonical-parent", MessageOrdinal: 7,
+			CallIndex: 0, ToolName: "Read", Category: "Read",
+		}}, nil)
+	})
+	require.ErrorContains(t, err, "missing message ordinal 7")
+
+	require.NoError(t, database.bunWriter.RunInTx(ctx, nil,
+		func(ctx context.Context, tx bun.Tx) error {
+			return ReplaceMessageRows(ctx, tx, "canonical-parent", []bunmodel.Message{{
+				SessionID: "canonical-parent", Ordinal: 7, Role: "assistant",
+				Content: "tool parent",
+			}})
+		}))
+	err = database.bunWriter.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		return ReplaceToolRows(ctx, tx, "canonical-parent", nil,
+			[]bunmodel.ToolResultEvent{{
+				SessionID: "canonical-parent", ToolCallMessageOrdinal: 7,
+				CallIndex: 0, EventIndex: 0, Source: "tool", Status: "ok",
+			}})
+	})
+	require.ErrorContains(t, err, "missing tool call (7, 0)")
+}
+
+func TestReplaceToolRowsUpdatesLogicalConflictAndDeletesStaleRows(t *testing.T) {
+	database := testDB(t)
+	insertSession(t, database, "canonical-tool-upsert", "alpha")
+	ctx := t.Context()
+	require.NoError(t, database.bunWriter.RunInTx(ctx, nil,
+		func(ctx context.Context, tx bun.Tx) error {
+			if err := ReplaceMessageRows(ctx, tx, "canonical-tool-upsert", []bunmodel.Message{{
+				SessionID: "canonical-tool-upsert", Ordinal: 4,
+				Role: "assistant", Content: "tool parent",
+			}}); err != nil {
+				return err
+			}
+			return ReplaceToolRows(ctx, tx, "canonical-tool-upsert", []bunmodel.ToolCall{
+				{SessionID: "canonical-tool-upsert", MessageOrdinal: 4,
+					CallIndex: 0, ToolName: "Old", Category: "Read"},
+				{SessionID: "canonical-tool-upsert", MessageOrdinal: 4,
+					CallIndex: 1, ToolName: "Stale", Category: "Read"},
+			}, []bunmodel.ToolResultEvent{
+				{SessionID: "canonical-tool-upsert", ToolCallMessageOrdinal: 4,
+					CallIndex: 0, EventIndex: 0, Source: "tool", Status: "old"},
+				{SessionID: "canonical-tool-upsert", ToolCallMessageOrdinal: 4,
+					CallIndex: 1, EventIndex: 0, Source: "tool", Status: "stale"},
+			})
+		}))
+
+	require.NoError(t, database.bunWriter.RunInTx(ctx, nil,
+		func(ctx context.Context, tx bun.Tx) error {
+			return ReplaceToolRows(ctx, tx, "canonical-tool-upsert", []bunmodel.ToolCall{{
+				SessionID: "canonical-tool-upsert", MessageOrdinal: 4,
+				CallIndex: 0, ToolName: "Updated", Category: "Read",
+			}}, []bunmodel.ToolResultEvent{{
+				SessionID: "canonical-tool-upsert", ToolCallMessageOrdinal: 4,
+				CallIndex: 0, EventIndex: 0, Source: "tool", Status: "updated",
+			}})
+		}))
+
+	var calls []bunmodel.ToolCall
+	require.NoError(t, database.bunReader.NewSelect().Model(&calls).
+		Where("session_id = ?", "canonical-tool-upsert").Scan(ctx))
+	require.Len(t, calls, 1)
+	assert.Equal(t, "Updated", calls[0].ToolName)
+	var results []bunmodel.ToolResultEvent
+	require.NoError(t, database.bunReader.NewSelect().Model(&results).
+		Where("session_id = ?", "canonical-tool-upsert").Scan(ctx))
+	require.Len(t, results, 1)
+	assert.Equal(t, "updated", results[0].Status)
+}
+
 func TestCanonicalBunRowsPreservePortableCoordinates(t *testing.T) {
 	cost := money.Money{Microdollars: 42}
 	messages, calls, results, err := CanonicalMessageRows([]Message{{

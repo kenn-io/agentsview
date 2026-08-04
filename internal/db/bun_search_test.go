@@ -393,14 +393,14 @@ func TestBunStoreSearchContentSubstringUsesCanonicalRows(t *testing.T) {
 	assert.Contains(t, page.Matches[0].Snippet, "needle")
 }
 
-func TestSQLiteBunStoreSearchContentSubstringPreservesNonASCIICase(t *testing.T) {
+func TestSQLiteBunStoreSearchContentSubstringFoldsNonASCIICase(t *testing.T) {
 	database := testDB(t)
 	seedSearchSession(t, database, "unicode-content", "alpha", [][2]string{
-		{"user", "identical uppercase CAFÉ content"},
+		{"user", "uppercase CAFÉ content"},
 	})
 
 	page, err := database.SearchContent(t.Context(), ContentSearchFilter{
-		Pattern: "CAFÉ", Sources: []string{"messages"},
+		Pattern: "café", Sources: []string{"messages"},
 		IncludeOneShot: true, Limit: 10,
 	})
 
