@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/uptrace/bun"
 )
 
 const (
@@ -326,6 +328,18 @@ type SearchPage struct {
 	NextCursor int            `json:"next_cursor,omitempty"`
 }
 
+type sqliteFullTextCapability struct {
+	store *DB
+}
+
+type sqliteSearchHitProjection struct {
+	SessionID string  `bun:"session_id"`
+	Ordinal   int     `bun:"ordinal"`
+	Snippet   string  `bun:"snippet"`
+	Rank      float64 `bun:"rank"`
+	MatchPos  int     `bun:"match_pos"`
+}
+
 // Search performs FTS5 full-text search across messages, grouped by session,
 // plus a LIKE-based search on session display names and first messages.
 //
@@ -339,9 +353,9 @@ type SearchPage struct {
 //  2. Name branch — display_name / first_message LIKE matches that are NOT
 //     already covered by the FTS branch. Ordinal is -1 (no specific message
 //     to navigate to).
-func (db *DB) Search(
-	ctx context.Context, f SearchFilter,
-) (SearchPage, error) {
+func (capability sqliteFullTextCapability) Search(
+	ctx context.Context, store bun.IDB, f SearchFilter,
+) ([]SearchHit, error) {
 	if f.Limit <= 0 || f.Limit > MaxSearchLimit {
 		f.Limit = DefaultSearchLimit
 	}
@@ -385,7 +399,7 @@ func (db *DB) Search(
 	// searches work correctly.
 	plainQuery := StripFTSQuotes(f.Query)
 	if plainQuery == "" {
-		return SearchPage{}, nil
+		return nil, nil
 	}
 	likePattern := "%" + escapeLike(plainQuery) + "%"
 
@@ -408,19 +422,18 @@ func (db *DB) Search(
 	//  [8+]| AND s2.project = ? (NOT IN, if set)         | ftsArgs[1]
 	//   9  | LIMIT ? OFFSET ?                            | f.Limit+1, f.Cursor
 	args := make([]any, 0, len(ftsArgs)*2+6+len(nameProjectArgs))
-	args = append(args, ftsArgs...)          // (1) ROW_NUMBER WHERE
-	args = append(args, f.Query)             // (2) outer MATCH re-filter
-	args = append(args, likePattern)         // (3) CASE COALESCE(display_name,session_name) LIKE
-	args = append(args, likePattern)         // (4) CASE first_message LIKE
-	args = append(args, likePattern)         // (5) name WHERE COALESCE(display_name,session_name) LIKE
-	args = append(args, likePattern)         // (6) name WHERE first_message LIKE
-	args = append(args, nameProjectArgs...)  // (7) optional name branch project
-	args = append(args, ftsArgs...)          // (8) NOT IN WHERE
-	args = append(args, f.Limit+1, f.Cursor) // (9) LIMIT / OFFSET
+	args = append(args, ftsArgs...)         // (1) ROW_NUMBER WHERE
+	args = append(args, f.Query)            // (2) outer MATCH re-filter
+	args = append(args, likePattern)        // (3) CASE COALESCE(display_name,session_name) LIKE
+	args = append(args, likePattern)        // (4) CASE first_message LIKE
+	args = append(args, likePattern)        // (5) name WHERE COALESCE(display_name,session_name) LIKE
+	args = append(args, likePattern)        // (6) name WHERE first_message LIKE
+	args = append(args, nameProjectArgs...) // (7) optional name branch project
+	args = append(args, ftsArgs...)         // (8) NOT IN WHERE
+	args = append(args, f.Limit, f.Cursor)  // (9) LIMIT / OFFSET
 
 	query := fmt.Sprintf(`
-		SELECT session_id, project, agent, name,
-			session_ended_at, ordinal, snippet, rank, match_pos
+		SELECT session_id, ordinal, snippet, rank, match_pos
 		FROM (
 			-- FTS branch: message content matches
 			SELECT m.session_id, s.project, s.agent,
@@ -513,36 +526,18 @@ func (db *DB) Search(
 	args2 = append(args2, args...)
 	args = args2
 
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
-	if err != nil {
-		return SearchPage{}, fmt.Errorf("searching: %w", err)
+	var rows []sqliteSearchHitProjection
+	if err := store.NewRaw(query, args...).Scan(ctx, &rows); err != nil {
+		return nil, fmt.Errorf("searching: %w", err)
 	}
-	defer rows.Close()
-
-	var results []SearchResult
-	for rows.Next() {
-		var r SearchResult
-		var matchPos int
-		if err := rows.Scan(
-			&r.SessionID, &r.Project, &r.Agent, &r.Name,
-			&r.SessionEndedAt, &r.Ordinal,
-			&r.Snippet, &r.Rank, &matchPos,
-		); err != nil {
-			return SearchPage{},
-				fmt.Errorf("scanning result: %w", err)
+	hits := make([]SearchHit, len(rows))
+	for i, row := range rows {
+		hits[i] = SearchHit{
+			SessionID: row.SessionID, Ordinal: row.Ordinal,
+			Snippet: row.Snippet, Rank: row.Rank,
 		}
-		results = append(results, r)
 	}
-	if err := rows.Err(); err != nil {
-		return SearchPage{}, err
-	}
-
-	page := SearchPage{Results: results}
-	if len(results) > f.Limit {
-		page.Results = results[:f.Limit]
-		page.NextCursor = f.Cursor + f.Limit
-	}
-	return page, nil
+	return hits, nil
 }
 
 // SearchSession performs a case-insensitive substring search within a single
@@ -551,8 +546,8 @@ func (db *DB) Search(
 // Both message content and tool-call result_content are searched so that
 // matches inside tool output blocks are reachable. Only fields that the
 // frontend renders and highlights are included to avoid phantom matches.
-func (db *DB) SearchSession(
-	ctx context.Context, sessionID, query string,
+func (capability sqliteFullTextCapability) SearchSession(
+	ctx context.Context, store bun.IDB, sessionID, query string,
 ) ([]int, error) {
 	if query == "" {
 		return nil, nil
@@ -563,7 +558,10 @@ func (db *DB) SearchSession(
 	// the parent message ordinal; DISTINCT collapses multiple tool calls
 	// on the same message into a single result.
 	like := "%" + escapeLike(query) + "%"
-	rows, err := db.getReader().QueryContext(ctx,
+	var rows []struct {
+		Ordinal int `bun:"ordinal"`
+	}
+	if err := store.NewRaw(
 		`SELECT DISTINCT m.ordinal
 		 FROM messages m
 		 LEFT JOIN tool_calls tc ON tc.message_id = m.id
@@ -574,21 +572,14 @@ func (db *DB) SearchSession(
 		        OR tc.result_content LIKE ? ESCAPE '\')
 		 ORDER BY m.ordinal ASC`,
 		sessionID, like, like,
-	)
-	if err != nil {
+	).Scan(ctx, &rows); err != nil {
 		return nil, fmt.Errorf("session search: %w", err)
 	}
-	defer rows.Close()
-
-	var ordinals []int
-	for rows.Next() {
-		var ord int
-		if err := rows.Scan(&ord); err != nil {
-			return nil, fmt.Errorf("scanning ordinal: %w", err)
-		}
-		ordinals = append(ordinals, ord)
+	ordinals := make([]int, len(rows))
+	for i, row := range rows {
+		ordinals[i] = row.Ordinal
 	}
-	return ordinals, rows.Err()
+	return ordinals, nil
 }
 
 // PrepareFTSQuery turns a user's raw search input into a well-formed SQLite

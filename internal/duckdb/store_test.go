@@ -424,6 +424,20 @@ func TestStoreSearchesMessagesContentAndSecrets(t *testing.T) {
 	assert.Equal(t, "secret token sk-duckdb", source)
 }
 
+func TestDuckBunStoreSearchUsesFullTextCapability(t *testing.T) {
+	store, fixture := newSyncedStore(t)
+
+	common := store.BunStore
+	page, err := common.Search(t.Context(), db.SearchFilter{
+		Query: "secret token", Project: "alpha", Limit: 10,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	assert.Equal(t, fixture.alphaID, page.Results[0].SessionID)
+	assert.Equal(t, 1, page.Results[0].Ordinal)
+}
+
 func TestSearchContentFTSSingleTermFallback(t *testing.T) {
 	ctx := context.Background()
 	store, fixture := newSyncedStore(t)

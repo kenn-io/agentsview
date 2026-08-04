@@ -65,7 +65,7 @@ func (*duckBunBackend) Name() string { return "duckdb" }
 func (*duckBunBackend) ReadOnly() bool { return true }
 
 func (*duckBunBackend) Capabilities() db.BackendCapabilities {
-	return db.BackendCapabilities{}
+	return db.BackendCapabilities{FullText: duckFullTextCapability{}}
 }
 
 func (*duckBunBackend) SessionQueryDialect() db.QueryDialect {
@@ -366,19 +366,30 @@ func formatDBTime(v any) string {
 	}
 }
 
-func (s *Store) HasFTS() bool { return true }
+type duckFullTextCapability struct{}
+
+type duckSearchHitProjection struct {
+	SessionID string  `bun:"session_id"`
+	Ordinal   int     `bun:"ordinal"`
+	Snippet   string  `bun:"snippet"`
+	Rank      float64 `bun:"rank"`
+}
+
+func (duckFullTextCapability) Available() bool { return true }
 
 // HasSemantic returns false: the DuckDB store has no VectorSearcher seam
 // yet, so SearchContent rejects "semantic"/"hybrid" modes up front with
 // db.ErrSemanticUnavailable.
 func (s *Store) HasSemantic() bool { return false }
 
-func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {
+func (duckFullTextCapability) Search(
+	ctx context.Context, store bun.IDB, f db.SearchFilter,
+) ([]db.SearchHit, error) {
 	if f.Limit <= 0 || f.Limit > db.MaxSearchLimit {
 		f.Limit = db.DefaultSearchLimit
 	}
 	if f.Query == "" {
-		return db.SearchPage{}, nil
+		return nil, nil
 	}
 	// plainTerm is the de-quoted query joined back into one string. It feeds the
 	// name-branch ILIKE (matching the typed text against the short session name)
@@ -392,7 +403,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	plainTerm := db.StripFTSQuotes(f.Query)
 	terms := db.FTSTerms(f.Query)
 	if plainTerm == "" || len(terms) == 0 {
-		return db.SearchPage{}, nil
+		return nil, nil
 	}
 	// firstTerm anchors INSTR-based ordering and snippet centering.
 	firstTerm := terms[0]
@@ -423,14 +434,14 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	if f.Sort == "recency" {
 		orderBy = "session_ended_at DESC, session_id ASC"
 	}
-	args = append(args, f.Limit+1, f.Cursor)
-	rows, err := s.queryContext(ctx, `
+	args = append(args, f.Limit, f.Cursor)
+	query := `
 		WITH msg_ranked AS (
 			SELECT m.session_id, s.project, s.agent,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at, s.created_at) AS session_ended_at,
 				m.ordinal, SUBSTRING(m.content, 1, 200) AS snippet,
-				1.0 AS rank, 1 AS match_priority,
+				CAST(1.0 AS DOUBLE) AS rank, 1 AS match_priority,
 				INSTR(LOWER(m.content), LOWER(?)) AS match_pos,
 				ROW_NUMBER() OVER (
 					PARTITION BY m.session_id
@@ -439,11 +450,11 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 				) AS rn
 			FROM messages m
 			JOIN sessions s ON s.id = m.session_id
-			WHERE `+msgTermPredicate+`
+			WHERE ` + msgTermPredicate + `
 				AND s.deleted_at IS NULL
 				AND m.is_system = FALSE
-				AND `+db.DuckDBSystemPrefixSQL("m.content", "m.role")+`
-				`+project+`
+				AND ` + db.DuckDBSystemPrefixSQL("m.content", "m.role") + `
+				` + project + `
 		),
 		msg_matches AS (
 			SELECT session_id, project, agent, name, session_ended_at,
@@ -463,7 +474,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 						THEN COALESCE(s.first_message, '')
 					ELSE COALESCE(s.display_name, s.session_name, s.first_message, '')
 				END AS snippet,
-				1.0 AS rank, 2 AS match_priority, 0 AS match_pos
+				CAST(1.0 AS DOUBLE) AS rank, 2 AS match_priority, 0 AS match_pos
 			FROM sessions s
 			WHERE (COALESCE(s.display_name, s.session_name) ILIKE ? ESCAPE '\'
 				OR s.first_message ILIKE ? ESCAPE '\')
@@ -472,53 +483,43 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 					SELECT 1 FROM messages mx
 					WHERE mx.session_id = s.id
 						AND mx.is_system = FALSE
-						AND `+db.DuckDBSystemPrefixSQL("mx.content", "mx.role")+`
+						AND ` + db.DuckDBSystemPrefixSQL("mx.content", "mx.role") + `
 				)
 				AND s.id NOT IN (SELECT session_id FROM msg_matches)
-				`+nameProject+`
+				` + nameProject + `
 		)
-		SELECT session_id, project, agent, name,
-			session_ended_at, ordinal, snippet, rank
+		SELECT session_id, ordinal, snippet, rank
 		FROM (
 			SELECT * FROM msg_matches
 			UNION ALL
 			SELECT * FROM name_matches
 		) combined
-		ORDER BY `+orderBy+`
-		LIMIT ? OFFSET ?`,
-		args...,
-	)
-	if err != nil {
-		return db.SearchPage{}, fmt.Errorf("duckdb search: %w", err)
+		ORDER BY ` + orderBy + `
+		LIMIT ? OFFSET ?`
+	var rows []duckSearchHitProjection
+	if err := store.NewRaw(query, args...).Scan(ctx, &rows); err != nil {
+		return nil, fmt.Errorf("duckdb search: %w", err)
 	}
-	defer rows.Close()
-	var results []db.SearchResult
-	for rows.Next() {
-		var r db.SearchResult
-		var ended any
-		if err := rows.Scan(&r.SessionID, &r.Project, &r.Agent, &r.Name,
-			&ended, &r.Ordinal, &r.Snippet, &r.Rank); err != nil {
-			return db.SearchPage{}, err
+	hits := make([]db.SearchHit, len(rows))
+	for i, row := range rows {
+		hits[i] = db.SearchHit{
+			SessionID: row.SessionID, Ordinal: row.Ordinal,
+			Snippet: row.Snippet, Rank: row.Rank,
 		}
-		r.SessionEndedAt = formatDBTime(ended)
-		results = append(results, r)
 	}
-	if err := rows.Err(); err != nil {
-		return db.SearchPage{}, err
-	}
-	page := db.SearchPage{Results: results}
-	if len(results) > f.Limit {
-		page.Results = results[:f.Limit]
-		page.NextCursor = f.Cursor + f.Limit
-	}
-	return page, nil
+	return hits, nil
 }
 
-func (s *Store) SearchSession(ctx context.Context, sessionID, query string) ([]int, error) {
+func (duckFullTextCapability) SearchSession(
+	ctx context.Context, store bun.IDB, sessionID, query string,
+) ([]int, error) {
 	if query == "" {
 		return nil, nil
 	}
-	rows, err := s.queryContext(ctx, `
+	var rows []struct {
+		Ordinal int `bun:"ordinal"`
+	}
+	err := store.NewRaw(`
 		SELECT DISTINCT m.ordinal
 		FROM messages m
 		LEFT JOIN tool_calls tc
@@ -538,20 +539,15 @@ func (s *Store) SearchSession(ctx context.Context, sessionID, query string) ([]i
 		sessionID, "%"+db.EscapeLikePattern(query)+"%",
 		"%"+db.EscapeLikePattern(query)+"%",
 		"%"+db.EscapeLikePattern(query)+"%",
-	)
+	).Scan(ctx, &rows)
 	if err != nil {
 		return nil, fmt.Errorf("duckdb session search: %w", err)
 	}
-	defer rows.Close()
-	var out []int
-	for rows.Next() {
-		var ordinal int
-		if err := rows.Scan(&ordinal); err != nil {
-			return nil, err
-		}
-		out = append(out, ordinal)
+	out := make([]int, len(rows))
+	for i, row := range rows {
+		out[i] = row.Ordinal
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db.ContentSearchPage, error) {
