@@ -281,6 +281,35 @@ func TestCanonicalModelPricingRowsRejectInvalidTimestamp(t *testing.T) {
 	require.ErrorContains(t, err, "model pricing timestamp")
 }
 
+func TestCanonicalModelPricingRowsKeepMetadataBandless(t *testing.T) {
+	prices, bands, err := CanonicalModelPricingRows([]ModelPricing{{
+		ModelPattern: "_fallback_version", UpdatedAt: "2026-08-04T01:00:00Z",
+		Bands: []PricingBand{{AboveInputTokens: 1}},
+	}})
+	require.NoError(t, err)
+	require.Len(t, prices, 1)
+	assert.Empty(t, bands)
+}
+
+func TestUpsertModelPricingRowsAdvancesTargetRevision(t *testing.T) {
+	database := testDB(t)
+	ctx := t.Context()
+	initial := []bunmodel.ModelPricing{{
+		ModelPattern: "model", InputMicrodollarsPerMTok: 1,
+		UpdatedAt: "2026-08-04T02:00:00Z",
+	}}
+	require.NoError(t, UpsertModelPricingRows(ctx, database.bunWriter, initial, nil))
+	changed := []bunmodel.ModelPricing{{
+		ModelPattern: "model", InputMicrodollarsPerMTok: 2,
+		UpdatedAt: "2026-08-04T01:00:00Z",
+	}}
+	require.NoError(t, UpsertModelPricingRows(ctx, database.bunWriter, changed, nil))
+	var stored bunmodel.ModelPricing
+	require.NoError(t, database.bunReader.NewSelect().Model(&stored).
+		Where("model_pattern = ?", "model").Scan(ctx))
+	assert.Equal(t, "2026-08-04T02:00:00.000001Z", stored.UpdatedAt)
+}
+
 func TestAppendCursorUsageEventRowsDeduplicatesPortableRows(t *testing.T) {
 	database := testDB(t)
 	rows, err := CanonicalCursorUsageEventRows([]CursorUsageEvent{{
@@ -302,4 +331,14 @@ func TestAppendCursorUsageEventRowsDeduplicatesPortableRows(t *testing.T) {
 		Model((*bunmodel.CursorUsageEvent)(nil)).Count(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
+}
+
+func TestCanonicalCursorUsageEventRowsValidatesPersistedValues(t *testing.T) {
+	rows, err := CanonicalCursorUsageEventRows([]CursorUsageEvent{{
+		OccurredAt: "2026-08-04T01:02:03Z", Model: "\x00", DedupKey: "\x00",
+	}})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Empty(t, rows[0].Model, "legacy empty models remain replicable")
+	assert.NotEmpty(t, rows[0].DedupKey, "sanitized empty keys are regenerated")
 }

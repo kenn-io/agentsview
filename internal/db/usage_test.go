@@ -568,6 +568,26 @@ func TestUsageEventsReplaceRejectsDuplicateDedupKeysAndRollsBack(t *testing.T) {
 	assert.Equal(t, 1, got[0].InputTokens, "prior event must survive the rollback")
 }
 
+func TestUsageEventFingerprintPreservesExactMicrodollars(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "exact-money", "project")
+	event := UsageEvent{
+		SessionID: "exact-money", Source: "provider", Model: "model",
+		OccurredAt: "2026-07-22T12:00:00Z", DedupKey: "exact-cost",
+	}
+	first := money.Money{Microdollars: 9_007_199_254_740_992}
+	event.Cost = &first
+	require.NoError(t, d.ReplaceSessionUsageEvents("exact-money", []UsageEvent{event}))
+	firstFingerprint, err := d.UsageEventFingerprint("exact-money")
+	require.NoError(t, err)
+	second := money.Money{Microdollars: 9_007_199_254_740_993}
+	event.Cost = &second
+	require.NoError(t, d.ReplaceSessionUsageEvents("exact-money", []UsageEvent{event}))
+	secondFingerprint, err := d.UsageEventFingerprint("exact-money")
+	require.NoError(t, err)
+	assert.NotEqual(t, firstFingerprint, secondFingerprint)
+}
+
 func TestGetDailyUsageWithData(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

@@ -14,12 +14,10 @@ import (
 	"slices"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/db/bunmodel"
 	"go.kenn.io/agentsview/internal/export"
 )
 
@@ -432,14 +430,6 @@ func (s *Sync) PushWithOptions(
 		return result, err
 	}
 
-	usageFingerprints, err := s.local.UsageEventFingerprints(
-		mapKeys(sessionByID),
-	)
-	if err != nil {
-		return result, fmt.Errorf(
-			"computing local usage event fingerprints: %w", err,
-		)
-	}
 	// The fingerprint loop issues several local queries per candidate
 	// session; on a full push that covers every session and runs for
 	// minutes, so it reports its own progress phase rather than sitting
@@ -459,35 +449,25 @@ func (s *Sync) PushWithOptions(
 	reportPrepare(0)
 	prepared := 0
 	candidateIDs := mapKeys(sessionByID)
-	for start := 0; start < len(candidateIDs); start += pushFingerprintBatchSize {
-		end := min(start+pushFingerprintBatchSize, len(candidateIDs))
-		chunk := candidateIDs[start:end]
-		depState, err := readLocalPushDependencyState(ctx, s.local, chunk)
+	for _, id := range candidateIDs {
+		snapshot, err := s.local.ReadSessionReplicationSnapshot(ctx, id)
 		if err != nil {
-			return result, err
+			return result, fmt.Errorf(
+				"reading local fingerprint snapshot %s: %w", id, err,
+			)
 		}
-		for _, id := range chunk {
-			usageFP, usageKnown := usageFingerprints[id]
-			dependencyFP, err := depState.dependencyFingerprint(
-				s.local, id, usageFP, usageKnown,
+		s.stampReplicationSnapshot(&snapshot)
+		sessionFingerprints[id], err = db.CanonicalSessionReplicationFingerprint(
+			snapshot, markerID,
+		)
+		if err != nil {
+			return result, fmt.Errorf(
+				"computing local snapshot fingerprint %s: %w", id, err,
 			)
-			if err != nil {
-				return result, fmt.Errorf(
-					"computing local dependency fingerprint %s: %w",
-					id, err,
-				)
-			}
-			sess := sessionByID[id]
-			sessionFingerprints[id] = sessionPushFingerprint(
-				sess, pushedSessionMachine(sess, s.machine),
-				s.archiveID, usageFP, markerID,
-				dependencyFP+"\x00source-database-generation:"+
-					s.databaseGeneration,
-			)
-			prepared++
-			if prepared%pushPrepareProgressStride == 0 {
-				reportPrepare(prepared)
-			}
+		}
+		prepared++
+		if prepared%pushPrepareProgressStride == 0 {
+			reportPrepare(prepared)
 		}
 	}
 	reportPrepare(prepared)
@@ -598,7 +578,8 @@ func (s *Sync) PushWithOptions(
 		batch := sessions[i:end]
 
 		batchResult, err := s.pushBatch(
-			ctx, batch, markerID, legacyMarkerMachines, &pushed,
+			ctx, batch, full, markerID, legacyMarkerMachines,
+			sessionFingerprints, &pushed,
 		)
 		if err != nil {
 			return result, err
@@ -613,7 +594,8 @@ func (s *Sync) PushWithOptions(
 			for _, sess := range batch {
 				sr, retryErr := s.pushBatch(
 					ctx, []db.Session{sess},
-					markerID, legacyMarkerMachines, &pushed,
+					full, markerID, legacyMarkerMachines,
+					sessionFingerprints, &pushed,
 				)
 				if retryErr != nil {
 					return result, retryErr
@@ -1222,8 +1204,10 @@ type batchResult struct {
 func (s *Sync) pushBatch(
 	ctx context.Context,
 	batch []db.Session,
+	full bool,
 	markerID string,
 	legacyMarkerMachines []string,
+	sessionFingerprints map[string]string,
 	pushed *[]db.Session,
 ) (batchResult, error) {
 	bunTx, err := s.bunDB().BeginTx(ctx, nil)
@@ -1245,6 +1229,15 @@ func (s *Sync) pushBatch(
 			*pushed = (*pushed)[:len(*pushed)-n]
 			return batchResult{}, nil
 		}
+		s.stampReplicationSnapshot(&snapshot)
+		fingerprint, err := db.CanonicalSessionReplicationFingerprint(snapshot, markerID)
+		if err != nil {
+			log.Printf("pgsync: session %s fingerprint: %v", sess.ID, err)
+			_ = tx.Rollback()
+			*pushed = (*pushed)[:len(*pushed)-n]
+			return batchResult{}, nil
+		}
+		sessionFingerprints[sess.ID] = fingerprint
 		if err := s.pushSession(
 			ctx, tx, snapshot.Session, markerID, legacyMarkerMachines,
 		); err != nil {
@@ -1265,7 +1258,7 @@ func (s *Sync) pushBatch(
 		}
 
 		msgCount, err := s.replacePGReplicationSnapshot(
-			ctx, tx, bunTx, snapshot,
+			ctx, tx, bunTx, snapshot, full,
 		)
 		if err != nil {
 			log.Printf(
@@ -1326,9 +1319,15 @@ func (s *Sync) pushBatch(
 	return batchResult{ok: true, sessions: n, messages: msgs, skippedConflicts: skippedConflicts}, nil
 }
 
+func (s *Sync) stampReplicationSnapshot(snapshot *db.SessionReplicationSnapshot) {
+	snapshot.Session.Machine = pushedSessionMachine(snapshot.Session, s.machine)
+	snapshot.Session.SourceArchiveID = s.archiveID
+	snapshot.Session.SourceDatabaseGeneration = s.databaseGeneration
+}
+
 func (s *Sync) replacePGReplicationSnapshot(
 	ctx context.Context, tx *sql.Tx, bunTx bun.IDB,
-	snapshot db.SessionReplicationSnapshot,
+	snapshot db.SessionReplicationSnapshot, force bool,
 ) (int, error) {
 	messageRows, callRows, resultRows, err := db.CanonicalMessageRows(snapshot.Messages)
 	if err != nil {
@@ -1338,17 +1337,19 @@ func (s *Sync) replacePGReplicationSnapshot(
 	if err != nil {
 		return 0, err
 	}
-	matches, err := db.CanonicalSessionDependentRowsMatch(
-		ctx, bunTx, snapshot.Session.ID, messageRows, callRows, resultRows, usageRows,
-	)
-	if err != nil {
-		return 0, err
-	}
-	if matches {
-		if err := reconcilePinnedMessages(ctx, tx, snapshot.Session.ID); err != nil {
+	if !force {
+		matches, err := db.CanonicalSessionDependentRowsMatch(
+			ctx, bunTx, snapshot.Session.ID, messageRows, callRows, resultRows, usageRows,
+		)
+		if err != nil {
 			return 0, err
 		}
-		return 0, nil
+		if matches {
+			if err := reconcilePinnedMessages(ctx, tx, snapshot.Session.ID); err != nil {
+				return 0, err
+			}
+			return 0, nil
+		}
 	}
 	if err := db.ReplaceMessageRows(
 		ctx, bunTx, snapshot.Session.ID, messageRows,
@@ -2015,90 +2016,6 @@ func deletePGSessionIfExcluded(
 // (pushedSessionMachine), not the raw sess.Machine: a "local"/empty sentinel
 // row is written under the fallback machine, so the fingerprint must track the
 // fallback to force a re-push when s.machine changes.
-func sessionPushFingerprint(
-	sess db.Session, pushedMachine,
-	sourceArchiveID, usageEventFingerprint, ownerMarker,
-	dependencyFingerprint string,
-) string {
-	fields := []string{
-		sess.ID,
-		sess.Project,
-		pushedMachine,
-		sourceArchiveID,
-		ownerMarker,
-		dependencyFingerprint,
-		sess.Agent,
-		sess.AgentLabel,
-		sess.Entrypoint,
-		sess.SessionKind,
-		stringValue(sess.FirstMessage),
-		stringValue(sess.DisplayName),
-		stringValue(sess.SessionName),
-		stringValue(sess.StartedAt),
-		stringValue(sess.EndedAt),
-		stringValue(sess.DeletedAt),
-		stringValue(sess.DeletionCause),
-		fmt.Sprintf("%d", sess.MessageCount),
-		fmt.Sprintf("%d", sess.UserMessageCount),
-		fmt.Sprintf("%t", sess.IsAutomated),
-		fmt.Sprintf("%d", sess.TotalOutputTokens),
-		fmt.Sprintf("%d", sess.PeakContextTokens),
-		fmt.Sprintf("%t", sess.HasTotalOutputTokens),
-		fmt.Sprintf("%t", sess.HasPeakContextTokens),
-		stringValue(sess.ParentSessionID),
-		stringValue(sess.ParserParentSessionID),
-		sess.RelationshipType,
-		stringValue(sess.FilePath),
-		stringValue(sess.FileHash),
-		sess.CreatedAt,
-		fmt.Sprintf("%d", sess.ToolFailureSignalCount),
-		fmt.Sprintf("%d", sess.ToolRetryCount),
-		fmt.Sprintf("%d", sess.EditChurnCount),
-		fmt.Sprintf("%d", sess.ConsecutiveFailureMax),
-		sess.Outcome,
-		sess.OutcomeConfidence,
-		sess.EndedWithRole,
-		fmt.Sprintf("%d", sess.FinalFailureStreak),
-		stringValue(sess.SignalsPendingSince),
-		fmt.Sprintf("%d", sess.CompactionCount),
-		fmt.Sprintf("%d", sess.MidTaskCompactionCount),
-		float64Value(sess.ContextPressureMax),
-		intPtrValue(sess.HealthScore),
-		stringValue(sess.HealthGrade),
-		fmt.Sprintf("%t", sess.HasToolCalls),
-		fmt.Sprintf("%t", sess.HasContextData),
-		fmt.Sprintf("%d", sess.QualitySignalVersion),
-		fmt.Sprintf("%d", sess.ShortPromptCount),
-		fmt.Sprintf("%t", sess.UnstructuredStart),
-		fmt.Sprintf("%d", sess.MissingSuccessCriteriaCount),
-		fmt.Sprintf("%d", sess.MissingVerificationCount),
-		fmt.Sprintf("%d", sess.DuplicatePromptCount),
-		fmt.Sprintf("%d", sess.NoCodeContextCount),
-		fmt.Sprintf("%d", sess.RunawayToolLoopCount),
-		fmt.Sprintf("%d", sess.DataVersion),
-		sess.Cwd,
-		sess.GitBranch,
-		sess.SourceSessionID,
-		sess.SourceVersion,
-		sess.TranscriptFidelity,
-		stringValue(sess.TranscriptRevision),
-		fmt.Sprintf("%d", sess.ParserMalformedLines),
-		fmt.Sprintf("%t", sess.IsTruncated),
-		stringValue(sess.TerminationStatus),
-		fmt.Sprintf("%d", sess.SecretLeakCount),
-		sess.SecretsRulesVersion,
-		usageEventFingerprint,
-	}
-	var b strings.Builder
-	for _, f := range fields {
-		fmt.Fprintf(&b, "%d:%s", len(f), f)
-	}
-	return b.String()
-}
-
-// pushedSessionMachine resolves the machine field for a PG row. Old rows
-// pushed before this fix with machine="local" will be repaired gradually as
-// each session is modified (message count change, etc.) and re-fingerprinted.
 func pushedSessionMachine(sess db.Session, fallbackMachine string) string {
 	if sess.Machine != "" && sess.Machine != "local" {
 		return sess.Machine
@@ -2125,32 +2042,11 @@ func sameSessionOwner(
 	return existingMachine == pushedMachine
 }
 
-func stringValue(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
-}
-
 func transcriptRevisionValue(value *string) string {
 	if value == nil || *value == "" {
 		return "0"
 	}
 	return *value
-}
-
-func float64Value(value *float64) string {
-	if value == nil {
-		return ""
-	}
-	return fmt.Sprintf("%g", *value)
-}
-
-func intPtrValue(value *int) string {
-	if value == nil {
-		return ""
-	}
-	return fmt.Sprintf("%d", *value)
 }
 
 // nilStr converts a nil or empty *string to SQL NULL.
@@ -2707,47 +2603,24 @@ func reconcilePinnedMessages(
 	return nil
 }
 
-func localMessageRoleTimePGFingerprint(
-	local *db.DB, sessionID string,
-) (string, error) {
-	return local.MessageRoleTimeFingerprintWithTimestampNormalizer(
-		sessionID,
-		pgPushTimestampFingerprintText,
-	)
-}
-
-func pgPushTimestampFingerprintText(value string) string {
-	t, ok := ParseSQLiteTimestamp(value)
-	if !ok {
-		return ""
-	}
-	return FormatISO8601(t.Truncate(time.Microsecond))
-}
-
-// pushSecretFindings replaces a session's secret findings in PG.
-// It deletes all existing rows for the session then bulk-inserts
-// the current local set. It reports whether it changed any rows
-// (deleted existing or inserted new) so the caller can bump
-// sessions.updated_at for secret-only changes that pushSession and
-// pushMessages would otherwise miss. Per-finding rules_version is
-// pushed via this table; the session-level
-// sessions.secrets_rules_version is pushed by pushSession alongside
-// the rest of the session columns.
 func (s *Sync) pushSecretFindings(
 	ctx context.Context, bunTx bun.IDB, sessionID string,
 	findings []db.SecretFinding,
 ) (bool, error) {
-	existing, err := bunTx.NewSelect().Model((*bunmodel.SecretFinding)(nil)).
-		Where("session_id = ?", sessionID).Count(ctx)
+	rows := db.CanonicalSecretFindingRows(findings)
+	matches, err := db.CanonicalSecretFindingRowsMatch(ctx, bunTx, sessionID, rows)
 	if err != nil {
-		return false, fmt.Errorf("counting pg secret findings for %s: %w", sessionID, err)
+		return false, fmt.Errorf("comparing pg secret findings for %s: %w", sessionID, err)
+	}
+	if matches {
+		return false, nil
 	}
 	if err := db.ReplaceSecretFindingRows(
-		ctx, bunTx, sessionID, db.CanonicalSecretFindingRows(findings),
+		ctx, bunTx, sessionID, rows,
 	); err != nil {
 		return false, err
 	}
-	return existing > 0 || len(findings) > 0, nil
+	return true, nil
 }
 
 // normalizeSyncTimestamps ensures schema exists and normalizes

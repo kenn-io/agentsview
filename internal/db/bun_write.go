@@ -35,6 +35,29 @@ func CanonicalSessionRow(session Session) (bunmodel.Session, error) {
 	return sessionToBunRow(session)
 }
 
+// UpsertSessionRow writes the complete canonical session shape with exact
+// replacement semantics. Adapters with target-owned curation or ownership
+// rules must apply those policies before calling this helper.
+func UpsertSessionRow(
+	ctx context.Context, store bun.IDB, row bunmodel.Session,
+) error {
+	if row.ID == "" {
+		return fmt.Errorf("upserting canonical session: empty id")
+	}
+	query := store.NewInsert().Model(&row).
+		On("CONFLICT (id) DO UPDATE").Returning("")
+	for _, column := range bunmodel.ModelColumns((*bunmodel.Session)(nil)) {
+		if column == "id" {
+			continue
+		}
+		query = query.Set("? = EXCLUDED.?", bun.Ident(column), bun.Ident(column))
+	}
+	if _, err := query.Exec(ctx); err != nil {
+		return fmt.Errorf("upserting canonical session %s: %w", row.ID, err)
+	}
+	return nil
+}
+
 // CanonicalMessageRows converts messages and their nested tool payloads once
 // for any replication target. Source row IDs are deliberately omitted; the
 // canonical relationships use session, ordinal, call index, and event index.
@@ -227,7 +250,7 @@ func CanonicalSessionDependentRowsMatch(
 	var storedUsage []bunmodel.UsageEvent
 	if err := store.NewSelect().Model(&storedUsage).
 		Where("session_id = ?", sessionID).
-		OrderExpr("COALESCE(occurred_at, 'epoch') ASC").OrderExpr("id ASC").Scan(ctx); err != nil {
+		OrderExpr("occurred_at ASC NULLS FIRST").OrderExpr("id ASC").Scan(ctx); err != nil {
 		return false, fmt.Errorf("reading canonical usage events for comparison: %w", err)
 	}
 
@@ -540,6 +563,31 @@ func ReplaceSecretFindingRows(
 		}
 	}
 	return nil
+}
+
+// CanonicalSecretFindingRowsMatch compares persisted finding content while
+// ignoring target-assigned IDs and replication-time created_at values.
+func CanonicalSecretFindingRowsMatch(
+	ctx context.Context, store bun.IDB, sessionID string,
+	rows []bunmodel.SecretFinding,
+) (bool, error) {
+	var stored []bunmodel.SecretFinding
+	if err := store.NewSelect().Model(&stored).
+		Where("session_id = ?", sessionID).
+		OrderExpr("message_ordinal ASC").OrderExpr("match_start ASC").
+		OrderExpr("match_index ASC").Scan(ctx); err != nil {
+		return false, fmt.Errorf("reading canonical secret findings for comparison: %w", err)
+	}
+	rows = append([]bunmodel.SecretFinding(nil), rows...)
+	for i := range stored {
+		stored[i].ID = nil
+		stored[i].CreatedAt = bunmodel.Timestamp{}
+	}
+	for i := range rows {
+		rows[i].ID = nil
+		rows[i].CreatedAt = bunmodel.Timestamp{}
+	}
+	return reflect.DeepEqual(stored, rows), nil
 }
 
 func validateMessageWriteScope(sessionID string, rows []bunmodel.Message) error {

@@ -196,9 +196,8 @@ func TestPushSecretFindingsReportsChange(t *testing.T) {
 	), "seed finding")
 	assert.True(t, pushOnce(), "insert should report change")
 
-	// Re-pushing the same finding still rewrites rows (delete + insert),
-	// which counts as a change.
-	assert.True(t, pushOnce(), "rewrite should report change")
+	// Re-pushing identical canonical content is a no-op.
+	assert.False(t, pushOnce(), "unchanged finding should not rewrite")
 
 	// Clearing local findings deletes the PG row: that is a change.
 	require.NoError(t, local.ReplaceSessionSecretFindings(
