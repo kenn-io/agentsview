@@ -863,9 +863,6 @@ func (db *DB) Path() string {
 	return db.path
 }
 
-// ReadOnly reports whether this local SQLite store was opened read-only.
-func (db *DB) ReadOnly() bool { return db.readOnly }
-
 func (db *DB) requireWritable() error {
 	if db.readOnly {
 		return ErrReadOnly
