@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 )
@@ -540,32 +541,6 @@ type pgProjectIdentityExecer interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-func upsertSourceArchiveScope(
-	ctx context.Context,
-	q pgProjectIdentityExecer,
-	archiveID, archiveSalt string,
-) error {
-	result, err := q.ExecContext(ctx, `
-		INSERT INTO source_archives (source_archive_id, source_archive_salt)
-		VALUES ($1, $2)
-		ON CONFLICT (source_archive_id) DO UPDATE SET
-			source_archive_salt = source_archives.source_archive_salt
-		WHERE source_archives.source_archive_salt = EXCLUDED.source_archive_salt`,
-		archiveID, archiveSalt,
-	)
-	if err != nil {
-		return fmt.Errorf("upserting pg source archive scope: %w", err)
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("checking pg source archive scope: %w", err)
-	}
-	if rows == 0 {
-		return fmt.Errorf("archive salt mismatch for %q", archiveID)
-	}
-	return nil
-}
-
 func upsertProjectIdentityObservation(
 	ctx context.Context,
 	q pgProjectIdentityExecer,
@@ -744,6 +719,8 @@ func planProjectIdentityObservationSync(
 func syncProjectIdentityObservationsBatch(
 	ctx context.Context,
 	tx *sql.Tx,
+	store bun.IDB,
+	archiveID, archiveSalt string,
 	observations []export.ProjectIdentityObservation,
 ) error {
 	plan := planProjectIdentityObservationSync(observations)
@@ -762,21 +739,19 @@ func syncProjectIdentityObservationsBatch(
 		len(plan.realRemote)+len(plan.ambiguous))
 	unconditional = append(unconditional, plan.realRemote...)
 	unconditional = append(unconditional, plan.ambiguous...)
-	if err := insertProjectIdentityObservations(ctx, tx, unconditional); err != nil {
+	if err := insertProjectIdentityObservations(
+		ctx, store, archiveID, archiveSalt, unconditional,
+	); err != nil {
 		return err
 	}
-	return insertProjectIdentityObservations(ctx, tx, fallbacks)
+	return insertProjectIdentityObservations(
+		ctx, store, archiveID, archiveSalt, fallbacks,
+	)
 }
 
 // projectIdentityRootKeyBatchSize bounds tuple-IN lists at four bind
 // parameters per key.
 const projectIdentityRootKeyBatchSize = 300
-
-// projectIdentityInsertBatchSize bounds multi-row upserts at nineteen bind
-// parameters per row.
-const projectIdentityInsertBatchSize = 500
-
-const projectIdentitySnapshotInsertBatchSize = 500
 
 func rootKeyTupleArgs(keys []projectIdentityRootKey) (string, []any) {
 	tuples := make([]string, len(keys))
@@ -882,110 +857,30 @@ func scanProjectIdentityRootKeys(
 
 func insertProjectIdentityObservations(
 	ctx context.Context,
-	tx *sql.Tx,
+	store bun.IDB,
+	archiveID, archiveSalt string,
 	observations []export.ProjectIdentityObservation,
 ) error {
-	for start := 0; start < len(observations); start += projectIdentityInsertBatchSize {
-		end := min(start+projectIdentityInsertBatchSize, len(observations))
-		chunk := observations[start:end]
-		valueRows := make([]string, len(chunk))
-		args := make([]any, 0, len(chunk)*19)
-		for i, obs := range chunk {
-			base := i * 19
-			valueRows[i] = fmt.Sprintf(
-				"($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
-				base+1, base+2, base+3, base+4, base+5, base+6,
-				base+7, base+8, base+9, base+10, base+11, base+12,
-				base+13, base+14, base+15, base+16, base+17, base+18,
-				base+19,
-			)
-			args = append(args,
-				obs.SourceArchiveID, obs.SourceArchiveSalt,
-				obs.Project, obs.Machine, obs.RootPath, obs.GitRemote,
-				obs.GitRemoteName, obs.RepositoryPath, obs.WorktreeName,
-				obs.WorktreeRootPath, obs.WorktreeRelationship, obs.CheckoutState,
-				obs.GitBranch, obs.RemoteResolution, obs.RemoteCandidateCount,
-				obs.ObservedAt, obs.NormalizedRemote, obs.KeySource, obs.Key,
-			)
-		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO source_project_identity_observations (
-				source_archive_id, source_archive_salt,
-				project, machine, root_path, git_remote, git_remote_name,
-				repository_path, worktree_name, worktree_root_path,
-				worktree_relationship, checkout_state, git_branch,
-				remote_resolution, remote_candidate_count, observed_at,
-				normalized_remote, key_source, key
-			) VALUES `+strings.Join(valueRows, ",\n\t\t\t")+
-			projectIdentityObservationConflictClause,
-			args...,
-		); err != nil {
-			return fmt.Errorf(
-				"upserting pg project identity observations: %w", err,
-			)
-		}
+	rows, err := db.CanonicalProjectIdentityObservationRows(
+		archiveID, archiveSalt, observations,
+	)
+	if err != nil {
+		return err
 	}
-	return nil
+	return db.UpsertProjectIdentityObservationRows(ctx, store, rows)
 }
 
 func insertSessionProjectIdentitySnapshots(
 	ctx context.Context,
-	tx *sql.Tx,
+	store bun.IDB,
 	archiveID, databaseGeneration string,
 	snapshots []export.ProjectIdentityObservation,
 ) error {
-	for start := 0; start < len(snapshots); start += projectIdentitySnapshotInsertBatchSize {
-		end := min(start+projectIdentitySnapshotInsertBatchSize, len(snapshots))
-		chunk := snapshots[start:end]
-		valueRows := make([]string, len(chunk))
-		args := make([]any, 0, len(chunk)*20)
-		for i, obs := range chunk {
-			base := i * 20
-			placeholders := make([]string, 20)
-			for j := range placeholders {
-				placeholders[j] = fmt.Sprintf("$%d", base+j+1)
-			}
-			valueRows[i] = "(" + strings.Join(placeholders, ", ") + ")"
-			args = append(args,
-				archiveID, databaseGeneration, obs.SessionID,
-				obs.Project, obs.Machine, obs.RootPath, obs.GitRemote,
-				obs.GitRemoteName, obs.RepositoryPath, obs.WorktreeName,
-				obs.WorktreeRootPath, obs.WorktreeRelationship, obs.CheckoutState,
-				obs.GitBranch, obs.RemoteResolution, obs.RemoteCandidateCount,
-				obs.ObservedAt, obs.NormalizedRemote, obs.KeySource, obs.Key,
-			)
-		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO source_session_project_identity_snapshots (
-				source_archive_id, source_database_generation, source_session_id,
-				project, machine, root_path, git_remote, git_remote_name,
-				repository_path, worktree_name, worktree_root_path,
-				worktree_relationship, checkout_state, git_branch,
-				remote_resolution, remote_candidate_count, observed_at,
-				normalized_remote, key_source, key
-			) VALUES `+strings.Join(valueRows, ",\n\t\t\t")+`
-			ON CONFLICT (
-				source_archive_id, source_database_generation, source_session_id
-			) DO UPDATE SET
-				project = EXCLUDED.project,
-				machine = EXCLUDED.machine,
-				root_path = EXCLUDED.root_path,
-				git_remote = EXCLUDED.git_remote,
-				git_remote_name = EXCLUDED.git_remote_name,
-				repository_path = EXCLUDED.repository_path,
-				worktree_name = EXCLUDED.worktree_name,
-				worktree_root_path = EXCLUDED.worktree_root_path,
-				worktree_relationship = EXCLUDED.worktree_relationship,
-				checkout_state = EXCLUDED.checkout_state,
-				git_branch = EXCLUDED.git_branch,
-				remote_resolution = EXCLUDED.remote_resolution,
-				remote_candidate_count = EXCLUDED.remote_candidate_count,
-				observed_at = EXCLUDED.observed_at,
-				normalized_remote = EXCLUDED.normalized_remote,
-				key_source = EXCLUDED.key_source,
-				key = EXCLUDED.key`, args...); err != nil {
-			return fmt.Errorf("upserting pg session project identity snapshots: %w", err)
-		}
+	rows, err := db.CanonicalSessionProjectIdentitySnapshotRows(
+		archiveID, databaseGeneration, snapshots,
+	)
+	if err != nil {
+		return err
 	}
-	return nil
+	return db.UpsertSessionProjectIdentitySnapshotRows(ctx, store, rows)
 }

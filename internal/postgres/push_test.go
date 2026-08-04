@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
@@ -95,7 +96,10 @@ func (s *syncStateStoreStub) GetOrCreateSyncState(
 
 type pushAliasRoutingDriver struct{}
 
-type pushAliasRoutingConn struct{}
+type pushAliasRoutingConn struct {
+	mu                sync.Mutex
+	sourceArchiveSalt string
+}
 
 type pushAliasRoutingTx struct{}
 
@@ -107,20 +111,20 @@ type pushAliasRoutingRows struct {
 
 var pushAliasRoutingRegisterOnce sync.Once
 
-func newPushAliasRoutingDB(t *testing.T) *sql.DB {
+func newPushAliasRoutingDB(t *testing.T, sourceArchiveSalt string) *sql.DB {
 	t.Helper()
 	pushAliasRoutingRegisterOnce.Do(func() {
 		sql.Register("agentsview_push_alias_routing", pushAliasRoutingDriver{})
 	})
 
-	pg, err := sql.Open("agentsview_push_alias_routing", t.Name())
+	pg, err := sql.Open("agentsview_push_alias_routing", sourceArchiveSalt)
 	require.NoError(t, err, "open push-alias-routing db")
 	t.Cleanup(func() { _ = pg.Close() })
 	return pg
 }
 
-func (pushAliasRoutingDriver) Open(string) (driver.Conn, error) {
-	return &pushAliasRoutingConn{}, nil
+func (pushAliasRoutingDriver) Open(sourceArchiveSalt string) (driver.Conn, error) {
+	return &pushAliasRoutingConn{sourceArchiveSalt: sourceArchiveSalt}, nil
 }
 
 func (c *pushAliasRoutingConn) Prepare(string) (driver.Stmt, error) {
@@ -146,10 +150,15 @@ func (c *pushAliasRoutingConn) CheckNamedValue(
 }
 
 func (c *pushAliasRoutingConn) ExecContext(
-	_ context.Context, query string, _ []driver.NamedValue,
+	_ context.Context, query string, args []driver.NamedValue,
 ) (driver.Result, error) {
 	normalized := strings.ToLower(query)
 	switch {
+	case strings.Contains(normalized, "insert into \"source_archives\""):
+		if len(args) != 0 {
+			return nil, fmt.Errorf("formatted source archive insert has %d arguments", len(args))
+		}
+		return driver.RowsAffected(1), nil
 	case strings.Contains(normalized, "insert into model_pricing"):
 		return driver.RowsAffected(1), nil
 	case strings.Contains(normalized, "insert into sync_metadata"):
@@ -171,6 +180,17 @@ func (c *pushAliasRoutingConn) QueryContext(
 				"malformed_scoped_output", "malformed_scoped_web_search",
 			},
 			values: [][]driver.Value{{"42", "2", "7", "42", "2"}},
+	case strings.Contains(normalized, "from \"source_archives\"") &&
+		strings.Contains(normalized, "source_archive_salt"):
+		c.mu.Lock()
+		salt := c.sourceArchiveSalt
+		c.mu.Unlock()
+		if salt == "" {
+			return &pushAliasRoutingRows{columns: []string{"source_archive_salt"}}, nil
+		}
+		return &pushAliasRoutingRows{
+			columns: []string{"source_archive_salt"},
+			values:  [][]driver.Value{{salt}},
 		}, nil
 	case strings.Contains(normalized, "select coalesce(max(data_version), 0) from sessions"):
 		return &pushAliasRoutingRows{
@@ -426,8 +446,10 @@ func TestPushUsesTargetScopedAliasBackfillStateAcrossFilters(t *testing.T) {
 	filterScopeA := pushSyncStateScope("work", []string{"alpha"}, nil)
 	filterScopeB := pushSyncStateScope("work", []string{"beta"}, nil)
 	local := testDB(t)
-	pg := newPushAliasRoutingDB(t)
 	ctx := context.Background()
+	archiveSalt, err := local.GetArchiveSalt(ctx)
+	require.NoError(t, err)
+	pg := newPushAliasRoutingDB(t, archiveSalt)
 
 	syncA := &Sync{
 		pg:                 pg,
@@ -454,7 +476,7 @@ func TestPushUsesTargetScopedAliasBackfillStateAcrossFilters(t *testing.T) {
 		schemaDone:         true,
 	}
 
-	_, err := syncA.Push(ctx, false, nil)
+	_, err = syncA.Push(ctx, false, nil)
 	require.NoError(t, err)
 	_, err = syncB.Push(ctx, false, nil)
 	require.NoError(t, err)

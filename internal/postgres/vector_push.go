@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/uptrace/bun"
 )
 
 // VectorGenerationInfo identifies the local embedding generation being pushed.
@@ -45,6 +47,42 @@ type VectorPushDoc struct {
 	Content     string
 	ContentHash string
 	Chunks      []VectorPushChunk
+}
+
+type vectorDocumentModel struct {
+	bun.BaseModel `bun:"table:vector_documents"`
+
+	DocKey      string `bun:"doc_key,pk"`
+	SessionID   string `bun:"session_id,notnull"`
+	SourceUUID  string `bun:"source_uuid,notnull,default:''"`
+	Ordinal     int    `bun:"ordinal,notnull"`
+	OrdinalEnd  int    `bun:"ordinal_end,notnull"`
+	Subordinate bool   `bun:"subordinate,notnull,default:false"`
+	Offsets     string `bun:"offsets,notnull,default:'[]'"`
+	Content     string `bun:"content,notnull"`
+	ContentHash string `bun:"content_hash,notnull"`
+}
+
+type vectorPushStateModel struct {
+	bun.BaseModel `bun:"table:vector_push_state"`
+
+	GenerationID int64  `bun:"generation_id,pk"`
+	SessionID    string `bun:"session_id,pk"`
+	DocAggHash   string `bun:"doc_agg_hash,notnull"`
+}
+
+func canonicalVectorDocumentRow(doc VectorPushDoc) vectorDocumentModel {
+	offsets := doc.OffsetsJSON
+	if offsets == "" {
+		offsets = "[]"
+	}
+	return vectorDocumentModel{
+		DocKey: doc.DocKey, SessionID: doc.SessionID,
+		SourceUUID: sanitizePG(doc.SourceUUID),
+		Ordinal:    doc.Ordinal, OrdinalEnd: doc.OrdinalEnd,
+		Subordinate: doc.Subordinate, Offsets: sanitizePG(offsets),
+		Content: sanitizePG(doc.Content), ContentHash: doc.ContentHash,
+	}
 }
 
 // VectorPushSource supplies one transaction-owned local export for a PG push
@@ -1039,7 +1077,7 @@ type vectorSessionOutcome struct {
 func (s *Sync) pushVectorSession(
 	ctx context.Context, scope vectorPushScope, export VectorExport, sessionID, aggHash string,
 ) (vectorSessionOutcome, error) {
-	tx, err := s.pg.BeginTx(ctx, nil)
+	tx, err := s.bunDB().BeginTx(ctx, nil)
 	if err != nil {
 		return vectorSessionOutcome{}, fmt.Errorf("begin vector push tx: %w", err)
 	}
@@ -1054,7 +1092,7 @@ func (s *Sync) pushVectorSession(
 	// primary key) before its own vector-table writes — a single, consistent
 	// lock so two vector pushes cannot form a cycle.
 	var ownerMarker, machine sql.NullString
-	err = tx.QueryRowContext(ctx,
+	err = tx.Tx.QueryRowContext(ctx,
 		`SELECT owner_marker, machine FROM sessions WHERE id = $1 FOR UPDATE`,
 		sessionID,
 	).Scan(&ownerMarker, &machine)
@@ -1090,7 +1128,7 @@ func (s *Sync) pushVectorSession(
 		return vectorSessionOutcome{deferred: true}, nil
 	}
 
-	if err := parkSessionVectorDocs(ctx, tx, sessionID); err != nil {
+	if err := parkSessionVectorDocs(ctx, tx.Tx, sessionID); err != nil {
 		return vectorSessionOutcome{}, err
 	}
 	if err := upsertVectorDocs(ctx, tx, docs); err != nil {
@@ -1100,16 +1138,16 @@ func (s *Sync) pushVectorSession(
 	if err != nil {
 		return vectorSessionOutcome{}, err
 	}
-	deleted, err := deleteParkedVectorDocs(ctx, tx, sessionID, scope.genIDs)
+	deleted, err := deleteParkedVectorDocs(ctx, tx.Tx, sessionID, scope.genIDs)
 	if err != nil {
 		return vectorSessionOutcome{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `
-INSERT INTO vector_push_state (generation_id, session_id, doc_agg_hash)
-VALUES ($1, $2, $3)
-ON CONFLICT (generation_id, session_id)
-DO UPDATE SET doc_agg_hash = EXCLUDED.doc_agg_hash`,
-		scope.gen.id, sessionID, aggHash); err != nil {
+	state := vectorPushStateModel{
+		GenerationID: scope.gen.id, SessionID: sessionID, DocAggHash: aggHash,
+	}
+	if _, err := tx.NewInsert().Model(&state).
+		On("CONFLICT (generation_id, session_id) DO UPDATE").
+		Set("doc_agg_hash = EXCLUDED.doc_agg_hash").Returning("").Exec(ctx); err != nil {
 		return vectorSessionOutcome{}, fmt.Errorf(
 			"upserting vector push state %s: %w", sessionID, err)
 	}
@@ -1152,30 +1190,18 @@ UPDATE vector_documents d
 // final ordinal. The caller parks the session's prior rows to negative ordinals
 // first, so every final (session_id, ordinal) slot is free and an ordinal shift
 // cannot collide with a sibling row that has not been updated yet.
-func upsertVectorDocs(ctx context.Context, tx *sql.Tx, docs []VectorPushDoc) error {
+func upsertVectorDocs(ctx context.Context, store bun.IDB, docs []VectorPushDoc) error {
 	for _, doc := range docs {
-		offsets := doc.OffsetsJSON
-		if offsets == "" {
-			offsets = "[]"
+		row := canonicalVectorDocumentRow(doc)
+		query := store.NewInsert().Model(&row).
+			On("CONFLICT (doc_key) DO UPDATE")
+		for _, column := range []string{
+			"session_id", "source_uuid", "ordinal", "ordinal_end", "subordinate",
+			"offsets", "content", "content_hash",
+		} {
+			query = query.Set("? = EXCLUDED.?", bun.Ident(column), bun.Ident(column))
 		}
-		if _, err := tx.ExecContext(ctx, `
-INSERT INTO vector_documents (
-    doc_key, session_id, source_uuid, ordinal, ordinal_end,
-    subordinate, offsets, content, content_hash)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-ON CONFLICT (doc_key) DO UPDATE SET
-    session_id = EXCLUDED.session_id,
-    source_uuid = EXCLUDED.source_uuid,
-    ordinal = EXCLUDED.ordinal,
-    ordinal_end = EXCLUDED.ordinal_end,
-    subordinate = EXCLUDED.subordinate,
-    offsets = EXCLUDED.offsets,
-    content = EXCLUDED.content,
-    content_hash = EXCLUDED.content_hash`,
-			doc.DocKey, doc.SessionID, sanitizePG(doc.SourceUUID),
-			doc.Ordinal, doc.OrdinalEnd, doc.Subordinate,
-			sanitizePG(offsets), sanitizePG(doc.Content),
-			doc.ContentHash); err != nil {
+		if _, err := query.Returning("").Exec(ctx); err != nil {
 			return fmt.Errorf("upserting vector doc %s: %w", doc.DocKey, err)
 		}
 	}
@@ -1187,11 +1213,11 @@ ON CONFLICT (doc_key) DO UPDATE SET
 // simpler and correct versus per-doc surgical deletes. It returns the number of
 // chunk rows inserted.
 func replaceVectorChunks(
-	ctx context.Context, tx *sql.Tx, gen vectorGeneration,
+	ctx context.Context, tx bun.Tx, gen vectorGeneration,
 	sessionID string, docs []VectorPushDoc,
 ) (int, error) {
 	table := vectorChunkTable(gen.id)
-	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
+	if _, err := tx.Tx.ExecContext(ctx, fmt.Sprintf(`
 DELETE FROM %s WHERE doc_key IN (
     SELECT doc_key FROM vector_documents WHERE session_id = $1)`, table),
 		sessionID); err != nil {
@@ -1236,7 +1262,7 @@ DELETE FROM %s WHERE doc_key IN (
 		stmt := fmt.Sprintf(
 			`INSERT INTO %s (doc_key, chunk_index, embedding) VALUES %s`,
 			table, values.String())
-		if _, err := tx.ExecContext(ctx, stmt, args...); err != nil {
+		if _, err := tx.Tx.ExecContext(ctx, stmt, args...); err != nil {
 			return 0, fmt.Errorf("inserting chunks for session %s: %w", sessionID, err)
 		}
 	}
@@ -1262,12 +1288,12 @@ func (s *Sync) evictVectorSessions(
 	}
 	table := vectorChunkTable(scope.gen.id)
 	for _, sessionID := range sessionIDs {
-		tx, err := s.pg.BeginTx(ctx, nil)
+		tx, err := s.bunDB().BeginTx(ctx, nil)
 		if err != nil {
 			return fmt.Errorf("begin vector evict tx: %w", err)
 		}
 		var ownerMarker, machine sql.NullString
-		err = tx.QueryRowContext(ctx,
+		err = tx.Tx.QueryRowContext(ctx,
 			`SELECT owner_marker, machine FROM sessions WHERE id = $1 FOR UPDATE`,
 			sessionID,
 		).Scan(&ownerMarker, &machine)
@@ -1283,21 +1309,20 @@ func (s *Sync) evictVectorSessions(
 			res.Conflicts++
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
+		if _, err := tx.Tx.ExecContext(ctx, fmt.Sprintf(`
 DELETE FROM %s WHERE doc_key IN (
     SELECT doc_key FROM vector_documents WHERE session_id = $1)`, table),
 			sessionID); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("evicting chunks for session %s: %w", sessionID, err)
 		}
-		if _, err := tx.ExecContext(ctx, `
-DELETE FROM vector_push_state
- WHERE generation_id = $1 AND session_id = $2`,
-			scope.gen.id, sessionID); err != nil {
+		if _, err := tx.NewDelete().Model((*vectorPushStateModel)(nil)).
+			Where("generation_id = ?", scope.gen.id).
+			Where("session_id = ?", sessionID).Exec(ctx); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("evicting push state for session %s: %w", sessionID, err)
 		}
-		deleted, err := deleteOrphanVectorDocs(ctx, tx, sessionID, scope.genIDs)
+		deleted, err := deleteOrphanVectorDocs(ctx, tx.Tx, sessionID, scope.genIDs)
 		if err != nil {
 			_ = tx.Rollback()
 			return err

@@ -1269,17 +1269,10 @@ func TestSourceArchiveScopeRejectsSaltMismatch(t *testing.T) {
 	ctx := context.Background()
 	conn := openTestDuckDB(t)
 	require.NoError(t, EnsureSchema(ctx, conn))
-	exec := func(query string, args ...any) error {
-		_, err := conn.ExecContext(ctx, query, args...)
-		return err
-	}
-
-	queryRow := func(query string, args ...any) *sql.Row {
-		return conn.QueryRowContext(ctx, query, args...)
-	}
+	store := bun.NewDB(conn, bundialect.New())
 	require.NoError(t, upsertSourceArchiveScope(
-		exec, queryRow, "archive-a", "salt-a"))
-	err := upsertSourceArchiveScope(exec, queryRow, "archive-a", "salt-b")
+		ctx, store, "archive-a", "salt-a"))
+	err := upsertSourceArchiveScope(ctx, store, "archive-a", "salt-b")
 	require.ErrorContains(t, err, "archive salt mismatch")
 }
 
