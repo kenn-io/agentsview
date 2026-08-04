@@ -857,7 +857,15 @@ func TestSyncCodebuffProviderStatHashRemoteStoresUnderLogicalKey(t *testing.T) {
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {root},
 		},
-		Machine: "local",
+		// Production remote sync (importEngineConfig) always pairs
+		// IDPrefix with PathRewriter: applyRemoteRewrites only rewrites
+		// the stored session file_path when a host prefix is configured,
+		// so the sessions table row lands under the same logical key the
+		// provider_freshness side-table uses. Without the prefix the row
+		// keeps the physical temp path and the digest's logical key has
+		// no matching session row.
+		IDPrefix: "remote-host~",
+		Machine:  "local",
 		PathRewriter: func(p string) string {
 			if !strings.HasPrefix(p, root) {
 				return p

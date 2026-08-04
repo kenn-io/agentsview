@@ -8509,6 +8509,32 @@ func (e *Engine) processProviderFile(
 		source.ProjectHint = file.Project
 	}
 
+	// Capture the per-component stat digest from the same pre-parse
+	// snapshot that gates freshness, BEFORE fingerprinting or parsing
+	// reads the source. Persisting a digest computed after the parse
+	// would race a concurrent companion rewrite: the stored digest would
+	// describe the new file state while the session row holds the old
+	// parse payload, so every later warm sync would short-circuit on the
+	// new digest and the stale row would never be refreshed. This single
+	// snapshot feeds the warm-match comparison in
+	// providerSourceFreshBeforeFingerprint, the confirmed-unchanged-skip
+	// stamp, and the write-path staging, so all three always agree.
+	var preParseStatHash *pendingProviderStatHash
+	if hasher, ok := e.providerStatHashers[file.Agent]; ok {
+		if physicalPath := providerDiscoveredPath(source); physicalPath != "" {
+			targetKey := physicalPath
+			if e.pathRewriter != nil {
+				targetKey = e.pathRewriter(physicalPath)
+			}
+			preParseStatHash = &pendingProviderStatHash{
+				agent:        file.Agent,
+				physicalPath: physicalPath,
+				targetKey:    targetKey,
+				digest:       hasher.ComputeMultiFileStatHash(physicalPath),
+			}
+		}
+	}
+
 	verifiedCapture, verifiedMtime, verifiedFresh, verifiedStateOK :=
 		e.verifiedProviderSourceState(provider, source, file)
 	if verifiedStateOK && verifiedFresh {
@@ -8549,7 +8575,9 @@ func (e *Engine) processProviderFile(
 	} else if forceReplace {
 		sourceForceReplace = true
 	}
-	if freshMtime, fresh := e.providerSourceFreshBeforeFingerprint(ctx, source, file); fresh {
+	if freshMtime, fresh := e.providerSourceFreshBeforeFingerprint(
+		ctx, source, file, preParseStatHash,
+	); fresh {
 		return processResult{
 			skip:  true,
 			mtime: freshMtime,
@@ -8735,7 +8763,7 @@ func (e *Engine) processProviderFile(
 	// earlier freshness checks; this is the generic fallback for the rest.
 	if !incForceReplace && !e.forceParse && !file.ForceParse &&
 		e.providerSourceUnchangedInDB(
-			ctx, source, fingerprint, providerSemantics,
+			ctx, source, fingerprint, providerSemantics, preParseStatHash,
 		) {
 		return processResult{
 			skip:      true,
@@ -8891,6 +8919,7 @@ func (e *Engine) processProviderFile(
 		suppressPresenceSweep: !outcome.ResultSetComplete,
 		providerFailureCount:  providerFailureCount,
 		retentionLease:        lease,
+		providerStatHash:      preParseStatHash,
 	}
 	if file.Agent == parser.AgentOmnigent && cacheSkip && cleanCache &&
 		!e.forceParse && !file.ForceParse &&
@@ -9309,46 +9338,52 @@ func (e *Engine) applyProviderFilePathPolicies(
 	if len(kept) > 0 && filePath != "" {
 		// Per-event work gates the digest stage by what actually got kept
 		// (an empty kept must not stamp a row that would suppress real
-		// drift on the next warm sync). The hash is taken from the
-		// physical on-disk chat path while the cache key uses the
+		// drift on the next warm sync). The digest itself is the pre-parse
+		// snapshot processProviderFile captured before fingerprinting or
+		// parsing (preParseStatHash), so it cannot describe a file state
+		// the parse never read; the fallback below recomputes from the
+		// physical on-disk chat path only for paths that bypassed
+		// processProviderFile's capture. The cache key uses the
 		// pathRewriter's "host:/remote/path" form so remote-synced
 		// sources keep hashing a real local file but read back under
 		// the canonical logical key.
 		//
-		// The digest is staged here, COMPUTED from the same snapshot
-		// provider.Fingerprint used for the parse, and persisted only
-		// after the matching source's sessions-table write commits
-		// successfully. Capturing the digest at staging time closes
-		// the TOCTOU window between parse and write: a file change
-		// between provider.Fingerprint and flushPending would
-		// otherwise let flushPending store the new digest under the
-		// old parse payload, falsely pinning a stale row on the
-		// next warm sync. The per-row persist gate in flushPending
-		// and the single-session writeSessionFull loop is what
-		// guarantees provider_freshness only sees digests whose
-		// matching session row actually committed; a CWD-filter
-		// veto, a failed upsert, or a parser-skipped session all
-		// bypass the persist call and keep the side-table clean.
-		if hasher, ok := e.providerStatHashers[agent]; ok {
-			targetKey := filePath
-			if e.pathRewriter != nil {
-				targetKey = e.pathRewriter(filePath)
-			}
-			if targetKey != "" {
-				res.providerStatHash = &pendingProviderStatHash{
-					agent:        agent,
-					physicalPath: filePath,
-					targetKey:    targetKey,
-					digest:       hasher.ComputeMultiFileStatHash(filePath),
+		// The digest is persisted only after the matching source's
+		// sessions-table write commits successfully. The per-row persist
+		// gate in flushPending and the single-session writeSessionFull
+		// loop is what guarantees provider_freshness only sees digests
+		// whose matching session row actually committed; a CWD-filter
+		// veto, a failed upsert, or a parser-skipped session all bypass
+		// the persist call and keep the side-table clean.
+		// Fallback staging for results that bypassed processProviderFile's
+		// pre-parse capture (res.providerStatHash == nil). Today only
+		// Codebuff/Freebuff register a MultiFileStatHasher and their
+		// provider-authoritative path always captures, so this recomputes
+		// post-parse only for hypothetical non-processProviderFile
+		// producers; it is not the hot path.
+		if res.providerStatHash == nil {
+			if hasher, ok := e.providerStatHashers[agent]; ok {
+				targetKey := filePath
+				if e.pathRewriter != nil {
+					targetKey = e.pathRewriter(filePath)
 				}
-				// Test observability: this counter lets tests
-				// distinguish a regression that drops just the
-				// staging block from one that drops the entire
-				// freshness gate. See stagedProviderStatHashes
-				// on Engine and the per-row suppress test in
-				// codebuff_integration_test.go.
-				e.stagedProviderStatHashes.Add(1)
+				if targetKey != "" {
+					res.providerStatHash = &pendingProviderStatHash{
+						agent:        agent,
+						physicalPath: filePath,
+						targetKey:    targetKey,
+						digest:       hasher.ComputeMultiFileStatHash(filePath),
+					}
+				}
 			}
+		}
+		// Test observability: this counter lets tests distinguish a
+		// regression that drops just the staging block from one that
+		// drops the entire freshness gate. See stagedProviderStatHashes
+		// on Engine and the per-row suppress test in
+		// codebuff_integration_test.go.
+		if res.providerStatHash != nil {
+			e.stagedProviderStatHashes.Add(1)
 		}
 	}
 }
@@ -9903,6 +9938,7 @@ func (e *Engine) providerSourceUnchangedInDB(
 	source parser.SourceRef,
 	fingerprint parser.SourceFingerprint,
 	semantics parser.ProviderSyncSemantics,
+	preParseStatHash *pendingProviderStatHash,
 ) bool {
 	if fingerprint.MTimeNS == 0 && fingerprint.Size == 0 {
 		return false
@@ -9948,40 +9984,36 @@ func (e *Engine) providerSourceUnchangedInDB(
 	// the engine can trust.
 	fresh := e.db.GetDataVersionByPath(lookupPath) >= db.CurrentDataVersion()
 	if fresh {
-		e.stampProviderStatHashForConfirmedSource(ctx, source, lookupPath)
+		e.stampProviderStatHashForConfirmedSource(ctx, preParseStatHash)
 	}
 	return fresh
 }
 
-// stampProviderStatHashForConfirmedSource persists the per-component stat
-// digest for a source whose provider.Fingerprint was just verified against
-// an existing current session row (the providerSourceUnchangedInDB skip).
-// This is the only pre-write moment a digest may safely be written: a
-// transient failure between an eager stamp and the fingerprint/parse/write
-// that follows would leave a matching digest that permanently suppresses
-// every later retry. The physical on-disk path is hashed while the DB key
-// uses the pathRewriter's logical key, mirroring the write path. Providers
-// without a MultiFileStatHasher carry no digest and are skipped here; their
+// stampProviderStatHashForConfirmedSource persists the pre-parse
+// per-component stat digest for a source whose provider.Fingerprint was
+// just verified against an existing current session row (the
+// providerSourceUnchangedInDB skip). This is the only pre-write moment a
+// digest may safely be written: a transient failure between an eager stamp
+// and the fingerprint/parse/write that follows would leave a matching
+// digest that permanently suppresses every later retry. The digest is the
+// pre-parse snapshot captured in processProviderFile, so it describes
+// exactly the file state the fingerprint verified, and the DB key uses the
+// pathRewriter's logical key, mirroring the write path. Providers without
+// a MultiFileStatHasher carry no digest and are skipped here; their
 // freshness is owned by the engine's existing stat and skip-cache paths.
 func (e *Engine) stampProviderStatHashForConfirmedSource(
 	ctx context.Context,
-	source parser.SourceRef,
-	lookupPath string,
+	statHash *pendingProviderStatHash,
 ) {
-	hasher, ok := e.providerStatHashers[source.Provider]
-	if !ok {
-		return
-	}
-	digest := hasher.ComputeMultiFileStatHash(providerDiscoveredPath(source))
-	if digest == 0 {
+	if statHash == nil || statHash.digest == 0 {
 		return
 	}
 	if err := e.db.UpsertProviderStatHash(
-		ctx, source.Provider, lookupPath, digest,
+		ctx, statHash.agent, statHash.targetKey, statHash.digest,
 	); err != nil {
 		log.Printf(
 			"provider_freshness write for %s/%s: %v",
-			source.Provider, lookupPath, err,
+			statHash.agent, statHash.targetKey, err,
 		)
 	}
 }
@@ -10229,10 +10261,28 @@ func providerStatFreshnessMtime(
 	return parser.CodebuffCompanionMtime(lookupPath, chatInfo)
 }
 
+// providerFreshDigestSourceCurrentInDB reports whether the stored session
+// row for a digest-matched source is still current: the row exists, its
+// data version is current, and it does not need a project reparse. A
+// matching provider_freshness digest proves only that the file stat is
+// unchanged; these checks are what allow the digest short-circuit to skip
+// safely, mirroring the tail guards of providerSourceUnchangedInDB.
+func (e *Engine) providerFreshDigestSourceCurrentInDB(lookupPath string) bool {
+	if _, _, ok := e.db.GetFileInfoByPath(lookupPath); !ok {
+		return false
+	}
+	if project, ok := e.db.GetProjectByPath(lookupPath); ok &&
+		parser.NeedsProjectReparse(project) {
+		return false
+	}
+	return e.db.GetDataVersionByPath(lookupPath) >= db.CurrentDataVersion()
+}
+
 func (e *Engine) providerSourceFreshBeforeFingerprint(
 	ctx context.Context,
 	source parser.SourceRef,
 	file parser.DiscoveredFile,
+	preParseStatHash *pendingProviderStatHash,
 ) (int64, bool) {
 	if e.forceParse || file.ForceParse {
 		return 0, false
@@ -10277,7 +10327,7 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 	// the digest before fingerprinting, parsing, or session
 	// writing succeeds — a transient failure must not leave a
 	// matching digest that suppresses every later retry.
-	if hasher, ok := e.providerStatHashers[file.Agent]; ok {
+	if preParseStatHash != nil {
 		stored, hasStored, hashErr :=
 			e.db.GetProviderStatHash(ctx, file.Agent, lookupPath)
 		switch {
@@ -10320,7 +10370,7 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 			// version freshness checks proceed normally; the digest
 			// just lives somewhere gated by a confirmed outcome.
 			return 0, false
-		case stored == hasher.ComputeMultiFileStatHash(path):
+		case stored == preParseStatHash.digest:
 			// Cold writes stamp fingerprint.MTimeNS as the max of
 			// chat + sibling companions (see codebuffFingerprintSource);
 			// the skip cache key/decision must align with that stamp
@@ -10328,6 +10378,18 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 			// have sibling companions today; other agents implementing
 			// MultiFileStatHasher fall through to chat-only via the
 			// helper.
+			//
+			// A matching digest proves only that the file stat is
+			// unchanged; it cannot prove the stored session is still
+			// current. Without row-existence, data-version, and
+			// project-reparse checks an unchanged Codebuff source would
+			// bypass parser migrations and project repairs indefinitely,
+			// because this short-circuit never reaches fingerprinting or
+			// parsing. Defer to the fingerprint path whenever the stored
+			// row is missing, stale, or needs project reclassification.
+			if !e.providerFreshDigestSourceCurrentInDB(lookupPath) {
+				return 0, false
+			}
 			return providerStatFreshnessMtime(file.Agent, lookupPath, info), true
 		default:
 			// Stored digest disagrees with current component stats.

@@ -70,7 +70,9 @@ func TestRooCodeFreshBeforeFingerprintUsesCompositeStat(t *testing.T) {
 		})
 	}
 
-	mtime, fresh := engine.providerSourceFreshBeforeFingerprint(t.Context(), source, file)
+	mtime, fresh := engine.providerSourceFreshBeforeFingerprint(
+		t.Context(), source, file, nil,
+	)
 	assert.True(t, fresh, "unchanged composite stat must skip the fingerprint")
 	assert.Equal(t, compositeMtime, mtime)
 
@@ -87,7 +89,9 @@ func TestRooCodeFreshBeforeFingerprintUsesCompositeStat(t *testing.T) {
 		[]byte(`[{"ts":2,"type":"say","say":"text","text":"hi"}]`), 0o644))
 	require.NoError(t, os.Chtimes(messagesPath, future, future))
 
-	_, fresh = engine.providerSourceFreshBeforeFingerprint(t.Context(), source, file)
+	_, fresh = engine.providerSourceFreshBeforeFingerprint(
+		t.Context(), source, file, nil,
+	)
 	assert.False(t, fresh,
 		"a sibling-only transcript change must fall through to the fingerprint")
 }
