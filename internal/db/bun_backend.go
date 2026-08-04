@@ -28,6 +28,12 @@ type bunSessionFullHydrator interface {
 	HydrateSessionFull(context.Context, bun.IDB, *Session) error
 }
 
+// BunTablePresenceProbe is implemented by adapters whose compatible read-only
+// schemas may omit optional canonical tables.
+type BunTablePresenceProbe interface {
+	BunTableExists(context.Context, bun.IDB, string) (bool, error)
+}
+
 // WriteOperation identifies a separately authorized family of mutations.
 type WriteOperation uint8
 

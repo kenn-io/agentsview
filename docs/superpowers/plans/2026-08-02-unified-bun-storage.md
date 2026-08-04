@@ -855,7 +855,7 @@ ______________________________________________________________________
     go vet ./...
     ```
 
-    Expected: fresh/legacy SQLite data survives, DuckDB rebuilds at version 10,
+    Expected: fresh/legacy SQLite data survives, DuckDB rebuilds at version 11,
     and all local schema checks pass.
 
 - [ ] **Step 6: Verify PostgreSQL migration GREEN**
@@ -1226,6 +1226,10 @@ ______________________________________________________________________
 - Modify: `internal/db/usage.go`
 - Modify: `internal/db/usage_events.go`
 - Modify: `internal/db/cursor_usage_events.go`
+- Modify: `internal/db/activityreport.go`
+- Modify: `internal/db/reporting_export.go`
+- Modify: `internal/db/session_export.go`
+- Modify: `internal/db/session_stats.go`
 - Modify: `internal/postgres/pricing.go`
 - Modify: `internal/postgres/usage.go`
 - Modify: `internal/duckdb/analytics_usage.go`
@@ -1250,6 +1254,16 @@ ______________________________________________________________________
 - Keeps SQLite pricing refresh state in `pricing_metadata`. `GetPricingMeta` and
   `SetPricingMeta` never read or create sentinel `model_pricing` rows, and
   actual pricing/band writes require valid canonical timestamps.
+
+- Defines the canonical empty-catalog policy: embedded rates remain the base
+  catalogue when stored pricing rows are absent, custom rates overlay that
+  base, and an explicitly supplied effective catalogue overlays both. Every
+  backend reports the same provenance for that state.
+
+- Runs pricing, normalized usage rows, metadata hydration, and project identity
+  resolution for each public usage operation inside one replay-safe
+  `ConsistentView`. Each callback stages a fresh complete result and publishes
+  only the accepted attempt.
 
 - Keeps cursor/provider normalization and exact microdollar calculation in pure
   shared functions; only row selection and aggregation SQL move to Bun.
@@ -1290,8 +1304,11 @@ ______________________________________________________________________
 - [ ] **Step 4: Implement shared usage aggregations**
 
     Select the smallest normalized row set needed for each API, then aggregate
-    through the existing pure reducers. Use canonical timestamp values and Bun
-    list/tuple expansion for filters. Preserve authoritative reported cost and
+    through the existing pure reducers. Push both padded time bounds and all
+    portable source/session filters into Bun before hydration; retain only the
+    final timezone date check and exact reducers in Go. Render SQLite timestamp
+    bounds through its `julianday` adapter expression so mixed RFC3339 offsets
+    compare as instants. Preserve authoritative reported cost and
     application-count semantics exactly.
 
 - [ ] **Step 5: Verify the common methods on every backend before deletion**
@@ -1597,6 +1614,7 @@ ______________________________________________________________________
 - Modify: `internal/postgres/vector_push.go`
 - Modify: `internal/duckdb/push.go`
 - Modify: `internal/duckdb/rebuild.go`
+- Modify: `internal/duckdb/schema.go`
 - Modify: `internal/duckdb/project_identity_upsert.go`
 - Modify: `internal/duckdb/worktree_mappings_push.go`
 - Modify: `internal/duckdb/sync.go`
@@ -1625,6 +1643,13 @@ ______________________________________________________________________
     SQLite uses the archive-identity stamping invariant established in Task 4;
     this task replaces its SQL implementation with Bun without adding a second
     retrieval or compatibility path.
+
+    Generated curation targets keep their target-assigned pin IDs on logical
+    conflicts. DuckDB mirrors preserve positive source-assigned IDs: before a
+    mirrored upsert, move any stale logical owner off a reused source ID inside
+    the same transaction, then adopt that ID on the current logical pin. Never
+    apply preserve-mode deletion/reconciliation to generated-ID targets; any
+    later insert failure rolls the stale owner and current logical pin back.
 
 - Consumes the canonical pricing/band and star/pin write helpers defined in
   Tasks 6-7; the cross-target fixture never relies on an undefined test-only
@@ -1693,8 +1718,13 @@ ______________________________________________________________________
 
     Keep rebuild/probe/swap, per-session fingerprint gating, metadata cursors, and
     local-only target validation in `internal/duckdb`. Replace common table
-    inserts/replacements with shared Bun helpers. Record `sync_metadata` in the
-    same DuckDB transaction as each successful batch.
+    inserts/replacements with shared Bun helpers. Add a transaction-aware
+    metadata writer in `internal/duckdb/schema.go`. Per-session fingerprints may
+    publish with their completed session batch; operation-level cutoffs,
+    revisions, scope, and the fresh mirror generation publish only after every
+    batch in the complete push succeeds, in the same final DuckDB transaction. A
+    failed later batch therefore cannot advance a cutoff past unprocessed
+    sessions.
 
 - [ ] **Step 6: Verify local and PostgreSQL write paths**
 
