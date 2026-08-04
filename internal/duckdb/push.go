@@ -44,140 +44,14 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 		return nil
 	}
 
-	tx, err := s.duck.BeginTx(ctx, nil)
+	rows, bands, err := db.CanonicalModelPricingRows(prices)
 	if err != nil {
-		return fmt.Errorf("beginning duckdb pricing sync: %w", err)
+		return fmt.Errorf("converting duckdb pricing rows: %w", err)
 	}
-	defer func() {
-		_ = tx.Rollback()
-	}()
-
-	for i := 0; i < len(prices); i += duckPricingUpsertBatch {
-		end := min(i+duckPricingUpsertBatch, len(prices))
-		batch := prices[i:end]
-		query, args := duckPricingUpsertStatement(batch)
-		if err := s.execMutation(ctx, tx, query, args...); err != nil {
-			return fmt.Errorf(
-				"syncing duckdb pricing batch starting at %d: %w",
-				i, err,
-			)
-		}
-	}
-	for i := 0; i < len(prices); i += duckPricingUpsertBatch {
-		end := min(i+duckPricingUpsertBatch, len(prices))
-		query, args := duckPricingBandDeleteStatement(prices[i:end])
-		if err := s.execMutation(ctx, tx, query, args...); err != nil {
-			return fmt.Errorf(
-				"deleting duckdb pricing bands batch starting at %d: %w",
-				i, err,
-			)
-		}
-	}
-	var bands []duckModelPricingBand
-	for _, price := range prices {
-		for _, band := range price.Bands {
-			bands = append(bands, duckModelPricingBand{
-				modelPattern: price.ModelPattern,
-				updatedAt:    price.UpdatedAt,
-				band:         band,
-			})
-		}
-	}
-	for i := 0; i < len(bands); i += duckPricingUpsertBatch {
-		end := min(i+duckPricingUpsertBatch, len(bands))
-		query, args := duckPricingBandInsertStatement(bands[i:end])
-		if err := s.execMutation(ctx, tx, query, args...); err != nil {
-			return fmt.Errorf(
-				"inserting duckdb pricing bands batch starting at %d: %w",
-				i, err,
-			)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing duckdb pricing sync: %w", err)
+	if err := db.UpsertModelPricingRows(ctx, s.bun, rows, bands); err != nil {
+		return fmt.Errorf("syncing duckdb pricing rows: %w", err)
 	}
 	return nil
-}
-
-func duckPricingBandDeleteStatement(prices []db.ModelPricing) (string, []any) {
-	placeholders := make([]string, len(prices))
-	args := make([]any, len(prices))
-	for i, price := range prices {
-		placeholders[i] = "?"
-		args[i] = price.ModelPattern
-	}
-	return `DELETE FROM model_pricing_bands WHERE model_pattern IN (` +
-		strings.Join(placeholders, ", ") + `)`, args
-}
-
-type duckModelPricingBand struct {
-	modelPattern string
-	updatedAt    string
-	band         db.PricingBand
-}
-
-func duckPricingBandInsertStatement(bands []duckModelPricingBand) (string, []any) {
-	var b strings.Builder
-	b.WriteString(`INSERT INTO model_pricing_bands (
-		model_pattern, above_input_tokens,
-		input_microdollars_per_mtok, output_microdollars_per_mtok,
-		cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok,
-		updated_at
-	) VALUES `)
-	args := make([]any, 0, len(bands)*7)
-	for i, item := range bands {
-		if i > 0 {
-			b.WriteString(", ")
-		}
-		b.WriteString("(?, ?, ?, ?, ?, ?, ?)")
-		updatedAt := item.band.UpdatedAt
-		if updatedAt == "" {
-			updatedAt = item.updatedAt
-		}
-		args = append(args,
-			item.modelPattern,
-			item.band.AboveInputTokens,
-			item.band.InputPerMTok.Microdollars,
-			item.band.OutputPerMTok.Microdollars,
-			item.band.CacheCreationPerMTok.Microdollars,
-			item.band.CacheReadPerMTok.Microdollars,
-			updatedAt,
-		)
-	}
-	return b.String(), args
-}
-
-const duckPricingUpsertBatch = 100
-
-func duckPricingUpsertStatement(prices []db.ModelPricing) (string, []any) {
-	var b strings.Builder
-	b.WriteString(`INSERT INTO model_pricing (
-		model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
-		cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-	) VALUES `)
-	args := make([]any, 0, len(prices)*6)
-	for i, p := range prices {
-		if i > 0 {
-			b.WriteString(", ")
-		}
-		b.WriteString("(?, ?, ?, ?, ?, ?)")
-		args = append(args,
-			p.ModelPattern,
-			p.InputPerMTok.Microdollars,
-			p.OutputPerMTok.Microdollars,
-			p.CacheCreationPerMTok.Microdollars,
-			p.CacheReadPerMTok.Microdollars,
-			p.UpdatedAt,
-		)
-	}
-	b.WriteString(`
-	ON CONFLICT(model_pattern) DO UPDATE SET
-		input_microdollars_per_mtok = excluded.input_microdollars_per_mtok,
-		output_microdollars_per_mtok = excluded.output_microdollars_per_mtok,
-		cache_creation_microdollars_per_mtok = excluded.cache_creation_microdollars_per_mtok,
-		cache_read_microdollars_per_mtok = excluded.cache_read_microdollars_per_mtok,
-		updated_at = excluded.updated_at`)
-	return b.String(), args
 }
 
 func (s *Sync) listDuckModelPricing(ctx context.Context) ([]db.ModelPricing, error) {
@@ -288,15 +162,16 @@ func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
 		return nil
 	}
 
-	tx, err := s.duck.BeginTx(ctx, nil)
+	rows, err := db.CanonicalCursorUsageEventRows(events)
+	if err != nil {
+		return fmt.Errorf("converting duckdb cursor usage rows: %w", err)
+	}
+	tx, err := s.bun.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning duckdb cursor usage sync: %w", err)
 	}
-	defer func() {
-		_ = tx.Rollback()
-	}()
-
-	if err := s.bulkInsertCursorUsageEvents(ctx, tx, events); err != nil {
+	defer func() { _ = tx.Rollback() }()
+	if err := db.AppendCursorUsageEventRows(ctx, tx, rows); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -1219,59 +1094,6 @@ func mirroredSessionMachine(sess db.Session, fallbackMachine string) string {
 		return sess.Machine
 	}
 	return fallbackMachine
-}
-
-func (s *Sync) bulkInsertCursorUsageEvents(
-	ctx context.Context, tx *sql.Tx, events []db.CursorUsageEvent,
-) error {
-	if len(events) == 0 {
-		return nil
-	}
-	const cursorBatch = 100
-	for i := 0; i < len(events); i += cursorBatch {
-		end := min(i+cursorBatch, len(events))
-		batch := events[i:end]
-
-		var b strings.Builder
-		b.WriteString(`INSERT INTO cursor_usage_events (
-			occurred_at, model, kind,
-			input_tokens, output_tokens,
-			cache_write_tokens, cache_read_tokens,
-			charged_microdollars, cursor_token_fee_microdollars,
-			user_id, user_email, is_headless, dedup_key
-		) VALUES `)
-		args := make([]any, 0, len(batch)*13)
-		for j, ev := range batch {
-			if j > 0 {
-				b.WriteByte(',')
-			}
-			b.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-			occurredAt, ok := parseTimestamp(ev.OccurredAt)
-			if !ok {
-				return fmt.Errorf("parsing cursor usage occurred_at %q", ev.OccurredAt)
-			}
-			args = append(args,
-				occurredAt,
-				db.SanitizeUTF8(ev.Model),
-				db.SanitizeUTF8(ev.Kind),
-				ev.InputTokens,
-				ev.OutputTokens,
-				ev.CacheWriteTokens,
-				ev.CacheReadTokens,
-				ev.Charged.Microdollars,
-				ev.CursorTokenFee.Microdollars,
-				db.SanitizeUTF8(ev.UserID),
-				db.SanitizeUTF8(ev.UserEmail),
-				ev.IsHeadless,
-				db.SanitizeUTF8(ev.DedupKey),
-			)
-		}
-		b.WriteString(` ON CONFLICT DO NOTHING`)
-		if err := s.execMutation(ctx, tx, b.String(), args...); err != nil {
-			return fmt.Errorf("bulk inserting duckdb cursor_usage_events: %w", err)
-		}
-	}
-	return nil
 }
 
 // insertPinnedMessages inserts pins already loaded from the local archive.

@@ -20,6 +20,116 @@ import (
 
 const bunPricingWriteBatchSize = 500
 
+const bunCursorUsageWriteBatchSize = 50
+
+// CanonicalModelPricingRows converts public pricing records and their bands
+// into the common persistence models used by every adapter.
+func CanonicalModelPricingRows(
+	prices []ModelPricing,
+) ([]bunmodel.ModelPricing, []bunmodel.ModelPricingBand, error) {
+	rows := make([]bunmodel.ModelPricing, 0, len(prices))
+	bands := make([]bunmodel.ModelPricingBand, 0)
+	for _, price := range prices {
+		pattern := SanitizeUTF8(price.ModelPattern)
+		updatedAtText := SanitizeUTF8(price.UpdatedAt)
+		updatedAt, err := requiredTimestampToBunRow(updatedAtText)
+		if err != nil {
+			return nil, nil, fmt.Errorf(
+				"converting model pricing timestamp for %q: %w", pattern, err,
+			)
+		}
+		rows = append(rows, bunmodel.ModelPricing{
+			ModelPattern:                     pattern,
+			InputMicrodollarsPerMTok:         price.InputPerMTok.Microdollars,
+			OutputMicrodollarsPerMTok:        price.OutputPerMTok.Microdollars,
+			CacheCreationMicrodollarsPerMTok: price.CacheCreationPerMTok.Microdollars,
+			CacheReadMicrodollarsPerMTok:     price.CacheReadPerMTok.Microdollars,
+			UpdatedAt:                        updatedAt,
+		})
+		for _, band := range price.Bands {
+			threshold, err := safecast.Convert[int64](band.AboveInputTokens)
+			if err != nil {
+				return nil, nil, fmt.Errorf(
+					"converting pricing band threshold for %q: %w", pattern, err,
+				)
+			}
+			bandUpdatedAtText := SanitizeUTF8(band.UpdatedAt)
+			if bandUpdatedAtText == "" {
+				bandUpdatedAtText = updatedAtText
+			}
+			bandUpdatedAt, err := requiredTimestampToBunRow(bandUpdatedAtText)
+			if err != nil {
+				return nil, nil, fmt.Errorf(
+					"converting model pricing band timestamp for %q: %w",
+					pattern, err,
+				)
+			}
+			bands = append(bands, bunmodel.ModelPricingBand{
+				ModelPattern: pattern, AboveInputTokens: threshold,
+				InputMicrodollarsPerMTok:         band.InputPerMTok.Microdollars,
+				OutputMicrodollarsPerMTok:        band.OutputPerMTok.Microdollars,
+				CacheCreationMicrodollarsPerMTok: band.CacheCreationPerMTok.Microdollars,
+				CacheReadMicrodollarsPerMTok:     band.CacheReadPerMTok.Microdollars,
+				UpdatedAt:                        bandUpdatedAt,
+			})
+		}
+	}
+	return rows, bands, nil
+}
+
+// CanonicalCursorUsageEventRows converts append-only Cursor usage into
+// portable rows. Source IDs are deliberately omitted because every target
+// assigns storage IDs independently and deduplicates by the stable event key.
+func CanonicalCursorUsageEventRows(
+	events []CursorUsageEvent,
+) ([]bunmodel.CursorUsageEvent, error) {
+	rows := make([]bunmodel.CursorUsageEvent, 0, len(events))
+	for _, event := range events {
+		if event.Model == "" {
+			return nil, fmt.Errorf("cursor usage event model is required")
+		}
+		occurredAt, err := requiredTimestampToBunRow(event.OccurredAt)
+		if err != nil {
+			return nil, fmt.Errorf("cursor usage event occurred_at: %w", err)
+		}
+		truncateCanonicalTimestamp(&occurredAt)
+		dedupKey := event.DedupKey
+		if dedupKey == "" {
+			dedupKey = CursorUsageEventDedupKey(event)
+		}
+		if dedupKey == "" {
+			return nil, fmt.Errorf("cursor usage event dedup key is required")
+		}
+		rows = append(rows, bunmodel.CursorUsageEvent{
+			OccurredAt: occurredAt, Model: SanitizeUTF8(event.Model),
+			Kind: SanitizeUTF8(event.Kind), InputTokens: event.InputTokens,
+			OutputTokens: event.OutputTokens, CacheWriteTokens: event.CacheWriteTokens,
+			CacheReadTokens:            event.CacheReadTokens,
+			ChargedMicrodollars:        event.Charged.Microdollars,
+			CursorTokenFeeMicrodollars: event.CursorTokenFee.Microdollars,
+			UserID:                     SanitizeUTF8(event.UserID), UserEmail: SanitizeUTF8(event.UserEmail),
+			IsHeadless: event.IsHeadless, DedupKey: SanitizeUTF8(dedupKey),
+		})
+	}
+	return rows, nil
+}
+
+// AppendCursorUsageEventRows appends canonical Cursor usage and ignores rows
+// whose stable deduplication key is already present.
+func AppendCursorUsageEventRows(
+	ctx context.Context, store bun.IDB, rows []bunmodel.CursorUsageEvent,
+) error {
+	for start := 0; start < len(rows); start += bunCursorUsageWriteBatchSize {
+		end := min(start+bunCursorUsageWriteBatchSize, len(rows))
+		batch := rows[start:end]
+		if _, err := store.NewInsert().Model(&batch).ExcludeColumn("id").
+			On("CONFLICT DO NOTHING").Returning("").Exec(ctx); err != nil {
+			return fmt.Errorf("appending cursor usage rows: %w", err)
+		}
+	}
+	return nil
+}
+
 // UpsertModelPricingRows writes canonical base prices and replaces the bands
 // for exactly those model patterns in one transaction.
 func UpsertModelPricingRows(

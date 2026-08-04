@@ -244,3 +244,62 @@ func mustBunTimestamp(t *testing.T, value string) bunmodel.Timestamp {
 	require.NoError(t, err)
 	return timestamp
 }
+
+func TestCanonicalModelPricingRowsPreserveBandsAndMoney(t *testing.T) {
+	prices, bands, err := CanonicalModelPricingRows([]ModelPricing{{
+		ModelPattern:         " model\x00 ",
+		InputPerMTok:         money.Money{Microdollars: 11},
+		OutputPerMTok:        money.Money{Microdollars: 22},
+		CacheCreationPerMTok: money.Money{Microdollars: 33},
+		CacheReadPerMTok:     money.Money{Microdollars: 44},
+		UpdatedAt:            "2026-08-04T01:02:03Z",
+		Bands: []PricingBand{{
+			AboveInputTokens: 200_000,
+			InputPerMTok:     money.Money{Microdollars: 55},
+			OutputPerMTok:    money.Money{Microdollars: 66},
+		}},
+	}})
+	require.NoError(t, err)
+	require.Len(t, prices, 1)
+	assert.Equal(t, " model ", prices[0].ModelPattern)
+	assert.Equal(t, int64(11), prices[0].InputMicrodollarsPerMTok)
+	assert.Equal(t, int64(44), prices[0].CacheReadMicrodollarsPerMTok)
+	assert.Equal(t,
+		time.Date(2026, 8, 4, 1, 2, 3, 0, time.UTC),
+		prices[0].UpdatedAt.Time,
+	)
+	require.Len(t, bands, 1)
+	assert.Equal(t, int64(200_000), bands[0].AboveInputTokens)
+	assert.Equal(t, int64(55), bands[0].InputMicrodollarsPerMTok)
+	assert.Equal(t, prices[0].UpdatedAt, bands[0].UpdatedAt)
+}
+
+func TestCanonicalModelPricingRowsRejectInvalidTimestamp(t *testing.T) {
+	_, _, err := CanonicalModelPricingRows([]ModelPricing{{
+		ModelPattern: "model", UpdatedAt: "not-a-timestamp",
+	}})
+	require.ErrorContains(t, err, "model pricing timestamp")
+}
+
+func TestAppendCursorUsageEventRowsDeduplicatesPortableRows(t *testing.T) {
+	database := testDB(t)
+	rows, err := CanonicalCursorUsageEventRows([]CursorUsageEvent{{
+		ID: 99, OccurredAt: "2026-08-04T01:02:03.123456789Z",
+		Model: "model\x00", Kind: "composer", InputTokens: 10,
+		Charged: money.Money{Microdollars: 1234}, DedupKey: "cursor-row",
+	}})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Nil(t, rows[0].ID)
+	assert.Equal(t, "model", rows[0].Model)
+	assert.Equal(t, time.Date(
+		2026, 8, 4, 1, 2, 3, 123456000, time.UTC,
+	), rows[0].OccurredAt.Time)
+
+	require.NoError(t, AppendCursorUsageEventRows(t.Context(), database.bunWriter, rows))
+	require.NoError(t, AppendCursorUsageEventRows(t.Context(), database.bunWriter, rows))
+	count, err := database.bunReader.NewSelect().
+		Model((*bunmodel.CursorUsageEvent)(nil)).Count(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+}
