@@ -276,7 +276,7 @@ func (db *DB) ApplyProjectIdentityBackfillBatch(
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	tx, err := db.getWriter().BeginTx(ctx, nil)
+	tx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning project identity backfill batch: %w", err)
 	}
@@ -297,23 +297,21 @@ func (db *DB) ApplyProjectIdentityBackfillBatch(
 			if observation.RemoteResolution == "" {
 				observation.RemoteResolution = export.ProjectResolutionUnknown
 			}
-			if err := upsertSessionProjectIdentitySnapshotExec(
-				ctx, tx,
-				func(ctx context.Context, query string, args ...any) rowScanner {
-					return tx.QueryRowContext(ctx, query, args...)
-				},
-				observation, false,
+			if err := upsertSessionProjectIdentitySnapshotBun(
+				ctx, tx, observation, false,
 			); err != nil {
 				return fmt.Errorf(
 					"applying unresolved project identity backfill batch: %w", err)
 			}
 			continue
 		}
-		if err := upsertProjectIdentityObservationTx(tx, observation); err != nil {
+		if err := upsertProjectIdentityObservationWithSnapshotProjectBun(
+			ctx, tx, observation, observation.Project, false, false,
+		); err != nil {
 			return fmt.Errorf("applying project identity backfill batch: %w", err)
 		}
 	}
-	result, err := tx.ExecContext(ctx, `
+	result, err := tx.Tx.ExecContext(ctx, `
 		UPDATE background_migrations SET
 			completed_items = completed_items + ?,
 			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
