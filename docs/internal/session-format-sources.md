@@ -1055,11 +1055,17 @@ Grok section and remove the explicit registry exception in the coverage test.
   `5ab0e6df34e69444f6f2016de40717a9f54bf816`; see the pinned
   [session manager](https://github.com/aaif-goose/goose/blob/5ab0e6df34e69444f6f2016de40717a9f54bf816/crates/goose/src/session/session_manager.rs),
   [message model](https://github.com/aaif-goose/goose/blob/5ab0e6df34e69444f6f2016de40717a9f54bf816/crates/goose-provider-types/src/conversation/message.rs),
+  [tool-result serialization](https://github.com/aaif-goose/goose/blob/5ab0e6df34e69444f6f2016de40717a9f54bf816/crates/goose-provider-types/src/conversation/tool_result_serde.rs),
   and
-  [tool-result serialization](https://github.com/aaif-goose/goose/blob/5ab0e6df34e69444f6f2016de40717a9f54bf816/crates/goose-provider-types/src/conversation/tool_result_serde.rs).
-  The first-party [session-management
-  guide](https://goose-docs.ai/docs/guides/sessions/session-management/) and an
-  isolated observed schema-version-15 database were also checked 2026-08-03.
+  [path resolution](https://github.com/aaif-goose/goose/blob/5ab0e6df34e69444f6f2016de40717a9f54bf816/crates/goose/src/config/paths.rs).
+  `Paths::data_dir()` uses etcetera 0.11 `choose_app_strategy` (XDG on macOS
+  and Linux; the Windows strategy appends a `data` subfolder under
+  `%APPDATA%\Block\goose\`), and `GOOSE_PATH_ROOT` overrides it with
+  `<root>/data`.
+  The first-party
+  [session-management guide](https://goose-docs.ai/docs/guides/sessions/session-management/)
+  and an isolated observed schema-version-15 database were also checked
+  2026-08-03.
 - **Usage and cost:** `usage_ledger` rows provide model, input, output,
   cache-read, cache-write, compaction, cost, and cost-source data without a
   stable message ordinal. Agentsview emits them as `goose-request`
