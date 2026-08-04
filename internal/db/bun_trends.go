@@ -31,7 +31,7 @@ func (s *BunStore) GetTrendsTerms(
 		if err != nil {
 			return err
 		}
-		messages, err := bunAnalyticsMessagesFrom(
+		messages, err := bunAnalyticsMessagesWithContentFrom(
 			ctx, store, bunAnalyticsSessionIDs(sessions),
 		)
 		if err != nil {

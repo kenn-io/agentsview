@@ -112,6 +112,39 @@ func TestBunInsightWriteSuppliesCanonicalCreationTime(t *testing.T) {
 	assert.NotEmpty(t, got.CreatedAt)
 }
 
+func TestBunCachedInsightOrdersMixedSQLiteTimestampsChronologically(t *testing.T) {
+	raw, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	raw.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	store := bun.NewDB(raw, sqlitedialect.New())
+	require.NoError(t, CreateCommonSchema(t.Context(), store))
+	common := NewBunStore(&writableCurationTestBackend{store: store})
+
+	oldTimestamp, err := bunmodel.ParseTimestamp(
+		time.Now().UTC().Format("2006-01-02") + "T00:00:00Z",
+	)
+	require.NoError(t, err)
+	old := bunmodel.Insight{
+		Type: "llm_canned", DateFrom: "2026-08-03", DateTo: "2026-08-03",
+		Agent: "codex", Content: "old", CacheKey: "mixed-timestamp-cache",
+		CreatedAt: oldTimestamp,
+	}
+	_, err = store.NewInsert().Model(&old).Exec(t.Context())
+	require.NoError(t, err)
+
+	newID, err := common.InsertInsight(Insight{
+		Type: "llm_canned", DateFrom: "2026-08-03", DateTo: "2026-08-03",
+		Agent: "codex", Content: "new", CacheKey: "mixed-timestamp-cache",
+	})
+	require.NoError(t, err)
+	got, err := common.GetCachedInsight(t.Context(), "mixed-timestamp-cache")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, newID, got.ID)
+	assert.Equal(t, "new", got.Content)
+}
+
 func TestUpsertPinnedMessageRowsGeneratesTargetIDOnSourceCollision(t *testing.T) {
 	database := testDB(t)
 	for _, sessionID := range []string{"target-pin", "replicated-pin", "generated-pin"} {

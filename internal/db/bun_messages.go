@@ -124,7 +124,7 @@ func (s *BunStore) GetMessagesWindow(
 func (s *BunStore) GetAllMessages(
 	ctx context.Context, sessionID string,
 ) ([]Message, error) {
-	var messages []Message
+	messages := []Message{}
 	err := s.view(ctx, func(store bun.IDB) error {
 		rows, err := scanBunMessages(ctx, store.NewSelect().
 			Model((*bunmodel.Message)(nil)).Where("session_id = ?", sessionID).

@@ -3,143 +3,154 @@ package db
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
 
+type bunRecentEditProjection struct {
+	Project       string              `bun:"project"`
+	FilePath      string              `bun:"file_path"`
+	EditCount     int                 `bun:"edit_count"`
+	LastEditedAt  *bunmodel.Timestamp `bun:"last_edited_at"`
+	LastSessionID string              `bun:"last_session_id"`
+	SessionID     string              `bun:"session_id"`
+	Ordinal       int                 `bun:"ordinal"`
+	ToolUseID     string              `bun:"tool_use_id"`
+	CallIndex     int                 `bun:"call_index"`
+	ToolName      string              `bun:"tool_name"`
+	Category      string              `bun:"category"`
+	Timestamp     *bunmodel.Timestamp `bun:"timestamp"`
+}
+
 func (s *BunStore) RecentEdits(
-	ctx context.Context, p RecentEditsParams,
+	ctx context.Context, params RecentEditsParams,
 ) (RecentEditsResult, error) {
-	p = NormalizeRecentEditsParams(p)
+	params = NormalizeRecentEditsParams(params)
 	var result RecentEditsResult
 	err := s.consistentView(ctx, func(store bun.IDB) error {
-		var sessions []bunmodel.Session
-		query := store.NewSelect().Model(&sessions).Where("deleted_at IS NULL")
-		if p.Project != "" {
-			query = query.Where("project = ?", p.Project)
-		}
-		if err := query.Scan(ctx); err != nil {
-			return fmt.Errorf("querying Bun recent-edit sessions: %w", err)
-		}
-		ids := bunAnalyticsSessionIDs(sessions)
-		messages, err := bunAnalyticsMessagesFrom(ctx, store, ids)
+		attempt, err := s.recentEditsFrom(ctx, store, params)
 		if err != nil {
 			return err
 		}
-		tools, err := bunAnalyticsToolsFrom(ctx, store, ids)
-		if err != nil {
-			return err
-		}
-		result = buildBunRecentEdits(sessions, messages, tools, p)
+		result = attempt
 		return nil
 	})
 	return result, err
 }
 
-type bunRecentEditRow struct {
-	project  string
-	filePath string
-	edit     RecentEdit
+func (s *BunStore) recentEditsFrom(
+	ctx context.Context, store bun.IDB, params RecentEditsParams,
+) (RecentEditsResult, error) {
+	timestampExpr := "m.timestamp"
+	sortExpr := timestampExpr
+	if s.backend.SessionQueryDialect().timestampOrderExpr != nil {
+		timestampExpr = "NULLIF(m.timestamp, '')"
+		sortExpr = "julianday(" + timestampExpr + ")"
+	}
+	predicates := []string{
+		"s.deleted_at IS NULL",
+		"tc.category IN ('Edit', 'Write')",
+		"tc.file_path IS NOT NULL",
+		"TRIM(tc.file_path) != ''",
+	}
+	var args []any
+	if params.Project != "" {
+		predicates = append(predicates, "s.project = ?")
+		args = append(args, params.Project)
+	}
+	if params.Search != "" {
+		predicates = append(predicates,
+			"LOWER(tc.file_path) LIKE ? ESCAPE '\\'")
+		args = append(args,
+			"%"+EscapeLikePattern(strings.ToLower(params.Search))+"%")
+	}
+	query := fmt.Sprintf(`
+		WITH edit_rows AS (
+			SELECT s.project, tc.file_path,
+				COUNT(*) OVER (
+					PARTITION BY s.project, tc.file_path
+				) AS edit_count,
+				s.id AS session_id,
+				tc.message_ordinal AS ordinal,
+				tc.tool_use_id, tc.call_index, tc.tool_name, tc.category,
+				%[1]s AS timestamp,
+				%[2]s AS edit_sort,
+				ROW_NUMBER() OVER (
+					PARTITION BY s.project, tc.file_path
+					ORDER BY %[2]s DESC NULLS LAST, s.id DESC,
+						tc.message_ordinal DESC, tc.call_index DESC
+				) AS edit_rank
+			FROM tool_calls AS tc
+			JOIN sessions AS s ON s.id = tc.session_id
+			LEFT JOIN messages AS m
+				ON m.session_id = tc.session_id
+				AND m.ordinal = tc.message_ordinal
+			WHERE %[3]s
+		),
+		paged_files AS (
+			SELECT project, file_path, edit_count,
+				timestamp AS last_edited_at,
+				session_id AS last_session_id,
+				ordinal AS last_ordinal,
+				call_index AS last_call_index, edit_sort
+			FROM edit_rows
+			WHERE edit_rank = 1
+			ORDER BY edit_sort DESC NULLS LAST, session_id DESC,
+				ordinal DESC, call_index DESC, file_path DESC
+			LIMIT ? OFFSET ?
+		)
+		SELECT page.project, page.file_path, page.edit_count,
+			page.last_edited_at, page.last_session_id,
+			edit.session_id, edit.ordinal, edit.tool_use_id,
+			edit.call_index, edit.tool_name, edit.category, edit.timestamp
+		FROM paged_files AS page
+		JOIN edit_rows AS edit
+			ON edit.project = page.project AND edit.file_path = page.file_path
+		WHERE edit.edit_rank <= ?
+		ORDER BY page.edit_sort DESC NULLS LAST, page.last_session_id DESC,
+			page.last_ordinal DESC, page.last_call_index DESC,
+			page.file_path DESC, edit.edit_rank ASC`,
+		timestampExpr, sortExpr, strings.Join(predicates, " AND "),
+	)
+	args = append(args, params.Limit+1, params.Offset, params.MaxEditsPerFile)
+	var rows []bunRecentEditProjection
+	if err := store.NewRaw(query, args...).Scan(ctx, &rows); err != nil {
+		return RecentEditsResult{}, fmt.Errorf("querying Bun recent edits: %w", err)
+	}
+	return buildBunRecentEditPage(rows, params), nil
 }
 
-func buildBunRecentEdits(
-	sessions []bunmodel.Session,
-	messages []bunmodel.Message,
-	tools []bunmodel.ToolCall,
-	p RecentEditsParams,
+func buildBunRecentEditPage(
+	rows []bunRecentEditProjection, params RecentEditsParams,
 ) RecentEditsResult {
-	projects := make(map[string]string, len(sessions))
-	messageTimes := map[string]string{}
-	for _, session := range sessions {
-		projects[session.ID] = session.Project
-	}
-	for _, message := range messages {
-		messageTimes[fmt.Sprintf("%s\x00%d", message.SessionID, message.Ordinal)] =
-			bunAnalyticsTimeString(message.Timestamp)
-	}
-	search := strings.ToLower(p.Search)
-	groups := map[string][]bunRecentEditRow{}
-	for _, tool := range tools {
-		if tool.Category != "Edit" && tool.Category != "Write" {
-			continue
+	files := []RecentEditFile{}
+	indices := make(map[string]int)
+	for _, row := range rows {
+		key := row.Project + "\x00" + row.FilePath
+		index, ok := indices[key]
+		if !ok {
+			files = append(files, RecentEditFile{
+				Project: row.Project, FilePath: row.FilePath,
+				EditCount:     row.EditCount,
+				LastEditedAt:  bunAnalyticsTimeString(row.LastEditedAt),
+				LastSessionID: row.LastSessionID, Edits: []RecentEdit{},
+				EditsTruncated: row.EditCount > params.MaxEditsPerFile,
+			})
+			index = len(files) - 1
+			indices[key] = index
 		}
-		if tool.FilePath == nil || strings.TrimSpace(*tool.FilePath) == "" {
-			continue
-		}
-		project, ok := projects[tool.SessionID]
-		if !ok || (search != "" &&
-			!strings.Contains(strings.ToLower(*tool.FilePath), search)) {
-			continue
-		}
-		row := bunRecentEditRow{
-			project: project, filePath: *tool.FilePath,
-			edit: RecentEdit{
-				SessionID: tool.SessionID, Ordinal: tool.MessageOrdinal,
-				ToolUseID: tool.ToolUseID, CallIndex: tool.CallIndex,
-				ToolName: tool.ToolName, Category: tool.Category,
-				Timestamp: messageTimes[fmt.Sprintf("%s\x00%d", tool.SessionID, tool.MessageOrdinal)],
-			},
-		}
-		key := project + "\x00" + *tool.FilePath
-		groups[key] = append(groups[key], row)
-	}
-	var files []RecentEditFile
-	for _, rows := range groups {
-		sort.SliceStable(rows, func(i, j int) bool {
-			return bunRecentEditLess(rows[i].edit, rows[j].edit)
+		files[index].Edits = append(files[index].Edits, RecentEdit{
+			SessionID: row.SessionID, Ordinal: row.Ordinal,
+			ToolUseID: row.ToolUseID, CallIndex: row.CallIndex,
+			ToolName: row.ToolName, Category: row.Category,
+			Timestamp: bunAnalyticsTimeString(row.Timestamp),
 		})
-		first := rows[0]
-		file := RecentEditFile{
-			Project: first.project, FilePath: first.filePath,
-			EditCount: len(rows), LastEditedAt: first.edit.Timestamp,
-			LastSessionID: first.edit.SessionID, Edits: []RecentEdit{},
-			EditsTruncated: len(rows) > p.MaxEditsPerFile,
-		}
-		for i := 0; i < min(len(rows), p.MaxEditsPerFile); i++ {
-			file.Edits = append(file.Edits, rows[i].edit)
-		}
-		files = append(files, file)
 	}
-	sort.SliceStable(files, func(i, j int) bool {
-		left := RecentEdit{Timestamp: files[i].LastEditedAt,
-			SessionID: files[i].LastSessionID,
-			Ordinal:   files[i].Edits[0].Ordinal,
-			CallIndex: files[i].Edits[0].CallIndex}
-		right := RecentEdit{Timestamp: files[j].LastEditedAt,
-			SessionID: files[j].LastSessionID,
-			Ordinal:   files[j].Edits[0].Ordinal,
-			CallIndex: files[j].Edits[0].CallIndex}
-		if bunRecentEditLess(left, right) {
-			return true
-		}
-		if bunRecentEditLess(right, left) {
-			return false
-		}
-		return files[i].FilePath > files[j].FilePath
-	})
-	if p.Offset >= len(files) {
-		return RecentEditsResult{Files: []RecentEditFile{}}
-	}
-	files = files[p.Offset:]
-	hasMore := len(files) > p.Limit
+	hasMore := len(files) > params.Limit
 	if hasMore {
-		files = files[:p.Limit]
+		files = files[:params.Limit]
 	}
 	return RecentEditsResult{Files: files, HasMore: hasMore}
-}
-
-func bunRecentEditLess(left, right RecentEdit) bool {
-	if left.Timestamp != right.Timestamp {
-		return timestampAfter(left.Timestamp, right.Timestamp)
-	}
-	if left.SessionID != right.SessionID {
-		return left.SessionID > right.SessionID
-	}
-	if left.Ordinal != right.Ordinal {
-		return left.Ordinal > right.Ordinal
-	}
-	return left.CallIndex > right.CallIndex
 }
