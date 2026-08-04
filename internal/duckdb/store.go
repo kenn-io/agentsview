@@ -1048,7 +1048,7 @@ func scanDuckContentCandidateRows(rows *sql.Rows) ([]duckContentCandidate, error
 		}
 		candidate.match.Timestamp = formatDBTime(ts)
 		candidate.sortTS = formatDBTime(sortTS)
-		candidate.sortTime, candidate.hasSort = parseAnalyticsTime(candidate.sortTS)
+		candidate.sortTime, candidate.hasSort = parseDuckTime(candidate.sortTS)
 		candidate.match.Snippet = candidate.body
 		out = append(out, candidate)
 	}

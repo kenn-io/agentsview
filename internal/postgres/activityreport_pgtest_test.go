@@ -4,7 +4,6 @@ package postgres
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -482,123 +481,6 @@ func TestPGGetActivityReportExcludesIneligibleUsage(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 500, r.Totals.OutputTokens, "synthetic message excluded")
 	assert.Equal(t, money.MustParseDollars("0.0105"), r.Totals.Cost)
-}
-
-// TestPGGetActivityReportDedupsAcrossChunks confirms the PG usage fetch's
-// global re-sort across maxPGVars-sized ID chunks (activityReportUsage in
-// internal/postgres/activityreport.go) orders rows by timestamp across the
-// whole candidate set, not per chunk. The aggregator's first-seen-wins
-// dedup relies on that order: the same (claude_message_id,
-// claude_request_id) can recur in two sessions (resumed/forked) that fall
-// in DIFFERENT chunks, and the globally-earliest row must survive.
-//
-// The candidate IDs are passed to activityReportUsage explicitly, so the
-// chunk split is deterministic and never depends on PostgreSQL's scan
-// order. The slice is [dup-b, 500 fillers, dup-a]: dup-b (the LATER
-// timestamp) lands in the first chunk (indices 0-499) and dup-a (the
-// EARLIER timestamp) in the second (indices 500-501). Only a global
-// re-sort by timestamp reorders the fetched rows to [dup-a, dup-b]; a
-// regression that appended per-chunk results in chunk order would yield
-// [dup-b, dup-a] and fail the ordering assertion below. The fillers are
-// placeholder IDs with no rows in the DB -- they exist only to push dup-a
-// past the 500-variable chunk boundary.
-func TestPGGetActivityReportDedupsAcrossChunks(t *testing.T) {
-	_, store := prepareUsageSchema(t, "agentsview_daily_report_chunk_test")
-	ctx := context.Background()
-
-	_, err := store.DB().ExecContext(ctx, `
-		INSERT INTO model_pricing (
-			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
-			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('claude-sonnet-4-20250514', 3000000, 15000000, 0, 0, '2026-01-01T00:00:00Z')`)
-	require.NoError(t, err, "insert pricing")
-
-	// dup-a: earlier timestamp and 500 output tokens -> the correct global
-	// survivor of the shared (claude_message_id, claude_request_id) key.
-	_, err = store.DB().ExecContext(ctx, `
-		INSERT INTO sessions (
-			id, machine, project, agent, started_at, ended_at,
-			message_count, user_message_count
-		) VALUES (
-			'dup-a', 'test-machine', 'proj1', 'claude',
-			'2026-06-16T10:00:00Z'::timestamptz,
-			'2026-06-16T10:00:00Z'::timestamptz, 1, 1
-		)`)
-	require.NoError(t, err, "insert dup-a session")
-	_, err = store.DB().ExecContext(ctx, `
-		INSERT INTO messages (
-			session_id, ordinal, role, content, timestamp,
-			content_length, model, token_usage,
-			claude_message_id, claude_request_id
-		) VALUES (
-			'dup-a', 0, 'assistant', 'x',
-			'2026-06-16T10:00:00Z'::timestamptz, 1,
-			'claude-sonnet-4-20250514',
-			'{"input_tokens":250,"output_tokens":500}', 'M1', 'R1'
-		)`)
-	require.NoError(t, err, "insert dup-a message")
-
-	// dup-b: same dedup identity as dup-a (claude_message_id,
-	// claude_request_id) but a later timestamp and 900 output tokens; the
-	// first-seen dedup must drop it in favor of dup-a.
-	_, err = store.DB().ExecContext(ctx, `
-		INSERT INTO sessions (
-			id, machine, project, agent, started_at, ended_at,
-			message_count, user_message_count
-		) VALUES (
-			'dup-b', 'test-machine', 'proj1', 'claude',
-			'2026-06-16T10:05:00Z'::timestamptz,
-			'2026-06-16T10:05:00Z'::timestamptz, 1, 1
-		)`)
-	require.NoError(t, err, "insert dup-b session")
-	_, err = store.DB().ExecContext(ctx, `
-		INSERT INTO messages (
-			session_id, ordinal, role, content, timestamp,
-			content_length, model, token_usage,
-			claude_message_id, claude_request_id
-		) VALUES (
-			'dup-b', 0, 'assistant', 'x',
-			'2026-06-16T10:05:00Z'::timestamptz, 1,
-			'claude-sonnet-4-20250514',
-			'{"input_tokens":450,"output_tokens":900}', 'M1', 'R1'
-		)`)
-	require.NoError(t, err, "insert dup-b message")
-
-	// Build the candidate ID slice explicitly so the chunk split is
-	// deterministic: dup-b in chunk 1 (later ts), dup-a in chunk 2 (earlier
-	// ts), forcing the shared dedup identity across the maxPGVars boundary.
-	ids := make([]string, 0, maxPGVars+2)
-	ids = append(ids, "dup-b")
-	for i := 0; i < maxPGVars; i++ {
-		ids = append(ids, fmt.Sprintf("fill-%d", i))
-	}
-	ids = append(ids, "dup-a")
-	require.Greater(t, len(ids), maxPGVars,
-		"candidate IDs must exceed one chunk to span the boundary")
-
-	q := pgDayQuery(t, "2026-06-16", "UTC")
-	lower := paddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
-	upper := paddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
-	usage, _, err := store.activityReportUsage(ctx, ids, lower, upper, q)
-	require.NoError(t, err)
-
-	// Only dup-a and dup-b carry eligible usage; the fillers have no rows, and
-	// the shared dedup identity leaves one survivor.
-	var shared []activity.UsageRow
-	for _, u := range usage {
-		if u.SessionID == "dup-a" || u.SessionID == "dup-b" {
-			shared = append(shared, u)
-		}
-	}
-	require.Len(t, shared, 1,
-		"only one dedup-identity row survives across the chunk boundary")
-	require.NotEmpty(t, shared[0].ClaudeMessageID, "rows carry a message id")
-	// The global re-sort by timestamp must place dup-a (10:00, fetched in
-	// the LATER chunk) before dup-b (10:05, fetched in the EARLIER chunk).
-	// A per-chunk-order regression keeps dup-b and fails here.
-	assert.Equal(t, "dup-a", shared[0].SessionID,
-		"earlier-timestamp row sorts first despite its later chunk")
-	assert.Equal(t, 500, shared[0].OutputTokens, "dup-a survives first-seen")
 }
 
 func TestPGGetActivityReportUsageDedupFallsBackToSourceUUID(t *testing.T) {

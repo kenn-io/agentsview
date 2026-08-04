@@ -238,60 +238,6 @@ const (
 	pgStaleWindow  = 60 * time.Minute
 )
 
-// pgActivityExpr returns the COALESCEd activity timestamp
-// expression used to compute a session's effective recency.
-const pgActivityExpr = "COALESCE(ended_at, started_at, created_at)"
-
-// pgTerminationPred returns a WHERE fragment for the multi-state
-// termination filter (active / stale / unclean). The status value
-// may be comma-separated to OR multiple states. Returns "" when
-// status is empty or "all".
-//
-// Stale and unclean both require a parser red flag — sessions with
-// termination_status NULL or 'clean' never appear under those
-// filters, so a short-lived agent that completes normally never
-// generates a yellow false-positive once it ages past 10 minutes.
-func pgTerminationPred(status string, pb *paramBuilder) string {
-	if status == "" || status == "all" {
-		return ""
-	}
-	now := time.Now().UTC()
-	activeCutoff := now.Add(-pgActiveWindow)
-	staleCutoff := now.Add(-pgStaleWindow)
-	const flagged = "termination_status IN ('tool_call_pending', 'truncated')"
-
-	parts := strings.Split(status, ",")
-	preds := make([]string, 0, len(parts))
-	for _, p := range parts {
-		switch strings.TrimSpace(p) {
-		case "active":
-			preds = append(preds,
-				pgActivityExpr+" > "+pb.add(activeCutoff))
-		case "stale":
-			preds = append(preds, "("+
-				pgActivityExpr+" > "+pb.add(staleCutoff)+
-				" AND "+pgActivityExpr+" <= "+pb.add(activeCutoff)+
-				" AND "+flagged+")")
-		case "unclean":
-			preds = append(preds, "("+
-				pgActivityExpr+" <= "+pb.add(staleCutoff)+
-				" AND "+flagged+")")
-		case "clean":
-			preds = append(preds, "termination_status = 'clean'")
-		case "awaiting_user":
-			preds = append(preds,
-				"termination_status = 'awaiting_user'")
-		}
-	}
-	if len(preds) == 0 {
-		return ""
-	}
-	if len(preds) == 1 {
-		return preds[0]
-	}
-	return "(" + strings.Join(preds, " OR ") + ")"
-}
-
 // buildPGSessionFilter returns a WHERE clause with $N
 // placeholders and the corresponding args.
 func buildPGSessionFilter(

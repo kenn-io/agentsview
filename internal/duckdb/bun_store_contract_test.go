@@ -276,3 +276,21 @@ func TestCanonicalPricingWriteContract(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, common.Close()) })
 	storetest.RunPricingWriteContract(t, "duckdb", common)
 }
+
+func TestBunStoreAnalyticsContract(t *testing.T) {
+	storetest.RunAnalyticsContract(t, storetest.AnalyticsBackend{
+		Name: "duckdb",
+		Open: func(t *testing.T) storetest.AnalyticsStore {
+			conn, err := Open(filepath.Join(t.TempDir(), "analytics-contract.duckdb"))
+			require.NoError(t, err)
+			common := bun.NewDB(conn, bundialect.New())
+			require.NoError(t, db.CreateCommonSchema(t.Context(), common))
+			require.NoError(t, storetest.InsertBunAnalyticsFixture(
+				t.Context(), common, "bun-analytics-archive", "bun-analytics-generation",
+			))
+			store := NewStoreFromDB(conn)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			return store.BunStore
+		},
+	})
+}

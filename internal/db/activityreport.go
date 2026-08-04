@@ -49,54 +49,6 @@ func activityReportRangeBoundsUTC(q activity.Query) (string, string) {
 // branches), so counting them adds no duplicate activity; any usage
 // rows that do recur across sessions collapse in the aggregator's
 // dedup, the same guarantee GetDailyUsage relies on.
-func (db *DB) GetActivityReport(
-	ctx context.Context, f AnalyticsFilter, q activity.Query,
-) (activity.Report, error) {
-	f.IncludeSubagents = true
-	f.IncludeForks = true
-	rangeStartUTC, rangeEndUTC := activityReportRangeBoundsUTC(q)
-	lowerBound := paddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
-	upperBound := paddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
-
-	sessions, ids, err := db.activityReportSessions(
-		ctx, f, rangeStartUTC, rangeEndUTC)
-	if err != nil {
-		return activity.Report{}, err
-	}
-
-	acts, err := db.activityReportActivity(ctx, ids)
-	if err != nil {
-		return activity.Report{}, err
-	}
-
-	usage, pricing, err := db.activityReportUsage(ctx, ids, lowerBound, upperBound, q)
-	if err != nil {
-		return activity.Report{}, err
-	}
-
-	report, err := activity.Aggregate(activity.Params{
-		RangeStart:    q.RangeStart,
-		RangeEnd:      q.RangeEnd,
-		Loc:           q.Loc,
-		EffectiveEnd:  q.EffectiveEnd,
-		Partial:       q.Partial,
-		GapCapSeconds: q.GapCapSeconds,
-		Bucket:        q.Bucket,
-	}, sessions, acts, usage)
-	if err != nil {
-		return activity.Report{}, fmt.Errorf("aggregating activity report: %w", err)
-	}
-	report.SchemaVersion = export.ActivityReportSchemaVersion
-	report.Pricing = pricing
-	projects, err := db.BuildProjectIdentityMap(ctx,
-		activityReportProjectLabels(sessions))
-	if err != nil {
-		return activity.Report{}, err
-	}
-	activity.SanitizeProjectLabels(&report, projects)
-	report.Projects = export.ProjectMapForWire(projects)
-	return report, nil
-}
 
 // GetSessionUsageRows returns the backend-priced usage rows for the supplied
 // sessions, with the same cross-session deduplication as activity reports.
@@ -261,26 +213,6 @@ func activityReportProjectLabels(
 	return sortedSetKeys(set)
 }
 
-// activityReportSessions returns the candidate sessions whose window
-// overlaps the exact range [rangeStartUTC, rangeEndUTC), plus their
-// IDs. The ID set defines the scope for the activity and usage fetches.
-// NULLIF guards the empty-string timestamp fallbacks SQLite stores so a
-// session with an empty ended_at but a valid started_at still falls back
-// correctly, matching the activity-expression convention elsewhere.
-//
-// The effective-end fallback for a session with no ended_at uses its
-// latest message timestamp before started_at, so a still-open or
-// partially-parsed session that began before the range but has messages
-// inside it is not dropped. COALESCE short-circuits, so the correlated
-// MAX subquery runs only for the rare sessions missing an ended_at.
-func (db *DB) activityReportSessions(
-	ctx context.Context, f AnalyticsFilter, rangeStartUTC, rangeEndUTC string,
-) ([]activity.SessionMeta, []string, error) {
-	return db.activityReportSessionsFrom(
-		ctx, db.getReader(), f, rangeStartUTC, rangeEndUTC,
-	)
-}
-
 func (db *DB) activityReportSessionsFrom(
 	ctx context.Context,
 	q sessionExportQuerier,
@@ -346,15 +278,6 @@ func (db *DB) activityReportSessionsFrom(
 	return sessions, ids, nil
 }
 
-// activityReportActivity returns every timestamped message for the
-// candidate sessions, ordered for the aggregator's per-session
-// interval walk.
-func (db *DB) activityReportActivity(
-	ctx context.Context, ids []string,
-) ([]activity.ActivityEvent, error) {
-	return db.activityReportActivityFrom(ctx, db.getReader(), ids)
-}
-
 func (db *DB) activityReportActivityFrom(
 	ctx context.Context, q sessionExportQuerier, ids []string,
 ) ([]activity.ActivityEvent, error) {
@@ -414,56 +337,6 @@ func (db *DB) activityReportActivityFrom(
 	return out, nil
 }
 
-// activityReportUsage returns the usage rows for the candidate sessions
-// within the padded range bounds, with per-row cost computed up front
-// (mirroring GetDailyUsage) so cost logic stays in the backend. Rows
-// are ordered by (ts, session_id, message_ordinal) as the aggregator
-// requires for its first-seen-wins dedup. The order is computed on the
-// parsed instant, not the RFC3339 text, so a whole-second value ("...00Z")
-// and a fractional one ("...00.123Z") in the same second sort
-// chronologically (matching PostgreSQL/DuckDB); lexically '.' < 'Z' would
-// otherwise invert them and let SQLite keep a different duplicate row.
-func (db *DB) activityReportUsage(
-	ctx context.Context, ids []string, lowerBound, upperBound string, q activity.Query,
-) ([]activity.UsageRow, *export.PricingBlock, error) {
-	var rows []activity.UsageRow
-	var pricing *export.PricingBlock
-	err := db.consistentView(ctx, func(store bun.IDB) error {
-		var err error
-		rows, pricing, err = db.activityReportUsageFrom(
-			ctx, store, ids, lowerBound, upperBound, q,
-		)
-		return err
-	})
-	return rows, pricing, err
-}
-
-func (db *DB) activityReportUsageFrom(
-	ctx context.Context,
-	source bun.IDB,
-	ids []string,
-	lowerBound, upperBound string,
-	q activity.Query,
-) ([]activity.UsageRow, *export.PricingBlock, error) {
-	candidates, rateResolver, err := db.loadActivityReportUsageCandidatesFrom(
-		ctx, source, ids, lowerBound, upperBound,
-	)
-	if err != nil {
-		return nil, nil, err
-	}
-	sortActivityReportUsageCandidates(candidates)
-	baseRows := make([]activity.UsageRow, len(candidates))
-	for i, candidate := range candidates {
-		baseRows[i] = candidate.row
-	}
-	mask := activity.UsageSurvivorMask(
-		q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows,
-	)
-	return materializeActivityReportUsageCandidates(
-		candidates, mask, rateResolver,
-	)
-}
-
 // activityReportUsageCandidate retains the scanned source fields until the
 // survivor set is known. Pricing provenance is recorded only for survivors in
 // the ordinary activity report, while reporting export can materialize every
@@ -476,7 +349,7 @@ type activityReportUsageCandidate struct {
 	ordinal int64
 }
 
-func (db *DB) loadActivityReportUsageCandidatesFrom(
+func (db *BunStore) loadActivityReportUsageCandidatesFrom(
 	ctx context.Context,
 	source bun.IDB,
 	ids []string,
@@ -589,7 +462,7 @@ func sortActivityReportUsageCandidates(
 // activityReportUsageCandidatesFrom returns normalized padded-range rows
 // without sorting or applying a survivor mask. Reporting export merges these
 // rows with standalone candidates before imposing either operation.
-func (db *DB) activityReportUsageCandidatesFrom(
+func (db *BunStore) activityReportUsageCandidatesFrom(
 	ctx context.Context,
 	source bun.IDB,
 	ids []string,

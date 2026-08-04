@@ -228,3 +228,22 @@ func TestBunStoreUsageContract(t *testing.T) {
 		},
 	})
 }
+
+func TestBunStoreAnalyticsContract(t *testing.T) {
+	storetest.RunAnalyticsContract(t, storetest.AnalyticsBackend{
+		Name: "sqlite",
+		Open: func(t *testing.T) storetest.AnalyticsStore {
+			database, err := db.Open(filepath.Join(t.TempDir(), "analytics-contract.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			archiveID, err := database.GetArchiveID(t.Context())
+			require.NoError(t, err)
+			generation, err := database.GetDatabaseID(t.Context())
+			require.NoError(t, err)
+			require.NoError(t, storetest.InsertBunAnalyticsFixture(
+				t.Context(), database.BunWriterForTest(), archiveID, generation,
+			))
+			return database.BunStore
+		},
+	})
+}
