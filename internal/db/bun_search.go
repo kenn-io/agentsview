@@ -121,7 +121,7 @@ func (s *BunStore) SearchSession(
 	if query == "" {
 		return nil, nil
 	}
-	capability := s.backend.Capabilities().FullText
+	capability := s.backend.Capabilities().SessionSearch
 	if capability == nil {
 		return nil, errFTSUnavailable
 	}

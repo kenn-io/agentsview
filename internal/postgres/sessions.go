@@ -59,6 +59,7 @@ func (b *postgresBunBackend) Capabilities() db.BackendCapabilities {
 	}
 	return db.BackendCapabilities{
 		FullText:      postgresFullTextCapability{},
+		SessionSearch: postgresFullTextCapability{},
 		HybridLexical: postgresFullTextCapability{},
 		Semantic: db.NewVectorSemanticCapability(
 			b.store.getVectorSearcher,
