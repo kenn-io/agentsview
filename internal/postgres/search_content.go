@@ -41,13 +41,7 @@ func (s *Store) SearchContent(
 		if err := db.ValidateSemanticFilter(f); err != nil {
 			return db.ContentSearchPage{}, err
 		}
-		if s.getVectorSearcher() == nil {
-			return db.ContentSearchPage{}, s.semanticUnavailableError()
-		}
-		if f.Mode == "semantic" {
-			return s.searchContentSemanticPG(ctx, f)
-		}
-		return s.searchContentHybridPG(ctx, f)
+		return s.bunSearchStore().SearchContent(ctx, f)
 	}
 	return s.BunStore.SearchContent(ctx, f)
 }

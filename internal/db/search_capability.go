@@ -56,3 +56,90 @@ type ContentSearchCapability interface {
 		context.Context, bun.IDB, ContentSearchFilter,
 	) ([]ContentSearchHit, error)
 }
+
+// HybridLexicalCapability owns only the engine-specific lexical candidate
+// ranking used by hybrid search. BunStore resolves candidates to semantic
+// units, applies scope, fuses both legs, and hydrates the final page.
+type HybridLexicalCapability interface {
+	Available() bool
+	SearchHybridContent(
+		context.Context, bun.IDB, ContentSearchFilter,
+	) ([]ContentSearchHit, error)
+}
+
+// SemanticCapability owns vector-index matching and message-to-unit
+// resolution. BunStore owns validation, canonical visibility, metadata
+// hydration, redaction, scope filtering, fusion, and final ordering.
+type SemanticCapability interface {
+	Available() bool
+	UnavailableError() error
+	SearchContent(
+		context.Context, bun.IDB, ContentSearchFilter,
+	) ([]ContentSearchHit, error)
+	ResolveMessageUnits(
+		context.Context, bun.IDB, []MessageRef,
+	) ([]UnitRef, error)
+}
+
+type vectorSemanticCapability struct {
+	searcher    func() VectorSearcher
+	unavailable func() error
+}
+
+// NewVectorSemanticCapability adapts a dynamically wired VectorSearcher to
+// the narrow storage capability used by BunStore.
+func NewVectorSemanticCapability(
+	searcher func() VectorSearcher, unavailable func() error,
+) SemanticCapability {
+	return vectorSemanticCapability{
+		searcher: searcher, unavailable: unavailable,
+	}
+}
+
+func (c vectorSemanticCapability) Available() bool {
+	return c.searcher != nil && c.searcher() != nil
+}
+
+func (c vectorSemanticCapability) UnavailableError() error {
+	if c.unavailable != nil {
+		return c.unavailable()
+	}
+	return ErrSemanticUnavailable
+}
+
+func (c vectorSemanticCapability) SearchContent(
+	ctx context.Context, _ bun.IDB, filter ContentSearchFilter,
+) ([]ContentSearchHit, error) {
+	searcher := c.searcher()
+	if searcher == nil {
+		return nil, c.UnavailableError()
+	}
+	hits, err := searcher.SemanticSearch(
+		ctx, filter.Pattern, filter.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ContentSearchHit, len(hits))
+	for i, hit := range hits {
+		score := float64(hit.Score)
+		out[i] = ContentSearchHit{
+			SessionID: hit.SessionID, Ordinal: hit.Ordinal,
+			OrdinalStart: hit.OrdinalStart, OrdinalEnd: hit.OrdinalEnd,
+			Subordinate: hit.Subordinate,
+			DocKey:      UnitFusionKey(hit.SessionID, hit.OrdinalStart),
+			Location:    "message", Snippet: hit.Snippet, Score: &score,
+		}
+	}
+	return out, nil
+}
+
+func (c vectorSemanticCapability) ResolveMessageUnits(
+	ctx context.Context, _ bun.IDB, refs []MessageRef,
+) ([]UnitRef, error) {
+	searcher := c.searcher()
+	if searcher == nil {
+		return nil, c.UnavailableError()
+	}
+	return searcher.ResolveMessageUnits(ctx, refs)
+}
