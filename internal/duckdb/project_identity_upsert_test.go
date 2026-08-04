@@ -15,12 +15,31 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 )
 
+type identityInsertQueryCounter struct {
+	inserts int
+}
+
+func (*identityInsertQueryCounter) BeforeQuery(
+	ctx context.Context, _ *bun.QueryEvent,
+) context.Context {
+	return ctx
+}
+
+func (h *identityInsertQueryCounter) AfterQuery(
+	_ context.Context, event *bun.QueryEvent,
+) {
+	if event.Operation() == "INSERT" {
+		h.inserts++
+	}
+}
+
 func TestUpsertSessionProjectIdentitySnapshotsPersistsEveryBatch(t *testing.T) {
 	ctx := t.Context()
 	database := openTestDuckDB(t)
 	require.NoError(t, EnsureSchema(ctx, database))
-	store := bun.NewDB(database, bundialect.New())
-	snapshots := make([]export.ProjectIdentityObservation, 101)
+	hook := new(identityInsertQueryCounter)
+	store := bun.NewDB(database, bundialect.New()).WithQueryHook(hook)
+	snapshots := make([]export.ProjectIdentityObservation, 501)
 	for i := range snapshots {
 		snapshots[i] = export.ProjectIdentityObservation{
 			SessionID: fmt.Sprintf("session-%03d", i),
@@ -30,6 +49,8 @@ func TestUpsertSessionProjectIdentitySnapshotsPersistsEveryBatch(t *testing.T) {
 	require.NoError(t, upsertSessionProjectIdentitySnapshots(
 		ctx, store, "archive", "generation", snapshots,
 	))
+	assert.Equal(t, 2, hook.inserts,
+		"identity publication must keep 500-row bounded batches")
 	var count int
 	require.NoError(t, database.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM source_session_project_identity_snapshots
@@ -38,16 +59,16 @@ func TestUpsertSessionProjectIdentitySnapshotsPersistsEveryBatch(t *testing.T) {
 	).Scan(&count))
 	assert.Equal(t, len(snapshots), count)
 
-	snapshots[100].GitBranch = "main"
+	snapshots[500].GitBranch = "main"
 	require.NoError(t, upsertSessionProjectIdentitySnapshots(
-		ctx, store, "archive", "generation", snapshots[100:],
+		ctx, store, "archive", "generation", snapshots[500:],
 	))
 	var branch string
 	require.NoError(t, database.QueryRowContext(ctx, `
 		SELECT git_branch FROM source_session_project_identity_snapshots
 		WHERE source_archive_id = ? AND source_database_generation = ?
 		  AND source_session_id = ?`,
-		"archive", "generation", "session-100",
+		"archive", "generation", "session-500",
 	).Scan(&branch))
 	assert.Equal(t, "main", branch)
 }

@@ -9,6 +9,11 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 )
 
+// Identity publications historically use 500-row batches. Their widest model
+// binds fewer than 25 columns, keeping one statement well below PostgreSQL's
+// parameter limit while avoiding fivefold statement growth on full mirrors.
+const canonicalIdentityWriteBatchSize = 500
+
 // CanonicalProjectIdentityObservationRows converts source observations into
 // their complete portable representation, including credential-safe remotes.
 func CanonicalProjectIdentityObservationRows(
@@ -49,8 +54,10 @@ func CanonicalProjectIdentityObservationRows(
 	return rows, nil
 }
 
-// CanonicalSessionProjectIdentitySnapshotRows converts immutable per-session
-// source snapshots into their complete portable representation.
+// CanonicalSessionProjectIdentitySnapshotRows converts durable per-session
+// source snapshots into their complete portable representation. The stable
+// archive/generation/session identity remains fixed while reclassification or
+// source refresh may replace the snapshot payload.
 func CanonicalSessionProjectIdentitySnapshotRows(
 	archiveID, databaseGeneration string,
 	snapshots []export.ProjectIdentityObservation,
@@ -127,18 +134,15 @@ func UpsertProjectIdentityObservationRows(
 	store bun.IDB,
 	rows []bunmodel.SourceProjectIdentityObservation,
 ) error {
-	for start := 0; start < len(rows); start += canonicalWriteBatchSize {
-		end := min(start+canonicalWriteBatchSize, len(rows))
+	for start := 0; start < len(rows); start += canonicalIdentityWriteBatchSize {
+		end := min(start+canonicalIdentityWriteBatchSize, len(rows))
 		chunk := rows[start:end]
 		query := store.NewInsert().Model(&chunk).
 			On("CONFLICT (source_archive_id, project, machine, root_path, git_remote) DO UPDATE")
-		for _, column := range []string{
-			"source_archive_salt", "git_remote_name", "repository_path",
-			"worktree_name", "worktree_root_path", "worktree_relationship",
-			"checkout_state", "git_branch", "remote_resolution",
-			"remote_candidate_count", "observed_at", "normalized_remote",
-			"key_source", "key",
-		} {
+		for _, column := range canonicalReplacementColumns(
+			(*bunmodel.SourceProjectIdentityObservation)(nil),
+			"source_archive_id", "project", "machine", "root_path", "git_remote",
+		) {
 			query = query.Set("? = EXCLUDED.?", bun.Ident(column), bun.Ident(column))
 		}
 		if _, err := query.Returning("").Exec(ctx); err != nil {
@@ -155,18 +159,15 @@ func UpsertSessionProjectIdentitySnapshotRows(
 	store bun.IDB,
 	rows []bunmodel.SourceSessionProjectIdentitySnapshot,
 ) error {
-	for start := 0; start < len(rows); start += canonicalWriteBatchSize {
-		end := min(start+canonicalWriteBatchSize, len(rows))
+	for start := 0; start < len(rows); start += canonicalIdentityWriteBatchSize {
+		end := min(start+canonicalIdentityWriteBatchSize, len(rows))
 		chunk := rows[start:end]
 		query := store.NewInsert().Model(&chunk).
 			On("CONFLICT (source_archive_id, source_database_generation, source_session_id) DO UPDATE")
-		for _, column := range []string{
-			"project", "machine", "root_path", "git_remote", "git_remote_name",
-			"repository_path", "worktree_name", "worktree_root_path",
-			"worktree_relationship", "checkout_state", "git_branch",
-			"remote_resolution", "remote_candidate_count", "observed_at",
-			"normalized_remote", "key_source", "key",
-		} {
+		for _, column := range canonicalReplacementColumns(
+			(*bunmodel.SourceSessionProjectIdentitySnapshot)(nil),
+			"source_archive_id", "source_database_generation", "source_session_id",
+		) {
 			query = query.Set("? = EXCLUDED.?", bun.Ident(column), bun.Ident(column))
 		}
 		if _, err := query.Returning("").Exec(ctx); err != nil {
@@ -217,6 +218,26 @@ func CanonicalWorktreeProjectMappingRows(
 	return rows, nil
 }
 
+// InsertWorktreeProjectMappingRows creates complete canonical mappings and
+// preserves archive duplicate rejection.
+func InsertWorktreeProjectMappingRows(
+	ctx context.Context,
+	store bun.IDB,
+	rows []bunmodel.SourceWorktreeProjectMapping,
+) error {
+	for i := range rows {
+		row := rows[i]
+		if _, err := store.NewInsert().Model(&row).
+			Column(bunmodel.ModelColumns(
+				(*bunmodel.SourceWorktreeProjectMapping)(nil),
+			)...).
+			Value("enabled", "?", row.Enabled).Returning("").Exec(ctx); err != nil {
+			return fmt.Errorf("inserting canonical worktree mappings: %w", err)
+		}
+	}
+	return nil
+}
+
 // UpsertWorktreeProjectMappingRows writes complete canonical mappings. A
 // target may customize only original_project conflict ownership.
 func UpsertWorktreeProjectMappingRows(
@@ -228,18 +249,17 @@ func UpsertWorktreeProjectMappingRows(
 	for i := range rows {
 		row := rows[i]
 		query := store.NewInsert().Model(&row).
-			Column(
-				"id", "source_archive_id", "machine", "path_prefix", "layout",
-				"project", "original_project", "enabled", "created_at", "updated_at",
-			).
+			Column(bunmodel.ModelColumns(
+				(*bunmodel.SourceWorktreeProjectMapping)(nil),
+			)...).
 			Value("enabled", "?", row.Enabled).
-			On("CONFLICT (source_archive_id, machine, path_prefix) DO UPDATE").
-			Set("id = EXCLUDED.id").
-			Set("layout = EXCLUDED.layout").
-			Set("project = EXCLUDED.project").
-			Set("enabled = EXCLUDED.enabled").
-			Set("created_at = EXCLUDED.created_at").
-			Set("updated_at = EXCLUDED.updated_at")
+			On("CONFLICT (source_archive_id, machine, path_prefix) DO UPDATE")
+		for _, column := range canonicalReplacementColumns(
+			(*bunmodel.SourceWorktreeProjectMapping)(nil),
+			"source_archive_id", "machine", "path_prefix", "original_project",
+		) {
+			query = query.Set("? = EXCLUDED.?", bun.Ident(column), bun.Ident(column))
+		}
 		if policy == nil {
 			query = query.Set("original_project = EXCLUDED.original_project")
 		} else {
@@ -250,6 +270,36 @@ func UpsertWorktreeProjectMappingRows(
 		}
 	}
 	return nil
+}
+
+// UpdateWorktreeProjectMappingRow replaces one archive mapping selected by
+// its stable source ID, allowing its natural path key to change atomically.
+func UpdateWorktreeProjectMappingRow(
+	ctx context.Context,
+	store bun.IDB,
+	archiveID string,
+	id int64,
+	machine string,
+	row bunmodel.SourceWorktreeProjectMapping,
+) (bool, error) {
+	result, err := store.NewUpdate().Model(&row).
+		Column(canonicalReplacementColumns(
+			(*bunmodel.SourceWorktreeProjectMapping)(nil),
+			"id", "source_archive_id", "machine", "path_prefix",
+		)...).
+		Set("path_prefix = ?", row.PathPrefix).
+		Value("enabled", "?", row.Enabled).
+		Where("source_archive_id = ?", archiveID).
+		Where("id = ?", id).
+		Where("machine = ?", machine).Exec(ctx)
+	if err != nil {
+		return false, fmt.Errorf("updating canonical worktree mapping: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("counting canonical worktree mapping update: %w", err)
+	}
+	return changed > 0, nil
 }
 
 // DeleteWorktreeProjectMappingRows applies archive-scoped mapping tombstones.

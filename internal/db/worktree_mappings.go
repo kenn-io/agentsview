@@ -8,8 +8,10 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mattn/go-sqlite3"
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -225,46 +227,35 @@ func (db *DB) CreateWorktreeProjectMapping(
 		return WorktreeProjectMapping{}, err
 	}
 	normalized.OriginalProject = m.OriginalProject
-
-	enabled := 0
-	if m.Enabled {
-		enabled = 1
+	normalized.Enabled = m.Enabled
+	archiveID, err := db.GetArchiveID(ctx)
+	if err != nil {
+		return WorktreeProjectMapping{}, err
 	}
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	tx, err := db.getWriter().BeginTx(ctx, nil)
+	tx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return WorktreeProjectMapping{}, fmt.Errorf("beginning worktree mapping create: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := tx.QueryRowContext(ctx, `
-		SELECT COALESCE(MAX(id), 0) + 1
-		FROM source_worktree_project_mappings
-		WHERE source_archive_id = (
-			SELECT value FROM archive_metadata WHERE key = 'archive_id'
-		)`,
-	).Scan(&normalized.ID); err != nil {
+	if err := tx.NewSelect().Model((*bunmodel.SourceWorktreeProjectMapping)(nil)).
+		ColumnExpr("COALESCE(MAX(id), 0) + 1").
+		Where("source_archive_id = ?", archiveID).Scan(ctx, &normalized.ID); err != nil {
 		return WorktreeProjectMapping{}, fmt.Errorf("allocating worktree mapping id: %w", err)
 	}
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO source_worktree_project_mappings
-			(id, source_archive_id, machine, path_prefix, layout,
-			 project, original_project, enabled, created_at, updated_at)
-		SELECT ?, value, ?, ?, ?, ?, ?, ?,
-			strftime('%Y-%m-%dT%H:%M:%fZ','now'),
-			strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		FROM archive_metadata WHERE key = 'archive_id'`,
-		normalized.ID,
-		normalized.Machine,
-		normalized.PathPrefix,
-		normalized.Layout,
-		normalized.Project,
-		normalized.OriginalProject,
-		enabled,
+	now := time.Now().UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano)
+	normalized.CreatedAt = now
+	normalized.UpdatedAt = now
+	rows, err := CanonicalWorktreeProjectMappingRows(
+		archiveID, []WorktreeProjectMapping{normalized},
 	)
 	if err != nil {
+		return WorktreeProjectMapping{}, err
+	}
+	if err := InsertWorktreeProjectMappingRows(ctx, tx, rows); err != nil {
 		if isSQLiteUniqueConstraint(err) {
 			return WorktreeProjectMapping{}, ErrWorktreeMappingDuplicate
 		}
@@ -287,35 +278,43 @@ func (db *DB) UpdateWorktreeProjectMapping(
 		return WorktreeProjectMapping{}, err
 	}
 
-	enabled := 0
-	if patch.Enabled {
-		enabled = 1
+	archiveID, err := db.GetArchiveID(ctx)
+	if err != nil {
+		return WorktreeProjectMapping{}, err
 	}
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	res, err := db.getWriter().ExecContext(ctx, `
-		UPDATE source_worktree_project_mappings
-		SET path_prefix = ?,
-			layout = ?,
-			project = ?,
-			original_project = CASE
-				WHEN original_project = '' THEN ?
-				ELSE original_project
-			END,
-			enabled = ?,
-			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		WHERE source_archive_id = (
-			SELECT value FROM archive_metadata WHERE key = 'archive_id'
-		) AND id = ? AND machine = ?`,
-		normalized.PathPrefix,
-		normalized.Layout,
-		normalized.Project,
-		patch.OriginalProject,
-		enabled,
-		id,
-		normalized.Machine,
+	tx, err := db.beginBunWriteTx(ctx)
+	if err != nil {
+		return WorktreeProjectMapping{}, fmt.Errorf("beginning worktree mapping update: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var current bunmodel.SourceWorktreeProjectMapping
+	if err := tx.NewSelect().Model(&current).
+		Where("source_archive_id = ?", archiveID).
+		Where("id = ?", id).
+		Where("machine = ?", normalized.Machine).Scan(ctx); err != nil {
+		return WorktreeProjectMapping{}, err
+	}
+	normalized.ID = id
+	normalized.Enabled = patch.Enabled
+	normalized.OriginalProject = current.OriginalProject
+	if normalized.OriginalProject == "" {
+		normalized.OriginalProject = patch.OriginalProject
+	}
+	normalized.CreatedAt = current.CreatedAt.UTC().Format(time.RFC3339Nano)
+	normalized.UpdatedAt = time.Now().UTC().Truncate(time.Microsecond).
+		Format(time.RFC3339Nano)
+	rows, err := CanonicalWorktreeProjectMappingRows(
+		archiveID, []WorktreeProjectMapping{normalized},
+	)
+	if err != nil {
+		return WorktreeProjectMapping{}, err
+	}
+	changed, err := UpdateWorktreeProjectMappingRow(
+		ctx, tx, archiveID, id, normalized.Machine, rows[0],
 	)
 	if err != nil {
 		if isSQLiteUniqueConstraint(err) {
@@ -323,9 +322,11 @@ func (db *DB) UpdateWorktreeProjectMapping(
 		}
 		return WorktreeProjectMapping{}, fmt.Errorf("updating worktree mapping: %w", err)
 	}
-	changed, _ := res.RowsAffected()
-	if changed == 0 {
+	if !changed {
 		return WorktreeProjectMapping{}, sql.ErrNoRows
+	}
+	if err := tx.Commit(); err != nil {
+		return WorktreeProjectMapping{}, fmt.Errorf("committing worktree mapping update: %w", err)
 	}
 	return db.getWorktreeProjectMappingLocked(ctx, normalized.Machine, id)
 }
@@ -335,23 +336,31 @@ func (db *DB) DeleteWorktreeProjectMapping(
 	machine string,
 	id int64,
 ) error {
+	archiveID, err := db.GetArchiveID(ctx)
+	if err != nil {
+		return err
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
-
-	res, err := db.getWriter().ExecContext(ctx,
-		`DELETE FROM source_worktree_project_mappings
-		 WHERE source_archive_id = (
-			 SELECT value FROM archive_metadata WHERE key = 'archive_id'
-		 ) AND id = ? AND machine = ?`,
-		id,
-		strings.TrimSpace(machine),
-	)
+	tx, err := db.beginBunWriteTx(ctx)
+	if err != nil {
+		return fmt.Errorf("beginning worktree mapping delete: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.NewDelete().
+		Model((*bunmodel.SourceWorktreeProjectMapping)(nil)).
+		Where("source_archive_id = ?", archiveID).
+		Where("id = ?", id).
+		Where("machine = ?", strings.TrimSpace(machine)).Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("deleting worktree mapping: %w", err)
 	}
 	changed, _ := res.RowsAffected()
 	if changed == 0 {
 		return sql.ErrNoRows
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing worktree mapping delete: %w", err)
 	}
 	return nil
 }
