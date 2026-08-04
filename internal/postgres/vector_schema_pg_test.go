@@ -5,6 +5,8 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -72,6 +74,47 @@ func TestEnsureVectorBaseSchema(t *testing.T) {
 	_, _, ok, err = LookupVectorGeneration(ctx, pg, "fp-missing")
 	require.NoError(t, err)
 	assert.False(t, ok)
+}
+
+func TestVectorDocumentModelMatchesDDLColumns(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanVectorSchemaTestPG(t, pgURL)
+	t.Cleanup(func() { cleanVectorSchemaTestPG(t, pgURL) })
+
+	pg, err := Open(pgURL, vectorSchemaTestSchema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, pg.Close()) })
+	ctx := t.Context()
+	require.NoError(t, EnsureSchema(ctx, pg, vectorSchemaTestSchema))
+	if available, err := VectorExtensionAvailable(ctx, pg); err != nil {
+		require.NoError(t, err)
+	} else if !available {
+		t.Skip("pgvector extension unavailable")
+	}
+
+	bunDB := (&Sync{pg: pg, schema: vectorSchemaTestSchema}).bunDB()
+	table := bunDB.Dialect().Tables().Get(reflect.TypeFor[*vectorDocumentModel]())
+	modelColumns := make([]string, 0, len(table.Fields))
+	for _, field := range table.Fields {
+		modelColumns = append(modelColumns, field.Name)
+	}
+	slices.Sort(modelColumns)
+
+	rows, err := pg.QueryContext(ctx, `
+		SELECT column_name
+		FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'vector_documents'
+		ORDER BY column_name`)
+	require.NoError(t, err)
+	defer rows.Close()
+	var ddlColumns []string
+	for rows.Next() {
+		var column string
+		require.NoError(t, rows.Scan(&column))
+		ddlColumns = append(ddlColumns, column)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, modelColumns, ddlColumns)
 }
 
 // TestVectorChunkTableExists pins the second half of the read-side startup

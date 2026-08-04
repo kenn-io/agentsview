@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -83,6 +84,20 @@ func canonicalVectorDocumentRow(doc VectorPushDoc) vectorDocumentModel {
 		Subordinate: doc.Subordinate, Offsets: sanitizePG(offsets),
 		Content: sanitizePG(doc.Content), ContentHash: doc.ContentHash,
 	}
+}
+
+func vectorDocumentReplacementColumns(store bun.IDB) []string {
+	table := store.Dialect().Tables().Get(
+		reflect.TypeFor[*vectorDocumentModel](),
+	)
+	columns := make([]string, 0, len(table.Fields)-1)
+	for _, field := range table.Fields {
+		if field.Name != "doc_key" {
+			columns = append(columns, field.Name)
+		}
+	}
+	slices.Sort(columns)
+	return columns
 }
 
 // VectorPushSource supplies one transaction-owned local export for a PG push
@@ -1191,14 +1206,12 @@ UPDATE vector_documents d
 // first, so every final (session_id, ordinal) slot is free and an ordinal shift
 // cannot collide with a sibling row that has not been updated yet.
 func upsertVectorDocs(ctx context.Context, store bun.IDB, docs []VectorPushDoc) error {
+	replacementColumns := vectorDocumentReplacementColumns(store)
 	for _, doc := range docs {
 		row := canonicalVectorDocumentRow(doc)
 		query := store.NewInsert().Model(&row).
 			On("CONFLICT (doc_key) DO UPDATE")
-		for _, column := range []string{
-			"session_id", "source_uuid", "ordinal", "ordinal_end", "subordinate",
-			"offsets", "content", "content_hash",
-		} {
+		for _, column := range replacementColumns {
 			query = query.Set("? = EXCLUDED.?", bun.Ident(column), bun.Ident(column))
 		}
 		if _, err := query.Returning("").Exec(ctx); err != nil {
