@@ -64,7 +64,14 @@ func (postgresFullTextCapability) Available() bool { return true }
 // (pg serve found a generation matching its embeddings fingerprint). When
 // false, SearchContent rejects "semantic"/"hybrid" modes up front with
 // db.ErrSemanticUnavailable.
-func (s *Store) HasSemantic() bool { return s.getVectorSearcher() != nil }
+func (s *Store) HasSemantic() bool { return s.bunSearchStore().HasSemantic() }
+
+func (s *Store) bunSearchStore() *db.BunStore {
+	if s.BunStore != nil {
+		return s.BunStore
+	}
+	return db.NewBunStore(&postgresBunBackend{store: s})
+}
 
 // escapeLike escapes SQL LIKE metacharacters so the bind
 // parameter is treated as a literal substring.

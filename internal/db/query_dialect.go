@@ -737,15 +737,6 @@ func oneShotPredicate(
 	return "(" + strings.Join(conds, " OR ") + ")"
 }
 
-// buildSessionBaseFilter returns a WHERE clause and args containing the base
-// predicates (message_count > 0, deleted_at IS NULL) plus user-facing filter
-// predicates (project, machine, agent, date, etc.) WITHOUT the relationship_type
-// exclusion. Callers that handle root-vs-child discrimination externally (e.g.
-// via buildCanonicalRootWhere) should use this instead of buildSessionFilter.
-func buildSessionBaseFilter(f SessionFilter) (string, []any) {
-	return BuildSessionBaseFilterSQL(f, SQLiteQueryDialect())
-}
-
 func inPredicate(col string, values []string, b *QueryBuilder) string {
 	if len(values) == 0 {
 		return "1 = 0"

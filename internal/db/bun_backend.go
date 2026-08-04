@@ -52,6 +52,8 @@ type BackendCapabilities struct {
 	Recall           bool
 	FullText         FullTextCapability
 	ContentSearch    ContentSearchCapability
+	Semantic         SemanticCapability
+	HybridLexical    HybridLexicalCapability
 	Writes           map[WriteOperation]bool
 	SessionMutations SessionMutationAdapter
 }
@@ -85,12 +87,22 @@ func (b *sqliteBunBackend) Capabilities() BackendCapabilities {
 		return BackendCapabilities{
 			Recall: true, FullText: sqliteFullTextCapability{store: b.store},
 			ContentSearch: sqliteFullTextCapability{store: b.store},
+			HybridLexical: sqliteFullTextCapability{store: b.store},
+			Semantic: NewVectorSemanticCapability(
+				b.store.getVectorSearcher,
+				func() error { return ErrSemanticUnavailable },
+			),
 		}
 	}
 	return BackendCapabilities{
-		Recall:           true,
-		FullText:         sqliteFullTextCapability{store: b.store},
-		ContentSearch:    sqliteFullTextCapability{store: b.store},
+		Recall:        true,
+		FullText:      sqliteFullTextCapability{store: b.store},
+		ContentSearch: sqliteFullTextCapability{store: b.store},
+		HybridLexical: sqliteFullTextCapability{store: b.store},
+		Semantic: NewVectorSemanticCapability(
+			b.store.getVectorSearcher,
+			func() error { return ErrSemanticUnavailable },
+		),
 		SessionMutations: sqliteSessionMutationAdapter{},
 		Writes: map[WriteOperation]bool{
 			WriteArchive:           true,

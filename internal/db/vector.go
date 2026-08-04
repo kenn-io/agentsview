@@ -137,7 +137,7 @@ func (db *DB) SetRecallVectorSearcher(v RecallVectorSearcher) {
 
 // HasSemantic reports whether a VectorSearcher has been wired in.
 func (db *DB) HasSemantic() bool {
-	return db.getVectorSearcher() != nil
+	return db.BunStore.HasSemantic()
 }
 
 // getVectorSearcher returns the currently wired VectorSearcher, or nil.

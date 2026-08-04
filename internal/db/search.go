@@ -618,6 +618,39 @@ func (capability sqliteFullTextCapability) SearchContent(
 	return hits, nil
 }
 
+func (capability sqliteFullTextCapability) SearchHybridContent(
+	ctx context.Context, store bun.IDB, filter ContentSearchFilter,
+) ([]ContentSearchHit, error) {
+	where, scopeArgs := BuildSessionBaseFilterSQL(
+		semanticContentSessionFilter(filter), SQLiteBunSessionQueryDialect(),
+	)
+	query := `SELECT message.session_id, message.ordinal,
+		'message' AS location, '' AS tool_name,
+		snippet(messages_fts, 0, '', '', '...', 32) AS body,
+		-1 AS call_index, -1 AS event_index
+		FROM messages_fts
+		JOIN messages AS message ON message.id = messages_fts.rowid
+		WHERE messages_fts MATCH ?
+			AND message.role IN ('user', 'assistant')
+			AND message.is_system = FALSE
+			AND ` + SystemPrefixSQL("message.content", "message.role") + `
+			AND message.session_id IN (SELECT id FROM sessions WHERE ` + where + `)
+		ORDER BY messages_fts.rank, message.id
+		LIMIT ? OFFSET ?`
+	args := []any{PrepareFTSQuery(filter.Pattern)}
+	args = append(args, scopeArgs...)
+	args = append(args, filter.Limit, filter.Cursor)
+	var rows []bunContentCandidate
+	if err := store.NewRaw(query, args...).Scan(ctx, &rows); err != nil {
+		return nil, classifyFTSError(fmt.Errorf("querying SQLite hybrid FTS candidates: %w", err))
+	}
+	hits := make([]ContentSearchHit, len(rows))
+	for i, row := range rows {
+		hits[i] = bunContentHitFromCandidate(row, row.Body)
+	}
+	return hits, nil
+}
+
 // PrepareFTSQuery turns a user's raw search input into a well-formed SQLite
 // FTS5 MATCH expression. Each whitespace-separated term is wrapped in double
 // quotes (with any embedded quote doubled, per FTS5 escaping), which makes
