@@ -178,49 +178,6 @@ type pgAnchorMeta struct {
 	missing         bool
 }
 
-// deriveLexicalUnitsPG is the shared post-scan pass for the PG substring,
-// regex, and fts-fallback modes, mirroring internal/db's deriveLexicalUnits:
-// one batched anchor-meta lookup, one shared db.DeriveUnitRanges derivation
-// (constant batched statement count for the whole page), then per-match
-// assignment of OrdinalRange and the lineage fields. matches is the already
-// truncated page, so the pass is O(page).
-func (s *Store) deriveLexicalUnitsPG(
-	ctx context.Context, matches []db.ContentMatch,
-) error {
-	if len(matches) == 0 {
-		return nil
-	}
-	metas, err := s.fillAnchorMetaPG(ctx, matches)
-	if err != nil {
-		return err
-	}
-	anchors := make([]db.UnitAnchor, len(matches))
-	for i, m := range matches {
-		meta := metas[i]
-		anchors[i] = db.UnitAnchor{
-			SessionID:  m.SessionID,
-			Ordinal:    m.Ordinal,
-			Role:       meta.role.String,
-			Sidechain:  meta.sidechain.Valid && meta.sidechain.Bool,
-			Embeddable: meta.embeddable.Valid && meta.embeddable.Bool,
-			Missing:    meta.missing,
-		}
-	}
-	ranges, err := db.DeriveUnitRanges(ctx, s, anchors)
-	if err != nil {
-		return fmt.Errorf("deriving lexical units: %w", err)
-	}
-	for i := range matches {
-		matches[i].OrdinalRange = ranges[i]
-		matches[i].Relationship = metas[i].relationship
-		matches[i].ParentSessionID = metas[i].parentSessionID
-		matches[i].Sidechain = anchors[i].Sidechain
-		matches[i].Subordinate = anchors[i].Sidechain ||
-			db.SubordinateSession(metas[i].relationship, metas[i].parentSessionID)
-	}
-	return nil
-}
-
 // fillAnchorMetaPG fetches anchor classification and session lineage for
 // every page row: one batched VALUES-CTE lookup per pgAnchorMetaChunk
 // distinct (session_id, ordinal) refs, never a per-row query. Refs whose

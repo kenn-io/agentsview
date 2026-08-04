@@ -16,6 +16,8 @@ type literalFullTextCapability struct {
 	sessionOrdinals []int
 	lastFilter      SearchFilter
 	insideGuard     func() bool
+	contentHits     []ContentSearchHit
+	lastContent     ContentSearchFilter
 }
 
 func (c *literalFullTextCapability) Available() bool { return c.available }
@@ -40,16 +42,21 @@ func (c *literalFullTextCapability) SearchSession(
 }
 
 func (c *literalFullTextCapability) SearchContent(
-	context.Context, ContentSearchFilter,
+	_ context.Context, _ bun.IDB, filter ContentSearchFilter,
 ) ([]ContentSearchHit, error) {
-	return nil, nil
+	if c.insideGuard != nil && !c.insideGuard() {
+		panic("content search ran outside the backend guard")
+	}
+	c.lastContent = filter
+	return append([]ContentSearchHit(nil), c.contentHits...), nil
 }
 
 type searchTestBackend struct {
-	store       bun.IDB
-	fullText    FullTextCapability
-	insideGuard bool
-	viewCalls   int
+	store         bun.IDB
+	fullText      FullTextCapability
+	contentSearch ContentSearchCapability
+	insideGuard   bool
+	viewCalls     int
 }
 
 func (*searchTestBackend) Name() string { return "search-test" }
@@ -57,7 +64,7 @@ func (*searchTestBackend) Name() string { return "search-test" }
 func (*searchTestBackend) ReadOnly() bool { return true }
 
 func (b *searchTestBackend) Capabilities() BackendCapabilities {
-	return BackendCapabilities{FullText: b.fullText}
+	return BackendCapabilities{FullText: b.fullText, ContentSearch: b.contentSearch}
 }
 
 func (*searchTestBackend) SessionQueryDialect() QueryDialect {
@@ -136,7 +143,9 @@ func TestBunStoreSearchHydratesOnlyVisibleCapabilityHits(t *testing.T) {
 			{SessionID: "search-alpha", Ordinal: 1, Snippet: "alpha needle", Rank: 0.3},
 		},
 	}
-	backend := &searchTestBackend{store: database.bunReader, fullText: capability}
+	backend := &searchTestBackend{
+		store: database.bunReader, fullText: capability, contentSearch: capability,
+	}
 	capability.insideGuard = func() bool { return backend.insideGuard }
 	store := NewBunStore(backend)
 
@@ -190,4 +199,129 @@ func TestSQLiteBunStoreSearchUsesFTSCapability(t *testing.T) {
 	assert.Equal(t, "sqlite-search", page.Results[0].SessionID)
 	assert.Equal(t, 0, page.Results[0].Ordinal)
 	assert.Contains(t, page.Results[0].Snippet, "needle")
+}
+
+func TestBunStoreSearchContentHydratesVisibleCapabilityHits(t *testing.T) {
+	database := testDB(t)
+	deletedAt := "2026-08-03T13:00:00Z"
+	for _, session := range []Session{
+		{ID: "content-visible", Project: "alpha", Machine: "host", Agent: "codex",
+			CreatedAt: "2026-08-03T10:00:00Z", MessageCount: 1},
+		{ID: "content-other", Project: "beta", Machine: "host", Agent: "claude",
+			CreatedAt: "2026-08-03T11:00:00Z", MessageCount: 1},
+		{ID: "content-deleted", Project: "alpha", Machine: "host", Agent: "codex",
+			CreatedAt: "2026-08-03T12:00:00Z", DeletedAt: &deletedAt, MessageCount: 1},
+	} {
+		require.NoError(t, database.UpsertSession(session))
+	}
+	_, err := database.getWriter().ExecContext(t.Context(),
+		"UPDATE sessions SET deleted_at = ? WHERE id = ?",
+		deletedAt, "content-deleted",
+	)
+	require.NoError(t, err)
+	insertMessages(t, database,
+		userMsg("content-visible", 2, "literal needle"),
+		userMsg("content-other", 3, "other needle"),
+		userMsg("content-deleted", 4, "deleted needle"),
+	)
+
+	capability := &literalFullTextCapability{available: true, contentHits: []ContentSearchHit{
+		{SessionID: "content-other", Ordinal: 3, Location: "message", Snippet: "other"},
+		{SessionID: "content-deleted", Ordinal: 4, Location: "message", Snippet: "deleted"},
+		{SessionID: "content-visible", Ordinal: 2, OrdinalStart: 1, OrdinalEnd: 3,
+			Location: "message", Snippet: "literal <mark>needle</mark>"},
+	}}
+	backend := &searchTestBackend{
+		store: database.bunReader, fullText: capability, contentSearch: capability,
+	}
+	capability.insideGuard = func() bool { return backend.insideGuard }
+
+	page, err := NewBunStore(backend).SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "needle", Mode: "fts", Project: "alpha",
+		IncludeOneShot: true, Limit: 10,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, ContentMatch{
+		SessionID: "content-visible", Project: "alpha", Agent: "codex",
+		Location: "message", Role: "user", Ordinal: 2,
+		Timestamp: "2024-01-01T00:00:00Z",
+		Snippet:   "literal <mark>needle</mark>", OrdinalRange: [2]int{1, 3},
+	}, page.Matches[0])
+	assert.Equal(t, 1, backend.viewCalls)
+	assert.Equal(t, 11, capability.lastContent.Limit)
+}
+
+func TestBunStoreSearchContentSubstringUsesCanonicalRows(t *testing.T) {
+	database := testDB(t)
+	seedSearchSession(t, database, "substring-session", "alpha", [][2]string{
+		{"user", "prefix literal needle suffix"},
+	})
+	store := NewBunStore(&searchTestBackend{store: database.bunReader})
+
+	page, err := store.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "needle", Project: "alpha", Sources: []string{"messages"},
+		IncludeOneShot: true, Limit: 10,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "substring-session", page.Matches[0].SessionID)
+	assert.Equal(t, "alpha", page.Matches[0].Project)
+	assert.Equal(t, "message", page.Matches[0].Location)
+	assert.Contains(t, page.Matches[0].Snippet, "needle")
+}
+
+func TestSQLiteBunStoreSearchContentUsesCanonicalRows(t *testing.T) {
+	database := testDB(t)
+	seedSearchSession(t, database, "sqlite-content", "alpha", [][2]string{
+		{"user", "sqlite common substring needle"},
+	})
+	common := database.BunStore
+
+	page, err := common.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "needle", Project: "alpha", Sources: []string{"messages"},
+		IncludeOneShot: true, Limit: 10,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "sqlite-content", page.Matches[0].SessionID)
+}
+
+func TestBunStoreSearchContentRegexUsesBoundedCanonicalCandidates(t *testing.T) {
+	database := testDB(t)
+	seedSearchSession(t, database, "regex-session", "alpha", [][2]string{
+		{"user", "prefix needle-42 suffix"},
+	})
+	store := NewBunStore(&searchTestBackend{store: database.bunReader})
+
+	page, err := store.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: `needle-[0-9]+`, Mode: "regex", Project: "alpha",
+		Sources: []string{"messages"}, IncludeOneShot: true, Limit: 10,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "regex-session", page.Matches[0].SessionID)
+	assert.Contains(t, page.Matches[0].Snippet, "needle-42")
+}
+
+func TestSQLiteBunStoreSearchContentUsesFTSCapability(t *testing.T) {
+	database := testDB(t)
+	requireFTS(t, database)
+	seedSearchSession(t, database, "sqlite-content-fts", "alpha", [][2]string{
+		{"user", "quick text with distant needle token"},
+	})
+	common := database.BunStore
+
+	page, err := common.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "quick needle", Mode: "fts", Project: "alpha",
+		Sources: []string{"messages"}, IncludeOneShot: true, Limit: 10,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "sqlite-content-fts", page.Matches[0].SessionID)
 }

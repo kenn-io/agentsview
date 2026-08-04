@@ -51,6 +51,44 @@ func TestPGBunStoreSearchUsesFullTextCapability(t *testing.T) {
 	assert.Equal(t, "store-test-001", page.Results[0].SessionID)
 }
 
+func TestPGBunStoreSearchContentUsesCanonicalRows(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+
+	store, err := NewStore(pgURL, testSchema, true)
+	require.NoError(t, err)
+	defer store.Close()
+	common := store.BunStore
+
+	page, err := common.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: "hello", Project: "test-project", Sources: []string{"messages"},
+		IncludeOneShot: true, Limit: 10,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "store-test-001", page.Matches[0].SessionID)
+}
+
+func TestPGBunStoreSearchContentUsesPortableFTS(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+
+	store, err := NewStore(pgURL, testSchema, true)
+	require.NoError(t, err)
+	defer store.Close()
+	common := store.BunStore
+
+	page, err := common.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: "hello world", Mode: "fts", Project: "test-project",
+		Sources: []string{"messages"}, IncludeOneShot: true, Limit: 10,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "store-test-001", page.Matches[0].SessionID)
+}
+
 func TestPGSearchDeduplication(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
