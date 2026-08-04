@@ -53,6 +53,44 @@ func requiredTimestampFromBunRow(value bunmodel.Timestamp) string {
 }
 
 func sessionToBunRow(session Session) (bunmodel.Session, error) {
+	session.Project = SanitizeUTF8(session.Project)
+	session.Machine = SanitizeUTF8(session.Machine)
+	session.Agent = SanitizeUTF8(session.Agent)
+	session.AgentLabel = SanitizeUTF8(session.AgentLabel)
+	session.Entrypoint = SanitizeUTF8(session.Entrypoint)
+	session.SessionKind = SanitizeUTF8(session.SessionKind)
+	session.FirstMessage = sanitizeCanonicalSessionStringPtr(session.FirstMessage)
+	session.DisplayName = sanitizeCanonicalSessionStringPtr(session.DisplayName)
+	session.SessionName = sanitizeCanonicalSessionStringPtr(session.SessionName)
+	session.ParentSessionID = sanitizeCanonicalSessionStringPtr(session.ParentSessionID)
+	session.ParserParentSessionID = sanitizeCanonicalSessionStringPtr(session.ParserParentSessionID)
+	session.RelationshipType = SanitizeUTF8(session.RelationshipType)
+	session.Outcome = SanitizeUTF8(session.Outcome)
+	session.OutcomeConfidence = SanitizeUTF8(session.OutcomeConfidence)
+	session.EndedWithRole = SanitizeUTF8(session.EndedWithRole)
+	session.HealthGrade = sanitizeCanonicalSessionStringPtr(session.HealthGrade)
+	session.SecretsRulesVersion = SanitizeUTF8(session.SecretsRulesVersion)
+	session.Cwd = SanitizeUTF8(session.Cwd)
+	session.GitBranch = SanitizeUTF8(session.GitBranch)
+	session.SourceSessionID = SanitizeUTF8(session.SourceSessionID)
+	session.SourceVersion = SanitizeUTF8(session.SourceVersion)
+	session.TranscriptFidelity = SanitizeUTF8(session.TranscriptFidelity)
+	session.DeletionCause = sanitizeCanonicalSessionStringPtr(session.DeletionCause)
+	session.TerminationStatus = sanitizeCanonicalSessionStringPtr(session.TerminationStatus)
+	session.FilePath = sanitizeCanonicalSessionStringPtr(session.FilePath)
+	session.FileHash = sanitizeCanonicalSessionStringPtr(session.FileHash)
+	if session.TranscriptRevision != nil {
+		clean := SanitizeUTF8(*session.TranscriptRevision)
+		session.TranscriptRevision = &clean
+	}
+	outcome := session.Outcome
+	if outcome == "" {
+		outcome = "unknown"
+	}
+	outcomeConfidence := session.OutcomeConfidence
+	if outcomeConfidence == "" {
+		outcomeConfidence = "low"
+	}
 	row := bunmodel.Session{
 		ID:                    session.ID,
 		Project:               session.Project,
@@ -79,8 +117,8 @@ func sessionToBunRow(session Session) (bunmodel.Session, error) {
 		ToolRetryCount:              session.ToolRetryCount,
 		EditChurnCount:              session.EditChurnCount,
 		ConsecutiveFailureMax:       session.ConsecutiveFailureMax,
-		Outcome:                     session.Outcome,
-		OutcomeConfidence:           session.OutcomeConfidence,
+		Outcome:                     outcome,
+		OutcomeConfidence:           outcomeConfidence,
 		EndedWithRole:               session.EndedWithRole,
 		FinalFailureStreak:          session.FinalFailureStreak,
 		CompactionCount:             session.CompactionCount,
@@ -154,6 +192,17 @@ func sessionToBunRow(session Session) (bunmodel.Session, error) {
 	}
 	row.CreatedAt = createdAt
 	return row, nil
+}
+
+func sanitizeCanonicalSessionStringPtr(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	clean := SanitizeUTF8(*value)
+	if clean == "" {
+		return nil
+	}
+	return &clean
 }
 
 func sessionFromBunRow(row bunmodel.Session) Session {
