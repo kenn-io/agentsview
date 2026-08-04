@@ -112,6 +112,91 @@ func TestGetDailyUsageKeepsPricingRowsAndIdentityInOneView(t *testing.T) {
 	assert.Equal(t, 2, backend.attempts)
 }
 
+// A missing ID predicate would admit ignored-session rows, adapter-specific
+// ordering would choose the wrong cross-session duplicate, and treating a
+// Copilot total as an ordinary row cost would double-count the root session.
+func TestBunStoreGetSessionUsageRowsFiltersDeduplicatesAndPrices(t *testing.T) {
+	database := testDB(t)
+	for _, session := range []Session{
+		{ID: "usage-root", Project: "project", Machine: "host", Agent: "copilot"},
+		{ID: "usage-child", Project: "project", Machine: "host", Agent: "copilot"},
+		{ID: "usage-ignored", Project: "project", Machine: "host", Agent: "copilot"},
+	} {
+		require.NoError(t, database.UpsertSession(session))
+	}
+	require.NoError(t, database.UpsertModelPricing([]ModelPricing{{
+		ModelPattern:  "usage-model",
+		InputPerMTok:  money.MustParseDollars("3"),
+		OutputPerMTok: money.MustParseDollars("15"),
+	}}))
+	require.NoError(t, database.InsertMessages([]Message{
+		{
+			SessionID: "usage-root", Ordinal: 0, Role: "assistant",
+			Content: "root", ContentLength: 4, Timestamp: "2026-08-03T09:00:00Z",
+			Model: "usage-model", TokenUsage: []byte(`{"input_tokens":1000,"output_tokens":500}`),
+			ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request",
+		},
+		{
+			SessionID: "usage-child", Ordinal: 0, Role: "assistant",
+			Content: "duplicate", ContentLength: 9, Timestamp: "2026-08-03T09:00:00Z",
+			Model: "usage-model", TokenUsage: []byte(`{"input_tokens":1000,"output_tokens":500}`),
+			ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request",
+		},
+	}))
+	reportedRootCost := money.MustParseDollars("0.03")
+	reportedChildCost := money.MustParseDollars("0.02")
+	require.NoError(t, database.ReplaceSessionUsageEvents("usage-root", []UsageEvent{
+		{
+			Source: "shutdown", Model: "usage-model",
+			InputTokens: 1000, OutputTokens: 500,
+			OccurredAt: "2026-08-03T10:00:00Z", DedupKey: "computed",
+		},
+		{
+			Source: "shutdown", Model: "usage-model",
+			InputTokens: 1000, OutputTokens: 500,
+			Cost: &reportedRootCost, CostStatus: "exact",
+			CostSource: CopilotReportedCostSource,
+			OccurredAt: "2026-08-03T10:01:00Z", DedupKey: "reported",
+		},
+	}))
+	require.NoError(t, database.ReplaceSessionUsageEvents("usage-child", []UsageEvent{{
+		Source: "provider", Model: "usage-model", Cost: &reportedChildCost,
+		CostStatus: "exact", CostSource: "provider",
+		OccurredAt: "2026-08-03T10:02:00Z", DedupKey: "child",
+	}}))
+	require.NoError(t, database.ReplaceSessionUsageEvents("usage-ignored", []UsageEvent{{
+		Source: "provider", Model: "usage-model", Cost: &reportedChildCost,
+		CostStatus: "exact", CostSource: "provider",
+		OccurredAt: "2026-08-03T08:00:00Z", DedupKey: "ignored",
+	}}))
+
+	rowSet, err := NewBunStore(&sessionContractBackend{store: database.bunReader}).
+		GetSessionUsageRows(t.Context(), []string{"usage-root", "usage-child"})
+	require.NoError(t, err)
+	require.NotNil(t, rowSet)
+	rows := rowSet.Rows
+	require.Len(t, rows, 4)
+	assert.Equal(t, []string{
+		"usage-child", "usage-root", "usage-root", "usage-child",
+	}, []string{rows[0].SessionID, rows[1].SessionID, rows[2].SessionID, rows[3].SessionID})
+	assert.Equal(t, []int64{10_500, 10_500, 10_500, 20_000}, []int64{
+		rows[0].Cost.Microdollars, rows[1].Cost.Microdollars,
+		rows[2].Cost.Microdollars, rows[3].Cost.Microdollars,
+	})
+	require.NotNil(t, rows[2].SessionCost)
+	assert.Equal(t, int64(30_000), rows[2].SessionCost.Microdollars)
+	assert.Nil(t, rows[0].SessionCost)
+	assert.Nil(t, rows[1].SessionCost)
+	assert.Nil(t, rows[3].SessionCost)
+	assert.Equal(t, "usage-root", rows[0].SourceSessionID)
+	assert.Equal(t, map[string]int{"usage-root": 1500, "usage-child": 500},
+		rowSet.RawOutputTokensBySession)
+	assert.Equal(t, map[string]int{"usage-root": 500, "usage-child": 500},
+		rowSet.DeduplicatedOutputTokens)
+	assert.Equal(t, map[string]struct{}{"usage-root": {}, "usage-child": {}},
+		rowSet.DiscardedContributingSessions)
+}
+
 func TestLoadPricingMapAllowsMissingOptionalBandsTable(t *testing.T) {
 	database := testDB(t)
 	require.NoError(t, database.UpsertModelPricing([]ModelPricing{{

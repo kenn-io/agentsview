@@ -680,6 +680,21 @@ type dailyUsageScanRow struct {
 	machine                  string
 }
 
+func nullInt64Pointer(v sql.NullInt64) *int {
+	if !v.Valid {
+		return nil
+	}
+	out := int(v.Int64)
+	return &out
+}
+
+func usageRowMessageOrdinal(v sql.NullInt64) int64 {
+	if !v.Valid {
+		return -1
+	}
+	return v.Int64
+}
+
 type topSessionMetadata struct {
 	displayName string
 	agent       string

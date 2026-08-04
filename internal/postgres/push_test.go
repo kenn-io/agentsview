@@ -180,6 +180,7 @@ func (c *pushAliasRoutingConn) QueryContext(
 				"malformed_scoped_output", "malformed_scoped_web_search",
 			},
 			values: [][]driver.Value{{"42", "2", "7", "42", "2"}},
+		}, nil
 	case strings.Contains(normalized, "from \"source_archives\"") &&
 		strings.Contains(normalized, "source_archive_salt"):
 		c.mu.Lock()
