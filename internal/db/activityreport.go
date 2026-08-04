@@ -35,111 +35,6 @@ func activityReportRangeBoundsUTC(q activity.Query) (string, string) {
 		q.RangeEnd.UTC().Format(boundLayout)
 }
 
-// GetActivityReport assembles a concurrency- and usage-oriented report
-// for the resolved range `q`. Sessions and activity are fetched from the
-// filtered candidate set. Usage loads candidate rows plus only the
-// cross-session Claude peers needed for complete-snapshot selection, keeping
-// the resulting streams consistent without materializing the whole window.
-//
-// The filter `f` is honored as-is: callers that want one-shot or
-// automated sessions included must pass them through with the
-// corresponding exclusions disabled. Subagent and fork sessions are
-// always counted so the cost totals match GetDailyUsage, which never
-// filters by relationship_type. Fork sessions hold only their own
-// rewound-branch messages (the parsers partition entries across
-// branches), so counting them adds no duplicate activity; any usage
-// rows that do recur across sessions collapse in the aggregator's
-// dedup, the same guarantee GetDailyUsage relies on.
-func (db *DB) GetActivityReport(
-	ctx context.Context, f AnalyticsFilter, q activity.Query,
-) (activity.Report, error) {
-	artifacts, err := db.BuildActivityReportArtifacts(ctx, f, q, nil)
-	if err != nil {
-		return activity.Report{}, err
-	}
-	artifacts.Report.BySession = artifacts.Sessions
-	artifacts.Report.SessionsTotal = len(artifacts.Sessions)
-	return artifacts.Report, nil
-}
-
-func (db *DB) BuildActivityReportArtifacts(
-	ctx context.Context,
-	f AnalyticsFilter,
-	q activity.Query,
-	onProgress activity.ProgressFunc,
-) (activity.CandidateArtifacts, error) {
-	reportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
-	f.IncludeSubagents = true
-	f.IncludeForks = true
-	rangeStartUTC, rangeEndUTC := activityReportRangeBoundsUTC(q)
-	lowerBound := paddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
-	upperBound := paddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
-
-	sessions, ids, err := db.activityReportSessions(
-		ctx, f, rangeStartUTC, rangeEndUTC)
-	if err != nil {
-		return activity.CandidateArtifacts{}, err
-	}
-	reportProgress(onProgress, activity.Progress{
-		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
-	})
-
-	usage, pricing, err := db.activityReportUsage(ctx, ids, lowerBound, upperBound, q)
-	if err != nil {
-		return activity.CandidateArtifacts{}, err
-	}
-
-	rowsProcessed := int64(0)
-	source := db.activityReportCandidateSource(ids, q)
-	artifacts, err := activity.BuildCandidateArtifactsFromSourceWithSurvivorUsage(ctx, activity.Params{
-		RangeStart:    q.RangeStart,
-		RangeEnd:      q.RangeEnd,
-		Loc:           q.Loc,
-		EffectiveEnd:  q.EffectiveEnd,
-		Partial:       q.Partial,
-		GapCapSeconds: q.GapCapSeconds,
-		Bucket:        q.Bucket,
-	}, sessions, func(
-		ctx context.Context, yield func(activity.IntervalCandidate) error,
-	) error {
-		reportProgress(onProgress, activity.Progress{
-			Phase: activity.ProgressScanningActivity, SessionsTotal: len(sessions),
-		})
-		return source(ctx, func(candidate activity.IntervalCandidate) error {
-			rowsProcessed++
-			reportProgress(onProgress, activity.Progress{
-				Phase:         activity.ProgressScanningActivity,
-				SessionsTotal: len(sessions), RowsProcessed: rowsProcessed,
-			})
-			return yield(candidate)
-		})
-	}, usage)
-	if err != nil {
-		return activity.CandidateArtifacts{}, fmt.Errorf("aggregating activity report: %w", err)
-	}
-	reportProgress(onProgress, activity.Progress{
-		Phase: activity.ProgressFinalizing, SessionsTotal: len(sessions),
-		SessionsProcessed: len(sessions), RowsProcessed: rowsProcessed,
-	})
-	artifacts.Report.SchemaVersion = export.ActivityReportSchemaVersion
-	artifacts.Report.Pricing = pricing
-	projects, err := db.BuildProjectIdentityMap(ctx,
-		activityReportProjectLabels(sessions))
-	if err != nil {
-		return activity.CandidateArtifacts{}, err
-	}
-	artifacts.Report.BySession = artifacts.Sessions
-	activity.SanitizeProjectLabels(&artifacts.Report, projects)
-	artifacts.Sessions = artifacts.Report.BySession
-	artifacts.Report.BySession = []activity.SessionRow{}
-	artifacts.Report.Projects = export.ProjectMapForWire(projects)
-	reportProgress(onProgress, activity.Progress{
-		Phase: activity.ProgressDone, SessionsTotal: len(sessions),
-		SessionsProcessed: len(sessions), RowsProcessed: rowsProcessed,
-	})
-	return artifacts, nil
-}
-
 func reportProgress(callback activity.ProgressFunc, progress activity.Progress) {
 	if callback != nil {
 		callback(progress)
@@ -387,26 +282,6 @@ func activityReportProjectLabels(
 		set[session.Project] = struct{}{}
 	}
 	return sortedSetKeys(set)
-}
-
-// activityReportSessions returns the candidate sessions whose window
-// overlaps the exact range [rangeStartUTC, rangeEndUTC), plus their
-// IDs. The ID set defines the scope for the activity and usage fetches.
-// NULLIF guards the empty-string timestamp fallbacks SQLite stores so a
-// session with an empty ended_at but a valid started_at still falls back
-// correctly, matching the activity-expression convention elsewhere.
-//
-// The effective-end fallback for a session with no ended_at uses its
-// latest message timestamp before started_at, so a still-open or
-// partially-parsed session that began before the range but has messages
-// inside it is not dropped. COALESCE short-circuits, so the correlated
-// MAX subquery runs only for the rare sessions missing an ended_at.
-func (db *DB) activityReportSessions(
-	ctx context.Context, f AnalyticsFilter, rangeStartUTC, rangeEndUTC string,
-) ([]activity.SessionMeta, []string, error) {
-	return db.activityReportSessionsFrom(
-		ctx, db.getReader(), f, rangeStartUTC, rangeEndUTC,
-	)
 }
 
 func (db *DB) activityReportSessionsFrom(
@@ -673,55 +548,6 @@ func (db *DB) ActivityReportCandidateSource(
 	return db.activityReportCandidateSource(ids, q)
 }
 
-// activityReportUsage selects complete snapshots across the padded range,
-// then keeps rows attributed to the candidate sessions. Rows are ordered on
-// parsed instants so mixed RFC3339 representations remain chronological.
-func (db *DB) activityReportUsage(
-	ctx context.Context, ids []string, lowerBound, upperBound string, q activity.Query,
-) ([]activity.UsageRow, *export.PricingBlock, error) {
-	var rows []activity.UsageRow
-	var pricing *export.PricingBlock
-	err := db.consistentView(ctx, func(store bun.IDB) error {
-		var err error
-		rows, pricing, err = db.activityReportUsageFrom(
-			ctx, store, ids, lowerBound, upperBound, q,
-		)
-		return err
-	})
-	return rows, pricing, err
-}
-
-func (db *DB) activityReportUsageFrom(
-	ctx context.Context,
-	source bun.IDB,
-	ids []string,
-	lowerBound, upperBound string,
-	q activity.Query,
-) ([]activity.UsageRow, *export.PricingBlock, error) {
-	candidates, rateResolver, err := db.loadActivityReportUsageCandidatesFrom(
-		ctx, source, ids, lowerBound, upperBound, false,
-	)
-	if err != nil {
-		return nil, nil, err
-	}
-	sortActivityReportUsageCandidates(candidates)
-	baseRows := make([]activity.UsageRow, len(candidates))
-	for i, candidate := range candidates {
-		row := candidate.row
-		_, row.OutputTokens, _, _, _ = dailyUsageRowTokens(candidate.scan)
-		row.WebSearchRequests = usageRowWebSearchRequests(
-			candidate.scan.usageSource, candidate.scan.tokenJSON)
-		baseRows[i] = row
-	}
-	mask, attribution, webSearchRequests :=
-		activity.UsageSurvivorSelectionForSessions(
-			q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
-		)
-	return materializeActivityReportUsageCandidates(
-		candidates, mask, attribution, webSearchRequests, rateResolver,
-	)
-}
-
 // activityReportUsageCandidate retains the scanned source fields until the
 // survivor set is known. Pricing provenance is recorded only for survivors in
 // the ordinary activity report, while reporting export can materialize every
@@ -734,7 +560,7 @@ type activityReportUsageCandidate struct {
 	ordinal int64
 }
 
-func (db *DB) loadActivityReportUsageCandidatesFrom(
+func (db *BunStore) loadActivityReportUsageCandidatesFrom(
 	ctx context.Context,
 	source bun.IDB,
 	ids []string,
@@ -908,7 +734,7 @@ func sortActivityReportUsageCandidates(
 // activityReportUsageCandidatesFrom returns normalized padded-range rows
 // without sorting or applying a survivor mask. Reporting export merges these
 // rows with standalone candidates before imposing either operation.
-func (db *DB) activityReportUsageCandidatesFrom(
+func (db *BunStore) activityReportUsageCandidatesFrom(
 	ctx context.Context,
 	source bun.IDB,
 	ids []string,

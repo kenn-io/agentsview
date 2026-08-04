@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -518,7 +517,6 @@ type pgUsageScanRow struct {
 }
 
 type pgDailyUsageScanRow struct {
-	sessionID                string
 	messageOrdinal           sql.NullInt64
 	usageSource              string
 	ts                       sql.NullTime
@@ -532,13 +530,6 @@ type pgDailyUsageScanRow struct {
 	reasoningTokens          int
 	cost                     sql.NullInt64
 	costSource               string
-	claudeMessageID          string
-	claudeRequestID          string
-	sourceUUID               string
-	usageDedupKey            string
-	project                  string
-	agent                    string
-	machine                  string
 }
 
 func pgUsageRowSelectFromRows(rowsSQL string) string {
@@ -1002,43 +993,6 @@ func scanPGUsageRow(rows *sql.Rows) (pgUsageScanRow, error) {
 	return r, err
 }
 
-func scanPGDailyUsageRow(rows *sql.Rows) (pgDailyUsageScanRow, error) {
-	return scanPGDailyUsageRowWithMachine(rows, false)
-}
-
-func scanPGDailyUsageRowWithMachine(
-	rows *sql.Rows, includeMachine bool,
-) (pgDailyUsageScanRow, error) {
-	var r pgDailyUsageScanRow
-	dest := []any{
-		&r.sessionID,
-		&r.messageOrdinal,
-		&r.usageSource,
-		&r.ts,
-		&r.model,
-		&r.tokenJSON,
-		&r.webSearchRequests,
-		&r.inputTokens,
-		&r.outputTokens,
-		&r.cacheCreationInputTokens,
-		&r.cacheReadInputTokens,
-		&r.reasoningTokens,
-		&r.cost,
-		&r.costSource,
-		&r.claudeMessageID,
-		&r.claudeRequestID,
-		&r.sourceUUID,
-		&r.usageDedupKey,
-		&r.project,
-		&r.agent,
-	}
-	if includeMachine {
-		dest = append(dest, &r.machine)
-	}
-	err := rows.Scan(dest...)
-	return r, err
-}
-
 func pgTokenJSONCount(usage gjson.Result, key string) int {
 	return db.ClampPlausibleTokens(usage.Get(key).Int())
 }
@@ -1318,13 +1272,4 @@ func startedAtString(ts sql.NullTime) string {
 		return ""
 	}
 	return FormatISO8601(ts.Time)
-}
-
-func sortedStringSetKeys(set map[string]struct{}) []string {
-	out := make([]string, 0, len(set))
-	for k := range set {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }

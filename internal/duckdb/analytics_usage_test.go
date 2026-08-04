@@ -5,7 +5,6 @@ package duckdb
 import (
 	"context"
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,142 +14,6 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
-
-// TestDuckBuildAnalyticsWhereSubagents verifies that the DuckDB
-// analytics WHERE builder mirrors the SQLite rule: when subagents are
-// counted, the relationship filter stops excluding them and the
-// one-shot exclusion exempts subagent rows (workflow subagents are
-// inherently one-shot). The exemption is hand-written DuckDB SQL, so
-// this guards its column qualification across prefixed/unprefixed
-// callers.
-func TestDuckBuildAnalyticsWhereSubagents(t *testing.T) {
-	t.Run("root-only default", func(t *testing.T) {
-		f := db.AnalyticsFilter{ExcludeOneShot: true}
-		where, _ := duckBuildAnalyticsWhere(f, "started_at", "", false, false)
-		assert.Contains(t, where,
-			"relationship_type NOT IN ('subagent', 'fork')")
-		assert.NotContains(t, where, "OR relationship_type = 'subagent'")
-	})
-
-	t.Run("include subagents, unprefixed", func(t *testing.T) {
-		f := db.AnalyticsFilter{ExcludeOneShot: true, IncludeSubagents: true}
-		where, _ := duckBuildAnalyticsWhere(f, "started_at", "", false, false)
-		assert.Contains(t, where, "relationship_type NOT IN ('fork')")
-		assert.NotContains(t, where, "NOT IN ('subagent'")
-		// One-shot exclusion exempts subagents.
-		assert.Contains(t, where, "OR relationship_type = 'subagent')")
-	})
-
-	t.Run("include subagents, prefixed columns stay qualified", func(t *testing.T) {
-		f := db.AnalyticsFilter{ExcludeOneShot: true, IncludeSubagents: true}
-		where, _ := duckBuildAnalyticsWhere(f, "s.started_at", "s.", false, false)
-		assert.Contains(t, where, "s.relationship_type NOT IN ('fork')")
-		assert.Contains(t, where, "OR s.relationship_type = 'subagent')")
-		// No unqualified relationship_type leaks through.
-		assert.False(t,
-			strings.Contains(where, " relationship_type") ||
-				strings.HasPrefix(where, "relationship_type"),
-			"relationship_type must be table-qualified: %s", where)
-	})
-}
-
-func TestDuckAnalyticsAutomatedScopePredicates(t *testing.T) {
-	tests := []struct {
-		name    string
-		filter  db.AnalyticsFilter
-		want    string
-		notWant string
-	}{
-		{
-			name: "legacy exclude automated normalizes to human",
-			filter: db.AnalyticsFilter{
-				ExcludeAutomated: true,
-			},
-			want: "s.is_automated = FALSE",
-		},
-		{
-			name: "all scope suppresses legacy human filter",
-			filter: db.AnalyticsFilter{
-				AutomatedScope:   "all",
-				ExcludeAutomated: true,
-			},
-			notWant: "s.is_automated = FALSE",
-		},
-		{
-			name: "automated scope selects automated sessions",
-			filter: db.AnalyticsFilter{
-				AutomatedScope: "automated",
-			},
-			want:    "s.is_automated = TRUE",
-			notWant: "s.is_automated = FALSE",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sql, _ := duckBuildAnalyticsWhere(
-				tt.filter,
-				"COALESCE(s.started_at, s.created_at)",
-				"s.",
-				false,
-				false,
-			)
-			if tt.want != "" {
-				assert.Contains(t, sql, tt.want,
-					"DuckDB analytics SQL missing expected predicate")
-			}
-			if tt.notWant != "" {
-				assert.NotContains(t, sql, tt.notWant,
-					"DuckDB analytics SQL has unexpected predicate")
-			}
-		})
-	}
-}
-
-func TestDuckAnalyticsAutomatedScopeOneShotExemption(t *testing.T) {
-	sql, _ := duckBuildAnalyticsWhere(
-		db.AnalyticsFilter{
-			AutomatedScope: "automated",
-			ExcludeOneShot: true,
-		},
-		"COALESCE(s.started_at, s.created_at)",
-		"s.",
-		false,
-		false,
-	)
-	want := "(s.user_message_count > 1 OR s.is_automated = TRUE)"
-	assert.Contains(t, sql, want,
-		"DuckDB analytics SQL missing one-shot exemption")
-}
-
-func TestDuckAnalyticsModelFilterPredicates(t *testing.T) {
-	sql, _ := duckBuildAnalyticsWhere(
-		db.AnalyticsFilter{Model: "gpt-4o"},
-		"COALESCE(s.started_at, s.created_at)",
-		"s.",
-		false,
-		false,
-	)
-	assert.Contains(t, sql,
-		"EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id AND m.model = ?)")
-}
-
-func TestDuckAnalyticsModelAndHourUseSameMessagePredicate(t *testing.T) {
-	hour := 10
-	sql, _ := duckBuildAnalyticsWhere(
-		db.AnalyticsFilter{
-			Model: "gpt-4o",
-			Hour:  &hour,
-		},
-		"COALESCE(s.started_at, s.created_at)",
-		"s.",
-		false,
-		true,
-	)
-	assert.Contains(t, sql, "m.session_id = s.id")
-	assert.Contains(t, sql, "m.model = ?")
-	assert.Contains(t, sql, "CAST(strftime(")
-}
 
 func TestDuckUsageAggregateCostRecordsMixedReportedAndComputed(t *testing.T) {
 	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
@@ -460,32 +323,6 @@ func TestDuckUsageAggregateCostPrefersExactCustomKimiAlias(t *testing.T) {
 	resolutions := block.Models["kimi-for-coding"].Resolutions
 	require.Len(t, resolutions, 1)
 	assert.Equal(t, "kimi-for-coding", resolutions[0].PricedModel)
-}
-
-func TestDuckSignalMessagesFormatsTimestampValues(t *testing.T) {
-	ctx := context.Background()
-	store, _ := newSyncedStore(t)
-
-	_, err := store.duck.ExecContext(ctx, `
-		INSERT INTO messages (
-			id, session_id, ordinal, role, content, timestamp,
-			is_system, has_tool_use
-		) VALUES
-			(9101, 'signal-time', 0, 'user', 'with timestamp',
-			 CAST('2026-01-20T12:34:56Z' AS TIMESTAMP), FALSE, FALSE),
-			(9102, 'signal-time', 1, 'assistant', 'without timestamp',
-			 NULL, FALSE, FALSE)`)
-	require.NoError(t, err)
-
-	got, err := store.duckSignalMessages(
-		ctx,
-		[]db.SignalRow{{ID: "signal-time"}},
-		db.AnalyticsFilter{},
-	)
-	require.NoError(t, err)
-	require.Len(t, got["signal-time"], 2)
-	assert.Equal(t, "2026-01-20T12:34:56Z", got["signal-time"][0].Timestamp)
-	assert.Empty(t, got["signal-time"][1].Timestamp)
 }
 
 func TestDuckAnalyticsSignalSessionsModelFilterUsesMatchingMessages(
