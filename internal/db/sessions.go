@@ -489,12 +489,6 @@ type SidebarSessionIndex struct {
 	Total int `json:"total"`
 }
 
-// buildSessionFilter returns a WHERE clause and args for the
-// non-cursor predicates in SessionFilter.
-func buildSessionFilter(f SessionFilter) (string, []any) {
-	return BuildSessionFilterSQL(f, SQLiteQueryDialect())
-}
-
 // GetArtifactExportSession returns raw user- and agent-owned session names so
 // canonical manifests do not publish session_name as a user display_name.
 func (db *DB) GetArtifactExportSession(

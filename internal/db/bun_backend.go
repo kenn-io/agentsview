@@ -51,6 +51,7 @@ const (
 type BackendCapabilities struct {
 	Recall           bool
 	FullText         FullTextCapability
+	ContentSearch    ContentSearchCapability
 	Writes           map[WriteOperation]bool
 	SessionMutations SessionMutationAdapter
 }
@@ -83,11 +84,13 @@ func (b *sqliteBunBackend) Capabilities() BackendCapabilities {
 	if b.store.readOnly {
 		return BackendCapabilities{
 			Recall: true, FullText: sqliteFullTextCapability{store: b.store},
+			ContentSearch: sqliteFullTextCapability{store: b.store},
 		}
 	}
 	return BackendCapabilities{
 		Recall:           true,
 		FullText:         sqliteFullTextCapability{store: b.store},
+		ContentSearch:    sqliteFullTextCapability{store: b.store},
 		SessionMutations: sqliteSessionMutationAdapter{},
 		Writes: map[WriteOperation]bool{
 			WriteArchive:           true,

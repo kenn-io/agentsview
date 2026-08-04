@@ -29,6 +29,7 @@ type ContentSearchHit struct {
 	SourceUUID   string
 	ToolName     string
 	Snippet      string
+	Timestamp    string
 	Score        *float64
 }
 
@@ -37,4 +38,13 @@ type FullTextCapability interface {
 	Available() bool
 	Search(context.Context, bun.IDB, SearchFilter) ([]SearchHit, error)
 	SearchSession(context.Context, bun.IDB, string, string) ([]int, error)
+}
+
+// ContentSearchCapability owns only engine-specific lexical candidate
+// matching. BunStore owns canonical metadata hydration and pagination.
+type ContentSearchCapability interface {
+	Available() bool
+	SearchContent(
+		context.Context, bun.IDB, ContentSearchFilter,
+	) ([]ContentSearchHit, error)
 }

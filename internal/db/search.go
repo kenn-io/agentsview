@@ -356,9 +356,6 @@ type sqliteSearchHitProjection struct {
 func (capability sqliteFullTextCapability) Search(
 	ctx context.Context, store bun.IDB, f SearchFilter,
 ) ([]SearchHit, error) {
-	if f.Limit <= 0 || f.Limit > MaxSearchLimit {
-		f.Limit = DefaultSearchLimit
-	}
 	f.Query = PrepareFTSQuery(f.Query)
 
 	// ORDER BY for the outer query. FTS5 ranks are negative (lower = better),
@@ -580,6 +577,40 @@ func (capability sqliteFullTextCapability) SearchSession(
 		ordinals[i] = row.Ordinal
 	}
 	return ordinals, nil
+}
+
+func (capability sqliteFullTextCapability) SearchContent(
+	ctx context.Context, store bun.IDB, filter ContentSearchFilter,
+) ([]ContentSearchHit, error) {
+	where, scopeArgs := BuildSessionFilterSQL(
+		contentSessionFilter(filter), SQLiteBunSessionQueryDialect(),
+	)
+	system := "1=1"
+	if filter.ExcludeSystem {
+		system = "message.is_system = FALSE AND " +
+			SystemPrefixSQL("message.content", "message.role")
+	}
+	query := `SELECT message.session_id, message.ordinal,
+		'message' AS location, '' AS tool_name, message.content AS body,
+		-1 AS call_index, -1 AS event_index
+		FROM messages_fts
+		JOIN messages AS message ON message.id = messages_fts.rowid
+		WHERE messages_fts MATCH ? AND ` + system + `
+			AND message.session_id IN (SELECT id FROM sessions WHERE ` + where + `)
+		ORDER BY rank ASC, message.ordinal ASC, message.id ASC
+		LIMIT ? OFFSET ?`
+	args := []any{PrepareFTSQuery(filter.Pattern)}
+	args = append(args, scopeArgs...)
+	args = append(args, filter.Limit, filter.Cursor)
+	var rows []bunContentCandidate
+	if err := store.NewRaw(query, args...).Scan(ctx, &rows); err != nil {
+		return nil, classifyFTSError(fmt.Errorf("querying SQLite FTS candidates: %w", err))
+	}
+	hits := make([]ContentSearchHit, len(rows))
+	for i, row := range rows {
+		hits[i] = bunContentHitFromCandidate(row, filter.ftsSnippet(row.Body))
+	}
+	return hits, nil
 }
 
 // PrepareFTSQuery turns a user's raw search input into a well-formed SQLite
