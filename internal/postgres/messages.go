@@ -78,10 +78,6 @@ func escapeLike(v string) string {
 func (postgresFullTextCapability) Search(
 	ctx context.Context, store bun.IDB, f db.SearchFilter,
 ) ([]db.SearchHit, error) {
-	if f.Limit <= 0 || f.Limit > db.MaxSearchLimit {
-		f.Limit = db.DefaultSearchLimit
-	}
-
 	// plainTerm is the de-quoted query joined back into one string. It feeds
 	// the name-branch ILIKE (matching the typed text against the short session
 	// name) and centers the message snippet, mirroring SQLite's plainQuery.

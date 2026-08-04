@@ -438,6 +438,34 @@ func TestDuckBunStoreSearchUsesFullTextCapability(t *testing.T) {
 	assert.Equal(t, 1, page.Results[0].Ordinal)
 }
 
+func TestDuckBunStoreSearchContentUsesCanonicalRows(t *testing.T) {
+	store, fixture := newSyncedStore(t)
+	common := store.BunStore
+
+	page, err := common.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: "secret token", Project: "alpha", Sources: []string{"messages"},
+		IncludeOneShot: true, Limit: 10,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, fixture.alphaID, page.Matches[0].SessionID)
+}
+
+func TestDuckBunStoreSearchContentUsesPortableFTS(t *testing.T) {
+	store, fixture := newSyncedStore(t)
+	common := store.BunStore
+
+	page, err := common.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: "secret token", Mode: "fts", Project: "alpha",
+		Sources: []string{"messages"}, IncludeOneShot: true, Limit: 10,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, fixture.alphaID, page.Matches[0].SessionID)
+}
+
 func TestSearchContentFTSSingleTermFallback(t *testing.T) {
 	ctx := context.Background()
 	store, fixture := newSyncedStore(t)
