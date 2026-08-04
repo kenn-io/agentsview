@@ -96,24 +96,51 @@ func TestWriteMirrorMetadataRollsBackBeforePublishingGeneration(t *testing.T) {
 	conn := openTestDuckDB(t)
 	_, err := conn.ExecContext(t.Context(), `
 		CREATE TABLE sync_metadata (
-			key TEXT PRIMARY KEY CHECK (key != 'agentsview_last_push_machine'),
-			value TEXT NOT NULL
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL,
+			CHECK (key != 'agentsview_last_push_machine' OR value != 'host')
 		);
-		INSERT INTO sync_metadata (key, value)
-		VALUES ('agentsview_schema_version', 'old')`)
+		INSERT INTO sync_metadata (key, value) VALUES
+			('agentsview_schema_version', '11'),
+			('agentsview_data_version', '80'),
+			('agentsview_source_database_id', 'old-database'),
+			('agentsview_source_archive_id', 'old-archive'),
+			('agentsview_push_scope', 'old-scope'),
+			('agentsview_last_push_cutoff', 'old-cutoff'),
+			('agentsview_last_push_at', 'old-at'),
+			('agentsview_last_push_machine', 'old-host'),
+			('agentsview_deletion_revision', '7'),
+			('agentsview_identity_revision', '8'),
+			('agentsview_mapping_revision', '9'),
+			('agentsview_mirror_generation', 'old-generation')`)
 	require.NoError(t, err)
+	before := readAllMirrorMetadataForTest(t, conn)
 
 	err = writeMirrorMetadata(t.Context(), conn, mirrorMetadata{
-		SchemaVersion: SchemaVersion, LastPushMachine: "host",
+		SchemaVersion: SchemaVersion, DataVersion: 81,
+		SourceDatabaseID: "new-database", SourceArchiveID: "new-archive",
+		Scope: "new-scope", LastPushCutoff: "new-cutoff",
+		LastPushAt: "new-at", LastPushMachine: "host",
+		DeletionRevision: 17, IdentityRevision: 18, MappingRevision: 19,
 	})
 	require.Error(t, err)
+	assert.Equal(t, before, readAllMirrorMetadataForTest(t, conn))
+}
 
-	value, err := readMetadataKey(t.Context(), conn, schemaVersionMetadataKey)
+func readAllMirrorMetadataForTest(t *testing.T, conn *sql.DB) map[string]string {
+	t.Helper()
+	rows, err := conn.QueryContext(t.Context(), `
+		SELECT key, value FROM sync_metadata ORDER BY key`)
 	require.NoError(t, err)
-	assert.Equal(t, "old", value)
-	generation, err := readMetadataKey(t.Context(), conn, mirrorGenerationMetadataKey)
-	require.NoError(t, err)
-	assert.Empty(t, generation)
+	defer func() { require.NoError(t, rows.Close()) }()
+	values := make(map[string]string)
+	for rows.Next() {
+		var key, value string
+		require.NoError(t, rows.Scan(&key, &value))
+		values[key] = value
+	}
+	require.NoError(t, rows.Err())
+	return values
 }
 
 func TestUsageEventsDedupIndexAllowsRepeatedEmptyKeysAndRejectsDuplicates(t *testing.T) {

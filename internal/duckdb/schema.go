@@ -269,6 +269,16 @@ func newMirrorGenerationToken() (string, error) {
 	return hex.EncodeToString(nonce[:]), nil
 }
 
+func validateMirrorGeneration(value string) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf(
+			"missing or empty required duckdb metadata key %s",
+			mirrorGenerationMetadataKey,
+		)
+	}
+	return nil
+}
+
 // readMirrorMetadata reads mirrorMetadata back from sync_metadata. Missing
 // keys read back as zero values; malformed integer fields are reported as
 // errors so callers (ProbeMirror) can surface them as shape issues rather
@@ -298,10 +308,8 @@ func readMirrorMetadata(ctx context.Context, db *sql.DB) (mirrorMetadata, error)
 		LastPushMachine:  raw[lastPushMachineMetadataKey],
 		MirrorGeneration: raw[mirrorGenerationMetadataKey],
 	}
-	if meta.MirrorGeneration == "" {
-		return mirrorMetadata{}, fmt.Errorf(
-			"missing required duckdb metadata key %s", mirrorGenerationMetadataKey,
-		)
+	if err := validateMirrorGeneration(meta.MirrorGeneration); err != nil {
+		return mirrorMetadata{}, err
 	}
 	var err error
 	if meta.SchemaVersion, err = parseMirrorMetadataInt(
@@ -476,10 +484,9 @@ func checkSchemaShapeCompat(
 	if err != nil {
 		return fmt.Errorf("checking duckdb mirror generation: %w", err)
 	}
-	if strings.TrimSpace(generation) == "" {
+	if err := validateMirrorGeneration(generation); err != nil {
 		return fmt.Errorf(
-			"duckdb schema incompatible; missing or empty %s in sync_metadata",
-			mirrorGenerationMetadataKey,
+			"duckdb schema incompatible: %w", err,
 		)
 	}
 

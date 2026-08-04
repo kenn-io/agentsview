@@ -141,9 +141,16 @@ func (s *BunStore) LoadPricingMap(
 func (s *BunStore) loadPricingMapFrom(
 	ctx context.Context, store bun.IDB,
 ) ([]export.EffectivePricingRow, error) {
-	prices, err := listBunModelPricing(ctx, store)
+	pricingTable, err := s.bunTableExists(ctx, store, "model_pricing")
 	if err != nil {
 		return nil, err
+	}
+	var prices []ModelPricing
+	if pricingTable {
+		prices, err = listBunModelPricing(ctx, store)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	s.pricingMu.RLock()
@@ -155,9 +162,6 @@ func (s *BunStore) loadPricingMapFrom(
 	fallback := fallbackRateMap()
 	out := make(map[string]export.ModelRates)
 	for _, price := range prices {
-		if strings.HasPrefix(price.ModelPattern, "_") {
-			continue
-		}
 		rates := modelPricingRates(price)
 		rates.Source = modelPricingSource(price, fallback)
 		out[price.ModelPattern] = rates
@@ -186,10 +190,18 @@ func (s *BunStore) loadPricingMapFrom(
 	return pricingMapRows(out), nil
 }
 
-func (s *BunStore) loadPricingMap(
-	ctx context.Context,
-) ([]export.EffectivePricingRow, error) {
-	return s.LoadPricingMap(ctx)
+func (s *BunStore) bunTableExists(
+	ctx context.Context, store bun.IDB, table string,
+) (bool, error) {
+	probe, ok := s.backend.(BunTablePresenceProbe)
+	if !ok {
+		return true, nil
+	}
+	exists, err := probe.BunTableExists(ctx, store, table)
+	if err != nil {
+		return false, fmt.Errorf("probing optional table %s: %w", table, err)
+	}
+	return exists, nil
 }
 
 func listBunModelPricing(
@@ -349,49 +361,53 @@ func (s *BunStore) loadDailyUsageRows(
 ) ([]dailyUsageScanRow, error) {
 	var staged []dailyUsageScanRow
 	err := s.consistentView(ctx, func(store bun.IDB) error {
-		rows, err := loadBunSessionUsageRows(ctx, store, filter, matching)
-		if err != nil {
-			return err
-		}
-		if includeCursor {
-			cursor, err := loadBunCursorUsageRows(ctx, store, filter)
-			if err != nil {
-				return err
-			}
-			rows = append(rows, cursor...)
-		}
-		sortDailyUsageRows(rows)
-		staged = rows
-		return nil
+		var err error
+		staged, err = s.loadDailyUsageRowsFrom(
+			ctx, store, filter, includeCursor, matching,
+		)
+		return err
 	})
 	return staged, err
 }
 
-func (s *BunStore) loadSessionUsageRows(
-	ctx context.Context, sessionID string,
+func (s *BunStore) loadDailyUsageRowsFrom(
+	ctx context.Context, store bun.IDB, filter UsageFilter,
+	includeCursor, matching bool,
+) ([]dailyUsageScanRow, error) {
+	rows, err := s.loadBunSessionUsageRows(ctx, store, filter, matching)
+	if err != nil {
+		return nil, err
+	}
+	if includeCursor {
+		cursor, err := s.loadBunCursorUsageRows(ctx, store, filter)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, cursor...)
+	}
+	sortDailyUsageRows(rows)
+	return rows, nil
+}
+
+func (s *BunStore) loadSessionUsageRowsFrom(
+	ctx context.Context, store bun.IDB, filter UsageFilter, sessionID string,
 ) ([]usageScanRow, error) {
-	filter := UsageFilter{}
-	var staged []usageScanRow
-	err := s.consistentView(ctx, func(store bun.IDB) error {
-		rows, err := loadBunUsageProjections(ctx, store, filter, false, sessionID)
-		if err != nil {
-			return err
-		}
-		out := make([]usageScanRow, 0, len(rows))
-		for _, row := range rows {
-			out = append(out, usageProjectionToFullRow(row))
-		}
-		sortUsageRows(out)
-		staged = out
-		return nil
-	})
-	return staged, err
+	rows, err := s.loadBunUsageProjections(ctx, store, filter, false, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]usageScanRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, usageProjectionToFullRow(row))
+	}
+	sortUsageRows(out)
+	return out, nil
 }
 
-func loadBunSessionUsageRows(
+func (s *BunStore) loadBunSessionUsageRows(
 	ctx context.Context, store bun.IDB, filter UsageFilter, matching bool,
 ) ([]dailyUsageScanRow, error) {
-	projections, err := loadBunUsageProjections(ctx, store, filter, matching, "")
+	projections, err := s.loadBunUsageProjections(ctx, store, filter, matching, "")
 	if err != nil {
 		return nil, err
 	}
@@ -402,7 +418,7 @@ func loadBunSessionUsageRows(
 	return rows, nil
 }
 
-func loadBunUsageProjections(
+func (s *BunStore) loadBunUsageProjections(
 	ctx context.Context, store bun.IDB, filter UsageFilter,
 	matching bool, sessionID string,
 ) ([]bunUsageProjection, error) {
@@ -421,7 +437,13 @@ func loadBunUsageProjections(
 	if sessionID != "" {
 		messageQuery = messageQuery.Where("m.session_id = ?", sessionID)
 	}
-	messageQuery = appendBunUsageLowerBound(messageQuery, filter, "m.timestamp")
+	messageQuery = appendBunUsageFilters(
+		messageQuery, filter, "m.model", s.backend.SessionQueryDialect(),
+	)
+	messageQuery = appendBunUsageBounds(
+		messageQuery, filter, "m.timestamp", true,
+		s.backend.SessionQueryDialect(),
+	)
 	if err := messageQuery.Scan(ctx, &messages); err != nil {
 		return nil, fmt.Errorf("querying usage messages: %w", err)
 	}
@@ -438,7 +460,13 @@ func loadBunUsageProjections(
 	if sessionID != "" {
 		eventQuery = eventQuery.Where("ue.session_id = ?", sessionID)
 	}
-	eventQuery = appendBunUsageLowerBound(eventQuery, filter, "ue.occurred_at")
+	eventQuery = appendBunUsageFilters(
+		eventQuery, filter, "ue.model", s.backend.SessionQueryDialect(),
+	)
+	eventQuery = appendBunUsageBounds(
+		eventQuery, filter, "ue.occurred_at", true,
+		s.backend.SessionQueryDialect(),
+	)
 	if err := eventQuery.Scan(ctx, &events); err != nil {
 		return nil, fmt.Errorf("querying usage events: %w", err)
 	}
@@ -461,20 +489,146 @@ func loadBunUsageProjections(
 	return rows, nil
 }
 
-func appendBunUsageLowerBound(
+func appendBunUsageBounds(
 	query *bun.SelectQuery, filter UsageFilter, timestampColumn string,
+	withSessionFallback bool, dialect QueryDialect,
 ) *bun.SelectQuery {
 	bounds := usageBoundsForFilter(filter)
-	if bounds.from == "" {
-		return query
+	expr := timestampColumn
+	if withSessionFallback {
+		if dialect.timestampOrderExpr != nil {
+			expr = "julianday(COALESCE(NULLIF(" + timestampColumn +
+				", ''), NULLIF(s.started_at, ''), s.created_at))"
+		} else {
+			expr = "COALESCE(" + timestampColumn + ", s.started_at, s.created_at)"
+		}
+	} else if dialect.timestampOrderExpr != nil {
+		expr = dialect.timestampOrderExpr(timestampColumn)
 	}
-	parsed, err := time.Parse(time.RFC3339, bounds.from)
-	if err != nil {
-		return query
+	parameter := "?"
+	if dialect.timestampOrderExpr != nil {
+		parameter = dialect.timestampOrderExpr("?")
 	}
-	return query.Where(
-		"("+timestampColumn+" >= ? OR s.started_at >= ?)", parsed, parsed,
+	if bounds.from != "" {
+		query = query.Where(expr+" >= "+parameter, bounds.from)
+	}
+	if bounds.to != "" {
+		query = query.Where(expr+" <= "+parameter, bounds.to)
+	}
+	return query
+}
+
+func appendBunUsageFilters(
+	query *bun.SelectQuery, filter UsageFilter, modelColumn string,
+	dialect QueryDialect,
+) *bun.SelectQuery {
+	query = appendBunUsageValues(query, modelColumn, csvUsageValues(filter.Model), true)
+	query = appendBunUsageValues(
+		query, modelColumn, csvUsageValues(filter.ExcludeModel), false,
 	)
+	query = appendBunUsageValues(query, "s.agent", csvUsageValues(filter.Agent), true)
+	query = appendBunUsageValues(query, "s.project", filter.ProjectFilterLabels(), true)
+	query = appendBunUsageValues(query, "s.machine", csvUsageValues(filter.Machine), true)
+	query = appendBunUsageValues(
+		query, "s.project", filter.ExcludedProjectFilterLabels(), false,
+	)
+	query = appendBunUsageValues(
+		query, "s.agent", csvUsageValues(filter.ExcludeAgent), false,
+	)
+	if filter.GitBranch != "" {
+		clause, args := BranchPairClauseArgs(
+			"s.project", "s.git_branch", filter.GitBranch, nil,
+		)
+		query = query.Where(clause, args...)
+	}
+	if filter.MinUserMessages > 0 {
+		query = query.Where("s.user_message_count >= ?", filter.MinUserMessages)
+	}
+	scope := normalizeAutomatedScope(filter.AutomatedScope, filter.ExcludeAutomated)
+	if filter.ExcludeOneShot {
+		if scope == "human" {
+			query = query.Where("s.user_message_count > 1")
+		} else {
+			query = query.Where("(s.user_message_count > 1 OR s.is_automated = ?)", true)
+		}
+	}
+	switch scope {
+	case "human":
+		query = query.Where("s.is_automated = ?", false)
+	case "automated":
+		query = query.Where("s.is_automated = ?", true)
+	}
+	if filter.ActiveSince != "" {
+		expr, parameter := bunUsageSessionActivityComparison(dialect)
+		query = query.Where(expr+" >= "+parameter, filter.ActiveSince)
+	}
+	return appendBunUsageTerminationFilter(query, filter.Termination, dialect)
+}
+
+func csvUsageValues(value string) []string {
+	if value == "" {
+		return nil
+	}
+	return strings.Split(value, ",")
+}
+
+func appendBunUsageValues(
+	query *bun.SelectQuery, column string, values []string, include bool,
+) *bun.SelectQuery {
+	if len(values) == 0 {
+		return query
+	}
+	operator := " IN (?)"
+	if !include {
+		operator = " NOT IN (?)"
+	}
+	return query.Where(column+operator, bun.List(values))
+}
+
+func bunUsageSessionActivityComparison(dialect QueryDialect) (string, string) {
+	if dialect.timestampOrderExpr != nil {
+		return "julianday(COALESCE(NULLIF(s.ended_at, ''), " +
+			"NULLIF(s.started_at, ''), s.created_at))", dialect.timestampOrderExpr("?")
+	}
+	return "COALESCE(s.ended_at, s.started_at, s.created_at)", "?"
+}
+
+func appendBunUsageTerminationFilter(
+	query *bun.SelectQuery, filter string, dialect QueryDialect,
+) *bun.SelectQuery {
+	if !usageHasTerminationFilter(filter) {
+		return query
+	}
+	activityExpr, parameter := bunUsageSessionActivityComparison(dialect)
+	now := time.Now().UTC()
+	activeCutoff := now.Add(-activeWindow).Format(time.RFC3339Nano)
+	staleCutoff := now.Add(-staleWindow).Format(time.RFC3339Nano)
+	flagged := "s.termination_status IN ('tool_call_pending', 'truncated')"
+	var predicates []string
+	var args []any
+	for part := range strings.SplitSeq(filter, ",") {
+		switch strings.TrimSpace(part) {
+		case "active":
+			predicates = append(predicates, activityExpr+" > "+parameter)
+			args = append(args, activeCutoff)
+		case "stale":
+			predicates = append(predicates, "("+activityExpr+" > "+parameter+
+				" AND "+activityExpr+" <= "+parameter+" AND "+flagged+")")
+			args = append(args, staleCutoff, activeCutoff)
+		case "unclean":
+			predicates = append(predicates, "("+activityExpr+" <= "+parameter+
+				" AND "+flagged+")")
+			args = append(args, staleCutoff)
+		case "clean":
+			predicates = append(predicates, "s.termination_status = 'clean'")
+		case "awaiting_user":
+			predicates = append(predicates, "s.termination_status = 'awaiting_user'")
+		}
+	}
+	if len(predicates) == 0 {
+		return query
+	}
+	return query.Where("("+strings.Join(predicates, " OR ")+")", args...)
 }
 
 func usageProjectionToDailyRow(row bunUsageProjection) dailyUsageScanRow {
@@ -527,10 +681,17 @@ func usageEventProjectionDedupKey(row bunUsageProjection) string {
 	return fmt.Sprintf("%s:%s:id:%d", row.SessionID, row.UsageSource, row.ID)
 }
 
-func loadBunCursorUsageRows(
+func (s *BunStore) loadBunCursorUsageRows(
 	ctx context.Context, store bun.IDB, filter UsageFilter,
 ) ([]dailyUsageScanRow, error) {
 	if !cursorUsageMatchesFilter(filter) {
+		return nil, nil
+	}
+	exists, err := s.bunTableExists(ctx, store, "cursor_usage_events")
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
 		return nil, nil
 	}
 	var rows []bunCursorUsageProjection
@@ -539,11 +700,19 @@ func loadBunCursorUsageRows(
 			"cache_write_tokens", "cache_read_tokens", "charged_microdollars",
 			"is_headless", "dedup_key").
 		Where("model != ?", "")
-	if bounds := usageBoundsForFilter(filter); bounds.from != "" {
-		if parsed, err := time.Parse(time.RFC3339, bounds.from); err == nil {
-			query = query.Where("occurred_at >= ?", parsed)
-		}
+	query = appendBunUsageValues(query, "cu.model", csvUsageValues(filter.Model), true)
+	query = appendBunUsageValues(
+		query, "cu.model", csvUsageValues(filter.ExcludeModel), false,
+	)
+	switch normalizeAutomatedScope(filter.AutomatedScope, filter.ExcludeAutomated) {
+	case "human":
+		query = query.Where("cu.is_headless = ?", false)
+	case "automated":
+		query = query.Where("cu.is_headless = ?", true)
 	}
+	query = appendBunUsageBounds(
+		query, filter, "cu.occurred_at", false, s.backend.SessionQueryDialect(),
+	)
 	if err := query.Scan(ctx, &rows); err != nil {
 		return nil, fmt.Errorf("querying cursor usage events: %w", err)
 	}

@@ -1,12 +1,100 @@
 package db
 
 import (
+	"context"
+	"database/sql"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/db/bunmodel"
+	"go.kenn.io/agentsview/internal/money"
 )
+
+type alternatingUsageBackend struct {
+	first, second bun.IDB
+	views         int
+}
+
+func (*alternatingUsageBackend) Name() string { return "alternating-usage" }
+
+func (*alternatingUsageBackend) ReadOnly() bool { return true }
+
+func (*alternatingUsageBackend) Capabilities() BackendCapabilities {
+	return BackendCapabilities{}
+}
+
+func (*alternatingUsageBackend) SessionQueryDialect() QueryDialect {
+	return SQLiteBunSessionQueryDialect()
+}
+
+func (*alternatingUsageBackend) SessionVersion(
+	context.Context, bun.IDB, string,
+) (int, int64, error) {
+	return 0, 0, sql.ErrNoRows
+}
+
+func (b *alternatingUsageBackend) View(
+	_ context.Context, fn func(bun.IDB) error,
+) error {
+	return fn(b.second)
+}
+
+func (b *alternatingUsageBackend) ConsistentView(
+	_ context.Context, fn func(bun.IDB) error,
+) error {
+	b.views++
+	if b.views == 1 {
+		return fn(b.first)
+	}
+	return fn(b.second)
+}
+
+func (*alternatingUsageBackend) Update(
+	context.Context, func(bun.IDB) error,
+) error {
+	return ErrReadOnly
+}
+
+func TestGetDailyUsageKeepsPricingRowsAndIdentityInOneView(t *testing.T) {
+	first := testDB(t)
+	second := testDB(t)
+	seedUsageSnapshot := func(database *DB, inputTokens int, inputRate int64) {
+		t.Helper()
+		startedAt := "2026-08-03T12:00:00Z"
+		require.NoError(t, database.UpsertSession(Session{
+			ID: "snapshot-usage", Project: "snapshot", Machine: "host", Agent: "codex",
+			StartedAt: &startedAt, MessageCount: 1, UserMessageCount: 1,
+		}))
+		require.NoError(t, database.InsertMessages([]Message{{
+			SessionID: "snapshot-usage", Ordinal: 0, Role: "assistant",
+			Content: "usage", ContentLength: 5, Timestamp: startedAt,
+			Model: "snapshot-model", TokenUsage: fmt.Appendf(
+				nil, `{"input_tokens":%d}`, inputTokens,
+			),
+		}}))
+		require.NoError(t, database.UpsertModelPricing([]ModelPricing{{
+			ModelPattern: "snapshot-model",
+			InputPerMTok: money.Money{Microdollars: inputRate},
+		}}))
+	}
+	seedUsageSnapshot(first, 1, 1_000_000)
+	seedUsageSnapshot(second, 100, 100_000_000)
+
+	backend := &alternatingUsageBackend{
+		first: first.bunReader, second: second.bunReader,
+	}
+	store := NewBunStore(backend)
+	result, err := store.GetDailyUsage(t.Context(), UsageFilter{
+		From: "2026-08-03", To: "2026-08-03", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Totals.InputTokens)
+	assert.Equal(t, int64(1), result.Totals.TotalCost.Microdollars)
+	assert.Equal(t, 1, backend.views)
+}
 
 func TestUpsertModelPricingRowsReplacesBandsAtomically(t *testing.T) {
 	database := testDB(t)

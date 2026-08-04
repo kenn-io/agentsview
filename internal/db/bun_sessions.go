@@ -262,32 +262,42 @@ func (s *BunStore) GetSessionFull(ctx context.Context, id string) (*Session, err
 func (s *BunStore) getSession(
 	ctx context.Context, id string, includeDeleted bool,
 ) (*Session, error) {
-	var row bunmodel.Session
-	var session Session
+	var session *Session
 	err := s.view(ctx, func(store bun.IDB) error {
-		query := store.NewSelect().Model(&row).Where("id = ?", id)
-		if !includeDeleted {
-			query = query.Where("deleted_at IS NULL")
-		}
-		if err := query.Scan(ctx); err != nil {
-			return err
-		}
-		if includeDeleted {
-			session = visibleSessionFromBunRow(row)
-			if hydrator, ok := s.backend.(bunSessionFullHydrator); ok {
-				return hydrator.HydrateSessionFull(ctx, store, &session)
-			}
-			return nil
-		}
-		session = baseSessionFromBunRow(row)
-		return nil
+		var err error
+		session, err = s.getSessionFrom(ctx, store, id, includeDeleted)
+		return err
 	})
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
 	if err != nil {
 		return nil, fmt.Errorf("getting session %s: %w", id, err)
 	}
+	return session, nil
+}
+
+func (s *BunStore) getSessionFrom(
+	ctx context.Context, store bun.IDB, id string, includeDeleted bool,
+) (*Session, error) {
+	var row bunmodel.Session
+	query := store.NewSelect().Model(&row).Where("id = ?", id)
+	if !includeDeleted {
+		query = query.Where("deleted_at IS NULL")
+	}
+	if err := query.Scan(ctx); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if includeDeleted {
+		session := visibleSessionFromBunRow(row)
+		if hydrator, ok := s.backend.(bunSessionFullHydrator); ok {
+			if err := hydrator.HydrateSessionFull(ctx, store, &session); err != nil {
+				return nil, err
+			}
+		}
+		return &session, nil
+	}
+	session := baseSessionFromBunRow(row)
 	return &session, nil
 }
 
