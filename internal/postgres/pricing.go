@@ -57,7 +57,9 @@ LEFT JOIN model_pricing_bands b ON b.model_pattern = p.model_pattern
 ORDER BY p.model_pattern, b.above_input_tokens`
 
 func listPGModelPricing(
-	ctx context.Context, pg *sql.DB,
+	ctx context.Context, pg interface {
+		QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	},
 ) ([]db.ModelPricing, error) {
 	rows, err := pg.QueryContext(ctx,
 		pgModelPricingSelect,
@@ -139,7 +141,7 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if len(prices) == 0 {
 		prices = fallbackPricingRows()
 	}
-	existing, err := listPGModelPricing(ctx, s.pg)
+	existing, err := listPGModelPricing(ctx, s.bunDB())
 	if err != nil {
 		return fmt.Errorf("listing pg model pricing: %w", err)
 	}

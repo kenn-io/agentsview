@@ -641,9 +641,10 @@ type DB struct {
 	recallSearcher RecallVectorSearcher
 }
 
-// Reader exposes guarded read-only query operations. It intentionally does
-// not expose the underlying *sql.DB so callers cannot retain a raw pool across
-// Reopen.
+// Reader exposes guarded read-only query operations through the current Bun
+// handle. It intentionally does not expose the underlying *sql.DB so callers
+// cannot retain a raw pool across Reopen or bypass the canonical execution
+// layer.
 type Reader interface {
 	Exec(query string, args ...any) (sql.Result, error)
 	Query(query string, args ...any) (*sql.Rows, error)
@@ -670,8 +671,8 @@ type writerHandle struct {
 	owner *DB
 }
 
-func (r *readerHandle) current() *sql.DB {
-	return r.owner.reader.Load()
+func (r *readerHandle) currentBun() *bun.DB {
+	return r.owner.bunReader
 }
 
 func (r *readerHandle) Exec(
@@ -679,7 +680,7 @@ func (r *readerHandle) Exec(
 ) (sql.Result, error) {
 	r.owner.connMu.RLock()
 	defer r.owner.connMu.RUnlock()
-	return r.current().Exec(query, args...)
+	return r.currentBun().Exec(query, args...)
 }
 
 func (r *readerHandle) Query(
@@ -687,7 +688,7 @@ func (r *readerHandle) Query(
 ) (*sql.Rows, error) {
 	r.owner.connMu.RLock()
 	defer r.owner.connMu.RUnlock()
-	return r.current().Query(query, args...)
+	return r.currentBun().Query(query, args...)
 }
 
 func (r *readerHandle) QueryContext(
@@ -695,7 +696,7 @@ func (r *readerHandle) QueryContext(
 ) (*sql.Rows, error) {
 	r.owner.connMu.RLock()
 	defer r.owner.connMu.RUnlock()
-	return r.current().QueryContext(ctx, query, args...)
+	return r.currentBun().QueryContext(ctx, query, args...)
 }
 
 func (r *readerHandle) QueryRow(
@@ -703,7 +704,7 @@ func (r *readerHandle) QueryRow(
 ) *sql.Row {
 	r.owner.connMu.RLock()
 	defer r.owner.connMu.RUnlock()
-	return r.current().QueryRow(query, args...)
+	return r.currentBun().QueryRow(query, args...)
 }
 
 func (r *readerHandle) QueryRowContext(
@@ -711,7 +712,7 @@ func (r *readerHandle) QueryRowContext(
 ) *sql.Row {
 	r.owner.connMu.RLock()
 	defer r.owner.connMu.RUnlock()
-	return r.current().QueryRowContext(ctx, query, args...)
+	return r.currentBun().QueryRowContext(ctx, query, args...)
 }
 
 func (r *readerHandle) BeginTx(
@@ -719,10 +720,14 @@ func (r *readerHandle) BeginTx(
 ) (*sql.Tx, error) {
 	r.owner.connMu.RLock()
 	defer r.owner.connMu.RUnlock()
-	return r.current().BeginTx(ctx, opts)
+	// Bun owns transaction creation. The raw view remains only for local
+	// archive operational helpers whose callback contracts still use sql.Tx;
+	// shared Store reads use BunBackend.ConsistentView directly.
+	tx, err := r.currentBun().BeginTx(ctx, opts)
+	return tx.Tx, err
 }
 
-func (w *writerHandle) current() (*sql.DB, error) {
+func (w *writerHandle) currentRaw() (*sql.DB, error) {
 	if w.owner.readOnly {
 		return nil, ErrReadOnly
 	}
@@ -736,10 +741,17 @@ func (w *writerHandle) current() (*sql.DB, error) {
 	return db, nil
 }
 
+func (w *writerHandle) currentBun() (*bun.DB, error) {
+	if _, err := w.currentRaw(); err != nil {
+		return nil, err
+	}
+	return w.owner.bunWriter, nil
+}
+
 func (w *writerHandle) Exec(query string, args ...any) (sql.Result, error) {
 	w.owner.connMu.RLock()
 	defer w.owner.connMu.RUnlock()
-	db, err := w.current()
+	db, err := w.currentBun()
 	if err != nil {
 		return nil, err
 	}
@@ -751,7 +763,7 @@ func (w *writerHandle) ExecContext(
 ) (sql.Result, error) {
 	w.owner.connMu.RLock()
 	defer w.owner.connMu.RUnlock()
-	db, err := w.current()
+	db, err := w.currentBun()
 	if err != nil {
 		return nil, err
 	}
@@ -763,7 +775,7 @@ func (w *writerHandle) Query(
 ) (*sql.Rows, error) {
 	w.owner.connMu.RLock()
 	defer w.owner.connMu.RUnlock()
-	db, err := w.current()
+	db, err := w.currentBun()
 	if err != nil {
 		return nil, err
 	}
@@ -775,7 +787,7 @@ func (w *writerHandle) QueryContext(
 ) (*sql.Rows, error) {
 	w.owner.connMu.RLock()
 	defer w.owner.connMu.RUnlock()
-	db, err := w.current()
+	db, err := w.currentBun()
 	if err != nil {
 		return nil, err
 	}
@@ -785,7 +797,7 @@ func (w *writerHandle) QueryContext(
 func (w *writerHandle) QueryRow(query string, args ...any) rowScanner {
 	w.owner.connMu.RLock()
 	defer w.owner.connMu.RUnlock()
-	db, err := w.current()
+	db, err := w.currentBun()
 	if err != nil {
 		return errRow{err: err}
 	}
@@ -799,7 +811,7 @@ func (w *writerHandle) QueryRowContext(
 ) rowScanner {
 	w.owner.connMu.RLock()
 	defer w.owner.connMu.RUnlock()
-	db, err := w.current()
+	db, err := w.currentBun()
 	if err != nil {
 		return errRow{err: err}
 	}
@@ -809,11 +821,14 @@ func (w *writerHandle) QueryRowContext(
 func (w *writerHandle) Begin() (*sql.Tx, error) {
 	w.owner.connMu.RLock()
 	defer w.owner.connMu.RUnlock()
-	db, err := w.current()
+	db, err := w.currentBun()
 	if err != nil {
 		return nil, err
 	}
-	return db.Begin()
+	// Bun owns transaction creation; expose the embedded sql.Tx only to
+	// SQLite-specific archive operations, never to a common Store method.
+	tx, err := db.Begin()
+	return tx.Tx, err
 }
 
 func (w *writerHandle) BeginTx(
@@ -821,17 +836,23 @@ func (w *writerHandle) BeginTx(
 ) (*sql.Tx, error) {
 	w.owner.connMu.RLock()
 	defer w.owner.connMu.RUnlock()
-	db, err := w.current()
+	db, err := w.currentBun()
 	if err != nil {
 		return nil, err
 	}
-	return db.BeginTx(ctx, opts)
+	// See Begin: canonical/common writes retain bun.Tx, while archive-only
+	// operational helpers may use the embedded driver transaction.
+	tx, err := db.BeginTx(ctx, opts)
+	return tx.Tx, err
 }
 
 func (w *writerHandle) Conn(ctx context.Context) (*sql.Conn, error) {
+	// A raw dedicated connection is reserved for SQLite connection-local
+	// control such as ATTACH/DETACH and extension registration. Ordinary
+	// archive queries use the Bun-backed methods above.
 	w.owner.connMu.RLock()
 	defer w.owner.connMu.RUnlock()
-	db, err := w.current()
+	db, err := w.currentRaw()
 	if err != nil {
 		return nil, err
 	}
@@ -841,7 +862,7 @@ func (w *writerHandle) Conn(ctx context.Context) (*sql.Conn, error) {
 func (w *writerHandle) Close() error {
 	w.owner.connMu.RLock()
 	defer w.owner.connMu.RUnlock()
-	db, err := w.current()
+	db, err := w.currentRaw()
 	if err != nil {
 		return err
 	}
@@ -851,8 +872,11 @@ func (w *writerHandle) Close() error {
 // getReader returns a guarded facade for the current read-only connection pool.
 func (db *DB) getReader() *readerHandle { return &readerHandle{owner: db} }
 
+// rawReader is a lifecycle/driver seam for pool state, compatibility probes,
+// and SQLite connection setup. Application queries use BunStore or Reader.
 func (db *DB) rawReader() *sql.DB { return db.reader.Load() }
 
+// rawWriter is the matching lifecycle/driver seam for the writable pool.
 func (db *DB) rawWriter() *sql.DB { return db.writer.Load() }
 
 // getWriter returns a guarded facade for the current write connection pool.

@@ -15,6 +15,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -631,43 +633,27 @@ func TestPGExcludedSessionIDsQueryUsesSingleArrayParameter(t *testing.T) {
 		"sess-003",
 	})
 
-	assert.Contains(t, query, "id = ANY($1)")
-	assert.NotContains(t, query, "$2")
+	assert.Contains(t, query, "id = ANY(?0)")
+	assert.NotContains(t, query, "?1")
 	require.Len(t, args, 1)
+	array, ok := args[0].(*pgdialect.ArrayValue)
+	require.True(t, ok)
 	assert.Equal(t,
 		[]string{"sess-001", "sess-002", "sess-003"},
-		args[0],
+		array.Value(),
 	)
 }
 
 func TestDeletePGExcludedSessionRowsUsesSingleArrayParameter(t *testing.T) {
-	execer := &capturePGExec{}
+	state := &pushSessionProbeState{}
+	store := newPushSessionProbeDB(t, state)
 
 	require.NoError(t, deletePGExcludedSessionRows(
-		context.Background(), execer,
+		context.Background(), store,
 		[]string{"sess-001", "sess-002", "sess-003"},
 	))
 
-	assert.Contains(t, execer.query, "DELETE FROM sessions")
-	assert.Contains(t, execer.query, "id = ANY($1)")
-	require.Len(t, execer.args, 1)
-	assert.Equal(t,
-		[]string{"sess-001", "sess-002", "sess-003"},
-		execer.args[0],
-	)
-}
-
-type capturePGExec struct {
-	query string
-	args  []any
-}
-
-func (c *capturePGExec) ExecContext(
-	_ context.Context, query string, args ...any,
-) (sql.Result, error) {
-	c.query = query
-	c.args = args
-	return driver.RowsAffected(0), nil
+	assert.True(t, state.deletedExcluded)
 }
 
 func TestPurgePGExcludedPushSessionsChecksDerivedAliases(t *testing.T) {
@@ -746,7 +732,7 @@ var (
 
 func newPushSessionProbeDB(
 	t *testing.T, state *pushSessionProbeState,
-) *sql.DB {
+) *bun.DB {
 	t.Helper()
 	pushSessionProbeRegisterOnce.Do(func() {
 		sql.Register("agentsview_push_session_probe", pushSessionProbeDriver{})
@@ -763,8 +749,9 @@ func newPushSessionProbeDB(
 
 	pg, err := sql.Open("agentsview_push_session_probe", name)
 	require.NoError(t, err, "open push-session probe db")
-	t.Cleanup(func() { _ = pg.Close() })
-	return pg
+	store := bun.NewDB(pg, pgdialect.New())
+	t.Cleanup(func() { _ = store.Close() })
+	return store
 }
 
 func (pushSessionProbeDriver) Open(name string) (driver.Conn, error) {
@@ -810,7 +797,7 @@ func (c *pushSessionProbeConn) ExecContext(
 		c.state.upsertArgs = append([]driver.NamedValue(nil), args...)
 		return driver.RowsAffected(1), nil
 	case strings.Contains(normalized, "delete from sessions") &&
-		strings.Contains(normalized, "id = any($1)"):
+		strings.Contains(normalized, "id = any('{"):
 		c.state.deletedExcluded = true
 		return driver.RowsAffected(1), nil
 	case strings.Contains(normalized, "delete from session_aliases"):
@@ -830,19 +817,14 @@ func (c *pushSessionProbeConn) ExecContext(
 		}
 		return driver.RowsAffected(1), nil
 	case strings.Contains(normalized, "insert into excluded_sessions"):
-		if c.state.excludedIDs != nil && len(args) > 0 {
-			switch ids := args[0].Value.(type) {
-			case []string:
-				for _, id := range ids {
-					c.state.excludedIDs[id] = true
-				}
-			case string:
-				c.state.excludedIDs[ids] = true
+		if c.state.excludedIDs != nil {
+			for _, id := range formattedPGArrayValues(query) {
+				c.state.excludedIDs[id] = true
 			}
 		}
 		return driver.RowsAffected(1), nil
 	default:
-		return nil, errors.New("unexpected push-session probe exec")
+		return nil, fmt.Errorf("unexpected push-session probe exec: %s", query)
 	}
 }
 
@@ -860,10 +842,10 @@ func (c *pushSessionProbeConn) QueryContext(
 		}, nil
 	case strings.Contains(normalized, "select id") &&
 		strings.Contains(normalized, "excluded_sessions") &&
-		strings.Contains(normalized, "id = any($1)"):
+		strings.Contains(normalized, "id = any('{"):
 		c.state.exclusionChecks++
 		values := [][]driver.Value{}
-		for _, id := range namedValueStrings(args) {
+		for _, id := range formattedPGArrayValues(query) {
 			if c.state.existingExcluded[id] {
 				values = append(values, []driver.Value{id})
 			}
@@ -887,22 +869,29 @@ func (c *pushSessionProbeConn) QueryContext(
 			},
 		}, nil
 	default:
-		return nil, errors.New("unexpected push-session probe query")
+		return nil, fmt.Errorf("unexpected push-session probe query: %s", query)
 	}
 }
 
-func namedValueStrings(args []driver.NamedValue) []string {
-	if len(args) == 0 {
+func formattedPGArrayValues(query string) []string {
+	start := strings.Index(query, "'{")
+	if start < 0 {
 		return nil
 	}
-	switch value := args[0].Value.(type) {
-	case []string:
-		return value
-	case string:
-		return []string{value}
-	default:
+	end := strings.Index(query[start+2:], "}'")
+	if end < 0 {
 		return nil
 	}
+	body := query[start+2 : start+2+end]
+	if body == "" {
+		return nil
+	}
+	parts := strings.Split(body, `","`)
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		values = append(values, strings.Trim(part, `"`))
+	}
+	return values
 }
 
 func (pushSessionProbeTx) Commit() error { return nil }

@@ -203,6 +203,18 @@ type paramBuilder struct {
 	args []any
 }
 
+// bunParamBuilder generates reusable Bun indexed placeholders for portable
+// question-mark binding while preserving the existing dynamic SQL assembly.
+type bunParamBuilder struct {
+	args []any
+}
+
+func (pb *bunParamBuilder) add(value any) string {
+	index := len(pb.args)
+	pb.args = append(pb.args, value)
+	return fmt.Sprintf("?%d", index)
+}
+
 func (pb *paramBuilder) add(v any) string {
 	pb.n++
 	pb.args = append(pb.args, v)
@@ -222,14 +234,14 @@ func (s *Store) FindSessionIDsByRawSuffix(
 	if limit <= 0 {
 		limit = 5
 	}
-	rows, err := s.pg.QueryContext(ctx,
+	rows, err := s.bun.QueryContext(ctx,
 		`SELECT id FROM sessions
-		 WHERE (id = $1
-		        OR RIGHT(id, LENGTH($1) + 1) = ':' || $1)
+		 WHERE (id = ?0
+		        OR RIGHT(id, LENGTH(?0) + 1) = ':' || ?0)
 		   AND deleted_at IS NULL
-		 ORDER BY (id = $1) DESC,
+		 ORDER BY (id = ?0) DESC,
 		          COALESCE(ended_at, started_at, created_at) DESC
-		 LIMIT $2`,
+		 LIMIT ?1`,
 		raw, limit,
 	)
 	if err != nil {

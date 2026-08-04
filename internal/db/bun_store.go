@@ -40,23 +40,40 @@ func (s *BunStore) ReadOnly() bool {
 	return s.backend.ReadOnly()
 }
 
-// UpsertSession is the common read-store default. The writable SQLite archive
-// supplies its ingestion implementation on DB; remote serving stores inherit
-// this default instead of maintaining adapter stubs.
-func (*BunStore) UpsertSession(Session) error {
-	return ErrReadOnly
+// UpsertSession routes archive ingestion through the backend capability while
+// keeping the public Store method owned by the common runtime.
+func (s *BunStore) UpsertSession(session Session) error {
+	capabilities := s.backend.Capabilities()
+	if !capabilities.AllowsWrite(WriteArchive) || capabilities.ArchiveWrites == nil {
+		return ErrReadOnly
+	}
+	return capabilities.ArchiveWrites.UpsertSession(session)
 }
 
-// ReplaceSessionMessages is the common read-store default.
-func (*BunStore) ReplaceSessionMessages(string, []Message) error {
-	return ErrReadOnly
+// ReplaceSessionMessages routes a complete archive message replacement through
+// the writable adapter. Remote serving backends reject it before execution.
+func (s *BunStore) ReplaceSessionMessages(
+	sessionID string, messages []Message,
+) error {
+	capabilities := s.backend.Capabilities()
+	if !capabilities.AllowsWrite(WriteArchive) || capabilities.ArchiveWrites == nil {
+		return ErrReadOnly
+	}
+	return capabilities.ArchiveWrites.ReplaceSessionMessages(sessionID, messages)
 }
 
-// WriteSessionBatchAtomic is the common read-store default.
-func (*BunStore) WriteSessionBatchAtomic(
-	[]SessionBatchWrite, ...func() error,
+// WriteSessionBatchAtomic routes atomic archive ingestion through the writable
+// adapter. Remote serving backends reject it before execution.
+func (s *BunStore) WriteSessionBatchAtomic(
+	writes []SessionBatchWrite, beforeCommit ...func() error,
 ) (SessionBatchResult, error) {
-	return SessionBatchResult{}, ErrReadOnly
+	capabilities := s.backend.Capabilities()
+	if !capabilities.AllowsWrite(WriteArchive) || capabilities.ArchiveWrites == nil {
+		return SessionBatchResult{}, ErrReadOnly
+	}
+	return capabilities.ArchiveWrites.WriteSessionBatchAtomic(
+		writes, beforeCommit...,
+	)
 }
 
 // SetCursorSecret updates the shared cursor signing key.
