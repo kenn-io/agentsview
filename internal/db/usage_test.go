@@ -29,12 +29,14 @@ import (
 func TestDailyUsageAmountsPricingBandRequestScope(t *testing.T) {
 	tests := []struct {
 		name            string
+		usageSource     string
 		messageOrdinal  sql.NullInt64
 		wantCost        int64
 		wantApplication export.PricingApplication
 	}{
 		{
 			name:           "ordinal-bound request uses band",
+			usageSource:    "usage-event",
 			messageOrdinal: sql.NullInt64{Int64: 1, Valid: true},
 			wantCost:       600_000,
 			wantApplication: export.PricingApplication{
@@ -45,8 +47,20 @@ func TestDailyUsageAmountsPricingBandRequestScope(t *testing.T) {
 			},
 		},
 		{
-			name:     "unbound aggregate uses base",
-			wantCost: 300_000,
+			name:        "Goose request uses band without message ordinal",
+			usageSource: "goose-request",
+			wantCost:    600_000,
+			wantApplication: export.PricingApplication{
+				Bands: []export.AppliedPricingBand{{
+					AboveInputTokens: 200_000,
+					RequestCount:     1,
+				}},
+			},
+		},
+		{
+			name:        "unbound aggregate uses base",
+			usageSource: "usage-event",
+			wantCost:    300_000,
 			wantApplication: export.PricingApplication{
 				AggregateRowCount: 1,
 			},
@@ -58,7 +72,7 @@ func TestDailyUsageAmountsPricingBandRequestScope(t *testing.T) {
 			resolver := pricingBandTestResolver()
 			_, _, _, _, cost, _, err := dailyUsageAmounts(dailyUsageScanRow{
 				messageOrdinal: tt.messageOrdinal,
-				usageSource:    "usage-event",
+				usageSource:    tt.usageSource,
 				model:          "banded-model",
 				inputTokens:    300_000,
 			}, resolver)

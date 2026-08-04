@@ -297,16 +297,17 @@ func TestDuckActivityReportRowStatusPrefersExactCustomKimiAlias(t *testing.T) {
 	assert.Equal(t, "daimon-kimi-code", resolutions[0].PricedModel)
 }
 
-func TestDuckGetActivityReportPricingBandApplicationCountedOnce(t *testing.T) {
+func TestDuckGetActivityReportPricesGooseRequestAsRequestScoped(t *testing.T) {
 	ctx := context.Background()
 	sess := syncSession(
 		"pricing-band", "proj1", "banded", "2026-06-14T10:30:00.000Z", 1)
 	msg := syncMessage(
-		sess.ID, 0, "assistant", "request", "2026-06-14T10:30:00.000Z")
-	msg.Model = "banded-model"
-	msg.TokenUsage = json.RawMessage(`{"input_tokens":300000}`)
+		sess.ID, 0, "user", "request", "2026-06-14T10:30:00.000Z")
 	store := activityReportStore(t, []db.SessionBatchWrite{{
-		Session: sess, Messages: []db.Message{msg},
+		Session: sess, Messages: []db.Message{msg}, UsageEvents: []db.UsageEvent{{
+			Source: "goose-request", Model: "banded-model", InputTokens: 300_000,
+			OccurredAt: "2026-06-14T10:30:30.000Z", DedupKey: "goose-request",
+		}},
 		DataVersion: 1, ReplaceMessages: true,
 	}}, []db.ModelPricing{{
 		ModelPattern: "banded-model",

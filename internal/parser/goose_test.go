@@ -277,7 +277,7 @@ func TestGooseProviderParsesTranscriptToolsRelationshipsAndUsage(t *testing.T) {
 	require.Len(t, result.UsageEvents, 2)
 	firstUsage := result.UsageEvents[0]
 	assert.Nil(t, firstUsage.MessageOrdinal)
-	assert.Equal(t, "message", firstUsage.Source)
+	assert.Equal(t, "goose-request", firstUsage.Source)
 	assert.Equal(t, 100, firstUsage.InputTokens)
 	assert.Equal(t, 20, firstUsage.OutputTokens)
 	assert.Equal(t, 30, firstUsage.CacheReadInputTokens)

@@ -654,7 +654,7 @@ func gooseUsageEvent(
 	}
 	event := ParsedUsageEvent{
 		SessionID:                "goose:" + row.sessionID,
-		Source:                   "message",
+		Source:                   "goose-request",
 		Model:                    model,
 		InputTokens:              nonnegativeGooseToken(row.inputTokens),
 		OutputTokens:             nonnegativeGooseToken(row.outputTokens),

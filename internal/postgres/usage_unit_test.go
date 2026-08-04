@@ -316,6 +316,7 @@ func TestPGUsageAmountsPreserveSessionSummaryUsageEventTokens(t *testing.T) {
 func TestPGDailyUsageAmountsPricingBandRequestScope(t *testing.T) {
 	tests := []struct {
 		name           string
+		usageSource    string
 		messageOrdinal sql.NullInt64
 		wantCost       int64
 		wantAggregate  int
@@ -323,12 +324,20 @@ func TestPGDailyUsageAmountsPricingBandRequestScope(t *testing.T) {
 	}{
 		{
 			name:           "ordinal-bound request uses band",
+			usageSource:    "usage-event",
 			messageOrdinal: sql.NullInt64{Int64: 1, Valid: true},
 			wantCost:       600_000,
 			wantBand:       1,
 		},
 		{
+			name:        "Goose request uses band without message ordinal",
+			usageSource: "goose-request",
+			wantCost:    600_000,
+			wantBand:    1,
+		},
+		{
 			name:          "unbound aggregate uses base",
+			usageSource:   "usage-event",
 			wantCost:      300_000,
 			wantAggregate: 1,
 		},
@@ -338,7 +347,7 @@ func TestPGDailyUsageAmountsPricingBandRequestScope(t *testing.T) {
 			resolver := pgPricingBandTestResolver()
 			_, _, _, _, cost, _, err := pgDailyUsageAmounts(pgDailyUsageScanRow{
 				messageOrdinal: tt.messageOrdinal,
-				usageSource:    "usage-event",
+				usageSource:    tt.usageSource,
 				model:          "banded-model",
 				inputTokens:    300_000,
 			}, resolver)

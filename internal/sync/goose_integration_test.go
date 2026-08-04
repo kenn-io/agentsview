@@ -6,10 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/activity"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -91,11 +94,34 @@ func TestSyncGooseTranscriptAndChangedDatabase(t *testing.T) {
 
 	usage, err := database.GetUsageEvents(context.Background(), "goose:session-001")
 	require.NoError(t, err)
-	require.Len(t, usage, 1)
+	require.Len(t, usage, 2)
+	assert.Equal(t, "goose-request", usage[0].Source)
 	assert.Equal(t, 100, usage[0].InputTokens)
 	assert.Equal(t, 20, usage[0].OutputTokens)
 	require.NotNil(t, usage[0].Cost)
 	assert.Equal(t, money.Money{Microdollars: 12_500}, *usage[0].Cost)
+	assert.Equal(t, "goose-request", usage[1].Source)
+	assert.Equal(t, 25, usage[1].InputTokens)
+	assert.Nil(t, usage[1].Cost)
+
+	daily, err := database.GetDailyUsage(context.Background(), db.UsageFilter{
+		From: "2023-11-14", To: "2023-11-14", Agent: "goose", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 125, daily.Totals.InputTokens)
+	assert.Equal(t, 25, daily.Totals.OutputTokens)
+	assert.Equal(t, 11, daily.Totals.CacheCreationTokens)
+	assert.Equal(t, 24, daily.Totals.CacheReadTokens)
+
+	reportQuery, err := activity.ResolveQuery(activity.QueryInput{
+		Preset: "day", Date: "2023-11-14", Timezone: "UTC",
+	}, time.Date(2030, time.January, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	report, err := database.GetActivityReport(
+		context.Background(), db.AnalyticsFilter{Timezone: "UTC"}, reportQuery,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 25, report.Totals.OutputTokens)
 
 	runSyncAndAssert(t, engine, SyncStats{})
 
@@ -255,6 +281,9 @@ func writeSyncGooseDB(t *testing.T) (string, string, *sql.DB) {
 		) VALUES (
 			'session-001', 1700000010, 'claude-sonnet-4-6',
 			100, 20, 150, 20, 10, 0.0125, 'provider_reported', 0
+		), (
+			'session-001', 1700000011, 'claude-sonnet-4-6',
+			25, 5, 35, 4, 1, NULL, '', 0
 		)
 	`)
 	require.NoError(t, err)

@@ -1229,6 +1229,9 @@ func TestDuckDailyAndSessionUsageApplyPricingBandsOnlyToRequests(t *testing.T) {
 		Session:  syncSession(sessionID, "proj", "banded", "2026-03-12T10:00:00.000Z", 1),
 		Messages: []db.Message{msg},
 		UsageEvents: []db.UsageEvent{{
+			Source: "goose-request", Model: "banded-model", InputTokens: 300_000,
+			OccurredAt: "2026-03-12T10:00:30.000Z", DedupKey: "goose-request",
+		}, {
 			Source: "aggregate", Model: "banded-model", InputTokens: 300_000,
 			OccurredAt: "2026-03-12T10:01:00.000Z", DedupKey: "aggregate",
 		}},
@@ -1246,8 +1249,8 @@ func TestDuckDailyAndSessionUsageApplyPricingBandsOnlyToRequests(t *testing.T) {
 		From: "2026-03-12", To: "2026-03-12", Timezone: "UTC",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, 600_000, daily.Totals.InputTokens)
-	assert.Equal(t, money.Money{Microdollars: 900_000}, daily.Totals.TotalCost)
+	assert.Equal(t, 900_000, daily.Totals.InputTokens)
+	assert.Equal(t, money.Money{Microdollars: 1_500_000}, daily.Totals.TotalCost)
 	require.NotNil(t, daily.Pricing)
 	provenance := daily.Pricing.Models["banded-model"]
 	require.Len(t, provenance.Resolutions, 1)
@@ -1255,7 +1258,7 @@ func TestDuckDailyAndSessionUsageApplyPricingBandsOnlyToRequests(t *testing.T) {
 		AggregateRowCount: 1,
 		Bands: []export.AppliedPricingBand{{
 			AboveInputTokens: 200_000,
-			RequestCount:     1,
+			RequestCount:     2,
 		}},
 	}, provenance.Resolutions[0].Application)
 
@@ -1263,10 +1266,11 @@ func TestDuckDailyAndSessionUsageApplyPricingBandsOnlyToRequests(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.True(t, session.HasCost)
-	assert.Equal(t, money.Money{Microdollars: 900_000}, session.Cost)
-	require.Len(t, session.Breakdown, 2)
+	assert.Equal(t, money.Money{Microdollars: 1_500_000}, session.Cost)
+	require.Len(t, session.Breakdown, 3)
 	assert.Equal(t, money.Money{Microdollars: 600_000}, session.Breakdown[0].Cost)
-	assert.Equal(t, money.Money{Microdollars: 300_000}, session.Breakdown[1].Cost)
+	assert.Equal(t, money.Money{Microdollars: 600_000}, session.Breakdown[1].Cost)
+	assert.Equal(t, money.Money{Microdollars: 300_000}, session.Breakdown[2].Cost)
 }
 
 func pricingByPattern(t *testing.T, prices []pricingpkg.ModelPricing, pattern string) pricingpkg.ModelPricing {

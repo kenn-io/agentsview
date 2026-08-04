@@ -323,6 +323,48 @@ func TestResolveSessionID_DevinCanonicalID_OnDiskNotInDB(t *testing.T) {
 		"provider-backed Devin IDs should resolve via FindSource even though FileBased is false")
 }
 
+func TestResolveSessionID_GooseOnDiskNotInDB(t *testing.T) {
+	d := newTestDB(t)
+	ctx := context.Background()
+
+	root := t.TempDir()
+	sessionsDir := filepath.Join(root, "data", "sessions")
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+	dbPath := filepath.Join(sessionsDir, parser.GooseDBName)
+	gooseDB, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, gooseDB.Close()) })
+	_, err = gooseDB.Exec(`
+		CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			working_dir TEXT NOT NULL,
+			created_at TIMESTAMP,
+			updated_at TIMESTAMP
+		);
+		CREATE TABLE messages (
+			id INTEGER PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			created_timestamp INTEGER NOT NULL
+		);
+		INSERT INTO sessions (id, working_dir, created_at, updated_at)
+		VALUES ('session-123', '/cwd/goose', '2026-08-03 10:00:00', '2026-08-03 10:01:00');
+	`)
+	require.NoError(t, err)
+
+	agentDirs := map[parser.AgentType][]string{
+		parser.AgentGoose: {root},
+	}
+	got, known := resolveRawSessionID(ctx, d, agentDirs, "session-123")
+	assert.Equal(t, "goose:session-123", got)
+	assert.True(t, known,
+		"provider-backed Goose raw IDs should resolve before archive sync")
+
+	got, known = resolveRawSessionID(ctx, d, agentDirs, "goose:session-123")
+	assert.Equal(t, "goose:session-123", got)
+	assert.True(t, known,
+		"provider-backed Goose canonical IDs should resolve before archive sync")
+}
+
 func TestResolveSessionID_RawOpenClawCollidesWithCodexPrefix(t *testing.T) {
 	d := newTestDB(t)
 	ctx := context.Background()
@@ -365,7 +407,7 @@ func TestResolveSessionID_UnderscoreID_NoFalseMatch(t *testing.T) {
 	assert.True(t, known)
 }
 
-func TestAgentHasDiskSourceLookupIncludesFileBackedAgentsAndDevin(t *testing.T) {
+func TestAgentHasDiskSourceLookupIncludesProviderAuthoritativeAgents(t *testing.T) {
 	for _, agent := range []parser.AgentType{
 		parser.AgentGptme,
 		parser.AgentPi,
@@ -377,6 +419,8 @@ func TestAgentHasDiskSourceLookupIncludesFileBackedAgentsAndDevin(t *testing.T) 
 		parser.AgentOpenHands,
 		parser.AgentCursor,
 		parser.AgentDevin,
+		parser.AgentGoose,
+		parser.AgentWarp,
 		parser.AgentVibe,
 		parser.AgentClaude,
 		parser.AgentCowork,
@@ -387,10 +431,6 @@ func TestAgentHasDiskSourceLookupIncludesFileBackedAgentsAndDevin(t *testing.T) 
 		assert.True(t, agentHasDiskSourceLookup(def),
 			"token-use source probe must include %s", agent)
 	}
-	warpDef, ok := parser.AgentByType(parser.AgentWarp)
-	require.True(t, ok, "agent %s", parser.AgentWarp)
-	assert.False(t, agentHasDiskSourceLookup(warpDef),
-		"token-use source probe must exclude non-Devin non-file-backed agents")
 }
 
 func TestUsageExitCode_TokenData(t *testing.T) {

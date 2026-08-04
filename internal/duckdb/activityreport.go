@@ -706,7 +706,8 @@ func duckActivityReportRowStatus(
 		billableCacheCr, billableCacheRd,
 		explicitCost,
 		r.cost != nil,
-		r.source == "message" || duckActivityUsageHasOrdinal(r.messageOrdinal),
+		db.UsageSourceIsRequestScoped(r.source) ||
+			duckActivityUsageHasOrdinal(r.messageOrdinal),
 		pricing,
 	)
 	return savings, cost, priced, contributes, err

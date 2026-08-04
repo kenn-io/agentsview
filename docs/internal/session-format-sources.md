@@ -1062,9 +1062,11 @@ Grok section and remove the explicit registry exception in the coverage test.
   isolated observed schema-version-15 database were also checked 2026-08-03.
 - **Usage and cost:** `usage_ledger` rows provide model, input, output,
   cache-read, cache-write, compaction, cost, and cost-source data without a
-  stable message ordinal. Agentsview emits request-scoped usage events and
-  preserves reported or estimated costs. Older schemas without the ledger
-  fall back to the session's accumulated counters and cost.
+  stable message ordinal. Agentsview emits them as `goose-request`
+  request-scoped usage events so aggregate reporting reads the ledger token
+  columns without attaching rows to arbitrary messages, and preserves reported
+  or estimated costs. Older schemas without the ledger fall back to the
+  session's accumulated counters and cost.
 - **Agentsview:** `internal/parser/goose.go` and
   `internal/parser/goose_provider.go`; the provider uses per-session content
   fingerprints and bounded SQLite row cursors for watcher events, while a

@@ -1032,7 +1032,7 @@ func pgDailyUsageRowTokens(
 func pgUsageRowIsRequestScoped(
 	usageSource string, messageOrdinal sql.NullInt64,
 ) bool {
-	return usageSource == "message" || messageOrdinal.Valid
+	return db.UsageSourceIsRequestScoped(usageSource) || messageOrdinal.Valid
 }
 
 func pgRecordComputedUsagePricing(

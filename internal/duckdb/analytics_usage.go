@@ -3762,7 +3762,7 @@ func duckSessionUsageRowCost(
 	if !lookup.OK {
 		return money.Money{}, false, true, nil
 	}
-	requestScoped := r.source == "message" || r.messageOrdinal.Valid
+	requestScoped := db.UsageSourceIsRequestScoped(r.source) || r.messageOrdinal.Valid
 	cost, err := lookup.Rates.CostForTokensScoped(
 		requestScoped,
 		r.inputTok, r.outputTok, r.reasoningTok, r.cacheCr, r.cacheRd,
@@ -3932,7 +3932,7 @@ func (s *Store) GetDailyUsage(
 			r.billableCacheCr, r.billableCacheRd,
 			r.explicitCost,
 			r.reportedCostRows > 0,
-			r.source == "message" || r.messageOrdinal.Valid,
+			db.UsageSourceIsRequestScoped(r.source) || r.messageOrdinal.Valid,
 			rateResolver,
 		)
 		if priceErr != nil {
@@ -4372,7 +4372,7 @@ func (s *Store) GetTopSessionsByCost(
 				r.billableCacheCr, r.billableCacheRd,
 				r.explicitCost,
 				r.reportedCostRows > 0,
-				r.source == "message" || r.messageOrdinal.Valid,
+				db.UsageSourceIsRequestScoped(r.source) || r.messageOrdinal.Valid,
 				rateResolver,
 			)
 			if priceErr != nil {
@@ -4578,7 +4578,7 @@ func (s *Store) GetSessionUsage(
 				r.billableCacheCr, r.billableCacheRd,
 				r.explicitCost,
 				r.reportedCostRows > 0,
-				r.source == "message" || r.messageOrdinal.Valid,
+				db.UsageSourceIsRequestScoped(r.source) || r.messageOrdinal.Valid,
 				rateResolver,
 			)
 			if priceErr != nil {

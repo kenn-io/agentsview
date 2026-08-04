@@ -1545,7 +1545,13 @@ func dailyUsageRowTokens(
 func usageRowIsRequestScoped(
 	usageSource string, messageOrdinal sql.NullInt64,
 ) bool {
-	return usageSource == "message" || messageOrdinal.Valid
+	return UsageSourceIsRequestScoped(usageSource) || messageOrdinal.Valid
+}
+
+// UsageSourceIsRequestScoped reports whether a usage source represents one
+// provider request even when the provider cannot attach it to a message.
+func UsageSourceIsRequestScoped(source string) bool {
+	return source == "message" || source == "goose-request"
 }
 
 func recordComputedUsagePricing(
