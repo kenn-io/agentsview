@@ -61,7 +61,17 @@ func (*duckBunBackend) Name() string { return "duckdb" }
 func (*duckBunBackend) ReadOnly() bool { return true }
 
 func (*duckBunBackend) Capabilities() db.BackendCapabilities {
-	return db.BackendCapabilities{FullText: duckFullTextCapability{}}
+	return db.BackendCapabilities{
+		FullText: duckFullTextCapability{},
+		Semantic: db.NewVectorSemanticCapability(
+			func() db.VectorSearcher { return nil },
+			func() error {
+				return db.NewSemanticUnavailableError(
+					"semantic search is not supported by the DuckDB backend",
+				)
+			},
+		),
+	}
 }
 
 func (*duckBunBackend) SessionQueryDialect() db.QueryDialect {
@@ -376,7 +386,14 @@ func (duckFullTextCapability) Available() bool { return true }
 // HasSemantic returns false: the DuckDB store has no VectorSearcher seam
 // yet, so SearchContent rejects "semantic"/"hybrid" modes up front with
 // db.ErrSemanticUnavailable.
-func (s *Store) HasSemantic() bool { return false }
+func (s *Store) HasSemantic() bool { return s.bunSearchStore().HasSemantic() }
+
+func (s *Store) bunSearchStore() *db.BunStore {
+	if s.BunStore != nil {
+		return s.BunStore
+	}
+	return db.NewBunStore(&duckBunBackend{store: s})
+}
 
 func (duckFullTextCapability) Search(
 	ctx context.Context, store bun.IDB, f db.SearchFilter,
@@ -557,19 +574,7 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 	// internal/db's SearchContent so an empty Sources field is not defaulted
 	// out from under ValidateSemanticFilter's empty-or-messages-only check.
 	if f.Mode == "semantic" || f.Mode == "hybrid" {
-		// Validate input the same way SQLite's semantic/hybrid paths do
-		// before reporting the capability gate: an invalid request (bad
-		// cursor, non-messages source) must return the same 400
-		// SearchInputError on every backend rather than a 501 here and a
-		// 400 on SQLite (backend parity, see AGENTS.md).
-		if err := db.ValidateSemanticFilter(f); err != nil {
-			return db.ContentSearchPage{}, err
-		}
-		// No VectorSearcher seam on the DuckDB store yet (HasSemantic always
-		// false): gate after input validation.
-		return db.ContentSearchPage{}, db.NewSemanticUnavailableError(
-			"semantic search is not supported by the DuckDB backend",
-		)
+		return s.bunSearchStore().SearchContent(ctx, f)
 	}
 	return s.BunStore.SearchContent(ctx, f)
 }

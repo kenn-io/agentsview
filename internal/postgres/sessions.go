@@ -58,7 +58,12 @@ func (b *postgresBunBackend) Capabilities() db.BackendCapabilities {
 		writes[db.WriteInsightDelete] = true
 	}
 	return db.BackendCapabilities{
-		FullText:         postgresFullTextCapability{},
+		FullText:      postgresFullTextCapability{},
+		HybridLexical: postgresFullTextCapability{},
+		Semantic: db.NewVectorSemanticCapability(
+			b.store.getVectorSearcher,
+			b.store.semanticUnavailableError,
+		),
 		Writes:           writes,
 		SessionMutations: postgresSessionMutationAdapter{},
 	}
@@ -210,12 +215,6 @@ func buildPGSessionFilter(
 	f db.SessionFilter,
 ) (string, []any) {
 	return db.BuildSessionFilterSQL(f, db.PostgresQueryDialect())
-}
-
-func buildPGSessionBaseFilter(
-	f db.SessionFilter,
-) (string, []any) {
-	return db.BuildSessionBaseFilterSQL(f, db.PostgresQueryDialect())
 }
 
 // FindSessionIDsByRawSuffix returns up to limit session IDs whose

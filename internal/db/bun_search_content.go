@@ -34,6 +34,15 @@ type bunContentMessageKey struct {
 	ordinal   int
 }
 
+type bunHybridAnchor struct {
+	SessionID   string `bun:"session_id"`
+	Ordinal     int    `bun:"ordinal"`
+	Role        string `bun:"role"`
+	Content     string `bun:"content"`
+	IsSystem    bool   `bun:"is_system"`
+	IsSidechain bool   `bun:"is_sidechain"`
+}
+
 type bunContentCandidate struct {
 	SessionID  string  `bun:"session_id"`
 	Ordinal    int     `bun:"ordinal"`
@@ -58,7 +67,24 @@ func (s *BunStore) SearchContent(
 		return ContentSearchPage{}, nil
 	}
 	if filter.Mode == "semantic" || filter.Mode == "hybrid" {
-		return ContentSearchPage{}, ErrSemanticUnavailable
+		if err := ValidateSemanticFilter(filter); err != nil {
+			return ContentSearchPage{}, err
+		}
+		semantic := s.backend.Capabilities().Semantic
+		if semantic == nil {
+			return ContentSearchPage{}, ErrSemanticUnavailable
+		}
+		if !semantic.Available() {
+			return ContentSearchPage{}, semantic.UnavailableError()
+		}
+		if filter.Mode == "hybrid" {
+			lexical := s.backend.Capabilities().HybridLexical
+			if lexical == nil || !lexical.Available() {
+				return ContentSearchPage{}, errFTSUnavailable
+			}
+			return s.searchContentHybrid(ctx, filter, semantic, lexical)
+		}
+		return s.searchContentSemantic(ctx, filter, semantic)
 	}
 	if filter.Mode == "fts" && len(filter.Sources) == 0 {
 		filter.Sources = []string{"messages"}
@@ -124,6 +150,364 @@ func (s *BunStore) SearchContent(
 	return page, err
 }
 
+// HasSemantic reports whether the backend currently has an available vector
+// search capability.
+func (s *BunStore) HasSemantic() bool {
+	if s == nil || s.backend == nil {
+		return false
+	}
+	capability := s.backend.Capabilities().Semantic
+	return capability != nil && capability.Available()
+}
+
+func (s *BunStore) searchContentSemantic(
+	ctx context.Context, filter ContentSearchFilter,
+	capability SemanticCapability,
+) (ContentSearchPage, error) {
+	var page ContentSearchPage
+	err := s.consistentView(ctx, func(store bun.IDB) error {
+		attemptFilter := filter
+		attemptFilter.Limit = max(filter.Limit*4, SemanticOverfetchMin)
+		hits, err := capability.SearchContent(
+			ctx, store, attemptFilter,
+		)
+		if err != nil {
+			return fmt.Errorf("searching semantic capability: %w", err)
+		}
+		hits, err = s.filterContentHitsBySessionScope(ctx, store, filter, hits)
+		if err != nil {
+			return err
+		}
+		eligible := make([]ContentSearchHit, 0, len(hits))
+		for _, hit := range hits {
+			if !ScopeExcludes(filter.Scope, hit.Subordinate) {
+				eligible = append(eligible, hit)
+			}
+		}
+		eligible = applyContentSubordinatePenalty(eligible)
+		attempt, err := s.hydrateContentSearchHits(
+			ctx, store, filter, eligible,
+		)
+		if err != nil {
+			return err
+		}
+		page = attempt
+		return nil
+	})
+	return page, err
+}
+
+type contentHybridLeg struct {
+	ranked  []RankedUnit
+	display map[string]ContentSearchHit
+}
+
+const maxHybridLexicalBatches = 4
+
+func (s *BunStore) searchContentHybrid(
+	ctx context.Context, filter ContentSearchFilter,
+	semantic SemanticCapability, lexical HybridLexicalCapability,
+) (ContentSearchPage, error) {
+	var page ContentSearchPage
+	err := s.consistentView(ctx, func(store bun.IDB) error {
+		candidateLimit := max(filter.Limit*4, SemanticOverfetchMin)
+		candidateFilter := filter
+		candidateFilter.Limit = candidateLimit
+
+		semanticHits, err := semantic.SearchContent(ctx, store, candidateFilter)
+		if err != nil {
+			return fmt.Errorf("searching semantic capability: %w", err)
+		}
+		semanticHits, err = s.filterContentHitsBySessionScope(
+			ctx, store, filter, semanticHits,
+		)
+		if err != nil {
+			return err
+		}
+		semanticLeg := contentHybridLegFromHits(semanticHits, filter.Scope, candidateLimit)
+
+		lexicalLeg := contentHybridLeg{display: make(map[string]ContentSearchHit)}
+		for batch := range maxHybridLexicalBatches {
+			batchFilter := candidateFilter
+			batchFilter.Cursor = batch * candidateLimit
+			lexicalHits, err := lexical.SearchHybridContent(ctx, store, batchFilter)
+			if err != nil {
+				return fmt.Errorf("searching hybrid lexical capability: %w", err)
+			}
+			if err := s.appendHybridLexicalHits(
+				ctx, store, semantic, filter.Scope, lexicalHits, &lexicalLeg,
+			); err != nil {
+				return err
+			}
+			if len(lexicalHits) < candidateLimit || len(lexicalLeg.ranked) >= candidateLimit {
+				break
+			}
+		}
+
+		merged := RRFMerge(
+			[][]RankedUnit{semanticLeg.ranked, lexicalLeg.ranked}, filter.Limit,
+		)
+		fusedHits := make([]ContentSearchHit, 0, len(merged))
+		for _, fused := range merged {
+			hit, ok := lexicalLeg.display[fused.Unit.Key]
+			if !ok {
+				hit = semanticLeg.display[fused.Unit.Key]
+			}
+			score := fused.Score
+			hit.Score = &score
+			fusedHits = append(fusedHits, hit)
+		}
+		page, err = s.hydrateContentSearchHits(ctx, store, filter, fusedHits)
+		return err
+	})
+	return page, err
+}
+
+func contentHybridLegFromHits(
+	hits []ContentSearchHit, scope string, limit int,
+) contentHybridLeg {
+	leg := contentHybridLeg{display: make(map[string]ContentSearchHit, len(hits))}
+	for _, hit := range hits {
+		if ScopeExcludes(scope, hit.Subordinate) {
+			continue
+		}
+		key := hit.DocKey
+		if key == "" {
+			key = UnitFusionKey(hit.SessionID, hit.OrdinalStart)
+		}
+		if _, exists := leg.display[key]; exists {
+			continue
+		}
+		hit.DocKey = key
+		leg.ranked = append(leg.ranked, RankedUnit{Key: key, Subordinate: hit.Subordinate})
+		leg.display[key] = hit
+		if limit > 0 && len(leg.ranked) >= limit {
+			break
+		}
+	}
+	return leg
+}
+
+func (s *BunStore) appendHybridLexicalHits(
+	ctx context.Context, store bun.IDB, semantic SemanticCapability, scope string,
+	hits []ContentSearchHit, leg *contentHybridLeg,
+) error {
+	if len(hits) == 0 {
+		return nil
+	}
+	refs := make([]MessageRef, len(hits))
+	for i, hit := range hits {
+		refs[i] = MessageRef{SessionID: hit.SessionID, Ordinal: hit.Ordinal}
+	}
+	units, err := semantic.ResolveMessageUnits(ctx, store, refs)
+	if err != nil {
+		return fmt.Errorf("resolving hybrid lexical hits to units: %w", err)
+	}
+	if len(units) != len(refs) {
+		return fmt.Errorf(
+			"resolving hybrid lexical hits to units: got %d units for %d refs",
+			len(units), len(refs),
+		)
+	}
+	var unitless []int
+	for i := range hits {
+		hits[i].DocKey = MessageFusionKey(hits[i].SessionID, hits[i].Ordinal)
+		hits[i].OrdinalStart = hits[i].Ordinal
+		hits[i].OrdinalEnd = hits[i].Ordinal
+		if units[i].DocKey == "" {
+			unitless = append(unitless, i)
+			continue
+		}
+		hits[i].DocKey = UnitFusionKey(units[i].SessionID, units[i].OrdinalStart)
+		hits[i].OrdinalStart = units[i].OrdinalStart
+		hits[i].OrdinalEnd = units[i].OrdinalEnd
+		hits[i].Subordinate = units[i].Subordinate
+	}
+	if err := s.classifyUnitlessHybridContentHits(ctx, store, hits, unitless); err != nil {
+		return err
+	}
+	for _, hit := range hits {
+		if ScopeExcludes(scope, hit.Subordinate) {
+			continue
+		}
+		if _, exists := leg.display[hit.DocKey]; exists {
+			continue
+		}
+		leg.ranked = append(leg.ranked, RankedUnit{
+			Key: hit.DocKey, Subordinate: hit.Subordinate,
+		})
+		leg.display[hit.DocKey] = hit
+	}
+	return nil
+}
+
+func (s *BunStore) filterContentHitsBySessionScope(
+	ctx context.Context, store bun.IDB, filter ContentSearchFilter,
+	hits []ContentSearchHit,
+) ([]ContentSearchHit, error) {
+	ids := make([]string, 0, len(hits))
+	seen := make(map[string]struct{}, len(hits))
+	for _, hit := range hits {
+		if hit.SessionID == "" {
+			continue
+		}
+		if _, exists := seen[hit.SessionID]; exists {
+			continue
+		}
+		seen[hit.SessionID] = struct{}{}
+		ids = append(ids, hit.SessionID)
+	}
+	where, args := BuildSessionBaseFilterSQL(
+		semanticContentSessionFilter(filter), s.backend.SessionQueryDialect(),
+	)
+	allowed := make(map[string]struct{}, len(ids))
+	if err := queryChunked(ids, func(chunk []string) error {
+		var rows []struct {
+			ID string `bun:"id"`
+		}
+		query := store.NewSelect().TableExpr("sessions AS session").
+			ColumnExpr("session.id AS id").Where("session.id IN (?)", bun.List(chunk))
+		query = applyBunWhere(query, where, args)
+		if err := query.Scan(ctx, &rows); err != nil {
+			return fmt.Errorf("filtering semantic session scope: %w", err)
+		}
+		for _, row := range rows {
+			allowed[row.ID] = struct{}{}
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	out := make([]ContentSearchHit, 0, len(hits))
+	for _, hit := range hits {
+		if _, ok := allowed[hit.SessionID]; ok {
+			out = append(out, hit)
+		}
+	}
+	return out, nil
+}
+
+func (s *BunStore) classifyUnitlessHybridContentHits(
+	ctx context.Context, store bun.IDB, hits []ContentSearchHit, indexes []int,
+) error {
+	if len(indexes) == 0 {
+		return nil
+	}
+	selected := make([]ContentSearchHit, len(indexes))
+	for i, index := range indexes {
+		selected[i] = hits[index]
+	}
+	messages, err := bunHybridAnchorsForHits(ctx, store, selected)
+	if err != nil {
+		return err
+	}
+	ids := make([]string, 0, len(selected))
+	seen := make(map[string]struct{}, len(selected))
+	for _, hit := range selected {
+		if _, exists := seen[hit.SessionID]; !exists {
+			seen[hit.SessionID] = struct{}{}
+			ids = append(ids, hit.SessionID)
+		}
+	}
+	var sessions []bunContentSession
+	if err := store.NewSelect().TableExpr("sessions AS session").
+		ColumnExpr("session.id AS id").
+		ColumnExpr("session.relationship_type AS relationship_type").
+		ColumnExpr("session.parent_session_id AS parent_session_id").
+		Where("session.id IN (?)", bun.List(ids)).Scan(ctx, &sessions); err != nil {
+		return fmt.Errorf("classifying hybrid lexical sessions: %w", err)
+	}
+	bySession := make(map[string]bunContentSession, len(sessions))
+	for _, session := range sessions {
+		bySession[session.ID] = session
+	}
+	anchors := make([]UnitAnchor, len(indexes))
+	for i, index := range indexes {
+		hit := hits[index]
+		message, ok := messages[bunContentMessageKey{hit.SessionID, hit.Ordinal}]
+		anchors[i] = UnitAnchor{
+			SessionID: hit.SessionID, Ordinal: hit.Ordinal, Role: message.Role,
+			Sidechain: message.IsSidechain,
+			Embeddable: ok && !message.IsSystem &&
+				!IsSystemPrefixed(message.Content, message.Role),
+			Missing: !ok,
+		}
+	}
+	ranges, err := DeriveUnitRanges(
+		ctx, bunUnitBoundsQuerier{store: store, parent: s}, anchors,
+	)
+	if err != nil {
+		return fmt.Errorf("deriving hybrid unit-less ranges: %w", err)
+	}
+	for i, index := range indexes {
+		session := bySession[hits[index].SessionID]
+		parentID := ""
+		if session.ParentSessionID != nil {
+			parentID = *session.ParentSessionID
+		}
+		hits[index].OrdinalStart = ranges[i][0]
+		hits[index].OrdinalEnd = ranges[i][1]
+		hits[index].Subordinate = anchors[i].Sidechain ||
+			SubordinateSession(session.RelationshipType, parentID)
+	}
+	return nil
+}
+
+func bunHybridAnchorsForHits(
+	ctx context.Context, store bun.IDB, hits []ContentSearchHit,
+) (map[bunContentMessageKey]bunHybridAnchor, error) {
+	out := make(map[bunContentMessageKey]bunHybridAnchor, len(hits))
+	const chunkSize = 400
+	for start := 0; start < len(hits); start += chunkSize {
+		chunk := hits[start:min(start+chunkSize, len(hits))]
+		values := make([]string, len(chunk))
+		args := make([]any, 0, len(chunk)*2)
+		for i, hit := range chunk {
+			values[i] = "(?, ?)"
+			args = append(args, hit.SessionID, hit.Ordinal)
+		}
+		var rows []bunHybridAnchor
+		query := `WITH refs(session_id, ordinal) AS (VALUES ` +
+			strings.Join(values, ", ") + `)
+			SELECT message.session_id, message.ordinal, message.role,
+				message.content, message.is_system, message.is_sidechain
+			FROM refs
+			JOIN messages AS message
+				ON message.session_id = refs.session_id
+				AND message.ordinal = refs.ordinal`
+		if err := store.NewRaw(query, args...).Scan(ctx, &rows); err != nil {
+			return nil, fmt.Errorf("classifying hybrid lexical messages: %w", err)
+		}
+		for _, row := range rows {
+			out[bunContentMessageKey{row.SessionID, row.Ordinal}] = row
+		}
+	}
+	return out, nil
+}
+
+func applyContentSubordinatePenalty(
+	hits []ContentSearchHit,
+) []ContentSearchHit {
+	leg := make([]RankedUnit, 0, len(hits))
+	byKey := make(map[string]ContentSearchHit, len(hits))
+	for _, hit := range hits {
+		key := UnitFusionKey(hit.SessionID, hit.OrdinalStart)
+		if _, exists := byKey[key]; exists {
+			continue
+		}
+		leg = append(leg, RankedUnit{
+			Key: key, Subordinate: hit.Subordinate,
+		})
+		byKey[key] = hit
+	}
+	merged := RRFMerge([][]RankedUnit{leg}, 0)
+	out := make([]ContentSearchHit, 0, len(merged))
+	for _, item := range merged {
+		out = append(out, byKey[item.Unit.Key])
+	}
+	return out
+}
+
 func (s *BunStore) hydrateContentSearchHits(
 	ctx context.Context, store bun.IDB, filter ContentSearchFilter,
 	hits []ContentSearchHit,
@@ -143,9 +527,18 @@ func (s *BunStore) hydrateContentSearchHits(
 		seen[hit.SessionID] = struct{}{}
 		ids = append(ids, hit.SessionID)
 	}
-	where, args := BuildSessionFilterSQL(
-		contentSessionFilter(filter), s.backend.SessionQueryDialect(),
-	)
+	var where string
+	var args []any
+	if filter.Mode == "semantic" || filter.Mode == "hybrid" {
+		where, args = BuildSessionBaseFilterSQL(
+			semanticContentSessionFilter(filter),
+			s.backend.SessionQueryDialect(),
+		)
+	} else {
+		where, args = BuildSessionFilterSQL(
+			contentSessionFilter(filter), s.backend.SessionQueryDialect(),
+		)
+	}
 	var sessions []bunContentSession
 	query := store.NewSelect().TableExpr("sessions AS session").
 		ColumnExpr("session.id AS id").ColumnExpr("session.project AS project").
@@ -187,11 +580,15 @@ func (s *BunStore) hydrateContentSearchHits(
 		if hit.Location != "message" {
 			role = "assistant"
 		}
+		snippet := hit.Snippet
+		if filter.Mode == "semantic" || filter.Mode == "hybrid" {
+			snippet = filter.SemanticSnippet(message.Content, hit.Snippet)
+		}
 		page.Matches = append(page.Matches, ContentMatch{
 			SessionID: hit.SessionID, Project: session.Project, Agent: session.Agent,
 			Location: hit.Location, Role: role, ToolName: hit.ToolName,
 			Ordinal: hit.Ordinal, Timestamp: bunAnalyticsTimeString(message.Timestamp),
-			Snippet: hit.Snippet, Score: hit.Score, OrdinalRange: ordinalRange,
+			Snippet: snippet, Score: hit.Score, OrdinalRange: ordinalRange,
 			Subordinate: hit.Subordinate || message.IsSidechain ||
 				SubordinateSession(session.RelationshipType, parentID),
 			Relationship: session.RelationshipType, ParentSessionID: parentID,
@@ -203,7 +600,9 @@ func (s *BunStore) hydrateContentSearchHits(
 	}
 	if len(page.Matches) > filter.Limit {
 		page.Matches = page.Matches[:filter.Limit]
-		page.NextCursor = filter.Cursor + filter.Limit
+		if filter.Mode != "semantic" && filter.Mode != "hybrid" {
+			page.NextCursor = filter.Cursor + filter.Limit
+		}
 	}
 	anchors := make([]UnitAnchor, len(page.Matches))
 	for i, match := range page.Matches {
