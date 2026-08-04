@@ -24,6 +24,7 @@ const bunRecallContractSchema = "agentsview_bun_recall_contract"
 const bunUsageContractSchema = "agentsview_bun_usage_contract"
 const bunOptionalUsageContractSchema = "agentsview_bun_optional_usage_contract"
 const bunPricingWriteContractSchema = "agentsview_bun_pricing_write_contract"
+const bunAnalyticsContractSchema = "agentsview_bun_analytics_contract"
 
 func TestBunStoreCoreContract(t *testing.T) {
 	storetest.RunCoreContract(t, storetest.Backend{
@@ -274,6 +275,28 @@ func TestCanonicalPricingWriteContract(t *testing.T) {
 	store := newStore(pg)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	storetest.RunPricingWriteContract(t, "postgres", store.bun)
+}
+
+func TestBunStoreAnalyticsContract(t *testing.T) {
+	storetest.RunAnalyticsContract(t, storetest.AnalyticsBackend{
+		Name: "postgres",
+		Open: func(t *testing.T) storetest.AnalyticsStore {
+			pgURL := testPGURL(t)
+			cleanupBunContractSchema(t, pgURL, bunAnalyticsContractSchema)
+			t.Cleanup(func() {
+				cleanupBunContractSchema(t, pgURL, bunAnalyticsContractSchema)
+			})
+			pg, err := Open(pgURL, bunAnalyticsContractSchema, true)
+			require.NoError(t, err)
+			require.NoError(t, EnsureSchema(t.Context(), pg, bunAnalyticsContractSchema))
+			store := newStore(pg)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			require.NoError(t, storetest.InsertBunAnalyticsFixture(
+				t.Context(), store.bun, "bun-analytics-archive", "bun-analytics-generation",
+			))
+			return store.BunStore
+		},
+	})
 }
 
 func cleanupBunCoreContractSchema(t *testing.T, pgURL string) {
