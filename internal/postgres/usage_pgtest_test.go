@@ -233,6 +233,60 @@ func TestStoreGetDailyUsageAppliesPricingBandsOnlyToRequests(t *testing.T) {
 	}, provenance.Resolutions[0].Application)
 }
 
+func TestStoreGetDailyUsagePricesGooseRequestAsRequestScoped(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_usage_goose_request_test")
+	ctx := context.Background()
+
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO model_pricing (
+			model_pattern, input_microdollars_per_mtok,
+			output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok,
+			cache_read_microdollars_per_mtok, updated_at
+		) VALUES ('banded-model', 1000000, 0, 0, 0, 'seed');
+		INSERT INTO model_pricing_bands (
+			model_pattern, above_input_tokens,
+			input_microdollars_per_mtok,
+			output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok,
+			cache_read_microdollars_per_mtok, updated_at
+		) VALUES ('banded-model', 200000, 2000000, 0, 0, 0, 'seed');
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at,
+			message_count, user_message_count
+		) VALUES (
+			'goose:banded', 'test-machine', 'proj', 'goose',
+			'2026-03-12T10:00:00Z'::timestamptz, 1, 1
+		);
+		INSERT INTO usage_events (
+			session_id, source, model, input_tokens,
+			occurred_at, dedup_key
+		) VALUES (
+			'goose:banded', 'goose-request', 'banded-model', 300000,
+			'2026-03-12T10:01:00Z'::timestamptz, 'goose-request'
+		)`)
+	require.NoError(t, err)
+
+	result, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-03-12", To: "2026-03-12", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, 300_000, result.Totals.InputTokens)
+	assert.Equal(t, money.Money{Microdollars: 600_000},
+		result.Totals.TotalCost,
+		"goose-request events must be priced per request, not at aggregate base rates")
+	require.NotNil(t, result.Pricing)
+	provenance := result.Pricing.Models["banded-model"]
+	require.Len(t, provenance.Resolutions, 1)
+	assert.Equal(t, export.PricingApplication{
+		Bands: []export.AppliedPricingBand{{
+			AboveInputTokens: 200_000,
+			RequestCount:     1,
+		}},
+	}, provenance.Resolutions[0].Application)
+}
+
 func TestStoreGetDailyUsageDedupesBySourceUUIDWhenClaudePairIncomplete(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_usage_source_uuid_daily_test")
 

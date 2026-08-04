@@ -297,6 +297,42 @@ func TestDuckActivityReportRowStatusPrefersExactCustomKimiAlias(t *testing.T) {
 	assert.Equal(t, "daimon-kimi-code", resolutions[0].PricedModel)
 }
 
+func TestDuckGetActivityReportPricingBandApplicationCountedOnce(t *testing.T) {
+	ctx := context.Background()
+	sess := syncSession(
+		"pricing-band", "proj1", "banded", "2026-06-14T10:30:00.000Z", 1)
+	msg := syncMessage(
+		sess.ID, 0, "assistant", "request", "2026-06-14T10:30:00.000Z")
+	msg.Model = "banded-model"
+	msg.TokenUsage = json.RawMessage(`{"input_tokens":300000}`)
+	store := activityReportStore(t, []db.SessionBatchWrite{{
+		Session: sess, Messages: []db.Message{msg},
+		DataVersion: 1, ReplaceMessages: true,
+	}}, []db.ModelPricing{{
+		ModelPattern: "banded-model",
+		InputPerMTok: money.MustParseDollars("1"),
+		Bands: []db.PricingBand{{
+			AboveInputTokens: 200_000,
+			InputPerMTok:     money.MustParseDollars("2"),
+		}},
+	}})
+
+	report, err := store.GetActivityReport(
+		ctx, db.AnalyticsFilter{Timezone: "UTC"},
+		duckDayQuery(t, "2026-06-14", "UTC"))
+	require.NoError(t, err)
+	assert.Equal(t, money.Money{Microdollars: 600_000}, report.Totals.Cost)
+	require.NotNil(t, report.Pricing)
+	provenance := report.Pricing.Models["banded-model"]
+	require.Len(t, provenance.Resolutions, 1)
+	assert.Equal(t, export.PricingApplication{
+		Bands: []export.AppliedPricingBand{{
+			AboveInputTokens: 200_000,
+			RequestCount:     1,
+		}},
+	}, provenance.Resolutions[0].Application)
+}
+
 func TestDuckGetActivityReportPricesGooseRequestAsRequestScoped(t *testing.T) {
 	ctx := context.Background()
 	sess := syncSession(
