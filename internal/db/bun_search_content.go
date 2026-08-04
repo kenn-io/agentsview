@@ -429,8 +429,8 @@ func (s *BunStore) filterContentHitsBySessionScope(
 		seen[hit.SessionID] = struct{}{}
 		ids = append(ids, hit.SessionID)
 	}
-	where, args := BuildSessionBaseFilterSQL(
-		semanticContentSessionFilter(filter), s.backend.SessionQueryDialect(),
+	where, args := buildBunSessionBaseFilter(
+		semanticContentSessionFilter(filter), s.backend.TimestampOrderExpr,
 	)
 	allowed := make(map[string]struct{}, len(ids))
 	if err := queryChunked(ids, func(chunk []string) error {
@@ -603,13 +603,13 @@ func (s *BunStore) hydrateContentSearchHits(
 	var where string
 	var args []any
 	if filter.Mode == "semantic" || filter.Mode == "hybrid" {
-		where, args = BuildSessionBaseFilterSQL(
+		where, args = buildBunSessionBaseFilter(
 			semanticContentSessionFilter(filter),
-			s.backend.SessionQueryDialect(),
+			s.backend.TimestampOrderExpr,
 		)
 	} else {
-		where, args = BuildSessionFilterSQL(
-			contentSessionFilter(filter), s.backend.SessionQueryDialect(),
+		where, args = buildBunSessionFilter(
+			contentSessionFilter(filter), s.backend.TimestampOrderExpr,
 		)
 	}
 	var sessions []bunContentSession
@@ -832,8 +832,8 @@ func (s *BunStore) bunContentPortableFTSHits(
 	if len(terms) == 0 {
 		return nil, nil
 	}
-	where, scopeArgs := BuildSessionFilterSQL(
-		contentSessionFilter(filter), s.backend.SessionQueryDialect(),
+	where, scopeArgs := buildBunSessionFilter(
+		contentSessionFilter(filter), s.backend.TimestampOrderExpr,
 	)
 	predicates := make([]string, len(terms))
 	args := make([]any, 0, len(terms)+len(scopeArgs)+2)
@@ -889,8 +889,8 @@ func (s *BunStore) bunContentCandidateRows(
 func (s *BunStore) bunContentCandidateQuery(
 	filter ContentSearchFilter, literal string, matchAll, paginate bool,
 ) (string, []any) {
-	where, scopeArgs := BuildSessionFilterSQL(
-		contentSessionFilter(filter), s.backend.SessionQueryDialect(),
+	where, scopeArgs := buildBunSessionFilter(
+		contentSessionFilter(filter), s.backend.TimestampOrderExpr,
 	)
 	scope := func(column string) string {
 		return column + " IN (SELECT id FROM sessions AS session WHERE " + where + ")"
@@ -988,7 +988,7 @@ func (s *BunStore) bunContentCandidateQuery(
 	if len(branches) == 0 {
 		return "", nil
 	}
-	orderTimestamp := s.backend.SessionQueryDialect().TimestampOrderExpr("sort_ts")
+	orderTimestamp := s.backend.TimestampOrderExpr("sort_ts")
 	query := `SELECT session_id, ordinal, location, tool_name, body,
 		source_timestamp,
 		call_index, event_index FROM (` + strings.Join(branches, " UNION ALL ") + `)

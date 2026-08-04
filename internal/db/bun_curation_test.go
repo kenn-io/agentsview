@@ -29,8 +29,8 @@ func (*writableCurationTestBackend) Capabilities() BackendCapabilities {
 	}}
 }
 
-func (*writableCurationTestBackend) SessionQueryDialect() QueryDialect {
-	return SQLiteBunSessionQueryDialect()
+func (*writableCurationTestBackend) TimestampOrderExpr(column string) string {
+	return "julianday(NULLIF(" + column + ", ''))"
 }
 
 func (*writableCurationTestBackend) SessionVersion(
