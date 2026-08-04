@@ -9237,14 +9237,11 @@ func (e *Engine) applyProviderFilePathPolicies(
 				delete(primaryErr, agentStr)
 			}
 		}
-		// Bail only when EVERY agent's lookup is permanently failing.
-		// A single failing agent that returns partial data is logged
-		// but tolerated, since aborting the file would suppress a real
-		// parse result based on identity data that may have been a
-		// transient DB blip. The full-failure floor prevents silently
-		// treating an unreadable archive as "fresh" (the legacy
-		// log-and-continue bug the review flagged).
-		if len(primaryErr) == len(agentsToQuery) {
+		// Bail when any agent's identity lookup remains unsuccessful
+		// after retry. Continuing with partial lifecycle information
+		// can recreate a trashed identity or leave both Codebuff and
+		// Freebuff classifications active for the same file.
+		if len(primaryErr) > 0 {
 			var failedAgents []string
 			var failedErrs []error
 			for _, agentStr := range agentsToQuery {
@@ -9265,21 +9262,6 @@ func (e *Engine) applyProviderFilePathPolicies(
 			// path must not stamp a row that suppresses real drift on the
 			// next warm sync.
 			return
-		}
-		if len(primaryErr) > 0 {
-			var failedAgents []string
-			var failedErrs []error
-			for _, agentStr := range agentsToQuery {
-				if err, ok := primaryErr[agentStr]; ok {
-					failedAgents = append(failedAgents, agentStr)
-					failedErrs = append(failedErrs, err)
-				}
-			}
-			sort.Strings(failedAgents)
-			log.Printf(
-				"partial session IDs by file path %q missing agents %v: %v",
-				lookupPath, failedAgents, errors.Join(failedErrs...),
-			)
 		}
 
 		// Resurrection guard. The path's identity is removed when a trashed row
@@ -14715,39 +14697,46 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 		// lossy: a same-size companion-file rewrite whose mtime stays
 		// below the existing max, or offsetting size changes that keep
 		// the sum unchanged, would both leave SourceMtime stable and
-		// stale metadata survive. Hash each component's (size, mtime)
-		// pair into a single int64 so any per-file change in size or
-		// mtime is detected by the watcher; the fingerprint step that
-		// triggers reparse continues to live where it always has.
+		// stale metadata survive. Hash each component's (size, mtime,
+		// ctime) triple plus directory metadata so any per-file change
+		// in size, mtime, or ctime is detected by the watcher. The
+		// triple matches the format used by ComputeMultiFileStatHash;
+		// ctime is the reliable change signal a pure (size, mtime)
+		// tuple lacks — a same-size rewrite with preserved mtime still
+		// bumps ctime on Unix and change-time on Windows.
 		dir := filepath.Dir(path)
-		files := []string{
-			path,
-			filepath.Join(dir, "run-state.json"),
-			filepath.Join(dir, "chat-meta.json"),
-		}
 		h := fnv.New64a()
-		// Domain separator: number of files included in the hash so a
-		// future file addition is the only way to change the value.
-		_, _ = h.Write([]byte{byte(len(files))})
-		for _, f := range files {
-			ci, err := os.Stat(f)
-			if err != nil {
-				// A missing companion file is a valid state (chat-meta
-				// and run-state can be absent in flight) and is encoded
-				// as a fixed zero block so its later appearance
-				// changes the hash. The primary file (path) must exist
-				// for the session to be live, so a missing primary file
-				// short-circuits to 0.
-				if f == path {
-					return 0
-				}
-				_, _ = h.Write([]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})
-				continue
-			}
-			var buf [16]byte
-			binary.LittleEndian.PutUint64(buf[0:8], uint64(ci.Size()))
-			binary.LittleEndian.PutUint64(buf[8:16], uint64(ci.ModTime().UnixNano()))
+		h.Write([]byte{0xCB})
+		var buf [24]byte
+		writeTuple := func(size, mtime, ctime int64) {
+			binary.LittleEndian.PutUint64(buf[:8], uint64(size))
+			binary.LittleEndian.PutUint64(buf[8:16], uint64(mtime))
+			binary.LittleEndian.PutUint64(buf[16:24], uint64(ctime))
 			_, _ = h.Write(buf[:])
+		}
+		// Primary file.
+		ci, err := os.Stat(path)
+		if err != nil {
+			return 0
+		}
+		ctime, _ := fileChangeTime(path, ci)
+		writeTuple(ci.Size(), ci.ModTime().UnixNano(), ctime)
+		// Companion files (run-state.json, chat-meta.json).
+		for _, name := range parser.CodebuffCompanionFilenames {
+			companion := filepath.Join(dir, name)
+			if ci, err := os.Stat(companion); err == nil {
+				ctime, _ := fileChangeTime(companion, ci)
+				writeTuple(ci.Size(), ci.ModTime().UnixNano(), ctime)
+			} else {
+				writeTuple(0, 0, 0)
+			}
+		}
+		// Directory metadata so create/rename/delete is folded in.
+		if di, err := os.Stat(dir); err == nil {
+			ctime, _ := fileChangeTime(dir, di)
+			writeTuple(0, di.ModTime().UnixNano(), ctime)
+		} else {
+			writeTuple(0, 0, 0)
 		}
 		return int64(h.Sum64())
 	}
