@@ -85,6 +85,23 @@ func TestBunRowSessionConversionRejectsMalformedRequiredTimestamp(t *testing.T) 
 	assert.Contains(t, err.Error(), "not-a-created-at")
 }
 
+func TestBunRowSessionConversionNormalizesEmptyTranscriptRevision(t *testing.T) {
+	for name, revision := range map[string]*string{
+		"missing":         nil,
+		"empty":           Ptr(""),
+		"sanitized empty": Ptr("\x00"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			row, err := sessionToBunRow(Session{
+				ID: "session-1", CreatedAt: "2026-08-04T10:00:00Z",
+				TranscriptRevision: revision,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, "0", row.TranscriptRevision)
+		})
+	}
+}
+
 func TestBunRowMessageRoundTripPreservesJSONAndOptionalID(t *testing.T) {
 	for name, id := range map[string]int64{"source id": 41, "missing source id": 0} {
 		t.Run(name, func(t *testing.T) {

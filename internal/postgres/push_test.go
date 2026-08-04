@@ -1251,3 +1251,39 @@ func TestNilIfEmptySanitizes(t *testing.T) {
 	// should return nil, not "".
 	assert.Nil(t, nilIfEmpty("\x00"), "nilIfEmpty(\"\\x00\") should be nil")
 }
+
+func TestPostgresSessionReplicationFingerprintUsesCommittedProjection(t *testing.T) {
+	localModifiedAt := "2026-08-04T10:00:00Z"
+	fileHash := "hash-a"
+	base := db.SessionReplicationSnapshot{
+		Session: db.Session{
+			ID: "session", Project: "project", Machine: "machine", Agent: "codex",
+			CreatedAt: "2026-08-04T09:00:00Z", FileHash: &fileHash,
+			LocalModifiedAt: &localModifiedAt,
+		},
+		PinnedMessages: []db.PinnedMessage{{
+			ID: 1, SessionID: "session", MessageID: 2, Ordinal: 2,
+		}},
+	}
+	want, err := postgresSessionReplicationFingerprint(base, "owner")
+	require.NoError(t, err)
+
+	targetOwnedChanged := base
+	targetModifiedAt := "2026-08-04T11:00:00Z"
+	targetOwnedChanged.Session.LocalModifiedAt = &targetModifiedAt
+	targetOwnedChanged.PinnedMessages = []db.PinnedMessage{{
+		ID: 9, SessionID: "session", MessageID: 7, Ordinal: 7,
+	}}
+	got, err := postgresSessionReplicationFingerprint(targetOwnedChanged, "owner")
+	require.NoError(t, err)
+	assert.Equal(t, want, got,
+		"target-owned pins and modification time must not trigger source pushes")
+
+	portableChanged := base
+	changedHash := "hash-b"
+	portableChanged.Session.FileHash = &changedHash
+	got, err = postgresSessionReplicationFingerprint(portableChanged, "owner")
+	require.NoError(t, err)
+	assert.NotEqual(t, want, got,
+		"portable file metadata is part of the canonical PostgreSQL row")
+}

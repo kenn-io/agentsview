@@ -188,17 +188,13 @@ func UpsertModelPricingRows(
 			Where("model_pattern IN (?)", bun.List(patterns)).Scan(ctx); err != nil {
 			return fmt.Errorf("reading model pricing revisions: %w", err)
 		}
-		existingPriceRevision := make(map[string]string, len(existingPrices))
+		existingPriceByPattern := make(
+			map[string]bunmodel.ModelPricing, len(existingPrices),
+		)
 		for _, existing := range existingPrices {
-			existingPriceRevision[existing.ModelPattern] = existing.UpdatedAt
+			existingPriceByPattern[existing.ModelPattern] = existing
 		}
 		defaultRevision := time.Now().UTC().Format(time.RFC3339Nano)
-		for i := range prices {
-			prices[i].UpdatedAt = nextPricingRevision(
-				existingPriceRevision[prices[i].ModelPattern],
-				prices[i].UpdatedAt, defaultRevision,
-			)
-		}
 		var existingBands []bunmodel.ModelPricingBand
 		if len(bandPatterns) > 0 {
 			if err := tx.NewSelect().Model(&existingBands).
@@ -210,17 +206,44 @@ func UpsertModelPricingRows(
 			pattern   string
 			threshold int64
 		}
-		existingBandRevision := make(map[bandKey]string, len(existingBands))
+		existingBandByKey := make(
+			map[bandKey]bunmodel.ModelPricingBand, len(existingBands),
+		)
+		incomingBandKeys := make(map[bandKey]struct{}, len(bands))
+		bandContentChanged := make(map[string]bool, len(bandPatterns))
 		for _, existing := range existingBands {
-			existingBandRevision[bandKey{
+			existingBandByKey[bandKey{
 				existing.ModelPattern, existing.AboveInputTokens,
-			}] = existing.UpdatedAt
+			}] = existing
 		}
 		for i := range bands {
+			key := bandKey{bands[i].ModelPattern, bands[i].AboveInputTokens}
+			incomingBandKeys[key] = struct{}{}
+			existing, ok := existingBandByKey[key]
+			if ok && modelPricingBandValuesEqual(existing, bands[i]) {
+				bands[i].UpdatedAt = existing.UpdatedAt
+				continue
+			}
+			bandContentChanged[bands[i].ModelPattern] = true
 			bands[i].UpdatedAt = nextPricingRevision(
-				existingBandRevision[bandKey{
-					bands[i].ModelPattern, bands[i].AboveInputTokens,
-				}], bands[i].UpdatedAt, defaultRevision,
+				existing.UpdatedAt, bands[i].UpdatedAt, defaultRevision,
+			)
+		}
+		for key := range existingBandByKey {
+			if _, ok := incomingBandKeys[key]; !ok {
+				bandContentChanged[key.pattern] = true
+			}
+		}
+		for i := range prices {
+			existing, ok := existingPriceByPattern[prices[i].ModelPattern]
+			if ok && modelPricingValuesEqual(existing, prices[i]) &&
+				!bandContentChanged[prices[i].ModelPattern] {
+				prices[i].UpdatedAt = existing.UpdatedAt
+				continue
+			}
+			prices[i].UpdatedAt = nextPricingRevision(
+				existing.UpdatedAt,
+				prices[i].UpdatedAt, defaultRevision,
 			)
 		}
 		for start := 0; start < len(prices); start += bunPricingWriteBatchSize {
@@ -268,13 +291,43 @@ func upsertModelPricingRowBatch(
 	return err
 }
 
+func modelPricingValuesEqual(
+	left, right bunmodel.ModelPricing,
+) bool {
+	return left.InputMicrodollarsPerMTok == right.InputMicrodollarsPerMTok &&
+		left.OutputMicrodollarsPerMTok == right.OutputMicrodollarsPerMTok &&
+		left.CacheCreationMicrodollarsPerMTok ==
+			right.CacheCreationMicrodollarsPerMTok &&
+		left.CacheReadMicrodollarsPerMTok == right.CacheReadMicrodollarsPerMTok
+}
+
+func modelPricingBandValuesEqual(
+	left, right bunmodel.ModelPricingBand,
+) bool {
+	return left.InputMicrodollarsPerMTok == right.InputMicrodollarsPerMTok &&
+		left.OutputMicrodollarsPerMTok == right.OutputMicrodollarsPerMTok &&
+		left.CacheCreationMicrodollarsPerMTok ==
+			right.CacheCreationMicrodollarsPerMTok &&
+		left.CacheReadMicrodollarsPerMTok == right.CacheReadMicrodollarsPerMTok
+}
+
 func nextPricingRevision(existing, proposed, fallback string) string {
 	if proposed == "" {
 		proposed = fallback
 	}
 	existingTime, existingErr := bunmodel.ParseTimestamp(existing)
 	proposedTime, proposedErr := bunmodel.ParseTimestamp(proposed)
-	if existingErr != nil || proposedErr != nil || proposedTime.After(existingTime.Time) {
+	if proposedErr != nil {
+		proposed = fallback
+		proposedTime, proposedErr = bunmodel.ParseTimestamp(proposed)
+	}
+	if existingErr != nil {
+		if proposedErr == nil {
+			return proposed
+		}
+		return fallback
+	}
+	if proposedErr == nil && proposedTime.After(existingTime.Time) {
 		return proposed
 	}
 	return existingTime.Add(time.Microsecond).UTC().Format(time.RFC3339Nano)
