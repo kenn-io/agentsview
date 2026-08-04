@@ -279,7 +279,7 @@ func TestCanonicalBunWriteSessionBatchUsesPortableTimestampPrecision(t *testing.
 	result, err := database.WriteSessionBatchAtomic([]SessionBatchWrite{{
 		Session: Session{
 			ID: sessionID, Project: "alpha", Machine: defaultMachine,
-			Agent: defaultAgent, MessageCount: 1,
+			Agent: defaultAgent, StartedAt: Ptr(sourceTime), MessageCount: 1,
 		},
 		Messages: []Message{{
 			SessionID: sessionID, Ordinal: 0, Role: "assistant",
@@ -300,6 +300,10 @@ func TestCanonicalBunWriteSessionBatchUsesPortableTimestampPrecision(t *testing.
 	}})
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.WrittenSessions)
+	session, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, session.StartedAt)
+	assert.Equal(t, wantTime, *session.StartedAt)
 
 	messages, err := database.GetAllMessages(t.Context(), sessionID)
 	require.NoError(t, err)
@@ -313,4 +317,41 @@ func TestCanonicalBunWriteSessionBatchUsesPortableTimestampPrecision(t *testing.
 	require.NoError(t, err)
 	require.Len(t, usage, 1)
 	assert.Equal(t, wantTime, usage[0].OccurredAt)
+}
+
+func TestCanonicalBunWriteSessionPlaceholderUsesPortableTimestampPrecision(
+	t *testing.T,
+) {
+	database := testDB(t)
+	const (
+		sessionID  = "canonical-placeholder-precision"
+		sourceTime = "2026-08-03T12:00:00.123456789Z"
+		wantTime   = "2026-08-03T12:00:00.123456Z"
+	)
+	firstMessage := "placeholder"
+	displayName := "must remain target-owned"
+	require.NoError(t, database.insertSessionIfAbsent(t.Context(), Session{
+		ID: sessionID, Project: "alpha", Machine: "recall-import",
+		Agent: "codex", FirstMessage: &firstMessage, DisplayName: &displayName,
+		StartedAt: Ptr(sourceTime), EndedAt: Ptr(sourceTime),
+		SourceVersion: "recall-import-placeholder",
+	}))
+
+	got, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, got.StartedAt)
+	require.NotNil(t, got.EndedAt)
+	assert.Equal(t, wantTime, *got.StartedAt)
+	assert.Equal(t, wantTime, *got.EndedAt)
+	assert.Nil(t, got.DisplayName,
+		"archive ingestion must not write target-owned display names")
+
+	require.NoError(t, database.insertSessionIfAbsent(t.Context(), Session{
+		ID: sessionID, Project: "replacement", Machine: "replacement",
+		Agent: "replacement", StartedAt: Ptr("2026-08-04T00:00:00Z"),
+	}))
+	got, err = database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, "alpha", got.Project,
+		"placeholder insertion must not overwrite an existing session")
 }

@@ -501,13 +501,8 @@ func writeOneSessionBatchTx(
 		write.IdentityObservation = normalized
 	}
 
-	upsertResult, err := upsertSessionExec(
-		queries.Exec,
-		func(query string, args ...any) rowScanner {
-			return queries.QueryRow(query, args...)
-		},
-		write.Session,
-		true,
+	upsertResult, err := upsertArchiveSessionRow(
+		ctx, bunTx, write.Session, true,
 	)
 	if err != nil {
 		return 0, err

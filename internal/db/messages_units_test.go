@@ -366,7 +366,7 @@ func TestScanEmbeddableUnitsMixedFractionalPrecisionSinceAndMaxEnded(t *testing.
 	assert.Contains(t, ids, "frac-after-since")
 	assert.Contains(t, ids, "whole-second-max-trap")
 	assert.Contains(t, ids, "true-max-fractional")
-	assert.Equal(t, "2024-01-01T00:00:05.900Z", maxEnded,
+	assert.Equal(t, "2024-01-01T00:00:05.9Z", maxEnded,
 		"maxEnded must be the chronologically latest ended_at")
 }
 
