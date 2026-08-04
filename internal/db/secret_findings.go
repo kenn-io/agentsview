@@ -24,6 +24,36 @@ type SecretFinding struct {
 	RulesVersion   string `json:"rules_version"`
 }
 
+// SecretFindingFilter narrows a findings listing. Empty fields do not filter.
+type SecretFindingFilter struct {
+	Project    string
+	Agent      string
+	DateFrom   string
+	DateTo     string
+	Rule       string
+	Confidence string // definite | candidate | "" (all)
+	// RulesVersions, when non-empty, limits rows to findings produced by one
+	// of the currently accepted scanner versions. This lets service callers
+	// hide stale findings after rule/fixture-deny changes before a backfill has
+	// rewritten old rows.
+	RulesVersions []string
+	Limit         int
+	Cursor        int
+}
+
+// SecretFindingRow is a finding enriched with its session's project and agent.
+type SecretFindingRow struct {
+	SecretFinding
+	Project string `json:"project"`
+	Agent   string `json:"agent"`
+}
+
+// SecretFindingPage is one offset-paginated page of findings.
+type SecretFindingPage struct {
+	Findings   []SecretFindingRow `json:"findings"`
+	NextCursor int                `json:"next_cursor,omitempty"`
+}
+
 // ReplaceSessionSecretFindings atomically replaces all secret findings for a
 // session and updates the summary columns on the sessions row.
 func (db *DB) ReplaceSessionSecretFindings(
@@ -90,84 +120,6 @@ func replaceSecretFindingsTx(
 		return fmt.Errorf("updating session secret columns %s: %w", sessionID, err)
 	}
 	return nil
-}
-
-// SecretFindingSource returns the full source text a finding was detected in,
-// reconstructed via GetAllMessages so the stored MatchStart/MatchEnd offsets
-// remain valid. ok is false when the coordinates no longer resolve (the source
-// was changed or removed), which --reveal treats as "source changed".
-func (db *DB) SecretFindingSource(
-	ctx context.Context, f SecretFinding,
-) (string, bool, error) {
-	msgs, err := db.GetAllMessages(ctx, f.SessionID)
-	if err != nil {
-		return "", false, err
-	}
-	text, ok := FindingSourceFromMessages(msgs, f)
-	return text, ok, nil
-}
-
-// FindingSourceFromMessages returns the source text that finding f points at,
-// reconstructed from msgs exactly as the scanner saw it. ok is false when the
-// coordinates no longer resolve. Shared by the SQLite and PostgreSQL stores so
-// the --reveal re-validation path stays identical.
-func FindingSourceFromMessages(msgs []Message, f SecretFinding) (string, bool) {
-	msg := findMessageByOrdinal(msgs, f.MessageOrdinal)
-	if msg == nil {
-		return "", false
-	}
-	if f.LocationKind == "message" {
-		return msg.Content, true
-	}
-	text, ok := toolCallSource(msg.ToolCalls, f)
-	return text, ok
-}
-
-func findMessageByOrdinal(msgs []Message, ordinal int) *Message {
-	for i := range msgs {
-		if msgs[i].Ordinal == ordinal {
-			return &msgs[i]
-		}
-	}
-	return nil
-}
-
-func toolCallAt(calls []ToolCall, idx *int) (ToolCall, bool) {
-	if idx == nil || *idx < 0 || *idx >= len(calls) {
-		return ToolCall{}, false
-	}
-	return calls[*idx], true
-}
-
-func toolCallSource(calls []ToolCall, f SecretFinding) (string, bool) {
-	tc, ok := toolCallAt(calls, f.CallIndex)
-	if !ok {
-		return "", false
-	}
-	switch f.LocationKind {
-	case "tool_input":
-		return tc.InputJSON, true
-	case "tool_result":
-		if len(tc.ResultEvents) > 0 {
-			return "", false
-		}
-		return tc.ResultContent, true
-	case "tool_result_event":
-		return resultEventContent(tc.ResultEvents, f.EventIndex)
-	}
-	return "", false
-}
-
-func resultEventContent(events []ToolResultEvent, idx *int) (string, bool) {
-	if idx == nil {
-		return "", false
-	}
-	for _, ev := range events {
-		if ev.EventIndex == *idx {
-			return ev.Content, true
-		}
-	}
-	return "", false
 }
 
 // SessionSecretFindings returns all secret findings for a session ordered by
