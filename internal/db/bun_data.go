@@ -264,7 +264,7 @@ func (s *BunStore) GetProjectInventory(ctx context.Context) (ProjectInventory, e
 	var inventory ProjectInventory
 	err := s.consistentView(ctx, func(store bun.IDB) error {
 		agg, err := listBunProjectInventoryAggregates(
-			ctx, store, s.backend.SessionQueryDialect(),
+			ctx, store, s.backend.TimestampOrderExpr,
 		)
 		if err != nil {
 			return err
@@ -442,11 +442,12 @@ func (s *BunStore) ListArchiveWorktreeCandidates(
 }
 
 func listBunProjectInventoryAggregates(
-	ctx context.Context, store bun.IDB, dialect QueryDialect,
+	ctx context.Context, store bun.IDB,
+	timestampOrderExpr func(string) string,
 ) (map[string]projectInventoryAgg, error) {
-	startedOrder := dialect.timestampExpr("started_at")
-	activityOrder := "COALESCE(" + dialect.timestampExpr("ended_at") + ", " +
-		dialect.timestampExpr("started_at") + ")"
+	startedOrder := timestampOrderExpr("started_at")
+	activityOrder := "COALESCE(" + timestampOrderExpr("ended_at") + ", " +
+		timestampOrderExpr("started_at") + ")"
 	startedRaw := bunNullableTimestamp("started_at")
 	activityRaw := "COALESCE(" + bunNullableTimestamp("ended_at") + ", " +
 		bunNullableTimestamp("started_at") + ")"

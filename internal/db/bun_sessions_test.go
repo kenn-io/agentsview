@@ -71,8 +71,8 @@ func (*sessionContractBackend) Capabilities() BackendCapabilities {
 	return BackendCapabilities{}
 }
 
-func (*sessionContractBackend) SessionQueryDialect() QueryDialect {
-	return SQLiteBunSessionQueryDialect()
+func (*sessionContractBackend) TimestampOrderExpr(column string) string {
+	return "julianday(NULLIF(" + column + ", ''))"
 }
 
 func (*sessionContractBackend) SessionVersion(

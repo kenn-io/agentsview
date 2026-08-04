@@ -50,9 +50,7 @@ func (postgresFullTextCapability) SearchHybridContent(
 	if len(terms) == 0 {
 		return nil, nil
 	}
-	scopeWhere, scopeArgs := db.BuildSessionBaseFilterSQL(
-		semanticPGSessionFilter(f), db.PortableBunSessionQueryDialect(),
-	)
+	scopeWhere, scopeArgs := db.BunSessionBaseFilter(semanticPGSessionFilter(f))
 	predicates := make([]string, len(terms))
 	args := make([]any, 0, len(terms)+len(scopeArgs)+2)
 	for i, term := range terms {

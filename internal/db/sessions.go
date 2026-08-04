@@ -428,12 +428,6 @@ const activeWindow = 10 * time.Minute
 // idle duration with an orphan tool call, the session is "unclean".
 const staleWindow = 60 * time.Minute
 
-// activityExprSQLite computes seconds-since-epoch of the most
-// recent activity timestamp. Used by both sessions and analytics
-// filters when classifying by status.
-const activityExprSQLite = "CAST(strftime('%s', " +
-	"COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), created_at)) AS INTEGER)"
-
 // buildTerminationPredSQLite returns a WHERE fragment and args for
 // the multi-state termination filter (active / stale / unclean).
 // The status value may be comma-separated to OR multiple states
@@ -446,11 +440,11 @@ const activityExprSQLite = "CAST(strftime('%s', " +
 // signal that something is wrong. Active is purely time-based:
 // any session written to in the last activeWindow qualifies.
 func buildTerminationPredSQLite(status string) (string, []any) {
-	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
-	pred := terminationPredicate(status, b, func(col string) string {
+	builder := newBunFilterArgs(sqliteTimestampOrderExpr)
+	predicate := bunTerminationPredicate(status, builder, func(col string) string {
 		return col
 	})
-	return pred, b.Args()
+	return predicate, builder.values()
 }
 
 // SessionPage is a page of session results.

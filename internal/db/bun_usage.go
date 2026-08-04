@@ -731,11 +731,11 @@ func (s *BunStore) loadBunUsageProjections(
 		)
 	}
 	messageQuery = appendBunUsageFilters(
-		messageQuery, filter, "m.model", s.backend.SessionQueryDialect(), referenceTime,
+		messageQuery, filter, "m.model", s.backend.TimestampOrderExpr, referenceTime,
 	)
 	messageQuery = appendBunUsageBounds(
 		messageQuery, filter, "m.timestamp", true,
-		s.backend.SessionQueryDialect(),
+		s.backend.TimestampOrderExpr,
 	)
 	if err := messageQuery.Scan(ctx, &messages); err != nil {
 		return nil, fmt.Errorf("querying usage messages: %w", err)
@@ -756,11 +756,11 @@ func (s *BunStore) loadBunUsageProjections(
 		)
 	}
 	eventQuery = appendBunUsageFilters(
-		eventQuery, filter, "ue.model", s.backend.SessionQueryDialect(), referenceTime,
+		eventQuery, filter, "ue.model", s.backend.TimestampOrderExpr, referenceTime,
 	)
 	eventQuery = appendBunUsageBounds(
 		eventQuery, filter, "ue.occurred_at", true,
-		s.backend.SessionQueryDialect(),
+		s.backend.TimestampOrderExpr,
 	)
 	if err := eventQuery.Scan(ctx, &events); err != nil {
 		return nil, fmt.Errorf("querying usage events: %w", err)
@@ -788,24 +788,16 @@ func (s *BunStore) loadBunUsageProjections(
 
 func appendBunUsageBounds(
 	query *bun.SelectQuery, filter UsageFilter, timestampColumn string,
-	withSessionFallback bool, dialect QueryDialect,
+	withSessionFallback bool, timestampOrder func(string) string,
 ) *bun.SelectQuery {
 	bounds := usageBoundsForFilter(filter)
 	expr := timestampColumn
 	if withSessionFallback {
-		if dialect.timestampOrderExpr != nil {
-			expr = "julianday(COALESCE(NULLIF(" + timestampColumn +
-				", ''), NULLIF(s.started_at, ''), s.created_at))"
-		} else {
-			expr = "COALESCE(" + timestampColumn + ", s.started_at, s.created_at)"
-		}
-	} else if dialect.timestampOrderExpr != nil {
-		expr = dialect.timestampOrderExpr(timestampColumn)
+		expr = "COALESCE(" + bunNullableTimestamp(timestampColumn) + ", " +
+			bunNullableTimestamp("s.started_at") + ", s.created_at)"
 	}
-	parameter := "?"
-	if dialect.timestampOrderExpr != nil {
-		parameter = dialect.timestampOrderExpr("?")
-	}
+	expr = timestampOrder(expr)
+	parameter := timestampOrder("?")
 	if bounds.from != "" {
 		query = query.Where(expr+" >= "+parameter, bounds.from)
 	}
@@ -817,7 +809,7 @@ func appendBunUsageBounds(
 
 func appendBunUsageFilters(
 	query *bun.SelectQuery, filter UsageFilter, modelColumn string,
-	dialect QueryDialect, referenceTime time.Time,
+	timestampOrder func(string) string, referenceTime time.Time,
 ) *bun.SelectQuery {
 	query = appendBunUsageValues(query, modelColumn, csvUsageValues(filter.Model), true)
 	query = appendBunUsageValues(
@@ -856,11 +848,11 @@ func appendBunUsageFilters(
 		query = query.Where("s.is_automated = ?", true)
 	}
 	if filter.ActiveSince != "" {
-		expr, parameter := bunUsageSessionActivityComparison(dialect)
+		expr, parameter := bunUsageSessionActivityComparison(timestampOrder)
 		query = query.Where(expr+" >= "+parameter, filter.ActiveSince)
 	}
 	return appendBunUsageTerminationFilter(
-		query, filter.Termination, dialect, referenceTime,
+		query, filter.Termination, timestampOrder, referenceTime,
 	)
 }
 
@@ -884,39 +876,35 @@ func appendBunUsageValues(
 	return query.Where(column+operator, bun.List(values))
 }
 
-func bunUsageSessionActivityComparison(dialect QueryDialect) (string, string) {
-	if dialect.timestampOrderExpr != nil {
-		return "julianday(COALESCE(NULLIF(s.ended_at, ''), " +
-			"NULLIF(s.started_at, ''), s.created_at))", dialect.timestampOrderExpr("?")
-	}
-	return "COALESCE(s.ended_at, s.started_at, s.created_at)", "?"
+func bunUsageSessionActivityComparison(
+	timestampOrder func(string) string,
+) (string, string) {
+	expr := "COALESCE(" + bunNullableTimestamp("s.ended_at") + ", " +
+		bunNullableTimestamp("s.started_at") + ", s.created_at)"
+	return timestampOrder(expr), timestampOrder("?")
 }
 
 func appendBunUsageTerminationFilter(
-	query *bun.SelectQuery, filter string, dialect QueryDialect,
+	query *bun.SelectQuery, filter string, timestampOrder func(string) string,
 	referenceTime time.Time,
 ) *bun.SelectQuery {
 	return appendBunTerminationFilter(
-		query, filter, "s", dialect, referenceTime,
+		query, filter, "s", timestampOrder, referenceTime,
 	)
 }
 
 func appendBunTerminationFilter(
-	query *bun.SelectQuery, filter, alias string, dialect QueryDialect,
+	query *bun.SelectQuery, filter, alias string,
+	timestampOrder func(string) string,
 	referenceTime time.Time,
 ) *bun.SelectQuery {
 	if !usageHasTerminationFilter(filter) {
 		return query
 	}
-	activityExpr := "COALESCE(" + alias + ".ended_at, " +
-		alias + ".started_at, " + alias + ".created_at)"
-	parameter := "?"
-	if dialect.timestampOrderExpr != nil {
-		activityExpr = "julianday(COALESCE(NULLIF(" + alias +
-			".ended_at, ''), NULLIF(" + alias + ".started_at, ''), " +
-			alias + ".created_at))"
-		parameter = dialect.timestampOrderExpr("?")
-	}
+	activityExpr := "COALESCE(" + bunNullableTimestamp(alias+".ended_at") + ", " +
+		bunNullableTimestamp(alias+".started_at") + ", " + alias + ".created_at)"
+	activityExpr = timestampOrder(activityExpr)
+	parameter := timestampOrder("?")
 	activeCutoff := referenceTime.UTC().Add(-activeWindow).Format(time.RFC3339Nano)
 	staleCutoff := referenceTime.UTC().Add(-staleWindow).Format(time.RFC3339Nano)
 	flagged := alias + ".termination_status IN ('tool_call_pending', 'truncated')"
@@ -1027,7 +1015,7 @@ func (s *BunStore) loadBunCursorUsageRows(
 		query = query.Where("cu.is_headless = ?", true)
 	}
 	query = appendBunUsageBounds(
-		query, filter, "cu.occurred_at", false, s.backend.SessionQueryDialect(),
+		query, filter, "cu.occurred_at", false, s.backend.TimestampOrderExpr,
 	)
 	if err := query.Scan(ctx, &rows); err != nil {
 		return nil, fmt.Errorf("querying cursor usage events: %w", err)

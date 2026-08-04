@@ -131,8 +131,8 @@ func (b *searchTestBackend) Capabilities() BackendCapabilities {
 	}
 }
 
-func (*searchTestBackend) SessionQueryDialect() QueryDialect {
-	return SQLiteBunSessionQueryDialect()
+func (*searchTestBackend) TimestampOrderExpr(column string) string {
+	return "julianday(NULLIF(" + column + ", ''))"
 }
 
 func (*searchTestBackend) SessionVersion(

@@ -102,9 +102,7 @@ func (postgresSessionMutationAdapter) BeforeDelete(
 	return nil
 }
 
-func (*postgresBunBackend) SessionQueryDialect() db.QueryDialect {
-	return db.PortableBunSessionQueryDialect()
-}
+func (*postgresBunBackend) TimestampOrderExpr(column string) string { return column }
 
 func (*postgresBunBackend) BunTableExists(
 	ctx context.Context, store bun.IDB, table string,
@@ -209,14 +207,6 @@ func (pb *paramBuilder) add(v any) string {
 	pb.n++
 	pb.args = append(pb.args, v)
 	return fmt.Sprintf("$%d", pb.n)
-}
-
-// buildPGSessionFilter returns a WHERE clause with $N
-// placeholders and the corresponding args.
-func buildPGSessionFilter(
-	f db.SessionFilter,
-) (string, []any) {
-	return db.BuildSessionFilterSQL(f, db.PostgresQueryDialect())
 }
 
 // FindSessionIDsByRawSuffix returns up to limit session IDs whose
