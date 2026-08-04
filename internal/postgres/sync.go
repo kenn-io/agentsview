@@ -193,6 +193,10 @@ type Sync struct {
 	afterVectorGenerationLookup func()
 	// afterScopedVectorApply is a scoped-retry test hook.
 	afterScopedVectorApply func()
+	// Ownership lock hooks coordinate the concurrent first-publisher contract.
+	beforeSessionOwnershipLock func()
+	afterSessionOwnershipLock  func()
+	afterSessionRowWrite       func()
 
 	closeOnce sync.Once
 	closeErr  error

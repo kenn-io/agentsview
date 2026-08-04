@@ -1188,10 +1188,17 @@ func TestPushSessionNoopPreservesUpdatedAt(t *testing.T) {
 	displayName := "source name"
 	deletedAt := "2026-01-01T00:00:00.123456789Z"
 	deletionCause := "source_missing"
+	sourceLocalModifiedAt := "2026-01-01T01:00:00Z"
+	filePath := "/archive/session.jsonl"
+	fileSize := int64(123)
+	fileMtime := int64(456)
+	fileHash := "hash-a"
 	sess := db.Session{
 		ID: "session-noop", Project: "project", Machine: "push-host",
 		Agent: "codex", DisplayName: &displayName, DeletedAt: &deletedAt,
 		DeletionCause: &deletionCause, CreatedAt: "2026-01-01T00:00:00Z",
+		LocalModifiedAt: &sourceLocalModifiedAt, FilePath: &filePath,
+		FileSize: &fileSize, FileMtime: &fileMtime, FileHash: &fileHash,
 	}
 	push := func() {
 		t.Helper()
@@ -1206,20 +1213,36 @@ func TestPushSessionNoopPreservesUpdatedAt(t *testing.T) {
 	push()
 
 	wantUpdatedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	wantLocalModifiedAt := time.Date(2026, 1, 2, 2, 3, 4, 0, time.UTC)
 	_, err = pg.ExecContext(ctx,
-		`UPDATE sessions SET updated_at = $1 WHERE id = $2`,
-		wantUpdatedAt, sess.ID,
+		`UPDATE sessions SET updated_at = $1, local_modified_at = $2 WHERE id = $3`,
+		wantUpdatedAt, wantLocalModifiedAt, sess.ID,
 	)
 	require.NoError(t, err, "install updated_at sentinel")
 
 	push()
 
 	var gotUpdatedAt time.Time
+	var gotLocalModifiedAt *time.Time
+	var gotFilePath *string
+	var gotFileSize, gotFileMtime *int64
+	var gotFileHash *string
 	require.NoError(t, pg.QueryRowContext(ctx,
-		`SELECT updated_at FROM sessions WHERE id = $1`, sess.ID,
-	).Scan(&gotUpdatedAt), "read updated_at")
+		`SELECT updated_at, local_modified_at, file_path, file_size, file_mtime, file_hash
+		 FROM sessions WHERE id = $1`, sess.ID,
+	).Scan(
+		&gotUpdatedAt, &gotLocalModifiedAt, &gotFilePath,
+		&gotFileSize, &gotFileMtime, &gotFileHash,
+	), "read session metadata")
 	assert.Equal(t, wantUpdatedAt, gotUpdatedAt.UTC(),
 		"identical session metadata must not publish a new revision")
+	require.NotNil(t, gotLocalModifiedAt)
+	assert.Equal(t, wantLocalModifiedAt, gotLocalModifiedAt.UTC(),
+		"PostgreSQL target curation owns local_modified_at")
+	assert.Equal(t, filePath, *gotFilePath)
+	assert.Equal(t, fileSize, *gotFileSize)
+	assert.Equal(t, fileMtime, *gotFileMtime)
+	assert.Equal(t, fileHash, *gotFileHash)
 }
 
 func TestPushPreservesPGServeLocalCurationFields(t *testing.T) {
@@ -1697,6 +1720,127 @@ func TestPushSessionSkipsPGExcludedSession(t *testing.T) {
 		`SELECT COUNT(*) FROM sessions WHERE id = $1`,
 		sessionID,
 	).Scan(&count), "count skipped session")
+	assert.Zero(t, count)
+}
+
+func TestPushSessionStoresVibeFallbackAlias(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_push_vibe_alias_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+	ctx := t.Context()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+	sync := &Sync{
+		pg: pg, local: localDB, machine: "machine", schema: schema, schemaDone: true,
+	}
+	markerID, err := sync.pushMarkerID()
+	require.NoError(t, err, "pushMarkerID")
+	filePath := filepath.Join(
+		t.TempDir(), "session_20260616_083518_abc123", "messages.jsonl",
+	)
+	tx, err := sync.bunDB().BeginTx(ctx, nil)
+	require.NoError(t, err, "BeginTx")
+	require.NoError(t, sync.pushSession(ctx, tx, db.Session{
+		ID: "vibe:canonical", Project: "project", Machine: "machine",
+		Agent: "vibe", FilePath: &filePath, CreatedAt: "2026-08-04T10:00:00Z",
+	}, markerID, nil))
+	require.NoError(t, tx.Commit(), "Commit")
+
+	var aliasID string
+	require.NoError(t, pg.QueryRowContext(ctx,
+		`SELECT alias_id FROM session_aliases WHERE session_id = $1`,
+		"vibe:canonical",
+	).Scan(&aliasID))
+	assert.Equal(t, "vibe:session_20260616_083518_abc123", aliasID)
+}
+
+func TestPushSessionPropagatesVibeFallbackExclusion(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_push_vibe_alias_exclusion_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+	ctx := t.Context()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+	sync := &Sync{
+		pg: pg, local: localDB, machine: "machine", schema: schema, schemaDone: true,
+	}
+	markerID, err := sync.pushMarkerID()
+	require.NoError(t, err, "pushMarkerID")
+	const fallbackID = "vibe:session_20260616_083518_def456"
+	_, err = pg.ExecContext(ctx,
+		`INSERT INTO excluded_sessions (id) VALUES ($1)`, fallbackID,
+	)
+	require.NoError(t, err, "insert fallback exclusion")
+	filePath := filepath.Join(
+		t.TempDir(), "session_20260616_083518_def456", "messages.jsonl",
+	)
+	tx, err := sync.bunDB().BeginTx(ctx, nil)
+	require.NoError(t, err, "BeginTx")
+	err = sync.pushSession(ctx, tx, db.Session{
+		ID: "vibe:canonical", Project: "project", Machine: "machine",
+		Agent: "vibe", FilePath: &filePath, CreatedAt: "2026-08-04T10:00:00Z",
+	}, markerID, nil)
+	require.ErrorIs(t, err, errSessionExcluded)
+	require.NoError(t, tx.Commit(), "Commit exclusion propagation")
+
+	var excludedCount int
+	require.NoError(t, pg.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM excluded_sessions WHERE id = ANY($1)`,
+		[]string{"vibe:canonical", fallbackID},
+	).Scan(&excludedCount))
+	assert.Equal(t, 2, excludedCount)
+}
+
+func TestPushSessionRechecksExclusionAfterRowWrite(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_push_exclusion_race_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+	ctx := t.Context()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+	sync := &Sync{
+		pg: pg, local: localDB, machine: "machine", schema: schema, schemaDone: true,
+	}
+	const sessionID = "excluded-during-write"
+	sync.afterSessionRowWrite = func() {
+		_, hookErr := pg.ExecContext(ctx,
+			`INSERT INTO excluded_sessions (id) VALUES ($1)`, sessionID,
+		)
+		require.NoError(t, hookErr, "insert concurrent exclusion")
+	}
+	markerID, err := sync.pushMarkerID()
+	require.NoError(t, err, "pushMarkerID")
+	tx, err := sync.bunDB().BeginTx(ctx, nil)
+	require.NoError(t, err, "BeginTx")
+	err = sync.pushSession(ctx, tx, db.Session{
+		ID: sessionID, Project: "project", Machine: "machine", Agent: "codex",
+		CreatedAt: "2026-08-04T10:00:00Z",
+	}, markerID, nil)
+	require.ErrorIs(t, err, errSessionExcluded)
+	require.NoError(t, tx.Commit(), "Commit exclusion cleanup")
+
+	var count int
+	require.NoError(t, pg.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sessions WHERE id = $1`, sessionID,
+	).Scan(&count))
 	assert.Zero(t, count)
 }
 

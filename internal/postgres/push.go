@@ -431,12 +431,11 @@ func (s *Sync) PushWithOptions(
 		return result, err
 	}
 
-	// The fingerprint loop issues several local queries per candidate
-	// session; on a full push that covers every session and runs for
-	// minutes, so it reports its own progress phase rather than sitting
-	// silent until the first batch lands.
-	log.Printf("pgsync: computing push fingerprints for %d candidate session(s)",
-		len(sessionByID))
+	// Incremental selection computes conservative source fingerprints before
+	// opening target batches. A full push already writes every candidate, so
+	// materializing every transcript here would only read the archive twice;
+	// pushBatch computes the authoritative fingerprint from the exact snapshot
+	// it commits.
 	reportPrepare := func(done int) {
 		if onProgress == nil {
 			return
@@ -447,31 +446,34 @@ func (s *Sync) PushWithOptions(
 			SessionsTotal: len(sessionByID),
 		})
 	}
-	reportPrepare(0)
-	prepared := 0
-	candidateIDs := mapKeys(sessionByID)
-	for _, id := range candidateIDs {
-		snapshot, err := s.local.ReadSessionReplicationSnapshot(ctx, id)
-		if err != nil {
-			return result, fmt.Errorf(
-				"reading local fingerprint snapshot %s: %w", id, err,
-			)
+	if !full {
+		log.Printf("pgsync: computing push fingerprints for %d candidate session(s)",
+			len(sessionByID))
+		reportPrepare(0)
+		prepared := 0
+		candidateIDs := mapKeys(sessionByID)
+		for _, id := range candidateIDs {
+			snapshot, err := s.local.ReadSessionReplicationSnapshot(ctx, id)
+			if err != nil {
+				return result, fmt.Errorf(
+					"reading local fingerprint snapshot %s: %w", id, err,
+				)
+			}
+			s.stampReplicationSnapshot(&snapshot)
+			sessionFingerprints[id], err =
+				postgresSessionReplicationFingerprint(snapshot, markerID)
+			if err != nil {
+				return result, fmt.Errorf(
+					"computing local snapshot fingerprint %s: %w", id, err,
+				)
+			}
+			prepared++
+			if prepared%pushPrepareProgressStride == 0 {
+				reportPrepare(prepared)
+			}
 		}
-		s.stampReplicationSnapshot(&snapshot)
-		sessionFingerprints[id], err = db.CanonicalSessionReplicationFingerprint(
-			snapshot, markerID,
-		)
-		if err != nil {
-			return result, fmt.Errorf(
-				"computing local snapshot fingerprint %s: %w", id, err,
-			)
-		}
-		prepared++
-		if prepared%pushPrepareProgressStride == 0 {
-			reportPrepare(prepared)
-		}
+		reportPrepare(prepared)
 	}
-	reportPrepare(prepared)
 
 	if len(priorFingerprints) > 0 {
 		for id := range sessionByID {
@@ -1231,7 +1233,7 @@ func (s *Sync) pushBatch(
 			return batchResult{}, nil
 		}
 		s.stampReplicationSnapshot(&snapshot)
-		fingerprint, err := db.CanonicalSessionReplicationFingerprint(snapshot, markerID)
+		fingerprint, err := postgresSessionReplicationFingerprint(snapshot, markerID)
 		if err != nil {
 			log.Printf("pgsync: session %s fingerprint: %v", sess.ID, err)
 			_ = tx.Rollback()
@@ -1324,6 +1326,17 @@ func (s *Sync) stampReplicationSnapshot(snapshot *db.SessionReplicationSnapshot)
 	snapshot.Session.Machine = pushedSessionMachine(snapshot.Session, s.machine)
 	snapshot.Session.SourceArchiveID = s.archiveID
 	snapshot.Session.SourceDatabaseGeneration = s.databaseGeneration
+}
+
+func postgresSessionReplicationFingerprint(
+	snapshot db.SessionReplicationSnapshot, markerID string,
+) (string, error) {
+	// PostgreSQL owns curation pins and local_modified_at independently of the
+	// source archive. They are deliberately excluded because pushSession does
+	// not commit their SQLite values. Portable file metadata remains included.
+	snapshot.PinnedMessages = nil
+	snapshot.Session.LocalModifiedAt = nil
+	return db.CanonicalSessionReplicationFingerprint(snapshot, markerID)
 }
 
 func (s *Sync) replacePGReplicationSnapshot(
@@ -2055,6 +2068,9 @@ func (s *Sync) pushSession(
 		return fmt.Errorf("pg session upsert requires a Bun transaction")
 	}
 	tx := bunTx.Tx
+	if err := s.lockSessionOwnership(ctx, store, sess.ID); err != nil {
+		return err
+	}
 	if excluded, err := deletePGSessionIfExcluded(ctx, tx, sess); err != nil {
 		return err
 	} else if excluded {
@@ -2070,11 +2086,12 @@ func (s *Sync) pushSession(
 		DeletedAt         sql.NullTime `bun:"deleted_at"`
 		SourceDeletedAt   sql.NullTime `bun:"source_deleted_at"`
 		DeletionCause     *string      `bun:"deletion_cause"`
+		LocalModifiedAt   sql.NullTime `bun:"local_modified_at"`
 	}
 	var current policyRow
 	err := store.NewSelect().TableExpr("sessions").
 		Column("machine", "owner_marker", "display_name", "source_display_name",
-			"deleted_at", "source_deleted_at", "deletion_cause").
+			"deleted_at", "source_deleted_at", "deletion_cause", "local_modified_at").
 		Where("id = ?", sess.ID).For("UPDATE").Scan(ctx, &current)
 	exists := err == nil
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -2105,6 +2122,11 @@ func (s *Sync) pushSession(
 		sess.DeletedAt = nullTimeString(current.DeletedAt)
 		sess.DeletionCause = current.DeletionCause
 	}
+	if exists {
+		sess.LocalModifiedAt = nullTimeString(current.LocalModifiedAt)
+	} else {
+		sess.LocalModifiedAt = nil
+	}
 	row, err := db.CanonicalSessionRow(sess)
 	if err != nil {
 		return fmt.Errorf("converting pg session %s: %w", sess.ID, err)
@@ -2127,6 +2149,9 @@ func (s *Sync) pushSession(
 			Set("updated_at = NOW()").Where("id = ?", sess.ID).Exec(ctx); err != nil {
 			return fmt.Errorf("writing pg session policy %s: %w", sess.ID, err)
 		}
+		if s.afterSessionRowWrite != nil {
+			s.afterSessionRowWrite()
+		}
 	}
 	if excluded, err := deletePGSessionIfExcluded(ctx, tx, sess); err != nil {
 		return err
@@ -2134,6 +2159,24 @@ func (s *Sync) pushSession(
 		return errSessionExcluded
 	}
 	return replacePGSessionAliases(ctx, tx, sess)
+}
+
+func (s *Sync) lockSessionOwnership(
+	ctx context.Context, store bun.IDB, sessionID string,
+) error {
+	if s.beforeSessionOwnershipLock != nil {
+		s.beforeSessionOwnershipLock()
+	}
+	lockKey := s.schema + "\x00" + sessionID
+	if _, err := store.NewRaw(
+		"SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", lockKey,
+	).Exec(ctx); err != nil {
+		return fmt.Errorf("locking pg session ownership %s: %w", sessionID, err)
+	}
+	if s.afterSessionOwnershipLock != nil {
+		s.afterSessionOwnershipLock()
+	}
+	return nil
 }
 
 func equalOptionalString(left, right *string) bool {

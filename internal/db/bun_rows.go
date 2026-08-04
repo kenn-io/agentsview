@@ -81,7 +81,11 @@ func sessionToBunRow(session Session) (bunmodel.Session, error) {
 	session.FileHash = sanitizeCanonicalSessionStringPtr(session.FileHash)
 	if session.TranscriptRevision != nil {
 		clean := SanitizeUTF8(*session.TranscriptRevision)
-		session.TranscriptRevision = &clean
+		if clean == "" {
+			session.TranscriptRevision = nil
+		} else {
+			session.TranscriptRevision = &clean
+		}
 	}
 	outcome := session.Outcome
 	if outcome == "" {
