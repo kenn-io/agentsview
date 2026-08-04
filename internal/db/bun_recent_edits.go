@@ -158,10 +158,9 @@ func hasNonASCII(value string) bool {
 }
 
 // unicodeRecentEditKeys preserves the original Unicode-aware path search on
-// SQLite, whose built-in LOWER only folds ASCII. It transfers one narrow row
-// per distinct edited file, filters those keys in Go, and returns only the
-// requested page plus its lookahead; the main query still hydrates a bounded
-// number of edit rows.
+// SQLite, whose built-in LOWER only folds ASCII. It streams narrow, ordered
+// keys, discards matches before Offset, and stops after the requested page plus
+// lookahead; the main query still hydrates a bounded number of edit rows.
 func (s *BunStore) unicodeRecentEditKeys(
 	ctx context.Context, store bun.IDB, params RecentEditsParams,
 	sortExpr string,
@@ -202,22 +201,33 @@ func (s *BunStore) unicodeRecentEditKeys(
 			ordinal DESC, call_index DESC, file_path DESC`,
 		sortExpr, sortExpr, strings.Join(predicates, " AND "),
 	)
-	var keys []bunRecentEditKey
-	if err := store.NewRaw(query, args...).Scan(ctx, &keys); err != nil {
+	formatted := store.NewRaw(query, args...).String()
+	rows, err := store.QueryContext(ctx, formatted)
+	if err != nil {
 		return nil, fmt.Errorf("querying Unicode recent-edit keys: %w", err)
 	}
+	defer rows.Close()
 	needle := strings.ToLower(params.Search)
-	matched := keys[:0]
-	for _, key := range keys {
-		if strings.Contains(strings.ToLower(key.FilePath), needle) {
-			matched = append(matched, key)
+	matched := make([]bunRecentEditKey, 0, params.Limit+1)
+	skipped := 0
+	for rows.Next() && len(matched) < params.Limit+1 {
+		var key bunRecentEditKey
+		if err := rows.Scan(&key.Project, &key.FilePath); err != nil {
+			return nil, fmt.Errorf("scanning Unicode recent-edit key: %w", err)
 		}
+		if !strings.Contains(strings.ToLower(key.FilePath), needle) {
+			continue
+		}
+		if skipped < params.Offset {
+			skipped++
+			continue
+		}
+		matched = append(matched, key)
 	}
-	if params.Offset >= len(matched) {
-		return nil, nil
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating Unicode recent-edit keys: %w", err)
 	}
-	end := min(params.Offset+params.Limit+1, len(matched))
-	return matched[params.Offset:end], nil
+	return matched, nil
 }
 
 func buildBunRecentEditPage(

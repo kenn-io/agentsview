@@ -52,11 +52,12 @@ func (c *literalFullTextCapability) SearchContent(
 }
 
 type literalSemanticCapability struct {
-	available   bool
-	hits        []ContentSearchHit
-	units       []UnitRef
-	lastFilter  ContentSearchFilter
-	insideGuard func() bool
+	available         bool
+	hits              []ContentSearchHit
+	units             []UnitRef
+	lastFilter        ContentSearchFilter
+	insideGuard       func() bool
+	outsideConsistent func() bool
 }
 
 type literalHybridLexicalCapability struct {
@@ -90,6 +91,9 @@ func (c *literalSemanticCapability) SearchContent(
 	if c.insideGuard != nil && !c.insideGuard() {
 		panic("semantic search ran outside the backend guard")
 	}
+	if c.outsideConsistent != nil && !c.outsideConsistent() {
+		panic("semantic search ran inside a consistent-view transaction")
+	}
 	c.lastFilter = filter
 	return append([]ContentSearchHit(nil), c.hits...), nil
 }
@@ -97,17 +101,22 @@ func (c *literalSemanticCapability) SearchContent(
 func (c *literalSemanticCapability) ResolveMessageUnits(
 	context.Context, bun.IDB, []MessageRef,
 ) ([]UnitRef, error) {
+	if c.outsideConsistent != nil && !c.outsideConsistent() {
+		panic("semantic unit resolution ran inside a consistent-view transaction")
+	}
 	return append([]UnitRef(nil), c.units...), nil
 }
 
 type searchTestBackend struct {
-	store         bun.IDB
-	fullText      FullTextCapability
-	contentSearch ContentSearchCapability
-	semantic      SemanticCapability
-	hybridLexical HybridLexicalCapability
-	insideGuard   bool
-	viewCalls     int
+	store            bun.IDB
+	fullText         FullTextCapability
+	sessionSearch    SessionSearchCapability
+	contentSearch    ContentSearchCapability
+	semantic         SemanticCapability
+	hybridLexical    HybridLexicalCapability
+	insideGuard      bool
+	insideConsistent bool
+	viewCalls        int
 }
 
 func (*searchTestBackend) Name() string { return "search-test" }
@@ -116,7 +125,8 @@ func (*searchTestBackend) ReadOnly() bool { return true }
 
 func (b *searchTestBackend) Capabilities() BackendCapabilities {
 	return BackendCapabilities{
-		FullText: b.fullText, ContentSearch: b.contentSearch, Semantic: b.semantic,
+		FullText: b.fullText, SessionSearch: b.sessionSearch,
+		ContentSearch: b.contentSearch, Semantic: b.semantic,
 		HybridLexical: b.hybridLexical,
 	}
 }
@@ -134,19 +144,25 @@ func (*searchTestBackend) SessionVersion(
 func (b *searchTestBackend) View(
 	_ context.Context, callback func(bun.IDB) error,
 ) error {
-	return b.runGuarded(callback)
+	return b.runGuarded(false, callback)
 }
 
 func (b *searchTestBackend) ConsistentView(
 	_ context.Context, callback func(bun.IDB) error,
 ) error {
-	return b.runGuarded(callback)
+	return b.runGuarded(true, callback)
 }
 
-func (b *searchTestBackend) runGuarded(callback func(bun.IDB) error) error {
+func (b *searchTestBackend) runGuarded(
+	consistent bool, callback func(bun.IDB) error,
+) error {
 	b.viewCalls++
 	b.insideGuard = true
-	defer func() { b.insideGuard = false }()
+	b.insideConsistent = consistent
+	defer func() {
+		b.insideGuard = false
+		b.insideConsistent = false
+	}()
 	return callback(b.store)
 }
 
@@ -225,7 +241,7 @@ func TestBunStoreSearchSessionUsesFullTextCapability(t *testing.T) {
 	capability := &literalFullTextCapability{
 		available: true, sessionOrdinals: []int{1, 3},
 	}
-	backend := &searchTestBackend{store: database.bunReader, fullText: capability}
+	backend := &searchTestBackend{store: database.bunReader, sessionSearch: capability}
 	capability.insideGuard = func() bool { return backend.insideGuard }
 	store := NewBunStore(backend)
 
@@ -241,7 +257,7 @@ func TestBunStoreSearchSessionDoesNotRequireGlobalFTS(t *testing.T) {
 	capability := &literalFullTextCapability{
 		available: false, sessionOrdinals: []int{2, 4},
 	}
-	backend := &searchTestBackend{store: database.bunReader, fullText: capability}
+	backend := &searchTestBackend{store: database.bunReader, sessionSearch: capability}
 	capability.insideGuard = func() bool { return backend.insideGuard }
 
 	ordinals, err := NewBunStore(backend).SearchSession(
@@ -332,7 +348,8 @@ func TestBunStoreSearchContentHydratesVisibleCapabilityHits(t *testing.T) {
 		{SessionID: "content-other", Ordinal: 3, Location: "message", Snippet: "other"},
 		{SessionID: "content-deleted", Ordinal: 4, Location: "message", Snippet: "deleted"},
 		{SessionID: "content-visible", Ordinal: 2, OrdinalStart: 1, OrdinalEnd: 3,
-			Location: "message", Snippet: "literal <mark>needle</mark>"},
+			RangeResolved: true, Location: "message",
+			Snippet: "literal <mark>needle</mark>"},
 	}}
 	backend := &searchTestBackend{
 		store: database.bunReader, fullText: capability, contentSearch: capability,
@@ -374,6 +391,22 @@ func TestBunStoreSearchContentSubstringUsesCanonicalRows(t *testing.T) {
 	assert.Equal(t, "alpha", page.Matches[0].Project)
 	assert.Equal(t, "message", page.Matches[0].Location)
 	assert.Contains(t, page.Matches[0].Snippet, "needle")
+}
+
+func TestSQLiteBunStoreSearchContentSubstringPreservesNonASCIICase(t *testing.T) {
+	database := testDB(t)
+	seedSearchSession(t, database, "unicode-content", "alpha", [][2]string{
+		{"user", "identical uppercase CAFÉ content"},
+	})
+
+	page, err := database.BunStore.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "CAFÉ", Sources: []string{"messages"},
+		IncludeOneShot: true, Limit: 10,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "unicode-content", page.Matches[0].SessionID)
 }
 
 func TestSQLiteBunStoreSearchContentUsesCanonicalRows(t *testing.T) {
@@ -491,15 +524,18 @@ func TestBunStoreSearchContentSemanticHydratesVisibleCapabilityHits(t *testing.T
 		available: true,
 		hits: []ContentSearchHit{
 			{SessionID: "semantic-filtered", Ordinal: 0, OrdinalStart: 0,
-				OrdinalEnd: 0, Location: "message", Snippet: "filtered semantic",
+				OrdinalEnd: 0, RangeResolved: true,
+				Location: "message", Snippet: "filtered semantic",
 				Score: &filteredScore},
 			{SessionID: "semantic-visible", Ordinal: 0, OrdinalStart: 0,
-				OrdinalEnd: 0, Location: "message", Snippet: "visible semantic",
+				OrdinalEnd: 0, RangeResolved: true,
+				Location: "message", Snippet: "visible semantic",
 				Score: &visibleScore},
 		},
 	}
 	backend := &searchTestBackend{store: database.bunReader, semantic: capability}
 	capability.insideGuard = func() bool { return backend.insideGuard }
+	capability.outsideConsistent = func() bool { return !backend.insideConsistent }
 
 	page, err := NewBunStore(backend).SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "semantic", Mode: "semantic", Project: "alpha",
@@ -515,7 +551,7 @@ func TestBunStoreSearchContentSemanticHydratesVisibleCapabilityHits(t *testing.T
 		Snippet:   "full visible semantic content", Score: &visibleScore,
 		OrdinalRange: [2]int{0, 0},
 	}, page.Matches[0])
-	assert.Equal(t, 1, backend.viewCalls)
+	assert.Equal(t, 2, backend.viewCalls)
 	assert.Equal(t, SemanticOverfetchMin, capability.lastFilter.Limit)
 }
 
@@ -530,7 +566,7 @@ func TestBunStoreSearchContentHybridFusesCapabilitiesWithLexicalAnchor(t *testin
 		available: true,
 		hits: []ContentSearchHit{{
 			SessionID: "hybrid", Ordinal: 1, OrdinalStart: 1, OrdinalEnd: 2,
-			Location: "message", Snippet: "semantic anchor",
+			RangeResolved: true, Location: "message", Snippet: "semantic anchor",
 		}},
 		units: []UnitRef{{
 			DocKey: "run:hybrid:1", SessionID: "hybrid",
@@ -548,6 +584,7 @@ func TestBunStoreSearchContentHybridFusesCapabilitiesWithLexicalAnchor(t *testin
 		store: database.bunReader, semantic: semantic, hybridLexical: lexical,
 	}
 	semantic.insideGuard = func() bool { return backend.insideGuard }
+	semantic.outsideConsistent = func() bool { return !backend.insideConsistent }
 	lexical.insideGuard = func() bool { return backend.insideGuard }
 
 	page, err := NewBunStore(backend).SearchContent(t.Context(), ContentSearchFilter{
@@ -564,7 +601,58 @@ func TestBunStoreSearchContentHybridFusesCapabilitiesWithLexicalAnchor(t *testin
 	assert.Equal(t, "lexical anchor contains zebra", match.Snippet)
 	require.NotNil(t, match.Score)
 	assert.InDelta(t, 2.0/61.0, *match.Score, 1e-9)
-	assert.Equal(t, 1, backend.viewCalls)
+	assert.Equal(t, 2, backend.viewCalls)
 	assert.Equal(t, SemanticOverfetchMin, semantic.lastFilter.Limit)
 	assert.Equal(t, SemanticOverfetchMin, lexical.lastFilter.Limit)
+}
+
+func TestBunStoreSearchContentSemanticDropsMissingAnchor(t *testing.T) {
+	database := testDB(t)
+	seedSearchSession(t, database, "stale-vector", "alpha", [][2]string{
+		{"user", "live message"},
+	})
+	capability := &literalSemanticCapability{
+		available: true,
+		hits: []ContentSearchHit{{
+			SessionID: "stale-vector", Ordinal: 99,
+			OrdinalStart: 99, OrdinalEnd: 99, RangeResolved: true,
+			Location: "message", Snippet: "stale message",
+		}},
+	}
+	backend := &searchTestBackend{store: database.bunReader, semantic: capability}
+
+	page, err := NewBunStore(backend).SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "stale", Mode: "semantic", Project: "alpha",
+		IncludeOneShot: true, Limit: 10,
+	})
+
+	require.NoError(t, err)
+	assert.Empty(t, page.Matches)
+}
+
+func TestBunStoreSearchContentSemanticPreservesResolvedSingletonRange(t *testing.T) {
+	database := testDB(t)
+	seedSearchSession(t, database, "singleton-vector", "alpha", [][2]string{
+		{"user", "question"},
+		{"assistant", "singleton vector anchor"},
+		{"assistant", "adjacent assistant message"},
+	})
+	capability := &literalSemanticCapability{
+		available: true,
+		hits: []ContentSearchHit{{
+			SessionID: "singleton-vector", Ordinal: 1,
+			OrdinalStart: 1, OrdinalEnd: 1, RangeResolved: true,
+			Location: "message", Snippet: "singleton vector anchor",
+		}},
+	}
+	backend := &searchTestBackend{store: database.bunReader, semantic: capability}
+
+	page, err := NewBunStore(backend).SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "singleton", Mode: "semantic", Project: "alpha",
+		IncludeOneShot: true, Limit: 10,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, [2]int{1, 1}, page.Matches[0].OrdinalRange)
 }

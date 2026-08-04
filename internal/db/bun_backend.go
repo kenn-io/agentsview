@@ -51,6 +51,7 @@ const (
 type BackendCapabilities struct {
 	Recall           bool
 	FullText         FullTextCapability
+	SessionSearch    SessionSearchCapability
 	ContentSearch    ContentSearchCapability
 	Semantic         SemanticCapability
 	HybridLexical    HybridLexicalCapability
@@ -86,6 +87,7 @@ func (b *sqliteBunBackend) Capabilities() BackendCapabilities {
 	if b.store.readOnly {
 		return BackendCapabilities{
 			Recall: true, FullText: sqliteFullTextCapability{store: b.store},
+			SessionSearch: sqliteFullTextCapability{store: b.store},
 			ContentSearch: sqliteFullTextCapability{store: b.store},
 			HybridLexical: sqliteFullTextCapability{store: b.store},
 			Semantic: NewVectorSemanticCapability(
@@ -97,6 +99,7 @@ func (b *sqliteBunBackend) Capabilities() BackendCapabilities {
 	return BackendCapabilities{
 		Recall:        true,
 		FullText:      sqliteFullTextCapability{store: b.store},
+		SessionSearch: sqliteFullTextCapability{store: b.store},
 		ContentSearch: sqliteFullTextCapability{store: b.store},
 		HybridLexical: sqliteFullTextCapability{store: b.store},
 		Semantic: NewVectorSemanticCapability(
