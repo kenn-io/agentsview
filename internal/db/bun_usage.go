@@ -616,11 +616,11 @@ const bunUsageSessionColumns = `
 	s.session_name AS session_name,
 	s.first_message AS first_message`
 
-func bunMessageUsageColumns(dialect QueryDialect) string {
+func bunMessageUsageColumns(timestampOrder func(string) string) string {
 	return `
 	m.session_id AS session_id,
 	m.ordinal AS message_ordinal,
-	` + bunUsageTimestampColumn(dialect, "m.timestamp") + ` AS usage_timestamp,
+	` + bunUsageTimestampColumn(timestampOrder, "m.timestamp") + ` AS usage_timestamp,
 	m.model AS model,
 	m.token_usage AS token_json,
 	m.claude_message_id AS claude_message_id,
@@ -628,12 +628,12 @@ func bunMessageUsageColumns(dialect QueryDialect) string {
 	m.source_uuid AS source_uuid`
 }
 
-func bunEventUsageColumns(dialect QueryDialect) string {
+func bunEventUsageColumns(timestampOrder func(string) string) string {
 	return `
 	ue.id AS id,
 	ue.session_id AS session_id,
 	ue.message_ordinal AS message_ordinal,
-	` + bunUsageTimestampColumn(dialect, "ue.occurred_at") + ` AS usage_timestamp,
+	` + bunUsageTimestampColumn(timestampOrder, "ue.occurred_at") + ` AS usage_timestamp,
 	ue.model AS model,
 	ue.input_tokens AS input_tokens,
 	ue.output_tokens AS output_tokens,
@@ -647,11 +647,10 @@ func bunEventUsageColumns(dialect QueryDialect) string {
 	ue.dedup_key AS dedup_key`
 }
 
-func bunUsageTimestampColumn(dialect QueryDialect, column string) string {
-	if dialect.timestampOrderExpr == nil {
-		return column
-	}
-	return "CASE WHEN " + dialect.timestampOrderExpr(column) +
+func bunUsageTimestampColumn(
+	timestampOrder func(string) string, column string,
+) string {
+	return "CASE WHEN " + timestampOrder(bunNullableTimestamp(column)) +
 		" IS NULL THEN NULL ELSE " + column + " END"
 }
 
@@ -815,10 +814,10 @@ func (s *BunStore) loadBunUsageProjections(
 	matching bool, sessionIDs []string,
 ) ([]bunUsageProjection, error) {
 	referenceTime := time.Now().UTC()
-	dialect := s.backend.SessionQueryDialect()
+	timestampOrder := s.backend.TimestampOrderExpr
 	var messages []bunUsageProjection
 	messageQuery := store.NewSelect().TableExpr("messages AS m").
-		ColumnExpr(bunMessageUsageColumns(dialect) + "," + bunUsageSessionColumns).
+		ColumnExpr(bunMessageUsageColumns(timestampOrder) + "," + bunUsageSessionColumns).
 		Join("JOIN sessions AS s ON s.id = m.session_id").
 		Where("s.deleted_at IS NULL")
 	if matching {
@@ -834,10 +833,11 @@ func (s *BunStore) loadBunUsageProjections(
 		)
 	}
 	messageQuery = appendBunUsageFilters(
-		messageQuery, filter, "m.model", dialect, referenceTime,
+		messageQuery, filter, "m.model", s.backend.TimestampOrderExpr, referenceTime,
 	)
 	messageQuery = appendBunUsageBounds(
-		messageQuery, filter, "m.timestamp", true, dialect,
+		messageQuery, filter, "m.timestamp", true,
+		s.backend.TimestampOrderExpr,
 	)
 	if err := messageQuery.Scan(ctx, &messages); err != nil {
 		return nil, fmt.Errorf("querying usage messages: %w", err)
@@ -849,7 +849,7 @@ func (s *BunStore) loadBunUsageProjections(
 
 	var events []bunUsageProjection
 	eventQuery := store.NewSelect().TableExpr("usage_events AS ue").
-		ColumnExpr(bunEventUsageColumns(dialect)+","+bunUsageSessionColumns).
+		ColumnExpr(bunEventUsageColumns(timestampOrder)+","+bunUsageSessionColumns).
 		Join("JOIN sessions AS s ON s.id = ue.session_id").
 		Where("s.deleted_at IS NULL").Where("ue.model != ?", "")
 	if len(sessionIDs) > 0 {
@@ -858,10 +858,11 @@ func (s *BunStore) loadBunUsageProjections(
 		)
 	}
 	eventQuery = appendBunUsageFilters(
-		eventQuery, filter, "ue.model", dialect, referenceTime,
+		eventQuery, filter, "ue.model", s.backend.TimestampOrderExpr, referenceTime,
 	)
 	eventQuery = appendBunUsageBounds(
-		eventQuery, filter, "ue.occurred_at", true, dialect,
+		eventQuery, filter, "ue.occurred_at", true,
+		s.backend.TimestampOrderExpr,
 	)
 	if err := eventQuery.Scan(ctx, &events); err != nil {
 		return nil, fmt.Errorf("querying usage events: %w", err)
@@ -889,25 +890,16 @@ func (s *BunStore) loadBunUsageProjections(
 
 func appendBunUsageBounds(
 	query *bun.SelectQuery, filter UsageFilter, timestampColumn string,
-	withSessionFallback bool, dialect QueryDialect,
+	withSessionFallback bool, timestampOrder func(string) string,
 ) *bun.SelectQuery {
 	bounds := usageBoundsForFilter(filter)
-	expr := timestampColumn
+	expr := timestampOrder(bunNullableTimestamp(timestampColumn))
 	if withSessionFallback {
-		if dialect.timestampOrderExpr != nil {
-			expr = "COALESCE(" + dialect.timestampOrderExpr(timestampColumn) +
-				", " + dialect.timestampOrderExpr("s.started_at") +
-				", " + dialect.timestampOrderExpr("s.created_at") + ")"
-		} else {
-			expr = "COALESCE(" + timestampColumn + ", s.started_at, s.created_at)"
-		}
-	} else if dialect.timestampOrderExpr != nil {
-		expr = dialect.timestampOrderExpr(timestampColumn)
+		expr = "COALESCE(" + timestampOrder(bunNullableTimestamp(timestampColumn)) +
+			", " + timestampOrder(bunNullableTimestamp("s.started_at")) +
+			", " + timestampOrder("s.created_at") + ")"
 	}
-	parameter := "?"
-	if dialect.timestampOrderExpr != nil {
-		parameter = dialect.timestampOrderExpr("?")
-	}
+	parameter := timestampOrder("?")
 	if bounds.from != "" {
 		query = query.Where(expr+" >= "+parameter, bounds.from)
 	}
@@ -919,7 +911,7 @@ func appendBunUsageBounds(
 
 func appendBunUsageFilters(
 	query *bun.SelectQuery, filter UsageFilter, modelColumn string,
-	dialect QueryDialect, referenceTime time.Time,
+	timestampOrder func(string) string, referenceTime time.Time,
 ) *bun.SelectQuery {
 	query = appendBunUsageValues(query, modelColumn, csvUsageValues(filter.Model), true)
 	query = appendBunUsageValues(
@@ -958,11 +950,11 @@ func appendBunUsageFilters(
 		query = query.Where("s.is_automated = ?", true)
 	}
 	if filter.ActiveSince != "" {
-		expr, parameter := bunUsageSessionActivityComparison(dialect)
+		expr, parameter := bunUsageSessionActivityComparison(timestampOrder)
 		query = query.Where(expr+" >= "+parameter, filter.ActiveSince)
 	}
 	return appendBunUsageTerminationFilter(
-		query, filter.Termination, dialect, referenceTime,
+		query, filter.Termination, timestampOrder, referenceTime,
 	)
 }
 
@@ -986,39 +978,35 @@ func appendBunUsageValues(
 	return query.Where(column+operator, bun.List(values))
 }
 
-func bunUsageSessionActivityComparison(dialect QueryDialect) (string, string) {
-	if dialect.timestampOrderExpr != nil {
-		return "julianday(COALESCE(NULLIF(s.ended_at, ''), " +
-			"NULLIF(s.started_at, ''), s.created_at))", dialect.timestampOrderExpr("?")
-	}
-	return "COALESCE(s.ended_at, s.started_at, s.created_at)", "?"
+func bunUsageSessionActivityComparison(
+	timestampOrder func(string) string,
+) (string, string) {
+	expr := "COALESCE(" + bunNullableTimestamp("s.ended_at") + ", " +
+		bunNullableTimestamp("s.started_at") + ", s.created_at)"
+	return timestampOrder(expr), timestampOrder("?")
 }
 
 func appendBunUsageTerminationFilter(
-	query *bun.SelectQuery, filter string, dialect QueryDialect,
+	query *bun.SelectQuery, filter string, timestampOrder func(string) string,
 	referenceTime time.Time,
 ) *bun.SelectQuery {
 	return appendBunTerminationFilter(
-		query, filter, "s", dialect, referenceTime,
+		query, filter, "s", timestampOrder, referenceTime,
 	)
 }
 
 func appendBunTerminationFilter(
-	query *bun.SelectQuery, filter, alias string, dialect QueryDialect,
+	query *bun.SelectQuery, filter, alias string,
+	timestampOrder func(string) string,
 	referenceTime time.Time,
 ) *bun.SelectQuery {
 	if !usageHasTerminationFilter(filter) {
 		return query
 	}
-	activityExpr := "COALESCE(" + alias + ".ended_at, " +
-		alias + ".started_at, " + alias + ".created_at)"
-	parameter := "?"
-	if dialect.timestampOrderExpr != nil {
-		activityExpr = "julianday(COALESCE(NULLIF(" + alias +
-			".ended_at, ''), NULLIF(" + alias + ".started_at, ''), " +
-			alias + ".created_at))"
-		parameter = dialect.timestampOrderExpr("?")
-	}
+	activityExpr := "COALESCE(" + bunNullableTimestamp(alias+".ended_at") + ", " +
+		bunNullableTimestamp(alias+".started_at") + ", " + alias + ".created_at)"
+	activityExpr = timestampOrder(activityExpr)
+	parameter := timestampOrder("?")
 	activeCutoff := referenceTime.UTC().Add(-activeWindow).Format(time.RFC3339Nano)
 	staleCutoff := referenceTime.UTC().Add(-staleWindow).Format(time.RFC3339Nano)
 	flagged := alias + ".termination_status IN ('tool_call_pending', 'truncated')"
@@ -1129,7 +1117,7 @@ func (s *BunStore) loadBunCursorUsageRows(
 		query = query.Where("cu.is_headless = ?", true)
 	}
 	query = appendBunUsageBounds(
-		query, filter, "cu.occurred_at", false, s.backend.SessionQueryDialect(),
+		query, filter, "cu.occurred_at", false, s.backend.TimestampOrderExpr,
 	)
 	if err := query.Scan(ctx, &rows); err != nil {
 		return nil, fmt.Errorf("querying cursor usage events: %w", err)

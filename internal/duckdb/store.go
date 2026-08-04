@@ -75,9 +75,7 @@ func (*duckBunBackend) Capabilities() db.BackendCapabilities {
 	}
 }
 
-func (*duckBunBackend) SessionQueryDialect() db.QueryDialect {
-	return db.PortableBunSessionQueryDialect()
-}
+func (*duckBunBackend) TimestampOrderExpr(column string) string { return column }
 
 func (*duckBunBackend) SessionVersion(
 	ctx context.Context, store bun.IDB, id string,

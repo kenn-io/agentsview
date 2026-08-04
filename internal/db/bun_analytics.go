@@ -80,7 +80,7 @@ func (s *BunStore) bunAnalyticsSessionsFrom(
 		query = query.Where(bunAnalyticsSessionAlias+".is_automated = ?", true)
 	}
 	query = appendBunAnalyticsTerminationFilter(
-		query, f.Termination, s.backend.SessionQueryDialect(), time.Now().UTC(),
+		query, f.Termination, s.backend.TimestampOrderExpr, time.Now().UTC(),
 	)
 	if models := csvFilterValues(f.Model); len(models) > 0 {
 		query = query.Where("EXISTS (SELECT 1 FROM messages AS analytics_model "+
@@ -89,16 +89,11 @@ func (s *BunStore) bunAnalyticsSessionsFrom(
 	}
 	if applyDate && (f.From != "" || f.To != "") {
 		from, to := f.utcRange()
-		dialect := s.backend.SessionQueryDialect()
-		expr := "COALESCE(" + bunAnalyticsSessionAlias + ".started_at, " +
-			bunAnalyticsSessionAlias + ".created_at)"
-		fromParam, toParam := "?", "?"
-		if dialect.timestampOrderExpr != nil {
-			expr = "julianday(COALESCE(NULLIF(" + bunAnalyticsSessionAlias +
-				".started_at, ''), " + bunAnalyticsSessionAlias + ".created_at))"
-			fromParam = dialect.timestampOrderExpr("?")
-			toParam = dialect.timestampOrderExpr("?")
-		}
+		timestampOrderExpr := s.backend.TimestampOrderExpr
+		expr := timestampOrderExpr("COALESCE(" +
+			bunNullableTimestamp(bunAnalyticsSessionAlias+".started_at") + ", " +
+			bunAnalyticsSessionAlias + ".created_at)")
+		fromParam, toParam := timestampOrderExpr("?"), timestampOrderExpr("?")
 		query = query.Where(expr+" >= "+fromParam, from).
 			Where(expr+" <= "+toParam, to)
 	}
@@ -255,10 +250,12 @@ func appendBunAnalyticsCSVFilter(
 }
 
 func appendBunAnalyticsTerminationFilter(
-	query *bun.SelectQuery, raw string, dialect QueryDialect, referenceTime time.Time,
+	query *bun.SelectQuery, raw string,
+	timestampOrderExpr func(string) string,
+	referenceTime time.Time,
 ) *bun.SelectQuery {
 	return appendBunTerminationFilter(
-		query, raw, bunAnalyticsSessionAlias, dialect, referenceTime,
+		query, raw, bunAnalyticsSessionAlias, timestampOrderExpr, referenceTime,
 	)
 }
 

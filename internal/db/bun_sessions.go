@@ -14,85 +14,6 @@ import (
 	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
 
-var bunSessionQueryDialect = QueryDialect{
-	name:             "bun",
-	placeholderStyle: placeholderQuestion,
-	trueLiteral:      "TRUE",
-	falseLiteral:     "FALSE",
-	dateStartExpr: func(q func(string) string) string {
-		return "COALESCE(" + bunNullableTimestamp(q("started_at")) +
-			", " + q("created_at") + ")"
-	},
-	dateEndExpr: func(q func(string) string) string {
-		outerID := q("id")
-		if outerID == "id" {
-			outerID = "session.id"
-		}
-		return "COALESCE(" + bunNullableTimestamp(q("ended_at")) +
-			", (SELECT MAX(" + bunNullableTimestamp("m.timestamp") +
-			") FROM messages m WHERE m.session_id = " + outerID +
-			" AND " + bunNullableTimestamp("m.timestamp") + " IS NOT NULL), " +
-			bunNullableTimestamp(q("started_at")) + ", " + q("created_at") + ")"
-	},
-	dateParam:     func(ph string) string { return ph },
-	activityParam: func(ph string) string { return ph },
-	cursorActivityExpr: "COALESCE(" + bunNullableTimestamp("ended_at") + ", " +
-		bunNullableTimestamp("started_at") + ", created_at)",
-	cursorParam:            func(ph string) string { return ph },
-	castCursor:             func(ph string, _ valueKind) string { return ph },
-	portableEmptyTimestamp: true,
-	terminationExpr: "COALESCE(" + bunNullableTimestamp("ended_at") + ", " +
-		bunNullableTimestamp("started_at") + ", created_at)",
-	terminationKind:        timestampText,
-	caseInsensitiveLike:    "LIKE",
-	caseInsensitiveLikeEsc: `ESCAPE '\'`,
-	regexPredicate: func(col, ph string) string {
-		return col + " LIKE " + ph
-	},
-	sidebarChildRelationships:   []string{"subagent", "fork"},
-	canonicalChildRelationships: []string{"subagent", "fork", "continuation"},
-}
-
-// PortableBunSessionQueryDialect returns the Bun-placeholder session dialect
-// used by engines with native timestamp comparison semantics.
-func PortableBunSessionQueryDialect() QueryDialect {
-	return bunSessionQueryDialect
-}
-
-// SQLiteBunSessionQueryDialect preserves chronological comparisons for the
-// shipped SQLite text timestamp representation while retaining Bun's portable
-// question-mark placeholders and common non-time predicates.
-func SQLiteBunSessionQueryDialect() QueryDialect {
-	dialect := bunSessionQueryDialect
-	sqlite := SQLiteQueryDialect()
-	dialect.dateStartExpr = sqlite.dateStartExpr
-	dialect.dateEndExpr = func(q func(string) string) string {
-		outerID := q("id")
-		if outerID == "id" {
-			outerID = "session.id"
-		}
-		return "julianday(COALESCE(NULLIF(" + q("ended_at") +
-			", ''), (SELECT m.timestamp FROM messages m" +
-			" WHERE m.session_id = " + outerID +
-			" AND m.timestamp != '' ORDER BY julianday(m.timestamp)" +
-			" DESC, m.timestamp DESC LIMIT 1), NULLIF(" + q("started_at") +
-			", ''), " + q("created_at") + "))"
-	}
-	dialect.dateParam = sqlite.dateParam
-	dialect.timestampOrderExpr = func(column string) string {
-		return "julianday(NULLIF(" + column + ", ''))"
-	}
-	dialect.castCursor = func(placeholder string, kind valueKind) string {
-		if kind == kindTimestamp {
-			return "julianday(" + placeholder + ")"
-		}
-		return placeholder
-	}
-	dialect.terminationExpr = sqlite.terminationExpr
-	dialect.terminationKind = sqlite.terminationKind
-	return dialect
-}
-
 func bunNullableTimestamp(column string) string {
 	return "CASE WHEN CAST(" + column + " AS VARCHAR) = '' THEN NULL ELSE " +
 		column + " END"
@@ -172,8 +93,8 @@ func (s *BunStore) ListSessions(
 	var pendingPage SessionPage
 	err := s.consistentView(ctx, func(store bun.IDB) error {
 		total := cursor.Total
-		dialect := s.backend.SessionQueryDialect()
-		where, args := BuildSessionFilterSQL(filter, dialect)
+		timestampOrderExpr := s.backend.TimestampOrderExpr
+		where, args := buildBunSessionFilter(filter, timestampOrderExpr)
 		base := store.NewSelect().Model((*bunmodel.Session)(nil))
 		base = applyBunWhere(base, where, args)
 		if total <= 0 {
@@ -189,21 +110,19 @@ func (s *BunStore) ListSessions(
 			if err != nil {
 				return err
 			}
-			builder := NewQueryBuilder(dialect, 0)
+			builder := newBunFilterArgs(timestampOrderExpr)
 			query = query.Where(
-				builder.CursorPredicate(resolvedSort, filter, values, cursor.ID),
-				builder.Args()...,
+				bunCursorPredicate(builder, resolvedSort, filter, values, cursor.ID),
+				builder.values()...,
 			)
 		}
-		orderBuilder := NewQueryBuilder(dialect, 0)
-		order := strings.TrimPrefix(
-			orderBuilder.OrderByClause(resolvedSort, filter), "ORDER BY ",
-		)
+		orderBuilder := newBunFilterArgs(timestampOrderExpr)
+		order := bunOrderByClause(orderBuilder, resolvedSort, filter)
 		var rows []bunmodel.Session
-		if len(orderBuilder.Args()) == 0 {
+		if len(orderBuilder.values()) == 0 {
 			query = query.OrderExpr(order)
 		} else {
-			query = query.OrderExpr(order, orderBuilder.Args()...)
+			query = query.OrderExpr(order, orderBuilder.values()...)
 		}
 		if err := query.Limit(filter.Limit+1).Scan(ctx, &rows); err != nil {
 			return fmt.Errorf("querying sessions: %w", err)
@@ -402,11 +321,11 @@ func (s *BunStore) GetSidebarSessionIndex(
 		var err error
 		if filter.Limit > 0 || filter.Cursor != "" || filter.Starred {
 			index, err = s.getSidebarSessionIndexPage(
-				ctx, store, filter, s.backend.SessionQueryDialect(),
+				ctx, store, filter, s.backend.TimestampOrderExpr,
 			)
 		} else {
 			index, err = s.getSidebarSessionIndexAll(
-				ctx, store, filter, s.backend.SessionQueryDialect(),
+				ctx, store, filter, s.backend.TimestampOrderExpr,
 			)
 		}
 		if err != nil {
@@ -421,15 +340,15 @@ func (s *BunStore) GetSidebarSessionIndex(
 	return pendingIndex, nil
 }
 
-func sidebarRootFilter(filter SessionFilter, dialect QueryDialect) (string, []any) {
+func sidebarRootFilter(
+	filter SessionFilter, timestampOrderExpr func(string) string,
+) (string, []any) {
 	rootFilter := filter
 	rootFilter.IncludeChildren = false
 	rootFilter.Cursor = ""
 	rootFilter.Starred = false
-	where, args := BuildSessionBaseFilterSQL(rootFilter, dialect)
-	where += " AND " + BuildCanonicalRootWhere(
-		dialect, "session", filter.IncludeOrphans,
-	)
+	where, args := buildBunSessionBaseFilter(rootFilter, timestampOrderExpr)
+	where += " AND " + bunCanonicalRootWhere("session", filter.IncludeOrphans)
 	return where, args
 }
 
@@ -445,8 +364,10 @@ func bunSessionActivityExpr(alias string) string {
 		qualify("created_at") + ")"
 }
 
-func bunSessionActivityOrderExpr(alias string, dialect QueryDialect) string {
-	return dialect.timestampExpr(bunSessionActivityExpr(alias))
+func bunSessionActivityOrderExpr(
+	alias string, timestampOrderExpr func(string) string,
+) string {
+	return timestampOrderExpr(bunSessionActivityExpr(alias))
 }
 
 func sidebarRootTreeSQL(
@@ -487,8 +408,8 @@ func sidebarStarredRootJoin(enabled bool) string {
 	return "JOIN eligible_roots AS eligible ON eligible.id = t.root_id"
 }
 
-func sidebarChildAutomationWhere(filter SessionFilter, dialect QueryDialect) string {
-	predicate := automationScopePredicate(filter, dialect, "child")
+func sidebarChildAutomationWhere(filter SessionFilter) string {
+	predicate := bunAutomationScopePredicate(filter, "child")
 	if predicate == "" {
 		return ""
 	}
@@ -496,9 +417,10 @@ func sidebarChildAutomationWhere(filter SessionFilter, dialect QueryDialect) str
 }
 
 func (s *BunStore) getSidebarSessionIndexAll(
-	ctx context.Context, store bun.IDB, filter SessionFilter, dialect QueryDialect,
+	ctx context.Context, store bun.IDB, filter SessionFilter,
+	timestampOrderExpr func(string) string,
 ) (SidebarSessionIndex, error) {
-	rootWhere, rootArgs := sidebarRootFilter(filter, dialect)
+	rootWhere, rootArgs := sidebarRootFilter(filter, timestampOrderExpr)
 	var total int
 	if err := store.NewRaw(
 		"SELECT COUNT(*) FROM sessions AS session WHERE "+rootWhere,
@@ -507,12 +429,12 @@ func (s *BunStore) getSidebarSessionIndexAll(
 		return SidebarSessionIndex{}, fmt.Errorf("counting sidebar roots: %w", err)
 	}
 
-	where, args := BuildSessionFilterSQL(filter, dialect)
+	where, args := buildBunSessionFilter(filter, timestampOrderExpr)
 	var rows []bunmodel.Session
 	query := store.NewSelect().Model(&rows)
 	query = applyBunWhere(query, where, args)
 	if err := query.
-		OrderExpr(bunSessionActivityOrderExpr("", dialect) + " DESC").
+		OrderExpr(bunSessionActivityOrderExpr("", timestampOrderExpr) + " DESC").
 		OrderExpr("id DESC").Scan(ctx); err != nil {
 		return SidebarSessionIndex{}, fmt.Errorf(
 			"querying sidebar session index: %w", err,
@@ -525,13 +447,14 @@ func (s *BunStore) getSidebarSessionIndexAll(
 }
 
 func (s *BunStore) getSidebarSessionIndexPage(
-	ctx context.Context, store bun.IDB, filter SessionFilter, dialect QueryDialect,
+	ctx context.Context, store bun.IDB, filter SessionFilter,
+	timestampOrderExpr func(string) string,
 ) (SidebarSessionIndex, error) {
 	if filter.Limit <= 0 || filter.Limit > MaxSessionLimit {
 		filter.Limit = DefaultSessionLimit
 	}
-	rootWhere, rootArgs := sidebarRootFilter(filter, dialect)
-	childAutomationWhere := sidebarChildAutomationWhere(filter, dialect)
+	rootWhere, rootArgs := sidebarRootFilter(filter, timestampOrderExpr)
+	childAutomationWhere := sidebarChildAutomationWhere(filter)
 	treeSQL := sidebarRootTreeSQL(
 		rootWhere, childAutomationWhere, filter.Starred,
 	)
@@ -565,7 +488,7 @@ func (s *BunStore) getSidebarSessionIndexPage(
 	}
 	rootActivityJoin := sidebarStarredRootJoin(filter.Starred)
 	rootActivityExpr := bunSessionActivityExpr("session")
-	rootActivityOrderExpr := bunSessionActivityOrderExpr("session", dialect)
+	rootActivityOrderExpr := bunSessionActivityOrderExpr("session", timestampOrderExpr)
 	rootPageSQL := treeSQL + `,
 		ranked_root_activity(id, activity, activity_order, activity_rank) AS (
 			SELECT t.root_id AS id,
@@ -594,7 +517,7 @@ func (s *BunStore) getSidebarSessionIndexPage(
 				"%w: invalid sidebar activity: %v", ErrInvalidCursor, err,
 			)
 		}
-		activityParam := dialect.dateParam("?")
+		activityParam := timestampOrderExpr("?")
 		rootPageSQL += `
 		WHERE activity_order < ` + activityParam + `
 		   OR (activity_order = ` + activityParam + ` AND id < ?)`
@@ -658,7 +581,7 @@ func (s *BunStore) getSidebarSessionIndexPage(
 		FROM sessions AS session
 		JOIN ranked_tree AS ranked ON session.id = ranked.id
 		ORDER BY ranked.ord ASC, ` +
-		bunSessionActivityOrderExpr("session", dialect) + ` DESC,
+		bunSessionActivityOrderExpr("session", timestampOrderExpr) + ` DESC,
 			session.id DESC`
 	var rows []bunmodel.Session
 	if err := store.NewRaw(treePageSQL, treeArgs...).Scan(ctx, &rows); err != nil {

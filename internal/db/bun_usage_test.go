@@ -39,8 +39,8 @@ func (*alternatingUsageBackend) Capabilities() BackendCapabilities {
 	return BackendCapabilities{}
 }
 
-func (*alternatingUsageBackend) SessionQueryDialect() QueryDialect {
-	return SQLiteBunSessionQueryDialect()
+func (*alternatingUsageBackend) TimestampOrderExpr(column string) string {
+	return "julianday(NULLIF(" + column + ", ''))"
 }
 
 func (*alternatingUsageBackend) SessionVersion(
@@ -247,7 +247,7 @@ func TestAppendBunUsageTerminationFilterUsesProvidedReference(t *testing.T) {
 	var ids []string
 	query := database.bunReader.NewSelect().TableExpr("sessions AS s").Column("s.id")
 	query = appendBunUsageTerminationFilter(
-		query, "active,stale,unclean", SQLiteBunSessionQueryDialect(), reference,
+		query, "active,stale,unclean", sqliteTimestampOrderExpr, reference,
 	)
 	require.NoError(t, query.OrderExpr("s.id ASC").Scan(t.Context(), &ids))
 	assert.Equal(t, []string{"active", "stale", "unclean"}, ids)

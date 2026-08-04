@@ -584,8 +584,8 @@ func (capability sqliteFullTextCapability) SearchSession(
 func (capability sqliteFullTextCapability) SearchContent(
 	ctx context.Context, store bun.IDB, filter ContentSearchFilter,
 ) ([]ContentSearchHit, error) {
-	where, scopeArgs := BuildSessionFilterSQL(
-		contentSessionFilter(filter), SQLiteBunSessionQueryDialect(),
+	where, scopeArgs := buildBunSessionFilter(
+		contentSessionFilter(filter), sqliteTimestampOrderExpr,
 	)
 	system := "1=1"
 	if filter.ExcludeSystem {
@@ -621,8 +621,8 @@ func (capability sqliteFullTextCapability) SearchContent(
 func (capability sqliteFullTextCapability) SearchHybridContent(
 	ctx context.Context, store bun.IDB, filter ContentSearchFilter,
 ) ([]ContentSearchHit, error) {
-	where, scopeArgs := BuildSessionBaseFilterSQL(
-		semanticContentSessionFilter(filter), SQLiteBunSessionQueryDialect(),
+	where, scopeArgs := buildBunSessionBaseFilter(
+		semanticContentSessionFilter(filter), sqliteTimestampOrderExpr,
 	)
 	query := `SELECT message.session_id, message.ordinal,
 		'message' AS location, '' AS tool_name,

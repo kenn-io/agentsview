@@ -27,9 +27,7 @@ func (b *recordingBunBackend) Capabilities() BackendCapabilities {
 	return b.capabilities
 }
 
-func (*recordingBunBackend) SessionQueryDialect() QueryDialect {
-	return PortableBunSessionQueryDialect()
-}
+func (*recordingBunBackend) TimestampOrderExpr(column string) string { return column }
 
 func (*recordingBunBackend) SessionVersion(
 	context.Context, bun.IDB, string,
