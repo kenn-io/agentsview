@@ -1092,12 +1092,23 @@ func (d *DB) CopyExcludedSessionsFrom(
 func (d *DB) CopySessionMetadataFrom(
 	sourcePath string,
 ) error {
+	if err := d.requireWritable(); err != nil {
+		return err
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	ctx := context.Background()
 	d.connMu.RLock()
-	conn, err := d.bunWriter.Conn(ctx)
+	writer := d.bunWriter
+	if writer == nil {
+		d.connMu.RUnlock()
+		if d.writerClosed.Load() {
+			return ErrWriterClosed
+		}
+		return ErrReadOnly
+	}
+	conn, err := writer.Conn(ctx)
 	d.connMu.RUnlock()
 	if err != nil {
 		return fmt.Errorf("acquiring connection: %w", err)
