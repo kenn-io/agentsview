@@ -261,6 +261,17 @@ func normalizeGooseRoots(roots []string) []string {
 	return out
 }
 
+// ResolveGoosePathRoot expands GOOSE_PATH_ROOT using Goose's producer-defined
+// data layout. Unlike goose_dirs, the environment variable is never a direct
+// sessions directory, even when its basename is "data" or "sessions".
+func ResolveGoosePathRoot(root string) string {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return ""
+	}
+	return filepath.Join(root, "data", "sessions")
+}
+
 func normalizeGooseRoot(root string) string {
 	root = filepath.Clean(root)
 	if root == "" || root == "." {
@@ -285,7 +296,8 @@ func normalizeGooseRoot(root string) string {
 	case "data":
 		return filepath.Join(root, "sessions")
 	default:
-		// GOOSE_PATH_ROOT places writable data under <root>/data.
+		// A goose_dirs entry may point at the path root when no more specific
+		// existing path or conventional basename identifies its shape.
 		return filepath.Join(root, "data", "sessions")
 	}
 }

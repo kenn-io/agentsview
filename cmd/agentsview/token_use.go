@@ -130,7 +130,10 @@ func agentHasDiskSourceLookup(def parser.AgentDef) bool {
 		return false
 	}
 	factory, ok := parser.ProviderFactoryByType(def.Type)
-	return ok && factory.Capabilities().Source.FindSource ==
+	if !ok {
+		return false
+	}
+	return factory.Capabilities().Source.FindSource ==
 		parser.CapabilitySupported
 }
 

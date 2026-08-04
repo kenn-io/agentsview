@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"flag"
 	"log"
 	"os"
@@ -412,6 +413,32 @@ func TestDefault_HermesEnvReplacesDefaultAndProfilesRoots(t *testing.T) {
 	cfg.loadEnv()
 
 	assert.Equal(t, []string{custom}, cfg.ResolveDirs(parser.AgentHermes))
+}
+
+func TestLoadEnv_GoosePathRootUsesProducerLayout(t *testing.T) {
+	for _, basename := range []string{"data", "sessions"} {
+		t.Run(basename, func(t *testing.T) {
+			setupTestEnv(t)
+			pathRoot := filepath.Join(t.TempDir(), basename)
+			t.Setenv("GOOSE_PATH_ROOT", pathRoot)
+
+			cfg, err := Default()
+			require.NoError(t, err)
+			cfg.loadEnv()
+			provider, ok := parser.NewProvider(parser.AgentGoose, parser.ProviderConfig{
+				Roots: cfg.ResolveDirs(parser.AgentGoose),
+			})
+			require.True(t, ok)
+
+			plan, err := provider.WatchPlan(context.Background())
+			require.NoError(t, err)
+			require.Len(t, plan.Roots, 1)
+			assert.Equal(t,
+				filepath.Join(pathRoot, "data", "sessions"),
+				plan.Roots[0].Path,
+			)
+		})
+	}
 }
 
 func TestLoadEnv_OverridesDataDir(t *testing.T) {
