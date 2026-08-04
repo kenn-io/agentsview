@@ -80,7 +80,8 @@ func TestBunUsageProjectionPreservesRawPricingTimestamp(t *testing.T) {
 	})
 
 	assert.Equal(t, "2026-07-01T12:00:00Z", row.ts)
-	assert.Equal(t, "2026-07-01T12:00:00Z", row.pricingTS)
+	assert.Equal(t, "2026-07-01T12:00:00Z",
+		row.pricingTime.UTC().Format(time.RFC3339Nano))
 	full := usageProjectionToFullRow(bunUsageProjection{
 		UsageTimestamp: &usageAt, SessionStartedAt: &startedAt,
 	})

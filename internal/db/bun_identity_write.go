@@ -14,6 +14,29 @@ import (
 // parameter limit while avoiding fivefold statement growth on full mirrors.
 const canonicalIdentityWriteBatchSize = 500
 
+var (
+	canonicalProjectIdentityObservationColumns = bunmodel.ModelColumns(
+		(*bunmodel.SourceProjectIdentityObservation)(nil),
+	)
+	canonicalProjectIdentityObservationConflictClause = canonicalConflictUpdateClauseForKey(
+		"source_archive_id, project, machine, root_path, git_remote",
+		canonicalReplacementColumns(
+			(*bunmodel.SourceProjectIdentityObservation)(nil),
+			"source_archive_id", "project", "machine", "root_path", "git_remote",
+		),
+	)
+	canonicalSessionProjectIdentitySnapshotColumns = bunmodel.ModelColumns(
+		(*bunmodel.SourceSessionProjectIdentitySnapshot)(nil),
+	)
+	canonicalSessionProjectIdentitySnapshotConflictClause = canonicalConflictUpdateClauseForKey(
+		"source_archive_id, source_database_generation, source_session_id",
+		canonicalReplacementColumns(
+			(*bunmodel.SourceSessionProjectIdentitySnapshot)(nil),
+			"source_archive_id", "source_database_generation", "source_session_id",
+		),
+	)
+)
+
 // CanonicalProjectIdentityObservationRows converts source observations into
 // their complete portable representation, including credential-safe remotes.
 func CanonicalProjectIdentityObservationRows(
@@ -138,13 +161,8 @@ func UpsertProjectIdentityObservationRows(
 		end := min(start+canonicalIdentityWriteBatchSize, len(rows))
 		chunk := rows[start:end]
 		query := store.NewInsert().Model(&chunk).
-			On("CONFLICT (source_archive_id, project, machine, root_path, git_remote) DO UPDATE")
-		for _, column := range canonicalReplacementColumns(
-			(*bunmodel.SourceProjectIdentityObservation)(nil),
-			"source_archive_id", "project", "machine", "root_path", "git_remote",
-		) {
-			query = query.Set("? = EXCLUDED.?", bun.Ident(column), bun.Ident(column))
-		}
+			Column(canonicalProjectIdentityObservationColumns...).
+			On(canonicalProjectIdentityObservationConflictClause)
 		if _, err := query.Returning("").Exec(ctx); err != nil {
 			return fmt.Errorf("upserting canonical project identity observations: %w", err)
 		}
@@ -163,13 +181,8 @@ func UpsertSessionProjectIdentitySnapshotRows(
 		end := min(start+canonicalIdentityWriteBatchSize, len(rows))
 		chunk := rows[start:end]
 		query := store.NewInsert().Model(&chunk).
-			On("CONFLICT (source_archive_id, source_database_generation, source_session_id) DO UPDATE")
-		for _, column := range canonicalReplacementColumns(
-			(*bunmodel.SourceSessionProjectIdentitySnapshot)(nil),
-			"source_archive_id", "source_database_generation", "source_session_id",
-		) {
-			query = query.Set("? = EXCLUDED.?", bun.Ident(column), bun.Ident(column))
-		}
+			Column(canonicalSessionProjectIdentitySnapshotColumns...).
+			On(canonicalSessionProjectIdentitySnapshotConflictClause)
 		if _, err := query.Returning("").Exec(ctx); err != nil {
 			return fmt.Errorf("upserting canonical session identity snapshots: %w", err)
 		}

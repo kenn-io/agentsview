@@ -79,7 +79,7 @@ func (r *sessionSuffixProbeRows) Next(dest []driver.Value) error {
 	return nil
 }
 
-func TestPGFindSessionIDsByRawSuffixUsesExactFirstSuffixQuery(t *testing.T) {
+func TestPGFindSessionIDsByRawSuffixUsesSharedExactFirstSuffixQuery(t *testing.T) {
 	state := &sessionSuffixProbeState{}
 	pg := sql.OpenDB(sessionSuffixProbeConnector{state: state})
 	t.Cleanup(func() { _ = pg.Close() })
@@ -98,8 +98,11 @@ func TestPGFindSessionIDsByRawSuffixUsesExactFirstSuffixQuery(t *testing.T) {
 	query := strings.ToLower(state.queries[len(state.queries)-1])
 
 	assert.Contains(t, query,
-		"right(id, length('project-hash:session-uuid') + 1) = ':' || 'project-hash:session-uuid'")
+		"session.id like '%:project-hash:session-uuid' escape '\\'")
 	assert.Contains(t, query, "deleted_at is null")
-	assert.Contains(t, query, "order by (id = 'project-hash:session-uuid') desc")
-	assert.Contains(t, query, "coalesce(ended_at, started_at, created_at) desc")
+	assert.Contains(t, query,
+		"order by case when session.id = 'project-hash:session-uuid' then 0 else 1 end asc")
+	assert.Contains(t, query, "session.ended_at")
+	assert.Contains(t, query, "session.started_at")
+	assert.Contains(t, query, "session.created_at) desc")
 }

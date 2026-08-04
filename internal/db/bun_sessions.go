@@ -119,6 +119,10 @@ func (s *BunStore) ListSessions(
 		orderBuilder := newBunFilterArgs(timestampOrderExpr)
 		order := bunOrderByClause(orderBuilder, resolvedSort, filter)
 		var rows []bunmodel.Session
+		query = query.ExcludeColumn(
+			"file_path", "file_size", "file_mtime", "file_inode",
+			"file_device", "file_hash", "local_modified_at",
+		)
 		if len(orderBuilder.values()) == 0 {
 			query = query.OrderExpr(order)
 		} else {
@@ -221,6 +225,41 @@ func (s *BunStore) getSessionFrom(
 }
 
 const partialSessionCandidateBatchSize = 64
+
+// FindSessionIDsByRawSuffix returns exact or agent-prefixed session IDs using
+// one portable Bun query. Exact matches rank ahead of suffix matches, followed
+// by the most recently active session.
+func (s *BunStore) FindSessionIDsByRawSuffix(
+	ctx context.Context, raw string, limit int,
+) ([]string, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+	var ids []string
+	err := s.view(ctx, func(store bun.IDB) error {
+		return store.NewSelect().TableExpr("sessions AS session").
+			ColumnExpr("session.id").
+			Where(
+				"(session.id = ? OR session.id LIKE ? ESCAPE '\\')",
+				raw, "%:"+EscapeLikePattern(raw),
+			).
+			Where("session.deleted_at IS NULL").
+			OrderExpr("CASE WHEN session.id = ? THEN 0 ELSE 1 END ASC", raw).
+			OrderExpr(bunSessionActivityOrderExpr(
+				"session", s.backend.TimestampOrderExpr,
+			)+" DESC").
+			OrderExpr("session.id DESC").
+			Limit(limit).
+			Scan(ctx, &ids)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("finding sessions by raw suffix %q: %w", raw, err)
+	}
+	return ids, nil
+}
 
 // FindSessionIDsByPartial performs literal, case-sensitive substring matching.
 func (s *BunStore) FindSessionIDsByPartial(
@@ -416,6 +455,45 @@ func sidebarChildAutomationWhere(filter SessionFilter) string {
 	return " AND " + predicate
 }
 
+type bunSidebarSessionRow struct {
+	ID                 string              `bun:"id"`
+	ParentSessionID    *string             `bun:"parent_session_id"`
+	RelationshipType   string              `bun:"relationship_type"`
+	Project            string              `bun:"project"`
+	Machine            string              `bun:"machine"`
+	Agent              string              `bun:"agent"`
+	AgentLabel         string              `bun:"agent_label"`
+	Entrypoint         string              `bun:"entrypoint"`
+	SessionKind        string              `bun:"session_kind"`
+	DisplayName        *string             `bun:"display_name"`
+	StartedAt          *bunmodel.Timestamp `bun:"started_at"`
+	EndedAt            *bunmodel.Timestamp `bun:"ended_at"`
+	CreatedAt          bunmodel.Timestamp  `bun:"created_at"`
+	TerminationStatus  *string             `bun:"termination_status"`
+	MessageCount       int                 `bun:"message_count"`
+	UserMessageCount   int                 `bun:"user_message_count"`
+	TranscriptRevision string              `bun:"transcript_revision"`
+	IsAutomated        bool                `bun:"is_automated"`
+	IsTeammate         bool                `bun:"is_teammate"`
+}
+
+func bunSidebarSessionColumns(alias string) string {
+	column := func(name string) string { return alias + "." + name }
+	return strings.Join([]string{
+		column("id"), column("parent_session_id"), column("relationship_type"),
+		column("project"), column("machine"), column("agent"),
+		column("agent_label"), column("entrypoint"), column("session_kind"),
+		"COALESCE(" + column("display_name") + ", " + column("session_name") +
+			") AS display_name",
+		column("started_at"), column("ended_at"), column("created_at"),
+		column("termination_status"), column("message_count"),
+		column("user_message_count"), column("transcript_revision"),
+		column("is_automated"),
+		"CASE WHEN COALESCE(" + column("first_message") +
+			", '') LIKE '%<teammate-message%' THEN TRUE ELSE FALSE END AS is_teammate",
+	}, ", ")
+}
+
 func (s *BunStore) getSidebarSessionIndexAll(
 	ctx context.Context, store bun.IDB, filter SessionFilter,
 	timestampOrderExpr func(string) string,
@@ -430,8 +508,9 @@ func (s *BunStore) getSidebarSessionIndexAll(
 	}
 
 	where, args := buildBunSessionFilter(filter, timestampOrderExpr)
-	var rows []bunmodel.Session
-	query := store.NewSelect().Model(&rows)
+	var rows []bunSidebarSessionRow
+	query := store.NewSelect().Model(&rows).ModelTableExpr("sessions AS session").
+		ColumnExpr(bunSidebarSessionColumns("session"))
 	query = applyBunWhere(query, where, args)
 	if err := query.
 		OrderExpr(bunSessionActivityOrderExpr("", timestampOrderExpr) + " DESC").
@@ -441,7 +520,7 @@ func (s *BunStore) getSidebarSessionIndexAll(
 		)
 	}
 	return SidebarSessionIndex{
-		Sessions: sidebarRowsFromBun(rows),
+		Sessions: sidebarRowsFromProjection(rows),
 		Total:    total,
 	}, nil
 }
@@ -577,34 +656,26 @@ func (s *BunStore) getSidebarSessionIndexPage(
 			FROM tree
 			GROUP BY id
 		)
-		SELECT ` + bunModelColumns("session", (*bunmodel.Session)(nil)) + `
+		SELECT ` + bunSidebarSessionColumns("session") + `
 		FROM sessions AS session
 		JOIN ranked_tree AS ranked ON session.id = ranked.id
 		ORDER BY ranked.ord ASC, ` +
 		bunSessionActivityOrderExpr("session", timestampOrderExpr) + ` DESC,
 			session.id DESC`
-	var rows []bunmodel.Session
+	var rows []bunSidebarSessionRow
 	if err := store.NewRaw(treePageSQL, treeArgs...).Scan(ctx, &rows); err != nil {
 		return SidebarSessionIndex{}, fmt.Errorf(
 			"querying sidebar tree page: %w", err,
 		)
 	}
-	index.Sessions = sidebarRowsFromBun(rows)
+	index.Sessions = sidebarRowsFromProjection(rows)
 	return index, nil
 }
 
-func bunModelColumns(alias string, model any) string {
-	columns := bunmodel.ModelColumns(model)
-	for i, column := range columns {
-		columns[i] = alias + `."` + column + `"`
-	}
-	return strings.Join(columns, ", ")
-}
-
-func sidebarRowsFromBun(rows []bunmodel.Session) []SidebarSessionIndexRow {
+func sidebarRowsFromProjection(rows []bunSidebarSessionRow) []SidebarSessionIndexRow {
 	out := make([]SidebarSessionIndexRow, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, sidebarRowFromBun(row))
+		out = append(out, sidebarRowFromProjection(row))
 	}
 	return out
 }
@@ -618,24 +689,21 @@ func applyBunWhere(
 	return query.Where(where, args...)
 }
 
-func sidebarRowFromBun(row bunmodel.Session) SidebarSessionIndexRow {
-	displayName := row.DisplayName
-	if displayName == nil {
-		displayName = row.SessionName
-	}
+func sidebarRowFromProjection(row bunSidebarSessionRow) SidebarSessionIndexRow {
+	transcriptRevision := row.TranscriptRevision
 	return SidebarSessionIndexRow{
 		ID: row.ID, ParentSessionID: row.ParentSessionID,
 		RelationshipType: row.RelationshipType, Project: row.Project,
 		Machine: row.Machine, Agent: row.Agent, AgentLabel: row.AgentLabel,
 		Entrypoint: row.Entrypoint, SessionKind: row.SessionKind,
-		DisplayName: displayName, StartedAt: timestampFromBunRow(row.StartedAt),
+		DisplayName: row.DisplayName, StartedAt: timestampFromBunRow(row.StartedAt),
 		EndedAt:           timestampFromBunRow(row.EndedAt),
 		CreatedAt:         requiredTimestampFromBunRow(row.CreatedAt),
 		TerminationStatus: row.TerminationStatus, MessageCount: row.MessageCount,
 		UserMessageCount:   row.UserMessageCount,
-		TranscriptRevision: &row.TranscriptRevision,
+		TranscriptRevision: &transcriptRevision,
 		IsAutomated:        row.IsAutomated,
-		IsTeammate:         row.FirstMessage != nil && strings.Contains(*row.FirstMessage, "<teammate-message"),
+		IsTeammate:         row.IsTeammate,
 	}
 }
 

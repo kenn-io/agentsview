@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -679,7 +680,8 @@ type dailyUsageScanRow struct {
 	messageOrdinal           sql.NullInt64
 	usageSource              string
 	ts                       string
-	pricingTS                string
+	usageTime                time.Time
+	pricingTime              time.Time
 	model                    string
 	providerID               string
 	tokenJSON                string
@@ -1444,14 +1446,19 @@ func parseJSONString(tokenJSON string, i int) (string, int, bool) {
 	if i >= len(tokenJSON) || tokenJSON[i] != '"' {
 		return "", i, false
 	}
+	escaped := false
 	for j := i + 1; j < len(tokenJSON); j++ {
 		switch tokenJSON[j] {
 		case '\\':
 			if j+1 >= len(tokenJSON) {
 				return "", len(tokenJSON), false
 			}
+			escaped = true
 			j++
 		case '"':
+			if !escaped {
+				return tokenJSON[i+1 : j], j + 1, true
+			}
 			raw := tokenJSON[i : j+1]
 			var value string
 			err := json.Unmarshal([]byte(raw), &value)
@@ -1692,6 +1699,24 @@ func usagePricingTimestamp(ts string) time.Time {
 	return parsed
 }
 
+func dailyUsageLookupModel(r dailyUsageScanRow) string {
+	if !r.pricingTime.IsZero() {
+		if canonical := pricingpkg.CanonicalModelForDate(
+			r.model, r.pricingTime,
+		); canonical != "" {
+			return canonical
+		}
+	}
+	return r.model
+}
+
+func dailyUsageLocalDate(r dailyUsageScanRow, loc *time.Location) string {
+	if !r.usageTime.IsZero() {
+		return r.usageTime.In(loc).Format("2006-01-02")
+	}
+	return localDate(r.ts, loc)
+}
+
 func dailyUsageAmounts(
 	r dailyUsageScanRow, pricing *export.PricingResolver,
 ) (
@@ -1708,19 +1733,20 @@ func dailyUsageAmounts(
 	cacheCrTok = int(fact.CacheCreationTokens)
 	cacheRdTok = int(fact.CacheReadTokens)
 	priced, err := priceUsageFact(usagePriceInput{
-		Fact: fact, Timestamp: r.pricingTS, ReportedModel: r.model,
-		ProviderID: r.providerID,
+		Fact: fact, Timestamp: formatRequiredUsageTime(r.pricingTime),
+		ReportedModel: r.model, ProviderID: r.providerID,
 	}, pricing)
 	if err != nil {
 		return 0, 0, 0, 0, money.Money{}, money.Money{}, err
 	}
-	_, lookup := pricing.Resolve(r.model, usageLookupModel(r.model, r.ts))
+	_, lookup := pricing.ResolveAt(
+		r.model, dailyUsageLookupModel(r), r.pricingTime,
+	)
 	if priced.Reported > 0 {
 		pricing.RecordResolvedReported(r.model, priced.PricedModel, lookup)
 	} else {
 		_, lookup, err = pricing.ResolveBilledAt(
-			r.providerID, r.model, usageLookupModel(r.model, r.pricingTS),
-			usagePricingTimestamp(r.pricingTS))
+			r.providerID, r.model, dailyUsageLookupModel(r), r.pricingTime)
 		if err != nil {
 			return 0, 0, 0, 0, money.Money{}, money.Money{}, err
 		}
@@ -2164,12 +2190,6 @@ func (s *BunStore) getDailyUsageFrom(
 	}
 	rateResolver := export.NewPricingResolver(pricing)
 
-	rows, err := s.loadDailyUsageRowsFrom(ctx, store, f, true, false)
-	if err != nil {
-		return DailyUsageResult{},
-			fmt.Errorf("querying daily usage: %w", err)
-	}
-
 	type bucket struct {
 		inputTok  int
 		outputTok int
@@ -2200,13 +2220,13 @@ func (s *BunStore) getDailyUsageFrom(
 	// single fallback rate would misreport mixed-model periods.
 	var totalSavings money.Money
 
-	for _, r := range rows {
-		date := localDate(r.ts, loc)
+	processRow := func(r dailyUsageScanRow) error {
+		date := dailyUsageLocalDate(r, loc)
 		if f.From != "" && date < f.From {
-			continue
+			return nil
 		}
 		if f.To != "" && date > f.To {
-			continue
+			return nil
 		}
 		// Dedup AFTER the date filter so out-of-range rows
 		// (pulled in by the ±14h timezone padding) don't mark
@@ -2216,7 +2236,7 @@ func (s *BunStore) getDailyUsageFrom(
 			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
 		); ok {
 			if _, dup := seen[key]; dup {
-				continue
+				return nil
 			}
 			seen[key] = struct{}{}
 		}
@@ -2236,11 +2256,11 @@ func (s *BunStore) getDailyUsageFrom(
 		inputTok, outputTok, cacheCrTok, cacheRdTok, cost, savings, priceErr :=
 			dailyUsageAmounts(r, rateResolver)
 		if priceErr != nil {
-			return DailyUsageResult{}, priceErr
+			return priceErr
 		}
 		totalSavings, priceErr = money.Add(totalSavings, savings)
 		if priceErr != nil {
-			return DailyUsageResult{}, fmt.Errorf(
+			return fmt.Errorf(
 				"summing daily usage cache savings: %w", priceErr)
 		}
 
@@ -2265,7 +2285,7 @@ func (s *BunStore) getDailyUsageFrom(
 		}
 		sc.estimated[key], priceErr = money.Add(sc.estimated[key], cost)
 		if priceErr != nil {
-			return DailyUsageResult{}, fmt.Errorf(
+			return fmt.Errorf(
 				"summing daily usage session cost: %w", priceErr)
 		}
 		if useAuthoritativeCost &&
@@ -2275,6 +2295,12 @@ func (s *BunStore) getDailyUsageFrom(
 			rateResolver.RecordUnattributedReported()
 		}
 		sessionCosts[r.sessionID] = sc
+		return nil
+	}
+	if err := s.streamDailyUsageRowsFrom(
+		ctx, store, f, true, false, processRow,
+	); err != nil {
+		return DailyUsageResult{}, fmt.Errorf("querying daily usage: %w", err)
 	}
 	sessionIDs := make([]string, 0, len(sessionCosts))
 	for sessionID := range sessionCosts {
@@ -3049,8 +3075,10 @@ func sessionRowCostWithWebSearchRequests(
 			r.inputTokens, r.outputTokens,
 			r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}
-	pricedModel, lookup := pricing.Resolve(
-		r.model, usageLookupModel(r.model, r.ts))
+	pricedModel, lookup := pricing.ResolveAt(
+		r.model, usageLookupModel(r.model, r.pricingTS),
+		usagePricingTimestamp(r.pricingTS),
+	)
 	if r.cost.Valid {
 		pricing.RecordResolvedReported(r.model, pricedModel, lookup)
 		return money.Money{Microdollars: r.cost.Int64}, true, true, nil

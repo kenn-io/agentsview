@@ -1,16 +1,108 @@
 package db
 
-import "context"
+import (
+	"context"
+	"database/sql"
 
-import "github.com/uptrace/bun"
+	"github.com/uptrace/bun"
+	"go.kenn.io/agentsview/internal/db/bunmodel"
+)
 
-// SearchHit is the engine-owned portion of a session search result. The
-// common store hydrates session metadata, enforces visibility, and paginates.
-type SearchHit struct {
-	SessionID string
-	Ordinal   int
-	Snippet   string
-	Rank      float64
+// ScanSearchResults executes a capability query through Bun and scans its
+// canonical eight-column projection without backend-specific reflection code.
+func ScanSearchResults(
+	ctx context.Context, query *bun.RawQuery, capacity int,
+) ([]SearchResult, error) {
+	return scanSearchResults(ctx, query, capacity, false)
+}
+
+// ScanSQLiteSearchResults retains canonical RFC3339 text timestamps already
+// returned by SQLite and normalizes only legacy non-canonical forms.
+func ScanSQLiteSearchResults(
+	ctx context.Context, query *bun.RawQuery, capacity int,
+) ([]SearchResult, error) {
+	return scanSearchResults(ctx, query, capacity, true)
+}
+
+func scanSearchResults(
+	ctx context.Context, query *bun.RawQuery, capacity int, timestampText bool,
+) ([]SearchResult, error) {
+	model := newSearchResultStreamModel(capacity, timestampText)
+	if err := query.Scan(ctx, model); err != nil {
+		return nil, err
+	}
+	return model.results, nil
+}
+
+type searchResultStreamModel struct {
+	row           SearchResult
+	endedAt       bunmodel.Timestamp
+	endedAtText   string
+	timestampText bool
+	results       []SearchResult
+	dest          [8]any
+}
+
+func newSearchResultStreamModel(
+	capacity int, timestampText bool,
+) *searchResultStreamModel {
+	model := &searchResultStreamModel{
+		timestampText: timestampText,
+		results:       make([]SearchResult, 0, capacity),
+	}
+	endedAtDest := any(&model.endedAt)
+	if timestampText {
+		endedAtDest = &model.endedAtText
+	}
+	model.dest = [8]any{
+		&model.row.SessionID,
+		&model.row.Project,
+		&model.row.Agent,
+		&model.row.Name,
+		endedAtDest,
+		&model.row.Ordinal,
+		&model.row.Snippet,
+		&model.row.Rank,
+	}
+	return model
+}
+
+func (m *searchResultStreamModel) ScanRows(
+	_ context.Context, rows *sql.Rows,
+) (int, error) {
+	count := 0
+	for rows.Next() {
+		m.row = SearchResult{}
+		m.endedAt = bunmodel.Timestamp{}
+		m.endedAtText = ""
+		if err := rows.Scan(m.dest[:]...); err != nil {
+			return count, err
+		}
+		if m.timestampText {
+			m.row.SessionEndedAt = normalizeSQLiteSearchTimestamp(m.endedAtText)
+		} else {
+			m.row.SessionEndedAt = formatRequiredUsageTimestamp(m.endedAt)
+		}
+		m.results = append(m.results, m.row)
+		count++
+	}
+	return count, rows.Err()
+}
+
+func (m *searchResultStreamModel) Value() any {
+	return &m.results
+}
+
+func normalizeSQLiteSearchTimestamp(value string) string {
+	if value == "" || len(value) >= len("2006-01-02T15:04:05Z") &&
+		value[10] == 'T' && value[len(value)-1] == 'Z' {
+		return value
+	}
+	parsed, err := bunmodel.ParseTimestamp(value)
+	if err != nil {
+		return value
+	}
+	return formatRequiredUsageTimestamp(parsed)
 }
 
 // ContentSearchHit is the engine-owned portion of a content search result.
@@ -40,7 +132,7 @@ type ContentSearchHit struct {
 // hydration, but this pushdown keeps cursor windows complete and bounded.
 type FullTextCapability interface {
 	Available() bool
-	Search(context.Context, bun.IDB, SearchFilter) ([]SearchHit, error)
+	Search(context.Context, bun.IDB, SearchFilter) ([]SearchResult, error)
 }
 
 // SessionSearchCapability owns matching within one known session. It is

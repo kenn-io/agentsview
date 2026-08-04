@@ -12,7 +12,7 @@ import (
 
 type literalFullTextCapability struct {
 	available       bool
-	hits            []SearchHit
+	hits            []SearchResult
 	sessionOrdinals []int
 	lastFilter      SearchFilter
 	insideGuard     func() bool
@@ -24,12 +24,12 @@ func (c *literalFullTextCapability) Available() bool { return c.available }
 
 func (c *literalFullTextCapability) Search(
 	_ context.Context, _ bun.IDB, filter SearchFilter,
-) ([]SearchHit, error) {
+) ([]SearchResult, error) {
 	if c.insideGuard != nil && !c.insideGuard() {
 		panic("full-text search ran outside the backend guard")
 	}
 	c.lastFilter = filter
-	return append([]SearchHit(nil), c.hits...), nil
+	return append([]SearchResult(nil), c.hits...), nil
 }
 
 func (c *literalFullTextCapability) SearchSession(
@@ -172,46 +172,18 @@ func (*searchTestBackend) Update(
 	return ErrReadOnly
 }
 
-func TestBunStoreSearchHydratesOnlyVisibleCapabilityHits(t *testing.T) {
+func TestBunStoreSearchUsesCanonicalCapabilityHit(t *testing.T) {
 	database := testDB(t)
 	alphaName := "Needle alpha"
-	alphaEndedAt := "2026-08-03T10:05:00Z"
-	deletedAt := "2026-08-03T13:00:00Z"
-	for _, session := range []Session{
-		{
-			ID: "search-alpha", Project: "alpha", Machine: "host", Agent: "codex",
-			DisplayName: &alphaName, CreatedAt: "2026-08-03T10:00:00Z",
-			EndedAt: &alphaEndedAt, MessageCount: 2,
-		},
-		{
-			ID: "search-beta", Project: "beta", Machine: "host", Agent: "claude",
-			CreatedAt: "2026-08-03T11:00:00Z", MessageCount: 1,
-		},
-		{
-			ID: "search-deleted", Project: "alpha", Machine: "host", Agent: "codex",
-			CreatedAt: "2026-08-03T12:00:00Z", DeletedAt: &deletedAt, MessageCount: 1,
-		},
-	} {
-		require.NoError(t, database.UpsertSession(session))
-	}
-	_, err := database.getWriter().ExecContext(t.Context(),
-		"UPDATE sessions SET display_name = ? WHERE id = ?",
-		alphaName, "search-alpha",
-	)
-	require.NoError(t, err)
-	_, err = database.getWriter().ExecContext(t.Context(),
-		"UPDATE sessions SET deleted_at = ? WHERE id = ?",
-		deletedAt, "search-deleted",
-	)
-	require.NoError(t, err)
 
 	capability := &literalFullTextCapability{
 		available: true,
-		hits: []SearchHit{
-			{SessionID: "search-beta", Ordinal: 0, Snippet: "beta needle", Rank: 0.1},
-			{SessionID: "search-deleted", Ordinal: 0, Snippet: "deleted needle", Rank: 0.2},
-			{SessionID: "search-alpha", Ordinal: 1, Snippet: "alpha needle", Rank: 0.3},
-		},
+		hits: []SearchResult{{
+			SessionID: "search-alpha", Project: "alpha", Agent: "codex",
+			Name: alphaName, Ordinal: 1,
+			SessionEndedAt: "2026-08-03T10:05:00Z",
+			Snippet:        "alpha needle", Rank: 0.3,
+		}},
 	}
 	backend := &searchTestBackend{
 		store: database.bunReader, fullText: capability, contentSearch: capability,

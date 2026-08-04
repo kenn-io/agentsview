@@ -675,7 +675,7 @@ func TestSQLiteActivityReportRowStatusCanonicalizesKimiAliasByTimestamp(t *testi
 					usageSource: "provider",
 					model:       "daimon-kimi-code",
 					ts:          tt.timestamp,
-					pricingTS:   tt.timestamp,
+					pricingTime: mustBunTimestamp(t, tt.timestamp).Time,
 					inputTokens: 1_000_000,
 				},
 				resolver,
@@ -719,7 +719,7 @@ func TestSQLiteActivityReportRowStatusPrefersExactCustomKimiAlias(t *testing.T) 
 			usageSource: "provider",
 			model:       "daimon-kimi-code",
 			ts:          "2026-07-19T00:00:00Z",
-			pricingTS:   "2026-07-19T00:00:00Z",
+			pricingTime: mustBunTimestamp(t, "2026-07-19T00:00:00Z").Time,
 			inputTokens: 1_000_000,
 		},
 		resolver,
@@ -756,7 +756,7 @@ func TestSQLiteActivityReportRowStatusUsesFlatRateForUntimedUsage(t *testing.T) 
 	cost, priced, contributes, err := sqliteActivityReportRowStatus(
 		dailyUsageScanRow{
 			usageSource: "provider", model: "gpt-5.6-luna",
-			ts: "2026-08-01T00:00:00Z", pricingTS: "", inputTokens: 1_000,
+			ts: "2026-08-01T00:00:00Z", inputTokens: 1_000,
 		},
 		resolver,
 	)

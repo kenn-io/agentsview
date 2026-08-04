@@ -22,7 +22,79 @@ func (s *BunStore) bunAnalyticsSessionsFrom(
 	ctx context.Context, store bun.IDB, f AnalyticsFilter, applyDate bool,
 ) ([]bunmodel.Session, error) {
 	var rows []bunmodel.Session
-	query := store.NewSelect().Model(&rows).
+	query := s.bunAnalyticsSessionSelect(store, f, applyDate).
+		ExcludeColumn("started_at", "ended_at", "signals_pending_since",
+			"deleted_at", "local_modified_at", "created_at").
+		OrderExpr(bunAnalyticsSessionAlias + ".id ASC")
+	if err := query.Scan(ctx, &rows); err != nil {
+		return nil, fmt.Errorf("querying Bun analytics sessions: %w", err)
+	}
+	if err := loadBunAnalyticsSessionTimes(ctx, store, rows); err != nil {
+		return nil, err
+	}
+
+	loc := f.location()
+	filtered := rows[:0]
+	for _, row := range rows {
+		if f.ActiveSince != "" {
+			cutoff, err := parseTimestamp(f.ActiveSince)
+			if err == nil {
+				activityTime := bunAnalyticsSessionTime(row)
+				if row.EndedAt != nil {
+					activityTime = row.EndedAt.UTC()
+				}
+				if activityTime.Before(cutoff) {
+					continue
+				}
+			}
+		}
+		if applyDate {
+			date := bunAnalyticsSessionTime(row).In(loc).Format("2006-01-02")
+			if !inDateRange(date, f.From, f.To) {
+				continue
+			}
+		}
+		filtered = append(filtered, row)
+	}
+	rows = filtered
+	if (f.DayOfWeek != nil || f.Hour != nil) && len(rows) > 0 {
+		messages, err := bunAnalyticsMessagesFrom(ctx, store, bunAnalyticsSessionIDs(rows))
+		if err != nil {
+			return nil, err
+		}
+		keep := make(map[string]bool, len(rows))
+		if strings.TrimSpace(f.Model) != "" {
+			scope, scopeErr := bunAnalyticsMessageScope(messages, f, false)
+			if scopeErr != nil {
+				return nil, scopeErr
+			}
+			for id, scoped := range scope.MessagesBySession() {
+				keep[id] = len(scoped) > 0
+			}
+		} else {
+			flt := f.messageScopeFilter()
+			for _, message := range messages {
+				t, ok := bunAnalyticsMessageLocalTime(message, loc)
+				if flt.MatchesDayHour(t, ok) {
+					keep[message.SessionID] = true
+				}
+			}
+		}
+		filtered = rows[:0]
+		for _, row := range rows {
+			if keep[row.ID] {
+				filtered = append(filtered, row)
+			}
+		}
+		rows = filtered
+	}
+	return rows, nil
+}
+
+func (s *BunStore) bunAnalyticsSessionSelect(
+	store bun.IDB, f AnalyticsFilter, applyDate bool,
+) *bun.SelectQuery {
+	query := store.NewSelect().Model((*bunmodel.Session)(nil)).
 		Where(bunAnalyticsSessionAlias + ".message_count > 0").
 		Where(bunAnalyticsSessionAlias + ".deleted_at IS NULL")
 
@@ -97,72 +169,7 @@ func (s *BunStore) bunAnalyticsSessionsFrom(
 		query = query.Where(expr+" >= "+fromParam, from).
 			Where(expr+" <= "+toParam, to)
 	}
-	if err := query.
-		ExcludeColumn("started_at", "ended_at", "signals_pending_since",
-			"deleted_at", "local_modified_at", "created_at").
-		OrderExpr(bunAnalyticsSessionAlias + ".id ASC").Scan(ctx); err != nil {
-		return nil, fmt.Errorf("querying Bun analytics sessions: %w", err)
-	}
-	if err := loadBunAnalyticsSessionTimes(ctx, store, rows); err != nil {
-		return nil, err
-	}
-
-	loc := f.location()
-	filtered := rows[:0]
-	for _, row := range rows {
-		if f.ActiveSince != "" {
-			cutoff, err := parseTimestamp(f.ActiveSince)
-			if err == nil {
-				activityTime := bunAnalyticsSessionTime(row)
-				if row.EndedAt != nil {
-					activityTime = row.EndedAt.UTC()
-				}
-				if activityTime.Before(cutoff) {
-					continue
-				}
-			}
-		}
-		if applyDate {
-			date := bunAnalyticsSessionTime(row).In(loc).Format("2006-01-02")
-			if !inDateRange(date, f.From, f.To) {
-				continue
-			}
-		}
-		filtered = append(filtered, row)
-	}
-	rows = filtered
-	if (f.DayOfWeek != nil || f.Hour != nil) && len(rows) > 0 {
-		messages, err := bunAnalyticsMessagesFrom(ctx, store, bunAnalyticsSessionIDs(rows))
-		if err != nil {
-			return nil, err
-		}
-		keep := make(map[string]bool, len(rows))
-		if strings.TrimSpace(f.Model) != "" {
-			scope, scopeErr := bunAnalyticsMessageScope(messages, f, false)
-			if scopeErr != nil {
-				return nil, scopeErr
-			}
-			for id, scoped := range scope.MessagesBySession() {
-				keep[id] = len(scoped) > 0
-			}
-		} else {
-			flt := f.messageScopeFilter()
-			for _, message := range messages {
-				t, ok := bunAnalyticsMessageLocalTime(message, loc)
-				if flt.MatchesDayHour(t, ok) {
-					keep[message.SessionID] = true
-				}
-			}
-		}
-		filtered = rows[:0]
-		for _, row := range rows {
-			if keep[row.ID] {
-				filtered = append(filtered, row)
-			}
-		}
-		rows = filtered
-	}
-	return rows, nil
+	return query
 }
 
 type bunAnalyticsSessionTimes struct {
@@ -448,13 +455,26 @@ func (s *BunStore) GetAnalyticsSummary(
 	f.IncludeSubagents = true
 	var result AnalyticsSummary
 	err := s.consistentView(ctx, func(store bun.IDB) error {
+		if bunAnalyticsSummaryCanAggregate(f) {
+			var err error
+			result, err = s.getBunAnalyticsSummaryAggregate(ctx, store, f)
+			return err
+		}
 		sessions, err := s.bunAnalyticsSessionsFrom(ctx, store, f, true)
 		if err != nil {
 			return err
 		}
-		messages, err := bunAnalyticsMessagesFrom(
-			ctx, store, bunAnalyticsSessionIDs(sessions),
-		)
+		ids := bunAnalyticsSessionIDs(sessions)
+		if strings.TrimSpace(f.Model) == "" && !f.HasTimeFilter() {
+			models, err := bunAnalyticsDistinctModelsFrom(ctx, store, ids)
+			if err != nil {
+				return err
+			}
+			result = buildBunAnalyticsSummary(sessions, nil, f)
+			result.Models = models
+			return nil
+		}
+		messages, err := bunAnalyticsMessagesFrom(ctx, store, ids)
 		if err != nil {
 			return err
 		}
@@ -462,6 +482,250 @@ func (s *BunStore) GetAnalyticsSummary(
 		return nil
 	})
 	return result, err
+}
+
+func bunAnalyticsSummaryCanAggregate(f AnalyticsFilter) bool {
+	return strings.TrimSpace(f.Model) == "" && !f.HasTimeFilter() &&
+		f.ActiveSince == "" && f.location() == time.UTC
+}
+
+func bunAnalyticsUTCDateExpr(alias string) string {
+	return "SUBSTR(CAST(COALESCE(" + bunNullableTimestamp(alias+".started_at") +
+		", " + alias + ".created_at) AS VARCHAR), 1, 10)"
+}
+
+func appendBunAnalyticsExactDate(
+	query *bun.SelectQuery, f AnalyticsFilter, alias string,
+) *bun.SelectQuery {
+	expr := bunAnalyticsUTCDateExpr(alias)
+	if f.From != "" {
+		query = query.Where(expr+" >= ?", f.From)
+	}
+	if f.To != "" {
+		query = query.Where(expr+" <= ?", f.To)
+	}
+	return query
+}
+
+func (s *BunStore) getBunAnalyticsSummaryAggregate(
+	ctx context.Context, store bun.IDB, f AnalyticsFilter,
+) (AnalyticsSummary, error) {
+	filteredColumns := bunAnalyticsSessionAlias + ".id, " +
+		bunAnalyticsSessionAlias + ".project, " +
+		bunAnalyticsSessionAlias + ".agent, " +
+		bunAnalyticsSessionAlias + ".message_count, " +
+		bunAnalyticsSessionAlias + ".total_output_tokens, " +
+		bunAnalyticsSessionAlias + ".has_total_output_tokens, " +
+		bunAnalyticsUTCDateExpr(bunAnalyticsSessionAlias) + " AS local_date"
+	filtered := s.bunAnalyticsSessionSelect(store, f, false).
+		ColumnExpr(filteredColumns)
+	filtered = appendBunAnalyticsExactDate(filtered, f, bunAnalyticsSessionAlias)
+
+	resultRows := newBunAnalyticsSummaryStreamModel()
+	if err := store.NewRaw(bunAnalyticsSummaryAggregateSQL, filtered).
+		Scan(ctx, resultRows); err != nil {
+		return AnalyticsSummary{}, fmt.Errorf(
+			"querying Bun analytics summary: %w", err,
+		)
+	}
+	if !resultRows.seen {
+		return AnalyticsSummary{
+			Models: []string{}, Agents: map[string]*AgentSummary{},
+		}, nil
+	}
+	return resultRows.summary, nil
+}
+
+const bunAnalyticsSummaryAggregateSQL = `
+WITH filtered AS (?),
+ranked AS (
+	SELECT message_count,
+		ROW_NUMBER() OVER (ORDER BY message_count ASC) AS rn,
+		COUNT(*) OVER () AS n
+	FROM filtered
+),
+project_totals AS (
+	SELECT project, SUM(message_count) AS messages
+	FROM filtered
+	GROUP BY project
+),
+summary AS (
+	SELECT COUNT(*) AS total_sessions,
+		CAST(COALESCE(SUM(message_count), 0) AS BIGINT) AS total_messages,
+		CAST(COALESCE(SUM(CASE WHEN has_total_output_tokens
+			THEN total_output_tokens ELSE 0 END), 0) AS BIGINT) AS total_output_tokens,
+		CAST(COALESCE(SUM(CASE WHEN has_total_output_tokens
+			THEN 1 ELSE 0 END), 0) AS BIGINT) AS token_reporting_sessions,
+		COUNT(DISTINCT project) AS active_projects,
+		COUNT(DISTINCT local_date) AS active_days,
+		CAST(COALESCE(ROUND(AVG(message_count), 1), 0)
+			AS DOUBLE PRECISION) AS avg_messages,
+		COALESCE((
+			SELECT CAST(AVG(message_count) AS BIGINT)
+			FROM ranked
+			WHERE rn IN (
+				CAST((n + 1) / 2 AS BIGINT),
+				CAST((n + 2) / 2 AS BIGINT)
+			)
+		), 0) AS median_messages,
+		COALESCE((
+			SELECT message_count
+			FROM ranked
+			WHERE rn = CASE
+				WHEN CAST(n * 0.9 AS BIGINT) + 1 < n
+				THEN CAST(n * 0.9 AS BIGINT) + 1
+				ELSE n
+			END
+			LIMIT 1
+		), 0) AS p90_messages,
+		COALESCE((
+			SELECT project
+			FROM project_totals
+			ORDER BY messages DESC, project ASC
+			LIMIT 1
+		), '') AS most_active,
+		CAST(COALESCE(ROUND((
+			SELECT SUM(messages)
+			FROM (
+				SELECT messages
+				FROM project_totals
+				ORDER BY messages DESC
+				LIMIT 3
+			) AS top_projects
+		) * 1.0 / NULLIF(SUM(message_count), 0), 3), 0)
+			AS DOUBLE PRECISION) AS concentration
+	FROM filtered
+),
+dimensions AS (
+	SELECT 'agent' AS kind, agent AS name,
+		COUNT(*) AS sessions,
+		CAST(COALESCE(SUM(message_count), 0) AS BIGINT) AS messages
+	FROM filtered
+	GROUP BY agent
+	UNION ALL
+	SELECT 'model' AS kind, analytics_model.model AS name,
+		CAST(0 AS BIGINT) AS sessions,
+		CAST(0 AS BIGINT) AS messages
+	FROM filtered AS filtered_session
+	JOIN messages AS analytics_model
+		ON analytics_model.session_id = filtered_session.id
+	WHERE analytics_model.model != ''
+	GROUP BY analytics_model.model
+)
+SELECT summary.total_sessions,
+	summary.total_messages,
+	summary.total_output_tokens,
+	summary.token_reporting_sessions,
+	summary.active_projects,
+	summary.active_days,
+	summary.avg_messages,
+	summary.median_messages,
+	summary.p90_messages,
+	summary.most_active,
+	summary.concentration,
+	dimensions.kind,
+	dimensions.name,
+	dimensions.sessions AS dimension_sessions,
+	dimensions.messages AS dimension_messages
+FROM summary
+LEFT JOIN dimensions ON 1 = 1
+ORDER BY dimensions.kind ASC, dimensions.name ASC`
+
+type bunAnalyticsSummaryStreamModel struct {
+	seen     bool
+	summary  AnalyticsSummary
+	kind     sql.NullString
+	name     sql.NullString
+	sessions sql.NullInt64
+	messages sql.NullInt64
+	dest     [15]any
+}
+
+func newBunAnalyticsSummaryStreamModel() *bunAnalyticsSummaryStreamModel {
+	model := &bunAnalyticsSummaryStreamModel{}
+	model.dest = [15]any{
+		&model.summary.TotalSessions,
+		&model.summary.TotalMessages,
+		&model.summary.TotalOutputTokens,
+		&model.summary.TokenReportingSessions,
+		&model.summary.ActiveProjects,
+		&model.summary.ActiveDays,
+		&model.summary.AvgMessages,
+		&model.summary.MedianMessages,
+		&model.summary.P90Messages,
+		&model.summary.MostActive,
+		&model.summary.Concentration,
+		&model.kind,
+		&model.name,
+		&model.sessions,
+		&model.messages,
+	}
+	return model
+}
+
+func (m *bunAnalyticsSummaryStreamModel) ScanRows(
+	_ context.Context, rows *sql.Rows,
+) (int, error) {
+	count := 0
+	for rows.Next() {
+		m.kind = sql.NullString{}
+		m.name = sql.NullString{}
+		m.sessions = sql.NullInt64{}
+		m.messages = sql.NullInt64{}
+		if err := rows.Scan(m.dest[:]...); err != nil {
+			return count, err
+		}
+		if !m.seen {
+			m.summary.Models = []string{}
+			m.summary.Agents = make(map[string]*AgentSummary)
+			m.seen = true
+		}
+		if !m.kind.Valid || !m.name.Valid {
+			count++
+			continue
+		}
+		switch m.kind.String {
+		case "agent":
+			if m.sessions.Valid && m.messages.Valid {
+				m.summary.Agents[m.name.String] = &AgentSummary{
+					Sessions: int(m.sessions.Int64), Messages: int(m.messages.Int64),
+				}
+			}
+		case "model":
+			m.summary.Models = append(m.summary.Models, m.name.String)
+		}
+		count++
+	}
+	return count, rows.Err()
+}
+
+func (m *bunAnalyticsSummaryStreamModel) Value() any {
+	return &m.summary
+}
+
+func bunAnalyticsDistinctModelsFrom(
+	ctx context.Context, store bun.IDB, sessionIDs []string,
+) ([]string, error) {
+	if len(sessionIDs) == 0 {
+		return []string{}, nil
+	}
+	modelSet := make(map[string]struct{})
+	if err := queryChunked(sessionIDs, func(chunk []string) error {
+		var models []string
+		if err := store.NewSelect().Table("messages").
+			Column("model").Distinct().
+			Where("session_id IN (?)", bun.List(chunk)).
+			Where("model != ?", "").Scan(ctx, &models); err != nil {
+			return fmt.Errorf("querying Bun analytics models: %w", err)
+		}
+		for _, model := range models {
+			modelSet[model] = struct{}{}
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return sortedSetKeys(modelSet), nil
 }
 
 func buildBunAnalyticsSummary(
