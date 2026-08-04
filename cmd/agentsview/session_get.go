@@ -147,11 +147,6 @@ func resolveBareCodebuffID(
 	if cfg == nil {
 		return "", nil
 	}
-	// LocalMachineName is set by config.LoadPFlags from
-	// os.Hostname() (or machine_name override). It is empty until
-	// config loads; callers supply the cfg they already loaded, so
-	// it is populated in practice when we reach the local-bridge
-	// path.
 	localMachine := cfg.LocalMachineName
 	locations := parser.FindCodebuffFreebuffMatches(
 		[]parser.CodebuffFamilyRoots{
@@ -162,16 +157,31 @@ func resolveBareCodebuffID(
 		},
 		rawID,
 	)
-	tryBothWithErr := func(project string) (string, error) {
-		for _, agent := range []parser.AgentType{
-			parser.AgentCodebuff, parser.AgentFreebuff,
-		} {
-			candidateID := strings.Join(
-				[]string{string(agent), project, rawID}, ":",
+
+	var (
+		valid     []string
+		seen      = make(map[string]struct{})
+		lookupErr error
+	)
+
+	// Phase 1: Unprefixed probes using filesystem project hints.
+	// Each location supplies a project name; try both codebuff and
+	// freebuff prefixes against the session service. This phase
+	// depends on a local Codebuff/Freebuff directory on disk and
+	// produces no candidates when len(locations)==0.
+	for _, agent := range []parser.AgentType{
+		parser.AgentCodebuff, parser.AgentFreebuff,
+	} {
+		for _, loc := range locations {
+			candidate := strings.Join(
+				[]string{string(agent), loc.ProjectHint, rawID}, ":",
 			)
-			detail, err := svc.Get(ctx, candidateID)
+			detail, err := svc.Get(ctx, candidate)
 			if err != nil {
-				return "", err
+				if lookupErr == nil {
+					lookupErr = err
+				}
+				continue
 			}
 			if detail == nil {
 				continue
@@ -181,34 +191,50 @@ func resolveBareCodebuffID(
 			) {
 				continue
 			}
-			return candidateID, nil
-		}
-		// When the session exists only as a remote-synced row (host~ prefix),
-		// the unprefixed probe above returns nil. Enumerate host-prefixed
-		// canonical IDs via substring search over the session timestamp suffix,
-		// then collect every qualifying candidate with dedup. Apply the same
-		// zero/one/many result handling as the top-level multi-location resolver
-		// so --machine=* never silently selects the wrong session.
-		if machineFilter != "" && machineFilter != "local" {
-			suffix := ":" + project + ":" + rawID
-			ids, findErr := svc.FindSessionIDsByPartial(ctx, suffix, 20)
-			if findErr != nil {
-				return "", fmt.Errorf("lookup host-prefixed sessions for %q: %w", rawID, findErr)
+			if _, dup := seen[candidate]; dup {
+				continue
 			}
-			var (
-				remoteCandidates []string
-				remoteSeen       = make(map[string]struct{})
-			)
+			seen[candidate] = struct{}{}
+			valid = append(valid, candidate)
+		}
+	}
+
+	// Phase 2: Host-prefixed remote-synced sessions.
+	// This runs independently of the filesystem walk (even when
+	// len(locations)==0) so remote-only sessions — imported via
+	// pg push or remotesync with no local on-disk copy — can still
+	// be resolved. The filter requires a host prefix ("~"), a
+	// codebuff or freebuff agent marker, and the exact timestamp
+	// suffix.
+	if machineFilter != "" && machineFilter != "local" {
+		ids, findErr := svc.FindSessionIDsByPartial(ctx, rawID, 20)
+		if findErr != nil {
+			if lookupErr == nil {
+				lookupErr = fmt.Errorf(
+					"lookup host-prefixed sessions for %q: %w",
+					rawID, findErr,
+				)
+			}
+		} else {
 			for _, id := range ids {
 				if !strings.Contains(id, "~") {
 					continue
 				}
-				if !strings.HasSuffix(id, suffix) {
+				if !strings.HasSuffix(id, ":"+rawID) {
+					continue
+				}
+				// Guard against non-codebuff/freebuff sessions
+				// whose ID happens to contain the timestamp.
+				if !strings.Contains(id, "~codebuff:") &&
+					!strings.Contains(id, "~freebuff:") {
 					continue
 				}
 				detail, err := svc.Get(ctx, id)
 				if err != nil {
-					return "", err
+					if lookupErr == nil {
+						lookupErr = err
+					}
+					continue
 				}
 				if detail == nil {
 					continue
@@ -218,70 +244,30 @@ func resolveBareCodebuffID(
 				) {
 					continue
 				}
-				if _, dup := remoteSeen[id]; dup {
+				if _, dup := seen[id]; dup {
 					continue
 				}
-				remoteSeen[id] = struct{}{}
-				remoteCandidates = append(remoteCandidates, id)
-			}
-			switch len(remoteCandidates) {
-			case 0:
-				// No qualifying remote candidate — fall through.
-			case 1:
-				return remoteCandidates[0], nil
-			default:
-				return "", fmt.Errorf(
-					"ambiguous session id %q: matches %d canonical sessions: %s. "+
-						"Re-run with one of the canonical IDs to disambiguate",
-					rawID, len(remoteCandidates), strings.Join(remoteCandidates, ", "),
-				)
+				seen[id] = struct{}{}
+				valid = append(valid, id)
 			}
 		}
-		return "", nil
 	}
-	switch len(locations) {
+
+	// Single zero/one/many decision over both phases.
+	if lookupErr != nil && len(valid) == 0 {
+		return "", lookupErr
+	}
+	switch len(valid) {
 	case 0:
 		return "", nil
 	case 1:
-		return tryBothWithErr(locations[0].ProjectHint)
+		return valid[0], nil
 	default:
-		var (
-			valid     []string
-			seen      = make(map[string]struct{})
-			lookupErr error
+		return "", fmt.Errorf(
+			"ambiguous session id %q: matches %d canonical sessions: %s. "+
+				"Re-run with one of the canonical IDs to disambiguate",
+			rawID, len(valid), strings.Join(valid, ", "),
 		)
-		for _, loc := range locations {
-			v, err := tryBothWithErr(loc.ProjectHint)
-			if err != nil {
-				if lookupErr == nil {
-					lookupErr = err
-				}
-				continue
-			}
-			if v == "" {
-				continue
-			}
-			if _, dup := seen[v]; dup {
-				continue
-			}
-			seen[v] = struct{}{}
-			valid = append(valid, v)
-		}
-		if lookupErr != nil {
-			return "", lookupErr
-		}
-		switch len(valid) {
-		case 0:
-			return "", nil
-		case 1:
-			return valid[0], nil
-		default:
-			return "", fmt.Errorf(
-				"ambiguous session id %q: matches %d canonical sessions: %s. "+
-					"Re-run with one of the canonical IDs to disambiguate",
-				rawID, len(valid), strings.Join(valid, ", "),
-			)
-		}
 	}
 }
 

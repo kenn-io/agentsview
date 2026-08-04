@@ -590,6 +590,42 @@ func TestResolveBareCodebuffID_RemoteAmbiguity(t *testing.T) {
 	assert.Contains(t, err.Error(), remoteB)
 }
 
+// TestResolveBareCodebuffID_RemoteOnlyNoLocations exercises the
+// case where no local filesystem directory matches the timestamp
+// (len(locations)==0), but a remote-synced session exists in the
+// database. The resolver must query the database independently of
+// the filesystem walk and surface the host-prefixed candidate.
+func TestResolveBareCodebuffID_RemoteOnlyNoLocations(t *testing.T) {
+	t.Parallel()
+	// Point AgentDirs at a temp dir with NO Codebuff session
+	// subdirectories — FindCodebuffFreebuffMatches returns zero
+	// locations, which previously caused an immediate "", nil
+	// return without ever querying the database.
+	tmp := t.TempDir()
+	cfg := config.Config{
+		LocalMachineName: "test-machine",
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {tmp},
+		},
+	}
+	remoteID := "host~codebuff:someproject:1704067200"
+	svc := &stubGetService{
+		getDetails: map[string]*service.SessionDetail{
+			remoteID: {Session: db.Session{
+				ID:      remoteID,
+				Machine: "remote-box",
+			}},
+		},
+		partialIDs: []string{remoteID},
+	}
+	got, err := resolveBareCodebuffID(
+		context.Background(), svc, &cfg, "1704067200", "*",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, remoteID, got,
+		"remote-only session must resolve without a local filesystem match")
+}
+
 // TestCodebuffMachineMatches_EmptyFilter pins the empty-string arm
 // of codebuffMachineMatches. The production --machine flag default is
 // "local" so an empty filter never reaches the resolver naturally,
