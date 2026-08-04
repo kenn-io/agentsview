@@ -72,10 +72,14 @@ func assertAnalyticsSummary(t *testing.T, store AnalyticsStore, filter db.Analyt
 	assert.Equal(t, 3, got.P90Messages)
 	assert.Equal(t, "alpha", got.MostActive)
 	assert.Equal(t, 1.0, got.Concentration)
-	require.Contains(t, got.Agents, "codex")
-	assert.Equal(t, db.AgentSummary{Sessions: 2, Messages: 5}, *got.Agents["codex"])
-	require.Contains(t, got.Agents, "claude")
-	assert.Equal(t, db.AgentSummary{Sessions: 1, Messages: 2}, *got.Agents["claude"])
+	codex, ok := got.Agents["codex"]
+	require.True(t, ok)
+	require.NotNil(t, codex)
+	assert.Equal(t, db.AgentSummary{Sessions: 2, Messages: 5}, *codex)
+	claude, ok := got.Agents["claude"]
+	require.True(t, ok)
+	require.NotNil(t, claude)
+	assert.Equal(t, db.AgentSummary{Sessions: 1, Messages: 2}, *claude)
 
 	projects, err := store.GetAnalyticsProjects(t.Context(), filter)
 	require.NoError(t, err)
