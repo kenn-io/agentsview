@@ -300,8 +300,8 @@ type Session struct {
 	// LastWriteIncremental is SQLite-only sync bookkeeping (like
 	// NextOrdinal): true when the last write to this row went through
 	// the incremental-append path (updateSessionIncrementalTx) instead
-	// of a full re-normalization (upsertSessionArgs, which always resets
-	// it to false). It is consumed only by parse-diff to classify benign
+	// of a full re-normalization (resetIncrementalMarkerTx resets it to
+	// false). It is consumed only by parse-diff to classify benign
 	// incremental-vs-full skew and is json:"-" so it never leaks through
 	// the HTTP session API. Deliberately not mirrored to PG/DuckDB: their
 	// push column lists omit the whole sync-bookkeeping cluster.
@@ -647,100 +647,6 @@ func (db *DB) DeleteParserExcludedSessions(ids []string) (int, error) {
 	return int(deleted), nil
 }
 
-const insertSessionSQL = `
-		INSERT INTO sessions (
-			id, project, machine, agent, first_message, session_name,
-			agent_label, entrypoint, session_kind,
-			started_at, ended_at, message_count,
-			user_message_count, parent_session_id,
-			parser_parent_session_id,
-			relationship_type,
-			total_output_tokens, peak_context_tokens,
-			has_total_output_tokens, has_peak_context_tokens,
-			is_automated,
-			termination_status,
-			cwd, git_branch, source_session_id,
-			source_version, transcript_fidelity,
-			parser_malformed_lines,
-			is_truncated,
-			last_write_incremental,
-			file_path, file_size, file_mtime,
-			next_ordinal, last_entry_uuid, claude_linear_parse,
-			file_inode, file_device, file_hash,
-			source_archive_id, source_database_generation
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-
-// insertSessionIfAbsentSQL inserts a session only when its id does not already
-// exist, leaving an existing row untouched.
-const insertSessionIfAbsentSQL = insertSessionSQL + `
-		ON CONFLICT(id) DO NOTHING`
-
-const upsertSessionBaseSQL = insertSessionSQL + `
-		ON CONFLICT(id) DO UPDATE SET
-			project = excluded.project,
-			machine = excluded.machine,
-			agent = excluded.agent,
-			agent_label = excluded.agent_label,
-			entrypoint = excluded.entrypoint,
-			session_kind = excluded.session_kind,
-			first_message = excluded.first_message,
-			-- session_name is always overwritten by re-parse; display_name
-			-- is the user override and is only touched by RenameSession.
-			session_name = excluded.session_name,
-			started_at = excluded.started_at,
-			ended_at = excluded.ended_at,
-			message_count = excluded.message_count,
-			user_message_count = excluded.user_message_count,
-			parent_session_id = excluded.parent_session_id,
-			parser_parent_session_id = excluded.parser_parent_session_id,
-			relationship_type = excluded.relationship_type,
-			total_output_tokens = excluded.total_output_tokens,
-			peak_context_tokens = excluded.peak_context_tokens,
-			has_total_output_tokens = excluded.has_total_output_tokens,
-			has_peak_context_tokens = excluded.has_peak_context_tokens,
-			is_automated = excluded.is_automated,
-			termination_status = excluded.termination_status,
-			cwd = excluded.cwd,
-			git_branch = excluded.git_branch,
-			source_session_id = excluded.source_session_id,
-			source_version = excluded.source_version,
-			transcript_fidelity = excluded.transcript_fidelity,
-			parser_malformed_lines = excluded.parser_malformed_lines,
-			is_truncated = excluded.is_truncated,
-			-- last_write_incremental is deliberately NOT touched on conflict.
-			-- A bare upsert rewrites only the session row, not the message
-			-- rows, so it is not a re-normalization: the append-only full-parse
-			-- path (Claude/Codex, ReplaceMessages=false) upserts the session and
-			-- appends new messages while leaving earlier incrementally written
-			-- rows in place. Clearing the marker here would make parse-diff
-			-- report that still-present benign skew as real drift. The marker is
-			-- reset only by a genuine full message replacement
-			-- (resetIncrementalMarkerTx), and seeded false on fresh INSERT.
-			file_path = excluded.file_path,
-			file_size = excluded.file_size,
-			file_mtime = excluded.file_mtime,
-			next_ordinal = excluded.next_ordinal,
-			last_entry_uuid = excluded.last_entry_uuid,
-			-- COALESCE keeps a known linearity verdict when a caller
-			-- upserts without one (e.g. non-parse session writers).
-			claude_linear_parse = COALESCE(
-				excluded.claude_linear_parse, sessions.claude_linear_parse),
-			file_inode = excluded.file_inode,
-			file_device = excluded.file_device,
-			file_hash = excluded.file_hash,
-			source_archive_id = excluded.source_archive_id,
-			source_database_generation = excluded.source_database_generation`
-
-const upsertSessionSQL = upsertSessionBaseSQL + `,
-			deleted_at = CASE
-				WHEN sessions.deletion_cause = '` + deletionCauseSourceMissing + `' THEN NULL
-				ELSE sessions.deleted_at
-			END,
-			deletion_cause = CASE
-				WHEN sessions.deletion_cause = '` + deletionCauseSourceMissing + `' THEN NULL
-				ELSE sessions.deletion_cause
-			END`
-
 func sessionIsAutomated(s Session) bool {
 	return s.IsAutomated ||
 		(s.UserMessageCount <= 1 &&
@@ -753,33 +659,6 @@ func parserParentSessionID(s Session) *string {
 		return s.ParserParentSessionID
 	}
 	return s.ParentSessionID
-}
-
-func upsertSessionArgs(s Session) []any {
-	return []any{
-		s.ID, s.Project, s.Machine, s.Agent, s.FirstMessage, s.SessionName,
-		s.AgentLabel, s.Entrypoint, s.SessionKind,
-		s.StartedAt, s.EndedAt, s.MessageCount,
-		s.UserMessageCount, s.ParentSessionID, parserParentSessionID(s),
-		s.RelationshipType,
-		s.TotalOutputTokens, s.PeakContextTokens,
-		s.HasTotalOutputTokens, s.HasPeakContextTokens,
-		sessionIsAutomated(s),
-		s.TerminationStatus,
-		s.Cwd, s.GitBranch, s.SourceSessionID,
-		s.SourceVersion, s.TranscriptFidelity,
-		s.ParserMalformedLines,
-		s.IsTruncated,
-		// last_write_incremental is seeded false on fresh INSERT: a brand-new
-		// row starts fully normalized. On conflict the column is left as-is
-		// (see upsertSessionSQL) because a bare upsert does not re-normalize
-		// the stored messages; only a full message replacement clears it.
-		false,
-		s.FilePath, s.FileSize, s.FileMtime,
-		s.NextOrdinal, s.LastEntryUUID, s.ClaudeLinearParse,
-		s.FileInode, s.FileDevice, s.FileHash,
-		s.SourceArchiveID, s.SourceDatabaseGeneration,
-	}
 }
 
 func (db *DB) localArchiveIdentity(ctx context.Context) (ArchiveIdentity, error) {
@@ -834,13 +713,20 @@ func (db *DB) upsertSession(
 	stampSessionArchiveIdentity(&s, identity)
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	writer := db.getWriter()
-	return upsertSessionExec(
-		writer.Exec,
-		writer.QueryRow,
-		s,
-		reviveSourceMissing,
-	)
+	ctx := context.Background()
+	tx, err := db.beginBunWriteTx(ctx)
+	if err != nil {
+		return sessionUpsertResult{}, fmt.Errorf("beginning session upsert: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := upsertArchiveSessionRow(ctx, tx, s, reviveSourceMissing)
+	if err != nil {
+		return sessionUpsertResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return sessionUpsertResult{}, fmt.Errorf("committing session upsert: %w", err)
+	}
+	return result, nil
 }
 
 type sessionUpsertResult struct {
@@ -850,68 +736,201 @@ type sessionUpsertResult struct {
 	currentProject  string
 }
 
-func upsertSessionExec(
-	exec func(string, ...any) (sql.Result, error),
-	queryRow func(string, ...any) rowScanner,
+func upsertArchiveSessionRow(
+	ctx context.Context,
+	store bun.IDB,
 	s Session,
 	reviveSourceMissing bool,
 ) (sessionUpsertResult, error) {
 	_ = ValidateAndSanitize(&s, nil, nil)
 
-	// Check exclusion/trash state under the write lock to avoid a race with
-	// concurrent DeleteSession/EmptyTrash/RestoreSession.
-	var excluded int
-	err := queryRow(
-		"SELECT 1 FROM excluded_sessions WHERE id = ?", s.ID,
-	).Scan(&excluded)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return sessionUpsertResult{},
-			fmt.Errorf("checking exclusion for %s: %w", s.ID, err)
+	excluded, err := store.NewSelect().Model((*bunmodel.ExcludedSession)(nil)).
+		Where("id = ?", s.ID).Exists(ctx)
+	if err != nil {
+		return sessionUpsertResult{}, fmt.Errorf(
+			"checking exclusion for %s: %w", s.ID, err,
+		)
 	}
-	if excluded == 1 {
+	if excluded {
 		return sessionUpsertResult{}, ErrSessionExcluded
 	}
-	var previousProject string
-	var deletedAt, deletionCause sql.NullString
-	err = queryRow(
-		"SELECT project, deleted_at, deletion_cause FROM sessions WHERE id = ?", s.ID,
-	).Scan(&previousProject, &deletedAt, &deletionCause)
-	result := sessionUpsertResult{
-		inserted:        errors.Is(err, sql.ErrNoRows),
-		previousProject: previousProject,
-		currentProject:  s.Project,
-	}
-	if err != nil && !result.inserted {
-		return sessionUpsertResult{},
-			fmt.Errorf("checking session %s: %w", s.ID, err)
-	}
-	if deletedAt.Valid &&
-		(!deletionCause.Valid || deletionCause.String != deletionCauseSourceMissing) {
-		return sessionUpsertResult{}, ErrSessionTrashed
-	}
-	result.sourceMissing = deletionCause.Valid &&
-		deletionCause.String == deletionCauseSourceMissing
 
-	// data_version is intentionally NOT advanced here. The
-	// caller must call SetSessionDataVersion only after the
-	// associated message rewrite succeeds, so a transient
-	// failure to write messages doesn't mark the file as
-	// up-to-date and starve the rewrite on the next sync.
-	// New rows are seeded with 0 (the default) and bumped to
-	// the current version once their messages land.
-	query := upsertSessionBaseSQL
-	if reviveSourceMissing {
-		query = upsertSessionSQL
+	var current bunmodel.Session
+	err = store.NewSelect().Model(&current).Where("id = ?", s.ID).Scan(ctx)
+	inserted := errors.Is(err, sql.ErrNoRows)
+	if err != nil && !inserted {
+		return sessionUpsertResult{}, fmt.Errorf("checking session %s: %w", s.ID, err)
 	}
-	_, err = exec(
-		query,
-		upsertSessionArgs(s)...,
-	)
+	result := sessionUpsertResult{
+		inserted: inserted, currentProject: s.Project,
+	}
+	if !inserted {
+		result.previousProject = current.Project
+		if current.DeletedAt != nil &&
+			(current.DeletionCause == nil ||
+				*current.DeletionCause != deletionCauseSourceMissing) {
+			return sessionUpsertResult{}, ErrSessionTrashed
+		}
+		result.sourceMissing = current.DeletionCause != nil &&
+			*current.DeletionCause == deletionCauseSourceMissing
+	}
+
+	s.IsAutomated = sessionIsAutomated(s)
+	s.ParserParentSessionID = parserParentSessionID(s)
+	if inserted {
+		s.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	} else if s.CreatedAt == "" {
+		s.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	row, err := CanonicalSessionRow(s)
 	if err != nil {
-		return sessionUpsertResult{},
-			fmt.Errorf("upserting session %s: %w", s.ID, err)
+		return sessionUpsertResult{}, err
+	}
+	if inserted {
+		row.DataVersion = 0
+		row.TranscriptRevision = "0"
+		row.DeletedAt = nil
+		row.DeletionCause = nil
+		resetArchiveManagedSessionFields(&row)
+	} else {
+		preserveArchiveManagedSessionFields(&row, current)
+		if result.sourceMissing && reviveSourceMissing {
+			row.DeletedAt = nil
+			row.DeletionCause = nil
+		}
+	}
+	if err := UpsertSessionRow(ctx, store, row); err != nil {
+		return sessionUpsertResult{}, err
+	}
+
+	update := store.NewUpdate().Table("sessions").
+		Set("next_ordinal = ?", s.NextOrdinal).
+		Set("last_entry_uuid = ?", s.LastEntryUUID)
+	if s.ClaudeLinearParse != nil {
+		update = update.Set("claude_linear_parse = ?", *s.ClaudeLinearParse)
+	}
+	if inserted {
+		update = update.Set("last_write_incremental = 0")
+	}
+	if _, err := update.Where("id = ?", s.ID).Exec(ctx); err != nil {
+		return sessionUpsertResult{}, fmt.Errorf(
+			"writing SQLite session state %s: %w", s.ID, err,
+		)
 	}
 	return result, nil
+}
+
+func resetArchiveManagedSessionFields(row *bunmodel.Session) {
+	row.DisplayName = nil
+	row.ToolFailureSignalCount = 0
+	row.ToolRetryCount = 0
+	row.EditChurnCount = 0
+	row.ConsecutiveFailureMax = 0
+	row.Outcome = "unknown"
+	row.OutcomeConfidence = "low"
+	row.EndedWithRole = ""
+	row.FinalFailureStreak = 0
+	row.SignalsPendingSince = nil
+	row.CompactionCount = 0
+	row.MidTaskCompactionCount = 0
+	row.ContextPressureMax = nil
+	row.HealthScore = nil
+	row.HealthGrade = nil
+	row.HasToolCalls = false
+	row.HasContextData = false
+	row.SecretLeakCount = 0
+	row.SecretsRulesVersion = ""
+	row.QualitySignalVersion = 0
+	row.ShortPromptCount = 0
+	row.UnstructuredStart = false
+	row.MissingSuccessCriteriaCount = 0
+	row.MissingVerificationCount = 0
+	row.DuplicatePromptCount = 0
+	row.NoCodeContextCount = 0
+	row.RunawayToolLoopCount = 0
+}
+
+func preserveArchiveManagedSessionFields(
+	row *bunmodel.Session, current bunmodel.Session,
+) {
+	row.DisplayName = current.DisplayName
+	row.CreatedAt = current.CreatedAt
+	row.DeletedAt = current.DeletedAt
+	row.DeletionCause = current.DeletionCause
+	row.LocalModifiedAt = current.LocalModifiedAt
+	row.TranscriptRevision = current.TranscriptRevision
+	row.DataVersion = current.DataVersion
+	row.ToolFailureSignalCount = current.ToolFailureSignalCount
+	row.ToolRetryCount = current.ToolRetryCount
+	row.EditChurnCount = current.EditChurnCount
+	row.ConsecutiveFailureMax = current.ConsecutiveFailureMax
+	row.Outcome = current.Outcome
+	row.OutcomeConfidence = current.OutcomeConfidence
+	row.EndedWithRole = current.EndedWithRole
+	row.FinalFailureStreak = current.FinalFailureStreak
+	row.SignalsPendingSince = current.SignalsPendingSince
+	row.CompactionCount = current.CompactionCount
+	row.MidTaskCompactionCount = current.MidTaskCompactionCount
+	row.ContextPressureMax = current.ContextPressureMax
+	row.HealthScore = current.HealthScore
+	row.HealthGrade = current.HealthGrade
+	row.HasToolCalls = current.HasToolCalls
+	row.HasContextData = current.HasContextData
+	row.SecretLeakCount = current.SecretLeakCount
+	row.SecretsRulesVersion = current.SecretsRulesVersion
+	row.QualitySignalVersion = current.QualitySignalVersion
+	row.ShortPromptCount = current.ShortPromptCount
+	row.UnstructuredStart = current.UnstructuredStart
+	row.MissingSuccessCriteriaCount = current.MissingSuccessCriteriaCount
+	row.MissingVerificationCount = current.MissingVerificationCount
+	row.DuplicatePromptCount = current.DuplicatePromptCount
+	row.NoCodeContextCount = current.NoCodeContextCount
+	row.RunawayToolLoopCount = current.RunawayToolLoopCount
+}
+
+func insertArchiveSessionIfAbsentRow(
+	ctx context.Context, store bun.IDB, s Session,
+) error {
+	_ = ValidateAndSanitize(&s, nil, nil)
+
+	excluded, err := store.NewSelect().Model((*bunmodel.ExcludedSession)(nil)).
+		Where("id = ?", s.ID).Exists(ctx)
+	if err != nil {
+		return fmt.Errorf("checking exclusion for %s: %w", s.ID, err)
+	}
+	if excluded {
+		return ErrSessionExcluded
+	}
+
+	var current bunmodel.Session
+	err = store.NewSelect().Model(&current).Where("id = ?", s.ID).Scan(ctx)
+	if err == nil {
+		if current.DeletedAt != nil {
+			return ErrSessionTrashed
+		}
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("checking session %s: %w", s.ID, err)
+	}
+
+	s.IsAutomated = sessionIsAutomated(s)
+	s.ParserParentSessionID = parserParentSessionID(s)
+	s.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	row, err := CanonicalSessionRow(s)
+	if err != nil {
+		return err
+	}
+	row.DataVersion = 0
+	row.TranscriptRevision = "0"
+	row.DeletedAt = nil
+	row.DeletionCause = nil
+	resetArchiveManagedSessionFields(&row)
+	if _, err := store.NewInsert().Model(&row).
+		On("CONFLICT (id) DO NOTHING").Returning("").Exec(ctx); err != nil {
+		return fmt.Errorf("inserting session %s if absent: %w", s.ID, err)
+	}
+	return nil
 }
 
 // ReviveSourceMissingSession makes a watcher-tombstoned session visible after
@@ -945,29 +964,16 @@ func (db *DB) insertSessionIfAbsent(ctx context.Context, s Session) error {
 	stampSessionArchiveIdentity(&s, identity)
 	db.mu.Lock()
 	defer db.mu.Unlock()
-
-	var excluded int
-	_ = db.getWriter().QueryRowContext(
-		ctx, "SELECT 1 FROM excluded_sessions WHERE id = ?", s.ID,
-	).Scan(&excluded)
-	if excluded == 1 {
-		return ErrSessionExcluded
+	tx, err := db.beginBunWriteTx(ctx)
+	if err != nil {
+		return fmt.Errorf("beginning placeholder session insert: %w", err)
 	}
-	// A soft-deleted (trashed) session would satisfy ON CONFLICT DO NOTHING and
-	// silently leave the import attached to a hidden session. Reject it like
-	// UpsertSession does, under the same lock to avoid a restore/delete race.
-	var trashed int
-	_ = db.getWriter().QueryRowContext(
-		ctx, "SELECT 1 FROM sessions WHERE id = ? AND deleted_at IS NOT NULL", s.ID,
-	).Scan(&trashed)
-	if trashed == 1 {
-		return ErrSessionTrashed
+	defer func() { _ = tx.Rollback() }()
+	if err := insertArchiveSessionIfAbsentRow(ctx, tx, s); err != nil {
+		return err
 	}
-
-	if _, err := db.getWriter().ExecContext(
-		ctx, insertSessionIfAbsentSQL, upsertSessionArgs(s)...,
-	); err != nil {
-		return fmt.Errorf("inserting session %s if absent: %w", s.ID, err)
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing placeholder session insert: %w", err)
 	}
 	return nil
 }
@@ -1907,8 +1913,8 @@ func updateSessionIncrementalTx(
 			has_peak_context_tokens = ?,
 			termination_status = ?,
 			-- Mark the row as last written by the incremental-append path.
-			-- The full-replace writer (upsertSessionArgs) resets this to
-			-- false; parse-diff reads it to classify benign
+			-- The full-replace writer resets this after messages land;
+			-- parse-diff reads it to classify benign
 			-- incremental-vs-full skew.
 			last_write_incremental = 1
 		WHERE id = ?`,
