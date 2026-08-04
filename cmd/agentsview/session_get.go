@@ -186,13 +186,19 @@ func resolveBareCodebuffID(
 		// When the session exists only as a remote-synced row (host~ prefix),
 		// the unprefixed probe above returns nil. Enumerate host-prefixed
 		// canonical IDs via substring search over the session timestamp suffix,
-		// then filter by Machine before returning the first match.
+		// then collect every qualifying candidate with dedup. Apply the same
+		// zero/one/many result handling as the top-level multi-location resolver
+		// so --machine=* never silently selects the wrong session.
 		if machineFilter != "" && machineFilter != "local" {
 			suffix := ":" + project + ":" + rawID
 			ids, findErr := svc.FindSessionIDsByPartial(ctx, suffix, 20)
 			if findErr != nil {
 				return "", fmt.Errorf("lookup host-prefixed sessions for %q: %w", rawID, findErr)
 			}
+			var (
+				remoteCandidates []string
+				remoteSeen       = make(map[string]struct{})
+			)
 			for _, id := range ids {
 				if !strings.Contains(id, "~") {
 					continue
@@ -212,20 +218,32 @@ func resolveBareCodebuffID(
 				) {
 					continue
 				}
-				return id, nil
+				if _, dup := remoteSeen[id]; dup {
+					continue
+				}
+				remoteSeen[id] = struct{}{}
+				remoteCandidates = append(remoteCandidates, id)
+			}
+			switch len(remoteCandidates) {
+			case 0:
+				// No qualifying remote candidate — fall through.
+			case 1:
+				return remoteCandidates[0], nil
+			default:
+				return "", fmt.Errorf(
+					"ambiguous session id %q: matches %d canonical sessions: %s. "+
+						"Re-run with one of the canonical IDs to disambiguate",
+					rawID, len(remoteCandidates), strings.Join(remoteCandidates, ", "),
+				)
 			}
 		}
 		return "", nil
-	}
-	tryBoth := func(project string) string {
-		v, _ := tryBothWithErr(project)
-		return v
 	}
 	switch len(locations) {
 	case 0:
 		return "", nil
 	case 1:
-		return tryBoth(locations[0].ProjectHint), nil
+		return tryBothWithErr(locations[0].ProjectHint)
 	default:
 		var (
 			valid     []string

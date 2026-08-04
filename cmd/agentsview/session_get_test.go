@@ -38,9 +38,9 @@ func TestPrintSessionDetailHidesZeroSecretLeak(t *testing.T) {
 		"clean session should not show a Secrets line")
 }
 
-// stubGetService implements service.SessionService. Only Get is wired up;
-// every other method panics to surface unintended use. Tests must not
-// exercise them.
+// stubGetService implements service.SessionService. Only Get and
+// FindSessionIDsByPartial are wired up; every other method panics to
+// surface unintended use. Tests must not exercise them.
 type stubGetService struct {
 	// getDetails is keyed by ID; Get returns the pointer when present
 	// and nil + nil when absent.
@@ -49,6 +49,15 @@ type stubGetService struct {
 	getCalls []string
 	// getErr, when non-nil, is returned by Get in place of the lookup.
 	getErr error
+	// partialIDs is returned by FindSessionIDsByPartial. An empty
+	// (nil) slice defaults to []string{} to avoid panicking in
+	// callers that iterate the result.
+	partialIDs []string
+	// partialCalls records every (partial, limit) pair.
+	partialCalls []struct {
+		partial string
+		limit   int
+	}
 }
 
 func (s *stubGetService) Get(
@@ -59,6 +68,19 @@ func (s *stubGetService) Get(
 		return nil, s.getErr
 	}
 	return s.getDetails[id], nil
+}
+
+func (s *stubGetService) FindSessionIDsByPartial(
+	_ context.Context, partial string, limit int,
+) ([]string, error) {
+	s.partialCalls = append(s.partialCalls, struct {
+		partial string
+		limit   int
+	}{partial, limit})
+	if s.partialIDs == nil {
+		return []string{}, nil
+	}
+	return s.partialIDs, nil
 }
 
 // Stubs for the remaining SessionService methods — resolveBareCodebuffID
@@ -92,9 +114,6 @@ func (s *stubGetService) UsageSummary(context.Context, service.UsageRequest) (*s
 }
 func (s *stubGetService) UsagePairwiseComparison(context.Context, service.UsagePairwiseComparisonRequest) (*service.UsagePairwiseComparisonResponse, error) {
 	panic("UsagePairwiseComparison not expected")
-}
-func (s *stubGetService) FindSessionIDsByPartial(context.Context, string, int) ([]string, error) {
-	panic("FindSessionIDsByPartial not expected")
 }
 func (s *stubGetService) ListRecallEntries(context.Context, service.RecallFilter) (*service.RecallList, error) {
 	panic("ListRecallEntries not expected")
@@ -485,6 +504,90 @@ func TestIsCanonicalServiceSessionID_BareTimestampNotCanonical(t *testing.T) {
 	t.Parallel()
 	assert.False(t, isCanonicalServiceSessionID("1704067200"))
 	assert.False(t, isCanonicalServiceSessionID("2026-07-16T00-09-00.236Z"))
+}
+
+// TestResolveBareCodebuffID_RemoteHostPrefixedMatch exercises the
+// host-prefixed canonical ID resolution path: when the unprefixed
+// probe returns nil and the machine filter is non-local, the
+// resolver queries FindSessionIDsByPartial with the timestamp suffix
+// and surfaces a qualifying host~-prefixed session.
+func TestResolveBareCodebuffID_RemoteHostPrefixedMatch(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	stageCodebuffSession(t, tmp, "myproject", "1704067200")
+	cfg := config.Config{
+		LocalMachineName: "test-machine",
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {tmp},
+		},
+	}
+	// Local probe returns a detail whose machine is "test-machine",
+	// so codebuffMachineMatches("test-machine", "laptop", ...) rejects
+	// it. The unprefixed probe returns nil, falling through to the
+	// remote-probe path.
+	candidate := "codebuff:myproject:1704067200"
+	remoteID := "host~codebuff:myproject:1704067200"
+	svc := &stubGetService{
+		getDetails: map[string]*service.SessionDetail{
+			candidate: {Session: db.Session{
+				ID:      candidate,
+				Machine: "test-machine",
+			}},
+			remoteID: {Session: db.Session{
+				ID:      remoteID,
+				Machine: "laptop",
+			}},
+		},
+		partialIDs: []string{remoteID},
+	}
+	got, err := resolveBareCodebuffID(
+		context.Background(), svc, &cfg, "1704067200", "laptop",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, remoteID, got,
+		"host-prefixed remote session matching the machine filter must be returned")
+}
+
+// TestResolveBareCodebuffID_RemoteAmbiguity exercises the case where
+// multiple host-prefixed sessions match the same bare timestamp and
+// machine filter, producing an ambiguity error instead of silently
+// picking the first.
+func TestResolveBareCodebuffID_RemoteAmbiguity(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	stageCodebuffSession(t, tmp, "myproject", "1704067200")
+	cfg := config.Config{
+		LocalMachineName: "test-machine",
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {tmp},
+		},
+	}
+	// Only register remote-synced sessions — NO local candidate in
+	// getDetails so the unprefixed probe returns nil and falls
+	// through to the remote resolution path.
+	remoteA := "host-a~codebuff:myproject:1704067200"
+	remoteB := "host-b~codebuff:myproject:1704067200"
+	svc := &stubGetService{
+		getDetails: map[string]*service.SessionDetail{
+			remoteA: {Session: db.Session{
+				ID:      remoteA,
+				Machine: "host-a",
+			}},
+			remoteB: {Session: db.Session{
+				ID:      remoteB,
+				Machine: "host-b",
+			}},
+		},
+		partialIDs: []string{remoteA, remoteB},
+	}
+	got, err := resolveBareCodebuffID(
+		context.Background(), svc, &cfg, "1704067200", "*",
+	)
+	require.Error(t, err)
+	assert.Empty(t, got)
+	assert.Contains(t, err.Error(), "ambiguous session id")
+	assert.Contains(t, err.Error(), remoteA)
+	assert.Contains(t, err.Error(), remoteB)
 }
 
 // TestCodebuffMachineMatches_EmptyFilter pins the empty-string arm
