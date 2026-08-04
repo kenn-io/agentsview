@@ -1,6 +1,11 @@
 package bunmodel
 
-import "github.com/uptrace/bun"
+import (
+	"maps"
+	"sort"
+
+	"github.com/uptrace/bun"
+)
 
 // Session is the common durable session row. The source provenance fields are
 // required; adapters stamp them before writes reach the shared store.
@@ -80,4 +85,118 @@ type Session struct {
 
 	SourceArchiveID          string `bun:"source_archive_id,notnull,default:''"`
 	SourceDatabaseGeneration string `bun:"source_database_generation,notnull,default:''"`
+}
+
+// SessionColumnOwner classifies which side supplies a canonical session
+// column during archive ingestion. The archive owns user curation, derived
+// signals, lifecycle state, and ingestion revisions; the parser supplies the
+// remaining source fields.
+type SessionColumnOwner uint8
+
+const (
+	SessionColumnSource SessionColumnOwner = iota
+	SessionColumnArchive
+)
+
+// sessionColumnOwnership is deliberately exhaustive. Adding or removing a
+// canonical session column requires choosing its ingestion owner here; the
+// registry contract test rejects drift between this map and Session.
+var sessionColumnOwnership = map[string]SessionColumnOwner{
+	"id":                             SessionColumnSource,
+	"project":                        SessionColumnSource,
+	"machine":                        SessionColumnSource,
+	"agent":                          SessionColumnSource,
+	"agent_label":                    SessionColumnSource,
+	"entrypoint":                     SessionColumnSource,
+	"session_kind":                   SessionColumnSource,
+	"first_message":                  SessionColumnSource,
+	"display_name":                   SessionColumnArchive,
+	"session_name":                   SessionColumnSource,
+	"started_at":                     SessionColumnSource,
+	"ended_at":                       SessionColumnSource,
+	"message_count":                  SessionColumnSource,
+	"user_message_count":             SessionColumnSource,
+	"parent_session_id":              SessionColumnSource,
+	"parser_parent_session_id":       SessionColumnSource,
+	"relationship_type":              SessionColumnSource,
+	"total_output_tokens":            SessionColumnSource,
+	"peak_context_tokens":            SessionColumnSource,
+	"has_total_output_tokens":        SessionColumnSource,
+	"has_peak_context_tokens":        SessionColumnSource,
+	"is_automated":                   SessionColumnSource,
+	"tool_failure_signal_count":      SessionColumnArchive,
+	"tool_retry_count":               SessionColumnArchive,
+	"edit_churn_count":               SessionColumnArchive,
+	"consecutive_failure_max":        SessionColumnArchive,
+	"outcome":                        SessionColumnArchive,
+	"outcome_confidence":             SessionColumnArchive,
+	"ended_with_role":                SessionColumnArchive,
+	"final_failure_streak":           SessionColumnArchive,
+	"signals_pending_since":          SessionColumnArchive,
+	"compaction_count":               SessionColumnArchive,
+	"mid_task_compaction_count":      SessionColumnArchive,
+	"context_pressure_max":           SessionColumnArchive,
+	"health_score":                   SessionColumnArchive,
+	"health_grade":                   SessionColumnArchive,
+	"has_tool_calls":                 SessionColumnArchive,
+	"has_context_data":               SessionColumnArchive,
+	"secret_leak_count":              SessionColumnArchive,
+	"secrets_rules_version":          SessionColumnArchive,
+	"quality_signal_version":         SessionColumnArchive,
+	"short_prompt_count":             SessionColumnArchive,
+	"unstructured_start":             SessionColumnArchive,
+	"missing_success_criteria_count": SessionColumnArchive,
+	"missing_verification_count":     SessionColumnArchive,
+	"duplicate_prompt_count":         SessionColumnArchive,
+	"no_code_context_count":          SessionColumnArchive,
+	"runaway_tool_loop_count":        SessionColumnArchive,
+	"data_version":                   SessionColumnArchive,
+	"cwd":                            SessionColumnSource,
+	"git_branch":                     SessionColumnSource,
+	"source_session_id":              SessionColumnSource,
+	"source_version":                 SessionColumnSource,
+	"transcript_fidelity":            SessionColumnSource,
+	"parser_malformed_lines":         SessionColumnSource,
+	"is_truncated":                   SessionColumnSource,
+	"deleted_at":                     SessionColumnArchive,
+	"deletion_cause":                 SessionColumnArchive,
+	"termination_status":             SessionColumnSource,
+	"file_path":                      SessionColumnSource,
+	"file_size":                      SessionColumnSource,
+	"file_mtime":                     SessionColumnSource,
+	"file_inode":                     SessionColumnSource,
+	"file_device":                    SessionColumnSource,
+	"file_hash":                      SessionColumnSource,
+	"local_modified_at":              SessionColumnArchive,
+	"transcript_revision":            SessionColumnArchive,
+	"created_at":                     SessionColumnArchive,
+	"source_archive_id":              SessionColumnSource,
+	"source_database_generation":     SessionColumnSource,
+}
+
+// SessionColumnOwnership returns the explicit archive-ingestion owner for a
+// canonical session column.
+func SessionColumnOwnership(column string) (SessionColumnOwner, bool) {
+	owner, ok := sessionColumnOwnership[column]
+	return owner, ok
+}
+
+// SessionColumnsOwnedBy returns a stable copy of the columns assigned to one
+// archive-ingestion owner.
+func SessionColumnsOwnedBy(owner SessionColumnOwner) []string {
+	columns := make([]string, 0, len(sessionColumnOwnership))
+	for column, columnOwner := range sessionColumnOwnership {
+		if columnOwner == owner {
+			columns = append(columns, column)
+		}
+	}
+	sort.Strings(columns)
+	return columns
+}
+
+// SessionColumnOwnerships returns a copy for schema invariant checks.
+func SessionColumnOwnerships() map[string]SessionColumnOwner {
+	owners := make(map[string]SessionColumnOwner, len(sessionColumnOwnership))
+	maps.Copy(owners, sessionColumnOwnership)
+	return owners
 }

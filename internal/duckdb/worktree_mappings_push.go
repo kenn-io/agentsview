@@ -98,58 +98,34 @@ func filterWorktreeMappingsForDuckScope(
 
 // commitWorktreeMappingPublication writes one publication window (a full
 // archive-scoped rebuild or a tombstoned delta) to the DuckDB mirror in a
-// single transaction, routing mutations through the same execMutation
-// executor identity sync uses.
+// single Bun transaction.
 func (s *Sync) commitWorktreeMappingPublication(
 	ctx context.Context,
 	fullPublication bool,
 	mappings []db.WorktreeProjectMapping,
 	deletes []db.WorktreeMappingKey,
 ) error {
-	tx, err := s.duck.BeginTx(ctx, nil)
+	rows, err := db.CanonicalWorktreeProjectMappingRows(s.archiveID, mappings)
+	if err != nil {
+		return fmt.Errorf("converting duckdb worktree mappings: %w", err)
+	}
+	tx, err := s.bun.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning duckdb mapping publication tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	exec := func(stmt string, args ...any) error {
-		return s.execMutation(ctx, tx, stmt, args...)
-	}
-
 	if fullPublication {
-		if err := exec(`
-			DELETE FROM source_worktree_project_mappings
-			WHERE source_archive_id = ?`, s.archiveID); err != nil {
+		if err := db.ClearWorktreeProjectMappingRows(ctx, tx, s.archiveID); err != nil {
 			return fmt.Errorf("clearing duckdb mapping mirror scope: %w", err)
 		}
-	} else {
-		for _, key := range deletes {
-			if err := exec(`
-				DELETE FROM source_worktree_project_mappings
-				WHERE source_archive_id = ?
-				  AND machine = ? AND path_prefix = ?`,
-				s.archiveID, key.Machine, key.PathPrefix); err != nil {
-				return fmt.Errorf("deleting duckdb mapping tombstone: %w", err)
-			}
-		}
+	} else if err := db.DeleteWorktreeProjectMappingRows(
+		ctx, tx, s.archiveID, deletes,
+	); err != nil {
+		return fmt.Errorf("deleting duckdb mapping tombstones: %w", err)
 	}
-	for _, m := range mappings {
-		if err := exec(`
-			INSERT INTO source_worktree_project_mappings
-			(source_archive_id, machine, path_prefix, layout, project,
-			 original_project, enabled, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT (source_archive_id, machine, path_prefix)
-			DO UPDATE SET
-				layout = excluded.layout,
-				project = excluded.project,
-				original_project = excluded.original_project,
-				enabled = excluded.enabled,
-				updated_at = excluded.updated_at`,
-			s.archiveID, m.Machine, m.PathPrefix, m.Layout, m.Project,
-			m.OriginalProject, m.Enabled, m.CreatedAt, m.UpdatedAt); err != nil {
-			return fmt.Errorf("upserting duckdb mapping mirror row: %w", err)
-		}
+	if err := db.UpsertWorktreeProjectMappingRows(ctx, tx, rows, nil); err != nil {
+		return fmt.Errorf("upserting duckdb mapping mirror rows: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing duckdb mapping publication: %w", err)

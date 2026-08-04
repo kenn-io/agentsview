@@ -46,9 +46,6 @@ func CanonicalModelPricingRows(
 			CacheReadMicrodollarsPerMTok:     price.CacheReadPerMTok.Microdollars,
 			UpdatedAt:                        updatedAt,
 		})
-		if strings.HasPrefix(pattern, "_") {
-			continue
-		}
 		for _, band := range price.Bands {
 			threshold, err := safecast.Convert[int64](band.AboveInputTokens)
 			if err != nil {
@@ -144,7 +141,6 @@ func UpsertModelPricingRows(
 	bands []bunmodel.ModelPricingBand,
 ) error {
 	patterns := make([]string, 0, len(prices))
-	bandPatterns := make([]string, 0, len(prices))
 	allowed := make(map[string]struct{}, len(prices))
 	for _, price := range prices {
 		if price.ModelPattern == "" {
@@ -158,20 +154,11 @@ func UpsertModelPricingRows(
 		}
 		allowed[price.ModelPattern] = struct{}{}
 		patterns = append(patterns, price.ModelPattern)
-		if !strings.HasPrefix(price.ModelPattern, "_") {
-			bandPatterns = append(bandPatterns, price.ModelPattern)
-		}
 	}
 	for _, band := range bands {
 		if _, ok := allowed[band.ModelPattern]; !ok {
 			return fmt.Errorf(
 				"upserting model pricing rows: band model %q has no base row",
-				band.ModelPattern,
-			)
-		}
-		if strings.HasPrefix(band.ModelPattern, "_") {
-			return fmt.Errorf(
-				"upserting model pricing rows: metadata model %q cannot own bands",
 				band.ModelPattern,
 			)
 		}
@@ -194,11 +181,11 @@ func UpsertModelPricingRows(
 		for _, existing := range existingPrices {
 			existingPriceByPattern[existing.ModelPattern] = existing
 		}
-		defaultRevision := time.Now().UTC().Format(time.RFC3339Nano)
+		defaultRevision := bunmodel.NewTimestamp(time.Now())
 		var existingBands []bunmodel.ModelPricingBand
-		if len(bandPatterns) > 0 {
+		if len(patterns) > 0 {
 			if err := tx.NewSelect().Model(&existingBands).
-				Where("model_pattern IN (?)", bun.List(bandPatterns)).Scan(ctx); err != nil {
+				Where("model_pattern IN (?)", bun.List(patterns)).Scan(ctx); err != nil {
 				return fmt.Errorf("reading model pricing band revisions: %w", err)
 			}
 		}
@@ -210,7 +197,7 @@ func UpsertModelPricingRows(
 			map[bandKey]bunmodel.ModelPricingBand, len(existingBands),
 		)
 		incomingBandKeys := make(map[bandKey]struct{}, len(bands))
-		bandContentChanged := make(map[string]bool, len(bandPatterns))
+		bandContentChanged := make(map[string]bool, len(patterns))
 		for _, existing := range existingBands {
 			existingBandByKey[bandKey{
 				existing.ModelPattern, existing.AboveInputTokens,
@@ -252,7 +239,7 @@ func UpsertModelPricingRows(
 				return fmt.Errorf("upserting model pricing rows: %w", err)
 			}
 		}
-		return ReplaceModelPricingBandRows(ctx, tx, bandPatterns, bands)
+		return ReplaceModelPricingBandRows(ctx, tx, patterns, bands)
 	})
 }
 
@@ -311,26 +298,19 @@ func modelPricingBandValuesEqual(
 		left.CacheReadMicrodollarsPerMTok == right.CacheReadMicrodollarsPerMTok
 }
 
-func nextPricingRevision(existing, proposed, fallback string) string {
-	if proposed == "" {
+func nextPricingRevision(
+	existing, proposed, fallback bunmodel.Timestamp,
+) bunmodel.Timestamp {
+	if proposed.IsZero() {
 		proposed = fallback
 	}
-	existingTime, existingErr := bunmodel.ParseTimestamp(existing)
-	proposedTime, proposedErr := bunmodel.ParseTimestamp(proposed)
-	if proposedErr != nil {
-		proposed = fallback
-		proposedTime, proposedErr = bunmodel.ParseTimestamp(proposed)
-	}
-	if existingErr != nil {
-		if proposedErr == nil {
-			return proposed
-		}
-		return fallback
-	}
-	if proposedErr == nil && proposedTime.After(existingTime.Time) {
+	if existing.IsZero() {
 		return proposed
 	}
-	return existingTime.Add(time.Microsecond).UTC().Format(time.RFC3339Nano)
+	if proposed.After(existing.Time) {
+		return proposed
+	}
+	return bunmodel.NewTimestamp(existing.Add(time.Microsecond))
 }
 
 // ReplaceModelPricingBandRows replaces bands for modelPatterns on the supplied
