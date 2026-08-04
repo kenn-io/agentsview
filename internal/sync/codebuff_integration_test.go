@@ -456,6 +456,17 @@ func TestSyncCodebuffMetaOnlySessionKeepsCounts(t *testing.T) {
 		"meta-derived counts must survive sync; a 0 here means "+
 			"the engine recomputed from the empty parsed-message "+
 			"slice and overwrote chat-meta.json's count")
+	require.NotNil(t, sess.StartedAt,
+		"meta-only session must have a StartedAt timestamp; nil means "+
+			"the parser left it unset and analytics would fall back to "+
+			"import-time created_at, incorrectly dating historical sessions")
+	require.NotEmpty(t, *sess.StartedAt,
+		"StartedAt must be non-empty for a meta-only session")
+	require.NotNil(t, sess.EndedAt,
+		"meta-only session must have an EndedAt timestamp; nil means "+
+			"the parser left it unset")
+	require.NotEmpty(t, *sess.EndedAt,
+		"EndedAt must be non-empty for a meta-only session")
 }
 
 // TestSyncCodebuffMetaOnlyDriftReparsesSession pins the roborev LOW
@@ -870,7 +881,8 @@ func TestSyncCodebuffProviderStatHashRemoteStoresUnderLogicalKey(t *testing.T) {
 			if !strings.HasPrefix(p, root) {
 				return p
 			}
-			return rewritePrefix + strings.TrimPrefix(p, root+string(filepath.Separator))
+			trimmed := strings.TrimPrefix(p, root+string(filepath.Separator))
+			return rewritePrefix + filepath.ToSlash(trimmed)
 		},
 	})
 	t.Cleanup(engine.Close)

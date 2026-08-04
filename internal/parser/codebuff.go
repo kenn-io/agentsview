@@ -186,6 +186,21 @@ func parseCodebuffSession(
 		}
 	}
 
+	// Fall back StartedAt/EndedAt for sessions whose transcript carries
+	// no parseable message timestamps (empty chat-messages.json, or
+	// messages without timestamp fields). Analytics and sorting need a
+	// real timestamp; fall back to the session directory date, then the
+	// source mtime as a last resort.
+	if startedAt.IsZero() && !sessionDate.IsZero() {
+		startedAt = sessionDate
+	}
+	if startedAt.IsZero() && fileInfo.Mtime > 0 {
+		startedAt = time.Unix(0, fileInfo.Mtime)
+	}
+	if endedAt.IsZero() && !startedAt.IsZero() {
+		endedAt = startedAt
+	}
+
 	sess := &ParsedSession{
 		ID:                  fullID,
 		Project:             project,

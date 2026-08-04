@@ -183,6 +183,38 @@ func resolveBareCodebuffID(
 			}
 			return candidateID, nil
 		}
+		// When the session exists only as a remote-synced row (host~ prefix),
+		// the unprefixed probe above returns nil. Enumerate host-prefixed
+		// canonical IDs via substring search over the session timestamp suffix,
+		// then filter by Machine before returning the first match.
+		if machineFilter != "" && machineFilter != "local" {
+			suffix := ":" + project + ":" + rawID
+			ids, findErr := svc.FindSessionIDsByPartial(ctx, suffix, 20)
+			if findErr != nil {
+				return "", fmt.Errorf("lookup host-prefixed sessions for %q: %w", rawID, findErr)
+			}
+			for _, id := range ids {
+				if !strings.Contains(id, "~") {
+					continue
+				}
+				if !strings.HasSuffix(id, suffix) {
+					continue
+				}
+				detail, err := svc.Get(ctx, id)
+				if err != nil {
+					return "", err
+				}
+				if detail == nil {
+					continue
+				}
+				if !codebuffMachineMatches(
+					detail.Machine, machineFilter, localMachine,
+				) {
+					continue
+				}
+				return id, nil
+			}
+		}
 		return "", nil
 	}
 	tryBoth := func(project string) string {
