@@ -266,12 +266,12 @@ func TestPGListProjectIdentityObservationsChunksLargeLabelLists(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, EnsureSchema(ctx, pg, schema))
 
-	// Cross the maxPGVars chunk boundary with duplicate labels that
+	// Cross the shared Bun list's 500-label chunk boundary with duplicates that
 	// straddle it, and interleave two source archives across the label
 	// range: the ORDER BY leads with source_archive_id, so concatenated
 	// per-chunk (label-range) results are not globally ordered until the
 	// Go re-sort restores the documented ordering.
-	const labelCount = maxPGVars + 50
+	const labelCount = 550
 	observedAt := time.Date(2025, 6, 2, 10, 0, 0, 0, time.UTC)
 	labels := make([]string, 0, 2*labelCount)
 	const batch = 200

@@ -111,13 +111,14 @@ func (db *DB) ApplyWorktreeReclassification(
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	tx, err := db.getWriter().BeginTx(ctx, nil)
+	bunTx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return WorktreeProjectMapping{}, WorktreeReclassificationPreview{}, fmt.Errorf(
 			"beginning worktree reclassification apply: %w", err,
 		)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = bunTx.Rollback() }()
+	tx := bunTx.Tx
 
 	stored, err := loadWorktreeMappingsForMachineTx(ctx, tx, normalized.Machine)
 	if err != nil {
@@ -156,14 +157,14 @@ func (db *DB) ApplyWorktreeReclassification(
 		updated += changed
 		if changed > 0 {
 			if err := reconcileSessionProjectIdentityAggregatesTx(
-				ctx, tx, update.id,
+				ctx, bunTx, update.id,
 				[]string{update.currentProject, update.nextProject},
 			); err != nil {
 				return WorktreeProjectMapping{}, WorktreeReclassificationPreview{}, err
 			}
 		}
 	}
-	if err := tx.Commit(); err != nil {
+	if err := bunTx.Commit(); err != nil {
 		return WorktreeProjectMapping{}, WorktreeReclassificationPreview{}, fmt.Errorf(
 			"committing worktree reclassification apply: %w", err,
 		)
