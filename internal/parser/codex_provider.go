@@ -14,14 +14,53 @@ import (
 var _ Provider = (*codexProvider)(nil)
 var _ ActivityHintProvider = (*codexProvider)(nil)
 
+// codexProviderSpec parameterizes the one shared Codex-format provider
+// implementation for Codex and its TraeX fork. Both reuse the same
+// discovery, source-lookup, fingerprinting, and parsing code; they differ
+// only in the agent label and ID prefix applied via relabel. TraeX parses
+// through the Codex rollout reader and then relabels the result onto its
+// own agent and ID prefix.
+type codexProviderSpec struct {
+	agent AgentType
+	// relabel rewrites a parsed Codex-format result onto this agent's
+	// identity, and is nil for Codex itself. The session is nil on the
+	// incremental path, which keeps the stored session ID and only needs
+	// the appended message rows relabeled.
+	relabel func(*ParsedSession, []ParsedMessage)
+}
+
+func codexProviderSpecForAgent(agent AgentType) codexProviderSpec {
+	switch agent {
+	case AgentTraeX:
+		return codexProviderSpec{
+			agent:   AgentTraeX,
+			relabel: relabelCodexResultAsTraeX,
+		}
+	default:
+		return codexProviderSpec{agent: AgentCodex}
+	}
+}
+
 type codexProviderFactory struct {
 	def         AgentDef
+	spec        codexProviderSpec
 	cursorCache *codexCursorCache
 }
 
 func newCodexProviderFactory(def AgentDef) ProviderFactory {
 	return &codexProviderFactory{
 		def:         cloneAgentDef(def),
+		spec:        codexProviderSpecForAgent(AgentCodex),
+		cursorCache: newProductionCodexCursorCache(),
+	}
+}
+
+// newTraeXProviderFactory serves TRAE CLI's rollout archive with the Codex
+// provider, relabeling every parsed session onto the traex: ID prefix.
+func newTraeXProviderFactory(def AgentDef) ProviderFactory {
+	return &codexProviderFactory{
+		def:         cloneAgentDef(def),
+		spec:        codexProviderSpecForAgent(AgentTraeX),
 		cursorCache: newProductionCodexCursorCache(),
 	}
 }
@@ -42,13 +81,15 @@ func (f *codexProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 			Caps:   codexProviderCapabilities(),
 			Config: cfg,
 		},
-		sources:     newCodexSourceSet(cfg.Roots),
+		spec:        f.spec,
+		sources:     newCodexSourceSet(f.spec.agent, cfg.Roots),
 		cursorCache: f.cursorCache,
 	}
 }
 
 type codexProvider struct {
 	ProviderBase
+	spec        codexProviderSpec
 	sources     codexSourceSet
 	cursorCache *codexCursorCache
 }
@@ -219,6 +260,9 @@ func (p *codexProvider) Parse(
 			SkipReason:        SkipNoSession,
 		}, nil
 	}
+	if p.spec.relabel != nil {
+		p.spec.relabel(sess, msgs)
+	}
 	if req.Fingerprint.Hash != "" {
 		sess.File.Hash = req.Fingerprint.Hash
 	}
@@ -326,6 +370,10 @@ func (p *codexProvider) ParseIncremental(
 		result.cursor,
 	)
 
+	if p.spec.relabel != nil {
+		p.spec.relabel(nil, result.messages)
+	}
+
 	totalOut, peakCtx, hasTotalOut, hasPeakCtx :=
 		codexProviderTokenTotals(result.messages)
 	termination := codexIncrementalTermination(result.cursor.lastTaskEvent)
@@ -352,11 +400,18 @@ type codexSource struct {
 }
 
 type codexSourceSet struct {
+	// agent labels the sources this set emits. Codex-format forks share
+	// the layout but must not share a discovery namespace: keying sources
+	// by agent keeps a TraeX UUID from colliding with a Codex one.
+	agent AgentType
 	roots []string
 }
 
-func newCodexSourceSet(roots []string) codexSourceSet {
-	return codexSourceSet{roots: cleanJSONLRoots(roots)}
+func newCodexSourceSet(agent AgentType, roots []string) codexSourceSet {
+	if agent == "" {
+		agent = AgentCodex
+	}
+	return codexSourceSet{agent: agent, roots: cleanJSONLRoots(roots)}
 }
 
 func (s codexSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
@@ -560,7 +615,7 @@ func (s codexSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 			Path:         root,
 			Recursive:    true,
 			IncludeGlobs: []string{"*.jsonl"},
-			DebounceKey:  string(AgentCodex) + ":sessions:" + root,
+			DebounceKey:  string(s.agent) + ":sessions:" + root,
 		})
 		for _, shallow := range ResolveCodexShallowWatchRoots(root) {
 			shallow = filepath.Clean(shallow)
@@ -572,7 +627,7 @@ func (s codexSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 				Path:         shallow,
 				Recursive:    false,
 				IncludeGlobs: []string{CodexSessionIndexFilename},
-				DebounceKey:  string(AgentCodex) + ":index:" + shallow,
+				DebounceKey:  string(s.agent) + ":index:" + shallow,
 			})
 		}
 	}
@@ -743,8 +798,8 @@ func (s codexSourceSet) sourceRef(
 		return SourceRef{}, false
 	}
 	return SourceRef{
-		Provider:       AgentCodex,
-		Key:            codexSourceKey(uuid),
+		Provider:       s.agent,
+		Key:            codexSourceKey(s.agent, uuid),
 		DisplayPath:    path,
 		FingerprintKey: path,
 		Opaque: codexSource{
@@ -770,7 +825,7 @@ func (s codexSourceSet) directPathSource(
 		return SourceRef{}, false
 	}
 	return SourceRef{
-		Provider:       AgentCodex,
+		Provider:       s.agent,
 		Key:            path,
 		DisplayPath:    path,
 		FingerprintKey: path,
@@ -809,16 +864,18 @@ func (s codexSourceSet) canonicalSource(
 	return best, true, nil
 }
 
-func codexSourceKey(uuid string) string {
-	return string(AgentCodex) + ":" + uuid
+func codexSourceKey(agent AgentType, uuid string) string {
+	return string(agent) + ":" + uuid
 }
 
-// CodexSourceKey is the discovery identity of a Codex session UUID. Every
-// on-disk copy of a duplicated UUID shares this key, so the sync engine's
-// reconciliation index resolves same-UUID replacements with one bounded
-// lookup instead of an archive walk.
-func CodexSourceKey(uuid string) string {
-	return codexSourceKey(uuid)
+// CodexSourceKey is the discovery identity of a Codex-format session UUID
+// under the given agent. Every on-disk copy of a duplicated UUID shares this
+// key, so the sync engine's reconciliation index resolves same-UUID
+// replacements with one bounded lookup instead of an archive walk. The agent
+// keeps Codex and its TraeX fork in separate identity namespaces even when
+// both archives happen to hold the same UUID.
+func CodexSourceKey(agent AgentType, uuid string) string {
+	return codexSourceKey(agent, uuid)
 }
 
 func preferCodexSource(candidate, current SourceRef) bool {

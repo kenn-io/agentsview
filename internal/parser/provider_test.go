@@ -221,6 +221,9 @@ func TestVerifiedLocalStatCapabilitiesMatchConsumers(t *testing.T) {
 	wantSupported := map[AgentType]bool{
 		AgentClaude: true,
 		AgentCodex:  true,
+		// TraeX shares the Codex provider; the gate stats the transcript and
+		// only looks for a session_index.jsonl sidecar under Codex itself.
+		AgentTraeX: true,
 	}
 	for _, factory := range ProviderFactories() {
 		agent := factory.Definition().Type

@@ -39,10 +39,12 @@ type resumeResponse struct {
 }
 
 // resumeAgents maps agent type strings to their resume command templates.
-// The %s placeholder is replaced with the (quoted) session ID.
+// The %s placeholder is replaced with the (quoted) session ID. TraeX ships the
+// traex, traecli, and trae-cli aliases; the shortest is used.
 var resumeAgents = map[string]string{
 	"claude":   "claude --resume %s",
 	"codex":    "codex resume %s",
+	"traex":    "traex resume %s",
 	"copilot":  "copilot --resume=%s",
 	"cursor":   "cursor agent --resume %s",
 	"gemini":   "gemini --resume %s",
@@ -64,14 +66,14 @@ func resumeCommand(agent, tmpl, rawID, model string) string {
 	switch agent {
 	case "claude":
 		cmd += " --model " + shellQuote(model)
-	case "codex":
+	case "codex", "traex":
 		cmd += " -m " + shellQuote(model)
 	}
 	return cmd
 }
 
 func resumeAgentNeedsModel(agent string) bool {
-	return agent == "claude" || agent == "codex"
+	return agent == "claude" || agent == "codex" || agent == "traex"
 }
 
 func primaryResumeModel(counts []db.ModelCount) string {

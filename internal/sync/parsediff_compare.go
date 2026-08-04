@@ -370,11 +370,11 @@ func markIncrementalHistory(d *FieldDiff, agent string) {
 
 // usesIncrementalAppend reports whether an agent's sync path can clear
 // termination_status to NULL via UpdateSessionIncremental. Only the
-// JSONL-tail agents (Claude, Codex) take that path; see
+// JSONL-tail agents (Claude and the Codex format family) take that path; see
 // tryIncrementalJSONL call sites in engine.go.
 func usesIncrementalAppend(agent string) bool {
 	return agent == string(parser.AgentClaude) ||
-		agent == string(parser.AgentCodex)
+		isCodexFormatAgent(parser.AgentType(agent))
 }
 
 // incrementalArtifactField reports whether a non-informational diff on
