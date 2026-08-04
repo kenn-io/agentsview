@@ -9,7 +9,7 @@ description: Release history for AgentsView
 
 ## 0.40.1
 
-<small>2026-08-03</small>
+<small>2026-08-04</small>
 
 **Bug fixes**
 
@@ -17,8 +17,9 @@ description: Release history for AgentsView
   the step's trailing usage record, and price the explicit `k2d6-agent` model
   alias at K2.6 rates across SQLite, PostgreSQL, and DuckDB. Existing affected
   sessions are repaired on resync.
-- Keep PostgreSQL serve startup audits compatible with valid multibyte text in
-  compressed rows on affected PostgreSQL minor releases.
+- Prevent `agentsview pg serve` from failing its startup automation audit with
+  an invalid UTF-8 error when affected PostgreSQL minor releases slice
+  compressed multibyte session text.
 
 **Acknowledgements**
 
