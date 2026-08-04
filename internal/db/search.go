@@ -599,7 +599,7 @@ func (capability sqliteFullTextCapability) SearchContent(
 		JOIN messages AS message ON message.id = messages_fts.rowid
 		JOIN sessions AS session ON session.id = message.session_id
 		WHERE messages_fts MATCH ? AND ` + system + `
-			AND message.session_id IN (SELECT id FROM sessions WHERE ` + where + `)
+			AND message.session_id IN (SELECT id FROM sessions AS session WHERE ` + where + `)
 		ORDER BY julianday(COALESCE(NULLIF(session.ended_at, ''),
 			NULLIF(session.started_at, ''), session.created_at)) DESC,
 			message.session_id ASC, message.ordinal ASC, message.id ASC
@@ -634,7 +634,7 @@ func (capability sqliteFullTextCapability) SearchHybridContent(
 			AND message.role IN ('user', 'assistant')
 			AND message.is_system = FALSE
 			AND ` + SystemPrefixSQL("message.content", "message.role") + `
-			AND message.session_id IN (SELECT id FROM sessions WHERE ` + where + `)
+			AND message.session_id IN (SELECT id FROM sessions AS session WHERE ` + where + `)
 		ORDER BY messages_fts.rank, message.id
 		LIMIT ? OFFSET ?`
 	args := []any{PrepareFTSQuery(filter.Pattern)}

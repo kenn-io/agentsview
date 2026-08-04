@@ -41,7 +41,7 @@ func (postgresFullTextCapability) SearchHybridContent(
 		WHERE %s
 		  AND m.role IN ('user', 'assistant') AND m.is_system = FALSE
 		  AND %s
-		  AND m.session_id IN (SELECT id FROM sessions WHERE %s)
+		  AND m.session_id IN (SELECT id FROM sessions AS session WHERE %s)
 		ORDER BY COALESCE(s.ended_at, s.started_at, s.created_at) DESC NULLS LAST,
 		         m.session_id ASC, m.ordinal ASC
 		LIMIT ? OFFSET ?`,

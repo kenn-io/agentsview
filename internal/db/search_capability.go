@@ -16,32 +16,37 @@ type SearchHit struct {
 // ContentSearchHit is the engine-owned portion of a content search result.
 // Stable coordinates let BunStore hydrate and order every engine identically.
 type ContentSearchHit struct {
-	SessionID    string
-	Ordinal      int
-	OrdinalStart int
-	OrdinalEnd   int
-	Subordinate  bool
-	DocKey       string
-	Location     string
-	MessageID    *int64
-	CallIndex    *int
-	EventIndex   *int
-	SourceUUID   string
-	ToolName     string
-	Snippet      string
-	Timestamp    string
-	Score        *float64
+	SessionID     string
+	Ordinal       int
+	OrdinalStart  int
+	OrdinalEnd    int
+	RangeResolved bool
+	Subordinate   bool
+	DocKey        string
+	Location      string
+	MessageID     *int64
+	CallIndex     *int
+	EventIndex    *int
+	SourceUUID    string
+	ToolName      string
+	Snippet       string
+	Timestamp     string
+	Score         *float64
 }
 
 // FullTextCapability owns engine-specific lexical matching. Search must apply
 // the canonical project/deleted-session scope before its LIMIT/OFFSET and
 // return at most one hit per visible session; BunStore owns policy and final
 // hydration, but this pushdown keeps cursor windows complete and bounded.
-// SearchSession is a separate substring operation and remains callable when
-// Available reports that the global full-text index is absent.
 type FullTextCapability interface {
 	Available() bool
 	Search(context.Context, bun.IDB, SearchFilter) ([]SearchHit, error)
+}
+
+// SessionSearchCapability owns matching within one known session. It is
+// separate from FullTextCapability because adapters can provide this bounded
+// operation even when their global full-text index is unavailable.
+type SessionSearchCapability interface {
 	SearchSession(context.Context, bun.IDB, string, string) ([]int, error)
 }
 
@@ -126,9 +131,10 @@ func (c vectorSemanticCapability) SearchContent(
 		out[i] = ContentSearchHit{
 			SessionID: hit.SessionID, Ordinal: hit.Ordinal,
 			OrdinalStart: hit.OrdinalStart, OrdinalEnd: hit.OrdinalEnd,
-			Subordinate: hit.Subordinate,
-			DocKey:      UnitFusionKey(hit.SessionID, hit.OrdinalStart),
-			Location:    "message", Snippet: hit.Snippet, Score: &score,
+			RangeResolved: true,
+			Subordinate:   hit.Subordinate,
+			DocKey:        UnitFusionKey(hit.SessionID, hit.OrdinalStart),
+			Location:      "message", Snippet: hit.Snippet, Score: &score,
 		}
 	}
 	return out, nil

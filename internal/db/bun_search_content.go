@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"regexp"
 	"strings"
@@ -164,22 +165,26 @@ func (s *BunStore) searchContentSemantic(
 	ctx context.Context, filter ContentSearchFilter,
 	capability SemanticCapability,
 ) (ContentSearchPage, error) {
+	attemptFilter := filter
+	attemptFilter.Limit = max(filter.Limit*4, SemanticOverfetchMin)
+	var hits []ContentSearchHit
+	if err := s.view(ctx, func(store bun.IDB) error {
+		var err error
+		hits, err = capability.SearchContent(ctx, store, attemptFilter)
+		return err
+	}); err != nil {
+		return ContentSearchPage{}, fmt.Errorf("searching semantic capability: %w", err)
+	}
 	var page ContentSearchPage
 	err := s.consistentView(ctx, func(store bun.IDB) error {
-		attemptFilter := filter
-		attemptFilter.Limit = max(filter.Limit*4, SemanticOverfetchMin)
-		hits, err := capability.SearchContent(
-			ctx, store, attemptFilter,
+		eligibleHits, err := s.filterContentHitsBySessionScope(
+			ctx, store, filter, hits,
 		)
-		if err != nil {
-			return fmt.Errorf("searching semantic capability: %w", err)
-		}
-		hits, err = s.filterContentHitsBySessionScope(ctx, store, filter, hits)
 		if err != nil {
 			return err
 		}
-		eligible := make([]ContentSearchHit, 0, len(hits))
-		for _, hit := range hits {
+		eligible := make([]ContentSearchHit, 0, len(eligibleHits))
+		for _, hit := range eligibleHits {
 			if !ScopeExcludes(filter.Scope, hit.Subordinate) {
 				eligible = append(eligible, hit)
 			}
@@ -208,25 +213,17 @@ func (s *BunStore) searchContentHybrid(
 	ctx context.Context, filter ContentSearchFilter,
 	semantic SemanticCapability, lexical HybridLexicalCapability,
 ) (ContentSearchPage, error) {
-	var page ContentSearchPage
-	err := s.consistentView(ctx, func(store bun.IDB) error {
-		candidateLimit := max(filter.Limit*4, SemanticOverfetchMin)
-		candidateFilter := filter
-		candidateFilter.Limit = candidateLimit
-
-		semanticHits, err := semantic.SearchContent(ctx, store, candidateFilter)
+	candidateLimit := max(filter.Limit*4, SemanticOverfetchMin)
+	candidateFilter := filter
+	candidateFilter.Limit = candidateLimit
+	var semanticHits []ContentSearchHit
+	lexicalLeg := contentHybridLeg{display: make(map[string]ContentSearchHit)}
+	if err := s.view(ctx, func(store bun.IDB) error {
+		var err error
+		semanticHits, err = semantic.SearchContent(ctx, store, candidateFilter)
 		if err != nil {
 			return fmt.Errorf("searching semantic capability: %w", err)
 		}
-		semanticHits, err = s.filterContentHitsBySessionScope(
-			ctx, store, filter, semanticHits,
-		)
-		if err != nil {
-			return err
-		}
-		semanticLeg := contentHybridLegFromHits(semanticHits, filter.Scope, candidateLimit)
-
-		lexicalLeg := contentHybridLeg{display: make(map[string]ContentSearchHit)}
 		for batch := range maxHybridLexicalBatches {
 			batchFilter := candidateFilter
 			batchFilter.Cursor = batch * candidateLimit
@@ -243,6 +240,21 @@ func (s *BunStore) searchContentHybrid(
 				break
 			}
 		}
+		return nil
+	}); err != nil {
+		return ContentSearchPage{}, err
+	}
+	var page ContentSearchPage
+	err := s.consistentView(ctx, func(store bun.IDB) error {
+		eligibleSemanticHits, err := s.filterContentHitsBySessionScope(
+			ctx, store, filter, semanticHits,
+		)
+		if err != nil {
+			return err
+		}
+		semanticLeg := contentHybridLegFromHits(
+			eligibleSemanticHits, filter.Scope, candidateLimit,
+		)
 
 		merged := RRFMerge(
 			[][]RankedUnit{semanticLeg.ranked, lexicalLeg.ranked}, filter.Limit,
@@ -321,6 +333,7 @@ func (s *BunStore) appendHybridLexicalHits(
 		hits[i].DocKey = UnitFusionKey(units[i].SessionID, units[i].OrdinalStart)
 		hits[i].OrdinalStart = units[i].OrdinalStart
 		hits[i].OrdinalEnd = units[i].OrdinalEnd
+		hits[i].RangeResolved = true
 		hits[i].Subordinate = units[i].Subordinate
 	}
 	if err := s.classifyUnitlessHybridContentHits(ctx, store, hits, unitless); err != nil {
@@ -447,6 +460,7 @@ func (s *BunStore) classifyUnitlessHybridContentHits(
 		}
 		hits[index].OrdinalStart = ranges[i][0]
 		hits[index].OrdinalEnd = ranges[i][1]
+		hits[index].RangeResolved = true
 		hits[index].Subordinate = anchors[i].Sidechain ||
 			SubordinateSession(session.RelationshipType, parentID)
 	}
@@ -562,12 +576,16 @@ func (s *BunStore) hydrateContentSearchHits(
 	page := ContentSearchPage{
 		Matches: make([]ContentMatch, 0, min(len(hits), filter.Limit+1)),
 	}
+	deriveRange := make([]bool, 0, min(len(hits), filter.Limit+1))
 	for _, hit := range hits {
 		session, ok := bySession[hit.SessionID]
 		if !ok {
 			continue
 		}
-		message := messages[bunContentMessageKey{hit.SessionID, hit.Ordinal}]
+		message, messageExists := messages[bunContentMessageKey{hit.SessionID, hit.Ordinal}]
+		if (filter.Mode == "semantic" || filter.Mode == "hybrid") && !messageExists {
+			continue
+		}
 		ordinalRange := [2]int{hit.OrdinalStart, hit.OrdinalEnd}
 		if ordinalRange == [2]int{} && hit.Ordinal != 0 {
 			ordinalRange = [2]int{hit.Ordinal, hit.Ordinal}
@@ -594,26 +612,33 @@ func (s *BunStore) hydrateContentSearchHits(
 			Relationship: session.RelationshipType, ParentSessionID: parentID,
 			Sidechain: message.IsSidechain,
 		})
+		deriveRange = append(deriveRange, !hit.RangeResolved)
 		if hit.Timestamp != "" {
 			page.Matches[len(page.Matches)-1].Timestamp = hit.Timestamp
 		}
 	}
 	if len(page.Matches) > filter.Limit {
 		page.Matches = page.Matches[:filter.Limit]
+		deriveRange = deriveRange[:filter.Limit]
 		if filter.Mode != "semantic" && filter.Mode != "hybrid" {
 			page.NextCursor = filter.Cursor + filter.Limit
 		}
 	}
-	anchors := make([]UnitAnchor, len(page.Matches))
+	anchors := make([]UnitAnchor, 0, len(page.Matches))
+	anchorIndexes := make([]int, 0, len(page.Matches))
 	for i, match := range page.Matches {
+		if !deriveRange[i] {
+			continue
+		}
 		message := messages[bunContentMessageKey{match.SessionID, match.Ordinal}]
-		anchors[i] = UnitAnchor{
+		anchorIndexes = append(anchorIndexes, i)
+		anchors = append(anchors, UnitAnchor{
 			SessionID: match.SessionID, Ordinal: match.Ordinal,
 			Role: message.Role, Sidechain: message.IsSidechain,
 			Embeddable: !message.IsSystem &&
 				!IsSystemPrefixed(message.Content, message.Role),
 			Missing: message.Role == "",
-		}
+		})
 	}
 	ranges, err := DeriveUnitRanges(
 		ctx, bunUnitBoundsQuerier{store: store, parent: s}, anchors,
@@ -621,11 +646,8 @@ func (s *BunStore) hydrateContentSearchHits(
 	if err != nil {
 		return ContentSearchPage{}, fmt.Errorf("deriving Bun content ranges: %w", err)
 	}
-	for i := range page.Matches {
-		anchorRange := [2]int{page.Matches[i].Ordinal, page.Matches[i].Ordinal}
-		if page.Matches[i].OrdinalRange == anchorRange {
-			page.Matches[i].OrdinalRange = ranges[i]
-		}
+	for i, matchIndex := range anchorIndexes {
+		page.Matches[matchIndex].OrdinalRange = ranges[i]
 	}
 	return page, nil
 }
@@ -656,41 +678,44 @@ func (s *BunStore) bunContentRegexHits(
 		return nil, searchInputErrorf("search: invalid regex: %v", err)
 	}
 	literal := literalPrefix(filter.Pattern)
-	const minBatch = 200
-	batchSize := max(filter.Limit*4, minBatch)
-	rawOffset := 0
+	query, args := s.bunContentCandidateQuery(filter, literal, literal == "", false)
+	if query == "" {
+		return nil, nil
+	}
+	formatted := store.NewRaw(query, args...).String()
+	rows, err := store.QueryContext(ctx, formatted)
+	if err != nil {
+		return nil, fmt.Errorf("streaming Bun regex candidates: %w", err)
+	}
+	defer rows.Close()
 	confirmed := 0
 	hits := make([]ContentSearchHit, 0, filter.Limit)
-	for len(hits) < filter.Limit {
-		batchFilter := filter
-		batchFilter.Cursor = rawOffset
-		batchFilter.Limit = batchSize
-		rows, err := s.bunContentCandidateRows(
-			ctx, store, batchFilter, literal, literal == "",
-		)
-		if err != nil {
-			return nil, err
+	for rows.Next() && len(hits) < filter.Limit {
+		var row bunContentCandidate
+		var timestamp sql.NullString
+		if err := rows.Scan(
+			&row.SessionID, &row.Ordinal, &row.Location, &row.ToolName,
+			&row.Body, &timestamp, &row.CallIndex, &row.EventIndex,
+		); err != nil {
+			return nil, fmt.Errorf("scanning Bun regex candidate: %w", err)
 		}
-		for _, row := range rows {
-			span := re.FindStringIndex(row.Body)
-			if span == nil {
-				continue
-			}
-			if confirmed < filter.Cursor {
-				confirmed++
-				continue
-			}
-			hits = append(hits, bunContentHitFromCandidate(
-				row, filter.buildSnippet(row.Body, span[0], span[1]),
-			))
-			if len(hits) >= filter.Limit {
-				break
-			}
+		if timestamp.Valid {
+			row.Timestamp = &timestamp.String
 		}
-		rawOffset += len(rows)
-		if len(rows) < batchSize {
-			break
+		span := re.FindStringIndex(row.Body)
+		if span == nil {
+			continue
 		}
+		if confirmed < filter.Cursor {
+			confirmed++
+			continue
+		}
+		hits = append(hits, bunContentHitFromCandidate(
+			row, filter.buildSnippet(row.Body, span[0], span[1]),
+		))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating Bun regex candidates: %w", err)
 	}
 	return hits, nil
 }
@@ -723,7 +748,7 @@ func (s *BunStore) bunContentPortableFTSHits(
 		JOIN sessions AS session ON session.id = message.session_id
 		WHERE ` + strings.Join(predicates, " AND ") + `
 			AND ` + system + `
-			AND message.session_id IN (SELECT id FROM sessions WHERE ` + where + `)
+			AND message.session_id IN (SELECT id FROM sessions AS session WHERE ` + where + `)
 		ORDER BY COALESCE(session.ended_at, session.started_at, session.created_at)
 			DESC NULLS LAST, message.session_id ASC, message.ordinal ASC,
 			COALESCE(message.id, 0) ASC
@@ -745,13 +770,31 @@ func (s *BunStore) bunContentCandidateRows(
 	ctx context.Context, store bun.IDB, filter ContentSearchFilter,
 	literal string, matchAll bool,
 ) ([]bunContentCandidate, error) {
+	query, args := s.bunContentCandidateQuery(filter, literal, matchAll, true)
+	if query == "" {
+		return nil, nil
+	}
+	var rows []bunContentCandidate
+	if err := store.NewRaw(query, args...).Scan(ctx, &rows); err != nil {
+		return nil, fmt.Errorf("querying Bun content candidates: %w", err)
+	}
+	return rows, nil
+}
+
+func (s *BunStore) bunContentCandidateQuery(
+	filter ContentSearchFilter, literal string, matchAll, paginate bool,
+) (string, []any) {
 	where, scopeArgs := BuildSessionFilterSQL(
 		contentSessionFilter(filter), s.backend.SessionQueryDialect(),
 	)
 	scope := func(column string) string {
-		return column + " IN (SELECT id FROM sessions WHERE " + where + ")"
+		return column + " IN (SELECT id FROM sessions AS session WHERE " + where + ")"
 	}
-	pattern := "%" + EscapeLikePattern(strings.ToLower(literal)) + "%"
+	patternValue := literal
+	if s.backend.Name() != "sqlite" {
+		patternValue = strings.ToLower(patternValue)
+	}
+	pattern := "%" + EscapeLikePattern(patternValue) + "%"
 	var branches []string
 	var args []any
 	addArgs := func() {
@@ -764,7 +807,11 @@ func (s *BunStore) bunContentCandidateRows(
 		if matchAll {
 			return column + " IS NOT NULL"
 		}
-		return "LOWER(COALESCE(" + column + ", '')) LIKE ? ESCAPE '\\'"
+		expression := "COALESCE(" + column + ", '')"
+		if s.backend.Name() != "sqlite" {
+			expression = "LOWER(" + expression + ")"
+		}
+		return expression + " LIKE ? ESCAPE '\\'"
 	}
 	if hasSource(filter, "messages") {
 		system := "1=1"
@@ -841,7 +888,7 @@ func (s *BunStore) bunContentCandidateRows(
 		addArgs()
 	}
 	if len(branches) == 0 {
-		return nil, nil
+		return "", nil
 	}
 	orderTimestamp := "sort_ts"
 	if s.backend.Name() == "sqlite" {
@@ -851,14 +898,12 @@ func (s *BunStore) bunContentCandidateRows(
 		source_timestamp,
 		call_index, event_index FROM (` + strings.Join(branches, " UNION ALL ") + `)
 		ORDER BY ` + orderTimestamp + ` DESC NULLS LAST, session_id ASC,
-			ordinal ASC, source_order ASC, row_order ASC
-		LIMIT ? OFFSET ?`
-	args = append(args, filter.Limit, filter.Cursor)
-	var rows []bunContentCandidate
-	if err := store.NewRaw(query, args...).Scan(ctx, &rows); err != nil {
-		return nil, fmt.Errorf("querying Bun content candidates: %w", err)
+			ordinal ASC, source_order ASC, row_order ASC`
+	if paginate {
+		query += "\n\t\tLIMIT ? OFFSET ?"
+		args = append(args, filter.Limit, filter.Cursor)
 	}
-	return rows, nil
+	return query, args
 }
 
 func bunContentHitFromCandidate(

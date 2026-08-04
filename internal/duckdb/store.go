@@ -62,7 +62,8 @@ func (*duckBunBackend) ReadOnly() bool { return true }
 
 func (*duckBunBackend) Capabilities() db.BackendCapabilities {
 	return db.BackendCapabilities{
-		FullText: duckFullTextCapability{},
+		FullText:      duckFullTextCapability{},
+		SessionSearch: duckFullTextCapability{},
 		Semantic: db.NewVectorSemanticCapability(
 			func() db.VectorSearcher { return nil },
 			func() error {
