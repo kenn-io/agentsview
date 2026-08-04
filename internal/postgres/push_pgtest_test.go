@@ -1083,7 +1083,7 @@ func TestPushSessionTerminationStatus(t *testing.T) {
 
 	pushOnce := func(s db.Session) {
 		t.Helper()
-		tx, err := pg.BeginTx(ctx, nil)
+		tx, err := sync.bunDB().BeginTx(ctx, nil)
 		require.NoError(t, err, "BeginTx")
 		if err := sync.pushSession(ctx, tx, s, markerID, nil); err != nil {
 			_ = tx.Rollback()
@@ -1147,7 +1147,7 @@ func TestPushSessionPreservesSourceMachine(t *testing.T) {
 		CreatedAt:    "2026-01-01T00:00:00Z",
 	}
 
-	tx, err := pg.BeginTx(ctx, nil)
+	tx, err := sync.bunDB().BeginTx(ctx, nil)
 	require.NoError(t, err, "BeginTx")
 	markerID, err := sync.pushMarkerID()
 	require.NoError(t, err, "pushMarkerID")
@@ -1160,6 +1160,66 @@ func TestPushSessionPreservesSourceMachine(t *testing.T) {
 		remoteSession.ID,
 	).Scan(&got), "read back machine")
 	assert.Equal(t, "remote-host", got)
+}
+
+func TestPushSessionNoopPreservesUpdatedAt(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_session_noop_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := t.Context()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg: pg, local: localDB, machine: "push-host", schema: schema,
+		schemaDone: true,
+	}
+	markerID, err := sync.pushMarkerID()
+	require.NoError(t, err, "pushMarkerID")
+	displayName := "source name"
+	deletedAt := "2026-01-01T00:00:00.123456789Z"
+	deletionCause := "source_missing"
+	sess := db.Session{
+		ID: "session-noop", Project: "project", Machine: "push-host",
+		Agent: "codex", DisplayName: &displayName, DeletedAt: &deletedAt,
+		DeletionCause: &deletionCause, CreatedAt: "2026-01-01T00:00:00Z",
+	}
+	push := func() {
+		t.Helper()
+		tx, err := sync.bunDB().BeginTx(ctx, nil)
+		require.NoError(t, err, "BeginTx")
+		if err := sync.pushSession(ctx, tx, sess, markerID, nil); err != nil {
+			_ = tx.Rollback()
+			require.NoError(t, err, "pushSession")
+		}
+		require.NoError(t, tx.Commit(), "Commit")
+	}
+	push()
+
+	wantUpdatedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	_, err = pg.ExecContext(ctx,
+		`UPDATE sessions SET updated_at = $1 WHERE id = $2`,
+		wantUpdatedAt, sess.ID,
+	)
+	require.NoError(t, err, "install updated_at sentinel")
+
+	push()
+
+	var gotUpdatedAt time.Time
+	require.NoError(t, pg.QueryRowContext(ctx,
+		`SELECT updated_at FROM sessions WHERE id = $1`, sess.ID,
+	).Scan(&gotUpdatedAt), "read updated_at")
+	assert.Equal(t, wantUpdatedAt, gotUpdatedAt.UTC(),
+		"identical session metadata must not publish a new revision")
 }
 
 func TestPushPreservesPGServeLocalCurationFields(t *testing.T) {
@@ -1618,7 +1678,7 @@ func TestPushSessionSkipsPGExcludedSession(t *testing.T) {
 	)
 	require.NoError(t, err, "insert excluded session")
 
-	tx, err := pg.BeginTx(ctx, nil)
+	tx, err := sync.bunDB().BeginTx(ctx, nil)
 	require.NoError(t, err, "BeginTx")
 	markerID, err := sync.pushMarkerID()
 	require.NoError(t, err, "pushMarkerID")

@@ -18,6 +18,7 @@ import (
 
 	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 	"go.kenn.io/agentsview/internal/export"
 )
 
@@ -1239,7 +1240,7 @@ func (s *Sync) pushBatch(
 		}
 		sessionFingerprints[sess.ID] = fingerprint
 		if err := s.pushSession(
-			ctx, tx, snapshot.Session, markerID, legacyMarkerMachines,
+			ctx, bunTx, snapshot.Session, markerID, legacyMarkerMachines,
 		); err != nil {
 			if errors.Is(err, errSessionOwnershipConflict) {
 				skippedConflicts++
@@ -2042,392 +2043,129 @@ func sameSessionOwner(
 	return existingMachine == pushedMachine
 }
 
-func transcriptRevisionValue(value *string) string {
-	if value == nil || *value == "" {
-		return "0"
-	}
-	return *value
-}
-
-// nilStr converts a nil or empty *string to SQL NULL.
-// Sanitizes before checking emptiness so strings like "\x00"
-// that reduce to "" are correctly returned as NULL.
-func nilStr(s *string) any {
-	if s == nil {
-		return nil
-	}
-	v := sanitizePG(*s)
-	if v == "" {
-		return nil
-	}
-	return v
-}
-
-// nilStrTS converts a nil or empty *string timestamp to a
-// *time.Time for PG TIMESTAMPTZ columns.
-func nilStrTS(s *string) any {
-	if s == nil || *s == "" {
-		return nil
-	}
-	t, ok := ParseSQLiteTimestamp(*s)
-	if !ok {
-		return nil
-	}
-	return t
-}
-
-// pushSession upserts a single session into PG.
-// Local file metadata remains SQLite-only. The file hash is copied into the
-// backend-neutral transcript_revision column so PG readers can observe
-// transcript content changes without depending on local sync metadata.
+// pushSession applies PostgreSQL ownership, exclusion, and target-curation
+// policy, then delegates the complete portable row write to the canonical Bun
+// upsert used by every adapter.
 func (s *Sync) pushSession(
-	ctx context.Context, tx *sql.Tx, sess db.Session, markerID string,
+	ctx context.Context, store bun.IDB, sess db.Session, markerID string,
 	legacyMarkerMachines []string,
 ) error {
-	createdAt, _ := ParseSQLiteTimestamp(sess.CreatedAt)
-	isAutomated := sess.IsAutomated
-	pushedMachine := pushedSessionMachine(sess, s.machine)
-	var existingMachine sql.NullString
-	var existingOwnerMarker sql.NullString
-	checkErr := tx.QueryRowContext(ctx,
-		`SELECT machine, owner_marker FROM sessions WHERE id = $1`, sess.ID,
-	).Scan(&existingMachine, &existingOwnerMarker)
-	if checkErr != nil && !errors.Is(checkErr, sql.ErrNoRows) {
-		return fmt.Errorf("checking session ownership %s: %w", sess.ID, checkErr)
+	bunTx, ok := store.(bun.Tx)
+	if !ok {
+		return fmt.Errorf("pg session upsert requires a Bun transaction")
 	}
-	if checkErr == nil && !sameSessionOwner(
-		existingOwnerMarker.String,
-		existingMachine.String,
-		markerID,
-		pushedMachine,
+	tx := bunTx.Tx
+	if excluded, err := deletePGSessionIfExcluded(ctx, tx, sess); err != nil {
+		return err
+	} else if excluded {
+		return errSessionExcluded
+	}
+
+	pushedMachine := pushedSessionMachine(sess, s.machine)
+	type policyRow struct {
+		Machine           string       `bun:"machine"`
+		OwnerMarker       string       `bun:"owner_marker"`
+		DisplayName       *string      `bun:"display_name"`
+		SourceDisplayName *string      `bun:"source_display_name"`
+		DeletedAt         sql.NullTime `bun:"deleted_at"`
+		SourceDeletedAt   sql.NullTime `bun:"source_deleted_at"`
+		DeletionCause     *string      `bun:"deletion_cause"`
+	}
+	var current policyRow
+	err := store.NewSelect().TableExpr("sessions").
+		Column("machine", "owner_marker", "display_name", "source_display_name",
+			"deleted_at", "source_deleted_at", "deletion_cause").
+		Where("id = ?", sess.ID).For("UPDATE").Scan(ctx, &current)
+	exists := err == nil
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("reading pg session policy %s: %w", sess.ID, err)
+	}
+	if exists && !sameSessionOwner(
+		current.OwnerMarker, current.Machine, markerID, pushedMachine,
 		legacyMarkerMachines,
 	) {
 		log.Printf(
-			"pgsync: session %s: skipping — already owned by machine %q, "+
-				"this pusher is %q; sync from the origin machine to update",
-			sess.ID, existingMachine.String, pushedMachine,
+			"pgsync: session %s: skipping — already owned by machine %q, this pusher is %q; sync from the origin machine to update",
+			sess.ID, current.Machine, pushedMachine,
 		)
 		return errSessionOwnershipConflict
 	}
-	if legacyMarkerMachines == nil {
-		legacyMarkerMachines = []string{}
-	}
-	legacyMarkerMachinesJSON, err := json.Marshal(legacyMarkerMachines)
+
+	sess.Machine = pushedMachine
+	sess.SourceArchiveID = s.archiveID
+	sess.SourceDatabaseGeneration = s.databaseGeneration
+	sourceRow, err := db.CanonicalSessionRow(sess)
 	if err != nil {
-		return fmt.Errorf("encoding legacy marker machines: %w", err)
+		return fmt.Errorf("converting pg source session %s: %w", sess.ID, err)
 	}
-	result, err := tx.ExecContext(ctx, `
-		INSERT INTO sessions (
-			id, machine, owner_marker, project, agent,
-			first_message, display_name, source_display_name,
-			session_name, created_at, started_at, ended_at,
-			deleted_at, source_deleted_at, deletion_cause,
-			message_count, user_message_count,
-			total_output_tokens, peak_context_tokens,
-			has_total_output_tokens, has_peak_context_tokens,
-			is_automated, data_version,
-			cwd, git_branch, source_session_id,
-			source_version, parser_malformed_lines,
-			is_truncated, termination_status,
-			parent_session_id, parser_parent_session_id, relationship_type,
-			tool_failure_signal_count, tool_retry_count,
-			edit_churn_count, consecutive_failure_max,
-			outcome, outcome_confidence,
-			ended_with_role, final_failure_streak,
-			signals_pending_since,
-			compaction_count, mid_task_compaction_count,
-			context_pressure_max,
-			health_score, health_grade,
-			has_tool_calls, has_context_data,
-			secret_leak_count, secrets_rules_version,
-			quality_signal_version,
-			short_prompt_count, unstructured_start,
-			missing_success_criteria_count,
-			missing_verification_count, duplicate_prompt_count,
-			no_code_context_count, runaway_tool_loop_count,
-			transcript_fidelity, transcript_revision,
-			agent_label, entrypoint, session_kind,
-			source_archive_id, source_database_generation, file_path,
-			updated_at
-			)
-			SELECT
-				$1, $2, $3, $4, $5, $6, $7, $8,
-				$9, $10, $11, $12, $13, $14, $15,
-				$16, $17, $18, $19,
-				$20, $21, $22, $23,
-				$24, $25, $26, $27, $28, $29, $30,
-				$31, $32, $33,
-				$34, $35, $36, $37,
-				$38, $39, $40, $41,
-				$42,
-				$43, $44,
-				$45,
-				$46, $47, $48, $49,
-				$50, $51,
-				$52, $53, $54, $55, $56, $57, $58, $59, $60, $61,
-				$62, $63, $64, $65, $66, $67,
-				NOW()
-			WHERE NOT EXISTS (
-				SELECT 1 FROM excluded_sessions WHERE id = $1
-			)
-			ON CONFLICT (id) DO UPDATE SET
-			machine = EXCLUDED.machine,
-			owner_marker = EXCLUDED.owner_marker,
-			project = EXCLUDED.project,
-			agent = EXCLUDED.agent,
-			agent_label = EXCLUDED.agent_label,
-			entrypoint = EXCLUDED.entrypoint,
-			session_kind = EXCLUDED.session_kind,
-			source_archive_id = EXCLUDED.source_archive_id,
-			source_database_generation = EXCLUDED.source_database_generation,
-			file_path = EXCLUDED.file_path,
-			first_message = EXCLUDED.first_message,
-			display_name = CASE
-				WHEN sessions.display_name IS DISTINCT FROM
-					sessions.source_display_name THEN sessions.display_name
-				ELSE EXCLUDED.display_name
-			END,
-			source_display_name = EXCLUDED.display_name,
-			session_name = EXCLUDED.session_name,
-			created_at = EXCLUDED.created_at,
-			started_at = EXCLUDED.started_at,
-			ended_at = EXCLUDED.ended_at,
-			deleted_at = CASE
-				WHEN sessions.deleted_at IS DISTINCT FROM
-					sessions.source_deleted_at THEN sessions.deleted_at
-				ELSE EXCLUDED.deleted_at
-			END,
-			deletion_cause = CASE
-				WHEN sessions.deleted_at IS DISTINCT FROM
-					sessions.source_deleted_at THEN sessions.deletion_cause
-				ELSE EXCLUDED.deletion_cause
-			END,
-			source_deleted_at = EXCLUDED.deleted_at,
-			message_count = EXCLUDED.message_count,
-			user_message_count = EXCLUDED.user_message_count,
-			total_output_tokens = EXCLUDED.total_output_tokens,
-			peak_context_tokens = EXCLUDED.peak_context_tokens,
-			has_total_output_tokens = EXCLUDED.has_total_output_tokens,
-			has_peak_context_tokens = EXCLUDED.has_peak_context_tokens,
-			is_automated = EXCLUDED.is_automated,
-			data_version = EXCLUDED.data_version,
-			cwd = EXCLUDED.cwd,
-			git_branch = EXCLUDED.git_branch,
-			source_session_id = EXCLUDED.source_session_id,
-			source_version = EXCLUDED.source_version,
-			transcript_fidelity = EXCLUDED.transcript_fidelity,
-			transcript_revision = EXCLUDED.transcript_revision,
-			parser_malformed_lines = EXCLUDED.parser_malformed_lines,
-			is_truncated = EXCLUDED.is_truncated,
-			termination_status = EXCLUDED.termination_status,
-			parent_session_id = EXCLUDED.parent_session_id,
-			parser_parent_session_id = EXCLUDED.parser_parent_session_id,
-			relationship_type = EXCLUDED.relationship_type,
-			tool_failure_signal_count = EXCLUDED.tool_failure_signal_count,
-			tool_retry_count = EXCLUDED.tool_retry_count,
-			edit_churn_count = EXCLUDED.edit_churn_count,
-			consecutive_failure_max = EXCLUDED.consecutive_failure_max,
-			outcome = EXCLUDED.outcome,
-			outcome_confidence = EXCLUDED.outcome_confidence,
-			ended_with_role = EXCLUDED.ended_with_role,
-			final_failure_streak = EXCLUDED.final_failure_streak,
-			signals_pending_since = EXCLUDED.signals_pending_since,
-			compaction_count = EXCLUDED.compaction_count,
-			mid_task_compaction_count = EXCLUDED.mid_task_compaction_count,
-			context_pressure_max = EXCLUDED.context_pressure_max,
-			health_score = EXCLUDED.health_score,
-			health_grade = EXCLUDED.health_grade,
-			has_tool_calls = EXCLUDED.has_tool_calls,
-			has_context_data = EXCLUDED.has_context_data,
-			secret_leak_count = EXCLUDED.secret_leak_count,
-			secrets_rules_version = EXCLUDED.secrets_rules_version,
-			quality_signal_version = EXCLUDED.quality_signal_version,
-			short_prompt_count = EXCLUDED.short_prompt_count,
-			unstructured_start = EXCLUDED.unstructured_start,
-			missing_success_criteria_count = EXCLUDED.missing_success_criteria_count,
-			missing_verification_count = EXCLUDED.missing_verification_count,
-			duplicate_prompt_count = EXCLUDED.duplicate_prompt_count,
-			no_code_context_count = EXCLUDED.no_code_context_count,
-			runaway_tool_loop_count = EXCLUDED.runaway_tool_loop_count,
-			updated_at = NOW()
-		WHERE ((
-				sessions.owner_marker = ''
-				AND (sessions.machine = EXCLUDED.machine
-					OR sessions.machine = 'local'
-					OR sessions.machine = ''
-					OR sessions.machine IN (
-						SELECT jsonb_array_elements_text($68::jsonb)
-					))
-			)
-			OR sessions.owner_marker = EXCLUDED.owner_marker)
-			AND NOT EXISTS (
-				SELECT 1 FROM excluded_sessions
-				WHERE id = EXCLUDED.id
-			)
-			AND (
-			sessions.machine IS DISTINCT FROM EXCLUDED.machine
-			OR sessions.owner_marker IS DISTINCT FROM EXCLUDED.owner_marker
-			OR sessions.project IS DISTINCT FROM EXCLUDED.project
-			OR sessions.agent IS DISTINCT FROM EXCLUDED.agent
-			OR sessions.agent_label IS DISTINCT FROM EXCLUDED.agent_label
-			OR sessions.entrypoint IS DISTINCT FROM EXCLUDED.entrypoint
-			OR sessions.session_kind IS DISTINCT FROM EXCLUDED.session_kind
-			OR sessions.source_archive_id IS DISTINCT FROM EXCLUDED.source_archive_id
-			OR sessions.source_database_generation IS DISTINCT FROM
-				EXCLUDED.source_database_generation
-			OR sessions.file_path IS DISTINCT FROM EXCLUDED.file_path
-			OR sessions.first_message IS DISTINCT FROM EXCLUDED.first_message
-			OR sessions.source_display_name IS DISTINCT FROM EXCLUDED.display_name
-			OR sessions.session_name IS DISTINCT FROM EXCLUDED.session_name
-			OR sessions.created_at IS DISTINCT FROM EXCLUDED.created_at
-			OR sessions.started_at IS DISTINCT FROM EXCLUDED.started_at
-			OR sessions.ended_at IS DISTINCT FROM EXCLUDED.ended_at
-			OR sessions.source_deleted_at IS DISTINCT FROM EXCLUDED.deleted_at
-			OR sessions.deletion_cause IS DISTINCT FROM EXCLUDED.deletion_cause
-			OR sessions.message_count IS DISTINCT FROM EXCLUDED.message_count
-			OR sessions.user_message_count IS DISTINCT FROM EXCLUDED.user_message_count
-			OR sessions.total_output_tokens IS DISTINCT FROM EXCLUDED.total_output_tokens
-			OR sessions.peak_context_tokens IS DISTINCT FROM EXCLUDED.peak_context_tokens
-			OR sessions.has_total_output_tokens IS DISTINCT FROM EXCLUDED.has_total_output_tokens
-			OR sessions.has_peak_context_tokens IS DISTINCT FROM EXCLUDED.has_peak_context_tokens
-			OR sessions.is_automated IS DISTINCT FROM EXCLUDED.is_automated
-			OR sessions.data_version IS DISTINCT FROM EXCLUDED.data_version
-			OR sessions.cwd IS DISTINCT FROM EXCLUDED.cwd
-			OR sessions.git_branch IS DISTINCT FROM EXCLUDED.git_branch
-			OR sessions.source_session_id IS DISTINCT FROM EXCLUDED.source_session_id
-			OR sessions.source_version IS DISTINCT FROM EXCLUDED.source_version
-			OR sessions.transcript_fidelity IS DISTINCT FROM EXCLUDED.transcript_fidelity
-			OR sessions.transcript_revision IS DISTINCT FROM EXCLUDED.transcript_revision
-			OR sessions.parser_malformed_lines IS DISTINCT FROM EXCLUDED.parser_malformed_lines
-			OR sessions.is_truncated IS DISTINCT FROM EXCLUDED.is_truncated
-			OR sessions.termination_status IS DISTINCT FROM EXCLUDED.termination_status
-			OR sessions.parent_session_id IS DISTINCT FROM EXCLUDED.parent_session_id
-			OR sessions.parser_parent_session_id IS DISTINCT FROM EXCLUDED.parser_parent_session_id
-			OR sessions.relationship_type IS DISTINCT FROM EXCLUDED.relationship_type
-			OR sessions.tool_failure_signal_count IS DISTINCT FROM EXCLUDED.tool_failure_signal_count
-			OR sessions.tool_retry_count IS DISTINCT FROM EXCLUDED.tool_retry_count
-			OR sessions.edit_churn_count IS DISTINCT FROM EXCLUDED.edit_churn_count
-			OR sessions.consecutive_failure_max IS DISTINCT FROM EXCLUDED.consecutive_failure_max
-			OR sessions.outcome IS DISTINCT FROM EXCLUDED.outcome
-			OR sessions.outcome_confidence IS DISTINCT FROM EXCLUDED.outcome_confidence
-			OR sessions.ended_with_role IS DISTINCT FROM EXCLUDED.ended_with_role
-			OR sessions.final_failure_streak IS DISTINCT FROM EXCLUDED.final_failure_streak
-			OR sessions.signals_pending_since IS DISTINCT FROM EXCLUDED.signals_pending_since
-			OR sessions.compaction_count IS DISTINCT FROM EXCLUDED.compaction_count
-			OR sessions.mid_task_compaction_count IS DISTINCT FROM EXCLUDED.mid_task_compaction_count
-			OR sessions.context_pressure_max IS DISTINCT FROM EXCLUDED.context_pressure_max
-			OR sessions.health_score IS DISTINCT FROM EXCLUDED.health_score
-			OR sessions.health_grade IS DISTINCT FROM EXCLUDED.health_grade
-			OR sessions.has_tool_calls IS DISTINCT FROM EXCLUDED.has_tool_calls
-			OR sessions.has_context_data IS DISTINCT FROM EXCLUDED.has_context_data
-			OR sessions.secret_leak_count IS DISTINCT FROM EXCLUDED.secret_leak_count
-			OR sessions.secrets_rules_version IS DISTINCT FROM EXCLUDED.secrets_rules_version
-			OR sessions.quality_signal_version IS DISTINCT FROM EXCLUDED.quality_signal_version
-			OR sessions.short_prompt_count IS DISTINCT FROM EXCLUDED.short_prompt_count
-			OR sessions.unstructured_start IS DISTINCT FROM EXCLUDED.unstructured_start
-			OR sessions.missing_success_criteria_count IS DISTINCT FROM EXCLUDED.missing_success_criteria_count
-			OR sessions.missing_verification_count IS DISTINCT FROM EXCLUDED.missing_verification_count
-			OR sessions.duplicate_prompt_count IS DISTINCT FROM EXCLUDED.duplicate_prompt_count
-			OR sessions.no_code_context_count IS DISTINCT FROM EXCLUDED.no_code_context_count
-			OR sessions.runaway_tool_loop_count IS DISTINCT FROM EXCLUDED.runaway_tool_loop_count)`,
-		sess.ID, pushedMachine, markerID,
-		sanitizePG(sess.Project),
-		sess.Agent,
-		nilStr(sess.FirstMessage),
-		nilStr(sess.DisplayName),
-		nilStr(sess.DisplayName),
-		nilStr(sess.SessionName),
-		createdAt,
-		nilStrTS(sess.StartedAt),
-		nilStrTS(sess.EndedAt),
-		nilStrTS(sess.DeletedAt),
-		nilStrTS(sess.DeletedAt),
-		nilStr(sess.DeletionCause),
-		sess.MessageCount, sess.UserMessageCount,
-		sess.TotalOutputTokens, sess.PeakContextTokens,
-		sess.HasTotalOutputTokens, sess.HasPeakContextTokens,
-		isAutomated, sess.DataVersion,
-		sanitizePG(sess.Cwd), sanitizePG(sess.GitBranch),
-		sanitizePG(sess.SourceSessionID),
-		sanitizePG(sess.SourceVersion),
-		sess.ParserMalformedLines,
-		sess.IsTruncated, nilStr(sess.TerminationStatus),
-		nilStr(sess.ParentSessionID),
-		nilStr(sess.ParserParentSessionID),
-		sess.RelationshipType,
-		sess.ToolFailureSignalCount, sess.ToolRetryCount,
-		sess.EditChurnCount, sess.ConsecutiveFailureMax,
-		sess.Outcome, sess.OutcomeConfidence,
-		sanitizePG(sess.EndedWithRole), sess.FinalFailureStreak,
-		nilStr(sess.SignalsPendingSince),
-		sess.CompactionCount, sess.MidTaskCompactionCount,
-		sess.ContextPressureMax,
-		sess.HealthScore, nilStr(sess.HealthGrade),
-		sess.HasToolCalls, sess.HasContextData,
-		sess.SecretLeakCount, sess.SecretsRulesVersion,
-		sess.QualitySignalVersion,
-		sess.ShortPromptCount, sess.UnstructuredStart,
-		sess.MissingSuccessCriteriaCount,
-		sess.MissingVerificationCount, sess.DuplicatePromptCount,
-		sess.NoCodeContextCount, sess.RunawayToolLoopCount,
-		sanitizePG(sess.TranscriptFidelity),
-		transcriptRevisionValue(sess.TranscriptRevision),
-		sanitizePG(sess.AgentLabel),
-		sanitizePG(sess.Entrypoint),
-		sanitizePG(sess.SessionKind),
-		s.archiveID,
-		s.databaseGeneration,
-		sess.FilePath,
-		string(legacyMarkerMachinesJSON),
-	)
+	if exists && !equalOptionalString(current.DisplayName, current.SourceDisplayName) {
+		sess.DisplayName = current.DisplayName
+	}
+	if exists && !equalOptionalTime(current.DeletedAt, current.SourceDeletedAt) {
+		sess.DeletedAt = nullTimeString(current.DeletedAt)
+		sess.DeletionCause = current.DeletionCause
+	}
+	row, err := db.CanonicalSessionRow(sess)
+	if err != nil {
+		return fmt.Errorf("converting pg session %s: %w", sess.ID, err)
+	}
+	rowMatches, err := db.CanonicalSessionRowMatches(ctx, store, row)
 	if err != nil {
 		return err
 	}
-	if rowsAffected, rowsErr := result.RowsAffected(); rowsErr == nil && rowsAffected == 0 {
-		excluded, excludedErr := deletePGSessionIfExcluded(ctx, tx, sess)
-		if excludedErr != nil {
-			return excludedErr
+	policyMatches := exists && current.OwnerMarker == markerID &&
+		equalOptionalString(current.SourceDisplayName, sourceRow.DisplayName) &&
+		equalOptionalTimeAndTimestamp(current.SourceDeletedAt, sourceRow.DeletedAt)
+	if !rowMatches || !policyMatches {
+		if err := db.UpsertSessionRow(ctx, store, row); err != nil {
+			return err
 		}
-		if excluded {
-			return errSessionExcluded
-		}
-		refreshErr := tx.QueryRowContext(ctx,
-			`SELECT machine, owner_marker FROM sessions WHERE id = $1`, sess.ID,
-		).Scan(&existingMachine, &existingOwnerMarker)
-		if refreshErr != nil {
-			// The guarded upsert changed no rows and we cannot
-			// re-read the current owner, so we cannot prove this
-			// pusher owns the session. Surface the error instead of
-			// reporting a blocked write as success, so the caller's
-			// retry path handles it rather than pushing messages for
-			// a row this pusher did not write.
-			return fmt.Errorf(
-				"re-reading session %s ownership after blocked upsert: %w",
-				sess.ID, refreshErr,
-			)
-		}
-		if !sameSessionOwner(
-			existingOwnerMarker.String, existingMachine.String,
-			markerID, pushedMachine, legacyMarkerMachines,
-		) {
-			log.Printf(
-				"pgsync: session %s: skipping — already owned by machine %q, this pusher is %q; sync from the origin machine to update",
-				sess.ID, existingMachine.String, pushedMachine,
-			)
-			return errSessionOwnershipConflict
+		if _, err := store.NewUpdate().Table("sessions").
+			Set("owner_marker = ?", markerID).
+			Set("source_display_name = ?", sourceRow.DisplayName).
+			Set("source_deleted_at = ?", sourceRow.DeletedAt).
+			Set("updated_at = NOW()").Where("id = ?", sess.ID).Exec(ctx); err != nil {
+			return fmt.Errorf("writing pg session policy %s: %w", sess.ID, err)
 		}
 	}
-	excluded, excludedErr := deletePGSessionIfExcluded(ctx, tx, sess)
-	if excludedErr != nil {
-		return excludedErr
-	}
-	if excluded {
+	if excluded, err := deletePGSessionIfExcluded(ctx, tx, sess); err != nil {
+		return err
+	} else if excluded {
 		return errSessionExcluded
 	}
-	if err := replacePGSessionAliases(ctx, tx, sess); err != nil {
-		return err
+	return replacePGSessionAliases(ctx, tx, sess)
+}
+
+func equalOptionalString(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
 	}
-	return nil
+	return *left == *right
+}
+
+func equalOptionalTime(left, right sql.NullTime) bool {
+	if !left.Valid || !right.Valid {
+		return left.Valid == right.Valid
+	}
+	return left.Time.Equal(right.Time)
+}
+
+func equalOptionalTimeAndTimestamp(
+	left sql.NullTime, right *bunmodel.Timestamp,
+) bool {
+	if !left.Valid || right == nil {
+		return !left.Valid && right == nil
+	}
+	return left.Time.Truncate(time.Microsecond).
+		Equal(right.Truncate(time.Microsecond))
+}
+
+func nullTimeString(value sql.NullTime) *string {
+	if !value.Valid {
+		return nil
+	}
+	formatted := value.Time.UTC().Format(time.RFC3339Nano)
+	return &formatted
 }
 
 func reconcilePinnedMessages(
