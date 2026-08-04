@@ -814,6 +814,8 @@ agentsview usage statusline [flags]
 
 | Flag        | Default | Description                        |
 | ----------- | ------- | ---------------------------------- |
+| `--format`  | `human` | Output format: `human` or `json`   |
+| `--json`    | `false` | Alias for `--format json`          |
 | `--agent`   |         | Filter by agent name               |
 | `--offline` | `false` | Use embedded fallback pricing only |
 | `--no-sync` | `false` | Skip on-demand sync                |
@@ -829,6 +831,20 @@ With `--agent claude`:
 ```
 $6.42 today (claude)
 ```
+
+With `--json`, the same facts are emitted for scripts, with the cost as exact
+microdollars rather than a formatted string:
+
+```json
+{
+  "date": "2026-08-04",
+  "cost": {
+    "microdollars": 9610000
+  }
+}
+```
+
+`agent` is included when `--agent` filtered the query.
 
 The command always scopes to the current local-time day. Use
 `agentsview usage daily --since $(date +%Y-%m-%d)` if you want the full row
@@ -896,11 +912,14 @@ for prompt modules that must stay snappy.
 
 **Monthly spend for the current month:**
 
+Costs are reported as `money` objects, so read `.microdollars` and divide when
+you want dollars:
+
 ```bash
 agentsview usage daily \
   --since "$(date +%Y-%m-01)" \
   --json \
-  | jq '.totals.totalCost'
+  | jq '.totals.totalCost.microdollars / 1000000'
 ```
 
 **Per-agent totals for the last 7 days:**
@@ -917,7 +936,7 @@ for a in claude codex copilot gemini; do
     --since "$since" \
     --agent "$a" \
     --json 2>/dev/null \
-    | jq '.totals.totalCost')
+    | jq -r '.totals.totalCost.microdollars / 1000000 | tostring')
   printf "%-8s  \$%s\n" "$a" "$total"
 done
 ```
@@ -926,13 +945,20 @@ done
 
 The script writes to stderr and exits non-zero so you can wire it into whatever
 notifier fits your OS — cron's `MAILTO`, launchd's `StandardErrorPath`, a
-systemd timer's journal, or a Windows Task Scheduler action:
+systemd timer's journal, or a Windows Task Scheduler action.
+
+`--json` reports the cost as exact microdollars, so the threshold is an integer
+comparison instead of a parse of the formatted line. `jq -e` fails the script
+when the value is missing, so a broken read cannot pass for an under-budget
+day:
 
 ```bash
-today=$(agentsview usage statusline --offline --no-sync \
-  | tr -dc '0-9.')
-if awk -v t="$today" 'BEGIN {exit !(t+0 > 25)}'; then
-  echo "AgentsView: AI spend \$$today today (> \$25)" >&2
+budget_usd=25
+spent=$(agentsview usage statusline --json --offline --no-sync \
+  | jq -e '.cost.microdollars') || exit 1
+if [ "$spent" -gt $((budget_usd * 1000000)) ]; then
+  printf 'AgentsView: $%d.%02d today (over $%d)\n' \
+    $((spent / 1000000)) $((spent % 1000000 / 10000)) "$budget_usd" >&2
   exit 1
 fi
 ```

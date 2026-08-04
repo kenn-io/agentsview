@@ -550,9 +550,11 @@ func newUsageStatuslineCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
+			cfg.JSON = outputFormat(cmd) == "json"
 			runUsageStatusline(cfg)
 		},
 	}
+	registerFormatFlags(cmd.Flags())
 	cmd.Flags().StringVar(&cfg.Agent, "agent", "", "Filter by agent name")
 	cmd.Flags().BoolVar(&cfg.Offline, "offline", false, "Use fallback pricing only")
 	cmd.Flags().BoolVar(&cfg.NoSync, "no-sync", false, "Skip on-demand sync before querying")

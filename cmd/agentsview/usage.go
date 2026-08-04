@@ -219,9 +219,21 @@ func noTokenDataNote(agent string, totals db.UsageTotals) string {
 }
 
 type UsageStatuslineConfig struct {
+	JSON    bool
 	Agent   string
 	Offline bool
 	NoSync  bool
+}
+
+// usageStatuslineReport is the machine-readable form of the statusline. It
+// carries the same facts as the human line and nothing more: today's cost,
+// the day it covers, and the agent filter that produced it. Cost stays a
+// money.Money so callers read exact microdollars instead of scraping the
+// formatted string.
+type usageStatuslineReport struct {
+	Date  string      `json:"date"`
+	Cost  money.Money `json:"cost"`
+	Agent string      `json:"agent,omitempty"`
 }
 
 func runUsageStatusline(cfg UsageStatuslineConfig) {
@@ -256,7 +268,28 @@ func runUsageStatusline(cfg UsageStatuslineConfig) {
 		os.Exit(1)
 	}
 
+	if cfg.JSON {
+		printUsageStatuslineJSON(result, cfg.Agent, today)
+		return
+	}
+
 	printUsageStatusline(result, cfg.Agent)
+}
+
+func printUsageStatuslineJSON(
+	result db.DailyUsageResult, agent, date string,
+) {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	report := usageStatuslineReport{
+		Date:  date,
+		Cost:  result.Totals.TotalCost,
+		Agent: agent,
+	}
+	if err := enc.Encode(report); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 func printUsageStatusline(result db.DailyUsageResult, agent string) {

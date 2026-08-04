@@ -413,6 +413,8 @@ agentsview usage statusline [flags]
 
 | Flag        | Default | Description                        |
 | ----------- | ------- | ---------------------------------- |
+| `--format`  | `human` | Output format: `human` or `json`   |
+| `--json`    | `false` | Alias for `--format json`          |
 | `--agent`   |         | Filter by agent name               |
 | `--offline` | `false` | Use embedded fallback pricing only |
 | `--no-sync` | `false` | Skip on-demand sync                |
@@ -422,6 +424,16 @@ agentsview usage statusline [flags]
 ```bash
 $ agentsview usage statusline
 $9.61 today
+```
+
+```bash
+$ agentsview usage statusline --json
+{
+  "date": "2026-08-04",
+  "cost": {
+    "microdollars": 9610000
+  }
+}
 ```
 
 See [Token Usage & Costs](/token-usage/#agentsview-usage-statusline) for

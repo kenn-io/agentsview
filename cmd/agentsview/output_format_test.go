@@ -50,6 +50,7 @@ var machineOutputCommandPaths = [][]string{
 	{"projects"},
 	{"health"},
 	{"usage", "daily"},
+	{"usage", "statusline"},
 	{"activity", "report"},
 	{"stats"},
 	{"secrets", "list"},
