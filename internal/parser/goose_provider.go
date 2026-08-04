@@ -57,36 +57,54 @@ type gooseProvider struct {
 }
 
 func (p *gooseProvider) Discover(ctx context.Context) ([]SourceRef, error) {
+	watermarks, err := p.captureDiscoveryWatermarks(ctx)
+	if err != nil {
+		return nil, err
+	}
 	sources, err := p.dbBackedProvider.Discover(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if err := p.seedChangeTracker(ctx); err != nil {
-		return nil, err
-	}
+	p.tracker.storeDiscoveryWatermarks(watermarks)
 	return sources, nil
 }
 
 func (p *gooseProvider) DiscoverEach(
 	ctx context.Context, yield func(SourceRef) error,
 ) error {
+	watermarks, err := p.captureDiscoveryWatermarks(ctx)
+	if err != nil {
+		return err
+	}
 	if err := p.dbBackedProvider.DiscoverEach(ctx, yield); err != nil {
 		return err
 	}
-	return p.seedChangeTracker(ctx)
+	p.tracker.storeDiscoveryWatermarks(watermarks)
+	return nil
 }
 
-func (p *gooseProvider) seedChangeTracker(ctx context.Context) error {
+// captureDiscoveryWatermarks reads the change cursors before enumeration.
+// Publishing them only after a successful pass leaves rows committed during
+// discovery available to the next watcher event.
+func (p *gooseProvider) captureDiscoveryWatermarks(
+	ctx context.Context,
+) ([]gooseDiscoveryWatermark, error) {
+	watermarks := make([]gooseDiscoveryWatermark, 0, len(p.sources.roots))
 	for _, root := range p.sources.roots {
 		dbPath := p.spec.findDB(root)
 		if dbPath == "" {
 			continue
 		}
-		if err := p.tracker.seed(ctx, dbPath); err != nil {
-			return err
+		state, err := readGooseTrackedDatabase(ctx, dbPath)
+		if err != nil {
+			return nil, err
 		}
+		watermarks = append(watermarks, gooseDiscoveryWatermark{
+			dbPath: dbPath,
+			state:  state,
+		})
 	}
-	return nil
+	return watermarks, nil
 }
 
 // SourcesForChangedPath returns only Goose sessions with newly inserted
@@ -125,9 +143,6 @@ func (p *gooseProvider) SourcesForChangedPath(
 				WatchRoot: req.WatchRoot,
 			})
 			if err != nil {
-				return nil, err
-			}
-			if err := p.tracker.seed(ctx, dbPath); err != nil {
 				return nil, err
 			}
 			return sources, nil
@@ -315,6 +330,11 @@ type gooseTrackedDatabase struct {
 	hasUsage      bool
 }
 
+type gooseDiscoveryWatermark struct {
+	dbPath string
+	state  gooseTrackedDatabase
+}
+
 type gooseChangeTracker struct {
 	mu        sync.Mutex
 	databases map[string]gooseTrackedDatabase
@@ -324,15 +344,14 @@ func newGooseChangeTracker() *gooseChangeTracker {
 	return &gooseChangeTracker{databases: make(map[string]gooseTrackedDatabase)}
 }
 
-func (t *gooseChangeTracker) seed(ctx context.Context, dbPath string) error {
-	state, err := readGooseTrackedDatabase(ctx, dbPath)
-	if err != nil {
-		return err
-	}
+func (t *gooseChangeTracker) storeDiscoveryWatermarks(
+	watermarks []gooseDiscoveryWatermark,
+) {
 	t.mu.Lock()
-	t.databases[filepath.Clean(dbPath)] = state
-	t.mu.Unlock()
-	return nil
+	defer t.mu.Unlock()
+	for _, watermark := range watermarks {
+		t.databases[filepath.Clean(watermark.dbPath)] = watermark.state
+	}
 }
 
 func (t *gooseChangeTracker) changedSessionIDs(

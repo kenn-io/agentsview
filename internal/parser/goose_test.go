@@ -353,6 +353,39 @@ func TestGooseChangedPathWorkStaysProportionalToNewRows(t *testing.T) {
 	}
 }
 
+func TestGooseDiscoveryLeavesConcurrentRowsForWatcherProcessing(t *testing.T) {
+	fixture := newGooseTestFixture(t)
+	fixture.insertSession(t, "session", "Race", "user", "")
+	fixture.insertMessage(t, "session", "user", `[
+		{"type":"text","text":"Initial prompt"}
+	]`, 1_700_000_000)
+	_, err := fixture.database.Exec("PRAGMA journal_mode=WAL")
+	require.NoError(t, err)
+
+	provider, ok := NewProvider(AgentGoose, ProviderConfig{
+		Roots: []string{fixture.pathRoot}, Machine: "devbox",
+	})
+	require.True(t, ok)
+	discoverer, ok := provider.(StreamingDiscoverer)
+	require.True(t, ok)
+	err = discoverer.DiscoverEach(context.Background(), func(SourceRef) error {
+		fixture.insertMessage(t, "session", "assistant", `[
+			{"type":"text","text":"Committed during discovery"}
+		]`, 1_700_000_001)
+		return nil
+	})
+	require.NoError(t, err)
+
+	sources, err := provider.SourcesForChangedPath(
+		context.Background(), ChangedPathRequest{
+			Path: fixture.dbPath + "-wal", WatchRoot: fixture.sessionDir,
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, fixture.dbPath+"#session", sources[0].DisplayPath)
+}
+
 func nullableGooseTestString(value string) any {
 	if value == "" {
 		return nil

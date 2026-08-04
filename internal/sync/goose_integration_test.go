@@ -169,6 +169,29 @@ func TestReconcileProviderRootsGooseSkipsUnchangedSession(t *testing.T) {
 		"unchanged Goose sessions must not be rewritten during reconciliation")
 }
 
+func TestSyncGoosePreservesHumanUserMessageCount(t *testing.T) {
+	pathRoot, _, sourceDB := writeSyncGooseDB(t)
+	insertSyncGooseMessage(t, sourceDB, "user", `[
+		{"type":"toolResponse","id":"call-read","toolResult":{"status":"success","value":{"content":[{"type":"text","text":"package auth"}]}}},
+		{"type":"actionRequired","message":"Approve the proposed edit."}
+	]`, 1_700_000_002)
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentGoose: {pathRoot},
+		},
+		Machine: "devbox",
+	})
+	t.Cleanup(engine.Close)
+
+	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1})
+	session, err := database.GetSession(context.Background(), "goose:session-001")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, 1, session.UserMessageCount,
+		"tool-response carriers must not count as human user messages")
+}
+
 func TestProcessFileGooseChangedDatabaseUsesOneVirtualSource(t *testing.T) {
 	pathRoot, dbPath, sourceDB := writeSyncGooseDB(t)
 	engine := NewEngine(openTestDB(t), EngineConfig{
