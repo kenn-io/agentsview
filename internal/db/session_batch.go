@@ -538,14 +538,14 @@ func writeOneSessionBatchTx(
 	}
 
 	if write.IdentityObservation.Project != "" {
-		var err error
 		if write.IdentitySnapshotProject == nil {
-			err = upsertProjectIdentityObservationTxContext(
-				ctx, tx, write.IdentityObservation,
+			err = upsertProjectIdentityObservationWithSnapshotProjectBun(
+				ctx, bunTx, write.IdentityObservation,
+				write.IdentityObservation.Project, false, false,
 			)
 		} else {
-			err = upsertProjectIdentityObservationWithSnapshotProjectTxContext(
-				ctx, tx, write.IdentityObservation,
+			err = upsertProjectIdentityObservationWithSnapshotProjectBun(
+				ctx, bunTx, write.IdentityObservation,
 				*write.IdentitySnapshotProject,
 				upsertResult.inserted, true,
 			)
