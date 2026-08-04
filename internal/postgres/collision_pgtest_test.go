@@ -302,3 +302,37 @@ func TestPushSessionSerializesConcurrentFirstOwner(t *testing.T) {
 	assert.Equal(t, "machine-a", machine)
 	assert.Equal(t, markerA, marker)
 }
+
+func TestSessionOwnershipLocksKeepDistinctFullDigestKeys(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, pg.Close()) })
+	ctx := t.Context()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err)
+	require.NoError(t, EnsureSchema(ctx, pg, schema))
+	syncer := &Sync{pg: pg, schema: schema, schemaDone: true}
+
+	// These IDs have the same first two SHA-256 bytes for this schema. They
+	// must nevertheless own independent persistent lock rows.
+	for _, sessionID := range []string{
+		"collision-session-366",
+		"collision-session-504",
+	} {
+		tx, err := syncer.bunDB().BeginTx(ctx, nil)
+		require.NoError(t, err)
+		require.NoError(t, syncer.lockSessionOwnership(ctx, tx, sessionID))
+		require.NoError(t, tx.Commit())
+	}
+
+	var lockKeys []string
+	require.NoError(t, syncer.bunDB().NewSelect().
+		Model((*pgSessionOwnershipLockRow)(nil)).
+		Column("key").
+		Where("key LIKE ?", "session_ownership_lock_v1:%").
+		Order("key ASC").Scan(ctx, &lockKeys))
+	assert.Len(t, lockKeys, 2)
+}

@@ -36,8 +36,22 @@ func TestCanonicalWorktreeMappingRowsReplaceCompletePortableState(t *testing.T) 
 
 	require.NoError(t, database.bunWriter.RunInTx(ctx, nil,
 		func(ctx context.Context, tx bun.Tx) error {
-			return UpsertWorktreeProjectMappingRows(ctx, tx, rows, nil)
+			return InsertWorktreeProjectMappingRows(ctx, tx, rows)
 		}))
+	require.Error(t, InsertWorktreeProjectMappingRows(
+		ctx, database.bunWriter, rows,
+	))
+	rows[0].PathPrefix = "/repo/.branches"
+	changed, err := UpdateWorktreeProjectMappingRow(
+		ctx, database.bunWriter, archiveID, 17, "machine", rows[0],
+	)
+	require.NoError(t, err)
+	assert.True(t, changed)
+	var afterUpdate []bunmodel.SourceWorktreeProjectMapping
+	require.NoError(t, database.bunReader.NewSelect().Model(&afterUpdate).
+		Where("source_archive_id = ?", archiveID).Scan(ctx))
+	require.Len(t, afterUpdate, 1)
+	assert.Equal(t, "/repo/.branches", afterUpdate[0].PathPrefix)
 
 	rows[0].ID = 23
 	rows[0].Project = "beta"
@@ -51,7 +65,7 @@ func TestCanonicalWorktreeMappingRowsReplaceCompletePortableState(t *testing.T) 
 	require.NoError(t, database.bunReader.NewSelect().Model(&got).
 		Where("source_archive_id = ?", archiveID).
 		Where("machine = ?", "machine").
-		Where("path_prefix = ?", "/repo/.worktrees").Scan(ctx))
+		Where("path_prefix = ?", "/repo/.branches").Scan(ctx))
 	assert.Equal(t, int64(23), got.ID)
 	assert.Equal(t, "beta", got.Project)
 	assert.Equal(t, "source-beta", got.OriginalProject)
@@ -61,7 +75,7 @@ func TestCanonicalWorktreeMappingRowsReplaceCompletePortableState(t *testing.T) 
 	require.NoError(t, database.bunWriter.RunInTx(ctx, nil,
 		func(ctx context.Context, tx bun.Tx) error {
 			return DeleteWorktreeProjectMappingRows(ctx, tx, archiveID,
-				[]WorktreeMappingKey{{Machine: "machine", PathPrefix: "/repo/.worktrees"}})
+				[]WorktreeMappingKey{{Machine: "machine", PathPrefix: "/repo/.branches"}})
 		}))
 	count, err := database.bunReader.NewSelect().
 		Model((*bunmodel.SourceWorktreeProjectMapping)(nil)).

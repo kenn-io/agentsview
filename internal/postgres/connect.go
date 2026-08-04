@@ -15,6 +15,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
 
 // pgTargetWriteContractVersion invalidates persisted push state when the
@@ -27,12 +28,53 @@ import (
 //
 // Bump this version whenever that committed projection or ownership split
 // changes. A mismatch clears the saved watermark and fingerprints, forcing a
-// complete retry. The new fingerprint is persisted only after a successful
-// push, so failures retry the same backfill; running an older binary after a
-// newer one likewise sees a mismatch and rewrites its own complete contract.
-// v2 backfills the canonical Bun session row instead of allowing old matching
-// fingerprints to leave newly source-owned columns empty indefinitely.
+// complete retry. A partially successful push may persist the new target
+// fingerprint, but the watermark and boundary fingerprints retain each failed
+// session's retry obligation; those three values jointly represent completion.
+// Running an older binary after a newer one likewise sees a mismatch and
+// rewrites its own complete contract. v2 backfills the canonical Bun session
+// row instead of allowing old matching fingerprints to leave newly source-owned
+// columns empty indefinitely.
 const pgTargetWriteContractVersion = "v2-canonical-session"
+
+type pgSessionColumnOwner string
+
+const (
+	pgSessionColumnSource pgSessionColumnOwner = "source"
+	pgSessionColumnTarget pgSessionColumnOwner = "target"
+)
+
+var pgSessionTargetOwnedColumns = map[string]struct{}{
+	"deleted_at":        {},
+	"deletion_cause":    {},
+	"display_name":      {},
+	"local_modified_at": {},
+}
+
+func pgSessionColumnOwnerships() map[string]pgSessionColumnOwner {
+	columns := bunmodel.ModelColumns((*bunmodel.Session)(nil))
+	owners := make(map[string]pgSessionColumnOwner, len(columns))
+	for _, column := range columns {
+		owners[column] = pgSessionColumnSource
+	}
+	for column := range pgSessionTargetOwnedColumns {
+		owners[column] = pgSessionColumnTarget
+	}
+	return owners
+}
+
+func pgSessionWriteContractSignature() string {
+	owners := pgSessionColumnOwnerships()
+	var signature strings.Builder
+	signature.WriteString(pgTargetWriteContractVersion)
+	for _, column := range bunmodel.ModelColumns((*bunmodel.Session)(nil)) {
+		signature.WriteByte('\n')
+		signature.WriteString(column)
+		signature.WriteByte('=')
+		signature.WriteString(string(owners[column]))
+	}
+	return signature.String()
+}
 
 // RedactDSN returns the host portion of the DSN for diagnostics,
 // stripping credentials, query parameters, and path components
@@ -218,7 +260,7 @@ func Open(
 
 func pgTargetFingerprint(dsn, schema string) (string, error) {
 	return pgTargetFingerprintForContract(
-		dsn, schema, pgTargetWriteContractVersion,
+		dsn, schema, pgSessionWriteContractSignature(),
 	)
 }
 

@@ -150,6 +150,15 @@ func TestBunStoreIdentityContract(t *testing.T) {
 	})
 }
 
+func TestCanonicalIdentityWriteContract(t *testing.T) {
+	conn, err := Open(filepath.Join(t.TempDir(), "identity-write-contract.duckdb"))
+	require.NoError(t, err)
+	common := bun.NewDB(conn, bundialect.New())
+	t.Cleanup(func() { require.NoError(t, common.Close()) })
+	require.NoError(t, db.CreateCommonSchema(t.Context(), common))
+	storetest.RunCanonicalIdentityWriteContract(t, "duckdb", common)
+}
+
 func TestBunStoreDataContract(t *testing.T) {
 	storetest.RunDataContract(t, storetest.DataBackend{
 		Name: "duckdb",

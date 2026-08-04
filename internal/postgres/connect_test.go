@@ -4,7 +4,29 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
+
+func TestPGSessionWriteContractClassifiesEveryCanonicalColumn(t *testing.T) {
+	columns := bunmodel.ModelColumns((*bunmodel.Session)(nil))
+	owners := pgSessionColumnOwnerships()
+	assert.Len(t, owners, len(columns))
+	for _, column := range columns {
+		assert.Contains(t, owners, column)
+	}
+
+	var targetOwned []string
+	for column, owner := range owners {
+		if owner == pgSessionColumnTarget {
+			targetOwned = append(targetOwned, column)
+		}
+	}
+	assert.ElementsMatch(t, []string{
+		"deleted_at", "deletion_cause", "display_name", "local_modified_at",
+	}, targetOwned)
+	assert.Contains(t, pgSessionWriteContractSignature(),
+		pgTargetWriteContractVersion)
+}
 
 func TestCheckSSL(t *testing.T) {
 	tests := []struct {

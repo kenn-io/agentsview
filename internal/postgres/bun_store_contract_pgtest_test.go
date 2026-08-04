@@ -25,6 +25,7 @@ const bunUsageContractSchema = "agentsview_bun_usage_contract"
 const bunOptionalUsageContractSchema = "agentsview_bun_optional_usage_contract"
 const bunPricingWriteContractSchema = "agentsview_bun_pricing_write_contract"
 const bunAnalyticsContractSchema = "agentsview_bun_analytics_contract"
+const bunIdentityWriteContractSchema = "agentsview_bun_identity_write_contract"
 
 func TestBunStoreCoreContract(t *testing.T) {
 	storetest.RunCoreContract(t, storetest.Backend{
@@ -70,6 +71,22 @@ func TestBunStoreIdentityContract(t *testing.T) {
 			return store, fixture
 		},
 	})
+}
+
+func TestCanonicalIdentityWriteContract(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanupBunContractSchema(t, pgURL, bunIdentityWriteContractSchema)
+	t.Cleanup(func() {
+		cleanupBunContractSchema(t, pgURL, bunIdentityWriteContractSchema)
+	})
+	pg, err := Open(pgURL, bunIdentityWriteContractSchema, true)
+	require.NoError(t, err)
+	require.NoError(t, EnsureSchema(
+		t.Context(), pg, bunIdentityWriteContractSchema,
+	))
+	store := newStore(pg)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	storetest.RunCanonicalIdentityWriteContract(t, "postgres", store.bun)
 }
 
 func TestBunStoreDataContract(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -13,6 +14,18 @@ import (
 )
 
 const canonicalWriteBatchSize = 100
+
+func canonicalReplacementColumns(model any, excluded ...string) []string {
+	excludedSet := make(map[string]struct{}, len(excluded))
+	for _, column := range excluded {
+		excludedSet[column] = struct{}{}
+	}
+	columns := bunmodel.ModelColumns(model)
+	return slices.DeleteFunc(columns, func(column string) bool {
+		_, skip := excludedSet[column]
+		return skip
+	})
+}
 
 func (db *DB) beginBunWriteTx(
 	ctx context.Context,
@@ -52,10 +65,9 @@ func UpsertSessionRow(
 	}
 	query := store.NewInsert().Model(&row).
 		On("CONFLICT (id) DO UPDATE").Returning("")
-	for _, column := range bunmodel.ModelColumns((*bunmodel.Session)(nil)) {
-		if column == "id" {
-			continue
-		}
+	for _, column := range canonicalReplacementColumns(
+		(*bunmodel.Session)(nil), "id",
+	) {
 		query = query.Set("? = EXCLUDED.?", bun.Ident(column), bun.Ident(column))
 	}
 	if _, err := query.Exec(ctx); err != nil {
