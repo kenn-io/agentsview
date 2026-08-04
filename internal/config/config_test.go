@@ -441,6 +441,20 @@ func TestLoadEnv_GoosePathRootUsesProducerLayout(t *testing.T) {
 	}
 }
 
+func TestLoadEnv_WhitespaceGoosePathRootKeepsConfiguredDirs(t *testing.T) {
+	setupTestEnv(t)
+	t.Setenv("GOOSE_PATH_ROOT", "   ")
+
+	cfg, err := Default()
+	require.NoError(t, err)
+	defaults := cfg.ResolveDirs(parser.AgentGoose)
+	require.NotEmpty(t, defaults)
+	cfg.loadEnv()
+
+	assert.Equal(t, defaults, cfg.ResolveDirs(parser.AgentGoose),
+		"a blank GOOSE_PATH_ROOT must not replace the default Goose directories")
+}
+
 func TestLoadEnv_OverridesDataDir(t *testing.T) {
 	custom := setupTestEnv(t)
 

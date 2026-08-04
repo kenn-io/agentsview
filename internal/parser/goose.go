@@ -80,6 +80,10 @@ func forEachGooseSessionMeta(
 	if err != nil {
 		return err
 	}
+	hasUsage, err := gooseTableExists(ctx, db, "usage_ledger")
+	if err != nil {
+		return err
+	}
 	rows, err := db.QueryContext(ctx, gooseSessionSelect(columns, "", true))
 	if err != nil {
 		return fmt.Errorf("listing goose sessions: %w", err)
@@ -90,11 +94,15 @@ func forEachGooseSessionMeta(
 		if err != nil {
 			return err
 		}
+		mtime, err := gooseSessionFileMtime(dbPath, db, hasUsage, row)
+		if err != nil {
+			return err
+		}
 		observeStreamingDiscoveryBuffer(ctx, 1)
 		if err := yield(dbBackedSessionMeta{
 			SessionID:   row.id,
 			VirtualPath: GooseSQLiteVirtualPath(dbPath, row.id),
-			FileMtime:   gooseSessionFileMtime(dbPath, db, row),
+			FileMtime:   mtime,
 		}); err != nil {
 			return err
 		}
@@ -117,10 +125,18 @@ func gooseSessionMeta(
 	if err != nil || !found {
 		return dbBackedSessionMeta{}, found, err
 	}
+	hasUsage, err := gooseTableExists(ctx, db, "usage_ledger")
+	if err != nil {
+		return dbBackedSessionMeta{}, false, err
+	}
+	mtime, err := gooseSessionFileMtime(dbPath, db, hasUsage, row)
+	if err != nil {
+		return dbBackedSessionMeta{}, false, err
+	}
 	return dbBackedSessionMeta{
 		SessionID:   row.id,
 		VirtualPath: GooseSQLiteVirtualPath(dbPath, row.id),
-		FileMtime:   gooseSessionFileMtime(dbPath, db, row),
+		FileMtime:   mtime,
 	}, true, nil
 }
 
@@ -218,6 +234,21 @@ func gooseSessionColumns(
 	}
 	if !hasMessages {
 		return nil, fmt.Errorf("unsupported goose sessions schema: missing messages table")
+	}
+	messageColumns, err := gooseTableColumns(ctx, db, "messages")
+	if err != nil {
+		return nil, err
+	}
+	// Message loading, fingerprints, and watcher cursors reference these
+	// columns directly; missing any of them must fail discovery instead of
+	// enumerating sessions that every later parse would reject.
+	for _, required := range []string{
+		"id", "message_id", "session_id", "role", "content_json",
+		"created_timestamp", "timestamp", "tokens", "metadata_json",
+	} {
+		if !messageColumns[required] {
+			return nil, fmt.Errorf("unsupported goose messages schema: missing messages.%s", required)
+		}
 	}
 	return columns, nil
 }
@@ -327,6 +358,14 @@ func buildGooseParseResult(
 	if err != nil {
 		return ParseResult{}, err
 	}
+	hasUsage, err := gooseTableExists(context.Background(), db, "usage_ledger")
+	if err != nil {
+		return ParseResult{}, err
+	}
+	mtime, err := gooseSessionFileMtime(dbPath, db, hasUsage, row)
+	if err != nil {
+		return ParseResult{}, err
+	}
 	session := ParsedSession{
 		ID:                  "goose:" + row.id,
 		Project:             project,
@@ -344,14 +383,14 @@ func buildGooseParseResult(
 		CountsAuthoritative: true,
 		File: FileInfo{
 			Path:  GooseSQLiteVirtualPath(dbPath, row.id),
-			Mtime: gooseSessionFileMtime(dbPath, db, row),
+			Mtime: mtime,
 		},
 	}
 	if parentID := strings.TrimSpace(row.parentSessionID); parentID != "" {
 		session.ParentSessionID = "goose:" + parentID
 		session.RelationshipType = RelSubagent
 	}
-	usageEvents, err := listGooseUsageEvents(db, row, startedAt, endedAt)
+	usageEvents, err := listGooseUsageEvents(db, row, hasUsage, startedAt, endedAt)
 	if err != nil {
 		return ParseResult{}, err
 	}
@@ -546,7 +585,10 @@ func gooseParseToolResult(block gjson.Result) (ParsedToolResult, bool) {
 			ContentRaw:    content.Raw,
 		}, true
 	default:
-		return ParsedToolResult{}, false
+		// Unknown statuses still identify the block as a tool response; keep
+		// the pairing ID so the carrier message is not counted as a human
+		// user message.
+		return ParsedToolResult{ToolUseID: toolUseID, ContentRaw: "null"}, true
 	}
 }
 
@@ -592,12 +634,9 @@ func gooseSessionModel(row gooseSessionRow) string {
 func listGooseUsageEvents(
 	db *sql.DB,
 	row gooseSessionRow,
+	hasLedger bool,
 	startedAt, endedAt time.Time,
 ) ([]ParsedUsageEvent, error) {
-	hasLedger, err := gooseTableExists(context.Background(), db, "usage_ledger")
-	if err != nil {
-		return nil, err
-	}
 	if !hasLedger {
 		return gooseAggregateUsageFallback(row, startedAt, endedAt), nil
 	}
@@ -787,28 +826,34 @@ func gooseMessageTime(createdTimestamp int64, fallback string) time.Time {
 }
 
 func gooseSessionFileMtime(
-	dbPath string, db *sql.DB, row gooseSessionRow,
-) int64 {
+	dbPath string, db *sql.DB, hasUsage bool, row gooseSessionRow,
+) (int64, error) {
 	maxTime := maxGooseTime(gooseParseTime(row.updatedAt), gooseParseTime(row.createdAt))
 	var messageTimestamp sql.NullInt64
 	if err := db.QueryRow(
 		"SELECT MAX(created_timestamp) FROM messages WHERE session_id = ?", row.id,
-	).Scan(&messageTimestamp); err == nil && messageTimestamp.Valid {
+	).Scan(&messageTimestamp); err != nil {
+		return 0, fmt.Errorf("reading goose session %s message mtime: %w", row.id, err)
+	}
+	if messageTimestamp.Valid {
 		maxTime = maxGooseTime(maxTime, gooseUnixTimestamp(messageTimestamp.Int64))
 	}
-	if hasUsage, err := gooseTableExists(context.Background(), db, "usage_ledger"); err == nil && hasUsage {
+	if hasUsage {
 		var usageTimestamp sql.NullInt64
 		if err := db.QueryRow(
 			"SELECT MAX(created_timestamp) FROM usage_ledger WHERE session_id = ?", row.id,
-		).Scan(&usageTimestamp); err == nil && usageTimestamp.Valid {
+		).Scan(&usageTimestamp); err != nil {
+			return 0, fmt.Errorf("reading goose session %s usage mtime: %w", row.id, err)
+		}
+		if usageTimestamp.Valid {
 			maxTime = maxGooseTime(maxTime, gooseUnixTimestamp(usageTimestamp.Int64))
 		}
 	}
 	if !maxTime.IsZero() {
-		return maxTime.UnixNano()
+		return maxTime.UnixNano(), nil
 	}
 	mtime, _ := sqliteDBCompositeMtime(dbPath, []string{"", "-wal"})
-	return mtime
+	return mtime, nil
 }
 
 func maxGooseTime(values ...time.Time) time.Time {

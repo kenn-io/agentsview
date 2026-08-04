@@ -343,8 +343,14 @@ func TestResolveSessionID_GooseOnDiskNotInDB(t *testing.T) {
 		);
 		CREATE TABLE messages (
 			id INTEGER PRIMARY KEY,
+			message_id TEXT,
 			session_id TEXT NOT NULL,
-			created_timestamp INTEGER NOT NULL
+			role TEXT NOT NULL,
+			content_json TEXT NOT NULL,
+			created_timestamp INTEGER NOT NULL,
+			timestamp TIMESTAMP,
+			tokens INTEGER,
+			metadata_json TEXT
 		);
 		INSERT INTO sessions (id, working_dir, created_at, updated_at)
 		VALUES ('session-123', '/cwd/goose', '2026-08-03 10:00:00', '2026-08-03 10:01:00');
