@@ -7,7 +7,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/db"
@@ -355,21 +354,6 @@ func (r duckSingleRow) Scan(dest ...any) error {
 		return err
 	}
 	return r.rows.Err()
-}
-
-func formatDBTime(v any) string {
-	switch t := v.(type) {
-	case nil:
-		return ""
-	case time.Time:
-		return t.UTC().Format(time.RFC3339Nano)
-	case string:
-		return t
-	case []byte:
-		return string(t)
-	default:
-		return fmt.Sprint(t)
-	}
 }
 
 type duckFullTextCapability struct{}

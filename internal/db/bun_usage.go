@@ -678,7 +678,9 @@ func (s *BunStore) loadDailyUsageRowsFrom(
 func (s *BunStore) loadSessionUsageRowsFrom(
 	ctx context.Context, store bun.IDB, filter UsageFilter, sessionID string,
 ) ([]usageScanRow, error) {
-	rows, err := s.loadBunUsageProjections(ctx, store, filter, false, sessionID)
+	rows, err := s.loadBunUsageProjections(
+		ctx, store, filter, false, []string{sessionID},
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -693,7 +695,9 @@ func (s *BunStore) loadSessionUsageRowsFrom(
 func (s *BunStore) loadBunSessionUsageRows(
 	ctx context.Context, store bun.IDB, filter UsageFilter, matching bool,
 ) ([]dailyUsageScanRow, error) {
-	projections, err := s.loadBunUsageProjections(ctx, store, filter, matching, "")
+	projections, err := s.loadBunUsageProjections(
+		ctx, store, filter, matching, nil,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -706,7 +710,7 @@ func (s *BunStore) loadBunSessionUsageRows(
 
 func (s *BunStore) loadBunUsageProjections(
 	ctx context.Context, store bun.IDB, filter UsageFilter,
-	matching bool, sessionID string,
+	matching bool, sessionIDs []string,
 ) ([]bunUsageProjection, error) {
 	referenceTime := time.Now().UTC()
 	var messages []bunUsageProjection
@@ -721,8 +725,10 @@ func (s *BunStore) loadBunUsageProjections(
 		messageQuery = messageQuery.Where("m.token_usage != ?", "").
 			Where("m.model != ?", "").Where("m.model != ?", "<synthetic>")
 	}
-	if sessionID != "" {
-		messageQuery = messageQuery.Where("m.session_id = ?", sessionID)
+	if len(sessionIDs) > 0 {
+		messageQuery = messageQuery.Where(
+			"m.session_id IN (?)", bun.List(sessionIDs),
+		)
 	}
 	messageQuery = appendBunUsageFilters(
 		messageQuery, filter, "m.model", s.backend.SessionQueryDialect(), referenceTime,
@@ -744,8 +750,10 @@ func (s *BunStore) loadBunUsageProjections(
 		ColumnExpr(bunEventUsageColumns+","+bunUsageSessionColumns).
 		Join("JOIN sessions AS s ON s.id = ue.session_id").
 		Where("s.deleted_at IS NULL").Where("ue.model != ?", "")
-	if sessionID != "" {
-		eventQuery = eventQuery.Where("ue.session_id = ?", sessionID)
+	if len(sessionIDs) > 0 {
+		eventQuery = eventQuery.Where(
+			"ue.session_id IN (?)", bun.List(sessionIDs),
+		)
 	}
 	eventQuery = appendBunUsageFilters(
 		eventQuery, filter, "ue.model", s.backend.SessionQueryDialect(), referenceTime,
