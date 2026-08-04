@@ -1021,6 +1021,10 @@ func TestVectorPushRoundTrip(t *testing.T) {
 
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
+	state := sync.aliasBackfillSyncStateOrDefault()
+	require.NoError(t, markSessionAliasBackfillDone(state))
+	require.NoError(t, markSessionProvenanceBackfillDone(state))
+	require.NoError(t, markTranscriptRevisionBackfillDone(sync.effectiveSyncState()))
 
 	sync.vectorSource = &fakeVectorSource{
 		gen:    VectorGenerationInfo{Fingerprint: "fp-rt", Model: "m", Dimension: 4},

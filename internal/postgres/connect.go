@@ -17,6 +17,12 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
+// pgTargetWriteContractVersion invalidates persisted push state when the
+// PostgreSQL projection changes. v2 backfills the complete canonical session
+// row introduced by the shared Bun writer instead of allowing old matching
+// fingerprints to leave newly owned columns empty indefinitely.
+const pgTargetWriteContractVersion = "v2-canonical-session"
+
 // RedactDSN returns the host portion of the DSN for diagnostics,
 // stripping credentials, query parameters, and path components
 // that may contain secrets.
@@ -209,7 +215,7 @@ func pgTargetFingerprint(dsn, schema string) (string, error) {
 	}
 
 	fields := []string{
-		"v1",
+		pgTargetWriteContractVersion,
 		cfg.Database,
 		cfg.User,
 		schema,
