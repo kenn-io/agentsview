@@ -313,7 +313,7 @@ func TestProjectIdentityReclassificationReconcilesAggregatesAndPreservesSnapshot
 		UPDATE sessions SET local_modified_at = '2000-01-01T00:00:00Z'
 		WHERE id IN ('gone', 'move')`)
 	require.NoError(t, err)
-	_, err = d.getWriter().ExecContext(ctx, `
+	_, err = d.rawWriter().ExecContext(ctx, `
 		UPDATE source_session_project_identity_snapshots
 		SET git_branch = ?
 		WHERE source_session_id = 'move'`, "feature\xff")

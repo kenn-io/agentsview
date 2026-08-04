@@ -628,7 +628,8 @@ func TestArtifactImportedManifestHashesChunksWithinSQLiteVariableLimit(
 	}
 	require.NoError(t, database.RecordArtifactImportedSession(ctx, first))
 	require.NoError(t, database.RecordArtifactImportedSession(ctx, last))
-	forceReaderVarLimit(t, database, 999)
+	hook := new(countingQueryHook)
+	database.bunReader = database.bunReader.WithQueryHook(hook)
 
 	got, err := database.ArtifactImportedManifestHashes(ctx, origin, gids)
 	require.NoError(t, err)
@@ -636,6 +637,8 @@ func TestArtifactImportedManifestHashesChunksWithinSQLiteVariableLimit(
 		first.GID: first.ManifestHash,
 		last.GID:  last.ManifestHash,
 	}, got)
+	assert.Greater(t, hook.selects, 1,
+		"large artifact manifest lookup is queried in chunks")
 }
 
 func TestArtifactCheckpointStagePagesDeferredSessionsAndLands(t *testing.T) {

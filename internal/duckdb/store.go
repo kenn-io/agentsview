@@ -225,10 +225,10 @@ func NewStoreFromDB(conn *sql.DB) *Store {
 	return store
 }
 
-// DB returns the current handle under a read lock. Callers that hold onto
-// the returned *sql.DB across a mirror replacement keep using the old
-// handle until they call DB() again; this is acceptable for the existing
-// callers, which only use DB() once at startup for compat checks.
+// DB exposes the current driver handle for adapter-owned compatibility probes
+// and mirror lifecycle setup. Application queries use the embedded BunStore.
+// Callers that hold the returned handle across a mirror replacement keep using
+// the old generation until they call DB again; startup probes do not retain it.
 func (s *Store) DB() *sql.DB {
 	s.handleMu.RLock()
 	defer s.handleMu.RUnlock()

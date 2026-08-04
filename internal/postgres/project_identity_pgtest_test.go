@@ -141,7 +141,7 @@ func TestSyncProjectIdentityObservationsBatchMatchesSequential(t *testing.T) {
 		_, err := pg.ExecContext(ctx,
 			`DELETE FROM source_project_identity_observations`)
 		require.NoError(t, err)
-		tx, err := pg.BeginTx(ctx, nil)
+		tx, err := bunDB.BeginTx(ctx, nil)
 		require.NoError(t, err)
 		defer func() { _ = tx.Rollback() }()
 		for _, o := range preExisting {
@@ -152,7 +152,7 @@ func TestSyncProjectIdentityObservationsBatchMatchesSequential(t *testing.T) {
 	}
 
 	reset()
-	tx, err := pg.BeginTx(ctx, nil)
+	tx, err := bunDB.BeginTx(ctx, nil)
 	require.NoError(t, err)
 	for _, o := range batch {
 		require.NoError(t, upsertProjectIdentityObservation(ctx, tx, o, ""))
@@ -164,7 +164,7 @@ func TestSyncProjectIdentityObservationsBatchMatchesSequential(t *testing.T) {
 	bunTx, err := bunDB.BeginTx(ctx, nil)
 	require.NoError(t, err)
 	require.NoError(t, syncProjectIdentityObservationsBatch(
-		ctx, bunTx.Tx, bunTx, "archive-batch", "archive-batch-salt", batch,
+		ctx, bunTx, bunTx, "archive-batch", "archive-batch-salt", batch,
 	))
 	require.NoError(t, bunTx.Commit())
 	batched := readIdentityRows(t, ctx, pg)
@@ -206,7 +206,7 @@ func TestSyncProjectIdentityObservationsBatchMatchesSequential(t *testing.T) {
 	bunTx, err = bunDB.BeginTx(ctx, nil)
 	require.NoError(t, err)
 	require.NoError(t, syncProjectIdentityObservationsBatch(
-		ctx, bunTx.Tx, bunTx, "archive-batch", "archive-batch-salt", nil,
+		ctx, bunTx, bunTx, "archive-batch", "archive-batch-salt", nil,
 	))
 	require.NoError(t, bunTx.Commit())
 	assert.Equal(t, batched, readIdentityRows(t, ctx, pg))

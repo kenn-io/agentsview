@@ -229,10 +229,10 @@ func (db *DB) WriteSessionBatchContext(
 	return result, nil
 }
 
-// WriteSessionBatchAtomic writes all sessions in one
+// writeArchiveSessionBatchAtomic writes all sessions in one
 // transaction. Any rejected or failed row rolls back the whole
 // batch.
-func (db *DB) WriteSessionBatchAtomic(
+func (db *DB) writeArchiveSessionBatchAtomic(
 	writes []SessionBatchWrite,
 	beforeCommit ...func() error,
 ) (SessionBatchResult, error) {

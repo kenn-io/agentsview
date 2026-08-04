@@ -25,8 +25,9 @@ func NewStore(
 	return newStore(pg), nil
 }
 
-// DB returns the underlying *sql.DB for operations that need
-// direct access (e.g. schema compatibility checks).
+// DB exposes the stable driver pool only to adapter-owned schema, connection,
+// and vector capability setup. Server-facing application queries are owned by
+// the embedded BunStore.
 func (s *Store) DB() *sql.DB { return s.pg }
 
 // Close closes the underlying database connection.
