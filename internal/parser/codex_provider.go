@@ -414,6 +414,16 @@ func newCodexSourceSet(agent AgentType, roots []string) codexSourceSet {
 	return codexSourceSet{agent: agent, roots: cleanJSONLRoots(roots)}
 }
 
+// ownsCodexSidecars reports whether this source set's agent is the one that
+// owns Codex's out-of-band files: the session_index.jsonl sidecar and the
+// s3://.../raw/codex/... archive layout. Only Codex does. A fork writes
+// neither, so it must not watch, fan out on, or import them -- importing an
+// s3:// root through discoverCodexS3 would stamp AgentCodex and silently move
+// the sessions into Codex's identity namespace.
+func (s codexSourceSet) ownsCodexSidecars() bool {
+	return s.agent == AgentCodex
+}
+
 func (s codexSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	return s.discover(ctx, func(string) bool { return true })
 }
@@ -426,6 +436,9 @@ func (s codexSourceSet) DiscoverEach(
 			return err
 		}
 		if strings.HasPrefix(root, "s3://") {
+			if !s.ownsCodexSidecars() {
+				continue
+			}
 			for _, file := range discoverCodexS3(root) {
 				if err := yield(s3SourceRefFromDiscoveredFile(file)); err != nil {
 					return err
@@ -477,6 +490,9 @@ func (s codexSourceSet) discover(
 			// payload. Each object is its own session keyed by URI, so the
 			// live-over-archived preference (which inspects a local codexSource
 			// layout) does not apply here.
+			if !s.ownsCodexSidecars() {
+				continue
+			}
 			for _, file := range discoverCodexS3(root) {
 				source := s3SourceRefFromDiscoveredFile(file)
 				if _, ok := byKey[source.Key]; ok {
@@ -617,6 +633,9 @@ func (s codexSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 			IncludeGlobs: []string{"*.jsonl"},
 			DebounceKey:  string(s.agent) + ":sessions:" + root,
 		})
+		if !s.ownsCodexSidecars() {
+			continue
+		}
 		for _, shallow := range ResolveCodexShallowWatchRoots(root) {
 			shallow = filepath.Clean(shallow)
 			if _, ok := seenShallow[shallow]; ok {
@@ -641,7 +660,8 @@ func (s codexSourceSet) SourcesForChangedPath(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if filepath.Base(req.Path) == CodexSessionIndexFilename {
+	if s.ownsCodexSidecars() &&
+		filepath.Base(req.Path) == CodexSessionIndexFilename {
 		return s.sourcesForIndexPath(ctx, req.Path)
 	}
 	for _, root := range s.roots {

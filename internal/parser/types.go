@@ -179,10 +179,16 @@ var Registry = []AgentDef{
 		ConfigKey:   "traex_sessions_dirs",
 		DefaultDirs: []string{
 			".trae/cli/sessions",
+			// `traex archive <id>` moves a rollout out of the dated tree into
+			// this flat directory, exactly as `codex archive` does.
+			".trae/cli/archived_sessions",
 		},
-		IDPrefix:              "traex:",
-		FileBased:             true,
-		ShallowWatchRootsFunc: ResolveCodexShallowWatchRoots,
+		IDPrefix:  "traex:",
+		FileBased: true,
+		// No ShallowWatchRootsFunc: that hook exists for Codex's sibling
+		// session_index.jsonl, which TraeX never writes. Watching
+		// ~/.trae/cli shallowly would deliver nothing but churn from the
+		// SQLite WALs TRAE CLI keeps there.
 	},
 	{
 		Type:         AgentCopilot,

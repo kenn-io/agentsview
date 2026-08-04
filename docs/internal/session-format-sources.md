@@ -207,8 +207,9 @@ Grok section and remove the explicit registry exception in the coverage test.
 ## TraeX (`traex`)
 
 - **Format:** Codex-compatible rollout JSONL under a dated `YYYY/MM/DD` tree,
-  written by TRAE CLI 2.0. The sibling `history.jsonl` carries the same
-  `session_id`/Unix-seconds `ts`/prompt `text` records Codex writes, and
+  written by TRAE CLI 2.0, plus the flat `archived_sessions/` directory that
+  `traex archive <id>` moves a rollout into. The sibling `history.jsonl`
+  carries the same `session_id`/Unix-seconds `ts`/prompt `text` records, and
   agentsview consumes it as the same live-activity hint. No
   `session_index.jsonl` sidecar is produced, so titles come from the rollout
   head alone.

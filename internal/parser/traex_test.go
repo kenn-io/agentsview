@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -110,7 +111,6 @@ func TestTraeXRegistryEntry(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "traex:", def.IDPrefix)
 	assert.True(t, def.FileBased)
-	assert.Equal(t, []string{".trae/cli/sessions"}, def.DefaultDirs)
 	// TraeX writes plaintext rollouts, so unlike the Trae IDE entry it must
 	// stay eligible for remote sync.
 	assert.False(t, def.RemoteSyncExcluded)
@@ -257,4 +257,92 @@ func TestTraeXAndCodexProvidersKeepSeparateSourceKeys(t *testing.T) {
 		CodexSourceKey(AgentCodex, uuid),
 		CodexSourceKey(AgentTraeX, uuid),
 	)
+}
+
+// TestTraeXProviderIgnoresCodexSidecars covers the three Codex-only
+// out-of-band surfaces the shared provider must not expose to a fork: the
+// session_index.jsonl watch, the index changed-path fan-out, and the
+// s3://.../raw/codex archive layout. TraeX writes none of them, and importing
+// an S3 root through the Codex scanner would stamp AgentCodex, silently moving
+// the sessions into Codex's identity namespace.
+func TestTraeXProviderIgnoresCodexSidecars(t *testing.T) {
+	base := filepath.Join(t.TempDir(), ".trae", "cli")
+	root := filepath.Join(base, "sessions")
+	const uuid = "019fbcca-9fd4-7d20-83dc-0762b2f839b3"
+	path := filepath.Join(
+		root, "2026", "08", "01",
+		"rollout-2026-08-01T18-07-03-"+uuid+".jsonl",
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/home/user/code/api", "codex-tui",
+			"2026-08-01T18:07:03.636Z",
+		),
+	)), 0o644))
+	// A stray index file: copied in, or left by a Codex root that used to own
+	// this directory. It must not fan out to every TraeX session.
+	indexPath := filepath.Join(base, CodexSessionIndexFilename)
+	require.NoError(t, os.WriteFile(indexPath, []byte(
+		`{"id":"`+uuid+`","thread_name":"Renamed","updated_at":`+
+			`"2026-08-01T18:07:03Z"}`+"\n",
+	), 0o644))
+
+	provider, ok := NewProvider(AgentTraeX, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	plan, err := provider.WatchPlan(context.Background())
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 1, "no shallow session_index.jsonl watch")
+	assert.Equal(t, root, plan.Roots[0].Path)
+	assert.True(t, plan.Roots[0].Recursive)
+
+	classifier, ok := provider.(interface {
+		SourcesForChangedPath(
+			context.Context, ChangedPathRequest,
+		) ([]SourceRef, error)
+	})
+	require.True(t, ok)
+	sources, err := classifier.SourcesForChangedPath(
+		context.Background(), ChangedPathRequest{Path: indexPath},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, sources, "index events must not fan out for a fork")
+
+	oldList := listS3Objects
+	t.Cleanup(func() { listS3Objects = oldList })
+	listS3Objects = func(string) ([]S3Object, error) {
+		return []S3Object{{
+			URI: "s3://bucket/devbox/raw/codex/2026/08/01/" +
+				"rollout-2026-08-01T18-07-03-" + uuid + ".jsonl",
+			Size:         11,
+			LastModified: time.Unix(100, 0),
+			Fingerprint:  "s3-meta:rollout",
+		}}, nil
+	}
+	s3Provider, ok := NewProvider(AgentTraeX, ProviderConfig{
+		Roots: []string{"s3://bucket/devbox/raw/codex"},
+	})
+	require.True(t, ok)
+	s3Sources, err := s3Provider.Discover(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, s3Sources,
+		"TraeX has no S3 archive convention and must not import one as Codex")
+}
+
+// TestTraeXRegistryCoversArchivedSessions guards the `traex archive <id>`
+// destination: TRAE CLI moves a rollout out of the dated tree into a flat
+// archived_sessions directory, mirroring `codex archive`.
+func TestTraeXRegistryCoversArchivedSessions(t *testing.T) {
+	def, ok := AgentByType(AgentTraeX)
+	require.True(t, ok)
+	assert.Equal(t, []string{
+		".trae/cli/sessions",
+		".trae/cli/archived_sessions",
+	}, def.DefaultDirs)
+	assert.Nil(t, def.ShallowWatchRootsFunc,
+		"the shallow watch exists for Codex's session_index.jsonl only")
 }
