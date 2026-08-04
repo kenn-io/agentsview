@@ -58,6 +58,7 @@ func (b *postgresBunBackend) Capabilities() db.BackendCapabilities {
 		writes[db.WriteInsightDelete] = true
 	}
 	return db.BackendCapabilities{
+		FullText:         postgresFullTextCapability{},
 		Writes:           writes,
 		SessionMutations: postgresSessionMutationAdapter{},
 	}

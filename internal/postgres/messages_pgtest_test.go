@@ -33,6 +33,24 @@ func TestStoreSearchILIKE(t *testing.T) {
 	}
 }
 
+func TestPGBunStoreSearchUsesFullTextCapability(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+
+	store, err := NewStore(pgURL, testSchema, true)
+	require.NoError(t, err)
+	defer store.Close()
+
+	common := store.BunStore
+	page, err := common.Search(t.Context(), db.SearchFilter{
+		Query: "hello", Project: "test-project", Limit: 10,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	assert.Equal(t, "store-test-001", page.Results[0].SessionID)
+}
+
 func TestPGSearchDeduplication(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
