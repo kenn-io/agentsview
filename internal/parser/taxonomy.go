@@ -226,7 +226,7 @@ func NormalizeToolCategory(rawName string) string {
 	case "suggest_followups", "write_todos", "read_url", "ask_user",
 		"render_ui", "gravity_index":
 		return "Tool"
-	case "basher":
+	case "run_terminal_command", "basher":
 		return "Bash"
 	case "code-searcher", "code-reviewer":
 		return "Tool"

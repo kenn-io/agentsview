@@ -844,20 +844,20 @@ func parseCodebuffAIMessage(
 			}
 			toolCalls = append(toolCalls, tc)
 
-			// Emit agent output text immediately associated with the
-			// tool call, not deferred to a later flush.
+			// Emit agent output as a linked ParsedToolResult rather
+			// than an ordinary assistant text message. Representing
+			// the output as a tool result lets the configured result-
+			// content blocking system (BlockedResultCategories)
+			// strip it when the Task category is blocked. Without
+			// this, agent-block output stored as ordinary assistant
+			// text survives blocking and retains content the operator
+			// explicitly configured agentsview not to store.
 			if output := block.Get("content"); output.Exists() && output.Str != "" {
-				prefix := agentName
-				if agentType != "" {
-					prefix = agentType + ":" + agentName
-				}
-				// Flush accumulated tool calls first, then emit output.
-				flushTools()
-				textBuf = append(textBuf, textEntry{
-					content:  "[" + prefix + " (" + status + ")]\n" + output.Str,
-					isReason: false,
+				toolResults = append(toolResults, ParsedToolResult{
+					ToolUseID:     agentID,
+					ContentRaw:    output.Raw,
+					ContentLength: len(output.Raw),
 				})
-				flushText()
 			}
 
 		case "mode-divider":

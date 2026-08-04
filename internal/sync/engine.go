@@ -6565,7 +6565,7 @@ func (e *Engine) discoveredFileEffectiveMtime(
 	// companion-only change still looks fresh and a same-size rewrite
 	// with preserved mtime advances the cutoff via ctime. Sources that
 	// pass the cutoff go on to the full fingerprint as usual.
-	if file.Agent == parser.AgentCodebuff {
+	if file.Agent == parser.AgentCodebuff || file.Agent == parser.AgentFreebuff {
 		info, err := os.Stat(file.Path)
 		if err != nil {
 			return 0, err
