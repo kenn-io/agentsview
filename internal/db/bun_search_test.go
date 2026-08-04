@@ -409,6 +409,21 @@ func TestSQLiteBunStoreSearchContentSubstringFoldsNonASCIICase(t *testing.T) {
 	assert.Equal(t, "unicode-content", page.Matches[0].SessionID)
 }
 
+func TestSQLiteBunStoreSearchContentSubstringFoldsASCIIToUnicode(t *testing.T) {
+	database := testDB(t)
+	seedSearchSession(t, database, "unicode-kelvin", "alpha", [][2]string{
+		{"user", "temperature uses Kelvin units"},
+	})
+
+	page, err := database.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "kelvin", Sources: []string{"messages"},
+		IncludeOneShot: true, Limit: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "unicode-kelvin", page.Matches[0].SessionID)
+}
+
 func TestSQLiteBunStoreSearchContentUsesCanonicalRows(t *testing.T) {
 	database := testDB(t)
 	seedSearchSession(t, database, "sqlite-content", "alpha", [][2]string{

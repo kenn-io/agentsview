@@ -46,6 +46,9 @@ func CanonicalModelPricingRows(
 			CacheReadMicrodollarsPerMTok:     price.CacheReadPerMTok.Microdollars,
 			UpdatedAt:                        updatedAt,
 		})
+		if strings.HasPrefix(pattern, "_") {
+			continue
+		}
 		for _, band := range price.Bands {
 			threshold, err := safecast.Convert[int64](band.AboveInputTokens)
 			if err != nil {
@@ -85,29 +88,31 @@ func CanonicalCursorUsageEventRows(
 ) ([]bunmodel.CursorUsageEvent, error) {
 	rows := make([]bunmodel.CursorUsageEvent, 0, len(events))
 	for _, event := range events {
-		if event.Model == "" {
-			return nil, fmt.Errorf("cursor usage event model is required")
-		}
 		occurredAt, err := requiredTimestampToBunRow(event.OccurredAt)
 		if err != nil {
 			return nil, fmt.Errorf("cursor usage event occurred_at: %w", err)
 		}
 		truncateCanonicalTimestamp(&occurredAt)
-		dedupKey := event.DedupKey
+		event.Model = SanitizeUTF8(event.Model)
+		event.Kind = SanitizeUTF8(event.Kind)
+		event.UserID = SanitizeUTF8(event.UserID)
+		event.UserEmail = SanitizeUTF8(event.UserEmail)
+		dedupKey := SanitizeUTF8(event.DedupKey)
 		if dedupKey == "" {
+			event.DedupKey = ""
 			dedupKey = CursorUsageEventDedupKey(event)
 		}
 		if dedupKey == "" {
 			return nil, fmt.Errorf("cursor usage event dedup key is required")
 		}
 		rows = append(rows, bunmodel.CursorUsageEvent{
-			OccurredAt: occurredAt, Model: SanitizeUTF8(event.Model),
-			Kind: SanitizeUTF8(event.Kind), InputTokens: event.InputTokens,
+			OccurredAt: occurredAt, Model: event.Model,
+			Kind: event.Kind, InputTokens: event.InputTokens,
 			OutputTokens: event.OutputTokens, CacheWriteTokens: event.CacheWriteTokens,
 			CacheReadTokens:            event.CacheReadTokens,
 			ChargedMicrodollars:        event.Charged.Microdollars,
 			CursorTokenFeeMicrodollars: event.CursorTokenFee.Microdollars,
-			UserID:                     SanitizeUTF8(event.UserID), UserEmail: SanitizeUTF8(event.UserEmail),
+			UserID:                     event.UserID, UserEmail: event.UserEmail,
 			IsHeadless: event.IsHeadless, DedupKey: SanitizeUTF8(dedupKey),
 		})
 	}
@@ -139,6 +144,7 @@ func UpsertModelPricingRows(
 	bands []bunmodel.ModelPricingBand,
 ) error {
 	patterns := make([]string, 0, len(prices))
+	bandPatterns := make([]string, 0, len(prices))
 	allowed := make(map[string]struct{}, len(prices))
 	for _, price := range prices {
 		if price.ModelPattern == "" {
@@ -152,11 +158,20 @@ func UpsertModelPricingRows(
 		}
 		allowed[price.ModelPattern] = struct{}{}
 		patterns = append(patterns, price.ModelPattern)
+		if !strings.HasPrefix(price.ModelPattern, "_") {
+			bandPatterns = append(bandPatterns, price.ModelPattern)
+		}
 	}
 	for _, band := range bands {
 		if _, ok := allowed[band.ModelPattern]; !ok {
 			return fmt.Errorf(
 				"upserting model pricing rows: band model %q has no base row",
+				band.ModelPattern,
+			)
+		}
+		if strings.HasPrefix(band.ModelPattern, "_") {
+			return fmt.Errorf(
+				"upserting model pricing rows: metadata model %q cannot own bands",
 				band.ModelPattern,
 			)
 		}
@@ -166,13 +181,55 @@ func UpsertModelPricingRows(
 	}
 
 	return store.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		prices = append([]bunmodel.ModelPricing(nil), prices...)
+		bands = append([]bunmodel.ModelPricingBand(nil), bands...)
+		var existingPrices []bunmodel.ModelPricing
+		if err := tx.NewSelect().Model(&existingPrices).
+			Where("model_pattern IN (?)", bun.List(patterns)).Scan(ctx); err != nil {
+			return fmt.Errorf("reading model pricing revisions: %w", err)
+		}
+		existingPriceRevision := make(map[string]string, len(existingPrices))
+		for _, existing := range existingPrices {
+			existingPriceRevision[existing.ModelPattern] = existing.UpdatedAt
+		}
+		defaultRevision := time.Now().UTC().Format(time.RFC3339Nano)
+		for i := range prices {
+			prices[i].UpdatedAt = nextPricingRevision(
+				existingPriceRevision[prices[i].ModelPattern],
+				prices[i].UpdatedAt, defaultRevision,
+			)
+		}
+		var existingBands []bunmodel.ModelPricingBand
+		if len(bandPatterns) > 0 {
+			if err := tx.NewSelect().Model(&existingBands).
+				Where("model_pattern IN (?)", bun.List(bandPatterns)).Scan(ctx); err != nil {
+				return fmt.Errorf("reading model pricing band revisions: %w", err)
+			}
+		}
+		type bandKey struct {
+			pattern   string
+			threshold int64
+		}
+		existingBandRevision := make(map[bandKey]string, len(existingBands))
+		for _, existing := range existingBands {
+			existingBandRevision[bandKey{
+				existing.ModelPattern, existing.AboveInputTokens,
+			}] = existing.UpdatedAt
+		}
+		for i := range bands {
+			bands[i].UpdatedAt = nextPricingRevision(
+				existingBandRevision[bandKey{
+					bands[i].ModelPattern, bands[i].AboveInputTokens,
+				}], bands[i].UpdatedAt, defaultRevision,
+			)
+		}
 		for start := 0; start < len(prices); start += bunPricingWriteBatchSize {
 			end := min(start+bunPricingWriteBatchSize, len(prices))
 			if err := upsertModelPricingRowBatch(ctx, tx, prices[start:end]); err != nil {
 				return fmt.Errorf("upserting model pricing rows: %w", err)
 			}
 		}
-		return ReplaceModelPricingBandRows(ctx, tx, patterns, bands)
+		return ReplaceModelPricingBandRows(ctx, tx, bandPatterns, bands)
 	})
 }
 
@@ -209,6 +266,18 @@ func upsertModelPricingRowBatch(
 		updated_at = EXCLUDED.updated_at`)
 	_, err := store.NewRaw(query.String(), args...).Exec(ctx)
 	return err
+}
+
+func nextPricingRevision(existing, proposed, fallback string) string {
+	if proposed == "" {
+		proposed = fallback
+	}
+	existingTime, existingErr := bunmodel.ParseTimestamp(existing)
+	proposedTime, proposedErr := bunmodel.ParseTimestamp(proposed)
+	if existingErr != nil || proposedErr != nil || proposedTime.After(existingTime.Time) {
+		return proposed
+	}
+	return existingTime.Add(time.Microsecond).UTC().Format(time.RFC3339Nano)
 }
 
 // ReplaceModelPricingBandRows replaces bands for modelPatterns on the supplied

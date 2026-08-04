@@ -18,6 +18,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
@@ -42,6 +43,33 @@ func TestPushIncrementalReplacesOnlyChangedSessions(t *testing.T) {
 	assert.Equal(t, 1, res.Diagnostics.PushedSessions.Total)
 	assert.LessOrEqual(t, res.Diagnostics.CandidateSessions.Total, 2)
 	assertMirrorMessageCount(t, path, "sess-2", 3)
+}
+
+func TestPushSingleSessionPersistsFingerprintOfWrittenSnapshot(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	syncer := newTestSync(t, path, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.duck))
+	require.NoError(t, syncer.ensureArchiveID(ctx))
+	sessions, err := local.ListSessionsForMirrorWindow(ctx, "", nil, nil)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	preflight, err := syncer.sessionFingerprints(ctx, sessions)
+	require.NoError(t, err)
+
+	appendMessage(t, local, sessions[0].ID)
+	written, err := syncer.sessionFingerprints(ctx, sessions)
+	require.NoError(t, err)
+	require.NotEqual(t, preflight[sessions[0].ID], written[sessions[0].ID])
+	_, err = syncer.pushSingleSession(ctx, sessions[0])
+	require.NoError(t, err)
+
+	var stored string
+	require.NoError(t, syncer.duck.QueryRowContext(ctx, `
+		SELECT agentsview_push_fingerprint FROM sessions WHERE id = ?`,
+		sessions[0].ID,
+	).Scan(&stored))
+	assert.Equal(t, written[sessions[0].ID], stored)
 }
 
 func TestMirroredSessionMachine(t *testing.T) {
@@ -656,11 +684,7 @@ func TestCanonicalSessionBatchUpdatesExistingToolLogicalKey(t *testing.T) {
 	syncer, err := New(path, local, "test-machine", SyncOptions{})
 	require.NoError(t, err)
 	require.NoError(t, syncer.ensureArchiveID(ctx))
-	_, err = syncer.tryPushSessionBatch(
-		ctx, []db.Session{child, sess}, map[string]string{
-			childID: "child-first", sessionID: "first",
-		},
-	)
+	_, err = syncer.tryPushSessionBatch(ctx, []db.Session{child, sess})
 	require.NoError(t, err)
 	require.NoError(t, syncer.Close())
 
@@ -678,11 +702,7 @@ func TestCanonicalSessionBatchUpdatesExistingToolLogicalKey(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	require.NoError(t, syncer.ensureArchiveID(ctx))
-	_, err = syncer.tryPushSessionBatch(
-		ctx, []db.Session{*childRow, *parentRow}, map[string]string{
-			childID: "child-second", sessionID: "second",
-		},
-	)
+	_, err = syncer.tryPushSessionBatch(ctx, []db.Session{*childRow, *parentRow})
 	require.NoError(t, err)
 
 	var subagent sql.NullString
@@ -1162,7 +1182,7 @@ func TestPushSessionBatchReturnsContextCancellation(t *testing.T) {
 			"duck-canceled", "alpha", "canceled",
 			"2026-01-10T00:00:00.000Z", 1,
 		)},
-		0, 1, &result, &pushed, nil, nil,
+		0, 1, &result, &pushed, nil,
 	)
 
 	require.ErrorIs(t, err, context.Canceled)
@@ -1220,7 +1240,7 @@ func TestPushSessionBatchLogsAbandonedSessionsAfterContextCancel(
 			if p.SessionsDone == 1 {
 				cancel()
 			}
-		}, nil,
+		},
 	)
 
 	require.ErrorIs(t, err, context.Canceled)
@@ -1322,10 +1342,8 @@ func TestDuckSessionFingerprintIncludesDeletionCause(t *testing.T) {
 	cause := "source_missing"
 	withCause.DeletionCause = &cause
 
-	assert.NotEqual(t,
-		duckSessionFingerprintFields(base, base.Machine),
-		duckSessionFingerprintFields(withCause, withCause.Machine),
-	)
+	assert.NotEqual(t, encodeDuckSessionFingerprint(t, base),
+		encodeDuckSessionFingerprint(t, withCause))
 }
 
 func TestDuckSessionFingerprintFieldsDiffer(t *testing.T) {
@@ -1339,9 +1357,7 @@ func TestDuckSessionFingerprintFieldsDiffer(t *testing.T) {
 		CreatedAt:        "2026-03-11T12:00:00Z",
 	}
 	encode := func(s db.Session) string {
-		data, err := json.Marshal(duckSessionFingerprintFields(s, "laptop"))
-		require.NoError(t, err)
-		return string(data)
+		return encodeDuckSessionFingerprint(t, s)
 	}
 	fp1 := encode(base)
 
@@ -1410,16 +1426,29 @@ func TestDuckSessionFingerprintFieldsDiffer(t *testing.T) {
 func TestDuckSessionFingerprintCoversEveryMirroredColumn(t *testing.T) {
 	base := db.Session{CreatedAt: "2026-03-11T12:00:00Z"}
 	encodeArgs := func(s db.Session) string {
-		data, err := json.Marshal(sessionInsertArgs(
-			s, "m", "archive", "generation", "fp",
-		))
+		canonicalTime := "2026-03-11T12:00:01.123456Z"
+		for _, field := range []**string{
+			&s.StartedAt, &s.EndedAt, &s.SignalsPendingSince,
+			&s.DeletedAt, &s.LocalModifiedAt,
+		} {
+			if *field != nil {
+				*field = &canonicalTime
+			}
+		}
+		if _, err := bunmodel.ParseTimestamp(s.CreatedAt); err != nil {
+			s.CreatedAt = canonicalTime
+		}
+		s.Machine = mirroredSessionMachine(s, "m")
+		s.SourceArchiveID = "archive"
+		s.SourceDatabaseGeneration = "generation"
+		row, err := db.CanonicalSessionRow(s)
+		require.NoError(t, err)
+		data, err := json.Marshal(row)
 		require.NoError(t, err)
 		return string(data)
 	}
 	encodeFingerprint := func(s db.Session) string {
-		data, err := json.Marshal(duckSessionFingerprintFields(s, "m"))
-		require.NoError(t, err)
-		return string(data)
+		return encodeDuckSessionFingerprint(t, s)
 	}
 	baseArgs := encodeArgs(base)
 	baseFingerprint := encodeFingerprint(base)
@@ -1444,6 +1473,32 @@ func TestDuckSessionFingerprintCoversEveryMirroredColumn(t *testing.T) {
 	}
 	assert.GreaterOrEqual(t, mirrored, 60,
 		"perturbation stopped detecting mirrored fields; fix perturbSessionField")
+}
+
+func encodeDuckSessionFingerprint(t *testing.T, session db.Session) string {
+	t.Helper()
+	canonicalTime := "2026-03-11T12:00:01.123456Z"
+	for _, field := range []**string{
+		&session.StartedAt, &session.EndedAt, &session.SignalsPendingSince,
+		&session.DeletedAt, &session.LocalModifiedAt,
+	} {
+		if *field != nil {
+			*field = &canonicalTime
+		}
+	}
+	if session.CreatedAt == "" {
+		session.CreatedAt = "2026-03-11T12:00:00Z"
+	} else if _, err := bunmodel.ParseTimestamp(session.CreatedAt); err != nil {
+		session.CreatedAt = canonicalTime
+	}
+	session.Machine = mirroredSessionMachine(session, "laptop")
+	session.SourceArchiveID = "archive"
+	session.SourceDatabaseGeneration = "generation"
+	fingerprint, err := db.CanonicalSessionReplicationFingerprint(
+		db.SessionReplicationSnapshot{Session: session},
+	)
+	require.NoError(t, err)
+	return fingerprint
 }
 
 // perturbSessionField returns a copy of base with exported field i set to a

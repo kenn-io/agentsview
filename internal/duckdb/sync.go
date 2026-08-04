@@ -2,10 +2,7 @@ package duckdb
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -514,7 +511,7 @@ func (s *Sync) pushChangedSessions(
 		return nil, nil, err
 	}
 
-	changed, unchanged, fingerprints, err := s.selectChangedSessions(ctx, inScope)
+	changed, unchanged, _, err := s.selectChangedSessions(ctx, inScope)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -525,7 +522,7 @@ func (s *Sync) pushChangedSessions(
 		end := min(batchStart+duckSessionPushBatchSize, len(changed))
 		if err := s.pushSessionBatchForMode(
 			ctx, changed[batchStart:end], batchStart, len(changed),
-			result, &pushed, onProgress, fingerprints,
+			result, &pushed, onProgress,
 		); err != nil {
 			return nil, nil, err
 		}
@@ -789,15 +786,14 @@ func (s *Sync) pushSessionBatchForMode(
 	result *PushResult,
 	pushed *[]db.Session,
 	onProgress func(PushProgress),
-	fingerprints map[string]string,
 ) error {
 	return pushSessionBatchWith(
 		ctx, sessions, offset, total, result, pushed, onProgress,
 		func(ctx context.Context, sessions []db.Session) ([]int, error) {
-			return s.tryPushSessionBatch(ctx, sessions, fingerprints)
+			return s.tryPushSessionBatch(ctx, sessions)
 		},
 		func(ctx context.Context, sess db.Session) (int, error) {
-			return s.pushSingleSession(ctx, sess, fingerprints[sess.ID])
+			return s.pushSingleSession(ctx, sess)
 		},
 	)
 }
@@ -910,7 +906,7 @@ func reportDuckPushProgress(
 }
 
 func (s *Sync) tryPushSessionBatch(
-	ctx context.Context, sessions []db.Session, fingerprints map[string]string,
+	ctx context.Context, sessions []db.Session,
 ) ([]int, error) {
 	tx, err := s.bun.BeginTx(ctx, nil)
 	if err != nil {
@@ -920,7 +916,7 @@ func (s *Sync) tryPushSessionBatch(
 	messagesBySession := make([]int, len(sessions))
 
 	for i, sess := range sessions {
-		messages, err := s.pushSession(ctx, tx, sess, fingerprints[sess.ID])
+		messages, err := s.pushSession(ctx, tx, sess)
 		if err != nil {
 			return nil, fmt.Errorf("pushing duckdb session %s: %w", sess.ID, err)
 		}
@@ -933,14 +929,14 @@ func (s *Sync) tryPushSessionBatch(
 }
 
 func (s *Sync) pushSingleSession(
-	ctx context.Context, sess db.Session, fingerprint string,
+	ctx context.Context, sess db.Session,
 ) (int, error) {
 	tx, err := s.bun.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin duckdb session tx %s: %w", sess.ID, err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	messages, err := s.pushSession(ctx, tx, sess, fingerprint)
+	messages, err := s.pushSession(ctx, tx, sess)
 	if err != nil {
 		return 0, err
 	}
@@ -978,14 +974,9 @@ func (s *Sync) sessionFingerprints(
 	ctx context.Context,
 	sessions []db.Session,
 ) (map[string]string, error) {
-	ids := sessionIDs(sessions)
-	usage, err := s.local.UsageEventFingerprints(ids)
-	if err != nil {
-		return nil, fmt.Errorf("computing usage fingerprints: %w", err)
-	}
 	out := make(map[string]string, len(sessions))
 	for _, sess := range sessions {
-		msgs, err := s.local.GetAllMessages(ctx, sess.ID)
+		snapshot, err := s.local.ReadSessionReplicationSnapshot(ctx, sess.ID)
 		if err != nil {
 			if errors.Is(err, bunmodel.ErrUnsupportedTimestamp) {
 				// Canonical writes always use a 64-character SHA-256 hex
@@ -996,96 +987,13 @@ func (s *Sync) sessionFingerprints(
 				out[sess.ID] = "invalid-message-timestamp"
 				continue
 			}
-			return nil, fmt.Errorf("message fingerprint %s: %w", sess.ID, err)
+			return nil, fmt.Errorf("session fingerprint snapshot %s: %w", sess.ID, err)
 		}
-		findings, err := s.local.SessionSecretFindings(ctx, sess.ID)
-		if err != nil {
-			return nil, fmt.Errorf("secret finding fingerprint %s: %w", sess.ID, err)
-		}
-		pins, err := s.local.ListPinnedMessages(ctx, sess.ID, "")
-		if err != nil {
-			return nil, fmt.Errorf("pin fingerprint %s: %w", sess.ID, err)
-		}
-		// file_path and call_index are json:"-" on ToolCall, so the
-		// marshaled Messages do not cover them. Fold in the tool-call
-		// fingerprint so a file_path-only backfill invalidates the mirror.
-		toolCalls, err := s.local.ToolCallFingerprint(sess.ID)
-		if err != nil {
-			return nil, fmt.Errorf("tool call fingerprint %s: %w", sess.ID, err)
-		}
-		payload := struct {
-			SessionFields  []any
-			Messages       []db.Message
-			Usage          string
-			ToolCalls      string
-			SecretFindings []db.SecretFinding
-			Pins           []db.PinnedMessage
-		}{
-			SessionFields: duckSessionFingerprintFields(
-				sess, mirroredSessionMachine(sess, s.machine),
-			),
-			Messages:       msgs,
-			Usage:          usage[sess.ID],
-			ToolCalls:      toolCalls,
-			SecretFindings: findings,
-			Pins:           pins,
-		}
-		data, err := json.Marshal(payload)
+		s.stampReplicationSnapshot(&snapshot)
+		out[sess.ID], err = db.CanonicalSessionReplicationFingerprint(snapshot)
 		if err != nil {
 			return nil, fmt.Errorf("encoding session fingerprint %s: %w", sess.ID, err)
 		}
-		sum := sha256.Sum256(data)
-		out[sess.ID] = hex.EncodeToString(sum[:])
 	}
 	return out, nil
-}
-
-// duckSessionFingerprintFields lists the session-scalar portion of the
-// push fingerprint. Invariant: every session column upsertSession mirrors
-// (see sessionInsertArgs) is covered here, so no mirrored value can go
-// stale while the fingerprint still reports the session as unchanged;
-// TestDuckSessionFingerprintCoversEveryMirroredColumn enforces the
-// invariant by reflection. That deliberately includes local_modified_at,
-// the file-stat columns, and the quality-signal columns: UpdateSessionSignals
-// bumps local_modified_at on every signal recompute, so a quality-signal
-// version bump already re-lists every session as an incremental candidate —
-// the enumeration cost is paid regardless, and excluding recomputed columns
-// from the fingerprint would only skip the re-push and leave the mirror's
-// quality analytics stale until the next full rebuild.
-func duckSessionFingerprintFields(sess db.Session, machine string) []any {
-	return []any{
-		sess.ID, sess.Project, mirroredSessionMachine(sess, machine), sess.Agent,
-		sess.AgentLabel, sess.Entrypoint, sess.SessionKind,
-		nilString(sess.FirstMessage), nilString(sess.DisplayName),
-		nilString(sess.SessionName),
-		nilTime(sess.StartedAt), nilTime(sess.EndedAt),
-		sess.MessageCount, sess.UserMessageCount,
-		nilString(sess.FilePath), sess.FileSize, sess.FileMtime,
-		sess.FileInode, sess.FileDevice, nilString(sess.FileHash),
-		nilTime(sess.LocalModifiedAt),
-		nilString(sess.ParentSessionID),
-		sess.RelationshipType, sess.TotalOutputTokens,
-		sess.PeakContextTokens, sess.HasTotalOutputTokens,
-		sess.HasPeakContextTokens, sess.IsAutomated,
-		sess.ToolFailureSignalCount, sess.ToolRetryCount,
-		sess.EditChurnCount, sess.ConsecutiveFailureMax,
-		sess.Outcome, sess.OutcomeConfidence,
-		sess.EndedWithRole, sess.FinalFailureStreak,
-		nilString(sess.SignalsPendingSince),
-		sess.CompactionCount, sess.MidTaskCompactionCount,
-		sess.ContextPressureMax, sess.HealthScore,
-		nilString(sess.HealthGrade), sess.HasToolCalls,
-		sess.HasContextData,
-		sess.QualitySignalVersion, sess.ShortPromptCount,
-		sess.UnstructuredStart, sess.MissingSuccessCriteriaCount,
-		sess.MissingVerificationCount, sess.DuplicatePromptCount,
-		sess.NoCodeContextCount, sess.RunawayToolLoopCount,
-		sess.DataVersion,
-		sess.Cwd, sess.GitBranch, sess.SourceSessionID,
-		sess.SourceVersion, sess.TranscriptFidelity, sess.ParserMalformedLines,
-		nilString(sess.TranscriptRevision),
-		sess.IsTruncated, nilTime(sess.DeletedAt), nilString(sess.DeletionCause),
-		timeValue(sess.CreatedAt), nilString(sess.TerminationStatus),
-		sess.SecretLeakCount, sess.SecretsRulesVersion,
-	}
 }

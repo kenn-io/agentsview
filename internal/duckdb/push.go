@@ -821,11 +821,16 @@ func (s *Sync) refreshCurationIfChanged(ctx context.Context) (bool, error) {
 // incrementalPush share this single write path: on a freshly created
 // rebuild file the pre-delete below is simply a no-op.
 func (s *Sync) pushSession(
-	ctx context.Context, tx bun.IDB, sess db.Session, fingerprint string,
+	ctx context.Context, tx bun.IDB, sess db.Session,
 ) (int, error) {
 	snapshot, err := s.local.ReadSessionReplicationSnapshot(ctx, sess.ID)
 	if err != nil {
 		return 0, fmt.Errorf("reading local replication snapshot for %s: %w", sess.ID, err)
+	}
+	s.stampReplicationSnapshot(&snapshot)
+	fingerprint, err := db.CanonicalSessionReplicationFingerprint(snapshot)
+	if err != nil {
+		return 0, fmt.Errorf("fingerprinting duckdb session %s: %w", sess.ID, err)
 	}
 	if err := s.upsertSession(ctx, tx, snapshot.Session, fingerprint); err != nil {
 		return 0, err
@@ -877,6 +882,12 @@ func (s *Sync) pushSession(
 	return len(snapshot.Messages), nil
 }
 
+func (s *Sync) stampReplicationSnapshot(snapshot *db.SessionReplicationSnapshot) {
+	snapshot.Session.Machine = mirroredSessionMachine(snapshot.Session, s.machine)
+	snapshot.Session.SourceArchiveID = s.archiveID
+	snapshot.Session.SourceDatabaseGeneration = s.databaseGeneration
+}
+
 func (s *Sync) replaceSessionDependents(
 	ctx context.Context, exec duckMutationExecutor, sessionID string,
 ) error {
@@ -926,164 +937,29 @@ type duckMutationExecutor interface {
 }
 
 func (s *Sync) upsertSession(
-	ctx context.Context, exec duckMutationExecutor, sess db.Session, fingerprint string,
+	ctx context.Context, store bun.IDB, sess db.Session, fingerprint string,
 ) error {
-	query := `
-		INSERT INTO sessions (
-			id, project, machine, agent,
-			agent_label, entrypoint, session_kind,
-			first_message, display_name, session_name, started_at, ended_at,
-			message_count, user_message_count,
-			file_path, file_size, file_mtime, file_inode, file_device,
-			file_hash, local_modified_at, transcript_revision,
-			parent_session_id,
-			relationship_type, total_output_tokens, peak_context_tokens,
-			has_total_output_tokens, has_peak_context_tokens, is_automated,
-			tool_failure_signal_count, tool_retry_count, edit_churn_count,
-			consecutive_failure_max, outcome, outcome_confidence,
-			ended_with_role, final_failure_streak, signals_pending_since,
-			compaction_count, mid_task_compaction_count,
-			context_pressure_max, health_score, health_grade,
-			has_tool_calls, has_context_data,
-			quality_signal_version, short_prompt_count, unstructured_start,
-			missing_success_criteria_count, missing_verification_count,
-			duplicate_prompt_count, no_code_context_count,
-			runaway_tool_loop_count, data_version,
-			cwd, git_branch, source_session_id, source_version, transcript_fidelity,
-			parser_malformed_lines, is_truncated, deleted_at, deletion_cause, created_at,
-			termination_status, secret_leak_count, secrets_rules_version,
-			agentsview_push_fingerprint, source_archive_id,
-			source_database_generation
-		) VALUES (
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-		)`
-	query += `
-		ON CONFLICT(id) DO UPDATE SET
-			project = excluded.project,
-			machine = excluded.machine,
-			agent = excluded.agent,
-			agent_label = excluded.agent_label,
-			entrypoint = excluded.entrypoint,
-			session_kind = excluded.session_kind,
-			first_message = excluded.first_message,
-			display_name = excluded.display_name,
-			session_name = excluded.session_name,
-			started_at = excluded.started_at,
-			ended_at = excluded.ended_at,
-			message_count = excluded.message_count,
-			user_message_count = excluded.user_message_count,
-			file_path = excluded.file_path,
-			file_size = excluded.file_size,
-			file_mtime = excluded.file_mtime,
-			file_inode = excluded.file_inode,
-			file_device = excluded.file_device,
-			file_hash = excluded.file_hash,
-			local_modified_at = excluded.local_modified_at,
-			transcript_revision = excluded.transcript_revision,
-			parent_session_id = excluded.parent_session_id,
-			relationship_type = excluded.relationship_type,
-			total_output_tokens = excluded.total_output_tokens,
-			peak_context_tokens = excluded.peak_context_tokens,
-			has_total_output_tokens = excluded.has_total_output_tokens,
-			has_peak_context_tokens = excluded.has_peak_context_tokens,
-			is_automated = excluded.is_automated,
-			tool_failure_signal_count = excluded.tool_failure_signal_count,
-			tool_retry_count = excluded.tool_retry_count,
-			edit_churn_count = excluded.edit_churn_count,
-			consecutive_failure_max = excluded.consecutive_failure_max,
-			outcome = excluded.outcome,
-			outcome_confidence = excluded.outcome_confidence,
-			ended_with_role = excluded.ended_with_role,
-			final_failure_streak = excluded.final_failure_streak,
-			signals_pending_since = excluded.signals_pending_since,
-			compaction_count = excluded.compaction_count,
-			mid_task_compaction_count = excluded.mid_task_compaction_count,
-			context_pressure_max = excluded.context_pressure_max,
-			health_score = excluded.health_score,
-			health_grade = excluded.health_grade,
-			has_tool_calls = excluded.has_tool_calls,
-			has_context_data = excluded.has_context_data,
-			quality_signal_version = excluded.quality_signal_version,
-			short_prompt_count = excluded.short_prompt_count,
-			unstructured_start = excluded.unstructured_start,
-			missing_success_criteria_count = excluded.missing_success_criteria_count,
-			missing_verification_count = excluded.missing_verification_count,
-			duplicate_prompt_count = excluded.duplicate_prompt_count,
-			no_code_context_count = excluded.no_code_context_count,
-			runaway_tool_loop_count = excluded.runaway_tool_loop_count,
-			data_version = excluded.data_version,
-			cwd = excluded.cwd,
-			git_branch = excluded.git_branch,
-			source_session_id = excluded.source_session_id,
-			source_version = excluded.source_version,
-			transcript_fidelity = excluded.transcript_fidelity,
-			parser_malformed_lines = excluded.parser_malformed_lines,
-			is_truncated = excluded.is_truncated,
-			deleted_at = excluded.deleted_at,
-			deletion_cause = excluded.deletion_cause,
-			created_at = excluded.created_at,
-			termination_status = excluded.termination_status,
-			secret_leak_count = excluded.secret_leak_count,
-			secrets_rules_version = excluded.secrets_rules_version,
-			agentsview_push_fingerprint = excluded.agentsview_push_fingerprint,
-			source_archive_id = excluded.source_archive_id,
-			source_database_generation = excluded.source_database_generation`
-
-	args := sessionInsertArgs(
-		sess, s.machine, s.archiveID, s.databaseGeneration, fingerprint,
-	)
-	if err := s.execMutation(ctx, exec, query, args...); err != nil {
+	sess.Machine = mirroredSessionMachine(sess, s.machine)
+	sess.SourceArchiveID = s.archiveID
+	sess.SourceDatabaseGeneration = s.databaseGeneration
+	row, err := db.CanonicalSessionRow(sess)
+	if err != nil {
+		return fmt.Errorf("converting duckdb session %s: %w", sess.ID, err)
+	}
+	if err := db.UpsertSessionRow(ctx, store, row); err != nil {
 		return fmt.Errorf("writing duckdb session %s: %w", sess.ID, err)
+	}
+	if _, err := store.NewUpdate().Model((*duckSessionFingerprintRow)(nil)).
+		Set("agentsview_push_fingerprint = ?", nilEmpty(fingerprint)).
+		Where("id = ?", sess.ID).Exec(ctx); err != nil {
+		return fmt.Errorf("writing duckdb session fingerprint %s: %w", sess.ID, err)
 	}
 	return nil
 }
 
-func sessionInsertArgs(
-	sess db.Session,
-	fallbackMachine string,
-	archiveID string,
-	databaseGeneration string,
-	fingerprint string,
-) []any {
-	return []any{
-		sess.ID, sess.Project,
-		mirroredSessionMachine(sess, fallbackMachine), sess.Agent,
-		sess.AgentLabel, sess.Entrypoint, sess.SessionKind,
-		nilString(sess.FirstMessage), nilString(sess.DisplayName),
-		nilString(sess.SessionName),
-		nilTime(sess.StartedAt), nilTime(sess.EndedAt),
-		sess.MessageCount, sess.UserMessageCount,
-		nilString(sess.FilePath), sess.FileSize, sess.FileMtime,
-		sess.FileInode, sess.FileDevice, nilString(sess.FileHash),
-		nilTime(sess.LocalModifiedAt), transcriptRevisionValue(sess.TranscriptRevision),
-		nilString(sess.ParentSessionID),
-		sess.RelationshipType, sess.TotalOutputTokens,
-		sess.PeakContextTokens, sess.HasTotalOutputTokens,
-		sess.HasPeakContextTokens, sess.IsAutomated,
-		sess.ToolFailureSignalCount, sess.ToolRetryCount,
-		sess.EditChurnCount, sess.ConsecutiveFailureMax,
-		sess.Outcome, sess.OutcomeConfidence,
-		sess.EndedWithRole, sess.FinalFailureStreak,
-		nilString(sess.SignalsPendingSince),
-		sess.CompactionCount, sess.MidTaskCompactionCount,
-		sess.ContextPressureMax, sess.HealthScore,
-		nilString(sess.HealthGrade), sess.HasToolCalls,
-		sess.HasContextData,
-		sess.QualitySignalVersion, sess.ShortPromptCount,
-		sess.UnstructuredStart, sess.MissingSuccessCriteriaCount,
-		sess.MissingVerificationCount, sess.DuplicatePromptCount,
-		sess.NoCodeContextCount, sess.RunawayToolLoopCount,
-		sess.DataVersion,
-		sess.Cwd, sess.GitBranch, sess.SourceSessionID,
-		sess.SourceVersion, sess.TranscriptFidelity, sess.ParserMalformedLines,
-		sess.IsTruncated, nilTime(sess.DeletedAt), nilString(sess.DeletionCause),
-		timeValue(sess.CreatedAt), nilString(sess.TerminationStatus),
-		sess.SecretLeakCount, sess.SecretsRulesVersion,
-		nilEmpty(fingerprint), archiveID, databaseGeneration,
-	}
+type duckSessionFingerprintRow struct {
+	bun.BaseModel `bun:"table:sessions"`
+	ID            string `bun:"id,pk"`
 }
 
 // mirroredSessionMachine preserves the source archive's machine identity.
@@ -1130,32 +1006,11 @@ func insertPinnedMessages(
 	return nil
 }
 
-func nilString(value *string) any {
-	if value == nil || *value == "" {
-		return nil
-	}
-	return *value
-}
-
-func transcriptRevisionValue(value *string) string {
-	if value == nil || *value == "" {
-		return "0"
-	}
-	return *value
-}
-
 func nilEmpty(value string) any {
 	if value == "" {
 		return nil
 	}
 	return value
-}
-
-func nilTime(value *string) any {
-	if value == nil || *value == "" {
-		return nil
-	}
-	return timeValue(*value)
 }
 
 func timeValue(value string) any {
