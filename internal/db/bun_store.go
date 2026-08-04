@@ -34,6 +34,31 @@ func NewBunStore(backend BunBackend) *BunStore {
 	}
 }
 
+// ReadOnly reports the coarse backend role. Narrow curation and session
+// management capabilities remain independently authorized by update.
+func (s *BunStore) ReadOnly() bool {
+	return s.backend.ReadOnly()
+}
+
+// UpsertSession is the common read-store default. The writable SQLite archive
+// supplies its ingestion implementation on DB; remote serving stores inherit
+// this default instead of maintaining adapter stubs.
+func (*BunStore) UpsertSession(Session) error {
+	return ErrReadOnly
+}
+
+// ReplaceSessionMessages is the common read-store default.
+func (*BunStore) ReplaceSessionMessages(string, []Message) error {
+	return ErrReadOnly
+}
+
+// WriteSessionBatchAtomic is the common read-store default.
+func (*BunStore) WriteSessionBatchAtomic(
+	[]SessionBatchWrite, ...func() error,
+) (SessionBatchResult, error) {
+	return SessionBatchResult{}, ErrReadOnly
+}
+
 // SetCursorSecret updates the shared cursor signing key.
 func (s *BunStore) SetCursorSecret(secret []byte) {
 	s.cursorMu.Lock()

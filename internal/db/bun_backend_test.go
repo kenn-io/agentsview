@@ -101,3 +101,16 @@ func TestBunStoreUpdateUsesOperationCapability(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, backend.updateCalls)
 }
+
+func TestBunStoreOwnsReadOnlyArchiveWriteDefaults(t *testing.T) {
+	backend := &recordingBunBackend{readOnly: true}
+	store := NewBunStore(backend)
+
+	assert.True(t, store.ReadOnly())
+	assert.ErrorIs(t, store.UpsertSession(Session{}), ErrReadOnly)
+	assert.ErrorIs(t, store.ReplaceSessionMessages("session", nil), ErrReadOnly)
+	result, err := store.WriteSessionBatchAtomic(nil)
+	assert.Equal(t, SessionBatchResult{}, result)
+	assert.ErrorIs(t, err, ErrReadOnly)
+	assert.Zero(t, backend.updateCalls)
+}
