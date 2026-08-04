@@ -52,7 +52,7 @@ func (s *BunStore) ListInsights(
 	var rows []bunmodel.Insight
 	err := s.view(ctx, func(store bun.IDB) error {
 		query := applyBunInsightFilter(store.NewSelect().Model(&rows), filter)
-		return query.OrderExpr("created_at DESC").OrderExpr("id DESC").
+		return query.OrderExpr(s.bunInsightTimeOrder() + " DESC").OrderExpr("id DESC").
 			Limit(maxInsights).Scan(ctx)
 	})
 	if err != nil {
@@ -93,7 +93,8 @@ func (s *BunStore) GetCachedInsight(
 	var row bunmodel.Insight
 	err := s.view(ctx, func(store bun.IDB) error {
 		return store.NewSelect().Model(&row).Where("cache_key = ?", cacheKey).
-			OrderExpr("created_at DESC").OrderExpr("id DESC").Limit(1).Scan(ctx)
+			OrderExpr(s.bunInsightTimeOrder() + " DESC").OrderExpr("id DESC").
+			Limit(1).Scan(ctx)
 	})
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -103,6 +104,14 @@ func (s *BunStore) GetCachedInsight(
 	}
 	insight := insightFromBunRow(row)
 	return &insight, nil
+}
+
+func (s *BunStore) bunInsightTimeOrder() string {
+	dialect := s.backend.SessionQueryDialect()
+	if dialect.timestampOrderExpr != nil {
+		return dialect.timestampOrderExpr("created_at")
+	}
+	return "created_at"
 }
 
 func applyBunInsightFilter(

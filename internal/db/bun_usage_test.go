@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,6 +17,18 @@ import (
 type alternatingUsageBackend struct {
 	first, second bun.IDB
 	views         int
+	attempts      int
+}
+
+type optionalUsageBackend struct {
+	*sessionContractBackend
+	missing map[string]bool
+}
+
+func (b *optionalUsageBackend) BunTableExists(
+	_ context.Context, _ bun.IDB, table string,
+) (bool, error) {
+	return !b.missing[table], nil
 }
 
 func (*alternatingUsageBackend) Name() string { return "alternating-usage" }
@@ -46,9 +59,11 @@ func (b *alternatingUsageBackend) ConsistentView(
 	_ context.Context, fn func(bun.IDB) error,
 ) error {
 	b.views++
-	if b.views == 1 {
-		return fn(b.first)
+	b.attempts++
+	if err := fn(b.first); err != nil {
+		return err
 	}
+	b.attempts++
 	return fn(b.second)
 }
 
@@ -91,9 +106,66 @@ func TestGetDailyUsageKeepsPricingRowsAndIdentityInOneView(t *testing.T) {
 		From: "2026-08-03", To: "2026-08-03", Timezone: "UTC",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, 1, result.Totals.InputTokens)
-	assert.Equal(t, int64(1), result.Totals.TotalCost.Microdollars)
+	assert.Equal(t, 100, result.Totals.InputTokens)
+	assert.Equal(t, int64(10_000), result.Totals.TotalCost.Microdollars)
 	assert.Equal(t, 1, backend.views)
+	assert.Equal(t, 2, backend.attempts)
+}
+
+func TestLoadPricingMapAllowsMissingOptionalBandsTable(t *testing.T) {
+	database := testDB(t)
+	require.NoError(t, database.UpsertModelPricing([]ModelPricing{{
+		ModelPattern: "base-only", InputPerMTok: money.Money{Microdollars: 7},
+	}}))
+	_, err := database.getWriter().ExecContext(
+		t.Context(), "DROP TABLE model_pricing_bands",
+	)
+	require.NoError(t, err)
+	backend := &optionalUsageBackend{
+		sessionContractBackend: &sessionContractBackend{store: database.bunReader},
+		missing:                map[string]bool{"model_pricing_bands": true},
+	}
+	rows, err := NewBunStore(backend).LoadPricingMap(t.Context())
+	require.NoError(t, err)
+	var found bool
+	for _, row := range rows {
+		if row.ModelPattern == "base-only" {
+			found = true
+			assert.Equal(t, int64(7), row.Rates.InputPerMTok.Microdollars)
+			assert.Empty(t, row.Rates.Bands)
+		}
+	}
+	assert.True(t, found)
+}
+
+func TestAppendBunUsageTerminationFilterUsesProvidedReference(t *testing.T) {
+	database := testDB(t)
+	reference := time.Date(2030, 1, 2, 12, 0, 0, 0, time.UTC)
+	for _, row := range []struct {
+		id, status string
+		age        time.Duration
+	}{
+		{id: "active", age: 5 * time.Minute},
+		{id: "stale", status: "tool_call_pending", age: 30 * time.Minute},
+		{id: "unclean", status: "truncated", age: 2 * time.Hour},
+		{id: "stale-clean", status: "clean", age: 30 * time.Minute},
+	} {
+		ended := reference.Add(-row.age).Format(time.RFC3339Nano)
+		status := row.status
+		require.NoError(t, database.UpsertSession(Session{
+			ID: row.id, Project: "clock", Machine: "host", Agent: "codex",
+			CreatedAt: ended, StartedAt: &ended, EndedAt: &ended,
+			MessageCount: 1, TerminationStatus: &status,
+		}))
+	}
+
+	var ids []string
+	query := database.bunReader.NewSelect().TableExpr("sessions AS s").Column("s.id")
+	query = appendBunUsageTerminationFilter(
+		query, "active,stale,unclean", SQLiteBunSessionQueryDialect(), reference,
+	)
+	require.NoError(t, query.OrderExpr("s.id ASC").Scan(t.Context(), &ids))
+	assert.Equal(t, []string{"active", "stale", "unclean"}, ids)
 }
 
 func TestUpsertModelPricingRowsReplacesBandsAtomically(t *testing.T) {

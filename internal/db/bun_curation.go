@@ -241,11 +241,8 @@ func (s *BunStore) ListPinnedMessages(
 		return nil, fmt.Errorf("listing pinned messages: %w", err)
 	}
 	var pins []PinnedMessage
-	if len(rows) > 0 {
-		pins = make([]PinnedMessage, len(rows))
-	}
-	for i, row := range rows {
-		pins[i] = PinnedMessage{
+	for _, row := range rows {
+		pins = append(pins, PinnedMessage{
 			ID: row.ID, SessionID: row.SessionID, MessageID: row.MessageID,
 			Ordinal: row.Ordinal, Note: row.Note,
 			CreatedAt:           formatBunCurationTime(row.CreatedAt.Time),
@@ -255,7 +252,7 @@ func (s *BunStore) ListPinnedMessages(
 			SessionAgent:        row.SessionAgent,
 			SessionDisplayName:  row.SessionDisplayName,
 			SessionFirstMessage: row.SessionFirstMessage,
-		}
+		})
 	}
 	return pins, nil
 }

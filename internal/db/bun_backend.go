@@ -96,6 +96,16 @@ func (b *sqliteBunBackend) Capabilities() BackendCapabilities {
 	}
 }
 
+func (*sqliteBunBackend) BunTableExists(
+	ctx context.Context, store bun.IDB, table string,
+) (bool, error) {
+	var exists bool
+	err := store.NewRaw(`SELECT EXISTS (
+		SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?
+	)`, table).Scan(ctx, &exists)
+	return exists, err
+}
+
 type sqliteSessionMutationAdapter struct{}
 
 func (sqliteSessionMutationAdapter) ApplyTouch(

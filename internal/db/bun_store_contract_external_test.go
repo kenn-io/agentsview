@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storetest"
@@ -227,6 +228,37 @@ func TestBunStoreUsageContract(t *testing.T) {
 			return database.BunStore
 		},
 	})
+}
+
+func TestBunStoreReadOnlyUsageAllowsMissingOptionalTables(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "read-only-optional-usage.db")
+	database, err := db.Open(path)
+	require.NoError(t, err)
+	archiveID, err := database.GetArchiveID(t.Context())
+	require.NoError(t, err)
+	generation, err := database.GetDatabaseID(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+		if err := storetest.InsertSQLiteUsageFixture(
+			t.Context(), tx, archiveID, generation,
+		); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(t.Context(), `DROP TABLE cursor_usage_events`)
+		return err
+	}))
+	require.NoError(t, database.Close())
+
+	readOnly, err := db.OpenReadOnly(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, readOnly.Close()) })
+	result, err := readOnly.GetDailyUsage(t.Context(), db.UsageFilter{
+		From: "2026-08-02", To: "2026-08-02", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Daily, 1)
+	assert.Equal(t, 25, result.Daily[0].InputTokens)
+	assert.Equal(t, 6, result.Daily[0].OutputTokens)
 }
 
 func TestBunStoreAnalyticsContract(t *testing.T) {

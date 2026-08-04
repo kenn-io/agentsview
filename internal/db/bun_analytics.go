@@ -77,7 +77,9 @@ func (s *BunStore) bunAnalyticsSessionsFrom(
 	if f.ExcludeInteractive {
 		query = query.Where(bunAnalyticsSessionAlias+".is_automated = ?", true)
 	}
-	query = appendBunAnalyticsTerminationFilter(query, f.Termination)
+	query = appendBunAnalyticsTerminationFilter(
+		query, f.Termination, s.backend.SessionQueryDialect(), time.Now().UTC(),
+	)
 	if models := csvFilterValues(f.Model); len(models) > 0 {
 		query = query.Where("EXISTS (SELECT 1 FROM messages AS analytics_model "+
 			"WHERE analytics_model.session_id = "+bunAnalyticsSessionAlias+
@@ -251,33 +253,27 @@ func appendBunAnalyticsCSVFilter(
 }
 
 func appendBunAnalyticsTerminationFilter(
-	query *bun.SelectQuery, raw string,
+	query *bun.SelectQuery, raw string, dialect QueryDialect, referenceTime time.Time,
 ) *bun.SelectQuery {
-	var predicates []string
-	var args []any
-	for value := range strings.SplitSeq(raw, ",") {
-		switch strings.TrimSpace(value) {
-		case "clean":
-			predicates = append(predicates,
-				bunAnalyticsSessionAlias+".termination_status = ?")
-			args = append(args, "clean")
-		case "awaiting_user":
-			predicates = append(predicates,
-				bunAnalyticsSessionAlias+".termination_status = ?")
-			args = append(args, "awaiting_user")
-		case "unclean":
-			predicates = append(predicates, bunAnalyticsSessionAlias+
-				".termination_status IN ('tool_call_pending', 'truncated')")
-		}
-	}
-	if len(predicates) == 0 {
-		return query
-	}
-	return query.Where("("+strings.Join(predicates, " OR ")+")", args...)
+	return appendBunTerminationFilter(
+		query, raw, bunAnalyticsSessionAlias, dialect, referenceTime,
+	)
 }
 
 func bunAnalyticsMessagesFrom(
 	ctx context.Context, store bun.IDB, sessionIDs []string,
+) ([]bunmodel.Message, error) {
+	return bunAnalyticsMessagesProjectedFrom(ctx, store, sessionIDs, false)
+}
+
+func bunAnalyticsMessagesWithContentFrom(
+	ctx context.Context, store bun.IDB, sessionIDs []string,
+) ([]bunmodel.Message, error) {
+	return bunAnalyticsMessagesProjectedFrom(ctx, store, sessionIDs, true)
+}
+
+func bunAnalyticsMessagesProjectedFrom(
+	ctx context.Context, store bun.IDB, sessionIDs []string, includeContent bool,
 ) ([]bunmodel.Message, error) {
 	if len(sessionIDs) == 0 {
 		return []bunmodel.Message{}, nil
@@ -285,8 +281,15 @@ func bunAnalyticsMessagesFrom(
 	var out []bunmodel.Message
 	err := queryChunked(sessionIDs, func(chunk []string) error {
 		var rows []bunmodel.Message
-		if err := store.NewSelect().Model(&rows).
-			ExcludeColumn("timestamp").
+		query := store.NewSelect().Model(&rows).Column(
+			"session_id", "ordinal", "role", "has_thinking", "has_tool_use",
+			"content_length", "is_system", "model", "output_tokens",
+			"has_output_tokens", "is_sidechain",
+		)
+		if includeContent {
+			query = query.Column("content")
+		}
+		if err := query.
 			Where("session_id IN (?)", bun.List(chunk)).
 			OrderExpr("session_id ASC, ordinal ASC").Scan(ctx); err != nil {
 			return fmt.Errorf("querying Bun analytics messages: %w", err)
@@ -327,7 +330,10 @@ func bunAnalyticsToolsFrom(
 	var out []bunmodel.ToolCall
 	err := queryChunked(sessionIDs, func(chunk []string) error {
 		var rows []bunmodel.ToolCall
-		if err := store.NewSelect().Model(&rows).
+		if err := store.NewSelect().Model(&rows).Column(
+			"session_id", "message_ordinal", "tool_name", "category",
+			"call_index", "tool_use_id", "skill_name", "file_path",
+		).
 			Where("session_id IN (?)", bun.List(chunk)).
 			OrderExpr("session_id ASC, message_ordinal ASC, call_index ASC").
 			Scan(ctx); err != nil {
@@ -447,7 +453,9 @@ func (s *BunStore) GetAnalyticsSummary(
 		if err != nil {
 			return err
 		}
-		messages, err := bunAnalyticsMessagesFrom(ctx, store, bunAnalyticsSessionIDs(sessions))
+		messages, err := bunAnalyticsMessagesFrom(
+			ctx, store, bunAnalyticsSessionIDs(sessions),
+		)
 		if err != nil {
 			return err
 		}
@@ -512,8 +520,7 @@ func buildBunAnalyticsSummary(
 	}
 	out.Models = bunAnalyticsModelsFiltered(modelRows, f)
 	if strings.TrimSpace(f.Model) != "" {
-		out.Models = csvFilterValues(f.Model)
-		sort.Strings(out.Models)
+		out.Models = bunAnalyticsPresentRequestedModels(messages, f)
 	}
 	out.ActiveProjects = len(projects)
 	out.ActiveDays = len(days)
@@ -547,6 +554,27 @@ func buildBunAnalyticsSummary(
 		) / 1000
 	}
 	return out
+}
+
+func bunAnalyticsPresentRequestedModels(
+	rows []bunmodel.Message, f AnalyticsFilter,
+) []string {
+	requested := make(map[string]struct{})
+	for _, model := range csvFilterValues(f.Model) {
+		requested[model] = struct{}{}
+	}
+	present := make(map[string]struct{})
+	filter := f.messageScopeFilter()
+	for _, row := range rows {
+		if _, ok := requested[row.Model]; !ok {
+			continue
+		}
+		local, hasLocal := bunAnalyticsMessageLocalTime(row, f.location())
+		if filter.MatchesDayHour(local, hasLocal) {
+			present[row.Model] = struct{}{}
+		}
+	}
+	return sortedSetKeys(present)
 }
 
 func bunAnalyticsModelsFiltered(rows []bunmodel.Message, f AnalyticsFilter) []string {
@@ -647,7 +675,10 @@ func buildBunAnalyticsActivity(
 		}
 	}
 	for _, key := range sortedMapKeys(buckets) {
-		out.Series = append(out.Series, *buckets[key])
+		entry := buckets[key]
+		if entry != nil {
+			out.Series = append(out.Series, *entry)
+		}
 	}
 	return out
 }
@@ -698,7 +729,9 @@ func (s *BunStore) GetAnalyticsHeatmap(
 		if err != nil {
 			return err
 		}
-		messages, err := bunAnalyticsMessagesFrom(ctx, store, bunAnalyticsSessionIDs(sessions))
+		messages, err := bunAnalyticsMessagesFrom(
+			ctx, store, bunAnalyticsSessionIDs(sessions),
+		)
 		if err != nil {
 			return err
 		}
@@ -762,11 +795,14 @@ func (s *BunStore) GetAnalyticsProjects(
 	f.IncludeSubagents = true
 	var result ProjectsAnalyticsResponse
 	err := s.consistentView(ctx, func(store bun.IDB) error {
+		attempt := ProjectsAnalyticsResponse{Projects: []ProjectAnalytics{}}
 		sessions, err := s.bunAnalyticsSessionsFrom(ctx, store, f, true)
 		if err != nil {
 			return err
 		}
-		messages, err := bunAnalyticsMessagesFrom(ctx, store, bunAnalyticsSessionIDs(sessions))
+		messages, err := bunAnalyticsMessagesFrom(
+			ctx, store, bunAnalyticsSessionIDs(sessions),
+		)
 		if err != nil {
 			return err
 		}
@@ -818,14 +854,15 @@ func (s *BunStore) GetAnalyticsProjects(
 				item.row.DailyTrend = round1(float64(item.row.Messages) /
 					float64(len(item.days)))
 			}
-			result.Projects = append(result.Projects, item.row)
+			attempt.Projects = append(attempt.Projects, item.row)
 		}
-		sort.Slice(result.Projects, func(i, j int) bool {
-			if result.Projects[i].Messages != result.Projects[j].Messages {
-				return result.Projects[i].Messages > result.Projects[j].Messages
+		sort.Slice(attempt.Projects, func(i, j int) bool {
+			if attempt.Projects[i].Messages != attempt.Projects[j].Messages {
+				return attempt.Projects[i].Messages > attempt.Projects[j].Messages
 			}
-			return result.Projects[i].Name < result.Projects[j].Name
+			return attempt.Projects[i].Name < attempt.Projects[j].Name
 		})
+		result = attempt
 		return nil
 	})
 	return result, err
@@ -843,7 +880,9 @@ func (s *BunStore) GetAnalyticsHourOfWeek(
 		if err != nil {
 			return err
 		}
-		messages, err := bunAnalyticsMessagesFrom(ctx, store, bunAnalyticsSessionIDs(sessions))
+		messages, err := bunAnalyticsMessagesFrom(
+			ctx, store, bunAnalyticsSessionIDs(sessions),
+		)
 		if err != nil {
 			return err
 		}
@@ -937,7 +976,12 @@ func (s *BunStore) GetAnalyticsTools(
 ) (ToolsAnalyticsResponse, error) {
 	var result ToolsAnalyticsResponse
 	err := s.consistentView(ctx, func(store bun.IDB) error {
-		sessions, err := s.bunAnalyticsSessionsFrom(ctx, store, f, false)
+		candidateFilter := f
+		candidateFilter.DayOfWeek = nil
+		candidateFilter.Hour = nil
+		sessions, err := s.bunAnalyticsSessionsFrom(
+			ctx, store, candidateFilter, false,
+		)
 		if err != nil {
 			return err
 		}
@@ -998,7 +1042,12 @@ func (s *BunStore) GetAnalyticsSkills(
 ) (SkillsAnalyticsResponse, error) {
 	var result SkillsAnalyticsResponse
 	err := s.consistentView(ctx, func(store bun.IDB) error {
-		sessions, err := s.bunAnalyticsSessionsFrom(ctx, store, f, false)
+		candidateFilter := f
+		candidateFilter.DayOfWeek = nil
+		candidateFilter.Hour = nil
+		sessions, err := s.bunAnalyticsSessionsFrom(
+			ctx, store, candidateFilter, false,
+		)
 		if err != nil {
 			return err
 		}
@@ -1200,7 +1249,9 @@ func (s *BunStore) GetAnalyticsSignals(
 		if err != nil {
 			return err
 		}
-		messages, err := bunAnalyticsMessagesFrom(ctx, store, bunAnalyticsSessionIDs(sessions))
+		messages, err := bunAnalyticsMessagesWithContentFrom(
+			ctx, store, bunAnalyticsSessionIDs(sessions),
+		)
 		if err != nil {
 			return err
 		}
@@ -1225,7 +1276,9 @@ func (s *BunStore) GetAnalyticsSignalSessions(
 		if err != nil {
 			return err
 		}
-		messages, err := bunAnalyticsMessagesFrom(ctx, store, bunAnalyticsSessionIDs(sessions))
+		messages, err := bunAnalyticsMessagesWithContentFrom(
+			ctx, store, bunAnalyticsSessionIDs(sessions),
+		)
 		if err != nil {
 			return err
 		}

@@ -147,7 +147,11 @@ func (s *BunStore) loadPricingMapFrom(
 	}
 	var prices []ModelPricing
 	if pricingTable {
-		prices, err = listBunModelPricing(ctx, store)
+		bandsTable, probeErr := s.bunTableExists(ctx, store, "model_pricing_bands")
+		if probeErr != nil {
+			return nil, probeErr
+		}
+		prices, err = listBunModelPricing(ctx, store, bandsTable)
 		if err != nil {
 			return nil, err
 		}
@@ -205,7 +209,7 @@ func (s *BunStore) bunTableExists(
 }
 
 func listBunModelPricing(
-	ctx context.Context, store bun.IDB,
+	ctx context.Context, store bun.IDB, includeBands bool,
 ) ([]ModelPricing, error) {
 	var rows []bunmodel.ModelPricing
 	if err := store.NewSelect().Model(&rows).
@@ -213,9 +217,11 @@ func listBunModelPricing(
 		return nil, fmt.Errorf("listing model pricing: %w", err)
 	}
 	var bandRows []bunmodel.ModelPricingBand
-	if err := store.NewSelect().Model(&bandRows).
-		OrderExpr("model_pattern ASC, above_input_tokens ASC").Scan(ctx); err != nil {
-		return nil, fmt.Errorf("listing model pricing bands: %w", err)
+	if includeBands {
+		if err := store.NewSelect().Model(&bandRows).
+			OrderExpr("model_pattern ASC, above_input_tokens ASC").Scan(ctx); err != nil {
+			return nil, fmt.Errorf("listing model pricing bands: %w", err)
+		}
 	}
 	bands := make(map[string][]PricingBand)
 	for _, row := range bandRows {
@@ -422,6 +428,7 @@ func (s *BunStore) loadBunUsageProjections(
 	ctx context.Context, store bun.IDB, filter UsageFilter,
 	matching bool, sessionID string,
 ) ([]bunUsageProjection, error) {
+	referenceTime := time.Now().UTC()
 	var messages []bunUsageProjection
 	messageQuery := store.NewSelect().TableExpr("messages AS m").
 		ColumnExpr(bunMessageUsageColumns + "," + bunUsageSessionColumns).
@@ -438,7 +445,7 @@ func (s *BunStore) loadBunUsageProjections(
 		messageQuery = messageQuery.Where("m.session_id = ?", sessionID)
 	}
 	messageQuery = appendBunUsageFilters(
-		messageQuery, filter, "m.model", s.backend.SessionQueryDialect(),
+		messageQuery, filter, "m.model", s.backend.SessionQueryDialect(), referenceTime,
 	)
 	messageQuery = appendBunUsageBounds(
 		messageQuery, filter, "m.timestamp", true,
@@ -461,7 +468,7 @@ func (s *BunStore) loadBunUsageProjections(
 		eventQuery = eventQuery.Where("ue.session_id = ?", sessionID)
 	}
 	eventQuery = appendBunUsageFilters(
-		eventQuery, filter, "ue.model", s.backend.SessionQueryDialect(),
+		eventQuery, filter, "ue.model", s.backend.SessionQueryDialect(), referenceTime,
 	)
 	eventQuery = appendBunUsageBounds(
 		eventQuery, filter, "ue.occurred_at", true,
@@ -473,14 +480,16 @@ func (s *BunStore) loadBunUsageProjections(
 
 	rows := make([]bunUsageProjection, 0, len(messages)+len(events))
 	for _, row := range messages {
-		if !usageSourceMatches(row.Model, filter) || !usageSessionMatches(row, filter) {
+		if !usageSourceMatches(row.Model, filter) ||
+			!usageSessionMatches(row, filter, referenceTime) {
 			continue
 		}
 		row.UsageDedupKey = ""
 		rows = append(rows, row)
 	}
 	for _, row := range events {
-		if !usageSourceMatches(row.Model, filter) || !usageSessionMatches(row, filter) {
+		if !usageSourceMatches(row.Model, filter) ||
+			!usageSessionMatches(row, filter, referenceTime) {
 			continue
 		}
 		row.UsageDedupKey = usageEventProjectionDedupKey(row)
@@ -520,7 +529,7 @@ func appendBunUsageBounds(
 
 func appendBunUsageFilters(
 	query *bun.SelectQuery, filter UsageFilter, modelColumn string,
-	dialect QueryDialect,
+	dialect QueryDialect, referenceTime time.Time,
 ) *bun.SelectQuery {
 	query = appendBunUsageValues(query, modelColumn, csvUsageValues(filter.Model), true)
 	query = appendBunUsageValues(
@@ -562,7 +571,9 @@ func appendBunUsageFilters(
 		expr, parameter := bunUsageSessionActivityComparison(dialect)
 		query = query.Where(expr+" >= "+parameter, filter.ActiveSince)
 	}
-	return appendBunUsageTerminationFilter(query, filter.Termination, dialect)
+	return appendBunUsageTerminationFilter(
+		query, filter.Termination, dialect, referenceTime,
+	)
 }
 
 func csvUsageValues(value string) []string {
@@ -595,15 +606,32 @@ func bunUsageSessionActivityComparison(dialect QueryDialect) (string, string) {
 
 func appendBunUsageTerminationFilter(
 	query *bun.SelectQuery, filter string, dialect QueryDialect,
+	referenceTime time.Time,
+) *bun.SelectQuery {
+	return appendBunTerminationFilter(
+		query, filter, "s", dialect, referenceTime,
+	)
+}
+
+func appendBunTerminationFilter(
+	query *bun.SelectQuery, filter, alias string, dialect QueryDialect,
+	referenceTime time.Time,
 ) *bun.SelectQuery {
 	if !usageHasTerminationFilter(filter) {
 		return query
 	}
-	activityExpr, parameter := bunUsageSessionActivityComparison(dialect)
-	now := time.Now().UTC()
-	activeCutoff := now.Add(-activeWindow).Format(time.RFC3339Nano)
-	staleCutoff := now.Add(-staleWindow).Format(time.RFC3339Nano)
-	flagged := "s.termination_status IN ('tool_call_pending', 'truncated')"
+	activityExpr := "COALESCE(" + alias + ".ended_at, " +
+		alias + ".started_at, " + alias + ".created_at)"
+	parameter := "?"
+	if dialect.timestampOrderExpr != nil {
+		activityExpr = "julianday(COALESCE(NULLIF(" + alias +
+			".ended_at, ''), NULLIF(" + alias + ".started_at, ''), " +
+			alias + ".created_at))"
+		parameter = dialect.timestampOrderExpr("?")
+	}
+	activeCutoff := referenceTime.UTC().Add(-activeWindow).Format(time.RFC3339Nano)
+	staleCutoff := referenceTime.UTC().Add(-staleWindow).Format(time.RFC3339Nano)
+	flagged := alias + ".termination_status IN ('tool_call_pending', 'truncated')"
 	var predicates []string
 	var args []any
 	for part := range strings.SplitSeq(filter, ",") {
@@ -620,9 +648,9 @@ func appendBunUsageTerminationFilter(
 				" AND "+flagged+")")
 			args = append(args, staleCutoff)
 		case "clean":
-			predicates = append(predicates, "s.termination_status = 'clean'")
+			predicates = append(predicates, alias+".termination_status = 'clean'")
 		case "awaiting_user":
-			predicates = append(predicates, "s.termination_status = 'awaiting_user'")
+			predicates = append(predicates, alias+".termination_status = 'awaiting_user'")
 		}
 	}
 	if len(predicates) == 0 {
@@ -739,7 +767,9 @@ func usageSourceMatches(model string, filter UsageFilter) bool {
 		usageCSVMatches(model, filter.ExcludeModel, false)
 }
 
-func usageSessionMatches(row bunUsageProjection, filter UsageFilter) bool {
+func usageSessionMatches(
+	row bunUsageProjection, filter UsageFilter, referenceTime time.Time,
+) bool {
 	if !usageCSVMatches(row.Agent, filter.Agent, true) ||
 		!usageValuesMatch(row.Project, filter.ProjectFilterLabels(), true) ||
 		!usageCSVMatches(row.Machine, filter.Machine, true) ||
@@ -778,7 +808,7 @@ func usageSessionMatches(row bunUsageProjection, filter UsageFilter) bool {
 		}
 	}
 	return usageTerminationMatches(
-		stringValue(row.TerminationStatus), activity, filter.Termination,
+		stringValue(row.TerminationStatus), activity, filter.Termination, referenceTime,
 	)
 }
 
@@ -810,13 +840,14 @@ func usageHasTerminationFilter(status string) bool {
 	return false
 }
 
-func usageTerminationMatches(status string, activity time.Time, filter string) bool {
+func usageTerminationMatches(
+	status string, activity time.Time, filter string, referenceTime time.Time,
+) bool {
 	if !usageHasTerminationFilter(filter) {
 		return true
 	}
-	now := time.Now().UTC()
-	activeCutoff := now.Add(-activeWindow)
-	staleCutoff := now.Add(-staleWindow)
+	activeCutoff := referenceTime.UTC().Add(-activeWindow)
+	staleCutoff := referenceTime.UTC().Add(-staleWindow)
 	flagged := status == "tool_call_pending" || status == "truncated"
 	for part := range strings.SplitSeq(filter, ",") {
 		switch strings.TrimSpace(part) {
