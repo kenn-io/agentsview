@@ -357,8 +357,6 @@ func (r duckSingleRow) Scan(dest ...any) error {
 	return r.rows.Err()
 }
 
-func (s *Store) ReadOnly() bool { return true }
-
 func formatDBTime(v any) string {
 	switch t := v.(type) {
 	case nil:
