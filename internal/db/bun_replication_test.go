@@ -40,16 +40,32 @@ func TestReadSessionReplicationSnapshotIncludesCanonicalDependents(t *testing.T)
 	require.Len(t, messages, 1)
 	_, err = database.PinMessage("replication-snapshot", messages[0].ID, nil)
 	require.NoError(t, err)
+	_, err = database.getWriter().Exec(
+		`UPDATE sessions SET session_name = 'raw-name', display_name = NULL WHERE id = ?`,
+		"replication-snapshot",
+	)
+	require.NoError(t, err)
 
 	snapshot, err := database.ReadSessionReplicationSnapshot(
 		t.Context(), "replication-snapshot",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "replication-snapshot", snapshot.Session.ID)
+	assert.Nil(t, snapshot.Session.DisplayName)
+	assert.Equal(t, "raw-name", *snapshot.Session.SessionName)
 	require.Len(t, snapshot.Messages, 1)
 	require.Len(t, snapshot.Messages[0].ToolCalls, 1)
 	require.Len(t, snapshot.Messages[0].ToolCalls[0].ResultEvents, 1)
 	require.Len(t, snapshot.UsageEvents, 1)
 	require.Len(t, snapshot.SecretFindings, 1)
 	require.Len(t, snapshot.PinnedMessages, 1)
+	fingerprint, err := CanonicalSessionReplicationFingerprint(snapshot, "owner")
+	require.NoError(t, err)
+	repeat, err := CanonicalSessionReplicationFingerprint(snapshot, "owner")
+	require.NoError(t, err)
+	assert.Equal(t, fingerprint, repeat)
+	snapshot.Messages[0].Content = "changed snapshot message"
+	changed, err := CanonicalSessionReplicationFingerprint(snapshot, "owner")
+	require.NoError(t, err)
+	assert.NotEqual(t, fingerprint, changed)
 }

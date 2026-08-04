@@ -59,6 +59,58 @@ func RunPricingWriteContract(t *testing.T, name string, store bun.IDB) {
 		require.Len(t, bands, 1)
 		assert.Equal(t, int64(300), bands[0].AboveInputTokens)
 		assert.Equal(t, int64(7), bands[0].InputMicrodollarsPerMTok)
+
+		require.NoError(t, db.UpsertModelPricingRows(ctx, store,
+			[]bunmodel.ModelPricing{{
+				ModelPattern: "atomic-contract", InputMicrodollarsPerMTok: 10,
+				UpdatedAt: "2026-08-03T12:00:00Z",
+			}}, []bunmodel.ModelPricingBand{{
+				ModelPattern: "atomic-contract", AboveInputTokens: 500,
+				UpdatedAt: "2026-08-03T12:00:00Z",
+			}}))
+		require.NoError(t, store.NewSelect().Model(&price).
+			Where("model_pattern = ?", "atomic-contract").Scan(ctx))
+		assert.Equal(t, "2026-08-03T13:00:00.000001Z", price.UpdatedAt)
+
+		metadata := bunmodel.ModelPricing{
+			ModelPattern: "_fallback_version", UpdatedAt: "2026-08-03T10:00:00Z",
+		}
+		require.NoError(t, db.UpsertModelPricingRows(
+			ctx, store, []bunmodel.ModelPricing{metadata}, nil,
+		))
+		metadataBand := bunmodel.ModelPricingBand{
+			ModelPattern: "_fallback_version", AboveInputTokens: 1,
+			UpdatedAt: "2026-08-03T10:00:00Z",
+		}
+		_, err = store.NewInsert().Model(&metadataBand).Exec(ctx)
+		require.NoError(t, err)
+		metadata.UpdatedAt = "2026-08-03T11:00:00Z"
+		require.NoError(t, db.UpsertModelPricingRows(
+			ctx, store, []bunmodel.ModelPricing{metadata}, nil,
+		))
+		metadataBandCount, err := store.NewSelect().
+			Model((*bunmodel.ModelPricingBand)(nil)).
+			Where("model_pattern = ?", "_fallback_version").Count(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 1, metadataBandCount)
+	})
+}
+
+// RunCursorUsageWriteContract verifies targetless deduplication and portable
+// empty-model compatibility on a real target engine.
+func RunCursorUsageWriteContract(t *testing.T, name string, store bun.IDB) {
+	t.Helper()
+	t.Run(name, func(t *testing.T) {
+		rows, err := db.CanonicalCursorUsageEventRows([]db.CursorUsageEvent{{
+			OccurredAt: "2026-08-03T13:00:00Z", Model: "", DedupKey: "cursor-contract",
+		}})
+		require.NoError(t, err)
+		require.NoError(t, db.AppendCursorUsageEventRows(t.Context(), store, rows))
+		require.NoError(t, db.AppendCursorUsageEventRows(t.Context(), store, rows))
+		count, err := store.NewSelect().Model((*bunmodel.CursorUsageEvent)(nil)).
+			Where("dedup_key = ?", "cursor-contract").Count(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, 1, count)
 	})
 }
 

@@ -194,6 +194,36 @@ func TestCanonicalBunRowsPreservePortableCoordinates(t *testing.T) {
 	assert.Equal(t, int64(42), *usage[0].CostMicrodollars)
 }
 
+func TestUpsertSessionRowUsesCanonicalReplacementColumns(t *testing.T) {
+	database := testDB(t)
+	ctx := t.Context()
+	_, err := database.bunWriter.NewInsert().Model(&bunmodel.SourceArchive{
+		SourceArchiveID: "archive-a", SourceArchiveSalt: "salt-a",
+	}).Exec(ctx)
+	require.NoError(t, err)
+	row, err := CanonicalSessionRow(Session{
+		ID: "canonical-session", Project: "alpha", Machine: "machine-a",
+		Agent: "codex", CreatedAt: "2026-08-04T10:00:00Z",
+		SourceArchiveID: "archive-a", SourceDatabaseGeneration: "generation-a",
+	})
+	require.NoError(t, err)
+	require.NoError(t, UpsertSessionRow(ctx, database.bunWriter, row))
+
+	row.Project = "beta"
+	row.AgentLabel = "reviewer"
+	row.ParserParentSessionID = Ptr("parser-parent")
+	row.SourceDatabaseGeneration = "generation-b"
+	require.NoError(t, UpsertSessionRow(ctx, database.bunWriter, row))
+
+	var stored bunmodel.Session
+	require.NoError(t, database.bunReader.NewSelect().Model(&stored).
+		Where("id = ?", row.ID).Scan(ctx))
+	assert.Equal(t, "beta", stored.Project)
+	assert.Equal(t, "reviewer", stored.AgentLabel)
+	assert.Equal(t, "parser-parent", *stored.ParserParentSessionID)
+	assert.Equal(t, "generation-b", stored.SourceDatabaseGeneration)
+}
+
 func TestCanonicalBunWriteSessionBatchUsesPortableTimestampPrecision(t *testing.T) {
 	database := testDB(t)
 	const (

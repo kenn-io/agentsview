@@ -714,9 +714,7 @@ func (s *BunStore) hydrateContentSearchHits(
 func (s *BunStore) bunContentSubstringHits(
 	ctx context.Context, store bun.IDB, filter ContentSearchFilter,
 ) ([]ContentSearchHit, error) {
-	if s.backend.Name() == "sqlite" && strings.IndexFunc(
-		filter.Pattern, func(r rune) bool { return r > 127 },
-	) >= 0 {
+	if s.backend.Name() == "sqlite" {
 		return s.bunContentUnicodeSubstringHits(ctx, store, filter)
 	}
 	rows, err := s.bunContentCandidateRows(

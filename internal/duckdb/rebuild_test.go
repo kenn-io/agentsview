@@ -434,10 +434,8 @@ func pushCurationSnapshotFixture(t *testing.T, local *db.DB, path string) (*Sync
 
 	sessions, err := local.ListSessionsForMirrorWindow(ctx, "", nil, nil)
 	require.NoError(t, err)
-	fingerprints, err := s.sessionFingerprints(ctx, sessions)
-	require.NoError(t, err)
 	for _, sess := range sessions {
-		_, err := s.pushSingleSession(ctx, sess, fingerprints[sess.ID])
+		_, err := s.pushSingleSession(ctx, sess)
 		require.NoError(t, err)
 	}
 	return s, ids
