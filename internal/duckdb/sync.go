@@ -14,8 +14,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/db/bunmodel"
+	"go.kenn.io/agentsview/internal/duckdb/bundialect"
 )
 
 const localSyncTimestampLayout = "2006-01-02T15:04:05.000Z"
@@ -23,6 +25,7 @@ const localSyncTimestampLayout = "2006-01-02T15:04:05.000Z"
 // Sync manages push-only mirroring from the SQLite primary archive to DuckDB.
 type Sync struct {
 	duck            *sql.DB
+	bun             *bun.DB
 	local           *db.DB
 	machine         string
 	projects        []string
@@ -158,6 +161,7 @@ func New(
 	}
 	return &Sync{
 		duck:            duck,
+		bun:             bun.NewDB(duck, bundialect.New()),
 		local:           local,
 		machine:         machine,
 		projects:        opts.Projects,
@@ -908,7 +912,7 @@ func reportDuckPushProgress(
 func (s *Sync) tryPushSessionBatch(
 	ctx context.Context, sessions []db.Session, fingerprints map[string]string,
 ) ([]int, error) {
-	tx, err := s.duck.BeginTx(ctx, nil)
+	tx, err := s.bun.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin duckdb session batch tx: %w", err)
 	}
@@ -931,7 +935,7 @@ func (s *Sync) tryPushSessionBatch(
 func (s *Sync) pushSingleSession(
 	ctx context.Context, sess db.Session, fingerprint string,
 ) (int, error) {
-	tx, err := s.duck.BeginTx(ctx, nil)
+	tx, err := s.bun.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin duckdb session tx %s: %w", sess.ID, err)
 	}

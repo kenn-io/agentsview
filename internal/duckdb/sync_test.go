@@ -598,8 +598,9 @@ func TestPushIncrementalMirrorsSubagentLinkBackfill(t *testing.T) {
 	})
 	require.NoError(t, err)
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	initial, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
 	require.NoError(t, err)
+	assert.Zero(t, initial.Errors, "canonical session batch must not fall back")
 	assertMirrorSessionRelationship(t, path, "child-1", "", "root")
 
 	// The linkage is discovered later, with the session files untouched.
@@ -612,6 +613,85 @@ func TestPushIncrementalMirrorsSubagentLinkBackfill(t *testing.T) {
 	assert.False(t, res.Diagnostics.Full,
 		"the follow-up push must be incremental")
 	assertMirrorSessionRelationship(t, path, "child-1", "parent-1", "subagent")
+}
+
+func TestCanonicalSessionBatchUpdatesExistingToolLogicalKey(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	const sessionID = "canonical-tool-update"
+	const childID = "canonical-tool-child"
+	ts := "2026-02-01T00:01:00.000Z"
+	sess := syncSession(sessionID, "alpha", "parent", ts, 2)
+	child := syncSession(childID, "alpha", "child", ts, 1)
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+		{
+			Session: sess,
+			Messages: []db.Message{
+				syncMessage(sessionID, 0, "user", "spawn", ts),
+				syncMessage(
+					sessionID, 1, "assistant", "[Task: subagent]", ts,
+					db.ToolCall{
+						SessionID: sessionID, ToolName: "Task", Category: "Task",
+						ToolUseID: "toolu_child",
+					},
+				),
+			},
+			ReplaceMessages: true,
+		},
+		{
+			Session: child,
+			Messages: []db.Message{
+				syncMessage(childID, 0, "user", "child", ts),
+			},
+			ReplaceMessages: true,
+		},
+	})
+	require.NoError(t, err)
+
+	path := filepath.Join(t.TempDir(), "canonical-tool-update.duckdb")
+	raw, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, createSchema(ctx, raw))
+	require.NoError(t, raw.Close())
+	syncer, err := New(path, local, "test-machine", SyncOptions{})
+	require.NoError(t, err)
+	require.NoError(t, syncer.ensureArchiveID(ctx))
+	_, err = syncer.tryPushSessionBatch(
+		ctx, []db.Session{child, sess}, map[string]string{
+			childID: "child-first", sessionID: "first",
+		},
+	)
+	require.NoError(t, err)
+	require.NoError(t, syncer.Close())
+
+	require.NoError(t, local.SetToolCallSubagentSession(
+		sessionID, "toolu_child", childID,
+	))
+	require.NoError(t, local.LinkSubagentSessions())
+	childRow, err := local.GetSession(ctx, childID)
+	require.NoError(t, err)
+	require.NotNil(t, childRow)
+	parentRow, err := local.GetSession(ctx, sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, parentRow)
+	syncer, err = New(path, local, "test-machine", SyncOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+	require.NoError(t, syncer.ensureArchiveID(ctx))
+	_, err = syncer.tryPushSessionBatch(
+		ctx, []db.Session{*childRow, *parentRow}, map[string]string{
+			childID: "child-second", sessionID: "second",
+		},
+	)
+	require.NoError(t, err)
+
+	var subagent sql.NullString
+	require.NoError(t, syncer.duck.QueryRowContext(ctx, `
+		SELECT subagent_session_id FROM tool_calls
+		WHERE session_id = ? AND message_ordinal = 1 AND call_index = 0`,
+		sessionID,
+	).Scan(&subagent))
+	assert.Equal(t, childID, subagent.String)
 }
 
 func assertMirrorSessionRelationship(
@@ -1009,12 +1089,19 @@ func TestPushDoesNotAdvanceStateOnError(t *testing.T) {
 	_, err = local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
 		Session: syncSession(badID, "alpha", "bad first", "2026-02-02T00:00:00.000Z", 1),
 		Messages: []db.Message{
-			syncMessage(badID, 0, "user", "bad first", "not-a-timestamp"),
+			syncMessage(badID, 0, "user", "bad first", "2026-02-02T00:00:00.000Z"),
 		},
 		DataVersion:     1,
 		ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
+	require.NoError(t, local.Update(func(tx *sql.Tx) error {
+		_, updateErr := tx.Exec(
+			`UPDATE messages SET timestamp = ? WHERE session_id = ?`,
+			"not-a-timestamp", badID,
+		)
+		return updateErr
+	}), "seed a legacy unsupported timestamp")
 
 	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
 	require.NoError(t, err)
@@ -1103,7 +1190,7 @@ func TestPushSessionBatchLogsAbandonedSessionsAfterContextCancel(
 			Messages: []db.Message{
 				syncMessage(
 					sessionID, 0, "user", "cancel fallback",
-					"not-a-timestamp",
+					"2026-01-10T00:00:00.000Z",
 				),
 			},
 			DataVersion:     1,
@@ -1112,6 +1199,13 @@ func TestPushSessionBatchLogsAbandonedSessionsAfterContextCancel(
 	}
 	_, err := local.WriteSessionBatchAtomic(writes)
 	require.NoError(t, err)
+	require.NoError(t, local.Update(func(tx *sql.Tx) error {
+		_, updateErr := tx.Exec(
+			`UPDATE messages SET timestamp = ? WHERE session_id LIKE ?`,
+			"not-a-timestamp", "duck-cancel-fallback-%",
+		)
+		return updateErr
+	}), "seed legacy unsupported timestamps")
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	var result PushResult
 	var pushed []db.Session

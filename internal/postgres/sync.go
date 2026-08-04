@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -157,6 +159,8 @@ func isInsufficientPrivilege(err error) bool {
 // PostgreSQL database.
 type Sync struct {
 	pg                     *sql.DB
+	bun                    *bun.DB
+	bunOnce                sync.Once
 	local                  *db.DB
 	syncState              syncStateStore
 	aliasBackfillState     syncStateStore
@@ -195,6 +199,13 @@ type Sync struct {
 
 	schemaMu   sync.Mutex
 	schemaDone bool
+}
+
+func (s *Sync) bunDB() *bun.DB {
+	s.bunOnce.Do(func() {
+		s.bun = bun.NewDB(s.pg, pgdialect.New())
+	})
+	return s.bun
 }
 
 func (s *Sync) effectiveSyncState() syncStateStore {

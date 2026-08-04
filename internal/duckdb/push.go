@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ccoveille/go-safecast/v2"
+	"github.com/uptrace/bun"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
@@ -945,32 +946,65 @@ func (s *Sync) refreshCurationIfChanged(ctx context.Context) (bool, error) {
 // incrementalPush share this single write path: on a freshly created
 // rebuild file the pre-delete below is simply a no-op.
 func (s *Sync) pushSession(
-	ctx context.Context, exec duckMutationExecutor, sess db.Session, fingerprint string,
+	ctx context.Context, tx bun.IDB, sess db.Session, fingerprint string,
 ) (int, error) {
-	if err := s.upsertSession(ctx, exec, sess, fingerprint); err != nil {
+	if err := s.upsertSession(ctx, tx, sess, fingerprint); err != nil {
 		return 0, err
 	}
 	msgs, err := s.local.GetAllMessages(ctx, sess.ID)
 	if err != nil {
 		return 0, fmt.Errorf("reading local messages for %s: %w", sess.ID, err)
 	}
-
-	if err := s.replaceSessionDependents(ctx, exec, sess.ID); err != nil {
+	messageRows, callRows, resultRows, err := db.CanonicalMessageRows(msgs)
+	if err != nil {
 		return 0, err
 	}
-	if err := s.replaceUsageEvents(ctx, exec, sess.ID); err != nil {
+	for i := range messageRows {
+		if msgs[i].ID <= 0 {
+			continue
+		}
+		id := msgs[i].ID
+		messageRows[i].ID = &id
+	}
+	usageEvents, err := s.local.GetUsageEvents(ctx, sess.ID)
+	if err != nil {
 		return 0, err
 	}
-	if err := insertMessages(ctx, exec, msgs); err != nil {
+	usageRows, err := db.CanonicalUsageEventRows(usageEvents)
+	if err != nil {
 		return 0, err
 	}
-	if err := s.replaceToolRows(ctx, exec, sess.ID, msgs); err != nil {
+	findings, err := s.local.SessionSecretFindings(ctx, sess.ID)
+	if err != nil {
 		return 0, err
 	}
-	if err := s.replaceSecretFindings(ctx, exec, sess.ID); err != nil {
+	// DuckDB's unique indexes require parent messages to be removed before
+	// reinserting a tool call with the same portable key in one transaction.
+	// Clear the mirror-only dependents in that order, then let the shared Bun
+	// writers own every replacement row.
+	if err := s.replaceSessionDependents(ctx, tx, sess.ID); err != nil {
 		return 0, err
 	}
-	if err := s.replacePinnedMessages(ctx, exec, sess.ID); err != nil {
+	if err := db.AppendMessageRows(ctx, tx, sess.ID, messageRows); err != nil {
+		return 0, err
+	}
+	if err := db.ReplaceToolRows(ctx, tx, sess.ID, callRows, resultRows); err != nil {
+		return 0, err
+	}
+	if err := db.ReplaceUsageEventRows(ctx, tx, sess.ID, usageRows); err != nil {
+		return 0, err
+	}
+	if err := db.ReplaceSecretFindingRows(
+		ctx, tx, sess.ID, db.CanonicalSecretFindingRows(findings),
+	); err != nil {
+		return 0, err
+	}
+	if err := s.execMutation(ctx, tx,
+		`DELETE FROM pinned_messages WHERE session_id = ?`, sess.ID,
+	); err != nil {
+		return 0, fmt.Errorf("clearing duckdb pinned messages for %s: %w", sess.ID, err)
+	}
+	if err := s.replacePinnedMessages(ctx, tx, sess.ID); err != nil {
 		return 0, err
 	}
 	return len(msgs), nil
@@ -1195,157 +1229,6 @@ func mirroredSessionMachine(sess db.Session, fallbackMachine string) string {
 	return fallbackMachine
 }
 
-func insertMessages(
-	ctx context.Context, exec duckMutationExecutor, msgs []db.Message,
-) error {
-	for _, m := range msgs {
-		if _, err := exec.ExecContext(ctx, `
-			INSERT INTO messages (
-				id, session_id, ordinal, role, content, thinking_text,
-				timestamp, has_thinking, has_tool_use, content_length,
-				is_system, model, token_usage, context_tokens, output_tokens,
-				has_context_tokens, has_output_tokens, claude_message_id,
-				claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
-				source_parent_uuid, is_sidechain, is_compact_boundary
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			m.ID, m.SessionID, m.Ordinal, m.Role, m.Content,
-			m.ThinkingText, timeValue(m.Timestamp),
-			m.HasThinking, m.HasToolUse, m.ContentLength,
-			m.IsSystem, m.Model, string(m.TokenUsage),
-			m.ContextTokens, m.OutputTokens,
-			m.HasContextTokens, m.HasOutputTokens,
-			m.ClaudeMessageID, m.ClaudeRequestID,
-			m.SourceType, m.SourceSubtype, m.PromptSource, m.SourceUUID,
-			m.SourceParentUUID, m.IsSidechain, m.IsCompactBoundary,
-		); err != nil {
-			return fmt.Errorf("inserting duckdb message %s/%d: %w", m.SessionID, m.Ordinal, err)
-		}
-	}
-	return nil
-}
-
-func (s *Sync) replaceToolRows(
-	ctx context.Context, exec duckMutationExecutor, sessionID string, msgs []db.Message,
-) error {
-	if err := s.execMutation(ctx, exec,
-		`DELETE FROM tool_result_events WHERE session_id = ?`,
-		sessionID,
-	); err != nil {
-		return fmt.Errorf("clearing duckdb tool_result_events for %s: %w", sessionID, err)
-	}
-	if err := s.execMutation(ctx, exec,
-		`DELETE FROM tool_calls WHERE session_id = ?`,
-		sessionID,
-	); err != nil {
-		return fmt.Errorf("clearing duckdb tool_calls for %s: %w", sessionID, err)
-	}
-	if err := insertToolCalls(ctx, exec, msgs); err != nil {
-		return err
-	}
-	if err := insertToolResultEvents(ctx, exec, msgs); err != nil {
-		return err
-	}
-	return nil
-}
-
-func insertToolCalls(
-	ctx context.Context, exec duckMutationExecutor, msgs []db.Message,
-) error {
-	for _, m := range msgs {
-		for i, tc := range m.ToolCalls {
-			if _, err := exec.ExecContext(ctx, `
-				INSERT INTO tool_calls (
-					message_id, session_id, message_ordinal, tool_name, category,
-					call_index, tool_use_id, input_json, skill_name,
-					result_content_length, result_content,
-					subagent_session_id, file_path
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				m.ID, m.SessionID, m.Ordinal, tc.ToolName, tc.Category,
-				i, tc.ToolUseID, nilEmpty(tc.InputJSON),
-				nilEmpty(tc.SkillName), nilZero(tc.ResultContentLength),
-				nilEmpty(tc.ResultContent), nilEmpty(tc.SubagentSessionID),
-				nilEmpty(tc.FilePath),
-			); err != nil {
-				return fmt.Errorf("inserting duckdb tool_call %s/%d/%d: %w",
-					m.SessionID, m.Ordinal, i, err)
-			}
-		}
-	}
-	return nil
-}
-
-func insertToolResultEvents(
-	ctx context.Context, exec duckMutationExecutor, msgs []db.Message,
-) error {
-	for _, m := range msgs {
-		for i, tc := range m.ToolCalls {
-			for _, ev := range tc.ResultEvents {
-				if _, err := exec.ExecContext(ctx, `
-					INSERT INTO tool_result_events (
-						session_id, tool_call_message_ordinal, call_index,
-						tool_use_id, agent_id, subagent_session_id,
-						source, status, content, content_length,
-						timestamp, event_index
-					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-					m.SessionID, m.Ordinal, i,
-					nilEmpty(ev.ToolUseID), nilEmpty(ev.AgentID),
-					nilEmpty(ev.SubagentSessionID), ev.Source, ev.Status,
-					ev.Content, ev.ContentLength, timeValue(ev.Timestamp),
-					ev.EventIndex,
-				); err != nil {
-					return fmt.Errorf("inserting duckdb tool_result_event %s/%d/%d: %w",
-						m.SessionID, m.Ordinal, i, err)
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func (s *Sync) replaceUsageEvents(
-	ctx context.Context, exec duckMutationExecutor, sessionID string,
-) error {
-	events, err := s.local.GetUsageEvents(ctx, sessionID)
-	if err != nil {
-		return err
-	}
-	if err := s.execMutation(ctx, exec,
-		`DELETE FROM usage_events WHERE session_id = ?`,
-		sessionID,
-	); err != nil {
-		return fmt.Errorf("clearing duckdb usage_events for %s: %w", sessionID, err)
-	}
-	for _, ev := range events {
-		if err := insertUsageEvent(ctx, exec, ev); err != nil {
-			return fmt.Errorf("inserting duckdb usage_event %s: %w", sessionID, err)
-		}
-	}
-	return nil
-}
-
-func insertUsageEvent(
-	ctx context.Context, exec duckMutationExecutor, ev db.UsageEvent,
-) error {
-	ordinal, cost, occurredAt := usageEventNullableValues(ev)
-	if _, err := exec.ExecContext(ctx, `
-		INSERT INTO usage_events (
-			id, session_id, message_ordinal, source, model,
-			input_tokens, output_tokens,
-			cache_creation_input_tokens, cache_read_input_tokens,
-			reasoning_tokens, cost_microdollars, cost_status, cost_source,
-			occurred_at, dedup_key
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		ev.ID, ev.SessionID, ordinal, ev.Source, ev.Model,
-		ev.InputTokens, ev.OutputTokens,
-		ev.CacheCreationInputTokens, ev.CacheReadInputTokens,
-		ev.ReasoningTokens, cost, ev.CostStatus,
-		ev.CostSource, occurredAt, ev.DedupKey,
-	); err != nil {
-		return err
-	}
-	return nil
-}
-
 func (s *Sync) bulkInsertCursorUsageEvents(
 	ctx context.Context, tx *sql.Tx, events []db.CursorUsageEvent,
 ) error {
@@ -1394,48 +1277,6 @@ func (s *Sync) bulkInsertCursorUsageEvents(
 		b.WriteString(` ON CONFLICT DO NOTHING`)
 		if err := s.execMutation(ctx, tx, b.String(), args...); err != nil {
 			return fmt.Errorf("bulk inserting duckdb cursor_usage_events: %w", err)
-		}
-	}
-	return nil
-}
-
-func usageEventNullableValues(ev db.UsageEvent) (any, any, any) {
-	var ordinal any
-	if ev.MessageOrdinal != nil {
-		ordinal = *ev.MessageOrdinal
-	}
-	var cost any
-	if ev.Cost != nil {
-		cost = ev.Cost.Microdollars
-	}
-	var occurredAt any
-	if ev.OccurredAt != "" {
-		occurredAt = timeValue(ev.OccurredAt)
-	}
-	return ordinal, cost, occurredAt
-}
-
-func (s *Sync) replaceSecretFindings(
-	ctx context.Context, exec duckMutationExecutor, sessionID string,
-) error {
-	findings, err := s.local.SessionSecretFindings(ctx, sessionID)
-	if err != nil {
-		return err
-	}
-	for _, f := range findings {
-		if _, err := exec.ExecContext(ctx, `
-			INSERT INTO secret_findings (
-				session_id, rule_name, confidence, location_kind,
-				message_ordinal, call_index, event_index,
-				match_start, match_end, match_index,
-				redacted_match, rules_version, created_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, current_timestamp)`,
-			f.SessionID, f.RuleName, f.Confidence, f.LocationKind,
-			f.MessageOrdinal, f.CallIndex, f.EventIndex,
-			f.MatchStart, f.MatchEnd, f.MatchIndex,
-			f.RedactedMatch, f.RulesVersion,
-		); err != nil {
-			return fmt.Errorf("inserting duckdb secret_finding %s: %w", sessionID, err)
 		}
 	}
 	return nil
@@ -1503,13 +1344,6 @@ func transcriptRevisionValue(value *string) string {
 
 func nilEmpty(value string) any {
 	if value == "" {
-		return nil
-	}
-	return value
-}
-
-func nilZero(value int) any {
-	if value == 0 {
 		return nil
 	}
 	return value
