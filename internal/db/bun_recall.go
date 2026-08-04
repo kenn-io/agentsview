@@ -111,22 +111,25 @@ func (s *BunStore) ListRecallEntries(
 	args = append(args, limit)
 	entries := []RecallEntry{}
 	err := s.consistentView(ctx, func(store bun.IDB) error {
+		attemptEntries := []RecallEntry{}
 		if err := store.NewRaw(
 			"SELECT "+recallBaseCols+" FROM recall_entries WHERE "+where+
 				" ORDER BY updated_at DESC, id ASC LIMIT ?", args...,
-		).Scan(ctx, &entries); err != nil {
+		).Scan(ctx, &attemptEntries); err != nil {
 			return fmt.Errorf("querying entries: %w", err)
 		}
-		if len(entries) == 0 {
+		if len(attemptEntries) == 0 {
+			entries = attemptEntries
 			return nil
 		}
-		evidence, err := listRecallEvidenceBun(ctx, store, recallIDs(entries))
+		evidence, err := listRecallEvidenceBun(ctx, store, recallIDs(attemptEntries))
 		if err != nil {
 			return err
 		}
-		for index := range entries {
-			entries[index].Evidence = evidence[entries[index].ID]
+		for index := range attemptEntries {
+			attemptEntries[index].Evidence = evidence[attemptEntries[index].ID]
 		}
+		entries = attemptEntries
 		return nil
 	})
 	if err != nil {

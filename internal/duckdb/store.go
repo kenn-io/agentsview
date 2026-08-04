@@ -125,11 +125,8 @@ func (s *Store) mirrorReadToken(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("reading duckdb mirror consistency token: %w", err)
 	}
-	if strings.TrimSpace(token) == "" {
-		return "", fmt.Errorf(
-			"reading duckdb mirror consistency token: %s is empty",
-			mirrorGenerationMetadataKey,
-		)
+	if err := validateMirrorGeneration(token); err != nil {
+		return "", fmt.Errorf("reading duckdb mirror consistency token: %w", err)
 	}
 	return token, nil
 }

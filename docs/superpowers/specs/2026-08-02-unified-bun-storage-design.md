@@ -154,6 +154,17 @@ The convergence uses this ownership matrix:
 | Identity and mappings                  | `source_archives` and the three `source_*` identity/mapping tables, including source archive and generation keys | SQLite change journals and publication revisions; PostgreSQL publication-scope ownership tables           |
 | Usage, pricing, curation, and insights | One common column set and logical key per registered Bun model                                                   | SQLite pricing refresh metadata, provider import cursors, and backend capability probes                   |
 
+When a pricing table is absent on a compatible read-only target or contains no
+rows, embedded rates form the canonical base catalogue. Custom rates overlay
+that base and an explicitly supplied effective catalogue overlays both; SQLite,
+PostgreSQL, and DuckDB expose identical pricing provenance for this state.
+
+Generated curation targets retain their own pin IDs on logical-key conflicts.
+Mirrors instead preserve positive source-assigned pin IDs and transactionally
+reconcile a reused ID away from any stale logical owner before the current pin
+adopts it. Preserve-mode reconciliation is never used for generated-ID targets,
+and a failed mirrored batch restores both the stale owner and prior logical pin.
+
 Canonical generated message DDL uses `(session_id, ordinal)` as its composite
 primary key and keeps `id` as an optional source row identifier. The shipped
 SQLite archive is the one physical compatibility alias: it retains

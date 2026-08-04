@@ -142,21 +142,31 @@ func (s *BunStore) BuildProjectIdentityMap(
 	}
 	var projects map[string]export.ProjectMapEntry
 	err := s.view(ctx, func(store bun.IDB) error {
-		observations, err := listBunProjectIdentityObservations(ctx, store, labels)
-		if err != nil {
-			return err
-		}
-		scope, err := bunSourceArchiveIdentityScope(ctx, store, observations)
-		if err != nil {
-			return err
-		}
-		projects = export.BuildProjectsMapWithScope(labels, observations, scope)
-		return nil
+		var err error
+		projects, err = buildBunProjectIdentityMapFrom(ctx, store, labels)
+		return err
 	})
 	if err != nil {
 		return nil, err
 	}
 	return projects, nil
+}
+
+func buildBunProjectIdentityMapFrom(
+	ctx context.Context, store bun.IDB, labels []string,
+) (map[string]export.ProjectMapEntry, error) {
+	if labels != nil && len(labels) == 0 {
+		return map[string]export.ProjectMapEntry{}, nil
+	}
+	observations, err := listBunProjectIdentityObservations(ctx, store, labels)
+	if err != nil {
+		return nil, err
+	}
+	scope, err := bunSourceArchiveIdentityScope(ctx, store, observations)
+	if err != nil {
+		return nil, err
+	}
+	return export.BuildProjectsMapWithScope(labels, observations, scope), nil
 }
 
 func bunSourceArchiveIdentityScope(

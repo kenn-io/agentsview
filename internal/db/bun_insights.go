@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/db/bunmodel"
@@ -16,12 +15,12 @@ import (
 func (s *BunStore) InsertInsight(insight Insight) (int64, error) {
 	ctx := context.Background()
 	row := insightToBunRow(insight)
-	row.CreatedAt = bunmodel.NewTimestamp(time.Now())
 	var id int64
 	err := s.update(ctx, WriteInsight, func(store bun.IDB) error {
 		return store.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 			if err := tx.NewInsert().Model(&row).
-				ExcludeColumn("id").Returning("id").
+				ExcludeColumn("id").Value("created_at", "current_timestamp").
+				Returning("id").
 				Scan(ctx, &id); err != nil {
 				return fmt.Errorf("inserting insight: %w", err)
 			}

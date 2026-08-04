@@ -267,3 +267,12 @@ func TestBunStoreUsageContract(t *testing.T) {
 		},
 	})
 }
+
+func TestCanonicalPricingWriteContract(t *testing.T) {
+	conn, err := Open(filepath.Join(t.TempDir(), "pricing-write-contract.duckdb"))
+	require.NoError(t, err)
+	common := bun.NewDB(conn, bundialect.New())
+	require.NoError(t, db.CreateCommonSchema(t.Context(), common))
+	t.Cleanup(func() { require.NoError(t, common.Close()) })
+	storetest.RunPricingWriteContract(t, "duckdb", common)
+}

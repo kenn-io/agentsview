@@ -7,7 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storetest"
 )
 
@@ -19,6 +22,8 @@ const bunInsightContractSchema = "agentsview_bun_insight_contract"
 const bunMutationContractSchema = "agentsview_bun_mutation_contract"
 const bunRecallContractSchema = "agentsview_bun_recall_contract"
 const bunUsageContractSchema = "agentsview_bun_usage_contract"
+const bunOptionalUsageContractSchema = "agentsview_bun_optional_usage_contract"
+const bunPricingWriteContractSchema = "agentsview_bun_pricing_write_contract"
 
 func TestBunStoreCoreContract(t *testing.T) {
 	storetest.RunCoreContract(t, storetest.Backend{
@@ -220,6 +225,55 @@ func TestBunStoreUsageContract(t *testing.T) {
 			return store.BunStore
 		},
 	})
+}
+
+func TestBunStoreUsageAllowsCompatibleMissingOptionalTables(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanupBunContractSchema(t, pgURL, bunOptionalUsageContractSchema)
+	t.Cleanup(func() {
+		cleanupBunContractSchema(t, pgURL, bunOptionalUsageContractSchema)
+	})
+	pg, err := Open(pgURL, bunOptionalUsageContractSchema, true)
+	require.NoError(t, err)
+	require.NoError(t, EnsureSchema(t.Context(), pg, bunOptionalUsageContractSchema))
+	store := newStore(pg)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(t, storetest.InsertBunUsageFixture(
+		t.Context(), store.bun, "bun-optional-usage-archive", "bun-optional-usage-generation",
+	))
+	_, err = pg.ExecContext(t.Context(), `
+		DROP TABLE model_pricing_bands;
+		DROP TABLE model_pricing;
+		DROP TABLE cursor_usage_events`)
+	require.NoError(t, err)
+	require.NoError(t, CheckSchemaCompat(t.Context(), pg))
+
+	store.SetCustomPricing(map[string]config.CustomModelRate{
+		"contract-model": {
+			InputMicrodollarsPerMTok:  2_000_000,
+			OutputMicrodollarsPerMTok: 3_000_000,
+		},
+	})
+	result, err := store.GetDailyUsage(t.Context(), db.UsageFilter{
+		From: "2026-08-02", To: "2026-08-02", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(80), result.Totals.TotalCost.Microdollars)
+	assert.Equal(t, []string{"contract-model"}, result.Daily[0].ModelsUsed)
+}
+
+func TestCanonicalPricingWriteContract(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanupBunContractSchema(t, pgURL, bunPricingWriteContractSchema)
+	t.Cleanup(func() {
+		cleanupBunContractSchema(t, pgURL, bunPricingWriteContractSchema)
+	})
+	pg, err := Open(pgURL, bunPricingWriteContractSchema, true)
+	require.NoError(t, err)
+	require.NoError(t, EnsureSchema(t.Context(), pg, bunPricingWriteContractSchema))
+	store := newStore(pg)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	storetest.RunPricingWriteContract(t, "postgres", store.bun)
 }
 
 func cleanupBunCoreContractSchema(t *testing.T, pgURL string) {

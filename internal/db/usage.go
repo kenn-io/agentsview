@@ -1665,34 +1665,31 @@ func usageDedupTokenForRow(
 	return usageDedupToken{}, false
 }
 
-func (s *BunStore) loadTopSessionMetadata(
-	ctx context.Context, sessionIDs []string,
+func loadTopSessionMetadataFrom(
+	ctx context.Context, store bun.IDB, sessionIDs []string,
 ) (map[string]topSessionMetadata, error) {
 	out := make(map[string]topSessionMetadata, len(sessionIDs))
 	if len(sessionIDs) == 0 {
 		return out, nil
 	}
-	err := s.view(ctx, func(store bun.IDB) error {
-		var rows []bunmodel.Session
-		if err := store.NewSelect().Model(&rows).
-			Where("id IN (?)", bun.List(sessionIDs)).Scan(ctx); err != nil {
-			return fmt.Errorf("querying top session metadata: %w", err)
+	var rows []bunmodel.Session
+	if err := store.NewSelect().Model(&rows).
+		Where("id IN (?)", bun.List(sessionIDs)).Scan(ctx); err != nil {
+		return nil, fmt.Errorf("querying top session metadata: %w", err)
+	}
+	for _, row := range rows {
+		projection := bunUsageProjection{
+			SessionID: row.ID, Project: row.Project, Agent: row.Agent,
+			DisplayName: row.DisplayName, SessionName: row.SessionName,
+			FirstMessage: row.FirstMessage, SessionStartedAt: row.StartedAt,
 		}
-		for _, row := range rows {
-			projection := bunUsageProjection{
-				SessionID: row.ID, Project: row.Project, Agent: row.Agent,
-				DisplayName: row.DisplayName, SessionName: row.SessionName,
-				FirstMessage: row.FirstMessage, SessionStartedAt: row.StartedAt,
-			}
-			out[row.ID] = topSessionMetadata{
-				displayName: usageSessionDisplayName(projection),
-				agent:       row.Agent, project: row.Project,
-				startedAt: formatUsageTimestamp(row.StartedAt),
-			}
+		out[row.ID] = topSessionMetadata{
+			displayName: usageSessionDisplayName(projection),
+			agent:       row.Agent, project: row.Project,
+			startedAt: formatUsageTimestamp(row.StartedAt),
 		}
-		return nil
-	})
-	return out, err
+	}
+	return out, nil
 }
 
 // DailyUsageEntry holds token counts and cost for one day.
@@ -1969,16 +1966,28 @@ func paddedUTCBound(ts string, hours int) string {
 func (s *BunStore) GetDailyUsage(
 	ctx context.Context, f UsageFilter,
 ) (DailyUsageResult, error) {
+	var staged DailyUsageResult
+	err := s.consistentView(ctx, func(store bun.IDB) error {
+		var err error
+		staged, err = s.getDailyUsageFrom(ctx, store, f)
+		return err
+	})
+	return staged, err
+}
+
+func (s *BunStore) getDailyUsageFrom(
+	ctx context.Context, store bun.IDB, f UsageFilter,
+) (DailyUsageResult, error) {
 	loc := f.location()
 
-	pricing, err := s.loadPricingMap(ctx)
+	pricing, err := s.loadPricingMapFrom(ctx, store)
 	if err != nil {
 		return DailyUsageResult{},
 			fmt.Errorf("loading pricing: %w", err)
 	}
 	rateResolver := export.NewPricingResolver(pricing)
 
-	rows, err := s.loadDailyUsageRows(ctx, f, true, false)
+	rows, err := s.loadDailyUsageRowsFrom(ctx, store, f, true, false)
 	if err != nil {
 		return DailyUsageResult{},
 			fmt.Errorf("querying daily usage: %w", err)
@@ -2270,8 +2279,8 @@ func (s *BunStore) GetDailyUsage(
 		if seenSessions != nil {
 			sessionCounts = NewUsageSessionCounts(seenSessions)
 		}
-		projects, err := s.BuildProjectIdentityMap(ctx,
-			sortedSetKeys(projectLabels))
+		projects, err := buildBunProjectIdentityMapFrom(
+			ctx, store, sortedSetKeys(projectLabels))
 		if err != nil {
 			return DailyUsageResult{}, err
 		}
@@ -2518,7 +2527,8 @@ func (s *BunStore) GetDailyUsage(
 	if seenSessions != nil {
 		sessionCounts = NewUsageSessionCounts(seenSessions)
 	}
-	projects, err := s.BuildProjectIdentityMap(ctx, sortedSetKeys(projectLabels))
+	projects, err := buildBunProjectIdentityMapFrom(
+		ctx, store, sortedSetKeys(projectLabels))
 	if err != nil {
 		return DailyUsageResult{}, err
 	}
@@ -2609,14 +2619,26 @@ func SortAndLimitTopSessions(
 func (s *BunStore) GetTopSessionsByCost(
 	ctx context.Context, f UsageFilter, limit int,
 ) ([]TopSessionEntry, error) {
-	pricing, err := s.loadPricingMap(ctx)
+	var staged []TopSessionEntry
+	err := s.consistentView(ctx, func(store bun.IDB) error {
+		var err error
+		staged, err = s.getTopSessionsByCostFrom(ctx, store, f, limit)
+		return err
+	})
+	return staged, err
+}
+
+func (s *BunStore) getTopSessionsByCostFrom(
+	ctx context.Context, store bun.IDB, f UsageFilter, limit int,
+) ([]TopSessionEntry, error) {
+	pricing, err := s.loadPricingMapFrom(ctx, store)
 	if err != nil {
 		return nil,
 			fmt.Errorf("loading pricing: %w", err)
 	}
 	rateResolver := export.NewPricingResolver(pricing)
 
-	rows, err := s.loadDailyUsageRows(ctx, f, false, false)
+	rows, err := s.loadDailyUsageRowsFrom(ctx, store, f, false, false)
 	if err != nil {
 		return nil,
 			fmt.Errorf("querying top sessions: %w", err)
@@ -2722,7 +2744,7 @@ func (s *BunStore) GetTopSessionsByCost(
 	for i := range result {
 		sessionIDs[i] = result[i].SessionID
 	}
-	metadata, err := s.loadTopSessionMetadata(ctx, sessionIDs)
+	metadata, err := loadTopSessionMetadataFrom(ctx, store, sessionIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -2957,7 +2979,21 @@ func sessionUsageBreakdownLabel(r usageScanRow) string {
 func (s *BunStore) GetSessionUsage(
 	ctx context.Context, sessionID string, includeBreakdown bool,
 ) (*SessionUsage, error) {
-	sess, err := s.GetSession(ctx, sessionID)
+	var staged *SessionUsage
+	err := s.consistentView(ctx, func(store bun.IDB) error {
+		var err error
+		staged, err = s.getSessionUsageFrom(
+			ctx, store, sessionID, includeBreakdown,
+		)
+		return err
+	})
+	return staged, err
+}
+
+func (s *BunStore) getSessionUsageFrom(
+	ctx context.Context, store bun.IDB, sessionID string, includeBreakdown bool,
+) (*SessionUsage, error) {
+	sess, err := s.getSessionFrom(ctx, store, sessionID, false)
 	if err != nil {
 		return nil, err
 	}
@@ -2965,13 +3001,15 @@ func (s *BunStore) GetSessionUsage(
 		return nil, nil
 	}
 
-	pricing, err := s.loadPricingMap(ctx)
+	pricing, err := s.loadPricingMapFrom(ctx, store)
 	if err != nil {
 		return nil, fmt.Errorf("loading pricing: %w", err)
 	}
 	rateResolver := export.NewPricingResolver(pricing)
 
-	rows, err := s.loadSessionUsageRows(ctx, sessionID)
+	rows, err := s.loadSessionUsageRowsFrom(
+		ctx, store, UsageFilter{}, sessionID,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("querying session usage: %w", err)
 	}
