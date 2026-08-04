@@ -109,6 +109,12 @@ func replaceSecretFindingsTx(
 		}
 	}
 
+	return updateSessionSecretSummaryTx(tx, sessionID, leakCount, rulesVersion)
+}
+
+func updateSessionSecretSummaryTx(
+	tx *sql.Tx, sessionID string, leakCount int, rulesVersion string,
+) error {
 	if _, err := tx.Exec(`
 		UPDATE sessions
 		SET secret_leak_count = ?,

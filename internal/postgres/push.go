@@ -17,7 +17,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 	"go.kenn.io/agentsview/internal/export"
 )
 
@@ -1261,12 +1263,13 @@ func (s *Sync) pushBatchAttempt(
 	pushed *[]db.Session,
 	preloadComparisons bool,
 ) (batchResult, error) {
-	tx, err := s.pg.BeginTx(ctx, nil)
+	bunTx, err := s.bunDB().BeginTx(ctx, nil)
 	if err != nil {
 		return batchResult{}, fmt.Errorf(
 			"begin pg tx: %w", err,
 		)
 	}
+	tx := bunTx.Tx
 
 	n := 0
 	msgs := 0
@@ -1310,7 +1313,7 @@ func (s *Sync) pushBatchAttempt(
 		}
 
 		msgCount, err := s.pushMessages(
-			ctx, tx, sess.ID, full,
+			ctx, tx, bunTx, sess.ID, full,
 			sessionUsageFingerprints, comparisons,
 		)
 		if err != nil {
@@ -1323,7 +1326,7 @@ func (s *Sync) pushBatchAttempt(
 			return batchResult{}, nil
 		}
 
-		findingsChanged, err := s.pushSecretFindings(ctx, tx, sess.ID)
+		findingsChanged, err := s.pushSecretFindings(ctx, bunTx, sess.ID)
 		if err != nil {
 			log.Printf(
 				"pgsync: secret findings %s: %v",
@@ -2540,6 +2543,7 @@ func (s *Sync) pushSession(
 func (s *Sync) pushMessages(
 	ctx context.Context,
 	tx *sql.Tx,
+	bunTx bun.IDB,
 	sessionID string,
 	full bool,
 	sessionUsageFingerprints map[string]string,
@@ -2552,36 +2556,9 @@ func (s *Sync) pushMessages(
 		)
 	}
 	if localCount == 0 {
-		if _, err := tx.ExecContext(ctx,
-			`DELETE FROM tool_result_events WHERE session_id = $1`,
-			sessionID,
+		if err := s.replaceCanonicalPGMessageRows(
+			ctx, bunTx, sessionID, nil,
 		); err != nil {
-			return 0, fmt.Errorf(
-				"deleting stale pg tool_result_events: %w", err,
-			)
-		}
-		if _, err := tx.ExecContext(ctx,
-			`DELETE FROM tool_calls WHERE session_id = $1`,
-			sessionID,
-		); err != nil {
-			return 0, fmt.Errorf(
-				"deleting stale pg tool_calls: %w", err,
-			)
-		}
-		if _, err := tx.ExecContext(ctx,
-			`DELETE FROM messages WHERE session_id = $1`,
-			sessionID,
-		); err != nil {
-			return 0, fmt.Errorf(
-				"deleting stale pg messages: %w", err,
-			)
-		}
-		// Usage events are independent of transcript messages: a
-		// session can carry token/cost accounting (e.g. a hermes
-		// state.db-only session) with zero messages. Sync them here
-		// too so their cost reaches PG instead of being dropped with
-		// the rest of the message-replace path below.
-		if err := s.replaceUsageEvents(ctx, tx, sessionID); err != nil {
 			return 0, err
 		}
 		if err := reconcilePinnedMessages(
@@ -2804,109 +2781,45 @@ func (s *Sync) pushMessages(
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM tool_result_events
-		WHERE session_id = $1
-	`, sessionID); err != nil {
-		return 0, fmt.Errorf(
-			"deleting pg tool_result_events: %w", err,
-		)
+	messages, err := s.local.GetAllMessages(ctx, sessionID)
+	if err != nil {
+		return 0, fmt.Errorf("reading local messages: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM tool_calls
-		WHERE session_id = $1
-	`, sessionID); err != nil {
-		return 0, fmt.Errorf(
-			"deleting pg tool_calls: %w", err,
-		)
-	}
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM messages
-		WHERE session_id = $1
-	`, sessionID); err != nil {
-		return 0, fmt.Errorf(
-			"deleting pg messages: %w", err,
-		)
-	}
-	if err := s.replaceUsageEvents(ctx, tx, sessionID); err != nil {
+	if err := s.replaceCanonicalPGMessageRows(
+		ctx, bunTx, sessionID, messages,
+	); err != nil {
 		return 0, err
 	}
 
-	count := 0
-	startOrdinal := 0
-	for {
-		msgs, err := s.local.GetMessages(
-			ctx, sessionID, startOrdinal,
-			db.MaxMessageLimit, true,
-		)
-		if err != nil {
-			return count, fmt.Errorf(
-				"reading local messages: %w", err,
-			)
-		}
-		if len(msgs) == 0 {
-			break
-		}
-
-		nextOrdinal := msgs[len(msgs)-1].Ordinal + 1
-		if nextOrdinal <= startOrdinal {
-			return count, fmt.Errorf(
-				"pushMessages %s: ordinal did not "+
-					"advance (start=%d, last=%d)",
-				sessionID, startOrdinal,
-				msgs[len(msgs)-1].Ordinal,
-			)
-		}
-
-		if err := bulkInsertMessages(
-			ctx, tx, sessionID, msgs,
-		); err != nil {
-			return count, err
-		}
-		if err := bulkInsertToolCalls(
-			ctx, tx, sessionID, msgs,
-		); err != nil {
-			return count, err
-		}
-		if err := bulkInsertToolResultEvents(
-			ctx, tx, sessionID, msgs,
-		); err != nil {
-			return count, err
-		}
-		count += len(msgs)
-		startOrdinal = nextOrdinal
-	}
-
 	if err := reconcilePinnedMessages(ctx, tx, sessionID); err != nil {
-		return count, err
+		return 0, err
 	}
 
-	return count, nil
+	return len(messages), nil
 }
 
-// replaceUsageEvents replaces a session's usage_events in PG with the
-// current local set. Usage events are synced independently of transcript
-// messages because a session can have token/cost accounting with no
-// messages at all (e.g. a hermes state.db-only session). Both the
-// zero-message and the normal message-replace paths in pushMessages call
-// this so a session's cost always reaches PG.
-func (s *Sync) replaceUsageEvents(
-	ctx context.Context, tx *sql.Tx, sessionID string,
+func (s *Sync) replaceCanonicalPGMessageRows(
+	ctx context.Context, bunTx bun.IDB, sessionID string, messages []db.Message,
 ) error {
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM usage_events
-		WHERE session_id = $1
-	`, sessionID); err != nil {
-		return fmt.Errorf("deleting pg usage_events: %w", err)
+	messageRows, callRows, resultRows, err := db.CanonicalMessageRows(messages)
+	if err != nil {
+		return err
 	}
 	usageEvents, err := s.local.GetUsageEvents(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("reading local usage events: %w", err)
 	}
-	if err := bulkInsertUsageEvents(ctx, tx, usageEvents); err != nil {
+	usageRows, err := db.CanonicalUsageEventRows(usageEvents)
+	if err != nil {
 		return err
 	}
-	return nil
+	if err := db.ReplaceMessageRows(ctx, bunTx, sessionID, messageRows); err != nil {
+		return err
+	}
+	if err := db.ReplaceToolRows(ctx, bunTx, sessionID, callRows, resultRows); err != nil {
+		return err
+	}
+	return db.ReplaceUsageEventRows(ctx, bunTx, sessionID, usageRows)
 }
 
 func reconcilePinnedMessages(
@@ -3370,156 +3283,6 @@ func pgUsageEventFingerprint(
 	return b.String(), rows.Err()
 }
 
-const msgInsertBatch = 100
-
-// bulkInsertMessages inserts messages using multi-row VALUES.
-func bulkInsertMessages(
-	ctx context.Context, tx *sql.Tx,
-	sessionID string, msgs []db.Message,
-) error {
-	for i := 0; i < len(msgs); i += msgInsertBatch {
-		end := min(i+msgInsertBatch, len(msgs))
-		batch := msgs[i:end]
-
-		var b strings.Builder
-		b.WriteString(`INSERT INTO messages (
-			session_id, ordinal, role, content, thinking_text,
-			timestamp, has_thinking, has_tool_use,
-			content_length, is_system, model, token_usage,
-			context_tokens, output_tokens,
-			has_context_tokens, has_output_tokens,
-			claude_message_id, claude_request_id,
-			source_type, source_subtype, prompt_source, source_uuid,
-			source_parent_uuid, is_sidechain,
-			is_compact_boundary) VALUES `)
-		args := make([]any, 0, len(batch)*25)
-		for j, m := range batch {
-			if j > 0 {
-				b.WriteByte(',')
-			}
-			p := j*25 + 1
-			fmt.Fprintf(&b,
-				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
-				p, p+1, p+2, p+3, p+4,
-				p+5, p+6, p+7, p+8, p+9,
-				p+10, p+11, p+12, p+13, p+14, p+15,
-				p+16, p+17, p+18, p+19, p+20,
-				p+21, p+22, p+23, p+24,
-			)
-			var ts any
-			if m.Timestamp != "" {
-				if t, ok := ParseSQLiteTimestamp(
-					m.Timestamp,
-				); ok {
-					ts = t
-				}
-			}
-			// Sanitize every parser-derived string, not just
-			// content: model and source fields come from
-			// third-party session files and have carried NUL
-			// bytes (e.g. raw protobuf fragments), which PG
-			// rejects with SQLSTATE 22021.
-			args = append(args,
-				sessionID, m.Ordinal, sanitizePG(m.Role),
-				sanitizePG(m.Content),
-				sanitizePG(m.ThinkingText), ts,
-				m.HasThinking,
-				m.HasToolUse, m.ContentLength, m.IsSystem,
-				sanitizePG(m.Model),
-				sanitizePG(string(m.TokenUsage)),
-				m.ContextTokens, m.OutputTokens,
-				m.HasContextTokens, m.HasOutputTokens,
-				sanitizePG(m.ClaudeMessageID),
-				sanitizePG(m.ClaudeRequestID),
-				sanitizePG(m.SourceType),
-				sanitizePG(m.SourceSubtype),
-				sanitizePG(m.PromptSource),
-				sanitizePG(m.SourceUUID),
-				sanitizePG(m.SourceParentUUID),
-				m.IsSidechain,
-				m.IsCompactBoundary,
-			)
-		}
-		if _, err := tx.ExecContext(
-			ctx, b.String(), args...,
-		); err != nil {
-			return fmt.Errorf(
-				"bulk inserting messages: %w", err,
-			)
-		}
-	}
-	return nil
-}
-
-func bulkInsertUsageEvents(
-	ctx context.Context, tx *sql.Tx, events []db.UsageEvent,
-) error {
-	if len(events) == 0 {
-		return nil
-	}
-	const usageBatch = 100
-	for i := 0; i < len(events); i += usageBatch {
-		end := min(i+usageBatch, len(events))
-		batch := events[i:end]
-
-		var b strings.Builder
-		b.WriteString(`INSERT INTO usage_events (
-			session_id, message_ordinal, source, model,
-			input_tokens, output_tokens,
-			cache_creation_input_tokens, cache_read_input_tokens,
-			reasoning_tokens, cost_microdollars, cost_status, cost_source,
-			occurred_at, dedup_key) VALUES `)
-		args := make([]any, 0, len(batch)*14)
-		for j, ev := range batch {
-			if j > 0 {
-				b.WriteByte(',')
-			}
-			p := j*14 + 1
-			fmt.Fprintf(&b,
-				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
-				p, p+1, p+2, p+3, p+4, p+5, p+6,
-				p+7, p+8, p+9, p+10, p+11, p+12, p+13,
-			)
-			var occurred any
-			if ev.OccurredAt != "" {
-				if t, ok := ParseSQLiteTimestamp(ev.OccurredAt); ok {
-					occurred = t
-				}
-			}
-			var ordinal any
-			if ev.MessageOrdinal != nil {
-				ordinal = *ev.MessageOrdinal
-			}
-			var cost any
-			if ev.Cost != nil {
-				cost = ev.Cost.Microdollars
-			}
-			args = append(args,
-				ev.SessionID,
-				ordinal,
-				sanitizePG(ev.Source),
-				sanitizePG(ev.Model),
-				ev.InputTokens,
-				ev.OutputTokens,
-				ev.CacheCreationInputTokens,
-				ev.CacheReadInputTokens,
-				ev.ReasoningTokens,
-				cost,
-				sanitizePG(ev.CostStatus),
-				sanitizePG(ev.CostSource),
-				occurred,
-				sanitizePG(ev.DedupKey),
-			)
-		}
-		if _, err := tx.ExecContext(ctx, b.String(), args...); err != nil {
-			return fmt.Errorf(
-				"bulk inserting usage_events: %w", err,
-			)
-		}
-	}
-	return nil
-}
-
 func bulkInsertCursorUsageEvents(
 	ctx context.Context, tx *sql.Tx, events []db.CursorUsageEvent,
 ) error {
@@ -3578,149 +3341,6 @@ func bulkInsertCursorUsageEvents(
 	return nil
 }
 
-// bulkInsertToolCalls inserts tool calls using multi-row VALUES.
-func bulkInsertToolCalls(
-	ctx context.Context, tx *sql.Tx,
-	sessionID string, msgs []db.Message,
-) error {
-	// Collect all tool calls from messages.
-	type tcRow struct {
-		ordinal int
-		index   int
-		tc      db.ToolCall
-	}
-	var rows []tcRow
-	for _, m := range msgs {
-		for i, tc := range m.ToolCalls {
-			rows = append(rows, tcRow{m.Ordinal, i, tc})
-		}
-	}
-	if len(rows) == 0 {
-		return nil
-	}
-
-	const tcBatch = 50
-	for i := 0; i < len(rows); i += tcBatch {
-		end := min(i+tcBatch, len(rows))
-		batch := rows[i:end]
-
-		var b strings.Builder
-		b.WriteString(`INSERT INTO tool_calls (
-			session_id, tool_name, category,
-			call_index, tool_use_id, input_json,
-			skill_name, result_content_length,
-			result_content, subagent_session_id,
-			message_ordinal, file_path) VALUES `)
-		args := make([]any, 0, len(batch)*12)
-		for j, r := range batch {
-			if j > 0 {
-				b.WriteByte(',')
-			}
-			p := j*12 + 1
-			fmt.Fprintf(&b,
-				"($%d,$%d,$%d,$%d,$%d,$%d,"+
-					"$%d,$%d,$%d,$%d,$%d,$%d)",
-				p, p+1, p+2, p+3, p+4, p+5,
-				p+6, p+7, p+8, p+9, p+10, p+11,
-			)
-			args = append(args,
-				sessionID,
-				sanitizePG(r.tc.ToolName),
-				sanitizePG(r.tc.Category),
-				r.index,
-				sanitizePG(r.tc.ToolUseID),
-				nilIfEmpty(r.tc.InputJSON),
-				nilIfEmpty(r.tc.SkillName),
-				nilIfZero(r.tc.ResultContentLength),
-				nilIfEmpty(r.tc.ResultContent),
-				nilIfEmpty(r.tc.SubagentSessionID),
-				r.ordinal,
-				nilIfEmpty(r.tc.FilePath),
-			)
-		}
-		if _, err := tx.ExecContext(
-			ctx, b.String(), args...,
-		); err != nil {
-			return fmt.Errorf(
-				"bulk inserting tool_calls: %w", err,
-			)
-		}
-	}
-	return nil
-}
-
-func bulkInsertToolResultEvents(
-	ctx context.Context, tx *sql.Tx,
-	sessionID string, msgs []db.Message,
-) error {
-	type evRow struct {
-		ordinal int
-		index   int
-		ev      db.ToolResultEvent
-	}
-	var rows []evRow
-	for _, m := range msgs {
-		for i, tc := range m.ToolCalls {
-			for _, ev := range tc.ResultEvents {
-				rows = append(rows, evRow{m.Ordinal, i, ev})
-			}
-		}
-	}
-	if len(rows) == 0 {
-		return nil
-	}
-
-	const evBatch = 100
-	for i := 0; i < len(rows); i += evBatch {
-		end := min(i+evBatch, len(rows))
-		batch := rows[i:end]
-
-		var b strings.Builder
-		b.WriteString(`INSERT INTO tool_result_events (
-			session_id, tool_call_message_ordinal, call_index,
-			tool_use_id, agent_id, subagent_session_id,
-			source, status, content, content_length,
-			timestamp, event_index) VALUES `)
-		args := make([]any, 0, len(batch)*12)
-		for j, r := range batch {
-			if j > 0 {
-				b.WriteByte(',')
-			}
-			p := j*12 + 1
-			fmt.Fprintf(&b,
-				"($%d,$%d,$%d,$%d,$%d,$%d,"+
-					"$%d,$%d,$%d,$%d,$%d,$%d)",
-				p, p+1, p+2, p+3, p+4, p+5,
-				p+6, p+7, p+8, p+9, p+10, p+11,
-			)
-			var ts any
-			if r.ev.Timestamp != "" {
-				if t, ok := ParseSQLiteTimestamp(r.ev.Timestamp); ok {
-					ts = t
-				}
-			}
-			args = append(args,
-				sessionID,
-				r.ordinal,
-				r.index,
-				nilIfEmpty(r.ev.ToolUseID),
-				nilIfEmpty(r.ev.AgentID),
-				nilIfEmpty(r.ev.SubagentSessionID),
-				sanitizePG(r.ev.Source),
-				sanitizePG(r.ev.Status),
-				sanitizePG(r.ev.Content),
-				r.ev.ContentLength,
-				ts,
-				r.ev.EventIndex,
-			)
-		}
-		if _, err := tx.ExecContext(ctx, b.String(), args...); err != nil {
-			return fmt.Errorf("bulk inserting tool_result_events: %w", err)
-		}
-	}
-	return nil
-}
-
 // pushSecretFindings replaces a session's secret findings in PG.
 // It deletes all existing rows for the session then bulk-inserts
 // the current local set. It reports whether it changed any rows
@@ -3731,26 +3351,13 @@ func bulkInsertToolResultEvents(
 // sessions.secrets_rules_version is pushed by pushSession alongside
 // the rest of the session columns.
 func (s *Sync) pushSecretFindings(
-	ctx context.Context, tx *sql.Tx, sessionID string,
+	ctx context.Context, bunTx bun.IDB, sessionID string,
 ) (bool, error) {
-	res, err := tx.ExecContext(ctx,
-		`DELETE FROM secret_findings WHERE session_id = $1`,
-		sessionID,
-	)
+	existing, err := bunTx.NewSelect().Model((*bunmodel.SecretFinding)(nil)).
+		Where("session_id = ?", sessionID).Count(ctx)
 	if err != nil {
-		return false, fmt.Errorf(
-			"deleting pg secret_findings for %s: %w",
-			sessionID, err,
-		)
+		return false, fmt.Errorf("counting pg secret findings for %s: %w", sessionID, err)
 	}
-	deleted, err := res.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf(
-			"counting deleted secret_findings for %s: %w",
-			sessionID, err,
-		)
-	}
-
 	findings, err := s.local.SessionSecretFindings(ctx, sessionID)
 	if err != nil {
 		return false, fmt.Errorf(
@@ -3758,53 +3365,12 @@ func (s *Sync) pushSecretFindings(
 			sessionID, err,
 		)
 	}
-	if len(findings) == 0 {
-		return deleted > 0, nil
+	if err := db.ReplaceSecretFindingRows(
+		ctx, bunTx, sessionID, db.CanonicalSecretFindingRows(findings),
+	); err != nil {
+		return false, err
 	}
-
-	const sfBatch = 50
-	for i := 0; i < len(findings); i += sfBatch {
-		end := min(i+sfBatch, len(findings))
-		batch := findings[i:end]
-
-		var b strings.Builder
-		b.WriteString(`INSERT INTO secret_findings (
-			session_id, rule_name, confidence,
-			location_kind, message_ordinal,
-			call_index, event_index,
-			match_start, match_end, match_index,
-			redacted_match, rules_version) VALUES `)
-		const cols = 12
-		args := make([]any, 0, len(batch)*cols)
-		for j, f := range batch {
-			if j > 0 {
-				b.WriteByte(',')
-			}
-			p := j*cols + 1
-			fmt.Fprintf(&b,
-				"($%d,$%d,$%d,$%d,$%d,"+
-					"$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
-				p, p+1, p+2, p+3, p+4,
-				p+5, p+6, p+7, p+8, p+9, p+10, p+11,
-			)
-			args = append(args,
-				f.SessionID, f.RuleName, f.Confidence,
-				f.LocationKind, f.MessageOrdinal,
-				f.CallIndex, f.EventIndex,
-				f.MatchStart, f.MatchEnd, f.MatchIndex,
-				sanitizePG(f.RedactedMatch), f.RulesVersion,
-			)
-		}
-		if _, err := tx.ExecContext(
-			ctx, b.String(), args...,
-		); err != nil {
-			return false, fmt.Errorf(
-				"bulk inserting secret_findings for %s: %w",
-				sessionID, err,
-			)
-		}
-	}
-	return true, nil
+	return existing > 0 || len(findings) > 0, nil
 }
 
 // normalizeSyncTimestamps ensures schema exists and normalizes
@@ -3835,13 +3401,6 @@ func nilIfEmpty(s string) any {
 		return nil
 	}
 	return s
-}
-
-func nilIfZero(n int) any {
-	if n == 0 {
-		return nil
-	}
-	return n
 }
 
 func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {

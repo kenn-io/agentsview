@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/export"
 )
 
@@ -68,17 +69,19 @@ func (db *DB) WriteSessionBatch(
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	tx, err := db.getWriter().Begin()
+	ctx := context.Background()
+	tx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return result, fmt.Errorf("beginning batch tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	rawTx := tx.Tx
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
 	for i, write := range writes {
 		write = sanitizeSessionBatchWrite(write)
 		savepoint := fmt.Sprintf("session_batch_%d", i)
-		if _, err := tx.Exec("SAVEPOINT " + savepoint); err != nil {
+		if _, err := rawTx.Exec("SAVEPOINT " + savepoint); err != nil {
 			return result, fmt.Errorf(
 				"creating savepoint %s: %w", savepoint, err,
 			)
@@ -86,13 +89,13 @@ func (db *DB) WriteSessionBatch(
 
 		var sessionRecallRevocations recallEvidenceRevocationEvents
 		messagesWritten, err := writeOneSessionBatchTx(
-			tx,
+			ctx, rawTx, tx,
 			write,
 			&sessionRecallRevocations,
 		)
 		switch {
 		case err == nil:
-			if _, err := tx.Exec("RELEASE SAVEPOINT " + savepoint); err != nil {
+			if _, err := rawTx.Exec("RELEASE SAVEPOINT " + savepoint); err != nil {
 				return result, fmt.Errorf(
 					"releasing savepoint %s: %w",
 					savepoint, err,
@@ -107,7 +110,7 @@ func (db *DB) WriteSessionBatch(
 			result.WrittenIndexes = append(result.WrittenIndexes, i)
 		case errors.Is(err, ErrSessionExcluded),
 			errors.Is(err, ErrSessionTrashed):
-			if rerr := rollbackSavepoint(tx, savepoint); rerr != nil {
+			if rerr := rollbackSavepoint(rawTx, savepoint); rerr != nil {
 				return result, rerr
 			}
 			result.ExcludedSessions++
@@ -116,7 +119,7 @@ func (db *DB) WriteSessionBatch(
 				write.Session.ID,
 			)
 		default:
-			if rerr := rollbackSavepoint(tx, savepoint); rerr != nil {
+			if rerr := rollbackSavepoint(rawTx, savepoint); rerr != nil {
 				return result, rerr
 			}
 			result.FailedSessions++
@@ -157,17 +160,19 @@ func (db *DB) WriteSessionBatchAtomic(
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	tx, err := db.getWriter().Begin()
+	ctx := context.Background()
+	tx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return result, fmt.Errorf("beginning batch tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	rawTx := tx.Tx
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
 	for i, write := range writes {
 		write = sanitizeSessionBatchWrite(write)
 		messagesWritten, err := writeOneSessionBatchTx(
-			tx,
+			ctx, rawTx, tx,
 			write,
 			&pendingRecallRevocations,
 		)
@@ -308,7 +313,9 @@ func rollbackSavepoint(tx *sql.Tx, savepoint string) error {
 }
 
 func writeOneSessionBatchTx(
+	ctx context.Context,
 	tx *sql.Tx,
+	bunTx bun.IDB,
 	write SessionBatchWrite,
 	pendingRecallRevocations *recallEvidenceRevocationEvents,
 ) (int, error) {
@@ -393,9 +400,16 @@ func writeOneSessionBatchTx(
 			return 0, err
 		}
 	}
-	if err := replaceSessionUsageEventsTx(
-		tx, write.Session.ID, write.UsageEvents, false,
-	); err != nil {
+	for i := range write.UsageEvents {
+		if write.UsageEvents[i].SessionID == "" {
+			write.UsageEvents[i].SessionID = write.Session.ID
+		}
+	}
+	usageRows, err := CanonicalUsageEventRows(write.UsageEvents)
+	if err != nil {
+		return 0, err
+	}
+	if err := ReplaceUsageEventRows(ctx, bunTx, write.Session.ID, usageRows); err != nil {
 		return 0, err
 	}
 
@@ -406,6 +420,10 @@ func writeOneSessionBatchTx(
 		if err != nil {
 			return 0, err
 		}
+		// SQLite FTS5 requires the archive-specific bulk-delete path: it
+		// temporarily replaces the per-row delete trigger so large transcript
+		// rewrites do not tokenize every old body. Canonical Bun writers own
+		// the replacement rows after this narrow dialect capability runs.
 		if err := deleteSessionMessagesTx(tx, write.Session.ID); err != nil {
 			return 0, err
 		}
@@ -422,16 +440,27 @@ func writeOneSessionBatchTx(
 	}
 
 	if len(msgs) > 0 {
-		ids, err := insertMessagesTx(tx, msgs)
+		messageRows, callRows, resultRows, err := CanonicalMessageRows(msgs)
 		if err != nil {
 			return 0, err
 		}
-		toolCalls := resolveToolCalls(msgs, ids)
-		if err := insertToolCallsTx(tx, toolCalls); err != nil {
-			return 0, err
+		if replaceMessages {
+			if err := ReplaceMessageRows(ctx, bunTx, write.Session.ID, messageRows); err != nil {
+				return 0, err
+			}
+			if err := ReplaceToolRows(ctx, bunTx, write.Session.ID, callRows, resultRows); err != nil {
+				return 0, err
+			}
+		} else {
+			if err := AppendMessageRows(ctx, bunTx, write.Session.ID, messageRows); err != nil {
+				return 0, err
+			}
+			if err := AppendToolRows(ctx, bunTx, write.Session.ID, callRows, resultRows); err != nil {
+				return 0, err
+			}
 		}
-		events := resolveToolResultEvents(msgs)
-		if err := insertToolResultEventsTx(tx, events); err != nil {
+	} else if replaceMessages {
+		if err := ReplaceMessageRows(ctx, bunTx, write.Session.ID, nil); err != nil {
 			return 0, err
 		}
 	}
@@ -486,8 +515,19 @@ func writeOneSessionBatchTx(
 	if err := updateSessionSignalsTx(tx, write.Session.ID, write.Signals); err != nil {
 		return 0, err
 	}
-	if err := replaceSecretFindingsTx(tx, write.Session.ID, write.Findings,
-		write.Signals.SecretLeakCount, write.Signals.SecretsRulesVersion); err != nil {
+	for i := range write.Findings {
+		write.Findings[i].SessionID = write.Session.ID
+		write.Findings[i].RulesVersion = write.Signals.SecretsRulesVersion
+	}
+	if err := ReplaceSecretFindingRows(
+		ctx, bunTx, write.Session.ID, CanonicalSecretFindingRows(write.Findings),
+	); err != nil {
+		return 0, err
+	}
+	if err := updateSessionSecretSummaryTx(
+		tx, write.Session.ID, write.Signals.SecretLeakCount,
+		write.Signals.SecretsRulesVersion,
+	); err != nil {
 		return 0, err
 	}
 	if err := enqueueArtifactExportIfGenerationUnchangedTx(
