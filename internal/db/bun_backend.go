@@ -17,10 +17,11 @@ type BunBackend interface {
 	Name() string
 	ReadOnly() bool
 	Capabilities() BackendCapabilities
-	// TimestampOrderExpr returns the backend expression that compares one
-	// canonical timestamp by instant. Native timestamp backends return column;
-	// SQLite wraps its shipped text representation with julianday.
-	TimestampOrderExpr(column string) string
+	// TimestampOrderExpr returns the backend expression that compares an
+	// arbitrary canonical timestamp SQL operand by instant. Native timestamp
+	// backends return operand; SQLite wraps its shipped text representation with
+	// julianday. Callers normalize empty timestamp sentinels before invoking it.
+	TimestampOrderExpr(operand string) string
 	SessionVersion(context.Context, bun.IDB, string) (int, int64, error)
 	View(context.Context, func(bun.IDB) error) error
 	ConsistentView(context.Context, func(bun.IDB) error) error

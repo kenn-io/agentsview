@@ -253,6 +253,43 @@ func TestAppendBunUsageTerminationFilterUsesProvidedReference(t *testing.T) {
 	assert.Equal(t, []string{"active", "stale", "unclean"}, ids)
 }
 
+func TestAppendBunUsageTerminationFilterKeepsExactCutoffSemantics(t *testing.T) {
+	database := testDB(t)
+	reference := time.Date(2026, time.August, 4, 12, 0, 0, 0, time.UTC)
+	flagged := "tool_call_pending"
+	for _, row := range []struct {
+		id    string
+		ended time.Time
+	}{
+		{id: "active-after", ended: reference.Add(-activeWindow + time.Second)},
+		{id: "active-cutoff", ended: reference.Add(-activeWindow)},
+		{id: "stale-after", ended: reference.Add(-staleWindow + time.Second)},
+		{id: "stale-cutoff", ended: reference.Add(-staleWindow)},
+	} {
+		value := row.ended.Format(time.RFC3339Nano)
+		require.NoError(t, database.UpsertSession(Session{
+			ID: row.id, Project: "clock", Machine: "host", Agent: "codex",
+			CreatedAt: value, StartedAt: &value, EndedAt: &value,
+			MessageCount: 1, TerminationStatus: &flagged,
+		}))
+	}
+
+	queryIDs := func(status string) []string {
+		var ids []string
+		query := database.bunReader.NewSelect().
+			TableExpr("sessions AS s").Column("s.id")
+		query = appendBunUsageTerminationFilter(
+			query, status, sqliteTimestampOrderExpr, reference,
+		)
+		require.NoError(t, query.OrderExpr("s.id ASC").Scan(t.Context(), &ids))
+		return ids
+	}
+
+	assert.Equal(t, []string{"active-after"}, queryIDs("active"))
+	assert.Equal(t, []string{"active-cutoff", "stale-after"}, queryIDs("stale"))
+	assert.Equal(t, []string{"stale-cutoff"}, queryIDs("unclean"))
+}
+
 func TestUpsertModelPricingRowsReplacesBandsAtomically(t *testing.T) {
 	database := testDB(t)
 	ctx := t.Context()

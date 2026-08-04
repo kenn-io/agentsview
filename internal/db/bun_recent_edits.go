@@ -48,12 +48,8 @@ func (s *BunStore) RecentEdits(
 func (s *BunStore) recentEditsFrom(
 	ctx context.Context, store bun.IDB, params RecentEditsParams,
 ) (RecentEditsResult, error) {
-	timestampExpr := "m.timestamp"
+	timestampExpr := bunNullableTimestamp("m.timestamp")
 	sortExpr := s.backend.TimestampOrderExpr(timestampExpr)
-	if sortExpr != timestampExpr {
-		timestampExpr = "NULLIF(m.timestamp, '')"
-		sortExpr = s.backend.TimestampOrderExpr(timestampExpr)
-	}
 	predicates := []string{
 		"s.deleted_at IS NULL",
 		"tc.category IN ('Edit', 'Write')",
