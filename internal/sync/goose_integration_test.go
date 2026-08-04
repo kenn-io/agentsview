@@ -75,6 +75,7 @@ func TestSyncGooseTranscriptAndChangedDatabase(t *testing.T) {
 		},
 		Machine: "devbox",
 	})
+	t.Cleanup(engine.Close)
 
 	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1})
 
@@ -220,26 +221,75 @@ func TestSyncGoosePreservesHumanUserMessageCount(t *testing.T) {
 
 func TestProcessFileGooseChangedDatabaseUsesOneVirtualSource(t *testing.T) {
 	pathRoot, dbPath, sourceDB := writeSyncGooseDB(t)
+	// A second, never-changed session proves the classification is bounded to
+	// the changed rows instead of fanning out to every stored session.
+	_, err := sourceDB.Exec(`
+		INSERT INTO sessions (
+			id, name, session_type, working_dir, created_at, updated_at,
+			provider_name, model_config_json, project_id,
+			accumulated_total_tokens, accumulated_input_tokens,
+			accumulated_output_tokens, accumulated_cache_read_tokens,
+			accumulated_cache_write_tokens
+		) VALUES (
+			'session-002', 'Untouched', 'user', '/work/acme-app',
+			'2023-11-14 22:13:00', '2023-11-14 22:13:25',
+			'anthropic', '{"model_name":"claude-sonnet-4-6"}', 'acme',
+			0, 0, 0, 0, 0
+		)
+	`)
+	require.NoError(t, err)
 	engine := NewEngine(openTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentGoose: {pathRoot},
 		},
 		Machine: "devbox",
 	})
-	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1})
+	t.Cleanup(engine.Close)
+	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 2, Synced: 2})
 
 	insertSyncGooseMessage(t, sourceDB, "assistant", `[{"type":"text","text":"Changed."}]`, 1_700_000_002)
 	files := requireClassifyProviderChangedPath(t, engine, dbPath)
-	require.Len(t, files, 1)
+	require.Len(t, files, 1,
+		"only the session with new rows may be classified for parsing")
 	assert.Equal(t, parser.AgentGoose, files[0].Agent)
 	assert.Equal(t, dbPath+"#session-001", files[0].Path)
-	assert.True(t, files[0].ForceParse)
+	assert.False(t, files[0].ForceParse,
+		"goose relies on the fingerprint hash gate instead of forced parses")
 
 	result := engine.processFile(context.Background(), files[0])
 	require.NoError(t, result.err)
 	require.Len(t, result.results, 1)
 	require.Len(t, result.results[0].Messages, 3)
 	assert.Equal(t, "Changed.", result.results[0].Messages[2].Content)
+}
+
+func TestSyncAllGooseMissingDBPreservesArchive(t *testing.T) {
+	pathRoot, dbPath, sourceDB := writeSyncGooseDB(t)
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentGoose: {pathRoot},
+		},
+		Machine: "devbox",
+	})
+	t.Cleanup(engine.Close)
+	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1})
+
+	require.NoError(t, sourceDB.Close())
+	require.NoError(t, os.Remove(dbPath))
+	runSyncAndAssert(t, engine, SyncStats{})
+	require.NoError(t, engine.ReconcileProviderRoots(
+		context.Background(), parser.AgentGoose, []string{pathRoot},
+	))
+
+	session, err := database.GetSession(context.Background(), "goose:session-001")
+	require.NoError(t, err)
+	require.NotNil(t, session,
+		"a vanished sessions.db must not tombstone archived Goose sessions")
+	messages, err := database.GetMessages(context.Background(), "goose:session-001", 0, 100, true)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	assert.Equal(t, "Inspect the auth flow.", messages[0].Content)
 }
 
 func writeSyncGooseDB(t *testing.T) (string, string, *sql.DB) {

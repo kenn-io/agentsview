@@ -1552,14 +1552,10 @@ func providerChangedPathForceParse(
 	mode parser.ProviderMigrationMode,
 ) bool {
 	if processFileUsesProvider(agent) {
-		if agent == parser.AgentGoose &&
-			!providerDeletedPhysicalSQLiteSource(agent, sourcePath) {
-			// Goose's change cursor returns only sessions touched by new rows.
-			// Force those bounded candidates through Parse because Goose stores
-			// timestamps with one-second precision and multiple commits can share
-			// the same logical mtime.
-			return true
-		}
+		// Goose needs no force here despite its one-second timestamps: it
+		// declares FingerprintHashRequiredForFreshness, so same-mtime edits
+		// are caught by the content-hash gate, and a cold-tracker fan-out
+		// must not rewrite every unchanged archived session.
 		return eventKind == "remove" &&
 			providerDeletedPhysicalSQLiteSource(agent, sourcePath)
 	}
