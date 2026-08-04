@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"strings"
@@ -12,6 +13,12 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/postgres"
 )
+
+type pgVectorSearchStore interface {
+	DB() *sql.DB
+	SetSemanticUnavailableReason(string)
+	SetVectorSearcher(db.VectorSearcher)
+}
 
 // resolvePGServeVectorState classifies the startup gate into (wire, reason).
 // It is the pure core of wirePGVectorSearch, split out so the decision
@@ -67,7 +74,7 @@ func resolvePGServeVectorState(
 // requires restarting the serve (or re-running the CLI command), and that
 // restart re-runs this gate.
 func wirePGVectorSearch(
-	ctx context.Context, appCfg config.Config, store *postgres.Store, label string,
+	ctx context.Context, appCfg config.Config, store pgVectorSearchStore, label string,
 ) error {
 	if !appCfg.Vector.Enabled {
 		_, reason := resolvePGServeVectorState(false, false, "", "")

@@ -385,18 +385,6 @@ type duckSearchHitProjection struct {
 
 func (duckFullTextCapability) Available() bool { return true }
 
-// HasSemantic returns false: the DuckDB store has no VectorSearcher seam
-// yet, so SearchContent rejects "semantic"/"hybrid" modes up front with
-// db.ErrSemanticUnavailable.
-func (s *Store) HasSemantic() bool { return s.bunSearchStore().HasSemantic() }
-
-func (s *Store) bunSearchStore() *db.BunStore {
-	if s.BunStore != nil {
-		return s.BunStore
-	}
-	return db.NewBunStore(&duckBunBackend{store: s})
-}
-
 func (duckFullTextCapability) Search(
 	ctx context.Context, store bun.IDB, f db.SearchFilter,
 ) ([]db.SearchHit, error) {
@@ -560,23 +548,4 @@ func (duckFullTextCapability) SearchSession(
 		out[i] = row.Ordinal
 	}
 	return out, nil
-}
-
-func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db.ContentSearchPage, error) {
-	if f.Limit <= 0 || f.Limit > db.MaxContentSearchLimit {
-		f.Limit = db.DefaultContentSearchLimit
-	}
-	if f.Pattern == "" {
-		return db.ContentSearchPage{}, nil
-	}
-
-	// Semantic and hybrid validate Sources themselves (messages only) ahead
-	// of the substring/regex/fts source-set default just below, which fills
-	// in tool_input/tool_result that neither mode supports -- mirroring
-	// internal/db's SearchContent so an empty Sources field is not defaulted
-	// out from under ValidateSemanticFilter's empty-or-messages-only check.
-	if f.Mode == "semantic" || f.Mode == "hybrid" {
-		return s.bunSearchStore().SearchContent(ctx, f)
-	}
-	return s.BunStore.SearchContent(ctx, f)
 }
