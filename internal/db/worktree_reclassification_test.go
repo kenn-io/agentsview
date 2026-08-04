@@ -313,6 +313,11 @@ func TestProjectIdentityReclassificationReconcilesAggregatesAndPreservesSnapshot
 		UPDATE sessions SET local_modified_at = '2000-01-01T00:00:00Z'
 		WHERE id IN ('gone', 'move')`)
 	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(ctx, `
+		UPDATE source_session_project_identity_snapshots
+		SET git_branch = ?
+		WHERE source_session_id = 'move'`, "feature\xff")
+	require.NoError(t, err)
 
 	before, err := d.ListSessionProjectIdentitySnapshots(ctx)
 	require.NoError(t, err)
@@ -335,6 +340,12 @@ func TestProjectIdentityReclassificationReconcilesAggregatesAndPreservesSnapshot
 	newObs, err := d.ListProjectIdentityObservations(ctx, []string{"new_service"})
 	require.NoError(t, err)
 	assert.Len(t, newObs, 2, "target receives evidence from both moved sessions")
+	for _, observation := range newObs {
+		if observation.RootPath == "/worktrees/service/move" {
+			assert.Equal(t, "feature", observation.GitBranch,
+				"reclassification must republish through canonical sanitization")
+		}
+	}
 	oldObs, err := d.ListProjectIdentityObservations(ctx, []string{"old_keep"})
 	require.NoError(t, err)
 	assert.Len(t, oldObs, 1, "supported former evidence remains")

@@ -4,15 +4,25 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
 
 func TestPGSessionWriteContractClassifiesEveryCanonicalColumn(t *testing.T) {
 	columns := bunmodel.ModelColumns((*bunmodel.Session)(nil))
 	owners := pgSessionColumnOwnerships()
+	require.NoError(t, validatePGSessionColumnOwnerships())
 	assert.Len(t, owners, len(columns))
 	for _, column := range columns {
 		assert.Contains(t, owners, column)
+	}
+	for column := range pgSessionSourceOwnedColumns {
+		assert.NotContains(t, pgSessionTargetOwnedColumns, column)
+		assert.Equal(t, pgSessionColumnSource, owners[column])
+	}
+	for column := range pgSessionTargetOwnedColumns {
+		assert.NotContains(t, pgSessionSourceOwnedColumns, column)
+		assert.Equal(t, pgSessionColumnTarget, owners[column])
 	}
 
 	var targetOwned []string

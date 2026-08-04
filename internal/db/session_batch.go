@@ -557,7 +557,7 @@ func writeOneSessionBatchTx(
 	if !upsertResult.inserted &&
 		upsertResult.previousProject != upsertResult.currentProject {
 		if err := reconcileSessionProjectIdentityAggregatesTx(
-			ctx, tx, write.Session.ID,
+			ctx, bunTx, write.Session.ID,
 			[]string{
 				upsertResult.previousProject,
 				upsertResult.currentProject,

@@ -44,6 +44,35 @@ const (
 	pgSessionColumnTarget pgSessionColumnOwner = "target"
 )
 
+var pgSessionSourceOwnedColumns = map[string]struct{}{
+	"id": {}, "project": {}, "machine": {}, "agent": {},
+	"agent_label": {}, "entrypoint": {}, "session_kind": {},
+	"first_message": {}, "session_name": {}, "started_at": {},
+	"ended_at": {}, "message_count": {}, "user_message_count": {},
+	"parent_session_id": {}, "parser_parent_session_id": {},
+	"relationship_type": {}, "total_output_tokens": {},
+	"peak_context_tokens": {}, "has_total_output_tokens": {},
+	"has_peak_context_tokens": {}, "is_automated": {},
+	"tool_failure_signal_count": {}, "tool_retry_count": {},
+	"edit_churn_count": {}, "consecutive_failure_max": {},
+	"outcome": {}, "outcome_confidence": {}, "ended_with_role": {},
+	"final_failure_streak": {}, "signals_pending_since": {},
+	"compaction_count": {}, "mid_task_compaction_count": {},
+	"context_pressure_max": {}, "health_score": {}, "health_grade": {},
+	"has_tool_calls": {}, "has_context_data": {}, "secret_leak_count": {},
+	"secrets_rules_version": {}, "quality_signal_version": {},
+	"short_prompt_count": {}, "unstructured_start": {},
+	"missing_success_criteria_count": {}, "missing_verification_count": {},
+	"duplicate_prompt_count": {}, "no_code_context_count": {},
+	"runaway_tool_loop_count": {}, "data_version": {}, "cwd": {},
+	"git_branch": {}, "source_session_id": {}, "source_version": {},
+	"transcript_fidelity": {}, "parser_malformed_lines": {},
+	"is_truncated": {}, "termination_status": {}, "file_path": {},
+	"file_size": {}, "file_mtime": {}, "file_inode": {}, "file_device": {},
+	"file_hash": {}, "transcript_revision": {}, "created_at": {},
+	"source_archive_id": {}, "source_database_generation": {},
+}
+
 var pgSessionTargetOwnedColumns = map[string]struct{}{
 	"deleted_at":        {},
 	"deletion_cause":    {},
@@ -52,15 +81,37 @@ var pgSessionTargetOwnedColumns = map[string]struct{}{
 }
 
 func pgSessionColumnOwnerships() map[string]pgSessionColumnOwner {
-	columns := bunmodel.ModelColumns((*bunmodel.Session)(nil))
-	owners := make(map[string]pgSessionColumnOwner, len(columns))
-	for _, column := range columns {
+	owners := make(map[string]pgSessionColumnOwner,
+		len(pgSessionSourceOwnedColumns)+len(pgSessionTargetOwnedColumns))
+	for column := range pgSessionSourceOwnedColumns {
 		owners[column] = pgSessionColumnSource
 	}
 	for column := range pgSessionTargetOwnedColumns {
+		if _, exists := owners[column]; exists {
+			panic("PostgreSQL session column has multiple owners: " + column)
+		}
 		owners[column] = pgSessionColumnTarget
 	}
 	return owners
+}
+
+func validatePGSessionColumnOwnerships() error {
+	owners := pgSessionColumnOwnerships()
+	columns := bunmodel.ModelColumns((*bunmodel.Session)(nil))
+	if len(owners) != len(columns) {
+		return fmt.Errorf(
+			"PostgreSQL session ownership classifies %d of %d canonical columns",
+			len(owners), len(columns),
+		)
+	}
+	for _, column := range columns {
+		if _, ok := owners[column]; !ok {
+			return fmt.Errorf(
+				"PostgreSQL session ownership does not classify %s", column,
+			)
+		}
+	}
+	return nil
 }
 
 func pgSessionWriteContractSignature() string {

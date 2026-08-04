@@ -77,8 +77,13 @@ func RunCanonicalIdentityWriteContract(
 		require.NoError(t, db.UpsertProjectIdentityObservationRows(
 			ctx, store, observationRows,
 		))
+		snapshotUpdated := updated
+		snapshotUpdated.Project = "identity-snapshot-project"
+		snapshotUpdated.Machine = "identity-snapshot-machine"
+		snapshotUpdated.RootPath = "/workspace/snapshot"
+		snapshotUpdated.GitRemote = "https://example.com/acme/snapshot.git"
 		snapshotRows, err = db.CanonicalSessionProjectIdentitySnapshotRows(
-			archiveID, generation, []export.ProjectIdentityObservation{updated},
+			archiveID, generation, []export.ProjectIdentityObservation{snapshotUpdated},
 		)
 		require.NoError(t, err)
 		require.NoError(t, db.UpsertSessionProjectIdentitySnapshotRows(
@@ -110,17 +115,17 @@ func RunCanonicalIdentityWriteContract(
 
 		wantSnapshot := bunmodel.SourceSessionProjectIdentitySnapshot{
 			SourceArchiveID: archiveID, SourceDatabaseGeneration: generation,
-			SourceSessionID: sessionID, Project: "identity-write-project",
-			Machine: "identity-write-machine", RootPath: "/workspace/identity",
-			GitRemote:     "https://example.com/acme/identity.git",
+			SourceSessionID: sessionID, Project: "identity-snapshot-project",
+			Machine: "identity-snapshot-machine", RootPath: "/workspace/snapshot",
+			GitRemote:     "https://example.com/acme/snapshot.git",
 			GitRemoteName: "upstream", RepositoryPath: "acme/identity",
 			WorktreeName: "feature", WorktreeRootPath: "/workspace/identity",
 			WorktreeRelationship: "linked_worktree", CheckoutState: "detached",
 			GitBranch: "feature/identity", RemoteResolution: "resolved",
 			RemoteCandidateCount: 7, ObservedAt: bunmodel.NewTimestamp(observedAt),
-			NormalizedRemote: "example.com/acme/identity",
+			NormalizedRemote: "example.com/acme/snapshot",
 			KeySource:        "git_remote",
-			Key:              "sha256:9d1aa351d2629a1ff511b97a0ccd08789b9f8f1629391221525e03378516bd60",
+			Key:              "sha256:b21bb0c142e566eee5a7cb9d683931f11f3e50f76f68b96b67188b9d1fc7ae72",
 		}
 		var gotSnapshot bunmodel.SourceSessionProjectIdentitySnapshot
 		require.NoError(t, store.NewSelect().Model(&gotSnapshot).
