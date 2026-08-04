@@ -60,13 +60,21 @@ func (s *BunStore) SearchContent(
 	if filter.Mode == "semantic" || filter.Mode == "hybrid" {
 		return ContentSearchPage{}, ErrSemanticUnavailable
 	}
-	if len(filter.Sources) == 0 {
+	if filter.Mode == "fts" && len(filter.Sources) == 0 {
+		filter.Sources = []string{"messages"}
+	} else if len(filter.Sources) == 0 {
 		filter.Sources = []string{"messages", "tool_input", "tool_result"}
 	}
 	for _, source := range filter.Sources {
 		if source != "messages" && source != "tool_input" && source != "tool_result" {
 			return ContentSearchPage{}, searchInputErrorf(
 				"search: unknown source %q", source,
+			)
+		}
+		if filter.Mode == "fts" && source != "messages" {
+			return ContentSearchPage{}, searchInputErrorf(
+				"search: full-text search only supports the messages source (got %q)",
+				source,
 			)
 		}
 	}

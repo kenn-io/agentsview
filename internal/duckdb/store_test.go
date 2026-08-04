@@ -466,6 +466,46 @@ func TestDuckBunStoreSearchContentUsesPortableFTS(t *testing.T) {
 	assert.Equal(t, fixture.alphaID, page.Matches[0].SessionID)
 }
 
+func TestDuckBunStoreSearchContentFTSOrdersByCanonicalRecency(t *testing.T) {
+	store, _ := newSyncedStore(t)
+	ctx := t.Context()
+	for _, fixture := range []struct {
+		id      string
+		endedAt string
+	}{
+		{id: "duck-fts-older", endedAt: "2026-01-01 00:00:00"},
+		{id: "duck-fts-newer", endedAt: "2026-02-01 00:00:00"},
+	} {
+		_, err := store.DB().ExecContext(ctx, `
+			INSERT INTO sessions (
+				id, project, machine, agent, message_count,
+				user_message_count, ended_at, created_at
+			) VALUES (?, 'parity', 'local', 'claude', 1, 2,
+				CAST(? AS TIMESTAMP), CAST(? AS TIMESTAMP))`,
+			fixture.id, fixture.endedAt, fixture.endedAt,
+		)
+		require.NoError(t, err)
+		_, err = store.DB().ExecContext(ctx, `
+			INSERT INTO messages (
+				session_id, ordinal, role, content, timestamp, content_length
+			) VALUES (?, 0, 'user', 'parityorderterm',
+				CAST(? AS TIMESTAMP), 15)`,
+			fixture.id, fixture.endedAt,
+		)
+		require.NoError(t, err)
+	}
+
+	page, err := store.BunStore.SearchContent(ctx, db.ContentSearchFilter{
+		Pattern: "parityorderterm", Mode: "fts", Sources: []string{"messages"},
+		IncludeOneShot: true, Limit: 1,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "duck-fts-newer", page.Matches[0].SessionID)
+	assert.Equal(t, 1, page.NextCursor)
+}
+
 func TestSearchContentFTSSingleTermFallback(t *testing.T) {
 	ctx := context.Background()
 	store, fixture := newSyncedStore(t)

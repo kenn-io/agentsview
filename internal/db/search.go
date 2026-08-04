@@ -435,7 +435,8 @@ func (capability sqliteFullTextCapability) Search(
 			-- FTS branch: message content matches
 			SELECT m.session_id, s.project, s.agent,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
-				COALESCE(s.ended_at, s.started_at, '') AS session_ended_at,
+				COALESCE(NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''),
+					s.created_at) AS session_ended_at,
 				best.best_ordinal AS ordinal,
 				snippet(messages_fts, 0, '<mark>', '</mark>',
 					'...', %d) AS snippet,
@@ -472,7 +473,8 @@ func (capability sqliteFullTextCapability) Search(
 			-- Name branch: display_name / session_name / first_message matches not in FTS branch
 			SELECT s.id, s.project, s.agent,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
-				COALESCE(s.ended_at, s.started_at, '') AS session_ended_at,
+				COALESCE(NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''),
+					s.created_at) AS session_ended_at,
 				-1 AS ordinal,
 				CASE
 					WHEN COALESCE(s.display_name, s.session_name) LIKE ? ESCAPE '\'
@@ -595,9 +597,12 @@ func (capability sqliteFullTextCapability) SearchContent(
 		-1 AS call_index, -1 AS event_index
 		FROM messages_fts
 		JOIN messages AS message ON message.id = messages_fts.rowid
+		JOIN sessions AS session ON session.id = message.session_id
 		WHERE messages_fts MATCH ? AND ` + system + `
 			AND message.session_id IN (SELECT id FROM sessions WHERE ` + where + `)
-		ORDER BY rank ASC, message.ordinal ASC, message.id ASC
+		ORDER BY julianday(COALESCE(NULLIF(session.ended_at, ''),
+			NULLIF(session.started_at, ''), session.created_at)) DESC,
+			message.session_id ASC, message.ordinal ASC, message.id ASC
 		LIMIT ? OFFSET ?`
 	args := []any{PrepareFTSQuery(filter.Pattern)}
 	args = append(args, scopeArgs...)
