@@ -1096,7 +1096,9 @@ func (d *DB) CopySessionMetadataFrom(
 	defer d.mu.Unlock()
 
 	ctx := context.Background()
-	conn, err := d.getWriter().Conn(ctx)
+	d.connMu.RLock()
+	conn, err := d.bunWriter.Conn(ctx)
+	d.connMu.RUnlock()
 	if err != nil {
 		return fmt.Errorf("acquiring connection: %w", err)
 	}
@@ -1113,11 +1115,12 @@ func (d *DB) CopySessionMetadataFrom(
 		)
 	}()
 
-	tx, err := conn.BeginTx(ctx, nil)
+	bunTx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin metadata tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = bunTx.Rollback() }()
+	tx := bunTx.Tx
 	var previousArchiveID string
 	if err := tx.QueryRowContext(ctx, `
 		SELECT value FROM main.archive_metadata WHERE key = 'archive_id'`,
@@ -1357,7 +1360,7 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 		for _, change := range projectChanges {
 			if err := reconcileSessionProjectIdentityAggregatesTx(
-				ctx, tx, change.sessionID,
+				ctx, bunTx, change.sessionID,
 				[]string{change.previousProject, change.currentProject},
 			); err != nil {
 				return fmt.Errorf(
@@ -1372,7 +1375,7 @@ func (d *DB) CopySessionMetadataFrom(
 		return err
 	}
 
-	return tx.Commit()
+	return bunTx.Commit()
 }
 
 func rekeyLocalArchiveRows(

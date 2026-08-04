@@ -899,7 +899,7 @@ func (db *DB) upsertSessionWithProjectIdentity(
 	}
 	if !result.inserted && result.previousProject != result.currentProject {
 		if err := reconcileSessionProjectIdentityAggregatesTx(
-			context.Background(), tx.Tx, s.ID,
+			context.Background(), tx, s.ID,
 			[]string{result.previousProject, result.currentProject},
 		); err != nil {
 			return sessionUpsertResult{}, err
@@ -956,13 +956,22 @@ func upsertProjectIdentityObservationBun(
 	if obs.SourceArchiveID == "" || obs.SourceArchiveSalt == "" {
 		return fmt.Errorf("project identity observation archive identity is required")
 	}
-	if obs.GitRemote == "" && obs.RemoteResolution != export.ProjectResolutionAmbiguous {
+	rows, err := CanonicalProjectIdentityObservationRows(
+		obs.SourceArchiveID, obs.SourceArchiveSalt,
+		[]export.ProjectIdentityObservation{obs},
+	)
+	if err != nil {
+		return err
+	}
+	row := rows[0]
+	if row.GitRemote == "" &&
+		row.RemoteResolution != string(export.ProjectResolutionAmbiguous) {
 		exists, err := store.NewSelect().
 			Model((*bunmodel.SourceProjectIdentityObservation)(nil)).
-			Where("source_archive_id = ?", obs.SourceArchiveID).
-			Where("project = ?", obs.Project).
-			Where("machine = ?", obs.Machine).
-			Where("root_path = ?", obs.RootPath).
+			Where("source_archive_id = ?", row.SourceArchiveID).
+			Where("project = ?", row.Project).
+			Where("machine = ?", row.Machine).
+			Where("root_path = ?", row.RootPath).
 			Where("(git_remote != '' OR remote_resolution = ?)",
 				export.ProjectResolutionAmbiguous).
 			Exists(ctx)
@@ -974,21 +983,14 @@ func upsertProjectIdentityObservationBun(
 		}
 	} else if _, err := store.NewDelete().
 		Model((*bunmodel.SourceProjectIdentityObservation)(nil)).
-		Where("source_archive_id = ?", obs.SourceArchiveID).
-		Where("project = ?", obs.Project).
-		Where("machine = ?", obs.Machine).
-		Where("root_path = ?", obs.RootPath).
+		Where("source_archive_id = ?", row.SourceArchiveID).
+		Where("project = ?", row.Project).
+		Where("machine = ?", row.Machine).
+		Where("root_path = ?", row.RootPath).
 		Where("git_remote = ''").
 		Where("remote_resolution != ?", export.ProjectResolutionAmbiguous).
 		Exec(ctx); err != nil {
 		return fmt.Errorf("removing stale project identity root fallback: %w", err)
-	}
-	rows, err := CanonicalProjectIdentityObservationRows(
-		obs.SourceArchiveID, obs.SourceArchiveSalt,
-		[]export.ProjectIdentityObservation{obs},
-	)
-	if err != nil {
-		return err
 	}
 	return UpsertProjectIdentityObservationRows(ctx, store, rows)
 }
@@ -1106,13 +1108,14 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	tx, err := db.getWriter().BeginTx(ctx, nil)
+	bunTx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return 0, fmt.Errorf(
 			"beginning session project identity restore: %w", err,
 		)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = bunTx.Rollback() }()
+	tx := bunTx.Tx
 
 	type projectRestore struct {
 		sessionID       string
@@ -1197,13 +1200,13 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 	}
 	for _, restore := range restores {
 		if err := reconcileSessionProjectIdentityAggregatesTx(
-			ctx, tx, restore.sessionID,
+			ctx, bunTx, restore.sessionID,
 			[]string{restore.previousProject, restore.currentProject},
 		); err != nil {
 			return 0, err
 		}
 	}
-	if err := tx.Commit(); err != nil {
+	if err := bunTx.Commit(); err != nil {
 		return 0, fmt.Errorf(
 			"committing session project identity restore: %w", err,
 		)
@@ -1216,16 +1219,15 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 // Aggregate-only legacy evidence has no session snapshot and remains untouched.
 func reconcileSessionProjectIdentityAggregatesTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	store bun.IDB,
 	sessionID string,
 	projects []string,
 ) error {
-	var machine, rootPath, gitRemote string
-	err := tx.QueryRowContext(ctx, `
-		SELECT machine, root_path, git_remote
-		FROM source_session_project_identity_snapshots
-		WHERE source_session_id = ?`, sessionID,
-	).Scan(&machine, &rootPath, &gitRemote)
+	var source bunmodel.SourceSessionProjectIdentitySnapshot
+	err := store.NewSelect().Model(&source).
+		Where("source_session_id = ?", sessionID).
+		OrderExpr("observed_at DESC, source_session_id").
+		Limit(1).Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -1244,52 +1246,77 @@ func reconcileSessionProjectIdentityAggregatesTx(
 		}
 		seen[project] = struct{}{}
 
-		if _, err := tx.ExecContext(ctx, `
-			DELETE FROM source_project_identity_observations
-			WHERE project = ? AND machine = ?
-			  AND root_path = ? AND git_remote = ?`,
-			project, machine, rootPath, gitRemote,
-		); err != nil {
+		if _, err := store.NewDelete().
+			Model((*bunmodel.SourceProjectIdentityObservation)(nil)).
+			Where("project = ?", project).
+			Where("machine = ?", source.Machine).
+			Where("root_path = ?", source.RootPath).
+			Where("git_remote = ?", source.GitRemote).
+			Exec(ctx); err != nil {
 			return fmt.Errorf(
 				"removing stale project identity aggregate key: %w", err,
 			)
 		}
 
-		_, err := tx.ExecContext(ctx, `
-			INSERT INTO source_project_identity_observations (
-				source_archive_id, source_archive_salt, project, machine,
-				root_path, git_remote, git_remote_name, repository_path,
-				worktree_name, worktree_root_path, worktree_relationship,
-				checkout_state, git_branch, remote_resolution,
-				remote_candidate_count, observed_at, normalized_remote,
-				key_source, key
+		var winner bunmodel.SourceSessionProjectIdentitySnapshot
+		err := store.NewSelect().Model(&winner).
+			TableExpr("source_session_project_identity_snapshots AS snap").
+			ColumnExpr("snap.*").
+			Where("snap.machine = ?", source.Machine).
+			Where("snap.root_path = ?", source.RootPath).
+			Where("snap.git_remote = ?", source.GitRemote).
+			Where(`EXISTS (
+				SELECT 1 FROM sessions AS session
+				WHERE session.id = snap.source_session_id
+				  AND session.source_archive_id = snap.source_archive_id
+				  AND session.source_database_generation = snap.source_database_generation
+				  AND session.deleted_at IS NULL
+				  AND session.machine = ?
+				  AND session.project = ?
+			)`, source.Machine, project).
+			OrderExpr("snap.observed_at DESC, snap.source_session_id").
+			Limit(1).Scan(ctx)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf(
+				"selecting project identity aggregate winner: %w", err,
 			)
-			SELECT snap.source_archive_id, archive.source_archive_salt, ?, snap.machine,
-				snap.root_path, snap.git_remote, snap.git_remote_name,
-				snap.repository_path, snap.worktree_name,
-				snap.worktree_root_path, snap.worktree_relationship,
-				snap.checkout_state, snap.git_branch,
-				snap.remote_resolution, snap.remote_candidate_count,
-				snap.observed_at, snap.normalized_remote,
-				snap.key_source, snap.key
-			FROM source_session_project_identity_snapshots snap
-			JOIN source_archives archive
-			  ON archive.source_archive_id = snap.source_archive_id
-			WHERE snap.machine = ? AND snap.root_path = ?
-			  AND snap.git_remote = ?
-			  AND EXISTS (
-				SELECT 1 FROM sessions s
-				WHERE s.id = snap.source_session_id
-				  AND s.source_archive_id = snap.source_archive_id
-				  AND s.source_database_generation = snap.source_database_generation
-				  AND s.deleted_at IS NULL
-				  AND s.machine = ? AND s.project = ?
-			  )
-			ORDER BY snap.observed_at DESC, snap.source_session_id
-			LIMIT 1`,
-			project, machine, rootPath, gitRemote, machine, project,
+		}
+
+		var archive bunmodel.SourceArchive
+		if err := store.NewSelect().Model(&archive).
+			Where("source_archive_id = ?", winner.SourceArchiveID).
+			Scan(ctx); err != nil {
+			return fmt.Errorf("reading project identity winner archive: %w", err)
+		}
+		rows, err := CanonicalProjectIdentityObservationRows(
+			winner.SourceArchiveID, archive.SourceArchiveSalt,
+			[]export.ProjectIdentityObservation{{
+				SourceArchiveID:   winner.SourceArchiveID,
+				SourceArchiveSalt: archive.SourceArchiveSalt,
+				SessionID:         winner.SourceSessionID,
+				Project:           project, Machine: winner.Machine,
+				RootPath: winner.RootPath, GitRemote: winner.GitRemote,
+				GitRemoteName:        winner.GitRemoteName,
+				RepositoryPath:       winner.RepositoryPath,
+				WorktreeName:         winner.WorktreeName,
+				WorktreeRootPath:     winner.WorktreeRootPath,
+				WorktreeRelationship: export.WorktreeRelationship(winner.WorktreeRelationship),
+				CheckoutState:        export.CheckoutState(winner.CheckoutState),
+				GitBranch:            winner.GitBranch,
+				RemoteResolution:     export.ProjectResolution(winner.RemoteResolution),
+				RemoteCandidateCount: winner.RemoteCandidateCount,
+				ObservedAt:           winner.ObservedAt.Time,
+				NormalizedRemote:     winner.NormalizedRemote,
+				KeySource:            winner.KeySource, Key: winner.Key,
+			}},
 		)
 		if err != nil {
+			return err
+		}
+		if err := UpsertProjectIdentityObservationRows(ctx, store, rows); err != nil {
 			return fmt.Errorf(
 				"reconciling project identity aggregate key: %w", err,
 			)

@@ -2077,6 +2077,9 @@ func (s *Sync) pushSession(
 	ctx context.Context, store bun.IDB, sess db.Session, markerID string,
 	legacyMarkerMachines []string,
 ) error {
+	if err := validatePGSessionColumnOwnerships(); err != nil {
+		return err
+	}
 	bunTx, ok := store.(bun.Tx)
 	if !ok {
 		return fmt.Errorf("pg session upsert requires a Bun transaction")

@@ -910,13 +910,14 @@ func (db *DB) applyWorktreeProjectMappings(
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	tx, err := db.getWriter().BeginTx(ctx, nil)
+	bunTx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return ApplyWorktreeProjectMappingsResult{}, fmt.Errorf(
 			"beginning worktree mapping apply: %w", err,
 		)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = bunTx.Rollback() }()
+	tx := bunTx.Tx
 
 	mappings, err := loadActiveWorktreeMappingsTx(ctx, tx, machine)
 	if err != nil {
@@ -944,14 +945,14 @@ func (db *DB) applyWorktreeProjectMappings(
 		result.UpdatedSessions += changed
 		if changed > 0 {
 			if err := reconcileSessionProjectIdentityAggregatesTx(
-				ctx, tx, update.id,
+				ctx, bunTx, update.id,
 				[]string{update.currentProject, update.nextProject},
 			); err != nil {
 				return result, err
 			}
 		}
 	}
-	if err := tx.Commit(); err != nil {
+	if err := bunTx.Commit(); err != nil {
 		return result, fmt.Errorf("committing worktree mapping apply: %w", err)
 	}
 	return result, nil
@@ -1001,13 +1002,14 @@ func (db *DB) applyWorktreeProjectMappingToSession(
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	tx, err := db.getWriter().BeginTx(ctx, nil)
+	bunTx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return false, fmt.Errorf(
 			"beginning worktree mapping session apply: %w", err,
 		)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = bunTx.Rollback() }()
+	tx := bunTx.Tx
 
 	mappings, err := loadActiveWorktreeMappingsTx(ctx, tx, machine)
 	if err != nil {
@@ -1036,14 +1038,14 @@ func (db *DB) applyWorktreeProjectMappingToSession(
 	}
 	if changed > 0 {
 		update := evaluation.updates[0]
-		if err := reconcileSessionProjectIdentityAggregatesTx(ctx, tx, sessionID, []string{
+		if err := reconcileSessionProjectIdentityAggregatesTx(ctx, bunTx, sessionID, []string{
 			update.currentProject,
 			update.nextProject,
 		}); err != nil {
 			return false, err
 		}
 	}
-	if err := tx.Commit(); err != nil {
+	if err := bunTx.Commit(); err != nil {
 		return false, fmt.Errorf(
 			"committing worktree mapping session apply: %w", err,
 		)
@@ -1084,13 +1086,14 @@ func (db *DB) applyWorktreeProjectMappingsToSessionsByPath(
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	tx, err := db.getWriter().BeginTx(ctx, nil)
+	bunTx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return ApplyWorktreeProjectMappingsResult{}, fmt.Errorf(
 			"beginning worktree mapping path apply: %w", err,
 		)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = bunTx.Rollback() }()
+	tx := bunTx.Tx
 
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, machine, project, cwd, file_path
@@ -1179,14 +1182,14 @@ func (db *DB) applyWorktreeProjectMappingsToSessionsByPath(
 		result.UpdatedSessions += changed
 		if changed > 0 {
 			if err := reconcileSessionProjectIdentityAggregatesTx(
-				ctx, tx, update.id,
+				ctx, bunTx, update.id,
 				[]string{update.currentProject, update.nextProject},
 			); err != nil {
 				return result, err
 			}
 		}
 	}
-	if err := tx.Commit(); err != nil {
+	if err := bunTx.Commit(); err != nil {
 		return result, fmt.Errorf(
 			"committing worktree mapping path apply: %w", err,
 		)
