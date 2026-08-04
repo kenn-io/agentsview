@@ -349,7 +349,7 @@ func (s *Sync) writeIdentityPublication(
 	observations, snapshots []export.ProjectIdentityObservation,
 	refreshSessionIDs []string,
 ) error {
-	tx, err := s.duck.BeginTx(ctx, nil)
+	tx, err := s.bun.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning duckdb project identity sync: %w", err)
 	}
@@ -357,18 +357,12 @@ func (s *Sync) writeIdentityPublication(
 		_ = tx.Rollback()
 	}()
 	if err := upsertSourceArchiveScope(
-		func(stmt string, args ...any) error {
-			return s.execMutation(ctx, tx, stmt, args...)
-		},
-		func(stmt string, args ...any) *sql.Row {
-			return tx.QueryRowContext(ctx, stmt, args...)
-		},
-		archiveID, archiveSalt,
+		ctx, tx, archiveID, archiveSalt,
 	); err != nil {
 		return err
 	}
 	execDelta := func(stmt string, args ...any) error {
-		return s.execMutation(ctx, tx, stmt, args...)
+		return s.execMutation(ctx, tx.Tx, stmt, args...)
 	}
 	if fullPublication {
 		// Rebuild the archive from the mirror's own rows so a filtered
@@ -395,11 +389,12 @@ func (s *Sync) writeIdentityPublication(
 		obs.SourceArchiveSalt = archiveSalt
 		obs = export.SanitizeStoredProjectIdentityObservation(obs)
 		if err := upsertProjectIdentityObservation(
+			ctx, tx,
 			func(stmt string, args ...any) error {
-				return s.execMutation(ctx, tx, stmt, args...)
+				return s.execMutation(ctx, tx.Tx, stmt, args...)
 			},
 			func(stmt string, args ...any) *sql.Row {
-				return tx.QueryRowContext(ctx, stmt, args...)
+				return tx.Tx.QueryRowContext(ctx, stmt, args...)
 			},
 			obs, "",
 		); err != nil {
@@ -413,10 +408,7 @@ func (s *Sync) writeIdentityPublication(
 		snapshots[i] = export.SanitizeStoredProjectIdentityObservation(snapshots[i])
 	}
 	if err := upsertSessionProjectIdentitySnapshots(
-		func(stmt string, args ...any) error {
-			return s.execMutation(ctx, tx, stmt, args...)
-		},
-		archiveID, databaseGeneration, snapshots,
+		ctx, tx, archiveID, databaseGeneration, snapshots,
 	); err != nil {
 		return fmt.Errorf("syncing duckdb session project identity snapshots: %w", err)
 	}

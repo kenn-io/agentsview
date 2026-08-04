@@ -203,14 +203,7 @@ func (s *Sync) ensureArchiveID(ctx context.Context) error {
 	}
 	s.databaseGeneration = databaseGeneration
 	if err := upsertSourceArchiveScope(
-		func(query string, args ...any) error {
-			_, execErr := s.duck.ExecContext(ctx, query, args...)
-			return execErr
-		},
-		func(query string, args ...any) *sql.Row {
-			return s.duck.QueryRowContext(ctx, query, args...)
-		},
-		s.archiveID, s.archiveSalt,
+		ctx, s.bun, s.archiveID, s.archiveSalt,
 	); err != nil {
 		return err
 	}
