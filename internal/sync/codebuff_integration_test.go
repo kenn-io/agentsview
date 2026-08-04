@@ -1267,6 +1267,83 @@ func TestSyncCodebuffSameSizeSameMtimeRewriteIsDetected(t *testing.T) {
 			"the source must short-circuit")
 }
 
+// TestSyncCodebuffIncrementalCutoffDetectsCtimeDrift pins the
+// roborev-medium finding: discoveredFileEffectiveMtime for Codebuff
+// must include ctime in the cutoff signal. A same-size companion
+// rewrite with restored mtime changes ctime but not mtime, so an
+// mtime-only cutoff would drop the source before the full freshness
+// check (providerSourceFreshBeforeFingerprint) can detect the rewrite.
+// The ctime-inclusive cutoff must advance past the SyncAllSince
+// parameter so the source reaches the per-component digest gate, which
+// then forces a full fingerprint and detects the content drift.
+func TestSyncCodebuffIncrementalCutoffDetectsCtimeDrift(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	database := dbtest.OpenTestDB(t)
+	root, chatPath := createCodebuffSingleSession(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	require.Equal(t, 1,
+		engine.SyncAll(context.Background(), nil).Synced,
+		"cold sync must parse the seeded Codebuff session")
+
+	// Confirm the warm pass skips the unchanged source.
+	require.Equal(t, 0,
+		engine.SyncAll(context.Background(), nil).Synced,
+		"warm SyncAll must skip the unchanged source")
+
+	// Rewrite run-state.json with byte-identical length but different
+	// content, then restore its mtime so only ctime distinguishes the
+	// new content. An mtime-only cutoff (the old behavior) would drop
+	// this source because max(mtime) is unchanged.
+	dir := filepath.Dir(chatPath)
+	runStatePath := filepath.Join(dir, "run-state.json")
+	original, err := os.ReadFile(runStatePath)
+	require.NoError(t, err)
+	info, err := os.Stat(runStatePath)
+	require.NoError(t, err)
+	originalMtime := info.ModTime()
+
+	replacement := bytes.Replace(
+		original,
+		[]byte("base2-free-deepseek"),
+		[]byte("base3-free-deepseek"),
+		1,
+	)
+	require.Equal(t, len(original), len(replacement),
+		"rewrite must preserve byte length so mtime is the only "+
+			"pre-ctime signal")
+
+	time.Sleep(10 * time.Millisecond)
+	// Use a cutoff anchored between the cold-sync mtimes and the
+	// rewrite ctime: the ctime-inclusive cutoff must see the source
+	// as fresh even though mtime alone would not.
+	cutoff := time.Now()
+	time.Sleep(10 * time.Millisecond)
+	require.NoError(t, os.WriteFile(runStatePath, replacement, 0o644))
+	require.NoError(t, os.Chtimes(runStatePath, originalMtime, originalMtime))
+
+	stats := engine.SyncAllSince(context.Background(), cutoff, nil)
+	require.Equal(t, 1, stats.Synced,
+		"SyncAllSince must pick up a same-size, mtime-preserved "+
+			"companion rewrite via the ctime-inclusive cutoff; "+
+			"a zero here means the cutoff saw only max(mtime) and "+
+			"dropped the source before the fingerprint could detect it")
+
+	// The re-stamped digest must then short-circuit the unchanged source.
+	warm := engine.SyncAll(context.Background(), nil)
+	assert.Zero(t, warm.Synced,
+		"after the rewrite is synced the digest must match again")
+}
+
 // TestSyncCodebuffSingleSessionWritesProviderStatHash pins Issue 4b:
 // a single-session sync (SyncSingleSession) that writes through
 // writeSessionFull must also persist the staged

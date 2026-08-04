@@ -6560,21 +6560,35 @@ func (e *Engine) discoveredFileEffectiveMtime(
 	// run-state.json and chat-meta.json, so consulting it here would
 	// read every session's full transcript on each incremental sync,
 	// scaling cutoff filtering with the archive instead of the changed
-	// batch. The stat-only composite carries the same cutoff signal —
-	// the max mtime of all three files — so a companion-only change
-	// still looks fresh. Sources that pass the cutoff go on to the full
-	// fingerprint as usual.
+	// batch. The stat-only composite carries the same cutoff signal:
+	// max(mtime, ctime) per file plus the session directory, so a
+	// companion-only change still looks fresh and a same-size rewrite
+	// with preserved mtime advances the cutoff via ctime. Sources that
+	// pass the cutoff go on to the full fingerprint as usual.
 	if file.Agent == parser.AgentCodebuff {
 		info, err := os.Stat(file.Path)
 		if err != nil {
 			return 0, err
 		}
 		mtime := info.ModTime().UnixNano()
+		// Include ctime as a cutoff signal so same-size rewrites
+		// with preserved mtime are not dropped before the full
+		// freshness check (which also uses ctime via the per-
+		// component stat digest). On platforms without ctime
+		// (e.g. Plan 9), fileChangeTime returns (0, false),
+		// leaving the mtime-only composite as-is.
+		if ct, _ := fileChangeTime(file.Path, info); ct > mtime {
+			mtime = ct
+		}
 		dir := filepath.Dir(file.Path)
-		for _, name := range []string{"run-state.json", "chat-meta.json"} {
+		for _, name := range parser.CodebuffCompanionFilenames {
 			companion := filepath.Join(dir, name)
 			if ci, err := os.Stat(companion); err == nil {
-				if ts := ci.ModTime().UnixNano(); ts > mtime {
+				ts := ci.ModTime().UnixNano()
+				if cct, _ := fileChangeTime(companion, ci); cct > ts {
+					ts = cct
+				}
+				if ts > mtime {
 					mtime = ts
 				}
 			}
@@ -6582,10 +6596,15 @@ func (e *Engine) discoveredFileEffectiveMtime(
 		// Also consider the session directory mtime as a local cutoff
 		// signal to detect companion-file deletions. Deleting a file
 		// changes the directory's mtime even though surviving files'
-		// mtimes are unchanged. This is a local-only signal that does
-		// not affect the persisted fingerprint.
+		// mtimes are unchanged. Include directory ctime as well so
+		// directory-level changes (create, rename, delete) that
+		// preserve mtime are still detected.
 		if dirInfo, err := os.Stat(dir); err == nil {
-			if ts := dirInfo.ModTime().UnixNano(); ts > mtime {
+			ts := dirInfo.ModTime().UnixNano()
+			if dct, _ := fileChangeTime(dir, dirInfo); dct > ts {
+				ts = dct
+			}
+			if ts > mtime {
 				mtime = ts
 			}
 		}
