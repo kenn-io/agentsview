@@ -108,8 +108,8 @@ func (p *gooseProvider) captureDiscoveryWatermarks(
 }
 
 // SourcesForChangedPath returns only Goose sessions with newly inserted
-// session, message, or usage rows. Metadata-only updates and non-tail deletes
-// are intentionally handled by the provider's scheduled reconciliation pass.
+// session, message, or usage rows. Metadata-only updates and row deletes are
+// intentionally handled by the provider's scheduled reconciliation pass.
 func (p *gooseProvider) SourcesForChangedPath(
 	ctx context.Context, req ChangedPathRequest,
 ) ([]SourceRef, error) {
@@ -376,7 +376,7 @@ func (t *gooseChangeTracker) changedSessionIDs(
 	}
 	if !valid {
 		t.databases[key] = current
-		return nil, true, nil
+		return nil, false, nil
 	}
 
 	db, err := openGooseDB(dbPath)

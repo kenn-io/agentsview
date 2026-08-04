@@ -1070,8 +1070,7 @@ Grok section and remove the explicit registry exception in the coverage test.
 - **Agentsview:** `internal/parser/goose.go` and
   `internal/parser/goose_provider.go`; the provider uses per-session content
   fingerprints and bounded SQLite row cursors for watcher events, while a
-  periodic full reconciliation covers metadata-only edits and non-tail
-  deletes.
+  periodic full reconciliation covers metadata-only edits and row deletes.
 
 ## Zed (`zed`)
 

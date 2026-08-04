@@ -353,6 +353,72 @@ func TestGooseChangedPathWorkStaysProportionalToNewRows(t *testing.T) {
 	}
 }
 
+func TestGooseTailDeletionWatcherWorkStaysBounded(t *testing.T) {
+	tests := []struct {
+		name   string
+		delete func(*testing.T, *gooseTestFixture)
+	}{
+		{
+			name: "session",
+			delete: func(t *testing.T, fixture *gooseTestFixture) {
+				t.Helper()
+				_, err := fixture.database.Exec(`DELETE FROM sessions WHERE id = 'session-tail'`)
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "message",
+			delete: func(t *testing.T, fixture *gooseTestFixture) {
+				t.Helper()
+				_, err := fixture.database.Exec(`DELETE FROM messages WHERE session_id = 'session-tail'`)
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "usage",
+			delete: func(t *testing.T, fixture *gooseTestFixture) {
+				t.Helper()
+				_, err := fixture.database.Exec(`DELETE FROM usage_ledger WHERE session_id = 'session-tail'`)
+				require.NoError(t, err)
+			},
+		},
+	}
+
+	for _, sessionCount := range []int{2, 200} {
+		for _, test := range tests {
+			t.Run(fmt.Sprintf("%d/%s", sessionCount, test.name), func(t *testing.T) {
+				fixture := newGooseTestFixture(t)
+				for i := 0; i < sessionCount-1; i++ {
+					id := fmt.Sprintf("session-%03d", i)
+					fixture.insertSession(t, id, id, "user", "")
+					fixture.insertMessage(t, id, "user", `[{"type":"text","text":"seed"}]`, 1_700_000_000)
+					fixture.insertUsage(t, id, "model", 1_700_000_000, 1, 1, 0, 0, 0, "", false)
+				}
+				fixture.insertSession(t, "session-tail", "tail", "user", "")
+				fixture.insertMessage(t, "session-tail", "user", `[{"type":"text","text":"tail"}]`, 1_700_000_001)
+				fixture.insertUsage(t, "session-tail", "model", 1_700_000_001, 1, 1, 0, 0, 0, "", false)
+
+				provider, ok := NewProvider(AgentGoose, ProviderConfig{
+					Roots: []string{fixture.pathRoot}, Machine: "devbox",
+				})
+				require.True(t, ok)
+				_, err := provider.Discover(context.Background())
+				require.NoError(t, err)
+
+				test.delete(t, fixture)
+				sources, err := provider.SourcesForChangedPath(
+					context.Background(), ChangedPathRequest{
+						Path: fixture.dbPath + "-wal", WatchRoot: fixture.sessionDir,
+					},
+				)
+				require.NoError(t, err)
+				assert.Empty(t, sources,
+					"tail deletion must wait for reconciliation instead of enumerating the archive")
+			})
+		}
+	}
+}
+
 func TestGooseDiscoveryLeavesConcurrentRowsForWatcherProcessing(t *testing.T) {
 	fixture := newGooseTestFixture(t)
 	fixture.insertSession(t, "session", "Race", "user", "")
