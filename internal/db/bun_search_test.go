@@ -399,7 +399,7 @@ func TestSQLiteBunStoreSearchContentSubstringPreservesNonASCIICase(t *testing.T)
 		{"user", "identical uppercase CAFÉ content"},
 	})
 
-	page, err := database.BunStore.SearchContent(t.Context(), ContentSearchFilter{
+	page, err := database.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "CAFÉ", Sources: []string{"messages"},
 		IncludeOneShot: true, Limit: 10,
 	})
@@ -499,7 +499,7 @@ func TestSQLiteBunStoreSearchContentFTSOrdersByCanonicalRecency(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	page, err := database.BunStore.SearchContent(t.Context(), ContentSearchFilter{
+	page, err := database.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "needle", Mode: "fts", Sources: []string{"messages"},
 		IncludeOneShot: true, Limit: 1,
 	})
