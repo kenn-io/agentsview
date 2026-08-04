@@ -122,7 +122,7 @@ func (s *BunStore) SearchSession(
 		return nil, nil
 	}
 	capability := s.backend.Capabilities().FullText
-	if capability == nil || !capability.Available() {
+	if capability == nil {
 		return nil, errFTSUnavailable
 	}
 	var ordinals []int
