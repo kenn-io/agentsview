@@ -135,8 +135,9 @@ func (c *schemaProbeConn) ExecContext(
 		c.state.mu.Unlock()
 	}
 	if strings.Contains(normalized, "insert into sync_metadata") &&
-		len(args) > 0 {
-		if key, ok := args[0].Value.(string); ok {
+		(len(args) > 0 || firstSQLStringLiteral(query) != "") {
+		key := schemaProbeStringArg(query, args, 0)
+		if key != "" {
 			c.state.mu.Lock()
 			if c.state.syncMetadataKeys != nil {
 				c.state.syncMetadataKeys[key] = true
@@ -164,12 +165,7 @@ func (c *schemaProbeConn) QueryContext(
 	}
 	switch {
 	case strings.Contains(normalized, "information_schema.tables"):
-		name := ""
-		if len(args) > 0 {
-			if v, ok := args[0].Value.(string); ok {
-				name = v
-			}
-		}
+		name := schemaProbeStringArg(query, args, 0)
 		if c.state.existingTables[name] {
 			return &schemaProbeRows{
 				columns: []string{"exists"},
@@ -183,12 +179,7 @@ func (c *schemaProbeConn) QueryContext(
 				columns: []string{"exists"}, values: [][]driver.Value{{true}},
 			}, nil
 		}
-		name := ""
-		if len(args) > 0 {
-			if v, ok := args[0].Value.(string); ok {
-				name = v
-			}
-		}
+		name := schemaProbeStringArg(query, args, 0)
 		if c.state.existingIndexes[name] {
 			return &schemaProbeRows{
 				columns: []string{"exists"},
@@ -277,12 +268,7 @@ func (c *schemaProbeConn) QueryContext(
 		strings.Contains(normalized, "from sync_metadata"):
 		done := true
 		if c.state.syncMetadataKeys != nil {
-			key := ""
-			if len(args) > 0 {
-				if v, ok := args[0].Value.(string); ok {
-					key = v
-				}
-			}
+			key := schemaProbeStringArg(query, args, 0)
 			done = c.state.syncMetadataKeys[key]
 		}
 		return &schemaProbeRows{
@@ -372,7 +358,40 @@ func (s *schemaProbeState) execArgValueSeen(value string) bool {
 			}
 		}
 	}
-	return false
+	quoted := "'" + strings.ReplaceAll(value, "'", "''") + "'"
+	return strings.Contains(strings.Join(s.execs, "\n"), quoted)
+}
+
+func schemaProbeStringArg(
+	query string, args []driver.NamedValue, index int,
+) string {
+	if index < len(args) {
+		if value, ok := args[index].Value.(string); ok {
+			return value
+		}
+	}
+	return firstSQLStringLiteral(query)
+}
+
+func firstSQLStringLiteral(query string) string {
+	start := strings.IndexByte(query, '\'')
+	if start < 0 {
+		return ""
+	}
+	var value strings.Builder
+	for index := start + 1; index < len(query); index++ {
+		if query[index] != '\'' {
+			value.WriteByte(query[index])
+			continue
+		}
+		if index+1 < len(query) && query[index+1] == '\'' {
+			value.WriteByte('\'')
+			index++
+			continue
+		}
+		return value.String()
+	}
+	return ""
 }
 
 func TestEnsureSchemaBatchesColumnIntrospection(t *testing.T) {

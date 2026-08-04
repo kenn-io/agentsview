@@ -344,6 +344,8 @@ func buildMirrorInto(
 	); err != nil {
 		return result, err
 	}
+	// CHECKPOINT is DuckDB driver control for the rebuild file, not an
+	// application query; execute it on the owning raw handle before swap.
 	if _, err := s.duck.ExecContext(ctx, "CHECKPOINT"); err != nil {
 		return result, fmt.Errorf("checkpointing duckdb rebuild: %w", err)
 	}
@@ -420,7 +422,7 @@ func (s *Sync) pushEverything(
 			return result, err
 		}
 		if err := recordMetadataKey(
-			ctx, s.duck, curationFingerprintMetadataKey, written,
+			ctx, s.bun, curationFingerprintMetadataKey, written,
 		); err != nil {
 			return result, err
 		}

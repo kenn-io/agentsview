@@ -441,7 +441,7 @@ func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 		// reads (issue #887). Still run the row-level data repairs
 		// so is_automated and token-coverage flags stay correct on
 		// existing rows.
-		if err := runSchemaDataRepairsPG(ctx, s.pg); err != nil {
+		if err := runSchemaDataRepairsPG(ctx, s.bunDB()); err != nil {
 			return err
 		}
 		// pushSchemaCurrent predates the vector tables, so a schema
@@ -519,8 +519,9 @@ func readStatus(
 	machine string,
 	lastPush string,
 ) (SyncStatus, error) {
+	store := bun.NewDB(pg, pgdialect.New())
 	var pgSessions int
-	err := pg.QueryRowContext(ctx,
+	err := store.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM sessions",
 	).Scan(&pgSessions)
 	if err != nil {
@@ -536,7 +537,7 @@ func readStatus(
 	}
 
 	var pgMessages int
-	err = pg.QueryRowContext(ctx,
+	err = store.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM messages",
 	).Scan(&pgMessages)
 	if err != nil {

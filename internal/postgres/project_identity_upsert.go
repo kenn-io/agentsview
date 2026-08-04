@@ -15,7 +15,7 @@ const projectIdentityDeleteBatchSize = 300
 
 func deleteProjectIdentityDelta(
 	ctx context.Context,
-	q pgProjectIdentityExecer,
+	q bun.IDB,
 	archiveID, databaseGeneration string,
 	observationKeys []db.ProjectIdentityObservationKey,
 	snapshotKeys []db.SessionProjectIdentitySnapshotKey,
@@ -25,15 +25,15 @@ func deleteProjectIdentityDelta(
 		args := []any{archiveID}
 		tuples := make([]string, 0, end-start)
 		for _, key := range observationKeys[start:end] {
-			base := len(args) + 1
+			base := len(args)
 			tuples = append(tuples, fmt.Sprintf(
-				"($%d, $%d, $%d, $%d)", base, base+1, base+2, base+3,
+				"(?%d, ?%d, ?%d, ?%d)", base, base+1, base+2, base+3,
 			))
 			args = append(args, key.Project, key.Machine, key.RootPath, key.GitRemote)
 		}
 		if _, err := q.ExecContext(ctx, `
 			DELETE FROM source_project_identity_observations
-			WHERE source_archive_id = $1
+			WHERE source_archive_id = ?0
 			  AND (project, machine, root_path, git_remote) IN (`+
 			strings.Join(tuples, ", ")+`)`, args...); err != nil {
 			return fmt.Errorf("deleting pg project identity observation delta: %w", err)
@@ -44,14 +44,14 @@ func deleteProjectIdentityDelta(
 		args := []any{archiveID, databaseGeneration}
 		tuples := make([]string, 0, end-start)
 		for _, key := range snapshotKeys[start:end] {
-			base := len(args) + 1
-			tuples = append(tuples, fmt.Sprintf("($%d, $%d)", base, base+1))
+			base := len(args)
+			tuples = append(tuples, fmt.Sprintf("(?%d, ?%d)", base, base+1))
 			args = append(args, key.SessionID, key.Project)
 		}
 		if _, err := q.ExecContext(ctx, `
 			DELETE FROM source_session_project_identity_snapshots
-			WHERE source_archive_id = $1
-			  AND source_database_generation = $2
+			WHERE source_archive_id = ?0
+			  AND source_database_generation = ?1
 			  AND (source_session_id, project) IN (`+
 			strings.Join(tuples, ", ")+`)`,
 			args...,
@@ -64,7 +64,7 @@ func deleteProjectIdentityDelta(
 
 func deleteProjectIdentityArchive(
 	ctx context.Context,
-	q pgProjectIdentityExecer,
+	q bun.IDB,
 	archiveID string,
 ) error {
 	for _, table := range []string{
@@ -72,7 +72,7 @@ func deleteProjectIdentityArchive(
 		"source_session_project_identity_snapshots",
 	} {
 		if _, err := q.ExecContext(ctx,
-			"DELETE FROM "+table+" WHERE source_archive_id = $1",
+			"DELETE FROM "+table+" WHERE source_archive_id = ?0",
 			archiveID,
 		); err != nil {
 			return fmt.Errorf("clearing pg %s archive: %w", table, err)
@@ -83,7 +83,7 @@ func deleteProjectIdentityArchive(
 
 func prepareFilteredProjectIdentityPublication(
 	ctx context.Context,
-	q pgProjectIdentityExecer,
+	q bun.IDB,
 	archiveID, databaseGeneration, publicationScope string,
 	full, adoptLegacyScope bool,
 	projects, excludeProjects []string,
@@ -127,7 +127,7 @@ func prepareFilteredProjectIdentityPublication(
 // a successful v3 cursor write prevents this bounded adoption from recurring.
 func adoptLegacyFilteredProjectIdentityScope(
 	ctx context.Context,
-	q pgProjectIdentityExecer,
+	q bun.IDB,
 	archiveID, publicationScope string,
 	projects, excludeProjects []string,
 ) error {
@@ -141,7 +141,7 @@ func adoptLegacyFilteredProjectIdentityScope(
 	placeholders := make([]string, 0, len(values))
 	for _, project := range values {
 		args = append(args, project)
-		placeholders = append(placeholders, fmt.Sprintf("$%d", len(args)))
+		placeholders = append(placeholders, fmt.Sprintf("?%d", len(args)-1))
 	}
 	projectPredicate := operator + " (" + strings.Join(placeholders, ", ") + ")"
 	if _, err := q.ExecContext(ctx, `
@@ -150,9 +150,9 @@ func adoptLegacyFilteredProjectIdentityScope(
 			publication_scope
 		)
 		SELECT observation.source_archive_id, observation.project,
-			observation.machine, observation.root_path, observation.git_remote, $2
+			observation.machine, observation.root_path, observation.git_remote, ?1
 		FROM source_project_identity_observations observation
-		WHERE observation.source_archive_id = $1
+		WHERE observation.source_archive_id = ?0
 		  AND observation.project `+projectPredicate+`
 		  AND NOT EXISTS (
 			SELECT 1
@@ -173,9 +173,9 @@ func adoptLegacyFilteredProjectIdentityScope(
 			source_session_id, publication_scope
 		)
 		SELECT snapshot.source_archive_id, snapshot.source_database_generation,
-			snapshot.source_session_id, $2
+			snapshot.source_session_id, ?1
 		FROM source_session_project_identity_snapshots snapshot
-		WHERE snapshot.source_archive_id = $1
+		WHERE snapshot.source_archive_id = ?0
 		  AND snapshot.project `+projectPredicate+`
 		  AND NOT EXISTS (
 			SELECT 1
@@ -193,12 +193,12 @@ func adoptLegacyFilteredProjectIdentityScope(
 
 func releaseFilteredProjectIdentityFullOwnership(
 	ctx context.Context,
-	q pgProjectIdentityExecer,
+	q bun.IDB,
 	archiveID, publicationScope string,
 ) error {
 	if _, err := q.ExecContext(ctx, `
 		DELETE FROM source_project_identity_observations observation
-		WHERE observation.source_archive_id = $1
+		WHERE observation.source_archive_id = ?0
 		  AND EXISTS (
 			SELECT 1
 			FROM source_project_identity_observation_scopes owner
@@ -207,7 +207,7 @@ func releaseFilteredProjectIdentityFullOwnership(
 			  AND owner.machine = observation.machine
 			  AND owner.root_path = observation.root_path
 			  AND owner.git_remote = observation.git_remote
-			  AND owner.publication_scope = $2
+			  AND owner.publication_scope = ?1
 		  )
 		  AND NOT EXISTS (
 			SELECT 1
@@ -217,7 +217,7 @@ func releaseFilteredProjectIdentityFullOwnership(
 			  AND owner.machine = observation.machine
 			  AND owner.root_path = observation.root_path
 			  AND owner.git_remote = observation.git_remote
-			  AND owner.publication_scope <> $2
+			  AND owner.publication_scope <> ?1
 		  )`, archiveID, publicationScope); err != nil {
 		return fmt.Errorf(
 			"clearing exclusively owned filtered pg identity observations: %w",
@@ -226,7 +226,7 @@ func releaseFilteredProjectIdentityFullOwnership(
 	}
 	if _, err := q.ExecContext(ctx, `
 		DELETE FROM source_session_project_identity_snapshots snapshot
-		WHERE snapshot.source_archive_id = $1
+		WHERE snapshot.source_archive_id = ?0
 		  AND EXISTS (
 			SELECT 1
 			FROM source_session_project_identity_snapshot_scopes owner
@@ -234,7 +234,7 @@ func releaseFilteredProjectIdentityFullOwnership(
 			  AND owner.source_database_generation =
 			      snapshot.source_database_generation
 			  AND owner.source_session_id = snapshot.source_session_id
-			  AND owner.publication_scope = $2
+			  AND owner.publication_scope = ?1
 		  )
 		  AND NOT EXISTS (
 			SELECT 1
@@ -243,7 +243,7 @@ func releaseFilteredProjectIdentityFullOwnership(
 			  AND owner.source_database_generation =
 			      snapshot.source_database_generation
 			  AND owner.source_session_id = snapshot.source_session_id
-			  AND owner.publication_scope <> $2
+			  AND owner.publication_scope <> ?1
 		  )`, archiveID, publicationScope); err != nil {
 		return fmt.Errorf(
 			"clearing exclusively owned filtered pg identity snapshots: %w", err,
@@ -255,7 +255,7 @@ func releaseFilteredProjectIdentityFullOwnership(
 	} {
 		if _, err := q.ExecContext(ctx,
 			"DELETE FROM "+table+
-				" WHERE source_archive_id = $1 AND publication_scope = $2",
+				" WHERE source_archive_id = ?0 AND publication_scope = ?1",
 			archiveID, publicationScope,
 		); err != nil {
 			return fmt.Errorf("clearing filtered pg %s scope: %w", table, err)
@@ -266,7 +266,7 @@ func releaseFilteredProjectIdentityFullOwnership(
 
 func deleteFilteredProjectIdentityDeltaOwnership(
 	ctx context.Context,
-	q pgProjectIdentityExecer,
+	q bun.IDB,
 	archiveID, databaseGeneration, publicationScope string,
 	observationKeys []db.ProjectIdentityObservationKey,
 	snapshotKeys []db.SessionProjectIdentitySnapshotKey,
@@ -276,15 +276,15 @@ func deleteFilteredProjectIdentityDeltaOwnership(
 		args := []any{archiveID, publicationScope}
 		tuples := make([]string, 0, end-start)
 		for _, key := range observationKeys[start:end] {
-			base := len(args) + 1
+			base := len(args)
 			tuples = append(tuples, fmt.Sprintf(
-				"($%d, $%d, $%d, $%d)", base, base+1, base+2, base+3,
+				"(?%d, ?%d, ?%d, ?%d)", base, base+1, base+2, base+3,
 			))
 			args = append(args, key.Project, key.Machine, key.RootPath, key.GitRemote)
 		}
 		if _, err := q.ExecContext(ctx, `
 			DELETE FROM source_project_identity_observations observation
-			WHERE observation.source_archive_id = $1
+			WHERE observation.source_archive_id = ?0
 			  AND (observation.project, observation.machine,
 			       observation.root_path, observation.git_remote) IN (`+
 			strings.Join(tuples, ", ")+`)
@@ -296,7 +296,7 @@ func deleteFilteredProjectIdentityDeltaOwnership(
 				  AND owner.machine = observation.machine
 				  AND owner.root_path = observation.root_path
 				  AND owner.git_remote = observation.git_remote
-				  AND owner.publication_scope = $2
+				  AND owner.publication_scope = ?1
 			  )
 			  AND NOT EXISTS (
 				SELECT 1
@@ -306,7 +306,7 @@ func deleteFilteredProjectIdentityDeltaOwnership(
 				  AND owner.machine = observation.machine
 				  AND owner.root_path = observation.root_path
 				  AND owner.git_remote = observation.git_remote
-				  AND owner.publication_scope <> $2
+				  AND owner.publication_scope <> ?1
 			  )`, args...); err != nil {
 			return fmt.Errorf(
 				"deleting exclusively owned filtered pg identity delta: %w", err,
@@ -314,7 +314,7 @@ func deleteFilteredProjectIdentityDeltaOwnership(
 		}
 		if _, err := q.ExecContext(ctx, `
 			DELETE FROM source_project_identity_observation_scopes
-			WHERE source_archive_id = $1 AND publication_scope = $2
+			WHERE source_archive_id = ?0 AND publication_scope = ?1
 			  AND (project, machine, root_path, git_remote) IN (`+
 			strings.Join(tuples, ", ")+`)`, args...); err != nil {
 			return fmt.Errorf(
@@ -328,12 +328,12 @@ func deleteFilteredProjectIdentityDeltaOwnership(
 		for _, key := range snapshotKeys[start:end] {
 			args = append(args, key.SessionID)
 			placeholders = append(
-				placeholders, fmt.Sprintf("$%d", len(args)))
+				placeholders, fmt.Sprintf("?%d", len(args)-1))
 		}
 		if _, err := q.ExecContext(ctx, `
 			DELETE FROM source_session_project_identity_snapshots snapshot
-			WHERE snapshot.source_archive_id = $1
-			  AND snapshot.source_database_generation = $2
+			WHERE snapshot.source_archive_id = ?0
+			  AND snapshot.source_database_generation = ?1
 			  AND snapshot.source_session_id IN (`+
 			strings.Join(placeholders, ", ")+`)
 			  AND EXISTS (
@@ -343,7 +343,7 @@ func deleteFilteredProjectIdentityDeltaOwnership(
 				  AND owner.source_database_generation =
 				      snapshot.source_database_generation
 				  AND owner.source_session_id = snapshot.source_session_id
-				  AND owner.publication_scope = $3
+				  AND owner.publication_scope = ?2
 			  )
 			  AND NOT EXISTS (
 				SELECT 1
@@ -352,7 +352,7 @@ func deleteFilteredProjectIdentityDeltaOwnership(
 				  AND owner.source_database_generation =
 				      snapshot.source_database_generation
 				  AND owner.source_session_id = snapshot.source_session_id
-				  AND owner.publication_scope <> $3
+				  AND owner.publication_scope <> ?2
 			  )`, args...); err != nil {
 			return fmt.Errorf(
 				"deleting exclusively owned filtered pg snapshot delta: %w", err,
@@ -360,9 +360,9 @@ func deleteFilteredProjectIdentityDeltaOwnership(
 		}
 		if _, err := q.ExecContext(ctx, `
 			DELETE FROM source_session_project_identity_snapshot_scopes
-			WHERE source_archive_id = $1
-			  AND source_database_generation = $2
-			  AND publication_scope = $3
+			WHERE source_archive_id = ?0
+			  AND source_database_generation = ?1
+			  AND publication_scope = ?2
 			  AND source_session_id IN (`+
 			strings.Join(placeholders, ", ")+`)`, args...); err != nil {
 			return fmt.Errorf(
@@ -374,7 +374,7 @@ func deleteFilteredProjectIdentityDeltaOwnership(
 
 func deleteFilteredSnapshotOwnershipBySessionID(
 	ctx context.Context,
-	q pgProjectIdentityExecer,
+	q bun.IDB,
 	archiveID, publicationScope string,
 	sessionIDs []string,
 ) error {
@@ -385,11 +385,11 @@ func deleteFilteredSnapshotOwnershipBySessionID(
 		for _, sessionID := range sessionIDs[start:end] {
 			args = append(args, sessionID)
 			placeholders = append(
-				placeholders, fmt.Sprintf("$%d", len(args)))
+				placeholders, fmt.Sprintf("?%d", len(args)-1))
 		}
 		if _, err := q.ExecContext(ctx, `
 			DELETE FROM source_session_project_identity_snapshots snapshot
-			WHERE snapshot.source_archive_id = $1
+			WHERE snapshot.source_archive_id = ?0
 			  AND snapshot.source_session_id IN (`+
 			strings.Join(placeholders, ", ")+`)
 			  AND EXISTS (
@@ -399,7 +399,7 @@ func deleteFilteredSnapshotOwnershipBySessionID(
 				  AND owner.source_database_generation =
 				      snapshot.source_database_generation
 				  AND owner.source_session_id = snapshot.source_session_id
-				  AND owner.publication_scope = $2
+				  AND owner.publication_scope = ?1
 			  )
 			  AND NOT EXISTS (
 				SELECT 1
@@ -408,7 +408,7 @@ func deleteFilteredSnapshotOwnershipBySessionID(
 				  AND owner.source_database_generation =
 				      snapshot.source_database_generation
 				  AND owner.source_session_id = snapshot.source_session_id
-				  AND owner.publication_scope <> $2
+				  AND owner.publication_scope <> ?1
 			  )`, args...); err != nil {
 			return fmt.Errorf(
 				"deleting exclusively owned filtered pg refreshed snapshots: %w",
@@ -417,7 +417,7 @@ func deleteFilteredSnapshotOwnershipBySessionID(
 		}
 		if _, err := q.ExecContext(ctx, `
 			DELETE FROM source_session_project_identity_snapshot_scopes
-			WHERE source_archive_id = $1 AND publication_scope = $2
+			WHERE source_archive_id = ?0 AND publication_scope = ?1
 			  AND source_session_id IN (`+
 			strings.Join(placeholders, ", ")+`)`, args...); err != nil {
 			return fmt.Errorf(
@@ -431,7 +431,7 @@ func deleteFilteredSnapshotOwnershipBySessionID(
 
 func ownProjectIdentityObservations(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.IDB,
 	archiveID, publicationScope string,
 	observations []export.ProjectIdentityObservation,
 ) error {
@@ -440,9 +440,9 @@ func ownProjectIdentityObservations(
 		args := []any{archiveID, publicationScope}
 		tuples := make([]string, 0, end-start)
 		for _, observation := range observations[start:end] {
-			base := len(args) + 1
+			base := len(args)
 			tuples = append(tuples, fmt.Sprintf(
-				"($%d, $%d, $%d, $%d)", base, base+1, base+2, base+3,
+				"(?%d, ?%d, ?%d, ?%d)", base, base+1, base+2, base+3,
 			))
 			args = append(args,
 				observation.Project, observation.Machine,
@@ -457,11 +457,11 @@ func ownProjectIdentityObservations(
 				source_archive_id, project, machine, root_path, git_remote,
 				publication_scope
 			)
-			SELECT $1, keys.project, keys.machine, keys.root_path,
-				keys.git_remote, $2
+			SELECT ?0, keys.project, keys.machine, keys.root_path,
+				keys.git_remote, ?1
 			FROM keys
 			JOIN source_project_identity_observations observation
-			  ON observation.source_archive_id = $1
+			  ON observation.source_archive_id = ?0
 			 AND observation.project = keys.project
 			 AND observation.machine = keys.machine
 			 AND observation.root_path = keys.root_path
@@ -475,7 +475,7 @@ func ownProjectIdentityObservations(
 
 func ownSessionProjectIdentitySnapshots(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.IDB,
 	archiveID, databaseGeneration, publicationScope string,
 	snapshots []export.ProjectIdentityObservation,
 ) error {
@@ -486,7 +486,7 @@ func ownSessionProjectIdentitySnapshots(
 		for _, snapshot := range snapshots[start:end] {
 			args = append(args, snapshot.SessionID)
 			placeholders = append(
-				placeholders, fmt.Sprintf("($%d)", len(args)))
+				placeholders, fmt.Sprintf("(?%d)", len(args)-1))
 		}
 		if _, err := tx.ExecContext(ctx, `
 			WITH keys(source_session_id) AS (
@@ -496,11 +496,11 @@ func ownSessionProjectIdentitySnapshots(
 				source_archive_id, source_database_generation,
 				source_session_id, publication_scope
 			)
-			SELECT $1, $2, keys.source_session_id, $3
+			SELECT ?0, ?1, keys.source_session_id, ?2
 			FROM keys
 			JOIN source_session_project_identity_snapshots snapshot
-			  ON snapshot.source_archive_id = $1
-			 AND snapshot.source_database_generation = $2
+			  ON snapshot.source_archive_id = ?0
+			 AND snapshot.source_database_generation = ?1
 			 AND snapshot.source_session_id = keys.source_session_id
 			ON CONFLICT DO NOTHING`, args...); err != nil {
 			return fmt.Errorf("owning pg session identity snapshots: %w", err)
@@ -511,7 +511,7 @@ func ownSessionProjectIdentitySnapshots(
 
 func deleteSessionProjectIdentitySnapshotsBySessionID(
 	ctx context.Context,
-	q pgProjectIdentityExecer,
+	q bun.IDB,
 	archiveID string,
 	sessionIDs []string,
 ) error {
@@ -521,11 +521,11 @@ func deleteSessionProjectIdentitySnapshotsBySessionID(
 		placeholders := make([]string, 0, end-start)
 		for _, sessionID := range sessionIDs[start:end] {
 			args = append(args, sessionID)
-			placeholders = append(placeholders, fmt.Sprintf("$%d", len(args)))
+			placeholders = append(placeholders, fmt.Sprintf("?%d", len(args)-1))
 		}
 		if _, err := q.ExecContext(ctx, `
 			DELETE FROM source_session_project_identity_snapshots
-			WHERE source_archive_id = $1
+			WHERE source_archive_id = ?0
 			  AND source_session_id IN (`+
 			strings.Join(placeholders, ", ")+`)`, args...); err != nil {
 			return fmt.Errorf(
@@ -536,14 +536,9 @@ func deleteSessionProjectIdentitySnapshotsBySessionID(
 	return nil
 }
 
-type pgProjectIdentityExecer interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-}
-
 func upsertProjectIdentityObservation(
 	ctx context.Context,
-	q pgProjectIdentityExecer,
+	q bun.IDB,
 	obs export.ProjectIdentityObservation,
 	excludeRemote string,
 ) error {
@@ -552,10 +547,10 @@ func upsertProjectIdentityObservation(
 		if err := q.QueryRowContext(ctx, `
 			SELECT EXISTS (
 				SELECT 1 FROM source_project_identity_observations
-				WHERE source_archive_id = $1 AND project = $2
-				  AND machine = $3 AND root_path = $4
-				  AND (git_remote != '' OR remote_resolution = $5)
-				  AND ($6 = '' OR git_remote != $6)
+				WHERE source_archive_id = ?0 AND project = ?1
+				  AND machine = ?2 AND root_path = ?3
+				  AND (git_remote != '' OR remote_resolution = ?4)
+				  AND (?5 = '' OR git_remote != ?5)
 			)`,
 			obs.SourceArchiveID, obs.Project, obs.Machine, obs.RootPath,
 			export.ProjectResolutionAmbiguous, excludeRemote,
@@ -569,9 +564,9 @@ func upsertProjectIdentityObservation(
 		}
 	} else if _, err := q.ExecContext(ctx, `
 		DELETE FROM source_project_identity_observations
-		WHERE source_archive_id = $1 AND project = $2
-		  AND machine = $3 AND root_path = $4
-		  AND git_remote = '' AND remote_resolution != $5`,
+		WHERE source_archive_id = ?0 AND project = ?1
+		  AND machine = ?2 AND root_path = ?3
+		  AND git_remote = '' AND remote_resolution != ?4`,
 		obs.SourceArchiveID, obs.Project, obs.Machine, obs.RootPath,
 		export.ProjectResolutionAmbiguous,
 	); err != nil {
@@ -589,8 +584,8 @@ func upsertProjectIdentityObservation(
 			remote_resolution, remote_candidate_count, observed_at,
 			normalized_remote, key_source, key
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-			$13, $14, $15, $16, $17, $18, $19
+			?0, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
+			?12, ?13, ?14, ?15, ?16, ?17, ?18
 		)`+projectIdentityObservationConflictClause,
 		obs.SourceArchiveID, obs.SourceArchiveSalt,
 		obs.Project, obs.Machine, obs.RootPath, obs.GitRemote,
@@ -718,7 +713,7 @@ func planProjectIdentityObservationSync(
 // no excluded remote.
 func syncProjectIdentityObservationsBatch(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.IDB,
 	store bun.IDB,
 	archiveID, archiveSalt string,
 	observations []export.ProjectIdentityObservation,
@@ -758,8 +753,8 @@ func rootKeyTupleArgs(keys []projectIdentityRootKey) (string, []any) {
 	args := make([]any, 0, len(keys)*4)
 	for i, key := range keys {
 		base := i * 4
-		tuples[i] = fmt.Sprintf("($%d, $%d, $%d, $%d)",
-			base+1, base+2, base+3, base+4)
+		tuples[i] = fmt.Sprintf("(?%d, ?%d, ?%d, ?%d)",
+			base, base+1, base+2, base+3)
 		args = append(args, key.archiveID, key.project, key.machine, key.rootPath)
 	}
 	return strings.Join(tuples, ", "), args
@@ -767,18 +762,18 @@ func rootKeyTupleArgs(keys []projectIdentityRootKey) (string, []any) {
 
 func deleteProjectIdentityFallbackRows(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.IDB,
 	roots []projectIdentityRootKey,
 ) error {
 	for start := 0; start < len(roots); start += projectIdentityRootKeyBatchSize {
 		end := min(start+projectIdentityRootKeyBatchSize, len(roots))
 		tuples, args := rootKeyTupleArgs(roots[start:end])
-		ambiguousParam := len(args) + 1
+		ambiguousParam := len(args)
 		args = append(args, export.ProjectResolutionAmbiguous)
 		if _, err := tx.ExecContext(ctx, `
 			DELETE FROM source_project_identity_observations
 			WHERE git_remote = ''
-			  AND remote_resolution != $`+fmt.Sprint(ambiguousParam)+`
+			  AND remote_resolution != ?`+fmt.Sprint(ambiguousParam)+`
 			  AND (source_archive_id, project, machine, root_path) IN (`+tuples+`)`,
 			args...,
 		); err != nil {
@@ -795,7 +790,7 @@ func deleteProjectIdentityFallbackRows(
 // existence check in upsertProjectIdentityObservation.
 func projectIdentityFallbacksWithoutRealRemote(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.IDB,
 	candidates []export.ProjectIdentityObservation,
 ) ([]export.ProjectIdentityObservation, error) {
 	if len(candidates) == 0 {
@@ -809,12 +804,12 @@ func projectIdentityFallbacksWithoutRealRemote(
 			keys = append(keys, observationRootKey(obs))
 		}
 		tuples, args := rootKeyTupleArgs(keys)
-		ambiguousParam := len(args) + 1
+		ambiguousParam := len(args)
 		args = append(args, export.ProjectResolutionAmbiguous)
 		rows, err := tx.QueryContext(ctx, `
 			SELECT DISTINCT source_archive_id, project, machine, root_path
 			FROM source_project_identity_observations
-			WHERE (git_remote != '' OR remote_resolution = $`+
+			WHERE (git_remote != '' OR remote_resolution = ?`+
 			fmt.Sprint(ambiguousParam)+`)
 			  AND (source_archive_id, project, machine, root_path) IN (`+tuples+`)`,
 			args...,

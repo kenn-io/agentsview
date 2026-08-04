@@ -680,10 +680,10 @@ func stampSessionArchiveIdentity(session *Session, identity ArchiveIdentity) {
 	session.SourceDatabaseGeneration = identity.SourceDatabaseGeneration
 }
 
-// UpsertSession inserts or updates a session.
+// upsertArchiveSession inserts or updates a session in the SQLite archive.
 // Sessions that were permanently deleted (in excluded_sessions)
 // or currently in the trash are rejected.
-func (db *DB) UpsertSession(s Session) error {
+func (db *DB) upsertArchiveSession(s Session) error {
 	_, err := db.upsertSession(s, true)
 	return err
 }

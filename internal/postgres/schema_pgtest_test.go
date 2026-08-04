@@ -105,9 +105,10 @@ func TestPostgresCommonConvergenceRollsBackDDLAndStamp(t *testing.T) {
 	require.NoError(t, err)
 
 	injected := errors.New("injected PostgreSQL common convergence failure")
-	err = convergePostgresCommonSchema(t.Context(), pg, func() error {
-		return injected
-	})
+	err = convergePostgresCommonSchema(
+		t.Context(), bun.NewDB(pg, pgdialect.New()), func() error {
+			return injected
+		})
 	require.ErrorIs(t, err, injected)
 
 	for table, column := range map[string]string{
@@ -275,7 +276,9 @@ func TestPostgresStampedCommonSchemaRejectsDrift(t *testing.T) {
 	_, err = pg.ExecContext(t.Context(), `ALTER TABLE messages DROP COLUMN id`)
 	require.NoError(t, err)
 
-	err = convergePostgresCommonSchema(t.Context(), pg, nil)
+	err = convergePostgresCommonSchema(
+		t.Context(), bun.NewDB(pg, pgdialect.New()), nil,
+	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "validating stamped common PostgreSQL schema")
 
@@ -723,13 +726,14 @@ func TestMigrateMoneyColumnsPGSerializesConcurrentUpgraders(t *testing.T) {
 	for _, migrator := range []*sql.DB{migratorA, migratorB} {
 		go func(conn *sql.DB) {
 			<-start
+			store := bun.NewDB(conn, pgdialect.New())
 			existingColumns, err := loadExistingColumns(
-				t.Context(), conn, nil,
+				t.Context(), store, nil,
 				"usage_events", "cursor_usage_events", "model_pricing",
 			)
 			if err == nil {
 				err = migrateMoneyColumnsPG(
-					t.Context(), conn, existingColumns,
+					t.Context(), store, existingColumns,
 				)
 			}
 			results <- err

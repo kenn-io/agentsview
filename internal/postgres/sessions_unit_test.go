@@ -83,7 +83,7 @@ func TestPGFindSessionIDsByRawSuffixUsesExactFirstSuffixQuery(t *testing.T) {
 	state := &sessionSuffixProbeState{}
 	pg := sql.OpenDB(sessionSuffixProbeConnector{state: state})
 	t.Cleanup(func() { _ = pg.Close() })
-	store := &Store{pg: pg}
+	store := newStore(pg)
 
 	ids, err := store.FindSessionIDsByRawSuffix(
 		context.Background(), "project-hash:session-uuid", 2,
@@ -97,8 +97,9 @@ func TestPGFindSessionIDsByRawSuffixUsesExactFirstSuffixQuery(t *testing.T) {
 	require.NotEmpty(t, state.queries)
 	query := strings.ToLower(state.queries[len(state.queries)-1])
 
-	assert.Contains(t, query, "right(id, length($1) + 1) = ':' || $1")
+	assert.Contains(t, query,
+		"right(id, length('project-hash:session-uuid') + 1) = ':' || 'project-hash:session-uuid'")
 	assert.Contains(t, query, "deleted_at is null")
-	assert.Contains(t, query, "order by (id = $1) desc")
+	assert.Contains(t, query, "order by (id = 'project-hash:session-uuid') desc")
 	assert.Contains(t, query, "coalesce(ended_at, started_at, created_at) desc")
 }

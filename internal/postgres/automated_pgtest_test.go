@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -81,7 +83,9 @@ func TestBackfillIsAutomatedPGMatchingHashUsesBoundedEvidence(t *testing.T) {
 	)
 	require.NoError(t, err, "stamp matching classifier hash")
 
-	progress, err := backfillIsAutomatedPGWithProgress(ctx, ps.DB())
+	progress, err := backfillIsAutomatedPGWithProgress(
+		ctx, bun.NewDB(ps.DB(), pgdialect.New()),
+	)
 	require.NoError(t, err, "bounded matching-hash audit")
 	assert.Equal(t, len(rows), progress.RowsPrefetched)
 	assert.Equal(t, 3, progress.RowsFullText,
@@ -218,7 +222,9 @@ func TestBackfillIsAutomatedPGRerunsOnHashChange(t *testing.T) {
 	// Sync.EnsureSchema's memo so the second pass actually
 	// executes). The matching row should flip to true.
 	db.SetUserAutomationPrefixes([]string{"You are analyzing an essay"})
-	require.NoError(t, backfillIsAutomatedPG(ctx, ps.DB()),
+	require.NoError(t, backfillIsAutomatedPG(
+		ctx, bun.NewDB(ps.DB(), pgdialect.New()),
+	),
 		"backfill after prefix add")
 
 	var got bool

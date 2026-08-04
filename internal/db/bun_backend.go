@@ -61,7 +61,18 @@ type BackendCapabilities struct {
 	HybridLexical    HybridLexicalCapability
 	SearchDialect    BunSearchDialect
 	Writes           map[WriteOperation]bool
+	ArchiveWrites    ArchiveWriteAdapter
 	SessionMutations SessionMutationAdapter
+}
+
+// ArchiveWriteAdapter owns SQLite's archive-only ingestion behavior while the
+// public db.Store entry points remain implemented once on BunStore.
+type ArchiveWriteAdapter interface {
+	UpsertSession(Session) error
+	ReplaceSessionMessages(string, []Message) error
+	WriteSessionBatchAtomic(
+		[]SessionBatchWrite, ...func() error,
+	) (SessionBatchResult, error)
 }
 
 // SessionMutationAdapter owns engine-specific timestamp expressions and
@@ -113,6 +124,7 @@ func (b *sqliteBunBackend) Capabilities() BackendCapabilities {
 			b.store.getVectorSearcher,
 			func() error { return ErrSemanticUnavailable },
 		),
+		ArchiveWrites:    sqliteArchiveWriteAdapter{store: b.store},
 		SessionMutations: sqliteSessionMutationAdapter{},
 		Writes: map[WriteOperation]bool{
 			WriteArchive:           true,
@@ -133,6 +145,26 @@ func (*sqliteBunBackend) BunTableExists(
 		SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?
 	)`, table).Scan(ctx, &exists)
 	return exists, err
+}
+
+type sqliteArchiveWriteAdapter struct {
+	store *DB
+}
+
+func (a sqliteArchiveWriteAdapter) UpsertSession(session Session) error {
+	return a.store.upsertArchiveSession(session)
+}
+
+func (a sqliteArchiveWriteAdapter) ReplaceSessionMessages(
+	sessionID string, messages []Message,
+) error {
+	return a.store.replaceArchiveSessionMessages(sessionID, messages)
+}
+
+func (a sqliteArchiveWriteAdapter) WriteSessionBatchAtomic(
+	writes []SessionBatchWrite, beforeCommit ...func() error,
+) (SessionBatchResult, error) {
+	return a.store.writeArchiveSessionBatchAtomic(writes, beforeCommit...)
 }
 
 type sqliteSessionMutationAdapter struct{}

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/db/bunmodel"
 	"go.kenn.io/agentsview/internal/export"
@@ -375,7 +376,7 @@ func (s *Sync) PushWithOptions(
 			)
 		}
 		reconciledScopeMoveIDs, scopeErr = reconcilePGProjectScopeMoves(
-			ctx, s.pg, markerID, scopeMoveCandidates,
+			ctx, s.bunDB(), markerID, scopeMoveCandidates,
 			s.projects, s.excludeProjects,
 		)
 		if scopeErr != nil {
@@ -432,7 +433,7 @@ func (s *Sync) PushWithOptions(
 	}
 
 	if err := purgePGExcludedPushSessions(
-		ctx, s.pg, sessionByID,
+		ctx, s.bunDB(), sessionByID,
 	); err != nil {
 		return result, err
 	}
@@ -862,7 +863,7 @@ func (s *Sync) syncProjectIdentityObservations(
 			"", s.projects, s.excludeProjects,
 		)
 		if err := prepareFilteredProjectIdentityPublication(
-			ctx, tx.Tx, archiveID, databaseGeneration, publicationScope,
+			ctx, tx, archiveID, databaseGeneration, publicationScope,
 			fullPublication, adoptLegacyFilteredScope,
 			s.projects, s.excludeProjects,
 			delta.ObservationDeletes, delta.SnapshotDeletes, refreshSessionIDs,
@@ -874,19 +875,19 @@ func (s *Sync) syncProjectIdentityObservations(
 		// stale out-of-scope identity without loading or transmitting
 		// excluded-project tombstone metadata.
 		if err := deleteProjectIdentityArchive(
-			ctx, tx.Tx, archiveID,
+			ctx, tx, archiveID,
 		); err != nil {
 			return err
 		}
 	} else if err := deleteProjectIdentityDelta(
-		ctx, tx.Tx, archiveID, databaseGeneration,
+		ctx, tx, archiveID, databaseGeneration,
 		delta.ObservationDeletes, delta.SnapshotDeletes,
 	); err != nil {
 		return err
 	}
 	if !s.isFiltered() {
 		if err := deleteSessionProjectIdentitySnapshotsBySessionID(
-			ctx, tx.Tx, archiveID, refreshSessionIDs,
+			ctx, tx, archiveID, refreshSessionIDs,
 		); err != nil {
 			return err
 		}
@@ -897,12 +898,12 @@ func (s *Sync) syncProjectIdentityObservations(
 		observations[i] = export.SanitizeStoredProjectIdentityObservation(obs)
 	}
 	if err := syncProjectIdentityObservationsBatch(
-		ctx, tx.Tx, tx, archiveID, archiveSalt, observations,
+		ctx, tx, tx, archiveID, archiveSalt, observations,
 	); err != nil {
 		return fmt.Errorf("syncing project identity observations: %w", err)
 	}
 	if err := ownProjectIdentityObservations(
-		ctx, tx.Tx, archiveID, publicationScope, observations,
+		ctx, tx, archiveID, publicationScope, observations,
 	); err != nil {
 		return err
 	}
@@ -915,7 +916,7 @@ func (s *Sync) syncProjectIdentityObservations(
 		return fmt.Errorf("syncing session project identity snapshots: %w", err)
 	}
 	if err := ownSessionProjectIdentitySnapshots(
-		ctx, tx.Tx, archiveID, databaseGeneration, publicationScope, snapshots,
+		ctx, tx, archiveID, databaseGeneration, publicationScope, snapshots,
 	); err != nil {
 		return err
 	}
@@ -1036,8 +1037,8 @@ func (s *Sync) pgPushMarkerMetadataValue(
 	ctx context.Context, key string,
 ) (string, bool, error) {
 	var value string
-	err := s.pg.QueryRowContext(ctx,
-		`SELECT value FROM sync_metadata WHERE key = $1`,
+	err := s.bunDB().QueryRowContext(ctx,
+		`SELECT value FROM sync_metadata WHERE key = ?0`,
 		key,
 	).Scan(&value)
 	if err != nil {
@@ -1056,8 +1057,8 @@ func (s *Sync) pgPushMarkerMachineAliases(
 	ctx context.Context, key string,
 ) ([]string, error) {
 	var raw string
-	err := s.pg.QueryRowContext(ctx,
-		`SELECT value FROM sync_metadata WHERE key = $1`,
+	err := s.bunDB().QueryRowContext(ctx,
+		`SELECT value FROM sync_metadata WHERE key = ?0`,
 		key,
 	).Scan(&raw)
 	if err != nil {
@@ -1090,7 +1091,7 @@ func (s *Sync) writePushMarker(
 	markerID, previousMarkerMachine string,
 	previousAliases []string,
 ) error {
-	tx, err := s.pg.BeginTx(ctx, nil)
+	tx, err := s.bunDB().BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin push marker tx: %w", err)
 	}
@@ -1104,7 +1105,7 @@ func (s *Sync) writePushMarker(
 	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO sync_metadata (key, value)
-		 VALUES ($1, $2)
+		 VALUES (?0, ?1)
 		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
 		s.pushMarkerMetadataKey(pushMarkerKeyPrefix, markerID), s.machine,
 	); err != nil {
@@ -1113,7 +1114,7 @@ func (s *Sync) writePushMarker(
 	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO sync_metadata (key, value)
-		 VALUES ($1, $2)
+		 VALUES (?0, ?1)
 		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
 		s.pushMarkerMetadataKey(pushMarkerMachineAliasesKeyPrefix, markerID),
 		string(aliasesJSON),
@@ -1230,7 +1231,7 @@ func (s *Sync) pushBatch(
 			"begin pg tx: %w", err,
 		)
 	}
-	tx := bunTx.Tx
+	tx := bunTx
 
 	n := 0
 	msgs := 0
@@ -1275,7 +1276,7 @@ func (s *Sync) pushBatch(
 		}
 
 		msgCount, err := s.replacePGReplicationSnapshot(
-			ctx, tx, bunTx, snapshot, full,
+			ctx, tx, snapshot, full,
 		)
 		if err != nil {
 			log.Printf(
@@ -1308,7 +1309,7 @@ func (s *Sync) pushBatch(
 			if _, err := tx.ExecContext(ctx, `
 				UPDATE sessions
 				SET updated_at = NOW()
-				WHERE id = $1`,
+				WHERE id = ?0`,
 				sess.ID,
 			); err != nil {
 				log.Printf(
@@ -1354,7 +1355,7 @@ func postgresSessionReplicationFingerprint(
 }
 
 func (s *Sync) replacePGReplicationSnapshot(
-	ctx context.Context, tx *sql.Tx, bunTx bun.IDB,
+	ctx context.Context, tx bun.Tx,
 	snapshot db.SessionReplicationSnapshot, force bool,
 ) (int, error) {
 	messageRows, callRows, resultRows, err := db.CanonicalMessageRows(snapshot.Messages)
@@ -1367,7 +1368,7 @@ func (s *Sync) replacePGReplicationSnapshot(
 	}
 	if !force {
 		matches, err := db.CanonicalSessionDependentRowsMatch(
-			ctx, bunTx, snapshot.Session.ID, messageRows, callRows, resultRows, usageRows,
+			ctx, tx, snapshot.Session.ID, messageRows, callRows, resultRows, usageRows,
 		)
 		if err != nil {
 			return 0, err
@@ -1380,17 +1381,17 @@ func (s *Sync) replacePGReplicationSnapshot(
 		}
 	}
 	if err := db.ReplaceMessageRows(
-		ctx, bunTx, snapshot.Session.ID, messageRows,
+		ctx, tx, snapshot.Session.ID, messageRows,
 	); err != nil {
 		return 0, err
 	}
 	if err := db.ReplaceToolRows(
-		ctx, bunTx, snapshot.Session.ID, callRows, resultRows,
+		ctx, tx, snapshot.Session.ID, callRows, resultRows,
 	); err != nil {
 		return 0, err
 	}
 	if err := db.ReplaceUsageEventRows(
-		ctx, bunTx, snapshot.Session.ID, usageRows,
+		ctx, tx, snapshot.Session.ID, usageRows,
 	); err != nil {
 		return 0, err
 	}
@@ -1485,7 +1486,7 @@ func clearPushState(local syncStateStore) error {
 func (s *Sync) retireSourceArchiveMetadata(
 	ctx context.Context, archiveID string,
 ) error {
-	tx, err := s.pg.BeginTx(ctx, nil)
+	tx, err := s.bunDB().BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning old archive metadata retirement: %w", err)
 	}
@@ -1514,7 +1515,7 @@ func (s *Sync) retireSourceArchiveMetadata(
 			"source_worktree_project_mappings",
 		} {
 			if _, err := tx.ExecContext(ctx,
-				"DELETE FROM "+table+" WHERE source_archive_id = $1",
+				"DELETE FROM "+table+" WHERE source_archive_id = ?0",
 				archiveID,
 			); err != nil {
 				return fmt.Errorf(
@@ -1535,9 +1536,9 @@ func (s *Sync) finalizeSourceArchiveRepair(
 	previousArchiveID string,
 ) error {
 	if previousArchiveID != "" {
-		if _, err := s.pg.ExecContext(ctx, `
+		if _, err := s.bunDB().ExecContext(ctx, `
 			DELETE FROM source_archives archive
-			WHERE archive.source_archive_id = $1
+			WHERE archive.source_archive_id = ?0
 			  AND NOT EXISTS (
 				SELECT 1 FROM sessions
 				WHERE source_archive_id = archive.source_archive_id
@@ -1828,7 +1829,7 @@ func mapKeys(m map[string]db.Session) []string {
 }
 
 func readPGExcludedSessionIDs(
-	ctx context.Context, pg pgSessionQueryer, ids []string,
+	ctx context.Context, pg bun.IDB, ids []string,
 ) (map[string]struct{}, error) {
 	ids = uniqueNonEmptyStrings(ids)
 	if len(ids) == 0 {
@@ -1863,11 +1864,11 @@ func readPGExcludedSessionIDs(
 
 func pgExcludedSessionIDsQuery(ids []string) (string, []any) {
 	return `SELECT id FROM excluded_sessions
-			 WHERE id = ANY($1)`, []any{ids}
+			 WHERE id = ANY(?0)`, []any{pgdialect.Array(ids)}
 }
 
 func purgePGExcludedPushSessions(
-	ctx context.Context, pg *sql.DB, sessionByID map[string]db.Session,
+	ctx context.Context, pg bun.IDB, sessionByID map[string]db.Session,
 ) error {
 	tombstoneIDsBySession := make(map[string][]string, len(sessionByID))
 	candidateIDs := []string{}
@@ -1904,7 +1905,7 @@ func purgePGExcludedPushSessions(
 
 func reconcilePGProjectScopeMoves(
 	ctx context.Context,
-	pg *sql.DB,
+	pg bun.IDB,
 	ownerMarker string,
 	changedSessions []db.Session,
 	projects []string,
@@ -1922,8 +1923,8 @@ func reconcilePGProjectScopeMoves(
 	rows, err := pg.QueryContext(ctx, `
 		SELECT id, project
 		FROM sessions
-		WHERE owner_marker = $1 AND id = ANY($2)`,
-		ownerMarker, changedIDs)
+		WHERE owner_marker = ?0 AND id = ANY(?1)`,
+		ownerMarker, pgdialect.Array(changedIDs))
 	if err != nil {
 		return nil, fmt.Errorf(
 			"listing changed pg sessions for scope reconciliation: %w", err,
@@ -1955,7 +1956,8 @@ func reconcilePGProjectScopeMoves(
 	sort.Strings(staleIDs)
 	if _, err := pg.ExecContext(ctx, `
 		DELETE FROM sessions
-		WHERE owner_marker = $1 AND id = ANY($2)`, ownerMarker, staleIDs); err != nil {
+		WHERE owner_marker = ?0 AND id = ANY(?1)`,
+		ownerMarker, pgdialect.Array(staleIDs)); err != nil {
 		return nil, fmt.Errorf("deleting pg sessions that moved out of scope: %w", err)
 	}
 	return staleIDs, nil
@@ -1996,23 +1998,15 @@ func hasPGExcludedSessionID(
 	return false
 }
 
-type pgSessionQueryer interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}
-
-type pgSessionExecer interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}
-
 func deletePGExcludedSessionRows(
-	ctx context.Context, pg pgSessionExecer, ids []string,
+	ctx context.Context, pg bun.IDB, ids []string,
 ) error {
 	if len(ids) == 0 {
 		return nil
 	}
 	if _, err := pg.ExecContext(ctx,
-		`DELETE FROM sessions WHERE id = ANY($1)`,
-		ids,
+		`DELETE FROM sessions WHERE id = ANY(?0)`,
+		pgdialect.Array(ids),
 	); err != nil {
 		return fmt.Errorf("deleting pg excluded session rows: %w", err)
 	}
@@ -2020,20 +2014,20 @@ func deletePGExcludedSessionRows(
 }
 
 func deletePGSessionIfExcluded(
-	ctx context.Context, tx *sql.Tx, sess db.Session,
+	ctx context.Context, store bun.IDB, sess db.Session,
 ) (bool, error) {
 	ids := pgSessionTombstoneIDs(sess)
-	excluded, err := readPGExcludedSessionIDs(ctx, tx, ids)
+	excluded, err := readPGExcludedSessionIDs(ctx, store, ids)
 	if err != nil {
 		return false, err
 	}
 	if len(excluded) == 0 {
 		return false, nil
 	}
-	if err := insertPGExcludedSessionIDs(ctx, tx, ids); err != nil {
+	if err := insertPGExcludedSessionIDs(ctx, store, ids); err != nil {
 		return false, err
 	}
-	if err := deletePGExcludedSessionRows(ctx, tx, ids); err != nil {
+	if err := deletePGExcludedSessionRows(ctx, store, ids); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -2080,15 +2074,14 @@ func (s *Sync) pushSession(
 	if err := validatePGSessionColumnOwnerships(); err != nil {
 		return err
 	}
-	bunTx, ok := store.(bun.Tx)
+	_, ok := store.(bun.Tx)
 	if !ok {
 		return fmt.Errorf("pg session upsert requires a Bun transaction")
 	}
-	tx := bunTx.Tx
 	if err := s.lockSessionOwnership(ctx, store, sess.ID); err != nil {
 		return err
 	}
-	if excluded, err := deletePGSessionIfExcluded(ctx, tx, sess); err != nil {
+	if excluded, err := deletePGSessionIfExcluded(ctx, store, sess); err != nil {
 		return err
 	} else if excluded {
 		return errSessionExcluded
@@ -2170,12 +2163,12 @@ func (s *Sync) pushSession(
 			s.afterSessionRowWrite()
 		}
 	}
-	if excluded, err := deletePGSessionIfExcluded(ctx, tx, sess); err != nil {
+	if excluded, err := deletePGSessionIfExcluded(ctx, store, sess); err != nil {
 		return err
 	} else if excluded {
 		return errSessionExcluded
 	}
-	return replacePGSessionAliases(ctx, tx, sess)
+	return replacePGSessionAliases(ctx, store, sess)
 }
 
 func (s *Sync) lockSessionOwnership(
@@ -2239,13 +2232,13 @@ func nullTimeString(value sql.NullTime) *string {
 }
 
 func reconcilePinnedMessages(
-	ctx context.Context, tx *sql.Tx, sessionID string,
+	ctx context.Context, tx bun.IDB, sessionID string,
 ) error {
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE pinned_messages p
 		SET source_uuid = m.source_uuid
 		FROM messages m
-		WHERE p.session_id = $1
+		WHERE p.session_id = ?0
 			AND m.session_id = p.session_id
 			AND m.ordinal = p.message_id
 			AND p.source_uuid = ''
@@ -2272,7 +2265,7 @@ func reconcilePinnedMessages(
 			JOIN messages m
 				ON m.session_id = p.session_id
 				AND m.source_uuid = p.source_uuid
-			WHERE p.session_id = $1
+			WHERE p.session_id = ?0
 				AND p.source_uuid <> ''
 			ORDER BY p.id,
 				CASE WHEN m.ordinal = p.message_id THEN 0 ELSE 1 END,
@@ -2306,7 +2299,7 @@ func reconcilePinnedMessages(
 			JOIN messages m
 				ON m.session_id = p.session_id
 				AND m.source_uuid = p.source_uuid
-			WHERE p.session_id = $1
+			WHERE p.session_id = ?0
 				AND p.source_uuid <> ''
 			ORDER BY p.id,
 				CASE WHEN m.ordinal = p.message_id THEN 0 ELSE 1 END,
@@ -2325,7 +2318,7 @@ func reconcilePinnedMessages(
 		)
 		DELETE FROM pinned_messages p
 		USING ranked r
-		WHERE p.session_id = $1
+		WHERE p.session_id = ?0
 			AND r.target_rank = 1
 			AND p.message_id = r.target_ordinal
 			AND p.id <> r.id`,
@@ -2345,7 +2338,7 @@ func reconcilePinnedMessages(
 			JOIN messages m
 				ON m.session_id = p.session_id
 				AND m.source_uuid = p.source_uuid
-			WHERE p.session_id = $1
+			WHERE p.session_id = ?0
 				AND p.source_uuid <> ''
 			ORDER BY p.id,
 				CASE WHEN m.ordinal = p.message_id THEN 0 ELSE 1 END,
@@ -2385,7 +2378,7 @@ func reconcilePinnedMessages(
 	// non-rank-1 duplicate left at the sentinel ordinal by step 2.
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM pinned_messages p
-		WHERE p.session_id = $1
+		WHERE p.session_id = ?0
 			AND (
 				(
 					p.source_uuid <> ''
