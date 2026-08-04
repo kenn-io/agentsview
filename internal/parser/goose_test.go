@@ -328,7 +328,7 @@ func TestGooseChangedPathWorkStaysProportionalToNewRows(t *testing.T) {
 	for _, sessionCount := range []int{2, 200} {
 		t.Run(strconv.Itoa(sessionCount), func(t *testing.T) {
 			fixture := newGooseTestFixture(t)
-			for i := 0; i < sessionCount; i++ {
+			for i := range sessionCount {
 				id := fmt.Sprintf("session-%03d", i)
 				fixture.insertSession(t, id, id, "user", "")
 				fixture.insertMessage(t, id, "user", `[{"type":"text","text":"seed"}]`, 1_700_000_000)
