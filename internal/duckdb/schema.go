@@ -19,10 +19,9 @@ import (
 // createSchema. The mirror schema is create-only: there are no in-place
 // migrations between versions. A version mismatch means the mirror file
 // must be rebuilt with 'agentsview duckdb push --full'. v12 adds the 1h
-// cache-write rate columns on top of v11's raw GenAI pricing document. v13
-// adds row-level provider identity to messages and usage events. v14 adds
-// reasoning effort to messages.
-const SchemaVersion = 14
+// cache-write rate columns, v13 adds row-level provider identity, and v14
+// adds reasoning effort. v15 adds the canonical Bun physical keys.
+const SchemaVersion = 15
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 

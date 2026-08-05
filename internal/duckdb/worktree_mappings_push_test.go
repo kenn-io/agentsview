@@ -5,6 +5,7 @@ package duckdb
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,7 +19,7 @@ func TestDuckPushReplicatesWorktreeMappings(t *testing.T) {
 	ctx := context.Background()
 	local, path := newPushFixture(t, 1)
 
-	_, err := local.CreateWorktreeProjectMapping(ctx,
+	created, err := local.CreateWorktreeProjectMapping(ctx,
 		db.WorktreeProjectMapping{
 			Machine: "workstation", PathPrefix: "/work/repos/sample",
 			Layout: db.WorktreeMappingLayoutExplicit, Project: "sample",
@@ -35,12 +36,24 @@ func TestDuckPushReplicatesWorktreeMappings(t *testing.T) {
 	require.NoError(t, err)
 	defer conn.Close()
 	var project string
+	var createdAt, updatedAt time.Time
 	require.NoError(t, conn.QueryRowContext(ctx, `
-		SELECT project FROM source_worktree_project_mappings
+		SELECT project, created_at, updated_at
+		FROM source_worktree_project_mappings
 		WHERE source_archive_id = ? AND machine = ? AND path_prefix = ?`,
 		archiveID, "workstation", "/work/repos/sample",
-	).Scan(&project), "read back mirrored mapping")
+	).Scan(&project, &createdAt, &updatedAt), "read back mirrored mapping")
 	assert.Equal(t, "sample", project)
+	wantCreatedAt, err := time.Parse(time.RFC3339Nano, created.CreatedAt)
+	require.NoError(t, err)
+	wantUpdatedAt, err := time.Parse(time.RFC3339Nano, created.UpdatedAt)
+	require.NoError(t, err)
+	assert.True(t, wantCreatedAt.Equal(createdAt),
+		"created_at must retain the archive value: want %s, got %s",
+		wantCreatedAt, createdAt)
+	assert.True(t, wantUpdatedAt.Equal(updatedAt),
+		"updated_at must retain the archive value: want %s, got %s",
+		wantUpdatedAt, updatedAt)
 }
 
 func TestDuckFilteredMappingPublicationOmitsOutOfScopeMetadata(t *testing.T) {
@@ -149,16 +162,16 @@ func TestDuckFullPublicationClearsOnlyOwnArchive(t *testing.T) {
 	_, err = conn.ExecContext(ctx, `
 		INSERT INTO source_worktree_project_mappings
 		(source_archive_id, machine, path_prefix, layout, project,
-		 original_project, enabled, updated_at)
+		 original_project, enabled, created_at, updated_at)
 		VALUES ('foreign-archive', 'workstation', '/work/stale',
-			'explicit', 'other', '', TRUE, current_timestamp)`)
+			'explicit', 'other', '', TRUE, current_timestamp, current_timestamp)`)
 	require.NoError(t, err, "seed foreign archive mapping")
 	_, err = conn.ExecContext(ctx, `
 		INSERT INTO source_worktree_project_mappings
 		(source_archive_id, machine, path_prefix, layout, project,
-		 original_project, enabled, updated_at)
+		 original_project, enabled, created_at, updated_at)
 		VALUES (?, 'workstation', '/work/stale', 'explicit', 'stale',
-			'', TRUE, current_timestamp)`, archiveID)
+			'', TRUE, current_timestamp, current_timestamp)`, archiveID)
 	require.NoError(t, err, "seed own stale mapping")
 	// Zero the mirror-resident cursor so the next incremental push runs a
 	// full mapping publication against a mirror that already holds rows.
@@ -229,9 +242,9 @@ func TestDuckMappingDeleteTombstones(t *testing.T) {
 	_, err = conn.ExecContext(ctx, `
 		INSERT INTO source_worktree_project_mappings
 		(source_archive_id, machine, path_prefix, layout, project,
-		 original_project, enabled, updated_at)
+		 original_project, enabled, created_at, updated_at)
 		VALUES (?, 'workstation', '/work/sentinel', 'explicit', 'sentinel',
-			'', TRUE, current_timestamp)`, archiveID)
+			'', TRUE, current_timestamp, current_timestamp)`, archiveID)
 	require.NoError(t, err, "seed same-archive sentinel row")
 	require.NoError(t, conn.Close())
 

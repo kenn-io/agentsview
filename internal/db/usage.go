@@ -1954,9 +1954,6 @@ func (db *DB) loadPricingMapFrom(
 	fallback := fallbackRateMap()
 	out := make(map[string]export.ModelRates)
 	for _, p := range prices {
-		if strings.HasPrefix(p.ModelPattern, "_") {
-			continue
-		}
 		rates := modelPricingRates(p)
 		rates.Source = modelPricingSource(p, fallback)
 		out[p.ModelPattern] = rates

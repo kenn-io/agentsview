@@ -1212,6 +1212,13 @@ CREATE TABLE IF NOT EXISTS genai_pricing (
         DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
+CREATE TABLE IF NOT EXISTS pricing_metadata (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
 -- Git aggregation TTL cache: memoizes `git log --numstat` and
 -- `gh pr list` results per (repo, author, window) tuple so
 -- repeated `agentsview stats` invocations don't re-shell out.

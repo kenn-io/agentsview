@@ -1778,6 +1778,7 @@ var readOnlyRequiredTables = []string{
 	"model_pricing",
 	"model_pricing_bands",
 	"genai_pricing",
+	"pricing_metadata",
 	"source_archives",
 	"source_project_identity_observations",
 	"source_session_project_identity_snapshots",

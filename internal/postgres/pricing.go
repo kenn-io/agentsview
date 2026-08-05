@@ -488,13 +488,8 @@ func pgPricingUpsertStatement(
 		cache_creation_1h_microdollars_per_mtok = EXCLUDED.cache_creation_1h_microdollars_per_mtok,
 		cache_read_microdollars_per_mtok = EXCLUDED.cache_read_microdollars_per_mtok,
 		updated_at = CASE
-			WHEN model_pricing.updated_at = '' THEN EXCLUDED.updated_at
-			WHEN model_pricing.updated_at::timestamptz >=
-				EXCLUDED.updated_at::timestamptz
-			THEN to_char(
-				(model_pricing.updated_at::timestamptz + INTERVAL '1 microsecond')
-					AT TIME ZONE 'UTC',
-				'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+			WHEN model_pricing.updated_at >= EXCLUDED.updated_at
+			THEN model_pricing.updated_at + INTERVAL '1 microsecond'
 			ELSE EXCLUDED.updated_at
 		END
 	WHERE model_pricing.input_microdollars_per_mtok IS DISTINCT FROM
@@ -598,12 +593,8 @@ func pgPricingTouchStatement(
 	var b strings.Builder
 	b.WriteString(`UPDATE model_pricing AS p
 		SET updated_at = CASE
-			WHEN p.updated_at = '' THEN v.updated_at
-			WHEN p.updated_at::timestamptz >= v.updated_at::timestamptz
-			THEN to_char(
-				(p.updated_at::timestamptz + INTERVAL '1 microsecond')
-					AT TIME ZONE 'UTC',
-				'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+			WHEN p.updated_at >= v.updated_at
+			THEN p.updated_at + INTERVAL '1 microsecond'
 			ELSE v.updated_at
 		END
 		FROM (VALUES `)
@@ -613,7 +604,7 @@ func pgPricingTouchStatement(
 			b.WriteString(", ")
 		}
 		base := i*2 + 1
-		fmt.Fprintf(&b, "($%d::text, $%d::text)", base, base+1)
+		fmt.Fprintf(&b, "($%d::text, $%d::timestamptz)", base, base+1)
 		updatedAt := price.UpdatedAt
 		if updatedAt == "" {
 			updatedAt = defaultUpdatedAt

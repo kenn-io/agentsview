@@ -74,27 +74,27 @@ func (t Timestamp) Value() (driver.Value, error) {
 type ModelPricing struct {
 	bun.BaseModel `bun:"table:model_pricing"`
 
-	ModelPattern                       string `bun:"model_pattern,pk"`
-	InputMicrodollarsPerMTok           int64  `bun:"input_microdollars_per_mtok,notnull,default:0"`
-	OutputMicrodollarsPerMTok          int64  `bun:"output_microdollars_per_mtok,notnull,default:0"`
-	CacheCreationMicrodollarsPerMTok   int64  `bun:"cache_creation_microdollars_per_mtok,notnull,default:0"`
-	CacheCreation1hMicrodollarsPerMTok int64  `bun:"cache_creation_1h_microdollars_per_mtok,notnull,default:0"`
-	CacheReadMicrodollarsPerMTok       int64  `bun:"cache_read_microdollars_per_mtok,notnull,default:0"`
-	UpdatedAt                          string `bun:"updated_at,notnull,default:''"`
+	ModelPattern                       string    `bun:"model_pattern,pk"`
+	InputMicrodollarsPerMTok           int64     `bun:"input_microdollars_per_mtok,notnull,default:0"`
+	OutputMicrodollarsPerMTok          int64     `bun:"output_microdollars_per_mtok,notnull,default:0"`
+	CacheCreationMicrodollarsPerMTok   int64     `bun:"cache_creation_microdollars_per_mtok,notnull,default:0"`
+	CacheCreation1hMicrodollarsPerMTok int64     `bun:"cache_creation_1h_microdollars_per_mtok,notnull,default:0"`
+	CacheReadMicrodollarsPerMTok       int64     `bun:"cache_read_microdollars_per_mtok,notnull,default:0"`
+	UpdatedAt                          Timestamp `bun:"updated_at,type:TIMESTAMPTZ,notnull"`
 }
 
 // ModelPricingBand overrides pricing above one input-token threshold.
 type ModelPricingBand struct {
 	bun.BaseModel `bun:"table:model_pricing_bands"`
 
-	ModelPattern                       string `bun:"model_pattern,pk"`
-	AboveInputTokens                   int64  `bun:"above_input_tokens,pk"`
-	InputMicrodollarsPerMTok           int64  `bun:"input_microdollars_per_mtok,notnull,default:0"`
-	OutputMicrodollarsPerMTok          int64  `bun:"output_microdollars_per_mtok,notnull,default:0"`
-	CacheCreationMicrodollarsPerMTok   int64  `bun:"cache_creation_microdollars_per_mtok,notnull,default:0"`
-	CacheCreation1hMicrodollarsPerMTok int64  `bun:"cache_creation_1h_microdollars_per_mtok,notnull,default:0"`
-	CacheReadMicrodollarsPerMTok       int64  `bun:"cache_read_microdollars_per_mtok,notnull,default:0"`
-	UpdatedAt                          string `bun:"updated_at,notnull,default:''"`
+	ModelPattern                       string    `bun:"model_pattern,pk"`
+	AboveInputTokens                   int64     `bun:"above_input_tokens,pk"`
+	InputMicrodollarsPerMTok           int64     `bun:"input_microdollars_per_mtok,notnull,default:0"`
+	OutputMicrodollarsPerMTok          int64     `bun:"output_microdollars_per_mtok,notnull,default:0"`
+	CacheCreationMicrodollarsPerMTok   int64     `bun:"cache_creation_microdollars_per_mtok,notnull,default:0"`
+	CacheCreation1hMicrodollarsPerMTok int64     `bun:"cache_creation_1h_microdollars_per_mtok,notnull,default:0"`
+	CacheReadMicrodollarsPerMTok       int64     `bun:"cache_read_microdollars_per_mtok,notnull,default:0"`
+	UpdatedAt                          Timestamp `bun:"updated_at,type:TIMESTAMPTZ,notnull"`
 }
 
 // GenAIPricing stores the intact upstream GenAI Prices document and its
@@ -102,10 +102,10 @@ type ModelPricingBand struct {
 type GenAIPricing struct {
 	bun.BaseModel `bun:"table:genai_pricing"`
 
-	Singleton int16     `bun:"singleton,pk"`
-	Version   string    `bun:"version,notnull"`
-	SourceRef string    `bun:"source_ref,notnull,default:''"`
-	Source    string    `bun:"source,notnull"`
-	DataJSON  []byte    `bun:"data_json,type:BLOB,notnull"`
-	UpdatedAt Timestamp `bun:"updated_at,type:TIMESTAMPTZ,notnull"`
+	Singleton int16  `bun:"singleton,pk"`
+	Version   string `bun:"version,notnull"`
+	SourceRef string `bun:"source_ref,notnull,default:''"`
+	Source    string `bun:"source,notnull"`
+	DataJSON  []byte `bun:"data_json,notnull"`
+	UpdatedAt string `bun:"updated_at,type:TEXT,notnull,default:''"`
 }

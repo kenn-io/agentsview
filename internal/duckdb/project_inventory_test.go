@@ -379,9 +379,10 @@ func TestDuckProjectInventoryCrossArchiveIsolation(t *testing.T) {
 	_, err := syncer.DB().ExecContext(ctx, `
 		INSERT INTO source_worktree_project_mappings
 		(source_archive_id, machine, path_prefix, layout, project,
-		 original_project, enabled, updated_at)
+		 original_project, enabled, created_at, updated_at)
 		VALUES (?, ?, '/repos/shared', 'explicit', 'proj-b',
-		 '', TRUE, current_timestamp)`, archiveB, duckPushMachine)
+			'', TRUE, current_timestamp, current_timestamp)`,
+		archiveB, duckPushMachine)
 	require.NoError(t, err, "seed archive B mapping")
 	_, err = syncer.DB().ExecContext(ctx, `
 		INSERT INTO sessions

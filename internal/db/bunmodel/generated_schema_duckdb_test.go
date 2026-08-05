@@ -5,6 +5,7 @@ package bunmodel
 import (
 	"database/sql"
 	"testing"
+	"time"
 
 	_ "github.com/duckdb/duckdb-go/v2"
 	"github.com/stretchr/testify/assert"
@@ -29,6 +30,45 @@ func TestCommonTablesGeneratedSchemaExecutesInDuckDB(t *testing.T) {
 		require.NoError(t, err, table.Name)
 		require.NoError(t, createRegisteredIndexes(t.Context(), store, table))
 	}
+}
+
+func TestCommonTablesDuckDBOmitsDynamicTimestampDefaults(t *testing.T) {
+	raw, err := sql.Open("duckdb", "")
+	require.NoError(t, err)
+	raw.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	store := bun.NewDB(raw, bundialect.New())
+
+	_, err = store.NewCreateTable().
+		Model((*SourceWorktreeProjectMapping)(nil)).Exec(t.Context())
+	require.NoError(t, err)
+
+	for _, column := range []string{"created_at", "updated_at"} {
+		var defaultExpression *string
+		err := raw.QueryRowContext(t.Context(), `
+			SELECT column_default
+			FROM information_schema.columns
+			WHERE table_schema = 'main'
+			  AND table_name = 'source_worktree_project_mappings'
+			  AND column_name = ?`, column).Scan(&defaultExpression)
+		require.NoError(t, err, column)
+		assert.Nil(t, defaultExpression, column)
+	}
+
+	want := time.Date(2026, 8, 5, 14, 30, 0, 123_000_000, time.UTC)
+	_, err = raw.ExecContext(t.Context(), `
+		INSERT INTO source_worktree_project_mappings (
+			source_archive_id, machine, path_prefix, created_at, updated_at
+		) VALUES ('archive', 'machine', '/repo', ?, ?)`, want, want)
+	require.NoError(t, err)
+	var createdAt, updatedAt time.Time
+	require.NoError(t, raw.QueryRowContext(t.Context(), `
+		SELECT created_at, updated_at
+		FROM source_worktree_project_mappings
+		WHERE source_archive_id = 'archive'`,
+	).Scan(&createdAt, &updatedAt))
+	assert.Equal(t, want, createdAt)
+	assert.Equal(t, want, updatedAt)
 }
 
 func TestCommonTablesDuckDBAllowsSourceOptionalIDsAndDeduplicatesNonEmptyKeys(t *testing.T) {
@@ -120,7 +160,7 @@ func TestCommonTablesDuckDBPreservesNativeBooleansJSONAndOptionalMessageID(t *te
 	assert.JSONEq(t, `{"output_tokens":7}`, string(got.TokenUsage))
 }
 
-func TestCommonTablesDuckDBAcceptsTextPricingMetadataVersions(t *testing.T) {
+func TestCommonTablesDuckDBRejectsNonTimestampPricingValues(t *testing.T) {
 	raw, err := sql.Open("duckdb", "")
 	require.NoError(t, err)
 	raw.SetMaxOpenConns(1)
@@ -136,11 +176,5 @@ func TestCommonTablesDuckDBAcceptsTextPricingMetadataVersions(t *testing.T) {
 			model_pattern, input_microdollars_per_mtok,
 			output_microdollars_per_mtok, updated_at
 		) VALUES ('__pricing_seed_version__', 0, 0, '2')`)
-	require.NoError(t, err)
-	var updatedAt string
-	require.NoError(t, raw.QueryRowContext(t.Context(), `
-		SELECT updated_at FROM model_pricing
-		WHERE model_pattern = '__pricing_seed_version__'`,
-	).Scan(&updatedAt))
-	assert.Equal(t, "2", updatedAt)
+	require.Error(t, err)
 }
