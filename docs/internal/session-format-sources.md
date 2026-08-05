@@ -214,8 +214,8 @@ Grok section and remove the explicit registry exception in the coverage test.
   `session_index.jsonl` sidecar is produced, so titles come from the rollout
   head alone.
 - **Evidence:** `no-public-source`.
-- **Upstream:** TRAE CLI 2.0 ships only as a closed-source binary
-  (`traecli 0.200.19 internal edition`). Trae's first-party
+- **Upstream:** TRAE CLI 2.0 ships only as a closed-source binary; the observed
+  builds report themselves as `traecli 0.200.x`. Trae's first-party
   [product site](https://www.trae.ai/) and the official
   `https://github.com/Trae-AI/Trae.git` repository were searched 2026-08-04 and
   publish neither the producer nor a session schema. The equivalence to Codex
