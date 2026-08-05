@@ -207,49 +207,64 @@ func resolveBareCodebuffID(
 	// codebuff or freebuff agent marker, and the exact timestamp
 	// suffix.
 	if machineFilter != "" && machineFilter != "local" {
-		ids, findErr := svc.FindSessionIDsByPartial(ctx, rawID, 20)
-		if findErr != nil {
-			if lookupErr == nil {
-				lookupErr = fmt.Errorf(
-					"lookup host-prefixed sessions for %q: %w",
-					rawID, findErr,
-				)
+		// Search with agent-prefixed queries instead of the bare
+		// timestamp suffix. A raw "project:timestamp" substring
+		// can match unrelated sessions from other agents whose IDs
+		// coincidentally contain the same digit sequence, and the
+		// 20-result limit may exclude the genuine codebuff/freebuff
+		// match. Prepending the agent prefix makes the query
+		// specific enough that 100 results is safely exhaustive.
+		ids1, findErr1 := svc.FindSessionIDsByPartial(
+			ctx, "codebuff:"+rawID, 100,
+		)
+		if findErr1 != nil && lookupErr == nil {
+			lookupErr = fmt.Errorf(
+				"lookup codebuff host-prefixed sessions for %q: %w",
+				rawID, findErr1,
+			)
+		}
+		ids2, findErr2 := svc.FindSessionIDsByPartial(
+			ctx, "freebuff:"+rawID, 100,
+		)
+		if findErr2 != nil && lookupErr == nil {
+			lookupErr = fmt.Errorf(
+				"lookup freebuff host-prefixed sessions for %q: %w",
+				rawID, findErr2,
+			)
+		}
+		for _, id := range append(ids1, ids2...) {
+			if !strings.Contains(id, "~") {
+				continue
 			}
-		} else {
-			for _, id := range ids {
-				if !strings.Contains(id, "~") {
-					continue
-				}
-				if !strings.HasSuffix(id, ":"+rawID) {
-					continue
-				}
-				// Guard against non-codebuff/freebuff sessions
-				// whose ID happens to contain the timestamp.
-				if !strings.Contains(id, "~codebuff:") &&
-					!strings.Contains(id, "~freebuff:") {
-					continue
-				}
-				detail, err := svc.Get(ctx, id)
-				if err != nil {
-					if lookupErr == nil {
-						lookupErr = err
-					}
-					continue
-				}
-				if detail == nil {
-					continue
-				}
-				if !codebuffMachineMatches(
-					detail.Machine, machineFilter, localMachine,
-				) {
-					continue
-				}
-				if _, dup := seen[id]; dup {
-					continue
-				}
-				seen[id] = struct{}{}
-				valid = append(valid, id)
+			if !strings.HasSuffix(id, ":"+rawID) {
+				continue
 			}
+			// Guard against non-codebuff/freebuff sessions
+			// whose ID happens to contain the timestamp.
+			if !strings.Contains(id, "~codebuff:") &&
+				!strings.Contains(id, "~freebuff:") {
+				continue
+			}
+			detail, err := svc.Get(ctx, id)
+			if err != nil {
+				if lookupErr == nil {
+					lookupErr = err
+				}
+				continue
+			}
+			if detail == nil {
+				continue
+			}
+			if !codebuffMachineMatches(
+				detail.Machine, machineFilter, localMachine,
+			) {
+				continue
+			}
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			seen[id] = struct{}{}
+			valid = append(valid, id)
 		}
 	}
 

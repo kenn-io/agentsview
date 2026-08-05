@@ -2296,6 +2296,156 @@ func TestParseDiffDBBackedLimitOrdersByDiscoveryMtime(t *testing.T) {
 		"the older session must be the one cut by --limit")
 }
 
+// TestParseDiffCodebuffCompanionOnlyChangeAdvancesOrderingMtime verifies
+// that a companion-only change (e.g. run-state.json touched while
+// chat-messages.json is untouched) advances the parse-diff ordering mtime.
+// The --limit sampler must not drop a recently rewritten session when the
+// only on-disk change is to a companion file. Verified: fails against the
+// pre-fix discoveredFileMtime (which only stat'd chat-messages.json) —
+// kept the older session instead of the companion-bumped one.
+func TestParseDiffCodebuffCompanionOnlyChangeAdvancesOrderingMtime(t *testing.T) {
+	// Two Codebuff sessions with identical chat-messages.json mtimes.
+	// Session A (older): chat-messages.json and run-state.json share
+	// the same base mtime. Session B (newer): chat-messages.json has
+	// the same base mtime, but run-state.json was bumped by one hour.
+	// A correct composite freshness must advance Session B's ordering
+	// value past Session A's, so --limit keeps B and cuts A.
+
+	dirA := t.TempDir()
+	dirB := t.TempDir()
+
+	// Create minimal Codebuff session directories with companion files.
+	for _, dir := range []string{dirA, dirB} {
+		require.NoError(t, os.WriteFile(
+			filepath.Join(dir, "chat-messages.json"),
+			[]byte(`[{"id":"u-1","variant":"user","content":"hello","timestamp":"03:04 PM"}]`),
+			0o644,
+		))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(dir, "run-state.json"),
+			[]byte(`{"sessionState":{"mainAgentState":{"agentType":"base2-free-deepseek"}}}`),
+			0o644,
+		))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(dir, "chat-meta.json"),
+			[]byte(`{"messageCount":1,"firstPrompt":"hello","messagesSize":50}`),
+			0o644,
+		))
+	}
+
+	baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	newerTime := baseTime.Add(time.Hour)
+
+	// Pin both chat-messages.json files to the same mtime.
+	chatA := filepath.Join(dirA, "chat-messages.json")
+	chatB := filepath.Join(dirB, "chat-messages.json")
+	require.NoError(t, os.Chtimes(chatA, baseTime, baseTime))
+	require.NoError(t, os.Chtimes(chatB, baseTime, baseTime))
+
+	// Pin both chat-meta.json files to base time.
+	metaA := filepath.Join(dirA, "chat-meta.json")
+	metaB := filepath.Join(dirB, "chat-meta.json")
+	require.NoError(t, os.Chtimes(metaA, baseTime, baseTime))
+	require.NoError(t, os.Chtimes(metaB, baseTime, baseTime))
+
+	// Session A: run-state.json at base time (no companion change).
+	runStateA := filepath.Join(dirA, "run-state.json")
+	require.NoError(t, os.Chtimes(runStateA, baseTime, baseTime))
+
+	// Session B: run-state.json bumped (companion-only change).
+	runStateB := filepath.Join(dirB, "run-state.json")
+	require.NoError(t, os.Chtimes(runStateB, newerTime, newerTime))
+
+	kept, cutPaths, limited := sortAndLimitParseDiffFiles(
+		[]parser.DiscoveredFile{
+			{Path: chatA, Agent: parser.AgentCodebuff},
+			{Path: chatB, Agent: parser.AgentCodebuff},
+		},
+		1,
+	)
+
+	require.True(t, limited)
+	require.Len(t, kept, 1)
+	assert.Equal(t, chatB, kept[0].Path,
+		"newer run-state.json must advance the composite freshness mtime "+
+			"even though chat-messages.json mtimes are identical; a zero here "+
+			"means parseDiffDiscoveryMtime or discoveredFileMtime dropped "+
+			"the companion stat and ordered by primary mtime alone")
+	assert.Len(t, cutPaths, 1)
+	assert.True(t, cutPaths[chatA],
+		"the session with older run-state.json must be the one cut by --limit")
+}
+
+func TestParseDiffFreebuffCompanionOnlyChangeAdvancesOrderingMtime(t *testing.T) {
+	// Freebuff variant of the Codebuff companion-only test. Freebuff
+	// shares the Codebuff provider and routes through codebuffCompositeMtime,
+	// so companion-only changes must advance the ordering mtime the same way.
+
+	dirA := t.TempDir()
+	dirB := t.TempDir()
+
+	// Create minimal session directories with companion files.
+	for _, dir := range []string{dirA, dirB} {
+		require.NoError(t, os.WriteFile(
+			filepath.Join(dir, "chat-messages.json"),
+			[]byte(`[{"id":"u-1","variant":"user","content":"hello","timestamp":"03:04 PM"}]`),
+			0o644,
+		))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(dir, "run-state.json"),
+			[]byte(`{"sessionState":{"mainAgentState":{"agentType":"base2-free-deepseek"}}}`),
+			0o644,
+		))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(dir, "chat-meta.json"),
+			[]byte(`{"messageCount":1,"firstPrompt":"hello","messagesSize":50}`),
+			0o644,
+		))
+	}
+
+	baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	newerTime := baseTime.Add(time.Hour)
+
+	// Pin both chat-messages.json files to the same mtime.
+	chatA := filepath.Join(dirA, "chat-messages.json")
+	chatB := filepath.Join(dirB, "chat-messages.json")
+	require.NoError(t, os.Chtimes(chatA, baseTime, baseTime))
+	require.NoError(t, os.Chtimes(chatB, baseTime, baseTime))
+
+	// Pin both chat-meta.json files to base time.
+	metaA := filepath.Join(dirA, "chat-meta.json")
+	metaB := filepath.Join(dirB, "chat-meta.json")
+	require.NoError(t, os.Chtimes(metaA, baseTime, baseTime))
+	require.NoError(t, os.Chtimes(metaB, baseTime, baseTime))
+
+	// Session A: run-state.json at base time (no companion change).
+	runStateA := filepath.Join(dirA, "run-state.json")
+	require.NoError(t, os.Chtimes(runStateA, baseTime, baseTime))
+
+	// Session B: run-state.json bumped (companion-only change).
+	runStateB := filepath.Join(dirB, "run-state.json")
+	require.NoError(t, os.Chtimes(runStateB, newerTime, newerTime))
+
+	kept, cutPaths, limited := sortAndLimitParseDiffFiles(
+		[]parser.DiscoveredFile{
+			{Path: chatA, Agent: parser.AgentFreebuff},
+			{Path: chatB, Agent: parser.AgentFreebuff},
+		},
+		1,
+	)
+
+	require.True(t, limited)
+	require.Len(t, kept, 1)
+	assert.Equal(t, chatB, kept[0].Path,
+		"Freebuff: newer run-state.json must advance the composite freshness "+
+			"even though chat-messages.json mtimes are identical; a zero here "+
+			"means discoveredFileMtime did not route AgentFreebuff through "+
+			"codebuffCompositeMtime")
+	assert.Len(t, cutPaths, 1)
+	assert.True(t, cutPaths[chatA],
+		"the session with older run-state.json must be the one cut by --limit")
+}
+
 func TestParseDiffReportHasFailures(t *testing.T) {
 	tests := []struct {
 		name   string

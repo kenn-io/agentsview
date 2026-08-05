@@ -6482,6 +6482,56 @@ func (e *Engine) filterFilesByMtime(
 	return out
 }
 
+// codebuffCompositeMtime returns a composite freshness timestamp for a
+// Codebuff/Freebuff session directory by stat'ing the primary file
+// (chat-messages.json), every companion file declared in
+// CodebuffCompanionFilenames (run-state.json, chat-meta.json), and the
+// session directory itself. Each stat contributes max(mtime, ctime), so
+// a companion-only change or a same-size rewrite with preserved mtime
+// still advances the composite. Shared by discoveredFileEffectiveMtime
+// (incremental cutoff) and discoveredFileMtime (parse-diff ordering) so
+// the two freshness signals never diverge.
+func codebuffCompositeMtime(path string) (int64, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	mtime := info.ModTime().UnixNano()
+	// Include ctime so same-size rewrites with preserved mtime are
+	// detected. On platforms without ctime (e.g. Plan 9), fileChangeTime
+	// returns (0, false), leaving the mtime-only composite as-is.
+	if ct, _ := fileChangeTime(path, info); ct > mtime {
+		mtime = ct
+	}
+	dir := filepath.Dir(path)
+	for _, name := range parser.CodebuffCompanionFilenames {
+		companion := filepath.Join(dir, name)
+		if ci, err := os.Stat(companion); err == nil {
+			ts := ci.ModTime().UnixNano()
+			if cct, _ := fileChangeTime(companion, ci); cct > ts {
+				ts = cct
+			}
+			if ts > mtime {
+				mtime = ts
+			}
+		}
+	}
+	// Also consider the session directory mtime as a local cutoff
+	// signal to detect companion-file deletions. Deleting a file
+	// changes the directory's mtime even though surviving files'
+	// mtimes are unchanged.
+	if dirInfo, err := os.Stat(dir); err == nil {
+		ts := dirInfo.ModTime().UnixNano()
+		if dct, _ := fileChangeTime(dir, dirInfo); dct > ts {
+			ts = dct
+		}
+		if ts > mtime {
+			mtime = ts
+		}
+	}
+	return mtime, nil
+}
+
 // discoveredFileEffectiveMtime returns the freshness timestamp used to filter a
 // discovered file against an incremental-sync cutoff. For provider-sourced
 // files it consults the provider's Fingerprint so composite/sibling-file
@@ -6565,50 +6615,12 @@ func (e *Engine) discoveredFileEffectiveMtime(
 	// companion-only change still looks fresh and a same-size rewrite
 	// with preserved mtime advances the cutoff via ctime. Sources that
 	// pass the cutoff go on to the full fingerprint as usual.
+	// Codebuff/Freebuff: stat-only composite avoids the provider
+	// Fingerprint path (which content-hashes the transcript) to keep
+	// cutoff filtering bounded by the changed batch. See the helper's
+	// doc comment for what the composite covers.
 	if file.Agent == parser.AgentCodebuff || file.Agent == parser.AgentFreebuff {
-		info, err := os.Stat(file.Path)
-		if err != nil {
-			return 0, err
-		}
-		mtime := info.ModTime().UnixNano()
-		// Include ctime as a cutoff signal so same-size rewrites
-		// with preserved mtime are not dropped before the full
-		// freshness check (which also uses ctime via the per-
-		// component stat digest). On platforms without ctime
-		// (e.g. Plan 9), fileChangeTime returns (0, false),
-		// leaving the mtime-only composite as-is.
-		if ct, _ := fileChangeTime(file.Path, info); ct > mtime {
-			mtime = ct
-		}
-		dir := filepath.Dir(file.Path)
-		for _, name := range parser.CodebuffCompanionFilenames {
-			companion := filepath.Join(dir, name)
-			if ci, err := os.Stat(companion); err == nil {
-				ts := ci.ModTime().UnixNano()
-				if cct, _ := fileChangeTime(companion, ci); cct > ts {
-					ts = cct
-				}
-				if ts > mtime {
-					mtime = ts
-				}
-			}
-		}
-		// Also consider the session directory mtime as a local cutoff
-		// signal to detect companion-file deletions. Deleting a file
-		// changes the directory's mtime even though surviving files'
-		// mtimes are unchanged. Include directory ctime as well so
-		// directory-level changes (create, rename, delete) that
-		// preserve mtime are still detected.
-		if dirInfo, err := os.Stat(dir); err == nil {
-			ts := dirInfo.ModTime().UnixNano()
-			if dct, _ := fileChangeTime(dir, dirInfo); dct > ts {
-				ts = dct
-			}
-			if ts > mtime {
-				mtime = ts
-			}
-		}
-		return mtime, nil
+		return codebuffCompositeMtime(file.Path)
 	}
 	// Watermark-only shared-container sources carry their session-row
 	// watermark from discovery. Consulting the provider Fingerprint instead
@@ -6777,6 +6789,10 @@ func discoveredFileMtime(
 			return 0, err
 		}
 		return reasonixEffectiveInfo(file.Path, info).ModTime().UnixNano(), nil
+	}
+
+	if file.Agent == parser.AgentCodebuff || file.Agent == parser.AgentFreebuff {
+		return codebuffCompositeMtime(file.Path)
 	}
 
 	info, err := os.Stat(file.Path)

@@ -540,7 +540,18 @@ func (e *Engine) parseDiffSourceReliableForRaced(
 	// non-virtual DB path rather than trusting a shared store's composite mtime.
 	def, ok := parser.AgentByType(agent)
 	if !ok {
-		return false
+		// Freebuff shares the Codebuff provider and on-disk layout
+		// but is not a standalone entry in the parser Registry.
+		// Map it to the Codebuff definition so the raced guard
+		// applies to Freebuff sessions: their source is the same
+		// literal chat-messages.json file, and the composite
+		// companion mtime is the same per-session race signal.
+		if agent == parser.AgentFreebuff {
+			def, ok = parser.AgentByType(parser.AgentCodebuff)
+		}
+		if !ok {
+			return false
+		}
 	}
 	return def.FileBased && e.parseDiffAgentDiscoverable(def)
 }
