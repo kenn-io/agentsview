@@ -173,6 +173,29 @@ func TestBunStoreFindSessionIDsByPartialUsesBoundedKeysetBatches(t *testing.T) {
 	}
 }
 
+func TestBunStoreFindSessionIDsByRawSuffixIsCaseSensitiveBeforeLimit(t *testing.T) {
+	database := testDB(t)
+	newer := "2026-08-03T12:00:00Z"
+	older := "2026-08-02T12:00:00Z"
+	for _, session := range []Session{
+		{
+			ID: "codex:ABC", Project: "alpha", Machine: "host", Agent: "codex",
+			StartedAt: &newer, CreatedAt: newer,
+		},
+		{
+			ID: "codex:abc", Project: "alpha", Machine: "host", Agent: "codex",
+			StartedAt: &older, CreatedAt: older,
+		},
+	} {
+		require.NoError(t, database.UpsertSession(session))
+	}
+
+	ids, err := database.FindSessionIDsByRawSuffix(t.Context(), "abc", 1)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"codex:abc"}, ids)
+}
+
 func TestBunStoreListSessionsKeepsQueriesAndResultsBounded(t *testing.T) {
 	for _, matchingRows := range []int{2, 50} {
 		t.Run(fmt.Sprintf("matching_rows_%d", matchingRows), func(t *testing.T) {

@@ -126,10 +126,11 @@ type ContentSearchHit struct {
 	Score         *float64
 }
 
-// FullTextCapability owns engine-specific lexical matching. Search must apply
-// the canonical project/deleted-session scope before its LIMIT/OFFSET and
-// return at most one hit per visible session; BunStore owns policy and final
-// hydration, but this pushdown keeps cursor windows complete and bounded.
+// FullTextCapability owns engine-specific lexical matching and returns fully
+// hydrated canonical SearchResults. Implementations must enforce the project
+// filter and non-deleted visibility before LIMIT/OFFSET, return at most one
+// result per session, and preserve stable ordering and pagination. BunStore
+// owns input normalization and the public page contract.
 type FullTextCapability interface {
 	Available() bool
 	Search(context.Context, bun.IDB, SearchFilter) ([]SearchResult, error)
