@@ -24,6 +24,13 @@ func priorCommonSQLiteSchema() string {
 		"    ordinal     INTEGER NOT NULL,\n"+
 			"    source_uuid TEXT NOT NULL DEFAULT '',\n",
 		"    ordinal     INTEGER NOT NULL,\n",
+		"CREATE TABLE IF NOT EXISTS pricing_metadata (\n"+
+			"    key        TEXT PRIMARY KEY,\n"+
+			"    value      TEXT NOT NULL,\n"+
+			"    updated_at TEXT NOT NULL\n"+
+			"        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))\n"+
+			");\n\n",
+		"",
 	).Replace(schemaSQL)
 }
 
@@ -70,7 +77,11 @@ INSERT INTO worktree_project_mappings (
     id, machine, path_prefix, layout, project, enabled
 ) VALUES (
     71, 'legacy-machine', '/work/legacy', 'explicit', 'legacy-project', 1
-);`
+);
+INSERT INTO model_pricing (
+    model_pattern, input_microdollars_per_mtok,
+    output_microdollars_per_mtok, updated_at
+) VALUES ('_fallback_version', 0, 0, 'legacy-v42');`
 
 func createPriorCommonSQLiteArchive(t *testing.T, path string) {
 	t.Helper()
@@ -148,6 +159,21 @@ func TestLegacySchemaCommonConvergenceRetainsRowsAndBackfillsProvenance(t *testi
 		CommonSchemaCompatibilityMetadataKey,
 	).Scan(&stamp))
 	assert.Equal(t, "1", stamp)
+
+	var pricingMetadataValue, pricingMetadataUpdatedAt string
+	require.NoError(t, database.getReader().QueryRowContext(t.Context(), `
+		SELECT value, updated_at FROM pricing_metadata
+		WHERE key = '_fallback_version'`,
+	).Scan(&pricingMetadataValue, &pricingMetadataUpdatedAt))
+	assert.Equal(t, "legacy-v42", pricingMetadataValue)
+	_, err = time.Parse(time.RFC3339Nano, pricingMetadataUpdatedAt)
+	require.NoError(t, err)
+	var pricingSentinelCount int
+	require.NoError(t, database.getReader().QueryRowContext(t.Context(), `
+		SELECT count(*) FROM model_pricing
+		WHERE model_pattern = '_fallback_version'`,
+	).Scan(&pricingSentinelCount))
+	assert.Zero(t, pricingSentinelCount)
 }
 
 func TestLegacySchemaCommonCutoverWritesCanonicalRowsAndDoesNotReplay(t *testing.T) {

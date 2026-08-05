@@ -28,6 +28,10 @@ func fieldSQLType(field *schema.Field) string {
 func onField(field *schema.Field) {
 	field.DiscoveredSQLType = fieldSQLType(field)
 	field.CreateTableSQLType = field.DiscoveredSQLType
+	if field.CreateTableSQLType == duckDBTypeTimestamp &&
+		isDynamicTimestampDefault(field.SQLDefault) {
+		field.SQLDefault = ""
+	}
 
 	if field.StructField.Type == jsonRawMessageType {
 		field.Scan = scanJSONRawMessage
@@ -38,6 +42,15 @@ func onField(field *schema.Field) {
 		field.Scan = func(dest reflect.Value, src any) error {
 			return scan(dest, normalizeIntegerSource(src))
 		}
+	}
+}
+
+func isDynamicTimestampDefault(value string) bool {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "CURRENT_TIMESTAMP", "CURRENT_TIMESTAMP()", "NOW()":
+		return true
+	default:
+		return false
 	}
 }
 

@@ -191,6 +191,12 @@ func (c *schemaProbeConn) QueryContext(
 			}, nil
 		}
 		return &schemaProbeRows{columns: []string{"exists"}}, nil
+	case strings.Contains(normalized, "select data_type") &&
+		strings.Contains(normalized, "information_schema.columns"):
+		return &schemaProbeRows{
+			columns: []string{"data_type"},
+			values:  [][]driver.Value{{"timestamp with time zone"}},
+		}, nil
 	case strings.Contains(normalized, "information_schema.columns"):
 		c.state.mu.Lock()
 		c.state.informationQueries++
@@ -543,6 +549,22 @@ func TestEnsureSchemaChecksDataVersionBeforeDDL(t *testing.T) {
 		"expected too-new data version error")
 	assert.Equal(t, 0, state.execCount(),
 		"EnsureSchema must not mutate PG before data-version refusal")
+}
+
+func TestConvergePostgresStampedSchemaValidatesUnderLock(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.queryErrors = []schemaProbeQueryError{{
+		contains: `from "sessions"`,
+		err:      errors.New("stamped common schema drift"),
+	}}
+
+	err := convergePostgresCommonSchema(t.Context(), pg, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "validating stamped common PostgreSQL schema")
+	assert.Contains(t, strings.ToLower(state.executedSQL()),
+		"pg_advisory_xact_lock",
+		"stamped validation must run under the schema transaction lock")
 }
 
 func TestSyncEnsureSchemaSkipsDDLWhenSchemaCompatible(t *testing.T) {
@@ -956,7 +978,7 @@ func TestSyncEnsureSchemaRunsDDLWhenDedupIndexMissing(t *testing.T) {
 		"fallback must recreate the cursor dedup index")
 }
 
-func TestSyncEnsureSchemaRunsDDLWhenSchemaIncompatible(t *testing.T) {
+func TestSyncEnsureSchemaFailsClosedWhenStampedSchemaIncompatible(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, map[string][]string{
 		"sessions": {
 			"has_total_output_tokens",
@@ -975,10 +997,10 @@ func TestSyncEnsureSchemaRunsDDLWhenSchemaIncompatible(t *testing.T) {
 	}}
 	syncer := &Sync{pg: pg, schema: "agentsview"}
 
-	require.NoError(t, syncer.EnsureSchema(context.Background()))
+	err := syncer.EnsureSchema(context.Background())
 
-	assert.Greater(t, state.execCount(), 0,
-		"incompatible PG schema should fall back to migration DDL")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "validating stamped common PostgreSQL schema")
 }
 
 func TestEnsureSchemaCreatesAnalyticsCoveringIndexes(t *testing.T) {

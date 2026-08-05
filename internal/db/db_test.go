@@ -4527,7 +4527,7 @@ func TestCopyInsightsFrom(t *testing.T) {
 func TestCopyModelPricingFrom(t *testing.T) {
 	dir := t.TempDir()
 
-	// Source DB with pricing rows and a sentinel meta row.
+	// Source DB with pricing rows and separate refresh metadata.
 	srcPath := filepath.Join(dir, "src.db")
 	srcDB := testDBAtPath(t, srcPath, "src")
 	require.NoError(t, srcDB.UpsertModelPricing([]ModelPricing{

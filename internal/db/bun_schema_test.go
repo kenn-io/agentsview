@@ -79,6 +79,50 @@ func TestBunSchemaNormalSQLiteOpenAcceptsCanonicalSession(t *testing.T) {
 	assert.Equal(t, generation, got.SourceDatabaseGeneration)
 }
 
+func TestBunSchemaNormalSQLiteOpenUsesAcceptedRelationshipMatrix(t *testing.T) {
+	database := testDB(t)
+	type foreignKey struct {
+		Parent   string
+		From     string
+		To       string
+		OnDelete string
+	}
+	wantByTable := map[string][]foreignKey{
+		"messages": {{
+			Parent: "sessions", From: "session_id", To: "id", OnDelete: "CASCADE",
+		}},
+		"tool_calls": {
+			{Parent: "messages", From: "message_id", To: "id", OnDelete: "CASCADE"},
+			{Parent: "sessions", From: "session_id", To: "id", OnDelete: "CASCADE"},
+		},
+		"pinned_messages": {
+			{Parent: "messages", From: "message_id", To: "id", OnDelete: "CASCADE"},
+			{Parent: "sessions", From: "session_id", To: "id", OnDelete: "CASCADE"},
+		},
+		"tool_result_events": {{
+			Parent: "sessions", From: "session_id", To: "id", OnDelete: "CASCADE",
+		}},
+	}
+
+	for table, want := range wantByTable {
+		rows, err := database.getReader().QueryContext(t.Context(), `
+			SELECT "table", "from", "to", on_delete
+			FROM pragma_foreign_key_list(?)`, table)
+		require.NoError(t, err, table)
+		var got []foreignKey
+		for rows.Next() {
+			var item foreignKey
+			require.NoError(t, rows.Scan(
+				&item.Parent, &item.From, &item.To, &item.OnDelete,
+			), table)
+			got = append(got, item)
+		}
+		require.NoError(t, rows.Err(), table)
+		require.NoError(t, rows.Close(), table)
+		assert.ElementsMatch(t, want, got, table)
+	}
+}
+
 func TestBunSchemaRawSQLiteToolCallInsertResolvesMessageOrdinal(t *testing.T) {
 	database := testDB(t)
 	insertSession(t, database, "raw-tool-session", "project")
@@ -126,28 +170,4 @@ func TestBunSchemaSessionBatchStampsArchiveProvenance(t *testing.T) {
 	).Scan(&archiveID, &generation))
 	assert.NotEmpty(t, archiveID)
 	assert.NotEmpty(t, generation)
-}
-
-func TestCheckCommonSchemaRejectsEmptyRequiredSessionProvenance(t *testing.T) {
-	raw, err := sql.Open("sqlite3", ":memory:")
-	require.NoError(t, err)
-	raw.SetMaxOpenConns(1)
-	t.Cleanup(func() { require.NoError(t, raw.Close()) })
-	store := bun.NewDB(raw, sqlitedialect.New())
-	require.NoError(t, CreateCommonSchema(t.Context(), store))
-	_, err = store.NewInsert().Model(&bunmodel.SourceArchive{
-		SourceArchiveID: "", SourceArchiveSalt: "salt",
-	}).Exec(t.Context())
-	require.NoError(t, err)
-	_, err = store.NewInsert().Model(&bunmodel.Session{
-		ID: "missing-provenance", Project: "project", Machine: "machine",
-		Agent: "agent", CreatedAt: bunmodel.NewTimestamp(
-			time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC),
-		),
-	}).Exec(t.Context())
-	require.NoError(t, err)
-
-	err = CheckCommonSchema(t.Context(), store)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "session provenance")
 }

@@ -133,7 +133,7 @@ func TestPGGetActivityReportUsageCostAndTokens(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('claude-sonnet-4-20250514', 3000000, 15000000, 0, 0, 'seed')`)
+		) VALUES ('claude-sonnet-4-20250514', 3000000, 15000000, 0, 0, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -180,8 +180,8 @@ func TestPGGetActivityReportCopilotReportedCostReplacesSessionEstimates(t *testi
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
 		) VALUES
-			('copilot-model-a', 10000000, 0, 0, 0, 'seed'),
-			('copilot-model-b', 20000000, 0, 0, 0, 'seed')`)
+			('copilot-model-a', 10000000, 0, 0, 0, '2026-01-01T00:00:00Z'),
+			('copilot-model-b', 20000000, 0, 0, 0, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err)
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -236,8 +236,8 @@ func TestPGGetActivityReportIncludesSubagentUsage(t *testing.T) {
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
 		) VALUES
-			('root-model', 3000000, 15000000, 0, 0, 'seed'),
-			('sub-model', 3000000, 15000000, 0, 0, 'seed')`)
+			('root-model', 3000000, 15000000, 0, 0, '2026-01-01T00:00:00Z'),
+			('sub-model', 3000000, 15000000, 0, 0, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -300,8 +300,8 @@ func TestPGGetActivityReportPricingModelsOnlyIncludeDedupSurvivors(t *testing.T)
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
 		) VALUES
-			('kept-model', 3000000, 15000000, 0, 0, 'seed'),
-			('discarded-model', 3000000, 15000000, 0, 0, 'seed')`)
+			('kept-model', 3000000, 15000000, 0, 0, '2026-01-01T00:00:00Z'),
+			('discarded-model', 3000000, 15000000, 0, 0, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -449,7 +449,7 @@ func TestPGGetActivityReportExcludesIneligibleUsage(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('claude-sonnet-4-20250514', 3000000, 15000000, 0, 0, 'seed')`)
+		) VALUES ('claude-sonnet-4-20250514', 3000000, 15000000, 0, 0, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -510,7 +510,7 @@ func TestPGGetActivityReportDedupsAcrossChunks(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('claude-sonnet-4-20250514', 3000000, 15000000, 0, 0, 'seed')`)
+		) VALUES ('claude-sonnet-4-20250514', 3000000, 15000000, 0, 0, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err, "insert pricing")
 
 	// dup-a: earlier timestamp and 500 output tokens -> the correct global
@@ -609,7 +609,7 @@ func TestPGGetActivityReportUsageDedupFallsBackToSourceUUID(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('claude-sonnet-4-20250514', 3000000, 15000000, 0, 0, 'seed')`)
+		) VALUES ('claude-sonnet-4-20250514', 3000000, 15000000, 0, 0, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err, "insert pricing")
 
 	_, err = store.DB().ExecContext(ctx, `

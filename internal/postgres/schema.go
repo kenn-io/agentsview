@@ -248,7 +248,7 @@ CREATE TABLE IF NOT EXISTS model_pricing (
     output_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
     cache_creation_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
     cache_read_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
-    updated_at TEXT NOT NULL DEFAULT ''
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS model_pricing_bands (
@@ -259,7 +259,7 @@ CREATE TABLE IF NOT EXISTS model_pricing_bands (
     output_microdollars_per_mtok BIGINT NOT NULL,
     cache_creation_microdollars_per_mtok BIGINT NOT NULL,
     cache_read_microdollars_per_mtok BIGINT NOT NULL,
-    updated_at TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (model_pattern, above_input_tokens)
 );
 
@@ -1353,17 +1353,6 @@ var postgresCommonConstraintMigrations = []string{
 func convergePostgresCommonSchema(
 	ctx context.Context, conn *sql.DB, beforeStamp func() error,
 ) error {
-	var complete bool
-	if err := conn.QueryRowContext(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM sync_metadata WHERE key = $1
-		)`, db.CommonSchemaCompatibilityMetadataKey,
-	).Scan(&complete); err != nil {
-		return fmt.Errorf("probing common PostgreSQL schema stamp: %w", err)
-	}
-	if complete {
-		return nil
-	}
 	store := bun.NewDB(conn, pgdialect.New())
 	tx, err := store.BeginTx(ctx, nil)
 	if err != nil {
@@ -1375,6 +1364,7 @@ func convergePostgresCommonSchema(
 	)`); err != nil {
 		return fmt.Errorf("locking common PostgreSQL schema migration: %w", err)
 	}
+	var complete bool
 	if err := tx.QueryRowContext(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM sync_metadata WHERE key = ?
@@ -1408,6 +1398,9 @@ func convergePostgresCommonSchema(
 			return fmt.Errorf("converging common PostgreSQL constraint: %w", err)
 		}
 	}
+	if err := convergePostgresPricingTimestamps(ctx, tx); err != nil {
+		return err
+	}
 	if err := db.CreateCommonSchema(ctx, tx); err != nil {
 		return err
 	}
@@ -1429,6 +1422,42 @@ func convergePostgresCommonSchema(
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing common PostgreSQL schema migration: %w", err)
+	}
+	return nil
+}
+
+func convergePostgresPricingTimestamps(ctx context.Context, store bun.IDB) error {
+	if _, err := store.ExecContext(ctx, `
+		DELETE FROM model_pricing
+		WHERE model_pattern LIKE '\_%' ESCAPE '\'`); err != nil {
+		return fmt.Errorf("removing PostgreSQL pricing metadata sentinels: %w", err)
+	}
+	for _, table := range []string{"model_pricing", "model_pricing_bands"} {
+		var dataType string
+		if err := store.NewRaw(`
+			SELECT data_type
+			FROM information_schema.columns
+			WHERE table_schema = current_schema()
+			  AND table_name = ?
+			  AND column_name = 'updated_at'`, table).Scan(ctx, &dataType); err != nil {
+			return fmt.Errorf("reading PostgreSQL %s.updated_at type: %w", table, err)
+		}
+		if dataType == "text" || dataType == "character varying" {
+			if _, err := store.ExecContext(ctx, fmt.Sprintf(`
+				ALTER TABLE %s ALTER COLUMN updated_at DROP DEFAULT;
+				ALTER TABLE %s ALTER COLUMN updated_at TYPE TIMESTAMPTZ
+				USING CASE
+					WHEN BTRIM(updated_at) = '' THEN NOW()
+					ELSE updated_at::timestamptz
+				END`, table, table)); err != nil {
+				return fmt.Errorf("converting PostgreSQL %s.updated_at: %w", table, err)
+			}
+		}
+		if _, err := store.ExecContext(ctx, fmt.Sprintf(`
+			ALTER TABLE %s ALTER COLUMN updated_at SET DEFAULT NOW()`,
+			table)); err != nil {
+			return fmt.Errorf("defaulting PostgreSQL %s.updated_at: %w", table, err)
+		}
 	}
 	return nil
 }

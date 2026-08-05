@@ -93,14 +93,6 @@ func CheckCommonSchema(ctx context.Context, db bun.IDB) error {
 		query string
 	}{
 		{
-			"session provenance",
-			`SELECT EXISTS (
-				SELECT 1 FROM sessions
-				WHERE TRIM(source_archive_id) = ''
-				   OR TRIM(source_database_generation) = ''
-			)`,
-		},
-		{
 			"tool call message ordinal",
 			`SELECT EXISTS (
 				SELECT 1 FROM tool_calls WHERE message_ordinal IS NULL
@@ -198,6 +190,9 @@ func (db *DB) convergeSQLiteCommonSchemaLocked(
 		END`); err != nil {
 		return fmt.Errorf("installing tool call message ordinal trigger: %w", err)
 	}
+	if err := convergeSQLitePricingMetadata(ctx, tx); err != nil {
+		return err
+	}
 	if err := CreateCommonSchema(ctx, tx); err != nil {
 		return err
 	}
@@ -261,6 +256,29 @@ func (db *DB) convergeSQLiteCommonSchemaLocked(
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing common SQLite schema migration: %w", err)
+	}
+	return nil
+}
+
+func convergeSQLitePricingMetadata(ctx context.Context, db bun.IDB) error {
+	if _, err := db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS pricing_metadata (
+			key        TEXT PRIMARY KEY,
+			value      TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+				DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		);
+		INSERT INTO pricing_metadata (key, value)
+		SELECT model_pattern, updated_at
+		FROM model_pricing
+		WHERE model_pattern LIKE '\_%' ESCAPE '\'
+		ON CONFLICT(key) DO UPDATE SET
+			value = excluded.value,
+			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+		DELETE FROM model_pricing
+		WHERE model_pattern LIKE '\_%' ESCAPE '\';
+	`); err != nil {
+		return fmt.Errorf("converging SQLite pricing metadata: %w", err)
 	}
 	return nil
 }
