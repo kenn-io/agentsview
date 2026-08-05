@@ -368,7 +368,12 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // tool.result before step.end, so existing Kimi and Kimi Work rows may omit
 // per-message usage for tool-calling steps. Re-parsing attaches the trailing
 // step usage to the assistant tool-call message.)
-const dataVersion = 80
+// (81: Claude Code IDE context wrappers prepended onto a real prompt in
+// the same entry are now split into a hidden system-metadata message plus
+// the real prompt, instead of leaving the raw wrapper in first_message and
+// the visible transcript. Existing rows need re-parsing so first_message
+// and message content drop the leading markup.)
+const dataVersion = 81
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

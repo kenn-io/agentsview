@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,6 +12,16 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 )
+
+func reconcilePinnedMessages(
+	ctx context.Context, tx *sql.Tx, sessionID string,
+) error {
+	pins, err := snapshotPinnedMessages(ctx, tx, sessionID)
+	if err != nil {
+		return err
+	}
+	return restorePinnedMessages(ctx, tx, sessionID, pins)
+}
 
 func TestStoreStarsAndPins(t *testing.T) {
 	pgURL := testPGURL(t)
@@ -247,6 +258,292 @@ func TestPushPreservesMultiplePGPinsBySourceUUID(t *testing.T) {
 	assert.Equal(t, 3, pin.Ordinal)
 }
 
+func TestPushReconcilesPGPinsByPriorMessageIdentity(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	tests := []struct {
+		name        string
+		oldMessages []db.Message
+		newMessages []db.Message
+		wantPin     bool
+		wantOrdinal int
+	}{
+		{
+			name: "duplicate UUID target removed",
+			oldMessages: []db.Message{
+				{
+					Ordinal: 0, Role: "user", Content: "pinned",
+					SourceUUID: "duplicate",
+				},
+				{
+					Ordinal: 1, Role: "assistant", Content: "other",
+					SourceUUID: "duplicate",
+				},
+				{
+					Ordinal: 2, Role: "user", Content: "tail",
+					SourceUUID: "tail",
+				},
+			},
+			newMessages: []db.Message{
+				{
+					Ordinal: 0, Role: "assistant", Content: "other",
+					SourceUUID: "duplicate",
+				},
+				{
+					Ordinal: 1, Role: "user", Content: "tail",
+					SourceUUID: "tail",
+				},
+			},
+		},
+		{
+			name: "UUID-less prompt split by IDE envelope",
+			oldMessages: []db.Message{
+				{
+					Ordinal: 0, Role: "user",
+					Content: "<ide_opened_file>ctx</ide_opened_file>prompt",
+				},
+				{
+					Ordinal: 1, Role: "assistant", Content: "answer",
+					SourceUUID: "answer",
+				},
+			},
+			newMessages: []db.Message{
+				{
+					Ordinal: 0, Role: "user",
+					Content:    "<ide_opened_file>ctx</ide_opened_file>",
+					SourceUUID: "entry:ide-context", IsSystem: true,
+				},
+				{
+					Ordinal: 1, Role: "user", Content: "prompt",
+					SourceUUID: "entry",
+				},
+				{
+					Ordinal: 2, Role: "assistant", Content: "answer",
+					SourceUUID: "answer",
+				},
+			},
+		},
+		{
+			name: "UUID enrichment",
+			oldMessages: []db.Message{
+				{Ordinal: 0, Role: "user", Content: "pinned"},
+				{Ordinal: 1, Role: "assistant", Content: "answer"},
+			},
+			newMessages: []db.Message{
+				{
+					Ordinal: 0, Role: "user", Content: "pinned",
+					SourceUUID: "new-provider-uuid",
+				},
+				{Ordinal: 1, Role: "assistant", Content: "answer"},
+			},
+			wantPin:     true,
+			wantOrdinal: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cleanPGSchema(t, pgURL)
+			t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+
+			local := testDB(t)
+			ps, err := New(
+				pgURL, "agentsview", local,
+				"curation-machine", true, SyncOptions{},
+			)
+			require.NoError(t, err, "New sync")
+			defer ps.Close()
+
+			ctx := context.Background()
+			require.NoError(t, ps.EnsureSchema(ctx), "EnsureSchema")
+
+			const sessionID = "pg-pin-prior-identity"
+			sess := db.Session{
+				ID: sessionID, Project: "proj-curation",
+				Machine: "local", Agent: "claude",
+				MessageCount: len(tt.oldMessages),
+				CreatedAt:    "2026-05-01T00:00:00Z",
+			}
+			require.NoError(t, local.UpsertSession(sess), "UpsertSession old")
+			oldMessages := append([]db.Message(nil), tt.oldMessages...)
+			for i := range oldMessages {
+				oldMessages[i].SessionID = sessionID
+			}
+			require.NoError(t, local.InsertMessages(oldMessages),
+				"InsertMessages old")
+			_, err = ps.Push(ctx, false, nil)
+			require.NoError(t, err, "Push old")
+
+			store, err := NewStore(pgURL, "agentsview", true)
+			require.NoError(t, err, "NewStore")
+			defer store.Close()
+			_, err = store.PinMessage(sessionID, 0, nil)
+			require.NoError(t, err, "PinMessage")
+
+			newMessages := append([]db.Message(nil), tt.newMessages...)
+			for i := range newMessages {
+				newMessages[i].SessionID = sessionID
+			}
+			sess.MessageCount = len(newMessages)
+			require.NoError(t, local.UpsertSession(sess), "UpsertSession new")
+			require.NoError(t,
+				local.ReplaceSessionMessages(sessionID, newMessages),
+				"ReplaceSessionMessages")
+			_, err = ps.Push(ctx, true, nil)
+			require.NoError(t, err, "Push new")
+
+			pins, err := store.ListPinnedMessages(ctx, sessionID, "")
+			require.NoError(t, err, "ListPinnedMessages")
+			if !tt.wantPin {
+				assert.Empty(t, pins,
+					"an ambiguous old identity must not retain a pin")
+				return
+			}
+			require.Len(t, pins, 1, "pins = %v", pins)
+			assert.Equal(t, tt.wantOrdinal, pins[0].Ordinal)
+		})
+	}
+}
+
+func TestRestorePinnedMessagesPreservesPinCreatedAfterSnapshot(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_pin_snapshot_race_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+	defer func() {
+		_, _ = pg.ExecContext(
+			context.Background(),
+			`DROP SCHEMA IF EXISTS `+schema+` CASCADE`,
+		)
+	}()
+
+	ctx := context.Background()
+	_, err = pg.ExecContext(ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	_, err = pg.ExecContext(ctx, `
+		INSERT INTO sessions
+			(id, machine, project, agent, first_message,
+			 started_at, message_count, user_message_count)
+		VALUES
+			('pg-pin-snapshot-race', 'machine-a', 'proj-curation',
+			 'codex', 'snapshot race',
+			 '2026-05-01T00:00:00Z'::timestamptz, 2, 1);
+		INSERT INTO messages
+			(session_id, ordinal, role, content, timestamp,
+			 content_length, source_uuid)
+		VALUES
+			('pg-pin-snapshot-race', 0, 'user', 'first',
+			 '2026-05-01T00:00:00Z'::timestamptz, 5, 'uuid-first'),
+			('pg-pin-snapshot-race', 1, 'assistant', 'second',
+			 '2026-05-01T00:00:01Z'::timestamptz, 6, 'uuid-second');
+		INSERT INTO pinned_messages
+			(session_id, message_id, ordinal, source_uuid, note)
+		VALUES
+			('pg-pin-snapshot-race', 0, 0, 'uuid-first', 'old pin')`)
+	require.NoError(t, err, "seed session and old pin")
+
+	tx, err := pg.BeginTx(ctx, nil)
+	require.NoError(t, err, "begin tx")
+	pins, err := snapshotPinnedMessages(ctx, tx, "pg-pin-snapshot-race")
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("snapshotPinnedMessages: %v", err)
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO pinned_messages
+			(session_id, message_id, ordinal, source_uuid, note)
+		VALUES
+			('pg-pin-snapshot-race', 1, 1, 'uuid-second', 'new pin')`)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("insert post-snapshot pin: %v", err)
+	}
+	if err := restorePinnedMessages(
+		ctx, tx, "pg-pin-snapshot-race", pins,
+	); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("restorePinnedMessages: %v", err)
+	}
+	require.NoError(t, tx.Commit(), "commit tx")
+
+	store, err := NewStore(pgURL, schema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+	got, err := store.ListPinnedMessages(ctx, "pg-pin-snapshot-race", "")
+	require.NoError(t, err, "ListPinnedMessages")
+	require.Len(t, got, 2, "post-snapshot pin must survive: %v", got)
+	byOrdinal := make(map[int]db.PinnedMessage, len(got))
+	for _, pin := range got {
+		byOrdinal[pin.Ordinal] = pin
+	}
+	assert.Contains(t, byOrdinal, 0, "snapshotted pin restored")
+	assert.Contains(t, byOrdinal, 1, "post-snapshot pin preserved")
+}
+
+func TestPinMessageSerializesWithSessionReplacement(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_pin_session_lock_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+	defer func() {
+		_, _ = pg.ExecContext(
+			context.Background(),
+			`DROP SCHEMA IF EXISTS `+schema+` CASCADE`,
+		)
+	}()
+
+	ctx := context.Background()
+	_, err = pg.ExecContext(ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+	_, err = pg.ExecContext(ctx, `
+		INSERT INTO sessions
+			(id, machine, project, agent, first_message,
+			 started_at, message_count, user_message_count)
+		VALUES
+			('pg-pin-session-lock', 'machine-a', 'proj-curation',
+			 'codex', 'session lock',
+			 '2026-05-01T00:00:00Z'::timestamptz, 1, 1);
+		INSERT INTO messages
+			(session_id, ordinal, role, content, timestamp,
+			 content_length, source_uuid)
+		VALUES
+			('pg-pin-session-lock', 0, 'user', 'message',
+			 '2026-05-01T00:00:00Z'::timestamptz, 7, 'uuid-message')`)
+	require.NoError(t, err, "seed session")
+
+	store, err := NewStore(pgURL, schema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+	store.pg.SetMaxOpenConns(1)
+	_, err = store.pg.ExecContext(ctx, `SET lock_timeout = '50ms'`)
+	require.NoError(t, err, "set lock timeout")
+
+	lockTx, err := pg.BeginTx(ctx, nil)
+	require.NoError(t, err, "begin lock tx")
+	require.NoError(t,
+		lockPinnedMessagesSession(ctx, lockTx, "pg-pin-session-lock"),
+		"lock session pins")
+
+	_, err = store.PinMessage("pg-pin-session-lock", 0, nil)
+	require.Error(t, err,
+		"pin mutation must wait while replacement owns the session lock")
+	assert.ErrorContains(t, err, "locking pg pins for session")
+	require.NoError(t, lockTx.Rollback(), "release session lock")
+
+	_, err = store.pg.ExecContext(ctx, `SET lock_timeout = 0`)
+	require.NoError(t, err, "clear lock timeout")
+	pinID, err := store.PinMessage("pg-pin-session-lock", 0, nil)
+	require.NoError(t, err, "PinMessage after replacement lock")
+	assert.NotZero(t, pinID, "PinMessage after replacement lock")
+}
+
 func TestReconcilePinnedMessagesPrefersCurrentTargetPin(t *testing.T) {
 	pgURL := testPGURL(t)
 
@@ -297,7 +594,7 @@ func TestReconcilePinnedMessagesPrefersCurrentTargetPin(t *testing.T) {
 		VALUES
 			('pg-pin-duplicate', 1, 1, 'uuid-answer',
 			 'stale note',
-			 '2026-05-01T00:01:00Z'::timestamptz),
+			 '2026-05-01T00:03:00Z'::timestamptz),
 			('pg-pin-duplicate', 2, 2, 'uuid-answer',
 			 'current note',
 			 '2026-05-01T00:02:00Z'::timestamptz)`)
@@ -324,6 +621,169 @@ func TestReconcilePinnedMessagesPrefersCurrentTargetPin(t *testing.T) {
 	assert.Equal(t, 2, pins[0].Ordinal)
 	require.NotNil(t, pins[0].Note)
 	assert.Equal(t, "current note", *pins[0].Note)
+}
+
+func TestReconcilePinnedMessagesFollowsStoredUniqueSourceUUID(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_pin_shifted_uuid_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+	defer func() {
+		_, _ = pg.ExecContext(
+			context.Background(),
+			`DROP SCHEMA IF EXISTS `+schema+` CASCADE`,
+		)
+	}()
+
+	ctx := context.Background()
+	_, err = pg.ExecContext(ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	_, err = pg.ExecContext(ctx, `
+		INSERT INTO sessions
+			(id, machine, project, agent, first_message,
+			 started_at, message_count, user_message_count)
+		VALUES
+			('pg-pin-shifted-uuid', 'machine-a', 'proj-curation',
+			 'claude', 'shifted source uuid',
+			 '2026-05-01T00:00:00Z'::timestamptz, 2, 1);
+		INSERT INTO messages
+			(session_id, ordinal, role, content, timestamp,
+			 content_length, source_uuid)
+		VALUES
+			('pg-pin-shifted-uuid', 0, 'user', '[context]',
+			 '2026-05-01T00:00:00Z'::timestamptz, 9,
+			 'uuid-context'),
+			('pg-pin-shifted-uuid', 1, 'user', 'question',
+			 '2026-05-01T00:00:01Z'::timestamptz, 8,
+			 'uuid-question');
+		INSERT INTO pinned_messages
+			(session_id, message_id, ordinal, source_uuid,
+			 note, created_at)
+		VALUES
+			('pg-pin-shifted-uuid', 0, 0, 'uuid-question',
+			 'keep shifted pin',
+			 '2026-05-01T00:01:00Z'::timestamptz)`)
+	require.NoError(t, err, "seed shifted pin")
+
+	tx, err := pg.BeginTx(ctx, nil)
+	require.NoError(t, err, "begin tx")
+	if err := reconcilePinnedMessages(
+		ctx, tx, "pg-pin-shifted-uuid",
+	); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("reconcilePinnedMessages: %v", err)
+	}
+	require.NoError(t, tx.Commit(), "commit tx")
+
+	store, err := NewStore(pgURL, schema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	pins, err := store.ListPinnedMessages(ctx, "pg-pin-shifted-uuid", "")
+	require.NoError(t, err, "ListPinnedMessages")
+	require.Len(t, pins, 1, "pins = %v", pins)
+	assert.Equal(t, int64(1), pins[0].MessageID)
+	assert.Equal(t, 1, pins[0].Ordinal)
+	require.NotNil(t, pins[0].Note)
+	assert.Equal(t, "keep shifted pin", *pins[0].Note)
+}
+
+func TestRestorePinnedMessagesUsesResolvedAnchorOrdinalForNewDuplicateUUID(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_pin_shifted_duplicate_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+	defer func() {
+		_, _ = pg.ExecContext(
+			context.Background(),
+			`DROP SCHEMA IF EXISTS `+schema+` CASCADE`,
+		)
+	}()
+
+	ctx := context.Background()
+	_, err = pg.ExecContext(ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	_, err = pg.ExecContext(ctx, `
+		INSERT INTO sessions
+			(id, machine, project, agent, first_message,
+			 started_at, message_count, user_message_count)
+		VALUES
+			('pg-pin-shifted-duplicate', 'machine-a', 'proj-curation',
+			 'claude', 'shifted source becomes duplicate',
+			 '2026-05-01T00:00:00Z'::timestamptz, 2, 1);
+		INSERT INTO messages
+			(session_id, ordinal, role, content, timestamp,
+			 content_length, source_uuid)
+		VALUES
+			('pg-pin-shifted-duplicate', 0, 'user', '[context]',
+			 '2026-05-01T00:00:00Z'::timestamptz, 9,
+			 'uuid-context'),
+			('pg-pin-shifted-duplicate', 1, 'assistant', 'answer',
+			 '2026-05-01T00:00:01Z'::timestamptz, 6,
+			 'uuid-answer');
+		INSERT INTO pinned_messages
+			(session_id, message_id, ordinal, source_uuid,
+			 note, created_at)
+		VALUES
+			('pg-pin-shifted-duplicate', 0, 0, 'uuid-answer',
+			 'keep shifted duplicate pin',
+			 '2026-05-01T00:01:00Z'::timestamptz)`)
+	require.NoError(t, err, "seed shifted pin")
+
+	tx, err := pg.BeginTx(ctx, nil)
+	require.NoError(t, err, "begin tx")
+	pins, err := snapshotPinnedMessages(
+		ctx, tx, "pg-pin-shifted-duplicate",
+	)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("snapshotPinnedMessages: %v", err)
+	}
+	_, err = tx.ExecContext(ctx, `
+		DELETE FROM messages
+		WHERE session_id = 'pg-pin-shifted-duplicate';
+		INSERT INTO messages
+			(session_id, ordinal, role, content, timestamp,
+			 content_length, source_uuid)
+		VALUES
+			('pg-pin-shifted-duplicate', 0, 'assistant', 'retry',
+			 '2026-05-01T00:00:00Z'::timestamptz, 5,
+			 'uuid-answer'),
+			('pg-pin-shifted-duplicate', 1, 'assistant', 'answer',
+			 '2026-05-01T00:00:01Z'::timestamptz, 6,
+			 'uuid-answer')`)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("replace messages: %v", err)
+	}
+	if err := restorePinnedMessages(
+		ctx, tx, "pg-pin-shifted-duplicate", pins,
+	); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("restorePinnedMessages: %v", err)
+	}
+	require.NoError(t, tx.Commit(), "commit tx")
+
+	store, err := NewStore(pgURL, schema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	got, err := store.ListPinnedMessages(
+		ctx, "pg-pin-shifted-duplicate", "",
+	)
+	require.NoError(t, err, "ListPinnedMessages")
+	require.Len(t, got, 1, "pins = %v", got)
+	assert.Equal(t, 1, got[0].Ordinal)
+	require.NotNil(t, got[0].Note)
+	assert.Equal(t, "keep shifted duplicate pin", *got[0].Note)
 }
 
 // TestReconcilePinnedMessagesPrunesPinWhenSourceUUIDGone covers the

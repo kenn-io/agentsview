@@ -206,21 +206,28 @@ func sessionBatchWriteFromParsed(
 	for i, m := range msgs {
 		hasCtx, hasOut := m.TokenPresence()
 		dbMsgs[i] = db.Message{
-			SessionID:        sess.ID,
-			Ordinal:          m.Ordinal,
-			Role:             string(m.Role),
-			Content:          m.Content,
-			Timestamp:        timeutil.Format(m.Timestamp),
-			HasThinking:      m.HasThinking,
-			HasToolUse:       m.HasToolUse,
-			ContentLength:    m.ContentLength,
-			Model:            m.Model,
-			TokenUsage:       m.TokenUsage,
-			PromptSource:     m.PromptSource,
-			ContextTokens:    m.ContextTokens,
-			OutputTokens:     m.OutputTokens,
-			HasContextTokens: hasCtx,
-			HasOutputTokens:  hasOut,
+			SessionID:         sess.ID,
+			Ordinal:           m.Ordinal,
+			Role:              string(m.Role),
+			Content:           m.Content,
+			Timestamp:         timeutil.Format(m.Timestamp),
+			HasThinking:       m.HasThinking,
+			HasToolUse:        m.HasToolUse,
+			ContentLength:     m.ContentLength,
+			IsSystem:          m.IsSystem,
+			IsCompactBoundary: m.IsCompactBoundary,
+			Model:             m.Model,
+			TokenUsage:        m.TokenUsage,
+			PromptSource:      m.PromptSource,
+			SourceType:        m.SourceType,
+			SourceSubtype:     m.SourceSubtype,
+			SourceUUID:        m.SourceUUID,
+			SourceParentUUID:  m.SourceParentUUID,
+			IsSidechain:       m.IsSidechain,
+			ContextTokens:     m.ContextTokens,
+			OutputTokens:      m.OutputTokens,
+			HasContextTokens:  hasCtx,
+			HasOutputTokens:   hasOut,
 		}
 	}
 
@@ -229,9 +236,10 @@ func sessionBatchWriteFromParsed(
 	// pipeline, so zero-valued signal columns and no findings rows are
 	// the expected state for freshly uploaded sessions.
 	return db.SessionBatchWrite{
-		Session:         dbSess,
-		Messages:        dbMsgs,
-		ReplaceMessages: true,
+		Session:                     dbSess,
+		Messages:                    dbMsgs,
+		ReplaceMessages:             true,
+		PreserveLegacyPinsByOrdinal: true,
 	}
 }
 

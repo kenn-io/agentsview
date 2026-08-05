@@ -1008,9 +1008,10 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 		"expected tool_result_events table after reopen")
 }
 
-func TestCurrentDataVersionKimiToolUsage(t *testing.T) {
-	assert.Equal(t, 80, CurrentDataVersion(),
-		"Kimi tool-step usage backfill requires a data version bump")
+func TestCurrentDataVersionClaudeIDEEnvelopeSplit(t *testing.T) {
+	assert.Equal(t, 81, CurrentDataVersion(),
+		"version 81 splits Claude IDE envelopes off mixed prompts after "+
+			"the Claude launch provenance reparse")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
@@ -1721,11 +1722,15 @@ func TestReplaceSessionMessagesPreservesPins(t *testing.T) {
 	ctx := context.Background()
 
 	insertSession(t, d, "s1", "p")
-	insertMessages(t, d,
+	oldMessages := []Message{
 		userMsg("s1", 0, "msg0"),
 		asstMsg("s1", 1, "msg1"),
 		userMsg("s1", 2, "msg2"),
-	)
+	}
+	for i := range oldMessages {
+		oldMessages[i].SourceUUID = fmt.Sprintf("uuid-%d", i)
+	}
+	insertMessages(t, d, oldMessages...)
 
 	msgs, err := d.GetAllMessages(ctx, "s1")
 	require.NoError(t, err, "GetAllMessages")
@@ -1747,11 +1752,16 @@ func TestReplaceSessionMessagesPreservesPins(t *testing.T) {
 
 	// Full replace (simulates a resync of an OpenCode or
 	// explicitly re-synced session).
-	require.NoError(t, d.ReplaceSessionMessages("s1", []Message{
+	newMessages := []Message{
 		userMsg("s1", 0, "msg0-updated"),
 		asstMsg("s1", 1, "msg1-updated"),
 		userMsg("s1", 2, "msg2-updated"),
-	}), "ReplaceSessionMessages")
+	}
+	for i := range newMessages {
+		newMessages[i].SourceUUID = fmt.Sprintf("uuid-%d", i)
+	}
+	require.NoError(t, d.ReplaceSessionMessages("s1", newMessages),
+		"ReplaceSessionMessages")
 
 	newMsgs, err := d.GetAllMessages(ctx, "s1")
 	require.NoError(t, err, "GetAllMessages after replace")
@@ -1791,10 +1801,13 @@ func TestReplaceSessionMessagesDropsPinsForRemovedOrdinals(t *testing.T) {
 	ctx := context.Background()
 
 	insertSession(t, d, "s1", "p")
-	insertMessages(t, d,
+	oldMessages := []Message{
 		userMsg("s1", 0, "msg0"),
 		asstMsg("s1", 1, "msg1"),
-	)
+	}
+	oldMessages[0].SourceUUID = "uuid-0"
+	oldMessages[1].SourceUUID = "uuid-1"
+	insertMessages(t, d, oldMessages...)
 
 	msgs, err := d.GetAllMessages(ctx, "s1")
 	require.NoError(t, err, "GetAllMessages")
@@ -1805,9 +1818,10 @@ func TestReplaceSessionMessagesDropsPinsForRemovedOrdinals(t *testing.T) {
 	}
 
 	// Replace with only ordinal-0 (ordinal-1 is gone).
-	require.NoError(t, d.ReplaceSessionMessages("s1", []Message{
-		userMsg("s1", 0, "msg0-updated"),
-	}), "ReplaceSessionMessages")
+	replacement := userMsg("s1", 0, "msg0-updated")
+	replacement.SourceUUID = "uuid-0"
+	require.NoError(t, d.ReplaceSessionMessages("s1", []Message{replacement}),
+		"ReplaceSessionMessages")
 
 	pins, err := d.ListPinnedMessages(ctx, "s1", "")
 	require.NoError(t, err, "ListPinnedMessages")
@@ -1889,6 +1903,7 @@ func TestReplaceSessionMessagesPinFallsBackToOrdinal(t *testing.T) {
 	insertMessages(t, d,
 		userMsg("s1", 0, "msg0"),
 		asstMsg("s1", 1, "msg1"),
+		userMsg("s1", 2, "removed"),
 	)
 
 	msgs, err := d.GetAllMessages(ctx, "s1")
@@ -1896,16 +1911,158 @@ func TestReplaceSessionMessagesPinFallsBackToOrdinal(t *testing.T) {
 	_, err = d.PinMessage("s1", msgs[1].ID, nil)
 	require.NoError(t, err, "PinMessage")
 
-	// Replace with the same ordinals (and still no source_uuid).
+	// Truncation forces a full replacement. The pinned legacy row remains
+	// unchanged at its old ordinal, so the guarded fallback can restore it.
 	require.NoError(t, d.ReplaceSessionMessages("s1", []Message{
-		userMsg("s1", 0, "msg0-v2"),
-		asstMsg("s1", 1, "msg1-v2"),
+		userMsg("s1", 0, "msg0"),
+		asstMsg("s1", 1, "msg1"),
 	}), "ReplaceSessionMessages")
 
 	pins, err := d.ListPinnedMessages(ctx, "s1", "")
 	require.NoError(t, err, "ListPinnedMessages")
 	require.Len(t, pins, 1, "want 1 pin")
 	assert.Equal(t, 1, pins[0].Ordinal, "pin ordinal")
+}
+
+func TestReplaceSessionMessagesPinFallbackAllowsSourceUUIDEnrichment(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "s1", "p")
+	insertMessages(t, d,
+		userMsg("s1", 0, "msg0"),
+		asstMsg("s1", 1, "msg1"),
+	)
+	msgs, err := d.GetAllMessages(ctx, "s1")
+	require.NoError(t, err, "GetAllMessages")
+	_, err = d.PinMessage("s1", msgs[1].ID, nil)
+	require.NoError(t, err, "PinMessage")
+
+	enriched := asstMsg("s1", 1, "msg1")
+	enriched.SourceUUID = "new-provider-uuid"
+	require.NoError(t, d.ReplaceSessionMessages("s1", []Message{
+		userMsg("s1", 0, "msg0"),
+		enriched,
+	}), "ReplaceSessionMessages")
+
+	pins, err := d.ListPinnedMessages(ctx, "s1", "")
+	require.NoError(t, err, "ListPinnedMessages")
+	require.Len(t, pins, 1, "UUID enrichment must preserve the pin")
+	assert.Equal(t, 1, pins[0].Ordinal, "pin ordinal")
+}
+
+func TestReplaceSessionContentDuplicateSourceUUIDRestoresOnePin(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "s1", "p")
+	insertMessages(t, d,
+		Message{
+			SessionID: "s1", Ordinal: 0, Role: "user",
+			Content: "pinned", SourceUUID: "duplicate",
+		},
+		Message{
+			SessionID: "s1", Ordinal: 1, Role: "assistant",
+			Content: "not pinned", SourceUUID: "duplicate",
+		},
+		Message{
+			SessionID: "s1", Ordinal: 2, Role: "user",
+			Content: "removed", SourceUUID: "tail",
+		},
+	)
+	msgs, err := d.GetAllMessages(ctx, "s1")
+	require.NoError(t, err, "GetAllMessages")
+	_, err = d.PinMessage("s1", msgs[0].ID, nil)
+	require.NoError(t, err, "PinMessage")
+
+	require.NoError(t, d.ReplaceSessionContent("s1", []Message{
+		{
+			SessionID: "s1", Ordinal: 0, Role: "user",
+			Content: "pinned", SourceUUID: "duplicate",
+		},
+		{
+			SessionID: "s1", Ordinal: 1, Role: "assistant",
+			Content: "not pinned", SourceUUID: "duplicate",
+		},
+	}, SessionSignalUpdate{}, nil), "ReplaceSessionContent")
+
+	pins, err := d.ListPinnedMessages(ctx, "s1", "")
+	require.NoError(t, err, "ListPinnedMessages")
+	require.Len(t, pins, 1, "duplicate UUID must not duplicate the pin")
+	assert.Equal(t, 0, pins[0].Ordinal, "pin stays on its original message")
+}
+
+func TestReplaceSessionContentSourceUUIDBecomesDuplicateRestoresOnePin(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "s1", "p")
+	insertMessages(t, d,
+		Message{
+			SessionID: "s1", Ordinal: 0, Role: "user",
+			Content: "pinned", SourceUUID: "becomes-duplicate",
+		},
+		Message{
+			SessionID: "s1", Ordinal: 1, Role: "assistant",
+			Content: "old tail", SourceUUID: "old-tail",
+		},
+	)
+	msgs, err := d.GetAllMessages(ctx, "s1")
+	require.NoError(t, err, "GetAllMessages")
+	_, err = d.PinMessage("s1", msgs[0].ID, nil)
+	require.NoError(t, err, "PinMessage")
+
+	require.NoError(t, d.ReplaceSessionContent("s1", []Message{
+		{
+			SessionID: "s1", Ordinal: 0, Role: "user",
+			Content: "pinned", SourceUUID: "becomes-duplicate",
+		},
+		{
+			SessionID: "s1", Ordinal: 1, Role: "assistant",
+			Content: "new duplicate", SourceUUID: "becomes-duplicate",
+		},
+	}, SessionSignalUpdate{}, nil), "ReplaceSessionContent")
+
+	pins, err := d.ListPinnedMessages(ctx, "s1", "")
+	require.NoError(t, err, "ListPinnedMessages")
+	require.Len(t, pins, 1,
+		"a newly duplicated UUID must use the guarded identity fallback")
+	assert.Equal(t, 0, pins[0].Ordinal, "pin stays on its original message")
+}
+
+func TestReplaceSessionContentMissingSourceUUIDDropsPin(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "s1", "p")
+	insertMessages(t, d,
+		Message{
+			SessionID: "s1", Ordinal: 0, Role: "user",
+			Content: "gone", SourceUUID: "gone-uuid",
+		},
+		Message{
+			SessionID: "s1", Ordinal: 1, Role: "assistant",
+			Content: "removed", SourceUUID: "tail",
+		},
+	)
+	msgs, err := d.GetAllMessages(ctx, "s1")
+	require.NoError(t, err, "GetAllMessages")
+	_, err = d.PinMessage("s1", msgs[0].ID, nil)
+	require.NoError(t, err, "PinMessage")
+
+	require.NoError(t, d.ReplaceSessionContent("s1", []Message{{
+		SessionID: "s1", Ordinal: 0, Role: "assistant",
+		Content: "unrelated", SourceUUID: "other-uuid",
+	}}, SessionSignalUpdate{}, nil), "ReplaceSessionContent")
+
+	pins, err := d.ListPinnedMessages(ctx, "s1", "")
+	require.NoError(t, err, "ListPinnedMessages")
+	assert.Empty(t, pins,
+		"a vanished UUID must not fall back to an unrelated ordinal")
 }
 
 func TestGetSessionFilePath(t *testing.T) {
@@ -4672,6 +4829,49 @@ func TestCopyOrphanedDataFrom(t *testing.T) {
 		"expected 0 tool_calls for s2, got %d", tcCount)
 }
 
+func TestCopyOrphanedDataFrom_DuplicateSourceUUIDKeepsOnePin(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	srcPath := filepath.Join(dir, "old.db")
+	srcDB := testDBAtPath(t, srcPath, "src")
+	insertSession(t, srcDB, "orphan", "proj")
+	insertMessages(t, srcDB,
+		Message{
+			SessionID: "orphan", Ordinal: 0, Role: "user",
+			Content: "pinned", ContentLength: 6,
+			SourceUUID: "duplicate",
+		},
+		Message{
+			SessionID: "orphan", Ordinal: 1, Role: "assistant",
+			Content: "not pinned", ContentLength: 10,
+			SourceUUID: "duplicate",
+		},
+	)
+	var pinnedMessageID int64
+	require.NoError(t, srcDB.getReader().QueryRow(`
+		SELECT id FROM messages
+		WHERE session_id = 'orphan' AND ordinal = 0`,
+	).Scan(&pinnedMessageID), "resolve pinned source message")
+	_, err := srcDB.PinMessage("orphan", pinnedMessageID, nil)
+	require.NoError(t, err, "pin source message")
+	require.NoError(t, srcDB.Close(), "close source database")
+
+	dstPath := filepath.Join(dir, "new.db")
+	dstDB := testDBAtPath(t, dstPath, "dst")
+	defer dstDB.Close()
+
+	copied, err := dstDB.CopyOrphanedDataFrom(srcPath)
+	require.NoError(t, err, "CopyOrphanedDataFrom")
+	require.Equal(t, 1, copied, "copied orphaned sessions")
+
+	pins, err := dstDB.ListPinnedMessages(ctx, "orphan", "")
+	require.NoError(t, err, "ListPinnedMessages")
+	require.Len(t, pins, 1,
+		"a duplicated source UUID must not duplicate the source pin")
+	assert.Equal(t, 0, pins[0].Ordinal, "pin stays on its copied ordinal")
+}
+
 // TestCopyOrphanedDataFrom_SkipsStaleCodexForkRows covers the
 // dataVersion 40 upgrade path (#643): a pre-fix DB stored a forked
 // Codex rollout under the replayed parent's id with double-counted
@@ -5781,6 +5981,287 @@ func TestCopySessionMetadataFrom(t *testing.T) {
 		"SELECT count(*) FROM starred_sessions WHERE session_id = ?", "s1",
 	).Scan(&starCount), "count stars after")
 	assert.Equal(t, 1, starCount, "stars after")
+}
+
+func TestCopySessionMetadataFrom_PinsFollowSourceUUID(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	// Source DB: pre-reparse shape where one entry held the IDE
+	// envelope and the prompt combined at ordinal 1.
+	srcPath := filepath.Join(dir, "src.db")
+	srcDB := testDBAtPath(t, srcPath, "src")
+	insertSession(t, srcDB, "s1", "proj")
+	insertMessages(t, srcDB,
+		Message{
+			SessionID: "s1", Ordinal: 1, Role: "user",
+			Content:       "<ide_opened_file>f</ide_opened_file> explain",
+			ContentLength: 44, SourceUUID: "u1",
+		},
+		Message{
+			SessionID: "s1", Ordinal: 2, Role: "assistant",
+			Content: "sure", ContentLength: 4, SourceUUID: "u2",
+		},
+	)
+	for _, ordinal := range []int{1, 2} {
+		var msgID int64
+		require.NoError(t, srcDB.getReader().QueryRow(
+			"SELECT id FROM messages WHERE session_id = 's1' AND ordinal = ?",
+			ordinal,
+		).Scan(&msgID), "resolve s1 message id")
+		pinID, err := srcDB.PinMessage("s1", msgID, nil)
+		require.NoError(t, err, "pin s1 ordinal %d", ordinal)
+		require.NotZero(t, pinID, "pin s1 ordinal %d not created", ordinal)
+	}
+
+	// Legacy session without source uuids still restores by ordinal.
+	insertSession(t, srcDB, "s2", "proj")
+	insertMessages(t, srcDB, Message{
+		SessionID: "s2", Ordinal: 1, Role: "user",
+		Content: "legacy", ContentLength: 6,
+	})
+	pinByOrdinal := func(d *DB, sessionID string, ordinal int) {
+		t.Helper()
+		var msgID int64
+		require.NoError(t, d.getReader().QueryRow(
+			"SELECT id FROM messages WHERE session_id = ? AND ordinal = ?",
+			sessionID, ordinal,
+		).Scan(&msgID), "resolve %s ordinal %d", sessionID, ordinal)
+		pinID, err := d.PinMessage(sessionID, msgID, nil)
+		require.NoError(t, err, "pin %s ordinal %d", sessionID, ordinal)
+		require.NotZero(t, pinID, "pin %s ordinal %d not created",
+			sessionID, ordinal)
+	}
+	pinByOrdinal(srcDB, "s2", 1)
+
+	// Session whose pinned message vanished in the re-parse while an
+	// unrelated message took over its ordinal.
+	insertSession(t, srcDB, "s3", "proj")
+	insertMessages(t, srcDB, Message{
+		SessionID: "s3", Ordinal: 1, Role: "user",
+		Content: "gone soon", ContentLength: 9, SourceUUID: "u-gone",
+	})
+	pinByOrdinal(srcDB, "s3", 1)
+
+	// Session whose pinned message's uuid is duplicated in the fresh
+	// DB; the old ordinal still identifies which duplicate was meant.
+	insertSession(t, srcDB, "s4", "proj")
+	insertMessages(t, srcDB,
+		Message{
+			SessionID: "s4", Ordinal: 1, Role: "user",
+			Content: "dup a", ContentLength: 5, SourceUUID: "u-dup",
+		},
+		Message{
+			SessionID: "s4", Ordinal: 2, Role: "user",
+			Content: "dup b", ContentLength: 5, SourceUUID: "u-dup",
+		},
+	)
+	pinByOrdinal(srcDB, "s4", 2)
+
+	// Session where the OLD DB itself holds duplicate uuids and only
+	// one row survives the re-parse. The uuid cannot identify which
+	// duplicate the pin was on, so a pin on the removed duplicate
+	// must not transfer to the survivor.
+	insertSession(t, srcDB, "s5", "proj")
+	insertMessages(t, srcDB,
+		Message{
+			SessionID: "s5", Ordinal: 1, Role: "user",
+			Content: "removed dup", ContentLength: 11,
+			SourceUUID: "u-old-dup",
+		},
+		Message{
+			SessionID: "s5", Ordinal: 2, Role: "user",
+			Content: "surviving dup", ContentLength: 13,
+			SourceUUID: "u-old-dup",
+		},
+	)
+	pinByOrdinal(srcDB, "s5", 1)
+
+	// Same old-side duplication, but the pin sits on the duplicate
+	// that survives at its ordinal: the guarded ordinal fallback
+	// still restores it.
+	insertSession(t, srcDB, "s6", "proj")
+	insertMessages(t, srcDB,
+		Message{
+			SessionID: "s6", Ordinal: 1, Role: "user",
+			Content: "removed dup", ContentLength: 11,
+			SourceUUID: "u-old-dup6",
+		},
+		Message{
+			SessionID: "s6", Ordinal: 2, Role: "user",
+			Content: "surviving dup", ContentLength: 13,
+			SourceUUID: "u-old-dup6",
+		},
+	)
+	pinByOrdinal(srcDB, "s6", 2)
+
+	// Matching role/content cannot disambiguate identical old-side
+	// duplicates when only one survives at the pinned ordinal.
+	insertSession(t, srcDB, "s7", "proj")
+	insertMessages(t, srcDB,
+		Message{
+			SessionID: "s7", Ordinal: 1, Role: "user",
+			Content: "same dup", ContentLength: 8,
+			SourceUUID: "u-identical-dup",
+		},
+		Message{
+			SessionID: "s7", Ordinal: 2, Role: "user",
+			Content: "same dup", ContentLength: 8,
+			SourceUUID: "u-identical-dup",
+		},
+	)
+	pinByOrdinal(srcDB, "s7", 1)
+
+	// Legacy session (no source uuids) whose pinned combined prompt
+	// is split by the re-parse: the hidden envelope row takes over
+	// the pinned ordinal.
+	insertSession(t, srcDB, "s8", "proj")
+	insertMessages(t, srcDB, Message{
+		SessionID: "s8", Ordinal: 1, Role: "user",
+		Content:       "<ide_opened_file>f</ide_opened_file> explain",
+		ContentLength: 44,
+	})
+	pinByOrdinal(srcDB, "s8", 1)
+	srcDB.Close()
+
+	// Destination DB: the re-parse split the envelope into its own
+	// hidden row, shifting the prompt and reply down by one ordinal.
+	dstPath := filepath.Join(dir, "dst.db")
+	dstDB := testDBAtPath(t, dstPath, "dst")
+	defer dstDB.Close()
+	insertSession(t, dstDB, "s1", "proj")
+	insertMessages(t, dstDB,
+		Message{
+			SessionID: "s1", Ordinal: 1, Role: "user",
+			Content:       "<ide_opened_file>f</ide_opened_file>",
+			ContentLength: 36, IsSystem: true,
+			SourceUUID: "u1:ide-context",
+		},
+		Message{
+			SessionID: "s1", Ordinal: 2, Role: "user",
+			Content: "explain", ContentLength: 7, SourceUUID: "u1",
+		},
+		Message{
+			SessionID: "s1", Ordinal: 3, Role: "assistant",
+			Content: "sure", ContentLength: 4, SourceUUID: "u2",
+		},
+	)
+	insertSession(t, dstDB, "s7", "proj")
+	insertMessages(t, dstDB, Message{
+		SessionID: "s7", Ordinal: 1, Role: "user",
+		Content: "same dup", ContentLength: 8,
+		SourceUUID: "u-identical-dup",
+	})
+	insertSession(t, dstDB, "s8", "proj")
+	insertMessages(t, dstDB,
+		Message{
+			SessionID: "s8", Ordinal: 1, Role: "user",
+			Content:       "<ide_opened_file>f</ide_opened_file>",
+			ContentLength: 36, IsSystem: true,
+			SourceUUID: "u8:ide-context",
+		},
+		Message{
+			SessionID: "s8", Ordinal: 2, Role: "user",
+			Content: "explain", ContentLength: 7, SourceUUID: "u8",
+		},
+	)
+	insertSession(t, dstDB, "s2", "proj")
+	insertMessages(t, dstDB, Message{
+		SessionID: "s2", Ordinal: 1, Role: "user",
+		Content: "legacy", ContentLength: 6,
+	})
+	insertSession(t, dstDB, "s3", "proj")
+	insertMessages(t, dstDB, Message{
+		SessionID: "s3", Ordinal: 1, Role: "user",
+		Content: "unrelated", ContentLength: 9, SourceUUID: "u-other",
+	})
+	insertSession(t, dstDB, "s4", "proj")
+	insertMessages(t, dstDB,
+		Message{
+			SessionID: "s4", Ordinal: 1, Role: "user",
+			Content: "dup a", ContentLength: 5, SourceUUID: "u-dup",
+		},
+		Message{
+			SessionID: "s4", Ordinal: 2, Role: "user",
+			Content: "dup b", ContentLength: 5, SourceUUID: "u-dup",
+		},
+	)
+
+	insertSession(t, dstDB, "s5", "proj")
+	insertMessages(t, dstDB, Message{
+		SessionID: "s5", Ordinal: 1, Role: "user",
+		Content: "surviving dup", ContentLength: 13,
+		SourceUUID: "u-old-dup",
+	})
+	insertSession(t, dstDB, "s6", "proj")
+	insertMessages(t, dstDB,
+		Message{
+			SessionID: "s6", Ordinal: 1, Role: "user",
+			Content: "unrelated", ContentLength: 9,
+			SourceUUID: "u-fresh6",
+		},
+		Message{
+			SessionID: "s6", Ordinal: 2, Role: "user",
+			Content: "surviving dup", ContentLength: 13,
+			SourceUUID: "u-old-dup6",
+		},
+	)
+
+	require.NoError(t, dstDB.CopySessionMetadataFrom(srcPath),
+		"CopySessionMetadataFrom")
+
+	// Pins follow source_uuid across the ordinal shift instead of
+	// landing on the hidden envelope row at their old ordinals, and
+	// no duplicate pin is created by the ordinal fallback.
+	pins, err := dstDB.ListPinnedMessages(ctx, "s1", "")
+	require.NoError(t, err, "ListPins s1")
+	require.Len(t, pins, 2, "pins s1")
+	gotOrdinals := []int{pins[0].Ordinal, pins[1].Ordinal}
+	slices.Sort(gotOrdinals)
+	assert.Equal(t, []int{2, 3}, gotOrdinals,
+		"pins should follow source_uuid to the shifted ordinals")
+
+	pins, err = dstDB.ListPinnedMessages(ctx, "s2", "")
+	require.NoError(t, err, "ListPins s2")
+	require.Len(t, pins, 1, "pins s2")
+	assert.Equal(t, 1, pins[0].Ordinal,
+		"legacy pin without source_uuid falls back to ordinal")
+
+	pins, err = dstDB.ListPinnedMessages(ctx, "s3", "")
+	require.NoError(t, err, "ListPins s3")
+	assert.Empty(t, pins,
+		"pin whose uuid vanished must be dropped, not attached to the "+
+			"unrelated message now at its ordinal")
+
+	pins, err = dstDB.ListPinnedMessages(ctx, "s4", "")
+	require.NoError(t, err, "ListPins s4")
+	require.Len(t, pins, 1, "pins s4")
+	assert.Equal(t, 2, pins[0].Ordinal,
+		"duplicated uuid resolves by old ordinal to the same-uuid row")
+
+	pins, err = dstDB.ListPinnedMessages(ctx, "s5", "")
+	require.NoError(t, err, "ListPins s5")
+	assert.Empty(t, pins,
+		"pin on a removed old-side duplicate must not transfer to the "+
+			"same-uuid survivor that shifted into its ordinal")
+
+	pins, err = dstDB.ListPinnedMessages(ctx, "s6", "")
+	require.NoError(t, err, "ListPins s6")
+	require.Len(t, pins, 1, "pins s6")
+	assert.Equal(t, 2, pins[0].Ordinal,
+		"pin on the surviving old-side duplicate restores at its ordinal")
+
+	pins, err = dstDB.ListPinnedMessages(ctx, "s7", "")
+	require.NoError(t, err, "ListPins s7")
+	assert.Empty(t, pins,
+		"pin on indistinguishable old duplicates must be dropped when "+
+			"their multiplicity changes")
+
+	pins, err = dstDB.ListPinnedMessages(ctx, "s8", "")
+	require.NoError(t, err, "ListPins s8")
+	assert.Empty(t, pins,
+		"uuid-less pin on a split combined prompt must not attach to "+
+			"the hidden envelope row at its old ordinal")
 }
 
 func TestCopySessionMetadataCopiesFromSource(t *testing.T) {

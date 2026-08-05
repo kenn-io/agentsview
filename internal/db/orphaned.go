@@ -1188,10 +1188,99 @@ func (d *DB) CopySessionMetadataFrom(
 	}
 
 	// Copy pinned messages (table may not exist in older DBs).
-	// Map old message_id to new message_id via the
-	// (session_id, ordinal) natural key, since auto-increment
-	// IDs differ between DBs.
+	// Auto-increment message IDs differ between DBs, so old
+	// message_id must be re-resolved against the fresh rows.
+	// Prefer the source_uuid natural key: a re-parse can insert or
+	// drop rows (e.g. the v75 IDE-envelope split), shifting ordinals
+	// so that the old (session_id, ordinal) key lands on an unrelated
+	// row. The uuid must be unique on BOTH sides: a duplicate in the
+	// old DB means the uuid does not identify which message the pin
+	// was on, so transferring it to a lone same-uuid survivor could
+	// misattach a pin whose real target was removed by the re-parse.
+	// Fall back to ordinal only when the row at the old ordinal also
+	// matches the pinned row's role and content: unconditionally for
+	// legacy pins whose source row has no source_uuid, and for
+	// duplicated uuids additionally requiring the tuple to be unique
+	// on both sides. The stronger identity check handles duplicate uuids without
+	// mistaking a surviving duplicate that shifted into the pinned row's
+	// old ordinal for the removed message. A nonempty uuid with no safe
+	// match means the pinned message is gone: the pin is dropped rather
+	// than silently attached to whatever now occupies its ordinal.
 	if oldDBHasTable(ctx, tx, "pinned_messages") {
+		hasSourceUUID := oldDBHasColumn(
+			ctx, tx, "messages", "source_uuid",
+		)
+		if hasSourceUUID {
+			if _, err := tx.ExecContext(ctx, `
+				INSERT OR IGNORE INTO main.pinned_messages
+					(session_id, message_id, ordinal, note, created_at)
+				SELECT
+					op.session_id, new_m.id, new_m.ordinal,
+					op.note, op.created_at
+				FROM old_db.pinned_messages op
+				JOIN old_db.messages old_m
+					ON old_m.id = op.message_id
+				JOIN main.messages new_m
+					ON new_m.session_id = old_m.session_id
+					AND new_m.source_uuid = old_m.source_uuid
+				WHERE op.session_id IN (
+					SELECT id FROM main.sessions
+				)
+				AND old_m.source_uuid != ''
+				AND (
+					SELECT COUNT(*) FROM main.messages x
+					WHERE x.session_id = old_m.session_id
+					AND x.source_uuid = old_m.source_uuid
+				) = 1
+				AND (
+					SELECT COUNT(*) FROM old_db.messages y
+					WHERE y.session_id = old_m.session_id
+					AND y.source_uuid = old_m.source_uuid
+				) = 1`); err != nil {
+				return fmt.Errorf(
+					"copying pinned messages by source uuid: %w", err,
+				)
+			}
+		}
+		// Ordinal fallback: legacy pins without a uuid, or an ordinal
+		// candidate whose uuid, role, and content uniquely match the
+		// pinned source row on both sides. When the uuid was unique the
+		// source_uuid pass already restored the same row and INSERT OR
+		// IGNORE dedupes; duplicate uuids need the stronger tuple to
+		// avoid attaching a removed pin to a shifted survivor.
+		uuidFallbackGuard := `
+			AND new_m.role = old_m.role
+			AND new_m.content = old_m.content`
+		if hasSourceUUID {
+			uuidFallbackGuard = `
+				AND (
+					(
+						(old_m.source_uuid IS NULL
+							OR old_m.source_uuid = '')
+						AND new_m.role = old_m.role
+						AND new_m.content = old_m.content
+					)
+					OR (
+						new_m.source_uuid = old_m.source_uuid
+						AND old_m.source_uuid != ''
+						AND new_m.role = old_m.role
+						AND new_m.content = old_m.content
+						AND (
+							SELECT COUNT(*) FROM old_db.messages y
+							WHERE y.session_id = old_m.session_id
+							AND y.source_uuid = old_m.source_uuid
+							AND y.role = old_m.role
+							AND y.content = old_m.content
+						) = 1
+						AND (
+							SELECT COUNT(*) FROM main.messages x
+							WHERE x.session_id = old_m.session_id
+							AND x.source_uuid = old_m.source_uuid
+							AND x.role = old_m.role
+							AND x.content = old_m.content
+						) = 1
+					))`
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT OR IGNORE INTO main.pinned_messages
 				(session_id, message_id, ordinal, note, created_at)
@@ -1206,7 +1295,7 @@ func (d *DB) CopySessionMetadataFrom(
 				AND new_m.ordinal = old_m.ordinal
 			WHERE op.session_id IN (
 				SELECT id FROM main.sessions
-			)`); err != nil {
+			)`+uuidFallbackGuard); err != nil {
 			return fmt.Errorf("copying pinned messages: %w", err)
 		}
 	}
@@ -2206,35 +2295,11 @@ func copyPinnedMessagesForIDs(
 		return nil
 	}
 
-	// Re-map old message IDs to the newly inserted message rows.
-	// Prefer source_uuid when available because it survives ordinal
-	// shifts, then fall back to the same (session_id, ordinal)
-	// natural key used by tool call copying.
-	if oldDBHasColumn(ctx, tx, "messages", "source_uuid") {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT OR IGNORE INTO main.pinned_messages
-				(session_id, message_id, ordinal, note, created_at)
-			SELECT
-				op.session_id, new_m.id, new_m.ordinal,
-				op.note, op.created_at
-			FROM old_db.pinned_messages op
-			JOIN old_db.messages old_m
-				ON old_m.id = op.message_id
-			JOIN main.messages new_m
-				ON new_m.session_id = old_m.session_id
-				AND new_m.source_uuid = old_m.source_uuid
-			WHERE op.session_id IN (
-				SELECT id FROM `+tempIDsTable+`
-			)
-			  AND old_m.source_uuid IS NOT NULL
-			  AND old_m.source_uuid <> ''`,
-		); err != nil {
-			return fmt.Errorf(
-				"copying pinned messages by source_uuid: %w", err,
-			)
-		}
-	}
-
+	// Re-map old message IDs to the newly inserted message rows. These
+	// orphaned messages were copied verbatim above, so their ordinals
+	// cannot shift. source_uuid is not a safe key here because providers
+	// can duplicate it across messages; joining on it would turn one pin
+	// into one pin for every matching row.
 	if _, err := tx.ExecContext(ctx, `
 		INSERT OR IGNORE INTO main.pinned_messages
 			(session_id, message_id, ordinal, note, created_at)
@@ -2251,7 +2316,7 @@ func copyPinnedMessagesForIDs(
 			SELECT id FROM `+tempIDsTable+`
 		)`,
 	); err != nil {
-		return fmt.Errorf("copying pinned messages by ordinal: %w", err)
+		return fmt.Errorf("copying pinned messages: %w", err)
 	}
 	return nil
 }

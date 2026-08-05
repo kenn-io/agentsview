@@ -1106,23 +1106,28 @@ func (db *DB) LastClaudeMessageID(sessionID string) string {
 	return s.String
 }
 
-// savedPin captures the minimal pin state needed to re-attach a pin
-// after a full message replacement. source_uuid is the preferred
-// identifier because it survives rewrites where the ordinal stream
-// shifts (e.g. when newly-emitted compact-boundary messages are
-// inserted between previously-seen rows). The ordinal is kept as a
-// fallback for legacy pins on rows that lack a source_uuid.
+// savedPin captures the message identity needed to re-attach a pin
+// after a full message replacement. source_uuid is preferred because
+// it survives ordinal shifts. Role and content guard the ordinal
+// fallback used for legacy rows and ambiguous source UUIDs.
 type savedPin struct {
-	sourceUUID string
-	ordinal    int
-	note       *string
-	createdAt  string
+	sourceUUID           string
+	role                 string
+	content              string
+	ordinal              int
+	sourceUUIDCount      int
+	sourceIdentityCount  int
+	hiddenRowsThroughPin int
+	messageFound         int
+	note                 *string
+	createdAt            string
 }
 
 // ReplaceSessionMessages deletes existing and inserts new messages
 // in a single transaction. Any existing pins are preserved by
 // re-attaching them to the new message rows that share the same
-// ordinal (pins for ordinals that no longer exist are dropped).
+// unambiguous message identity (pins whose message no longer exists
+// are dropped).
 func (db *DB) ReplaceSessionMessages(
 	sessionID string, msgs []Message,
 ) error {
@@ -1158,6 +1163,15 @@ func (db *DB) ReplaceSessionMessages(
 		return fmt.Errorf("beginning tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if useDiff {
+		needsPinRemap, err := messageDiffNeedsPinRemapTx(tx, plan)
+		if err != nil {
+			return err
+		}
+		if needsPinRemap {
+			useDiff = false
+		}
+	}
 	queueGenerationBefore, queueExistedBefore, err := artifactExportGenerationTx(
 		tx, sessionID,
 	)
@@ -1247,7 +1261,7 @@ func replaceSessionMessagesTx(
 		}
 	}
 
-	return restorePinsTx(tx, sessionID, pins)
+	return restorePinsTx(tx, sessionID, pins, false)
 }
 
 func bumpTranscriptRevisionTx(tx *sql.Tx, sessionID string) error {
@@ -1376,6 +1390,15 @@ func (db *DB) ReplaceSessionContent(
 		return fmt.Errorf("beginning tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if useDiff {
+		needsPinRemap, err := messageDiffNeedsPinRemapTx(tx, plan)
+		if err != nil {
+			return err
+		}
+		if needsPinRemap {
+			useDiff = false
+		}
+	}
 	queueGenerationBefore, queueExistedBefore, err := artifactExportGenerationTx(
 		tx, sessionID,
 	)
@@ -1529,9 +1552,36 @@ func savePinsTx(tx *sql.Tx, sessionID string) ([]savedPin, error) {
 	// pinned_messages.message_id would otherwise wipe them when
 	// messages are deleted below. source_uuid comes from the joined
 	// message row; LEFT JOIN keeps pins on legacy rows whose
-	// message_id no longer resolves cleanly.
+	// message_id no longer resolves cleanly. The counts capture whether
+	// source_uuid, or source_uuid plus role and content, uniquely identify
+	// the old message before it is deleted.
 	pinRows, err := tx.Query(`
 		SELECT p.ordinal, COALESCE(m.source_uuid, ''),
+			COALESCE(m.role, ''), COALESCE(m.content, ''),
+			CASE WHEN m.id IS NULL THEN 0 ELSE 1 END,
+			(
+				SELECT COUNT(*)
+				FROM messages same_uuid
+				WHERE same_uuid.session_id = m.session_id
+					AND same_uuid.source_uuid = m.source_uuid
+					AND m.source_uuid != ''
+			),
+			(
+				SELECT COUNT(*)
+				FROM messages same_identity
+				WHERE same_identity.session_id = m.session_id
+					AND same_identity.source_uuid = m.source_uuid
+					AND same_identity.role = m.role
+					AND same_identity.content = m.content
+					AND m.source_uuid != ''
+			),
+			(
+				SELECT COUNT(*)
+				FROM messages hidden
+				WHERE hidden.session_id = m.session_id
+					AND hidden.ordinal <= p.ordinal
+					AND hidden.is_system = 1
+			),
 			p.note, p.created_at
 		FROM pinned_messages p
 		LEFT JOIN messages m ON m.id = p.message_id
@@ -1546,7 +1596,10 @@ func savePinsTx(tx *sql.Tx, sessionID string) ([]savedPin, error) {
 	for pinRows.Next() {
 		var sp savedPin
 		if err := pinRows.Scan(
-			&sp.ordinal, &sp.sourceUUID, &sp.note, &sp.createdAt,
+			&sp.ordinal, &sp.sourceUUID, &sp.role, &sp.content,
+			&sp.messageFound, &sp.sourceUUIDCount,
+			&sp.sourceIdentityCount, &sp.hiddenRowsThroughPin,
+			&sp.note, &sp.createdAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning pin: %w", err)
 		}
@@ -1560,38 +1613,119 @@ func savePinsTx(tx *sql.Tx, sessionID string) ([]savedPin, error) {
 
 func restorePinsTx(
 	tx *sql.Tx, sessionID string, pins []savedPin,
+	preserveLegacyByOrdinal bool,
 ) error {
-	// Re-attach saved pins. Prefer source_uuid (stable across
-	// ordinal-shifting rewrites) and fall back to ordinal for
-	// legacy pins whose source row predates the source_uuid column.
-	// Pins whose row no longer exists by either key are silently
-	// dropped.
+	// Re-attach saved pins only when the old and new message identities
+	// are both unambiguous. A unique source_uuid may move to another
+	// ordinal. Duplicate UUIDs and legacy UUID-less rows must retain the
+	// old ordinal, role, and content. A legacy UUID-less row may gain a
+	// provider UUID while retaining that fallback identity. Otherwise the
+	// pin is dropped rather than duplicated or attached to an unrelated
+	// message.
 	for _, sp := range pins {
+		if sp.messageFound == 0 {
+			continue
+		}
 		if sp.sourceUUID != "" {
-			res, err := tx.Exec(`
+			if sp.sourceUUIDCount == 1 {
+				res, err := tx.Exec(`
 				INSERT OR IGNORE INTO pinned_messages
 					(session_id, message_id, ordinal, note, created_at)
 				SELECT ?, m.id, m.ordinal, ?, ?
 				FROM messages m
-				WHERE m.session_id = ? AND m.source_uuid = ?`,
-				sessionID, sp.note, sp.createdAt, sessionID, sp.sourceUUID,
-			)
-			if err != nil {
-				return fmt.Errorf(
-					"restoring pin uuid=%s: %w", sp.sourceUUID, err,
+				WHERE m.session_id = ? AND m.source_uuid = ?
+					AND (
+						SELECT COUNT(*)
+						FROM messages same_uuid
+						WHERE same_uuid.session_id = m.session_id
+							AND same_uuid.source_uuid = m.source_uuid
+					) = 1`,
+					sessionID, sp.note, sp.createdAt,
+					sessionID, sp.sourceUUID,
 				)
+				if err != nil {
+					return fmt.Errorf(
+						"restoring unique pin uuid=%s: %w",
+						sp.sourceUUID, err,
+					)
+				}
+				n, err := res.RowsAffected()
+				if err != nil {
+					return fmt.Errorf(
+						"checking restored pin uuid=%s: %w",
+						sp.sourceUUID, err,
+					)
+				}
+				if n > 0 {
+					continue
+				}
 			}
-			if n, _ := res.RowsAffected(); n > 0 {
+			if sp.sourceIdentityCount != 1 {
 				continue
 			}
+			if _, err := tx.Exec(`
+				INSERT OR IGNORE INTO pinned_messages
+					(session_id, message_id, ordinal, note, created_at)
+				SELECT ?, m.id, m.ordinal, ?, ?
+				FROM messages m
+				WHERE m.session_id = ? AND m.ordinal = ?
+					AND m.source_uuid = ?
+					AND m.role = ? AND m.content = ?
+					AND (
+						SELECT COUNT(*)
+						FROM messages same_identity
+						WHERE same_identity.session_id = m.session_id
+							AND same_identity.source_uuid = m.source_uuid
+							AND same_identity.role = m.role
+							AND same_identity.content = m.content
+					) = 1`,
+				sessionID, sp.note, sp.createdAt, sessionID, sp.ordinal,
+				sp.sourceUUID, sp.role, sp.content,
+			); err != nil {
+				return fmt.Errorf(
+					"restoring ambiguous pin uuid=%s ord=%d: %w",
+					sp.sourceUUID, sp.ordinal, err,
+				)
+			}
+			continue
+		}
+		if preserveLegacyByOrdinal {
+			// Explicit re-uploads define ordinal continuity for visible legacy
+			// rows. Preserve that continuity only while the hidden-row layout
+			// through the saved ordinal is unchanged; inserted metadata can shift
+			// both the hidden row and every later visible row onto another message.
+			if _, err := tx.Exec(`
+				INSERT OR IGNORE INTO pinned_messages
+					(session_id, message_id, ordinal, note, created_at)
+				SELECT ?, m.id, m.ordinal, ?, ?
+				FROM messages m
+				WHERE m.session_id = ? AND m.ordinal = ?
+					AND m.is_system = 0
+					AND (
+						SELECT COUNT(*)
+						FROM messages hidden
+						WHERE hidden.session_id = m.session_id
+							AND hidden.ordinal <= m.ordinal
+							AND hidden.is_system = 1
+					) = ?`,
+				sessionID, sp.note, sp.createdAt,
+				sessionID, sp.ordinal, sp.hiddenRowsThroughPin,
+			); err != nil {
+				return fmt.Errorf(
+					"restoring legacy pin ord=%d: %w", sp.ordinal, err,
+				)
+			}
+			continue
 		}
 		if _, err := tx.Exec(`
 			INSERT OR IGNORE INTO pinned_messages
 				(session_id, message_id, ordinal, note, created_at)
 			SELECT ?, m.id, m.ordinal, ?, ?
 			FROM messages m
-			WHERE m.session_id = ? AND m.ordinal = ?`,
+			WHERE m.session_id = ? AND m.ordinal = ?
+				AND m.role = ? AND m.content = ?`,
 			sessionID, sp.note, sp.createdAt, sessionID, sp.ordinal,
+			sp.role, sp.content,
 		); err != nil {
 			return fmt.Errorf("restoring pin ord=%d: %w", sp.ordinal, err)
 		}

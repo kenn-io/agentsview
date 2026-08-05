@@ -100,8 +100,9 @@ type messageDiffUpdate struct {
 }
 
 type messageDiffPlan struct {
-	updates []messageDiffUpdate
-	inserts []Message
+	updates            []messageDiffUpdate
+	inserts            []Message
+	unsafePinUpdateIDs []int64
 }
 
 // planStoredMessageDiff loads the session's stored messages and
@@ -201,6 +202,8 @@ func planSessionMessageDiff(
 		}
 		byOrdinal[m.Ordinal] = m
 	}
+	storedUUIDCounts := messageSourceUUIDCounts(stored)
+	incomingUUIDCounts := messageSourceUUIDCounts(incoming)
 
 	var plan messageDiffPlan
 	seen := make(map[int]bool, len(incoming))
@@ -221,6 +224,13 @@ func planSessionMessageDiff(
 				id:  old.ID,
 				msg: m,
 			})
+			if !messagePinIdentityStable(
+				old, m, storedUUIDCounts, incomingUUIDCounts,
+			) {
+				plan.unsafePinUpdateIDs = append(
+					plan.unsafePinUpdateIDs, old.ID,
+				)
+			}
 		}
 	}
 	for ord := range byOrdinal {
@@ -232,6 +242,59 @@ func planSessionMessageDiff(
 		return messageDiffPlan{}, false
 	}
 	return plan, true
+}
+
+func messageSourceUUIDCounts(msgs []Message) map[string]int {
+	counts := make(map[string]int)
+	for _, msg := range msgs {
+		if msg.SourceUUID != "" {
+			counts[msg.SourceUUID]++
+		}
+	}
+	return counts
+}
+
+func messagePinIdentityStable(
+	old, incoming Message,
+	oldUUIDCounts, incomingUUIDCounts map[string]int,
+) bool {
+	if old.SourceUUID != "" &&
+		old.SourceUUID == incoming.SourceUUID &&
+		oldUUIDCounts[old.SourceUUID] == 1 &&
+		incomingUUIDCounts[incoming.SourceUUID] == 1 {
+		return true
+	}
+	return old.Ordinal == incoming.Ordinal &&
+		old.Role == incoming.Role && old.Content == incoming.Content
+}
+
+// messageDiffNeedsPinRemapTx reports whether an in-place update would
+// retain a pin on a row whose identity changed ambiguously. The caller
+// can then use the full replacement path, which drops or remaps the pin
+// through the guarded identity rules. Unpinned streaming updates retain
+// the in-place path.
+func messageDiffNeedsPinRemapTx(
+	tx *sql.Tx, plan messageDiffPlan,
+) (bool, error) {
+	for start := 0; start < len(plan.unsafePinUpdateIDs); start += diffDeleteChunkSize {
+		end := min(start+diffDeleteChunkSize, len(plan.unsafePinUpdateIDs))
+		args := make([]any, 0, end-start)
+		for _, id := range plan.unsafePinUpdateIDs[start:end] {
+			args = append(args, id)
+		}
+		var exists int
+		if err := tx.QueryRow(
+			"SELECT EXISTS (SELECT 1 FROM pinned_messages "+
+				"WHERE message_id IN ("+placeholderList(len(args))+"))",
+			args...,
+		).Scan(&exists); err != nil {
+			return false, fmt.Errorf("checking diff pins: %w", err)
+		}
+		if exists != 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // applySessionMessageDiffTx persists a planned diff: changed rows
