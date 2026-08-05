@@ -8384,7 +8384,6 @@ func (e *Engine) processProviderFile(
 	// reparses, matching the prior behavior. Claude and Cowork have their own
 	// earlier freshness checks; this is the generic fallback for the rest.
 	if !incForceReplace && !e.forceParse && !file.ForceParse &&
-		!e.providerSourceStoredIdentityMismatch(file) &&
 		e.providerSourceUnchangedInDB(
 			source, fingerprint, providerSemantics,
 		) {
@@ -9965,14 +9964,6 @@ func (e *Engine) tryIncrementalJSONL(
 		return processResult{}, false
 	}
 
-	// The stored row is keyed by path alone, so a Codex-format path that
-	// changed hands (a root repointed from codex to a fork, or back) would
-	// otherwise graft relabeled messages onto the previous agent's session.
-	// Decline and let the full parse rewrite the row under the right identity.
-	if isCodexFormatAgent(agent) && !storedIDMatchesAgent(inc.ID, agent) {
-		return processResult{}, false
-	}
-
 	// A session archived before the cwd allow-list was configured
 	// must not keep growing through the append path, which bypasses
 	// the prepareSessionWrite veto. Fall back to the full parse path
@@ -10272,7 +10263,8 @@ func (e *Engine) tryIncrementalJSONL(
 // their existing in-memory skip-cache behavior unchanged. Codex-format forks
 // share the gate: with no index file their effective mtime equals the raw file
 // mtime, which reduces the decision to the size/hash/mtime comparison and never
-// reaches the index-title branch.
+// reaches the index-title branch. Each agent owns its own roots, so a stored
+// row for one of its paths is always its own.
 func (e *Engine) shouldSkipProviderSourceByDB(
 	file parser.DiscoveredFile,
 	fingerprint parser.SourceFingerprint,
@@ -10281,43 +10273,7 @@ func (e *Engine) shouldSkipProviderSourceByDB(
 	if !isCodexFormatAgent(file.Agent) {
 		return false
 	}
-	if e.providerSourceStoredIdentityMismatch(file) {
-		return false
-	}
 	return e.shouldSkipCodexFingerprint(file.Path, fingerprint, semantics)
-}
-
-// providerSourceStoredIdentityMismatch reports whether the database provably
-// does not yet hold this file under the agent that discovered it. Both DB-keyed
-// skips in processProviderFile match on file path alone, and a Codex-format
-// path can change hands: the documented way to adopt TraeX is to repoint a root
-// that was previously configured as codex. Without this check the stale
-// codex:<uuid> row satisfies the skip on its size and mtime, and the
-// traex:<uuid> row is never written. Scoped to the Codex format family, where
-// this change introduced two agents over one on-disk layout; a path whose UUID
-// cannot be derived, or a database that cannot answer, keeps the unguarded
-// behavior.
-func (e *Engine) providerSourceStoredIdentityMismatch(
-	file parser.DiscoveredFile,
-) bool {
-	if !isCodexFormatAgent(file.Agent) {
-		return false
-	}
-	uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(file.Path))
-	if uuid == "" {
-		return false
-	}
-	_, found, err := e.db.GetSessionName(
-		context.Background(), e.idPrefix+string(file.Agent)+":"+uuid,
-	)
-	return err == nil && !found
-}
-
-// storedIDMatchesAgent reports whether a stored session ID belongs to the given
-// agent, ignoring any remote-sync host prefix.
-func storedIDMatchesAgent(storedID string, agent parser.AgentType) bool {
-	def, ok := parser.AgentByPrefix(storedID)
-	return ok && def.Type == agent
 }
 
 // shouldSkipCodexFingerprint reproduces the legacy shouldSkipCodex decision in
