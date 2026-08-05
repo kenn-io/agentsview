@@ -612,6 +612,7 @@ type bunDailyUsageProjection struct {
 	Agent                    string             `bun:"agent"`
 	Machine                  string             `bun:"machine"`
 	SessionStartedAt         bunmodel.Timestamp `bun:"session_started_at"`
+	SessionCreatedAt         bunmodel.Timestamp `bun:"session_created_at"`
 }
 
 type bunCursorUsageProjection struct {
@@ -645,7 +646,8 @@ const bunDailyUsageSessionColumns = `
 	s.project AS project,
 	s.agent AS agent,
 	s.machine AS machine,
-	s.started_at AS session_started_at`
+	s.started_at AS session_started_at,
+	s.created_at AS session_created_at`
 
 const bunMessageUsageColumns = `
 	m.session_id AS session_id,
@@ -850,7 +852,13 @@ func (s *BunStore) streamDailyUsageRowsFrom(
 			return err
 		}
 		sortDailyUsageRows(cursor)
+		location := filter.location()
 		for _, row := range cursor {
+			date := dailyUsageLocalDate(row, location)
+			if filter.From != "" && date < filter.From ||
+				filter.To != "" && date > filter.To {
+				continue
+			}
 			key, ok := usageDedupTokenForRow(
 				row.usageSource, row.agent, row.claudeMessageID,
 				row.claudeRequestID, row.sourceUUID, row.usageDedupKey,
@@ -940,6 +948,7 @@ func newBunDailyUsageStreamModel(
 			&model.row.Agent,
 			&model.row.Machine,
 			&model.row.SessionStartedAt,
+			&model.row.SessionCreatedAt,
 		}
 	} else {
 		model.dest = []any{
@@ -961,6 +970,7 @@ func newBunDailyUsageStreamModel(
 			&model.row.Agent,
 			&model.row.Machine,
 			&model.row.SessionStartedAt,
+			&model.row.SessionCreatedAt,
 		}
 	}
 	return model
@@ -1278,6 +1288,9 @@ func dailyUsageProjectionTime(row bunDailyUsageProjection) time.Time {
 	}
 	if !row.SessionStartedAt.IsZero() {
 		return row.SessionStartedAt.Time
+	}
+	if !row.SessionCreatedAt.IsZero() {
+		return row.SessionCreatedAt.Time
 	}
 	return time.Time{}
 }

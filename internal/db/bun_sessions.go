@@ -226,9 +226,9 @@ func (s *BunStore) getSessionFrom(
 
 const partialSessionCandidateBatchSize = 64
 
-// FindSessionIDsByRawSuffix returns exact or agent-prefixed session IDs using
-// one portable Bun query. Exact matches rank ahead of suffix matches, followed
-// by the most recently active session.
+// FindSessionIDsByRawSuffix returns exact or agent-prefixed session IDs.
+// SQL narrows candidates portably; Go enforces literal case-sensitive suffix
+// matching because SQLite LIKE folds ASCII case by default.
 func (s *BunStore) FindSessionIDsByRawSuffix(
 	ctx context.Context, raw string, limit int,
 ) ([]string, error) {
@@ -238,22 +238,42 @@ func (s *BunStore) FindSessionIDsByRawSuffix(
 	if limit <= 0 {
 		limit = 5
 	}
-	var ids []string
+	ids := make([]string, 0, min(limit, partialSessionCandidateBatchSize))
 	err := s.view(ctx, func(store bun.IDB) error {
-		return store.NewSelect().TableExpr("sessions AS session").
-			ColumnExpr("session.id").
-			Where(
-				"(session.id = ? OR session.id LIKE ? ESCAPE '\\')",
-				raw, "%:"+EscapeLikePattern(raw),
-			).
-			Where("session.deleted_at IS NULL").
-			OrderExpr("CASE WHEN session.id = ? THEN 0 ELSE 1 END ASC", raw).
-			OrderExpr(bunSessionActivityOrderExpr(
-				"session", s.backend.TimestampOrderExpr,
-			)+" DESC").
-			OrderExpr("session.id DESC").
-			Limit(limit).
-			Scan(ctx, &ids)
+		pattern := "%:" + EscapeLikePattern(raw)
+		for offset := 0; len(ids) < limit; offset += partialSessionCandidateBatchSize {
+			var candidates []string
+			if err := store.NewSelect().TableExpr("sessions AS session").
+				ColumnExpr("session.id").
+				Where(
+					"(session.id = ? OR session.id LIKE ? ESCAPE '\\')",
+					raw, pattern,
+				).
+				Where("session.deleted_at IS NULL").
+				OrderExpr("CASE WHEN session.id = ? THEN 0 ELSE 1 END ASC", raw).
+				OrderExpr(bunSessionActivityOrderExpr(
+					"session", s.backend.TimestampOrderExpr,
+				)+" DESC").
+				OrderExpr("session.id DESC").
+				Limit(partialSessionCandidateBatchSize).
+				Offset(offset).
+				Scan(ctx, &candidates); err != nil {
+				return err
+			}
+			for _, candidate := range candidates {
+				if candidate != raw && !strings.HasSuffix(candidate, ":"+raw) {
+					continue
+				}
+				ids = append(ids, candidate)
+				if len(ids) == limit {
+					return nil
+				}
+			}
+			if len(candidates) < partialSessionCandidateBatchSize {
+				return nil
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("finding sessions by raw suffix %q: %w", raw, err)
