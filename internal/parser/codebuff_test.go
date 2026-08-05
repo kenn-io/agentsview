@@ -258,8 +258,76 @@ func TestParseCodebuffSession_SubagentToolCall(t *testing.T) {
 	assert.Equal(t, "agent-1", tc.ToolUseID)
 	assert.Contains(t, tc.InputJSON, "basher")
 	assert.Contains(t, tc.InputJSON, "run tests")
+	// The agent's lifecycle status must be carried in the tool-call input
+	// now that agent output is emitted as a linked ParsedToolResult; it
+	// used to render in the assistant text for the block. Assert on the
+	// decoded value, not a raw substring, so formatting changes to
+	// InputJSON cannot silently drop the field.
+	var input map[string]any
+	require.NoError(t, json.Unmarshal([]byte(tc.InputJSON), &input))
+	status, ok := input["status"]
+	require.True(t, ok,
+		"agent tool-call InputJSON must include the status field")
+	assert.Equal(t, "complete", status,
+		"agent status must round-trip from the block's status field")
 	// SubagentSessionID intentionally unset.
 	assert.Empty(t, tc.SubagentSessionID)
+}
+
+// TestParseCodebuffSession_SubagentToolCallDefaultStatus pins the default
+// lifecycle status for agent blocks that omit the status field. The parser
+// folds the status into the tool-call InputJSON; when the block carries no
+// status, it must default to "spawned" so the field stays present for
+// consumers that key off it.
+func TestParseCodebuffSession_SubagentToolCallDefaultStatus(t *testing.T) {
+	chatMessages := `[
+		{
+			"id": "ai-1",
+			"variant": "ai",
+			"content": "",
+			"timestamp": "03:04 PM",
+			"blocks": [
+				{
+					"type": "agent",
+					"agentId": "agent-1",
+					"agentName": "basher",
+					"agentType": "basher",
+					"initialPrompt": "run tests",
+					"content": "All tests passed."
+				}
+			]
+		}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-deepseek"
+			}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	_, msgs, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+
+	var toolCallMsg *ParsedMessage
+	for i := range msgs {
+		if msgs[i].HasToolUse {
+			toolCallMsg = &msgs[i]
+			break
+		}
+	}
+	require.NotNil(t, toolCallMsg, "expected a message with tool use")
+	require.Len(t, toolCallMsg.ToolCalls, 1)
+
+	tc := toolCallMsg.ToolCalls[0]
+	var input map[string]any
+	require.NoError(t, json.Unmarshal([]byte(tc.InputJSON), &input))
+	status, ok := input["status"]
+	require.True(t, ok,
+		"agent tool-call InputJSON must always include the status field")
+	assert.Equal(t, "spawned", status,
+		"a missing block status must default to spawned")
 }
 
 func TestParseCodebuffSession_ThinkingBlocks(t *testing.T) {

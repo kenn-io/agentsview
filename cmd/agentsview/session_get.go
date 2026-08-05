@@ -253,8 +253,11 @@ func resolveBareCodebuffID(
 		}
 	}
 
-	// Single zero/one/many decision over both phases.
-	if lookupErr != nil && len(valid) == 0 {
+	// Single zero/one/many decision over both phases. Fail closed on
+	// any candidate lookup error: a probe that errored could hide a
+	// second match, so returning the lone successful candidate may
+	// resolve an ID that is genuinely ambiguous.
+	if lookupErr != nil {
 		return "", lookupErr
 	}
 	switch len(valid) {

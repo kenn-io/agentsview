@@ -829,12 +829,18 @@ func parseCodebuffAIMessage(
 				prompt.Str != "" {
 				inputParts["prompt"] = prompt.Str
 			}
-			inputJSON, _ := json.Marshal(inputParts)
-
+			// The agent's lifecycle status (spawned, complete, ...) used to
+			// be rendered in the assistant text for the block; now that
+			// agent output is emitted as a linked ParsedToolResult, carry
+			// the status in the tool-call input so it stays visible in the
+			// parsed session.
 			status := agentStatus
 			if status == "" {
 				status = "spawned"
 			}
+			inputParts["status"] = status
+
+			inputJSON, _ := json.Marshal(inputParts)
 
 			tc := ParsedToolCall{
 				ToolUseID: agentID,

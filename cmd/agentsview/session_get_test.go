@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -49,6 +50,10 @@ type stubGetService struct {
 	getCalls []string
 	// getErr, when non-nil, is returned by Get in place of the lookup.
 	getErr error
+	// getErrs maps individual IDs to lookup errors; a present entry
+	// takes precedence over getErr so a test can fail one probe while
+	// letting another succeed.
+	getErrs map[string]error
 	// partialIDs is returned by FindSessionIDsByPartial. An empty
 	// (nil) slice defaults to []string{} to avoid panicking in
 	// callers that iterate the result.
@@ -64,6 +69,9 @@ func (s *stubGetService) Get(
 	_ context.Context, id string,
 ) (*service.SessionDetail, error) {
 	s.getCalls = append(s.getCalls, id)
+	if err, ok := s.getErrs[id]; ok {
+		return nil, err
+	}
 	if s.getErr != nil {
 		return nil, s.getErr
 	}
@@ -624,6 +632,45 @@ func TestResolveBareCodebuffID_RemoteOnlyNoLocations(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, remoteID, got,
 		"remote-only session must resolve without a local filesystem match")
+}
+
+// TestResolveBareCodebuffID_FailClosedOnLookupError pins the
+// fail-closed contract in resolveBareCodebuffID: when one candidate
+// probe succeeds and another errors, the error must be returned even
+// though a valid candidate exists. A failed probe could hide a second
+// match, so returning the lone success may resolve an ID that is
+// genuinely ambiguous. The pre-fix code only surfaced lookupErr when
+// len(valid)==0, silently dropping the error in this exact scenario.
+func TestResolveBareCodebuffID_FailClosedOnLookupError(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	stageCodebuffSession(t, tmp, "myproject", "1704067200")
+	stageCodebuffSession(t, tmp, "otherproject", "1704067200")
+	cfg := config.Config{
+		LocalMachineName: "test-machine",
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {tmp},
+		},
+	}
+	good := "codebuff:myproject:1704067200"
+	bad := "codebuff:otherproject:1704067200"
+	svc := &stubGetService{
+		getDetails: map[string]*service.SessionDetail{
+			good: {Session: db.Session{
+				ID:      good,
+				Machine: "test-machine",
+			}},
+		},
+		getErrs: map[string]error{
+			bad: errors.New("backend failure"),
+		},
+	}
+	got, err := resolveBareCodebuffID(
+		context.Background(), svc, &cfg, "1704067200", "local",
+	)
+	require.Error(t, err)
+	assert.Empty(t, got)
+	assert.Contains(t, err.Error(), "backend failure")
 }
 
 // TestCodebuffMachineMatches_EmptyFilter pins the empty-string arm
