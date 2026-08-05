@@ -642,14 +642,22 @@ ______________________________________________________________________
 - Modify: `internal/db/messages_test.go`
 - Modify: `internal/db/orphaned.go`
 - Modify: `internal/db/pricing.go`
+- Modify: `internal/db/pricing_list.go`
 - Modify: `internal/db/pricing_test.go`
 - Modify: `internal/db/read_only_test.go`
 - Modify: `internal/db/recall_eval_ingest.go`
 - Modify: `internal/db/recall_import.go`
+- Modify: `internal/db/usage.go`
+- Modify: `internal/postgres/activityreport_pgtest_test.go`
+- Modify: `internal/postgres/pricing.go`
+- Modify: `internal/postgres/pricing_unit_test.go`
 - Modify: `internal/postgres/schema.go`
 - Modify: `internal/postgres/schema_test.go`
 - Modify: `internal/postgres/schema_pgtest_test.go`
 - Modify: `internal/postgres/analytics.go`
+- Modify: `internal/postgres/usage_pgtest_test.go`
+- Modify: `internal/duckdb/analytics_usage.go`
+- Modify: `internal/duckdb/bundialect/types.go`
 - Modify: `internal/duckdb/schema.go`
 - Modify: `internal/duckdb/schema_test.go`
 - Modify: `internal/duckdb/rebuild_test.go`
@@ -663,6 +671,7 @@ ______________________________________________________________________
 - Modify: `internal/duckdb/store_test.go`
 - Modify: `internal/duckdb/sync.go`
 - Modify: `internal/duckdb/sync_test.go`
+- Modify: `internal/duckdb/worktree_mappings_push.go`
 - Modify: `internal/duckdb/worktree_mappings_push_test.go`
 
 **Interfaces:**
@@ -840,19 +849,25 @@ ______________________________________________________________________
       internal/db/db.go internal/db/db_test.go internal/db/legacy_schema_test.go \
       internal/db/link_subagent_nested_test.go internal/db/messages.go \
       internal/db/messages_test.go internal/db/project_identity.go \
-      internal/db/orphaned.go internal/db/pricing.go internal/db/pricing_test.go \
+      internal/db/orphaned.go internal/db/pricing.go \
+      internal/db/pricing_list.go internal/db/pricing_test.go \
       internal/db/read_only_test.go internal/db/recall_eval_ingest.go \
       internal/db/recall_import.go internal/db/schema.sql \
-      internal/db/session_batch.go internal/db/sessions.go \
-      internal/postgres/analytics.go internal/postgres/schema.go \
+      internal/db/session_batch.go internal/db/sessions.go internal/db/usage.go \
+      internal/postgres/activityreport_pgtest_test.go \
+      internal/postgres/analytics.go internal/postgres/pricing.go \
+      internal/postgres/pricing_unit_test.go internal/postgres/schema.go \
       internal/postgres/schema_pgtest_test.go internal/postgres/schema_test.go \
-      internal/duckdb/analytics_usage_test.go internal/duckdb/messages_test.go \
+      internal/postgres/usage_pgtest_test.go internal/duckdb/analytics_usage.go \
+      internal/duckdb/analytics_usage_test.go \
+      internal/duckdb/bundialect/types.go internal/duckdb/messages_test.go \
       internal/duckdb/probe.go internal/duckdb/project_identity_test.go \
       internal/duckdb/project_inventory_test.go \
       internal/duckdb/project_rules_test.go internal/duckdb/push.go \
       internal/duckdb/rebuild_test.go internal/duckdb/schema.go \
       internal/duckdb/schema_test.go internal/duckdb/store_test.go \
       internal/duckdb/sync.go internal/duckdb/sync_test.go \
+      internal/duckdb/worktree_mappings_push.go \
       internal/duckdb/worktree_mappings_push_test.go
     git commit -m "refactor(storage): converge Bun schemas"
     ```

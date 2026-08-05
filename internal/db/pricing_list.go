@@ -14,8 +14,7 @@ type pricingQuerier interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
-// ListModelPricing returns every pricing row, including sentinel
-// metadata rows (for example `_fallback_version`).
+// ListModelPricing returns every model pricing row.
 func (db *DB) ListModelPricing(
 	ctx context.Context,
 ) ([]ModelPricing, error) {

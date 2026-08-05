@@ -1493,6 +1493,7 @@ var readOnlyRequiredTables = []string{
 	"pg_sync_state",
 	"model_pricing",
 	"model_pricing_bands",
+	"pricing_metadata",
 	"source_archives",
 	"source_project_identity_observations",
 	"source_session_project_identity_snapshots",

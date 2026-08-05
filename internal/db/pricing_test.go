@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"testing"
+	"time"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
@@ -70,7 +71,10 @@ func TestUpsertModelPricingPricingBandsReplacesCompleteSet(t *testing.T) {
 	assert.Equal(t, 200_000, got.Bands[0].AboveInputTokens)
 	assert.Equal(t, 272_000, got.Bands[1].AboveInputTokens)
 	assert.NotEmpty(t, got.Bands[0].UpdatedAt)
-	require.NoError(t, d.SetPricingMeta("banded-model", "2000-01-01T00:00:00Z"))
+	_, err = d.getWriter().Exec(`
+		UPDATE model_pricing SET updated_at = ? WHERE model_pattern = ?`,
+		"2000-01-01T00:00:00Z", "banded-model")
+	require.NoError(t, err)
 
 	updated := initial
 	updated.Bands = []PricingBand{{
@@ -105,7 +109,7 @@ func TestFilterChangedModelPricingDetectsPricingBandOnlyChange(t *testing.T) {
 		Bands: []PricingBand{{
 			AboveInputTokens: 200_000,
 			InputPerMTok:     money.MustParseDollars("2"),
-			UpdatedAt:        "old",
+			UpdatedAt:        "2026-08-05T12:00:00Z",
 		}},
 	}}
 	desired := []ModelPricing{{
@@ -114,7 +118,7 @@ func TestFilterChangedModelPricingDetectsPricingBandOnlyChange(t *testing.T) {
 		Bands: []PricingBand{{
 			AboveInputTokens: 200_000,
 			InputPerMTok:     money.MustParseDollars("3"),
-			UpdatedAt:        "new",
+			UpdatedAt:        "2026-08-05T12:01:00Z",
 		}},
 	}}
 
@@ -192,20 +196,12 @@ func TestUpsertModelPricingOverwrites(t *testing.T) {
 func TestFilterChangedModelPricingIgnoresUpdatedAtOnlyDifferences(t *testing.T) {
 	existing := []ModelPricing{
 		{
-			ModelPattern:         "_fallback_version",
-			InputPerMTok:         money.MustParseDollars("0"),
-			OutputPerMTok:        money.MustParseDollars("0"),
-			CacheCreationPerMTok: money.MustParseDollars("0"),
-			CacheReadPerMTok:     money.MustParseDollars("0"),
-			UpdatedAt:            "v1",
-		},
-		{
 			ModelPattern:         "same-model",
 			InputPerMTok:         money.MustParseDollars("1"),
 			OutputPerMTok:        money.MustParseDollars("2"),
 			CacheCreationPerMTok: money.MustParseDollars("3"),
 			CacheReadPerMTok:     money.MustParseDollars("4"),
-			UpdatedAt:            "old",
+			UpdatedAt:            "2026-08-05T12:00:00Z",
 		},
 		{
 			ModelPattern:         "changed-model",
@@ -213,25 +209,17 @@ func TestFilterChangedModelPricingIgnoresUpdatedAtOnlyDifferences(t *testing.T) 
 			OutputPerMTok:        money.MustParseDollars("2"),
 			CacheCreationPerMTok: money.MustParseDollars("3"),
 			CacheReadPerMTok:     money.MustParseDollars("4"),
-			UpdatedAt:            "old",
+			UpdatedAt:            "2026-08-05T12:00:00Z",
 		},
 	}
 	desired := []ModelPricing{
-		{
-			ModelPattern:         "_fallback_version",
-			InputPerMTok:         money.MustParseDollars("0"),
-			OutputPerMTok:        money.MustParseDollars("0"),
-			CacheCreationPerMTok: money.MustParseDollars("0"),
-			CacheReadPerMTok:     money.MustParseDollars("0"),
-			UpdatedAt:            "v2",
-		},
 		{
 			ModelPattern:         "same-model",
 			InputPerMTok:         money.MustParseDollars("1"),
 			OutputPerMTok:        money.MustParseDollars("2"),
 			CacheCreationPerMTok: money.MustParseDollars("3"),
 			CacheReadPerMTok:     money.MustParseDollars("4"),
-			UpdatedAt:            "new",
+			UpdatedAt:            "2026-08-05T12:01:00Z",
 		},
 		{
 			ModelPattern:         "changed-model",
@@ -239,7 +227,7 @@ func TestFilterChangedModelPricingIgnoresUpdatedAtOnlyDifferences(t *testing.T) 
 			OutputPerMTok:        money.MustParseDollars("9"),
 			CacheCreationPerMTok: money.MustParseDollars("3"),
 			CacheReadPerMTok:     money.MustParseDollars("4"),
-			UpdatedAt:            "new",
+			UpdatedAt:            "2026-08-05T12:01:00Z",
 		},
 		{
 			ModelPattern:         "missing-model",
@@ -247,17 +235,17 @@ func TestFilterChangedModelPricingIgnoresUpdatedAtOnlyDifferences(t *testing.T) 
 			OutputPerMTok:        money.MustParseDollars("6"),
 			CacheCreationPerMTok: money.MustParseDollars("7"),
 			CacheReadPerMTok:     money.MustParseDollars("8"),
-			UpdatedAt:            "new",
+			UpdatedAt:            "2026-08-05T12:01:00Z",
 		},
 	}
 
 	gotSummary, gotRows := FilterChangedModelPricing(existing, desired)
 
 	assert.Equal(t, PricingChangeSummary{
-		Total:     4,
+		Total:     3,
 		Missing:   1,
 		Changed:   1,
-		Unchanged: 2,
+		Unchanged: 1,
 	}, gotSummary)
 	require.Len(t, gotRows, 2)
 	assert.Equal(t, "changed-model", gotRows[0].ModelPattern)
@@ -288,13 +276,25 @@ func TestPricingMeta(t *testing.T) {
 	require.NoError(t, err, "GetPricingMeta v2")
 	require.Equal(t, "v2", got)
 
-	// Sentinel row does not interfere with model lookups.
+	var storedValue, metadataUpdatedAt string
+	require.NoError(t, d.getReader().QueryRow(`
+		SELECT value, updated_at FROM pricing_metadata
+		WHERE key = '_fallback_version'`,
+	).Scan(&storedValue, &metadataUpdatedAt))
+	assert.Equal(t, "v2", storedValue)
+	_, err = time.Parse(time.RFC3339Nano, metadataUpdatedAt)
+	require.NoError(t, err, "pricing metadata updated_at must be a timestamp")
+
+	var sentinelCount int
+	require.NoError(t, d.getReader().QueryRow(`
+		SELECT count(*) FROM model_pricing
+		WHERE model_pattern = '_fallback_version'`,
+	).Scan(&sentinelCount))
+	assert.Zero(t, sentinelCount, "metadata must not create fake pricing rows")
+
 	p, err := d.GetModelPricing("_fallback_version")
-	require.NoError(t, err, "GetModelPricing sentinel")
-	if p != nil {
-		assert.Zero(t, p.InputPerMTok,
-			"sentinel should have zero pricing, got %+v", p)
-	}
+	require.NoError(t, err, "GetModelPricing metadata key")
+	assert.Nil(t, p)
 }
 
 func TestGetModelPricingNotFound(t *testing.T) {

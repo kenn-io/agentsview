@@ -986,8 +986,7 @@ func TestLoadPricingUsesDBRowsAsEffectiveTableAndOverlaysOverrides(t *testing.T)
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
 		) VALUES
-			('claude-sonnet-4-6', 30000000, 150000000, 37500000, 3000000, '2026-06-08T12:00:00Z'),
-			('_fallback_version', 999, 999, 999, 999, '2026-06-08T12:00:00Z')`)
+			('claude-sonnet-4-6', 30000000, 150000000, 37500000, 3000000, '2026-06-08T12:00:00Z')`)
 	require.NoError(t, err)
 
 	got, err := store.loadPricing(ctx)
@@ -999,7 +998,6 @@ func TestLoadPricingUsesDBRowsAsEffectiveTableAndOverlaysOverrides(t *testing.T)
 		updatedAt: ptrTime(t, "2026-06-08T12:00:00Z"),
 		source:    export.PricingRowSourceFetched,
 	}, got["claude-sonnet-4-6"])
-	assert.NotContains(t, got, "_fallback_version")
 	assert.Equal(t, duckRates{
 		input: money.MustParseDollars("9"), output: money.MustParseDollars("10"), cacheCreation: money.MustParseDollars("11"), cacheRead: money.MustParseDollars("12"),
 		source: export.PricingRowSourceCustom,

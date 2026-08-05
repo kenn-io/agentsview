@@ -129,6 +129,86 @@ func TestPostgresCommonConvergenceRollsBackDDLAndStamp(t *testing.T) {
 	assert.Equal(t, 1, sessionCount)
 }
 
+func TestEnsureSchemaUsesNativePricingTimestamps(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanSchemaTestPG(t, pgURL)
+	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
+	pg, err := Open(pgURL, schemaTestSchema, true)
+	require.NoError(t, err)
+	defer pg.Close()
+	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
+
+	for _, table := range []string{"model_pricing", "model_pricing_bands"} {
+		var dataType string
+		require.NoError(t, pg.QueryRowContext(t.Context(), `
+			SELECT data_type FROM information_schema.columns
+			WHERE table_schema = $1 AND table_name = $2
+			  AND column_name = 'updated_at'`,
+			schemaTestSchema, table,
+		).Scan(&dataType))
+		assert.Equal(t, "timestamp with time zone", dataType, table)
+	}
+
+	_, err = pg.ExecContext(t.Context(), `
+		INSERT INTO model_pricing (
+			model_pattern, input_microdollars_per_mtok,
+			output_microdollars_per_mtok, updated_at
+		) VALUES ('metadata-is-not-pricing', 0, 0, '2')`)
+	require.Error(t, err)
+}
+
+func TestEnsureSchemaMigratesPricingSentinelsBeforeTimestampConversion(
+	t *testing.T,
+) {
+	pgURL := testPGURL(t)
+	cleanSchemaTestPG(t, pgURL)
+	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
+	pg, err := Open(pgURL, schemaTestSchema, true)
+	require.NoError(t, err)
+	defer pg.Close()
+	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
+
+	_, err = pg.ExecContext(t.Context(), `
+		ALTER TABLE model_pricing_bands
+			ALTER COLUMN updated_at DROP DEFAULT;
+		ALTER TABLE model_pricing_bands
+			ALTER COLUMN updated_at TYPE TEXT USING updated_at::TEXT;
+		ALTER TABLE model_pricing_bands
+			ALTER COLUMN updated_at SET DEFAULT '';
+		ALTER TABLE model_pricing
+			ALTER COLUMN updated_at DROP DEFAULT;
+		ALTER TABLE model_pricing
+			ALTER COLUMN updated_at TYPE TEXT USING updated_at::TEXT;
+		ALTER TABLE model_pricing
+			ALTER COLUMN updated_at SET DEFAULT '';
+		INSERT INTO model_pricing (
+			model_pattern, input_microdollars_per_mtok,
+			output_microdollars_per_mtok, updated_at
+		) VALUES
+			('_fallback_version', 0, 0, 'legacy-v42'),
+			('real-model', 1250000, 2500000, '2026-08-05T12:00:00Z');
+		DELETE FROM sync_metadata WHERE key = 'bun_common_schema_v1';
+	`)
+	require.NoError(t, err)
+
+	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
+
+	var sentinelCount int
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
+		SELECT count(*) FROM model_pricing
+		WHERE model_pattern = '_fallback_version'`,
+	).Scan(&sentinelCount))
+	assert.Zero(t, sentinelCount)
+	var input int64
+	var updatedAt time.Time
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
+		SELECT input_microdollars_per_mtok, updated_at
+		FROM model_pricing WHERE model_pattern = 'real-model'`,
+	).Scan(&input, &updatedAt))
+	assert.Equal(t, int64(1250000), input)
+	assert.True(t, time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC).Equal(updatedAt))
+}
+
 func cleanSchemaTestPG(t *testing.T, pgURL string) {
 	t.Helper()
 	pg, err := sql.Open("pgx", pgURL)
@@ -351,7 +431,10 @@ func TestEnsureSchemaMigratesLegacyMoneyColumns(t *testing.T) {
 			output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok,
 			cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('legacy-rate', 1250000, 9876543, 2500000, 125000, 'seed');
+		) VALUES (
+			'legacy-rate', 1250000, 9876543, 2500000, 125000,
+			'2026-08-05T12:00:00Z'
+		);
 
 		ALTER TABLE usage_events
 			ALTER COLUMN cost_microdollars TYPE DOUBLE PRECISION
