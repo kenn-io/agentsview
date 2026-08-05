@@ -561,19 +561,20 @@ summary AS (
 		CAST(COALESCE(ROUND(AVG(message_count), 1), 0)
 			AS DOUBLE PRECISION) AS avg_messages,
 		COALESCE((
-			SELECT CAST(AVG(message_count) AS BIGINT)
+			SELECT CAST((SUM(message_count) -
+				(SUM(message_count) % COUNT(*))) / COUNT(*) AS BIGINT)
 			FROM ranked
 			WHERE rn IN (
-				CAST((n + 1) / 2 AS BIGINT),
-				CAST((n + 2) / 2 AS BIGINT)
+				CAST(((n + 1) - ((n + 1) % 2)) / 2 AS BIGINT),
+				CAST(((n + 2) - ((n + 2) % 2)) / 2 AS BIGINT)
 			)
 		), 0) AS median_messages,
 		COALESCE((
 			SELECT message_count
 			FROM ranked
 			WHERE rn = CASE
-				WHEN CAST(n * 0.9 AS BIGINT) + 1 < n
-				THEN CAST(n * 0.9 AS BIGINT) + 1
+				WHEN CAST((n * 9 - ((n * 9) % 10)) / 10 AS BIGINT) + 1 < n
+				THEN CAST((n * 9 - ((n * 9) % 10)) / 10 AS BIGINT) + 1
 				ELSE n
 			END
 			LIMIT 1

@@ -1282,6 +1282,9 @@ func dailyUsageProjectionTime(row bunDailyUsageProjection) time.Time {
 	if !row.SessionStartedAt.IsZero() {
 		return row.SessionStartedAt.Time
 	}
+	if !row.SessionCreatedAt.IsZero() {
+		return row.SessionCreatedAt.Time
+	}
 	return time.Time{}
 }
 
