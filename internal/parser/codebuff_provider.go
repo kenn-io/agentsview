@@ -220,6 +220,25 @@ func codebuffClassifyPath(
 	return singleFileMatch{}, false
 }
 
+// isSafeSinglePathComponent reports whether s is a single
+// filesystem-safe directory or file name: non-empty, not "." or "..",
+// and contains no path separators.
+func isSafeSinglePathComponent(s string) bool {
+	if s == "" || s == "." || s == ".." {
+		return false
+	}
+	return !strings.ContainsAny(s, string(filepath.Separator)+string('/'))
+}
+
+// isWithinRoot reports whether the path is beneath root after
+// resolving any symlinks in the common prefix. Unlike a raw
+// strings.HasPrefix check, this catches .. segments that
+// filepath.Join collapses.
+func isWithinRoot(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	return err == nil && !strings.HasPrefix(rel, "..")
+}
+
 // codebuffFindFile finds a session by raw session ID under the root.
 // The rawID may be either "project:timestamp" (new format) or just
 // "timestamp" (legacy compatibility). For the new format, it searches
@@ -231,7 +250,21 @@ func codebuffFindFile(root, rawID string) (singleFileMatch, bool) {
 	if len(parts) == 2 {
 		projectName := parts[0]
 		timestamp := parts[1]
+		// Reject traversal: project and timestamp must each be a single
+		// safe path component so filepath.Join does not escape root.
+		if !isSafeSinglePathComponent(projectName) ||
+			!isSafeSinglePathComponent(timestamp) {
+			return singleFileMatch{}, false
+		}
+		// Reject raw IDs whose timestamp segment is not a valid
+		// Codebuff session directory name; see IsCodebuffTimestamp.
+		if !IsCodebuffTimestamp(timestamp) {
+			return singleFileMatch{}, false
+		}
 		chatPath := filepath.Join(root, projectName, "chats", timestamp, "chat-messages.json")
+		if !isWithinRoot(root, chatPath) {
+			return singleFileMatch{}, false
+		}
 		if IsRegularFile(chatPath) {
 			return singleFileMatch{
 				Path:        chatPath,
@@ -242,6 +275,9 @@ func codebuffFindFile(root, rawID string) (singleFileMatch, bool) {
 	}
 
 	// Legacy format: search all projects for the timestamp.
+	if !isSafeSinglePathComponent(rawID) {
+		return singleFileMatch{}, false
+	}
 	projects, err := os.ReadDir(root)
 	if err != nil {
 		return singleFileMatch{}, false
@@ -251,6 +287,9 @@ func codebuffFindFile(root, rawID string) (singleFileMatch, bool) {
 			continue
 		}
 		chatPath := filepath.Join(root, project.Name(), "chats", rawID, "chat-messages.json")
+		if !isWithinRoot(root, chatPath) {
+			continue
+		}
 		if IsRegularFile(chatPath) {
 			return singleFileMatch{
 				Path:        chatPath,
