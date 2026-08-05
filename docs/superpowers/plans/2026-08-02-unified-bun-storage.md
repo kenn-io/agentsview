@@ -192,6 +192,11 @@ ______________________________________________________________________
     that `Features` contains the flag whose syntax it exercises;
     `transaction_rollback` is a lifecycle contract and has no feature flag.
 
+    Generate a canonical table with dynamic timestamp defaults, create it in a
+    real temporary DuckDB database, and attach it through the Quack-compatible
+    path. Assert the resulting catalog has no dynamic default and that an
+    explicit-timestamp insert preserves the literal value.
+
 - [ ] **Step 3: Run the focused tests and verify RED**
 
     Run:
@@ -226,7 +231,9 @@ ______________________________________________________________________
     Use a private non-built-in `dialect.Name` value, return `"main"` from
     `DefaultSchema`, map text/JSON/blob/bool/timestamp/integer types explicitly,
     and leave `AppendSequence` unchanged because mirror IDs are source-assigned.
-    Remove any advertised flag whose representative execution fails.
+    Normalize generated DuckDB table metadata by dropping dynamic timestamp
+    defaults that Quack cannot attach; DuckDB writers provide those values
+    explicitly. Remove any advertised flag whose representative execution fails.
 
 - [ ] **Step 5: Verify GREEN and tidy dependencies**
 
@@ -278,6 +285,10 @@ ______________________________________________________________________
   `StarredSession`, `PinnedMessage`, `ExcludedSession`, `SessionAlias`,
   `Insight`, `SourceArchive`, `SourceProjectIdentityObservation`,
   `SourceSessionProjectIdentitySnapshot`, and `SourceWorktreeProjectMapping`.
+
+- Represents `ModelPricing.updated_at` and `ModelPricingBand.updated_at` with
+  the canonical timestamp scanner/valuer. Arbitrary pricing refresh state is
+  not a common model row.
 
 - Uses the source-scoped identity tables as the only canonical serving models.
   Existing SQLite non-source identity/mapping structs remain domain or
@@ -355,6 +366,10 @@ ______________________________________________________________________
     package. Represent timestamps with a shared scanner/valuer that accepts
     existing SQLite text and PostgreSQL/DuckDB native time values and always
     emits UTC.
+
+    Pricing rows and pricing bands always use that timestamp type. Keep pricing
+    refresh versions and attempt markers out of the common registry; Task 4
+    gives SQLite a dedicated operational metadata table for them.
 
     Keep engine-operational tables out of `CommonTables`; list them only in the
     schema extension packages that own them.
@@ -605,22 +620,50 @@ ______________________________________________________________________
 
 **Files:**
 
+- Modify: `docs/superpowers/specs/2026-08-02-unified-bun-storage-design.md`
+- Modify: `internal/db/bun_rows.go`
 - Create: `internal/db/bun_schema.go`
 - Create: `internal/db/bun_schema_test.go`
+- Modify: `internal/db/bunmodel/generated_schema_duckdb_test.go`
+- Modify: `internal/db/bunmodel/identity.go`
+- Modify: `internal/db/bunmodel/models.go`
+- Modify: `internal/db/bunmodel/registry.go`
+- Modify: `internal/db/bunmodel/registry_test.go`
+- Modify: `internal/db/bunmodel/session.go`
 - Modify: `internal/db/db.go`
+- Modify: `internal/db/db_test.go`
 - Modify: `internal/db/schema.sql`
 - Modify: `internal/db/sessions.go`
 - Modify: `internal/db/session_batch.go`
 - Modify: `internal/db/project_identity.go`
 - Modify: `internal/db/legacy_schema_test.go`
+- Modify: `internal/db/link_subagent_nested_test.go`
+- Modify: `internal/db/messages.go`
+- Modify: `internal/db/messages_test.go`
+- Modify: `internal/db/orphaned.go`
+- Modify: `internal/db/pricing.go`
+- Modify: `internal/db/pricing_test.go`
+- Modify: `internal/db/read_only_test.go`
+- Modify: `internal/db/recall_eval_ingest.go`
+- Modify: `internal/db/recall_import.go`
 - Modify: `internal/postgres/schema.go`
 - Modify: `internal/postgres/schema_test.go`
 - Modify: `internal/postgres/schema_pgtest_test.go`
+- Modify: `internal/postgres/analytics.go`
 - Modify: `internal/duckdb/schema.go`
 - Modify: `internal/duckdb/schema_test.go`
-- Modify: `internal/duckdb/rebuild.go`
 - Modify: `internal/duckdb/rebuild_test.go`
-- Modify: `internal/duckdb/probe_test.go`
+- Modify: `internal/duckdb/analytics_usage_test.go`
+- Modify: `internal/duckdb/messages_test.go`
+- Modify: `internal/duckdb/probe.go`
+- Modify: `internal/duckdb/project_identity_test.go`
+- Modify: `internal/duckdb/project_inventory_test.go`
+- Modify: `internal/duckdb/project_rules_test.go`
+- Modify: `internal/duckdb/push.go`
+- Modify: `internal/duckdb/store_test.go`
+- Modify: `internal/duckdb/sync.go`
+- Modify: `internal/duckdb/sync_test.go`
+- Modify: `internal/duckdb/worktree_mappings_push_test.go`
 
 **Interfaces:**
 
@@ -665,6 +708,11 @@ ______________________________________________________________________
     1. PostgreSQL's prior schema fixture migrates in one transaction and retains a
        named session under `pgtest`.
 
+    Inspect the catalog produced by SQLite's normal `Open` path and assert the one
+    accepted physical relationship matrix. Do not substitute an isolated
+    Bun-only constructor or claim that fresh archives receive foreign keys the
+    bootstrap path does not create.
+
     Seed the prior SQLite fixture with an aggregate identity observation, a
     session snapshot, a worktree mapping, a tool call, and a pinned message.
     Assert that convergence backfills the source-scoped tables with the archive
@@ -672,6 +720,10 @@ ______________________________________________________________________
     target only those canonical tables. Inject a failure before the
     compatibility stamp on SQLite and PostgreSQL; assert the new rows, stamp,
     and all intermediate DDL roll back together.
+
+    Open an already-stamped PostgreSQL fixture whose canonical catalog is invalid
+    and assert convergence fails after taking the advisory transaction lock. The
+    initial stamp probe must not bypass normal validation.
 
     Reopen the stamped SQLite fixture after deliberately diverging its legacy and
     canonical identity rows. Assert canonical rows are unchanged so the one-time
@@ -725,16 +777,25 @@ ______________________________________________________________________
     do not read, write, drop, or use them as a fallback after the cutover.
 
     Check the SQLite stamp inside the transaction. Copy legacy identity inputs and
-    install canonical publication triggers only when unstamped; stamped archives
-    validate and fail closed without replaying inputs. PostgreSQL rechecks its
-    stamp after acquiring the advisory transaction lock.
+    install the transitional canonical publication triggers only when unstamped;
+    stamped archives validate and fail closed without replaying inputs. Task 11
+    removes those triggers after all application write paths and journal updates
+    are centralized. PostgreSQL rechecks its stamp after acquiring the advisory
+    transaction lock.
 
     Move archive-identity retrieval and session provenance stamping into this
     task. Route every SQLite session insertion path, including batch, pending-
     content, project-identity, and placeholder writes, through the same helper
-    before shared reads are enabled. Empty archive identity is an error. Task 10
-    later replaces the SQL implementation with Bun but does not introduce this
-    invariant.
+    before shared reads are enabled. The artifact-import coordinator may stage
+    an incomplete row during its recoverable pre-publication phase; governed
+    reads exclude it until provenance is populated. Shared schema validation
+    must not reject that workflow state. Task 10 later replaces the SQL
+    implementation with Bun but does not introduce this invariant.
+
+    Move the known pricing sentinel rows into a dedicated SQLite
+    `pricing_metadata` table in this same forward convergence. Delete the
+    migrated sentinels from `model_pricing`, use no fallback reads, and preserve
+    the metadata explicitly during archive resync.
 
     Replace DuckDB's duplicated common `mirrorTables` declarations with registry
     creation. Keep only `sync_metadata`, provenance, and DuckDB-specific indexes
@@ -769,20 +830,30 @@ ______________________________________________________________________
 - [ ] **Step 7: Commit the convergence migration**
 
     ```bash
-    git add internal/db/bun_schema.go internal/db/bun_schema_test.go \
-      internal/db/bun_rows.go internal/db/db.go internal/db/schema.sql \
-      internal/db/legacy_schema_test.go internal/db/messages.go \
-      internal/db/project_identity.go internal/db/session_batch.go \
-      internal/db/sessions.go internal/db/recall_eval_ingest.go \
-      internal/db/recall_import.go internal/db/worktree_mappings.go \
-      internal/db/worktree_mapping_publication.go \
-      internal/db/worktree_reclassification.go \
-      internal/postgres/schema.go internal/postgres/schema_test.go \
-      internal/postgres/schema_pgtest_test.go internal/postgres/analytics.go \
-      internal/duckdb/schema.go internal/duckdb/schema_test.go \
-      internal/duckdb/rebuild.go internal/duckdb/rebuild_test.go \
-      internal/duckdb/probe.go internal/duckdb/probe_test.go \
-      internal/duckdb/push.go internal/duckdb/sync.go
+    git add docs/superpowers/specs/2026-08-02-unified-bun-storage-design.md \
+      internal/db/bun_rows.go internal/db/bun_schema.go \
+      internal/db/bun_schema_test.go \
+      internal/db/bunmodel/generated_schema_duckdb_test.go \
+      internal/db/bunmodel/identity.go internal/db/bunmodel/models.go \
+      internal/db/bunmodel/registry.go internal/db/bunmodel/registry_test.go \
+      internal/db/bunmodel/session.go \
+      internal/db/db.go internal/db/db_test.go internal/db/legacy_schema_test.go \
+      internal/db/link_subagent_nested_test.go internal/db/messages.go \
+      internal/db/messages_test.go internal/db/project_identity.go \
+      internal/db/orphaned.go internal/db/pricing.go internal/db/pricing_test.go \
+      internal/db/read_only_test.go internal/db/recall_eval_ingest.go \
+      internal/db/recall_import.go internal/db/schema.sql \
+      internal/db/session_batch.go internal/db/sessions.go \
+      internal/postgres/analytics.go internal/postgres/schema.go \
+      internal/postgres/schema_pgtest_test.go internal/postgres/schema_test.go \
+      internal/duckdb/analytics_usage_test.go internal/duckdb/messages_test.go \
+      internal/duckdb/probe.go internal/duckdb/project_identity_test.go \
+      internal/duckdb/project_inventory_test.go \
+      internal/duckdb/project_rules_test.go internal/duckdb/push.go \
+      internal/duckdb/rebuild_test.go internal/duckdb/schema.go \
+      internal/duckdb/schema_test.go internal/duckdb/store_test.go \
+      internal/duckdb/sync.go internal/duckdb/sync_test.go \
+      internal/duckdb/worktree_mappings_push_test.go
     git commit -m "refactor(storage): converge Bun schemas"
     ```
 
@@ -981,10 +1052,8 @@ ______________________________________________________________________
   write helpers used by local mutations and the Task 10 cross-target fixture.
 
 - Produces identity and mapping reads exclusively from the source-scoped
-  canonical tables. In the same slice, redirect SQLite observation, snapshot,
-  and mapping writes from the retired migration-input tables to those
-  canonical tables before enabling the shared reads; no commit may leave new
-  writes invisible to the active read path.
+  canonical tables. Task 4 already moved active writes off the retired
+  migration-input tables; this task does not introduce another write path.
 
 - Produces the `db.Store` Recall methods once on `BunStore`: the SQLite adapter
   advertises `BackendCapabilities.Recall`, while PostgreSQL and DuckDB
@@ -1020,10 +1089,10 @@ ______________________________________________________________________
 - [ ] **Step 3: Implement shared identity and inventory reads**
 
     Port identity observations/snapshots, inventory aggregation, project rules,
-    and worktree candidates to canonical source-scoped Bun rows. Redirect the
-    SQLite write entry points in the same transaction boundary. Keep path
+    and worktree candidates to canonical source-scoped Bun rows. Keep path
     normalization and identity merge algorithms in their existing pure helpers;
-    only database access moves.
+    only database access moves. Task 11 owns the final application-write
+    centralization and removal of trigger-based publication bookkeeping.
 
 - [ ] **Step 4: Implement shared curation, insight, and session mutations**
 
@@ -1108,6 +1177,10 @@ ______________________________________________________________________
   write helpers; pricing bands replace per model pattern in the same
   transaction as their base pricing row.
 
+- Keeps SQLite pricing refresh state in `pricing_metadata`. `GetPricingMeta` and
+  `SetPricingMeta` never read or create sentinel `model_pricing` rows, and
+  actual pricing/band writes require valid canonical timestamps.
+
 - Keeps cursor/provider normalization and exact microdollar calculation in pure
   shared functions; only row selection and aggregation SQL move to Bun.
 
@@ -1139,6 +1212,10 @@ ______________________________________________________________________
     usage events, message-level token data, Cursor events, and session
     fallbacks. Keep band selection and money arithmetic in existing Go helpers
     so SQL never performs floating-point cost calculation.
+
+    Route pricing refresh metadata through the dedicated SQLite extension.
+    Preserve it explicitly during resync; do not fall back to sentinel pricing
+    rows after Task 4's one-time migration.
 
 - [ ] **Step 4: Implement shared usage aggregations**
 
@@ -1610,6 +1687,12 @@ ______________________________________________________________________
 
 - Removes the old placeholder/dialect builder and all legacy Store receivers.
 
+- Centralizes the remaining live SQLite identity, mapping, and session-snapshot
+  writes behind application-owned Bun transactions. Those helpers update
+  publication revisions and change journals atomically, after which the 11
+  canonical identity triggers are removed. Migration-only raw seams remain
+  named and documented.
+
 - [ ] **Step 1: Compile the complete backend contract and inventory shadows**
 
     Run focused source inventories as development checks, not tests:
@@ -1634,6 +1717,12 @@ ______________________________________________________________________
     contract passes. Split mixed files so retained push/search/lifecycle code
     has one responsibility. Remove `QueryDialect`, placeholder builders, and
     query tests that only protected the deleted implementation.
+
+    Finish routing SQLite identity and worktree-mapping mutations through the
+    canonical helpers. Move revision and change-journal maintenance into those
+    same transactions, remove the canonical identity triggers, and make stamped
+    archive opens validation-only. This is the final cutover, not a temporary
+    dual write or compatibility layer.
 
 - [ ] **Step 3: Audit direct `database/sql` execution**
 

@@ -92,6 +92,10 @@ The dialect owns:
 - default schema/catalog behavior; and
 - table metadata normalization required by canonical schema generation.
 
+DuckDB catalog DDL contains only defaults that Quack can attach. The dialect
+omits dynamic timestamp defaults such as `current_timestamp`; every DuckDB
+writer supplies those timestamp values explicitly instead.
+
 Focused execution tests against a real temporary DuckDB database determine the
 feature set. Unsupported operations fail explicitly rather than falling back to
 SQLite behavior.
@@ -116,12 +120,17 @@ syntax or affinity:
 - SQLite may retain text timestamp affinity in shipped tables; PostgreSQL and
   DuckDB use native timestamp types. Canonical scanners normalize all values
   to UTC domain values.
+- Pricing and pricing-band `updated_at` values are always timestamps. Pricing
+  refresh versions, attempt markers, and other arbitrary state live in a
+  dedicated SQLite `pricing_metadata` extension rather than sentinel pricing
+  rows.
 - JSON uses a portable representation unless a narrowly scoped engine feature
   requires a native type.
 
 The following remain documented extensions rather than canonical data tables:
 
 - SQLite archive, parser, skip, watcher, and resync bookkeeping;
+- SQLite pricing refresh metadata;
 - PostgreSQL push/source bookkeeping;
 - DuckDB `sync_metadata` and mirror provenance;
 - FTS tables, generated search columns, and search indexes; and
@@ -143,7 +152,7 @@ The convergence uses this ownership matrix:
 | Sessions                               | Domain fields plus `source_archive_id` and `source_database_generation` provenance                               | SQLite parser cursors/linearity, PostgreSQL owner and remote-curation baselines, DuckDB push fingerprints |
 | Messages and dependent rows            | `(session_id, ordinal)` is the logical message key; source row IDs remain data columns where present             | FTS/vector derived rows and generation state                                                              |
 | Identity and mappings                  | `source_archives` and the three `source_*` identity/mapping tables, including source archive and generation keys | SQLite change journals and publication revisions; PostgreSQL publication-scope ownership tables           |
-| Usage, pricing, curation, and insights | One common column set and logical key per registered Bun model                                                   | Provider import cursors and backend capability probes                                                     |
+| Usage, pricing, curation, and insights | One common column set and logical key per registered Bun model                                                   | SQLite pricing refresh metadata, provider import cursors, and backend capability probes                   |
 
 Canonical generated message DDL uses `(session_id, ordinal)` as its composite
 primary key and keeps `id` as an optional source row identifier. The shipped
@@ -167,9 +176,11 @@ the canonical `(session_id, ordinal)` key is authoritative there. Migration
 tests retain existing tool calls and pins and prove new writes satisfy the
 accepted representation on each persistent backend.
 
-Upgraded SQLite archives cannot gain table-level foreign keys through additive
-`ALTER TABLE`, so compatibility is behavioral rather than a claim that fresh and
-shipped DDL text are identical. The accepted legacy relationship matrix is:
+SQLite archives cannot gain table-level foreign keys through additive
+`ALTER TABLE`, and the normal fresh `Open` path creates the same persistent
+table shape before Bun fills missing common objects. SQLite therefore has one
+accepted physical relationship matrix rather than separate fresh and upgraded
+catalogs:
 
 - shipped `messages.id` plus unique `(session_id, ordinal)` represents the
   canonical message key;
@@ -181,19 +192,22 @@ shipped DDL text are identical. The accepted legacy relationship matrix is:
 - shipped tool-result rows retain their session cascade, while every
   replacement/delete transaction removes result events before calls/messages.
 
-Fresh SQLite and PostgreSQL schemas receive the full canonical foreign-key
-metadata. Compatibility checks accept only the legacy forms above and validate
-their data invariants; no persistent table is rebuilt to make catalog text
-match.
+PostgreSQL schemas receive the full canonical foreign-key metadata. SQLite
+compatibility checks require the single matrix above and validate its data
+invariants; no persistent table is rebuilt to make catalog text match. Tests
+inspect the catalog created by the normal `Open` path, not an isolated Bun-only
+schema constructor.
 
 Canonical foreign-key metadata preserves session/message deletion behavior for
-fresh schemas. Canonical usage dedup indexes use portable `CASE` expressions so
-empty keys may repeat while non-empty keys remain unique on all engines; shipped
-SQLite/PostgreSQL partial indexes are accepted as physically equivalent.
-Mirror-only source IDs, including cursor-usage and secret-finding IDs, are
-nullable data rather than generated canonical keys. Conversion of a non-empty
-timestamp that is not one of the proven persistent forms returns an error and
-aborts the enclosing write instead of silently producing `NULL` or a zero time.
+PostgreSQL and isolated generated-schema fixtures; SQLite preserves the same
+observable deletion behavior through its accepted physical matrix. Canonical
+usage dedup indexes use portable `CASE` expressions so empty keys may repeat
+while non-empty keys remain unique on all engines; shipped SQLite/PostgreSQL
+partial indexes are accepted as physically equivalent. Mirror-only source IDs,
+including cursor-usage and secret-finding IDs, are nullable data rather than
+generated canonical keys. Conversion of a non-empty timestamp that is not one of
+the proven persistent forms returns an error and aborts the enclosing write
+instead of silently producing `NULL` or a zero time.
 
 Existing SQLite `project_identity_observations`,
 `session_project_identity_snapshots`, and `worktree_project_mappings` are
@@ -204,13 +218,14 @@ fallback or dual-write path. PostgreSQL and DuckDB already use the canonical
 source-scoped identity shape.
 
 `sessions.source_archive_id` and `sessions.source_database_generation` are
-required canonical provenance. The SQLite adapter reads the stable archive ID
-and database ID under its guarded handle and stamps every session write before
-the first shared-query cutover. This stamping lands with schema convergence, not
-the later canonical-write rewrite, so Tasks 5-9 cannot create sessions with
-empty provenance. The convergence migration backfills both columns on legacy
-sessions in the same transaction as the source-scoped identity tables; empty
-values fail compatibility validation after cutover.
+required publication provenance. Normal SQLite session writers read the stable
+archive ID and database ID under the guarded handle and stamp both values in the
+same transaction. The artifact-import coordinator may persist an incomplete row
+during its crash-recoverable staging phase; governed reads and mirror
+publication exclude that row until the coordinator completes provenance. Common
+schema validation checks the columns, keys, and portable row invariants, not
+this workflow state. The convergence migration still backfills both columns on
+legacy sessions in the same transaction as the source-scoped identity tables.
 
 ## Schema Creation and Migration
 
@@ -226,6 +241,9 @@ schema-convergence migration and follows these rules:
   preserved.
 - PostgreSQL applies the corresponding changes transactionally in place and
   retains existing synchronized data.
+- Existing pricing metadata sentinel rows are moved once into `pricing_metadata`
+  and removed from `model_pricing`. Runtime reads use only the new table;
+  there is no dual read or write path.
 - The migration leaves no permanent dual-schema read or write path. Once the
   transaction succeeds, only the canonical model is used.
 - DuckDB does not migrate in place. Its `SchemaVersion` is incremented; a push
@@ -238,18 +256,21 @@ rather than rewriting stored data without benefit.
 
 The SQLite compatibility stamp is checked inside the convergence transaction. An
 unstamped archive copies the three legacy identity inputs exactly once, installs
-canonical change-journal triggers, validates invariants, and stamps the same
-commit. A stamped archive validates and fails closed on drift; it never replays
-legacy inputs or attempts an implicit repair. PostgreSQL rechecks its stamp
-after acquiring the advisory transaction lock and follows the same fail-closed
-rule. SQLite's writer transaction/busy timeout and PostgreSQL's advisory lock
-serialize concurrent openers.
+the publication machinery owned by this stack layer, validates invariants, and
+stamps the same commit. A stamped archive validates and fails closed on drift;
+it never replays legacy inputs or attempts an implicit repair. PostgreSQL always
+acquires its advisory transaction lock before relying on the stamp, rechecks it
+under that lock, and validates a stamped schema before returning. SQLite's
+writer transaction/busy timeout and PostgreSQL's advisory lock serialize
+concurrent openers.
 
-Downgrading a database after this cutover is unsupported: older binaries may
-observe stale legacy identity inputs. They must not be used to write an archive
-that has the canonical compatibility stamp. Read-only open requires the
-canonical source-scoped tables and therefore reports an incompatible schema
-rather than silently falling back.
+Downgrading a database after this cutover is unsupported. Older released
+binaries cannot recognize the new stamp and no trigger, shim, or dual-schema
+path attempts to police them. Before upgrading a persistent archive, operators
+who need a downgrade path must keep a pre-upgrade backup and restore that backup
+before running the older binary. Read-only open on the new binary requires the
+canonical source-scoped tables and reports an incompatible schema rather than
+silently falling back.
 
 ## Query and Write Flow
 
