@@ -2334,7 +2334,11 @@ func TestParseDiffCodebuffCompanionOnlyChangeAdvancesOrderingMtime(t *testing.T)
 	}
 
 	baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	newerTime := baseTime.Add(time.Hour)
+	// Chtimes updates ctime to the current wall-clock time on all
+	// platforms, and codebuffCompositeMtime uses max(mtime,ctime).
+	// Use a future mtime so the bumped companion's mtime dominates
+	// its own ctime rather than being buried by it.
+	newerTime := time.Now().Add(time.Hour)
 
 	// Pin both chat-messages.json files to the same mtime.
 	chatA := filepath.Join(dirA, "chat-messages.json")
@@ -2404,7 +2408,11 @@ func TestParseDiffFreebuffCompanionOnlyChangeAdvancesOrderingMtime(t *testing.T)
 	}
 
 	baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	newerTime := baseTime.Add(time.Hour)
+	// Chtimes updates ctime to the current wall-clock time on all
+	// platforms, and codebuffCompositeMtime uses max(mtime,ctime).
+	// Use a future mtime so the bumped companion's mtime dominates
+	// its own ctime rather than being buried by it.
+	newerTime := time.Now().Add(time.Hour)
 
 	// Pin both chat-messages.json files to the same mtime.
 	chatA := filepath.Join(dirA, "chat-messages.json")

@@ -207,32 +207,25 @@ func resolveBareCodebuffID(
 	// codebuff or freebuff agent marker, and the exact timestamp
 	// suffix.
 	if machineFilter != "" && machineFilter != "local" {
-		// Search with agent-prefixed queries instead of the bare
-		// timestamp suffix. A raw "project:timestamp" substring
-		// can match unrelated sessions from other agents whose IDs
-		// coincidentally contain the same digit sequence, and the
-		// 20-result limit may exclude the genuine codebuff/freebuff
-		// match. Prepending the agent prefix makes the query
-		// specific enough that 100 results is safely exhaustive.
-		ids1, findErr1 := svc.FindSessionIDsByPartial(
-			ctx, "codebuff:"+rawID, 100,
+		// Canonical remote Codebuff/Freebuff IDs carry the form
+		// host~codebuff:<project>:<timestamp> — the project
+		// segment separates the agent prefix from the timestamp.
+		// An agent-prefixed query ("codebuff:"+rawID) cannot
+		// match because the prefix isn't contiguous with the
+		// timestamp. Search by the raw timestamp alone so
+		// codebuff:<project>:<timestamp> rows are found. The
+		// post-fetch guards below (host prefix, suffix, agent
+		// marker, machine) keep the result set specific.
+		ids, findErr := svc.FindSessionIDsByPartial(
+			ctx, rawID, 200,
 		)
-		if findErr1 != nil && lookupErr == nil {
+		if findErr != nil && lookupErr == nil {
 			lookupErr = fmt.Errorf(
-				"lookup codebuff host-prefixed sessions for %q: %w",
-				rawID, findErr1,
+				"lookup host-prefixed sessions for %q: %w",
+				rawID, findErr,
 			)
 		}
-		ids2, findErr2 := svc.FindSessionIDsByPartial(
-			ctx, "freebuff:"+rawID, 100,
-		)
-		if findErr2 != nil && lookupErr == nil {
-			lookupErr = fmt.Errorf(
-				"lookup freebuff host-prefixed sessions for %q: %w",
-				rawID, findErr2,
-			)
-		}
-		for _, id := range append(ids1, ids2...) {
+		for _, id := range ids {
 			if !strings.Contains(id, "~") {
 				continue
 			}
