@@ -607,7 +607,9 @@ Grok section and remove the explicit registry exception in the coverage test.
   [session manager](https://github.com/earendil-works/pi/blob/f1c587dde39025c75d7397bc14532d8fa5c001d9/packages/coding-agent/src/core/session-manager.ts).
 - **Usage and cost:** Assistant messages persist input and output tokens plus
   cache-read and cache-write/creation values in nested or historical flat
-  shapes. Model IDs are present. Agentsview catalog-prices the tokens.
+  shapes. Model IDs are present. Agentsview catalog-prices the tokens. Data
+  version 81 reparses existing Pi-family archives after adding the flat
+  `cacheWrite` spelling.
 - **Agentsview:** `internal/parser/pi.go` and `internal/parser/pi_provider.go`;
   alternate branches remain in the file but only the active ancestry is a
   conversation.
@@ -633,7 +635,10 @@ Grok section and remove the explicit registry exception in the coverage test.
   a target assistant message's usage with the persisted aggregate that
   includes RLM child work. Agentsview consumes that aggregate and
   catalog-prices the normalized tokens rather than trusting the producer's
-  persisted cost object.
+  persisted cost object. Attribution is applied in file order: records for an
+  unknown target are ignored, and the last aggregate for a known target wins.
+  Prime Agent full parses replace stored messages because a later append can
+  retroactively update an earlier assistant message.
 
 - **Agentsview:** Prime Agent is registered through the Pi-family parser in
   `internal/parser/pi.go` and `internal/parser/pi_provider.go`, with its own
@@ -641,8 +646,11 @@ Grok section and remove the explicit registry exception in the coverage test.
   path handling. Reverified 2026-08-06 against a live Prime Agent v0.7.0
   session: the flat transcript filename UUID can differ from the session
   header UUID, so canonical ID lookup falls back to scanning session headers.
-  The same artifact persisted OpenAI Codex model identity and per-message
-  input and output usage in the documented Pi-family fields.
+  Persisted parent paths accept both POSIX and Windows separators. The same
+  artifact persisted OpenAI Codex model identity and per-message input and
+  output usage in the documented Pi-family fields. Support targets v0.7.0's
+  current flat layout; that producer migrates older per-project sessions
+  before normal session listing.
 
 ## Oh My Pi (`omp`)
 

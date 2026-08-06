@@ -1008,9 +1008,9 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 		"expected tool_result_events table after reopen")
 }
 
-func TestCurrentDataVersionKimiToolUsage(t *testing.T) {
-	assert.Equal(t, 80, CurrentDataVersion(),
-		"Kimi tool-step usage backfill requires a data version bump")
+func TestCurrentDataVersionPrimeAgentCacheWriteUsage(t *testing.T) {
+	assert.Equal(t, 81, CurrentDataVersion(),
+		"Pi cacheWrite usage backfill requires a data version bump")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {

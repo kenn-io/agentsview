@@ -292,6 +292,11 @@ can still be parsed.
 | Zed                   | (platform-specific, see below)                                                   | SQLite database (`threads/threads.db`)                                                                                          |
 | Zencoder              | `~/.zencoder/sessions/`                                                          | JSONL per session                                                                                                               |
 
+Prime Agent support targets the current flat session layout in v0.7.0. That
+release migrates the older per-project layout when Prime Agent opens its
+session store, so open the current Prime Agent once before syncing a legacy
+archive with AgentsView.
+
 Grok sessions are read from `summary.json` (title, timestamps, project),
 optional `signals.json` (token counters), and `chat_history.jsonl` when
 present for the full transcript (user turns, assistant replies, thinking,

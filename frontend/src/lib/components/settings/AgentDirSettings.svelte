@@ -15,6 +15,7 @@
     iflow: "iFlow",
     "vscode-copilot": "VSCode Copilot",
     pi: "Pi",
+    "prime-agent": "Prime Agent",
     "visualstudio-copilot": "Visual Studio Copilot",
     qwen: "Qwen Code",
     openclaw: "OpenClaw",

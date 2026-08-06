@@ -23,7 +23,7 @@ func (f piProviderFactory) Definition() AgentDef {
 }
 
 func (f piProviderFactory) Capabilities() Capabilities {
-	return piProviderCapabilities()
+	return piProviderCapabilities(f.def.Type)
 }
 
 func (f piProviderFactory) NewProvider(cfg ProviderConfig) Provider {
@@ -31,7 +31,7 @@ func (f piProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	return &piProvider{
 		ProviderBase: ProviderBase{
 			Def:    cloneAgentDef(f.def),
-			Caps:   piProviderCapabilities(),
+			Caps:   piProviderCapabilities(f.def.Type),
 			Config: cfg,
 		},
 		sources: newPiSourceSet(f.def.Type, cfg.Roots),
@@ -221,6 +221,7 @@ func (p *piProvider) Parse(
 			DataVersion: DataVersionCurrent,
 		}},
 		ResultSetComplete: true,
+		ForceReplace:      p.Def.Type == AgentPrimeAgent,
 	}, nil
 }
 
@@ -311,7 +312,7 @@ func piSessionIDFromPath(root, path string) string {
 	return strings.TrimSuffix(filepath.Base(path), ".jsonl")
 }
 
-func piProviderCapabilities() Capabilities {
+func piProviderCapabilities(agent AgentType) Capabilities {
 	caps := Capabilities{
 		Source: jsonlFileProviderSourceCapabilities(),
 		Content: ContentCapabilities{
@@ -327,5 +328,8 @@ func piProviderCapabilities() Capabilities {
 		},
 	}
 	caps.Source.StreamingDiscovery = CapabilitySupported
+	if agent == AgentPrimeAgent {
+		caps.Source.ForceReplaceOnParse = CapabilitySupported
+	}
 	return caps
 }

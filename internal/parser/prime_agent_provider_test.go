@@ -48,6 +48,7 @@ func TestPrimeAgentProviderParsesFlatSessionAndAttributedUsage(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
+	assert.True(t, outcome.ForceReplace)
 
 	result := outcome.Results[0].Result
 	assert.Equal(t, "prime-agent:019c1234-session", result.Session.ID)
@@ -69,4 +70,51 @@ func TestPrimeAgentProviderParsesFlatSessionAndAttributedUsage(t *testing.T) {
 		"cache_read_input_tokens": 5,
 		"cache_creation_input_tokens": 2
 	}`, string(result.Messages[1].TokenUsage))
+}
+
+func TestPrimeAgentParentSessionPathSeparators(t *testing.T) {
+	tests := []struct {
+		name   string
+		header string
+	}{
+		{
+			name:   "POSIX",
+			header: `{"type":"session","version":3,"id":"child","timestamp":"2026-08-06T12:00:00Z","cwd":"/work/project","parentSession":"/home/user/.prime/agent/sessions/parent-session.jsonl"}`,
+		},
+		{
+			name:   "Windows",
+			header: `{"type":"session","version":3,"id":"child","timestamp":"2026-08-06T12:00:00Z","cwd":"C:\\work\\project","parentSession":"C:\\Users\\user\\.prime\\agent\\sessions\\parent-session.jsonl"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content := strings.Join([]string{
+				tt.header,
+				`{"type":"message","id":"user-1","parentId":null,"timestamp":"2026-08-06T12:00:01Z","message":{"role":"user","content":"hello"}}`,
+				"",
+			}, "\n")
+			session, _ := parsePiLikeTestSession(t, AgentPrimeAgent, content)
+			assert.Equal(t, "prime-agent:parent-session", session.ParentSessionID)
+		})
+	}
+}
+
+func TestPrimeAgentAttributedUsageUsesLastKnownTargetAggregate(t *testing.T) {
+	content := strings.Join([]string{
+		`{"type":"session","version":3,"id":"usage-session","timestamp":"2026-08-06T12:00:00Z","cwd":"/work/project"}`,
+		`{"type":"message","id":"user-1","parentId":null,"timestamp":"2026-08-06T12:00:01Z","message":{"role":"user","content":"hello"}}`,
+		`{"type":"message","id":"assistant-1","parentId":"user-1","timestamp":"2026-08-06T12:00:02Z","message":{"role":"assistant","content":"hi","model":"gpt-5.4-mini","usage":{"input":10,"output":1}}}`,
+		`{"type":"child_usage_attributed","id":"unknown-usage","parentId":"assistant-1","timestamp":"2026-08-06T12:00:03Z","targetId":"missing-assistant","aggregateUsage":{"input":900,"output":90}}`,
+		`{"type":"child_usage_attributed","id":"first-usage","parentId":"assistant-1","timestamp":"2026-08-06T12:00:04Z","targetId":"assistant-1","aggregateUsage":{"input":20,"output":3,"cacheRead":4,"cacheWrite":1}}`,
+		`{"type":"child_usage_attributed","id":"last-usage","parentId":"first-usage","timestamp":"2026-08-06T12:00:05Z","targetId":"assistant-1","aggregateUsage":{"input":30,"output":7,"cacheRead":5,"cacheWrite":2}}`,
+		"",
+	}, "\n")
+
+	session, messages := parsePiLikeTestSession(t, AgentPrimeAgent, content)
+	require.Len(t, messages, 2)
+	assert.Equal(t, 37, messages[1].ContextTokens)
+	assert.Equal(t, 7, messages[1].OutputTokens)
+	assert.Equal(t, 37, session.PeakContextTokens)
+	assert.Equal(t, 7, session.TotalOutputTokens)
 }

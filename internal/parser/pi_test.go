@@ -1059,6 +1059,22 @@ func TestPiProviderParsesZeroUsage(t *testing.T) {
 	assert.Equal(t, 0, m.ContextTokens)
 }
 
+func TestPiProviderParsesFlatCacheWriteUsage(t *testing.T) {
+	header := `{"type":"session","id":"cache-write-session","timestamp":"2026-08-06T12:00:00Z","cwd":"/tmp"}` + "\n"
+	assistant := `{"type":"message","id":"assistant-1","timestamp":"2026-08-06T12:00:01Z","message":{"role":"assistant","content":"done","model":"claude-opus-4-5","usage":{"input":10,"output":3,"cacheRead":4,"cacheWrite":2}}}`
+
+	_, messages := runPiParserTest(t, header+assistant)
+	require.Len(t, messages, 1)
+	assert.Equal(t, 16, messages[0].ContextTokens)
+	assert.Equal(t, 3, messages[0].OutputTokens)
+	assert.JSONEq(t, `{
+		"input_tokens": 10,
+		"output_tokens": 3,
+		"cache_read_input_tokens": 4,
+		"cache_creation_input_tokens": 2
+	}`, string(messages[0].TokenUsage))
+}
+
 // TestPiProviderParsesNoUsageNoTokenUsage verifies that messages
 // without a usage block do not write an empty token_usage row,
 // since the eligibility filter requires token_usage != ”.

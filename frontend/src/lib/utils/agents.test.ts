@@ -28,6 +28,7 @@ describe("KNOWN_AGENTS", () => {
       "vscode-copilot",
       "visualstudio-copilot",
       "pi",
+      "prime-agent",
       "qwen",
       "qwenpaw",
       "deepseek-tui",
@@ -97,6 +98,9 @@ describe("agentColor", () => {
       "var(--accent-green)",
     );
     expect(agentColor("pi")).toBe(
+      "var(--accent-indigo)",
+    );
+    expect(agentColor("prime-agent")).toBe(
       "var(--accent-indigo)",
     );
     expect(agentColor("qwen")).toBe(
@@ -204,6 +208,7 @@ describe("agentLabel", () => {
     expect(agentLabel("qwen")).toBe("Qwen Code");
     expect(agentLabel("qwenpaw")).toBe("QwenPaw");
     expect(agentLabel("deepseek-tui")).toBe("DeepSeek TUI");
+    expect(agentLabel("prime-agent")).toBe("Prime Agent");
     expect(agentLabel("qoder")).toBe("Qoder");
     expect(agentLabel("roocode")).toBe("RooCode");
     expect(agentLabel("omnigent")).toBe("Omnigent");

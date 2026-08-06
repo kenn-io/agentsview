@@ -96,13 +96,11 @@ func parsePiLikeSession(
 	// lineage resolves.
 	var parentSessionID string
 	if branchedFrom := gjson.Get(headerLine, "branchedFrom").Str; branchedFrom != "" {
-		base := filepath.Base(branchedFrom)
-		parentSessionID = idPrefix + strings.TrimSuffix(base, filepath.Ext(base))
+		parentSessionID = idPrefix + piPersistedPathSessionID(branchedFrom)
 	} else if agent == AgentOMP || agent == AgentPrimeAgent {
 		if parentSession := gjson.Get(headerLine, "parentSession").Str; parentSession != "" {
 			if agent == AgentPrimeAgent {
-				base := filepath.Base(parentSession)
-				parentSession = strings.TrimSuffix(base, filepath.Ext(base))
+				parentSession = piPersistedPathSessionID(parentSession)
 			}
 			parentSessionID = idPrefix + parentSession
 		}
@@ -359,6 +357,11 @@ func parsePiLikeSession(
 	accumulateMessageTokenUsage(sess, messages)
 
 	return sess, messages, nil
+}
+
+func piPersistedPathSessionID(value string) string {
+	base := filepath.Base(strings.ReplaceAll(value, `\`, "/"))
+	return strings.TrimSuffix(base, filepath.Ext(base))
 }
 
 // parsePiUserMessage parses a message entry with role="user".

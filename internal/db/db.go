@@ -368,7 +368,10 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // tool.result before step.end, so existing Kimi and Kimi Work rows may omit
 // per-message usage for tool-calling steps. Re-parsing attaches the trailing
 // step usage to the assistant tool-call message.)
-const dataVersion = 80
+// (81: Pi-family flat cache-write usage reparse. Existing Pi and OMP rows can
+// persist cache creation under cacheWrite, which older parses ignored.
+// Re-parsing restores those tokens to per-message usage and computed cost.)
+const dataVersion = 81
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
