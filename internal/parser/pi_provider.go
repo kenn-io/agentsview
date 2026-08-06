@@ -97,7 +97,7 @@ func (p *piProvider) FindSource(
 		if source, ok, err := p.sources.sourceForPath(ctx, path); err != nil {
 			return SourceRef{}, false, err
 		} else if ok {
-			if p.Def.Type != AgentPrimeAgent {
+			if p.Def.Type != AgentPrimeAgent || req.RawSessionID == "" {
 				return source, true, nil
 			}
 			src, isJSONL := source.Opaque.(JSONLSource)

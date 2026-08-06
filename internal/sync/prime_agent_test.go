@@ -116,3 +116,39 @@ func TestEngineSyncPrimeAgentStoresForkRelationship(t *testing.T) {
 	assert.Equal(t, "prime-agent:parent-header-id", *child.ParentSessionID)
 	assert.Equal(t, string(parser.RelFork), child.RelationshipType)
 }
+
+func TestEngineSyncPrimeAgentSingleSessionResyncsResolvedPath(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentPrimeAgent: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	path := filepath.Join(root, "transcript-file-id.jsonl")
+	initial := `{"type":"session","version":3,"id":"session-header-id","timestamp":"2026-08-06T12:00:00Z","cwd":"/work/project"}
+{"type":"message","id":"user-1","parentId":null,"timestamp":"2026-08-06T12:00:01Z","message":{"role":"user","content":"first"}}
+`
+	require.NoError(t, os.WriteFile(path, []byte(initial), 0o600))
+	stats := engine.SyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted)
+
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	require.NoError(t, err)
+	_, err = file.WriteString(
+		`{"type":"message","id":"user-2","parentId":"user-1","timestamp":"2026-08-06T12:00:02Z","message":{"role":"user","content":"second"}}` + "\n",
+	)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+
+	require.NoError(t, engine.SyncSingleSession("prime-agent:session-header-id"))
+	messages, err := database.GetAllMessages(
+		t.Context(), "prime-agent:session-header-id",
+	)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	assert.Equal(t, "second", messages[1].Content)
+}
