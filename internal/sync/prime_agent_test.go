@@ -84,3 +84,35 @@ func TestEngineSyncPrimeAgentLateAttributionForceReplacesUsage(t *testing.T) {
 	assert.True(t, usage.HasCost)
 	assert.Equal(t, money.Money{Microdollars: 70}, usage.Cost)
 }
+
+func TestEngineSyncPrimeAgentStoresForkRelationship(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentPrimeAgent: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	parentPath := filepath.Join(root, "parent-file-id.jsonl")
+	childPath := filepath.Join(root, "child-file-id.jsonl")
+	require.NoError(t, os.WriteFile(parentPath, []byte(`{"type":"session","version":3,"id":"parent-header-id","timestamp":"2026-08-06T12:00:00Z","cwd":"/work/project"}
+{"type":"message","id":"parent-user","parentId":null,"timestamp":"2026-08-06T12:00:01Z","message":{"role":"user","content":"parent"}}
+`), 0o600))
+	require.NoError(t, os.WriteFile(childPath, []byte(`{"type":"session","version":3,"id":"child-header-id","timestamp":"2026-08-06T12:01:00Z","cwd":"/work/project","parentSession":"/stale/source/parent-file-id.jsonl"}
+{"type":"message","id":"child-user","parentId":null,"timestamp":"2026-08-06T12:01:01Z","message":{"role":"user","content":"child"}}
+`), 0o600))
+
+	stats := engine.SyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted)
+	child, err := database.GetSessionFull(
+		t.Context(), "prime-agent:child-header-id",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, child)
+	require.NotNil(t, child.ParentSessionID)
+	assert.Equal(t, "prime-agent:parent-header-id", *child.ParentSessionID)
+	assert.Equal(t, string(parser.RelFork), child.RelationshipType)
+}

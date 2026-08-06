@@ -57,6 +57,7 @@ func TestPrimeAgentProviderParsesFlatSessionAndAttributedUsage(t *testing.T) {
 	assert.Equal(t, "devbox", result.Session.Machine)
 	assert.Equal(t, "Investigate scheduler", result.Session.SessionName)
 	assert.Equal(t, "prime-agent:019c0000-parent", result.Session.ParentSessionID)
+	assert.Equal(t, RelFork, result.Session.RelationshipType)
 	assert.Equal(t, 37, result.Session.PeakContextTokens)
 	assert.Equal(t, 7, result.Session.TotalOutputTokens)
 
@@ -160,6 +161,46 @@ func TestPrimeAgentFindSourceVerifiesDirectFilenameHeader(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, ok)
 			assert.Equal(t, filepath.Join(root, tt.wantFile), found.DisplayPath)
+		})
+	}
+}
+
+func TestPrimeAgentFindSourceRejectsMismatchedStoredHints(t *testing.T) {
+	tests := []struct {
+		name           string
+		useFingerprint bool
+	}{
+		{name: "stored file path"},
+		{name: "fingerprint key", useFingerprint: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			stalePath := filepath.Join(root, "stale-transcript.jsonl")
+			matchingPath := filepath.Join(root, "matching-transcript.jsonl")
+			writeSourceFile(t, stalePath,
+				`{"type":"session","version":3,"id":"other-session","timestamp":"2026-08-06T12:00:00Z","cwd":"/work/project"}`+"\n")
+			writeSourceFile(t, matchingPath,
+				`{"type":"session","version":3,"id":"target-session","timestamp":"2026-08-06T12:00:00Z","cwd":"/work/project"}`+"\n")
+
+			provider, ok := NewProvider(AgentPrimeAgent, ProviderConfig{
+				Roots: []string{root},
+			})
+			require.True(t, ok)
+			request := FindSourceRequest{
+				FullSessionID: "prime-agent:target-session",
+			}
+			if tt.useFingerprint {
+				request.FingerprintKey = stalePath
+			} else {
+				request.StoredFilePath = stalePath
+			}
+
+			found, ok, err := provider.FindSource(context.Background(), request)
+			require.NoError(t, err)
+			require.True(t, ok)
+			assert.Equal(t, matchingPath, found.DisplayPath)
 		})
 	}
 }

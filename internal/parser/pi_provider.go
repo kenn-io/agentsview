@@ -97,7 +97,19 @@ func (p *piProvider) FindSource(
 		if source, ok, err := p.sources.sourceForPath(ctx, path); err != nil {
 			return SourceRef{}, false, err
 		} else if ok {
-			return source, true, nil
+			if p.Def.Type != AgentPrimeAgent {
+				return source, true, nil
+			}
+			src, isJSONL := source.Opaque.(JSONLSource)
+			if !isJSONL {
+				continue
+			}
+			headerID, valid := piSessionHeaderID(src.Path)
+			if valid && (headerID == req.RawSessionID ||
+				(headerID == "" &&
+					piSessionIDFromPath("", src.Path) == req.RawSessionID)) {
+				return source, true, nil
+			}
 		}
 	}
 	if req.RawSessionID == "" || !IsValidSessionID(req.RawSessionID) {
