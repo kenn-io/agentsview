@@ -103,7 +103,10 @@ func (p *piProvider) FindSource(
 	if req.RawSessionID == "" || !IsValidSessionID(req.RawSessionID) {
 		return SourceRef{}, false, nil
 	}
-	if p.Def.Type == AgentOMP || p.Def.Type == AgentPrimeAgent {
+	if p.Def.Type == AgentPrimeAgent {
+		return p.sourceForPrimeSessionID(ctx, req.RawSessionID)
+	}
+	if p.Def.Type == AgentOMP {
 		return p.sourceForHeaderSessionID(ctx, req.RawSessionID)
 	}
 	for _, root := range p.Config.Roots {
@@ -113,6 +116,31 @@ func (p *piProvider) FindSource(
 		}
 	}
 	return SourceRef{}, false, nil
+}
+
+func (p *piProvider) sourceForPrimeSessionID(
+	ctx context.Context,
+	sessionID string,
+) (SourceRef, bool, error) {
+	for _, root := range p.Config.Roots {
+		direct := filepath.Join(root, sessionID+".jsonl")
+		source, ok, err := p.sources.sourceForPath(ctx, direct)
+		if err != nil {
+			return SourceRef{}, false, err
+		}
+		if !ok {
+			continue
+		}
+		src, ok := source.Opaque.(JSONLSource)
+		if !ok {
+			continue
+		}
+		headerID, valid := piSessionHeaderID(src.Path)
+		if valid && (headerID == "" || headerID == sessionID) {
+			return source, true, nil
+		}
+	}
+	return p.sourceForHeaderSessionID(ctx, sessionID)
 }
 
 func (p *piProvider) sourceForSessionID(

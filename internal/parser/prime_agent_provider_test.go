@@ -118,3 +118,48 @@ func TestPrimeAgentAttributedUsageUsesLastKnownTargetAggregate(t *testing.T) {
 	assert.Equal(t, 37, session.PeakContextTokens)
 	assert.Equal(t, 7, session.TotalOutputTokens)
 }
+
+func TestPrimeAgentFindSourceVerifiesDirectFilenameHeader(t *testing.T) {
+	tests := []struct {
+		name       string
+		directID   string
+		fallbackID string
+		wantFile   string
+	}{
+		{
+			name:     "matching direct header",
+			directID: "target-session",
+			wantFile: "target-session.jsonl",
+		},
+		{
+			name:       "mismatched direct header falls back to matching header",
+			directID:   "different-session",
+			fallbackID: "target-session",
+			wantFile:   "actual-transcript.jsonl",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			directPath := filepath.Join(root, "target-session.jsonl")
+			writeSourceFile(t, directPath,
+				`{"type":"session","version":3,"id":"`+tt.directID+`","timestamp":"2026-08-06T12:00:00Z","cwd":"/work/project"}`+"\n")
+			if tt.fallbackID != "" {
+				writeSourceFile(t, filepath.Join(root, "actual-transcript.jsonl"),
+					`{"type":"session","version":3,"id":"`+tt.fallbackID+`","timestamp":"2026-08-06T12:00:00Z","cwd":"/work/project"}`+"\n")
+			}
+
+			provider, ok := NewProvider(AgentPrimeAgent, ProviderConfig{
+				Roots: []string{root},
+			})
+			require.True(t, ok)
+			found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+				FullSessionID: "prime-agent:target-session",
+			})
+			require.NoError(t, err)
+			require.True(t, ok)
+			assert.Equal(t, filepath.Join(root, tt.wantFile), found.DisplayPath)
+		})
+	}
+}
