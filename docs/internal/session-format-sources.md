@@ -638,7 +638,11 @@ Grok section and remove the explicit registry exception in the coverage test.
 - **Agentsview:** Prime Agent is registered through the Pi-family parser in
   `internal/parser/pi.go` and `internal/parser/pi_provider.go`, with its own
   flat-root discovery, `prime-agent:` session identity, and `parentSession`
-  path handling. Verified 2026-08-06.
+  path handling. Reverified 2026-08-06 against a live Prime Agent v0.7.0
+  session: the flat transcript filename UUID can differ from the session
+  header UUID, so canonical ID lookup falls back to scanning session headers.
+  The same artifact persisted OpenAI Codex model identity and per-message
+  input and output usage in the documented Pi-family fields.
 
 ## Oh My Pi (`omp`)
 

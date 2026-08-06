@@ -680,7 +680,7 @@ func piTimestamp(line string) time.Time {
 // id, but support V1 parent transcripts by falling back to the parent filename.
 func ompParentHeaderSessionID(childPath string) string {
 	parent := filepath.Dir(childPath) + ".jsonl"
-	parentID, ok := ompSessionHeaderID(parent)
+	parentID, ok := piSessionHeaderID(parent)
 	if !ok {
 		return ""
 	}
@@ -690,11 +690,10 @@ func ompParentHeaderSessionID(childPath string) string {
 	return strings.TrimSuffix(filepath.Base(parent), ".jsonl")
 }
 
-// ompSessionHeaderID reads path's session header id, skipping a leading OMP
+// piSessionHeaderID reads path's session header id, skipping a leading OMP
 // title slot line. The boolean reports whether the file has a valid pi session
-// header. os.Open intentionally follows symlinks to supported parent
-// transcripts.
-func ompSessionHeaderID(path string) (string, bool) {
+// header. os.Open intentionally follows symlinks to supported transcripts.
+func piSessionHeaderID(path string) (string, bool) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", false

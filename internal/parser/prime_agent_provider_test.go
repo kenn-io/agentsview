@@ -12,7 +12,9 @@ import (
 
 func TestPrimeAgentProviderParsesFlatSessionAndAttributedUsage(t *testing.T) {
 	root := t.TempDir()
-	sourcePath := filepath.Join(root, "019c1234-session.jsonl")
+	// Prime Agent v0.7.0 can allocate the transcript filename before the
+	// session header, so their UUIDs are not guaranteed to match.
+	sourcePath := filepath.Join(root, "019c1111-file.jsonl")
 	writeSourceFile(t, sourcePath, strings.Join([]string{
 		`{"type":"session","version":3,"id":"019c1234-session","timestamp":"2026-08-06T12:00:00Z","cwd":"/work/prime-project","parentSession":"/config/.prime/agent/sessions/019c0000-parent.jsonl"}`,
 		`{"type":"session_info","id":"info-1","parentId":null,"timestamp":"2026-08-06T12:00:01Z","name":"Investigate scheduler"}`,
