@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -20,6 +22,13 @@ func TestEngineSyncPrimeAgentLateAttributionForceReplacesUsage(t *testing.T) {
 		},
 		Machine: "local",
 	})
+	require.NoError(t, database.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:         "gpt-5.4-mini",
+		InputPerMTok:         money.Money{Microdollars: 1_000_000},
+		OutputPerMTok:        money.Money{Microdollars: 2_000_000},
+		CacheCreationPerMTok: money.Money{Microdollars: 3_000_000},
+		CacheReadPerMTok:     money.Money{Microdollars: 4_000_000},
+	}}))
 
 	path := filepath.Join(root, "transcript-file-id.jsonl")
 	initial := `{"type":"session","version":3,"id":"session-header-id","timestamp":"2026-08-06T12:00:00Z","cwd":"/work/project"}
@@ -60,4 +69,18 @@ func TestEngineSyncPrimeAgentLateAttributionForceReplacesUsage(t *testing.T) {
 		"cache_read_input_tokens": 5,
 		"cache_creation_input_tokens": 2
 	}`, string(messages[1].TokenUsage))
+	session, err := database.GetSessionFull(
+		context.Background(), "prime-agent:session-header-id",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, 37, session.PeakContextTokens)
+	assert.Equal(t, 7, session.TotalOutputTokens)
+	usage, err := database.GetSessionUsage(
+		context.Background(), "prime-agent:session-header-id", true,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.True(t, usage.HasCost)
+	assert.Equal(t, money.Money{Microdollars: 70}, usage.Cost)
 }

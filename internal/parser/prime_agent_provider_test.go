@@ -163,3 +163,46 @@ func TestPrimeAgentFindSourceVerifiesDirectFilenameHeader(t *testing.T) {
 		})
 	}
 }
+
+func TestPrimeAgentParentSessionUsesSiblingHeaderID(t *testing.T) {
+	root := t.TempDir()
+	parentPath := filepath.Join(root, "parent-file-id.jsonl")
+	childPath := filepath.Join(root, "child-file-id.jsonl")
+	writeSourceFile(t, parentPath, strings.Join([]string{
+		`{"type":"session","version":3,"id":"parent-header-id","timestamp":"2026-08-06T12:00:00Z","cwd":"/work/project"}`,
+		`{"type":"message","id":"parent-user","parentId":null,"timestamp":"2026-08-06T12:00:01Z","message":{"role":"user","content":"parent"}}`,
+		"",
+	}, "\n"))
+	writeSourceFile(t, childPath, strings.Join([]string{
+		`{"type":"session","version":3,"id":"child-header-id","timestamp":"2026-08-06T12:01:00Z","cwd":"/work/project","parentSession":"/stale/source/parent-file-id.jsonl"}`,
+		`{"type":"message","id":"child-user","parentId":null,"timestamp":"2026-08-06T12:01:01Z","message":{"role":"user","content":"child"}}`,
+		"",
+	}, "\n"))
+
+	provider, ok := NewProvider(AgentPrimeAgent, ProviderConfig{
+		Roots: []string{root},
+	})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 2)
+
+	var parentID, childParentID string
+	for _, source := range sources {
+		outcome, err := provider.Parse(context.Background(), ParseRequest{
+			Source: source,
+		})
+		require.NoError(t, err)
+		require.Len(t, outcome.Results, 1)
+		session := outcome.Results[0].Result.Session
+		switch session.ID {
+		case "prime-agent:parent-header-id":
+			parentID = session.ID
+		case "prime-agent:child-header-id":
+			childParentID = session.ParentSessionID
+		}
+	}
+
+	require.NotEmpty(t, parentID)
+	assert.Equal(t, parentID, childParentID)
+}

@@ -100,7 +100,7 @@ func parsePiLikeSession(
 	} else if agent == AgentOMP || agent == AgentPrimeAgent {
 		if parentSession := gjson.Get(headerLine, "parentSession").Str; parentSession != "" {
 			if agent == AgentPrimeAgent {
-				parentSession = piPersistedPathSessionID(parentSession)
+				parentSession = primeParentSessionID(path, parentSession)
 			}
 			parentSessionID = idPrefix + parentSession
 		}
@@ -360,7 +360,26 @@ func parsePiLikeSession(
 }
 
 func piPersistedPathSessionID(value string) string {
-	base := filepath.Base(strings.ReplaceAll(value, `\`, "/"))
+	base := piPersistedPathBase(value)
+	return strings.TrimSuffix(base, filepath.Ext(base))
+}
+
+func piPersistedPathBase(value string) string {
+	return filepath.Base(strings.ReplaceAll(value, `\`, "/"))
+}
+
+func primeParentSessionID(childPath, persistedPath string) string {
+	base := piPersistedPathBase(persistedPath)
+	localSibling := filepath.Join(filepath.Dir(childPath), base)
+	if headerID, ok := piSessionHeaderID(localSibling); ok && headerID != "" {
+		return headerID
+	}
+	if filepath.IsAbs(persistedPath) &&
+		filepath.Clean(persistedPath) != filepath.Clean(localSibling) {
+		if headerID, ok := piSessionHeaderID(persistedPath); ok && headerID != "" {
+			return headerID
+		}
+	}
 	return strings.TrimSuffix(base, filepath.Ext(base))
 }
 

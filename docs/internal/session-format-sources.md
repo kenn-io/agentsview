@@ -646,11 +646,14 @@ Grok section and remove the explicit registry exception in the coverage test.
   path handling. Reverified 2026-08-06 against a live Prime Agent v0.7.0
   session: the flat transcript filename UUID can differ from the session
   header UUID, so canonical ID lookup falls back to scanning session headers.
-  Persisted parent paths accept both POSIX and Windows separators. The same
-  artifact persisted OpenAI Codex model identity and per-message input and
-  output usage in the documented Pi-family fields. Support targets v0.7.0's
-  current flat layout; that producer migrates older per-project sessions
-  before normal session listing.
+  Parent lineage accepts both POSIX and Windows separators and resolves the
+  referenced sibling transcript's header UUID from the configured session root
+  before trying the original persisted path; when neither file is available,
+  the filename UUID remains the explicit fallback. The same artifact persisted
+  OpenAI Codex model identity and per-message input and output usage in the
+  documented Pi-family fields. Support targets v0.7.0's current flat layout;
+  that producer migrates older per-project sessions before normal session
+  listing.
 
 ## Oh My Pi (`omp`)
 
