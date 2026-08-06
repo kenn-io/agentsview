@@ -276,7 +276,8 @@ func parsePiLikeSession(
 				continue
 			}
 			targetID := gjson.Get(line, "targetId").Str
-			if index, ok := assistantByID[targetID]; ok {
+			if index, ok := assistantByID[targetID]; ok &&
+				index >= 0 && index < len(messages) {
 				applyPiUsage(
 					&messages[index], gjson.Get(line, "aggregateUsage"),
 				)
