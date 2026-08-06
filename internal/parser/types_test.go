@@ -228,6 +228,7 @@ func TestAgentByType(t *testing.T) {
 		{AgentAmp, true},
 		{AgentVSCodeCopilot, true},
 		{AgentPi, true},
+		{AgentPrimeAgent, true},
 		{AgentOMP, true},
 		{AgentDevin, true},
 		{AgentDeepSeekTUI, true},
@@ -325,6 +326,12 @@ func TestAgentByPrefix(t *testing.T) {
 			"pi prefix",
 			"pi:pi-session-uuid",
 			AgentPi,
+			true,
+		},
+		{
+			"prime agent prefix",
+			"prime-agent:019c1234-session",
+			AgentPrimeAgent,
 			true,
 		},
 		{
@@ -428,6 +435,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentTrae,
 		AgentVSCopilot,
 		AgentPi,
+		AgentPrimeAgent,
 		AgentOMP,
 		AgentQwen,
 		AgentCommandCode,

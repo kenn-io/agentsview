@@ -32,6 +32,7 @@ const (
 	AgentTrae           AgentType = "trae"
 	AgentVSCopilot      AgentType = "visualstudio-copilot"
 	AgentPi             AgentType = "pi"
+	AgentPrimeAgent     AgentType = "prime-agent"
 	AgentOMP            AgentType = "omp"
 	AgentQwen           AgentType = "qwen"
 	AgentCommandCode    AgentType = "commandcode"
@@ -419,6 +420,15 @@ var Registry = []AgentDef{
 		ConfigKey:   "pi_dirs",
 		DefaultDirs: []string{".pi/agent/sessions"},
 		IDPrefix:    "pi:",
+		FileBased:   true,
+	},
+	{
+		Type:        AgentPrimeAgent,
+		DisplayName: "Prime Agent",
+		EnvVar:      "PRIME_AGENT_SESSION_DIR",
+		ConfigKey:   "prime_agent_dirs",
+		DefaultDirs: []string{".prime/agent/sessions"},
+		IDPrefix:    "prime-agent:",
 		FileBased:   true,
 	},
 	{

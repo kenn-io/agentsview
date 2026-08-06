@@ -88,9 +88,9 @@ func parsePiLikeSession(
 
 	// Branch lineage. Upstream pi records the parent as branchedFrom, a
 	// file path whose basename without extension is the parent's session
-	// ID. OMP (Oh My Pi) v3 headers instead record parentSession, the
-	// parent's session ID directly. branchedFrom wins when present so
-	// upstream pi is unchanged; parentSession is the OMP-only fallback.
+	// ID. OMP (Oh My Pi) headers instead record the parent's session ID
+	// directly in parentSession, while Prime Agent records its file path there.
+	// branchedFrom wins when present so upstream pi is unchanged.
 	// Both paths reuse this session's own idPrefix, so the mapped value
 	// matches the parent's stored ID (idPrefix + its session id) and
 	// lineage resolves.
@@ -98,8 +98,12 @@ func parsePiLikeSession(
 	if branchedFrom := gjson.Get(headerLine, "branchedFrom").Str; branchedFrom != "" {
 		base := filepath.Base(branchedFrom)
 		parentSessionID = idPrefix + strings.TrimSuffix(base, filepath.Ext(base))
-	} else if agent == AgentOMP {
+	} else if agent == AgentOMP || agent == AgentPrimeAgent {
 		if parentSession := gjson.Get(headerLine, "parentSession").Str; parentSession != "" {
+			if agent == AgentPrimeAgent {
+				base := filepath.Base(parentSession)
+				parentSession = strings.TrimSuffix(base, filepath.Ext(base))
+			}
 			parentSessionID = idPrefix + parentSession
 		}
 	}
@@ -122,13 +126,15 @@ func parsePiLikeSession(
 
 	// --- Main message loop ---
 	var (
-		messages     []ParsedMessage
-		firstMessage string
-		sessionName  string
-		ordinal      int
-		userCount    int
-		currentModel string
+		messages      []ParsedMessage
+		firstMessage  string
+		sessionName   string
+		ordinal       int
+		userCount     int
+		currentModel  string
+		assistantByID map[string]int
 	)
+	assistantByID = make(map[string]int)
 	// Pi emits metadata rows that stay in the tree, so bridge them to the
 	// nearest visible ancestor before assigning SourceParentUUID.
 	visibleAncestorByID := map[string]string{}
@@ -200,6 +206,7 @@ func parsePiLikeSession(
 				}
 				messages = append(messages, *msg)
 				if entryID != "" {
+					assistantByID[entryID] = len(messages) - 1
 					visibleAncestorByID[entryID] = entryID
 				}
 				ordinal++
@@ -259,6 +266,22 @@ func parsePiLikeSession(
 			}
 			if name := gjson.Get(line, "name"); name.Exists() {
 				sessionName = name.Str
+			}
+
+		case "child_usage_attributed":
+			if entryID != "" {
+				visibleAncestorByID[entryID] = resolveVisibleAncestor(
+					parentID,
+				)
+			}
+			if agent != AgentPrimeAgent {
+				continue
+			}
+			targetID := gjson.Get(line, "targetId").Str
+			if index, ok := assistantByID[targetID]; ok {
+				applyPiUsage(
+					&messages[index], gjson.Get(line, "aggregateUsage"),
+				)
 			}
 
 		default:
@@ -459,8 +482,8 @@ func parsePiAssistantMessage(
 // usage as a flat object under message.usage with provider-
 // agnostic input/output keys plus optional cache breakdowns.
 // Cache fields are read from both the nested cache.{read,write}
-// shape (OpenCode-style) and the flat cacheRead/cacheCreation
-// shape (Anthropic-style) so both transports work.
+// shape (OpenCode-style) and the flat cacheRead/cacheCreation/cacheWrite
+// shapes used across Pi-family producers.
 //
 // Coverage semantics match the claude parser contract: a field
 // present at zero is preserved as "known zero" and sets its
@@ -477,6 +500,10 @@ func applyPiTokenUsage(
 	}
 
 	usage := gjson.Get(line, "message.usage")
+	applyPiUsage(pm, usage)
+}
+
+func applyPiUsage(pm *ParsedMessage, usage gjson.Result) {
 	if !usage.Exists() {
 		return
 	}
@@ -490,6 +517,9 @@ func applyPiTokenUsage(
 	cacheWriteField := usage.Get("cache.write")
 	if !cacheWriteField.Exists() {
 		cacheWriteField = usage.Get("cacheCreation")
+	}
+	if !cacheWriteField.Exists() {
+		cacheWriteField = usage.Get("cacheWrite")
 	}
 
 	if !inputField.Exists() && !outputField.Exists() &&

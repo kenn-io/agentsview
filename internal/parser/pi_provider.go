@@ -120,6 +120,11 @@ func (p *piProvider) sourceForSessionID(
 	root string,
 	sessionID string,
 ) (SourceRef, bool, error) {
+	direct := filepath.Join(root, sessionID+".jsonl")
+	if source, ok, err := p.sources.sourceForPath(ctx, direct); err != nil || ok {
+		return source, ok, err
+	}
+
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return SourceRef{}, false, nil
@@ -232,6 +237,19 @@ func (p *piProvider) filterDiscoveredSources(sources []SourceRef) []SourceRef {
 }
 
 func newPiSourceSet(agent AgentType, roots []string) JSONLSourceSet {
+	// Prime Agent writes current sessions directly under its flat sessions
+	// root. Its producer migrates the older per-project layout before normal
+	// session listing, so discovery mirrors the current persisted boundary.
+	if agent == AgentPrimeAgent {
+		return NewJSONLSourceSet(agent, roots,
+			WithFollowSymlinkFiles(),
+			WithIncludePath(isPiSourcePath),
+			WithProjectHint(func(root, path string) string { return "" }),
+			WithSessionIDFromPath(piSessionIDFromPath),
+			WithContentHashing(),
+		)
+	}
+
 	// OMP nests subagent transcripts one directory deeper than the main
 	// session (<project>/<session>/<agent>.jsonl), so it cannot use the
 	// strict two-segment DirectoryJSONLSourceSet layout the other pi-family

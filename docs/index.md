@@ -80,6 +80,7 @@ across every project, model, and tool.
   <a class="agent-chip" data-agent="omp" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Om</span><span class="agent-chip__name">OhMyPi</span></a>
   <a class="agent-chip" data-agent="openclaw" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Oc</span><span class="agent-chip__name">OpenClaw</span></a>
   <a class="agent-chip" data-agent="pi" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">&#960;</span><span class="agent-chip__name">Pi</span></a>
+  <a class="agent-chip" data-agent="prime-agent" href="https://github.com/PrimeIntellect-ai/prime-agent" target="_blank" rel="noopener"><span class="agent-chip__glyph agent-chip__glyph--mono">Pr</span><span class="agent-chip__name">Prime Agent</span></a>
   <a class="agent-chip" data-agent="piebald" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Pb</span><span class="agent-chip__name">Piebald</span></a>
   <a class="agent-chip" data-agent="poolside" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Po</span><span class="agent-chip__name">Poolside</span></a>
   <a class="agent-chip" data-agent="qclaw" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Qc</span><span class="agent-chip__name">QClaw</span></a>
@@ -271,7 +272,7 @@ read [out-of-band filesystem copies](/filesystem-sync/), or
     including Claude Code, OpenClaude, Codex, Copilot, Cursor,
     Gemini, OpenHands, Aider, Claude Cowork, DeepSeek TUI, Goose,
     gptme, Grok, Kilo, Kilo (legacy), Kimi Work, MiMoCode, Mistral Vibe,
-    OhMyPi, Omnigent, Poolside, QwenPaw, Reasonix, RooCode, Shelley,
+    OhMyPi, Omnigent, Poolside, Prime Agent, QwenPaw, Reasonix, RooCode, Shelley,
     Trae, Visual Studio Copilot, and ZCode. Auto-discovers session
     directories so there's nothing to configure.
 

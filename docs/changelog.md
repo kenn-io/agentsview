@@ -5,6 +5,11 @@ description: Release history for AgentsView
 
 ## Unreleased
 
+**New features**
+
+- Add Prime Agent session discovery, Pi-family conversation parsing, fork
+  lineage, and RLM-attributed token usage.
+
 ---
 
 ## 0.40.1

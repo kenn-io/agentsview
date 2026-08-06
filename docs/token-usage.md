@@ -32,7 +32,8 @@ it's also dramatically faster on large histories (see
 
     **As of 0.34.0**, usage totals are populated when the source session includes
     token metadata for **Claude Code**, **Codex**, **Copilot CLI**, **OpenCode** and
-    OpenCode-format forks such as **Kilo** and **MiMoCode**, **Pi**, **Gemini**,
+    OpenCode-format forks such as **Kilo** and **MiMoCode**, **Pi**, **Prime
+    Agent**, **Gemini**,
     **Qwen Code**, **OpenClaw**, **QClaw**, **Hermes**, **WorkBuddy**, **Forge**,
     **Piebald**, **Antigravity IDE/CLI**, **Zed**, **VS Code Copilot**, **Visual
     Studio Copilot**, **Mistral Vibe**, and **gptme**.
@@ -506,7 +507,8 @@ existing report).
 Beyond raw speed, `agentsview usage`:
 
 - **Works beyond Claude Code** — coverage includes Claude Code, Codex, Copilot
-  CLI, OpenCode-format tools, Pi, Gemini, Qwen Code, OpenClaw/QClaw, Hermes,
+  CLI, OpenCode-format tools, Pi, Prime Agent, Gemini, Qwen Code,
+  OpenClaw/QClaw, Hermes,
   WorkBuddy, Forge, Piebald, Antigravity, Zed, VS Code Copilot, Visual Studio
   Copilot, Mistral Vibe, and gptme from the same database and command whenever
   those sessions log token metadata. Filter with `--agent <name>` when you want
