@@ -85,6 +85,12 @@ func CheckCommonSchema(ctx context.Context, db bun.IDB) error {
 	return checkCommonSchemaRows(ctx, db)
 }
 
+// CheckCommonSchemaStructure validates the canonical table projections without
+// rescanning row invariants already attested by a compatibility stamp.
+func CheckCommonSchemaStructure(ctx context.Context, db bun.IDB) error {
+	return checkCommonSchemaColumns(ctx, db)
+}
+
 func checkCommonSchemaColumns(ctx context.Context, db bun.IDB) error {
 	for _, table := range bunmodel.CommonTables() {
 		columns := bunmodel.ModelColumns(table.Model)

@@ -621,6 +621,19 @@ func TestConvergePostgresStampedSchemaValidatesUnderLock(t *testing.T) {
 		"stamped validation must run under the schema transaction lock")
 }
 
+func TestConvergePostgresStampedSchemaSkipsRowInvariantScans(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.queryErrors = []schemaProbeQueryError{{
+		contains: "left join",
+		err:      errors.New("stamped row invariant scan must not run"),
+	}}
+
+	err := convergePostgresCommonSchema(t.Context(), pg, nil)
+
+	require.NoError(t, err)
+	assert.NotContains(t, strings.ToLower(state.queriedSQL()), "left join")
+}
+
 func TestSyncEnsureSchemaSkipsDDLWhenSchemaCompatible(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
 	state.existingTables = map[string]bool{
