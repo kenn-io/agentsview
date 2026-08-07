@@ -81,7 +81,9 @@ INSERT INTO worktree_project_mappings (
 INSERT INTO model_pricing (
     model_pattern, input_microdollars_per_mtok,
     output_microdollars_per_mtok, updated_at
-) VALUES ('_fallback_version', 0, 0, 'legacy-v42');`
+) VALUES
+    ('_fallback_version', 0, 0, 'legacy-v42'),
+    ('_private-model', 1250000, 2500000, '2026-08-05T12:00:00Z');`
 
 func createPriorCommonSQLiteArchive(t *testing.T, path string) {
 	t.Helper()
@@ -174,6 +176,13 @@ func TestLegacySchemaCommonConvergenceRetainsRowsAndBackfillsProvenance(t *testi
 		WHERE model_pattern = '_fallback_version'`,
 	).Scan(&pricingSentinelCount))
 	assert.Zero(t, pricingSentinelCount)
+	var privateInput, privateOutput int64
+	require.NoError(t, database.getReader().QueryRowContext(t.Context(), `
+		SELECT input_microdollars_per_mtok, output_microdollars_per_mtok
+		FROM model_pricing WHERE model_pattern = '_private-model'`,
+	).Scan(&privateInput, &privateOutput))
+	assert.Equal(t, int64(1250000), privateInput)
+	assert.Equal(t, int64(2500000), privateOutput)
 }
 
 func TestLegacySchemaCommonCutoverWritesCanonicalRowsAndDoesNotReplay(t *testing.T) {

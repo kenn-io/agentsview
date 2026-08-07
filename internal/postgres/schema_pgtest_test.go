@@ -157,6 +157,49 @@ func TestEnsureSchemaUsesNativePricingTimestamps(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestPostgresPricingTimestampCompatibilityRejectsTextDrift(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanSchemaTestPG(t, pgURL)
+	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
+	pg, err := Open(pgURL, schemaTestSchema, true)
+	require.NoError(t, err)
+	defer pg.Close()
+	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
+
+	_, err = pg.ExecContext(t.Context(), `
+		ALTER TABLE model_pricing
+			ALTER COLUMN updated_at DROP DEFAULT;
+		ALTER TABLE model_pricing
+			ALTER COLUMN updated_at TYPE TEXT USING updated_at::TEXT;
+		ALTER TABLE model_pricing_bands
+			ALTER COLUMN updated_at DROP DEFAULT;
+		ALTER TABLE model_pricing_bands
+			ALTER COLUMN updated_at TYPE TEXT USING updated_at::TEXT;
+	`)
+	require.NoError(t, err)
+
+	err = CheckSchemaCompat(t.Context(), pg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "model_pricing.updated_at")
+	assert.False(t, pushSchemaCurrent(t.Context(), pg))
+
+	_, err = pg.ExecContext(t.Context(), `
+		ALTER TABLE model_pricing
+			ALTER COLUMN updated_at TYPE TIMESTAMPTZ
+			USING updated_at::timestamptz;
+		ALTER TABLE model_pricing
+			ALTER COLUMN updated_at SET DEFAULT NOW();
+	`)
+	require.NoError(t, err)
+	err = CheckSchemaCompat(t.Context(), pg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "model_pricing_bands.updated_at")
+
+	err = convergePostgresCommonSchema(t.Context(), pg, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "validating stamped common PostgreSQL schema")
+}
+
 func TestEnsureSchemaMigratesPricingSentinelsBeforeTimestampConversion(
 	t *testing.T,
 ) {
@@ -186,6 +229,7 @@ func TestEnsureSchemaMigratesPricingSentinelsBeforeTimestampConversion(
 			output_microdollars_per_mtok, updated_at
 		) VALUES
 			('_fallback_version', 0, 0, 'legacy-v42'),
+			('_private-model', 750000, 1500000, '2026-08-05T11:00:00Z'),
 			('real-model', 1250000, 2500000, '2026-08-05T12:00:00Z');
 		DELETE FROM sync_metadata WHERE key = 'bun_common_schema_v1';
 	`)
@@ -207,6 +251,13 @@ func TestEnsureSchemaMigratesPricingSentinelsBeforeTimestampConversion(
 	).Scan(&input, &updatedAt))
 	assert.Equal(t, int64(1250000), input)
 	assert.True(t, time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC).Equal(updatedAt))
+	var privateInput, privateOutput int64
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
+		SELECT input_microdollars_per_mtok, output_microdollars_per_mtok
+		FROM model_pricing WHERE model_pattern = '_private-model'`,
+	).Scan(&privateInput, &privateOutput))
+	assert.Equal(t, int64(750000), privateInput)
+	assert.Equal(t, int64(1500000), privateOutput)
 }
 
 func cleanSchemaTestPG(t *testing.T, pgURL string) {
