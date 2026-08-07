@@ -16,6 +16,8 @@ import (
 
 const bunAnalyticsSessionAlias = `"session"`
 
+const bunAnalyticsContentSessionBatchSize = 32
+
 func (s *BunStore) bunAnalyticsSessionsFrom(
 	ctx context.Context, store bun.IDB, f AnalyticsFilter, applyDate bool,
 ) ([]bunmodel.Session, error) {
@@ -1206,13 +1208,47 @@ func (s *BunStore) GetAnalyticsVelocity(
 	return result, err
 }
 
-func bunSignalRows(sessions []bunmodel.Session, messages []bunmodel.Message, f AnalyticsFilter) []SignalRow {
-	frustration := map[string]int{}
-	for _, message := range messages {
-		if message.Role == "user" && !message.IsSystem && signals.IsFrustrationMarker(message.Content) {
-			frustration[message.SessionID]++
-		}
-	}
+func bunFrustrationCountsFrom(
+	ctx context.Context, store bun.IDB, sessionIDs []string,
+) (map[string]int, error) {
+	frustration := make(map[string]int)
+	err := queryChunkedSize(
+		sessionIDs, bunAnalyticsContentSessionBatchSize,
+		func(chunk []string) error {
+			rows, err := store.NewSelect().Table("messages").
+				Column("session_id", "is_system", "content").
+				Where("session_id IN (?)", bun.List(chunk)).
+				Where("role = ?", "user").Rows(ctx)
+			if err != nil {
+				return fmt.Errorf("querying Bun frustration messages: %w", err)
+			}
+			for rows.Next() {
+				var sessionID, content string
+				var isSystem bool
+				if err := rows.Scan(&sessionID, &isSystem, &content); err != nil {
+					_ = rows.Close()
+					return fmt.Errorf("scanning Bun frustration message: %w", err)
+				}
+				if !isSystem && signals.IsFrustrationMarker(content) {
+					frustration[sessionID]++
+				}
+			}
+			if err := rows.Err(); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("iterating Bun frustration messages: %w", err)
+			}
+			if err := rows.Close(); err != nil {
+				return fmt.Errorf("closing Bun frustration messages: %w", err)
+			}
+			return nil
+		},
+	)
+	return frustration, err
+}
+
+func bunSignalRows(
+	sessions []bunmodel.Session, frustration map[string]int, f AnalyticsFilter,
+) []SignalRow {
 	rows := make([]SignalRow, 0, len(sessions))
 	for _, session := range sessions {
 		rows = append(rows, SignalRow{
@@ -1249,13 +1285,13 @@ func (s *BunStore) GetAnalyticsSignals(
 		if err != nil {
 			return err
 		}
-		messages, err := bunAnalyticsMessagesWithContentFrom(
+		frustration, err := bunFrustrationCountsFrom(
 			ctx, store, bunAnalyticsSessionIDs(sessions),
 		)
 		if err != nil {
 			return err
 		}
-		result = AggregateSignals(bunSignalRows(sessions, messages, f))
+		result = AggregateSignals(bunSignalRows(sessions, frustration, f))
 		return nil
 	})
 	return result, err
@@ -1276,16 +1312,24 @@ func (s *BunStore) GetAnalyticsSignalSessions(
 		if err != nil {
 			return err
 		}
-		messages, err := bunAnalyticsMessagesWithContentFrom(
+		frustration, err := bunFrustrationCountsFrom(
 			ctx, store, bunAnalyticsSessionIDs(sessions),
 		)
 		if err != nil {
 			return err
 		}
-		candidates := SignalCandidates(bunSignalRows(sessions, messages, f), signal, limit)
-		candidateIDs := map[string]struct{}{}
+		candidates := SignalCandidates(
+			bunSignalRows(sessions, frustration, f), signal, limit,
+		)
+		candidateIDs := make([]string, 0, len(candidates))
 		for _, candidate := range candidates {
-			candidateIDs[candidate.ID] = struct{}{}
+			candidateIDs = append(candidateIDs, candidate.ID)
+		}
+		messages, err := bunAnalyticsMessagesWithContentFrom(
+			ctx, store, candidateIDs,
+		)
+		if err != nil {
+			return err
 		}
 		messageMap := map[string][]SignalMessage{}
 		if strings.TrimSpace(f.Model) != "" {
@@ -1294,9 +1338,6 @@ func (s *BunStore) GetAnalyticsSignalSessions(
 				return scopeErr
 			}
 			for id, scoped := range scope.MessagesBySession() {
-				if _, ok := candidateIDs[id]; !ok {
-					continue
-				}
 				for _, message := range scoped {
 					messageMap[id] = append(messageMap[id], SignalMessage{
 						SessionID: id, Ordinal: message.Ordinal, Role: message.Role,
@@ -1307,9 +1348,6 @@ func (s *BunStore) GetAnalyticsSignalSessions(
 			}
 		} else {
 			for _, message := range messages {
-				if _, ok := candidateIDs[message.SessionID]; !ok {
-					continue
-				}
 				messageMap[message.SessionID] = append(messageMap[message.SessionID], SignalMessage{
 					SessionID: message.SessionID, Ordinal: message.Ordinal,
 					Role: message.Role, Content: message.Content,
