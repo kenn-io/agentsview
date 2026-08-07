@@ -12,6 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
 	localdb "go.kenn.io/agentsview/internal/db"
 )
 
@@ -609,7 +611,9 @@ func TestConvergePostgresStampedSchemaValidatesUnderLock(t *testing.T) {
 		err:      errors.New("stamped common schema drift"),
 	}}
 
-	err := convergePostgresCommonSchema(t.Context(), pg, nil)
+	err := convergePostgresCommonSchema(
+		t.Context(), bun.NewDB(pg, pgdialect.New()), nil,
+	)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "validating stamped common PostgreSQL schema")
