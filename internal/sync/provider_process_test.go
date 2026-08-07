@@ -692,7 +692,7 @@ func TestSyncSingleSessionAtomicFullWritesQueueCommittedChildren(t *testing.T) {
 	}
 }
 
-func TestSyncSingleSessionPartialFullWriteRepairsAttemptedSession(t *testing.T) {
+func TestSyncSingleSessionAtomicFailurePreservesExistingParent(t *testing.T) {
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(
 		t, root, "partial-parent-write.jsonl",
@@ -756,7 +756,7 @@ func TestSyncSingleSessionPartialFullWriteRepairsAttemptedSession(t *testing.T) 
 	require.NotNil(t, stored)
 	require.NotNil(t, stored.ParentSessionID)
 	assert.Equal(t, actualParent, *stored.ParentSessionID,
-		"deferred repair must reconcile the partially written session itself")
+		"the failed atomic write must preserve the existing relationship")
 }
 
 func TestProcessFileProviderAuthoritativeSuppressesUncleanSkipCache(t *testing.T) {

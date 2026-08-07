@@ -11111,8 +11111,8 @@ func (e *Engine) rejectSkipCacheWrites(writes []skipCacheWrite) {
 
 // markStaleFailedMemberWrite demotes the stored data version of an omnigent
 // session whose write failed. Shared-container members have no per-file mtime
-// to invalidate, so without the demotion a partial write (session row updated,
-// messages not) would compare as unchanged and never be repaired.
+// to invalidate, so the post-rollback retry marker must change or the failed
+// member would compare as unchanged and never be retried.
 func (e *Engine) markStaleFailedMemberWrite(pw pendingWrite) {
 	if pw.sess.Agent != parser.AgentOmnigent || pw.sess.ID == "" {
 		return
