@@ -496,6 +496,58 @@ func TestUsageEventsReplaceAndList(t *testing.T) {
 	require.Len(t, got, 0, "usage events after clear =")
 }
 
+func TestReplaceSessionUsageEventsCanonicalizesTimestamp(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "usage-canonical-time", "proj")
+
+	require.NoError(t, d.ReplaceSessionUsageEvents("usage-canonical-time", []UsageEvent{{
+		Source: "session", Model: "model",
+		OccurredAt: "2026-01-01T00:30:00.123456789+01:00",
+	}}))
+
+	events, err := d.GetUsageEvents(t.Context(), "usage-canonical-time")
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, "usage-canonical-time", events[0].SessionID)
+	assert.Equal(t, "2025-12-31T23:30:00.123456Z", events[0].OccurredAt)
+}
+
+func TestReplaceSessionUsageEventsRejectsInvalidTimestampWithoutReplacing(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "usage-invalid-time", "proj")
+	require.NoError(t, d.ReplaceSessionUsageEvents("usage-invalid-time", []UsageEvent{{
+		Source: "session", Model: "prior", OccurredAt: "2026-01-01T00:00:00Z",
+	}}))
+
+	err := d.ReplaceSessionUsageEvents("usage-invalid-time", []UsageEvent{{
+		Source: "session", Model: "invalid", OccurredAt: "not-a-timestamp",
+	}})
+	require.Error(t, err)
+
+	events, readErr := d.GetUsageEvents(t.Context(), "usage-invalid-time")
+	require.NoError(t, readErr)
+	require.Len(t, events, 1)
+	assert.Equal(t, "prior", events[0].Model)
+}
+
+func TestReplaceSessionUsageEventsRejectsMismatchedSessionWithoutReplacing(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "usage-session-scope", "proj")
+	require.NoError(t, d.ReplaceSessionUsageEvents("usage-session-scope", []UsageEvent{{
+		Source: "session", Model: "prior",
+	}}))
+
+	err := d.ReplaceSessionUsageEvents("usage-session-scope", []UsageEvent{{
+		SessionID: "another-session", Source: "session", Model: "invalid",
+	}})
+	require.ErrorContains(t, err, "does not match")
+
+	events, readErr := d.GetUsageEvents(t.Context(), "usage-session-scope")
+	require.NoError(t, readErr)
+	require.Len(t, events, 1)
+	assert.Equal(t, "prior", events[0].Model)
+}
+
 func TestGetUsageEventsOrdersOffsetTimestampsChronologically(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
