@@ -3,6 +3,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"database/sql"
@@ -18,10 +19,66 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/importer"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
+
+const geminiAppsCLIHTML = `<html><head><title>My Activity History</title></head><body><div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Prompted</p><p>Jan 2, 2025, 3:04:05 PM EDT</p></div><div class="content-cell"><p>cli prompt</p><p>cli answer</p></div></div></body></html>`
+
+func TestGeminiAppsImportDispatchesDirectAndZipSources(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	direct := filepath.Join(t.TempDir(), "activity.html")
+	require.NoError(t, os.WriteFile(direct, []byte(geminiAppsCLIHTML), 0o644))
+
+	stats, err := runImportDispatch(
+		context.Background(), database, "gemini-apps", direct, t.TempDir(), "test-machine",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Imported)
+
+	archivePath := filepath.Join(t.TempDir(), "takeout.zip")
+	archiveFile, err := os.Create(archivePath)
+	require.NoError(t, err)
+	zipWriter := zip.NewWriter(archiveFile)
+	entry, err := zipWriter.Create("Takeout/My Activity/Gemini Apps/activity.html")
+	require.NoError(t, err)
+	_, err = entry.Write([]byte(geminiAppsCLIHTML))
+	require.NoError(t, err)
+	require.NoError(t, zipWriter.Close())
+	require.NoError(t, archiveFile.Close())
+
+	source, cleanup, err := resolveImportSource(archivePath)
+	require.NoError(t, err)
+	require.NotNil(t, cleanup)
+	defer cleanup()
+	stats, err = runImportDispatch(
+		context.Background(), database, "gemini-apps", source, t.TempDir(), "test-machine",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Skipped)
+
+	_, err = runImportDispatch(
+		context.Background(), database, "gemini-apps",
+		filepath.Join(t.TempDir(), "missing.html"), t.TempDir(), "test-machine",
+	)
+	assert.ErrorContains(t, err, "stat import source")
+
+	nonPrompt := filepath.Join(t.TempDir(), "non-prompt.html")
+	require.NoError(t, os.WriteFile(
+		nonPrompt,
+		[]byte(strings.Replace(geminiAppsCLIHTML, "<p>Prompted</p>", "<p>Canvas</p>", 1)),
+		0o644,
+	))
+	stats, err = runImportDispatch(
+		context.Background(), database, "gemini-apps", nonPrompt, t.TempDir(), "test-machine",
+	)
+	assert.ErrorContains(t, err, "no admissible Prompted records")
+	assert.Equal(t, 1, stats.Skipped)
+	assert.Equal(t, "\rDone: 1 processed (1 skipped)\n", formatImportFailureSummary(stats))
+	assert.Empty(t, formatImportFailureSummary(importer.ImportStats{}))
+}
 
 // isolateParseDiffEnv points the data dir, HOME, and every per-agent
 // directory override at empty temp dirs so end-to-end runs never
@@ -150,6 +207,11 @@ func TestParseDiffAgentTypes(t *testing.T) {
 		{
 			name:    "import-only agent",
 			in:      []string{"claude-ai"},
+			wantErr: "is not supported by parse-diff",
+		},
+		{
+			name:    "Gemini Apps import-only agent",
+			in:      []string{"gemini-apps"},
 			wantErr: "is not supported by parse-diff",
 		},
 	}

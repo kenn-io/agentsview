@@ -281,6 +281,12 @@ func TestAgentByPrefix(t *testing.T) {
 			true,
 		},
 		{
+			"gemini apps prefix",
+			"gemini-apps:sess-id",
+			AgentGeminiApps,
+			true,
+		},
+		{
 			"mimocode prefix",
 			"mimocode:sess-id",
 			AgentMiMoCode,
@@ -423,6 +429,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentCodex,
 		AgentCopilot,
 		AgentGemini,
+		AgentGeminiApps,
 		AgentMiMoCode,
 		AgentOpenCode,
 		AgentKilo,

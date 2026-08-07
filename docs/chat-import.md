@@ -1,10 +1,10 @@
 ---
 title: Chat Import
-description: Import Claude.ai and ChatGPT conversations into AgentsView
+description: Import Claude.ai, ChatGPT, and Gemini Apps conversations into AgentsView
 ---
 
 AgentsView can import your conversation history from Claude.ai
-and ChatGPT. Both services let you export your data as a zip
+ChatGPT, and Gemini Apps. These services let you export your data as a zip
 file — AgentsView reads these exports and adds the conversations
 to your local database alongside your agent coding sessions.
 
@@ -24,6 +24,23 @@ to your local database alongside your agent coding sessions.
 3. ChatGPT emails you a download link for a `.zip` file
    containing conversation data and any images you uploaded
    or generated with DALL-E
+
+### Gemini Apps
+
+1. Open [Google Takeout](https://takeout.google.com/)
+2. Select **Gemini Apps** under **My Activity**
+3. Create an export and download the resulting `.zip` file
+
+AgentsView imports `Prompted` activity records. Canvas, feedback, and unknown
+activity kinds are reported as skipped. Each prompt becomes a one-turn session;
+the importer resolves the timestamp's explicit exported zone instead of using
+the host timezone. Mixed Takeout archives may contain other product activity;
+those explicitly identified cells are ignored. The current parser supports the
+observed English rendering for Gemini Apps cells, including the named zones it
+currently recognizes and complete `GMT±H`, `GMT±HH`, `GMT±H:MM`, and
+`GMT±HH:MM` zones; omitted minutes mean zero. Declared non-English or otherwise
+unsupported localized Gemini candidates and malformed zone tokens are reported
+as unsupported before any sessions are emitted.
 
 ## Importing via the UI
 
@@ -55,23 +72,26 @@ Use `agentsview import` to import from the command line:
 ```bash
 agentsview import --type claude-ai ~/Downloads/claude-export.zip
 agentsview import --type chatgpt ~/Downloads/chatgpt-export.zip
+agentsview import --type gemini-apps ~/Downloads/takeout.zip
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--type` | `claude-ai` or `chatgpt` (required) |
+| `--type` | `claude-ai`, `chatgpt`, or `gemini-apps` (required) |
 
 The path can be a `.zip` file, a `conversations.json` file
-(Claude.ai only), or a directory containing the extracted
-export.
+(Claude.ai only), a Gemini Apps `MyActivity.html` file, or a
+directory containing the extracted export.
 
 ## What Gets Imported
 
 ### Messages
 
-All conversation turns are imported as sessions: user
-messages, assistant responses, thinking/reasoning blocks,
-and tool usage (code interpreter, web search, DALL-E).
+Conversation turns are imported as sessions. Providers that emit
+thinking/reasoning blocks or tool usage preserve those message types;
+each Gemini Apps `Prompted` record becomes one user message containing its
+complete visible plain text. HTML presentation does not infer speaker roles;
+inline code and preformatted text remain text without generated Markdown.
 
 ### Images (ChatGPT)
 
@@ -96,7 +116,7 @@ Each imported session includes:
 
 Imported conversations appear in the session list alongside
 your locally-tracked agent sessions. They are grouped under
-the **claude.ai** or **chatgpt.com** project, so you can
+the **claude.ai**, **chatgpt.com**, or **gemini.google.com** project, so you can
 filter to them using the project filter or browse them
 mixed in with your other sessions.
 
@@ -112,3 +132,8 @@ You can safely re-import the same export file:
   new messages. User-edited display names are preserved.
 - **ChatGPT** — existing sessions are skipped (not
   re-imported), so your data stays unchanged.
+- **Gemini Apps** — existing sessions are matched by the canonical UTC
+  timestamp and its zero-based occurrence among records sharing that
+  timestamp. Inserting or reordering records with other timestamps doesn't
+  change existing IDs. Content changes update the same one-message session;
+  unchanged records are skipped.

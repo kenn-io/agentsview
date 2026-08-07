@@ -32,6 +32,8 @@ func (f importOnlyProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 		return &chatGPTImportOnlyProvider{importOnlyProvider: base}
 	case AgentClaudeAI:
 		return &claudeAIImportOnlyProvider{importOnlyProvider: base}
+	case AgentGeminiApps:
+		return &geminiAppsImportOnlyProvider{importOnlyProvider: base}
 	default:
 		return &base
 	}
@@ -53,5 +55,9 @@ type chatGPTImportOnlyProvider struct {
 }
 
 type claudeAIImportOnlyProvider struct {
+	importOnlyProvider
+}
+
+type geminiAppsImportOnlyProvider struct {
 	importOnlyProvider
 }

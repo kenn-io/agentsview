@@ -325,6 +325,38 @@ Grok section and remove the explicit registry exception in the coverage test.
   `internal/parser/gemini_provider.go`; both JSON and JSONL generations remain
   supported.
 
+## Gemini Apps (`gemini-apps`)
+
+- **Format:** Google Takeout `My Activity` HTML containing Gemini Apps activity
+  cells. Each compatible `Prompted` record is imported as one one-turn session
+  with exactly one user message containing the complete visible plain text;
+  HTML presentation does not infer speaker roles or generate Markdown.
+  Canvas, feedback, and unknown record kinds are counted as skipped. Explicitly
+  identified cells from other Takeout products are ignored. The current parser
+  supports the observed English rendering for Gemini Apps cells and reports
+  declared non-English or otherwise unsupported localized Gemini candidates
+  before emitting sessions. Inline code remains inline text, while preformatted
+  text preserves authored spaces, tabs, newlines, and backticks as data.
+  Session IDs use the canonical UTC timestamp plus a zero-based occurrence
+  index among admitted `Prompted` records sharing that timestamp. Records with
+  other timestamps can be inserted or reordered without changing existing IDs;
+  order remains a tie-breaker only for exact timestamp collisions.
+- **Evidence:** `no-public-source`.
+- **Upstream:** Google's Takeout documentation and public format references
+  were searched 2026-08-01. Google does not publish a versioned Gemini Apps
+  activity HTML schema, so markup, labels, timestamp zones, and future record
+  kinds remain observed compatibility evidence from sanitized exports. No
+  translated label or timestamp vocabulary is claimed. Timestamp compatibility
+  includes the existing named zones and complete `GMT±H`, `GMT±HH`,
+  `GMT±H:MM`, and `GMT±HH:MM` forms, with omitted minutes treated as zero;
+  unsupported localized formats and malformed zone tokens return an explicit
+  compatibility error.
+- **Usage and cost:** Takeout activity records expose no authoritative token,
+  cache, reasoning, credit, or monetary-cost fields to Agentsview.
+- **Agentsview:** `internal/parser/gemini_apps_takeout.go` and
+  `internal/importer/gemini_apps.go`; the CLI-only import path does not affect
+  Gemini CLI discovery or parsing.
+
 ## MiMo Code (`mimocode`)
 
 - **Format:** OpenCode-compatible SQLite or legacy `storage/session`,

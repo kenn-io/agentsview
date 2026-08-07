@@ -21,6 +21,7 @@ var providerMigrationModes = map[AgentType]ProviderMigrationMode{
 	AgentCodex:          ProviderMigrationProviderAuthoritative,
 	AgentCopilot:        ProviderMigrationProviderAuthoritative,
 	AgentGemini:         ProviderMigrationProviderAuthoritative,
+	AgentGeminiApps:     ProviderMigrationImportOnly,
 	AgentOpenHands:      ProviderMigrationProviderAuthoritative,
 	AgentCursor:         ProviderMigrationProviderAuthoritative,
 	AgentMiMoCode:       ProviderMigrationProviderAuthoritative,
@@ -180,7 +181,7 @@ func validateProviderMigrationMode(
 
 func isImportOnlyAgentType(agent AgentType) bool {
 	switch agent {
-	case AgentClaudeAI, AgentChatGPT:
+	case AgentClaudeAI, AgentChatGPT, AgentGeminiApps:
 		return true
 	default:
 		return false
