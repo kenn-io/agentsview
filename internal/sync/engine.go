@@ -3682,13 +3682,13 @@ func (e *Engine) resyncBuildLocked(
 
 	// Metadata restoration deliberately copies user-owned deletion state from
 	// the original archive. Reconcile archive-only Claude members afterwards so
-	// an available legacy fork cannot overwrite the source-missing state that
+	// an active legacy fork cannot overwrite the source_missing tombstone that
 	// this rebuild just established.
 	deferredTombstoned, err := e.reconcileCopiedSourceMissingMembers(
 		ctx, newDB, origPath, stats.sourceMissingArchiveMembers,
 	)
 	if err != nil {
-		log.Printf("resync: mark copied sessions source-missing: %v", err)
+		log.Printf("resync: tombstone copied source-missing sessions: %v", err)
 		stats.Aborted = true
 		stats.Warnings = append(stats.Warnings,
 			"copied source-missing reconciliation failed, aborting swap: "+
@@ -6875,7 +6875,7 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 							// The container still exists but the streamed pass no
 							// longer yields this member; tombstone directly — the
 							// guards below all assume a vanished stored path.
-							changed, err := e.markSessionSourceMissing(
+							changed, err := e.tombstoneSessionSourceOwnership(
 								ctx, ownership.Machine, ownership.Agent,
 								ownership.ID, ownership.FilePath,
 							)
@@ -7099,7 +7099,7 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 								}
 							}
 						}
-						changed, err := e.markSessionSourceMissing(
+						changed, err := e.tombstoneSessionSourceOwnership(
 							ctx, ownership.Machine, ownership.Agent,
 							ownership.ID, ownership.FilePath,
 						)
@@ -7151,12 +7151,12 @@ func canonicalProviderStatHashAgent(agent string) parser.AgentType {
 	return a
 }
 
-func (e *Engine) markSessionSourceMissing(
+func (e *Engine) tombstoneSessionSourceOwnership(
 	ctx context.Context, machine, agent, id, filePath string,
 ) (bool, error) {
 	// Clear durable freshness state first. If this fails, leave the session
-	// unchanged so a later reconciliation can retry the cache invalidation and
-	// source-state transition as one recoverable operation.
+	// active so a later reconciliation can retry the cache invalidation and
+	// tombstone as one recoverable operation.
 	if _, err := e.clearSkipPersistent(filePath); err != nil {
 		return false, fmt.Errorf("clear source skip cache: %w", err)
 	}
@@ -7175,13 +7175,13 @@ func (e *Engine) markSessionSourceMissing(
 	// same physical directory is later restored byte-for-byte, the stale
 	// digest would short-circuit providerSourceFreshBeforeFingerprint on
 	// the next warm pass and silently skip the source, preventing the
-	// source-missing row from returning to sync eligibility.
+	// tombstoned row from being revived by reconciliation.
 	if err := e.db.DeleteProviderStatHash(
 		ctx, canonicalProviderStatHashAgent(agent), filePath,
 	); err != nil {
 		return false, fmt.Errorf("clear provider_freshness: %w", err)
 	}
-	changed, err := e.db.MarkSessionSourceMissing(
+	changed, err := e.db.SoftDeleteSessionSourceOwnership(
 		ctx, machine, agent, id, filePath,
 	)
 	if err != nil || !changed {
@@ -7189,14 +7189,14 @@ func (e *Engine) markSessionSourceMissing(
 	}
 	// The skip family was removed before the database transition. Drop the
 	// remaining source trust so a byte-identical return is reverified and can
-	// clear the source-missing state.
+	// revive the tombstoned row.
 	e.invalidateVerifiedSource(parser.AgentType(agent), filePath)
 	return true, nil
 }
 
 // reconcileSourceMissingMembers applies the per-member CWD decision shared by
-// batch and single-session writes. A member without source-absence proof cannot
-// be marked source-missing yet, so baseline records only that exact admitted ownership; the
+// batch and single-session writes. A member without deletion proof cannot be
+// tombstoned yet, so baseline records only that exact admitted ownership; the
 // caller persists those records at the correct point in its write ordering.
 func (e *Engine) reconcileSourceMissingMembers(
 	ctx context.Context,
@@ -7252,7 +7252,7 @@ func (e *Engine) reconcileSourceMissingMembers(
 				continue
 			}
 		}
-		changed, err := e.markSessionSourceMissing(
+		changed, err := e.tombstoneSessionSourceOwnership(
 			ctx, member.machine, string(agent),
 			member.sessionID, member.filePath,
 		)
@@ -7273,8 +7273,8 @@ func (e *Engine) reconcileSourceMissingMembers(
 // reconcileCopiedSourceMissingMembers completes rebuild-time reconciliation
 // after orphan copy has materialized archive-only rows in the replacement.
 // Exact baselines copied from the archive authorize an immediate guarded
-// source-missing transition.
-// Baseline-free legacy rows remain available for this pass but gain exact proof,
+// tombstone.
+// Baseline-free legacy rows remain active for this pass but gain exact proof,
 // preserving the normal two-pass upgrade safety rule.
 func (e *Engine) reconcileCopiedSourceMissingMembers(
 	ctx context.Context,
@@ -7313,13 +7313,13 @@ func (e *Engine) reconcileCopiedSourceMissingMembers(
 				member.sessionID, err,
 			)
 		}
-		changed, err := target.MarkSessionSourceMissing(
+		changed, err := target.SoftDeleteSessionSourceOwnership(
 			ctx, member.machine, string(member.agent),
 			member.sessionID, member.filePath,
 		)
 		if err != nil {
 			return tombstoned, fmt.Errorf(
-				"mark copied member %s source-missing: %w",
+				"tombstone copied source-missing member %s: %w",
 				member.sessionID, err,
 			)
 		}
@@ -9625,7 +9625,8 @@ func (e *Engine) collectAndBatch(
 }
 
 type collectAndBatchOptions struct {
-	observeResult func(syncJob)
+	preserveMissingSources bool
+	observeResult          func(syncJob)
 }
 
 func (e *Engine) collectAndBatchWithOptions(
@@ -10196,15 +10197,15 @@ func (e *Engine) collectAndBatchWithOptions(
 				stats.parserExcludedIDs, excludedSessionIDs...,
 			)
 		}
-		// Virtual members that vanished from a still-existing shared container
-		// are marked source-missing with their exact source ownership, matching
-		// the reconciliation audit, instead of being hidden or hard-deleted.
+		// Virtual members that vanished from a still-existing shared
+		// container are tombstoned with their exact source ownership,
+		// matching the reconciliation audit, instead of hard-deleted.
 		// The cwd-filter freeze is judged per member against the
 		// archived cwd (missingMemberTombstoneAllowed), not source-wide:
 		// unchanged survivors are dropped from r.results before this
 		// point, so the source-wide gate would freeze an allowed
 		// member's deletion whenever everything else was unchanged.
-		if len(r.sourceMissingMembers) > 0 {
+		if len(r.sourceMissingMembers) > 0 && !options.preserveMissingSources {
 			tombstoned, deferred, tombstoneErr := e.reconcileSourceMissingMembers(
 				ctx, r.agent, r.sourceMissingMembers,
 				baselineExactOwnership, rejectExactOwnership,
@@ -10813,9 +10814,9 @@ type sessionParseError struct {
 }
 
 // sourceMissingMember identifies one stored session whose virtual member
-// source vanished from a still-existing shared container. The write seam marks
-// its exact source ownership missing instead of hard-deleting it as a parser
-// exclusion. The archived session remains visible.
+// source vanished from a still-existing shared container. The write seam
+// tombstones its exact source ownership (deletion_cause = source_missing,
+// revivable) instead of hard-deleting it as a parser exclusion.
 type sourceMissingMember struct {
 	sessionID string
 	filePath  string
@@ -10836,7 +10837,7 @@ type processResult struct {
 	// sourceMissingMembers carries stored sessions whose virtual member
 	// source no longer exists inside a still-present shared container
 	// (e.g. a Windsurf conversation deleted from state.vscdb). They must
-	// be marked source-missing, never routed through DeleteParserExcludedSessions.
+	// be tombstoned, never routed through DeleteParserExcludedSessions.
 	sourceMissingMembers []sourceMissingMember
 	// sessionErrs carries per-session parse failures from the
 	// shared-db fan-out loops. Normal sync logs and skips these;
@@ -11967,11 +11968,6 @@ func (e *Engine) processProviderFile(
 			sharedContainerExists := (file.Agent == parser.AgentTrae ||
 				file.Agent == parser.AgentCursorIDE) &&
 				parser.IsRegularFile(providerDiscoveredPath(source))
-			sourceFileMissing := false
-			if statPath := validatedProviderSourceStatPath(file.Path); statPath != "" {
-				_, statErr := e.lstatSource(statPath)
-				sourceFileMissing = os.IsNotExist(statErr)
-			}
 			if e.pathRewriter != nil ||
 				(providerVirtualSourceContainerExists(file.Path) ||
 					omnigentContainerExists || sharedContainerExists ||
@@ -14145,7 +14141,8 @@ func providerFingerprintHashEstablishesFreshness(agent parser.AgentType) bool {
 // providerSourceUnchangedInDB. Unlike providerFingerprintHashMatchesDB, an
 // absent hash can never establish freshness here: the stat already disagrees,
 // so only a positive content match may skip. GetFileHashByAgentPath excludes
-// source-missing rows, so a returning member still passes through a full parse.
+// recoverable source-missing tombstones, so a returning member still revives
+// through a full parse.
 func (e *Engine) providerSourceHashFreshDespiteStat(
 	agent parser.AgentType,
 	lookupPath string,
@@ -14267,7 +14264,7 @@ func (e *Engine) providerSingleSessionFresh(
 			return 0, false, false, false
 		}
 	}
-	// A source-missing primary must read as unavailable here: it cannot
+	// A source-missing primary tombstone must read as absent here: it cannot
 	// vouch for the source (shouldSkipFile ignores it), so only the rowless
 	// marker can prove an unchanged source that no longer admits a primary.
 	primaryPath := e.db.GetSessionFilePathNotSourceMissing(fullID)
@@ -16794,18 +16791,18 @@ func (e *Engine) writeBatchWithOutcomeContext(
 			return outcome
 		}
 
-		// The session row must exist before messages can be inserted (FK
-		// constraint), but a row stays source-missing until every
-		// dependent write succeeds below. For incremental updates
-		// (writeIncremental), messages are written first since the session
-		// already exists.
-		revivingSourceMissing, err :=
-			e.upsertSessionPendingContentForWrite(pw, s)
-		if err != nil {
-			if ctx.Err() != nil {
-				return outcome
-			}
-			if isIntentionalSessionSkip(err) {
+		replaceMessages := shouldReplaceFullParseMessages(
+			pw, forceReplace, stale, false,
+		)
+		write, buildErr := e.buildSessionBatchWriteContext(
+			ctx, pw, s, msgs, replaceMessages,
+		)
+		if buildErr != nil {
+			return outcome
+		}
+		result, werr := e.db.WriteSessionAtomic(write)
+		if werr != nil {
+			if isIntentionalSessionSkip(werr) {
 				outcome.resolved[i] = true
 				if pw.sess.File.Path != "" {
 					e.cacheSkip(
@@ -16816,160 +16813,14 @@ func (e *Engine) writeBatchWithOutcomeContext(
 				}
 				continue
 			}
-			log.Printf("upsert session %s: %v", s.ID, err)
+			log.Printf("write complete session %s: %v", s.ID, werr)
 			e.markStaleFailedMemberWrite(pw)
 			outcome.failedSessions++
 			continue
 		}
-		replaceMessages := shouldReplaceFullParseMessages(
-			pw, forceReplace, stale, revivingSourceMissing,
-		)
-
-		var update db.SessionSignalUpdate
-		var findings []db.SecretFinding
-		var werr error
-		if replaceMessages && pw.staged != nil {
-			// The staged sink owns this parse's tool-result rows, and only the
-			// staged write publishes them, so it runs even when signal
-			// recomputation is disabled.
-			werr = e.writeStagedFullParse(ctx, s, msgs, pw)
-		} else if replaceMessages && !e.disableSignalRecompute {
-			update, findings, werr = e.computeFullSignalsAndSecretsForStorage(s, msgs, nil)
-			if werr != nil {
-				log.Printf("compute full signals %s: %v", s.ID, werr)
-				outcome.failedSessions++
-				continue
-			}
-			if ctx.Err() != nil {
-				return outcome
-			}
-			if isCodexFormatAgent(pw.sess.Agent) {
-				cp, blobs, cpErr := e.buildCodexFullParseCheckpoint(
-					pw.sess.File.Path, pw,
-				)
-				if cpErr != nil {
-					log.Printf(
-						"checkpoint build %s: %v",
-						pw.sess.File.Path, cpErr,
-					)
-					cp, blobs = nil, nil
-				}
-				werr = e.db.ReplaceSessionContentWithCheckpointAndToolResultImages(
-					s.ID, msgs, update, findings, cp, blobs,
-					e.toolResultImages,
-				)
-			} else {
-				werr = e.db.ReplaceSessionContentWithToolResultImages(
-					s.ID, msgs, update, findings, e.toolResultImages,
-				)
-			}
-		} else if replaceMessages {
-			if msgs == nil {
-				msgs = []db.Message{}
-			}
-			werr = e.db.ReplaceSessionMessagesWithToolResultImages(
-				s.ID, msgs, e.toolResultImages,
-			)
-		} else {
-			if !e.disableSignalRecompute {
-				update, findings = e.computeSignalsAndSecretsForStorage(s, msgs)
-				if ctx.Err() != nil {
-					return outcome
-				}
-			}
-			werr = e.writeMessages(s.ID, msgs)
-		}
-		if werr != nil {
-			if ctx.Err() != nil {
-				return outcome
-			}
-			log.Printf(
-				"write messages for %s: %v",
-				s.ID, werr,
-			)
-			e.markStaleFailedMemberWrite(pw)
-			outcome.failedSessions++
-			continue
-		}
-
-		if ctx.Err() != nil {
-			return outcome
-		}
-		usageEvents, usageErr := e.usageEventsForWriteContext(
-			ctx, s.ID, pw.usageEvents,
-		)
-		if usageErr != nil {
-			return outcome
-		}
-		if err := e.db.ReplaceSessionUsageEvents(
-			s.ID, usageEvents,
-		); err != nil {
-			if ctx.Err() != nil {
-				return outcome
-			}
-			log.Printf(
-				"write usage events for %s: %v",
-				s.ID, err,
-			)
-			e.markStaleFailedMemberWrite(pw)
-			outcome.failedSessions++
-			continue
-		}
-		if ctx.Err() != nil {
-			return outcome
-		}
-
-		// Advance data_version only after the message and usage writes
-		// succeeded. The pending upsert deliberately does not touch this
-		// column, and source-missing state is cleared only after this
-		// succeeds, so an old current version cannot hide a failed rewrite.
-		if err := e.db.SetSessionDataVersion(
-			s.ID, dataVersionForWrite(pw),
-		); err != nil {
-			if ctx.Err() != nil {
-				return outcome
-			}
-			log.Printf(
-				"set data_version for %s: %v", s.ID, err,
-			)
-			e.markStaleFailedMemberWrite(pw)
-			outcome.failedSessions++
-			continue
-		}
-		if ctx.Err() != nil {
-			return outcome
-		}
-
-		if !replaceMessages && !e.disableSignalRecompute {
-			if ctx.Err() != nil {
-				return outcome
-			}
-			// Same ordering contract as recomputeSignalsFromDB: the
-			// version-advancing signals update only runs after findings
-			// persisted, so a partial failure leaves the session below
-			// the current version for the startup backfill to retry.
-			if err := e.db.ReplaceSessionSecretFindings(
-				s.ID, findings, update.SecretLeakCount,
-				update.SecretsRulesVersion); err != nil {
-				log.Printf("secrets: persist %s: %v", s.ID, err)
-			} else if err := e.db.UpdateSessionSignals(s.ID, update); err != nil {
-				log.Printf("signals: update %s: %v", s.ID, err)
-			}
-		}
-		if ctx.Err() != nil {
-			return outcome
-		}
-		if err := e.db.ClearSessionSourceMissing(s.ID); err != nil {
-			if ctx.Err() != nil {
-				return outcome
-			}
-			log.Printf("clear source-missing state for session %s: %v", s.ID, err)
-			outcome.failedSessions++
-			continue
-		}
-		outcome.writtenSessions++
+		outcome.writtenSessions += result.WrittenSessions
 		outcome.writtenMessages += len(msgs)
-		outcome.written[i] = true
+		outcome.written[i] = result.WrittenSessions == 1
 		outcome.resolved[i] = true
 	}
 	return outcome
@@ -18082,62 +17933,15 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 		replaceMessages := shouldReplaceFullParseMessages(
 			pw, forceReplace, false, false,
 		)
-		var update db.SessionSignalUpdate
-		var findings []db.SecretFinding
-		if !e.disableSignalRecompute {
-			tScan := time.Now()
-			var signalErr error
-			update, findings, signalErr = e.computeFullSignalsAndSecretsForStorage(s, msgs, nil)
-			if signalErr != nil {
-				log.Printf("compute full signals %s: %v", s.ID, signalErr)
-				outcome.failedSessions++
-				continue
-			}
-			if ctx.Err() != nil {
-				return outcome
-			}
-			e.phaseStats.ScanNanos.Add(int64(time.Since(tScan)))
-		}
-		snapshotProject := pw.sess.Project
-		var checkpoint *db.ParserCheckpoint
-		var checkpointBlobs *db.ParserCheckpointBlobs
-		if isCodexFormatAgent(pw.sess.Agent) {
-			var checkpointErr error
-			checkpoint, checkpointBlobs, checkpointErr =
-				e.buildCodexFullParseCheckpoint(pw.sess.File.Path, pw)
-			if checkpointErr != nil {
-				log.Printf(
-					"checkpoint build %s: %v",
-					pw.sess.File.Path, checkpointErr,
-				)
-				checkpoint, checkpointBlobs = nil, nil
-			}
-		}
-		usageEvents, usageErr := e.usageEventsForWriteContext(
-			ctx, s.ID, pw.usageEvents,
+		tScan := time.Now()
+		write, buildErr := e.buildSessionBatchWriteContext(
+			ctx, pw, s, msgs, replaceMessages,
 		)
-		if usageErr != nil {
+		if buildErr != nil {
 			return outcome
 		}
-		identityObservation, hasIdentityObservation :=
-			e.projectIdentityObservationForWrite(pw, s)
-		writes = append(writes, db.SessionBatchWrite{
-			Session:          s,
-			Messages:         msgs,
-			UsageEvents:      usageEvents,
-			ToolResultImages: &e.toolResultImages,
-			IdentityObservation: identityObservationOrZero(
-				identityObservation, hasIdentityObservation,
-			),
-			IdentitySnapshotProject: &snapshotProject,
-			Signals:                 update,
-			Findings:                findings,
-			SkipSignalUpdates:       e.disableSignalRecompute,
-			DataVersion:             dataVersionForWrite(pw),
-			ReplaceMessages:         replaceMessages,
-			Checkpoint:              checkpoint,
-			CheckpointBlobs:         checkpointBlobs,
-		})
+		writes = append(writes, write)
+		e.phaseStats.ScanNanos.Add(int64(time.Since(tScan)))
 		pendingIndexes = append(pendingIndexes, pendingIndex)
 		pendingByID[s.ID] = pw
 		pendingIndexByID[s.ID] = pendingIndex
@@ -18200,6 +18004,61 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 	outcome.writtenMessages = result.WrittenMessages
 	outcome.failedSessions += result.FailedSessions
 	return outcome
+}
+
+func (e *Engine) buildSessionBatchWriteContext(
+	ctx context.Context,
+	pw pendingWrite,
+	session db.Session,
+	messages []db.Message,
+	replaceMessages bool,
+) (db.SessionBatchWrite, error) {
+	var signals db.SessionSignalUpdate
+	var findings []db.SecretFinding
+	if !e.disableSignalRecompute {
+		var signalErr error
+		signals, findings, signalErr = computeFullSignalsAndSecrets(session, messages, nil)
+		if signalErr != nil {
+			return db.SessionBatchWrite{}, signalErr
+		}
+		if err := ctx.Err(); err != nil {
+			return db.SessionBatchWrite{}, err
+		}
+	}
+	usageEvents, err := e.usageEventsForWriteContext(
+		ctx, session.ID, pw.usageEvents,
+	)
+	if err != nil {
+		return db.SessionBatchWrite{}, err
+	}
+	var checkpoint *db.ParserCheckpoint
+	var checkpointBlobs *db.ParserCheckpointBlobs
+	if isCodexFormatAgent(pw.sess.Agent) {
+		var checkpointErr error
+		checkpoint, checkpointBlobs, checkpointErr = e.buildCodexFullParseCheckpoint(pw.sess.File.Path, pw)
+		if checkpointErr != nil {
+			log.Printf("checkpoint build %s: %v", pw.sess.File.Path, checkpointErr)
+			checkpoint, checkpointBlobs = nil, nil
+		}
+	}
+	snapshotProject := pw.sess.Project
+	return db.SessionBatchWrite{
+		ToolResultImages: &e.toolResultImages,
+		Session:     session,
+		Messages:    messages,
+		UsageEvents: usageEvents,
+		IdentityObservation: identityObservationOrZero(
+			e.projectIdentityObservationForWrite(pw, session),
+		),
+		IdentitySnapshotProject: &snapshotProject,
+		Signals:                 signals,
+		Findings:                findings,
+		SkipSignalUpdates:       e.disableSignalRecompute,
+		DataVersion:             dataVersionForWrite(pw),
+		ReplaceMessages:         replaceMessages,
+		Checkpoint:              checkpoint,
+		CheckpointBlobs:         checkpointBlobs,
+	}, nil
 }
 
 func identityObservationOrZero(
@@ -18357,31 +18216,6 @@ func (e *Engine) writeProjectIdentityObservationWithSnapshotProject(
 	e.projectIdentityWritten[fingerprint] = struct{}{}
 	e.projectIdentityMu.Unlock()
 	return nil
-}
-
-func (e *Engine) upsertSessionPendingContentWithProjectIdentity(
-	s db.Session,
-	snapshotProject string,
-) (bool, error) {
-	obs, ok := e.projectIdentityObservation(s)
-	if !ok {
-		return e.db.UpsertSessionPendingContent(s)
-	}
-	return e.db.UpsertSessionPendingContentWithProjectIdentity(
-		s, obs, snapshotProject,
-	)
-}
-
-func (e *Engine) upsertSessionPendingContentForWrite(
-	pw pendingWrite,
-	s db.Session,
-) (bool, error) {
-	if pw.sourceIdentityUnverified {
-		return e.db.UpsertSessionPendingContent(s)
-	}
-	return e.upsertSessionPendingContentWithProjectIdentity(
-		s, pw.sess.Project,
-	)
 }
 
 func projectIdentityObservationFingerprint(
@@ -18951,54 +18785,6 @@ func (e *Engine) writeIncremental(
 	return nil
 }
 
-// writeMessages uses an incremental append when possible.
-// Session files are append-only, so if the DB already has
-// messages for this session and the new set is larger, we
-// only insert the new messages (avoiding expensive FTS5
-// delete+reinsert of existing content).
-func (e *Engine) writeMessages(
-	sessionID string, msgs []db.Message,
-) error {
-	maxOrd := e.db.MaxOrdinal(sessionID)
-
-	// No existing messages — insert all.
-	if maxOrd < 0 {
-		if err := e.db.InsertMessagesWithToolResultImages(
-			msgs, e.toolResultImages,
-		); err != nil {
-			return fmt.Errorf(
-				"insert messages for %s: %w",
-				sessionID, err,
-			)
-		}
-		return nil
-	}
-
-	// Find new messages (ordinal > maxOrd).
-	delta := 0
-	for i, m := range msgs {
-		if m.Ordinal > maxOrd {
-			delta = len(msgs) - i
-			msgs = msgs[i:]
-			break
-		}
-	}
-
-	if delta == 0 {
-		return nil
-	}
-
-	if err := e.db.InsertMessagesWithToolResultImages(
-		msgs, e.toolResultImages,
-	); err != nil {
-		return fmt.Errorf(
-			"append messages for %s: %w",
-			sessionID, err,
-		)
-	}
-	return nil
-}
-
 // writeSessionFull upserts a session and does a full
 // delete+reinsert of its messages. Used by explicit
 // single-session re-syncs where existing content may have
@@ -19034,99 +18820,25 @@ func (e *Engine) writeSessionFullWithResolver(
 	if verdict != sessionWriteOK {
 		return errSessionPreserved
 	}
-	_, err = e.upsertSessionPendingContentForWrite(pw, s)
+	write, err := e.buildSessionBatchWriteContext(
+		context.Background(), pw, s, msgs, true,
+	)
 	if err != nil {
-		if isIntentionalSessionSkip(err) {
-			if pw.sess.File.Path != "" {
-				e.cacheSkip(
-					pw.sess.File.Path,
-					pw.sess.File.Mtime,
-					pw.sess.File.Hash,
-				)
-			}
-			return err
-		}
-		log.Printf("upsert session %s: %v", s.ID, err)
 		return err
 	}
-	if pw.staged != nil {
-		// The staged sink owns this parse's tool-result rows, and only the
-		// staged write publishes them.
-		if err := e.writeStagedFullParse(ctx, s, msgs, pw); err != nil {
-			log.Printf(
-				"write staged session %s: %v",
-				s.ID, err,
-			)
-			return err
-		}
-	} else if e.disableSignalRecompute {
-		if msgs == nil {
-			msgs = []db.Message{}
-		}
-		if err := e.db.ReplaceSessionMessagesWithToolResultImages(
-			s.ID, msgs, e.toolResultImages,
-		); err != nil {
-			log.Printf(
-				"replace messages for %s: %v",
-				s.ID, err,
-			)
-			return err
-		}
-	} else {
-		update, findings, signalErr := e.computeFullSignalsAndSecretsForStorage(s, msgs, nil)
-		if signalErr != nil {
-			return signalErr
-		}
-		var checkpoint *db.ParserCheckpoint
-		var checkpointBlobs *db.ParserCheckpointBlobs
-		if isCodexFormatAgent(pw.sess.Agent) {
-			var checkpointErr error
-			checkpoint, checkpointBlobs, checkpointErr =
-				e.buildCodexFullParseCheckpoint(pw.sess.File.Path, pw)
-			if checkpointErr != nil {
-				log.Printf(
-					"checkpoint build %s: %v",
-					pw.sess.File.Path, checkpointErr,
-				)
-				checkpoint, checkpointBlobs = nil, nil
-			}
-		}
-		if err := e.db.ReplaceSessionContentWithCheckpointAndToolResultImages(
-			s.ID, msgs, update, findings, checkpoint, checkpointBlobs,
-			e.toolResultImages,
-		); err != nil {
-			log.Printf(
-				"replace messages for %s: %v",
-				s.ID, err,
-			)
-			return err
-		}
+	_, err = e.db.WriteSessionAtomic(write)
+	if err == nil {
+		return nil
 	}
-	if err := e.db.ReplaceSessionUsageEvents(
-		s.ID, e.usageEventsForWrite(s.ID, pw.usageEvents),
-	); err != nil {
-		log.Printf(
-			"replace usage events for %s: %v",
-			s.ID, err,
+	if isIntentionalSessionSkip(err) && pw.sess.File.Path != "" {
+		e.cacheSkip(
+			pw.sess.File.Path,
+			pw.sess.File.Mtime,
+			pw.sess.File.Hash,
 		)
-		return err
 	}
-
-	// See writeBatch for why data_version is bumped here
-	// rather than inside UpsertSession.
-	if err := e.db.SetSessionDataVersion(
-		s.ID, dataVersionForWrite(pw),
-	); err != nil {
-		log.Printf(
-			"set data_version for %s: %v", s.ID, err,
-		)
-		return err
-	}
-	if err := e.db.ClearSessionSourceMissing(s.ID); err != nil {
-		log.Printf("clear source-missing state for session %s: %v", s.ID, err)
-		return err
-	}
-	return nil
+	log.Printf("write complete session %s: %v", s.ID, err)
+	return err
 }
 
 // shouldPreserveRooCodeArchive reports whether a zero-message RooCode
@@ -20820,10 +20532,10 @@ func (e *Engine) processAndWriteSessionFile(
 			"delete parser-excluded sessions: %w", err,
 		)
 	}
-	// A virtual member gone from a still-existing shared container is marked
-	// source-missing with its exact source ownership, mirroring
+	// A virtual member gone from a still-existing shared container is
+	// tombstoned with its exact source ownership, mirroring
 	// collectAndBatch, so a single-session resync preserves the archive
-	// row with recoverable source-missing state. The cwd-filter
+	// row as a revivable source-missing tombstone. The cwd-filter
 	// freeze is judged per member against the archived cwd, matching
 	// the batch path.
 	if len(res.sourceMissingMembers) > 0 {
@@ -20916,9 +20628,8 @@ func (e *Engine) processAndWriteSessionFile(
 			write.staged = res.staged
 		}
 		// The session upsert commits parser-derived parent provenance before
-		// the later content, usage, and completion stages. Queue the attempted
-		// session itself first so a failure after that upsert still re-resolves
-		// its incoming spawn edges in the deferred repair pass.
+		// hierarchy repair runs. Queue the attempted session itself so its
+		// incoming spawn edges are re-resolved after any successful write.
 		if err := e.db.QueueSubagentParentRepairs(
 			[]string{resultIDs[i]},
 		); err != nil {
@@ -20930,11 +20641,6 @@ func (e *Engine) processAndWriteSessionFile(
 		repairQueued = true
 		writeErr := e.writeSessionFullWithResolver(ctx, write, e.loadWorktreeProjectResolverContext(ctx))
 		memberPolicySkipped := sourceCompletionSkipped[resultIDs[i]]
-		// Full-write stages commit independently. Message content (and a new
-		// spawn edge) can persist even when a later usage, data-version, or
-		// sibling write fails, so discover and queue children after every
-		// attempt rather than waiting for the entire result set to finish.
-		queueErr := queueWrittenChildren([]string{resultIDs[i]})
 		if writeErr == nil {
 			resolved++
 			writtenIDs = append(writtenIDs, resultIDs[i])
@@ -20945,24 +20651,22 @@ func (e *Engine) processAndWriteSessionFile(
 			!isIntentionalSessionSkip(writeErr) &&
 			!memberPolicySkipped &&
 			!errors.Is(writeErr, errSessionPreserved) {
-			// Mirror the batch write paths: a partial write (session
-			// row updated, messages or usage not) must demote the
-			// stored data version, or the next container parse would
-			// compare the member as unchanged and never repair it.
+			// Mirror the batch write paths: demote the stored data version so
+			// the next container parse retries the failed member.
 			e.markStaleFailedMemberWrite(write)
-			if queueErr != nil {
-				writeErr = errors.Join(writeErr, queueErr)
-			}
 			markSourceIncomplete()
 			return false, sessionsChanged, fmt.Errorf("write session %s: %w",
 				pr.Session.ID, writeErr)
 		}
-		if queueErr != nil {
-			markSourceIncomplete()
-			return false, sessionsChanged, queueErr
-		}
 		if !memberPolicySkipped && errors.Is(writeErr, errSessionPreserved) {
 			preserved = true
+		}
+		if writeErr != nil {
+			continue
+		}
+		if err := queueWrittenChildren([]string{resultIDs[i]}); err != nil {
+			markSourceIncomplete()
+			return false, err
 		}
 	}
 	// A source-level digest is valid only when every active result and its

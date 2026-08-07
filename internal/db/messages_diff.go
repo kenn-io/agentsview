@@ -269,3 +269,8 @@ func applySessionMessageDiffTx(
 	messageRows, callRows, resultRows, err := CanonicalMessageRows(messages)
 	if err != nil {
 		return err
+	}
+	return RepairMessageRows(
+		ctx, tx, sessionID, ordinals, messageRows, callRows, resultRows,
+	)
+}

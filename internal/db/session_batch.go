@@ -517,6 +517,8 @@ func writeOneSessionBatchTx(
 	}
 	sessionExists := !upsertResult.inserted
 	replacementTranscriptChanged := false
+	var replacementPlan messageDiffPlan
+	useMessageDiff := false
 	if replaceMessages && sessionExists {
 		stored, err := sessionMessagesTx(
 			ctx, tx, write.Session.ID,
@@ -535,7 +537,22 @@ func writeOneSessionBatchTx(
 		replacementTranscriptChanged = !transcriptMessagesEqual(
 			stored, write.Messages,
 		)
+		replacementPlan, useMessageDiff = planSessionMessageDiff(
+			stored, write.Messages,
+		)
+		if useMessageDiff {
+			needsPinRemap, err := messageDiffNeedsPinRemap(
+				ctx, bunTx, replacementPlan,
+			)
+			if err != nil {
+				return 0, err
+			}
+			if needsPinRemap {
+				useMessageDiff = false
+			}
+		}
 	}
+	fullMessageReplace := replaceMessages && !useMessageDiff
 
 	if write.IdentityObservation.Project != "" {
 		if write.IdentitySnapshotProject == nil {
@@ -581,7 +598,7 @@ func writeOneSessionBatchTx(
 
 	msgs := write.Messages
 	var pins []savedPin
-	if replaceMessages && sessionExists {
+	if fullMessageReplace && sessionExists {
 		pins, err = savePinsTx(queries, write.Session.ID)
 		if err != nil {
 			return 0, err
@@ -593,7 +610,7 @@ func writeOneSessionBatchTx(
 		if err := deleteSessionMessagesTx(queries, write.Session.ID); err != nil {
 			return 0, err
 		}
-	} else {
+	} else if !replaceMessages {
 		maxOrd, err := maxOrdinalTx(queries, write.Session.ID)
 		if err != nil {
 			return 0, err
@@ -604,8 +621,15 @@ func writeOneSessionBatchTx(
 	if replaceMessages && sessionExists {
 		transcriptChanged = replacementTranscriptChanged
 	}
+	messagesWritten := len(msgs)
 
-	if len(msgs) > 0 {
+	if useMessageDiff {
+		if err := applySessionMessageDiffTx(
+			ctx, bunTx, write.Session.ID, replacementPlan,
+		); err != nil {
+			return 0, err
+		}
+	} else if len(msgs) > 0 {
 		messageRows, callRows, resultRows, err := CanonicalMessageRows(msgs)
 		if err != nil {
 			return 0, err
@@ -639,7 +663,8 @@ func writeOneSessionBatchTx(
 			return 0, err
 		}
 	}
-	if replaceMessages && sessionExists {
+	if fullMessageReplace && sessionExists ||
+		useMessageDiff && len(replacementPlan.updates) > 0 {
 		if err := reconcileRecallEvidenceForSessionTx(
 			ctx,
 			tx,
@@ -650,10 +675,10 @@ func writeOneSessionBatchTx(
 		}
 	}
 	if replaceMessages {
-		if err := restorePinsTx(
-			queries, write.Session.ID, pins,
-		); err != nil {
-			return 0, err
+		if fullMessageReplace {
+			if err := restorePinsTx(queries, write.Session.ID, pins); err != nil {
+				return 0, err
+			}
 		}
 		// A full message replacement re-normalizes every row, so this row is
 		// no longer incremental-append skew. The append-only branch
@@ -729,7 +754,7 @@ func writeOneSessionBatchTx(
 		return 0, err
 	}
 
-	return len(msgs), nil
+	return messagesWritten, nil
 }
 
 func sessionMessagesTx(
