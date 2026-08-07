@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -203,40 +202,6 @@ func (pb *paramBuilder) add(v any) string {
 	pb.args = append(pb.args, v)
 	return fmt.Sprintf("$%d", pb.n)
 }
-
-func normalizePGAutomatedScope(
-	scope string,
-	excludeAutomated bool,
-) string {
-	switch strings.TrimSpace(scope) {
-	case "human", "all", "automated":
-		return strings.TrimSpace(scope)
-	}
-	if excludeAutomated {
-		return "human"
-	}
-	return "all"
-}
-
-func pgAutomatedScopePredicate(scope, col string) string {
-	switch scope {
-	case "human":
-		return col + " = FALSE"
-	case "automated":
-		return col + " = TRUE"
-	default:
-		return ""
-	}
-}
-
-// pgActivityWindows holds the cutoff durations used by
-// pgTerminationPred. Kept in sync with the SQLite-side constants
-// in internal/db/sessions.go so both stores classify a session
-// the same way at the same wall-clock time.
-const (
-	pgActiveWindow = 10 * time.Minute
-	pgStaleWindow  = 60 * time.Minute
-)
 
 // buildPGSessionFilter returns a WHERE clause with $N
 // placeholders and the corresponding args.

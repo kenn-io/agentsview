@@ -161,18 +161,17 @@ func (s *BunStore) ListSessions(
 	}
 	resolvedSort := ResolveSort(filter)
 	var cursor SessionCursor
-	var total int
 	if filter.Cursor != "" {
 		var err error
 		cursor, err = s.DecodeCursor(filter.Cursor)
 		if err != nil {
 			return SessionPage{}, err
 		}
-		total = cursor.Total
 	}
 
-	var page SessionPage
-	err := s.view(ctx, func(store bun.IDB) error {
+	var pendingPage SessionPage
+	err := s.consistentView(ctx, func(store bun.IDB) error {
+		total := cursor.Total
 		dialect := s.backend.SessionQueryDialect()
 		where, args := BuildSessionFilterSQL(filter, dialect)
 		base := store.NewSelect().Model((*bunmodel.Session)(nil))
@@ -209,7 +208,7 @@ func (s *BunStore) ListSessions(
 		if err := query.Limit(filter.Limit+1).Scan(ctx, &rows); err != nil {
 			return fmt.Errorf("querying sessions: %w", err)
 		}
-		page.Total = total
+		page := SessionPage{Total: total}
 		page.Sessions = make([]Session, 0, min(len(rows), filter.Limit))
 		for _, row := range rows[:min(len(rows), filter.Limit)] {
 			page.Sessions = append(page.Sessions, baseSessionFromBunRow(row))
@@ -220,12 +219,13 @@ func (s *BunStore) ListSessions(
 				NextSessionCursor(&last, resolvedSort, total, filter),
 			)
 		}
+		pendingPage = page
 		return nil
 	})
 	if err != nil {
 		return SessionPage{}, err
 	}
-	return page, nil
+	return pendingPage, nil
 }
 
 func visibleSessionFromBunRow(row bunmodel.Session) Session {
@@ -396,8 +396,9 @@ func (s *BunStore) GetSidebarSessionIndex(
 ) (SidebarSessionIndex, error) {
 	filter.IncludeChildren = true
 	filter.IncludeOrphans = true
-	var index SidebarSessionIndex
-	err := s.view(ctx, func(store bun.IDB) error {
+	var pendingIndex SidebarSessionIndex
+	err := s.consistentView(ctx, func(store bun.IDB) error {
+		var index SidebarSessionIndex
 		var err error
 		if filter.Limit > 0 || filter.Cursor != "" || filter.Starred {
 			index, err = s.getSidebarSessionIndexPage(
@@ -408,12 +409,16 @@ func (s *BunStore) GetSidebarSessionIndex(
 				ctx, store, filter, s.backend.SessionQueryDialect(),
 			)
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		pendingIndex = index
+		return nil
 	})
 	if err != nil {
 		return SidebarSessionIndex{}, err
 	}
-	return index, nil
+	return pendingIndex, nil
 }
 
 func sidebarRootFilter(filter SessionFilter, dialect QueryDialect) (string, []any) {
