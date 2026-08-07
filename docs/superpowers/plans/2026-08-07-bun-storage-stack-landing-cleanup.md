@@ -91,10 +91,10 @@ ______________________________________________________________________
 - Produces: explicit errors for unsupported direct arguments and a closed list
   of sanctioned adapter seams.
 
-- [ ] Add a resolver test that calls `QueryContext` with a direct argument and
+- [x] Add a resolver test that calls `QueryContext` with a direct argument and
   expects an unused/unsupported argument error without forwarding the query.
 
-- [ ] Reject non-empty argument lists in `quackBunConn.QueryContext` and
+- [x] Reject non-empty argument lists in `quackBunConn.QueryContext` and
   `QueryRowContext`; retain Bun-generated formatted SQL behavior.
 
 - [x] Tighten the storage guide to lifecycle, schema/convergence, sync/metadata,
@@ -106,7 +106,7 @@ ______________________________________________________________________
   stable coordinates for shared hydration; engine relevance ranking may differ
   where the engines expose genuinely different ranks.
 
-- [ ] Run `go test -tags fts5 ./internal/duckdb -run 'QuackBun' -count=1`.
+- [x] Run `go test -tags fts5 ./internal/duckdb -run 'QuackBun' -count=1`.
 
 ### Task 3: Composite reads and dead PostgreSQL renderer (`asej`)
 
@@ -156,13 +156,13 @@ ______________________________________________________________________
 - Produces: identical signal and trend totals with bounded peak transcript
   retention.
 
-- [ ] Add a focused regression test and benchmark for a candidate set spanning
+- [x] Add a focused regression test and benchmark for a candidate set spanning
   multiple chunks.
 
-- [ ] Stream or reduce transcript content by bounded chunk without imposing a
+- [x] Stream or reduce transcript content by bounded chunk without imposing a
   hard result limit or changing the effective analytics date range.
 
-- [ ] Run the affected analytics tests and benchmark, then commit separately on
+- [x] Run the affected analytics tests and benchmark, then commit separately on
   `t3code/bun-store-reads`.
 
 ### Task 4: Search capability cleanup (`4n8v`)
@@ -243,14 +243,14 @@ ______________________________________________________________________
 
 - Produces: linear local/remote stack ready for human landing.
 
-- [ ] Create recovery refs, rebase each upper branch onto its updated parent,
+- [x] Create recovery refs, rebase each upper branch onto its updated parent,
   and resolve duplicate patches by preserving the lower introducing fix.
 
-- [ ] Run focused tests after each rebase, then `go fmt ./...`, `go vet ./...`,
+- [x] Run focused tests after each rebase, then `go fmt ./...`, `go vet ./...`,
   `make test-short`, relevant DuckDB-tagged tests, and PostgreSQL integration
   if the dedicated test container is available.
 
-- [ ] Treat the unrelated macOS FSEvents baseline timeouts separately; do not
+- [x] Treat the unrelated macOS FSEvents baseline timeouts separately; do not
   weaken them as part of storage cleanup.
 
 - [ ] Update the #1347 body from “byte-identical” one-off comparison to
