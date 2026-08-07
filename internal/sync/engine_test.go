@@ -6140,6 +6140,203 @@ func TestWriteBatchQwenPawReplacesMessages(t *testing.T) {
 		"rewritten content must reach existing message rows")
 }
 
+func TestWriteBatchLateDataVersionFailureRollsBackCompleteSession(t *testing.T) {
+	database := openTestDB(t)
+	engine := &Engine{db: database}
+	const sessionID = "atomic-session"
+	path := filepath.Join(t.TempDir(), "session.json")
+	require.NoError(t, os.WriteFile(path, []byte("{}"), 0o600))
+	oldHash := "old-hash"
+	startedAt := "2026-08-07T10:00:00Z"
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: sessionID, Project: "old-project", Machine: "local",
+		Agent: string(parser.AgentQwenPaw), StartedAt: &startedAt,
+		FilePath: &path, FileHash: &oldHash, MessageCount: 2,
+		UserMessageCount: 1,
+	}))
+	require.NoError(t, database.InsertMessages([]db.Message{
+		{SessionID: sessionID, Ordinal: 0, Role: "user",
+			Content: "old question", SourceUUID: "old-user"},
+		{SessionID: sessionID, Ordinal: 1, Role: "assistant",
+			Content: "old answer", SourceUUID: "old-answer",
+			ToolCalls: []db.ToolCall{{
+				ToolUseID: "old-tool", ToolName: "Read", Category: "file",
+				ResultEvents: []db.ToolResultEvent{{
+					Source: "tool", Status: "completed", Content: "old result",
+				}},
+			}},
+		},
+	}))
+	oldVersion := max(db.CurrentDataVersion()-1, 1)
+	require.NoError(t, database.SetSessionDataVersion(sessionID, oldVersion))
+	require.NoError(t, database.ReplaceSessionUsageEvents(
+		sessionID, []db.UsageEvent{{
+			Source: "session", Model: "old-model", InputTokens: 11,
+			OutputTokens: 3, DedupKey: "old-usage",
+		}},
+	))
+	require.NoError(t, database.ReplaceSessionSecretFindings(
+		sessionID, []db.SecretFinding{{
+			RuleName: "old-rule", Confidence: "definite",
+			LocationKind: "message", MessageOrdinal: 0,
+			MatchStart: 0, MatchEnd: 3, RedactedMatch: "old",
+		}}, 1, "old-rules",
+	))
+	require.NoError(t, database.UpdateSessionSignals(
+		sessionID, db.SessionSignalUpdate{
+			ToolFailureSignalCount: 7, Outcome: "failure",
+			QualitySignals: db.QualitySignals{
+				Version:          db.CurrentQualitySignalVersion,
+				ShortPromptCount: 4,
+			},
+		},
+	))
+
+	oldMessages, err := database.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Len(t, oldMessages, 2)
+	note := "keep pin"
+	_, err = database.PinMessage(sessionID, oldMessages[1].ID, &note)
+	require.NoError(t, err)
+	window, err := database.BuildRecallEvidenceWindow(
+		t.Context(), sessionID, 0, 1,
+	)
+	require.NoError(t, err)
+	metadata, err := window.BindSelection(db.RecallEvidenceSelection{
+		MessageStartOrdinal: 0, MessageEndOrdinal: 1,
+		ToolUseIDs: []string{"old-tool"},
+	})
+	require.NoError(t, err)
+	_, err = database.InsertRecallEntry(db.RecallEntry{
+		ID: "old-recall", Type: "fact", Scope: "project", Status: "accepted",
+		Title: "old recall", Body: "old body", SourceSessionID: sessionID,
+		Transferable: true, ProvenanceOK: true,
+		Evidence: []db.RecallEvidence{{
+			SessionID: sessionID, MessageStartOrdinal: 0, MessageEndOrdinal: 1,
+			MessageStartSourceUUID: metadata.MessageStartSourceUUID,
+			MessageEndSourceUUID:   metadata.MessageEndSourceUUID,
+			ContentDigest:          metadata.ContentDigest,
+			ToolUseID:              "old-tool",
+		}},
+	})
+	require.NoError(t, err)
+	require.NoError(t, database.BaselineActiveSessionSourcePaths(
+		t.Context(), "local", []db.SessionSourcePath{{
+			Agent: string(parser.AgentQwenPaw), FilePath: path,
+		}},
+	))
+	changed, err := database.SoftDeleteSessionSourceOwnership(
+		t.Context(), "local", string(parser.AgentQwenPaw), sessionID, path,
+	)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.NoError(t, database.SetSyncState(
+		"artifact_origin_id", "desktop-a1b2c3",
+	))
+
+	raw, err := sql.Open("sqlite3", database.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	type sessionState struct {
+		project, fileHash, deletedAt, deletionCause string
+		messageCount, dataVersion, toolFailures     int
+	}
+	readSessionState := func() sessionState {
+		t.Helper()
+		var state sessionState
+		require.NoError(t, raw.QueryRow(`
+			SELECT project, COALESCE(file_hash, ''), COALESCE(deleted_at, ''),
+			       COALESCE(deletion_cause, ''), message_count, data_version,
+			       tool_failure_signal_count
+			FROM sessions WHERE id = ?`, sessionID).Scan(
+			&state.project, &state.fileHash, &state.deletedAt,
+			&state.deletionCause, &state.messageCount, &state.dataVersion,
+			&state.toolFailures,
+		))
+		return state
+	}
+	readArtifactGeneration := func() int64 {
+		t.Helper()
+		var generation int64
+		err := raw.QueryRow(
+			"SELECT generation FROM artifact_export_queue WHERE session_id = ?",
+			sessionID,
+		).Scan(&generation)
+		if errors.Is(err, sql.ErrNoRows) {
+			return -1
+		}
+		require.NoError(t, err)
+		return generation
+	}
+
+	beforeSession := readSessionState()
+	beforeMessages, err := database.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	beforeUsage, err := database.GetUsageEvents(t.Context(), sessionID)
+	require.NoError(t, err)
+	beforeFindings, err := database.SessionSecretFindings(t.Context(), sessionID)
+	require.NoError(t, err)
+	beforePins, err := database.ListPinnedMessages(t.Context(), sessionID, "")
+	require.NoError(t, err)
+	beforeRecall, err := database.GetRecallEntry(t.Context(), "old-recall")
+	require.NoError(t, err)
+	beforeArtifactGeneration := readArtifactGeneration()
+
+	_, err = raw.Exec(`
+		CREATE TRIGGER fail_complete_session_data_version
+		BEFORE UPDATE OF data_version ON sessions
+		WHEN NEW.id = 'atomic-session'
+		BEGIN
+			SELECT RAISE(FAIL, 'injected late session write failure');
+		END`)
+	require.NoError(t, err)
+	ts := time.Date(2026, 8, 7, 11, 0, 0, 0, time.UTC)
+	outcome := engine.writeBatchWithOutcome([]pendingWrite{{
+		sess: parser.ParsedSession{
+			ID: sessionID, Project: "new-project", Machine: "local",
+			Agent: parser.AgentQwenPaw, StartedAt: ts, EndedAt: ts,
+			MessageCount: 2, UserMessageCount: 1,
+			File: parser.FileInfo{
+				Path: path, Size: 200, Mtime: 20, Hash: "new-hash",
+			},
+		},
+		msgs: []parser.ParsedMessage{
+			{Ordinal: 0, Role: parser.RoleUser, Content: "new question", Timestamp: ts},
+			{Ordinal: 1, Role: parser.RoleAssistant, Content: "new answer", Timestamp: ts,
+				ToolCalls: []parser.ParsedToolCall{{
+					ToolUseID: "new-tool", ToolName: "Write", Category: "file",
+				}}},
+		},
+		usageEvents: []parser.ParsedUsageEvent{{
+			Source: "session", Model: "new-model", InputTokens: 99,
+			OutputTokens: 44, DedupKey: "new-usage",
+		}},
+		forceReplace: true,
+	}}, syncWriteDefault, true)
+	assert.Zero(t, outcome.writtenSessions)
+	assert.Equal(t, 1, outcome.failedSessions)
+
+	afterMessages, err := database.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	afterUsage, err := database.GetUsageEvents(t.Context(), sessionID)
+	require.NoError(t, err)
+	afterFindings, err := database.SessionSecretFindings(t.Context(), sessionID)
+	require.NoError(t, err)
+	afterPins, err := database.ListPinnedMessages(t.Context(), sessionID, "")
+	require.NoError(t, err)
+	afterRecall, err := database.GetRecallEntry(t.Context(), "old-recall")
+	require.NoError(t, err)
+	assert.Equal(t, beforeSession, readSessionState())
+	assert.Equal(t, beforeMessages, afterMessages)
+	assert.Equal(t, beforeUsage, afterUsage)
+	assert.Equal(t, beforeFindings, afterFindings)
+	assert.Equal(t, beforePins, afterPins)
+	assert.Equal(t, beforeRecall, afterRecall)
+	assert.Equal(t, beforeArtifactGeneration, readArtifactGeneration())
+	assert.Equal(t, "source_missing", beforeSession.deletionCause)
+	assert.Equal(t, oldVersion, beforeSession.dataVersion)
+}
+
 func TestWriteBatchFailedReplacementKeepsSourceMissingSessionRetryable(t *testing.T) {
 	database := openTestDB(t)
 	e := &Engine{db: database}

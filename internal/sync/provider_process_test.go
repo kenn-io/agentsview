@@ -567,16 +567,22 @@ func TestProcessFileProviderAuthoritativeKeepsRetryStatePerResult(t *testing.T) 
 	assert.False(t, res.suppressesPresenceSweepForRetry())
 }
 
-func TestSyncSingleSessionPartialFullWritesQueueNewChild(t *testing.T) {
+func TestSyncSingleSessionAtomicFullWritesQueueCommittedChildren(t *testing.T) {
 	for _, tc := range []struct {
-		name         string
-		includeLater bool
-		failureSQL   string
-		wantError    string
+		name            string
+		includeLater    bool
+		failureSQL      string
+		wantError       string
+		wantRepairError bool
+		wantEdgeCount   int
+		wantQueueCount  int
 	}{
 		{
-			name:         "later member fails",
-			includeLater: true,
+			name:            "later member fails",
+			includeLater:    true,
+			wantRepairError: true,
+			wantEdgeCount:   1,
+			wantQueueCount:  1,
 			failureSQL: `
 				CREATE TRIGGER fail_later_member_write
 				BEFORE INSERT ON sessions
@@ -587,7 +593,7 @@ func TestSyncSingleSessionPartialFullWritesQueueNewChild(t *testing.T) {
 			wantError: "injected later member write failure",
 		},
 		{
-			name: "spawner completion fails after content commit",
+			name: "spawner completion fails atomically",
 			failureSQL: fmt.Sprintf(`
 				CREATE TRIGGER fail_spawner_write_completion
 				BEFORE UPDATE OF data_version ON sessions
@@ -661,23 +667,27 @@ func TestSyncSingleSessionPartialFullWritesQueueNewChild(t *testing.T) {
 			syncErr := engine.SyncSingleSession("cowork:spawner")
 
 			require.ErrorContains(t, syncErr, tc.wantError)
-			assert.ErrorContains(t, syncErr, "injected partial parent repair failure",
-				"committed message content must activate deferred repair")
+			if tc.wantRepairError {
+				assert.ErrorContains(t, syncErr, "injected partial parent repair failure",
+					"a committed spawn edge must activate deferred repair")
+			} else {
+				assert.NotContains(t, syncErr.Error(),
+					"injected partial parent repair failure",
+					"a rolled-back spawn edge must not activate deferred repair")
+			}
 			var edgeCount int
 			require.NoError(t, database.Reader().QueryRow(`
 				SELECT count(*) FROM tool_calls
 				WHERE session_id = 'cowork:spawner'
 				  AND subagent_session_id = 'cowork:child'`,
 			).Scan(&edgeCount))
-			assert.Equal(t, 1, edgeCount,
-				"the partial write must commit its new spawn edge")
+			assert.Equal(t, tc.wantEdgeCount, edgeCount)
 			var queuedRepairs int
 			require.NoError(t, database.Reader().QueryRow(`
 				SELECT count(*) FROM subagent_parent_repair_queue
 				WHERE session_id = 'cowork:child'`,
 			).Scan(&queuedRepairs))
-			assert.Equal(t, 1, queuedRepairs,
-				"the new child must remain durable after partial failure")
+			assert.Equal(t, tc.wantQueueCount, queuedRepairs)
 		})
 	}
 }
