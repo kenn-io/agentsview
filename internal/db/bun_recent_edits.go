@@ -48,11 +48,11 @@ func (s *BunStore) RecentEdits(
 func (s *BunStore) recentEditsFrom(
 	ctx context.Context, store bun.IDB, params RecentEditsParams,
 ) (RecentEditsResult, error) {
+	dialect := s.backend.SessionQueryDialect()
 	timestampExpr := "m.timestamp"
-	sortExpr := timestampExpr
-	if s.backend.SessionQueryDialect().timestampOrderExpr != nil {
+	sortExpr := dialect.TimestampOrderExpr(timestampExpr)
+	if sortExpr != timestampExpr {
 		timestampExpr = "NULLIF(m.timestamp, '')"
-		sortExpr = "julianday(" + timestampExpr + ")"
 	}
 	predicates := []string{
 		"s.deleted_at IS NULL",
@@ -67,7 +67,8 @@ func (s *BunStore) recentEditsFrom(
 	}
 	queryOffset := params.Offset
 	if params.Search != "" {
-		if s.backend.Name() == "sqlite" && hasNonASCII(params.Search) {
+		if s.backend.Capabilities().SearchDialect.unicodeRecentEdits &&
+			hasNonASCII(params.Search) {
 			keys, err := s.unicodeRecentEditKeys(
 				ctx, store, params, sortExpr,
 			)
