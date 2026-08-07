@@ -282,7 +282,7 @@ ______________________________________________________________________
   registry while retaining SQLite-only relationship, pin, provenance, and FTS
   transforms.
 
-- [ ] Verify and publish the sixth stacked PR, then close Kata `h381` and resume
+- [x] Verify and publish the sixth stacked PR, then close Kata `h381` and resume
   RoboRev reminders.
 
 ## Self-review
