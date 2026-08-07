@@ -12,13 +12,15 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 )
 
-func TestPGBatchedUsageEventFingerprintsPreserveExactMicrodollars(t *testing.T) {
+func TestPGCanonicalUsageComparisonPreservesExactMicrodollars(t *testing.T) {
 	pgURL := testPGURL(t)
 	const schema = "agentsview_usage_fingerprint_money_test"
 	cleanNamedPGSchema(t, pgURL, schema)
@@ -30,20 +32,13 @@ func TestPGBatchedUsageEventFingerprintsPreserveExactMicrodollars(t *testing.T) 
 	defer pg.Close()
 	require.NoError(t, EnsureSchema(ctx, pg, schema))
 
-	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
-	require.NoError(t, err)
-	defer local.Close()
-	require.NoError(t, local.UpsertSession(db.Session{
-		ID: "exact-money", Project: "project", Machine: "machine", Agent: "codex",
-	}))
 	cost := money.Money{Microdollars: 9_007_199_254_740_993}
-	require.NoError(t, local.ReplaceSessionUsageEvents("exact-money", []db.UsageEvent{{
+	usageRows, err := db.CanonicalUsageEventRows([]db.UsageEvent{{
 		SessionID: "exact-money", Source: "provider", Model: "model",
 		InputTokens: 11, OutputTokens: 7, Cost: &cost,
 		CostStatus: "priced", CostSource: "provider",
 		OccurredAt: "2026-07-22T12:00:00Z", DedupKey: "exact-cost",
-	}}))
-	want, err := local.UsageEventFingerprint("exact-money")
+	}})
 	require.NoError(t, err)
 
 	_, err = pg.ExecContext(ctx, `
@@ -59,14 +54,20 @@ func TestPGBatchedUsageEventFingerprintsPreserveExactMicrodollars(t *testing.T) 
 		)`)
 	require.NoError(t, err)
 
-	tx, err := pg.BeginTx(ctx, nil)
+	store := bun.NewDB(pg, pgdialect.New())
+	matches, err := db.CanonicalSessionDependentRowsMatch(
+		ctx, store, "exact-money", nil, nil, nil, usageRows,
+	)
 	require.NoError(t, err)
-	defer tx.Rollback()
-	batched := map[string]string{}
-	require.NoError(t, loadPushUsageEventFingerprints(
-		ctx, tx, []string{"exact-money"}, batched,
-	))
-	assert.Equal(t, want, batched["exact-money"])
+	assert.True(t, matches)
+
+	differentCost := *usageRows[0].CostMicrodollars - 1
+	usageRows[0].CostMicrodollars = &differentCost
+	matches, err = db.CanonicalSessionDependentRowsMatch(
+		ctx, store, "exact-money", nil, nil, nil, usageRows,
+	)
+	require.NoError(t, err)
+	assert.False(t, matches)
 }
 
 func TestPushMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
