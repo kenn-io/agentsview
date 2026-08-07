@@ -288,6 +288,50 @@ func TestAppendToolRowsResolvesOnlyAffectedMessageOrdinals(t *testing.T) {
 		"legacy message-id resolution must be bounded by appended ordinals")
 }
 
+func TestAppendToolRowsChunksAffectedMessageOrdinalResolution(t *testing.T) {
+	database := testDB(t)
+	const sessionID = "chunked-tool-resolution"
+	insertSession(t, database, sessionID, "alpha")
+	messages := make([]Message, 250)
+	for ordinal := range messages {
+		messages[ordinal] = Message{
+			SessionID: sessionID, Ordinal: ordinal,
+			Role: "assistant", Content: "message",
+		}
+	}
+	insertMessages(t, database, messages...)
+	calls := make([]bunmodel.ToolCall, canonicalWriteBatchSize+1)
+	for index := range calls {
+		calls[index] = bunmodel.ToolCall{
+			SessionID: sessionID, MessageOrdinal: 149 + index,
+			CallIndex: 0, ToolName: "Read", Category: "file",
+		}
+	}
+
+	hook := new(countingQueryHook)
+	database.bunWriter = database.bunWriter.WithQueryHook(hook)
+	require.NoError(t, database.bunWriter.RunInTx(t.Context(), nil,
+		func(ctx context.Context, tx bun.Tx) error {
+			return AppendToolRows(ctx, tx, sessionID, calls, nil)
+		}))
+
+	var resolutionQueries []string
+	for _, query := range hook.queries {
+		if strings.Contains(query, `FROM "messages"`) {
+			resolutionQueries = append(resolutionQueries, query)
+		}
+	}
+	require.Len(t, resolutionQueries, 2,
+		"101 affected ordinals must resolve in two bounded chunks")
+	assert.NotContains(t, strings.Join(resolutionQueries, "\n"), "ordinal IN (0,",
+		"resolution must not materialize unaffected transcript history")
+	var storedCalls int
+	require.NoError(t, database.getReader().QueryRowContext(t.Context(),
+		`SELECT count(*) FROM tool_calls WHERE session_id = ?`, sessionID,
+	).Scan(&storedCalls))
+	assert.Equal(t, len(calls), storedCalls)
+}
+
 func TestCanonicalBunRowsPreservePortableCoordinates(t *testing.T) {
 	cost := money.Money{Microdollars: 42}
 	messages, calls, results, err := CanonicalMessageRows([]Message{{

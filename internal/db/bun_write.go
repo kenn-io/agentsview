@@ -827,7 +827,7 @@ func resolveCanonicalToolMessageIDs(
 	}
 	slices.Sort(ordinals)
 
-	messageIDs := make(map[int]int64, len(ordinals))
+	messageIDs := make(map[int]*int64, len(ordinals))
 	for start := 0; start < len(ordinals); start += canonicalWriteBatchSize {
 		end := min(start+canonicalWriteBatchSize, len(ordinals))
 		var messages []bunmodel.Message
@@ -838,9 +838,7 @@ func resolveCanonicalToolMessageIDs(
 			return fmt.Errorf("resolving canonical tool message ids for %s: %w", sessionID, err)
 		}
 		for _, message := range messages {
-			if message.ID != nil {
-				messageIDs[message.Ordinal] = *message.ID
-			}
+			messageIDs[message.Ordinal] = message.ID
 		}
 	}
 	for i := range calls {
@@ -852,7 +850,7 @@ func resolveCanonicalToolMessageIDs(
 					sessionID, calls[i].MessageOrdinal,
 				)
 			}
-			calls[i].MessageID = &messageID
+			calls[i].MessageID = messageID
 		}
 	}
 	return nil
