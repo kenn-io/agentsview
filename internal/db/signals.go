@@ -59,10 +59,10 @@ func (db *DB) UpdateSessionSignals(
 // updateSessionSignalsTx writes signal columns within an existing transaction.
 // Caller owns the lock and transaction lifecycle. It deliberately does NOT
 // write secret_leak_count/secrets_rules_version: those are owned solely by the
-// secret-finding replacement path (replaceSecretFindingsTx), so a signals-only
-// recompute cannot reset them while findings still exist. The two secret fields
-// on SessionSignalUpdate are carried here only so callers can forward them to
-// replaceSecretFindingsTx alongside the findings.
+// secret-finding replacement path (replaceSessionSecretFindingsBunTx), so a
+// signals-only recompute cannot reset them while findings still exist. The two
+// secret fields on SessionSignalUpdate are carried here only so callers can
+// forward them to replaceSessionSecretFindingsBunTx alongside the findings.
 func updateSessionSignalsTx(
 	tx *sql.Tx, sessionID string, u SessionSignalUpdate,
 ) error {
