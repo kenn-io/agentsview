@@ -1529,6 +1529,11 @@ func convergePostgresCommonSchema(
 		return fmt.Errorf("rechecking common PostgreSQL schema stamp: %w", err)
 	}
 	if complete {
+		if err := checkPostgresPricingTimestampTypes(ctx, tx); err != nil {
+			return fmt.Errorf(
+				"validating stamped common PostgreSQL schema: %w", err,
+			)
+		}
 		if err := db.CheckCommonSchema(ctx, tx); err != nil {
 			return fmt.Errorf("validating stamped common PostgreSQL schema: %w", err)
 		}
@@ -1560,6 +1565,9 @@ func convergePostgresCommonSchema(
 	if err := db.CreateCommonSchema(ctx, tx); err != nil {
 		return err
 	}
+	if err := checkPostgresPricingTimestampTypes(ctx, tx); err != nil {
+		return err
+	}
 	if err := db.CheckCommonSchema(ctx, tx); err != nil {
 		return err
 	}
@@ -1585,7 +1593,11 @@ func convergePostgresCommonSchema(
 func convergePostgresPricingTimestamps(ctx context.Context, store bun.IDB) error {
 	if _, err := store.ExecContext(ctx, `
 		DELETE FROM model_pricing
-		WHERE model_pattern LIKE '\_%' ESCAPE '\'`); err != nil {
+		WHERE model_pattern IN (
+			'_fallback_version',
+			'_litellm_last_attempt',
+			'_pricing_storage_version'
+		)`); err != nil {
 		return fmt.Errorf("removing PostgreSQL pricing metadata sentinels: %w", err)
 	}
 	for _, table := range []string{"model_pricing", "model_pricing_bands"} {
@@ -1613,6 +1625,30 @@ func convergePostgresPricingTimestamps(ctx context.Context, store bun.IDB) error
 			ALTER TABLE %s ALTER COLUMN updated_at SET DEFAULT NOW()`,
 			table)); err != nil {
 			return fmt.Errorf("defaulting PostgreSQL %s.updated_at: %w", table, err)
+		}
+	}
+	return nil
+}
+
+func checkPostgresPricingTimestampTypes(
+	ctx context.Context, conn bun.IConn,
+) error {
+	for _, table := range []string{"model_pricing", "model_pricing_bands"} {
+		var dataType string
+		query := fmt.Sprintf(`
+			SELECT data_type
+			FROM information_schema.columns
+			WHERE table_schema = current_schema()
+			  AND table_name = '%s'
+			  AND column_name = 'updated_at'`, table)
+		if err := conn.QueryRowContext(ctx, query).Scan(&dataType); err != nil {
+			return fmt.Errorf("reading PostgreSQL %s.updated_at type: %w", table, err)
+		}
+		if dataType != "timestamp with time zone" {
+			return fmt.Errorf(
+				"PostgreSQL %s.updated_at has type %s, want timestamp with time zone",
+				table, dataType,
+			)
 		}
 	}
 	return nil
@@ -2691,6 +2727,9 @@ func CheckSchemaCompat(
 			)
 		}
 		rows.Close()
+		if err := checkPostgresPricingTimestampTypes(ctx, db); err != nil {
+			return err
+		}
 	}
 
 	rows, err = db.QueryContext(ctx,

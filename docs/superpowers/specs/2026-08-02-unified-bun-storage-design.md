@@ -241,9 +241,11 @@ schema-convergence migration and follows these rules:
   preserved.
 - PostgreSQL applies the corresponding changes transactionally in place and
   retains existing synchronized data.
-- Existing pricing metadata sentinel rows are moved once into `pricing_metadata`
-  and removed from `model_pricing`. Runtime reads use only the new table;
-  there is no dual read or write path.
+- The three existing pricing metadata rows (`_fallback_version`,
+  `_litellm_last_attempt`, and `_pricing_storage_version`) are moved once into
+  `pricing_metadata` and removed from `model_pricing`. Other
+  underscore-prefixed model patterns remain pricing data. Runtime reads use
+  only the new table; there is no dual read or write path.
 - The migration leaves no permanent dual-schema read or write path. Once the
   transaction succeeds, only the canonical model is used.
 - DuckDB does not migrate in place. Its `SchemaVersion` is incremented; a push
@@ -260,9 +262,12 @@ the publication machinery owned by this stack layer, validates invariants, and
 stamps the same commit. A stamped archive validates and fails closed on drift;
 it never replays legacy inputs or attempts an implicit repair. PostgreSQL always
 acquires its advisory transaction lock before relying on the stamp, rechecks it
-under that lock, and validates a stamped schema before returning. SQLite's
-writer transaction/busy timeout and PostgreSQL's advisory lock serialize
-concurrent openers.
+under that lock, and validates a stamped schema before returning. PostgreSQL
+read compatibility and the push fast path require native timestamp types for
+both pricing `updated_at` columns; writable push converges the shipped text
+columns, while read-only serve and stamped drift fail closed. SQLite's writer
+transaction/busy timeout and PostgreSQL's advisory lock serialize concurrent
+openers.
 
 Downgrading a database after this cutover is unsupported. Older released
 binaries cannot recognize the new stamp and no trigger, shim, or dual-schema

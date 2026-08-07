@@ -651,6 +651,7 @@ ______________________________________________________________________
 - Modify: `internal/postgres/activityreport_pgtest_test.go`
 - Modify: `internal/postgres/pricing.go`
 - Modify: `internal/postgres/pricing_unit_test.go`
+- Modify: `internal/postgres/push_test.go`
 - Modify: `internal/postgres/schema.go`
 - Modify: `internal/postgres/schema_test.go`
 - Modify: `internal/postgres/schema_pgtest_test.go`
@@ -732,7 +733,9 @@ ______________________________________________________________________
 
     Open an already-stamped PostgreSQL fixture whose canonical catalog is invalid
     and assert convergence fails after taking the advisory transaction lock. The
-    initial stamp probe must not bypass normal validation.
+    initial stamp probe must not bypass normal validation. Make both pricing
+    `updated_at` columns textual and assert read compatibility rejects them, the
+    push fast path forces writable convergence, and stamped drift fails closed.
 
     Reopen the stamped SQLite fixture after deliberately diverging its legacy and
     canonical identity rows. Assert canonical rows are unchanged so the one-time
@@ -801,10 +804,16 @@ ______________________________________________________________________
     must not reject that workflow state. Task 10 later replaces the SQL
     implementation with Bun but does not introduce this invariant.
 
-    Move the known pricing sentinel rows into a dedicated SQLite
-    `pricing_metadata` table in this same forward convergence. Delete the
-    migrated sentinels from `model_pricing`, use no fallback reads, and preserve
-    the metadata explicitly during archive resync.
+    Move `_fallback_version`, `_litellm_last_attempt`, and
+    `_pricing_storage_version` into a dedicated SQLite `pricing_metadata` table
+    in this same forward convergence. Delete only those migrated rows from
+    `model_pricing`, preserve other underscore-prefixed pricing patterns, use no
+    fallback reads, and preserve the metadata explicitly during archive resync.
+
+    Require native PostgreSQL timestamp types for both pricing `updated_at`
+    columns in read compatibility, push fast-path, and stamped-schema
+    validation. The shipped unstamped text schema converges under the advisory
+    transaction lock; read-only and stamped drift fail closed.
 
     Replace DuckDB's duplicated common `mirrorTables` declarations with registry
     creation. Keep only `sync_metadata`, provenance, and DuckDB-specific indexes
@@ -856,7 +865,8 @@ ______________________________________________________________________
       internal/db/session_batch.go internal/db/sessions.go internal/db/usage.go \
       internal/postgres/activityreport_pgtest_test.go \
       internal/postgres/analytics.go internal/postgres/pricing.go \
-      internal/postgres/pricing_unit_test.go internal/postgres/schema.go \
+      internal/postgres/pricing_unit_test.go internal/postgres/push_test.go \
+      internal/postgres/schema.go \
       internal/postgres/schema_pgtest_test.go internal/postgres/schema_test.go \
       internal/postgres/usage_pgtest_test.go internal/duckdb/analytics_usage.go \
       internal/duckdb/analytics_usage_test.go \
