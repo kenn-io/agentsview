@@ -332,7 +332,7 @@ func TestLegacySchemaStampedCommonSchemaRejectsTriggerDriftWithoutRepair(
 	require.NoError(t, err)
 	require.NoError(t, database.Close())
 
-	const triggerName = "trg_project_identity_observations_revision_insert"
+	const triggerName = "trg_source_project_identity_observations_revision_insert"
 	conn, err := sql.Open("sqlite3", makeDSN(path, false))
 	require.NoError(t, err)
 	conn.SetMaxOpenConns(1)
