@@ -1,8 +1,8 @@
 # Bun Storage Stack Landing Cleanup Implementation Plan
 
-**Goal:** Close the confirmed correctness and ownership gaps in PRs #1343–#1347
-without expanding the landing stack into the separately tracked incremental
-archive-writer refactor.
+**Goal:** Close the confirmed correctness and ownership gaps in PRs #1343–#1347,
+then complete the remaining archive-writer consolidation in a sixth stacked pull
+request before landing.
 
 **Approved spec/design:**
 `docs/superpowers/specs/2026-08-02-unified-bun-storage-design.md`, supplemented
@@ -31,8 +31,9 @@ restacked after every lower branch is complete.
 - The existing shipped migrations are immutable.
 - RoboRev hooks stay snoozed while branch commits and restacks are in progress;
   unsnooze every affected branch after final verification.
-- Kata parent `h26h` tracks landing work. Follow-up `h381` owns the remaining
-  incremental archive-writer migration and does not block this stack.
+- Kata parent `h26h` tracks the original landing work. Kata `h381` owns the
+  required sixth tip layer that completes archive-writer consolidation before
+  the stack lands.
 
 ______________________________________________________________________
 
@@ -260,10 +261,35 @@ ______________________________________________________________________
 - [x] Push only after verification, close completed Kata children with commit
   evidence, and unsnooze RoboRev on every affected branch.
 
+### Task 7: Complete archive-writer consolidation (`h381`)
+
+**Interfaces:**
+
+- Consumes: the canonical Bun schema, write primitives, and five reviewed stack
+  layers.
+
+- Produces: a sixth tip PR where ordinary/full sync, incremental and parse-diff
+  message repair, accounting/findings, and orphan recovery share guarded Bun
+  transactions.
+
+- [x] Route every archive message writer through canonical Bun row helpers.
+
+- [x] Converge ordinary and explicit full sync on the atomic session-batch core.
+
+- [x] Consolidate accounting and secret-finding writes on canonical helpers.
+
+- [x] Derive compatible attached orphan-copy projections from the Bun model
+  registry while retaining SQLite-only relationship, pin, provenance, and FTS
+  transforms.
+
+- [ ] Verify and publish the sixth stacked PR, then close Kata `h381` and resume
+  RoboRev reminders.
+
 ## Self-review
 
-- Spec coverage: landing correctness findings are assigned to their introducing
-  layers; the incremental writer migration is explicitly owned by Kata `h381`.
+- Spec coverage: landing correctness findings remain in their introducing
+  layers; the archive-writer migration is implemented in the sixth layer owned
+  by Kata `h381` rather than deferred beyond landing.
 - Scope exclusions: Store interface splitting, generated converters, registry-
   driven relationship walks, package splitting, and context retrofits are not
   landing cleanup.

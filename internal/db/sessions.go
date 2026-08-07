@@ -684,23 +684,11 @@ func stampSessionArchiveIdentity(session *Session, identity ArchiveIdentity) {
 // Sessions that were permanently deleted (in excluded_sessions)
 // or currently in the trash are rejected.
 func (db *DB) upsertArchiveSession(s Session) error {
-	_, err := db.upsertSession(s, true)
+	_, err := db.upsertSession(s)
 	return err
 }
 
-// UpsertSessionPendingContent inserts or updates the session row without
-// reviving a source-missing tombstone. Full content writers call
-// ReviveSourceMissingSession only after every required dependent write lands.
-// The returned bool reports whether the row was source-missing before the
-// upsert, so callers can replace rather than append its retained content.
-func (db *DB) UpsertSessionPendingContent(s Session) (bool, error) {
-	result, err := db.upsertSession(s, false)
-	return result.sourceMissing, err
-}
-
-func (db *DB) upsertSession(
-	s Session, reviveSourceMissing bool,
-) (sessionUpsertResult, error) {
+func (db *DB) upsertSession(s Session) (sessionUpsertResult, error) {
 	identity, err := db.localArchiveIdentity(context.Background())
 	if err != nil {
 		return sessionUpsertResult{}, err
@@ -714,7 +702,7 @@ func (db *DB) upsertSession(
 		return sessionUpsertResult{}, fmt.Errorf("beginning session upsert: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	result, err := upsertArchiveSessionRow(ctx, tx, s, reviveSourceMissing)
+	result, err := upsertArchiveSessionRow(ctx, tx, s, true)
 	if err != nil {
 		return sessionUpsertResult{}, err
 	}
@@ -909,24 +897,6 @@ func insertArchiveSessionIfAbsentRow(
 	if _, err := store.NewInsert().Model(&row).
 		On("CONFLICT (id) DO NOTHING").Returning("").Exec(ctx); err != nil {
 		return fmt.Errorf("inserting session %s if absent: %w", s.ID, err)
-	}
-	return nil
-}
-
-// ReviveSourceMissingSession makes a watcher-tombstoned session visible after
-// its replacement session row, messages, usage events, and data version have
-// all been persisted successfully. User trash is never affected.
-func (db *DB) ReviveSourceMissingSession(id string) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	_, err := db.getWriter().Exec(`
-		UPDATE sessions
-		SET deleted_at = NULL,
-		    deletion_cause = NULL,
-		    local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		WHERE id = ? AND deletion_cause = ?`, id, deletionCauseSourceMissing)
-	if err != nil {
-		return fmt.Errorf("reviving source-missing session %s: %w", id, err)
 	}
 	return nil
 }

@@ -79,7 +79,7 @@ func TestSyncPersistsSecretFindings(t *testing.T) {
 
 // TestSyncNoSecretsLeavesZero verifies a clean session persists no findings
 // and a zero secret_leak_count, exercising the empty-findings path through
-// the sync write (replaceSecretFindingsTx deletes with nothing to insert).
+// the sync write (the canonical replacement deletes with nothing to insert).
 func TestSyncNoSecretsLeavesZero(t *testing.T) {
 	fx := newEngineFixture(t)
 	content := testjsonl.NewSessionBuilder().
