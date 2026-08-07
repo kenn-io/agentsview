@@ -1600,14 +1600,13 @@ func convergePostgresCommonSchema(
 }
 
 func validateStampedPostgresCommonSchema(
-	ctx context.Context, conn *sql.DB,
+	ctx context.Context, store *bun.DB,
 ) error {
 	var complete bool
-	err := conn.QueryRowContext(ctx, `
+	err := store.NewRaw(`
 		SELECT EXISTS (
-			SELECT 1 FROM sync_metadata WHERE key = $1
-		)`, db.CommonSchemaCompatibilityMetadataKey,
-	).Scan(&complete)
+			SELECT 1 FROM sync_metadata WHERE key = ?
+		)`, db.CommonSchemaCompatibilityMetadataKey).Scan(ctx, &complete)
 	if err != nil {
 		if isUndefinedTable(err) {
 			return nil
@@ -1617,9 +1616,7 @@ func validateStampedPostgresCommonSchema(
 	if !complete {
 		return nil
 	}
-	return convergePostgresCommonSchema(
-		ctx, bun.NewDB(conn, pgdialect.New()), nil,
-	)
+	return convergePostgresCommonSchema(ctx, store, nil)
 }
 
 func convergePostgresPricingTimestamps(ctx context.Context, store bun.IDB) error {
