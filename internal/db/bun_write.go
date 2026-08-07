@@ -93,6 +93,93 @@ func (db *DB) beginBunWriteTx(
 	return db.bunWriter.BeginTx(ctx, (*sql.TxOptions)(nil))
 }
 
+func (db *DB) acquireBunWriteConn(ctx context.Context) (bun.Conn, error) {
+	db.connMu.RLock()
+	defer db.connMu.RUnlock()
+	if db.readOnly {
+		return bun.Conn{}, ErrReadOnly
+	}
+	if db.bunWriter == nil {
+		if db.writerClosed.Load() {
+			return bun.Conn{}, ErrWriterClosed
+		}
+		return bun.Conn{}, ErrReadOnly
+	}
+	return db.bunWriter.Conn(ctx)
+}
+
+// copyCanonicalRowsFromAttached copies natural-key child rows from an attached
+// SQLite archive using the canonical Bun registry as the destination
+// projection. Physical IDs are excluded so the destination assigns them, and
+// columns absent from a legacy source archive are omitted.
+func copyCanonicalRowsFromAttached(
+	ctx context.Context,
+	tx bun.IDB,
+	model any,
+	sourceTable string,
+	idsTable string,
+	excludedColumns ...string,
+) error {
+	rows, err := tx.QueryContext(ctx,
+		"PRAGMA old_db.table_info("+quoteCommonIdentifier(sourceTable)+")",
+	)
+	if err != nil {
+		return fmt.Errorf("reading attached %s columns: %w", sourceTable, err)
+	}
+	defer rows.Close()
+
+	sourceColumns := make(map[string]struct{})
+	for rows.Next() {
+		var cid int
+		var name string
+		var typ, defaultValue sql.NullString
+		var notNull, primaryKey int
+		if err := rows.Scan(
+			&cid, &name, &typ, &notNull, &defaultValue, &primaryKey,
+		); err != nil {
+			return fmt.Errorf("scanning attached %s columns: %w", sourceTable, err)
+		}
+		sourceColumns[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating attached %s columns: %w", sourceTable, err)
+	}
+
+	excluded := make(map[string]struct{}, len(excludedColumns))
+	for _, column := range excludedColumns {
+		excluded[column] = struct{}{}
+	}
+	columns := bunmodel.ModelColumns(model)
+	columns = slices.DeleteFunc(columns, func(column string) bool {
+		if _, skip := excluded[column]; skip {
+			return true
+		}
+		_, present := sourceColumns[column]
+		return !present
+	})
+	if len(columns) == 0 {
+		return fmt.Errorf("copying attached %s: no compatible canonical columns", sourceTable)
+	}
+	if _, present := sourceColumns["session_id"]; !present {
+		return fmt.Errorf("copying attached %s: session_id column is required", sourceTable)
+	}
+
+	quotedColumns := make([]string, len(columns))
+	for index, column := range columns {
+		quotedColumns[index] = quoteCommonIdentifier(column)
+	}
+	columnList := strings.Join(quotedColumns, ", ")
+	query := "INSERT INTO main." + quoteCommonIdentifier(sourceTable) +
+		" (" + columnList + ") SELECT " + columnList +
+		" FROM old_db." + quoteCommonIdentifier(sourceTable) +
+		" WHERE " + quoteCommonIdentifier("session_id") + " IN (SELECT " +
+		quoteCommonIdentifier("id") + " FROM " + quoteCommonIdentifier(idsTable) + ")"
+	if _, err := tx.NewRaw(query).Exec(ctx); err != nil {
+		return fmt.Errorf("copying attached %s: %w", sourceTable, err)
+	}
+	return nil
+}
+
 // CanonicalSessionRow converts one public session into its portable Bun row.
 func CanonicalSessionRow(session Session) (bunmodel.Session, error) {
 	row, err := sessionToBunRow(session)

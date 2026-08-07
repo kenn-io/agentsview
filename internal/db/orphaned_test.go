@@ -458,6 +458,256 @@ func TestExecWithoutCancelDropsTempTableWithCanceledContext(t *testing.T) {
 	require.NoError(t, err, "recreate temp table after cleanup")
 }
 
+func TestCopyOrphanedDataPreservesCanonicalRowsWithFreshPhysicalIDs(t *testing.T) {
+	ctx := t.Context()
+	dir := t.TempDir()
+	const (
+		sessionID   = "canonical-orphan"
+		searchToken = "xylophoniccopytoken"
+		createdAt   = "2020-01-02T03:04:05.000Z"
+	)
+	terminationStatus := "clean"
+	fileInode := int64(4242)
+	fileDevice := int64(84)
+
+	sourcePath := filepath.Join(dir, "source.db")
+	source := testDBAtPath(t, sourcePath, "source")
+	insertSession(t, source, sessionID, "project", func(session *Session) {
+		session.MessageCount = 1
+		session.TerminationStatus = &terminationStatus
+		session.FileInode = &fileInode
+		session.FileDevice = &fileDevice
+	})
+	insertMessages(t, source, Message{
+		SessionID: sessionID, Ordinal: 0, Role: "assistant",
+		Content: searchToken, SourceUUID: "canonical-source-message",
+		ToolCalls: []ToolCall{{
+			ToolUseID: "canonical-tool", ToolName: "Read", Category: "file",
+			ResultEvents: []ToolResultEvent{{
+				EventIndex: 7, Source: "tool", Status: "completed",
+				Content: "canonical result",
+			}},
+		}},
+	})
+	ordinal := 0
+	require.NoError(t, source.ReplaceSessionUsageEvents(sessionID, []UsageEvent{{
+		SessionID: sessionID, MessageOrdinal: &ordinal, Source: "session",
+		Model: "canonical-model", InputTokens: 11, OutputTokens: 5,
+		DedupKey: "canonical-usage",
+	}}))
+	require.NoError(t, source.ReplaceSessionSecretFindings(
+		sessionID, []SecretFinding{{
+			SessionID: sessionID, RuleName: "canonical-rule",
+			Confidence: "definite", LocationKind: "message",
+			MessageOrdinal: 0, MatchStart: 1, MatchEnd: 3,
+			RedactedMatch: "xy…ic",
+		}}, 1, "canonical-rules",
+	))
+	_, err := source.getWriter().ExecContext(ctx,
+		`UPDATE secret_findings SET created_at = ? WHERE session_id = ?`,
+		createdAt, sessionID,
+	)
+	require.NoError(t, err)
+	sourceMessages, err := source.GetAllMessages(ctx, sessionID)
+	require.NoError(t, err)
+	require.Len(t, sourceMessages, 1)
+	_, err = source.PinMessage(sessionID, sourceMessages[0].ID, Ptr("keep"))
+	require.NoError(t, err)
+	sourceIDs := canonicalCopyPhysicalIDs(t, source, sessionID)
+	require.NoError(t, source.Close())
+
+	destination := testDBAtPath(
+		t, filepath.Join(dir, "destination.db"), "destination",
+	)
+	defer destination.Close()
+	seedCanonicalCopyCollision(t, destination)
+	destinationIDs := canonicalCopyPhysicalIDs(t, destination, "occupied")
+	assert.Equal(t, sourceIDs, destinationIDs,
+		"fixture must collide on every source-assigned physical child ID")
+
+	copied, err := destination.CopyOrphanedDataFrom(sourcePath)
+	require.NoError(t, err)
+	require.Equal(t, 1, copied)
+
+	session, err := destination.GetSessionFull(ctx, sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.NotNil(t, session.TerminationStatus)
+	assert.Equal(t, terminationStatus, *session.TerminationStatus)
+	require.NotNil(t, session.FileInode)
+	assert.Equal(t, fileInode, *session.FileInode)
+	require.NotNil(t, session.FileDevice)
+	assert.Equal(t, fileDevice, *session.FileDevice)
+
+	copiedIDs := canonicalCopyPhysicalIDs(t, destination, sessionID)
+	assert.NotEqual(t, sourceIDs, copiedIDs,
+		"destination must assign fresh physical child IDs")
+	messages, err := destination.GetAllMessages(ctx, sessionID)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	require.Len(t, messages[0].ToolCalls, 1)
+	require.Len(t, messages[0].ToolCalls[0].ResultEvents, 1)
+	assert.Equal(t, 7, messages[0].ToolCalls[0].ResultEvents[0].EventIndex)
+	usage, err := destination.GetUsageEvents(ctx, sessionID)
+	require.NoError(t, err)
+	require.Len(t, usage, 1)
+	assert.Equal(t, "canonical-usage", usage[0].DedupKey)
+	findings, err := destination.SessionSecretFindings(ctx, sessionID)
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	assert.Equal(t, "canonical-rule", findings[0].RuleName)
+	var copiedCreatedAt string
+	require.NoError(t, destination.getReader().QueryRowContext(ctx,
+		`SELECT created_at FROM secret_findings WHERE session_id = ?`, sessionID,
+	).Scan(&copiedCreatedAt))
+	assert.Equal(t, createdAt, copiedCreatedAt)
+	pins, err := destination.ListPinnedMessages(ctx, sessionID, "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, 0, pins[0].Ordinal)
+	ordinals, err := destination.SearchSession(ctx, sessionID, searchToken)
+	require.NoError(t, err)
+	assert.Equal(t, []int{0}, ordinals)
+}
+
+type canonicalCopyIDs struct {
+	message int64
+	usage   int64
+	result  int64
+	finding int64
+}
+
+func canonicalCopyPhysicalIDs(
+	t *testing.T, database *DB, sessionID string,
+) canonicalCopyIDs {
+	t.Helper()
+	var ids canonicalCopyIDs
+	require.NoError(t, database.getReader().QueryRowContext(t.Context(), `
+		SELECT
+			(SELECT id FROM messages WHERE session_id = ?),
+			(SELECT id FROM usage_events WHERE session_id = ?),
+			(SELECT id FROM tool_result_events WHERE session_id = ?),
+			(SELECT id FROM secret_findings WHERE session_id = ?)`,
+		sessionID, sessionID, sessionID, sessionID,
+	).Scan(&ids.message, &ids.usage, &ids.result, &ids.finding))
+	return ids
+}
+
+func seedCanonicalCopyCollision(t *testing.T, database *DB) {
+	t.Helper()
+	const sessionID = "occupied"
+	insertSession(t, database, sessionID, "project")
+	insertMessages(t, database, Message{
+		SessionID: sessionID, Ordinal: 0, Role: "assistant", Content: "occupied",
+		ToolCalls: []ToolCall{{
+			ToolUseID: "occupied-tool", ToolName: "Read", Category: "file",
+			ResultEvents: []ToolResultEvent{{
+				Source: "tool", Status: "completed", Content: "occupied result",
+			}},
+		}},
+	})
+	require.NoError(t, database.ReplaceSessionUsageEvents(sessionID, []UsageEvent{{
+		SessionID: sessionID, Source: "session", DedupKey: "occupied-usage",
+	}}))
+	require.NoError(t, database.ReplaceSessionSecretFindings(
+		sessionID, []SecretFinding{{
+			SessionID: sessionID, RuleName: "occupied-rule",
+			Confidence: "definite", LocationKind: "message",
+		}}, 1, "occupied-rules",
+	))
+}
+
+func TestCopyOrphanedDataLateDependentFailureRollsBackEverything(t *testing.T) {
+	ctx := t.Context()
+	dir := t.TempDir()
+	const orphanID = "late-orphan"
+
+	sourcePath := filepath.Join(dir, "source.db")
+	source := testDBAtPath(t, sourcePath, "source")
+	insertSession(t, source, "existing", "project")
+	insertMessages(t, source, userMsg("existing", 0, "source transcript"))
+	_, err := source.getWriter().ExecContext(ctx,
+		`UPDATE sessions SET transcript_revision = '8' WHERE id = 'existing'`)
+	require.NoError(t, err)
+	insertSession(t, source, orphanID, "project")
+	insertMessages(t, source, Message{
+		SessionID: orphanID, Ordinal: 0, Role: "assistant",
+		Content: "late rollback token", SourceUUID: "late-message",
+		ToolCalls: []ToolCall{{
+			ToolUseID: "late-tool", ToolName: "Read", Category: "file",
+			ResultEvents: []ToolResultEvent{{
+				Source: "tool", Status: "completed", Content: "late result",
+			}},
+		}},
+	})
+	orphanMessages, err := source.GetAllMessages(ctx, orphanID)
+	require.NoError(t, err)
+	require.Len(t, orphanMessages, 1)
+	_, err = source.PinMessage(orphanID, orphanMessages[0].ID, Ptr("late pin"))
+	require.NoError(t, err)
+	require.NoError(t, source.ReplaceSessionSecretFindings(
+		orphanID, []SecretFinding{{
+			SessionID: orphanID, RuleName: "late-rule",
+			Confidence: "definite", LocationKind: "message",
+		}}, 1, "late-rules",
+	))
+	require.NoError(t, source.ReplaceSessionUsageEvents(orphanID, []UsageEvent{{
+		SessionID: orphanID, Source: "session", DedupKey: "late-usage",
+	}}))
+	_, err = source.getWriter().ExecContext(ctx, `
+		DROP INDEX idx_usage_events_dedup;
+		INSERT INTO usage_events (
+			session_id, message_ordinal, source, model,
+			input_tokens, output_tokens, cache_creation_input_tokens,
+			cache_read_input_tokens, reasoning_tokens, cost_microdollars,
+			cost_status, cost_source, occurred_at, dedup_key
+		)
+		SELECT
+			session_id, message_ordinal, source, model,
+			input_tokens, output_tokens, cache_creation_input_tokens,
+			cache_read_input_tokens, reasoning_tokens, cost_microdollars,
+			cost_status, cost_source, occurred_at, dedup_key
+		FROM usage_events WHERE session_id = 'late-orphan'`)
+	require.NoError(t, err, "plant conflicting legacy usage rows")
+	require.NoError(t, source.Close())
+
+	destination := testDBAtPath(
+		t, filepath.Join(dir, "destination.db"), "destination",
+	)
+	defer destination.Close()
+	insertSession(t, destination, "existing", "project")
+	insertMessages(t, destination, userMsg("existing", 0, "destination transcript"))
+	_, err = destination.getWriter().ExecContext(ctx,
+		`UPDATE sessions SET transcript_revision = '3' WHERE id = 'existing'`)
+	require.NoError(t, err)
+	_, err = destination.CopyOrphanedDataFrom(sourcePath)
+	require.ErrorContains(t, err, "copying attached usage_events")
+
+	session, err := destination.GetSession(ctx, orphanID)
+	require.NoError(t, err)
+	assert.Nil(t, session)
+	for _, table := range []string{
+		"messages", "tool_calls", "tool_result_events", "pinned_messages",
+		"usage_events", "secret_findings",
+	} {
+		var count int
+		require.NoError(t, destination.getReader().QueryRowContext(ctx,
+			`SELECT count(*) FROM `+quoteCommonIdentifier(table)+` WHERE session_id = ?`,
+			orphanID,
+		).Scan(&count))
+		assert.Zero(t, count, table)
+	}
+	ordinals, err := destination.SearchSession(ctx, orphanID, "rollback")
+	require.NoError(t, err)
+	assert.Empty(t, ordinals)
+	var revision string
+	require.NoError(t, destination.getReader().QueryRowContext(ctx,
+		`SELECT transcript_revision FROM sessions WHERE id = 'existing'`,
+	).Scan(&revision))
+	assert.Equal(t, "3", revision,
+		"revision reconciliation must roll back with the failed orphan copy")
+}
+
 func TestCopyOrphanedDataPreservesSessionKindAndPromptSource(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
