@@ -108,8 +108,9 @@ type Server struct {
 	// activity would otherwise surface. Called synchronously; it must not
 	// block.
 	sessionMutationNotify func()
-	// recallCorpusMutationNotify, when set, is called after an import adds or
-	// supersedes accepted recall entries so semantic mirrors can refresh.
+	// recallCorpusMutationNotify, when set, is called after an import or
+	// extraction-generation action changes accepted recall entries so semantic
+	// mirrors can refresh.
 	recallCorpusMutationNotify func()
 	recallExtractionStatus     RecallExtractionStatusProvider
 
@@ -351,8 +352,8 @@ func WithSessionMutationNotifier(fn func()) Option {
 }
 
 // WithRecallCorpusMutationNotifier registers fn to run after a successful
-// import changes the accepted recall corpus. fn must not block; a scheduler's
-// coalescing Notify method is the intended shape.
+// import or generation action changes the accepted recall corpus. fn must not
+// block; a scheduler's coalescing Notify method is the intended shape.
 func WithRecallCorpusMutationNotifier(fn func()) Option {
 	return func(s *Server) { s.recallCorpusMutationNotify = fn }
 }
@@ -361,6 +362,14 @@ func WithRecallCorpusMutationNotifier(fn func()) Option {
 // the Recall page. The model-backed manager satisfies this interface directly.
 type RecallExtractionStatusProvider interface {
 	Status(context.Context) (extract.Status, error)
+}
+
+// RecallExtractionLifecycleController supplies the guarded generation
+// mutations exposed by the Recall page. The model-backed manager implements
+// this interface without exposing force retirement.
+type RecallExtractionLifecycleController interface {
+	Activate(context.Context) error
+	Retire(context.Context, string) error
 }
 
 // WithRecallExtractionStatusProvider exposes extraction coverage through the
@@ -457,6 +466,14 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/v1/recall/extraction/progress", s.withTimeout(
 		"GET /api/v1/recall/extraction/progress",
 		s.handleRecallExtractionProgress,
+	))
+	s.mux.Handle("POST /api/v1/recall/extraction/activate", s.withTimeout(
+		"POST /api/v1/recall/extraction/activate",
+		s.handleRecallExtractionActivate,
+	))
+	s.mux.Handle("POST /api/v1/recall/extraction/generations/{fingerprint}/retire", s.withTimeout(
+		"POST /api/v1/recall/extraction/generations/{fingerprint}/retire",
+		s.handleRecallExtractionRetire,
 	))
 	s.mux.Handle("POST /api/v1/recall/query", s.withTimeout(
 		"POST /api/v1/recall/query",

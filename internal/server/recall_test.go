@@ -89,6 +89,26 @@ func (p recallExtractionStatusProvider) Status(
 	return p.status, p.err
 }
 
+type recallExtractionLifecycleProvider struct {
+	recallExtractionStatusProvider
+	activateCalls int
+	activateErr   error
+	retireCalls   []string
+	retireErr     error
+}
+
+func (p *recallExtractionLifecycleProvider) Activate(context.Context) error {
+	p.activateCalls++
+	return p.activateErr
+}
+
+func (p *recallExtractionLifecycleProvider) Retire(
+	_ context.Context, fingerprint string,
+) error {
+	p.retireCalls = append(p.retireCalls, fingerprint)
+	return p.retireErr
+}
+
 func (s recallErrorSearcher) SearchRecall(
 	context.Context, string, int,
 ) ([]db.RecallVectorHit, bool, db.RecallVectorSnapshot, error) {
@@ -615,10 +635,12 @@ func TestRecallExtractionStatusReportsUnconfigured(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 
 	status := decode[struct {
-		Configured        bool `json:"configured"`
-		ProgressAvailable bool `json:"progress_available"`
+		Configured          bool `json:"configured"`
+		ManagementAvailable bool `json:"management_available"`
+		ProgressAvailable   bool `json:"progress_available"`
 	}](t, w)
 	assert.False(t, status.Configured)
+	assert.False(t, status.ManagementAvailable)
 	assert.True(t, status.ProgressAvailable)
 }
 
@@ -700,14 +722,16 @@ func TestRecallExtractionStatusReportsManagerCoverage(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 
 	status := decode[struct {
-		Configured        bool                    `json:"configured"`
-		ProgressAvailable bool                    `json:"progress_available"`
-		Fingerprint       string                  `json:"fingerprint"`
-		Generations       []db.ExtractGeneration  `json:"generations"`
-		Stats             db.ExtractProgressStats `json:"stats"`
-		EligibleBacklog   int                     `json:"eligible_backlog"`
+		Configured          bool                    `json:"configured"`
+		ManagementAvailable bool                    `json:"management_available"`
+		ProgressAvailable   bool                    `json:"progress_available"`
+		Fingerprint         string                  `json:"fingerprint"`
+		Generations         []db.ExtractGeneration  `json:"generations"`
+		Stats               db.ExtractProgressStats `json:"stats"`
+		EligibleBacklog     int                     `json:"eligible_backlog"`
 	}](t, w)
 	assert.True(t, status.Configured)
+	assert.False(t, status.ManagementAvailable)
 	assert.True(t, status.ProgressAvailable)
 	assert.Equal(t, "generation-a", status.Fingerprint)
 	require.Len(t, status.Generations, 1)
@@ -717,6 +741,62 @@ func TestRecallExtractionStatusReportsManagerCoverage(t *testing.T) {
 	assert.Equal(t, 1, status.Stats.Failed)
 	assert.Equal(t, 3, status.EligibleBacklog)
 	assert.NotContains(t, w.Body.String(), "private_request_configuration")
+}
+
+func TestRecallExtractionLifecycleRoutesMutateAndNotify(t *testing.T) {
+	provider := &recallExtractionLifecycleProvider{
+		recallExtractionStatusProvider: recallExtractionStatusProvider{
+			status: recallextract.Status{Fingerprint: "generation-building"},
+		},
+	}
+	var notifyCalls atomic.Int32
+	te := setupWithServerOpts(t, []server.Option{
+		server.WithRecallExtractionStatusProvider(provider),
+		server.WithRecallCorpusMutationNotifier(func() {
+			notifyCalls.Add(1)
+		}),
+	})
+
+	statusResponse := te.get(t, "/api/v1/recall/extraction/status")
+	assertStatus(t, statusResponse, http.StatusOK)
+	status := decode[struct {
+		ManagementAvailable bool `json:"management_available"`
+	}](t, statusResponse)
+	assert.True(t, status.ManagementAvailable)
+
+	activated := te.post(t, "/api/v1/recall/extraction/activate", `{}`)
+	assertStatus(t, activated, http.StatusNoContent)
+	assert.Equal(t, 1, provider.activateCalls)
+
+	retired := te.post(t,
+		"/api/v1/recall/extraction/generations/generation-old/retire", `{}`)
+	assertStatus(t, retired, http.StatusNoContent)
+	assert.Equal(t, []string{"generation-old"}, provider.retireCalls)
+	assert.Equal(t, int32(2), notifyCalls.Load())
+}
+
+func TestRecallExtractionLifecycleRoutesRequireManager(t *testing.T) {
+	te := setup(t)
+
+	w := te.post(t, "/api/v1/recall/extraction/activate", `{}`)
+
+	assertStatus(t, w, http.StatusNotImplemented)
+}
+
+func TestRecallExtractionActivationRefusalReturnsConflict(t *testing.T) {
+	provider := &recallExtractionLifecycleProvider{
+		recallExtractionStatusProvider: recallExtractionStatusProvider{
+			status: recallextract.Status{Fingerprint: "generation-building"},
+		},
+		activateErr: db.ErrExtractActivationBlocked,
+	}
+	te := setupWithServerOpts(t, []server.Option{
+		server.WithRecallExtractionStatusProvider(provider),
+	})
+
+	w := te.post(t, "/api/v1/recall/extraction/activate", `{}`)
+
+	assertStatus(t, w, http.StatusConflict)
 }
 
 func TestListRecallEntriesFiltersBySourceSessionID(t *testing.T) {

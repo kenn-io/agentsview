@@ -14,6 +14,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	recallextract "go.kenn.io/agentsview/internal/recall/extract"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -340,6 +341,7 @@ func (s *Server) handleRecallExtractionStatus(
 	w http.ResponseWriter, r *http.Request,
 ) {
 	_, progressAvailable := s.db.(recallExtractProgressLister)
+	_, managementAvailable := s.recallExtractionStatus.(RecallExtractionLifecycleController)
 	var sourceRuns []string
 	if lister, ok := s.db.(servedRecallSourceRunLister); ok {
 		var err error
@@ -354,9 +356,10 @@ func (s *Server) handleRecallExtractionStatus(
 	}
 	if s.recallExtractionStatus == nil {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"configured":         false,
-			"progress_available": progressAvailable,
-			"source_runs":        sourceRuns,
+			"configured":           false,
+			"management_available": false,
+			"progress_available":   progressAvailable,
+			"source_runs":          sourceRuns,
 		})
 		return
 	}
@@ -382,13 +385,14 @@ func (s *Server) handleRecallExtractionStatus(
 		})
 	}
 	writeJSON(w, http.StatusOK, recallExtractionStatusResponse{
-		Configured:        true,
-		ProgressAvailable: progressAvailable,
-		Fingerprint:       status.Fingerprint,
-		Generations:       generations,
-		SourceRuns:        sourceRuns,
-		Stats:             status.Stats,
-		EligibleBacklog:   status.EligibleBacklog,
+		Configured:          true,
+		ManagementAvailable: managementAvailable,
+		ProgressAvailable:   progressAvailable,
+		Fingerprint:         status.Fingerprint,
+		Generations:         generations,
+		SourceRuns:          sourceRuns,
+		Stats:               status.Stats,
+		EligibleBacklog:     status.EligibleBacklog,
 	})
 }
 
@@ -402,13 +406,87 @@ type recallExtractGenerationStatus struct {
 }
 
 type recallExtractionStatusResponse struct {
-	Configured        bool                            `json:"configured"`
-	ProgressAvailable bool                            `json:"progress_available"`
-	Fingerprint       string                          `json:"fingerprint,omitempty"`
-	Generations       []recallExtractGenerationStatus `json:"generations,omitempty"`
-	SourceRuns        []string                        `json:"source_runs,omitempty"`
-	Stats             db.ExtractProgressStats         `json:"stats"`
-	EligibleBacklog   int                             `json:"eligible_backlog"`
+	Configured          bool                            `json:"configured"`
+	ManagementAvailable bool                            `json:"management_available"`
+	ProgressAvailable   bool                            `json:"progress_available"`
+	Fingerprint         string                          `json:"fingerprint,omitempty"`
+	Generations         []recallExtractGenerationStatus `json:"generations,omitempty"`
+	SourceRuns          []string                        `json:"source_runs,omitempty"`
+	Stats               db.ExtractProgressStats         `json:"stats"`
+	EligibleBacklog     int                             `json:"eligible_backlog"`
+}
+
+func (s *Server) recallExtractionLifecycleController(
+	w http.ResponseWriter,
+) (RecallExtractionLifecycleController, bool) {
+	controller, ok := s.recallExtractionStatus.(RecallExtractionLifecycleController)
+	if !ok {
+		writeError(w, http.StatusNotImplemented,
+			"recall extraction generation management is not available")
+		return nil, false
+	}
+	return controller, true
+}
+
+func (s *Server) handleRecallExtractionActivate(
+	w http.ResponseWriter, r *http.Request,
+) {
+	controller, ok := s.recallExtractionLifecycleController(w)
+	if !ok {
+		return
+	}
+	if err := controller.Activate(r.Context()); err != nil {
+		s.handleRecallExtractionLifecycleError(w, err)
+		return
+	}
+	s.notifyRecallCorpusMutation()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleRecallExtractionRetire(
+	w http.ResponseWriter, r *http.Request,
+) {
+	controller, ok := s.recallExtractionLifecycleController(w)
+	if !ok {
+		return
+	}
+	fingerprint := strings.TrimSpace(r.PathValue("fingerprint"))
+	if fingerprint == "" {
+		writeError(w, http.StatusBadRequest,
+			"extraction generation fingerprint is required")
+		return
+	}
+	if err := controller.Retire(r.Context(), fingerprint); err != nil {
+		s.handleRecallExtractionLifecycleError(w, err)
+		return
+	}
+	s.notifyRecallCorpusMutation()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleRecallExtractionLifecycleError(
+	w http.ResponseWriter, err error,
+) {
+	if handleContextError(w, err) || handleReadOnly(w, err) {
+		return
+	}
+	if errors.Is(err, db.ErrExtractActivationBlocked) ||
+		errors.Is(err, db.ErrExtractGenerationActive) ||
+		errors.Is(err, recallextract.ErrPassRunning) {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if errors.Is(err, db.ErrExtractGenerationNotFound) {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeError(w, http.StatusInternalServerError, err.Error())
+}
+
+func (s *Server) notifyRecallCorpusMutation() {
+	if s.recallCorpusMutationNotify != nil {
+		s.recallCorpusMutationNotify()
+	}
 }
 
 const (
@@ -699,8 +777,8 @@ func (s *Server) handleImportRecallEntries(
 			AllowProductionImport:   allowProductionImport,
 		},
 	)
-	if result.Imported > 0 && s.recallCorpusMutationNotify != nil {
-		s.recallCorpusMutationNotify()
+	if result.Imported > 0 {
+		s.notifyRecallCorpusMutation()
 	}
 	if err != nil {
 		if handleContextError(w, err) {

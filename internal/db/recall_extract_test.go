@@ -100,9 +100,13 @@ func TestExtractGenerationRetireActiveRequiresForce(t *testing.T) {
 		ctx, "fp-a", []string{"rules-v1"}, time.Now()))
 
 	err = d.RetireExtractGeneration(ctx, "fp-a", false)
-	require.Error(t, err, "retiring the active generation needs force")
+	require.ErrorIs(t, err, ErrExtractGenerationActive)
 
 	require.NoError(t, d.RetireExtractGeneration(ctx, "fp-a", true))
+	require.ErrorIs(t,
+		d.RetireExtractGeneration(ctx, "fp-missing", false),
+		ErrExtractGenerationNotFound,
+	)
 	generations, err := d.ExtractGenerations(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, ExtractGenerationRetired, generations[0].State)

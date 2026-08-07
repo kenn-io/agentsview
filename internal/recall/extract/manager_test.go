@@ -983,6 +983,7 @@ func TestManagerTryPassDropsWhenBusy(t *testing.T) {
 	}()
 	// The first model call proves the background pass holds the pass lock.
 	<-inFlight
+	require.ErrorIs(t, m.Activate(ctx), ErrPassRunning)
 	started, _, err := m.TryPass(ctx, PassOptions{})
 	if err != nil {
 		t.Fatalf("TryPass: %v", err)

@@ -6,8 +6,10 @@ import {
   vi,
 } from "vite-plus/test";
 import {
+  activateRecallExtractionGeneration,
   fetchRecallEntries,
   fetchRecallExtractionProgress,
+  retireRecallExtractionGeneration,
 } from "./recall.js";
 
 afterEach(() => {
@@ -90,5 +92,35 @@ describe("fetchRecallExtractionProgress", () => {
       progress: [],
       nextCursor: "progress-cursor-2",
     });
+  });
+});
+
+describe("Recall extraction generation actions", () => {
+  it("activates the configured generation", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, {
+      status: 204,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await activateRecallExtractionGeneration();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/recall/extraction/activate",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("retires one generation without a force option", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, {
+      status: 204,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await retireRecallExtractionGeneration("generation old");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/recall/extraction/generations/generation%20old/retire",
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 });

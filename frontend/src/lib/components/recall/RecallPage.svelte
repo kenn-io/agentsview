@@ -3,6 +3,7 @@
     Button,
     Card,
     EmptyState,
+    Modal,
     SearchInput,
     SegmentedControl,
     Table,
@@ -12,13 +13,16 @@
     type TypeaheadOption,
   } from "@kenn-io/kit-ui";
   import {
+    activateRecallExtractionGeneration,
     fetchRecallEntries,
     fetchRecallExtractionProgress,
     fetchRecallExtractionStatus,
+    retireRecallExtractionGeneration,
   } from "../../api/recall.js";
   import type {
     RecallEntry,
     RecallEvidence,
+    RecallExtractGeneration,
     RecallExtractProgress,
     RecallExtractProgressState,
     RecallExtractionStatus,
@@ -48,6 +52,11 @@
     "eval_raw",
   ];
 
+  type GenerationAction = {
+    kind: "activate" | "retire";
+    generation: RecallExtractGeneration;
+  };
+
   let entries = $state<RecallEntry[]>([]);
   let nextCursor = $state("");
   let resultCap = $state(0);
@@ -64,6 +73,9 @@
   let progressNextCursor = $state("");
   let progressLoading = $state(false);
   let progressFailed = $state(false);
+  let generationAction = $state<GenerationAction | null>(null);
+  let generationActionLoading = $state(false);
+  let generationActionError = $state("");
   let search = $state("");
   let query = $state("");
   let project = $state("");
@@ -254,6 +266,43 @@
     }
   }
 
+  function requestGenerationAction(
+    kind: GenerationAction["kind"],
+    generation: RecallExtractGeneration,
+  ) {
+    generationActionError = "";
+    generationAction = { kind, generation };
+  }
+
+  function closeGenerationAction() {
+    if (generationActionLoading) return;
+    generationAction = null;
+    generationActionError = "";
+  }
+
+  async function confirmGenerationAction() {
+    const action = generationAction;
+    if (!action || generationActionLoading) return;
+    generationActionLoading = true;
+    generationActionError = "";
+    try {
+      if (action.kind === "activate") {
+        await activateRecallExtractionGeneration();
+      } else {
+        await retireRecallExtractionGeneration(action.generation.fingerprint);
+      }
+      await refreshRecall();
+      generationAction = null;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      generationActionError = m.recall_page_generation_action_error({
+        error: detail,
+      });
+    } finally {
+      generationActionLoading = false;
+    }
+  }
+
   function progressStateLabel(state: RecallExtractProgressState): string {
     switch (state) {
       case "pending":
@@ -319,6 +368,29 @@
     void loadProgress();
   });
 </script>
+
+{#snippet generationActionFooter()}
+  {#if generationAction}
+    <span class="generation-modal-actions">
+      <Button
+        label={m.recall_page_generation_cancel()}
+        tone="neutral"
+        surface="outline"
+        disabled={generationActionLoading}
+        onclick={closeGenerationAction}
+      />
+      <Button
+        label={generationAction.kind === "activate"
+          ? m.recall_page_generation_activate_title()
+          : m.recall_page_generation_retire_title()}
+        tone={generationAction.kind === "activate" ? "info" : "danger"}
+        surface="solid"
+        disabled={generationActionLoading}
+        onclick={confirmGenerationAction}
+      />
+    </span>
+  {/if}
+{/snippet}
 
 <div class="recall-page">
   <header class="recall-page-header">
@@ -403,6 +475,46 @@
             countLabel: status.stats.entries.toLocaleString(),
           })}</span>
         </div>
+      {/if}
+
+      {#if status?.management_available && status.generations?.length}
+        <section class="generation-management">
+          <h4>{m.recall_page_generations_title()}</h4>
+          <div class="generation-list">
+            {#each status.generations as item (item.fingerprint)}
+              <div class="generation-row">
+                <div class="generation-identity">
+                  <span class="generation-model">{item.model}</span>
+                  <code title={item.fingerprint}>
+                    {item.fingerprint.slice(0, 12)}
+                  </code>
+                  <span class="generation-state">{item.state}</span>
+                </div>
+                {#if item.state === "building"}
+                  <div class="generation-actions">
+                    {#if item.fingerprint === status.fingerprint}
+                      <Button
+                        size="sm"
+                        tone="info"
+                        surface="outline"
+                        label={m.recall_page_generation_activate()}
+                        onclick={() => requestGenerationAction("activate", item)}
+                      />
+                    {:else}
+                      <Button
+                        size="sm"
+                        tone="danger"
+                        surface="outline"
+                        label={m.recall_page_generation_retire()}
+                        onclick={() => requestGenerationAction("retire", item)}
+                      />
+                    {/if}
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        </section>
       {/if}
 
       {#if progressExpanded}
@@ -516,6 +628,35 @@
       {/if}
     </div>
   </Card>
+
+  {#if generationAction}
+    <Modal
+      title={generationAction.kind === "activate"
+        ? m.recall_page_generation_activate_title()
+        : m.recall_page_generation_retire_title()}
+      closeLabel={m.recall_page_generation_close()}
+      tone={generationAction.kind === "activate" ? "info" : "danger"}
+      width="460px"
+      closeOnOverlayClick={!generationActionLoading}
+      onclose={closeGenerationAction}
+      footer={generationActionFooter}
+    >
+      <p class="generation-modal-copy">
+        {generationAction.kind === "activate"
+          ? m.recall_page_generation_activate_message({
+              model: generationAction.generation.model,
+              fingerprint: generationAction.generation.fingerprint,
+            })
+          : m.recall_page_generation_retire_message({
+              model: generationAction.generation.model,
+              fingerprint: generationAction.generation.fingerprint,
+            })}
+      </p>
+      {#if generationActionError}
+        <p class="generation-action-error">{generationActionError}</p>
+      {/if}
+    </Modal>
+  {/if}
 
   <div class="recall-toolbar">
     <SearchInput
@@ -814,6 +955,73 @@
     font-size: 10px;
   }
 
+  .generation-management {
+    margin-top: var(--space-5);
+    padding-top: var(--space-5);
+    border-top: 1px solid var(--border-default);
+  }
+
+  .generation-management h4 {
+    margin: 0 0 var(--space-3);
+    color: var(--text-secondary);
+    font-size: 10px;
+    font-weight: 600;
+  }
+
+  .generation-list {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .generation-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+    min-height: 38px;
+    padding: var(--space-2) var(--space-3);
+    background: var(--bg-inset);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+  }
+
+  .generation-identity,
+  .generation-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .generation-model {
+    color: var(--text-primary);
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .generation-identity code {
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 9px;
+  }
+
+  .generation-modal-actions {
+    display: contents;
+  }
+
+  .generation-modal-copy,
+  .generation-action-error {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+  }
+
+  .generation-action-error {
+    margin-top: var(--space-4);
+    color: var(--slow-fg);
+  }
+
   .progress-panel {
     margin-top: var(--space-6);
     padding-top: var(--space-5);
@@ -1077,6 +1285,12 @@
 
     :global(.recall-search) {
       grid-column: auto;
+    }
+
+    .generation-row,
+    .generation-identity {
+      align-items: flex-start;
+      flex-direction: column;
     }
   }
 </style>

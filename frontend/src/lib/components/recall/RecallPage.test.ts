@@ -25,6 +25,7 @@ describe("RecallPage", () => {
       if (url.includes("/recall/extraction/status")) {
         return new Response(JSON.stringify({
           configured: true,
+          management_available: false,
           progress_available: true,
           fingerprint: "generation-active",
           source_runs: [
@@ -471,6 +472,116 @@ describe("RecallPage", () => {
       expect.stringContaining("/recall/extraction/progress"),
       expect.anything(),
     );
+  });
+
+  it("confirms safe generation activation and retirement", async () => {
+    const defaultFetch = fetchMock as unknown as (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => Promise<Response>;
+    fetchMock = vi.fn(async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const url = String(input);
+      if (url.includes("/recall/extraction/status")) {
+        return new Response(JSON.stringify({
+          configured: true,
+          management_available: true,
+          progress_available: true,
+          fingerprint: "generation-building",
+          source_runs: ["generation-active"],
+          generations: [{
+            fingerprint: "generation-active",
+            state: "active",
+            model: "model-a",
+            segmenter: "turns-v1",
+            created_at: "2026-07-23T10:00:00Z",
+            updated_at: "2026-07-23T11:00:00Z",
+          }, {
+            fingerprint: "generation-building",
+            state: "building",
+            model: "model-b",
+            segmenter: "turns-v1",
+            created_at: "2026-07-24T10:00:00Z",
+            updated_at: "2026-07-24T11:00:00Z",
+          }, {
+            fingerprint: "generation-abandoned",
+            state: "building",
+            model: "model-c",
+            segmenter: "turns-v1",
+            created_at: "2026-07-22T10:00:00Z",
+            updated_at: "2026-07-22T11:00:00Z",
+          }],
+          stats: {
+            pending: 0,
+            partial: 0,
+            done: 8,
+            failed: 0,
+            units_done: 20,
+            units_total: 20,
+            entries: 12,
+          },
+          eligible_backlog: 0,
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (init?.method === "POST") {
+        return new Response(null, { status: 204 });
+      }
+      return defaultFetch(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    component = mount(RecallPage, { target: document.body });
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("model-b");
+    });
+
+    const activate = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent?.trim() === "Activate");
+    expect(activate).toBeDefined();
+    activate!.click();
+    await tick();
+
+    const confirmActivate = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent?.trim() === "Activate generation");
+    expect(confirmActivate).toBeDefined();
+    confirmActivate!.click();
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/v1/recall/extraction/activate",
+        expect.objectContaining({ method: "POST" }),
+      );
+      expect(Array.from(
+        document.querySelectorAll<HTMLButtonElement>("button"),
+      ).find((button) =>
+        button.textContent?.trim() === "Activate generation"
+      )).toBeUndefined();
+    });
+
+    const retire = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent?.trim() === "Retire");
+    expect(retire).toBeDefined();
+    retire!.click();
+    await tick();
+
+    const confirmRetire = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent?.trim() === "Retire generation");
+    expect(confirmRetire).toBeDefined();
+    confirmRetire!.click();
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/v1/recall/extraction/generations/generation-abandoned/retire",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
   });
 
   it("loads the next cursor page and removes the truncation action", async () => {

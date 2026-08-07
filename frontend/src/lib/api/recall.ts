@@ -98,6 +98,31 @@ export async function fetchRecallExtractionProgress(
   };
 }
 
+async function postRecallExtractionAction(path: string): Promise<void> {
+  const response = await fetch(
+    `${getBase()}${path}`,
+    authHeaders({ method: "POST" }),
+  );
+  if (!response.ok) {
+    throw new ApiError(
+      response.status,
+      await responseErrorMessage(response),
+    );
+  }
+}
+
+export async function activateRecallExtractionGeneration(): Promise<void> {
+  await postRecallExtractionAction("/recall/extraction/activate");
+}
+
+export async function retireRecallExtractionGeneration(
+  fingerprint: string,
+): Promise<void> {
+  await postRecallExtractionAction(
+    `/recall/extraction/generations/${encodeURIComponent(fingerprint)}/retire`,
+  );
+}
+
 export async function fetchSessionRecall(
   sessionId: string,
   signal?: AbortSignal,

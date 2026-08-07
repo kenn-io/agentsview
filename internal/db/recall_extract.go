@@ -53,6 +53,14 @@ func extractDriftErrorf(format string, args ...any) error {
 var ErrExtractActivationBlocked = errors.New(
 	"extract generation activation blocked")
 
+// ErrExtractGenerationNotFound reports that a requested extraction generation
+// does not exist.
+var ErrExtractGenerationNotFound = errors.New("extract generation not found")
+
+// ErrExtractGenerationActive reports that a non-force retirement refused to
+// remove the currently served extraction generation.
+var ErrExtractGenerationActive = errors.New("extract generation is active")
+
 // ExtractGeneration is one row of the extraction generation registry.
 type ExtractGeneration struct {
 	Fingerprint string `json:"fingerprint"`
@@ -536,7 +544,8 @@ func (db *DB) RetireExtractGeneration(
 		}
 		return fmt.Errorf(
 			"generation %s is active; retiring it leaves no distilled corpus "+
-				"to serve (use force to retire anyway)", fingerprint,
+				"to serve (use force to retire anyway): %w", fingerprint,
+			ErrExtractGenerationActive,
 		)
 	}
 	// A retired generation stops serving: its still-automatic entries are
@@ -568,7 +577,10 @@ func (db *DB) extractGenerationByFingerprint(
 		&gen.ParamsJSON, &gen.CreatedAt, &gen.UpdatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return gen, fmt.Errorf("extract generation %s not found", fingerprint)
+		return gen, fmt.Errorf(
+			"extract generation %s not found: %w",
+			fingerprint, ErrExtractGenerationNotFound,
+		)
 	}
 	if err != nil {
 		return gen, fmt.Errorf("reading generation %s: %w", fingerprint, err)
