@@ -34,6 +34,12 @@ func handleReadOnly(w http.ResponseWriter, err error) bool {
 		writeError(w, http.StatusNotImplemented, "not available in remote mode")
 		return true
 	}
+	if errors.Is(err, db.ErrWriterClosed) {
+		w.Header().Set("Retry-After", writerClosedRetryAfterSeconds)
+		writeError(w, http.StatusServiceUnavailable,
+			"archive is briefly read-only for a maintenance pass; retry shortly")
+		return true
+	}
 	return false
 }
 

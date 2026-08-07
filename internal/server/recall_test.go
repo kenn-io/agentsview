@@ -799,6 +799,24 @@ func TestRecallExtractionActivationRefusalReturnsConflict(t *testing.T) {
 	assertStatus(t, w, http.StatusConflict)
 }
 
+func TestRecallExtractionMaintenanceReturnsRetryable(t *testing.T) {
+	provider := &recallExtractionLifecycleProvider{
+		recallExtractionStatusProvider: recallExtractionStatusProvider{
+			status: recallextract.Status{Fingerprint: "generation-building"},
+		},
+		activateErr: db.ErrWriterClosed,
+	}
+	te := setupWithServerOpts(t, []server.Option{
+		server.WithRecallExtractionStatusProvider(provider),
+	})
+
+	w := te.post(t, "/api/v1/recall/extraction/activate", `{}`)
+
+	require.Equal(t, http.StatusServiceUnavailable, w.Code,
+		"body: %s", w.Body.String())
+	assert.Equal(t, "5", w.Header().Get("Retry-After"))
+}
+
 func TestListRecallEntriesFiltersBySourceSessionID(t *testing.T) {
 	te := setup(t)
 	seedRecallEntrySession(t, te)
