@@ -666,6 +666,193 @@ func TestWriteSessionBatchReplaceMessagesOnlyBumpsChangedTranscript(t *testing.T
 	assert.Equal(t, "8", *replayed.TranscriptRevision)
 }
 
+func TestWriteSessionIncrementalUsesCanonicalMessageGraph(t *testing.T) {
+	t.Parallel()
+	d := testDB(t)
+	const sessionID = "canonical-incremental"
+	firstMessage := "You are generating a changelog for myrepo version 1.0.0."
+	insertSession(t, d, sessionID, "proj", func(session *Session) {
+		session.FirstMessage = &firstMessage
+		session.MessageCount = 1
+		session.UserMessageCount = 1
+	})
+	insertMessages(t, d, userMsg(sessionID, 0, firstMessage))
+	_, err := d.getWriter().Exec(
+		`UPDATE sessions
+		 SET transcript_revision = '11',
+		     quality_signal_version = ?,
+		     is_automated = 0
+		 WHERE id = ?`,
+		CurrentQualitySignalVersion, sessionID,
+	)
+	require.NoError(t, err, "seed incremental metadata")
+	beforeIDs := messageIDsByOrdinal(t, d, sessionID)
+
+	endedAt := "2026-08-07T10:00:04Z"
+	fileHash := "incremental-hash"
+	require.NoError(t, d.WriteSessionIncremental(
+		sessionID,
+		[]Message{{
+			SessionID: sessionID,
+			Ordinal:   1,
+			Role:      "assistant",
+			Content:   "canonical append",
+			Timestamp: "2026-08-07T06:00:01.987654789-04:00",
+			ToolCalls: []ToolCall{{
+				ToolName:  "Read",
+				Category:  "file",
+				ToolUseID: "toolu_incremental",
+				ResultEvents: []ToolResultEvent{{
+					EventIndex: 7,
+					Source:     "tool",
+					Status:     "completed",
+					Content:    "canonical result",
+					Timestamp:  "2026-08-07T06:00:02.876543219-04:00",
+				}},
+			}},
+		}},
+		IncrementalSessionUpdate{
+			EndedAt:       &endedAt,
+			MsgCount:      2,
+			UserMsgCount:  1,
+			FileSize:      2048,
+			FileMtime:     173,
+			FileHash:      &fileHash,
+			NextOrdinal:   2,
+			LastEntryUUID: "entry-2",
+		},
+	), "incremental write")
+
+	messages, err := d.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	assert.Equal(t, beforeIDs[0], messages[0].ID,
+		"append must not replace the prior message")
+	assert.Equal(t, "2026-08-07T10:00:01.987654Z", messages[1].Timestamp)
+	require.Len(t, messages[1].ToolCalls, 1)
+	require.Len(t, messages[1].ToolCalls[0].ResultEvents, 1)
+	result := messages[1].ToolCalls[0].ResultEvents[0]
+	assert.Equal(t, 7, result.EventIndex)
+	assert.Equal(t, "2026-08-07T10:00:02.876543Z", result.Timestamp)
+
+	var legacyMessageID, messageID int64
+	require.NoError(t, d.getReader().QueryRow(
+		`SELECT tc.message_id, m.id
+		 FROM tool_calls tc
+		 JOIN messages m
+		   ON m.session_id = tc.session_id
+		  AND m.ordinal = tc.message_ordinal
+		 WHERE tc.session_id = ? AND tc.message_ordinal = 1`,
+		sessionID,
+	).Scan(&legacyMessageID, &messageID))
+	assert.Equal(t, messageID, legacyMessageID,
+		"SQLite legacy message_id must resolve to the canonical parent")
+
+	session, err := d.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.NotNil(t, session.TranscriptRevision)
+	assert.Equal(t, "12", *session.TranscriptRevision)
+	assert.True(t, session.LastWriteIncremental)
+	assert.True(t, session.IsAutomated)
+	assert.Zero(t, session.QualitySignalVersion)
+	require.NotNil(t, session.FileSize)
+	assert.Equal(t, int64(2048), *session.FileSize)
+	require.NotNil(t, session.FileMtime)
+	assert.Equal(t, int64(173), *session.FileMtime)
+	assert.Equal(t, 2, session.NextOrdinal)
+	require.NotNil(t, session.LastEntryUUID)
+	assert.Equal(t, "entry-2", *session.LastEntryUUID)
+}
+
+func TestInsertMessagesUsesCanonicalGraphsAcrossSessions(t *testing.T) {
+	t.Parallel()
+	d := testDB(t)
+	for _, sessionID := range []string{"canonical-a", "canonical-b"} {
+		insertSession(t, d, sessionID, "proj")
+		_, err := d.getWriter().Exec(
+			`UPDATE sessions
+			 SET transcript_revision = '4', quality_signal_version = ?
+			 WHERE id = ?`,
+			CurrentQualitySignalVersion, sessionID,
+		)
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, d.InsertMessages([]Message{
+		{SessionID: "canonical-a", Ordinal: 0, Role: "user", Content: "a0"},
+		{SessionID: "canonical-b", Ordinal: 0, Role: "assistant", Content: "b0",
+			Timestamp: "2026-08-07T06:00:01.123456789-04:00",
+			ToolCalls: []ToolCall{{ToolName: "Read", Category: "file",
+				ResultEvents: []ToolResultEvent{{EventIndex: 5, Source: "tool",
+					Status: "completed", Content: "b-result"}}}}},
+		{SessionID: "canonical-a", Ordinal: 1, Role: "assistant", Content: "a1",
+			ToolCalls: []ToolCall{{ToolName: "Write", Category: "file",
+				ResultEvents: []ToolResultEvent{{EventIndex: 7, Source: "tool",
+					Status: "completed", Content: "a-result"}}}}},
+	}))
+
+	aMessages, err := d.GetAllMessages(t.Context(), "canonical-a")
+	require.NoError(t, err)
+	require.Len(t, aMessages, 2)
+	require.Len(t, aMessages[1].ToolCalls, 1)
+	require.Len(t, aMessages[1].ToolCalls[0].ResultEvents, 1)
+	assert.Equal(t, 7, aMessages[1].ToolCalls[0].ResultEvents[0].EventIndex)
+
+	bMessages, err := d.GetAllMessages(t.Context(), "canonical-b")
+	require.NoError(t, err)
+	require.Len(t, bMessages, 1)
+	assert.Equal(t, "2026-08-07T10:00:01.123456Z", bMessages[0].Timestamp)
+	require.Len(t, bMessages[0].ToolCalls, 1)
+	require.Len(t, bMessages[0].ToolCalls[0].ResultEvents, 1)
+	assert.Equal(t, 5, bMessages[0].ToolCalls[0].ResultEvents[0].EventIndex)
+
+	for _, sessionID := range []string{"canonical-a", "canonical-b"} {
+		session, err := d.GetSessionFull(t.Context(), sessionID)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		require.NotNil(t, session.TranscriptRevision)
+		assert.Equal(t, "5", *session.TranscriptRevision)
+		assert.Zero(t, session.QualitySignalVersion)
+	}
+}
+
+func TestReplaceSessionMessagesFullUsesCanonicalGraph(t *testing.T) {
+	t.Parallel()
+	d := testDB(t)
+	const sessionID = "canonical-full-replace"
+	insertSession(t, d, sessionID, "proj")
+	insertMessages(t, d,
+		userMsg(sessionID, 0, "old zero"),
+		userMsg(sessionID, 1, "old one"),
+	)
+
+	require.NoError(t, d.ReplaceSessionMessages(sessionID, []Message{{
+		SessionID: sessionID,
+		Ordinal:   0,
+		Role:      "assistant",
+		Content:   "replacement",
+		Timestamp: "2026-08-07T06:00:01.123456789-04:00",
+		ToolCalls: []ToolCall{{
+			ToolName: "Read", Category: "file",
+			ResultEvents: []ToolResultEvent{{
+				EventIndex: 9,
+				Source:     "tool",
+				Status:     "completed",
+				Content:    "replacement result",
+			}},
+		}},
+	}}))
+
+	messages, err := d.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "2026-08-07T10:00:01.123456Z", messages[0].Timestamp)
+	require.Len(t, messages[0].ToolCalls, 1)
+	require.Len(t, messages[0].ToolCalls[0].ResultEvents, 1)
+	assert.Equal(t, 9, messages[0].ToolCalls[0].ResultEvents[0].EventIndex)
+}
+
 func TestReplacementAPIsOnlyBumpVisibleTranscriptChanges(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -818,32 +1005,18 @@ func TestToolCallFilePathCallIndexRoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	insertSession(t, d, "sess-1", "proj")
-	insertMessages(t, d, userMsg("sess-1", 7, "hello"))
-
-	// Fetch the message id assigned by the DB.
-	var msgID int64
-	require.NoError(t, d.getReader().QueryRowContext(ctx,
-		`SELECT id FROM messages WHERE session_id = 'sess-1' AND ordinal = 7`,
-	).Scan(&msgID))
-
-	tx, err := d.getWriter().Begin()
-	require.NoError(t, err, "begin tx")
-	err = insertToolCallsChunkTx(tx, []ToolCall{
-		{
-			MessageID: msgID, SessionID: "sess-1", MessageOrdinal: 7,
+	insertMessages(t, d, Message{
+		SessionID: "sess-1", Ordinal: 7, Role: "assistant", Content: "tools",
+		ToolCalls: []ToolCall{{
 			ToolName: "Edit", Category: "Edit",
 			ToolUseID: "tu1", InputJSON: `{"file_path":"/a/b.go"}`,
 			FilePath: "/a/b.go", CallIndex: 0,
-		},
-		{
-			MessageID: msgID, SessionID: "sess-1", MessageOrdinal: 7,
+		}, {
 			ToolName: "Write", Category: "Write",
 			ToolUseID: "tu2", InputJSON: `{"file":"/c/d.go"}`,
 			FilePath: "/c/d.go", CallIndex: 1,
-		},
+		}},
 	})
-	require.NoError(t, err, "insertToolCallsChunkTx")
-	require.NoError(t, tx.Commit(), "commit")
 
 	var fp string
 	var ordinal, ci int

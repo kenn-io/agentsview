@@ -3611,23 +3611,6 @@ func TestToolCallsMixedSessionsOverlappingOrdinals(t *testing.T) {
 	assert.Equal(t, "s1", got[1].msgSession, "Read msgSession")
 }
 
-func TestResolveToolCallsPanicsOnLengthMismatch(t *testing.T) {
-	defer func() {
-		r := recover()
-		require.NotNil(t, r, "expected panic, got none")
-		msg, ok := r.(string)
-		assert.True(t, ok && strings.Contains(msg, "resolveToolCalls"),
-			"unexpected panic value: %v", r)
-	}()
-
-	msgs := []Message{
-		{SessionID: "s1", Ordinal: 0, Role: "user"},
-		{SessionID: "s1", Ordinal: 1, Role: "assistant"},
-	}
-	ids := []int64{1} // length mismatch
-	resolveToolCalls(msgs, ids)
-}
-
 func TestToolCallNewColumns(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "proj")
@@ -5101,8 +5084,7 @@ func TestCopyOrphanedDataFrom(t *testing.T) {
 		`UPDATE sessions SET transcript_revision = '7' WHERE id = 's2'`,
 	)
 	requireNoError(t, err, "set orphan transcript revision")
-	// Insert tool_calls for s1 via raw SQL since
-	// insertToolCallsTx is unexported.
+	// Seed the legacy physical tool-call shape for orphan-copy coverage.
 	_, err = srcDB.getWriter().Exec(`
 		INSERT INTO tool_calls
 			(message_id, session_id, tool_name, category)
@@ -8346,7 +8328,7 @@ func TestResolveToolCallsDerivesPositionalCallIndex(t *testing.T) {
 		ID: "ci", Project: "p", Machine: "local", Agent: "cursor",
 	}), "upsert")
 	// Three tool calls in one message with no explicit CallIndex, mirroring
-	// the importer write path. resolveToolCalls must number them by position.
+	// the importer write path. The canonical converter must number them by position.
 	require.NoError(t, d.InsertMessages([]Message{
 		{
 			SessionID: "ci", Ordinal: 0, Role: "assistant", Content: "tools",
