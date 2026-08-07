@@ -6403,6 +6403,68 @@ func TestSyncPathsClaudeSubagentUsesCompanionDirectoryParent(
 	)
 }
 
+func TestSyncSessionWithSubagentsRefreshesNestedChildFromSubagent(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+
+	rootContent := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "Coordinate the work").
+		AddClaudeAssistant(tsZeroS5, "Delegating.").
+		String()
+	env.writeClaudeSession(
+		t, "test-proj", "root-session.jsonl", rootContent,
+	)
+
+	orchestratorContent := testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","sessionId":"root-session","message":{"content":"Investigate"},"cwd":"/tmp"}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","sessionId":"root-session","message":{"content":[{"type":"tool_use","id":"toolu_nested","name":"Agent","input":{"description":"nested","subagent_type":"Explore","prompt":"inspect"}}]}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:02Z","uuid":"u2","parentUuid":"a1","sessionId":"root-session","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_nested","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"nested-child"}}`,
+	)
+	env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"test-proj", "root-session", "subagents",
+			"agent-orchestrator.jsonl",
+		),
+		orchestratorContent,
+	)
+
+	runSyncAndAssert(
+		t, env.engine,
+		sync.SyncStats{TotalSessions: 2, Synced: 2, Skipped: 0},
+	)
+
+	nestedContent := testjsonl.NewSessionBuilder().
+		AddClaudeUserWithSessionID(
+			tsEarly, "Inspect the code", "root-session",
+		).
+		AddClaudeAssistant(tsEarlyS5, "Inspection complete.").
+		String()
+	env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"test-proj", "root-session", "subagents",
+			"workflows", "wf-1", "agent-nested-child.jsonl",
+		),
+		nestedContent,
+	)
+
+	require.NoError(t, env.engine.SyncSessionWithSubagentsContext(
+		t.Context(), "agent-orchestrator",
+	))
+	assertSessionState(
+		t, env.db, "agent-nested-child",
+		func(sess *db.Session) {
+			require.NotNil(t, sess.ParentSessionID)
+			assert.Equal(
+				t, "agent-orchestrator", *sess.ParentSessionID,
+			)
+			assert.Equal(t, "subagent", sess.RelationshipType)
+		},
+	)
+}
+
 func TestSyncPathsClaudeNestedWorkflowSubagent(t *testing.T) {
 	env := setupTestEnv(t)
 

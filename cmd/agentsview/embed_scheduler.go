@@ -147,18 +147,23 @@ func (s *embedScheduler) Stop() {
 // TryBuild calls and, independently, fires a Backstop TryBuild on every
 // backstop tick. It returns when ctx is done or Stop is called.
 func (s *embedScheduler) Run(ctx context.Context) {
-	defer close(s.done)
-
-	debounceTimer := time.NewTimer(s.debounce)
-	stopTimer(debounceTimer)
-	defer debounceTimer.Stop()
-
 	var backstopC <-chan time.Time
 	if s.backstop > 0 {
 		ticker := time.NewTicker(s.backstop)
 		defer ticker.Stop()
 		backstopC = ticker.C
 	}
+	s.run(ctx, backstopC)
+}
+
+func (s *embedScheduler) run(
+	ctx context.Context, backstopC <-chan time.Time,
+) {
+	defer close(s.done)
+
+	debounceTimer := time.NewTimer(s.debounce)
+	stopTimer(debounceTimer)
+	defer debounceTimer.Stop()
 
 	// pendingBackstop remembers a backstop tick that collided with another
 	// build or failed transiently. Without it, that reconciliation pass would
@@ -208,15 +213,14 @@ func (s *embedScheduler) Run(ctx context.Context) {
 			if err != nil {
 				log.Printf("embed scheduler: build failed: %v", err)
 				if buildErrorRetries >= embedBuildErrorRetryLimit {
-					log.Printf("embed scheduler: retry limit reached; deferring until new work")
+					log.Printf("embed scheduler: retry limit reached; deferring until next backstop or new work")
 					if pendingRelease != nil {
 						pendingRelease()
 						pendingRelease = nil
 					}
-					// A failed full reconciliation remains owed. Stop automatic
-					// retries and release the lease, but let the next fresh
-					// notification carry Backstop: true instead of deferring the
-					// full pass until the next periodic tick.
+					// A failed full reconciliation remains owed. End this bounded
+					// lifecycle and release its lease; a later periodic tick or
+					// fresh notification can begin another lifecycle.
 					buildErrorRetries = 0
 					continue
 				}

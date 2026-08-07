@@ -200,7 +200,7 @@ func TestCheckSchemaCompatKeepsLocalRebuildHintOnMissingColumns(
 }
 
 // TestCheckSchemaCompatRejectsSchemaVersionMismatchInBothDirections verifies
-// that mirror schema v4's create-only version check rejects a mismatch in
+// that the mirror's create-only version check rejects a mismatch in
 // either direction (an older or a newer schema_version row than this
 // build's SchemaVersion), for both the local mirror file and a remote Quack
 // server, with the same rebuild hint.
@@ -213,8 +213,9 @@ func TestCheckSchemaCompatRejectsSchemaVersionMismatchInBothDirections(
 		"remote": CheckSchemaCompatViaQuack,
 	}
 	versions := map[string]string{
-		"older": "1",
-		"newer": strconv.Itoa(SchemaVersion + 1),
+		"pre_usage_accounting": strconv.Itoa(SchemaVersion - 1),
+		"older":                "1",
+		"newer":                strconv.Itoa(SchemaVersion + 1),
 	}
 	for versionName, version := range versions {
 		for locationName, check := range checks {

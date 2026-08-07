@@ -375,6 +375,65 @@ func TestClaudeProviderParseIncremental(t *testing.T) {
 	assert.Contains(t, outcome.Messages[1].Content, "got it")
 }
 
+func TestClaudeProviderParseIncrementalWebSearchResultNeedsFullParse(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := filepath.Join(
+		root, "-Users-dev-code-demo", "inc-web-search.jsonl")
+	initial := testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2026-07-30T10:00:00Z",`+
+			`"uuid":"u1","message":{"content":"find something"}}`,
+		`{"type":"assistant","timestamp":"2026-07-30T10:00:01Z",`+
+			`"uuid":"a1","parentUuid":"u1","message":{"id":"msg_1",`+
+			`"model":"claude-sonnet-4-5","content":[{"type":"tool_use",`+
+			`"id":"toolu_s1","name":"WebSearch","input":{"query":"q"}}],`+
+			`"usage":{"input_tokens":10,"output_tokens":5,`+
+			`"server_tool_use":{"web_search_requests":0}}}}`,
+	)
+	writeSourceFile(t, sourcePath, initial)
+
+	appended := testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2026-07-30T10:00:04Z",` +
+			`"uuid":"u2","parentUuid":"a1","message":{"content":[{"type":` +
+			`"tool_result","tool_use_id":"toolu_s1","content":"hits"}]},` +
+			`"toolUseResult":{"query":"q","searchCount":1}}`,
+	)
+	f, err := os.OpenFile(sourcePath, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(appended)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	provider, ok := NewProvider(AgentClaude, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "inc-web-search",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	outcome, status, err := provider.ParseIncremental(
+		context.Background(),
+		IncrementalRequest{
+			Source: source,
+			Fingerprint: SourceFingerprint{
+				Key:  sourcePath,
+				Size: int64(len(initial) + len(appended)),
+			},
+			SessionID:     "inc-web-search",
+			Offset:        int64(len(initial)),
+			StartOrdinal:  2,
+			LastEntryUUID: "a1",
+		},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, IncrementalNeedsFullParse, status)
+	assert.True(t, outcome.ForceReplace,
+		"the stored assistant row must be rewritten with the billed search")
+}
+
 func TestClaudeProviderParseIncrementalPreservesLinkWithoutMessage(t *testing.T) {
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "-Users-dev-code-demo", "inc-link-only.jsonl")

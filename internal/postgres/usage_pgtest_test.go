@@ -335,6 +335,206 @@ func TestStoreGetDailyUsageDedupesBySourceUUIDWhenClaudePairIncomplete(t *testin
 	assert.Equal(t, 500000, result.Daily[0].OutputTokens)
 }
 
+func TestStoreUsageAggregatesPreferCompleteClaudeSnapshotAcrossSessions(t *testing.T) {
+	_, store := prepareUsageSchema(
+		t, "agentsview_daily_usage_streamed_snapshot_test")
+	ctx := context.Background()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO model_pricing (
+			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
+		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, 'seed');
+		INSERT INTO sessions (
+			id, machine, project, agent, display_name, started_at,
+			message_count, user_message_count
+		) VALUES
+		(
+			'claude:daily-streamed', 'parent-machine', 'parent-project', 'parent-agent',
+			'parent display',
+			'2026-05-20T10:00:00Z'::timestamptz, 1, 1
+		),
+		(
+			'agent-daily-streamed', 'child-machine', 'child-project', 'child-agent',
+			'child display',
+			'2026-05-20T10:31:00Z'::timestamptz, 2, 0
+		);
+		INSERT INTO messages (
+			session_id, ordinal, role, content, timestamp, content_length,
+			model, token_usage, claude_message_id, claude_request_id
+		) VALUES
+			('claude:daily-streamed', 0, 'assistant', 'partial',
+			 '2026-05-20T10:30:00Z'::timestamptz, 7,
+			 'claude-opus-4-6', '{"input_tokens":1000,"output_tokens":5}',
+			 'msg-stream', 'req-stream'),
+			('agent-daily-streamed', 0, 'assistant', 'complete',
+			 '2026-05-20T10:31:00Z'::timestamptz, 8,
+			 'claude-opus-4-6', '{"input_tokens":1000,"output_tokens":631}',
+			 'msg-stream', 'req-stream'),
+			('agent-daily-streamed', 1, 'assistant', 'next-day',
+			 '2026-05-21T00:00:00Z'::timestamptz, 8,
+			 'claude-opus-4-6', '{"input_tokens":1000,"output_tokens":999}',
+			 'msg-stream', 'req-stream')`)
+	require.NoError(t, err)
+
+	result, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-05-20", To: "2026-05-20", Timezone: "UTC", Breakdowns: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Daily, 1)
+	assert.Equal(t, 1000, result.Totals.InputTokens)
+	assert.Equal(t, 631, result.Totals.OutputTokens)
+	require.Len(t, result.Daily[0].ProjectBreakdowns, 1)
+	assert.Equal(t, "parent-project", result.Daily[0].ProjectBreakdowns[0].Project)
+	require.Len(t, result.Daily[0].AgentBreakdowns, 1)
+	assert.Equal(t, "parent-agent", result.Daily[0].AgentBreakdowns[0].Agent)
+	require.Len(t, result.Daily[0].MachineBreakdowns, 1)
+	assert.Equal(t, "parent-machine", result.Daily[0].MachineBreakdowns[0].MachineName)
+
+	top, err := store.GetTopSessionsByCost(ctx, db.UsageFilter{
+		From: "2026-05-20", To: "2026-05-20", Timezone: "UTC",
+	}, 10)
+	require.NoError(t, err)
+	require.Len(t, top, 1)
+	assert.Equal(t, "claude:daily-streamed", top[0].SessionID)
+	assert.Equal(t, "parent display", top[0].DisplayName)
+	assert.Equal(t, "parent-project", top[0].Project)
+	assert.Equal(t, "parent-agent", top[0].Agent)
+	assert.Equal(t, "2026-05-20T10:00:00Z", top[0].StartedAt)
+	assert.Equal(t, 1000, top[0].InputTokens)
+	assert.Equal(t, 631, top[0].OutputTokens)
+
+	filtered, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-05-20", To: "2026-05-20", Timezone: "UTC",
+		ProjectLabels: []string{"parent-project"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1000, filtered.Totals.InputTokens)
+	assert.Equal(t, 631, filtered.Totals.OutputTokens,
+		"the attributed parent filter must retain the complete child snapshot")
+
+	filteredTop, err := store.GetTopSessionsByCost(ctx, db.UsageFilter{
+		From: "2026-05-20", To: "2026-05-20", Timezone: "UTC",
+		ProjectLabels: []string{"parent-project"},
+	}, 10)
+	require.NoError(t, err)
+	require.Len(t, filteredTop, 1)
+	assert.Equal(t, 631, filteredTop[0].OutputTokens)
+
+	childFiltered, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-05-20", To: "2026-05-20", Timezone: "UTC",
+		ProjectLabels: []string{"child-project"},
+	})
+	require.NoError(t, err)
+	assert.Zero(t, childFiltered.Totals.OutputTokens,
+		"the source child metadata must not override parent attribution")
+}
+
+func TestStoreGetDailyUsagePrefersTimestampedEqualClaudeSnapshot(t *testing.T) {
+	_, store := prepareUsageSchema(
+		t, "agentsview_daily_usage_null_snapshot_timestamp_test")
+	ctx := context.Background()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO model_pricing (
+			model_pattern, input_microdollars_per_mtok,
+			output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok,
+			cache_read_microdollars_per_mtok, updated_at
+		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, 'seed');
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at,
+			message_count, user_message_count
+		) VALUES
+			('a-null-snapshot', 'test-machine', 'proj', 'claude',
+			 NULL, 1, 0),
+			('z-timestamped-snapshot', 'test-machine', 'proj', 'claude',
+			 '2026-05-20T10:00:00Z'::timestamptz, 1, 0);
+		INSERT INTO messages (
+			session_id, ordinal, role, content, timestamp, content_length,
+			model, token_usage, claude_message_id, claude_request_id
+		) VALUES
+			('a-null-snapshot', 0, 'assistant', 'missing timestamp', NULL, 17,
+			 'claude-opus-4-6', '{"input_tokens":10,"output_tokens":100}',
+			 'msg-null-ts', 'req-null-ts'),
+			('z-timestamped-snapshot', 0, 'assistant', 'timestamped',
+			 '2026-05-20T10:30:00Z'::timestamptz, 11,
+			 'claude-opus-4-6', '{"input_tokens":900,"output_tokens":100}',
+			 'msg-null-ts', 'req-null-ts')`)
+	require.NoError(t, err)
+
+	result, err := store.GetDailyUsage(ctx, db.UsageFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	assert.Equal(t, 900, result.Totals.InputTokens)
+	assert.Equal(t, 100, result.Totals.OutputTokens)
+}
+
+func TestStoreUsageRanksNumericStringClaudeSnapshot(t *testing.T) {
+	_, store := prepareUsageSchema(
+		t, "agentsview_daily_usage_numeric_string_snapshot_test")
+	ctx := context.Background()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO model_pricing (
+			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
+		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, 'seed');
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at,
+			message_count, user_message_count
+		) VALUES
+			('numeric-parent', 'test-machine', 'proj', 'claude-code',
+			 '2026-05-20T10:00:00Z'::timestamptz, 1, 1),
+			('numeric-child', 'test-machine', 'proj', 'claude-code',
+			 '2026-05-20T10:01:00Z'::timestamptz, 1, 0);
+		INSERT INTO messages (
+			session_id, ordinal, role, content, timestamp, content_length,
+			model, token_usage, claude_message_id, claude_request_id
+		) VALUES
+			('numeric-parent', 0, 'assistant', 'partial',
+			 '2026-05-20T10:00:00Z'::timestamptz, 7,
+			 'claude-opus-4-6', '{"input_tokens":1000,"output_tokens":5}',
+			 'msg-numeric-string', 'req-numeric-string'),
+			('numeric-child', 0, 'assistant', 'complete',
+			 '2026-05-20T10:01:00Z'::timestamptz, 8,
+			 'claude-opus-4-6', '{"input_tokens":"1000","output_tokens":"631"}',
+			 'msg-numeric-string', 'req-numeric-string')`)
+	require.NoError(t, err)
+
+	result, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-05-20", To: "2026-05-20", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1000, result.Totals.InputTokens)
+	assert.Equal(t, 631, result.Totals.OutputTokens)
+}
+
+func TestPGSnapshotRankedDailyUsageRowsPrefersLatestEqualOutput(t *testing.T) {
+	_, store := prepareUsageSchema(
+		t, "agentsview_daily_usage_snapshot_tie_test")
+	pb := &paramBuilder{}
+	rowsSQL := `
+		SELECT 'z-snapshot' AS session_id, 0 AS message_ordinal,
+			'message' AS usage_source,
+			'2026-05-20T10:31:00Z'::timestamptz AS ts,
+			'{"input_tokens":900,"output_tokens":100}' AS token_usage,
+			0 AS output_tokens, 'msg-tie' AS claude_message_id,
+			'req-tie' AS claude_request_id
+		UNION ALL
+		SELECT 'a-snapshot', 0, 'message',
+			'2026-05-20T10:30:00Z'::timestamptz,
+			'{"input_tokens":10,"output_tokens":100}', 0,
+			'msg-tie', 'req-tie'`
+	ranked := pgSnapshotRankedDailyUsageRowsSQL(
+		pb, rowsSQL, db.UsageFilter{})
+	var sessionID, attributionSessionID, tokenJSON string
+	err := store.DB().QueryRow(`
+		SELECT session_id, snapshot_attribution_session_id, token_usage
+		FROM (`+ranked+`)`, pb.args...).Scan(
+		&sessionID, &attributionSessionID, &tokenJSON)
+	require.NoError(t, err)
+	assert.Equal(t, "z-snapshot", sessionID)
+	assert.Equal(t, "a-snapshot", attributionSessionID)
+	assert.JSONEq(t, `{"input_tokens":900,"output_tokens":100}`, tokenJSON)
+}
+
 func TestStoreGetSessionUsagePricedModel(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_session_usage_priced_test")
 
@@ -380,6 +580,11 @@ func TestStoreGetSessionUsagePricedModel(t *testing.T) {
 	assert.True(t, got.HasTokenData)
 	assert.True(t, got.HasCost)
 	assert.Equal(t, money.MustParseDollars("0.01134"), got.Cost)
+	// cost_usd is a deprecated compatibility alias for
+	// cost.microdollars/1e6; PostgreSQL must report the same value as
+	// SQLite and DuckDB for the same cost (see db.CostUSDFromCost).
+	require.NotNil(t, got.CostUSD)
+	assert.InDelta(t, 0.01134, *got.CostUSD, 1e-9)
 	assert.Equal(t, []string{"gpt-5.1"}, got.Models)
 	assert.Empty(t, got.UnpricedModels)
 	require.Len(t, got.Breakdown, 1, "Breakdown")
@@ -552,6 +757,48 @@ func TestStoreGetSessionUsageDedupesSourceUUIDWhenClaudePairIncomplete(t *testin
 	assert.Equal(t, 0, *got.Breakdown[0].MessageOrdinal)
 }
 
+func TestStoreGetSessionUsagePrefersCompleteClaudeSnapshot(t *testing.T) {
+	_, store := prepareUsageSchema(
+		t, "agentsview_session_usage_streamed_snapshot_test")
+	ctx := context.Background()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO model_pricing (
+			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
+		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, 'seed');
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at,
+			message_count, user_message_count,
+			total_output_tokens, has_total_output_tokens
+		) VALUES (
+			'claude:streamed', 'test-machine', 'proj', 'claude-code',
+			'2026-03-12T10:00:00Z'::timestamptz, 2, 1, 636, TRUE
+		);
+		INSERT INTO messages (
+			session_id, ordinal, role, content, timestamp, content_length,
+			model, token_usage, claude_message_id, claude_request_id
+		) VALUES
+			('claude:streamed', 0, 'assistant', 'partial',
+			 '2026-03-12T10:01:00Z'::timestamptz, 7,
+			 'claude-opus-4-6', '{"input_tokens":1000,"output_tokens":5}',
+			 'msg-stream', 'req-stream'),
+			('claude:streamed', 1, 'assistant', 'complete',
+			 '2026-03-12T10:02:00Z'::timestamptz, 8,
+			 'claude-opus-4-6', '{"input_tokens":1000,"output_tokens":631}',
+			 'msg-stream', 'req-stream')`)
+	require.NoError(t, err)
+
+	got, err := store.GetSessionUsage(ctx, "claude:streamed", true)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, 631, got.TotalOutputTokens)
+	assert.Equal(t, money.MustParseDollars("0.020775"), got.Cost)
+	require.Len(t, got.Breakdown, 1)
+	assert.Equal(t, 631, got.Breakdown[0].OutputTokens)
+	require.NotNil(t, got.Breakdown[0].MessageOrdinal)
+	assert.Equal(t, 1, *got.Breakdown[0].MessageOrdinal)
+}
+
 func TestStoreGetSessionUsageNoTokenRowsKeepsMetadata(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_session_usage_empty_test")
 
@@ -575,6 +822,7 @@ func TestStoreGetSessionUsageNoTokenRowsKeepsMetadata(t *testing.T) {
 	assert.False(t, got.HasTokenData)
 	assert.False(t, got.HasCost)
 	assert.Zero(t, got.Cost)
+	assert.Nil(t, got.CostUSD, "cost_usd must be omitted when has_cost is false")
 	assert.Empty(t, got.Models)
 	assert.Empty(t, got.UnpricedModels)
 	assert.Empty(t, got.Breakdown)
@@ -753,6 +1001,53 @@ func TestStoreGetUsageSessionCountsDedupesClaudeKeys(t *testing.T) {
 	assert.Equal(t, 1, counts.ByProject["proj-a"])
 	_, ok := counts.ByProject["proj-b"]
 	assert.False(t, ok, "proj-b should have been deduped out: %#v", counts.ByProject)
+}
+
+func TestStoreGetUsageSessionCountsFiltersAfterCrossSessionSnapshotSelection(
+	t *testing.T,
+) {
+	_, store := prepareUsageSchema(
+		t, "agentsview_usage_counts_filtered_snapshot_test")
+	ctx := context.Background()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at,
+			message_count, user_message_count
+		) VALUES
+			('count-parent', 'test-machine', 'parent-project', 'claude',
+			 '2026-05-20T10:00:00Z'::timestamptz, 1, 1),
+			('count-child', 'test-machine', 'child-project', 'claude',
+			 '2026-05-20T10:01:00Z'::timestamptz, 1, 1);
+		INSERT INTO messages (
+			session_id, ordinal, role, content, timestamp, content_length,
+			model, token_usage, claude_message_id, claude_request_id
+		) VALUES
+			('count-parent', 0, 'assistant', 'partial',
+			 '2026-05-20T10:00:00Z'::timestamptz, 7, 'partial-model',
+			 '{"input_tokens":10,"output_tokens":5}',
+			 'count-message', 'count-request'),
+			('count-child', 0, 'assistant', 'complete',
+			 '2026-05-20T10:01:00Z'::timestamptz, 8, 'complete-model',
+			 '{"input_tokens":1000,"output_tokens":631}',
+			 'count-message', 'count-request')`)
+	require.NoError(t, err)
+
+	partialCounts, err := store.GetUsageSessionCounts(ctx, db.UsageFilter{
+		From: "2026-05-20", To: "2026-05-20", Timezone: "UTC",
+		Model: "partial-model",
+	})
+	require.NoError(t, err)
+	assert.Zero(t, partialCounts.Total,
+		"the discarded partial model must not count a session")
+
+	completeParentCounts, err := store.GetUsageSessionCounts(ctx, db.UsageFilter{
+		From: "2026-05-20", To: "2026-05-20", Timezone: "UTC",
+		Model: "complete-model", ProjectLabels: []string{"parent-project"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, completeParentCounts.Total)
+	assert.Equal(t, 1, completeParentCounts.ByProject["parent-project"])
+	assert.NotContains(t, completeParentCounts.ByProject, "child-project")
 }
 
 func TestStoreGetUsageMatchingSessionCountCountsCopilotSessionsWithoutUsageRows(
@@ -1566,4 +1861,105 @@ func TestStoreGetSessionUsage_CopilotUnpricedNoCost(t *testing.T) {
 	assert.False(t, u.HasCost, "HasCost should be false")
 	assert.Zero(t, u.Cost, "Cost should be zero when unpriced")
 	assert.Equal(t, 0.0, u.AICredits, "AICredits should be 0 when unpriced")
+}
+
+// TestStoreSessionUsageWithSubagentsParity pins PostgreSQL parity for the
+// presentation-time subagent rollup: combined totals, cross-transcript
+// deduplication of a shared claude_message_id/claude_request_id pair, and
+// breakdown rows tagged with the subagent they came from.
+func TestStoreSessionUsageWithSubagentsParity(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_session_usage_subagents_test")
+	ctx := context.Background()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO model_pricing (
+			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
+		) VALUES ('test-opus', 2000000, 10000000, 0, 0, 'seed')`)
+	require.NoError(t, err)
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at, message_count,
+			user_message_count, parent_session_id, relationship_type,
+			total_output_tokens, has_total_output_tokens
+		) VALUES
+			('pg-sub-parent', 'test', 'project', 'claude', '2026-05-20T09:00:00Z', 3, 1, NULL, '', 705, true),
+			('agent-pg-a', 'test', 'project', 'claude', '2026-05-20T09:01:00Z', 2, 0, 'pg-sub-parent', 'subagent', 1500, true),
+			('agent-pg-b', 'test', 'project', 'claude', '2026-05-20T09:02:00Z', 1, 0, 'pg-sub-parent', 'subagent', 100, true),
+			('agent-pg-dedup-only', 'test', 'project', 'claude', '2026-05-20T09:03:00Z', 1, 0, 'pg-sub-parent', 'subagent', 500, true)`)
+	require.NoError(t, err)
+	// agent-pg-a's second row repeats the parent's turn under the same
+	// message identity, the way a sidechain transcript echoes it.
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO messages (
+			session_id, ordinal, role, content, timestamp, content_length,
+			model, token_usage, claude_message_id, claude_request_id
+		) VALUES
+			('pg-sub-parent', 0, 'assistant', 'work', '2026-05-20T10:00:00Z', 4, 'test-opus', '{"input_tokens":1000,"output_tokens":5}', 'm-1', 'req-m-1'),
+			('pg-sub-parent', 1, 'assistant', 'work', '2026-05-20T10:00:10Z', 4, 'test-opus', '{"input_tokens":1000,"output_tokens":500}', 'm-1', 'req-m-1'),
+			('agent-pg-a', 0, 'assistant', 'work', '2026-05-20T10:01:00Z', 4, 'test-opus', '{"input_tokens":2000,"output_tokens":1000}', 'm-2', 'req-m-2'),
+			('agent-pg-a', 1, 'assistant', 'work', '2026-05-20T10:02:00Z', 4, 'test-opus', '{"input_tokens":1000,"output_tokens":500}', 'm-1', 'req-m-1'),
+			('agent-pg-b', 0, 'assistant', 'work', '2026-05-20T10:03:00Z', 4, 'test-opus', '{"input_tokens":500,"output_tokens":100}', 'm-3', 'req-m-3'),
+			('agent-pg-dedup-only', 0, 'assistant', 'work', '2026-05-20T10:04:00Z', 4, 'test-opus', '{"input_tokens":1000,"output_tokens":500}', 'm-1', 'req-m-1')`)
+	require.NoError(t, err)
+	// This message contributes to the parser's stored output total but has
+	// no raw token_usage payload, so it is intentionally absent from cost
+	// rows and the usage breakdown.
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO messages (
+			session_id, ordinal, role, content, timestamp, content_length,
+			model, token_usage, output_tokens, has_output_tokens
+		) VALUES
+			('pg-sub-parent', 2, 'assistant', 'output-only', '2026-05-20T10:00:30Z', 11, 'test-opus', '', 200, true)`)
+	require.NoError(t, err)
+
+	own, err := store.GetSessionUsage(ctx, "pg-sub-parent", true)
+	require.NoError(t, err)
+	require.NotNil(t, own)
+	assert.Equal(t, money.MustParseDollars("0.007"), own.Cost,
+		"the own-session path stays own-session")
+	assert.Equal(t, 700, own.TotalOutputTokens)
+	assert.Zero(t, own.SubagentCount)
+	rowSet, err := store.GetSessionUsageRows(ctx, []string{
+		"pg-sub-parent", "agent-pg-a", "agent-pg-b", "agent-pg-dedup-only",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]int{
+		"pg-sub-parent": 505, "agent-pg-a": 1500,
+		"agent-pg-b": 100, "agent-pg-dedup-only": 500,
+	}, rowSet.RawOutputTokensBySession)
+	assert.Equal(t, map[string]struct{}{
+		"pg-sub-parent": {}, "agent-pg-a": {}, "agent-pg-dedup-only": {},
+	}, rowSet.DiscardedContributingSessions)
+	require.Len(t, rowSet.Rows, 3)
+	assert.Equal(t, []string{
+		"agent-pg-a", "agent-pg-b", "agent-pg-dedup-only",
+	}, []string{
+		rowSet.Rows[0].SourceSessionID,
+		rowSet.Rows[1].SourceSessionID,
+		rowSet.Rows[2].SourceSessionID,
+	})
+
+	got, err := service.SessionUsageWithSubagents(ctx, store, "pg-sub-parent", true)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, 3, got.SubagentCount)
+	assert.False(t, got.HasCost,
+		"the output-only parent tokens make the combined cost incomplete")
+	assert.Zero(t, got.Cost)
+	assert.Equal(t, 3, got.BreakdownCount)
+	require.Len(t, got.Breakdown, 3)
+	assert.Equal(t, []string{"agent-pg-a", "agent-pg-b", "agent-pg-dedup-only"}, []string{
+		got.Breakdown[0].SubagentSessionID,
+		got.Breakdown[1].SubagentSessionID,
+		got.Breakdown[2].SubagentSessionID,
+	})
+	assert.Equal(t, "message", got.Breakdown[0].Source)
+	assert.Equal(t, 2000, got.Breakdown[0].InputTokens)
+	assert.Equal(t, 1000, got.Breakdown[0].OutputTokens)
+	// The stored aggregates sum to 2805. Removing the incomplete 5-token
+	// streaming snapshot and the two 500-token echoes, while preserving the
+	// parent's output-only 200, yields 1800.
+	assert.Equal(t, 1800, got.TotalOutputTokens,
+		"output tokens are deduplicated without dropping output-only messages")
+	assert.True(t, got.HasTokenData)
 }

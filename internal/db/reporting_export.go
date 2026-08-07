@@ -17,8 +17,9 @@ import (
 // ReportingExportOptions selects one UTC calendar date and fixes the current
 // time used to decide which hours have closed.
 type ReportingExportOptions struct {
-	Date time.Time
-	Now  time.Time
+	Date          time.Time
+	Now           time.Time
+	SchemaVersion int
 
 	// afterSnapshot is a deterministic test seam for proving that every source
 	// read uses the transaction established before this callback.
@@ -30,6 +31,15 @@ type ReportingExportOptions struct {
 func (db *DB) ExportReportingDay(
 	ctx context.Context, opts ReportingExportOptions,
 ) (export.ReportingDay, error) {
+	schemaVersion := opts.SchemaVersion
+	if schemaVersion == 0 {
+		schemaVersion = export.ReportingSchemaVersion
+	}
+	if !export.IsSupportedReportingSchemaVersion(schemaVersion) {
+		return export.ReportingDay{}, fmt.Errorf(
+			"unsupported reporting schema version %d", schemaVersion,
+		)
+	}
 	date, _, hourCount, complete, err := resolveReportingExportRange(opts)
 	if err != nil {
 		return export.ReportingDay{}, err
@@ -55,12 +65,14 @@ func (db *DB) ExportReportingDay(
 		opts.afterSnapshot()
 	}
 
-	hours, err := db.reportingHoursFromSnapshot(ctx, tx, date, hourCount)
+	hours, err := db.reportingHoursFromSnapshot(
+		ctx, tx, date, hourCount, schemaVersion,
+	)
 	if err != nil {
 		return export.ReportingDay{}, err
 	}
 	day, _, err := export.FinalizeReportingDay(export.ReportingDay{
-		SchemaVersion: export.ReportingSchemaVersion,
+		SchemaVersion: schemaVersion,
 		Date:          date.Format("2006-01-02"),
 		Complete:      complete,
 		Hours:         hours,
@@ -75,7 +87,7 @@ func (db *DB) ExportReportingDay(
 }
 
 func (db *DB) reportingHoursFromSnapshot(
-	ctx context.Context, tx *sql.Tx, date time.Time, hourCount int,
+	ctx context.Context, tx *sql.Tx, date time.Time, hourCount, schemaVersion int,
 ) ([]export.ReportingHour, error) {
 	hours := make([]export.ReportingHour, hourCount)
 	if hourCount == 0 {
@@ -122,6 +134,7 @@ func (db *DB) reportingHoursFromSnapshot(
 		usageIDs,
 		lowerBound,
 		upperBound,
+		schemaVersion >= export.ReportingSchemaVersion,
 	)
 	if err != nil {
 		return nil, err
@@ -136,14 +149,20 @@ func (db *DB) reportingHoursFromSnapshot(
 		append([]activity.UsageRow(nil), sessionUsage...),
 		standaloneUsage...,
 	)
-	usage, err = finalizeReportingUsage(query, usage)
+	allSessions := mergeReportingSessions(sessions, usageSessions)
+	sessionByID := make(map[string]activity.SessionMeta, len(allSessions))
+	for _, session := range allSessions {
+		sessionByID[session.SessionID] = session
+	}
+	usage, err = finalizeReportingUsageForSchema(
+		schemaVersion, query, usage, sessionByID,
+	)
 	if err != nil {
 		return nil, err
 	}
 	activityIDs := reportingSessionIDSet(ids)
 	activityUsage := reportingActivityUsage(usage, activityIDs)
 
-	allSessions := mergeReportingSessions(sessions, usageSessions)
 	projectLabels := activityReportProjectLabels(allSessions)
 	projects, err := db.reportingProjectIdentityMapFrom(ctx, tx, projectLabels)
 	if err != nil {
@@ -162,11 +181,6 @@ func (db *DB) reportingHoursFromSnapshot(
 		events,
 		activityUsage,
 	)
-	sessionByID := make(map[string]activity.SessionMeta, len(allSessions))
-	for _, session := range allSessions {
-		sessionByID[session.SessionID] = session
-	}
-
 	for i := range hours {
 		hourStart := date.Add(time.Duration(i) * time.Hour)
 		hourEnd := hourStart.Add(time.Hour)
@@ -186,7 +200,9 @@ func (db *DB) reportingHoursFromSnapshot(
 			)
 		}
 		activity.SanitizeProjectLabels(&report, projects)
-		hour, conversionErr := reportingHourFromActivity(hourStart, report)
+		hour, conversionErr := reportingHourFromActivity(
+			hourStart, report, schemaVersion,
+		)
 		if conversionErr != nil {
 			return nil, fmt.Errorf(
 				"convert reporting hour %s: %w",
@@ -207,7 +223,7 @@ func (db *DB) reportingHoursFromSnapshot(
 			hour.Activity.Totals.ActiveMinutes > 0 ||
 			firstSeen[i].hasAny()
 		if !hour.HasData {
-			hour = quietReportingHour(hourStart)
+			hour = quietReportingHour(hourStart, schemaVersion)
 		}
 		hours[i] = hour
 	}
@@ -420,15 +436,60 @@ func sortReportingUsage(rows []activity.UsageRow) {
 func finalizeReportingUsage(
 	query activity.Query,
 	rows []activity.UsageRow,
+	sessionByID map[string]activity.SessionMeta,
+) ([]activity.UsageRow, error) {
+	return finalizeReportingUsageForSchema(
+		export.ReportingSchemaVersion, query, rows, sessionByID,
+	)
+}
+
+func finalizeReportingUsageForSchema(
+	schemaVersion int,
+	query activity.Query,
+	rows []activity.UsageRow,
+	sessionByID map[string]activity.SessionMeta,
 ) ([]activity.UsageRow, error) {
 	sortReportingUsage(rows)
-	mask := activity.UsageSurvivorMask(
+	if schemaVersion == export.ReportingLegacySchemaVersion {
+		mask := activity.LegacyUsageSurvivorMask(
+			query.RangeStart, query.RangeEnd, query.EffectiveEnd, rows,
+		)
+		survivors := make([]activity.UsageRow, 0, len(rows))
+		for i, keep := range mask {
+			if keep {
+				survivors = append(survivors, rows[i])
+			}
+		}
+		return allocateReportingUsageCosts(survivors)
+	}
+	mask, attribution, webSearchRequests := activity.UsageSurvivorSelection(
 		query.RangeStart, query.RangeEnd, query.EffectiveEnd, rows,
 	)
 	survivors := make([]activity.UsageRow, 0, len(rows))
 	for i, keep := range mask {
 		if keep {
-			survivors = append(survivors, rows[i])
+			row := rows[i]
+			row.SessionID = attribution[i]
+			if row.CostSource == export.CostSourceComputed &&
+				webSearchRequests[i] > row.WebSearchRequests {
+				additionalFee, err := export.WebSearchFee(
+					webSearchRequests[i] - row.WebSearchRequests)
+				if err != nil {
+					return nil, err
+				}
+				row.Cost, err = money.Add(row.Cost, additionalFee)
+				if err != nil {
+					return nil, err
+				}
+			}
+			row.WebSearchRequests = webSearchRequests[i]
+			row.Contributes = row.Contributes || row.WebSearchRequests > 0
+			if session, ok := sessionByID[row.SessionID]; ok {
+				row.Agent = session.Agent
+				row.Project = session.Project
+				row.Machine = session.Machine
+			}
+			survivors = append(survivors, row)
 		}
 	}
 	return allocateReportingUsageCosts(survivors)
@@ -834,7 +895,7 @@ func applyReportingFirstSeen(
 }
 
 func reportingHourFromActivity(
-	start time.Time, report activity.Report,
+	start time.Time, report activity.Report, schemaVersion int,
 ) (export.ReportingHour, error) {
 	totalAgentMinutes, err := reportingDerivedAgentMinutes(
 		"activity totals",
@@ -870,7 +931,7 @@ func reportingHourFromActivity(
 		}
 	}
 	return export.ReportingHour{
-		SchemaVersion: export.ReportingSchemaVersion,
+		SchemaVersion: schemaVersion,
 		Period:        start.Format("2006-01-02-15"),
 		Activity: export.ReportingActivity{
 			Totals: export.ReportingActivityTotals{
@@ -1179,14 +1240,14 @@ func resolveReportingExportRange(
 	return
 }
 
-func quietReportingHour(start time.Time) export.ReportingHour {
+func quietReportingHour(start time.Time, schemaVersion int) export.ReportingHour {
 	buckets := make([]export.ReportingActivityBucket, 12)
 	for i := range buckets {
 		buckets[i].Start = start.Add(time.Duration(i) * 5 * time.Minute).
 			Format(time.RFC3339)
 	}
 	return export.ReportingHour{
-		SchemaVersion: export.ReportingSchemaVersion,
+		SchemaVersion: schemaVersion,
 		Period:        start.Format("2006-01-02-15"),
 		Activity: export.ReportingActivity{
 			Buckets: buckets,

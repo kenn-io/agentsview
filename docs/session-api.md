@@ -626,15 +626,32 @@ only honored on a localhost-bound daemon.
 Per-session token usage and cost estimate. Output shape is
 stable for the fields shown below; new fields may be added.
 
-The REST endpoint is `GET /api/v1/sessions/{id}/usage`. Add
-`?rollup=true` there to include the selected session's explicit
-`subagent` descendants recursively. `breakdown=true` remains scoped to
-the selected session; descendant usage is loaded as totals only. The CLI
-subcommand keeps its existing own-session output and does not expose the
-rollup fields below.
+Totals cover the named session **and every subagent transcript spawned
+beneath it**. Claude Code writes each Task-tool subagent to its own file
+under `<session>/subagents/`, which agentsview ingests as a separate
+session; reporting only the parent's own rows understated its cost by up
+to 77% in real sessions. Attribution happens at read time — no rollup is
+persisted, no child row is duplicated under the parent, and daily/activity
+aggregates (which already count subagent sessions as first-class spend)
+are unaffected. Pass `--own-only` to report just the named transcript's
+rows, which is the pre-0.40.0 output.
+
+The REST endpoint is `GET /api/v1/sessions/{id}/usage`, and it is
+own-session by default. Two query params widen it, and they are not
+composable: if both are passed, `rollup=true` takes precedence and
+`subagents` is ignored for that request.
+
+- `?subagents=true` folds descendant usage into `cost`,
+  `total_output_tokens`, `models`, `breakdown`, and `breakdown_count`,
+  and adds `subagent_count`. This is what the CLI requests.
+- `?rollup=true` keeps the totals own-session and reports the combined
+  cost in the separate `rollup_*` fields below. The session detail header
+  uses this form. When both `rollup=true` and `subagents=true` are passed,
+  the handler returns from the rollup branch first, so `subagents` has no
+  effect.
 
 ```bash
-agentsview session usage <id> [--format json]
+agentsview session usage <id> [--format json] [--own-only]
 ```
 
 ```json
@@ -647,13 +664,15 @@ agentsview session usage <id> [--format json]
   "has_token_data": true,
   "cost": {"microdollars": 2410000},
   "has_cost": true,
+  "cost_usd": 2.41,
   "cost_source": "computed",
   "models": ["claude-opus-4-7"],
   "unpriced_models": [],
   "breakdown_count": 42,
+  "subagent_count": 2,
   "breakdown": [
     {
-      "ordinal": 0,
+      "ordinal": 1,
       "message_ordinal": 0,
       "source": "message",
       "label": "Prompt 1",
@@ -663,7 +682,23 @@ agentsview session usage <id> [--format json]
       "output_tokens": 640,
       "cache_creation_input_tokens": 0,
       "cache_read_input_tokens": 43000,
+      "web_search_requests": 2,
       "cost": {"microdollars": 580000},
+      "has_cost": true
+    },
+    {
+      "ordinal": 2,
+      "message_ordinal": 4,
+      "source": "message",
+      "label": "Prompt 5",
+      "timestamp": "2026-07-08T14:05:02Z",
+      "model": "claude-opus-4-7",
+      "subagent_session_id": "agent-9f2c",
+      "input_tokens": 800,
+      "output_tokens": 310,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 12000,
+      "cost": {"microdollars": 190000},
       "has_cost": true
     }
   ],
@@ -673,41 +708,61 @@ agentsview session usage <id> [--format json]
 
 | Field                 | Notes                                                                |
 |-----------------------|----------------------------------------------------------------------|
-| `total_output_tokens` | Sum of generated output tokens across the session                    |
-| `peak_context_tokens` | Highest context-token count observed during the session              |
-| `has_token_data`      | `false` when the session has no per-message token usage              |
+| `total_output_tokens` | Generated output tokens across the session and its included subagents, deduplicated the same way `cost` is (see below) |
+| `peak_context_tokens` | Highest context-token count observed in any included session; peaks are high-water marks, so they are maxed rather than summed |
+| `has_token_data`      | `false` when no included session has token usage                     |
 | `cost`                | Model-pricing estimate as an integer microdollar object; zero when `has_cost` is `false` |
 | `has_cost`            | `false` if any contributing row is unpriced — never reports a partial total as complete |
+| `cost_usd`            | Deprecated compatibility alias for `cost.microdollars / 1e6`, present only when `has_cost` is `true`; will be removed in a future release, use `cost.microdollars` instead |
 | `cost_source`         | Omitted without a complete cost; `reported` for an authoritative session total, otherwise `computed`, `reported`, or `mixed` for the contributing rows |
 | `ai_credits`          | Omitted unless the priced agent uses AI Credits; derived from `cost_usd` at 100 credits per dollar |
 | `models`              | Models with contributing usage, sorted by model name                    |
 | `unpriced_models`     | Omitted from JSON when empty; lists models seen but missing from pricing |
-| `breakdown_count`     | Number of per-step usage rows in the session; always populated       |
-| `breakdown`           | Per-step usage rows, in session order; when a reported session total exists, row costs are estimated allocations that sum to it; CLI JSON always includes them (added in 0.37.1) |
+| `breakdown_count`     | Number of deduplicated per-step usage rows across all included sessions; always populated |
+| `subagent_count`      | Number of subagent descendant sessions folded in; omitted when zero, so own-session results are byte-identical to before |
+| `breakdown`           | Per-step usage rows ordered by timestamp across all included sessions (the queried session wins ties); when a reported session total exists, row costs are estimated allocations that sum to it; CLI JSON always includes them (added in 0.37.1) |
 | `server_running`      | `true` when the report came from an already-running daemon           |
 | `rollup_cost`          | REST only, with `rollup=true`; integer microdollar object present only when `has_rollup_cost` is true, carrying the complete cost across the root and explicit subagent descendants |
 | `has_rollup_cost`      | REST only, with `rollup=true`; true only when at least one contributing row exists and every contributing row is priced |
 | `rollup_subagent_count`| REST only, with `rollup=true`; count of reachable explicit subagent descendants, including those without usage rows |
 
+Claude Code echoes some parent turns into a subagent's sidechain
+transcript, so the same message can appear in two sessions. Every combined
+figure counts it once: `cost`, `total_output_tokens`, `breakdown`, and
+`breakdown_count` are all derived from one deduplicated row set, so they
+agree with each other and with the day aggregates. This is why the combined
+`total_output_tokens` can be lower than the sum of the included sessions'
+individual `total_output_tokens` — each of those is derived from its own
+transcript in isolation and still contains the echo. A session with no
+per-message usage rows contributes its session-level total instead, since
+it has nothing to deduplicate against.
+
 Each `breakdown` row carries the fields shown in the example:
 
 | Row field         | Notes                                                            |
 |-------------------|------------------------------------------------------------------|
-| `ordinal`         | Position of the row in the session's deduplicated usage stream   |
+| `ordinal`         | 1-based position of the row in the deduplicated usage stream     |
 | `message_ordinal` | Ordinal of the originating message; omitted when the row is not tied to one |
-| `source`          | `message` for per-message token usage; otherwise the usage-event source |
+| `source`          | `message` for per-message token usage; otherwise the usage-event source. Subagent rows keep their real source — they are marked by `subagent_session_id`, not by a different source |
+| `subagent_session_id` | Id of the subagent session the row came from; omitted for the queried session's own rows |
 | `label`           | Display label — `Prompt N` for message rows, `Step N` for other rows tied to a message, else the source name |
-| `cost`            | Per-row integer microdollar object; zero with `has_cost: false` when the model is unpriced |
+| `web_search_requests` | Anthropic server-side web searches this row was billed for, at $0.01 each on top of tokens; omitted when the row performed none |
+| `cost`            | Per-row integer microdollar object; includes the web search fee when `web_search_requests` is present and the row's cost is computed. A row with an authoritative reported cost is assumed to already settle its own server tool use, so the fee is not added on top even when `web_search_requests` is present. Zero with `has_cost: false` when the model is unpriced and the row performed no web search; an unpriced computed row that did still reports the fee, because the fee does not depend on token rates |
 
-Human output is a five-line summary:
+Human output is a compact summary:
 
 ```
 Session:       abc-123
 Agent:         claude
 Output:        15230
 Peak ctx:      84000
+Subagents:     2 (included)
 Cost:          ~$2.41 (claude-opus-4-7)
 ```
+
+The `Subagents` line appears only when the figures cover subagent
+transcripts, so a session without them (or a `--own-only` run) prints the
+same five lines it always has.
 
 The leading `~` on the cost line marks a computed or mixed figure. A reported
 cost omits it. The parenthesized model list is
@@ -732,7 +787,9 @@ HTTP responses set `server_running: true`. As of 0.37.1, pass
 without it `breakdown` is `[]` while `breakdown_count` still
 reports the row count. The CLI requests the breakdown on every
 path (local, `--server`, and `--pg`), so its `--format json`
-output always includes the rows. The session detail header uses
+output always includes the rows; it also passes `subagents=true`
+unless `--own-only` was given, so the three backends return the
+same document. The session detail header uses
 this endpoint to render its
 [per-step usage breakdown](/usage/#token-usage). Existing sessions
 return `200 OK` even when token or cost data is absent; inspect
@@ -758,6 +815,15 @@ Unexpected usage-query failures return `500` with
 | `0`  | Token data or cost present and reported       |
 | `2`  | Session not found in the local archive        |
 | `3`  | Session exists but has neither token data nor cost |
+
+The codes classify the reported document, so a session whose only token
+data lives in its subagents exits `0`, not `3`. With `--own-only` it
+exits `3`, as it did before.
+
+Before querying, the local backend refreshes the session's own transcript
+and the `agent-*.jsonl` files under its `subagents/` directory, so a
+session that just finished reports complete numbers. `--own-only` skips
+the subagent refresh.
 
 The command uses a writable local daemon when one is running, or
 starts a detached daemon when fresh local data is needed and no
@@ -813,7 +879,7 @@ Response excerpt:
 
 ```json
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "pricing": {
     "source": "fetched",
     "table_version": "litellm-398a0b15378c",

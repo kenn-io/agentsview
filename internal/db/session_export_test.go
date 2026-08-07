@@ -1064,6 +1064,176 @@ func TestSessionExportUsageUsesPageReadSnapshot(t *testing.T) {
 	assert.Equal(t, 10, rows[0].ModelUsage.OutputTokens)
 }
 
+func TestSessionSummaryExportSelectsCompleteClaudeSnapshotBeforeDedup(t *testing.T) {
+	d := testSessionExportDB(t)
+	ctx := context.Background()
+	seedSessionExportPricing(t, d)
+	for _, session := range []Session{
+		{
+			ID: "a-parent", Project: "snapshot", Machine: "local",
+			Agent: "claude", StartedAt: Ptr("2026-05-01T10:00:00Z"),
+		},
+		{
+			ID: "z-child", Project: "snapshot", Machine: "local",
+			Agent: "claude", StartedAt: Ptr("2026-05-01T10:01:00Z"),
+		},
+	} {
+		insertExportSession(t, d, session)
+	}
+	insertMessages(t, d,
+		Message{
+			SessionID: "a-parent", Ordinal: 0, Role: "assistant",
+			Timestamp: "2026-05-01T10:00:00Z", Model: "model-computed",
+			ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request",
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":100,"output_tokens":5,` +
+					`"server_tool_use":{"web_search_requests":2}}`),
+		},
+		Message{
+			SessionID: "z-child", Ordinal: 0, Role: "assistant",
+			Timestamp: "2026-05-01T10:01:00Z", Model: "model-computed",
+			ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request",
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":1000,"output_tokens":100}`),
+		},
+	)
+
+	result, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "snapshot"}, Limit: 10, Format: "json",
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Rows, 2)
+	rows := sessionExportRowsByID(result.Rows)
+
+	parent := rows["a-parent"].ModelUsage
+	require.NotNil(t, parent)
+	assert.Equal(t, 1000, parent.InputTokens)
+	assert.Equal(t, 100, parent.OutputTokens)
+	assert.Equal(t, money.Money{Microdollars: 32_000}, parent.Cost)
+	assert.True(t, parent.HasCost)
+	require.Contains(t, parent.ByModel, "model-computed")
+	assert.Equal(t, money.Money{Microdollars: 32_000},
+		parent.ByModel["model-computed"].Cost)
+
+	child := rows["z-child"].ModelUsage
+	require.NotNil(t, child)
+	assert.Zero(t, child.InputTokens)
+	assert.Zero(t, child.OutputTokens)
+	assert.Zero(t, child.Cost.Microdollars)
+	assert.False(t, child.HasCost)
+}
+
+func TestSessionSummaryExportSelectsClaudeSnapshotFromExcludedSubagent(t *testing.T) {
+	d := testSessionExportDB(t)
+	ctx := context.Background()
+	seedSessionExportPricing(t, d)
+	parentID := "snapshot-parent"
+	insertExportSession(t, d, Session{
+		ID: parentID, Project: "snapshot-excluded", Machine: "local",
+		Agent: "claude", StartedAt: Ptr("2026-05-01T10:00:00Z"),
+		EndedAt: Ptr("2026-05-01T10:02:00Z"),
+	})
+	insertExportSession(t, d, Session{
+		ID: "snapshot-child", Project: "snapshot-excluded", Machine: "local",
+		Agent: "claude", StartedAt: Ptr("2026-05-01T10:01:00Z"),
+		EndedAt: Ptr("2026-05-01T10:02:00Z"), ParentSessionID: &parentID,
+		RelationshipType: "subagent",
+	})
+	insertMessages(t, d,
+		Message{
+			SessionID: parentID, Ordinal: 0, Role: "assistant",
+			Timestamp: "2026-05-01T10:00:00Z", Model: "model-computed",
+			ClaudeMessageID: "excluded-message", ClaudeRequestID: "excluded-request",
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":100,"output_tokens":5,` +
+					`"server_tool_use":{"web_search_requests":2}}`),
+		},
+		Message{
+			SessionID: "snapshot-child", Ordinal: 0, Role: "assistant",
+			Timestamp: "2026-05-01T10:01:00Z", Model: "model-computed",
+			ClaudeMessageID: "excluded-message", ClaudeRequestID: "excluded-request",
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":1000,"output_tokens":100}`),
+		},
+	)
+
+	result, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "snapshot-excluded"},
+		Limit:  10,
+		Format: "json",
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Rows, 1)
+	assert.Equal(t, parentID, result.Rows[0].ID)
+	usage := result.Rows[0].ModelUsage
+	require.NotNil(t, usage)
+	assert.Equal(t, 1000, usage.InputTokens)
+	assert.Equal(t, 100, usage.OutputTokens)
+	assert.Equal(t, money.Money{Microdollars: 32_000}, usage.Cost)
+	assert.True(t, usage.HasCost)
+}
+
+func TestSessionSummaryExportSelectsClaudeSnapshotAcrossPages(t *testing.T) {
+	d := testSessionExportDB(t)
+	ctx := context.Background()
+	seedSessionExportPricing(t, d)
+	for _, session := range []Session{
+		{
+			ID: "snapshot-page-parent", Project: "snapshot-pages", Machine: "local",
+			Agent: "claude", StartedAt: Ptr("2026-05-01T10:00:00Z"),
+			EndedAt: Ptr("2026-05-01T12:00:00Z"),
+		},
+		{
+			ID: "snapshot-page-peer", Project: "snapshot-pages", Machine: "local",
+			Agent: "claude", StartedAt: Ptr("2026-05-01T10:01:00Z"),
+			EndedAt: Ptr("2026-05-01T11:00:00Z"),
+		},
+	} {
+		insertExportSession(t, d, session)
+	}
+	insertMessages(t, d,
+		Message{
+			SessionID: "snapshot-page-parent", Ordinal: 0, Role: "assistant",
+			Timestamp: "2026-05-01T10:00:00Z", Model: "model-computed",
+			ClaudeMessageID: "paged-message", ClaudeRequestID: "paged-request",
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":100,"output_tokens":5,` +
+					`"server_tool_use":{"web_search_requests":2}}`),
+		},
+		Message{
+			SessionID: "snapshot-page-peer", Ordinal: 0, Role: "assistant",
+			Timestamp: "2026-05-01T10:01:00Z", Model: "model-computed",
+			ClaudeMessageID: "paged-message", ClaudeRequestID: "paged-request",
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":1000,"output_tokens":100}`),
+		},
+	)
+
+	pages, err := d.ExportAllSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "snapshot-pages"}, Limit: 1, Format: "json",
+	})
+	require.NoError(t, err)
+	require.Len(t, pages, 2)
+	require.Len(t, pages[0].Rows, 1)
+	require.Len(t, pages[1].Rows, 1)
+	assert.Equal(t, "snapshot-page-parent", pages[0].Rows[0].ID)
+	assert.Equal(t, "snapshot-page-peer", pages[1].Rows[0].ID)
+
+	parentUsage := pages[0].Rows[0].ModelUsage
+	require.NotNil(t, parentUsage)
+	assert.Equal(t, 1000, parentUsage.InputTokens)
+	assert.Equal(t, 100, parentUsage.OutputTokens)
+	assert.Equal(t, money.Money{Microdollars: 32_000}, parentUsage.Cost)
+	assert.True(t, parentUsage.HasCost)
+
+	peerUsage := pages[1].Rows[0].ModelUsage
+	require.NotNil(t, peerUsage)
+	assert.Zero(t, peerUsage.InputTokens)
+	assert.Zero(t, peerUsage.OutputTokens)
+	assert.Zero(t, peerUsage.Cost.Microdollars)
+	assert.False(t, peerUsage.HasCost)
+}
+
 func TestSessionExportCopilotReportedCostReplacesSessionEstimates(t *testing.T) {
 	d := testSessionExportDB(t)
 	ctx := context.Background()

@@ -161,6 +161,7 @@ func TestRenderSessionUsageHuman_CopilotNoCost(t *testing.T) {
 }
 
 func TestSessionUsageJSONSchemaIncludesCostContract(t *testing.T) {
+	cost := money.MustParseDollars("0.42")
 	out := &sessionUsageOutput{
 		SessionUsage: db.SessionUsage{
 			SessionID:         "codex:abc",
@@ -169,10 +170,15 @@ func TestSessionUsageJSONSchemaIncludesCostContract(t *testing.T) {
 			TotalOutputTokens: 123,
 			PeakContextTokens: 456,
 			HasTokenData:      true,
-			Cost:              money.MustParseDollars("0.42"),
+			Cost:              cost,
 			HasCost:           true,
-			Models:            []string{"gpt-5.1"},
-			UnpricedModels:    []string{"local-model"},
+			// A caller normally gets CostUSD from the shared
+			// db.CostUSDFromCost helper (called by every backend and
+			// the subagent combiner); set here directly since this
+			// test pins the JSON contract, not the computation.
+			CostUSD:        db.CostUSDFromCost(true, cost),
+			Models:         []string{"gpt-5.1"},
+			UnpricedModels: []string{"local-model"},
 		},
 		ServerRunning: true,
 	}
@@ -195,8 +201,108 @@ func TestSessionUsageJSONSchemaIncludesCostContract(t *testing.T) {
 			"microdollars": float64(420000),
 		},
 		"has_cost":        true,
+		"cost_usd":        0.42,
 		"models":          []any{"gpt-5.1"},
 		"unpriced_models": []any{"local-model"},
 		"server_running":  true,
-	}, raw)
+	}, raw, "a session with no subagents must serialize exactly as before")
+}
+
+// TestSessionUsageJSONSchemaOmitsCostUSDWhenNoCost pins the other half of
+// the cost_usd compatibility contract: roborev treats has_cost=true with a
+// missing/zero cost_usd as the pre-fix bug case, so a session with no cost
+// at all must omit the field entirely rather than emit cost_usd: 0.
+func TestSessionUsageJSONSchemaOmitsCostUSDWhenNoCost(t *testing.T) {
+	out := &sessionUsageOutput{
+		SessionUsage: db.SessionUsage{
+			SessionID: "claude:no-cost",
+			Agent:     "claude-code",
+			HasCost:   false,
+		},
+	}
+
+	data, err := json.Marshal(out)
+	require.NoError(t, err)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+	assert.NotContains(t, raw, "cost_usd",
+		"cost_usd must be omitted entirely when has_cost is false")
+}
+
+// TestSessionUsageJSONSchemaIncludesSubagentContract pins the two keys the
+// subagent rollup adds. Both are omitempty, which is what keeps the
+// no-subagent contract above byte-identical.
+func TestSessionUsageJSONSchemaIncludesSubagentContract(t *testing.T) {
+	out := &sessionUsageOutput{
+		SessionUsage: db.SessionUsage{
+			SessionID:      "parent-1",
+			Agent:          "claude",
+			Project:        "my-project",
+			Models:         []string{"claude-opus-4-7"},
+			BreakdownCount: 2,
+			SubagentCount:  1,
+			Breakdown: []db.SessionUsageBreakdownEntry{
+				{Ordinal: 1, Source: "message", Label: "usage"},
+				{
+					Ordinal:           2,
+					Source:            "message",
+					Label:             "usage",
+					SubagentSessionID: "agent-9f2c",
+				},
+			},
+		},
+	}
+
+	data, err := json.Marshal(out)
+	require.NoError(t, err)
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+
+	assert.Equal(t, float64(1), raw["subagent_count"])
+	rows, ok := raw["breakdown"].([]any)
+	require.True(t, ok, "breakdown must serialize as an array")
+	require.Len(t, rows, 2)
+
+	own, ok := rows[0].(map[string]any)
+	require.True(t, ok)
+	assert.NotContains(t, own, "subagent_session_id",
+		"the parent's own rows must not gain the field")
+
+	child, ok := rows[1].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "agent-9f2c", child["subagent_session_id"])
+	assert.Equal(t, "message", child["source"],
+		"subagent rows keep their real source")
+}
+
+func TestRenderSessionUsageHuman_SubagentLine(t *testing.T) {
+	tests := []struct {
+		name          string
+		subagentCount int
+		wantLine      bool
+	}{
+		{name: "own session omits the line", subagentCount: 0},
+		{name: "combined session names the count",
+			subagentCount: 2, wantLine: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := &sessionUsageOutput{
+				SessionUsage: db.SessionUsage{
+					SessionID: "claude:s1", Agent: "claude-code",
+					TotalOutputTokens: 100, HasTokenData: true,
+					SubagentCount: tt.subagentCount,
+				},
+			}
+			var b strings.Builder
+			require.NoError(t, renderSessionUsageHuman(&b, out))
+			if tt.wantLine {
+				assert.Contains(t, b.String(), "Subagents:     2 (included)")
+				return
+			}
+			assert.NotContains(t, b.String(), "Subagents")
+		})
+	}
 }

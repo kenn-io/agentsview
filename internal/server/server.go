@@ -46,7 +46,12 @@ type VersionInfo struct {
 // APIVersion is shared by HTTP version reporting and local daemon discovery.
 // Bump it when a client-visible contract cannot be decoded safely by an older
 // CLI or daemon.
-const APIVersion = 5
+const (
+	APIVersion = 6
+	// SubagentUsageAPIVersion is the first daemon API that guarantees
+	// combined session-usage scope and targeted descendant synchronization.
+	SubagentUsageAPIVersion = 6
+)
 
 const daemonService = "agentsview"
 

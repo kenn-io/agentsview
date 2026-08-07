@@ -27,10 +27,9 @@ func activityReportRangeBoundsUTC(q activity.Query) (string, string) {
 // GetActivityReport assembles a concurrency- and usage-oriented report
 // for the resolved range `q`, reading from the DuckDB store. It mirrors
 // the SQLite (*DB).GetActivityReport and PostgreSQL
-// (*Store).GetActivityReport: three fetches scoped to the SAME candidate
-// session-ID set so the concurrency timeline, sessions table, and usage
-// totals stay mutually consistent (no orphan usage rows), then the
-// in-memory streams are handed to activity.Aggregate.
+// (*Store).GetActivityReport: sessions and activity come from the filtered
+// candidate set. Usage loads candidate rows plus only the cross-session Claude
+// peers needed for complete-snapshot selection.
 //
 // The filter `f` is honored as-is: callers that want one-shot or
 // automated sessions included must pass them through with the
@@ -101,7 +100,7 @@ type duckSessionUsageOrderedRow struct {
 
 func (s *Store) GetSessionUsageRows(
 	ctx context.Context, ids []string,
-) ([]activity.UsageRow, error) {
+) (*activity.SessionUsageRows, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -168,13 +167,16 @@ func (s *Store) GetSessionUsageRows(
 	queryArgs := make([]any, 0, len(args)*2)
 	queryArgs = append(queryArgs, args...)
 	queryArgs = append(queryArgs, args...)
-	cte, queryArgs := duckUsageCTEFromRaw(db.UsageFilter{}, rawSQL, queryArgs)
+	// Read every normalized row here. The session-aware ordering below applies
+	// complete-snapshot selection before its own cross-session dedup pass.
+	cte, queryArgs := duckUsageCTEFromRaw(
+		db.UsageFilter{}, rawSQL, queryArgs, false)
 	query := cte + `
 		SELECT session_id, message_ordinal, ts, source, model,
 			agent, claude_message_id, claude_request_id, source_uuid,
 			usage_dedup_key, input_tokens_norm, output_tokens_norm,
 			cache_create_norm, cache_read_norm, reasoning_tokens_norm,
-			cost_microdollars, cost_source
+			web_search_requests_norm, cost_microdollars, cost_source
 		FROM usage_normalized`
 	rows, err := s.queryContext(ctx, query, queryArgs...)
 	if err != nil {
@@ -190,7 +192,7 @@ func (s *Store) GetSessionUsageRows(
 			&r.agent, &r.claudeMessageID, &r.claudeRequestID, &r.sourceUUID,
 			&r.usageDedupKey,
 			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheRd,
-			&r.reasoningTok, &r.cost, &r.costSource,
+			&r.reasoningTok, &r.webSearchRequests, &r.cost, &r.costSource,
 		); err != nil {
 			return nil, fmt.Errorf("scanning duckdb session usage rows: %w", err)
 		}
@@ -213,12 +215,55 @@ func (s *Store) GetSessionUsageRows(
 	sort.SliceStable(rowsAcc, func(i, j int) bool {
 		return duckSessionUsageRowLess(rowsAcc[i], rowsAcc[j], sessionOrder)
 	})
+	snapshotRows := make([]activity.UsageRow, len(rowsAcc))
+	rowContributes := make([]bool, len(rowsAcc))
+	rawOutputTokensBySession := make(map[string]int)
+	for i, o := range rowsAcc {
+		snapshotRows[i] = activity.UsageRow{
+			SessionID:         o.scan.sessionID,
+			Timestamp:         o.scan.ts,
+			MessageOrdinal:    o.ordinal,
+			OutputTokens:      o.scan.outputTok,
+			WebSearchRequests: o.scan.webSearchRequests,
+			ClaudeMessageID:   o.scan.claudeMessageID,
+			ClaudeRequestID:   o.scan.claudeRequestID,
+		}
+		rowContributes[i] = activity.UsageDataContributes(
+			o.scan.cost != nil, o.scan.inputTok, o.scan.outputTok,
+			o.scan.reasoningTok, o.scan.cacheCr, o.scan.cacheRd,
+			o.scan.webSearchRequests)
+		rawOutputTokensBySession[o.scan.sessionID] += o.scan.outputTok
+	}
+	snapshotMask, snapshotAttribution, snapshotWebSearchRequests :=
+		activity.ClaudeSnapshotSurvivorSelection(snapshotRows)
 	seen := make(map[string]struct{})
+	deduplicatedOutputTokens := make(map[string]int)
+	discardedContributingSessions := make(map[string]struct{})
 	out := make([]activity.UsageRow, 0, len(rowsAcc))
-	for _, o := range rowsAcc {
+	for i, o := range rowsAcc {
+		if !snapshotMask[i] {
+			deduplicatedOutputTokens[o.scan.sessionID] +=
+				snapshotRows[i].OutputTokens
+			if rowContributes[i] {
+				discardedContributingSessions[o.scan.sessionID] = struct{}{}
+			}
+			continue
+		}
 		r := o.scan
+		r.webSearchRequests = snapshotWebSearchRequests[i]
+		attributionSessionID := snapshotAttribution[i]
+		if attributionSessionID != r.sessionID {
+			deduplicatedOutputTokens[r.sessionID] += r.outputTok
+			if rowContributes[i] {
+				discardedContributingSessions[r.sessionID] = struct{}{}
+			}
+		}
 		if key, ok := duckSessionUsageDedupKey(r); ok {
 			if _, dup := seen[key]; dup {
+				deduplicatedOutputTokens[r.sessionID] += r.outputTok
+				if rowContributes[i] {
+					discardedContributingSessions[r.sessionID] = struct{}{}
+				}
 				continue
 			}
 			seen[key] = struct{}{}
@@ -229,7 +274,8 @@ func (s *Store) GetSessionUsageRows(
 			return nil, priceErr
 		}
 		out = append(out, activity.UsageRow{
-			SessionID:       r.sessionID,
+			SessionID:       attributionSessionID,
+			SourceSessionID: r.sessionID,
 			Model:           r.model,
 			Timestamp:       r.ts,
 			OutputTokens:    r.outputTok,
@@ -243,9 +289,31 @@ func (s *Store) GetSessionUsageRows(
 			ClaudeRequestID: r.claudeRequestID,
 			SourceUUID:      r.sourceUUID,
 			UsageDedupKey:   r.usageDedupKey,
+
+			UsageSource:         r.source,
+			MessageOrdinal:      duckUsageOrdinalOrNeg(r.messageOrdinal),
+			InputTokens:         r.inputTok,
+			CacheCreationTokens: r.cacheCr,
+			CacheReadTokens:     r.cacheRd,
+			WebSearchRequests:   r.webSearchRequests,
 		})
 	}
-	return out, nil
+	return &activity.SessionUsageRows{
+		Rows:                          out,
+		RawOutputTokensBySession:      rawOutputTokensBySession,
+		DeduplicatedOutputTokens:      deduplicatedOutputTokens,
+		DiscardedContributingSessions: discardedContributingSessions,
+	}, nil
+}
+
+// duckUsageOrdinalOrNeg renders a nullable message ordinal in
+// activity.UsageRow's COALESCE(message_ordinal, -1) convention.
+func duckUsageOrdinalOrNeg(v any) int64 {
+	o, ok := duckUsageOrdinal(v)
+	if !ok {
+		return -1
+	}
+	return o
 }
 
 func duckSessionUsageDedupKey(r duckActivityReportUsageRow) (string, bool) {
@@ -272,9 +340,6 @@ func duckSessionUsageRowLess(
 	} else if a.validTS != b.validTS {
 		return a.validTS
 	}
-	if a.scan.ts != b.scan.ts {
-		return a.scan.ts < b.scan.ts
-	}
 	if ai, ok := sessionOrder[a.scan.sessionID]; ok {
 		if bi, ok := sessionOrder[b.scan.sessionID]; ok && ai != bi {
 			return ai < bi
@@ -289,7 +354,10 @@ func duckSessionUsageRowLess(
 	if a.scan.source != b.scan.source {
 		return a.scan.source < b.scan.source
 	}
-	return a.scan.usageDedupKey < b.scan.usageDedupKey
+	if a.scan.usageDedupKey != b.scan.usageDedupKey {
+		return a.scan.usageDedupKey < b.scan.usageDedupKey
+	}
+	return !a.validTS && a.scan.ts < b.scan.ts
 }
 
 func activityReportProjectLabels(sessions []activity.SessionMeta) []string {
@@ -421,33 +489,29 @@ func (s *Store) activityReportActivity(
 // into an activity.UsageRow, carrying the normalized token amounts and
 // dedup keys the aggregator and per-row cost need.
 type duckActivityReportUsageRow struct {
-	sessionID       string
-	source          string
-	model           string
-	ts              string
-	messageOrdinal  any
-	agent           string
-	claudeMessageID string
-	claudeRequestID string
-	sourceUUID      string
-	usageDedupKey   string
-	inputTok        int
-	outputTok       int
-	cacheCr         int
-	cacheRd         int
-	reasoningTok    int
-	cost            *int64
-	costSource      string
+	sessionID         string
+	source            string
+	model             string
+	ts                string
+	messageOrdinal    any
+	agent             string
+	claudeMessageID   string
+	claudeRequestID   string
+	sourceUUID        string
+	usageDedupKey     string
+	inputTok          int
+	outputTok         int
+	cacheCr           int
+	cacheRd           int
+	reasoningTok      int
+	webSearchRequests int
+	cost              *int64
+	costSource        string
 }
 
-// activityReportUsage returns the usage rows for the candidate sessions
-// within the padded range bounds, with per-row cost computed up front
-// (mirroring GetDailyUsage's cost logic) so cost stays in the backend.
-// Rows are delivered as one globally ordered stream by
-// (ts, session_id, message_ordinal) as the aggregator's first-seen-wins
-// dedup requires. The ordering is computed in Go on the parsed time
-// value, not the formatted string, to avoid fractional-second lexical
-// issues.
+// activityReportUsage selects complete snapshots across the padded range,
+// then keeps rows attributed to the candidate sessions. Cost is computed
+// after selection so filtered rows do not affect pricing metadata.
 func (s *Store) activityReportUsage(
 	ctx context.Context, ids []string, lowerBound, upperBound string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
@@ -466,20 +530,6 @@ func (s *Store) activityReportUsage(
 		return out, &block, nil
 	}
 
-	idArgs, placeholders := stringInArgs(ids)
-	inClause := strings.Join(placeholders, ",")
-	query := duckActivityReportUsageQuery(inClause)
-	args := make([]any, 0, len(idArgs)*2+2)
-	args = append(args, idArgs...) // message-source IN
-	args = append(args, idArgs...) // event-source IN
-	args = append(args, lowerBound, upperBound)
-
-	rows, err := s.queryContext(ctx, query, args...)
-	if err != nil {
-		return nil, nil, fmt.Errorf("querying duckdb activity report usage: %w", err)
-	}
-	defer rows.Close()
-
 	// Accumulate the parsed ts and dedup ordinal alongside each mapped row
 	// so a single global (ts, session_id, ordinal) order can be imposed
 	// before the aggregator's first-seen dedup.
@@ -490,45 +540,116 @@ func (s *Store) activityReportUsage(
 		ordinal int64
 	}
 	var rowsAcc []ordered
-
-	for rows.Next() {
-		var r duckActivityReportUsageRow
-		if err := rows.Scan(
-			&r.sessionID, &r.messageOrdinal, &r.ts, &r.source, &r.model,
-			&r.agent, &r.claudeMessageID, &r.claudeRequestID, &r.sourceUUID,
-			&r.usageDedupKey,
-			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheRd,
-			&r.reasoningTok, &r.cost, &r.costSource,
-		); err != nil {
-			return nil, nil, fmt.Errorf(
-				"scanning duckdb activity report usage: %w", err)
+	loadRows := func(
+		query string, args []any, skipSessionIDs map[string]struct{},
+	) error {
+		rows, queryErr := s.queryContext(ctx, query, args...)
+		if queryErr != nil {
+			return fmt.Errorf("querying duckdb activity report usage: %w", queryErr)
 		}
-		tsStr := formatDBTime(r.ts)
-		ord := int64(-1)
-		if o, ok := duckUsageOrdinal(r.messageOrdinal); ok {
-			ord = o
+		defer rows.Close()
+		for rows.Next() {
+			var r duckActivityReportUsageRow
+			if err := rows.Scan(
+				&r.sessionID, &r.messageOrdinal, &r.ts, &r.source, &r.model,
+				&r.agent, &r.claudeMessageID, &r.claudeRequestID, &r.sourceUUID,
+				&r.usageDedupKey,
+				&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheRd,
+				&r.reasoningTok, &r.webSearchRequests, &r.cost, &r.costSource,
+			); err != nil {
+				return fmt.Errorf(
+					"scanning duckdb activity report usage: %w", err)
+			}
+			if _, skip := skipSessionIDs[r.sessionID]; skip {
+				continue
+			}
+			tsStr := formatDBTime(r.ts)
+			ord := int64(-1)
+			if o, ok := duckUsageOrdinal(r.messageOrdinal); ok {
+				ord = o
+			}
+			parsedTS, _ := parseTimestamp(tsStr)
+			rowsAcc = append(rowsAcc, ordered{
+				ts:      parsedTS,
+				ordinal: ord,
+				scan:    r,
+				row: activity.UsageRow{
+					SessionID:         r.sessionID,
+					Model:             r.model,
+					Timestamp:         tsStr,
+					OutputTokens:      r.outputTok,
+					WebSearchRequests: r.webSearchRequests,
+					Agent:             r.agent,
+					ClaudeMessageID:   r.claudeMessageID,
+					ClaudeRequestID:   r.claudeRequestID,
+					SourceUUID:        r.sourceUUID,
+					UsageDedupKey:     r.usageDedupKey,
+				},
+			})
 		}
-		parsedTS, _ := parseTimestamp(tsStr)
-		rowsAcc = append(rowsAcc, ordered{
-			ts:      parsedTS,
-			ordinal: ord,
-			scan:    r,
-			row: activity.UsageRow{
-				SessionID:       r.sessionID,
-				Model:           r.model,
-				Timestamp:       tsStr,
-				OutputTokens:    r.outputTok,
-				Agent:           r.agent,
-				ClaudeMessageID: r.claudeMessageID,
-				ClaudeRequestID: r.claudeRequestID,
-				SourceUUID:      r.sourceUUID,
-				UsageDedupKey:   r.usageDedupKey,
-			},
-		})
+		return rows.Err()
 	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf(
-			"iterating duckdb activity report usage: %w", err)
+
+	const usageChunk = 500
+	for i := 0; i < len(ids); i += usageChunk {
+		end := min(i+usageChunk, len(ids))
+		chunkArgs, placeholders := stringInArgs(ids[i:end])
+		inClause := "(" + strings.Join(placeholders, ",") + ")"
+		query := duckActivityReportUsageQuery(
+			"AND m.session_id IN "+inClause,
+			"AND ue.session_id IN "+inClause)
+		args := make([]any, 0, len(chunkArgs)*2+2)
+		args = append(args, chunkArgs...)
+		args = append(args, chunkArgs...)
+		args = append(args, lowerBound, upperBound)
+		if err := loadRows(query, args, nil); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	type snapshotKey struct {
+		messageID string
+		requestID string
+	}
+	keySet := make(map[snapshotKey]struct{})
+	for _, candidate := range rowsAcc {
+		if candidate.row.ClaudeMessageID == "" || candidate.row.ClaudeRequestID == "" {
+			continue
+		}
+		keySet[snapshotKey{
+			messageID: candidate.row.ClaudeMessageID,
+			requestID: candidate.row.ClaudeRequestID,
+		}] = struct{}{}
+	}
+	keys := make([]snapshotKey, 0, len(keySet))
+	for key := range keySet {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].messageID != keys[j].messageID {
+			return keys[i].messageID < keys[j].messageID
+		}
+		return keys[i].requestID < keys[j].requestID
+	})
+	candidateIDs := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		candidateIDs[id] = struct{}{}
+	}
+	for i := 0; i < len(keys); i += usageChunk {
+		end := min(i+usageChunk, len(keys))
+		predicates := make([]string, 0, end-i)
+		args := make([]any, 0, (end-i)*2+2)
+		for _, key := range keys[i:end] {
+			predicates = append(predicates,
+				"(m.claude_message_id = ? AND m.claude_request_id = ?)")
+			args = append(args, key.messageID, key.requestID)
+		}
+		query := duckActivityReportUsageQuery(
+			"AND ("+strings.Join(predicates, " OR ")+")", "AND FALSE")
+		args = append(args, lowerBound, upperBound)
+		if err := loadRows(query, args, candidateIDs); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	sort.SliceStable(rowsAcc, func(i, j int) bool {
@@ -545,18 +666,25 @@ func (s *Store) activityReportUsage(
 	for i, o := range rowsAcc {
 		baseRows[i] = o.row
 	}
-	mask := activity.UsageSurvivorMask(q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows)
+	mask, attribution, webSearchRequests :=
+		activity.UsageSurvivorSelectionForSessions(
+			q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
+		)
 	out = make([]activity.UsageRow, 0, len(rowsAcc))
 	for i, o := range rowsAcc {
 		if !mask[i] {
 			continue
 		}
+		costRow := o.scan
+		costRow.webSearchRequests = webSearchRequests[i]
 		cost, costSource, priced, contributes, sessionCost, priceErr :=
-			duckActivityUsageCost(o.scan, rateResolver)
+			duckActivityUsageCost(costRow, rateResolver)
 		if priceErr != nil {
 			return nil, nil, priceErr
 		}
 		row := o.row
+		row.SessionID = attribution[i]
+		row.WebSearchRequests = webSearchRequests[i]
 		row.Cost = cost
 		row.CostSource = costSource
 		row.SessionCost = sessionCost
@@ -571,15 +699,13 @@ func (s *Store) activityReportUsage(
 	return out, &block, nil
 }
 
-// duckActivityReportUsageQuery builds the per-row usage-union SQL scoped to
-// the candidate sessions. It applies the same message and usage-event
+// duckActivityReportUsageQuery builds the per-row usage-union SQL across the
+// padded time range. It applies the same message and usage-event
 // eligibility predicates as GetDailyUsage (empty token_usage, empty, and
 // synthetic models excluded) so the daily totals match the Usage
 // dashboard, normalizes the per-source token columns in SQL, and bounds
-// rows to the padded range window. inClause is the comma-joined "?"
-// placeholder list; it is interpolated twice (message source, event
-// source). Cost is computed per row in Go.
-func duckActivityReportUsageQuery(inClause string) string {
+// rows to the padded range window. Cost is computed per row in Go.
+func duckActivityReportUsageQuery(messageFilter, eventFilter string) string {
 	return fmt.Sprintf(`
 		WITH usage_raw AS (
 			SELECT m.session_id AS session_id, m.ordinal AS message_ordinal,
@@ -600,7 +726,7 @@ func duckActivityReportUsageQuery(inClause string) string {
 				AND m.model != ''
 				AND m.model != '<synthetic>'
 				AND s.deleted_at IS NULL
-				AND m.session_id IN (%[1]s)
+				%[2]s
 			UNION ALL
 			SELECT ue.session_id AS session_id, ue.message_ordinal AS message_ordinal,
 				ue.source AS source, COALESCE(ue.occurred_at, s.started_at) AS ts,
@@ -622,36 +748,40 @@ func duckActivityReportUsageQuery(inClause string) string {
 			JOIN sessions s ON s.id = ue.session_id
 			WHERE ue.model != ''
 				AND s.deleted_at IS NULL
-				AND ue.session_id IN (%[1]s)
+				%[3]s
 		),
 		usage_normalized AS (
 			SELECT session_id, message_ordinal, ts, source, model, agent,
 				claude_message_id, claude_request_id, source_uuid, usage_dedup_key,
 				CASE
-					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.input_tokens') AS BIGINT), 0), 0), %[2]d)
+					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.input_tokens') AS BIGINT), 0), 0), %[1]d)
 					WHEN source = 'session' THEN GREATEST(input_tokens, 0)
-					ELSE LEAST(GREATEST(input_tokens, 0), %[2]d)
+					ELSE LEAST(GREATEST(input_tokens, 0), %[1]d)
 				END AS input_tokens_norm,
 				CASE
-					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.output_tokens') AS BIGINT), 0), 0), %[2]d)
+					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.output_tokens') AS BIGINT), 0), 0), %[1]d)
 					WHEN source = 'session' THEN GREATEST(output_tokens, 0)
-					ELSE LEAST(GREATEST(output_tokens, 0), %[2]d)
+					ELSE LEAST(GREATEST(output_tokens, 0), %[1]d)
 				END AS output_tokens_norm,
 				CASE
-					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_creation_input_tokens') AS BIGINT), 0), 0), %[2]d)
+					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_creation_input_tokens') AS BIGINT), 0), 0), %[1]d)
 					WHEN source = 'session' THEN GREATEST(cache_create, 0)
-					ELSE LEAST(GREATEST(cache_create, 0), %[2]d)
+					ELSE LEAST(GREATEST(cache_create, 0), %[1]d)
 				END AS cache_create_norm,
 					CASE
-						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_read_input_tokens') AS BIGINT), 0), 0), %[2]d)
+						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_read_input_tokens') AS BIGINT), 0), 0), %[1]d)
 						WHEN source = 'session' THEN GREATEST(cache_read, 0)
-						ELSE LEAST(GREATEST(cache_read, 0), %[2]d)
+						ELSE LEAST(GREATEST(cache_read, 0), %[1]d)
 					END AS cache_read_norm,
 					CASE
-						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.reasoning_tokens') AS BIGINT), 0), 0), %[2]d)
+						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.reasoning_tokens') AS BIGINT), 0), 0), %[1]d)
 						WHEN source = 'session' THEN GREATEST(reasoning_tokens, 0)
-						ELSE LEAST(GREATEST(reasoning_tokens, 0), %[2]d)
+						ELSE LEAST(GREATEST(reasoning_tokens, 0), %[1]d)
 					END AS reasoning_tokens_norm,
+					CASE
+						WHEN source = 'message' THEN GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.server_tool_use.web_search_requests') AS BIGINT), 0), 0)
+						ELSE 0
+					END AS web_search_requests_norm,
 					cost_microdollars, cost_source
 			FROM usage_raw
 		)
@@ -659,10 +789,12 @@ func duckActivityReportUsageQuery(inClause string) string {
 				claude_message_id, claude_request_id, source_uuid, usage_dedup_key,
 				input_tokens_norm, output_tokens_norm,
 				cache_create_norm, cache_read_norm, reasoning_tokens_norm,
+				web_search_requests_norm,
 				cost_microdollars, cost_source
 		FROM usage_normalized
 		WHERE ts >= CAST(? AS TIMESTAMP)
-			AND ts <= CAST(? AS TIMESTAMP)`, inClause, db.MaxPlausibleTokens)
+			AND ts <= CAST(? AS TIMESTAMP)`,
+		db.MaxPlausibleTokens, messageFilter, eventFilter)
 }
 
 // duckActivityReportRowStatus computes one usage row's cost and pricing state the same way
@@ -677,12 +809,15 @@ func duckActivityReportRowStatus(
 	canonicalModel := duckUsageLookupModel(r.model, r.ts)
 	var explicitCost int64
 	var billableInput, billableOutput, billableReasoning, billableCacheCr, billableCacheRd int
+	var billableWebSearch int
 	if r.cost != nil {
 		explicitCost = *r.cost
 		priced = true
 		contributes = true
-	} else if r.inputTok != 0 || r.outputTok != 0 || r.reasoningTok != 0 ||
-		r.cacheCr != 0 || r.cacheRd != 0 {
+	} else if activity.UsageDataContributes(
+		false, r.inputTok, r.outputTok, r.reasoningTok,
+		r.cacheCr, r.cacheRd, r.webSearchRequests,
+	) {
 		contributes = true
 		_, lookup := pricing.Resolve(r.model, canonicalModel)
 		priced = lookup.OK
@@ -691,6 +826,7 @@ func duckActivityReportRowStatus(
 		billableReasoning = r.reasoningTok
 		billableCacheCr = r.cacheCr
 		billableCacheRd = r.cacheRd
+		billableWebSearch = r.webSearchRequests
 	} else {
 		priced = true
 		billableInput = r.inputTok
@@ -703,7 +839,7 @@ func duckActivityReportRowStatus(
 		r.model, canonicalModel,
 		r.inputTok, r.outputTok, r.cacheCr, r.cacheRd,
 		billableInput, billableOutput, billableReasoning,
-		billableCacheCr, billableCacheRd,
+		billableCacheCr, billableCacheRd, billableWebSearch,
 		explicitCost,
 		r.cost != nil,
 		db.UsageSourceIsRequestScoped(r.source) ||

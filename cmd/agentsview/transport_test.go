@@ -25,8 +25,7 @@ func daemonRuntimeDir(t *testing.T) string {
 }
 
 // freeTCPListener binds to a free loopback port and returns the
-// listener (caller closes) and the port number. Tests that need
-// an unreachable daemon close the listener after reserving the port.
+// listener (caller closes) and the port number.
 func freeTCPListener(t *testing.T) (net.Listener, int) {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -48,14 +47,22 @@ func writeDaemonRuntimeForTest(
 	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
 }
 
-// writeUnreachableDaemonRuntime reserves a free loopback port, releases
-// it so the TCP probe fails, then writes a live-PID runtime record for
-// it and registers cleanup. The record looks owned (live PID) but the
-// daemon cannot be reached. Returns the unreachable port.
+// writeUnreachableDaemonRuntime holds a loopback port and closes every
+// accepted connection so daemon probes fail without releasing the port for
+// an unrelated parallel test to claim. The runtime record looks owned (live
+// PID) but no daemon can be reached. Returns the unprobeable port.
 func writeUnreachableDaemonRuntime(t *testing.T, dir string, readOnly bool) int {
 	t.Helper()
 	ln, port := freeTCPListener(t)
-	ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
 	writeDaemonRuntimeForTest(t, dir, "127.0.0.1", port, "test", readOnly)
 	return port
 }

@@ -1202,6 +1202,7 @@ export class SessionsService {
     id,
     breakdown,
     rollup,
+    subagents,
   }: {
     /**
      * Session ID
@@ -1215,6 +1216,10 @@ export class SessionsService {
      * Include explicit subagent descendant costs
      */
     rollup?: boolean,
+    /**
+     * Fold subagent descendant usage into the totals, models, and breakdown
+     */
+    subagents?: boolean,
   }): CancelablePromise<SessionUsageResponse> {
     return __request(OpenAPI, {
       method: 'GET',
@@ -1225,6 +1230,7 @@ export class SessionsService {
       query: {
         'breakdown': breakdown,
         'rollup': rollup,
+        'subagents': subagents,
       },
       errors: {
         400: `Bad Request`,

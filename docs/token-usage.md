@@ -336,6 +336,25 @@ both fetched and embedded catalogs. Processing variants such as Batch, Flex,
 Priority, regional, and one-hour cache pricing are not inferred when the stored
 usage does not identify that service tier.
 
+### Anthropic Web Search Fee
+
+Anthropic charges a flat
+[$10 per 1,000 server-side web search requests](https://docs.claude.com/en/docs/agents-and-tools/tool-use/web-search-tool)
+on top of tokens. That fee is not a per-token rate, so it lives outside the
+`model_pricing` catalog as a fixed $0.01 per request. AgentsView adds it to any
+usage row whose stored `token_usage` reports
+`server_tool_use.web_search_requests`, and `session usage --format json`
+reports the per-row count as `web_search_requests` so the charge is auditable.
+A row that carries an authoritative reported cost is left alone, since that
+cost already settles the whole row.
+
+Claude Code runs each `WebSearch` in an out-of-band side call and writes a zero
+counter on the assistant message, so AgentsView takes the count from the linked
+tool result instead. That side call's own tokens — tens of thousands of input
+tokens on a Haiku model per search — are not written to the transcript at all
+and are therefore a known undercount: AgentsView records the fee, not the
+hidden tokens.
+
 As of 0.32.0, the embedded fallback includes `claude-opus-4-7` at the same Opus
 tier used for 4.6 and 4.8, so offline reports and fresh installs price Opus 4.7
 sessions without waiting for a live LiteLLM fetch. 0.33.0 adds `claude-fable-5`
@@ -551,7 +570,7 @@ to X" still works.
 
 ```json
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "pricing": {
     "source": "fetched",
     "table_version": "2026-07-03T12:00:00Z",
@@ -673,11 +692,13 @@ session-summary v1 contract shipped in 0.37.1. Releases 0.38.0 and 0.38.1
 emitted the substantially revised project-evidence shape while still reporting
 version 1. Version 2 corrected those markers, version 3 introduced exact
 microdollar money objects, and version 4 adds resolved-model pricing provenance
-with request-pricing bands and application counts. Version 4 is a contract bump
-because band selection changes pricing semantics and bands participate in digest
-canonicalization, not merely because fields were added. The two transitional
-releases must not be treated as v1-compatible. The commands do not provide an
-earlier-version output mode. Consumers should require the expected
+with request-pricing bands and application counts. Version 5 selects complete
+Claude snapshots before generic deduplication and charges the maximum observed
+server-side web-search count. Versions 4 and 5 are contract bumps because
+version 4 changed band-selection pricing semantics and digest canonicalization,
+while version 5 changes snapshot and server-tool accounting. The two
+transitional releases must not be treated as v1-compatible. The commands do not
+provide an earlier-version output mode. Consumers should require the expected
 `schema_version` and ignore unknown additive fields.
 
 | Change                                                                                | Requires `schema_version` bump? |
@@ -722,7 +743,7 @@ after their tokens and costs have been aggregated.
 
 When no catalog bands or applied bands exist, their canonical JSON value is
 `null`, not `[]`. Consumers should accept future additive fields but can rely on
-that null-versus-nonempty-array representation within schema version 4.
+that null-versus-nonempty-array representation within schema version 5.
 
 Ordinary models have one resolution whose `priced_model` is the reported model.
 Timestamp-aware aliases can have more than one resolution in a report. For
@@ -733,7 +754,7 @@ canonicalization and produces one self-resolution. Fallback provenance also
 lists reported model names.
 
 `cost_source` is a closed enum everywhere it appears: `computed`, `reported`, or
-`mixed`. It was established in schema version 2 and is unchanged in version 4.
+`mixed`. It was established in schema version 2 and is unchanged in version 5.
 `computed` means AgentsView derived cost from token counts and the effective
 pricing resolver. `reported` means a source supplied explicit cost, such as
 Cursor Admin API billing data; those amounts may not be derivable from tokens

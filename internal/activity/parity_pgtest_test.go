@@ -486,12 +486,13 @@ func assertParityForCase(
 
 // assertDayMinuteFixtureSanity checks the day-minute report actually exercises
 // the fixture: a full day with peak concurrency 2, nine sessions, non-zero
-// cost, and exactly 14050 output tokens. The token total proves the
+// cost, and exactly 22550 output tokens. The token total proves the
 // synthetic-model usage row (9999 tokens) is excluded, the dedup pair
-// collapses to its earlier 500-token row, the subagent's and unique fork's
-// tokens count, and the replaying fork's do not -- not merely that the
-// backends agree on a wrong number -- so the deep-compare above extends those
-// guarantees, plus the zero-cost primary-model fallback, to PG and DuckDB.
+// keeps its complete 9000-token snapshot with earlier attribution, the
+// subagent's and unique fork's tokens count, and the replaying fork's do not --
+// not merely that the backends agree on a wrong number. The deep-compare above
+// extends those guarantees, plus the zero-cost primary-model fallback, to PG
+// and DuckDB.
 func assertDayMinuteFixtureSanity(t *testing.T, r activity.Report) {
 	t.Helper()
 	require.False(t, r.Partial, "fixture day must be a full day")
@@ -499,10 +500,11 @@ func assertDayMinuteFixtureSanity(t *testing.T, r activity.Report) {
 	require.Equal(t, 9, r.Totals.Sessions, "fixture session count")
 	require.Positive(t, r.Totals.Cost.Microdollars, "fixture must exercise cost")
 	// 2400 (parity-a) + 1600 (parity-b) + 300 (parity-c; synthetic 9999 row
-	// excluded) + 500 (parity-d wins the dedup) + 0 (parity-e deduped away;
+	// excluded) + 9000 (parity-d receives parity-e's complete snapshot) +
+	// 0 (parity-e deduped away;
 	// parity-f zero-cost) + 250 (parity-sub) + 9000 (parity-fork, unique)
-	// + 0 (parity-fork-replay deduped away) = 14050.
-	require.Equal(t, 14050, r.Totals.OutputTokens,
+	// + 0 (parity-fork-replay deduped away) = 22550.
+	require.Equal(t, 22550, r.Totals.OutputTokens,
 		"synthetic row excluded, dedup collapses, subagent and unique fork count")
 
 	bySession := map[string]activity.SessionRow{}
@@ -522,8 +524,8 @@ func assertDayMinuteFixtureSanity(t *testing.T, r activity.Report) {
 	require.Contains(t, bySession, "parity-d")
 	require.Contains(t, bySession, "parity-e")
 	require.Contains(t, bySession, "parity-f")
-	require.Equal(t, 500, bySession["parity-d"].OutputTokens,
-		"dedup keeps the earlier whole-second duplicate's tokens")
+	require.Equal(t, 9000, bySession["parity-d"].OutputTokens,
+		"complete snapshot is attributed to the earlier session")
 	require.Equal(t, 0, bySession["parity-e"].OutputTokens,
 		"the later fractional duplicate is dropped")
 	require.Equal(t, "model-x", bySession["parity-f"].PrimaryModel,

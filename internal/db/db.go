@@ -17,8 +17,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
-
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
@@ -371,7 +369,13 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // (81: Pi-family flat cache-write usage reparse. Existing Pi and OMP rows can
 // persist cache creation under cacheWrite, which older parses ignored.
 // Re-parsing restores those tokens to per-message usage and computed cost.)
-const dataVersion = 81
+// (82: Claude web search accounting. The parser now records how many billed
+// server-side web searches an assistant message performed in its stored
+// token_usage blob, taking the count from the linked WebSearch tool result
+// when the message's own server_tool_use counter is zero. Existing Claude
+// rows need re-parsing so historical web searches are charged the
+// per-request fee.)
+const dataVersion = 82
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -1362,7 +1366,7 @@ func OpenReadOnly(path string) (*DB, error) {
 		)
 	}
 
-	reader, err := sql.Open("sqlite3", makeDSN(path, true))
+	reader, err := sql.Open(sqliteUsageDriverName, makeDSN(path, true))
 	if err != nil {
 		return nil, fmt.Errorf("opening read-only reader: %w", err)
 	}
@@ -3684,7 +3688,7 @@ func openAndInit(path string, schemaRepairNeeded bool) (*DB, error) {
 		return nil, fmt.Errorf("configuring wal: %w", err)
 	}
 
-	reader, err := sql.Open("sqlite3", makeDSN(path, true))
+	reader, err := sql.Open(sqliteUsageDriverName, makeDSN(path, true))
 	if err != nil {
 		writer.Close()
 		return nil, fmt.Errorf("opening reader: %w", err)
@@ -4302,7 +4306,7 @@ func (db *DB) reopenLocked() error {
 	}
 
 	reader, err := sql.Open(
-		"sqlite3", makeDSN(db.path, true),
+		sqliteUsageDriverName, makeDSN(db.path, true),
 	)
 	if err != nil {
 		writer.Close()

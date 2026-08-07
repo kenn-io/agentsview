@@ -453,8 +453,9 @@ type ToolCallList struct {
 // SyncInput carries the payload for a per-session sync.
 // Exactly one of Path or ID must be set.
 type SyncInput struct {
-	Path string `json:"path,omitempty"`
-	ID   string `json:"id,omitempty"`
+	Path      string `json:"path,omitempty"`
+	ID        string `json:"id,omitempty"`
+	Subagents bool   `json:"subagents,omitempty"`
 }
 
 // Event is the CLI-side NDJSON wrapper for SSE events from

@@ -9,9 +9,9 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
-const UsageDailySchemaVersion = 4
-const ActivityReportSchemaVersion = 4
-const SessionSummarySchemaVersion = 4
+const UsageDailySchemaVersion = 5
+const ActivityReportSchemaVersion = 5
+const SessionSummarySchemaVersion = 5
 
 // CostSource is a closed contract enum. Adding a value requires a schema version
 // bump for any export surface that emits it.

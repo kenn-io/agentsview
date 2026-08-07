@@ -11,9 +11,9 @@ content-derived change detection.
 ## Commands
 
 ```bash
-agentsview export hour --schema-version 1 2026-07-28-13
-agentsview export day --schema-version 1 2026-07-28
-agentsview export digest --schema-version 1 --from 2026-06-28 --to 2026-07-27
+agentsview export hour --schema-version 2 2026-07-28-13
+agentsview export day --schema-version 2 2026-07-28
+agentsview export digest --schema-version 2 --from 2026-06-28 --to 2026-07-27
 ```
 
 All dates and hours are UTC and must use the exact zero-padded forms shown
@@ -22,9 +22,10 @@ hours; the current UTC date contains only closed hours and has no day digest.
 Digest ranges are inclusive, require both bounds, and may contain at most 31
 dates.
 
-Version 1 is the default when `--schema-version` is omitted. Hour, day, and
-digest commands accept an explicit value of `1`; any other value is rejected
-before the archive is opened or output is written.
+Version 2 is the default when `--schema-version` is omitted. Hour, day, and
+digest commands accept an explicit value of `1` or `2`; any other value is
+rejected before the archive is opened or output is written. Version 1 preserves
+its original first-seen snapshot and token-only charging semantics.
 
 Each successful command writes exactly one canonical JSON document followed by
 one newline. Diagnostics go to stderr. A malformed or future period, an open
@@ -33,11 +34,11 @@ non-zero exit.
 
 ## Hour and day documents
 
-The v1 hour shape is:
+The v2 hour shape is:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "period": "2026-07-28-13",
   "digest": "sha256:...",
   "has_data": true,
@@ -125,14 +126,20 @@ archive snapshot even when a sync writes concurrently. Usage deduplication and
 authoritative session-cost allocation happen once on the merged usage stream
 across the day before rows are partitioned by hour.
 
-First-seen usage deduplication orders candidates by occurrence time, session ID
-ascending, and `COALESCE(message_ordinal, -1)` ascending, matching the Usage
-view. A standalone row retains its empty session ID and therefore sorts before a
-session-linked row at the same time. Source and the remaining semantic fields
-provide deterministic tie-breakers only after that shared ordering prefix.
+Version 2 selects the greatest output-token snapshot for each Claude
+message/request identity before generic deduplication, retains the earliest
+session for attribution, and carries the maximum observed web-search count into
+pricing. Version 1 instead uses its original first-seen usage deduplication,
+ordered by occurrence time, session ID ascending, and
+`COALESCE(message_ordinal, -1)` ascending, and does not charge web-search
+requests. A standalone row retains its empty session ID and therefore sorts
+before a session-linked row at the same time. Source and the remaining semantic
+fields provide deterministic tie-breakers only after that shared ordering
+prefix.
 
 Arrays use stable contract ordering. Canonical JSON preserves declared JSON
-field names and encodes money exactly. Version 1 uses a project-specific
+field names and encodes money exactly. Both supported versions use a
+project-specific
 canonical format and does not claim RFC 8785 or JSON Canonicalization Scheme
 compliance. Its byte rules are:
 
@@ -163,7 +170,7 @@ Digests are derived as follows:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "from": "2026-07-27",
   "to": "2026-07-28",
   "days": [
@@ -206,11 +213,13 @@ SHA-256:   940f129aabf5afc6800add24fbf597727e9dc6316f6ae10adbc78a3362b1c483
 
 ## Versioning
 
-Version 1 is a stable wire contract. Integrations should require
-`schema_version: 1`, reject unknown fields, and verify the canonical content
-digest before accepting an hour. Adding, renaming, or removing a field, changing
-a type or accounting rule, or changing canonicalization requires a new schema
-version. Commands currently reject every schema version other than `1`.
+Versions 1 and 2 are stable wire contracts. Integrations should request and
+require the intended `schema_version`, reject unknown fields, and verify the
+canonical content digest before accepting an hour. Version 2 adds complete
+Claude snapshot selection and web-search charging; version 1 remains available
+with its original accounting semantics. Adding, renaming, or removing a field,
+changing a type or accounting rule, or changing canonicalization requires a new
+schema version.
 
 ## Local SQLite scope
 
@@ -221,9 +230,9 @@ the local archive is the canonical source for the device's reporting payload,
 dedup order, pricing view, and archive-scoped project keys.
 
 Costs are estimates computed from the pricing catalog visible to the read
-transaction. Version 1 does not pin a closed hour to the catalog revision that
-was current when the hour closed, so a later catalog change can change cost and
-therefore the hour digest without changing token facts. Integrations should
+transaction. Reporting exports do not pin a closed hour to the catalog revision
+that was current when the hour closed, so a later catalog change can change cost
+and therefore the hour digest without changing token facts. Integrations should
 treat such a digest change as an ordinary source correction.
 
 When the archive has no stored model-pricing rows, the read-only reporting
@@ -234,5 +243,5 @@ The sum of a completed export day's usage fields reconciles with the Usage view
 for the same UTC date and filters. Usage-session selection follows usage
 timestamps independently of the session activity window.
 
-The checked-in fixtures under `cmd/agentsview/testdata/reporting/` freeze the v1
-bytes and their SHA-256 manifest for portable contract tests.
+The checked-in fixtures under `cmd/agentsview/testdata/reporting/` freeze both
+v1 and v2 bytes and their SHA-256 manifest for portable contract tests.

@@ -1008,9 +1008,9 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 		"expected tool_result_events table after reopen")
 }
 
-func TestCurrentDataVersionPrimeAgentCacheWriteUsage(t *testing.T) {
-	assert.Equal(t, 81, CurrentDataVersion(),
-		"Pi cacheWrite usage backfill requires a data version bump")
+func TestCurrentDataVersionUsageReparses(t *testing.T) {
+	assert.Equal(t, 82, CurrentDataVersion(),
+		"Pi cacheWrite usage and Claude web-search accounting require sequential backfills")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {

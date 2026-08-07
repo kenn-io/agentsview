@@ -2,6 +2,8 @@ package sync
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path"
 	"strings"
@@ -372,4 +374,70 @@ func (e *Engine) hydrateS3DiscoveredFile(
 			file.SourceFingerprint = obj.Fingerprint
 		}
 	}
+}
+
+// SyncClaudeS3SubagentTranscriptsContext ingests the given s3:// Claude
+// subagent transcript objects. The changed-path pipeline
+// (SyncPathsContext) classifies by statting local files, so it cannot
+// route s3:// objects; the on-demand subagent refresh behind `session
+// usage` syncs them here instead, one process-and-write per object with
+// the project, machine, and object-metadata hydration the s3 discovery
+// path would apply. Work is bounded by the given objects, never by
+// archive size. Objects that fail to sync are reported joined; the
+// remaining objects still sync. parentSessionID preserves the stored
+// parent's machine namespace when its original S3 root is no longer
+// configured.
+func (e *Engine) SyncClaudeS3SubagentTranscriptsContext(
+	ctx context.Context, parentSessionID string, paths []string,
+) error {
+	if e.refuseWriteInForceParse("SyncClaudeS3SubagentTranscripts") {
+		return nil
+	}
+	e.syncMu.Lock()
+	synced := false
+	// Defers run LIFO: emit runs after syncMu.Unlock, matching the
+	// other sync entry points.
+	defer func() {
+		if synced {
+			e.emit("messages")
+		}
+	}()
+	defer e.syncMu.Unlock()
+
+	parentMachine, _ := parser.StripHostPrefix(parentSessionID)
+	parentProject := ""
+	if parent, _ := e.db.GetSession(ctx, parentSessionID); parent != nil &&
+		parent.Project != "" &&
+		!parser.NeedsProjectReparse(parent.Project) {
+		parentProject = parent.Project
+	}
+	var errs error
+	for _, p := range paths {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(errs, err)
+		}
+		if !isS3SourcePath(p) {
+			continue
+		}
+		file := parser.DiscoveredFile{
+			Path: p, Agent: parser.AgentClaude, Machine: parentMachine,
+		}
+		sessionID := strings.TrimSuffix(path.Base(p), ".jsonl")
+		childID := applyIDPrefixToID(
+			s3SessionIDPrefix(parentMachine), sessionID)
+		e.hydrateS3DiscoveredFile(ctx, childID, &file)
+		if file.Project == "" {
+			file.Project = parentProject
+		}
+		preserved, err := e.processAndWriteSessionFile(ctx, file, childID)
+		if err != nil {
+			errs = errors.Join(errs, fmt.Errorf(
+				"sync subagent transcript %s: %w", p, err))
+			continue
+		}
+		if !preserved {
+			synced = true
+		}
+	}
+	return errs
 }

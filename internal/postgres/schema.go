@@ -27,6 +27,95 @@ type columnMigration struct {
 	desc   string
 }
 
+// fallback_key remains in the installed signature so CREATE OR REPLACE can
+// upgrade existing databases; extraction is deliberately governed by
+// json_path for both valid and supported malformed values.
+const postgresUsageJSONHelperDDL = `
+CREATE OR REPLACE FUNCTION agentsview_json_integer(
+    raw_value TEXT, json_path TEXT[], fallback_key TEXT
+) RETURNS TEXT
+LANGUAGE PLpgSQL
+IMMUTABLE
+AS $function$
+DECLARE
+    parsed JSONB;
+    counter TEXT;
+    repaired TEXT;
+BEGIN
+    parsed := raw_value::JSONB;
+    counter := parsed #>> json_path;
+    IF counter ~ '^-?[0-9]+$' THEN
+        RETURN counter;
+    END IF;
+    RETURN NULL;
+EXCEPTION WHEN OTHERS THEN
+    BEGIN
+        repaired := raw_value || repeat('}', GREATEST(
+            length(raw_value) - length(replace(raw_value, '{', '')) -
+            (length(raw_value) - length(replace(raw_value, '}', ''))),
+            0));
+        parsed := repaired::JSONB;
+        counter := parsed #>> json_path;
+        IF counter ~ '^-?[0-9]+$' THEN
+            RETURN counter;
+        END IF;
+        RETURN NULL;
+    EXCEPTION WHEN OTHERS THEN
+        RETURN NULL;
+    END;
+END;
+$function$;`
+
+// cockroachUsageJSONHelperDDL avoids PL/pgSQL exception blocks, which older
+// CockroachDB releases reject. json_valid guards the JSONB cast; end-truncated
+// legacy objects are balanced before the exact requested path is extracted.
+const cockroachUsageJSONHelperDDL = `
+CREATE OR REPLACE FUNCTION agentsview_json_integer(
+    raw_value TEXT, json_path TEXT[], fallback_key TEXT
+) RETURNS TEXT
+LANGUAGE SQL
+IMMUTABLE
+AS $function$
+SELECT CASE
+    WHEN json_valid(candidate_value) THEN
+        CASE
+            WHEN (candidate_value::JSONB #>> json_path) ~ '^-?[0-9]+$'
+                THEN candidate_value::JSONB #>> json_path
+            ELSE NULL
+        END
+    ELSE NULL
+END
+FROM (
+    SELECT CASE
+        WHEN json_valid(raw_value) THEN raw_value
+        ELSE raw_value || repeat('}', GREATEST(
+            length(raw_value) - length(replace(raw_value, '{', '')) -
+            (length(raw_value) - length(replace(raw_value, '}', ''))),
+            0))
+        END AS candidate_value
+) repaired
+$function$;`
+
+const usageJSONHelperProbe = `
+SELECT
+    agentsview_json_integer(
+        '{"metadata":{"output_tokens":900},"output_tokens":"42"}',
+        ARRAY['output_tokens'], 'output_tokens'),
+    agentsview_json_integer(
+        '{"metadata":{"web_search_requests":9},"server_tool_use":{"web_search_requests":"2"}}',
+        ARRAY['server_tool_use', 'web_search_requests'],
+        'web_search_requests'),
+    agentsview_json_integer(
+        '{"output_tokens":"7"',
+        ARRAY['output_tokens'], 'output_tokens'),
+    agentsview_json_integer(
+        '{"metadata":{"output_tokens":900},"output_tokens":"42"',
+        ARRAY['output_tokens'], 'output_tokens'),
+    agentsview_json_integer(
+        '{"metadata":{"web_search_requests":9},"server_tool_use":{"web_search_requests":"2"',
+        ARRAY['server_tool_use', 'web_search_requests'],
+        'web_search_requests')`
+
 // coreDDL creates the tables and indexes. It uses unqualified
 // names because Open() sets search_path to the target schema.
 //
@@ -726,6 +815,60 @@ func rekeyMigratedCursorUsageEventsPG(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
+func probeUsageJSONHelper(ctx context.Context, db *sql.DB) error {
+	var outputTokens, webSearchRequests, malformedOutput string
+	var malformedScopedOutput, malformedScopedWebSearch string
+	if err := db.QueryRowContext(ctx, usageJSONHelperProbe).Scan(
+		&outputTokens, &webSearchRequests, &malformedOutput,
+		&malformedScopedOutput, &malformedScopedWebSearch,
+	); err != nil {
+		return err
+	}
+	if outputTokens != "42" || webSearchRequests != "2" ||
+		malformedOutput != "7" || malformedScopedOutput != "42" ||
+		malformedScopedWebSearch != "2" {
+		return fmt.Errorf(
+			"unexpected extraction results: output=%q web_search=%q "+
+				"malformed=%q malformed_scoped_output=%q "+
+				"malformed_scoped_web_search=%q",
+			outputTokens, webSearchRequests, malformedOutput,
+			malformedScopedOutput, malformedScopedWebSearch,
+		)
+	}
+	return nil
+}
+
+func ensureUsageJSONHelper(ctx context.Context, db *sql.DB) error {
+	_, primaryErr := db.ExecContext(ctx, postgresUsageJSONHelperDDL)
+	if primaryErr == nil {
+		primaryErr = probeUsageJSONHelper(ctx, db)
+		if primaryErr == nil {
+			return nil
+		}
+	}
+
+	if _, err := db.ExecContext(ctx, cockroachUsageJSONHelperDDL); err != nil {
+		return fmt.Errorf(
+			"creating usage JSON helper: PL/pgSQL implementation failed: %v; "+
+				"SQL fallback failed: %w",
+			primaryErr, err,
+		)
+	}
+	if err := probeUsageJSONHelper(ctx, db); err != nil {
+		return fmt.Errorf(
+			"validating Cockroach-compatible usage JSON helper "+
+				"after PL/pgSQL implementation failed (%v): %w",
+			primaryErr, err,
+		)
+	}
+	log.Printf(
+		"pg schema: using Cockroach-compatible SQL usage JSON helper "+
+			"after PL/pgSQL probe failed: %v",
+		primaryErr,
+	)
+	return nil
+}
+
 // EnsureSchema creates the schema (if needed), then runs
 // idempotent CREATE TABLE / ALTER TABLE statements. The schema
 // parameter is the unquoted schema name (e.g. "agentsview").
@@ -759,6 +902,14 @@ func EnsureSchema(
 	}
 	log.Printf(
 		"pg schema: core DDL step completed in %s",
+		time.Since(step).Round(time.Millisecond),
+	)
+	step = time.Now()
+	if err := ensureUsageJSONHelper(ctx, db); err != nil {
+		return err
+	}
+	log.Printf(
+		"pg schema: usage JSON helper step completed in %s",
 		time.Since(step).Round(time.Millisecond),
 	)
 
@@ -2212,6 +2363,13 @@ func pgHasIndex(ctx context.Context, db *sql.DB, name string) bool {
 func CheckSchemaCompat(
 	ctx context.Context, db *sql.DB,
 ) error {
+	if err := probeUsageJSONHelper(ctx, db); err != nil {
+		return fmt.Errorf(
+			"usage JSON helper missing or incompatible: %w",
+			err,
+		)
+	}
+
 	rows, err := db.QueryContext(ctx,
 		`SELECT updated_at, `+pgSessionCols+`
 		 FROM sessions LIMIT 0`)

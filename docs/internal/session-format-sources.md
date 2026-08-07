@@ -92,6 +92,76 @@ Grok section and remove the explicit registry exception in the coverage test.
 - **Usage and cost:** Assistant messages persist input, output, cache-creation,
   and cache-read tokens. Model IDs are present. No authoritative persisted USD
   cost field is consumed; Agentsview prices the tokens from its catalog.
+- **Server tool use (web search):** Anthropic bills server-side web search at
+  $10 per 1,000 requests on top of tokens and reports the count in
+  `message.usage.server_tool_use.web_search_requests`, which Claude Code
+  persists verbatim inside the stored usage object. Verified 2026-07-30
+  against two local web-search sessions: when the search is driven by the
+  **CLI's** `WebSearch` tool, every assistant record carries
+  `server_tool_use: {"web_search_requests": 0, "web_fetch_requests": 0}` —
+  the search itself runs in an out-of-band side call that is **not written to
+  the transcript at all**. The only surviving evidence is the tool-result
+  record's `toolUseResult` object
+  (`{query, results, durationSeconds, searchCount}`), whose `searchCount`
+  matched the wire-billed `web_search_requests` (1 == 1) in both sessions.
+  Agentsview therefore credits the assistant message that issued the
+  `WebSearch` `tool_use` with its linked result's `searchCount`, and uses the
+  message's own counter instead whenever that counter is nonzero (which is
+  what sessions driving the API directly report), so a search is never
+  counted twice. **Known undercount:** the side call's own token usage — tens
+  of thousands of input tokens on `claude-haiku-4-5` per search — is not
+  persisted anywhere in the transcript and is not recoverable, so it is
+  neither recorded nor estimated. `web_fetch_requests` is recorded when
+  present but is not priced. Data version 82 reparses existing Claude archives
+  so persisted side-call counts receive the flat fee.
+- **Subagent attribution:** Task-tool subagents are written to their own
+  transcripts under `<project>/<parent-session-id>/subagents/`, named
+  `agent-<id>.jsonl` (nested one more level under `workflows/<workflow-id>/`
+  for workflow tools) with an `agent-<id>.meta.json` sidecar. Every record in
+  those files carries `isSidechain: true` and the **parent's** `sessionId`,
+  and assistant records carry the same full per-message `usage` object as a
+  root transcript, so subagent spend is real billed spend that the parent's
+  own file does not record. Agentsview ingests each file as its own session
+  (id = filename stem) linked to the parent with
+  `relationship_type = 'subagent'`, and attributes it to the parent at
+  presentation time only — `session usage` and `?subagents=true` combine them,
+  while daily and activity aggregates keep counting the child sessions
+  directly. Fork branches created inside a subagent subtree remain delegated
+  usage and are included in that presentation-time total; root-level forks are
+  still traversed only to discover nested subagents. Verified 2026-07-30
+  against wire-captured billing for three local Claude Code sessions: parents
+  with subagents under-reported cost by 45-77% before the presentation-time
+  rollup. Reverified 2026-07-30 with Claude Code 2.1.220: a streaming tool turn
+  can persist several assistant records with one `(message.id, requestId)` pair
+  while `usage.output_tokens` grows from an early partial count to the final
+  billed count (observed examples included `5` then `631` and `6` then `798`).
+  Usage reporting therefore keeps the greatest output-token snapshot for each
+  message/request identity across the included sessions, attributes it to the
+  earliest transcript, and then applies cross-session replay deduplication.
+  Session-owned dimensions and display metadata also come from that earliest
+  transcript. Numeric-string token values remain accepted as compatibility
+  input and are normalized before snapshot comparison on every backend. The
+  SQLite and PostgreSQL read the exact top-level token path and nested
+  server-tool path even in supported malformed legacy JSON. Reverified
+  2026-08-06 with end-truncated objects containing earlier nested decoy keys;
+  PostgreSQL and its Cockroach-compatible helper repair the truncated object
+  before extracting the requested path, while irreparable input contributes no
+  counter rather than an ambiguously scoped value.
+  Equal snapshots are selected deterministically by timestamp, session id, and
+  message ordinal; equivalent RFC3339 spellings use the semantic tie-breakers
+  rather than raw timestamp text. Reverified 2026-08-04 against the
+  cross-backend stored-usage fixtures.
+  Replaying the three captured sessions after this correction matched all
+  transcript-visible output; each full-wire total remained 15 output tokens
+  higher because Claude Code's separate session-title request is not persisted.
+  Reverified 2026-08-06 that session-summary export loads matching snapshots
+  across excluded sessions and pagination before applying the same snapshot,
+  attribution, web-search, and generic deduplication rules. These accounting
+  semantics are exposed by usage, activity, and session-summary schema version
+  5 and reporting schema version 2; reporting version 1 retains its frozen
+  first-seen, token-only semantics. Reverified 2026-08-06 that DuckDB records a
+  web-search-only flat fee as computed pricing provenance, so combining it with
+  a provider-reported cost is labeled `mixed` like the SQLite archive.
 - **Agentsview:** `internal/parser/claude.go` and
   `internal/parser/claude_provider.go`; local observations and fixtures are
   the implementation evidence for fields not documented upstream. Reverified

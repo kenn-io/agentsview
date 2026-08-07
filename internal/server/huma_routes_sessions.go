@@ -370,19 +370,23 @@ func (s *Server) humaSessionTiming(
 }
 
 type sessionUsageResponse struct {
-	SessionID           string                          `json:"session_id"`
-	Agent               string                          `json:"agent"`
-	Project             string                          `json:"project"`
-	TotalOutputTokens   int                             `json:"total_output_tokens"`
-	PeakContextTokens   int                             `json:"peak_context_tokens"`
-	HasTokenData        bool                            `json:"has_token_data"`
-	Cost                money.Money                     `json:"cost"`
-	HasCost             bool                            `json:"has_cost"`
+	SessionID         string      `json:"session_id"`
+	Agent             string      `json:"agent"`
+	Project           string      `json:"project"`
+	TotalOutputTokens int         `json:"total_output_tokens"`
+	PeakContextTokens int         `json:"peak_context_tokens"`
+	HasTokenData      bool        `json:"has_token_data"`
+	Cost              money.Money `json:"cost"`
+	HasCost           bool        `json:"has_cost"`
+	// CostUSD is a deprecated compatibility alias for
+	// Cost.Microdollars/1e6; see db.SessionUsage.CostUSD.
+	CostUSD             *float64                        `json:"cost_usd,omitempty"`
 	CostSource          export.CostSource               `json:"cost_source,omitempty"`
 	AICredits           float64                         `json:"ai_credits,omitempty"`
 	Models              []string                        `json:"models"`
 	UnpricedModels      []string                        `json:"unpriced_models"`
 	BreakdownCount      int                             `json:"breakdown_count"`
+	SubagentCount       int                             `json:"subagent_count,omitempty"`
 	Breakdown           []sessionUsageBreakdownResponse `json:"breakdown"`
 	ServerRunning       bool                            `json:"server_running"`
 	RollupCost          *money.Money                    `json:"rollup_cost,omitempty"`
@@ -395,6 +399,7 @@ type sessionUsageInput struct {
 	ID        string `path:"id" required:"true" doc:"Session ID"`
 	Breakdown bool   `query:"breakdown" doc:"Include per-step breakdown rows"`
 	Rollup    bool   `query:"rollup" doc:"Include explicit subagent descendant costs"`
+	Subagents bool   `query:"subagents" doc:"Fold subagent descendant usage into the totals, models, and breakdown"`
 }
 
 type sessionUsageBreakdownResponse struct {
@@ -404,10 +409,12 @@ type sessionUsageBreakdownResponse struct {
 	Label                    string      `json:"label"`
 	Timestamp                string      `json:"timestamp"`
 	Model                    string      `json:"model"`
+	SubagentSessionID        string      `json:"subagent_session_id,omitempty"`
 	InputTokens              int         `json:"input_tokens"`
 	OutputTokens             int         `json:"output_tokens"`
 	CacheCreationInputTokens int         `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     int         `json:"cache_read_input_tokens"`
+	WebSearchRequests        int         `json:"web_search_requests,omitempty"`
 	Cost                     money.Money `json:"cost"`
 	HasCost                  bool        `json:"has_cost"`
 }
@@ -444,10 +451,12 @@ func newSessionUsageHumaResponse(usage *db.SessionUsage) sessionUsageResponse {
 			Label:                    entry.Label,
 			Timestamp:                entry.Timestamp,
 			Model:                    entry.Model,
+			SubagentSessionID:        entry.SubagentSessionID,
 			InputTokens:              entry.InputTokens,
 			OutputTokens:             entry.OutputTokens,
 			CacheCreationInputTokens: entry.CacheCreationInputTokens,
 			CacheReadInputTokens:     entry.CacheReadInputTokens,
+			WebSearchRequests:        entry.WebSearchRequests,
 			Cost:                     entry.Cost,
 			HasCost:                  entry.HasCost,
 		})
@@ -461,11 +470,13 @@ func newSessionUsageHumaResponse(usage *db.SessionUsage) sessionUsageResponse {
 		HasTokenData:      usage.HasTokenData,
 		Cost:              usage.Cost,
 		HasCost:           usage.HasCost,
+		CostUSD:           usage.CostUSD,
 		CostSource:        usage.CostSource,
 		AICredits:         usage.AICredits,
 		Models:            usage.Models,
 		UnpricedModels:    unpricedModels,
 		BreakdownCount:    usage.BreakdownCount,
+		SubagentCount:     usage.SubagentCount,
 		Breakdown:         breakdown,
 		ServerRunning:     true,
 	}
@@ -495,7 +506,18 @@ func (s *Server) humaSessionUsage(
 		body.RollupSubagentCount = &rollup.SubagentCount
 		return &jsonOutput[sessionUsageResponse]{Body: body}, nil
 	}
-	usage, err := s.db.GetSessionUsage(ctx, in.ID, in.Breakdown)
+	// `subagents` is additive: it changes the totals, models and breakdown
+	// in place rather than adding parallel rollup_* fields, so a caller
+	// (the CLI) gets one combined document. `rollup` above keeps its own
+	// shape because the SPA reads those fields.
+	var usage *db.SessionUsage
+	var err error
+	if in.Subagents {
+		usage, err = service.SessionUsageWithSubagents(
+			ctx, s.db, in.ID, in.Breakdown)
+	} else {
+		usage, err = s.db.GetSessionUsage(ctx, in.ID, in.Breakdown)
+	}
 	if err != nil {
 		if handled := handleHumaContextError(err); handled != nil {
 			return nil, handled

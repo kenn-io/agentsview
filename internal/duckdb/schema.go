@@ -13,11 +13,10 @@ import (
 // SchemaVersion is the version of the DuckDB mirror schema created by
 // createSchema. The mirror schema is create-only: there are no in-place
 // migrations between versions. A version mismatch means the mirror file
-// must be rebuilt with 'agentsview duckdb push --full'. v8 adds
-// sessions.source_archive_id and the source_worktree_project_mappings
-// mirror table on top of the schema-v7 mainline shape. v9 adds the
-// sessions.session_kind and messages.prompt_source columns.
-const SchemaVersion = 9
+// must be rebuilt with 'agentsview duckdb push --full'. v10 adds the usage
+// accounting rebuild boundary on top of schema v9's session launch and prompt
+// provenance columns.
+const SchemaVersion = 10
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -745,7 +744,7 @@ func EnsureSchema(ctx context.Context, db *sql.DB) error {
 }
 
 // createSchema creates the DuckDB mirror schema on a fresh file. Mirror
-// schema v4 has no in-place migrations: an existing file whose shape or
+// schema v10 has no in-place migrations: an existing file whose shape or
 // version does not match is rejected by CheckSchemaCompat and must be
 // rebuilt with 'agentsview duckdb push --full' rather than patched here.
 func createSchema(ctx context.Context, db *sql.DB) error {

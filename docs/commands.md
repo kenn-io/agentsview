@@ -542,6 +542,10 @@ If the AgentsView server is already running, the command reads the current
 database state. If no server is running, it performs an on-demand sync for the
 requested session first.
 
+As of 0.40.0, the reported totals include every subagent transcript the session
+spawned, so the cost matches what the session actually spent. `token-use` has no
+opt-out; use `agentsview session usage <id> --own-only` for own-session numbers.
+
 **Example:**
 
 ```bash
@@ -558,10 +562,15 @@ agentsview token-use 550e8400-e29b-41d4-a716-446655440000
   "has_token_data": true,
   "cost": {"microdollars": 2410000},
   "has_cost": true,
+  "cost_usd": 2.41,
   "models": ["claude-opus-4-7"],
   "server_running": false
 }
 ```
+
+`cost_usd` is a deprecated compatibility alias for `cost.microdollars / 1e6`
+and will be removed in a future release; new consumers should read
+`cost.microdollars` directly.
 
 See [`agentsview session usage`](/session-api/#agentsview-session-usage) for the
 full field reference and exit-code contract.
@@ -947,7 +956,7 @@ agentsview export sessions --all --format ndjson --project agentsview
 The JSON top level has `schema_version`, `database_id`, `cursor`, `pricing`,
 `projects`, and `sessions`. NDJSON writes the same metadata as the first line,
 then one session row per following line. Current builds emit
-`schema_version: 2`; see [Session Export](/session-export/#versioning) for the
+`schema_version: 5`; see [Session Export](/session-export/#versioning) for the
 v1 and transitional 0.38 release history. The default and maximum page size is
 `db.MaxSessionLimit`, currently 500.
 
@@ -965,7 +974,7 @@ ______________________________________________________________________
 
 Export canonical UTC-hour activity and usage documents, coherent UTC-day
 snapshots, or compact date-range digests from the local archive. See
-[Reporting Export](/reporting-export/) for the v1 wire schema, quiet-hour
+[Reporting Export](/reporting-export/) for the v2 wire schema, quiet-hour
 semantics, snapshot guarantee, and digest rules.
 
 ```bash
@@ -977,7 +986,7 @@ agentsview export digest --from 2026-06-28 --to 2026-07-27
 Hour and date keys must be exact, zero-padded UTC values. Open and future hours
 are rejected. The current UTC date contains only closed hours and has no day
 digest. Digest ranges are inclusive and limited to 31 dates. Integrations
-should validate the emitted `schema_version: 1` and content digest before
+should validate the emitted `schema_version: 2` and content digest before
 accepting a document.
 
 ______________________________________________________________________
@@ -999,7 +1008,12 @@ agentsview session sync <path-or-id>     # parse + insert
 agentsview session watch <id>            # NDJSON event stream
 agentsview session search <pattern>      # content search across sessions
 agentsview session usage <id>            # token usage and cost estimate
+agentsview session usage <id> --own-only # exclude subagent transcripts
 ```
+
+`session usage` attributes each subagent transcript's spend to the session that
+spawned it, so a parent that delegated most of its work still reports the full
+cost. `--own-only` restores the older own-session output.
 
 `session search` supports substring (default), `--regex`, `--fts`, `--semantic`,
 and `--hybrid` modes. Semantic and hybrid results can be scoped with

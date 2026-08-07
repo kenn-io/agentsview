@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ const (
 	reportingGoldenProject      = "project \"雪\" \\\\ fixture"
 	reportingGoldenAgent        = "agent \"α\" \\\\ interactive"
 	reportingGoldenPrimaryModel = "model \"雪\" \\\\ survivor"
-	reportingGoldenDroppedModel = "model duplicate-later"
+	reportingGoldenLatestModel  = "model duplicate-later"
 	reportingGoldenStandalone   = "model standalone usage"
 	reportingGoldenUsageOnly    = "model usage-only α"
 	reportingGoldenUsageProject = "project usage-only 雪"
@@ -147,38 +148,25 @@ func TestExportDigestRejectsReversedRange(t *testing.T) {
 	assert.Contains(t, err.Error(), "--from must not be after --to")
 }
 
-func TestExportReportingSchemaVersionOne(t *testing.T) {
+func TestExportReportingSchemaVersions(t *testing.T) {
 	seedExportReportingArchive(t)
 	now := time.Date(2026, 7, 29, 14, 37, 0, 0, time.UTC)
 	tests := []struct {
-		name     string
-		defaults []string
-		explicit []string
+		name   string
+		common []string
 	}{
 		{
-			name:     "hour",
-			defaults: []string{"export", "hour", "2026-07-28-10"},
-			explicit: []string{
-				"export", "hour", "--schema-version", "1",
-				"2026-07-28-10",
-			},
+			name:   "hour",
+			common: []string{"export", "hour", "2026-07-28-10"},
 		},
 		{
-			name:     "day",
-			defaults: []string{"export", "day", "2026-07-28"},
-			explicit: []string{
-				"export", "day", "--schema-version", "1", "2026-07-28",
-			},
+			name:   "day",
+			common: []string{"export", "day", "2026-07-28"},
 		},
 		{
 			name: "digest",
-			defaults: []string{
+			common: []string{
 				"export", "digest",
-				"--from", "2026-07-28",
-				"--to", "2026-07-28",
-			},
-			explicit: []string{
-				"export", "digest", "--schema-version", "1",
 				"--from", "2026-07-28",
 				"--to", "2026-07-28",
 			},
@@ -188,18 +176,29 @@ func TestExportReportingSchemaVersionOne(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			defaultOut, defaultErrOut, err := executeExportSessionsCommand(
-				newExportReportingTestRoot(now), tt.defaults...,
+				newExportReportingTestRoot(now), tt.common...,
 			)
 			require.NoError(t, err)
 			assert.Empty(t, defaultErrOut)
 
-			explicitOut, explicitErrOut, err := executeExportSessionsCommand(
-				newExportReportingTestRoot(now), tt.explicit...,
+			currentArgs := append([]string(nil), tt.common...)
+			currentArgs = append(currentArgs, "--schema-version", "2")
+			currentOut, currentErrOut, err := executeExportSessionsCommand(
+				newExportReportingTestRoot(now), currentArgs...,
 			)
 			require.NoError(t, err)
-			assert.Empty(t, explicitErrOut)
-			assert.Equal(t, defaultOut, explicitOut)
-			assert.Contains(t, explicitOut, `"schema_version":1`)
+			assert.Empty(t, currentErrOut)
+			assert.Equal(t, defaultOut, currentOut)
+			assert.Contains(t, currentOut, `"schema_version":2`)
+
+			legacyArgs := append([]string(nil), tt.common...)
+			legacyArgs = append(legacyArgs, "--schema-version", "1")
+			legacyOut, legacyErrOut, err := executeExportSessionsCommand(
+				newExportReportingTestRoot(now), legacyArgs...,
+			)
+			require.NoError(t, err)
+			assert.Empty(t, legacyErrOut)
+			assert.Contains(t, legacyOut, `"schema_version":1`)
 		})
 	}
 }
@@ -213,20 +212,20 @@ func TestExportReportingSchemaVersionRejectsBeforeOpen(t *testing.T) {
 		{
 			name: "hour",
 			args: []string{
-				"export", "hour", "--schema-version", "2",
+				"export", "hour", "--schema-version", "3",
 				"2026-07-28-10",
 			},
 		},
 		{
 			name: "day",
 			args: []string{
-				"export", "day", "--schema-version", "2", "2026-07-28",
+				"export", "day", "--schema-version", "3", "2026-07-28",
 			},
 		},
 		{
 			name: "digest",
 			args: []string{
-				"export", "digest", "--schema-version", "2",
+				"export", "digest", "--schema-version", "3",
 				"--from", "2026-07-28",
 				"--to", "2026-07-28",
 			},
@@ -251,7 +250,7 @@ func TestExportReportingSchemaVersionRejectsBeforeOpen(t *testing.T) {
 				newExportReportingTestRootWithDeps(deps), tt.args...,
 			)
 			require.EqualError(
-				t, err, "unsupported reporting schema version 2",
+				t, err, "unsupported reporting schema version 3",
 			)
 			assert.False(t, opened)
 			assert.Empty(t, stdout)
@@ -456,10 +455,10 @@ func seedExportReportingArchive(t *testing.T) {
 }
 
 func TestExportReportingGolden(t *testing.T) {
-	got, emptyDay := buildExportReportingGoldenDocuments(t)
-	repeated, repeatedEmptyDay := buildExportReportingGoldenDocuments(t)
+	got, emptyDays := buildExportReportingGoldenDocuments(t)
+	repeated, repeatedEmptyDays := buildExportReportingGoldenDocuments(t)
 	require.Equal(t, got, repeated, "independent fixture seeds must be byte-identical")
-	require.Equal(t, emptyDay, repeatedEmptyDay)
+	require.Equal(t, emptyDays, repeatedEmptyDays)
 
 	base := filepath.Join("testdata", "reporting")
 	manifest := reportingGoldenManifest(got)
@@ -487,25 +486,36 @@ func TestExportReportingGolden(t *testing.T) {
 		assert.Equal(t, string(wantManifest), string(manifest))
 	}
 
+	var legacyHour export.ReportingHour
+	require.NoError(t, json.Unmarshal(got["hour-v1.json"], &legacyHour))
+	finalLegacyHour, canonicalLegacyHour, err := export.FinalizeReportingHour(legacyHour)
+	require.NoError(t, err)
+	assert.Equal(t, legacyHour, finalLegacyHour)
+	assert.Equal(t, string(canonicalLegacyHour)+"\n", string(got["hour-v1.json"]))
+	require.Len(t, legacyHour.Usage.ByModel, 3)
+	assert.Equal(t, reportingGoldenPrimaryModel, legacyHour.Usage.ByModel[0].Key)
+	assert.Equal(t, int64(15_000), legacyHour.Usage.Totals.Cost.Microdollars)
+
 	var hour export.ReportingHour
-	require.NoError(t, json.Unmarshal(got["hour-v1.json"], &hour))
+	require.NoError(t, json.Unmarshal(got["hour-v2.json"], &hour))
 	finalHour, canonicalHour, err := export.FinalizeReportingHour(hour)
 	require.NoError(t, err)
 	assert.Equal(t, hour, finalHour)
-	assert.Equal(t, string(canonicalHour)+"\n", string(got["hour-v1.json"]))
+	assert.Equal(t, string(canonicalHour)+"\n", string(got["hour-v2.json"]))
 
 	var day export.ReportingDay
-	require.NoError(t, json.Unmarshal(got["day-v1.json"], &day))
+	require.NoError(t, json.Unmarshal(got["day-v2.json"], &day))
 	finalDay, canonicalDay, err := export.FinalizeReportingDay(day)
 	require.NoError(t, err)
 	assert.Equal(t, day, finalDay)
-	assert.Equal(t, string(canonicalDay)+"\n", string(got["day-v1.json"]))
+	assert.Equal(t, string(canonicalDay)+"\n", string(got["day-v2.json"]))
 	require.Equal(t, day.Hours[11], hour)
 	assert.InDelta(t, 2, day.Hours[10].Activity.Totals.AgentMinutes, 0.0001)
 	assert.InDelta(t, 3, hour.Activity.Totals.AgentMinutes, 0.0001)
 	require.Len(t, hour.Usage.ByModel, 3)
-	assert.Equal(t, reportingGoldenPrimaryModel, hour.Usage.ByModel[0].Key)
-	assert.NotEqual(t, reportingGoldenDroppedModel, hour.Usage.ByModel[0].Key)
+	assert.Equal(t, reportingGoldenLatestModel, hour.Usage.ByModel[0].Key)
+	assert.Equal(t, int64(71_000), hour.Usage.Totals.Cost.Microdollars)
+	assert.Equal(t, int64(62_000), hour.Activity.Totals.Cost.Microdollars)
 	assert.Equal(t, reportingGoldenStandalone, hour.Usage.ByModel[1].Key)
 	assert.Equal(t, reportingGoldenUsageOnly, hour.Usage.ByModel[2].Key)
 	require.Len(t, hour.Usage.ByAgent, 3)
@@ -540,18 +550,18 @@ func TestExportReportingGolden(t *testing.T) {
 	assert.Empty(t, quiet.Usage.ByModel)
 
 	var digest export.ReportingDigest
-	require.NoError(t, json.Unmarshal(got["digest-v1.json"], &digest))
+	require.NoError(t, json.Unmarshal(got["digest-v2.json"], &digest))
 	require.Len(t, digest.Days, 2)
 	assertDigestDayMatchesReportingDay(t, digest.Days[1], day)
 	var empty export.ReportingDay
-	require.NoError(t, json.Unmarshal(emptyDay, &empty))
+	require.NoError(t, json.Unmarshal(emptyDays[2], &empty))
 	assert.False(t, empty.HasData)
 	assertDigestDayMatchesReportingDay(t, digest.Days[0], empty)
 }
 
 func buildExportReportingGoldenDocuments(
 	t *testing.T,
-) (map[string][]byte, []byte) {
+) (map[string][]byte, map[int][]byte) {
 	t.Helper()
 	seedExportReportingGoldenArchive(t)
 	now := time.Date(2026, 7, 29, 12, 34, 0, 0, time.UTC)
@@ -564,21 +574,26 @@ func buildExportReportingGoldenDocuments(
 		require.Empty(t, stderr)
 		return []byte(stdout)
 	}
-	return map[string][]byte{
-			"hour-v1.json": run(
-				"export", "hour", "--schema-version", "1", "2026-07-28-11",
-			),
-			"day-v1.json": run(
-				"export", "day", "--schema-version", "1", "2026-07-28",
-			),
-			"digest-v1.json": run(
-				"export", "digest", "--schema-version", "1",
-				"--from", "2026-07-27",
-				"--to", "2026-07-28",
-			),
-		}, run(
-			"export", "day", "--schema-version", "1", "2026-07-27",
+	documents := make(map[string][]byte, 6)
+	emptyDays := make(map[int][]byte, 2)
+	for _, version := range []int{1, 2} {
+		versionValue := strconv.Itoa(version)
+		documents[fmt.Sprintf("hour-v%d.json", version)] = run(
+			"export", "hour", "--schema-version", versionValue, "2026-07-28-11",
 		)
+		documents[fmt.Sprintf("day-v%d.json", version)] = run(
+			"export", "day", "--schema-version", versionValue, "2026-07-28",
+		)
+		documents[fmt.Sprintf("digest-v%d.json", version)] = run(
+			"export", "digest", "--schema-version", versionValue,
+			"--from", "2026-07-27",
+			"--to", "2026-07-28",
+		)
+		emptyDays[version] = run(
+			"export", "day", "--schema-version", versionValue, "2026-07-27",
+		)
+	}
+	return documents, emptyDays
 }
 
 func seedExportReportingGoldenArchive(t *testing.T) {
@@ -597,7 +612,7 @@ func seedExportReportingGoldenArchive(t *testing.T) {
 			OutputPerMTok: money.MustParseDollars("15"),
 		},
 		{
-			ModelPattern:  reportingGoldenDroppedModel,
+			ModelPattern:  reportingGoldenLatestModel,
 			InputPerMTok:  money.MustParseDollars("30"),
 			OutputPerMTok: money.MustParseDollars("60"),
 		},
@@ -642,7 +657,7 @@ func seedExportReportingGoldenArchive(t *testing.T) {
 			ClaudeMessageID: "fixture-duplicate-message",
 			ClaudeRequestID: "fixture-duplicate-request",
 			TokenUsage: json.RawMessage(
-				`{"input_tokens":1000,"output_tokens":200,"cache_creation_input_tokens":30,"cache_read_input_tokens":40}`,
+				`{"input_tokens":1000,"output_tokens":200,"cache_creation_input_tokens":30,"cache_read_input_tokens":40,"server_tool_use":{"web_search_requests":2}}`,
 			),
 		},
 	}))
@@ -662,10 +677,12 @@ func seedExportReportingGoldenArchive(t *testing.T) {
 		Role:            "assistant",
 		Content:         "duplicate",
 		Timestamp:       "2026-07-28T11:10:00Z",
-		Model:           reportingGoldenDroppedModel,
+		Model:           reportingGoldenLatestModel,
 		ClaudeMessageID: "fixture-duplicate-message",
 		ClaudeRequestID: "fixture-duplicate-request",
-		TokenUsage:      json.RawMessage(`{"input_tokens":9999,"output_tokens":8888}`),
+		TokenUsage: json.RawMessage(
+			`{"input_tokens":1000,"output_tokens":200,"cache_creation_input_tokens":30,"cache_read_input_tokens":40}`,
+		),
 	}}))
 	require.NoError(t, database.UpsertSession(db.Session{
 		ID:           "fixture-usage-only",

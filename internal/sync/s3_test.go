@@ -505,3 +505,143 @@ func TestProcessS3ClaudeSubagentPreservesParentLayout(t *testing.T) {
 	assert.Equal(t, "subagent", sess.RelationshipType)
 	assert.Equal(t, path, derefString(sess.FilePath))
 }
+
+// TestSyncClaudeS3SubagentTranscriptsContextPreservesStoredParentNamespace
+// covers the S3 half of the on-demand subagent refresh behind `session usage`.
+// The stored parent remains sufficient to namespace a newly discovered child
+// after its original S3 root is removed from the current configuration.
+func TestSyncClaudeS3SubagentTranscriptsContextPreservesStoredParentNamespace(
+	t *testing.T,
+) {
+	database := openTestDB(t)
+	const root = "s3://bucket/laptop/raw/claude"
+	parentPath := root + "/-home-proj/parent-uuid.jsonl"
+	childPath := root + "/-home-proj/parent-uuid/subagents/agent-worker1.jsonl"
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUserWithSessionID(
+			"2026-05-20T10:01:00Z", "do the subtask", "parent-uuid").
+		AddClaudeAssistant("2026-05-20T10:01:30Z", "subtask done").
+		String()
+
+	oldFetch := fetchS3Object
+	oldStat := statClaudeS3Session
+	t.Cleanup(func() {
+		fetchS3Object = oldFetch
+		statClaudeS3Session = oldStat
+	})
+	fetchS3Object = func(got string) (io.ReadCloser, error) {
+		if got != childPath {
+			return nil, missingS3ObjectError()
+		}
+		return io.NopCloser(strings.NewReader(content)), nil
+	}
+	statClaudeS3Session = func(got string) (parser.S3Object, error) {
+		if got != childPath {
+			return parser.S3Object{}, missingS3ObjectError()
+		}
+		return parser.S3Object{
+			URI:          childPath,
+			Size:         int64(len(content)),
+			LastModified: time.Date(2026, 5, 20, 10, 2, 0, 0, time.UTC),
+			Fingerprint:  "s3-meta:agent-worker1",
+		}, nil
+	}
+
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:       "laptop~parent-uuid",
+		Project:  "proj",
+		Machine:  "laptop",
+		Agent:    "claude",
+		FilePath: &parentPath,
+	}))
+	engine := NewEngine(database, EngineConfig{
+		Machine:   "central",
+		Ephemeral: true,
+	})
+	require.NoError(t, engine.SyncClaudeS3SubagentTranscriptsContext(
+		context.Background(), "laptop~parent-uuid", []string{childPath}))
+
+	child, err := database.GetSessionFull(
+		context.Background(), "laptop~agent-worker1")
+	require.NoError(t, err)
+	require.NotNil(t, child, "subagent transcript was not ingested")
+	assert.Equal(t, "proj", child.Project,
+		"the child inherits the stored parent's project")
+	assert.Equal(t, "laptop", child.Machine,
+		"the child preserves the stored parent's machine namespace")
+	require.NotNil(t, child.ParentSessionID)
+	assert.Equal(t, "laptop~parent-uuid", *child.ParentSessionID)
+	assert.Equal(t, childPath, derefString(child.FilePath))
+	rawChild, err := database.GetSessionFull(
+		context.Background(), "agent-worker1")
+	require.NoError(t, err)
+	assert.Nil(t, rawChild, "the child must not collide with a local session")
+}
+
+func TestSyncClaudeS3SubagentTranscriptsContextUsesPrefixedChildProject(
+	t *testing.T,
+) {
+	database := openTestDB(t)
+	const root = "s3://bucket/laptop/raw/claude"
+	childPath := root +
+		"/-home-proj/parent-uuid/subagents/agent-worker1.jsonl"
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUserWithSessionID(
+			"2026-05-20T10:01:00Z", "do the subtask", "parent-uuid").
+		AddClaudeAssistant("2026-05-20T10:01:30Z", "subtask done").
+		String()
+
+	oldFetch := fetchS3Object
+	oldStat := statClaudeS3Session
+	t.Cleanup(func() {
+		fetchS3Object = oldFetch
+		statClaudeS3Session = oldStat
+	})
+	fetchS3Object = func(got string) (io.ReadCloser, error) {
+		require.Equal(t, childPath, got)
+		return io.NopCloser(strings.NewReader(content)), nil
+	}
+	statClaudeS3Session = func(got string) (parser.S3Object, error) {
+		require.Equal(t, childPath, got)
+		return parser.S3Object{
+			URI:          childPath,
+			Size:         int64(len(content)),
+			LastModified: time.Date(2026, 5, 20, 10, 2, 0, 0, time.UTC),
+			Fingerprint:  "s3-meta:agent-worker1",
+		}, nil
+	}
+
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:      "agent-worker1",
+		Project: "localproject",
+		Machine: "local",
+		Agent:   "claude",
+	}))
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:      "laptop~agent-worker1",
+		Project: "remoteproject",
+		Machine: "laptop",
+		Agent:   "claude",
+	}))
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {root},
+		},
+		Machine:   "central",
+		Ephemeral: true,
+	})
+
+	require.NoError(t, engine.SyncClaudeS3SubagentTranscriptsContext(
+		context.Background(), "laptop~parent-uuid", []string{childPath}))
+
+	remoteChild, err := database.GetSessionFull(
+		context.Background(), "laptop~agent-worker1")
+	require.NoError(t, err)
+	require.NotNil(t, remoteChild)
+	assert.Equal(t, "remoteproject", remoteChild.Project)
+	localChild, err := database.GetSessionFull(
+		context.Background(), "agent-worker1")
+	require.NoError(t, err)
+	require.NotNil(t, localChild)
+	assert.Equal(t, "localproject", localChild.Project)
+}

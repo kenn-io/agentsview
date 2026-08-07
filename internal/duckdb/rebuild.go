@@ -81,7 +81,7 @@ func ensureMirrorWorkDir(path string) (string, error) {
 // rebuildMirror builds a fresh DuckDB mirror file from scratch in a
 // temporary file inside the mirror's work directory, then atomically swaps
 // it over path. It is
-// the only way a schema v8 mirror is created or repaired: unlike Sync.Push,
+// the only way a schema v9 mirror is created or repaired: unlike Sync.Push,
 // it never touches an existing mirror file in place, so a rebuild that
 // fails at any point leaves the previous mirror (if any) fully intact.
 func rebuildMirror(
@@ -301,7 +301,7 @@ func captureRebuildSnapshot(ctx context.Context, local *db.DB) (rebuildSnapshot,
 	}, nil
 }
 
-// buildMirrorInto creates schema v4 on a fresh Sync's DuckDB file, pushes
+// buildMirrorInto creates schema v9 on a fresh Sync's DuckDB file, pushes
 // every in-scope session plus the mirror's global tables, records mirror
 // metadata, and checkpoints so the on-disk file reflects every write.
 //

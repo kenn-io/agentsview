@@ -449,6 +449,47 @@ func discoverClaudeS3(root string) []DiscoveredFile {
 	})
 }
 
+// claudeS3SubagentTranscriptPaths lists candidate subagent transcript objects,
+// mirroring the local walk in ClaudeSubagentTranscriptPaths. A root session
+// lists its own subagents prefix; a subagent lists the enclosing root's prefix
+// so nested descendants can be linked before relationship traversal scopes the
+// result. A listing error reads as no subagents, matching the local walk
+// swallowing filesystem errors: the caller's usage query degrades to stale
+// delegated totals instead of failing.
+func claudeS3SubagentTranscriptPaths(sessionPath string) []string {
+	base := sessionPath[strings.LastIndex(sessionPath, "/")+1:]
+	stem := strings.TrimSuffix(base, ".jsonl")
+	if stem == "" {
+		return nil
+	}
+	prefix := strings.TrimSuffix(sessionPath, ".jsonl") + "/subagents"
+	if strings.HasPrefix(stem, "agent-") {
+		const marker = "/subagents/"
+		idx := strings.LastIndex(sessionPath, marker)
+		if idx < 0 {
+			return nil
+		}
+		prefix = sessionPath[:idx] + "/subagents"
+	}
+	objects, err := listS3Objects(prefix)
+	if err != nil {
+		return nil
+	}
+	var paths []string
+	for _, obj := range objects {
+		if obj.URI == sessionPath {
+			continue
+		}
+		name := obj.URI[strings.LastIndex(obj.URI, "/")+1:]
+		if strings.HasPrefix(name, "agent-") &&
+			strings.HasSuffix(name, ".jsonl") {
+			paths = append(paths, obj.URI)
+		}
+	}
+	sort.Strings(paths)
+	return paths
+}
+
 // keepClaudeS3Session selects Claude transcript objects: a top-level
 // <project>/<uuid>.jsonl (excluding agent-* names and any subagents path), or a
 // subagent under .../subagents/.../agent-*.jsonl.

@@ -771,17 +771,16 @@ func TestPushFailsClosedWhenMirrorLosesSentinel(t *testing.T) {
 }
 
 // TestPushRebuildsOverOldSchemaVersionMirror pins the recognition boundary
-// from the other side: a real agentsview mirror whose recorded schema
-// version predates this build is still recognized (it carries the
-// agentsview sentinel) and must rebuild normally rather than fail the
-// overwrite guard.
+// from the other side: a schema-7 mirror predates complete web-search
+// accounting but is still recognized (it carries the agentsview sentinel)
+// and must rebuild normally rather than fail the overwrite guard.
 func TestPushRebuildsOverOldSchemaVersionMirror(t *testing.T) {
 	ctx := context.Background()
 	local, path := newPushFixture(t, 1)
 	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
 	require.NoError(t, err)
 
-	setMirrorMetadataValue(t, path, schemaVersionMetadataKey, "1")
+	setMirrorMetadataValue(t, path, schemaVersionMetadataKey, "7")
 
 	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
 	require.NoError(t, err)

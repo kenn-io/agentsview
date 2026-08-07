@@ -154,6 +154,14 @@ func (c *pushAliasRoutingConn) QueryContext(
 ) (driver.Rows, error) {
 	normalized := strings.ToLower(query)
 	switch {
+	case strings.Contains(normalized, "agentsview_json_integer"):
+		return &pushAliasRoutingRows{
+			columns: []string{
+				"output", "web_search", "malformed",
+				"malformed_scoped_output", "malformed_scoped_web_search",
+			},
+			values: [][]driver.Value{{"42", "2", "7", "42", "2"}},
+		}, nil
 	case strings.Contains(normalized, "select coalesce(max(data_version), 0) from sessions"):
 		return &pushAliasRoutingRows{
 			columns: []string{"coalesce"},

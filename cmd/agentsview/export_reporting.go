@@ -49,8 +49,9 @@ func newExportHourCommand(deps exportReportingDeps) *cobra.Command {
 			day, err := database.ExportReportingDay(
 				cmd.Context(),
 				db.ReportingExportOptions{
-					Date: hourStart.Truncate(24 * time.Hour),
-					Now:  now,
+					Date:          hourStart.Truncate(24 * time.Hour),
+					Now:           now,
+					SchemaVersion: *schemaVersion,
 				},
 			)
 			if err != nil {
@@ -92,7 +93,9 @@ func newExportDayCommand(deps exportReportingDeps) *cobra.Command {
 			defer cleanup()
 			day, err := database.ExportReportingDay(
 				cmd.Context(),
-				db.ReportingExportOptions{Date: date, Now: deps.now()},
+				db.ReportingExportOptions{
+					Date: date, Now: deps.now(), SchemaVersion: *schemaVersion,
+				},
 			)
 			if err != nil {
 				return err
@@ -150,7 +153,9 @@ func newExportDigestCommand(deps exportReportingDeps) *cobra.Command {
 			for date := from; !date.After(to); date = date.Add(24 * time.Hour) {
 				day, err := database.ExportReportingDay(
 					cmd.Context(),
-					db.ReportingExportOptions{Date: date, Now: now},
+					db.ReportingExportOptions{
+						Date: date, Now: now, SchemaVersion: *schemaVersion,
+					},
 				)
 				if err != nil {
 					return err
@@ -168,7 +173,7 @@ func newExportDigestCommand(deps exportReportingDeps) *cobra.Command {
 				})
 			}
 			return writeCanonicalReportingDocument(cmd, export.ReportingDigest{
-				SchemaVersion: export.ReportingSchemaVersion,
+				SchemaVersion: *schemaVersion,
 				From:          fromValue,
 				To:            toValue,
 				Days:          days,
@@ -197,7 +202,7 @@ func bindReportingSchemaVersion(command *cobra.Command) *int {
 }
 
 func validateReportingSchemaVersion(version int) error {
-	if version != export.ReportingSchemaVersion {
+	if !export.IsSupportedReportingSchemaVersion(version) {
 		return fmt.Errorf("unsupported reporting schema version %d", version)
 	}
 	return nil

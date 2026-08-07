@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -31,15 +33,23 @@ type rawSessionIDResolver interface {
 }
 
 func newSessionUsageCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:          "usage <id>",
-		Short:        "Show token usage and cost estimate for a session",
+	cmd := &cobra.Command{
+		Use:   "usage <id>",
+		Short: "Show token usage and cost estimate for a session",
+		Long: "Show token usage and cost estimate for a session.\n\n" +
+			"Totals include every subagent transcript spawned by the " +
+			"session (Claude Code writes those to their own files), so " +
+			"the cost matches what the session actually spent. Pass " +
+			"--own-only to report just the named transcript's rows.",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		Run: func(cmd *cobra.Command, args []string) {
 			runSessionUsage(cmd, args[0], outputFormat(cmd))
 		},
 	}
+	cmd.Flags().Bool("own-only", false,
+		"Report only this session's own usage, excluding subagents")
+	return cmd
 }
 
 // runSessionUsage computes usage for one session and renders it,
@@ -78,6 +88,9 @@ func sessionUsageDataForCommand(
 		ctx = context.Background()
 	}
 
+	ownOnly, _ := cmd.Flags().GetBool("own-only")
+	query := sessionUsageQuery{SessionID: sessionID, OwnOnly: ownOnly}
+
 	remote, _ := cmd.Flags().GetString("server")
 	if remote != "" {
 		if pgReadRequested(cmd) {
@@ -89,7 +102,14 @@ func sessionUsageDataForCommand(
 		if err != nil {
 			return nil, tokenUseExitErr, err
 		}
-		return httpSessionUsageData(ctx, remote, token, sessionID)
+		if !query.OwnOnly {
+			if err := requireRemoteSubagentUsageSupport(
+				ctx, remote, token,
+			); err != nil {
+				return nil, tokenUseExitErr, err
+			}
+		}
+		return httpSessionUsageData(ctx, remote, token, query)
 	}
 	cfg, err := config.LoadPFlags(cmd.Flags())
 	if err != nil {
@@ -100,14 +120,14 @@ func sessionUsageDataForCommand(
 		if err != nil {
 			return nil, tokenUseExitErr, err
 		}
-		return pgSessionUsageData(cfg, pgCfg, sessionID)
+		return pgSessionUsageData(cfg, pgCfg, query)
 	}
 	backend, cleanup, err := resolveArchiveQueryBackendWithConfig(
 		ctx,
 		cfg,
 		archiveQueryPolicy{
 			AutoStart:            true,
-			ReadOnlyDaemon:       archiveQueryRejectReadOnlyDaemon,
+			ReadOnlyDaemon:       archiveQueryUseReadOnlyDaemon,
 			DirectReadOnlyAction: "refresh session usage directly",
 		},
 	)
@@ -115,7 +135,26 @@ func sessionUsageDataForCommand(
 		return nil, tokenUseExitErr, err
 	}
 	defer closeArchiveQueryBackend(cleanup)
-	return backend.SessionUsage(ctx, sessionID)
+	return backend.SessionUsage(ctx, query)
+}
+
+func requireRemoteSubagentUsageSupport(
+	ctx context.Context, baseURL, token string,
+) error {
+	capabilities, err := service.ProbeHTTPServerCapabilities(
+		ctx, baseURL, token,
+	)
+	if err != nil {
+		return err
+	}
+	if capabilities.APIVersion < server.SubagentUsageAPIVersion {
+		return fmt.Errorf(
+			"server API version %d does not support combined subagent usage; "+
+				"upgrade or restart the server, or pass --own-only",
+			capabilities.APIVersion,
+		)
+	}
+	return nil
 }
 
 func readOnlySessionUsageDaemonError(url string) error {
@@ -131,11 +170,12 @@ func httpSessionUsageData(
 	ctx context.Context,
 	baseURL string,
 	token string,
-	sessionID string,
+	query sessionUsageQuery,
 ) (*sessionUsageOutput, int, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	sessionID := query.SessionID
 	resolvedID, err := resolveServiceSessionID(
 		ctx, service.NewHTTPBackend(baseURL, token, false), sessionID,
 	)
@@ -146,11 +186,23 @@ func httpSessionUsageData(
 		}
 		return nil, tokenUseExitErr, err
 	}
+	if !query.OwnOnly {
+		backend := service.NewHTTPBackend(baseURL, token, false)
+		if _, syncErr := backend.Sync(ctx, service.SyncInput{
+			ID: resolvedID, Subagents: true,
+		}); syncErr != nil && !errors.Is(syncErr, db.ErrReadOnly) {
+			fmt.Fprintf(os.Stderr, "warning: sync failed: %v\n", syncErr)
+		}
+	}
 	// Request the full breakdown so the remote path matches the
-	// shape returned by the direct store paths.
+	// shape returned by the direct store paths, and the same subagent
+	// attribution scope so --server and local agree field for field.
 	endpoint := strings.TrimSuffix(baseURL, "/") +
 		"/api/v1/sessions/" + url.PathEscape(resolvedID) +
 		"/usage?breakdown=true"
+	if !query.OwnOnly {
+		endpoint += "&subagents=true"
+	}
 	req, err := http.NewRequestWithContext(
 		ctx, http.MethodGet, endpoint, nil,
 	)
@@ -184,7 +236,7 @@ func httpSessionUsageData(
 }
 
 func pgSessionUsageData(
-	cfg config.Config, pgCfg config.PGConfig, sessionID string,
+	cfg config.Config, pgCfg config.PGConfig, query sessionUsageQuery,
 ) (*sessionUsageOutput, int, error) {
 	store, cleanup, err := openPGReadStore(cfg, pgCfg)
 	if err != nil {
@@ -196,14 +248,14 @@ func pgSessionUsageData(
 	if cleanup != nil {
 		defer cleanup()
 	}
-	return storeSessionUsageData("pg", cfg, store, sessionID)
+	return storeSessionUsageData("pg", cfg, store, query)
 }
 
 func storeSessionUsageData(
 	storeName string,
 	cfg config.Config,
 	store db.Store,
-	sessionID string,
+	query sessionUsageQuery,
 ) (*sessionUsageOutput, int, error) {
 	if len(cfg.CustomModelPricing) > 0 {
 		if priced, ok := store.(customPricingStore); ok {
@@ -212,6 +264,7 @@ func storeSessionUsageData(
 	}
 
 	ctx := context.Background()
+	sessionID := query.SessionID
 	resolvedID, err := resolveStoreSessionID(ctx, store, sessionID)
 	if err != nil {
 		if !strings.HasPrefix(err.Error(), "session not found:") {
@@ -222,7 +275,13 @@ func storeSessionUsageData(
 		return nil, tokenUseExitNotFound, nil
 	}
 
-	u, err := store.GetSessionUsage(ctx, resolvedID, true)
+	var u *db.SessionUsage
+	if query.OwnOnly {
+		u, err = store.GetSessionUsage(ctx, resolvedID, true)
+	} else {
+		u, err = service.SessionUsageWithSubagents(
+			ctx, store, resolvedID, true)
+	}
 	if err != nil {
 		return nil, tokenUseExitErr,
 			fmt.Errorf("querying %s session usage: %w", storeName, err)
@@ -274,7 +333,9 @@ func resolveStoreSessionID(
 // renderSessionUsageHuman writes a compact key/value summary. The
 // cost line shows "~$X.XX (models)" when a complete estimate exists,
 // otherwise "n/a" (noting any unpriced models). The tilde marks the
-// figure as a model-pricing estimate.
+// figure as a model-pricing estimate. A "Subagents" line appears only
+// when the figures cover subagent transcripts, so the reader can tell
+// why the total exceeds what the session's own file records.
 func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 	label := func(name string) string {
 		return fmt.Sprintf("%-14s", name+":")
@@ -285,6 +346,10 @@ func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 		sanitizeTerminal(out.Agent))
 	fmt.Fprintf(w, "%s %d\n", label("Output"), out.TotalOutputTokens)
 	fmt.Fprintf(w, "%s %d\n", label("Peak ctx"), out.PeakContextTokens)
+	if out.SubagentCount > 0 {
+		fmt.Fprintf(w, "%s %d (included)\n", label("Subagents"),
+			out.SubagentCount)
+	}
 	if out.HasCost {
 		models := strings.Join(out.Models, ", ")
 		prefix := "~"

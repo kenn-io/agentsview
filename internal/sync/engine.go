@@ -14312,6 +14312,20 @@ func (e *Engine) SyncSingleSessionContext(
 		}
 	}
 
+	preserved, err = e.processAndWriteSessionFile(ctx, file, sessionID)
+	return err
+}
+
+// processAndWriteSessionFile runs one discovered session source through
+// processFile and commits the result, mirroring collectAndBatch's
+// exclusion, tombstone, incremental, and full-write handling for a
+// single file. It reports whether the write preserved an existing
+// archived session instead of replacing it, so callers can skip their
+// change event. The caller must hold syncMu.
+func (e *Engine) processAndWriteSessionFile(
+	ctx context.Context, file parser.DiscoveredFile, requestedSessionID string,
+) (preserved bool, err error) {
+	path := file.Path
 	res := e.processFile(ctx, file)
 	defer e.retentionBudget().scavengeIfNeeded()
 	defer res.retentionLease.Release()
@@ -14319,20 +14333,22 @@ func (e *Engine) SyncSingleSessionContext(
 		if res.cacheSkip && res.mtime != 0 && !res.noCacheSkip {
 			e.cacheSkip(res.skipCacheKey(path), res.mtime, res.sourceFingerprint)
 		}
-		return res.err
+		return false, res.err
 	}
 	if res.skip {
 		if err := e.db.RepairQueuedSubagentParents(); err != nil {
-			return fmt.Errorf("repair queued subagent parents: %w", err)
+			return false, fmt.Errorf("repair queued subagent parents: %w", err)
 		}
 		// A previous write may have stored a new spawn edge but failed
 		// before its child could be durably queued. The requested session is
 		// still a bounded repair seed on the freshness path because its
 		// surviving edges identify those children directly.
-		if err := e.db.LinkSubagentSessionsForSessions([]string{sessionID}); err != nil {
-			return fmt.Errorf("link fresh subagent sessions: %w", err)
+		if err := e.db.LinkSubagentSessionsForSessions(
+			[]string{requestedSessionID},
+		); err != nil {
+			return false, fmt.Errorf("link fresh subagent sessions: %w", err)
 		}
-		return nil
+		return false, nil
 	}
 	if res.cacheSkip {
 		e.clearSkip(res.skipCacheKey(path))
@@ -14357,16 +14373,17 @@ func (e *Engine) SyncSingleSessionContext(
 		append(append([]string{}, excluded...), resultIDs...),
 	)
 	if childErr != nil {
-		return fmt.Errorf("list pre-write subagent children: %w", childErr)
+		return false, fmt.Errorf(
+			"list pre-write subagent children: %w", childErr)
 	}
 	// A prior sync may have removed an edge and then failed before repairing
 	// its child. Retry that durable work after this sync's read-only capture
 	// but before making any new mutations.
 	if err := e.db.RepairQueuedSubagentParents(); err != nil {
-		return fmt.Errorf("repair queued subagent parents: %w", err)
+		return false, fmt.Errorf("repair queued subagent parents: %w", err)
 	}
 	if err := e.db.QueueSubagentParentCleanupRepairs(priorChildren); err != nil {
-		return fmt.Errorf("queue subagent parent repairs: %w", err)
+		return false, fmt.Errorf("queue subagent parent repairs: %w", err)
 	}
 	// Always attempt queued work after mutations begin, including when a later
 	// write or scoped link fails. Post-write capture below expands this flag
@@ -14407,7 +14424,7 @@ func (e *Engine) SyncSingleSessionContext(
 	if _, err := e.deleteParserExcludedSessions(
 		res, sourceAllowsParserExclusions,
 	); err != nil {
-		return fmt.Errorf(
+		return false, fmt.Errorf(
 			"delete parser-excluded sessions: %w", err,
 		)
 	}
@@ -14423,7 +14440,7 @@ func (e *Engine) SyncSingleSessionContext(
 				ctx, member.sessionID,
 			)
 			if err != nil {
-				return err
+				return false, err
 			}
 			if !allowed {
 				continue
@@ -14432,7 +14449,7 @@ func (e *Engine) SyncSingleSessionContext(
 				ctx, member.machine, string(file.Agent),
 				member.sessionID, member.filePath,
 			); err != nil {
-				return fmt.Errorf(
+				return false, fmt.Errorf(
 					"tombstone source-missing member %s: %w",
 					member.sessionID, err,
 				)
@@ -14444,23 +14461,24 @@ func (e *Engine) SyncSingleSessionContext(
 	// append-only JSONL that was already synced).
 	if res.incremental != nil {
 		if err := e.writeIncremental(res.incremental); err != nil {
-			return err
+			return false, err
 		}
 		if err := queueWrittenChildren(
 			[]string{res.incremental.sessionID},
 		); err != nil {
-			return err
+			return false, err
 		}
 		if err := e.db.LinkSubagentSessionsForSessions(
 			[]string{res.incremental.sessionID},
 		); err != nil {
-			return fmt.Errorf("link incremental subagent sessions: %w", err)
+			return false, fmt.Errorf(
+				"link incremental subagent sessions: %w", err)
 		}
-		return nil
+		return false, nil
 	}
 
 	if len(res.results) == 0 {
-		return nil
+		return false, nil
 	}
 
 	for i, pr := range res.results {
@@ -14478,7 +14496,7 @@ func (e *Engine) SyncSingleSessionContext(
 		if err := e.db.QueueSubagentParentRepairs(
 			[]string{resultIDs[i]},
 		); err != nil {
-			return fmt.Errorf(
+			return false, fmt.Errorf(
 				"queue attempted session parent repair: %w", err,
 			)
 		}
@@ -14500,21 +14518,21 @@ func (e *Engine) SyncSingleSessionContext(
 			if queueErr != nil {
 				writeErr = errors.Join(writeErr, queueErr)
 			}
-			return fmt.Errorf("write session %s: %w",
+			return false, fmt.Errorf("write session %s: %w",
 				pr.Session.ID, writeErr)
 		}
 		if queueErr != nil {
-			return queueErr
+			return false, queueErr
 		}
 		if errors.Is(writeErr, errSessionPreserved) {
 			preserved = true
 		}
 	}
 	if err := e.db.LinkSubagentSessionsForSessions(resultIDs); err != nil {
-		return fmt.Errorf("link changed subagent sessions: %w", err)
+		return false, fmt.Errorf("link changed subagent sessions: %w", err)
 	}
 
-	return nil
+	return preserved, nil
 }
 
 func (e *Engine) applyWorktreeMappingToSingleSession(

@@ -244,6 +244,7 @@ func TestDuckUsageAggregateCostRecordsMixedReportedAndComputed(t *testing.T) {
 		"mixed-model",
 		1000, 2000, 3000, 4000,
 		100, 200, 300, 400, 500,
+		0,
 		250_000,
 		true,
 		false,
@@ -253,6 +254,49 @@ func TestDuckUsageAggregateCostRecordsMixedReportedAndComputed(t *testing.T) {
 	require.True(t, priced)
 	require.True(t, contributes)
 	assert.Equal(t, money.Money{Microdollars: 253_700}, cost)
+
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+	assert.Equal(t, export.CostSourceMixed, block.CostSource)
+	assert.Equal(t, export.CostSourceMixed, block.Models["mixed-model"].CostSource)
+}
+
+func TestDuckUsageAggregateCostRecordsWebSearchOnlyComputed(t *testing.T) {
+	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
+		ModelPattern: "mixed-model",
+		Rates: export.ModelRates{
+			Source: export.PricingRowSourceFetched,
+		},
+	}})
+
+	_, _, priced, contributes, err := duckUsageAggregateCost(
+		"mixed-model",
+		0, 0, 0, 0,
+		0, 0, 0, 0, 0,
+		0,
+		30_000,
+		true,
+		false,
+		resolver,
+	)
+	require.NoError(t, err)
+	require.True(t, priced)
+	require.True(t, contributes)
+
+	cost, _, priced, contributes, err := duckUsageAggregateCost(
+		"mixed-model",
+		0, 0, 0, 0,
+		0, 0, 0, 0, 0,
+		2,
+		0,
+		false,
+		true,
+		resolver,
+	)
+	require.NoError(t, err)
+	require.True(t, priced)
+	require.True(t, contributes)
+	assert.Equal(t, money.Money{Microdollars: 20_000}, cost)
 
 	block, err := resolver.BuildBlock()
 	require.NoError(t, err)
@@ -303,6 +347,7 @@ func TestDuckUsageAggregateCostPricingBandRequestScope(t *testing.T) {
 				100_001, 0, 0, 100_000,
 				100_001, 0, 0, 0, 100_000,
 				0,
+				0,
 				false,
 				tt.requestScoped,
 				resolver,
@@ -344,6 +389,7 @@ func TestDuckUsageAggregateCostReportedRowUsesBandForSavingsOnly(t *testing.T) {
 		"banded-model",
 		100_001, 0, 0, 100_000,
 		0, 0, 0, 0, 0,
+		0,
 		75_000,
 		true,
 		true,
@@ -369,6 +415,7 @@ func TestDuckUsageAggregateCostKeepsMixedUnpricedComputedTokensUnpriced(t *testi
 		"unknown-model",
 		1000, 2000, 0, 0,
 		1000, 2000, 0, 0, 0,
+		0,
 		250_000,
 		true,
 		false,
@@ -405,6 +452,7 @@ func TestDuckUsageAggregateCostIncludesReasoningOnlyRows(t *testing.T) {
 		0, 0, 0, 0,
 		0, 0, 300, 0, 0,
 		0,
+		0,
 		false,
 		false,
 		resolver,
@@ -435,6 +483,7 @@ func TestDuckUsageAggregateCostRecordsZeroTokenModelProvenance(t *testing.T) {
 		"zero-model",
 		0, 0, 0, 0,
 		0, 0, 0, 0, 0,
+		0,
 		0,
 		false,
 		false,
@@ -473,7 +522,7 @@ func TestDuckUsageAggregateCostPrefersExactCustomKimiAlias(t *testing.T) {
 	cost, _, priced, contributes, err := duckUsageAggregateResolvedCost(
 		"kimi-for-coding", pricingpkg.KimiK3Canonical,
 		1_000_000, 0, 0, 0,
-		1_000_000, 0, 0, 0, 0,
+		1_000_000, 0, 0, 0, 0, 0,
 		0, false, true, resolver,
 	)
 

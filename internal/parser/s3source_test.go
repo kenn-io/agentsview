@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -318,4 +319,82 @@ func TestS3SourceRefFromDiscoveredFile(t *testing.T) {
 		MtimeNS:     1718900000000000000,
 		Fingerprint: "fp-1",
 	}, opaque)
+}
+
+// TestClaudeSubagentTranscriptPathsS3 covers the S3 branch of the on-demand
+// subagent enumeration behind `session usage`: an s3:// Claude session lists
+// its subagents/ prefix instead of walking a local directory, so delegated
+// spend from S3-sourced sessions is refreshed like local spend.
+func TestClaudeSubagentTranscriptPathsS3(t *testing.T) {
+	oldList := listS3Objects
+	t.Cleanup(func() { listS3Objects = oldList })
+
+	const root = "s3://bucket/laptop/raw/claude"
+	sessionPath := root + "/-home-proj/sess-1.jsonl"
+	tests := []struct {
+		name       string
+		path       string
+		list       func(t *testing.T, prefix string) ([]S3Object, error)
+		want       []string
+		wantListed bool
+	}{
+		{
+			name: "lists the session's subagents prefix",
+			path: sessionPath,
+			list: func(t *testing.T, prefix string) ([]S3Object, error) {
+				assert.Equal(t,
+					root+"/-home-proj/sess-1/subagents", prefix)
+				return []S3Object{
+					{URI: root + "/-home-proj/sess-1/subagents/agent-b.jsonl"},
+					{URI: root + "/-home-proj/sess-1/subagents/agent-b.meta.json"},
+					{URI: root + "/-home-proj/sess-1/subagents/notes.jsonl"},
+					{URI: root + "/-home-proj/sess-1/subagents/workflows/wf-1/agent-a.jsonl"},
+				}, nil
+			},
+			want: []string{
+				root + "/-home-proj/sess-1/subagents/agent-b.jsonl",
+				root + "/-home-proj/sess-1/subagents/workflows/wf-1/agent-a.jsonl",
+			},
+			wantListed: true,
+		},
+		{
+			name: "a subagent lists the enclosing root tree",
+			path: root + "/-home-proj/sess-1/subagents/agent-b.jsonl",
+			list: func(t *testing.T, prefix string) ([]S3Object, error) {
+				assert.Equal(t,
+					root+"/-home-proj/sess-1/subagents", prefix)
+				return []S3Object{
+					{URI: root + "/-home-proj/sess-1/subagents/agent-b.jsonl"},
+					{URI: root + "/-home-proj/sess-1/subagents/workflows/wf-1/agent-a.jsonl"},
+				}, nil
+			},
+			want: []string{
+				root + "/-home-proj/sess-1/subagents/workflows/wf-1/agent-a.jsonl",
+			},
+			wantListed: true,
+		},
+		{
+			name: "a listing error reads as no subagents",
+			path: sessionPath,
+			list: func(_ *testing.T, _ string) ([]S3Object, error) {
+				return nil, errors.New("store unavailable")
+			},
+			wantListed: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			listed := false
+			listS3Objects = func(prefix string) ([]S3Object, error) {
+				listed = true
+				require.NotNil(t, tt.list,
+					"unexpected S3 listing for %s", tt.path)
+				return tt.list(t, prefix)
+			}
+			got := ClaudeSubagentTranscriptPaths(tt.path)
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.wantListed, listed)
+		})
+	}
 }

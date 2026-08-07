@@ -394,8 +394,12 @@ func compactClaudeEntry(line []byte) string {
 	snapshotFields := []claudeCompactField{
 		{name: "timestamp"},
 	}
+	// searchCount is how many billed server-side web searches a
+	// WebSearch tool result performed; it is the only surviving record
+	// of them in a Claude Code transcript.
 	toolResultFields := []claudeCompactField{
 		{name: "agentId"}, {name: "persistedOutputPath"},
+		{name: "searchCount"},
 	}
 
 	// Fill all field groups in a single pass over the entry. This runs
@@ -737,6 +741,9 @@ func claudeParseSessionFrom(
 	if needsClaudeFullParseForSubagentMap(entries, subagentMap) {
 		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
+	if needsClaudeFullParseForWebSearchCounts(entries) {
+		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
+	}
 
 	if len(entries) == 0 && len(queuedCommands) == 0 {
 		return nil, nil, latestTS, consumed, nil
@@ -927,6 +934,16 @@ func needsClaudeFullParseForSubagentMap(
 		return false
 	}
 
+	appendedToolUseIDs := claudeAppendedToolUseIDs(entries)
+	for toolUseID := range subagentMap {
+		if _, ok := appendedToolUseIDs[toolUseID]; !ok {
+			return true
+		}
+	}
+	return false
+}
+
+func claudeAppendedToolUseIDs(entries []dagEntry) map[string]struct{} {
 	appendedToolUseIDs := make(map[string]struct{})
 	for _, e := range entries {
 		if e.entryType != "assistant" {
@@ -946,13 +963,7 @@ func needsClaudeFullParseForSubagentMap(
 			return true
 		})
 	}
-
-	for toolUseID := range subagentMap {
-		if _, ok := appendedToolUseIDs[toolUseID]; !ok {
-			return true
-		}
-	}
-	return false
+	return appendedToolUseIDs
 }
 
 // appendAddsDAGRoot reports whether an appended message entry has a
@@ -1142,6 +1153,9 @@ func extractMessagesFrom(
 		messages = append(messages, msg)
 		ordinal++
 	}
+
+	annotateClaudeWebSearchRequests(
+		messages, collectClaudeWebSearchCounts(entries))
 
 	return messages, startedAt, endedAt
 }
@@ -2180,6 +2194,9 @@ func extractMessages(entries []dagEntry) (
 		messages = append(messages, msg)
 		ordinal++
 	}
+
+	annotateClaudeWebSearchRequests(
+		messages, collectClaudeWebSearchCounts(entries))
 
 	return messages, startedAt, endedAt
 }

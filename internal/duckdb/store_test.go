@@ -2666,6 +2666,292 @@ func TestUsageDedupesClaudeMessageIDs(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("0.000033"), entry.Cost)
 }
 
+func TestSessionUsagePrefersCompleteClaudeSnapshot(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:  "claude-test",
+		InputPerMTok:  money.MustParseDollars("5"),
+		OutputPerMTok: money.MustParseDollars("25"),
+	}}))
+
+	first := syncMessage(
+		"duck-streamed", 0, "assistant", "partial",
+		"2026-01-13T00:00:00.000Z")
+	first.ClaudeMessageID = "msg-stream"
+	first.ClaudeRequestID = "req-stream"
+	first.TokenUsage = json.RawMessage(
+		`{"input_tokens":1000,"output_tokens":5}`)
+	first.OutputTokens = 5
+	second := syncMessage(
+		"duck-streamed", 1, "assistant", "complete",
+		"2026-01-13T00:01:00.000Z")
+	second.ClaudeMessageID = "msg-stream"
+	second.ClaudeRequestID = "req-stream"
+	second.TokenUsage = json.RawMessage(
+		`{"input_tokens":1000,"output_tokens":631}`)
+	second.OutputTokens = 631
+
+	session := syncSession(
+		"duck-streamed", "alpha", "streamed",
+		"2026-01-13T00:00:00.000Z", 2)
+	session.TotalOutputTokens = 636
+	session.HasTotalOutputTokens = true
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session:         session,
+		Messages:        []db.Message{first, second},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	got, err := store.GetSessionUsage(ctx, "duck-streamed", true)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, 631, got.TotalOutputTokens)
+	assert.Equal(t, money.MustParseDollars("0.020775"), got.Cost)
+	require.Len(t, got.Breakdown, 1)
+	assert.Equal(t, 631, got.Breakdown[0].OutputTokens)
+	require.NotNil(t, got.Breakdown[0].MessageOrdinal)
+	assert.Equal(t, 1, *got.Breakdown[0].MessageOrdinal)
+
+	withoutBreakdown, err := store.GetSessionUsage(
+		ctx, "duck-streamed", false)
+	require.NoError(t, err)
+	assert.Equal(t, 1, withoutBreakdown.BreakdownCount)
+}
+
+func TestUsageAggregatesPreferCompleteClaudeSnapshotAcrossSessions(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:  "claude-test",
+		InputPerMTok:  money.MustParseDollars("5"),
+		OutputPerMTok: money.MustParseDollars("25"),
+	}}))
+
+	first := syncMessage(
+		"duck-daily-streamed", 0, "assistant", "partial",
+		"2026-01-13T00:00:00.000Z")
+	first.ClaudeMessageID = "msg-stream"
+	first.ClaudeRequestID = "req-stream"
+	first.TokenUsage = json.RawMessage(
+		`{"input_tokens":1000,"output_tokens":5}`)
+	first.OutputTokens = 5
+	second := syncMessage(
+		"duck-daily-streamed-child", 0, "assistant", "complete",
+		"2026-01-13T00:01:00.000Z")
+	second.ClaudeMessageID = "msg-stream"
+	second.ClaudeRequestID = "req-stream"
+	second.TokenUsage = json.RawMessage(
+		`{"input_tokens":1000,"output_tokens":631}`)
+	second.OutputTokens = 631
+
+	parent := syncSession(
+		"duck-daily-streamed", "parent-project", "parent first message",
+		"2026-01-13T00:00:00.000Z", 1)
+	parent.Agent = "parent-agent"
+	parent.Machine = "parent-machine"
+	parent.DisplayName = new("parent display")
+	child := syncSession(
+		"duck-daily-streamed-child", "child-project", "child first message",
+		"2026-01-13T00:01:00.000Z", 1)
+	child.Agent = "child-agent"
+	child.Machine = "child-machine"
+	child.DisplayName = new("child display")
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+		{
+			Session:         parent,
+			Messages:        []db.Message{first},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+		{
+			Session:         child,
+			Messages:        []db.Message{second},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+	})
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	result, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-01-13", To: "2026-01-13", Timezone: "UTC", Breakdowns: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Daily, 1)
+	assert.Equal(t, 1000, result.Totals.InputTokens)
+	assert.Equal(t, 631, result.Totals.OutputTokens)
+	require.Len(t, result.Daily[0].ProjectBreakdowns, 1)
+	assert.Equal(t, "parent-project", result.Daily[0].ProjectBreakdowns[0].Project)
+	require.Len(t, result.Daily[0].AgentBreakdowns, 1)
+	assert.Equal(t, "parent-agent", result.Daily[0].AgentBreakdowns[0].Agent)
+	require.Len(t, result.Daily[0].MachineBreakdowns, 1)
+	assert.Equal(t, "parent-machine", result.Daily[0].MachineBreakdowns[0].MachineName)
+
+	top, err := store.GetTopSessionsByCost(ctx, db.UsageFilter{
+		From: "2026-01-13", To: "2026-01-13", Timezone: "UTC",
+	}, 10)
+	require.NoError(t, err)
+	require.Len(t, top, 1)
+	assert.Equal(t, "duck-daily-streamed", top[0].SessionID)
+	assert.Equal(t, "parent first message", top[0].DisplayName)
+	assert.Equal(t, "parent-project", top[0].Project)
+	assert.Equal(t, "parent-agent", top[0].Agent)
+	assert.Equal(t, "2026-01-13T00:00:00Z", top[0].StartedAt)
+	assert.Equal(t, 1000, top[0].InputTokens)
+	assert.Equal(t, 631, top[0].OutputTokens)
+
+	filtered, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-01-13", To: "2026-01-13", Timezone: "UTC",
+		ProjectLabels: []string{"parent-project"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1000, filtered.Totals.InputTokens)
+	assert.Equal(t, 631, filtered.Totals.OutputTokens,
+		"the attributed parent filter must retain the complete child snapshot")
+
+	filteredTop, err := store.GetTopSessionsByCost(ctx, db.UsageFilter{
+		From: "2026-01-13", To: "2026-01-13", Timezone: "UTC",
+		ProjectLabels: []string{"parent-project"},
+	}, 10)
+	require.NoError(t, err)
+	require.Len(t, filteredTop, 1)
+	assert.Equal(t, 631, filteredTop[0].OutputTokens)
+
+	childFiltered, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-01-13", To: "2026-01-13", Timezone: "UTC",
+		ProjectLabels: []string{"child-project"},
+	})
+	require.NoError(t, err)
+	assert.Zero(t, childFiltered.Totals.OutputTokens,
+		"the source child metadata must not override parent attribution")
+}
+
+func TestUsageSessionCountsFilterAfterCrossSessionSnapshotSelection(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	parent := syncSession(
+		"count-parent", "parent-project", "parent",
+		"2026-01-13T00:00:00.000Z", 1)
+	parent.Agent = "claude"
+	child := syncSession(
+		"count-child", "child-project", "child",
+		"2026-01-13T00:01:00.000Z", 1)
+	child.Agent = "claude"
+	partial := syncMessage(
+		"count-parent", 0, "assistant", "partial",
+		"2026-01-13T00:00:00.000Z")
+	partial.Model = "partial-model"
+	partial.TokenUsage = json.RawMessage(`{"input_tokens":10,"output_tokens":5}`)
+	partial.OutputTokens = 5
+	partial.ClaudeMessageID = "count-message"
+	partial.ClaudeRequestID = "count-request"
+	complete := syncMessage(
+		"count-child", 0, "assistant", "complete",
+		"2026-01-13T00:01:00.000Z")
+	complete.Model = "complete-model"
+	complete.TokenUsage = json.RawMessage(
+		`{"input_tokens":1000,"output_tokens":631}`)
+	complete.OutputTokens = 631
+	complete.ClaudeMessageID = "count-message"
+	complete.ClaudeRequestID = "count-request"
+	store := activityReportStore(t, []db.SessionBatchWrite{
+		{Session: parent, Messages: []db.Message{partial},
+			DataVersion: 1, ReplaceMessages: true},
+		{Session: child, Messages: []db.Message{complete},
+			DataVersion: 1, ReplaceMessages: true},
+	}, nil)
+
+	partialCounts, err := store.GetUsageSessionCounts(ctx, db.UsageFilter{
+		From: "2026-01-13", To: "2026-01-13", Timezone: "UTC",
+		Model: "partial-model",
+	})
+	require.NoError(t, err)
+	assert.Zero(t, partialCounts.Total,
+		"the discarded partial model must not count a session")
+
+	completeParentCounts, err := store.GetUsageSessionCounts(ctx, db.UsageFilter{
+		From: "2026-01-13", To: "2026-01-13", Timezone: "UTC",
+		Model: "complete-model", ProjectLabels: []string{"parent-project"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, completeParentCounts.Total)
+	assert.Equal(t, 1, completeParentCounts.ByProject["parent-project"])
+	assert.NotContains(t, completeParentCounts.ByProject, "child-project")
+}
+
+func TestUsageAggregatesPreferLatestEqualOutputSnapshot(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:  "claude-test",
+		InputPerMTok:  money.MustParseDollars("5"),
+		OutputPerMTok: money.MustParseDollars("25"),
+	}}))
+
+	zMessage := syncMessage(
+		"z-snapshot", 0, "assistant", "z", "2026-01-13T00:01:00.000Z")
+	zMessage.Model = "claude-test"
+	zMessage.ClaudeMessageID = "msg-tie"
+	zMessage.ClaudeRequestID = "req-tie"
+	zMessage.TokenUsage = json.RawMessage(
+		`{"input_tokens":900,"output_tokens":100}`)
+	zMessage.OutputTokens = 100
+	aMessage := syncMessage(
+		"a-snapshot", 0, "assistant", "a", "2026-01-13T00:00:00.000Z")
+	aMessage.Model = "claude-test"
+	aMessage.ClaudeMessageID = "msg-tie"
+	aMessage.ClaudeRequestID = "req-tie"
+	aMessage.TokenUsage = json.RawMessage(
+		`{"input_tokens":10,"output_tokens":100}`)
+	aMessage.OutputTokens = 100
+
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+		{
+			Session: syncSession(
+				"z-snapshot", "alpha", "z snapshot",
+				"2026-01-13T00:00:00.000Z", 1),
+			Messages: []db.Message{zMessage}, DataVersion: 1,
+			ReplaceMessages: true,
+		},
+		{
+			Session: syncSession(
+				"a-snapshot", "alpha", "a snapshot",
+				"2026-01-13T00:00:00.000Z", 1),
+			Messages: []db.Message{aMessage}, DataVersion: 1,
+			ReplaceMessages: true,
+		},
+	})
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	result, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-01-13", To: "2026-01-13", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 900, result.Totals.InputTokens)
+	assert.Equal(t, 100, result.Totals.OutputTokens)
+}
+
 func TestUsageDedupesSourceUUIDWhenClaudePairIncomplete(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)

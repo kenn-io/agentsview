@@ -829,6 +829,9 @@ func (s *Server) humaSyncSession(
 		(in.Body.Path != "" && in.Body.ID != "") {
 		return nil, apiError(http.StatusBadRequest, "exactly one of 'path' or 'id' is required")
 	}
+	if in.Body.Subagents && in.Body.ID == "" {
+		return nil, apiError(http.StatusBadRequest, "'subagents' requires 'id'")
+	}
 	if err := s.resyncBeforeSessionSync(ctx); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil, nil

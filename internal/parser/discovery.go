@@ -501,6 +501,68 @@ func ClaudeProjectSessionFiles(projectsDir string) []DiscoveredFile {
 	return files
 }
 
+// ClaudeSubagentTranscriptPaths returns candidate subagent transcripts to
+// refresh before querying the Claude session stored at sessionPath, sorted by
+// path. Root sessions scan their own subagents tree. A subagent scans its
+// enclosing root's tree so newly written nested descendants can be linked;
+// relationship traversal later limits usage aggregation to the queried
+// session's descendants. An s3:// session lists the equivalent prefix and
+// returns object URIs. Returns nil for a non-Claude path, a path with no such
+// directory, or an empty path.
+func ClaudeSubagentTranscriptPaths(sessionPath string) []string {
+	if sessionPath == "" || !strings.HasSuffix(sessionPath, ".jsonl") {
+		return nil
+	}
+	if strings.HasPrefix(sessionPath, "s3://") {
+		return claudeS3SubagentTranscriptPaths(sessionPath)
+	}
+	stem := strings.TrimSuffix(filepath.Base(sessionPath), ".jsonl")
+	if stem == "" {
+		return nil
+	}
+	subagentsDir := filepath.Join(filepath.Dir(sessionPath), stem, "subagents")
+	if strings.HasPrefix(stem, "agent-") {
+		subagentsDir = claudeEnclosingSubagentsDir(sessionPath)
+		if subagentsDir == "" {
+			return nil
+		}
+	}
+	cleanSessionPath := filepath.Clean(sessionPath)
+	var paths []string
+	_ = filepath.WalkDir(
+		subagentsDir,
+		func(path string, entry os.DirEntry, err error) error {
+			if err != nil || entry.IsDir() {
+				return nil
+			}
+			name := entry.Name()
+			if !strings.HasPrefix(name, "agent-") ||
+				!strings.HasSuffix(name, ".jsonl") {
+				return nil
+			}
+			if filepath.Clean(path) == cleanSessionPath {
+				return nil
+			}
+			paths = append(paths, path)
+			return nil
+		},
+	)
+	sort.Strings(paths)
+	return paths
+}
+
+func claudeEnclosingSubagentsDir(sessionPath string) string {
+	for dir := filepath.Dir(sessionPath); ; dir = filepath.Dir(dir) {
+		if filepath.Base(dir) == "subagents" {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+	}
+}
+
 // claudeFindSourceFile finds the original JSONL file for a Claude
 // session ID by searching all project directories. It is the
 // provider-owned lookup body used by the Claude provider source set's

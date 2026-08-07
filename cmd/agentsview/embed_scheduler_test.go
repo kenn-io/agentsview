@@ -357,20 +357,24 @@ func TestEmbedSchedulerPendingBackstopRetriesBeforeNextTick(
 			}}
 			idled := make(chan struct{})
 			ctx, cancel := context.WithCancel(t.Context())
-			tracker := server.NewIdleTracker(450*time.Millisecond, func() {
+			tracker := server.NewIdleTracker(300*time.Millisecond, func() {
 				close(idled)
 				cancel()
 			})
 			s := newEmbedScheduler(
-				fake, 200*time.Millisecond, 300*time.Millisecond, false, tracker,
+				fake, 200*time.Millisecond, time.Second, false, tracker,
 			)
-			go tracker.Run(ctx)
 			go s.Run(ctx)
 			defer s.Stop()
 
 			waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 1 },
 				"expected the initial backstop attempt")
-			waitForSchedulerConditionWithin(t, 250*time.Millisecond,
+			// Start idle observation only after the deliberately delayed backstop
+			// acquires its lease. Otherwise the idle timeout can cancel the test
+			// before the first tick when the tick interval is kept well clear of
+			// the retry and idle deadlines.
+			go tracker.Run(ctx)
+			waitForSchedulerConditionWithin(t, 500*time.Millisecond,
 				func() bool { return fake.callCount() >= 2 },
 				"a pending backstop must retry before the next backstop tick")
 			select {
@@ -421,35 +425,33 @@ func TestEmbedSchedulerRepeatedBackstopFailuresReleaseIdleLease(
 		fake.callsSnapshot(), "one backstop tick should get one bounded retry")
 }
 
-func TestEmbedSchedulerBackstopTicksDoNotRestartPendingRetry(t *testing.T) {
+func TestEmbedSchedulerLaterBackstopStartsFreshLifecycle(t *testing.T) {
 	buildErr := errors.New("embedding request rejected")
 	fake := &fakeEmbedManager{results: []fakeTryBuildResult{
 		{started: true, err: buildErr},
+		{started: true, err: buildErr},
+		{started: true},
 	}}
-	idled := make(chan struct{})
-	ctx, cancel := context.WithCancel(t.Context())
-	tracker := server.NewIdleTracker(5*time.Millisecond, func() {
-		close(idled)
-		cancel()
-	})
-	s := newEmbedScheduler(
-		fake, 70*time.Millisecond, 20*time.Millisecond, false, tracker,
-	)
-	go s.Run(ctx)
+	ticks := make(chan time.Time, 1)
+	s := newEmbedScheduler(fake, 200*time.Millisecond, 0, false, nil)
+	go s.run(t.Context(), ticks)
 	defer s.Stop()
 
+	ticks <- time.Now()
 	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 1 },
-		"expected the initial backstop attempt")
-	go tracker.Run(ctx)
-	select {
-	case <-idled:
-	case <-time.After(500 * time.Millisecond):
-		require.Fail(t,
-			"frequent backstop ticks restarted the retry lifecycle and retained the idle lease")
-	}
+		"expected the first backstop attempt")
+	ticks <- time.Now()
+	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 2 },
+		"expected exactly one bounded retry")
+	assert.Equal(t, 2, fake.callCount(),
+		"a tick during the retry lifecycle must be coalesced")
+
+	ticks <- time.Now()
+	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 3 },
+		"a later backstop tick must start a fresh lifecycle")
 	assert.Equal(t, []vector.BuildRequest{
-		{Backstop: true}, {Backstop: true},
-	}, fake.callsSnapshot(), "one backstop work item should get one bounded retry")
+		{Backstop: true}, {Backstop: true}, {Backstop: true},
+	}, fake.callsSnapshot())
 }
 
 func TestEmbedSchedulerExhaustedBackstopCarriesIntoNextNotification(

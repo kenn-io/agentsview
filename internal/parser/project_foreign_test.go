@@ -163,17 +163,24 @@ func TestExtractProjectFromCwd_HomePathWithoutAutofs_StillWalks(t *testing.T) {
 	autofsPrefixes = nil
 	resetAutofsProbes()
 
+	realDir := t.TempDir()
+	realInfo, err := os.Stat(realDir)
+	require.NoError(t, err)
+
 	orig := osStat
 	defer func() { osStat = orig }()
 	var count atomic.Int64
+	cwd := "/home/nobody-agentsview-test/code/example"
 	osStat = func(path string) (os.FileInfo, error) {
 		count.Add(1)
-		return orig(path)
+		if path == cwd {
+			return realInfo, nil
+		}
+		return nil, os.ErrNotExist
 	}
 
-	cwd := "/home/nobody-agentsview-test/code/example"
 	_ = ExtractProjectFromCwdWithBranch(cwd, "")
-	assert.NotZero(t, count.Load(),
+	assert.GreaterOrEqual(t, count.Load(), int64(2),
 		"osStat never called for /home path with empty "+
 			"autofs config; walk must proceed for a real mount")
 }

@@ -244,7 +244,7 @@ func sessionUsageData(sessionID string) (*sessionUsageOutput, int, error) {
 		appCfg,
 		archiveQueryPolicy{
 			AutoStart:            true,
-			ReadOnlyDaemon:       archiveQueryRejectReadOnlyDaemon,
+			ReadOnlyDaemon:       archiveQueryUseReadOnlyDaemon,
 			DirectReadOnlyAction: "refresh session usage directly",
 		},
 	)
@@ -252,5 +252,5 @@ func sessionUsageData(sessionID string) (*sessionUsageOutput, int, error) {
 		return nil, tokenUseExitErr, err
 	}
 	defer closeArchiveQueryBackend(cleanup)
-	return backend.SessionUsage(ctx, sessionID)
+	return backend.SessionUsage(ctx, sessionUsageQuery{SessionID: sessionID})
 }

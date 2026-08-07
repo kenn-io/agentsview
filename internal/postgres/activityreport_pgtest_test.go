@@ -4,7 +4,6 @@ package postgres
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -300,8 +299,8 @@ func TestPGGetActivityReportPricingModelsOnlyIncludeDedupSurvivors(t *testing.T)
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
 		) VALUES
-			('kept-model', 3000000, 15000000, 0, 0, 'seed'),
-			('discarded-model', 3000000, 15000000, 0, 0, 'seed')`)
+			('partial-model', 3000000, 15000000, 0, 0, 'seed'),
+			('complete-model', 3000000, 15000000, 0, 0, 'seed')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -323,11 +322,11 @@ func TestPGGetActivityReportPricingModelsOnlyIncludeDedupSurvivors(t *testing.T)
 		) VALUES
 			('earlier', 0, 'assistant', 'x',
 			 '2026-06-16T10:30:00Z'::timestamptz, 1,
-			 'kept-model',
+			 'partial-model',
 			 '{"input_tokens":1000,"output_tokens":500}', 'M1', 'R1'),
 			('later', 0, 'assistant', 'x',
 			 '2026-06-16T10:31:00Z'::timestamptz, 1,
-			 'discarded-model',
+			 'complete-model',
 			 '{"input_tokens":2000,"output_tokens":900}', 'M1', 'R1')`)
 	require.NoError(t, err, "insert messages")
 
@@ -335,10 +334,10 @@ func TestPGGetActivityReportPricingModelsOnlyIncludeDedupSurvivors(t *testing.T)
 		ctx, db.AnalyticsFilter{Timezone: "UTC"},
 		pgDayQuery(t, "2026-06-16", "UTC"))
 	require.NoError(t, err)
-	assert.Equal(t, 500, r.Totals.OutputTokens)
+	assert.Equal(t, 900, r.Totals.OutputTokens)
 	require.NotNil(t, r.Pricing)
-	assert.Contains(t, r.Pricing.Models, "kept-model")
-	assert.NotContains(t, r.Pricing.Models, "discarded-model")
+	assert.Contains(t, r.Pricing.Models, "complete-model")
+	assert.NotContains(t, r.Pricing.Models, "partial-model")
 }
 
 // TestPGGetActivityReportExcludesOtherDays confirms the candidate-session
@@ -484,25 +483,10 @@ func TestPGGetActivityReportExcludesIneligibleUsage(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("0.0105"), r.Totals.Cost)
 }
 
-// TestPGGetActivityReportDedupsAcrossChunks confirms the PG usage fetch's
-// global re-sort across maxPGVars-sized ID chunks (activityReportUsage in
-// internal/postgres/activityreport.go) orders rows by timestamp across the
-// whole candidate set, not per chunk. The aggregator's first-seen-wins
-// dedup relies on that order: the same (claude_message_id,
-// claude_request_id) can recur in two sessions (resumed/forked) that fall
-// in DIFFERENT chunks, and the globally-earliest row must survive.
-//
-// The candidate IDs are passed to activityReportUsage explicitly, so the
-// chunk split is deterministic and never depends on PostgreSQL's scan
-// order. The slice is [dup-b, 500 fillers, dup-a]: dup-b (the LATER
-// timestamp) lands in the first chunk (indices 0-499) and dup-a (the
-// EARLIER timestamp) in the second (indices 500-501). Only a global
-// re-sort by timestamp reorders the fetched rows to [dup-a, dup-b]; a
-// regression that appended per-chunk results in chunk order would yield
-// [dup-b, dup-a] and fail the ordering assertion below. The fillers are
-// placeholder IDs with no rows in the DB -- they exist only to push dup-a
-// past the 500-variable chunk boundary.
-func TestPGGetActivityReportDedupsAcrossChunks(t *testing.T) {
+// TestPGGetActivityReportDedupUsesChronologicalOrder confirms that
+// first-seen cross-session dedup uses timestamp order rather than database or
+// candidate-ID order.
+func TestPGGetActivityReportDedupUsesChronologicalOrder(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_daily_report_chunk_test")
 	ctx := context.Background()
 
@@ -514,7 +498,7 @@ func TestPGGetActivityReportDedupsAcrossChunks(t *testing.T) {
 	require.NoError(t, err, "insert pricing")
 
 	// dup-a: earlier timestamp and 500 output tokens -> the correct global
-	// survivor of the shared (claude_message_id, claude_request_id) key.
+	// survivor of the shared source UUID fallback key.
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at, ended_at,
@@ -529,7 +513,7 @@ func TestPGGetActivityReportDedupsAcrossChunks(t *testing.T) {
 		INSERT INTO messages (
 			session_id, ordinal, role, content, timestamp,
 			content_length, model, token_usage,
-			claude_message_id, claude_request_id
+			claude_message_id, source_uuid
 		) VALUES (
 			'dup-a', 0, 'assistant', 'x',
 			'2026-06-16T10:00:00Z'::timestamptz, 1,
@@ -538,8 +522,8 @@ func TestPGGetActivityReportDedupsAcrossChunks(t *testing.T) {
 		)`)
 	require.NoError(t, err, "insert dup-a message")
 
-	// dup-b: same dedup identity as dup-a (claude_message_id,
-	// claude_request_id) but a later timestamp and 900 output tokens; the
+	// dup-b: same source UUID dedup identity as dup-a but a later timestamp
+	// and 900 output tokens; the
 	// first-seen dedup must drop it in favor of dup-a.
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -555,7 +539,7 @@ func TestPGGetActivityReportDedupsAcrossChunks(t *testing.T) {
 		INSERT INTO messages (
 			session_id, ordinal, role, content, timestamp,
 			content_length, model, token_usage,
-			claude_message_id, claude_request_id
+			claude_message_id, source_uuid
 		) VALUES (
 			'dup-b', 0, 'assistant', 'x',
 			'2026-06-16T10:05:00Z'::timestamptz, 1,
@@ -564,17 +548,7 @@ func TestPGGetActivityReportDedupsAcrossChunks(t *testing.T) {
 		)`)
 	require.NoError(t, err, "insert dup-b message")
 
-	// Build the candidate ID slice explicitly so the chunk split is
-	// deterministic: dup-b in chunk 1 (later ts), dup-a in chunk 2 (earlier
-	// ts), forcing the shared dedup identity across the maxPGVars boundary.
-	ids := make([]string, 0, maxPGVars+2)
-	ids = append(ids, "dup-b")
-	for i := 0; i < maxPGVars; i++ {
-		ids = append(ids, fmt.Sprintf("fill-%d", i))
-	}
-	ids = append(ids, "dup-a")
-	require.Greater(t, len(ids), maxPGVars,
-		"candidate IDs must exceed one chunk to span the boundary")
+	ids := []string{"dup-b", "dup-a"}
 
 	q := pgDayQuery(t, "2026-06-16", "UTC")
 	lower := paddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
@@ -582,23 +556,101 @@ func TestPGGetActivityReportDedupsAcrossChunks(t *testing.T) {
 	usage, _, err := store.activityReportUsage(ctx, ids, lower, upper, q)
 	require.NoError(t, err)
 
-	// Only dup-a and dup-b carry eligible usage; the fillers have no rows, and
-	// the shared dedup identity leaves one survivor.
+	// The shared dedup identity leaves one survivor.
 	var shared []activity.UsageRow
 	for _, u := range usage {
 		if u.SessionID == "dup-a" || u.SessionID == "dup-b" {
 			shared = append(shared, u)
 		}
 	}
-	require.Len(t, shared, 1,
-		"only one dedup-identity row survives across the chunk boundary")
+	require.Len(t, shared, 1, "only one dedup-identity row survives")
 	require.NotEmpty(t, shared[0].ClaudeMessageID, "rows carry a message id")
-	// The global re-sort by timestamp must place dup-a (10:00, fetched in
-	// the LATER chunk) before dup-b (10:05, fetched in the EARLIER chunk).
-	// A per-chunk-order regression keeps dup-b and fails here.
 	assert.Equal(t, "dup-a", shared[0].SessionID,
-		"earlier-timestamp row sorts first despite its later chunk")
+		"earlier-timestamp row sorts first")
 	assert.Equal(t, 500, shared[0].OutputTokens, "dup-a survives first-seen")
+}
+
+func TestPGGetActivityReportFiltersAfterCrossSessionSnapshotSelection(
+	t *testing.T,
+) {
+	_, store := prepareUsageSchema(
+		t, "agentsview_activity_filtered_snapshot_test")
+	ctx := context.Background()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at, ended_at,
+			message_count, user_message_count
+		) VALUES
+			('activity-parent', 'test-machine', 'parent-project', 'claude',
+			 '2026-06-16T10:00:00Z'::timestamptz,
+			 '2026-06-16T10:00:00Z'::timestamptz, 1, 1),
+			('activity-child', 'test-machine', 'child-project', 'claude',
+			 '2026-06-16T10:01:00Z'::timestamptz,
+			 '2026-06-16T10:01:00Z'::timestamptz, 1, 1);
+		INSERT INTO messages (
+			session_id, ordinal, role, content, timestamp, content_length,
+			model, token_usage, claude_message_id, claude_request_id
+		) VALUES
+			('activity-parent', 0, 'assistant', 'partial',
+			 '2026-06-16T10:00:00Z'::timestamptz, 7, 'partial-model',
+			 '{"input_tokens":10,"output_tokens":5}',
+			 'activity-message', 'activity-request'),
+			('activity-child', 0, 'assistant', 'complete',
+			 '2026-06-16T10:01:00Z'::timestamptz, 8, 'complete-model',
+			 '{"input_tokens":1000,"output_tokens":631}',
+			 'activity-message', 'activity-request')`)
+	require.NoError(t, err)
+
+	parentReport, err := store.GetActivityReport(ctx, db.AnalyticsFilter{
+		Project: "parent-project", Timezone: "UTC",
+	}, pgDayQuery(t, "2026-06-16", "UTC"))
+	require.NoError(t, err)
+	assert.Equal(t, 1, parentReport.Totals.Sessions)
+	assert.Equal(t, 631, parentReport.Totals.OutputTokens,
+		"the parent filter must retain the complete child snapshot")
+
+	childReport, err := store.GetActivityReport(ctx, db.AnalyticsFilter{
+		Project: "child-project", Timezone: "UTC",
+	}, pgDayQuery(t, "2026-06-16", "UTC"))
+	require.NoError(t, err)
+	assert.Equal(t, 1, childReport.Totals.Sessions)
+	assert.Zero(t, childReport.Totals.OutputTokens,
+		"the child source must not claim usage attributed to the parent")
+}
+
+func TestPGGetActivityReportDeduplicatesAfterProjectFilter(t *testing.T) {
+	_, store := prepareUsageSchema(
+		t, "agentsview_activity_filtered_dedup_test")
+	ctx := context.Background()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at, ended_at,
+			message_count, user_message_count
+		) VALUES
+			('excluded-earlier', 'test-machine', 'excluded-project', 'claude',
+			 '2026-06-16T10:00:00Z'::timestamptz,
+			 '2026-06-16T10:00:00Z'::timestamptz, 1, 1),
+			('included-later', 'test-machine', 'included-project', 'claude',
+			 '2026-06-16T10:01:00Z'::timestamptz,
+			 '2026-06-16T10:01:00Z'::timestamptz, 1, 1);
+		INSERT INTO messages (
+			session_id, ordinal, role, content, timestamp, content_length,
+			model, token_usage, source_uuid
+		) VALUES
+			('excluded-earlier', 0, 'assistant', 'excluded',
+			 '2026-06-16T10:00:00Z'::timestamptz, 8, 'model-x',
+			 '{"input_tokens":10,"output_tokens":5}', 'shared-source'),
+			('included-later', 0, 'assistant', 'included',
+			 '2026-06-16T10:01:00Z'::timestamptz, 8, 'model-x',
+			 '{"input_tokens":20,"output_tokens":631}', 'shared-source')`)
+	require.NoError(t, err)
+
+	report, err := store.GetActivityReport(ctx, db.AnalyticsFilter{
+		Project: "included-project", Timezone: "UTC",
+	}, pgDayQuery(t, "2026-06-16", "UTC"))
+	require.NoError(t, err)
+	assert.Equal(t, 631, report.Totals.OutputTokens,
+		"an excluded duplicate must not suppress included usage")
 }
 
 func TestPGGetActivityReportUsageDedupFallsBackToSourceUUID(t *testing.T) {

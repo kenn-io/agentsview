@@ -20,7 +20,7 @@ func OpenPreparedTestDB(path string) (*DB, error) {
 		return nil, fmt.Errorf("configuring prepared test wal: %w", err)
 	}
 
-	reader, err := sql.Open("sqlite3", makeDSN(path, true))
+	reader, err := sql.Open(sqliteUsageDriverName, makeDSN(path, true))
 	if err != nil {
 		writer.Close()
 		return nil, fmt.Errorf("opening prepared test reader: %w", err)

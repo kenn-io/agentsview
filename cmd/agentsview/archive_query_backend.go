@@ -12,6 +12,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/pricingrefresh"
+	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/sync"
 )
 
@@ -34,7 +35,15 @@ type archiveQueryPolicy struct {
 type archiveQueryBackend interface {
 	ActivityReport(context.Context, ActivityReportConfig) (activity.Report, error)
 	DailyUsage(context.Context, dailyUsageQuery) (db.DailyUsageResult, error)
-	SessionUsage(context.Context, string) (*sessionUsageOutput, int, error)
+	SessionUsage(context.Context, sessionUsageQuery) (*sessionUsageOutput, int, error)
+}
+
+// sessionUsageQuery selects the session and the attribution scope for
+// `session usage`. OwnOnly restores the pre-rollup behavior of reporting
+// just the named transcript's own rows.
+type sessionUsageQuery struct {
+	SessionID string
+	OwnOnly   bool
 }
 
 type dailyUsageQuery struct {
@@ -186,9 +195,9 @@ func (b daemonArchiveQueryBackend) DailyUsage(
 
 func (b daemonArchiveQueryBackend) SessionUsage(
 	ctx context.Context,
-	sessionID string,
+	query sessionUsageQuery,
 ) (*sessionUsageOutput, int, error) {
-	return httpSessionUsageData(ctx, b.tr.URL, b.authToken, sessionID)
+	return httpSessionUsageData(ctx, b.tr.URL, b.authToken, query)
 }
 
 type localArchiveQueryBackend struct {
@@ -238,13 +247,13 @@ func localDailyUsageFilter(query dailyUsageQuery) db.UsageFilter {
 
 func (b localArchiveQueryBackend) SessionUsage(
 	ctx context.Context,
-	sessionID string,
+	query sessionUsageQuery,
 ) (*sessionUsageOutput, int, error) {
 	applyCustomPricing(b.database, b.cfg)
 	ensureUsagePricing(b.database, b.offline, b.cfg.CustomModelPricing)
 
 	resolvedID, known := resolveRawSessionID(
-		ctx, b.database, b.cfg.AgentDirs, sessionID,
+		ctx, b.database, b.cfg.AgentDirs, query.SessionID,
 	)
 
 	if known && !b.skipFreshData {
@@ -255,9 +264,13 @@ func (b localArchiveQueryBackend) SessionUsage(
 			Machine:                 b.cfg.LocalMachineName,
 			BlockedResultCategories: b.cfg.ResultContentBlockedCategories,
 		})
-		if syncErr := engine.SyncSingleSessionContext(
-			ctx, resolvedID,
-		); syncErr != nil {
+		var syncErr error
+		if query.OwnOnly {
+			syncErr = engine.SyncSingleSessionContext(ctx, resolvedID)
+		} else {
+			syncErr = engine.SyncSessionWithSubagentsContext(ctx, resolvedID)
+		}
+		if syncErr != nil {
 			fmt.Fprintf(os.Stderr,
 				"warning: sync failed: %v\n", syncErr)
 		}
@@ -266,13 +279,21 @@ func (b localArchiveQueryBackend) SessionUsage(
 		engine.Close()
 	}
 
-	u, err := b.database.GetSessionUsage(ctx, resolvedID, true)
+	load := func() (*db.SessionUsage, error) {
+		if query.OwnOnly {
+			return b.database.GetSessionUsage(ctx, resolvedID, true)
+		}
+		return service.SessionUsageWithSubagents(
+			ctx, b.database, resolvedID, true)
+	}
+
+	u, err := load()
 	if err != nil {
 		return nil, tokenUseExitErr,
 			fmt.Errorf("querying session usage: %w", err)
 	}
 	if u == nil {
-		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
+		fmt.Fprintf(os.Stderr, "session not found: %s\n", query.SessionID)
 		return nil, tokenUseExitNotFound, nil
 	}
 	if len(u.UnpricedModels) > 0 && !b.offline {
@@ -284,9 +305,7 @@ func (b localArchiveQueryBackend) SessionUsage(
 			fmt.Fprintf(os.Stderr,
 				"warning: pricing refresh failed: %v\n", refErr)
 		} else if refreshed {
-			if u2, e := b.database.GetSessionUsage(
-				ctx, resolvedID, true,
-			); e == nil && u2 != nil {
+			if u2, e := load(); e == nil && u2 != nil {
 				u = u2
 			}
 		}

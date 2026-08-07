@@ -578,6 +578,12 @@ func contractAnalyticsTrendsAndUsage(
 	require.True(t, usage.HasCost)
 	require.Equal(t, []string{"claude-sonnet-contract"}, usage.Models)
 	require.Equal(t, money.MustParseDollars("0.002355"), usage.Cost)
+	// cost_usd is a deprecated compatibility alias for
+	// cost.microdollars/1e6; every backend must report the same value
+	// for the same cost (see db.CostUSDFromCost).
+	require.NotNil(t, usage.CostUSD)
+	assert.InDelta(t,
+		float64(usage.Cost.Microdollars)/1e6, *usage.CostUSD, 1e-9)
 }
 
 func contractLocalOnlyMethods(

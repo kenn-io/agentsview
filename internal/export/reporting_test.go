@@ -92,54 +92,84 @@ func TestFinalizeReportingHourCanonicalizesOrderingAndIgnoresInputDigest(t *test
 }
 
 func TestFinalizeReportingHourDigestVector(t *testing.T) {
-	hour := quietReportingHourFixture("2026-07-28-00")
-	hour.Digest = "sha256:stale-derived-field"
+	tests := []struct {
+		name    string
+		version int
+		digest  string
+	}{
+		{
+			name: "v1", version: ReportingLegacySchemaVersion,
+			digest: "sha256:3b1d5c9c228f26da81e4acc08ccf50d11b4855fa11fdbaf67bfbc6a34b72e172",
+		},
+		{
+			name: "v2", version: ReportingSchemaVersion,
+			digest: "sha256:4c3dbbedc3bd6bcebfe194093ce77c4e85e85dd1b3ac6bd39e21b841b9ce993b",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hour := quietReportingHourFixtureVersion("2026-07-28-00", tt.version)
+			hour.Digest = "sha256:stale-derived-field"
 
-	finalized, _, err := FinalizeReportingHour(hour)
-	require.NoError(t, err)
-	assert.Equal(
-		t,
-		"sha256:3b1d5c9c228f26da81e4acc08ccf50d11b4855fa11fdbaf67bfbc6a34b72e172",
-		finalized.Digest,
-	)
+			finalized, _, err := FinalizeReportingHour(hour)
+			require.NoError(t, err)
+			assert.Equal(t, tt.digest, finalized.Digest)
 
-	hour.Digest = "sha256:different-stale-derived-field"
-	repeated, _, err := FinalizeReportingHour(hour)
-	require.NoError(t, err)
-	assert.Equal(t, finalized.Digest, repeated.Digest)
+			hour.Digest = "sha256:different-stale-derived-field"
+			repeated, _, err := FinalizeReportingHour(hour)
+			require.NoError(t, err)
+			assert.Equal(t, finalized.Digest, repeated.Digest)
+		})
+	}
 }
 
 func TestFinalizeReportingDayGivesCompletedEmptyDateCanonicalDigest(t *testing.T) {
-	hours := make([]ReportingHour, 24)
-	for i := range hours {
-		hours[i] = quietReportingHourFixture(
-			"2026-07-28-" + time.Date(0, 1, 1, i, 0, 0, 0, time.UTC).Format("15"),
-		)
+	tests := []struct {
+		name       string
+		version    int
+		dayDigest  string
+		hourDigest string
+	}{
+		{
+			name: "v1", version: ReportingLegacySchemaVersion,
+			dayDigest:  "sha256:3e92051eeb2fa36ad03a30bbbf1a7769244ecd33c5dca3eddd3698ddc0cd71d3",
+			hourDigest: "sha256:3b1d5c9c228f26da81e4acc08ccf50d11b4855fa11fdbaf67bfbc6a34b72e172",
+		},
+		{
+			name: "v2", version: ReportingSchemaVersion,
+			dayDigest:  "sha256:24fb5a2f40effe393c3c384087b4103811eabc85e029c1afd56b3f61afa8fe3e",
+			hourDigest: "sha256:4c3dbbedc3bd6bcebfe194093ce77c4e85e85dd1b3ac6bd39e21b841b9ce993b",
+		},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hours := make([]ReportingHour, 24)
+			for i := range hours {
+				hours[i] = quietReportingHourFixtureVersion(
+					"2026-07-28-"+time.Date(
+						0, 1, 1, i, 0, 0, 0, time.UTC,
+					).Format("15"),
+					tt.version,
+				)
+			}
 
-	finalized, canonical, err := FinalizeReportingDay(ReportingDay{
-		SchemaVersion: ReportingSchemaVersion,
-		Date:          "2026-07-28",
-		Complete:      true,
-		HasData:       true,
-		Digest:        "sha256:stale-derived-field",
-		Hours:         hours,
-	})
-	require.NoError(t, err)
+			finalized, canonical, err := FinalizeReportingDay(ReportingDay{
+				SchemaVersion: tt.version,
+				Date:          "2026-07-28",
+				Complete:      true,
+				HasData:       true,
+				Digest:        "sha256:stale-derived-field",
+				Hours:         hours,
+			})
+			require.NoError(t, err)
 
-	assert.False(t, finalized.HasData)
-	assert.Equal(
-		t,
-		"sha256:3e92051eeb2fa36ad03a30bbbf1a7769244ecd33c5dca3eddd3698ddc0cd71d3",
-		finalized.Digest,
-	)
-	require.Len(t, finalized.Hours, 24)
-	assert.Equal(
-		t,
-		"sha256:3b1d5c9c228f26da81e4acc08ccf50d11b4855fa11fdbaf67bfbc6a34b72e172",
-		finalized.Hours[0].Digest,
-	)
-	assert.Contains(t, string(canonical), `"has_data":false`)
+			assert.False(t, finalized.HasData)
+			assert.Equal(t, tt.dayDigest, finalized.Digest)
+			require.Len(t, finalized.Hours, 24)
+			assert.Equal(t, tt.hourDigest, finalized.Hours[0].Digest)
+			assert.Contains(t, string(canonical), `"has_data":false`)
+		})
+	}
 }
 
 func reportingHourFixture(period string) ReportingHour {
@@ -188,7 +218,7 @@ func reportingHourFixture(period string) ReportingHour {
 	}
 }
 
-func quietReportingHourFixture(period string) ReportingHour {
+func quietReportingHourFixtureVersion(period string, schemaVersion int) ReportingHour {
 	hourStart, err := time.Parse("2006-01-02-15", period)
 	if err != nil {
 		panic(err)
@@ -199,7 +229,7 @@ func quietReportingHourFixture(period string) ReportingHour {
 			Format(time.RFC3339)
 	}
 	return ReportingHour{
-		SchemaVersion: ReportingSchemaVersion,
+		SchemaVersion: schemaVersion,
 		Period:        period,
 		Activity: ReportingActivity{
 			Buckets: buckets,

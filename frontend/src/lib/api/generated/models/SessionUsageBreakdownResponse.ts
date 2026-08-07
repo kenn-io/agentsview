@@ -15,6 +15,8 @@ export type SessionUsageBreakdownResponse = {
   ordinal: number;
   output_tokens: number;
   source: string;
+  subagent_session_id?: string;
   timestamp: string;
+  web_search_requests?: number;
 };
 

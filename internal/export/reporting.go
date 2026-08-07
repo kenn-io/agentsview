@@ -12,10 +12,20 @@ const (
 	reportingHourLayout = "2006-01-02-15"
 	reportingDateLayout = "2006-01-02"
 
-	// ReportingSchemaVersion is the wire version for hour, day, and digest
-	// exports consumed by downstream integrations.
-	ReportingSchemaVersion = 1
+	// ReportingLegacySchemaVersion preserves the original first-seen usage
+	// snapshot and token-only charging semantics.
+	ReportingLegacySchemaVersion = 1
+	// ReportingSchemaVersion is the current wire version for hour, day, and
+	// digest exports consumed by downstream integrations.
+	ReportingSchemaVersion = 2
 )
+
+// IsSupportedReportingSchemaVersion reports whether reporting exports can
+// still produce the requested wire semantics.
+func IsSupportedReportingSchemaVersion(version int) bool {
+	return version == ReportingLegacySchemaVersion ||
+		version == ReportingSchemaVersion
+}
 
 // ReportingHour is one immutable UTC-hour export. Digest identifies the
 // canonical document body with the derived Digest field omitted.
@@ -181,7 +191,7 @@ func ParseReportingDate(value string) (time.Time, error) {
 // FinalizeReportingHour returns a normalized copy, its content-derived
 // digest, and its canonical JSON bytes.
 func FinalizeReportingHour(hour ReportingHour) (ReportingHour, []byte, error) {
-	if hour.SchemaVersion != ReportingSchemaVersion {
+	if !IsSupportedReportingSchemaVersion(hour.SchemaVersion) {
 		return ReportingHour{}, nil, fmt.Errorf(
 			"unsupported reporting schema version %d", hour.SchemaVersion,
 		)
@@ -216,7 +226,7 @@ func FinalizeReportingHour(hour ReportingHour) (ReportingHour, []byte, error) {
 // FinalizeReportingDay normalizes and finalizes every hour, then derives the
 // completed-day digest from the ordered hour digests.
 func FinalizeReportingDay(day ReportingDay) (ReportingDay, []byte, error) {
-	if day.SchemaVersion != ReportingSchemaVersion {
+	if !IsSupportedReportingSchemaVersion(day.SchemaVersion) {
 		return ReportingDay{}, nil, fmt.Errorf(
 			"unsupported reporting schema version %d", day.SchemaVersion,
 		)

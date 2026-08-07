@@ -46,6 +46,7 @@ type schemaProbeState struct {
 	syncMetadataKeys    map[string]bool
 	maxDataVersion      int
 	maxDataVersionErr   error
+	execErrors          []schemaProbeQueryError
 	queryErrors         []schemaProbeQueryError
 }
 
@@ -133,6 +134,14 @@ func (c *schemaProbeConn) ExecContext(
 			c.state.mu.Unlock()
 		}
 	}
+	for _, execErr := range c.state.execErrors {
+		if strings.Contains(
+			normalized,
+			strings.ToLower(execErr.contains),
+		) {
+			return nil, execErr.err
+		}
+	}
 	return driver.RowsAffected(0), nil
 }
 
@@ -213,6 +222,14 @@ func (c *schemaProbeConn) QueryContext(
 		return &schemaProbeRows{
 			columns: []string{"max"},
 			values:  [][]driver.Value{{int64(c.state.maxDataVersion)}},
+		}, nil
+	case strings.Contains(normalized, "agentsview_json_integer"):
+		return &schemaProbeRows{
+			columns: []string{
+				"output", "web_search", "malformed",
+				"malformed_scoped_output", "malformed_scoped_web_search",
+			},
+			values: [][]driver.Value{{"42", "2", "7", "42", "2"}},
 		}, nil
 	case strings.Contains(normalized, "select id, first_message"):
 		return &schemaProbeRows{
@@ -364,6 +381,43 @@ func TestEnsureSchemaBatchesColumnIntrospection(t *testing.T) {
 
 	assert.Equal(t, 1, state.informationQueryCount(),
 		"information_schema.columns queries")
+}
+
+func TestEnsureSchemaFallsBackWhenPLpgSQLUsageHelperIsUnsupported(
+	t *testing.T,
+) {
+	pg, state := newSchemaProbeDB(t, map[string][]string{
+		"sessions": {
+			"has_total_output_tokens",
+			"has_peak_context_tokens",
+		},
+		"messages": {
+			"has_context_tokens",
+			"has_output_tokens",
+		},
+	})
+	state.syncMetadataKeys = map[string]bool{
+		tokenCoverageRepairMetadataKey:        true,
+		sourceCurationBackfillMetadataKey:     true,
+		projectIdentityRemoteScrubMetadataKey: true,
+	}
+	state.execErrors = []schemaProbeQueryError{{
+		contains: "language plpgsql",
+		err: errors.New(
+			`ERROR: unimplemented: PL/pgSQL exception blocks (SQLSTATE 0A000)`,
+		),
+	}}
+
+	require.NoError(t, EnsureSchema(t.Context(), pg, "agentsview"))
+
+	executed := strings.ToLower(state.executedSQL())
+	primary := strings.Index(executed, "language plpgsql")
+	fallback := strings.Index(executed, "language sql")
+	require.NotEqual(t, -1, primary, "must feature-probe PL/pgSQL helper")
+	require.NotEqual(t, -1, fallback, "must install SQL fallback")
+	assert.Less(t, primary, fallback, "fallback must follow failed probe")
+	assert.Contains(t, executed, "json_valid(raw_value)")
+	assert.Contains(t, state.queriedSQL(), "agentsview_json_integer")
 }
 
 func TestEnsureSchemaMigratesSessionDeletionCause(t *testing.T) {
@@ -604,6 +658,20 @@ func TestCheckSchemaCompatIgnoresPushOnlySchema(t *testing.T) {
 
 	require.NoError(t, CheckSchemaCompat(context.Background(), pg),
 		"read compatibility must not require push-only schema")
+}
+
+func TestCheckSchemaCompatRequiresUsageJSONHelper(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.queryErrors = []schemaProbeQueryError{{
+		contains: "agentsview_json_integer",
+		err: errors.New(
+			`ERROR: function agentsview_json_integer does not exist (SQLSTATE 42883)`),
+	}}
+
+	err := CheckSchemaCompat(t.Context(), pg)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "usage JSON helper missing or incompatible")
 }
 
 func TestCheckSchemaCompatRequiresCurationBaselineColumns(t *testing.T) {

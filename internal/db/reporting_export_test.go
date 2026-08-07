@@ -19,30 +19,48 @@ import (
 func TestReportingExportCompletedEmptyDayHas24QuietHours(t *testing.T) {
 	d := testDB(t)
 
-	day, err := d.ExportReportingDay(context.Background(), ReportingExportOptions{
-		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
-		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
-	})
-	require.NoError(t, err)
+	tests := []struct {
+		name          string
+		schemaVersion int
+		digest        string
+	}{
+		{
+			name:          "legacy v1",
+			schemaVersion: export.ReportingLegacySchemaVersion,
+			digest:        "sha256:3e92051eeb2fa36ad03a30bbbf1a7769244ecd33c5dca3eddd3698ddc0cd71d3",
+		},
+		{
+			name:          "current v2",
+			schemaVersion: export.ReportingSchemaVersion,
+			digest:        "sha256:24fb5a2f40effe393c3c384087b4103811eabc85e029c1afd56b3f61afa8fe3e",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			day, err := d.ExportReportingDay(context.Background(), ReportingExportOptions{
+				Date:          time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+				Now:           time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
+				SchemaVersion: tt.schemaVersion,
+			})
+			require.NoError(t, err)
 
-	assert.True(t, day.Complete)
-	assert.False(t, day.HasData)
-	assert.Equal(
-		t,
-		"sha256:3e92051eeb2fa36ad03a30bbbf1a7769244ecd33c5dca3eddd3698ddc0cd71d3",
-		day.Digest,
-	)
-	require.Len(t, day.Hours, 24)
-	for _, hour := range day.Hours {
-		assert.False(t, hour.HasData)
-		assert.Zero(t, hour.Activity.Totals.IdleMinutes)
-		assert.Empty(t, hour.Activity.ByModel)
-		assert.Empty(t, hour.Activity.ByAgent)
-		assert.Empty(t, hour.Activity.ByProject)
-		assert.Empty(t, hour.Usage.ByModel)
-		assert.Empty(t, hour.Usage.ByAgent)
-		assert.Empty(t, hour.Usage.ByProject)
-		assert.Len(t, hour.Activity.Buckets, 12)
+			assert.Equal(t, tt.schemaVersion, day.SchemaVersion)
+			assert.True(t, day.Complete)
+			assert.False(t, day.HasData)
+			assert.Equal(t, tt.digest, day.Digest)
+			require.Len(t, day.Hours, 24)
+			for _, hour := range day.Hours {
+				assert.False(t, hour.HasData)
+				assert.Zero(t, hour.Activity.Totals.IdleMinutes)
+				assert.Empty(t, hour.Activity.ByModel)
+				assert.Empty(t, hour.Activity.ByAgent)
+				assert.Empty(t, hour.Activity.ByProject)
+				assert.Empty(t, hour.Usage.ByModel)
+				assert.Empty(t, hour.Usage.ByAgent)
+				assert.Empty(t, hour.Usage.ByProject)
+				assert.Len(t, hour.Activity.Buckets, 12)
+			}
+		})
 	}
 }
 
@@ -587,6 +605,55 @@ func TestReportingExportIncludesStandaloneRowsOnlyInUsage(t *testing.T) {
 	assert.Equal(t, daily.Totals.TotalCost, exportedCost)
 }
 
+func TestReportingExportUsesAttributedSessionMetadataForCompleteSnapshot(
+	t *testing.T,
+) {
+	d := testDB(t)
+	insertSession(t, d, "reporting-parent", "parent-project", func(s *Session) {
+		s.Agent = "parent-agent"
+		s.Machine = "parent-machine"
+		s.StartedAt = Ptr("2026-07-28T09:00:00Z")
+		s.EndedAt = Ptr("2026-07-28T09:05:00Z")
+	})
+	insertSession(t, d, "reporting-child", "child-project", func(s *Session) {
+		s.Agent = "child-agent"
+		s.Machine = "child-machine"
+		s.StartedAt = Ptr("2026-07-28T09:01:00Z")
+		s.EndedAt = Ptr("2026-07-28T09:06:00Z")
+	})
+	insertMessages(t, d,
+		Message{
+			SessionID: "reporting-parent", Ordinal: 0, Role: "assistant",
+			Timestamp: "2026-07-28T09:05:00Z", Model: "partial-model",
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":10,"output_tokens":5}`),
+			ClaudeMessageID: "reporting-message",
+			ClaudeRequestID: "reporting-request",
+		},
+		Message{
+			SessionID: "reporting-child", Ordinal: 0, Role: "assistant",
+			Timestamp: "2026-07-28T09:06:00Z", Model: "complete-model",
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":1000,"output_tokens":631}`),
+			ClaudeMessageID: "reporting-message",
+			ClaudeRequestID: "reporting-request",
+		},
+	)
+
+	day, err := d.ExportReportingDay(context.Background(), ReportingExportOptions{
+		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+
+	hour := day.Hours[9]
+	assert.Equal(t, int64(631), hour.Usage.Totals.OutputTokens)
+	assert.Equal(t, []string{"parent-agent"},
+		reportingUsageBreakdownKeys(hour.Usage.ByAgent))
+	require.Len(t, hour.Usage.ByProject, 1)
+	assert.Equal(t, "parent-project", hour.Usage.ByProject[0].Project)
+}
+
 func TestReportingExportDeduplicatesMergedUsageInputs(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "fixture-dedup", "project dedup", func(s *Session) {
@@ -859,7 +926,7 @@ func TestFinalizeReportingUsageOrdering(t *testing.T) {
 				if reverse {
 					rows[0], rows[1] = rows[1], rows[0]
 				}
-				survivors, err := finalizeReportingUsage(query, rows)
+				survivors, err := finalizeReportingUsage(query, rows, nil)
 				require.NoError(t, err)
 				require.Len(t, survivors, 1)
 				assert.Equal(t, tt.wantInput, survivors[0].InputTokens)
@@ -867,6 +934,151 @@ func TestFinalizeReportingUsageOrdering(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFinalizeReportingUsageAttributesCompleteSnapshotToEarliestSession(t *testing.T) {
+	query := activity.Query{
+		RangeStart:   time.Date(2026, 7, 28, 9, 0, 0, 0, time.UTC),
+		RangeEnd:     time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC),
+		EffectiveEnd: time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC),
+	}
+	rows := []activity.UsageRow{
+		{
+			SessionID:       "earlier-parent",
+			MessageOrdinal:  1,
+			UsageSource:     "message",
+			Timestamp:       "2026-07-28T09:05:00Z",
+			Model:           "model-a",
+			OutputTokens:    100,
+			Cost:            money.Money{Microdollars: 1000},
+			CostSource:      export.CostSourceReported,
+			Priced:          true,
+			Contributes:     true,
+			ClaudeMessageID: "shared-message",
+			ClaudeRequestID: "shared-request",
+		},
+		{
+			SessionID:       "later-child",
+			MessageOrdinal:  1,
+			UsageSource:     "message",
+			Timestamp:       "2026-07-28T09:06:00Z",
+			Model:           "model-a",
+			OutputTokens:    900,
+			Cost:            money.Money{Microdollars: 9000},
+			CostSource:      export.CostSourceReported,
+			Priced:          true,
+			Contributes:     true,
+			ClaudeMessageID: "shared-message",
+			ClaudeRequestID: "shared-request",
+		},
+	}
+
+	sessionByID := map[string]activity.SessionMeta{
+		"earlier-parent": {
+			SessionID: "earlier-parent",
+			Agent:     "parent-agent",
+			Project:   "parent-project",
+			Machine:   "parent-machine",
+		},
+	}
+	survivors, err := finalizeReportingUsage(query, rows, sessionByID)
+	require.NoError(t, err)
+	require.Len(t, survivors, 1)
+	assert.Equal(t, "earlier-parent", survivors[0].SessionID)
+	assert.Equal(t, "parent-agent", survivors[0].Agent)
+	assert.Equal(t, "parent-project", survivors[0].Project)
+	assert.Equal(t, "parent-machine", survivors[0].Machine)
+	assert.Equal(t, 900, survivors[0].OutputTokens)
+	assert.Equal(t, money.Money{Microdollars: 9000}, survivors[0].Cost)
+}
+
+func TestFinalizeReportingUsageAttributesEquivalentInstantBySessionID(
+	t *testing.T,
+) {
+	query := activity.Query{
+		RangeStart:   time.Date(2026, 7, 28, 9, 0, 0, 0, time.UTC),
+		RangeEnd:     time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC),
+		EffectiveEnd: time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC),
+	}
+	rows := []activity.UsageRow{
+		{
+			SessionID:       "a-parent",
+			MessageOrdinal:  1,
+			UsageSource:     "message",
+			Timestamp:       "2026-07-28T09:05:00Z",
+			OutputTokens:    100,
+			ClaudeMessageID: "shared-message",
+			ClaudeRequestID: "shared-request",
+		},
+		{
+			SessionID:       "z-child",
+			MessageOrdinal:  1,
+			UsageSource:     "message",
+			Timestamp:       "2026-07-28T09:05:00.000Z",
+			OutputTokens:    900,
+			ClaudeMessageID: "shared-message",
+			ClaudeRequestID: "shared-request",
+		},
+	}
+	sessionByID := map[string]activity.SessionMeta{
+		"a-parent": {
+			SessionID: "a-parent",
+			Agent:     "parent-agent",
+			Project:   "parent-project",
+			Machine:   "parent-machine",
+		},
+	}
+
+	survivors, err := finalizeReportingUsage(query, rows, sessionByID)
+	require.NoError(t, err)
+	require.Len(t, survivors, 1)
+	assert.Equal(t, "a-parent", survivors[0].SessionID)
+	assert.Equal(t, "parent-agent", survivors[0].Agent)
+	assert.Equal(t, "parent-project", survivors[0].Project)
+	assert.Equal(t, "parent-machine", survivors[0].Machine)
+	assert.Equal(t, 900, survivors[0].OutputTokens)
+}
+
+func TestFinalizeReportingUsageCarriesWebSearchFeeToCompleteSnapshot(
+	t *testing.T,
+) {
+	query := activity.Query{
+		RangeStart:   time.Date(2026, 7, 28, 9, 0, 0, 0, time.UTC),
+		RangeEnd:     time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC),
+		EffectiveEnd: time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC),
+	}
+	rows := []activity.UsageRow{
+		{
+			SessionID:         "earlier-parent",
+			Timestamp:         "2026-07-28T09:05:00Z",
+			OutputTokens:      100,
+			WebSearchRequests: 2,
+			Cost:              money.MustParseDollars("0.22"),
+			CostSource:        export.CostSourceComputed,
+			Priced:            true,
+			Contributes:       true,
+			ClaudeMessageID:   "shared-message",
+			ClaudeRequestID:   "shared-request",
+		},
+		{
+			SessionID:       "later-child",
+			Timestamp:       "2026-07-28T09:06:00Z",
+			OutputTokens:    200,
+			Cost:            money.MustParseDollars("0.50"),
+			CostSource:      export.CostSourceComputed,
+			Priced:          true,
+			Contributes:     true,
+			ClaudeMessageID: "shared-message",
+			ClaudeRequestID: "shared-request",
+		},
+	}
+
+	survivors, err := finalizeReportingUsage(query, rows, nil)
+	require.NoError(t, err)
+	require.Len(t, survivors, 1)
+	assert.Equal(t, 200, survivors[0].OutputTokens)
+	assert.Equal(t, 2, survivors[0].WebSearchRequests)
+	assert.Equal(t, money.MustParseDollars("0.52"), survivors[0].Cost)
 }
 
 func reportingUsageBreakdownKeys(
@@ -1022,6 +1234,7 @@ func TestReportingHourDerivesAgentMinutes(t *testing.T) {
 	hour, err := reportingHourFromActivity(
 		time.Date(2026, 7, 28, 9, 0, 0, 0, time.UTC),
 		report,
+		export.ReportingSchemaVersion,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, 0.5, hour.Activity.Totals.AgentMinutes)

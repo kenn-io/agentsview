@@ -55,7 +55,8 @@ type ActivityEvent struct {
 // GetDailyUsage). Rows MUST be delivered in the timestamp, session ID, and
 // message-ordinal survivor order required by the caller.
 type UsageRow struct {
-	SessionID           string
+	SessionID           string // session receiving attribution
+	SourceSessionID     string // transcript that supplied the surviving row
 	Model               string
 	Timestamp           string // ts, RFC3339 or ""
 	Project             string
@@ -66,16 +67,45 @@ type UsageRow struct {
 	OutputTokens        int
 	CacheCreationTokens int
 	CacheReadTokens     int
-	Cost                money.Money
-	CostSource          export.CostSource
-	SessionCost         *money.Money
-	Priced              bool
-	Contributes         bool
-	Agent               string
-	ClaudeMessageID     string
-	ClaudeRequestID     string
-	SourceUUID          string
-	UsageDedupKey       string
+	// WebSearchRequests is how many billed Anthropic server-side web
+	// searches the row's stored usage reports; it prices at a flat
+	// per-request fee on top of tokens.
+	WebSearchRequests int
+	Cost              money.Money
+	CostSource        export.CostSource
+	SessionCost       *money.Money
+	Priced            bool
+	Contributes       bool
+	Agent             string
+	ClaudeMessageID   string
+	ClaudeRequestID   string
+	SourceUUID        string
+	UsageDedupKey     string
+}
+
+// SessionUsageRows is a globally ordered, cross-session-deduplicated usage
+// row set. RawOutputTokensBySession records output from every usage row before
+// snapshot selection or cross-session deduplication. DeduplicatedOutputTokens
+// records output removed from each session when an earlier transcript already
+// represented the same usage.
+// DiscardedContributingSessions records sessions whose snapshot or duplicate
+// rows carried billable usage before they were removed.
+type SessionUsageRows struct {
+	Rows                          []UsageRow
+	RawOutputTokensBySession      map[string]int
+	DeduplicatedOutputTokens      map[string]int
+	DiscardedContributingSessions map[string]struct{}
+}
+
+// UsageDataContributes reports whether normalized usage data represents spend.
+func UsageDataContributes(
+	hasExplicitCost bool,
+	inputTokens, outputTokens, reasoningTokens int,
+	cacheCreationTokens, cacheReadTokens, webSearchRequests int,
+) bool {
+	return hasExplicitCost || inputTokens != 0 || outputTokens != 0 ||
+		reasoningTokens != 0 || cacheCreationTokens != 0 ||
+		cacheReadTokens != 0 || webSearchRequests != 0
 }
 
 type UsageCostAllocation struct {
@@ -665,6 +695,11 @@ type usageDedupToken struct {
 	value string
 }
 
+type claudeUsageSnapshotToken struct {
+	messageID string
+	requestID string
+}
+
 func usageDedupTokenForRow(u UsageRow) (usageDedupToken, bool) {
 	if u.ClaudeMessageID != "" && u.ClaudeRequestID != "" {
 		return usageDedupToken{
@@ -687,22 +722,192 @@ func usageDedupTokenForRow(u UsageRow) (usageDedupToken, bool) {
 	return usageDedupToken{}, false
 }
 
-// UsageSurvivorMask returns a same-length mask for rows that survive the
-// report's range, effective-end, and first-seen dedup filters.
-func UsageSurvivorMask(start, end, effEnd time.Time, usage []UsageRow) []bool {
-	return usageSurvivorMask(start, end, effEnd, usage)
+// ClaudeSnapshotSurvivorMask returns a same-length mask that keeps the most
+// complete output-token snapshot for each Claude request across the supplied
+// rows.
+// Claude Code can persist several assistant rows with the same message and
+// request IDs while a tool turn streams; the final row carries the full output
+// count. Equal snapshots retain their latest occurrence.
+func ClaudeSnapshotSurvivorMask(usage []UsageRow) []bool {
+	mask, _, _ := ClaudeSnapshotSurvivorSelection(usage)
+	return mask
 }
 
-func usageSurvivorMask(start, end, effEnd time.Time, usage []UsageRow) []bool {
+// ClaudeSnapshotSurvivorSelection also returns the earliest session and the
+// maximum billed web-search count for each surviving snapshot. Callers use the
+// former for attribution and the latter when pricing the selected token row.
+func ClaudeSnapshotSurvivorSelection(
+	usage []UsageRow,
+) (mask []bool, attribution []string, webSearchRequests []int) {
+	return claudeSnapshotSurvivorSelection(usage, nil)
+}
+
+func claudeSnapshotSurvivorSelection(
+	usage []UsageRow, eligible []bool,
+) (mask []bool, attribution []string, webSearchRequests []int) {
+	mask = make([]bool, len(usage))
+	attribution = make([]string, len(usage))
+	webSearchRequests = make([]int, len(usage))
+	best := make(map[claudeUsageSnapshotToken]int)
+	earliest := make(map[claudeUsageSnapshotToken]int)
+	maximumWebSearchRequests := make(map[claudeUsageSnapshotToken]int)
+	for i, u := range usage {
+		if eligible != nil && !eligible[i] {
+			continue
+		}
+		if u.ClaudeMessageID == "" || u.ClaudeRequestID == "" {
+			mask[i] = true
+			attribution[i] = u.SessionID
+			webSearchRequests[i] = u.WebSearchRequests
+			continue
+		}
+		key := claudeUsageSnapshotToken{
+			messageID: u.ClaudeMessageID,
+			requestID: u.ClaudeRequestID,
+		}
+		previous, ok := best[key]
+		if first, exists := earliest[key]; !exists ||
+			earlierClaudeSnapshotAttribution(u, usage[first]) {
+			earliest[key] = i
+		}
+		if !ok || laterClaudeSnapshot(u, usage[previous]) {
+			best[key] = i
+		}
+		maximumWebSearchRequests[key] = max(
+			maximumWebSearchRequests[key], u.WebSearchRequests)
+	}
+	for key, i := range best {
+		mask[i] = true
+		attribution[i] = usage[earliest[key]].SessionID
+		webSearchRequests[i] = maximumWebSearchRequests[key]
+	}
+	return mask, attribution, webSearchRequests
+}
+
+func earlierClaudeSnapshotAttribution(candidate, current UsageRow) bool {
+	candidateTS, candidateErr := time.Parse(time.RFC3339Nano, candidate.Timestamp)
+	currentTS, currentErr := time.Parse(time.RFC3339Nano, current.Timestamp)
+	if candidateErr == nil && currentErr == nil && !candidateTS.Equal(currentTS) {
+		return candidateTS.Before(currentTS)
+	}
+	if (candidateErr == nil) != (currentErr == nil) {
+		return candidateErr == nil
+	}
+	if candidate.SessionID != current.SessionID {
+		return candidate.SessionID < current.SessionID
+	}
+	if candidate.MessageOrdinal != current.MessageOrdinal {
+		return candidate.MessageOrdinal < current.MessageOrdinal
+	}
+	return candidateErr != nil && candidate.Timestamp < current.Timestamp
+}
+
+func laterClaudeSnapshot(candidate, current UsageRow) bool {
+	if candidate.OutputTokens != current.OutputTokens {
+		return candidate.OutputTokens > current.OutputTokens
+	}
+	candidateTS, candidateErr := time.Parse(time.RFC3339Nano, candidate.Timestamp)
+	currentTS, currentErr := time.Parse(time.RFC3339Nano, current.Timestamp)
+	if candidateErr == nil && currentErr == nil && !candidateTS.Equal(currentTS) {
+		return candidateTS.After(currentTS)
+	}
+	if (candidateErr == nil) != (currentErr == nil) {
+		return candidateErr == nil
+	}
+	if candidate.SessionID != current.SessionID {
+		return candidate.SessionID > current.SessionID
+	}
+	if candidate.MessageOrdinal != current.MessageOrdinal {
+		return candidate.MessageOrdinal > current.MessageOrdinal
+	}
+	return candidateErr != nil && candidate.Timestamp > current.Timestamp
+}
+
+// LegacyUsageSurvivorMask preserves reporting schema v1's range filtering and
+// first-seen deduplication. It intentionally does not rank Claude snapshots.
+func LegacyUsageSurvivorMask(
+	start, end, effEnd time.Time, usage []UsageRow,
+) []bool {
 	seen := map[usageDedupToken]struct{}{}
-	out := make([]bool, len(usage))
+	mask := make([]bool, len(usage))
+	for i, row := range usage {
+		ts, ok := parseTS(row.Timestamp)
+		if !ok || ts.Before(start) || !ts.Before(end) || !ts.Before(effEnd) {
+			continue
+		}
+		if key, ok := usageDedupTokenForRow(row); ok {
+			if _, duplicate := seen[key]; duplicate {
+				continue
+			}
+			seen[key] = struct{}{}
+		}
+		mask[i] = true
+	}
+	return mask
+}
+
+// UsageSurvivorMask returns a same-length mask for rows that survive the
+// report's range, effective-end, complete-snapshot, and cross-session dedup
+// filters.
+func UsageSurvivorMask(start, end, effEnd time.Time, usage []UsageRow) []bool {
+	mask, _, _ := UsageSurvivorSelection(start, end, effEnd, usage)
+	return mask
+}
+
+// UsageSurvivorSelection returns the survivor mask, accounting destination,
+// and maximum billed web-search count for each surviving row. A complete
+// snapshot can come from a later transcript while retaining the earliest
+// transcript's attribution and an earlier snapshot's server-tool count.
+func UsageSurvivorSelection(
+	start, end, effEnd time.Time, usage []UsageRow,
+) (mask []bool, attribution []string, webSearchRequests []int) {
+	return usageSurvivorSelection(start, end, effEnd, usage, nil)
+}
+
+// UsageSurvivorSelectionForSessions selects complete Claude snapshots across
+// all supplied rows, then limits them to the requested accounting destinations
+// before applying generic first-seen deduplication. This prevents an excluded
+// source-UUID or usage-key duplicate from suppressing an included row.
+func UsageSurvivorSelectionForSessions(
+	start, end, effEnd time.Time, usage []UsageRow, sessionIDs []string,
+) (mask []bool, attribution []string, webSearchRequests []int) {
+	allowed := make(map[string]struct{}, len(sessionIDs))
+	for _, id := range sessionIDs {
+		allowed[id] = struct{}{}
+	}
+	return usageSurvivorSelection(start, end, effEnd, usage, allowed)
+}
+
+func usageSurvivorSelection(
+	start, end, effEnd time.Time,
+	usage []UsageRow,
+	allowed map[string]struct{},
+) (mask []bool, attribution []string, webSearchRequests []int) {
+	eligible := make([]bool, len(usage))
 	for i, u := range usage {
 		t, ok := parseTS(u.Timestamp)
 		if !ok || t.Before(start) || !t.Before(end) {
-			continue // out-of-range rows never claim a key
+			continue
 		}
 		if !t.Before(effEnd) {
-			continue // partial range: rows at/after as_of never claim a key
+			continue
+		}
+		eligible[i] = true
+	}
+	snapshots, snapshotAttribution, snapshotWebSearchRequests :=
+		claudeSnapshotSurvivorSelection(usage, eligible)
+	mask = make([]bool, len(usage))
+	attribution = make([]string, len(usage))
+	webSearchRequests = make([]int, len(usage))
+	seen := map[usageDedupToken]struct{}{}
+	for i, u := range usage {
+		if !snapshots[i] {
+			continue
+		}
+		if allowed != nil {
+			if _, ok := allowed[snapshotAttribution[i]]; !ok {
+				continue
+			}
 		}
 		if k, ok := usageDedupTokenForRow(u); ok {
 			if _, dup := seen[k]; dup {
@@ -710,24 +915,31 @@ func usageSurvivorMask(start, end, effEnd time.Time, usage []UsageRow) []bool {
 			}
 			seen[k] = struct{}{}
 		}
-		out[i] = true
+		mask[i] = true
+		attribution[i] = snapshotAttribution[i]
+		webSearchRequests[i] = snapshotWebSearchRequests[i]
 	}
-	return out
+	return mask, attribution, webSearchRequests
 }
 
-// dedupUsage filters usage rows to the range and applies the two-tier,
-// first-seen-wins dedup that mirrors GetDailyUsage. Rows arrive pre-sorted by
-// (ts, session_id, COALESCE(message_ordinal,-1)). The half-open instant filter
-// drops rows before start or at/after end; on a partial range effEnd is the
-// as-of clip, so rows at or after effEnd are dropped before they can claim a
-// dedup key, matching the activity/bucket clipping Aggregate applies. For a
-// full range effEnd == end, so nothing extra is excluded.
+// dedupUsage filters usage rows to the range, keeps the fullest Claude
+// snapshot across the candidate rows, then applies first-seen dedup that
+// mirrors the usage stores. Rows arrive pre-sorted by (ts, session_id,
+// COALESCE(message_ordinal,-1)). The half-open instant filter drops rows before
+// start or at/after end; on a partial range effEnd is the as-of clip, so rows
+// at or after effEnd are dropped before they can claim a dedup key, matching
+// the activity/bucket clipping Aggregate applies. For a full range
+// effEnd == end, so nothing extra is excluded.
 func dedupUsage(start, end, effEnd time.Time, usage []UsageRow) []UsageRow {
 	out := make([]UsageRow, 0, len(usage))
-	mask := usageSurvivorMask(start, end, effEnd, usage)
+	mask, attribution, webSearchRequests :=
+		usageSurvivorSelection(start, end, effEnd, usage, nil)
 	for i, keep := range mask {
 		if keep {
-			out = append(out, usage[i])
+			row := usage[i]
+			row.SessionID = attribution[i]
+			row.WebSearchRequests = webSearchRequests[i]
+			out = append(out, row)
 		}
 	}
 	return out

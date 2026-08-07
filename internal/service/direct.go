@@ -396,6 +396,17 @@ func (b *directBackend) Sync(
 	if in.Path != "" && in.ID != "" {
 		return nil, errors.New("sync: only one of path or id allowed")
 	}
+	if in.Subagents && in.ID == "" {
+		return nil, errors.New("sync: subagents requires id")
+	}
+	if in.Subagents {
+		if err := b.engine.SyncSessionWithSubagentsContext(
+			ctx, in.ID,
+		); err != nil {
+			return nil, err
+		}
+		return b.Get(ctx, in.ID)
+	}
 
 	path := in.Path
 	if path == "" {

@@ -196,6 +196,137 @@ func TestDuckGetActivityReportUsageCostAndTokens(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("0.0105"), r.Totals.Cost)
 }
 
+func TestDuckGetActivityReportPrefersCompleteClaudeSnapshot(t *testing.T) {
+	ctx := context.Background()
+	sess := syncSession(
+		"streamed", "proj1", "first", "2026-06-14T10:30:00.000Z", 2)
+	sess.Agent = "claude"
+	partial := syncMessage(
+		"streamed", 0, "assistant", "partial", "2026-06-14T10:30:00.000Z")
+	partial.Model = "claude-sonnet-4-20250514"
+	partial.ClaudeMessageID = "msg-stream"
+	partial.ClaudeRequestID = "req-stream"
+	partial.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":5}`)
+	partial.OutputTokens = 5
+	complete := syncMessage(
+		"streamed", 1, "assistant", "complete", "2026-06-14T10:31:00.000Z")
+	complete.Model = "claude-sonnet-4-20250514"
+	complete.ClaudeMessageID = "msg-stream"
+	complete.ClaudeRequestID = "req-stream"
+	complete.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":631}`)
+	complete.OutputTokens = 631
+	store := activityReportStore(t, []db.SessionBatchWrite{{
+		Session:         sess,
+		Messages:        []db.Message{partial, complete},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}}, []db.ModelPricing{{
+		ModelPattern:  "claude-sonnet-4-20250514",
+		InputPerMTok:  money.MustParseDollars("3.0"),
+		OutputPerMTok: money.MustParseDollars("15.0"),
+	}})
+
+	r, err := store.GetActivityReport(
+		ctx, db.AnalyticsFilter{Timezone: "UTC"},
+		duckDayQuery(t, "2026-06-14", "UTC"))
+	require.NoError(t, err)
+	assert.Equal(t, 631, r.Totals.OutputTokens)
+}
+
+func TestDuckGetActivityReportFiltersAfterCrossSessionSnapshotSelection(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	parent := syncSession(
+		"activity-parent", "parent-project", "parent",
+		"2026-06-14T10:00:00.000Z", 1)
+	parent.Agent = "claude"
+	child := syncSession(
+		"activity-child", "child-project", "child",
+		"2026-06-14T10:01:00.000Z", 1)
+	child.Agent = "claude"
+	partial := syncMessage(
+		"activity-parent", 0, "assistant", "partial",
+		"2026-06-14T10:00:00.000Z")
+	partial.Model = "partial-model"
+	partial.TokenUsage = json.RawMessage(`{"input_tokens":10,"output_tokens":5}`)
+	partial.OutputTokens = 5
+	partial.ClaudeMessageID = "activity-message"
+	partial.ClaudeRequestID = "activity-request"
+	complete := syncMessage(
+		"activity-child", 0, "assistant", "complete",
+		"2026-06-14T10:01:00.000Z")
+	complete.Model = "complete-model"
+	complete.TokenUsage = json.RawMessage(
+		`{"input_tokens":1000,"output_tokens":631}`)
+	complete.OutputTokens = 631
+	complete.ClaudeMessageID = "activity-message"
+	complete.ClaudeRequestID = "activity-request"
+	store := activityReportStore(t, []db.SessionBatchWrite{
+		{Session: parent, Messages: []db.Message{partial},
+			DataVersion: 1, ReplaceMessages: true},
+		{Session: child, Messages: []db.Message{complete},
+			DataVersion: 1, ReplaceMessages: true},
+	}, nil)
+
+	parentReport, err := store.GetActivityReport(ctx, db.AnalyticsFilter{
+		Project: "parent-project", Timezone: "UTC",
+	}, duckDayQuery(t, "2026-06-14", "UTC"))
+	require.NoError(t, err)
+	assert.Equal(t, 1, parentReport.Totals.Sessions)
+	assert.Equal(t, 631, parentReport.Totals.OutputTokens,
+		"the parent filter must retain the complete child snapshot")
+
+	childReport, err := store.GetActivityReport(ctx, db.AnalyticsFilter{
+		Project: "child-project", Timezone: "UTC",
+	}, duckDayQuery(t, "2026-06-14", "UTC"))
+	require.NoError(t, err)
+	assert.Equal(t, 1, childReport.Totals.Sessions)
+	assert.Zero(t, childReport.Totals.OutputTokens,
+		"the child source must not claim usage attributed to the parent")
+}
+
+func TestDuckGetActivityReportDeduplicatesAfterProjectFilter(t *testing.T) {
+	ctx := context.Background()
+	excluded := syncSession(
+		"excluded-earlier", "excluded-project", "excluded",
+		"2026-06-14T10:00:00Z", 1)
+	excluded.Agent = "claude"
+	included := syncSession(
+		"included-later", "included-project", "included",
+		"2026-06-14T10:01:00Z", 1)
+	included.Agent = "claude"
+	excludedMsg := syncMessage(
+		"excluded-earlier", 0, "assistant", "excluded",
+		"2026-06-14T10:00:00Z")
+	excludedMsg.Model = "model-x"
+	excludedMsg.TokenUsage = json.RawMessage(
+		`{"input_tokens":10,"output_tokens":5}`)
+	excludedMsg.OutputTokens = 5
+	excludedMsg.SourceUUID = "shared-source"
+	includedMsg := syncMessage(
+		"included-later", 0, "assistant", "included",
+		"2026-06-14T10:01:00Z")
+	includedMsg.Model = "model-x"
+	includedMsg.TokenUsage = json.RawMessage(
+		`{"input_tokens":20,"output_tokens":631}`)
+	includedMsg.OutputTokens = 631
+	includedMsg.SourceUUID = "shared-source"
+	store := activityReportStore(t, []db.SessionBatchWrite{
+		{Session: excluded, Messages: []db.Message{excludedMsg},
+			DataVersion: 1, ReplaceMessages: true},
+		{Session: included, Messages: []db.Message{includedMsg},
+			DataVersion: 1, ReplaceMessages: true},
+	}, nil)
+
+	report, err := store.GetActivityReport(ctx, db.AnalyticsFilter{
+		Project: "included-project", Timezone: "UTC",
+	}, duckDayQuery(t, "2026-06-14", "UTC"))
+	require.NoError(t, err)
+	assert.Equal(t, 631, report.Totals.OutputTokens,
+		"an excluded duplicate must not suppress included usage")
+}
+
 func TestDuckActivityReportRowStatusCanonicalizesKimiAliasByTimestamp(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -422,7 +553,7 @@ func TestDuckGetActivityReportPricingModelsOnlyIncludeDedupSurvivors(t *testing.
 	earlier := syncSession("earlier", "proj1", "first", "2026-06-14T10:30:00.000Z", 1)
 	earlier.Agent = "claude"
 	earlierMsg := syncMessage("earlier", 0, "assistant", "x", "2026-06-14T10:30:00.000Z")
-	earlierMsg.Model = "kept-model"
+	earlierMsg.Model = "partial-model"
 	earlierMsg.TokenUsage = json.RawMessage(
 		`{"input_tokens":1000,"output_tokens":500}`)
 	earlierMsg.OutputTokens = 500
@@ -432,7 +563,7 @@ func TestDuckGetActivityReportPricingModelsOnlyIncludeDedupSurvivors(t *testing.
 	later := syncSession("later", "proj1", "first", "2026-06-14T10:31:00.000Z", 1)
 	later.Agent = "claude"
 	laterMsg := syncMessage("later", 0, "assistant", "x", "2026-06-14T10:31:00.000Z")
-	laterMsg.Model = "discarded-model"
+	laterMsg.Model = "complete-model"
 	laterMsg.TokenUsage = json.RawMessage(
 		`{"input_tokens":2000,"output_tokens":900}`)
 	laterMsg.OutputTokens = 900
@@ -454,8 +585,8 @@ func TestDuckGetActivityReportPricingModelsOnlyIncludeDedupSurvivors(t *testing.
 		},
 	}
 	pricing := []db.ModelPricing{
-		{ModelPattern: "kept-model", InputPerMTok: money.MustParseDollars("3.0"), OutputPerMTok: money.MustParseDollars("15.0")},
-		{ModelPattern: "discarded-model", InputPerMTok: money.MustParseDollars("3.0"), OutputPerMTok: money.MustParseDollars("15.0")},
+		{ModelPattern: "partial-model", InputPerMTok: money.MustParseDollars("3.0"), OutputPerMTok: money.MustParseDollars("15.0")},
+		{ModelPattern: "complete-model", InputPerMTok: money.MustParseDollars("3.0"), OutputPerMTok: money.MustParseDollars("15.0")},
 	}
 	store := activityReportStore(t, writes, pricing)
 
@@ -463,10 +594,10 @@ func TestDuckGetActivityReportPricingModelsOnlyIncludeDedupSurvivors(t *testing.
 		ctx, db.AnalyticsFilter{Timezone: "UTC"},
 		duckDayQuery(t, "2026-06-14", "UTC"))
 	require.NoError(t, err)
-	assert.Equal(t, 500, r.Totals.OutputTokens)
+	assert.Equal(t, 900, r.Totals.OutputTokens)
 	require.NotNil(t, r.Pricing)
-	assert.Contains(t, r.Pricing.Models, "kept-model")
-	assert.NotContains(t, r.Pricing.Models, "discarded-model")
+	assert.Contains(t, r.Pricing.Models, "complete-model")
+	assert.NotContains(t, r.Pricing.Models, "partial-model")
 }
 
 func TestDuckGetActivityReportPreservesSessionSummaryUsageEventTokens(t *testing.T) {
@@ -650,8 +781,8 @@ func TestDuckGetActivityReportOpenSessionWithInRangeMessageIncluded(t *testing.T
 }
 
 // TestDuckGetActivityReportUsageDedupSubSecondOrder confirms DuckDB orders the
-// usage stream by the parsed instant so first-seen-wins dedup keeps the
-// chronologically earlier row when two rows share a dedup key in the same
+// usage stream by the parsed instant so first-seen-wins fallback dedup keeps
+// the chronologically earlier row when two rows share a source UUID in the same
 // second -- one whole-second ("...00Z"), one fractional ("...00.123Z"). DuckDB
 // already sorts on the parsed time (not the formatted text), so this locks in
 // that cross-backend behavior, matching the SQLite
@@ -664,14 +795,14 @@ func TestDuckGetActivityReportUsageDedupSubSecondOrder(t *testing.T) {
 		OutputPerMTok: money.MustParseDollars("15.0"),
 	}}
 
-	// A resumed/forked pair shares one (claude_message_id, claude_request_id)
+	// A resumed/forked pair shares one source UUID fallback dedup identity
 	// across two sessions: the earlier whole-second instant carries 500 output
 	// tokens, the later fractional instant 9000. Dedup must keep the 500 row.
 	earlier := syncSession("earlier", "proj1", "first", "2026-06-14T10:30:00Z", 1)
 	earlierMsg := syncMessage("earlier", 0, "assistant", "x", "2026-06-14T10:30:00Z")
 	earlierMsg.Model = "claude-sonnet-4-20250514"
 	earlierMsg.ClaudeMessageID = "dup-m"
-	earlierMsg.ClaudeRequestID = "dup-r"
+	earlierMsg.SourceUUID = "dup-source"
 	earlierMsg.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
 	earlierMsg.OutputTokens = 500
 
@@ -679,7 +810,7 @@ func TestDuckGetActivityReportUsageDedupSubSecondOrder(t *testing.T) {
 	laterMsg := syncMessage("later", 0, "assistant", "x", "2026-06-14T10:30:00.123Z")
 	laterMsg.Model = "claude-sonnet-4-20250514"
 	laterMsg.ClaudeMessageID = "dup-m"
-	laterMsg.ClaudeRequestID = "dup-r"
+	laterMsg.SourceUUID = "dup-source"
 	laterMsg.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":9000}`)
 	laterMsg.OutputTokens = 9000
 

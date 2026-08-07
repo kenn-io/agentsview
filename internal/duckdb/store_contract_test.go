@@ -548,6 +548,14 @@ func duckContractAnalyticsTrendsAndUsage(
 	require.NotNil(t, sessionUsage)
 	require.True(t, sessionUsage.HasCost)
 	require.Equal(t, []string{"claude-test"}, sessionUsage.Models)
+	// cost_usd is a deprecated compatibility alias for
+	// cost.microdollars/1e6; the DuckDB mirror must report the same
+	// value as SQLite and PostgreSQL for the same cost (see
+	// db.CostUSDFromCost).
+	require.NotNil(t, sessionUsage.CostUSD)
+	assert.InDelta(t,
+		float64(sessionUsage.Cost.Microdollars)/1e6,
+		*sessionUsage.CostUSD, 1e-9)
 }
 
 func duckContractLocalOnlyMethodsReadOnly(
