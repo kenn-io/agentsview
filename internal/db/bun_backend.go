@@ -59,6 +59,7 @@ type BackendCapabilities struct {
 	ContentSearch    ContentSearchCapability
 	Semantic         SemanticCapability
 	HybridLexical    HybridLexicalCapability
+	SearchDialect    BunSearchDialect
 	Writes           map[WriteOperation]bool
 	SessionMutations SessionMutationAdapter
 }
@@ -94,6 +95,7 @@ func (b *sqliteBunBackend) Capabilities() BackendCapabilities {
 			SessionSearch: sqliteFullTextCapability{store: b.store},
 			ContentSearch: sqliteFullTextCapability{store: b.store},
 			HybridLexical: sqliteFullTextCapability{store: b.store},
+			SearchDialect: SQLiteBunSearchDialect(),
 			Semantic: NewVectorSemanticCapability(
 				b.store.getVectorSearcher,
 				func() error { return ErrSemanticUnavailable },
@@ -106,6 +108,7 @@ func (b *sqliteBunBackend) Capabilities() BackendCapabilities {
 		SessionSearch: sqliteFullTextCapability{store: b.store},
 		ContentSearch: sqliteFullTextCapability{store: b.store},
 		HybridLexical: sqliteFullTextCapability{store: b.store},
+		SearchDialect: SQLiteBunSearchDialect(),
 		Semantic: NewVectorSemanticCapability(
 			b.store.getVectorSearcher,
 			func() error { return ErrSemanticUnavailable },

@@ -329,6 +329,16 @@ func duckCastCursor(ph string, kind valueKind) string {
 	}
 }
 
+// TimestampOrderExpr renders a timestamp operand for chronological ordering.
+// SQLite archives need julianday normalization for mixed textual timestamp
+// forms; native timestamp backends use the operand unchanged.
+func (d QueryDialect) TimestampOrderExpr(column string) string {
+	if d.timestampOrderExpr != nil {
+		return d.timestampOrderExpr(column)
+	}
+	return column
+}
+
 // timestampExpr returns a column reference that treats unset timestamps as NULL.
 // SQLite stores empty strings for missing timestamps; other backends use real
 // NULLs, so the column reference passes through unchanged.
