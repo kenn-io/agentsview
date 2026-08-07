@@ -241,6 +241,18 @@ func CanonicalMessageRows(
 			}
 		}
 	}
+	slices.SortStableFunc(resultRows, func(a, b bunmodel.ToolResultEvent) int {
+		if a.SessionID != b.SessionID {
+			return strings.Compare(a.SessionID, b.SessionID)
+		}
+		if a.ToolCallMessageOrdinal != b.ToolCallMessageOrdinal {
+			return a.ToolCallMessageOrdinal - b.ToolCallMessageOrdinal
+		}
+		if a.CallIndex != b.CallIndex {
+			return a.CallIndex - b.CallIndex
+		}
+		return a.EventIndex - b.EventIndex
+	})
 	return messageRows, callRows, resultRows, nil
 }
 
@@ -716,16 +728,33 @@ func replaceToolRows(
 func resolveCanonicalToolMessageIDs(
 	ctx context.Context, tx bun.IDB, sessionID string, calls []bunmodel.ToolCall,
 ) error {
-	var messages []bunmodel.Message
-	if len(calls) > 0 {
-		if err := tx.NewSelect().Model(&messages).Column("id", "ordinal").
-			Where("session_id = ?", sessionID).Scan(ctx); err != nil {
-			return fmt.Errorf("resolving canonical tool message ids for %s: %w", sessionID, err)
+	needed := make(map[int]struct{}, len(calls))
+	for _, call := range calls {
+		if call.MessageID == nil {
+			needed[call.MessageOrdinal] = struct{}{}
 		}
 	}
-	messageIDs := make(map[int]*int64, len(messages))
-	for _, message := range messages {
-		messageIDs[message.Ordinal] = message.ID
+	ordinals := make([]int, 0, len(needed))
+	for ordinal := range needed {
+		ordinals = append(ordinals, ordinal)
+	}
+	slices.Sort(ordinals)
+
+	messageIDs := make(map[int]int64, len(ordinals))
+	for start := 0; start < len(ordinals); start += canonicalWriteBatchSize {
+		end := min(start+canonicalWriteBatchSize, len(ordinals))
+		var messages []bunmodel.Message
+		if err := tx.NewSelect().Model(&messages).Column("id", "ordinal").
+			Where("session_id = ?", sessionID).
+			Where("ordinal IN (?)", bun.List(ordinals[start:end])).
+			Scan(ctx); err != nil {
+			return fmt.Errorf("resolving canonical tool message ids for %s: %w", sessionID, err)
+		}
+		for _, message := range messages {
+			if message.ID != nil {
+				messageIDs[message.Ordinal] = *message.ID
+			}
+		}
 	}
 	for i := range calls {
 		if calls[i].MessageID == nil {
@@ -736,7 +765,7 @@ func resolveCanonicalToolMessageIDs(
 					sessionID, calls[i].MessageOrdinal,
 				)
 			}
-			calls[i].MessageID = messageID
+			calls[i].MessageID = &messageID
 		}
 	}
 	return nil

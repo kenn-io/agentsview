@@ -38,7 +38,14 @@ func TestReplaceSessionMessagesCanonicalNoOpDoesNotRepairRows(t *testing.T) {
 				ResultContentLength: 4, ResultContent: "done",
 				SubagentSessionID: "sub-1", FilePath: "a.go",
 				ResultEvents: []ToolResultEvent{{
-					ToolUseID: "tool-1", AgentID: "agent-1",
+					EventIndex: 3,
+					ToolUseID:  "tool-1", AgentID: "agent-1",
+					SubagentSessionID: "sub-1", Source: "result",
+					Status: "started", Content: "working", ContentLength: 7,
+					Timestamp: "2026-08-04T01:02:04.123456Z",
+				}, {
+					EventIndex: 7,
+					ToolUseID:  "tool-1", AgentID: "agent-1",
 					SubagentSessionID: "sub-1", Source: "result",
 					Status: "ok", Content: "done", ContentLength: 4,
 					Timestamp: "2026-08-04T01:02:04.654321Z",
@@ -61,6 +68,9 @@ func TestReplaceSessionMessagesCanonicalNoOpDoesNotRepairRows(t *testing.T) {
 			INSERT INTO message_update_audit(session_id) VALUES (NEW.session_id);
 		END`)
 	require.NoError(t, err, "install message update audit")
+	before, err := d.GetSessionFull(t.Context(), "canonical-noop")
+	require.NoError(t, err)
+	require.NotNil(t, before)
 
 	incoming := []Message{
 		{
@@ -73,10 +83,17 @@ func TestReplaceSessionMessagesCanonicalNoOpDoesNotRepairRows(t *testing.T) {
 				ResultContentLength: 4, ResultContent: "done",
 				SubagentSessionID: "sub-1", FilePath: "a.go",
 				ResultEvents: []ToolResultEvent{{
-					ToolUseID: "tool-1", AgentID: "agent-1",
+					EventIndex: 7,
+					ToolUseID:  "tool-1", AgentID: "agent-1",
 					SubagentSessionID: "sub-1", Source: "result",
 					Status: "ok", Content: "done", ContentLength: 4,
 					Timestamp: "2026-08-03T21:02:04.654321987-04:00",
+				}, {
+					EventIndex: 3,
+					ToolUseID:  "tool-1", AgentID: "agent-1",
+					SubagentSessionID: "sub-1", Source: "result",
+					Status: "started", Content: "working", ContentLength: 7,
+					Timestamp: "2026-08-03T21:02:04.123456789-04:00",
 				}},
 			}},
 		},
@@ -90,6 +107,11 @@ func TestReplaceSessionMessagesCanonicalNoOpDoesNotRepairRows(t *testing.T) {
 	).Scan(&updates))
 	assert.Zero(t, updates,
 		"canonical-equivalent rows must not be repaired repeatedly")
+	after, err := d.GetSessionFull(t.Context(), "canonical-noop")
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	assert.Equal(t, before.TranscriptRevision, after.TranscriptRevision,
+		"canonical-equivalent event ordering must not bump the transcript revision")
 }
 
 func diffTestMsg(

@@ -110,6 +110,9 @@ func TestBunStoreOwnsReadOnlyArchiveWriteDefaults(t *testing.T) {
 	result, err := store.WriteSessionBatchAtomic(nil)
 	assert.Equal(t, SessionBatchResult{}, result)
 	assert.ErrorIs(t, err, ErrReadOnly)
+	result, err = store.WriteSessionAtomic(SessionBatchWrite{})
+	assert.Equal(t, SessionBatchResult{}, result)
+	assert.ErrorIs(t, err, ErrReadOnly)
 	assert.Zero(t, backend.updateCalls)
 }
 
@@ -161,6 +164,27 @@ func TestBunStoreWriteSessionBatchAtomicUsesWritableArchiveCapability(t *testing
 	session, err := store.GetSessionFull(t.Context(), "bun-store-batch")
 	require.NoError(t, err)
 	assert.Equal(t, "bun-store-batch", session.ID)
+}
+
+func TestBunStoreWriteSessionAtomicUsesOneBatchTransaction(t *testing.T) {
+	database := testDB(t)
+	store := database.BunStore
+
+	result, err := store.WriteSessionAtomic(
+		SessionBatchWrite{
+			Session: Session{ID: "bun-store-single", Agent: "codex"},
+			Messages: []Message{{
+				SessionID: "bun-store-single", Ordinal: 0,
+				Role: "user", Content: "single atomic write",
+			}},
+		},
+		func() error { return assert.AnError },
+	)
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Zero(t, result.WrittenSessions)
+	session, readErr := store.GetSessionFull(t.Context(), "bun-store-single")
+	require.NoError(t, readErr)
+	assert.Nil(t, session, "late failure must roll back the complete session")
 }
 
 func TestGuardedSQLFacadesExecuteThroughBun(t *testing.T) {

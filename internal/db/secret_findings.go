@@ -75,6 +75,7 @@ func (db *DB) ReplaceSessionSecretFindings(
 	if db.usageOnlyStorage() {
 		if err := settleUsageOnlySignalsTx(tx.Tx, sessionID); err != nil { return err }; return tx.Commit()
 	}
+	rulesVersion = SanitizeUTF8(rulesVersion)
 	findings = append([]SecretFinding(nil), findings...)
 	for i := range findings {
 		findings[i].SessionID = sessionID

@@ -76,6 +76,20 @@ func (s *BunStore) WriteSessionBatchAtomic(
 	)
 }
 
+// WriteSessionAtomic routes one complete archive session through the same
+// all-or-nothing batch transaction used by artifact imports and resyncs.
+func (s *BunStore) WriteSessionAtomic(
+	write SessionBatchWrite, beforeCommit ...func() error,
+) (SessionBatchResult, error) {
+	capabilities := s.backend.Capabilities()
+	if !capabilities.AllowsWrite(WriteArchive) || capabilities.ArchiveWrites == nil {
+		return SessionBatchResult{}, ErrReadOnly
+	}
+	return capabilities.ArchiveWrites.WriteSessionAtomic(
+		write, beforeCommit...,
+	)
+}
+
 // SetCursorSecret updates the shared cursor signing key.
 func (s *BunStore) SetCursorSecret(secret []byte) {
 	s.cursorMu.Lock()
