@@ -432,7 +432,7 @@ func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 	if err := CheckDataVersionCompat(ctx, s.pg); err != nil {
 		return err
 	}
-	if err := validateStampedPostgresCommonSchema(ctx, s.pg); err != nil {
+	if err := validateStampedPostgresCommonSchema(ctx, s.bunDB()); err != nil {
 		return err
 	}
 	if pushSchemaCurrent(ctx, s.pg) {
