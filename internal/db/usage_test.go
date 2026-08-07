@@ -496,6 +496,33 @@ func TestUsageEventsReplaceAndList(t *testing.T) {
 	require.Len(t, got, 0, "usage events after clear =")
 }
 
+func TestGetUsageEventsOrdersOffsetTimestampsChronologically(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "usage-offset-order", "proj")
+	require.NoError(t, d.ReplaceSessionUsageEvents("usage-offset-order", []UsageEvent{
+		{
+			Source:     "session",
+			Model:      "earlier",
+			OccurredAt: "2026-01-01T00:30:00+01:00",
+		},
+		{
+			Source:     "session",
+			Model:      "later",
+			OccurredAt: "2025-12-31T23:45:00Z",
+		},
+	}))
+
+	events, err := d.GetUsageEvents(ctx, "usage-offset-order")
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	assert.Equal(t, []string{"earlier", "later"}, []string{
+		events[0].Model,
+		events[1].Model,
+	})
+}
+
 func TestUsageEventsReplaceRejectsDuplicateDedupKeysAndRollsBack(t *testing.T) {
 	// A parser emitting two events with the same dedup key (e.g. Grok
 	// retry/replay lines sharing a prompt_id, before the parser-side

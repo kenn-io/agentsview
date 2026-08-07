@@ -32,11 +32,15 @@ func CanonicalModelPricingRows(
 	for _, price := range prices {
 		pattern := SanitizeUTF8(price.ModelPattern)
 		updatedAtText := SanitizeUTF8(price.UpdatedAt)
-		updatedAt, err := requiredTimestampToBunRow(updatedAtText)
-		if err != nil {
-			return nil, nil, fmt.Errorf(
-				"converting model pricing timestamp for %q: %w", pattern, err,
-			)
+		var updatedAt bunmodel.Timestamp
+		if updatedAtText != "" {
+			var err error
+			updatedAt, err = requiredTimestampToBunRow(updatedAtText)
+			if err != nil {
+				return nil, nil, fmt.Errorf(
+					"converting model pricing timestamp for %q: %w", pattern, err,
+				)
+			}
 		}
 		rows = append(rows, bunmodel.ModelPricing{
 			ModelPattern:                     pattern,
@@ -57,12 +61,16 @@ func CanonicalModelPricingRows(
 			if bandUpdatedAtText == "" {
 				bandUpdatedAtText = updatedAtText
 			}
-			bandUpdatedAt, err := requiredTimestampToBunRow(bandUpdatedAtText)
-			if err != nil {
-				return nil, nil, fmt.Errorf(
-					"converting model pricing band timestamp for %q: %w",
-					pattern, err,
-				)
+			var bandUpdatedAt bunmodel.Timestamp
+			if bandUpdatedAtText != "" {
+				var err error
+				bandUpdatedAt, err = requiredTimestampToBunRow(bandUpdatedAtText)
+				if err != nil {
+					return nil, nil, fmt.Errorf(
+						"converting model pricing band timestamp for %q: %w",
+						pattern, err,
+					)
+				}
 			}
 			bands = append(bands, bunmodel.ModelPricingBand{
 				ModelPattern: pattern, AboveInputTokens: threshold,
@@ -75,6 +83,19 @@ func CanonicalModelPricingRows(
 		}
 	}
 	return rows, bands, nil
+}
+
+// UpsertModelPricing writes public pricing records through the canonical Bun
+// models and the backend's guarded archive-write handle.
+func (s *BunStore) UpsertModelPricing(prices []ModelPricing) error {
+	rows, bands, err := CanonicalModelPricingRows(prices)
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	return s.update(ctx, WriteArchive, func(store bun.IDB) error {
+		return UpsertModelPricingRows(ctx, store, rows, bands)
+	})
 }
 
 // CanonicalCursorUsageEventRows converts append-only Cursor usage into
