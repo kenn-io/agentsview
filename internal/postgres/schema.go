@@ -1378,7 +1378,7 @@ func convergePostgresCommonSchema(
 				"validating stamped common PostgreSQL schema: %w", err,
 			)
 		}
-		if err := db.CheckCommonSchema(ctx, tx); err != nil {
+		if err := db.CheckCommonSchemaStructure(ctx, tx); err != nil {
 			return fmt.Errorf("validating stamped common PostgreSQL schema: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
