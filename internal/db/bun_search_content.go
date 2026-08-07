@@ -993,7 +993,8 @@ func (s *BunStore) bunContentCandidateQuery(
 		source_timestamp,
 		call_index, event_index FROM (` + strings.Join(branches, " UNION ALL ") + `)
 		ORDER BY ` + orderTimestamp + ` DESC NULLS LAST, session_id ASC,
-			ordinal ASC, source_order ASC, row_order ASC`
+			ordinal ASC, source_order ASC, call_index ASC, event_index ASC,
+			row_order ASC`
 	if paginate {
 		query += "\n\t\tLIMIT ? OFFSET ?"
 		args = append(args, filter.Limit, filter.Cursor)

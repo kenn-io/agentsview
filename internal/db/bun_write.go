@@ -138,19 +138,41 @@ func CanonicalMessageRows(
 				SubagentSessionID:   optionalCanonicalString(call.SubagentSessionID),
 				FilePath:            optionalCanonicalString(call.FilePath),
 			})
+			eventIndices := make(map[int]struct{}, len(call.ResultEvents))
+			uniqueEventIndices := true
 			for _, result := range call.ResultEvents {
+				if _, exists := eventIndices[result.EventIndex]; exists {
+					uniqueEventIndices = false
+					break
+				}
+				eventIndices[result.EventIndex] = struct{}{}
+			}
+			for eventPosition, result := range call.ResultEvents {
+				eventIndex := result.EventIndex
+				if !uniqueEventIndices {
+					eventIndex = eventPosition
+				}
+				if result.ContentLength == 0 {
+					result.ContentLength = len(result.Content)
+				}
+				if result.ToolUseID == "" {
+					result.ToolUseID = call.ToolUseID
+				}
+				if result.SubagentSessionID == "" {
+					result.SubagentSessionID = call.SubagentSessionID
+				}
 				timestamp, err := timestampToBunRow(result.Timestamp)
 				if err != nil {
 					return nil, nil, nil, fmt.Errorf(
 						"tool result %q ordinal %d event %d timestamp: %w",
-						message.SessionID, message.Ordinal, result.EventIndex, err,
+						message.SessionID, message.Ordinal, eventIndex, err,
 					)
 				}
 				truncateCanonicalTimestamp(timestamp)
 				resultRows = append(resultRows, bunmodel.ToolResultEvent{
 					SessionID:              message.SessionID,
 					ToolCallMessageOrdinal: message.Ordinal,
-					CallIndex:              callIndex, EventIndex: result.EventIndex,
+					CallIndex:              callIndex, EventIndex: eventIndex,
 					ToolUseID:         optionalCanonicalString(result.ToolUseID),
 					AgentID:           optionalCanonicalString(result.AgentID),
 					SubagentSessionID: optionalCanonicalString(result.SubagentSessionID),
