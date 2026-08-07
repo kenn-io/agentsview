@@ -988,7 +988,7 @@ func (s *BunStore) bunContentCandidateQuery(
 	if len(branches) == 0 {
 		return "", nil
 	}
-	orderTimestamp := s.backend.SessionQueryDialect().TimestampOrderExpr("sort_ts")
+	orderTimestamp := s.backend.TimestampOrderExpr("sort_ts")
 	query := `SELECT session_id, ordinal, location, tool_name, body,
 		source_timestamp,
 		call_index, event_index FROM (` + strings.Join(branches, " UNION ALL ") + `)

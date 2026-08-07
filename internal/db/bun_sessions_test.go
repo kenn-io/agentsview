@@ -32,8 +32,8 @@ func (*replayingReadBackend) Capabilities() BackendCapabilities {
 	return BackendCapabilities{}
 }
 
-func (*replayingReadBackend) SessionQueryDialect() QueryDialect {
-	return SQLiteBunSessionQueryDialect()
+func (*replayingReadBackend) TimestampOrderExpr(column string) string {
+	return sqliteTimestampOrderExpr(column)
 }
 
 func (*replayingReadBackend) SessionVersion(
