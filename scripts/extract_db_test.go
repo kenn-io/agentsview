@@ -605,7 +605,11 @@ func TestExtractDBSupportsArchivesBeforeMappingChangeJournals(t *testing.T) {
 		DROP TRIGGER trg_worktree_project_mappings_revision_insert;
 		DROP TRIGGER trg_worktree_project_mappings_revision_update;
 		DROP TRIGGER trg_worktree_project_mappings_revision_delete;
+		DROP TRIGGER trg_source_worktree_project_mappings_revision_insert;
+		DROP TRIGGER trg_source_worktree_project_mappings_revision_update;
+		DROP TRIGGER trg_source_worktree_project_mappings_revision_delete;
 		DROP TABLE worktree_project_mapping_changes;
+		DELETE FROM archive_metadata WHERE key = ?;
 		INSERT INTO sessions
 			(id, project, created_at, started_at, message_count,
 			 user_message_count, first_message)
@@ -616,7 +620,7 @@ func TestExtractDBSupportsArchivesBeforeMappingChangeJournals(t *testing.T) {
 		VALUES ('s_keep', 0, 'user', 'clean transcript');
 		INSERT INTO worktree_project_mappings (machine, path_prefix, project)
 		VALUES ('dev-laptop', '/workspace', 'agentsview');
-	`)
+	`, avdb.CommonSchemaCompatibilityMetadataKey)
 	require.NoError(t, err)
 	_, err = conn.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
 	require.NoError(t, err)
