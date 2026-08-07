@@ -329,6 +329,16 @@ func duckCastCursor(ph string, kind valueKind) string {
 	}
 }
 
+// TimestampOrderExpr renders a timestamp operand for chronological ordering.
+// SQLite archives need julianday normalization for mixed textual timestamp
+// forms; native timestamp backends use the operand unchanged.
+func (d QueryDialect) TimestampOrderExpr(column string) string {
+	if d.timestampOrderExpr != nil {
+		return d.timestampOrderExpr(column)
+	}
+	return column
+}
+
 // timestampExpr returns a column reference that treats unset timestamps as NULL.
 // SQLite stores empty strings for missing timestamps; other backends use real
 // NULLs, so the column reference passes through unchanged.
@@ -735,15 +745,6 @@ func oneShotPredicate(
 		return conds[0]
 	}
 	return "(" + strings.Join(conds, " OR ") + ")"
-}
-
-// buildSessionBaseFilter returns a WHERE clause and args containing the base
-// predicates (message_count > 0, deleted_at IS NULL) plus user-facing filter
-// predicates (project, machine, agent, date, etc.) WITHOUT the relationship_type
-// exclusion. Callers that handle root-vs-child discrimination externally (e.g.
-// via buildCanonicalRootWhere) should use this instead of buildSessionFilter.
-func buildSessionBaseFilter(f SessionFilter) (string, []any) {
-	return BuildSessionBaseFilterSQL(f, SQLiteQueryDialect())
 }
 
 func inPredicate(col string, values []string, b *QueryBuilder) string {

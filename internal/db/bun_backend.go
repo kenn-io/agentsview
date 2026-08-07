@@ -50,6 +50,12 @@ const (
 // store's coarse public ReadOnly value.
 type BackendCapabilities struct {
 	Recall           bool
+	FullText         FullTextCapability
+	SessionSearch    SessionSearchCapability
+	ContentSearch    ContentSearchCapability
+	Semantic         SemanticCapability
+	HybridLexical    HybridLexicalCapability
+	SearchDialect    BunSearchDialect
 	Writes           map[WriteOperation]bool
 	SessionMutations SessionMutationAdapter
 }
@@ -80,10 +86,29 @@ func (b *sqliteBunBackend) ReadOnly() bool { return b.store.readOnly }
 
 func (b *sqliteBunBackend) Capabilities() BackendCapabilities {
 	if b.store.readOnly {
-		return BackendCapabilities{Recall: true}
+		return BackendCapabilities{
+			Recall: true, FullText: sqliteFullTextCapability{store: b.store},
+			SessionSearch: sqliteFullTextCapability{store: b.store},
+			ContentSearch: sqliteFullTextCapability{store: b.store},
+			HybridLexical: sqliteFullTextCapability{store: b.store},
+			SearchDialect: SQLiteBunSearchDialect(),
+			Semantic: NewVectorSemanticCapability(
+				b.store.getVectorSearcher,
+				func() error { return ErrSemanticUnavailable },
+			),
+		}
 	}
 	return BackendCapabilities{
-		Recall:           true,
+		Recall:        true,
+		FullText:      sqliteFullTextCapability{store: b.store},
+		SessionSearch: sqliteFullTextCapability{store: b.store},
+		ContentSearch: sqliteFullTextCapability{store: b.store},
+		HybridLexical: sqliteFullTextCapability{store: b.store},
+		SearchDialect: SQLiteBunSearchDialect(),
+		Semantic: NewVectorSemanticCapability(
+			b.store.getVectorSearcher,
+			func() error { return ErrSemanticUnavailable },
+		),
 		SessionMutations: sqliteSessionMutationAdapter{},
 		Writes: map[WriteOperation]bool{
 			WriteArchive:           true,
