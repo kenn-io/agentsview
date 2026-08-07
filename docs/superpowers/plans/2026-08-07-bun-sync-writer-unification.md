@@ -20,6 +20,11 @@ other documented SQLite operations.
 
 **Tech Stack:** Go, Uptrace Bun, SQLite/FTS5, Kata, `gh stack`.
 
+**Commit ownership note:** Review-fix commit `c54a3b56` intentionally spans
+completed task boundaries: Task 1 result ordering, Task 2 bounded legacy-ID
+resolution, Task 3 adapter exposure, and Task 4 rules-version normalization. The
+task-specific commits below remain the primary ownership boundaries.
+
 ## Global Constraints
 
 - SQLite remains the persistent archive and must never be dropped, truncated, or
@@ -27,9 +32,19 @@ other documented SQLite operations.
 - No compatibility shim, dual writer, or fallback path may survive the cutover.
 - Existing append, replacement, pin, FTS, recall, source-revival, artifact,
   signal-freshness, and rollback behavior must remain observable.
+- A complete-session transaction rolls back session content, identity evidence,
+  accounting, findings, signals, lifecycle state, and artifact side effects.
+  Provider-specific retry metadata written after that transaction fails is an
+  explicit exception: Omnigent may demote `data_version` so a shared-container
+  member cannot be cached as current after a rejected write.
 - Canonical writes use Bun placeholders and model-derived column lists.
 - ATTACH, DETACH, temporary tables, legacy-schema probes, and FTS5 maintenance
   remain narrow SQLite adapter seams.
+- Attached archive compatibility supports source tables that retain `session_id`
+  plus a usable intersection of canonical columns. Missing optional legacy
+  columns take destination defaults; missing destination-required values fail
+  the copy atomically with table-scoped context rather than invoking a
+  compatibility fallback.
 - Each new behavior test must fail for the expected reason before production
   code changes and assert persisted behavior rather than source shape.
 - RoboRev remains snoozed during implementation and is resumed only after the
@@ -162,6 +177,10 @@ ______________________________________________________________________
 
 ### Task 3: Converge ordinary and full sync on the session-batch core
 
+Implementation ownership: `WriteSessionAtomic` and its adapter/store exposure
+landed with the preceding bounded-writer fix (`c54a3b56`); engine routing and
+the remaining Task 3 behavior landed in `1f74607b`.
+
 **Files:**
 
 - Modify: `internal/db/session_batch.go`
@@ -190,41 +209,47 @@ ______________________________________________________________________
 
     implemented only as a one-item call into the existing atomic batch core.
 
-- [ ] Add a late-failure test that seeds an existing session, transcript, usage,
+- [x] Add a late-failure test that seeds an existing session, transcript, usage,
   findings, signals, pin/recall evidence, source tombstone, artifact
   generation, and data version; inject failure after canonical dependent rows
-  are attempted; assert every pre-write value survives.
+  are attempted; assert every transaction-owned pre-write value survives. The
+  provider-specific post-rollback retry exception above remains allowed.
 
-- [ ] Run the focused test and confirm the current split ordinary-sync sequence
+- [x] Run the focused test and confirm the current split ordinary-sync sequence
   exposes a partially committed state.
 
-- [ ] Reuse the transactionally loaded stored transcript in
+- [x] Reuse the transactionally loaded stored transcript in
   `writeOneSessionBatchTx` to choose safe in-place diff versus full FTS
-  replacement, preserving the O(changed rows) streaming-tail path.
+  replacement. Transcript loading/comparison remains O(session history), while
+  persistence and FTS mutation remain proportional to changed rows.
 
-- [ ] Add `WriteSessionAtomic` to `ArchiveWriteAdapter`, expose it through the
+- [x] Add `WriteSessionAtomic` to `ArchiveWriteAdapter`, expose it through the
   capability-checking `BunStore` wrapper and shared `Store` interface, and
   implement it as a one-element `writeArchiveSessionBatchAtomic` call.
 
-- [ ] Factor one engine-side constructor that fills `SessionBatchWrite` with
+- [x] Factor one engine-side constructor that fills `SessionBatchWrite` with
   session, messages, usage, identity observation/snapshot, signals, findings,
   data version, and replacement mode.
 
-- [ ] Route ordinary and explicit full sync through `WriteSessionAtomic`; remove
+- [x] Route ordinary and explicit full sync through `WriteSessionAtomic`; remove
   their separate message, usage, signal, finding, data-version, and revival
   commits. Preserve failed-write stale marking and post-batch relationship
   repair queues.
 
-- [ ] Retarget the streaming-tail benchmark to the production unified writer and
-  assert work remains proportional to changed rows.
+- [x] Retarget the streaming-tail benchmark to the production unified writer and
+  guard write amplification for a one-row tail repair. The benchmark is not a
+  claim that total comparison allocations are independent of history size.
 
-- [ ] Run focused ordinary/full sync, source-revival, marker, and benchmark
+- [x] Run focused ordinary/full sync, source-revival, marker, and benchmark
   coverage.
 
-- [ ] Commit as
+- [x] Commit as
   `refactor(sync): write complete sessions atomically through Bun`.
 
 ### Task 4: Consolidate standalone usage and secret writers (`zj81`)
+
+Implementation ownership: standalone usage/findings landed in `a714b988` and
+`a86e177b`; shared secret-helper call sites completed in `3bf1703c`.
 
 **Files:**
 
@@ -246,35 +271,38 @@ ______________________________________________________________________
 - Produces private transaction helpers that add SQLite side effects around the
   canonical row writers.
 
-- [ ] Retarget the usage replacement tests through the Bun-backed public path
+- [x] Retarget the usage replacement tests through the Bun-backed public path
   and add a canonical timestamp case; confirm the current manual writer keeps
   the noncanonical text.
 
-- [ ] Retarget the secret replacement test through the Bun-backed public path.
+- [x] Retarget the secret replacement test through the Bun-backed public path.
   Pass findings with mismatched embedded session/rules values and assert the
   method arguments remain authoritative, including nil versus pointer-to-zero
   coordinates.
 
-- [ ] Normalize copied input events/findings before canonical conversion.
+- [x] Normalize copied input events/findings before canonical conversion.
 
-- [ ] Begin `bun.Tx` in standalone methods, call canonical replace helpers, then
+- [x] Begin `bun.Tx` in standalone methods, call canonical replace helpers, then
   use `bunTx.Tx` for session touch, summary columns, sync-marker advancement,
   and standalone usage artifact enqueue in the same transaction.
 
-- [ ] Reuse the secret helper from message replacement, full content
+- [x] Reuse the secret helper from message replacement, full content
   replacement, and session batch; remove the raw insert implementation and its
   obsolete boolean flag.
 
-- [ ] Keep usage reads/fingerprints on the existing adapter timestamp-order
+- [x] Keep usage reads/fingerprints on the existing adapter timestamp-order
   expression; this task changes writes only.
 
-- [ ] Run usage duplicate-rollback, exact-money, timestamp-order, sync-marker,
+- [x] Run usage duplicate-rollback, exact-money, timestamp-order, sync-marker,
   artifact, secret reset, and content atomicity tests.
 
-- [ ] Commit as
+- [x] Commit as
   `refactor(storage): unify accounting and finding writes through Bun`.
 
 ### Task 5: Derive attached orphan-copy projections from the registry (`wrc0`)
+
+Implementation ownership: the registry-derived attached-copy work and its
+rollback/legacy regressions landed in `163fa027`.
 
 **Files:**
 
@@ -304,39 +332,39 @@ ______________________________________________________________________
     for direct natural-key child copies. Sessions, tool calls, pins, revision
     comparisons, provenance, and sanitization retain explicit transforms.
 
-- [ ] Add an orphan-copy test with colliding source/destination child row IDs,
+- [x] Add an orphan-copy test with colliding source/destination child row IDs,
   canonical usage/findings/tool results, a preserved source finding
   `created_at`, file inode/device and termination status, and a searchable
   copied message token. Assert destination IDs are assigned, content survives,
   canonical session fields survive, and FTS finds the copied token.
 
-- [ ] Run the test and confirm failure on the currently omitted session fields.
+- [x] Run the test and confirm failure on the currently omitted session fields.
 
-- [ ] Add a guarded Bun connection acquisition helper, perform ATTACH/DETACH and
+- [x] Add a guarded Bun connection acquisition helper, perform ATTACH/DETACH and
   temp-table lifecycle on that connection, and begin the copy as `bun.Tx`.
 
-- [ ] Derive direct-copy columns from `bunmodel.ModelColumns`, intersect with
+- [x] Derive direct-copy columns from `bunmodel.ModelColumns`, intersect with
   the attached source schema, exclude destination IDs, and execute the
   `INSERT ... SELECT` through `bun.IDB.NewRaw`.
 
-- [ ] Use the helper for usage events, tool result events, and secret findings.
+- [x] Use the helper for usage events, tool result events, and secret findings.
   Preserve finding `created_at`; do not use `CanonicalSecretFindingRows` for
   archive copy.
 
-- [ ] Derive compatible message columns from the registry while still omitting
+- [x] Derive compatible message columns from the registry while still omitting
   `id`; extend the curated session copy with registry-owned fields that are
   safe to preserve, specifically `termination_status`, `file_inode`, and
   `file_device`.
 
-- [ ] Keep explicit transforms for tool-call message-ID remapping, pins, session
+- [x] Keep explicit transforms for tool-call message-ID remapping, pins, session
   provenance, identity placeholders, transcript comparison, and sanitization.
 
-- [ ] Add a plausible late-copy rollback regression using conflicting legacy
+- [x] Add a plausible late-copy rollback regression using conflicting legacy
   usage dedup rows; assert no session/message/usage/finding copy survives.
 
-- [ ] Run orphan, trash, resync, FTS, and legacy-schema tests.
+- [x] Run orphan, trash, resync, FTS, and legacy-schema tests.
 
-- [ ] Commit as `refactor(storage): derive orphan copies from Bun models`.
+- [x] Commit as `refactor(storage): derive orphan copies from Bun models`.
 
 ### Task 6: Remove the old sync writer surface and verify (`a403`)
 
@@ -355,26 +383,26 @@ ______________________________________________________________________
 - Produces a sixth stacked PR with no live hand-maintained canonical writer
   projection.
 
-- [ ] Search production code for the removed raw writer helpers and for manual
+- [x] Search production code for the removed raw writer helpers and for manual
   canonical INSERT column lists in the scoped files. Inspect each remaining
   hit and document why it is schema, FTS, connection-local, compatibility, or
   operational metadata SQL.
 
-- [ ] Update the storage guide to state that attached archive copy may use
+- [x] Update the storage guide to state that attached archive copy may use
   model-derived `INSERT ... SELECT` through Bun while connection-local
   ATTACH/temp-table control remains adapter-owned.
 
-- [ ] Run `go fmt ./...` and `go vet ./...`.
+- [x] Run `go fmt ./...` and `go vet ./...`.
 
-- [ ] Run focused `internal/db`, `internal/sync`, `internal/importer`, and
+- [x] Run focused `internal/db`, `internal/sync`, `internal/importer`, and
   `scripts` tests with `CGO_ENABLED=1` and `-tags fts5`.
 
-- [ ] Run the streaming-tail and sync benchmarks with `-benchtime=1x`.
+- [x] Run the streaming-tail and sync benchmarks with `-benchtime=1x`.
 
-- [ ] Run the full DuckDB suite and dedicated PostgreSQL/activity integration
+- [x] Run the full DuckDB suite and dedicated PostgreSQL/activity integration
   suite to prove the new tip does not disturb lower-layer parity.
 
-- [ ] Run `make test-short`; report unchanged macOS watcher delivery failures
+- [x] Run `make test-short`; report unchanged macOS watcher delivery failures
   separately without weakening them.
 
 - [ ] Commit the completed plan/docs, create a recovery ref, submit the sixth
@@ -398,6 +426,7 @@ ______________________________________________________________________
 - Scope exclusions: no schema migration, Store interface decomposition,
   generated domain converters, package split, or new compatibility layer.
 - Test quality: regressions assert canonical persisted values, atomic rollback,
-  stable IDs/pins/FTS, and bounded streaming behavior; no source-grep
-  assertion is encoded as a test.
+  stable IDs/pins/FTS, bounded legacy-ID resolution, and changed-row write
+  amplification; full transcript comparison remains history-proportional. No
+  source-grep assertion is encoded as a test.
 - Placeholder scan: no `TBD`, `TODO`, or unowned implementation step remains.
