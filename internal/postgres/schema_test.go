@@ -239,6 +239,22 @@ func (c *schemaProbeConn) QueryContext(
 			values:  values,
 		}, nil
 	case strings.Contains(normalized, "select value from sync_metadata"):
+		done := true
+		if c.state.syncMetadataKeys != nil {
+			key := ""
+			if len(args) > 0 {
+				if value, ok := args[0].Value.(string); ok {
+					key = value
+				}
+			}
+			done = c.state.syncMetadataKeys[key]
+		}
+		if done {
+			return &schemaProbeRows{
+				columns: []string{"value"},
+				values:  [][]driver.Value{{"1"}},
+			}, nil
+		}
 		return &schemaProbeRows{
 			columns: []string{"value"},
 		}, nil
