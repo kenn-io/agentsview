@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { m } from "../../i18n/index.js";
   import { squarify } from "../../utils/treemap.js";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
 
@@ -9,13 +8,18 @@
     value: number;
     color: string;
     meta?: string;
+    selectable?: boolean;
   }
 
   interface Props {
     items: TreemapItem[];
     height?: number;
-    onSelect?: (id: string) => void;
+    onSelect: (id: string) => void;
     formatValue?: (value: number) => string;
+    // Localized tooltip/aria copy comes from the caller because it
+    // depends on what selecting a tile does there (hide vs. filter).
+    titleFor: (id: string, label: string) => string;
+    ariaLabelFor: (id: string, label: string) => string;
   }
 
   function formatCost(value: number): string {
@@ -27,6 +31,8 @@
     height = 260,
     onSelect,
     formatValue = formatCost,
+    titleFor,
+    ariaLabelFor,
   }: Props = $props();
 
   let containerEl: HTMLDivElement | undefined = $state();
@@ -50,6 +56,7 @@
     value: number;
     color: string;
     meta?: string;
+    selectable: boolean;
     x: number;
     y: number;
     width: number;
@@ -74,6 +81,7 @@
         value: src.value,
         color: src.color,
         meta: src.meta,
+        selectable: src.selectable ?? true,
         x: t.x,
         y: t.y,
         width: t.width,
@@ -85,7 +93,7 @@
   function handleKey(e: KeyboardEvent, id: string) {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      onSelect?.(id);
+      onSelect(id);
     }
   }
 </script>
@@ -110,17 +118,19 @@
         height={tile.height}
       />
     </clipPath>
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <g
       class="tile"
-      tabindex="0"
-      role="button"
-      aria-label={m.usage_hide_from_chart({ label: tile.label })}
-      onclick={() => onSelect?.(tile.id)}
-      onkeydown={(e) => handleKey(e, tile.id)}
+      class:interactive={tile.selectable}
+      tabindex={tile.selectable ? 0 : undefined}
+      role={tile.selectable ? "button" : undefined}
+      aria-label={ariaLabelFor(tile.id, tile.label)}
+      onclick={tile.selectable ? () => onSelect(tile.id) : undefined}
+      onkeydown={tile.selectable ? (e) => handleKey(e, tile.id) : undefined}
       clip-path="url(#{clipId})"
     >
-      <title>{m.usage_click_to_hide({ label: tile.label })}</title>
+      <title>{titleFor(tile.id, tile.label)}</title>
       <rect
         x={tile.x}
         y={tile.y}
@@ -177,19 +187,19 @@
     display: block;
   }
 
-  .tile {
+  .tile.interactive {
     cursor: pointer;
   }
 
-  .tile:hover rect {
+  .tile.interactive:hover rect {
     opacity: 0.92;
   }
 
-  .tile:focus-visible {
+  .tile.interactive:focus-visible {
     outline: none;
   }
 
-  .tile:focus-visible rect {
+  .tile.interactive:focus-visible rect {
     stroke: white;
     stroke-width: 2;
   }

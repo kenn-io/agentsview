@@ -107,6 +107,7 @@ function usageSummary(): UsageSummaryResponse {
     ],
     modelTotals: [],
     agentTotals: [],
+    branchTotals: [],
     sessionCounts: {
       total: 15,
       byProject: { agentsview: 15 },
@@ -214,23 +215,91 @@ describe("CostTimeSeriesChart", () => {
   });
 
   it("keeps projects with the same display label as distinct series", async () => {
-	usage.summary = usageSummary();
-	usage.summary.daily = [dailyEntry(0)];
-	usage.summary.daily[0]!.projectBreakdowns = [
-		{ ...usage.summary.daily[0]!.projectBreakdowns![0]!, cost: testMoney(6) },
-		{
-			...usage.summary.daily[0]!.projectBreakdowns![0]!,
-			project_key: "pl1:sha256:other-archive",
-			cost: testMoney(4),
-		},
-	];
+    usage.summary = usageSummary();
+    usage.summary.daily = [dailyEntry(0)];
+    usage.summary.daily[0]!.projectBreakdowns = [
+      { ...usage.summary.daily[0]!.projectBreakdowns![0]!, cost: testMoney(6) },
+      {
+        ...usage.summary.daily[0]!.projectBreakdowns![0]!,
+        project_key: "pl1:sha256:other-archive",
+        cost: testMoney(4),
+      },
+    ];
 
-	const component = mountChart();
-	await tick();
+    const component = mountChart();
+    await tick();
 
-	expect(document.querySelectorAll("path[opacity='0.7']")).toHaveLength(2);
-	expect(document.querySelectorAll(".legend-item")).toHaveLength(2);
-	unmount(component);
+    expect(document.querySelectorAll("path[opacity='0.7']")).toHaveLength(2);
+    expect(document.querySelectorAll(".legend-item")).toHaveLength(2);
+    unmount(component);
+  });
+
+  it("renders branch legend labels, not raw tokens", async () => {
+    const summary = usageSummary();
+    for (const day of summary.daily) {
+      day.branchBreakdowns = [
+        {
+          project_key: "pl1:sha256:agentsview",
+          project: "agentsview",
+          branch: "main",
+          inputTokens: 80,
+          outputTokens: 40,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 0,
+          cost: testMoney(8),
+        },
+        {
+          project_key: "pl1:sha256:agentsview",
+          project: "agentsview",
+          branch: "",
+          inputTokens: 20,
+          outputTokens: 10,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 0,
+          cost: testMoney(2),
+        },
+      ];
+    }
+    usage.summary = summary;
+    usage.toggles.timeSeries.groupBy = "branch";
+
+    const component = mountChart();
+    await tick();
+
+    const legendText = Array.from(
+      document.querySelectorAll(".legend-item"),
+    ).map((el) => el.textContent!.trim());
+    expect(legendText).toContain("agentsview/main");
+    expect(legendText).toContain("agentsview/(no branch)");
+    expect(document.body.textContent).not.toContain("\u001f");
+
+    unmount(component);
+  });
+
+  it("keeps colliding branch display labels as distinct series", async () => {
+    const summary = usageSummary();
+    summary.daily = [dailyEntry(0)];
+    summary.daily[0]!.branchBreakdowns = [
+      {
+        project_key: "pl1:sha256:first", project: "", branch: "main",
+        inputTokens: 60, outputTokens: 30, cacheCreationTokens: 0,
+        cacheReadTokens: 0, cost: testMoney(6),
+      },
+      {
+        project_key: "pl1:sha256:second", project: "", branch: "main",
+        inputTokens: 40, outputTokens: 20, cacheCreationTokens: 0,
+        cacheReadTokens: 0, cost: testMoney(4),
+      },
+    ];
+    usage.summary = summary;
+    usage.toggles.timeSeries.groupBy = "branch";
+
+    const component = mountChart();
+    await tick();
+
+    expect(document.querySelectorAll("path[opacity='0.7']")).toHaveLength(2);
+    expect(document.body.textContent).not.toContain("pl1:sha256:");
+    unmount(component);
   });
 
   it("uses distinct active model colors for paths and legend dots", async () => {
@@ -336,6 +405,95 @@ describe("CostTimeSeriesChart", () => {
     ).map((dot) => dot.style.background);
     expect(paths).toEqual(["#ff7f0e", "#1f77b4"]);
     expect(dots).toEqual(["rgb(255, 127, 14)", "rgb(31, 119, 180)"]);
+    unmount(component);
+  });
+
+  it("shows fully unattributable branch cost explicitly", async () => {
+    const summary = usageSummary();
+    for (const day of summary.daily) {
+      day.branchBreakdowns = [];
+    }
+    usage.summary = summary;
+    usage.toggles.timeSeries.groupBy = "branch";
+
+    const component = mountChart();
+    await tick();
+
+    expect(document.querySelector(".empty")).toBeNull();
+    expect(document.querySelector("svg.chart-svg")).toBeTruthy();
+    expect(document.body.textContent).toContain("Unattributed");
+    unmount(component);
+  });
+
+  it("shows the unattributed remainder beside branch-attributed cost", async () => {
+    const summary = usageSummary();
+    summary.daily = [dailyEntry(0), dailyEntry(1)];
+    summary.daily[0]!.branchBreakdowns = [{
+      project_key: "pl1:sha256:agentsview",
+      project: "agentsview",
+      branch: "main",
+      inputTokens: 60,
+      outputTokens: 30,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      cost: testMoney(6),
+    }];
+    summary.daily[1]!.branchBreakdowns = [];
+    usage.summary = summary;
+    usage.toggles.timeSeries.groupBy = "branch";
+
+    const component = mountChart();
+    await tick();
+
+    const legendText = Array.from(
+      document.querySelectorAll(".legend-item"),
+    ).map((el) => el.textContent!.trim());
+    expect(legendText).toContain("agentsview/main");
+    expect(legendText).toContain("Unattributed");
+    expect(document.querySelectorAll("path[opacity='0.7']")).toHaveLength(2);
+    unmount(component);
+  });
+
+  it("shows same-day unattributed cost beside branch-attributed cost", async () => {
+    const summary = usageSummary();
+    summary.daily = [dailyEntry(0)];
+    summary.daily[0]!.branchBreakdowns = [{
+      project_key: "pl1:sha256:agentsview",
+      project: "agentsview",
+      branch: "main",
+      inputTokens: 60,
+      outputTokens: 30,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      cost: testMoney(5),
+    }];
+    usage.summary = summary;
+    usage.toggles.timeSeries.groupBy = "branch";
+
+    const component = mountChart();
+    await tick();
+
+    const legendText = Array.from(
+      document.querySelectorAll(".legend-item"),
+    ).map((el) => el.textContent!.trim());
+    expect(legendText).toContain("agentsview/main");
+    expect(legendText).toContain("Unattributed");
+    unmount(component);
+  });
+
+  it("keeps the total fallback for non-branch groupings without breakdowns", async () => {
+    const summary = usageSummary();
+    for (const day of summary.daily) {
+      day.projectBreakdowns = [];
+    }
+    usage.summary = summary;
+    usage.toggles.timeSeries.groupBy = "project";
+
+    const component = mountChart();
+    await tick();
+
+    expect(document.querySelector(".empty")).toBeNull();
+    expect(document.querySelector("svg.chart-svg")).toBeTruthy();
     unmount(component);
   });
 });

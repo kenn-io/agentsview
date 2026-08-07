@@ -1175,8 +1175,7 @@ func (s *Store) GetMachines(
 	return machines, rows.Err()
 }
 
-// GetBranches mirrors db.DB.GetBranches: distinct (project, branch) pairs,
-// including the empty no-branch value, scoped to root sessions with messages.
+// GetBranches mirrors the stable qualified branch metadata contract.
 func (s *Store) GetBranches(
 	ctx context.Context,
 	excludeOneShot, excludeAutomated bool,
@@ -1204,12 +1203,53 @@ func (s *Store) GetBranches(
 
 	branches := []db.BranchInfo{}
 	for rows.Next() {
-		var bi db.BranchInfo
-		if err := rows.Scan(&bi.Project, &bi.Branch); err != nil {
+		var branch db.BranchInfo
+		if err := rows.Scan(&branch.Project, &branch.Branch); err != nil {
 			return nil, fmt.Errorf("scanning branch: %w", err)
 		}
-		bi.Token = db.EncodeBranchFilterToken(bi.Project, bi.Branch)
-		branches = append(branches, bi)
+		branch.Token = db.EncodeBranchFilterToken(branch.Project, branch.Branch)
+		branches = append(branches, branch)
 	}
 	return branches, rows.Err()
+}
+
+// SearchBranchNames mirrors db.DB.SearchBranchNames for PostgreSQL.
+func (s *Store) SearchBranchNames(
+	ctx context.Context, query db.BranchQuery,
+) (db.BranchResult, error) {
+	query = db.NormalizeBranchQuery(query)
+	q := `SELECT git_branch FROM sessions
+		WHERE message_count > 0
+		  AND deleted_at IS NULL`
+	pb := &paramBuilder{}
+	if query.Scope == db.BranchScopeRoots {
+		q += " AND relationship_type NOT IN ('subagent', 'fork')"
+	}
+	if query.ExcludeOneShot {
+		if !query.ExcludeAutomated {
+			q += " AND (user_message_count > 1 OR is_automated = TRUE)"
+		} else {
+			q += " AND user_message_count > 1"
+		}
+	}
+	if query.ExcludeAutomated {
+		q += " AND is_automated = FALSE"
+	}
+	if len(query.Projects) > 0 {
+		q += " AND project IN " + pgInPlaceholders(query.Projects, pb)
+	}
+	if query.Search != "" {
+		q += ` AND git_branch ILIKE ` + pb.add(
+			"%"+db.EscapeLikePattern(query.Search)+"%") + ` ESCAPE '\'`
+	}
+	limitPlaceholder := pb.add(query.Limit + 1)
+	q += fmt.Sprintf(` GROUP BY git_branch
+		ORDER BY MAX(%s) DESC NULLS LAST, git_branch
+		LIMIT %s`, pgActivityExpr, limitPlaceholder)
+	rows, err := s.pg.QueryContext(ctx, q, pb.args...)
+	if err != nil {
+		return db.BranchResult{}, fmt.Errorf("querying branches: %w", err)
+	}
+	defer rows.Close()
+	return db.ScanBranchResult(rows, query)
 }

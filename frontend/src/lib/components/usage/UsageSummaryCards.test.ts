@@ -36,6 +36,7 @@ function summary(): UsageSummaryResponse {
     projectTotals: [],
     modelTotals: [],
     agentTotals: [],
+    branchTotals: [],
     sessionCounts: {
       total: 1,
       byProject: { demo: 1 },

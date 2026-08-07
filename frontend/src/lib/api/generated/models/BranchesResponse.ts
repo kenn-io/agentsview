@@ -5,4 +5,3 @@
 export type BranchesResponse = {
   branches: any[] | null;
 };
-

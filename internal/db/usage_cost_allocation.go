@@ -10,11 +10,13 @@ import (
 // usageCostAllocationKey is the daily usage breakdown granularity used when
 // distributing an authoritative session total.
 type usageCostAllocationKey struct {
-	date    string
-	project string
-	agent   string
-	machine string
-	model   string
+	date             string
+	project          string
+	agent            string
+	machine          string
+	model            string
+	gitBranch        string
+	branchAttributed bool
 }
 
 func sortedUsageCostAllocationKeys(
@@ -38,7 +40,13 @@ func sortedUsageCostAllocationKeys(
 		if a.machine != b.machine {
 			return a.machine < b.machine
 		}
-		return a.model < b.model
+		if a.model != b.model {
+			return a.model < b.model
+		}
+		if a.gitBranch != b.gitBranch {
+			return a.gitBranch < b.gitBranch
+		}
+		return !a.branchAttributed && b.branchAttributed
 	})
 	return keys
 }

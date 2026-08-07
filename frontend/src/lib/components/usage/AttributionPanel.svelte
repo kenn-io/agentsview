@@ -4,26 +4,28 @@
     type GroupBy,
     type AttributionView,
   } from "../../stores/usage.svelte.js";
+  import {
+    branchFilterToken,
+    branchLabel,
+  } from "../../branchFilters.js";
   import Treemap from "./Treemap.svelte";
   import { m } from "../../i18n/index.js";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
   import { formatTokenCount } from "../../utils/format.js";
   import { sumSelectedTokens } from "../../stores/usageTokenTypes.js";
+  import { createVirtualizer } from "../../virtual/createVirtualizer.svelte.js";
 
   interface Props {
     colorMap: ReadonlyMap<string, string>;
   }
 
   let { colorMap }: Props = $props();
-
-  function fmtPct(v: number, total: number): string {
-    if (total <= 0) return "";
-    return `${((v / total) * 100).toFixed(1)}%`;
-  }
-
   const groupBy = $derived(usage.toggles.attribution.groupBy);
   const view = $derived(usage.toggles.attribution.view);
   const isTokenMode = $derived(usage.mode === "token");
+  const noBranchLabel = $derived(m.shared_no_branch());
+  const UNATTRIBUTED_ID = "__unattributed__";
+  const OTHER_ID = "__attribution_other__";
 
   interface Row {
     id: string;
@@ -31,6 +33,7 @@
     value: number;
     color: string;
     pct: number;
+    selectable: boolean;
   }
 
   const rowItems = $derived.by(() => {
@@ -41,6 +44,7 @@
       id: string;
       label: string;
       value: number;
+      selectable?: boolean;
     }> = [];
 
     if (groupBy === "project") {
@@ -59,6 +63,27 @@
           ? sumSelectedTokens(m, usage.selectedTokenTypes)
           : m.cost.microdollars,
       }));
+    } else if (groupBy === "branch") {
+      items = s.branchTotals.map((b) => ({
+        id: branchFilterToken(b.project_key, b.branch),
+        label: branchLabel(b.project, b.branch, noBranchLabel),
+        value: isTokenMode
+          ? sumSelectedTokens(b, usage.selectedTokenTypes)
+          : b.cost.microdollars,
+      }));
+      const attributed = items.reduce((sum, item) => sum + item.value, 0);
+      const total = isTokenMode
+        ? sumSelectedTokens(s.totals, usage.selectedTokenTypes)
+        : s.totals.totalCost.microdollars;
+      const unattributed = Math.max(0, total - attributed);
+      if (unattributed > 0) {
+        items.push({
+          id: UNATTRIBUTED_ID,
+          label: m.usage_unattributed(),
+          value: unattributed,
+          selectable: false,
+        });
+      }
     } else {
       items = s.agentTotals.map((a) => ({
         id: a.agent,
@@ -81,31 +106,109 @@
       id: d.id,
       label: d.label,
       value: d.value,
-      color: colorMap.get(d.id) ?? "var(--text-muted)",
+      color: d.id === UNATTRIBUTED_ID
+        ? "var(--text-muted)"
+        : colorMap.get(d.id) ?? "var(--text-muted)",
       pct: total > 0 ? d.value / total : 0,
+      selectable: d.selectable ?? true,
     }));
   });
 
-  const treemapItems = $derived(
-    rows.map((r) => ({
+  const RAIL_ROW_HEIGHT = 24;
+  const LIST_ROW_HEIGHT = 42;
+  let railScrollElement: HTMLDivElement | undefined = $state();
+  let listScrollElement: HTMLDivElement | undefined = $state();
+
+  const railVirtualizer = createVirtualizer(() => ({
+    count: rows.length,
+    getScrollElement: () => railScrollElement ?? null,
+    estimateSize: () => RAIL_ROW_HEIGHT,
+    overscan: 6,
+    getItemKey: (index) => rows[index]?.id ?? index,
+  }));
+
+  const listVirtualizer = createVirtualizer(() => ({
+    count: rows.length,
+    getScrollElement: () => listScrollElement ?? null,
+    estimateSize: () => LIST_ROW_HEIGHT,
+    overscan: 6,
+    getItemKey: (index) => rows[index]?.id ?? index,
+  }));
+
+  // One SVG group is drawn per tile, and branch grouping can produce
+  // thousands of (project, branch) rows whose tiles would be sub-pixel.
+  // Reserve the final capped tile for their aggregate so the treemap still
+  // represents the full total. The side rail and list view retain every row.
+  const TREEMAP_MAX_TILES = 40;
+
+  const treemapItems = $derived.by(() => {
+    const visibleCount = rows.length > TREEMAP_MAX_TILES
+      ? TREEMAP_MAX_TILES - 1
+      : TREEMAP_MAX_TILES;
+    const items = rows.slice(0, visibleCount).map((r) => ({
       id: r.id,
       label: r.label,
       value: r.value,
       color: r.color,
-      meta: fmtPct(r.value, rows.reduce(
-        (sum, item) => sum + item.value, 0,
-      )),
-    })),
-  );
+      meta: r.pct > 0 ? `${(r.pct * 100).toFixed(1)}%` : "",
+      selectable: r.selectable,
+    }));
+    const omitted = rows.slice(visibleCount);
+    if (omitted.length > 0) {
+      const value = omitted.reduce((sum, row) => sum + row.value, 0);
+      const pct = omitted.reduce((sum, row) => sum + row.pct, 0);
+      items.push({
+        id: OTHER_ID,
+        label: m.shared_other(),
+        value,
+        color: "var(--text-muted)",
+        meta: pct > 0 ? `${(pct * 100).toFixed(1)}%` : "",
+        selectable: false,
+      });
+    }
+    return items;
+  });
 
   function handleSelect(id: string) {
+    if (id === UNATTRIBUTED_ID || id === OTHER_ID) return;
     if (groupBy === "project") {
       usage.toggleProjectKey(id);
     } else if (groupBy === "agent") {
       usage.toggleAgent(id);
-    } else {
+    } else if (groupBy === "model") {
       usage.toggleModel(id);
+    } else if (groupBy === "branch") {
+      usage.toggleBranch(id);
     }
+  }
+
+  // Project and agent clicks exclude the item ("hide"); model and
+  // branch clicks toggle an include-based selection ("filter"), so the
+  // hint, tooltip, and aria copy must describe different actions.
+  const includeBased = $derived(
+    groupBy === "model" || groupBy === "branch",
+  );
+
+  function isRowSelected(id: string): boolean {
+    if (groupBy === "model") return usage.isModelSelected(id);
+    if (groupBy === "branch") return usage.isBranchSelected(id);
+    return false;
+  }
+
+  function rowTitle(id: string, label: string): string {
+    if (id === UNATTRIBUTED_ID || id === OTHER_ID) return label;
+    if (!includeBased) return m.usage_click_to_hide({ label });
+    return isRowSelected(id)
+      ? m.usage_click_to_clear_filter({ label })
+      : m.usage_click_to_filter({ label });
+  }
+
+  function rowAriaLabel(id: string, label: string): string {
+    if (id === UNATTRIBUTED_ID || id === OTHER_ID) return label;
+    if (!includeBased) return m.usage_hide_from_chart({ label });
+    return isRowSelected(id)
+      ? m.usage_clear_filter_item({ label })
+      : m.usage_filter_to_item({ label });
   }
 
   function handleGroupByChange(g: GroupBy) {
@@ -147,6 +250,13 @@
         >
           {m.analytics_col_agent()}
         </button>
+        <button
+          class="toggle-btn"
+          class:active={groupBy === "branch"}
+          onclick={() => handleGroupByChange("branch")}
+        >
+          {m.usage_branch()}
+        </button>
       </div>
       <div class="segment-toggle">
         <button
@@ -170,7 +280,11 @@
   {#if rows.length === 0}
     <div class="empty">{m.shared_no_data_for_period()}</div>
   {:else}
-    <div class="hint">{m.usage_click_to_hide_hint()}</div>
+    <div class="hint">
+      {includeBased
+        ? m.usage_click_to_filter_hint()
+        : m.usage_click_to_hide_hint()}
+    </div>
     {#if view === "treemap"}
       <div class="treemap-layout">
         <div class="treemap-main">
@@ -179,67 +293,80 @@
             height={260}
             onSelect={handleSelect}
             formatValue={isTokenMode ? formatTokenCount : undefined}
+            titleFor={rowTitle}
+            ariaLabelFor={rowAriaLabel}
           />
         </div>
-        <div class="side-rail">
-          {#each rows as row, i (row.id)}
-            <!-- svelte-ignore a11y_click_events_have_key_events -->
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div
-              class="rail-row"
-              title={m.usage_click_to_hide({ label: row.label })}
-              onclick={() => handleSelect(row.id)}
-            >
-              <span class="rail-rank">{i + 1}</span>
-              <span
-                class="rail-dot"
-                style="background: {row.color}"
-              ></span>
-              <span class="rail-label">{row.label}</span>
-              <span class="rail-cost">
-                {isTokenMode
-                  ? formatTokenCount(row.value)
-                  : formatMoney(moneyFromMicrodollars(row.value))}
-              </span>
-            </div>
-          {/each}
+        <div class="side-rail" bind:this={railScrollElement}>
+          <div
+            class="rail-virtual-spacer"
+            style="height: {railVirtualizer.instance?.getTotalSize() ?? 0}px; position: relative;"
+          >
+            {#each railVirtualizer.instance?.getVirtualItems() ?? [] as virtualRow (virtualRow.key)}
+              {@const row = rows[virtualRow.index]}
+              {#if row}
+                <!-- svelte-ignore a11y_click_events_have_key_events -->
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div
+                  class="rail-row"
+                  class:interactive={row.selectable}
+                  title={rowTitle(row.id, row.label)}
+                  style="position: absolute; top: 0; left: 0; width: 100%; height: {virtualRow.size}px; transform: translateY({virtualRow.start}px);"
+                  onclick={() => handleSelect(row.id)}
+                >
+                  <span class="rail-rank">{virtualRow.index + 1}</span>
+                  <span class="rail-dot" style="background: {row.color}"></span>
+                  <span class="rail-label">{row.label}</span>
+                  <span class="rail-cost">
+                    {isTokenMode
+                      ? formatTokenCount(row.value)
+                      : formatMoney(moneyFromMicrodollars(row.value))}
+                  </span>
+                </div>
+              {/if}
+            {/each}
+          </div>
         </div>
       </div>
     {:else}
-      <div class="list-view">
-        {#each rows as row, i (row.id)}
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div
-            class="list-row"
-            title={m.usage_click_to_hide({ label: row.label })}
-            onclick={() => handleSelect(row.id)}
-          >
-            <span class="list-rank">{i + 1}</span>
-            <span
-              class="list-dot"
-              style="background: {row.color}"
-            ></span>
-            <div class="list-info">
-              <span class="list-label">{row.label}</span>
-              <div class="list-bar-track">
-                <div
-                  class="list-bar-fill"
-                  style="width: {Math.max(row.pct * 100, 1)}%;
-                         background: {row.color};"
-                ></div>
+      <div class="list-view" bind:this={listScrollElement}>
+        <div
+          class="list-virtual-spacer"
+          style="height: {listVirtualizer.instance?.getTotalSize() ?? 0}px; position: relative;"
+        >
+          {#each listVirtualizer.instance?.getVirtualItems() ?? [] as virtualRow (virtualRow.key)}
+            {@const row = rows[virtualRow.index]}
+            {#if row}
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <div
+                class="list-row"
+                class:interactive={row.selectable}
+                title={rowTitle(row.id, row.label)}
+                style="position: absolute; top: 0; left: 0; width: 100%; height: {virtualRow.size}px; transform: translateY({virtualRow.start}px);"
+                onclick={() => handleSelect(row.id)}
+              >
+                <span class="list-rank">{virtualRow.index + 1}</span>
+                <span class="list-dot" style="background: {row.color}"></span>
+                <div class="list-info">
+                  <span class="list-label">{row.label}</span>
+                  <div class="list-bar-track">
+                    <div
+                      class="list-bar-fill"
+                      style="width: {Math.max(row.pct * 100, 1)}%; background: {row.color};"
+                    ></div>
+                  </div>
+                </div>
+                <span class="list-pct">{(row.pct * 100).toFixed(1)}%</span>
+                <span class="list-cost">
+                  {isTokenMode
+                    ? formatTokenCount(row.value)
+                    : formatMoney(moneyFromMicrodollars(row.value))}
+                </span>
               </div>
-            </div>
-            <span class="list-pct">
-              {(row.pct * 100).toFixed(1)}%
-            </span>
-            <span class="list-cost">
-              {isTokenMode
-                ? formatTokenCount(row.value)
-                : formatMoney(moneyFromMicrodollars(row.value))}
-            </span>
-          </div>
-        {/each}
+            {/if}
+          {/each}
+        </div>
       </div>
     {/if}
   {/if}
@@ -312,9 +439,6 @@
   }
 
   .side-rail {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
     overflow-y: auto;
     max-height: 280px;
   }
@@ -325,11 +449,15 @@
     gap: 6px;
     padding: 3px 4px;
     border-radius: var(--radius-sm);
-    cursor: pointer;
     transition: background 0.1s;
+    box-sizing: border-box;
   }
 
-  .rail-row:hover {
+  .rail-row.interactive {
+    cursor: pointer;
+  }
+
+  .rail-row.interactive:hover {
     background: var(--bg-surface-hover);
   }
 
@@ -367,9 +495,8 @@
 
   /* List view */
   .list-view {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+    max-height: 420px;
+    overflow-y: auto;
   }
 
   .list-row {
@@ -378,11 +505,15 @@
     gap: 8px;
     padding: 4px 6px;
     border-radius: var(--radius-sm);
-    cursor: pointer;
     transition: background 0.1s;
+    box-sizing: border-box;
   }
 
-  .list-row:hover {
+  .list-row.interactive {
+    cursor: pointer;
+  }
+
+  .list-row.interactive:hover {
     background: var(--bg-surface-hover);
   }
 

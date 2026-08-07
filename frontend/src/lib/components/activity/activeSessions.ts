@@ -1,7 +1,4 @@
-import type {
-  ActivityReportInterval,
-  ActivitySessionRow,
-} from "../../api/generated/index";
+import type { ReportInterval, SessionRow } from "../../api/types.js";
 
 /**
  * The unique sessions whose interval overlaps the half-open slot
@@ -10,11 +7,11 @@ import type {
  * in the slot appears once. Ids absent from `bySession` are skipped.
  */
 export function activeSessionsInSlot(
-  intervals: ActivityReportInterval[],
+  intervals: ReportInterval[],
   slotStartMs: number,
   slotEndMs: number,
-  bySession: Map<string, ActivitySessionRow>,
-): ActivitySessionRow[] {
+  bySession: Map<string, SessionRow>,
+): SessionRow[] {
   const earliestStart = new Map<string, number>();
   for (const iv of intervals) {
     const start = Date.parse(iv.start);
@@ -35,7 +32,7 @@ export function activeSessionsInSlot(
     const d = earliestStart.get(a)! - earliestStart.get(b)!;
     return d !== 0 ? d : a.localeCompare(b);
   });
-  const rows: ActivitySessionRow[] = [];
+  const rows: SessionRow[] = [];
   for (const id of ids) {
     const r = bySession.get(id);
     if (r) rows.push(r);

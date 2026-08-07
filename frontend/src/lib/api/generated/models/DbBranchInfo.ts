@@ -7,4 +7,3 @@ export type DbBranchInfo = {
   project: string;
   token: string;
 };
-
