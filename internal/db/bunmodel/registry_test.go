@@ -291,6 +291,10 @@ func TestBunRowTimestampScannerNormalizesSupportedInputsToUTC(t *testing.T) {
 			var got Timestamp
 			require.NoError(t, got.Scan(input))
 			assert.Equal(t, want, got.Time)
+
+			value, err := got.Value()
+			require.NoError(t, err)
+			assert.Equal(t, "2026-08-02T16:30:00.123456Z", value)
 		})
 	}
 }

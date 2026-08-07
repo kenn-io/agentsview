@@ -183,7 +183,9 @@ func TestDevinMessageNodeSessionResyncsDespiteUnchangedFingerprint(t *testing.T)
 		AgentDirs: map[parser.AgentType][]string{parser.AgentDevin: {root}},
 		Machine:   "local",
 	})
-	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
+	initialResync := engine.ResyncAll(context.Background(), nil)
+	require.False(t, initialResync.Aborted)
+	require.Equal(t, 1, initialResync.Synced)
 
 	stored := requireOnlyStoredSession(t, database)
 	require.NotNil(t, stored.StartedAt)

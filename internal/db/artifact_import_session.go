@@ -72,6 +72,11 @@ func (db *DB) applyArtifactImportedSession(
 			"artifact imported session write does not match provenance",
 		)
 	}
+	identity, err := db.localArchiveIdentity(ctx)
+	if err != nil {
+		return result, err
+	}
+	stampSessionArchiveIdentity(&write.Session, identity)
 	write = sanitizeSessionBatchWrite(write)
 
 	db.mu.Lock()

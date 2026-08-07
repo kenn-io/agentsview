@@ -2781,9 +2781,9 @@ func TestResyncAllUpgradeKeepsFreshProjectSnapshotAndDropsLegacyOrphan(
 	require.Less(t, legacyDataVersion, db.CurrentDataVersion(),
 		"fixture must predate the current data version to trigger an upgrade")
 	_, err = raw.ExecContext(ctx, fmt.Sprintf(`
-		UPDATE session_project_identity_snapshots
+		UPDATE source_session_project_identity_snapshots
 		SET project = ?
-		WHERE session_id = ?;
+		WHERE source_session_id = ?;
 		PRAGMA user_version = %d`, legacyDataVersion),
 		targetProject, liveSessionID,
 	)
