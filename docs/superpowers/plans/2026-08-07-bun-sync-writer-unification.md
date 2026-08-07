@@ -69,34 +69,34 @@ ______________________________________________________________________
     ) error
     ```
 
-- [ ] Add a failing Bun writer test with two message ordinals where only one is
+- [x] Add a failing Bun writer test with two message ordinals where only one is
   repaired. Assert the untouched row ID/tool graph remains unchanged, the
   changed row ID remains stable, stale changed-row tools disappear, a unique
   result `event_index = 7` survives, and timestamps persist at canonical UTC
   microsecond precision.
 
-- [ ] Run
+- [x] Run
   `CGO_ENABLED=1 go test -tags fts5 ./internal/db -run 'Canonical.*Repair|DiffRepairsOnlyChangedOrdinals' -count=1`
   and confirm failure because `RepairMessageRows` does not exist.
 
-- [ ] Implement `appendCanonicalMessageGraph` by validating one session,
+- [x] Implement `appendCanonicalMessageGraph` by validating one session,
   converting once with `CanonicalMessageRows`, then calling
   `AppendMessageRows` and `AppendToolRows`.
 
-- [ ] Implement `RepairMessageRows` with message upserts on
+- [x] Implement `RepairMessageRows` with message upserts on
   `(session_id, ordinal)`, conflict updates excluding `id` and key columns,
   Bun deletes limited to `affectedOrdinals`, and append of only the supplied
   tool graph. Reject message/tool rows outside the requested session or
   ordinal set.
 
-- [ ] Change `messageRowEqual` to compare canonical persisted projections so
+- [x] Change `messageRowEqual` to compare canonical persisted projections so
   normalized timestamps and nullable optional tool fields do not cause
   perpetual parse-diff repairs.
 
-- [ ] Run the focused test and the existing
+- [x] Run the focused test and the existing
   `TestReplaceSessionMessagesDiffMatchesFullReplace` suite; confirm pass.
 
-- [ ] Commit the primitive and tests as
+- [x] Commit the primitive and tests as
   `refactor(storage): add canonical message repair writes`.
 
 ### Task 2: Port archive message writers to Bun (`1yq3`, `k919`)
@@ -118,35 +118,35 @@ ______________________________________________________________________
   `replaceArchiveSessionMessages`, and `ReplaceSessionContent` without the raw
   message/tool insert helpers.
 
-- [ ] Add `TestWriteSessionIncrementalUsesCanonicalMessageGraph` with a
+- [x] Add `TestWriteSessionIncrementalUsesCanonicalMessageGraph` with a
   nanosecond offset timestamp and a tool result whose unique event index is 7.
   Assert canonical persisted timestamps, retained event index, correct legacy
   `message_id`, one transcript revision bump, incremental marker, automation
   state, metadata update, and signal invalidation.
 
-- [ ] Run that test and confirm the current manual writer fails by preserving
+- [x] Run that test and confirm the current manual writer fails by preserving
   source timestamp text and rewriting the unique event index.
 
-- [ ] Convert each public writer to begin one `bun.Tx`; pass `bunTx` to
+- [x] Convert each public writer to begin one `bun.Tx`; pass `bunTx` to
   canonical row helpers and `bunTx.Tx` to SQLite-only revision, FTS, pins,
   recall, links, signals, and artifact helpers.
 
-- [ ] Replace full-reinsert logic with the existing FTS/pin deletion sequence
+- [x] Replace full-reinsert logic with the existing FTS/pin deletion sequence
   followed by `appendCanonicalMessageGraph`.
 
-- [ ] Replace diff writes with `RepairMessageRows`; never call `ReplaceToolRows`
+- [x] Replace diff writes with `RepairMessageRows`; never call `ReplaceToolRows`
   for a partial diff because it owns the complete session tool set.
 
-- [ ] Preserve multi-session `InsertMessages` behavior by grouping inputs in
+- [x] Preserve multi-session `InsertMessages` behavior by grouping inputs in
   first-seen session order, applying one graph append per session, and running
   revision/automation/signal effects once per distinct session.
 
-- [ ] Delete `insertMessagesTx`, `nextMessageIDTx`, `messageInsertArgs`,
+- [x] Delete `insertMessagesTx`, `nextMessageIDTx`, `messageInsertArgs`,
   `messageUpdateSetClause`, `insertToolCallsChunkTx`,
   `insertToolResultEventsChunkTx`, and their batching/placeholder constants
   after all callers are gone.
 
-- [ ] Run focused message, diff, pin, FTS, incremental rollback, recall, and
+- [x] Run focused message, diff, pin, FTS, incremental rollback, recall, and
   artifact tests.
 
 - [ ] Commit as `refactor(storage): route archive message writes through Bun`.

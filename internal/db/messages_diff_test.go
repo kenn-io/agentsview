@@ -183,9 +183,25 @@ func TestReplaceSessionMessagesUpdatesChangedRowsInPlace(t *testing.T) {
 			"partial chunk plus merged tail zqmergetoken",
 			func(m *Message) {
 				m.ClaudeMessageID = "m1"
-				m.ToolCalls = v1[1].ToolCalls
+				m.Timestamp = "2026-06-20T06:00:01.123456789-04:00"
+				m.ToolCalls = []ToolCall{{
+					ToolName: "Bash", Category: "execution",
+					ResultEvents: []ToolResultEvent{{
+						EventIndex: 6, Source: "result", Status: "ok",
+						Content: "updated",
+					}},
+				}}
 			}),
-		diffTestMsg("diff-a", 2, "assistant", "follow-up"),
+		diffTestMsg("diff-a", 2, "assistant", "follow-up",
+			func(m *Message) {
+				m.ToolCalls = []ToolCall{{
+					ToolName: "Read", Category: "file",
+					ResultEvents: []ToolResultEvent{{
+						EventIndex: 9, Source: "result", Status: "ok",
+						Content: "appended",
+					}},
+				}}
+			}),
 	}
 	require.NoError(t, d.ReplaceSessionMessages("diff-a", v2))
 
@@ -201,6 +217,13 @@ func TestReplaceSessionMessagesUpdatesChangedRowsInPlace(t *testing.T) {
 	require.Len(t, msgs, 3)
 	assert.Contains(t, msgs[1].Content, "zqmergetoken",
 		"merged content must be persisted")
+	assert.Equal(t, "2026-06-20T10:00:01.123456Z", msgs[1].Timestamp)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	require.Len(t, msgs[1].ToolCalls[0].ResultEvents, 1)
+	assert.Equal(t, 6, msgs[1].ToolCalls[0].ResultEvents[0].EventIndex)
+	require.Len(t, msgs[2].ToolCalls, 1)
+	require.Len(t, msgs[2].ToolCalls[0].ResultEvents, 1)
+	assert.Equal(t, 9, msgs[2].ToolCalls[0].ResultEvents[0].EventIndex)
 
 	if d.HasFTS() {
 		var n int
