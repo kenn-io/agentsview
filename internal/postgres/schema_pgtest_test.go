@@ -200,7 +200,9 @@ func TestPostgresPricingTimestampCompatibilityRejectsTextDrift(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "model_pricing_bands.updated_at")
 
-	err = convergePostgresCommonSchema(t.Context(), pg, nil)
+	err = convergePostgresCommonSchema(
+		t.Context(), bun.NewDB(pg, pgdialect.New()), nil,
+	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "validating stamped common PostgreSQL schema")
 }
