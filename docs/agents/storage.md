@@ -44,15 +44,15 @@ atomically. Preserve sessions even when their source files no longer exist.
   DuckDB `USE`, handle swap/drain/close lifecycle, connector state, and
   unavoidable compatibility or capability probes. Keep each such seam inside
   its backend adapter and document why Bun cannot own it.
-- Backend-specific query construction is allowed wherever engine semantics,
-  features, or query plans require it. Common examples are schema
-  creation/migrations, archive ingestion and replication or mirror
-  synchronization, operational metadata, full-text/vector capabilities,
-  timestamp and aggregate expressions, connection-local lifecycle commands,
-  and compatibility/capability probes. Keep the difference behind the backend
-  adapter or capability boundary. The server-facing Store policy, filtering,
-  hydration, reduction, and public ordering remain shared unless a documented
-  engine constraint requires an observable difference.
+- Backend-specific query construction is limited to this closed set of seams:
+  lifecycle and connection-local operations; canonical schema creation,
+  convergence, and validation; replication or mirror synchronization and
+  operational metadata; adapter-supplied timestamp ordering and compatibility
+  or capability probes; and narrowly scoped full-text or vector
+  implementations. Keep each difference behind the backend adapter or search
+  capability boundary. The server-facing Store policy, filtering, hydration,
+  and reduction remain shared. A new non-search seam requires an explicit
+  design update; a backend-specific query plan alone is not one.
 
 ### Bun placeholders
 
