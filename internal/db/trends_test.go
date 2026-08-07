@@ -353,8 +353,12 @@ func TestGetTrendsTermsSQLiteTimestampFallback(t *testing.T) {
 		s.UserMessageCount = 1
 	})
 	insertMessages(t, d,
-		Message{SessionID: "s1", Ordinal: 0, Role: "user", Content: "seam", Timestamp: "not-a-time", ContentLength: 4},
+		Message{SessionID: "s1", Ordinal: 0, Role: "user", Content: "seam", Timestamp: start, ContentLength: 4},
 	)
+	_, err := d.getWriter().Exec(
+		"UPDATE messages SET timestamp = 'not-a-time' WHERE session_id = 's1' AND ordinal = 0",
+	)
+	require.NoError(t, err, "seed malformed legacy timestamp")
 	terms, err := ParseTrendTerms([]string{"seam"})
 	require.NoError(t, err)
 	got, err := d.GetTrendsTerms(ctx, AnalyticsFilter{

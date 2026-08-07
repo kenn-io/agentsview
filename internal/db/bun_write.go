@@ -42,9 +42,13 @@ func canonicalConflictUpdateClause(columns []string) string {
 }
 
 func canonicalConflictUpdateClauseForKey(key string, columns []string) string {
+	return canonicalConflictUpdateClauseForKeys([]string{key}, columns)
+}
+
+func canonicalConflictUpdateClauseForKeys(keys, columns []string) string {
 	var clause strings.Builder
 	clause.WriteString("CONFLICT (")
-	clause.WriteString(key)
+	clause.WriteString(strings.Join(keys, ", "))
 	clause.WriteString(") DO UPDATE SET ")
 	for index, column := range columns {
 		if index > 0 {
@@ -87,6 +91,93 @@ func (db *DB) beginBunWriteTx(
 		return bun.Tx{}, ErrReadOnly
 	}
 	return db.bunWriter.BeginTx(ctx, (*sql.TxOptions)(nil))
+}
+
+func (db *DB) acquireBunWriteConn(ctx context.Context) (bun.Conn, error) {
+	db.connMu.RLock()
+	defer db.connMu.RUnlock()
+	if db.readOnly {
+		return bun.Conn{}, ErrReadOnly
+	}
+	if db.bunWriter == nil {
+		if db.writerClosed.Load() {
+			return bun.Conn{}, ErrWriterClosed
+		}
+		return bun.Conn{}, ErrReadOnly
+	}
+	return db.bunWriter.Conn(ctx)
+}
+
+// copyCanonicalRowsFromAttached copies natural-key child rows from an attached
+// SQLite archive using the canonical Bun registry as the destination
+// projection. Physical IDs are excluded so the destination assigns them, and
+// columns absent from a legacy source archive are omitted.
+func copyCanonicalRowsFromAttached(
+	ctx context.Context,
+	tx bun.IDB,
+	model any,
+	sourceTable string,
+	idsTable string,
+	excludedColumns ...string,
+) error {
+	rows, err := tx.QueryContext(ctx,
+		"PRAGMA old_db.table_info("+quoteCommonIdentifier(sourceTable)+")",
+	)
+	if err != nil {
+		return fmt.Errorf("reading attached %s columns: %w", sourceTable, err)
+	}
+	defer rows.Close()
+
+	sourceColumns := make(map[string]struct{})
+	for rows.Next() {
+		var cid int
+		var name string
+		var typ, defaultValue sql.NullString
+		var notNull, primaryKey int
+		if err := rows.Scan(
+			&cid, &name, &typ, &notNull, &defaultValue, &primaryKey,
+		); err != nil {
+			return fmt.Errorf("scanning attached %s columns: %w", sourceTable, err)
+		}
+		sourceColumns[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating attached %s columns: %w", sourceTable, err)
+	}
+
+	excluded := make(map[string]struct{}, len(excludedColumns))
+	for _, column := range excludedColumns {
+		excluded[column] = struct{}{}
+	}
+	columns := bunmodel.ModelColumns(model)
+	columns = slices.DeleteFunc(columns, func(column string) bool {
+		if _, skip := excluded[column]; skip {
+			return true
+		}
+		_, present := sourceColumns[column]
+		return !present
+	})
+	if len(columns) == 0 {
+		return fmt.Errorf("copying attached %s: no compatible canonical columns", sourceTable)
+	}
+	if _, present := sourceColumns["session_id"]; !present {
+		return fmt.Errorf("copying attached %s: session_id column is required", sourceTable)
+	}
+
+	quotedColumns := make([]string, len(columns))
+	for index, column := range columns {
+		quotedColumns[index] = quoteCommonIdentifier(column)
+	}
+	columnList := strings.Join(quotedColumns, ", ")
+	query := "INSERT INTO main." + quoteCommonIdentifier(sourceTable) +
+		" (" + columnList + ") SELECT " + columnList +
+		" FROM old_db." + quoteCommonIdentifier(sourceTable) +
+		" WHERE " + quoteCommonIdentifier("session_id") + " IN (SELECT " +
+		quoteCommonIdentifier("id") + " FROM " + quoteCommonIdentifier(idsTable) + ")"
+	if _, err := tx.NewRaw(query).Exec(ctx); err != nil {
+		return fmt.Errorf("copying attached %s: %w", sourceTable, err)
+	}
+	return nil
 }
 
 // CanonicalSessionRow converts one public session into its portable Bun row.
@@ -237,6 +328,18 @@ func CanonicalMessageRows(
 			}
 		}
 	}
+	slices.SortStableFunc(resultRows, func(a, b bunmodel.ToolResultEvent) int {
+		if a.SessionID != b.SessionID {
+			return strings.Compare(a.SessionID, b.SessionID)
+		}
+		if a.ToolCallMessageOrdinal != b.ToolCallMessageOrdinal {
+			return a.ToolCallMessageOrdinal - b.ToolCallMessageOrdinal
+		}
+		if a.CallIndex != b.CallIndex {
+			return a.CallIndex - b.CallIndex
+		}
+		return a.EventIndex - b.EventIndex
+	})
 	return messageRows, callRows, resultRows, nil
 }
 
@@ -463,6 +566,110 @@ func AppendToolRows(
 	return appendToolRows(ctx, tx, sessionID, calls, results)
 }
 
+// RepairMessageRows replaces only the requested logical message ordinals.
+// SQLite parse-diff uses this to keep stable message IDs, pins, and untouched
+// FTS/tool rows while canonicalizing changed and appended rows through Bun.
+func RepairMessageRows(
+	ctx context.Context,
+	tx bun.IDB,
+	sessionID string,
+	affectedOrdinals []int,
+	messages []bunmodel.Message,
+	calls []bunmodel.ToolCall,
+	results []bunmodel.ToolResultEvent,
+) error {
+	if err := validateMessageWriteScope(sessionID, messages); err != nil {
+		return err
+	}
+	if err := validateToolWriteScope(sessionID, calls, results); err != nil {
+		return err
+	}
+	affected := make(map[int]struct{}, len(affectedOrdinals))
+	for _, ordinal := range affectedOrdinals {
+		if _, exists := affected[ordinal]; exists {
+			return fmt.Errorf(
+				"duplicate canonical repair ordinal %d for %s",
+				ordinal, sessionID,
+			)
+		}
+		affected[ordinal] = struct{}{}
+	}
+	messageOrdinals := make(map[int]struct{}, len(messages))
+	for _, row := range messages {
+		if _, ok := affected[row.Ordinal]; !ok {
+			return fmt.Errorf(
+				"canonical message ordinal %d is outside repair scope for %s",
+				row.Ordinal, sessionID,
+			)
+		}
+		if _, exists := messageOrdinals[row.Ordinal]; exists {
+			return fmt.Errorf(
+				"duplicate canonical message ordinal %d for %s",
+				row.Ordinal, sessionID,
+			)
+		}
+		messageOrdinals[row.Ordinal] = struct{}{}
+	}
+	for _, ordinal := range affectedOrdinals {
+		if _, ok := messageOrdinals[ordinal]; !ok {
+			return fmt.Errorf(
+				"canonical repair ordinal %d has no message for %s",
+				ordinal, sessionID,
+			)
+		}
+	}
+	for _, row := range calls {
+		if _, ok := affected[row.MessageOrdinal]; !ok {
+			return fmt.Errorf(
+				"canonical tool call ordinal %d is outside repair scope for %s",
+				row.MessageOrdinal, sessionID,
+			)
+		}
+	}
+	for _, row := range results {
+		if _, ok := affected[row.ToolCallMessageOrdinal]; !ok {
+			return fmt.Errorf(
+				"canonical tool result ordinal %d is outside repair scope for %s",
+				row.ToolCallMessageOrdinal, sessionID,
+			)
+		}
+	}
+
+	for start := 0; start < len(affectedOrdinals); start += canonicalWriteBatchSize {
+		end := min(start+canonicalWriteBatchSize, len(affectedOrdinals))
+		ordinals := affectedOrdinals[start:end]
+		if _, err := tx.NewDelete().Model((*bunmodel.ToolResultEvent)(nil)).
+			Where("session_id = ?", sessionID).
+			Where("tool_call_message_ordinal IN (?)", bun.List(ordinals)).
+			Exec(ctx); err != nil {
+			return fmt.Errorf("clearing canonical repair tool results for %s: %w", sessionID, err)
+		}
+		if _, err := tx.NewDelete().Model((*bunmodel.ToolCall)(nil)).
+			Where("session_id = ?", sessionID).
+			Where("message_ordinal IN (?)", bun.List(ordinals)).
+			Exec(ctx); err != nil {
+			return fmt.Errorf("clearing canonical repair tool calls for %s: %w", sessionID, err)
+		}
+	}
+
+	columns := canonicalReplacementColumns((*bunmodel.Message)(nil), "id")
+	updates := canonicalReplacementColumns(
+		(*bunmodel.Message)(nil), "id", "session_id", "ordinal",
+	)
+	conflict := canonicalConflictUpdateClauseForKeys(
+		[]string{"session_id", "ordinal"}, updates,
+	)
+	for start := 0; start < len(messages); start += canonicalWriteBatchSize {
+		end := min(start+canonicalWriteBatchSize, len(messages))
+		batch := messages[start:end]
+		if _, err := tx.NewInsert().Model(&batch).Column(columns...).
+			On(conflict).Returning("").Exec(ctx); err != nil {
+			return fmt.Errorf("repairing canonical messages for %s: %w", sessionID, err)
+		}
+	}
+	return appendToolRows(ctx, tx, sessionID, calls, results)
+}
+
 func appendToolRows(
 	ctx context.Context, tx bun.IDB, sessionID string,
 	calls []bunmodel.ToolCall, results []bunmodel.ToolResultEvent,
@@ -608,16 +815,31 @@ func replaceToolRows(
 func resolveCanonicalToolMessageIDs(
 	ctx context.Context, tx bun.IDB, sessionID string, calls []bunmodel.ToolCall,
 ) error {
-	var messages []bunmodel.Message
-	if len(calls) > 0 {
-		if err := tx.NewSelect().Model(&messages).Column("id", "ordinal").
-			Where("session_id = ?", sessionID).Scan(ctx); err != nil {
-			return fmt.Errorf("resolving canonical tool message ids for %s: %w", sessionID, err)
+	needed := make(map[int]struct{}, len(calls))
+	for _, call := range calls {
+		if call.MessageID == nil {
+			needed[call.MessageOrdinal] = struct{}{}
 		}
 	}
-	messageIDs := make(map[int]*int64, len(messages))
-	for _, message := range messages {
-		messageIDs[message.Ordinal] = message.ID
+	ordinals := make([]int, 0, len(needed))
+	for ordinal := range needed {
+		ordinals = append(ordinals, ordinal)
+	}
+	slices.Sort(ordinals)
+
+	messageIDs := make(map[int]*int64, len(ordinals))
+	for start := 0; start < len(ordinals); start += canonicalWriteBatchSize {
+		end := min(start+canonicalWriteBatchSize, len(ordinals))
+		var messages []bunmodel.Message
+		if err := tx.NewSelect().Model(&messages).Column("id", "ordinal").
+			Where("session_id = ?", sessionID).
+			Where("ordinal IN (?)", bun.List(ordinals[start:end])).
+			Scan(ctx); err != nil {
+			return fmt.Errorf("resolving canonical tool message ids for %s: %w", sessionID, err)
+		}
+		for _, message := range messages {
+			messageIDs[message.Ordinal] = message.ID
+		}
 	}
 	for i := range calls {
 		if calls[i].MessageID == nil {

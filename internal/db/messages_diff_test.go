@@ -26,6 +26,94 @@ func TestTranscriptMessagesEqualUsesCanonicalTimestampPrecision(t *testing.T) {
 	assert.True(t, transcriptMessagesEqual(stored, incoming))
 }
 
+func TestReplaceSessionMessagesCanonicalNoOpDoesNotRepairRows(t *testing.T) {
+	d := testDB(t)
+	stored := []Message{
+		{
+			SessionID: "canonical-noop", Ordinal: 0, Role: "assistant",
+			Content: "answer", Timestamp: "2026-08-04T01:02:03.123456Z",
+			ToolCalls: []ToolCall{{
+				ToolName: "Read", Category: "file", ToolUseID: "tool-1",
+				InputJSON: `{"path":"a.go"}`, SkillName: "inspect",
+				ResultContentLength: 4, ResultContent: "done",
+				SubagentSessionID: "sub-1", FilePath: "a.go",
+				ResultEvents: []ToolResultEvent{{
+					EventIndex: 3,
+					ToolUseID:  "tool-1", AgentID: "agent-1",
+					SubagentSessionID: "sub-1", Source: "result",
+					Status: "started", Content: "working", ContentLength: 7,
+					Timestamp: "2026-08-04T01:02:04.123456Z",
+				}, {
+					EventIndex: 7,
+					ToolUseID:  "tool-1", AgentID: "agent-1",
+					SubagentSessionID: "sub-1", Source: "result",
+					Status: "ok", Content: "done", ContentLength: 4,
+					Timestamp: "2026-08-04T01:02:04.654321Z",
+				}},
+			}},
+		},
+		{
+			SessionID: "canonical-noop", Ordinal: 1, Role: "user",
+			Content: "follow-up", Timestamp: "2026-08-04T01:03:00Z",
+		},
+	}
+	seedDiffSession(t, d, "canonical-noop", stored)
+
+	_, err := d.getWriter().Exec(`
+		CREATE TABLE message_update_audit (session_id TEXT NOT NULL);
+		CREATE TRIGGER audit_canonical_noop_message_update
+		AFTER UPDATE ON messages
+		WHEN NEW.session_id = 'canonical-noop'
+		BEGIN
+			INSERT INTO message_update_audit(session_id) VALUES (NEW.session_id);
+		END`)
+	require.NoError(t, err, "install message update audit")
+	before, err := d.GetSessionFull(t.Context(), "canonical-noop")
+	require.NoError(t, err)
+	require.NotNil(t, before)
+
+	incoming := []Message{
+		{
+			SessionID: "canonical-noop", Ordinal: 0, Role: "assistant",
+			Content:   "answer",
+			Timestamp: "2026-08-03T21:02:03.123456789-04:00",
+			ToolCalls: []ToolCall{{
+				ToolName: "Read", Category: "file", ToolUseID: "tool-1",
+				InputJSON: `{"path":"a.go"}`, SkillName: "inspect",
+				ResultContentLength: 4, ResultContent: "done",
+				SubagentSessionID: "sub-1", FilePath: "a.go",
+				ResultEvents: []ToolResultEvent{{
+					EventIndex: 7,
+					ToolUseID:  "tool-1", AgentID: "agent-1",
+					SubagentSessionID: "sub-1", Source: "result",
+					Status: "ok", Content: "done", ContentLength: 4,
+					Timestamp: "2026-08-03T21:02:04.654321987-04:00",
+				}, {
+					EventIndex: 3,
+					ToolUseID:  "tool-1", AgentID: "agent-1",
+					SubagentSessionID: "sub-1", Source: "result",
+					Status: "started", Content: "working", ContentLength: 7,
+					Timestamp: "2026-08-03T21:02:04.123456789-04:00",
+				}},
+			}},
+		},
+		stored[1],
+	}
+	require.NoError(t, d.ReplaceSessionMessages("canonical-noop", incoming))
+
+	var updates int
+	require.NoError(t, d.getReader().QueryRow(
+		"SELECT count(*) FROM message_update_audit",
+	).Scan(&updates))
+	assert.Zero(t, updates,
+		"canonical-equivalent rows must not be repaired repeatedly")
+	after, err := d.GetSessionFull(t.Context(), "canonical-noop")
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	assert.Equal(t, before.TranscriptRevision, after.TranscriptRevision,
+		"canonical-equivalent event ordering must not bump the transcript revision")
+}
+
 func diffTestMsg(
 	sessionID string, ord int, role, content string,
 	mut ...func(*Message),
@@ -117,9 +205,25 @@ func TestReplaceSessionMessagesUpdatesChangedRowsInPlace(t *testing.T) {
 			"partial chunk plus merged tail zqmergetoken",
 			func(m *Message) {
 				m.ClaudeMessageID = "m1"
-				m.ToolCalls = v1[1].ToolCalls
+				m.Timestamp = "2026-06-20T06:00:01.123456789-04:00"
+				m.ToolCalls = []ToolCall{{
+					ToolName: "Bash", Category: "execution",
+					ResultEvents: []ToolResultEvent{{
+						EventIndex: 6, Source: "result", Status: "ok",
+						Content: "updated",
+					}},
+				}}
 			}),
-		diffTestMsg("diff-a", 2, "assistant", "follow-up"),
+		diffTestMsg("diff-a", 2, "assistant", "follow-up",
+			func(m *Message) {
+				m.ToolCalls = []ToolCall{{
+					ToolName: "Read", Category: "file",
+					ResultEvents: []ToolResultEvent{{
+						EventIndex: 9, Source: "result", Status: "ok",
+						Content: "appended",
+					}},
+				}}
+			}),
 	}
 	require.NoError(t, d.ReplaceSessionMessages("diff-a", v2))
 
@@ -135,6 +239,13 @@ func TestReplaceSessionMessagesUpdatesChangedRowsInPlace(t *testing.T) {
 	require.Len(t, msgs, 3)
 	assert.Contains(t, msgs[1].Content, "zqmergetoken",
 		"merged content must be persisted")
+	assert.Equal(t, "2026-06-20T10:00:01.123456Z", msgs[1].Timestamp)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	require.Len(t, msgs[1].ToolCalls[0].ResultEvents, 1)
+	assert.Equal(t, 6, msgs[1].ToolCalls[0].ResultEvents[0].EventIndex)
+	require.Len(t, msgs[2].ToolCalls, 1)
+	require.Len(t, msgs[2].ToolCalls[0].ResultEvents, 1)
+	assert.Equal(t, 9, msgs[2].ToolCalls[0].ResultEvents[0].EventIndex)
 
 	if d.HasFTS() {
 		var n int

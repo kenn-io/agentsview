@@ -397,6 +397,39 @@ func TestRecallEvidenceDiffRevokesChangedContent(t *testing.T) {
 	assert.Equal(t, 10, got.Evidence[0].MessageStartOrdinal)
 }
 
+func TestRecallEvidenceSessionBatchInsertRevokesDuplicateSourceEndpoint(
+	t *testing.T,
+) {
+	d := testDB(t)
+	seedRecallEvidenceWindow(t, d, "batch-insert", 10, "stable", "")
+	insertVerifiedRecallSelection(
+		t, d, "insert-entry", "batch-insert", 10, 11, []string{"tool-a"},
+	)
+	messages, err := d.GetAllMessages(t.Context(), "batch-insert")
+	require.NoError(t, err)
+	require.Len(t, messages, 3)
+	messages = append(messages, recallEvidenceMessage(
+		"batch-insert", 13, "assistant", "A duplicate endpoint appeared.",
+		messages[0].SourceUUID,
+	))
+	session, err := d.GetSessionFull(t.Context(), "batch-insert")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	session.MessageCount = len(messages)
+
+	_, err = d.WriteSessionAtomic(SessionBatchWrite{
+		Session:         *session,
+		Messages:        messages,
+		DataVersion:     CurrentDataVersion(),
+		ReplaceMessages: true,
+	})
+
+	require.NoError(t, err)
+	entry := requireRecallEntry(t, d, "insert-entry")
+	assert.False(t, entry.ProvenanceOK,
+		"an inserted duplicate source UUID must revoke ambiguous evidence")
+}
+
 func TestRecallEvidenceReplaceSessionContentLogsCommittedRevocation(t *testing.T) {
 	d := testDB(t)
 	seedRecallEvidenceWindow(t, d, "replace-content", 10, "stable", "")

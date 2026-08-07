@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,6 +160,176 @@ func TestReplaceToolRowsUpdatesLogicalConflictAndDeletesStaleRows(t *testing.T) 
 		Where("session_id = ?", "canonical-tool-upsert").Scan(ctx))
 	require.Len(t, results, 1)
 	assert.Equal(t, "updated", results[0].Status)
+}
+
+func TestCanonicalMessageRepairPreservesUntouchedGraphAndRowIDs(t *testing.T) {
+	database := testDB(t)
+	insertSession(t, database, "canonical-repair", "alpha")
+	ctx := t.Context()
+	seedTime := bunmodel.NewTimestamp(time.Date(
+		2026, 8, 7, 10, 0, 0, 123456000, time.UTC,
+	))
+	require.NoError(t, database.bunWriter.RunInTx(ctx, nil,
+		func(ctx context.Context, tx bun.Tx) error {
+			if err := ReplaceMessageRows(ctx, tx, "canonical-repair", []bunmodel.Message{
+				{SessionID: "canonical-repair", Ordinal: 0, Role: "user",
+					Content: "untouched", Timestamp: &seedTime},
+				{SessionID: "canonical-repair", Ordinal: 1, Role: "assistant",
+					Content: "stale", Timestamp: &seedTime},
+			}); err != nil {
+				return err
+			}
+			return ReplaceToolRows(ctx, tx, "canonical-repair", []bunmodel.ToolCall{
+				{SessionID: "canonical-repair", MessageOrdinal: 0,
+					CallIndex: 0, ToolName: "Keep", Category: "Read"},
+				{SessionID: "canonical-repair", MessageOrdinal: 1,
+					CallIndex: 0, ToolName: "Stale", Category: "Read"},
+			}, []bunmodel.ToolResultEvent{
+				{SessionID: "canonical-repair", ToolCallMessageOrdinal: 0,
+					CallIndex: 0, EventIndex: 0, Source: "tool",
+					Status: "kept", Content: "keep"},
+				{SessionID: "canonical-repair", ToolCallMessageOrdinal: 1,
+					CallIndex: 0, EventIndex: 0, Source: "tool",
+					Status: "stale", Content: "stale"},
+			})
+		}))
+
+	before := messageIDsByOrdinal(t, database, "canonical-repair")
+	repairMessages, repairCalls, repairResults, err := CanonicalMessageRows([]Message{
+		{SessionID: "canonical-repair", Ordinal: 1, Role: "assistant",
+			Content: "repaired", Timestamp: "2026-08-07T06:00:01.987654789-04:00",
+			ToolCalls: []ToolCall{{ToolName: "Fixed", Category: "Read",
+				ResultEvents: []ToolResultEvent{{EventIndex: 7, Source: "tool",
+					Status: "completed", Content: "fixed",
+					Timestamp: "2026-08-07T06:00:02.876543219-04:00"}}}}},
+		{SessionID: "canonical-repair", Ordinal: 2, Role: "user",
+			Content: "appended", Timestamp: "2026-08-07T10:00:03Z"},
+	})
+	require.NoError(t, err)
+	require.NoError(t, database.bunWriter.RunInTx(ctx, nil,
+		func(ctx context.Context, tx bun.Tx) error {
+			return RepairMessageRows(
+				ctx, tx, "canonical-repair", []int{1, 2},
+				repairMessages, repairCalls, repairResults,
+			)
+		}))
+
+	after := messageIDsByOrdinal(t, database, "canonical-repair")
+	assert.Equal(t, before[0], after[0])
+	assert.Equal(t, before[1], after[1])
+	require.NotZero(t, after[2])
+
+	var messages []bunmodel.Message
+	require.NoError(t, database.bunReader.NewSelect().Model(&messages).
+		Where("session_id = ?", "canonical-repair").OrderExpr("ordinal ASC").
+		Scan(ctx))
+	require.Len(t, messages, 3)
+	assert.Equal(t, "untouched", messages[0].Content)
+	assert.Equal(t, "repaired", messages[1].Content)
+	require.NotNil(t, messages[1].Timestamp)
+	assert.Equal(t, "2026-08-07T10:00:01.987654Z",
+		messages[1].Timestamp.Format(time.RFC3339Nano))
+
+	var calls []bunmodel.ToolCall
+	require.NoError(t, database.bunReader.NewSelect().Model(&calls).
+		Where("session_id = ?", "canonical-repair").
+		OrderExpr("message_ordinal ASC").Scan(ctx))
+	require.Len(t, calls, 2)
+	assert.Equal(t, "Keep", calls[0].ToolName)
+	assert.Equal(t, "Fixed", calls[1].ToolName)
+
+	var results []bunmodel.ToolResultEvent
+	require.NoError(t, database.bunReader.NewSelect().Model(&results).
+		Where("session_id = ?", "canonical-repair").
+		OrderExpr("tool_call_message_ordinal ASC").Scan(ctx))
+	require.Len(t, results, 2)
+	assert.Equal(t, "kept", results[0].Status)
+	assert.Equal(t, 7, results[1].EventIndex)
+	require.NotNil(t, results[1].Timestamp)
+	assert.Equal(t, "2026-08-07T10:00:02.876543Z",
+		results[1].Timestamp.Format(time.RFC3339Nano))
+}
+
+func TestAppendToolRowsResolvesOnlyAffectedMessageOrdinals(t *testing.T) {
+	database := testDB(t)
+	insertSession(t, database, "bounded-tool-resolution", "alpha")
+	messages := make([]Message, 250)
+	for ordinal := range messages {
+		messages[ordinal] = Message{
+			SessionID: "bounded-tool-resolution", Ordinal: ordinal,
+			Role: "assistant", Content: "message",
+		}
+	}
+	insertMessages(t, database, messages...)
+
+	hook := new(countingQueryHook)
+	database.bunWriter = database.bunWriter.WithQueryHook(hook)
+	require.NoError(t, database.bunWriter.RunInTx(t.Context(), nil,
+		func(ctx context.Context, tx bun.Tx) error {
+			return AppendToolRows(
+				ctx, tx, "bounded-tool-resolution",
+				[]bunmodel.ToolCall{{
+					SessionID: "bounded-tool-resolution", MessageOrdinal: 249,
+					CallIndex: 0, ToolName: "Read", Category: "file",
+				}},
+				nil,
+			)
+		}))
+
+	var resolutionQuery string
+	for _, query := range hook.queries {
+		if strings.Contains(query, "FROM \"messages\"") {
+			resolutionQuery = query
+			break
+		}
+	}
+	require.NotEmpty(t, resolutionQuery)
+	assert.Contains(t, resolutionQuery, "ordinal IN (249)",
+		"legacy message-id resolution must be bounded by appended ordinals")
+}
+
+func TestAppendToolRowsChunksAffectedMessageOrdinalResolution(t *testing.T) {
+	database := testDB(t)
+	const sessionID = "chunked-tool-resolution"
+	insertSession(t, database, sessionID, "alpha")
+	messages := make([]Message, 250)
+	for ordinal := range messages {
+		messages[ordinal] = Message{
+			SessionID: sessionID, Ordinal: ordinal,
+			Role: "assistant", Content: "message",
+		}
+	}
+	insertMessages(t, database, messages...)
+	calls := make([]bunmodel.ToolCall, canonicalWriteBatchSize+1)
+	for index := range calls {
+		calls[index] = bunmodel.ToolCall{
+			SessionID: sessionID, MessageOrdinal: 149 + index,
+			CallIndex: 0, ToolName: "Read", Category: "file",
+		}
+	}
+
+	hook := new(countingQueryHook)
+	database.bunWriter = database.bunWriter.WithQueryHook(hook)
+	require.NoError(t, database.bunWriter.RunInTx(t.Context(), nil,
+		func(ctx context.Context, tx bun.Tx) error {
+			return AppendToolRows(ctx, tx, sessionID, calls, nil)
+		}))
+
+	var resolutionQueries []string
+	for _, query := range hook.queries {
+		if strings.Contains(query, `FROM "messages"`) {
+			resolutionQueries = append(resolutionQueries, query)
+		}
+	}
+	require.Len(t, resolutionQueries, 2,
+		"101 affected ordinals must resolve in two bounded chunks")
+	assert.NotContains(t, strings.Join(resolutionQueries, "\n"), "ordinal IN (0,",
+		"resolution must not materialize unaffected transcript history")
+	var storedCalls int
+	require.NoError(t, database.getReader().QueryRowContext(t.Context(),
+		`SELECT count(*) FROM tool_calls WHERE session_id = ?`, sessionID,
+	).Scan(&storedCalls))
+	assert.Equal(t, len(calls), storedCalls)
 }
 
 func TestCanonicalBunRowsPreservePortableCoordinates(t *testing.T) {

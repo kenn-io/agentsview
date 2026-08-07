@@ -773,6 +773,55 @@ func TestProjectObservationSessionBatchWritePersistsObservation(t *testing.T) {
 	assert.Nil(t, projects["mapped-project"].Identity)
 }
 
+func TestWriteSessionAtomicAppendLateFailureRollsBackIdentityAndMessages(
+	t *testing.T,
+) {
+	d := testDB(t)
+	const sessionID = "append-identity-rollback"
+	insertSession(t, d, sessionID, "mapped-project")
+	insertMessages(t, d, userMsg(sessionID, 0, "existing message"))
+	beforeSession, err := d.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, beforeSession)
+	beforeMessages, err := d.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	beforeObservations, err := d.ListProjectIdentityObservations(t.Context(), nil)
+	require.NoError(t, err)
+	beforeSnapshots, err := d.ListSessionProjectIdentitySnapshots(t.Context())
+	require.NoError(t, err)
+	snapshotProject := "source-project"
+
+	result, err := d.WriteSessionAtomic(SessionBatchWrite{
+		Session: Session{
+			ID: sessionID, Project: "mapped-project", Machine: defaultMachine,
+			Agent: defaultAgent, MessageCount: 2,
+		},
+		Messages: []Message{asstMsg(sessionID, 1, "appended message")},
+		IdentityObservation: export.ProjectIdentityObservation{
+			SessionID: sessionID, Project: "mapped-project",
+			Machine: defaultMachine, RootPath: "/tmp/append-identity-rollback",
+		},
+		IdentitySnapshotProject: &snapshotProject,
+		DataVersion:             CurrentDataVersion(),
+		ReplaceMessages:         false,
+	}, func() error { return assert.AnError })
+
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Zero(t, result.WrittenSessions)
+	afterSession, readErr := d.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, readErr)
+	assert.Equal(t, beforeSession, afterSession)
+	afterMessages, readErr := d.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, readErr)
+	assert.Equal(t, beforeMessages, afterMessages)
+	afterObservations, readErr := d.ListProjectIdentityObservations(t.Context(), nil)
+	require.NoError(t, readErr)
+	assert.Equal(t, beforeObservations, afterObservations)
+	afterSnapshots, readErr := d.ListSessionProjectIdentitySnapshots(t.Context())
+	require.NoError(t, readErr)
+	assert.Equal(t, beforeSnapshots, afterSnapshots)
+}
+
 func TestProjectObservationSessionBatchExplicitEmptyProjectOmitsSnapshot(
 	t *testing.T,
 ) {
