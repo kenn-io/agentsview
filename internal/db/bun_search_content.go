@@ -130,7 +130,7 @@ func (s *BunStore) SearchContent(
 		case "fts":
 			if contentCapability != nil {
 				hits, err = contentCapability.SearchContent(ctx, store, attemptFilter)
-			} else if s.backend.Name() == "postgres" || s.backend.Name() == "duckdb" {
+			} else if s.backend.Capabilities().SearchDialect.portableContentFTS {
 				hits, err = s.bunContentPortableFTSHits(ctx, store, attemptFilter)
 			} else {
 				return errFTSUnavailable
@@ -790,11 +790,8 @@ func (s *BunStore) bunContentCandidateQuery(
 	scope := func(column string) string {
 		return column + " IN (SELECT id FROM sessions AS session WHERE " + where + ")"
 	}
-	patternValue := literal
-	if s.backend.Name() != "sqlite" {
-		patternValue = strings.ToLower(patternValue)
-	}
-	pattern := "%" + EscapeLikePattern(patternValue) + "%"
+	searchDialect := s.backend.Capabilities().SearchDialect
+	pattern := searchDialect.contentSearchPattern(literal)
 	var branches []string
 	var args []any
 	addArgs := func() {
@@ -807,11 +804,7 @@ func (s *BunStore) bunContentCandidateQuery(
 		if matchAll {
 			return column + " IS NOT NULL"
 		}
-		expression := "COALESCE(" + column + ", '')"
-		if s.backend.Name() != "sqlite" {
-			expression = "LOWER(" + expression + ")"
-		}
-		return expression + " LIKE ? ESCAPE '\\'"
+		return searchDialect.contentSearchPredicate(column)
 	}
 	if hasSource(filter, "messages") {
 		system := "1=1"
@@ -890,10 +883,7 @@ func (s *BunStore) bunContentCandidateQuery(
 	if len(branches) == 0 {
 		return "", nil
 	}
-	orderTimestamp := "sort_ts"
-	if s.backend.Name() == "sqlite" {
-		orderTimestamp = "julianday(sort_ts)"
-	}
+	orderTimestamp := s.backend.SessionQueryDialect().TimestampOrderExpr("sort_ts")
 	query := `SELECT session_id, ordinal, location, tool_name, body,
 		source_timestamp,
 		call_index, event_index FROM (` + strings.Join(branches, " UNION ALL ") + `)
@@ -946,14 +936,7 @@ func normalizeBunContentTimestamp(value *string) string {
 }
 
 func (s *BunStore) bunContentSystemPrefixSQL(content, role string) string {
-	switch s.backend.Name() {
-	case "postgres":
-		return PostgresSystemPrefixSQL(content, role)
-	case "duckdb":
-		return DuckDBSystemPrefixSQL(content, role)
-	default:
-		return SystemPrefixSQL(content, role)
-	}
+	return s.backend.Capabilities().SearchDialect.systemPrefixPredicate(content, role)
 }
 
 func bunContentMessagesForHits(

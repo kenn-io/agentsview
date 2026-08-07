@@ -64,6 +64,7 @@ func (*duckBunBackend) Capabilities() db.BackendCapabilities {
 	return db.BackendCapabilities{
 		FullText:      duckFullTextCapability{},
 		SessionSearch: duckFullTextCapability{},
+		SearchDialect: db.DuckDBBunSearchDialect(),
 		Semantic: db.NewVectorSemanticCapability(
 			func() db.VectorSearcher { return nil },
 			func() error {
@@ -535,7 +536,7 @@ func (duckFullTextCapability) SearchSession(
 		FROM messages m
 		LEFT JOIN tool_calls tc
 			ON tc.session_id = m.session_id
-			AND tc.message_id = m.id
+			AND tc.message_ordinal = m.ordinal
 		LEFT JOIN tool_result_events tre
 			ON tre.session_id = tc.session_id
 			AND tre.tool_call_message_ordinal = m.ordinal

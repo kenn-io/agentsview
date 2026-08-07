@@ -424,6 +424,52 @@ func TestStoreSearchesMessagesContentAndSecrets(t *testing.T) {
 	assert.Equal(t, "secret token sk-duckdb", source)
 }
 
+func TestDuckSearchSessionJoinsToolResultsByCanonicalMessageKey(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	const sessionID = "canonical-session-search"
+	writes := []db.SessionBatchWrite{{
+		Session: syncSession(
+			sessionID, "alpha", "plain user message",
+			"2026-02-01T12:00:00Z", 2,
+		),
+		Messages: []db.Message{
+			syncMessage(
+				sessionID, 0, "user", "plain user message",
+				"2026-02-01T12:00:00Z",
+			),
+			syncMessage(
+				sessionID, 1, "assistant", "plain assistant message",
+				"2026-02-01T12:01:00Z", db.ToolCall{
+					ToolName:      "Bash",
+					Category:      "execution",
+					ResultContent: "canonical-only-result",
+				},
+			),
+		},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}}
+	_, err := local.WriteSessionBatchAtomic(writes)
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+	_, err = syncer.DB().ExecContext(ctx,
+		`UPDATE messages SET id = NULL WHERE session_id = ? AND ordinal = 1`,
+		sessionID,
+	)
+	require.NoError(t, err)
+
+	ordinals, err := NewStoreFromDB(syncer.DB()).SearchSession(
+		ctx, sessionID, "canonical-only-result",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []int{1}, ordinals)
+}
+
 func TestDuckBunStoreSearchUsesFullTextCapability(t *testing.T) {
 	store, fixture := newSyncedStore(t)
 
