@@ -44,6 +44,12 @@ atomically. Preserve sessions even when their source files no longer exist.
   DuckDB `USE`, handle swap/drain/close lifecycle, connector state, and
   unavoidable compatibility or capability probes. Keep each such seam inside
   its backend adapter and document why Bun cannot own it.
+- Attached archive recovery pins a guarded `bun.Conn`: the adapter owns
+  `ATTACH`/`DETACH` and temporary-table lifecycle on that connection, while
+  canonical child copies use registry-derived `INSERT ... SELECT` projections
+  through the connection's `bun.Tx`. Explicit SQLite transforms remain only
+  where physical IDs, pins, provenance, or legacy relationships must be
+  remapped.
 - Backend-specific query construction is limited to this closed set of seams:
   lifecycle and connection-local operations; canonical schema creation,
   convergence, and validation; replication or mirror synchronization and

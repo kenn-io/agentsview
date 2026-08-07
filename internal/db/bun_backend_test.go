@@ -135,7 +135,7 @@ func TestBunStoreReplaceSessionMessagesUsesWritableArchiveCapability(t *testing.
 	store := database.BunStore
 	_, err := database.upsertSession(Session{
 		ID: "bun-store-messages", Agent: "codex",
-	}, true)
+	})
 	require.NoError(t, err)
 
 	require.NoError(t, store.ReplaceSessionMessages(
