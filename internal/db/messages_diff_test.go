@@ -26,6 +26,72 @@ func TestTranscriptMessagesEqualUsesCanonicalTimestampPrecision(t *testing.T) {
 	assert.True(t, transcriptMessagesEqual(stored, incoming))
 }
 
+func TestReplaceSessionMessagesCanonicalNoOpDoesNotRepairRows(t *testing.T) {
+	d := testDB(t)
+	stored := []Message{
+		{
+			SessionID: "canonical-noop", Ordinal: 0, Role: "assistant",
+			Content: "answer", Timestamp: "2026-08-04T01:02:03.123456Z",
+			ToolCalls: []ToolCall{{
+				ToolName: "Read", Category: "file", ToolUseID: "tool-1",
+				InputJSON: `{"path":"a.go"}`, SkillName: "inspect",
+				ResultContentLength: 4, ResultContent: "done",
+				SubagentSessionID: "sub-1", FilePath: "a.go",
+				ResultEvents: []ToolResultEvent{{
+					ToolUseID: "tool-1", AgentID: "agent-1",
+					SubagentSessionID: "sub-1", Source: "result",
+					Status: "ok", Content: "done", ContentLength: 4,
+					Timestamp: "2026-08-04T01:02:04.654321Z",
+				}},
+			}},
+		},
+		{
+			SessionID: "canonical-noop", Ordinal: 1, Role: "user",
+			Content: "follow-up", Timestamp: "2026-08-04T01:03:00Z",
+		},
+	}
+	seedDiffSession(t, d, "canonical-noop", stored)
+
+	_, err := d.getWriter().Exec(`
+		CREATE TABLE message_update_audit (session_id TEXT NOT NULL);
+		CREATE TRIGGER audit_canonical_noop_message_update
+		AFTER UPDATE ON messages
+		WHEN NEW.session_id = 'canonical-noop'
+		BEGIN
+			INSERT INTO message_update_audit(session_id) VALUES (NEW.session_id);
+		END`)
+	require.NoError(t, err, "install message update audit")
+
+	incoming := []Message{
+		{
+			SessionID: "canonical-noop", Ordinal: 0, Role: "assistant",
+			Content:   "answer",
+			Timestamp: "2026-08-03T21:02:03.123456789-04:00",
+			ToolCalls: []ToolCall{{
+				ToolName: "Read", Category: "file", ToolUseID: "tool-1",
+				InputJSON: `{"path":"a.go"}`, SkillName: "inspect",
+				ResultContentLength: 4, ResultContent: "done",
+				SubagentSessionID: "sub-1", FilePath: "a.go",
+				ResultEvents: []ToolResultEvent{{
+					ToolUseID: "tool-1", AgentID: "agent-1",
+					SubagentSessionID: "sub-1", Source: "result",
+					Status: "ok", Content: "done", ContentLength: 4,
+					Timestamp: "2026-08-03T21:02:04.654321987-04:00",
+				}},
+			}},
+		},
+		stored[1],
+	}
+	require.NoError(t, d.ReplaceSessionMessages("canonical-noop", incoming))
+
+	var updates int
+	require.NoError(t, d.getReader().QueryRow(
+		"SELECT count(*) FROM message_update_audit",
+	).Scan(&updates))
+	assert.Zero(t, updates,
+		"canonical-equivalent rows must not be repaired repeatedly")
+}
+
 func diffTestMsg(
 	sessionID string, ord int, role, content string,
 	mut ...func(*Message),
