@@ -53,9 +53,6 @@ func pricingRowsToMap(prices []db.ModelPricing) map[string]export.ModelRates {
 	fallback := pgFallbackRateMap()
 	out := make(map[string]export.ModelRates, len(prices))
 	for _, p := range prices {
-		if strings.HasPrefix(p.ModelPattern, "_") {
-			continue
-		}
 		rates := pgModelPricingRates(p)
 		rates.Source = pgModelPricingSource(p, fallback)
 		out[p.ModelPattern] = rates
@@ -300,9 +297,6 @@ func (s *Store) mergeDBPricing(
 	fallback := pgFallbackRateMap()
 	usableRows := 0
 	for _, p := range prices {
-		if strings.HasPrefix(p.ModelPattern, "_") {
-			continue
-		}
 		rates := pgModelPricingRates(p)
 		rates.Source = pgModelPricingSource(p, fallback)
 		out[p.ModelPattern] = rates
@@ -399,13 +393,8 @@ func pgPricingUpsertStatement(
 		cache_creation_microdollars_per_mtok = EXCLUDED.cache_creation_microdollars_per_mtok,
 		cache_read_microdollars_per_mtok = EXCLUDED.cache_read_microdollars_per_mtok,
 		updated_at = CASE
-			WHEN model_pricing.updated_at = '' THEN EXCLUDED.updated_at
-			WHEN model_pricing.updated_at::timestamptz >=
-				EXCLUDED.updated_at::timestamptz
-			THEN to_char(
-				(model_pricing.updated_at::timestamptz + INTERVAL '1 microsecond')
-					AT TIME ZONE 'UTC',
-				'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+			WHEN model_pricing.updated_at >= EXCLUDED.updated_at
+			THEN model_pricing.updated_at + INTERVAL '1 microsecond'
 			ELSE EXCLUDED.updated_at
 		END
 	WHERE model_pricing.input_microdollars_per_mtok IS DISTINCT FROM
@@ -501,12 +490,8 @@ func pgPricingTouchStatement(
 	var b strings.Builder
 	b.WriteString(`UPDATE model_pricing AS p
 		SET updated_at = CASE
-			WHEN p.updated_at = '' THEN v.updated_at
-			WHEN p.updated_at::timestamptz >= v.updated_at::timestamptz
-			THEN to_char(
-				(p.updated_at::timestamptz + INTERVAL '1 microsecond')
-					AT TIME ZONE 'UTC',
-				'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+			WHEN p.updated_at >= v.updated_at
+			THEN p.updated_at + INTERVAL '1 microsecond'
 			ELSE v.updated_at
 		END
 		FROM (VALUES `)
@@ -516,7 +501,7 @@ func pgPricingTouchStatement(
 			b.WriteString(", ")
 		}
 		base := i*2 + 1
-		fmt.Fprintf(&b, "($%d::text, $%d::text)", base, base+1)
+		fmt.Fprintf(&b, "($%d::text, $%d::timestamptz)", base, base+1)
 		updatedAt := price.UpdatedAt
 		if updatedAt == "" {
 			updatedAt = defaultUpdatedAt
@@ -633,14 +618,11 @@ func upsertModelPricing(
 				"closing changed pg pricing at batch %d: %w", i, err)
 		}
 	}
-	modelPrices := make([]db.ModelPricing, 0, len(prices))
+	modelPrices := prices
 	bandOnlyPrices := make([]db.ModelPricing, 0, len(prices))
 	for _, price := range prices {
-		if !strings.HasPrefix(price.ModelPattern, "_") {
-			modelPrices = append(modelPrices, price)
-			if _, changed := baseChanged[price.ModelPattern]; !changed {
-				bandOnlyPrices = append(bandOnlyPrices, price)
-			}
+		if _, changed := baseChanged[price.ModelPattern]; !changed {
+			bandOnlyPrices = append(bandOnlyPrices, price)
 		}
 	}
 	for i := 0; i < len(bandOnlyPrices); i += pricingUpsertBatch {

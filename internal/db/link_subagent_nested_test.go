@@ -1004,8 +1004,8 @@ func TestLinkSubagentSessionsForSessionsPlanIsBatchBounded(t *testing.T) {
 			assert.NotContains(t, plan, "SCAN tc",
 				"scoped linking must not scan tool_calls: per-event cost "+
 					"has to track the batch, not the archive's edges\n"+plan)
-			assert.Contains(t, plan, "idx_tool_calls_session",
-				"the spawner-side branch must seek the session_id index\n"+
+			assert.Regexp(t, `idx_tool_calls_(session|dedup)`, plan,
+				"the spawner-side branch must seek a session-prefixed index\n"+
 					plan)
 			assert.Contains(t, plan, "idx_tool_calls_subagent",
 				"the child-side branch must seek the subagent partial "+

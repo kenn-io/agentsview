@@ -8,6 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/uptrace/bun"
+	"go.kenn.io/agentsview/internal/duckdb/bundialect"
 )
 
 // WatchMirrorReplacement polls the Store's mirror file for a rebuild-driven
@@ -223,6 +226,7 @@ func (s *Store) swapHandle(conn *sql.DB, alias string, info os.FileInfo) {
 	oldConn := s.duck
 	oldAlias := s.aliasPath
 	s.duck = conn
+	s.bun = bun.NewDB(conn, bundialect.New())
 	s.aliasPath = alias
 	s.fileInfo = info
 	s.retiring.Add(1)

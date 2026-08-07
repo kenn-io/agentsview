@@ -18,6 +18,8 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/sqlitedialect"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
@@ -556,12 +558,18 @@ END;
 // concurrent HTTP handler goroutines can safely read while
 // Reopen/CloseConnections swap the underlying *sql.DB.
 type DB struct {
-	path    string
-	writer  atomic.Pointer[sql.DB]
-	reader  atomic.Pointer[sql.DB]
-	mu      sync.Mutex // serializes writes
-	connMu  sync.RWMutex
-	retired []*sql.DB // old pools kept open for in-flight reads
+	*BunStore
+
+	path   string
+	writer atomic.Pointer[sql.DB]
+	reader atomic.Pointer[sql.DB]
+	// bunReader and bunWriter are swapped with the raw pools under connMu.
+	// Bun does not own or close those pools.
+	bunReader *bun.DB
+	bunWriter *bun.DB
+	mu        sync.Mutex // serializes writes
+	connMu    sync.RWMutex
+	retired   []*sql.DB // old pools kept open for in-flight reads
 	// undrainedPools holds closed pools whose connections had not drained
 	// when CloseWriter or CloseConnections gave up. They must drain before
 	// a later close reports success, or write ownership could be released
@@ -824,6 +832,9 @@ func (db *DB) requireWritable() error {
 }
 
 func (db *DB) SetCustomPricing(p map[string]config.CustomModelRate) {
+	if db.BunStore != nil {
+		db.BunStore.SetCustomPricing(p)
+	}
 	db.customPricing = p
 	db.effectivePricing = nil
 }
@@ -833,6 +844,9 @@ func (db *DB) SetCustomPricing(p map[string]config.CustomModelRate) {
 func (db *DB) SetEffectivePricing(
 	p map[string]export.ModelRates,
 ) {
+	if db.BunStore != nil {
+		db.BunStore.SetEffectivePricing(p)
+	}
 	db.customPricing = nil
 	db.effectivePricing = make(map[string]export.ModelRates, len(p))
 	for model, rates := range p {
@@ -846,6 +860,9 @@ func (db *DB) SetEffectivePricing(
 func (db *DB) SetEmptyCatalogPricing(
 	p map[string]export.ModelRates,
 ) {
+	if db.BunStore != nil {
+		db.BunStore.SetEmptyCatalogPricing(p)
+	}
 	db.emptyCatalogPricing = make(map[string]export.ModelRates, len(p))
 	for model, rates := range p {
 		rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
@@ -855,6 +872,9 @@ func (db *DB) SetEmptyCatalogPricing(
 
 // SetCursorSecret updates the secret key used for cursor signing.
 func (db *DB) SetCursorSecret(secret []byte) {
+	if db.BunStore != nil {
+		db.BunStore.SetCursorSecret(secret)
+	}
 	db.cursorMu.Lock()
 	defer db.cursorMu.Unlock()
 	db.cursorSecret = append([]byte(nil), secret...)
@@ -926,10 +946,6 @@ func Open(path string) (*DB, error) {
 		return nil, err
 	}
 
-	if err := d.migrateColumns(); err != nil {
-		d.Close()
-		return nil, fmt.Errorf("migrating columns: %w", err)
-	}
 	if _, err := d.GetOrCreateDatabaseID(context.Background()); err != nil {
 		d.Close()
 		return nil, fmt.Errorf("initializing database id: %w", err)
@@ -941,6 +957,10 @@ func Open(path string) (*DB, error) {
 	if _, err := d.GetOrCreateArchiveSalt(context.Background()); err != nil {
 		d.Close()
 		return nil, fmt.Errorf("initializing archive salt: %w", err)
+	}
+	if err := d.migrateColumns(); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("migrating columns: %w", err)
 	}
 	if err := d.EnsureProjectIdentityBackfillQueued(context.Background()); err != nil {
 		d.Close()
@@ -1392,6 +1412,8 @@ func OpenReadOnly(path string) (*DB, error) {
 
 	db := &DB{path: path, readOnly: true}
 	db.reader.Store(reader)
+	db.bunReader = bun.NewDB(reader, sqlitedialect.New())
+	db.BunStore = NewBunStore(&sqliteBunBackend{store: db})
 	db.cursorSecret = make([]byte, 32)
 	if _, err := rand.Read(db.cursorSecret); err != nil {
 		reader.Close()
@@ -1399,6 +1421,7 @@ func OpenReadOnly(path string) (*DB, error) {
 			"generating cursor secret: %w", err,
 		)
 	}
+	db.BunStore.SetCursorSecret(db.cursorSecret)
 	return db, nil
 }
 
@@ -1421,6 +1444,11 @@ var readOnlyRequiredTables = []string{
 	"pg_sync_state",
 	"model_pricing",
 	"model_pricing_bands",
+	"pricing_metadata",
+	"source_archives",
+	"source_project_identity_observations",
+	"source_session_project_identity_snapshots",
+	"source_worktree_project_mappings",
 	"secret_findings",
 	"recall_entries",
 	"recall_evidence",
@@ -1462,6 +1490,13 @@ func readOnlyRequiredSchema() (map[string][]string, error) {
 		if _, err := conn.Exec(schemaSQL); err != nil {
 			readOnlyRequiredSchemaErr = fmt.Errorf(
 				"loading schema probe: %w", err,
+			)
+			return
+		}
+		store := bun.NewDB(conn, sqlitedialect.New())
+		if err := CreateCommonSchema(context.Background(), store); err != nil {
+			readOnlyRequiredSchemaErr = fmt.Errorf(
+				"loading common schema probe: %w", err,
 			)
 			return
 		}
@@ -2603,6 +2638,11 @@ func (db *DB) migrateColumns() error {
 	if _, err := w.Exec(projectIdentitySnapshotInvariantSchemaSQL); err != nil {
 		return fmt.Errorf("creating project identity snapshot trigger: %w", err)
 	}
+	if err := db.convergeSQLiteCommonSchemaLocked(
+		context.Background(), nil,
+	); err != nil {
+		return err
+	}
 	if err := db.scrubProjectIdentityGitRemoteCredentialsLocked(w); err != nil {
 		return err
 	}
@@ -2616,7 +2656,6 @@ func (db *DB) migrateColumns() error {
 	if err := requeueInvalidArtifactPublicationsLocked(w); err != nil {
 		return err
 	}
-
 	runRepair, err := db.shouldRunTokenCoverageRepairLocked(w)
 	if err != nil {
 		return err
@@ -2969,13 +3008,16 @@ func (db *DB) scrubProjectIdentityGitRemoteCredentialsLocked(
 	}
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.Exec(`
-		DELETE FROM project_identity_observations
+		DELETE FROM source_project_identity_observations
 		WHERE git_remote = ''
 		  AND EXISTS (
-			SELECT 1 FROM project_identity_observations remote
-			WHERE remote.project = project_identity_observations.project
-			  AND remote.machine = project_identity_observations.machine
-			  AND remote.root_path = project_identity_observations.root_path
+			SELECT 1 FROM source_project_identity_observations remote
+			WHERE remote.source_archive_id =
+				source_project_identity_observations.source_archive_id
+			  AND remote.project = source_project_identity_observations.project
+			  AND remote.machine = source_project_identity_observations.machine
+			  AND remote.root_path =
+				source_project_identity_observations.root_path
 			  AND remote.git_remote != ''
 		  )`); err != nil {
 		return fmt.Errorf("removing stale project identity root fallbacks: %w", err)
@@ -3694,6 +3736,9 @@ func openAndInit(path string, schemaRepairNeeded bool) (*DB, error) {
 	db := &DB{path: path}
 	db.writer.Store(writer)
 	db.reader.Store(reader)
+	db.bunWriter = bun.NewDB(writer, sqlitedialect.New())
+	db.bunReader = bun.NewDB(reader, sqlitedialect.New())
+	db.BunStore = NewBunStore(&sqliteBunBackend{store: db})
 
 	db.cursorSecret = make([]byte, 32)
 	if _, err := rand.Read(db.cursorSecret); err != nil {
@@ -3703,6 +3748,7 @@ func openAndInit(path string, schemaRepairNeeded bool) (*DB, error) {
 			"generating cursor secret: %w", err,
 		)
 	}
+	db.BunStore.SetCursorSecret(db.cursorSecret)
 	if schemaRepairNeeded {
 		db.mu.Lock()
 		err = repairLegacySchemaBeforeInit(db.getWriter())
@@ -4314,6 +4360,8 @@ func (db *DB) reopenLocked() error {
 	retired := append([]*sql.DB(nil), db.retired...)
 	oldWriter := db.writer.Swap(writer)
 	oldReader := db.reader.Swap(reader)
+	db.bunWriter = bun.NewDB(writer, sqlitedialect.New())
+	db.bunReader = bun.NewDB(reader, sqlitedialect.New())
 	// Reopen fully restores the writer pool, so clear any writer-closed barrier
 	// a prior CloseWriter set. Without this a resync swap that ran behind the
 	// worker write barrier would reopen the pool yet keep rejecting writes.
@@ -4373,6 +4421,7 @@ func (db *DB) CloseWriter() error {
 	defer db.mu.Unlock()
 	db.connMu.Lock()
 	old := db.writer.Swap(nil)
+	db.bunWriter = nil
 	db.writerClosed.Store(true)
 	pending := db.undrainedPools
 	db.undrainedPools = nil
@@ -4433,6 +4482,7 @@ func (db *DB) ReopenWriter() error {
 
 	db.connMu.Lock()
 	old := db.writer.Swap(writer)
+	db.bunWriter = bun.NewDB(writer, sqlitedialect.New())
 	db.writerClosed.Store(false)
 	db.connMu.Unlock()
 
