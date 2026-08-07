@@ -3,10 +3,10 @@
 package db
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -46,80 +46,22 @@ var messageUpdateSetClause = func() string {
 	return strings.Join(parts, ", ")
 }()
 
-// messageRowEqual reports whether two messages would persist the
-// same message row, tool_calls rows, and tool_result_events rows.
-// Both sides go through the same resolve helpers the insert path
-// uses, so equality is defined on exactly the persisted tuples.
+// messageRowEqual reports whether two messages have the same canonical
+// message, tool-call, and tool-result projections. Deep comparison is required
+// because nullable canonical fields are independently allocated pointers whose
+// values, rather than pointer identities, define persistence equality.
 func messageRowEqual(a, b Message) bool {
-	if a.SessionID != b.SessionID || a.Ordinal != b.Ordinal ||
-		a.Role != b.Role || a.Content != b.Content ||
-		a.ThinkingText != b.ThinkingText || a.Timestamp != b.Timestamp ||
-		a.HasThinking != b.HasThinking || a.HasToolUse != b.HasToolUse ||
-		a.ContentLength != b.ContentLength || a.IsSystem != b.IsSystem ||
-		a.Model != b.Model || a.ReasoningEffort != b.ReasoningEffort ||
-		!bytes.Equal(a.TokenUsage, b.TokenUsage) ||
-		a.ContextTokens != b.ContextTokens || a.OutputTokens != b.OutputTokens ||
-		a.ProviderID != b.ProviderID ||
-		a.HasContextTokens != b.HasContextTokens ||
-		a.HasOutputTokens != b.HasOutputTokens ||
-		a.ClaudeMessageID != b.ClaudeMessageID ||
-		a.ClaudeRequestID != b.ClaudeRequestID ||
-		a.SourceType != b.SourceType || a.SourceSubtype != b.SourceSubtype ||
-		a.PromptSource != b.PromptSource || a.SourceUUID != b.SourceUUID ||
-		a.SourceParentUUID != b.SourceParentUUID ||
-		a.IsSidechain != b.IsSidechain ||
-		a.IsCompactBoundary != b.IsCompactBoundary {
+	aMessages, aCalls, aResults, err := CanonicalMessageRows([]Message{a})
+	if err != nil {
 		return false
 	}
-
-	aCalls := resolveToolCalls([]Message{a}, []int64{0})
-	bCalls := resolveToolCalls([]Message{b}, []int64{0})
-	if len(aCalls) != len(bCalls) {
+	bMessages, bCalls, bResults, err := CanonicalMessageRows([]Message{b})
+	if err != nil {
 		return false
 	}
-	for i := range aCalls {
-		if !toolCallRowEqual(aCalls[i], bCalls[i]) {
-			return false
-		}
-	}
-
-	aEvents := resolveToolResultEvents([]Message{a})
-	bEvents := resolveToolResultEvents([]Message{b})
-	if len(aEvents) != len(bEvents) {
-		return false
-	}
-	for i := range aEvents {
-		x, y := aEvents[i], bEvents[i]
-		if x.SessionID != y.SessionID || x.MessageOrdinal != y.MessageOrdinal || x.CallIndex != y.CallIndex ||
-			x.Event.ToolUseID != y.Event.ToolUseID || x.Event.AgentID != y.Event.AgentID ||
-			x.Event.SubagentSessionID != y.Event.SubagentSessionID || x.Event.Source != y.Event.Source ||
-			x.Event.Status != y.Event.Status || x.Event.Content != y.Event.Content ||
-			x.Event.ContentLength != y.Event.ContentLength || x.Event.Timestamp != y.Event.Timestamp ||
-			x.Event.EventIndex != y.Event.EventIndex || !bytes.Equal(x.Event.RawContentDigest, y.Event.RawContentDigest) {
-			return false
-		}
-		if (x.Event.SummaryParticipates == nil) != (y.Event.SummaryParticipates == nil) ||
-			(x.Event.SummaryParticipates != nil && *x.Event.SummaryParticipates != *y.Event.SummaryParticipates) {
-			return false
-		}
-	}
-	return true
-}
-
-// toolCallRowEqual compares the persisted tool_calls columns except
-// message_id (rowid-derived on both sides of a diff).
-func toolCallRowEqual(a, b ToolCall) bool {
-	return a.SessionID == b.SessionID &&
-		a.ToolName == b.ToolName &&
-		a.Category == b.Category &&
-		a.ToolUseID == b.ToolUseID &&
-		a.InputJSON == b.InputJSON &&
-		a.SkillName == b.SkillName &&
-		a.ResultContentLength == b.ResultContentLength &&
-		a.ResultContent == b.ResultContent &&
-		a.SubagentSessionID == b.SubagentSessionID &&
-		a.FilePath == b.FilePath &&
-		a.CallIndex == b.CallIndex
+	return reflect.DeepEqual(aMessages, bMessages) &&
+		reflect.DeepEqual(aCalls, bCalls) &&
+		reflect.DeepEqual(aResults, bResults)
 }
 
 type messageDiffUpdate struct {
