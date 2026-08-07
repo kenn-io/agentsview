@@ -48,16 +48,11 @@ ______________________________________________________________________
 
 **Interfaces:**
 
-- Consumes: `CanonicalMessageRows`, `AppendMessageRows`, `AppendToolRows`, and a
-  transaction-bound `bun.IDB`.
+- Consumes: `CanonicalMessageRows` and a transaction-bound `bun.IDB`.
 
 - Produces:
 
     ```go
-    func appendCanonicalMessageGraph(
-        ctx context.Context, tx bun.IDB, sessionID string, messages []Message,
-    ) error
-
     func RepairMessageRows(
         ctx context.Context,
         tx bun.IDB,
@@ -79,10 +74,6 @@ ______________________________________________________________________
   `CGO_ENABLED=1 go test -tags fts5 ./internal/db -run 'Canonical.*Repair|DiffRepairsOnlyChangedOrdinals' -count=1`
   and confirm failure because `RepairMessageRows` does not exist.
 
-- [x] Implement `appendCanonicalMessageGraph` by validating one session,
-  converting once with `CanonicalMessageRows`, then calling
-  `AppendMessageRows` and `AppendToolRows`.
-
 - [x] Implement `RepairMessageRows` with message upserts on
   `(session_id, ordinal)`, conflict updates excluding `id` and key columns,
   Bun deletes limited to `affectedOrdinals`, and append of only the supplied
@@ -92,6 +83,11 @@ ______________________________________________________________________
 - [x] Change `messageRowEqual` to compare canonical persisted projections so
   normalized timestamps and nullable optional tool fields do not cause
   perpetual parse-diff repairs.
+
+- [x] Sort canonical result-event projections by their persisted
+  `(message ordinal, call index, event index)` keys. Add an observable no-op
+  replacement regression proving that reversed input order for unique event
+  indices does not repair rows or bump the transcript revision.
 
 - [x] Run the focused test and the existing
   `TestReplaceSessionMessagesDiffMatchesFullReplace` suite; confirm pass.
@@ -103,20 +99,26 @@ ______________________________________________________________________
 
 **Files:**
 
+- Modify: `internal/db/bun_write.go`
 - Modify: `internal/db/messages.go`
 - Modify: `internal/db/messages_diff.go`
+- Test: `internal/db/bun_write_test.go`
 - Test: `internal/db/messages_test.go`
 - Test: `internal/db/db_test.go`
 - Test: `internal/db/messages_diff_test.go`
 
 **Interfaces:**
 
-- Consumes: `beginBunWriteTx`, `appendCanonicalMessageGraph`, and
-  `RepairMessageRows`.
+- Consumes: `beginBunWriteTx`, `CanonicalMessageRows`, `AppendMessageRows`,
+  `AppendToolRows`, and `RepairMessageRows`.
 
-- Produces: Bun-backed `InsertMessages`, `WriteSessionIncremental`,
-  `replaceArchiveSessionMessages`, and `ReplaceSessionContent` without the raw
-  message/tool insert helpers.
+- Produces: `appendCanonicalMessageGraph` plus Bun-backed `InsertMessages`,
+  `WriteSessionIncremental`, `replaceArchiveSessionMessages`, and
+  `ReplaceSessionContent` without the raw message/tool insert helpers.
+
+- [x] Implement `appendCanonicalMessageGraph` by validating one session,
+  converting once with `CanonicalMessageRows`, then calling
+  `AppendMessageRows` and `AppendToolRows`.
 
 - [x] Add `TestWriteSessionIncrementalUsesCanonicalMessageGraph` with a
   nanosecond offset timestamp and a tool result whose unique event index is 7.
@@ -141,6 +143,13 @@ ______________________________________________________________________
   first-seen session order, applying one graph append per session, and running
   revision/automation/signal effects once per distinct session.
 
+- [x] Add a cardinality regression for a tool-bearing append into a large
+  transcript and prove that legacy `message_id` resolution queries only the
+  affected message ordinals.
+
+- [x] Resolve legacy tool-call message IDs from distinct affected ordinals in
+  bounded chunks rather than materializing every message in the session.
+
 - [x] Delete `insertMessagesTx`, `nextMessageIDTx`, `messageInsertArgs`,
   `messageUpdateSetClause`, `insertToolCallsChunkTx`,
   `insertToolResultEventsChunkTx`, and their batching/placeholder constants
@@ -149,7 +158,7 @@ ______________________________________________________________________
 - [x] Run focused message, diff, pin, FTS, incremental rollback, recall, and
   artifact tests.
 
-- [ ] Commit as `refactor(storage): route archive message writes through Bun`.
+- [x] Commit as `refactor(storage): route archive message writes through Bun`.
 
 ### Task 3: Converge ordinary and full sync on the session-batch core
 
@@ -157,7 +166,10 @@ ______________________________________________________________________
 
 - Modify: `internal/db/session_batch.go`
 - Modify: `internal/db/bun_backend.go`
+- Modify: `internal/db/bun_store.go`
+- Modify: `internal/db/store.go`
 - Modify: `internal/sync/engine.go`
+- Test: `internal/db/bun_backend_test.go`
 - Test: `internal/db/messages_test.go`
 - Test: `internal/sync/engine_test.go`
 - Test: `internal/sync/engine_integration_test.go`
@@ -190,8 +202,9 @@ ______________________________________________________________________
   `writeOneSessionBatchTx` to choose safe in-place diff versus full FTS
   replacement, preserving the O(changed rows) streaming-tail path.
 
-- [ ] Add `WriteSessionAtomic` to `ArchiveWriteAdapter` and implement it as a
-  one-element `writeArchiveSessionBatchAtomic` call.
+- [ ] Add `WriteSessionAtomic` to `ArchiveWriteAdapter`, expose it through the
+  capability-checking `BunStore` wrapper and shared `Store` interface, and
+  implement it as a one-element `writeArchiveSessionBatchAtomic` call.
 
 - [ ] Factor one engine-side constructor that fills `SessionBatchWrite` with
   session, messages, usage, identity observation/snapshot, signals, findings,

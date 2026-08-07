@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -247,6 +248,44 @@ func TestCanonicalMessageRepairPreservesUntouchedGraphAndRowIDs(t *testing.T) {
 	require.NotNil(t, results[1].Timestamp)
 	assert.Equal(t, "2026-08-07T10:00:02.876543Z",
 		results[1].Timestamp.Format(time.RFC3339Nano))
+}
+
+func TestAppendToolRowsResolvesOnlyAffectedMessageOrdinals(t *testing.T) {
+	database := testDB(t)
+	insertSession(t, database, "bounded-tool-resolution", "alpha")
+	messages := make([]Message, 250)
+	for ordinal := range messages {
+		messages[ordinal] = Message{
+			SessionID: "bounded-tool-resolution", Ordinal: ordinal,
+			Role: "assistant", Content: "message",
+		}
+	}
+	insertMessages(t, database, messages...)
+
+	hook := new(countingQueryHook)
+	database.bunWriter = database.bunWriter.WithQueryHook(hook)
+	require.NoError(t, database.bunWriter.RunInTx(t.Context(), nil,
+		func(ctx context.Context, tx bun.Tx) error {
+			return AppendToolRows(
+				ctx, tx, "bounded-tool-resolution",
+				[]bunmodel.ToolCall{{
+					SessionID: "bounded-tool-resolution", MessageOrdinal: 249,
+					CallIndex: 0, ToolName: "Read", Category: "file",
+				}},
+				nil,
+			)
+		}))
+
+	var resolutionQuery string
+	for _, query := range hook.queries {
+		if strings.Contains(query, "FROM \"messages\"") {
+			resolutionQuery = query
+			break
+		}
+	}
+	require.NotEmpty(t, resolutionQuery)
+	assert.Contains(t, resolutionQuery, "ordinal IN (249)",
+		"legacy message-id resolution must be bounded by appended ordinals")
 }
 
 func TestCanonicalBunRowsPreservePortableCoordinates(t *testing.T) {

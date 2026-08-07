@@ -74,6 +74,9 @@ type BackendCapabilities struct {
 type ArchiveWriteAdapter interface {
 	UpsertSession(Session) error
 	ReplaceSessionMessages(string, []Message) error
+	WriteSessionAtomic(
+		SessionBatchWrite, ...func() error,
+	) (SessionBatchResult, error)
 	WriteSessionBatchAtomic(
 		[]SessionBatchWrite, ...func() error,
 	) (SessionBatchResult, error)
@@ -169,6 +172,14 @@ func (a sqliteArchiveWriteAdapter) WriteSessionBatchAtomic(
 	writes []SessionBatchWrite, beforeCommit ...func() error,
 ) (SessionBatchResult, error) {
 	return a.store.writeArchiveSessionBatchAtomic(writes, beforeCommit...)
+}
+
+func (a sqliteArchiveWriteAdapter) WriteSessionAtomic(
+	write SessionBatchWrite, beforeCommit ...func() error,
+) (SessionBatchResult, error) {
+	return a.store.writeArchiveSessionBatchAtomic(
+		[]SessionBatchWrite{write}, beforeCommit...,
+	)
 }
 
 type sqliteSessionMutationAdapter struct{}
