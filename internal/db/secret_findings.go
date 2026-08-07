@@ -4,6 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
+
+	"github.com/uptrace/bun"
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
 
 // SecretFinding holds one redacted secret detection persisted per session.
@@ -62,16 +66,48 @@ func (db *DB) ReplaceSessionSecretFindings(
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	tx, err := db.getWriter().Begin()
+	ctx := context.Background()
+	tx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := replaceSecretFindingsTx(tx, sessionID, findings, leakCount, rulesVersion); err != nil {
+	findings = append([]SecretFinding(nil), findings...)
+	for i := range findings {
+		findings[i].SessionID = sessionID
+		findings[i].RulesVersion = rulesVersion
+	}
+	if err := ReplaceSecretFindingRows(
+		ctx, tx, sessionID, CanonicalSecretFindingRows(findings),
+	); err != nil {
+		return err
+	}
+	if err := updateSessionSecretSummaryBun(
+		ctx, tx, sessionID, leakCount, rulesVersion,
+	); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+func updateSessionSecretSummaryBun(
+	ctx context.Context,
+	tx bun.IDB,
+	sessionID string,
+	leakCount int,
+	rulesVersion string,
+) error {
+	now := bunmodel.NewTimestamp(time.Now().UTC().Truncate(time.Microsecond))
+	if _, err := tx.NewUpdate().Table("sessions").
+		Set("secret_leak_count = ?", leakCount).
+		Set("secrets_rules_version = ?", rulesVersion).
+		Set("local_modified_at = ?", now).
+		Where("id = ?", sessionID).
+		Exec(ctx); err != nil {
+		return fmt.Errorf("updating session secret columns %s: %w", sessionID, err)
+	}
+	return nil
 }
 
 // replaceSecretFindingsTx deletes all existing findings for the session,
