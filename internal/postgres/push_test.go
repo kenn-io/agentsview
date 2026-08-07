@@ -23,6 +23,17 @@ type syncStateReaderStub struct {
 	err   error
 }
 
+func TestSessionOwnershipLockKeyUsesFullDigest(t *testing.T) {
+	// These session IDs collide in the first two SHA-256 bytes for this schema.
+	// A truncated lock key would serialize unrelated sessions on one shared row.
+	first := sessionOwnershipLockKey("agentsview", "session-1110")
+	second := sessionOwnershipLockKey("agentsview", "session-0458")
+
+	assert.NotEqual(t, first, second)
+	assert.Len(t, strings.TrimPrefix(first, "session_ownership_lock_v1:"), 64)
+	assert.Len(t, strings.TrimPrefix(second, "session_ownership_lock_v1:"), 64)
+}
+
 func (s syncStateReaderStub) GetSyncState(
 	key string,
 ) (string, error) {
