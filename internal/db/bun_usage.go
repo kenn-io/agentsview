@@ -57,24 +57,47 @@ func UpsertModelPricingRows(
 	return store.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		for start := 0; start < len(prices); start += bunPricingWriteBatchSize {
 			end := min(start+bunPricingWriteBatchSize, len(prices))
-			batch := prices[start:end]
-			if _, err := tx.NewInsert().Model(&batch).Column(
-				"model_pattern", "input_microdollars_per_mtok",
-				"output_microdollars_per_mtok",
-				"cache_creation_microdollars_per_mtok",
-				"cache_read_microdollars_per_mtok", "updated_at",
-			).
-				On("CONFLICT (model_pattern) DO UPDATE").
-				Set("input_microdollars_per_mtok = EXCLUDED.input_microdollars_per_mtok").
-				Set("output_microdollars_per_mtok = EXCLUDED.output_microdollars_per_mtok").
-				Set("cache_creation_microdollars_per_mtok = EXCLUDED.cache_creation_microdollars_per_mtok").
-				Set("cache_read_microdollars_per_mtok = EXCLUDED.cache_read_microdollars_per_mtok").
-				Set("updated_at = EXCLUDED.updated_at").Exec(ctx); err != nil {
+			if err := upsertModelPricingRowBatch(ctx, tx, prices[start:end]); err != nil {
 				return fmt.Errorf("upserting model pricing rows: %w", err)
 			}
 		}
 		return ReplaceModelPricingBandRows(ctx, tx, patterns, bands)
 	})
+}
+
+func upsertModelPricingRowBatch(
+	ctx context.Context, store bun.IDB, rows []bunmodel.ModelPricing,
+) error {
+	var query strings.Builder
+	query.WriteString(`INSERT INTO model_pricing (
+		model_pattern, input_microdollars_per_mtok,
+		output_microdollars_per_mtok,
+		cache_creation_microdollars_per_mtok,
+		cache_read_microdollars_per_mtok, updated_at
+	) VALUES `)
+	args := make([]any, 0, len(rows)*6)
+	for i, row := range rows {
+		if i > 0 {
+			query.WriteString(", ")
+		}
+		query.WriteString("(?, ?, ?, ?, ?, ?)")
+		args = append(args,
+			row.ModelPattern,
+			row.InputMicrodollarsPerMTok,
+			row.OutputMicrodollarsPerMTok,
+			row.CacheCreationMicrodollarsPerMTok,
+			row.CacheReadMicrodollarsPerMTok,
+			row.UpdatedAt,
+		)
+	}
+	query.WriteString(` ON CONFLICT (model_pattern) DO UPDATE SET
+		input_microdollars_per_mtok = EXCLUDED.input_microdollars_per_mtok,
+		output_microdollars_per_mtok = EXCLUDED.output_microdollars_per_mtok,
+		cache_creation_microdollars_per_mtok = EXCLUDED.cache_creation_microdollars_per_mtok,
+		cache_read_microdollars_per_mtok = EXCLUDED.cache_read_microdollars_per_mtok,
+		updated_at = EXCLUDED.updated_at`)
+	_, err := store.NewRaw(query.String(), args...).Exec(ctx)
+	return err
 }
 
 // ReplaceModelPricingBandRows replaces bands for modelPatterns on the supplied
@@ -110,17 +133,41 @@ func ReplaceModelPricingBandRows(
 	}
 	for start := 0; start < len(bands); start += bunPricingWriteBatchSize {
 		end := min(start+bunPricingWriteBatchSize, len(bands))
-		batch := bands[start:end]
-		if _, err := store.NewInsert().Model(&batch).Column(
-			"model_pattern", "above_input_tokens",
-			"input_microdollars_per_mtok", "output_microdollars_per_mtok",
-			"cache_creation_microdollars_per_mtok",
-			"cache_read_microdollars_per_mtok", "updated_at",
-		).Exec(ctx); err != nil {
+		if err := insertModelPricingBandRowBatch(ctx, store, bands[start:end]); err != nil {
 			return fmt.Errorf("inserting model pricing bands: %w", err)
 		}
 	}
 	return nil
+}
+
+func insertModelPricingBandRowBatch(
+	ctx context.Context, store bun.IDB, rows []bunmodel.ModelPricingBand,
+) error {
+	var query strings.Builder
+	query.WriteString(`INSERT INTO model_pricing_bands (
+		model_pattern, above_input_tokens,
+		input_microdollars_per_mtok, output_microdollars_per_mtok,
+		cache_creation_microdollars_per_mtok,
+		cache_read_microdollars_per_mtok, updated_at
+	) VALUES `)
+	args := make([]any, 0, len(rows)*7)
+	for i, row := range rows {
+		if i > 0 {
+			query.WriteString(", ")
+		}
+		query.WriteString("(?, ?, ?, ?, ?, ?, ?)")
+		args = append(args,
+			row.ModelPattern,
+			row.AboveInputTokens,
+			row.InputMicrodollarsPerMTok,
+			row.OutputMicrodollarsPerMTok,
+			row.CacheCreationMicrodollarsPerMTok,
+			row.CacheReadMicrodollarsPerMTok,
+			row.UpdatedAt,
+		)
+	}
+	_, err := store.NewRaw(query.String(), args...).Exec(ctx)
+	return err
 }
 
 // LoadPricingMap returns the effective stored and in-memory pricing catalogue.
