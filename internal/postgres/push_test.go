@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,6 +21,17 @@ import (
 type syncStateReaderStub struct {
 	value string
 	err   error
+}
+
+func TestSessionOwnershipLockKeyUsesFullDigest(t *testing.T) {
+	// These session IDs collide in the first two SHA-256 bytes for this schema.
+	// A truncated lock key would serialize unrelated sessions on one shared row.
+	first := sessionOwnershipLockKey("agentsview", "session-1110")
+	second := sessionOwnershipLockKey("agentsview", "session-0458")
+
+	assert.NotEqual(t, first, second)
+	assert.Len(t, strings.TrimPrefix(first, "session_ownership_lock_v1:"), 64)
+	assert.Len(t, strings.TrimPrefix(second, "session_ownership_lock_v1:"), 64)
 }
 
 func (s syncStateReaderStub) GetSyncState(
@@ -629,197 +639,6 @@ func (c *capturePGExec) ExecContext(
 	return driver.RowsAffected(0), nil
 }
 
-func TestPushSessionRechecksExclusionAfterSuccessfulUpsert(t *testing.T) {
-	state := &pushSessionProbeState{
-		existingExcluded: map[string]bool{
-			"sess-race": true,
-		},
-	}
-	pg := newPushSessionProbeDB(t, state)
-	tx, err := pg.BeginTx(context.Background(), nil)
-	require.NoError(t, err, "BeginTx")
-
-	syncer := &Sync{machine: "push-machine"}
-	err = syncer.pushSession(
-		context.Background(), tx,
-		db.Session{
-			ID:        "sess-race",
-			Project:   "proj",
-			Machine:   "push-machine",
-			Agent:     "claude",
-			CreatedAt: "2026-01-01T00:00:00Z",
-		},
-		"marker", nil,
-	)
-
-	require.ErrorIs(t, err, errSessionExcluded)
-	assert.Equal(t, 1, state.upserts)
-	assert.Equal(t, 1, state.exclusionChecks)
-	assert.True(t, state.deletedExcluded,
-		"excluded row should be deleted after the tombstone is observed")
-	require.NoError(t, tx.Rollback(), "Rollback")
-}
-
-func TestPushSessionCarriesDeletionCauseInStableParameterOrder(t *testing.T) {
-	state := &pushSessionProbeState{}
-	pg := newPushSessionProbeDB(t, state)
-	tx, err := pg.BeginTx(t.Context(), nil)
-	require.NoError(t, err)
-	deletedAt := "2026-07-14T12:34:56Z"
-	cause := "source_missing"
-
-	err = (&Sync{machine: "push-machine"}).pushSession(
-		t.Context(), tx,
-		db.Session{
-			ID: "session", Project: "project", Machine: "push-machine",
-			Agent: "claude", CreatedAt: "2026-01-01T00:00:00Z",
-			DeletedAt: &deletedAt, DeletionCause: &cause,
-		},
-		"marker", nil,
-	)
-	require.NoError(t, err)
-	require.Len(t, state.upsertArgs, 68)
-	assert.IsType(t, time.Time{}, state.upsertArgs[12].Value)
-	assert.IsType(t, time.Time{}, state.upsertArgs[13].Value)
-	assert.Equal(t, cause, state.upsertArgs[14].Value)
-	// session_kind sits between entrypoint and the archive-provenance
-	// parameters; it is empty when the session carries no kind marker.
-	assert.Equal(t, "", state.upsertArgs[63].Value)
-	assert.Equal(t, "[]", state.upsertArgs[67].Value)
-
-	query := strings.ToLower(strings.Join(strings.Fields(state.upsertQuery), " "))
-	assert.Contains(t, query,
-		"deleted_at, source_deleted_at, deletion_cause")
-	assert.Contains(t, query,
-		"when sessions.deleted_at is distinct from sessions.source_deleted_at then sessions.deletion_cause else excluded.deletion_cause")
-	assert.Contains(t, query,
-		"sessions.deletion_cause is distinct from excluded.deletion_cause")
-	require.NoError(t, tx.Rollback())
-}
-
-func TestSessionPushFingerprintIncludesDeletionCause(t *testing.T) {
-	base := db.Session{ID: "session", Machine: "machine"}
-	withCause := base
-	cause := "source_missing"
-	withCause.DeletionCause = &cause
-
-	assert.NotEqual(t,
-		sessionPushFingerprint(base, base.Machine, "", "", "", ""),
-		sessionPushFingerprint(withCause, withCause.Machine, "", "", "", ""),
-	)
-}
-
-func TestPushSessionStoresVibeFallbackAlias(t *testing.T) {
-	state := &pushSessionProbeState{aliases: map[string]string{}}
-	pg := newPushSessionProbeDB(t, state)
-	tx, err := pg.BeginTx(context.Background(), nil)
-	require.NoError(t, err, "BeginTx")
-
-	sessionDir := filepath.Join(
-		t.TempDir(),
-		"session_20260616_083518_abc123",
-	)
-	filePath := filepath.Join(sessionDir, "messages.jsonl")
-	syncer := &Sync{machine: "push-machine"}
-	err = syncer.pushSession(
-		context.Background(), tx,
-		db.Session{
-			ID:        "vibe:canonical-uuid",
-			Project:   "proj",
-			Machine:   "push-machine",
-			Agent:     "vibe",
-			CreatedAt: "2026-01-01T00:00:00Z",
-			FilePath:  &filePath,
-		},
-		"marker", nil,
-	)
-
-	require.NoError(t, err, "pushSession")
-	assert.Equal(t,
-		"vibe:session_20260616_083518_abc123",
-		state.aliases["vibe:canonical-uuid"],
-	)
-	require.NoError(t, tx.Rollback(), "Rollback")
-}
-
-func TestPushSessionExcludesVibeFallbackAliasWhenCanonicalExcluded(t *testing.T) {
-	state := &pushSessionProbeState{
-		existingExcluded: map[string]bool{
-			"vibe:canonical-deleted": true,
-		},
-		excludedIDs: map[string]bool{},
-	}
-	pg := newPushSessionProbeDB(t, state)
-	tx, err := pg.BeginTx(context.Background(), nil)
-	require.NoError(t, err, "BeginTx")
-
-	sessionDir := filepath.Join(
-		t.TempDir(),
-		"session_20260616_083518_def456",
-	)
-	filePath := filepath.Join(sessionDir, "messages.jsonl")
-	syncer := &Sync{machine: "push-machine"}
-	err = syncer.pushSession(
-		context.Background(), tx,
-		db.Session{
-			ID:        "vibe:canonical-deleted",
-			Project:   "proj",
-			Machine:   "push-machine",
-			Agent:     "vibe",
-			CreatedAt: "2026-01-01T00:00:00Z",
-			FilePath:  &filePath,
-		},
-		"marker", nil,
-	)
-
-	require.ErrorIs(t, err, errSessionExcluded)
-	assert.True(t,
-		state.excludedIDs["vibe:session_20260616_083518_def456"],
-		"excluded canonical Vibe pushes should tombstone the fallback alias",
-	)
-	require.NoError(t, tx.Rollback(), "Rollback")
-}
-
-func TestPushSessionSkipsVibeCanonicalWhenFallbackAliasExcluded(t *testing.T) {
-	state := &pushSessionProbeState{
-		existingExcluded: map[string]bool{
-			"vibe:session_20260616_083518_ghi789": true,
-		},
-		excludedIDs: map[string]bool{},
-	}
-	pg := newPushSessionProbeDB(t, state)
-	tx, err := pg.BeginTx(context.Background(), nil)
-	require.NoError(t, err, "BeginTx")
-
-	sessionDir := filepath.Join(
-		t.TempDir(),
-		"session_20260616_083518_ghi789",
-	)
-	filePath := filepath.Join(sessionDir, "messages.jsonl")
-	syncer := &Sync{machine: "push-machine"}
-	err = syncer.pushSession(
-		context.Background(), tx,
-		db.Session{
-			ID:        "vibe:canonical-active",
-			Project:   "proj",
-			Machine:   "push-machine",
-			Agent:     "vibe",
-			CreatedAt: "2026-01-01T00:00:00Z",
-			FilePath:  &filePath,
-		},
-		"marker", nil,
-	)
-
-	require.ErrorIs(t, err, errSessionExcluded)
-	assert.True(t, state.excludedIDs["vibe:canonical-active"])
-	assert.True(t,
-		state.excludedIDs["vibe:session_20260616_083518_ghi789"],
-	)
-	assert.True(t, state.deletedExcluded,
-		"all excluded aliases should be purged from PG sessions")
-	require.NoError(t, tx.Rollback(), "Rollback")
-}
-
 func TestPurgePGExcludedPushSessionsChecksDerivedAliases(t *testing.T) {
 	state := &pushSessionProbeState{
 		existingExcluded: map[string]bool{
@@ -1072,303 +891,6 @@ func (r *pushSessionProbeRows) Next(dest []driver.Value) error {
 	return nil
 }
 
-func TestSessionPushFingerprintDiffers(t *testing.T) {
-	base := db.Session{
-		ID:               "sess-001",
-		Project:          "proj",
-		Machine:          "laptop",
-		Agent:            "claude",
-		MessageCount:     5,
-		UserMessageCount: 2,
-		CreatedAt:        "2026-03-11T12:00:00Z",
-	}
-
-	fp1 := sessionPushFingerprint(base, base.Machine, "", "", "", "")
-
-	tests := []struct {
-		name   string
-		modify func(s db.Session) db.Session
-	}{
-		{
-			name: "agent label change",
-			modify: func(s db.Session) db.Session {
-				s.AgentLabel = "triage"
-				return s
-			},
-		},
-		{
-			name: "entrypoint change",
-			modify: func(s db.Session) db.Session {
-				s.Entrypoint = "sdk-cli"
-				return s
-			},
-		},
-		{
-			name: "message count change",
-			modify: func(s db.Session) db.Session {
-				s.MessageCount = 6
-				return s
-			},
-		},
-		{
-			name: "display name change",
-			modify: func(s db.Session) db.Session {
-				name := "new name"
-				s.DisplayName = &name
-				return s
-			},
-		},
-		{
-			name: "session_name change",
-			modify: func(s db.Session) db.Session {
-				n := "agent-provided-title"
-				s.SessionName = &n
-				return s
-			},
-		},
-		{
-			name: "ended at change",
-			modify: func(s db.Session) db.Session {
-				ended := "2026-03-11T13:00:00Z"
-				s.EndedAt = &ended
-				return s
-			},
-		},
-		{
-			name: "file hash change",
-			modify: func(s db.Session) db.Session {
-				hash := "abc123"
-				s.FileHash = &hash
-				return s
-			},
-		},
-		{
-			name: "file path change",
-			modify: func(s db.Session) db.Session {
-				path := "/home/test/.vibe/sessions/alias.jsonl"
-				s.FilePath = &path
-				return s
-			},
-		},
-		{
-			name: "termination_status change",
-			modify: func(s db.Session) db.Session {
-				ts := "tool_call_pending"
-				s.TerminationStatus = &ts
-				return s
-			},
-		},
-		{
-			name: "parser parent provenance change",
-			modify: func(s db.Session) db.Session {
-				parentID := "parser-parent"
-				s.ParserParentSessionID = &parentID
-				return s
-			},
-		},
-		{
-			name: "automated classification change",
-			modify: func(s db.Session) db.Session {
-				s.IsAutomated = true
-				return s
-			},
-		},
-		{
-			name: "quality signal version change",
-			modify: func(s db.Session) db.Session {
-				s.QualitySignalVersion = db.CurrentQualitySignalVersion
-				return s
-			},
-		},
-		{
-			name: "quality signal count change",
-			modify: func(s db.Session) db.Session {
-				s.QualitySignalVersion = db.CurrentQualitySignalVersion
-				s.DuplicatePromptCount = 1
-				return s
-			},
-		},
-		{
-			name: "quality signal boolean change",
-			modify: func(s db.Session) db.Session {
-				s.QualitySignalVersion = db.CurrentQualitySignalVersion
-				s.UnstructuredStart = true
-				return s
-			},
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			modified := tc.modify(base)
-			fp2 := sessionPushFingerprint(modified, modified.Machine, "", "", "", "")
-			require.NotEqual(t, fp1, fp2,
-				"fingerprint should differ after %s", tc.name)
-		})
-	}
-
-	assert.Equal(t, fp1, sessionPushFingerprint(base, base.Machine, "", "", "", ""),
-		"identical sessions should produce identical fingerprints")
-}
-
-func TestSessionPushFingerprintIgnoresVolatileStatFields(t *testing.T) {
-	hash := "content-hash"
-	localModifiedAt := "2026-03-11T12:00:00.000Z"
-	fileMtime := int64(1700000000000000000)
-	base := db.Session{
-		ID:               "sess-001",
-		Project:          "proj",
-		Machine:          "laptop",
-		Agent:            "claude",
-		MessageCount:     5,
-		UserMessageCount: 2,
-		FileHash:         &hash,
-		FileMtime:        &fileMtime,
-		LocalModifiedAt:  &localModifiedAt,
-		CreatedAt:        "2026-03-11T12:00:00Z",
-	}
-	baseFP := sessionPushFingerprint(base, base.Machine, "", "", "", "deps")
-
-	statOnlyMtime := int64(1700000001000000000)
-	statOnlyModifiedAt := "2026-03-11T12:00:01.000Z"
-	statOnly := base
-	statOnly.FileMtime = &statOnlyMtime
-	statOnly.LocalModifiedAt = &statOnlyModifiedAt
-	assert.Equal(t, baseFP, sessionPushFingerprint(statOnly, statOnly.Machine, "", "", "", "deps"),
-		"file stat churn should not change push candidacy")
-
-	contentChanged := statOnly
-	contentChanged.MessageCount++
-	assert.NotEqual(t, baseFP,
-		sessionPushFingerprint(contentChanged, contentChanged.Machine, "", "", "", "deps"),
-		"content changes should still change push candidacy")
-
-	assert.NotEqual(t, baseFP,
-		sessionPushFingerprint(statOnly, statOnly.Machine, "", "", "", "changed-deps"),
-		"dependent row changes should still change push candidacy")
-}
-
-func TestLocalSessionDependencyPushFingerprintTracksMessageEditsWithoutFileHash(
-	t *testing.T,
-) {
-	localDB := testDB(t)
-	const sessID = "sess-message-edit"
-	require.NoError(t, localDB.UpsertSession(db.Session{
-		ID:               sessID,
-		Project:          "proj",
-		Machine:          "laptop",
-		Agent:            "claude",
-		MessageCount:     1,
-		UserMessageCount: 1,
-		CreatedAt:        "2026-03-11T12:00:00Z",
-	}))
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
-		SessionID: sessID,
-		Ordinal:   0,
-		Role:      "user",
-		Content:   "before",
-	}}))
-
-	depsBefore, err := localSessionDependencyPushFingerprint(
-		context.Background(), localDB, sessID, "", true,
-	)
-	require.NoError(t, err)
-	session := db.Session{
-		ID:               sessID,
-		Project:          "proj",
-		Machine:          "laptop",
-		Agent:            "claude",
-		MessageCount:     1,
-		UserMessageCount: 1,
-		CreatedAt:        "2026-03-11T12:00:00Z",
-	}
-	fpBefore := sessionPushFingerprint(
-		session, session.Machine, "", "", "", depsBefore,
-	)
-
-	require.NoError(t, localDB.ReplaceSessionMessages(sessID, []db.Message{{
-		SessionID: sessID,
-		Ordinal:   0,
-		Role:      "user",
-		Content:   "after",
-	}}))
-	depsAfter, err := localSessionDependencyPushFingerprint(
-		context.Background(), localDB, sessID, "", true,
-	)
-	require.NoError(t, err)
-	fpAfter := sessionPushFingerprint(
-		session, session.Machine, "", "", "", depsAfter,
-	)
-
-	assert.NotEqual(t, depsBefore, depsAfter)
-	assert.NotEqual(t, fpBefore, fpAfter,
-		"same-count message edits should remain push candidates without file_hash")
-}
-
-func TestSessionPushFingerprintIncludesUsageEventFingerprint(
-	t *testing.T,
-) {
-	base := db.Session{
-		ID:               "sess-001",
-		Project:          "proj",
-		Machine:          "laptop",
-		Agent:            "claude",
-		MessageCount:     5,
-		UserMessageCount: 2,
-		CreatedAt:        "2026-03-11T12:00:00Z",
-	}
-
-	withoutUsage := sessionPushFingerprint(base, base.Machine, "", "", "", "")
-	withUsage := sessionPushFingerprint(base, base.Machine, "", "usage-fp", "", "")
-	assert.NotEqual(t, withoutUsage, withUsage,
-		"usage event fingerprint should affect session fingerprint")
-}
-
-func TestSessionPushFingerprintTracksSourceArchiveID(t *testing.T) {
-	session := db.Session{
-		ID: "sess-001", Project: "proj", Machine: "laptop", Agent: "claude",
-		CreatedAt: "2026-03-11T12:00:00Z",
-	}
-
-	archiveA := sessionPushFingerprint(
-		session, session.Machine, "archive-a", "", "", "",
-	)
-	archiveB := sessionPushFingerprint(
-		session, session.Machine, "archive-b", "", "", "",
-	)
-	assert.NotEqual(t, archiveA, archiveB)
-}
-
-func TestSessionPushFingerprintTracksResolvedMachine(t *testing.T) {
-	sentinel := db.Session{
-		ID:        "sess-001",
-		Project:   "proj",
-		Machine:   "local",
-		Agent:     "claude",
-		CreatedAt: "2026-03-11T12:00:00Z",
-	}
-	fpA := sessionPushFingerprint(
-		sentinel, pushedSessionMachine(sentinel, "host-a"), "", "", "", "")
-	fpB := sessionPushFingerprint(
-		sentinel, pushedSessionMachine(sentinel, "host-b"), "", "", "", "")
-	assert.NotEqual(t, fpA, fpB,
-		"sentinel session fingerprint must change with the fallback machine")
-
-	real := db.Session{
-		ID:        "sess-002",
-		Project:   "proj",
-		Machine:   "real-host",
-		Agent:     "claude",
-		CreatedAt: "2026-03-11T12:00:00Z",
-	}
-	fp1 := sessionPushFingerprint(
-		real, pushedSessionMachine(real, "host-a"), "", "", "", "")
-	fp2 := sessionPushFingerprint(
-		real, pushedSessionMachine(real, "host-b"), "", "", "", "")
-	assert.Equal(t, fp1, fp2,
-		"a session with a real machine ignores the fallback")
-}
-
 func TestPushedSessionMachine(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1406,61 +928,6 @@ func TestPushedSessionMachine(t *testing.T) {
 				pushedSessionMachine(tc.session, tc.fallback))
 		})
 	}
-}
-
-func TestSessionPushFingerprintNoFieldCollisions(
-	t *testing.T,
-) {
-	s1 := db.Session{
-		ID:        "ab",
-		Project:   "cd",
-		CreatedAt: "2026-03-11T12:00:00Z",
-	}
-	s2 := db.Session{
-		ID:        "a",
-		Project:   "bcd",
-		CreatedAt: "2026-03-11T12:00:00Z",
-	}
-	assert.NotEqual(t,
-		sessionPushFingerprint(s1, s1.Machine, "", "", "", ""),
-		sessionPushFingerprint(s2, s2.Machine, "", "", "", ""),
-		"length-prefixed fingerprints should not collide")
-}
-
-func TestLocalMessageRoleTimePGFingerprintNormalizesNanoseconds(
-	t *testing.T,
-) {
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
-	require.NoError(t, err, "db.Open")
-	defer localDB.Close()
-
-	const sessID = "pg-role-time-nanos"
-	require.NoError(t, localDB.UpsertSession(db.Session{
-		ID:        sessID,
-		Project:   "proj",
-		Machine:   "host",
-		Agent:     "shelley",
-		CreatedAt: "2026-03-11T12:34:56Z",
-	}), "UpsertSession")
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
-		SessionID:     sessID,
-		Ordinal:       1,
-		Role:          "assistant",
-		Content:       "answer",
-		ContentLength: len("answer"),
-		Timestamp:     "2026-03-11T12:34:56.123456789Z",
-	}}), "InsertMessages")
-
-	got, err := localMessageRoleTimePGFingerprint(localDB, sessID)
-	require.NoError(t, err)
-	assert.Equal(t,
-		"1|9:assistant|27:2026-03-11T12:34:56.123456Z;",
-		got)
-
-	raw, err := localDB.MessageRoleTimeFingerprint(sessID)
-	require.NoError(t, err)
-	assert.NotEqual(t, raw, got,
-		"PG push fingerprint must not use raw nanosecond text")
 }
 
 func TestFinalizePushStatePersistsEmptyBoundary(
@@ -1708,7 +1175,7 @@ func TestFinalizePushStateMergesPriorFingerprints(
 	require.NoError(t, finalizePushState(
 		store, cutoff, cycle2Sessions,
 		priorFingerprints,
-		map[string]string{"sess-002": sessionPushFingerprint(cycle2Sessions[0], cycle2Sessions[0].Machine, "", "", "", "")},
+		map[string]string{"sess-002": "fp-cycle-2"},
 	))
 
 	raw := store.values[lastPushBoundaryStateKey]
@@ -1788,83 +1255,38 @@ func TestNilIfEmptySanitizes(t *testing.T) {
 	assert.Nil(t, nilIfEmpty("\x00"), "nilIfEmpty(\"\\x00\") should be nil")
 }
 
-func TestNilStrSanitizes(t *testing.T) {
-	s := "hello\xe2world"
-	assert.Equal(t, any("helloworld"), nilStr(&s))
-
-	// A *string that reduces to empty after sanitization
-	// should return nil.
-	nul := "\x00"
-	assert.Nil(t, nilStr(&nul), "nilStr(\"\\x00\") should be nil")
-}
-
-func TestShouldSkipSessionMessagesInBatchedPush(t *testing.T) {
-	const sessionID = "sess-batched"
-	baseComparisons := &pushMessageComparison{
-		MessageAggregates: map[string]pushMessageAggregate{
-			sessionID: {Count: 2, Sum: 12, Max: 6, Min: 1},
+func TestPostgresSessionReplicationFingerprintUsesCommittedProjection(t *testing.T) {
+	localModifiedAt := "2026-08-04T10:00:00Z"
+	fileHash := "hash-a"
+	base := db.SessionReplicationSnapshot{
+		Session: db.Session{
+			ID: "session", Project: "project", Machine: "machine", Agent: "codex",
+			CreatedAt: "2026-08-04T09:00:00Z", FileHash: &fileHash,
+			LocalModifiedAt: &localModifiedAt,
 		},
-		MessageContentHash: map[string]string{
-			sessionID: "abc",
-		},
-		MessageRoleTime: map[string]string{
-			sessionID: "role-time",
-		},
-		MessageFlags: map[string]string{
-			sessionID: "flags",
-		},
-		MessageSystemOrdinals: map[string]string{
-			sessionID: "0,1",
-		},
-		MessageTokenFingerprint: map[string]string{
-			sessionID: "tokens",
-		},
-		ToolCallAggregates: map[string]pushToolCallAggregate{
-			sessionID: {Count: 1, Sum: 99},
-		},
-		ToolCallFingerprint: map[string]string{
-			sessionID: "toolcalls",
-		},
-		ToolResultFingerprint: map[string]string{
-			sessionID: "results",
-		},
-		UsageEventFingerprint: map[string]string{
-			sessionID: "usage",
-		},
+		PinnedMessages: []db.PinnedMessage{{
+			ID: 1, SessionID: "session", MessageID: 2, Ordinal: 2,
+		}},
 	}
-	unchangedFP := pushLocalMessageFingerprint{
-		Sum:           12,
-		Max:           6,
-		Min:           1,
-		ContentHashFP: "abc",
-		RoleTimeFP:    "role-time",
-		FlagsFP:       "flags",
-		SystemFP:      "0,1",
-		ToolCallCount: 1,
-		ToolCallSum:   99,
-		ToolCallFP:    "toolcalls",
-		ToolResultFP:  "results",
-		TokenFP:       "tokens",
-		UsageEventFP:  "usage",
-	}
+	want, err := postgresSessionReplicationFingerprint(base, "owner")
+	require.NoError(t, err)
 
-	assert.True(t, shouldSkipSessionMessages(
-		sessionID, 2, unchangedFP, false, baseComparisons,
-	), "unchanged sessions should be skipped as unchanged")
+	targetOwnedChanged := base
+	targetModifiedAt := "2026-08-04T11:00:00Z"
+	targetOwnedChanged.Session.LocalModifiedAt = &targetModifiedAt
+	targetOwnedChanged.PinnedMessages = []db.PinnedMessage{{
+		ID: 9, SessionID: "session", MessageID: 7, Ordinal: 7,
+	}}
+	got, err := postgresSessionReplicationFingerprint(targetOwnedChanged, "owner")
+	require.NoError(t, err)
+	assert.Equal(t, want, got,
+		"target-owned pins and modification time must not trigger source pushes")
 
-	changedFP := unchangedFP
-	changedFP.ToolCallSum = 100
-	assert.False(t, shouldSkipSessionMessages(
-		sessionID, 2, changedFP, false, baseComparisons,
-	), "tool-call sum mismatch should force push")
-
-	changedFP = unchangedFP
-	changedFP.ToolResultFP = "changed-results"
-	assert.False(t, shouldSkipSessionMessages(
-		sessionID, 2, changedFP, false, baseComparisons,
-	), "tool-result event mismatch should force push")
-
-	assert.False(t, shouldSkipSessionMessages(
-		sessionID, 2, unchangedFP, true, baseComparisons,
-	), "full mode should not skip by fingerprint check")
+	portableChanged := base
+	changedHash := "hash-b"
+	portableChanged.Session.FileHash = &changedHash
+	got, err = postgresSessionReplicationFingerprint(portableChanged, "owner")
+	require.NoError(t, err)
+	assert.NotEqual(t, want, got,
+		"portable file metadata is part of the canonical PostgreSQL row")
 }

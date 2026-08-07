@@ -297,21 +297,15 @@ func (db *DB) ingestEvalTrajectoryChunks(
 	stampSessionArchiveIdentity(&session, identity)
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	tx, err := db.getWriter().BeginTx(ctx, nil)
+	bunTx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("begin eval trajectory ingest: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
-	if err := validateRecallImportPlaceholderSessionStateWithQueryer(
-		ctx, tx, session.ID,
-	); err != nil {
+	defer func() { _ = bunTx.Rollback() }()
+	if err := insertArchiveSessionIfAbsentRow(ctx, bunTx, session); err != nil {
 		return 0, fmt.Errorf("preparing eval session: %w", err)
 	}
-	if _, err := tx.ExecContext(
-		ctx, insertSessionIfAbsentSQL, upsertSessionArgs(session)...,
-	); err != nil {
-		return 0, fmt.Errorf("preparing eval session: %w", err)
-	}
+	tx := bunTx.Tx
 	indexed := 0
 	for idx, entry := range entries {
 		inserted, err := insertEvalRecallEntryIfAbsentTx(ctx, tx, entry)
@@ -322,7 +316,7 @@ func (db *DB) ingestEvalTrajectoryChunks(
 			indexed++
 		}
 	}
-	if err := tx.Commit(); err != nil {
+	if err := bunTx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit eval trajectory ingest: %w", err)
 	}
 	return indexed, nil

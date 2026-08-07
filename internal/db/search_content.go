@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"regexp"
@@ -140,29 +139,6 @@ func semanticContentSessionFilter(f ContentSearchFilter) SessionFilter {
 	sf := contentSessionFilter(f)
 	sf.ChildExemptOneShot = true
 	return sf
-}
-
-// SearchContent runs a content search and returns a page of matches.
-func (db *DB) SearchContent(
-	ctx context.Context, f ContentSearchFilter,
-) (ContentSearchPage, error) {
-	if f.Limit <= 0 || f.Limit > MaxContentSearchLimit {
-		f.Limit = DefaultContentSearchLimit
-	}
-	if f.Pattern == "" {
-		return ContentSearchPage{}, nil
-	}
-
-	// Semantic and hybrid validate and default Sources themselves (messages
-	// only) ahead of the substring/regex/fts source-set default just below,
-	// which fills in tool_input/tool_result that neither mode supports.
-	switch f.Mode {
-	case "semantic":
-		return db.BunStore.SearchContent(ctx, f)
-	case "hybrid":
-		return db.BunStore.SearchContent(ctx, f)
-	}
-	return db.BunStore.SearchContent(ctx, f)
 }
 
 func hasSource(f ContentSearchFilter, name string) bool {

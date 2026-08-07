@@ -204,23 +204,39 @@ func (s *BunStore) UnpinMessage(sessionID string, messageID int64) error {
 func (s *BunStore) ListPinnedMessages(
 	ctx context.Context, sessionID string, project string,
 ) ([]PinnedMessage, error) {
-	var rows []bunPinnedMessageReadRow
+	var pins []PinnedMessage
 	err := s.view(ctx, func(store bun.IDB) error {
-		query := store.NewSelect().TableExpr("pinned_messages AS pin").
-			ColumnExpr("pin.id AS id").
-			ColumnExpr("pin.session_id AS session_id").
-			ColumnExpr("COALESCE(message.id, CAST(pin.ordinal AS BIGINT)) AS message_id").
-			ColumnExpr("pin.ordinal AS ordinal").
-			ColumnExpr("pin.note AS note").
-			ColumnExpr("pin.created_at AS created_at").
-			Join("LEFT JOIN messages AS message").
-			JoinOn("message.session_id = pin.session_id").
-			JoinOn("message.ordinal = pin.ordinal")
-		if sessionID != "" {
-			return query.Where("pin.session_id = ?", sessionID).
-				OrderExpr("pin.created_at DESC").OrderExpr("pin.id DESC").
-				Scan(ctx, &rows)
+		var err error
+		pins, err = listPinnedMessagesWithStore(ctx, store, sessionID, project)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("listing pinned messages: %w", err)
+	}
+	return pins, nil
+}
+
+func listPinnedMessagesWithStore(
+	ctx context.Context, store bun.IDB, sessionID string, project string,
+) ([]PinnedMessage, error) {
+	var rows []bunPinnedMessageReadRow
+	query := store.NewSelect().TableExpr("pinned_messages AS pin").
+		ColumnExpr("pin.id AS id").
+		ColumnExpr("pin.session_id AS session_id").
+		ColumnExpr("COALESCE(message.id, CAST(pin.ordinal AS BIGINT)) AS message_id").
+		ColumnExpr("pin.ordinal AS ordinal").
+		ColumnExpr("pin.note AS note").
+		ColumnExpr("pin.created_at AS created_at").
+		Join("LEFT JOIN messages AS message").
+		JoinOn("message.session_id = pin.session_id").
+		JoinOn("message.ordinal = pin.ordinal")
+	if sessionID != "" {
+		if err := query.Where("pin.session_id = ?", sessionID).
+			OrderExpr("pin.created_at DESC").OrderExpr("pin.id DESC").
+			Scan(ctx, &rows); err != nil {
+			return nil, err
 		}
+	} else {
 		query = query.
 			ColumnExpr("message.content AS content").
 			ColumnExpr("message.role AS role").
@@ -234,11 +250,10 @@ func (s *BunStore) ListPinnedMessages(
 		if project != "" {
 			query = query.Where("session.project = ?", project)
 		}
-		return query.OrderExpr("pin.created_at DESC").OrderExpr("pin.id DESC").
-			Limit(500).Scan(ctx, &rows)
-	})
-	if err != nil {
-		return nil, fmt.Errorf("listing pinned messages: %w", err)
+		if err := query.OrderExpr("pin.created_at DESC").OrderExpr("pin.id DESC").
+			Limit(500).Scan(ctx, &rows); err != nil {
+			return nil, err
+		}
 	}
 	var pins []PinnedMessage
 	for _, row := range rows {

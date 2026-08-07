@@ -218,15 +218,21 @@ func TestDuckDBSystemPrefixSQLTerminalRemainder(t *testing.T) {
 // TestDuckDBStoreHasSemanticFalse pins that the DuckDB store reports no
 // semantic search capability until it gets its own VectorSearcher seam.
 func TestDuckDBStoreHasSemanticFalse(t *testing.T) {
-	s := &Store{}
+	s := newSearchUnitStore()
 	assert.False(t, s.HasSemantic(), "DuckDB HasSemantic")
+}
+
+func newSearchUnitStore() *Store {
+	store := &Store{}
+	store.BunStore = db.NewBunStore(&duckBunBackend{store: store})
+	return store
 }
 
 // TestDuckDBSearchContentSemanticModesUnavailable pins that "semantic" and
 // "hybrid" are rejected with db.ErrSemanticUnavailable before any query runs
-// -- a zero-value Store (no live *sql.DB) is enough to prove that.
+// -- an explicitly initialized common store needs no live *sql.DB to prove it.
 func TestDuckDBSearchContentSemanticModesUnavailable(t *testing.T) {
-	s := &Store{}
+	s := newSearchUnitStore()
 	for _, mode := range []string{"semantic", "hybrid"} {
 		_, err := s.SearchContent(context.Background(),
 			db.ContentSearchFilter{Pattern: "x", Mode: mode})
@@ -248,7 +254,7 @@ func TestDuckDBSearchContentSemanticModesUnavailable(t *testing.T) {
 // though DuckDB has no VectorSearcher seam and would otherwise report the
 // capability gate for any request in these modes.
 func TestDuckDBSearchContentSemanticInvalidInputReturns400Before501(t *testing.T) {
-	s := &Store{}
+	s := newSearchUnitStore()
 	cases := []struct {
 		name string
 		f    db.ContentSearchFilter

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -18,8 +17,14 @@ import (
 // TestStoreHasSemanticFalse pins that the PostgreSQL store reports no
 // semantic search capability until it gets its own VectorSearcher seam.
 func TestStoreHasSemanticFalse(t *testing.T) {
-	s := &Store{}
+	s := newSearchUnitStore()
 	assert.False(t, s.HasSemantic(), "PostgreSQL HasSemantic")
+}
+
+func newSearchUnitStore() *Store {
+	store := &Store{}
+	store.BunStore = db.NewBunStore(&postgresBunBackend{store: store})
+	return store
 }
 
 func TestStoreBunBackendCapabilitiesFollowInsightProbe(t *testing.T) {
@@ -58,9 +63,9 @@ func TestPostgresBunBackendUpdatePreservesReadOnlySentinel(t *testing.T) {
 
 // TestStoreSearchContentSemanticModesUnavailable pins that "semantic" and
 // "hybrid" are rejected with db.ErrSemanticUnavailable before any query runs
-// -- a zero-value Store (no live *sql.DB) is enough to prove that.
+// -- an explicitly initialized common store needs no live *sql.DB to prove it.
 func TestStoreSearchContentSemanticModesUnavailable(t *testing.T) {
-	s := &Store{}
+	s := newSearchUnitStore()
 	for _, mode := range []string{"semantic", "hybrid"} {
 		_, err := s.SearchContent(context.Background(),
 			db.ContentSearchFilter{Pattern: "x", Mode: mode})
@@ -77,7 +82,7 @@ func TestStoreSearchContentSemanticModesUnavailable(t *testing.T) {
 // though PostgreSQL has no VectorSearcher seam and would otherwise report the
 // capability gate for any request in these modes.
 func TestStoreSearchContentSemanticInvalidInputReturns400Before501(t *testing.T) {
-	s := &Store{}
+	s := newSearchUnitStore()
 	cases := []struct {
 		name string
 		f    db.ContentSearchFilter
@@ -141,36 +146,6 @@ func TestEscapeLike(t *testing.T) {
 		assert.Equal(t, tt.want, escapeLike(tt.input),
 			"input=%q", tt.input)
 	}
-}
-
-func TestPGMessagesBranchFTSRequiresAllTerms(t *testing.T) {
-	pb := &paramBuilder{}
-	branch := pgMessagesBranch(
-		db.ContentSearchFilter{
-			Pattern: "quick fox",
-			Mode:    "fts",
-		},
-		escapeLike("quick fox"),
-		pb,
-	)
-
-	assert.Contains(t, branch,
-		"m.content ILIKE '%'||$1||'%' ESCAPE E'\\\\'")
-	assert.Contains(t, branch,
-		"m.content ILIKE '%'||$2||'%' ESCAPE E'\\\\'")
-	assert.Equal(t, []any{"quick", "fox"}, pb.args)
-}
-
-func TestPGSubstringSnippetFTSModeCentersOnFirstTerm(t *testing.T) {
-	body := strings.Repeat("prefix ", 30) + "the quick brown fox jumps"
-
-	got := pgSubstringSnippet(db.ContentSearchFilter{
-		Pattern: "quick fox",
-		Mode:    "fts",
-	}, body)
-
-	assert.Contains(t, got, "quick")
-	assert.Contains(t, got, "fox")
 }
 
 func TestMapPGWriteErrorNormalizesReadOnlyPgErrors(t *testing.T) {

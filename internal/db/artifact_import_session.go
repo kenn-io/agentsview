@@ -81,24 +81,25 @@ func (db *DB) applyArtifactImportedSession(
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	tx, err := db.getWriter().BeginTx(ctx, nil)
+	tx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return result, fmt.Errorf("beginning artifact imported session: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	rawTx := tx.Tx
 
 	var machine string
-	err = tx.QueryRowContext(ctx, `
+	err = rawTx.QueryRowContext(ctx, `
 		SELECT machine FROM sessions WHERE id = ?`,
 		write.Session.ID,
 	).Scan(&machine)
 	switch {
 	case err == nil && machine != imported.Origin:
-		if err := recordArtifactImportedSessionTx(ctx, tx, imported); err != nil {
+		if err := recordArtifactImportedSessionTx(ctx, rawTx, imported); err != nil {
 			return result, err
 		}
 		if err := satisfyArtifactCheckpointImportTx(
-			ctx, tx, landing, staged, imported,
+			ctx, rawTx, landing, staged, imported,
 		); err != nil {
 			return result, err
 		}
@@ -115,7 +116,7 @@ func (db *DB) applyArtifactImportedSession(
 
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 	messagesWritten, err := writeOneSessionBatchTx(
-		tx, write, &pendingRecallRevocations,
+		ctx, rawTx, tx, write, &pendingRecallRevocations,
 	)
 	switch {
 	case err == nil:
@@ -128,11 +129,11 @@ func (db *DB) applyArtifactImportedSession(
 	default:
 		return result, err
 	}
-	if err := recordArtifactImportedSessionTx(ctx, tx, imported); err != nil {
+	if err := recordArtifactImportedSessionTx(ctx, rawTx, imported); err != nil {
 		return ArtifactImportedSessionResult{}, err
 	}
 	if err := satisfyArtifactCheckpointImportTx(
-		ctx, tx, landing, staged, imported,
+		ctx, rawTx, landing, staged, imported,
 	); err != nil {
 		return ArtifactImportedSessionResult{}, err
 	}

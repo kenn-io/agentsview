@@ -132,31 +132,6 @@ func sqlitePricingValues(
 	}
 }
 
-func sqlitePricingUpsertStatement(prices []ModelPricing) (string, []any) {
-	var b strings.Builder
-	b.WriteString(`INSERT INTO model_pricing
-		(model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
-		 cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok,
-		 updated_at)
-	VALUES `)
-	args := make([]any, 0, len(prices)*5)
-	sqlitePricingValues(&b, &args, prices)
-	b.WriteString(`
-	ON CONFLICT(model_pattern) DO UPDATE SET
-		input_microdollars_per_mtok          = excluded.input_microdollars_per_mtok,
-		output_microdollars_per_mtok         = excluded.output_microdollars_per_mtok,
-		cache_creation_microdollars_per_mtok = excluded.cache_creation_microdollars_per_mtok,
-		cache_read_microdollars_per_mtok     = excluded.cache_read_microdollars_per_mtok,
-		updated_at              = excluded.updated_at
-	WHERE model_pricing.input_microdollars_per_mtok IS NOT excluded.input_microdollars_per_mtok
-		OR model_pricing.output_microdollars_per_mtok IS NOT excluded.output_microdollars_per_mtok
-		OR model_pricing.cache_creation_microdollars_per_mtok IS NOT
-			excluded.cache_creation_microdollars_per_mtok
-		OR model_pricing.cache_read_microdollars_per_mtok IS NOT
-			excluded.cache_read_microdollars_per_mtok`)
-	return b.String(), args
-}
-
 func sqlitePricingInsertMissingStatement(
 	prices []ModelPricing,
 ) (string, []any) {
@@ -171,71 +146,6 @@ func sqlitePricingInsertMissingStatement(
 	b.WriteString(`
 	ON CONFLICT(model_pattern) DO NOTHING`)
 	return b.String(), args
-}
-
-// UpsertModelPricing inserts or replaces pricing rows in a
-// single transaction.
-func (db *DB) UpsertModelPricing(
-	prices []ModelPricing,
-) error {
-	if err := db.requireWritable(); err != nil {
-		return err
-	}
-	if len(prices) == 0 {
-		return nil
-	}
-
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	existing, err := db.listModelPricing(context.Background())
-	if err != nil {
-		return fmt.Errorf(
-			"listing current pricing before upsert: %w", err,
-		)
-	}
-	_, prices = FilterChangedModelPricing(existing, prices)
-	if len(prices) == 0 {
-		return nil
-	}
-
-	tx, err := db.getWriter().Begin()
-	if err != nil {
-		return fmt.Errorf("beginning pricing upsert: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	for i := 0; i < len(prices); i += pricingWriteBatch {
-		end := min(i+pricingWriteBatch, len(prices))
-		query, args := sqlitePricingUpsertStatement(prices[i:end])
-		if _, err := tx.Exec(query, args...); err != nil {
-			return fmt.Errorf(
-				"upserting pricing batch starting at %d: %w",
-				i, err,
-			)
-		}
-	}
-	for _, price := range prices {
-		if _, err := tx.Exec(`
-			UPDATE model_pricing
-			SET updated_at = CASE
-				WHEN updated_at >= strftime('%Y-%m-%dT%H:%M:%fZ','now')
-				THEN strftime(
-					'%Y-%m-%dT%H:%M:%fZ', updated_at, '+0.001 seconds')
-				ELSE strftime('%Y-%m-%dT%H:%M:%fZ','now')
-			END
-			WHERE model_pattern = ?`, price.ModelPattern); err != nil {
-			return fmt.Errorf(
-				"advancing pricing timestamp for %q: %w",
-				price.ModelPattern,
-				err,
-			)
-		}
-	}
-	if err := replaceModelPricingBands(tx, prices); err != nil {
-		return err
-	}
-	return tx.Commit()
 }
 
 func replaceModelPricingBands(tx *sql.Tx, prices []ModelPricing) error {

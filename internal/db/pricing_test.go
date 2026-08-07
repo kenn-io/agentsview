@@ -193,6 +193,31 @@ func TestUpsertModelPricingOverwrites(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("1.00"), got.CacheReadPerMTok)
 }
 
+func TestUpsertModelPricingAdvancesCollidingRevisionByOneMicrosecond(t *testing.T) {
+	database := testDB(t)
+	revision := "2099-01-01T00:00:00.123456Z"
+	require.NoError(t, database.UpsertModelPricing([]ModelPricing{{
+		ModelPattern: "revision-collision",
+		InputPerMTok: money.MustParseDollars("1"),
+		UpdatedAt:    revision,
+	}}))
+	_, err := database.getWriter().Exec(`
+		UPDATE model_pricing SET updated_at = ? WHERE model_pattern = ?`,
+		revision, "revision-collision")
+	require.NoError(t, err)
+
+	require.NoError(t, database.UpsertModelPricing([]ModelPricing{{
+		ModelPattern: "revision-collision",
+		InputPerMTok: money.MustParseDollars("2"),
+		UpdatedAt:    revision,
+	}}))
+
+	stored, err := database.GetModelPricing("revision-collision")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "2099-01-01T00:00:00.123457Z", stored.UpdatedAt)
+}
+
 func TestFilterChangedModelPricingIgnoresUpdatedAtOnlyDifferences(t *testing.T) {
 	existing := []ModelPricing{
 		{
