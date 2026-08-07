@@ -253,11 +253,11 @@ ______________________________________________________________________
 - [x] Treat the unrelated macOS FSEvents baseline timeouts separately; do not
   weaken them as part of storage cleanup.
 
-- [ ] Update the #1347 body from “byte-identical” one-off comparison to
+- [x] Update the #1347 body from “byte-identical” one-off comparison to
   contract-verified dollar parity and keep all five PR bodies aligned with the
   final diffs.
 
-- [ ] Push only after verification, close completed Kata children with commit
+- [x] Push only after verification, close completed Kata children with commit
   evidence, and unsnooze RoboRev on every affected branch.
 
 ## Self-review
