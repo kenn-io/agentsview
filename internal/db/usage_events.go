@@ -201,7 +201,8 @@ func (db *DB) appendUsageEventFingerprints(
 			occurred_at, dedup_key
 		FROM usage_events
 		WHERE session_id IN (`+strings.Join(placeholders, ",")+`)
-		ORDER BY session_id, COALESCE(occurred_at, ''), id`,
+		ORDER BY session_id, julianday(NULLIF(occurred_at, '')),
+			COALESCE(occurred_at, ''), id`,
 		args...,
 	)
 	if err != nil {
@@ -299,7 +300,8 @@ func usageEventsWithQuerier(
 			occurred_at, dedup_key
 		FROM usage_events
 		WHERE session_id = ?
-		ORDER BY COALESCE(occurred_at, ''), id`
+		ORDER BY julianday(NULLIF(occurred_at, '')),
+			COALESCE(occurred_at, ''), id`
 	args := []any{sessionID}
 	if limit > 0 {
 		query += ` LIMIT ?`

@@ -2179,8 +2179,7 @@ func (s *Sync) lockSessionOwnership(
 	if s.beforeSessionOwnershipLock != nil {
 		s.beforeSessionOwnershipLock()
 	}
-	digest := sha256.Sum256([]byte(s.schema + "\x00" + sessionID))
-	lockKey := "session_ownership_lock_v1:" + hex.EncodeToString(digest[:2])
+	lockKey := sessionOwnershipLockKey(s.schema, sessionID)
 	row := pgSessionOwnershipLockRow{Key: lockKey, Value: "1"}
 	if _, err := store.NewInsert().Model(&row).
 		On("CONFLICT (key) DO NOTHING").Returning("").Exec(ctx); err != nil {
@@ -2195,6 +2194,11 @@ func (s *Sync) lockSessionOwnership(
 		s.afterSessionOwnershipLock()
 	}
 	return nil
+}
+
+func sessionOwnershipLockKey(schema, sessionID string) string {
+	digest := sha256.Sum256([]byte(schema + "\x00" + sessionID))
+	return "session_ownership_lock_v1:" + hex.EncodeToString(digest[:])
 }
 
 func equalOptionalString(left, right *string) bool {
