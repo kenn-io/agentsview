@@ -291,12 +291,32 @@ func TestBunRowTimestampScannerNormalizesSupportedInputsToUTC(t *testing.T) {
 			var got Timestamp
 			require.NoError(t, got.Scan(input))
 			assert.Equal(t, want, got.Time)
-
-			value, err := got.Value()
-			require.NoError(t, err)
-			assert.Equal(t, want, value)
 		})
 	}
+}
+
+func TestBunRowTimestampScannerAcceptsSQLiteEmptySentinel(t *testing.T) {
+	for name, input := range map[string]any{
+		"text":  "",
+		"bytes": []byte(""),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var got Timestamp
+			require.NoError(t, got.Scan(input))
+			assert.True(t, got.IsZero())
+		})
+	}
+}
+
+func TestBunRowTimestampValuePersistsRFC3339NanoText(t *testing.T) {
+	value := NewTimestamp(time.Date(
+		2026, 8, 2, 12, 30, 0, 123_456_789,
+		time.FixedZone("EDT", -4*60*60),
+	))
+
+	got, err := value.Value()
+	require.NoError(t, err)
+	assert.Equal(t, "2026-08-02T16:30:00.123456789Z", got)
 }
 
 func TestBunRowTimestampScannerPreservesDatabaseNull(t *testing.T) {

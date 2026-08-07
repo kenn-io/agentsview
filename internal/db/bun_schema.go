@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect"
@@ -77,6 +79,13 @@ func CreateCommonSchema(ctx context.Context, db bun.IDB) error {
 // column required by shared Bun reads. Engine-specific compatibility checks
 // additionally validate physical keys and operational extensions.
 func CheckCommonSchema(ctx context.Context, db bun.IDB) error {
+	if err := checkCommonSchemaColumns(ctx, db); err != nil {
+		return err
+	}
+	return checkCommonSchemaRows(ctx, db)
+}
+
+func checkCommonSchemaColumns(ctx context.Context, db bun.IDB) error {
 	for _, table := range bunmodel.CommonTables() {
 		columns := bunmodel.ModelColumns(table.Model)
 		rows, err := db.NewSelect().Table(table.Name).Column(columns...).Limit(0).
@@ -88,6 +97,10 @@ func CheckCommonSchema(ctx context.Context, db bun.IDB) error {
 			return fmt.Errorf("closing common table %s check: %w", table.Name, err)
 		}
 	}
+	return nil
+}
+
+func checkCommonSchemaRows(ctx context.Context, db bun.IDB) error {
 	checks := []struct {
 		name  string
 		query string
@@ -146,10 +159,10 @@ func (db *DB) convergeSQLiteCommonSchemaLocked(
 		return err
 	}
 	if complete {
-		if err := installSQLiteCanonicalIdentityTriggers(ctx, tx); err != nil {
-			return err
+		if err := checkCommonSchemaColumns(ctx, tx); err != nil {
+			return fmt.Errorf("validating stamped common SQLite schema: %w", err)
 		}
-		if err := CheckCommonSchema(ctx, tx); err != nil {
+		if err := checkSQLiteCanonicalSchemaObjects(ctx, tx); err != nil {
 			return fmt.Errorf("validating stamped common SQLite schema: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -239,6 +252,9 @@ func (db *DB) convergeSQLiteCommonSchemaLocked(
 	if err := CheckCommonSchema(ctx, tx); err != nil {
 		return err
 	}
+	if err := checkSQLiteCanonicalSchemaObjects(ctx, tx); err != nil {
+		return err
+	}
 	if beforeStamp != nil {
 		if err := beforeStamp(); err != nil {
 			return err
@@ -292,19 +308,19 @@ func convergeSQLitePricingMetadata(ctx context.Context, db bun.IDB) error {
 }
 
 const sqliteCanonicalIdentityTriggerDDL = `
-DROP TRIGGER IF EXISTS trg_project_identity_observations_revision_insert;
-DROP TRIGGER IF EXISTS trg_project_identity_observations_revision_update;
-DROP TRIGGER IF EXISTS trg_project_identity_observations_revision_delete;
-DROP TRIGGER IF EXISTS trg_session_project_identity_snapshots_revision_insert;
-DROP TRIGGER IF EXISTS trg_session_project_identity_snapshots_revision_update;
-DROP TRIGGER IF EXISTS trg_session_project_identity_snapshots_revision_delete;
-DROP TRIGGER IF EXISTS trg_sessions_create_project_identity_snapshot;
-DROP TRIGGER IF EXISTS trg_sessions_delete_project_identity_snapshot;
-DROP TRIGGER IF EXISTS trg_worktree_project_mappings_revision_insert;
-DROP TRIGGER IF EXISTS trg_worktree_project_mappings_revision_update;
-DROP TRIGGER IF EXISTS trg_worktree_project_mappings_revision_delete;
+DROP TRIGGER IF EXISTS trg_source_project_identity_observations_revision_insert;
+DROP TRIGGER IF EXISTS trg_source_project_identity_observations_revision_update;
+DROP TRIGGER IF EXISTS trg_source_project_identity_observations_revision_delete;
+DROP TRIGGER IF EXISTS trg_source_session_project_identity_snapshots_revision_insert;
+DROP TRIGGER IF EXISTS trg_source_session_project_identity_snapshots_revision_update;
+DROP TRIGGER IF EXISTS trg_source_session_project_identity_snapshots_revision_delete;
+DROP TRIGGER IF EXISTS trg_sessions_create_source_project_identity_snapshot;
+DROP TRIGGER IF EXISTS trg_sessions_delete_source_project_identity_snapshot;
+DROP TRIGGER IF EXISTS trg_source_worktree_project_mappings_revision_insert;
+DROP TRIGGER IF EXISTS trg_source_worktree_project_mappings_revision_update;
+DROP TRIGGER IF EXISTS trg_source_worktree_project_mappings_revision_delete;
 
-CREATE TRIGGER trg_project_identity_observations_revision_insert
+CREATE TRIGGER trg_source_project_identity_observations_revision_insert
 AFTER INSERT ON source_project_identity_observations BEGIN
     INSERT INTO archive_metadata (key, value)
     VALUES ('project_identity_publication_revision', '1')
@@ -321,7 +337,7 @@ AFTER INSERT ON source_project_identity_observations BEGIN
         revision = excluded.revision, deleted = 0;
 END;
 
-CREATE TRIGGER trg_project_identity_observations_revision_update
+CREATE TRIGGER trg_source_project_identity_observations_revision_update
 AFTER UPDATE ON source_project_identity_observations BEGIN
     INSERT INTO archive_metadata (key, value)
     VALUES ('project_identity_publication_revision', '1')
@@ -346,7 +362,7 @@ AFTER UPDATE ON source_project_identity_observations BEGIN
         revision = excluded.revision, deleted = 0;
 END;
 
-CREATE TRIGGER trg_project_identity_observations_revision_delete
+CREATE TRIGGER trg_source_project_identity_observations_revision_delete
 AFTER DELETE ON source_project_identity_observations BEGIN
     INSERT INTO archive_metadata (key, value)
     VALUES ('project_identity_publication_revision', '1')
@@ -363,7 +379,7 @@ AFTER DELETE ON source_project_identity_observations BEGIN
         revision = excluded.revision, deleted = 1;
 END;
 
-CREATE TRIGGER trg_session_project_identity_snapshots_revision_insert
+CREATE TRIGGER trg_source_session_project_identity_snapshots_revision_insert
 AFTER INSERT ON source_session_project_identity_snapshots BEGIN
     INSERT INTO archive_metadata (key, value)
     VALUES ('project_identity_publication_revision', '1')
@@ -380,7 +396,7 @@ AFTER INSERT ON source_session_project_identity_snapshots BEGIN
         revision = excluded.revision, deleted = 0;
 END;
 
-CREATE TRIGGER trg_session_project_identity_snapshots_revision_update
+CREATE TRIGGER trg_source_session_project_identity_snapshots_revision_update
 AFTER UPDATE ON source_session_project_identity_snapshots BEGIN
     INSERT INTO archive_metadata (key, value)
     VALUES ('project_identity_publication_revision', '1')
@@ -405,7 +421,7 @@ AFTER UPDATE ON source_session_project_identity_snapshots BEGIN
         revision = excluded.revision, deleted = 0;
 END;
 
-CREATE TRIGGER trg_session_project_identity_snapshots_revision_delete
+CREATE TRIGGER trg_source_session_project_identity_snapshots_revision_delete
 AFTER DELETE ON source_session_project_identity_snapshots BEGIN
     INSERT INTO archive_metadata (key, value)
     VALUES ('project_identity_publication_revision', '1')
@@ -422,7 +438,7 @@ AFTER DELETE ON source_session_project_identity_snapshots BEGIN
         revision = excluded.revision, deleted = 1;
 END;
 
-CREATE TRIGGER trg_sessions_create_project_identity_snapshot
+CREATE TRIGGER trg_sessions_create_source_project_identity_snapshot
 AFTER INSERT ON sessions
 WHEN NEW.source_archive_id <> '' AND NEW.source_database_generation <> '' BEGIN
     INSERT INTO source_session_project_identity_snapshots (
@@ -439,7 +455,7 @@ WHEN NEW.source_archive_id <> '' AND NEW.source_database_generation <> '' BEGIN
     ) DO NOTHING;
 END;
 
-CREATE TRIGGER trg_sessions_delete_project_identity_snapshot
+CREATE TRIGGER trg_sessions_delete_source_project_identity_snapshot
 AFTER DELETE ON sessions BEGIN
     DELETE FROM source_session_project_identity_snapshots
     WHERE source_archive_id = OLD.source_archive_id
@@ -447,7 +463,7 @@ AFTER DELETE ON sessions BEGIN
       AND source_session_id = OLD.id;
 END;
 
-CREATE TRIGGER trg_worktree_project_mappings_revision_insert
+CREATE TRIGGER trg_source_worktree_project_mappings_revision_insert
 AFTER INSERT ON source_worktree_project_mappings BEGIN
     INSERT INTO archive_metadata (key, value)
     VALUES ('worktree_mapping_publication_revision', '1')
@@ -463,7 +479,7 @@ AFTER INSERT ON source_worktree_project_mappings BEGIN
         revision = excluded.revision, deleted = 0;
 END;
 
-CREATE TRIGGER trg_worktree_project_mappings_revision_update
+CREATE TRIGGER trg_source_worktree_project_mappings_revision_update
 AFTER UPDATE ON source_worktree_project_mappings BEGIN
     INSERT INTO archive_metadata (key, value)
     VALUES ('worktree_mapping_publication_revision', '1')
@@ -486,7 +502,7 @@ AFTER UPDATE ON source_worktree_project_mappings BEGIN
         revision = excluded.revision, deleted = 0;
 END;
 
-CREATE TRIGGER trg_worktree_project_mappings_revision_delete
+CREATE TRIGGER trg_source_worktree_project_mappings_revision_delete
 AFTER DELETE ON source_worktree_project_mappings BEGIN
     INSERT INTO archive_metadata (key, value)
     VALUES ('worktree_mapping_publication_revision', '1')
@@ -502,11 +518,147 @@ AFTER DELETE ON source_worktree_project_mappings BEGIN
         revision = excluded.revision, deleted = 1;
 END;`
 
+var sqliteCanonicalIdentityTriggerNames = []string{
+	"trg_source_project_identity_observations_revision_insert",
+	"trg_source_project_identity_observations_revision_update",
+	"trg_source_project_identity_observations_revision_delete",
+	"trg_source_session_project_identity_snapshots_revision_insert",
+	"trg_source_session_project_identity_snapshots_revision_update",
+	"trg_source_session_project_identity_snapshots_revision_delete",
+	"trg_sessions_create_source_project_identity_snapshot",
+	"trg_sessions_delete_source_project_identity_snapshot",
+	"trg_source_worktree_project_mappings_revision_insert",
+	"trg_source_worktree_project_mappings_revision_update",
+	"trg_source_worktree_project_mappings_revision_delete",
+}
+
 func installSQLiteCanonicalIdentityTriggers(ctx context.Context, db bun.IDB) error {
 	if _, err := db.ExecContext(ctx, sqliteCanonicalIdentityTriggerDDL); err != nil {
 		return fmt.Errorf("installing canonical SQLite identity triggers: %w", err)
 	}
 	return nil
+}
+
+func checkSQLiteCanonicalSchemaObjects(ctx context.Context, db bun.IDB) error {
+	if err := checkSQLiteCanonicalIdentityTriggers(ctx, db); err != nil {
+		return err
+	}
+	return checkSQLiteCanonicalIndexes(ctx, db)
+}
+
+func checkSQLiteCanonicalIdentityTriggers(ctx context.Context, db bun.IDB) error {
+	for _, name := range sqliteCanonicalIdentityTriggerNames {
+		var got string
+		if err := db.NewRaw(`
+			SELECT sql FROM sqlite_schema
+			WHERE type = 'trigger' AND name = ?`, name,
+		).Scan(ctx, &got); err != nil {
+			return fmt.Errorf("checking canonical SQLite trigger %s: %w", name, err)
+		}
+		want, err := sqliteCanonicalIdentityTriggerSQL(name)
+		if err != nil {
+			return err
+		}
+		if normalizeSQLiteSchemaSQL(got) != normalizeSQLiteSchemaSQL(want) {
+			return fmt.Errorf("canonical SQLite trigger %s has drifted", name)
+		}
+	}
+	return nil
+}
+
+func sqliteCanonicalIdentityTriggerSQL(name string) (string, error) {
+	startMarker := "CREATE TRIGGER " + name
+	start := strings.Index(sqliteCanonicalIdentityTriggerDDL, startMarker)
+	if start < 0 {
+		return "", fmt.Errorf("canonical SQLite trigger %s is not defined", name)
+	}
+	rest := sqliteCanonicalIdentityTriggerDDL[start:]
+	end := strings.Index(rest, "\nEND;")
+	if end < 0 {
+		return "", fmt.Errorf("canonical SQLite trigger %s is incomplete", name)
+	}
+	return rest[:end+len("\nEND;")], nil
+}
+
+func checkSQLiteCanonicalIndexes(ctx context.Context, db bun.IDB) error {
+	for _, table := range bunmodel.CommonTables() {
+		for _, index := range table.Indexes {
+			if err := checkSQLiteCanonicalIndex(ctx, db, table, index); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func checkSQLiteCanonicalIndex(
+	ctx context.Context, db bun.IDB, table bunmodel.Table, index bunmodel.Index,
+) error {
+	var unique, partial bool
+	if err := db.NewRaw(`
+		SELECT "unique", partial FROM pragma_index_list(?) WHERE name = ?`,
+		table.Name, index.Name,
+	).Scan(ctx, &unique, &partial); err != nil {
+		return fmt.Errorf("checking canonical SQLite index %s: %w", index.Name, err)
+	}
+	if unique != index.Unique {
+		return fmt.Errorf("canonical SQLite index %s has drifted", index.Name)
+	}
+
+	var indexColumns []struct {
+		Name sql.NullString `bun:"name"`
+	}
+	if err := db.NewRaw(`
+		SELECT name FROM pragma_index_info(?) ORDER BY seqno`, index.Name,
+	).Scan(ctx, &indexColumns); err != nil {
+		return fmt.Errorf("reading canonical SQLite index %s: %w", index.Name, err)
+	}
+	columns := make([]string, len(indexColumns))
+	for i := range indexColumns {
+		columns[i] = indexColumns[i].Name.String
+	}
+
+	if len(index.Expressions) == 0 {
+		if !slices.Equal(columns, index.Columns) {
+			return fmt.Errorf("canonical SQLite index %s has drifted", index.Name)
+		}
+		return nil
+	}
+
+	logicalColumns := sqliteExpressionIndexColumns(index.Expressions)
+	if partial && slices.Equal(columns, logicalColumns) {
+		var definition string
+		if err := db.NewRaw(`
+			SELECT sql FROM sqlite_schema
+			WHERE type = 'index' AND name = ?`, index.Name,
+		).Scan(ctx, &definition); err != nil {
+			return fmt.Errorf("reading canonical SQLite index %s definition: %w", index.Name, err)
+		}
+		if strings.Contains(normalizeSQLiteSchemaSQL(definition), " where dedup_key != ''") {
+			return nil
+		}
+	}
+	return fmt.Errorf("canonical SQLite index %s has drifted", index.Name)
+}
+
+func sqliteExpressionIndexColumns(expressions []string) []string {
+	columns := make([]string, 0, len(expressions))
+	for _, expression := range expressions {
+		normalized := strings.TrimSpace(strings.Trim(expression, "()"))
+		thenAt := strings.Index(normalized, " THEN ")
+		endAt := strings.LastIndex(normalized, " END")
+		if thenAt < 0 || endAt < thenAt {
+			return nil
+		}
+		columns = append(columns, normalized[thenAt+len(" THEN "):endAt])
+	}
+	return columns
+}
+
+func normalizeSQLiteSchemaSQL(query string) string {
+	normalized := strings.ToLower(strings.Join(strings.Fields(query), " "))
+	normalized = strings.Replace(normalized, " if not exists ", " ", 1)
+	return strings.TrimSuffix(normalized, ";")
 }
 
 func sqliteCommonSchemaStamped(ctx context.Context, db bun.IDB) (bool, error) {
