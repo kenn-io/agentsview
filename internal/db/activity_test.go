@@ -113,10 +113,15 @@ func TestGetSessionActivity_MalformedTimestamps(t *testing.T) {
 
 	msgs := []Message{
 		{SessionID: sid, Ordinal: 0, Role: "user", Content: "hi", Timestamp: "2026-03-26T10:00:00Z", ContentLength: 2},
-		{SessionID: sid, Ordinal: 1, Role: "assistant", Content: "hello", Timestamp: "not-a-timestamp", ContentLength: 5},
+		{SessionID: sid, Ordinal: 1, Role: "assistant", Content: "hello", Timestamp: "2026-03-26T10:00:15Z", ContentLength: 5},
 		{SessionID: sid, Ordinal: 2, Role: "user", Content: "bye", Timestamp: "2026-03-26T10:00:30Z", ContentLength: 3},
 	}
 	require.NoError(t, d.InsertMessages(msgs))
+	_, err := d.getWriter().Exec(
+		"UPDATE messages SET timestamp = 'not-a-timestamp' WHERE session_id = ? AND ordinal = 1",
+		sid,
+	)
+	require.NoError(t, err, "seed malformed legacy timestamp")
 
 	resp, err := d.GetSessionActivity(context.Background(), sid)
 	require.NoError(t, err)

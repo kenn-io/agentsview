@@ -4,47 +4,12 @@ package db
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
 	"reflect"
-	"strings"
 	"time"
 
+	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
-
-// diffDeleteChunkSize bounds IN(...) parameter lists when clearing
-// tool rows for updated messages, mirroring the insert chunk limits.
-const diffDeleteChunkSize = 500
-
-// messageInsertArgs returns the values for insertMessageCols in
-// declaration order. insertMessagesTx and the diff UPDATE share it
-// so the persisted tuple has exactly one definition.
-func messageInsertArgs(m Message) []any {
-	return []any{
-		m.SessionID, m.Ordinal, m.Role, m.Content,
-		m.ThinkingText,
-		m.Timestamp, m.HasThinking, m.HasToolUse,
-		m.ContentLength, m.IsSystem,
-		m.Model, string(m.TokenUsage),
-		m.ContextTokens, m.OutputTokens,
-		m.HasContextTokens, m.HasOutputTokens,
-		m.ClaudeMessageID, m.ClaudeRequestID,
-		m.SourceType, m.SourceSubtype, m.PromptSource, m.SourceUUID,
-		m.SourceParentUUID, m.IsSidechain, m.IsCompactBoundary,
-	}
-}
-
-// messageUpdateSetClause is the UPDATE assignment list derived from
-// insertMessageCols, so the two can never drift apart.
-var messageUpdateSetClause = func() string {
-	cols := strings.Split(insertMessageCols, ",")
-	parts := make([]string, 0, len(cols))
-	for _, c := range cols {
-		parts = append(parts, strings.TrimSpace(c)+" = ?")
-	}
-	return strings.Join(parts, ", ")
-}()
 
 // messageRowEqual reports whether two messages have the same canonical
 // message, tool-call, and tool-result projections. Deep comparison is required
@@ -221,104 +186,23 @@ func planSessionMessageDiff(
 // triggers reindex only those rows), their tool rows are rebuilt,
 // and new ordinals are inserted through the normal insert path.
 func applySessionMessageDiffTx(
-	tx *sql.Tx, sessionID string, plan messageDiffPlan,
+	ctx context.Context, tx bun.IDB, sessionID string, plan messageDiffPlan,
 ) error {
-	if len(plan.updates) > 0 {
-		updateSQL := "UPDATE messages SET " +
-			messageUpdateSetClause + " WHERE id = ?"
-		ids := make([]int64, 0, len(plan.updates))
-		ordinals := make([]int, 0, len(plan.updates))
-		msgs := make([]Message, 0, len(plan.updates))
-		for _, u := range plan.updates {
-			args := append(messageInsertArgs(u.msg), u.id)
-			if _, err := tx.Exec(updateSQL, args...); err != nil {
-				return fmt.Errorf(
-					"updating message ord=%d: %w",
-					u.msg.Ordinal, err,
-				)
-			}
-			ids = append(ids, u.id)
-			ordinals = append(ordinals, u.msg.Ordinal)
-			msgs = append(msgs, u.msg)
-		}
-		if err := deleteToolRowsForMessagesTx(
-			tx, sessionID, ids, ordinals,
-		); err != nil {
-			return err
-		}
-		if err := insertToolCallsTx(
-			tx, resolveToolCalls(msgs, ids),
-		); err != nil {
-			return err
-		}
-		if err := insertToolResultEventsTx(
-			tx, resolveToolResultEvents(msgs),
-		); err != nil {
-			return err
-		}
+	messages := make([]Message, 0, len(plan.updates)+len(plan.inserts))
+	ordinals := make([]int, 0, cap(messages))
+	for _, update := range plan.updates {
+		messages = append(messages, update.msg)
+		ordinals = append(ordinals, update.msg.Ordinal)
 	}
-
-	if len(plan.inserts) > 0 {
-		ids, err := insertMessagesTx(tx, plan.inserts)
-		if err != nil {
-			return err
-		}
-		if err := insertToolCallsTx(
-			tx, resolveToolCalls(plan.inserts, ids),
-		); err != nil {
-			return err
-		}
-		if err := insertToolResultEventsTx(
-			tx, resolveToolResultEvents(plan.inserts),
-		); err != nil {
-			return err
-		}
+	for _, message := range plan.inserts {
+		messages = append(messages, message)
+		ordinals = append(ordinals, message.Ordinal)
 	}
-	return nil
-}
-
-// deleteToolRowsForMessagesTx clears tool_calls and
-// tool_result_events for the updated messages so their rebuilt rows
-// cannot duplicate the stale ones.
-func deleteToolRowsForMessagesTx(
-	tx *sql.Tx, sessionID string, ids []int64, ordinals []int,
-) error {
-	for start := 0; start < len(ids); start += diffDeleteChunkSize {
-		end := min(start+diffDeleteChunkSize, len(ids))
-
-		idArgs := make([]any, 0, end-start)
-		for _, id := range ids[start:end] {
-			idArgs = append(idArgs, id)
-		}
-		if _, err := tx.Exec(
-			"DELETE FROM tool_calls WHERE message_id IN ("+
-				placeholderList(len(idArgs))+")",
-			idArgs...,
-		); err != nil {
-			return fmt.Errorf("deleting stale tool_calls: %w", err)
-		}
-
-		ordArgs := make([]any, 0, 1+end-start)
-		ordArgs = append(ordArgs, sessionID)
-		for _, ord := range ordinals[start:end] {
-			ordArgs = append(ordArgs, ord)
-		}
-		if _, err := tx.Exec(
-			"DELETE FROM tool_result_events WHERE session_id = ?"+
-				" AND tool_call_message_ordinal IN ("+
-				placeholderList(len(ordArgs)-1)+")",
-			ordArgs...,
-		); err != nil {
-			return fmt.Errorf(
-				"deleting stale tool_result_events: %w", err,
-			)
-		}
+	messageRows, callRows, resultRows, err := CanonicalMessageRows(messages)
+	if err != nil {
+		return err
 	}
-	return nil
-}
-
-func placeholderList(n int) string {
-	return strings.TrimSuffix(
-		strings.Repeat("?,", n), ",",
+	return RepairMessageRows(
+		ctx, tx, sessionID, ordinals, messageRows, callRows, resultRows,
 	)
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
@@ -23,10 +24,13 @@ func seedSearchSession(t *testing.T, d *DB, id, project string, msgs [][2]string
 		s.UserMessageCount = 2
 	})
 	var out []Message
+	baseTimestamp := time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC)
 	for i, rc := range msgs {
 		out = append(out, Message{
 			SessionID: id, Ordinal: i, Role: rc[0],
-			Content: rc[1], Timestamp: "2026-05-20T12:00:0" + itoa(i) + "Z",
+			Content: rc[1],
+			Timestamp: baseTimestamp.Add(time.Duration(i) * time.Second).
+				Format(time.RFC3339),
 		})
 	}
 	require.NoError(t, d.ReplaceSessionMessages(id, out), "ReplaceSessionMessages")
