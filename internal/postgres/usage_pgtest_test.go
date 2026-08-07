@@ -243,14 +243,14 @@ func TestStoreGetDailyUsagePricesGooseRequestAsRequestScoped(t *testing.T) {
 			output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok,
 			cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('banded-model', 1000000, 0, 0, 0, 'seed');
+		) VALUES ('banded-model', 1000000, 0, 0, 0, '2026-01-01T00:00:00Z');
 		INSERT INTO model_pricing_bands (
 			model_pattern, above_input_tokens,
 			input_microdollars_per_mtok,
 			output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok,
 			cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('banded-model', 200000, 2000000, 0, 0, 0, 'seed');
+		) VALUES ('banded-model', 200000, 2000000, 0, 0, 0, '2026-01-01T00:00:00Z');
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at,
 			message_count, user_message_count

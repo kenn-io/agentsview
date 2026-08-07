@@ -271,12 +271,20 @@ func convergeSQLitePricingMetadata(ctx context.Context, db bun.IDB) error {
 		INSERT INTO pricing_metadata (key, value)
 		SELECT model_pattern, updated_at
 		FROM model_pricing
-		WHERE model_pattern LIKE '\_%' ESCAPE '\'
+		WHERE model_pattern IN (
+			'_fallback_version',
+			'_litellm_last_attempt',
+			'_pricing_storage_version'
+		)
 		ON CONFLICT(key) DO UPDATE SET
 			value = excluded.value,
 			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
 		DELETE FROM model_pricing
-		WHERE model_pattern LIKE '\_%' ESCAPE '\';
+		WHERE model_pattern IN (
+			'_fallback_version',
+			'_litellm_last_attempt',
+			'_pricing_storage_version'
+		);
 	`); err != nil {
 		return fmt.Errorf("converging SQLite pricing metadata: %w", err)
 	}
