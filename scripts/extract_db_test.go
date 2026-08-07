@@ -602,12 +602,12 @@ func TestExtractDBSupportsArchivesBeforeMappingChangeJournals(t *testing.T) {
 	defer conn.Close()
 
 	_, err = conn.Exec(`
-		DROP TRIGGER trg_worktree_project_mappings_revision_insert;
-		DROP TRIGGER trg_worktree_project_mappings_revision_update;
-		DROP TRIGGER trg_worktree_project_mappings_revision_delete;
-		DROP TRIGGER trg_source_worktree_project_mappings_revision_insert;
-		DROP TRIGGER trg_source_worktree_project_mappings_revision_update;
-		DROP TRIGGER trg_source_worktree_project_mappings_revision_delete;
+		DROP TRIGGER IF EXISTS trg_worktree_project_mappings_revision_insert;
+		DROP TRIGGER IF EXISTS trg_worktree_project_mappings_revision_update;
+		DROP TRIGGER IF EXISTS trg_worktree_project_mappings_revision_delete;
+		DROP TRIGGER IF EXISTS trg_source_worktree_project_mappings_revision_insert;
+		DROP TRIGGER IF EXISTS trg_source_worktree_project_mappings_revision_update;
+		DROP TRIGGER IF EXISTS trg_source_worktree_project_mappings_revision_delete;
 		DROP TABLE worktree_project_mapping_changes;
 		DELETE FROM archive_metadata WHERE key = ?;
 		INSERT INTO sessions
