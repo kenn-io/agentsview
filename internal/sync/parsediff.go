@@ -392,6 +392,17 @@ func sortAndLimitParseDiffFiles(
 // reliability (parseDiffSourceReliableForRaced) and skip-cache/data-version
 // freshness are unaffected.
 func parseDiffDiscoveryMtime(f parser.DiscoveredFile) (int64, bool) {
+	// Codebuff/Freebuff session mtime is a composite of the primary
+	// chat-messages.json mtime plus any companion file (run-state.json,
+	// chat-meta.json) and directory mtime. The provider's DiscoveryMTimeNS
+	// stamps only the primary file's mtime, so a companion-only change
+	// would leave the ordering value stale and could drop a recently
+	// rewritten session from a --limit sample. Fall through to
+	// discoveredFileMtime for these agents so the composite freshness
+	// is used for ordering.
+	if f.Agent == parser.AgentCodebuff || f.Agent == parser.AgentFreebuff {
+		return 0, false
+	}
 	if f.ProviderSource == nil || f.ProviderSource.DiscoveryMTimeNS == 0 {
 		return 0, false
 	}
@@ -529,7 +540,18 @@ func (e *Engine) parseDiffSourceReliableForRaced(
 	// non-virtual DB path rather than trusting a shared store's composite mtime.
 	def, ok := parser.AgentByType(agent)
 	if !ok {
-		return false
+		// Freebuff shares the Codebuff provider and on-disk layout
+		// but is not a standalone entry in the parser Registry.
+		// Map it to the Codebuff definition so the raced guard
+		// applies to Freebuff sessions: their source is the same
+		// literal chat-messages.json file, and the composite
+		// companion mtime is the same per-session race signal.
+		if agent == parser.AgentFreebuff {
+			def, ok = parser.AgentByType(parser.AgentCodebuff)
+		}
+		if !ok {
+			return false
+		}
 	}
 	return def.FileBased && e.parseDiffAgentDiscoverable(def)
 }
@@ -574,6 +596,15 @@ func parseDiffLiveMtime(
 			return 0, err
 		}
 		return copilotEffectiveMtime(path, info), nil
+	case parser.AgentCodebuff, parser.AgentFreebuff:
+		// Codebuff and Freebuff share the same on-disk layout with
+		// companion files (run-state.json, chat-meta.json) that can
+		// change independently of chat-messages.json. Use the composite
+		// companion freshness so a companion-only rewrite is detected
+		// as a race rather than reported as drift.
+		return discoveredFileMtime(parser.DiscoveredFile{
+			Path: path, Agent: agent,
+		})
 	}
 	return discoveredFileMtime(parser.DiscoveredFile{
 		Path: path, Agent: agent,

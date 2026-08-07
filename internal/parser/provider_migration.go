@@ -74,6 +74,7 @@ var providerMigrationModes = map[AgentType]ProviderMigrationMode{
 	AgentRooCode:        ProviderMigrationProviderAuthoritative,
 	AgentPoolside:       ProviderMigrationProviderAuthoritative,
 	AgentOmnigent:       ProviderMigrationProviderAuthoritative,
+	AgentCodebuff:       ProviderMigrationProviderAuthoritative,
 }
 
 // ProviderMigrationModes returns the current provider migration manifest.

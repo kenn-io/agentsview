@@ -52,6 +52,8 @@ describe("KNOWN_AGENTS", () => {
       "roocode",
       "poolside",
       "omnigent",
+      "codebuff",
+      "freebuff",
     ]);
   });
 

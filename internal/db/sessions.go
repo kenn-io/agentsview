@@ -3904,7 +3904,12 @@ func (db *DB) GetDataVersionByPath(path string) int {
 
 // ResetAllMtimes zeroes file_mtime for every session, forcing
 // the next sync to re-process all files regardless of whether
-// their size+mtime matches what was previously stored.
+// their size+mtime matches what was previously stored. It also
+// clears the provider_freshness side-table so the per-component
+// stat digest cannot defeat the forced re-sync: without this, a
+// Codebuff/Freebuff session whose mtime was zeroed would still
+// skip re-processing via the digest shortcut, preserving stale
+// parsed data indefinitely.
 func (db *DB) ResetAllMtimes() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -3913,6 +3918,14 @@ func (db *DB) ResetAllMtimes() error {
 	)
 	if err != nil {
 		return fmt.Errorf("resetting mtimes: %w", err)
+	}
+	// Clear provider_freshness so the stat-digest shortcut cannot
+	// defeat the forced re-sync. A DELETE (not a walk) is safe
+	// because the side-table is rebuilt on the next sync pass.
+	if _, err := db.getWriter().Exec(
+		"DELETE FROM provider_freshness",
+	); err != nil {
+		return fmt.Errorf("clearing provider_freshness: %w", err)
 	}
 	return nil
 }

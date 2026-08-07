@@ -1476,3 +1476,41 @@ Grok section and remove the explicit registry exception in the coverage test.
 - **Agentsview:** `internal/parser/omnigent.go` and
   `internal/parser/omnigent_provider.go`; fixtures under
   `internal/parser/testdata/omnigent/` provide observed event-shape evidence.
+  
+## Codebuff (`codebuff`)
+
+- **Format:** Per-session JSON files under
+  `<root>/<project>/chats/<timestamp>/`. Each session directory contains
+  `chat-messages.json` (JSON array of user/ai/error message objects with
+  text, tool, agent, mode-divider, plan, ask-user, and image blocks),
+  `run-state.json` (agent type, context token count, credits used, cwd,
+  and skill catalog), and optional `chat-meta.json` (message count,
+  first prompt, and messages size). Freebuff sessions share the same
+  layout and are distinguished by the `agentType` field containing
+  `"free"`.
+- **Evidence:** `source`.
+- **Upstream:** Clone `https://github.com/CodebuffAI/codebuff.git` at
+  `b285b562b9ef3a3f35272ed32718eeb74dd86283`; see
+  [chat.ts](https://github.com/CodebuffAI/codebuff/blob/b285b562b9ef3a3f35272ed32718eeb74dd86283/cli/src/types/chat.ts)
+  for the `ChatMessage` and `ContentBlock` type definitions that define
+  the on-disk format, and
+  [session-state.ts](https://github.com/CodebuffAI/codebuff/blob/b285b562b9ef3a3f35272ed32718eeb74dd86283/common/src/types/session-state.ts)
+  for the `AgentState` type that defines `contextTokenCount` and
+  `creditsUsed`. Freebuff shares the same layout and is distinguished by
+  the `agentType` field in `run-state.json`.
+- **Usage and cost:** The `contextTokenCount` field in
+  `run-state.json` provides context window token counts (updated per
+  API step). The `creditsUsed` and `directCreditsUsed` fields provide
+  session-level billing totals (1 credit = $0.01). The `agentType` field
+  records the agent template name (e.g. `base2-deepseek`,
+  `base2-free-mimo`), which encodes the model family but is not the
+  actual LLM model -- the real model is selected server-side and can
+  change mid-session; mid-session model switches are not detectable from
+  the on-disk format. Per-message token breakdown (input/output/cache)
+  is not available; only context window size and billing credits are
+  persisted. Freebuff (free tier) has no credits -- it is ad-supported
+  with daily session limits.
+- **Agentsview:** `internal/parser/codebuff.go` and
+  `internal/parser/codebuff_provider.go`; single-file provider with
+  JSON array parsing.
+

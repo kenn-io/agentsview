@@ -227,6 +227,29 @@ type StoredSourceHintScopeProvider interface {
 	StoredSourceHintScopes(ChangedPathRequest) []StoredSourceHintScope
 }
 
+// MultiFileStatHasher is an optional capability for providers whose on-disk
+// source layout spans multiple sibling files (Codebuff's
+// chat-messages.json plus run-state.json and chat-meta.json in the same
+// directory, for example). It computes a stable per-component stat digest
+// that the engine's stat-only pre-check compares against a value persisted
+// in the provider_freshness side-table so warm sync over an unchanged
+// archive can short-circuit to zero provider.Fingerprint calls while still
+// catching same-size companion rewrites, offsetting size deltas, and
+// sibling-only directory mutations.
+//
+// Implementations live on the provider implementation; the engine type-
+// asserts a constructed provider against MultiFileStatHasher and caches
+// the result. Providers that do not implement this interface take the
+// existing stat-only composite path, which is the right default for
+// single-file agents (Claude, Codex, etc.).
+type MultiFileStatHasher interface {
+	// ComputeMultiFileStatHash stats the chat path plus any companion
+	// siblings declared by the provider and returns a stable per-source
+	// digest. The hasher performs its own os.Stat so the engine does not
+	// need to supply FileInfo.
+	ComputeMultiFileStatHash(chatPath string) uint64
+}
+
 // ProviderBase is embedded by concrete providers to make optional source
 // methods callable with zero-value no-op behavior.
 type ProviderBase struct {
@@ -1129,6 +1152,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newZedProviderFactory(def)
 	case AgentRooCode:
 		return newRooCodeProviderFactory(def)
+	case AgentCodebuff:
+		return newCodebuffProviderFactory(def)
 	default:
 		panic("missing provider factory for " + string(def.Type))
 	}

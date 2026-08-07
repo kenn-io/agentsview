@@ -85,6 +85,14 @@ func TestProviderSyncSemanticsDeclarations(t *testing.T) {
 			FingerprintHashRequiredForFreshness: true,
 			UnchangedResults:                    UnchangedResultMTimeAndHash,
 		},
+		// Codebuff requires the per-component stat-hash digest (persisted in
+		// the provider_freshness side-table) before a warm pass may consider a
+		// source fresh; the side-table row is the only signal that sees
+		// companion-file rewrites, offsetting size deltas, and sibling-only
+		// directory mutations.
+		AgentCodebuff: {
+			FingerprintHashRequiredForFreshness: true,
+		},
 	}
 
 	for _, factory := range ProviderFactories() {
