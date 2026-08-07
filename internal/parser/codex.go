@@ -231,7 +231,7 @@ func (b *codexSessionBuilder) processLine(
 		if b.forkGate.suppresses(codexTypeEventMsg, payload) {
 			return false
 		}
-		b.handleEventMsg(payload)
+		b.handleEventMsg(payload, ts)
 	}
 	return false
 }
@@ -371,11 +371,15 @@ func (b *codexSessionBuilder) handleAgentMessage(
 	b.ordinal++
 }
 
-func (b *codexSessionBuilder) handleEventMsg(payload gjson.Result) {
+func (b *codexSessionBuilder) handleEventMsg(
+	payload gjson.Result, ts time.Time,
+) {
 	eventType := payload.Get("type").Str
 	switch eventType {
 	case "task_started", "task_complete", "turn_aborted":
 		b.observeTaskEvent(eventType)
+	case "agent_message":
+		b.handleCommentaryMessage(payload, ts)
 	case "token_count":
 		b.handleTokenCountEvent(payload)
 	case "collab_agent_spawn_end":
@@ -383,6 +387,29 @@ func (b *codexSessionBuilder) handleEventMsg(payload gjson.Result) {
 	case "sub_agent_activity":
 		b.handleSubagentActivity(payload)
 	}
+}
+
+func (b *codexSessionBuilder) handleCommentaryMessage(
+	payload gjson.Result, ts time.Time,
+) {
+	if payload.Get("phase").Str != "commentary" {
+		return
+	}
+	content := strings.TrimSpace(payload.Get("message").Str)
+	if content == "" {
+		return
+	}
+	b.messages = append(b.messages, ParsedMessage{
+		Ordinal:       b.ordinal,
+		Role:          RoleAssistant,
+		Content:       content,
+		Timestamp:     ts,
+		ContentLength: len(content),
+		Model:         b.model,
+		SourceType:    codexTypeEventMsg,
+		SourceSubtype: "commentary",
+	})
+	b.ordinal++
 }
 
 func (b *codexSessionBuilder) markFirstUserReplayPossible() {

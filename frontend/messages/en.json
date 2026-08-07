@@ -34,6 +34,8 @@
   "header_transcript_filter_title": "Filter block types",
   "header_transcript_filter_label": "Filter block types",
   "header_transcript_visibility": "Block Visibility",
+  "header_transcript_remediation": "Remediation Updates",
+  "header_transcript_hide_resolved_remediation": "Hide resolved remediation updates ({count})",
   "header_transcript_show_all": "Show all",
   "header_transcript_blocks_user": "User messages",
   "header_transcript_blocks_assistant": "Assistant text",

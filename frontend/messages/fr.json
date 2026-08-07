@@ -34,6 +34,8 @@
   "header_transcript_filter_title": "Filtrer les types de blocs",
   "header_transcript_filter_label": "Filtrer les types de blocs",
   "header_transcript_visibility": "Visibilité des blocs",
+  "header_transcript_remediation": "Mises à jour de correction",
+  "header_transcript_hide_resolved_remediation": "Masquer les mises à jour de correction résolues ({count})",
   "header_transcript_show_all": "Tout afficher",
   "header_transcript_blocks_user": "Messages utilisateur",
   "header_transcript_blocks_assistant": "Texte de l'assistant",

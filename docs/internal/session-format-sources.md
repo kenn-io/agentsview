@@ -195,7 +195,11 @@ Grok section and remove the explicit registry exception in the coverage test.
   trees, so this evidence does not establish IDE, desktop, or `codex exec`
   activity-hint coverage. Locally observed Codex app builds can write the same
   schema, but that is observational evidence rather than a public
-  compatibility guarantee. Agentsview derives the hint path as
+  compatibility guarantee. Reverified 2026-08-08 against local desktop
+  rollouts: `event_msg` records with `payload.type="agent_message"`,
+  `phase="commentary"`, and `message` are ordered assistant progress updates;
+  Agentsview preserves them as assistant messages with
+  `source_subtype="commentary"`. Agentsview derives the hint path as
   `<configured-sessions-root>/../history.jsonl`; a custom sessions root
   without that sibling, or `HistoryPersistence::None`, degrades to ordinary
   watcher behavior, degraded-coverage polling when applicable, and the daily

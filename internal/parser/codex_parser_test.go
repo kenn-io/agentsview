@@ -2062,6 +2062,54 @@ func codexEventMsgJSON(
 		`","payload":{"type":"` + eventType + `"}}`
 }
 
+func codexCommentaryEventMsgJSON(message, timestamp string) string {
+	return fmt.Sprintf(
+		`{"type":"event_msg","timestamp":%q,"payload":{"type":"agent_message","phase":"commentary","message":%q}}`,
+		timestamp, message,
+	)
+}
+
+func TestParseCodexSession_CommentaryEvents(t *testing.T) {
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON("commentary", "/tmp", "user", tsEarly),
+		testjsonl.CodexMsgJSON("user", "fix it", tsEarlyS1),
+		codexCommentaryEventMsgJSON(
+			"The local repair is in progress.", tsEarlyS5),
+		testjsonl.CodexMsgJSON("assistant", "Fixed.", tsLate),
+	)
+
+	_, msgs := runCodexParserTest(t, "commentary.jsonl", content, false)
+	require.Len(t, msgs, 3)
+	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	assert.Equal(t, "The local repair is in progress.", msgs[1].Content)
+	assert.Equal(t, "event_msg", msgs[1].SourceType)
+	assert.Equal(t, "commentary", msgs[1].SourceSubtype)
+}
+
+func TestParseCodexSessionFrom_CommentaryEvents(t *testing.T) {
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON("commentary-inc", "/tmp", "user", tsEarly),
+		testjsonl.CodexMsgJSON("user", "fix it", tsEarlyS1),
+	)
+	path := createTestFile(t, "commentary-incremental.jsonl", initial)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(codexCommentaryEventMsgJSON(
+		"The local repair is in progress.", tsEarlyS5))
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	msgs, _, _, err := parseCodexTestSessionFrom(t, path, info.Size(), 1, false)
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, 1, msgs[0].Ordinal)
+	assert.Equal(t, RoleAssistant, msgs[0].Role)
+	assert.Equal(t, "commentary", msgs[0].SourceSubtype)
+}
+
 // TestParseCodexSession_TerminationStatus exercises the lifecycle
 // event tracking that drives termination_status for Codex sessions.
 // Codex doesn't go through Classify() — it sets the status from the

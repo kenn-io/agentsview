@@ -34,6 +34,8 @@
   "header_transcript_filter_title": "筛选 block 类型",
   "header_transcript_filter_label": "筛选 block 类型",
   "header_transcript_visibility": "Block 可见性",
+  "header_transcript_remediation": "修复更新",
+  "header_transcript_hide_resolved_remediation": "隐藏已解决的修复更新 ({count})",
   "header_transcript_show_all": "全部显示",
   "header_transcript_blocks_user": "用户消息",
   "header_transcript_blocks_assistant": "助手文本",

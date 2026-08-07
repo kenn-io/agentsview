@@ -24,6 +24,7 @@
   } from "../../utils/content-parser.js";
   import { isSystemMessage } from "../../utils/messages.js";
   import { resolveMessageLayout } from "../../utils/message-layout.js";
+  import { shouldHideResolvedRemediation } from "../../utils/remediation-filter.js";
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
   import { sessionActivity } from "../../stores/sessionActivity.svelte.js";
   import SessionFindBar from "./SessionFindBar.svelte";
@@ -49,7 +50,14 @@
   let unreadLatestSeen = false;
 
   let baseMessages: Message[] = $derived.by(() =>
-    messages.messages.filter((m) => !isSystemMessage(m)),
+    messages.messages.filter((m) =>
+      !isSystemMessage(m) &&
+      !shouldHideResolvedRemediation(
+        m,
+        sessions.activeSession?.outcome,
+        ui.hideResolvedRemediation,
+      )
+    ),
   );
 
   let baseDisplayItemsAsc = $derived(

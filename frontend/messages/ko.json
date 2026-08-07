@@ -34,6 +34,8 @@
   "header_transcript_filter_title": "블록 유형 필터",
   "header_transcript_filter_label": "블록 유형 필터",
   "header_transcript_visibility": "블록 표시 여부",
+  "header_transcript_remediation": "수정 업데이트",
+  "header_transcript_hide_resolved_remediation": "해결된 수정 업데이트 숨기기 ({count})",
   "header_transcript_show_all": "모두 표시",
   "header_transcript_blocks_user": "사용자 메시지",
   "header_transcript_blocks_assistant": "어시스턴트 텍스트",

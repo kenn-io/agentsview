@@ -37,6 +37,7 @@
     ALL_BLOCK_TYPES,
     type BlockType,
   } from "../../stores/ui.svelte.js";
+  import { messages } from "../../stores/messages.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
   import { settings } from "../../stores/settings.svelte.js";
@@ -46,6 +47,7 @@
     getMarkdownExportUrl,
   } from "../../api/client.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
+  import { countResolvedRemediation } from "../../utils/remediation-filter.js";
   import ProjectTypeahead from "./ProjectTypeahead.svelte";
   import ImportModal from "../import/ImportModal.svelte";
 
@@ -100,6 +102,13 @@
       !settings.readOnly &&
       (sync.serverVersion !== null ||
         (settings.loaded && settings.error === null)),
+  );
+
+  const resolvedRemediationCount = $derived(
+    countResolvedRemediation(
+      messages.messages,
+      sessions.activeSession?.outcome,
+    ),
   );
 
   const tabs: TopBarTab[] = $derived([
@@ -435,6 +444,26 @@
                   </span>
                 </button>
               {/each}
+              {#if resolvedRemediationCount > 0}
+                <div class="block-filter-title remediation-filter-title">
+                  {m.header_transcript_remediation()}
+                </div>
+                <button
+                  class="block-filter-item remediation-filter-item"
+                  class:active={ui.hideResolvedRemediation}
+                  onclick={() => ui.setHideResolvedRemediation(!ui.hideResolvedRemediation)}
+                  aria-pressed={ui.hideResolvedRemediation}
+                >
+                  <span class="block-filter-label">
+                    {m.header_transcript_hide_resolved_remediation({ count: resolvedRemediationCount })}
+                  </span>
+                  <span class="block-filter-check" class:on={ui.hideResolvedRemediation}>
+                    {#if ui.hideResolvedRemediation}
+                      <CheckIcon size="10" strokeWidth="2.4" aria-hidden="true" />
+                    {/if}
+                  </span>
+                </button>
+              {/if}
               {#if ui.hasBlockFilters}
                 <button
                   class="block-filter-reset"
@@ -925,6 +954,16 @@
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
+  }
+
+  .remediation-filter-title {
+    border-top: 1px solid var(--border-muted);
+    margin-top: 4px;
+    padding-top: 8px;
+  }
+
+  .remediation-filter-item:not(.active) {
+    opacity: 1;
   }
 
   .block-filter-item {

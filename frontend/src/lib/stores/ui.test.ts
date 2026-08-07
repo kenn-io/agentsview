@@ -979,6 +979,47 @@ describe("UIStore", () => {
     });
   });
 
+  describe("hideResolvedRemediation", () => {
+    beforeEach(() => {
+      ui.setHideResolvedRemediation(false);
+    });
+
+    it("sets the resolved remediation filter explicitly", () => {
+      ui.setHideResolvedRemediation(true);
+      expect(ui.hideResolvedRemediation).toBe(true);
+    });
+
+    it("persists the resolved remediation filter", async () => {
+      const original = globalThis.localStorage;
+      const setItem = vi.fn();
+      const getItem = vi.fn(() => null);
+
+      Object.defineProperty(globalThis, "localStorage", {
+        value: { getItem, setItem },
+        writable: true,
+        configurable: true,
+      });
+
+      try {
+        // @ts-expect-error -- cache bust for fresh UIStore
+        const mod = await import("./ui.svelte.js?persistRemediationFilter");
+        setItem.mockClear();
+        mod.ui.setHideResolvedRemediation(true);
+        await Promise.resolve();
+        expect(setItem).toHaveBeenLastCalledWith(
+          "agentsview-hide-resolved-remediation",
+          "true",
+        );
+      } finally {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
+    });
+  });
+
   describe("fontScale", () => {
     beforeEach(() => {
       ui.setFontScale(100);

@@ -34,6 +34,8 @@
   "header_transcript_filter_title": "篩選 block 類型",
   "header_transcript_filter_label": "篩選 block 類型",
   "header_transcript_visibility": "Block 可見性",
+  "header_transcript_remediation": "修正更新",
+  "header_transcript_hide_resolved_remediation": "隱藏已解決的修正更新 ({count})",
   "header_transcript_show_all": "全部顯示",
   "header_transcript_blocks_user": "使用者訊息",
   "header_transcript_blocks_assistant": "助手文本",
