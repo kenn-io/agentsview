@@ -201,12 +201,6 @@ const pgSessionBaseCols = `id, project, machine, agent,
 const pgSessionCols = pgSessionBaseCols + `,
 	file_path`
 
-// paramBuilder generates numbered PostgreSQL placeholders.
-type paramBuilder struct {
-	n    int
-	args []any
-}
-
 // bunParamBuilder generates reusable Bun indexed placeholders for portable
 // question-mark binding while preserving the existing dynamic SQL assembly.
 type bunParamBuilder struct {
@@ -217,10 +211,4 @@ func (pb *bunParamBuilder) add(value any) string {
 	index := len(pb.args)
 	pb.args = append(pb.args, value)
 	return fmt.Sprintf("?%d", index)
-}
-
-func (pb *paramBuilder) add(v any) string {
-	pb.n++
-	pb.args = append(pb.args, v)
-	return fmt.Sprintf("$%d", pb.n)
 }
