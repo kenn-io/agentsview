@@ -19,8 +19,8 @@ func (s *BunStore) GetMessages(
 	if limit <= 0 || limit > MaxMessageLimit {
 		limit = DefaultMessageLimit
 	}
-	var messages []Message
-	err := s.view(ctx, func(store bun.IDB) error {
+	var pendingMessages []Message
+	err := s.consistentView(ctx, func(store bun.IDB) error {
 		query := store.NewSelect().Model((*bunmodel.Message)(nil)).
 			Where("session_id = ?", sessionID)
 		if asc {
@@ -32,13 +32,16 @@ func (s *BunStore) GetMessages(
 		if err != nil {
 			return fmt.Errorf("querying messages: %w", err)
 		}
-		messages = rows
-		return attachBunToolData(ctx, store, messages)
+		if err := attachBunToolData(ctx, store, rows); err != nil {
+			return err
+		}
+		pendingMessages = rows
+		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return messages, nil
+	return pendingMessages, nil
 }
 
 // GetMessagesWindow implements linear and around-anchor retrieval once for all
@@ -57,8 +60,8 @@ func (s *BunStore) GetMessagesWindow(
 		if window.Limit <= 0 || window.Limit > MaxMessageLimit {
 			window.Limit = DefaultMessageLimit
 		}
-		var messages []Message
-		err := s.view(ctx, func(store bun.IDB) error {
+		var pendingMessages []Message
+		err := s.consistentView(ctx, func(store bun.IDB) error {
 			query := store.NewSelect().Model((*bunmodel.Message)(nil)).
 				Where("session_id = ?", sessionID).
 				Where("role IN (?)", bun.List(window.Roles))
@@ -71,18 +74,21 @@ func (s *BunStore) GetMessagesWindow(
 			if err != nil {
 				return fmt.Errorf("querying role-filtered messages: %w", err)
 			}
-			messages = rows
-			return attachBunToolData(ctx, store, messages)
+			if err := attachBunToolData(ctx, store, rows); err != nil {
+				return err
+			}
+			pendingMessages = rows
+			return nil
 		})
 		if err != nil {
 			return nil, err
 		}
-		return messages, nil
+		return pendingMessages, nil
 	}
 
 	anchor := *window.Around
-	var messages []Message
-	err := s.view(ctx, func(store bun.IDB) error {
+	var pendingMessages []Message
+	err := s.consistentView(ctx, func(store bun.IDB) error {
 		queryPart := func(operator, order string, limit int, roles bool) ([]Message, error) {
 			if limit <= 0 {
 				return []Message{}, nil
@@ -109,36 +115,44 @@ func (s *BunStore) GetMessagesWindow(
 		if err != nil {
 			return fmt.Errorf("querying after-window messages: %w", err)
 		}
+		messages := make([]Message, 0, len(before)+len(anchorRows)+len(after))
 		messages = append(messages, before...)
 		messages = append(messages, anchorRows...)
 		messages = append(messages, after...)
-		return attachBunToolData(ctx, store, messages)
+		if err := attachBunToolData(ctx, store, messages); err != nil {
+			return err
+		}
+		pendingMessages = messages
+		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return messages, nil
+	return pendingMessages, nil
 }
 
 // GetAllMessages returns all canonical messages in ordinal order.
 func (s *BunStore) GetAllMessages(
 	ctx context.Context, sessionID string,
 ) ([]Message, error) {
-	messages := []Message{}
-	err := s.view(ctx, func(store bun.IDB) error {
+	pendingMessages := []Message{}
+	err := s.consistentView(ctx, func(store bun.IDB) error {
 		rows, err := scanBunMessages(ctx, store.NewSelect().
 			Model((*bunmodel.Message)(nil)).Where("session_id = ?", sessionID).
 			OrderExpr("ordinal ASC"))
 		if err != nil {
 			return fmt.Errorf("querying all messages: %w", err)
 		}
-		messages = rows
-		return attachBunToolData(ctx, store, messages)
+		if err := attachBunToolData(ctx, store, rows); err != nil {
+			return err
+		}
+		pendingMessages = rows
+		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return messages, nil
+	return pendingMessages, nil
 }
 
 func scanBunMessages(ctx context.Context, query *bun.SelectQuery) ([]Message, error) {
@@ -431,21 +445,25 @@ func (s *BunStore) GetSessionTiming(
 	ctx context.Context, sessionID string,
 ) (*SessionTiming, error) {
 	now := time.Now().UTC()
-	var sessionRow bunTimingSessionRow
-	var messages []bunTimingMessageRow
-	var calls []bunTimingCallRow
-	var events []bunTimingEventRow
-	subagents := make(map[string]bunTimingSessionRow)
-	err := s.view(ctx, func(store bun.IDB) error {
+	type timingRows struct {
+		sessionRow bunTimingSessionRow
+		messages   []bunTimingMessageRow
+		calls      []bunTimingCallRow
+		events     []bunTimingEventRow
+		subagents  map[string]bunTimingSessionRow
+	}
+	var pending timingRows
+	err := s.consistentView(ctx, func(store bun.IDB) error {
+		attempt := timingRows{subagents: make(map[string]bunTimingSessionRow)}
 		if err := store.NewSelect().Table("sessions").
 			Column("id", "started_at", "ended_at").Where("id = ?", sessionID).
-			Where("deleted_at IS NULL").Scan(ctx, &sessionRow); err != nil {
+			Where("deleted_at IS NULL").Scan(ctx, &attempt.sessionRow); err != nil {
 			return err
 		}
 		if err := store.NewSelect().Table("messages").
 			Column("ordinal", "timestamp", "has_tool_use").
 			Where("session_id = ?", sessionID).
-			OrderExpr("ordinal ASC").Scan(ctx, &messages); err != nil {
+			OrderExpr("ordinal ASC").Scan(ctx, &attempt.messages); err != nil {
 			return err
 		}
 		if err := store.NewSelect().Table("tool_calls").
@@ -455,11 +473,11 @@ func (s *BunStore) GetSessionTiming(
 			).
 			Where("session_id = ?", sessionID).
 			OrderExpr("message_ordinal ASC").OrderExpr("call_index ASC").
-			Scan(ctx, &calls); err != nil {
+			Scan(ctx, &attempt.calls); err != nil {
 			return err
 		}
 		subagentIDs := make([]string, 0)
-		for _, call := range calls {
+		for _, call := range attempt.calls {
 			if call.SubagentSessionID != nil && *call.SubagentSessionID != "" {
 				subagentIDs = append(subagentIDs, *call.SubagentSessionID)
 			}
@@ -472,17 +490,21 @@ func (s *BunStore) GetSessionTiming(
 				return fmt.Errorf("querying timing subagents: %w", err)
 			}
 			for _, row := range rows {
-				subagents[row.ID] = row
+				attempt.subagents[row.ID] = row
 			}
 		}
-		return store.NewSelect().Table("tool_result_events").
+		if err := store.NewSelect().Table("tool_result_events").
 			Column(
 				"tool_call_message_ordinal", "call_index", "source", "status",
 				"timestamp", "event_index",
 			).
 			Where("session_id = ?", sessionID).
 			OrderExpr("tool_call_message_ordinal ASC").OrderExpr("call_index ASC").
-			OrderExpr("event_index ASC").Scan(ctx, &events)
+			OrderExpr("event_index ASC").Scan(ctx, &attempt.events); err != nil {
+			return err
+		}
+		pending = attempt
+		return nil
 	})
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -490,6 +512,11 @@ func (s *BunStore) GetSessionTiming(
 	if err != nil {
 		return nil, fmt.Errorf("querying session timing: %w", err)
 	}
+	sessionRow := pending.sessionRow
+	messages := pending.messages
+	calls := pending.calls
+	events := pending.events
+	subagents := pending.subagents
 	session := Session{
 		ID: sessionRow.ID, StartedAt: timestampFromBunRow(sessionRow.StartedAt),
 		EndedAt: timestampFromBunRow(sessionRow.EndedAt),

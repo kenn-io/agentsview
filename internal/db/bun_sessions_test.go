@@ -20,6 +20,49 @@ type sessionContractBackend struct {
 	viewCalls int
 }
 
+type replayingReadBackend struct {
+	first, second bun.IDB
+}
+
+func (*replayingReadBackend) Name() string { return "replaying-read" }
+
+func (*replayingReadBackend) ReadOnly() bool { return true }
+
+func (*replayingReadBackend) Capabilities() BackendCapabilities {
+	return BackendCapabilities{}
+}
+
+func (*replayingReadBackend) SessionQueryDialect() QueryDialect {
+	return SQLiteBunSessionQueryDialect()
+}
+
+func (*replayingReadBackend) SessionVersion(
+	context.Context, bun.IDB, string,
+) (int, int64, error) {
+	return 0, 0, sql.ErrNoRows
+}
+
+func (b *replayingReadBackend) View(
+	_ context.Context, fn func(bun.IDB) error,
+) error {
+	return fn(b.first)
+}
+
+func (b *replayingReadBackend) ConsistentView(
+	_ context.Context, fn func(bun.IDB) error,
+) error {
+	if err := fn(b.first); err != nil {
+		return err
+	}
+	return fn(b.second)
+}
+
+func (*replayingReadBackend) Update(
+	context.Context, func(bun.IDB) error,
+) error {
+	return ErrReadOnly
+}
+
 func (*sessionContractBackend) Name() string { return "session-contract" }
 
 func (*sessionContractBackend) ReadOnly() bool { return true }
@@ -179,6 +222,56 @@ func TestBunStoreListSessionsKeepsQueriesAndResultsBounded(t *testing.T) {
 			assert.Equal(t, 2, hook.selects, "count plus bounded page query")
 		})
 	}
+}
+
+func TestBunStoreSessionCompositeReadsPublishOnlyAcceptedReplayAttempt(
+	t *testing.T,
+) {
+	first := testDB(t)
+	second := testDB(t)
+	seed := func(database *DB, rootIDs []string, childID string) {
+		t.Helper()
+		for _, id := range rootIDs {
+			require.NoError(t, database.UpsertSession(Session{
+				ID: id, Project: "replaying-reads", Machine: "host", Agent: "codex",
+				MessageCount: 1, UserMessageCount: 1,
+			}))
+		}
+		parentID := rootIDs[0]
+		require.NoError(t, database.UpsertSession(Session{
+			ID: childID, Project: "replaying-reads", Machine: "host", Agent: "codex",
+			MessageCount: 1, UserMessageCount: 1, ParentSessionID: &parentID,
+			RelationshipType: "subagent",
+		}))
+	}
+	seed(first, []string{"rejected-root-a", "rejected-root-b"}, "rejected-child")
+	seed(second, []string{"accepted-root"}, "accepted-child")
+
+	store := NewBunStore(&replayingReadBackend{
+		first: first.bunReader, second: second.bunReader,
+	})
+
+	t.Run("list sessions", func(t *testing.T) {
+		page, err := store.ListSessions(t.Context(), SessionFilter{
+			Project: "replaying-reads", Limit: 10,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 1, page.Total)
+		require.Len(t, page.Sessions, 1)
+		assert.Equal(t, "accepted-root", page.Sessions[0].ID)
+	})
+
+	t.Run("sidebar index", func(t *testing.T) {
+		index, err := store.GetSidebarSessionIndex(t.Context(), SessionFilter{
+			Project: "replaying-reads",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 1, index.Total)
+		require.Len(t, index.Sessions, 2)
+		assert.ElementsMatch(t, []string{"accepted-root", "accepted-child"}, []string{
+			index.Sessions[0].ID, index.Sessions[1].ID,
+		})
+	})
 }
 
 func TestBunStoreListSessionsUsesChronologicalSQLiteActivity(t *testing.T) {

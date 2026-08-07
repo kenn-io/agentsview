@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"strings"
@@ -13,6 +14,115 @@ import (
 	"github.com/uptrace/bun/dialect/sqlitedialect"
 	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
+
+func TestBunStoreMessageCompositeReadsPublishOnlyAcceptedReplayAttempt(
+	t *testing.T,
+) {
+	first := testDB(t)
+	second := testDB(t)
+	const sessionID = "replayed-messages"
+	seed := func(database *DB, label string) {
+		t.Helper()
+		require.NoError(t, database.UpsertSession(Session{
+			ID: sessionID, Project: "replaying-reads", Machine: "host", Agent: "codex",
+			MessageCount: 1, UserMessageCount: 1,
+		}))
+		require.NoError(t, database.InsertMessages([]Message{{
+			SessionID: sessionID, Ordinal: 5, Role: "assistant",
+			Content: label + " message", ContentLength: len(label) + len(" message"),
+			HasToolUse: true,
+			ToolCalls: []ToolCall{{
+				ToolName: label + " tool", Category: "Read", ToolUseID: label + "-call",
+				ResultEvents: []ToolResultEvent{{
+					ToolUseID: label + "-call", Source: "tool_execution",
+					Status: label + " status", Content: label + " result",
+				}},
+			}},
+		}}))
+	}
+	seed(first, "rejected")
+	seed(second, "accepted")
+
+	store := NewBunStore(&replayingReadBackend{
+		first: first.bunReader, second: second.bunReader,
+	})
+	anchor := 5
+	reads := []struct {
+		name string
+		read func(context.Context) ([]Message, error)
+	}{
+		{
+			name: "messages",
+			read: func(ctx context.Context) ([]Message, error) {
+				return store.GetMessages(ctx, sessionID, 0, 10, true)
+			},
+		},
+		{
+			name: "message window",
+			read: func(ctx context.Context) ([]Message, error) {
+				return store.GetMessagesWindow(ctx, sessionID, MessageWindow{
+					Around: &anchor,
+				})
+			},
+		},
+		{
+			name: "all messages",
+			read: func(ctx context.Context) ([]Message, error) {
+				return store.GetAllMessages(ctx, sessionID)
+			},
+		},
+	}
+	for _, test := range reads {
+		t.Run(test.name, func(t *testing.T) {
+			messages, err := test.read(t.Context())
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			assert.Equal(t, "accepted message", messages[0].Content)
+			require.Len(t, messages[0].ToolCalls, 1)
+			assert.Equal(t, "accepted tool", messages[0].ToolCalls[0].ToolName)
+			require.NotEmpty(t, messages[0].ToolCalls[0].ResultEvents)
+			for _, event := range messages[0].ToolCalls[0].ResultEvents {
+				assert.Equal(t, "accepted status", event.Status)
+			}
+		})
+	}
+}
+
+func TestBunStoreSessionTimingPublishesOnlyAcceptedReplayAttempt(t *testing.T) {
+	first := testDB(t)
+	second := testDB(t)
+	const sessionID = "replayed-timing"
+	seed := func(database *DB, label, started, ended, messageAt string) {
+		t.Helper()
+		require.NoError(t, database.UpsertSession(Session{
+			ID: sessionID, Project: "replaying-reads", Machine: "host", Agent: "codex",
+			StartedAt: &started, EndedAt: &ended, MessageCount: 1,
+		}))
+		require.NoError(t, database.InsertMessages([]Message{{
+			SessionID: sessionID, Ordinal: 0, Role: "assistant",
+			Content: label, ContentLength: len(label), Timestamp: messageAt,
+			HasToolUse: true,
+			ToolCalls: []ToolCall{{
+				ToolName: label + " tool", Category: "Read", ToolUseID: label + "-call",
+			}},
+		}}))
+	}
+	seed(first, "rejected", "2026-08-01T10:00:00Z", "2026-08-01T10:10:00Z",
+		"2026-08-01T10:01:00Z")
+	seed(second, "accepted", "2026-08-01T12:00:00Z", "2026-08-01T12:03:00Z",
+		"2026-08-01T12:01:00Z")
+
+	timing, err := NewBunStore(&replayingReadBackend{
+		first: first.bunReader, second: second.bunReader,
+	}).GetSessionTiming(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, timing)
+	require.Len(t, timing.Turns, 1)
+	require.Len(t, timing.Turns[0].Calls, 1)
+	assert.Equal(t, "accepted tool", timing.Turns[0].Calls[0].ToolName)
+	require.NotNil(t, timing.Turns[0].Calls[0].DurationMs)
+	assert.Equal(t, int64(120_000), *timing.Turns[0].Calls[0].DurationMs)
+}
 
 func TestBunStoreGetSessionTimingUsesOneGuardForSubagentHydration(t *testing.T) {
 	raw, err := sql.Open("sqlite3", ":memory:")
