@@ -1445,9 +1445,11 @@ func (db *DB) replaceArchiveSessionMessages(
 	// The new messages invalidate any findings scanned from the old content, so
 	// clear them and reset the scan state (empty version => secrets scan
 	// --backfill re-scans). ReplaceSessionContent does not call this method; it
-	// supplies fresh findings via replaceSecretFindingsTx directly.
+	// supplies fresh findings through the same canonical replacement helper.
 	if transcriptChanged {
-		if err := replaceSecretFindingsTx(tx, sessionID, nil, 0, ""); err != nil {
+		if err := replaceSessionSecretFindingsBunTx(
+			ctx, bunTx, sessionID, nil, 0, "",
+		); err != nil {
 			return err
 		}
 	}
@@ -1733,11 +1735,13 @@ func (db *DB) replaceSessionContent(
 	if err := updateSessionSignalsTx(tx, sessionID, signals); err != nil {
 		return err
 	}
-	// replaceSecretFindingsTx is the sole writer of secret_leak_count/
+	// The canonical findings helper owns secret_leak_count and
 	// secrets_rules_version (updateSessionSignalsTx leaves them untouched), so
 	// the count cannot diverge from the findings it summarizes.
-	if err := replaceSecretFindingsTx(tx, sessionID, findings,
-		signals.SecretLeakCount, signals.SecretsRulesVersion); err != nil {
+	if err := replaceSessionSecretFindingsBunTx(
+		ctx, bunTx, sessionID, findings,
+		signals.SecretLeakCount, signals.SecretsRulesVersion,
+	); err != nil {
 		return err
 	}
 	if err := enqueueArtifactExportIfGenerationUnchangedTx(

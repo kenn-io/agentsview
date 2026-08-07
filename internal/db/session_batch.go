@@ -477,7 +477,7 @@ func writeOneSessionBatchTx(
 	ctx context.Context,
 	tx *sql.Tx,
 	queries transactionQueries,
-	bunTx bun.IDB,
+	bunTx bun.Tx,
 	write SessionBatchWrite,
 	pendingRecallRevocations *recallEvidenceRevocationEvents,
 	preserveAutomation bool,
@@ -717,18 +717,9 @@ func writeOneSessionBatchTx(
 		if err := updateSessionSignalsTx(queries, write.Session.ID, write.Signals); err != nil {
 			return 0, err
 		}
-		for i := range write.Findings {
-			write.Findings[i].SessionID = write.Session.ID
-			write.Findings[i].RulesVersion = write.Signals.SecretsRulesVersion
-		}
-		if err := ReplaceSecretFindingRows(
-			ctx, bunTx, write.Session.ID, CanonicalSecretFindingRows(write.Findings),
-		); err != nil {
-			return 0, err
-		}
-		if err := updateSessionSecretSummaryTx(
-			queries, write.Session.ID, write.Signals.SecretLeakCount,
-			write.Signals.SecretsRulesVersion,
+		if err := replaceSessionSecretFindingsBunTx(
+			ctx, bunTx, write.Session.ID, write.Findings,
+			write.Signals.SecretLeakCount, write.Signals.SecretsRulesVersion,
 		); err != nil {
 			return 0, err
 		}

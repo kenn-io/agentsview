@@ -3,10 +3,8 @@ package db
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/uptrace/bun"
-	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
 
 // SecretFinding holds one redacted secret detection persisted per session.
@@ -75,6 +73,26 @@ func (db *DB) ReplaceSessionSecretFindings(
 	if db.usageOnlyStorage() {
 		if err := settleUsageOnlySignalsTx(tx.Tx, sessionID); err != nil { return err }; return tx.Commit()
 	}
+	if err := replaceSessionSecretFindingsBunTx(
+		ctx, tx, sessionID, findings, leakCount, rulesVersion,
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// replaceSessionSecretFindingsBunTx replaces the canonical finding rows and
+// updates SQLite's session summary in one transaction. Method arguments own
+// the persisted session and rules version; embedded values cannot redirect a
+// finding to another session or stamp a different scan version.
+func replaceSessionSecretFindingsBunTx(
+	ctx context.Context,
+	tx bun.Tx,
+	sessionID string,
+	findings []SecretFinding,
+	leakCount int,
+	rulesVersion string,
+) error {
 	rulesVersion = SanitizeUTF8(rulesVersion)
 	findings = append([]SecretFinding(nil), findings...)
 	for i := range findings {
@@ -86,12 +104,9 @@ func (db *DB) ReplaceSessionSecretFindings(
 	); err != nil {
 		return err
 	}
-	if err := updateSessionSecretSummaryBun(
+	return updateSessionSecretSummaryBun(
 		ctx, tx, sessionID, leakCount, rulesVersion,
-	); err != nil {
-		return err
-	}
-	return tx.Commit()
+	)
 }
 
 func updateSessionSecretSummaryBun(
@@ -101,67 +116,12 @@ func updateSessionSecretSummaryBun(
 	leakCount int,
 	rulesVersion string,
 ) error {
-	now := bunmodel.NewTimestamp(time.Now().UTC().Truncate(time.Microsecond))
 	if _, err := tx.NewUpdate().Table("sessions").
 		Set("secret_leak_count = ?", leakCount).
 		Set("secrets_rules_version = ?", rulesVersion).
-		Set("local_modified_at = ?", now).
+		Set("local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')").
 		Where("id = ?", sessionID).
 		Exec(ctx); err != nil {
-		return fmt.Errorf("updating session secret columns %s: %w", sessionID, err)
-	}
-	return nil
-}
-
-// replaceSecretFindingsTx deletes all existing findings for the session,
-// inserts the new set, and updates the sessions summary columns. Caller owns
-// the lock and transaction lifecycle.
-func replaceSecretFindingsTx(
-	tx transactionQueries,
-	sessionID string,
-	findings []SecretFinding,
-	leakCount int,
-	rulesVersion string,
-) error {
-	if _, err := tx.Exec(
-		"DELETE FROM secret_findings WHERE session_id = ?",
-		sessionID,
-	); err != nil {
-		return fmt.Errorf("deleting secret findings for %s: %w", sessionID, err)
-	}
-
-	for i := range findings {
-		f := &findings[i]
-		if _, err := tx.Exec(`
-			INSERT INTO secret_findings (
-				session_id, rule_name, confidence,
-				location_kind, message_ordinal, call_index, event_index,
-				match_start, match_end, match_index,
-				redacted_match, rules_version
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			sessionID, f.RuleName, f.Confidence,
-			f.LocationKind, f.MessageOrdinal, f.CallIndex, f.EventIndex,
-			f.MatchStart, f.MatchEnd, f.MatchIndex,
-			f.RedactedMatch, rulesVersion,
-		); err != nil {
-			return fmt.Errorf("inserting secret finding: %w", err)
-		}
-	}
-
-	return updateSessionSecretSummaryTx(tx, sessionID, leakCount, rulesVersion)
-}
-
-func updateSessionSecretSummaryTx(
-	tx transactionQueries, sessionID string, leakCount int, rulesVersion string,
-) error {
-	if _, err := tx.Exec(`
-		UPDATE sessions
-		SET secret_leak_count = ?,
-		    secrets_rules_version = ?,
-		    local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		WHERE id = ?`,
-		leakCount, rulesVersion, sessionID,
-	); err != nil {
 		return fmt.Errorf("updating session secret columns %s: %w", sessionID, err)
 	}
 	return nil
