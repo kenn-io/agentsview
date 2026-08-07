@@ -490,25 +490,26 @@
                   </code>
                   <span class="generation-state">{item.state}</span>
                 </div>
-                {#if item.state === "building"}
+                {#if item.fingerprint === status.fingerprint &&
+                item.state !== "active"}
                   <div class="generation-actions">
-                    {#if item.fingerprint === status.fingerprint}
-                      <Button
-                        size="sm"
-                        tone="info"
-                        surface="outline"
-                        label={m.recall_page_generation_activate()}
-                        onclick={() => requestGenerationAction("activate", item)}
-                      />
-                    {:else}
-                      <Button
-                        size="sm"
-                        tone="danger"
-                        surface="outline"
-                        label={m.recall_page_generation_retire()}
-                        onclick={() => requestGenerationAction("retire", item)}
-                      />
-                    {/if}
+                    <Button
+                      size="sm"
+                      tone="info"
+                      surface="outline"
+                      label={m.recall_page_generation_activate()}
+                      onclick={() => requestGenerationAction("activate", item)}
+                    />
+                  </div>
+                {:else if item.state === "building"}
+                  <div class="generation-actions">
+                    <Button
+                      size="sm"
+                      tone="danger"
+                      surface="outline"
+                      label={m.recall_page_generation_retire()}
+                      onclick={() => requestGenerationAction("retire", item)}
+                    />
                   </div>
                 {/if}
               </div>

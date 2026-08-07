@@ -474,7 +474,7 @@ describe("RecallPage", () => {
     );
   });
 
-  it("confirms safe generation activation and retirement", async () => {
+  it("activates a configured retired generation and retires an abandoned build", async () => {
     const defaultFetch = fetchMock as unknown as (
       input: RequestInfo | URL,
       init?: RequestInit,
@@ -500,7 +500,7 @@ describe("RecallPage", () => {
             updated_at: "2026-07-23T11:00:00Z",
           }, {
             fingerprint: "generation-building",
-            state: "building",
+            state: "retired",
             model: "model-b",
             segmenter: "turns-v1",
             created_at: "2026-07-24T10:00:00Z",
