@@ -20,32 +20,32 @@
   },
   "dependencies": {
     "@kenn-io/kit-ui": "git+https://github.com/kenn-io/kit-ui.git#97be355ef25a02ce96de6da4f3627ed5b922c4c3",
-    "@lucide/svelte": "1.26.0",
-    "@tanstack/virtual-core": "3.17.6",
+    "@lucide/svelte": "1.28.0",
+    "@tanstack/virtual-core": "3.17.7",
     "dompurify": "3.4.13",
     "marked": "18.0.7",
     "mermaid": "11.16.1",
-    "shiki": "4.3.1"
+    "shiki": "4.4.1"
   },
   "devDependencies": {
     "@inlang/paraglide-js": "^2.20.2",
     "@inlang/plugin-m-function-matcher": "^2.2.9",
     "@inlang/plugin-message-format": "^4.4.0",
-    "@playwright/test": "1.61.1",
+    "@playwright/test": "1.62.1",
     "@sveltejs/vite-plugin-svelte": "7.2.0",
     "@testing-library/svelte": "^5.3.1",
     "@tsconfig/svelte": "5.0.8",
     "jsdom": "29.1.1",
     "openapi-typescript-codegen": "^0.31.0",
-    "svelte": "5.56.7",
-    "svelte-check": "4.7.3",
+    "svelte": "5.56.8",
+    "svelte-check": "4.7.4",
     "typescript": "6.0.3",
-    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.6",
-    "vite-plus": "0.2.6",
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.7",
+    "vite-plus": "0.2.7",
     "vitest": "4.1.10"
   },
   "overrides": {
-    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.6"
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.7"
   },
-  "packageManager": "npm@12.0.1"
+  "packageManager": "npm@12.0.2"
 }
