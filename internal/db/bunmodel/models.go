@@ -52,6 +52,10 @@ func (t *Timestamp) Scan(src any) error {
 		t.Time = value.UTC()
 		return nil
 	case string:
+		if value == "" {
+			t.Time = time.Time{}
+			return nil
+		}
 		parsed, err := ParseTimestamp(value)
 		if err != nil {
 			return err
@@ -67,7 +71,7 @@ func (t *Timestamp) Scan(src any) error {
 
 // Value implements driver.Valuer.
 func (t Timestamp) Value() (driver.Value, error) {
-	return t.UTC(), nil
+	return t.UTC().Format(time.RFC3339Nano), nil
 }
 
 // ModelPricing is one model-pattern pricing row.

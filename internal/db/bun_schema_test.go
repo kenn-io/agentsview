@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -170,4 +171,108 @@ func TestBunSchemaSessionBatchStampsArchiveProvenance(t *testing.T) {
 	).Scan(&archiveID, &generation))
 	assert.NotEmpty(t, archiveID)
 	assert.NotEmpty(t, generation)
+}
+
+func TestBunSchemaStampedReopenRejectsTriggerDriftWithoutRepair(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	database, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(t.Context(), `
+		DROP TRIGGER IF EXISTS trg_sessions_delete_source_project_identity_snapshot;
+		CREATE TRIGGER trg_sessions_delete_source_project_identity_snapshot
+		AFTER DELETE ON sessions BEGIN
+			SELECT 'drifted trigger';
+		END;`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+
+	reopened, err := Open(path)
+	if reopened != nil {
+		require.NoError(t, reopened.Close())
+	}
+	require.Error(t, err)
+
+	raw, err = sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	var triggerSQL string
+	require.NoError(t, raw.QueryRowContext(t.Context(), `
+		SELECT sql FROM sqlite_schema
+		WHERE type = 'trigger'
+		  AND name = 'trg_sessions_delete_source_project_identity_snapshot'`,
+	).Scan(&triggerSQL))
+	assert.Contains(t, triggerSQL, "drifted trigger")
+}
+
+func TestBunSchemaStampedReopenRejectsIndexDriftWithoutRepair(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	database, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(t.Context(), `
+		DROP INDEX idx_sessions_project;
+		CREATE INDEX idx_sessions_project ON sessions(machine);`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+
+	reopened, err := Open(path)
+	if reopened != nil {
+		require.NoError(t, reopened.Close())
+	}
+	require.Error(t, err)
+
+	raw, err = sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	var indexedColumn string
+	require.NoError(t, raw.QueryRowContext(t.Context(), `
+		SELECT name FROM pragma_index_info('idx_sessions_project')
+		ORDER BY seqno LIMIT 1`,
+	).Scan(&indexedColumn))
+	assert.Equal(t, "machine", indexedColumn)
+}
+
+func TestBunSchemaStampedReopenSkipsRowInvariantScans(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	database, err := Open(path)
+	require.NoError(t, err)
+	archiveID, err := database.GetArchiveID(t.Context())
+	require.NoError(t, err)
+	databaseID, err := database.GetDatabaseID(t.Context())
+	require.NoError(t, err)
+	_, err = database.getWriter().ExecContext(t.Context(), `
+		INSERT INTO sessions (
+			id, project, machine, agent, created_at,
+			source_archive_id, source_database_generation
+		) VALUES (?, 'project', 'machine', 'agent', ?, ?, ?);
+		INSERT INTO messages (session_id, ordinal, role, content)
+		VALUES ('invalid-tool-session', 0, 'assistant', 'done');
+		INSERT INTO tool_calls (
+			message_id, session_id, message_ordinal,
+			tool_name, category, call_index
+		) SELECT id, session_id, ordinal, 'Read', 'Read', 0
+		  FROM messages WHERE session_id = 'invalid-tool-session';
+		UPDATE tool_calls SET message_ordinal = NULL
+		WHERE session_id = 'invalid-tool-session';`,
+		"invalid-tool-session", "2026-08-02T12:00:00Z", archiveID, databaseID,
+	)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	reopened, err := Open(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+
+	var invalidRows int
+	require.NoError(t, reopened.getReader().QueryRowContext(t.Context(), `
+		SELECT count(*) FROM tool_calls WHERE message_ordinal IS NULL`,
+	).Scan(&invalidRows))
+	assert.Equal(t, 1, invalidRows)
 }
