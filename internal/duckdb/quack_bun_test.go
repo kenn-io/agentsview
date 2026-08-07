@@ -65,6 +65,44 @@ func TestQuackBunResolverRejectsExec(t *testing.T) {
 	assert.ErrorIs(t, err, db.ErrReadOnly)
 }
 
+func TestQuackBunResolverQueryContextRejectsDriverArguments(t *testing.T) {
+	called := false
+	resolver := newQuackBunResolver(&recordingBunConn{}, func(
+		context.Context, string,
+	) (*sql.Rows, error) {
+		called = true
+		return nil, nil
+	})
+	conn := resolver.ResolveConn(t.Context(), nil)
+
+	_, err := conn.QueryContext(t.Context(), "SELECT ?", 7)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "driver argument")
+	assert.False(t, called)
+}
+
+func TestQuackBunResolverQueryRowContextRejectsDriverArguments(t *testing.T) {
+	raw, err := sql.Open("duckdb", "")
+	require.NoError(t, err)
+	raw.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+
+	called := false
+	resolver := newQuackBunResolver(raw, func(
+		ctx context.Context, _ string,
+	) (*sql.Rows, error) {
+		called = true
+		return raw.QueryContext(ctx, "SELECT CAST(7 AS INTEGER)")
+	})
+	conn := resolver.ResolveConn(t.Context(), nil)
+
+	var got int
+	err = conn.QueryRowContext(t.Context(), "SELECT ?", 7).Scan(&got)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "driver argument")
+	assert.False(t, called)
+}
+
 func TestQuackBunResolverRoutesQueryRowThroughRecoverableQueryPath(t *testing.T) {
 	raw, err := sql.Open("duckdb", "")
 	require.NoError(t, err)

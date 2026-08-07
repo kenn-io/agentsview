@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"fmt"
 	"strings"
 
 	"github.com/uptrace/bun"
@@ -40,8 +41,13 @@ type quackBunConn struct {
 var _ bun.IConn = (*quackBunConn)(nil)
 
 func (c *quackBunConn) QueryContext(
-	ctx context.Context, query string, _ ...any,
+	ctx context.Context, query string, args ...any,
 ) (*sql.Rows, error) {
+	if len(args) != 0 {
+		return nil, fmt.Errorf(
+			"quack Bun query does not accept driver arguments: got %d", len(args),
+		)
+	}
 	if c.query != nil {
 		return c.query(ctx, query)
 	}
@@ -57,14 +63,17 @@ func (*quackBunConn) ExecContext(
 }
 
 func (c *quackBunConn) QueryRowContext(
-	ctx context.Context, query string, _ ...any,
+	ctx context.Context, query string, args ...any,
 ) *sql.Row {
+	if len(args) != 0 {
+		return c.queryRowError(ctx, fmt.Errorf(
+			"quack Bun query does not accept driver arguments: got %d", len(args),
+		))
+	}
 	if c.query != nil {
 		values, err := c.querySingleRow(ctx, query)
 		if err != nil {
-			return c.conn.QueryRowContext(
-				ctx, "SELECT ?", quackBunRowError{err: err},
-			)
+			return c.queryRowError(ctx, err)
 		}
 		placeholders := strings.TrimSuffix(
 			strings.Repeat("?, ", len(values)), ", ",
@@ -74,6 +83,10 @@ func (c *quackBunConn) QueryRowContext(
 	return c.conn.QueryRowContext(
 		ctx, "SELECT * FROM "+quackAttachmentName+".query(?)", query,
 	)
+}
+
+func (c *quackBunConn) queryRowError(ctx context.Context, err error) *sql.Row {
+	return c.conn.QueryRowContext(ctx, "SELECT ?", quackBunRowError{err: err})
 }
 
 func (c *quackBunConn) querySingleRow(
