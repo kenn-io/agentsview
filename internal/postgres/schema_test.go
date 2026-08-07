@@ -629,7 +629,9 @@ func TestConvergePostgresStampedSchemaSkipsRowInvariantScans(t *testing.T) {
 		err:      errors.New("stamped row invariant scan must not run"),
 	}}
 
-	err := convergePostgresCommonSchema(t.Context(), pg, nil)
+	err := convergePostgresCommonSchema(
+		t.Context(), bun.NewDB(pg, pgdialect.New()), nil,
+	)
 
 	require.NoError(t, err)
 	assert.NotContains(t, strings.ToLower(state.queriedSQL()), "left join")
