@@ -29,7 +29,9 @@ func TestProviderCapabilitiesActivityHintsMatchConsumers(t *testing.T) {
 	for _, factory := range ProviderFactories() {
 		agent := factory.Definition().Type
 		got := factory.Capabilities().Source.ActivityHints
-		if agent == AgentCodex {
+		// TraeX writes the same history.jsonl at the same position relative
+		// to its sessions root, so it inherits the Codex hint reader.
+		if agent == AgentCodex || agent == AgentTraeX {
 			assert.Equal(t, CapabilitySupported, got)
 			provider := factory.NewProvider(ProviderConfig{
 				Roots: []string{t.TempDir()},

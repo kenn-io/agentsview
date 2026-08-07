@@ -6,6 +6,7 @@
     claude: "Claude Code",
     cowork: "Claude Cowork",
     codex: "Codex",
+    traex: "TraeX",
     copilot: "Copilot",
     gemini: "Gemini",
     opencode: "OpenCode",

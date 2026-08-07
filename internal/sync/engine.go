@@ -1706,7 +1706,7 @@ func dedupeDiscoveredFilesByPreference(
 }
 
 func discoveredFileKey(file parser.DiscoveredFile) string {
-	if file.Agent == parser.AgentCodex {
+	if isCodexFormatAgent(file.Agent) {
 		if id := parser.CodexSessionUUIDFromFilename(filepath.Base(file.Path)); id != "" {
 			return string(file.Agent) + "\x00" +
 				discoveredFileIDPrefix(file) + "\x00" + id
@@ -1725,7 +1725,7 @@ func discoveredFileIDPrefix(file parser.DiscoveredFile) string {
 func preferDiscoveredFile(
 	candidate, current parser.DiscoveredFile,
 ) bool {
-	if candidate.Agent == parser.AgentCodex && current.Agent == parser.AgentCodex {
+	if candidate.Agent == current.Agent && isCodexFormatAgent(candidate.Agent) {
 		candLayout := codexLayoutForPath(candidate.Path)
 		currLayout := codexLayoutForPath(current.Path)
 		if candLayout != currLayout {
@@ -1738,7 +1738,7 @@ func preferDiscoveredFile(
 func preferNewestCodexDiscoveredFile(
 	candidate, current parser.DiscoveredFile,
 ) bool {
-	if candidate.Agent == parser.AgentCodex && current.Agent == parser.AgentCodex {
+	if candidate.Agent == current.Agent && isCodexFormatAgent(candidate.Agent) {
 		candMTime, candOK := discoveredFileMTime(candidate.Path)
 		currMTime, currOK := discoveredFileMTime(current.Path)
 		if candOK && currOK && candMTime != currMTime {
@@ -4482,14 +4482,14 @@ func (e *Engine) reconciliationCandidate(
 			}
 		}
 	}
-	if agent == parser.AgentCodex && codexLayoutForPath(path) == parser.CodexLayoutDated {
+	if isCodexFormatAgent(agent) && codexLayoutForPath(path) == parser.CodexLayoutDated {
 		preference1 = 1
 	}
 	if isOpenCodeFormatAgent(agent) {
 		if statPath == path {
 			preference1 = 1
 		}
-	} else if agent != parser.AgentClaude && agent != parser.AgentCodex {
+	} else if agent != parser.AgentClaude && !isCodexFormatAgent(agent) {
 		for i, configured := range roots {
 			if samePathOrDescendant(statPath, configured) {
 				preference1 = int64(len(roots) - i)
@@ -4548,6 +4548,23 @@ func reconciliationSourceIdentity(agent parser.AgentType, source parser.SourceRe
 func isOpenCodeFormatAgent(agent parser.AgentType) bool {
 	switch agent {
 	case parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode, parser.AgentIcodemate:
+		return true
+	default:
+		return false
+	}
+}
+
+// isCodexFormatAgent reports whether an agent stores sessions in the Codex
+// rollout-JSONL layout: UUID-bearing filenames, a dated year/month/day tree
+// with an optional flat archive, and JSONL-tail incremental appends. It gates
+// the format-shaped branches (duplicate resolution, layout preference,
+// reconciliation identity, parse-diff mtime) so the Codex fork TraeX gets the
+// same handling. Branches that depend on Codex's session_index.jsonl sidecar
+// or its S3 archive layout stay keyed to parser.AgentCodex alone: TraeX writes
+// no index file and has no S3 path convention.
+func isCodexFormatAgent(agent parser.AgentType) bool {
+	switch agent {
+	case parser.AgentCodex, parser.AgentTraeX:
 		return true
 	default:
 		return false
@@ -4788,12 +4805,12 @@ func reconciliationReplacementIdentity(
 	switch agent {
 	case parser.AgentClaude:
 		return claudeSessionIDFromPath(storedPath)
-	case parser.AgentCodex:
+	case parser.AgentCodex, parser.AgentTraeX:
 		uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(storedPath))
 		if uuid == "" {
 			return ""
 		}
-		return parser.CodexSourceKey(uuid)
+		return parser.CodexSourceKey(agent, uuid)
 	default:
 		return ""
 	}
@@ -6061,26 +6078,33 @@ func (e *Engine) visualStudioCopilotCurrentPollSource(
 }
 
 // expandCodexProviderDuplicates re-adds the on-disk duplicate paths of each
-// discovered Codex source. The provider deduplicates a UUID's live and archived
-// copies to the preferred layout at discovery time; this restores the dropped
-// duplicates (scoped to the configured roots) so an mtime cutoff filter can
-// judge each copy on its own mtime, matching the legacy discover-then-filter
-// order. Non-Codex files and Codex files without a UUID-shaped name pass through
-// unchanged. Duplicates are keyed by path so nothing is added twice.
+// discovered Codex-format source. The provider deduplicates a UUID's live and
+// archived copies to the preferred layout at discovery time; this restores the
+// dropped duplicates (scoped to the configured roots) so an mtime cutoff filter
+// can judge each copy on its own mtime, matching the legacy discover-then-filter
+// order. Files of other agents, and Codex-format files without a UUID-shaped
+// name, pass through unchanged. Duplicates are keyed by path so nothing is added
+// twice. Each agent is expanded against its own roots and re-added under its own
+// identity: a fork's UUID must not be resolved through the Codex provider.
 func (e *Engine) expandCodexProviderDuplicates(
 	files []parser.DiscoveredFile, scope *rootSyncScope,
 ) []parser.DiscoveredFile {
-	pather := e.codexUUIDPathLister(scope)
-	if pather == nil {
-		return files
-	}
+	pathers := make(map[parser.AgentType]func(string) []string)
 	seen := make(map[string]struct{}, len(files))
 	for _, f := range files {
 		seen[string(f.Agent)+"\x00"+filepath.Clean(f.Path)] = struct{}{}
 	}
 	out := files
 	for _, f := range files {
-		if f.Agent != parser.AgentCodex {
+		if !isCodexFormatAgent(f.Agent) {
+			continue
+		}
+		pather, resolved := pathers[f.Agent]
+		if !resolved {
+			pather = e.codexUUIDPathLister(f.Agent, scope)
+			pathers[f.Agent] = pather
+		}
+		if pather == nil {
 			continue
 		}
 		uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(f.Path))
@@ -6088,37 +6112,38 @@ func (e *Engine) expandCodexProviderDuplicates(
 			continue
 		}
 		for _, dup := range pather(uuid) {
-			key := string(parser.AgentCodex) + "\x00" + filepath.Clean(dup)
+			key := string(f.Agent) + "\x00" + filepath.Clean(dup)
 			if _, ok := seen[key]; ok {
 				continue
 			}
 			seen[key] = struct{}{}
 			out = append(out, parser.DiscoveredFile{
 				Path:            dup,
-				Agent:           parser.AgentCodex,
-				Machine:         e.machineForPath(parser.AgentCodex, dup),
+				Agent:           f.Agent,
+				Machine:         e.machineForPath(f.Agent, dup),
 				ProviderProcess: true,
-				ProviderSource:  e.codexPinnedProviderSource(dup),
+				ProviderSource:  e.codexPinnedProviderSource(f.Agent, dup),
 			})
 		}
 	}
 	return out
 }
 
-// codexUUIDPathLister returns a function that lists every on-disk Codex
-// transcript path for a UUID under the in-scope roots, or nil when the Codex
-// provider is unavailable. It scopes a single provider to the in-scope roots so
-// the returned paths cover both the live dated and flat archived copies of a
-// duplicated UUID, including duplicates that share one root.
+// codexUUIDPathLister returns a function that lists every on-disk transcript
+// path of the given Codex-format agent for a UUID under the in-scope roots, or
+// nil when that provider is unavailable. It scopes a single provider to the
+// in-scope roots so the returned paths cover both the live dated and flat
+// archived copies of a duplicated UUID, including duplicates that share one
+// root.
 func (e *Engine) codexUUIDPathLister(
-	scope *rootSyncScope,
+	agent parser.AgentType, scope *rootSyncScope,
 ) func(string) []string {
-	factory, ok := e.providerFactories[parser.AgentCodex]
+	factory, ok := e.providerFactories[agent]
 	if !ok || factory == nil {
 		return nil
 	}
-	roots := make([]string, 0, len(e.agentDirs[parser.AgentCodex]))
-	for _, root := range e.agentDirs[parser.AgentCodex] {
+	roots := make([]string, 0, len(e.agentDirs[agent]))
+	for _, root := range e.agentDirs[agent] {
 		if root == "" || !scope.includes(root) {
 			continue
 		}
@@ -6251,7 +6276,9 @@ func (e *Engine) discoveredFileEffectiveMtime(
 	// expandCodexProviderDuplicates relies on to preserve a changed archived
 	// duplicate. Index refreshes are handled separately by the codexIndexRefresh
 	// pass in filterFilesByMtime, so codex uses its raw per-file mtime here.
-	if file.Agent == parser.AgentCodex {
+	// Codex-format forks take the same branch: their fingerprint carries no
+	// index component, so the raw mtime is the same value at lower cost.
+	if isCodexFormatAgent(file.Agent) {
 		return discoveredFileMtime(file)
 	}
 	// S3 objects are discovered through the provider facade (so they carry a
@@ -9859,14 +9886,18 @@ func (e *Engine) tryProviderIncrementalAppend(
 	if path == "" {
 		return processResult{}, false
 	}
-	if provider.Definition().Type == parser.AgentCodex &&
+	// Codex-format incremental parsing intentionally preserves head-derived
+	// metadata. A manual refresh, title change, or stale project needs the
+	// authoritative full parse, and forceReplace prevents the later DB skip
+	// gates from swallowing that refresh. Only Codex itself has a
+	// session_index.jsonl title, so that check stays keyed to it: a fork would
+	// pay a DB lookup that can never report a change.
+	providerAgent := provider.Definition().Type
+	if isCodexFormatAgent(providerAgent) &&
 		(file.ForceParse ||
-			e.codexIndexSessionNameChanged(path) ||
-			e.pathNeedsProjectReparse(path)) {
-		// Codex incremental parsing intentionally preserves head-derived
-		// metadata. A manual refresh, title change, or stale project needs the
-		// authoritative full parse, and forceReplace prevents the later DB skip
-		// gates from swallowing that refresh.
+			e.pathNeedsProjectReparse(path) ||
+			(providerAgent == parser.AgentCodex &&
+				e.codexIndexSessionNameChanged(path))) {
 		return processResult{forceReplace: true}, false
 	}
 	info, err := os.Stat(path)
@@ -10049,7 +10080,7 @@ func (e *Engine) tryIncrementalJSONL(
 	// and shouldSkipCodex's storedMtime==effectiveMtime fast path stays
 	// accurate. Plain JSONL agents (Claude/Gemini) keep the raw stat.
 	incMtime := info.ModTime().UnixNano()
-	if agent == parser.AgentCodex {
+	if isCodexFormatAgent(agent) {
 		incMtime = parser.CodexEffectiveMtime(file.Path, incMtime)
 	}
 
@@ -10101,7 +10132,7 @@ func (e *Engine) tryIncrementalJSONL(
 	// providerSingleSessionFresh can compare the stored hash against the
 	// on-disk bytes and catch a same-size, same-mtime, same-inode in-place
 	// rewrite that the size/mtime/identity skip signals cannot see.
-	if agent == parser.AgentCodex || agent == parser.AgentClaude {
+	if isCodexFormatAgent(agent) || agent == parser.AgentClaude {
 		if hash, err := ComputeFileHashPrefix(file.Path, newOffset); err == nil {
 			incHash = hash
 		}
@@ -10267,13 +10298,17 @@ func (e *Engine) tryIncrementalJSONL(
 // session_index.jsonl sidecar, so a size-and-effective-mtime match plus a
 // per-session title check preserves the legacy "skip when only the global index
 // advanced but this session's name did not" semantics. Other providers keep
-// their existing in-memory skip-cache behavior unchanged.
+// their existing in-memory skip-cache behavior unchanged. Codex-format forks
+// share the gate: with no index file their effective mtime equals the raw file
+// mtime, which reduces the decision to the size/hash/mtime comparison and never
+// reaches the index-title branch. Each agent owns its own roots, so a stored
+// row for one of its paths is always its own.
 func (e *Engine) shouldSkipProviderSourceByDB(
 	file parser.DiscoveredFile,
 	fingerprint parser.SourceFingerprint,
 	semantics parser.ProviderSyncSemantics,
 ) bool {
-	if file.Agent != parser.AgentCodex {
+	if !isCodexFormatAgent(file.Agent) {
 		return false
 	}
 	return e.shouldSkipCodexFingerprint(file.Path, fingerprint, semantics)
@@ -10436,7 +10471,9 @@ func (e *Engine) classifyCodexIndexPath(
 		// re-canonicalizing the UUID to the preferred dated layout, which would
 		// undo the DB-aware selection above.
 		chosen.ProviderProcess = true
-		chosen.ProviderSource = e.codexPinnedProviderSource(chosen.Path)
+		chosen.ProviderSource = e.codexPinnedProviderSource(
+			parser.AgentCodex, chosen.Path,
+		)
 		out = append(out, chosen)
 	}
 	return out
@@ -10468,19 +10505,22 @@ func (e *Engine) codexSourceFileForUUID(root, uuid string) string {
 	return providerDiscoveredPath(source)
 }
 
-// codexPinnedProviderSource builds a Codex provider SourceRef pinned to the
-// exact path, bypassing the provider's live-over-archived canonicalization. It
-// is used when the engine's DB-aware or mtime-aware logic has already chosen
+// codexPinnedProviderSource builds a Codex-format provider SourceRef pinned to
+// the exact path, bypassing the provider's live-over-archived canonicalization.
+// It is used when the engine's DB-aware or mtime-aware logic has already chosen
 // which on-disk copy of a duplicated UUID to parse, so processProviderFile
-// parses that copy instead of the provider's preferred dated layout. Returns
-// nil when the Codex provider or the path's source shape is unavailable.
-func (e *Engine) codexPinnedProviderSource(path string) *parser.SourceRef {
-	factory, ok := e.providerFactories[parser.AgentCodex]
+// parses that copy instead of the provider's preferred dated layout. The agent
+// selects the provider so a fork's path is pinned under the fork's own roots.
+// Returns nil when that provider or the path's source shape is unavailable.
+func (e *Engine) codexPinnedProviderSource(
+	agent parser.AgentType, path string,
+) *parser.SourceRef {
+	factory, ok := e.providerFactories[agent]
 	if !ok || factory == nil {
 		return nil
 	}
 	provider := factory.NewProvider(parser.ProviderConfig{
-		Roots:   e.agentDirs[parser.AgentCodex],
+		Roots:   e.agentDirs[agent],
 		Machine: e.machine,
 	})
 	pinner, ok := provider.(interface {

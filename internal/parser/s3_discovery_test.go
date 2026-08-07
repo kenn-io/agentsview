@@ -129,7 +129,7 @@ func TestCodexSourceSetDiscoversS3Sessions(t *testing.T) {
 		}}, nil
 	}
 
-	sources, err := newCodexSourceSet([]string{root}).Discover(context.Background())
+	sources, err := newCodexSourceSet(AgentCodex, []string{root}).Discover(context.Background())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 

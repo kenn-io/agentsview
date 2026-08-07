@@ -276,6 +276,36 @@ Grok section and remove the explicit registry exception in the coverage test.
   autonomous run whose last prompt falls outside those bounds, the rollout
   relies on those fallbacks until its next prompt.
 
+## TraeX (`traex`)
+
+- **Format:** Codex-compatible rollout JSONL under a dated `YYYY/MM/DD` tree,
+  written by TRAE CLI 2.0, plus the flat `archived_sessions/` directory that
+  `traex archive <id>` moves a rollout into. The sibling `history.jsonl`
+  carries the same `session_id`/Unix-seconds `ts`/prompt `text` records, and
+  agentsview consumes it as the same live-activity hint. No
+  `session_index.jsonl` sidecar is produced, so titles come from the rollout
+  head alone.
+- **Evidence:** `no-public-source`.
+- **Upstream:** TRAE CLI 2.0 ships only as a closed-source binary; the observed
+  builds report themselves as `traecli 0.200.x`. Trae's first-party
+  [product site](https://www.trae.ai/) and the official
+  `https://github.com/Trae-AI/Trae.git` repository were searched 2026-08-04 and
+  publish neither the producer nor a session schema. The equivalence to Codex
+  rests on locally observed rollouts whose `session_meta`, `event_msg`,
+  `response_item`, and `token_count` records are field-for-field the Codex
+  shape -- including `source.subagent.thread_spawn.parent_thread_id` and an
+  `originator` of `codex-tui` -- which identifies it as a fork of the
+  evidenced codex-rs recorder rather than an independent format. A
+  de-identified rollout is retained as a fixture.
+- **Usage and cost:** `token_count` records carry the Codex fields, so
+  normalization and catalog pricing follow the Codex entry above exactly,
+  including the same cache-write and reasoning-output omissions.
+- **Agentsview:** `internal/parser/traex.go` relabels the shared Codex parser
+  (`internal/parser/codex.go`, `internal/parser/codex_provider.go`) onto the
+  `traex:` ID namespace, and `internal/sync` gates the format-shaped branches
+  on `isCodexFormatAgent`. The `session_index.jsonl` and S3 branches stay
+  Codex-only because TraeX writes no index file and has no archive layout.
+
 ## GitHub Copilot CLI (`copilot`)
 
 - **Format:** Flat session JSONL or a session directory containing

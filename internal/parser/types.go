@@ -16,6 +16,7 @@ const (
 	AgentOpenClaude     AgentType = "openclaude"
 	AgentCowork         AgentType = "cowork"
 	AgentCodex          AgentType = "codex"
+	AgentTraeX          AgentType = "traex"
 	AgentCopilot        AgentType = "copilot"
 	AgentGemini         AgentType = "gemini"
 	AgentMiMoCode       AgentType = "mimocode"
@@ -166,6 +167,30 @@ var Registry = []AgentDef{
 		IDPrefix:              "codex:",
 		FileBased:             true,
 		ShallowWatchRootsFunc: ResolveCodexShallowWatchRoots,
+	},
+	{
+		// TRAE CLI 2.0 is a closed-source fork of codex-rs and writes
+		// byte-compatible rollout JSONL, so it reuses the Codex parser
+		// through a relabel hook. It is a distinct agent rather than a
+		// Codex source because resuming needs `traex resume` and the two
+		// tools keep separate session archives. Unlike the Trae IDE entry
+		// below, nothing here is encrypted, so remote sync is not excluded.
+		Type:        AgentTraeX,
+		DisplayName: "TraeX",
+		EnvVar:      "TRAEX_SESSIONS_DIR",
+		ConfigKey:   "traex_sessions_dirs",
+		DefaultDirs: []string{
+			".trae/cli/sessions",
+			// `traex archive <id>` moves a rollout out of the dated tree into
+			// this flat directory, exactly as `codex archive` does.
+			".trae/cli/archived_sessions",
+		},
+		IDPrefix:  "traex:",
+		FileBased: true,
+		// No ShallowWatchRootsFunc: that hook exists for Codex's sibling
+		// session_index.jsonl, which TraeX never writes. Watching
+		// ~/.trae/cli shallowly would deliver nothing but churn from the
+		// SQLite WALs TRAE CLI keeps there.
 	},
 	{
 		Type:         AgentCopilot,
