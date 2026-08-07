@@ -161,6 +161,94 @@ func TestReplaceToolRowsUpdatesLogicalConflictAndDeletesStaleRows(t *testing.T) 
 	assert.Equal(t, "updated", results[0].Status)
 }
 
+func TestCanonicalMessageRepairPreservesUntouchedGraphAndRowIDs(t *testing.T) {
+	database := testDB(t)
+	insertSession(t, database, "canonical-repair", "alpha")
+	ctx := t.Context()
+	seedTime := bunmodel.NewTimestamp(time.Date(
+		2026, 8, 7, 10, 0, 0, 123456000, time.UTC,
+	))
+	require.NoError(t, database.bunWriter.RunInTx(ctx, nil,
+		func(ctx context.Context, tx bun.Tx) error {
+			if err := ReplaceMessageRows(ctx, tx, "canonical-repair", []bunmodel.Message{
+				{SessionID: "canonical-repair", Ordinal: 0, Role: "user",
+					Content: "untouched", Timestamp: &seedTime},
+				{SessionID: "canonical-repair", Ordinal: 1, Role: "assistant",
+					Content: "stale", Timestamp: &seedTime},
+			}); err != nil {
+				return err
+			}
+			return ReplaceToolRows(ctx, tx, "canonical-repair", []bunmodel.ToolCall{
+				{SessionID: "canonical-repair", MessageOrdinal: 0,
+					CallIndex: 0, ToolName: "Keep", Category: "Read"},
+				{SessionID: "canonical-repair", MessageOrdinal: 1,
+					CallIndex: 0, ToolName: "Stale", Category: "Read"},
+			}, []bunmodel.ToolResultEvent{
+				{SessionID: "canonical-repair", ToolCallMessageOrdinal: 0,
+					CallIndex: 0, EventIndex: 0, Source: "tool",
+					Status: "kept", Content: "keep"},
+				{SessionID: "canonical-repair", ToolCallMessageOrdinal: 1,
+					CallIndex: 0, EventIndex: 0, Source: "tool",
+					Status: "stale", Content: "stale"},
+			})
+		}))
+
+	before := messageIDsByOrdinal(t, database, "canonical-repair")
+	repairMessages, repairCalls, repairResults, err := CanonicalMessageRows([]Message{
+		{SessionID: "canonical-repair", Ordinal: 1, Role: "assistant",
+			Content: "repaired", Timestamp: "2026-08-07T06:00:01.987654789-04:00",
+			ToolCalls: []ToolCall{{ToolName: "Fixed", Category: "Read",
+				ResultEvents: []ToolResultEvent{{EventIndex: 7, Source: "tool",
+					Status: "completed", Content: "fixed",
+					Timestamp: "2026-08-07T06:00:02.876543219-04:00"}}}}},
+		{SessionID: "canonical-repair", Ordinal: 2, Role: "user",
+			Content: "appended", Timestamp: "2026-08-07T10:00:03Z"},
+	})
+	require.NoError(t, err)
+	require.NoError(t, database.bunWriter.RunInTx(ctx, nil,
+		func(ctx context.Context, tx bun.Tx) error {
+			return RepairMessageRows(
+				ctx, tx, "canonical-repair", []int{1, 2},
+				repairMessages, repairCalls, repairResults,
+			)
+		}))
+
+	after := messageIDsByOrdinal(t, database, "canonical-repair")
+	assert.Equal(t, before[0], after[0])
+	assert.Equal(t, before[1], after[1])
+	require.NotZero(t, after[2])
+
+	var messages []bunmodel.Message
+	require.NoError(t, database.bunReader.NewSelect().Model(&messages).
+		Where("session_id = ?", "canonical-repair").OrderExpr("ordinal ASC").
+		Scan(ctx))
+	require.Len(t, messages, 3)
+	assert.Equal(t, "untouched", messages[0].Content)
+	assert.Equal(t, "repaired", messages[1].Content)
+	require.NotNil(t, messages[1].Timestamp)
+	assert.Equal(t, "2026-08-07T10:00:01.987654Z",
+		messages[1].Timestamp.Format(time.RFC3339Nano))
+
+	var calls []bunmodel.ToolCall
+	require.NoError(t, database.bunReader.NewSelect().Model(&calls).
+		Where("session_id = ?", "canonical-repair").
+		OrderExpr("message_ordinal ASC").Scan(ctx))
+	require.Len(t, calls, 2)
+	assert.Equal(t, "Keep", calls[0].ToolName)
+	assert.Equal(t, "Fixed", calls[1].ToolName)
+
+	var results []bunmodel.ToolResultEvent
+	require.NoError(t, database.bunReader.NewSelect().Model(&results).
+		Where("session_id = ?", "canonical-repair").
+		OrderExpr("tool_call_message_ordinal ASC").Scan(ctx))
+	require.Len(t, results, 2)
+	assert.Equal(t, "kept", results[0].Status)
+	assert.Equal(t, 7, results[1].EventIndex)
+	require.NotNil(t, results[1].Timestamp)
+	assert.Equal(t, "2026-08-07T10:00:02.876543Z",
+		results[1].Timestamp.Format(time.RFC3339Nano))
+}
+
 func TestCanonicalBunRowsPreservePortableCoordinates(t *testing.T) {
 	cost := money.Money{Microdollars: 42}
 	messages, calls, results, err := CanonicalMessageRows([]Message{{
