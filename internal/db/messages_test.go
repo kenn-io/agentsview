@@ -610,7 +610,15 @@ func TestWriteSessionBatchReplaceMessagesOnlyBumpsChangedTranscript(t *testing.T
 			}},
 		}},
 	}
-	insertMessages(t, d, original)
+	originalMessages := []Message{
+		original,
+		userMsg(sessionID, 1, "unchanged question"),
+		asstMsg(sessionID, 2, "unchanged answer"),
+	}
+	insertMessages(t, d, originalMessages...)
+	insertSession(t, d, "batch-revision-sibling", "proj")
+	insertMessages(t, d, userMsg("batch-revision-sibling", 0, "hold max id"))
+	beforeID := messageIDsByOrdinal(t, d, sessionID)[0]
 	_, err := d.getWriter().Exec(
 		`UPDATE sessions SET transcript_revision = '7' WHERE id = ?`,
 		sessionID,
@@ -623,9 +631,9 @@ func TestWriteSessionBatchReplaceMessagesOnlyBumpsChangedTranscript(t *testing.T
 			Project:      "proj",
 			Machine:      defaultMachine,
 			Agent:        defaultAgent,
-			MessageCount: 1,
+			MessageCount: 3,
 		},
-		Messages:        []Message{original},
+		Messages:        originalMessages,
 		ReplaceMessages: true,
 	}
 	_, err = d.WriteSessionBatch([]SessionBatchWrite{write})
@@ -635,6 +643,8 @@ func TestWriteSessionBatchReplaceMessagesOnlyBumpsChangedTranscript(t *testing.T
 	require.NotNil(t, unchanged)
 	require.NotNil(t, unchanged.TranscriptRevision)
 	assert.Equal(t, "7", *unchanged.TranscriptRevision)
+	assert.Equal(t, beforeID, messageIDsByOrdinal(t, d, sessionID)[0],
+		"canonical no-op must not replace the message row")
 
 	write.Messages[0].ContentLength = 999
 	write.Messages[0].ToolCalls[0].ResultContentLength = 999
@@ -646,6 +656,8 @@ func TestWriteSessionBatchReplaceMessagesOnlyBumpsChangedTranscript(t *testing.T
 	require.NotNil(t, recalculated)
 	require.NotNil(t, recalculated.TranscriptRevision)
 	assert.Equal(t, "7", *recalculated.TranscriptRevision)
+	assert.Equal(t, beforeID, messageIDsByOrdinal(t, d, sessionID)[0],
+		"derived-length normalization must not replace the message row")
 
 	write.Messages[0].ToolCalls[0].ResultContent = "changed result"
 	_, err = d.WriteSessionBatch([]SessionBatchWrite{write})
@@ -655,6 +667,8 @@ func TestWriteSessionBatchReplaceMessagesOnlyBumpsChangedTranscript(t *testing.T
 	require.NotNil(t, changed)
 	require.NotNil(t, changed.TranscriptRevision)
 	assert.Equal(t, "8", *changed.TranscriptRevision)
+	assert.Equal(t, beforeID, messageIDsByOrdinal(t, d, sessionID)[0],
+		"safe replacement must repair the message in place")
 
 	write.ReplaceMessages = false
 	_, err = d.WriteSessionBatch([]SessionBatchWrite{write})

@@ -14201,15 +14201,13 @@ func (e *Engine) writeBatchWithOutcome(
 			stale = true
 		}
 
-		// The session row must exist before messages can be inserted (FK
-		// constraint), but a source-missing row stays tombstoned until every
-		// dependent write succeeds below. For incremental updates
-		// (writeIncremental), messages are written first since the session
-		// already exists.
-		revivingSourceMissing, err :=
-			e.upsertSessionPendingContentForWrite(pw, s)
-		if err != nil {
-			if isIntentionalSessionSkip(err) {
+		replaceMessages := shouldReplaceFullParseMessages(
+			pw, forceReplace, stale, false,
+		)
+		write := e.buildSessionBatchWrite(pw, s, msgs, replaceMessages)
+		result, werr := e.db.WriteSessionAtomic(write)
+		if werr != nil {
+			if isIntentionalSessionSkip(werr) {
 				outcome.resolved[i] = true
 				if pw.sess.File.Path != "" {
 					e.cacheSkip(
@@ -14220,80 +14218,14 @@ func (e *Engine) writeBatchWithOutcome(
 				}
 				continue
 			}
-			log.Printf("upsert session %s: %v", s.ID, err)
+			log.Printf("write complete session %s: %v", s.ID, werr)
 			e.markStaleFailedMemberWrite(pw)
 			outcome.failedSessions++
 			continue
 		}
-		replaceMessages := shouldReplaceFullParseMessages(
-			pw, forceReplace, stale, revivingSourceMissing,
-		)
-
-		update, findings := computeSignalsAndSecrets(s, msgs)
-
-		var werr error
-		if replaceMessages {
-			werr = e.db.ReplaceSessionContent(s.ID, msgs, update, findings)
-		} else {
-			werr = e.writeMessages(s.ID, msgs)
-		}
-		if werr != nil {
-			log.Printf(
-				"write messages for %s: %v",
-				s.ID, werr,
-			)
-			e.markStaleFailedMemberWrite(pw)
-			outcome.failedSessions++
-			continue
-		}
-		if err := e.db.ReplaceSessionUsageEvents(
-			s.ID, e.usageEventsForWrite(s.ID, pw.usageEvents),
-		); err != nil {
-			log.Printf(
-				"write usage events for %s: %v",
-				s.ID, err,
-			)
-			e.markStaleFailedMemberWrite(pw)
-			outcome.failedSessions++
-			continue
-		}
-
-		// Advance data_version only after the message and usage writes
-		// succeeded. The pending upsert deliberately does not touch this
-		// column, and the source-missing tombstone is cleared only after this
-		// succeeds, so an old current version cannot hide a failed rewrite.
-		if err := e.db.SetSessionDataVersion(
-			s.ID, dataVersionForWrite(pw),
-		); err != nil {
-			log.Printf(
-				"set data_version for %s: %v", s.ID, err,
-			)
-			e.markStaleFailedMemberWrite(pw)
-			outcome.failedSessions++
-			continue
-		}
-
-		if !replaceMessages {
-			// Same ordering contract as recomputeSignalsFromDB: the
-			// version-advancing signals update only runs after findings
-			// persisted, so a partial failure leaves the session below
-			// the current version for the startup backfill to retry.
-			if err := e.db.ReplaceSessionSecretFindings(
-				s.ID, findings, update.SecretLeakCount,
-				update.SecretsRulesVersion); err != nil {
-				log.Printf("secrets: persist %s: %v", s.ID, err)
-			} else if err := e.db.UpdateSessionSignals(s.ID, update); err != nil {
-				log.Printf("signals: update %s: %v", s.ID, err)
-			}
-		}
-		if err := e.db.ReviveSourceMissingSession(s.ID); err != nil {
-			log.Printf("revive source-missing session %s: %v", s.ID, err)
-			outcome.failedSessions++
-			continue
-		}
-		outcome.writtenSessions++
+		outcome.writtenSessions += result.WrittenSessions
 		outcome.writtenMessages += len(msgs)
-		outcome.written[i] = true
+		outcome.written[i] = result.WrittenSessions == 1
 		outcome.resolved[i] = true
 	}
 	return outcome
@@ -15158,22 +15090,10 @@ func (e *Engine) writeBatchBulkWithOutcome(
 			pw, forceReplace, false, false,
 		)
 		tScan := time.Now()
-		update, findings := computeSignalsAndSecrets(s, msgs)
+		writes = append(writes, e.buildSessionBatchWrite(
+			pw, s, msgs, replaceMessages,
+		))
 		e.phaseStats.ScanNanos.Add(int64(time.Since(tScan)))
-		snapshotProject := pw.sess.Project
-		writes = append(writes, db.SessionBatchWrite{
-			Session:     s,
-			Messages:    msgs,
-			UsageEvents: e.usageEventsForWrite(s.ID, pw.usageEvents),
-			IdentityObservation: identityObservationOrZero(
-				e.projectIdentityObservationForWrite(pw, s),
-			),
-			IdentitySnapshotProject: &snapshotProject,
-			Signals:                 update,
-			Findings:                findings,
-			DataVersion:             dataVersionForWrite(pw),
-			ReplaceMessages:         replaceMessages,
-		})
 		pendingIndexes = append(pendingIndexes, pendingIndex)
 		pendingByID[s.ID] = pw
 		pendingIndexByID[s.ID] = pendingIndex
@@ -15232,6 +15152,29 @@ func (e *Engine) writeBatchBulkWithOutcome(
 	outcome.writtenMessages = result.WrittenMessages
 	outcome.failedSessions += result.FailedSessions
 	return outcome
+}
+
+func (e *Engine) buildSessionBatchWrite(
+	pw pendingWrite,
+	session db.Session,
+	messages []db.Message,
+	replaceMessages bool,
+) db.SessionBatchWrite {
+	signals, findings := computeSignalsAndSecrets(session, messages)
+	snapshotProject := pw.sess.Project
+	return db.SessionBatchWrite{
+		Session:     session,
+		Messages:    messages,
+		UsageEvents: e.usageEventsForWrite(session.ID, pw.usageEvents),
+		IdentityObservation: identityObservationOrZero(
+			e.projectIdentityObservationForWrite(pw, session),
+		),
+		IdentitySnapshotProject: &snapshotProject,
+		Signals:                 signals,
+		Findings:                findings,
+		DataVersion:             dataVersionForWrite(pw),
+		ReplaceMessages:         replaceMessages,
+	}
 }
 
 func identityObservationOrZero(
@@ -15389,31 +15332,6 @@ func (e *Engine) writeProjectIdentityObservationWithSnapshotProject(
 	e.projectIdentityWritten[fingerprint] = struct{}{}
 	e.projectIdentityMu.Unlock()
 	return nil
-}
-
-func (e *Engine) upsertSessionPendingContentWithProjectIdentity(
-	s db.Session,
-	snapshotProject string,
-) (bool, error) {
-	obs, ok := e.projectIdentityObservation(s)
-	if !ok {
-		return e.db.UpsertSessionPendingContent(s)
-	}
-	return e.db.UpsertSessionPendingContentWithProjectIdentity(
-		s, obs, snapshotProject,
-	)
-}
-
-func (e *Engine) upsertSessionPendingContentForWrite(
-	pw pendingWrite,
-	s db.Session,
-) (bool, error) {
-	if pw.sourceIdentityUnverified {
-		return e.db.UpsertSessionPendingContent(s)
-	}
-	return e.upsertSessionPendingContentWithProjectIdentity(
-		s, pw.sess.Project,
-	)
 }
 
 func projectIdentityObservationFingerprint(
@@ -15902,50 +15820,6 @@ func (e *Engine) writeIncremental(
 	return nil
 }
 
-// writeMessages uses an incremental append when possible.
-// Session files are append-only, so if the DB already has
-// messages for this session and the new set is larger, we
-// only insert the new messages (avoiding expensive FTS5
-// delete+reinsert of existing content).
-func (e *Engine) writeMessages(
-	sessionID string, msgs []db.Message,
-) error {
-	maxOrd := e.db.MaxOrdinal(sessionID)
-
-	// No existing messages — insert all.
-	if maxOrd < 0 {
-		if err := e.db.InsertMessages(msgs); err != nil {
-			return fmt.Errorf(
-				"insert messages for %s: %w",
-				sessionID, err,
-			)
-		}
-		return nil
-	}
-
-	// Find new messages (ordinal > maxOrd).
-	delta := 0
-	for i, m := range msgs {
-		if m.Ordinal > maxOrd {
-			delta = len(msgs) - i
-			msgs = msgs[i:]
-			break
-		}
-	}
-
-	if delta == 0 {
-		return nil
-	}
-
-	if err := e.db.InsertMessages(msgs); err != nil {
-		return fmt.Errorf(
-			"append messages for %s: %w",
-			sessionID, err,
-		)
-	}
-	return nil
-}
-
 // writeSessionFull upserts a session and does a full
 // delete+reinsert of its messages. Used by explicit
 // single-session re-syncs where existing content may have
@@ -15981,55 +15855,21 @@ func (e *Engine) writeSessionFullWithResolver(
 	if verdict != sessionWriteOK {
 		return errSessionPreserved
 	}
-	_, err = e.upsertSessionPendingContentForWrite(pw, s)
-	if err != nil {
-		if isIntentionalSessionSkip(err) {
-			if pw.sess.File.Path != "" {
-				e.cacheSkip(
-					pw.sess.File.Path,
-					pw.sess.File.Mtime,
-					pw.sess.File.Hash,
-				)
-			}
-			return err
-		}
-		log.Printf("upsert session %s: %v", s.ID, err)
-		return err
+	_, err = e.db.WriteSessionAtomic(
+		e.buildSessionBatchWrite(pw, s, msgs, true),
+	)
+	if err == nil {
+		return nil
 	}
-	update, findings := computeSignalsAndSecrets(s, msgs)
-	if err := e.db.ReplaceSessionContent(s.ID, msgs, update, findings); err != nil {
-		log.Printf(
-			"replace messages for %s: %v",
-			s.ID, err,
+	if isIntentionalSessionSkip(err) && pw.sess.File.Path != "" {
+		e.cacheSkip(
+			pw.sess.File.Path,
+			pw.sess.File.Mtime,
+			pw.sess.File.Hash,
 		)
-		return err
 	}
-	if err := e.db.ReplaceSessionUsageEvents(
-		s.ID, e.usageEventsForWrite(s.ID, pw.usageEvents),
-	); err != nil {
-		log.Printf(
-			"replace usage events for %s: %v",
-			s.ID, err,
-		)
-		return err
-	}
-
-	// See writeBatch for why data_version is bumped here
-	// rather than inside UpsertSession.
-	if err := e.db.SetSessionDataVersion(
-		s.ID, dataVersionForWrite(pw),
-	); err != nil {
-		log.Printf(
-			"set data_version for %s: %v", s.ID, err,
-		)
-		return err
-	}
-	if err := e.db.ReviveSourceMissingSession(s.ID); err != nil {
-		log.Printf("revive source-missing session %s: %v", s.ID, err)
-		return err
-	}
-
-	return nil
+	log.Printf("write complete session %s: %v", s.ID, err)
+	return err
 }
 
 // shouldPreserveRooCodeArchive reports whether a zero-message RooCode
@@ -17541,9 +17381,8 @@ func (e *Engine) processAndWriteSessionFile(
 			forceReplace: res.forceReplace,
 		}
 		// The session upsert commits parser-derived parent provenance before
-		// the later content, usage, and completion stages. Queue the attempted
-		// session itself first so a failure after that upsert still re-resolves
-		// its incoming spawn edges in the deferred repair pass.
+		// hierarchy repair runs. Queue the attempted session itself so its
+		// incoming spawn edges are re-resolved after any successful write.
 		if err := e.db.QueueSubagentParentRepairs(
 			[]string{resultIDs[i]},
 		); err != nil {
@@ -17555,11 +17394,6 @@ func (e *Engine) processAndWriteSessionFile(
 		repairQueued = true
 		writeErr := e.writeSessionFull(write)
 		memberPolicySkipped := sourceCompletionSkipped[resultIDs[i]]
-		// Full-write stages commit independently. Message content (and a new
-		// spawn edge) can persist even when a later usage, data-version, or
-		// sibling write fails, so discover and queue children after every
-		// attempt rather than waiting for the entire result set to finish.
-		queueErr := queueWrittenChildren([]string{resultIDs[i]})
 		if writeErr == nil {
 			resolved++
 			writtenIDs = append(writtenIDs, resultIDs[i])
@@ -17570,24 +17404,22 @@ func (e *Engine) processAndWriteSessionFile(
 			!isIntentionalSessionSkip(writeErr) &&
 			!memberPolicySkipped &&
 			!errors.Is(writeErr, errSessionPreserved) {
-			// Mirror the batch write paths: a partial write (session
-			// row updated, messages or usage not) must demote the
-			// stored data version, or the next container parse would
-			// compare the member as unchanged and never repair it.
+			// Mirror the batch write paths: demote the stored data version so
+			// the next container parse retries the failed member.
 			e.markStaleFailedMemberWrite(write)
-			if queueErr != nil {
-				writeErr = errors.Join(writeErr, queueErr)
-			}
 			markSourceIncomplete()
 			return false, sessionsChanged, fmt.Errorf("write session %s: %w",
 				pr.Session.ID, writeErr)
 		}
-		if queueErr != nil {
-			markSourceIncomplete()
-			return false, sessionsChanged, queueErr
-		}
 		if !memberPolicySkipped && errors.Is(writeErr, errSessionPreserved) {
 			preserved = true
+		}
+		if writeErr != nil {
+			continue
+		}
+		if err := queueWrittenChildren([]string{resultIDs[i]}); err != nil {
+			markSourceIncomplete()
+			return false, err
 		}
 	}
 	// A source-level digest is valid only when every active result and its
