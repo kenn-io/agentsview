@@ -96,7 +96,7 @@ func TestReplaceSessionSecretFindingsCanonicalizesMethodOwnedRows(t *testing.T) 
 			RedactedMatch: "tok\x00en",
 		}},
 		7,
-		"rules-v2",
+		"rules\x00-v2\x1b",
 	))
 
 	got, err := d.SessionSecretFindings(t.Context(), "canonical-findings")

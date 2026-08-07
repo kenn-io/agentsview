@@ -73,6 +73,7 @@ func (db *DB) ReplaceSessionSecretFindings(
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	rulesVersion = SanitizeUTF8(rulesVersion)
 	findings = append([]SecretFinding(nil), findings...)
 	for i := range findings {
 		findings[i].SessionID = sessionID
