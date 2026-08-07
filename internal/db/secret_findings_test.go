@@ -72,6 +72,63 @@ func TestReplaceSessionSecretFindings(t *testing.T) {
 	require.Len(t, got, 1, "replace not idempotent")
 }
 
+func TestReplaceSessionSecretFindingsCanonicalizesMethodOwnedRows(t *testing.T) {
+	d := testDB(t)
+	seedArtifactOrigin(t, d)
+	insertSession(t, d, "canonical-findings", "proj")
+	const oldTimestamp = "2020-01-01T00:00:00.000Z"
+	_, err := d.getWriter().Exec(`
+		UPDATE sessions
+		SET created_at = ?, local_modified_at = ?
+		WHERE id = ?`, oldTimestamp, oldTimestamp, "canonical-findings")
+	require.NoError(t, err)
+	clearArtifactExportQueue(t, d)
+
+	zero := 0
+	require.NoError(t, d.ReplaceSessionSecretFindings(
+		"canonical-findings",
+		[]SecretFinding{{
+			SessionID: "wrong-session", RulesVersion: "wrong-rules",
+			RuleName: "api\x00-key", Confidence: "definite\x1b",
+			LocationKind: "tool_result\x7f", MessageOrdinal: 3,
+			CallIndex: &zero, EventIndex: &zero,
+			MatchStart: 4, MatchEnd: 12, MatchIndex: 1,
+			RedactedMatch: "tok\x00en",
+		}},
+		7,
+		"rules-v2",
+	))
+
+	got, err := d.SessionSecretFindings(t.Context(), "canonical-findings")
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "canonical-findings", got[0].SessionID)
+	assert.Equal(t, "rules-v2", got[0].RulesVersion)
+	assert.Equal(t, "api-key", got[0].RuleName)
+	assert.Equal(t, "definite", got[0].Confidence)
+	assert.Equal(t, "tool_result", got[0].LocationKind)
+	assert.Equal(t, "token", got[0].RedactedMatch)
+	require.NotNil(t, got[0].CallIndex)
+	assert.Zero(t, *got[0].CallIndex)
+	require.NotNil(t, got[0].EventIndex)
+	assert.Zero(t, *got[0].EventIndex)
+
+	var leakCount int
+	var rulesVersion, localModifiedAt, syncMarker string
+	require.NoError(t, d.getReader().QueryRow(`
+		SELECT secret_leak_count, secrets_rules_version,
+		       local_modified_at, sync_marker
+		FROM sessions WHERE id = ?`, "canonical-findings").Scan(
+		&leakCount, &rulesVersion, &localModifiedAt, &syncMarker,
+	))
+	assert.Equal(t, 7, leakCount)
+	assert.Equal(t, "rules-v2", rulesVersion)
+	assert.Greater(t, localModifiedAt, oldTimestamp)
+	assert.Greater(t, syncMarker, oldTimestamp)
+	assert.Empty(t, artifactExportQueueIDs(t, d),
+		"secret scan bookkeeping must not enqueue an artifact export")
+}
+
 // TestReplaceSessionMessagesResetsSecretState verifies that replacing a
 // session's messages clears stale secret findings and resets the scan-state
 // columns. A session re-imported with different content (the importer calls
