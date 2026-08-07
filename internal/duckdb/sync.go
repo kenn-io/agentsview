@@ -203,14 +203,7 @@ func (s *Sync) ensureArchiveID(ctx context.Context) error {
 	}
 	s.databaseGeneration = databaseGeneration
 	if err := upsertSourceArchiveScope(
-		func(query string, args ...any) error {
-			_, execErr := s.duck.ExecContext(ctx, query, args...)
-			return execErr
-		},
-		func(query string, args ...any) *sql.Row {
-			return s.duck.QueryRowContext(ctx, query, args...)
-		},
-		s.archiveID, s.archiveSalt,
+		ctx, s.bun, s.archiveID, s.archiveSalt,
 	); err != nil {
 		return err
 	}
@@ -575,7 +568,7 @@ func (s *Sync) deleteOutOfScopeMirrorSessions(
 	if len(resident) == 0 {
 		return nil
 	}
-	if err := s.withDuckTx(ctx, "delete out-of-scope sessions", func(tx *sql.Tx) error {
+	if err := s.withDuckTx(ctx, "delete out-of-scope sessions", func(tx bun.Tx) error {
 		for _, sess := range outOfScope {
 			if !resident[sess.ID] {
 				continue
@@ -647,7 +640,7 @@ func (s *Sync) readMirrorFingerprintBatch(
 		placeholders[i] = "?"
 		args[i] = id
 	}
-	rows, err := s.duck.QueryContext(ctx,
+	rows, err := s.bun.QueryContext(ctx,
 		`SELECT id, agentsview_push_fingerprint FROM sessions WHERE id IN (`+
 			strings.Join(placeholders, ",")+`)`, args...,
 	)
@@ -702,7 +695,7 @@ func (s *Sync) readMirrorResidentBatch(
 		placeholders[i] = "?"
 		args = append(args, id)
 	}
-	rows, err := s.duck.QueryContext(ctx,
+	rows, err := s.bun.QueryContext(ctx,
 		`SELECT id FROM sessions WHERE id IN (`+
 			strings.Join(placeholders, ",")+`)`, args...,
 	)
@@ -760,9 +753,9 @@ func (s *Sync) checkpointAfterMutatingPush(ctx context.Context) error {
 }
 
 func (s *Sync) withDuckTx(
-	ctx context.Context, label string, fn func(*sql.Tx) error,
+	ctx context.Context, label string, fn func(bun.Tx) error,
 ) error {
-	tx, err := s.duck.BeginTx(ctx, nil)
+	tx, err := s.bun.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin duckdb tx for %s: %w", label, err)
 	}

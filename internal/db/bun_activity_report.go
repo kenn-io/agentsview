@@ -11,6 +11,93 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 )
 
+// GetSessionUsageRows loads the priced usage stream used by subagent rollups.
+// Filtering, ordering, deduplication, and pricing all execute inside one
+// guarded view so every adapter exposes the same allocation input.
+func (s *BunStore) GetSessionUsageRows(
+	ctx context.Context, ids []string,
+) ([]activity.UsageRow, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var result []activity.UsageRow
+	err := s.consistentView(ctx, func(store bun.IDB) error {
+		pricing, err := s.loadPricingMapFrom(ctx, store)
+		if err != nil {
+			return fmt.Errorf("loading session usage pricing: %w", err)
+		}
+		projections, err := s.loadBunUsageProjections(
+			ctx, store, UsageFilter{}, false, ids,
+		)
+		if err != nil {
+			return err
+		}
+		sessionOrder := make(map[string]int, len(ids))
+		for index, id := range ids {
+			sessionOrder[id] = index
+		}
+		candidates := make([]activityReportUsageCandidate, 0, len(projections))
+		for _, projection := range projections {
+			row := usageProjectionToDailyRow(projection)
+			parsed, parseErr := parseTimestamp(row.ts)
+			ordinal := int64(-1)
+			if row.messageOrdinal.Valid {
+				ordinal = row.messageOrdinal.Int64
+			}
+			candidates = append(candidates, activityReportUsageCandidate{
+				scan: row, ts: parsed, validTS: parseErr == nil, ordinal: ordinal,
+				row: activity.UsageRow{
+					SessionID: row.sessionID, Model: row.model, Timestamp: row.ts,
+					Project: row.project, Machine: row.machine, MessageOrdinal: ordinal,
+					UsageSource: row.usageSource, Agent: row.agent,
+					ClaudeMessageID: row.claudeMessageID,
+					ClaudeRequestID: row.claudeRequestID, SourceUUID: row.sourceUUID,
+					UsageDedupKey: row.usageDedupKey,
+				},
+			})
+		}
+		sort.SliceStable(candidates, func(i, j int) bool {
+			a, b := candidates[i], candidates[j]
+			if a.validTS && b.validTS && !a.ts.Equal(b.ts) {
+				return a.ts.Before(b.ts)
+			}
+			if a.validTS != b.validTS {
+				return a.validTS
+			}
+			if a.row.Timestamp != b.row.Timestamp {
+				return a.row.Timestamp < b.row.Timestamp
+			}
+			if sessionOrder[a.row.SessionID] != sessionOrder[b.row.SessionID] {
+				return sessionOrder[a.row.SessionID] < sessionOrder[b.row.SessionID]
+			}
+			if a.ordinal != b.ordinal {
+				return a.ordinal < b.ordinal
+			}
+			return compareDailyUsageSemantic(a.scan, b.scan) < 0
+		})
+		seen := make(map[usageDedupToken]struct{})
+		survivors := candidates[:0]
+		for _, candidate := range candidates {
+			row := candidate.scan
+			if key, ok := usageDedupTokenForRow(
+				row.usageSource, row.agent, row.claudeMessageID,
+				row.claudeRequestID, row.sourceUUID, row.usageDedupKey,
+			); ok {
+				if _, duplicate := seen[key]; duplicate {
+					continue
+				}
+				seen[key] = struct{}{}
+			}
+			survivors = append(survivors, candidate)
+		}
+		result, err = materializeActivityReportUsageRows(
+			survivors, nil, export.NewPricingResolver(pricing),
+		)
+		return err
+	})
+	return result, err
+}
+
 func (s *BunStore) GetActivityReport(
 	ctx context.Context, f AnalyticsFilter, q activity.Query,
 ) (activity.Report, error) {

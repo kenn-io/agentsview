@@ -145,10 +145,7 @@ func (s *BunStore) ListTrashedSessions(ctx context.Context) ([]Session, error) {
 		query := store.NewSelect().Model(&rows).
 			Where("deleted_at IS NOT NULL").
 			Where("deletion_cause IS NULL")
-		orderExpr := "deleted_at"
-		if timestampOrder := s.backend.SessionQueryDialect().timestampOrderExpr; timestampOrder != nil {
-			orderExpr = timestampOrder("deleted_at")
-		}
+		orderExpr := s.backend.TimestampOrderExpr("deleted_at")
 		if err := query.OrderExpr(orderExpr + " DESC").
 			OrderExpr("id ASC").Limit(500).Scan(ctx); err != nil {
 			return fmt.Errorf("listing trashed sessions: %w", err)

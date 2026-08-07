@@ -523,14 +523,14 @@ func TestCopyOrphanedDataSanitizesCopiedContent(t *testing.T) {
 		eventLengthExcess   = 5
 		emptyResultLength   = 7
 	)
-	_, err := srcDB.getWriter().ExecContext(ctx,
+	_, err := srcDB.rawWriter().ExecContext(ctx,
 		`UPDATE messages
 		 SET content = ?, content_length = ?
 		 WHERE id = ?`,
 		messageContent, len(messageContent)+messageLengthExcess, messageID,
 	)
 	require.NoError(t, err, "plant poisoned message")
-	_, err = srcDB.getWriter().ExecContext(ctx,
+	_, err = srcDB.rawWriter().ExecContext(ctx,
 		`INSERT INTO tool_calls (
 			message_id, session_id, tool_name, category,
 			tool_use_id, input_json, result_content_length,
@@ -540,7 +540,7 @@ func TestCopyOrphanedDataSanitizesCopiedContent(t *testing.T) {
 		toolInput, len(toolResult)+toolLengthExcess, toolResult, 0,
 	)
 	require.NoError(t, err, "plant poisoned tool call")
-	_, err = srcDB.getWriter().ExecContext(ctx,
+	_, err = srcDB.rawWriter().ExecContext(ctx,
 		`INSERT INTO tool_calls (
 			message_id, session_id, tool_name, category,
 			tool_use_id, input_json, call_index
@@ -549,7 +549,7 @@ func TestCopyOrphanedDataSanitizesCopiedContent(t *testing.T) {
 		emptyToolInput, 1,
 	)
 	require.NoError(t, err, "plant empty-sanitized tool input")
-	_, err = srcDB.getWriter().ExecContext(ctx,
+	_, err = srcDB.rawWriter().ExecContext(ctx,
 		`INSERT INTO tool_calls (
 			message_id, session_id, tool_name, category,
 			tool_use_id, result_content_length, result_content,
@@ -559,7 +559,7 @@ func TestCopyOrphanedDataSanitizesCopiedContent(t *testing.T) {
 		emptyResultLength, emptyToolResult, 2,
 	)
 	require.NoError(t, err, "plant empty-sanitized tool result")
-	_, err = srcDB.getWriter().ExecContext(ctx,
+	_, err = srcDB.rawWriter().ExecContext(ctx,
 		`INSERT INTO tool_result_events (
 			session_id, tool_call_message_ordinal, call_index,
 			tool_use_id, source, status, content, content_length,
@@ -572,7 +572,7 @@ func TestCopyOrphanedDataSanitizesCopiedContent(t *testing.T) {
 	// Dirty content only exists in archives written before
 	// sanitizedSourceDataVersion; sources at or above it skip the
 	// sanitize pass entirely.
-	_, err = srcDB.getWriter().ExecContext(ctx, fmt.Sprintf(
+	_, err = srcDB.rawWriter().ExecContext(ctx, fmt.Sprintf(
 		"PRAGMA user_version = %d", sanitizedSourceDataVersion-1,
 	))
 	require.NoError(t, err, "downgrade source data version")
@@ -717,7 +717,7 @@ func TestCopySkipsSanitizeForSanitizedSource(t *testing.T) {
 				srcDB := testDBAtPath(t, srcPath, "src")
 				insertSession(t, srcDB, "sess", "proj")
 				insertMessages(t, srcDB, userMsg("sess", 0, "clean"))
-				_, err := srcDB.getWriter().ExecContext(ctx,
+				_, err := srcDB.rawWriter().ExecContext(ctx,
 					`UPDATE messages SET content = ? WHERE session_id = ?`,
 					rawContent, "sess",
 				)
@@ -726,7 +726,7 @@ func TestCopySkipsSanitizeForSanitizedSource(t *testing.T) {
 				require.NoError(t, srcDB.getWriter().QueryRowContext(ctx,
 					`SELECT id FROM messages WHERE session_id = ?`, "sess",
 				).Scan(&messageID), "read message id")
-				_, err = srcDB.getWriter().ExecContext(ctx,
+				_, err = srcDB.rawWriter().ExecContext(ctx,
 					`INSERT INTO tool_calls (
 						message_id, session_id, tool_name, category,
 						tool_use_id, input_json, result_content_length,
@@ -736,7 +736,7 @@ func TestCopySkipsSanitizeForSanitizedSource(t *testing.T) {
 					rawToolInput, len(rawToolResult), rawToolResult, 0,
 				)
 				require.NoError(t, err, "plant raw tool call")
-				_, err = srcDB.getWriter().ExecContext(ctx, fmt.Sprintf(
+				_, err = srcDB.rawWriter().ExecContext(ctx, fmt.Sprintf(
 					"PRAGMA user_version = %d", ver.sourceVersion,
 				))
 				require.NoError(t, err, "set source data version")

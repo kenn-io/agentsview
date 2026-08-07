@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -315,7 +317,7 @@ func TestReconcilePinnedMessagesPrefersCurrentTargetPin(t *testing.T) {
 			 '2026-05-01T00:02:00Z'::timestamptz)`)
 	require.NoError(t, err, "insert pins")
 
-	tx, err := pg.BeginTx(ctx, nil)
+	tx, err := bun.NewDB(pg, pgdialect.New()).BeginTx(ctx, nil)
 	require.NoError(t, err, "begin tx")
 	if err := reconcilePinnedMessages(
 		ctx, tx, "pg-pin-duplicate",
@@ -393,7 +395,7 @@ func TestReconcilePinnedMessagesPrunesPinWhenSourceUUIDGone(t *testing.T) {
 			 '2026-05-01T00:01:00Z'::timestamptz)`)
 	require.NoError(t, err, "insert pin")
 
-	tx, err := pg.BeginTx(ctx, nil)
+	tx, err := bun.NewDB(pg, pgdialect.New()).BeginTx(ctx, nil)
 	require.NoError(t, err, "begin tx")
 	if err := reconcilePinnedMessages(
 		ctx, tx, "pg-pin-source-gone",
@@ -471,7 +473,7 @@ func TestReconcilePinnedMessagesKeepsPinOnLaterDuplicateSourceUUID(t *testing.T)
 			 '2026-05-01T00:01:00Z'::timestamptz)`)
 	require.NoError(t, err, "insert pin")
 
-	tx, err := pg.BeginTx(ctx, nil)
+	tx, err := bun.NewDB(pg, pgdialect.New()).BeginTx(ctx, nil)
 	require.NoError(t, err, "begin tx")
 	if err := reconcilePinnedMessages(
 		ctx, tx, "pg-pin-dup-uuid",

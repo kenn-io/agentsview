@@ -17,7 +17,11 @@ type BunBackend interface {
 	Name() string
 	ReadOnly() bool
 	Capabilities() BackendCapabilities
-	SessionQueryDialect() QueryDialect
+	// TimestampOrderExpr returns the backend expression that compares an
+	// arbitrary canonical timestamp SQL operand by instant. Native timestamp
+	// backends return operand; SQLite wraps its shipped text representation with
+	// julianday. Callers normalize empty timestamp sentinels before invoking it.
+	TimestampOrderExpr(operand string) string
 	SessionVersion(context.Context, bun.IDB, string) (int, int64, error)
 	View(context.Context, func(bun.IDB) error) error
 	ConsistentView(context.Context, func(bun.IDB) error) error
@@ -57,7 +61,18 @@ type BackendCapabilities struct {
 	HybridLexical    HybridLexicalCapability
 	SearchDialect    BunSearchDialect
 	Writes           map[WriteOperation]bool
+	ArchiveWrites    ArchiveWriteAdapter
 	SessionMutations SessionMutationAdapter
+}
+
+// ArchiveWriteAdapter owns SQLite's archive-only ingestion behavior while the
+// public db.Store entry points remain implemented once on BunStore.
+type ArchiveWriteAdapter interface {
+	UpsertSession(Session) error
+	ReplaceSessionMessages(string, []Message) error
+	WriteSessionBatchAtomic(
+		[]SessionBatchWrite, ...func() error,
+	) (SessionBatchResult, error)
 }
 
 // SessionMutationAdapter owns engine-specific timestamp expressions and
@@ -109,6 +124,7 @@ func (b *sqliteBunBackend) Capabilities() BackendCapabilities {
 			b.store.getVectorSearcher,
 			func() error { return ErrSemanticUnavailable },
 		),
+		ArchiveWrites:    sqliteArchiveWriteAdapter{store: b.store},
 		SessionMutations: sqliteSessionMutationAdapter{},
 		Writes: map[WriteOperation]bool{
 			WriteArchive:           true,
@@ -129,6 +145,26 @@ func (*sqliteBunBackend) BunTableExists(
 		SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?
 	)`, table).Scan(ctx, &exists)
 	return exists, err
+}
+
+type sqliteArchiveWriteAdapter struct {
+	store *DB
+}
+
+func (a sqliteArchiveWriteAdapter) UpsertSession(session Session) error {
+	return a.store.upsertArchiveSession(session)
+}
+
+func (a sqliteArchiveWriteAdapter) ReplaceSessionMessages(
+	sessionID string, messages []Message,
+) error {
+	return a.store.replaceArchiveSessionMessages(sessionID, messages)
+}
+
+func (a sqliteArchiveWriteAdapter) WriteSessionBatchAtomic(
+	writes []SessionBatchWrite, beforeCommit ...func() error,
+) (SessionBatchResult, error) {
+	return a.store.writeArchiveSessionBatchAtomic(writes, beforeCommit...)
 }
 
 type sqliteSessionMutationAdapter struct{}
@@ -167,8 +203,12 @@ func (sqliteSessionMutationAdapter) BeforeDelete(
 	return nil
 }
 
-func (*sqliteBunBackend) SessionQueryDialect() QueryDialect {
-	return SQLiteBunSessionQueryDialect()
+func (*sqliteBunBackend) TimestampOrderExpr(column string) string {
+	return sqliteTimestampOrderExpr(column)
+}
+
+func sqliteTimestampOrderExpr(column string) string {
+	return "julianday(NULLIF(" + column + ", ''))"
 }
 
 func (*sqliteBunBackend) SessionVersion(

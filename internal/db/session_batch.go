@@ -135,10 +135,10 @@ func (db *DB) WriteSessionBatch(
 	return result, nil
 }
 
-// WriteSessionBatchAtomic writes all sessions in one
+// writeArchiveSessionBatchAtomic writes all sessions in one
 // transaction. Any rejected or failed row rolls back the whole
 // batch.
-func (db *DB) WriteSessionBatchAtomic(
+func (db *DB) writeArchiveSessionBatchAtomic(
 	writes []SessionBatchWrite,
 	beforeCommit ...func() error,
 ) (SessionBatchResult, error) {
@@ -367,14 +367,14 @@ func writeOneSessionBatchTx(
 	}
 
 	if write.IdentityObservation.Project != "" {
-		var err error
 		if write.IdentitySnapshotProject == nil {
-			err = upsertProjectIdentityObservationTx(
-				tx, write.IdentityObservation,
+			err = upsertProjectIdentityObservationWithSnapshotProjectBun(
+				ctx, bunTx, write.IdentityObservation,
+				write.IdentityObservation.Project, false, false,
 			)
 		} else {
-			err = upsertProjectIdentityObservationWithSnapshotProjectTx(
-				tx, write.IdentityObservation,
+			err = upsertProjectIdentityObservationWithSnapshotProjectBun(
+				ctx, bunTx, write.IdentityObservation,
 				*write.IdentitySnapshotProject,
 				upsertResult.inserted, true,
 			)
@@ -386,7 +386,7 @@ func writeOneSessionBatchTx(
 	if !upsertResult.inserted &&
 		upsertResult.previousProject != upsertResult.currentProject {
 		if err := reconcileSessionProjectIdentityAggregatesTx(
-			context.Background(), tx, write.Session.ID,
+			context.Background(), bunTx, write.Session.ID,
 			[]string{
 				upsertResult.previousProject,
 				upsertResult.currentProject,

@@ -8,6 +8,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -34,13 +35,13 @@ const fullAutomationCandidatesPG = `SELECT
  FROM sessions s`
 
 func backfillIsAutomatedPGWithProgress(
-	ctx context.Context, pg *sql.DB,
+	ctx context.Context, pg bun.IConn,
 ) (automatedAuditPGProgress, error) {
 	var progress automatedAuditPGProgress
 	current := db.ClassifierHash()
 	var stored string
 	err := pg.QueryRowContext(ctx,
-		`SELECT value FROM sync_metadata WHERE key = $1`,
+		`SELECT value FROM sync_metadata WHERE key = ?0`,
 		db.ClassifierHashKey,
 	).Scan(&stored)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -80,7 +81,7 @@ func backfillIsAutomatedPGWithProgress(
 
 	if _, err := pg.ExecContext(ctx,
 		`INSERT INTO sync_metadata (key, value)
-		 VALUES ($1, $2)
+		 VALUES (?0, ?1)
 		 ON CONFLICT (key) DO UPDATE
 		 SET value = EXCLUDED.value`,
 		db.ClassifierHashKey, current,
@@ -94,7 +95,7 @@ func backfillIsAutomatedPGWithProgress(
 
 func auditAutomatedFullPG(
 	ctx context.Context,
-	pg *sql.DB,
+	pg bun.IConn,
 	classifier db.AutomationClassifier,
 	progress *automatedAuditPGProgress,
 ) (setIDs, clearIDs []string, err error) {
@@ -116,7 +117,7 @@ func auditAutomatedFullPG(
 
 func auditAutomatedMatchingHashPG(
 	ctx context.Context,
-	pg *sql.DB,
+	pg bun.IConn,
 	classifier db.AutomationClassifier,
 	progress *automatedAuditPGProgress,
 ) (setIDs, clearIDs []string, err error) {
@@ -130,7 +131,7 @@ func auditAutomatedMatchingHashPG(
 			s.is_automated,
 			CASE WHEN s.user_message_count <= 1
 				THEN substring(
-					convert_to(first_user.content, 'UTF8') FROM 1 FOR $1
+					convert_to(first_user.content, 'UTF8') FROM 1 FOR ?0
 				)
 			END AS first_user_prefix,
 			CASE WHEN s.user_message_count <= 1
@@ -140,7 +141,7 @@ func auditAutomatedMatchingHashPG(
 				WHEN s.user_message_count <= 1
 				 AND s.first_message IS NOT NULL
 				THEN substring(
-					convert_to(s.first_message, 'UTF8') FROM 1 FOR $1
+					convert_to(s.first_message, 'UTF8') FROM 1 FOR ?0
 				)
 			END AS first_message_prefix,
 			CASE
@@ -219,7 +220,7 @@ func auditAutomatedMatchingHashPG(
 	for start := 0; start < len(unresolved); start += batchSize {
 		end := min(start+batchSize, len(unresolved))
 		batch := unresolved[start:end]
-		pb := &paramBuilder{}
+		pb := &bunParamBuilder{}
 		placeholders := make([]string, len(batch))
 		for i, id := range batch {
 			placeholders[i] = pb.add(id)

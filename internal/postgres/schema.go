@@ -514,7 +514,7 @@ CREATE INDEX IF NOT EXISTS idx_insights_cache
 
 func migrateMoneyColumnsPG(
 	ctx context.Context,
-	conn *sql.DB,
+	conn *bun.DB,
 	existingColumns map[string]map[string]bool,
 ) error {
 	legacyColumns := []struct {
@@ -646,7 +646,7 @@ func migrateMoneyColumnsPG(
 	return nil
 }
 
-func rekeyMigratedCursorUsageEventsPG(ctx context.Context, tx *sql.Tx) error {
+func rekeyMigratedCursorUsageEventsPG(ctx context.Context, tx bun.Tx) error {
 	type keyUpdate struct {
 		id  int64
 		key string
@@ -663,7 +663,7 @@ func rekeyMigratedCursorUsageEventsPG(ctx context.Context, tx *sql.Tx) error {
 				charged_microdollars, cursor_token_fee_microdollars,
 				user_id, user_email, is_headless
 			FROM cursor_usage_events
-			WHERE id > $1
+			WHERE id > ?0
 			ORDER BY id
 			LIMIT 1000`, lastID)
 		if err != nil {
@@ -701,7 +701,7 @@ func rekeyMigratedCursorUsageEventsPG(ctx context.Context, tx *sql.Tx) error {
 		}
 		for _, update := range updates {
 			if _, err := tx.ExecContext(ctx,
-				`UPDATE cursor_usage_events SET dedup_key = $1 WHERE id = $2`,
+				`UPDATE cursor_usage_events SET dedup_key = ?0 WHERE id = ?1`,
 				update.key, update.id,
 			); err != nil {
 				return fmt.Errorf("updating migrated PG cursor usage key: %w", err)
@@ -736,14 +736,15 @@ func rekeyMigratedCursorUsageEventsPG(ctx context.Context, tx *sql.Tx) error {
 // After CREATE SCHEMA, all table DDL uses unqualified names
 // because Open() sets search_path to the target schema.
 func EnsureSchema(
-	ctx context.Context, db *sql.DB, schema string,
+	ctx context.Context, raw *sql.DB, schema string,
 ) error {
+	db := bun.NewDB(raw, pgdialect.New())
 	start := time.Now()
 	quoted, err := quoteIdentifier(schema)
 	if err != nil {
 		return fmt.Errorf("invalid schema name: %w", err)
 	}
-	if err := CheckDataVersionCompat(ctx, db); err != nil {
+	if err := checkDataVersionCompat(ctx, db); err != nil {
 		return err
 	}
 	step := time.Now()
@@ -1280,7 +1281,9 @@ func EnsureSchema(
 		"pg schema: content search index step completed in %s",
 		time.Since(step).Round(time.Millisecond),
 	)
-	if _, err := ensureVectorBaseSchemaPG(ctx, db); err != nil {
+	// PostgreSQL extension installation and dynamic vector DDL remain an
+	// adapter-owned vector capability seam on the raw driver pool.
+	if _, err := ensureVectorBaseSchemaPG(ctx, raw); err != nil {
 		log.Printf("pg schema: vector schema setup failed: %v", err)
 	}
 	step = time.Now()
@@ -1352,9 +1355,8 @@ var postgresCommonConstraintMigrations = []string{
 }
 
 func convergePostgresCommonSchema(
-	ctx context.Context, conn *sql.DB, beforeStamp func() error,
+	ctx context.Context, store *bun.DB, beforeStamp func() error,
 ) error {
-	store := bun.NewDB(conn, pgdialect.New())
 	tx, err := store.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("starting common PostgreSQL schema migration: %w", err)
@@ -1442,14 +1444,13 @@ func convergePostgresCommonSchema(
 }
 
 func validateStampedPostgresCommonSchema(
-	ctx context.Context, conn *sql.DB,
+	ctx context.Context, store *bun.DB,
 ) error {
 	var complete bool
-	err := conn.QueryRowContext(ctx, `
+	err := store.NewRaw(`
 		SELECT EXISTS (
-			SELECT 1 FROM sync_metadata WHERE key = $1
-		)`, db.CommonSchemaCompatibilityMetadataKey,
-	).Scan(&complete)
+			SELECT 1 FROM sync_metadata WHERE key = ?
+		)`, db.CommonSchemaCompatibilityMetadataKey).Scan(ctx, &complete)
 	if err != nil {
 		if isUndefinedTable(err) {
 			return nil
@@ -1459,7 +1460,7 @@ func validateStampedPostgresCommonSchema(
 	if !complete {
 		return nil
 	}
-	return convergePostgresCommonSchema(ctx, conn, nil)
+	return convergePostgresCommonSchema(ctx, store, nil)
 }
 
 func convergePostgresPricingTimestamps(ctx context.Context, store bun.IDB) error {
@@ -1577,7 +1578,7 @@ func validatePostgresCommonSchemaObjects(ctx context.Context, tx bun.Tx) error {
 
 // createPartialIndexesPG creates partial indexes on the PG schema.
 // Idempotent via IF NOT EXISTS.
-func createPartialIndexesPG(ctx context.Context, db *sql.DB) error {
+func createPartialIndexesPG(ctx context.Context, db bun.IConn) error {
 	indexes := []string{
 		`CREATE INDEX IF NOT EXISTS idx_sessions_cwd
 		 ON sessions(cwd) WHERE cwd != ''`,
@@ -1632,7 +1633,7 @@ func createPartialIndexesPG(ctx context.Context, db *sql.DB) error {
 // operator class lives in whatever schema pg_trgm was installed in, which may
 // not be on the connection search_path (Open sets it to the target schema
 // only), so the opclass is schema-qualified to the extension's namespace.
-func createContentSearchIndexesPG(ctx context.Context, db *sql.DB) {
+func createContentSearchIndexesPG(ctx context.Context, db bun.IConn) {
 	if _, err := db.ExecContext(ctx,
 		`CREATE EXTENSION IF NOT EXISTS pg_trgm`,
 	); err != nil {
@@ -1689,7 +1690,7 @@ func createContentSearchIndexesPG(ctx context.Context, db *sql.DB) {
 // complete integrity marker: rows can arrive from stale clients
 // after the hash was stamped.
 func backfillIsAutomatedPG(
-	ctx context.Context, pg *sql.DB,
+	ctx context.Context, pg bun.IConn,
 ) error {
 	_, err := backfillIsAutomatedPGWithProgress(ctx, pg)
 	return err
@@ -1701,7 +1702,7 @@ func backfillIsAutomatedPG(
 // token-coverage flags. These issue only row-level writes, so the
 // compatible-schema fast path can run them without the index and
 // column DDL that can block concurrent pg serve reads (issue #887).
-func runSchemaDataRepairsPG(ctx context.Context, db *sql.DB) error {
+func runSchemaDataRepairsPG(ctx context.Context, db bun.IDB) error {
 	if err := backfillIsAutomatedPG(ctx, db); err != nil {
 		return err
 	}
@@ -1725,7 +1726,7 @@ func runSchemaDataRepairsPG(ctx context.Context, db *sql.DB) error {
 }
 
 func backfillSourceCurationBaselines(
-	ctx context.Context, pg *sql.DB,
+	ctx context.Context, pg bun.IConn,
 ) error {
 	if _, err := pg.ExecContext(ctx,
 		`UPDATE sessions
@@ -1749,7 +1750,7 @@ func backfillSourceCurationBaselines(
 }
 
 func runSourceCurationBackfill(
-	ctx context.Context, db *sql.DB, sourceCurationColumnsAdded bool,
+	ctx context.Context, db bun.IConn, sourceCurationColumnsAdded bool,
 ) (bool, error) {
 	runRepair, err := shouldRunSourceCurationBackfill(
 		ctx, db, sourceCurationColumnsAdded,
@@ -1770,7 +1771,7 @@ func runSourceCurationBackfill(
 }
 
 func shouldRunSourceCurationBackfill(
-	ctx context.Context, db *sql.DB, sourceCurationColumnsAdded bool,
+	ctx context.Context, db bun.IConn, sourceCurationColumnsAdded bool,
 ) (bool, error) {
 	if sourceCurationColumnsAdded {
 		return true, nil
@@ -1780,7 +1781,7 @@ func shouldRunSourceCurationBackfill(
 	if err := db.QueryRowContext(ctx,
 		`SELECT EXISTS (
 			SELECT 1 FROM sync_metadata
-			WHERE key = $1
+			WHERE key = ?0
 		)`,
 		sourceCurationBackfillMetadataKey,
 	).Scan(&done); err != nil {
@@ -1792,11 +1793,11 @@ func shouldRunSourceCurationBackfill(
 }
 
 func markSourceCurationBackfillDone(
-	ctx context.Context, db *sql.DB,
+	ctx context.Context, db bun.IConn,
 ) error {
 	_, err := db.ExecContext(ctx,
 		`INSERT INTO sync_metadata (key, value)
-		 VALUES ($1, '1')
+		 VALUES (?0, '1')
 		 ON CONFLICT (key) DO UPDATE
 		 SET value = EXCLUDED.value`,
 		sourceCurationBackfillMetadataKey,
@@ -1810,13 +1811,13 @@ func markSourceCurationBackfillDone(
 }
 
 func scrubProjectIdentityGitRemoteCredentialsPG(
-	ctx context.Context, db *sql.DB,
+	ctx context.Context, db bun.IDB,
 ) (bool, error) {
 	var done bool
 	if err := db.QueryRowContext(ctx,
 		`SELECT EXISTS (
 			SELECT 1 FROM sync_metadata
-			WHERE key = $1
+			WHERE key = ?0
 		)`,
 		projectIdentityRemoteScrubMetadataKey,
 	).Scan(&done); err != nil {
@@ -1909,8 +1910,8 @@ func scrubProjectIdentityGitRemoteCredentialsPG(
 		}
 		if _, err := db.ExecContext(ctx, `
 			DELETE FROM source_project_identity_observations
-			WHERE source_archive_id = $1 AND project = $2 AND machine = $3
-			  AND root_path = $4 AND git_remote = $5`,
+			WHERE source_archive_id = ?0 AND project = ?1 AND machine = ?2
+			  AND root_path = ?3 AND git_remote = ?4`,
 			scrub.obs.SourceArchiveID, scrub.obs.Project, scrub.obs.Machine,
 			scrub.obs.RootPath, scrub.rawRemote,
 		); err != nil {
@@ -1926,11 +1927,11 @@ func scrubProjectIdentityGitRemoteCredentialsPG(
 }
 
 func markProjectIdentityRemoteScrubDone(
-	ctx context.Context, db *sql.DB,
+	ctx context.Context, db bun.IConn,
 ) error {
 	_, err := db.ExecContext(ctx,
 		`INSERT INTO sync_metadata (key, value)
-		 VALUES ($1, '1')
+		 VALUES (?0, '1')
 		 ON CONFLICT (key) DO UPDATE
 		 SET value = EXCLUDED.value`,
 		projectIdentityRemoteScrubMetadataKey,
@@ -1944,14 +1945,14 @@ func markProjectIdentityRemoteScrubDone(
 }
 
 func batchUpdateAutomatedPG(
-	ctx context.Context, pg *sql.DB,
+	ctx context.Context, pg bun.IConn,
 	ids []string, val bool,
 ) error {
 	const batchSize = 500
 	for i := 0; i < len(ids); i += batchSize {
 		end := min(i+batchSize, len(ids))
 		batch := ids[i:end]
-		pb := &paramBuilder{}
+		pb := &bunParamBuilder{}
 		valPh := pb.add(val)
 		phs := make([]string, len(batch))
 		for j, id := range batch {
@@ -2003,7 +2004,7 @@ func loadExistingColumns(
 		return existing, nil
 	}
 
-	pb := &paramBuilder{}
+	pb := &bunParamBuilder{}
 	phs := make([]string, len(tables))
 	for i, table := range tables {
 		phs[i] = pb.add(table)
@@ -2043,7 +2044,7 @@ func loadExistingColumns(
 }
 
 func ensureColumns(
-	ctx context.Context, db *sql.DB,
+	ctx context.Context, db bun.IConn,
 	existing map[string]map[string]bool,
 	migrations []columnMigration,
 ) ([]string, error) {
@@ -2107,7 +2108,7 @@ func ensureColumns(
 }
 
 func shouldRunTokenCoverageRepair(
-	ctx context.Context, db *sql.DB, tokenCoverageColumnsAdded bool,
+	ctx context.Context, db bun.IConn, tokenCoverageColumnsAdded bool,
 ) (bool, error) {
 	if tokenCoverageColumnsAdded {
 		return true, nil
@@ -2117,7 +2118,7 @@ func shouldRunTokenCoverageRepair(
 	if err := db.QueryRowContext(ctx,
 		`SELECT EXISTS (
 			SELECT 1 FROM sync_metadata
-			WHERE key = $1
+			WHERE key = ?0
 		)`,
 		tokenCoverageRepairMetadataKey,
 	).Scan(&done); err != nil {
@@ -2141,11 +2142,11 @@ func shouldRunTokenCoverageRepair(
 }
 
 func markTokenCoverageRepairDone(
-	ctx context.Context, db *sql.DB,
+	ctx context.Context, db bun.IConn,
 ) error {
 	_, err := db.ExecContext(ctx,
 		`INSERT INTO sync_metadata (key, value)
-		 VALUES ($1, '1')
+		 VALUES (?0, '1')
 		 ON CONFLICT (key) DO UPDATE
 		 SET value = EXCLUDED.value`,
 		tokenCoverageRepairMetadataKey,
@@ -2159,7 +2160,7 @@ func markTokenCoverageRepairDone(
 }
 
 func backfillTokenCoverageFlags(
-	ctx context.Context, db *sql.DB,
+	ctx context.Context, db bun.IDB,
 ) error {
 	if _, err := backfillMessageTokenCoverage(ctx, db); err != nil {
 		return err
@@ -2171,7 +2172,7 @@ func backfillTokenCoverageFlags(
 }
 
 func backfillMessageTokenCoverage(
-	ctx context.Context, db *sql.DB,
+	ctx context.Context, db bun.IDB,
 ) (int, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT session_id, ordinal, token_usage, context_tokens,
@@ -2198,18 +2199,6 @@ func backfillMessageTokenCoverage(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	stmt, err := tx.PrepareContext(ctx,
-		`UPDATE messages
-		 SET has_context_tokens = $1, has_output_tokens = $2
-		 WHERE session_id = $3 AND ordinal = $4`,
-	)
-	if err != nil {
-		return 0, fmt.Errorf(
-			"preparing pg message token backfill update: %w", err,
-		)
-	}
-	defer stmt.Close()
-
 	updated := 0
 	for rows.Next() {
 		var sessionID, tokenUsage string
@@ -2231,8 +2220,11 @@ func backfillMessageTokenCoverage(
 			backfilledOutput == hasOutput {
 			continue
 		}
-		if _, err := stmt.ExecContext(
-			ctx, backfilledContext, backfilledOutput,
+		if _, err := tx.ExecContext(
+			ctx, `UPDATE messages
+			 SET has_context_tokens = ?, has_output_tokens = ?
+			 WHERE session_id = ? AND ordinal = ?`,
+			backfilledContext, backfilledOutput,
 			sessionID, ordinal,
 		); err != nil {
 			return updated, fmt.Errorf(
@@ -2255,7 +2247,7 @@ func backfillMessageTokenCoverage(
 }
 
 func backfillSessionTokenCoverage(
-	ctx context.Context, conn *sql.DB,
+	ctx context.Context, conn bun.IDB,
 ) (int, error) {
 	candidates, err := loadPGSessionCoverageCandidates(ctx, conn)
 	if err != nil {
@@ -2282,7 +2274,7 @@ func backfillSessionTokenCoverage(
 }
 
 func loadPGSessionCoverageCandidates(
-	ctx context.Context, conn *sql.DB,
+	ctx context.Context, conn bun.IConn,
 ) ([]db.SessionCoverageCandidate, error) {
 	rows, err := conn.QueryContext(ctx,
 		`SELECT id, total_output_tokens, peak_context_tokens,
@@ -2320,7 +2312,7 @@ func loadPGSessionCoverageCandidates(
 }
 
 func batchLoadPGMessageCoverage(
-	ctx context.Context, conn *sql.DB,
+	ctx context.Context, conn bun.IConn,
 	candidates []db.SessionCoverageCandidate,
 ) (map[string][2]bool, error) {
 	coverage := map[string][2]bool{}
@@ -2330,18 +2322,17 @@ func batchLoadPGMessageCoverage(
 			len(candidates),
 		)
 		batch := candidates[start:end]
-		args := make([]any, len(batch))
+		pb := &bunParamBuilder{}
 		placeholders := make([]string, len(batch))
 		for i, c := range batch {
-			args[i] = c.ID
-			placeholders[i] = fmt.Sprintf("$%d", i+1)
+			placeholders[i] = pb.add(c.ID)
 		}
 		rows, err := conn.QueryContext(ctx,
 			`SELECT session_id, has_context_tokens,
 				has_output_tokens
 			 FROM messages
 			 WHERE session_id IN (`+strings.Join(placeholders, ",")+`)`,
-			args...,
+			pb.args...,
 		)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -2377,7 +2368,7 @@ func batchLoadPGMessageCoverage(
 }
 
 func applyPGSessionCoverageUpdates(
-	ctx context.Context, conn *sql.DB,
+	ctx context.Context, conn bun.IDB,
 	updates []db.SessionCoverageUpdate,
 ) (int, error) {
 	tx, err := conn.BeginTx(ctx, nil)
@@ -2389,23 +2380,14 @@ func applyPGSessionCoverageUpdates(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	stmt, err := tx.PrepareContext(ctx,
-		`UPDATE sessions
-		 SET has_total_output_tokens = $1,
-		     has_peak_context_tokens = $2
-		 WHERE id = $3`,
-	)
-	if err != nil {
-		return 0, fmt.Errorf(
-			"preparing pg session token backfill update: %w", err,
-		)
-	}
-	defer stmt.Close()
-
 	updated := 0
 	for _, u := range updates {
-		if _, err := stmt.ExecContext(
-			ctx, u.HasTotal, u.HasPeak, u.ID,
+		if _, err := tx.ExecContext(
+			ctx, `UPDATE sessions
+			 SET has_total_output_tokens = ?,
+			     has_peak_context_tokens = ?
+			 WHERE id = ?`,
+			u.HasTotal, u.HasPeak, u.ID,
 		); err != nil {
 			return updated, fmt.Errorf(
 				"updating pg session token backfill %s: %w",
@@ -2435,10 +2417,10 @@ func inferTokenCoverage(
 }
 
 // CheckSchemaCompat verifies that the PG schema has all columns
-func pgHasTable(ctx context.Context, db *sql.DB, name string) bool {
+func pgHasTable(ctx context.Context, db bun.IConn, name string) bool {
 	var n int
 	err := db.QueryRowContext(ctx,
-		"SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1",
+		"SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = ?0",
 		name,
 	).Scan(&n)
 	return err == nil && n == 1
@@ -2446,11 +2428,11 @@ func pgHasTable(ctx context.Context, db *sql.DB, name string) bool {
 
 // pgHasIndex reports whether an index of the given name exists in the
 // current schema.
-func pgHasIndex(ctx context.Context, db *sql.DB, name string) bool {
+func pgHasIndex(ctx context.Context, db bun.IConn, name string) bool {
 	var n int
 	err := db.QueryRowContext(ctx,
 		`SELECT 1 FROM pg_indexes
-		 WHERE schemaname = current_schema() AND indexname = $1`,
+		 WHERE schemaname = current_schema() AND indexname = ?0`,
 		name,
 	).Scan(&n)
 	return err == nil && n == 1
@@ -2460,8 +2442,12 @@ func pgHasIndex(ctx context.Context, db *sql.DB, name string) bool {
 // against any PG role. Returns nil if compatible, or an error
 // describing what is missing.
 func CheckSchemaCompat(
-	ctx context.Context, db *sql.DB,
+	ctx context.Context, raw *sql.DB,
 ) error {
+	return checkSchemaCompat(ctx, bun.NewDB(raw, pgdialect.New()))
+}
+
+func checkSchemaCompat(ctx context.Context, db bun.IConn) error {
 	rows, err := db.QueryContext(ctx,
 		`SELECT updated_at, `+pgSessionCols+`
 		 FROM sessions LIMIT 0`)
@@ -2759,7 +2745,7 @@ func CheckSchemaCompat(
 // CheckSchemaCompat (which gates read-only serve startup and now probes the
 // serve-read sessions.source_archive_id/file_path provenance columns itself)
 // and are checked only on the push fast path.
-func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
+func checkPushSchemaCompat(ctx context.Context, db bun.IConn) error {
 	rows, err := db.QueryContext(ctx,
 		`SELECT key, value FROM sync_metadata LIMIT 0`)
 	if err != nil {
@@ -2788,35 +2774,40 @@ func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
 // caller must run EnsureSchema so push migrates the schema instead of failing
 // or duplicating rows.
 func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
-	if err := CheckSchemaCompat(ctx, db); err != nil {
+	store := bun.NewDB(db, pgdialect.New())
+	if err := checkSchemaCompat(ctx, store); err != nil {
 		return false
 	}
-	if err := checkPushSchemaCompat(ctx, db); err != nil {
+	if err := checkPushSchemaCompat(ctx, store); err != nil {
 		return false
 	}
-	if !pgHasTable(ctx, db, "model_pricing") ||
-		!pgHasTable(ctx, db, "model_pricing_bands") ||
-		!pgHasTable(ctx, db, "source_archives") ||
-		!pgHasTable(ctx, db, "source_project_identity_observations") ||
-		!pgHasTable(ctx, db, "source_project_identity_observation_scopes") ||
-		!pgHasTable(ctx, db, "source_session_project_identity_snapshots") ||
-		!pgHasTable(ctx, db, "source_session_project_identity_snapshot_scopes") ||
-		!pgHasTable(ctx, db, "source_worktree_project_mappings") ||
-		!pgHasTable(ctx, db, "source_worktree_project_mapping_scopes") ||
-		!pgHasTable(ctx, db, "cursor_usage_events") {
+	if !pgHasTable(ctx, store, "model_pricing") ||
+		!pgHasTable(ctx, store, "model_pricing_bands") ||
+		!pgHasTable(ctx, store, "source_archives") ||
+		!pgHasTable(ctx, store, "source_project_identity_observations") ||
+		!pgHasTable(ctx, store, "source_project_identity_observation_scopes") ||
+		!pgHasTable(ctx, store, "source_session_project_identity_snapshots") ||
+		!pgHasTable(ctx, store, "source_session_project_identity_snapshot_scopes") ||
+		!pgHasTable(ctx, store, "source_worktree_project_mappings") ||
+		!pgHasTable(ctx, store, "source_worktree_project_mapping_scopes") ||
+		!pgHasTable(ctx, store, "cursor_usage_events") {
 		return false
 	}
 	// AppendCursorUsageEventRows dedups via a targetless ON CONFLICT
 	// DO NOTHING, which only suppresses duplicates when this partial
 	// unique index exists. Fall back to EnsureSchema when it is missing
 	// so repeated pushes cannot duplicate cursor usage rows.
-	return pgHasIndex(ctx, db, "idx_cursor_usage_events_dedup")
+	return pgHasIndex(ctx, store, "idx_cursor_usage_events_dedup")
 }
 
 // CheckDataVersionCompat rejects PG datasets containing rows written by a
 // newer agentsview parser. PG does not have SQLite's global user_version, so
 // the highest session data_version is the compatibility marker.
 func CheckDataVersionCompat(ctx context.Context, pg *sql.DB) error {
+	return checkDataVersionCompat(ctx, bun.NewDB(pg, pgdialect.New()))
+}
+
+func checkDataVersionCompat(ctx context.Context, pg bun.IConn) error {
 	var version int
 	err := pg.QueryRowContext(ctx,
 		`SELECT COALESCE(MAX(data_version), 0) FROM sessions`,

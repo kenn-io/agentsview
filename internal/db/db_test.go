@@ -532,6 +532,13 @@ func TestCloseWriterFailsEveryWritePathCleanly(t *testing.T) {
 		_, err := database.RestoreSession("barrier-session")
 		require.ErrorIs(t, err, ErrWriterClosed)
 	})
+
+	t.Run("CopySessionMetadataFrom", func(t *testing.T) {
+		err := database.CopySessionMetadataFrom(
+			filepath.Join(t.TempDir(), "source.db"),
+		)
+		require.ErrorIs(t, err, ErrWriterClosed)
+	})
 }
 
 func insertSession(

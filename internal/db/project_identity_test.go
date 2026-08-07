@@ -44,6 +44,36 @@ func TestProjectObservationDatabaseIDIsCreatedAndStable(t *testing.T) {
 	assert.Equal(t, "test-database-id", overridden)
 }
 
+func TestParserIdentityWritesUseCanonicalBunRows(t *testing.T) {
+	database := testDB(t)
+	hook := new(countingQueryHook)
+	database.bunWriter = database.bunWriter.WithQueryHook(hook)
+
+	require.NoError(t, database.UpsertSessionWithProjectIdentity(Session{
+		ID: "canonical-parser-identity", Project: "canonical-project",
+		Machine: "machine", Agent: "codex", CreatedAt: "2026-08-04T12:00:00Z",
+	}, export.ProjectIdentityObservation{
+		SessionID: "canonical-parser-identity", Project: "canonical-project",
+		Machine: "machine", RootPath: "/workspace/canonical",
+		GitRemote:  "https://example.com/acme/canonical.git",
+		ObservedAt: time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC),
+	}, "canonical-project"))
+
+	inserts := strings.Join(hook.insertQueries, "\n")
+	assert.Contains(t, inserts, "source_project_identity_observations")
+	assert.Contains(t, inserts, "source_session_project_identity_snapshots")
+	observations, err := database.ListProjectIdentityObservations(
+		t.Context(), []string{"canonical-project"},
+	)
+	require.NoError(t, err)
+	require.Len(t, observations, 1)
+	assert.Equal(t, "example.com/acme/canonical", observations[0].NormalizedRemote)
+	snapshots, err := database.ListSessionProjectIdentitySnapshots(t.Context())
+	require.NoError(t, err)
+	require.Len(t, snapshots, 1)
+	assert.Equal(t, "canonical-parser-identity", snapshots[0].SessionID)
+}
+
 func TestProjectObservationArchiveIDIsCreatedAndStable(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

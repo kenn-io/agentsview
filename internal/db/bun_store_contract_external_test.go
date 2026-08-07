@@ -59,6 +59,15 @@ func TestBunStoreIdentityContract(t *testing.T) {
 	})
 }
 
+func TestCanonicalIdentityWriteContract(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "identity-write-contract.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	storetest.RunCanonicalIdentityWriteContract(
+		t, "sqlite", database.BunWriterForTest(),
+	)
+}
+
 func TestBunStoreDataContract(t *testing.T) {
 	storetest.RunDataContract(t, storetest.DataBackend{
 		Name: "sqlite",

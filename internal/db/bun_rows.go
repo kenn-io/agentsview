@@ -35,14 +35,10 @@ func timestampFromBunRow(value *bunmodel.Timestamp) *string {
 }
 
 func requiredTimestampToBunRow(value string) (bunmodel.Timestamp, error) {
-	timestamp, err := timestampToBunRow(value)
-	if err != nil {
-		return bunmodel.Timestamp{}, err
-	}
-	if timestamp == nil {
+	if value == "" {
 		return bunmodel.Timestamp{}, fmt.Errorf("timestamp is empty")
 	}
-	return *timestamp, nil
+	return bunmodel.ParseTimestamp(value)
 }
 
 func requiredTimestampFromBunRow(value bunmodel.Timestamp) string {
@@ -83,7 +79,7 @@ func sessionToBunRow(session Session) (bunmodel.Session, error) {
 		clean := SanitizeUTF8(*session.TranscriptRevision)
 		if clean == "" {
 			session.TranscriptRevision = nil
-		} else {
+		} else if clean != *session.TranscriptRevision {
 			session.TranscriptRevision = &clean
 		}
 	}
@@ -168,7 +164,7 @@ func sessionToBunRow(session Session) (bunmodel.Session, error) {
 		row.TranscriptRevision = *session.TranscriptRevision
 	}
 
-	optionalTimestamps := []struct {
+	optionalTimestamps := [...]struct {
 		name  string
 		value *string
 		dest  **bunmodel.Timestamp
@@ -205,6 +201,9 @@ func sanitizeCanonicalSessionStringPtr(value *string) *string {
 	clean := SanitizeUTF8(*value)
 	if clean == "" {
 		return nil
+	}
+	if clean == *value {
+		return value
 	}
 	return &clean
 }
