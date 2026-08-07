@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -209,4 +210,83 @@ func TestBunRecentEditsHydratesOnlyRequestedGroups(t *testing.T) {
 	assert.NotContains(t, hook.queries[0], "input_json")
 	assert.NotContains(t, hook.queries[0], "result_content")
 	assert.NotContains(t, hook.queries[0], "messages.content")
+}
+
+func TestBunContentAnalyticsStreamsAcrossSessionBatches(t *testing.T) {
+	database := testDB(t)
+	started := "2026-08-04T12:00:00Z"
+	messages := make([]Message, 0, 33)
+	for index := range 33 {
+		id := fmt.Sprintf("content-stream-%02d", index)
+		require.NoError(t, database.UpsertSession(Session{
+			ID: id, Project: "content-stream", Machine: "host", Agent: "codex",
+			CreatedAt: started, StartedAt: &started,
+			MessageCount: 1, UserMessageCount: 1,
+		}))
+		content := "this is broken again seam"
+		messages = append(messages, Message{
+			SessionID: id, Ordinal: 0, Role: "user", Content: content,
+			ContentLength: len(content), Timestamp: started,
+		})
+	}
+	require.NoError(t, database.InsertMessages(messages))
+	_, err := database.getWriter().Exec(
+		"UPDATE sessions SET quality_signal_version = ?",
+		CurrentQualitySignalVersion,
+	)
+	require.NoError(t, err)
+
+	hook := new(countingQueryHook)
+	store := NewBunStore(&sessionContractBackend{
+		store: database.bunReader.WithQueryHook(hook),
+	})
+	terms, err := ParseTrendTerms([]string{"seam"})
+	require.NoError(t, err)
+	trends, err := store.GetTrendsTerms(t.Context(), AnalyticsFilter{
+		Project: "content-stream", From: "2026-08-04", To: "2026-08-04",
+		Timezone: "UTC",
+	}, terms, "day")
+	require.NoError(t, err)
+	assert.Equal(t, 33, trends.MessageCount)
+	require.Len(t, trends.Series, 1)
+	assert.Equal(t, 33, trends.Series[0].Total)
+	trendContentQueries := bunContentSelects(hook.queries)
+	require.Len(t, trendContentQueries, 2)
+	for _, query := range trendContentQueries {
+		assert.NotContains(t, query, "has_thinking")
+		assert.NotContains(t, query, "has_tool_use")
+		assert.NotContains(t, query, "content_length")
+		assert.NotContains(t, query, "output_tokens")
+		assert.NotContains(t, query, "is_sidechain")
+	}
+
+	hook.queries = nil
+	signalResult, err := store.GetAnalyticsSignals(t.Context(), AnalyticsFilter{
+		Project: "content-stream", From: "2026-08-04", To: "2026-08-04",
+		Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 33, signalResult.QualityHealth.Totals.FrustrationMarkerCount)
+	assert.Equal(t, 33,
+		signalResult.QualityHealth.SessionsWithSignal.FrustrationMarkerCount)
+	signalContentQueries := bunContentSelects(hook.queries)
+	require.Len(t, signalContentQueries, 2)
+	for _, query := range signalContentQueries {
+		assert.NotContains(t, query, "ordinal")
+		assert.NotContains(t, query, "model")
+		assert.NotContains(t, query, "timestamp")
+		assert.NotContains(t, query, "has_tool_use")
+	}
+}
+
+func bunContentSelects(queries []string) []string {
+	var contentQueries []string
+	for _, query := range queries {
+		normalized := strings.ToLower(query)
+		if strings.Contains(normalized, `from "messages"`) &&
+			strings.Contains(normalized, `"content"`) {
+			contentQueries = append(contentQueries, normalized)
+		}
+	}
+	return contentQueries
 }
