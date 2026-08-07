@@ -11,9 +11,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Fixture directory names are short stand-ins for the UUIDs and workspace
+// hashes Posit Assistant writes in production. Full-length IDs pushed the
+// deepest testdata path past the Windows 260-character MAX_PATH limit when
+// the repository is checked out under a deep CI workspace prefix.
 const (
-	positAssistantTestMainID = "11111111-1111-4111-8111-111111111111"
-	positAssistantTestSubID  = "22222222-2222-4222-8222-222222222222"
+	positAssistantTestMainID = "11111111"
+	positAssistantTestSubID  = "22222222"
 )
 
 func positAssistantTestRoot(t *testing.T) string {
@@ -51,15 +55,15 @@ func TestPositAssistantProviderDiscoverAndWatch(t *testing.T) {
 		byPath[source.DisplayPath] = source
 	}
 	mainPath := positAssistantTestConvPath(
-		root, "a1b2c3d4e5f60718293a4b5c", positAssistantTestMainID,
+		root, "a1b2c3d4", positAssistantTestMainID,
 		"conversation.json",
 	)
 	subPath := positAssistantTestConvPath(
-		root, "a1b2c3d4e5f60718293a4b5c", positAssistantTestMainID,
+		root, "a1b2c3d4", positAssistantTestMainID,
 		"subagents", positAssistantTestSubID, "conversation.json",
 	)
 	defaultPath := positAssistantTestConvPath(
-		root, "default", "33333333-3333-4333-8333-333333333333",
+		root, "default", "33333333",
 		"conversation.json",
 	)
 	require.Contains(t, byPath, mainPath)
@@ -89,7 +93,7 @@ func TestPositAssistantProviderFindSource(t *testing.T) {
 				FullSessionID: "host~posit-assistant:" + positAssistantTestMainID,
 			},
 			wantPath: positAssistantTestConvPath(
-				root, "a1b2c3d4e5f60718293a4b5c", positAssistantTestMainID,
+				root, "a1b2c3d4", positAssistantTestMainID,
 				"conversation.json",
 			),
 			wantOK: true,
@@ -98,7 +102,7 @@ func TestPositAssistantProviderFindSource(t *testing.T) {
 			name: "nested subagent by raw session ID",
 			req:  FindSourceRequest{RawSessionID: positAssistantTestSubID},
 			wantPath: positAssistantTestConvPath(
-				root, "a1b2c3d4e5f60718293a4b5c", positAssistantTestMainID,
+				root, "a1b2c3d4", positAssistantTestMainID,
 				"subagents", positAssistantTestSubID, "conversation.json",
 			),
 			wantOK: true,
@@ -129,7 +133,7 @@ func TestPositAssistantProviderClassifiesChangedPaths(t *testing.T) {
 	require.True(t, ok)
 
 	mainConvPath := positAssistantTestConvPath(
-		root, "a1b2c3d4e5f60718293a4b5c", positAssistantTestMainID,
+		root, "a1b2c3d4", positAssistantTestMainID,
 		"conversation.json",
 	)
 	mainConvDir := filepath.Dir(mainConvPath)
@@ -151,18 +155,18 @@ func TestPositAssistantProviderClassifiesChangedPaths(t *testing.T) {
 		},
 		{
 			name: "workspace manifest re-emits all workspace conversations",
-			path: filepath.Join(root, "a1b2c3d4e5f60718293a4b5c", "workspace.json"),
+			path: filepath.Join(root, "a1b2c3d4", "workspace.json"),
 			wantPaths: []string{
 				mainConvPath,
 				positAssistantTestConvPath(
-					root, "a1b2c3d4e5f60718293a4b5c", positAssistantTestMainID,
+					root, "a1b2c3d4", positAssistantTestMainID,
 					"subagents", positAssistantTestSubID, "conversation.json",
 				),
 			},
 		},
 		{
 			name:      "workspace index is not a session source",
-			path:      filepath.Join(root, "a1b2c3d4e5f60718293a4b5c", "index.json"),
+			path:      filepath.Join(root, "a1b2c3d4", "index.json"),
 			wantPaths: nil,
 		},
 	}
@@ -205,7 +209,7 @@ func TestPositAssistantProviderParseMainConversation(t *testing.T) {
 	)
 	require.NoError(t, err)
 	wsInfo, err := os.Stat(
-		filepath.Join(root, "a1b2c3d4e5f60718293a4b5c", "workspace.json"),
+		filepath.Join(root, "a1b2c3d4", "workspace.json"),
 	)
 	require.NoError(t, err)
 	assert.Equal(t, source.DisplayPath, fingerprint.Key)
@@ -344,7 +348,7 @@ func TestPositAssistantProviderParseDefaultWorkspace(t *testing.T) {
 	require.True(t, ok)
 
 	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
-		RawSessionID: "33333333-3333-4333-8333-333333333333",
+		RawSessionID: "33333333",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
