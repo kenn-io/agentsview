@@ -177,13 +177,13 @@ func (s *BunStore) ListSessions(
 		base := store.NewSelect().Model((*bunmodel.Session)(nil))
 		base = applyBunWhere(base, where, args)
 		if total <= 0 {
-			count, err := base.Clone().Count(ctx)
+			count, err := base.Clone().Conn(store).Count(ctx)
 			if err != nil {
 				return fmt.Errorf("counting sessions: %w", err)
 			}
 			total = count
 		}
-		query := base.Clone()
+		query := base.Clone().Conn(store)
 		if filter.Cursor != "" {
 			values, err := CursorPredicateValues(cursor, resolvedSort)
 			if err != nil {
