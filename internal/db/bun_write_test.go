@@ -194,6 +194,28 @@ func TestCanonicalBunRowsPreservePortableCoordinates(t *testing.T) {
 	assert.Equal(t, int64(42), *usage[0].CostMicrodollars)
 }
 
+func TestCanonicalMessageRowsDeriveDuplicateDefaultEventIndices(t *testing.T) {
+	_, _, results, err := CanonicalMessageRows([]Message{{
+		SessionID: "portable-events", Ordinal: 4, Role: "assistant",
+		ToolCalls: []ToolCall{{
+			ToolUseID: "tool-1", SubagentSessionID: "subagent-1",
+			ResultEvents: []ToolResultEvent{
+				{Source: "tool", Status: "started", Content: "a"},
+				{Source: "tool", Status: "completed", Content: "done"},
+			},
+		}},
+	}})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, 0, results[0].EventIndex)
+	assert.Equal(t, 1, results[1].EventIndex)
+	require.NotNil(t, results[1].ToolUseID)
+	assert.Equal(t, "tool-1", *results[1].ToolUseID)
+	require.NotNil(t, results[1].SubagentSessionID)
+	assert.Equal(t, "subagent-1", *results[1].SubagentSessionID)
+	assert.Equal(t, len("done"), results[1].ContentLength)
+}
+
 func TestUpsertSessionRowUsesCanonicalReplacementColumns(t *testing.T) {
 	database := testDB(t)
 	ctx := t.Context()
