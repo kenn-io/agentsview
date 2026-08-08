@@ -375,7 +375,11 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // when the message's own server_tool_use counter is zero. Existing Claude
 // rows need re-parsing so historical web searches are charged the
 // per-request fee.)
-const dataVersion = 82
+// (83: Amp usage accounting. Exported Amp threads carry a per-inference
+// usage object with model and token counts that the parser previously
+// ignored. Existing Amp rows need re-parsing so their model, token
+// usage, and computed cost appear in usage reports.)
+const dataVersion = 83
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

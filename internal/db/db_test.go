@@ -1009,8 +1009,8 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 }
 
 func TestCurrentDataVersionUsageReparses(t *testing.T) {
-	assert.Equal(t, 82, CurrentDataVersion(),
-		"Pi cacheWrite usage and Claude web-search accounting require sequential backfills")
+	assert.Equal(t, 83, CurrentDataVersion(),
+		"Claude web-search accounting and Amp usage accounting require sequential backfills")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {

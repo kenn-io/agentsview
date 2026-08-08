@@ -579,11 +579,40 @@ Grok section and remove the explicit registry exception in the coverage test.
 
 - **Format:** One JSON thread document per session.
 - **Evidence:** `no-public-source`.
-- **Upstream:** The first-party [Amp manual](https://ampcode.com/manual) and
-  public Sourcegraph/Amp repositories were searched 2026-07-19; no
-  session-file producer or authoritative disk schema was found.
-- **Usage and cost:** The consumed thread documents do not expose token, cache,
-  reasoning, credit, or USD fields to Agentsview.
+- **Upstream:** The first-party [Amp manual](https://ampcode.com/manual),
+  its [appendix](https://ampcode.com/manual/appendix), the
+  [CLI guide](https://github.com/sourcegraph/amp-examples-and-guides/blob/main/guides/cli/README.md),
+  and public Sourcegraph/Amp repositories were searched 2026-07-19 and
+  again 2026-08-08; no session-file producer or authoritative disk schema
+  was found. `amp threads export`, which produces the complete thread
+  documents, is itself undocumented. `amp threads raw` is permission-gated
+  (HTTP 403) for non-maintainer accounts.
+- **Usage and cost:** Complete thread documents carry a per-inference
+  `usage` object on assistant messages: `inputTokens`, `outputTokens`,
+  `cacheCreationInputTokens`, `cacheReadInputTokens`, `totalInputTokens`,
+  `maxInputTokens`, and optionally `model`, `timestamp`, and
+  `thinkingBudget`. Amp persists no USD or credit field per thread;
+  `amp threads usage` reports Amp credits only and returns `$0` for
+  customer-managed provider keys, so Agentsview computes cost from tokens.
+  `totalInputTokens` equals the sum of the three input buckets across every
+  record observed (172/172, four threads, three model families), and the
+  parser asserts nothing beyond that shape.
+- **Field availability:** `model` and `timestamp` are absent from older
+  threads — one observed thread carries 67 usage records with no `model` on
+  any of them, and no thread-level fallback (`agentMode` is null and no
+  `debug.lastInferenceUsage` key exists in exports). Those records are
+  recorded as tokens without cost rather than attributed to a guessed
+  model. Only the six token and window counters were present in every
+  observed record.
+- **Subagent usage:** Not represented. Threads that invoke `oracle`,
+  `librarian`, or subagents record only main-thread inference; tool results
+  carry no nested usage and no child thread ID, and subagent threads do not
+  appear in `amp threads list`. Those tokens are therefore not counted.
+- **Independent parser:** `illegalstudio/lazyagent`
+  (`internal/amp/process.go`) reads the same `model`, `inputTokens`,
+  `outputTokens`, `cacheCreationInputTokens`, and `cacheReadInputTokens`
+  fields, corroborating the field names from outside this project. It is
+  not Amp's own producer source.
 - **Agentsview:** `internal/parser/amp.go` and
   `internal/parser/amp_provider.go`.
 

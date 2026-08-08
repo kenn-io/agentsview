@@ -110,7 +110,7 @@ func parseAmpSession(
 			)
 		}
 
-		messages = append(messages, ParsedMessage{
+		parsed := ParsedMessage{
 			Ordinal:       ordinal,
 			Role:          role,
 			Content:       content,
@@ -120,7 +120,10 @@ func parseAmpSession(
 			ContentLength: len(content),
 			ToolCalls:     tcs,
 			ToolResults:   trs,
-		})
+		}
+		applyAmpTokenUsage(&parsed, msg.Get("usage"))
+
+		messages = append(messages, parsed)
 		ordinal++
 		return true
 	})
@@ -159,7 +162,82 @@ func parseAmpSession(
 		},
 	}
 
+	accumulateMessageTokenUsage(sess, messages)
+
 	return sess, messages, nil
+}
+
+// ampFoldsCacheCreationIntoInput reports whether an Amp usage model
+// bills cache writes. Amp routes every prompt token into one of its
+// three input buckets, but only Anthropic-family models are billed a
+// cache-write premium. OpenAI-family threads report inputTokens as 0
+// and classify the whole uncached prompt as cacheCreationInputTokens,
+// so that portion is uncached input rather than a cache write.
+//
+// Only gpt-prefixed names are folded. An unrecognized or absent model
+// keeps Amp's own bucket labels: without a known provider there is no
+// evidence for reinterpreting them, and a model that cannot be priced
+// contributes no cost either way.
+func ampFoldsCacheCreationIntoInput(model string) bool {
+	return strings.HasPrefix(model, "gpt-")
+}
+
+// applyAmpTokenUsage normalizes an Amp per-inference usage object into
+// the Anthropic-style shape expected by the usage and cost queries.
+//
+// Amp reports the prompt split across three buckets plus their total:
+//
+//	totalInputTokens = inputTokens + cacheCreationInputTokens +
+//	                   cacheReadInputTokens
+//
+// Anthropic-family threads already carry Anthropic semantics and pass
+// through unchanged. OpenAI-family threads fold cache creation into
+// uncached input and emit no cache-creation bucket, mirroring
+// applyCodexTokenUsage: the cost formula treats input_tokens as the
+// uncached remainder, and OpenAI does not bill cache writes.
+//
+//	inputTokens (+ cacheCreationInputTokens for gpt-*) → input_tokens
+//	outputTokens                                       → output_tokens
+//	cacheCreationInputTokens                           → cache_creation_input_tokens
+//	cacheReadInputTokens                               → cache_read_input_tokens
+func applyAmpTokenUsage(msg *ParsedMessage, usage gjson.Result) {
+	if !usage.Exists() {
+		return
+	}
+
+	msg.Model = usage.Get("model").Str
+
+	input := int(usage.Get("inputTokens").Int())
+	output := int(usage.Get("outputTokens").Int())
+	cacheCreation := int(usage.Get("cacheCreationInputTokens").Int())
+	cacheRead := int(usage.Get("cacheReadInputTokens").Int())
+
+	normalized := map[string]int{
+		"input_tokens":            input,
+		"output_tokens":           output,
+		"cache_read_input_tokens": cacheRead,
+	}
+	if ampFoldsCacheCreationIntoInput(msg.Model) {
+		normalized["input_tokens"] = input + cacheCreation
+	} else {
+		normalized["cache_creation_input_tokens"] = cacheCreation
+	}
+
+	j, err := json.Marshal(normalized)
+	if err != nil {
+		return
+	}
+	msg.TokenUsage = j
+
+	msg.OutputTokens = output
+	msg.HasOutputTokens = usage.Get("outputTokens").Exists()
+	// Presence comes from the fields themselves: an inference whose
+	// prompt is entirely cached reports inputTokens as 0, which is
+	// real usage rather than missing data.
+	msg.HasContextTokens = usage.Get("inputTokens").Exists() ||
+		usage.Get("cacheCreationInputTokens").Exists() ||
+		usage.Get("cacheReadInputTokens").Exists()
+	msg.ContextTokens = input + cacheCreation + cacheRead
 }
 
 // AmpThreadID extracts the id field from raw Amp thread JSON
