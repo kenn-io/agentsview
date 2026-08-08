@@ -603,7 +603,10 @@ Grok section and remove the explicit registry exception in the coverage test.
   `debug.lastInferenceUsage` key exists in exports). Those records are
   recorded as tokens without cost rather than attributed to a guessed
   model. Only the six token and window counters were present in every
-  observed record.
+  observed record. Usage reporting requires a model, so those rows are
+  stored and visible per session but excluded from daily totals and model
+  breakdowns. `timestamp` is likewise absent on older threads; those
+  messages fall back to the session start for date bucketing.
 - **Subagent usage:** Not represented. Threads that invoke `oracle`,
   `librarian`, or subagents record only main-thread inference; tool results
   carry no nested usage and no child thread ID, and subagent threads do not

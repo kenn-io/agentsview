@@ -826,3 +826,38 @@ func TestAmpProviderParsesMixedModelsAndAggregates(t *testing.T) {
 	assert.True(t, sess.HasPeakContextTokens)
 	assert.Equal(t, 8050, sess.PeakContextTokens)
 }
+
+// Each inference carries its own timestamp. Without it a long-lived
+// thread collapses into the daily bucket of its session start.
+func TestAmpProviderParsesPerInferenceTimestamps(t *testing.T) {
+	msgs := ampUsageThread(t, `
+		{"role": "user", "content": [{"type": "text", "text": "hi"}]},
+		{"role": "assistant", "content": [{"type": "text", "text": "day one"}],
+		 "usage": {"model": "gpt-5.6-sol", "timestamp": "2026-08-07T19:25:30.151Z",
+			"inputTokens": 0, "outputTokens": 15, "cacheReadInputTokens": 0,
+			"cacheCreationInputTokens": 100}},
+		{"role": "user", "content": [{"type": "text", "text": "later"}]},
+		{"role": "assistant", "content": [{"type": "text", "text": "day two"}],
+		 "usage": {"model": "gpt-5.6-sol", "timestamp": "2026-08-09T04:10:00.000Z",
+			"inputTokens": 0, "outputTokens": 20, "cacheReadInputTokens": 50,
+			"cacheCreationInputTokens": 10}}`)
+
+	require.Equal(t, 4, len(msgs))
+	assertTimestamp(t, msgs[1].Timestamp,
+		time.Date(2026, 8, 7, 19, 25, 30, 151000000, time.UTC))
+	assertTimestamp(t, msgs[3].Timestamp,
+		time.Date(2026, 8, 9, 4, 10, 0, 0, time.UTC))
+}
+
+// Older threads omit the usage timestamp; those messages keep the zero
+// value and fall back to the session start downstream.
+func TestAmpProviderParsesUsageWithoutTimestamp(t *testing.T) {
+	msgs := ampUsageThread(t, `
+		{"role": "user", "content": [{"type": "text", "text": "hi"}]},
+		{"role": "assistant", "content": [{"type": "text", "text": "hello"}],
+		 "usage": {"model": "claude-sonnet-4-20250514", "inputTokens": 7,
+			"outputTokens": 87, "cacheReadInputTokens": 15863,
+			"cacheCreationInputTokens": 180}}`)
+
+	assert.True(t, msgs[1].Timestamp.IsZero())
+}

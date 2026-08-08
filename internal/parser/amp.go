@@ -207,6 +207,13 @@ func applyAmpTokenUsage(msg *ParsedMessage, usage gjson.Result) {
 
 	msg.Model = usage.Get("model").Str
 
+	// Each inference carries its own timestamp on newer threads. Without
+	// it every inference in a long-lived thread falls back to the
+	// session start and lands in one daily bucket.
+	if ts := parseTimestamp(usage.Get("timestamp").Str); !ts.IsZero() {
+		msg.Timestamp = ts
+	}
+
 	input := int(usage.Get("inputTokens").Int())
 	output := int(usage.Get("outputTokens").Int())
 	cacheCreation := int(usage.Get("cacheCreationInputTokens").Int())

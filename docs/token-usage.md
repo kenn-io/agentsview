@@ -506,11 +506,12 @@ uncached prompt as cache creation; because OpenAI does not bill cache writes,
 those tokens are recorded as uncached input and no cache-creation bucket is
 emitted — the same normalization the Codex parser applies for the same reason.
 
-Two limits are worth knowing. Older threads can omit the model entirely; those
-inferences contribute tokens but no cost, because a model that cannot be priced
-is never charged a guessed rate. And Amp's exports record only main-thread
-inference, so tokens spent by `oracle`, `librarian`, and other subagents are not
-included in a thread's totals.
+Two limits are worth knowing. Older threads can omit the model entirely. Usage
+reporting counts only rows that carry a model, so those inferences are absent
+from daily totals and model breakdowns rather than appearing at a guessed rate —
+their tokens are still stored and visible in the session's own usage view. And
+Amp's exports record only main-thread inference, so tokens spent by `oracle`,
+`librarian`, and other subagents are not included in a thread's totals.
 
 Note that recent Amp versions keep complete threads server-side and leave only
 stub files on disk. AgentsView reports usage for whatever complete threads are
