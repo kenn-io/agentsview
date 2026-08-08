@@ -55,7 +55,9 @@ insight entity or the `/api/v1/insights` backend API.
 
 The tab selection belongs in the URL so refresh, back/forward navigation, copied
 links, and direct entry all restore the same surface. An absent or unknown `tab`
-value selects the first available tab.
+value selects the first available tab unless a valid `insight` parameter is
+present. In that case, the saved-report deep link implies the Generated insights
+tab.
 
 Only the selected panel mounts. The corpus panel therefore does not refresh or
 poll extraction state while Generated insights is open, and the generated
@@ -73,7 +75,10 @@ archive does not load while Corpus is open.
 
 The top-level desktop and mobile navigation label becomes **Quality**. The old
 `insights` route is removed from the frontend router. Navigating to `/insights`
-follows the router's ordinary unknown-route behavior; no compatibility alias is
+therefore resolves to the default Sessions route. Query parameters shared with
+Sessions, including `window_days`, `date_from`, and `date_to`, continue to be
+interpreted by Sessions through the router's existing unknown-route behavior.
+No compatibility alias, redirect, or special handling for the former route is
 introduced.
 
 ## Capability behavior
@@ -81,8 +86,10 @@ introduced.
 The two Recall tabs have different backend requirements and must be gated
 independently.
 
-- **Corpus** is available only when the backend supports Recall queries. This
-  remains unavailable for current PostgreSQL and DuckDB read-only services.
+- **Corpus** availability reuses the frontend's existing read-only derivation:
+  `sync.readOnly || settings.readOnly`. Corpus is available when that expression
+  is false and backend state is known. No new server capability is added. This
+  keeps Corpus unavailable for current PostgreSQL and DuckDB read-only services.
 - **Generated insights** remains available anywhere the existing insight archive
   is readable.
 - The Recall top-level destination remains visible when at least one child tab
@@ -136,12 +143,20 @@ It may continue to use the existing `insights` store and insight API. Store and
 API names describe the persisted resource and are not user-facing navigation
 labels.
 
+The visible generation scope remains in the `insights` store rather than local
+panel state. It therefore survives panel unmounts and can be seeded by activity
+or session entry points before navigation mounts the Generated insights panel.
+
 ### `QualityPage`
 
 The remaining Insights component is renamed to `QualityPage`. It retains the
 analytics store, date-yoke behavior, refresh interval, quality calculations,
 and evidence navigation. It no longer imports or loads the generated-insight
 store.
+
+The retained analytics date owner changes from `insights` to `quality` so the
+in-memory date-yoke state follows the renamed deterministic page and is not
+mistaken for Generated insights scope.
 
 ## Generated insight scope
 
@@ -165,6 +180,11 @@ message, recent-activity, one-shot, or automation filters from the Sessions or
 Quality pages. Backend defaults apply to dimensions not represented by the
 form.
 
+The client timezone continues to be sent with every generation request as
+request context. It is not a session-scope filter and does not need a visible
+form control; preserving it keeps date bucketing aligned with the user's local
+calendar.
+
 The generated archive continues to display all saved model-generated insight
 types, including daily activity, agent analysis, single-session analysis, and
 canned reports. Moving the generation form does not migrate or filter stored
@@ -176,6 +196,8 @@ rows.
 - Selecting or copying a saved report produces
   `/recall?tab=generated&insight=<id>`.
 - A valid `insight` ID is selected after the archive loads.
+- A valid `insight` parameter implies the Generated insights tab when `tab` is
+  absent or unknown.
 - A missing, malformed, or absent ID leaves the archive unselected without
   blocking the rest of the page.
 - Selecting an in-flight task removes the saved `insight` parameter.
@@ -185,8 +207,9 @@ rows.
   scope, then navigate to the Generated insights tab.
 - Existing in-app links to deterministic analysis navigate to `/quality`.
 
-There is no redirect from `/insights` and no attempt to interpret its old query
-parameters.
+There is no redirect from `/insights`. The router applies its normal
+unknown-route fallback to Sessions, including the normal interpretation of
+query parameters that Sessions recognizes.
 
 ## Loading and error behavior
 
@@ -244,7 +267,8 @@ text.
 ### Router and application shell
 
 - `/quality` parses and renders Quality.
-- `/insights` is no longer a valid route.
+- `/insights` resolves to Sessions through the ordinary unknown-route fallback,
+  with recognized session query parameters preserved.
 - desktop and mobile navigation expose Quality.
 - Recall remains visible when only Generated insights is supported.
 - `/recall` selects the first available tab.
@@ -259,11 +283,12 @@ text.
 ### Generated insights
 
 - a direct `insight` link selects the saved report after loading;
+- an `insight` parameter without `tab` opens Generated insights;
 - copied links use the new Recall URL;
 - session and activity entry points open the generated tab with the expected
   selection or visible scope;
-- generation requests contain the visible scope and exclude hidden Sessions
-  filters;
+- generation requests contain the visible scope and client timezone while
+  excluding hidden Sessions filters;
 - unavailable generation leaves saved reports readable; and
 - task failure, retry, export, publish, and delete behavior remains intact.
 
@@ -289,10 +314,12 @@ text.
 - Only the active Recall panel performs work.
 - Generated reports can be scoped, generated, browsed, linked, exported,
   published, and deleted from Recall.
-- The generated request is determined only by visible scope controls.
+- Generated scope survives tab switches and can be seeded before navigation.
+- The generated request is determined by visible scope controls plus the client
+  timezone supplied as request context.
 - Quality contains no generated archive or generator controls.
 - `/quality` and all in-app entry points use the new information architecture.
-- `/insights` has no frontend alias or redirect.
+- `/insights` has no frontend alias or redirect and falls back to Sessions.
 - Read-only users retain access to saved generated reports.
 - User-facing copy and documentation consistently describe Recall, Generated
   insights, and Quality.
