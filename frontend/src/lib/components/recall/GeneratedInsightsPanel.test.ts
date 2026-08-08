@@ -30,6 +30,12 @@ const state = vi.hoisted(() => {
     created_at: "2026-08-01T12:00:00Z",
   };
   return {
+    sessions: {
+      agents: [] as Array<{ name: string; session_count: number }>,
+      projects: [],
+      loadAgents: mocks.loadAgents,
+      loadProjects: mocks.loadProjects,
+    },
     store: {
       dateFrom: "2026-07-01",
       dateTo: "2026-07-31",
@@ -71,12 +77,7 @@ vi.mock("../../stores/insights.svelte.js", () => ({
 }));
 
 vi.mock("../../stores/sessions.svelte.js", () => ({
-  sessions: {
-    agents: [],
-    projects: [],
-    loadAgents: mocks.loadAgents,
-    loadProjects: mocks.loadProjects,
-  },
+  sessions: state.sessions,
 }));
 
 vi.mock("../../stores/sync.svelte.js", () => ({
@@ -109,11 +110,12 @@ describe("GeneratedInsightsPanel", () => {
     router.params = { tab: "generated" };
     state.store.selectedId = 42;
     state.store.selectedItem = state.store.items[0]!;
+    state.sessions.agents = [];
     ui.activeModal = null;
   });
 
-  afterEach(() => {
-    if (component) unmount(component);
+  afterEach(async () => {
+    if (component) await unmount(component);
     component = undefined;
     document.body.innerHTML = "";
     router.params = {};
@@ -135,6 +137,21 @@ describe("GeneratedInsightsPanel", () => {
     ]) {
       expect(text).toContain(label);
     }
+  });
+
+  it("does not reorder the shared session agent list", async () => {
+    state.sessions.agents = [
+      { name: "codex", session_count: 5 },
+      { name: "claude", session_count: 8 },
+    ];
+
+    component = mount(GeneratedInsightsPanel, { target: document.body });
+    await tick();
+
+    expect(state.sessions.agents.map((agent) => agent.name)).toEqual([
+      "codex",
+      "claude",
+    ]);
   });
 
   it("generates from the scope retained in the insights store", async () => {
@@ -192,7 +209,7 @@ describe("GeneratedInsightsPanel", () => {
   it("cancels archive reads without canceling generation tasks", async () => {
     component = mount(GeneratedInsightsPanel, { target: document.body });
     await tick();
-    unmount(component);
+    await unmount(component);
     component = undefined;
 
     expect(mocks.cancelInFlightReads).toHaveBeenCalledOnce();

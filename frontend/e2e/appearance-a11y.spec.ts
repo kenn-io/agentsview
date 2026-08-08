@@ -57,7 +57,7 @@ function expectReadableContrast(colors: {
 }
 
 test.describe("Appearance accessibility", () => {
-  test("keeps Insights semantic wrappers as rendered layout boxes", async ({
+  test("keeps Quality semantic wrappers as rendered layout boxes", async ({
     page,
   }) => {
     let failSignals = false;
@@ -146,7 +146,7 @@ test.describe("Appearance accessibility", () => {
       }),
     );
 
-    await page.goto("/insights");
+    await page.goto("/quality");
     await expect(
       page.getByRole("heading", { name: "Quality Patterns" }),
     ).toBeVisible();

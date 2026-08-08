@@ -278,11 +278,11 @@ test.describe("Usage page", () => {
     ).toContainText("Last 30 days");
   });
 
-  test("adopts a retained Insights range after linking is enabled", async ({
+  test("adopts a retained Quality range after linking is enabled", async ({
     page,
   }) => {
-    await page.goto("/insights");
-    await expect(page.locator(".insights-page")).toBeVisible();
+    await page.goto("/quality");
+    await expect(page.locator(".quality-page")).toBeVisible();
 
     await page.locator(".kit-date-range-picker__trigger").click();
     await page.getByRole("button", { name: "90d", exact: true }).click();

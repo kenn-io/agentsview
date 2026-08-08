@@ -68,7 +68,7 @@
       label: m.insights_page_all_agents(),
       displayLabel: m.insights_page_all_agents(),
     },
-    ...sessions.agents
+    ...[...sessions.agents]
       .sort((a, b) => b.session_count - a.session_count)
       .map((agent) => ({
         name: agent.name,
@@ -450,8 +450,22 @@
                     insights.selectedItem.kind,
                   )}
                 </span>
-                {#if cacheStatusLabel(insights.selectedItem.cache_status)}
-                  <span>{cacheStatusLabel(insights.selectedItem.cache_status)}</span>
+                {#if insights.selectedItem.type === "llm_canned"}
+                  {#if cacheStatusLabel(insights.selectedItem.cache_status)}
+                    <span class="generated-meta-chip">
+                      {cacheStatusLabel(insights.selectedItem.cache_status)}
+                    </span>
+                  {/if}
+                  {#if insights.selectedItem.template_version}
+                    <span class="generated-meta-chip">
+                      {m.insights_page_template_version({ version: insights.selectedItem.template_version })}
+                    </span>
+                  {/if}
+                  {#if insights.selectedItem.aggregate_hash}
+                    <span class="generated-meta-chip">
+                      {m.insights_page_aggregate_hash({ hash: insights.selectedItem.aggregate_hash.slice(0, 12) })}
+                    </span>
+                  {/if}
                 {/if}
               </div>
               <div class="generated-actions">
@@ -641,6 +655,21 @@
     font-size: 0.7rem;
     font-weight: 700;
     padding: 0.2rem 0.5rem;
+  }
+
+  .generated-meta-chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 18px;
+    padding: 2px 6px;
+    border: 1px solid var(--border-muted);
+    border-radius: 3px;
+    background: var(--bg-inset);
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
   }
 
   .markdown-body {

@@ -119,8 +119,8 @@ test.describe("Session list", () => {
     expect(expectedFrom).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(expectedTo).toMatch(/^\d{4}-\d{2}-\d{2}$/);
 
-    await clickNavTab(page, "Insights");
-    await expect(page).toHaveURL(/\/insights/);
+    await clickNavTab(page, "Quality");
+    await expect(page).toHaveURL(/\/quality/);
 
     const requestPromise = page.waitForRequest((request) =>
       new URL(request.url()).pathname.endsWith(
