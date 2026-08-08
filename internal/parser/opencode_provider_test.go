@@ -389,9 +389,15 @@ func TestOpenCodeProviderStorageSourceMethods(t *testing.T) {
 
 	plan, err := provider.WatchPlan(context.Background())
 	require.NoError(t, err)
-	require.Len(t, plan.Roots, 1)
-	assert.Equal(t, filepath.Join(root, "storage"), plan.Roots[0].Path)
-	assert.True(t, plan.Roots[0].Recursive)
+	require.Len(t, plan.Roots, 2)
+	assert.Equal(t, root, plan.Roots[0].Path)
+	assert.False(t, plan.Roots[0].Recursive)
+	assert.Equal(t, []string{
+		"opencode.db", "opencode.db-wal",
+	}, plan.Roots[0].IncludeGlobs)
+	assert.Equal(t, filepath.Join(root, "storage"), plan.Roots[1].Path)
+	assert.True(t, plan.Roots[1].Recursive)
+	assert.Equal(t, []string{"*.json"}, plan.Roots[1].IncludeGlobs)
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
@@ -494,6 +500,8 @@ func TestOpenCodeProviderSQLiteSourceMethods(t *testing.T) {
 
 	plan, err := provider.WatchPlan(context.Background())
 	require.NoError(t, err)
+	// A SQLite-layout root has no storage tree, so it keeps the single
+	// recursive unit and plans no watch root that does not exist.
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.True(t, plan.Roots[0].Recursive)

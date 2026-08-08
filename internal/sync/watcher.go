@@ -16,7 +16,14 @@ import (
 )
 
 type RecursiveWatchResult struct {
-	Watched   int
+	Watched int
+	// Allocated counts the native watches this registration installed. Watched
+	// counts every directory the root covers, which includes directories an
+	// earlier root already watches natively. Charging those to the shared
+	// budget again spends capacity the process is not paying for, so a later
+	// root that overlaps an earlier one can be refused coverage the kernel
+	// already provides.
+	Allocated int
 	Unwatched int
 	Err       error
 	// MissingRootLifecycleOwned reports that the backend has durable native

@@ -374,8 +374,14 @@ func TestFSNotifyBackendRuntimeDegradationPreservesOverlappingRootScopes(t *test
 			Path: nested, Recursive: true, Exists: true,
 			Scopes: []WatchScope{{Agent: "cursor", SyncDir: nestedScope}},
 		},
-	}, 3)
+		// Two native watches cover both roots: nested is inside parent, so the
+		// nested root reuses the watch parent already installed instead of
+		// charging the shared budget for it a second time.
+	}, 2)
 	require.Len(t, results, 2)
+	require.Equal(t, 2, results[0].Allocated)
+	require.Zero(t, results[1].Allocated)
+	require.False(t, results[1].BudgetExhausted)
 	require.Zero(t, backend.runtimeBudget)
 
 	created := filepath.Join(nested, "created-after-startup")

@@ -333,12 +333,6 @@ func (spec openCodeProviderSpec) find(root, sessionID string) string {
 	return findOpenCodeFormatSourceFile(spec.format, root, sessionID)
 }
 
-// watchRoots returns the directories that should be watched for live
-// updates under a configured root.
-func (spec openCodeProviderSpec) watchRoots(root string) []string {
-	return resolveOpenCodeFormatWatchRoots(spec.format, root)
-}
-
 // storageIDs returns the set of session IDs present as storage JSON
 // under a root, used to skip duplicate SQLite metas in hybrid roots.
 func (spec openCodeProviderSpec) storageIDs(root string) map[string]struct{} {
@@ -664,22 +658,105 @@ func (s openCodeFormatSourceSet) discoverStorageEach(
 }
 
 func (s openCodeFormatSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
-	roots := make([]WatchRoot, 0, len(s.roots))
+	roots := make([]WatchRoot, 0, 2*len(s.roots))
 	for _, root := range s.roots {
-		for _, watchRoot := range s.spec.watchRoots(root) {
-			roots = append(roots, WatchRoot{
-				Path:      watchRoot,
-				Recursive: true,
-				IncludeGlobs: []string{
-					"*.json",
-					s.spec.dbName,
-					s.spec.dbName + "-wal",
-				},
-				DebounceKey: string(s.spec.agent) + ":opencode:" + watchRoot,
-			})
-		}
+		roots = append(roots, s.watchUnits(root)...)
 	}
 	return WatchPlan{Roots: roots}, nil
+}
+
+// watchUnits returns the coverage units for one configured root. The database
+// and its WAL are direct children of the root, so a shallow container unit
+// covers them, and a shallow watch never draws on the shared recursive budget.
+// Under one recursive unit the archive and the container shared that budget:
+// once earlier roots had spent it, the whole root registered with no native
+// watch at all, so a large archive elsewhere in the plan could leave a live
+// SQLite container uncovered. Exhaustion inside this root's own walk also
+// marked the container's coverage degraded along with the archive's, although
+// the root's watch had already been installed.
+func (s openCodeFormatSourceSet) watchUnits(root string) []WatchRoot {
+	if !s.splitsCoverageUnits(root) {
+		return []WatchRoot{{
+			Path:      root,
+			Recursive: true,
+			IncludeGlobs: []string{
+				"*.json",
+				s.spec.dbName,
+				s.spec.dbName + "-wal",
+			},
+			DebounceKey: string(s.spec.agent) + ":opencode:" + root,
+		}}
+	}
+	return []WatchRoot{
+		{
+			Path:      root,
+			Recursive: false,
+			IncludeGlobs: []string{
+				s.spec.dbName,
+				s.spec.dbName + "-wal",
+			},
+			DebounceKey: string(s.spec.agent) + ":container:" + root,
+		},
+		{
+			Path:         openCodeStorageWatchDir(root),
+			Recursive:    true,
+			IncludeGlobs: []string{"*.json"},
+			DebounceKey:  string(s.spec.agent) + ":storage:" + root,
+		},
+	}
+}
+
+// splitsCoverageUnits reports whether a configured root plans separate
+// container and storage units.
+//
+// The split needs an existing storage directory. Naming an absent one would
+// plan a watch root that cannot be established, and its polling obligation
+// probes a path that may never appear, which defers every other obligation on
+// the same configured dir. While storage is absent the single recursive unit
+// costs one native watch and still covers the tree if it is created later, and
+// the root's own watch is installed first so a growing archive can no longer
+// starve the database.
+//
+// A symlinked root also keeps the single unit. The daemon refuses to watch a
+// recursive root through a symlink and gates the configured dir's
+// reconciliation on the link target instead, and that check reads the unit's
+// Recursive flag: a shallow container unit would slip past it while the
+// storage unit walked the link's target anyway.
+//
+// The split is forfeited when another provider plans a recursive root at the
+// same path. The daemon keeps one watch root per path and merges a shallow
+// unit into a recursive one, so the merged root's walk covers the archive
+// again and the two share a budget once more. The merged root still gets its
+// own native watch, so nothing is left uncovered; only the isolation is lost,
+// and only for a directory two providers were configured to share.
+func (s openCodeFormatSourceSet) splitsCoverageUnits(root string) bool {
+	return !isSymlinkWatchPath(root) &&
+		isDirWatchPath(openCodeStorageWatchDir(root))
+}
+
+// isSymlinkWatchPath reports whether path is itself a symbolic link, without
+// resolving it.
+func isSymlinkWatchPath(path string) bool {
+	info, err := os.Lstat(path)
+	if err != nil || info == nil {
+		return false
+	}
+	return info.Mode()&os.ModeSymlink != 0
+}
+
+// isDirWatchPath reports whether path resolves to a directory.
+func isDirWatchPath(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || info == nil {
+		return false
+	}
+	return info.IsDir()
+}
+
+// openCodeStorageWatchDir is the recursive storage unit's path for a
+// configured root.
+func openCodeStorageWatchDir(root string) string {
+	return filepath.Join(root, "storage")
 }
 
 // reconciliationContainer maps a requested path to the SQLite container that
@@ -715,6 +792,9 @@ func (s openCodeFormatSourceSet) SourcesForChangedPath(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if !s.unitScopeAllows(req) {
+		return nil, nil
+	}
 	if dbPath, _, virtual := s.spec.parseVirtual(req.Path); virtual {
 		for _, root := range s.roots {
 			if _, under := relUnder(root, dbPath); !under {
@@ -744,6 +824,71 @@ func (s openCodeFormatSourceSet) SourcesForChangedPath(
 		}
 	}
 	return nil, nil
+}
+
+// unitScopeAllows scopes changed-path classification to the coverage units of
+// the configured root that owns the path. The engine calls
+// SourcesForChangedPath once per emitted watch root per event, so with two
+// units per configured root an unscoped WAL event would run the whole SQLite
+// fan-out twice. A request whose path (or, for a virtual path, its physical
+// database path) lies outside req.WatchRoot belongs to another unit and yields
+// no sources, and configured roots can nest, so only the most specific
+// containing root's units claim it.
+//
+// The container unit does not defer storage paths to the storage unit, even
+// though only one of the two watches them. Whether the storage unit exists is
+// a filesystem fact, and the engine resolves each provider's watch roots once
+// and reuses that set for the life of the process: a storage tree created
+// after that set was cached would be dispatched only against the container
+// root while the scope rule had already handed it to a root the caller never
+// passes, so no unit would claim it at all. Classifying a storage path twice
+// costs one repeated source lookup. The expensive claim, the shared
+// container's session listing, still cannot double, because a storage watch
+// root never contains the database or its WAL.
+//
+// An empty req.WatchRoot preserves unscoped behavior for callers that do not
+// dispatch per watch root.
+func (s openCodeFormatSourceSet) unitScopeAllows(req ChangedPathRequest) bool {
+	if req.WatchRoot == "" {
+		return true
+	}
+	path := req.Path
+	if dbPath, _, virtual := s.spec.parseVirtual(req.Path); virtual {
+		path = dbPath
+	}
+	if !pathAtOrUnder(req.WatchRoot, path) {
+		return false
+	}
+	owner, owned := s.mostSpecificRootFor(path)
+	if !owned {
+		return true
+	}
+	return reconciliationScopeSamePath(req.WatchRoot, owner) ||
+		reconciliationScopeSamePath(req.WatchRoot, openCodeStorageWatchDir(owner))
+}
+
+// mostSpecificRootFor returns the deepest configured root containing path.
+func (s openCodeFormatSourceSet) mostSpecificRootFor(path string) (string, bool) {
+	best := ""
+	for _, root := range s.roots {
+		clean := filepath.Clean(root)
+		if !pathAtOrUnder(clean, path) {
+			continue
+		}
+		if len(clean) > len(best) {
+			best = clean
+		}
+	}
+	return best, best != ""
+}
+
+// pathAtOrUnder reports whether path is root itself or lies within it.
+func pathAtOrUnder(root, path string) bool {
+	if filepath.Clean(root) == filepath.Clean(path) {
+		return true
+	}
+	_, under := relUnder(root, path)
+	return under
 }
 
 func (s openCodeFormatSourceSet) SourceForReconciliation(

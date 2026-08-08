@@ -1546,7 +1546,7 @@ func TestOpenCodeFormatMissingRootsUseNativeLifecycleWithoutPolling(t *testing.T
 
 			roots, unwatched, _, persistentDirAgents := collectWatchRoots(cfg)
 			require.Len(t, roots, rootCount)
-			results := make([]agentsync.RecursiveWatchResult, rootCount)
+			results := make([]agentsync.RecursiveWatchResult, len(roots))
 			for i := range results {
 				results[i] = agentsync.RecursiveWatchResult{
 					Watched:                   1,
@@ -3369,4 +3369,77 @@ func TestSyncWatchBatchDirectoryRenameDefersUnavailableProviderRoots(t *testing.
 	require.NoError(t, err)
 	assert.NotNil(t, synced,
 		"the available root must still reconcile the rename authoritatively")
+}
+
+// TestOpenCodeSQLiteOnlyRootKeepsItsPollingFallback is the regression that a
+// coverage-unit split can introduce silently. A SQLite-layout OpenCode root
+// never grows a storage/ directory, so a polling obligation probed on that
+// path could never be satisfied, and an unsatisfiable probe defers every other
+// obligation sharing the configured dir. The root would then have neither
+// native coverage nor polling.
+func TestOpenCodeSQLiteOnlyRootKeepsItsPollingFallback(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "opencode")
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "opencode.db"), []byte("db"), 0o600,
+	))
+	require.NoDirExists(t, filepath.Join(root, "storage"))
+
+	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{
+		parser.AgentOpenCode: {root},
+	}}
+	roots, unwatched, symlinkGated, persistentDirAgents := collectWatchRoots(cfg)
+
+	// Degraded coverage is the only reason this root needs polling at all.
+	// Registration skips a unit that does not exist, so its result stays
+	// zero-valued.
+	results := make([]agentsync.RecursiveWatchResult, len(roots))
+	for i := range results {
+		if roots[i].exists {
+			results[i] = agentsync.RecursiveWatchResult{Unwatched: 1}
+		}
+	}
+	obligations := watchPollingObligations(
+		roots, results, unwatched, persistentDirAgents,
+	)
+	obligations = append(obligations, symlinkPollingObligations(symlinkGated)...)
+
+	local := make([]pollingObligation, 0, len(obligations))
+	for _, obligation := range obligations {
+		local = append(local, syncObligationToPoller(obligation))
+	}
+	scopes := availableUnwatchedPollScopes(local)
+	assert.Equal(t, []string{root}, scopes[parser.AgentOpenCode],
+		"degraded coverage on a SQLite-only root must still reach polling")
+}
+
+// TestOpenCodeAbsentRootPollsTheConfiguredDir covers the cold-start layout:
+// nothing is installed yet, so the plan must leave one satisfiable probe on
+// the configured dir rather than a deeper path that appears only afterwards.
+func TestOpenCodeAbsentRootPollsTheConfiguredDir(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "not-installed")
+	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{
+		parser.AgentOpenCode: {root},
+	}}
+	roots, unwatched, symlinkGated, persistentDirAgents := collectWatchRoots(cfg)
+
+	obligations := watchPollingObligations(
+		roots, make([]agentsync.RecursiveWatchResult, len(roots)),
+		unwatched, persistentDirAgents,
+	)
+	obligations = append(obligations, symlinkPollingObligations(symlinkGated)...)
+	require.NotEmpty(t, obligations)
+	for _, obligation := range obligations {
+		assert.Equal(t, filepath.Clean(root), filepath.Clean(obligation.Probe),
+			"no obligation may be probed on a path deeper than the configured dir")
+	}
+
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	local := make([]pollingObligation, 0, len(obligations))
+	for _, obligation := range obligations {
+		local = append(local, syncObligationToPoller(obligation))
+	}
+	scopes := availableUnwatchedPollScopes(local)
+	assert.Equal(t, []string{root}, scopes[parser.AgentOpenCode],
+		"the dir must become pollable as soon as it appears")
 }
