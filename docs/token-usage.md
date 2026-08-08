@@ -36,7 +36,7 @@ it's also dramatically faster on large histories (see
     Agent**, **Gemini**,
     **Qwen Code**, **OpenClaw**, **QClaw**, **Hermes**, **WorkBuddy**, **Forge**,
     **Piebald**, **Antigravity IDE/CLI**, **Zed**, **VS Code Copilot**, **Visual
-    Studio Copilot**, **Mistral Vibe**, and **gptme**.
+    Studio Copilot**, **Mistral Vibe**, **gptme**, and **Amp**.
 
     Coverage is opportunistic rather than guaranteed for every session from those
     agents: rows contribute to cost only when the local transcript includes usable
@@ -491,6 +491,31 @@ so the input side of the equation is accurate:
 
 If you upgraded from an earlier version, the first `usage` invocation triggers a
 full resync so these corrections apply to historical sessions.
+
+### Amp Token Metrics
+
+Amp thread documents carry a `usage` object on each assistant message with the
+model and its input, output, cache-creation, and cache-read token counts.
+AgentsView reads them per inference, so a thread that switches models keeps each
+model's own tokens rather than collapsing to one.
+
+Amp routes every prompt token into one of three input buckets. Anthropic-backed
+threads already use Anthropic's cache semantics and are read as-is.
+OpenAI-backed threads report `inputTokens` as zero and classify the whole
+uncached prompt as cache creation; because OpenAI does not bill cache writes,
+those tokens are recorded as uncached input and no cache-creation bucket is
+emitted — the same normalization the Codex parser applies for the same reason.
+
+Two limits are worth knowing. Older threads can omit the model entirely. Usage
+reporting counts only rows that carry a model, so those inferences are absent
+from daily totals and model breakdowns rather than appearing at a guessed rate —
+their tokens are still stored and visible in the session's own usage view. And
+Amp's exports record only main-thread inference, so tokens spent by `oracle`,
+`librarian`, and other subagents are not included in a thread's totals.
+
+Note that recent Amp versions keep complete threads server-side and leave only
+stub files on disk. AgentsView reports usage for whatever complete threads are
+present locally; threads that exist only as stubs have nothing to read.
 
 ## How It Compares to `ccusage`
 

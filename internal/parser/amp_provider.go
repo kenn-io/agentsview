@@ -54,10 +54,12 @@ func ampProviderCapabilities() Capabilities {
 	return Capabilities{
 		Source: jsonlFileProviderSourceCapabilities(),
 		Content: ContentCapabilities{
-			FirstMessage: CapabilitySupported,
-			Thinking:     CapabilitySupported,
-			ToolCalls:    CapabilitySupported,
-			ToolResults:  CapabilitySupported,
+			FirstMessage:         CapabilitySupported,
+			Thinking:             CapabilitySupported,
+			ToolCalls:            CapabilitySupported,
+			ToolResults:          CapabilitySupported,
+			PerMessageTokenUsage: CapabilitySupported,
+			Model:                CapabilitySupported,
 		},
 	}
 }
