@@ -78,3 +78,49 @@ func TestRegisterRootsReusesNativeWatchesAfterTheBudgetIsSpent(t *testing.T) {
 		"the reusing root must own the shared watch, or removing the first "+
 			"root would drop coverage the second still needs")
 }
+
+// TestRegisterRootsAlwaysWatchesARecursiveRootItself covers the coverage a
+// shallow unit loses when the plan merges it into a recursive unit at the same
+// path. Two providers can name one directory, one shallowly and one
+// recursively, and the daemon keeps a single root for it. A shallow watch is
+// installed unconditionally, so refusing the merged root once the budget is
+// spent would silently drop coverage the shallow unit guaranteed.
+func TestRegisterRootsAlwaysWatchesARecursiveRootItself(t *testing.T) {
+	backend := testFSNotifyBackend(t)
+	first := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(first, "child"), 0o755))
+	shared := t.TempDir()
+	sharedChild := filepath.Join(shared, "child")
+	require.NoError(t, os.Mkdir(sharedChild, 0o755))
+
+	watcher, err := newWatcherWithBackendOptions(
+		0, 0, func(context.Context, WatchBatch) error { return nil },
+		backend, 8, 1_000, WatcherOptions{},
+	)
+	require.NoError(t, err)
+
+	// The first root consumes the whole budget, so the merged root registers
+	// with nothing left to spend.
+	results := watcher.RegisterRoots([]WatchRoot{
+		{Path: first, Recursive: true, Exists: true},
+		{Path: shared, Recursive: true, Exists: true},
+	}, 2)
+	require.Len(t, results, 2)
+	require.Equal(t, 2, results[0].Allocated,
+		"the fixture must actually spend the budget, or the guard is vacuous")
+	require.False(t, results[0].BudgetExhausted)
+	require.Zero(t, backend.runtimeBudget)
+
+	assert.Contains(t, backend.watcher.WatchList(), shared,
+		"a recursive root must still watch its own directory")
+	assert.True(t, results[1].BudgetExhausted,
+		"the subtree below it stays discretionary and hands off to polling")
+	assert.NotContains(t, backend.watcher.WatchList(), sharedChild)
+
+	// The mandatory watch is off the books like a shallow root's, so removing
+	// it must not hand back a slot the process never spent.
+	assert.Zero(t, results[1].Allocated)
+	require.NoError(t, backend.Remove(shared))
+	assert.Zero(t, backend.runtimeBudget,
+		"an uncharged watch cannot refund budget above the cap")
+}

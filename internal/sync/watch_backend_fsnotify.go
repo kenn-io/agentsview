@@ -114,7 +114,14 @@ func (b *fsnotifyBackend) AddRecursive(root string, budget int) RecursiveWatchRe
 				result.Watched++
 				return nil
 			}
-			if remaining <= 0 {
+			// The root's own directory is the mandatory part of a recursive
+			// registration and its subtree is the discretionary part. A
+			// shallow unit's watch is installed unconditionally, so a plan
+			// that merges one into a recursive unit at the same path would
+			// lose that coverage the moment the budget ran out. The subtree
+			// below still reports BudgetExhausted and hands off to polling.
+			mandatory := path == root
+			if remaining <= 0 && !mandatory {
 				result.BudgetExhausted = true
 				return filepath.SkipAll
 			}
@@ -127,11 +134,18 @@ func (b *fsnotifyBackend) AddRecursive(root string, budget int) RecursiveWatchRe
 				}
 				return nil
 			}
-			b.watchBudgetCost[path]++
+			// A mandatory watch installed past the budget sits outside the
+			// accounting entirely, the way a shallow root already does: it is
+			// not charged, so removing it must not refund a slot the process
+			// never spent. Charging it and refunding it would leave headroom
+			// above the cap that runtime subtree adds could then claim.
+			if remaining > 0 {
+				b.watchBudgetCost[path]++
+				remaining--
+				result.Allocated++
+			}
 			b.addWatchOwner(path, root)
-			remaining--
 			result.Watched++
-			result.Allocated++
 			return nil
 		})
 	if errors.Is(result.Err, filepath.SkipAll) {
