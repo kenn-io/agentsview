@@ -55,9 +55,9 @@ insight entity or the `/api/v1/insights` backend API.
 
 The tab selection belongs in the URL so refresh, back/forward navigation, copied
 links, and direct entry all restore the same surface. An absent or unknown `tab`
-value selects the first available tab unless a valid `insight` parameter is
-present. In that case, the saved-report deep link implies the Generated insights
-tab.
+value selects the first available tab unless an `insight` parameter is present.
+In that case, the saved-report deep link implies the Generated insights tab;
+parsing and archive lookup determine whether a report is selected.
 
 Only the selected panel mounts. The corpus panel therefore does not refresh or
 poll extraction state while Generated insights is open, and the generated
@@ -196,8 +196,9 @@ rows.
 - Selecting or copying a saved report produces
   `/recall?tab=generated&insight=<id>`.
 - A valid `insight` ID is selected after the archive loads.
-- A valid `insight` parameter implies the Generated insights tab when `tab` is
-  absent or unknown.
+- A present `insight` parameter implies the Generated insights tab when `tab` is
+  absent or unknown, even if the value is malformed or does not match a saved
+  report.
 - A missing, malformed, or absent ID leaves the archive unselected without
   blocking the rest of the page.
 - Selecting an in-flight task removes the saved `insight` parameter.
