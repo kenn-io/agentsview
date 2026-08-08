@@ -78,7 +78,7 @@ func (w *Watcher) RegisterRoots(
 			continue
 		}
 		results[i] = w.backend.AddRecursive(root.Path, remaining)
-		remaining -= results[i].Watched
+		remaining -= results[i].Allocated
 	}
 	return results
 }

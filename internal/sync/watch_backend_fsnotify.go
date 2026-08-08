@@ -105,6 +105,15 @@ func (b *fsnotifyBackend) AddRecursive(root string, budget int) RecursiveWatchRe
 			if path != root && b.shouldExcludeForRoot(path, root) {
 				return filepath.SkipDir
 			}
+			// A directory an earlier root already watches natively is shared,
+			// not installed again: the kernel watch is already paid for, so
+			// settle reuse before the budget check or an overlapping root
+			// would be refused coverage that already exists.
+			if len(b.watchOwners[path]) > 0 {
+				b.addWatchOwner(path, root)
+				result.Watched++
+				return nil
+			}
 			if remaining <= 0 {
 				result.BudgetExhausted = true
 				return filepath.SkipAll
@@ -122,6 +131,7 @@ func (b *fsnotifyBackend) AddRecursive(root string, budget int) RecursiveWatchRe
 			b.addWatchOwner(path, root)
 			remaining--
 			result.Watched++
+			result.Allocated++
 			return nil
 		})
 	if errors.Is(result.Err, filepath.SkipAll) {
