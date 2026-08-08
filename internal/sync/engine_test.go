@@ -5600,6 +5600,41 @@ func TestProjectIdentityObservationSkipsProtectedPathByDefault(t *testing.T) {
 		"root path must stay the raw cwd, not a resolved git root")
 }
 
+// TestProjectIdentityObservationSkipsSymlinkedProtectedCwd pins that a cwd
+// reaching a protected location only through a symlink is refused too: a
+// lexical-only gate would pass it, and the discovery's own EvalSymlinks and
+// git reads would then enter the protected folder.
+func TestProjectIdentityObservationSkipsSymlinkedProtectedCwd(t *testing.T) {
+	database := openTestDB(t)
+	home, _ := protectedPathIdentityRepo(t)
+	require.NoError(t, os.Symlink(
+		filepath.Join(home, "Documents"), filepath.Join(home, "code"),
+	))
+	cwd := filepath.Join(home, "code", "proj", "subdir")
+	engine := NewEngine(database, EngineConfig{Machine: "current-machine"})
+	t.Cleanup(engine.Close)
+	engine.goos = "darwin"
+	engine.homeDir = home
+
+	require.NoError(t, engine.writeProjectIdentityObservation(
+		t.Context(), db.Session{
+			ID: "identity-protected-symlink", Project: "symlinked-project",
+			Machine: "current-machine", Agent: "codex", Cwd: cwd,
+			StartedAt: strPtr(time.Now().UTC().Format(time.RFC3339Nano)),
+		},
+	))
+
+	observations, err := database.ListProjectIdentityObservations(
+		t.Context(), []string{"symlinked-project"},
+	)
+	require.NoError(t, err)
+	require.Len(t, observations, 1)
+	assert.Empty(t, observations[0].GitRemote,
+		"a cwd symlinked into a protected location must not be probed")
+	assert.Equal(t, cwd, observations[0].RootPath,
+		"root path must stay the raw cwd, not a resolved protected root")
+}
+
 // TestProjectIdentityObservationScansProtectedPathWhenOptedIn pins that
 // scan_protected_paths restores full git identity for users who keep code in
 // Documents and accept the macOS prompt.

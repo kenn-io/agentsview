@@ -564,6 +564,52 @@ func TestIsProtectedUserDataPath(t *testing.T) {
 	}
 }
 
+// TestResolvesIntoProtectedUserDataPath pins that the resolving variant
+// catches working directories that only reach a protected folder through a
+// symlink, which the lexical predicate alone cannot see.
+func TestResolvesIntoProtectedUserDataPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the predicate compares POSIX home paths built with filepath")
+	}
+	home := t.TempDir()
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(home, "Documents", "proj"), 0o755,
+	))
+	require.NoError(t, os.MkdirAll(filepath.Join(home, "src", "app"), 0o755))
+	require.NoError(t, os.Symlink(
+		filepath.Join(home, "Documents"), filepath.Join(home, "code"),
+	))
+	require.NoError(t, os.Symlink("./Documents", filepath.Join(home, "rel")))
+	require.NoError(t, os.Symlink(
+		filepath.Join(home, "loop"), filepath.Join(home, "loop"),
+	))
+	outside := t.TempDir()
+	require.NoError(t, os.Symlink(outside, filepath.Join(home, "out")))
+
+	tests := []struct {
+		name string
+		goos string
+		path string
+		want bool
+	}{
+		{"lexically protected", "darwin", filepath.Join(home, "Documents", "proj"), true},
+		{"absolute symlink into protected", "darwin", filepath.Join(home, "code", "proj"), true},
+		{"relative symlink into protected", "darwin", filepath.Join(home, "rel", "proj"), true},
+		{"link loop fails protected", "darwin", filepath.Join(home, "loop", "proj"), true},
+		{"plain unprotected", "darwin", filepath.Join(home, "src", "app"), false},
+		{"symlink to unprotected", "darwin", filepath.Join(home, "out", "app"), false},
+		{"missing unprotected path", "darwin", filepath.Join(home, "src", "gone", "deep"), false},
+		{"linux never matches", "linux", filepath.Join(home, "code", "proj"), false},
+		{"relative path", "darwin", "code/proj", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want,
+				ResolvesIntoProtectedUserDataPath(tt.goos, home, tt.path))
+		})
+	}
+}
+
 // TestNormalizeStoredRootPathSkipsAutomountNamespace pins that on macOS a
 // stored /home/... root path normalizes to its cleaned form without touching
 // the filesystem: resolving it through the automounter is both futile (the

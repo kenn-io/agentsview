@@ -998,9 +998,11 @@ AgentsView no longer touches these locations during discovery:
   `~/Dropbox`
 - `~/Library/Mobile Documents` (iCloud Drive)
 
-Sessions whose working directory lives in one of these folders keep **path-only
-project identity**: they are still ingested, listed, searched, and grouped by
-path, but they carry no Git remote, worktree relationship, or branch. Sessions
+Sessions whose working directory lives in one of these folders — including
+directories that only reach one through a symlink — keep **path-only project
+identity**: they are still ingested, listed, searched, and grouped by path, but
+they carry no Git remote, worktree relationship, or branch, and their project
+name comes from the path rather than the enclosing Git repository. Sessions
 anywhere else are unaffected.
 
 If you keep code in one of these folders and want the Git detail, opt in:

@@ -9,17 +9,57 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
 	gitrepo "go.kenn.io/kit/git/repo"
 	"golang.org/x/sync/singleflight"
+
+	"go.kenn.io/agentsview/internal/export"
 )
 
 // osStat is indirected through a var so tests can intercept stat
 // calls from the git-root walker. Production code always uses
 // os.Stat via this binding.
 var osStat = os.Stat
+
+// allowProtectedPathProbes lets project extraction probe recorded working
+// directories inside macOS TCC-protected locations. It is package-level
+// because parsers extract project names deep inside per-format code with no
+// engine context to consult. The zero value refuses those probes, so a
+// process that never opts in cannot raise a consent prompt from parsing.
+var allowProtectedPathProbes atomic.Bool
+
+// SetAllowProtectedPathProbes sets whether project extraction may probe
+// macOS TCC-protected working directories for git roots. Wired from the
+// scan_protected_paths config option by the sync engine.
+func SetAllowProtectedPathProbes(allow bool) {
+	allowProtectedPathProbes.Store(allow)
+}
+
+// probeGitRootForCwd is indirected through a var so tests can force the
+// guard's decision without building a real protected home layout.
+var probeGitRootForCwd = defaultProbeGitRootForCwd
+
+// defaultProbeGitRootForCwd reports whether the git-root walk may touch
+// cleaned on disk. The walk stats every ancestor, reads .git file contents,
+// lists sibling directories, and execs git — all attributed to the app
+// bundle on macOS, so a cwd inside a TCC-protected folder would raise a
+// consent prompt during passive parsing. An unresolvable home directory
+// leaves the guard inactive rather than guessing at protected roots.
+func defaultProbeGitRootForCwd(cleaned string) bool {
+	if allowProtectedPathProbes.Load() {
+		return true
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return true
+	}
+	return !export.ResolvesIntoProtectedUserDataPath(
+		runtime.GOOS, home, cleaned,
+	)
+}
 
 var projectMarkers = []string{
 	"code", "projects", "repos", "src", "work", "dev",
@@ -127,7 +167,8 @@ func extractProjectFromCwdWithBranch(
 	// an unbacked autofs prefix cascades through automountd into
 	// opendirectoryd (/usr/libexec/od_user_homes), so we probe
 	// the prefix once before walking.
-	if filepath.IsAbs(cleaned) && !isForeignOSPath(cwd, cleaned, winPath) {
+	if filepath.IsAbs(cleaned) && !isForeignOSPath(cwd, cleaned, winPath) &&
+		probeGitRootForCwd(cleaned) {
 		if root := findGitRepoRoot(ctx, cleaned); root != "" {
 			name := filepath.Base(root)
 			if isInvalidPathBase(name) {

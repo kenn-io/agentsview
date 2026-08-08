@@ -854,6 +854,96 @@ func IsProtectedUserDataPath(goos, home, p string) bool {
 	return false
 }
 
+// maxProtectedPathLinkHops bounds symlink resolution in
+// ResolvesIntoProtectedUserDataPath. Hitting the bound treats the path as
+// protected, so a link loop fails toward skipping the probe rather than
+// looping forever or letting the caller resolve the loop itself.
+const maxProtectedPathLinkHops = 40
+
+// ResolvesIntoProtectedUserDataPath reports whether p denotes a location
+// inside a macOS TCC-protected user data folder once symlinks are followed.
+// IsProtectedUserDataPath alone compares lexically, so a working directory
+// like ~/code/proj where ~/code links into ~/Documents would pass it and the
+// caller's own Stat or EvalSymlinks would then reach into the protected
+// folder. This walk resolves one component at a time and checks every
+// candidate lexically before touching it with Lstat, so answering the
+// question never enters a protected location itself. Unresolvable links are
+// treated as protected; a missing path component means nothing beyond it can
+// be opened, so the remainder is reported unprotected.
+func ResolvesIntoProtectedUserDataPath(goos, home, p string) bool {
+	if goos != "darwin" || strings.TrimSpace(home) == "" || !filepath.IsAbs(p) {
+		return false
+	}
+	// Compare against the symlink-resolved home too: once the walk hops
+	// through a link, it continues on resolved prefixes, and a home behind
+	// a symlinked ancestor (e.g. /var -> /private/var) would never match
+	// the unresolved form lexically. Resolving home itself only stats its
+	// ancestors, which are never protected locations.
+	homes := []string{home}
+	if resolved, err := filepath.EvalSymlinks(home); err == nil &&
+		filepath.Clean(resolved) != filepath.Clean(home) {
+		homes = append(homes, resolved)
+	}
+	return resolvesIntoProtectedUserData(goos, homes, p, 0)
+}
+
+func protectedUnderAnyHome(goos string, homes []string, p string) bool {
+	for _, home := range homes {
+		if IsProtectedUserDataPath(goos, home, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func resolvesIntoProtectedUserData(
+	goos string, homes []string, p string, hops int,
+) bool {
+	if hops > maxProtectedPathLinkHops {
+		return true
+	}
+	if protectedUnderAnyHome(goos, homes, p) {
+		return true
+	}
+	rest := splitAbsPathComponents(p)
+	current := string(filepath.Separator)
+	for i, component := range rest {
+		next := filepath.Join(current, component)
+		if protectedUnderAnyHome(goos, homes, next) {
+			return true
+		}
+		info, err := os.Lstat(next)
+		if err != nil {
+			return false
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(next)
+			if err != nil {
+				return true
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(current, target)
+			}
+			resolved := filepath.Join(
+				append([]string{target}, rest[i+1:]...)...,
+			)
+			return resolvesIntoProtectedUserData(goos, homes, resolved, hops+1)
+		}
+		current = next
+	}
+	return false
+}
+
+func splitAbsPathComponents(p string) []string {
+	trimmed := strings.TrimPrefix(
+		filepath.Clean(p), string(filepath.Separator),
+	)
+	if trimmed == "" {
+		return nil
+	}
+	return strings.Split(trimmed, string(filepath.Separator))
+}
+
 func resolveLiveRootPath(cleaned string) (string, bool) {
 	if IsAutomountNamespacePath(runtime.GOOS, cleaned) {
 		return "", false

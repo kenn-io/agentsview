@@ -563,6 +563,15 @@ func NewEngine(
 		maps.Copy(providerModes, cfg.ProviderMigrationModes)
 	}
 
+	if cfg.ScanProtectedPaths {
+		// Parsers extract project names by probing recorded cwds for git
+		// roots; that guard is package-level because extraction runs deep
+		// inside per-format code with no engine to consult. The opt-in only
+		// ever enables it: engines built without the option (remote sync,
+		// the identity backfill) must not revoke the user's process-wide
+		// choice.
+		parser.SetAllowProtectedPathProbes(true)
+	}
 	e := &Engine{
 		db:                      database,
 		stat:                    os.Stat,
@@ -11299,11 +11308,13 @@ func userHomeDirOrEmpty() string {
 // Working directories inside macOS TCC-protected locations stay untouched
 // unless the user set scan_protected_paths, so importing an archive cannot
 // raise consent prompts for Documents, Downloads, or a cloud-provider folder.
+// The check follows symlinks, so a cwd that merely links into a protected
+// folder is refused before Stat or EvalSymlinks can enter it.
 func (e *Engine) mayProbeLocalPath(p string) bool {
 	if e.scanProtectedPaths {
 		return true
 	}
-	return !export.IsProtectedUserDataPath(e.goos, e.homeDir, p)
+	return !export.ResolvesIntoProtectedUserDataPath(e.goos, e.homeDir, p)
 }
 
 // isLocalMachineAttribution recognizes empty and the legacy "local" sentinel
