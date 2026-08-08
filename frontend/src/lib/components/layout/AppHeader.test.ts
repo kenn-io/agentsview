@@ -249,7 +249,7 @@ describe("AppHeader export actions", () => {
       "Trends",
       "Recall",
       "Pinned",
-      "Insights",
+      "Issue Review",
       "Trash",
       "Recent Edits",
       "Data",

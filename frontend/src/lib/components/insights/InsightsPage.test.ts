@@ -414,7 +414,7 @@ describe("InsightsPage date yoke integration", () => {
     expect(yokedDates.range).toBeNull();
 
     const refresh = document.querySelector<HTMLButtonElement>(
-      'button[aria-label="Refresh insights"]',
+      'button[aria-label="Refresh issue review"]',
     );
     expect(refresh).not.toBeNull();
     const callsBeforeRefresh = fetchStates.length;
@@ -768,16 +768,23 @@ describe("InsightsPage selected insight actions", () => {
     document.body.innerHTML = "";
   });
 
-  it("renders the deterministic-vs-generated insights help affordance", async () => {
+  it("labels the recurring issue review and its evidence", async () => {
     component = mount(InsightsPage, { target: document.body });
     await tick();
+
+    expect(document.querySelector("#actions-title")?.textContent).toContain(
+      "What to fix next",
+    );
+    expect(document.querySelector("#facts-title")?.textContent).toContain(
+      "Top issue drivers",
+    );
 
     const helpBlock = document.querySelector("p.insights-help");
     expect(helpBlock).not.toBeNull();
     const helpText = helpBlock?.textContent ?? "";
     expect(
       helpText.includes("insights_page_insights_help_intro") ||
-        helpText.includes("Deterministic sections are computed"),
+        helpText.includes("This review ranks recurring patterns"),
     ).toBe(true);
 
     const docsLink = document.querySelector<HTMLAnchorElement>(
@@ -786,7 +793,7 @@ describe("InsightsPage selected insight actions", () => {
     expect(docsLink).not.toBeNull();
     expect(
       (docsLink!.textContent?.includes("insights_page_insights_help_docs") ||
-        docsLink!.textContent?.includes("Read Insights docs")),
+        docsLink!.textContent?.includes("Read issue review docs")),
     ).toBe(true);
     expect(docsLink!.getAttribute("target")).toBe("_blank");
     expect(docsLink!.getAttribute("rel")).toContain("noopener");

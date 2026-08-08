@@ -47,8 +47,6 @@ export const ALL_BLOCK_TYPES: BlockType[] = [
 
 const BLOCK_FILTER_KEY = "agentsview-block-filters";
 const TRANSCRIPT_MODE_KEY = "agentsview-transcript-mode";
-const HIDE_RESOLVED_REMEDIATION_KEY =
-  "agentsview-hide-resolved-remediation";
 const VITALS_KEY = "agentsview-session-vitals";
 const VITALS_CALLS_EXPANDED_KEY =
   "agentsview-session-vitals-calls-expanded";
@@ -268,9 +266,6 @@ class UIStore {
   transcriptMode: TranscriptMode = $state(
     readStoredTranscriptMode(),
   );
-  hideResolvedRemediation: boolean = $state(
-    readStoredBool(HIDE_RESOLVED_REMEDIATION_KEY, false),
-  );
   sidebarWidth: number = $state(readStoredSidebarWidth());
   activeModal: ModalType = $state(null);
   /** Whether the next gist publish should be secret instead of public. */
@@ -322,17 +317,6 @@ class UIStore {
           localStorage?.setItem(
             TRANSCRIPT_MODE_KEY,
             this.transcriptMode,
-          );
-        } catch {
-          // ignore
-        }
-      });
-
-      $effect(() => {
-        try {
-          localStorage?.setItem(
-            HIDE_RESOLVED_REMEDIATION_KEY,
-            String(this.hideResolvedRemediation),
           );
         } catch {
           // ignore
@@ -542,10 +526,6 @@ class UIStore {
 
   setTranscriptMode(mode: TranscriptMode) {
     this.transcriptMode = mode;
-  }
-
-  setHideResolvedRemediation(hide: boolean) {
-    this.hideResolvedRemediation = hide;
   }
 
   setSidebarWidth(width: number) {
