@@ -18,7 +18,7 @@ import sourceRaw from "./AnalyticsPage.svelte?raw";
 // @ts-ignore
 import AnalyticsPage from "./AnalyticsPage.svelte";
 // @ts-ignore
-import InsightsPage from "../insights/InsightsPage.svelte";
+import QualityPage from "../quality/QualityPage.svelte";
 
 const source = sourceRaw.replace(/\r\n/g, "\n");
 
@@ -288,7 +288,7 @@ describe("AnalyticsPage refresh behavior", () => {
     });
   });
 
-  it("retains independent Sessions and Insights ranges when linking is disabled", async () => {
+  it("retains independent Sessions and Quality ranges when linking is disabled", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-07-10T12:00:00"));
     vi.stubGlobal(
@@ -300,7 +300,7 @@ describe("AnalyticsPage refresh behavior", () => {
       },
     );
     vi.spyOn(analytics, "fetchAll").mockResolvedValue();
-    vi.spyOn(analytics, "fetchSignalsForInsights").mockResolvedValue();
+    vi.spyOn(analytics, "fetchSignalsForQuality").mockResolvedValue();
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
@@ -318,8 +318,8 @@ describe("AnalyticsPage refresh behavior", () => {
 
     unmount(component);
     component = undefined;
-    router.navigate("insights");
-    component = mount(InsightsPage, { target: document.body });
+    router.navigate("quality");
+    component = mount(QualityPage, { target: document.body });
     await flushEffects();
 
     expect(analytics.windowDays).toBe(365);
@@ -336,8 +336,8 @@ describe("AnalyticsPage refresh behavior", () => {
 
     unmount(component);
     component = undefined;
-    router.navigate("insights");
-    component = mount(InsightsPage, { target: document.body });
+    router.navigate("quality");
+    component = mount(QualityPage, { target: document.body });
     await flushEffects();
 
     expect(analytics.windowDays).toBe(7);

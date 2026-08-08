@@ -1128,39 +1128,32 @@ test.describe('Modals', () => {
   });
 });
 
-// ── Insights ────────────────────────────────────────────
+// ── Recall and Quality ──────────────────────────────────
 
-test.describe('Insights', () => {
+test.describe('Recall and Quality', () => {
   test.beforeEach(async ({ page }) => {
     await page.setViewportSize(FULL);
     await waitForApp(page);
   });
 
-  async function navigateToInsights(page: Page) {
-    await page.goto('/insights');
-    await page.waitForSelector('.insights-page', {
+  async function navigateToGeneratedInsights(page: Page) {
+    await page.goto('/recall?tab=generated');
+    await page.waitForSelector('.generated-insights-panel', {
       timeout: 10_000,
     });
     await page.waitForTimeout(1000);
   }
 
-  test('full insights page', async ({ page }) => {
-    await navigateToInsights(page);
-
-    // Select the first completed insight (weekly analysis)
-    const rows = page.locator('.insight-row');
-    if (await rows.count() > 0) {
-      await rows.first().click();
-      await page.waitForTimeout(500);
-    }
-    await snap(page, 'insights');
+  test('quality page', async ({ page }) => {
+    await page.goto('/quality');
+    await page.waitForSelector('.quality-page', { timeout: 10_000 });
+    await page.waitForTimeout(1000);
+    await snap(page, 'quality');
   });
 
-  test('insight content', async ({ page }) => {
-    await navigateToInsights(page);
+  test('generated insights', async ({ page }) => {
+    await navigateToGeneratedInsights(page);
 
-    // Select the first generated insight and snap its rendered detail.
-    // extract-db.sh seeds the archive with safe, synthetic reports.
     const items = page.locator('.generated-list button');
     await items.first().waitFor({ state: 'visible', timeout: 10_000 });
     await items.first().click();
@@ -1168,7 +1161,10 @@ test.describe('Insights', () => {
       timeout: 10_000,
     });
     await page.waitForTimeout(400);
-    await snapEl(page.locator('.generated-detail'), 'insight-content');
+    await snapEl(
+      page.locator('.recall-page'),
+      'recall-generated-insights'
+    );
   });
 
   test('session insight action in header', async ({ page }) => {

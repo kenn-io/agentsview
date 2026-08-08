@@ -248,7 +248,7 @@ describe("ThreeColumnLayout", () => {
     navigate.mockRestore();
   });
 
-  it("omits Recall from mobile navigation for read-only backends", async () => {
+  it("keeps Recall in mobile navigation for read-only backends", async () => {
     setViewportWidth(SIDEBAR_DESKTOP_BREAKPOINT - 1);
     ui.isMobileViewport = true;
     sync.serverVersion = {
@@ -265,7 +265,8 @@ describe("ThreeColumnLayout", () => {
         ".mobile-nav .mobile-nav-btn",
       ),
     ).map((button) => button.textContent?.trim());
-    expect(labels).not.toContain(m.nav_recall());
+    expect(labels).toContain(m.nav_recall());
+    expect(labels).toContain("Quality");
   });
 
   it("exposes Recent Edits in the mobile nav, reachable below the header breakpoint", async () => {

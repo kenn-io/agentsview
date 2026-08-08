@@ -102,8 +102,8 @@ beforeEach(() => {
   insights.setCannedKind("prompt_maturity_review");
   insights.setProject("");
   insights.setAgent("claude");
+  insights.setSessionAgent("");
   insights.setAutomatedScope("human");
-  insights.setSessionFilters(undefined);
   insights.promptText = "";
   runtimeMocks.callGenerated.mockReset();
   runtimeMocks.callGenerated.mockImplementation(
@@ -427,19 +427,11 @@ describe("generate (multi-task)", () => {
     expect(insights.selectedTaskId).toBe(insights.tasks[0]?.clientId);
   });
 
-  it("sends dashboard session filters for canned recommendations", async () => {
+  it("sends only visible session scope for canned recommendations", async () => {
     insights.setType("llm_canned");
     insights.setCannedKind("prompt_maturity_review");
-    insights.setSessionFilters({
-      timezone: "America/New_York",
-      machine: "workstation",
-      agent: "codex",
-      termination: "clean",
-      min_user_messages: 2,
-      include_one_shot: false,
-      automated_scope: "human",
-      active_since: "2025-01-15T12:00:00.000Z",
-    });
+    insights.setSessionAgent("codex");
+    insights.setAutomatedScope("all");
     vi.mocked(api.generateInsight).mockReturnValueOnce({
       abort: vi.fn(),
       done: Promise.resolve(makeInsight({ id: 31 })),
@@ -450,15 +442,10 @@ describe("generate (multi-task)", () => {
     expect(api.generateInsight).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "llm_canned",
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        automated_scope: "all",
         filters: {
-          timezone: "America/New_York",
-          machine: "workstation",
           agent: "codex",
-          termination: "clean",
-          min_user_messages: 2,
-          include_one_shot: false,
-          automated_scope: "human",
-          active_since: "2025-01-15T12:00:00.000Z",
         },
       }),
       expect.any(Function),
@@ -543,14 +530,8 @@ describe("generate (multi-task)", () => {
     insights.setDateTo("2025-01-31");
     insights.setProject("middleman");
     insights.setAgent("codex");
+    insights.setSessionAgent("codex");
     insights.setAutomatedScope("automated");
-    insights.setSessionFilters({
-      timezone: "America/Chicago",
-      machine: "laptop",
-      agent: "codex",
-      include_one_shot: true,
-      automated_scope: "automated",
-    });
     insights.promptText = "Focus on cache misses";
 
     insights.generate();
@@ -560,12 +541,7 @@ describe("generate (multi-task)", () => {
     expect(failedTask.status).toBe("error");
 
     insights.promptText = "A different current focus";
-    insights.setSessionFilters({
-      timezone: "UTC",
-      machine: "other",
-      include_one_shot: false,
-      automated_scope: "human",
-    });
+    insights.setSessionAgent("claude");
     insights.retryTask(failedTask.clientId);
 
     expect(insights.tasks).toHaveLength(1);
@@ -584,11 +560,7 @@ describe("generate (multi-task)", () => {
         llm_opt_in: true,
         automated_scope: "automated",
         filters: {
-          timezone: "America/Chicago",
-          machine: "laptop",
           agent: "codex",
-          include_one_shot: true,
-          automated_scope: "automated",
         },
       },
       expect.any(Function),

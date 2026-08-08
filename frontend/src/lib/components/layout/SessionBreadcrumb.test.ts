@@ -921,7 +921,9 @@ describe("SessionBreadcrumb", () => {
     button!.click();
 
     expect(generateForSession).toHaveBeenCalledWith(session);
-    expect(navigateSpy).toHaveBeenCalledWith("insights");
+    expect(navigateSpy).toHaveBeenCalledWith("recall", {
+      tab: "generated",
+    });
 
     navigateSpy.mockRestore();
     unmount(component);

@@ -19,86 +19,7 @@ import {
 } from "../../api/generated/index.js";
 import type { SignalsAnalyticsResponse } from "../../api/types.js";
 // @ts-ignore
-import InsightsPage from "./InsightsPage.svelte";
-import source from "./InsightsPage.svelte?raw";
-
-describe("InsightsPage sidebar filter sync", () => {
-  it("syncs the automated-session scope from the sidebar", () => {
-    // Insight scope derives from analytics.includeAutomated, so the
-    // sidebar->insights sync must mirror the analytics page: read the
-    // sidebar toggle, map it to all/human, and write both fields.
-    const normalized = source.replace(/\s+/g, " ");
-    expect(source).toContain("sessions.filters.includeAutomated");
-    expect(normalized).toContain('headerIncludeAutomated ? "all" : "human"');
-    expect(source).toContain(
-      "analytics.includeAutomated = headerIncludeAutomated",
-    );
-    expect(source).toContain("analytics.automatedScope = headerAutomatedScope");
-  });
-
-  it("refetches when the automated scope changes", () => {
-    // includeAutomated and automatedScope must take part in the change
-    // detection that triggers the refetch, not just be assigned.
-    const normalized = source.replace(/\s+/g, " ");
-    expect(normalized).toContain(
-      "untrack(() => analytics.includeAutomated) !== headerIncludeAutomated",
-    );
-    expect(normalized).toContain(
-      "untrack(() => analytics.automatedScope) !== headerAutomatedScope",
-    );
-    expect(source).toContain("fetchInsightSignals()");
-  });
-});
-
-describe("InsightsPage date yoke controls", () => {
-  it("updates and seeds shared yoke state from the unified range picker", () => {
-    expect(source).toContain("<RangePicker");
-    expect(source).toContain("updateYokeFromInsights");
-    expect(source).toContain("seedInsightsYoke");
-    expect(source).toContain("rangeToPanelDate(seed)");
-  });
-
-  it("lets insight URL dates override stored yoke dates", () => {
-    expect(source).toContain("insightParamsToPanelDate(router.params)");
-    expect(source).toContain("hasInsightDateParams(router.params)");
-    expect(source).toContain("paramsWithInsightDate");
-    expect(source).toContain("rangeToInsightParams(range)");
-  });
-
-  it("preserves relative range selections as rolling yoke state", () => {
-    const applyIndex = source.indexOf("function applyRange");
-    const parseIndex = source.indexOf(
-      "function parseInsightWindowDays",
-      applyIndex,
-    );
-    const applyBlock = source.slice(applyIndex, parseIndex);
-
-    expect(source).toContain('mode: "rolling"');
-    expect(source).toContain("windowDays: sel.days");
-    expect(applyBlock).toContain("analytics.setRollingWindow(sel.days)");
-    expect(applyBlock).toContain("updateYokeFromInsights(state)");
-  });
-
-  it("preserves rolling window intent in insight URLs", () => {
-    expect(source).toContain('const INSIGHTS_WINDOW_PARAM = "window_days"');
-    expect(source).toContain("parseInsightWindowDays");
-    expect(source).toContain("rollingRange(windowDays)");
-    expect(source).toContain("delete nextParams[key]");
-    expect(source).toContain("paramsWithInsightDate");
-  });
-
-  it("routes automated scope changes through the insight refresh wrapper", () => {
-    const handlerIndex = source.indexOf("function handleAutomatedScopeChange");
-    const nextHandlerIndex = source.indexOf(
-      "\n\n  function handlePromptChange",
-      handlerIndex,
-    );
-    const handlerBlock = source.slice(handlerIndex, nextHandlerIndex);
-
-    expect(handlerBlock).toContain("fetchInsightSignals()");
-    expect(handlerBlock).not.toContain("analytics.setAutomatedScope");
-  });
-});
+import QualityPage from "./QualityPage.svelte";
 
 const mocks = vi.hoisted(() => ({
   copyToClipboard: vi.fn().mockResolvedValue(true),
@@ -336,13 +257,13 @@ const signalsFixture: SignalsAnalyticsResponse = {
   calibration: {},
 };
 
-describe("InsightsPage date yoke integration", () => {
+describe("QualityPage date yoke integration", () => {
   let component: ReturnType<typeof mount> | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    window.history.replaceState(null, "", "/insights");
-    router.route = "insights";
+    window.history.replaceState(null, "", "/quality");
+    router.route = "quality";
     router.params = {};
     analytics.isPinned = false;
     analytics.windowDays = 365;
@@ -383,7 +304,7 @@ describe("InsightsPage date yoke integration", () => {
       from: string;
       to: string;
     }> = [];
-    vi.spyOn(analytics, "fetchSignalsForInsights").mockImplementation(
+    vi.spyOn(analytics, "fetchSignalsForQuality").mockImplementation(
       () => {
         fetchStates.push({
           isPinned: analytics.isPinned,
@@ -400,7 +321,7 @@ describe("InsightsPage date yoke integration", () => {
     analytics.to = "2026-07-10";
     yokedDates.setEnabled(true);
 
-    component = mount(InsightsPage, { target: document.body });
+    component = mount(QualityPage, { target: document.body });
     await flushEffects();
 
     expect(fetchStates[0]).toEqual({
@@ -414,7 +335,7 @@ describe("InsightsPage date yoke integration", () => {
     expect(yokedDates.range).toBeNull();
 
     const refresh = document.querySelector<HTMLButtonElement>(
-      'button[aria-label="Refresh insights"]',
+      'button[aria-label="Refresh quality"]',
     );
     expect(refresh).not.toBeNull();
     const callsBeforeRefresh = fetchStates.length;
@@ -444,7 +365,7 @@ describe("InsightsPage date yoke integration", () => {
         }),
     );
 
-    component = mount(InsightsPage, { target: document.body });
+    component = mount(QualityPage, { target: document.body });
     await flushEffects();
     expect(
       AnalyticsService.getApiV1AnalyticsSignals,
@@ -456,87 +377,45 @@ describe("InsightsPage date yoke integration", () => {
     expect(cancelTransport).toHaveBeenCalledOnce();
   });
 
-  it("does not turn a bare Insights reload into explicit date intent", async () => {
-    vi.spyOn(analytics, "fetchSignalsForInsights").mockResolvedValue();
+  it("does not turn a bare Quality reload into explicit date intent", async () => {
+    vi.spyOn(analytics, "fetchSignalsForQuality").mockResolvedValue();
     analytics.applyRollingWindow(365);
     yokedDates.setEnabled(true);
 
-    component = mount(InsightsPage, { target: document.body });
+    component = mount(QualityPage, { target: document.body });
     await flushEffects();
     expect(window.location.search).not.toContain("window_days");
 
     unmount(component);
     component = undefined;
-    component = mount(InsightsPage, { target: document.body });
+    component = mount(QualityPage, { target: document.body });
     await flushEffects();
 
     expect(router.params.window_days).toBeUndefined();
     expect(yokedDates.range).toBeNull();
   });
 
-  it("restores a bare Insights history entry without publishing default dates", async () => {
-    vi.spyOn(analytics, "fetchSignalsForInsights").mockResolvedValue();
+  it("restores a bare Quality history entry without publishing default dates", async () => {
+    vi.spyOn(analytics, "fetchSignalsForQuality").mockResolvedValue();
     analytics.applyRollingWindow(365);
     yokedDates.setEnabled(true);
 
-    component = mount(InsightsPage, { target: document.body });
+    component = mount(QualityPage, { target: document.body });
     await flushEffects();
     unmount(component);
     component = undefined;
 
     router.navigate("usage");
-    window.history.replaceState(null, "", "/insights");
+    window.history.replaceState(null, "", "/quality");
     window.dispatchEvent(new PopStateEvent("popstate"));
-    expect(router.route).toBe("insights");
+    expect(router.route).toBe("quality");
     expect(router.params).toEqual({});
 
-    component = mount(InsightsPage, { target: document.body });
+    component = mount(QualityPage, { target: document.body });
     await flushEffects();
 
     expect(window.location.search).toBe("");
     expect(yokedDates.range).toBeNull();
-  });
-
-  it("keeps picker date intent in copied links after navigation", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-07-10T12:00:00"));
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
-    vi.spyOn(analytics, "fetchAll").mockResolvedValue();
-    vi.spyOn(analytics, "fetchSignalsForInsights").mockResolvedValue();
-    yokedDates.setEnabled(false);
-
-    component = mount(InsightsPage, { target: document.body });
-    await flushEffects();
-    await selectRelativeRange(30);
-
-    router.navigate("usage");
-    unmount(component);
-    component = undefined;
-    router.navigate("insights");
-    component = mount(InsightsPage, { target: document.body });
-    await flushEffects();
-
-    const copyButton = document.querySelector<HTMLButtonElement>(
-      ".insight-link-copy",
-    );
-    expect(copyButton).not.toBeNull();
-    copyButton!.click();
-    await flushEffects();
-
-    expect(mocks.copyToClipboard).toHaveBeenCalledTimes(1);
-    const copiedUrl = new URL(
-      mocks.copyToClipboard.mock.calls[0]![0],
-    );
-    expect(copiedUrl.searchParams.get("window_days")).toBe("30");
-    expect(copiedUrl.searchParams.get("date_from")).toBe("2026-06-11");
-    expect(copiedUrl.searchParams.get("date_to")).toBe("2026-07-10");
   });
 
   it("restores fixed picker dates to the URL after navigation", async () => {
@@ -551,18 +430,18 @@ describe("InsightsPage date yoke integration", () => {
       },
     );
     vi.spyOn(analytics, "fetchAll").mockResolvedValue();
-    vi.spyOn(analytics, "fetchSignalsForInsights").mockResolvedValue();
+    vi.spyOn(analytics, "fetchSignalsForQuality").mockResolvedValue();
     yokedDates.setEnabled(false);
 
-    component = mount(InsightsPage, { target: document.body });
+    component = mount(QualityPage, { target: document.body });
     await flushEffects();
     await selectCustomRange("Jul 1, 2026", "Jul 7, 2026");
 
     router.navigate("usage");
     unmount(component);
     component = undefined;
-    router.navigate("insights");
-    component = mount(InsightsPage, { target: document.body });
+    router.navigate("quality");
+    component = mount(QualityPage, { target: document.body });
     await flushEffects();
 
     expect(analytics.isPinned).toBe(true);
@@ -577,7 +456,7 @@ describe("InsightsPage date yoke integration", () => {
       from: string;
       to: string;
     }> = [];
-    vi.spyOn(analytics, "fetchSignalsForInsights").mockImplementation(
+    vi.spyOn(analytics, "fetchSignalsForQuality").mockImplementation(
       () => {
         fetchStates.push({
           isPinned: analytics.isPinned,
@@ -590,7 +469,7 @@ describe("InsightsPage date yoke integration", () => {
     window.history.replaceState(
       null,
       "",
-      "/insights?date_from=2026-06-01&date_to=2026-06-07",
+      "/quality?date_from=2026-06-01&date_to=2026-06-07",
     );
     router.params = {
       date_from: "2026-06-01",
@@ -598,7 +477,7 @@ describe("InsightsPage date yoke integration", () => {
     };
     yokedDates.setEnabled(true);
 
-    component = mount(InsightsPage, { target: document.body });
+    component = mount(QualityPage, { target: document.body });
     await flushEffects();
 
     expect(fetchStates[0]).toEqual({
@@ -613,13 +492,13 @@ describe("InsightsPage date yoke integration", () => {
     });
   });
 
-  it("seeds bare Insights from an enabled fixed range", async () => {
+  it("seeds bare Quality from an enabled fixed range", async () => {
     const fetchStates: Array<{
       isPinned: boolean;
       from: string;
       to: string;
     }> = [];
-    vi.spyOn(analytics, "fetchSignalsForInsights").mockImplementation(
+    vi.spyOn(analytics, "fetchSignalsForQuality").mockImplementation(
       () => {
         fetchStates.push({
           isPinned: analytics.isPinned,
@@ -636,7 +515,7 @@ describe("InsightsPage date yoke integration", () => {
       mode: "fixed",
     });
 
-    component = mount(InsightsPage, { target: document.body });
+    component = mount(QualityPage, { target: document.body });
     await flushEffects();
 
     expect(analytics.isPinned).toBe(true);
@@ -650,18 +529,18 @@ describe("InsightsPage date yoke integration", () => {
   });
 });
 
-describe("InsightsPage evidence navigation", () => {
+describe("QualityPage evidence navigation", () => {
   let component: ReturnType<typeof mount> | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    window.history.replaceState(null, "", "/insights");
-    router.route = "insights";
+    window.history.replaceState(null, "", "/quality");
+    router.route = "quality";
     router.params = {};
     analytics.signals = signalsFixture;
     analytics.loading.signals = false;
     analytics.errors.signals = null;
-    vi.spyOn(analytics, "fetchSignalsForInsights").mockResolvedValue();
+    vi.spyOn(analytics, "fetchSignalsForQuality").mockResolvedValue();
   });
 
   afterEach(() => {
@@ -727,7 +606,7 @@ describe("InsightsPage evidence navigation", () => {
       .spyOn(router, "navigateToSession")
       .mockImplementation(() => {});
 
-    component = mount(InsightsPage, { target: document.body });
+    component = mount(QualityPage, { target: document.body });
     await flushEffects();
     document.querySelector<HTMLButtonElement>(".driver-row")!.click();
     await flushEffects();
@@ -743,147 +622,5 @@ describe("InsightsPage evidence navigation", () => {
     expect(routeToSession).toHaveBeenCalledWith("second-session", {
       msg: "23",
     });
-  });
-});
-
-describe("InsightsPage selected insight actions", () => {
-  let component: ReturnType<typeof mount> | undefined;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    ui.activeModal = null;
-    ui.publishSecret = false;
-    ui.clearPublishTarget();
-    syncState.serverVersion = { read_only: false };
-    state.insightsStore.selectedItem = state.selectedInsight;
-    state.insightsStore.selectedId = state.selectedInsight.id;
-    state.insightsStore.items = [state.selectedInsight];
-  });
-
-  afterEach(() => {
-    if (component) {
-      unmount(component);
-      component = undefined;
-    }
-    document.body.innerHTML = "";
-  });
-
-  it("renders the deterministic-vs-generated insights help affordance", async () => {
-    component = mount(InsightsPage, { target: document.body });
-    await tick();
-
-    const helpBlock = document.querySelector("p.insights-help");
-    expect(helpBlock).not.toBeNull();
-    const helpText = helpBlock?.textContent ?? "";
-    expect(
-      helpText.includes("insights_page_insights_help_intro") ||
-        helpText.includes("Deterministic sections are computed"),
-    ).toBe(true);
-
-    const docsLink = document.querySelector<HTMLAnchorElement>(
-      'a[href="https://www.agentsview.io/insights/"]',
-    );
-    expect(docsLink).not.toBeNull();
-    expect(
-      (docsLink!.textContent?.includes("insights_page_insights_help_docs") ||
-        docsLink!.textContent?.includes("Read Insights docs")),
-    ).toBe(true);
-    expect(docsLink!.getAttribute("target")).toBe("_blank");
-    expect(docsLink!.getAttribute("rel")).toContain("noopener");
-    expect(docsLink!.getAttribute("rel")).toContain("noreferrer");
-  });
-
-  it("exports the selected insight", async () => {
-    component = mount(InsightsPage, { target: document.body });
-    await tick();
-
-    const exportButton = Array.from(
-      document.querySelectorAll<HTMLButtonElement>("button"),
-    ).find((button) => button.textContent?.trim() === "Export");
-    expect(exportButton).toBeDefined();
-
-    exportButton!.click();
-    await tick();
-
-    expect(mocks.downloadInsightExport).toHaveBeenCalledWith(42);
-  });
-
-  it("opens the shared publish modal for the selected insight", async () => {
-    component = mount(InsightsPage, { target: document.body });
-    await tick();
-
-    const publishButton = Array.from(
-      document.querySelectorAll<HTMLButtonElement>("button"),
-    ).find((button) => button.textContent?.trim() === "Publish");
-    expect(publishButton).toBeDefined();
-
-    publishButton!.click();
-    await tick();
-
-    expect(ui.activeModal).toBe("publish");
-    expect(ui.publishSecret).toBe(false);
-    expect(ui.publishTarget).toEqual({
-      kind: "insight",
-      id: 42,
-    });
-  });
-
-  it("can target a secret insight publish", async () => {
-    component = mount(InsightsPage, { target: document.body });
-    await tick();
-
-    const secretButton = Array.from(
-      document.querySelectorAll<HTMLButtonElement>("button"),
-    ).find((button) => button.textContent?.trim() === "Secret");
-    expect(secretButton).toBeDefined();
-
-    secretButton!.click();
-    await tick();
-
-    expect(ui.activeModal).toBe("publish");
-    expect(ui.publishSecret).toBe(true);
-    expect(ui.publishTarget).toEqual({
-      kind: "insight",
-      id: 42,
-    });
-  });
-
-  it("keeps Generate enabled for pg serve when version advertises insight writes", async () => {
-    syncState.serverVersion = {
-      read_only: true,
-      insight_generation_available: true,
-    };
-    component = mount(InsightsPage, { target: document.body });
-    await tick();
-
-    const generateButton = document.querySelector<HTMLButtonElement>(
-      "button.generate-action",
-    );
-    expect(generateButton).toBeDefined();
-    expect(generateButton!.disabled).toBe(false);
-  });
-
-  it("selects a generated insight without promoting default date intent", async () => {
-    window.history.replaceState(null, "", "/insights");
-    router.route = "insights";
-    router.params = {};
-    analytics.applyRollingWindow(365);
-    yokedDates.setEnabled(true);
-    vi.spyOn(analytics, "fetchSignalsForInsights").mockResolvedValue();
-
-    component = mount(InsightsPage, { target: document.body });
-    await flushEffects();
-
-    const insightButton = document.querySelector<HTMLButtonElement>(
-      ".generated-list button",
-    );
-    expect(insightButton).not.toBeNull();
-    insightButton!.click();
-    await flushEffects();
-
-    expect(state.insightsStore.select).toHaveBeenCalledWith(42);
-    expect(router.params.insight).toBe("42");
-    expect(router.params.window_days).toBeUndefined();
-    expect(yokedDates.range).toBeNull();
   });
 });

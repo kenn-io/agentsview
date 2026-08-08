@@ -398,7 +398,7 @@ describe("registerShortcuts", () => {
     });
 
     it("should navigate to sessions on non-session routes when mobile", () => {
-      router.navigate("insights");
+      router.navigate("quality");
       ui.isMobileViewport = true;
       ui.sidebarOpen = false;
       fireKey("b");
@@ -408,12 +408,12 @@ describe("registerShortcuts", () => {
     });
 
     it("should toggle sidebar on non-session routes when desktop", () => {
-      router.navigate("insights");
+      router.navigate("quality");
       ui.isMobileViewport = false;
       ui.sidebarOpen = true;
       fireKey("b");
       expect(ui.sidebarOpen).toBe(false);
-      expect(router.route).toBe("insights");
+      expect(router.route).toBe("quality");
     });
 
     it("should not toggle sidebar when modal is open", () => {

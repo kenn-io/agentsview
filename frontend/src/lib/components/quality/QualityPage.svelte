@@ -3,14 +3,11 @@
   import { onMount, onDestroy, untrack } from "svelte";
   import { analytics } from "../../stores/analytics.svelte.js";
   import { analyticsPageDates } from "../../stores/analyticsPageDates.js";
-  import { insights } from "../../stores/insights.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
-  import { getBasePath, router } from "../../stores/router.svelte.js";
+  import { router } from "../../stores/router.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
   import { events } from "../../stores/events.svelte.js";
-  import { downloadInsightExport } from "../../api/client.js";
-  import { copyToClipboard } from "../../utils/clipboard.js";
   import {
     yokedDates,
     panelDateState,
@@ -19,7 +16,6 @@
     rangeToPanelDate,
     type PanelDateState,
   } from "../../stores/yokedDates.svelte.js";
-  import { renderMarkdown } from "../../utils/markdown.js";
   import { rollingRange } from "../../utils/dates.js";
   import { scoreToGrade } from "../../utils/grade.js";
   import { agentLabel } from "../../utils/agents.js";
@@ -27,15 +23,11 @@
   import { callGenerated, isAbortError } from "../../api/runtime.js";
   import { LatestRead } from "../../utils/latest-read.js";
   import type {
-    AgentName,
     AutomatedScope,
-    CannedInsightKind,
-    InsightGenerationFilters,
-    InsightType,
     SignalCalibration,
     SignalSessionExample,
   } from "../../api/types.js";
-  import { Button, Card, CopyButton, IconButton, Typeahead } from "@kenn-io/kit-ui";
+  import { Card, IconButton, Typeahead } from "@kenn-io/kit-ui";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import RangePicker from "../shared/RangePicker.svelte";
   import {
@@ -52,9 +44,9 @@
   } from "./qualityPatterns.js";
 
   const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
-  const INSIGHTS_WINDOW_PARAM = "window_days";
-  const INSIGHTS_DATE_PARAM_KEYS = [
-    INSIGHTS_WINDOW_PARAM,
+  const QUALITY_WINDOW_PARAM = "window_days";
+  const QUALITY_DATE_PARAM_KEYS = [
+    QUALITY_WINDOW_PARAM,
     "date_from",
     "date_to",
   ] as const;
@@ -64,10 +56,6 @@
 
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
   let unsubEvents: (() => void) | undefined;
-  let copiedInsightLinkId: number | null = $state(null);
-  let copiedInsightLinkTimer:
-    | ReturnType<typeof setTimeout>
-    | undefined;
   let selectedSignalId: string | null = $state(null);
   let signalExamples: SignalSessionExample[] = $state([]);
   let signalExamplesLoading = $state(false);
@@ -77,7 +65,7 @@
   const signalEvidenceRead = new LatestRead();
   // A materialized page default is not date intent. Only picker input, a
   // dated URL, or a shared seed may serialize dates back into the URL.
-  let insightDateIntentEstablished = false;
+  let qualityDateIntentEstablished = false;
 
   const signals = $derived(analytics.signals);
   const summary = $derived(buildQualitySummary(signals));
@@ -87,13 +75,6 @@
   );
   const loading = $derived(analytics.loading.signals);
   const error = $derived(analytics.errors.signals);
-  const insightGenerationAvailable = $derived(
-    sync.serverVersion?.insight_generation_available === true ||
-      sync.serverVersion?.read_only !== true,
-  );
-  const generationUnavailable = $derived(
-    sync.serverVersion === null || !insightGenerationAvailable,
-  );
   const earliestSession = $derived(sync.stats?.earliest_session ?? null);
   const rangeSelection = $derived(
     selectionFromWindow({
@@ -113,13 +94,6 @@
       ...summary.scoreDistribution.map((bucket) => bucket.count),
     ),
   );
-  const generationAgentNames = [
-    "claude",
-    "codex",
-    "copilot",
-    "gemini",
-    "kiro",
-  ] satisfies AgentName[];
   const agentOptions = $derived.by(() => {
     const opts = [...sessions.agents]
       .sort((a, b) => b.session_count - a.session_count)
@@ -139,22 +113,6 @@
       ...opts,
     ];
   });
-  const generationAgentOptions = generationAgentNames.map((name) => ({
-    name,
-    label: agentLabel(name),
-    displayLabel: agentLabel(name),
-  }));
-  const templateOptions = $derived([
-    { name: "prompt_maturity_review", label: m.insights_page_template_prompt_maturity() },
-    { name: "context_setup_review", label: m.insights_page_template_context_setup() },
-    { name: "workflow_hygiene_review", label: m.insights_page_template_workflow_hygiene() },
-    { name: "tool_reliability_review", label: m.insights_page_template_tool_reliability() },
-    { name: "model_cost_review", label: m.insights_page_template_model_cost() },
-    {
-      name: "instruction_opportunity_review",
-      label: m.insights_page_template_instruction_opportunities(),
-    },
-  ]);
   const scopeOptions = $derived([
     { name: "human", label: m.insights_page_scope_no_automated() },
     { name: "all", label: m.insights_page_scope_both() },
@@ -174,10 +132,10 @@
       analytics.setDateRange(range.from, range.to);
       state = panelDateState(range.from, range.to, { mode: "fixed" });
     }
-    updateYokeFromInsights(state);
+    updateYokeFromQuality(state);
   }
 
-  function parseInsightWindowDays(raw: string | undefined): number | null {
+  function parseQualityWindowDays(raw: string | undefined): number | null {
     if (!raw) return null;
     const n = Number.parseInt(raw, 10);
     if (!Number.isInteger(n) || n <= 0 || String(n) !== raw) {
@@ -186,10 +144,10 @@
     return n;
   }
 
-  function insightParamsToPanelDate(
+  function qualityParamsToPanelDate(
     params: Record<string, string>,
   ): PanelDateState | null {
-    const windowDays = parseInsightWindowDays(params[INSIGHTS_WINDOW_PARAM]);
+    const windowDays = parseQualityWindowDays(params[QUALITY_WINDOW_PARAM]);
     if (windowDays !== null) {
       const range = rollingRange(windowDays);
       return panelDateState(range.from, range.to, {
@@ -204,14 +162,14 @@
     );
   }
 
-  function hasInsightDateParams(
+  function hasQualityDateParams(
     params: Record<string, string>,
   ): boolean {
     return !!params.date_from || !!params.date_to ||
-      !!params[INSIGHTS_WINDOW_PARAM];
+      !!params[QUALITY_WINDOW_PARAM];
   }
 
-  function applyInsightPanelDate(state: PanelDateState): boolean {
+  function applyQualityPanelDate(state: PanelDateState): boolean {
     const before = JSON.stringify({
       from: analytics.from,
       to: analytics.to,
@@ -232,7 +190,7 @@
     return before !== after;
   }
 
-  function currentInsightPanelDate(): PanelDateState | null {
+  function currentQualityPanelDate(): PanelDateState | null {
     if (!analytics.isPinned) {
       return panelDateState(analytics.from, analytics.to, {
         mode: "rolling",
@@ -244,14 +202,14 @@
     });
   }
 
-  function paramsWithInsightDate(
-    state: PanelDateState | null = insightDateIntentEstablished
-      ? currentInsightPanelDate()
+  function paramsWithQualityDate(
+    state: PanelDateState | null = qualityDateIntentEstablished
+      ? currentQualityPanelDate()
       : null,
     extra: Record<string, string> = {},
   ): Record<string, string> {
     const nextParams = { ...router.params };
-    for (const key of INSIGHTS_DATE_PARAM_KEYS) {
+    for (const key of QUALITY_DATE_PARAM_KEYS) {
       delete nextParams[key];
     }
     if (state) {
@@ -263,132 +221,78 @@
     return { ...nextParams, ...extra };
   }
 
-  function writeInsightDateParams(state: PanelDateState): void {
-    router.replaceParams(paramsWithInsightDate(state));
+  function writeQualityDateParams(state: PanelDateState): void {
+    router.replaceParams(paramsWithQualityDate(state));
   }
 
-  function updateYokeFromInsights(state: PanelDateState | null): void {
+  function updateYokeFromQuality(state: PanelDateState | null): void {
     if (!state) return;
-    insightDateIntentEstablished = true;
+    qualityDateIntentEstablished = true;
     yokedDates.updateFromPanel(state);
-    writeInsightDateParams(state);
+    writeQualityDateParams(state);
   }
 
-  function seedInsightsYoke(): void {
-    const urlState = insightParamsToPanelDate(router.params);
+  function seedQualityYoke(): void {
+    const urlState = qualityParamsToPanelDate(router.params);
     if (urlState) {
-      insightDateIntentEstablished = true;
-      applyInsightPanelDate(urlState);
+      qualityDateIntentEstablished = true;
+      applyQualityPanelDate(urlState);
       yokedDates.updateFromPanel(urlState);
       return;
     }
-    if (hasInsightDateParams(router.params)) return;
+    if (hasQualityDateParams(router.params)) return;
 
     const seed = yokedDates.seedForPanel();
     const retained = seed
       ? null
-      : analyticsPageDates.restoreWithIntent("insights");
+      : analyticsPageDates.restoreWithIntent("quality");
     const state = seed
       ? rangeToPanelDate(seed)
       : retained?.state ?? null;
     if (!state) return;
     if (retained) {
-      insightDateIntentEstablished = retained.explicitDateIntent;
+      qualityDateIntentEstablished = retained.explicitDateIntent;
     }
-    applyInsightPanelDate(state);
+    applyQualityPanelDate(state);
     if (retained?.explicitDateIntent) {
       yokedDates.updateFromPanel(state);
     }
     if (seed || retained?.explicitDateIntent) {
-      insightDateIntentEstablished = true;
-      writeInsightDateParams(state);
+      qualityDateIntentEstablished = true;
+      writeQualityDateParams(state);
     }
   }
 
-  function fetchInsightSignals() {
-    analytics.fetchSignalsForInsights();
-    const state = currentInsightPanelDate();
-    if (state?.mode === "rolling" && insightDateIntentEstablished) {
+  function fetchQualitySignals() {
+    analytics.fetchSignalsForQuality();
+    const state = currentQualityPanelDate();
+    if (state?.mode === "rolling" && qualityDateIntentEstablished) {
       if (yokedDates.range !== null) {
         yokedDates.updateFromPanel(state);
       }
-      writeInsightDateParams(state);
+      writeQualityDateParams(state);
     }
   }
 
   function handleProjectChange(value: string) {
     analytics.project = value;
-    fetchInsightSignals();
+    fetchQualitySignals();
   }
 
   function handleAgentChange(value: string) {
     analytics.agent = value;
-    fetchInsightSignals();
-  }
-
-  function handleInsightAgentChange(value: string) {
-    insights.setAgent(value as AgentName);
-  }
-
-  function handleCannedKindChange(value: string) {
-    insights.setCannedKind(value as CannedInsightKind);
+    fetchQualitySignals();
   }
 
   function handleAutomatedScopeChange(value: string) {
     const scope = value as AutomatedScope;
     analytics.automatedScope = scope;
     analytics.includeAutomated = scope !== "human";
-    fetchInsightSignals();
-  }
-
-  function handlePromptChange(e: Event) {
-    const textarea = e.target as HTMLTextAreaElement;
-    insights.promptText = textarea.value;
-  }
-
-  function effectiveAutomatedScope(): AutomatedScope {
-    if (!analytics.includeAutomated) return "human";
-    if (analytics.automatedScope === "human") return "all";
-    return analytics.automatedScope;
-  }
-
-  function currentInsightFilters(): InsightGenerationFilters {
-    const filters: InsightGenerationFilters = {
-      timezone: analytics.timezone,
-      include_one_shot: analytics.includeOneShot,
-      automated_scope: effectiveAutomatedScope(),
-    };
-    if (analytics.machine) filters.machine = analytics.machine;
-    if (analytics.agent) filters.agent = analytics.agent;
-    if (analytics.termination) {
-      filters.termination = analytics.termination;
-    }
-    if (analytics.minUserMessages > 0) {
-      filters.min_user_messages = analytics.minUserMessages;
-    }
-    if (analytics.recentlyActive) {
-      filters.active_since = new Date(
-        Date.now() - 24 * 60 * 60 * 1000,
-      ).toISOString();
-    }
-    return filters;
-  }
-
-  function handleGenerateCanned() {
-    if (generationUnavailable) return;
-    const filters = currentInsightFilters();
-    insights.setType("llm_canned");
-    insights.setDateFrom(analytics.from);
-    insights.setDateTo(analytics.to);
-    insights.setProject(analytics.project);
-    insights.setAutomatedScope(filters.automated_scope ?? "human");
-    insights.setSessionFilters(filters);
-    insights.generate();
+    fetchQualitySignals();
   }
 
   function handleRefresh() {
-    fetchInsightSignals();
-    insights.load();
+    fetchQualitySignals();
   }
 
   function signalEvidenceKey(
@@ -504,62 +408,6 @@
       : { msg: String(example.message_ordinal) };
   }
 
-  function insightLinkPath(id: number): string {
-    const params = new URLSearchParams();
-    const dateParams = paramsWithInsightDate();
-    if (Object.hasOwn(router.params, "desktop")) {
-      params.set("desktop", router.params.desktop ?? "");
-    }
-    for (const [key, value] of Object.entries(dateParams)) {
-      if (key !== "desktop" && key !== "insight") {
-        params.set(key, value);
-      }
-    }
-    params.set("insight", String(id));
-    return `${getBasePath()}/insights?${params.toString()}`;
-  }
-
-  function insightLinkUrl(id: number): string {
-    return new URL(
-      insightLinkPath(id),
-      window.location.origin,
-    ).toString();
-  }
-
-  async function handleCopyInsightLink(id: number) {
-    const ok = await copyToClipboard(insightLinkUrl(id));
-    if (!ok) return;
-    copiedInsightLinkId = id;
-    clearTimeout(copiedInsightLinkTimer);
-    copiedInsightLinkTimer = setTimeout(() => {
-      copiedInsightLinkId = null;
-    }, 1500);
-  }
-
-  function selectGeneratedInsight(id: number) {
-    insights.select(id);
-    router.replaceParams(
-      paramsWithInsightDate(undefined, {
-        insight: String(id),
-      }),
-    );
-  }
-
-  function selectGeneratedTask(clientId: string) {
-    insights.selectTask(clientId);
-    const params = paramsWithInsightDate();
-    delete params.insight;
-    router.replaceParams(params);
-  }
-
-  function selectedInsightFromRoute(): number | null {
-    const raw = router.params.insight;
-    if (!raw) return null;
-    const id = Number.parseInt(raw, 10);
-    if (!Number.isSafeInteger(id) || id <= 0) return null;
-    return id;
-  }
-
   function formatDateRange(from: string, to: string): string {
     if (from === to) return formatDate(from);
     return m.insights_page_date_range({ from: formatDate(from), to: formatDate(to) });
@@ -570,14 +418,6 @@
     return d.toLocaleDateString(undefined, {
       month: "short",
       day: "numeric",
-    });
-  }
-
-  function formatTime(iso: string): string {
-    const d = new Date(iso);
-    return d.toLocaleTimeString(undefined, {
-      hour: "2-digit",
-      minute: "2-digit",
     });
   }
 
@@ -648,73 +488,17 @@
     return m.insights_page_unscored();
   }
 
-  function cannedKindLabel(
-    kind: CannedInsightKind | "" | undefined,
-  ): string {
-    switch (kind) {
-      case "prompt_maturity_review":
-        return m.insights_page_template_prompt_maturity();
-      case "context_setup_review":
-        return m.insights_page_template_context_setup();
-      case "workflow_hygiene_review":
-        return m.insights_page_template_workflow_hygiene();
-      case "tool_reliability_review":
-        return m.insights_page_template_tool_reliability();
-      case "model_cost_review":
-        return m.insights_page_template_model_cost();
-      case "instruction_opportunity_review":
-        return m.insights_page_template_instruction_opportunities();
-      default:
-        return m.insights_page_generated_recommendation();
-    }
-  }
-
-  function insightTypeLabel(
-    type: InsightType,
-    kind: CannedInsightKind | "" | undefined,
-  ): string {
-    if (type === "llm_canned") return cannedKindLabel(kind);
-    if (type === "agent_analysis") return m.insights_page_agent_analysis();
-    return m.insights_page_activity();
-  }
-
-  function cacheStatusLabel(status: string | undefined): string {
-    if (status === "hit") return m.insights_page_cache_hit();
-    if (status === "fresh") return m.insights_page_fresh();
-    return "";
-  }
-
-  async function handleInsightExport() {
-    if (!insights.selectedItem) return;
-    try {
-      await downloadInsightExport(insights.selectedItem.id);
-    } catch (error) {
-      console.error("Insight export failed:", error);
-    }
-  }
-
-  function openInsightPublish(secret: boolean) {
-    if (!insights.selectedItem) return;
-    ui.publishSecret = secret;
-    ui.setPublishTarget({
-      kind: "insight",
-      id: insights.selectedItem.id,
-    });
-    ui.activeModal = "publish";
-  }
-
   onMount(() => {
-    seedInsightsYoke();
+    seedQualityYoke();
     sessions.loadProjects();
     sessions.loadAgents();
-    fetchInsightSignals();
-    insights.load();
+    fetchQualitySignals();
     refreshTimer = setInterval(
-      () => fetchInsightSignals(),
+      () => fetchQualitySignals(),
       REFRESH_INTERVAL_MS,
     );
     unsubEvents = events.subscribeDebounced(() => {
-      fetchInsightSignals();
+      fetchQualitySignals();
     });
   });
 
@@ -761,24 +545,22 @@
       analytics.includeOneShot = headerIncludeOneShot;
       analytics.includeAutomated = headerIncludeAutomated;
       analytics.automatedScope = headerAutomatedScope;
-      untrack(() => fetchInsightSignals());
+      untrack(() => fetchQualitySignals());
     }
   });
 
   onDestroy(() => {
-    insights.cancelInFlightReads();
     analytics.cancelInFlightReads();
     signalEvidenceRead.cancel();
-    const state = currentInsightPanelDate();
+    const state = currentQualityPanelDate();
     if (state) {
       analyticsPageDates.retain(
-        "insights",
+        "quality",
         state,
-        insightDateIntentEstablished,
+        qualityDateIntentEstablished,
       );
     }
     if (refreshTimer !== undefined) clearInterval(refreshTimer);
-    clearTimeout(copiedInsightLinkTimer);
     unsubEvents?.();
   });
 
@@ -793,16 +575,9 @@
     untrack(() => void openSignalEvidence(signal));
   });
 
-  $effect(() => {
-    if (router.route !== "insights") return;
-    const id = selectedInsightFromRoute();
-    if (id === null || insights.selectedId === id) return;
-    if (!insights.items.some((item) => item.id === id)) return;
-    insights.select(id);
-  });
 </script>
 
-<div class="insights-page">
+<div class="quality-page">
   <header class="toolbar">
     <RangePicker
       selection={rangeSelection}
@@ -845,8 +620,8 @@
     <IconButton
       class="toolbar-refresh"
       onclick={handleRefresh}
-      title={m.insights_page_refresh()}
-      ariaLabel={m.insights_page_refresh()}
+      title={m.quality_page_refresh()}
+      ariaLabel={m.quality_page_refresh()}
     >
       <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
         <path d="M8 3a5 5 0 00-4.546 2.914.5.5 0 01-.908-.418A6 6 0 0114 8a.5.5 0 01-1 0 5 5 0 00-5-5zm4.546 7.086a.5.5 0 01.908.418A6 6 0 012 8a.5.5 0 011 0 5 5 0 005 5 5 5 0 004.546-2.914z"/>
@@ -864,15 +639,15 @@
           </div>
           <h2 id="actions-title">{m.insights_page_deterministic_recommendations()}</h2>
         </div>
-        <p class="insights-help">
-          {m.insights_page_insights_help_intro()}
+        <p class="quality-help">
+          {m.quality_page_help_intro()}
           <a
-            href="https://www.agentsview.io/insights/"
+            href="https://www.agentsview.io/quality/"
             target="_blank"
             rel="noopener noreferrer"
-            class="insights-help-link"
+            class="quality-help-link"
           >
-            {m.insights_page_insights_help_docs()}
+            {m.quality_page_help_docs()}
           </a>
         </p>
       </div>
@@ -929,7 +704,7 @@
           <div class="state-panel-alert" role="alert">
             <strong>{m.insights_page_could_not_load()}</strong>
             <span>{error}</span>
-            <button onclick={fetchInsightSignals}>
+            <button onclick={fetchQualitySignals}>
               {m.insights_page_retry()}
             </button>
           </div>
@@ -1153,262 +928,11 @@
       {/if}
     </section>
 
-    <section
-      class="section-block generated-block"
-      aria-labelledby="generated-title"
-    >
-      <div class="section-heading">
-        <div>
-          <div class="eyebrow">
-            <span class="badge generated">{m.insights_page_generated()}</span>
-            <span>{m.insights_page_separate_from_facts()}</span>
-          </div>
-          <h2 id="generated-title">{m.insights_page_generated_archive()}</h2>
-        </div>
-        <p>
-          {m.insights_page_generated_archive_hint()}
-        </p>
-      </div>
-
-      <Card level="default" padding="none" class="generated-controls">
-        <label class="generated-control">
-          <span>{m.insights_page_template_label()}</span>
-          <Typeahead
-            options={templateOptions}
-            value={insights.cannedKind}
-            fallbackLabel={cannedKindLabel(insights.cannedKind)}
-            placeholder={m.insights_page_filter_templates()}
-            title={m.insights_page_select_template()}
-            emptyLabel={m.insights_page_no_matching_templates()}
-            onselect={handleCannedKindChange}
-          />
-        </label>
-
-        <label class="generated-control">
-          <span>{m.insights_page_generator_label()}</span>
-          <Typeahead
-            options={generationAgentOptions}
-            value={insights.agent}
-            fallbackLabel={agentLabel(insights.agent)}
-            placeholder={m.insights_page_filter_generators()}
-            title={m.insights_page_select_generator()}
-            emptyLabel={m.insights_page_no_matching_generators()}
-            onselect={handleInsightAgentChange}
-          />
-        </label>
-
-        <label class="generated-control focus-control">
-          <span>{m.insights_page_optional_focus()}</span>
-          <textarea
-            class="generated-focus"
-            value={insights.promptText}
-            maxlength="1200"
-            rows="2"
-            placeholder={m.insights_page_focus_placeholder()}
-            oninput={handlePromptChange}
-          ></textarea>
-        </label>
-
-        <button
-          class="generate-action"
-          disabled={generationUnavailable}
-          title={sync.serverVersion !== null && !insightGenerationAvailable
-            ? m.insights_page_generate_disabled()
-            : m.insights_page_generate_title()}
-          onclick={handleGenerateCanned}
-        >
-          {m.insights_page_generate()}
-        </button>
-      </Card>
-
-      {#if insights.loading}
-        <Card level="default" padding="none" class="state-panel compact-state">{m.insights_page_loading_archive()}</Card>
-      {:else if insights.items.length === 0 && insights.tasks.length === 0}
-        <Card level="default" padding="none" class="state-panel compact-state">
-          <strong>{m.insights_page_no_generated_saved()}</strong>
-          <span>
-            {m.insights_page_no_generated_hint()}
-          </span>
-        </Card>
-      {:else}
-        <div class="generated-layout">
-          <div class="generated-list">
-            {#each insights.tasks as task (task.clientId)}
-              <Card
-                level="default"
-                padding="none"
-                class={task.status === "error" ? "error-task" : ""}
-                selected={insights.selectedTaskId === task.clientId}
-                onclick={() => selectGeneratedTask(task.clientId)}
-              >
-                <span>{task.status === "error" ? m.insights_page_error() : m.insights_page_running()}</span>
-                <strong>{task.project || m.insights_page_global()}</strong>
-                <em>
-                  {task.kind ? cannedKindLabel(task.kind) : task.phase}
-                </em>
-              </Card>
-            {/each}
-            {#each insights.items as item (item.id)}
-              <Card
-                level="default"
-                padding="none"
-                selected={insights.selectedId === item.id}
-                onclick={() => selectGeneratedInsight(item.id)}
-              >
-                <span>
-                  {insightTypeLabel(item.type, item.kind)}
-                </span>
-                <strong>{item.project || m.insights_page_global()}</strong>
-                <em>
-                  {formatDateRange(item.date_from, item.date_to)}
-                  · {formatTime(item.created_at)}
-                </em>
-              </Card>
-            {/each}
-          </div>
-
-          <Card level="default" padding="none" class="generated-detail">
-            <article>
-            {#if insights.selectedTask}
-              <div class="generated-detail-head">
-                <span class="badge generated">
-                  {insights.selectedTask.status === "error"
-                    ? m.insights_page_generation_error()
-                    : m.insights_page_generating()}
-                </span>
-                {#if insights.selectedTask.status === "error"}
-                  <div class="generated-actions">
-                    <button
-                      class="text-btn"
-                      type="button"
-                      onclick={() =>
-                        insights.retryTask(
-                          insights.selectedTask!.clientId,
-                        )}
-                    >
-                      {m.insights_page_retry()}
-                    </button>
-                    <IconButton
-                      class="icon-action"
-                      size="sm"
-                      tone="danger"
-                      onclick={() =>
-                        insights.dismissTask(
-                          insights.selectedTask!.clientId,
-                        )}
-                      title={m.insights_page_dismiss_failed()}
-                      ariaLabel={m.insights_page_dismiss_failed()}
-                    >
-                      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-                        <path d="M5.5 5.5A.5.5 0 016 6v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm2.5 0a.5.5 0 01.5.5v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm3 .5a.5.5 0 00-1 0v6a.5.5 0 001 0V6z"/>
-                        <path fill-rule="evenodd" d="M14.5 3a1 1 0 01-1 1H13v9a2 2 0 01-2 2H5a2 2 0 01-2-2V4h-.5a1 1 0 01-1-1V2a1 1 0 011-1H5.5l1-1h3l1 1h2.5a1 1 0 011 1v1zM4.118 4L4 4.059V13a1 1 0 001 1h6a1 1 0 001-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
-                      </svg>
-                    </IconButton>
-                  </div>
-                {/if}
-              </div>
-              {#if insights.selectedTask.error}
-                <p>{insights.selectedTask.error}</p>
-              {:else}
-                <p>{insights.selectedTask.phase}</p>
-              {/if}
-            {:else if insights.selectedItem}
-              <div class="generated-detail-head">
-                <div class="generated-meta">
-                  <span class="badge generated">
-                    {insightTypeLabel(
-                      insights.selectedItem.type,
-                      insights.selectedItem.kind,
-                    )}
-                  </span>
-                  {#if insights.selectedItem.type === "llm_canned"}
-                    {#if cacheStatusLabel(insights.selectedItem.cache_status)}
-                      <span class="detail-chip muted">
-                        {cacheStatusLabel(insights.selectedItem.cache_status)}
-                      </span>
-                    {/if}
-                    {#if insights.selectedItem.template_version}
-                      <span class="detail-chip muted">
-                        {m.insights_page_template_version({ version: insights.selectedItem.template_version })}
-                      </span>
-                    {/if}
-                    {#if insights.selectedItem.aggregate_hash}
-                      <span class="detail-chip muted">
-                        {m.insights_page_aggregate_hash({ hash: insights.selectedItem.aggregate_hash.slice(0, 12) })}
-                      </span>
-                    {/if}
-                  {/if}
-                </div>
-                <div class="generated-actions">
-                  <Button
-                    class="header-action"
-                    size="sm"
-                    onclick={handleInsightExport}
-                  >
-                    Export
-                  </Button>
-                  <Button
-                    class="header-action"
-                    size="sm"
-                    onclick={() => openInsightPublish(false)}
-                  >
-                    Publish
-                  </Button>
-                  <Button
-                    class="header-action subtle"
-                    size="sm"
-                    onclick={() => openInsightPublish(true)}
-                  >
-                    Secret
-                  </Button>
-                  <CopyButton
-                    class="insight-link-copy"
-                    copied={copiedInsightLinkId === insights.selectedItem.id}
-                    ariaLabel={m.insights_page_copy_link()}
-                    copiedAriaLabel={m.insights_page_copied_link()}
-                    title={m.insights_page_copy_link_title()}
-                    copiedTitle={m.insights_page_copied_link_short()}
-                    onclick={() =>
-                      handleCopyInsightLink(insights.selectedItem!.id)}
-                  />
-                  <IconButton
-                    class="icon-action"
-                    size="sm"
-                    tone="danger"
-                    onclick={() => {
-                      if (insights.selectedItem) {
-                        insights.deleteItem(insights.selectedItem.id);
-                        const params = paramsWithInsightDate();
-                        delete params.insight;
-                        router.replaceParams(params);
-                      }
-                    }}
-                    title={m.insights_page_delete_insight()}
-                    ariaLabel={m.insights_page_delete_insight()}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-                      <path d="M5.5 5.5A.5.5 0 016 6v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm2.5 0a.5.5 0 01.5.5v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm3 .5a.5.5 0 00-1 0v6a.5.5 0 001 0V6z"/>
-                      <path fill-rule="evenodd" d="M14.5 3a1 1 0 01-1 1H13v9a2 2 0 01-2 2H5a2 2 0 01-2-2V4h-.5a1 1 0 01-1-1V2a1 1 0 011-1H5.5l1-1h3l1 1h2.5a1 1 0 011 1v1zM4.118 4L4 4.059V13a1 1 0 001 1h6a1 1 0 001-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
-                    </svg>
-                  </IconButton>
-                </div>
-              </div>
-              <div class="markdown-body">
-                {@html renderMarkdown(insights.selectedItem.content)}
-              </div>
-            {:else}
-              <p>{m.insights_page_select_to_read()}</p>
-            {/if}
-            </article>
-          </Card>
-        </div>
-      {/if}
-    </section>
   </main>
 </div>
 
 <style>
-  .insights-page {
+  .quality-page {
     flex: 1;
     display: flex;
     flex-direction: column;
@@ -1456,8 +980,7 @@
   }
 
   .filter-group :global(.kit-typeahead),
-  .toolbar-scope :global(.kit-typeahead),
-  .generated-control :global(.kit-typeahead) {
+  .toolbar-scope :global(.kit-typeahead) {
     min-width: 0;
     max-width: none;
     width: 100%;
@@ -1511,7 +1034,7 @@
     align-items: center;
   }
 
-  .section-heading p.insights-help {
+  .section-heading p.quality-help {
     max-width: 58ch;
     margin: 0;
     display: flex;
@@ -1522,11 +1045,11 @@
     line-height: 1.35;
   }
 
-  .insights-help-link {
+  .quality-help-link {
     color: var(--accent-blue);
   }
 
-  .insights-help-link:hover {
+  .quality-help-link:hover {
     color: color-mix(in srgb, var(--accent-blue) 70%, var(--text-primary));
     text-underline-offset: 2px;
   }
@@ -1584,19 +1107,6 @@
     );
   }
 
-  .badge.generated {
-    color: var(--accent-purple);
-    background: color-mix(
-      in srgb,
-      var(--accent-purple) 9%,
-      var(--bg-surface)
-    );
-    border-color: color-mix(
-      in srgb,
-      var(--accent-purple) 22%,
-      var(--border-muted)
-    );
-  }
 
   .summary-grid {
     display: grid;
@@ -2046,238 +1556,6 @@
     line-height: 1.45;
   }
 
-  .generated-block {
-    border-top: 1px solid var(--border-muted);
-    padding-top: 18px;
-  }
-
-  /* The generated-archive grids have hard minimum column widths (controls:
-     180+130+240px; layout: a 240px list rail), so they collapse on available
-     CONTENT width via a container query (declared after both base grid rules
-     — same specificity, so it must win on source order) rather than the
-     viewport-width media gate below — with the sidebar open, a ~950px
-     viewport leaves far less room than a viewport breakpoint assumes. */
-  .generated-block {
-    container-type: inline-size;
-  }
-
-  .generated-block :global(.generated-controls) {
-    display: grid;
-    grid-template-columns:
-      minmax(180px, 220px) minmax(130px, 160px)
-      minmax(240px, 1fr) auto;
-    gap: var(--space-5);
-    align-items: end;
-    padding: 12px;
-  }
-
-  .generated-block :global(.generated-controls > .kit-card__body) {
-    display: contents;
-  }
-
-  .generated-control {
-    display: grid;
-    gap: var(--space-2);
-    min-width: 0;
-  }
-
-  .generated-control span {
-    color: var(--text-muted);
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-  }
-
-  .badge-blue {
-    background: var(--accent-blue);
-  }
-
-  .badge-purple {
-    background: var(--accent-purple);
-  }
-
-  .badge-red {
-    background: var(--accent-red);
-  }
-
-  .header-date {
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--text-primary);
-    letter-spacing: -0.01em;
-  }
-
-  .delete-btn {
-    width: 28px;
-    height: 28px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: var(--radius-sm);
-    color: var(--text-primary);
-    font-size: 12px;
-  }
-
-  .generated-focus {
-    width: 100%;
-    min-height: 30px;
-    max-height: 76px;
-    border: 1px solid var(--border-muted);
-    background: var(--bg-inset);
-    padding: 7px 8px;
-    resize: vertical;
-    line-height: 1.35;
-  }
-
-  .generate-action {
-    height: 30px;
-    padding: 0 12px;
-    background: var(--accent-purple);
-    color: var(--accent-purple-foreground);
-    border-radius: var(--radius-sm);
-    font-size: 12px;
-    font-weight: 700;
-  }
-
-  .generate-action:disabled {
-    cursor: not-allowed;
-    opacity: 0.5;
-  }
-
-  .generated-layout {
-    display: grid;
-    grid-template-columns: minmax(240px, 320px) 1fr;
-    gap: 12px;
-    align-items: start;
-  }
-
-  @container (max-width: 760px) {
-    .generated-block :global(.generated-controls),
-    .generated-layout {
-      grid-template-columns: 1fr;
-    }
-  }
-
-  .generated-list {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .generated-list :global(.kit-card) {
-    min-height: 54px;
-    padding: 9px 10px;
-    display: grid;
-    gap: 2px;
-    text-align: left;
-  }
-
-  .generated-list :global(.kit-card > .kit-card__body) {
-    display: contents;
-  }
-
-  .generated-list :global(.kit-card span) {
-    color: var(--accent-purple);
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
-  }
-
-  .generated-list :global(.kit-card strong) {
-    color: var(--text-primary);
-    font-size: 12px;
-  }
-
-  .generated-list :global(.kit-card em) {
-    color: var(--text-muted);
-    font-size: 11px;
-    font-style: normal;
-  }
-
-  .generated-list :global(.kit-card.error-task span) {
-    color: var(--accent-red);
-  }
-
-  .header-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  :global(.header-action.kit-button) {
-    font-weight: 600;
-  }
-
-  :global(.header-action.subtle.kit-button) {
-    color: var(--text-muted);
-  }
-
-  .delete-btn:hover {
-    background: color-mix(
-      in srgb,
-      var(--accent-red) 10%,
-      transparent
-    );
-    color: var(--accent-red);
-  }
-
-  .generated-layout :global(.generated-detail) {
-    min-height: 220px;
-    padding: 14px;
-  }
-
-  .generated-detail-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 12px;
-  }
-
-  .generated-meta {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 6px;
-    min-width: 0;
-  }
-
-  .generated-actions {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-shrink: 0;
-  }
-
-  .generated-actions :global(.insight-link-copy.kit-copy-btn) {
-    border: 1px solid var(--border-muted);
-    background: var(--bg-inset);
-  }
-
-  .generated-actions :global(.insight-link-copy.kit-copy-btn:hover) {
-    border-color: var(--border-default);
-  }
-
-  .detail-chip {
-    display: inline-flex;
-    align-items: center;
-    min-height: 18px;
-    padding: 2px 6px;
-    border: 1px solid var(--border-muted);
-    border-radius: 3px;
-    color: var(--text-secondary);
-    background: var(--bg-inset);
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.02em;
-    text-transform: uppercase;
-  }
-
-  .detail-chip.muted {
-    color: var(--text-muted);
-  }
-
   .text-btn {
     color: var(--text-muted);
     font-size: 12px;
@@ -2285,34 +1563,6 @@
 
   .text-btn:hover {
     color: var(--text-primary);
-  }
-
-  .text-btn.danger:hover {
-    color: var(--accent-red);
-  }
-
-  .markdown-body {
-    color: var(--text-primary);
-    line-height: 1.65;
-    max-width: 76ch;
-  }
-
-  .markdown-body :global(h1),
-  .markdown-body :global(h2),
-  .markdown-body :global(h3) {
-    margin: 14px 0 6px;
-    font-size: 15px;
-  }
-
-  .markdown-body :global(p),
-  .markdown-body :global(ul),
-  .markdown-body :global(ol) {
-    margin: 8px 0;
-  }
-
-  .markdown-body :global(ul),
-  .markdown-body :global(ol) {
-    padding-left: 18px;
   }
 
   .content :global(.state-panel) {
@@ -2428,7 +1678,7 @@
       text-align: left;
     }
 
-    .section-heading p.insights-help {
+    .section-heading p.quality-help {
       justify-content: flex-start;
       text-align: left;
     }

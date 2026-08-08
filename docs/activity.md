@@ -126,10 +126,9 @@ Codex, Copilot, Gemini, or Kiro.
 
 ![Weekly Activity Insight panel](/assets/generated/screenshots/activity-insight.png)
 
-The **Open in Insights page** link opens the standalone
-[Session Insights](/insights/) page prefilled with the same range. Insight
-generation is disabled in read-only remote modes such as PostgreSQL-backed
-`pg serve`.
+The **Open in Generated insights** link opens the
+[Generated insights](/recall/?tab=generated) tab prefilled with the same range.
+Generation is disabled when the connected server cannot run an agent CLI.
 
 ## CLI And API
 

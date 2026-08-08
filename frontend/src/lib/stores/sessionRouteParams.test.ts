@@ -130,7 +130,7 @@ describe("session route params", () => {
     expect(hasSessionRouteDateIntent("usage", {
       window_days: "30",
     })).toBe(false);
-    expect(hasSessionRouteDateIntent("insights", {
+    expect(hasSessionRouteDateIntent("quality", {
       window_days: "30",
     })).toBe(false);
   });

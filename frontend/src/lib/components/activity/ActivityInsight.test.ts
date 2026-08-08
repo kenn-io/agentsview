@@ -51,8 +51,10 @@ vi.mock("../../stores/insights.svelte.js", () => ({
   },
 }));
 vi.mock("../../stores/router.svelte.js", () => ({
-  router: { navigate: mocks.navigate },
-  getBasePath: () => "",
+  router: {
+    navigate: mocks.navigate,
+    buildHref: () => "/recall?tab=generated",
+  },
 }));
 
 import ActivityInsight from "./ActivityInsight.svelte";
@@ -201,18 +203,20 @@ describe("ActivityInsight", () => {
     expect(document.body.textContent).not.toContain("STALE RESULT");
   });
 
-  it("prefills the Insights page range and navigates", async () => {
+  it("prefills Generated insights scope and navigates", async () => {
     render(ActivityInsight, { dateFrom: "2026-06-15", dateTo: "2026-06-21" });
     await settle();
     const link = screen.getByRole("link", {
-      name: /insights page|open in insights/i,
+      name: /generated insights|open in recall/i,
     });
     await fireEvent.click(link);
     expect(mocks.setType).toHaveBeenCalledWith("daily_activity");
     expect(mocks.setDateFrom).toHaveBeenCalledWith("2026-06-15");
     expect(mocks.setDateTo).toHaveBeenCalledWith("2026-06-21");
     expect(mocks.setProject).toHaveBeenCalledWith("");
-    expect(mocks.navigate).toHaveBeenCalledWith("insights");
+    expect(mocks.navigate).toHaveBeenCalledWith("recall", {
+      tab: "generated",
+    });
   });
 
   it("disables Generate when the server version is unavailable", async () => {

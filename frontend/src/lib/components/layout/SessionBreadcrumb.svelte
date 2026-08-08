@@ -443,7 +443,7 @@
   function handleAgentAnalysis() {
     if (!session) return;
     insights.generateForSession(session);
-    router.navigate("insights");
+    router.navigate("recall", { tab: "generated" });
   }
 
   function toggleMenu() {

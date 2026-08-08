@@ -47,12 +47,12 @@ export type AgentName =
   | "kiro";
 
 export interface InsightGenerationFilters {
-  timezone: string;
+  timezone?: string;
   machine?: string;
   agent?: string;
   termination?: string;
   min_user_messages?: number;
-  include_one_shot: boolean;
+  include_one_shot?: boolean;
   automated_scope?: AutomatedScope;
   active_since?: string;
 }

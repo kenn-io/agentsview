@@ -13,7 +13,7 @@
   } from "../../api/client.js";
   import { sync } from "../../stores/sync.svelte.js";
   import { insights } from "../../stores/insights.svelte.js";
-  import { router, getBasePath } from "../../stores/router.svelte.js";
+  import { router } from "../../stores/router.svelte.js";
   import { renderMarkdown } from "../../utils/markdown.js";
   import { highlightCodeFences } from "../../utils/highlight-fences.js";
   import type { Insight, InsightsResponse, AgentName } from "../../api/types.js";
@@ -43,11 +43,11 @@
   const insightListRead = new LatestRead();
 
   /**
-   * Open the standalone Insights page prefilled for this panel's range.
+   * Open Generated insights prefilled for this panel's range.
    * Modified or middle clicks fall through to the browser so the href opens in
    * a new tab/window; a plain left click is intercepted for SPA navigation.
    */
-  function openInsightsPage(e: MouseEvent) {
+  function openGeneratedInsights(e: MouseEvent) {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) {
       return;
     }
@@ -56,7 +56,7 @@
     insights.setDateFrom(dateFrom);
     insights.setDateTo(dateTo);
     insights.setProject("");
-    router.navigate("insights");
+    router.navigate("recall", { tab: "generated" });
   }
 
   const insightGenerationAvailable = $derived(
@@ -136,7 +136,7 @@
     };
   });
 
-  // The agent choice is shared with the standalone Insights page via the
+  // The agent choice is shared with the Generated insights panel via the
   // insights store, so picking one here and there stays in sync.
   function onAgentChange(value: string) {
     insights.setAgent(value as AgentName);
@@ -194,10 +194,10 @@
     </span>
     <a
       class="insights-link"
-      href={getBasePath() + "/insights"}
-      onclick={openInsightsPage}
+      href={router.buildHref("recall", { tab: "generated" })}
+      onclick={openGeneratedInsights}
     >
-      {m.activity_insight_open_insights_page()}
+      {m.activity_insight_open_generated()}
     </a>
   </header>
 

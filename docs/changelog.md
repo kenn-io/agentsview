@@ -1805,7 +1805,7 @@ description: Release history for AgentsView
   state is shared across machines through the same push.
   Pinned messages are reconciled by `source_uuid`, so pins
   survive message-ordinal shifts after a re-parse.
-- Add [configurable insight agent binaries](/insights/#configuring-agent-binaries).
+- Add [configurable insight agent binaries](/recall/#configuring-agent-binaries).
   Set `[agent.<name>] binary = "..."` in
   `~/.agentsview/config.toml` to point each insight-generation
   agent (Claude, Codex, Copilot, Gemini, Kiro) at a specific

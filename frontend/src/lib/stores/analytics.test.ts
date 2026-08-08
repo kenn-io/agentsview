@@ -738,17 +738,17 @@ describe("AnalyticsStore model filter", () => {
     expect(params?.model).toBeUndefined();
   });
 
-  it("fetchSignalsForInsights omits the model filter", async () => {
+  it("fetchSignalsForQuality omits the model filter", async () => {
     analytics.model = "gpt-4o";
     vi.clearAllMocks();
 
-    await analytics.fetchSignalsForInsights();
+    await analytics.fetchSignalsForQuality();
 
     expect(analyticsService.getApiV1AnalyticsSignals).toHaveBeenCalledWith(
       expect.not.objectContaining({ model: expect.anything() }),
     );
-    // The Insights page has no model control; the selected model stays put for
-    // the Analytics page rather than being cleared by viewing Insights.
+    // The Quality page has no model control; the selected model stays put for
+    // the Analytics page rather than being cleared by viewing Quality.
     expect(analytics.model).toBe("gpt-4o");
   });
 
@@ -757,13 +757,13 @@ describe("AnalyticsStore model filter", () => {
     expect(analytics.signalEvidenceParams().model).toBeUndefined();
   });
 
-  it("drops stale model-scoped signals while an Insights fetch is pending", async () => {
+  it("drops stale model-scoped signals while an Quality fetch is pending", async () => {
     // Analytics loads model-scoped signals into the shared cache.
     analytics.model = "gpt-4o";
     await analytics.fetchSignals();
     expect(analytics.signals).not.toBeNull();
 
-    // The unmodelled Insights fetch is held in flight.
+    // The unmodelled Quality fetch is held in flight.
     let resolve!: (v: SignalsAnalyticsResponse) => void;
     vi.mocked(analyticsService.getApiV1AnalyticsSignals).mockReturnValue(
       new Promise((r) => {
@@ -771,9 +771,9 @@ describe("AnalyticsStore model filter", () => {
       }),
     );
 
-    const pending = analytics.fetchSignalsForInsights();
+    const pending = analytics.fetchSignalsForQuality();
 
-    // The model-scoped cache is dropped up front, so Insights shows a loading
+    // The model-scoped cache is dropped up front, so Quality shows a loading
     // skeleton instead of another scope's signals during the fetch.
     expect(analytics.signals).toBeNull();
     expect(analytics.loading.signals).toBe(true);
@@ -783,18 +783,18 @@ describe("AnalyticsStore model filter", () => {
     expect(analytics.signals).not.toBeNull();
   });
 
-  it("does not retain stale model-scoped signals when an Insights fetch fails", async () => {
+  it("does not retain stale model-scoped signals when an Quality fetch fails", async () => {
     // Analytics loads model-scoped signals into the shared cache.
     analytics.model = "gpt-4o";
     await analytics.fetchSignals();
     expect(analytics.signals).not.toBeNull();
 
-    // The unmodelled Insights fetch fails.
+    // The unmodelled Quality fetch fails.
     vi.mocked(analyticsService.getApiV1AnalyticsSignals).mockRejectedValueOnce(
       new Error("signals failed"),
     );
 
-    await analytics.fetchSignalsForInsights();
+    await analytics.fetchSignalsForQuality();
 
     // The wrong-scope cache is cleared and the failure surfaces rather than
     // being swallowed as a cached refetch that keeps stale data.
@@ -802,14 +802,14 @@ describe("AnalyticsStore model filter", () => {
     expect(analytics.errors.signals).toBe("signals failed");
   });
 
-  it("drops stale drill-down-scoped signals when entering Insights without a model", async () => {
+  it("drops stale drill-down-scoped signals when entering Quality without a model", async () => {
     // Analytics loaded signals under a heatmap drill-down (hour) and no model,
-    // so the cache scope differs from Insights only by the drill-down filter.
+    // so the cache scope differs from Quality only by the drill-down filter.
     analytics.selectedHour = 9;
     await analytics.fetchSignals();
     expect(analytics.signals).not.toBeNull();
 
-    // Insights clears the drill-down; hold the unmodelled fetch in flight.
+    // Quality clears the drill-down; hold the unmodelled fetch in flight.
     let resolve!: (v: SignalsAnalyticsResponse) => void;
     vi.mocked(analyticsService.getApiV1AnalyticsSignals).mockReturnValue(
       new Promise((r) => {
@@ -817,10 +817,10 @@ describe("AnalyticsStore model filter", () => {
       }),
     );
 
-    const pending = analytics.fetchSignalsForInsights();
+    const pending = analytics.fetchSignalsForQuality();
 
     // The drill-down-scoped cache is dropped even though no model was set, so
-    // Insights does not show another scope's signals while the fetch runs.
+    // Quality does not show another scope's signals while the fetch runs.
     expect(analytics.signals).toBeNull();
     expect(analytics.loading.signals).toBe(true);
 
@@ -1100,7 +1100,7 @@ describe("AnalyticsStore rolling default date range", () => {
     expect(analytics.selectedHour).toBeNull();
   });
 
-  it("fetchSignalsForInsights clears hidden drill-down filters", async () => {
+  it("fetchSignalsForQuality clears hidden drill-down filters", async () => {
     const { analytics } = await loadAnalyticsStore();
     analytics.from = "2026-04-01";
     analytics.to = "2026-04-30";
@@ -1109,7 +1109,7 @@ describe("AnalyticsStore rolling default date range", () => {
     analytics.selectedDow = 2;
     analytics.selectedHour = 16;
 
-    await analytics.fetchSignalsForInsights();
+    await analytics.fetchSignalsForQuality();
 
     expect(analytics.selectedDate).toBeNull();
     expect(analytics.selectedDow).toBeNull();
@@ -1128,13 +1128,13 @@ describe("AnalyticsStore rolling default date range", () => {
     );
   });
 
-  it("fetchSignalsForInsights re-derives rolling dates before fetching", async () => {
+  it("fetchSignalsForQuality re-derives rolling dates before fetching", async () => {
     const { analytics } = await loadAnalyticsStore();
     analytics.setRollingWindow(7);
     vi.clearAllMocks();
 
     vi.setSystemTime(new Date("2026-04-26T12:00:00"));
-    await analytics.fetchSignalsForInsights();
+    await analytics.fetchSignalsForQuality();
 
     expect(analytics.from).toBe("2026-04-20");
     expect(analytics.to).toBe("2026-04-26");

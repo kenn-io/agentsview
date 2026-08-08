@@ -98,7 +98,7 @@ function appSourceSlice(startMarker: string, endMarker: string): string {
 }
 
 describe("App Recall availability", () => {
-  it("does not query Recall when a read-only backend opens the direct route", async () => {
+  it("opens Generated insights without querying the corpus on a read-only backend", async () => {
     vi.stubGlobal(
       "ResizeObserver",
       class {
@@ -142,9 +142,7 @@ describe("App Recall availability", () => {
     component = mount(App, { target: document.body });
     await flushEffects();
 
-    expect(document.body.textContent).toContain(
-      "Recall is unavailable in read-only mode.",
-    );
+    expect(document.body.textContent).toContain("Generated insights");
     expect(
       fetchSpy.mock.calls.some(([input]) =>
         String(input).includes("/recall/"),
@@ -754,12 +752,12 @@ describe("App analytics date navigation", () => {
     vi.spyOn(sessionTiming, "load").mockResolvedValue();
     vi.spyOn(pins, "loadForSession").mockResolvedValue();
     vi.spyOn(analytics, "fetchAll").mockResolvedValue();
-    vi.spyOn(analytics, "fetchSignalsForInsights").mockResolvedValue();
+    vi.spyOn(analytics, "fetchSignalsForQuality").mockResolvedValue();
     vi.spyOn(insights, "load").mockResolvedValue();
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
 
-    window.history.replaceState(null, "", "/insights");
-    router.route = "insights";
+    window.history.replaceState(null, "", "/quality");
+    router.route = "quality";
     router.params = {};
     router.sessionId = null;
     yokedDates.setEnabled(true);
@@ -842,11 +840,11 @@ describe("App analytics date navigation", () => {
       sessions.activeSessionId = id;
     });
     vi.spyOn(analytics, "fetchAll").mockResolvedValue();
-    vi.spyOn(analytics, "fetchSignalsForInsights").mockResolvedValue();
+    vi.spyOn(analytics, "fetchSignalsForQuality").mockResolvedValue();
     vi.spyOn(insights, "load").mockResolvedValue();
 
-    window.history.replaceState(null, "", "/insights");
-    router.route = "insights";
+    window.history.replaceState(null, "", "/quality");
+    router.route = "quality";
     router.params = {};
     router.sessionId = null;
     yokedDates.setEnabled(true);
@@ -905,11 +903,11 @@ describe("App analytics date navigation", () => {
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
     vi.spyOn(analytics, "fetchAll").mockResolvedValue();
-    vi.spyOn(analytics, "fetchSignalsForInsights").mockResolvedValue();
+    vi.spyOn(analytics, "fetchSignalsForQuality").mockResolvedValue();
     vi.spyOn(insights, "load").mockResolvedValue();
 
-    window.history.replaceState(null, "", "/insights");
-    router.route = "insights";
+    window.history.replaceState(null, "", "/quality");
+    router.route = "quality";
     router.params = {};
     router.sessionId = null;
     analyticsPageDates.retain(
@@ -975,7 +973,7 @@ describe("App analytics date navigation", () => {
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
     vi.spyOn(analytics, "fetchAll").mockResolvedValue();
-    vi.spyOn(analytics, "fetchSignalsForInsights").mockResolvedValue();
+    vi.spyOn(analytics, "fetchSignalsForQuality").mockResolvedValue();
     vi.spyOn(insights, "load").mockResolvedValue();
 
     window.history.replaceState(null, "", "/sessions");
@@ -989,7 +987,7 @@ describe("App analytics date navigation", () => {
     await flushEffects();
     await selectRelativeRange(30);
 
-    router.navigate("insights");
+    router.navigate("quality");
     await flushEffects();
     sessionLoadDates.length = 0;
     const dateFiltersAtRouteReplace: Array<{
@@ -1037,7 +1035,7 @@ describe("App analytics date navigation", () => {
     expect(router.params).toEqual({});
   });
 
-  it("shares a retained Insights range after linking is enabled", async () => {
+  it("shares a retained Quality range after linking is enabled", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-07-10T12:00:00"));
     vi.stubGlobal(
@@ -1060,12 +1058,12 @@ describe("App analytics date navigation", () => {
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
     vi.spyOn(analytics, "fetchAll").mockResolvedValue();
-    vi.spyOn(analytics, "fetchSignalsForInsights").mockResolvedValue();
+    vi.spyOn(analytics, "fetchSignalsForQuality").mockResolvedValue();
     vi.spyOn(insights, "load").mockResolvedValue();
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
 
-    window.history.replaceState(null, "", "/insights");
-    router.route = "insights";
+    window.history.replaceState(null, "", "/quality");
+    router.route = "quality";
     router.params = {};
     router.sessionId = null;
     analytics.applyRollingWindow(365);
@@ -1078,7 +1076,7 @@ describe("App analytics date navigation", () => {
     router.navigate("settings");
     await flushEffects();
     yokedDates.setEnabled(true);
-    router.navigate("insights");
+    router.navigate("quality");
     await flushEffects();
     router.navigate("usage");
     await flushEffects();

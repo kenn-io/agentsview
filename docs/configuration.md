@@ -1044,8 +1044,8 @@ Optional features that send data externally when you enable them:
   database you configure.
 - The [DuckDB mirror](/duckdb/) writes a local DuckDB file by default; data only
   leaves the machine if you expose the mirror over a remote Quack endpoint.
-- [Session Insights](/insights/) sends session content to an AI provider
-  (Claude, Codex, Copilot, or Gemini) to generate summaries.
+- [Generated insights](/recall/#current-surface) sends scoped session content to
+  the selected agent CLI to generate reports.
 - [Publish to Gist](/usage/#publish-to-gist) uploads a session to GitHub.
 
 The automatic outbound requests are update checks and an anonymous daemon ping:

@@ -87,7 +87,7 @@ disabled by default because applying a broad range automatically
 can make some pages run substantially more expensive queries.
 
 To carry selections among Sessions, Usage, Activity, Trends, and
-Insights, enable **Settings > Date ranges > Link date ranges across
+Quality, enable **Settings > Date ranges > Link date ranges across
 pages**. An explicit dated URL always controls the target page. With
 linking enabled, that selection can then carry to date-aware pages
 opened later at their bare URLs.
@@ -130,7 +130,7 @@ model's messages.
 
 !!! note "Dashboard-only scope"
     The model filter applies only to the analytics dashboard. The
-    [Session Insights](/insights/) page and the session list are
+    [Generated insights](/recall/?tab=generated) and the session list are
     not scoped by it, so a model selected here does not silently
     narrow those views. The [Usage](/token-usage/) page keeps its
     own separate model filter.
@@ -269,17 +269,15 @@ projects, tools, and velocity sections.
 
 ---
 
-## Session Insights
+## Generated Insights
 
-AgentsView can generate AI-powered summaries and analysis of your
-coding sessions using Claude, Codex, Copilot, or Gemini. Click
-**More → Insights** in the header navigation to open the Insights
-page, where you can generate daily activity digests, multi-day
-summaries, and deeper analyses of your agent workflow patterns —
-scoped by project or across everything.
+AgentsView can generate model-written reports over an explicit session scope
+using Claude, Codex, Copilot, Gemini, or Kiro. Open **Recall → Generated
+insights** to choose the date range, project, session agent, automated-session
+scope, template, generator, and optional focus.
 
-See the [Session Insights](/insights/) page for full
-documentation.
+See [Recall](/recall/#current-surface) for generation, archive, and privacy
+details.
 
 ---
 
@@ -1223,7 +1221,7 @@ Settings are organized into sections:
 |---------|----------------------|
 | Language | Interface language (English, French, Simplified Chinese, Traditional Chinese, or Korean) |
 | Appearance | Theme (light/dark), high-contrast mode, chart colors, message layout, text size, block visibility, desktop zoom level |
-| Date ranges | Browser-local checkbox for linking date selections across Sessions, Usage, Activity, Trends, and Insights |
+| Date ranges | Browser-local checkbox for linking date selections across Sessions, Usage, Activity, Trends, and Quality |
 | Agent Directories | Custom paths for each agent's session files. For Devin CLI, point at the local root that contains `cli/` (for example a redacted `.../Application Support/devin` path), not copied config or OAuth files. |
 | Terminal | Default terminal emulator for session resume |
 | Embeddings | Current semantic-index build phase, progress, throughput, ETA, last result, and local generations |

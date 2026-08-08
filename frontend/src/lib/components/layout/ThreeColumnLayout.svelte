@@ -13,8 +13,6 @@
   import { router } from "../../stores/router.svelte.js";
   import type { Route } from "../../stores/router.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
-  import { sync } from "../../stores/sync.svelte.js";
-  import { settings } from "../../stores/settings.svelte.js";
   import {
     ActivityIcon,
     ChartColumnIcon,
@@ -78,13 +76,6 @@
         )
       : SIDEBAR_WIDTH_DEFAULT,
   );
-  const recallAvailable = $derived(
-    !sync.readOnly &&
-      !settings.readOnly &&
-      (sync.serverVersion !== null ||
-        (settings.loaded && settings.error === null)),
-  );
-
   function handleBackdropClick() {
     ui.closeSidebar();
   }
@@ -347,16 +338,14 @@
         <ChartColumnIcon size="12" strokeWidth="2" aria-hidden="true" />
         {m.nav_trends()}
       </button>
-      {#if recallAvailable}
-        <button
-          class="mobile-nav-btn"
-          class:active={router.route === "recall"}
-          onclick={() => mobileNav("recall")}
-        >
-          <LightbulbIcon size="12" strokeWidth="2" aria-hidden="true" />
-          {m.nav_recall()}
-        </button>
-      {/if}
+      <button
+        class="mobile-nav-btn"
+        class:active={router.route === "recall"}
+        onclick={() => mobileNav("recall")}
+      >
+        <LightbulbIcon size="12" strokeWidth="2" aria-hidden="true" />
+        {m.nav_recall()}
+      </button>
       <button
         class="mobile-nav-btn"
         class:active={router.route === "pinned"}
@@ -367,11 +356,11 @@
       </button>
       <button
         class="mobile-nav-btn"
-        class:active={router.route === "insights"}
-        onclick={() => mobileNav("insights")}
+        class:active={router.route === "quality"}
+        onclick={() => mobileNav("quality")}
       >
         <LogsIcon size="12" strokeWidth="2" aria-hidden="true" />
-        {m.nav_insights()}
+        {m.nav_quality()}
       </button>
       <button
         class="mobile-nav-btn"

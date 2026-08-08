@@ -66,7 +66,7 @@ describe("parsePath", () => {
       "usage",
       "trends",
       "recall",
-      "insights",
+      "quality",
       "pinned",
       "trash",
       "settings",
@@ -102,6 +102,16 @@ describe("parsePath", () => {
     const result = parsePath();
     expect(result.route).toBe("sessions");
     expect(result.sessionId).toBeNull();
+  });
+
+  it("falls back from the removed insights route while preserving session params", () => {
+    setURL("/insights?window_days=30&date_from=2026-07-01");
+    const result = parsePath();
+    expect(result.route).toBe("sessions");
+    expect(result.params).toEqual({
+      window_days: "30",
+      date_from: "2026-07-01",
+    });
   });
 
   it("decodes encoded session IDs", () => {
@@ -164,9 +174,9 @@ describe("RouterStore", () => {
     setURL("/");
     store = new RouterStore();
     const spy = vi.spyOn(window.history, "pushState");
-    store.navigate("insights");
+    store.navigate("quality");
     expect(spy).toHaveBeenCalled();
-    expect(store.route).toBe("insights");
+    expect(store.route).toBe("quality");
     spy.mockRestore();
   });
 
@@ -331,9 +341,9 @@ describe("RouterStore", () => {
   it("responds to popstate events", () => {
     setURL("/sessions");
     store = new RouterStore();
-    setURL("/insights");
+    setURL("/quality");
     window.dispatchEvent(new PopStateEvent("popstate"));
-    expect(store.route).toBe("insights");
+    expect(store.route).toBe("quality");
   });
 
   it("destroy removes popstate listener", () => {
@@ -370,7 +380,7 @@ describe("RouterStore", () => {
   it("preserves desktop param across navigations", () => {
     setURL("/sessions?desktop");
     store = new RouterStore();
-    store.navigate("insights");
+    store.navigate("quality");
     expect(window.location.search).toBe("?desktop=");
     expect(store.params).toEqual({ desktop: "" });
   });
@@ -423,14 +433,14 @@ describe("RouterStore", () => {
     setURL("/sessions?desktop");
     store = new RouterStore();
     store.navigate("sessions", { desktop: "off" });
-    store.navigate("insights");
+    store.navigate("quality");
     expect(window.location.search).toBe("?desktop=off");
   });
 
   it("preserves sticky param across two consecutive navigations", () => {
     setURL("/sessions?desktop");
     store = new RouterStore();
-    store.navigate("insights");
+    store.navigate("quality");
     expect(window.location.search).toBe("?desktop=");
     store.navigate("pinned");
     expect(window.location.search).toBe("?desktop=");
@@ -440,7 +450,7 @@ describe("RouterStore", () => {
     setURL("/sessions?desktop=v1");
     store = new RouterStore();
     // Simulate browser back to a URL with different desktop value
-    setURL("/insights?desktop=v2");
+    setURL("/quality?desktop=v2");
     window.dispatchEvent(new PopStateEvent("popstate"));
     // Next navigation should use updated sticky value
     store.navigate("pinned");
@@ -450,7 +460,7 @@ describe("RouterStore", () => {
   it("removes sticky param on popstate to URL without it", () => {
     setURL("/sessions?desktop");
     store = new RouterStore();
-    setURL("/insights");
+    setURL("/quality");
     window.dispatchEvent(new PopStateEvent("popstate"));
     store.navigate("pinned");
     expect(window.location.search).toBe("");

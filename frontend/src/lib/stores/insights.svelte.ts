@@ -66,8 +66,8 @@ class InsightsStore {
   cannedKind: CannedInsightKind = $state("prompt_maturity_review");
   project: string = $state("");
   agent: AgentName = $state("claude");
+  sessionAgent: string = $state("");
   automatedScope: AutomatedScope = $state("human");
-  sessionFilters: InsightGenerationFilters | undefined = $state();
   items: Insight[] = $state([]);
   selectedId: number | null = $state(null);
   selectedTaskId: string | null = $state(null);
@@ -161,14 +161,12 @@ class InsightsStore {
     this.agent = agent;
   }
 
-  setAutomatedScope(scope: AutomatedScope) {
-    this.automatedScope = scope;
+  setSessionAgent(agent: string) {
+    this.sessionAgent = agent;
   }
 
-  setSessionFilters(filters?: InsightGenerationFilters) {
-    this.sessionFilters = filters
-      ? { ...filters }
-      : undefined;
+  setAutomatedScope(scope: AutomatedScope) {
+    this.automatedScope = scope;
   }
 
   select(id: number) {
@@ -194,8 +192,8 @@ class InsightsStore {
       promptText: this.promptText,
       automatedScope: this.automatedScope,
       sessionId: undefined,
-      sessionFilters: this.sessionFilters
-        ? { ...this.sessionFilters }
+      sessionFilters: this.type === "llm_canned" && this.sessionAgent
+        ? { agent: this.sessionAgent }
         : undefined,
     });
   }

@@ -33,25 +33,61 @@ The current implementation is local and SQLite-only. The CLI provides:
   `recall extract preview` for previewing deterministic session chunks; and
 - `recall import --dry-run` for validating reviewed JSONL candidates.
 
-The top-level **Recall** page provides a read-only corpus browser. Open it from
-the header or navigate directly to `/recall`. The page shows extraction coverage
-and generation state, and filters entries by text, project, entry type,
-generation, and review state. Expand an entry to inspect its body, trigger,
-uncertainty, provenance metadata, and evidence links back to the source
-transcript.
+The top-level **Recall** page has two tabs:
+
+- **Corpus** is a read-only browser for distilled entries. It shows extraction
+  coverage and generation state, and filters entries by text, project, entry
+  type, generation, and review state. Expand an entry to inspect its body,
+  trigger, uncertainty, provenance metadata, and evidence links back to the
+  source transcript.
+- **Generated insights** creates and stores longer reports over an explicit
+  session scope. Its form always shows the date range, project, session agent,
+  automated-session scope, report template, generator, and optional focus used
+  for the next report. Saved reports can be exported, published, linked, or
+  deleted from the archive.
+
+Open Recall from the header or navigate directly to `/recall`. Generated-report
+links use `/recall?tab=generated&insight=<id>`.
 
 ![Recall corpus browser](/assets/generated/screenshots/recall-corpus.png)
+
+![Generated insights](/assets/generated/screenshots/recall-generated-insights.png)
+
+Generated insights run through the selected agent CLI on your machine. The CLI
+receives content from sessions matching the visible scope, and the completed
+markdown is saved in the local SQLite archive. AgentsView does not manage the
+CLI's provider credentials; review that agent's privacy behavior before
+generating a report.
+
+### Configuring agent binaries
+
+AgentsView normally resolves `claude`, `codex`, `copilot`, `gemini`, and
+`kiro-cli` through `PATH`. To pin a particular executable, configure its agent
+table:
+
+```toml
+[agent.claude]
+binary = "/usr/local/bin/claude"
+
+[agent.gemini]
+binary = "/usr/local/bin/gemini"
+```
+
+Each known agent has an independent override. This setting affects report
+generation only; session discovery continues to read the configured session
+directories.
 
 Reviewed JSONL import is a guarded laboratory inlet, not a stable or recommended
 end-user workflow. Use an isolated `AGENTSVIEW_DATA_DIR` for experiments. The
 import command refuses the default data directory unless the operator explicitly
 overrides that guard.
 
-Recall is not available through PostgreSQL or DuckDB stores, so those read-only
-servers omit the corpus browser. On the local SQLite UI, Session Vital Signs
-also includes a read-only Recall panel for the open session and links each
-evidence range back to the transcript. Corpus population, review, generation
-management, and ranked querying remain CLI and HTTP API workflows.
+The Corpus tab is not available through PostgreSQL or DuckDB stores, so those
+read-only servers open Recall on Generated insights instead. On the local SQLite
+UI, Session Vital Signs also includes a read-only Recall panel for the open
+session and links each evidence range back to the transcript. Corpus population,
+review, extraction-generation management, and ranked querying remain CLI and
+HTTP API workflows.
 
 The daemon exposes the same inspection and query operations over its HTTP API.
 Ordinary queries record measurement data when the SQLite store is writable, but

@@ -194,12 +194,10 @@ read [out-of-band filesystem copies](/filesystem-sync/), or
 
 <div class="grid cards" markdown>
 
--   **AI-Powered Insights**
+-   **Generated Insights**
 
-    Generate summaries and analysis of your coding sessions
-    using Claude, Codex, Copilot, or Gemini. Get daily
-    activity digests, multi-day analyses, and
-    recommendations — scoped by project or across everything.
+    Generate model-written reports over an explicit session scope and manage
+    them alongside the [Recall corpus](/recall/).
 
 -   **Browse Sessions**
 
@@ -228,6 +226,11 @@ read [out-of-band filesystem copies](/filesystem-sync/), or
     Explore the experimental [Recall corpus](/recall/) with extraction
     coverage, filters, expandable entries, and evidence links back to
     source transcripts.
+
+-   **Measure Quality**
+
+    Inspect deterministic [Quality signals](/quality/), rule-based
+    recommendations, coverage, and source-session evidence.
 
 -   **Recent Edits**
 

@@ -249,7 +249,7 @@ describe("AppHeader export actions", () => {
       "Trends",
       "Recall",
       "Pinned",
-      "Insights",
+      "Quality",
       "Trash",
       "Recent Edits",
       "Data",
@@ -294,10 +294,10 @@ describe("AppHeader export actions", () => {
     expect(
       refreshButton?.querySelector("svg.lucide-database-backup"),
     ).not.toBeNull();
-    expect(document.body.textContent).not.toContain("Recall");
+    expect(document.body.textContent).toContain("Recall");
   });
 
-  it("hides Recall when settings report a read-only backend", async () => {
+  it("keeps Recall available when settings report a read-only backend", async () => {
     sync.serverVersion = {
       version: "dev",
       commit: "unknown",
@@ -310,7 +310,7 @@ describe("AppHeader export actions", () => {
     await tick();
 
     expect(document.body.textContent).toContain("Sessions");
-    expect(document.body.textContent).not.toContain("Recall");
+    expect(document.body.textContent).toContain("Recall");
   });
 
   it("renders translated shell navigation when locale is Simplified Chinese", async () => {
