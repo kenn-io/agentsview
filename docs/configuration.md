@@ -74,6 +74,7 @@ chart_palette = "agentsview"
 | `chart_palette`                     | Server-wide categorical chart colors: `"agentsview"` (default) or `"matplotlib"`; also configurable under **Settings > Appearance**                                                                                                                  |
 | `[proxy]`                           | Managed proxy configuration table — see [Remote Access](/remote-access/)                                                                                                                                                                             |
 | `disable_update_check`              | Disable the automatic update check (see [Privacy](#privacy-and-telemetry))                                                                                                                                                                           |
+| `scan_protected_paths`              | Allow Git discovery inside macOS privacy-protected folders, accepting one consent prompt per folder — see [macOS Protected Folders](#macos-protected-folders)                                                                                        |
 | `[pg]`                              | PostgreSQL sync configuration — see [PostgreSQL Sync](/pg-sync/)                                                                                                                                                                                     |
 | `[duckdb]`                          | DuckDB mirror configuration — see [DuckDB Mirror](/duckdb/)                                                                                                                                                                                          |
 | `[vector]`                          | Opt-in semantic-search index; model settings live in `[vector.embeddings]`, named endpoints in `[vector.embeddings.servers.<name>]`, embedding schedule in `[vector.embed]` — see [Semantic Search](/semantic-search/#enabling-vector) for every key |
@@ -979,6 +980,38 @@ Notes:
   sessions explicitly with `agentsview prune`.
 - Remote-host sync is unaffected: the prefixes describe local paths, so they are
   not applied to sessions pulled from `[[remote_hosts]]` entries.
+
+### macOS Protected Folders
+
+To label a session with its Git remote, worktree, and branch, AgentsView reads
+Git metadata from the session's recorded working directory. On macOS some
+locations are guarded by a privacy consent prompt, and reading inside one makes
+macOS attribute the request to the AgentsView app and ask the user for access.
+Because the first sync walks every session in the archive at once, this produced
+a burst of prompts at first launch for folders the user never pointed AgentsView
+at.
+
+AgentsView no longer touches these locations during discovery:
+
+- `~/Desktop`, `~/Documents`, `~/Downloads`, `~/Movies`, `~/Music`, `~/Pictures`
+- `~/Library/CloudStorage` (Dropbox, OneDrive, Google Drive, Box) and
+  `~/Dropbox`
+- `~/Library/Mobile Documents` (iCloud Drive)
+
+Sessions whose working directory lives in one of these folders keep **path-only
+project identity**: they are still ingested, listed, searched, and grouped by
+path, but they carry no Git remote, worktree relationship, or branch. Sessions
+anywhere else are unaffected.
+
+If you keep code in one of these folders and want the Git detail, opt in:
+
+```toml
+scan_protected_paths = true
+```
+
+macOS then prompts once per folder on the next sync; granting access restores
+full identity for those sessions, and denying leaves them path-only. The option
+has no effect on other platforms.
 
 ### Large Watch Trees
 

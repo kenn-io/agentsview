@@ -513,6 +513,57 @@ func TestIsAutomountNamespacePath(t *testing.T) {
 	}
 }
 
+func TestIsProtectedUserDataPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the predicate compares POSIX home paths built with filepath")
+	}
+	const home = "/Users/tester"
+	tests := []struct {
+		name string
+		goos string
+		home string
+		path string
+		want bool
+	}{
+		{"documents child", "darwin", home, home + "/Documents/proj", true},
+		{"documents root", "darwin", home, home + "/Documents", true},
+		{"downloads child", "darwin", home, home + "/Downloads/repo", true},
+		{"desktop child", "darwin", home, home + "/Desktop/repo", true},
+		{"pictures child", "darwin", home, home + "/Pictures/scan", true},
+		{"dropbox child", "darwin", home, home + "/Dropbox/code/app", true},
+		{
+			"cloud storage child", "darwin", home,
+			home + "/Library/CloudStorage/Dropbox-Personal/app", true,
+		},
+		{
+			"icloud drive child", "darwin", home,
+			home + "/Library/Mobile Documents/com~apple~CloudDocs/app", true,
+		},
+		{
+			"case folded child", "darwin", home,
+			home + "/documents/proj", true,
+		},
+		{"unprotected home child", "darwin", home, home + "/src/app", false},
+		{"library sibling", "darwin", home, home + "/Library/Caches/x", false},
+		{
+			"prefix collision documentation", "darwin", home,
+			home + "/Documentation/proj", false,
+		},
+		{"another user documents", "darwin", home, "/Users/other/Documents", false},
+		{"outside home", "darwin", home, "/opt/src/app", false},
+		{"relative path", "darwin", home, "Documents/proj", false},
+		{"empty home", "darwin", "", home + "/Documents/proj", false},
+		{"linux never matches", "linux", home, home + "/Documents/proj", false},
+		{"windows never matches", "windows", home, home + "/Documents/proj", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want,
+				IsProtectedUserDataPath(tt.goos, tt.home, tt.path))
+		})
+	}
+}
+
 // TestNormalizeStoredRootPathSkipsAutomountNamespace pins that on macOS a
 // stored /home/... root path normalizes to its cleaned form without touching
 // the filesystem: resolving it through the automounter is both futile (the

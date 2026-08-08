@@ -129,6 +129,7 @@ func doParseDiff(cfg ParseDiffConfig) (failed bool) {
 		AgentDirs:               appCfg.AgentDirs,
 		SourceMachines:          appCfg.SourceMachines,
 		IncludeCwdPrefixes:      appCfg.SyncIncludeCwdPrefixes,
+		ScanProtectedPaths:      appCfg.ScanProtectedPaths,
 		Machine:                 appCfg.LocalMachineName,
 		BlockedResultCategories: appCfg.ResultContentBlockedCategories,
 	})

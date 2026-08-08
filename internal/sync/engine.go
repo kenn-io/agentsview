@@ -268,6 +268,14 @@ type EngineConfig struct {
 	// remote sync leaves it empty because the prefixes describe
 	// local paths.
 	IncludeCwdPrefixes []string
+	// ScanProtectedPaths lets local Git discovery read working directories
+	// inside macOS TCC-protected locations (Documents, Downloads, Desktop,
+	// iCloud Drive, and cloud-provider folders). It defaults to false so a
+	// first sync cannot raise consent prompts the user cannot explain;
+	// sessions there keep path-only project identity. Populated from the
+	// scan_protected_paths config option. The safe default belongs to the
+	// zero value so an engine built without the option never prompts.
+	ScanProtectedPaths bool
 	// IDPrefix is prepended to all session IDs. Used by
 	// remote sync to namespace IDs by host (e.g. "host~").
 	IDPrefix string
@@ -315,11 +323,18 @@ type Engine struct {
 	machine                 string
 	blockedResultCategories map[string]bool
 	cwdFilter               cwdPrefixFilter
-	syncMu                  gosync.Mutex // serializes all sync operations
-	mu                      gosync.RWMutex
-	lastSync                time.Time
-	lastSyncStats           SyncStats
-	currentProgress         *Progress
+	// scanProtectedPaths, homeDir, and goos gate passive probing of macOS
+	// TCC-protected locations. homeDir is empty when the home directory
+	// cannot be resolved, which disables the gate rather than guessing.
+	// goos mirrors runtime.GOOS so the gate is testable off-darwin.
+	scanProtectedPaths bool
+	homeDir            string
+	goos               string
+	syncMu             gosync.Mutex // serializes all sync operations
+	mu                 gosync.RWMutex
+	lastSync           time.Time
+	lastSyncStats      SyncStats
+	currentProgress    *Progress
 	// skipCache tracks paths that should be skipped on
 	// subsequent syncs, keyed by path with the file mtime
 	// at time of caching. Covers parse errors and
@@ -557,6 +572,9 @@ func NewEngine(
 		machine:                 cfg.Machine,
 		blockedResultCategories: blockedCategorySet(cfg.BlockedResultCategories),
 		cwdFilter:               newCwdPrefixFilter(cfg.IncludeCwdPrefixes),
+		scanProtectedPaths:      cfg.ScanProtectedPaths,
+		homeDir:                 userHomeDirOrEmpty(),
+		goos:                    runtime.GOOS,
 		skipCache:               skipCache,
 		skipFingerprints:        make(map[string]string),
 		skipHashKeys:            skipHashKeys,
@@ -11181,6 +11199,27 @@ func (e *Engine) loadWorktreeProjectResolver() worktreeProjectResolver {
 	}
 }
 
+// skipSourceProjectProbe reports whether pw's working directory must not be
+// stat-ed to decide whether its source project is still available. Remote and
+// unverified sessions describe another machine's paths, automounter namespaces
+// wake automountd, and macOS TCC-protected locations raise a consent prompt.
+// Skipping leaves the stored project untouched, which is what an unreachable
+// working directory would produce anyway.
+func (e *Engine) skipSourceProjectProbe(pw *pendingWrite) bool {
+	sess := &pw.sess
+	if sess.ID == "" || sess.Cwd == "" || pw.sourceIdentityUnverified {
+		return true
+	}
+	if !e.isLocalMachineAttribution(sess.Machine) ||
+		!safeLocalAbsolutePath(sess.Cwd) {
+		return true
+	}
+	if export.IsAutomountNamespacePath(runtime.GOOS, filepath.Clean(sess.Cwd)) {
+		return true
+	}
+	return !e.mayProbeLocalPath(sess.Cwd)
+}
+
 func (e *Engine) preserveUnavailableSourceProjects(
 	ctx context.Context,
 	batch []pendingWrite,
@@ -11192,11 +11231,7 @@ func (e *Engine) preserveUnavailableSourceProjects(
 			continue
 		}
 		sess := batch[i].sess
-		if sess.ID == "" || sess.Cwd == "" ||
-			batch[i].sourceIdentityUnverified ||
-			!e.isLocalMachineAttribution(sess.Machine) ||
-			!safeLocalAbsolutePath(sess.Cwd) ||
-			export.IsAutomountNamespacePath(runtime.GOOS, filepath.Clean(sess.Cwd)) {
+		if e.skipSourceProjectProbe(&batch[i]) {
 			batch[i].sourceProjectResolved = true
 			continue
 		}
@@ -11247,6 +11282,28 @@ func (e *Engine) preserveUnavailableSourceProjects(
 		}
 	}
 	return batch, nil
+}
+
+// userHomeDirOrEmpty returns the current user's home directory, or "" when it
+// cannot be resolved. An empty result leaves protected-path gating inactive,
+// which keeps discovery working on systems with no usable home directory.
+func userHomeDirOrEmpty() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return home
+}
+
+// mayProbeLocalPath reports whether passive discovery may touch p on disk.
+// Working directories inside macOS TCC-protected locations stay untouched
+// unless the user set scan_protected_paths, so importing an archive cannot
+// raise consent prompts for Documents, Downloads, or a cloud-provider folder.
+func (e *Engine) mayProbeLocalPath(p string) bool {
+	if e.scanProtectedPaths {
+		return true
+	}
+	return !export.IsProtectedUserDataPath(e.goos, e.homeDir, p)
 }
 
 // isLocalMachineAttribution recognizes empty and the legacy "local" sentinel
@@ -12454,8 +12511,10 @@ func (e *Engine) cachedProjectIdentity(machine, rootPath string) projectIdentity
 	// wakes the /home automounter — with tens of thousands of remote
 	// sessions and a one-minute cache TTL that becomes a sustained
 	// automountd/opendirectoryd CPU storm.
+	// mayProbeLocalPath also guards export.NormalizeRootPath below, which
+	// resolves symlinks and would reach into a protected location on its own.
 	if e.idPrefix == "" && e.pathRewriter == nil &&
-		e.isLocalMachineAttribution(machine) {
+		e.isLocalMachineAttribution(machine) && e.mayProbeLocalPath(rootPath) {
 		if normalized, ok, err := export.NormalizeRootPath(rootPath); err == nil && ok {
 			identity.rootPath = normalized
 		}

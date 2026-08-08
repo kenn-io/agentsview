@@ -362,6 +362,7 @@ func workerEngineConfig(cfg config.Config) sync.EngineConfig {
 		AgentDirs:               cfg.AgentDirs,
 		SourceMachines:          cfg.SourceMachines,
 		IncludeCwdPrefixes:      cfg.SyncIncludeCwdPrefixes,
+		ScanProtectedPaths:      cfg.ScanProtectedPaths,
 		Machine:                 cfg.LocalMachineName,
 		BlockedResultCategories: cfg.ResultContentBlockedCategories,
 	}

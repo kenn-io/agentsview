@@ -261,6 +261,7 @@ func (b localArchiveQueryBackend) SessionUsage(
 			AgentDirs:               b.cfg.AgentDirs,
 			SourceMachines:          b.cfg.SourceMachines,
 			IncludeCwdPrefixes:      b.cfg.SyncIncludeCwdPrefixes,
+			ScanProtectedPaths:      b.cfg.ScanProtectedPaths,
 			Machine:                 b.cfg.LocalMachineName,
 			BlockedResultCategories: b.cfg.ResultContentBlockedCategories,
 		})

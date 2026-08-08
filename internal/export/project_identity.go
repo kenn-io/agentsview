@@ -806,6 +806,54 @@ func IsAutomountNamespacePath(goos, p string) bool {
 	return false
 }
 
+// protectedUserDataDirs are home-relative locations macOS guards behind a TCC
+// consent prompt. Reading a file under one of them from a bundled app makes
+// macOS attribute the request to the bundle and ask the user for access, so a
+// first sync that probes recorded working directories produces prompts the
+// user has no way to connect to anything they did.
+var protectedUserDataDirs = [...]string{
+	"Desktop",
+	"Documents",
+	"Downloads",
+	"Movies",
+	"Music",
+	"Pictures",
+	// Cloud providers publish their files as File Provider domains under
+	// Library/CloudStorage (Dropbox, OneDrive, Google Drive, Box); iCloud
+	// Drive uses Library/Mobile Documents. Both prompt on first access.
+	"Library/CloudStorage",
+	"Library/Mobile Documents",
+	// Dropbox keeps ~/Dropbox pointing into its File Provider domain, so a
+	// recorded working directory names it without mentioning CloudStorage.
+	"Dropbox",
+}
+
+// IsProtectedUserDataPath reports whether p lies inside a macOS TCC-protected
+// user data location under home. Passive discovery skips these paths so
+// importing an archive cannot trigger consent prompts; the user opts in with
+// scan_protected_paths when they want Git-derived identity there instead.
+//
+// Comparison folds case because the startup volume is case-insensitive by
+// default, so a working directory recorded as ~/documents names the protected
+// folder just as ~/Documents does. goos and home are parameters so the
+// predicate is testable off-darwin.
+func IsProtectedUserDataPath(goos, home, p string) bool {
+	if goos != "darwin" || strings.TrimSpace(home) == "" || !filepath.IsAbs(p) {
+		return false
+	}
+	cleaned := strings.ToLower(filepath.Clean(p))
+	for _, dir := range protectedUserDataDirs {
+		root := strings.ToLower(filepath.Join(
+			filepath.Clean(home), filepath.FromSlash(dir),
+		))
+		if cleaned == root ||
+			strings.HasPrefix(cleaned, root+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
 func resolveLiveRootPath(cleaned string) (string, bool) {
 	if IsAutomountNamespacePath(runtime.GOOS, cleaned) {
 		return "", false

@@ -546,6 +546,16 @@ type Config struct {
 	// paths.
 	SyncIncludeCwdPrefixes []string `json:"-" toml:"sync_include_cwd_prefixes"`
 
+	// ScanProtectedPaths allows local Git discovery to read working
+	// directories inside macOS locations guarded by a TCC consent prompt
+	// (Documents, Downloads, Desktop, iCloud Drive, and cloud-provider
+	// folders such as Dropbox). It defaults to false so a first sync never
+	// asks for access to folders the user did not point us at; sessions
+	// there keep path-only project identity instead of Git remote,
+	// worktree, and branch detail. Setting it accepts one macOS prompt per
+	// location in exchange for that detail. No effect off macOS.
+	ScanProtectedPaths bool `json:"-" toml:"scan_protected_paths"`
+
 	// EventsCoalesceInterval is the minimum wall-clock time between
 	// SSE data_changed broadcasts to connected clients. Emits that
 	// arrive within this window after a prior broadcast are coalesced
@@ -1084,6 +1094,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		Proxy                          ProxyConfig                `toml:"proxy"`
 		WatchExcludePatterns           []string                   `toml:"watch_exclude_patterns"`
 		SyncIncludeCwdPrefixes         []string                   `toml:"sync_include_cwd_prefixes"`
+		ScanProtectedPaths             bool                       `toml:"scan_protected_paths"`
 		ResultContentBlockedCategories []string                   `toml:"result_content_blocked_categories"`
 		Terminal                       TerminalConfig             `toml:"terminal"`
 		AuthToken                      string                     `toml:"auth_token"`
@@ -1165,6 +1176,9 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if file.SyncIncludeCwdPrefixes != nil {
 		c.SyncIncludeCwdPrefixes = file.SyncIncludeCwdPrefixes
+	}
+	if file.ScanProtectedPaths {
+		c.ScanProtectedPaths = true
 	}
 	if file.ResultContentBlockedCategories != nil {
 		c.ResultContentBlockedCategories = file.ResultContentBlockedCategories

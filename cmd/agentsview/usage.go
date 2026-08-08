@@ -347,6 +347,7 @@ func ensureFreshData(
 			AgentDirs:          appCfg.AgentDirs,
 			SourceMachines:     appCfg.SourceMachines,
 			IncludeCwdPrefixes: appCfg.SyncIncludeCwdPrefixes,
+			ScanProtectedPaths: appCfg.ScanProtectedPaths,
 			Machine:            appCfg.LocalMachineName,
 		})
 		defer engine.Close()
@@ -372,6 +373,7 @@ func ensureFreshData(
 		AgentDirs:          appCfg.AgentDirs,
 		SourceMachines:     appCfg.SourceMachines,
 		IncludeCwdPrefixes: appCfg.SyncIncludeCwdPrefixes,
+		ScanProtectedPaths: appCfg.ScanProtectedPaths,
 		Machine:            appCfg.LocalMachineName,
 	})
 	defer engine.Close()

@@ -10,6 +10,16 @@ description: Release history for AgentsView
 - Add Prime Agent session discovery, Pi-family conversation parsing, fork
   lineage, and RLM-attributed token usage.
 
+**Bug fixes**
+
+- Stop the macOS app from asking for access to Documents, Downloads, Desktop,
+  iCloud Drive, and cloud-provider folders such as Dropbox. Discovery read Git
+  metadata from every recorded session working directory, so a first sync
+  raised a consent prompt for each guarded folder any session had ever run in.
+  Sessions in those folders now keep path-only project identity; set
+  `scan_protected_paths` to opt back in to Git remote, worktree, and branch
+  detail there.
+
 ---
 
 ## 0.40.1

@@ -938,6 +938,7 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 		AgentDirs:               b.appCfg.AgentDirs,
 		SourceMachines:          b.appCfg.SourceMachines,
 		IncludeCwdPrefixes:      b.appCfg.SyncIncludeCwdPrefixes,
+		ScanProtectedPaths:      b.appCfg.ScanProtectedPaths,
 		Machine:                 b.appCfg.LocalMachineName,
 		BlockedResultCategories: b.appCfg.ResultContentBlockedCategories,
 	})
@@ -1056,6 +1057,7 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 		AgentDirs:               b.appCfg.AgentDirs,
 		SourceMachines:          b.appCfg.SourceMachines,
 		IncludeCwdPrefixes:      b.appCfg.SyncIncludeCwdPrefixes,
+		ScanProtectedPaths:      b.appCfg.ScanProtectedPaths,
 		Machine:                 b.appCfg.LocalMachineName,
 		BlockedResultCategories: b.appCfg.ResultContentBlockedCategories,
 	})

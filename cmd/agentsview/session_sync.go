@@ -76,6 +76,7 @@ func syncService(
 		AgentDirs:          cfg.AgentDirs,
 		SourceMachines:     cfg.SourceMachines,
 		IncludeCwdPrefixes: cfg.SyncIncludeCwdPrefixes,
+		ScanProtectedPaths: cfg.ScanProtectedPaths,
 		Machine:            cfg.LocalMachineName,
 	})
 	// Close the engine before the DB so pending debounced signal

@@ -202,6 +202,39 @@ func TestPreserveUnavailableSourceProjectsUsesDurableSnapshot(
 	}
 }
 
+// TestPreserveUnavailableSourceProjectsSkipsProtectedPath pins that deciding
+// whether a session's working directory still exists never stats a path in a
+// macOS TCC-protected location. This probe runs for every unresolved local
+// session in a sync batch, so on a first sync it would prompt once per
+// guarded folder before any git metadata is read.
+func TestPreserveUnavailableSourceProjectsSkipsProtectedPath(t *testing.T) {
+	database := openTestDB(t)
+	home := t.TempDir()
+	cwd := filepath.Join(home, "Downloads", "checkout")
+	require.NoError(t, os.MkdirAll(cwd, 0o755))
+	engine := NewEngine(database, EngineConfig{Machine: "test-machine"})
+	t.Cleanup(engine.Close)
+	engine.goos = "darwin"
+	engine.homeDir = home
+	engine.stat = func(got string) (os.FileInfo, error) {
+		assert.Fail(t, "stat must not touch a protected location", got)
+		return nil, os.ErrNotExist
+	}
+
+	result, err := engine.preserveUnavailableSourceProjects(
+		t.Context(), []pendingWrite{{sess: parser.ParsedSession{
+			ID: "protected-source", Project: "protected-project",
+			Machine: "test-machine", Agent: parser.AgentClaude, Cwd: cwd,
+		}}},
+	)
+
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	assert.True(t, result[0].sourceProjectResolved,
+		"an unprobed session must be treated as resolved, not retried")
+	assert.Equal(t, "protected-project", result[0].sess.Project)
+}
+
 func TestWriteBatchRelabelRecoversUnavailableSourceProject(t *testing.T) {
 	const (
 		sessionID       = "relabel-unavailable-source"
@@ -5516,6 +5549,122 @@ func TestProjectIdentityObservationSkipsDiscoveryForRemoteMachine(t *testing.T) 
 		"foreign-machine cwd must not be probed for a local git identity")
 	assert.Equal(t, cwd, observations[0].RootPath,
 		"root path must stay the raw cwd, not a locally resolved git root")
+}
+
+// protectedPathIdentityRepo builds a git repo with an origin remote under
+// <home>/Documents and returns the fake home plus the session cwd inside it.
+func protectedPathIdentityRepo(t *testing.T) (home, cwd string) {
+	t.Helper()
+	home = t.TempDir()
+	root := filepath.Join(home, "Documents", "proj")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".git"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, ".git", "config"),
+		[]byte("[remote \"origin\"]\n\turl = https://github.com/acme/docs.git\n"),
+		0o644,
+	))
+	cwd = filepath.Join(root, "subdir")
+	require.NoError(t, os.Mkdir(cwd, 0o755))
+	return home, cwd
+}
+
+// TestProjectIdentityObservationSkipsProtectedPathByDefault pins that a cwd
+// inside a macOS TCC-protected location is never probed on disk. Probing it
+// makes macOS raise a consent prompt for Documents during the first sync,
+// which is what issue #1364 reported. The cwd here is a real git repo, so a
+// discovered remote would prove the filesystem was read.
+func TestProjectIdentityObservationSkipsProtectedPathByDefault(t *testing.T) {
+	database := openTestDB(t)
+	home, cwd := protectedPathIdentityRepo(t)
+	engine := NewEngine(database, EngineConfig{Machine: "current-machine"})
+	t.Cleanup(engine.Close)
+	engine.goos = "darwin"
+	engine.homeDir = home
+
+	require.NoError(t, engine.writeProjectIdentityObservation(
+		t.Context(), db.Session{
+			ID: "identity-protected-skip", Project: "protected-project",
+			Machine: "current-machine", Agent: "codex", Cwd: cwd,
+			StartedAt: strPtr(time.Now().UTC().Format(time.RFC3339Nano)),
+		},
+	))
+
+	observations, err := database.ListProjectIdentityObservations(
+		t.Context(), []string{"protected-project"},
+	)
+	require.NoError(t, err)
+	require.Len(t, observations, 1)
+	assert.Empty(t, observations[0].GitRemote,
+		"a protected-location cwd must not be probed for a git identity")
+	assert.Equal(t, cwd, observations[0].RootPath,
+		"root path must stay the raw cwd, not a resolved git root")
+}
+
+// TestProjectIdentityObservationScansProtectedPathWhenOptedIn pins that
+// scan_protected_paths restores full git identity for users who keep code in
+// Documents and accept the macOS prompt.
+func TestProjectIdentityObservationScansProtectedPathWhenOptedIn(t *testing.T) {
+	database := openTestDB(t)
+	home, cwd := protectedPathIdentityRepo(t)
+	engine := NewEngine(database, EngineConfig{
+		Machine: "current-machine", ScanProtectedPaths: true,
+	})
+	t.Cleanup(engine.Close)
+	engine.goos = "darwin"
+	engine.homeDir = home
+
+	require.NoError(t, engine.writeProjectIdentityObservation(
+		t.Context(), db.Session{
+			ID: "identity-protected-optin", Project: "protected-optin-project",
+			Machine: "current-machine", Agent: "codex", Cwd: cwd,
+			StartedAt: strPtr(time.Now().UTC().Format(time.RFC3339Nano)),
+		},
+	))
+
+	observations, err := database.ListProjectIdentityObservations(
+		t.Context(), []string{"protected-optin-project"},
+	)
+	require.NoError(t, err)
+	require.Len(t, observations, 1)
+	assert.Equal(t, "https://github.com/acme/docs.git",
+		observations[0].GitRemote,
+		"opting in must restore git discovery inside protected locations")
+}
+
+// TestProjectIdentityObservationScansUnprotectedPath pins that the protected
+// -path gate does not disturb the ordinary case: a cwd outside the guarded
+// locations still gets full git identity with the default configuration.
+func TestProjectIdentityObservationScansUnprotectedPath(t *testing.T) {
+	database := openTestDB(t)
+	home := t.TempDir()
+	root := filepath.Join(home, "src", "proj")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".git"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, ".git", "config"),
+		[]byte("[remote \"origin\"]\n\turl = https://github.com/acme/src.git\n"),
+		0o644,
+	))
+	engine := NewEngine(database, EngineConfig{Machine: "current-machine"})
+	t.Cleanup(engine.Close)
+	engine.goos = "darwin"
+	engine.homeDir = home
+
+	require.NoError(t, engine.writeProjectIdentityObservation(
+		t.Context(), db.Session{
+			ID: "identity-unprotected", Project: "unprotected-project",
+			Machine: "current-machine", Agent: "codex", Cwd: root,
+			StartedAt: strPtr(time.Now().UTC().Format(time.RFC3339Nano)),
+		},
+	))
+
+	observations, err := database.ListProjectIdentityObservations(
+		t.Context(), []string{"unprotected-project"},
+	)
+	require.NoError(t, err)
+	require.Len(t, observations, 1)
+	assert.Equal(t, "https://github.com/acme/src.git",
+		observations[0].GitRemote,
+		"paths outside protected locations must still be discovered")
 }
 
 func TestProjectIdentityObservationDiscoversForLegacyLocalMachine(t *testing.T) {

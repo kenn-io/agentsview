@@ -188,6 +188,7 @@ func (s *Server) syncEngineForLocal(local *db.DB) *syncpkg.Engine {
 		AgentDirs:               s.cfg.AgentDirs,
 		SourceMachines:          s.cfg.SourceMachines,
 		IncludeCwdPrefixes:      s.cfg.SyncIncludeCwdPrefixes,
+		ScanProtectedPaths:      s.cfg.ScanProtectedPaths,
 		Machine:                 s.cfg.LocalMachineName,
 		BlockedResultCategories: s.cfg.ResultContentBlockedCategories,
 		Emitter:                 emitter,
