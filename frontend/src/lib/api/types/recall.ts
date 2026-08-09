@@ -119,6 +119,7 @@ export interface RecallEntryFilters {
   project?: string;
   type?: string;
   sourceRunId?: string;
+  status?: string;
   reviewState?: string;
   limit?: number;
   cursor?: string;

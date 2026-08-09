@@ -179,6 +179,7 @@
         project: project || undefined,
         type: entryType || undefined,
         sourceRunId: generation || undefined,
+        status: reviewState === "human_rejected" ? "archived" : undefined,
         reviewState: reviewState || undefined,
         cursor: cursor || undefined,
       }, signal);

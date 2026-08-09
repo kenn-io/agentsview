@@ -28,6 +28,7 @@ export async function fetchRecallEntries(
   if (filters.sourceRunId) {
     query.set("source_run_id", filters.sourceRunId);
   }
+  if (filters.status) query.set("status", filters.status);
   if (filters.reviewState) {
     query.set("review_state", filters.reviewState);
   }
@@ -59,10 +60,7 @@ export async function reviewRecallEntry(
     }),
   );
   if (!response.ok) {
-    throw new ApiError(
-      response.status,
-      await responseErrorMessage(response),
-    );
+    throw new ApiError(response.status, await responseErrorMessage(response));
   }
   return (await response.json()) as RecallEntry;
 }

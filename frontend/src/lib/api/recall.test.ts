@@ -31,6 +31,7 @@ describe("fetchRecallEntries", () => {
       project: "project-a",
       type: "decision",
       sourceRunId: "generation-a",
+      status: "archived",
       reviewState: "human_reviewed",
       limit: 75,
     });
@@ -44,6 +45,7 @@ describe("fetchRecallEntries", () => {
       project: "project-a",
       type: "decision",
       source_run_id: "generation-a",
+      status: "archived",
       review_state: "human_reviewed",
     });
     expect(page).toEqual({
@@ -61,14 +63,15 @@ describe("reviewRecallEntry", () => {
       status: "archived",
       review_state: "human_rejected",
     };
-    const fetchMock = vi.fn().mockResolvedValue(new Response(
-      JSON.stringify(updated),
-      { status: 200, headers: { "Content-Type": "application/json" } },
-    ));
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(updated), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(reviewRecallEntry("entry one", "archive"))
-      .resolves.toEqual(updated);
+    await expect(reviewRecallEntry("entry one", "archive")).resolves.toEqual(updated);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/recall/entries/entry%20one/review",
       expect.objectContaining({

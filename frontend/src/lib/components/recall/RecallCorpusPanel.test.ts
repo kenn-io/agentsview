@@ -942,6 +942,65 @@ describe("RecallCorpusPanel", () => {
     expect(entryRequests).toBe(requestsBeforeReview);
   });
 
+  it("requests archived entries for the human-rejected review filter", async () => {
+    const defaultFetch = fetchMock as unknown as (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => Promise<Response>;
+    fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestURL(input);
+      if (url.includes("review_state=human_rejected") && url.includes("status=archived")) {
+        return new Response(
+          JSON.stringify({
+            entries: [
+              reviewFixture({
+                id: "rejected-entry",
+                title: "Rejected Recall entry",
+                status: "archived",
+                review_state: "human_rejected",
+              }),
+            ],
+            trusted_only: false,
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      return defaultFetch(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    component = mount(RecallCorpusPanel, { target: document.body });
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Keep extraction passes bounded");
+    });
+
+    document.querySelector<HTMLButtonElement>('button[title="Review state"]')!.click();
+    await tick();
+    const rejectedOption = Array.from(
+      document.querySelectorAll<HTMLElement>('[role="option"]'),
+    ).find((option) => option.textContent?.trim() === "Human rejected")!;
+    rejectedOption.dispatchEvent(
+      new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Rejected Recall entry");
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("review_state=human_rejected"),
+      expect.anything(),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("status=archived"),
+      expect.anything(),
+    );
+  });
+
   it("archives only after confirmation and removes the accepted row", async () => {
     const defaultFetch = fetchMock as unknown as (
       input: RequestInfo | URL,
