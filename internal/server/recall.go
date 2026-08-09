@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -695,6 +696,61 @@ func (s *Server) handleGetRecallEntry(
 		return
 	}
 	writeJSON(w, http.StatusOK, recall)
+}
+
+type reviewRecallEntryRequest struct {
+	Action db.RecallReviewAction `json:"action"`
+}
+
+func (s *Server) handleReviewRecallEntry(
+	w http.ResponseWriter, r *http.Request,
+) {
+	if s.db.ReadOnly() {
+		handleReadOnly(w, db.ErrReadOnly)
+		return
+	}
+	var req reviewRecallEntryRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if err := req.Action.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	entry, err := s.db.ReviewRecallEntry(
+		r.Context(), strings.TrimSpace(r.PathValue("id")), req.Action,
+	)
+	if err != nil {
+		s.handleRecallReviewError(w, err)
+		return
+	}
+	s.notifyRecallCorpusMutation()
+	writeJSON(w, http.StatusOK, entry)
+}
+
+func (s *Server) handleRecallReviewError(w http.ResponseWriter, err error) {
+	if handleContextError(w, err) || handleReadOnly(w, err) {
+		return
+	}
+	switch {
+	case errors.Is(err, db.ErrInvalidRecallReviewAction):
+		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, db.ErrRecallEntryNotFound):
+		writeError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, db.ErrRecallReviewConflict),
+		errors.Is(err, db.ErrRecallReviewProvenance):
+		writeError(w, http.StatusConflict, err.Error())
+	default:
+		writeError(w, http.StatusInternalServerError, err.Error())
+	}
 }
 
 func (s *Server) handleQueryRecallEntries(
