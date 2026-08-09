@@ -589,6 +589,34 @@ func TestIsProtectedUserDataPath(t *testing.T) {
 	}
 }
 
+// TestIsCanonicalAutomountNamespacePath pins that the canonical predicate
+// accepts only the exact spellings the parser's resolved-autofs probe
+// examines: alternate spellings the broad predicate recognizes must not
+// inherit that vetting.
+func TestIsCanonicalAutomountNamespacePath(t *testing.T) {
+	tests := []struct {
+		name string
+		goos string
+		path string
+		want bool
+	}{
+		{"canonical home", "darwin", "/home/user/repo", true},
+		{"canonical net", "darwin", "/net/host/share", true},
+		{"canonical network servers", "darwin", "/Network/Servers/x", true},
+		{"data volume spelling", "darwin", "/System/Volumes/Data/home/user", false},
+		{"case folded spelling", "darwin", "/HOME/user", false},
+		{"lowercase network servers", "darwin", "/network/servers/x", false},
+		{"regular path", "darwin", "/Users/user/repo", false},
+		{"linux never matches", "linux", "/home/user/repo", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want,
+				IsCanonicalAutomountNamespacePath(tt.goos, tt.path))
+		})
+	}
+}
+
 // TestClassifyLocalPathProbe pins the tri-state classification, including
 // working directories that only reach a protected folder through a symlink,
 // which the lexical predicates alone cannot see.

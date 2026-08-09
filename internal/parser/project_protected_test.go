@@ -379,5 +379,9 @@ func TestDefaultProbeGitfileTargetRefusesAutomount(t *testing.T) {
 	assert.False(t, defaultProbeGitfileTarget("/home/user/repo/.git"),
 		"an automount gitfile target must be refused")
 	assert.True(t, defaultProbeGitRootForCwd("/home/user/repo"),
-		"a literal automount cwd defers to isForeignOSPath's autofs probe")
+		"a canonical automount cwd defers to isForeignOSPath's autofs probe")
+	assert.False(t, defaultProbeGitRootForCwd("/System/Volumes/Data/home/user"),
+		"the data-volume spelling was never autofs-vetted and stays refused")
+	assert.False(t, defaultProbeGitRootForCwd("/HOME/user/repo"),
+		"a case-folded spelling was never autofs-vetted and stays refused")
 }

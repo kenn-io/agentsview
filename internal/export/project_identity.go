@@ -810,6 +810,24 @@ func IsAutomountNamespacePath(goos, p string) bool {
 	return false
 }
 
+// IsCanonicalAutomountNamespacePath reports whether p names an automounter
+// namespace in its canonical spelling only — exact case, no data-volume
+// prefix. IsAutomountNamespacePath accepts alternate spellings too; a caller
+// that defers to a vetting layer which only examines canonical spellings
+// (the parser's resolved-autofs probe) must use this narrower predicate, or
+// alternate spellings would inherit a clearance they never received.
+func IsCanonicalAutomountNamespacePath(goos, p string) bool {
+	if goos != "darwin" {
+		return false
+	}
+	for _, ns := range [...]string{"/home", "/net", "/Network/Servers"} {
+		if p == ns || strings.HasPrefix(p, ns+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // dataVolumePrefix is the APFS data-volume mount point. Since macOS Catalina
 // the writable system firmlinks user data there, so
 // /System/Volumes/Data/Users/me/Documents is the physical spelling of

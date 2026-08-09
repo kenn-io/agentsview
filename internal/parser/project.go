@@ -117,12 +117,13 @@ func defaultProbeGitfileTarget(cleaned string) bool {
 func defaultProbeGitRootForCwd(cleaned string) bool {
 	switch classifyProbePath(cleaned) {
 	case export.LocalPathProbeAutomountNamespace:
-		// A lexically automount path already passed isForeignOSPath's
-		// resolved-autofs probe before this guard runs (or is a gitfile
-		// target, which previous behavior read directly), so only refuse
-		// when a symlink smuggled the walk into the namespace — that hop
-		// is invisible to the lexical checks and never autofs-vetted.
-		return export.IsAutomountNamespacePath(
+		// Only a canonically spelled automount cwd passed isForeignOSPath's
+		// resolved-autofs probe before this guard runs — that function
+		// matches the mount table's canonical prefixes case-sensitively.
+		// Alternate spellings the classifier recognizes (the data-volume
+		// form, case-folded forms) and symlink-smuggled paths were never
+		// autofs-vetted and stay refused.
+		return export.IsCanonicalAutomountNamespacePath(
 			runtime.GOOS, filepath.Clean(cleaned),
 		)
 	case export.LocalPathProbeProtectedUserData:
