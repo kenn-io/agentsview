@@ -690,7 +690,7 @@ func (db *DB) WriteSessionIncremental(
 		}
 		transcriptChanged = transcriptChanged || changed
 	}
-	if len(msgs) > 0 {
+	if transcriptChanged {
 		if err := reconcileRecallEvidenceForSessionTx(
 			ctx, tx, sessionID, &pendingRecallRevocations,
 		); err != nil {
