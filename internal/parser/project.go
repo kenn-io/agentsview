@@ -740,6 +740,15 @@ func repoRootFromSiblings(dir, cwd string) string {
 			continue
 		}
 		gitPath := filepath.Join(dir, entry.Name(), ".git")
+		// Vet before typing: when the existing ancestor is the home
+		// directory, siblings include Documents and the other guarded
+		// folders, and even an Lstat of <sibling>/.git reaches inside
+		// them — and a guarded sibling holding a real .git directory
+		// would flow into deletedChildIsWorktree's ReadDir. The lexical
+		// check answers without touching the filesystem.
+		if !probeGitfileTarget(gitPath) {
+			continue
+		}
 		info, err := statGitEntry(gitPath)
 		if err != nil {
 			continue

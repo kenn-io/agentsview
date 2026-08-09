@@ -262,6 +262,33 @@ func TestExtractProjectFromCwdSymlinkedCommondirFallsBack(t *testing.T) {
 		"a commondir symlink into a guarded location must not be read")
 }
 
+// TestRepoRootFromSiblingsSkipsGuardedSiblings pins that missing-cwd
+// recovery vets each sibling before typing its .git entry: when the first
+// existing ancestor is the home directory, the siblings include Documents
+// and the other guarded folders, and typing them would Lstat inside — while
+// a guarded sibling holding a real .git directory would flow into
+// deletedChildIsWorktree's ReadDir of its worktrees list. The fixture makes
+// Documents exactly that sibling, with the deleted child registered as its
+// worktree, so a missing vet is caught by "Documents" becoming the name.
+func TestRepoRootFromSiblingsSkipsGuardedSiblings(t *testing.T) {
+	home := t.TempDir()
+	worktreesDir := filepath.Join(home, "Documents", ".git", "worktrees")
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(worktreesDir, "gone-child"), 0o755,
+	))
+
+	origGuard := probeGitfileTarget
+	t.Cleanup(func() { probeGitfileTarget = origGuard })
+	probeGitfileTarget = func(cleaned string) bool {
+		return export.ClassifyLocalPathProbe("darwin", home, cleaned) ==
+			export.LocalPathProbeSafe
+	}
+
+	deleted := filepath.Join(home, "gone-child", "sub")
+	assert.Equal(t, "sub", ExtractProjectFromCwd(deleted),
+		"a guarded sibling must not be typed or recovered as the root")
+}
+
 // TestDefaultProbeGitfileTargetRefusesAutomount pins the asymmetry between
 // the two default guards on macOS: a literal automount cwd stays probeable
 // because isForeignOSPath vetted it with the resolved-autofs probe before
