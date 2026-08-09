@@ -105,7 +105,7 @@ func TestOpenMigratesLegacyRecallReviewConstraint(t *testing.T) {
 	require.NoError(t, conn.Close())
 	require.NoError(t, d.Close())
 
-	for pass := 0; pass < 2; pass++ {
+	for pass := range 2 {
 		reopened, err := Open(path)
 		require.NoError(t, err)
 
