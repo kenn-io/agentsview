@@ -438,9 +438,6 @@ class SessionsStore {
 
   resetFiltersForRoot(): void {
     const previous = this.filters;
-    if (hasDateFilters(previous)) {
-      yokedDates.clear();
-    }
     this.filters = defaultFilters();
     this.dateFiltersWindowDays = null;
     this.filterPersistenceHeld = true;

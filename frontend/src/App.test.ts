@@ -726,6 +726,39 @@ describe("App root Sessions landing", () => {
     expect(window.location.search).toBe("?desktop=1");
   });
 
+  it("preserves the shared date yoke while resetting root session filters", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    sessions.initFromParams({
+      date_from: "2026-06-01",
+      date_to: "2026-06-30",
+    });
+    yokedDates.setEnabled(true);
+    yokedDates.updateFromPanel({
+      from: "2026-06-01",
+      to: "2026-06-30",
+      mode: "fixed",
+    });
+    setRootUrl();
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+
+    expect(sessions.filters.dateFrom).toBe("");
+    expect(sessions.filters.dateTo).toBe("");
+    expect(yokedDates.range).toMatchObject({
+      from: "2026-06-01",
+      to: "2026-06-30",
+      mode: "fixed",
+    });
+    expect(JSON.parse(localStorage.getItem("yoked-dates") ?? "{}").range)
+      .toMatchObject({
+        from: "2026-06-01",
+        to: "2026-06-30",
+        mode: "fixed",
+      });
+  });
+
   it("treats filter-bearing root URLs as explicit deep links", async () => {
     stubAppDependencies();
     vi.spyOn(sessions, "load").mockResolvedValue();
@@ -780,6 +813,37 @@ describe("App root Sessions landing", () => {
     await flushEffects();
     expect(sessions.filters.project).toBe("");
 
+    router.navigate("usage");
+    await flushEffects();
+    router.navigate("sessions");
+    await flushEffects();
+
+    expect(window.location.pathname).toBe("/sessions");
+    expect(sessions.filters.project).toBe("saved-project");
+    expect(sessions.filters.agent).toBe("codex");
+  });
+
+  it("restores saved filters after root detail visits another route", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(sessions, "navigateToSession").mockImplementation(async (id) => {
+      sessions.activeSessionId = id;
+    });
+    const saved = JSON.stringify({
+      version: 2,
+      project: "saved-project",
+      agent: "codex",
+    });
+    localStorage.setItem("session-filters", saved);
+    sessions.initFromParams({ project: "saved-project", agent: "codex" });
+    setRootUrl();
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    expect(sessions.filters.project).toBe("");
+
+    router.navigateToSession("session-a");
+    await flushEffects();
     router.navigate("usage");
     await flushEffects();
     router.navigate("sessions");

@@ -408,6 +408,8 @@
       !rootLanding;
     const enteringSessionsRoute =
       route === "sessions" && previousDateRestoreRoute !== "sessions";
+    const leavingSessionsRoute =
+      previousDateRestoreRoute === "sessions" && route !== "sessions";
     const wasRootLanding = previousRootLanding;
     untrack(() => {
       previousDateRestoreRoute = route;
@@ -443,7 +445,9 @@
         rootResetPending = false;
         rootDetailOpened = false;
       }
-      if (openingRootDetail) {
+      if (leavingSessionsRoute) {
+        rootDetailOpened = false;
+      } else if (openingRootDetail) {
         rootDetailOpened = true;
       } else if (closingRootDetail) {
         rootDetailOpened = false;
