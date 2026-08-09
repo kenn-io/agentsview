@@ -72,6 +72,18 @@ type SourceCapabilities struct {
 	// its stored virtual members. A still-present container remains
 	// authoritative for member deletion.
 	PersistentArchive CapabilitySupport
+	// MultiFileStatHash declares that a provider's on-disk source layout
+	// spans multiple sibling files (Codebuff's chat-messages.json plus
+	// run-state.json and chat-meta.json, for example) and that the engine
+	// should consult its per-component provider_freshness digest on
+	// warm passes instead of the legacy size/max-mtime composite
+	// freshness gate. Providers that do not have a multi-file layout
+	// leave this at CapabilityUnsupported; a SourceSetProvider wrapper
+	// still satisfies parser.MultiFileStatHasher unconditionally, so
+	// the engine reads this capability before registering a hasher
+	// in providerStatHashers to avoid short-circuiting every
+	// SourceSet-wrapped agent on a 0==0 digest match.
+	MultiFileStatHash CapabilitySupport
 }
 
 // ContentCapabilities declares optional normalized content fields a provider

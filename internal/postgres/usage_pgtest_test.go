@@ -1963,3 +1963,49 @@ func TestStoreSessionUsageWithSubagentsParity(t *testing.T) {
 		"output tokens are deduplicated without dropping output-only messages")
 	assert.True(t, got.HasTokenData)
 }
+
+// TestStoreGetSessionUsage_CodebuffCostOnlyReported pins the
+// PostgreSQL aggregator acceptance for Codebuff/Freebuff's
+// parser-emitted cost-only usage event. The Codebuff parser
+// (internal/parser/codebuff.go) attributes the session cost
+// to the agent template (e.g. "base2-deepseek") rather than
+// the agent name so the per-model breakdown in the usage
+// report stays granular. The PG aggregator must accept that
+// non-empty Model value and surface the cost unchanged.
+// Without this pin, a future change that hard-codes the
+// accepted model name would silently drop template-attributed
+// codebuff/freebuff rows.
+func TestStoreGetSessionUsage_CodebuffCostOnlyReported(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_codebuff_cost_only_test")
+
+	ctx := context.Background()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at,
+			message_count, user_message_count
+		) VALUES (
+			'codebuff:cost-only', 'test-machine', 'proj', 'codebuff',
+			'2026-07-15T10:00:00Z'::timestamptz, 1, 1
+		)`)
+	require.NoError(t, err)
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO usage_events (
+			session_id, source, model, input_tokens, output_tokens,
+			cost_microdollars, cost_status, cost_source, occurred_at, dedup_key
+		) VALUES (
+			'codebuff:cost-only', 'session', 'base2-deepseek', 0, 0,
+			5000, 'reported', 'session',
+			'2026-07-15T10:05:00Z'::timestamptz, 'session:codebuff:cost-only'
+		)`)
+	require.NoError(t, err)
+
+	u, err := store.GetSessionUsage(ctx, "codebuff:cost-only", true)
+	require.NoError(t, err)
+	require.NotNil(t, u)
+	assert.True(t, u.HasCost,
+		"a codebuff cost-only event must surface HasCost")
+	assert.Equal(t, money.Money{Microdollars: 5000}, u.Cost,
+		"the reported cost must flow through unchanged")
+	assert.Equal(t, []string{"base2-deepseek"}, u.Models,
+		"the parser-attributed template name must surface in Models")
+}

@@ -1876,3 +1876,25 @@ func duckHOWMessages(cells []db.HourOfWeekCell, dow, hour int) int {
 	}
 	return -1
 }
+
+// TestDuckUsageEventSourceEligibilityIncludesModel pins the DuckDB
+// aggregator's eligibility filter non-emptiness contract for
+// Codebuff/Freebuff's parser-attributed agent template name. The
+// Codebuff parser (internal/parser/codebuff.go) sets
+// Model = <agentType> (e.g. "base2-deepseek", "base2-free-minimax-m3")
+// rather than the agent name so the per-model breakdown in the
+// usage report stays granular. The eligibility filter must accept
+// any non-empty Model value (the SQL is templated with each row's
+// model name), so the constant must filter on a non-empty ue.model rather
+// than a hard-coded name. Without this pin a future change that
+// hard-codes the accepted model literal would silently drop
+// template-attributed codebuff/freebuff rows.
+func TestDuckUsageEventSourceEligibilityIncludesModel(t *testing.T) {
+	require.NotEmpty(t, duckUsageEventSourceEligibility,
+		"duckUsageEventSourceEligibility must be a non-empty SQL filter")
+	normalized := strings.ToLower(
+		strings.Join(strings.Fields(duckUsageEventSourceEligibility), " "))
+	require.Contains(t, normalized, "ue.model !=",
+		"the filter must reject empty-model rows so codebuff "+
+			"template-attributed rows surface in the breakdown")
+}

@@ -476,6 +476,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentRooCode,
 		AgentPoolside,
 		AgentOmnigent,
+		AgentCodebuff,
 	}
 
 	expected := make(map[AgentType]bool, len(allTypes))
@@ -1339,4 +1340,16 @@ func TestReasonixRegistryEntry(t *testing.T) {
 	}
 	assert.True(t, hasUnix, "DefaultDirs should contain .reasonix")
 	assert.True(t, hasWindows, "DefaultDirs should contain AppData/Roaming/reasonix")
+}
+
+func TestFreebuffNotRegistered(t *testing.T) {
+	// Freebuff intentionally shares the Codebuff provider and is NOT
+	// registered in Registry. Both paid Codebuff and free Freebuff sessions
+	// use agent = AgentCodebuff so that lifecycle operations (reconciliation,
+	// deletion, baselines) keyed by agent type work correctly. The UI
+	// distinguishes them via AgentLabel.
+	for _, def := range Registry {
+		assert.NotEqualf(t, AgentFreebuff, def.Type,
+			"AgentFreebuff must not be registered — it shares the Codebuff provider")
+	}
 }

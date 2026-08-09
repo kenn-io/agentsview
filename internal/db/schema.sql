@@ -90,6 +90,24 @@ CREATE TABLE IF NOT EXISTS sessions (
     sync_marker TEXT
 );
 
+-- provider_freshness stores per-component stat digests that providers
+-- with multi-file on-disk layouts (currently Codebuff and Freebuff)
+-- compute for the engine's stat-only freshness pre-check. The
+-- (agent, file_path) composite key isolates the namespace per provider
+-- so a future multi-file agent (Omnigent, Zed virtual paths, etc.)
+-- can opt in without schema changes. stat_hash is INTEGER (signed
+-- in SQLite but always non-negative; FNV-1a 64 outputs that fit the
+-- same int64 representation).
+CREATE TABLE IF NOT EXISTS provider_freshness (
+    agent         TEXT NOT NULL,
+    file_path     TEXT NOT NULL,
+    stat_hash     INTEGER NOT NULL,
+    updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (agent, file_path)
+);
+CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
+    ON provider_freshness(updated_at);
+
 -- Messages table with ordinal for efficient range queries
 CREATE TABLE IF NOT EXISTS messages (
     id             INTEGER PRIMARY KEY,

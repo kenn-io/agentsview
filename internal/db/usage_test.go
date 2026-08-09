@@ -4645,6 +4645,49 @@ func TestCostUSDFromCost(t *testing.T) {
 	}
 }
 
+// TestGetDailyUsage_CodebuffCostOnly pins the SQLite aggregator path
+// for Codebuff/Freebuff's parser-emitted cost-only usage event. The
+// Codebuff parser (internal/parser/codebuff.go) attributes the session
+// cost to the agent name ("codebuff" or "freebuff") because the actual
+// LLM model is selected server-side and unknown at parse time. The row
+// must therefore carry Model="codebuff" so it passes the
+// usageEventEligibility filter (non-empty ue.model) and the authoritative
+// reported Cost flows into TotalCost at the daily-usage level. The
+// per-model and per-agent breakdown shapes are aggregator internals
+// covered by other tests; this pins only the cost-flow contract.
+func TestGetDailyUsage_CodebuffCostOnly(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "codebuff:cost-only", "proj", func(s *Session) {
+		s.Agent = "codebuff"
+		s.StartedAt = new("2026-07-15T10:00:00Z")
+	})
+	cost := money.MustParseDollars("0.05")
+	require.NoError(t, d.ReplaceSessionUsageEvents(
+		"codebuff:cost-only",
+		[]UsageEvent{{
+			Source:     "session",
+			Model:      "base2-deepseek",
+			Cost:       &cost,
+			CostStatus: "reported",
+			CostSource: "session",
+			OccurredAt: "2026-07-15T10:05:00Z",
+			DedupKey:   "session:codebuff:cost-only",
+		}}))
+
+	daily, err := d.GetDailyUsage(ctx, UsageFilter{
+		From: "2026-07-15", To: "2026-07-15", Timezone: "UTC",
+	})
+	requireNoError(t, err, "GetDailyUsage")
+	assert.Equal(t, cost, daily.Totals.TotalCost,
+		"the codebuff reported cost must surface in daily TotalCost")
+	require.Len(t, daily.Daily, 1,
+		"the cost-only row should produce one daily entry")
+	assert.Equal(t, cost, daily.Daily[0].TotalCost,
+		"the day's TotalCost must include the reported cost")
+}
+
 // TestGetDailyUsage_KimiAliasPricing proves Kimi alias pricing end to end on
 // SQLite: the date-ambiguous aliases
 // (kimi-for-coding, daimon-kimi-code, daimon-kimi-messages) price each
