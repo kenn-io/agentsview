@@ -896,9 +896,22 @@ func protectedUnderAnyHome(goos string, homes []string, p string) bool {
 	return false
 }
 
+// osLstat is indirected through a var so tests can assert the resolver never
+// touches a namespace it must stay out of. Production code always uses
+// os.Lstat via this binding.
+var osLstat = os.Lstat
+
 func resolvesIntoProtectedUserData(
 	goos string, homes []string, p string, hops int,
 ) bool {
+	// Never walk an automounter namespace: Lstat on /home, /net, or
+	// /Network/Servers wakes automountd on every call (see
+	// IsAutomountNamespacePath), and nothing there is protected user data.
+	// Checked per resolution step so a symlink hopping into the namespace
+	// is refused too, not only a literal /home/... input.
+	if IsAutomountNamespacePath(goos, filepath.Clean(p)) {
+		return false
+	}
 	if hops > maxProtectedPathLinkHops {
 		return true
 	}
@@ -912,7 +925,7 @@ func resolvesIntoProtectedUserData(
 		if protectedUnderAnyHome(goos, homes, next) {
 			return true
 		}
-		info, err := os.Lstat(next)
+		info, err := osLstat(next)
 		if err != nil {
 			return false
 		}

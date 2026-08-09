@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -608,6 +609,34 @@ func TestResolvesIntoProtectedUserDataPath(t *testing.T) {
 				ResolvesIntoProtectedUserDataPath(tt.goos, home, tt.path))
 		})
 	}
+}
+
+// TestResolvesIntoProtectedUserDataPathSkipsAutomountNamespace pins that the
+// resolver never Lstats inside a macOS automounter namespace, whether the
+// input names it directly or a symlink hops into it mid-walk. On darwin that
+// Lstat wakes automountd on every call, which is the CPU storm the automount
+// safeguards elsewhere in identity capture exist to prevent.
+func TestResolvesIntoProtectedUserDataPathSkipsAutomountNamespace(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the predicate compares POSIX home paths built with filepath")
+	}
+	home := t.TempDir()
+	require.NoError(t, os.Symlink("/home", filepath.Join(home, "tohome")))
+	orig := osLstat
+	t.Cleanup(func() { osLstat = orig })
+	osLstat = func(path string) (os.FileInfo, error) {
+		if path == "/home" || strings.HasPrefix(path, "/home/") {
+			assert.Fail(t, "automount namespace must not be walked", path)
+		}
+		return orig(path)
+	}
+
+	assert.False(t, ResolvesIntoProtectedUserDataPath(
+		"darwin", home, "/home/user/repo",
+	), "a direct automount path is not protected user data")
+	assert.False(t, ResolvesIntoProtectedUserDataPath(
+		"darwin", home, filepath.Join(home, "tohome", "user", "repo"),
+	), "a symlink into the automount namespace must stop the walk")
 }
 
 // TestNormalizeStoredRootPathSkipsAutomountNamespace pins that on macOS a
