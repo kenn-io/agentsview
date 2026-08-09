@@ -12755,6 +12755,14 @@ func gitDirectoryContext(
 	root string, mayProbe func(string) bool,
 ) (gitDir, commonDir string, relationship export.WorktreeRelationship) {
 	gitPath := filepath.Join(root, ".git")
+	// root is vetted, but the .git entry itself can be a symlink into a
+	// guarded location; classification follows links, so vetting the exact
+	// path keeps both the type probe and the gitfile read (and every later
+	// HEAD, config, and commondir read under the returned directories)
+	// from traversing into it.
+	if !mayProbe(gitPath) {
+		return "", "", export.WorktreeUnknown
+	}
 	if info, err := os.Stat(gitPath); err == nil && info.IsDir() {
 		return gitPath, gitPath, export.WorktreeMain
 	}

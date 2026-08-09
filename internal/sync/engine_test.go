@@ -5711,6 +5711,53 @@ func TestProjectIdentityObservationSkipsProtectedGitdirTarget(t *testing.T) {
 		"classifying the worktree requires the refused commondir read")
 }
 
+// TestProjectIdentityObservationSkipsSymlinkedGitDir pins that a .git entry
+// which is itself a symlink into a protected folder is refused before being
+// read: the type probe would follow the link, and the HEAD and config reads
+// under the returned git directory would traverse into the protected
+// location. The link target is a real git directory with a branch and a
+// remote, so a missing vet is caught by either leaking into the observation.
+func TestProjectIdentityObservationSkipsSymlinkedGitDir(t *testing.T) {
+	database := openTestDB(t)
+	home := t.TempDir()
+	realGit := filepath.Join(home, "Documents", "main", ".git")
+	require.NoError(t, os.MkdirAll(realGit, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(realGit, "HEAD"),
+		[]byte("ref: refs/heads/docs-branch\n"), 0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(realGit, "config"),
+		[]byte("[remote \"origin\"]\n\turl = https://github.com/acme/docs.git\n"),
+		0o644,
+	))
+	repo := filepath.Join(home, "src", "repo")
+	require.NoError(t, os.MkdirAll(repo, 0o755))
+	require.NoError(t, os.Symlink(realGit, filepath.Join(repo, ".git")))
+	engine := NewEngine(database, EngineConfig{Machine: "current-machine"})
+	t.Cleanup(engine.Close)
+	engine.goos = "darwin"
+	engine.homeDir = home
+
+	require.NoError(t, engine.writeProjectIdentityObservation(
+		t.Context(), db.Session{
+			ID: "identity-symlinked-gitdir", Project: "gitlink-project",
+			Machine: "current-machine", Agent: "codex", Cwd: repo,
+			StartedAt: strPtr(time.Now().UTC().Format(time.RFC3339Nano)),
+		},
+	))
+
+	observations, err := database.ListProjectIdentityObservations(
+		t.Context(), []string{"gitlink-project"},
+	)
+	require.NoError(t, err)
+	require.Len(t, observations, 1)
+	assert.Empty(t, observations[0].GitRemote,
+		"config must not be read through a protected .git symlink")
+	assert.Empty(t, observations[0].GitBranch,
+		"HEAD must not be read through a protected .git symlink")
+}
+
 // TestProjectIdentityObservationSkipsProtectedCommonDir pins the second hop
 // of the same leak: a gitfile target outside protected folders whose
 // commondir points into one. The gitdir itself may be read, but the common

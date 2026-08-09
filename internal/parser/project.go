@@ -38,9 +38,41 @@ func SetAllowProtectedPathProbes(allow bool) {
 	allowProtectedPathProbes.Store(allow)
 }
 
-// probeGitRootForCwd is indirected through a var so tests can force the
-// guard's decision without building a real protected home layout.
-var probeGitRootForCwd = defaultProbeGitRootForCwd
+// probeGitRootForCwd and probeGitfileTarget are indirected through vars so
+// tests can force the guards' decisions without building a real protected
+// home layout.
+var (
+	probeGitRootForCwd = defaultProbeGitRootForCwd
+	probeGitfileTarget = defaultProbeGitfileTarget
+)
+
+// classifyProbePath classifies cleaned for the local process: real GOOS,
+// real home directory. An unresolvable home leaves the protected checks
+// vacuous rather than guessing at protected roots.
+func classifyProbePath(cleaned string) export.LocalPathProbeClass {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = ""
+	}
+	return export.ClassifyLocalPathProbe(runtime.GOOS, home, cleaned)
+}
+
+// defaultProbeGitfileTarget reports whether a path taken from gitfile
+// contents — a gitdir, a common directory, or the .git entry itself when it
+// is a symlink — may be read. Unlike the cwd guard, automount namespaces are
+// refused outright: targets never pass isForeignOSPath's resolved-autofs
+// probe, so reading one would wake automountd unvetted.
+func defaultProbeGitfileTarget(cleaned string) bool {
+	switch classifyProbePath(cleaned) {
+	case export.LocalPathProbeAutomountNamespace:
+		return false
+	case export.LocalPathProbeProtectedUserData:
+		return allowProtectedPathProbes.Load()
+	case export.LocalPathProbeSafe:
+		return true
+	}
+	return true
+}
 
 // defaultProbeGitRootForCwd reports whether the git-root walk may touch
 // cleaned on disk. The walk stats every ancestor, reads .git file contents,
@@ -51,11 +83,7 @@ var probeGitRootForCwd = defaultProbeGitRootForCwd
 // probing them wakes automountd regardless of any consent. An unresolvable
 // home directory leaves the protected checks vacuous rather than guessing.
 func defaultProbeGitRootForCwd(cleaned string) bool {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = ""
-	}
-	switch export.ClassifyLocalPathProbe(runtime.GOOS, home, cleaned) {
+	switch classifyProbePath(cleaned) {
 	case export.LocalPathProbeAutomountNamespace:
 		// A lexically automount path already passed isForeignOSPath's
 		// resolved-autofs probe before this guard runs (or is a gitfile
@@ -824,9 +852,13 @@ func repoRootFromGitFile(repoDir, gitFilePath string) string {
 // may be read under the protected-path policy. Both come from file contents,
 // not from the vetted cwd, so a worktree in an unguarded directory can point
 // at a main repository inside a protected folder; reading commondir, config,
-// or HEAD there would raise the consent prompt the cwd gate prevented.
-// Reading the .git file itself is safe: it lives in the already-vetted dir.
+// or HEAD there would raise the consent prompt the cwd gate prevented. The
+// .git entry itself is vetted first: it lives in the already-vetted dir, but
+// as a symlink it can lead anywhere, and reading it would follow the link.
 func gitFileTargetsProbeable(dir, gitPath string) bool {
+	if !probeGitfileTarget(gitPath) {
+		return false
+	}
 	gitDir := readGitDirFromFile(gitPath)
 	if gitDir == "" {
 		// Nothing parseable means no target will be read from here.
@@ -835,11 +867,11 @@ func gitFileTargetsProbeable(dir, gitPath string) bool {
 	if !filepath.IsAbs(gitDir) {
 		gitDir = filepath.Join(dir, gitDir)
 	}
-	if !probeGitRootForCwd(filepath.Clean(gitDir)) {
+	if !probeGitfileTarget(filepath.Clean(gitDir)) {
 		return false
 	}
 	commonDir := readCommonDir(gitDir)
-	return commonDir == "" || probeGitRootForCwd(commonDir)
+	return commonDir == "" || probeGitfileTarget(commonDir)
 }
 
 func readGitDirFromFile(path string) string {
