@@ -2,12 +2,12 @@
 
 Status date: 2026-08-10
 
-Release decision: **READY FOR LOCAL SQLITE DESKTOP DEPLOYMENT AFTER THE
-FEATURE COMMIT**. The production-scale default-timeout benchmark, SQLite,
-DuckDB, server, and frontend gates pass. PostgreSQL integration execution is
-the only unresolved backend-parity gate because this host has no dedicated
-PostgreSQL test database and cannot start the Docker test service while
-firmware virtualization is disabled.
+Release decision: **LOCAL SQLITE DESKTOP RELEASE DEPLOYED AND ACCEPTED** at
+`28eff630d84bf9c582eadd6b9b854fcfa1f2b99c`. The installed binary, API,
+browser workflow, rollback artifact, and daily read-only task are verified.
+PostgreSQL integration execution remains the only unresolved backend-parity
+gate because this host has no dedicated PostgreSQL test database and cannot
+start the Docker test service while firmware virtualization is disabled.
 
 Base revision: `915e83b91da3c553a8735f89309fd4b055189f65`
 
@@ -44,9 +44,9 @@ Automatic remediation remains out of scope.
 | Hourly and on-demand refresh | Ready | One-hour cache and forced-refresh coverage passes |
 | Performance | Ready | Two forced requests pass the unchanged 30-second timeout |
 | Finding privacy | Ready | Full benchmark pagination has zero path or credential leaks |
-| Feature commit | Pending | Freeze only intended files; preserve unrelated untracked content |
-| Installed desktop release | Pending | Build and deploy only from the clean exact feature commit |
-| Daily scheduled report | Pending | Create only after installed browser acceptance passes |
+| Feature commit | Ready | Feature `252cef0`; optimized release `28eff63` |
+| Installed desktop release | Ready | Exact artifact installed, hashed, healthy, and browser-verified |
+| Daily scheduled report | Active | `daily-agentsview-issue-review`, daily 09:00 local Kyiv time |
 
 ## Current implementation
 
@@ -247,9 +247,118 @@ The benchmark closed two late issues:
 
 Changing the production write timeout was not required.
 
+## Final release closeout
+
+### Frozen revision and validation
+
+The release code is frozen in three focused commits:
+
+- `252cef0` — proactive Issue Review;
+- `4c3c108` — allocation reduction;
+- `28eff63` — hot-path allocation reduction.
+
+`go fmt ./...`, focused SQLite and DuckDB Issue Review tests,
+`go vet -tags fts5 ./...`, the private-data scrub, `git diff --check`, the
+isolated performance/parity gate, and the exact frontend build pass. The
+broader `go test -tags fts5 ./internal/db ./internal/duckdb -count=1` exceeded
+the 184-second harness timeout without emitting a failure; the affected
+focused tests pass, and the full backend suites passed before the final
+localized optimization. PostgreSQL `pgtest` remains blocked as described
+above.
+
+GitNexus is current at exact revision `28eff63`: 47,865 nodes, 278,060 edges,
+2,390 clusters, and 300 flows. Graphify remains unavailable for this
+repository. Analyzer-generated `AGENTS.md` and `CLAUDE.md` churn was not kept.
+
+On the same isolated production-scale database, `4c3c108` took 24.488 seconds
+for 1,135 findings. `28eff63` took 17.763 and 17.868 seconds for the same 1,135
+findings; a cached request took 0.064 seconds. Telemetry was `available`.
+
+### Exact artifact, deployment, and rollback
+
+The clean detached release worktree is
+`%LOCALAPPDATA%\Temp\agentsview-issue-review-28eff63-release`.
+
+| Evidence | Result |
+| --- | --- |
+| Version | `v0.40.1-5-g28eff63` |
+| Compiler | `x86_64-w64-mingw32` |
+| Build time | `2026-08-09T22:32:15Z` |
+| SHA-256 | `09515D3A0E3517D07C0F96A00627F1467A4AFC2D01BC7280494D79E694C7D16F` |
+| Installed path | `%LOCALAPPDATA%\Programs\AgentsView\agentsview.exe` |
+| Installed daemon | PID 64192 on `127.0.0.1:8080` after retry acceptance |
+| Root UI | HTTP 200 |
+
+The installed hash and version match the release artifact. The prior
+`4c3c108` binary is backed up at
+`%LOCALAPPDATA%\Programs\AgentsView\backups\20260810-013422-28eff63-predeploy\agentsview.exe`
+with SHA-256
+`3FC516FEA37080344997808D7CFF1D92C058C34D9F93CC02AA566C41BD8B2D2D`.
+
+### Installed API and browser acceptance
+
+The live archive changed during acceptance, increasing the result from 1,150
+to 1,152 findings. The installed API returned:
+
+| Check | Result |
+| --- | --- |
+| Cold forced request | HTTP 200, 29.488 seconds |
+| Warm forced request | HTTP 200, 28.215 seconds |
+| Cached pagination | 12 pages in 0.487 seconds |
+| Findings | 1,152 |
+| Scanned tool calls | 88,040 |
+| Analyzed tool calls | 79,111 |
+| Duplicate imported calls | 8,929 |
+| Telemetry | `available` |
+| Duplicate finding IDs | 0 |
+| Absolute path leaks | 0 |
+| Credential leaks | 0 |
+
+Installed-browser acceptance passed for primary navigation, every Issue Review
+filter group, a high-severity filter, **Clear filters**, **Load more findings**
+(100 to 200), **Refresh now**, keyboard selection in a filter, and evidence
+navigation to the exact session and message query. Browser diagnostics were
+empty before the deliberate retry test. The screenshot is
+`%LOCALAPPDATA%\Temp\agentsview-issue-review-28eff63.png`; the repeatable API
+acceptance script is
+`%LOCALAPPDATA%\Temp\agentsview-issue-review-acceptance.ps1`.
+
+Retry acceptance stopped and verified the initial PID 8804, rendered the
+first-load **Retry** state, started the same installed artifact as PID 64192,
+and recovered through **Retry** to 1,153 findings and 88,195 scanned tool calls.
+The only new browser diagnostics were the expected fetch warnings during the
+deliberate outage; there were no errors after recovery. The daemon remains
+running and healthy.
+
+The in-app acceptance harness has a fixed 1280×720 viewport and exposes no
+viewport override. Narrow-layout CSS was source-reviewed and the full
+frontend test/build gates pass, but an installed sub-720-pixel manual resize
+was not reproducible in this harness. This is the one remaining installed-UI
+evidence limitation.
+
+### Daily read-only task
+
+`daily-agentsview-issue-review` is active as a heartbeat in the dedicated
+Issue Review task. It runs daily at 09:00 local Kyiv time and uses the previous
+completed `Europe/Kiev` day. Its prompt permits one forced GET followed by
+cached GET pagination and forbids repair, restart, import, sync, repository
+changes, and worktree creation. It pauses after three consecutive
+unreachable-daemon runs and requests operator review.
+
+The host local zone is Windows `FLE Standard Time` for Kyiv. The verified
+`Europe/Kiev` offset is UTC+02:00 in winter and UTC+03:00 in summer, so the
+local-wall-clock schedule remains 09:00 through daylight-saving changes.
+
+The exact prompt was tested before scheduling against 2026-08-09 with label
+`issue-review:2026-08-09:Europe/Kiev:human-excluding-one-shot`. It returned 120
+unique findings across two pages: 13 recurring and 107 observed; 23 high, 86
+medium, and 11 low severity; telemetry `available`; six sessions, 30 messages,
+and 2,630 tool calls. This is the comparison baseline for the first scheduled
+run.
+
 ## Release gates
 
-### Gate 5: freeze, graph review, and commit
+### Gate 5: freeze, graph review, and commit — complete
 
 1. Stage regenerated API output and all intended Issue Review files.
 2. Preserve unrelated untracked `.claude/skills/gitnexus/` and `build/`.
@@ -263,7 +372,7 @@ Changing the production write timeout was not required.
 Graphify has no graph for this repository. GitNexus is the release graph
 authority; a missing Graphify artifact is not review evidence.
 
-### Gate 6: exact-commit Windows deployment
+### Gate 6: exact-commit Windows deployment — complete
 
 1. Create a detached clean worktree at the committed revision.
 2. Verify the worktree is clean and `HEAD` equals the release revision.
@@ -287,11 +396,11 @@ Rollback:
 3. Restart and verify its version, root UI, and API health.
 4. Keep the failed artifact and sanitized logs for diagnosis.
 
-### Gate 7: installed browser acceptance
+### Gate 7: installed browser acceptance — desktop complete; narrow resize limited
 
 Verify in the installed desktop UI:
 
-- **Issue Review** is visible on **Insights**;
+- **Issue Review** is visible in primary navigation;
 - global timeframe and project filters change the scan scope;
 - chat and folder selectors enforce exact evidence containment;
 - category, tool, source, outcome, severity, confidence, status,
@@ -343,7 +452,7 @@ Operational acceptance:
 
 Official OpenAI documentation requires the computer and desktop app to remain
 running for scheduled tasks that need local files or localhost services. See
-[Scheduled tasks](https://learn.chatgpt.com/docs/automations).
+[Scheduled tasks](https://developers.openai.com/codex/app/automations).
 
 ## Definition of done
 
