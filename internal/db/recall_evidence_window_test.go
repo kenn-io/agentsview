@@ -537,6 +537,28 @@ func TestRecallEvidenceAppendOnlyWritesRevokeDuplicateSourceEndpoint(t *testing.
 	}
 }
 
+func TestRecallEvidenceIncrementalLinkRevokesChangedToolContent(t *testing.T) {
+	d := testDB(t)
+	const sessionID = "incremental-link"
+	seedRecallEvidenceWindow(t, d, sessionID, 10, "stable", "")
+	insertVerifiedRecallSelection(
+		t, d, "link-entry", sessionID, 10, 11, []string{"tool-a"},
+	)
+	result := "late result content"
+
+	err := d.WriteSessionIncremental(sessionID, nil, IncrementalSessionUpdate{
+		SubagentLinks: []ToolCallSubagentLink{{
+			ToolUseID: "tool-a", ResultContent: result,
+			ResultContentLen: len(result), HasResult: true,
+		}},
+	})
+
+	require.NoError(t, err)
+	entry := requireRecallEntry(t, d, "link-entry")
+	assert.False(t, entry.ProvenanceOK,
+		"a late tool result must revoke the stale evidence digest")
+}
+
 func TestRecallEvidenceReplaceSessionContentLogsCommittedRevocation(t *testing.T) {
 	d := testDB(t)
 	seedRecallEvidenceWindow(t, d, "replace-content", 10, "stable", "")

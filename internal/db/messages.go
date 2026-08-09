@@ -1301,7 +1301,7 @@ func (db *DB) WriteSessionIncremental(
 			)
 		}
 	}
-	if len(msgs) > 0 {
+	if transcriptChanged {
 		if err := reconcileRecallEvidenceForSessionTx(
 			ctx, tx, sessionID, &pendingRecallRevocations,
 		); err != nil {
