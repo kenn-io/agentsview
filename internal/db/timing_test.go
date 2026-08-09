@@ -216,27 +216,44 @@ func TestGetSessionTiming_ReadOnlyFixture(t *testing.T) {
 	})
 }
 
-func TestGetSessionTimingTreatsMalformedMessageTimestampAsUnavailable(t *testing.T) {
-	d := testDB(t)
-	startedAt := "2026-08-09T10:00:00Z"
-	endedAt := "2026-08-09T10:05:00Z"
-	insertSession(t, d, "malformed-timing", "proj", func(session *Session) {
-		session.StartedAt = &startedAt
-		session.EndedAt = &endedAt
-		session.MessageCount = 1
-	})
-	require.NoError(t, d.InsertMessages([]Message{{
-		SessionID: "malformed-timing", Ordinal: 0, Role: "assistant",
-		Content: "provider timestamp", Timestamp: "not-a-timestamp", HasToolUse: true,
-	}}))
+func TestGetSessionTimingUsesOnlyCanonicalMessageTimestamps(t *testing.T) {
+	tests := []struct {
+		name, timestamp, want string
+	}{
+		{"canonical", "2026-08-09T10:01:00Z", "2026-08-09T10:01:00Z"},
+		{"empty", "", ""},
+		{"malformed", "not-a-timestamp", ""},
+		{"date only", "2026-08-09", ""},
+		{"time only", "10:01:00", ""},
+		{"numeric", "2451545", ""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			d := testDB(t)
+			startedAt := "2026-08-09T10:00:00Z"
+			endedAt := "2026-08-09T10:05:00Z"
+			insertSession(t, d, "timestamp-timing", "proj", func(session *Session) {
+				session.StartedAt = &startedAt
+				session.EndedAt = &endedAt
+				session.MessageCount = 1
+			})
+			require.NoError(t, d.InsertMessages([]Message{{
+				SessionID: "timestamp-timing", Ordinal: 0, Role: "assistant",
+				Content: "provider timestamp", Timestamp: test.timestamp,
+				HasToolUse: true,
+			}}))
 
-	timing, err := d.GetSessionTiming(t.Context(), "malformed-timing")
+			timing, err := d.GetSessionTiming(t.Context(), "timestamp-timing")
 
-	require.NoError(t, err)
-	require.NotNil(t, timing)
-	require.Len(t, timing.Turns, 1)
-	assert.Empty(t, timing.Turns[0].StartedAt)
-	assert.Nil(t, timing.Turns[0].DurationMs)
+			require.NoError(t, err)
+			require.NotNil(t, timing)
+			require.Len(t, timing.Turns, 1)
+			assert.Equal(t, test.want, timing.Turns[0].StartedAt)
+			if test.want == "" {
+				assert.Nil(t, timing.Turns[0].DurationMs)
+			}
+		})
+	}
 }
 
 // TestActiveGapCapConstantsAgree guards the two spellings of the active

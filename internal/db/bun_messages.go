@@ -282,9 +282,10 @@ type bunTimingSessionRow struct {
 }
 
 type bunTimingMessageRow struct {
-	Ordinal    int                 `bun:"ordinal"`
-	Timestamp  *bunmodel.Timestamp `bun:"timestamp"`
-	HasToolUse bool                `bun:"has_tool_use"`
+	Ordinal      int                 `bun:"ordinal"`
+	RawTimestamp any                 `bun:"timestamp"`
+	Timestamp    *bunmodel.Timestamp `bun:"-"`
+	HasToolUse   bool                `bun:"has_tool_use"`
 }
 
 type bunTimingCallRow struct {
@@ -478,6 +479,26 @@ func bunActivityTime(value any) (time.Time, bool) {
 	}
 }
 
+// bunAvailableTimestamp applies the canonical persistence scanner to a raw
+// query value. SQLite's timestamp columns can contain legacy text outside the
+// canonical domain; those values are unavailable to readers. Native timestamp
+// backends stay strict because their typed schemas must never return them.
+func bunAvailableTimestamp(
+	backend BunBackend, value any,
+) (*bunmodel.Timestamp, error) {
+	var parsed bunmodel.Timestamp
+	if err := parsed.Scan(value); err != nil {
+		if backend.Name() == "sqlite" {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if parsed.IsZero() {
+		return nil, nil
+	}
+	return &parsed, nil
+}
+
 // GetSessionTiming assembles timing from canonical rows in Go.
 func (s *BunStore) GetSessionTiming(
 	ctx context.Context, sessionID string,
@@ -506,6 +527,15 @@ func (s *BunStore) GetSessionTiming(
 			Where("session_id = ?", sessionID).
 			OrderExpr("ordinal ASC").Scan(ctx, &attempt.messages); err != nil {
 			return err
+		}
+		for index := range attempt.messages {
+			timestamp, err := bunAvailableTimestamp(
+				s.backend, attempt.messages[index].RawTimestamp,
+			)
+			if err != nil {
+				return fmt.Errorf("scanning timing message timestamp: %w", err)
+			}
+			attempt.messages[index].Timestamp = timestamp
 		}
 		if err := store.NewSelect().Table("tool_calls").
 			Column(

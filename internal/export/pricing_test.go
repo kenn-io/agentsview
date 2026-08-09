@@ -385,6 +385,34 @@ func TestPricingResolverBuildBlockMatchesPersistedTimestampPrecision(t *testing.
 			want: time.Date(2026, 8, 9, 4, 9, 57, 310_282_000, time.UTC),
 		},
 		{
+			name: "base rate rounds odd midpoint up",
+			row: EffectivePricingRow{
+				ModelPattern: "base-odd-tie-model",
+				Rates: ModelRates{
+					InputPerMTok: money.MustParseDollars("1"),
+					UpdatedAt: new(time.Date(
+						2026, 8, 9, 4, 9, 57, 310_283_500, time.UTC,
+					)),
+					Source: PricingRowSourceFetched,
+				},
+			},
+			want: time.Date(2026, 8, 9, 4, 9, 57, 310_284_000, time.UTC),
+		},
+		{
+			name: "base rate midpoint carries into next second",
+			row: EffectivePricingRow{
+				ModelPattern: "base-carry-model",
+				Rates: ModelRates{
+					InputPerMTok: money.MustParseDollars("1"),
+					UpdatedAt: new(time.Date(
+						2026, 8, 9, 4, 9, 57, 999_999_500, time.UTC,
+					)),
+					Source: PricingRowSourceFetched,
+				},
+			},
+			want: time.Date(2026, 8, 9, 4, 9, 58, 0, time.UTC),
+		},
+		{
 			name: "band rate rounds midpoint to even",
 			row: EffectivePricingRow{
 				ModelPattern: "band-model",

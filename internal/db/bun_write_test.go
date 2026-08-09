@@ -84,6 +84,39 @@ func TestCanonicalBunWriteReplacesDependentRowsAtomically(t *testing.T) {
 	assert.Zero(t, findingCount)
 }
 
+func TestForEachCanonicalWriteBatchBoundsPayloadWithoutSplittingRows(
+	t *testing.T,
+) {
+	type row struct{ payload string }
+	rows := []row{
+		{payload: "123456"},
+		{payload: "abc"},
+		{payload: "xyz"},
+		{payload: "oversized-payload"},
+	}
+	var batches [][]string
+
+	err := forEachCanonicalWriteBatch(
+		rows, 10,
+		func(row row) int { return len(row.payload) },
+		func(batch []row) error {
+			payloads := make([]string, len(batch))
+			for index := range batch {
+				payloads[index] = batch[index].payload
+			}
+			batches = append(batches, payloads)
+			return nil
+		},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, [][]string{
+		{"123456", "abc"},
+		{"xyz"},
+		{"oversized-payload"},
+	}, batches)
+}
+
 func TestCanonicalToolRowsRejectMissingLogicalParents(t *testing.T) {
 	database := testDB(t)
 	insertSession(t, database, "canonical-parent", "alpha")

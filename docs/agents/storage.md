@@ -77,6 +77,25 @@ atomically. Preserve sessions even when their source files no longer exist.
   driver-side bind array. Chunk bounded reads and writes, keep sensitive
   values out of ad hoc logging, and inspect the formatted query when
   diagnosing placeholder or dialect failures.
+- Canonical slice writes use a 16 MiB approximate dynamic-payload budget,
+  matching the largest tool result the archive deliberately persists. This is
+  a formatted-query working-set bound, not a row count or bind-variable rule;
+  one larger logical row is written alone rather than split across statements.
+
+### Timestamp compatibility
+
+- Canonical non-empty timestamps use the layouts accepted by
+  `bunmodel.ParseTimestamp`, normalize to UTC, and persist at microsecond
+  precision on every backend. Empty timestamps are unavailable.
+- SQLite archive message rows retain their historical raw-text write seam so a
+  malformed provider value never prevents archival. Timing, recent-edit, and
+  content-search readers scan that raw value through the canonical parser and
+  expose unsupported text as an unavailable timestamp.
+- PostgreSQL, DuckDB, SQLite tool-result rows, and other common timestamp models
+  remain strict: unsupported non-empty values reject the session write or
+  replication transaction. Correcting the source value makes the next
+  canonical rewrite eligible to succeed; failed target transactions do not
+  advance their synchronization cursor.
 
 ## DuckDB Mirror
 
