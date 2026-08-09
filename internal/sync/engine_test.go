@@ -5605,6 +5605,9 @@ func TestProjectIdentityObservationSkipsProtectedPathByDefault(t *testing.T) {
 // lexical-only gate would pass it, and the discovery's own EvalSymlinks and
 // git reads would then enter the protected folder.
 func TestProjectIdentityObservationSkipsSymlinkedProtectedCwd(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the probe classifier walks POSIX paths and symlinks")
+	}
 	database := openTestDB(t)
 	home, _ := protectedPathIdentityRepo(t)
 	require.NoError(t, os.Symlink(
@@ -5641,6 +5644,9 @@ func TestProjectIdentityObservationSkipsSymlinkedProtectedCwd(t *testing.T) {
 // stays refused, because consenting to macOS consent prompts is not
 // consenting to waking automountd on every identity-cache miss.
 func TestMayProbeLocalPathRefusesAutomountDespiteOptIn(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the probe classifier walks POSIX paths and symlinks")
+	}
 	home := t.TempDir()
 	require.NoError(t, os.Symlink("/home", filepath.Join(home, "tohome")))
 	engine := NewEngine(openTestDB(t), EngineConfig{
@@ -5718,6 +5724,9 @@ func TestProjectIdentityObservationSkipsProtectedGitdirTarget(t *testing.T) {
 // location. The link target is a real git directory with a branch and a
 // remote, so a missing vet is caught by either leaking into the observation.
 func TestProjectIdentityObservationSkipsSymlinkedGitDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the probe classifier walks POSIX paths and symlinks")
+	}
 	database := openTestDB(t)
 	home := t.TempDir()
 	realGit := filepath.Join(home, "Documents", "main", ".git")

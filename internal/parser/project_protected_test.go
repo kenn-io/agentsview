@@ -83,6 +83,9 @@ func TestExtractProjectFromCwdProtectedGitdirTargetFallsBack(t *testing.T) {
 // valid gitfile pointing at a safe main repository, so a missing vet is
 // caught by the main repository's name leaking into the result.
 func TestExtractProjectFromCwdSymlinkedGitFileFallsBack(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the probe classifier walks POSIX paths and symlinks")
+	}
 	home := t.TempDir()
 	mainGitDir := filepath.Join(home, "src", "main-repo", ".git")
 	worktreeGitDir := filepath.Join(mainGitDir, "worktrees", "wt")
@@ -139,6 +142,41 @@ func TestDefaultProbeGitRootForCwdHonorsProtectedHome(t *testing.T) {
 	t.Cleanup(func() { SetAllowProtectedPathProbes(false) })
 	assert.True(t, defaultProbeGitRootForCwd(protected),
 		"opting in must allow protected cwd probes")
+}
+
+// TestRepoRootFromSiblingsSkipsRefusedGitfileTargets pins that missing-cwd
+// recovery applies the same gitfile-target vetting as the upward walk: a
+// sibling worktree whose gitfile targets a refused location must not have
+// its commondir read or its main repository's name recovered. The deleted
+// cwd falls back to its own basename instead.
+func TestRepoRootFromSiblingsSkipsRefusedGitfileTargets(t *testing.T) {
+	root := t.TempDir()
+	guarded := filepath.Join(root, "guarded")
+	mainGitDir := filepath.Join(guarded, "main-docs", ".git")
+	worktreeGitDir := filepath.Join(mainGitDir, "worktrees", "wt1")
+	require.NoError(t, os.MkdirAll(worktreeGitDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(worktreeGitDir, "commondir"), []byte("../..\n"), 0o644,
+	))
+	parent := filepath.Join(root, "worktrees")
+	sibling := filepath.Join(parent, "wt1")
+	require.NoError(t, os.MkdirAll(sibling, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sibling, ".git"),
+		[]byte("gitdir: "+worktreeGitDir+"\n"), 0o644,
+	))
+
+	origGuard := probeGitfileTarget
+	t.Cleanup(func() { probeGitfileTarget = origGuard })
+	probeGitfileTarget = func(cleaned string) bool {
+		return !strings.HasPrefix(cleaned, guarded)
+	}
+
+	// The recorded cwd is a deleted child of parent, so recovery scans
+	// parent's siblings for linked-worktree gitfiles.
+	deleted := filepath.Join(parent, "wt2", "src")
+	assert.Equal(t, "src", ExtractProjectFromCwd(deleted),
+		"a refused sibling gitfile target must not name the main repository")
 }
 
 // TestDefaultProbeGitfileTargetRefusesAutomount pins the asymmetry between

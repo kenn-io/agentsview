@@ -168,20 +168,26 @@ func TestExtractProjectFromCwd_HomePathWithoutAutofs_StillWalks(t *testing.T) {
 	require.NoError(t, err)
 
 	orig := osStat
-	defer func() { osStat = orig }()
+	origLstat := osLstat
+	defer func() { osStat = orig; osLstat = origLstat }()
 	var count atomic.Int64
 	cwd := "/home/nobody-agentsview-test/code/example"
-	osStat = func(path string) (os.FileInfo, error) {
+	// The walk types .git candidates through osLstat and falls back to
+	// osStat elsewhere; count both so the assertion tracks the walk
+	// regardless of which seam a level uses.
+	statFn := func(path string) (os.FileInfo, error) {
 		count.Add(1)
 		if path == cwd {
 			return realInfo, nil
 		}
 		return nil, os.ErrNotExist
 	}
+	osStat = statFn
+	osLstat = statFn
 
 	_ = ExtractProjectFromCwdWithBranch(cwd, "")
 	assert.GreaterOrEqual(t, count.Load(), int64(2),
-		"osStat never called for /home path with empty "+
+		"stat never called for /home path with empty "+
 			"autofs config; walk must proceed for a real mount")
 }
 

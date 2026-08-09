@@ -12682,7 +12682,7 @@ func discoverLocalGitIdentity(
 	if err != nil {
 		return localGitIdentity{}
 	}
-	root := findLocalGitRoot(resolved)
+	root := findLocalGitRoot(resolved, mayProbe)
 	if root == "" {
 		return localGitIdentity{}
 	}
@@ -12735,10 +12735,22 @@ func looksWindowsDrivePath(p string) bool {
 	return p[2] == '\\' || p[2] == '/'
 }
 
-func findLocalGitRoot(start string) string {
+func findLocalGitRoot(start string, mayProbe func(string) bool) string {
 	dir := filepath.Clean(start)
 	for {
-		if info, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		gitPath := filepath.Join(dir, ".git")
+		info, err := os.Lstat(gitPath)
+		if err == nil && info.Mode()&os.ModeSymlink != 0 {
+			// A .git symlink into a refused location marks a repo
+			// boundary we must not look through: return the directory
+			// without following the link; gitDirectoryContext refuses
+			// the reads under it.
+			if !mayProbe(gitPath) {
+				return dir
+			}
+			info, err = os.Stat(gitPath)
+		}
+		if err == nil {
 			if info.IsDir() || info.Mode().IsRegular() {
 				return dir
 			}

@@ -643,6 +643,36 @@ func TestClassifyLocalPathProbeSkipsAutomountNamespace(t *testing.T) {
 	), "a symlink into the automount namespace must stop the walk")
 }
 
+// TestClassifyLocalPathProbeAutomountHomeNeverResolved pins that resolving
+// the home directory for lexical comparison never touches an automounter
+// namespace: a home under /home (autofs user homes) or reached through a
+// /net link must not wake automountd on every classification call.
+func TestClassifyLocalPathProbeAutomountHomeNeverResolved(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the predicate compares POSIX home paths built with filepath")
+	}
+	outside := t.TempDir()
+	linkedHome := filepath.Join(outside, "nethome")
+	require.NoError(t, os.Symlink("/net/host/users/x", linkedHome))
+	orig := osLstat
+	t.Cleanup(func() { osLstat = orig })
+	osLstat = func(path string) (os.FileInfo, error) {
+		for _, ns := range []string{"/home", "/net", "/Network/Servers"} {
+			if path == ns || strings.HasPrefix(path, ns+"/") {
+				assert.Fail(t, "automount namespace must not be walked", path)
+			}
+		}
+		return orig(path)
+	}
+
+	assert.Equal(t, LocalPathProbeSafe, ClassifyLocalPathProbe(
+		"darwin", "/home/user", filepath.Join(outside, "elsewhere"),
+	), "an automount home must not derail classifying an unrelated path")
+	assert.Equal(t, LocalPathProbeSafe, ClassifyLocalPathProbe(
+		"darwin", linkedHome, filepath.Join(outside, "elsewhere"),
+	), "resolving a home linked through /net must abort, not follow")
+}
+
 // TestNormalizeStoredRootPathSkipsAutomountNamespace pins that on macOS a
 // stored /home/... root path normalizes to its cleaned form without touching
 // the filesystem: resolving it through the automounter is both futile (the

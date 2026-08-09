@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"unicode"
 )
 
@@ -888,21 +889,83 @@ func ClassifyLocalPathProbe(goos, home, p string) LocalPathProbeClass {
 	if goos != "darwin" || !filepath.IsAbs(p) {
 		return LocalPathProbeSafe
 	}
-	// Compare against the symlink-resolved home too: once the walk hops
-	// through a link, it continues on resolved prefixes, and a home behind
-	// a symlinked ancestor (e.g. /var -> /private/var) would never match
-	// the unresolved form lexically. Resolving home itself only stats its
-	// ancestors, which are never protected locations. An unresolvable home
-	// leaves the protected checks vacuous; automount checks need no home.
-	var homes []string
-	if strings.TrimSpace(home) != "" {
-		homes = []string{home}
-		if resolved, err := filepath.EvalSymlinks(home); err == nil &&
-			filepath.Clean(resolved) != filepath.Clean(home) {
-			homes = append(homes, resolved)
-		}
+	// Classify a literal automount input before resolving home, so a
+	// caller probing /home paths never pays for home resolution at all.
+	if IsAutomountNamespacePath(goos, filepath.Clean(p)) {
+		return LocalPathProbeAutomountNamespace
 	}
-	return classifyLocalPathProbe(goos, homes, p, 0)
+	return classifyLocalPathProbe(goos, probeHomesFor(goos, home), p, 0)
+}
+
+// probeHomesCache memoizes probeHomesFor per (goos, home): home never changes
+// within a process, and classification runs for every session parse and
+// identity-cache miss, so resolving home's symlinks each call is waste.
+var probeHomesCache sync.Map
+
+// probeHomesFor returns home plus its symlink-resolved form for lexical
+// comparison: once the classification walk hops through a link, it continues
+// on resolved prefixes, and a home behind a symlinked ancestor (e.g.
+// /var -> /private/var) would never match the unresolved form. Resolution
+// walks component-by-component and aborts if any candidate lands in an
+// automounter namespace, so a home under /home, or linked through /net,
+// never wakes automountd. An unresolvable home leaves the protected checks
+// comparing the raw form only.
+func probeHomesFor(goos, home string) []string {
+	home = strings.TrimSpace(home)
+	if home == "" || !filepath.IsAbs(home) {
+		return nil
+	}
+	key := goos + "\x00" + home
+	if cached, ok := probeHomesCache.Load(key); ok {
+		homes, _ := cached.([]string)
+		return homes
+	}
+	homes := []string{home}
+	if resolved, ok := resolvePathAvoidingAutomount(goos, home, 0); ok &&
+		filepath.Clean(resolved) != filepath.Clean(home) {
+		homes = append(homes, resolved)
+	}
+	probeHomesCache.Store(key, homes)
+	return homes
+}
+
+// resolvePathAvoidingAutomount resolves p's symlinks one component at a
+// time, refusing (ok=false) as soon as any candidate lies inside a macOS
+// automounter namespace so the resolution itself never wakes automountd.
+// Unresolvable paths also report ok=false; callers fall back to the raw form.
+func resolvePathAvoidingAutomount(
+	goos, p string, hops int,
+) (resolved string, ok bool) {
+	if hops > maxProtectedPathLinkHops {
+		return "", false
+	}
+	if IsAutomountNamespacePath(goos, filepath.Clean(p)) {
+		return "", false
+	}
+	rest := splitAbsPathComponents(p)
+	current := string(filepath.Separator)
+	for i, component := range rest {
+		next := filepath.Join(current, component)
+		info, err := osLstat(next)
+		if err != nil {
+			return "", false
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(next)
+			if err != nil {
+				return "", false
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(current, target)
+			}
+			respliced := filepath.Join(
+				append([]string{target}, rest[i+1:]...)...,
+			)
+			return resolvePathAvoidingAutomount(goos, respliced, hops+1)
+		}
+		current = next
+	}
+	return current, true
 }
 
 func protectedUnderAnyHome(goos string, homes []string, p string) bool {

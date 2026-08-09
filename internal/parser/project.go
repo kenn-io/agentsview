@@ -19,10 +19,33 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 )
 
-// osStat is indirected through a var so tests can intercept stat
-// calls from the git-root walker. Production code always uses
-// os.Stat via this binding.
-var osStat = os.Stat
+// osStat and osLstat are indirected through vars so tests can intercept
+// stat calls from the git-root walker. Production code always uses os.Stat
+// and os.Lstat via these bindings.
+var (
+	osStat  = os.Stat
+	osLstat = os.Lstat
+)
+
+// statGitEntry types a .git entry without following a refused symlink: it
+// Lstats first, and only follows (via osStat) when the entry is not a link
+// or its link target passes the gitfile-target guard. A refused link
+// reports refused=true so callers stop at the boundary without escalating
+// to git, which would traverse the same target.
+func statGitEntry(gitPath string) (info os.FileInfo, refused bool, err error) {
+	info, err = osLstat(gitPath)
+	if err != nil {
+		return nil, false, err
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return info, false, nil
+	}
+	if !probeGitfileTarget(gitPath) {
+		return nil, true, nil
+	}
+	info, err = osStat(gitPath)
+	return info, false, err
+}
 
 // allowProtectedPathProbes lets project extraction probe recorded working
 // directories inside macOS TCC-protected locations. It is package-level
@@ -624,7 +647,13 @@ func findGitRepoRoot(ctx context.Context, cwd string) string {
 func findGitRepoRootLocal(dir string) (root string, conservative bool) {
 	for {
 		gitPath := filepath.Join(dir, ".git")
-		info, err := osStat(gitPath)
+		info, refused, err := statGitEntry(gitPath)
+		if refused {
+			// A .git symlink into a refused location marks a repo
+			// boundary we must not look through. Stop here without a
+			// conservative result so the caller cannot escalate to git.
+			return dir, false
+		}
 		if err == nil {
 			if info.IsDir() {
 				return dir, false
@@ -702,8 +731,8 @@ func repoRootFromSiblings(dir, cwd string) string {
 			continue
 		}
 		gitPath := filepath.Join(dir, entry.Name(), ".git")
-		info, err := osStat(gitPath)
-		if err != nil {
+		info, refused, err := statGitEntry(gitPath)
+		if refused || err != nil {
 			continue
 		}
 		if info.IsDir() {
@@ -714,6 +743,12 @@ func repoRootFromSiblings(dir, cwd string) string {
 			continue
 		}
 		if !info.Mode().IsRegular() {
+			continue
+		}
+		// Sibling gitfiles and their targets get the same vetting as the
+		// upward walk: repoRootFromGitFile reads commondir and config from
+		// whatever the gitfile names, which the deleted cwd never vetted.
+		if !gitFileTargetsProbeable(filepath.Join(dir, entry.Name()), gitPath) {
 			continue
 		}
 		gitDir := readGitDirFromFile(gitPath)
