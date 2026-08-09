@@ -673,6 +673,119 @@ func TestResolveBareCodebuffID_FailClosedOnLookupError(t *testing.T) {
 	assert.Contains(t, err.Error(), "backend failure")
 }
 
+// TestResolveBareCodebuffID_ArchiveOnlyLocalMatch pins archive
+// preservation for bare-ID resolution: a local Codebuff session whose
+// source directory was deleted still has an unprefixed archive row
+// ("codebuff:<project>:<ts>"), and the default --machine=local lookup
+// must find it via the database search even though the filesystem walk
+// yields zero locations.
+func TestResolveBareCodebuffID_ArchiveOnlyLocalMatch(t *testing.T) {
+	t.Parallel()
+	// AgentDirs points at an empty directory: the on-disk chats/
+	// tree is gone, so only the archive row can resolve the ID.
+	tmp := t.TempDir()
+	cfg := config.Config{
+		LocalMachineName: "test-machine",
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {tmp},
+		},
+	}
+	archived := "codebuff:goneproject:1704067200"
+	svc := &stubGetService{
+		getDetails: map[string]*service.SessionDetail{
+			archived: {Session: db.Session{
+				ID:      archived,
+				Machine: "test-machine",
+			}},
+		},
+		partialIDs: []string{archived},
+	}
+	got, err := resolveBareCodebuffID(
+		context.Background(), svc, &cfg, "1704067200", "local",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, archived, got,
+		"archive-only local session must resolve by bare ID after its "+
+			"source directory is deleted")
+}
+
+// TestResolveBareCodebuffID_ArchivedLocalAndRemoteTwinAmbiguous pins
+// the ambiguity contract under --machine=*: an unprefixed local
+// archive row and a host-prefixed remote twin both match the bare
+// timestamp, so the resolver must return the ambiguity error listing
+// both canonical IDs instead of silently picking the remote one.
+func TestResolveBareCodebuffID_ArchivedLocalAndRemoteTwinAmbiguous(t *testing.T) {
+	t.Parallel()
+	// No on-disk session: the local row exists only in the archive.
+	tmp := t.TempDir()
+	cfg := config.Config{
+		LocalMachineName: "test-machine",
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {tmp},
+		},
+	}
+	localID := "codebuff:myproject:1704067200"
+	remoteID := "host~codebuff:myproject:1704067200"
+	svc := &stubGetService{
+		getDetails: map[string]*service.SessionDetail{
+			localID: {Session: db.Session{
+				ID:      localID,
+				Machine: "test-machine",
+			}},
+			remoteID: {Session: db.Session{
+				ID:      remoteID,
+				Machine: "remote-box",
+			}},
+		},
+		partialIDs: []string{localID, remoteID},
+	}
+	got, err := resolveBareCodebuffID(
+		context.Background(), svc, &cfg, "1704067200", "*",
+	)
+	require.Error(t, err,
+		"a local archive row plus a remote twin is ambiguous under "+
+			"--machine=*")
+	assert.Empty(t, got)
+	assert.Contains(t, err.Error(), "ambiguous session id")
+	assert.Contains(t, err.Error(), localID)
+	assert.Contains(t, err.Error(), remoteID)
+}
+
+// TestResolveBareCodebuffID_OnDiskRowNotDoubleCounted pins the
+// dedupe between the filesystem probe and the database search: a
+// session found on disk also has its own unprefixed archive row, and
+// the resolver must treat the two sightings as one candidate rather
+// than firing the ambiguity error against itself.
+func TestResolveBareCodebuffID_OnDiskRowNotDoubleCounted(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	stageCodebuffSession(t, tmp, "myproject", "1704067200")
+	cfg := config.Config{
+		LocalMachineName: "test-machine",
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {tmp},
+		},
+	}
+	candidate := "codebuff:myproject:1704067200"
+	svc := &stubGetService{
+		getDetails: map[string]*service.SessionDetail{
+			candidate: {Session: db.Session{
+				ID:      candidate,
+				Machine: "test-machine",
+			}},
+		},
+		// The database search returns the same archive row the
+		// filesystem probe already surfaced.
+		partialIDs: []string{candidate},
+	}
+	got, err := resolveBareCodebuffID(
+		context.Background(), svc, &cfg, "1704067200", "local",
+	)
+	require.NoError(t, err,
+		"a session's own archive row must not make it ambiguous")
+	assert.Equal(t, candidate, got)
+}
+
 // TestCodebuffMachineMatches_EmptyFilter pins the empty-string arm
 // of codebuffMachineMatches. The production --machine flag default is
 // "local" so an empty filter never reaches the resolver naturally,

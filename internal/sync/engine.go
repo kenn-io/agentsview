@@ -822,9 +822,14 @@ func providerFactoryMap(
 // be registered with a 0-returning stub, and a warm pass would
 // short-circuit its parse on a 0==0 digest match between
 // ComputeMultiFileStatHash(path) and the previously-stored 0. The
-// probe must be side-effect-free: a fresh provider per agent is
-// allocated only for the type assertion, and the probe is discarded
-// immediately.
+// probe construction must be side-effect-free: a fresh provider is
+// allocated per agent with an empty ProviderConfig (no roots, no
+// machine), and a probe that passes both gates is retained for the
+// engine's lifetime as the cached hasher. Retaining a config-less
+// instance is safe only because ComputeMultiFileStatHash is stateless
+// — a pure function of its chatPath argument and the filesystem — so
+// implementations must not depend on provider construction state such
+// as Roots or Machine.
 //
 // Freebuff sessions intentionally route through this single
 // AgentCodebuff entry: AgentFreebuff is a recognized AgentType string
@@ -7760,12 +7765,16 @@ func (e *Engine) collectAndBatch(
 			// rows in the same batch still get their digests
 			// stamped; a pendingStatHash source whose whole session
 			// row committed is exactly the invariant the side-table
-			// needs to recognize on the next warm pass.
+			// needs to recognize on the next warm pass. A pending
+			// row with no matching written entry fails closed:
+			// without a per-row success flag the write cannot be
+			// confirmed, and an unconfirmed digest persist could
+			// mark an absent session as fresh forever.
 			for i, pw := range pending {
 				if pw.providerStatHash == nil {
 					continue
 				}
-				if i < len(outcome.written) && !outcome.written[i] {
+				if i >= len(outcome.written) || !outcome.written[i] {
 					continue
 				}
 				e.recordProviderStatHash(ctx, *pw.providerStatHash)
@@ -10524,13 +10533,18 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 		// bytes, and a sibling-only change still changes the composite
 		// and falls through to the full fingerprint.
 		//
-		// Note: the per-component digest above (Issue 1) handles the
-		// warm path once provider_freshness has at least one row. This
-		// case remains the cold-start fallback for the very first
-		// warm sync after the column is introduced, when no digest
-		// exists yet and the legacy size/mtime composite must still
-		// short-circuit unchanged sources so the digest can be
-		// stamped after the cold parse.
+		// Note: whenever a MultiFileStatHasher is registered for this
+		// agent — always, in the production configuration — the digest
+		// block above returns before this switch: its !hasStored arm
+		// forces provider.Fingerprint on cold start, and the loop then
+		// closes through providerSourceUnchangedInDB →
+		// stampProviderStatHashForConfirmedSource (or a successful
+		// write's flushPending). This arm is therefore reachable only
+		// for a provider that declares Source.MultiFileStatHash=
+		// Supported while its constructed instance fails the
+		// MultiFileStatHasher assertion in buildProviderStatHashers.
+		// It is kept as a defensive fallback for that
+		// hasher-failed-to-register case, not as a production path.
 		dir := filepath.Dir(path)
 		size := info.Size()
 		mtime := info.ModTime().UnixNano()
@@ -14811,6 +14825,12 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 		} else {
 			writeTuple(0, 0, 0)
 		}
+		// Despite SourceMtime's name and int64 type, this value is an
+		// opaque change token, not a timestamp: reinterpreting the
+		// FNV-1a sum can go negative and is non-monotonic across
+		// changes. It is valid only for equality and zero/missing
+		// comparison — never for ordering or arithmetic against real
+		// mtimes.
 		return int64(h.Sum64())
 	}
 	if def.Type == parser.AgentKiloLegacy {

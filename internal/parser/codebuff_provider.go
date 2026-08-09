@@ -46,8 +46,11 @@ func CodebuffCompanionMtime(
 }
 
 // newCodebuffProviderFactory creates a provider factory for Codebuff.
-// Freebuff sessions are handled through the same provider and distinguished
-// via AgentLabel rather than a separate agent type.
+// Freebuff sessions are handled through this same provider: they are
+// parsed with their own agent type (parseCodebuffSession sets Agent =
+// AgentFreebuff and emits freebuff:-prefixed IDs), but Freebuff has no
+// registry entry or factory of its own, and sync canonicalizes
+// freebuff: IDs onto the Codebuff def via AgentByPrefix.
 func newCodebuffProviderFactory(def AgentDef) ProviderFactory {
 	return NewSourceSetFactory(
 		def,
@@ -244,6 +247,12 @@ func isWithinRoot(root, path string) bool {
 // "timestamp" (legacy compatibility). For the new format, it searches
 // the specific project directory. For legacy format, it searches all
 // project subdirectories.
+//
+// Known asymmetry with discovery: codebuffDiscoverEach accepts any
+// chats/<name>/ directory containing chat-messages.json, but lookup
+// rejects non-timestamp session names (the IsCodebuffTimestamp gate
+// below, part of the traversal defense). A session discovered under a
+// non-timestamp directory name is therefore not resolvable by rawID.
 func codebuffFindFile(root, rawID string) (singleFileMatch, bool) {
 	// Try to split into project:timestamp.
 	parts := strings.SplitN(rawID, ":", 2)

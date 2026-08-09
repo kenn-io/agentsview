@@ -129,6 +129,46 @@ func TestFindCodebuffFreebuffMatchesMiss(t *testing.T) {
 		"unknown timestamp must return no matches")
 }
 
+// TestFindCodebuffFreebuffMatchesRejectsTraversal pins the
+// fail-closed contract for hostile rawIDs: an ID containing path
+// separators or "."/".." segments must return no matches (and not
+// panic), even when the traversal-shaped ID points at a real
+// chat-messages.json outside the root.
+func TestFindCodebuffFreebuffMatchesRejectsTraversal(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "root")
+	codebuffMakeSessionDir(
+		t, root, "proj", "2026-07-16T00-09-00.236Z",
+	)
+	// Decoy outside the root: filepath.Join(root, "proj", "chats",
+	// "../../../x", "chat-messages.json") collapses to
+	// <base>/x/chat-messages.json.
+	require.NoError(t, os.MkdirAll(filepath.Join(base, "x"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(base, "x", "chat-messages.json"),
+		[]byte("[]"),
+		0o644,
+	))
+
+	pairs := []CodebuffFamilyRoots{
+		{Agent: AgentCodebuff, Roots: []string{root}},
+	}
+	sep := string(filepath.Separator)
+	hostile := []string{
+		"../../../x",
+		".." + sep + ".." + sep + ".." + sep + "x",
+		"..",
+		".",
+		"a/b",
+		"../2026-07-16T00-09-00.236Z",
+	}
+	for _, rawID := range hostile {
+		matches := FindCodebuffFreebuffMatches(pairs, rawID)
+		assert.Empty(t, matches,
+			"hostile rawID %q must return no matches", rawID)
+	}
+}
+
 // TestFindCodebuffFreebuffMatchesEmpty pins the empty-input
 // path: empty rawID returns nil without touching the
 // filesystem or iterating the configured roots.

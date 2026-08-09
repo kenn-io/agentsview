@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -49,11 +50,6 @@ func parseCodebuffSession(
 	// Read chat-meta.json for session name and timing hints.
 	meta := readCodebuffChatMeta(chatMetaPath)
 
-	// The actual LLM model is selected server-side based on the agentType
-	// template and can change mid-session. The on-disk format does not
-	// persist the actual model, so leave it unknown.
-	model := ""
-
 	// Read and parse the chat messages.
 	data, err := os.ReadFile(chatMessagesPath)
 	if err != nil {
@@ -67,7 +63,7 @@ func parseCodebuffSession(
 	sessionID := filepath.Base(dir)
 	sessionDate := parseCodebuffSessionDate(sessionID)
 
-	msgs, startedAt, endedAt, err := parseCodebuffMessages(data, sessionDate, model)
+	msgs, startedAt, endedAt, err := parseCodebuffMessages(data, sessionDate)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse chat-messages %s: %w", chatMessagesPath, err)
 	}
@@ -102,7 +98,7 @@ func parseCodebuffSession(
 	// Session name from first prompt (better than directory name).
 	sessionName := firstMsg
 	if len(sessionName) > 80 {
-		sessionName = sessionName[:77] + "..."
+		sessionName = truncate(sessionName, 77)
 	}
 	if sessionName == "" {
 		if rs.Cwd != "" {
@@ -152,8 +148,6 @@ func parseCodebuffSession(
 	// keeps reconciling message-derived counts for sessions with real
 	// transcripts.
 	countsAuthoritative := len(msgs) == 0 && meta.MessageCount > 0
-
-	// Model extracted earlier (passed into message parser above).
 
 	// Source file identity: use chat-messages.json as the primary source.
 	info, err := os.Stat(chatMessagesPath)
@@ -275,7 +269,6 @@ type codebuffRunState struct {
 	AgentType         string
 	ContextTokenCount int
 	CreditsUsed       float64
-	DirectCreditsUsed float64
 	Cwd               string
 	Skills            []codebuffSkill
 }
@@ -304,7 +297,6 @@ func readCodebuffRunState(path string) (codebuffRunState, error) {
 		AgentType:         mas.Get("agentType").Str,
 		ContextTokenCount: int(mas.Get("contextTokenCount").Int()),
 		CreditsUsed:       mas.Get("creditsUsed").Float(),
-		DirectCreditsUsed: mas.Get("directCreditsUsed").Float(),
 		Cwd: gjson.GetBytes(data,
 			"sessionState.fileContext.cwd").Str,
 	}
@@ -348,9 +340,12 @@ func codebuffAttachSkillNames(msgs []ParsedMessage, skills []codebuffSkill) {
 	if len(skills) == 0 {
 		return
 	}
-	byName := make(map[string]struct{}, len(skills))
+	// byName maps the lowercased skill name to the catalog's canonical
+	// casing so attribution can match case-insensitively while always
+	// reporting the catalog spelling.
+	byName := make(map[string]string, len(skills))
 	for _, s := range skills {
-		byName[strings.ToLower(s.Name)] = struct{}{}
+		byName[strings.ToLower(s.Name)] = s.Name
 	}
 	for i := range msgs {
 		for j := range msgs[i].ToolCalls {
@@ -385,9 +380,12 @@ func codebuffAttachSkillNames(msgs []ParsedMessage, skills []codebuffSkill) {
 
 // codebuffSkillNameFromInput scans raw tool input JSON for a reference to a
 // known skill name. It matches the skill name as a quoted JSON string value
-// or as a standalone token (e.g. inside a shell command). Returns "" when no
-// known skill is referenced.
-func codebuffSkillNameFromInput(inputJSON string, byName map[string]struct{}) string {
+// or as a standalone token (e.g. inside a shell command). byName maps the
+// lowercased skill name to its canonical catalog casing; matches always
+// return the canonical casing. When multiple catalog skills appear as
+// tokens, the winner is deterministic: the first in lowercase-sorted
+// order. Returns "" when no known skill is referenced.
+func codebuffSkillNameFromInput(inputJSON string, byName map[string]string) string {
 	if inputJSON == "" {
 		return ""
 	}
@@ -395,16 +393,23 @@ func codebuffSkillNameFromInput(inputJSON string, byName map[string]struct{}) st
 	for _, key := range []string{"skill", "name", "skill_name", "command", "prompt"} {
 		v := gjson.Get(inputJSON, key).Str
 		if v != "" {
-			if _, ok := byName[strings.ToLower(v)]; ok {
-				return v
+			if canonical, ok := byName[strings.ToLower(v)]; ok {
+				return canonical
 			}
 		}
 	}
 	// Fall back to scanning for any known skill name as a whole token.
+	// Sort the candidate names so the winner is deterministic when two
+	// catalog skills both appear in the input.
 	lower := strings.ToLower(inputJSON)
+	names := make([]string, 0, len(byName))
 	for name := range byName {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
 		if containsSkillToken(lower, name) {
-			return name
+			return byName[name]
 		}
 	}
 	return ""
@@ -504,10 +509,11 @@ func parseCodebuffSessionDate(sessionID string) time.Time {
 }
 
 // parseCodebuffMessages parses chat-messages.json data into ParsedMessages.
-// sessionDate provides the date context for time-only timestamps.
-// model is set on every ParsedMessage so the UI can identify the model used.
+// sessionDate provides the date context for time-only timestamps. Message
+// Model stays empty: the LLM is selected server-side per agentType template
+// and is not persisted in the on-disk format.
 func parseCodebuffMessages(
-	data []byte, sessionDate time.Time, model string,
+	data []byte, sessionDate time.Time,
 ) ([]ParsedMessage, time.Time, time.Time, error) {
 	root := gjson.ParseBytes(data)
 	if !root.IsArray() {
@@ -526,6 +532,17 @@ func parseCodebuffMessages(
 		currentDate = sessionDate
 		prevHour    = -1
 	)
+	// Seed the rollover state from the session creation time-of-day so
+	// the first time-only message can roll past midnight. A session
+	// created late in the local evening (directory
+	// 2026-07-17T06-58-00.000Z = 23:58 July 16 in UTC-7) whose first
+	// message reads "12:01 AM" belongs to the next local calendar day;
+	// without the seed, prevHour stays -1 until the second message and
+	// the first message would be stamped ~24h before the session
+	// started, skewing StartedAt.
+	if !sessionDate.IsZero() {
+		prevHour = sessionDate.Hour()
+	}
 
 	root.ForEach(func(_, msg gjson.Result) bool {
 		variant := msg.Get("variant").Str
@@ -619,7 +636,6 @@ func parseCodebuffMessages(
 			}
 			for i := range parsed {
 				parsed[i].Ordinal = ordinal
-				parsed[i].Model = model
 				ordinal++
 			}
 			messages = append(messages, parsed...)

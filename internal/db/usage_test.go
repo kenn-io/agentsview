@@ -4648,9 +4648,9 @@ func TestCostUSDFromCost(t *testing.T) {
 // TestGetDailyUsage_CodebuffCostOnly pins the SQLite aggregator path
 // for Codebuff/Freebuff's parser-emitted cost-only usage event. The
 // Codebuff parser (internal/parser/codebuff.go) attributes the session
-// cost to the agent name ("codebuff" or "freebuff") because the actual
-// LLM model is selected server-side and unknown at parse time. The row
-// must therefore carry Model="codebuff" so it passes the
+// cost to the agent template (e.g. "base2-deepseek") rather than the
+// agent name so the per-model breakdown in the usage report stays
+// granular. The row's template-attributed Model passes the
 // usageEventEligibility filter (non-empty ue.model) and the authoritative
 // reported Cost flows into TotalCost at the daily-usage level. The
 // per-model and per-agent breakdown shapes are aggregator internals

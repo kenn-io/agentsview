@@ -48,7 +48,12 @@ func (c CodebuffFamilyMatch) CanonicalID() string {
 // existing chat-messages.json. Returns one match per (agent,
 // project) pair whose chats subdirectory matches rawID.
 //
-// Empty rawID returns nil. A roots entry that does not exist on
+// Empty rawID returns nil. rawID must be a single filesystem-safe
+// path component: IDs containing path separators, "." or ".."
+// segments, or absolute paths fail closed and return nil, so a
+// traversal-shaped rawID can never join into a path outside the
+// configured roots. This holds independently of the caller's
+// IsCodebuffTimestamp pre-gate. A roots entry that does not exist on
 // disk is silently skipped. The agent type is determined by which
 // Roots list the match was found in; run-state.json is not read.
 //
@@ -68,7 +73,7 @@ func FindCodebuffFreebuffMatches(
 	pairs []CodebuffFamilyRoots,
 	rawID string,
 ) []CodebuffFamilyMatch {
-	if rawID == "" {
+	if !isSafeSinglePathComponent(rawID) {
 		return nil
 	}
 	var out []CodebuffFamilyMatch
@@ -86,6 +91,9 @@ func FindCodebuffFreebuffMatches(
 					root, project.Name(), "chats",
 					rawID, "chat-messages.json",
 				)
+				if !isWithinRoot(root, chatPath) {
+					continue
+				}
 				if _, err := os.Stat(chatPath); err != nil {
 					continue
 				}

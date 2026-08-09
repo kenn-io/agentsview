@@ -199,66 +199,66 @@ func resolveBareCodebuffID(
 		}
 	}
 
-	// Phase 2: Host-prefixed remote-synced sessions.
-	// This runs independently of the filesystem walk (even when
-	// len(locations)==0) so remote-only sessions — imported via
-	// pg push or remotesync with no local on-disk copy — can still
-	// be resolved. The filter requires a host prefix ("~"), a
-	// codebuff or freebuff agent marker, and the exact timestamp
-	// suffix.
-	if machineFilter != "" && machineFilter != "local" {
-		// Canonical remote Codebuff/Freebuff IDs carry the form
-		// host~codebuff:<project>:<timestamp> — the project
-		// segment separates the agent prefix from the timestamp.
-		// An agent-prefixed query ("codebuff:"+rawID) cannot
-		// match because the prefix isn't contiguous with the
-		// timestamp. Search by the raw timestamp alone so
-		// codebuff:<project>:<timestamp> rows are found. The
-		// post-fetch guards below (host prefix, suffix, agent
-		// marker, machine) keep the result set specific.
-		ids, findErr := svc.FindSessionIDsByPartial(
-			ctx, rawID, 200,
+	// Phase 2: Archived and remote-synced sessions found in the
+	// database. This runs independently of the filesystem walk (even
+	// when len(locations)==0) so sessions with no on-disk copy —
+	// local archive rows whose source directory was deleted, or
+	// remote rows imported via pg push or remotesync — can still be
+	// resolved. The filter requires a codebuff or freebuff agent
+	// marker (with or without a host prefix), the exact timestamp
+	// suffix, and a machine match; the seen map dedupes rows Phase 1
+	// already surfaced so an on-disk session is not double-counted
+	// as ambiguous with its own archive row.
+	//
+	// Canonical Codebuff/Freebuff IDs carry the form
+	// [host~]codebuff:<project>:<timestamp> — the project segment
+	// separates the agent prefix from the timestamp. An
+	// agent-prefixed query ("codebuff:"+rawID) cannot match because
+	// the prefix isn't contiguous with the timestamp. Search by the
+	// raw timestamp alone so codebuff:<project>:<timestamp> rows are
+	// found. The post-fetch guards below (suffix, agent marker,
+	// machine) keep the result set specific.
+	ids, findErr := svc.FindSessionIDsByPartial(
+		ctx, rawID, 200,
+	)
+	if findErr != nil && lookupErr == nil {
+		lookupErr = fmt.Errorf(
+			"lookup archived sessions for %q: %w",
+			rawID, findErr,
 		)
-		if findErr != nil && lookupErr == nil {
-			lookupErr = fmt.Errorf(
-				"lookup host-prefixed sessions for %q: %w",
-				rawID, findErr,
-			)
+	}
+	for _, id := range ids {
+		if !strings.HasSuffix(id, ":"+rawID) {
+			continue
 		}
-		for _, id := range ids {
-			if !strings.Contains(id, "~") {
-				continue
-			}
-			if !strings.HasSuffix(id, ":"+rawID) {
-				continue
-			}
-			// Guard against non-codebuff/freebuff sessions
-			// whose ID happens to contain the timestamp.
-			if !strings.Contains(id, "~codebuff:") &&
-				!strings.Contains(id, "~freebuff:") {
-				continue
-			}
-			detail, err := svc.Get(ctx, id)
-			if err != nil {
-				if lookupErr == nil {
-					lookupErr = err
-				}
-				continue
-			}
-			if detail == nil {
-				continue
-			}
-			if !codebuffMachineMatches(
-				detail.Machine, machineFilter, localMachine,
-			) {
-				continue
-			}
-			if _, dup := seen[id]; dup {
-				continue
-			}
-			seen[id] = struct{}{}
-			valid = append(valid, id)
+		// Guard against non-codebuff/freebuff sessions whose ID
+		// happens to contain the timestamp.
+		if !strings.HasPrefix(id, "codebuff:") &&
+			!strings.HasPrefix(id, "freebuff:") &&
+			!strings.Contains(id, "~codebuff:") &&
+			!strings.Contains(id, "~freebuff:") {
+			continue
 		}
+		detail, err := svc.Get(ctx, id)
+		if err != nil {
+			if lookupErr == nil {
+				lookupErr = err
+			}
+			continue
+		}
+		if detail == nil {
+			continue
+		}
+		if !codebuffMachineMatches(
+			detail.Machine, machineFilter, localMachine,
+		) {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		valid = append(valid, id)
 	}
 
 	// Single zero/one/many decision over both phases. Fail closed on

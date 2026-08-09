@@ -3913,19 +3913,29 @@ func (db *DB) GetDataVersionByPath(path string) int {
 func (db *DB) ResetAllMtimes() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	_, err := db.getWriter().Exec(
-		"UPDATE sessions SET file_mtime = 0",
-	)
+	// Both statements run in one transaction: a failure between them
+	// would otherwise leave mtimes zeroed with digests intact,
+	// letting the stat-digest shortcut defeat the forced re-sync.
+	tx, err := db.getWriter().Begin()
 	if err != nil {
+		return fmt.Errorf("beginning mtime reset tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(
+		"UPDATE sessions SET file_mtime = 0",
+	); err != nil {
 		return fmt.Errorf("resetting mtimes: %w", err)
 	}
 	// Clear provider_freshness so the stat-digest shortcut cannot
 	// defeat the forced re-sync. A DELETE (not a walk) is safe
 	// because the side-table is rebuilt on the next sync pass.
-	if _, err := db.getWriter().Exec(
+	if _, err := tx.Exec(
 		"DELETE FROM provider_freshness",
 	); err != nil {
 		return fmt.Errorf("clearing provider_freshness: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing mtime reset: %w", err)
 	}
 	return nil
 }

@@ -158,7 +158,8 @@ agentsview session get <id> [--format json]
 (e.g. `2026-07-16T00-09-00.236Z`) is not a canonical ID. Against the
 local archive the CLI resolves a bare timestamp to its canonical ID
 by walking the configured codebuff/freebuff roots, gated by
-`--machine` (default `local`).Against a remote store (`--server`, `--pg`) a bare Codebuff/Freebuff timestamp is rejected with an
+`--machine` (default `local`). Against a remote store (`--server`,
+`--pg`) a bare Codebuff/Freebuff timestamp is rejected with an
 explicit error pointing at `session list`, because a bare timestamp is
 intrinsically ambiguous across machines and projects.
 The rejection is scoped to the Codebuff/Freebuff timestamp shape;

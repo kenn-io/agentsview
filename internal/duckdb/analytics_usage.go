@@ -4703,13 +4703,13 @@ func (s *Store) GetSessionUsage(
 	var authoritativeCost *money.Money
 	var hasComputedCost, hasReportedCost bool
 	deduplicatedOutputTokens := 0
+	// hasRows is "any contributing row processed" and feeds cost
+	// aggregation only. HasTokenData is computed from the session
+	// flags alone (sess.HasTotalOutputTokens || sess.HasPeakContextTokens),
+	// exactly like SQLite and Postgres; no row-derived term may
+	// contribute, so neither cost-only rows nor token-bearing rows
+	// can flip it when the session flags are false.
 	hasRows := false
-	// hasTokenRows tracks whether any contributing row carries billable
-	// token counts. hasRows is "any contributing row processed" and is
-	// still used for cost aggregation; cost-only rows (e.g. a Codebuff
-	// row that reports only explicitCost with zero billable tokens)
-	// must not flip HasTokenData, matching SQLite and Postgres.
-	hasTokenRows := false
 	err = s.forEachSessionUsageAggregateRow(
 		ctx, db.UsageFilter{}, sessionID,
 		func(r duckUsageAggregateRow) error {
@@ -4750,7 +4750,6 @@ func (s *Store) GetSessionUsage(
 				r.billableReason != 0 || r.billableCacheCr != 0 ||
 				r.billableCacheRd != 0 || r.billableWebSearch > 0 {
 				hasComputedCost = true
-				hasTokenRows = true
 			}
 			if !priced {
 				unpriced[r.model] = true
@@ -4790,7 +4789,7 @@ func (s *Store) GetSessionUsage(
 		SessionID: sessionID, Agent: sess.Agent, Project: sess.Project,
 		TotalOutputTokens: max(sess.TotalOutputTokens-deduplicatedOutputTokens, 0),
 		PeakContextTokens: sess.PeakContextTokens,
-		HasTokenData:      hasTokenRows || sess.HasTotalOutputTokens || sess.HasPeakContextTokens,
+		HasTokenData:      sess.HasTotalOutputTokens || sess.HasPeakContextTokens,
 		Models:            sortedBoolKeys(models),
 		UnpricedModels:    sortedBoolKeys(unpriced),
 		BreakdownCount:    breakdownCount,

@@ -3300,14 +3300,13 @@ func TestDuckDBCostOnlyReportedSessionMatchesSQLite(t *testing.T) {
 // parity rule surfaced by roborev on ab050f8: a Codebuff session whose
 // contributor rows report only explicitCost (cost_source !=
 // 'copilot-reported', zero billable tokens) must NOT flip HasTokenData.
-// The fix in (*Store).sessionUsage splits hasRows ("any contributing
-// row processed") from hasTokenRows ("any row carries billable tokens"),
-// since the cost-only contributor path otherwise set hasRows = true and
-// spilled into HasTokenData via the prior `hasRows ||
-// sess.HasTotalOutputTokens || sess.HasPeakContextTokens` predicate.
-// Mirrors the copilot pattern in TestDuckDBCostOnlyReportedSessionMatchesSQLite
-// but uses a non-copilot cost_source so the row passes the
-// `contributes = true` gate (the copilot path early-returns).
+// (*Store).sessionUsage computes HasTokenData from the session flags
+// alone, matching SQLite and Postgres; a row-derived `hasRows ||`
+// term previously spilled cost-only contributor rows into
+// HasTokenData. Mirrors the copilot pattern in
+// TestDuckDBCostOnlyReportedSessionMatchesSQLite but uses a
+// non-copilot cost_source so the row passes the `contributes = true`
+// gate (the copilot path early-returns).
 func TestDuckDBCostOnlyCodebuffSessionHasTokenDataFalse(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
@@ -3352,6 +3351,57 @@ func TestDuckDBCostOnlyCodebuffSessionHasTokenDataFalse(t *testing.T) {
 			"sess.HasTotalOutputTokens || sess.HasPeakContextTokens "+
 			"short-circuit in (*Store).sessionUsage is the regression "+
 			"this test pins")
+}
+
+// TestDuckDBTokenRowsWithoutSessionFlagsMatchSQLite pins HasTokenData
+// parity with SQLite and PostgreSQL for the inverse of the cost-only
+// case: a session whose usage_events rows DO carry billable tokens but
+// whose session row has HasTotalOutputTokens and HasPeakContextTokens
+// false. SQLite (internal/db) and PostgreSQL compute HasTokenData from
+// the session flags alone, so both report false here; DuckDB must
+// agree instead of deriving true from the token-bearing rows.
+func TestDuckDBTokenRowsWithoutSessionFlagsMatchSQLite(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	// syncSession leaves TotalOutputTokens/PeakContextTokens and both
+	// Has* flags at their zero values, and with no messages in the
+	// batch the sanitizer keeps them false even though the usage
+	// event below carries tokens.
+	sess := syncSession(
+		"duck-flags-off", "alpha", "tokens without flags",
+		"2026-01-18T00:00:00.000Z", 0)
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: sess,
+		UsageEvents: []db.UsageEvent{{
+			Source: "shutdown", Model: "claude-sonnet-4-6",
+			InputTokens: 1000, OutputTokens: 500,
+			OccurredAt: "2026-01-18T00:01:00.000Z",
+			DedupKey:   "flags-off",
+		}},
+		DataVersion: 1, ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	want, err := local.GetSessionUsage(ctx, sess.ID, true)
+	require.NoError(t, err)
+	require.NotNil(t, want)
+	require.False(t, want.HasTokenData,
+		"SQLite computes HasTokenData from session flags only")
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	got, err := store.GetSessionUsage(ctx, sess.ID, true)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.False(t, got.HasTokenData,
+		"DuckDB must compute HasTokenData from session flags only, "+
+			"not from token-bearing usage rows, to match SQLite and "+
+			"PostgreSQL")
+	assert.Equal(t, want.HasTokenData, got.HasTokenData)
 }
 
 func TestDailyUsageCostsReasoningOnlyRows(t *testing.T) {

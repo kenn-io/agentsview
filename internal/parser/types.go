@@ -901,17 +901,21 @@ var Registry = []AgentDef{
 		// ~/.config/manicode/projects/<project>/chats/<timestamp>/. Each
 		// session directory holds chat-messages.json (primary),
 		// run-state.json (model/token metadata), and chat-meta.json.
-		// Freebuff sessions are distinguished from codebuff sessions
-		// via the AgentLabel field (set to "Freebuff" when run-state.json
-		// agentType contains "free"), not via separate agent types, to
-		// avoid double-discovery and skip-cache contention issues.
-		Type:        AgentCodebuff,
-		DisplayName: "Codebuff",
-		EnvVar:      "CODEBUFF_DIR",
-		ConfigKey:   "codebuff_dirs",
-		DefaultDirs: []string{".config/manicode/projects"},
-		IDPrefix:    "codebuff:",
-		FileBased:   true,
+		// Freebuff sessions do carry their own agent type: the parser
+		// sets Agent = AgentFreebuff and emits freebuff:-prefixed IDs
+		// when run-state.json agentType contains "free". Freebuff has
+		// no separate registry entry or provider factory, though; sync
+		// canonicalizes freebuff onto this Codebuff def (AgentByPrefix
+		// maps freebuff: IDs here), which avoids double-discovery and
+		// skip-cache contention over the shared roots.
+		Type:              AgentCodebuff,
+		DisplayName:       "Codebuff",
+		EnvVar:            "CODEBUFF_DIR",
+		ConfigKey:         "codebuff_dirs",
+		DefaultDirs:       []string{".config/manicode/projects"},
+		IDPrefix:          "codebuff:",
+		FileBased:         true,
+		PeriodicReconcile: true,
 		Usage: UsageCapabilities{
 			NoPerMessageTokenData: true,
 		},

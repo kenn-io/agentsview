@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1508,7 +1509,7 @@ func TestParseCodebuffMixedFormatMidnightRollover(t *testing.T) {
 		{"id":"u5","variant":"user","content":"after","timestamp":"02:00 PM"}
 	]`)
 
-	msgs, _, _, err := parseCodebuffMessages(data, sessionDate, "")
+	msgs, _, _, err := parseCodebuffMessages(data, sessionDate)
 	require.NoError(t, err)
 	require.Len(t, msgs, 5)
 
@@ -1539,4 +1540,109 @@ func TestParseCodebuffMixedFormatMidnightRollover(t *testing.T) {
 	require.Equal(t, 17, msgs[4].Timestamp.Day(),
 		"time-only after an RFC3339 anchor that crossed a date boundary must stay on the new date")
 	require.Equal(t, 14, msgs[4].Timestamp.Hour())
+}
+
+// TestParseCodebuffMessages_FirstMessageMidnightRollover pins the
+// rollover seed for the very first message: a session created late in
+// the local evening (directory 2026-07-17T06-58-00.000Z = 23:58 on
+// July 16 in UTC-7) whose first time-only message reads "12:01 AM"
+// belongs to the next local calendar day (July 17), not ~24 hours
+// before the session started. Before the fix prevHour started at -1,
+// so the first message could never roll over midnight and was stamped
+// July 16 00:01, skewing StartedAt.
+func TestParseCodebuffMessages_FirstMessageMidnightRollover(t *testing.T) {
+	// Pin time.Local to a fixed UTC-7 zone so the session-date parse
+	// and the time-only reconstruction are deterministic regardless of
+	// the host TZ (same pinning approach as the mixed-format rollover
+	// test above).
+	origLocal := time.Local
+	t.Cleanup(func() { time.Local = origLocal })
+	time.Local = time.FixedZone("UTC-7", -7*3600)
+
+	sessionDate := parseCodebuffSessionDate("2026-07-17T06-58-00.000Z")
+	require.Equal(t, 16, sessionDate.Day(), "06:58 UTC is 23:58 on July 16 in UTC-7")
+	require.Equal(t, 23, sessionDate.Hour())
+
+	data := []byte(`[
+		{"id":"u1","variant":"user","content":"hello","timestamp":"12:01 AM"},
+		{"id":"u2","variant":"user","content":"more","timestamp":"12:30 AM"}
+	]`)
+
+	msgs, startedAt, _, err := parseCodebuffMessages(data, sessionDate)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+
+	assert.Equal(t, 17, msgs[0].Timestamp.Day(),
+		"first time-only message past local midnight must land on the next calendar day")
+	assert.Equal(t, 0, msgs[0].Timestamp.Hour())
+	assert.Equal(t, 1, msgs[0].Timestamp.Minute())
+	assert.Equal(t, 17, msgs[1].Timestamp.Day())
+	assert.Equal(t, 17, startedAt.Day(),
+		"StartedAt must not be skewed ~24h before the session directory timestamp")
+}
+
+// TestCodebuffAttachSkillNames_DeterministicFallbackWinner pins two
+// contracts of the input-scan skill attribution: when two catalog
+// skills both appear as tokens in the tool input, the winner is
+// deterministic (first in lowercase-sorted order), and both the
+// direct-key path and the fallback token scan return the catalog's
+// canonical casing rather than the input's or the lowercased key.
+func TestCodebuffAttachSkillNames_DeterministicFallbackWinner(t *testing.T) {
+	msgs := []ParsedMessage{{
+		Role:       RoleAssistant,
+		HasToolUse: true,
+		ToolCalls: []ParsedToolCall{
+			{
+				ToolUseID: "tc-1",
+				ToolName:  "run_terminal_command",
+				InputJSON: `{"command":"zulu-skill then alpha-skill"}`,
+			},
+			{
+				ToolUseID: "tc-2",
+				ToolName:  "run_terminal_command",
+				InputJSON: `{"command":"alpha-skill"}`,
+			},
+		},
+	}}
+	skills := []codebuffSkill{
+		{Name: "Zulu-Skill", Description: "z"},
+		{Name: "Alpha-Skill", Description: "a"},
+	}
+	codebuffAttachSkillNames(msgs, skills)
+
+	assert.Equal(t, "Alpha-Skill", msgs[0].ToolCalls[0].SkillName,
+		"two-match input must pick the lowercase-sorted first skill with catalog casing")
+	assert.Equal(t, "Alpha-Skill", msgs[0].ToolCalls[1].SkillName,
+		"direct command-key match must return the catalog's canonical casing")
+}
+
+// TestParseCodebuffSession_SessionNameRuneSafeTruncation pins that
+// the 80-byte session-name shortening cannot split a multi-byte rune:
+// a first message of 100 two-byte runes must yield a valid-UTF-8 name
+// of the first 77 runes plus "...", not a raw 77-byte slice ending in
+// half a rune.
+func TestParseCodebuffSession_SessionNameRuneSafeTruncation(t *testing.T) {
+	longPrompt := strings.Repeat("é", 100)
+	chatMessages := `[
+		{
+			"id": "user-1",
+			"variant": "user",
+			"content": "` + longPrompt + `",
+			"timestamp": "2026-07-15T15:04:00Z"
+		}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {"agentType": "base2-deepseek"}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	sess, _, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	assert.True(t, utf8.ValidString(sess.SessionName),
+		"session name must remain valid UTF-8 after truncation")
+	assert.Equal(t, strings.Repeat("é", 77)+"...", sess.SessionName)
 }

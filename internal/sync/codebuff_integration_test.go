@@ -220,6 +220,28 @@ func (p *codebuffFingerprintCountingProvider) ParseIncremental(
 	return p.inner.ParseIncremental(ctx, req)
 }
 
+// ComputeMultiFileStatHash forwards to the inner provider through a
+// MultiFileStatHasher type assertion because parser.Provider does not
+// include it. Without this forwarding method the wrapper fails the
+// interface assertion in buildProviderStatHashers, no hasher is
+// registered for Codebuff, preParseStatHash stays nil, and the warm
+// pass of the cardinality test satisfies its "zero Fingerprint calls"
+// assertion through the legacy size/max-mtime composite arm — a path
+// unreachable in the production configuration — instead of the
+// per-component digest gate the test pins. Returning 0 on a failed
+// assertion keeps miswiring loud: a 0 digest is never persisted to
+// provider_freshness, so every warm pass would force fingerprints and
+// the zero-call assertion would fail.
+func (p *codebuffFingerprintCountingProvider) ComputeMultiFileStatHash(
+	chatPath string,
+) uint64 {
+	hasher, ok := p.inner.(parser.MultiFileStatHasher)
+	if !ok {
+		return 0
+	}
+	return hasher.ComputeMultiFileStatHash(chatPath)
+}
+
 // codebuffCountingFactory hands out a single prebuilt
 // codebuffFingerprintCountingProvider so every Engine.NewProvider call
 // observes through the same counter.
@@ -321,9 +343,13 @@ func TestSyncCodebuffPerEventWorkIsCardinalityIndependent(t *testing.T) {
 			"cold sync must call provider.Fingerprint once per "+
 				"discovered source")
 
-		// Warm pass: composite-stats still match what was persisted on
-		// the cold pass, so providerSourceFreshBeforeFingerprint
-		// returns fresh=true for every source and provider.Fingerprint
+		// Warm pass: the counting wrapper forwards
+		// ComputeMultiFileStatHash, so the engine registered a hasher
+		// and the cold pass persisted a per-component digest for every
+		// source. Each digest still matches the current stat snapshot,
+		// so providerSourceFreshBeforeFingerprint short-circuits
+		// through the production digest arm (stored == digest plus
+		// providerFreshDigestSourceCurrentInDB) and provider.Fingerprint
 		// is not called. A regression that lets the freshness gate
 		// fall through on unchanged sessions surfaces here as a
 		// non-zero call count for either archive — both must remain
