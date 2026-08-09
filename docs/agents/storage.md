@@ -48,8 +48,8 @@ atomically. Preserve sessions even when their source files no longer exist.
   `ATTACH`/`DETACH` and temporary-table lifecycle on that connection, while
   canonical child copies use registry-derived `INSERT ... SELECT` projections
   through the connection's `bun.Tx`. Explicit SQLite transforms remain only
-  where physical IDs, pins, provenance, or legacy relationships must be
-  remapped.
+  where physical IDs, pins, provenance, legacy relationships, or legacy
+  content sanitization must be remapped.
 - Backend-specific query construction is limited to this closed set of seams:
   lifecycle and connection-local operations; canonical schema creation,
   convergence, and validation; replication or mirror synchronization and

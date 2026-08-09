@@ -48,7 +48,9 @@ func (s *BunStore) RecentEdits(
 func (s *BunStore) recentEditsFrom(
 	ctx context.Context, store bun.IDB, params RecentEditsParams,
 ) (RecentEditsResult, error) {
-	timestampExpr := bunNullableTimestamp("m.timestamp")
+	timestampExpr := bunUsageTimestampColumn(
+		s.backend.TimestampOrderExpr, "m.timestamp",
+	)
 	sortExpr := s.backend.TimestampOrderExpr(timestampExpr)
 	predicates := []string{
 		"s.deleted_at IS NULL",

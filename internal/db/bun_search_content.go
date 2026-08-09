@@ -253,7 +253,7 @@ func (s *BunStore) searchContentHybrid(
 			return err
 		}
 		eligibleSemanticHits, err = filterContentHitsByLiveAnchor(
-			ctx, store, eligibleSemanticHits,
+			ctx, store, eligibleSemanticHits, s.backend.TimestampOrderExpr,
 		)
 		if err != nil {
 			return err
@@ -262,7 +262,7 @@ func (s *BunStore) searchContentHybrid(
 			eligibleSemanticHits, filter.Scope, candidateLimit,
 		)
 		liveLexicalLeg, err := filterContentHybridLegByLiveAnchor(
-			ctx, store, lexicalLeg,
+			ctx, store, lexicalLeg, s.backend.TimestampOrderExpr,
 		)
 		if err != nil {
 			return err
@@ -289,8 +289,11 @@ func (s *BunStore) searchContentHybrid(
 
 func filterContentHitsByLiveAnchor(
 	ctx context.Context, store bun.IDB, hits []ContentSearchHit,
+	timestampOrder func(string) string,
 ) ([]ContentSearchHit, error) {
-	messages, err := bunContentMessagesForHits(ctx, store, hits)
+	messages, err := bunContentMessagesForHits(
+		ctx, store, hits, timestampOrder,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -305,6 +308,7 @@ func filterContentHitsByLiveAnchor(
 
 func filterContentHybridLegByLiveAnchor(
 	ctx context.Context, store bun.IDB, leg contentHybridLeg,
+	timestampOrder func(string) string,
 ) (contentHybridLeg, error) {
 	hits := make([]ContentSearchHit, 0, len(leg.ranked))
 	for _, ranked := range leg.ranked {
@@ -312,7 +316,9 @@ func filterContentHybridLegByLiveAnchor(
 			hits = append(hits, hit)
 		}
 	}
-	liveHits, err := filterContentHitsByLiveAnchor(ctx, store, hits)
+	liveHits, err := filterContentHitsByLiveAnchor(
+		ctx, store, hits, timestampOrder,
+	)
 	if err != nil {
 		return contentHybridLeg{}, err
 	}
@@ -628,7 +634,9 @@ func (s *BunStore) hydrateContentSearchHits(
 		bySession[session.ID] = session
 	}
 
-	messages, err := bunContentMessagesForHits(ctx, store, hits)
+	messages, err := bunContentMessagesForHits(
+		ctx, store, hits, s.backend.TimestampOrderExpr,
+	)
 	if err != nil {
 		return ContentSearchPage{}, err
 	}
@@ -1038,7 +1046,7 @@ func normalizeBunContentTimestamp(value *string) string {
 			return parsed.UTC().Format(time.RFC3339Nano)
 		}
 	}
-	return *value
+	return ""
 }
 
 func (s *BunStore) bunContentSystemPrefixSQL(content, role string) string {
@@ -1047,6 +1055,7 @@ func (s *BunStore) bunContentSystemPrefixSQL(content, role string) string {
 
 func bunContentMessagesForHits(
 	ctx context.Context, store bun.IDB, hits []ContentSearchHit,
+	timestampOrder func(string) string,
 ) (map[bunContentMessageKey]bunContentMessage, error) {
 	out := make(map[bunContentMessageKey]bunContentMessage, len(hits))
 	const chunkSize = 400
@@ -1059,10 +1068,13 @@ func bunContentMessagesForHits(
 			args = append(args, hit.SessionID, hit.Ordinal)
 		}
 		var rows []bunContentMessage
+		timestampColumn := bunUsageTimestampColumn(
+			timestampOrder, "message.timestamp",
+		)
 		query := `WITH refs(session_id, ordinal) AS (VALUES ` +
 			strings.Join(values, ", ") + `)
 			SELECT message.session_id, message.ordinal, message.role,
-				message.content, message.timestamp, message.is_system,
+				message.content, ` + timestampColumn + ` AS timestamp, message.is_system,
 				message.is_sidechain
 			FROM refs
 			JOIN messages AS message

@@ -868,9 +868,7 @@ func (db *DB) upsertSessionWithProjectIdentity(
 			fmt.Errorf("beginning session identity upsert: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	result, err := upsertArchiveSessionRow(
-		context.Background(), tx, s, true,
-	)
+	result, err := upsertArchiveSessionRow(context.Background(), tx, s)
 	if err != nil {
 		return sessionUpsertResult{}, err
 	}

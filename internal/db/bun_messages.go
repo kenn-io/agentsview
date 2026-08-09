@@ -499,7 +499,10 @@ func (s *BunStore) GetSessionTiming(
 			return err
 		}
 		if err := store.NewSelect().Table("messages").
-			Column("ordinal", "timestamp", "has_tool_use").
+			Column("ordinal", "has_tool_use").
+			ColumnExpr(bunUsageTimestampColumn(
+				s.backend.TimestampOrderExpr, "timestamp",
+			)+" AS timestamp").
 			Where("session_id = ?", sessionID).
 			OrderExpr("ordinal ASC").Scan(ctx, &attempt.messages); err != nil {
 			return err

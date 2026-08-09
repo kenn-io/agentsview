@@ -338,9 +338,7 @@ func writeOneSessionBatchTx(
 		write.IdentityObservation = normalized
 	}
 
-	upsertResult, err := upsertArchiveSessionRow(
-		ctx, bunTx, write.Session, true,
-	)
+	upsertResult, err := upsertArchiveSessionRow(ctx, bunTx, write.Session)
 	if err != nil {
 		return 0, err
 	}

@@ -216,6 +216,29 @@ func TestGetSessionTiming_ReadOnlyFixture(t *testing.T) {
 	})
 }
 
+func TestGetSessionTimingTreatsMalformedMessageTimestampAsUnavailable(t *testing.T) {
+	d := testDB(t)
+	startedAt := "2026-08-09T10:00:00Z"
+	endedAt := "2026-08-09T10:05:00Z"
+	insertSession(t, d, "malformed-timing", "proj", func(session *Session) {
+		session.StartedAt = &startedAt
+		session.EndedAt = &endedAt
+		session.MessageCount = 1
+	})
+	require.NoError(t, d.InsertMessages([]Message{{
+		SessionID: "malformed-timing", Ordinal: 0, Role: "assistant",
+		Content: "provider timestamp", Timestamp: "not-a-timestamp", HasToolUse: true,
+	}}))
+
+	timing, err := d.GetSessionTiming(t.Context(), "malformed-timing")
+
+	require.NoError(t, err)
+	require.NotNil(t, timing)
+	require.Len(t, timing.Turns, 1)
+	assert.Empty(t, timing.Turns[0].StartedAt)
+	assert.Nil(t, timing.Turns[0].DurationMs)
+}
+
 // TestActiveGapCapConstantsAgree guards the two spellings of the active
 // gap cap against drifting apart: the velocity metric uses the seconds
 // form and the active-duration SQL uses the milliseconds form.

@@ -709,7 +709,7 @@ func (db *DB) upsertSession(s Session) (sessionUpsertResult, error) {
 		return sessionUpsertResult{}, fmt.Errorf("beginning session upsert: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	result, err := upsertArchiveSessionRow(ctx, tx, s, true)
+	result, err := upsertArchiveSessionRow(ctx, tx, s)
 	if err != nil {
 		return sessionUpsertResult{}, err
 	}
@@ -730,7 +730,6 @@ func upsertArchiveSessionRow(
 	ctx context.Context,
 	store bun.IDB,
 	s Session,
-	reviveSourceMissing bool,
 ) (sessionUpsertResult, error) {
 	_ = ValidateAndSanitize(&s, nil, nil)
 
@@ -790,7 +789,7 @@ func upsertArchiveSessionRow(
 		if err := preserveArchiveManagedSessionFields(&row, current); err != nil {
 			return sessionUpsertResult{}, err
 		}
-		if result.sourceMissing && reviveSourceMissing {
+		if result.sourceMissing {
 			row.DeletedAt = nil
 			row.DeletionCause = nil
 		}

@@ -350,26 +350,67 @@ func TestPricingResolverUnresolvedAggregatePreservesComputedProvenanceWithoutApp
 	assert.Equal(t, PricingApplication{}, model.Application)
 }
 
-func TestPricingResolverBuildBlockNormalizesLatestUpdatePrecision(t *testing.T) {
-	updatedAt := time.Date(
-		2026, 8, 9, 4, 9, 57, 310_282_585, time.UTC,
-	)
-	resolver := NewPricingResolver([]EffectivePricingRow{{
-		ModelPattern: "model",
-		Rates: ModelRates{
-			InputPerMTok: money.MustParseDollars("1"),
-			UpdatedAt:    &updatedAt,
-			Source:       PricingRowSourceFetched,
+func TestPricingResolverBuildBlockMatchesPersistedTimestampPrecision(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		row  EffectivePricingRow
+		want time.Time
+	}{
+		{
+			name: "base rate rounds above midpoint",
+			row: EffectivePricingRow{
+				ModelPattern: "base-model",
+				Rates: ModelRates{
+					InputPerMTok: money.MustParseDollars("1"),
+					UpdatedAt: new(time.Date(
+						2026, 8, 9, 4, 9, 57, 310_282_585, time.UTC,
+					)),
+					Source: PricingRowSourceFetched,
+				},
+			},
+			want: time.Date(2026, 8, 9, 4, 9, 57, 310_283_000, time.UTC),
 		},
-	}})
+		{
+			name: "base rate rounds midpoint to even",
+			row: EffectivePricingRow{
+				ModelPattern: "base-tie-model",
+				Rates: ModelRates{
+					InputPerMTok: money.MustParseDollars("1"),
+					UpdatedAt: new(time.Date(
+						2026, 8, 9, 4, 9, 57, 310_282_500, time.UTC,
+					)),
+					Source: PricingRowSourceFetched,
+				},
+			},
+			want: time.Date(2026, 8, 9, 4, 9, 57, 310_282_000, time.UTC),
+		},
+		{
+			name: "band rate rounds midpoint to even",
+			row: EffectivePricingRow{
+				ModelPattern: "band-model",
+				Rates: ModelRates{
+					InputPerMTok: money.MustParseDollars("1"),
+					Source:       PricingRowSourceFetched,
+					Bands: []PricingBand{{
+						AboveInputTokens: 100,
+						UpdatedAt: new(time.Date(
+							2026, 8, 9, 4, 9, 57, 310_282_500, time.UTC,
+						)),
+					}},
+				},
+			},
+			want: time.Date(2026, 8, 9, 4, 9, 57, 310_282_000, time.UTC),
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resolver := NewPricingResolver([]EffectivePricingRow{tt.row})
 
-	block, err := resolver.BuildBlock()
-	require.NoError(t, err)
-	require.NotNil(t, block.LatestRowUpdatedAt)
-	assert.Equal(t,
-		time.Date(2026, 8, 9, 4, 9, 57, 310_283_000, time.UTC),
-		*block.LatestRowUpdatedAt,
-	)
+			block, err := resolver.BuildBlock()
+			require.NoError(t, err)
+			require.NotNil(t, block.LatestRowUpdatedAt)
+			assert.Equal(t, tt.want, *block.LatestRowUpdatedAt)
+		})
+	}
 }
 
 func TestPricingResolverBuildBlockModelsAndFallback(t *testing.T) {
