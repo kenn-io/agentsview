@@ -764,6 +764,32 @@ describe("App root Sessions landing", () => {
     expect(sessions.filters.agent).toBe("codex");
   });
 
+  it("restores saved filters after visiting another route from root", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    const saved = JSON.stringify({
+      version: 2,
+      project: "saved-project",
+      agent: "codex",
+    });
+    localStorage.setItem("session-filters", saved);
+    sessions.initFromParams({ project: "saved-project", agent: "codex" });
+    setRootUrl();
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    expect(sessions.filters.project).toBe("");
+
+    router.navigate("usage");
+    await flushEffects();
+    router.navigate("sessions");
+    await flushEffects();
+
+    expect(window.location.pathname).toBe("/sessions");
+    expect(sessions.filters.project).toBe("saved-project");
+    expect(sessions.filters.agent).toBe("codex");
+  });
+
   it("promotes divergent root filters and resets them on root popstate", async () => {
     stubAppDependencies();
     vi.spyOn(sessions, "load").mockResolvedValue();
