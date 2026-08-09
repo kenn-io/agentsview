@@ -107,7 +107,7 @@ func (db *DB) ReadSessionReplicationSnapshot(
 
 		messageRows, err := scanBunMessages(ctx, store.NewSelect().
 			Model((*bunmodel.Message)(nil)).Where("session_id = ?", sessionID).
-			OrderExpr("ordinal ASC"))
+			OrderExpr("ordinal ASC"), preserveRawMessageTimestamps(db.backend))
 		if err != nil {
 			return fmt.Errorf("reading replication messages: %w", err)
 		}

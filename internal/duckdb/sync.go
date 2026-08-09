@@ -19,7 +19,10 @@ import (
 	"go.kenn.io/agentsview/internal/jsonutil"
 )
 
-const localSyncTimestampLayout = "2006-01-02T15:04:05.000Z"
+const (
+	localSyncTimestampLayout           = "2006-01-02T15:04:05.000Z"
+	invalidMessageTimestampFingerprint = "invalid-message-timestamp"
+)
 
 // Sync manages push-only mirroring from the SQLite primary archive to DuckDB.
 type Sync struct {
@@ -997,7 +1000,7 @@ func (s *Sync) sessionFingerprints(
 				// compare equal to a mirrored session: the transactional push
 				// will retry the row, reject its malformed timestamp, and count
 				// the session-local error without advancing mirror metadata.
-				out[sess.ID] = "invalid-message-timestamp"
+				out[sess.ID] = invalidMessageTimestampFingerprint
 				continue
 			}
 			return nil, fmt.Errorf("session fingerprint snapshot %s: %w", sess.ID, err)
@@ -1005,6 +1008,10 @@ func (s *Sync) sessionFingerprints(
 		s.stampReplicationSnapshot(&snapshot)
 		out[sess.ID], err = db.CanonicalSessionReplicationFingerprint(snapshot)
 		if err != nil {
+			if errors.Is(err, bunmodel.ErrUnsupportedTimestamp) {
+				out[sess.ID] = invalidMessageTimestampFingerprint
+				continue
+			}
 			return nil, fmt.Errorf("encoding session fingerprint %s: %w", sess.ID, err)
 		}
 	}

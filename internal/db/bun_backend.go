@@ -36,6 +36,10 @@ type bunCurationSessionLocker interface {
 	LockCurationSession(context.Context, bun.IDB, string) error
 }
 
+type bunRawMessageTimestampReader interface {
+	PreserveRawMessageTimestamps() bool
+}
+
 // BunTablePresenceProbe is implemented by adapters whose compatible read-only
 // schemas may omit optional canonical tables.
 type BunTablePresenceProbe interface {
@@ -103,6 +107,8 @@ type sqliteBunBackend struct {
 var _ BunBackend = (*sqliteBunBackend)(nil)
 
 func (*sqliteBunBackend) Name() string { return "sqlite" }
+
+func (*sqliteBunBackend) PreserveRawMessageTimestamps() bool { return true }
 
 func (b *sqliteBunBackend) ReadOnly() bool { return b.store.readOnly }
 
