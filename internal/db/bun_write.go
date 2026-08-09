@@ -14,10 +14,7 @@ import (
 	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
 
-const (
-	canonicalWriteBatchSize     = 100
-	sqliteHistoricVariableLimit = 999
-)
+const canonicalWriteBatchSize = 100
 
 var (
 	canonicalSessionConflictClause = canonicalConflictUpdateClause(
@@ -399,9 +396,8 @@ func writeArchiveMessageRows(
 		}
 	}
 	columnCount := len(canonicalArchiveMessageColumns)
-	batchSize := max(1, sqliteHistoricVariableLimit/columnCount)
-	for start := 0; start < len(messages); start += batchSize {
-		end := min(start+batchSize, len(messages))
+	for start := 0; start < len(messages); start += canonicalWriteBatchSize {
+		end := min(start+canonicalWriteBatchSize, len(messages))
 		batch := messages[start:end]
 		args := make([]any, 0, len(batch)*columnCount)
 		for _, message := range batch {

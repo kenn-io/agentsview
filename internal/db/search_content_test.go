@@ -56,6 +56,28 @@ func TestSearchContentSubstringMessages(t *testing.T) {
 	assert.Contains(t, m.Snippet, "DATABASE_URL", "snippet")
 }
 
+func TestSearchContentTreatsMalformedMessageTimestampAsUnavailable(t *testing.T) {
+	d := testDB(t)
+	seedSearchSession(t, d, "malformed-search", "proj", [][2]string{
+		{"user", "find the malformed timestamp row"},
+		{"assistant", "done"},
+	})
+	_, err := d.getWriter().Exec(
+		"UPDATE messages SET timestamp = ? WHERE session_id = ? AND ordinal = ?",
+		"not-a-timestamp", "malformed-search", 0,
+	)
+	require.NoError(t, err)
+
+	result, err := d.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "malformed timestamp", Mode: "substring",
+		Sources: []string{"messages"}, Limit: 50,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, result.Matches, 1)
+	assert.Empty(t, result.Matches[0].Timestamp)
+}
+
 // TestSearchContentRedactsStraddlingSecret pins the default (non-reveal)
 // content-search guarantee: a secret adjacent to the match that extends past
 // the snippet window must not leak. A snippet-only redaction would cut the PEM

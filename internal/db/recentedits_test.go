@@ -224,6 +224,19 @@ func TestRecentEditsNullTimestampsSortLast(t *testing.T) {
 	assert.Equal(t, "null.go", res.Files[1].FilePath, "null-timestamp file last")
 }
 
+func TestRecentEditsTreatsMalformedMessageTimestampAsUnavailable(t *testing.T) {
+	d := testDB(t)
+	seedEdit(t, d, "proj", "malformed-edit", 1, 0, "broken.go", "not-a-timestamp")
+
+	result, err := d.RecentEdits(t.Context(), RecentEditsParams{})
+
+	require.NoError(t, err)
+	require.Len(t, result.Files, 1)
+	assert.Empty(t, result.Files[0].LastEditedAt)
+	require.Len(t, result.Files[0].Edits, 1)
+	assert.Empty(t, result.Files[0].Edits[0].Timestamp)
+}
+
 func TestRecentEditsTieByCallIndex(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
