@@ -350,6 +350,28 @@ func TestPricingResolverUnresolvedAggregatePreservesComputedProvenanceWithoutApp
 	assert.Equal(t, PricingApplication{}, model.Application)
 }
 
+func TestPricingResolverBuildBlockNormalizesLatestUpdatePrecision(t *testing.T) {
+	updatedAt := time.Date(
+		2026, 8, 9, 4, 9, 57, 310_282_585, time.UTC,
+	)
+	resolver := NewPricingResolver([]EffectivePricingRow{{
+		ModelPattern: "model",
+		Rates: ModelRates{
+			InputPerMTok: money.MustParseDollars("1"),
+			UpdatedAt:    &updatedAt,
+			Source:       PricingRowSourceFetched,
+		},
+	}})
+
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+	require.NotNil(t, block.LatestRowUpdatedAt)
+	assert.Equal(t,
+		time.Date(2026, 8, 9, 4, 9, 57, 310_283_000, time.UTC),
+		*block.LatestRowUpdatedAt,
+	)
+}
+
 func TestPricingResolverBuildBlockModelsAndFallback(t *testing.T) {
 	resolver := NewPricingResolver([]EffectivePricingRow{
 		{
