@@ -17,6 +17,7 @@
     fetchRecallEntries,
     fetchRecallExtractionProgress,
     fetchRecallExtractionStatus,
+    reviewRecallEntry,
     retireRecallExtractionGeneration,
   } from "../../api/recall.js";
   import type {
@@ -26,6 +27,7 @@
     RecallExtractProgress,
     RecallExtractProgressState,
     RecallExtractionStatus,
+    RecallReviewAction,
   } from "../../api/types/recall.js";
   import { ApiError, isAbortError } from "../../api/runtime.js";
   import { formatDateTime, m } from "../../i18n/index.js";
@@ -47,6 +49,7 @@
   ];
   const REVIEW_STATES = [
     "human_reviewed",
+    "human_rejected",
     "unreviewed_auto",
     "calibrated_auto",
     "eval_raw",
@@ -76,6 +79,9 @@
   let generationAction = $state<GenerationAction | null>(null);
   let generationActionLoading = $state(false);
   let generationActionError = $state("");
+  let reviewingEntryIds = $state<string[]>([]);
+  let reviewErrors = $state<Record<string, string>>({});
+  let archiveEntry = $state<RecallEntry | null>(null);
   let search = $state("");
   let query = $state("");
   let project = $state("");
@@ -141,8 +147,8 @@
     },
     ...REVIEW_STATES.map((name) => ({
       name,
-      label: name,
-      displayLabel: name,
+      label: reviewStateLabel(name),
+      displayLabel: reviewStateLabel(name),
     })),
   ]);
   const progressStateOptions = $derived<SegmentedControlOption[]>([
@@ -314,6 +320,66 @@
     }
   }
 
+  function reviewStateLabel(state: string): string {
+    switch (state) {
+      case "human_reviewed":
+        return m.recall_page_review_state_human_reviewed();
+      case "human_rejected":
+        return m.recall_page_review_state_human_rejected();
+      case "unreviewed_auto":
+        return m.recall_page_review_state_unreviewed_auto();
+      case "calibrated_auto":
+        return m.recall_page_review_state_calibrated_auto();
+      case "eval_raw":
+        return m.recall_page_review_state_eval_raw();
+      default:
+        return state;
+    }
+  }
+
+  function isReviewable(entry: RecallEntry): boolean {
+    return entry.status === "accepted" &&
+      entry.review_state === "unreviewed_auto";
+  }
+
+  function keepAfterReview(entry: RecallEntry): boolean {
+    return entry.status === "accepted" &&
+      (!reviewState || entry.review_state === reviewState);
+  }
+
+  async function submitReview(
+    entry: RecallEntry,
+    action: RecallReviewAction,
+  ) {
+    if (reviewingEntryIds.includes(entry.id)) return;
+    reviewingEntryIds = [...reviewingEntryIds, entry.id];
+    reviewErrors = { ...reviewErrors, [entry.id]: "" };
+    try {
+      const updated = await reviewRecallEntry(entry.id, action);
+      const keep = keepAfterReview(updated);
+      entries = keep
+        ? entries.map((item) => item.id === updated.id ? updated : item)
+        : entries.filter((item) => item.id !== updated.id);
+      if (!keep) {
+        expandedEntryIds = expandedEntryIds.filter((id) => id !== updated.id);
+      }
+      archiveEntry = null;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      reviewErrors = {
+        ...reviewErrors,
+        [entry.id]: m.recall_page_review_error({ error: detail }),
+      };
+    } finally {
+      reviewingEntryIds = reviewingEntryIds.filter((id) => id !== entry.id);
+    }
+  }
+
+  function closeArchiveReview() {
+    if (archiveEntry && reviewingEntryIds.includes(archiveEntry.id)) return;
+    archiveEntry = null;
+  }
+
   function progressTimestamp(value: string): string {
     return formatDateTime(value, {
       dateStyle: "medium",
@@ -387,6 +453,28 @@
         surface="solid"
         disabled={generationActionLoading}
         onclick={confirmGenerationAction}
+      />
+    </span>
+  {/if}
+{/snippet}
+
+{#snippet archiveReviewFooter()}
+  {#if archiveEntry}
+    {@const busy = reviewingEntryIds.includes(archiveEntry.id)}
+    <span class="review-modal-actions">
+      <Button
+        label={m.recall_page_review_cancel()}
+        tone="neutral"
+        surface="outline"
+        disabled={busy}
+        onclick={closeArchiveReview}
+      />
+      <Button
+        label={m.recall_page_review_archive()}
+        tone="danger"
+        surface="solid"
+        disabled={busy}
+        onclick={() => submitReview(archiveEntry!, "archive")}
       />
     </span>
   {/if}
@@ -659,6 +747,22 @@
     </Modal>
   {/if}
 
+  {#if archiveEntry}
+    <Modal
+      title={m.recall_page_review_archive_title()}
+      closeLabel={m.recall_page_review_close()}
+      tone="danger"
+      width="460px"
+      closeOnOverlayClick={!reviewingEntryIds.includes(archiveEntry.id)}
+      onclose={closeArchiveReview}
+      footer={archiveReviewFooter}
+    >
+      <p class="review-modal-copy">
+        {m.recall_page_review_archive_message({ title: archiveEntry.title })}
+      </p>
+    </Modal>
+  {/if}
+
   <div class="recall-toolbar">
     <SearchInput
       class="recall-search"
@@ -775,7 +879,7 @@
               </td>
               <td><span class="entry-type">{entry.type}</span></td>
               <td class="project-cell">{entry.project ?? "—"}</td>
-              <td class="review-cell">{entry.review_state}</td>
+              <td class="review-cell">{reviewStateLabel(entry.review_state)}</td>
             </tr>
             {#if expanded}
               <tr class="entry-detail-row">
@@ -825,6 +929,48 @@
                             <span>{evidenceLabel(evidence)}</span>
                           {/if}
                         {/each}
+                      </div>
+                    {/if}
+                    {#if isReviewable(entry)}
+                      {@const busy = reviewingEntryIds.includes(entry.id)}
+                      <div class="entry-review">
+                        <div class="entry-review-actions">
+                          <Button
+                            size="sm"
+                            tone="info"
+                            surface="solid"
+                            label={m.recall_page_review_approve()}
+                            disabled={busy || !entry.provenance_ok}
+                            title={!entry.provenance_ok
+                              ? m.recall_page_review_approve_disabled()
+                              : undefined}
+                            onclick={() => submitReview(entry, "approve")}
+                          />
+                          <Button
+                            size="sm"
+                            tone="danger"
+                            surface="outline"
+                            label={m.recall_page_review_archive()}
+                            disabled={busy}
+                            onclick={() => {
+                              reviewErrors = {
+                                ...reviewErrors,
+                                [entry.id]: "",
+                              };
+                              archiveEntry = entry;
+                            }}
+                          />
+                        </div>
+                        {#if !entry.provenance_ok}
+                          <p class="entry-review-note">
+                            {m.recall_page_review_approve_disabled()}
+                          </p>
+                        {/if}
+                        {#if reviewErrors[entry.id]}
+                          <p class="entry-review-error">
+                            {reviewErrors[entry.id]}
+                          </p>
+                        {/if}
                       </div>
                     {/if}
                   </div>
@@ -1009,8 +1155,13 @@
     display: contents;
   }
 
+  .review-modal-actions {
+    display: contents;
+  }
+
   .generation-modal-copy,
-  .generation-action-error {
+  .generation-action-error,
+  .review-modal-copy {
     margin: 0;
     color: var(--text-secondary);
     font-size: 12px;
@@ -1252,6 +1403,30 @@
   :global(.evidence-button) {
     font-family: var(--font-mono);
     font-size: 9px;
+  }
+
+  .entry-review {
+    margin-top: var(--space-5);
+    padding-top: var(--space-5);
+    border-top: 1px solid var(--border-default);
+  }
+
+  .entry-review-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+  }
+
+  .entry-review-note,
+  .entry-review-error {
+    margin-top: var(--space-3);
+    color: var(--text-muted);
+    font-size: 10px;
+    line-height: 1.5;
+  }
+
+  .entry-review-error {
+    color: var(--slow-fg);
   }
 
   .load-more {
