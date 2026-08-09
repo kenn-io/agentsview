@@ -12495,7 +12495,9 @@ func (e *Engine) projectIdentityObservation(
 	if obs.GitBranch != "" {
 		obs.CheckoutState = export.CheckoutBranch
 	} else {
-		obs.CheckoutState, obs.GitBranch = readGitCheckout(cached.gitDir)
+		obs.CheckoutState, obs.GitBranch = readGitCheckout(
+			cached.gitDir, e.mayProbeLocalPath,
+		)
 	}
 	return obs, true
 }
@@ -12694,9 +12696,14 @@ func discoverLocalGitIdentity(
 		worktreeKind:   relationship,
 	}
 	// The common directory comes from gitfile contents and can point
-	// anywhere, including a protected location the vetted cwd never named.
-	if commonDir != "" && mayProbe(commonDir) {
-		result.remotes = readGitRemotes(filepath.Join(commonDir, "config"))
+	// anywhere, including a protected location the vetted cwd never named,
+	// and the config file inside a vetted one can itself be a symlink out;
+	// vetting the exact file path covers both.
+	if commonDir != "" {
+		configPath := filepath.Join(commonDir, "config")
+		if mayProbe(configPath) {
+			result.remotes = readGitRemotes(configPath)
+		}
 	}
 	return result
 }
@@ -12738,22 +12745,8 @@ func looksWindowsDrivePath(p string) bool {
 func findLocalGitRoot(start string, mayProbe func(string) bool) string {
 	dir := filepath.Clean(start)
 	for {
-		gitPath := filepath.Join(dir, ".git")
-		info, err := os.Lstat(gitPath)
-		if err == nil && info.Mode()&os.ModeSymlink != 0 {
-			// A .git symlink into a refused location marks a repo
-			// boundary we must not look through: return the directory
-			// without following the link; gitDirectoryContext refuses
-			// the reads under it.
-			if !mayProbe(gitPath) {
-				return dir
-			}
-			info, err = os.Stat(gitPath)
-		}
-		if err == nil {
-			if info.IsDir() || info.Mode().IsRegular() {
-				return dir
-			}
+		if gitEntryMarksRoot(filepath.Join(dir, ".git"), mayProbe) {
+			return dir
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -12761,6 +12754,28 @@ func findLocalGitRoot(start string, mayProbe func(string) bool) string {
 		}
 		dir = parent
 	}
+}
+
+// gitEntryMarksRoot reports whether gitPath denotes a git directory or
+// gitfile, following a symlink only when its target passes mayProbe. A
+// refused link still marks a root: it is a repo boundary we must not look
+// through, and gitDirectoryContext refuses the reads under it.
+func gitEntryMarksRoot(gitPath string, mayProbe func(string) bool) bool {
+	info, err := os.Lstat(gitPath)
+	if err != nil {
+		return false
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		if !mayProbe(gitPath) {
+			return true
+		}
+		followed, err := os.Stat(gitPath)
+		if err != nil {
+			return false
+		}
+		return followed.IsDir() || followed.Mode().IsRegular()
+	}
+	return info.IsDir() || info.Mode().IsRegular()
 }
 
 func gitDirectoryContext(
@@ -12800,7 +12815,14 @@ func gitDirectoryContext(
 	}
 	commonDir = line
 	relationship = export.WorktreeMain
-	if data, err := os.ReadFile(filepath.Join(line, "commondir")); err == nil {
+	// The commondir file sits inside the vetted gitdir, but as a symlink
+	// it can lead anywhere; vet the exact path (classification follows
+	// links) before reading through it.
+	commondirPath := filepath.Join(line, "commondir")
+	if !mayProbe(commondirPath) {
+		return filepath.Clean(line), filepath.Clean(commonDir), relationship
+	}
+	if data, err := os.ReadFile(commondirPath); err == nil {
 		common := strings.TrimSpace(string(data))
 		if filepath.IsAbs(common) {
 			commonDir = common
@@ -12832,11 +12854,19 @@ func repositoryPathForGitContext(
 	return filepath.Clean(repositoryPath)
 }
 
-func readGitCheckout(gitDir string) (export.CheckoutState, string) {
+func readGitCheckout(
+	gitDir string, mayProbe func(string) bool,
+) (export.CheckoutState, string) {
 	if gitDir == "" {
 		return export.CheckoutUnknown, ""
 	}
-	data, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
+	// HEAD sits inside the vetted git directory, but as a symlink it can
+	// lead anywhere; vet the exact path before reading through it.
+	headPath := filepath.Join(gitDir, "HEAD")
+	if !mayProbe(headPath) {
+		return export.CheckoutUnknown, ""
+	}
+	data, err := os.ReadFile(headPath)
 	if err != nil {
 		return export.CheckoutUnknown, ""
 	}

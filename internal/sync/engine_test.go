@@ -5813,6 +5813,143 @@ func TestProjectIdentityObservationSkipsProtectedCommonDir(t *testing.T) {
 		"a protected common directory must not be read for remotes")
 }
 
+// TestProjectIdentityObservationSkipsSymlinkedMetadataFiles pins that the
+// exact metadata-file paths are vetted before reading: HEAD, config, and
+// commondir sit inside vetted directories, but as symlinks they can lead
+// into a protected folder, and reading through one would raise the consent
+// prompt every directory-level vet already prevented. Each protected target
+// holds real git data, so a missing vet is caught by that data leaking into
+// the observation.
+func TestProjectIdentityObservationSkipsSymlinkedMetadataFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the probe classifier walks POSIX paths and symlinks")
+	}
+	tests := []struct {
+		name  string
+		build func(t *testing.T, home, gitDir string)
+		check func(t *testing.T, obs export.ProjectIdentityObservation)
+	}{
+		{
+			name: "HEAD symlink",
+			build: func(t *testing.T, home, gitDir string) {
+				t.Helper()
+				target := filepath.Join(home, "Documents", "head-target")
+				require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o755))
+				require.NoError(t, os.WriteFile(
+					target, []byte("ref: refs/heads/leak-branch\n"), 0o644,
+				))
+				require.NoError(t, os.Symlink(
+					target, filepath.Join(gitDir, "HEAD"),
+				))
+			},
+			check: func(t *testing.T, obs export.ProjectIdentityObservation) {
+				t.Helper()
+				assert.Empty(t, obs.GitBranch,
+					"HEAD must not be read through a protected symlink")
+			},
+		},
+		{
+			name: "config symlink",
+			build: func(t *testing.T, home, gitDir string) {
+				t.Helper()
+				target := filepath.Join(home, "Documents", "config-target")
+				require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o755))
+				require.NoError(t, os.WriteFile(
+					target,
+					[]byte("[remote \"origin\"]\n\turl = https://github.com/acme/leak.git\n"),
+					0o644,
+				))
+				require.NoError(t, os.Symlink(
+					target, filepath.Join(gitDir, "config"),
+				))
+			},
+			check: func(t *testing.T, obs export.ProjectIdentityObservation) {
+				t.Helper()
+				assert.Empty(t, obs.GitRemote,
+					"config must not be read through a protected symlink")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database := openTestDB(t)
+			home := t.TempDir()
+			repo := filepath.Join(home, "src", "repo")
+			gitDir := filepath.Join(repo, ".git")
+			require.NoError(t, os.MkdirAll(gitDir, 0o755))
+			tt.build(t, home, gitDir)
+			engine := NewEngine(database, EngineConfig{
+				Machine: "current-machine",
+			})
+			t.Cleanup(engine.Close)
+			engine.goos = "darwin"
+			engine.homeDir = home
+
+			project := "meta-" + strings.ReplaceAll(tt.name, " ", "-")
+			require.NoError(t, engine.writeProjectIdentityObservation(
+				t.Context(), db.Session{
+					ID: "identity-" + project, Project: project,
+					Machine: "current-machine", Agent: "codex", Cwd: repo,
+					StartedAt: strPtr(time.Now().UTC().Format(time.RFC3339Nano)),
+				},
+			))
+
+			observations, err := database.ListProjectIdentityObservations(
+				t.Context(), []string{project},
+			)
+			require.NoError(t, err)
+			require.Len(t, observations, 1)
+			tt.check(t, observations[0])
+		})
+	}
+}
+
+// TestProjectIdentityObservationSkipsSymlinkedCommondirFile pins the same
+// vet for the commondir file inside a linked worktree's gitdir: reading it
+// through a protected symlink would both touch the protected folder and
+// misclassify the worktree as linked.
+func TestProjectIdentityObservationSkipsSymlinkedCommondirFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the probe classifier walks POSIX paths and symlinks")
+	}
+	database := openTestDB(t)
+	home := t.TempDir()
+	gitStore := filepath.Join(home, "gitstore", "wt-git")
+	require.NoError(t, os.MkdirAll(gitStore, 0o755))
+	target := filepath.Join(home, "Documents", "commondir-target")
+	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o755))
+	require.NoError(t, os.WriteFile(target, []byte("../..\n"), 0o644))
+	require.NoError(t, os.Symlink(
+		target, filepath.Join(gitStore, "commondir"),
+	))
+	worktree := filepath.Join(home, "src", "wt")
+	require.NoError(t, os.MkdirAll(worktree, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(worktree, ".git"),
+		[]byte("gitdir: "+gitStore+"\n"), 0o644,
+	))
+	engine := NewEngine(database, EngineConfig{Machine: "current-machine"})
+	t.Cleanup(engine.Close)
+	engine.goos = "darwin"
+	engine.homeDir = home
+
+	require.NoError(t, engine.writeProjectIdentityObservation(
+		t.Context(), db.Session{
+			ID: "identity-commondir-link", Project: "commondir-link-project",
+			Machine: "current-machine", Agent: "codex", Cwd: worktree,
+			StartedAt: strPtr(time.Now().UTC().Format(time.RFC3339Nano)),
+		},
+	))
+
+	observations, err := database.ListProjectIdentityObservations(
+		t.Context(), []string{"commondir-link-project"},
+	)
+	require.NoError(t, err)
+	require.Len(t, observations, 1)
+	assert.Equal(t, export.WorktreeMain, observations[0].WorktreeRelationship,
+		"an unread commondir must leave the gitdir classified as main")
+}
+
 // TestProjectIdentityObservationScansProtectedPathWhenOptedIn pins that
 // scan_protected_paths restores full git identity for users who keep code in
 // Documents and accept the macOS prompt.

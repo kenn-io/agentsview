@@ -179,6 +179,89 @@ func TestRepoRootFromSiblingsSkipsRefusedGitfileTargets(t *testing.T) {
 		"a refused sibling gitfile target must not name the main repository")
 }
 
+// TestRepoRootFromSiblingsBoundaryCheckDoesNotFollowRefusedSymlink pins that
+// the ancestor boundary check in missing-cwd recovery types a refused .git
+// symlink without following it: the old following stat traversed the link
+// into the guarded target before any vet ran.
+func TestRepoRootFromSiblingsBoundaryCheckDoesNotFollowRefusedSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the probe classifier walks POSIX paths and symlinks")
+	}
+	home := t.TempDir()
+	guarded := filepath.Join(home, "Documents", "main", ".git")
+	require.NoError(t, os.MkdirAll(guarded, 0o755))
+	ancestor := filepath.Join(home, "work")
+	require.NoError(t, os.MkdirAll(ancestor, 0o755))
+	gitLink := filepath.Join(ancestor, ".git")
+	require.NoError(t, os.Symlink(guarded, gitLink))
+
+	// Exercise the real classifier with an injected darwin home: the guard
+	// receives the symlink's own path and must refuse it by resolving to
+	// the guarded target.
+	origGuard := probeGitfileTarget
+	t.Cleanup(func() { probeGitfileTarget = origGuard })
+	probeGitfileTarget = func(cleaned string) bool {
+		return export.ClassifyLocalPathProbe("darwin", home, cleaned) ==
+			export.LocalPathProbeSafe
+	}
+	origStat := osStat
+	t.Cleanup(func() { osStat = origStat })
+	osStat = func(path string) (os.FileInfo, error) {
+		if path == gitLink {
+			assert.Fail(t, "a refused .git symlink must not be stat-followed", path)
+		}
+		return origStat(path)
+	}
+
+	// The recorded cwd is a deleted child of ancestor, so recovery reaches
+	// the boundary check with ancestor's refused .git symlink. The refused
+	// entry marks ancestor as the repo boundary, so its basename becomes
+	// the path-only name; the stat spy above is what catches a regression
+	// back to a following stat.
+	deleted := filepath.Join(ancestor, "gone", "sub")
+	assert.Equal(t, "work", ExtractProjectFromCwd(deleted),
+		"a refused boundary must name the boundary directory, unread")
+}
+
+// TestExtractProjectFromCwdSymlinkedCommondirFallsBack pins the exact-file
+// vet on the parser side: a vetted gitdir whose commondir file is a symlink
+// into a guarded location must not be read through, so the main repository
+// it names cannot be recovered.
+func TestExtractProjectFromCwdSymlinkedCommondirFallsBack(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the probe classifier walks POSIX paths and symlinks")
+	}
+	home := t.TempDir()
+	mainRepo := filepath.Join(home, "src", "main-repo")
+	require.NoError(t, os.MkdirAll(filepath.Join(mainRepo, ".git"), 0o755))
+	gitStore := filepath.Join(home, "gitstore", "wt-git")
+	require.NoError(t, os.MkdirAll(gitStore, 0o755))
+	target := filepath.Join(home, "Documents", "commondir-target")
+	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o755))
+	require.NoError(t, os.WriteFile(
+		target, []byte(filepath.Join(mainRepo, ".git")+"\n"), 0o644,
+	))
+	require.NoError(t, os.Symlink(
+		target, filepath.Join(gitStore, "commondir"),
+	))
+	worktree := filepath.Join(home, "work", "wt-x")
+	require.NoError(t, os.MkdirAll(worktree, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(worktree, ".git"),
+		[]byte("gitdir: "+gitStore+"\n"), 0o644,
+	))
+
+	origGuard := probeGitfileTarget
+	t.Cleanup(func() { probeGitfileTarget = origGuard })
+	probeGitfileTarget = func(cleaned string) bool {
+		return export.ClassifyLocalPathProbe("darwin", home, cleaned) ==
+			export.LocalPathProbeSafe
+	}
+
+	assert.Equal(t, "wt_x", ExtractProjectFromCwd(worktree),
+		"a commondir symlink into a guarded location must not be read")
+}
+
 // TestDefaultProbeGitfileTargetRefusesAutomount pins the asymmetry between
 // the two default guards on macOS: a literal automount cwd stays probeable
 // because isForeignOSPath vetted it with the resolved-autofs probe before

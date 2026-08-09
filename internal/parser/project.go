@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,24 +28,30 @@ var (
 	osLstat = os.Lstat
 )
 
+// errRefusedGitEntry marks a .git entry whose symlink target the
+// protected-path policy refuses. Callers stop at the boundary without
+// following the link or escalating to git, which would traverse the same
+// target.
+var errRefusedGitEntry = errors.New(
+	"git entry target refused by protected-path policy",
+)
+
 // statGitEntry types a .git entry without following a refused symlink: it
 // Lstats first, and only follows (via osStat) when the entry is not a link
 // or its link target passes the gitfile-target guard. A refused link
-// reports refused=true so callers stop at the boundary without escalating
-// to git, which would traverse the same target.
-func statGitEntry(gitPath string) (info os.FileInfo, refused bool, err error) {
-	info, err = osLstat(gitPath)
+// returns errRefusedGitEntry; info is non-nil exactly when err is nil.
+func statGitEntry(gitPath string) (os.FileInfo, error) {
+	info, err := osLstat(gitPath)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	if info.Mode()&os.ModeSymlink == 0 {
-		return info, false, nil
+		return info, nil
 	}
 	if !probeGitfileTarget(gitPath) {
-		return nil, true, nil
+		return nil, errRefusedGitEntry
 	}
-	info, err = osStat(gitPath)
-	return info, false, err
+	return osStat(gitPath)
 }
 
 // allowProtectedPathProbes lets project extraction probe recorded working
@@ -647,8 +654,8 @@ func findGitRepoRoot(ctx context.Context, cwd string) string {
 func findGitRepoRootLocal(dir string) (root string, conservative bool) {
 	for {
 		gitPath := filepath.Join(dir, ".git")
-		info, refused, err := statGitEntry(gitPath)
-		if refused {
+		info, err := statGitEntry(gitPath)
+		if errors.Is(err, errRefusedGitEntry) {
 			// A .git symlink into a refused location marks a repo
 			// boundary we must not look through. Stop here without a
 			// conservative result so the caller cannot escalate to git.
@@ -706,9 +713,11 @@ func gitMainRoot(ctx context.Context, dir string) string {
 // candidates must agree on the same root to avoid
 // misattributing unrelated paths.
 func repoRootFromSiblings(dir, cwd string) string {
-	// If dir is itself a repo or worktree, let the normal
-	// upward walk handle it.
-	if _, err := osStat(filepath.Join(dir, ".git")); err == nil {
+	// If dir is itself a repo or worktree, let the normal upward walk
+	// handle it. A refused .git symlink counts too: it is a boundary the
+	// walk stops at, and typing it must not follow the link.
+	if _, err := statGitEntry(filepath.Join(dir, ".git")); err == nil ||
+		errors.Is(err, errRefusedGitEntry) {
 		return ""
 	}
 	entries, err := os.ReadDir(dir)
@@ -731,8 +740,8 @@ func repoRootFromSiblings(dir, cwd string) string {
 			continue
 		}
 		gitPath := filepath.Join(dir, entry.Name(), ".git")
-		info, refused, err := statGitEntry(gitPath)
-		if refused || err != nil {
+		info, err := statGitEntry(gitPath)
+		if err != nil {
 			continue
 		}
 		if info.IsDir() {
@@ -902,11 +911,23 @@ func gitFileTargetsProbeable(dir, gitPath string) bool {
 	if !filepath.IsAbs(gitDir) {
 		gitDir = filepath.Join(dir, gitDir)
 	}
-	if !probeGitfileTarget(filepath.Clean(gitDir)) {
+	gitDir = filepath.Clean(gitDir)
+	if !probeGitfileTarget(gitDir) {
+		return false
+	}
+	// The commondir and config files sit inside vetted directories, but as
+	// symlinks they can lead anywhere; vet the exact file paths
+	// (classification follows links) before the reads that follow —
+	// readCommonDir here, gitConfigCoreBare in repoRootFromGitFile.
+	if !probeGitfileTarget(filepath.Join(gitDir, "commondir")) {
 		return false
 	}
 	commonDir := readCommonDir(gitDir)
-	return commonDir == "" || probeGitfileTarget(commonDir)
+	if commonDir == "" {
+		return true
+	}
+	return probeGitfileTarget(commonDir) &&
+		probeGitfileTarget(filepath.Join(commonDir, "config"))
 }
 
 func readGitDirFromFile(path string) string {
