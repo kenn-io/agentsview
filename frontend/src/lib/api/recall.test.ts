@@ -3,6 +3,7 @@ import {
   activateRecallExtractionGeneration,
   fetchRecallEntries,
   fetchRecallExtractionProgress,
+  reviewRecallEntry,
   retireRecallExtractionGeneration,
 } from "./recall.js";
 
@@ -50,6 +51,31 @@ describe("fetchRecallEntries", () => {
       nextCursor: "cursor-2",
       resultCap: 500,
     });
+  });
+});
+
+describe("reviewRecallEntry", () => {
+  it("posts one encoded review action and returns the updated entry", async () => {
+    const updated = {
+      id: "entry one",
+      status: "archived",
+      review_state: "human_rejected",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify(updated),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(reviewRecallEntry("entry one", "archive"))
+      .resolves.toEqual(updated);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/recall/entries/entry%20one/review",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ action: "archive" }),
+      }),
+    );
   });
 });
 
