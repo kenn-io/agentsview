@@ -52,11 +52,12 @@ type Store struct {
 	// gone.
 	retiring sync.WaitGroup
 
-	quack          *quackClient
-	connectionKind duckDBConnectionKind
-	cursorMu       sync.RWMutex
-	cursorSecret   []byte
-	customPricing  map[string]config.CustomModelRate
+	quack            *quackClient
+	connectionKind   duckDBConnectionKind
+	cursorMu         sync.RWMutex
+	cursorSecret     []byte
+	customPricing    map[string]config.CustomModelRate
+	issueReviewCache db.IssueReviewCache
 }
 
 // NewStore opens a local DuckDB mirror file as a db.Store. The handle is

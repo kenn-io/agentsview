@@ -332,6 +332,87 @@ export interface SignalsAnalyticsResponse {
   calibration: Record<string, SignalCalibration>;
 }
 
+export type IssueSeverity = "high" | "medium" | "low";
+export type IssueConfidence = "high" | "medium" | "low";
+export type IssueStatus = "open" | "recovered" | "recurring" | "observed";
+export type IssueRecommendationType = "skill" | "script" | "rule" | "tool_fix";
+
+export interface IssueFacet {
+  value: string;
+  label?: string;
+  count: number;
+}
+
+export interface IssueReviewEvidence {
+  session_id: string;
+  project: string;
+  cwd: string;
+  agent: string;
+  date: string;
+  outcome: string;
+  source: string;
+  tool: string;
+  excerpt: string;
+  message_ordinal?: number;
+  call_index?: number;
+  event_status?: string;
+  recovered: boolean;
+  duration_ms?: number;
+}
+
+export interface IssueReviewFinding {
+  id: string;
+  reason_code: string;
+  tool: string;
+  signature: string;
+  severity: IssueSeverity;
+  confidence: IssueConfidence;
+  status: IssueStatus;
+  recommendation_type: IssueRecommendationType;
+  recommendation: string;
+  github_reference?: string;
+  sources: string[];
+  occurrences: number;
+  session_count: number;
+  project_count: number;
+  incomplete_session_count: number;
+  total_duration_ms: number;
+  wasted_duration_ms: number;
+  p95_duration_ms?: number;
+  duration_coverage: number;
+  duration_source?: string;
+  last_seen: string;
+  evidence: IssueReviewEvidence[];
+}
+
+export interface IssueReviewResponse {
+  generated_at: string;
+  scanned_sessions: number;
+  scanned_messages: number;
+  scanned_tool_calls: number;
+  analyzed_messages: number;
+  analyzed_tool_calls: number;
+  duplicate_messages: number;
+  duplicate_tool_calls: number;
+  scanned_telemetry: number;
+  telemetry_status: string;
+  total_findings: number;
+  truncated: boolean;
+  findings: IssueReviewFinding[];
+  facets: {
+    category: IssueFacet[];
+    tool: IssueFacet[];
+    source: IssueFacet[];
+    severity: IssueFacet[];
+    confidence: IssueFacet[];
+    status: IssueFacet[];
+    recommendation_type: IssueFacet[];
+    session: IssueFacet[];
+    folder: IssueFacet[];
+    outcome: IssueFacet[];
+  };
+}
+
 export interface TrendsBucket {
   date: string;
   message_count: number;

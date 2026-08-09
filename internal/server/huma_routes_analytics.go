@@ -25,6 +25,7 @@ func (s *Server) registerAnalyticsRoutes() {
 	get(s, group, "/top-sessions", "Get top sessions", s.humaAnalyticsTopSessions)
 	get(s, group, "/signals", "Get signal analytics", s.humaAnalyticsSignals)
 	get(s, group, "/signal-sessions", "Get signal session examples", s.humaAnalyticsSignalSessions)
+	get(s, group, "/issue-review", "Get proactive issue review", s.humaAnalyticsIssueReview)
 }
 
 type analyticsGranularity string
@@ -76,6 +77,33 @@ type analyticsSignalSessionsInput struct {
 	AnalyticsFilterInput
 	Signal string `query:"signal" required:"true" doc:"Signal name"`
 	Limit  int    `query:"limit" minimum:"0" maximum:"20" default:"10" doc:"Maximum number of session examples"`
+}
+
+type analyticsIssueReviewInput struct {
+	AnalyticsFilterInput
+	SessionID          string `query:"session_id" doc:"Exact chat session ID"`
+	Folder             string `query:"folder" doc:"Exact session working directory"`
+	Category           string `query:"category" doc:"Issue reason code"`
+	Reason             string `query:"reason" doc:"Issue reason code alias"`
+	Tool               string `query:"tool" doc:"Normalized tool name"`
+	Source             string `query:"source" doc:"Evidence source"`
+	Outcome            string `query:"outcome" doc:"Session outcome"`
+	Severity           string `query:"severity" enum:"high,medium,low" doc:"Finding severity"`
+	Confidence         string `query:"confidence" enum:"high,medium,low" doc:"Finding confidence"`
+	Status             string `query:"status" enum:"open,recovered,recurring,observed" doc:"Finding status"`
+	RecommendationType string `query:"recommendation_type" enum:"skill,script,rule,tool_fix" doc:"Suggested action type"`
+	MinOccurrences     int    `query:"min_occurrences" minimum:"1" default:"1" doc:"Minimum repeated occurrences"`
+	MinSessions        int    `query:"min_sessions" minimum:"1" default:"1" doc:"Minimum distinct chats"`
+	MinProjects        int    `query:"min_projects" minimum:"0" default:"0" doc:"Minimum distinct projects"`
+	MinWastedMS        int64  `query:"min_wasted_ms" minimum:"0" default:"0" doc:"Minimum estimated wasted duration in milliseconds"`
+	Sort               string `query:"sort" enum:"impact,frequency,recent,waste,duration" default:"impact" doc:"Finding sort order"`
+	Refresh            bool   `query:"refresh" default:"false" doc:"Bypass the short analysis cache"`
+	Offset             int    `query:"offset" minimum:"0" default:"0" doc:"Findings to skip after filtering and sorting"`
+	Limit              int    `query:"limit" minimum:"1" maximum:"100" default:"50" doc:"Maximum findings"`
+}
+
+type analyticsIssueReviewStore interface {
+	GetAnalyticsIssueReview(context.Context, db.AnalyticsFilter, db.IssueReviewQuery) (db.IssueReviewResponse, error)
 }
 
 func analyticsFilterFromInput(in AnalyticsFilterInput) (db.AnalyticsFilter, error) {
@@ -300,4 +328,46 @@ func (s *Server) humaAnalyticsSignalSessions(
 		return nil, internalError("analytics signal sessions error", err)
 	}
 	return &jsonOutput[db.SignalSessionsResponse]{Body: result}, nil
+}
+
+func (s *Server) humaAnalyticsIssueReview(
+	ctx context.Context,
+	in *analyticsIssueReviewInput,
+) (*jsonOutput[db.IssueReviewResponse], error) {
+	f, err := analyticsFilterFromInput(in.AnalyticsFilterInput)
+	if err != nil {
+		return nil, err
+	}
+	store, ok := s.db.(analyticsIssueReviewStore)
+	if !ok {
+		return nil, apiError(http.StatusNotImplemented, "issue review is not supported by this store")
+	}
+	reason := in.Category
+	if reason == "" {
+		reason = in.Reason
+	}
+	result, err := store.GetAnalyticsIssueReview(ctx, f, db.IssueReviewQuery{
+		SessionID:           in.SessionID,
+		Folder:              in.Folder,
+		Reason:              reason,
+		Tool:                in.Tool,
+		Source:              in.Source,
+		Outcome:             in.Outcome,
+		Severity:            in.Severity,
+		Confidence:          in.Confidence,
+		Status:              in.Status,
+		RecommendationType:  in.RecommendationType,
+		MinOccurrences:      in.MinOccurrences,
+		MinSessions:         in.MinSessions,
+		MinProjects:         in.MinProjects,
+		MinWastedDurationMS: in.MinWastedMS,
+		Sort:                in.Sort,
+		Refresh:             in.Refresh,
+		Offset:              in.Offset,
+		Limit:               in.Limit,
+	})
+	if err != nil {
+		return nil, internalError("analytics issue review error", err)
+	}
+	return &jsonOutput[db.IssueReviewResponse]{Body: result}, nil
 }

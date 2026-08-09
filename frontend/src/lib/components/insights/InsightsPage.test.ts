@@ -21,6 +21,53 @@ import type { SignalsAnalyticsResponse } from "../../api/types.js";
 // @ts-ignore
 import InsightsPage from "./InsightsPage.svelte";
 import source from "./InsightsPage.svelte?raw";
+import issueReviewSource from "./IssueReviewPanel.svelte?raw";
+
+describe("IssueReviewPanel proactive detector contract", () => {
+  it("sends every issue filter to the server", () => {
+    for (const field of [
+      "sessionId", "folder", "category", "tool", "source", "outcome", "severity", "confidence",
+      "status", "recommendationType", "minOccurrences", "minSessions",
+      "minProjects", "minWastedMs", "sort",
+    ]) {
+      expect(issueReviewSource).toContain(`${field}:`);
+    }
+    expect(issueReviewSource).toContain("getApiV1AnalyticsIssueReview");
+  });
+
+  it("forces manual refresh and uses the analysis cache for background refreshes", () => {
+    expect(issueReviewSource).toContain("onclick={() => refresh(true)}");
+    expect(issueReviewSource).toContain("events.subscribeDebounced(() => void refresh())");
+    expect(issueReviewSource).toContain("globalScopeKey()");
+    expect(issueReviewSource).toContain("setInterval(() => void refresh()");
+    expect(issueReviewSource).toContain("issue_review_cached_warning");
+    expect(issueReviewSource).toContain("response.telemetry_status !== \"available\"");
+    expect(issueReviewSource).toContain("issue_review_telemetry_unavailable");
+  });
+
+  it("opens exact ordinal evidence and formats numbers in the app locale", () => {
+    expect(issueReviewSource).toContain("ui.scrollToOrdinal(evidence.message_ordinal");
+    expect(issueReviewSource).toContain("msg: String(evidence.message_ordinal)");
+    expect(issueReviewSource).toContain("new Intl.NumberFormat(getLocale()");
+  });
+
+  it("persists and clears filters while rendering actionable recommendations", () => {
+    expect(issueReviewSource).toContain("agentsview.issue-review.filters.v1");
+    expect(issueReviewSource).toContain("localStorage.setItem");
+    expect(issueReviewSource).toContain("function clearFilters()");
+    expect(issueReviewSource).toContain("finding.recommendation");
+    expect(issueReviewSource).toContain("finding.github_reference");
+    expect(issueReviewSource).toContain("duplicate_tool_calls");
+    expect(issueReviewSource).not.toContain("<button");
+  });
+
+  it("loads every filtered finding in stable server pages", () => {
+    expect(issueReviewSource).toContain("offset,");
+    expect(issueReviewSource).toContain("refresh(false, findings.length)");
+    expect(issueReviewSource).toContain("issue_review_load_more");
+    expect(issueReviewSource).toContain("response.findings, ...page.findings");
+  });
+});
 
 describe("InsightsPage sidebar filter sync", () => {
   it("syncs the automated-session scope from the sidebar", () => {

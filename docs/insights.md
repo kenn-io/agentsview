@@ -16,6 +16,61 @@ live under the **More** dropdown as of 0.21.0, which leaves
 
 ![Insights page](/assets/generated/screenshots/insights.png)
 
+## Proactive Issue Review
+
+The top of the Insights page continuously ranks recurring problems and
+automation opportunities across the selected chats. It is deterministic and
+server-backed; generating an AI insight is not required. The review detects:
+
+- failed commands, edits, builds, tests, migrations, Git/GitHub operations,
+  missing files or dependencies, permissions, network errors, timeouts, and
+  tool crashes;
+- a successful retry after a failed identical call, persistent repeated waits
+  or polling, and the
+  same substantial workflow repeated across chats or projects;
+- slow non-wait tools, exact-normalized user requests repeated across chats,
+  explicit user corrections, and assistant-reported blockers;
+- allowlisted Codex response, tool-router, hook, session, and PowerShell
+  snapshot failures when local telemetry is available.
+
+When an `exec` wrapper calls only one nested tool, Issue Review attributes the
+finding and duration to that nested tool. Mixed-tool wrappers remain attributed
+to `exec` because the outer result cannot identify one responsible tool.
+
+The global date, project, machine, agent, termination, automation, and
+one-shot filters apply first. The panel adds exact chat, folder, category, tool,
+outcome, severity, confidence, status, suggested-action, and minimum-occurrence
+filters. Each finding keeps at most five redacted evidence excerpts and links
+to the exact message ordinal when one exists. Results are returned in pages of
+100; **Load more findings** continues through the full filtered result set.
+
+The panel refreshes when its filters or the global scope changes, after a
+debounced data-sync event, every hour while open, and on manual retry.
+Background refreshes use the one-hour analysis cache so frequent sync events
+cannot trigger repeated full-archive scans; **Refresh now** bypasses the cache.
+If a refresh fails, the last successful result remains visible with a warning.
+
+Durations are measured only when start and completion events can be paired.
+For slow tools, occurrences count calls at least 30 seconds long, while p95 is
+calculated from every measured sample for that tool. Coverage is measured
+samples divided by all scoped calls for the tool. The “excess” duration is a
+triage proxy above 30 seconds, not a claim that all of that time was wasted.
+Wait/sleep tools and negative or malformed durations are excluded.
+
+Large tool results retain bounded context from both the beginning and end, so a
+stable compiler, test, or command error near the tail remains classifiable.
+
+The optional Codex supplement reads `~/.codex/logs_2.sqlite` in read-only mode
+only for scoped session IDs and exact tool-call IDs. This supplement is
+available only with the local SQLite store; PostgreSQL and DuckDB use timing
+events already mirrored into their own stores. Telemetry and chat/tool
+excerpts are redacted before the API returns them. The panel shows a non-blocking
+warning when local telemetry is missing or unavailable; chat and tool-result
+analysis remains active.
+
+See [Proactive Issue Review handover](issue-review-handover.md) for the detector
+architecture, validation matrix, deployment gates, and follow-up roadmap.
+
 ## Insight Types
 
 There are three generation modes, selected from the dropdown at

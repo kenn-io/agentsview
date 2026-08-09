@@ -6,6 +6,7 @@ import type { DbActivityResponse } from '../models/DbActivityResponse';
 import type { DbAnalyticsSummary } from '../models/DbAnalyticsSummary';
 import type { DbHeatmapResponse } from '../models/DbHeatmapResponse';
 import type { DbHourOfWeekResponse } from '../models/DbHourOfWeekResponse';
+import type { DbIssueReviewResponse } from '../models/DbIssueReviewResponse';
 import type { DbProjectsAnalyticsResponse } from '../models/DbProjectsAnalyticsResponse';
 import type { DbSessionShapeResponse } from '../models/DbSessionShapeResponse';
 import type { DbSignalsAnalyticsResponse } from '../models/DbSignalsAnalyticsResponse';
@@ -386,6 +387,244 @@ export class AnalyticsService {
         'include_one_shot': includeOneShot,
         'include_automated': includeAutomated,
         'termination': termination,
+      },
+      errors: {
+        400: `Bad Request`,
+        401: `Unauthorized`,
+        403: `Forbidden`,
+        404: `Not Found`,
+        409: `Conflict`,
+        422: `Unprocessable Entity`,
+        500: `Internal Server Error`,
+        501: `Not Implemented`,
+        502: `Bad Gateway`,
+        503: `Service Unavailable`,
+        504: `Gateway Timeout`,
+      },
+    });
+  }
+  /**
+   * Get proactive issue review
+   * @returns DbIssueReviewResponse OK
+   * @throws ApiError
+   */
+  public static getApiV1AnalyticsIssueReview({
+    from,
+    to,
+    timezone,
+    machine,
+    project,
+    gitBranch,
+    agent,
+    model,
+    dow,
+    hour,
+    minUserMessages,
+    activeSince,
+    automatedScope,
+    includeOneShot,
+    includeAutomated,
+    termination,
+    sessionId,
+    folder,
+    category,
+    reason,
+    tool,
+    source,
+    outcome,
+    severity,
+    confidence,
+    status,
+    recommendationType,
+    minOccurrences = 1,
+    minSessions = 1,
+    minProjects,
+    minWastedMs,
+    sort = 'impact',
+    refresh = false,
+    offset,
+    limit = 50,
+  }: {
+    /**
+     * Range start date
+     */
+    from?: string,
+    /**
+     * Range end date
+     */
+    to?: string,
+    /**
+     * IANA timezone name
+     */
+    timezone?: string,
+    /**
+     * Filter by machine
+     */
+    machine?: string,
+    /**
+     * Filter by project
+     */
+    project?: string,
+    /**
+     * Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+     */
+    gitBranch?: string,
+    /**
+     * Filter by agent
+     */
+    agent?: string,
+    /**
+     * Comma-separated model filter
+     */
+    model?: string,
+    /**
+     * Day of week, Monday=0 through Sunday=6
+     */
+    dow?: number,
+    /**
+     * Hour of day, 0 through 23
+     */
+    hour?: number,
+    /**
+     * Minimum user message count
+     */
+    minUserMessages?: number,
+    /**
+     * Filter sessions active since this RFC3339 timestamp
+     */
+    activeSince?: string,
+    /**
+     * Automation scope
+     */
+    automatedScope?: 'human' | 'all' | 'automated',
+    /**
+     * Include one-shot sessions
+     */
+    includeOneShot?: boolean,
+    /**
+     * Include automated sessions
+     */
+    includeAutomated?: boolean,
+    /**
+     * Filter by termination reason
+     */
+    termination?: string,
+    /**
+     * Exact chat session ID
+     */
+    sessionId?: string,
+    /**
+     * Exact session working directory
+     */
+    folder?: string,
+    /**
+     * Issue reason code
+     */
+    category?: string,
+    /**
+     * Issue reason code alias
+     */
+    reason?: string,
+    /**
+     * Normalized tool name
+     */
+    tool?: string,
+    /**
+     * Evidence source
+     */
+    source?: string,
+    /**
+     * Session outcome
+     */
+    outcome?: string,
+    /**
+     * Finding severity
+     */
+    severity?: 'high' | 'medium' | 'low',
+    /**
+     * Finding confidence
+     */
+    confidence?: 'high' | 'medium' | 'low',
+    /**
+     * Finding status
+     */
+    status?: 'open' | 'recovered' | 'recurring' | 'observed',
+    /**
+     * Suggested action type
+     */
+    recommendationType?: 'skill' | 'script' | 'rule' | 'tool_fix',
+    /**
+     * Minimum repeated occurrences
+     */
+    minOccurrences?: number,
+    /**
+     * Minimum distinct chats
+     */
+    minSessions?: number,
+    /**
+     * Minimum distinct projects
+     */
+    minProjects?: number,
+    /**
+     * Minimum estimated wasted duration in milliseconds
+     */
+    minWastedMs?: number,
+    /**
+     * Finding sort order
+     */
+    sort?: 'impact' | 'frequency' | 'recent' | 'waste' | 'duration',
+    /**
+     * Bypass the short analysis cache
+     */
+    refresh?: boolean,
+    /**
+     * Findings to skip after filtering and sorting
+     */
+    offset?: number,
+    /**
+     * Maximum findings
+     */
+    limit?: number,
+  }): CancelablePromise<DbIssueReviewResponse> {
+    return __request(OpenAPI, {
+      method: 'GET',
+      url: '/api/v1/analytics/issue-review',
+      query: {
+        'from': from,
+        'to': to,
+        'timezone': timezone,
+        'machine': machine,
+        'project': project,
+        'git_branch': gitBranch,
+        'agent': agent,
+        'model': model,
+        'dow': dow,
+        'hour': hour,
+        'min_user_messages': minUserMessages,
+        'active_since': activeSince,
+        'automated_scope': automatedScope,
+        'include_one_shot': includeOneShot,
+        'include_automated': includeAutomated,
+        'termination': termination,
+        'session_id': sessionId,
+        'folder': folder,
+        'category': category,
+        'reason': reason,
+        'tool': tool,
+        'source': source,
+        'outcome': outcome,
+        'severity': severity,
+        'confidence': confidence,
+        'status': status,
+        'recommendation_type': recommendationType,
+        'min_occurrences': minOccurrences,
+        'min_sessions': minSessions,
+        'min_projects': minProjects,
+        'min_wasted_ms': minWastedMs,
+        'sort': sort,
+        'refresh': refresh,
+        'offset': offset,
+        'limit': limit,
       },
       errors: {
         400: `Bad Request`,

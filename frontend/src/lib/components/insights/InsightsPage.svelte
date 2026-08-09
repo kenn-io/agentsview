@@ -50,6 +50,7 @@
     type QualityPatternSeverity,
     type QualityPatternView,
   } from "./qualityPatterns.js";
+  import IssueReviewPanel from "./IssueReviewPanel.svelte";
 
   const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
   const INSIGHTS_WINDOW_PARAM = "window_days";
@@ -63,6 +64,7 @@
   >[0];
 
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
+  let issueReviewPanel: { refresh(): Promise<void> } | undefined;
   let unsubEvents: (() => void) | undefined;
   let copiedInsightLinkId: number | null = $state(null);
   let copiedInsightLinkTimer:
@@ -388,6 +390,7 @@
 
   function handleRefresh() {
     fetchInsightSignals();
+    void issueReviewPanel?.refresh();
     insights.load();
   }
 
@@ -855,6 +858,8 @@
   </header>
 
   <main class="content">
+    <IssueReviewPanel bind:this={issueReviewPanel} />
+
     <section class="section-block" aria-labelledby="actions-title">
       <div class="section-heading compact">
         <div>

@@ -40,6 +40,7 @@ type Store struct {
 	vectorMu                  sync.RWMutex
 	vectorSearcher            db.VectorSearcher
 	semanticUnavailableReason string
+	issueReviewCache          db.IssueReviewCache
 }
 
 // pgSessionCols is the column list for standard PG session queries.
