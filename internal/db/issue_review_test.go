@@ -90,6 +90,7 @@ func TestCanonicalGitHubReference(t *testing.T) {
 			assert.Equal(t, tt.want, canonicalGitHubReference(tt.input))
 		})
 	}
+	assert.Equal(t, "url/repo#47", canonicalGitHubReferenceParts("Short/Repo#46", "https://github.com/URL/Repo/issues/47"))
 }
 
 func TestFirstIssueLineSkipsExecutionWrapper(t *testing.T) {

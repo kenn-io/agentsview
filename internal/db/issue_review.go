@@ -265,16 +265,24 @@ var issueFailurePatterns = []issuePattern{
 // ClassifyIssueFailure classifies a tool result conservatively. It returns
 // false for explicit success and search no-match exits.
 func ClassifyIssueFailure(tool, status, input, result string) (string, bool) {
+	command := input
+	if isShellTool(tool) {
+		command = issueCommandInput(input)
+	}
+	return classifyIssueFailure(tool, status, command, result)
+}
+
+func classifyIssueFailure(tool, status, command, result string) (string, bool) {
 	status = strings.ToLower(strings.TrimSpace(status))
 	failedStatus := status == "errored" || status == "error" || status == "cancelled" || status == "canceled"
 	resultLower := strings.ToLower(result)
 	hasZeroExit, hasOneExit, hasNonZeroExit := issueExitCodes(resultLower)
-	if isSearchInvocation(tool, input) && hasOneExit && !hasSpecificSearchFailure(resultLower) {
+	if isSearchInvocation(tool, command) && hasOneExit && !hasSpecificSearchFailure(resultLower) {
 		return "", false
 	}
-	logicalFailure := hasLogicalFailure(input, resultLower)
+	logicalFailure := hasLogicalFailure(command, resultLower)
 	markerFailure := explicitFailureMarker(result)
-	if !failedStatus && !hasNonZeroExit && isReadInvocation(tool, input) {
+	if !failedStatus && !hasNonZeroExit && isReadInvocation(tool, command) {
 		return "", false
 	}
 	if hasZeroExit && !hasNonZeroExit && !logicalFailure && !failedStatus {
@@ -286,13 +294,13 @@ func ClassifyIssueFailure(tool, status, input, result string) (string, bool) {
 	if reason, ok := classifyIssueReason(resultLower); ok {
 		return reason, true
 	}
-	if isEditInvocation(tool, input) {
+	if isEditInvocation(tool, command) {
 		return "failed_edit", true
 	}
-	if isGitHubInvocation(tool, input) {
+	if isGitHubInvocation(tool, command) {
 		return "git_github_ci", true
 	}
-	if isBuildTestInvocation(tool, input) {
+	if isBuildTestInvocation(tool, command) {
 		return "build_test", true
 	}
 	if isShellTool(tool) {
@@ -412,15 +420,14 @@ func hasSpecificSearchFailure(resultLower string) bool {
 	return false
 }
 
-func isSearchInvocation(tool, input string) bool {
+func isSearchInvocation(tool, command string) bool {
 	if isSearchTool(tool) {
 		return true
 	}
 	if !isShellTool(tool) {
 		return false
 	}
-	input = issueCommandInput(input)
-	return searchCommandRE.MatchString(input)
+	return searchCommandRE.MatchString(command)
 }
 
 func issueCommandInput(input string) string {
@@ -433,30 +440,30 @@ func issueCommandInput(input string) string {
 	return input
 }
 
-func isEditInvocation(tool, input string) bool {
+func isEditInvocation(tool, command string) bool {
 	lowerTool := normalizeTool(tool)
 	if strings.Contains(lowerTool, "apply_patch") || strings.Contains(lowerTool, "edit") {
 		return true
 	}
-	lower := strings.ToLower(issueCommandInput(input))
+	lower := strings.ToLower(command)
 	return strings.HasPrefix(strings.TrimSpace(lower), "apply_patch")
 }
 
-func isGitHubInvocation(tool, input string) bool {
+func isGitHubInvocation(tool, command string) bool {
 	if !isShellTool(tool) && !strings.Contains(normalizeTool(tool), "github") {
 		return false
 	}
-	lower := strings.ToLower(issueCommandInput(input))
+	lower := strings.ToLower(command)
 	return strings.Contains(lower, "gh ") || strings.Contains(lower, "github.com") ||
 		strings.Contains(lower, "git push") || strings.Contains(lower, "git pull") ||
 		strings.Contains(lower, "git fetch") || strings.Contains(lower, "git clone")
 }
 
-func isBuildTestInvocation(tool, input string) bool {
+func isBuildTestInvocation(tool, command string) bool {
 	if !isShellTool(tool) {
 		return false
 	}
-	lower := strings.ToLower(issueCommandInput(input))
+	lower := strings.ToLower(command)
 	for _, term := range []string{" go test", "npm test", "npm run build", "npm run check", "pytest", "cargo test", "dotnet test", "psql", "migration"} {
 		if strings.Contains(" "+lower, term) {
 			return true
@@ -466,16 +473,25 @@ func isBuildTestInvocation(tool, input string) bool {
 }
 
 func canonicalGitHubReference(value string) string {
-	if strings.Contains(value, "://") {
-		match := githubIssueURLRE.FindStringSubmatch(value)
-		if len(match) == 4 {
-			return strings.ToLower(match[1]+"/"+match[2]) + "#" + match[3]
+	return canonicalGitHubReferenceParts(value, "")
+}
+
+func canonicalGitHubReferenceParts(first, second string) string {
+	values := [...]string{first, second}
+	for _, value := range values {
+		if strings.Contains(value, "://") {
+			match := githubIssueURLRE.FindStringSubmatch(value)
+			if len(match) == 4 {
+				return strings.ToLower(match[1]+"/"+match[2]) + "#" + match[3]
+			}
 		}
 	}
-	if strings.Contains(value, "#") {
-		match := githubIssueShortRE.FindStringSubmatch(value)
-		if len(match) == 4 {
-			return strings.ToLower(match[1]+"/"+match[2]) + "#" + match[3]
+	for _, value := range values {
+		if strings.Contains(value, "#") {
+			match := githubIssueShortRE.FindStringSubmatch(value)
+			if len(match) == 4 {
+				return strings.ToLower(match[1]+"/"+match[2]) + "#" + match[3]
+			}
 		}
 	}
 	return ""
@@ -808,6 +824,7 @@ func (a *issueAnalyzer) finish(totalCalls int, durationCounts map[string]int) []
 type analyzedCall struct {
 	row        IssueReviewToolCall
 	tool       string
+	command    string
 	normalized string
 	reason     string
 	failed     bool
@@ -890,17 +907,18 @@ func AnalyzeIssueReviewBase(sessions []IssueReviewSession, messages []IssueRevie
 	toolCounts := map[string]int{}
 	for _, row := range calls {
 		tool := effectiveIssueTool(row.Tool, row.Input)
+		command := row.Input
+		if isShellTool(tool) {
+			command = issueCommandInput(row.Input)
+		}
 		toolCounts[tool]++
 		if row.DurationMS != nil && *row.DurationMS < 0 {
 			row.DurationMS = nil
 			row.DurationSource = ""
 		}
-		normalized := strings.TrimSpace(row.Input)
-		if isShellTool(tool) {
-			normalized = strings.TrimSpace(issueCommandInput(row.Input))
-		}
-		reason, failed := ClassifyIssueFailure(tool, row.EventStatus, row.Input, row.Result)
-		bySession[row.SessionID] = append(bySession[row.SessionID], analyzedCall{row: row, tool: tool, normalized: normalized, reason: reason, failed: failed})
+		normalized := strings.TrimSpace(command)
+		reason, failed := classifyIssueFailure(tool, row.EventStatus, command, row.Result)
+		bySession[row.SessionID] = append(bySession[row.SessionID], analyzedCall{row: row, tool: tool, command: command, normalized: normalized, reason: reason, failed: failed})
 		if row.DurationMS != nil && *row.DurationMS >= 0 {
 			durationCounts[tool]++
 		}
@@ -927,7 +945,7 @@ func AnalyzeIssueReviewBase(sessions []IssueReviewSession, messages []IssueRevie
 					rows[i].recovered = true
 					break
 				}
-				if intervening == 3 || !isRecoveryDiagnostic(next.tool, next.row.Input) {
+				if intervening == 3 || !isRecoveryDiagnostic(next.tool, next.command) {
 					break
 				}
 				intervening++
@@ -937,17 +955,18 @@ func AnalyzeIssueReviewBase(sessions []IssueReviewSession, messages []IssueRevie
 		for i, call := range rows {
 			tool := call.tool
 			ord, idx := call.row.MessageOrdinal, call.row.CallIndex
-			if ref := canonicalGitHubReference(call.row.Input + "\n" + call.row.Result); ref != "" && (call.failed || isGitHubInvocation(tool, call.row.Input)) {
+			githubRef := canonicalGitHubReferenceParts(call.row.Input, call.row.Result)
+			if githubRef != "" && (call.failed || isGitHubInvocation(tool, call.command)) {
 				severity := "low"
 				if call.failed {
 					severity = "medium"
 				}
-				e := a.evidence(sessionID, firstNonEmptyString(call.row.EventSource, "tool_call"), tool, ref, call.row.EventStatus, &ord, &idx, call.row.DurationMS)
-				a.add("github-issue|"+ref, "github_issue_reference", tool, ref, severity, "high", "rule", e, call.row.DurationMS, nil, false)
+				e := a.evidence(sessionID, firstNonEmptyString(call.row.EventSource, "tool_call"), tool, githubRef, call.row.EventStatus, &ord, &idx, call.row.DurationMS)
+				a.add("github-issue|"+githubRef, "github_issue_reference", tool, githubRef, severity, "high", "rule", e, call.row.DurationMS, nil, false)
 			}
 			if call.failed {
 				sig := firstIssueLine(call.row.Result, call.row.Input)
-				key := "failure|" + call.reason + "|" + tool + "|" + canonicalGitHubReference(call.row.Input+"\n"+call.row.Result) + "|" + normalizeIssueText(sig)
+				key := "failure|" + call.reason + "|" + tool + "|" + githubRef + "|" + normalizeIssueText(sig)
 				e := a.evidence(sessionID, firstNonEmptyString(call.row.EventSource, "tool_result"), tool, sig, call.row.EventStatus, &ord, &idx, call.row.DurationMS)
 				a.add(key, call.reason, tool, sig, failureSeverity(call.reason), issueFailureConfidence(call.row.EventStatus, call.row.Input, call.row.Result), recommendationFor(call.reason, 1, 1), e, call.row.DurationMS, call.row.DurationMS, call.recovered)
 				if i+1 < len(rows) && rows[i+1].tool == tool && rows[i+1].normalized == call.normalized {
@@ -957,7 +976,7 @@ func AnalyzeIssueReviewBase(sessions []IssueReviewSession, messages []IssueRevie
 					a.add("retry|"+tool+"|"+call.normalized, "retry_after_failure", tool, next.row.Input, "medium", "high", "script", e, next.row.DurationMS, next.row.DurationMS, !next.failed)
 				}
 			}
-			if eligibleWorkflow(tool, call.row.Input) {
+			if eligibleWorkflow(tool, call.row.Input, call.command) {
 				normalized, ok := normalizedInputs[call.row.Input]
 				if !ok {
 					normalized = normalizeIssueText(call.row.Input)
@@ -988,7 +1007,7 @@ func AnalyzeIssueReviewBase(sessions []IssueReviewSession, messages []IssueRevie
 				call := rows[start]
 				tool := call.tool
 				reason := "repeated_polling"
-				if isReadInvocation(tool, call.row.Input) {
+				if isReadInvocation(tool, call.command) {
 					reason = "repeated_read"
 				}
 				ord, idx := call.row.MessageOrdinal, call.row.CallIndex
@@ -1266,8 +1285,8 @@ func concreteRecommendation(f IssueReviewFinding) string {
 	}
 }
 
-func eligibleWorkflow(tool, input string) bool {
-	if isWaitTool(tool) || isReadInvocation(tool, input) || len(strings.TrimSpace(input)) < 80 {
+func eligibleWorkflow(tool, input, command string) bool {
+	if isWaitTool(tool) || isReadInvocation(tool, command) || len(strings.TrimSpace(input)) < 80 {
 		return false
 	}
 	lower := strings.ToLower(strings.TrimSpace(input))
@@ -1284,14 +1303,14 @@ func isWaitTool(tool string) bool {
 	return strings.Contains(t, "wait") || t == "sleep" || t == "await" || t == "awaitshell"
 }
 
-func isReadInvocation(tool, input string) bool {
+func isReadInvocation(tool, command string) bool {
 	t := normalizeTool(tool)
 	for _, term := range []string{"read", "view_file", "get_file", "read_mcp_resource"} {
 		if t == term || strings.Contains(t, "read_file") {
 			return true
 		}
 	}
-	lower := strings.ToLower(strings.TrimSpace(issueCommandInput(input)))
+	lower := strings.ToLower(strings.TrimSpace(command))
 	for _, prefix := range []string{"get-content ", "cat ", "type ", "head ", "tail ", "sed -n "} {
 		if strings.HasPrefix(lower, prefix) {
 			return true
@@ -1300,16 +1319,15 @@ func isReadInvocation(tool, input string) bool {
 	return false
 }
 
-func isRecoveryDiagnostic(tool, input string) bool {
+func isRecoveryDiagnostic(tool, command string) bool {
 	t := normalizeTool(tool)
-	command := ""
 	if isShellTool(t) {
-		command = strings.ToLower(strings.TrimSpace(issueCommandInput(input)))
+		command = strings.ToLower(strings.TrimSpace(command))
 		if strings.ContainsAny(command, "\r\n;|&") {
 			return false
 		}
 	}
-	if isWaitTool(tool) || isReadInvocation(tool, input) || isSearchInvocation(tool, input) {
+	if isWaitTool(tool) || isReadInvocation(tool, command) || isSearchInvocation(tool, command) {
 		return true
 	}
 	if t == "status" || t == "location" || t == "list" || strings.HasPrefix(t, "get_status") || strings.HasPrefix(t, "get_location") || strings.HasPrefix(t, "list_") {
