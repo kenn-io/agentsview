@@ -382,6 +382,7 @@
 
   let lastDetailFilterParamsSignature: string | null = $state(null);
   let previousDateRestoreRoute: string | null = null;
+  let previousRootLanding = false;
 
   // React to route changes: reload sessions and apply URL params.
   // Only apply URL deep-link params (initFromParams) when the URL
@@ -391,11 +392,26 @@
   $effect.pre(() => {
     const route = router.route;
     const params = router.params;
-    const enteringSessions =
+    const rootLanding = router.isRootPath && !hasFilterParams(params);
+    const enteringRootLanding = rootLanding && !previousRootLanding;
+    const leavingRootLanding =
+      previousRootLanding &&
+      route === "sessions" &&
+      !hasFilterParams(params) &&
+      !rootLanding;
+    const enteringSessionsRoute =
       route === "sessions" && previousDateRestoreRoute !== "sessions";
     untrack(() => {
       previousDateRestoreRoute = route;
+      previousRootLanding = rootLanding;
       const sid = router.sessionId;
+      const directRootToList = leavingRootLanding && sid === null;
+      const enteringSessions = enteringSessionsRoute || directRootToList;
+      if (enteringRootLanding) {
+        sessions.resetFiltersForRoot();
+      } else if (directRootToList) {
+        sessions.restoreSavedFilters();
+      }
       if (
         route === "sessions" &&
         hasFilterParams(params) &&
@@ -403,7 +419,7 @@
       ) {
         sessions.initFromParams(params);
       }
-      if (enteringSessions) {
+      if (enteringSessions && !rootLanding) {
         const explicitState = sessionParamsToPanelDate(params);
         if (explicitState) yokedDates.updateFromPanel(explicitState);
         const entryParams =
@@ -567,14 +583,26 @@
   // the URL with localStorage-restored filters.
   $effect(() => {
     const route = router.route;
+    const rootLanding = router.isRootPath && !hasFilterParams(router.params);
+    const sessionFilterParams = sessionFilterRouteParams();
     const newParams = sessionRouteParamsForFilters(
-      sessionFilterRouteParams(),
+      sessionFilterParams,
       router.params,
     );
     untrack(() => {
       if (route !== "sessions") return;
       if (router.sessionId) return;
-      if (filterParamsEqual(router.params, newParams)) return;
+      if (rootLanding && Object.keys(sessionFilterParams).length === 0) {
+        return;
+      }
+      if (rootLanding) {
+        clearYokeForClearedSessionDates(newParams);
+        router.navigateToSessions(newParams);
+        return;
+      }
+      if (!router.isRootPath && filterParamsEqual(router.params, newParams)) {
+        return;
+      }
       clearYokeForClearedSessionDates(newParams);
       router.replaceParams(newParams);
     });

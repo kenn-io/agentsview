@@ -26,6 +26,7 @@ import type { Message } from "./lib/api/types.js";
 import { hasVisibleSegments } from "./lib/utils/content-parser.js";
 import sourceRaw from "./App.svelte?raw";
 import { SESSION_FILTER_KEYS } from "./lib/stores/sessionRouteParams.js";
+import { SessionsService } from "./lib/api/generated/index.js";
 // @ts-ignore
 import App, { findUserPromptOrdinal } from "./App.svelte";
 
@@ -55,6 +56,36 @@ async function selectRelativeRange(days: number) {
   await flushEffects();
 }
 
+function stubAppDependencies() {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  vi.spyOn(settings, "load").mockResolvedValue();
+  vi.spyOn(starred, "load").mockResolvedValue();
+  vi.spyOn(sync, "loadStatus").mockResolvedValue();
+  vi.spyOn(sync, "loadStats").mockResolvedValue();
+  vi.spyOn(sync, "loadVersion").mockResolvedValue();
+  vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
+  vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+  vi.spyOn(sync, "watchSession").mockImplementation(() => {});
+  vi.spyOn(sessions, "loadProjects").mockResolvedValue();
+  vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+  vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
+  vi.spyOn(sessions, "loadChildSessions").mockResolvedValue();
+  vi.spyOn(messages, "loadSession").mockResolvedValue();
+  vi.spyOn(sessionTiming, "load").mockResolvedValue();
+  vi.spyOn(pins, "loadForSession").mockResolvedValue();
+  vi.spyOn(analytics, "fetchAll").mockResolvedValue();
+  vi.spyOn(analytics, "fetchSignalsForQuality").mockResolvedValue();
+  vi.spyOn(insights, "load").mockResolvedValue();
+  vi.spyOn(usage, "fetchAll").mockResolvedValue();
+}
+
 afterEach(() => {
   if (component) {
     unmount(component);
@@ -69,10 +100,14 @@ afterEach(() => {
   router.route = "sessions";
   router.params = {};
   router.sessionId = null;
+  router.isRootPath = false;
   sessions.activeSessionId = null;
   sessions.filters.date = "";
   sessions.filters.dateFrom = "";
   sessions.filters.dateTo = "";
+  sessions.filters.includeOneShot = true;
+  sessions.filters.includeAutomated = false;
+  sessions.initFromParams({});
   sessions.filters.project = "";
   analytics.applyRollingWindow(365);
   usage.isPinned = false;
@@ -645,6 +680,168 @@ describe("App session URL date state", () => {
     expect(undoBlock).not.toContain("await sessions.restoreSession(last.id);");
   });
 });
+
+describe("App root Sessions landing", () => {
+  function setRootUrl(params: Record<string, string> = {}) {
+    const query = new URLSearchParams(params).toString();
+    window.history.replaceState(null, "", query ? `/?${query}` : "/");
+    router.route = "sessions";
+    router.params = params;
+    router.sessionId = null;
+    router.isRootPath = true;
+  }
+
+  it("resets filters without changing the bare root URL or saved value", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    const saved = JSON.stringify({
+      version: 2,
+      project: "saved-project",
+      agent: "codex",
+    });
+    localStorage.setItem("session-filters", saved);
+    sessions.initFromParams({ project: "saved-project", agent: "codex" });
+    setRootUrl();
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+
+    expect(sessions.filters.project).toBe("");
+    expect(sessions.filters.agent).toBe("");
+    expect(window.location.pathname).toBe("/");
+    expect(window.location.search).toBe("");
+    expect(localStorage.getItem("session-filters")).toBe(saved);
+  });
+
+  it("keeps sticky parameters on the root landing URL", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    setRootUrl({ desktop: "1" });
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+
+    expect(router.isRootPath).toBe(true);
+    expect(window.location.pathname).toBe("/");
+    expect(window.location.search).toBe("?desktop=1");
+  });
+
+  it("treats filter-bearing root URLs as explicit deep links", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    setRootUrl({ project: "explicit-project" });
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+
+    expect(sessions.filters.project).toBe("explicit-project");
+    expect(window.location.pathname).toBe("/sessions");
+    expect(window.location.search).toBe("?project=explicit-project");
+    expect(router.isRootPath).toBe(false);
+  });
+
+  it("restores saved filters on direct root-to-list navigation", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    const saved = JSON.stringify({
+      version: 2,
+      project: "saved-project",
+      agent: "codex",
+    });
+    localStorage.setItem("session-filters", saved);
+    sessions.initFromParams({ project: "saved-project", agent: "codex" });
+    setRootUrl();
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    expect(sessions.filters.project).toBe("");
+
+    router.navigate("sessions");
+    await flushEffects();
+
+    expect(window.location.pathname).toBe("/sessions");
+    expect(sessions.filters.project).toBe("saved-project");
+    expect(sessions.filters.agent).toBe("codex");
+  });
+
+  it("promotes divergent root filters and resets them on root popstate", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    const saved = JSON.stringify({
+      version: 2,
+      project: "saved-project",
+      agent: "codex",
+    });
+    localStorage.setItem("session-filters", saved);
+    sessions.initFromParams({ project: "saved-project", agent: "codex" });
+    setRootUrl();
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    const historyLength = window.history.length;
+
+    sessions.filters.project = "chosen-project";
+    await flushEffects();
+
+    expect(window.location.pathname).toBe("/sessions");
+    expect(window.location.search).toBe("?project=chosen-project");
+    expect(window.history.length).toBeGreaterThan(historyLength);
+    expect(router.isRootPath).toBe(false);
+
+    window.history.replaceState(null, "", "/");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    await flushEffects();
+
+    expect(router.isRootPath).toBe(true);
+    expect(sessions.filters.project).toBe("");
+    expect(localStorage.getItem("session-filters")).toBe(saved);
+  });
+
+  it("keeps saved filters through root-opened detail refresh and exit", async () => {
+    stubAppDependencies();
+    const actualAttachSidebar = sessions.attachSidebar.bind(sessions);
+    const sidebarIndex = vi
+      .spyOn(SessionsService, "getApiV1SessionsSidebarIndex")
+      .mockImplementation(() => Promise.resolve({
+        sessions: [],
+        total: 0,
+        next_cursor: null,
+      }) as never);
+    vi.spyOn(sessions, "navigateToSession").mockImplementation(async (id) => {
+      sessions.activeSessionId = id;
+    });
+    const saved = JSON.stringify({
+      version: 2,
+      project: "saved-project",
+      agent: "codex",
+    });
+    localStorage.setItem("session-filters", saved);
+    sessions.initFromParams({ project: "saved-project", agent: "codex" });
+    setRootUrl();
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    const detach = actualAttachSidebar();
+
+    sidebarIndex.mockClear();
+    router.navigateToSession("session-a");
+    await flushEffects();
+    sessions.refreshSidebarIfAttached();
+    await vi.waitFor(() => {
+      expect(sidebarIndex).toHaveBeenCalled();
+    });
+    expect(localStorage.getItem("session-filters")).toBe(saved);
+
+    sessions.deselectSession();
+    await flushEffects();
+
+    expect(window.location.pathname).toBe("/sessions");
+    expect(sessions.filters.project).toBe("");
+    expect(localStorage.getItem("session-filters")).toBe(saved);
+    detach();
+  });
+});
+
 function message(
   ordinal: number,
   role: Message["role"],
