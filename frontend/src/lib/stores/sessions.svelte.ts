@@ -302,6 +302,7 @@ class SessionsStore {
   total: number = $state(0);
   loading: boolean = $state(false);
   #savedFilters = loadSavedFilters();
+  private filterPersistenceHeld = false;
   filters: Filters = $state(this.#savedFilters.filters);
   /** Rolling window (in days) behind the current date bounds, or null when
    *  the bounds were chosen explicitly. Persisted as intent and
@@ -419,6 +420,54 @@ class SessionsStore {
     };
   }
 
+  private hasDefaultSessionFilters(): boolean {
+    return (
+      Object.keys(filtersToParams(this.filters)).length === 0 &&
+      this.dateFiltersWindowDays === null
+    );
+  }
+
+  private persistFiltersIfAllowed(): void {
+    if (this.filterPersistenceHeld && !this.hasDefaultSessionFilters()) {
+      this.filterPersistenceHeld = false;
+    }
+    if (!this.filterPersistenceHeld) {
+      saveFilters(this.filters, this.dateFiltersWindowDays);
+    }
+  }
+
+  resetFiltersForRoot(): void {
+    const previous = this.filters;
+    if (hasDateFilters(previous)) {
+      yokedDates.clear();
+    }
+    this.filters = defaultFilters();
+    this.dateFiltersWindowDays = null;
+    this.filterPersistenceHeld = true;
+    if (
+      previous.includeOneShot !== this.filters.includeOneShot ||
+      previous.includeAutomated !== this.filters.includeAutomated
+    ) {
+      this.invalidateFilterCaches();
+    }
+    this.setActiveSession(null);
+  }
+
+  restoreSavedFilters(): void {
+    const previous = this.filters;
+    this.#savedFilters = loadSavedFilters();
+    this.filters = this.#savedFilters.filters;
+    this.dateFiltersWindowDays = this.#savedFilters.windowDays;
+    this.filterPersistenceHeld = false;
+    if (
+      previous.includeOneShot !== this.filters.includeOneShot ||
+      previous.includeAutomated !== this.filters.includeAutomated
+    ) {
+      this.invalidateFilterCaches();
+    }
+    this.setActiveSession(null);
+  }
+
   /** Set date filters materialized from a panel date state. `windowDays`
    *  carries the rolling intent behind the bounds (null for explicitly
    *  chosen fixed ranges). */
@@ -433,7 +482,7 @@ class SessionsStore {
     // Persist immediately: a provenance flip with identical bounds does
     // not register as a filter change, so callers that diff serialized
     // filters may never trigger a load() and its save.
-    saveFilters(this.filters, windowDays);
+    this.persistFiltersIfAllowed();
   }
 
   initFromParams(params: Record<string, string>) {
@@ -444,6 +493,7 @@ class SessionsStore {
     this.dateFiltersWindowDays = parseWindowDaysParam(
       params[SESSION_ANALYTICS_WINDOW_PARAM],
     );
+    this.filterPersistenceHeld = false;
     if (prevOneShot !== next.includeOneShot ||
         prevAutomated !== next.includeAutomated) {
       this.invalidateFilterCaches();
@@ -452,7 +502,7 @@ class SessionsStore {
   }
 
   async load(options: LoadOptions = {}) {
-    saveFilters(this.filters, this.dateFiltersWindowDays);
+    this.persistFiltersIfAllowed();
 
     const params = {
       ...this.apiParams,

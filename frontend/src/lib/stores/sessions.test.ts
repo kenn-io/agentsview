@@ -314,6 +314,95 @@ describe("SessionsStore", () => {
       expect(store.filters.includeOneShot).toBe(true);
     });
 
+    it("holds saved filters through root loads and refreshes", async () => {
+      const saved = JSON.stringify({
+        version: 2,
+        project: "saved-project",
+        agent: "codex",
+      });
+      localStorage.setItem("session-filters", saved);
+      const store = createSessionsStore();
+      store.resetFiltersForRoot();
+
+      await store.load();
+      expect(store.filters.project).toBe("");
+      expect(localStorage.getItem("session-filters")).toBe(saved);
+
+      const detach = store.attachSidebar();
+      store.refreshSidebarIfAttached();
+      await vi.waitFor(() => {
+        expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
+      });
+      expect(localStorage.getItem("session-filters")).toBe(saved);
+      detach();
+    });
+
+    it("restores saved filters and resumes persistence", async () => {
+      const saved = JSON.stringify({
+        version: 2,
+        project: "saved-project",
+        agent: "codex",
+      });
+      localStorage.setItem("session-filters", saved);
+      const store = createSessionsStore();
+      store.resetFiltersForRoot();
+
+      store.restoreSavedFilters();
+      expect(store.filters.project).toBe("saved-project");
+      expect(store.filters.agent).toBe("codex");
+
+      store.filters.project = "updated-project";
+      await store.load();
+      const persisted = JSON.parse(
+        localStorage.getItem("session-filters") ?? "{}",
+      );
+      expect(persisted).toMatchObject({
+        project: "updated-project",
+        agent: "codex",
+        version: 2,
+      });
+    });
+
+    it("releases the root hold when filters diverge", async () => {
+      const saved = JSON.stringify({
+        version: 2,
+        project: "saved-project",
+        agent: "codex",
+      });
+      localStorage.setItem("session-filters", saved);
+      const store = createSessionsStore();
+      store.resetFiltersForRoot();
+      store.filters.project = "new-project";
+
+      await store.load();
+
+      const persisted = JSON.parse(
+        localStorage.getItem("session-filters") ?? "{}",
+      );
+      expect(persisted).toMatchObject({
+        project: "new-project",
+        agent: "",
+        version: 2,
+      });
+    });
+
+    it("keeps the root hold through session deselection", async () => {
+      const saved = JSON.stringify({
+        version: 2,
+        project: "saved-project",
+        agent: "codex",
+      });
+      localStorage.setItem("session-filters", saved);
+      const store = createSessionsStore();
+      store.resetFiltersForRoot();
+      store.selectSession("session-a");
+      store.deselectSession();
+
+      await store.load();
+
+      expect(localStorage.getItem("session-filters")).toBe(saved);
+    });
+
     it("should fall back to defaults on corrupted localStorage", () => {
       localStorage.setItem("session-filters", "not json");
       const store = createSessionsStore();
