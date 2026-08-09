@@ -806,6 +806,79 @@ func TestSyncSingleSessionAtomicFailurePreservesExistingParent(t *testing.T) {
 		"the failed atomic write must preserve the existing relationship")
 }
 
+func TestSyncSingleSessionLaterFailureRepairsCommittedSessionParent(t *testing.T) {
+	root := t.TempDir()
+	sourcePath, fingerprint := writeProcessProviderSource(
+		t, root, "partial-parent-repair.jsonl",
+	)
+	child := processFixtureResult(
+		"cowork:child", parser.AgentCowork, "fixture-project",
+		sourcePath, fingerprint,
+	)
+	child.Session.ParentSessionID = "cowork:path-parent"
+	child.Session.RelationshipType = parser.RelSubagent
+	provider := newProcessFixtureProvider(
+		processFixtureSource(sourcePath), fingerprint,
+		parser.ParseOutcome{
+			Results: []parser.ParseResultOutcome{
+				{Result: child, DataVersion: parser.DataVersionCurrent},
+				{
+					Result: processFixtureResult(
+						"cowork:later", parser.AgentCowork, "fixture-project",
+						sourcePath, fingerprint,
+					),
+					DataVersion: parser.DataVersionCurrent,
+				},
+			},
+			ResultSetComplete: true,
+			ForceReplace:      true,
+		},
+	)
+	provider.Caps.Source.MultiSessionSource = parser.CapabilitySupported
+	engine := newProcessFixtureEngine(t, root, provider)
+	database := engine.db
+	actualParent := "cowork:spawner"
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: actualParent, Agent: string(parser.AgentCowork),
+		Project: "fixture-project", Machine: "devbox", MessageCount: 1,
+	}))
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "cowork:child", Agent: string(parser.AgentCowork),
+		Project: "fixture-project", Machine: "devbox",
+		ParentSessionID: &actualParent, RelationshipType: string(parser.RelSubagent),
+	}))
+	require.NoError(t, database.InsertMessages([]db.Message{{
+		SessionID: actualParent, Ordinal: 0, Role: string(parser.RoleAssistant),
+		Content: "spawn child", HasToolUse: true,
+		ToolCalls: []db.ToolCall{{
+			ToolUseID: "spawn-child", ToolName: "Agent",
+			SubagentSessionID: "cowork:child",
+		}},
+	}}))
+
+	raw, err := sql.Open("sqlite3", database.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	_, err = raw.Exec(`
+		CREATE TRIGGER fail_later_parent_member_write
+		BEFORE INSERT ON sessions
+		WHEN NEW.id = 'cowork:later'
+		BEGIN
+			SELECT RAISE(FAIL, 'injected later parent member failure');
+		END`)
+	require.NoError(t, err)
+
+	syncErr := engine.SyncSingleSession("cowork:child")
+
+	require.ErrorContains(t, syncErr, "injected later parent member failure")
+	stored, err := database.GetSession(t.Context(), "cowork:child")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	require.NotNil(t, stored.ParentSessionID)
+	assert.Equal(t, actualParent, *stored.ParentSessionID,
+		"a later member failure must not strand a committed parser-derived parent")
+}
+
 func TestProcessFileProviderAuthoritativeSuppressesUncleanSkipCache(t *testing.T) {
 
 	root := t.TempDir()

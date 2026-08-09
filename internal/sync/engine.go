@@ -17417,6 +17417,15 @@ func (e *Engine) processAndWriteSessionFile(
 		if writeErr != nil {
 			continue
 		}
+		// A later member or scoped-link failure must not strand this committed
+		// session with parser-derived parentage when an incoming spawn edge is
+		// already authoritative.
+		if err := e.db.QueueSubagentParentRepairs([]string{resultIDs[i]}); err != nil {
+			return false, fmt.Errorf(
+				"queue written session parent repair: %w", err,
+			)
+		}
+		repairQueued = true
 		if err := queueWrittenChildren([]string{resultIDs[i]}); err != nil {
 			markSourceIncomplete()
 			return false, err
