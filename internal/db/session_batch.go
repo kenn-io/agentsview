@@ -472,7 +472,8 @@ func writeOneSessionBatchTx(
 			return 0, err
 		}
 	}
-	if fullMessageReplace && sessionExists ||
+	if !replaceMessages && len(msgs) > 0 ||
+		fullMessageReplace && sessionExists ||
 		useMessageDiff && (len(replacementPlan.updates) > 0 ||
 			len(replacementPlan.inserts) > 0) {
 		if err := reconcileRecallEvidenceForSessionTx(

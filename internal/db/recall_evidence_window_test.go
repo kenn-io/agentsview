@@ -476,6 +476,67 @@ func TestRecallEvidenceInsertDiffRevokesDuplicateSourceEndpoint(t *testing.T) {
 	}
 }
 
+func TestRecallEvidenceAppendOnlyWritesRevokeDuplicateSourceEndpoint(t *testing.T) {
+	tests := []struct {
+		name   string
+		append func(*DB, string, Message) error
+	}{
+		{
+			name: "insert messages",
+			append: func(d *DB, _ string, message Message) error {
+				return d.InsertMessages([]Message{message})
+			},
+		},
+		{
+			name: "incremental session",
+			append: func(d *DB, sessionID string, message Message) error {
+				return d.WriteSessionIncremental(
+					sessionID, []Message{message}, IncrementalSessionUpdate{},
+				)
+			},
+		},
+		{
+			name: "atomic append",
+			append: func(d *DB, sessionID string, message Message) error {
+				session, err := d.GetSessionFull(context.Background(), sessionID)
+				if err != nil {
+					return err
+				}
+				session.MessageCount++
+				_, err = d.WriteSessionAtomic(SessionBatchWrite{
+					Session: *session, Messages: []Message{message},
+					DataVersion: CurrentDataVersion(), ReplaceMessages: false,
+				})
+				return err
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			sessionID := "append-only-" + tt.name
+			seedRecallEvidenceWindow(t, d, sessionID, 10, "stable", "")
+			insertVerifiedRecallSelection(
+				t, d, "append-entry", sessionID, 10, 11, []string{"tool-a"},
+			)
+			messages, err := d.GetAllMessages(t.Context(), sessionID)
+			require.NoError(t, err)
+			require.Len(t, messages, 3)
+			message := recallEvidenceMessage(
+				sessionID, 13, "assistant", "A duplicate endpoint appeared.",
+				messages[0].SourceUUID,
+			)
+
+			err = tt.append(d, sessionID, message)
+
+			require.NoError(t, err)
+			entry := requireRecallEntry(t, d, "append-entry")
+			assert.False(t, entry.ProvenanceOK,
+				"an appended duplicate source UUID must revoke ambiguous evidence")
+		})
+	}
+}
+
 func TestRecallEvidenceReplaceSessionContentLogsCommittedRevocation(t *testing.T) {
 	d := testDB(t)
 	seedRecallEvidenceWindow(t, d, "replace-content", 10, "stable", "")
