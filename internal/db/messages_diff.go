@@ -18,6 +18,10 @@ import (
 // because nullable canonical fields are independently allocated pointers whose
 // values, rather than pointer identities, define persistence equality.
 func messageRowEqual(a, b Message) bool {
+	aTimestamp := canonicalTranscriptTimestamp(a.Timestamp)
+	bTimestamp := canonicalTranscriptTimestamp(b.Timestamp)
+	a.Timestamp = ""
+	b.Timestamp = ""
 	aMessages, aCalls, aResults, err := CanonicalMessageRows([]Message{a})
 	if err != nil {
 		return false
@@ -26,7 +30,8 @@ func messageRowEqual(a, b Message) bool {
 	if err != nil {
 		return false
 	}
-	return reflect.DeepEqual(aMessages, bMessages) &&
+	return aTimestamp == bTimestamp &&
+		reflect.DeepEqual(aMessages, bMessages) &&
 		reflect.DeepEqual(aCalls, bCalls) &&
 		reflect.DeepEqual(aResults, bResults)
 }
@@ -270,11 +275,5 @@ func applySessionMessageDiffTx(
 		messages = append(messages, message)
 		ordinals = append(ordinals, message.Ordinal)
 	}
-	messageRows, callRows, resultRows, err := CanonicalMessageRows(messages)
-	if err != nil {
-		return err
-	}
-	return RepairMessageRows(
-		ctx, tx, sessionID, ordinals, messageRows, callRows, resultRows,
-	)
+	return repairArchiveMessageGraph(ctx, tx, sessionID, ordinals, messages)
 }

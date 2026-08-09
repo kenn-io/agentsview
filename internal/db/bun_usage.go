@@ -789,14 +789,14 @@ func (s *BunStore) loadBunSessionUsageRows(
 		// is then attributed to its earliest session.
 		queryFilter = usageSnapshotInputFilter(filter)
 	}
+	if !matching {
+		return s.loadBunNormalizedDailyUsageRows(ctx, store, queryFilter, filter)
+	}
 	projections, err := s.loadBunDailyUsageProjections(
-		ctx, store, queryFilter, matching,
+		ctx, store, queryFilter, true,
 	)
 	if err != nil {
 		return nil, err
-	}
-	if !matching {
-		return normalizeBunDailyUsageProjections(projections, filter), nil
 	}
 	rows := make([]dailyUsageScanRow, 0, len(projections))
 	for _, row := range projections {
@@ -809,67 +809,93 @@ func (s *BunStore) loadBunDailyUsageProjections(
 	ctx context.Context, store bun.IDB, filter UsageFilter, matching bool,
 ) ([]bunDailyUsageProjection, error) {
 	messageQuery, eventQuery := s.bunDailyUsageQueries(store, filter, matching)
-	var messages []bunDailyUsageProjection
-	if err := messageQuery.Scan(ctx, &messages); err != nil {
+	rows := make([]bunDailyUsageProjection, 0)
+	if err := streamBunDailyUsageProjections(
+		ctx, messageQuery, true,
+		func(row bunDailyUsageProjection) error {
+			rows = append(rows, row)
+			return nil
+		},
+	); err != nil {
 		return nil, fmt.Errorf("querying daily usage messages: %w", err)
 	}
-
-	var events []bunDailyUsageProjection
-	if err := eventQuery.Scan(ctx, &events); err != nil {
+	if err := streamBunDailyUsageProjections(
+		ctx, eventQuery, false,
+		func(row bunDailyUsageProjection) error {
+			rows = append(rows, row)
+			return nil
+		},
+	); err != nil {
 		return nil, fmt.Errorf("querying daily usage events: %w", err)
-	}
-
-	rows := make([]bunDailyUsageProjection, 0, len(messages)+len(events))
-	for _, row := range messages {
-		row.UsageSource = "message"
-		rows = append(rows, row)
-	}
-	for _, row := range events {
-		row.UsageDedupKey = dailyUsageEventProjectionDedupKey(row)
-		rows = append(rows, row)
 	}
 	return rows, nil
 }
 
-func normalizeBunDailyUsageProjections(
-	projections []bunDailyUsageProjection, filter UsageFilter,
-) []dailyUsageScanRow {
+func (s *BunStore) loadBunNormalizedDailyUsageRows(
+	ctx context.Context, store bun.IDB, queryFilter, filter UsageFilter,
+) ([]dailyUsageScanRow, error) {
 	loc := filter.location()
 	bounded := usageBoundsForFilter(filter).bounded()
-	eligible := make([]bunDailyUsageProjection, 0, len(projections))
-	for _, row := range projections {
+	referenceTime := time.Now().UTC()
+	messageQuery, eventQuery := s.bunDailyUsageQueries(store, queryFilter, false)
+	messageCount, err := messageQuery.Count(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("counting daily usage messages: %w", err)
+	}
+	eventCount, err := eventQuery.Count(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("counting daily usage events: %w", err)
+	}
+	rows := make([]dailyUsageScanRow, 0, messageCount+eventCount)
+	claudeRows := make([]bunDailyUsageProjection, 0)
+	snapshotRows := make([]activity.UsageRow, 0)
+	metadata := make(map[string]bunDailyUsageProjection)
+	consume := func(row bunDailyUsageProjection) error {
 		daily := dailyUsageProjectionToRow(row)
 		if bounded {
 			date := dailyUsageLocalDate(daily, loc)
 			if date == "" || filter.From != "" && date < filter.From ||
 				filter.To != "" && date > filter.To {
-				continue
+				return nil
 			}
 		}
-		eligible = append(eligible, row)
+		if row.ClaudeMessageID != "" && row.ClaudeRequestID != "" {
+			metadata[row.SessionID] = row
+			_, outputTokens, _, _, _ := dailyUsageRowTokens(daily)
+			claudeRows = append(claudeRows, row)
+			snapshotRows = append(snapshotRows, activity.UsageRow{
+				SessionID:      row.SessionID,
+				Timestamp:      dailyUsageProjectionSnapshotTimestamp(row),
+				MessageOrdinal: usageRowMessageOrdinal(daily.messageOrdinal),
+				OutputTokens:   outputTokens,
+				WebSearchRequests: usageRowWebSearchRequests(
+					daily.usageSource, daily.tokenJSON),
+				ClaudeMessageID: row.ClaudeMessageID,
+				ClaudeRequestID: row.ClaudeRequestID,
+			})
+			return nil
+		}
+		if usageSourceMatches(row.Model, filter) &&
+			bunDailyUsageSessionMatches(row, filter, referenceTime) {
+			rows = append(rows, daily)
+		}
+		return nil
 	}
 
-	snapshotRows := make([]activity.UsageRow, len(eligible))
-	metadata := make(map[string]bunDailyUsageProjection, len(eligible))
-	for i, row := range eligible {
-		daily := dailyUsageProjectionToRow(row)
-		metadata[row.SessionID] = row
-		_, outputTokens, _, _, _ := dailyUsageRowTokens(daily)
-		snapshotRows[i] = activity.UsageRow{
-			SessionID: row.SessionID, Timestamp: daily.ts,
-			MessageOrdinal: usageRowMessageOrdinal(daily.messageOrdinal),
-			OutputTokens:   outputTokens,
-			WebSearchRequests: usageRowWebSearchRequests(
-				daily.usageSource, daily.tokenJSON),
-			ClaudeMessageID: row.ClaudeMessageID,
-			ClaudeRequestID: row.ClaudeRequestID,
-		}
+	if err := streamBunDailyUsageProjections(
+		ctx, messageQuery, true, consume,
+	); err != nil {
+		return nil, fmt.Errorf("querying daily usage messages: %w", err)
 	}
+	if err := streamBunDailyUsageProjections(
+		ctx, eventQuery, false, consume,
+	); err != nil {
+		return nil, fmt.Errorf("querying daily usage events: %w", err)
+	}
+
 	mask, attribution, webSearchRequests :=
 		activity.ClaudeSnapshotSurvivorSelection(snapshotRows)
-	referenceTime := time.Now().UTC()
-	rows := make([]dailyUsageScanRow, 0, len(eligible))
-	for i, row := range eligible {
+	for i, row := range claudeRows {
 		if !mask[i] {
 			continue
 		}
@@ -887,7 +913,93 @@ func normalizeBunDailyUsageProjections(
 		rows = append(rows, daily)
 	}
 	sortDailyUsageRows(rows)
-	return rows
+	return rows, nil
+}
+
+func streamBunDailyUsageProjections(
+	ctx context.Context,
+	query *bun.SelectQuery,
+	message bool,
+	consume func(bunDailyUsageProjection) error,
+) error {
+	rows, err := query.Rows(ctx)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var row bunDailyUsageProjection
+	var sessionEndedAt bunmodel.Timestamp
+	var terminationStatus sql.NullString
+	sessionColumns := []any{
+		&row.Project,
+		&row.Agent,
+		&row.Machine,
+		&row.GitBranch,
+		&row.UserMessageCount,
+		&row.IsAutomated,
+		&row.SessionStartedAt,
+		&sessionEndedAt,
+		&row.SessionCreatedAt,
+		&terminationStatus,
+	}
+	var dest []any
+	if message {
+		dest = []any{
+			&row.SessionID,
+			&row.MessageOrdinal,
+			&row.UsageTimestamp,
+			&row.Model,
+			&row.TokenJSON,
+			&row.ClaudeMessageID,
+			&row.ClaudeRequestID,
+			&row.SourceUUID,
+		}
+	} else {
+		dest = []any{
+			&row.ID,
+			&row.SessionID,
+			&row.MessageOrdinal,
+			&row.UsageTimestamp,
+			&row.Model,
+			&row.InputTokens,
+			&row.OutputTokens,
+			&row.CacheCreationInputTokens,
+			&row.CacheReadInputTokens,
+			&row.ReasoningTokens,
+			&row.CostMicrodollars,
+			&row.CostSource,
+			&row.UsageSource,
+			&row.DedupKey,
+		}
+	}
+	dest = append(dest, sessionColumns...)
+
+	for rows.Next() {
+		row = bunDailyUsageProjection{}
+		sessionEndedAt = bunmodel.Timestamp{}
+		terminationStatus = sql.NullString{}
+		if err := rows.Scan(dest...); err != nil {
+			return err
+		}
+		if message {
+			row.UsageSource = "message"
+		} else {
+			row.UsageDedupKey = dailyUsageEventProjectionDedupKey(row)
+		}
+		if !sessionEndedAt.IsZero() {
+			value := sessionEndedAt
+			row.SessionEndedAt = &value
+		}
+		if terminationStatus.Valid {
+			value := terminationStatus.String
+			row.TerminationStatus = &value
+		}
+		if err := consume(row); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 func bunDailyUsageProjectionWithSessionMetadata(
@@ -1286,6 +1398,16 @@ func dailyUsageProjectionTime(row bunDailyUsageProjection) time.Time {
 		return row.SessionCreatedAt.Time
 	}
 	return time.Time{}
+}
+
+func dailyUsageProjectionSnapshotTimestamp(row bunDailyUsageProjection) string {
+	if !row.UsageTimestamp.IsZero() {
+		return formatRequiredUsageTimestamp(row.UsageTimestamp)
+	}
+	if !row.SessionStartedAt.IsZero() {
+		return formatRequiredUsageTimestamp(row.SessionStartedAt)
+	}
+	return ""
 }
 
 func formatRequiredUsageTime(value time.Time) string {

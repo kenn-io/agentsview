@@ -495,12 +495,11 @@ func (db *DB) InsertMessages(msgs []Message) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	grouped := make(map[string][]Message)
+	sessionID := msgs[0].SessionID
 	for _, msg := range msgs {
 		if msg.SessionID == "" {
 			return errors.New("inserting canonical message: empty session id")
 		}
-		grouped[msg.SessionID] = append(grouped[msg.SessionID], msg)
 	}
 
 	ctx := context.Background()
@@ -511,10 +510,8 @@ func (db *DB) InsertMessages(msgs []Message) error {
 	defer func() { _ = bunTx.Rollback() }()
 	tx := bunTx.Tx
 
-	for _, sessionID := range messageSessionIDs(msgs) {
-		if err := appendCanonicalMessageGraph(
-			ctx, bunTx, sessionID, grouped[sessionID],
-		); err != nil {
+	writeSession := func(sessionID string, sessionMessages []Message) error {
+		if err := appendCanonicalMessageGraph(ctx, bunTx, sessionID, sessionMessages); err != nil {
 			return err
 		}
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
@@ -527,6 +524,29 @@ func (db *DB) InsertMessages(msgs []Message) error {
 		}
 		if err := invalidateSessionSignalsTx(tx, sessionID); err != nil {
 			return err
+		}
+		return nil
+	}
+	oneSession := true
+	for _, msg := range msgs[1:] {
+		if msg.SessionID != sessionID {
+			oneSession = false
+			break
+		}
+	}
+	if oneSession {
+		if err := writeSession(sessionID, msgs); err != nil {
+			return err
+		}
+	} else {
+		grouped := make(map[string][]Message)
+		for _, msg := range msgs {
+			grouped[msg.SessionID] = append(grouped[msg.SessionID], msg)
+		}
+		for _, groupedSessionID := range messageSessionIDs(msgs) {
+			if err := writeSession(groupedSessionID, grouped[groupedSessionID]); err != nil {
+				return err
+			}
 		}
 	}
 	return bunTx.Commit()
@@ -563,14 +583,38 @@ func appendCanonicalMessageGraph(
 			)
 		}
 	}
-	messageRows, callRows, resultRows, err := CanonicalMessageRows(msgs)
+	if err := appendArchiveMessageRows(ctx, tx, sessionID, msgs); err != nil {
+		return err
+	}
+	callRows, resultRows, err := canonicalToolRows(msgs)
 	if err != nil {
 		return err
 	}
-	if err := AppendMessageRows(ctx, tx, sessionID, messageRows); err != nil {
+	return AppendToolRows(ctx, tx, sessionID, callRows, resultRows)
+}
+
+func repairArchiveMessageGraph(
+	ctx context.Context, tx bun.IDB, sessionID string,
+	affectedOrdinals []int, messages []Message,
+) error {
+	canonicalInput := append([]Message(nil), messages...)
+	for i := range canonicalInput {
+		canonicalInput[i].Timestamp = ""
+	}
+	messageRows, callRows, resultRows, err := CanonicalMessageRows(canonicalInput)
+	if err != nil {
 		return err
 	}
-	return AppendToolRows(ctx, tx, sessionID, callRows, resultRows)
+	if err := prepareMessageRepair(
+		ctx, tx, sessionID, affectedOrdinals,
+		messageRows, callRows, resultRows,
+	); err != nil {
+		return err
+	}
+	if err := repairArchiveMessageRows(ctx, tx, sessionID, messages); err != nil {
+		return err
+	}
+	return appendToolRows(ctx, tx, sessionID, callRows, resultRows)
 }
 
 func (db *DB) WriteSessionIncremental(

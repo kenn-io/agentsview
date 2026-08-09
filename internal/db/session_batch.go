@@ -459,24 +459,10 @@ func writeOneSessionBatchTx(
 			return 0, err
 		}
 	} else if len(msgs) > 0 {
-		messageRows, callRows, resultRows, err := CanonicalMessageRows(msgs)
-		if err != nil {
+		if err := appendCanonicalMessageGraph(
+			ctx, bunTx, write.Session.ID, msgs,
+		); err != nil {
 			return 0, err
-		}
-		if replaceMessages {
-			if err := ReplaceMessageRows(ctx, bunTx, write.Session.ID, messageRows); err != nil {
-				return 0, err
-			}
-			if err := ReplaceToolRows(ctx, bunTx, write.Session.ID, callRows, resultRows); err != nil {
-				return 0, err
-			}
-		} else {
-			if err := AppendMessageRows(ctx, bunTx, write.Session.ID, messageRows); err != nil {
-				return 0, err
-			}
-			if err := AppendToolRows(ctx, bunTx, write.Session.ID, callRows, resultRows); err != nil {
-				return 0, err
-			}
 		}
 	} else if replaceMessages {
 		if err := ReplaceMessageRows(ctx, bunTx, write.Session.ID, nil); err != nil {

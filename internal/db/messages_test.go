@@ -587,6 +587,85 @@ func TestWriteSessionBatchFreshReplaceMessagesSkipsDeletePath(t *testing.T) {
 	requireMessagesDeleteTriggerPoisoned(t, d)
 }
 
+func TestWriteSessionAtomicPreservesMalformedMessageTimestamp(t *testing.T) {
+	t.Parallel()
+	d := testDB(t)
+	const sessionID = "atomic-malformed-timestamp"
+	const malformed = "not-a-timestamp"
+
+	result, err := d.WriteSessionAtomic(SessionBatchWrite{
+		Session: Session{
+			ID: sessionID, Project: "proj", Machine: defaultMachine,
+			Agent: defaultAgent, MessageCount: 1, UserMessageCount: 1,
+		},
+		Messages: []Message{{
+			SessionID: sessionID, Ordinal: 0, Role: "user",
+			Content: "provider timestamp", Timestamp: malformed,
+		}},
+		ReplaceMessages: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.WrittenSessions)
+
+	messages, err := d.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, malformed, messages[0].Timestamp)
+}
+
+func TestWriteSessionAtomicNoOpAndRepairPreserveMalformedMessageTimestamp(t *testing.T) {
+	t.Parallel()
+	d := testDB(t)
+	const sessionID = "atomic-repair-malformed-timestamp"
+	const malformed = "not-a-timestamp"
+	insertSession(t, d, sessionID, "proj", func(session *Session) {
+		session.MessageCount = 2
+	})
+	messages := []Message{
+		{SessionID: sessionID, Ordinal: 0, Role: "assistant",
+			Content: "before", Timestamp: malformed, SourceUUID: "source-0"},
+		{SessionID: sessionID, Ordinal: 1, Role: "user",
+			Content: "unchanged", Timestamp: malformed, SourceUUID: "source-1"},
+	}
+	require.NoError(t, d.InsertMessages(messages))
+	beforeIDs := messageIDsByOrdinal(t, d, sessionID)
+
+	session, err := d.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.NotNil(t, session.TranscriptRevision)
+	beforeRevision := *session.TranscriptRevision
+
+	result, err := d.WriteSessionAtomic(SessionBatchWrite{
+		Session: *session, Messages: messages,
+		ReplaceMessages: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.WrittenSessions)
+	unchanged, err := d.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, unchanged)
+	require.NotNil(t, unchanged.TranscriptRevision)
+	assert.Equal(t, beforeRevision, *unchanged.TranscriptRevision)
+	assert.Equal(t, beforeIDs, messageIDsByOrdinal(t, d, sessionID))
+
+	messages[0].Content = "after"
+	result, err = d.WriteSessionAtomic(SessionBatchWrite{
+		Session: *unchanged, Messages: messages,
+		ReplaceMessages: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.WrittenSessions)
+	stored, err := d.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Len(t, stored, 2)
+	assert.Equal(t, "after", stored[0].Content)
+	assert.Equal(t, malformed, stored[0].Timestamp)
+	assert.Equal(t, malformed, stored[1].Timestamp)
+	assert.Equal(t, beforeIDs, messageIDsByOrdinal(t, d, sessionID),
+		"safe repair must retain SQLite row IDs")
+}
+
 func TestWriteSessionBatchReplaceMessagesOnlyBumpsChangedTranscript(t *testing.T) {
 	t.Parallel()
 	d := testDB(t)

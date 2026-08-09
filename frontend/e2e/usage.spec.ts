@@ -127,6 +127,12 @@ test.describe("Usage page", () => {
       .locator(".usage-toolbar .kit-filter-dropdown__btn")
       .first();
     await trigger.click();
+    await expect(
+      page
+        .locator(".usage-toolbar .kit-filter-dropdown__item")
+        .filter({ hasText: "project-delta" })
+        .first(),
+    ).toBeVisible();
 
     // Click "Deselect all".
     await page

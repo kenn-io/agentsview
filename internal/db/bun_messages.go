@@ -28,7 +28,9 @@ func (s *BunStore) GetMessages(
 		} else {
 			query = query.Where("ordinal <= ?", from).OrderExpr("ordinal DESC")
 		}
-		rows, err := scanBunMessages(ctx, query.Limit(limit))
+		rows, err := scanBunMessages(
+			ctx, query.Limit(limit), preserveRawMessageTimestamps(s.backend),
+		)
 		if err != nil {
 			return fmt.Errorf("querying messages: %w", err)
 		}
@@ -70,7 +72,10 @@ func (s *BunStore) GetMessagesWindow(
 			} else {
 				query = query.Where("ordinal <= ?", from).OrderExpr("ordinal DESC")
 			}
-			rows, err := scanBunMessages(ctx, query.Limit(window.Limit))
+			rows, err := scanBunMessages(
+				ctx, query.Limit(window.Limit),
+				preserveRawMessageTimestamps(s.backend),
+			)
 			if err != nil {
 				return fmt.Errorf("querying role-filtered messages: %w", err)
 			}
@@ -100,7 +105,9 @@ func (s *BunStore) GetMessagesWindow(
 			if roles && len(window.Roles) > 0 {
 				query = query.Where("role IN (?)", bun.List(window.Roles))
 			}
-			return scanBunMessages(ctx, query)
+			return scanBunMessages(
+				ctx, query, preserveRawMessageTimestamps(s.backend),
+			)
 		}
 		before, err := queryPart("<", "DESC", window.Before, true)
 		if err != nil {
@@ -139,7 +146,7 @@ func (s *BunStore) GetAllMessages(
 	err := s.consistentView(ctx, func(store bun.IDB) error {
 		rows, err := scanBunMessages(ctx, store.NewSelect().
 			Model((*bunmodel.Message)(nil)).Where("session_id = ?", sessionID).
-			OrderExpr("ordinal ASC"))
+			OrderExpr("ordinal ASC"), preserveRawMessageTimestamps(s.backend))
 		if err != nil {
 			return fmt.Errorf("querying all messages: %w", err)
 		}
@@ -155,7 +162,38 @@ func (s *BunStore) GetAllMessages(
 	return pendingMessages, nil
 }
 
-func scanBunMessages(ctx context.Context, query *bun.SelectQuery) ([]Message, error) {
+type bunRawTimestampMessage struct {
+	bunmodel.Message `bun:",extend"`
+	RawTimestamp     string `bun:"raw_timestamp"`
+}
+
+func preserveRawMessageTimestamps(backend BunBackend) bool {
+	reader, ok := backend.(bunRawMessageTimestampReader)
+	return ok && reader.PreserveRawMessageTimestamps()
+}
+
+func scanBunMessages(
+	ctx context.Context, query *bun.SelectQuery, preserveRawTimestamp bool,
+) ([]Message, error) {
+	if preserveRawTimestamp {
+		var rows []bunRawTimestampMessage
+		if err := query.ExcludeColumn("timestamp").
+			ColumnExpr("NULL AS timestamp").
+			ColumnExpr("COALESCE(timestamp, '') AS raw_timestamp").
+			Scan(ctx, &rows); err != nil {
+			return nil, err
+		}
+		messages := make([]Message, 0, len(rows))
+		for _, row := range rows {
+			message := messageFromBunRow(row.Message)
+			message.Timestamp = row.RawTimestamp
+			if row.ID == nil {
+				message.ID = int64(message.Ordinal)
+			}
+			messages = append(messages, message)
+		}
+		return messages, nil
+	}
 	var rows []bunmodel.Message
 	if err := query.Scan(ctx, &rows); err != nil {
 		return nil, err
