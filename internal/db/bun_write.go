@@ -406,15 +406,19 @@ func writeArchiveMessageRows(
 	if len(rows) == 0 {
 		return nil
 	}
-	query := tx.NewInsert().Model(&rows).
-		Column(canonicalArchiveMessageColumns...).Returning("")
-	if conflict != "" {
-		query.On(conflict)
-	}
-	if _, err := query.Exec(ctx); err != nil {
-		return fmt.Errorf("inserting canonical messages for %s: %w", sessionID, err)
-	}
-	return nil
+	return writeCanonicalBatches(rows, func(batch []archiveMessageRow) error {
+		query := tx.NewInsert().Model(&batch).
+			Column(canonicalArchiveMessageColumns...).Returning("")
+		if conflict != "" {
+			query.On(conflict)
+		}
+		if _, err := query.Exec(ctx); err != nil {
+			return fmt.Errorf(
+				"inserting canonical messages for %s: %w", sessionID, err,
+			)
+		}
+		return nil
+	})
 }
 
 func archiveMessageTimestamp(value string) string {
@@ -620,11 +624,15 @@ func appendMessageRows(
 	if tx.Dialect().Name().String() != "custom" {
 		columns = canonicalReplacementColumns((*bunmodel.Message)(nil), "id")
 	}
-	if _, err := tx.NewInsert().Model(&rows).Column(columns...).Returning("").
-		Exec(ctx); err != nil {
-		return fmt.Errorf("inserting canonical messages for %s: %w", sessionID, err)
-	}
-	return nil
+	return writeCanonicalBatches(rows, func(batch []bunmodel.Message) error {
+		if _, err := tx.NewInsert().Model(&batch).Column(columns...).Returning("").
+			Exec(ctx); err != nil {
+			return fmt.Errorf(
+				"inserting canonical messages for %s: %w", sessionID, err,
+			)
+		}
+		return nil
+	})
 }
 
 // ReplaceToolRows replaces a session's canonical tool-call and result-event
@@ -677,9 +685,19 @@ func RepairMessageRows(
 		[]string{"session_id", "ordinal"}, updates,
 	)
 	if len(messages) > 0 {
-		if _, err := tx.NewInsert().Model(&messages).Column(columns...).
-			On(conflict).Returning("").Exec(ctx); err != nil {
-			return fmt.Errorf("repairing canonical messages for %s: %w", sessionID, err)
+		if err := writeCanonicalBatches(
+			messages,
+			func(batch []bunmodel.Message) error {
+				if _, err := tx.NewInsert().Model(&batch).Column(columns...).
+					On(conflict).Returning("").Exec(ctx); err != nil {
+					return fmt.Errorf(
+						"repairing canonical messages for %s: %w", sessionID, err,
+					)
+				}
+				return nil
+			},
+		); err != nil {
+			return err
 		}
 	}
 	return appendToolRows(ctx, tx, sessionID, calls, results)
@@ -752,17 +770,31 @@ func prepareMessageRepair(
 	}
 
 	if len(affectedOrdinals) > 0 {
-		if _, err := tx.NewDelete().Model((*bunmodel.ToolResultEvent)(nil)).
-			Where("session_id = ?", sessionID).
-			Where("tool_call_message_ordinal IN (?)", bun.List(affectedOrdinals)).
-			Exec(ctx); err != nil {
-			return fmt.Errorf("clearing canonical repair tool results for %s: %w", sessionID, err)
-		}
-		if _, err := tx.NewDelete().Model((*bunmodel.ToolCall)(nil)).
-			Where("session_id = ?", sessionID).
-			Where("message_ordinal IN (?)", bun.List(affectedOrdinals)).
-			Exec(ctx); err != nil {
-			return fmt.Errorf("clearing canonical repair tool calls for %s: %w", sessionID, err)
+		if err := writeCanonicalBatches(
+			affectedOrdinals,
+			func(batch []int) error {
+				if _, err := tx.NewDelete().Model((*bunmodel.ToolResultEvent)(nil)).
+					Where("session_id = ?", sessionID).
+					Where("tool_call_message_ordinal IN (?)", bun.List(batch)).
+					Exec(ctx); err != nil {
+					return fmt.Errorf(
+						"clearing canonical repair tool results for %s: %w",
+						sessionID, err,
+					)
+				}
+				if _, err := tx.NewDelete().Model((*bunmodel.ToolCall)(nil)).
+					Where("session_id = ?", sessionID).
+					Where("message_ordinal IN (?)", bun.List(batch)).
+					Exec(ctx); err != nil {
+					return fmt.Errorf(
+						"clearing canonical repair tool calls for %s: %w",
+						sessionID, err,
+					)
+				}
+				return nil
+			},
+		); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -777,18 +809,37 @@ func appendToolRows(
 		return err
 	}
 	if len(calls) > 0 {
-		insert := tx.NewInsert().Model(&calls).
-			Column(canonicalReplacementColumns((*bunmodel.ToolCall)(nil), "id")...).
-			Returning("")
-		if _, err := insert.Exec(ctx); err != nil {
-			return fmt.Errorf("inserting canonical tool calls for %s: %w", sessionID, err)
+		if err := writeCanonicalBatches(calls, func(batch []bunmodel.ToolCall) error {
+			insert := tx.NewInsert().Model(&batch).
+				Column(canonicalReplacementColumns((*bunmodel.ToolCall)(nil), "id")...).
+				Returning("")
+			if _, err := insert.Exec(ctx); err != nil {
+				return fmt.Errorf(
+					"inserting canonical tool calls for %s: %w", sessionID, err,
+				)
+			}
+			return nil
+		}); err != nil {
+			return err
 		}
 	}
 	if len(results) > 0 {
-		if _, err := tx.NewInsert().Model(&results).
-			Column(canonicalReplacementColumns((*bunmodel.ToolResultEvent)(nil), "id")...).
-			Returning("").Exec(ctx); err != nil {
-			return fmt.Errorf("inserting canonical tool results for %s: %w", sessionID, err)
+		if err := writeCanonicalBatches(
+			results,
+			func(batch []bunmodel.ToolResultEvent) error {
+				if _, err := tx.NewInsert().Model(&batch).
+					Column(canonicalReplacementColumns(
+						(*bunmodel.ToolResultEvent)(nil), "id",
+					)...).
+					Returning("").Exec(ctx); err != nil {
+					return fmt.Errorf(
+						"inserting canonical tool results for %s: %w", sessionID, err,
+					)
+				}
+				return nil
+			},
+		); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -827,39 +878,58 @@ func replaceToolRows(
 		return err
 	}
 	if len(calls) > 0 {
-		if _, err := tx.NewInsert().Model(&calls).
-			Column(canonicalReplacementColumns((*bunmodel.ToolCall)(nil), "id")...).
-			Returning("").
-			On("CONFLICT (session_id, message_ordinal, call_index) DO UPDATE").
-			Set("message_id = EXCLUDED.message_id").
-			Set("tool_name = EXCLUDED.tool_name").
-			Set("category = EXCLUDED.category").
-			Set("tool_use_id = EXCLUDED.tool_use_id").
-			Set("input_json = EXCLUDED.input_json").
-			Set("skill_name = EXCLUDED.skill_name").
-			Set("result_content_length = EXCLUDED.result_content_length").
-			Set("result_content = EXCLUDED.result_content").
-			Set("subagent_session_id = EXCLUDED.subagent_session_id").
-			Set("file_path = EXCLUDED.file_path").
-			Exec(ctx); err != nil {
-			return fmt.Errorf("upserting canonical tool calls for %s: %w", sessionID, err)
+		if err := writeCanonicalBatches(calls, func(batch []bunmodel.ToolCall) error {
+			if _, err := tx.NewInsert().Model(&batch).
+				Column(canonicalReplacementColumns((*bunmodel.ToolCall)(nil), "id")...).
+				Returning("").
+				On("CONFLICT (session_id, message_ordinal, call_index) DO UPDATE").
+				Set("message_id = EXCLUDED.message_id").
+				Set("tool_name = EXCLUDED.tool_name").
+				Set("category = EXCLUDED.category").
+				Set("tool_use_id = EXCLUDED.tool_use_id").
+				Set("input_json = EXCLUDED.input_json").
+				Set("skill_name = EXCLUDED.skill_name").
+				Set("result_content_length = EXCLUDED.result_content_length").
+				Set("result_content = EXCLUDED.result_content").
+				Set("subagent_session_id = EXCLUDED.subagent_session_id").
+				Set("file_path = EXCLUDED.file_path").
+				Exec(ctx); err != nil {
+				return fmt.Errorf(
+					"upserting canonical tool calls for %s: %w", sessionID, err,
+				)
+			}
+			return nil
+		}); err != nil {
+			return err
 		}
 	}
 	if len(results) > 0 {
-		if _, err := tx.NewInsert().Model(&results).
-			Column(canonicalReplacementColumns((*bunmodel.ToolResultEvent)(nil), "id")...).
-			Returning("").
-			On("CONFLICT (session_id, tool_call_message_ordinal, call_index, event_index) DO UPDATE").
-			Set("tool_use_id = EXCLUDED.tool_use_id").
-			Set("agent_id = EXCLUDED.agent_id").
-			Set("subagent_session_id = EXCLUDED.subagent_session_id").
-			Set("source = EXCLUDED.source").
-			Set("status = EXCLUDED.status").
-			Set("content = EXCLUDED.content").
-			Set("content_length = EXCLUDED.content_length").
-			Set("timestamp = EXCLUDED.timestamp").
-			Exec(ctx); err != nil {
-			return fmt.Errorf("upserting canonical tool results for %s: %w", sessionID, err)
+		if err := writeCanonicalBatches(
+			results,
+			func(batch []bunmodel.ToolResultEvent) error {
+				if _, err := tx.NewInsert().Model(&batch).
+					Column(canonicalReplacementColumns(
+						(*bunmodel.ToolResultEvent)(nil), "id",
+					)...).
+					Returning("").
+					On("CONFLICT (session_id, tool_call_message_ordinal, call_index, event_index) DO UPDATE").
+					Set("tool_use_id = EXCLUDED.tool_use_id").
+					Set("agent_id = EXCLUDED.agent_id").
+					Set("subagent_session_id = EXCLUDED.subagent_session_id").
+					Set("source = EXCLUDED.source").
+					Set("status = EXCLUDED.status").
+					Set("content = EXCLUDED.content").
+					Set("content_length = EXCLUDED.content_length").
+					Set("timestamp = EXCLUDED.timestamp").
+					Exec(ctx); err != nil {
+					return fmt.Errorf(
+						"upserting canonical tool results for %s: %w", sessionID, err,
+					)
+				}
+				return nil
+			},
+		); err != nil {
+			return err
 		}
 	}
 
@@ -919,15 +989,22 @@ func resolveCanonicalToolMessageIDs(
 
 	messageIDs := make(map[int]*int64, len(ordinals))
 	if len(ordinals) > 0 {
-		var messages []bunmodel.Message
-		if err := tx.NewSelect().Model(&messages).Column("id", "ordinal").
-			Where("session_id = ?", sessionID).
-			Where("ordinal IN (?)", bun.List(ordinals)).
-			Scan(ctx); err != nil {
-			return fmt.Errorf("resolving canonical tool message ids for %s: %w", sessionID, err)
-		}
-		for _, message := range messages {
-			messageIDs[message.Ordinal] = message.ID
+		if err := writeCanonicalBatches(ordinals, func(batch []int) error {
+			var messages []bunmodel.Message
+			if err := tx.NewSelect().Model(&messages).Column("id", "ordinal").
+				Where("session_id = ?", sessionID).
+				Where("ordinal IN (?)", bun.List(batch)).
+				Scan(ctx); err != nil {
+				return fmt.Errorf(
+					"resolving canonical tool message ids for %s: %w", sessionID, err,
+				)
+			}
+			for _, message := range messages {
+				messageIDs[message.Ordinal] = message.ID
+			}
+			return nil
+		}); err != nil {
+			return err
 		}
 	}
 	for i := range calls {
@@ -963,9 +1040,16 @@ func ReplaceUsageEventRows(
 		if tx.Dialect().Name().String() != "custom" {
 			columns = canonicalReplacementColumns((*bunmodel.UsageEvent)(nil), "id")
 		}
-		query := tx.NewInsert().Model(&rows).Column(columns...).Returning("")
-		if _, err := query.Exec(ctx); err != nil {
-			return fmt.Errorf("inserting canonical usage events for %s: %w", sessionID, err)
+		if err := writeCanonicalBatches(rows, func(batch []bunmodel.UsageEvent) error {
+			query := tx.NewInsert().Model(&batch).Column(columns...).Returning("")
+			if _, err := query.Exec(ctx); err != nil {
+				return fmt.Errorf(
+					"inserting canonical usage events for %s: %w", sessionID, err,
+				)
+			}
+			return nil
+		}); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -986,10 +1070,22 @@ func ReplaceSecretFindingRows(
 		return fmt.Errorf("clearing canonical secret findings for %s: %w", sessionID, err)
 	}
 	if len(rows) > 0 {
-		if _, err := tx.NewInsert().Model(&rows).
-			Column(canonicalReplacementColumns((*bunmodel.SecretFinding)(nil), "id")...).
-			Returning("").Exec(ctx); err != nil {
-			return fmt.Errorf("inserting canonical secret findings for %s: %w", sessionID, err)
+		if err := writeCanonicalBatches(
+			rows,
+			func(batch []bunmodel.SecretFinding) error {
+				if _, err := tx.NewInsert().Model(&batch).
+					Column(canonicalReplacementColumns(
+						(*bunmodel.SecretFinding)(nil), "id",
+					)...).
+					Returning("").Exec(ctx); err != nil {
+					return fmt.Errorf(
+						"inserting canonical secret findings for %s: %w", sessionID, err,
+					)
+				}
+				return nil
+			},
+		); err != nil {
+			return err
 		}
 	}
 	return nil

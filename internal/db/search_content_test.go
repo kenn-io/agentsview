@@ -56,26 +56,40 @@ func TestSearchContentSubstringMessages(t *testing.T) {
 	assert.Contains(t, m.Snippet, "DATABASE_URL", "snippet")
 }
 
-func TestSearchContentTreatsMalformedMessageTimestampAsUnavailable(t *testing.T) {
-	d := testDB(t)
-	seedSearchSession(t, d, "malformed-search", "proj", [][2]string{
-		{"user", "find the malformed timestamp row"},
-		{"assistant", "done"},
-	})
-	_, err := d.getWriter().Exec(
-		"UPDATE messages SET timestamp = ? WHERE session_id = ? AND ordinal = ?",
-		"not-a-timestamp", "malformed-search", 0,
-	)
-	require.NoError(t, err)
+func TestSearchContentUsesOnlyCanonicalMessageTimestamps(t *testing.T) {
+	tests := []struct {
+		name, timestamp, want string
+	}{
+		{"canonical", "2026-08-09T10:01:00Z", "2026-08-09T10:01:00Z"},
+		{"empty", "", ""},
+		{"malformed", "not-a-timestamp", ""},
+		{"date only", "2026-08-09", ""},
+		{"time only", "10:01:00", ""},
+		{"numeric", "2451545", ""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			d := testDB(t)
+			seedSearchSession(t, d, "timestamp-search", "proj", [][2]string{
+				{"user", "find the timestamp row"},
+				{"assistant", "done"},
+			})
+			_, err := d.getWriter().Exec(
+				"UPDATE messages SET timestamp = ? WHERE session_id = ? AND ordinal = ?",
+				test.timestamp, "timestamp-search", 0,
+			)
+			require.NoError(t, err)
 
-	result, err := d.SearchContent(t.Context(), ContentSearchFilter{
-		Pattern: "malformed timestamp", Mode: "substring",
-		Sources: []string{"messages"}, Limit: 50,
-	})
+			result, err := d.SearchContent(t.Context(), ContentSearchFilter{
+				Pattern: "timestamp row", Mode: "substring",
+				Sources: []string{"messages"}, Limit: 50,
+			})
 
-	require.NoError(t, err)
-	require.Len(t, result.Matches, 1)
-	assert.Empty(t, result.Matches[0].Timestamp)
+			require.NoError(t, err)
+			require.Len(t, result.Matches, 1)
+			assert.Equal(t, test.want, result.Matches[0].Timestamp)
+		})
+	}
 }
 
 // TestSearchContentRedactsStraddlingSecret pins the default (non-reveal)

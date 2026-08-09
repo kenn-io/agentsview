@@ -130,6 +130,62 @@ func TestScanSecretsResultEventIndexSurvivesPersistence(t *testing.T) {
 	assert.Equal(t, syntheticAWSAccessKey(), source)
 }
 
+func TestBackfillRewritesPreCanonicalEventCoordinateFindings(t *testing.T) {
+	fx := newEngineFixture(t)
+	ctx := context.Background()
+	const (
+		sessionID                = "pre-canonical-event-coordinate"
+		preCanonicalRulesVersion = "bd4c273e0d48a52d630b8c3c270b5444891b447cd47d31ae979935e5c0810a93"
+	)
+	session := db.Session{
+		ID: sessionID, Project: "proj", Machine: "machine", Agent: "claude",
+		MessageCount: 1,
+	}
+	messages := []db.Message{{
+		SessionID: sessionID, Ordinal: 0, Role: "assistant",
+		ToolCalls: []db.ToolCall{{
+			ToolName: "Bash", ToolUseID: "tool-1",
+			ResultEvents: []db.ToolResultEvent{
+				{Status: "running", Content: "starting up", EventIndex: 5},
+				{Status: "completed", Content: syntheticAWSAccessKey(), EventIndex: 9},
+			},
+		}},
+	}}
+	require.NoError(t, fx.db.UpsertSession(session))
+	require.NoError(t, fx.db.ReplaceSessionMessages(sessionID, messages))
+	callIndex, oldEventIndex := 0, 1
+	require.NoError(t, fx.db.ReplaceSessionSecretFindings(
+		sessionID,
+		[]db.SecretFinding{{
+			RuleName: "aws-access-key", Confidence: secrets.ConfidenceDefinite,
+			LocationKind: "tool_result_event", MessageOrdinal: 0,
+			CallIndex: &callIndex, EventIndex: &oldEventIndex,
+			MatchStart: 0, MatchEnd: len(syntheticAWSAccessKey()),
+			RedactedMatch: "AKIA…PLJM",
+		}},
+		1,
+		preCanonicalRulesVersion,
+	))
+
+	summary, err := fx.engine.ScanSecrets(
+		ctx, SecretScanInput{Backfill: true}, nil,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, summary.Scanned,
+		"the pre-canonical rules stamp must be stale")
+	findings, err := fx.db.SessionSecretFindings(ctx, sessionID)
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	require.NotNil(t, findings[0].EventIndex)
+	assert.Equal(t, 9, *findings[0].EventIndex)
+	assert.Equal(t, secrets.RulesVersion(), findings[0].RulesVersion)
+	source, ok, err := fx.db.SecretFindingSource(ctx, findings[0])
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, syntheticAWSAccessKey(), source)
+}
+
 // TestComputeSignalsAndSecretsDefiniteOnly pins the inline-sync contract: the
 // per-write scan path stores only definite findings and stamps the definite
 // rules version, keeping the FP-prone, CPU-heavy candidate regexes out of the

@@ -21,13 +21,14 @@ type bunContentSession struct {
 }
 
 type bunContentMessage struct {
-	SessionID   string              `bun:"session_id"`
-	Ordinal     int                 `bun:"ordinal"`
-	Role        string              `bun:"role"`
-	Content     string              `bun:"content"`
-	Timestamp   *bunmodel.Timestamp `bun:"timestamp"`
-	IsSystem    bool                `bun:"is_system"`
-	IsSidechain bool                `bun:"is_sidechain"`
+	SessionID    string              `bun:"session_id"`
+	Ordinal      int                 `bun:"ordinal"`
+	Role         string              `bun:"role"`
+	Content      string              `bun:"content"`
+	RawTimestamp any                 `bun:"timestamp"`
+	Timestamp    *bunmodel.Timestamp `bun:"-"`
+	IsSystem     bool                `bun:"is_system"`
+	IsSidechain  bool                `bun:"is_sidechain"`
 }
 
 type bunContentMessageKey struct {
@@ -253,7 +254,7 @@ func (s *BunStore) searchContentHybrid(
 			return err
 		}
 		eligibleSemanticHits, err = filterContentHitsByLiveAnchor(
-			ctx, store, eligibleSemanticHits, s.backend.TimestampOrderExpr,
+			ctx, store, eligibleSemanticHits, s.backend,
 		)
 		if err != nil {
 			return err
@@ -262,7 +263,7 @@ func (s *BunStore) searchContentHybrid(
 			eligibleSemanticHits, filter.Scope, candidateLimit,
 		)
 		liveLexicalLeg, err := filterContentHybridLegByLiveAnchor(
-			ctx, store, lexicalLeg, s.backend.TimestampOrderExpr,
+			ctx, store, lexicalLeg, s.backend,
 		)
 		if err != nil {
 			return err
@@ -289,10 +290,10 @@ func (s *BunStore) searchContentHybrid(
 
 func filterContentHitsByLiveAnchor(
 	ctx context.Context, store bun.IDB, hits []ContentSearchHit,
-	timestampOrder func(string) string,
+	backend BunBackend,
 ) ([]ContentSearchHit, error) {
 	messages, err := bunContentMessagesForHits(
-		ctx, store, hits, timestampOrder,
+		ctx, store, hits, backend,
 	)
 	if err != nil {
 		return nil, err
@@ -308,7 +309,7 @@ func filterContentHitsByLiveAnchor(
 
 func filterContentHybridLegByLiveAnchor(
 	ctx context.Context, store bun.IDB, leg contentHybridLeg,
-	timestampOrder func(string) string,
+	backend BunBackend,
 ) (contentHybridLeg, error) {
 	hits := make([]ContentSearchHit, 0, len(leg.ranked))
 	for _, ranked := range leg.ranked {
@@ -317,7 +318,7 @@ func filterContentHybridLegByLiveAnchor(
 		}
 	}
 	liveHits, err := filterContentHitsByLiveAnchor(
-		ctx, store, hits, timestampOrder,
+		ctx, store, hits, backend,
 	)
 	if err != nil {
 		return contentHybridLeg{}, err
@@ -635,7 +636,7 @@ func (s *BunStore) hydrateContentSearchHits(
 	}
 
 	messages, err := bunContentMessagesForHits(
-		ctx, store, hits, s.backend.TimestampOrderExpr,
+		ctx, store, hits, s.backend,
 	)
 	if err != nil {
 		return ContentSearchPage{}, err
@@ -1055,7 +1056,7 @@ func (s *BunStore) bunContentSystemPrefixSQL(content, role string) string {
 
 func bunContentMessagesForHits(
 	ctx context.Context, store bun.IDB, hits []ContentSearchHit,
-	timestampOrder func(string) string,
+	backend BunBackend,
 ) (map[bunContentMessageKey]bunContentMessage, error) {
 	out := make(map[bunContentMessageKey]bunContentMessage, len(hits))
 	const chunkSize = 400
@@ -1069,7 +1070,7 @@ func bunContentMessagesForHits(
 		}
 		var rows []bunContentMessage
 		timestampColumn := bunUsageTimestampColumn(
-			timestampOrder, "message.timestamp",
+			backend.TimestampOrderExpr, "message.timestamp",
 		)
 		query := `WITH refs(session_id, ordinal) AS (VALUES ` +
 			strings.Join(values, ", ") + `)
@@ -1083,7 +1084,15 @@ func bunContentMessagesForHits(
 		if err := store.NewRaw(query, args...).Scan(ctx, &rows); err != nil {
 			return nil, fmt.Errorf("hydrating content search messages: %w", err)
 		}
-		for _, row := range rows {
+		for index := range rows {
+			timestamp, err := bunAvailableTimestamp(backend, rows[index].RawTimestamp)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"scanning content search message timestamp: %w", err,
+				)
+			}
+			rows[index].Timestamp = timestamp
+			row := rows[index]
 			out[bunContentMessageKey{row.SessionID, row.Ordinal}] = row
 		}
 	}

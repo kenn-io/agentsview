@@ -10,18 +10,20 @@ import (
 )
 
 type bunRecentEditProjection struct {
-	Project       string              `bun:"project"`
-	FilePath      string              `bun:"file_path"`
-	EditCount     int                 `bun:"edit_count"`
-	LastEditedAt  *bunmodel.Timestamp `bun:"last_edited_at"`
-	LastSessionID string              `bun:"last_session_id"`
-	SessionID     string              `bun:"session_id"`
-	Ordinal       int                 `bun:"ordinal"`
-	ToolUseID     string              `bun:"tool_use_id"`
-	CallIndex     int                 `bun:"call_index"`
-	ToolName      string              `bun:"tool_name"`
-	Category      string              `bun:"category"`
-	Timestamp     *bunmodel.Timestamp `bun:"timestamp"`
+	Project         string              `bun:"project"`
+	FilePath        string              `bun:"file_path"`
+	EditCount       int                 `bun:"edit_count"`
+	RawLastEditedAt any                 `bun:"last_edited_at"`
+	LastEditedAt    *bunmodel.Timestamp `bun:"-"`
+	LastSessionID   string              `bun:"last_session_id"`
+	SessionID       string              `bun:"session_id"`
+	Ordinal         int                 `bun:"ordinal"`
+	ToolUseID       string              `bun:"tool_use_id"`
+	CallIndex       int                 `bun:"call_index"`
+	ToolName        string              `bun:"tool_name"`
+	Category        string              `bun:"category"`
+	RawTimestamp    any                 `bun:"timestamp"`
+	Timestamp       *bunmodel.Timestamp `bun:"-"`
 }
 
 type bunRecentEditKey struct {
@@ -143,6 +145,22 @@ func (s *BunStore) recentEditsFrom(
 	var rows []bunRecentEditProjection
 	if err := store.NewRaw(query, args...).Scan(ctx, &rows); err != nil {
 		return RecentEditsResult{}, fmt.Errorf("querying Bun recent edits: %w", err)
+	}
+	for index := range rows {
+		lastEditedAt, err := bunAvailableTimestamp(s.backend, rows[index].RawLastEditedAt)
+		if err != nil {
+			return RecentEditsResult{}, fmt.Errorf(
+				"scanning Bun recent-edit latest timestamp: %w", err,
+			)
+		}
+		timestamp, err := bunAvailableTimestamp(s.backend, rows[index].RawTimestamp)
+		if err != nil {
+			return RecentEditsResult{}, fmt.Errorf(
+				"scanning Bun recent-edit timestamp: %w", err,
+			)
+		}
+		rows[index].LastEditedAt = lastEditedAt
+		rows[index].Timestamp = timestamp
 	}
 	return buildBunRecentEditPage(rows, params), nil
 }
