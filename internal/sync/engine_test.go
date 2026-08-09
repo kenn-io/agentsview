@@ -5721,6 +5721,14 @@ func TestMayProbeLocalPathRefusesAutomountDespiteOptIn(t *testing.T) {
 	assert.True(t, engine.mayProbeLocalPath(
 		filepath.Join(home, "Documents", "proj"),
 	), "the opt-in must still lift the protected-folder restriction")
+
+	require.NoError(t, os.MkdirAll(filepath.Join(home, "Documents"), 0o755))
+	require.NoError(t, os.Symlink(
+		"/home/user", filepath.Join(home, "Documents", "hidden"),
+	))
+	assert.False(t, engine.mayProbeLocalPath(
+		filepath.Join(home, "Documents", "hidden", "repo"),
+	), "an automount target hidden behind a protected prefix stays refused")
 }
 
 // TestProjectIdentityObservationSkipsProtectedGitdirTarget pins that a linked

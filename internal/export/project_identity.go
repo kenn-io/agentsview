@@ -918,7 +918,16 @@ const (
 // folder or wakes the automounter itself. Unresolvable links classify as
 // protected; a missing path component means nothing beyond it can be opened,
 // so the remainder is safe.
-func ClassifyLocalPathProbe(goos, home, p string) LocalPathProbeClass {
+//
+// scanProtected mirrors the caller's protected-folder opt-in: when set, the
+// walk continues resolving through protected prefixes — Lstat inside them is
+// exactly what the caller is about to do anyway — so a symlink hidden behind
+// ~/Documents that leads into an automounter namespace still classifies as
+// automount. The opt-in lifts consent prompts, never automountd wakeups.
+// Without it the walk stops at the first protected candidate, untouched.
+func ClassifyLocalPathProbe(
+	goos, home, p string, scanProtected bool,
+) LocalPathProbeClass {
 	if goos != "darwin" || !filepath.IsAbs(p) {
 		return LocalPathProbeSafe
 	}
@@ -927,7 +936,9 @@ func ClassifyLocalPathProbe(goos, home, p string) LocalPathProbeClass {
 	if IsAutomountNamespacePath(goos, filepath.Clean(p)) {
 		return LocalPathProbeAutomountNamespace
 	}
-	return classifyLocalPathProbe(goos, probeHomesFor(goos, home), p, 0)
+	return classifyLocalPathProbe(
+		goos, probeHomesFor(goos, home), p, 0, scanProtected,
+	)
 }
 
 // probeHomesCache memoizes probeHomesFor per (goos, home): home never changes
@@ -1025,7 +1036,7 @@ func protectedUnderAnyHome(goos string, homes []string, p string) bool {
 var osLstat = os.Lstat
 
 func classifyLocalPathProbe(
-	goos string, homes []string, p string, hops int,
+	goos string, homes []string, p string, hops int, scanProtected bool,
 ) LocalPathProbeClass {
 	if hops > maxProtectedPathLinkHops {
 		return LocalPathProbeProtectedUserData
@@ -1037,7 +1048,7 @@ func classifyLocalPathProbe(
 	if IsAutomountNamespacePath(goos, cleaned) {
 		return LocalPathProbeAutomountNamespace
 	}
-	if protectedUnderAnyHome(goos, homes, cleaned) {
+	if !scanProtected && protectedUnderAnyHome(goos, homes, cleaned) {
 		return LocalPathProbeProtectedUserData
 	}
 	// Walk raw components in traversal order. current never contains a
@@ -1046,6 +1057,7 @@ func classifyLocalPathProbe(
 	// collapsing ".." lexically up front instead would drop unresolved
 	// components — home/q/../x with q linked into Documents classifies as
 	// home/x while real resolution reaches Documents/x.
+	sawProtected := false
 	rest := splitRawPathComponents(p)
 	current := string(filepath.Separator)
 	for i, component := range rest {
@@ -1061,26 +1073,43 @@ func classifyLocalPathProbe(
 			return LocalPathProbeAutomountNamespace
 		}
 		if protectedUnderAnyHome(goos, homes, next) {
-			return LocalPathProbeProtectedUserData
+			if !scanProtected {
+				return LocalPathProbeProtectedUserData
+			}
+			sawProtected = true
 		}
 		info, err := osLstat(next)
 		if err != nil {
-			return LocalPathProbeSafe
+			return classWithProtected(LocalPathProbeSafe, sawProtected)
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
 			target, err := os.Readlink(next)
 			if err != nil {
 				return LocalPathProbeProtectedUserData
 			}
-			return classifyLocalPathProbe(
+			class := classifyLocalPathProbe(
 				goos, homes,
 				spliceLinkTarget(current, target, rest[i+1:]),
-				hops+1,
+				hops+1, scanProtected,
 			)
+			return classWithProtected(class, sawProtected)
 		}
 		current = next
 	}
-	return LocalPathProbeSafe
+	return classWithProtected(LocalPathProbeSafe, sawProtected)
+}
+
+// classWithProtected upgrades a safe result to protected when the walk
+// traversed a protected prefix on the way: reaching the final target still
+// passes through the guarded folder. Automount always wins — it must stay
+// refused even under the protected-folder opt-in.
+func classWithProtected(
+	class LocalPathProbeClass, sawProtected bool,
+) LocalPathProbeClass {
+	if class == LocalPathProbeSafe && sawProtected {
+		return LocalPathProbeProtectedUserData
+	}
+	return class
 }
 
 // spliceLinkTarget rebuilds the unresolved remainder of a walk after a

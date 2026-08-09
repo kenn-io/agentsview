@@ -109,7 +109,7 @@ func TestExtractProjectFromCwdSymlinkedGitFileFallsBack(t *testing.T) {
 	origGuard := probeGitfileTarget
 	t.Cleanup(func() { probeGitfileTarget = origGuard })
 	probeGitfileTarget = func(cleaned string) bool {
-		return export.ClassifyLocalPathProbe("darwin", home, cleaned) ==
+		return export.ClassifyLocalPathProbe("darwin", home, cleaned, false) ==
 			export.LocalPathProbeSafe
 	}
 
@@ -201,7 +201,7 @@ func TestRepoRootFromSiblingsBoundaryCheckDoesNotFollowRefusedSymlink(t *testing
 	origGuard := probeGitfileTarget
 	t.Cleanup(func() { probeGitfileTarget = origGuard })
 	probeGitfileTarget = func(cleaned string) bool {
-		return export.ClassifyLocalPathProbe("darwin", home, cleaned) ==
+		return export.ClassifyLocalPathProbe("darwin", home, cleaned, false) ==
 			export.LocalPathProbeSafe
 	}
 	origStat := osStat
@@ -254,7 +254,7 @@ func TestExtractProjectFromCwdSymlinkedCommondirFallsBack(t *testing.T) {
 	origGuard := probeGitfileTarget
 	t.Cleanup(func() { probeGitfileTarget = origGuard })
 	probeGitfileTarget = func(cleaned string) bool {
-		return export.ClassifyLocalPathProbe("darwin", home, cleaned) ==
+		return export.ClassifyLocalPathProbe("darwin", home, cleaned, false) ==
 			export.LocalPathProbeSafe
 	}
 
@@ -280,7 +280,7 @@ func TestRepoRootFromSiblingsSkipsGuardedSiblings(t *testing.T) {
 	origGuard := probeGitfileTarget
 	t.Cleanup(func() { probeGitfileTarget = origGuard })
 	probeGitfileTarget = func(cleaned string) bool {
-		return export.ClassifyLocalPathProbe("darwin", home, cleaned) ==
+		return export.ClassifyLocalPathProbe("darwin", home, cleaned, false) ==
 			export.LocalPathProbeSafe
 	}
 
@@ -315,13 +315,56 @@ func TestDeletedChildIsWorktreeSkipsSymlinkedWorktreesDir(t *testing.T) {
 	origGuard := probeGitfileTarget
 	t.Cleanup(func() { probeGitfileTarget = origGuard })
 	probeGitfileTarget = func(cleaned string) bool {
-		return export.ClassifyLocalPathProbe("darwin", home, cleaned) ==
+		return export.ClassifyLocalPathProbe("darwin", home, cleaned, false) ==
 			export.LocalPathProbeSafe
 	}
 
 	deleted := filepath.Join(parent, "gone-child", "sub")
 	assert.Equal(t, "sub", ExtractProjectFromCwd(deleted),
 		"a symlinked worktrees directory must not be enumerated")
+}
+
+// TestGitFileTargetsProbeableVetsSubmoduleConfig pins that a gitfile target
+// without a commondir — the submodule layout — vets the gitdir's own config
+// and HEAD: the conservative result would otherwise escalate to gitMainRoot,
+// whose git exec reads them, so a config symlink into a guarded folder would
+// be read through despite the vetted gitdir.
+func TestGitFileTargetsProbeableVetsSubmoduleConfig(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the probe classifier walks POSIX paths and symlinks")
+	}
+	home := t.TempDir()
+	gitDir := filepath.Join(home, "src", "parent", ".git", "modules", "sub")
+	require.NoError(t, os.MkdirAll(gitDir, 0o755))
+	guardedConfig := filepath.Join(home, "Documents", "config-target")
+	require.NoError(t, os.MkdirAll(filepath.Dir(guardedConfig), 0o755))
+	require.NoError(t, os.WriteFile(guardedConfig, []byte("[core]\n"), 0o644))
+	worktree := filepath.Join(home, "src", "parent", "sub")
+	require.NoError(t, os.MkdirAll(worktree, 0o755))
+	gitPath := filepath.Join(worktree, ".git")
+	require.NoError(t, os.WriteFile(
+		gitPath, []byte("gitdir: "+gitDir+"\n"), 0o644,
+	))
+
+	origGuard := probeGitfileTarget
+	t.Cleanup(func() { probeGitfileTarget = origGuard })
+	probeGitfileTarget = func(cleaned string) bool {
+		return export.ClassifyLocalPathProbe("darwin", home, cleaned, false) ==
+			export.LocalPathProbeSafe
+	}
+
+	require.NoError(t, os.Symlink(
+		guardedConfig, filepath.Join(gitDir, "config"),
+	))
+	assert.False(t, gitFileTargetsProbeable(worktree, gitPath),
+		"a guarded config symlink must refuse the submodule gitdir")
+
+	require.NoError(t, os.Remove(filepath.Join(gitDir, "config")))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(gitDir, "config"), []byte("[core]\n"), 0o644,
+	))
+	assert.True(t, gitFileTargetsProbeable(worktree, gitPath),
+		"a plain submodule gitdir stays probeable")
 }
 
 // TestDefaultProbeGitfileTargetRefusesAutomount pins the asymmetry between

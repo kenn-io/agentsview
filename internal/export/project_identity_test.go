@@ -636,7 +636,7 @@ func TestClassifyLocalPathProbe(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want,
-				ClassifyLocalPathProbe(tt.goos, tt.home, tt.path))
+				ClassifyLocalPathProbe(tt.goos, tt.home, tt.path, false))
 		})
 	}
 }
@@ -662,11 +662,9 @@ func TestClassifyLocalPathProbeSkipsAutomountNamespace(t *testing.T) {
 	}
 
 	assert.Equal(t, LocalPathProbeAutomountNamespace, ClassifyLocalPathProbe(
-		"darwin", home, "/home/user/repo",
-	), "a direct automount path must classify as automount")
+		"darwin", home, "/home/user/repo", false), "a direct automount path must classify as automount")
 	assert.Equal(t, LocalPathProbeAutomountNamespace, ClassifyLocalPathProbe(
-		"darwin", home, filepath.Join(home, "tohome", "user", "repo"),
-	), "a symlink into the automount namespace must stop the walk")
+		"darwin", home, filepath.Join(home, "tohome", "user", "repo"), false), "a symlink into the automount namespace must stop the walk")
 }
 
 // TestClassifyLocalPathProbeDotDotTraversalOrder pins that ".." resolves in
@@ -707,9 +705,47 @@ func TestClassifyLocalPathProbeDotDotTraversalOrder(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want,
-				ClassifyLocalPathProbe("darwin", home, tt.path))
+				ClassifyLocalPathProbe("darwin", home, tt.path, false))
 		})
 	}
+}
+
+// TestClassifyLocalPathProbeOptInStillRefusesAutomount pins that the
+// protected-folder opt-in continues resolution through protected prefixes:
+// a symlink hidden inside ~/Documents that leads into an automounter
+// namespace must classify as automount, because the opt-in lifts consent
+// prompts, never automountd wakeups. Without the opt-in the walk still
+// stops at the protected prefix untouched.
+func TestClassifyLocalPathProbeOptInStillRefusesAutomount(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the predicate compares POSIX home paths built with filepath")
+	}
+	home := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(home, "Documents"), 0o755))
+	require.NoError(t, os.Symlink(
+		"/home/user", filepath.Join(home, "Documents", "tohome"),
+	))
+	hidden := filepath.Join(home, "Documents", "tohome", "repo")
+
+	assert.Equal(t, LocalPathProbeAutomountNamespace,
+		ClassifyLocalPathProbe("darwin", home, hidden, true),
+		"opt-in must keep resolving and find the automount target")
+	assert.Equal(t, LocalPathProbeProtectedUserData,
+		ClassifyLocalPathProbe("darwin", home,
+			filepath.Join(home, "Documents", "proj"), true),
+		"a protected-only path stays protected under the opt-in")
+
+	orig := osLstat
+	t.Cleanup(func() { osLstat = orig })
+	osLstat = func(path string) (os.FileInfo, error) {
+		if strings.HasPrefix(path, filepath.Join(home, "Documents")) {
+			assert.Fail(t, "opt-out must not Lstat inside protected", path)
+		}
+		return orig(path)
+	}
+	assert.Equal(t, LocalPathProbeProtectedUserData,
+		ClassifyLocalPathProbe("darwin", home, hidden, false),
+		"without the opt-in the walk stops at the protected prefix")
 }
 
 // TestClassifyLocalPathProbeAutomountHomeNeverResolved pins that resolving
@@ -735,11 +771,9 @@ func TestClassifyLocalPathProbeAutomountHomeNeverResolved(t *testing.T) {
 	}
 
 	assert.Equal(t, LocalPathProbeSafe, ClassifyLocalPathProbe(
-		"darwin", "/home/user", filepath.Join(outside, "elsewhere"),
-	), "an automount home must not derail classifying an unrelated path")
+		"darwin", "/home/user", filepath.Join(outside, "elsewhere"), false), "an automount home must not derail classifying an unrelated path")
 	assert.Equal(t, LocalPathProbeSafe, ClassifyLocalPathProbe(
-		"darwin", linkedHome, filepath.Join(outside, "elsewhere"),
-	), "resolving a home linked through /net must abort, not follow")
+		"darwin", linkedHome, filepath.Join(outside, "elsewhere"), false), "resolving a home linked through /net must abort, not follow")
 }
 
 // TestNormalizeStoredRootPathSkipsAutomountNamespace pins that on macOS a

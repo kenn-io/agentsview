@@ -84,7 +84,9 @@ func classifyProbePath(cleaned string) export.LocalPathProbeClass {
 	if err != nil {
 		home = ""
 	}
-	return export.ClassifyLocalPathProbe(runtime.GOOS, home, cleaned)
+	return export.ClassifyLocalPathProbe(
+		runtime.GOOS, home, cleaned, allowProtectedPathProbes.Load(),
+	)
 }
 
 // defaultProbeGitfileTarget reports whether a path taken from gitfile
@@ -939,7 +941,13 @@ func gitFileTargetsProbeable(dir, gitPath string) bool {
 	}
 	commonDir := readCommonDir(gitDir)
 	if commonDir == "" {
-		return true
+		// No commondir means a submodule-style gitdir: the gitdir is the
+		// effective common directory, and the git fallback the caller may
+		// escalate to reads its config and HEAD. Vet them exactly — inside
+		// a vetted directory, a file symlink can still lead into a
+		// guarded folder.
+		return probeGitfileTarget(filepath.Join(gitDir, "config")) &&
+			probeGitfileTarget(filepath.Join(gitDir, "HEAD"))
 	}
 	return probeGitfileTarget(commonDir) &&
 		probeGitfileTarget(filepath.Join(commonDir, "config"))

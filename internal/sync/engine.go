@@ -11313,7 +11313,9 @@ func userHomeDirOrEmpty() string {
 // follows symlinks, so a path that merely links into either kind of location
 // is refused before Stat or EvalSymlinks can enter it.
 func (e *Engine) mayProbeLocalPath(p string) bool {
-	switch export.ClassifyLocalPathProbe(e.goos, e.homeDir, p) {
+	switch export.ClassifyLocalPathProbe(
+		e.goos, e.homeDir, p, e.scanProtectedPaths,
+	) {
 	case export.LocalPathProbeAutomountNamespace:
 		return false
 	case export.LocalPathProbeProtectedUserData:
