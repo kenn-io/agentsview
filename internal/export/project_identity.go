@@ -799,12 +799,34 @@ func IsAutomountNamespacePath(goos, p string) bool {
 	if goos != "darwin" {
 		return false
 	}
+	p = trimDataVolumePrefix(p)
 	for _, ns := range [...]string{"/home", "/net", "/Network/Servers"} {
 		if p == ns || strings.HasPrefix(p, ns+"/") {
 			return true
 		}
 	}
 	return false
+}
+
+// dataVolumePrefix is the APFS data-volume mount point. Since macOS Catalina
+// the writable system firmlinks user data there, so
+// /System/Volumes/Data/Users/me/Documents is the physical spelling of
+// ~/Documents and /System/Volumes/Data/home is the autofs home map.
+// Firmlinks are not symlinks — Lstat reports a plain directory — so only
+// lexical canonicalization can equate the two spellings.
+const dataVolumePrefix = "/System/Volumes/Data"
+
+// trimDataVolumePrefix strips the data-volume firmlink prefix so the
+// physical spelling of a path compares equal to its canonical form. Purely
+// lexical; never touches the filesystem.
+func trimDataVolumePrefix(p string) string {
+	if p == dataVolumePrefix {
+		return "/"
+	}
+	if strings.HasPrefix(p, dataVolumePrefix+"/") {
+		return p[len(dataVolumePrefix):]
+	}
+	return p
 }
 
 // protectedUserDataDirs are home-relative locations macOS guards behind a TCC
@@ -842,10 +864,15 @@ func IsProtectedUserDataPath(goos, home, p string) bool {
 	if goos != "darwin" || strings.TrimSpace(home) == "" || !filepath.IsAbs(p) {
 		return false
 	}
-	cleaned := strings.ToLower(filepath.Clean(p))
+	// Strip the data-volume firmlink prefix from both sides so the
+	// physical spelling (/System/Volumes/Data/Users/...) matches a home
+	// recorded in either form. Comparison folds case afterwards because
+	// the startup volume is case-insensitive by default.
+	cleaned := strings.ToLower(trimDataVolumePrefix(filepath.Clean(p)))
 	for _, dir := range protectedUserDataDirs {
 		root := strings.ToLower(filepath.Join(
-			filepath.Clean(home), filepath.FromSlash(dir),
+			trimDataVolumePrefix(filepath.Clean(home)),
+			filepath.FromSlash(dir),
 		))
 		if cleaned == root ||
 			strings.HasPrefix(cleaned, root+string(filepath.Separator)) {

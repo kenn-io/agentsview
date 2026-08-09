@@ -504,7 +504,12 @@ func TestIsAutomountNamespacePath(t *testing.T) {
 		{"darwin prefix collision homework", "darwin", "/homework/repo", false},
 		{"darwin prefix collision netdata", "darwin", "/netdata", false},
 		{"darwin regular path", "darwin", "/Users/user/repo", false},
+		{"darwin data volume home", "darwin", "/System/Volumes/Data/home/user/repo", true},
+		{"darwin data volume net", "darwin", "/System/Volumes/Data/net/host", true},
+		{"darwin data volume users is real", "darwin", "/System/Volumes/Data/Users/user/repo", false},
+		{"darwin data volume root is real", "darwin", "/System/Volumes/Data", false},
 		{"linux home is real", "linux", "/home/user/repo", false},
+		{"linux data volume ignored", "linux", "/System/Volumes/Data/home/user", false},
 		{"windows never matches", "windows", "/home/user", false},
 	}
 	for _, tt := range tests {
@@ -543,6 +548,18 @@ func TestIsProtectedUserDataPath(t *testing.T) {
 		{
 			"case folded child", "darwin", home,
 			home + "/documents/proj", true,
+		},
+		{
+			"data volume documents", "darwin", home,
+			"/System/Volumes/Data" + home + "/Documents/proj", true,
+		},
+		{
+			"data volume home form", "darwin",
+			"/System/Volumes/Data" + home, home + "/Documents/proj", true,
+		},
+		{
+			"data volume unprotected", "darwin", home,
+			"/System/Volumes/Data" + home + "/src/app", false,
 		},
 		{"unprotected home child", "darwin", home, home + "/src/app", false},
 		{"library sibling", "darwin", home, home + "/Library/Caches/x", false},
@@ -600,6 +617,8 @@ func TestClassifyLocalPathProbe(t *testing.T) {
 		{"link loop fails protected", "darwin", home, filepath.Join(home, "loop", "proj"), LocalPathProbeProtectedUserData},
 		{"automount namespace", "darwin", home, "/home/user/repo", LocalPathProbeAutomountNamespace},
 		{"automount without home", "darwin", "", "/net/host/share", LocalPathProbeAutomountNamespace},
+		{"data volume protected", "darwin", home, "/System/Volumes/Data" + home + "/Documents/proj", LocalPathProbeProtectedUserData},
+		{"data volume automount", "darwin", home, "/System/Volumes/Data/home/user/repo", LocalPathProbeAutomountNamespace},
 		{"plain unprotected", "darwin", home, filepath.Join(home, "src", "app"), LocalPathProbeSafe},
 		{"symlink to unprotected", "darwin", home, filepath.Join(home, "out", "app"), LocalPathProbeSafe},
 		{"missing unprotected path", "darwin", home, filepath.Join(home, "src", "gone", "deep"), LocalPathProbeSafe},
