@@ -395,12 +395,16 @@
   $effect.pre(() => {
     const route = router.route;
     const params = router.params;
-    const rootLanding = router.isRootPath && !hasFilterParams(params);
+    const hasSessionFilterParams =
+      route === "sessions" && hasFilterParams(params);
+    const rootLanding = router.isRootPath && !hasSessionFilterParams;
+    const sessionFiltersDiverged = route !== "sessions" &&
+      Object.keys(sessionFilterRouteParams()).length > 0;
     const enteringRootLanding = rootLanding && !previousRootLanding;
     const leavingRootLanding =
       previousRootLanding &&
       route === "sessions" &&
-      !hasFilterParams(params) &&
+      !hasSessionFilterParams &&
       !rootLanding;
     const enteringSessionsRoute =
       route === "sessions" && previousDateRestoreRoute !== "sessions";
@@ -423,7 +427,7 @@
         rootDetailOpened = false;
       } else if (
         !rootLanding &&
-        !hasFilterParams(params) &&
+        !hasSessionFilterParams &&
         route === "sessions" &&
         sid === null &&
         enteringSessions &&
@@ -432,7 +436,10 @@
       ) {
         sessions.restoreSavedFilters();
         rootResetPending = false;
-      } else if (hasFilterParams(params)) {
+      } else if (hasSessionFilterParams) {
+        rootResetPending = false;
+        rootDetailOpened = false;
+      } else if (rootResetPending && sessionFiltersDiverged) {
         rootResetPending = false;
         rootDetailOpened = false;
       }

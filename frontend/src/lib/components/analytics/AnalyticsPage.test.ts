@@ -60,6 +60,7 @@ afterEach(() => {
   router.route = "sessions";
   router.params = {};
   router.sessionId = null;
+  router.isRootPath = false;
   analytics.isPinned = false;
   analytics.windowDays = 365;
   analytics.from = "";
@@ -418,12 +419,13 @@ describe("AnalyticsPage refresh behavior", () => {
   });
 
   it("only seeds saved yoke dates during initial URL hydration", () => {
-    const seedIndex = source.indexOf("const seed = yokedDates.seedForPanel()");
+    const seedIndex = source.indexOf("yokedDates.seedForPanel()");
     const firstRunIndex = source.indexOf("if (firstRun) {");
 
     expect(seedIndex).toBeGreaterThan(-1);
     expect(firstRunIndex).toBeGreaterThan(-1);
     expect(seedIndex).toBeGreaterThan(firstRunIndex);
+    expect(source).toContain("if (router.isRootPath)");
   });
 
   it("treats drill-down clears as analytics date changes", () => {

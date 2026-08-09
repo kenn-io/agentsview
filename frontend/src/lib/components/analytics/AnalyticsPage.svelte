@@ -180,7 +180,11 @@
     if (state.mode === "rolling" && state.windowDays) {
       params[SESSION_ANALYTICS_WINDOW_PARAM] = String(state.windowDays);
     }
-    router.replaceParams(params);
+    if (router.isRootPath) {
+      router.navigateToSessions(params);
+    } else {
+      router.replaceParams(params);
+    }
     if (sessionChanged) sessions.load();
   }
 
@@ -399,6 +403,16 @@
     const earliestSession = sync.stats?.earliest_session ?? undefined;
     untrack(() => {
       if (route !== "sessions") return;
+      if (router.isRootPath) {
+        if (lastAnalyticsDateUrlSignature !== "root-landing") {
+          analytics.fetchAll();
+        }
+        lastAnalyticsDateUrlSignature = "root-landing";
+        analyticsDateUrlInitRan = false;
+        analyticsDateUrlInitComplete = false;
+        sessionDateIntentEstablished = false;
+        return;
+      }
 
       const fixedState = sessionParamsToPanelDate(params, {
         earliest: earliestSession,
