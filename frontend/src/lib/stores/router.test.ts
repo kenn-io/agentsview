@@ -25,6 +25,15 @@ describe("parsePath", () => {
     expect(result.route).toBe("sessions");
     expect(result.sessionId).toBeNull();
     expect(result.params).toEqual({});
+    expect(result.isRootPath).toBe(true);
+  });
+
+  it("marks root independently of query parameters", () => {
+    setURL("/?desktop=1");
+    expect(parsePath().isRootPath).toBe(true);
+
+    setURL("/sessions?desktop=1");
+    expect(parsePath().isRootPath).toBe(false);
   });
 
   it("parses /sessions with query params", () => {
@@ -135,6 +144,10 @@ describe("parsePath", () => {
       const result = parsePath();
       expect(result.route).toBe("sessions");
       expect(result.sessionId).toBe("abc");
+      expect(result.isRootPath).toBe(false);
+
+      setURL("/agentsview/?desktop=1");
+      expect(parsePath().isRootPath).toBe(true);
     } finally {
       base.remove();
     }
@@ -155,6 +168,21 @@ describe("RouterStore", () => {
     expect(store.route).toBe("sessions");
     expect(store.params).toEqual({ project: "test" });
     expect(store.sessionId).toBeNull();
+    expect(store.isRootPath).toBe(false);
+  });
+
+  it("initializes root state from the current pathname", () => {
+    setURL("/?desktop=1");
+    store = new RouterStore();
+    expect(store.isRootPath).toBe(true);
+  });
+
+  it("updates root state on popstate", () => {
+    setURL("/sessions");
+    store = new RouterStore();
+    setURL("/?desktop=1");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    expect(store.isRootPath).toBe(true);
   });
 
   it("initializes sessionId from path", () => {
@@ -177,7 +205,33 @@ describe("RouterStore", () => {
     store.navigate("quality");
     expect(spy).toHaveBeenCalled();
     expect(store.route).toBe("quality");
+    expect(store.isRootPath).toBe(false);
     spy.mockRestore();
+  });
+
+  it.each([
+    ["navigate", (router: RouterStore) => router.navigate("quality")],
+    ["replace", (router: RouterStore) => router.replace("quality")],
+    [
+      "navigateToSession",
+      (router: RouterStore) => router.navigateToSession("abc-123"),
+    ],
+    [
+      "navigateFromSession",
+      (router: RouterStore) => router.navigateFromSession(),
+    ],
+    [
+      "replaceParams",
+      (router: RouterStore) => router.replaceParams({ project: "test" }),
+    ],
+  ] as const)("clears root state through %s", (_name, navigate) => {
+    setURL("/");
+    store = new RouterStore();
+    expect(store.isRootPath).toBe(true);
+
+    navigate(store);
+
+    expect(store.isRootPath).toBe(false);
   });
 
   it("replaces a route and preserves supplied params without adding history", () => {

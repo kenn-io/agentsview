@@ -41,6 +41,7 @@ export function parsePath(): {
   route: Route;
   sessionId: string | null;
   params: Record<string, string>;
+  isRootPath: boolean;
 } {
   const basePath = getBasePath();
   let pathname = window.location.pathname;
@@ -48,6 +49,7 @@ export function parsePath(): {
     pathname = pathname.slice(basePath.length);
   }
   if (!pathname.startsWith("/")) pathname = "/" + pathname;
+  const isRootPath = pathname === "/";
 
   const segments = pathname
     .split("/")
@@ -70,7 +72,7 @@ export function parsePath(): {
     new URLSearchParams(window.location.search),
   );
 
-  return { route, sessionId, params };
+  return { route, sessionId, params, isRootPath };
 }
 
 /** Params that are not part of routing but must survive navigations. */
@@ -97,6 +99,7 @@ export class RouterStore {
   route: Route = $state("sessions");
   params: Record<string, string> = $state({});
   sessionId: string | null = $state(null);
+  isRootPath: boolean = $state(false);
   #onPopState: () => void;
   #stickyParams: Record<string, string>;
 
@@ -105,6 +108,7 @@ export class RouterStore {
     this.route = initial.route;
     this.params = initial.params;
     this.sessionId = initial.sessionId;
+    this.isRootPath = initial.isRootPath;
 
     this.#stickyParams = {};
     for (const [k, v] of Object.entries(initial.params)) {
@@ -118,6 +122,7 @@ export class RouterStore {
       this.route = parsed.route;
       this.params = parsed.params;
       this.sessionId = parsed.sessionId;
+      this.isRootPath = parsed.isRootPath;
       this.#replaceSticky(parsed.params);
     };
     window.addEventListener("popstate", this.#onPopState);
@@ -220,6 +225,7 @@ export class RouterStore {
     this.route = route;
     this.params = { ...this.#stickyParams, ...params };
     this.sessionId = null;
+    this.isRootPath = false;
     window.history.pushState(null, "", url);
     return true;
   }
@@ -233,6 +239,7 @@ export class RouterStore {
     this.route = route;
     this.params = { ...this.#stickyParams, ...params };
     this.sessionId = null;
+    this.isRootPath = false;
     window.history.replaceState(null, "", url);
   }
 
@@ -260,6 +267,7 @@ export class RouterStore {
     this.route = "sessions";
     this.params = { ...this.#stickyParams, ...nextParams };
     this.sessionId = id;
+    this.isRootPath = false;
     window.history.pushState(null, "", url);
   }
 
@@ -271,6 +279,7 @@ export class RouterStore {
     this.route = "sessions";
     this.params = { ...this.#stickyParams, ...params };
     this.sessionId = null;
+    this.isRootPath = false;
     window.history.pushState(null, "", url);
   }
 
@@ -282,6 +291,7 @@ export class RouterStore {
     const url = this.#buildUrl(path, params);
     this.#updateSticky(params);
     this.params = { ...this.#stickyParams, ...params };
+    this.isRootPath = false;
     window.history.replaceState(null, "", url);
   }
 }
