@@ -36,6 +36,11 @@ func duckUsageLocalDateSQL(f db.UsageFilter) (string, any) {
 }
 
 func duckPriceModelCaseSQL() string {
+	fixedK26Aliases := pricingpkg.KimiK26Aliases()
+	fixedK26Quoted := make([]string, len(fixedK26Aliases))
+	for i, alias := range fixedK26Aliases {
+		fixedK26Quoted[i] = "'" + alias + "'"
+	}
 	aliases := pricingpkg.DateAliasedModels()
 	quoted := make([]string, len(aliases))
 	for i, alias := range aliases {
@@ -44,14 +49,16 @@ func duckPriceModelCaseSQL() string {
 	cutoff := pricingpkg.KimiModelEraCutoff.UTC().Format("2006-01-02 15:04:05")
 	return fmt.Sprintf(`CASE
 		WHEN regexp_replace(model, '^.*/', '') IN (%[1]s)
-			AND (ts IS NULL OR ts >= TIMESTAMP '%[2]s')
-			THEN '%[3]s'
-		WHEN regexp_replace(model, '^.*/', '') IN (%[1]s)
-			THEN '%[4]s'
+			THEN '%[2]s'
+		WHEN regexp_replace(model, '^.*/', '') IN (%[3]s)
+			AND (ts IS NULL OR ts >= TIMESTAMP '%[4]s')
+			THEN '%[5]s'
+		WHEN regexp_replace(model, '^.*/', '') IN (%[3]s)
+			THEN '%[2]s'
 		ELSE model
 	END`,
-		strings.Join(quoted, ", "), cutoff,
-		pricingpkg.KimiK3Canonical, pricingpkg.KimiK26Canonical,
+		strings.Join(fixedK26Quoted, ", "), pricingpkg.KimiK26Canonical,
+		strings.Join(quoted, ", "), cutoff, pricingpkg.KimiK3Canonical,
 	)
 }
 
@@ -105,6 +112,10 @@ func duckUsageCTEFromRaw(
 						WHEN source = 'session' THEN GREATEST(reasoning_tokens, 0)
 						ELSE LEAST(GREATEST(reasoning_tokens, 0), %[4]d)
 					END AS reasoning_tokens_norm,
+					CASE
+						WHEN source = 'message' THEN GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.server_tool_use.web_search_requests') AS BIGINT), 0), 0)
+						ELSE 0
+					END AS web_search_requests_norm,
 				CASE
 					WHEN claude_message_id != '' AND claude_request_id != ''
 						THEN 'claude:' || claude_message_id || ':' || claude_request_id
@@ -154,6 +165,7 @@ func duckUsageAggregateCost(
 	model string,
 	inputTok, outputTok, cacheCr, cacheRd int,
 	billableInput, billableOutput, billableReasoning, billableCacheCr, billableCacheRd int,
+	billableWebSearchRequests int,
 	explicitCost int64,
 	hasReportedCost bool,
 	requestScoped bool,
@@ -163,7 +175,7 @@ func duckUsageAggregateCost(
 		model, model,
 		inputTok, outputTok, cacheCr, cacheRd,
 		billableInput, billableOutput, billableReasoning,
-		billableCacheCr, billableCacheRd,
+		billableCacheCr, billableCacheRd, billableWebSearchRequests,
 		explicitCost, hasReportedCost, requestScoped, pricing)
 }
 
@@ -171,6 +183,7 @@ func duckUsageAggregateResolvedCost(
 	reportedModel, canonicalModel string,
 	inputTok, outputTok, cacheCr, cacheRd int,
 	billableInput, billableOutput, billableReasoning, billableCacheCr, billableCacheRd int,
+	billableWebSearchRequests int,
 	explicitCost int64,
 	hasReportedCost bool,
 	requestScoped bool,
@@ -179,10 +192,11 @@ func duckUsageAggregateResolvedCost(
 	pricedModel, lookup := pricing.Resolve(reportedModel, canonicalModel)
 	hasBillableTokens := billableInput != 0 || billableOutput != 0 ||
 		billableReasoning != 0 || billableCacheCr != 0 || billableCacheRd != 0
+	hasComputedUsage := hasBillableTokens || billableWebSearchRequests > 0
 	if !hasReportedCost &&
 		explicitCost == 0 &&
 		inputTok == 0 && outputTok == 0 && cacheCr == 0 && cacheRd == 0 &&
-		!hasBillableTokens {
+		!hasBillableTokens && billableWebSearchRequests == 0 {
 		pricing.RecordResolvedComputed(reportedModel, pricedModel, lookup)
 		return money.Money{}, money.Money{}, true, false, nil
 	}
@@ -191,6 +205,11 @@ func duckUsageAggregateResolvedCost(
 		requestScoped,
 		billableInput, billableOutput, billableReasoning,
 		billableCacheCr, billableCacheRd)
+	if err != nil {
+		return money.Money{}, money.Money{}, false, false,
+			fmt.Errorf("pricing duckdb usage for model %q: %w", reportedModel, err)
+	}
+	computed, err = export.AddWebSearchFee(computed, billableWebSearchRequests)
 	if err != nil {
 		return money.Money{}, money.Money{}, false, false,
 			fmt.Errorf("pricing duckdb usage for model %q: %w", reportedModel, err)
@@ -204,7 +223,7 @@ func duckUsageAggregateResolvedCost(
 	if hasReportedCost {
 		pricing.RecordResolvedReported(reportedModel, pricedModel, lookup)
 	}
-	if hasBillableTokens {
+	if hasComputedUsage {
 		duckRecordComputedUsagePricing(
 			pricing, reportedModel, pricedModel, lookup, requestScoped,
 			billableInput, billableCacheCr, billableCacheRd,

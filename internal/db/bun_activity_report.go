@@ -216,18 +216,19 @@ func (s *BunStore) bunActivityReportUsageFrom(
 	if loc == nil {
 		loc = time.UTC
 	}
-	rows, err := s.loadDailyUsageRowsFrom(ctx, store, UsageFilter{
+	projections, err := s.loadBunUsageProjections(ctx, store, UsageFilter{
 		From:     q.RangeStart.In(loc).Format("2006-01-02"),
 		To:       q.RangeEnd.In(loc).Format("2006-01-02"),
 		Timezone: q.Timezone,
-	}, false, false)
+	}, false, "")
 	if err != nil {
 		return nil, nil, err
 	}
 	lower, lowerErr := parseTimestamp(lowerBound)
 	upper, upperErr := parseTimestamp(upperBound)
 	var candidates []activityReportUsageCandidate
-	for _, row := range rows {
+	for _, projection := range projections {
+		row := usageProjectionToDailyRow(projection)
 		parsed, parseErr := parseTimestamp(row.ts)
 		if parseErr == nil {
 			if lowerErr == nil && parsed.Before(lower) {

@@ -114,7 +114,6 @@ type pgUsageScanRow struct {
 	model                    string
 	providerID               string
 	tokenJSON                string
-	webSearchRequests        sql.NullInt64
 	inputTokens              int
 	outputTokens             int
 	cacheCreationInputTokens int
@@ -145,6 +144,7 @@ type pgDailyUsageScanRow struct {
 	model                    string
 	providerID               string
 	tokenJSON                string
+	webSearchRequests        sql.NullInt64
 	inputTokens              int
 	outputTokens             int
 	cacheCreationInputTokens int

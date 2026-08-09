@@ -96,7 +96,7 @@ func (s *Store) GetSessionUsageRows(
 	// Read every normalized row here. The session-aware ordering below applies
 	// complete-snapshot selection before its own cross-session dedup pass.
 	cte, queryArgs := duckUsageCTEFromRaw(
-		db.UsageFilter{}, rawSQL, queryArgs, false)
+		db.UsageFilter{}, rawSQL, queryArgs)
 	query := cte + `
 		SELECT session_id, message_ordinal, ts, pricing_ts, source, model,
 			provider_id, agent, claude_message_id, claude_request_id, source_uuid,

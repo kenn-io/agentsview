@@ -217,16 +217,6 @@ func (s *Store) GetSessionUsageRows(
 	}, nil
 }
 
-// pgNullInt64Pointer converts a nullable message ordinal into the pointer
-// shape SessionUsageBreakdownEntry uses.
-func pgNullInt64Pointer(v sql.NullInt64) *int {
-	if !v.Valid {
-		return nil
-	}
-	out := int(v.Int64)
-	return &out
-}
-
 // pgUsageRowMessageOrdinal renders a nullable message ordinal in
 // activity.UsageRow's COALESCE(message_ordinal, -1) convention.
 func pgUsageRowMessageOrdinal(v sql.NullInt64) int64 {
