@@ -14,8 +14,6 @@ import (
 	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
 
-const canonicalWriteBatchSize = 100
-
 var (
 	canonicalSessionConflictClause = canonicalConflictUpdateClause(
 		canonicalReplacementColumns((*bunmodel.Session)(nil), "id"),
@@ -27,6 +25,11 @@ var (
 		(*bunmodel.Message)(nil), "id",
 	)
 )
+
+type archiveMessageRow struct {
+	bunmodel.Message `bun:",extend"`
+	Timestamp        string `bun:"timestamp,type:TEXT,nullzero"`
+}
 
 func canonicalReplacementColumns(model any, excluded ...string) []string {
 	excludedSet := make(map[string]struct{}, len(excluded))
@@ -251,24 +254,10 @@ func CanonicalMessageRows(
 ) ([]bunmodel.Message, []bunmodel.ToolCall, []bunmodel.ToolResultEvent, error) {
 	messageRows := make([]bunmodel.Message, 0, len(messages))
 	for _, message := range messages {
-		message.Role = SanitizeUTF8(message.Role)
-		message.Content = SanitizeUTF8(message.Content)
-		message.ThinkingText = SanitizeUTF8(message.ThinkingText)
-		message.Model = SanitizeUTF8(message.Model)
-		message.TokenUsage = []byte(SanitizeUTF8(string(message.TokenUsage)))
-		message.ClaudeMessageID = SanitizeUTF8(message.ClaudeMessageID)
-		message.ClaudeRequestID = SanitizeUTF8(message.ClaudeRequestID)
-		message.SourceType = SanitizeUTF8(message.SourceType)
-		message.SourceSubtype = SanitizeUTF8(message.SourceSubtype)
-		message.PromptSource = SanitizeUTF8(message.PromptSource)
-		message.SourceUUID = SanitizeUTF8(message.SourceUUID)
-		message.SourceParentUUID = SanitizeUTF8(message.SourceParentUUID)
-		row, err := messageToBunRow(message)
+		row, err := canonicalMessageRow(message)
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		row.ID = nil
-		truncateCanonicalTimestamp(row.Timestamp)
 		messageRows = append(messageRows, row)
 	}
 	callRows, resultRows, err := canonicalToolRows(messages)
@@ -276,6 +265,28 @@ func CanonicalMessageRows(
 		return nil, nil, nil, err
 	}
 	return messageRows, callRows, resultRows, nil
+}
+
+func canonicalMessageRow(message Message) (bunmodel.Message, error) {
+	message.Role = SanitizeUTF8(message.Role)
+	message.Content = SanitizeUTF8(message.Content)
+	message.ThinkingText = SanitizeUTF8(message.ThinkingText)
+	message.Model = SanitizeUTF8(message.Model)
+	message.TokenUsage = []byte(SanitizeUTF8(string(message.TokenUsage)))
+	message.ClaudeMessageID = SanitizeUTF8(message.ClaudeMessageID)
+	message.ClaudeRequestID = SanitizeUTF8(message.ClaudeRequestID)
+	message.SourceType = SanitizeUTF8(message.SourceType)
+	message.SourceSubtype = SanitizeUTF8(message.SourceSubtype)
+	message.PromptSource = SanitizeUTF8(message.PromptSource)
+	message.SourceUUID = SanitizeUTF8(message.SourceUUID)
+	message.SourceParentUUID = SanitizeUTF8(message.SourceParentUUID)
+	row, err := messageToBunRow(message)
+	if err != nil {
+		return bunmodel.Message{}, err
+	}
+	row.ID = nil
+	truncateCanonicalTimestamp(row.Timestamp)
+	return row, nil
 }
 
 func canonicalToolRows(
@@ -387,109 +398,39 @@ func writeArchiveMessageRows(
 	ctx context.Context, tx bun.IDB, sessionID string, messages []Message,
 	conflict string,
 ) error {
-	for _, message := range messages {
+	rows := make([]archiveMessageRow, len(messages))
+	for index, message := range messages {
 		if message.SessionID != sessionID {
 			return fmt.Errorf(
 				"canonical message session id %q does not match %q",
 				message.SessionID, sessionID,
 			)
 		}
+		timestamp := archiveMessageTimestamp(message.Timestamp)
+		message.Timestamp = ""
+		row, err := canonicalMessageRow(message)
+		if err != nil {
+			return err
+		}
+		rows[index] = archiveMessageRow{Message: row, Timestamp: timestamp}
 	}
-	columnCount := len(canonicalArchiveMessageColumns)
-	for start := 0; start < len(messages); start += canonicalWriteBatchSize {
-		end := min(start+canonicalWriteBatchSize, len(messages))
-		batch := messages[start:end]
-		args := make([]any, 0, len(batch)*columnCount)
-		for _, message := range batch {
-			var err error
-			args, err = appendArchiveMessageArgs(args, message)
-			if err != nil {
-				return err
-			}
-		}
-		query := "INSERT INTO messages (" +
-			strings.Join(canonicalArchiveMessageColumns, ", ") + ") VALUES " +
-			canonicalValuePlaceholders(len(batch), columnCount)
-		if conflict != "" {
-			query += " ON " + conflict
-		}
-		if _, err := tx.NewRaw(query, args...).Exec(ctx); err != nil {
-			return fmt.Errorf(
-				"inserting canonical messages for %s ord=%d..%d: %w",
-				sessionID, batch[0].Ordinal, batch[len(batch)-1].Ordinal, err,
-			)
-		}
+	if len(rows) == 0 {
+		return nil
+	}
+	query := tx.NewInsert().Model(&rows).
+		Column(canonicalArchiveMessageColumns...).Returning("")
+	if conflict != "" {
+		query.On(conflict)
+	}
+	if _, err := query.Exec(ctx); err != nil {
+		return fmt.Errorf("inserting canonical messages for %s: %w", sessionID, err)
 	}
 	return nil
 }
 
-func appendArchiveMessageArgs(args []any, message Message) ([]any, error) {
-	for _, column := range canonicalArchiveMessageColumns {
-		var value any
-		switch column {
-		case "session_id":
-			value = message.SessionID
-		case "ordinal":
-			value = message.Ordinal
-		case "role":
-			value = SanitizeUTF8(message.Role)
-		case "content":
-			value = SanitizeUTF8(message.Content)
-		case "thinking_text":
-			value = SanitizeUTF8(message.ThinkingText)
-		case "timestamp":
-			value = archiveMessageTimestamp(message.Timestamp)
-		case "has_thinking":
-			value = message.HasThinking
-		case "has_tool_use":
-			value = message.HasToolUse
-		case "content_length":
-			value = message.ContentLength
-		case "is_system":
-			value = message.IsSystem
-		case "model":
-			value = SanitizeUTF8(message.Model)
-		case "token_usage":
-			value = SanitizeUTF8(string(message.TokenUsage))
-		case "context_tokens":
-			value = message.ContextTokens
-		case "output_tokens":
-			value = message.OutputTokens
-		case "has_context_tokens":
-			value = message.HasContextTokens
-		case "has_output_tokens":
-			value = message.HasOutputTokens
-		case "claude_message_id":
-			value = SanitizeUTF8(message.ClaudeMessageID)
-		case "claude_request_id":
-			value = SanitizeUTF8(message.ClaudeRequestID)
-		case "source_type":
-			value = SanitizeUTF8(message.SourceType)
-		case "source_subtype":
-			value = SanitizeUTF8(message.SourceSubtype)
-		case "prompt_source":
-			value = SanitizeUTF8(message.PromptSource)
-		case "source_uuid":
-			value = SanitizeUTF8(message.SourceUUID)
-		case "source_parent_uuid":
-			value = SanitizeUTF8(message.SourceParentUUID)
-		case "is_sidechain":
-			value = message.IsSidechain
-		case "is_compact_boundary":
-			value = message.IsCompactBoundary
-		default:
-			return nil, fmt.Errorf(
-				"unsupported canonical archive message column %q", column,
-			)
-		}
-		args = append(args, value)
-	}
-	return args, nil
-}
-
-func archiveMessageTimestamp(value string) any {
+func archiveMessageTimestamp(value string) string {
 	if value == "" {
-		return nil
+		return ""
 	}
 	timestamp, err := bunmodel.ParseTimestamp(value)
 	if err != nil {
@@ -497,25 +438,6 @@ func archiveMessageTimestamp(value string) any {
 	}
 	timestamp.Time = timestamp.Truncate(time.Microsecond)
 	return timestamp.UTC().Format(time.RFC3339Nano)
-}
-
-func canonicalValuePlaceholders(rows, columns int) string {
-	var builder strings.Builder
-	builder.Grow(rows * (columns*2 + 2))
-	for row := range rows {
-		if row > 0 {
-			builder.WriteByte(',')
-		}
-		builder.WriteByte('(')
-		for column := range columns {
-			if column > 0 {
-				builder.WriteByte(',')
-			}
-			builder.WriteByte('?')
-		}
-		builder.WriteByte(')')
-	}
-	return builder.String()
 }
 
 // CanonicalUsageEventRows converts source accounting into target-assigned
@@ -702,17 +624,16 @@ func AppendMessageRows(
 func appendMessageRows(
 	ctx context.Context, tx bun.IDB, sessionID string, rows []bunmodel.Message,
 ) error {
-	for start := 0; start < len(rows); start += canonicalWriteBatchSize {
-		end := min(start+canonicalWriteBatchSize, len(rows))
-		batch := rows[start:end]
-		columns := canonicalReplacementColumns((*bunmodel.Message)(nil))
-		if tx.Dialect().Name().String() != "custom" {
-			columns = canonicalReplacementColumns((*bunmodel.Message)(nil), "id")
-		}
-		query := tx.NewInsert().Model(&batch).Column(columns...).Returning("")
-		if _, err := query.Exec(ctx); err != nil {
-			return fmt.Errorf("inserting canonical messages for %s: %w", sessionID, err)
-		}
+	if len(rows) == 0 {
+		return nil
+	}
+	columns := canonicalReplacementColumns((*bunmodel.Message)(nil))
+	if tx.Dialect().Name().String() != "custom" {
+		columns = canonicalReplacementColumns((*bunmodel.Message)(nil), "id")
+	}
+	if _, err := tx.NewInsert().Model(&rows).Column(columns...).Returning("").
+		Exec(ctx); err != nil {
+		return fmt.Errorf("inserting canonical messages for %s: %w", sessionID, err)
 	}
 	return nil
 }
@@ -766,10 +687,8 @@ func RepairMessageRows(
 	conflict := canonicalConflictUpdateClauseForKeys(
 		[]string{"session_id", "ordinal"}, updates,
 	)
-	for start := 0; start < len(messages); start += canonicalWriteBatchSize {
-		end := min(start+canonicalWriteBatchSize, len(messages))
-		batch := messages[start:end]
-		if _, err := tx.NewInsert().Model(&batch).Column(columns...).
+	if len(messages) > 0 {
+		if _, err := tx.NewInsert().Model(&messages).Column(columns...).
 			On(conflict).Returning("").Exec(ctx); err != nil {
 			return fmt.Errorf("repairing canonical messages for %s: %w", sessionID, err)
 		}
@@ -843,18 +762,16 @@ func prepareMessageRepair(
 		}
 	}
 
-	for start := 0; start < len(affectedOrdinals); start += canonicalWriteBatchSize {
-		end := min(start+canonicalWriteBatchSize, len(affectedOrdinals))
-		ordinals := affectedOrdinals[start:end]
+	if len(affectedOrdinals) > 0 {
 		if _, err := tx.NewDelete().Model((*bunmodel.ToolResultEvent)(nil)).
 			Where("session_id = ?", sessionID).
-			Where("tool_call_message_ordinal IN (?)", bun.List(ordinals)).
+			Where("tool_call_message_ordinal IN (?)", bun.List(affectedOrdinals)).
 			Exec(ctx); err != nil {
 			return fmt.Errorf("clearing canonical repair tool results for %s: %w", sessionID, err)
 		}
 		if _, err := tx.NewDelete().Model((*bunmodel.ToolCall)(nil)).
 			Where("session_id = ?", sessionID).
-			Where("message_ordinal IN (?)", bun.List(ordinals)).
+			Where("message_ordinal IN (?)", bun.List(affectedOrdinals)).
 			Exec(ctx); err != nil {
 			return fmt.Errorf("clearing canonical repair tool calls for %s: %w", sessionID, err)
 		}
@@ -870,20 +787,16 @@ func appendToolRows(
 	if err := resolveCanonicalToolMessageIDs(ctx, tx, sessionID, calls); err != nil {
 		return err
 	}
-	for start := 0; start < len(calls); start += canonicalWriteBatchSize {
-		end := min(start+canonicalWriteBatchSize, len(calls))
-		batch := calls[start:end]
-		insert := tx.NewInsert().Model(&batch).
+	if len(calls) > 0 {
+		insert := tx.NewInsert().Model(&calls).
 			Column(canonicalReplacementColumns((*bunmodel.ToolCall)(nil), "id")...).
 			Returning("")
 		if _, err := insert.Exec(ctx); err != nil {
 			return fmt.Errorf("inserting canonical tool calls for %s: %w", sessionID, err)
 		}
 	}
-	for start := 0; start < len(results); start += canonicalWriteBatchSize {
-		end := min(start+canonicalWriteBatchSize, len(results))
-		batch := results[start:end]
-		if _, err := tx.NewInsert().Model(&batch).
+	if len(results) > 0 {
+		if _, err := tx.NewInsert().Model(&results).
 			Column(canonicalReplacementColumns((*bunmodel.ToolResultEvent)(nil), "id")...).
 			Returning("").Exec(ctx); err != nil {
 			return fmt.Errorf("inserting canonical tool results for %s: %w", sessionID, err)
@@ -924,10 +837,8 @@ func replaceToolRows(
 	if err := resolveCanonicalToolMessageIDs(ctx, tx, sessionID, calls); err != nil {
 		return err
 	}
-	for start := 0; start < len(calls); start += canonicalWriteBatchSize {
-		end := min(start+canonicalWriteBatchSize, len(calls))
-		batch := calls[start:end]
-		if _, err := tx.NewInsert().Model(&batch).
+	if len(calls) > 0 {
+		if _, err := tx.NewInsert().Model(&calls).
 			Column(canonicalReplacementColumns((*bunmodel.ToolCall)(nil), "id")...).
 			Returning("").
 			On("CONFLICT (session_id, message_ordinal, call_index) DO UPDATE").
@@ -945,10 +856,8 @@ func replaceToolRows(
 			return fmt.Errorf("upserting canonical tool calls for %s: %w", sessionID, err)
 		}
 	}
-	for start := 0; start < len(results); start += canonicalWriteBatchSize {
-		end := min(start+canonicalWriteBatchSize, len(results))
-		batch := results[start:end]
-		if _, err := tx.NewInsert().Model(&batch).
+	if len(results) > 0 {
+		if _, err := tx.NewInsert().Model(&results).
 			Column(canonicalReplacementColumns((*bunmodel.ToolResultEvent)(nil), "id")...).
 			Returning("").
 			On("CONFLICT (session_id, tool_call_message_ordinal, call_index, event_index) DO UPDATE").
@@ -1020,12 +929,11 @@ func resolveCanonicalToolMessageIDs(
 	slices.Sort(ordinals)
 
 	messageIDs := make(map[int]*int64, len(ordinals))
-	for start := 0; start < len(ordinals); start += canonicalWriteBatchSize {
-		end := min(start+canonicalWriteBatchSize, len(ordinals))
+	if len(ordinals) > 0 {
 		var messages []bunmodel.Message
 		if err := tx.NewSelect().Model(&messages).Column("id", "ordinal").
 			Where("session_id = ?", sessionID).
-			Where("ordinal IN (?)", bun.List(ordinals[start:end])).
+			Where("ordinal IN (?)", bun.List(ordinals)).
 			Scan(ctx); err != nil {
 			return fmt.Errorf("resolving canonical tool message ids for %s: %w", sessionID, err)
 		}
@@ -1061,14 +969,12 @@ func ReplaceUsageEventRows(
 		Where("session_id = ?", sessionID).Exec(ctx); err != nil {
 		return fmt.Errorf("clearing canonical usage events for %s: %w", sessionID, err)
 	}
-	for start := 0; start < len(rows); start += canonicalWriteBatchSize {
-		end := min(start+canonicalWriteBatchSize, len(rows))
-		batch := rows[start:end]
+	if len(rows) > 0 {
 		columns := canonicalReplacementColumns((*bunmodel.UsageEvent)(nil))
 		if tx.Dialect().Name().String() != "custom" {
 			columns = canonicalReplacementColumns((*bunmodel.UsageEvent)(nil), "id")
 		}
-		query := tx.NewInsert().Model(&batch).Column(columns...).Returning("")
+		query := tx.NewInsert().Model(&rows).Column(columns...).Returning("")
 		if _, err := query.Exec(ctx); err != nil {
 			return fmt.Errorf("inserting canonical usage events for %s: %w", sessionID, err)
 		}
@@ -1090,10 +996,8 @@ func ReplaceSecretFindingRows(
 		Where("session_id = ?", sessionID).Exec(ctx); err != nil {
 		return fmt.Errorf("clearing canonical secret findings for %s: %w", sessionID, err)
 	}
-	for start := 0; start < len(rows); start += canonicalWriteBatchSize {
-		end := min(start+canonicalWriteBatchSize, len(rows))
-		batch := rows[start:end]
-		if _, err := tx.NewInsert().Model(&batch).
+	if len(rows) > 0 {
+		if _, err := tx.NewInsert().Model(&rows).
 			Column(canonicalReplacementColumns((*bunmodel.SecretFinding)(nil), "id")...).
 			Returning("").Exec(ctx); err != nil {
 			return fmt.Errorf("inserting canonical secret findings for %s: %w", sessionID, err)
