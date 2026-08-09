@@ -308,20 +308,9 @@ func canonicalToolRows(
 				SubagentSessionID:   optionalCanonicalString(call.SubagentSessionID),
 				FilePath:            optionalCanonicalString(call.FilePath),
 			})
-			eventIndices := make(map[int]struct{}, len(call.ResultEvents))
-			uniqueEventIndices := true
-			for _, result := range call.ResultEvents {
-				if _, exists := eventIndices[result.EventIndex]; exists {
-					uniqueEventIndices = false
-					break
-				}
-				eventIndices[result.EventIndex] = struct{}{}
-			}
+			eventIndices := CanonicalToolResultEventIndexes(call.ResultEvents)
 			for eventPosition, result := range call.ResultEvents {
-				eventIndex := result.EventIndex
-				if !uniqueEventIndices {
-					eventIndex = eventPosition
-				}
+				eventIndex := eventIndices[eventPosition]
 				if result.ContentLength == 0 {
 					result.ContentLength = len(result.Content)
 				}

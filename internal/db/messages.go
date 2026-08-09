@@ -78,6 +78,29 @@ type ToolResultEvent struct {
 	EventIndex        int    `json:"event_index"`
 }
 
+// CanonicalToolResultEventIndexes returns the event indexes used by every
+// persistence consumer. Distinct provider indexes are preserved; duplicate
+// indexes fall back to slice positions so the canonical key remains unique.
+func CanonicalToolResultEventIndexes(events []ToolResultEvent) []int {
+	indexes := make([]int, len(events))
+	seen := make(map[int]struct{}, len(events))
+	unique := true
+	for _, event := range events {
+		if _, exists := seen[event.EventIndex]; exists {
+			unique = false
+			break
+		}
+		seen[event.EventIndex] = struct{}{}
+	}
+	for position, event := range events {
+		indexes[position] = event.EventIndex
+		if !unique {
+			indexes[position] = position
+		}
+	}
+	return indexes
+}
+
 // Message represents a row in the messages table.
 type Message struct {
 	ID        int64  `json:"id"`
