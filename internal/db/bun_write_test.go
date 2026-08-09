@@ -288,7 +288,7 @@ func TestAppendToolRowsResolvesOnlyAffectedMessageOrdinals(t *testing.T) {
 		"legacy message-id resolution must be bounded by appended ordinals")
 }
 
-func TestAppendToolRowsChunksAffectedMessageOrdinalResolution(t *testing.T) {
+func TestAppendToolRowsResolvesAllAffectedMessageOrdinals(t *testing.T) {
 	database := testDB(t)
 	const sessionID = "chunked-tool-resolution"
 	insertSession(t, database, sessionID, "alpha")
@@ -300,7 +300,7 @@ func TestAppendToolRowsChunksAffectedMessageOrdinalResolution(t *testing.T) {
 		}
 	}
 	insertMessages(t, database, messages...)
-	calls := make([]bunmodel.ToolCall, canonicalWriteBatchSize+1)
+	calls := make([]bunmodel.ToolCall, 101)
 	for index := range calls {
 		calls[index] = bunmodel.ToolCall{
 			SessionID: sessionID, MessageOrdinal: 149 + index,
@@ -321,8 +321,7 @@ func TestAppendToolRowsChunksAffectedMessageOrdinalResolution(t *testing.T) {
 			resolutionQueries = append(resolutionQueries, query)
 		}
 	}
-	require.Len(t, resolutionQueries, 2,
-		"101 affected ordinals must resolve in two bounded chunks")
+	require.Len(t, resolutionQueries, 1)
 	assert.NotContains(t, strings.Join(resolutionQueries, "\n"), "ordinal IN (0,",
 		"resolution must not materialize unaffected transcript history")
 	var storedCalls int
