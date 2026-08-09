@@ -506,6 +506,9 @@ func TestIsAutomountNamespacePath(t *testing.T) {
 		{"darwin regular path", "darwin", "/Users/user/repo", false},
 		{"darwin data volume home", "darwin", "/System/Volumes/Data/home/user/repo", true},
 		{"darwin data volume net", "darwin", "/System/Volumes/Data/net/host", true},
+		{"darwin mixed case home", "darwin", "/HOME/user/repo", true},
+		{"darwin mixed case network servers", "darwin", "/network/SERVERS/x", true},
+		{"darwin mixed case data volume", "darwin", "/system/Volumes/DATA/home/user", true},
 		{"darwin data volume users is real", "darwin", "/System/Volumes/Data/Users/user/repo", false},
 		{"darwin data volume root is real", "darwin", "/System/Volumes/Data", false},
 		{"linux home is real", "linux", "/home/user/repo", false},
@@ -560,6 +563,10 @@ func TestIsProtectedUserDataPath(t *testing.T) {
 		{
 			"data volume unprotected", "darwin", home,
 			"/System/Volumes/Data" + home + "/src/app", false,
+		},
+		{
+			"mixed case data volume documents", "darwin", home,
+			"/system/volumes/data" + home + "/Documents/proj", true,
 		},
 		{"unprotected home child", "darwin", home, home + "/src/app", false},
 		{"library sibling", "darwin", home, home + "/Library/Caches/x", false},
@@ -660,6 +667,49 @@ func TestClassifyLocalPathProbeSkipsAutomountNamespace(t *testing.T) {
 	assert.Equal(t, LocalPathProbeAutomountNamespace, ClassifyLocalPathProbe(
 		"darwin", home, filepath.Join(home, "tohome", "user", "repo"),
 	), "a symlink into the automount namespace must stop the walk")
+}
+
+// TestClassifyLocalPathProbeDotDotTraversalOrder pins that ".." resolves in
+// traversal order, after the components before it: collapsing it lexically
+// would drop an unresolved symlink component and classify a path as safe
+// while real filesystem resolution reaches a protected location through it.
+func TestClassifyLocalPathProbeDotDotTraversalOrder(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the predicate compares POSIX home paths built with filepath")
+	}
+	home := t.TempDir()
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(home, "Documents", "sub"), 0o755,
+	))
+	require.NoError(t, os.MkdirAll(filepath.Join(home, "src", "app"), 0o755))
+	// q links into Documents; home/q/../x resolves through Documents.
+	require.NoError(t, os.Symlink(
+		filepath.Join(home, "Documents", "sub"), filepath.Join(home, "q"),
+	))
+	// Chained relative target: l1 -> "l2/../safe" where l2 links into
+	// Documents; the kernel resolves l2 before applying "..".
+	require.NoError(t, os.Symlink(
+		filepath.Join(home, "Documents", "sub"), filepath.Join(home, "l2"),
+	))
+	require.NoError(t, os.Symlink("l2/../safe", filepath.Join(home, "l1")))
+
+	tests := []struct {
+		name string
+		path string
+		want LocalPathProbeClass
+	}{
+		{"dotdot after symlink into protected", filepath.Join(home, "q") + "/../x", LocalPathProbeProtectedUserData},
+		{"chained relative target with dotdot", filepath.Join(home, "l1"), LocalPathProbeProtectedUserData},
+		{"dotdot through protected midpoint", home + "/Documents/../src/app", LocalPathProbeProtectedUserData},
+		{"dotdot through automount", "/home/../tmp/x", LocalPathProbeAutomountNamespace},
+		{"dotdot through safe components", home + "/src/app/../app", LocalPathProbeSafe},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want,
+				ClassifyLocalPathProbe("darwin", home, tt.path))
+		})
+	}
 }
 
 // TestClassifyLocalPathProbeAutomountHomeNeverResolved pins that resolving

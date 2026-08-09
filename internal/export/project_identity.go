@@ -799,8 +799,10 @@ func IsAutomountNamespacePath(goos, p string) bool {
 	if goos != "darwin" {
 		return false
 	}
-	p = trimDataVolumePrefix(p)
-	for _, ns := range [...]string{"/home", "/net", "/Network/Servers"} {
+	// Comparison folds case: the startup volume is case-insensitive by
+	// default, so /HOME/x resolves to the same autofs map as /home/x.
+	p = strings.ToLower(trimDataVolumePrefix(p))
+	for _, ns := range [...]string{"/home", "/net", "/network/servers"} {
 		if p == ns || strings.HasPrefix(p, ns+"/") {
 			return true
 		}
@@ -817,13 +819,17 @@ func IsAutomountNamespacePath(goos, p string) bool {
 const dataVolumePrefix = "/System/Volumes/Data"
 
 // trimDataVolumePrefix strips the data-volume firmlink prefix so the
-// physical spelling of a path compares equal to its canonical form. Purely
+// physical spelling of a path compares equal to its canonical form. The
+// prefix match folds case (the startup volume is case-insensitive by
+// default) while the returned suffix keeps its original spelling. Purely
 // lexical; never touches the filesystem.
 func trimDataVolumePrefix(p string) string {
-	if p == dataVolumePrefix {
+	lower := strings.ToLower(p)
+	prefix := strings.ToLower(dataVolumePrefix)
+	if lower == prefix {
 		return "/"
 	}
-	if strings.HasPrefix(p, dataVolumePrefix+"/") {
+	if strings.HasPrefix(lower, prefix+"/") {
 		return p[len(dataVolumePrefix):]
 	}
 	return p
@@ -969,10 +975,23 @@ func resolvePathAvoidingAutomount(
 	if IsAutomountNamespacePath(goos, filepath.Clean(p)) {
 		return "", false
 	}
-	rest := splitAbsPathComponents(p)
+	// Raw components with kernel-order ".." handling, mirroring
+	// classifyLocalPathProbe: current never contains a symlink, so
+	// Dir(current) is the correct physical parent.
+	rest := splitRawPathComponents(p)
 	current := string(filepath.Separator)
 	for i, component := range rest {
+		if component == "" || component == "." {
+			continue
+		}
+		if component == ".." {
+			current = filepath.Dir(current)
+			continue
+		}
 		next := filepath.Join(current, component)
+		if IsAutomountNamespacePath(goos, next) {
+			return "", false
+		}
 		info, err := osLstat(next)
 		if err != nil {
 			return "", false
@@ -982,13 +1001,9 @@ func resolvePathAvoidingAutomount(
 			if err != nil {
 				return "", false
 			}
-			if !filepath.IsAbs(target) {
-				target = filepath.Join(current, target)
-			}
-			respliced := filepath.Join(
-				append([]string{target}, rest[i+1:]...)...,
+			return resolvePathAvoidingAutomount(
+				goos, spliceLinkTarget(current, target, rest[i+1:]), hops+1,
 			)
-			return resolvePathAvoidingAutomount(goos, respliced, hops+1)
 		}
 		current = next
 	}
@@ -1012,23 +1027,39 @@ var osLstat = os.Lstat
 func classifyLocalPathProbe(
 	goos string, homes []string, p string, hops int,
 ) LocalPathProbeClass {
-	// The automount check runs per resolution step so a symlink hopping
-	// into /home, /net, or /Network/Servers is caught too, not only a
-	// literal input. A namespace prefix always survives filepath.Clean,
-	// so checking the full path covers every intermediate component.
-	if IsAutomountNamespacePath(goos, filepath.Clean(p)) {
-		return LocalPathProbeAutomountNamespace
-	}
 	if hops > maxProtectedPathLinkHops {
 		return LocalPathProbeProtectedUserData
 	}
-	if protectedUnderAnyHome(goos, homes, p) {
+	// Fast-path lexical checks on the cleaned form; they can only miss
+	// (".." may collapse a guarded midpoint away), and the component walk
+	// below re-checks every candidate in traversal order.
+	cleaned := filepath.Clean(p)
+	if IsAutomountNamespacePath(goos, cleaned) {
+		return LocalPathProbeAutomountNamespace
+	}
+	if protectedUnderAnyHome(goos, homes, cleaned) {
 		return LocalPathProbeProtectedUserData
 	}
-	rest := splitAbsPathComponents(p)
+	// Walk raw components in traversal order. current never contains a
+	// symlink (each hop restarts the walk on the spliced remainder), so a
+	// ".." component resolves to Dir(current) exactly as the kernel would;
+	// collapsing ".." lexically up front instead would drop unresolved
+	// components — home/q/../x with q linked into Documents classifies as
+	// home/x while real resolution reaches Documents/x.
+	rest := splitRawPathComponents(p)
 	current := string(filepath.Separator)
 	for i, component := range rest {
+		if component == "" || component == "." {
+			continue
+		}
+		if component == ".." {
+			current = filepath.Dir(current)
+			continue
+		}
 		next := filepath.Join(current, component)
+		if IsAutomountNamespacePath(goos, next) {
+			return LocalPathProbeAutomountNamespace
+		}
 		if protectedUnderAnyHome(goos, homes, next) {
 			return LocalPathProbeProtectedUserData
 		}
@@ -1041,27 +1072,42 @@ func classifyLocalPathProbe(
 			if err != nil {
 				return LocalPathProbeProtectedUserData
 			}
-			if !filepath.IsAbs(target) {
-				target = filepath.Join(current, target)
-			}
-			resolved := filepath.Join(
-				append([]string{target}, rest[i+1:]...)...,
+			return classifyLocalPathProbe(
+				goos, homes,
+				spliceLinkTarget(current, target, rest[i+1:]),
+				hops+1,
 			)
-			return classifyLocalPathProbe(goos, homes, resolved, hops+1)
 		}
 		current = next
 	}
 	return LocalPathProbeSafe
 }
 
-func splitAbsPathComponents(p string) []string {
-	trimmed := strings.TrimPrefix(
-		filepath.Clean(p), string(filepath.Separator),
-	)
-	if trimmed == "" {
-		return nil
+// spliceLinkTarget rebuilds the unresolved remainder of a walk after a
+// symlink hop. It concatenates without filepath.Join so "." and ".."
+// components survive for the restarted walk to resolve in traversal order.
+// A relative target resolves against current, the link's fully resolved
+// parent directory.
+func spliceLinkTarget(current, target string, rest []string) string {
+	sep := string(filepath.Separator)
+	base := target
+	if !filepath.IsAbs(target) {
+		base = current + sep + target
 	}
-	return strings.Split(trimmed, string(filepath.Separator))
+	if len(rest) == 0 {
+		return base
+	}
+	return base + sep + strings.Join(rest, sep)
+}
+
+// splitRawPathComponents splits a path into raw components, preserving "."
+// and ".." so the walk resolves them in traversal order. Empty components
+// from doubled separators are kept and skipped by the walkers.
+func splitRawPathComponents(p string) []string {
+	return strings.Split(
+		strings.TrimPrefix(p, string(filepath.Separator)),
+		string(filepath.Separator),
+	)
 }
 
 func resolveLiveRootPath(cleaned string) (string, bool) {
