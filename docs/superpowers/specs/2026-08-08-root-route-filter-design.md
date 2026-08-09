@@ -49,32 +49,45 @@ route, while `/?project=...` is an explicit filter deep link and is handled like
 
 When entering the unfiltered root, the App will reset only the sessions store's
 in-memory filters to their defaults and clear any active session selection. The
-reset will not write to local storage. While the App remains in this root state,
-filter persistence is suppressed for every sessions load, including live-refresh
-and sync-triggered loads, so repeated refreshes cannot erase the saved
-preference.
+reset will not write to local storage. This creates a temporary persistence hold
+for the untouched root-reset filter state. The hold follows that filter state,
+not the URL path, and therefore suppresses persistence for every sessions load,
+including live-refresh and sync-triggered loads after a session is opened from
+the root. A session click, detail view, and return to the list cannot erase the
+saved preference while the filters remain untouched.
+
+The hold is released when filter state diverges from the root-reset defaults or
+when saved filters are restored. A filter divergence at the root triggers the
+canonical `/sessions?...` promotion; a saved-filter restoration happens on the
+direct in-app `/` to `/sessions` list transition. Explicit URL filter state is
+also authoritative and does not use the temporary root-reset state.
 
 Root entry will not restore a saved session date range or apply the shared date
 yoke to the landing view. The yoke preference itself remains available for
 normal `/sessions` navigation.
 
-When the user navigates in-app from the unfiltered root to `/sessions` without
-filter parameters, the App will restore the saved session filters before the
-normal `/sessions` load and date/yoke restoration. This means the Sessions nav
-item acts like a return to the user's remembered Sessions view, even though a
-fresh root visit is intentionally unfiltered. Explicit filter parameters on the
+When the user navigates in-app from the unfiltered root to the bare `/sessions`
+list without filter parameters, the App will restore the saved session filters
+before the normal `/sessions` load and date/yoke restoration. This means the
+Sessions nav item acts like a return to the user's remembered Sessions view,
+even though a fresh root visit is intentionally unfiltered. Opening a session
+from `/` is different: navigating to its detail and then closing it back to bare
+`/sessions` keeps the untouched defaults and the persistence hold, so the list
+does not unexpectedly change under the user. Explicit filter parameters on the
 destination remain authoritative.
 
 ### URL synchronization
 
 The existing URL write-back remains unchanged for `/sessions` and session detail
 routes. While the root is unfiltered, it will not write session filters into the
-URL. If session-filter state diverges from defaults while at the root, the App
-will navigate to `/sessions` with the current canonical filter parameters; this
-deliberately covers both user interactions and programmatic state changes.
-Promotion clears the root flag even though both locations use the logical
-`sessions` route, and re-enables filter persistence. Subsequent changes use the
-existing replace-state synchronization.
+URL. If session-filter state diverges from the root-reset defaults while at the
+root, the App will navigate to `/sessions` with the current canonical filter
+parameters; this deliberately covers both user interactions and programmatic
+state changes. Promotion clears the root flag even though both locations use the
+logical `sessions` route, and releases the temporary persistence hold.
+Navigating to session detail or back to its list does not release the hold by
+itself. Subsequent changes after the hold is released use the existing
+replace-state synchronization.
 
 Promotion uses a history-pushing navigation, so the Back button returns to the
 unfiltered root and resets the in-memory filters again. Later filter changes
@@ -97,6 +110,8 @@ Add frontend coverage for the observable contracts:
 - The URL remains `/` (or `/` plus a sticky desktop parameter) after root
   startup, and the saved local-storage value remains intact.
 - A live refresh while at `/` does not persist the temporary default filters.
+- Opening a session from `/`, refreshing its detail view, and closing back to
+  the list leaves the saved local-storage filter intact.
 - Navigating in-app from `/` to `/sessions` restores the saved filter.
 - A filter-state divergence from `/` navigates to `/sessions` with the filter
   encoded, and Back returns to the unfiltered root.
