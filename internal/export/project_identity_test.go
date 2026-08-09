@@ -565,10 +565,10 @@ func TestIsProtectedUserDataPath(t *testing.T) {
 	}
 }
 
-// TestResolvesIntoProtectedUserDataPath pins that the resolving variant
-// catches working directories that only reach a protected folder through a
-// symlink, which the lexical predicate alone cannot see.
-func TestResolvesIntoProtectedUserDataPath(t *testing.T) {
+// TestClassifyLocalPathProbe pins the tri-state classification, including
+// working directories that only reach a protected folder through a symlink,
+// which the lexical predicates alone cannot see.
+func TestClassifyLocalPathProbe(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the predicate compares POSIX home paths built with filepath")
 	}
@@ -590,33 +590,37 @@ func TestResolvesIntoProtectedUserDataPath(t *testing.T) {
 	tests := []struct {
 		name string
 		goos string
+		home string
 		path string
-		want bool
+		want LocalPathProbeClass
 	}{
-		{"lexically protected", "darwin", filepath.Join(home, "Documents", "proj"), true},
-		{"absolute symlink into protected", "darwin", filepath.Join(home, "code", "proj"), true},
-		{"relative symlink into protected", "darwin", filepath.Join(home, "rel", "proj"), true},
-		{"link loop fails protected", "darwin", filepath.Join(home, "loop", "proj"), true},
-		{"plain unprotected", "darwin", filepath.Join(home, "src", "app"), false},
-		{"symlink to unprotected", "darwin", filepath.Join(home, "out", "app"), false},
-		{"missing unprotected path", "darwin", filepath.Join(home, "src", "gone", "deep"), false},
-		{"linux never matches", "linux", filepath.Join(home, "code", "proj"), false},
-		{"relative path", "darwin", "code/proj", false},
+		{"lexically protected", "darwin", home, filepath.Join(home, "Documents", "proj"), LocalPathProbeProtectedUserData},
+		{"absolute symlink into protected", "darwin", home, filepath.Join(home, "code", "proj"), LocalPathProbeProtectedUserData},
+		{"relative symlink into protected", "darwin", home, filepath.Join(home, "rel", "proj"), LocalPathProbeProtectedUserData},
+		{"link loop fails protected", "darwin", home, filepath.Join(home, "loop", "proj"), LocalPathProbeProtectedUserData},
+		{"automount namespace", "darwin", home, "/home/user/repo", LocalPathProbeAutomountNamespace},
+		{"automount without home", "darwin", "", "/net/host/share", LocalPathProbeAutomountNamespace},
+		{"plain unprotected", "darwin", home, filepath.Join(home, "src", "app"), LocalPathProbeSafe},
+		{"symlink to unprotected", "darwin", home, filepath.Join(home, "out", "app"), LocalPathProbeSafe},
+		{"missing unprotected path", "darwin", home, filepath.Join(home, "src", "gone", "deep"), LocalPathProbeSafe},
+		{"empty home protected miss", "darwin", "", filepath.Join(home, "Documents", "proj"), LocalPathProbeSafe},
+		{"linux never restricts", "linux", home, filepath.Join(home, "code", "proj"), LocalPathProbeSafe},
+		{"relative path", "darwin", home, "code/proj", LocalPathProbeSafe},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want,
-				ResolvesIntoProtectedUserDataPath(tt.goos, home, tt.path))
+				ClassifyLocalPathProbe(tt.goos, tt.home, tt.path))
 		})
 	}
 }
 
-// TestResolvesIntoProtectedUserDataPathSkipsAutomountNamespace pins that the
-// resolver never Lstats inside a macOS automounter namespace, whether the
-// input names it directly or a symlink hops into it mid-walk. On darwin that
-// Lstat wakes automountd on every call, which is the CPU storm the automount
-// safeguards elsewhere in identity capture exist to prevent.
-func TestResolvesIntoProtectedUserDataPathSkipsAutomountNamespace(t *testing.T) {
+// TestClassifyLocalPathProbeSkipsAutomountNamespace pins that classification
+// never Lstats inside a macOS automounter namespace, whether the input names
+// it directly or a symlink hops into it mid-walk, and that the namespace is
+// reported as its own class rather than as protected user data — the
+// protected-path opt-in must not become permission to wake automountd.
+func TestClassifyLocalPathProbeSkipsAutomountNamespace(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the predicate compares POSIX home paths built with filepath")
 	}
@@ -631,10 +635,10 @@ func TestResolvesIntoProtectedUserDataPathSkipsAutomountNamespace(t *testing.T) 
 		return orig(path)
 	}
 
-	assert.False(t, ResolvesIntoProtectedUserDataPath(
+	assert.Equal(t, LocalPathProbeAutomountNamespace, ClassifyLocalPathProbe(
 		"darwin", home, "/home/user/repo",
-	), "a direct automount path is not protected user data")
-	assert.False(t, ResolvesIntoProtectedUserDataPath(
+	), "a direct automount path must classify as automount")
+	assert.Equal(t, LocalPathProbeAutomountNamespace, ClassifyLocalPathProbe(
 		"darwin", home, filepath.Join(home, "tohome", "user", "repo"),
 	), "a symlink into the automount namespace must stop the walk")
 }

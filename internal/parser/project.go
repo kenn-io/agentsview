@@ -46,19 +46,31 @@ var probeGitRootForCwd = defaultProbeGitRootForCwd
 // cleaned on disk. The walk stats every ancestor, reads .git file contents,
 // lists sibling directories, and execs git — all attributed to the app
 // bundle on macOS, so a cwd inside a TCC-protected folder would raise a
-// consent prompt during passive parsing. An unresolvable home directory
-// leaves the guard inactive rather than guessing at protected roots.
+// consent prompt during passive parsing. The opt-in only lifts the
+// protected-folder restriction; automounter namespaces stay refused because
+// probing them wakes automountd regardless of any consent. An unresolvable
+// home directory leaves the protected checks vacuous rather than guessing.
 func defaultProbeGitRootForCwd(cleaned string) bool {
-	if allowProtectedPathProbes.Load() {
-		return true
-	}
 	home, err := os.UserHomeDir()
 	if err != nil {
+		home = ""
+	}
+	switch export.ClassifyLocalPathProbe(runtime.GOOS, home, cleaned) {
+	case export.LocalPathProbeAutomountNamespace:
+		// A lexically automount path already passed isForeignOSPath's
+		// resolved-autofs probe before this guard runs (or is a gitfile
+		// target, which previous behavior read directly), so only refuse
+		// when a symlink smuggled the walk into the namespace — that hop
+		// is invisible to the lexical checks and never autofs-vetted.
+		return export.IsAutomountNamespacePath(
+			runtime.GOOS, filepath.Clean(cleaned),
+		)
+	case export.LocalPathProbeProtectedUserData:
+		return allowProtectedPathProbes.Load()
+	case export.LocalPathProbeSafe:
 		return true
 	}
-	return !export.ResolvesIntoProtectedUserDataPath(
-		runtime.GOOS, home, cleaned,
-	)
+	return true
 }
 
 var projectMarkers = []string{
@@ -590,6 +602,14 @@ func findGitRepoRootLocal(dir string) (root string, conservative bool) {
 				return dir, false
 			}
 			if info.Mode().IsRegular() {
+				if !gitFileTargetsProbeable(dir, gitPath) {
+					// The gitfile targets a directory the protected-path
+					// policy refuses. Stop at the worktree itself and do
+					// not report a conservative result: escalating to
+					// gitMainRoot would exec git, which reads inside the
+					// refused target.
+					return dir, false
+				}
 				if root := repoRootFromGitFile(dir, gitPath); root != "" {
 					if root == dir {
 						return root, true
@@ -797,6 +817,29 @@ func repoRootFromGitFile(repoDir, gitFilePath string) string {
 	}
 
 	return repoDir
+}
+
+// gitFileTargetsProbeable reports whether the gitdir target recorded in a
+// linked-worktree .git file, and the common directory that target references,
+// may be read under the protected-path policy. Both come from file contents,
+// not from the vetted cwd, so a worktree in an unguarded directory can point
+// at a main repository inside a protected folder; reading commondir, config,
+// or HEAD there would raise the consent prompt the cwd gate prevented.
+// Reading the .git file itself is safe: it lives in the already-vetted dir.
+func gitFileTargetsProbeable(dir, gitPath string) bool {
+	gitDir := readGitDirFromFile(gitPath)
+	if gitDir == "" {
+		// Nothing parseable means no target will be read from here.
+		return true
+	}
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(dir, gitDir)
+	}
+	if !probeGitRootForCwd(filepath.Clean(gitDir)) {
+		return false
+	}
+	commonDir := readCommonDir(gitDir)
+	return commonDir == "" || probeGitRootForCwd(commonDir)
 }
 
 func readGitDirFromFile(path string) string {

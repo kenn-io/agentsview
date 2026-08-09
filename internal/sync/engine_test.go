@@ -5635,6 +5635,128 @@ func TestProjectIdentityObservationSkipsSymlinkedProtectedCwd(t *testing.T) {
 		"root path must stay the raw cwd, not a resolved protected root")
 }
 
+// TestMayProbeLocalPathRefusesAutomountDespiteOptIn pins that
+// scan_protected_paths lifts only the protected-folder restriction: an
+// automounter-namespace path — named directly or reached through a symlink —
+// stays refused, because consenting to macOS consent prompts is not
+// consenting to waking automountd on every identity-cache miss.
+func TestMayProbeLocalPathRefusesAutomountDespiteOptIn(t *testing.T) {
+	home := t.TempDir()
+	require.NoError(t, os.Symlink("/home", filepath.Join(home, "tohome")))
+	engine := NewEngine(openTestDB(t), EngineConfig{
+		Machine: "current-machine", ScanProtectedPaths: true,
+	})
+	t.Cleanup(engine.Close)
+	engine.goos = "darwin"
+	engine.homeDir = home
+
+	assert.False(t, engine.mayProbeLocalPath("/home/user/repo"),
+		"a literal automount path must stay refused under the opt-in")
+	assert.False(t, engine.mayProbeLocalPath(
+		filepath.Join(home, "tohome", "user", "repo"),
+	), "a symlink into the automount namespace must stay refused too")
+	assert.True(t, engine.mayProbeLocalPath(
+		filepath.Join(home, "Documents", "proj"),
+	), "the opt-in must still lift the protected-folder restriction")
+}
+
+// TestProjectIdentityObservationSkipsProtectedGitdirTarget pins that a linked
+// worktree in an unguarded directory whose .git file targets a gitdir inside
+// a protected folder yields no git detail: reading commondir, config, or
+// HEAD from that target would raise the consent prompt the cwd gate
+// prevented. The worktree relationship stays unknown because classifying it
+// requires the refused commondir read.
+func TestProjectIdentityObservationSkipsProtectedGitdirTarget(t *testing.T) {
+	database := openTestDB(t)
+	home := t.TempDir()
+	mainGitDir := filepath.Join(home, "Documents", "main", ".git")
+	worktreeGitDir := filepath.Join(mainGitDir, "worktrees", "wt")
+	require.NoError(t, os.MkdirAll(worktreeGitDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(worktreeGitDir, "commondir"), []byte("../..\n"), 0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(mainGitDir, "config"),
+		[]byte("[remote \"origin\"]\n\turl = https://github.com/acme/docs.git\n"),
+		0o644,
+	))
+	worktree := filepath.Join(home, "src", "wt")
+	require.NoError(t, os.MkdirAll(worktree, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(worktree, ".git"),
+		[]byte("gitdir: "+worktreeGitDir+"\n"), 0o644,
+	))
+	engine := NewEngine(database, EngineConfig{Machine: "current-machine"})
+	t.Cleanup(engine.Close)
+	engine.goos = "darwin"
+	engine.homeDir = home
+
+	require.NoError(t, engine.writeProjectIdentityObservation(
+		t.Context(), db.Session{
+			ID: "identity-protected-gitdir", Project: "gitdir-project",
+			Machine: "current-machine", Agent: "codex", Cwd: worktree,
+			StartedAt: strPtr(time.Now().UTC().Format(time.RFC3339Nano)),
+		},
+	))
+
+	observations, err := database.ListProjectIdentityObservations(
+		t.Context(), []string{"gitdir-project"},
+	)
+	require.NoError(t, err)
+	require.Len(t, observations, 1)
+	assert.Empty(t, observations[0].GitRemote,
+		"a protected gitdir target must not be read for remotes")
+	assert.Equal(t, export.WorktreeUnknown,
+		observations[0].WorktreeRelationship,
+		"classifying the worktree requires the refused commondir read")
+}
+
+// TestProjectIdentityObservationSkipsProtectedCommonDir pins the second hop
+// of the same leak: a gitfile target outside protected folders whose
+// commondir points into one. The gitdir itself may be read, but the common
+// directory's config must not be.
+func TestProjectIdentityObservationSkipsProtectedCommonDir(t *testing.T) {
+	database := openTestDB(t)
+	home := t.TempDir()
+	protectedGit := filepath.Join(home, "Documents", "main", ".git")
+	require.NoError(t, os.MkdirAll(protectedGit, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(protectedGit, "config"),
+		[]byte("[remote \"origin\"]\n\turl = https://github.com/acme/docs.git\n"),
+		0o644,
+	))
+	gitDir := filepath.Join(home, "gitstore", "wt-git")
+	require.NoError(t, os.MkdirAll(gitDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(gitDir, "commondir"), []byte(protectedGit+"\n"), 0o644,
+	))
+	worktree := filepath.Join(home, "src", "wt")
+	require.NoError(t, os.MkdirAll(worktree, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(worktree, ".git"), []byte("gitdir: "+gitDir+"\n"), 0o644,
+	))
+	engine := NewEngine(database, EngineConfig{Machine: "current-machine"})
+	t.Cleanup(engine.Close)
+	engine.goos = "darwin"
+	engine.homeDir = home
+
+	require.NoError(t, engine.writeProjectIdentityObservation(
+		t.Context(), db.Session{
+			ID: "identity-protected-commondir", Project: "commondir-project",
+			Machine: "current-machine", Agent: "codex", Cwd: worktree,
+			StartedAt: strPtr(time.Now().UTC().Format(time.RFC3339Nano)),
+		},
+	))
+
+	observations, err := database.ListProjectIdentityObservations(
+		t.Context(), []string{"commondir-project"},
+	)
+	require.NoError(t, err)
+	require.Len(t, observations, 1)
+	assert.Empty(t, observations[0].GitRemote,
+		"a protected common directory must not be read for remotes")
+}
+
 // TestProjectIdentityObservationScansProtectedPathWhenOptedIn pins that
 // scan_protected_paths restores full git identity for users who keep code in
 // Documents and accept the macOS prompt.

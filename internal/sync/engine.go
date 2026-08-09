@@ -11308,13 +11308,20 @@ func userHomeDirOrEmpty() string {
 // Working directories inside macOS TCC-protected locations stay untouched
 // unless the user set scan_protected_paths, so importing an archive cannot
 // raise consent prompts for Documents, Downloads, or a cloud-provider folder.
-// The check follows symlinks, so a cwd that merely links into a protected
-// folder is refused before Stat or EvalSymlinks can enter it.
+// Automounter namespaces stay untouched regardless of the opt-in: consenting
+// to consent prompts is not consenting to waking automountd. The check
+// follows symlinks, so a path that merely links into either kind of location
+// is refused before Stat or EvalSymlinks can enter it.
 func (e *Engine) mayProbeLocalPath(p string) bool {
-	if e.scanProtectedPaths {
+	switch export.ClassifyLocalPathProbe(e.goos, e.homeDir, p) {
+	case export.LocalPathProbeAutomountNamespace:
+		return false
+	case export.LocalPathProbeProtectedUserData:
+		return e.scanProtectedPaths
+	case export.LocalPathProbeSafe:
 		return true
 	}
-	return !export.ResolvesIntoProtectedUserDataPath(e.goos, e.homeDir, p)
+	return true
 }
 
 // isLocalMachineAttribution recognizes empty and the legacy "local" sentinel
@@ -12529,7 +12536,9 @@ func (e *Engine) cachedProjectIdentity(machine, rootPath string) projectIdentity
 		if normalized, ok, err := export.NormalizeRootPath(rootPath); err == nil && ok {
 			identity.rootPath = normalized
 		}
-		if discovered := discoverLocalGitIdentity(rootPath); discovered.rootPath != "" {
+		if discovered := discoverLocalGitIdentity(
+			rootPath, e.mayProbeLocalPath,
+		); discovered.rootPath != "" {
 			identity.rootPath = discovered.rootPath
 			identity.repositoryPath = discovered.repositoryPath
 			identity.gitDir = discovered.gitDir
@@ -12657,7 +12666,9 @@ func countNormalizedRemoteCandidates(remotes map[string]string) int {
 	return len(unique)
 }
 
-func discoverLocalGitIdentity(cwd string) localGitIdentity {
+func discoverLocalGitIdentity(
+	cwd string, mayProbe func(string) bool,
+) localGitIdentity {
 	if !safeLocalAbsolutePath(cwd) {
 		return localGitIdentity{}
 	}
@@ -12675,14 +12686,16 @@ func discoverLocalGitIdentity(cwd string) localGitIdentity {
 	if root == "" {
 		return localGitIdentity{}
 	}
-	gitDir, commonDir, relationship := gitDirectoryContext(root)
+	gitDir, commonDir, relationship := gitDirectoryContext(root, mayProbe)
 	result := localGitIdentity{
 		rootPath:       root,
-		repositoryPath: repositoryPathForGitContext(root, commonDir),
+		repositoryPath: repositoryPathForGitContext(root, commonDir, mayProbe),
 		gitDir:         gitDir,
 		worktreeKind:   relationship,
 	}
-	if commonDir != "" {
+	// The common directory comes from gitfile contents and can point
+	// anywhere, including a protected location the vetted cwd never named.
+	if commonDir != "" && mayProbe(commonDir) {
 		result.remotes = readGitRemotes(filepath.Join(commonDir, "config"))
 	}
 	return result
@@ -12739,7 +12752,7 @@ func findLocalGitRoot(start string) string {
 }
 
 func gitDirectoryContext(
-	root string,
+	root string, mayProbe func(string) bool,
 ) (gitDir, commonDir string, relationship export.WorktreeRelationship) {
 	gitPath := filepath.Join(root, ".git")
 	if info, err := os.Stat(gitPath); err == nil && info.IsDir() {
@@ -12758,6 +12771,13 @@ func gitDirectoryContext(
 	if !filepath.IsAbs(line) {
 		line = filepath.Join(root, line)
 	}
+	// The gitfile target comes from file contents, not from the vetted
+	// cwd: a linked worktree in an unguarded directory can point at a
+	// main repository inside a protected folder, and reading commondir or
+	// HEAD there would raise the consent prompt the cwd gate prevented.
+	if !mayProbe(line) {
+		return "", "", export.WorktreeUnknown
+	}
 	commonDir = line
 	relationship = export.WorktreeMain
 	if data, err := os.ReadFile(filepath.Join(line, "commondir")); err == nil {
@@ -12772,12 +12792,19 @@ func gitDirectoryContext(
 	return filepath.Clean(line), filepath.Clean(commonDir), relationship
 }
 
-func repositoryPathForGitContext(root, commonDir string) string {
+func repositoryPathForGitContext(
+	root, commonDir string, mayProbe func(string) bool,
+) string {
 	repositoryPath := commonDir
 	if commonDir == "" {
 		repositoryPath = root
 	} else if filepath.Base(commonDir) == ".git" {
 		repositoryPath = filepath.Dir(commonDir)
+	}
+	// Storing the path string is harmless; resolving its symlinks is a
+	// filesystem walk that must respect the protected-path policy.
+	if !mayProbe(repositoryPath) {
+		return filepath.Clean(repositoryPath)
 	}
 	if resolved, err := filepath.EvalSymlinks(repositoryPath); err == nil {
 		return resolved

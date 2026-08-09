@@ -860,31 +860,49 @@ func IsProtectedUserDataPath(goos, home, p string) bool {
 // looping forever or letting the caller resolve the loop itself.
 const maxProtectedPathLinkHops = 40
 
-// ResolvesIntoProtectedUserDataPath reports whether p denotes a location
-// inside a macOS TCC-protected user data folder once symlinks are followed.
-// IsProtectedUserDataPath alone compares lexically, so a working directory
-// like ~/code/proj where ~/code links into ~/Documents would pass it and the
-// caller's own Stat or EvalSymlinks would then reach into the protected
-// folder. This walk resolves one component at a time and checks every
-// candidate lexically before touching it with Lstat, so answering the
-// question never enters a protected location itself. Unresolvable links are
-// treated as protected; a missing path component means nothing beyond it can
-// be opened, so the remainder is reported unprotected.
-func ResolvesIntoProtectedUserDataPath(goos, home, p string) bool {
-	if goos != "darwin" || strings.TrimSpace(home) == "" || !filepath.IsAbs(p) {
-		return false
+// LocalPathProbeClass classifies whether passive discovery may touch a local
+// path on disk. Safe paths may be probed. Protected paths raise a macOS TCC
+// consent prompt and may only be probed under an explicit user opt-in.
+// Automount-namespace paths wake automountd on any stat and must never be
+// probed, opt-in or not — the two unsafe classes exist so callers cannot
+// treat one override as permission for the other.
+type LocalPathProbeClass int
+
+const (
+	LocalPathProbeSafe LocalPathProbeClass = iota
+	LocalPathProbeProtectedUserData
+	LocalPathProbeAutomountNamespace
+)
+
+// ClassifyLocalPathProbe classifies p for passive probing once symlinks are
+// followed. IsProtectedUserDataPath and IsAutomountNamespacePath compare
+// lexically, so a working directory like ~/code/proj where ~/code links into
+// ~/Documents or /home would pass them and the caller's own Stat or
+// EvalSymlinks would then reach into the guarded location. This walk resolves
+// one component at a time and checks every candidate lexically before
+// touching it with Lstat, so answering the question never enters a protected
+// folder or wakes the automounter itself. Unresolvable links classify as
+// protected; a missing path component means nothing beyond it can be opened,
+// so the remainder is safe.
+func ClassifyLocalPathProbe(goos, home, p string) LocalPathProbeClass {
+	if goos != "darwin" || !filepath.IsAbs(p) {
+		return LocalPathProbeSafe
 	}
 	// Compare against the symlink-resolved home too: once the walk hops
 	// through a link, it continues on resolved prefixes, and a home behind
 	// a symlinked ancestor (e.g. /var -> /private/var) would never match
 	// the unresolved form lexically. Resolving home itself only stats its
-	// ancestors, which are never protected locations.
-	homes := []string{home}
-	if resolved, err := filepath.EvalSymlinks(home); err == nil &&
-		filepath.Clean(resolved) != filepath.Clean(home) {
-		homes = append(homes, resolved)
+	// ancestors, which are never protected locations. An unresolvable home
+	// leaves the protected checks vacuous; automount checks need no home.
+	var homes []string
+	if strings.TrimSpace(home) != "" {
+		homes = []string{home}
+		if resolved, err := filepath.EvalSymlinks(home); err == nil &&
+			filepath.Clean(resolved) != filepath.Clean(home) {
+			homes = append(homes, resolved)
+		}
 	}
-	return resolvesIntoProtectedUserData(goos, homes, p, 0)
+	return classifyLocalPathProbe(goos, homes, p, 0)
 }
 
 func protectedUnderAnyHome(goos string, homes []string, p string) bool {
@@ -901,38 +919,37 @@ func protectedUnderAnyHome(goos string, homes []string, p string) bool {
 // os.Lstat via this binding.
 var osLstat = os.Lstat
 
-func resolvesIntoProtectedUserData(
+func classifyLocalPathProbe(
 	goos string, homes []string, p string, hops int,
-) bool {
-	// Never walk an automounter namespace: Lstat on /home, /net, or
-	// /Network/Servers wakes automountd on every call (see
-	// IsAutomountNamespacePath), and nothing there is protected user data.
-	// Checked per resolution step so a symlink hopping into the namespace
-	// is refused too, not only a literal /home/... input.
+) LocalPathProbeClass {
+	// The automount check runs per resolution step so a symlink hopping
+	// into /home, /net, or /Network/Servers is caught too, not only a
+	// literal input. A namespace prefix always survives filepath.Clean,
+	// so checking the full path covers every intermediate component.
 	if IsAutomountNamespacePath(goos, filepath.Clean(p)) {
-		return false
+		return LocalPathProbeAutomountNamespace
 	}
 	if hops > maxProtectedPathLinkHops {
-		return true
+		return LocalPathProbeProtectedUserData
 	}
 	if protectedUnderAnyHome(goos, homes, p) {
-		return true
+		return LocalPathProbeProtectedUserData
 	}
 	rest := splitAbsPathComponents(p)
 	current := string(filepath.Separator)
 	for i, component := range rest {
 		next := filepath.Join(current, component)
 		if protectedUnderAnyHome(goos, homes, next) {
-			return true
+			return LocalPathProbeProtectedUserData
 		}
 		info, err := osLstat(next)
 		if err != nil {
-			return false
+			return LocalPathProbeSafe
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
 			target, err := os.Readlink(next)
 			if err != nil {
-				return true
+				return LocalPathProbeProtectedUserData
 			}
 			if !filepath.IsAbs(target) {
 				target = filepath.Join(current, target)
@@ -940,11 +957,11 @@ func resolvesIntoProtectedUserData(
 			resolved := filepath.Join(
 				append([]string{target}, rest[i+1:]...)...,
 			)
-			return resolvesIntoProtectedUserData(goos, homes, resolved, hops+1)
+			return classifyLocalPathProbe(goos, homes, resolved, hops+1)
 		}
 		current = next
 	}
-	return false
+	return LocalPathProbeSafe
 }
 
 func splitAbsPathComponents(p string) []string {

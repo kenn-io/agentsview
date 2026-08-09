@@ -1015,6 +1015,11 @@ macOS then prompts once per folder on the next sync; granting access restores
 full identity for those sessions, and denying leaves them path-only. The option
 has no effect on other platforms.
 
+Enabling the option applies to sessions parsed after the change. Sessions
+already in the archive keep their path-only identity until their session files
+change; run `agentsview sync --full` to reparse the archive and pick up Git
+detail for existing sessions.
+
 ### Large Watch Trees
 
 The recursive watcher has a hard budget of 8192 directories per process. If a

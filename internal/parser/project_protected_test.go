@@ -42,6 +42,38 @@ func TestExtractProjectFromCwdGuardedCwdSkipsGitWalk(t *testing.T) {
 		"a guarded cwd must fall back to its basename")
 }
 
+// TestExtractProjectFromCwdProtectedGitdirTargetFallsBack pins that a linked
+// worktree in an unguarded directory whose .git file targets a refused gitdir
+// stops at the worktree itself: following the target would read commondir and
+// config inside the refused location, and escalating to gitMainRoot would
+// exec git, which reads the same target. The main repository name must not
+// leak into the result.
+func TestExtractProjectFromCwdProtectedGitdirTargetFallsBack(t *testing.T) {
+	root := t.TempDir()
+	guarded := filepath.Join(root, "guarded")
+	mainGitDir := filepath.Join(guarded, "main", ".git")
+	worktreeGitDir := filepath.Join(mainGitDir, "worktrees", "wt")
+	require.NoError(t, os.MkdirAll(worktreeGitDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(worktreeGitDir, "commondir"), []byte("../..\n"), 0o644,
+	))
+	worktree := filepath.Join(root, "work", "wt-checkout")
+	require.NoError(t, os.MkdirAll(worktree, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(worktree, ".git"),
+		[]byte("gitdir: "+worktreeGitDir+"\n"), 0o644,
+	))
+
+	origGuard := probeGitRootForCwd
+	t.Cleanup(func() { probeGitRootForCwd = origGuard })
+	probeGitRootForCwd = func(cleaned string) bool {
+		return !strings.HasPrefix(cleaned, guarded)
+	}
+
+	assert.Equal(t, "wt_checkout", ExtractProjectFromCwd(worktree),
+		"a refused gitdir target must fall back to the worktree basename")
+}
+
 // TestDefaultProbeGitRootForCwdHonorsProtectedHome pins the default guard's
 // wiring on macOS: a cwd under $HOME/Documents is refused until
 // SetAllowProtectedPathProbes opts in. Darwin-only because the guard reads
