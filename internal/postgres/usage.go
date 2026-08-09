@@ -108,7 +108,6 @@ type pgUsageScanRow struct {
 	ts                       sql.NullTime
 	model                    string
 	tokenJSON                string
-	webSearchRequests        sql.NullInt64
 	inputTokens              int
 	outputTokens             int
 	cacheCreationInputTokens int
@@ -137,6 +136,7 @@ type pgDailyUsageScanRow struct {
 	ts                       sql.NullTime
 	model                    string
 	tokenJSON                string
+	webSearchRequests        sql.NullInt64
 	inputTokens              int
 	outputTokens             int
 	cacheCreationInputTokens int
