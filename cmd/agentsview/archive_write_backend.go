@@ -935,8 +935,8 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 	cleanResyncTemp(b.appCfg.DBPath)
 
 	engine := syncpkg.NewEngine(b.database, syncpkg.EngineConfig{
-		AgentDirs:               b.appCfg.AgentDirs,
-		SourceMachines:          b.appCfg.SourceMachines,
+		AgentDirs:               b.appCfg.SyncAgentDirs(),
+		SourceMachines:          b.appCfg.SyncSourceMachines(),
 		IncludeCwdPrefixes:      b.appCfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths:      b.appCfg.ScanProtectedPaths,
 		Machine:                 b.appCfg.LocalMachineName,
@@ -1054,8 +1054,8 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 	cleanResyncTemp(b.appCfg.DBPath)
 
 	engine := syncpkg.NewEngine(b.database, syncpkg.EngineConfig{
-		AgentDirs:               b.appCfg.AgentDirs,
-		SourceMachines:          b.appCfg.SourceMachines,
+		AgentDirs:               b.appCfg.SyncAgentDirs(),
+		SourceMachines:          b.appCfg.SyncSourceMachines(),
 		IncludeCwdPrefixes:      b.appCfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths:      b.appCfg.ScanProtectedPaths,
 		Machine:                 b.appCfg.LocalMachineName,

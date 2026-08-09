@@ -126,8 +126,8 @@ func doParseDiff(cfg ParseDiffConfig) (failed bool) {
 	defer closeWriteDB(database, writeLock)
 
 	engine := sync.NewDiffEngine(database, sync.EngineConfig{
-		AgentDirs:               appCfg.AgentDirs,
-		SourceMachines:          appCfg.SourceMachines,
+		AgentDirs:               appCfg.SyncAgentDirs(),
+		SourceMachines:          appCfg.SyncSourceMachines(),
 		IncludeCwdPrefixes:      appCfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths:      appCfg.ScanProtectedPaths,
 		Machine:                 appCfg.LocalMachineName,

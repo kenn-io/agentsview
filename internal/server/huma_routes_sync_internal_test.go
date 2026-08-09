@@ -2121,3 +2121,16 @@ func TestRunHTTPRemoteSyncReachesMirrorPath(t *testing.T) {
 	assert.Equal(t, 1, manifestRequests,
 		"configured DataDir must route HTTP sync through the manifest/mirror path")
 }
+
+func TestOnDemandSyncEngineExcludesDisabledProvider(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	geminiDir := filepath.Join(f.dir, "gemini")
+	f.srv.cfg.AgentDirs[parser.AgentGemini] = []string{geminiDir}
+	f.srv.cfg.DisabledAgents = []parser.AgentType{parser.AgentGemini}
+
+	engine := f.srv.syncEngineForLocal(f.db)
+
+	assert.Empty(t, engine.ReconciliationRootsForAgent(string(parser.AgentGemini)))
+	assert.Equal(t, []string{f.claudeDir},
+		engine.ReconciliationRootsForAgent(string(parser.AgentClaude)))
+}

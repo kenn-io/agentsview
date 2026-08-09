@@ -73,8 +73,8 @@ func syncService(
 		return nil, nil, fmt.Errorf("opening db: %w", err)
 	}
 	engine := sync.NewEngine(d, sync.EngineConfig{
-		AgentDirs:          cfg.AgentDirs,
-		SourceMachines:     cfg.SourceMachines,
+		AgentDirs:          cfg.SyncAgentDirs(),
+		SourceMachines:     cfg.SyncSourceMachines(),
 		IncludeCwdPrefixes: cfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths: cfg.ScanProtectedPaths,
 		Machine:            cfg.LocalMachineName,

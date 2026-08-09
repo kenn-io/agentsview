@@ -72,6 +72,7 @@ chart_palette = "agentsview"
 | `public_origins`                    | Array of additional trusted CORS origins                                                                                                                                                                                                             |
 | `daemon_idle_timeout`               | Idle timeout for detached writable daemons; set to `"0s"` to keep them alive                                                                                                                                                                         |
 | `chart_palette`                     | Server-wide categorical chart colors: `"agentsview"` (default) or `"matplotlib"`; also configurable under **Settings > Appearance**                                                                                                                  |
+| `disabled_agents`                   | Session providers to exclude from discovery and ingestion; changes require a daemon restart — see [Disabling Session Providers](#disabling-session-providers)                                                                                         |
 | `[proxy]`                           | Managed proxy configuration table — see [Remote Access](/remote-access/)                                                                                                                                                                             |
 | `disable_update_check`              | Disable the automatic update check (see [Privacy](#privacy-and-telemetry))                                                                                                                                                                           |
 | `scan_protected_paths`              | Allow Git discovery inside macOS privacy-protected folders, accepting one consent prompt per folder — see [macOS Protected Folders](#macos-protected-folders)                                                                                        |
@@ -682,6 +683,21 @@ export ZCODE_DIR=~/custom/zcode/cli
 export ZED_DIR=~/custom/zed
 export ZENCODER_DIR=~/custom/zencoder
 ```
+
+### Disabling Session Providers
+
+Exclude session providers you do not use by listing their IDs in
+`disabled_agents`:
+
+```toml
+disabled_agents = ["gemini"]
+```
+
+The setting applies to local discovery, file watching, scheduled polling, and
+remote session ingestion. Restart the AgentsView daemon after changing it.
+Previously archived sessions from a disabled provider remain available and are
+not deleted. The setting does not disable that provider as a Recall execution
+backend.
 
 ### Multiple Directories
 

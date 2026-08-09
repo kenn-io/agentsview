@@ -19,11 +19,12 @@ func (im Importer) ImportExtracted(
 	if err := validateTargetSetPaths(targets); err != nil {
 		return stats, err
 	}
+	targets = filterDisabledImportTargets(targets, im.DisabledAgents)
 	if len(targets.Dirs) == 0 {
 		return stats, nil
 	}
 	layout, config, err := newImportInputs(
-		im.Host, im.BlockedResultCategories, targets, root,
+		im.Host, im.BlockedResultCategories, im.DisabledAgents, targets, root,
 	)
 	if err != nil {
 		return stats, err
@@ -47,6 +48,35 @@ func (im Importer) ImportExtracted(
 	stats.Skipped = engineStats.Skipped
 	stats.Failed = engineStats.Failed
 	return stats, nil
+}
+
+func filterDisabledImportTargets(
+	targets TargetSet,
+	disabled []parser.AgentType,
+) TargetSet {
+	if len(disabled) == 0 {
+		return targets
+	}
+	disabledSet := make(map[parser.AgentType]struct{}, len(disabled))
+	for _, agent := range disabled {
+		disabledSet[agent] = struct{}{}
+	}
+	filtered := targets
+	filtered.Dirs = make(map[parser.AgentType][]string, len(targets.Dirs))
+	for agent, dirs := range targets.Dirs {
+		if _, skip := disabledSet[agent]; skip {
+			continue
+		}
+		filtered.Dirs[agent] = append([]string(nil), dirs...)
+	}
+	filtered.Files = make(map[parser.AgentType][]string, len(targets.Files))
+	for agent, files := range targets.Files {
+		if _, skip := disabledSet[agent]; skip {
+			continue
+		}
+		filtered.Files[agent] = append([]string(nil), files...)
+	}
+	return filtered
 }
 
 // importLayout maps stable remote paths to one prepared source root. Keeping
@@ -103,9 +133,11 @@ func newImportLayout(targets TargetSet, root string) (importLayout, error) {
 func newImportInputs(
 	host string,
 	blockedResultCategories []string,
+	disabledAgents []parser.AgentType,
 	targets TargetSet,
 	root string,
 ) (importLayout, syncpkg.EngineConfig, error) {
+	targets = filterDisabledImportTargets(targets, disabledAgents)
 	layout, err := newImportLayout(targets, root)
 	if err != nil {
 		return importLayout{}, syncpkg.EngineConfig{}, err

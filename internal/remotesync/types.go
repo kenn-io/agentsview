@@ -210,6 +210,7 @@ type Importer struct {
 	Host                    string
 	Full                    bool
 	DB                      *db.DB
+	DisabledAgents          []parser.AgentType
 	BlockedResultCategories []string
 	Progress                syncpkg.ProgressFunc
 }

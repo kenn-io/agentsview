@@ -331,7 +331,8 @@ func (p *PreparedHTTP) RebuildContributor() (syncpkg.RebuildContributor, error) 
 		)
 	}
 	layout, config, err := newImportInputs(
-		p.sync.Host, p.sync.BlockedResultCategories, p.targets, p.root,
+		p.sync.Host, p.sync.BlockedResultCategories, p.sync.DisabledAgents,
+		p.targets, p.root,
 	)
 	if err != nil {
 		return syncpkg.RebuildContributor{}, err

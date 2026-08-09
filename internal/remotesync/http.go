@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
@@ -35,6 +36,7 @@ type HTTPSync struct {
 	Full                    bool
 	DataDir                 string
 	DB                      *db.DB
+	DisabledAgents          []parser.AgentType
 	BlockedResultCategories []string
 	Progress                syncpkg.ProgressFunc
 	Client                  *http.Client
@@ -109,6 +111,7 @@ func (hs HTTPSync) importRoot(
 		Host:                    hs.Host,
 		Full:                    hs.Full,
 		DB:                      hs.DB,
+		DisabledAgents:          hs.DisabledAgents,
 		BlockedResultCategories: hs.BlockedResultCategories,
 		Progress:                hs.Progress,
 	}.ImportExtracted(ctx, targets, root)

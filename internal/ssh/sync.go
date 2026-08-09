@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/sync"
 )
@@ -25,6 +26,7 @@ type RemoteSync struct {
 	Port                    int
 	Full                    bool
 	DB                      *db.DB
+	DisabledAgents          []parser.AgentType
 	SSHOpts                 []string // extra args passed to ssh (e.g. -i keyfile)
 	BlockedResultCategories []string
 	Progress                sync.ProgressFunc
@@ -104,6 +106,7 @@ func (rs *RemoteSync) Run(
 		Host:                    rs.Host,
 		Full:                    rs.Full,
 		DB:                      rs.DB,
+		DisabledAgents:          rs.DisabledAgents,
 		BlockedResultCategories: rs.BlockedResultCategories,
 		Progress:                progress,
 	}.ImportExtracted(ctx, remotesync.TargetSet{

@@ -295,8 +295,8 @@ func runServe(cfg config.Config, opts serveOptions) {
 	if !cfg.NoSync {
 		var onStartupReconciled func(sync.SyncStats, error)
 		engine = sync.NewEngine(database, sync.EngineConfig{
-			AgentDirs:               cfg.AgentDirs,
-			SourceMachines:          cfg.SourceMachines,
+			AgentDirs:               cfg.SyncAgentDirs(),
+			SourceMachines:          cfg.SyncSourceMachines(),
 			IncludeCwdPrefixes:      cfg.SyncIncludeCwdPrefixes,
 			ScanProtectedPaths:      cfg.ScanProtectedPaths,
 			Machine:                 cfg.LocalMachineName,

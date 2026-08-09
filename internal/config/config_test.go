@@ -2401,3 +2401,64 @@ func TestLoadFileSessionSourceAbsoluteDirDeduplicatesRelativeLegacyRoot(t *testi
 		cfg.SourceMachines[parser.AgentCopilot],
 		"the structured entry must relabel the equivalent legacy root")
 }
+
+func TestDisabledAgentsNormalizeAndFilterEffectiveDirs(t *testing.T) {
+	cfg, err := Default()
+	require.NoError(t, err)
+	geminiDirs := append([]string(nil), cfg.AgentDirs[parser.AgentGemini]...)
+
+	require.NoError(t, cfg.applyConfigTOML(`
+disabled_agents = [" gemini ", "claude", "gemini"]
+`))
+
+	assert.Equal(t,
+		[]parser.AgentType{parser.AgentClaude, parser.AgentGemini},
+		cfg.DisabledAgents,
+	)
+	assert.Empty(t, cfg.ResolveDirs(parser.AgentGemini))
+	assert.Equal(t, geminiDirs, cfg.ConfiguredDirs(parser.AgentGemini))
+	assert.NotContains(t, cfg.SyncAgentDirs(), parser.AgentGemini)
+	assert.NotContains(t, cfg.SyncSourceMachines(), parser.AgentGemini)
+}
+
+func TestDisabledAgentsRejectInvalidSessionProviders(t *testing.T) {
+	tests := []struct {
+		name    string
+		agent   string
+		wantErr string
+	}{
+		{
+			name:    "unknown",
+			agent:   "not-an-agent",
+			wantErr: `disabled_agents: unknown session provider "not-an-agent"`,
+		},
+		{
+			name:    "import only",
+			agent:   "chatgpt",
+			wantErr: `disabled_agents: "chatgpt" is not a configurable session provider`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Default()
+			require.NoError(t, err)
+
+			err = cfg.applyConfigTOML(
+				`disabled_agents = ["` + tt.agent + `"]`,
+			)
+
+			require.EqualError(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestDisabledAgentsExplicitEmptyArrayEnablesDefaults(t *testing.T) {
+	cfg, err := Default()
+	require.NoError(t, err)
+	cfg.DisabledAgents = []parser.AgentType{parser.AgentGemini}
+
+	require.NoError(t, cfg.applyConfigTOML(`disabled_agents = []`))
+
+	assert.Empty(t, cfg.DisabledAgents)
+	assert.NotEmpty(t, cfg.ResolveDirs(parser.AgentGemini))
+}

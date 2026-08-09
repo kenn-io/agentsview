@@ -212,6 +212,70 @@ func TestImporterImportsExtractedRemoteFiles(t *testing.T) {
 	assert.Contains(t, *full.FilePath, "devbox:/home/wes/.claude/projects/test-project/session.jsonl")
 }
 
+func TestImporterExcludesLocallyDisabledProvider(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	extracted := t.TempDir()
+	claudeRoot := "/remote/claude"
+	claudeDir := filepath.Join(
+		remappedRemotePath(extracted, claudeRoot), "project",
+	)
+	require.NoError(t, os.MkdirAll(claudeDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(claudeDir, "enabled.jsonl"),
+		[]byte(testjsonl.NewSessionBuilder().
+			AddClaudeUserWithSessionID(
+				"2026-08-09T10:00:00Z", "enabled remote", "enabled-remote",
+			).
+			String()),
+		0o644,
+	))
+
+	geminiRoot := "/remote/gemini"
+	geminiDir := filepath.Join(
+		remappedRemotePath(extracted, geminiRoot),
+		"tmp", "project", "chats",
+	)
+	require.NoError(t, os.MkdirAll(geminiDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(geminiDir,
+			"session-2026-08-09T10-00-disabled-remote.json"),
+		[]byte(testjsonl.GeminiSessionJSON(
+			"disabled-remote",
+			"project",
+			"2026-08-09T10:00:00Z",
+			"2026-08-09T10:01:00Z",
+			[]map[string]any{
+				testjsonl.GeminiUserMsg(
+					"user", "2026-08-09T10:00:00Z", "disabled remote",
+				),
+			},
+		)),
+		0o644,
+	))
+
+	stats, err := Importer{
+		Host:           "devbox",
+		DB:             database,
+		DisabledAgents: []parser.AgentType{parser.AgentGemini},
+	}.ImportExtracted(t.Context(), TargetSet{
+		Dirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {claudeRoot},
+			parser.AgentGemini: {geminiRoot},
+		},
+	}, extracted)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.SessionsSynced)
+	page, err := database.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 1)
+	assert.Equal(t, "devbox~enabled", page.Sessions[0].ID)
+	assert.Equal(t, string(parser.AgentClaude), page.Sessions[0].Agent)
+}
+
 func TestImporterImportsHermesDatabaseOnlySession(t *testing.T) {
 	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
 	require.NoError(t, err)

@@ -510,6 +510,7 @@ type Config struct {
 	PublicOrigins        []string               `json:"public_origins,omitempty" toml:"public_origins"`
 	Proxy                ProxyConfig            `json:"proxy,omitempty" toml:"proxy"`
 	WatchExcludePatterns []string               `json:"watch_exclude_patterns,omitempty" toml:"watch_exclude_patterns"`
+	DisabledAgents       []parser.AgentType     `json:"disabled_agents,omitempty" toml:"disabled_agents"`
 	CursorSecret         string                 `json:"cursor_secret" toml:"cursor_secret"`
 	CursorAdminAPIKey    string                 `json:"cursor_admin_api_key,omitempty" toml:"cursor_admin_api_key"`
 	CursorAdminEmail     string                 `json:"cursor_admin_email,omitempty" toml:"cursor_admin_email"`
@@ -613,10 +614,80 @@ const (
 )
 
 // ResolveDirs returns the effective directories for an agent.
-func (c *Config) ResolveDirs(
-	agent parser.AgentType,
-) []string {
-	return c.AgentDirs[agent]
+func (c Config) AgentDisabled(agent parser.AgentType) bool {
+	return slices.Contains(c.DisabledAgents, agent)
+}
+
+func (c Config) ConfiguredDirs(agent parser.AgentType) []string {
+	return append([]string(nil), c.AgentDirs[agent]...)
+}
+
+func (c Config) ResolveDirs(agent parser.AgentType) []string {
+	if c.AgentDisabled(agent) {
+		return nil
+	}
+	return c.ConfiguredDirs(agent)
+}
+
+func (c Config) SyncAgentDirs() map[parser.AgentType][]string {
+	dirs := make(map[parser.AgentType][]string, len(c.AgentDirs))
+	for agent, configured := range c.AgentDirs {
+		if c.AgentDisabled(agent) {
+			continue
+		}
+		dirs[agent] = append([]string(nil), configured...)
+	}
+	return dirs
+}
+
+func (c Config) SyncSourceMachines() map[parser.AgentType]map[string]string {
+	machines := make(
+		map[parser.AgentType]map[string]string,
+		len(c.SourceMachines),
+	)
+	for agent, configured := range c.SourceMachines {
+		if c.AgentDisabled(agent) {
+			continue
+		}
+		machines[agent] = maps.Clone(configured)
+	}
+	return machines
+}
+
+func NormalizeDisabledAgents(
+	values []string,
+) ([]parser.AgentType, error) {
+	requested := make(map[parser.AgentType]struct{}, len(values))
+	for _, value := range values {
+		agent := parser.AgentType(strings.ToLower(strings.TrimSpace(value)))
+		found := false
+		for _, def := range parser.Registry {
+			if def.Type != agent {
+				continue
+			}
+			found = true
+			if !def.FileBased && def.EnvVar == "" {
+				return nil, fmt.Errorf(
+					`disabled_agents: %q is not a configurable session provider`,
+					agent,
+				)
+			}
+			requested[agent] = struct{}{}
+			break
+		}
+		if !found {
+			return nil, fmt.Errorf(
+				`disabled_agents: unknown session provider %q`, agent,
+			)
+		}
+	}
+	normalized := make([]parser.AgentType, 0, len(requested))
+	for _, def := range parser.Registry {
+		if _, ok := requested[def.Type]; ok {
+			normalized = append(normalized, def.Type)
+		}
+	}
+	return normalized, nil
 }
 
 // IsUserConfigured reports whether the agent's directories
@@ -1109,6 +1180,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		PublicOrigins                  []string                   `toml:"public_origins"`
 		Proxy                          ProxyConfig                `toml:"proxy"`
 		WatchExcludePatterns           []string                   `toml:"watch_exclude_patterns"`
+		DisabledAgents                 []string                   `toml:"disabled_agents"`
 		SyncIncludeCwdPrefixes         []string                   `toml:"sync_include_cwd_prefixes"`
 		ScanProtectedPaths             bool                       `toml:"scan_protected_paths"`
 		ResultContentBlockedCategories []string                   `toml:"result_content_blocked_categories"`
@@ -1189,6 +1261,13 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if file.WatchExcludePatterns != nil {
 		c.WatchExcludePatterns = file.WatchExcludePatterns
+	}
+	if meta.IsDefined("disabled_agents") {
+		disabled, err := NormalizeDisabledAgents(file.DisabledAgents)
+		if err != nil {
+			return err
+		}
+		c.DisabledAgents = disabled
 	}
 	if file.SyncIncludeCwdPrefixes != nil {
 		c.SyncIncludeCwdPrefixes = file.SyncIncludeCwdPrefixes
@@ -2773,6 +2852,7 @@ func (c *Config) SaveTerminalConfig(tc TerminalConfig) error {
 // The patch map contains config keys mapped to their new values. Only
 // the keys present in patch are written; other config keys are preserved.
 func (c *Config) SaveSettings(patch map[string]any) error {
+	patch = maps.Clone(patch)
 	if value, ok := patch["chart_palette"]; ok {
 		palette, ok := value.(ChartPalette)
 		if !ok {
@@ -2781,6 +2861,23 @@ func (c *Config) SaveSettings(patch map[string]any) error {
 		if _, err := ParseChartPalette(string(palette)); err != nil {
 			return err
 		}
+	}
+	if value, ok := patch["disabled_agents"]; ok {
+		agents, ok := value.([]parser.AgentType)
+		if !ok {
+			return fmt.Errorf(
+				"disabled_agents must use typed session provider values",
+			)
+		}
+		raw := make([]string, len(agents))
+		for i, agent := range agents {
+			raw[i] = string(agent)
+		}
+		normalized, err := NormalizeDisabledAgents(raw)
+		if err != nil {
+			return err
+		}
+		patch["disabled_agents"] = normalized
 	}
 	return c.withConfigLock(func() error {
 		existing, err := c.readConfigMap()
@@ -2834,6 +2931,11 @@ func (c *Config) SaveSettings(patch map[string]any) error {
 		if v, ok := patch["chart_palette"]; ok {
 			if palette, ok := v.(ChartPalette); ok {
 				c.ChartPalette = palette
+			}
+		}
+		if v, ok := patch["disabled_agents"]; ok {
+			if agents, ok := v.([]parser.AgentType); ok {
+				c.DisabledAgents = append([]parser.AgentType(nil), agents...)
 			}
 		}
 		return nil
