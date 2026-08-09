@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tidwall/gjson"
+
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/secrets"
 )
@@ -281,7 +283,7 @@ func classifyIssueFailure(tool, status, command, result string) (string, bool) {
 		return "", false
 	}
 	logicalFailure := hasLogicalFailure(command, resultLower)
-	markerFailure := explicitFailureMarker(result)
+	markerFailure := !logicalFailure && explicitFailureMarker(resultLower)
 	if !failedStatus && !hasNonZeroExit && isReadInvocation(tool, command) {
 		return "", false
 	}
@@ -337,7 +339,6 @@ func issueFailureConfidence(status, input, result string) string {
 }
 
 func explicitFailureMarker(result string) bool {
-	result = strings.ToLower(result)
 	for _, marker := range failureMarkerTerms {
 		if strings.Contains(result, marker) {
 			return true
@@ -359,10 +360,10 @@ func hasLogicalFailure(input, resultLower string) bool {
 	if (strings.Contains(resultLower, "failed") || strings.Contains(resultLower, "npm err!") || strings.Contains(resultLower, "fatal:") || strings.Contains(resultLower, "panic:") || strings.Contains(resultLower, "traceback (most recent call last):")) && failureSummaryRE.MatchString(resultLower) {
 		return true
 	}
-	lowerInput := strings.ToLower(input)
 	if (!strings.Contains(resultLower, "http") && !strings.Contains(resultLower, "status")) || !httpFailureRE.MatchString(resultLower) {
 		return false
 	}
+	lowerInput := strings.ToLower(input)
 	for _, term := range []string{"gh ", "github", "curl", "invoke-webrequest", "api", "http"} {
 		if strings.Contains(lowerInput, term) {
 			return true
@@ -431,11 +432,8 @@ func isSearchInvocation(tool, command string) bool {
 }
 
 func issueCommandInput(input string) string {
-	var payload struct {
-		Command string `json:"command"`
-	}
-	if json.Unmarshal([]byte(input), &payload) == nil && payload.Command != "" {
-		return payload.Command
+	if result := gjson.Get(input, "command"); result.Type == gjson.String && result.Str != "" && gjson.Valid(input) {
+		return result.Str
 	}
 	return input
 }
@@ -523,7 +521,7 @@ func normalizeTool(tool string) string {
 
 func effectiveIssueTool(tool, input string) string {
 	outer := normalizeTool(tool)
-	if outer != "exec" && outer != "functions.exec" {
+	if (outer != "exec" && outer != "functions.exec") || !strings.Contains(input, "tools.") {
 		return outer
 	}
 	var nested string
@@ -832,7 +830,7 @@ type analyzedCall struct {
 }
 
 type workflowAccumulator struct {
-	rows         []analyzedCall
+	rows         []*analyzedCall
 	firstSession string
 	firstProject string
 	multiSession bool
@@ -901,12 +899,21 @@ func AnalyzeIssueReviewBase(sessions []IssueReviewSession, messages []IssueRevie
 	messages, duplicateMessages := dedupeIssueMessages(messages)
 	calls, duplicateCalls := dedupeIssueCalls(calls)
 	a := newIssueAnalyzer(sessions)
-	bySession := make(map[string][]analyzedCall)
+	sessionCallCounts := make(map[string]int)
+	for _, row := range calls {
+		sessionCallCounts[row.SessionID]++
+	}
+	bySession := make(map[string][]analyzedCall, len(sessionCallCounts))
+	for sessionID, count := range sessionCallCounts {
+		bySession[sessionID] = make([]analyzedCall, 0, count)
+	}
 	normalizedInputs := make(map[string]string)
 	durationCounts := map[string]int{}
 	toolCounts := map[string]int{}
+	effectiveTools := make([]string, 0, len(calls))
 	for _, row := range calls {
 		tool := effectiveIssueTool(row.Tool, row.Input)
+		effectiveTools = append(effectiveTools, tool)
 		command := row.Input
 		if isShellTool(tool) {
 			command = issueCommandInput(row.Input)
@@ -923,7 +930,8 @@ func AnalyzeIssueReviewBase(sessions []IssueReviewSession, messages []IssueRevie
 			durationCounts[tool]++
 		}
 	}
-	workflows := map[string]*workflowAccumulator{}
+	type workflowKey struct{ tool, normalized string }
+	workflows := map[workflowKey]*workflowAccumulator{}
 	for sessionID, rows := range bySession {
 		sort.Slice(rows, func(i, j int) bool {
 			if rows[i].row.MessageOrdinal != rows[j].row.MessageOrdinal {
@@ -952,7 +960,8 @@ func AnalyzeIssueReviewBase(sessions []IssueReviewSession, messages []IssueRevie
 			}
 		}
 		bySession[sessionID] = rows
-		for i, call := range rows {
+		for i := range rows {
+			call := &rows[i]
 			tool := call.tool
 			ord, idx := call.row.MessageOrdinal, call.row.CallIndex
 			githubRef := canonicalGitHubReferenceParts(call.row.Input, call.row.Result)
@@ -982,7 +991,7 @@ func AnalyzeIssueReviewBase(sessions []IssueReviewSession, messages []IssueRevie
 					normalized = normalizeIssueText(call.row.Input)
 					normalizedInputs[call.row.Input] = normalized
 				}
-				key := tool + "|" + normalized
+				key := workflowKey{tool: tool, normalized: normalized}
 				acc := workflows[key]
 				if acc == nil {
 					acc = &workflowAccumulator{firstSession: call.row.SessionID, firstProject: a.sessions[call.row.SessionID].Project}
@@ -1027,13 +1036,14 @@ func AnalyzeIssueReviewBase(sessions []IssueReviewSession, messages []IssueRevie
 		if workflow.multiProject {
 			recommendation = "skill"
 		}
+		findingKey := "workflow|" + key.tool + "|" + key.normalized
 		for _, row := range workflow.rows {
 			ord, idx := row.row.MessageOrdinal, row.row.CallIndex
 			e := a.evidence(row.row.SessionID, "tool_call", row.tool, row.row.Input, row.row.EventStatus, &ord, &idx, row.row.DurationMS)
-			a.add("workflow|"+key, "repeated_workflow", row.tool, row.row.Input, "medium", "high", recommendation, e, row.row.DurationMS, row.row.DurationMS, false)
+			a.add(findingKey, "repeated_workflow", row.tool, row.row.Input, "medium", "high", recommendation, e, row.row.DurationMS, row.row.DurationMS, false)
 		}
 	}
-	addSlowToolFindings(a, calls, toolCounts)
+	addSlowToolFindings(a, calls, effectiveTools, toolCounts)
 	addMessageFindings(a, messages)
 	addTelemetryFindings(a, telemetry)
 	findings := a.finish(len(calls), durationCounts)
@@ -1118,7 +1128,7 @@ func firstNonEmptyString(values ...string) string {
 func firstIssueLine(result, input string) string {
 	for _, source := range []string{result, issueCommandInput(input)} {
 		contentBlocks := strings.Contains(source, `"type"`) && strings.Contains(source, `"text"`)
-		if decoded := parser.DecodeContent(source); json.Valid([]byte(source)) && decoded != "" {
+		if decoded := parser.DecodeContent(source); gjson.Valid(source) && decoded != "" {
 			source = decoded
 			contentBlocks = false
 		}
@@ -1289,9 +1299,9 @@ func eligibleWorkflow(tool, input, command string) bool {
 	if isWaitTool(tool) || isReadInvocation(tool, command) || len(strings.TrimSpace(input)) < 80 {
 		return false
 	}
-	lower := strings.ToLower(strings.TrimSpace(input))
+	input = strings.TrimSpace(input)
 	for _, prefix := range []string{"git status", "pwd", "get-location", "ls", "dir", "rg ", "grep ", "find ", "get-childitem", "get-content"} {
-		if strings.HasPrefix(lower, prefix) {
+		if hasFoldPrefix(input, prefix) {
 			return false
 		}
 	}
@@ -1310,9 +1320,9 @@ func isReadInvocation(tool, command string) bool {
 			return true
 		}
 	}
-	lower := strings.ToLower(strings.TrimSpace(command))
+	command = strings.TrimSpace(command)
 	for _, prefix := range []string{"get-content ", "cat ", "type ", "head ", "tail ", "sed -n "} {
-		if strings.HasPrefix(lower, prefix) {
+		if hasFoldPrefix(command, prefix) {
 			return true
 		}
 	}
@@ -1322,7 +1332,7 @@ func isReadInvocation(tool, command string) bool {
 func isRecoveryDiagnostic(tool, command string) bool {
 	t := normalizeTool(tool)
 	if isShellTool(t) {
-		command = strings.ToLower(strings.TrimSpace(command))
+		command = strings.TrimSpace(command)
 		if strings.ContainsAny(command, "\r\n;|&") {
 			return false
 		}
@@ -1337,17 +1347,21 @@ func isRecoveryDiagnostic(tool, command string) bool {
 		return false
 	}
 	for _, diagnostic := range []string{"git status", "pwd", "get-location", "ls", "dir", "get-childitem"} {
-		if command == diagnostic || strings.HasPrefix(command, diagnostic+" ") {
+		if strings.EqualFold(command, diagnostic) || hasFoldPrefix(command, diagnostic+" ") {
 			return true
 		}
 	}
 	return false
 }
 
-func addSlowToolFindings(a *issueAnalyzer, calls []IssueReviewToolCall, toolCounts map[string]int) {
+func hasFoldPrefix(value, prefix string) bool {
+	return len(value) >= len(prefix) && strings.EqualFold(value[:len(prefix)], prefix)
+}
+
+func addSlowToolFindings(a *issueAnalyzer, calls []IssueReviewToolCall, effectiveTools []string, toolCounts map[string]int) {
 	byTool := map[string][]IssueReviewToolCall{}
-	for _, call := range calls {
-		tool := effectiveIssueTool(call.Tool, call.Input)
+	for i, call := range calls {
+		tool := effectiveTools[i]
 		if call.DurationMS != nil && *call.DurationMS >= 0 && !isWaitTool(tool) {
 			byTool[tool] = append(byTool[tool], call)
 		}
