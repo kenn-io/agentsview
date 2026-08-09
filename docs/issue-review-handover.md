@@ -266,9 +266,10 @@ focused tests pass, and the full backend suites passed before the final
 localized optimization. PostgreSQL `pgtest` remains blocked as described
 above.
 
-GitNexus is current at exact revision `28eff63`: 47,865 nodes, 278,060 edges,
-2,390 clusters, and 300 flows. Graphify remains unavailable for this
-repository. Analyzer-generated `AGENTS.md` and `CLAUDE.md` churn was not kept.
+At the release-code freeze, GitNexus was current at exact revision `28eff63`:
+47,865 nodes, 278,060 edges, 2,390 clusters, and 300 flows. Graphify remains
+unavailable for this repository. Analyzer-generated `AGENTS.md` and
+`CLAUDE.md` churn was not kept.
 
 On the same isolated production-scale database, `4c3c108` took 24.488 seconds
 for 1,135 findings. `28eff63` took 17.763 and 17.868 seconds for the same 1,135
