@@ -11284,7 +11284,7 @@ func (e *Engine) preserveUnavailableSourceProjects(
 		for _, i := range indexes[id] {
 			sess := &batch[i].sess
 			if !e.sameLocalMachineAttribution(snapshot.Machine, sess.Machine) ||
-				!pathContains(snapshot.RootPath, sess.Cwd) {
+				!e.snapshotRootContainsCwd(snapshot.RootPath, sess.Cwd) {
 				continue
 			}
 			sess.Project = snapshot.Project
@@ -11335,10 +11335,26 @@ func (e *Engine) sameLocalMachineAttribution(left, right string) bool {
 		(e.isLocalMachineAttribution(left) && e.isLocalMachineAttribution(right))
 }
 
+// snapshotRootContainsCwd reports whether the durable snapshot's root
+// contains the session cwd. The cwd was vetted by skipSourceProjectProbe,
+// but the snapshot root is stored data that can predate protected-path
+// gating and name a guarded folder; resolving its symlinks would walk
+// inside it, so a refused root falls back to lexical containment.
+func (e *Engine) snapshotRootContainsCwd(root, cwd string) bool {
+	if !e.mayProbeLocalPath(root) {
+		return lexicalPathContains(root, cwd)
+	}
+	return pathContains(root, cwd)
+}
+
 func pathContains(root, path string) bool {
 	root = resolveExistingPathPrefix(root)
 	path = resolveExistingPathPrefix(path)
-	rel, err := filepath.Rel(root, path)
+	return lexicalPathContains(root, path)
+}
+
+func lexicalPathContains(root, path string) bool {
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
 	if err != nil {
 		return false
 	}
@@ -11346,12 +11362,17 @@ func pathContains(root, path string) bool {
 		(rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
+// evalSymlinks is indirected through a var so tests can assert prefix
+// resolution never walks a refused root. Production code always uses
+// filepath.EvalSymlinks via this binding.
+var evalSymlinks = filepath.EvalSymlinks
+
 func resolveExistingPathPrefix(path string) string {
 	cleaned := filepath.Clean(path)
 	current := cleaned
 	var missingTail []string
 	for {
-		if resolved, err := filepath.EvalSymlinks(current); err == nil {
+		if resolved, err := evalSymlinks(current); err == nil {
 			for _, v := range slices.Backward(missingTail) {
 				resolved = filepath.Join(resolved, v)
 			}

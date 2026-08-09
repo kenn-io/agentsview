@@ -849,6 +849,12 @@ func deletedChildIsWorktree(
 		return false
 	}
 	wtDir := filepath.Join(repoRoot, ".git", "worktrees")
+	// The .git entry was vetted by the sibling scan, but worktrees inside
+	// a real .git directory can itself be a symlink; vet the exact path
+	// (classification follows links) before enumerating through it.
+	if !probeGitfileTarget(wtDir) {
+		return false
+	}
 	entries, err := os.ReadDir(wtDir)
 	if err != nil {
 		return false

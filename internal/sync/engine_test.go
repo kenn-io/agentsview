@@ -235,6 +235,63 @@ func TestPreserveUnavailableSourceProjectsSkipsProtectedPath(t *testing.T) {
 	assert.Equal(t, "protected-project", result[0].sess.Project)
 }
 
+// TestPreserveUnavailableSourceProjectsSkipsProtectedSnapshotRoot pins that
+// containment against a durable snapshot's root never resolves symlinks
+// inside a guarded folder: the session cwd is vetted upstream, but the
+// snapshot root is stored data that can predate protected-path gating. A
+// refused root falls back to lexical containment, so the reconciliation
+// completes without EvalSymlinks ever walking the guarded path.
+func TestPreserveUnavailableSourceProjectsSkipsProtectedSnapshotRoot(t *testing.T) {
+	database := openTestDB(t)
+	home := t.TempDir()
+	protectedRoot := filepath.Join(home, "Documents", "proj")
+	cwd := filepath.Join(home, "src", "gone")
+	const sessionID = "protected-snapshot-source"
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: sessionID, Project: "snapshot-project",
+		Machine: "test-machine", Agent: string(parser.AgentClaude), Cwd: cwd,
+	}))
+	require.NoError(t,
+		database.UpsertProjectIdentityObservationWithSnapshotProject(
+			t.Context(), export.ProjectIdentityObservation{
+				SessionID: sessionID, Project: "snapshot-project",
+				Machine: "test-machine", RootPath: protectedRoot,
+				GitRemote:        "https://example.com/team/project.git",
+				RemoteResolution: export.ProjectResolutionResolved,
+				ObservedAt: time.Date(
+					2026, 8, 9, 12, 0, 0, 0, time.UTC,
+				),
+			}, "snapshot-project",
+		))
+	engine := NewEngine(database, EngineConfig{Machine: "test-machine"})
+	t.Cleanup(engine.Close)
+	engine.goos = "darwin"
+	engine.homeDir = home
+
+	origEval := evalSymlinks
+	t.Cleanup(func() { evalSymlinks = origEval })
+	evalSymlinks = func(path string) (string, error) {
+		if strings.HasPrefix(path, filepath.Join(home, "Documents")) {
+			assert.Fail(t, "a protected snapshot root must not be resolved", path)
+		}
+		return origEval(path)
+	}
+
+	result, err := engine.preserveUnavailableSourceProjects(
+		t.Context(), []pendingWrite{{sess: parser.ParsedSession{
+			ID: sessionID, Project: "parser-fallback",
+			Machine: "test-machine", Agent: parser.AgentClaude, Cwd: cwd,
+		}}},
+	)
+
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	assert.True(t, result[0].sourceProjectResolved)
+	assert.Equal(t, "parser-fallback", result[0].sess.Project,
+		"a refused snapshot root that does not contain the cwd lexically "+
+			"must leave the parsed project untouched")
+}
+
 func TestWriteBatchRelabelRecoversUnavailableSourceProject(t *testing.T) {
 	const (
 		sessionID       = "relabel-unavailable-source"

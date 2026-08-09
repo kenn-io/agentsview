@@ -289,6 +289,41 @@ func TestRepoRootFromSiblingsSkipsGuardedSiblings(t *testing.T) {
 		"a guarded sibling must not be typed or recovered as the root")
 }
 
+// TestDeletedChildIsWorktreeSkipsSymlinkedWorktreesDir pins that verifying a
+// deleted worktree vets the exact worktrees path before enumerating it: the
+// sibling's .git directory is vetted and real, but worktrees inside it can
+// be a symlink into a guarded folder, and ReadDir through it is exactly the
+// enumeration macOS gates behind a consent prompt. The guarded store lists
+// the deleted child, so a missing vet is caught by the sibling's name being
+// recovered.
+func TestDeletedChildIsWorktreeSkipsSymlinkedWorktreesDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the probe classifier walks POSIX paths and symlinks")
+	}
+	home := t.TempDir()
+	store := filepath.Join(home, "Documents", "wt-store")
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(store, "gone-child"), 0o755,
+	))
+	parent := filepath.Join(home, "work")
+	mainRepo := filepath.Join(parent, "mainrepo")
+	require.NoError(t, os.MkdirAll(filepath.Join(mainRepo, ".git"), 0o755))
+	require.NoError(t, os.Symlink(
+		store, filepath.Join(mainRepo, ".git", "worktrees"),
+	))
+
+	origGuard := probeGitfileTarget
+	t.Cleanup(func() { probeGitfileTarget = origGuard })
+	probeGitfileTarget = func(cleaned string) bool {
+		return export.ClassifyLocalPathProbe("darwin", home, cleaned) ==
+			export.LocalPathProbeSafe
+	}
+
+	deleted := filepath.Join(parent, "gone-child", "sub")
+	assert.Equal(t, "sub", ExtractProjectFromCwd(deleted),
+		"a symlinked worktrees directory must not be enumerated")
+}
+
 // TestDefaultProbeGitfileTargetRefusesAutomount pins the asymmetry between
 // the two default guards on macOS: a literal automount cwd stays probeable
 // because isForeignOSPath vetted it with the resolved-autofs probe before
