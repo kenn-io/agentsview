@@ -17,6 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/timeutil"
 )
 
 const bunPricingWriteBatchSize = 500
@@ -42,6 +43,9 @@ func CanonicalModelPricingRows(
 					"converting model pricing timestamp for %q: %w", pattern, err,
 				)
 			}
+			updatedAt.Time = timeutil.NormalizePostgresTimestampPrecision(
+				updatedAt.Time,
+			)
 		}
 		rows = append(rows, bunmodel.ModelPricing{
 			ModelPattern:                     pattern,
@@ -72,6 +76,9 @@ func CanonicalModelPricingRows(
 						pattern, err,
 					)
 				}
+				bandUpdatedAt.Time = timeutil.NormalizePostgresTimestampPrecision(
+					bandUpdatedAt.Time,
+				)
 			}
 			bands = append(bands, bunmodel.ModelPricingBand{
 				ModelPattern: pattern, AboveInputTokens: threshold,
@@ -209,7 +216,9 @@ func UpsertModelPricingRows(
 		for _, existing := range existingPrices {
 			existingPriceByPattern[existing.ModelPattern] = existing
 		}
-		defaultRevision := bunmodel.NewTimestamp(time.Now())
+		defaultRevision := bunmodel.NewTimestamp(
+			timeutil.NormalizePostgresTimestampPrecision(time.Now()),
+		)
 		var existingBands []bunmodel.ModelPricingBand
 		if len(patterns) > 0 {
 			if err := tx.NewSelect().Model(&existingBands).
@@ -329,6 +338,9 @@ func modelPricingBandValuesEqual(
 func nextPricingRevision(
 	existing, proposed, fallback bunmodel.Timestamp,
 ) bunmodel.Timestamp {
+	existing.Time = timeutil.NormalizePostgresTimestampPrecision(existing.Time)
+	proposed.Time = timeutil.NormalizePostgresTimestampPrecision(proposed.Time)
+	fallback.Time = timeutil.NormalizePostgresTimestampPrecision(fallback.Time)
 	if proposed.IsZero() {
 		proposed = fallback
 	}

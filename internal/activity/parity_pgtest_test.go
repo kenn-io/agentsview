@@ -42,6 +42,8 @@ import (
 // microsecond-different as_of/effective_end values across the three reports.
 const parityDate = "2026-06-14"
 
+const parityPricingUpdatedAt = "2026-08-09T04:09:57.836404600Z"
+
 // paritySchema is dedicated to this test so it never collides with the shared
 // "agentsview" schema that internal/postgres pgtests create and drop. Go runs
 // package tests concurrently, so a shared-schema DROP here could wipe another
@@ -261,9 +263,11 @@ func seedParitySQLite(t *testing.T) *db.DB {
 	// token amounts identically (the syncs copy model_pricing to PG/DuckDB).
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{
 		{ModelPattern: "model-x", InputPerMTok: money.MustParseDollars("3"), OutputPerMTok: money.MustParseDollars("15"),
-			CacheCreationPerMTok: money.MustParseDollars("3.75"), CacheReadPerMTok: money.MustParseDollars("0.3")},
+			CacheCreationPerMTok: money.MustParseDollars("3.75"), CacheReadPerMTok: money.MustParseDollars("0.3"),
+			UpdatedAt: parityPricingUpdatedAt},
 		{ModelPattern: "model-y", InputPerMTok: money.MustParseDollars("1"), OutputPerMTok: money.MustParseDollars("5"),
-			CacheCreationPerMTok: money.MustParseDollars("1.25"), CacheReadPerMTok: money.MustParseDollars("0.1")},
+			CacheCreationPerMTok: money.MustParseDollars("1.25"), CacheReadPerMTok: money.MustParseDollars("0.1"),
+			UpdatedAt: parityPricingUpdatedAt},
 	}), "seeding pricing")
 
 	var writes []db.SessionBatchWrite
