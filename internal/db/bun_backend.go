@@ -40,6 +40,17 @@ type bunRawMessageTimestampReader interface {
 	PreserveRawMessageTimestamps() bool
 }
 
+type bunTimestampAvailabilityExpression interface {
+	AvailableTimestampExpr(string) string
+}
+
+func bunMessageTimestampExpr(backend BunBackend, column string) string {
+	if expression, ok := backend.(bunTimestampAvailabilityExpression); ok {
+		return expression.AvailableTimestampExpr(column)
+	}
+	return bunUsageTimestampColumn(backend.TimestampOrderExpr, column)
+}
+
 // BunTablePresenceProbe is implemented by adapters whose compatible read-only
 // schemas may omit optional canonical tables.
 type BunTablePresenceProbe interface {
@@ -239,7 +250,23 @@ func sqliteTimestampOrderExpr(column string) string {
 }
 
 func (*sqliteBunBackend) AvailableTimestampExpr(column string) string {
-	return "agentsview_canonical_timestamp(" + column + ")"
+	// Canonical writes overwhelmingly use UTC RFC3339 text. Keep those rows in
+	// SQLite's native execution path: crossing into the Go UDF for every usage
+	// row is substantially more expensive. The datetime round trip makes this
+	// a conservative fast path (including calendar validation); all other
+	// historical text still goes through the exact canonical parser.
+	canonicalUTC := "((length(" + column + ") = 20 OR (" +
+		"length(" + column + ") BETWEEN 22 AND 30 AND " +
+		"substr(" + column + ", 20, 1) = '.' AND " +
+		"substr(" + column + ", 21, length(" + column + ") - 21) " +
+		"NOT GLOB '*[^0-9]*')) AND " +
+		"substr(" + column + ", 11, 1) = 'T' AND " +
+		"substr(" + column + ", -1, 1) = 'Z' AND " +
+		"substr(" + column + ", 12, 2) BETWEEN '00' AND '23' AND " +
+		"datetime(" + column + ") = substr(" + column + ", 1, 10) || " +
+		"' ' || substr(" + column + ", 12, 8))"
+	return "CASE WHEN " + canonicalUTC + " THEN " + column +
+		" ELSE agentsview_canonical_timestamp(" + column + ") END"
 }
 
 func (*sqliteBunBackend) SessionVersion(

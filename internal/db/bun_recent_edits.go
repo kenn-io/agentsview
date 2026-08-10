@@ -31,10 +31,6 @@ type bunRecentEditKey struct {
 	FilePath string `bun:"file_path"`
 }
 
-type bunTimestampAvailabilityExpression interface {
-	AvailableTimestampExpr(string) string
-}
-
 func (s *BunStore) RecentEdits(
 	ctx context.Context, params RecentEditsParams,
 ) (RecentEditsResult, error) {
@@ -54,7 +50,7 @@ func (s *BunStore) RecentEdits(
 func (s *BunStore) recentEditsFrom(
 	ctx context.Context, store bun.IDB, params RecentEditsParams,
 ) (RecentEditsResult, error) {
-	timestampExpr := bunRecentEditTimestampExpr(s.backend, "m.timestamp")
+	timestampExpr := bunMessageTimestampExpr(s.backend, "m.timestamp")
 	sortExpr := s.backend.TimestampOrderExpr(timestampExpr)
 	predicates := []string{
 		"s.deleted_at IS NULL",
@@ -165,13 +161,6 @@ func (s *BunStore) recentEditsFrom(
 		rows[index].Timestamp = timestamp
 	}
 	return buildBunRecentEditPage(rows, params), nil
-}
-
-func bunRecentEditTimestampExpr(backend BunBackend, column string) string {
-	if expression, ok := backend.(bunTimestampAvailabilityExpression); ok {
-		return expression.AvailableTimestampExpr(column)
-	}
-	return bunUsageTimestampColumn(backend.TimestampOrderExpr, column)
 }
 
 func hasNonASCII(value string) bool {
