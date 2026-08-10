@@ -23,16 +23,20 @@ import (
 // fork, so lineage can only be established from content overlap.
 //
 // Direction is anchored on the asymmetric bg stamp: only a transcript
-// whose root chain entry is bg-marked is ever considered a fork. Both
-// non-bg and bg siblings qualify as ancestors, so chained backgrounding
-// trims each link against its nearest ancestor, but a bg candidate must
-// be a strict subset of the fork: a candidate that fully covers the
-// fork is either its descendant or an identical twin, and trimming
-// against it could erase the ancestor. Anything ambiguous (unmarked
-// manual --fork-session copies, missing or divergent siblings, a fork
-// fully covered by a bg sibling, several branches at the replay
-// boundary) fails open: no trim and no relationship is emitted, leaving
-// the status-quo duplicate rather than risking a wrongly-oriented trim.
+// whose root chain entry is bg-marked is ever considered a fork. The
+// stamp is process-derived — the writer re-stamps sessionKind from the
+// current process on every persisted line, so a non-bg fork of a bg
+// transcript carries no marker and never trims. Both non-bg and bg
+// siblings qualify as ancestors, so chained backgrounding trims each
+// link against its nearest ancestor, but a bg candidate that strictly
+// contains the fork never wins: it is the fork's descendant or an
+// extension, and trimming against it could erase the ancestor. Equal
+// uuid content (a fork that is a pure copy of a bg sibling) elects
+// direction deterministically by stem. Anything else ambiguous
+// (unmarked manual --fork-session copies, missing or divergent
+// siblings, several branches at the replay boundary) fails open: no
+// trim and no relationship is emitted, leaving the status-quo
+// duplicate rather than risking a wrongly-oriented trim.
 
 const (
 	// claudeLineageSniffMaxLines bounds how many leading lines are
@@ -255,9 +259,16 @@ func claudeResolveSiblingLineage(path string) *claudeLineagePlan {
 	// Pick the candidate whose uuid set covers the longest contiguous
 	// leading run of the fork: with chained ancestors sharing one
 	// root, the nearest ancestor is the one the fork replayed. A bg
-	// candidate must remain a strict subset of the fork — full
-	// coverage means it is the fork's descendant or twin, where
-	// direction is unknowable.
+	// candidate that fully covers the fork is its descendant or twin,
+	// where content gives no direction. A strict superset never wins.
+	// Equal-set twins elect direction deterministically by stem: the
+	// larger stem trims against the smaller, never the reverse, so
+	// the smaller twin keeps the content and no cycle can form.
+	forkStem := strings.TrimSuffix(base, ".jsonl")
+	forkUUIDs := make(map[string]struct{}, len(forkSeq))
+	for _, line := range forkSeq {
+		forkUUIDs[line.uuid] = struct{}{}
+	}
 	bestRun := 0
 	bestStem := ""
 	var bestSet map[string]struct{}
@@ -275,7 +286,8 @@ func claudeResolveSiblingLineage(path string) *claudeLineagePlan {
 			}
 			run++
 		}
-		if c.bg && run == len(forkSeq) {
+		if c.bg && run == len(forkSeq) &&
+			(len(set) != len(forkUUIDs) || forkStem < c.stem) {
 			continue
 		}
 		if run > bestRun {

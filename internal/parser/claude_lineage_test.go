@@ -219,6 +219,101 @@ func TestClaudeBackgroundForkChainTrimsAgainstNearestBgAncestor(t *testing.T) {
 	assert.Equal(t, "orig-1111", bResults[0].Session.ParentSessionID)
 }
 
+func TestClaudeBackgroundForkQueuedOnlyChainTrimsAgainstEqualBgSibling(t *testing.T) {
+	t.Parallel()
+	// C replays B fully and holds only a uuid-less queued prompt, so
+	// its uuid content equals B's exactly. Direction between equal
+	// bg twins is elected deterministically by stem — the larger stem
+	// trims against the smaller — so C must link to B and keep just
+	// its queued prompt, not partially trim against A and duplicate
+	// B's turns.
+	aContent := lineageOriginalContent()
+	bContent := strings.Join([]string{
+		lineageUserLine("u1", "", "2026-01-01T10:00:00Z", "bbbb-2222", "bg", "first question"),
+		lineageAssistantLine("a1", "u1", "2026-01-01T10:00:05Z", "bbbb-2222", "bg", "msg_01", "first answer", 20),
+		lineageUserLine("u2", "a1", "2026-01-01T11:00:00Z", "bbbb-2222", "bg", "second question"),
+		lineageAssistantLine("a2", "u2", "2026-01-01T11:00:05Z", "bbbb-2222", "bg", "msg_02", "second answer", 4),
+	}, "\n") + "\n"
+	cContent := strings.Join([]string{
+		lineageUserLine("u1", "", "2026-01-01T10:00:00Z", "cccc-3333", "bg", "first question"),
+		lineageAssistantLine("a1", "u1", "2026-01-01T10:00:05Z", "cccc-3333", "bg", "msg_01", "first answer", 20),
+		lineageUserLine("u2", "a1", "2026-01-01T11:00:00Z", "cccc-3333", "bg", "second question"),
+		lineageAssistantLine("a2", "u2", "2026-01-01T11:00:05Z", "cccc-3333", "bg", "msg_02", "second answer", 4),
+		lineageQueuedCommandLine("2026-01-01T12:00:00Z", "cccc-3333", "queued in c"),
+	}, "\n") + "\n"
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "orig-1111.jsonl"), []byte(aContent), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "bbbb-2222.jsonl"), []byte(bContent), 0o644))
+	cPath := filepath.Join(dir, "cccc-3333.jsonl")
+	require.NoError(t, os.WriteFile(cPath, []byte(cContent), 0o644))
+
+	results, excluded, err := claudeParseFile(
+		cPath, "my_app", "local",
+		claudeParseOptions{siblingLineage: true},
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Empty(t, excluded)
+	require.Len(t, results[0].Messages, 1)
+	assert.Equal(t, "queued in c", results[0].Messages[0].Content)
+	assert.Equal(t, "bbbb-2222", results[0].Session.ParentSessionID)
+}
+
+func TestClaudeBackgroundForkEqualBgTwinsElectKeeperByStem(t *testing.T) {
+	t.Parallel()
+	// Reverse stem order: the queued-only fork has the smaller stem,
+	// so it never trims against its equal twin. The larger-stem twin
+	// trims fully against the smaller and is excluded (it has no
+	// content of its own), while the smaller falls back to the
+	// interactive original. Every message is stored exactly once.
+	aContent := lineageOriginalContent()
+	smallContent := strings.Join([]string{
+		lineageUserLine("u1", "", "2026-01-01T10:00:00Z", "cccc-3333", "bg", "first question"),
+		lineageAssistantLine("a1", "u1", "2026-01-01T10:00:05Z", "cccc-3333", "bg", "msg_01", "first answer", 20),
+		lineageUserLine("u2", "a1", "2026-01-01T11:00:00Z", "cccc-3333", "bg", "second question"),
+		lineageAssistantLine("a2", "u2", "2026-01-01T11:00:05Z", "cccc-3333", "bg", "msg_02", "second answer", 4),
+		lineageQueuedCommandLine("2026-01-01T12:00:00Z", "cccc-3333", "queued in c"),
+	}, "\n") + "\n"
+	largeContent := strings.Join([]string{
+		lineageUserLine("u1", "", "2026-01-01T10:00:00Z", "dddd-4444", "bg", "first question"),
+		lineageAssistantLine("a1", "u1", "2026-01-01T10:00:05Z", "dddd-4444", "bg", "msg_01", "first answer", 20),
+		lineageUserLine("u2", "a1", "2026-01-01T11:00:00Z", "dddd-4444", "bg", "second question"),
+		lineageAssistantLine("a2", "u2", "2026-01-01T11:00:05Z", "dddd-4444", "bg", "msg_02", "second answer", 4),
+	}, "\n") + "\n"
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "orig-1111.jsonl"), []byte(aContent), 0o644))
+	smallPath := filepath.Join(dir, "cccc-3333.jsonl")
+	require.NoError(t, os.WriteFile(smallPath, []byte(smallContent), 0o644))
+	largePath := filepath.Join(dir, "dddd-4444.jsonl")
+	require.NoError(t, os.WriteFile(largePath, []byte(largeContent), 0o644))
+
+	largeResults, largeExcluded, err := claudeParseFile(
+		largePath, "my_app", "local",
+		claudeParseOptions{siblingLineage: true},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, largeResults)
+	assert.Equal(t, []string{"dddd-4444"}, largeExcluded)
+
+	smallResults, smallExcluded, err := claudeParseFile(
+		smallPath, "my_app", "local",
+		claudeParseOptions{siblingLineage: true},
+	)
+	require.NoError(t, err)
+	require.Len(t, smallResults, 1)
+	assert.Empty(t, smallExcluded)
+	var contents []string
+	for _, m := range smallResults[0].Messages {
+		contents = append(contents, m.Content)
+	}
+	assert.Contains(t, contents, "second question")
+	assert.Contains(t, contents, "queued in c")
+	assert.NotContains(t, contents, "first question")
+	assert.Equal(t, "orig-1111", smallResults[0].Session.ParentSessionID)
+}
+
 func TestClaudeBackgroundForkBoundaryRetryFailsOpen(t *testing.T) {
 	t.Parallel()
 	// Two retained entries parented at the replay leaf (a retry right

@@ -198,7 +198,12 @@ Grok section and remove the explicit registry exception in the coverage test.
   attachment: only uuid-bearing chain entries are replayed into the fork;
   uuid-less records (queued commands, queue-operations, ai-title, mode) never
   appear in the replay region, so every uuid-less line in a fork transcript is
-  the fork's own. Evidence remains `no-public-source`.
+  the fork's own. Reverified 2026-08-09 by forking a fully bg-marked transcript
+  with a plain non-bg `--fork-session` process: every replayed line in the new
+  transcript carries no `sessionKind` — the writer re-stamps the current
+  process's kind on each persisted line, overwriting the copied value, so the
+  bg marker reflects the forking process and cannot be inherited through
+  replayed entries. Evidence remains `no-public-source`.
 
 ## OpenClaude (`openclaude`)
 
