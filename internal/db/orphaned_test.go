@@ -1023,3 +1023,69 @@ func TestCopySkipsSanitizeForSanitizedSource(t *testing.T) {
 		}
 	}
 }
+
+func TestArchiveRecoveryRepairsMalformedMessageTimestamp(t *testing.T) {
+	copies := []struct {
+		name  string
+		trash bool
+		copy  func(*DB, string) (int, error)
+	}{
+		{
+			name: "orphaned",
+			copy: func(destination *DB, sourcePath string) (int, error) {
+				return destination.CopyOrphanedDataFrom(sourcePath)
+			},
+		},
+		{
+			name:  "trashed",
+			trash: true,
+			copy: func(destination *DB, sourcePath string) (int, error) {
+				return destination.CopyTrashedDataFrom(sourcePath)
+			},
+		},
+	}
+	for _, test := range copies {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := t.Context()
+			dir := t.TempDir()
+			sourcePath := filepath.Join(dir, "source.db")
+			source := testDBAtPath(t, sourcePath, "source")
+			insertSession(t, source, "malformed-timestamp", "proj")
+			insertMessages(t, source, Message{
+				SessionID: "malformed-timestamp",
+				Ordinal:   0,
+				Role:      "assistant",
+				Content:   "archived",
+				Timestamp: tsZero,
+			})
+			_, err := source.rawWriter().ExecContext(ctx,
+				`UPDATE messages SET timestamp = ? WHERE session_id = ?`,
+				"not-a-timestamp", "malformed-timestamp",
+			)
+			require.NoError(t, err, "seed malformed timestamp")
+			if test.trash {
+				require.NoError(t, source.SoftDeleteSession("malformed-timestamp"))
+			}
+			_, err = source.rawWriter().ExecContext(ctx, fmt.Sprintf(
+				"PRAGMA user_version = %d", canonicalTimestampDataVersion-1,
+			))
+			require.NoError(t, err, "mark source before timestamp canonicalization")
+			require.NoError(t, source.Close(), "close source")
+
+			destination := testDBAtPath(
+				t, filepath.Join(dir, "destination.db"), "destination",
+			)
+			defer destination.Close()
+			copied, err := test.copy(destination, sourcePath)
+			require.NoError(t, err, "copy archived data")
+			require.Equal(t, 1, copied, "copied sessions")
+
+			var timestamp string
+			require.NoError(t, destination.getReader().QueryRowContext(ctx,
+				`SELECT COALESCE(timestamp, '') FROM messages WHERE session_id = ?`,
+				"malformed-timestamp",
+			).Scan(&timestamp), "read repaired timestamp")
+			assert.Empty(t, timestamp)
+		})
+	}
+}

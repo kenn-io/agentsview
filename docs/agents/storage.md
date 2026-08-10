@@ -89,10 +89,10 @@ atomically. Preserve sessions even when their source files no longer exist.
 - Canonical non-empty timestamps use the layouts accepted by
   `bunmodel.ParseTimestamp`, normalize to UTC, and persist at microsecond
   precision on every backend. Empty timestamps are unavailable.
-- SQLite archive message rows retain their historical raw-text write seam so a
-  malformed provider value never prevents archival. Timing, recent-edit, and
-  content-search readers scan that raw value through the canonical parser and
-  expose unsupported text as an unavailable timestamp.
+- Unsupported provider message timestamps are blanked during archive ingestion
+  and counted as a validation repair. The data-version 84 rebuild repairs
+  already archived live, orphaned, and trashed sessions so all backends read
+  the same canonical timestamp shape.
 - PostgreSQL, DuckDB, SQLite tool-result rows, and other common timestamp models
   remain strict: unsupported non-empty values reject the session write or
   replication transaction. Correcting the source value makes the next

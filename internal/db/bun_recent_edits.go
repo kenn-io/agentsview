@@ -50,7 +50,7 @@ func (s *BunStore) RecentEdits(
 func (s *BunStore) recentEditsFrom(
 	ctx context.Context, store bun.IDB, params RecentEditsParams,
 ) (RecentEditsResult, error) {
-	timestampExpr := bunMessageTimestampExpr(s.backend, "m.timestamp")
+	timestampExpr := "m.timestamp"
 	sortExpr := s.backend.TimestampOrderExpr(timestampExpr)
 	predicates := []string{
 		"s.deleted_at IS NULL",
@@ -145,13 +145,13 @@ func (s *BunStore) recentEditsFrom(
 		return RecentEditsResult{}, fmt.Errorf("querying Bun recent edits: %w", err)
 	}
 	for index := range rows {
-		lastEditedAt, err := bunAvailableTimestamp(s.backend, rows[index].RawLastEditedAt)
+		lastEditedAt, err := bunAvailableTimestamp(rows[index].RawLastEditedAt)
 		if err != nil {
 			return RecentEditsResult{}, fmt.Errorf(
 				"scanning Bun recent-edit latest timestamp: %w", err,
 			)
 		}
-		timestamp, err := bunAvailableTimestamp(s.backend, rows[index].RawTimestamp)
+		timestamp, err := bunAvailableTimestamp(rows[index].RawTimestamp)
 		if err != nil {
 			return RecentEditsResult{}, fmt.Errorf(
 				"scanning Bun recent-edit timestamp: %w", err,

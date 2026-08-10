@@ -26,11 +26,6 @@ var (
 	)
 )
 
-type archiveMessageRow struct {
-	bunmodel.Message `bun:",extend"`
-	Timestamp        string `bun:"timestamp,type:TEXT,nullzero"`
-}
-
 func canonicalReplacementColumns(model any, excluded ...string) []string {
 	excludedSet := make(map[string]struct{}, len(excluded))
 	for _, column := range excluded {
@@ -358,13 +353,10 @@ func canonicalToolRows(
 	return callRows, resultRows, nil
 }
 
-// appendArchiveMessageRows is the SQLite archive's narrow timestamp seam. The
-// canonical PostgreSQL and DuckDB models use native timestamps and must reject
-// unsupported values. SQLite historically stores message timestamps as TEXT,
-// including malformed provider values that read-side date logic deliberately
-// falls back from to the session timestamp. Keep that raw fallback while
-// deriving the insert projection from the shared Bun model and executing the
-// batch through Bun.
+// appendArchiveMessageRows writes SQLite messages through the canonical model.
+// Parser output is sanitized before reaching this boundary, so an unavailable
+// provider timestamp is stored as NULL and malformed values cannot enter the
+// archive.
 func appendArchiveMessageRows(
 	ctx context.Context, tx bun.IDB, sessionID string, messages []Message,
 ) error {
@@ -387,7 +379,7 @@ func writeArchiveMessageRows(
 	ctx context.Context, tx bun.IDB, sessionID string, messages []Message,
 	conflict string,
 ) error {
-	rows := make([]archiveMessageRow, len(messages))
+	rows := make([]bunmodel.Message, len(messages))
 	for index, message := range messages {
 		if message.SessionID != sessionID {
 			return fmt.Errorf(
@@ -395,18 +387,16 @@ func writeArchiveMessageRows(
 				message.SessionID, sessionID,
 			)
 		}
-		timestamp := archiveMessageTimestamp(message.Timestamp)
-		message.Timestamp = ""
 		row, err := canonicalMessageRow(message)
 		if err != nil {
 			return err
 		}
-		rows[index] = archiveMessageRow{Message: row, Timestamp: timestamp}
+		rows[index] = row
 	}
 	if len(rows) == 0 {
 		return nil
 	}
-	return writeCanonicalBatches(rows, func(batch []archiveMessageRow) error {
+	return writeCanonicalBatches(rows, func(batch []bunmodel.Message) error {
 		query := tx.NewInsert().Model(&batch).
 			Column(canonicalArchiveMessageColumns...).Returning("")
 		if conflict != "" {
@@ -419,18 +409,6 @@ func writeArchiveMessageRows(
 		}
 		return nil
 	})
-}
-
-func archiveMessageTimestamp(value string) string {
-	if value == "" {
-		return ""
-	}
-	timestamp, err := bunmodel.ParseTimestamp(value)
-	if err != nil {
-		return value
-	}
-	timestamp.Time = timestamp.Truncate(time.Microsecond)
-	return timestamp.UTC().Format(time.RFC3339Nano)
 }
 
 // CanonicalUsageEventRows converts source accounting into target-assigned

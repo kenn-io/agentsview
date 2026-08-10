@@ -28,9 +28,7 @@ func (s *BunStore) GetMessages(
 		} else {
 			query = query.Where("ordinal <= ?", from).OrderExpr("ordinal DESC")
 		}
-		rows, err := scanBunMessages(
-			ctx, query.Limit(limit), preserveRawMessageTimestamps(s.backend),
-		)
+		rows, err := scanBunMessages(ctx, query.Limit(limit))
 		if err != nil {
 			return fmt.Errorf("querying messages: %w", err)
 		}
@@ -72,10 +70,7 @@ func (s *BunStore) GetMessagesWindow(
 			} else {
 				query = query.Where("ordinal <= ?", from).OrderExpr("ordinal DESC")
 			}
-			rows, err := scanBunMessages(
-				ctx, query.Limit(window.Limit),
-				preserveRawMessageTimestamps(s.backend),
-			)
+			rows, err := scanBunMessages(ctx, query.Limit(window.Limit))
 			if err != nil {
 				return fmt.Errorf("querying role-filtered messages: %w", err)
 			}
@@ -105,9 +100,7 @@ func (s *BunStore) GetMessagesWindow(
 			if roles && len(window.Roles) > 0 {
 				query = query.Where("role IN (?)", bun.List(window.Roles))
 			}
-			return scanBunMessages(
-				ctx, query, preserveRawMessageTimestamps(s.backend),
-			)
+			return scanBunMessages(ctx, query)
 		}
 		before, err := queryPart("<", "DESC", window.Before, true)
 		if err != nil {
@@ -146,7 +139,7 @@ func (s *BunStore) GetAllMessages(
 	err := s.consistentView(ctx, func(store bun.IDB) error {
 		rows, err := scanBunMessages(ctx, store.NewSelect().
 			Model((*bunmodel.Message)(nil)).Where("session_id = ?", sessionID).
-			OrderExpr("ordinal ASC"), preserveRawMessageTimestamps(s.backend))
+			OrderExpr("ordinal ASC"))
 		if err != nil {
 			return fmt.Errorf("querying all messages: %w", err)
 		}
@@ -162,38 +155,9 @@ func (s *BunStore) GetAllMessages(
 	return pendingMessages, nil
 }
 
-type bunRawTimestampMessage struct {
-	bunmodel.Message `bun:",extend"`
-	RawTimestamp     string `bun:"raw_timestamp"`
-}
-
-func preserveRawMessageTimestamps(backend BunBackend) bool {
-	reader, ok := backend.(bunRawMessageTimestampReader)
-	return ok && reader.PreserveRawMessageTimestamps()
-}
-
 func scanBunMessages(
-	ctx context.Context, query *bun.SelectQuery, preserveRawTimestamp bool,
+	ctx context.Context, query *bun.SelectQuery,
 ) ([]Message, error) {
-	if preserveRawTimestamp {
-		var rows []bunRawTimestampMessage
-		if err := query.ExcludeColumn("timestamp").
-			ColumnExpr("NULL AS timestamp").
-			ColumnExpr("COALESCE(timestamp, '') AS raw_timestamp").
-			Scan(ctx, &rows); err != nil {
-			return nil, err
-		}
-		messages := make([]Message, 0, len(rows))
-		for _, row := range rows {
-			message := messageFromBunRow(row.Message)
-			message.Timestamp = row.RawTimestamp
-			if row.ID == nil {
-				message.ID = int64(message.Ordinal)
-			}
-			messages = append(messages, message)
-		}
-		return messages, nil
-	}
 	var rows []bunmodel.Message
 	if err := query.Scan(ctx, &rows); err != nil {
 		return nil, err
@@ -282,6 +246,7 @@ type bunTimingSessionRow struct {
 }
 
 type bunTimingMessageRow struct {
+	ID           *int64              `bun:"id"`
 	Ordinal      int                 `bun:"ordinal"`
 	RawTimestamp any                 `bun:"timestamp"`
 	Timestamp    *bunmodel.Timestamp `bun:"-"`
@@ -406,10 +371,14 @@ func (s *BunStore) GetSessionActivity(
 		if row.IsSystem || IsSystemPrefixed(row.Content, row.Role) {
 			continue
 		}
-		at, ok := bunActivityTime(row.Timestamp)
-		if !ok {
+		timestamp, err := bunAvailableTimestamp(row.Timestamp)
+		if err != nil {
+			return nil, fmt.Errorf("scanning activity message timestamp: %w", err)
+		}
+		if timestamp == nil {
 			continue
 		}
+		at := timestamp.Time
 		if len(visible) == 0 || at.Before(minTime) {
 			minTime = at
 		}
@@ -463,34 +432,12 @@ func (s *BunStore) GetSessionActivity(
 	}, nil
 }
 
-func bunActivityTime(value any) (time.Time, bool) {
-	switch value := value.(type) {
-	case nil:
-		return time.Time{}, false
-	case time.Time:
-		return value.UTC(), !value.IsZero()
-	case string:
-		parsed, err := bunmodel.ParseTimestamp(value)
-		return parsed.Time, err == nil && !parsed.IsZero()
-	case []byte:
-		return bunActivityTime(string(value))
-	default:
-		return time.Time{}, false
-	}
-}
-
-// bunAvailableTimestamp applies the canonical persistence scanner to a raw
-// query value. SQLite's timestamp columns can contain legacy text outside the
-// canonical domain; those values are unavailable to readers. Native timestamp
-// backends stay strict because their typed schemas must never return them.
-func bunAvailableTimestamp(
-	backend BunBackend, value any,
-) (*bunmodel.Timestamp, error) {
+// bunAvailableTimestamp applies the strict canonical persistence scanner to a
+// raw query value. Invalid stored timestamps are data corruption rather than an
+// alternate representation on every backend.
+func bunAvailableTimestamp(value any) (*bunmodel.Timestamp, error) {
 	var parsed bunmodel.Timestamp
 	if err := parsed.Scan(value); err != nil {
-		if backend.Name() == "sqlite" {
-			return nil, nil
-		}
 		return nil, err
 	}
 	if parsed.IsZero() {
@@ -520,17 +467,15 @@ func (s *BunStore) GetSessionTiming(
 			return err
 		}
 		if err := store.NewSelect().Table("messages").
-			Column("ordinal", "has_tool_use").
-			ColumnExpr(bunUsageTimestampColumn(
-				s.backend.TimestampOrderExpr, "timestamp",
-			)+" AS timestamp").
+			Column("id", "ordinal", "has_tool_use").
+			Column("timestamp").
 			Where("session_id = ?", sessionID).
 			OrderExpr("ordinal ASC").Scan(ctx, &attempt.messages); err != nil {
 			return err
 		}
 		for index := range attempt.messages {
 			timestamp, err := bunAvailableTimestamp(
-				s.backend, attempt.messages[index].RawTimestamp,
+				attempt.messages[index].RawTimestamp,
 			)
 			if err != nil {
 				return fmt.Errorf("scanning timing message timestamp: %w", err)
@@ -593,9 +538,15 @@ func (s *BunStore) GetSessionTiming(
 		EndedAt: timestampFromBunRow(sessionRow.EndedAt),
 	}
 	turnRows := make([]TurnRow, 0, len(messages))
+	messageIDsByOrdinal := make(map[int]int64, len(messages))
 	for index, message := range messages {
+		messageID := int64(message.Ordinal)
+		if message.ID != nil {
+			messageID = *message.ID
+		}
+		messageIDsByOrdinal[message.Ordinal] = messageID
 		turn := TurnRow{
-			MessageID: int64(message.Ordinal), Ordinal: int64(message.Ordinal),
+			MessageID: messageID, Ordinal: int64(message.Ordinal),
 			Timestamp:  requiredTimestampFromBunRowPtr(message.Timestamp),
 			HasToolUse: message.HasToolUse,
 		}
@@ -619,8 +570,12 @@ func (s *BunStore) GetSessionTiming(
 	}
 	callRows := make([]CallRow, 0, len(calls))
 	for _, call := range calls {
+		messageID := int64(call.MessageOrdinal)
+		if persistedID, ok := messageIDsByOrdinal[call.MessageOrdinal]; ok {
+			messageID = persistedID
+		}
 		row := CallRow{
-			MessageID: int64(call.MessageOrdinal), ToolUseID: call.ToolUseID,
+			MessageID: messageID, ToolUseID: call.ToolUseID,
 			ToolName: call.ToolName, Category: call.Category,
 			SkillName: call.SkillName, SubagentSessionID: call.SubagentSessionID,
 		}

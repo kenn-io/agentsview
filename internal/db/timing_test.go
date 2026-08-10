@@ -256,6 +256,33 @@ func TestGetSessionTimingUsesOnlyCanonicalMessageTimestamps(t *testing.T) {
 	}
 }
 
+func TestGetSessionTimingUsesPersistedMessageID(t *testing.T) {
+	d := testDB(t)
+	const sessionID = "persisted-timing-message-id"
+	timingInsertSession(t, d, sessionID,
+		"2026-08-10T10:00:00Z", "2026-08-10T10:01:00Z")
+	timingInsertMessage(t, d, sessionID, 7, "assistant",
+		"run a tool", "2026-08-10T10:00:01Z", true)
+	messageID := timingMsgID(t, d, sessionID, 7)
+	require.NotEqual(t, int64(7), messageID,
+		"fixture must distinguish the persisted ID from the ordinal")
+	timingInsertToolCall(t, d, sessionID, messageID,
+		"tu_persisted", "Bash", "Bash", "")
+
+	messages, err := d.GetMessages(t.Context(), sessionID, 7, 1, true)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	timing, err := d.GetSessionTiming(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, timing)
+	require.Len(t, timing.Turns, 1)
+
+	assert.Equal(t, messages[0].ID, timing.Turns[0].MessageID)
+	assert.Equal(t, 1, timing.ToolCallCount)
+	require.Len(t, timing.Turns[0].Calls, 1)
+	assert.Equal(t, "tu_persisted", timing.Turns[0].Calls[0].ToolUseID)
+}
+
 // TestActiveGapCapConstantsAgree guards the two spellings of the active
 // gap cap against drifting apart: the velocity metric uses the seconds
 // form and the active-duration SQL uses the milliseconds form.

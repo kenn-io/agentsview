@@ -4,7 +4,6 @@ import (
 	"database/sql"
 
 	"github.com/mattn/go-sqlite3"
-	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
 
 const sqliteUsageDriverName = "agentsview_sqlite3"
@@ -15,13 +14,6 @@ func init() {
 			if err := conn.RegisterFunc(
 				"agentsview_timestamp_unix_micro",
 				sqliteTimestampUnixMicro,
-				true,
-			); err != nil {
-				return err
-			}
-			if err := conn.RegisterFunc(
-				"agentsview_canonical_timestamp",
-				sqliteCanonicalTimestamp,
 				true,
 			); err != nil {
 				return err
@@ -49,27 +41,6 @@ func sqliteTimestampUnixMicro(raw string) any {
 	}
 	return timestamp.UTC().UnixMicro()
 }
-
-func sqliteCanonicalTimestamp(value any) any {
-	var text string
-	switch value := value.(type) {
-	case string:
-		text = value
-	case []byte:
-		if value == nil {
-			return nil
-		}
-		text = string(value)
-	default:
-		return nil
-	}
-	timestamp, err := bunmodel.ParseTimestamp(text)
-	if err != nil || timestamp.IsZero() {
-		return nil
-	}
-	return text
-}
-
 func sqliteUsageOutputTokens(tokenJSON string) int {
 	_, outputTokens, _, _ := parseUsageTokenCounters(tokenJSON)
 	return outputTokens

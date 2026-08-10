@@ -587,7 +587,7 @@ func TestWriteSessionBatchFreshReplaceMessagesSkipsDeletePath(t *testing.T) {
 	requireMessagesDeleteTriggerPoisoned(t, d)
 }
 
-func TestWriteSessionAtomicPreservesMalformedMessageTimestamp(t *testing.T) {
+func TestWriteSessionAtomicRepairsMalformedMessageTimestamp(t *testing.T) {
 	t.Parallel()
 	d := testDB(t)
 	const sessionID = "atomic-malformed-timestamp"
@@ -610,10 +610,10 @@ func TestWriteSessionAtomicPreservesMalformedMessageTimestamp(t *testing.T) {
 	messages, err := d.GetAllMessages(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
-	assert.Equal(t, malformed, messages[0].Timestamp)
+	assert.Empty(t, messages[0].Timestamp)
 }
 
-func TestWriteSessionAtomicNoOpAndRepairPreserveMalformedMessageTimestamp(t *testing.T) {
+func TestWriteSessionAtomicNoOpAndRepairCanonicalizeMalformedMessageTimestamp(t *testing.T) {
 	t.Parallel()
 	d := testDB(t)
 	const sessionID = "atomic-repair-malformed-timestamp"
@@ -660,8 +660,8 @@ func TestWriteSessionAtomicNoOpAndRepairPreserveMalformedMessageTimestamp(t *tes
 	require.NoError(t, err)
 	require.Len(t, stored, 2)
 	assert.Equal(t, "after", stored[0].Content)
-	assert.Equal(t, malformed, stored[0].Timestamp)
-	assert.Equal(t, malformed, stored[1].Timestamp)
+	assert.Empty(t, stored[0].Timestamp)
+	assert.Empty(t, stored[1].Timestamp)
 	assert.Equal(t, beforeIDs, messageIDsByOrdinal(t, d, sessionID),
 		"safe repair must retain SQLite row IDs")
 }

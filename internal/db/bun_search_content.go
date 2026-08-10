@@ -2,11 +2,9 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/db/bunmodel"
@@ -46,14 +44,14 @@ type bunHybridAnchor struct {
 }
 
 type bunContentCandidate struct {
-	SessionID  string  `bun:"session_id"`
-	Ordinal    int     `bun:"ordinal"`
-	Location   string  `bun:"location"`
-	ToolName   string  `bun:"tool_name"`
-	Body       string  `bun:"body"`
-	Timestamp  *string `bun:"source_timestamp"`
-	CallIndex  int     `bun:"call_index"`
-	EventIndex int     `bun:"event_index"`
+	SessionID  string              `bun:"session_id"`
+	Ordinal    int                 `bun:"ordinal"`
+	Location   string              `bun:"location"`
+	ToolName   string              `bun:"tool_name"`
+	Body       string              `bun:"body"`
+	Timestamp  *bunmodel.Timestamp `bun:"source_timestamp"`
+	CallIndex  int                 `bun:"call_index"`
+	EventIndex int                 `bun:"event_index"`
 }
 
 // SearchContent resolves dialect-specific lexical hits through canonical Bun
@@ -757,15 +755,18 @@ func (s *BunStore) bunContentUnicodeSubstringHits(
 	hits := make([]ContentSearchHit, 0, filter.Limit)
 	for rows.Next() && len(hits) < filter.Limit {
 		var row bunContentCandidate
-		var timestamp sql.NullString
+		var rawTimestamp any
 		if err := rows.Scan(
 			&row.SessionID, &row.Ordinal, &row.Location, &row.ToolName,
-			&row.Body, &timestamp, &row.CallIndex, &row.EventIndex,
+			&row.Body, &rawTimestamp, &row.CallIndex, &row.EventIndex,
 		); err != nil {
 			return nil, fmt.Errorf("scanning Bun Unicode substring candidate: %w", err)
 		}
-		if timestamp.Valid {
-			row.Timestamp = &timestamp.String
+		row.Timestamp, err = bunAvailableTimestamp(rawTimestamp)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"scanning Bun Unicode substring timestamp: %w", err,
+			)
 		}
 		if CaseInsensitiveIndex(row.Body, filter.Pattern) < 0 {
 			continue
@@ -806,15 +807,16 @@ func (s *BunStore) bunContentRegexHits(
 	hits := make([]ContentSearchHit, 0, filter.Limit)
 	for rows.Next() && len(hits) < filter.Limit {
 		var row bunContentCandidate
-		var timestamp sql.NullString
+		var rawTimestamp any
 		if err := rows.Scan(
 			&row.SessionID, &row.Ordinal, &row.Location, &row.ToolName,
-			&row.Body, &timestamp, &row.CallIndex, &row.EventIndex,
+			&row.Body, &rawTimestamp, &row.CallIndex, &row.EventIndex,
 		); err != nil {
 			return nil, fmt.Errorf("scanning Bun regex candidate: %w", err)
 		}
-		if timestamp.Valid {
-			row.Timestamp = &timestamp.String
+		row.Timestamp, err = bunAvailableTimestamp(rawTimestamp)
+		if err != nil {
+			return nil, fmt.Errorf("scanning Bun regex timestamp: %w", err)
 		}
 		span := re.FindStringIndex(row.Body)
 		if span == nil {
@@ -1032,22 +1034,11 @@ func bunContentHitFromCandidate(
 	return hit
 }
 
-func normalizeBunContentTimestamp(value *string) string {
-	if value == nil || *value == "" {
+func normalizeBunContentTimestamp(value *bunmodel.Timestamp) string {
+	if value == nil || value.IsZero() {
 		return ""
 	}
-	if parsed, err := bunmodel.ParseTimestamp(*value); err == nil {
-		return parsed.UTC().Format(time.RFC3339Nano)
-	}
-	for _, layout := range []string{
-		"2006-01-02 15:04:05.999999999Z07",
-		"2006-01-02 15:04:05Z07",
-	} {
-		if parsed, err := time.Parse(layout, *value); err == nil {
-			return parsed.UTC().Format(time.RFC3339Nano)
-		}
-	}
-	return ""
+	return requiredTimestampFromBunRow(*value)
 }
 
 func (s *BunStore) bunContentSystemPrefixSQL(content, role string) string {
@@ -1069,9 +1060,7 @@ func bunContentMessagesForHits(
 			args = append(args, hit.SessionID, hit.Ordinal)
 		}
 		var rows []bunContentMessage
-		timestampColumn := bunUsageTimestampColumn(
-			backend.TimestampOrderExpr, "message.timestamp",
-		)
+		timestampColumn := "message.timestamp"
 		query := `WITH refs(session_id, ordinal) AS (VALUES ` +
 			strings.Join(values, ", ") + `)
 			SELECT message.session_id, message.ordinal, message.role,
@@ -1085,7 +1074,7 @@ func bunContentMessagesForHits(
 			return nil, fmt.Errorf("hydrating content search messages: %w", err)
 		}
 		for index := range rows {
-			timestamp, err := bunAvailableTimestamp(backend, rows[index].RawTimestamp)
+			timestamp, err := bunAvailableTimestamp(rows[index].RawTimestamp)
 			if err != nil {
 				return nil, fmt.Errorf(
 					"scanning content search message timestamp: %w", err,

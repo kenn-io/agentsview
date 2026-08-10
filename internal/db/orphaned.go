@@ -2295,6 +2295,7 @@ func removeGeneratedIdentitySnapshotsWithoutSource(
 const (
 	sanitizedSourceDataVersion      = 58
 	sanitizedInputSourceDataVersion = 59
+	canonicalTimestampDataVersion   = 84
 )
 
 // projectIdentitySourceSnapshotDataVersion is the first archive version whose
@@ -2323,6 +2324,13 @@ func sanitizeCopiedSessionContent(
 	tempIDsTable string,
 	sourceVersion int,
 ) error {
+	if sourceVersion < canonicalTimestampDataVersion {
+		if err := canonicalizeCopiedMessageTimestamps(
+			ctx, tx, tempIDsTable,
+		); err != nil {
+			return err
+		}
+	}
 	// Each pass runs only when the source predates the version at
 	// which ingest started sanitizing that field, so a v58 source
 	// upgrading to v59 pays only the single-column input pass.
@@ -2341,6 +2349,64 @@ func sanitizeCopiedSessionContent(
 		return err
 	}
 	return sanitizeCopiedToolResultEvents(ctx, tx, tempIDsTable)
+}
+
+type copiedTimestampUpdate struct {
+	id        int64
+	timestamp any
+}
+
+func canonicalizeCopiedMessageTimestamps(
+	ctx context.Context,
+	tx *sql.Tx,
+	tempIDsTable string,
+) error {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id, timestamp
+		 FROM main.messages
+		 WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)
+		   AND timestamp IS NOT NULL
+		   AND timestamp != ''`,
+	)
+	if err != nil {
+		return fmt.Errorf("querying copied message timestamps: %w", err)
+	}
+	defer rows.Close()
+
+	var updates []copiedTimestampUpdate
+	for rows.Next() {
+		var id int64
+		var stored string
+		if err := rows.Scan(&id, &stored); err != nil {
+			return fmt.Errorf("scanning copied message timestamp: %w", err)
+		}
+		parsed, parseErr := bunmodel.ParseTimestamp(stored)
+		if parseErr != nil || !isPlausibleTime(parsed.Time) {
+			updates = append(updates, copiedTimestampUpdate{id: id})
+			continue
+		}
+		canonical := parsed.Time.UTC().Truncate(time.Microsecond).
+			Format(time.RFC3339Nano)
+		if canonical != stored {
+			updates = append(updates, copiedTimestampUpdate{
+				id: id, timestamp: canonical,
+			})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating copied message timestamps: %w", err)
+	}
+	for _, update := range updates {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE main.messages SET timestamp = ? WHERE id = ?`,
+			update.timestamp, update.id,
+		); err != nil {
+			return fmt.Errorf(
+				"updating copied message timestamp %d: %w", update.id, err,
+			)
+		}
+	}
+	return nil
 }
 
 type copiedTextUpdate struct {

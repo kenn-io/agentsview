@@ -673,11 +673,11 @@ const bunDailyUsageSessionColumns = `
 	s.created_at AS session_created_at,
 	s.termination_status AS termination_status`
 
-func bunMessageUsageColumns(backend BunBackend) string {
+func bunMessageUsageColumns() string {
 	return `
 	m.session_id AS session_id,
 	m.ordinal AS message_ordinal,
-	` + bunMessageTimestampExpr(backend, "m.timestamp") + ` AS usage_timestamp,
+	m.timestamp AS usage_timestamp,
 	m.model AS model,
 	m.token_usage AS token_json,
 	m.claude_message_id AS claude_message_id,
@@ -685,12 +685,12 @@ func bunMessageUsageColumns(backend BunBackend) string {
 	m.source_uuid AS source_uuid`
 }
 
-func bunEventUsageColumns(timestampOrder func(string) string) string {
+func bunEventUsageColumns() string {
 	return `
 	ue.id AS id,
 	ue.session_id AS session_id,
 	ue.message_ordinal AS message_ordinal,
-	` + bunUsageTimestampColumn(timestampOrder, "ue.occurred_at") + ` AS usage_timestamp,
+	ue.occurred_at AS usage_timestamp,
 	ue.model AS model,
 	ue.input_tokens AS input_tokens,
 	ue.output_tokens AS output_tokens,
@@ -704,18 +704,11 @@ func bunEventUsageColumns(timestampOrder func(string) string) string {
 	ue.dedup_key AS dedup_key`
 }
 
-func bunUsageTimestampColumn(
-	timestampOrder func(string) string, column string,
-) string {
-	return "CASE WHEN " + timestampOrder(bunNullableTimestamp(column)) +
-		" IS NULL THEN NULL ELSE " + column + " END"
-}
-
-func bunDailyMessageUsageColumns(backend BunBackend) string {
+func bunDailyMessageUsageColumns() string {
 	return `
 	m.session_id AS session_id,
 	m.ordinal AS message_ordinal,
-	` + bunMessageTimestampExpr(backend, "m.timestamp") + ` AS usage_timestamp,
+	m.timestamp AS usage_timestamp,
 	m.model AS model,
 	m.token_usage AS token_json,
 	m.claude_message_id AS claude_message_id,
@@ -723,12 +716,12 @@ func bunDailyMessageUsageColumns(backend BunBackend) string {
 	m.source_uuid AS source_uuid`
 }
 
-func bunDailyEventUsageColumns(timestampOrder func(string) string) string {
+func bunDailyEventUsageColumns() string {
 	return `
 	ue.id AS id,
 	ue.session_id AS session_id,
 	ue.message_ordinal AS message_ordinal,
-	` + bunUsageTimestampColumn(timestampOrder, "ue.occurred_at") + ` AS usage_timestamp,
+	ue.occurred_at AS usage_timestamp,
 	ue.model AS model,
 	ue.input_tokens AS input_tokens,
 	ue.output_tokens AS output_tokens,
@@ -1085,10 +1078,10 @@ func (s *BunStore) bunDailyUsageQueries(
 	referenceTime := time.Now().UTC()
 	timestampOrder := s.backend.TimestampOrderExpr
 	messageTimestampValue := func(column string) string {
-		return bunMessageTimestampExpr(s.backend, column)
+		return column
 	}
 	messageQuery := store.NewSelect().TableExpr("messages AS m").
-		ColumnExpr(bunDailyMessageUsageColumns(s.backend) + "," +
+		ColumnExpr(bunDailyMessageUsageColumns() + "," +
 			bunDailyUsageSessionColumns).
 		Join("JOIN sessions AS s ON s.id = m.session_id").
 		Where("s.deleted_at IS NULL")
@@ -1116,7 +1109,7 @@ func (s *BunStore) bunDailyUsageQueries(
 		OrderExpr("m.ordinal ASC")
 
 	eventQuery := store.NewSelect().TableExpr("usage_events AS ue").
-		ColumnExpr(bunDailyEventUsageColumns(timestampOrder)+","+
+		ColumnExpr(bunDailyEventUsageColumns()+","+
 			bunDailyUsageSessionColumns).
 		Join("JOIN sessions AS s ON s.id = ue.session_id").
 		Where("s.deleted_at IS NULL").Where("ue.model != ?", "")
@@ -1161,13 +1154,12 @@ func (s *BunStore) loadBunUsageProjections(
 	matching bool, sessionIDs []string,
 ) ([]bunUsageProjection, error) {
 	referenceTime := time.Now().UTC()
-	timestampOrder := s.backend.TimestampOrderExpr
 	messageTimestampValue := func(column string) string {
-		return bunMessageTimestampExpr(s.backend, column)
+		return column
 	}
 	var messages []bunUsageProjection
 	messageQuery := store.NewSelect().TableExpr("messages AS m").
-		ColumnExpr(bunMessageUsageColumns(s.backend) + "," + bunUsageSessionColumns).
+		ColumnExpr(bunMessageUsageColumns() + "," + bunUsageSessionColumns).
 		Join("JOIN sessions AS s ON s.id = m.session_id").
 		Where("s.deleted_at IS NULL")
 	if matching {
@@ -1199,7 +1191,7 @@ func (s *BunStore) loadBunUsageProjections(
 
 	var events []bunUsageProjection
 	eventQuery := store.NewSelect().TableExpr("usage_events AS ue").
-		ColumnExpr(bunEventUsageColumns(timestampOrder)+","+bunUsageSessionColumns).
+		ColumnExpr(bunEventUsageColumns()+","+bunUsageSessionColumns).
 		Join("JOIN sessions AS s ON s.id = ue.session_id").
 		Where("s.deleted_at IS NULL").Where("ue.model != ?", "")
 	if len(sessionIDs) > 0 {

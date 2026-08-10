@@ -985,6 +985,9 @@ func scanUsageRow(rows *sql.Rows) (usageScanRow, error) {
 		&r.displayName,
 		&r.startedAt,
 	)
+	if err == nil {
+		r.ts, err = canonicalStoredMessageTimestamp(r.ts)
+	}
 	return r, err
 }
 
@@ -1018,6 +1021,9 @@ func scanDailyUsageRowWithMachine(
 		dest = append(dest, &r.machine)
 	}
 	err := rows.Scan(dest...)
+	if err == nil {
+		r.ts, err = canonicalStoredMessageTimestamp(r.ts)
+	}
 	return r, err
 }
 

@@ -149,6 +149,13 @@ func (db *DB) activityReportActivityFrom(
 				return fmt.Errorf(
 					"scanning activity report activity: %w", err)
 			}
+			e.Timestamp, err = canonicalStoredMessageTimestamp(e.Timestamp)
+			if err != nil {
+				return fmt.Errorf(
+					"reading activity report message %s ordinal %d timestamp: %w",
+					e.SessionID, e.Ordinal, err,
+				)
+			}
 			out = append(out, e)
 		}
 		return rows.Err()

@@ -1510,6 +1510,13 @@ func (db *DB) queryVelocityMsgs(
 				"scanning velocity msg: %w", err,
 			)
 		}
+		ts, err = canonicalStoredMessageTimestamp(ts)
+		if err != nil {
+			return fmt.Errorf(
+				"reading velocity message %s ordinal %d timestamp: %w",
+				sid, ordinal, err,
+			)
+		}
 		t, ok := localTime(ts, loc)
 		sessionMsgs[sid] = append(sessionMsgs[sid],
 			velocityMsg{
