@@ -11,21 +11,74 @@ import (
 // GetAnalyticsIssueReview mirrors the SQLite detector over PostgreSQL rows.
 func (s *Store) GetAnalyticsIssueReview(ctx context.Context, f db.AnalyticsFilter, q db.IssueReviewQuery) (db.IssueReviewResponse, error) {
 	key := db.IssueReviewCacheKey(f, q)
-	if cached, ok := s.issueReviewCache.Get(key, q); ok {
-		return cached, nil
+	response, ok := s.issueReviewCache.Get(key, q.Refresh)
+	if !ok {
+		sessions, err := s.issueReviewSessions(ctx, f, q)
+		if err != nil {
+			return db.IssueReviewResponse{}, err
+		}
+		messages, calls, err := s.issueReviewRows(ctx, sessions)
+		if err != nil {
+			return db.IssueReviewResponse{}, err
+		}
+		response = db.AnalyzeIssueReviewBase(sessions, messages, calls, nil)
+		response.TelemetryStatus = "unsupported"
+		s.issueReviewCache.Put(key, response)
 	}
-	sessions, err := s.issueReviewSessions(ctx, f, q)
+	states, err := s.issueReviewFindingStates(ctx)
 	if err != nil {
 		return db.IssueReviewResponse{}, err
 	}
-	messages, calls, err := s.issueReviewRows(ctx, sessions)
+	return db.FilterIssueReviewWithStates(response, states, q, time.Now()), nil
+}
+
+func (s *Store) PutIssueReviewFindingState(ctx context.Context, state db.IssueReviewFindingState) error {
+	_, err := s.pg.ExecContext(ctx, `
+		INSERT INTO issue_review_finding_states
+			(finding_id, review_state, accepted_last_seen, suppressed_until, updated_at)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT(finding_id) DO UPDATE SET
+			review_state = EXCLUDED.review_state,
+			accepted_last_seen = EXCLUDED.accepted_last_seen,
+			suppressed_until = EXCLUDED.suppressed_until,
+			updated_at = EXCLUDED.updated_at`,
+		state.FindingID, state.ReviewState, state.AcceptedLastSeen,
+		state.SuppressedUntil, state.UpdatedAt,
+	)
 	if err != nil {
-		return db.IssueReviewResponse{}, err
+		return fmt.Errorf("saving issue review finding state: %w", err)
 	}
-	response := db.AnalyzeIssueReviewBase(sessions, messages, calls, nil)
-	response.TelemetryStatus = "unsupported"
-	s.issueReviewCache.Put(key, response)
-	return db.FilterIssueReview(response, q), nil
+	return nil
+}
+
+func (s *Store) DeleteIssueReviewFindingState(ctx context.Context, findingID string) error {
+	if _, err := s.pg.ExecContext(ctx,
+		"DELETE FROM issue_review_finding_states WHERE finding_id = $1", findingID,
+	); err != nil {
+		return fmt.Errorf("deleting issue review finding state: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) issueReviewFindingStates(ctx context.Context) ([]db.IssueReviewFindingState, error) {
+	rows, err := s.pg.QueryContext(ctx, `
+		SELECT finding_id, review_state, accepted_last_seen,
+			suppressed_until, updated_at
+		FROM issue_review_finding_states`)
+	if err != nil {
+		return nil, fmt.Errorf("querying issue review finding states: %w", err)
+	}
+	defer rows.Close()
+	var states []db.IssueReviewFindingState
+	for rows.Next() {
+		var state db.IssueReviewFindingState
+		if err := rows.Scan(&state.FindingID, &state.ReviewState,
+			&state.AcceptedLastSeen, &state.SuppressedUntil, &state.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scanning issue review finding state: %w", err)
+		}
+		states = append(states, state)
+	}
+	return states, rows.Err()
 }
 
 func (s *Store) issueReviewSessions(ctx context.Context, f db.AnalyticsFilter, q db.IssueReviewQuery) ([]db.IssueReviewSession, error) {

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { Button, Card, Spinner, TextInput, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
-  import { AnalyticsService } from "../../api/generated/index.js";
+  import { AnalyticsService, IssueReviewFindingStateInputBody } from "../../api/generated/index.js";
   import { callGenerated, isAbortError } from "../../api/runtime.js";
   import type {
     IssueFacet,
@@ -40,6 +40,7 @@
   let severity = $state("");
   let confidence = $state("");
   let status = $state("");
+  let reviewState = $state("");
   let recommendationType = $state("");
   let minOccurrences = $state("2");
   let minSessions = $state("2");
@@ -49,6 +50,9 @@
   let savedViews = $state<SavedView[]>([]);
   let selectedView = $state("");
   let viewName = $state("");
+  let updatingFinding = $state("");
+  let reviewError: string | null = $state(null);
+  let suppressionSelections = $state<Record<string, string>>({});
 
   const findings: IssueReviewFinding[] = $derived(response ? response.findings : []);
   const facets: IssueReviewResponse["facets"] | undefined = $derived(response ? response.facets : undefined);
@@ -61,6 +65,7 @@
   const severityOptions = $derived(facetOptions(facets?.severity, m.issue_review_all_severities(), severityLabel));
   const confidenceOptions = $derived(facetOptions(facets?.confidence, m.issue_review_all_confidences(), confidenceLabel));
   const statusOptions = $derived(facetOptions(facets?.status, m.issue_review_all_statuses(), statusLabel));
+  const reviewStateOptions = $derived(facetOptions(facets?.review_state, m.issue_review_all_review_states(), reviewStateLabel));
   const actionOptions = $derived(facetOptions(facets?.recommendation_type, m.issue_review_all_actions(), actionLabel));
   const savedViewOptions = $derived([
     { name: "", label: m.issue_review_no_saved_view() },
@@ -88,6 +93,12 @@
     name: value,
     label: sortLabel(value),
   }));
+  const suppressionOptions: TypeaheadOption[] = [
+    { name: "1", label: m.issue_review_suppress_one_day() },
+    { name: "7", label: m.issue_review_suppress_seven_days() },
+    { name: "30", label: m.issue_review_suppress_thirty_days() },
+    { name: "permanent", label: m.issue_review_suppress_permanently() },
+  ];
 
   type FilterState = ReturnType<typeof filterState>;
   interface SavedView { name: string; filters: FilterState }
@@ -140,6 +151,7 @@
           severity: (severity || undefined) as "high" | "medium" | "low" | undefined,
           confidence: (confidence || undefined) as "high" | "medium" | "low" | undefined,
           status: (status || undefined) as "open" | "recovered" | "recurring" | "observed" | undefined,
+          reviewState: (reviewState || undefined) as "active" | "acknowledged" | "suppressed" | undefined,
           recommendationType: (recommendationType || undefined) as "skill" | "script" | "rule" | "tool_fix" | undefined,
           minOccurrences: Number(minOccurrences),
           minSessions: Number(minSessions),
@@ -178,18 +190,21 @@
   }
 
   function filterState() {
-    return { sessionId, folder, category, tool, source, outcome, severity, confidence, status, recommendationType, minOccurrences, minSessions, minProjects, minWastedMs, sort };
+    return { sessionId, folder, category, tool, source, outcome, severity, confidence, status, reviewState, recommendationType, minOccurrences, minSessions, minProjects, minWastedMs, sort };
   }
 
   function persistFilters() {
     localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(filterState()));
   }
 
-  function isFilterState(value: unknown): value is FilterState {
-    if (!value || typeof value !== "object") return false;
-    const saved = value as Record<string, unknown>;
+  function parseFilterState(value: unknown): FilterState | null {
+    if (!value || typeof value !== "object") return null;
+    const saved = { ...(value as Record<string, unknown>) };
+    if (saved.reviewState === undefined) saved.reviewState = "";
     return (Object.keys(filterState()) as Array<keyof FilterState>)
-      .every((key) => typeof saved[key] === "string");
+      .every((key) => typeof saved[key] === "string")
+      ? saved as FilterState
+      : null;
   }
 
   function applyFilterState(saved: FilterState) {
@@ -203,6 +218,7 @@
       else if (key === "severity") severity = saved[key];
       else if (key === "confidence") confidence = saved[key];
       else if (key === "status") status = saved[key];
+      else if (key === "reviewState") reviewState = saved[key];
       else if (key === "recommendationType") recommendationType = saved[key];
       else if (key === "minOccurrences") minOccurrences = saved[key];
       else if (key === "minSessions") minSessions = saved[key];
@@ -215,7 +231,8 @@
   function restoreFilters() {
     try {
       const saved = JSON.parse(localStorage.getItem(FILTER_STORAGE_KEY) ?? "null");
-      if (isFilterState(saved)) applyFilterState(saved);
+      const parsed = parseFilterState(saved);
+      if (parsed) applyFilterState(parsed);
       else if (saved !== null) localStorage.removeItem(FILTER_STORAGE_KEY);
     } catch {
       localStorage.removeItem(FILTER_STORAGE_KEY);
@@ -228,12 +245,14 @@
       if (!Array.isArray(saved)) throw new Error("invalid saved views");
       const names = new Set<string>();
       savedViews = saved.flatMap((item): SavedView[] => {
-        if (!item || typeof item !== "object" || typeof item.name !== "string" || !isFilterState(item.filters)) return [];
+        if (!item || typeof item !== "object" || typeof item.name !== "string") return [];
+        const filters = parseFilterState(item.filters);
+        if (!filters) return [];
         const name = item.name.trim().slice(0, MAX_VIEW_NAME_LENGTH);
         const key = name.toLowerCase();
         if (!name || names.has(key) || names.size >= MAX_SAVED_VIEWS) return [];
         names.add(key);
-        return [{ name, filters: item.filters }];
+        return [{ name, filters }];
       });
       if (JSON.stringify(savedViews) !== JSON.stringify(saved)) persistSavedViews();
     } catch {
@@ -282,7 +301,7 @@
   }
 
   function clearFilters() {
-    sessionId = folder = category = tool = source = outcome = severity = confidence = status = recommendationType = "";
+    sessionId = folder = category = tool = source = outcome = severity = confidence = status = reviewState = recommendationType = "";
     minOccurrences = minSessions = "2";
     minProjects = minWastedMs = "0";
     sort = "impact";
@@ -362,6 +381,65 @@
     if (value === "recovered") return m.issue_review_status_recovered();
     if (value === "recurring") return m.issue_review_status_recurring();
     return m.issue_review_status_observed();
+  }
+
+  function reviewStateLabel(value: string): string {
+    if (value === "acknowledged") return m.issue_review_state_acknowledged();
+    if (value === "suppressed") return m.issue_review_state_suppressed();
+    return m.issue_review_state_active();
+  }
+
+  function findingReviewState(finding: IssueReviewFinding): string {
+    return finding.review_state || "active";
+  }
+
+  function suppressionSelection(findingID: string): string {
+    return suppressionSelections[findingID] ?? "7";
+  }
+
+  function selectSuppression(findingID: string, value: string) {
+    suppressionSelections = { ...suppressionSelections, [findingID]: value };
+  }
+
+  async function setReviewState(
+    finding: IssueReviewFinding,
+    next: "acknowledged" | "suppressed",
+  ) {
+    updatingFinding = finding.id;
+    reviewError = null;
+    const selection = suppressionSelection(finding.id);
+    try {
+      await callGenerated(() => AnalyticsService.putApiV1AnalyticsIssueReviewFindingsIdState({
+        id: finding.id,
+        requestBody: {
+          review_state: next === "acknowledged"
+            ? IssueReviewFindingStateInputBody.review_state.ACKNOWLEDGED
+            : IssueReviewFindingStateInputBody.review_state.SUPPRESSED,
+          finding_last_seen: finding.last_seen,
+          suppression_days: next === "suppressed" && selection !== "permanent"
+            ? Number(selection)
+            : undefined,
+        },
+      }));
+      await refresh();
+    } catch (cause) {
+      reviewError = cause instanceof Error ? cause.message : m.issue_review_load_failed();
+    } finally {
+      updatingFinding = "";
+    }
+  }
+
+  async function reopenFinding(finding: IssueReviewFinding) {
+    updatingFinding = finding.id;
+    reviewError = null;
+    try {
+      await callGenerated(() => AnalyticsService.deleteApiV1AnalyticsIssueReviewFindingsIdState({ id: finding.id }));
+      await refresh();
+    } catch (cause) {
+      reviewError = cause instanceof Error ? cause.message : m.issue_review_load_failed();
+    } finally {
+      updatingFinding = "";
+    }
   }
 
   function actionLabel(value: string): string {
@@ -465,6 +543,7 @@
     <Typeahead options={severityOptions} value={severity} fallbackLabel={m.issue_review_all_severities()} placeholder={m.issue_review_severity()} title={m.issue_review_severity()} emptyLabel={m.issue_review_no_matches()} onselect={(value) => selectFilter((next) => severity = next, value)} />
     <Typeahead options={confidenceOptions} value={confidence} fallbackLabel={m.issue_review_all_confidences()} placeholder={m.issue_review_confidence()} title={m.issue_review_confidence()} emptyLabel={m.issue_review_no_matches()} onselect={(value) => selectFilter((next) => confidence = next, value)} />
     <Typeahead options={statusOptions} value={status} fallbackLabel={m.issue_review_all_statuses()} placeholder={m.issue_review_status()} title={m.issue_review_status()} emptyLabel={m.issue_review_no_matches()} onselect={(value) => selectFilter((next) => status = next, value)} />
+    <Typeahead options={reviewStateOptions} value={reviewState} fallbackLabel={m.issue_review_all_review_states()} placeholder={m.issue_review_review_state()} title={m.issue_review_review_state()} emptyLabel={m.issue_review_no_matches()} onselect={(value) => selectFilter((next) => reviewState = next, value)} />
     <Typeahead options={actionOptions} value={recommendationType} fallbackLabel={m.issue_review_all_actions()} placeholder={m.issue_review_action()} title={m.issue_review_action()} emptyLabel={m.issue_review_no_matches()} onselect={(value) => selectFilter((next) => recommendationType = next, value)} />
     <Typeahead options={occurrenceOptions} value={minOccurrences} fallbackLabel={m.issue_review_min_occurrences_value({ count: Number(minOccurrences) })} placeholder={m.issue_review_min_occurrences()} title={m.issue_review_min_occurrences()} emptyLabel={m.issue_review_no_matches()} onselect={(value) => selectFilter((next) => minOccurrences = next, value)} />
     <Typeahead options={minSessionOptions} value={minSessions} fallbackLabel={m.issue_review_min_chats_value({ count: Number(minSessions) })} placeholder={m.issue_review_min_chats()} title={m.issue_review_min_chats()} emptyLabel={m.issue_review_no_matches()} onselect={(value) => selectFilter((next) => minSessions = next, value)} />
@@ -484,6 +563,7 @@
     </Card>
   {:else}
     {#if error}<div class="cached-warning" role="status">{m.issue_review_cached_warning({ error })}</div>{/if}
+    {#if reviewError}<div class="cached-warning error" role="alert">{m.issue_review_update_failed({ error: reviewError })}</div>{/if}
     <div class="scan-summary">
       <span>{m.issue_review_scanned_sessions({ count: response?.scanned_sessions ?? 0 })}</span>
       <span>{m.issue_review_scanned_messages({ count: response?.scanned_messages ?? 0 })}</span>
@@ -505,7 +585,7 @@
               <article>
               <header>
                 <div><h3>{reasonLabel(finding.reason_code)}</h3><code>{finding.tool || finding.signature}</code></div>
-                <div class="chips"><span>{severityLabel(finding.severity)}</span><span>{confidenceLabel(finding.confidence)}</span><span>{statusLabel(finding.status)}</span><span>{actionLabel(finding.recommendation_type)}</span></div>
+                <div class="chips"><span>{severityLabel(finding.severity)}</span><span>{confidenceLabel(finding.confidence)}</span><span>{statusLabel(finding.status)}</span>{#if findingReviewState(finding) !== "active"}<span>{reviewStateLabel(findingReviewState(finding))}</span>{/if}<span>{actionLabel(finding.recommendation_type)}</span></div>
               </header>
               <p class="signature">{finding.signature}</p>
               <div class="counts">
@@ -521,6 +601,13 @@
                 </div>
               {/if}
               <p class="suggestion"><strong>{m.issue_review_suggestion_label()}</strong> {finding.recommendation}</p>
+              <div class="review-actions">
+                <Button size="sm" disabled={updatingFinding !== "" || findingReviewState(finding) === "acknowledged"} onclick={() => setReviewState(finding, "acknowledged")}>{m.issue_review_acknowledge()}</Button>
+                <Typeahead options={suppressionOptions} value={suppressionSelection(finding.id)} fallbackLabel={m.issue_review_suppress_seven_days()} placeholder={m.issue_review_suppress_for()} title={m.issue_review_suppress_for()} emptyLabel={m.issue_review_no_matches()} onselect={(value) => selectSuppression(finding.id, value)} />
+                <Button size="sm" disabled={updatingFinding !== ""} onclick={() => setReviewState(finding, "suppressed")}>{m.issue_review_suppress()}</Button>
+                {#if findingReviewState(finding) !== "active"}<Button size="sm" disabled={updatingFinding !== ""} onclick={() => reopenFinding(finding)}>{m.issue_review_reopen()}</Button>{/if}
+                {#if updatingFinding === finding.id}<Spinner size={14} label={m.issue_review_updating()} />{/if}
+              </div>
               {#if finding.github_reference}<a class="github-link" href={githubHref(finding.github_reference)} target="_blank" rel="noreferrer">{m.issue_review_open_github_issue({ reference: finding.github_reference })}</a>{/if}
               <div class="evidence">
                 {#each finding.evidence as item}
@@ -577,6 +664,8 @@
   .counts, .timing { display: flex; flex-wrap: wrap; gap: 10px; font-size: 11px; color: var(--text-muted); }
   .counts strong { color: var(--text-primary); }
   .suggestion { padding: 8px; border-radius: 6px; background: var(--bg-inset); }
+  .review-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .review-actions :global(.kit-typeahead) { min-width: 150px; }
   .github-link { width: fit-content; color: var(--accent-blue); font-size: 11px; text-decoration: none; }
   .github-link:hover { text-decoration: underline; }
   .evidence { display: grid; gap: 5px; }

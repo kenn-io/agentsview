@@ -57,9 +57,10 @@ Automatic remediation remains out of scope.
    groups recurring signatures, measures durations, and attaches evidence.
 4. Local SQLite optionally supplements exact scoped calls with read-only Codex
    telemetry from `%USERPROFILE%\.codex\logs_2.sqlite`.
-5. Cheap filters, sorting, and pagination apply to a one-hour cached base
-   analysis.
-6. The Svelte panel renders findings and links evidence to the exact chat and
+5. Persisted acknowledgement and suppression state is overlaid on a fresh copy
+   of the one-hour cached base analysis for every request.
+6. Cheap filters, sorting, and pagination apply after that overlay.
+7. The Svelte panel renders findings and links evidence to the exact chat and
    message ordinal.
 
 Codex JSONL-derived archive rows remain the conversation and tool-result
@@ -89,10 +90,19 @@ automation scope. Issue Review adds:
 - chat and working folder;
 - category, tool, evidence source, and session outcome;
 - severity, confidence, lifecycle status, and recommendation type;
+- active, acknowledged, or suppressed review state;
 - minimum occurrences, chats, projects, and excess duration;
 - impact, frequency, recency, waste, and duration sorting;
 - stable pages of 100 findings and explicit **Load more**;
 - persisted local filter state, **Clear filters**, and **Refresh now**.
+- **Acknowledge**, 1/7/30-day or permanent **Suppress**, and **Reopen** actions.
+
+Detector lifecycle status remains derived. User review state is stored in a
+separate SQLite or PostgreSQL table and copied during full SQLite rebuilds.
+Acknowledgement applies only through the accepted `last_seen` date; a later
+occurrence reactivates the finding. Timed suppression expires against UTC.
+Suppressed findings are hidden by default but remain queryable. DuckDB is
+read-only and reports findings as active without an in-place mirror migration.
 
 ### Reliability and privacy boundaries
 
@@ -471,12 +481,12 @@ comparison run are reviewed.
 
 ## Post-release backlog
 
-Named saved views and multiple filter presets are complete. They are
-browser-local, capped at 50, and covered by component behavior tests.
+Named saved views, multiple filter presets, and accepted-finding review state
+are complete. Saved views are browser-local and capped at 50. Review decisions
+persist in SQLite or PostgreSQL with acknowledgement and suppression expiry.
 
 Remaining:
 
-- acknowledge, suppress, and expiry rules for accepted findings;
 - persisted “new since last review” trend snapshots;
 - per-tool slow thresholds and project-specific rule packs;
 - conservative near-duplicate request clustering beyond exact normalization;

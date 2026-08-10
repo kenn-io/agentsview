@@ -18,6 +18,8 @@ export type DbIssueReviewFinding = {
   reason_code: string;
   recommendation: string;
   recommendation_type: string;
+  review_state: string;
+  review_state_expires_at?: string;
   session_count: number;
   severity: string;
   signature: string;

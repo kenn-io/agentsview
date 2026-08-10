@@ -26,6 +26,8 @@ func (s *Server) registerAnalyticsRoutes() {
 	get(s, group, "/signals", "Get signal analytics", s.humaAnalyticsSignals)
 	get(s, group, "/signal-sessions", "Get signal session examples", s.humaAnalyticsSignalSessions)
 	get(s, group, "/issue-review", "Get proactive issue review", s.humaAnalyticsIssueReview)
+	put(s, group, "/issue-review/findings/{id}/state", "Set issue review finding state", s.humaPutIssueReviewFindingState)
+	deleteRoute(s, group, "/issue-review/findings/{id}/state", "Reopen issue review finding", s.humaDeleteIssueReviewFindingState)
 }
 
 type analyticsGranularity string
@@ -91,6 +93,7 @@ type analyticsIssueReviewInput struct {
 	Severity           string `query:"severity" enum:"high,medium,low" doc:"Finding severity"`
 	Confidence         string `query:"confidence" enum:"high,medium,low" doc:"Finding confidence"`
 	Status             string `query:"status" enum:"open,recovered,recurring,observed" doc:"Finding status"`
+	ReviewState        string `query:"review_state" enum:"active,acknowledged,suppressed" doc:"User review state; suppressed findings are hidden when omitted"`
 	RecommendationType string `query:"recommendation_type" enum:"skill,script,rule,tool_fix" doc:"Suggested action type"`
 	MinOccurrences     int    `query:"min_occurrences" minimum:"1" default:"1" doc:"Minimum repeated occurrences"`
 	MinSessions        int    `query:"min_sessions" minimum:"1" default:"1" doc:"Minimum distinct chats"`
@@ -102,8 +105,17 @@ type analyticsIssueReviewInput struct {
 	Limit              int    `query:"limit" minimum:"1" maximum:"100" default:"50" doc:"Maximum findings"`
 }
 
-type analyticsIssueReviewStore interface {
-	GetAnalyticsIssueReview(context.Context, db.AnalyticsFilter, db.IssueReviewQuery) (db.IssueReviewResponse, error)
+type issueReviewFindingStateInput struct {
+	ID   string `path:"id" pattern:"^[0-9a-f]{16}$" doc:"Stable finding ID"`
+	Body struct {
+		ReviewState     string `json:"review_state" enum:"acknowledged,suppressed" required:"true" doc:"Accepted finding state"`
+		FindingLastSeen string `json:"finding_last_seen" format:"date" required:"true" doc:"Finding last_seen snapshot"`
+		SuppressionDays *int   `json:"suppression_days,omitempty" doc:"Suppress for 1, 7, or 30 days; omit for permanent suppression"`
+	}
+}
+
+type issueReviewFindingStatePathInput struct {
+	ID string `path:"id" pattern:"^[0-9a-f]{16}$" doc:"Stable finding ID"`
 }
 
 func analyticsFilterFromInput(in AnalyticsFilterInput) (db.AnalyticsFilter, error) {
@@ -338,15 +350,11 @@ func (s *Server) humaAnalyticsIssueReview(
 	if err != nil {
 		return nil, err
 	}
-	store, ok := s.db.(analyticsIssueReviewStore)
-	if !ok {
-		return nil, apiError(http.StatusNotImplemented, "issue review is not supported by this store")
-	}
 	reason := in.Category
 	if reason == "" {
 		reason = in.Reason
 	}
-	result, err := store.GetAnalyticsIssueReview(ctx, f, db.IssueReviewQuery{
+	result, err := s.db.GetAnalyticsIssueReview(ctx, f, db.IssueReviewQuery{
 		SessionID:           in.SessionID,
 		Folder:              in.Folder,
 		Reason:              reason,
@@ -356,6 +364,7 @@ func (s *Server) humaAnalyticsIssueReview(
 		Severity:            in.Severity,
 		Confidence:          in.Confidence,
 		Status:              in.Status,
+		ReviewState:         in.ReviewState,
 		RecommendationType:  in.RecommendationType,
 		MinOccurrences:      in.MinOccurrences,
 		MinSessions:         in.MinSessions,
@@ -370,4 +379,37 @@ func (s *Server) humaAnalyticsIssueReview(
 		return nil, internalError("analytics issue review error", err)
 	}
 	return &jsonOutput[db.IssueReviewResponse]{Body: result}, nil
+}
+
+func (s *Server) humaPutIssueReviewFindingState(
+	ctx context.Context,
+	in *issueReviewFindingStateInput,
+) (*jsonOutput[db.IssueReviewFindingState], error) {
+	state, err := db.NewIssueReviewFindingState(
+		in.ID, in.Body.ReviewState, in.Body.FindingLastSeen,
+		in.Body.SuppressionDays, time.Now(),
+	)
+	if err != nil {
+		return nil, apiError(http.StatusBadRequest, err.Error())
+	}
+	if err := s.db.PutIssueReviewFindingState(ctx, state); err != nil {
+		if handled := handleHumaReadOnly(err); handled != nil {
+			return nil, handled
+		}
+		return nil, internalError("save issue review finding state", err)
+	}
+	return &jsonOutput[db.IssueReviewFindingState]{Body: state}, nil
+}
+
+func (s *Server) humaDeleteIssueReviewFindingState(
+	ctx context.Context,
+	in *issueReviewFindingStatePathInput,
+) (*noContentOutput, error) {
+	if err := s.db.DeleteIssueReviewFindingState(ctx, in.ID); err != nil {
+		if handled := handleHumaReadOnly(err); handled != nil {
+			return nil, handled
+		}
+		return nil, internalError("delete issue review finding state", err)
+	}
+	return &noContentOutput{Status: http.StatusNoContent}, nil
 }

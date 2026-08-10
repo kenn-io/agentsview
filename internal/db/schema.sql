@@ -697,6 +697,17 @@ CREATE TABLE IF NOT EXISTS starred_sessions (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
+-- Issue Review curation: detector status stays derived; user decisions persist.
+CREATE TABLE IF NOT EXISTS issue_review_finding_states (
+    finding_id         TEXT PRIMARY KEY,
+    review_state       TEXT NOT NULL CHECK (
+        review_state IN ('acknowledged', 'suppressed')
+    ),
+    accepted_last_seen TEXT NOT NULL,
+    suppressed_until   TEXT NOT NULL DEFAULT '',
+    updated_at         TEXT NOT NULL
+);
+
 -- Excluded sessions: tracks session IDs that were permanently
 -- deleted by the user so the sync engine does not re-import them.
 CREATE TABLE IF NOT EXISTS excluded_sessions (

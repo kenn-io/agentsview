@@ -9,6 +9,7 @@ export type DbIssueReviewFacets = {
   folder: Array<DbIssueFacet>;
   outcome: Array<DbIssueFacet>;
   recommendation_type: Array<DbIssueFacet>;
+  review_state: Array<DbIssueFacet>;
   session: Array<DbIssueFacet>;
   severity: Array<DbIssueFacet>;
   source: Array<DbIssueFacet>;

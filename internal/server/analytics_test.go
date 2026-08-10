@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -18,6 +19,29 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 )
+
+func TestIssueReviewFindingStateHTTP(t *testing.T) {
+	te := setup(t)
+	const path = "/api/v1/analytics/issue-review/findings/0123456789abcdef/state"
+
+	w := te.put(t, path, `{"review_state":"suppressed","finding_last_seen":"2026-08-10","suppression_days":7}`)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	var state db.IssueReviewFindingState
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &state))
+	assert.Equal(t, db.IssueReviewStateSuppressed, state.ReviewState)
+	assert.NotEmpty(t, state.SuppressedUntil)
+
+	w = te.put(t, path, `{"review_state":"suppressed","finding_last_seen":"2026-08-10","suppression_days":2}`)
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+
+	w = te.del(t, path)
+	require.Equal(t, http.StatusNoContent, w.Code, "body: %s", w.Body.String())
+	var count int
+	require.NoError(t, te.db.Reader().QueryRow(
+		"SELECT COUNT(*) FROM issue_review_finding_states",
+	).Scan(&count))
+	assert.Zero(t, count)
+}
 
 const basePath = "/api/v1/analytics/"
 

@@ -27,12 +27,18 @@ describe("IssueReviewPanel proactive detector contract", () => {
   it("sends every issue filter to the server", () => {
     for (const field of [
       "sessionId", "folder", "category", "tool", "source", "outcome", "severity", "confidence",
-      "status", "recommendationType", "minOccurrences", "minSessions",
+      "status", "reviewState", "recommendationType", "minOccurrences", "minSessions",
       "minProjects", "minWastedMs", "sort",
     ]) {
       expect(issueReviewSource).toContain(`${field}:`);
     }
     expect(issueReviewSource).toContain("getApiV1AnalyticsIssueReview");
+  });
+
+  it("persists accepted finding decisions through typed routes", () => {
+    expect(issueReviewSource).toContain("putApiV1AnalyticsIssueReviewFindingsIdState");
+    expect(issueReviewSource).toContain("deleteApiV1AnalyticsIssueReviewFindingsIdState");
+    expect(issueReviewSource).toContain("finding_last_seen: finding.last_seen");
   });
 
   it("forces manual refresh and uses the analysis cache for background refreshes", () => {

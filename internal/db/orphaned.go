@@ -1078,8 +1078,8 @@ func (d *DB) CopyExcludedSessionsFrom(
 // CopySessionMetadataFrom merges user-managed data from the
 // source DB into sessions that were re-synced into this DB.
 // This preserves display_name, deleted_at, starred_sessions, pinned_messages,
-// archive metadata, project identity observations, and worktree project
-// mappings across full DB rebuilds. Immutable project snapshots are restored
+// Issue Review decisions, archive metadata, project identity observations, and
+// worktree project mappings across full DB rebuilds. Immutable project snapshots are restored
 // only from source versions that recorded parser-source labels reliably.
 func (d *DB) CopySessionMetadataFrom(
 	sourcePath string,
@@ -1453,6 +1453,24 @@ func (d *DB) CopySessionMetadataFrom(
 				created_at = excluded.created_at,
 				updated_at = excluded.updated_at`); err != nil {
 			return fmt.Errorf("copying worktree project mappings: %w", err)
+		}
+	}
+
+	if oldDBHasTable(ctx, tx, "issue_review_finding_states") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO main.issue_review_finding_states
+				(finding_id, review_state, accepted_last_seen,
+				 suppressed_until, updated_at)
+			SELECT finding_id, review_state, accepted_last_seen,
+				COALESCE(suppressed_until,''), updated_at
+			FROM old_db.issue_review_finding_states
+			WHERE true
+			ON CONFLICT(finding_id) DO UPDATE SET
+				review_state = excluded.review_state,
+				accepted_last_seen = excluded.accepted_last_seen,
+				suppressed_until = excluded.suppressed_until,
+				updated_at = excluded.updated_at`); err != nil {
+			return fmt.Errorf("copying issue review finding states: %w", err)
 		}
 	}
 

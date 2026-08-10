@@ -1411,6 +1411,7 @@ var readOnlyRequiredTables = []string{
 	"insights",
 	"pinned_messages",
 	"starred_sessions",
+	"issue_review_finding_states",
 	"excluded_sessions",
 	"worktree_project_mappings",
 	"archive_metadata",

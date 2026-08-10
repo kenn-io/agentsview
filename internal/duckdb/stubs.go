@@ -8,6 +8,12 @@ import (
 
 func (s *Store) InsertInsight(_ db.Insight) (int64, error) { return 0, db.ErrReadOnly }
 func (s *Store) DeleteInsight(_ int64) error               { return db.ErrReadOnly }
+func (s *Store) PutIssueReviewFindingState(_ context.Context, _ db.IssueReviewFindingState) error {
+	return db.ErrReadOnly
+}
+func (s *Store) DeleteIssueReviewFindingState(_ context.Context, _ string) error {
+	return db.ErrReadOnly
+}
 func (s *Store) ListInsights(_ context.Context, _ db.InsightFilter) ([]db.Insight, error) {
 	return []db.Insight{}, nil
 }

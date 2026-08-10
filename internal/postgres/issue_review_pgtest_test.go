@@ -6,12 +6,32 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
 )
+
+func TestIssueReviewFindingStatePersistence(t *testing.T) {
+	store := setupIssueReviewStore(t)
+	days := 7
+	state, err := db.NewIssueReviewFindingState(
+		"0123456789abcdef", db.IssueReviewStateSuppressed,
+		"2026-08-10", &days,
+		time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+	)
+	require.NoError(t, err)
+	require.NoError(t, store.PutIssueReviewFindingState(context.Background(), state))
+	states, err := store.issueReviewFindingStates(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []db.IssueReviewFindingState{state}, states)
+	require.NoError(t, store.DeleteIssueReviewFindingState(context.Background(), state.FindingID))
+	states, err = store.issueReviewFindingStates(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, states)
+}
 
 const issueReviewSchema = "agentsview_issue_review_test"
 

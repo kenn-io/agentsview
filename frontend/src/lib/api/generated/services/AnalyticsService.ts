@@ -6,6 +6,7 @@ import type { DbActivityResponse } from '../models/DbActivityResponse';
 import type { DbAnalyticsSummary } from '../models/DbAnalyticsSummary';
 import type { DbHeatmapResponse } from '../models/DbHeatmapResponse';
 import type { DbHourOfWeekResponse } from '../models/DbHourOfWeekResponse';
+import type { DbIssueReviewFindingState } from '../models/DbIssueReviewFindingState';
 import type { DbIssueReviewResponse } from '../models/DbIssueReviewResponse';
 import type { DbProjectsAnalyticsResponse } from '../models/DbProjectsAnalyticsResponse';
 import type { DbSessionShapeResponse } from '../models/DbSessionShapeResponse';
@@ -15,6 +16,7 @@ import type { DbSkillsAnalyticsResponse } from '../models/DbSkillsAnalyticsRespo
 import type { DbToolsAnalyticsResponse } from '../models/DbToolsAnalyticsResponse';
 import type { DbTopSessionsResponse } from '../models/DbTopSessionsResponse';
 import type { DbVelocityResponse } from '../models/DbVelocityResponse';
+import type { IssueReviewFindingStateInputBody } from '../models/IssueReviewFindingStateInputBody';
 import type { CancelablePromise } from '../core/CancelablePromise';
 import { OpenAPI } from '../core/OpenAPI';
 import { request as __request } from '../core/request';
@@ -435,6 +437,7 @@ export class AnalyticsService {
     severity,
     confidence,
     status,
+    reviewState,
     recommendationType,
     minOccurrences = 1,
     minSessions = 1,
@@ -550,6 +553,10 @@ export class AnalyticsService {
      */
     status?: 'open' | 'recovered' | 'recurring' | 'observed',
     /**
+     * User review state; suppressed findings are hidden when omitted
+     */
+    reviewState?: 'active' | 'acknowledged' | 'suppressed',
+    /**
      * Suggested action type
      */
     recommendationType?: 'skill' | 'script' | 'rule' | 'tool_fix',
@@ -616,6 +623,7 @@ export class AnalyticsService {
         'severity': severity,
         'confidence': confidence,
         'status': status,
+        'review_state': reviewState,
         'recommendation_type': recommendationType,
         'min_occurrences': minOccurrences,
         'min_sessions': minSessions,
@@ -626,6 +634,78 @@ export class AnalyticsService {
         'offset': offset,
         'limit': limit,
       },
+      errors: {
+        400: `Bad Request`,
+        401: `Unauthorized`,
+        403: `Forbidden`,
+        404: `Not Found`,
+        409: `Conflict`,
+        422: `Unprocessable Entity`,
+        500: `Internal Server Error`,
+        501: `Not Implemented`,
+        502: `Bad Gateway`,
+        503: `Service Unavailable`,
+        504: `Gateway Timeout`,
+      },
+    });
+  }
+  /**
+   * Reopen issue review finding
+   * @returns void
+   * @throws ApiError
+   */
+  public static deleteApiV1AnalyticsIssueReviewFindingsIdState({
+    id,
+  }: {
+    /**
+     * Stable finding ID
+     */
+    id: string,
+  }): CancelablePromise<void> {
+    return __request(OpenAPI, {
+      method: 'DELETE',
+      url: '/api/v1/analytics/issue-review/findings/{id}/state',
+      path: {
+        'id': id,
+      },
+      errors: {
+        400: `Bad Request`,
+        401: `Unauthorized`,
+        403: `Forbidden`,
+        404: `Not Found`,
+        409: `Conflict`,
+        422: `Unprocessable Entity`,
+        500: `Internal Server Error`,
+        501: `Not Implemented`,
+        502: `Bad Gateway`,
+        503: `Service Unavailable`,
+        504: `Gateway Timeout`,
+      },
+    });
+  }
+  /**
+   * Set issue review finding state
+   * @returns DbIssueReviewFindingState OK
+   * @throws ApiError
+   */
+  public static putApiV1AnalyticsIssueReviewFindingsIdState({
+    id,
+    requestBody,
+  }: {
+    /**
+     * Stable finding ID
+     */
+    id: string,
+    requestBody: IssueReviewFindingStateInputBody,
+  }): CancelablePromise<DbIssueReviewFindingState> {
+    return __request(OpenAPI, {
+      method: 'PUT',
+      url: '/api/v1/analytics/issue-review/findings/{id}/state',
+      path: {
+        'id': id,
+      },
+      body: requestBody,
+      mediaType: 'application/json',
       errors: {
         400: `Bad Request`,
         401: `Unauthorized`,

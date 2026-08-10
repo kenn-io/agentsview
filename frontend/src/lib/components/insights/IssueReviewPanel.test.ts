@@ -3,7 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { mount, tick, unmount } from "svelte";
 import type { IssueReviewResponse } from "../../api/types.js";
 
-const mocks = vi.hoisted(() => ({ getIssueReview: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  getIssueReview: vi.fn(),
+  putFindingState: vi.fn(),
+  deleteFindingState: vi.fn(),
+}));
 
 vi.mock("../../api/generated/index.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../api/generated/index.js")>();
@@ -11,6 +15,8 @@ vi.mock("../../api/generated/index.js", async (importOriginal) => {
     ...original,
     AnalyticsService: {
       getApiV1AnalyticsIssueReview: mocks.getIssueReview,
+      putApiV1AnalyticsIssueReviewFindingsIdState: mocks.putFindingState,
+      deleteApiV1AnalyticsIssueReviewFindingsIdState: mocks.deleteFindingState,
     },
   };
 });
@@ -32,6 +38,7 @@ function filters(overrides: Record<string, string> = {}) {
     severity: "",
     confidence: "",
     status: "",
+    reviewState: "",
     recommendationType: "",
     minOccurrences: "2",
     minSessions: "2",
@@ -66,11 +73,35 @@ const response: IssueReviewResponse = {
     ],
     confidence: [],
     status: [],
+    review_state: [],
     recommendation_type: [],
     session: [],
     folder: [],
     outcome: [],
   },
+};
+
+const finding = {
+  id: "0123456789abcdef",
+  reason_code: "timeout",
+  tool: "shell_command",
+  signature: "command timed out",
+  severity: "medium" as const,
+  confidence: "high" as const,
+  status: "recurring" as const,
+  review_state: "active" as const,
+  recommendation_type: "script" as const,
+  recommendation: "Add a bounded retry.",
+  sources: ["tool_result"],
+  occurrences: 2,
+  session_count: 2,
+  project_count: 1,
+  incomplete_session_count: 0,
+  total_duration_ms: 1_000,
+  wasted_duration_ms: 0,
+  duration_coverage: 1,
+  last_seen: "2026-08-10",
+  evidence: [],
 };
 
 let component: ReturnType<typeof mount> | undefined;
@@ -118,6 +149,70 @@ async function nameView(name: string) {
 beforeEach(() => {
   localStorage.clear();
   mocks.getIssueReview.mockReset().mockResolvedValue(response);
+  mocks.putFindingState.mockReset().mockResolvedValue({});
+  mocks.deleteFindingState.mockReset().mockResolvedValue(undefined);
+});
+
+describe("IssueReviewPanel finding review state", () => {
+  beforeEach(() => {
+    mocks.getIssueReview.mockResolvedValue({
+      ...response,
+      total_findings: 1,
+      findings: [finding],
+      facets: {
+        ...response.facets,
+        review_state: [{ value: "active", count: 1 }],
+      },
+    });
+  });
+
+  it("acknowledges the current finding snapshot", async () => {
+    await mountPanel();
+    button("Acknowledge").click();
+    await settle();
+
+    expect(mocks.putFindingState).toHaveBeenCalledWith({
+      id: finding.id,
+      requestBody: {
+        review_state: "acknowledged",
+        finding_last_seen: finding.last_seen,
+        suppression_days: undefined,
+      },
+    });
+  });
+
+  it("suppresses for the selected duration", async () => {
+    await mountPanel();
+    await choose("Suppress for", "30 days");
+    button("Suppress").click();
+    await settle();
+
+    expect(mocks.putFindingState).toHaveBeenCalledWith({
+      id: finding.id,
+      requestBody: {
+        review_state: "suppressed",
+        finding_last_seen: finding.last_seen,
+        suppression_days: 30,
+      },
+    });
+  });
+
+  it("reopens a reviewed finding", async () => {
+    mocks.getIssueReview.mockResolvedValue({
+      ...response,
+      total_findings: 1,
+      findings: [{ ...finding, review_state: "acknowledged" }],
+      facets: {
+        ...response.facets,
+        review_state: [{ value: "acknowledged", count: 1 }],
+      },
+    });
+    await mountPanel();
+    button("Reopen").click();
+    await settle();
+
+    expect(mocks.deleteFindingState).toHaveBeenCalledWith({ id: finding.id });
+  });
 });
 
 afterEach(async () => {

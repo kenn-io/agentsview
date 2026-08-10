@@ -203,6 +203,16 @@ CREATE TABLE IF NOT EXISTS starred_sessions (
         REFERENCES sessions(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS issue_review_finding_states (
+    finding_id         TEXT PRIMARY KEY,
+    review_state       TEXT NOT NULL CHECK (
+        review_state IN ('acknowledged', 'suppressed')
+    ),
+    accepted_last_seen TEXT NOT NULL,
+    suppressed_until   TEXT NOT NULL DEFAULT '',
+    updated_at         TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS excluded_sessions (
     id         TEXT PRIMARY KEY,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

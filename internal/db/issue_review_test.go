@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -474,6 +475,121 @@ func TestFilterIssueReviewResponseControlsAndPagination(t *testing.T) {
 	assert.Equal(t, "duration", last.Findings[0].ID)
 }
 
+func TestIssueReviewStateOverlayAndExpiry(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	base := IssueReviewResponse{Findings: []IssueReviewFinding{
+		{ID: "acknowledged0001", LastSeen: "2026-08-10", Occurrences: 1, SessionCount: 1},
+		{ID: "advanced00000002", LastSeen: "2026-08-11", Occurrences: 1, SessionCount: 1},
+		{ID: "suppressed000003", LastSeen: "2026-08-10", Occurrences: 1, SessionCount: 1},
+		{ID: "expired000000004", LastSeen: "2026-08-10", Occurrences: 1, SessionCount: 1},
+		{ID: "permanent0000005", LastSeen: "2026-08-10", Occurrences: 1, SessionCount: 1},
+	}}
+	states := []IssueReviewFindingState{
+		{FindingID: "acknowledged0001", ReviewState: IssueReviewStateAcknowledged, AcceptedLastSeen: "2026-08-10"},
+		{FindingID: "advanced00000002", ReviewState: IssueReviewStateAcknowledged, AcceptedLastSeen: "2026-08-10"},
+		{FindingID: "suppressed000003", ReviewState: IssueReviewStateSuppressed, SuppressedUntil: now.Add(time.Hour).Format(time.RFC3339)},
+		{FindingID: "expired000000004", ReviewState: IssueReviewStateSuppressed, SuppressedUntil: now.Add(-time.Second).Format(time.RFC3339)},
+		{FindingID: "permanent0000005", ReviewState: IssueReviewStateSuppressed},
+	}
+
+	overlaid := ApplyIssueReviewStates(base, states, now)
+	assert.Equal(t, "", base.Findings[0].ReviewState, "cached base must not be mutated")
+	assert.Equal(t, []string{
+		IssueReviewStateAcknowledged, IssueReviewStateActive,
+		IssueReviewStateSuppressed, IssueReviewStateActive,
+		IssueReviewStateSuppressed,
+	}, []string{
+		overlaid.Findings[0].ReviewState, overlaid.Findings[1].ReviewState,
+		overlaid.Findings[2].ReviewState, overlaid.Findings[3].ReviewState,
+		overlaid.Findings[4].ReviewState,
+	})
+
+	visible := filterIssueReviewResponse(overlaid, IssueReviewQuery{Limit: 100})
+	assert.Equal(t, 3, visible.TotalFindings)
+	suppressed := filterIssueReviewResponse(overlaid, IssueReviewQuery{ReviewState: IssueReviewStateSuppressed, Limit: 100})
+	assert.Equal(t, 2, suppressed.TotalFindings)
+	assert.Equal(t, 2, facetCount(overlaid.Facets.ReviewState, IssueReviewStateSuppressed))
+}
+
+func TestNewIssueReviewFindingStateValidation(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	days := 7
+	state, err := NewIssueReviewFindingState(
+		"0123456789abcdef", IssueReviewStateSuppressed,
+		"2026-08-10", &days, now,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "2026-08-17T12:00:00Z", state.SuppressedUntil)
+
+	badDays := 2
+	_, err = NewIssueReviewFindingState("0123456789abcdef", IssueReviewStateSuppressed, "2026-08-10", &badDays, now)
+	assert.EqualError(t, err, "suppression_days must be 1, 7, or 30")
+	_, err = NewIssueReviewFindingState("bad", IssueReviewStateAcknowledged, "2026-08-10", nil, now)
+	assert.EqualError(t, err, "invalid finding id")
+	_, err = NewIssueReviewFindingState("0123456789abcdef", IssueReviewStateAcknowledged, "2026-08-10", &days, now)
+	assert.EqualError(t, err, "suppression_days requires suppressed state")
+}
+
+func TestGetAnalyticsIssueReviewRefreshesReviewStateOverCachedAnalysis(t *testing.T) {
+	database := testDB(t)
+	started := "2026-08-10T10:00:00Z"
+	insertSession(t, database, "state-s1", "alpha", func(session *Session) {
+		session.StartedAt = &started
+		session.MessageCount = 2
+	})
+	insertMessages(t, database,
+		userMsgAt("state-s1", 0, "Open the required missing file", started),
+		Message{SessionID: "state-s1", Ordinal: 1, Role: "assistant", Content: "opening", Timestamp: started, HasToolUse: true,
+			ToolCalls: []ToolCall{{SessionID: "state-s1", ToolName: "shell_command", ToolUseID: "state-call", InputJSON: `{"command":"open missing.txt"}`, ResultEvents: []ToolResultEvent{{ToolUseID: "state-call", Source: "tool_execution", Status: "errored", Content: "file not found", Timestamp: started}}}}},
+	)
+	filter := AnalyticsFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+	query := IssueReviewQuery{Reason: "missing_file", Limit: 10}
+	first, err := database.GetAnalyticsIssueReview(context.Background(), filter, query)
+	require.NoError(t, err)
+	require.Len(t, first.Findings, 1)
+
+	state, err := NewIssueReviewFindingState(first.Findings[0].ID, IssueReviewStateAcknowledged, first.Findings[0].LastSeen, nil, time.Now())
+	require.NoError(t, err)
+	require.NoError(t, database.PutIssueReviewFindingState(context.Background(), state))
+	acknowledged, err := database.GetAnalyticsIssueReview(context.Background(), filter, query)
+	require.NoError(t, err)
+	require.Len(t, acknowledged.Findings, 1)
+	assert.Equal(t, IssueReviewStateAcknowledged, acknowledged.Findings[0].ReviewState)
+	assert.Equal(t, first.GeneratedAt, acknowledged.GeneratedAt)
+
+	state.ReviewState = IssueReviewStateSuppressed
+	state.SuppressedUntil = ""
+	require.NoError(t, database.PutIssueReviewFindingState(context.Background(), state))
+	hidden, err := database.GetAnalyticsIssueReview(context.Background(), filter, query)
+	require.NoError(t, err)
+	assert.Empty(t, hidden.Findings)
+	query.ReviewState = IssueReviewStateSuppressed
+	suppressed, err := database.GetAnalyticsIssueReview(context.Background(), filter, query)
+	require.NoError(t, err)
+	require.Len(t, suppressed.Findings, 1)
+
+	require.NoError(t, database.DeleteIssueReviewFindingState(context.Background(), state.FindingID))
+	query.ReviewState = ""
+	reopened, err := database.GetAnalyticsIssueReview(context.Background(), filter, query)
+	require.NoError(t, err)
+	require.Len(t, reopened.Findings, 1)
+	assert.Equal(t, IssueReviewStateActive, reopened.Findings[0].ReviewState)
+}
+
+func TestCopySessionMetadataFromPreservesIssueReviewState(t *testing.T) {
+	source := testDB(t)
+	destination := testDB(t)
+	state := IssueReviewFindingState{
+		FindingID: "0123456789abcdef", ReviewState: IssueReviewStateSuppressed,
+		AcceptedLastSeen: "2026-08-10", UpdatedAt: "2026-08-10T12:00:00Z",
+	}
+	require.NoError(t, source.PutIssueReviewFindingState(context.Background(), state))
+	require.NoError(t, destination.CopySessionMetadataFrom(source.path))
+	states, err := destination.issueReviewFindingStates(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []IssueReviewFindingState{state}, states)
+}
+
 func TestGetAnalyticsIssueReviewFiltersAndEvidence(t *testing.T) {
 	database := testDB(t)
 	started := "2026-08-01T10:00:00Z"
@@ -692,6 +808,15 @@ func findingsByReason(findings []IssueReviewFinding) map[string][]IssueReviewFin
 		out[finding.ReasonCode] = append(out[finding.ReasonCode], finding)
 	}
 	return out
+}
+
+func facetCount(facets []IssueFacet, value string) int {
+	for _, facet := range facets {
+		if facet.Value == value {
+			return facet.Count
+		}
+	}
+	return 0
 }
 
 func ms(value int64) *int64 { return &value }

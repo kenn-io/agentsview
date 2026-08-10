@@ -335,6 +335,7 @@ export interface SignalsAnalyticsResponse {
 export type IssueSeverity = "high" | "medium" | "low";
 export type IssueConfidence = "high" | "medium" | "low";
 export type IssueStatus = "open" | "recovered" | "recurring" | "observed";
+export type IssueReviewState = "active" | "acknowledged" | "suppressed";
 export type IssueRecommendationType = "skill" | "script" | "rule" | "tool_fix";
 
 export interface IssueFacet {
@@ -368,6 +369,8 @@ export interface IssueReviewFinding {
   severity: IssueSeverity;
   confidence: IssueConfidence;
   status: IssueStatus;
+  review_state: IssueReviewState;
+  review_state_expires_at?: string;
   recommendation_type: IssueRecommendationType;
   recommendation: string;
   github_reference?: string;
@@ -406,6 +409,7 @@ export interface IssueReviewResponse {
     severity: IssueFacet[];
     confidence: IssueFacet[];
     status: IssueFacet[];
+    review_state: IssueFacet[];
     recommendation_type: IssueFacet[];
     session: IssueFacet[];
     folder: IssueFacet[];

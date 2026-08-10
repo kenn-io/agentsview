@@ -11,8 +11,8 @@ import (
 // GetAnalyticsIssueReview runs the shared detector over the derived mirror.
 func (s *Store) GetAnalyticsIssueReview(ctx context.Context, f db.AnalyticsFilter, q db.IssueReviewQuery) (db.IssueReviewResponse, error) {
 	key := db.IssueReviewCacheKey(f, q)
-	if cached, ok := s.issueReviewCache.Get(key, q); ok {
-		return cached, nil
+	if cached, ok := s.issueReviewCache.Get(key, q.Refresh); ok {
+		return db.FilterIssueReview(cached, q), nil
 	}
 	sessions, err := s.issueReviewSessions(ctx, f, q)
 	if err != nil {

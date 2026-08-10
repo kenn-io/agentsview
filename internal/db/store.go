@@ -88,6 +88,9 @@ type Store interface {
 	GetAnalyticsTopSessions(ctx context.Context, f AnalyticsFilter, metric string) (TopSessionsResponse, error)
 	GetAnalyticsSignals(ctx context.Context, f AnalyticsFilter) (SignalsAnalyticsResponse, error)
 	GetAnalyticsSignalSessions(ctx context.Context, f AnalyticsFilter, signal string, limit int) (SignalSessionsResponse, error)
+	GetAnalyticsIssueReview(ctx context.Context, f AnalyticsFilter, q IssueReviewQuery) (IssueReviewResponse, error)
+	PutIssueReviewFindingState(ctx context.Context, state IssueReviewFindingState) error
+	DeleteIssueReviewFindingState(ctx context.Context, findingID string) error
 	GetTrendsTerms(ctx context.Context, f AnalyticsFilter, terms []TrendTermInput, granularity string) (TrendsTermsResponse, error)
 	GetActivityReport(ctx context.Context, f AnalyticsFilter, q activity.Query) (activity.Report, error)
 	RecentEdits(ctx context.Context, p RecentEditsParams) (RecentEditsResult, error)

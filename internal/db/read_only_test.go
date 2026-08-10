@@ -238,6 +238,15 @@ func TestOpenReadOnlyWriteMethodsReturnErrReadOnly(t *testing.T) {
 	requireReadOnlyOp(t, "BulkStarSessions", func() error {
 		return readonly.BulkStarSessions(nil)
 	})
+	requireReadOnlyOp(t, "PutIssueReviewFindingState", func() error {
+		return readonly.PutIssueReviewFindingState(context.Background(), IssueReviewFindingState{
+			FindingID: "0123456789abcdef", ReviewState: IssueReviewStateAcknowledged,
+			AcceptedLastSeen: "2026-08-10", UpdatedAt: "2026-08-10T12:00:00Z",
+		})
+	})
+	requireReadOnlyOp(t, "DeleteIssueReviewFindingState", func() error {
+		return readonly.DeleteIssueReviewFindingState(context.Background(), "0123456789abcdef")
+	})
 	requireReadOnlyOp(t, "DeleteParserExcludedSessions", func() error {
 		_, err := readonly.DeleteParserExcludedSessions(nil)
 		return err

@@ -55,6 +55,11 @@ debounced data-sync event, every hour while open, and on manual retry.
 Background refreshes use the one-hour analysis cache so frequent sync events
 cannot trigger repeated full-archive scans; **Refresh now** bypasses the cache.
 If a refresh fails, the last successful result remains visible with a warning.
+Acknowledgement and suppression decisions are loaded separately on every
+request, so they take effect immediately without invalidating or mutating the
+cached detector result. Acknowledgements reopen when a finding appears on a
+later date. Suppression can last 1, 7, or 30 days, or remain permanent; hidden
+findings stay available through the review-state filter.
 
 Durations are measured only when start and completion events can be paired.
 For slow tools, occurrences count calls at least 30 seconds long, while p95 is

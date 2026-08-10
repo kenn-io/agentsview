@@ -43,6 +43,7 @@ type IssueReviewQuery struct {
 	Severity            string
 	Confidence          string
 	Status              string
+	ReviewState         string
 	RecommendationType  string
 	MinOccurrences      int
 	MinSessions         int
@@ -84,6 +85,7 @@ type IssueReviewFacets struct {
 	Severity           []IssueFacet `json:"severity" nullable:"false"`
 	Confidence         []IssueFacet `json:"confidence" nullable:"false"`
 	Status             []IssueFacet `json:"status" nullable:"false"`
+	ReviewState        []IssueFacet `json:"review_state" nullable:"false"`
 	RecommendationType []IssueFacet `json:"recommendation_type" nullable:"false"`
 	Session            []IssueFacet `json:"session" nullable:"false"`
 	Folder             []IssueFacet `json:"folder" nullable:"false"`
@@ -98,6 +100,8 @@ type IssueReviewFinding struct {
 	Severity               string                `json:"severity"`
 	Confidence             string                `json:"confidence"`
 	Status                 string                `json:"status"`
+	ReviewState            string                `json:"review_state"`
+	ReviewStateExpiresAt   string                `json:"review_state_expires_at,omitempty"`
 	RecommendationType     string                `json:"recommendation_type"`
 	Recommendation         string                `json:"recommendation"`
 	GitHubReference        string                `json:"github_reference,omitempty"`
@@ -114,6 +118,54 @@ type IssueReviewFinding struct {
 	LastSeen               string                `json:"last_seen"`
 	Evidence               []IssueReviewEvidence `json:"evidence" nullable:"false"`
 	rank                   int
+}
+
+const (
+	IssueReviewStateActive       = "active"
+	IssueReviewStateAcknowledged = "acknowledged"
+	IssueReviewStateSuppressed   = "suppressed"
+)
+
+type IssueReviewFindingState struct {
+	FindingID        string `json:"finding_id"`
+	ReviewState      string `json:"review_state"`
+	AcceptedLastSeen string `json:"accepted_last_seen"`
+	SuppressedUntil  string `json:"suppressed_until,omitempty"`
+	UpdatedAt        string `json:"updated_at"`
+}
+
+func NewIssueReviewFindingState(
+	findingID, reviewState, acceptedLastSeen string,
+	suppressionDays *int, now time.Time,
+) (IssueReviewFindingState, error) {
+	if len(findingID) != 16 || strings.IndexFunc(findingID, func(r rune) bool {
+		return r < '0' || r > '9' && r < 'a' || r > 'f'
+	}) >= 0 {
+		return IssueReviewFindingState{}, fmt.Errorf("invalid finding id")
+	}
+	if _, err := time.Parse(time.DateOnly, acceptedLastSeen); err != nil {
+		return IssueReviewFindingState{}, fmt.Errorf("invalid finding last_seen: use YYYY-MM-DD")
+	}
+	if reviewState != IssueReviewStateAcknowledged && reviewState != IssueReviewStateSuppressed {
+		return IssueReviewFindingState{}, fmt.Errorf("invalid review state")
+	}
+	if reviewState == IssueReviewStateAcknowledged && suppressionDays != nil {
+		return IssueReviewFindingState{}, fmt.Errorf("suppression_days requires suppressed state")
+	}
+	state := IssueReviewFindingState{
+		FindingID: findingID, ReviewState: reviewState,
+		AcceptedLastSeen: acceptedLastSeen,
+		UpdatedAt:        now.UTC().Format(time.RFC3339),
+	}
+	if reviewState == IssueReviewStateSuppressed && suppressionDays != nil {
+		switch *suppressionDays {
+		case 1, 7, 30:
+			state.SuppressedUntil = now.UTC().AddDate(0, 0, *suppressionDays).Format(time.RFC3339)
+		default:
+			return IssueReviewFindingState{}, fmt.Errorf("suppression_days must be 1, 7, or 30")
+		}
+	}
+	return state, nil
 }
 
 type IssueReviewEvidence struct {
@@ -171,8 +223,8 @@ type IssueReviewCache struct {
 	entry *issueReviewCacheEntry
 }
 
-func (c *IssueReviewCache) Get(key string, q IssueReviewQuery) (IssueReviewResponse, bool) {
-	if q.Refresh {
+func (c *IssueReviewCache) Get(key string, refresh bool) (IssueReviewResponse, bool) {
+	if refresh {
 		return IssueReviewResponse{}, false
 	}
 	c.mu.Lock()
@@ -180,7 +232,7 @@ func (c *IssueReviewCache) Get(key string, q IssueReviewQuery) (IssueReviewRespo
 	if c.entry == nil || c.entry.key != key || !time.Now().Before(c.entry.expiresAt) {
 		return IssueReviewResponse{}, false
 	}
-	return filterIssueReviewResponse(c.entry.response, q), true
+	return c.entry.response, true
 }
 
 func (c *IssueReviewCache) Put(key string, response IssueReviewResponse) {
@@ -885,12 +937,49 @@ func dedupeIssueCalls(rows []IssueReviewToolCall) ([]IssueReviewToolCall, int) {
 }
 
 func AnalyzeIssueReview(sessions []IssueReviewSession, messages []IssueReviewMessage, calls []IssueReviewToolCall, telemetry []IssueReviewTelemetry, q IssueReviewQuery) IssueReviewResponse {
-	return filterIssueReviewResponse(AnalyzeIssueReviewBase(sessions, messages, calls, telemetry), q)
+	return filterIssueReviewResponse(ApplyIssueReviewStates(AnalyzeIssueReviewBase(sessions, messages, calls, telemetry), nil, time.Now()), q)
 }
 
 // FilterIssueReview applies cheap result filters and pagination to a base analysis.
 func FilterIssueReview(response IssueReviewResponse, q IssueReviewQuery) IssueReviewResponse {
-	return filterIssueReviewResponse(response, q)
+	return filterIssueReviewResponse(ApplyIssueReviewStates(response, nil, time.Now()), q)
+}
+
+func FilterIssueReviewWithStates(response IssueReviewResponse, states []IssueReviewFindingState, q IssueReviewQuery, now time.Time) IssueReviewResponse {
+	return filterIssueReviewResponse(ApplyIssueReviewStates(response, states, now), q)
+}
+
+func ApplyIssueReviewStates(response IssueReviewResponse, states []IssueReviewFindingState, now time.Time) IssueReviewResponse {
+	byID := make(map[string]IssueReviewFindingState, len(states))
+	for _, state := range states {
+		byID[state.FindingID] = state
+	}
+	findings := make([]IssueReviewFinding, len(response.Findings))
+	counts := map[string]int{}
+	for i, finding := range response.Findings {
+		finding.ReviewState = IssueReviewStateActive
+		finding.ReviewStateExpiresAt = ""
+		if state, ok := byID[finding.ID]; ok {
+			switch state.ReviewState {
+			case IssueReviewStateAcknowledged:
+				if finding.LastSeen <= state.AcceptedLastSeen {
+					finding.ReviewState = IssueReviewStateAcknowledged
+				}
+			case IssueReviewStateSuppressed:
+				if state.SuppressedUntil == "" {
+					finding.ReviewState = IssueReviewStateSuppressed
+				} else if until, err := time.Parse(time.RFC3339, state.SuppressedUntil); err == nil && now.Before(until) {
+					finding.ReviewState = IssueReviewStateSuppressed
+					finding.ReviewStateExpiresAt = state.SuppressedUntil
+				}
+			}
+		}
+		counts[finding.ReviewState]++
+		findings[i] = finding
+	}
+	response.Findings = findings
+	response.Facets.ReviewState = issueFacetCounts(counts)
+	return response
 }
 
 // AnalyzeIssueReviewBase performs the expensive shared analysis before result filters.
@@ -1054,7 +1143,10 @@ func AnalyzeIssueReviewBase(sessions []IssueReviewSession, messages []IssueRevie
 func filterIssueReviewResponse(response IssueReviewResponse, q IssueReviewQuery) IssueReviewResponse {
 	filtered := make([]IssueReviewFinding, 0, len(response.Findings))
 	for _, finding := range response.Findings {
-		if q.Reason != "" && finding.ReasonCode != q.Reason || q.Tool != "" && finding.Tool != q.Tool || q.Source != "" && !containsIssueString(finding.Sources, q.Source) || q.Severity != "" && finding.Severity != q.Severity || q.Confidence != "" && finding.Confidence != q.Confidence || q.Status != "" && finding.Status != q.Status || q.RecommendationType != "" && finding.RecommendationType != q.RecommendationType || finding.Occurrences < max(1, q.MinOccurrences) || finding.SessionCount < max(1, q.MinSessions) || finding.ProjectCount < q.MinProjects || finding.WastedDurationMS < q.MinWastedDurationMS {
+		if finding.ReviewState == "" {
+			finding.ReviewState = IssueReviewStateActive
+		}
+		if q.Reason != "" && finding.ReasonCode != q.Reason || q.Tool != "" && finding.Tool != q.Tool || q.Source != "" && !containsIssueString(finding.Sources, q.Source) || q.Severity != "" && finding.Severity != q.Severity || q.Confidence != "" && finding.Confidence != q.Confidence || q.Status != "" && finding.Status != q.Status || q.ReviewState != "" && finding.ReviewState != q.ReviewState || q.ReviewState == "" && finding.ReviewState == IssueReviewStateSuppressed || q.RecommendationType != "" && finding.RecommendationType != q.RecommendationType || finding.Occurrences < max(1, q.MinOccurrences) || finding.SessionCount < max(1, q.MinSessions) || finding.ProjectCount < q.MinProjects || finding.WastedDurationMS < q.MinWastedDurationMS {
 			continue
 		}
 		filtered = append(filtered, finding)
@@ -1575,10 +1667,10 @@ func sanitizeTelemetryTail(body string) string {
 }
 
 func issueFacets(findings []IssueReviewFinding, sessions []IssueReviewSession) IssueReviewFacets {
-	maps := map[string]map[string]int{"category": {}, "tool": {}, "source": {}, "severity": {}, "confidence": {}, "status": {}, "recommendation_type": {}, "session": {}, "folder": {}, "outcome": {}}
+	maps := map[string]map[string]int{"category": {}, "tool": {}, "source": {}, "severity": {}, "confidence": {}, "status": {}, "review_state": {}, "recommendation_type": {}, "session": {}, "folder": {}, "outcome": {}}
 	labels := map[string]string{}
 	for _, finding := range findings {
-		for key, value := range map[string]string{"category": finding.ReasonCode, "tool": finding.Tool, "severity": finding.Severity, "confidence": finding.Confidence, "status": finding.Status, "recommendation_type": finding.RecommendationType} {
+		for key, value := range map[string]string{"category": finding.ReasonCode, "tool": finding.Tool, "severity": finding.Severity, "confidence": finding.Confidence, "status": finding.Status, "review_state": firstNonEmptyString(finding.ReviewState, IssueReviewStateActive), "recommendation_type": finding.RecommendationType} {
 			if value != "" {
 				maps[key][value]++
 			}
@@ -1623,32 +1715,103 @@ func issueFacets(findings []IssueReviewFinding, sessions []IssueReviewSession) I
 	}
 	return IssueReviewFacets{
 		Category: out["category"], Tool: out["tool"], Source: out["source"], Severity: out["severity"],
-		Confidence: out["confidence"], Status: out["status"],
+		Confidence: out["confidence"], Status: out["status"], ReviewState: out["review_state"],
 		RecommendationType: out["recommendation_type"], Session: out["session"], Folder: out["folder"],
 		Outcome: out["outcome"],
 	}
+}
+
+func issueFacetCounts(counts map[string]int) []IssueFacet {
+	values := make([]IssueFacet, 0, len(counts))
+	for value, count := range counts {
+		values = append(values, IssueFacet{Value: value, Count: count})
+	}
+	sort.Slice(values, func(i, j int) bool {
+		if values[i].Count != values[j].Count {
+			return values[i].Count > values[j].Count
+		}
+		return values[i].Value < values[j].Value
+	})
+	return values
 }
 
 // GetAnalyticsIssueReview implements the local archive query and optional
 // read-only Codex telemetry supplement.
 func (db *DB) GetAnalyticsIssueReview(ctx context.Context, f AnalyticsFilter, q IssueReviewQuery) (IssueReviewResponse, error) {
 	key := IssueReviewCacheKey(f, q)
-	if cached, ok := db.issueReviewCache.Get(key, q); ok {
-		return cached, nil
+	response, ok := db.issueReviewCache.Get(key, q.Refresh)
+	if !ok {
+		sessions, err := db.issueReviewSessions(ctx, f, q)
+		if err != nil {
+			return IssueReviewResponse{}, err
+		}
+		messages, calls, err := db.issueReviewRows(ctx, sessions)
+		if err != nil {
+			return IssueReviewResponse{}, err
+		}
+		telemetry, telemetryStatus := db.issueReviewTelemetry(ctx, sessions, calls)
+		response = AnalyzeIssueReviewBase(sessions, messages, calls, telemetry)
+		response.TelemetryStatus = telemetryStatus
+		db.issueReviewCache.Put(key, response)
 	}
-	sessions, err := db.issueReviewSessions(ctx, f, q)
+	states, err := db.issueReviewFindingStates(ctx)
 	if err != nil {
 		return IssueReviewResponse{}, err
 	}
-	messages, calls, err := db.issueReviewRows(ctx, sessions)
+	return filterIssueReviewResponse(ApplyIssueReviewStates(response, states, time.Now()), q), nil
+}
+
+func (db *DB) PutIssueReviewFindingState(ctx context.Context, state IssueReviewFindingState) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	_, err := db.getWriter().ExecContext(ctx, `
+		INSERT INTO issue_review_finding_states
+			(finding_id, review_state, accepted_last_seen, suppressed_until, updated_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(finding_id) DO UPDATE SET
+			review_state = excluded.review_state,
+			accepted_last_seen = excluded.accepted_last_seen,
+			suppressed_until = excluded.suppressed_until,
+			updated_at = excluded.updated_at`,
+		state.FindingID, state.ReviewState, state.AcceptedLastSeen,
+		state.SuppressedUntil, state.UpdatedAt,
+	)
 	if err != nil {
-		return IssueReviewResponse{}, err
+		return fmt.Errorf("saving issue review finding state: %w", err)
 	}
-	telemetry, telemetryStatus := db.issueReviewTelemetry(ctx, sessions, calls)
-	response := AnalyzeIssueReviewBase(sessions, messages, calls, telemetry)
-	response.TelemetryStatus = telemetryStatus
-	db.issueReviewCache.Put(key, response)
-	return filterIssueReviewResponse(response, q), nil
+	return nil
+}
+
+func (db *DB) DeleteIssueReviewFindingState(ctx context.Context, findingID string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if _, err := db.getWriter().ExecContext(ctx,
+		"DELETE FROM issue_review_finding_states WHERE finding_id = ?", findingID,
+	); err != nil {
+		return fmt.Errorf("deleting issue review finding state: %w", err)
+	}
+	return nil
+}
+
+func (db *DB) issueReviewFindingStates(ctx context.Context) ([]IssueReviewFindingState, error) {
+	rows, err := db.getReader().QueryContext(ctx, `
+		SELECT finding_id, review_state, accepted_last_seen,
+			COALESCE(suppressed_until,''), updated_at
+		FROM issue_review_finding_states`)
+	if err != nil {
+		return nil, fmt.Errorf("querying issue review finding states: %w", err)
+	}
+	defer rows.Close()
+	var states []IssueReviewFindingState
+	for rows.Next() {
+		var state IssueReviewFindingState
+		if err := rows.Scan(&state.FindingID, &state.ReviewState,
+			&state.AcceptedLastSeen, &state.SuppressedUntil, &state.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scanning issue review finding state: %w", err)
+		}
+		states = append(states, state)
+	}
+	return states, rows.Err()
 }
 
 // IssueReviewCacheKey identifies the expensive base-analysis scope.
