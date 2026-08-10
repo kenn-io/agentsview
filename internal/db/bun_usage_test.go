@@ -112,6 +112,20 @@ func TestGetDailyUsageKeepsPricingRowsAndIdentityInOneView(t *testing.T) {
 	assert.Equal(t, 2, backend.attempts)
 }
 
+func TestLoadBunNormalizedDailyUsageRowsStreamsWithoutCandidateCounts(t *testing.T) {
+	database := testDB(t)
+	hook := new(countingQueryHook)
+	store := database.bunReader.WithQueryHook(hook)
+	common := NewBunStore(&sessionContractBackend{store: store})
+	filter := UsageFilter{Timezone: "UTC"}
+
+	_, err := common.loadBunNormalizedDailyUsageRows(
+		t.Context(), store, filter, filter,
+	)
+	require.NoError(t, err)
+	require.Len(t, hook.queries, 2)
+}
+
 // A missing ID predicate would admit ignored-session rows, adapter-specific
 // ordering would choose the wrong cross-session duplicate, and treating a
 // Copilot total as an ordinary row cost would double-count the root session.

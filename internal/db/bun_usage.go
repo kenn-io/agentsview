@@ -850,15 +850,7 @@ func (s *BunStore) loadBunNormalizedDailyUsageRows(
 	bounded := usageBoundsForFilter(filter).bounded()
 	referenceTime := time.Now().UTC()
 	messageQuery, eventQuery := s.bunDailyUsageQueries(store, queryFilter, false)
-	messageCount, err := messageQuery.Count(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("counting daily usage messages: %w", err)
-	}
-	eventCount, err := eventQuery.Count(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("counting daily usage events: %w", err)
-	}
-	rows := make([]dailyUsageScanRow, 0, messageCount+eventCount)
+	rows := make([]dailyUsageScanRow, 0)
 	claudeRows := make([]bunDailyUsageProjection, 0)
 	snapshotRows := make([]activity.UsageRow, 0)
 	metadata := make(map[string]bunDailyUsageProjection)
