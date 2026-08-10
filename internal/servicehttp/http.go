@@ -993,6 +993,9 @@ func (b *httpBackend) UsageSummary(
 	if req.GitBranch != "" {
 		q.GitBranch = new(req.GitBranch)
 	}
+	if req.ExcludeGitBranch != "" {
+		q.ExcludeGitBranch = new(req.ExcludeGitBranch)
+	}
 	if req.ExcludeProject != "" {
 		q.ExcludeProject = new(req.ExcludeProject)
 	}
@@ -1029,6 +1032,9 @@ func (b *httpBackend) UsageSummary(
 	}
 	if req.Breakdowns != nil {
 		q.Breakdowns = new(*req.Breakdowns)
+	}
+	if req.BranchBreakdowns != nil {
+		q.BranchBreakdowns = new(*req.BranchBreakdowns)
 	}
 	if req.SessionCounts != nil {
 		q.SessionCounts = new(*req.SessionCounts)
@@ -1121,6 +1127,9 @@ func (b *httpBackend) UsagePairwiseComparison(
 	}
 	if req.GitBranch != "" {
 		q.GitBranch = new(req.GitBranch)
+	}
+	if req.ExcludeGitBranch != "" {
+		q.ExcludeGitBranch = new(req.ExcludeGitBranch)
 	}
 	if req.ExcludeProject != "" {
 		q.ExcludeProject = new(req.ExcludeProject)

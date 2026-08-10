@@ -444,3 +444,31 @@ func TestSyncHelpHostFlagDescribesConfiguredHTTPHost(t *testing.T) {
 	require.NoError(t, err, "Execute")
 	assert.Contains(t, help, "Configured HTTP host name")
 }
+
+func TestBranchFilterToken(t *testing.T) {
+	tests := []struct {
+		name    string
+		project string
+		branch  string
+		wantErr bool
+		want    string
+	}{
+		{name: "empty branch yields no token", project: "proj", branch: ""},
+		{name: "branch without project errors", project: "", branch: "main", wantErr: true},
+		{
+			name: "project and branch encode a token", project: "proj", branch: "main",
+			want: db.EncodeBranchFilterToken("proj", "main"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tok, err := branchFilterToken(tt.project, tt.branch)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, tok)
+		})
+	}
+}

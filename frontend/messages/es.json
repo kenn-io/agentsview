@@ -2861,5 +2861,20 @@
   "usage_all_projects": "Todos los proyectos",
   "usage_clear_selection": "Borrar selección",
   "usage_open_project": "Abrir",
-  "usage_loading": "Cargando..."
+  "usage_loading": "Cargando...",
+  "sidebar_filters_branch": "Rama",
+  "sidebar_filters_search_branches": "Buscar ramas...",
+  "sidebar_filters_no_branches": "Sin ramas",
+  "shared_active_filters_remove_branch": "Quitar el filtro {branch}",
+  "usage_branch": "Rama",
+  "usage_unattributed": "Sin atribuir",
+  "activity_filter_by_branch": "Filtrar por rama",
+  "activity_all_branches": "Todas las ramas",
+  "activity_branch": "Rama",
+  "activity_filter_branches_placeholder": "Filtrar ramas",
+  "activity_no_matching_branches": "No hay ramas coincidentes",
+  "shared_branch_clear_search": "Borrar la búsqueda de ramas",
+  "shared_branch_loading": "Cargando ramas…",
+  "shared_branch_no_match": "No hay ramas coincidentes",
+  "shared_branch_refine": "Hay más ramas. Refina la búsqueda."
 }

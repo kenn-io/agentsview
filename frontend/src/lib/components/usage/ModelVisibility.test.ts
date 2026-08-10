@@ -82,6 +82,7 @@ function summary(excluded = ""): UsageSummaryResponse {
     daily: [],
     projectTotals: [],
     agentTotals: [],
+    branchTotals: [],
     modelTotals: ["model-alpha", "model-bravo", "model-charlie"]
       .filter((model) => !hidden.includes(model))
       .map((model, index) => ({

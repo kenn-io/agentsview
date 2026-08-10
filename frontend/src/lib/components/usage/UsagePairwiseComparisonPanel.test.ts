@@ -61,6 +61,7 @@ function usageSummary(): UsageSummaryResponse {
       },
     ],
     agentTotals: [],
+    branchTotals: [],
     sessionCounts: {
       total: 2,
       byProject: { alpha: 1, beta: 1 },

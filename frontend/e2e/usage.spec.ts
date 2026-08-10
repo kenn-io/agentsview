@@ -342,11 +342,13 @@ test.describe("Usage input cards", () => {
         projectBreakdowns: [],
         agentBreakdowns: [],
         machineBreakdowns: [],
+        branchBreakdowns: [],
       },
     ],
     projectTotals: [],
     modelTotals: [],
     agentTotals: [],
+    branchTotals: [],
     sessionCounts: { total: 1, byProject: {}, byAgent: {} },
     cacheStats: {
       cacheReadTokens: totals.cacheReadTokens,

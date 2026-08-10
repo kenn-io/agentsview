@@ -2839,5 +2839,20 @@
   "usage_all_projects": "Bütün layihələr",
   "usage_clear_selection": "Seçimi təmizlə",
   "usage_open_project": "Aç",
-  "usage_loading": "Yüklənir..."
+  "usage_loading": "Yüklənir...",
+  "sidebar_filters_branch": "Budaq",
+  "sidebar_filters_search_branches": "Budaqları axtar...",
+  "sidebar_filters_no_branches": "Budaq yoxdur",
+  "shared_active_filters_remove_branch": "{branch} süzgəcini çıxar",
+  "usage_branch": "Budaq",
+  "usage_unattributed": "Aid edilməyib",
+  "activity_filter_by_branch": "Budağa görə süz",
+  "activity_all_branches": "Bütün budaqlar",
+  "activity_branch": "Budaq",
+  "activity_filter_branches_placeholder": "Budaqları süz",
+  "activity_no_matching_branches": "Uyğun gələn budaq yoxdur",
+  "shared_branch_clear_search": "Budaq axtarışını təmizlə",
+  "shared_branch_loading": "Budaqlar yüklənir…",
+  "shared_branch_no_match": "Uyğun gələn budaq yoxdur",
+  "shared_branch_refine": "Daha çox budaq var. Axtarışı dəqiqləşdirin."
 }

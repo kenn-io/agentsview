@@ -331,11 +331,7 @@ func chCursorUsageRowsWhere(
 	f db.UsageFilter, b chUsageBounds,
 ) (string, []any, bool) {
 	hasTermFilter := f.Termination != "" && f.Termination != "all"
-	if len(f.ProjectFilterLabels()) > 0 ||
-		len(f.ExcludedProjectFilterLabels()) > 0 ||
-		len(db.CSVFilterValues(f.Machine)) > 0 || f.GitBranch != "" || f.MinUserMessages > 0 ||
-		f.ExcludeOneShot || hasTermFilter ||
-		f.ActiveSince != "" {
+	if f.RequiresSessionScope() || hasTermFilter {
 		return "", nil, false
 	}
 	if vals := db.CSVFilterValues(f.Agent); len(vals) > 0 && !slices.Contains(vals, "cursor") {

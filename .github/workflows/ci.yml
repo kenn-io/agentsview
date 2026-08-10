@@ -165,6 +165,13 @@ jobs:
           sudo find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) -exec sed -i -E \
             -e 's|https?://(azure\.)?archive\.ubuntu\.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' \
             -e 's|http://security\.ubuntu\.com/ubuntu|https://security.ubuntu.com/ubuntu|g' {} +
+          # The runner image's Microsoft apt repos intermittently fail
+          # signature validation and abort `apt-get update`; ripgrep comes
+          # from the Ubuntu archive, so drop them rather than fail on them.
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list \
+            /etc/apt/sources.list.d/microsoft-prod.sources \
+            /etc/apt/sources.list.d/azure-cli.list \
+            /etc/apt/sources.list.d/azure-cli.sources
           sudo apt-get update
           sudo apt-get install -y ripgrep
 

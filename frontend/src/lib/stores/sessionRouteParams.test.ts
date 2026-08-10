@@ -161,6 +161,7 @@ describe("session route params", () => {
   it("tracks rolling window and termination as session route params", () => {
     expect(SESSION_FILTER_KEYS.has("window_days")).toBe(true);
     expect(SESSION_FILTER_KEYS.has("termination")).toBe(true);
+    expect(SESSION_FILTER_KEYS.has("git_branch")).toBe(true);
   });
 
   it("treats label and pull request params as session filter deep links", () => {

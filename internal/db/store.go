@@ -70,6 +70,7 @@ type Store interface {
 	GetMachineLabels(ctx context.Context) (map[string]string, error)
 	GetMachineAliases(ctx context.Context) (map[string]string, error)
 	GetBranches(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]BranchInfo, error)
+	SearchBranchNames(ctx context.Context, q BranchQuery) (BranchResult, error)
 	ListProjectIdentityObservations(ctx context.Context, labels []string) ([]export.ProjectIdentityObservation, error)
 	BuildProjectIdentityMap(ctx context.Context, labels []string) (map[string]export.ProjectMapEntry, error)
 

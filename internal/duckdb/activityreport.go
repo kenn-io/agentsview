@@ -350,7 +350,8 @@ func (s *Store) activityReportSessions(
 		s.started_at,
 		s.ended_at,
 		COALESCE(s.is_automated, false) AS is_automated,
-		s.relationship_type = 'subagent' AS is_subagent
+		s.relationship_type = 'subagent' AS is_subagent,
+		s.git_branch
 	FROM sessions s
 	WHERE ` + where
 
@@ -369,6 +370,7 @@ func (s *Store) activityReportSessions(
 		if err := rows.Scan(
 			&m.SessionID, &m.Title, &m.Project, &m.Agent,
 			&m.Machine, &startedAt, &endedAt, &m.IsAutomated, &m.IsSubagent,
+			&m.GitBranch,
 		); err != nil {
 			return nil, nil, fmt.Errorf(
 				"scanning duckdb activity report session: %w", err)

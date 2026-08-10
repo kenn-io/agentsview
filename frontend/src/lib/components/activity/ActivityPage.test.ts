@@ -93,6 +93,7 @@ function projectReport(): Report {
     ],
     by_model: [],
     by_agent: [],
+    by_branch: [],
     by_session: [],
     sessions_total: 0,
     projects: {},
@@ -544,6 +545,22 @@ describe("ActivityPage bucket drill-down", () => {
     await flushEffects();
 
     expect(screen.getByTitle("Clear time filter")).toBeTruthy();
+  });
+});
+
+describe("ActivityPage branch filter", () => {
+  it("wires the shared single-select branch picker through the activity store", () => {
+    expect(source).toContain("<BranchPicker");
+    expect(source).toContain('mode="single"');
+    expect(source).toContain("selected={selectedBranchNames}");
+    expect(source).toContain("onChange={onBranchChange}");
+    expect(source).toContain("reconcileBranchFilterValues(");
+    expect(source).toContain("activity.branch ? [activity.branch] : []");
+  });
+
+  it("passes the active project as branch search scope", () => {
+    expect(source).toContain("activity.project ? [activity.project] : []");
+    expect(source).toContain("projects={branchProjects}");
   });
 });
 
