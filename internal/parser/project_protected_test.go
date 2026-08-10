@@ -378,10 +378,51 @@ func TestDefaultProbeGitfileTargetRefusesAutomount(t *testing.T) {
 	}
 	assert.False(t, defaultProbeGitfileTarget("/home/user/repo/.git"),
 		"an automount gitfile target must be refused")
-	assert.True(t, defaultProbeGitRootForCwd("/home/user/repo"),
-		"a canonical automount cwd defers to isForeignOSPath's autofs probe")
-	assert.False(t, defaultProbeGitRootForCwd("/System/Volumes/Data/home/user"),
-		"the data-volume spelling was never autofs-vetted and stays refused")
-	assert.False(t, defaultProbeGitRootForCwd("/HOME/user/repo"),
-		"a case-folded spelling was never autofs-vetted and stays refused")
+}
+
+// TestAutomountCwdProbeAllowed pins the clearance rules for automount cwds:
+// spelling alone is never enough. Clearance requires the canonical spelling,
+// an actually resolving autofs first-level probe (or no autofs management at
+// all), a non-root path, and — without the opt-in — a path outside the
+// network home's own guarded folders.
+func TestAutomountCwdProbeAllowed(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("the guard reads runtime.GOOS")
+	}
+	origPrefixes := autofsPrefixes
+	t.Cleanup(func() { autofsPrefixes = origPrefixes; resetAutofsProbes() })
+	autofsPrefixes = []string{"/home/"}
+	resetAutofsProbes()
+	origStat := osStat
+	t.Cleanup(func() { osStat = origStat })
+	realInfo, err := os.Stat(t.TempDir())
+	require.NoError(t, err)
+	osStat = func(path string) (os.FileInfo, error) {
+		if path == "/home/user" {
+			return realInfo, nil
+		}
+		return nil, os.ErrNotExist
+	}
+	t.Setenv("HOME", "/home/user")
+
+	assert.True(t, automountCwdProbeAllowed("/home/user/repo"),
+		"a resolving first-level entry clears the walk")
+	assert.False(t, automountCwdProbeAllowed("/home/ghost/repo"),
+		"an unresolved first-level entry must stay refused")
+	assert.False(t, automountCwdProbeAllowed("/home"),
+		"the namespace root has no first-level entry to vet")
+	assert.False(t, automountCwdProbeAllowed("/System/Volumes/Data/home/user"),
+		"the data-volume spelling was never autofs-examined")
+	assert.False(t, automountCwdProbeAllowed("/HOME/user/repo"),
+		"a case-folded spelling was never autofs-examined")
+	assert.False(t, automountCwdProbeAllowed("/home/user/Documents/proj"),
+		"a network home's guarded folders stay refused")
+	SetAllowProtectedPathProbes(true)
+	t.Cleanup(func() { SetAllowProtectedPathProbes(false) })
+	assert.True(t, automountCwdProbeAllowed("/home/user/Documents/proj"),
+		"the opt-in lifts the guarded-folder refusal for network homes")
+
+	autofsPrefixes = nil
+	assert.True(t, automountCwdProbeAllowed("/home/user/repo"),
+		"an unmanaged namespace has no automountd to wake")
 }

@@ -89,6 +89,38 @@ func classifyProbePath(cleaned string) export.LocalPathProbeClass {
 	)
 }
 
+// automountCwdProbeAllowed decides whether an automount-classified cwd may
+// enter the git-root walk. Canonical spelling alone is not clearance:
+// alternate spellings were never examined by the autofs machinery, an exact
+// namespace root has no first-level entry the probe could have vetted, a
+// network home under /home still carries the user's own guarded folders,
+// and for autofs-managed prefixes the first-level probe must actually have
+// resolved — checked here explicitly (memoized, shared with
+// isForeignOSPath) rather than assumed from call ordering.
+func automountCwdProbeAllowed(cleaned string) bool {
+	if !export.IsCanonicalAutomountNamespacePath(runtime.GOOS, cleaned) {
+		return false
+	}
+	if !allowProtectedPathProbes.Load() {
+		if home, err := os.UserHomeDir(); err == nil &&
+			export.IsProtectedUserDataPath(runtime.GOOS, home, cleaned) {
+			return false
+		}
+	}
+	sep := string(filepath.Separator)
+	for _, prefix := range autofsPrefixes {
+		if cleaned+sep == prefix {
+			return false
+		}
+		if strings.HasPrefix(cleaned, prefix) {
+			return autofsFirstLevelResolves(prefix, cleaned)
+		}
+	}
+	// The namespace is not autofs-managed on this host, so statting it
+	// wakes nothing.
+	return true
+}
+
 // defaultProbeGitfileTarget reports whether a path taken from gitfile
 // contents — a gitdir, a common directory, or the .git entry itself when it
 // is a symlink — may be read. Unlike the cwd guard, automount namespaces are
@@ -117,15 +149,7 @@ func defaultProbeGitfileTarget(cleaned string) bool {
 func defaultProbeGitRootForCwd(cleaned string) bool {
 	switch classifyProbePath(cleaned) {
 	case export.LocalPathProbeAutomountNamespace:
-		// Only a canonically spelled automount cwd passed isForeignOSPath's
-		// resolved-autofs probe before this guard runs — that function
-		// matches the mount table's canonical prefixes case-sensitively.
-		// Alternate spellings the classifier recognizes (the data-volume
-		// form, case-folded forms) and symlink-smuggled paths were never
-		// autofs-vetted and stay refused.
-		return export.IsCanonicalAutomountNamespacePath(
-			runtime.GOOS, filepath.Clean(cleaned),
-		)
+		return automountCwdProbeAllowed(filepath.Clean(cleaned))
 	case export.LocalPathProbeProtectedUserData:
 		return allowProtectedPathProbes.Load()
 	case export.LocalPathProbeSafe:
