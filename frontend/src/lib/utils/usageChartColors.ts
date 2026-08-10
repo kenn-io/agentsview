@@ -1,4 +1,5 @@
 import type { UsageSummaryResponse } from "../api/types/usage.js";
+import { branchFilterToken } from "../branchFilters.js";
 import {
   orderedChartSeriesColorMap,
   type ChartPalette,
@@ -8,6 +9,7 @@ export interface UsageChartColorMaps {
   project: ReadonlyMap<string, string>;
   model: ReadonlyMap<string, string>;
   agent: ReadonlyMap<string, string>;
+  branch: ReadonlyMap<string, string>;
 }
 
 function rankedIds(costs: ReadonlyMap<string, number>): string[] {
@@ -29,6 +31,7 @@ export function usageChartColorMaps(
   const projects = new Map<string, number>();
   const models = new Map<string, number>();
   const agents = new Map<string, number>();
+  const branches = new Map<string, number>();
 
   for (const item of summary?.projectTotals ?? []) {
     projects.set(item.project_key, item.cost.microdollars);
@@ -39,10 +42,16 @@ export function usageChartColorMaps(
   for (const item of summary?.agentTotals ?? []) {
     agents.set(item.agent, item.cost.microdollars);
   }
-
   const dailyProjects = new Map<string, number>();
   const dailyModels = new Map<string, number>();
   const dailyAgents = new Map<string, number>();
+  const dailyBranches = new Map<string, number>();
+  for (const item of summary?.branchTotals ?? []) {
+    branches.set(
+      branchFilterToken(item.project_key || item.project, item.branch),
+      item.cost.microdollars,
+    );
+  }
   for (const day of summary?.daily ?? []) {
     for (const item of day.projectBreakdowns ?? []) {
       addCost(dailyProjects, item.project_key, item.cost.microdollars);
@@ -53,15 +62,24 @@ export function usageChartColorMaps(
     for (const item of day.agentBreakdowns ?? []) {
       addCost(dailyAgents, item.agent, item.cost.microdollars);
     }
+    for (const item of day.branchBreakdowns ?? []) {
+      addCost(
+        dailyBranches,
+        branchFilterToken(item.project_key || item.project, item.branch),
+        item.cost.microdollars,
+      );
+    }
   }
 
   for (const [id, cost] of dailyProjects) projects.set(id, cost);
   for (const [id, cost] of dailyModels) models.set(id, cost);
   for (const [id, cost] of dailyAgents) agents.set(id, cost);
+  for (const [id, cost] of dailyBranches) branches.set(id, cost);
 
   return {
     project: orderedChartSeriesColorMap(rankedIds(projects), palette),
     model: orderedChartSeriesColorMap(rankedIds(models), palette),
     agent: orderedChartSeriesColorMap(rankedIds(agents), palette),
+    branch: orderedChartSeriesColorMap(rankedIds(branches), palette),
   };
 }

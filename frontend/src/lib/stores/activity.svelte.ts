@@ -1,4 +1,5 @@
 import type { AgentInfo, ProjectInfo } from "../api/types.js";
+import { splitBranchFilterToken } from "../branchFilters.js";
 import type { Report } from "../api/types/activity.js";
 import { m } from "../i18n/index.js";
 import { MetadataService } from "../api/generated/index";
@@ -61,6 +62,7 @@ class ActivityStore {
   project: string = $state("");
   agent: string = $state("");
   machine: string = $state("");
+  branch: string = $state("");
   automation: Automation = $state("all");
   report: Report | null = $state(null);
   // Monotonic identity for successful full-report loads. report_id is
@@ -85,11 +87,9 @@ class ActivityStore {
   // aggregation on every event.
   hasNewData: boolean = $state(false);
 
-  // Filter-option lists for the activity controls. Loaded with full
-  // inclusion (one-shot + automated) so every project/agent/machine
-  // that can appear in the always-inclusive activity report is also
-  // selectable here — unlike the sidebar's lists, which honor the
-  // sidebar include toggles.
+  // Filter-option lists for the bounded metadata controls. Loaded with full
+  // inclusion (one-shot + automated), unlike the sidebar lists which honor
+  // the sidebar include toggles. Branches are searched on demand by the picker.
   projects: ProjectInfo[] = $state([]);
   agents: AgentInfo[] = $state([]);
   machines: string[] = $state([]);
@@ -155,6 +155,7 @@ class ActivityStore {
       timezone: this.timezone,
       bucket: (this.bucket || undefined) as "5m" | "15m" | "1h" | "1d" | "1w" | undefined,
       project: this.project || undefined,
+      gitBranch: this.branch || undefined,
       agent: this.agent || undefined,
       machine: this.machine || undefined,
       automation: this.automation,
@@ -336,7 +337,8 @@ class ActivityStore {
         if (isAbortError(e) || !this.filterOptionsRead.isCurrent(signal)) return false;
         ok = false;
       }
-      const current = ver === this.#filterOptionsVersion && this.filterOptionsRead.isCurrent(signal);
+      const current =
+        ver === this.#filterOptionsVersion && this.filterOptionsRead.isCurrent(signal);
       if (current) {
         // Cache only a fully successful load so a transient failure is
         // retried rather than frozen as a permanent empty list.
@@ -420,6 +422,11 @@ class ActivityStore {
     this.project = params.project ?? "";
     this.agent = params.agent ?? "";
     this.machine = params.machine ?? "";
+    this.branch = params.git_branch ?? "";
+    if (this.branch && this.project) {
+      const legacy = splitBranchFilterToken(this.branch);
+      if (legacy.project && legacy.project !== this.project) this.branch = "";
+    }
     this.automation = AUTOMATIONS.has(params.automation ?? "")
       ? (params.automation as Automation)
       : "all";
@@ -429,9 +436,9 @@ class ActivityStore {
    * Write the current range/preset/filter state to the URL through the router's
    * single replaceState path. `preset` is always included; `date` is included
    * for day/week/month when non-empty; `from`/`to` only for the custom preset;
-   * bucket/project/agent/machine only when non-empty; `automation` only when not
-   * the "all" default. Empty filters and preset-irrelevant fields are omitted so
-   * URLs stay minimal and deep-linkable.
+   * bucket/project/agent/machine/branch only when non-empty; `automation` only
+   * when not the "all" default. Empty filters and preset-irrelevant fields are
+   * omitted so URLs stay minimal and deep-linkable.
    */
   writeUrl() {
     const p: Record<string, string> = { preset: this.preset };
@@ -448,6 +455,7 @@ class ActivityStore {
     if (this.project) p.project = this.project;
     if (this.agent) p.agent = this.agent;
     if (this.machine) p.machine = this.machine;
+    if (this.branch) p.git_branch = this.branch;
     if (this.automation !== "all") p.automation = this.automation;
     router.replaceParams(p);
   }
@@ -521,6 +529,13 @@ class ActivityStore {
 
   setProject(project: string) {
     this.project = project;
+    // New branch values are plain names and remain valid under a changed
+    // project scope. Legacy project-pair URLs are cleared only when their
+    // embedded project conflicts with the new scope.
+    if (this.branch) {
+      const legacy = splitBranchFilterToken(this.branch);
+      if (legacy.project && legacy.project !== project) this.branch = "";
+    }
     this.writeUrl();
   }
 
@@ -531,6 +546,11 @@ class ActivityStore {
 
   setMachine(machine: string) {
     this.machine = machine;
+    this.writeUrl();
+  }
+
+  setBranch(branch: string) {
+    this.branch = branch;
     this.writeUrl();
   }
 
@@ -548,8 +568,8 @@ export const activity = new ActivityStore();
 events.subscribe((event) => activity.handleDataChangedEvent(event));
 
 // Refresh the activity filter options after any sync/import, mirroring the
-// sessions store, so newly imported projects/agents/machines appear in the
-// activity controls without a full page reload. Only refetch when an
+// sessions store, so newly imported projects/agents/machines appear
+// in the activity controls without a full page reload. Only refetch when an
 // ActivityPage is mounted; otherwise the invalidated cache is picked up lazily
 // by the next mount's loadFilterOptions(). The report itself is deliberately
 // not refetched here: that is driven by the manual refresh button and the

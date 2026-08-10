@@ -1,7 +1,6 @@
 <script lang="ts">
   import { formatDateTime, m } from "../../i18n/index.js";
-  import type { Report } from "../../api/types.js";
-  import type { ActivitySessionRow } from "../../api/generated/index";
+  import type { Report, SessionRow } from "../../api/types.js";
   import { router } from "../../stores/router.svelte.js";
   import { XIcon } from "../../icons.js";
   import { TableHeaderCell } from "@kenn-io/kit-ui";
@@ -32,11 +31,7 @@
     onNext?: (cursor: string) => void;
   } = $props();
 
-  // by_session is typed `any[] | null` by the codegen; cast to the
-  // generated element model for field-level type safety.
-  const rows = $derived(
-    (report.by_session ?? []) as ActivitySessionRow[],
-  );
+  const rows = $derived(report.by_session ?? []);
 
   function setSort(key: ActivitySessionSort) {
     const direction = sortKey === key
@@ -50,8 +45,8 @@
     return Math.round(v).toLocaleString();
   }
 
-  function rowModel(row: ActivitySessionRow): string {
-    const models = (row.models ?? []) as string[];
+  function rowModel(row: SessionRow): string {
+    const models = row.models ?? [];
     if (models.length > 1) return m.activity_mixed();
     return row.primary_model || "—";
   }

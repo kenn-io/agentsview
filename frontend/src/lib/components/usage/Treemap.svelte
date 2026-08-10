@@ -11,6 +11,7 @@
     value: number;
     color: string;
     meta?: string;
+    selectable?: boolean;
   }
 
   interface Props {
@@ -18,6 +19,10 @@
     height?: number;
     onSelect?: (id: string) => void;
     formatValue?: (value: number) => string;
+    // Localized tooltip/aria copy can come from the caller because it
+    // depends on what selecting a tile does there (hide vs. filter).
+    titleFor?: (id: string, label: string) => string;
+    ariaLabelFor?: (id: string, label: string) => string;
   }
 
   const uid = $props.id();
@@ -31,6 +36,8 @@
     height = 260,
     onSelect,
     formatValue = formatCost,
+    titleFor = (_id, label) => m.usage_click_to_hide({ label }),
+    ariaLabelFor = (_id, label) => m.usage_hide_from_chart({ label }),
   }: Props = $props();
 
   const root = $derived.by(() =>
@@ -57,6 +64,7 @@
         {#snippet children({ nodes })}
           {#each nodes.filter((node) => node.depth === 1) as node, index ((node.data as TreemapItem).id)}
             {@const tile = node.data as TreemapItem}
+            {@const selectable = tile.selectable ?? true}
             {@const tileWidth = node.x1 - node.x0}
             {@const tileHeight = node.y1 - node.y0}
             {@const large = tileWidth > 60 && tileHeight > 40}
@@ -67,14 +75,15 @@
             </clipPath>
             <g
               class="tile"
+              class:interactive={selectable}
               clip-path={`url(#${clipId})`}
-              tabindex={0}
-              role="button"
-              aria-label={m.usage_hide_from_chart({ label: tile.label })}
-              onclick={() => onSelect?.(tile.id)}
-              onkeydown={(event) => handleKey(event, tile.id)}
+              tabindex={selectable ? 0 : undefined}
+              role={selectable ? "button" : undefined}
+              aria-label={selectable ? ariaLabelFor(tile.id, tile.label) : undefined}
+              onclick={selectable ? () => onSelect?.(tile.id) : undefined}
+              onkeydown={selectable ? (event) => handleKey(event, tile.id) : undefined}
             >
-              <title>{m.usage_click_to_hide({ label: tile.label })}</title>
+              <title>{titleFor(tile.id, tile.label)}</title>
               <Group x={node.x0} y={node.y0}>
                 <Rect
                   width={tileWidth}
@@ -110,19 +119,19 @@
     display: block;
   }
 
-  .treemap-container :global(.tile) {
+  .treemap-container :global(.tile.interactive) {
     cursor: pointer;
   }
 
-  .treemap-container :global(.tile:hover rect) {
+  .treemap-container :global(.tile.interactive:hover rect) {
     opacity: 0.92;
   }
 
-  .treemap-container :global(.tile:focus-visible) {
+  .treemap-container :global(.tile.interactive:focus-visible) {
     outline: none;
   }
 
-  .treemap-container :global(.tile:focus-visible rect) {
+  .treemap-container :global(.tile.interactive:focus-visible rect) {
     stroke: white;
     stroke-width: 2;
   }

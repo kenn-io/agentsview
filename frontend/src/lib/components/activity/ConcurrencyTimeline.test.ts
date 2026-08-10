@@ -1,5 +1,12 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vite-plus/test";
 import { fireEvent, render } from "@testing-library/svelte";
 import { mount, tick, unmount } from "svelte";
 import ConcurrencyTimeline from "./ConcurrencyTimeline.svelte";
@@ -68,7 +75,7 @@ function makeReport(overrides: Partial<Report> = {}): Report {
       automated_at_peak: 0,
     },
   ];
-  const report = {
+  return {
     peak: { agents: 3, at: "2026-06-16T06:00:00Z" },
     totals: {
       active_minutes: 50,
@@ -102,15 +109,6 @@ function makeReport(overrides: Partial<Report> = {}): Report {
     projects: {},
     ...overrides,
   } as Report;
-  // Backfill the peak-automation split onto any bucket literal that omits it
-  // (most fixtures only set max_agents), so the stacked bars get real geometry
-  // instead of NaN. Unspecified buckets default to all-interactive.
-  report.buckets = (report.buckets ?? []).map((b) => ({
-    interactive_at_peak: b.max_agents,
-    automated_at_peak: 0,
-    ...b,
-  }));
-  return report;
 }
 
 function popoverReport(): Report {
@@ -127,6 +125,8 @@ function popoverReport(): Report {
         agent_minutes: 4,
         output_tokens: 0,
         cost: testMoney(0),
+        interactive_at_peak: 2,
+        automated_at_peak: 0,
       },
     ],
     by_session: [
@@ -180,6 +180,8 @@ function minuteReport(overrides: Partial<Report> = {}): Report {
         agent_minutes: 5,
         output_tokens: 10,
         cost: testMoney(0),
+        interactive_at_peak: 1,
+        automated_at_peak: 0,
       },
       {
         start: "2026-06-16T00:05:00Z",
@@ -188,6 +190,8 @@ function minuteReport(overrides: Partial<Report> = {}): Report {
         agent_minutes: 5,
         output_tokens: 20,
         cost: testMoney(0),
+        interactive_at_peak: 2,
+        automated_at_peak: 0,
       },
       {
         start: "2026-06-16T00:10:00Z",
@@ -196,8 +200,10 @@ function minuteReport(overrides: Partial<Report> = {}): Report {
         agent_minutes: 5,
         output_tokens: 5,
         cost: testMoney(0),
+        interactive_at_peak: 1,
+        automated_at_peak: 0,
       },
-    ] as Report["buckets"],
+    ],
     ...overrides,
   });
 }
@@ -211,7 +217,9 @@ async function chooseOverlayMetric(target: HTMLElement, label: string) {
   await tick();
 
   const option = Array.from(
-    target.querySelectorAll<HTMLElement>(".overlay-toggle .kit-typeahead__option"),
+    target.querySelectorAll<HTMLElement>(
+      ".overlay-toggle .kit-typeahead__option",
+    ),
   ).find((el) => el.textContent?.trim() === label);
   expect(option).toBeTruthy();
   await fireEvent.mouseDown(option!);
@@ -262,7 +270,9 @@ describe("ConcurrencyTimeline", () => {
     });
     await tick();
 
-    const interactive = document.querySelectorAll(".concurrency-seg.interactive");
+    const interactive = document.querySelectorAll(
+      ".concurrency-seg.interactive",
+    );
     const automated = document.querySelectorAll(".concurrency-seg.automated");
     expect(interactive.length).toBe(report.buckets!.length);
     expect(automated.length).toBe(report.buckets!.length);
@@ -281,7 +291,9 @@ describe("ConcurrencyTimeline", () => {
     const interactive = document.querySelectorAll(
       ".concurrency-seg.interactive",
     )[2] as SVGRectElement;
-    const automated = document.querySelectorAll(".concurrency-seg.automated")[2] as SVGRectElement;
+    const automated = document.querySelectorAll(
+      ".concurrency-seg.automated",
+    )[2] as SVGRectElement;
     const h = (el: SVGRectElement) => Number(el.getAttribute("height"));
     const y = (el: SVGRectElement) => Number(el.getAttribute("y"));
     // The automated cap has real height and sits above (smaller y) the taller
@@ -443,7 +455,10 @@ describe("ConcurrencyTimeline", () => {
   it("shows a tooltip on slot hover and clears it on leave", async () => {
     const target = document.createElement("div");
     document.body.appendChild(target);
-    const c = mount(ConcurrencyTimeline, { target, props: { report: makeReport() } });
+    const c = mount(ConcurrencyTimeline, {
+      target,
+      props: { report: makeReport() },
+    });
     await tick();
     const hits = target.querySelectorAll(".slot-hit");
     expect(hits.length).toBe(makeReport().buckets!.length);
@@ -487,7 +502,10 @@ describe("ConcurrencyTimeline", () => {
   it("splits only the peak count in the tooltip, leaving agent-min combined", async () => {
     const target = document.createElement("div");
     document.body.appendChild(target);
-    const c = mount(ConcurrencyTimeline, { target, props: { report: makeReport() } });
+    const c = mount(ConcurrencyTimeline, {
+      target,
+      props: { report: makeReport() },
+    });
     await tick();
     const hit = target.querySelectorAll(".slot-hit")[2] as SVGRectElement; // peak 3 = 2 int / 1 auto
     hit.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
@@ -506,7 +524,10 @@ describe("ConcurrencyTimeline", () => {
   it("omits the peak split when the bucket has no automated agent", async () => {
     const target = document.createElement("div");
     document.body.appendChild(target);
-    const c = mount(ConcurrencyTimeline, { target, props: { report: makeReport() } });
+    const c = mount(ConcurrencyTimeline, {
+      target,
+      props: { report: makeReport() },
+    });
     await tick();
     const hit = target.querySelectorAll(".slot-hit")[3] as SVGRectElement; // peak 1, all interactive
     hit.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
@@ -547,6 +568,8 @@ describe("ConcurrencyTimeline", () => {
           agent_minutes: 1,
           output_tokens: 0,
           cost: testMoney(0),
+          interactive_at_peak: 1,
+          automated_at_peak: 0,
         },
         {
           start: "2026-06-16T10:05:00Z",
@@ -555,6 +578,8 @@ describe("ConcurrencyTimeline", () => {
           agent_minutes: 0,
           output_tokens: 0,
           cost: testMoney(0),
+          interactive_at_peak: 0,
+          automated_at_peak: 0,
         },
       ],
       by_session: [] as Report["by_session"],
@@ -654,7 +679,9 @@ describe("ConcurrencyTimeline", () => {
     });
     await tick();
     const hit = target.querySelector(".slot-hit") as SVGRectElement;
-    hit.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    hit.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
     await tick();
     expect(onSelectRange).toHaveBeenCalledWith(expect.objectContaining({ start: 0, end: 1 }));
     unmount(c);
@@ -743,6 +770,8 @@ describe("ConcurrencyTimeline", () => {
           agent_minutes: 10,
           output_tokens: 1,
           cost: testMoney(0),
+          interactive_at_peak: 1,
+          automated_at_peak: 0,
         },
         {
           start: "2026-06-16T00:00:00Z",
@@ -751,8 +780,10 @@ describe("ConcurrencyTimeline", () => {
           agent_minutes: 10,
           output_tokens: 1,
           cost: testMoney(0),
+          interactive_at_peak: 1,
+          automated_at_peak: 0,
         },
-      ] as Report["buckets"],
+      ],
     });
     render(ConcurrencyTimeline, { report: r });
     const bar = document.querySelector("rect[data-bucket-bar]") as Element;
@@ -778,8 +809,10 @@ describe("ConcurrencyTimeline", () => {
           agent_minutes: 20,
           output_tokens: 100,
           cost: testMoney(0),
+          interactive_at_peak: 2,
+          automated_at_peak: 0,
         },
-      ] as Report["buckets"],
+      ],
     });
     const target = document.createElement("div");
     document.body.appendChild(target);
@@ -812,7 +845,10 @@ describe("ConcurrencyTimeline", () => {
   it("overlays the selected metric line and hides it when None", async () => {
     const target = document.createElement("div");
     document.body.appendChild(target);
-    const c = mount(ConcurrencyTimeline, { target, props: { report: makeReport() } });
+    const c = mount(ConcurrencyTimeline, {
+      target,
+      props: { report: makeReport() },
+    });
     await tick();
     // Default metric is "none": no overlay line.
     expect(target.querySelector(".overlay-line")).toBeNull();
@@ -825,22 +861,25 @@ describe("ConcurrencyTimeline", () => {
   it("labels the overlay scale on the right y-axis", async () => {
     const target = document.createElement("div");
     document.body.appendChild(target);
-    const c = mount(ConcurrencyTimeline, { target, props: { report: makeReport() } });
+    const c = mount(ConcurrencyTimeline, {
+      target,
+      props: { report: makeReport() },
+    });
     await tick();
 
     await chooseOverlayMetric(target, "Cost");
 
-    const labels = Array.from(target.querySelectorAll("text.overlay-y-label")).map(
-      (el) => el.textContent?.trim() ?? "",
-    );
+    const labels = Array.from(
+      target.querySelectorAll("text.overlay-y-label"),
+    ).map((el) => el.textContent?.trim() ?? "");
     expect(labels).toContain("$0.90");
     expect(labels).toContain("$0.00");
 
     await chooseOverlayMetric(target, "Tokens");
 
-    const tokenLabels = Array.from(target.querySelectorAll("text.overlay-y-label")).map(
-      (el) => el.textContent?.trim() ?? "",
-    );
+    const tokenLabels = Array.from(
+      target.querySelectorAll("text.overlay-y-label"),
+    ).map((el) => el.textContent?.trim() ?? "");
     expect(tokenLabels).toContain("9k");
 
     unmount(c);
