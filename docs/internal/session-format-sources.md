@@ -98,18 +98,17 @@ Grok section and remove the explicit registry exception in the coverage test.
   persists verbatim inside the stored usage object. Verified 2026-07-30
   against two local web-search sessions: when the search is driven by the
   **CLI's** `WebSearch` tool, every assistant record carries
-  `server_tool_use: {"web_search_requests": 0, "web_fetch_requests": 0}` —
-  the search itself runs in an out-of-band side call that is **not written to
-  the transcript at all**. The only surviving evidence is the tool-result
-  record's `toolUseResult` object
-  (`{query, results, durationSeconds, searchCount}`), whose `searchCount`
-  matched the wire-billed `web_search_requests` (1 == 1) in both sessions.
-  Agentsview therefore credits the assistant message that issued the
-  `WebSearch` `tool_use` with its linked result's `searchCount`, and uses the
-  message's own counter instead whenever that counter is nonzero (which is
-  what sessions driving the API directly report), so a search is never
-  counted twice. **Known undercount:** the side call's own token usage — tens
-  of thousands of input tokens on `claude-haiku-4-5` per search — is not
+  `server_tool_use: {"web_search_requests": 0, "web_fetch_requests": 0}` — the
+  search itself runs in an out-of-band side call that is **not written to the
+  transcript at all**. The only surviving evidence is the tool-result record's
+  `toolUseResult` object (`{query, results, durationSeconds, searchCount}`),
+  whose `searchCount` matched the wire-billed `web_search_requests` (1 == 1)
+  in both sessions. Agentsview therefore credits the assistant message that
+  issued the `WebSearch` `tool_use` with its linked result's `searchCount`,
+  and uses the message's own counter instead whenever that counter is nonzero
+  (which is what sessions driving the API directly report), so a search is
+  never counted twice. **Known undercount:** the side call's own token usage —
+  tens of thousands of input tokens on `claude-haiku-4-5` per search — is not
   persisted anywhere in the transcript and is not recoverable, so it is
   neither recorded nor estimated. `web_fetch_requests` is recorded when
   present but is not priced. Data version 82 reparses existing Claude archives
@@ -131,37 +130,38 @@ Grok section and remove the explicit registry exception in the coverage test.
   still traversed only to discover nested subagents. Verified 2026-07-30
   against wire-captured billing for three local Claude Code sessions: parents
   with subagents under-reported cost by 45-77% before the presentation-time
-  rollup. Reverified 2026-07-30 with Claude Code 2.1.220: a streaming tool turn
-  can persist several assistant records with one `(message.id, requestId)` pair
-  while `usage.output_tokens` grows from an early partial count to the final
-  billed count (observed examples included `5` then `631` and `6` then `798`).
-  Usage reporting therefore keeps the greatest output-token snapshot for each
-  message/request identity across the included sessions, attributes it to the
-  earliest transcript, and then applies cross-session replay deduplication.
-  Session-owned dimensions and display metadata also come from that earliest
-  transcript. Numeric-string token values remain accepted as compatibility
-  input and are normalized before snapshot comparison on every backend. The
-  SQLite and PostgreSQL read the exact top-level token path and nested
-  server-tool path even in supported malformed legacy JSON. Reverified
-  2026-08-06 with end-truncated objects containing earlier nested decoy keys;
-  PostgreSQL and its Cockroach-compatible helper repair the truncated object
-  before extracting the requested path, while irreparable input contributes no
-  counter rather than an ambiguously scoped value.
-  Equal snapshots are selected deterministically by timestamp, session id, and
-  message ordinal; equivalent RFC3339 spellings use the semantic tie-breakers
-  rather than raw timestamp text. Reverified 2026-08-04 against the
-  cross-backend stored-usage fixtures.
+  rollup. Reverified 2026-07-30 with Claude Code 2.1.220: a streaming tool
+  turn can persist several assistant records with one
+  `(message.id, requestId)` pair while `usage.output_tokens` grows from an
+  early partial count to the final billed count (observed examples included
+  `5` then `631` and `6` then `798`). Usage reporting therefore keeps the
+  greatest output-token snapshot for each message/request identity across the
+  included sessions, attributes it to the earliest transcript, and then
+  applies cross-session replay deduplication. Session-owned dimensions and
+  display metadata also come from that earliest transcript. Numeric-string
+  token values remain accepted as compatibility input and are normalized
+  before snapshot comparison on every backend. The SQLite and PostgreSQL read
+  the exact top-level token path and nested server-tool path even in supported
+  malformed legacy JSON. Reverified 2026-08-06 with end-truncated objects
+  containing earlier nested decoy keys; PostgreSQL and its
+  Cockroach-compatible helper repair the truncated object before extracting
+  the requested path, while irreparable input contributes no counter rather
+  than an ambiguously scoped value. Equal snapshots are selected
+  deterministically by timestamp, session id, and message ordinal; equivalent
+  RFC3339 spellings use the semantic tie-breakers rather than raw timestamp
+  text. Reverified 2026-08-04 against the cross-backend stored-usage fixtures.
   Replaying the three captured sessions after this correction matched all
   transcript-visible output; each full-wire total remained 15 output tokens
-  higher because Claude Code's separate session-title request is not persisted.
-  Reverified 2026-08-06 that session-summary export loads matching snapshots
-  across excluded sessions and pagination before applying the same snapshot,
-  attribution, web-search, and generic deduplication rules. These accounting
-  semantics are exposed by usage, activity, and session-summary schema version
-  5 and reporting schema version 2; reporting version 1 retains its frozen
-  first-seen, token-only semantics. Reverified 2026-08-06 that DuckDB records a
-  web-search-only flat fee as computed pricing provenance, so combining it with
-  a provider-reported cost is labeled `mixed` like the SQLite archive.
+  higher because Claude Code's separate session-title request is not
+  persisted. Reverified 2026-08-06 that session-summary export loads matching
+  snapshots across excluded sessions and pagination before applying the same
+  snapshot, attribution, web-search, and generic deduplication rules. These
+  accounting semantics are exposed by usage, activity, and session-summary
+  schema version 5 and reporting schema version 2; reporting version 1 retains
+  its frozen first-seen, token-only semantics. Reverified 2026-08-06 that
+  DuckDB records a web-search-only flat fee as computed pricing provenance, so
+  combining it with a provider-reported cost is labeled `mixed` like the
+  SQLite archive.
 - **Agentsview:** `internal/parser/claude.go` and
   `internal/parser/claude_provider.go`; local observations and fixtures are
   the implementation evidence for fields not documented upstream. Reverified
@@ -180,6 +180,21 @@ Grok section and remove the explicit registry exception in the coverage test.
   `promptSource` (per user turn, e.g. `"typed"`, `"queued"`, `"system"`,
   `"sdk"`). Neither key is documented upstream or covered by the codeburn
   notes; the evidence remains local observation under `no-public-source`.
+  Reverified 2026-08-09 against controlled `--resume <session> --fork-session`
+  reproductions and inspection of the Claude Code 2.1.226 bundle
+  ([#1370](https://github.com/kenn-io/agentsview/issues/1370)): the background
+  handoff (left-arrow picker, Ctrl+B, `/background`) spawns
+  `claude --resume <transcript> --fork-session` with
+  `CLAUDE_CODE_SESSION_KIND=bg`. The forked process re-persists the entire
+  prior message chain into a new transcript in the same project directory;
+  replayed chain entries are byte-identical to the originals (same `uuid`,
+  `parentUuid`, `timestamp`, `requestId`, `message.id`, and usage) except for
+  a rewritten `sessionId` and, when spawned by the background launcher, an
+  injected `sessionKind:"bg"` on every chain entry. The new transcript carries
+  no pointer back to the original session (no Codex-style `forked_from_id`),
+  so `internal/parser/claude_lineage.go` establishes lineage from sibling
+  content overlap anchored on the asymmetric `bg` stamp. Evidence remains
+  `no-public-source`.
 
 ## OpenClaude (`openclaude`)
 

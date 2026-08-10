@@ -91,7 +91,10 @@ func (p *claudeProvider) Parse(
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
 	project := claudeProviderProject(ctx, req.Source.ProjectHint, path)
-	results, excludedIDs, err := claudeParseWithExclusions(path, project, machine)
+	opts := claudeParseOptions{
+		siblingLineage: claudeSourceIsProjectLevel(req.Source, path),
+	}
+	results, excludedIDs, err := claudeParseFile(path, project, machine, opts)
 	if err != nil {
 		return ParseOutcome{}, err
 	}
@@ -218,6 +221,35 @@ func (p *claudeProvider) ParseIncremental(
 type claudeSource struct {
 	Root string
 	Path string
+}
+
+// claudeSourceIsProjectLevel reports whether a discovered local source
+// is a top-level project transcript (root/<project>/<session>.jsonl).
+// Only those participate in background-fork sibling lineage: subagent
+// transcripts, materialized s3 objects, and uploads never do.
+func claudeSourceIsProjectLevel(source SourceRef, path string) bool {
+	var root string
+	switch src := source.Opaque.(type) {
+	case claudeSource:
+		root = src.Root
+	case *claudeSource:
+		if src == nil {
+			return false
+		}
+		root = src.Root
+	default:
+		return false
+	}
+	if root == "" {
+		return false
+	}
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	return len(parts) == 2 && strings.HasSuffix(parts[1], ".jsonl") &&
+		!strings.HasPrefix(parts[1], "agent-")
 }
 
 type claudeSourceSet struct {

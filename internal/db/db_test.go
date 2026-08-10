@@ -1009,8 +1009,8 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 }
 
 func TestCurrentDataVersionUsageReparses(t *testing.T) {
-	assert.Equal(t, 82, CurrentDataVersion(),
-		"Pi cacheWrite usage and Claude web-search accounting require sequential backfills")
+	assert.Equal(t, 83, CurrentDataVersion(),
+		"Claude background-fork lineage requires a full resync so stored fork sessions drop replayed messages")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {

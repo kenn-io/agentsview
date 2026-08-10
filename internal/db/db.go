@@ -375,7 +375,12 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // when the message's own server_tool_use counter is zero. Existing Claude
 // rows need re-parsing so historical web searches are charged the
 // per-request fee.)
-const dataVersion = 82
+// (83: Claude background-fork lineage. The parser now trims the replayed
+// prefix a background handoff copies into its new transcript and links the
+// fork to its original session as a continuation. Existing Claude rows need
+// re-parsing so already-ingested fork sessions drop their duplicated
+// messages and usage and stop appearing as unrelated top-level sessions.)
+const dataVersion = 83
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
