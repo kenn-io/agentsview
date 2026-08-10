@@ -112,18 +112,23 @@ func TestGetDailyUsageKeepsPricingRowsAndIdentityInOneView(t *testing.T) {
 	assert.Equal(t, 2, backend.attempts)
 }
 
-func TestLoadBunNormalizedDailyUsageRowsStreamsWithoutCandidateCounts(t *testing.T) {
+func TestLoadBunNormalizedDailyUsageRowsFiltersOrdinaryStreamsBeforeScan(t *testing.T) {
 	database := testDB(t)
 	hook := new(countingQueryHook)
 	store := database.bunReader.WithQueryHook(hook)
 	common := NewBunStore(&sessionContractBackend{store: store})
-	filter := UsageFilter{Timezone: "UTC"}
+	filter := UsageFilter{Timezone: "UTC", Model: "wanted-model"}
 
 	_, err := common.loadBunNormalizedDailyUsageRows(
-		t.Context(), store, filter, filter,
+		t.Context(), store, usageSnapshotInputFilter(filter), filter,
 	)
 	require.NoError(t, err)
-	require.Len(t, hook.queries, 2)
+	require.Len(t, hook.queries, 3)
+	assert.Contains(t, hook.queries[0], "m.model IN ('wanted-model')")
+	assert.Contains(t, hook.queries[0], "m.claude_message_id = ''")
+	assert.Contains(t, hook.queries[1], "ue.model IN ('wanted-model')")
+	assert.NotContains(t, hook.queries[2], "m.model IN ('wanted-model')")
+	assert.Contains(t, hook.queries[2], "m.claude_message_id != ''")
 }
 
 // A missing ID predicate would admit ignored-session rows, adapter-specific
