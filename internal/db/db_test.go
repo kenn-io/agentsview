@@ -7637,7 +7637,7 @@ func TestGetSessionForIncremental(t *testing.T) {
 		)
 		requireNoError(t, err, "UpdateSessionIncremental legacy")
 
-		got, ok := d.GetSessionForIncremental(path)
+		got, ok := d.GetSessionForIncremental(path, "claude")
 		require.True(t, ok, "legacy session missing after incremental")
 		assert.Equal(t, 3, got.NextOrdinal, "NextOrdinal")
 		assert.Equal(t, "entry-3", got.LastEntryUUID, "LastEntryUUID")
@@ -7780,7 +7780,9 @@ func TestUpdateSessionIncremental(t *testing.T) {
 	assert.Equal(t, ended, *got.EndedAt, "EndedAt")
 	require.NotNil(t, got.FileSize, "FileSize nil")
 	assert.Equal(t, int64(2048), *got.FileSize, "FileSize")
-	incremental, ok := d.GetSessionForIncremental("/tmp/sessions/update.jsonl")
+	incremental, ok := d.GetSessionForIncremental(
+		"/tmp/sessions/update.jsonl", "codex",
+	)
 	require.True(t, ok, "session missing from incremental lookup")
 	assert.Equal(t, 9, incremental.NextOrdinal, "NextOrdinal")
 	assert.Equal(t, "uuid-9", incremental.LastEntryUUID, "LastEntryUUID")
