@@ -193,8 +193,12 @@ Grok section and remove the explicit registry exception in the coverage test.
   injected `sessionKind:"bg"` on every chain entry. The new transcript carries
   no pointer back to the original session (no Codex-style `forked_from_id`),
   so `internal/parser/claude_lineage.go` establishes lineage from sibling
-  content overlap anchored on the asymmetric `bg` stamp. Evidence remains
-  `no-public-source`.
+  content overlap anchored on the asymmetric `bg` stamp. Reverified 2026-08-09
+  by fork-resuming a transcript containing a uuid-less `queued_command`
+  attachment: only uuid-bearing chain entries are replayed into the fork;
+  uuid-less records (queued commands, queue-operations, ai-title, mode) never
+  appear in the replay region, so every uuid-less line in a fork transcript is
+  the fork's own. Evidence remains `no-public-source`.
 
 ## OpenClaude (`openclaude`)
 

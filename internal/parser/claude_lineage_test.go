@@ -44,14 +44,16 @@ func lineageAssistantLine(uuid, parentUUID, ts, sessionID, kind, msgID, text str
 	)
 }
 
-func lineageQueuedCommandLine(uuid, ts, sessionID, kind, prompt string) string {
-	kindField := ""
-	if kind != "" {
-		kindField = fmt.Sprintf(`"sessionKind":%q,`, kind)
-	}
+// lineageQueuedCommandLine mirrors the real queued_command attachment
+// shape: these records carry no uuid. Verified against controlled
+// fork-resume reproductions that Claude Code never replays uuid-less
+// records into a fork transcript — only uuid-bearing chain entries are
+// re-persisted — so a queued_command in a fork file is always the
+// fork's own.
+func lineageQueuedCommandLine(ts, sessionID, prompt string) string {
 	return fmt.Sprintf(
-		`{"type":"attachment","uuid":%q,"timestamp":%q,"sessionId":%q,%s"attachment":{"type":"queued_command","commandMode":"prompt","prompt":%q}}`,
-		uuid, ts, sessionID, kindField, prompt,
+		`{"type":"attachment","timestamp":%q,"sessionId":%q,"attachment":{"type":"queued_command","commandMode":"prompt","prompt":%q}}`,
+		ts, sessionID, prompt,
 	)
 }
 
@@ -332,19 +334,27 @@ func TestClaudeBackgroundForkPicksLongestReplayCandidate(t *testing.T) {
 	assert.Equal(t, "long-3333", results[0].Session.ParentSessionID)
 }
 
-func TestClaudeBackgroundForkDropsReplayedQueuedCommand(t *testing.T) {
+func TestClaudeBackgroundForkKeepsOwnUUIDLessRecords(t *testing.T) {
 	t.Parallel()
+	// Claude Code never replays uuid-less records into a fork
+	// transcript, so every uuid-less line in a fork is the fork's own:
+	// spawn-time queue-operations interleaved before the replayed
+	// chain, and queued_command attachments typed into the fork later.
+	// Trimming must leave all of them alone — a position-based trim
+	// that discarded everything through the replay boundary would eat
+	// the fork's own head records.
 	origContent := strings.Join([]string{
 		lineageUserLine("u1", "", "2026-01-01T10:00:00Z", "orig-1111", "", "first question"),
-		lineageQueuedCommandLine("qc1", "2026-01-01T10:00:02Z", "orig-1111", "", "queued in original"),
+		lineageQueuedCommandLine("2026-01-01T10:00:02Z", "orig-1111", "queued in original"),
 		lineageAssistantLine("a1", "u1", "2026-01-01T10:00:05Z", "orig-1111", "", "msg_01", "first answer", 20),
 	}, "\n") + "\n"
 	forkContent := strings.Join([]string{
+		// Fork-own spawn-time records precede the replayed chain.
+		`{"type":"queue-operation","operation":"enqueue","timestamp":"2026-01-01T11:00:00Z","sessionId":"fork-2222","content":"{\"tool_use_id\":\"tu-1\",\"task_id\":\"task-1\"}"}`,
 		lineageUserLine("u1", "", "2026-01-01T10:00:00Z", "fork-2222", "bg", "first question"),
-		lineageQueuedCommandLine("qc1", "2026-01-01T10:00:02Z", "fork-2222", "bg", "queued in original"),
 		lineageAssistantLine("a1", "u1", "2026-01-01T10:00:05Z", "fork-2222", "bg", "msg_01", "first answer", 20),
-		lineageUserLine("u2", "a1", "2026-01-01T11:00:00Z", "fork-2222", "bg", "continued question"),
-		lineageQueuedCommandLine("qc2", "2026-01-01T11:00:02Z", "fork-2222", "bg", "queued in fork"),
+		lineageUserLine("u2", "a1", "2026-01-01T11:00:01Z", "fork-2222", "bg", "continued question"),
+		lineageQueuedCommandLine("2026-01-01T11:00:02Z", "fork-2222", "queued in fork"),
 		lineageAssistantLine("a2", "u2", "2026-01-01T11:00:05Z", "fork-2222", "bg", "msg_02", "continued answer", 7),
 	}, "\n") + "\n"
 	_, forkPath := writeLineageFixture(t,
@@ -362,9 +372,29 @@ func TestClaudeBackgroundForkDropsReplayedQueuedCommand(t *testing.T) {
 	for _, m := range results[0].Messages {
 		prompts = append(prompts, m.Content)
 	}
-	assert.NotContains(t, prompts, "queued in original")
 	assert.Contains(t, prompts, "queued in fork")
 	assert.Contains(t, prompts, "continued question")
+	assert.NotContains(t, prompts, "first question")
+	assert.Equal(t, "orig-1111", results[0].Session.ParentSessionID)
+	// The fork-own enqueue record written before the replayed chain
+	// survives the trim: its spawn timestamp is the session start.
+	wantStart := time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC)
+	assert.True(t, results[0].Session.StartedAt.Equal(wantStart),
+		"StartedAt = %v", results[0].Session.StartedAt)
+
+	// The original still splices its own queued command.
+	origResults, _, err := claudeParseFile(
+		filepath.Join(filepath.Dir(forkPath), "orig-1111.jsonl"),
+		"my_app", "local",
+		claudeParseOptions{siblingLineage: true},
+	)
+	require.NoError(t, err)
+	require.Len(t, origResults, 1)
+	var origPrompts []string
+	for _, m := range origResults[0].Messages {
+		origPrompts = append(origPrompts, m.Content)
+	}
+	assert.Contains(t, origPrompts, "queued in original")
 }
 
 func TestClaudeUploadParseIgnoresSiblingLineage(t *testing.T) {
