@@ -79,8 +79,10 @@ atomically. Preserve sessions even when their source files no longer exist.
   diagnosing placeholder or dialect failures.
 - Canonical slice writes use a 16 MiB approximate dynamic-payload budget,
   matching the largest tool result the archive deliberately persists. This is
-  a formatted-query working-set bound, not a row count or bind-variable rule;
-  one larger logical row is written alone rather than split across statements.
+  a pre-format row-payload target, not a statement-length, row-count, or
+  bind-variable guarantee: SQL syntax, escaping, and Bun's intermediate copies
+  add overhead. One larger logical row is written alone rather than split
+  across statements.
 
 ### Timestamp compatibility
 
