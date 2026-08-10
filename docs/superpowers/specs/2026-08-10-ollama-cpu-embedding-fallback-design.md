@@ -45,7 +45,9 @@ ollama_cpu_fallback = true
 The setting defaults to `false`. When enabled, the endpoint path must end in a
 `/v1` path component. The encoder derives the native Ollama endpoint by
 replacing that final component with `/api/embed`, preserving any preceding proxy
-path. The existing API key, when configured, is sent to both endpoints.
+path and query values. The primary `/embeddings` URL is derived through the same
+parsed-URL path handling. The existing API key, when configured, is sent to both
+endpoints.
 
 This flag is server transport behavior. It does not join the vector generation
 parameters or fingerprint, because both backends use the same model, dimensions,
@@ -60,6 +62,11 @@ path:
 1. Send the batch to `<endpoint>/embeddings` through Metal.
 1. Reorder and validate the response as today.
 1. Retry retryable Metal failures up to `max_retries` as today.
+1. Coordinate every opted-in encoder for the same native Ollama endpoint through
+   one process-wide gate. Primary requests hold a shared lock; a CPU fallback
+   waits for active primary requests and holds the exclusive lock until its
+   response and requested unload complete, blocking new Metal traffic
+   meanwhile.
 1. If the final Metal response contains zero-norm or non-finite vectors and
    `ollama_cpu_fallback` is enabled, retain the valid vectors and collect
    every invalid response position.
@@ -84,11 +91,13 @@ The native fallback request is:
 input strings are the exact already-affixed strings sent through the primary
 path.
 
-Ollama keys loaded runners by model and runner options. Changing `num_gpu` from
-the normal automatic Metal placement to `0` therefore unloads the Metal runner,
-loads a CPU runner on demand, and serves the fallback. `keep_alive: "0s"`
-unloads the CPU runner immediately afterward. The next normal request loads a
-fresh Metal runner.
+The request asks Ollama to use a CPU-only runner through `num_gpu: 0` and to
+unload it through `keep_alive: "0s"`. With the diagnosed Ollama version,
+changing runner options was observed to swap out the Metal runner, load CPU on
+demand, unload CPU after the response, and load fresh Metal on the next primary
+request. The gate prevents other AgentsView requests from racing that observed
+lifecycle; tests cover AgentsView's request ordering, not Ollama's internal
+scheduler.
 
 ## Error Handling
 
@@ -98,10 +107,12 @@ their existing behavior.
 
 The CPU request gets one attempt bounded by the configured server timeout. Its
 response must contain exactly one correctly sized, finite, non-zero vector per
-fallback input, in request order. If the CPU request fails, returns the wrong
-shape, or returns another invalid vector, the encoder returns an error that
-retains both the original Metal failure and the CPU failure. It returns no
-partial batch, so invalid data cannot reach vector persistence.
+fallback input, in request order. Native vectors use the same strict decoder as
+the OpenAI-compatible response, so JSON `null` components are rejected instead
+of becoming zero. If the CPU request fails, returns the wrong shape, or returns
+another invalid vector, the encoder returns an error that retains both the
+original Metal failure and the CPU failure. It returns no partial batch, so
+invalid data cannot reach vector persistence.
 
 The encoder may log that it is retrying a count of invalid vectors through the
 configured Ollama CPU fallback, but it must not log input text.
@@ -111,7 +122,8 @@ configured Ollama CPU fallback, but it must not log input text.
 - `internal/config` owns the new per-server boolean and validation.
 - `cmd/agentsview` copies the resolved setting into `vector.EncoderConfig`.
 - `internal/vector/encoder.go` owns endpoint derivation, the native Ollama
-  request and response types, selective fallback, validation, and merge.
+  request and response types, per-endpoint coordination, selective fallback,
+  validation, and merge.
 - `go.kenn.io/kit` remains provider-agnostic and unchanged.
 
 Because query and document encoders share `NewEncoder`, the fallback applies to
@@ -131,7 +143,10 @@ encoder behavior:
   never calls the native endpoint.
 - HTTP, shape, dimension, and invalid-vector failures from the CPU attempt leave
   the whole encode call failed.
+- Native JSON `null` components are rejected.
 - Non-vector primary failures never trigger the CPU endpoint.
+- Concurrent opted-in encoders for one endpoint cannot send primary traffic
+  while a CPU fallback is in flight.
 - Config parsing and validation accept the explicit flag and reject an enabled
   fallback whose endpoint does not end in `/v1`.
 

@@ -14,7 +14,10 @@ recomputing only invalid embedding outputs with a short-lived CPU runner.
 into the existing OpenAI-compatible encoder. After ordinary Metal retries are
 exhausted, the encoder retains valid vectors, sends only invalid inputs to
 Ollama's native `/api/embed` endpoint with `num_gpu: 0` and `keep_alive: "0s"`,
-validates the response, and merges it into the batch.
+validates the response, and merges it into the batch. Opted-in encoders sharing
+the same native endpoint use a process-wide read/write gate: primary traffic is
+concurrent under shared access, while CPU fallback quiesces it under exclusive
+access.
 
 **Tech Stack:** Go, BurntSushi TOML, `net/http`, `httptest`, testify, Ollama's
 native embedding HTTP API.
@@ -29,6 +32,8 @@ native embedding HTTP API.
   `options.num_gpu: 0`, and `keep_alive: "0s"`.
 - Model, dimensions, prefixes, suffix, and API credentials stay identical.
 - The fallback is transport-only and must not join the generation fingerprint.
+- Query-bearing endpoints must preserve their query on both primary and native
+  requests.
 - Do not change `go.kenn.io/kit`.
 - Do not install a branch binary over the live AgentsView binary or restart the
   live daemon without separate explicit permission.
@@ -204,6 +209,11 @@ git commit -m "feat(vector): configure Ollama CPU fallback" \
 
 - Modify: `internal/vector/encoder.go:168-490`
 - Test: `internal/vector/encoder_test.go:1-760`
+- Test: `cmd/agentsview/embeddings_test.go`
+- Modify:
+  `docs/superpowers/specs/2026-08-10-ollama-cpu-embedding-fallback-design.md`
+- Modify:
+  `docs/superpowers/plans/2026-08-10-automatic-ollama-cpu-embedding-fallback.md`
 
 **Interfaces:**
 
@@ -212,6 +222,7 @@ git commit -m "feat(vector): configure Ollama CPU fallback" \
 - Produces:
 
     - `ollamaEmbedURL(endpoint string) (string, error)`
+    - `openAIEmbeddingsURL(endpoint string) (string, error)`
     - `(*encoderClient).requestInputs(texts []string) []string`
     - `(*encoderClient).ollamaCPUFallback(ctx context.Context, texts []string, primaryVectors [][]float32) ([][]float32, error)`
     - Primary attempts that retain ordered vectors when norm validation fails.
@@ -361,18 +372,24 @@ type ollamaEmbedOptions struct {
 }
 
 type ollamaEmbedResponse struct {
-	Embeddings [][]float32 `json:"embeddings"`
+	Embeddings []embeddingVector `json:"embeddings"`
 }
 ```
 
-Derive the native URL by parsing `cfg.Endpoint`, trimming one trailing slash,
-replacing the final `/v1` with `/api/embed`, clearing `RawPath`, and preserving
-scheme, host, proxy prefix, and query values.
+Derive both request URLs by parsing `cfg.Endpoint` and clearing `RawPath`.
+Append `/embeddings` to the primary path without moving it into the query
+string. For the native URL, trim one trailing slash and replace the final `/v1`
+with `/api/embed`. Preserve scheme, host, proxy prefix, and query values for
+both.
 
-Add `TestOllamaEmbedURLPreservesEndpointComponents` as a table test for a plain
+Add `TestEmbeddingURLsPreserveEndpointComponents` as a table test for a plain
 `/v1` endpoint and a `/proxy/v1/?tenant=local` endpoint. Assert the exact native
 URL, including the proxy prefix and query string, so dropping queries or
 mishandling a trailing slash cannot pass.
+
+Add an HTTP-boundary test that drives fallback through the query-bearing proxy
+endpoint and asserts both `/proxy/v1/embeddings?tenant=local` and
+`/proxy/api/embed?tenant=local` are reached.
 
 Factor input affixing into:
 
@@ -393,6 +410,14 @@ primary strings.
 1. Send the same bearer credential as the primary request.
 1. Make exactly one HTTP call using the existing timeout-bound client.
 1. Copy the outer primary slice and replace only invalid positions.
+
+All opted-in encoders whose derived native URL is identical share a process-wide
+`sync.RWMutex`. Each primary request holds `RLock` for its HTTP attempt. The CPU
+fallback takes `Lock` after the invalid primary attempt returns, waiting for
+active primary requests and preventing new ones until the native response and
+requested unload complete. Add a concurrent HTTP test using two independently
+constructed encoders to prove no primary request reaches the server during the
+exclusive fallback.
 
 At this step, implement the successful native-request path and only the minimum
 response-count guard needed to merge without indexing outside the response.
@@ -443,9 +468,10 @@ Add these focused tests, each with its own `httptest.Server` handler:
   boundaries that must never switch runners.
 - `TestEncoderOllamaCPUFallbackFailureLeavesBatchFailed`: table subtests for
   native status 500, wrong response count, wrong vector dimension, and a
-  zero-norm CPU vector. Each asserts nil output, one CPU call, an error
-  containing both `invalid embedding` and `Ollama CPU fallback`, and no second
-  CPU attempt.
+  zero-norm CPU vector. Add a raw native response containing a JSON `null`
+  component and assert it is rejected by the strict decoder. Each asserts nil
+  output, one CPU call, an error containing both `invalid embedding` and
+  `Ollama CPU fallback`, and no second CPU attempt.
 - `TestNewVectorEncoderWiresOllamaCPUFallback` in
   `cmd/agentsview/embeddings_test.go`: build a named server config with the
   flag enabled, call `newVectorEncoder`, return an invalid OpenAI-compatible
@@ -500,7 +526,10 @@ dimension, cancellation, and invalid-vector tests.
 - [ ] **Step 10: Commit the fallback behavior**
 
 ```bash
-git add internal/vector/encoder.go internal/vector/encoder_test.go
+git add internal/vector/encoder.go internal/vector/encoder_test.go \
+  cmd/agentsview/embeddings_test.go \
+  docs/superpowers/specs/2026-08-10-ollama-cpu-embedding-fallback-design.md \
+  docs/superpowers/plans/2026-08-10-automatic-ollama-cpu-embedding-fallback.md
 git commit -m "fix(vector): recover invalid Ollama embeddings on CPU" \
   -m "Keep Metal as the fast path while isolating the expensive CPU runner to invalid vectors after normal retries are exhausted."
 ```
@@ -537,10 +566,12 @@ ollama_cpu_fallback = true
 ```
 
 Explain that invalid Metal responses first use normal retries, then only bad
-inputs are sent to `/api/embed` with `num_gpu: 0`; Ollama swaps out Metal,
-unloads CPU after the response, and reloads fresh Metal on the next request.
-Call out the one-time latency cost and the requirement that the configured
-endpoint end in `/v1`.
+inputs are sent to `/api/embed` with `num_gpu: 0`; the request asks Ollama for a
+CPU-only runner and immediate unload. State that the diagnosed Ollama version
+was observed to swap out Metal, unload CPU after the response, and reload fresh
+Metal on the next request; AgentsView gates its own endpoint traffic around this
+sequence but does not verify Ollama's scheduler lifecycle. Call out the one-time
+latency cost and the requirement that the configured endpoint end in `/v1`.
 
 - [ ] **Step 3: Correct the direct llama-server cache guidance**
 

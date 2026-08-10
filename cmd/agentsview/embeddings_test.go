@@ -194,6 +194,49 @@ func TestVectorGenerationParams(t *testing.T) {
 		"enabling request_dimensions cuts a new generation")
 }
 
+func TestNewVectorEncoderWiresOllamaCPUFallback(t *testing.T) {
+	var cpuCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1/embeddings":
+			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]any{{
+					"index": 0, "embedding": []float32{0, 0, 0},
+				}},
+			}))
+		case "/api/embed":
+			cpuCalls.Add(1)
+			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+				"model":      "test-model",
+				"embeddings": [][]float32{{1, 2, 3}},
+			}))
+		default:
+			require.FailNow(t, "unexpected request path", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	enc, err := newVectorEncoder(config.VectorEmbeddingsConfig{
+		Model:     "test-model",
+		Dimension: 3,
+		Servers: map[string]config.VectorEmbeddingsServerConfig{
+			"local": {
+				Endpoint:          srv.URL + "/v1",
+				Timeout:           "1s",
+				MaxRetries:        1,
+				OllamaCPUFallback: true,
+			},
+		},
+	}, "local", "")
+	require.NoError(t, err)
+
+	out, err := enc(context.Background(), []string{"alpha"})
+	require.NoError(t, err)
+	assert.Equal(t, [][]float32{{1, 2, 3}}, out)
+	assert.Equal(t, int32(1), cpuCalls.Load())
+}
+
 func TestRecallVectorGenerationExtendsExtractionFingerprint(t *testing.T) {
 	cfg := config.VectorEmbeddingsConfig{
 		Model: "embed-model", Dimension: 3, MaxInputChars: 4000,
