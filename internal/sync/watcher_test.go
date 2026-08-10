@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -490,6 +492,101 @@ func TestPendingWatchBatchOverflowsByEntryCount(t *testing.T) {
 	require.True(t, ok)
 	assert.True(t, batch.FullSync)
 	assert.Empty(t, batch.Paths)
+}
+
+func TestWatchBatchAccumulatorMergesAndSortsPublicWork(t *testing.T) {
+	accumulator := NewWatchBatchAccumulator(nil)
+	rename := WatchRename{
+		Path: "/sessions/c.jsonl", Root: "/sessions", Agent: "codex", ItemType: ItemIsFile,
+	}
+	accumulator.Add(WatchBatch{
+		Paths:          []string{"/sessions/b.jsonl", "/sessions/a.jsonl"},
+		Renames:        []WatchRename{rename},
+		ReconcileRoots: []string{"/sessions", "/other"},
+		LostEvents:     true,
+	})
+	accumulator.Add(WatchBatch{
+		Paths:          []string{"/sessions/a.jsonl"},
+		Renames:        []WatchRename{rename},
+		ReconcileRoots: []string{"/other"},
+	})
+
+	batch, ok := accumulator.Take()
+	require.True(t, ok)
+	assert.Equal(t, WatchBatch{
+		Paths:           []string{"/sessions/a.jsonl", "/sessions/b.jsonl"},
+		Renames:         []WatchRename{rename},
+		ReconcileRoots:  []string{"/other", "/sessions"},
+		LostEvents:      true,
+		lifecycleTokens: nil,
+	}, batch)
+	assert.True(t, accumulator.Empty())
+}
+
+func TestWatchBatchAccumulatorReportsEntryAndBytePromotion(t *testing.T) {
+	tests := []struct {
+		name       string
+		add        func(*WatchBatchAccumulator)
+		wantReason WatchBatchPromotionReason
+	}{
+		{
+			name: "entry limit",
+			add: func(accumulator *WatchBatchAccumulator) {
+				paths := make([]string, defaultWatchBatchMaxEntries+1)
+				for i := range paths {
+					paths[i] = fmt.Sprintf("/sessions/%05d", i)
+				}
+				accumulator.Add(WatchBatch{Paths: paths})
+			},
+			wantReason: WatchBatchPromotionEntryLimit,
+		},
+		{
+			name: "byte limit",
+			add: func(accumulator *WatchBatchAccumulator) {
+				accumulator.Add(WatchBatch{Paths: []string{
+					"/sessions/" + strings.Repeat("a", defaultWatchBatchMaxPathBytes),
+				}})
+			},
+			wantReason: WatchBatchPromotionByteLimit,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var reasons []WatchBatchPromotionReason
+			accumulator := NewWatchBatchAccumulator(func(reason WatchBatchPromotionReason) {
+				reasons = append(reasons, reason)
+			})
+
+			tt.add(accumulator)
+
+			batch, ok := accumulator.Take()
+			require.True(t, ok)
+			assert.Equal(t, WatchBatch{FullSync: true, LostEvents: true}, batch)
+			assert.Equal(t, []WatchBatchPromotionReason{tt.wantReason}, reasons)
+		})
+	}
+}
+
+func TestWatchBatchJSONExcludesLifecycleTokens(t *testing.T) {
+	gate := &recordingLifecycleGate{acknowledged: make(chan uint64, 1)}
+	want := WatchBatch{
+		Paths:          []string{"/sessions/a.jsonl"},
+		Renames:        []WatchRename{{Path: "/sessions/old", Root: "/sessions", ItemType: ItemIsDir}},
+		ReconcileRoots: []string{"/sessions"},
+		LostEvents:     true,
+	}
+	withLifecycle := want
+	withLifecycle.lifecycleTokens = []backendLifecycleToken{{gate: gate, generation: 4}}
+
+	data, err := json.Marshal(withLifecycle)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"paths"`)
+	assert.NotContains(t, string(data), "lifecycle")
+	assert.NotContains(t, string(data), `"Paths"`)
+
+	var got WatchBatch
+	require.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, want, got)
 }
 
 func TestPendingWatchBatchOverflowsByPathBytes(t *testing.T) {

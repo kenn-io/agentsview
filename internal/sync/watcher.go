@@ -52,10 +52,10 @@ const (
 )
 
 type WatchRename struct {
-	Path     string
-	Root     string
-	Agent    string
-	ItemType WatchItemType
+	Path     string        `json:"path"`
+	Root     string        `json:"root,omitempty"`
+	Agent    string        `json:"agent,omitempty"`
+	ItemType WatchItemType `json:"item_type,omitempty"`
 }
 
 // WatchBatch describes one serialized watcher callback. FullSync is an
@@ -64,11 +64,11 @@ type WatchRename struct {
 // LostEvents distinguishes overflow recovery from an ordinary authoritative
 // reconciliation so freshness shortcuts can be invalidated only when needed.
 type WatchBatch struct {
-	Paths           []string
-	Renames         []WatchRename
-	ReconcileRoots  []string
-	FullSync        bool
-	LostEvents      bool
+	Paths           []string      `json:"paths,omitempty"`
+	Renames         []WatchRename `json:"renames,omitempty"`
+	ReconcileRoots  []string      `json:"reconcile_roots,omitempty"`
+	FullSync        bool          `json:"full_sync,omitempty"`
+	LostEvents      bool          `json:"lost_events,omitempty"`
 	lifecycleTokens []backendLifecycleToken
 }
 
@@ -128,7 +128,7 @@ type pendingWatchBatch struct {
 	maxPathBytes   int
 	fullSync       bool
 	lostEvents     bool
-	onOverflow     func()
+	onOverflow     func(WatchBatchPromotionReason)
 }
 
 type pendingBackendRename struct {
@@ -193,7 +193,7 @@ func (p *pendingWatchBatch) AddRename(rename WatchRename) {
 		return
 	}
 	if len(p.renames)+1 > p.maxEntries {
-		p.overflow()
+		p.overflow(WatchBatchPromotionEntryLimit)
 		return
 	}
 	if !p.retainStrings(rename.Path, rename.Root, rename.Agent) {
@@ -269,7 +269,7 @@ func (p *pendingWatchBatch) AddLifecycle(token backendLifecycleToken) {
 		return
 	}
 	if len(p.strings)+len(p.lifecycle)+1 > p.maxEntries {
-		p.overflow()
+		p.overflow(WatchBatchPromotionEntryLimit)
 		if len(p.lifecycle)+1 > p.maxEntries {
 			return
 		}
@@ -319,9 +319,12 @@ func (p *pendingWatchBatch) merge(other *pendingWatchBatch) {
 
 func (p *pendingWatchBatch) retainStrings(values ...string) bool {
 	additionalEntries, additionalBytes := p.retainedStringCost(values...)
-	if len(p.strings)+additionalEntries > p.maxEntries ||
-		p.pathBytes+additionalBytes > p.maxPathBytes {
-		p.overflow()
+	if len(p.strings)+additionalEntries > p.maxEntries {
+		p.overflow(WatchBatchPromotionEntryLimit)
+		return false
+	}
+	if p.pathBytes+additionalBytes > p.maxPathBytes {
+		p.overflow(WatchBatchPromotionByteLimit)
 		return false
 	}
 	for _, value := range values {
@@ -359,9 +362,9 @@ func (p *pendingWatchBatch) retainedStringCost(values ...string) (int, int) {
 	return additionalEntries, additionalBytes
 }
 
-func (p *pendingWatchBatch) overflow() {
+func (p *pendingWatchBatch) overflow(reason WatchBatchPromotionReason) {
 	if !p.fullSync && p.onOverflow != nil {
-		p.onOverflow()
+		p.onOverflow(reason)
 	}
 	p.makeFullSync(true)
 }
@@ -511,7 +514,7 @@ func newWatchEventSink(maxEntries, maxPathBytes int) *watchEventSink {
 		pending: newPendingWatchBatch(maxEntries, maxPathBytes),
 		wake:    make(chan struct{}, 1),
 	}
-	sink.pending.onOverflow = sink.overflows.Inc
+	sink.pending.onOverflow = func(WatchBatchPromotionReason) { sink.overflows.Inc() }
 	return sink
 }
 
@@ -519,7 +522,7 @@ func (s *watchEventSink) TryAccumulate(
 	accumulate func(add func(backendEvent) bool) bool,
 ) bool {
 	batch := newPendingWatchBatch(s.pending.maxEntries, s.pending.maxPathBytes)
-	batch.onOverflow = s.overflows.Inc
+	batch.onOverflow = func(WatchBatchPromotionReason) { s.overflows.Inc() }
 	meaningful := accumulate(batch.AddBackendEvent)
 	if batch.Empty() {
 		return true

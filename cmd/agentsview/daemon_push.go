@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/server"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 type daemonPushRequest struct {
@@ -37,7 +39,9 @@ type daemonPushRequest struct {
 	// defers instead of rebuilding when a live serve process holds the
 	// mirror and skips archive-scale diagnostics (see
 	// duckdbsync.SyncOptions.Automatic).
-	Automatic bool `json:"automatic,omitempty"`
+	Automatic     bool                        `json:"automatic,omitempty"`
+	WatchBatch    *syncpkg.WatchBatch         `json:"watch_batch,omitempty"`
+	WatchRecovery *syncpkg.WatchRecoveryScope `json:"watch_recovery,omitempty"`
 }
 
 // postDaemonPush delegates a push to the local daemon. It negotiates an SSE
@@ -54,42 +58,80 @@ func postDaemonPush[T, P any](
 	onProgress func(P),
 ) (T, error) {
 	var zero T
-	data, err := json.Marshal(body)
-	if err != nil {
-		return zero, err
+	body = daemonPushRequestForCapabilities(tr, body)
+	fallbackAttempted := false
+	for {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return zero, err
+		}
+		req, err := http.NewRequestWithContext(
+			ctx, http.MethodPost, strings.TrimSuffix(tr.URL, "/")+path,
+			bytes.NewReader(data),
+		)
+		if err != nil {
+			return zero, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "text/event-stream")
+		req.Header.Set("Origin", tr.URL)
+		if authToken != "" {
+			req.Header.Set("Authorization", "Bearer "+authToken)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return zero, err
+		}
+		if resp.StatusCode != http.StatusOK {
+			msg, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if !fallbackAttempted && body.WatchBatch != nil &&
+				daemonRejectsWatchScope(resp.StatusCode, msg) {
+				body.WatchBatch = nil
+				body.WatchRecovery = nil
+				fallbackAttempted = true
+				continue
+			}
+			return zero, daemonPushError(resp.StatusCode, msg)
+		}
+		defer resp.Body.Close()
+		if strings.HasPrefix(
+			resp.Header.Get("Content-Type"), "text/event-stream",
+		) {
+			return parseDaemonPushSSE[T](resp.Body, onProgress)
+		}
+		var out T
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			return zero, err
+		}
+		return out, nil
 	}
-	req, err := http.NewRequestWithContext(
-		ctx, http.MethodPost, strings.TrimSuffix(tr.URL, "/")+path,
-		bytes.NewReader(data),
-	)
-	if err != nil {
-		return zero, err
+}
+
+func daemonPushRequestForCapabilities(
+	tr transport, body daemonPushRequest,
+) daemonPushRequest {
+	if body.WatchBatch != nil && tr.Runtime != nil && tr.Runtime.API > 0 &&
+		tr.Runtime.API < server.ScopedWatchPushAPIVersion {
+		body.WatchBatch = nil
+		body.WatchRecovery = nil
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("Origin", tr.URL)
-	if authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+authToken)
+	return body
+}
+
+func daemonRejectsWatchScope(status int, body []byte) bool {
+	if status != http.StatusBadRequest && status != http.StatusUnprocessableEntity {
+		return false
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return zero, err
+	message := strings.ToLower(string(body))
+	if !strings.Contains(message, "watch_batch") &&
+		!strings.Contains(message, "watch_recovery") {
+		return false
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(resp.Body)
-		return zero, daemonPushError(resp.StatusCode, msg)
-	}
-	if strings.HasPrefix(
-		resp.Header.Get("Content-Type"), "text/event-stream",
-	) {
-		return parseDaemonPushSSE[T](resp.Body, onProgress)
-	}
-	var out T
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return zero, err
-	}
-	return out, nil
+	return strings.Contains(message, "unexpected") ||
+		strings.Contains(message, "unknown") ||
+		strings.Contains(message, "additional") ||
+		strings.Contains(message, "not allowed")
 }
 
 // daemonPushError renders a non-200 daemon response, preferring the API's

@@ -172,7 +172,9 @@ type daemonPushRequest struct {
 	// archive on every changed batch, and archive-scale diagnostics are
 	// skipped (see duckdbsync.SyncOptions.Automatic). Explicit pushes
 	// leave it unset and do neither.
-	Automatic bool `json:"automatic,omitempty"`
+	Automatic     bool                        `json:"automatic,omitempty"`
+	WatchBatch    *syncpkg.WatchBatch         `json:"watch_batch,omitempty"`
+	WatchRecovery *syncpkg.WatchRecoveryScope `json:"watch_recovery,omitempty"`
 }
 
 // WithVectorPushSource wires the local vectors.db push source used by the

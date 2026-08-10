@@ -103,6 +103,11 @@ try {
     ["SessionProviderResponse", "dirs"],
     ["SettingsResponse", "disabled_agents"],
     ["SettingsResponse", "session_providers"],
+    ["SyncWatchBatch", "paths"],
+    ["SyncWatchBatch", "reconcile_roots"],
+    ["SyncWatchBatch", "renames"],
+    ["SyncWatchRecoveryScope", "available_roots"],
+    ["SyncWatchRecoveryScope", "deferred_roots"],
   ]) {
     normalizeNullableArray(schemas?.[model]?.properties?.[property], `${model}.${property}`);
   }

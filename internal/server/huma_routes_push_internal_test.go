@@ -27,6 +27,26 @@ import (
 // only needs identity, never a method call.
 type stubVectorPushSource struct{}
 
+func TestDaemonPushRequestWatchTransportJSON(t *testing.T) {
+	payload := []byte(`{
+		"full":false,
+		"watch_batch":{"paths":["/sessions/changed.jsonl"],"lost_events":true},
+		"watch_recovery":{"available_roots":["/sessions"],"deferred_roots":["/offline"]}
+	}`)
+	var request daemonPushRequest
+	require.NoError(t, json.Unmarshal(payload, &request))
+	require.NotNil(t, request.WatchBatch)
+	assert.Equal(t, []string{"/sessions/changed.jsonl"}, request.WatchBatch.Paths)
+	assert.True(t, request.WatchBatch.LostEvents)
+	require.NotNil(t, request.WatchRecovery)
+	assert.Equal(t, []string{"/sessions"}, request.WatchRecovery.AvailableRoots)
+	assert.Equal(t, []string{"/offline"}, request.WatchRecovery.DeferredRoots)
+
+	encoded, err := json.Marshal(request)
+	require.NoError(t, err)
+	assert.JSONEq(t, string(payload), string(encoded))
+}
+
 func (stubVectorPushSource) BeginExport(
 	context.Context, []string,
 ) (postgres.VectorExport, bool, error) {
