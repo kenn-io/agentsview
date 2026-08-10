@@ -223,15 +223,16 @@ func ApplyWatchBatch(
 		}
 	}
 	if plan.full {
-		if len(recovery.AvailableRoots) == 0 {
+		reconcileRoots := watchRecoveryAvailableRoots(recovery)
+		if len(reconcileRoots) == 0 {
 			return nil
 		}
 		if plan.lostEvents {
 			err = engine.ReconcileWatchRootsAfterLostEvents(
-				ctx, recovery.AvailableRoots, false,
+				ctx, reconcileRoots, false,
 			)
 		} else {
-			err = engine.ReconcileWatchRoots(ctx, recovery.AvailableRoots, false)
+			err = engine.ReconcileWatchRoots(ctx, reconcileRoots, false)
 		}
 		if err != nil {
 			return watchBatchReconciliationError(err, nil, true, plan.lostEvents)
@@ -309,7 +310,7 @@ func (e *Engine) SyncWatchBatchThenRun(
 
 	reconcileRoots := plan.reconcileRoots
 	if plan.full {
-		reconcileRoots = recovery.AvailableRoots
+		reconcileRoots = watchRecoveryAvailableRoots(recovery)
 	}
 	if len(reconcileRoots) > 0 {
 		reconcileStats, tombstoned, _, reconcileErr :=
@@ -334,6 +335,17 @@ func (e *Engine) SyncWatchBatchThenRun(
 		}
 	}
 	return stats, nil
+}
+
+// watchRecoveryAvailableRoots keeps the recovery dereference local to the
+// nil check. ValidateWatchBatch already requires a recovery scope whenever a
+// plan can become full, but callers and static analyzers need not reproduce
+// that cross-function implication.
+func watchRecoveryAvailableRoots(recovery *WatchRecoveryScope) []string {
+	if recovery == nil {
+		return nil
+	}
+	return recovery.AvailableRoots
 }
 
 func watchRecoveryCoversProviderRoot(
