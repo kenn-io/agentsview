@@ -19,7 +19,7 @@ func (im Importer) ImportExtracted(
 	if err := validateTargetSetPaths(targets); err != nil {
 		return stats, err
 	}
-	targets = filterDisabledImportTargets(targets, im.DisabledAgents)
+	targets = FilterDisabledTargets(targets, im.DisabledAgents)
 	if len(targets.Dirs) == 0 {
 		return stats, nil
 	}
@@ -50,7 +50,10 @@ func (im Importer) ImportExtracted(
 	return stats, nil
 }
 
-func filterDisabledImportTargets(
+// FilterDisabledTargets removes provider-owned roots and curated files before
+// remote collection or ingestion. Shared extra files remain because TargetSet
+// does not attribute them to one provider.
+func FilterDisabledTargets(
 	targets TargetSet,
 	disabled []parser.AgentType,
 ) TargetSet {
@@ -137,7 +140,7 @@ func newImportInputs(
 	targets TargetSet,
 	root string,
 ) (importLayout, syncpkg.EngineConfig, error) {
-	targets = filterDisabledImportTargets(targets, disabledAgents)
+	targets = FilterDisabledTargets(targets, disabledAgents)
 	layout, err := newImportLayout(targets, root)
 	if err != nil {
 		return importLayout{}, syncpkg.EngineConfig{}, err

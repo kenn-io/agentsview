@@ -1,6 +1,7 @@
 package sync_test
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	sessionsync "go.kenn.io/agentsview/internal/sync"
+	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 func TestDisabledProviderPreservesArchivedSession(t *testing.T) {
@@ -52,4 +54,63 @@ func TestDisabledProviderPreservesArchivedSession(t *testing.T) {
 	assert.Nil(t, stored.DeletedAt)
 	assert.Nil(t, stored.DeletionCause)
 	assert.Equal(t, source, *stored.FilePath)
+}
+
+func TestDisabledProviderPreservesArchivedSessionAcrossRebuild(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	base := t.TempDir()
+	geminiRoot := filepath.Join(base, "gemini")
+	geminiSource := filepath.Join(
+		geminiRoot, "tmp", "project", "chats", "session-existing.json",
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(geminiSource), 0o755))
+	require.NoError(t, os.WriteFile(geminiSource, []byte(`{"sessionId":"old"}`), 0o644))
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "archived-gemini-rebuild", Project: "archived-project",
+		Machine: "test-machine", Agent: string(parser.AgentGemini),
+		FilePath: &geminiSource, MessageCount: 1, UserMessageCount: 1,
+	}))
+	require.NoError(t, database.InsertMessages([]db.Message{{
+		SessionID: "archived-gemini-rebuild", Ordinal: 0,
+		Role: "user", Content: "preserve this archived message",
+	}}))
+
+	claudeRoot := filepath.Join(base, "claude")
+	claudeSource := filepath.Join(claudeRoot, "project", "enabled.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(claudeSource), 0o755))
+	require.NoError(t, os.WriteFile(
+		claudeSource,
+		[]byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID(
+			"2026-08-09T10:00:00Z", "enabled session", "enabled-rebuild",
+		).String()),
+		0o644,
+	))
+
+	cfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {claudeRoot},
+			parser.AgentGemini: {geminiRoot},
+		},
+		DisabledAgents:   []parser.AgentType{parser.AgentGemini},
+		LocalMachineName: "test-machine",
+	}
+	engine := sessionsync.NewEngine(database, sessionsync.EngineConfig{
+		AgentDirs: cfg.SyncAgentDirs(), Machine: cfg.LocalMachineName,
+	})
+	t.Cleanup(engine.Close)
+
+	stats := engine.ResyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted, "rebuild warnings: %v", stats.Warnings)
+
+	stored, err := database.GetSessionFull(t.Context(), "archived-gemini-rebuild")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Nil(t, stored.DeletedAt)
+	assert.Equal(t, geminiSource, *stored.FilePath)
+	messages, err := database.GetMessages(
+		t.Context(), "archived-gemini-rebuild", 0, 10, true,
+	)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "preserve this archived message", messages[0].Content)
 }

@@ -22,6 +22,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/insight"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/pricingrefresh"
 	"go.kenn.io/agentsview/internal/recall/extract"
@@ -62,19 +63,20 @@ const (
 
 // Server is the HTTP server that serves the SPA and REST API.
 type Server struct {
-	mu              gosync.RWMutex
-	cfg             config.Config
-	db              db.Store
-	engine          *sync.Engine
-	onDemandEngine  *sync.Engine
-	sessions        service.SessionService
-	broadcaster     *Broadcaster
-	mux             *http.ServeMux
-	api             huma.API
-	httpSrv         *http.Server
-	startupProbeKey []byte
-	version         VersionInfo
-	dataDir         string
+	mu                   gosync.RWMutex
+	cfg                  config.Config
+	activeDisabledAgents []parser.AgentType
+	db                   db.Store
+	engine               *sync.Engine
+	onDemandEngine       *sync.Engine
+	sessions             service.SessionService
+	broadcaster          *Broadcaster
+	mux                  *http.ServeMux
+	api                  huma.API
+	httpSrv              *http.Server
+	startupProbeKey      []byte
+	version              VersionInfo
+	dataDir              string
 
 	httpRemoteCleanupRegistry *remotesync.CleanupRegistry
 
@@ -184,6 +186,7 @@ func New(
 
 	s := &Server{
 		cfg:                       cfg,
+		activeDisabledAgents:      append([]parser.AgentType(nil), cfg.DisabledAgents...),
 		db:                        database,
 		engine:                    engine,
 		sessions:                  sessions,
@@ -217,6 +220,20 @@ func New(
 	}
 	s.routes()
 	return s
+}
+
+// ingestionConfig returns the daemon-start configuration for session-provider
+// selection. Settings updates are persisted and reflected by GET immediately,
+// but the running engine, watchers, polling, and remote ingestion must keep one
+// provider set until restart.
+func (s *Server) ingestionConfig() config.Config {
+	s.mu.RLock()
+	cfg := s.cfg
+	s.mu.RUnlock()
+	cfg.DisabledAgents = append(
+		[]parser.AgentType(nil), s.activeDisabledAgents...,
+	)
+	return cfg
 }
 
 // Option configures a Server.

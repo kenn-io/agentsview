@@ -929,6 +929,30 @@ func newMirrorSync(t *testing.T, remote *mirrorTestRemote, dataDir string) (*db.
 	}
 }
 
+func TestPrepareHTTPSyncExcludesDisabledProviderBeforeTransfer(t *testing.T) {
+	remote := newMirrorTestRemote(t)
+	remote.writeSession(t, "enabled.jsonl", time.Now(), "enabled session")
+	disabledFile := remote.addFileScopedAgent(t)
+	dataDir := t.TempDir()
+	_, hs := newMirrorSync(t, remote, dataDir)
+	hs.DisabledAgents = []parser.AgentType{parser.AgentGemini}
+
+	prepared, err := hs.Prepare(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, prepared.Close()) })
+
+	assert.NotContains(t, prepared.Targets().Dirs, parser.AgentGemini)
+	assert.NotContains(t, prepared.Targets().Files, parser.AgentGemini)
+	require.Len(t, remote.archiveRequests, 1)
+	assert.NotContains(t, remote.archiveRequests[0].Dirs, parser.AgentGemini)
+	assert.NotContains(t, remote.archiveRequests[0].Files, parser.AgentGemini)
+	disabledMirrorPath, err := safeRemappedRemotePath(
+		MirrorDir(dataDir, hs.Host), disabledFile,
+	)
+	require.NoError(t, err)
+	assert.NoFileExists(t, disabledMirrorPath)
+}
+
 func TestHTTPSyncMirrorSecondSyncTransfersOnlyDelta(t *testing.T) {
 	remote := newMirrorTestRemote(t)
 	base := time.Date(2026, 7, 8, 10, 0, 0, 123456789, time.UTC)

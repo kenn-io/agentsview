@@ -22,10 +22,11 @@ Svelte 5, TypeScript, Paraglide JS, kit-ui, Vite+/Vitest.
 
 ## Global Constraints
 
-- `disabled_agents` changes session ingestion only; Recall execution is
+- `disabled_agents` changes session-source processing only; Recall execution is
   unchanged.
-- Disabling never deletes or hides archived sessions.
-- Provider changes require daemon restart; the UI never restarts it.
+- Disabling never deletes or hides archived sessions, including during rebuilds.
+- Provider changes require restart of the daemon and any separate push-watch
+  process; the UI never restarts them.
 - Ordinary batches remain bounded; ambiguous events remain authoritative.
 - Manual pushes and clients omitting the optional batch preserve current
   behavior.
@@ -124,10 +125,13 @@ explicit empty TOML array. Make `SaveSettings` accept a typed provider slice,
 validate before locking, persist, then update memory. Use the `Sync*` maps at
 every production engine constructor, including session-usage refresh and the
 server's on-demand/no-sync engine; existing `ResolveDirs` callers then omit
-disabled watch, poll, live-activity, diagnostic, and remote-source work. Filter
-the receiving-side remote `TargetSet` against the local disabled set before
-constructing its import engine, so a sending host cannot re-enable a locally
-disabled provider.
+disabled watch, poll, live-activity, diagnostic, and remote-source work. Capture
+an immutable daemon-start provider set so a Settings mutation cannot partially
+hot-apply to lazy engines or remote sync. Filter the receiving-side remote
+`TargetSet` before HTTP manifest/archive transfer and SSH download, as well as
+before active and rebuild import engines. Keep already mirrored disabled files
+but ignore them until re-enabling triggers a fresh manifest. Prove rebuild
+orphan-copy preserves disabled sessions and messages.
 
 - [ ] **Step 4: Document the config**
 
@@ -174,8 +178,10 @@ git commit -m "feat(sync): allow session providers to be disabled"
 
 PUT `{"disabled_agents":["gemini","claude","gemini"]}`. Assert response/TOML
 normalize to Claude then Gemini, ordered provider metadata still includes
-disabled Gemini and its dirs, invalid `nope` returns 400 without mutation, and
-read-only mode rejects mutation.
+disabled Gemini and its dirs, an unset selection returns `[]` rather than
+`null`, invalid `nope` returns 400 without mutation, and read-only mode rejects
+mutation. Update Settings before and after lazy engine construction and prove
+the current daemon keeps its startup provider set in both cases.
 
 - [ ] **Step 2: Run and verify failure**
 
@@ -260,11 +266,12 @@ text.
 - [ ] **Step 4: Implement compact rows**
 
 Use kit-ui `Toggle` and server-ordered provider metadata. Show dirs or localized
-not-configured text. Keep confirmed and row-pending state separate, disable
-pending/read-only rows, rollback on false, and show restart status on true.
-Rename visible panel copy to “Session Providers” but retain internal ID
-`agent-directories`. Add localized title, description, aria label, state labels,
-restart notice, and failure copy in all locales.
+not-configured text. Keep confirmed and pending state separate, disable every
+row while one complete-array save is pending (and all rows in read-only mode),
+rollback on false, and show restart status on true. Rename visible panel copy to
+“Session Providers” but retain internal ID `agent-directories`. Add localized
+title, description, aria label, state labels, restart notice, and failure copy
+in all locales.
 
 - [ ] **Step 5: Validate and commit**
 
@@ -356,7 +363,8 @@ exceed existing count and byte limits to get `FullSync+LostEvents`. Capture the
 promotion callback and assert it reports `entry_limit` or `byte_limit` without
 any path. JSON round-trip a batch with a lifecycle token and assert only public
 data survives. Assert CLI/server request shapes match and omission remains
-compatible.
+compatible. Add a scoped-push API capability version and prove a new client
+retries unscoped when an older daemon cannot accept strict-schema fields.
 
 - [ ] **Step 2: Run and verify failure**
 
@@ -384,7 +392,8 @@ promotion reason through `pendingWatchBatch.onOverflow`; callers log only that
 reason and aggregate pending counts. Add JSON tags and exclude lifecycle tokens.
 Define `WatchRecoveryScope` with available/deferred roots. Add optional pointer
 fields with JSON names `watch_batch` and `watch_recovery` to both request
-structs. Regenerate the frontend API after these final Huma schema fields land.
+structs. Gate them on the daemon capability and retain an unscoped fallback.
+Regenerate the frontend API after these final Huma schema fields land.
 
 - [ ] **Step 4: Test, format, and commit**
 
@@ -444,14 +453,20 @@ waiters         []chan error
 ```
 
 Dirty marks unscoped; batch methods add bounded scope unless superseded. Claim
-returns nil for unscoped or a copied batch. Restore merges failed scope with
-arrivals and preserves waiter order. Pass the claim for every push reason.
+returns nil for unscoped or a copied batch. The push loop is the sole retry
+owner: restore merges failed scope with arrivals and preserves waiter order;
+waiters remain pending through failed attempts and complete after eventual
+success, cancellation, or the final shutdown result. Pass the claim for every
+push reason.
 
 - [ ] **Step 5: Wire daemon PG**
 
 Use batch notification from `notifyPushForWatchBatch`. Attach claimed scope to
-`PGPushConfig`. For full/rename, probe recovery immediately before HTTP. Local
-PG/DuckDB callbacks accept and ignore their already-applied batches.
+`PGPushConfig`. For full/rename, probe recovery immediately before execution.
+Daemon PG sends the scope over HTTP. Local PG and DuckDB pass the claimed batch
+to `SyncWatchBatchThenRun`, which applies it and performs the push under one
+engine lock; they must not run the old follow-up `SyncAll`. Add a local-backend
+cardinality regression.
 
 - [ ] **Step 6: Test, format, and commit**
 
@@ -526,8 +541,10 @@ runs work, unlocks, and emits once. Failures skip work.
 
 - [ ] **Step 6: Use shared application in watcher callbacks**
 
-Call `sync.ApplyWatchBatch` from serve/archive watcher callbacks with the probed
-recovery scope. Preserve `WatchRetryError` acknowledgements.
+Call `sync.ApplyWatchBatch` from ordinary serve watcher callbacks. Archive push
+watchers hand the batch and probed recovery scope to the push loop; local push
+callbacks call `SyncWatchBatchThenRun`, while daemon callbacks transport the
+same scope. Preserve `WatchRetryError` acknowledgements.
 
 - [ ] **Step 7: Test, race-test, format, and commit**
 
@@ -557,7 +574,8 @@ git commit -m "feat(sync): run scoped batches with serialized work"
 
 Cover one-path update, one versus 10,000 unrelated-source cardinality,
 full/lost/rename/root authoritative behavior, omitted-field compatibility,
-stale-archive worker fallback, and pre-SSE HTTP 400 for malformed scope.
+old-daemon unscoped fallback, stale-archive worker fallback, and pre-SSE HTTP
+400 for malformed scope.
 
 - [ ] **Step 2: Run and verify failure**
 

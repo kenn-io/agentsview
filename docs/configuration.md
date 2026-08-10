@@ -693,11 +693,13 @@ Exclude session providers you do not use by listing their IDs in
 disabled_agents = ["gemini"]
 ```
 
-The setting applies to local discovery, file watching, scheduled polling, and
-remote session ingestion. Restart the AgentsView daemon after changing it.
-Previously archived sessions from a disabled provider remain available and are
-not deleted. The setting does not disable that provider as a Recall execution
-backend.
+The setting applies to local discovery, file watching, scheduled polling,
+session-source diagnostics, and remote session collection and ingestion.
+Restart the AgentsView daemon and any separate `pg push --watch` or
+`duckdb push --watch` process after changing it. Previously archived sessions
+from a disabled provider remain available and are not deleted, including during
+archive rebuilds. The setting does not disable that provider as a Recall
+execution backend.
 
 ### Multiple Directories
 

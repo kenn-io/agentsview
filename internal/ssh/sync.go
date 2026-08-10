@@ -52,6 +52,13 @@ func (rs *RemoteSync) Run(
 			"resolve dirs on %s: %w", rs.Host, err,
 		)
 	}
+	filtered := filterDisabledResolvedTargets(
+		dirs, files, extraFiles, forbiddenRoots, rs.DisabledAgents,
+	)
+	dirs = filtered.Dirs
+	files = filtered.Files
+	extraFiles = filtered.ExtraFiles
+	forbiddenRoots = filtered.ForbiddenRoots
 	if len(dirs) == 0 {
 		rs.reportProgress("No agent directories found on " + rs.Host)
 		fmt.Printf("No agent directories found on %s\n", rs.Host)
@@ -143,6 +150,18 @@ func (rs *RemoteSync) Run(
 	fmt.Println()
 	rs.reportProgress(remoteSyncSummary(rs.Host, stats))
 	return stats, nil
+}
+
+func filterDisabledResolvedTargets(
+	dirs map[parser.AgentType][]string,
+	files map[parser.AgentType][]string,
+	extraFiles, forbiddenRoots []string,
+	disabled []parser.AgentType,
+) remotesync.TargetSet {
+	return remotesync.FilterDisabledTargets(remotesync.TargetSet{
+		Dirs: dirs, Files: files, ExtraFiles: extraFiles,
+		ForbiddenRoots: forbiddenRoots,
+	}, disabled)
 }
 
 func (rs *RemoteSync) reportProgress(detail string) {

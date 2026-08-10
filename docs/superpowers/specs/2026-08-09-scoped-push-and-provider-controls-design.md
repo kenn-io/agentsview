@@ -71,16 +71,24 @@ Settings API update, so a typo cannot appear to disable work while doing
 nothing.
 
 Disabling a provider excludes it from local discovery, sync, watch plans,
-watcher fallback polling, and remote session-source ingestion. It does not
-delete archived data and does not affect agent binaries used outside session
-ingestion. The enabled-provider predicate is centralized and applied at sync
-engine and watch-plan boundaries rather than repeated as ad hoc checks in
+watcher fallback polling, explicit session-source diagnostics, and remote
+session-source collection and ingestion. It does not delete archived data and
+does not affect agent binaries used outside session-source processing, such as
+Recall execution. The enabled-provider predicate is centralized and applied at
+sync engine and watch-plan boundaries rather than repeated as ad hoc checks in
 individual providers.
 
 Configuration-file and Settings changes take effect for ingestion after the
-daemon restarts. This keeps the running engine, watcher coverage, and polling
-obligations consistent with one immutable provider set. Other persisted settings
-continue to apply according to their existing behavior.
+relevant long-running ingestion processes restart: the daemon and any separate
+`pg push --watch` or `duckdb push --watch` process. The running daemon retains
+an immutable startup provider set even though GET Settings immediately returns
+the new persisted selection. This keeps engines, watcher coverage, polling, and
+remote collection consistent. Other persisted settings continue to apply
+according to their existing behavior.
+
+Disabled-provider content already present in a persistent HTTP mirror is
+retained but ignored. It is not refreshed while disabled; re-enabling the
+provider refreshes its manifest and files before ingestion.
 
 ## Watch Batch Transport and Coalescing
 
@@ -94,11 +102,14 @@ The push loop keeps one bounded pending batch while a push is running:
 - ordinary paths, reconciliation roots, and renames are deduplicated and merged;
 - `LostEvents` is sticky;
 - any full-sync input promotes the pending batch to full sync;
-- exceeding the existing watcher batch count or byte bounds also promotes the
-  batch to full sync rather than dropping paths;
-- acknowledgements complete only after the push containing their batch succeeds
-  or fails;
-- a failed push restores its pending batch for the existing retry behavior.
+- exceeding the existing watcher batch count or byte bounds promotes to
+  `FullSync: true, LostEvents: true`, because discarding the individual paths
+  also invalidates path-dependent freshness caches;
+- the push loop owns retry: acknowledgements and their exact scope remain
+  pending across failed attempts and complete only after eventual success,
+  caller cancellation, or final shutdown failure;
+- a failed push restores its pending batch ahead of concurrent arrivals without
+  changing waiter order.
 
 Startup, manual, and other unscoped dirty notifications keep their existing
 unscoped synchronization behavior. Only notifications originating in a known
@@ -109,7 +120,9 @@ watch batch use the scoped path.
 The daemon request accepts the transport batch as an optional field. A new sync
 engine operation performs the same classification and reconciliation choices as
 a local watcher callback, then runs the PostgreSQL push while still serialized
-against other sync work.
+against other sync work. Direct local watch pushes call the same engine
+operation and do not run the old follow-up `SyncAll`; daemon-delegated pushes
+transport the batch so the daemon can perform that operation instead.
 
 For ordinary file batches, only the changed sources are classified, parsed, and
 committed. Explicit reconciliation roots and rename metadata use their existing
@@ -119,8 +132,10 @@ full push retain authoritative archive-scale reconciliation.
 
 The daemon treats malformed or internally contradictory batch metadata as a bad
 request rather than silently widening or narrowing the sync. Older clients that
-omit the field retain current behavior. PostgreSQL project filters and
-vector-generation promotion remain independent of sync scope.
+omit the field retain current behavior. A new client detects a daemon whose API
+predates scoped batches and retries that push without the optional fields, so a
+user-managed daemon upgrade cannot wedge watch mode. PostgreSQL project filters
+and vector-generation promotion remain independent of sync scope.
 
 ## Gemini Empty-Source Fast Path
 
@@ -153,10 +168,12 @@ including disabled providers, with:
 - disabled controls in read-only mode;
 - the existing saving and error feedback.
 
-A toggle saves immediately. If saving fails, the control returns to the last
-server-confirmed state. After a successful provider change, the panel displays a
-localized notice that the daemon must be restarted before ingestion changes take
-effect. The UI does not restart or stop the daemon itself.
+A toggle saves immediately. All provider toggles remain disabled while one save
+is pending so complete-array requests cannot race and overwrite each other. If
+saving fails, the control returns to the last server-confirmed state. After a
+successful provider change, the panel displays a localized notice that the
+daemon and any separate watch processes must be restarted before ingestion
+changes take effect. The UI does not restart or stop a process itself.
 
 All new user-facing copy uses Paraglide messages in English, Simplified Chinese,
 Traditional Chinese, Korean, and French. Generated API types are regenerated
@@ -180,7 +197,9 @@ Behavior tests will cover:
 
 - parsing, normalization, persistence, and invalid values for `disabled_agents`;
 - exclusion of disabled providers from discovery, watch plans, polling, and
-  remote ingestion without deleting archived sessions;
+  pre-transfer remote collection without deleting archived sessions;
+- preservation of disabled-provider sessions, messages, and push eligibility
+  across local and multi-source archive rebuilds;
 - transport serialization and bounded coalescing of paths, roots, renames,
   lost-event markers, acknowledgements, and full-sync promotion;
 - daemon selection of scoped synchronization and authoritative fallbacks;
@@ -199,11 +218,13 @@ check.
 
 ## Compatibility and Rollout
 
-The empty `disabled_agents` default preserves all current providers. Existing
-configuration files and daemon-push clients remain valid. The optional batch
-field lets new clients use scoped pushes while omitted fields preserve the
-existing daemon contract. No database migration is required.
+The empty `disabled_agents` default is returned as `[]` and preserves all
+current providers. Existing configuration files and daemon-push clients remain
+valid. The optional batch field lets new clients use scoped pushes while omitted
+fields preserve the existing daemon contract; new clients fall back to omission
+when a daemon reports an older API. No database migration is required.
 
 After upgrading, users may disable Gemini or any other unused session provider
-in Settings or TOML and restart the daemon. Existing Gemini sessions remain
-queryable; only future Gemini ingestion work stops.
+in Settings or TOML and restart the daemon plus any separate push-watch process.
+Existing Gemini sessions remain queryable; only future Gemini session-source
+work stops.

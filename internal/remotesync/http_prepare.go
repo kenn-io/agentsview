@@ -245,6 +245,7 @@ func (hs HTTPSync) prepare(
 	if err := validateTargetSetPaths(targets); err != nil {
 		return nil, err
 	}
+	targets = FilterDisabledTargets(targets, hs.DisabledAgents)
 
 	prepared := &PreparedHTTP{
 		sync:        hs,

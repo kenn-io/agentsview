@@ -41,12 +41,14 @@ type syncRouteFixture struct {
 }
 
 type syncRouteFixtureConfig struct {
-	stale        bool
-	remoteHosts  []config.RemoteHost
-	broadcaster  *Broadcaster
-	engine       *syncpkg.Engine
-	syncRunner   LocalSyncRunner
-	resyncRunner LocalResyncRunner
+	stale          bool
+	remoteHosts    []config.RemoteHost
+	disabledAgents []parser.AgentType
+	extraAgentDirs map[parser.AgentType][]string
+	broadcaster    *Broadcaster
+	engine         *syncpkg.Engine
+	syncRunner     LocalSyncRunner
+	resyncRunner   LocalResyncRunner
 }
 
 type syncRouteFixtureOption func(*syncRouteFixtureConfig)
@@ -74,6 +76,16 @@ func withLocalResyncRunner(r LocalResyncRunner) syncRouteFixtureOption {
 
 func withRemoteHosts(hosts ...config.RemoteHost) syncRouteFixtureOption {
 	return func(c *syncRouteFixtureConfig) { c.remoteHosts = hosts }
+}
+
+func withDisabledAgents(
+	disabled []parser.AgentType,
+	dirs map[parser.AgentType][]string,
+) syncRouteFixtureOption {
+	return func(c *syncRouteFixtureConfig) {
+		c.disabledAgents = append([]parser.AgentType(nil), disabled...)
+		c.extraAgentDirs = dirs
+	}
 }
 
 func withBroadcasterForSyncRoutes(b *Broadcaster) syncRouteFixtureOption {
@@ -118,7 +130,11 @@ func newSyncRouteFixture(
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {claudeDir},
 		},
-		RemoteHosts: cfg.remoteHosts,
+		RemoteHosts:    cfg.remoteHosts,
+		DisabledAgents: cfg.disabledAgents,
+	}
+	for agent, dirs := range cfg.extraAgentDirs {
+		serverConfig.AgentDirs[agent] = append([]string(nil), dirs...)
 	}
 	var serverOptions []Option
 	if cfg.broadcaster != nil {
@@ -2123,14 +2139,30 @@ func TestRunHTTPRemoteSyncReachesMirrorPath(t *testing.T) {
 }
 
 func TestOnDemandSyncEngineExcludesDisabledProvider(t *testing.T) {
-	f := newSyncRouteFixture(t)
-	geminiDir := filepath.Join(f.dir, "gemini")
-	f.srv.cfg.AgentDirs[parser.AgentGemini] = []string{geminiDir}
-	f.srv.cfg.DisabledAgents = []parser.AgentType{parser.AgentGemini}
+	geminiDir := filepath.Join(t.TempDir(), "gemini")
+	f := newSyncRouteFixture(t, withDisabledAgents(
+		[]parser.AgentType{parser.AgentGemini},
+		map[parser.AgentType][]string{parser.AgentGemini: {geminiDir}},
+	))
 
 	engine := f.srv.syncEngineForLocal(f.db)
 
 	assert.Empty(t, engine.ReconciliationRootsForAgent(string(parser.AgentGemini)))
 	assert.Equal(t, []string{f.claudeDir},
 		engine.ReconciliationRootsForAgent(string(parser.AgentClaude)))
+}
+
+func TestOnDemandSyncEngineKeepsStartupProvidersUntilRestart(t *testing.T) {
+	geminiDir := filepath.Join(t.TempDir(), "gemini")
+	f := newSyncRouteFixture(t, withDisabledAgents(nil,
+		map[parser.AgentType][]string{parser.AgentGemini: {geminiDir}},
+	))
+	f.srv.mu.Lock()
+	f.srv.cfg.DisabledAgents = []parser.AgentType{parser.AgentGemini}
+	f.srv.mu.Unlock()
+
+	engine := f.srv.syncEngineForLocal(f.db)
+
+	assert.Equal(t, []string{geminiDir},
+		engine.ReconciliationRootsForAgent(string(parser.AgentGemini)))
 }
