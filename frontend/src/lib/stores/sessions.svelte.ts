@@ -423,7 +423,8 @@ class SessionsStore {
   private hasDefaultSessionFilters(): boolean {
     return (
       Object.keys(filtersToParams(this.filters)).length === 0 &&
-      this.dateFiltersWindowDays === null
+      this.dateFiltersWindowDays === null &&
+      !starred.filterOnly
     );
   }
 

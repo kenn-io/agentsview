@@ -15,7 +15,10 @@ import { pins } from "./lib/stores/pins.svelte.js";
 import { router } from "./lib/stores/router.svelte.js";
 import { rollingRange } from "./lib/utils/dates.js";
 import { sessionTiming } from "./lib/stores/sessionTiming.svelte.js";
-import { sessions } from "./lib/stores/sessions.svelte.js";
+import {
+  createSessionsStore,
+  sessions,
+} from "./lib/stores/sessions.svelte.js";
 import { settings } from "./lib/stores/settings.svelte.js";
 import { starred } from "./lib/stores/starred.svelte.js";
 import { sync } from "./lib/stores/sync.svelte.js";
@@ -756,6 +759,48 @@ describe("App root Sessions landing", () => {
     expect(window.location.pathname).toBe("/sessions");
     expect(window.location.search).toBe("?starred=true");
     expect(router.isRootPath).toBe(false);
+  });
+
+  it("persists defaults after starred-only is toggled in a root-derived detail", async () => {
+    stubAppDependencies();
+    vi.spyOn(SessionsService, "getApiV1SessionsSidebarIndex")
+      .mockResolvedValue({
+        sessions: [],
+        total: 0,
+        next_cursor: null,
+      } as never);
+    vi.spyOn(sessions, "navigateToSession").mockImplementation(async (id) => {
+      sessions.activeSessionId = id;
+    });
+    const saved = JSON.stringify({
+      version: 2,
+      project: "saved-project",
+      agent: "codex",
+    });
+    localStorage.setItem("session-filters", saved);
+    sessions.initFromParams({ project: "saved-project", agent: "codex" });
+    setRootUrl();
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    router.navigateToSession("session-a");
+    await flushEffects();
+
+    starred.filterOnly = true;
+    await flushEffects();
+    expect(router.params.starred).toBe("true");
+
+    starred.filterOnly = false;
+    await flushEffects();
+    expect(router.params.starred).toBeUndefined();
+
+    sessions.deselectSession();
+    await flushEffects();
+    expect(window.location.pathname).toBe("/sessions");
+
+    const reloaded = createSessionsStore();
+    expect(reloaded.filters.project).toBe("");
+    expect(reloaded.filters.agent).toBe("");
   });
 
   it("keeps sticky parameters on the root landing URL", async () => {
