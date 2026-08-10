@@ -103,6 +103,7 @@ func (*sessionContractBackend) Update(
 
 type countingQueryHook struct {
 	selects       int
+	deletes       int
 	queries       []string
 	insertQueries []string
 }
@@ -122,6 +123,9 @@ func (h *countingQueryHook) AfterQuery(
 	}
 	if event.Operation() == "INSERT" {
 		h.insertQueries = append(h.insertQueries, event.Query)
+	}
+	if event.Operation() == "DELETE" {
+		h.deletes++
 	}
 }
 
