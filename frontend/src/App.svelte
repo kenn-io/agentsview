@@ -419,6 +419,7 @@
     const leavingSessionsRoute =
       previousDateRestoreRoute === "sessions" && route !== "sessions";
     const wasRootLanding = previousRootLanding;
+    const wasSessionsRoute = previousDateRestoreRoute === "sessions";
     untrack(() => {
       previousDateRestoreRoute = route;
       previousRootLanding = rootLanding;
@@ -428,9 +429,11 @@
       const closingRootDetail =
         rootDetailOpened && previousSessionId !== null && sid === null &&
         route === "sessions";
-      const openingRootDetail =
-        rootResetPending && wasRootLanding && sid !== null &&
-        route === "sessions";
+      const openingRootDerivedDetail =
+        rootResetPending && sid !== null && route === "sessions" &&
+        !hasSessionFilterParams &&
+        (wasRootLanding ||
+          (wasSessionsRoute && previousSessionId === null));
       const enteringUnfilteredSessionDetail =
         rootResetPending && !wasRootLanding && enteringSessionsRoute &&
         route === "sessions" && sid !== null && !hasSessionFilterParams;
@@ -468,7 +471,7 @@
         rootDetailOpened = false;
         rootDetailDateRestoreSuppressed = false;
         rootDetailExitDateRestorePending = false;
-      } else if (openingRootDetail) {
+      } else if (openingRootDerivedDetail) {
         rootDetailOpened = true;
         rootDetailDateRestoreSuppressed = true;
         rootDetailExitDateRestorePending = false;

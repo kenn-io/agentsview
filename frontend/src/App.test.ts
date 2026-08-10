@@ -1040,7 +1040,7 @@ describe("App root Sessions landing", () => {
     expect(sessions.filters.dateTo).toBe("");
   });
 
-  it("keeps saved filters through root-opened detail refresh and exit", async () => {
+  it("keeps saved filters through consecutive root-derived detail exits", async () => {
     stubAppDependencies();
     const actualAttachSidebar = sessions.attachSidebar.bind(sessions);
     const sidebarIndex = vi
@@ -1083,6 +1083,24 @@ describe("App root Sessions landing", () => {
     await vi.waitFor(() => {
       expect(sidebarIndex).toHaveBeenCalled();
     });
+    expect(localStorage.getItem("session-filters")).toBe(saved);
+
+    sessions.deselectSession();
+    await flushEffects();
+
+    expect(window.location.pathname).toBe("/sessions");
+    expect(window.location.search).toBe("");
+    expect(sessions.filters.project).toBe("");
+    expect(yokedDates.range).toMatchObject({
+      from: "2026-06-01",
+      to: "2026-06-30",
+      mode: "fixed",
+    });
+    expect(localStorage.getItem("session-filters")).toBe(saved);
+
+    router.navigateToSession("session-b");
+    await flushEffects();
+    expect(window.location.search).toBe("");
     expect(localStorage.getItem("session-filters")).toBe(saved);
 
     sessions.deselectSession();
