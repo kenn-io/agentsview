@@ -8,6 +8,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/timeutil"
 )
 
 type PricingRowSource string
@@ -542,7 +543,7 @@ func latestPricingRowUpdate(rows []EffectivePricingRow) *time.Time {
 	var latest *time.Time
 	for _, row := range rows {
 		if row.Rates.UpdatedAt != nil {
-			t := normalizePricingTimestampPrecision(*row.Rates.UpdatedAt)
+			t := timeutil.NormalizePostgresTimestampPrecision(*row.Rates.UpdatedAt)
 			if latest == nil || t.After(*latest) {
 				latest = &t
 			}
@@ -551,26 +552,11 @@ func latestPricingRowUpdate(rows []EffectivePricingRow) *time.Time {
 			if band.UpdatedAt == nil {
 				continue
 			}
-			t := normalizePricingTimestampPrecision(*band.UpdatedAt)
+			t := timeutil.NormalizePostgresTimestampPrecision(*band.UpdatedAt)
 			if latest == nil || t.After(*latest) {
 				latest = &t
 			}
 		}
 	}
 	return latest
-}
-
-func normalizePricingTimestampPrecision(value time.Time) time.Time {
-	value = value.UTC()
-	microseconds := value.Nanosecond() / int(time.Microsecond)
-	remainder := value.Nanosecond() % int(time.Microsecond)
-	// PostgreSQL rounds timestamp fractions to the nearest microsecond, with
-	// exact ties going to the even microsecond.
-	if remainder > int(time.Microsecond)/2 ||
-		remainder == int(time.Microsecond)/2 && microseconds%2 != 0 {
-		microseconds++
-	}
-	return value.Truncate(time.Second).Add(
-		time.Duration(microseconds) * time.Microsecond,
-	)
 }

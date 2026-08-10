@@ -396,6 +396,30 @@ func TestCanonicalModelPricingRowsPreserveBandsAndMoney(t *testing.T) {
 	assert.Equal(t, prices[0].UpdatedAt, bands[0].UpdatedAt)
 }
 
+func TestCanonicalModelPricingRowsRoundTimestampsToPostgresPrecision(
+	t *testing.T,
+) {
+	prices, bands, err := CanonicalModelPricingRows([]ModelPricing{{
+		ModelPattern: "base-model",
+		UpdatedAt:    "2026-08-09T04:09:57.836404600Z",
+		Bands: []PricingBand{{
+			AboveInputTokens: 100,
+			UpdatedAt:        "2026-08-09T04:09:57.310283500Z",
+		}},
+	}})
+	require.NoError(t, err)
+	require.Len(t, prices, 1)
+	require.Len(t, bands, 1)
+	assert.Equal(t,
+		time.Date(2026, 8, 9, 4, 9, 57, 836_405_000, time.UTC),
+		prices[0].UpdatedAt.Time,
+	)
+	assert.Equal(t,
+		time.Date(2026, 8, 9, 4, 9, 57, 310_284_000, time.UTC),
+		bands[0].UpdatedAt.Time,
+	)
+}
+
 func TestCanonicalModelPricingRowsRejectInvalidTimestamp(t *testing.T) {
 	_, _, err := CanonicalModelPricingRows([]ModelPricing{{
 		ModelPattern: "model", UpdatedAt: "not-a-timestamp",
