@@ -143,6 +143,33 @@ describe("TopSessions", () => {
     unmount(component);
   });
 
+  it("preserves starred-only filtering when opening an analytics result", async () => {
+    navSpy.mockRestore();
+    window.history.replaceState(
+      null,
+      "",
+      "/sessions?starred=true&window_days=14",
+    );
+    router.route = "sessions";
+    router.sessionId = null;
+    router.params = {
+      starred: "true",
+      window_days: "14",
+    };
+    const component = mountWithData();
+    await tick();
+
+    clickRow();
+    await tick();
+
+    const params = new URLSearchParams(window.location.search);
+    expect(window.location.pathname).toBe("/sessions/sess-1");
+    expect(params.get("starred")).toBe("true");
+    expect(params.get("window_days")).toBe("14");
+
+    unmount(component);
+  });
+
   it("skips invalidation but still navigates when filter already set", async () => {
     analytics.includeOneShot = true;
     sessions.filters.includeOneShot = true;

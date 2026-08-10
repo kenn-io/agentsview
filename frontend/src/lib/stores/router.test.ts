@@ -561,4 +561,13 @@ describe("RouterStore", () => {
     expect(href).toContain("termination=unclean");
     expect(href).not.toContain("msg=stale");
   });
+
+  it("buildSessionHref preserves starred-only filtering", () => {
+    setURL("/sessions?starred=true");
+    store = new RouterStore();
+
+    const href = store.buildSessionHref("abc-123");
+
+    expect(href).toBe("/sessions/abc-123?starred=true");
+  });
 });

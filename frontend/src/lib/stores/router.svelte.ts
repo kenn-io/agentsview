@@ -1,3 +1,5 @@
+import { SESSION_FILTER_KEYS } from "./sessionRouteParams.js";
+
 export type Route =
   | "sessions"
   | "usage"
@@ -77,23 +79,6 @@ export function parsePath(): {
 
 /** Params that are not part of routing but must survive navigations. */
 const STICKY_PARAMS = new Set(["desktop"]);
-const SESSION_ROUTE_PARAMS = new Set([
-  "project",
-  "machine",
-  "agent",
-  "termination",
-  "date",
-  "date_from",
-  "date_to",
-  "active_since",
-  "exclude_project",
-  "min_messages",
-  "max_messages",
-  "min_user_messages",
-  "include_one_shot",
-  "include_automated",
-  "window_days",
-]);
 
 export class RouterStore {
   route: Route = $state("sessions");
@@ -170,7 +155,7 @@ export class RouterStore {
     if (this.route !== "sessions") return {};
     const params: Record<string, string> = {};
     for (const [key, value] of Object.entries(this.params)) {
-      if (SESSION_ROUTE_PARAMS.has(key)) {
+      if (SESSION_FILTER_KEYS.has(key)) {
         params[key] = value;
       }
     }

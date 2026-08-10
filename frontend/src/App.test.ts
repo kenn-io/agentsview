@@ -1085,6 +1085,28 @@ describe("App root Sessions landing", () => {
     expect(sessions.filters.dateTo).toBe("");
   });
 
+  it("preserves starred-only filtering when selecting a session date range", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    window.history.replaceState(null, "", "/sessions?starred=true");
+    router.route = "sessions";
+    router.params = { starred: "true" };
+    router.sessionId = null;
+    router.isRootPath = false;
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    expect(starred.filterOnly).toBe(true);
+
+    await selectRelativeRange(30);
+
+    const params = new URLSearchParams(window.location.search);
+    expect(window.location.pathname).toBe("/sessions");
+    expect(params.get("starred")).toBe("true");
+    expect(params.get("window_days")).toBe("30");
+    expect(starred.filterOnly).toBe(true);
+  });
+
   it("keeps saved filters through consecutive root-derived detail exits", async () => {
     stubAppDependencies();
     const actualAttachSidebar = sessions.attachSidebar.bind(sessions);

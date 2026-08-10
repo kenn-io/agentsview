@@ -31,6 +31,7 @@
     filtersToParams,
   } from "../../stores/sessions.svelte.js";
   import { events } from "../../stores/events.svelte.js";
+  import { starred } from "../../stores/starred.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
   import { router } from "../../stores/router.svelte.js";
@@ -188,6 +189,7 @@
   function writeSessionDateParams(state: PanelDateState): void {
     const sessionChanged = syncSessionFiltersForDateState(state);
     const params = filtersToParams(sessions.filters);
+    if (starred.filterOnly) params.starred = "true";
     delete params[SESSION_ANALYTICS_WINDOW_PARAM];
     if (state.mode === "rolling" && state.windowDays) {
       params[SESSION_ANALYTICS_WINDOW_PARAM] = String(state.windowDays);
