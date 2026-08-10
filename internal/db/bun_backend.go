@@ -238,6 +238,10 @@ func sqliteTimestampOrderExpr(column string) string {
 	return "julianday(NULLIF(" + column + ", ''))"
 }
 
+func (*sqliteBunBackend) AvailableTimestampExpr(column string) string {
+	return "agentsview_canonical_timestamp(" + column + ")"
+}
+
 func (*sqliteBunBackend) SessionVersion(
 	ctx context.Context, store bun.IDB, id string,
 ) (int, int64, error) {
