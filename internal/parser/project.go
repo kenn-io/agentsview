@@ -440,7 +440,13 @@ func detectAutofsPrefixes() []string {
 	if err != nil {
 		return nil
 	}
-	return parseMountOutputForAutofs(data)
+	prefixes := parseMountOutputForAutofs(data)
+	// Share the discovered prefixes with the probe classifier: custom
+	// autofs mounts such as /corp/home must classify as automount so
+	// symlinked cwds, siblings, and gitfile targets cannot reach Lstat
+	// inside them; only this package can discover them.
+	export.RegisterAutomountPrefixes(prefixes)
+	return prefixes
 }
 
 // parseMountOutputForAutofs extracts the mount points of autofs

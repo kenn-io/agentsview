@@ -617,6 +617,57 @@ func TestIsCanonicalAutomountNamespacePath(t *testing.T) {
 	}
 }
 
+// TestRegisteredAutomountPrefixes pins that autofs mounts discovered from
+// the host's mount table classify as automount alongside the fixed
+// namespaces: the broad predicate accepts alternate spellings, the canonical
+// predicate only the mount table's exact form, and the classification walk
+// refuses a symlink into a custom mount without Lstat-ing inside it.
+func TestRegisteredAutomountPrefixes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the predicate compares POSIX home paths built with filepath")
+	}
+	orig := RegisteredAutomountPrefixes()
+	t.Cleanup(func() { RegisterAutomountPrefixes(orig) })
+	RegisterAutomountPrefixes([]string{"/corp/home/"})
+
+	assert.True(t, IsAutomountNamespacePath("darwin", "/corp/home/user"),
+		"a custom autofs mount must classify as automount")
+	assert.True(t, IsAutomountNamespacePath("darwin", "/corp/home"),
+		"the custom mount root itself must classify as automount")
+	assert.True(t, IsAutomountNamespacePath("darwin", "/CORP/Home/user"),
+		"case-folded spellings of a custom mount must match")
+	assert.True(t, IsAutomountNamespacePath(
+		"darwin", "/System/Volumes/Data/corp/home/user",
+	), "the data-volume spelling of a custom mount must match")
+	assert.False(t, IsAutomountNamespacePath("darwin", "/corp/homework"),
+		"prefix matching must respect component boundaries")
+	assert.False(t, IsAutomountNamespacePath("linux", "/corp/home/user"),
+		"custom mounts are darwin-only like the fixed namespaces")
+
+	assert.True(t, IsCanonicalAutomountNamespacePath(
+		"darwin", "/corp/home/user",
+	), "the canonical predicate accepts the mount table's exact form")
+	assert.False(t, IsCanonicalAutomountNamespacePath(
+		"darwin", "/CORP/home/user",
+	), "the canonical predicate must not accept case-folded forms")
+
+	home := t.TempDir()
+	require.NoError(t, os.Symlink(
+		"/corp/home/user", filepath.Join(home, "tocorp"),
+	))
+	origLstat := osLstat
+	t.Cleanup(func() { osLstat = origLstat })
+	osLstat = func(path string) (os.FileInfo, error) {
+		if path == "/corp" || strings.HasPrefix(path, "/corp/") {
+			assert.Fail(t, "custom automount must not be walked", path)
+		}
+		return origLstat(path)
+	}
+	assert.Equal(t, LocalPathProbeAutomountNamespace, ClassifyLocalPathProbe(
+		"darwin", home, filepath.Join(home, "tocorp", "repo"), false,
+	), "a symlink into a custom mount must stop the walk")
+}
+
 // TestClassifyLocalPathProbe pins the tri-state classification, including
 // working directories that only reach a protected folder through a symlink,
 // which the lexical predicates alone cannot see.

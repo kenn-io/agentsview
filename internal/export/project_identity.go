@@ -10,9 +10,11 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unicode"
 )
 
@@ -807,6 +809,10 @@ func IsAutomountNamespacePath(goos, p string) bool {
 			return true
 		}
 	}
+	if set := registeredAutomountPrefixes.Load(); set != nil &&
+		matchAutomountPrefixes(p, set.folded) {
+		return true
+	}
 	return false
 }
 
@@ -822,6 +828,58 @@ func IsCanonicalAutomountNamespacePath(goos, p string) bool {
 	}
 	for _, ns := range [...]string{"/home", "/net", "/Network/Servers"} {
 		if p == ns || strings.HasPrefix(p, ns+"/") {
+			return true
+		}
+	}
+	if set := registeredAutomountPrefixes.Load(); set != nil &&
+		matchAutomountPrefixes(p, set.canonical) {
+		return true
+	}
+	return false
+}
+
+// automountPrefixSet holds autofs mount prefixes discovered from the live
+// mount table, each with a trailing separator: canonical as reported, folded
+// for the case-insensitive broad predicate.
+type automountPrefixSet struct {
+	canonical []string
+	folded    []string
+}
+
+var registeredAutomountPrefixes atomic.Pointer[automountPrefixSet]
+
+// RegisterAutomountPrefixes records autofs-managed mount prefixes discovered
+// from the host's mount table (trailing separator, data-volume prefix
+// already stripped). The fixed namespaces above cover macOS's default map
+// entries; custom mounts such as /corp/home are host-specific and only
+// discoverable live, and paths inside them must classify as automount so
+// symlinked cwds, siblings, and gitfile targets cannot reach Lstat there.
+func RegisterAutomountPrefixes(prefixes []string) {
+	set := &automountPrefixSet{}
+	for _, prefix := range prefixes {
+		if prefix == "" {
+			continue
+		}
+		set.canonical = append(set.canonical, prefix)
+		set.folded = append(set.folded, strings.ToLower(prefix))
+	}
+	registeredAutomountPrefixes.Store(set)
+}
+
+// RegisteredAutomountPrefixes returns the currently registered canonical
+// prefixes so tests can restore them after overriding.
+func RegisteredAutomountPrefixes() []string {
+	set := registeredAutomountPrefixes.Load()
+	if set == nil {
+		return nil
+	}
+	return slices.Clone(set.canonical)
+}
+
+func matchAutomountPrefixes(p string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(p, prefix) ||
+			p+string(filepath.Separator) == prefix {
 			return true
 		}
 	}

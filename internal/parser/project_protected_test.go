@@ -426,3 +426,37 @@ func TestAutomountCwdProbeAllowed(t *testing.T) {
 	assert.True(t, automountCwdProbeAllowed("/home/user/repo"),
 		"an unmanaged namespace has no automountd to wake")
 }
+
+// TestAutomountCwdProbeAllowedCustomPrefix pins the same clearance rules for
+// a custom autofs mount discovered from the mount table: registration makes
+// it classify as automount, and clearance still requires a resolving
+// first-level probe and refuses the mount root.
+func TestAutomountCwdProbeAllowedCustomPrefix(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("the guard reads runtime.GOOS")
+	}
+	origRegistered := export.RegisteredAutomountPrefixes()
+	t.Cleanup(func() { export.RegisterAutomountPrefixes(origRegistered) })
+	export.RegisterAutomountPrefixes([]string{"/corp/home/"})
+	origPrefixes := autofsPrefixes
+	t.Cleanup(func() { autofsPrefixes = origPrefixes; resetAutofsProbes() })
+	autofsPrefixes = []string{"/corp/home/"}
+	resetAutofsProbes()
+	origStat := osStat
+	t.Cleanup(func() { osStat = origStat })
+	realInfo, err := os.Stat(t.TempDir())
+	require.NoError(t, err)
+	osStat = func(path string) (os.FileInfo, error) {
+		if path == "/corp/home/user" {
+			return realInfo, nil
+		}
+		return nil, os.ErrNotExist
+	}
+
+	assert.True(t, automountCwdProbeAllowed("/corp/home/user/repo"),
+		"a resolving custom-mount entry clears the walk")
+	assert.False(t, automountCwdProbeAllowed("/corp/home/ghost/repo"),
+		"an unresolved custom-mount entry must stay refused")
+	assert.False(t, automountCwdProbeAllowed("/corp/home"),
+		"the custom mount root has no first-level entry to vet")
+}
