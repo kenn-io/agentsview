@@ -48,6 +48,7 @@ batch_size = 32                   # inputs per HTTP call (default 32)
 concurrency = 4                   # documents embedded in parallel during a build (default 4)
 timeout = "30s"                   # per-HTTP-call timeout (default "30s")
 max_retries = 3                   # attempts on 429/5xx/network errors; 4xx fails fast (default 3)
+# ollama_cpu_fallback = true      # Ollama only: retry invalid Metal vectors once on CPU
 
 [vector.embed]
 run_after_sync = true             # daemon embeds deltas after each sync, debounced ~30s (default true)
@@ -79,7 +80,8 @@ Model identity — `model`, `dimension`, `request_dimensions`, `max_input_chars`
 in the `servers` table must serve that same model and input recipe, so vectors
 produced by any of them are interchangeable and land in the same generation.
 What varies per server is transport and capacity: `endpoint`, `api_key_env`,
-`timeout`, `max_retries`, `batch_size`, and `concurrency`.
+`timeout`, `max_retries`, `batch_size`, `concurrency`, and
+`ollama_cpu_fallback`.
 
 This split exists so you can encode search queries against a fast local server
 while offloading bulk index builds to a bigger remote machine:
@@ -107,6 +109,8 @@ with more than one it is required.
 different server without touching the default. Because the model identity is
 global, the server choice is not part of the generation fingerprint — a build
 started on one server can be topped up incrementally from another.
+`ollama_cpu_fallback` is also transport-only: enabling or disabling it does not
+change the generation fingerprint or rebuild the index.
 
 One caveat: the same model served at different quantizations (say F16 on one
 box, Q8 on another) produces slightly different vectors for the same text. They
@@ -255,6 +259,7 @@ dimension = 768
 
 [vector.embeddings.servers.local]
 endpoint = "http://localhost:11434/v1"
+ollama_cpu_fallback = true
 ```
 
 The encoder POSTs to `<endpoint>/embeddings` with an OpenAI-style
@@ -266,6 +271,25 @@ rejected. AgentsView also rejects non-finite components (`NaN` or infinity),
 JSON `null` components, and zero-norm vectors before they can be written to the
 index. Those failures are retried according to `max_retries`; if every attempt
 is invalid, the build stops and leaves the document pending.
+
+For Ollama on Apple Metal, `ollama_cpu_fallback = true` adds one explicit
+recovery attempt after those normal retries are exhausted. AgentsView keeps the
+valid vectors from the final Metal response and sends only the invalid inputs to
+Ollama's native `/api/embed` route with `options.num_gpu = 0`,
+`truncate = false`, and `keep_alive = "0s"`. This requests a CPU-only runner and
+asks Ollama to unload it immediately after the response. The configured endpoint
+must be an absolute HTTP(S) URL ending in `/v1`, from which AgentsView derives
+the native route while preserving proxy prefixes and query parameters.
+
+The CPU recovery can incur model-load and CPU-inference latency, followed by
+another model load for the next Metal request. AgentsView gates its own primary
+and fallback traffic to the same native endpoint so another AgentsView request
+cannot race that runner transition. With Ollama 0.32.7 during diagnosis, the CPU
+request was observed to replace the Metal runner, unload after its response, and
+cause the next request to load a fresh Metal runner. That sequence is observed
+behavior, not an Ollama scheduler guarantee, and AgentsView does not attempt to
+verify Ollama's internal runner lifecycle. The setting is therefore intended as
+automatic recovery for rare invalid output, not as a permanent CPU serving mode.
 
 ### Direct `llama-server` for high-throughput Ollama models
 
@@ -287,19 +311,21 @@ llama-server \
 
 These are `llama-server` command-line flags, not `ollama serve` environment
 variables. Its prompt cache stores reusable inference state rather than a final
-embedding API result. Independent document embeddings do not need conversational
-prefix reuse, and bad or saturated slot state can yield non-finite output for
-otherwise valid input. Some llama.cpp builds do not apply the global
-`--no-cache-prompt` default to embedding tasks; without
-`--slot-prompt-similarity 0`, an exact retry can then be routed back to the same
-bad slot. Disabling similarity routing lets retries use the least-recently-used
-slot while retaining multiple request slots and large physical/logical batches.
+embedding API result, so disabling it can still be useful for a dedicated
+embedding service that does not benefit from conversational prefix reuse. It is
+not, however, a fix for the Metal corruption diagnosed here: repeated Metal
+embedding requests were observed to become non-finite even with prompt caching,
+context checkpoints, and slot-similarity routing disabled. Cache and slot
+settings therefore do not replace output validation or recovery through an
+Ollama-managed CPU runner.
 
 Run `llama-server --help` for the installed binary before adopting this direct
 setup. If any of these flags are unavailable, upgrade the bundled llama.cpp
 binary or use Ollama's normal `/v1/embeddings` route instead. AgentsView's
 validation remains the final safety boundary either way: invalid endpoint output
-aborts the build and is never written.
+is never written. The explicit `ollama_cpu_fallback` recovery is available only
+through Ollama's `/v1` endpoint because it depends on Ollama's native
+`/api/embed` runner controls; it does not apply to a standalone `llama-server`.
 
 ## What gets embedded: units, not messages
 
