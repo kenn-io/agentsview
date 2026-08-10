@@ -902,7 +902,7 @@ func TestUsageFallsBackForUnsupportedMessageTimestamp(t *testing.T) {
 	}
 }
 
-func TestBoundedUsagePreservesMalformedTimestampDateFallbackBeforeSnapshotRanking(
+func TestBoundedUsageRepairsMalformedTimestampBeforeSnapshotRanking(
 	t *testing.T,
 ) {
 	d := testDB(t)

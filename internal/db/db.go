@@ -490,7 +490,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // Subagent tool calls from Other to Task so delegation renders as a task call
 // and leaves the Other analytics bucket; subagent transcripts themselves are
 // new sources and need no re-parse.)
-const dataVersion = 107
+// (108: Canonical message timestamps. Re-parse live sessions and blank unsupported
+// timestamps in orphaned and trashed sessions before strict Bun reads.)
+const dataVersion = 108
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

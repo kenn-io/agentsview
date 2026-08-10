@@ -93,6 +93,13 @@ func (db *DB) resolveAnalyticsMessageScope(
 			); err != nil {
 				return fmt.Errorf("scanning analytics candidate message: %w", err)
 			}
+			ts, err = canonicalStoredMessageTimestamp(ts)
+			if err != nil {
+				return fmt.Errorf(
+					"reading analytics message %s ordinal %d timestamp: %w",
+					sessionID, ordinal, err,
+				)
+			}
 			parsed, has := localTime(ts, loc)
 			if err := reducer.Push(MessageInput{
 				SessionID:       sessionID,

@@ -290,7 +290,7 @@ func bunAnalyticsMessagesProjectedFrom(
 		query := store.NewSelect().Model(&rows).Column(
 			"session_id", "ordinal", "role", "has_thinking", "has_tool_use",
 			"content_length", "is_system", "model", "output_tokens",
-			"has_output_tokens", "is_sidechain",
+			"has_output_tokens", "is_sidechain", "timestamp",
 		)
 		if includeContent {
 			query = query.Column("content")
@@ -299,27 +299,6 @@ func bunAnalyticsMessagesProjectedFrom(
 			Where("session_id IN (?)", bun.List(chunk)).
 			OrderExpr("session_id ASC, ordinal ASC").Scan(ctx); err != nil {
 			return fmt.Errorf("querying Bun analytics messages: %w", err)
-		}
-		var timestamps []struct {
-			SessionID string         `bun:"session_id"`
-			Ordinal   int            `bun:"ordinal"`
-			Timestamp sql.NullString `bun:"timestamp"`
-		}
-		if err := store.NewSelect().Table("messages").
-			Column("session_id", "ordinal").
-			ColumnExpr("CAST(timestamp AS VARCHAR) AS timestamp").
-			Where("session_id IN (?)", bun.List(chunk)).
-			Scan(ctx, &timestamps); err != nil {
-			return fmt.Errorf("querying Bun analytics message timestamps: %w", err)
-		}
-		timestampMap := make(map[string]sql.NullString, len(timestamps))
-		for _, row := range timestamps {
-			timestampMap[fmt.Sprintf("%s\x00%d", row.SessionID, row.Ordinal)] = row.Timestamp
-		}
-		for i := range rows {
-			rows[i].Timestamp = parseBunAnalyticsTimestamp(
-				timestampMap[fmt.Sprintf("%s\x00%d", rows[i].SessionID, rows[i].Ordinal)],
-			)
 		}
 		out = append(out, rows...)
 		return nil

@@ -56,7 +56,7 @@ func TestSearchContentSubstringMessages(t *testing.T) {
 	assert.Contains(t, m.Snippet, "DATABASE_URL", "snippet")
 }
 
-func TestSearchContentUsesOnlyCanonicalMessageTimestamps(t *testing.T) {
+func TestSearchContentReceivesCanonicalProviderTimestamps(t *testing.T) {
 	tests := []struct {
 		name, timestamp, want string
 	}{
@@ -74,11 +74,13 @@ func TestSearchContentUsesOnlyCanonicalMessageTimestamps(t *testing.T) {
 				{"user", "find the timestamp row"},
 				{"assistant", "done"},
 			})
-			_, err := d.getWriter().Exec(
-				"UPDATE messages SET timestamp = ? WHERE session_id = ? AND ordinal = ?",
-				test.timestamp, "timestamp-search", 0,
-			)
+			messages, err := d.GetAllMessages(t.Context(), "timestamp-search")
 			require.NoError(t, err)
+			require.Len(t, messages, 2)
+			messages[0].Timestamp = test.timestamp
+			require.NoError(
+				t, d.ReplaceSessionMessages("timestamp-search", messages),
+			)
 
 			result, err := d.SearchContent(t.Context(), ContentSearchFilter{
 				Pattern: "timestamp row", Mode: "substring",
