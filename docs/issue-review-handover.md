@@ -194,11 +194,11 @@ workflow and cleanup guards.
 | --- | --- |
 | `npm run i18n:compile` | Pass |
 | `npm run generate:api` | Pass with x64 CGO toolchain available to the subprocess |
-| Locale parity | Pass; five catalogues, 1,610 keys each |
+| Locale parity | Pass; five catalogues, 1,617 keys each |
 | `npm run check` | Pass; zero errors and eight known CSS warnings |
-| `npm test` | Pass; 148 files and 2,278 tests |
+| `npm test` | Pass; 149 files and 2,282 tests |
 | `npm run build` | Pass; one known large-chunk warning |
-| project-local `vp check` | Exact documented baseline: 486 files, exit 1 |
+| project-local `vp check` | Exact documented baseline: 487 files, exit 1 |
 
 Do not run `vp check --fix`; it would create an unrelated repository-wide
 rewrite. The final staged diff still requires `git diff --check` and the
@@ -471,7 +471,11 @@ comparison run are reviewed.
 
 ## Post-release backlog
 
-- named saved views and multiple filter presets;
+Named saved views and multiple filter presets are complete. They are
+browser-local, capped at 50, and covered by component behavior tests.
+
+Remaining:
+
 - acknowledge, suppress, and expiry rules for accepted findings;
 - persisted “new since last review” trend snapshots;
 - per-tool slow thresholds and project-specific rule packs;

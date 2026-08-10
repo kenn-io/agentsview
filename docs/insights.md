@@ -44,6 +44,12 @@ filters. Each finding keeps at most five redacted evidence excerpts and links
 to the exact message ordinal when one exists. Results are returned in pages of
 100; **Load more findings** continues through the full filtered result set.
 
+You can name and save up to 50 complete Issue Review filter sets. Selecting a
+saved view restores its filters and refreshes the results. Saving the same name
+updates that view, and deleting it removes only the preset. Saved views stay in
+the current browser profile; they are not stored in the archive or synced
+between devices.
+
 The panel refreshes when its filters or the global scope changes, after a
 debounced data-sync event, every hour while open, and on manual retry.
 Background refreshes use the one-hour analysis cache so frequent sync events

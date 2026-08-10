@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
-  import { Button, Card, Spinner, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
+  import { Button, Card, Spinner, TextInput, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
   import { AnalyticsService } from "../../api/generated/index.js";
   import { callGenerated, isAbortError } from "../../api/runtime.js";
   import type {
@@ -18,6 +18,9 @@
 
   const REFRESH_INTERVAL_MS = 60 * 60 * 1000;
   const FILTER_STORAGE_KEY = "agentsview.issue-review.filters.v1";
+  const SAVED_VIEWS_STORAGE_KEY = "agentsview.issue-review.saved-views.v1";
+  const MAX_SAVED_VIEWS = 50;
+  const MAX_VIEW_NAME_LENGTH = 80;
   const read = new LatestRead();
   let response = $state<IssueReviewResponse | null>(null);
   let loading = $state(false);
@@ -43,6 +46,9 @@
   let minProjects = $state("0");
   let minWastedMs = $state("0");
   let sort = $state("impact");
+  let savedViews = $state<SavedView[]>([]);
+  let selectedView = $state("");
+  let viewName = $state("");
 
   const findings: IssueReviewFinding[] = $derived(response ? response.findings : []);
   const facets: IssueReviewResponse["facets"] | undefined = $derived(response ? response.facets : undefined);
@@ -56,6 +62,10 @@
   const confidenceOptions = $derived(facetOptions(facets?.confidence, m.issue_review_all_confidences(), confidenceLabel));
   const statusOptions = $derived(facetOptions(facets?.status, m.issue_review_all_statuses(), statusLabel));
   const actionOptions = $derived(facetOptions(facets?.recommendation_type, m.issue_review_all_actions(), actionLabel));
+  const savedViewOptions = $derived([
+    { name: "", label: m.issue_review_no_saved_view() },
+    ...savedViews.map((view) => ({ name: view.name, label: view.name })),
+  ]);
   const occurrenceOptions: TypeaheadOption[] = [1, 2, 3, 5, 10].map((count) => ({
     name: String(count),
     label: m.issue_review_min_occurrences_value({ count }),
@@ -78,6 +88,9 @@
     name: value,
     label: sortLabel(value),
   }));
+
+  type FilterState = ReturnType<typeof filterState>;
+  interface SavedView { name: string; filters: FilterState }
 
   function facetOptions(
     values: IssueFacet[] | undefined,
@@ -159,6 +172,7 @@
 
   function selectFilter(setter: (value: string) => void, value: string) {
     setter(value);
+    selectedView = "";
     persistFilters();
     void refresh();
   }
@@ -171,31 +185,100 @@
     localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(filterState()));
   }
 
+  function isFilterState(value: unknown): value is FilterState {
+    if (!value || typeof value !== "object") return false;
+    const saved = value as Record<string, unknown>;
+    return (Object.keys(filterState()) as Array<keyof FilterState>)
+      .every((key) => typeof saved[key] === "string");
+  }
+
+  function applyFilterState(saved: FilterState) {
+    for (const key of Object.keys(filterState()) as Array<keyof FilterState>) {
+      if (key === "sessionId") sessionId = saved[key];
+      else if (key === "folder") folder = saved[key];
+      else if (key === "category") category = saved[key];
+      else if (key === "tool") tool = saved[key];
+      else if (key === "source") source = saved[key];
+      else if (key === "outcome") outcome = saved[key];
+      else if (key === "severity") severity = saved[key];
+      else if (key === "confidence") confidence = saved[key];
+      else if (key === "status") status = saved[key];
+      else if (key === "recommendationType") recommendationType = saved[key];
+      else if (key === "minOccurrences") minOccurrences = saved[key];
+      else if (key === "minSessions") minSessions = saved[key];
+      else if (key === "minProjects") minProjects = saved[key];
+      else if (key === "minWastedMs") minWastedMs = saved[key];
+      else if (key === "sort") sort = saved[key];
+    }
+  }
+
   function restoreFilters() {
     try {
       const saved = JSON.parse(localStorage.getItem(FILTER_STORAGE_KEY) ?? "null");
-      if (!saved || typeof saved !== "object") return;
-      for (const key of Object.keys(filterState()) as Array<keyof ReturnType<typeof filterState>>) {
-        if (typeof saved[key] !== "string") continue;
-        if (key === "sessionId") sessionId = saved[key];
-        else if (key === "folder") folder = saved[key];
-        else if (key === "category") category = saved[key];
-        else if (key === "tool") tool = saved[key];
-        else if (key === "source") source = saved[key];
-        else if (key === "outcome") outcome = saved[key];
-        else if (key === "severity") severity = saved[key];
-        else if (key === "confidence") confidence = saved[key];
-        else if (key === "status") status = saved[key];
-        else if (key === "recommendationType") recommendationType = saved[key];
-        else if (key === "minOccurrences") minOccurrences = saved[key];
-        else if (key === "minSessions") minSessions = saved[key];
-        else if (key === "minProjects") minProjects = saved[key];
-        else if (key === "minWastedMs") minWastedMs = saved[key];
-        else if (key === "sort") sort = saved[key];
-      }
+      if (isFilterState(saved)) applyFilterState(saved);
+      else if (saved !== null) localStorage.removeItem(FILTER_STORAGE_KEY);
     } catch {
       localStorage.removeItem(FILTER_STORAGE_KEY);
     }
+  }
+
+  function restoreSavedViews() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(SAVED_VIEWS_STORAGE_KEY) ?? "[]");
+      if (!Array.isArray(saved)) throw new Error("invalid saved views");
+      const names = new Set<string>();
+      savedViews = saved.flatMap((item): SavedView[] => {
+        if (!item || typeof item !== "object" || typeof item.name !== "string" || !isFilterState(item.filters)) return [];
+        const name = item.name.trim().slice(0, MAX_VIEW_NAME_LENGTH);
+        const key = name.toLowerCase();
+        if (!name || names.has(key) || names.size >= MAX_SAVED_VIEWS) return [];
+        names.add(key);
+        return [{ name, filters: item.filters }];
+      });
+      if (JSON.stringify(savedViews) !== JSON.stringify(saved)) persistSavedViews();
+    } catch {
+      savedViews = [];
+      localStorage.removeItem(SAVED_VIEWS_STORAGE_KEY);
+    }
+  }
+
+  function persistSavedViews() {
+    localStorage.setItem(SAVED_VIEWS_STORAGE_KEY, JSON.stringify(savedViews));
+  }
+
+  function saveView() {
+    const name = viewName.trim().slice(0, MAX_VIEW_NAME_LENGTH);
+    if (!name) return;
+    const key = name.toLowerCase();
+    const next = { name, filters: filterState() };
+    const index = savedViews.findIndex((view) => view.name.toLowerCase() === key);
+    savedViews = index === -1
+      ? [...savedViews.slice(-(MAX_SAVED_VIEWS - 1)), next]
+      : savedViews.map((view, itemIndex) => itemIndex === index ? next : view);
+    selectedView = name;
+    viewName = name;
+    persistSavedViews();
+  }
+
+  function selectSavedView(name: string) {
+    selectedView = name;
+    if (!name) {
+      viewName = "";
+      return;
+    }
+    const view = savedViews.find((item) => item.name === name);
+    if (!view) return;
+    viewName = view.name;
+    applyFilterState(view.filters);
+    persistFilters();
+    void refresh();
+  }
+
+  function deleteSavedView() {
+    if (!selectedView) return;
+    savedViews = savedViews.filter((view) => view.name !== selectedView);
+    selectedView = viewName = "";
+    persistSavedViews();
   }
 
   function clearFilters() {
@@ -203,6 +286,7 @@
     minOccurrences = minSessions = "2";
     minProjects = minWastedMs = "0";
     sort = "impact";
+    selectedView = viewName = "";
     persistFilters();
     void refresh();
   }
@@ -327,6 +411,7 @@
   onMount(() => {
     mounted = true;
     restoreFilters();
+    restoreSavedViews();
     scopeKey = globalScopeKey();
     void refresh();
     timer = setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
@@ -359,6 +444,15 @@
       <Button size="sm" onclick={() => refresh(true)} disabled={refreshing}>{m.issue_review_refresh_now()}</Button>
       <Button size="sm" onclick={clearFilters}>{m.issue_review_clear_filters()}</Button>
     </div>
+  </div>
+
+  <div class="saved-views">
+    <Typeahead options={savedViewOptions} value={selectedView} fallbackLabel={m.issue_review_no_saved_view()} placeholder={m.issue_review_saved_view()} title={m.issue_review_saved_view()} emptyLabel={m.issue_review_no_saved_views()} onselect={selectSavedView} />
+    <div class="view-name">
+      <TextInput size="sm" block bind:value={viewName} placeholder={m.issue_review_view_name_placeholder()} ariaLabel={m.issue_review_view_name()} />
+    </div>
+    <Button size="sm" onclick={saveView} disabled={!viewName.trim()}>{m.issue_review_save_view()}</Button>
+    <Button size="sm" onclick={deleteSavedView} disabled={!selectedView}>{m.issue_review_delete_view()}</Button>
   </div>
 
   <div class="filters" aria-label={m.issue_review_filters()}>
@@ -461,6 +555,8 @@
   .heading h2 { margin: 3px 0 4px; font-size: 18px; }
   .heading p { margin: 0; color: var(--text-muted); font-size: 13px; }
   .eyebrow { color: var(--accent-blue); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+  .saved-views { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .view-name { flex: 1 1 180px; max-width: 300px; }
   .filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
   .state { min-height: 110px; display: grid; place-content: center; gap: 6px; padding: 20px; text-align: center; }
   .state span, .cached-warning, .scan-summary { color: var(--text-muted); font-size: 12px; }
