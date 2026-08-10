@@ -88,14 +88,13 @@ func claudeParseFile(
 
 	// Background-fork lineage: when the transcript is a bg-marked fork
 	// that replays a non-bg sibling, drop the replayed prefix and link
-	// the fork to its parent. A fork with no entries of its own yet is
-	// an exact copy of the parent and is excluded outright.
+	// the fork to its parent. Whether the fork is still an exact copy
+	// of the parent is decided after parsing: uuid-less fork-own
+	// records (a prompt queued at handoff) can carry the fork's only
+	// message.
 	var lineage *claudeLineagePlan
 	if opts.siblingLineage {
 		lineage = claudeResolveSiblingLineage(path)
-		if lineage.pureReplay() {
-			return nil, []string{sessionID}, nil
-		}
 	}
 
 	f, err := os.Open(path)
@@ -412,11 +411,16 @@ func claudeParseFile(
 	// Drop content-free /usage probe sessions (e.g. CodexBar's
 	// ClaudeProbe) after the queued-command splice so both inline
 	// and queued /usage prompts are visible to the check. They never
-	// enter the archive.
+	// enter the archive. A background fork whose trimmed result holds
+	// no messages of its own is still an exact copy of its parent and
+	// is excluded the same way, retiring any previously stored
+	// untrimmed row.
 	kept := results[:0]
 	var excluded []string
 	for _, r := range results {
-		if isUsageProbeSession(r.Messages) {
+		if isUsageProbeSession(r.Messages) ||
+			(lineage != nil && r.Session.ID == sessionID &&
+				len(r.Messages) == 0) {
 			excluded = append(excluded, r.Session.ID)
 			continue
 		}

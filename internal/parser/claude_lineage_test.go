@@ -169,6 +169,36 @@ func TestClaudeBackgroundForkPureReplayExcluded(t *testing.T) {
 	assert.Equal(t, []string{"fork-2222"}, excluded)
 }
 
+func TestClaudeBackgroundForkKeepsQueuedCommandWithoutNewChainEntry(t *testing.T) {
+	t.Parallel()
+	// A prompt queued at handoff lands as a fork-own uuid-less
+	// queued_command before any new chain entry exists. Even though
+	// every uuid-bearing line is replayed, the fork holds a real user
+	// message and must be kept and linked, not excluded.
+	forkContent := strings.Join([]string{
+		lineageUserLine("u1", "", "2026-01-01T10:00:00Z", "fork-2222", "bg", "first question"),
+		lineageAssistantLine("a1", "u1", "2026-01-01T10:00:05Z", "fork-2222", "bg", "msg_01", "first answer", 20),
+		lineageQueuedCommandLine("2026-01-01T11:00:00Z", "fork-2222", "queued at handoff"),
+	}, "\n") + "\n"
+	_, forkPath := writeLineageFixture(t,
+		"orig-1111.jsonl", lineageOriginalContent(),
+		"fork-2222.jsonl", forkContent,
+	)
+
+	results, excluded, err := claudeParseFile(
+		forkPath, "my_app", "local",
+		claudeParseOptions{siblingLineage: true},
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Empty(t, excluded)
+	require.Len(t, results[0].Messages, 1)
+	assert.Equal(t, "queued at handoff", results[0].Messages[0].Content)
+	assert.Equal(t, "orig-1111", results[0].Session.ParentSessionID)
+	assert.Equal(t, RelContinuation, results[0].Session.RelationshipType)
+	assert.Equal(t, 1, results[0].Session.MessageCount)
+}
+
 func TestClaudeBackgroundForkFailOpen(t *testing.T) {
 	t.Parallel()
 	// Every ambiguous case must parse untrimmed and unlinked: the

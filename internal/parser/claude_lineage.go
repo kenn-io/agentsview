@@ -79,16 +79,9 @@ type claudeParseOptions struct {
 type claudeLineagePlan struct {
 	parentSessionID string
 	dropCount       int
-	totalUUIDLines  int
 	// dropUUIDs holds the replayed uuids so retained entries whose
 	// parentUuid points into the dropped region can be re-rooted.
 	dropUUIDs map[string]struct{}
-}
-
-// pureReplay reports whether the fork holds no chain entries beyond the
-// replayed prefix, i.e. it is currently an exact copy of its parent.
-func (p *claudeLineagePlan) pureReplay() bool {
-	return p != nil && p.dropCount == p.totalUUIDLines
 }
 
 func claudeSniffHead(path string) claudeHeadSniff {
@@ -270,7 +263,6 @@ func claudeResolveSiblingLineage(path string) *claudeLineagePlan {
 	return &claudeLineagePlan{
 		parentSessionID: bestStem,
 		dropCount:       bestRun,
-		totalUUIDLines:  len(forkSeq),
 		dropUUIDs:       dropUUIDs,
 	}
 }
