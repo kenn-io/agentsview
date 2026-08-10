@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -82,6 +83,21 @@ func TestCanonicalWorktreeMappingRowsReplaceCompletePortableState(t *testing.T) 
 		Where("source_archive_id = ?", archiveID).Count(ctx)
 	require.NoError(t, err)
 	assert.Zero(t, count)
+}
+
+func TestDeleteWorktreeProjectMappingRowsBatchesLargeTombstonePayloads(t *testing.T) {
+	database := testDB(t)
+	hook := new(countingQueryHook)
+	store := database.bunWriter.WithQueryHook(hook)
+	keys := []WorktreeMappingKey{
+		{Machine: "machine", PathPrefix: strings.Repeat("a", 9<<20)},
+		{Machine: "machine", PathPrefix: strings.Repeat("b", 9<<20)},
+	}
+
+	require.NoError(t, DeleteWorktreeProjectMappingRows(
+		t.Context(), store, "archive", keys,
+	))
+	assert.Equal(t, 2, hook.deletes)
 }
 
 func TestCanonicalProjectIdentityRowsReplacePortableState(t *testing.T) {
