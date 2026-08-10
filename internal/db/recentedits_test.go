@@ -251,6 +251,22 @@ func TestRecentEditsUsesOnlyCanonicalMessageTimestamps(t *testing.T) {
 	}
 }
 
+func TestRecentEditsRanksCanonicalTimestampsBeforeUnsupportedValues(
+	t *testing.T,
+) {
+	d := testDB(t)
+	seedEdit(t, d, "proj", "unsupported", 1, 0, "unsupported.go", "9999-12-31")
+	seedEdit(t, d, "proj", "valid", 1, 0, "valid.go", "2026-08-09T10:01:00Z")
+
+	result, err := d.RecentEdits(t.Context(), RecentEditsParams{Limit: 1})
+
+	require.NoError(t, err)
+	require.Len(t, result.Files, 1)
+	assert.Equal(t, "valid.go", result.Files[0].FilePath)
+	assert.Equal(t, "2026-08-09T10:01:00Z", result.Files[0].LastEditedAt)
+	assert.True(t, result.HasMore)
+}
+
 func TestRecentEditsTieByCallIndex(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
