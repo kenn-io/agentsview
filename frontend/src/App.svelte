@@ -396,6 +396,12 @@
     rootDetailExitDateRestorePending = false;
   }
 
+  function clearRootFilterProvenance(): void {
+    rootResetPending = false;
+    rootDetailOpened = false;
+    clearRootDetailDateRestoreSuppressed();
+  }
+
   // React to route changes: reload sessions and apply URL params.
   // Only apply URL deep-link params (initFromParams) when the URL
   // actually contains filter keys — a bare /sessions preserves the
@@ -422,6 +428,7 @@
     const wasRootLanding = previousRootLanding;
     const wasSessionsRoute = previousDateRestoreRoute === "sessions";
     untrack(() => {
+      let effectiveParams = params;
       previousDateRestoreRoute = route;
       previousRootLanding = rootLanding;
       const sid = router.sessionId;
@@ -446,10 +453,7 @@
         rootDetailExitDateRestorePending = false;
       } else if (enteringUnfilteredSessionDetail) {
         sessions.restoreSavedFilters();
-        rootResetPending = false;
-        rootDetailOpened = false;
-        rootDetailDateRestoreSuppressed = false;
-        rootDetailExitDateRestorePending = false;
+        clearRootFilterProvenance();
       } else if (
         !rootLanding &&
         !hasSessionFilterParams &&
@@ -460,13 +464,17 @@
         !rootDetailOpened
       ) {
         sessions.restoreSavedFilters();
-        rootResetPending = false;
+        clearRootFilterProvenance();
       } else if (hasSessionFilterParams) {
-        rootResetPending = false;
-        rootDetailOpened = false;
+        if (rootResetPending) {
+          effectiveParams = sessionEntryDateParams(params) ?? params;
+          if (!filterParamsEqual(params, effectiveParams)) {
+            router.replaceParams(effectiveParams);
+          }
+        }
+        clearRootFilterProvenance();
       } else if (rootResetPending && sessionFiltersDiverged) {
-        rootResetPending = false;
-        rootDetailOpened = false;
+        clearRootFilterProvenance();
       }
       if (leavingSessionsRoute) {
         rootDetailOpened = false;
@@ -476,7 +484,11 @@
         rootDetailOpened = true;
         rootDetailDateRestoreSuppressed = true;
         rootDetailExitDateRestorePending = false;
-      } else if (closingRootDetail && !rootLanding) {
+      } else if (
+        closingRootDetail &&
+        !rootLanding &&
+        !hasSessionFilterParams
+      ) {
         rootDetailOpened = false;
         rootDetailDateRestoreSuppressed = true;
         rootDetailExitDateRestorePending = true;
@@ -484,18 +496,18 @@
       previousSessionId = sid;
       if (
         route === "sessions" &&
-        hasFilterParams(params) &&
+        hasFilterParams(effectiveParams) &&
         (!sid || enteringSessions)
       ) {
-        sessions.initFromParams(params);
+        sessions.initFromParams(effectiveParams);
       }
       if (enteringSessions && !rootLanding) {
-        const explicitState = sessionParamsToPanelDate(params);
+        const explicitState = sessionParamsToPanelDate(effectiveParams);
         if (explicitState) yokedDates.updateFromPanel(explicitState);
         const entryParams =
           explicitState?.mode === "rolling"
-            ? applySessionDateState(explicitState, params)
-            : sessionEntryDateParams(params);
+            ? applySessionDateState(explicitState, effectiveParams)
+            : sessionEntryDateParams(effectiveParams);
         if (entryParams) router.replaceParams(entryParams);
       }
       if (route === "sessions") {
@@ -688,15 +700,9 @@
         return;
       }
       if (rootLanding) {
-        rootResetPending = false;
-        rootDetailOpened = false;
         clearYokeForClearedSessionDates(newParams);
         router.navigateToSessions(newParams);
         return;
-      }
-      if (rootResetPending && Object.keys(sessionFilterParams).length > 0) {
-        rootResetPending = false;
-        rootDetailOpened = false;
       }
       if (!router.isRootPath && filterParamsEqual(router.params, newParams)) {
         return;
