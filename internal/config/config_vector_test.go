@@ -348,6 +348,25 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 		assert.Equal(t, 256, cfg.Vector.Embeddings.Dimension)
 	})
 
+	t.Run("Ollama CPU fallback loads explicitly", func(t *testing.T) {
+		cfg := loadMinimalWithConfig(t, map[string]any{
+			"vector": map[string]any{
+				"enabled": true,
+				"embeddings": map[string]any{
+					"model":     "qwen3-embedding:4b-8k",
+					"dimension": 2560,
+					"servers": map[string]any{
+						"local": map[string]any{
+							"endpoint":            "http://localhost:11434/proxy/v1/",
+							"ollama_cpu_fallback": true,
+						},
+					},
+				},
+			},
+		})
+		assert.True(t, cfg.Vector.Embeddings.Servers["local"].OllamaCPUFallback)
+	})
+
 	t.Run("named servers with default_server load and resolve", func(t *testing.T) {
 		cfg := loadMinimalWithConfig(t, map[string]any{
 			"vector": map[string]any{
@@ -486,6 +505,22 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 				name:    "explicit zero timeout",
 				server:  map[string]any{"timeout": "0s"},
 				wantErr: "timeout",
+			},
+			{
+				name: "Ollama CPU fallback without v1 endpoint",
+				server: map[string]any{
+					"endpoint":            "http://localhost:11434/openai",
+					"ollama_cpu_fallback": true,
+				},
+				wantErr: "ollama_cpu_fallback requires an endpoint ending in /v1",
+			},
+			{
+				name: "Ollama CPU fallback with relative endpoint",
+				server: map[string]any{
+					"endpoint":            "/v1",
+					"ollama_cpu_fallback": true,
+				},
+				wantErr: "ollama_cpu_fallback requires an absolute HTTP(S) endpoint",
 			},
 			{
 				name:    "explicit zero backstop_interval",

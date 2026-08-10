@@ -307,6 +307,7 @@ func newVectorEncoder(
 	return vector.NewEncoder(vector.EncoderConfig{
 		Endpoint:          server.Endpoint,
 		APIKey:            server.APIKey(),
+		OllamaCPUFallback: server.OllamaCPUFallback,
 		Model:             c.Model,
 		Dimension:         c.Dimension,
 		RequestDimensions: c.RequestDimensions,

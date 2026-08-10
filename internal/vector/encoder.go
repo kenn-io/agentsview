@@ -28,6 +28,9 @@ type EncoderConfig struct {
 	// APIKey is sent as a Bearer token when non-empty. Empty means
 	// anonymous, unauthenticated requests.
 	APIKey string
+	// OllamaCPUFallback enables one native Ollama CPU retry for invalid vectors.
+	// Callers must opt in only for an Ollama endpoint ending in /v1.
+	OllamaCPUFallback bool
 	// Model is the embeddings model name sent in the request body.
 	Model string
 	// Dimension is the length every returned vector must have.

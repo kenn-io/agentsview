@@ -188,6 +188,9 @@ type VectorEmbeddingsConfig struct {
 // VectorEmbeddingsConfig.
 type VectorEmbeddingsServerConfig struct {
 	Endpoint string `toml:"endpoint" json:"endpoint"`
+	// OllamaCPUFallback retries invalid Metal vectors once through Ollama's
+	// native CPU embedding path. It is transport-only and defaults to false.
+	OllamaCPUFallback bool `toml:"ollama_cpu_fallback" json:"ollama_cpu_fallback,omitempty"`
 	// APIKeyEnv names the environment variable holding the API key.
 	// Empty means anonymous access.
 	APIKeyEnv string `toml:"api_key_env" json:"api_key_env,omitempty"`
@@ -371,6 +374,19 @@ func (c VectorEmbeddingsServerConfig) validate(name string) error {
 	section := fmt.Sprintf("[vector.embeddings.servers.%s]", name)
 	if c.Endpoint == "" {
 		return fmt.Errorf("%s endpoint is required", section)
+	}
+	if c.OllamaCPUFallback {
+		u, err := url.Parse(c.Endpoint)
+		if err != nil || u.Scheme == "" || u.Host == "" ||
+			(u.Scheme != "http" && u.Scheme != "https") {
+			return fmt.Errorf(
+				"%s ollama_cpu_fallback requires an absolute HTTP(S) endpoint", section)
+		}
+		endpointPath := strings.TrimSuffix(u.Path, "/")
+		if !strings.HasSuffix(endpointPath, "/v1") {
+			return fmt.Errorf(
+				"%s ollama_cpu_fallback requires an endpoint ending in /v1", section)
+		}
 	}
 	if c.BatchSize <= 0 {
 		return fmt.Errorf("%s batch_size must be greater than 0, got %d", section, c.BatchSize)
