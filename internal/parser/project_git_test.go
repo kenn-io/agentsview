@@ -177,7 +177,13 @@ func TestExtractProjectFromCwdPlainRepoDoesNotInvokeGit(t *testing.T) {
 	assert.NoFileExists(t, marker, "plain .git directory should resolve without invoking git")
 }
 
-func TestExtractProjectFromCwdFallsBackToGitWhenLocalWalkMisses(t *testing.T) {
+// TestExtractProjectFromCwdNoGitInvocationWhenLocalWalkMisses pins that a
+// cwd with no discoverable .git falls back to its basename without spawning
+// git: passive discovery must not let git follow config-derived paths such
+// as [include] path into locations the probe policy never vetted. The shim
+// would happily resolve the repo, so a reintroduced fallback is caught by
+// both the name and the invocation log.
+func TestExtractProjectFromCwdNoGitInvocationWhenLocalWalkMisses(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("test uses a POSIX shell git shim")
 	}
@@ -202,12 +208,18 @@ func TestExtractProjectFromCwdFallsBackToGitWhenLocalWalkMisses(t *testing.T) {
 	require.NoError(t, os.Chmod(fakeGit, 0o755), "chmod fake git")
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	assert.Equal(t, "virtual_repo",
+	assert.Equal(t, "parser",
 		ExtractProjectFromCwdWithBranchContext(context.Background(), cwd, ""))
-	assert.FileExists(t, gitLog, "git fallback should be used when local walk misses")
+	assert.NoFileExists(t, gitLog,
+		"passive discovery must not invoke git when the local walk misses")
 }
 
-func TestExtractProjectFromCwdTriesGitBeforeConservativeGitFileFallback(
+// TestExtractProjectFromCwdConservativeGitFileRootWithoutGit pins that a
+// gitfile whose external gitdir has no commondir resolves to the worktree
+// itself without spawning git. The shim would resolve the main repository,
+// so a reintroduced git fallback is caught by both the name and the
+// invocation log.
+func TestExtractProjectFromCwdConservativeGitFileRootWithoutGit(
 	t *testing.T,
 ) {
 	if runtime.GOOS == "windows" {
@@ -240,10 +252,10 @@ func TestExtractProjectFromCwdTriesGitBeforeConservativeGitFileFallback(
 	require.NoError(t, os.Chmod(fakeGit, 0o755), "chmod fake git")
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	assert.Equal(t, "main_repo",
+	assert.Equal(t, "feature_worktree",
 		ExtractProjectFromCwdWithBranchContext(context.Background(), cwd, ""))
-	assert.FileExists(t, gitLog,
-		"git fallback should run before accepting conservative gitfile root")
+	assert.NoFileExists(t, gitLog,
+		"passive discovery must not invoke git for a conservative gitfile root")
 }
 
 func TestExtractProjectFromCwd_DeletedNestedWorktree(t *testing.T) {

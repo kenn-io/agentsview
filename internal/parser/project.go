@@ -14,7 +14,6 @@ import (
 	"time"
 	"unicode"
 
-	gitrepo "go.kenn.io/kit/git/repo"
 	"golang.org/x/sync/singleflight"
 
 	"go.kenn.io/agentsview/internal/export"
@@ -30,8 +29,7 @@ var (
 
 // errRefusedGitEntry marks a .git entry whose symlink target the
 // protected-path policy refuses. Callers stop at the boundary without
-// following the link or escalating to git, which would traverse the same
-// target.
+// following the link.
 var errRefusedGitEntry = errors.New(
 	"git entry target refused by protected-path policy",
 )
@@ -140,8 +138,8 @@ func defaultProbeGitfileTarget(cleaned string) bool {
 
 // defaultProbeGitRootForCwd reports whether the git-root walk may touch
 // cleaned on disk. The walk stats every ancestor, reads .git file contents,
-// lists sibling directories, and execs git — all attributed to the app
-// bundle on macOS, so a cwd inside a TCC-protected folder would raise a
+// and lists sibling directories — all attributed to the app bundle on
+// macOS, so a cwd inside a TCC-protected folder would raise a
 // consent prompt during passive parsing. The opt-in only lifts the
 // protected-folder restriction; automounter namespaces stay refused because
 // probing them wakes automountd regardless of any consent. An unresolvable
@@ -224,26 +222,26 @@ func ExtractProjectFromCwd(cwd string) string {
 func ExtractProjectFromCwdWithBranch(
 	cwd, gitBranch string,
 ) string {
-	return extractProjectFromCwdWithBranch(context.TODO(), cwd, gitBranch)
+	return extractProjectFromCwdWithBranch(cwd, gitBranch)
 }
 
 // ExtractProjectFromCwdWithBranchContext extracts a canonical project name
-// from cwd and optionally git branch metadata using ctx for git-backed
-// repository resolution.
+// from cwd and optionally git branch metadata. The context parameter is
+// retained for compatibility: extraction no longer execs git — passive
+// discovery must not let git follow config-derived paths such as
+// [include] path into locations the probe policy never vetted — so all
+// resolution is filesystem-local and needs no cancellation.
 func ExtractProjectFromCwdWithBranchContext(
-	ctx context.Context, cwd, gitBranch string,
+	_ context.Context, cwd, gitBranch string,
 ) string {
-	return extractProjectFromCwdWithBranch(ctx, cwd, gitBranch)
+	return extractProjectFromCwdWithBranch(cwd, gitBranch)
 }
 
 func extractProjectFromCwdWithBranch(
-	ctx context.Context, cwd, gitBranch string,
+	cwd, gitBranch string,
 ) string {
 	if cwd == "" {
 		return ""
-	}
-	if ctx == nil {
-		ctx = context.TODO()
 	}
 	winPath := looksLikeWindowsPath(cwd)
 	norm := cwd
@@ -266,7 +264,7 @@ func extractProjectFromCwdWithBranch(
 	// the prefix once before walking.
 	if filepath.IsAbs(cleaned) && !isForeignOSPath(cwd, cleaned, winPath) &&
 		probeGitRootForCwd(cleaned) {
-		if root := findGitRepoRoot(ctx, cleaned); root != "" {
+		if root := findGitRepoRoot(cleaned); root != "" {
 			name := filepath.Base(root)
 			if isInvalidPathBase(name) {
 				return ""
@@ -629,7 +627,7 @@ func isInvalidPathBase(name string) bool {
 // and linked worktrees/submodules (.git file). When cwd no longer
 // exists on disk, sibling directories are checked for worktree
 // .git files that can reveal the true repo root.
-func findGitRepoRoot(ctx context.Context, cwd string) string {
+func findGitRepoRoot(cwd string) string {
 	if cwd == "" {
 		return ""
 	}
@@ -648,7 +646,6 @@ func findGitRepoRoot(ctx context.Context, cwd string) string {
 		cwdMissing = true
 		dir = filepath.Dir(dir)
 	}
-	startDir := dir
 
 	// When the original path is gone, walk up to the first
 	// existing ancestor and check its children for worktree
@@ -672,15 +669,7 @@ func findGitRepoRoot(ctx context.Context, cwd string) string {
 		}
 	}
 
-	root, conservative := findGitRepoRootLocal(dir)
-	if root != "" && !conservative {
-		return root
-	}
-	if !cwdMissing {
-		if gitRoot := gitMainRoot(ctx, startDir); gitRoot != "" {
-			return gitRoot
-		}
-	}
+	root, _ := findGitRepoRootLocal(dir)
 	return root
 }
 
@@ -690,8 +679,7 @@ func findGitRepoRootLocal(dir string) (root string, conservative bool) {
 		info, err := statGitEntry(gitPath)
 		if errors.Is(err, errRefusedGitEntry) {
 			// A .git symlink into a refused location marks a repo
-			// boundary we must not look through. Stop here without a
-			// conservative result so the caller cannot escalate to git.
+			// boundary we must not look through.
 			return dir, false
 		}
 		if err == nil {
@@ -701,10 +689,7 @@ func findGitRepoRootLocal(dir string) (root string, conservative bool) {
 			if info.Mode().IsRegular() {
 				if !gitFileTargetsProbeable(dir, gitPath) {
 					// The gitfile targets a directory the protected-path
-					// policy refuses. Stop at the worktree itself and do
-					// not report a conservative result: escalating to
-					// gitMainRoot would exec git, which reads inside the
-					// refused target.
+					// policy refuses. Stop at the worktree itself.
 					return dir, false
 				}
 				if root := repoRootFromGitFile(dir, gitPath); root != "" {
@@ -725,19 +710,6 @@ func findGitRepoRootLocal(dir string) (root string, conservative bool) {
 		}
 		dir = parent
 	}
-}
-
-func gitMainRoot(ctx context.Context, dir string) string {
-	if ctx == nil || dir == "" {
-		return ""
-	}
-	opCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	root, err := gitrepo.MainRoot(opCtx, dir)
-	if err != nil {
-		return ""
-	}
-	return root
 }
 
 // repoRootFromSiblings checks child directories of dir for
@@ -973,10 +945,9 @@ func gitFileTargetsProbeable(dir, gitPath string) bool {
 	commonDir := readCommonDir(gitDir)
 	if commonDir == "" {
 		// No commondir means a submodule-style gitdir: the gitdir is the
-		// effective common directory, and the git fallback the caller may
-		// escalate to reads its config and HEAD. Vet them exactly — inside
-		// a vetted directory, a file symlink can still lead into a
-		// guarded folder.
+		// effective common directory holding config and HEAD. Vet them
+		// exactly — inside a vetted directory, a file symlink can still
+		// lead into a guarded folder.
 		return probeGitfileTarget(filepath.Join(gitDir, "config")) &&
 			probeGitfileTarget(filepath.Join(gitDir, "HEAD"))
 	}
