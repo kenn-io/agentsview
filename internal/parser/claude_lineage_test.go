@@ -169,6 +169,90 @@ func TestClaudeBackgroundForkPureReplayExcluded(t *testing.T) {
 	assert.Equal(t, []string{"fork-2222"}, excluded)
 }
 
+func TestClaudeBackgroundForkChainTrimsAgainstNearestBgAncestor(t *testing.T) {
+	t.Parallel()
+	// Chained backgrounding: A (interactive) -> B (bg fork of A with
+	// its own turns) -> C (bg fork of B with its own turns). C must
+	// trim B's full replay and link to B, not partially trim against
+	// A and keep B's turns duplicated. B still trims against A.
+	aContent := lineageOriginalContent()
+	bContent := strings.Join([]string{
+		lineageUserLine("u1", "", "2026-01-01T10:00:00Z", "bbbb-2222", "bg", "first question"),
+		lineageAssistantLine("a1", "u1", "2026-01-01T10:00:05Z", "bbbb-2222", "bg", "msg_01", "first answer", 20),
+		lineageUserLine("u2", "a1", "2026-01-01T11:00:00Z", "bbbb-2222", "bg", "second question"),
+		lineageAssistantLine("a2", "u2", "2026-01-01T11:00:05Z", "bbbb-2222", "bg", "msg_02", "second answer", 4),
+	}, "\n") + "\n"
+	cContent := strings.Join([]string{
+		lineageUserLine("u1", "", "2026-01-01T10:00:00Z", "cccc-3333", "bg", "first question"),
+		lineageAssistantLine("a1", "u1", "2026-01-01T10:00:05Z", "cccc-3333", "bg", "msg_01", "first answer", 20),
+		lineageUserLine("u2", "a1", "2026-01-01T11:00:00Z", "cccc-3333", "bg", "second question"),
+		lineageAssistantLine("a2", "u2", "2026-01-01T11:00:05Z", "cccc-3333", "bg", "msg_02", "second answer", 4),
+		lineageUserLine("u5", "a2", "2026-01-01T12:00:00Z", "cccc-3333", "bg", "third question"),
+		lineageAssistantLine("a5", "u5", "2026-01-01T12:00:05Z", "cccc-3333", "bg", "msg_03", "third answer", 3),
+	}, "\n") + "\n"
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "orig-1111.jsonl"), []byte(aContent), 0o644))
+	bPath := filepath.Join(dir, "bbbb-2222.jsonl")
+	require.NoError(t, os.WriteFile(bPath, []byte(bContent), 0o644))
+	cPath := filepath.Join(dir, "cccc-3333.jsonl")
+	require.NoError(t, os.WriteFile(cPath, []byte(cContent), 0o644))
+
+	cResults, _, err := claudeParseFile(
+		cPath, "my_app", "local",
+		claudeParseOptions{siblingLineage: true},
+	)
+	require.NoError(t, err)
+	require.Len(t, cResults, 1)
+	require.Len(t, cResults[0].Messages, 2)
+	assert.Equal(t, "third question", cResults[0].Messages[0].Content)
+	assert.Equal(t, "bbbb-2222", cResults[0].Session.ParentSessionID)
+
+	bResults, _, err := claudeParseFile(
+		bPath, "my_app", "local",
+		claudeParseOptions{siblingLineage: true},
+	)
+	require.NoError(t, err)
+	require.Len(t, bResults, 1)
+	require.Len(t, bResults[0].Messages, 2)
+	assert.Equal(t, "second question", bResults[0].Messages[0].Content)
+	assert.Equal(t, "orig-1111", bResults[0].Session.ParentSessionID)
+}
+
+func TestClaudeBackgroundForkBoundaryRetryFailsOpen(t *testing.T) {
+	t.Parallel()
+	// Two retained entries parented at the replay leaf (a retry right
+	// after the handoff) cannot be re-rooted without collapsing the
+	// retry branches into a linear merge. The trim fails open so the
+	// intact DAG keeps retry semantics: only the latest branch shows.
+	forkContent := strings.Join([]string{
+		lineageUserLine("u1", "", "2026-01-01T10:00:00Z", "fork-2222", "bg", "first question"),
+		lineageAssistantLine("a1", "u1", "2026-01-01T10:00:05Z", "fork-2222", "bg", "msg_01", "first answer", 20),
+		lineageAssistantLine("x1", "a1", "2026-01-01T11:00:00Z", "fork-2222", "bg", "msg_02", "abandoned retry", 2),
+		lineageAssistantLine("x2", "a1", "2026-01-01T11:00:05Z", "fork-2222", "bg", "msg_03", "final answer", 6),
+	}, "\n") + "\n"
+	_, forkPath := writeLineageFixture(t,
+		"orig-1111.jsonl", lineageOriginalContent(),
+		"fork-2222.jsonl", forkContent,
+	)
+
+	results, excluded, err := claudeParseFile(
+		forkPath, "my_app", "local",
+		claudeParseOptions{siblingLineage: true},
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Empty(t, excluded)
+	assert.Empty(t, results[0].Session.ParentSessionID)
+	var contents []string
+	for _, m := range results[0].Messages {
+		contents = append(contents, m.Content)
+	}
+	assert.Contains(t, contents, "first question")
+	assert.Contains(t, contents, "final answer")
+	assert.NotContains(t, contents, "abandoned retry")
+}
+
 func TestClaudeBackgroundForkKeepsQueuedCommandWithoutNewChainEntry(t *testing.T) {
 	t.Parallel()
 	// A prompt queued at handoff lands as a fork-own uuid-less
@@ -229,13 +313,22 @@ func TestClaudeBackgroundForkFailOpen(t *testing.T) {
 			forkContent: lineageForkContent(),
 		},
 		{
-			name:     "ancestor also bg marked",
-			origName: "orig-1111.jsonl",
+			// A bg transcript fully covered by a bg sibling is either
+			// that sibling's ancestor or its idle copy — direction is
+			// unknowable, so it must not trim.
+			name:     "fork is subset of bg sibling",
+			origName: "long-3333.jsonl",
 			origContent: strings.Join([]string{
-				lineageUserLine("u1", "", "2026-01-01T10:00:00Z", "orig-1111", "bg", "first question"),
-				lineageAssistantLine("a1", "u1", "2026-01-01T10:00:05Z", "orig-1111", "bg", "msg_01", "first answer", 20),
+				lineageUserLine("u1", "", "2026-01-01T10:00:00Z", "long-3333", "bg", "first question"),
+				lineageAssistantLine("a1", "u1", "2026-01-01T10:00:05Z", "long-3333", "bg", "msg_01", "first answer", 20),
+				lineageUserLine("u2", "a1", "2026-01-01T11:00:00Z", "long-3333", "bg", "continued question"),
+				lineageAssistantLine("a2", "u2", "2026-01-01T11:00:05Z", "long-3333", "bg", "msg_02", "continued answer", 7),
 			}, "\n") + "\n",
-			forkContent: lineageForkContent(),
+			forkContent: strings.Join([]string{
+				lineageUserLine("u1", "", "2026-01-01T10:00:00Z", "fork-2222", "bg", "first question"),
+				lineageAssistantLine("a1", "u1", "2026-01-01T10:00:05Z", "fork-2222", "bg", "msg_01", "first answer", 20),
+				lineageUserLine("u2", "a1", "2026-01-01T11:00:00Z", "fork-2222", "bg", "continued question"),
+			}, "\n") + "\n",
 		},
 	}
 	for _, tt := range tests {

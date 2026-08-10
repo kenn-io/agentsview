@@ -23,12 +23,16 @@ import (
 // fork, so lineage can only be established from content overlap.
 //
 // Direction is anchored on the asymmetric bg stamp: only a transcript
-// whose root chain entry is bg-marked is ever considered a fork, and
-// only non-bg siblings qualify as its ancestor. Anything ambiguous
-// (bg-to-bg pairs, unmarked manual --fork-session copies, missing or
-// divergent siblings) fails open: no trim and no relationship is
-// emitted, leaving the status-quo duplicate rather than risking a
-// wrongly-oriented trim.
+// whose root chain entry is bg-marked is ever considered a fork. Both
+// non-bg and bg siblings qualify as ancestors, so chained backgrounding
+// trims each link against its nearest ancestor, but a bg candidate must
+// be a strict subset of the fork: a candidate that fully covers the
+// fork is either its descendant or an identical twin, and trimming
+// against it could erase the ancestor. Anything ambiguous (unmarked
+// manual --fork-session copies, missing or divergent siblings, a fork
+// fully covered by a bg sibling, several branches at the replay
+// boundary) fails open: no trim and no relationship is emitted, leaving
+// the status-quo duplicate rather than risking a wrongly-oriented trim.
 
 const (
 	// claudeLineageSniffMaxLines bounds how many leading lines are
@@ -147,10 +151,20 @@ func claudeSniffHeadUncached(path string) claudeHeadSniff {
 	return claudeHeadSniff{}
 }
 
+// claudeForkLine is one uuid-bearing line of a fork transcript.
+type claudeForkLine struct {
+	uuid       string
+	parentUUID string
+	// chainEntry marks user/assistant records — the ones the parser
+	// collects into DAG entries and whose parent links matter for
+	// boundary re-rooting.
+	chainEntry bool
+}
+
 // claudeScanUUIDs streams every uuid-bearing line of a transcript in
 // order. Errors and malformed lines are skipped; lineage resolution
 // fails open on incomplete data.
-func claudeScanUUIDs(path string, visit func(uuid string)) bool {
+func claudeScanUUIDs(path string, visit func(line claudeForkLine)) bool {
 	f, err := os.Open(path)
 	if err != nil {
 		return false
@@ -166,9 +180,16 @@ func claudeScanUUIDs(path string, visit func(uuid string)) bool {
 		if !gjson.ValidBytes(lineBytes) {
 			continue
 		}
-		if uuid := gjson.GetBytes(lineBytes, "uuid").Str; uuid != "" {
-			visit(uuid)
+		uuid := gjson.GetBytes(lineBytes, "uuid").Str
+		if uuid == "" {
+			continue
 		}
+		entryType := gjson.GetBytes(lineBytes, "type").Str
+		visit(claudeForkLine{
+			uuid:       uuid,
+			parentUUID: gjson.GetBytes(lineBytes, "parentUuid").Str,
+			chainEntry: entryType == "user" || entryType == "assistant",
+		})
 	}
 	return lr.Err() == nil
 }
@@ -192,6 +213,7 @@ func claudeResolveSiblingLineage(path string) *claudeLineagePlan {
 	type candidate struct {
 		path string
 		stem string
+		bg   bool
 	}
 	var candidates []candidate
 	for _, de := range dirEntries {
@@ -202,48 +224,59 @@ func claudeResolveSiblingLineage(path string) *claudeLineagePlan {
 			continue
 		}
 		sibling := claudeSniffHead(filepath.Join(dir, name))
-		if !sibling.ok || sibling.rootIsBG ||
-			sibling.rootUUID != self.rootUUID {
+		if !sibling.ok || sibling.rootUUID != self.rootUUID {
 			continue
 		}
 		candidates = append(candidates, candidate{
 			path: filepath.Join(dir, name),
 			stem: strings.TrimSuffix(name, ".jsonl"),
+			bg:   sibling.rootIsBG,
 		})
 	}
 	if len(candidates) == 0 {
 		return nil
 	}
+	// Non-bg candidates first so an interactive original wins a run
+	// tie against an unrelated bg fork of the same original.
 	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].bg != candidates[j].bg {
+			return !candidates[i].bg
+		}
 		return candidates[i].stem < candidates[j].stem
 	})
 
-	var forkSeq []string
-	if !claudeScanUUIDs(path, func(uuid string) {
-		forkSeq = append(forkSeq, uuid)
+	var forkSeq []claudeForkLine
+	if !claudeScanUUIDs(path, func(line claudeForkLine) {
+		forkSeq = append(forkSeq, line)
 	}) || len(forkSeq) == 0 {
 		return nil
 	}
 
 	// Pick the candidate whose uuid set covers the longest contiguous
 	// leading run of the fork: with chained ancestors sharing one
-	// root, the deepest ancestor is the one the fork replayed.
+	// root, the nearest ancestor is the one the fork replayed. A bg
+	// candidate must remain a strict subset of the fork — full
+	// coverage means it is the fork's descendant or twin, where
+	// direction is unknowable.
 	bestRun := 0
 	bestStem := ""
 	var bestSet map[string]struct{}
 	for _, c := range candidates {
 		set := make(map[string]struct{})
-		if !claudeScanUUIDs(c.path, func(uuid string) {
-			set[uuid] = struct{}{}
+		if !claudeScanUUIDs(c.path, func(line claudeForkLine) {
+			set[line.uuid] = struct{}{}
 		}) {
 			continue
 		}
 		run := 0
-		for _, uuid := range forkSeq {
-			if _, ok := set[uuid]; !ok {
+		for _, line := range forkSeq {
+			if _, ok := set[line.uuid]; !ok {
 				break
 			}
 			run++
+		}
+		if c.bg && run == len(forkSeq) {
+			continue
 		}
 		if run > bestRun {
 			bestRun = run
@@ -255,10 +288,27 @@ func claudeResolveSiblingLineage(path string) *claudeLineagePlan {
 		return nil
 	}
 	dropUUIDs := make(map[string]struct{}, bestRun)
-	for _, uuid := range forkSeq[:bestRun] {
-		if _, ok := bestSet[uuid]; ok {
-			dropUUIDs[uuid] = struct{}{}
+	for _, line := range forkSeq[:bestRun] {
+		if _, ok := bestSet[line.uuid]; ok {
+			dropUUIDs[line.uuid] = struct{}{}
 		}
+	}
+	// More than one retained chain entry hanging off the dropped
+	// region means the replay boundary carries retry or fork
+	// branches. Re-rooting them all would collapse the DAG into a
+	// linear merge, so the trim fails open and the intact DAG keeps
+	// its branch semantics.
+	danglingChildren := 0
+	for _, line := range forkSeq[bestRun:] {
+		if !line.chainEntry {
+			continue
+		}
+		if _, dropped := dropUUIDs[line.parentUUID]; dropped {
+			danglingChildren++
+		}
+	}
+	if danglingChildren > 1 {
+		return nil
 	}
 	return &claudeLineagePlan{
 		parentSessionID: bestStem,
