@@ -20,7 +20,10 @@ use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::plugin::Builder as PluginBuilder;
 #[cfg(target_os = "macos")]
 use tauri::tray::TrayIconBuilder;
-use tauri::{App, AppHandle, Emitter, Manager, RunEvent, Url, WebviewWindow};
+use tauri::{
+    App, AppHandle, Emitter, Manager, RunEvent, Url, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder,
+};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
@@ -54,6 +57,10 @@ const CHECK_UPDATES_MENU_ID: &str = "check_updates";
 const OPEN_LOGS_FOLDER_MENU_ID: &str = "open_logs_folder";
 const SHOW_MAIN_WINDOW_MENU_ID: &str = "show_main_window";
 const QUIT_FROM_STATUS_ITEM_MENU_ID: &str = "quit_from_status_item";
+const CLAUDE_AUTH_WINDOW_LABEL: &str = "claude-auth";
+const CLAUDE_AUTH_URL: &str = "https://claude.ai/login?return_url=%2Fnew";
+const CLAUDE_KEYCHAIN_SERVICE: &str = "io.agentsview.desktop";
+const CLAUDE_KEYCHAIN_ACCOUNT: &str = "claude-ai/default";
 // Delay after navigating to the backend before probing whether the
 // Linux WebKitGTK web content process is actually alive. Gives the
 // process time to spawn so we don't false-positive on slow startup.
@@ -80,6 +87,20 @@ struct SidecarState {
 struct SidecarProcess {
     child: CommandChild,
     generation: u64,
+}
+
+/// Deliberately holds only non-secret state. Claude session cookies stay in the
+/// isolated WKWebView profile and are never exposed to the frontend or logs.
+#[derive(Default)]
+struct ClaudeAuthState {
+    connected_this_launch: AtomicBool,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeAuthStatus {
+    connected: bool,
+    message: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -153,6 +174,13 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(init_navigation_guard_plugin())
         .manage(SidecarState::default())
+        .manage(ClaudeAuthState::default())
+        .invoke_handler(tauri::generate_handler![
+            claude_auth_start,
+            claude_auth_disconnect,
+            claude_auth_status,
+            claude_auth_test_connection,
+        ])
         .setup(|app| {
             if let Err(err) = setup_menu(app) {
                 eprintln!("[agentsview] failed to set up desktop menu: {err}");
@@ -442,6 +470,14 @@ fn combined_preflight_output(stdout: &str, stderr: &str) -> Option<String> {
 fn init_navigation_guard_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     PluginBuilder::new("navigation-guard")
         .on_navigation(|webview, url| {
+            // This is a deliberately isolated, login-only webview. SSO and MFA
+            // legitimately redirect to arbitrary HTTPS identity-provider hosts;
+            // the main AgentsView window remains restricted to localhost below.
+            if webview.label() == CLAUDE_AUTH_WINDOW_LABEL
+                && matches!(url.scheme(), "http" | "https")
+            {
+                return true;
+            }
             let backend_port = webview
                 .app_handle()
                 .try_state::<SidecarState>()
@@ -489,6 +525,188 @@ fn is_allowed_navigation_url(url: &Url, backend_port: Option<u16>) -> bool {
         return url.scheme() == "http" && url.host_str() == Some(HOST) && url.port() == Some(port);
     }
     false
+}
+
+fn claude_auth_profile_dir(handle: &AppHandle) -> Result<PathBuf, String> {
+    let directory = handle
+        .path()
+        .app_data_dir()
+        .map_err(|err| format!("could not resolve the Claude login profile directory: {err}"))?
+        .join("cloud-auth")
+        .join("claude-ai");
+    fs::create_dir_all(&directory)
+        .map_err(|err| format!("could not create the Claude login profile directory: {err}"))?;
+    #[cfg(unix)]
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+        .map_err(|err| format!("could not secure the Claude login profile directory: {err}"))?;
+    Ok(directory)
+}
+
+#[tauri::command]
+fn claude_auth_start(handle: AppHandle) -> Result<ClaudeAuthStatus, String> {
+    if let Some(window) = handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
+        window.show().map_err(|err| err.to_string())?;
+        window.set_focus().map_err(|err| err.to_string())?;
+        return Ok(ClaudeAuthStatus {
+            connected: handle.state::<ClaudeAuthState>().connected_this_launch.load(Ordering::SeqCst),
+            message: "Claude sign-in is already open. AgentsView will capture the session automatically once sign-in completes.".into(),
+        });
+    }
+
+    let profile_dir = claude_auth_profile_dir(&handle)?;
+    let url = Url::parse(CLAUDE_AUTH_URL).map_err(|err| err.to_string())?;
+    WebviewWindowBuilder::new(&handle, CLAUDE_AUTH_WINDOW_LABEL, WebviewUrl::External(url))
+        .title("Connect Claude.ai to AgentsView")
+        .inner_size(1100.0, 800.0)
+        .min_inner_size(800.0, 600.0)
+        .data_directory(profile_dir)
+        .build()
+        .map_err(|err| format!("could not open the Claude sign-in window: {err}"))?;
+    start_claude_auth_watcher(handle.clone());
+
+    Ok(ClaudeAuthStatus {
+        connected: false,
+        message: "Sign in to Claude in the separate window. AgentsView will capture the session automatically.".into(),
+    })
+}
+
+fn claude_session_cookie_header(handle: &AppHandle) -> Result<String, String> {
+    let window = handle
+        .get_webview_window(CLAUDE_AUTH_WINDOW_LABEL)
+        .ok_or_else(|| "Claude sign-in window was closed.".to_string())?;
+    let url = Url::parse("https://claude.ai/").map_err(|err| err.to_string())?;
+    let cookies = window
+        .cookies_for_url(url)
+        .map_err(|err| format!("could not read the Claude session: {err}"))?;
+    let has_session = cookies.iter().any(|cookie| cookie.name() == "sessionKey");
+    let has_org = cookies
+        .iter()
+        .any(|cookie| cookie.name() == "lastActiveOrg");
+    if !has_session || !has_org {
+        return Err("Claude is not signed in yet.".into());
+    }
+    Ok(cookies
+        .iter()
+        .map(|cookie| format!("{}={}", cookie.name(), cookie.value()))
+        .collect::<Vec<_>>()
+        .join("; "))
+}
+
+fn store_claude_session(handle: &AppHandle) -> Result<(), String> {
+    let cookie_header = claude_session_cookie_header(handle)?;
+    let entry = keyring::Entry::new(CLAUDE_KEYCHAIN_SERVICE, CLAUDE_KEYCHAIN_ACCOUNT)
+        .map_err(|err| format!("could not access the system credential store: {err}"))?;
+    entry.set_password(&cookie_header).map_err(|err| {
+        format!("could not save the Claude session in the system credential store: {err}")
+    })
+}
+
+fn delete_claude_session() -> Result<(), String> {
+    let entry = keyring::Entry::new(CLAUDE_KEYCHAIN_SERVICE, CLAUDE_KEYCHAIN_ACCOUNT)
+        .map_err(|err| format!("could not access the system credential store: {err}"))?;
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(err) => Err(format!(
+            "could not remove the Claude session from the system credential store: {err}"
+        )),
+    }
+}
+
+fn start_claude_auth_watcher(handle: AppHandle) {
+    thread::spawn(move || {
+        // Cookie writes can lag the final Claude redirect. Poll only while this
+        // dedicated sign-in window exists, and stop after ten minutes.
+        for _ in 0..600 {
+            thread::sleep(Duration::from_secs(1));
+            if store_claude_session(&handle).is_err() {
+                continue;
+            }
+
+            handle
+                .state::<ClaudeAuthState>()
+                .connected_this_launch
+                .store(true, Ordering::SeqCst);
+            if let Some(window) = handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
+                let _ = window.close();
+            }
+            return;
+        }
+    });
+}
+
+#[tauri::command]
+fn claude_auth_disconnect(handle: AppHandle) -> Result<ClaudeAuthStatus, String> {
+    if let Some(window) = handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
+        window.close().map_err(|err| err.to_string())?;
+    }
+    delete_claude_session()?;
+    let profile_dir = claude_auth_profile_dir(&handle)?;
+    fs::remove_dir_all(&profile_dir)
+        .map_err(|err| format!("could not remove the Claude login profile: {err}"))?;
+    handle
+        .state::<ClaudeAuthState>()
+        .connected_this_launch
+        .store(false, Ordering::SeqCst);
+    Ok(ClaudeAuthStatus {
+        connected: false,
+        message: "Claude has been disconnected and its saved session was removed.".into(),
+    })
+}
+
+#[tauri::command]
+fn claude_auth_status(handle: AppHandle) -> ClaudeAuthStatus {
+    let connected = handle
+        .state::<ClaudeAuthState>()
+        .connected_this_launch
+        .load(Ordering::SeqCst);
+    ClaudeAuthStatus {
+        connected,
+        message: if connected {
+            "Claude session is saved securely on this device.".into()
+        } else {
+            "Not connected.".into()
+        },
+    }
+}
+
+#[tauri::command]
+async fn claude_auth_test_connection(handle: AppHandle) -> Result<ClaudeAuthStatus, String> {
+    let mut command = handle
+        .shell()
+        .sidecar("agentsview")
+        .map_err(|err| format!("could not start Claude connection test: {err}"))?;
+    for (key, value) in sidecar_env() {
+        command = command.env(key, value);
+    }
+    let (mut events, _child) = command
+        .args(["cloud", "claude-ai", "test-connection"])
+        .spawn()
+        .map_err(|err| format!("could not start Claude connection test: {err}"))?;
+
+    while let Some(event) = events.recv().await {
+        match event {
+            CommandEvent::Terminated(payload) if payload.code == Some(0) => {
+                return Ok(ClaudeAuthStatus {
+                    connected: true,
+                    message:
+                        "Claude connection verified. AgentsView can read your conversation list."
+                            .into(),
+                });
+            }
+            CommandEvent::Terminated(_) | CommandEvent::Error(_) => {
+                return Ok(ClaudeAuthStatus {
+                    connected: true,
+                    message: "Claude is connected, but its session could not be verified. Reconnect Claude and try again.".into(),
+                });
+            }
+            CommandEvent::Stdout(_) | CommandEvent::Stderr(_) => {}
+            _ => {}
+        }
+    }
+    Ok(ClaudeAuthStatus {
+        connected: true,
+        message: "Claude is connected, but its session could not be verified. Reconnect Claude and try again.".into(),
+    })
 }
 
 fn is_allowed_external_open_url(url: &Url) -> bool {

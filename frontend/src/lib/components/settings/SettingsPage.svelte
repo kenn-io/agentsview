@@ -20,6 +20,7 @@
   import TerminalSettings from "./TerminalSettings.svelte";
   import EmbeddingsSettings from "./EmbeddingsSettings.svelte";
   import GithubSettings from "./GithubSettings.svelte";
+  import ClaudeAiSettings from "./ClaudeAiSettings.svelte";
   import LanguageSettings from "./LanguageSettings.svelte";
   import RemoteSettings from "./RemoteSettings.svelte";
   import { settingsPanels } from "./settingsPanels.js";
@@ -214,6 +215,8 @@
                 <EmbeddingsSettings />
               {:else if meta.id === "github"}
                 <GithubSettings />
+              {:else if meta.id === "claude-ai"}
+                <ClaudeAiSettings />
               {:else if meta.id === "remote-access"}
                 <RemoteSettings />
               {/if}

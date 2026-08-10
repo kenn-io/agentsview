@@ -9,6 +9,7 @@ export type SettingsPanelId =
   | "worktree-mappings"
   | "embeddings"
   | "github"
+  | "claude-ai"
   | "remote-access";
 
 export interface SettingsPanelMeta {
@@ -89,6 +90,14 @@ export function settingsPanels(): SettingsPanelMeta[] {
       description: m.settings_github_description(),
       group: connections,
       keywords: m.settings_search_keywords_github(),
+    },
+    {
+      id: "claude-ai",
+      label: "Claude.ai",
+      title: "Claude.ai",
+      description: "Connect a Claude.ai session from the desktop app.",
+      group: connections,
+      keywords: "claude ai login browser session conversations import",
     },
     {
       id: "remote-access",
