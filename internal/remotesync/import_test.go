@@ -137,7 +137,7 @@ func TestPreparedHTTPSyncRebuildContributor(t *testing.T) {
 	require.Len(t, remoteCache, 1)
 	for cachedPath := range remoteCache {
 		assert.True(t, strings.HasPrefix(
-			cachedPath, skippedFile+"?source_hash=",
+			cachedPath, skippedFile+"?agent=claude?source_hash=",
 		), "rowless Claude skips must persist their content hash")
 	}
 	assert.NotContains(t, remoteCache, remoteFile,
@@ -371,7 +371,7 @@ func TestImporterMapsHermesStateDBExtraFileAndRefreshesWALChanges(t *testing.T) 
 	require.NoError(t, err)
 	require.NotEmpty(t, remoteCache,
 		"the state.db skip entry must survive the import, not be discarded")
-	_, ok := remoteCache[remoteStateDB]
+	_, ok := remoteCache[remoteStateDB+"?agent=hermes"]
 	assert.True(t, ok,
 		"skip cache must key the state.db entry by its remote path, got %v",
 		remoteCache)
@@ -506,4 +506,38 @@ func TestRemoteSkipCacheUsesArchivePathMapping(t *testing.T) {
 	)
 	require.True(t, ok)
 	assert.Equal(t, remoteFile, got)
+}
+
+func TestRemoteSkipCacheRoundTripsQualifiedExtraFile(t *testing.T) {
+	root := t.TempDir()
+	const (
+		host       = "devbox"
+		remoteFile = "/home/remote/.hermes/state.db"
+		qualified  = remoteFile + "?agent=hermes"
+	)
+	targets := TargetSet{ExtraFiles: []string{remoteFile}}
+	layout, cfg, err := newImportInputs(host, nil, targets, root)
+	require.NoError(t, err)
+
+	localFile := remappedRemotePath(root, remoteFile) + "?agent=hermes"
+	translated := translateRemoteCacheToTemp(
+		map[string]int64{qualified: 123},
+		layout.paths.remoteDirs,
+		layout.paths.localDirs,
+	)
+	require.Equal(t, map[string]int64{localFile: 123}, translated,
+		"remote translation must preserve the provider qualifier")
+
+	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := syncpkg.NewEngine(database, cfg)
+	t.Cleanup(engine.Close)
+	engine.InjectSkipCache(translated)
+	require.NoError(t, saveEngineSkipCache(database, engine, layout.paths))
+
+	remoteCache, err := database.LoadRemoteSkippedFiles(host)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]int64{qualified: 123}, remoteCache,
+		"temporary translation must restore the identical remote cache key")
 }

@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func verifiedSourceSignatureForTest(seed int64) verifiedSourceSignature {
@@ -25,47 +27,77 @@ func TestVerifiedSourceGatePromotionAndInvalidation(t *testing.T) {
 
 	t.Run("promotion trusts the captured signature", func(t *testing.T) {
 		e := &Engine{}
-		capture, fresh := e.captureVerifiedSource(path, signature)
+		capture, fresh := e.captureVerifiedSource(
+			parser.AgentCodex, path, signature,
+		)
 		assert.False(t, fresh)
 		e.promoteVerifiedSource(capture)
 
-		_, fresh = e.captureVerifiedSource(path, signature)
+		_, fresh = e.captureVerifiedSource(parser.AgentCodex, path, signature)
 		assert.True(t, fresh)
 		_, fresh = e.captureVerifiedSource(
-			path, verifiedSourceSignatureForTest(2),
+			parser.AgentCodex, path, verifiedSourceSignatureForTest(2),
 		)
 		assert.False(t, fresh, "a changed signature must re-verify")
 	})
 
 	t.Run("path invalidation vetoes stale promotion", func(t *testing.T) {
 		e := &Engine{}
-		capture, _ := e.captureVerifiedSource(path, signature)
-		e.invalidateVerifiedSource(path)
+		capture, _ := e.captureVerifiedSource(
+			parser.AgentCodex, path, signature,
+		)
+		e.invalidateVerifiedSource(parser.AgentCodex, path)
 		e.promoteVerifiedSource(capture)
 
-		_, fresh := e.captureVerifiedSource(path, signature)
+		_, fresh := e.captureVerifiedSource(
+			parser.AgentCodex, path, signature,
+		)
 		assert.False(t, fresh)
 	})
 
 	t.Run("global clear vetoes stale promotion", func(t *testing.T) {
 		e := &Engine{}
-		capture, _ := e.captureVerifiedSource(path, signature)
+		capture, _ := e.captureVerifiedSource(
+			parser.AgentCodex, path, signature,
+		)
 		e.clearVerifiedSources()
 		e.promoteVerifiedSource(capture)
 
-		_, fresh := e.captureVerifiedSource(path, signature)
+		_, fresh := e.captureVerifiedSource(
+			parser.AgentCodex, path, signature,
+		)
 		assert.False(t, fresh)
 	})
 
 	t.Run("unrelated invalidation does not veto promotion", func(t *testing.T) {
 		e := &Engine{}
-		capture, _ := e.captureVerifiedSource(path, signature)
-		e.invalidateVerifiedSource("archive/session-b.jsonl")
+		capture, _ := e.captureVerifiedSource(
+			parser.AgentCodex, path, signature,
+		)
+		e.invalidateVerifiedSource(
+			parser.AgentCodex, "archive/session-b.jsonl",
+		)
 		e.promoteVerifiedSource(capture)
 
-		_, fresh := e.captureVerifiedSource(path, signature)
+		_, fresh := e.captureVerifiedSource(
+			parser.AgentCodex, path, signature,
+		)
 		assert.True(t, fresh)
 	})
+}
+
+func TestVerifiedSourceGateSeparatesAgentsAtSharedPath(t *testing.T) {
+	e := &Engine{}
+	path := "archive/shared.jsonl"
+	signature := verifiedSourceSignatureForTest(1)
+	capture, fresh := e.captureVerifiedSource(
+		parser.AgentCodex, path, signature,
+	)
+	require.False(t, fresh)
+	e.promoteVerifiedSource(capture)
+
+	_, fresh = e.captureVerifiedSource(parser.AgentTraeX, path, signature)
+	assert.False(t, fresh)
 }
 
 func TestVerifiedSourceGateFullPassPruning(t *testing.T) {
@@ -75,10 +107,10 @@ func TestVerifiedSourceGateFullPassPruning(t *testing.T) {
 
 	firstPass := e.beginVerifiedSourcePass()
 	keepCapture, keepFresh := e.captureVerifiedSource(
-		"archive/keep.jsonl", keepSignature,
+		parser.AgentCodex, "archive/keep.jsonl", keepSignature,
 	)
 	dropCapture, dropFresh := e.captureVerifiedSource(
-		"archive/drop.jsonl", dropSignature,
+		parser.AgentCodex, "archive/drop.jsonl", dropSignature,
 	)
 	require.False(t, keepFresh)
 	require.False(t, dropFresh)
@@ -88,12 +120,16 @@ func TestVerifiedSourceGateFullPassPruning(t *testing.T) {
 	require.Len(t, e.verifiedSources, 2)
 
 	secondPass := e.beginVerifiedSourcePass()
-	_, keepFresh = e.captureVerifiedSource("archive/keep.jsonl", keepSignature)
+	_, keepFresh = e.captureVerifiedSource(
+		parser.AgentCodex, "archive/keep.jsonl", keepSignature,
+	)
 	require.True(t, keepFresh)
 	e.finishVerifiedSourcePass(secondPass, true)
 
 	require.Len(t, e.verifiedSources, 1)
-	_, ok := e.verifiedSources["archive/keep.jsonl"]
+	_, ok := e.verifiedSources[verifiedSourceKey{
+		agent: parser.AgentCodex, path: "archive/keep.jsonl",
+	}]
 	assert.True(t, ok)
 
 	incompletePass := e.beginVerifiedSourcePass()
@@ -108,14 +144,16 @@ func TestVerifiedSourceGateInvalidationSurvivesActivePassPruning(t *testing.T) {
 	signature := verifiedSourceSignatureForTest(1)
 
 	pass := e.beginVerifiedSourcePass()
-	capture, _ := e.captureVerifiedSource(path, signature)
-	e.invalidateVerifiedSource(path)
+	capture, _ := e.captureVerifiedSource(
+		parser.AgentCodex, path, signature,
+	)
+	e.invalidateVerifiedSource(parser.AgentCodex, path)
 	e.finishVerifiedSourcePass(pass, true)
 
 	require.Len(t, e.verifiedSources, 1,
 		"the invalidation record must survive its active pass")
 	e.promoteVerifiedSource(capture)
-	_, fresh := e.captureVerifiedSource(path, signature)
+	_, fresh := e.captureVerifiedSource(parser.AgentCodex, path, signature)
 	assert.False(t, fresh,
 		"pruning must not erase the generation that vetoes stale promotion")
 }
@@ -138,7 +176,8 @@ func TestVerifiedSourceGateRetainedBudget(t *testing.T) {
 		for i := range count {
 			path := "archive/provider/session-" + strconv.Itoa(i) + ".jsonl"
 			capture, _ := e.captureVerifiedSource(
-				path, verifiedSourceSignatureForTest(int64(i)),
+				parser.AgentCodex, path,
+				verifiedSourceSignatureForTest(int64(i)),
 			)
 			e.promoteVerifiedSource(capture)
 		}
@@ -168,7 +207,8 @@ func TestVerifiedSourceGateRetainedBudget(t *testing.T) {
 	for i := range largeCount {
 		path := "archive/provider/session-" + strconv.Itoa(i) + ".jsonl"
 		capture, _ := e.captureVerifiedSource(
-			path, verifiedSourceSignatureForTest(int64(i)),
+			parser.AgentCodex, path,
+			verifiedSourceSignatureForTest(int64(i)),
 		)
 		e.promoteVerifiedSource(capture)
 	}
@@ -176,7 +216,10 @@ func TestVerifiedSourceGateRetainedBudget(t *testing.T) {
 	secondPass := e.beginVerifiedSourcePass()
 	for i := range smallCount {
 		path := "archive/provider/session-" + strconv.Itoa(i) + ".jsonl"
-		e.captureVerifiedSource(path, verifiedSourceSignatureForTest(int64(i)))
+		e.captureVerifiedSource(
+			parser.AgentCodex, path,
+			verifiedSourceSignatureForTest(int64(i)),
+		)
 	}
 	e.finishVerifiedSourcePass(secondPass, true)
 	assert.Len(t, e.verifiedSources, smallCount,

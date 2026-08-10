@@ -1521,16 +1521,15 @@ func (p *codexProvider) parseSessionSnapshot(
 	}
 
 	mtime := info.ModTime().UnixNano()
-	// Include session_index.jsonl mtime so renames trigger a re-parse.
-	if idxPath := codexSessionIndexPath(path); idxPath != "" {
-		if idxInfo, err := os.Stat(idxPath); err == nil {
-			if idxMtime := idxInfo.ModTime().UnixNano(); idxMtime > mtime {
-				mtime = idxMtime
-			}
-		}
+	if p.spec.agent == AgentCodex {
+		// Include session_index.jsonl mtime so Codex renames trigger a re-parse.
+		mtime = CodexEffectiveMtime(path, mtime)
 	}
 
-	sessionName := LookupCodexThreadName(path, b.sessionID)
+	sessionName := ""
+	if p.spec.agent == AgentCodex {
+		sessionName = LookupCodexThreadName(path, b.sessionID)
+	}
 	if sessionName == "" && b.firstMessage == "" &&
 		b.relationshipType == RelSubagent {
 		sessionName = codexAgentPathLeaf(b.agentPath)

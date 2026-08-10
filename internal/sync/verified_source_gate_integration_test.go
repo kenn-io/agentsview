@@ -268,6 +268,103 @@ func TestVerifiedSourceGateWarmTrustDoesNotMaskDatabaseRepair(t *testing.T) {
 	}
 }
 
+func TestVerifiedSourceGateDoesNotBorrowRepairState(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(
+		root,
+		"rollout-2026-07-11T00-00-00-00000000-0000-0000-0000-000000000001.jsonl",
+	)
+	require.NoError(t, os.WriteFile(path, []byte("session\n"), 0o600))
+	fingerprint, err := verifiedSourceFingerprint(path)
+	require.NoError(t, err)
+
+	newProvider := func(agent parser.AgentType) *verifiedSourceCountingProvider {
+		return &verifiedSourceCountingProvider{
+			ProviderBase: parser.ProviderBase{
+				Def: parser.AgentDef{
+					Type: agent, DisplayName: string(agent),
+					IDPrefix: string(agent) + ":", FileBased: true,
+				},
+				Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+					WatchSources:         parser.CapabilitySupported,
+					ClassifyChangedPath:  parser.CapabilitySupported,
+					CompositeFingerprint: parser.CapabilitySupported,
+					VerifiedLocalStat:    parser.CapabilitySupported,
+				}},
+			},
+			root: root,
+			sources: map[string]parser.SourceRef{
+				filepath.Clean(path): {
+					Provider: agent, Key: path,
+					DisplayPath: path, FingerprintKey: path,
+					ProjectHint: "project",
+				},
+			},
+		}
+	}
+	codexProvider := newProvider(parser.AgentCodex)
+	traexProvider := newProvider(parser.AgentTraeX)
+	database := openTestDB(t)
+	filePath := path
+	fileSize := fingerprint.Size
+	fileMtime := fingerprint.MTimeNS
+	fileHash := fingerprint.Hash
+	for _, agent := range []parser.AgentType{
+		parser.AgentCodex, parser.AgentTraeX,
+	} {
+		id := string(agent) + ":shared"
+		require.NoError(t, database.UpsertSession(db.Session{
+			ID: id, Project: "project", Machine: "host",
+			Agent: string(agent), FilePath: &filePath,
+			FileSize: &fileSize, FileMtime: &fileMtime,
+			FileHash: &fileHash,
+		}))
+		require.NoError(t, database.SetSessionDataVersion(
+			id, db.CurrentDataVersion(),
+		))
+	}
+
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {root}, parser.AgentTraeX: {root},
+		},
+		Machine: "host",
+		ProviderFactories: []parser.ProviderFactory{
+			verifiedSourceCountingFactory{provider: codexProvider},
+			verifiedSourceCountingFactory{provider: traexProvider},
+		},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentCodex: parser.ProviderMigrationProviderAuthoritative,
+			parser.AgentTraeX: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	fileFor := func(agent parser.AgentType) parser.DiscoveredFile {
+		source := parser.SourceRef{
+			Provider: agent, Key: path,
+			DisplayPath: path, FingerprintKey: path,
+			ProjectHint: "project",
+		}
+		return parser.DiscoveredFile{
+			Path: path, Agent: agent,
+			ProviderSource: &source, ProviderProcess: true,
+		}
+	}
+
+	runVerifiedSourcePass(t, engine, []parser.DiscoveredFile{
+		fileFor(parser.AgentCodex),
+	})
+	runVerifiedSourcePass(t, engine, []parser.DiscoveredFile{
+		fileFor(parser.AgentTraeX),
+	})
+	require.NoError(t, database.DeleteSession("traex:shared"))
+
+	res := engine.processFile(t.Context(), fileFor(parser.AgentTraeX))
+	require.ErrorContains(t, res.err,
+		"unexpected parse after seeding stored source state")
+	assert.Equal(t, 2, traexProvider.fingerprintCalls,
+		"missing TraeX state must invalidate only TraeX trust and reverify")
+}
+
 func TestVerifiedSourceGateRechecksAfterStatAndWatcherInvalidation(t *testing.T) {
 	engine, provider, files := newVerifiedSourceArchive(t, 1)
 	file := files[0]
@@ -375,7 +472,9 @@ func TestVerifiedSourceGateLegacyClaudeRowMustEstablishFingerprint(t *testing.T)
 		"unexpected parse after seeding stored source state")
 	assert.Equal(t, 1, provider.fingerprintCalls,
 		"a legacy row without file_hash must not keep taking the stat-only skip")
-	record, ok := engine.verifiedSources[path]
+	record, ok := engine.verifiedSources[verifiedSourceKey{
+		agent: parser.AgentClaude, path: path,
+	}]
 	require.True(t, ok)
 	assert.False(t, record.trusted,
 		"failed parsing must not promote source trust")

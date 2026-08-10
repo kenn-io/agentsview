@@ -566,6 +566,8 @@ func (e *Engine) parseDiffSourceReliableForRaced(
 //   - Codex deliberately uses the transcript mtime only. Its
 //     session_index.jsonl is global to every Codex session, so an unrelated
 //     title/index write must not mask transcript-derived parser drift.
+//     Codex-format forks join it: they write no index file, so the transcript
+//     stat is already their whole story.
 //   - OpenHands folds base_state.json/TASKS.json/events/* (OpenHandsSnapshot).
 //   - Copilot folds workspace.yaml (copilotEffectiveMtime).
 //
@@ -577,26 +579,26 @@ func (e *Engine) parseDiffSourceReliableForRaced(
 func parseDiffLiveMtime(
 	agent parser.AgentType, path string,
 ) (int64, error) {
-	switch agent {
-	case parser.AgentCodex:
+	switch {
+	case isCodexFormatAgent(agent):
 		info, err := os.Stat(path)
 		if err != nil {
 			return 0, err
 		}
 		return info.ModTime().UnixNano(), nil
-	case parser.AgentOpenHands:
+	case agent == parser.AgentOpenHands:
 		snapshot, err := parser.OpenHandsSnapshot(path)
 		if err != nil {
 			return 0, err
 		}
 		return snapshot.Mtime, nil
-	case parser.AgentCopilot:
+	case agent == parser.AgentCopilot:
 		info, err := os.Stat(path)
 		if err != nil {
 			return 0, err
 		}
 		return copilotEffectiveMtime(path, info), nil
-	case parser.AgentCodebuff, parser.AgentFreebuff:
+	case agent == parser.AgentCodebuff, agent == parser.AgentFreebuff:
 		// Codebuff and Freebuff share the same on-disk layout with
 		// companion files (run-state.json, chat-meta.json) that can
 		// change independently of chat-messages.json. Use the composite
@@ -611,7 +613,7 @@ func parseDiffLiveMtime(
 	})
 }
 
-// parseDiffCodexTranscriptChangedSinceStored reports whether the Codex
+// parseDiffCodexTranscriptChangedSinceStored reports whether a Codex-format
 // transcript differs from the archived source snapshot on a size basis Codex
 // has historically stored. Full parses store the raw file size, while
 // incremental parses can store only the parser-consumed JSONL boundary when a
@@ -625,7 +627,7 @@ func parseDiffLiveMtime(
 func parseDiffCodexTranscriptChangedSinceStored(
 	stored *db.Session, parsed parser.ParsedSession,
 ) bool {
-	if stored == nil || parsed.Agent != parser.AgentCodex {
+	if stored == nil || !isCodexFormatAgent(parsed.Agent) {
 		return false
 	}
 	if stored.FileSize == nil {
@@ -785,7 +787,7 @@ func (e *Engine) parseDiffCollectFile(
 				pw.sess.Agent, pw.sess.File.Path,
 			)
 			liveOK := err == nil
-			if liveOK && pw.sess.Agent != parser.AgentCodex &&
+			if liveOK && !isCodexFormatAgent(pw.sess.Agent) &&
 				pw.sess.File.Mtime > liveMtime {
 				liveMtime = pw.sess.File.Mtime
 			}

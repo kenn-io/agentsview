@@ -264,7 +264,7 @@ func TestOmnigentWholeContainerCachePromotesAfterSuccessfulWrite(
 		require.NoError(t, err)
 		assert.NotNil(t, stored)
 	}
-	wantKey := container + "?source_hash=container-hash&data_version=" +
+	wantKey := container + "?agent=omnigent?source_hash=container-hash&data_version=" +
 		strconv.Itoa(db.CurrentDataVersion())
 	assert.Equal(t, map[string]int64{wantKey: fingerprint.MTimeNS},
 		engine.SnapshotSkipCache())

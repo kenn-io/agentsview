@@ -4686,7 +4686,11 @@ func TestCodexExecMigrationIdempotent(t *testing.T) {
 	)
 	info, err := os.Stat(path)
 	require.NoError(t, err, "stat codex session")
-	cacheKey := fmt.Sprintf("%s?source_hash=%x", path, sha256.Sum256([]byte(content)))
+	cacheKey := fmt.Sprintf(
+		"%s?agent=codex?source_hash=%x",
+		path,
+		sha256.Sum256([]byte(content)),
+	)
 
 	require.NoError(t, env.db.ReplaceSkippedFiles(map[string]int64{
 		cacheKey: info.ModTime().UnixNano(),

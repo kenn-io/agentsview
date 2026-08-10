@@ -287,6 +287,7 @@ can still be parsed.
 | VS Code Copilot       | (platform-specific, see below)                                                   | JSON / JSONL per session                                                                                                        |
 | Windsurf              | (platform-specific, see below)                                                   | SQLite `workspaceStorage/<hash>/state.vscdb` workspace chat data                                                                |
 | Trae                  | (platform-specific, see below)                                                   | Legacy inline chat data in SQLite `workspaceStorage/<hash>/state.vscdb` and `globalStorage/state.vscdb`; modern encrypted layouts are detected as unsupported |
+| TraeX (TRAE CLI)      | `~/.trae/cli/sessions/` and `~/.trae/cli/archived_sessions/`                     | Codex-compatible rollout JSONL per session                                                                                      |
 | Warp                  | (platform-specific, see below)                                                   | SQLite database                                                                                                                 |
 | WorkBuddy             | `~/.workbuddy/projects/`                                                         | JSONL per session                                                                                                               |
 | ZCode                 | `~/.zcode/cli/db/` or `~/.zcode/cli/`                                            | SQLite database (`db.sqlite`) with usage rows                                                                                   |
@@ -670,6 +671,7 @@ export REASONIX_DIR=~/custom/reasonix
 export ROOCODE_DIR=~/custom/roocode
 export SHELLEY_DIR=~/custom/shelley
 export TRAE_DIR=~/custom/trae/User
+export TRAEX_SESSIONS_DIR=~/custom/trae/cli/sessions
 export VISUALSTUDIO_COPILOT_DIR=~/custom/visualstudio-copilot/traces
 export VSCODE_COPILOT_DIR=~/custom/vscode
 export WINDSURF_DIR=~/custom/windsurf/User
@@ -707,11 +709,11 @@ The corresponding fields are `aider_dirs`, `amp_dirs`, `antigravity_dirs`,
 `opencode_dirs`, `openhands_dirs`, `pi_dirs`, `prime_agent_dirs`, `piebald_dirs`,
 `posit_assistant_dirs`, `positron_dirs`, `qclaw_dirs`, `qoder_project_dirs`,
 `qwen_project_dirs`, `qwenpaw_dirs`, `reasonix_dirs`, `roocode_dirs`,
-`shelley_dirs`, `visualstudio_copilot_dirs`, `vscode_copilot_dirs`,
-`windsurf_dirs`, `warp_dirs`, `workbuddy_project_dirs`, `zcode_dirs`,
-`zed_dirs`, and `zencoder_dirs`. Each accepts an array of paths. When set,
-these take precedence over the single-directory environment variable and the
-default path.
+`shelley_dirs`, `traex_sessions_dirs`, `visualstudio_copilot_dirs`,
+`vscode_copilot_dirs`, `windsurf_dirs`, `warp_dirs`,
+`workbuddy_project_dirs`, `zcode_dirs`, `zed_dirs`, and `zencoder_dirs`. Each
+accepts an array of paths. When set, these take precedence over the
+single-directory environment variable and the default path.
 
 All listed directories are discovered, watched, and synced independently.
 

@@ -1052,6 +1052,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newCommandCodeProviderFactory(def)
 	case AgentCodex:
 		return newCodexProviderFactory(def)
+	case AgentTraeX:
+		return newTraeXProviderFactory(def)
 	case AgentCopilot:
 		return newCopilotProviderFactory(def)
 	case AgentCowork:

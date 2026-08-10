@@ -656,6 +656,33 @@ func TestSourceMissingOwnershipDoesNotSatisfyFreshnessLookups(t *testing.T) {
 	assert.Equal(t, "unchanged", storedHash)
 }
 
+func TestGetSourceRepairStateByAgentPathDoesNotBorrowAnotherAgent(
+	t *testing.T,
+) {
+	d := testDB(t)
+	path := filepath.Join(t.TempDir(), "shared.jsonl")
+	insertSessionWithSourcePath(t, d, "codex:shared", "codex", path)
+	_, err := d.getWriter().Exec(
+		`UPDATE sessions
+		 SET project = 'project', file_size = 64,
+		     file_mtime = 128, data_version = ?
+		 WHERE id = 'codex:shared'`,
+		CurrentDataVersion(),
+	)
+	require.NoError(t, err)
+
+	project, version, size, mtime, ok :=
+		d.GetSourceRepairStateByAgentPath(path, "codex")
+	require.True(t, ok)
+	assert.Equal(t, "project", project)
+	assert.Equal(t, CurrentDataVersion(), version)
+	assert.EqualValues(t, 64, size)
+	assert.EqualValues(t, 128, mtime)
+
+	_, _, _, _, ok = d.GetSourceRepairStateByAgentPath(path, "traex")
+	assert.False(t, ok)
+}
+
 func TestSharedPathSourceOwnershipPageAllocationsStayBoundedByPage(t *testing.T) {
 	seed := func(t *testing.T, count int) (*DB, string) {
 		t.Helper()

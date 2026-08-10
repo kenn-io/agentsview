@@ -187,14 +187,15 @@ func translateRemoteCacheToTemp(
 	tempDirs []string,
 ) map[string]int64 {
 	translated := make(map[string]int64, len(remoteCache))
-	for remotePath, mtime := range remoteCache {
+	for remoteKey, mtime := range remoteCache {
+		remotePath, suffix := syncpkg.SplitProviderSkipCachePath(remoteKey)
 		for i, rd := range remoteDirs {
 			if rel, ok := remoteArchiveRel(rd, remotePath); ok {
 				local, err := safeLocalArchivePath(tempDirs[i], rel)
 				if err != nil {
 					break
 				}
-				translated[local] = mtime
+				translated[local+suffix] = mtime
 				break
 			}
 		}
@@ -209,12 +210,13 @@ func saveEngineSkipCache(
 ) error {
 	snapshot := engine.SnapshotSkipCache()
 	remoteCache := make(map[string]int64, len(snapshot))
-	for localPath, mtime := range snapshot {
+	for localKey, mtime := range snapshot {
+		localPath, suffix := syncpkg.SplitProviderSkipCachePath(localKey)
 		remotePath, ok := tempPathToRemotePath(
 			localPath, paths.remoteDirs, paths.localDirs,
 		)
 		if ok {
-			remoteCache[remotePath] = mtime
+			remoteCache[remotePath+suffix] = mtime
 		}
 	}
 	if err := database.ReplaceRemoteSkippedFiles(paths.host, remoteCache); err != nil {

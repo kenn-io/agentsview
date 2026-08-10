@@ -5813,7 +5813,9 @@ func TestProjectIdentityIncrementalStatePreservesExplicitSourceProject(
 			)
 			require.Equal(t, 0, failed)
 			require.Equal(t, 1, written)
-			incrementalInfo, found := database.GetSessionForIncremental(path)
+			incrementalInfo, found := database.GetSessionForIncremental(
+				path, string(parser.AgentClaude),
+			)
 			require.True(t, found)
 			assert.Equal(t, int64(len(initial)), incrementalInfo.FileSize)
 			assert.Equal(t, 1, incrementalInfo.MsgCount)
@@ -6574,10 +6576,11 @@ func TestShouldSkipCodexReparsesStaleProject(t *testing.T) {
 		},
 	}
 
-	assert.False(t, e.shouldSkipCodexFingerprint(path, parser.SourceFingerprint{
-		Size:    info.Size(),
-		MTimeNS: info.ModTime().UnixNano(),
-	}, parser.ProviderSyncSemantics{}),
+	assert.False(t, e.shouldSkipCodexFingerprint(
+		parser.AgentCodex, path, parser.SourceFingerprint{
+			Size:    info.Size(),
+			MTimeNS: info.ModTime().UnixNano(),
+		}, parser.ProviderSyncSemantics{}),
 		"stale generated roborev CI projects must be reparsed")
 }
 
@@ -7269,10 +7272,23 @@ func TestProviderProcessCacheKeyCodexIncludesContentHash(t *testing.T) {
 		FingerprintHashInCacheKey: true,
 	})
 
-	assert.Equal(t, path+"?source_hash=first-content-hash", first)
-	assert.Equal(t, path+"?source_hash=second-content-hash", second)
+	assert.Equal(t,
+		path+"?agent=codex?source_hash=first-content-hash", first,
+	)
+	assert.Equal(t,
+		path+"?agent=codex?source_hash=second-content-hash", second,
+	)
 	assert.NotEqual(t, first, second,
 		"same-stat content rewrites must not reuse a rowless skip entry")
+
+	traex := providerProcessCacheKey(
+		parser.DiscoveredFile{Path: path, Agent: parser.AgentTraeX},
+		parser.SourceRef{Provider: parser.AgentTraeX, FingerprintKey: path},
+		parser.SourceFingerprint{Key: path, Hash: "first-content-hash"},
+		parser.ProviderSyncSemantics{FingerprintHashInCacheKey: true},
+	)
+	assert.NotEqual(t, first, traex,
+		"agents sharing one source path must not share skip state")
 }
 
 func TestProviderProcessCacheKeyOmnigentContainerIncludesDataVersion(t *testing.T) {
@@ -7303,13 +7319,14 @@ func TestProviderProcessCacheKeyOmnigentContainerIncludesDataVersion(t *testing.
 		providerSemantics,
 	)
 
-	legacy := container + "?source_hash=container-content-hash"
+	legacy := container + "?agent=omnigent?source_hash=container-content-hash"
 	assert.Equal(t,
 		legacy+"&data_version="+strconv.Itoa(db.CurrentDataVersion()),
 		containerKey,
 		"whole-container cache identity must include the parser data version",
 	)
-	assert.Equal(t, memberPath+"?source_hash=member-hash", memberKey,
+	assert.Equal(t,
+		memberPath+"?agent=omnigent?source_hash=member-hash", memberKey,
 		"virtual member cache identity must not carry a data-version suffix")
 }
 

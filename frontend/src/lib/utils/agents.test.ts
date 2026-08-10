@@ -14,6 +14,7 @@ describe("KNOWN_AGENTS", () => {
       "claude",
       "cowork",
       "codex",
+      "traex",
       "copilot",
       "devin",
       "gemini",
@@ -71,6 +72,9 @@ describe("agentColor", () => {
     );
     expect(agentColor("codex")).toBe(
       "var(--accent-green)",
+    );
+    expect(agentColor("traex")).toBe(
+      "var(--accent-coral)",
     );
     expect(agentColor("copilot")).toBe(
       "var(--accent-amber)",
@@ -214,6 +218,7 @@ describe("agentLabel", () => {
     expect(agentLabel("qoder")).toBe("Qoder");
     expect(agentLabel("roocode")).toBe("RooCode");
     expect(agentLabel("omnigent")).toBe("Omnigent");
+    expect(agentLabel("traex")).toBe("TraeX");
   });
 
   it("capitalizes simple agent names", () => {

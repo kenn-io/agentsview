@@ -45,6 +45,29 @@ func TestCollectLiveActivityTargetsUsesOnlyConfiguredHintProviders(t *testing.T)
 	}, targets[0].Sources)
 }
 
+// TestCollectLiveActivityTargetsIncludesTraeX pins the TraeX hint wiring:
+// TRAE CLI writes history.jsonl at the same position relative to its sessions
+// root as Codex, so it reaches the poller with its own traex: ID prefix.
+func TestCollectLiveActivityTargetsIncludesTraeX(t *testing.T) {
+	base := filepath.Join(t.TempDir(), ".trae", "cli")
+	cfg := config.Config{
+		LocalMachineName: "local",
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentTraeX: {filepath.Join(base, "sessions")},
+		},
+	}
+
+	targets, err := collectLiveActivityTargets(t.Context(), cfg)
+
+	require.NoError(t, err)
+	require.Len(t, targets, 1)
+	assert.Equal(t, parser.AgentTraeX, targets[0].Provider.Definition().Type)
+	assert.Equal(t, "traex:", targets[0].Provider.Definition().IDPrefix)
+	assert.Equal(t, []parser.ActivityHintSource{
+		{Path: filepath.Join(base, "history.jsonl")},
+	}, targets[0].Sources)
+}
+
 func TestCollectLiveActivityTargetsDoesNotRequireExistingRoots(t *testing.T) {
 	base := t.TempDir()
 	missing := filepath.Join(base, "missing", "sessions")

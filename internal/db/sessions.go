@@ -2489,13 +2489,12 @@ type ToolCallSubagentLink struct {
 	HasResult         bool
 }
 
-// GetSessionForIncremental returns session state needed for
-// incremental parsing, looked up by file_path. Returns false
-// when the path is unknown or maps to multiple sessions (e.g.
-// Claude DAG forks), since incremental parsing cannot update
-// multiple sessions from a single append.
+// GetSessionForIncremental returns session state needed for incremental
+// parsing, looked up by agent and file_path. Returns false when the scoped path
+// is unknown or maps to multiple sessions (e.g. Claude DAG forks), since
+// incremental parsing cannot update multiple sessions from a single append.
 func (db *DB) GetSessionForIncremental(
-	path string,
+	path, agent string,
 ) (*IncrementalInfo, bool) {
 	// Bail out if the file maps to more than one session
 	// (Claude fork/subagent splits).
@@ -2503,7 +2502,9 @@ func (db *DB) GetSessionForIncremental(
 	err := db.getReader().QueryRow(
 		`SELECT COUNT(*) FROM sessions
 		 WHERE file_path = ?
+		   AND agent = ?
 		   AND deleted_at IS NULL`, path,
+		agent,
 	).Scan(&count)
 	if err != nil || count != 1 {
 		return nil, false
@@ -2527,8 +2528,9 @@ func (db *DB) GetSessionForIncremental(
 		 LEFT JOIN session_project_identity_snapshots snap
 		   ON snap.session_id = s.id
 		 WHERE s.file_path = ?
+		   AND s.agent = ?
 		   AND s.deleted_at IS NULL`,
-		path,
+		path, agent,
 	).Scan(
 		&info.ID, &info.Project, &info.SourceProject,
 		&info.Machine, &info.Cwd,
@@ -2735,6 +2737,26 @@ func (db *DB) GetFileInfoByPath(
 	return s.Int64, m.Int64, true
 }
 
+// GetFileInfoByAgentPath is GetFileInfoByPath scoped to the agent that owns
+// the source path.
+func (db *DB) GetFileInfoByAgentPath(
+	path, agent string,
+) (size int64, mtime int64, ok bool) {
+	var s, m sql.NullInt64
+	err := db.getReader().QueryRow(
+		"SELECT file_size, file_mtime FROM sessions"+
+			" WHERE file_path = ? AND agent = ?"+
+			" AND (deletion_cause IS NULL"+
+			" OR deletion_cause <> '"+deletionCauseSourceMissing+"')"+
+			" ORDER BY file_mtime DESC LIMIT 1",
+		path, agent,
+	).Scan(&s, &m)
+	if err != nil {
+		return 0, 0, false
+	}
+	return s.Int64, m.Int64, true
+}
+
 // VirtualContainerMemberFreshness is one stored virtual member's freshness
 // signal: the newest stored file_mtime for its path, the minimum stored
 // data version, and the newest row's fingerprint hash, mirroring
@@ -2886,6 +2908,24 @@ func (db *DB) GetProjectByPath(path string) (project string, ok bool) {
 	return project, true
 }
 
+// GetProjectByAgentPath is GetProjectByPath scoped to the agent that owns the
+// source path.
+func (db *DB) GetProjectByAgentPath(
+	path, agent string,
+) (project string, ok bool) {
+	err := db.getReader().QueryRow(
+		"SELECT project FROM sessions"+
+			" WHERE file_path = ? AND agent = ?"+
+			" AND deleted_at IS NULL"+
+			" ORDER BY file_mtime DESC LIMIT 1",
+		path, agent,
+	).Scan(&project)
+	if err != nil {
+		return "", false
+	}
+	return project, true
+}
+
 // GetSourceRepairStateByPath returns the newest active session's project and
 // file metadata plus the minimum active parser data version for one source
 // path. It combines the lightweight self-healing checks used by hot sync paths
@@ -2916,6 +2956,34 @@ func (db *DB) GetSourceRepairStateByPath(
 	return project, dataVersion, fileSize, fileMtime, true
 }
 
+// GetSourceRepairStateByAgentPath is GetSourceRepairStateByPath scoped to the
+// agent that owns the source path.
+func (db *DB) GetSourceRepairStateByAgentPath(
+	path, agent string,
+) (
+	project string,
+	dataVersion int,
+	fileSize int64,
+	fileMtime int64,
+	ok bool,
+) {
+	err := db.getReader().QueryRow(`
+		SELECT project, file_size, file_mtime, (
+			SELECT MIN(data_version)
+			FROM sessions
+			WHERE file_path = ? AND agent = ? AND deleted_at IS NULL
+		)
+		FROM sessions
+		WHERE file_path = ? AND agent = ? AND deleted_at IS NULL
+		ORDER BY file_mtime DESC
+		LIMIT 1`, path, agent, path, agent,
+	).Scan(&project, &fileSize, &fileMtime, &dataVersion)
+	if err != nil {
+		return "", 0, 0, 0, false
+	}
+	return project, dataVersion, fileSize, fileMtime, true
+}
+
 // GetFileHashByPath returns the stored file_hash for a non-source-missing
 // session matching file_path, preferring the most recently modified row.
 // The bool is false when no row exists or the column is NULL. Used
@@ -2930,6 +2998,26 @@ func (db *DB) GetFileHashByPath(path string) (hash string, ok bool) {
 			" OR deletion_cause <> '"+deletionCauseSourceMissing+"')"+
 			" ORDER BY file_mtime DESC LIMIT 1",
 		path,
+	).Scan(&h)
+	if err != nil {
+		return "", false
+	}
+	return h.String, h.Valid
+}
+
+// GetFileHashByAgentPath is GetFileHashByPath scoped to the agent that owns
+// the source path.
+func (db *DB) GetFileHashByAgentPath(
+	path, agent string,
+) (hash string, ok bool) {
+	var h sql.NullString
+	err := db.getReader().QueryRow(
+		"SELECT file_hash FROM sessions"+
+			" WHERE file_path = ? AND agent = ?"+
+			" AND (deletion_cause IS NULL"+
+			" OR deletion_cause <> '"+deletionCauseSourceMissing+"')"+
+			" ORDER BY file_mtime DESC LIMIT 1",
+		path, agent,
 	).Scan(&h)
 	if err != nil {
 		return "", false
@@ -3895,6 +3983,23 @@ func (db *DB) GetDataVersionByPath(path string) int {
 			" WHERE file_path = ?"+
 			" AND (deletion_cause IS NULL"+
 			" OR deletion_cause <> '"+deletionCauseSourceMissing+"')", path,
+	).Scan(&v)
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
+// GetDataVersionByAgentPath is GetDataVersionByPath scoped to the agent that
+// owns the source path.
+func (db *DB) GetDataVersionByAgentPath(path, agent string) int {
+	var v int
+	err := db.getReader().QueryRow(
+		"SELECT MIN(data_version) FROM sessions"+
+			" WHERE file_path = ? AND agent = ?"+
+			" AND (deletion_cause IS NULL"+
+			" OR deletion_cause <> '"+deletionCauseSourceMissing+"')",
+		path, agent,
 	).Scan(&v)
 	if err != nil {
 		return 0

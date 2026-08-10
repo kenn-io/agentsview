@@ -36,11 +36,16 @@ type verifiedSourceRecord struct {
 	trusted         bool
 }
 
+type verifiedSourceKey struct {
+	agent parser.AgentType
+	path  string
+}
+
 // verifiedSourceCapture binds a pre-verification signature to the path's
 // invalidation coordinates. Promotion succeeds only if neither coordinate
 // changed while content verification was in flight.
 type verifiedSourceCapture struct {
-	path         string
+	key          verifiedSourceKey
 	signature    verifiedSourceSignature
 	epoch        uint64
 	invalidation uint64
@@ -50,24 +55,26 @@ type verifiedSourceCapture struct {
 // invalidation coordinates before verification, and reports whether the same
 // signature was previously promoted.
 func (e *Engine) captureVerifiedSource(
+	agent parser.AgentType,
 	path string,
 	signature verifiedSourceSignature,
 ) (verifiedSourceCapture, bool) {
-	if path == "" {
+	if agent == "" || path == "" {
 		return verifiedSourceCapture{}, false
 	}
+	key := verifiedSourceKey{agent: agent, path: path}
 	e.verifiedSourceMu.Lock()
 	defer e.verifiedSourceMu.Unlock()
 	if e.verifiedSources == nil {
-		e.verifiedSources = make(map[string]verifiedSourceRecord)
+		e.verifiedSources = make(map[verifiedSourceKey]verifiedSourceRecord)
 	}
-	record := e.verifiedSources[path]
+	record := e.verifiedSources[key]
 	if e.verifiedSourceActivePass != 0 {
 		record.lastSeenPass = e.verifiedSourceActivePass
 	}
-	e.verifiedSources[path] = record
+	e.verifiedSources[key] = record
 	return verifiedSourceCapture{
-		path:         path,
+		key:          key,
 		signature:    signature,
 		epoch:        e.verifiedSourceEpoch,
 		invalidation: record.invalidationGen,
@@ -77,12 +84,12 @@ func (e *Engine) captureVerifiedSource(
 // promoteVerifiedSource trusts a capture only when no path invalidation,
 // global clear, or completed-pass pruning landed after capture.
 func (e *Engine) promoteVerifiedSource(capture verifiedSourceCapture) {
-	if capture.path == "" {
+	if capture.key.agent == "" || capture.key.path == "" {
 		return
 	}
 	e.verifiedSourceMu.Lock()
 	defer e.verifiedSourceMu.Unlock()
-	record, ok := e.verifiedSources[capture.path]
+	record, ok := e.verifiedSources[capture.key]
 	if !ok ||
 		capture.epoch != e.verifiedSourceEpoch ||
 		capture.invalidation != record.invalidationGen {
@@ -90,28 +97,29 @@ func (e *Engine) promoteVerifiedSource(capture verifiedSourceCapture) {
 	}
 	record.signature = capture.signature
 	record.trusted = true
-	e.verifiedSources[capture.path] = record
+	e.verifiedSources[capture.key] = record
 }
 
 // invalidateVerifiedSource drops one path's trust and advances its generation.
 // During an active full pass the invalidation record is marked seen so pruning
 // cannot erase the generation before a stale in-flight promotion observes it.
-func (e *Engine) invalidateVerifiedSource(path string) {
-	if path == "" {
+func (e *Engine) invalidateVerifiedSource(agent parser.AgentType, path string) {
+	if agent == "" || path == "" {
 		return
 	}
+	key := verifiedSourceKey{agent: agent, path: path}
 	e.verifiedSourceMu.Lock()
 	defer e.verifiedSourceMu.Unlock()
 	if e.verifiedSources == nil {
-		e.verifiedSources = make(map[string]verifiedSourceRecord)
+		e.verifiedSources = make(map[verifiedSourceKey]verifiedSourceRecord)
 	}
-	record := e.verifiedSources[path]
+	record := e.verifiedSources[key]
 	record.trusted = false
 	record.invalidationGen++
 	if e.verifiedSourceActivePass != 0 {
 		record.lastSeenPass = e.verifiedSourceActivePass
 	}
-	e.verifiedSources[path] = record
+	e.verifiedSources[key] = record
 }
 
 // clearVerifiedSources invalidates every trusted source and vetoes all
@@ -148,9 +156,9 @@ func (e *Engine) finishVerifiedSourcePass(pass uint64, complete bool) {
 		return
 	}
 	if complete {
-		for path, record := range e.verifiedSources {
+		for key, record := range e.verifiedSources {
 			if record.lastSeenPass != pass {
-				delete(e.verifiedSources, path)
+				delete(e.verifiedSources, key)
 			}
 		}
 	}
@@ -213,7 +221,8 @@ func (e *Engine) verifiedProviderSourceState(
 			}
 		}
 	}
-	capture, fresh := e.captureVerifiedSource(path, verifiedSourceSignature{
+	agent := provider.Definition().Type
+	capture, fresh := e.captureVerifiedSource(agent, path, verifiedSourceSignature{
 		size:              info.Size(),
 		mtime:             mtime,
 		inode:             inode,
@@ -236,6 +245,7 @@ func (e *Engine) verifiedProviderSourceState(
 // hide a missing active row, forced file-metadata reset, old parser data
 // version, or project value that the current parser knows how to repair.
 func (e *Engine) verifiedProviderSourceFreshInDB(
+	agent parser.AgentType,
 	source parser.SourceRef,
 	wantSize, wantMtime int64,
 ) bool {
@@ -244,7 +254,7 @@ func (e *Engine) verifiedProviderSourceFreshInDB(
 		return false
 	}
 	project, dataVersion, storedSize, storedMtime, ok :=
-		e.db.GetSourceRepairStateByPath(path)
+		e.db.GetSourceRepairStateByAgentPath(path, string(agent))
 	if !ok || parser.NeedsProjectReparse(project) {
 		return false
 	}
@@ -260,22 +270,23 @@ func (e *Engine) verifiedLocalStatSupported(agent parser.AgentType) bool {
 			parser.CapabilitySupported
 }
 
-func (e *Engine) markVerifiedSourceSeen(path string) {
-	if path == "" {
+func (e *Engine) markVerifiedSourceSeen(agent parser.AgentType, path string) {
+	if agent == "" || path == "" {
 		return
 	}
 	path = filepath.Clean(path)
+	key := verifiedSourceKey{agent: agent, path: path}
 	e.verifiedSourceMu.Lock()
 	defer e.verifiedSourceMu.Unlock()
 	if e.verifiedSourceActivePass == 0 {
 		return
 	}
-	record, ok := e.verifiedSources[path]
+	record, ok := e.verifiedSources[key]
 	if !ok {
 		return
 	}
 	record.lastSeenPass = e.verifiedSourceActivePass
-	e.verifiedSources[path] = record
+	e.verifiedSources[key] = record
 }
 
 // markVerifiedDiscoveredSources preserves trusted records for gateable sources
@@ -287,7 +298,7 @@ func (e *Engine) markVerifiedDiscoveredSources(files []parser.DiscoveredFile) {
 	}
 	for _, file := range files {
 		if e.verifiedLocalStatSupported(file.Agent) {
-			e.markVerifiedSourceSeen(file.Path)
+			e.markVerifiedSourceSeen(file.Agent, file.Path)
 		}
 	}
 }
@@ -299,5 +310,5 @@ func (e *Engine) invalidateVerifiedDiscoveredSource(file parser.DiscoveredFile) 
 	if e.pathRewriter != nil || !e.verifiedLocalStatSupported(file.Agent) {
 		return
 	}
-	e.invalidateVerifiedSource(filepath.Clean(file.Path))
+	e.invalidateVerifiedSource(file.Agent, filepath.Clean(file.Path))
 }

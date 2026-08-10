@@ -9,6 +9,7 @@ describe("supportsResume", () => {
   it("returns true for supported agents", () => {
     expect(supportsResume("claude")).toBe(true);
     expect(supportsResume("codex")).toBe(true);
+    expect(supportsResume("traex")).toBe(true);
     expect(supportsResume("copilot")).toBe(true);
     expect(supportsResume("cursor")).toBe(true);
     expect(supportsResume("gemini")).toBe(true);
@@ -39,6 +40,15 @@ describe("buildResumeCommand", () => {
     expect(
       buildResumeCommand("codex", "codex:sess-1"),
     ).toBe("codex resume sess-1");
+  });
+
+  it("generates traex resume command", () => {
+    expect(
+      buildResumeCommand("traex", "traex:sess-1"),
+    ).toBe("traex resume sess-1");
+    expect(
+      buildResumeCommand("traex", "traex:run-1", { model: "gpt-5-codex" }),
+    ).toBe("traex resume run-1 -m gpt-5-codex");
   });
 
   it("pins Claude and Codex models with shell quoting", () => {

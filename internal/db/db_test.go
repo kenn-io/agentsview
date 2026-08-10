@@ -3633,14 +3633,14 @@ func TestClaudeLinearParseRoundTrip(t *testing.T) {
 	}
 	require.NoError(t, d.UpsertSession(sess))
 
-	info, ok := d.GetSessionForIncremental("/tmp/s-linear.jsonl")
+	info, ok := d.GetSessionForIncremental("/tmp/s-linear.jsonl", "claude")
 	require.True(t, ok)
 	require.NotNil(t, info.ClaudeLinearParse)
 	assert.True(t, *info.ClaudeLinearParse)
 
 	sess.ClaudeLinearParse = nil
 	require.NoError(t, d.UpsertSession(sess))
-	info, ok = d.GetSessionForIncremental("/tmp/s-linear.jsonl")
+	info, ok = d.GetSessionForIncremental("/tmp/s-linear.jsonl", "claude")
 	require.True(t, ok)
 	require.NotNil(t, info.ClaudeLinearParse,
 		"verdict-free upsert must keep the stored flag")
@@ -3654,7 +3654,7 @@ func TestClaudeLinearParseRoundTrip(t *testing.T) {
 		FilePath: new("/tmp/s-legacy.jsonl"),
 	}
 	require.NoError(t, d.UpsertSession(legacy))
-	info, ok = d.GetSessionForIncremental("/tmp/s-legacy.jsonl")
+	info, ok = d.GetSessionForIncremental("/tmp/s-legacy.jsonl", "claude")
 	require.True(t, ok)
 	assert.Nil(t, info.ClaudeLinearParse)
 }
@@ -6538,7 +6538,7 @@ func TestGetSessionForIncremental(t *testing.T) {
 
 	t.Run("found", func(t *testing.T) {
 		info, ok := d.GetSessionForIncremental(
-			"/tmp/sessions/test.jsonl",
+			"/tmp/sessions/test.jsonl", "codex",
 		)
 		require.True(t, ok, "expected to find session")
 		assert.Equal(t, "codex:inc-test", info.ID, "ID")
@@ -6558,8 +6558,16 @@ func TestGetSessionForIncremental(t *testing.T) {
 		assert.True(t, info.HasPeakContextTokens, "HasPeakContextTokens = false, want true")
 	})
 
+	t.Run("wrong_agent", func(t *testing.T) {
+		_, ok := d.GetSessionForIncremental(
+			"/tmp/sessions/test.jsonl", "traex",
+		)
+		assert.False(t, ok,
+			"another agent's row must not satisfy incremental lookup")
+	})
+
 	t.Run("not_found", func(t *testing.T) {
-		_, ok := d.GetSessionForIncremental("/no/such/file")
+		_, ok := d.GetSessionForIncremental("/no/such/file", "codex")
 		assert.False(t, ok, "expected not found")
 	})
 
@@ -6575,7 +6583,7 @@ func TestGetSessionForIncremental(t *testing.T) {
 				FileSize: new(int64(8192)),
 			}), "upsert "+id)
 		}
-		_, ok := d.GetSessionForIncremental(path)
+		_, ok := d.GetSessionForIncremental(path, "claude")
 		assert.False(t, ok,
 			"expected false for multi-session file")
 	})
@@ -6595,7 +6603,7 @@ func TestGetSessionForIncremental(t *testing.T) {
 		)
 		requireNoError(t, err, "insert legacy false flags")
 
-		info, ok := d.GetSessionForIncremental(path)
+		info, ok := d.GetSessionForIncremental(path, "claude")
 		require.True(t, ok, "expected legacy session for incremental")
 		assert.True(t, info.HasTotalOutputTokens, "HasTotalOutputTokens = false, want true")
 		assert.True(t, info.HasPeakContextTokens, "HasPeakContextTokens = false, want true")
@@ -6697,7 +6705,7 @@ func TestGetSessionForIncrementalReturnsImmutableSourceProject(t *testing.T) {
 				tc.sourceProject,
 			))
 
-			info, ok := d.GetSessionForIncremental(tc.filePath)
+			info, ok := d.GetSessionForIncremental(tc.filePath, "claude")
 			require.True(t, ok)
 			assert.Equal(t, "mapped-target", info.Project)
 			assert.Equal(t, tc.sourceProject, info.SourceProject)

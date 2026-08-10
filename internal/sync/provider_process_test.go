@@ -808,7 +808,10 @@ func TestProcessFileProviderAuthoritativeUsesSkipReasonCacheKey(t *testing.T) {
 	assert.True(t, res.skip)
 	assert.True(t, res.cacheSkip)
 	assert.False(t, res.noCacheSkip)
-	assert.Equal(t, source.FingerprintKey, res.skipCacheKey(sourcePath))
+	assert.Equal(t,
+		providerAgentSkipCacheKey(source.FingerprintKey, parser.AgentCowork),
+		res.skipCacheKey(sourcePath),
+	)
 }
 
 func TestProcessFileProviderAuthoritativeForceParseAllowsStaleSourceLookup(t *testing.T) {
