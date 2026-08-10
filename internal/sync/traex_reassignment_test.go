@@ -17,10 +17,11 @@ import (
 )
 
 type traexRepairFixture struct {
-	database *db.DB
-	engine   *agentsync.Engine
-	path     string
-	uuid     string
+	database     *db.DB
+	engine       *agentsync.Engine
+	path         string
+	sessionsRoot string
+	uuid         string
 }
 
 func newTraeXRepairFixture(t *testing.T) traexRepairFixture {
@@ -50,7 +51,8 @@ func newTraeXRepairFixture(t *testing.T) traexRepairFixture {
 	stats := engine.SyncAll(t.Context(), nil)
 	require.Zero(t, stats.Failed)
 	return traexRepairFixture{
-		database: database, engine: engine, path: path, uuid: uuid,
+		database: database, engine: engine, path: path,
+		sessionsRoot: sessionsRoot, uuid: uuid,
 	}
 }
 
@@ -90,6 +92,29 @@ func seedSharedPathProjectRepairConflict(
 	)
 	require.True(t, ok)
 	require.Equal(t, "roborev_ci_28293_3831737461", project)
+}
+
+func TestTraeXRepeatSyncSkipsUnchangedRollout(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	fx := newTraeXRepairFixture(t)
+	require.NoError(t, fx.database.ReplaceSkippedFiles(map[string]int64{}))
+
+	repeat := agentsync.NewEngine(fx.database, agentsync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentTraeX: {fx.sessionsRoot},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(repeat.Close)
+
+	stats := repeat.SyncAll(t.Context(), nil)
+
+	require.Zero(t, stats.Failed)
+	assert.Zero(t, stats.Synced,
+		"an untouched TraeX rollout must not be rewritten")
+	assert.Equal(t, 1, stats.Skipped)
 }
 
 func TestTraeXCachedSkipDoesNotBorrowCodexRepairState(t *testing.T) {

@@ -10930,10 +10930,11 @@ func (e *Engine) tryIncrementalJSONL(
 		return processResult{forceReplace: true}, false
 	}
 	if currentSize == inc.FileSize {
-		if agent == parser.AgentCodex {
-			// Codex's composite mtime can change when session_index.jsonl does,
-			// even though the transcript has no new bytes. Let the later Codex
-			// fingerprint/title check decide whether to skip or full-parse.
+		if isCodexFormatAgent(agent) {
+			// A Codex-format rollout with no new transcript bytes can still
+			// reach the fingerprint path. Codex's composite mtime may also
+			// change when session_index.jsonl does. Let the later database
+			// freshness checks decide whether to skip or full-parse.
 			return processResult{}, false
 		}
 		log.Printf(
