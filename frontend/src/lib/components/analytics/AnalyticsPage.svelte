@@ -47,6 +47,16 @@
   import RefreshControl from "../shared/RefreshControl.svelte";
   import { m } from "../../i18n/index.js";
 
+  interface Props {
+    suppressSessionDateRestore?: boolean;
+    onSessionDateRestoreSuppressed?: () => void;
+  }
+
+  let {
+    suppressSessionDateRestore = false,
+    onSessionDateRestoreSuppressed,
+  }: Props = $props();
+
   const SESSION_ANALYTICS_WINDOW_PARAM = "window_days";
 
   const earliestSession = $derived(sync.stats?.earliest_session ?? null);
@@ -450,15 +460,20 @@
         }
         let changed = false;
         if (firstRun) {
-          const seed = yokedDates.seedForPanel();
-          const retained = seed
-            ? null
-            : analyticsPageDates.restoreWithIntent("sessions");
-          state = seed
-            ? rangeToPanelDate(seed)
-            : retained?.state ?? null;
-          sessionDateIntentEstablished = seed !== null ||
-            retained?.explicitDateIntent === true;
+          if (suppressSessionDateRestore) {
+            sessionDateIntentEstablished = false;
+            onSessionDateRestoreSuppressed?.();
+          } else {
+            const seed = yokedDates.seedForPanel();
+            const retained = seed
+              ? null
+              : analyticsPageDates.restoreWithIntent("sessions");
+            state = seed
+              ? rangeToPanelDate(seed)
+              : retained?.state ?? null;
+            sessionDateIntentEstablished = seed !== null ||
+              retained?.explicitDateIntent === true;
+          }
           if (state) {
             changed = applyAnalyticsPanelDate(state);
             if (sessionDateIntentEstablished) {

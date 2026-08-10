@@ -385,7 +385,15 @@
   let previousRootLanding = false;
   let rootResetPending = false;
   let rootDetailOpened = false;
+  let rootDetailDateRestoreSuppressed = $state(false);
+  let rootDetailExitDateRestorePending = $state(false);
   let previousSessionId: string | null = null;
+  let previousActiveSessionId: string | null = null;
+
+  function clearRootDetailDateRestoreSuppressed(): void {
+    rootDetailDateRestoreSuppressed = false;
+    rootDetailExitDateRestorePending = false;
+  }
 
   // React to route changes: reload sessions and apply URL params.
   // Only apply URL deep-link params (initFromParams) when the URL
@@ -430,10 +438,14 @@
         sessions.resetFiltersForRoot();
         rootResetPending = true;
         rootDetailOpened = false;
+        rootDetailDateRestoreSuppressed = false;
+        rootDetailExitDateRestorePending = false;
       } else if (enteringUnfilteredSessionDetail) {
         sessions.restoreSavedFilters();
         rootResetPending = false;
         rootDetailOpened = false;
+        rootDetailDateRestoreSuppressed = false;
+        rootDetailExitDateRestorePending = false;
       } else if (
         !rootLanding &&
         !hasSessionFilterParams &&
@@ -454,10 +466,16 @@
       }
       if (leavingSessionsRoute) {
         rootDetailOpened = false;
+        rootDetailDateRestoreSuppressed = false;
+        rootDetailExitDateRestorePending = false;
       } else if (openingRootDetail) {
         rootDetailOpened = true;
+        rootDetailDateRestoreSuppressed = true;
+        rootDetailExitDateRestorePending = false;
       } else if (closingRootDetail) {
         rootDetailOpened = false;
+        rootDetailDateRestoreSuppressed = true;
+        rootDetailExitDateRestorePending = true;
       }
       previousSessionId = sid;
       if (
@@ -481,6 +499,28 @@
       }
       sessions.loadProjects();
       sessions.loadAgents();
+    });
+  });
+
+  // The active session clears before the URL sync clears the routed id. Mark
+  // the root-detail exit before AnalyticsPage remounts for that transition.
+  $effect.pre(() => {
+    const activeSessionId = sessions.activeSessionId;
+    untrack(() => {
+      const activeSessionChanged =
+        previousActiveSessionId !== activeSessionId;
+      const hadActiveSession = previousActiveSessionId !== null;
+      previousActiveSessionId = activeSessionId;
+      if (
+        activeSessionChanged &&
+        hadActiveSession &&
+        activeSessionId === null &&
+        router.route === "sessions" &&
+        router.sessionId !== null &&
+        rootDetailDateRestoreSuppressed
+      ) {
+        rootDetailExitDateRestorePending = true;
+      }
     });
   });
 
@@ -792,7 +832,14 @@
         />
         <MessageList bind:this={messageListRef} />
       {:else}
-        <AnalyticsPage />
+        <AnalyticsPage
+          suppressSessionDateRestore={rootDetailDateRestoreSuppressed}
+          onSessionDateRestoreSuppressed={
+            rootDetailExitDateRestorePending
+              ? clearRootDetailDateRestoreSuppressed
+              : undefined
+          }
+        />
       {/if}
     {/snippet}
 

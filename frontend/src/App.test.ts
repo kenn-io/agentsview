@@ -1060,15 +1060,25 @@ describe("App root Sessions landing", () => {
     });
     localStorage.setItem("session-filters", saved);
     sessions.initFromParams({ project: "saved-project", agent: "codex" });
+    yokedDates.setEnabled(true);
+    yokedDates.updateFromPanel({
+      from: "2026-06-01",
+      to: "2026-06-30",
+      mode: "fixed",
+    });
     setRootUrl();
 
     component = mount(App, { target: document.body });
     await flushEffects();
+    expect(localStorage.getItem("session-filters")).toBe(saved);
+    expect(window.location.search).toBe("");
     const detach = actualAttachSidebar();
 
     sidebarIndex.mockClear();
     router.navigateToSession("session-a");
     await flushEffects();
+    expect(localStorage.getItem("session-filters")).toBe(saved);
+    expect(window.location.search).toBe("");
     sessions.refreshSidebarIfAttached();
     await vi.waitFor(() => {
       expect(sidebarIndex).toHaveBeenCalled();
@@ -1079,7 +1089,13 @@ describe("App root Sessions landing", () => {
     await flushEffects();
 
     expect(window.location.pathname).toBe("/sessions");
+    expect(window.location.search).toBe("");
     expect(sessions.filters.project).toBe("");
+    expect(yokedDates.range).toMatchObject({
+      from: "2026-06-01",
+      to: "2026-06-30",
+      mode: "fixed",
+    });
     expect(localStorage.getItem("session-filters")).toBe(saved);
     detach();
   });
