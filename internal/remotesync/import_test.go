@@ -601,7 +601,7 @@ func TestRemoteSkipCacheRoundTripsQualifiedExtraFile(t *testing.T) {
 		qualified  = remoteFile + "?agent=hermes"
 	)
 	targets := TargetSet{ExtraFiles: []string{remoteFile}}
-	layout, cfg, err := newImportInputs(host, nil, targets, root)
+	layout, cfg, err := newImportInputs(host, nil, nil, targets, root)
 	require.NoError(t, err)
 
 	localFile := remappedRemotePath(root, remoteFile) + "?agent=hermes"
