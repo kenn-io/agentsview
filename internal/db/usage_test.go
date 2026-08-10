@@ -827,6 +827,54 @@ func TestGetDailyUsageFallsBackForEmptyMessageTimestamp(t *testing.T) {
 	assert.Equal(t, 500, result.Totals.OutputTokens, "OutputTokens")
 }
 
+func TestUsageFallsBackForUnsupportedMessageTimestamp(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		timestamp string
+	}{
+		{name: "date only", timestamp: "2026-08-09"},
+		{name: "time only", timestamp: "12:34:56"},
+		{name: "numeric", timestamp: "2451545"},
+		{name: "invalid calendar date", timestamp: "2024-02-30T10:30:00Z"},
+		{name: "invalid end of day", timestamp: "2024-06-15T24:00:00Z"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database := testDB(t)
+			insertSession(t, database, "unsupported-ts", "project", func(session *Session) {
+				session.Agent = "claude"
+				session.StartedAt = new("2024-06-15T10:00:00Z")
+			})
+			insertMessages(t, database, Message{
+				SessionID: "unsupported-ts", Ordinal: 0, Role: "assistant",
+				Timestamp: tc.timestamp, Model: "test-model",
+				TokenUsage: json.RawMessage(
+					`{"input_tokens":1000,"output_tokens":500}`,
+				),
+			})
+
+			result, err := database.GetDailyUsage(t.Context(), UsageFilter{
+				From: "2024-06-15", To: "2024-06-15", Timezone: "UTC",
+			})
+			require.NoError(t, err)
+			require.Len(t, result.Daily, 1)
+			assert.Equal(t, "2024-06-15", result.Daily[0].Date)
+			assert.Equal(t, 1000, result.Totals.InputTokens)
+			assert.Equal(t, 500, result.Totals.OutputTokens)
+
+			sessionUsage, err := database.GetSessionUsage(
+				t.Context(), "unsupported-ts", true,
+			)
+			require.NoError(t, err)
+			require.NotNil(t, sessionUsage)
+			assert.Equal(t, 1, sessionUsage.BreakdownCount)
+			require.Len(t, sessionUsage.Breakdown, 1)
+			assert.Equal(t, "2024-06-15T10:00:00Z", sessionUsage.Breakdown[0].Timestamp)
+			assert.Equal(t, 1000, sessionUsage.Breakdown[0].InputTokens)
+			assert.Equal(t, 500, sessionUsage.Breakdown[0].OutputTokens)
+		})
+	}
+}
+
 func TestBoundedUsagePreservesMalformedTimestampDateFallbackBeforeSnapshotRanking(
 	t *testing.T,
 ) {

@@ -673,11 +673,11 @@ const bunDailyUsageSessionColumns = `
 	s.created_at AS session_created_at,
 	s.termination_status AS termination_status`
 
-func bunMessageUsageColumns(timestampOrder func(string) string) string {
+func bunMessageUsageColumns(backend BunBackend) string {
 	return `
 	m.session_id AS session_id,
 	m.ordinal AS message_ordinal,
-	` + bunUsageTimestampColumn(timestampOrder, "m.timestamp") + ` AS usage_timestamp,
+	` + bunMessageTimestampExpr(backend, "m.timestamp") + ` AS usage_timestamp,
 	m.model AS model,
 	m.token_usage AS token_json,
 	m.claude_message_id AS claude_message_id,
@@ -711,11 +711,11 @@ func bunUsageTimestampColumn(
 		" IS NULL THEN NULL ELSE " + column + " END"
 }
 
-func bunDailyMessageUsageColumns(timestampOrder func(string) string) string {
+func bunDailyMessageUsageColumns(backend BunBackend) string {
 	return `
 	m.session_id AS session_id,
 	m.ordinal AS message_ordinal,
-	` + bunUsageTimestampColumn(timestampOrder, "m.timestamp") + ` AS usage_timestamp,
+	` + bunMessageTimestampExpr(backend, "m.timestamp") + ` AS usage_timestamp,
 	m.model AS model,
 	m.token_usage AS token_json,
 	m.claude_message_id AS claude_message_id,
@@ -1084,8 +1084,11 @@ func (s *BunStore) bunDailyUsageQueries(
 ) (*bun.SelectQuery, *bun.SelectQuery) {
 	referenceTime := time.Now().UTC()
 	timestampOrder := s.backend.TimestampOrderExpr
+	messageTimestampValue := func(column string) string {
+		return bunMessageTimestampExpr(s.backend, column)
+	}
 	messageQuery := store.NewSelect().TableExpr("messages AS m").
-		ColumnExpr(bunDailyMessageUsageColumns(timestampOrder) + "," +
+		ColumnExpr(bunDailyMessageUsageColumns(s.backend) + "," +
 			bunDailyUsageSessionColumns).
 		Join("JOIN sessions AS s ON s.id = m.session_id").
 		Where("s.deleted_at IS NULL")
@@ -1100,10 +1103,11 @@ func (s *BunStore) bunDailyUsageQueries(
 		messageQuery, filter, "m.model", s.backend.TimestampOrderExpr, referenceTime,
 	)
 	messageQuery = appendBunUsageBounds(
-		messageQuery, filter, "m.timestamp", true, s.backend.TimestampOrderExpr,
+		messageQuery, filter, "m.timestamp", true,
+		messageTimestampValue, s.backend.TimestampOrderExpr,
 	)
 	messageTimestamp := "COALESCE(" +
-		timestampOrder(bunNullableTimestamp("m.timestamp")) + ", " +
+		timestampOrder(messageTimestampValue("m.timestamp")) + ", " +
 		timestampOrder(bunNullableTimestamp("s.started_at")) + ", " +
 		timestampOrder("s.created_at") + ")"
 	messageQuery = messageQuery.
@@ -1120,7 +1124,8 @@ func (s *BunStore) bunDailyUsageQueries(
 		eventQuery, filter, "ue.model", s.backend.TimestampOrderExpr, referenceTime,
 	)
 	eventQuery = appendBunUsageBounds(
-		eventQuery, filter, "ue.occurred_at", true, s.backend.TimestampOrderExpr,
+		eventQuery, filter, "ue.occurred_at", true,
+		bunNullableTimestamp, s.backend.TimestampOrderExpr,
 	)
 	eventTimestamp := "COALESCE(" +
 		timestampOrder(bunNullableTimestamp("ue.occurred_at")) + ", " +
@@ -1157,9 +1162,12 @@ func (s *BunStore) loadBunUsageProjections(
 ) ([]bunUsageProjection, error) {
 	referenceTime := time.Now().UTC()
 	timestampOrder := s.backend.TimestampOrderExpr
+	messageTimestampValue := func(column string) string {
+		return bunMessageTimestampExpr(s.backend, column)
+	}
 	var messages []bunUsageProjection
 	messageQuery := store.NewSelect().TableExpr("messages AS m").
-		ColumnExpr(bunMessageUsageColumns(timestampOrder) + "," + bunUsageSessionColumns).
+		ColumnExpr(bunMessageUsageColumns(s.backend) + "," + bunUsageSessionColumns).
 		Join("JOIN sessions AS s ON s.id = m.session_id").
 		Where("s.deleted_at IS NULL")
 	if matching {
@@ -1179,7 +1187,7 @@ func (s *BunStore) loadBunUsageProjections(
 	)
 	messageQuery = appendBunUsageBounds(
 		messageQuery, filter, "m.timestamp", true,
-		s.backend.TimestampOrderExpr,
+		messageTimestampValue, s.backend.TimestampOrderExpr,
 	)
 	if err := messageQuery.Scan(ctx, &messages); err != nil {
 		return nil, fmt.Errorf("querying usage messages: %w", err)
@@ -1204,7 +1212,7 @@ func (s *BunStore) loadBunUsageProjections(
 	)
 	eventQuery = appendBunUsageBounds(
 		eventQuery, filter, "ue.occurred_at", true,
-		s.backend.TimestampOrderExpr,
+		bunNullableTimestamp, s.backend.TimestampOrderExpr,
 	)
 	if err := eventQuery.Scan(ctx, &events); err != nil {
 		return nil, fmt.Errorf("querying usage events: %w", err)
@@ -1232,12 +1240,12 @@ func (s *BunStore) loadBunUsageProjections(
 
 func appendBunUsageBounds(
 	query *bun.SelectQuery, filter UsageFilter, timestampColumn string,
-	withSessionFallback bool, timestampOrder func(string) string,
+	withSessionFallback bool, timestampValue, timestampOrder func(string) string,
 ) *bun.SelectQuery {
 	bounds := usageBoundsForFilter(filter)
-	expr := timestampOrder(bunNullableTimestamp(timestampColumn))
+	expr := timestampOrder(timestampValue(timestampColumn))
 	if withSessionFallback {
-		expr = "COALESCE(" + timestampOrder(bunNullableTimestamp(timestampColumn)) +
+		expr = "COALESCE(" + timestampOrder(timestampValue(timestampColumn)) +
 			", " + timestampOrder(bunNullableTimestamp("s.started_at")) +
 			", " + timestampOrder("s.created_at") + ")"
 	}
@@ -1530,7 +1538,8 @@ func (s *BunStore) loadBunCursorUsageRows(
 		query = query.Where("cu.is_headless = ?", true)
 	}
 	query = appendBunUsageBounds(
-		query, filter, "cu.occurred_at", false, s.backend.TimestampOrderExpr,
+		query, filter, "cu.occurred_at", false,
+		bunNullableTimestamp, s.backend.TimestampOrderExpr,
 	)
 	if err := query.Scan(ctx, &rows); err != nil {
 		return nil, fmt.Errorf("querying cursor usage events: %w", err)
