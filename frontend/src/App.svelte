@@ -423,9 +423,16 @@
       const openingRootDetail =
         rootResetPending && wasRootLanding && sid !== null &&
         route === "sessions";
+      const enteringUnfilteredSessionDetail =
+        rootResetPending && !wasRootLanding && enteringSessionsRoute &&
+        route === "sessions" && sid !== null && !hasSessionFilterParams;
       if (enteringRootLanding) {
         sessions.resetFiltersForRoot();
         rootResetPending = true;
+        rootDetailOpened = false;
+      } else if (enteringUnfilteredSessionDetail) {
+        sessions.restoreSavedFilters();
+        rootResetPending = false;
         rootDetailOpened = false;
       } else if (
         !rootLanding &&

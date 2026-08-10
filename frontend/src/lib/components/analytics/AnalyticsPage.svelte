@@ -225,6 +225,7 @@
 
   function refreshAnalytics(): Promise<void> {
     const refresh = analytics.fetchAll();
+    if (router.isRootPath) return refresh;
     const state = currentAnalyticsPanelDate();
     if (state && !analyticsDateYokeIsClear()) {
       yokedDates.updateFromPanel(state);

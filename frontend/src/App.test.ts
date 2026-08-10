@@ -759,6 +759,50 @@ describe("App root Sessions landing", () => {
       });
   });
 
+  it("keeps root URL, yoke, and saved filters through analytics refresh", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    const saved = JSON.stringify({
+      version: 2,
+      project: "saved-project",
+      agent: "codex",
+    });
+    localStorage.setItem("session-filters", saved);
+    sessions.initFromParams({ project: "saved-project", agent: "codex" });
+    yokedDates.setEnabled(true);
+    yokedDates.updateFromPanel({
+      from: "2026-06-01",
+      to: "2026-06-30",
+      mode: "fixed",
+    });
+    setRootUrl();
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+
+    const refresh = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Refresh analytics"]',
+    );
+    expect(refresh).not.toBeNull();
+    refresh!.click();
+    await flushEffects();
+
+    expect(window.location.pathname).toBe("/");
+    expect(window.location.search).toBe("");
+    expect(yokedDates.range).toMatchObject({
+      from: "2026-06-01",
+      to: "2026-06-30",
+      mode: "fixed",
+    });
+    expect(localStorage.getItem("session-filters")).toBe(saved);
+    expect(JSON.parse(localStorage.getItem("yoked-dates") ?? "{}").range)
+      .toMatchObject({
+        from: "2026-06-01",
+        to: "2026-06-30",
+        mode: "fixed",
+      });
+  });
+
   it("treats filter-bearing root URLs as explicit deep links", async () => {
     stubAppDependencies();
     vi.spyOn(sessions, "load").mockResolvedValue();
@@ -847,6 +891,37 @@ describe("App root Sessions landing", () => {
     router.navigate("usage");
     await flushEffects();
     router.navigate("sessions");
+    await flushEffects();
+
+    expect(window.location.pathname).toBe("/sessions");
+    expect(sessions.filters.project).toBe("saved-project");
+    expect(sessions.filters.agent).toBe("codex");
+  });
+
+  it("restores saved filters when opening a session from Usage after root", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(sessions, "navigateToSession").mockImplementation(async (id) => {
+      sessions.activeSessionId = id;
+    });
+    const saved = JSON.stringify({
+      version: 2,
+      project: "saved-project",
+      agent: "codex",
+    });
+    localStorage.setItem("session-filters", saved);
+    sessions.initFromParams({ project: "saved-project", agent: "codex" });
+    setRootUrl();
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    expect(sessions.filters.project).toBe("");
+
+    router.navigate("usage");
+    await flushEffects();
+    router.navigateToSession("session-a");
+    await flushEffects();
+    sessions.deselectSession();
     await flushEffects();
 
     expect(window.location.pathname).toBe("/sessions");
