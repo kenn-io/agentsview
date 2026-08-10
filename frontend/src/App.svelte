@@ -476,7 +476,7 @@
         rootDetailOpened = true;
         rootDetailDateRestoreSuppressed = true;
         rootDetailExitDateRestorePending = false;
-      } else if (closingRootDetail) {
+      } else if (closingRootDetail && !rootLanding) {
         rootDetailOpened = false;
         rootDetailDateRestoreSuppressed = true;
         rootDetailExitDateRestorePending = true;

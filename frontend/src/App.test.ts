@@ -1085,6 +1085,48 @@ describe("App root Sessions landing", () => {
     expect(sessions.filters.dateTo).toBe("");
   });
 
+  it("restores shared dates after Back returns a root detail to the landing", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(sessions, "navigateToSession").mockImplementation(async (id) => {
+      sessions.activeSessionId = id;
+    });
+    yokedDates.setEnabled(true);
+    yokedDates.updateFromPanel({
+      from: "2026-06-01",
+      to: "2026-06-30",
+      mode: "fixed",
+    });
+    setRootUrl();
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+
+    router.navigateToSession("session-a");
+    await flushEffects();
+    expect(window.location.pathname).toBe("/sessions/session-a");
+
+    window.history.back();
+    await vi.waitFor(() => {
+      expect(router.isRootPath).toBe(true);
+    });
+    await flushEffects();
+    expect(window.location.pathname).toBe("/");
+    expect(sessions.filters.dateFrom).toBe("");
+    expect(sessions.filters.dateTo).toBe("");
+
+    sessions.filters.project = "chosen-project";
+    await flushEffects();
+
+    const params = new URLSearchParams(window.location.search);
+    expect(window.location.pathname).toBe("/sessions");
+    expect(params.get("project")).toBe("chosen-project");
+    expect(params.get("date_from")).toBe("2026-06-01");
+    expect(params.get("date_to")).toBe("2026-06-30");
+    expect(sessions.filters.dateFrom).toBe("2026-06-01");
+    expect(sessions.filters.dateTo).toBe("2026-06-30");
+  });
+
   it("preserves starred-only filtering when selecting a session date range", async () => {
     stubAppDependencies();
     vi.spyOn(sessions, "load").mockResolvedValue();
