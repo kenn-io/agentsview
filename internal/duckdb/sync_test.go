@@ -889,6 +889,44 @@ func TestPushRebuildsOverOldSchemaVersionMirror(t *testing.T) {
 	assertMirrorMessageCount(t, path, "sess-1", 2)
 }
 
+func TestPushRebuildsVersion11MirrorForPricingTimestampPrecision(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "pricing-precision-model",
+		InputPerMTok: money.MustParseDollars("1"),
+		UpdatedAt:    "2026-08-09T04:09:57.836404600Z",
+	}}))
+	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+
+	conn, err := Open(path)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `
+		UPDATE model_pricing SET updated_at = TIMESTAMP '2026-08-09 04:09:57.836404'
+		WHERE model_pattern = 'pricing-precision-model'`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	setMirrorMetadataValue(t, path, schemaVersionMetadataKey, "11")
+
+	result, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.True(t, result.Diagnostics.Full)
+	assert.Contains(t, result.Diagnostics.RebuildReason, "schema version")
+
+	conn, err = Open(path)
+	require.NoError(t, err)
+	defer conn.Close()
+	var updatedAt time.Time
+	require.NoError(t, conn.QueryRowContext(ctx, `
+		SELECT updated_at FROM model_pricing
+		WHERE model_pattern = 'pricing-precision-model'`).Scan(&updatedAt))
+	assert.Equal(t,
+		time.Date(2026, 8, 9, 4, 9, 57, 836_405_000, time.UTC),
+		updatedAt.UTC(),
+	)
+}
+
 // TestPushRebuildReasonReportsFullFlag verifies an explicitly requested
 // --full push records that as its RebuildReason even though the existing
 // mirror would otherwise be valid for an incremental push.
