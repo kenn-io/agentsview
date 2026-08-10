@@ -21,7 +21,15 @@ func TestQoderRegistry(t *testing.T) {
 	assert.Equal(t, qoderIDPrefix, def.IDPrefix)
 	assert.True(t, def.FileBased)
 	assert.False(t, def.ShallowWatch)
-	assert.Equal(t, []string{".qoder/projects", ".qoderwork/projects"}, def.DefaultDirs)
+	// DefaultDirs is sourced from qoderDefaultDirs(); legacy export paths
+	// stay listed alongside the SharedClientCache paths.
+	wantDirs := qoderDefaultDirs()
+	require.NotEmpty(t, wantDirs)
+	assert.Equal(t, wantDirs, def.DefaultDirs)
+	assert.Contains(t, def.DefaultDirs, ".qoder/projects")
+	assert.Contains(t, def.DefaultDirs, ".qoderwork/projects")
+	assert.Contains(t, def.DefaultDirs,
+		"AppData/Roaming/Qoder/SharedClientCache/cli/projects")
 	factory, ok := ProviderFactoryByType(AgentQoder)
 	require.True(t, ok, "AgentQoder provider missing")
 	assert.Equal(t, AgentQoder, factory.Definition().Type)
@@ -328,4 +336,99 @@ func TestDecodeQoderProjectDir(t *testing.T) {
 			assert.Equal(t, tt.want, DecodeQoderProjectDir(tt.name))
 		})
 	}
+}
+
+func TestQoderFlatDiscovery(t *testing.T) {
+	root := t.TempDir()
+	// SharedClientCache-style flat layout: files directly under root with
+	// dotted suffixes such as task-<uuid>.session.execution.jsonl.
+	stem := "task-10f849241e06451d9c9c.session.execution"
+	flatPath := filepath.Join(root, stem+".jsonl")
+	sidecar := strings.TrimSuffix(flatPath, ".jsonl") + "-session.json"
+	// A legacy per-project subtree still needs to be discovered alongside.
+	projRoot := filepath.Join(root, "proj-dir")
+	legacyPath := filepath.Join(projRoot, "22222222-2222-4222-8222-222222222222.jsonl")
+	for _, path := range []string{flatPath, sidecar, legacyPath} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o644))
+	}
+
+	files := DiscoverQoderSessions(root)
+	require.Len(t, files, 2)
+	// results are sorted by path; "proj-dir" (p) sorts before "task-..." (t).
+	assert.Equal(t, legacyPath, files[0].Path)
+	assert.Equal(t, "proj_dir", files[0].Project)
+	assert.Equal(t, AgentQoder, files[0].Agent)
+	assert.Equal(t, flatPath, files[1].Path)
+	// Project hint for flat files comes from the parent dir basename
+	// (the temp dir's parent in t.TempDir ends in a generated name; we
+	// just assert it's non-empty).
+	assert.NotEmpty(t, files[1].Project)
+	assert.Equal(t, AgentQoder, files[1].Agent)
+}
+
+func TestQoderFlatSourceFileLookup(t *testing.T) {
+	root := t.TempDir()
+	stem := "task-abcdef1234567890abcdef1234567890.session.execution"
+	flatPath := filepath.Join(root, stem+".jsonl")
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	require.NoError(t, os.WriteFile(flatPath, []byte("{}\n"), 0o644))
+
+	assert.Equal(t, flatPath, FindQoderSourceFile(root, "qoder:"+stem))
+	assert.Empty(t, FindQoderSourceFile(root, "qoder:nope"))
+}
+
+func TestIsValidQoderSessionID(t *testing.T) {
+	tests := []struct {
+		id   string
+		want bool
+	}{
+		{"abc-123", true},
+		{"session_1", true},
+		{"abc123", true},
+		// Dotted suffixes used by SharedClientCache layouts.
+		{"task-10f849241e06451d9c9c.session.execution", true},
+		{"uuid.exec", true},
+		{"a.b.c.d", true},
+		{"", false},
+		{"../etc", false},
+		{"a b", false},
+		{"a/b", false},
+		{"a\\b", false},
+		{"weird:id", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.id, func(t *testing.T) {
+			got := IsValidQoderSessionID(tt.id)
+			assert.Equalf(t, tt.want, got, "IsValidQoderSessionID(%q)", tt.id)
+		})
+	}
+}
+
+func TestQoderDefaultDirs(t *testing.T) {
+	dirs := qoderDefaultDirs()
+	// Legacy export paths retained.
+	assert.Contains(t, dirs, ".qoder/projects")
+	assert.Contains(t, dirs, ".qoderwork/projects")
+	// SharedClientCache paths for the three target platforms.
+	assert.Contains(t, dirs,
+		"Library/Application Support/Qoder/SharedClientCache/cli/projects")
+	assert.Contains(t, dirs,
+		".config/Qoder/SharedClientCache/cli/projects")
+	assert.Contains(t, dirs,
+		"AppData/Roaming/Qoder/SharedClientCache/cli/projects")
+}
+
+func TestQoderFlatProjectHint(t *testing.T) {
+	t.Run("cli parent", func(t *testing.T) {
+		tmp := t.TempDir()
+		cliRoot := filepath.Join(tmp, "Qoder", "SharedClientCache", "cli", "projects")
+		require.NoError(t, os.MkdirAll(cliRoot, 0o755))
+		// Parent dir's basename is the "cli" segment, so flat files
+		// under the SharedClientCache/projects root label as "cli".
+		assert.Equal(t, "cli", qoderFlatProjectHint(cliRoot))
+	})
+	t.Run("root with no parent", func(t *testing.T) {
+		assert.Equal(t, "SharedClientCache", qoderFlatProjectHint("/"))
+	})
 }

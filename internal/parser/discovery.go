@@ -778,6 +778,23 @@ func IsValidSessionID(id string) bool {
 	return true
 }
 
+// IsValidQoderSessionID reports whether id is a valid Qoder session
+// identifier. Qoder session IDs use the same alphanumeric/dash/underscore
+// charset as other agents, but the SharedClientCache layout (see
+// qoder_paths.go) appends dotted suffixes such as
+// "task-<uuid>.session.execution", so periods are also accepted here.
+func IsValidQoderSessionID(id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, c := range id {
+		if !isAlphanum(c) && c != '-' && c != '_' && c != '.' {
+			return false
+		}
+	}
+	return true
+}
+
 func isAlphanumOrDashUnderscore(c rune) bool {
 	return isAlphanum(c) ||
 		c == '-' || c == '_'

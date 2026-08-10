@@ -763,12 +763,9 @@ var Registry = []AgentDef{
 		DisplayName: "Qoder",
 		EnvVar:      "QODER_PROJECTS_DIR",
 		ConfigKey:   "qoder_project_dirs",
-		DefaultDirs: []string{
-			".qoder/projects",
-			".qoderwork/projects",
-		},
-		IDPrefix:  "qoder:",
-		FileBased: true,
+		DefaultDirs: qoderDefaultDirs(),
+		IDPrefix:    "qoder:",
+		FileBased:   true,
 	},
 	{
 		// Shelley (exe.dev) stores all conversations in a single

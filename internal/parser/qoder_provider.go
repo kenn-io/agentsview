@@ -59,18 +59,24 @@ func isQoderSourcePath(root, path string) bool {
 		return false
 	}
 	switch len(parts) {
+	case 1:
+		// SharedClientCache flat layout: file directly under root.
+		stem, ok := strings.CutSuffix(parts[0], ".jsonl")
+		return ok &&
+			!strings.HasPrefix(stem, "agent-") &&
+			IsValidQoderSessionID(stem)
 	case 2:
 		stem, ok := strings.CutSuffix(parts[1], ".jsonl")
 		return ok &&
 			!strings.HasPrefix(stem, "agent-") &&
-			IsValidSessionID(stem)
+			IsValidQoderSessionID(stem)
 	case 4:
 		stem, ok := strings.CutSuffix(parts[3], ".jsonl")
 		return ok &&
-			IsValidSessionID(parts[1]) &&
+			IsValidQoderSessionID(parts[1]) &&
 			parts[2] == "subagents" &&
 			strings.HasPrefix(stem, "agent-") &&
-			IsValidSessionID(stem)
+			IsValidQoderSessionID(stem)
 	default:
 		return false
 	}
@@ -78,10 +84,19 @@ func isQoderSourcePath(root, path string) bool {
 
 func qoderProjectHintFromPath(root, path string) string {
 	parts, ok := qoderPathParts(root, path)
-	if !ok || len(parts) < 2 {
+	if !ok {
 		return ""
 	}
-	return DecodeQoderProjectDir(parts[0])
+	switch len(parts) {
+	case 1:
+		// SharedClientCache flat layout: synthesize a project hint
+		// from the parent dir basename (e.g. "cli").
+		return qoderFlatProjectHint(root)
+	case 2, 4:
+		return DecodeQoderProjectDir(parts[0])
+	default:
+		return ""
+	}
 }
 
 func qoderSessionIDFromPath(root, path string) string {
@@ -101,12 +116,12 @@ func isQoderLookupID(rawID string) bool {
 		return false
 	}
 	sessionID, subagentID, hasSubagent := strings.Cut(rawID, ":subagent:")
-	if !IsValidSessionID(sessionID) {
+	if !IsValidQoderSessionID(sessionID) {
 		return false
 	}
 	return !hasSubagent ||
 		strings.HasPrefix(subagentID, "agent-") &&
-			IsValidSessionID(subagentID)
+			IsValidQoderSessionID(subagentID)
 }
 
 func qoderPathParts(root, path string) ([]string, bool) {

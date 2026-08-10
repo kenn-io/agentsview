@@ -29,6 +29,12 @@ func DiscoverQoderSessions(projectsDir string) []DiscoveredFile {
 	}
 
 	var files []DiscoveredFile
+
+	// SharedClientCache layout: files live directly under projectsDir with
+	// no per-project subdirectory. Discover those flat files first and treat
+	// the root itself as a single virtual project.
+	files = append(files, qoderCollectFlatProject(projectsDir, projects)...)
+
 	for _, projectEntry := range projects {
 		if !isDirOrSymlink(projectEntry, projectsDir) {
 			continue
@@ -44,7 +50,7 @@ func DiscoverQoderSessions(projectsDir string) []DiscoveredFile {
 			if !entry.IsDir() && strings.HasSuffix(name, ".jsonl") {
 				stem := strings.TrimSuffix(name, ".jsonl")
 				if strings.HasPrefix(stem, "agent-") ||
-					!IsValidSessionID(stem) {
+					!IsValidQoderSessionID(stem) {
 					continue
 				}
 				files = append(files, DiscoveredFile{
@@ -54,7 +60,7 @@ func DiscoverQoderSessions(projectsDir string) []DiscoveredFile {
 				})
 				continue
 			}
-			if !isDirOrSymlink(entry, projectDir) || !IsValidSessionID(name) {
+			if !isDirOrSymlink(entry, projectDir) || !IsValidQoderSessionID(name) {
 				continue
 			}
 			subagentsDir := filepath.Join(projectDir, name, "subagents")
@@ -68,7 +74,7 @@ func DiscoverQoderSessions(projectsDir string) []DiscoveredFile {
 				}
 				stem := strings.TrimSuffix(sub.Name(), ".jsonl")
 				if !strings.HasPrefix(stem, "agent-") ||
-					!IsValidSessionID(stem) {
+					!IsValidQoderSessionID(stem) {
 					continue
 				}
 				files = append(files, DiscoveredFile{
@@ -86,23 +92,76 @@ func DiscoverQoderSessions(projectsDir string) []DiscoveredFile {
 	return files
 }
 
+// qoderCollectFlatProject treats the root directory itself as a single
+// virtual project and discovers session .jsonl files written directly
+// under it (the SharedClientCache layout). Files in subdirectories are
+// left to the per-project loop in DiscoverQoderSessions. The project
+// hint is the basename of the root's parent ("cli") when available,
+// otherwise "SharedClientCache".
+func qoderCollectFlatProject(
+	root string, entries []os.DirEntry,
+) []DiscoveredFile {
+	var files []DiscoveredFile
+	var any bool
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			continue
+		}
+		stem := strings.TrimSuffix(entry.Name(), ".jsonl")
+		if strings.HasPrefix(stem, "agent-") ||
+			!IsValidQoderSessionID(stem) {
+			continue
+		}
+		files = append(files, DiscoveredFile{
+			Path:    filepath.Join(root, entry.Name()),
+			Project: qoderFlatProjectHint(root),
+			Agent:   AgentQoder,
+		})
+		any = true
+	}
+	if !any {
+		return nil
+	}
+	return files
+}
+
+// qoderFlatProjectHint picks a stable project label for files discovered
+// directly under a SharedClientCache projects root. Prefers the parent
+// dir's basename (typically "cli") and falls back to "SharedClientCache"
+// when the root has no parent (e.g. user-supplied QODER_PROJECTS_DIR).
+func qoderFlatProjectHint(root string) string {
+	parent := filepath.Base(filepath.Dir(root))
+	if parent == "." || parent == "/" || parent == "" {
+		return "SharedClientCache"
+	}
+	return parent
+}
+
 func FindQoderSourceFile(projectsDir, rawID string) string {
 	if projectsDir == "" {
 		return ""
 	}
 	rawID = strings.TrimPrefix(rawID, qoderIDPrefix)
 	sessionID, subagentID, hasSubagent := strings.Cut(rawID, ":subagent:")
-	if !IsValidSessionID(sessionID) {
+	if !IsValidQoderSessionID(sessionID) {
 		return ""
 	}
 	if hasSubagent &&
-		(!strings.HasPrefix(subagentID, "agent-") || !IsValidSessionID(subagentID)) {
+		(!strings.HasPrefix(subagentID, "agent-") || !IsValidQoderSessionID(subagentID)) {
 		return ""
 	}
 
 	projects, err := os.ReadDir(projectsDir)
 	if err != nil {
 		return ""
+	}
+	// SharedClientCache flat layout: files live directly under projectsDir.
+	// Check the root itself before descending into per-project subdirs.
+	if !hasSubagent {
+		candidate := filepath.Join(projectsDir, sessionID+".jsonl")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
 	}
 	for _, projectEntry := range projects {
 		if !isDirOrSymlink(projectEntry, projectsDir) {
@@ -258,11 +317,11 @@ func qoderPathIDs(path, _ string) (parentID, subagentID string, isSubagent bool)
 		return "", "", false
 	}
 	parent := filepath.Base(filepath.Dir(filepath.Dir(path)))
-	if !IsValidSessionID(parent) {
+	if !IsValidQoderSessionID(parent) {
 		return "", "", false
 	}
 	stem := strings.TrimSuffix(filepath.Base(path), ".jsonl")
-	if !strings.HasPrefix(stem, "agent-") || !IsValidSessionID(stem) {
+	if !strings.HasPrefix(stem, "agent-") || !IsValidQoderSessionID(stem) {
 		return "", "", false
 	}
 	return parent, stem, true
