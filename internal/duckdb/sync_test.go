@@ -917,13 +917,12 @@ func TestPushRebuildsVersion11MirrorForPricingTimestampPrecision(t *testing.T) {
 	conn, err = Open(path)
 	require.NoError(t, err)
 	defer conn.Close()
-	var updatedAt time.Time
+	var updatedAtMicros int64
 	require.NoError(t, conn.QueryRowContext(ctx, `
-		SELECT updated_at FROM model_pricing
-		WHERE model_pattern = 'pricing-precision-model'`).Scan(&updatedAt))
-	assert.Equal(t,
-		time.Date(2026, 8, 9, 4, 9, 57, 836_405_000, time.UTC),
-		updatedAt.UTC(),
+		SELECT epoch_us(updated_at) FROM model_pricing
+		WHERE model_pattern = 'pricing-precision-model'`).Scan(&updatedAtMicros))
+	assert.Equal(t, int64(1_786_248_597_836_405), updatedAtMicros,
+		"stored pricing timestamp microseconds",
 	)
 }
 
