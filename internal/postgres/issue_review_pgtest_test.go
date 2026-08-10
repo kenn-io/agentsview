@@ -37,17 +37,21 @@ func TestIssueReviewRowsConditionallyLoadsResultTail(t *testing.T) {
 	success := strings.Repeat("completed output ", 200) + "\nSUCCESS_TAIL_SENTINEL"
 	_, err := store.DB().Exec(`
 		INSERT INTO sessions (id,machine,project,agent,first_message,started_at,message_count,user_message_count)
-		VALUES ($1,'test-machine','test-project','codex','Run the build','2026-08-09T10:00:00Z'::timestamptz,1,0);
+		VALUES ($1,'test-machine','test-project','codex','Run the build','2026-08-09T10:00:00Z'::timestamptz,1,0)`, sessionID)
+	require.NoError(t, err)
+	_, err = store.DB().Exec(`
 		INSERT INTO messages (session_id,ordinal,role,content,timestamp,content_length)
-		VALUES ($1,1,'assistant','running','2026-08-09T10:00:00Z'::timestamptz,7);
+		VALUES ($1,1,'assistant','running','2026-08-09T10:00:00Z'::timestamptz,7)`, sessionID)
+	require.NoError(t, err)
+	_, err = store.DB().Exec(`
 		INSERT INTO tool_calls (session_id,message_ordinal,call_index,tool_name,category,tool_use_id,input_json,result_content)
 		VALUES ($1,1,0,'shell_command','shell','call-1','{"command":"run"}','fallback'),
-		       ($1,1,1,'shell_command','shell','call-2','{"command":"check"}','fallback');
+		       ($1,1,1,'shell_command','shell','call-2','{"command":"check"}','fallback')`, sessionID)
+	require.NoError(t, err)
+	_, err = store.DB().Exec(`
 		INSERT INTO tool_result_events (session_id,tool_call_message_ordinal,call_index,tool_use_id,source,status,content,timestamp,event_index)
 		VALUES ($1,1,0,'call-1','tool_execution','completed',$2,'2026-08-09T10:00:02Z'::timestamptz,0),
-		       ($1,1,1,'call-2','tool_execution','completed',$3,'2026-08-09T10:00:03Z'::timestamptz,0)`,
-		sessionID, failure, success,
-	)
+		       ($1,1,1,'call-2','tool_execution','completed',$3,'2026-08-09T10:00:03Z'::timestamptz,0)`, sessionID, failure, success)
 	require.NoError(t, err)
 
 	_, calls, err := store.issueReviewRows(context.Background(), []db.IssueReviewSession{{ID: sessionID}})

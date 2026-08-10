@@ -5,9 +5,8 @@ Status date: 2026-08-10
 Release decision: **LOCAL SQLITE DESKTOP RELEASE DEPLOYED AND ACCEPTED** at
 `28eff630d84bf9c582eadd6b9b854fcfa1f2b99c`. The installed binary, API,
 browser workflow, rollback artifact, and daily read-only task are verified.
-PostgreSQL integration execution remains the only unresolved backend-parity
-gate because this host has no dedicated PostgreSQL test database and cannot
-start the Docker test service while firmware virtualization is disabled.
+PostgreSQL integration now passes against a dedicated disposable local
+PostgreSQL 17 database; no backend-parity gate remains.
 
 Base revision: `915e83b91da3c553a8735f89309fd4b055189f65`
 
@@ -38,7 +37,7 @@ Automatic remediation remains out of scope.
 | Shared detector and recommendations | Ready | Focused and full SQLite suites pass |
 | SQLite read path | Ready | Conditional tail, cache, pagination, and redaction coverage passes |
 | DuckDB read path | Ready | Focused and full suites pass |
-| PostgreSQL read path | Compile-verified | Dedicated `pgtest` execution is blocked by host capabilities |
+| PostgreSQL read path | Ready | Focused contract and full 682-test `pgtest` suite pass |
 | Filters, sorting, pagination, and evidence links | Ready | 2,278 frontend tests and production build pass |
 | Telemetry supplement | Ready | Status remains explicit; benchmark reports `available` with zero scoped rows |
 | Hourly and on-demand refresh | Ready | One-hour cache and forced-refresh coverage passes |
@@ -141,9 +140,9 @@ classified.
 
 ### B4: backend parity
 
-SQLite and DuckDB execution coverage passes. PostgreSQL query construction and
-server compilation pass. `internal/postgres/issue_review_pgtest_test.go` covers
-the same failure-tail and successful-no-tail contract but has not executed on a
+Resolved. SQLite and DuckDB execution coverage passes. PostgreSQL query
+construction, server compilation, the focused result-tail contract, and the
+full `pgtest` package pass against a dedicated disposable PostgreSQL 17
 database.
 
 ### B5: release state
@@ -152,18 +151,17 @@ Implementation and validation are complete. The final freeze must include only
 Issue Review files and this handover. Preserve unrelated untracked
 `.claude/skills/gitnexus/` and `build/` content.
 
-## Remaining PostgreSQL gate
+## PostgreSQL gate closeout
 
 The canonical integration test requires a dedicated database because it drops
-and recreates its test schema. This host cannot currently supply one:
+and recreates test schemas. A disposable PostgreSQL 17 cluster was initialized
+below `%TEMP%`, bound only to loopback on a non-default port, and removed after
+the run. No production, shared, or persistent archive database was used.
 
-- Docker Desktop cannot start its Linux engine because WSL2 reports firmware
-  virtualization disabled;
-- no local PostgreSQL service or listener exists;
-- no test container was created.
-
-Do not point `pgtest` at production or a shared database. When a dedicated test
-database becomes available, run:
+The first focused run exposed an invalid test fixture: pgx rejects multiple
+parameterized SQL commands in one prepared execution. Splitting the fixture
+setup into separate executions fixed the test without changing production
+code. The focused contract and full canonical suite then passed:
 
 ```powershell
 $env:TEST_PG_URL = '<dedicated test database URL>'
@@ -171,8 +169,8 @@ $env:CGO_ENABLED = '1'
 go test -tags 'fts5,pgtest' ./internal/postgres/... -v -count=1
 ```
 
-The PostgreSQL gate remains unresolved until that command executes
-successfully.
+Use `.claude/skills/run-postgres-integration-tests/SKILL.md` for the safe local
+workflow and cleanup guards.
 
 ## Validation evidence
 
@@ -187,7 +185,8 @@ successfully.
 | PostgreSQL/server compile | Pass, packages 1.474 and 0.593 seconds |
 | Full SQLite suite | Pass, package 93.901 seconds |
 | Full DuckDB suite | Pass, package 202.524 seconds |
-| PostgreSQL `pgtest` execution | Not run; dedicated database unavailable |
+| Focused PostgreSQL Issue Review | Pass, package 0.514 seconds |
+| Full PostgreSQL `pgtest` suite | Pass, 682 tests, package 167.702 seconds |
 
 ### Final frontend checks
 
@@ -263,8 +262,8 @@ isolated performance/parity gate, and the exact frontend build pass. The
 broader `go test -tags fts5 ./internal/db ./internal/duckdb -count=1` exceeded
 the 184-second harness timeout without emitting a failure; the affected
 focused tests pass, and the full backend suites passed before the final
-localized optimization. PostgreSQL `pgtest` remains blocked as described
-above.
+localized optimization. PostgreSQL `pgtest` later passed in full during the
+backend-parity closeout described above.
 
 At the release-code freeze, GitNexus was current at exact revision `28eff63`:
 47,865 nodes, 278,060 edges, 2,390 clusters, and 300 flows. Graphify remains
@@ -462,8 +461,7 @@ Implementation is complete when:
 - B1-B5 are resolved;
 - SQLite, DuckDB, server, frontend, build, and default-timeout benchmark gates
   pass on the frozen diff;
-- PostgreSQL integration is either executed or remains explicitly blocked from
-  the local SQLite release;
+- PostgreSQL integration passes against a dedicated test database;
 - an exact-commit binary is installed, hashed, healthy, and browser-verified;
 - rollback evidence exists;
 - the daily read-only task is created after installed acceptance.
@@ -473,7 +471,6 @@ comparison run are reviewed.
 
 ## Post-release backlog
 
-- execute PostgreSQL `pgtest` against a dedicated database;
 - named saved views and multiple filter presets;
 - acknowledge, suppress, and expiry rules for accepted findings;
 - persisted “new since last review” trend snapshots;

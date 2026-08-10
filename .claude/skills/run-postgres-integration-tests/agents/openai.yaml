@@ -1,0 +1,4 @@
+interface:
+  display_name: "PostgreSQL Integration Tests"
+  short_description: "Run isolated PostgreSQL parity tests safely"
+  default_prompt: "Use $run-postgres-integration-tests to run the PostgreSQL integration suite against a disposable local database."
