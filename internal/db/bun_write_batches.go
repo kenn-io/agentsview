@@ -88,8 +88,10 @@ func canonicalDynamicValueBytes(value reflect.Value) int {
 		return total
 	case reflect.Struct:
 		total := 0
-		for _, field := range value.Fields() {
-			total += canonicalDynamicValueBytes(field)
+		// reflect.Value.Fields allocates an iterator on this write hot path.
+		//nolint:modernize
+		for index := range value.NumField() {
+			total += canonicalDynamicValueBytes(value.Field(index))
 		}
 		return total
 	default:
