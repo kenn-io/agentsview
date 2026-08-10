@@ -1098,6 +1098,22 @@ describe("App root Sessions landing", () => {
     });
     expect(localStorage.getItem("session-filters")).toBe(saved);
 
+    const refresh = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Refresh analytics"]',
+    );
+    expect(refresh).not.toBeNull();
+    refresh!.click();
+    await flushEffects();
+
+    expect(window.location.pathname).toBe("/sessions");
+    expect(window.location.search).toBe("");
+    expect(yokedDates.range).toMatchObject({
+      from: "2026-06-01",
+      to: "2026-06-30",
+      mode: "fixed",
+    });
+    expect(localStorage.getItem("session-filters")).toBe(saved);
+
     router.navigateToSession("session-b");
     await flushEffects();
     expect(window.location.search).toBe("");

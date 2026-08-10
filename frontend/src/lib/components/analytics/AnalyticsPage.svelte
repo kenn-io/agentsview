@@ -49,11 +49,13 @@
 
   interface Props {
     suppressSessionDateRestore?: boolean;
+    suppressSessionDateRefresh?: boolean;
     onSessionDateRestoreSuppressed?: () => void;
   }
 
   let {
     suppressSessionDateRestore = false,
+    suppressSessionDateRefresh = false,
     onSessionDateRestoreSuppressed,
   }: Props = $props();
 
@@ -235,7 +237,7 @@
 
   function refreshAnalytics(): Promise<void> {
     const refresh = analytics.fetchAll();
-    if (router.isRootPath) return refresh;
+    if (router.isRootPath || suppressSessionDateRefresh) return refresh;
     const state = currentAnalyticsPanelDate();
     if (state && !analyticsDateYokeIsClear()) {
       yokedDates.updateFromPanel(state);

@@ -383,7 +383,7 @@
   let lastDetailFilterParamsSignature: string | null = $state(null);
   let previousDateRestoreRoute: string | null = null;
   let previousRootLanding = false;
-  let rootResetPending = false;
+  let rootResetPending = $state(false);
   let rootDetailOpened = false;
   let rootDetailDateRestoreSuppressed = $state(false);
   let rootDetailExitDateRestorePending = $state(false);
@@ -837,6 +837,7 @@
       {:else}
         <AnalyticsPage
           suppressSessionDateRestore={rootDetailDateRestoreSuppressed}
+          suppressSessionDateRefresh={rootResetPending}
           onSessionDateRestoreSuppressed={
             rootDetailExitDateRestorePending
               ? clearRootDetailDateRestoreSuppressed
