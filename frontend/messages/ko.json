@@ -71,14 +71,8 @@
   "header_actions_keyboard_shortcuts_shortcut": "키보드 단축키 (?)",
   "status_bar_sessions": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "세션 {countLabel}개"
       }
@@ -86,14 +80,8 @@
   ],
   "status_bar_messages": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "메시지 {countLabel}개"
       }
@@ -101,14 +89,8 @@
   ],
   "status_bar_projects": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "프로젝트 {countLabel}개"
       }
@@ -180,14 +162,8 @@
   "session_breadcrumb_total_cost": "합계",
   "session_breadcrumb_total_cost_title": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "하위 에이전트 {countLabel}개를 포함한 총 비용",
         "countPlural=other": "하위 에이전트 {countLabel}개를 포함한 총 비용"
@@ -198,11 +174,7 @@
   "session_breadcrumb_usage_breakdown_loading": "사용량 불러오는 중...",
   "session_breadcrumb_usage_breakdown_steps": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{countLabel}개 단계"
@@ -230,13 +202,8 @@
   "session_breadcrumb_summary_mode_tooltip": "이 transcript에는 도구 결과, 사고 내용, 변경 사항(diff)이 없습니다. 전체 충실도를 보려면 agy-reader 사이드카가 필요합니다 — 설치하거나, 이미 설치했다면 따라잡을 때까지 기다리세요. 방법을 알아보려면 클릭하세요.",
   "session_breadcrumb_malformed_lines": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "형식 오류가 있는 {count}줄"
       }
@@ -244,13 +211,8 @@
   ],
   "session_breadcrumb_malformed_lines_tooltip": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "소스 파일에서 {count}줄을 구문 분석할 수 없습니다"
       }
@@ -293,14 +255,8 @@
   "message_content_running_duration": "실행 중 {duration}+",
   "message_content_turn_summary": [
     {
-      "declarations": [
-        "input count",
-        "input duration",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input duration", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "턴 {duration} · 호출 {count}회"
       }
@@ -308,14 +264,8 @@
   ],
   "message_content_running_turn_summary": [
     {
-      "declarations": [
-        "input count",
-        "input duration",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input duration", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "실행 중 {duration}+ · 호출 {count}회"
       }
@@ -323,13 +273,8 @@
   ],
   "tool_call_group_call_count": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "도구 호출 {count}회"
       }
@@ -342,13 +287,8 @@
   "parallel_group_label": "병렬",
   "parallel_group_call_count": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{count}회 호출"
       }
@@ -359,13 +299,8 @@
   "subagent_inline_label": "서브에이전트 세션",
   "subagent_inline_message_count": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "메시지 {count}개"
       }
@@ -389,13 +324,8 @@
   "tool_block_show_less": "간략히 보기",
   "tool_block_show_all_lines": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "전체 {count}줄 표시"
       }
@@ -407,14 +337,8 @@
   "compact_boundary_show_full_summary": "전체 요약 표시",
   "sidebar_session_count": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "세션 {countLabel}개"
       }
@@ -524,13 +448,8 @@
   "shared_range_custom_range": "사용자 지정 범위",
   "shared_range_last_days": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "최근 {count}일"
       }
@@ -591,14 +510,8 @@
   "analytics_tool_usage_title": "도구 사용량",
   "analytics_tool_usage_call_count": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{countLabel}회 호출"
       }
@@ -610,11 +523,7 @@
   "analytics_tool_usage_top_tools": "상위 도구",
   "analytics_tool_usage_sessions": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "세션 {countLabel}개"
@@ -636,14 +545,8 @@
   "analytics_projects_title": "프로젝트",
   "analytics_project_messages": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{countLabel}개 메시지"
       }
@@ -651,14 +554,8 @@
   ],
   "analytics_project_sessions": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{countLabel}개 세션"
       }
@@ -687,9 +584,7 @@
         "input countLabel",
         "local countPlural = count: plural"
       ],
-      "selectors": [
-        "countPlural"
-      ],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{day} {hour}:00 - {countLabel}개 메시지"
       }
@@ -700,14 +595,8 @@
   "analytics_session_shape_autonomy": "자율성",
   "analytics_session_shape_session_count": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{countLabel}개 세션"
       }
@@ -750,9 +639,7 @@
         "input pct",
         "local countPlural = count: plural"
       ],
-      "selectors": [
-        "countPlural"
-      ],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{skill}: {countLabel}회 호출 ({pct}%)"
       }
@@ -768,10 +655,7 @@
         "local callsPlural = calls: plural",
         "local skillsPlural = skills: plural"
       ],
-      "selectors": [
-        "callsPlural",
-        "skillsPlural"
-      ],
+      "selectors": ["callsPlural", "skillsPlural"],
       "match": {
         "callsPlural=other, skillsPlural=other": "{callsLabel}회 호출 · {skillsLabel}개 스킬"
       }
@@ -827,14 +711,8 @@
   "usage_filter_deselect_all": "전체 선택 해제",
   "usage_filter_all_items": [
     {
-      "declarations": [
-        "input label",
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input label", "input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "모든 {label}"
       }
@@ -903,13 +781,37 @@
   "data_view_inventory": "인벤토리",
   "data_view_rules": "규칙",
   "data_summary_projects": [
-    { "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"], "selectors": ["countPlural"], "match": { "countPlural=other": "프로젝트 {countNumber}개" } }
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "프로젝트 {countNumber}개" }
+    }
   ],
   "data_summary_sessions": [
-    { "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"], "selectors": ["countPlural"], "match": { "countPlural=other": "세션 {countNumber}개" } }
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "세션 {countNumber}개" }
+    }
   ],
   "data_summary_governed": [
-    { "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"], "selectors": ["countPlural"], "match": { "countPlural=other": "규칙이 적용된 세션 {countNumber}개" } }
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "규칙이 적용된 세션 {countNumber}개" }
+    }
   ],
   "data_filter_projects": "프로젝트 필터링",
   "data_col_project": "프로젝트",
@@ -921,7 +823,15 @@
   "data_col_last_activity": "마지막 활동",
   "data_col_rules": "규칙",
   "data_rules_targeting": [
-    { "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"], "selectors": ["countPlural"], "match": { "countPlural=other": "활성화된 규칙 {countNumber}개가 이 프로젝트를 대상으로 함" } }
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "활성화된 규칙 {countNumber}개가 이 프로젝트를 대상으로 함" }
+    }
   ],
   "data_recorded_original": "규칙의 원본 레이블로 기록됨",
   "data_loading": "프로젝트 인벤토리를 불러오는 중…",
@@ -937,7 +847,15 @@
   "data_mapping_observed_folders": "확인된 폴더",
   "data_mapping_definition": "매핑",
   "data_reclassify_candidate_sessions": [
-    { "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"], "selectors": ["countPlural"], "match": { "countPlural=other": "세션 {countNumber}개" } }
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "세션 {countNumber}개" }
+    }
   ],
   "data_reclassify_cwd_unavailable": "이 폴더는 사용할 수 없거나 파일 시스템 루트를 나타내므로 안전하게 매핑할 수 없습니다.",
   "data_reclassify_path_prefix": "폴더 경로",
@@ -948,18 +866,50 @@
   "data_reclassify_preview_failed": "매핑을 미리 보지 못했습니다",
   "data_reclassify_full_archive_impact": "전체 아카이브 영향",
   "data_reclassify_sessions_matched": [
-    { "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"], "selectors": ["countPlural"], "match": { "countPlural=other": "세션 {countNumber}개 일치" } }
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "세션 {countNumber}개 일치" }
+    }
   ],
   "data_reclassify_sessions_changing": [
-    { "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"], "selectors": ["countPlural"], "match": { "countPlural=other": "세션 {countNumber}개 변경 예정" } }
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "세션 {countNumber}개 변경 예정" }
+    }
   ],
   "data_reclassify_projects_affected": [
-    { "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"], "selectors": ["countPlural"], "match": { "countPlural=other": "프로젝트 {countNumber}개" } }
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "프로젝트 {countNumber}개" }
+    }
   ],
   "data_reclassify_normalized_target": "{project}(으)로 저장됩니다",
   "data_reclassify_multiple_projects": "이 접두사는 여러 프로젝트에 영향을 줍니다. 적용 전에 샘플을 확인하세요.",
   "data_reclassify_project_sample_sessions": [
-    { "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"], "selectors": ["countPlural"], "match": { "countPlural=other": "세션 {countNumber}개" } }
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "세션 {countNumber}개" }
+    }
   ],
   "data_reclassify_zero_matches": "이 접두사와 일치하는 아카이브 세션이 없습니다.",
   "data_reclassify_conflict": "미리 보기 이후 매핑이 변경되었습니다. 영향이 새로 고쳐졌으니 적용 전에 확인하세요.",
@@ -1034,14 +984,8 @@
   "activity_no_sessions_selected_slot": "선택한 시간대에 활성 세션이 없습니다.",
   "activity_output_tokens_value": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{countLabel} 출력 토큰"
       }
@@ -1193,14 +1137,8 @@
   "call_group_parallel_label": "병렬",
   "call_group_parallel_call_count": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{countLabel}회 호출"
       }
@@ -1216,10 +1154,7 @@
         "input running",
         "local countPlural = count: plural"
       ],
-      "selectors": [
-        "countPlural",
-        "running"
-      ],
+      "selectors": ["countPlural", "running"],
       "match": {
         "countPlural=other,running=true": "{countLabel}회 호출 · 실행 중 {duration}+",
         "countPlural=other,running=false": "{countLabel}회 호출 · {duration}"
@@ -1229,14 +1164,8 @@
   "activity_lane_activity": "활동",
   "activity_lane_message_count": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "메시지 {countLabel}개"
       }
@@ -1360,10 +1289,7 @@
         "local countPlural = count: plural",
         "local runningPlural = runningCount: plural"
       ],
-      "selectors": [
-        "countPlural",
-        "runningPlural"
-      ],
+      "selectors": ["countPlural", "runningPlural"],
       "match": {
         "countPlural=other,runningPlural=one": "{countLabel}회 호출 · {runningCount}개 실행 중",
         "countPlural=other,runningPlural=other": "{countLabel}회 호출"
@@ -1499,14 +1425,8 @@
   "insights_page_pct_affected": "{pct}% 영향받음",
   "insights_pattern_recommendation_rationale": [
     {
-      "declarations": [
-        "input affected",
-        "input total",
-        "local totalPlural = total: plural"
-      ],
-      "selectors": [
-        "totalPlural"
-      ],
+      "declarations": ["input affected", "input total", "local totalPlural = total: plural"],
+      "selectors": ["totalPlural"],
       "match": {
         "totalPlural=other": "{total}개 세션 중 {affected}개에서 이 결정론적 패턴이 발생했습니다."
       }
@@ -1564,9 +1484,7 @@
         "input failureSignals",
         "local countPlural = count: plural"
       ],
-      "selectors": [
-        "countPlural"
-      ],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "세션 {count}개, {completedRate}% 완료, 평균 실패 신호 {failureSignals}개"
       }
@@ -1574,14 +1492,8 @@
   ],
   "insights_page_driver_sessions": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "세션 {countLabel}개"
       }
@@ -1744,9 +1656,14 @@
   "pinned_copy_message": "메시지 복사",
   "pinned_copied_message": "메시지가 복사됨",
   "pinned_unpin": "고정 해제",
-  "settings_agent_dir_title": "에이전트 디렉터리",
-  "settings_agent_dir_description": "세션 데이터를 검색할 디렉터리입니다. 환경 변수나 설정 파일을 통해 구성됩니다.",
-  "settings_agent_dir_not_configured": "설정되지 않음",
+  "settings_session_providers_title": "세션 공급자",
+  "settings_session_providers_description": "AgentsView가 검색하고 동기화할 에이전트 세션 소스를 선택합니다.",
+  "settings_session_providers_not_configured": "구성된 디렉터리 없음",
+  "settings_session_providers_enable_aria": "{provider} 세션 동기화 사용",
+  "settings_session_providers_enabled": "사용",
+  "settings_session_providers_disabled": "사용 안 함",
+  "settings_session_providers_restart_notice": "변경 사항을 적용하려면 AgentsView 데몬과 별도의 푸시 감시 프로세스를 다시 시작하세요.",
+  "settings_session_providers_save_failed": "세션 공급자를 업데이트하지 못했습니다. 이전 선택이 계속 적용됩니다.",
   "appearance_layout_default": "기본",
   "appearance_layout_compact": "컴팩트",
   "appearance_layout_stream": "스트림",
@@ -1804,11 +1721,7 @@
   ],
   "settings_embeddings_rate": [
     {
-      "declarations": [
-        "input count",
-        "input rateLabel",
-        "local countPlural = count: plural"
-      ],
+      "declarations": ["input count", "input rateLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "초당 {rateLabel} 청크"
@@ -1926,14 +1839,8 @@
   "trash_empty_trash": "휴지통 비우기",
   "trash_msgs": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "메시지 {countLabel}개"
       }

@@ -2,9 +2,8 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-export type ServiceSyncInput = {
-  id?: string;
-  path?: string;
-  subagents?: boolean;
+export type SessionProviderResponse = {
+  dirs: Array<string> | null;
+  display_name: string;
+  id: string;
 };
-

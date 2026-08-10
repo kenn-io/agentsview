@@ -1,29 +1,14 @@
 import { spawnSync } from "node:child_process";
-import {
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import {
-  dirname,
-  join,
-  resolve,
-} from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const frontendDir = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  "..",
-);
+const frontendDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(frontendDir, "..");
 
 function suppressExpectedAbortLogging() {
-  const requestPath = join(
-    frontendDir,
-    "src/lib/api/generated/core/request.ts",
-  );
+  const requestPath = join(frontendDir, "src/lib/api/generated/core/request.ts");
   const source = readFileSync(requestPath, "utf8");
   const generatedCatch = `    } catch (error) {
       console.error(error);
@@ -36,19 +21,43 @@ function suppressExpectedAbortLogging() {
     }
 `;
   if (!source.includes(generatedCatch)) {
-    throw new Error(
-      "generated request body handler no longer matches the abort-log patch",
-    );
+    throw new Error("generated request body handler no longer matches the abort-log patch");
   }
-  writeFileSync(
-    requestPath,
-    source.replace(generatedCatch, cancellationAwareCatch),
-  );
+  writeFileSync(requestPath, source.replace(generatedCatch, cancellationAwareCatch));
+}
+
+function generatedTrailingNewlineCounts(dir, base = dir, counts = new Map()) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      generatedTrailingNewlineCounts(path, base, counts);
+      continue;
+    }
+    if (!entry.name.endsWith(".ts")) continue;
+    const source = readFileSync(path, "utf8");
+    counts.set(relative(base, path), source.match(/\n+$/)?.[0].length ?? 0);
+  }
+  return counts;
+}
+
+function normalizeGeneratedTrailingNewlines(dir, preferred, base = dir) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      normalizeGeneratedTrailingNewlines(path, preferred, base);
+      continue;
+    }
+    if (!entry.name.endsWith(".ts")) continue;
+    const source = readFileSync(path, "utf8");
+    const newlineCount = preferred.get(relative(base, path)) ?? 1;
+    const normalized = source.replace(/\n*$/, "\n".repeat(newlineCount));
+    if (normalized !== source) writeFileSync(path, normalized);
+  }
 }
 
 // openapi-typescript-codegen 0.31 treats OpenAPI 3.1 nullable array type
-// unions as untyped arrays. Normalize the pricing arrays added in schema v4
-// to the equivalent nullable form it understands before generation.
+// unions as untyped arrays. Normalize affected response arrays to the
+// equivalent nullable form it understands before generation.
 function normalizeNullableArray(schema, label) {
   if (!schema || !Array.isArray(schema.type) || !schema.type.includes("null")) {
     throw new Error(`missing nullable OpenAPI array schema for ${label}`);
@@ -76,6 +85,8 @@ function run(cmd, args, options = {}) {
   return result.stdout ?? "";
 }
 
+const generatedDir = join(frontendDir, "src/lib/api/generated");
+const generatedTrailingNewlines = generatedTrailingNewlineCounts(generatedDir);
 const tempDir = mkdtempSync(join(tmpdir(), "agentsview-openapi-"));
 try {
   const specPath = join(tempDir, "openapi.json");
@@ -89,11 +100,11 @@ try {
     ["ExportEffectiveModelRate", "bands"],
     ["ExportPricingApplication", "bands"],
     ["ExportModelPricingProvenance", "resolutions"],
+    ["SessionProviderResponse", "dirs"],
+    ["SettingsResponse", "disabled_agents"],
+    ["SettingsResponse", "session_providers"],
   ]) {
-    normalizeNullableArray(
-      schemas?.[model]?.properties?.[property],
-      `${model}.${property}`,
-    );
+    normalizeNullableArray(schemas?.[model]?.properties?.[property], `${model}.${property}`);
   }
   writeFileSync(specPath, JSON.stringify(parsedSpec));
   const openapiArgs = [
@@ -109,15 +120,14 @@ try {
     "2",
   ];
   if (process.platform === "win32") {
-    run(
-      process.env.ComSpec ?? "cmd.exe",
-      ["/d", "/s", "/c", "npx.cmd", ...openapiArgs],
-      { cwd: frontendDir },
-    );
+    run(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", "npx.cmd", ...openapiArgs], {
+      cwd: frontendDir,
+    });
   } else {
     run("npx", openapiArgs, { cwd: frontendDir });
   }
   suppressExpectedAbortLogging();
+  normalizeGeneratedTrailingNewlines(generatedDir, generatedTrailingNewlines);
 } finally {
   rmSync(tempDir, { recursive: true, force: true });
 }

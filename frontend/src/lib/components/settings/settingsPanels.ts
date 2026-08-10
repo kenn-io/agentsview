@@ -60,9 +60,9 @@ export function settingsPanels(): SettingsPanelMeta[] {
     },
     {
       id: "agent-directories",
-      label: m.settings_agent_dir_title(),
-      title: m.settings_agent_dir_title(),
-      description: m.settings_agent_dir_description(),
+      label: m.settings_session_providers_title(),
+      title: m.settings_session_providers_title(),
+      description: m.settings_session_providers_description(),
       group: data,
       keywords: m.settings_search_keywords_agent_directories(),
     },

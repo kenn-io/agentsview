@@ -71,14 +71,8 @@
   "header_actions_keyboard_shortcuts_shortcut": "键盘快捷键 (?)",
   "status_bar_sessions": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{countLabel} 个会话"
       }
@@ -86,14 +80,8 @@
   ],
   "status_bar_messages": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{countLabel} 条消息"
       }
@@ -101,14 +89,8 @@
   ],
   "status_bar_projects": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{countLabel} 个项目"
       }
@@ -180,14 +162,8 @@
   "session_breadcrumb_total_cost": "总计",
   "session_breadcrumb_total_cost_title": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "包含 {countLabel} 个子代理的总成本",
         "countPlural=other": "包含 {countLabel} 个子代理的总成本"
@@ -198,11 +174,7 @@
   "session_breadcrumb_usage_breakdown_loading": "正在加载用量数据...",
   "session_breadcrumb_usage_breakdown_steps": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{countLabel} 个步骤"
@@ -230,13 +202,8 @@
   "session_breadcrumb_summary_mode_tooltip": "此 transcript 缺少工具结果、思考内容和代码差异。需要 agy-reader sidecar 才能获得完整保真度 — 请安装它，若已安装，请等待其同步完成。点击了解如何操作。",
   "session_breadcrumb_malformed_lines": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{count} 行格式错误"
       }
@@ -244,13 +211,8 @@
   ],
   "session_breadcrumb_malformed_lines_tooltip": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "源文件中有 {count} 行无法解析"
       }
@@ -293,14 +255,8 @@
   "message_content_running_duration": "运行中 {duration}+",
   "message_content_turn_summary": [
     {
-      "declarations": [
-        "input count",
-        "input duration",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input duration", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "turn {duration} · {count} 次调用"
       }
@@ -308,14 +264,8 @@
   ],
   "message_content_running_turn_summary": [
     {
-      "declarations": [
-        "input count",
-        "input duration",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input duration", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "运行中 {duration}+ · {count} 次调用"
       }
@@ -323,13 +273,8 @@
   ],
   "tool_call_group_call_count": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{count} 次 tool call"
       }
@@ -342,13 +287,8 @@
   "parallel_group_label": "并行",
   "parallel_group_call_count": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{count} 次调用"
       }
@@ -359,13 +299,8 @@
   "subagent_inline_label": "Subagent 会话",
   "subagent_inline_message_count": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{count} 条消息"
       }
@@ -389,13 +324,8 @@
   "tool_block_show_less": "收起",
   "tool_block_show_all_lines": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "显示全部 {count} 行"
       }
@@ -407,14 +337,8 @@
   "compact_boundary_show_full_summary": "显示完整摘要",
   "sidebar_session_count": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{countLabel} 个会话"
       }
@@ -524,13 +448,8 @@
   "shared_range_custom_range": "自定义范围",
   "shared_range_last_days": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "最近 {count} 天"
       }
@@ -591,14 +510,8 @@
   "analytics_tool_usage_title": "Tool 使用",
   "analytics_tool_usage_call_count": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{countLabel} 次调用"
       }
@@ -610,11 +523,7 @@
   "analytics_tool_usage_top_tools": "热门 Tool",
   "analytics_tool_usage_sessions": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{countLabel} 个会话"
@@ -636,14 +545,8 @@
   "analytics_projects_title": "项目",
   "analytics_project_messages": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{countLabel} 条消息"
       }
@@ -651,14 +554,8 @@
   ],
   "analytics_project_sessions": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{countLabel} 个会话"
       }
@@ -687,9 +584,7 @@
         "input countLabel",
         "local countPlural = count: plural"
       ],
-      "selectors": [
-        "countPlural"
-      ],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{day} {hour}:00 - {countLabel} 条消息"
       }
@@ -700,14 +595,8 @@
   "analytics_session_shape_autonomy": "自主度",
   "analytics_session_shape_session_count": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{countLabel} 个会话"
       }
@@ -750,9 +639,7 @@
         "input pct",
         "local countPlural = count: plural"
       ],
-      "selectors": [
-        "countPlural"
-      ],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{skill}：{countLabel} 次调用 ({pct}%)"
       }
@@ -768,10 +655,7 @@
         "local callsPlural = calls: plural",
         "local skillsPlural = skills: plural"
       ],
-      "selectors": [
-        "callsPlural",
-        "skillsPlural"
-      ],
+      "selectors": ["callsPlural", "skillsPlural"],
       "match": {
         "callsPlural=other, skillsPlural=other": "{callsLabel} 次调用 · {skillsLabel} 个 skill"
       }
@@ -825,14 +709,8 @@
   "usage_filter_deselect_all": "取消全选",
   "usage_filter_all_items": [
     {
-      "declarations": [
-        "input label",
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input label", "input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "所有 {label}"
       }
@@ -901,13 +779,37 @@
   "data_view_inventory": "清单",
   "data_view_rules": "规则",
   "data_summary_projects": [
-    { "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"], "selectors": ["countPlural"], "match": { "countPlural=other": "{countNumber} 个项目" } }
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 个项目" }
+    }
   ],
   "data_summary_sessions": [
-    { "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"], "selectors": ["countPlural"], "match": { "countPlural=other": "{countNumber} 个会话" } }
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 个会话" }
+    }
   ],
   "data_summary_governed": [
-    { "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"], "selectors": ["countPlural"], "match": { "countPlural=other": "{countNumber} 个会话受规则管理" } }
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 个会话受规则管理" }
+    }
   ],
   "data_filter_projects": "筛选项目",
   "data_col_project": "项目",
@@ -919,7 +821,15 @@
   "data_col_last_activity": "最近活动",
   "data_col_rules": "规则",
   "data_rules_targeting": [
-    { "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"], "selectors": ["countPlural"], "match": { "countPlural=other": "{countNumber} 条已启用的规则以此项目为目标" } }
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 条已启用的规则以此项目为目标" }
+    }
   ],
   "data_recorded_original": "已记录为规则的原始标签",
   "data_loading": "正在加载项目清单…",
@@ -935,7 +845,15 @@
   "data_mapping_observed_folders": "已发现的文件夹",
   "data_mapping_definition": "映射",
   "data_reclassify_candidate_sessions": [
-    { "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"], "selectors": ["countPlural"], "match": { "countPlural=other": "{countNumber} 个会话" } }
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 个会话" }
+    }
   ],
   "data_reclassify_cwd_unavailable": "此文件夹无法安全映射，因为它不可用或表示文件系统根目录。",
   "data_reclassify_path_prefix": "文件夹路径",
@@ -946,18 +864,50 @@
   "data_reclassify_preview_failed": "无法预览映射",
   "data_reclassify_full_archive_impact": "完整存档影响",
   "data_reclassify_sessions_matched": [
-    { "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"], "selectors": ["countPlural"], "match": { "countPlural=other": "匹配 {countNumber} 个会话" } }
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "匹配 {countNumber} 个会话" }
+    }
   ],
   "data_reclassify_sessions_changing": [
-    { "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"], "selectors": ["countPlural"], "match": { "countPlural=other": "将更改 {countNumber} 个会话" } }
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "将更改 {countNumber} 个会话" }
+    }
   ],
   "data_reclassify_projects_affected": [
-    { "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"], "selectors": ["countPlural"], "match": { "countPlural=other": "{countNumber} 个项目" } }
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 个项目" }
+    }
   ],
   "data_reclassify_normalized_target": "将保存为 {project}",
   "data_reclassify_multiple_projects": "此前缀会影响多个项目。应用前请检查示例。",
   "data_reclassify_project_sample_sessions": [
-    { "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"], "selectors": ["countPlural"], "match": { "countPlural=other": "{countNumber} 个会话" } }
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 个会话" }
+    }
   ],
   "data_reclassify_zero_matches": "此前缀与存档中的任何会话都不匹配。",
   "data_reclassify_conflict": "映射自预览后已更改。影响已刷新；应用前请检查。",
@@ -1032,14 +982,8 @@
   "activity_no_sessions_selected_slot": "所选时段内没有活跃会话。",
   "activity_output_tokens_value": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{countLabel} 输出 Token"
       }
@@ -1191,14 +1135,8 @@
   "call_group_parallel_label": "并行",
   "call_group_parallel_call_count": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{countLabel} 次调用"
       }
@@ -1214,10 +1152,7 @@
         "input running",
         "local countPlural = count: plural"
       ],
-      "selectors": [
-        "countPlural",
-        "running"
-      ],
+      "selectors": ["countPlural", "running"],
       "match": {
         "countPlural=other,running=true": "{countLabel} 次调用 · 运行中 {duration}+",
         "countPlural=other,running=false": "{countLabel} 次调用 · {duration}"
@@ -1227,14 +1162,8 @@
   "activity_lane_activity": "活动",
   "activity_lane_message_count": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{countLabel} 条消息"
       }
@@ -1358,10 +1287,7 @@
         "local countPlural = count: plural",
         "local runningPlural = runningCount: plural"
       ],
-      "selectors": [
-        "countPlural",
-        "runningPlural"
-      ],
+      "selectors": ["countPlural", "runningPlural"],
       "match": {
         "countPlural=other,runningPlural=one": "{countLabel} 次调用 · {runningCount} 个运行中",
         "countPlural=other,runningPlural=other": "{countLabel} 次调用"
@@ -1497,14 +1423,8 @@
   "insights_page_pct_affected": "{pct}% 受影响",
   "insights_pattern_recommendation_rationale": [
     {
-      "declarations": [
-        "input affected",
-        "input total",
-        "local totalPlural = total: plural"
-      ],
-      "selectors": [
-        "totalPlural"
-      ],
+      "declarations": ["input affected", "input total", "local totalPlural = total: plural"],
+      "selectors": ["totalPlural"],
       "match": {
         "totalPlural=other": "{total} 个会话中有 {affected} 个触发此确定性模式。"
       }
@@ -1562,9 +1482,7 @@
         "input failureSignals",
         "local countPlural = count: plural"
       ],
-      "selectors": [
-        "countPlural"
-      ],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{count} 个会话，{completedRate}% 已完成，平均 {failureSignals} 个失败信号"
       }
@@ -1572,14 +1490,8 @@
   ],
   "insights_page_driver_sessions": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{countLabel} 个会话"
       }
@@ -1742,9 +1654,14 @@
   "pinned_copy_message": "复制消息",
   "pinned_copied_message": "已复制消息",
   "pinned_unpin": "取消固定",
-  "settings_agent_dir_title": "代理目录",
-  "settings_agent_dir_description": "用于扫描会话数据的目录。通过环境变量或配置文件配置。",
-  "settings_agent_dir_not_configured": "未配置",
+  "settings_session_providers_title": "会话提供商",
+  "settings_session_providers_description": "选择 AgentsView 要发现和同步的代理会话来源。",
+  "settings_session_providers_not_configured": "未配置目录",
+  "settings_session_providers_enable_aria": "启用 {provider} 会话同步",
+  "settings_session_providers_enabled": "已启用",
+  "settings_session_providers_disabled": "已停用",
+  "settings_session_providers_restart_notice": "重启 AgentsView 守护进程以及任何单独的推送监视进程，以应用这些更改。",
+  "settings_session_providers_save_failed": "无法更新会话提供商。之前的选择仍然有效。",
   "appearance_layout_default": "默认",
   "appearance_layout_compact": "紧凑",
   "appearance_layout_stream": "流式",
@@ -1802,11 +1719,7 @@
   ],
   "settings_embeddings_rate": [
     {
-      "declarations": [
-        "input count",
-        "input rateLabel",
-        "local countPlural = count: plural"
-      ],
+      "declarations": ["input count", "input rateLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{rateLabel} 块/秒"
@@ -1924,14 +1837,8 @@
   "trash_empty_trash": "清空回收站",
   "trash_msgs": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{countLabel} 条消息"
       }

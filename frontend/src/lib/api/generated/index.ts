@@ -196,6 +196,7 @@ export type { ServiceUsagePairwiseComparisonDelta } from './models/ServiceUsageP
 export type { ServiceUsagePairwiseComparisonResponse } from './models/ServiceUsagePairwiseComparisonResponse';
 export type { ServiceUsagePairwiseComparisonSide } from './models/ServiceUsagePairwiseComparisonSide';
 export type { SessionDirectoryResponse } from './models/SessionDirectoryResponse';
+export type { SessionProviderResponse } from './models/SessionProviderResponse';
 export type { SessionUsageBreakdownResponse } from './models/SessionUsageBreakdownResponse';
 export type { SessionUsageResponse } from './models/SessionUsageResponse';
 export type { SetGithubConfigInputBody } from './models/SetGithubConfigInputBody';
