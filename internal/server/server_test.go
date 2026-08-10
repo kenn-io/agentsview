@@ -3502,6 +3502,109 @@ func TestSettingsRejectInvalidChartPaletteWithoutChangingSelection(t *testing.T)
 	assert.Equal(t, config.ChartPaletteMatplotlib, got.ChartPalette)
 }
 
+func TestSettingsDisabledProvidersRoundTrip(t *testing.T) {
+	geminiDir := filepath.Join(t.TempDir(), "gemini")
+	te := setup(t, func(cfg *config.Config) {
+		cfg.AgentDirs = map[parser.AgentType][]string{
+			parser.AgentClaude: {"/sessions/claude"},
+			parser.AgentGemini: {geminiDir},
+		}
+	})
+	put := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+			strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		te.handler.ServeHTTP(w, req)
+		return w
+	}
+
+	w := put(`{"disabled_agents":["gemini","claude","gemini"]}`)
+	assertStatus(t, w, http.StatusOK)
+	type sessionProvider struct {
+		ID          parser.AgentType `json:"id"`
+		DisplayName string           `json:"display_name"`
+		Dirs        []string         `json:"dirs"`
+	}
+	var got struct {
+		SessionProviders []sessionProvider  `json:"session_providers"`
+		DisabledAgents   []parser.AgentType `json:"disabled_agents"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t,
+		[]parser.AgentType{parser.AgentClaude, parser.AgentGemini},
+		got.DisabledAgents,
+	)
+	require.NotEmpty(t, got.SessionProviders)
+	assert.Equal(t, parser.AgentClaude, got.SessionProviders[0].ID)
+	assert.Equal(t, "Claude Code", got.SessionProviders[0].DisplayName)
+	assert.Equal(t, []string{"/sessions/claude"}, got.SessionProviders[0].Dirs)
+	geminiIndex := slices.IndexFunc(got.SessionProviders,
+		func(provider sessionProvider) bool {
+			return provider.ID == parser.AgentGemini
+		})
+	require.NotEqual(t, -1, geminiIndex)
+	gemini := got.SessionProviders[geminiIndex]
+	assert.Equal(t, "Gemini", gemini.DisplayName)
+	assert.Equal(t, []string{geminiDir}, gemini.Dirs)
+
+	var persisted struct {
+		DisabledAgents []parser.AgentType `toml:"disabled_agents"`
+	}
+	_, err := toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
+	require.NoError(t, err)
+	assert.Equal(t, got.DisabledAgents, persisted.DisabledAgents)
+}
+
+func TestSettingsDisabledProvidersDefaultToEmptyArray(t *testing.T) {
+	te := setup(t)
+
+	w := te.get(t, "/api/v1/settings")
+	assertStatus(t, w, http.StatusOK)
+	var got struct {
+		DisabledAgents json.RawMessage `json:"disabled_agents"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.JSONEq(t, `[]`, string(got.DisabledAgents))
+}
+
+func TestSettingsRejectInvalidDisabledProviderWithoutMutation(t *testing.T) {
+	te := setup(t)
+	put := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+			strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		te.handler.ServeHTTP(w, req)
+		return w
+	}
+
+	assertStatus(t, put(`{"disabled_agents":["gemini"]}`), http.StatusOK)
+	w := put(`{"disabled_agents":["nope"]}`)
+	assertStatus(t, w, http.StatusBadRequest)
+	assertBodyContains(t, w, "unknown session provider")
+
+	w = te.get(t, "/api/v1/settings")
+	assertStatus(t, w, http.StatusOK)
+	var got struct {
+		DisabledAgents []parser.AgentType `json:"disabled_agents"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, []parser.AgentType{parser.AgentGemini}, got.DisabledAgents)
+}
+
+func TestSettingsDisabledProvidersRemainLockedInPGMode(t *testing.T) {
+	te := setupPGMode(t)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+		strings.NewReader(`{"disabled_agents":["gemini"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	te.handler.ServeHTTP(w, req)
+
+	assertStatus(t, w, http.StatusNotImplemented)
+	assertBodyContains(t, w, "settings cannot be modified")
+}
+
 func TestSettingsRemainLockedInPGMode(t *testing.T) {
 	te := setupPGMode(t)
 	te.srv.SetGithubToken("settings-test-token")
