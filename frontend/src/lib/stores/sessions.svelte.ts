@@ -440,6 +440,7 @@ class SessionsStore {
     const previous = this.filters;
     this.filters = defaultFilters();
     this.dateFiltersWindowDays = null;
+    starred.filterOnly = false;
     this.filterPersistenceHeld = true;
     if (
       previous.includeOneShot !== this.filters.includeOneShot ||
@@ -490,6 +491,7 @@ class SessionsStore {
     this.dateFiltersWindowDays = parseWindowDaysParam(
       params[SESSION_ANALYTICS_WINDOW_PARAM],
     );
+    starred.filterOnly = params["starred"] === "true";
     this.filterPersistenceHeld = false;
     if (prevOneShot !== next.includeOneShot ||
         prevAutomated !== next.includeAutomated) {

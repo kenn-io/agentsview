@@ -107,6 +107,7 @@ afterEach(() => {
   sessions.filters.dateTo = "";
   sessions.filters.includeOneShot = true;
   sessions.filters.includeAutomated = false;
+  starred.filterOnly = false;
   sessions.initFromParams({});
   sessions.filters.project = "";
   analytics.applyRollingWindow(365);
@@ -711,6 +712,50 @@ describe("App root Sessions landing", () => {
     expect(window.location.pathname).toBe("/");
     expect(window.location.search).toBe("");
     expect(localStorage.getItem("session-filters")).toBe(saved);
+  });
+
+  it("clears starred-only filtering when entering the root landing", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    starred.filterOnly = true;
+    setRootUrl();
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+
+    expect(starred.filterOnly).toBe(false);
+    expect(window.location.pathname).toBe("/");
+    expect(window.location.search).toBe("");
+  });
+
+  it("promotes a starred-only toggle from root to Sessions", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    setRootUrl();
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+
+    starred.filterOnly = true;
+    await flushEffects();
+
+    expect(window.location.pathname).toBe("/sessions");
+    expect(window.location.search).toBe("?starred=true");
+    expect(router.isRootPath).toBe(false);
+  });
+
+  it("normalizes a starred-only root deep link to Sessions", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    setRootUrl({ starred: "true" });
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+
+    expect(starred.filterOnly).toBe(true);
+    expect(window.location.pathname).toBe("/sessions");
+    expect(window.location.search).toBe("?starred=true");
+    expect(router.isRootPath).toBe(false);
   });
 
   it("keeps sticky parameters on the root landing URL", async () => {

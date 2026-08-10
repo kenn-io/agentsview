@@ -327,6 +327,7 @@
   // persistence would be lost after one reload.
   function sessionFilterRouteParams(): Record<string, string> {
     const params = filtersToParams(sessions.filters);
+    if (starred.filterOnly) params.starred = "true";
     if (sessions.dateFiltersWindowDays !== null) {
       params[SESSION_ANALYTICS_WINDOW_PARAM] = String(
         sessions.dateFiltersWindowDays,
