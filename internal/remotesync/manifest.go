@@ -103,7 +103,7 @@ func BuildManifest(targets TargetSet) (Manifest, error) {
 			}
 		}
 	}
-	for _, path := range targets.ExtraFiles {
+	for _, path := range targets.AllExtraFiles() {
 		if _, ok := hermesSQLite[filepath.Clean(path)]; ok {
 			continue
 		}

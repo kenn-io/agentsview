@@ -558,11 +558,17 @@ func TestWatchBatchAccumulatorReportsEntryAndBytePromotion(t *testing.T) {
 			})
 
 			tt.add(accumulator)
+			accumulator.Add(WatchBatch{
+				Paths:          []string{"/sessions/after-overflow"},
+				ReconcileRoots: []string{"/sessions"},
+			})
 
 			batch, ok := accumulator.Take()
 			require.True(t, ok)
 			assert.Equal(t, WatchBatch{FullSync: true, LostEvents: true}, batch)
 			assert.Equal(t, []WatchBatchPromotionReason{tt.wantReason}, reasons)
+			assert.True(t, accumulator.Empty(),
+				"full sync must supersede later fine-grained work in the same accumulation window")
 		})
 	}
 }

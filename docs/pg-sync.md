@@ -136,9 +136,12 @@ agentsview pg push --watch --interval 5m
 
 The watcher performs one initial local sync plus PostgreSQL push,
 then pushes again after session-directory changes settle for the
-debounce window. The interval acts as a floor: even if filesystem
-events are missed or a root cannot be watched because of OS watch
-limits, the next interval push catches up.
+debounce window. Ordinary changes carry a bounded set of changed paths to the
+daemon, so a one-session edit does not rediscover the full local archive.
+Watcher overflow, lost events, and ambiguous renames promote to authoritative
+reconciliation of the currently available provider roots. The interval acts as
+a floor: even if filesystem events are missed or a root cannot be watched
+because of OS watch limits, the next interval push catches up.
 
 Operational details:
 

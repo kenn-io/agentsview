@@ -149,8 +149,9 @@ func sqliteReadOnlyDSN(path string) string {
 }
 
 func hermesStateDBTargets(targets TargetSet) []string {
-	extraFiles := make(map[string]struct{}, len(targets.ExtraFiles))
-	for _, path := range targets.ExtraFiles {
+	allExtraFiles := targets.AllExtraFiles()
+	extraFiles := make(map[string]struct{}, len(allExtraFiles))
+	for _, path := range allExtraFiles {
 		extraFiles[filepath.Clean(path)] = struct{}{}
 	}
 	seen := make(map[string]struct{})

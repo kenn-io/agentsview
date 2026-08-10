@@ -128,6 +128,7 @@ func doParseDiff(cfg ParseDiffConfig) (failed bool) {
 	engine := sync.NewDiffEngine(database, sync.EngineConfig{
 		AgentDirs:               appCfg.SyncAgentDirs(),
 		SourceMachines:          appCfg.SyncSourceMachines(),
+		PreserveAgents:          appCfg.DisabledAgents,
 		IncludeCwdPrefixes:      appCfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths:      appCfg.ScanProtectedPaths,
 		Machine:                 appCfg.LocalMachineName,

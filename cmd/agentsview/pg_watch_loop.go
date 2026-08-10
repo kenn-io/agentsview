@@ -5,6 +5,8 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 // pushReason labels why a push was triggered, for logging.
@@ -34,11 +36,15 @@ type pushLoop struct {
 	dirty     chan struct{}
 	floor     <-chan time.Time
 	after     func(time.Duration) <-chan time.Time
-	push      func(ctx context.Context, reason pushReason) error
+	push      func(ctx context.Context, reason pushReason, batch *syncpkg.WatchBatch) error
 	label     string
 	pendingMu sync.Mutex
-	pending   bool
-	waiters   []chan error
+	// pendingUnscoped supersedes pendingBatch. Startup, interval, coverage,
+	// and manual dirtiness intentionally keep the historical full SyncAll path.
+	pendingUnscoped bool
+	pendingBatch    *syncpkg.WatchBatchAccumulator
+	waiters         []chan error
+	promotionCounts map[syncpkg.WatchBatchPromotionReason]int
 	// flushTimeout bounds the final shutdown-flush push. Zero means
 	// no bound (used in tests that inject a fake pusher).
 	flushTimeout time.Duration
@@ -57,17 +63,18 @@ func (l *pushLoop) NotifyCoverageDegraded(roots []string) error {
 func newPushLoopWithLabel(
 	label string,
 	debounce, interval time.Duration,
-	push func(context.Context, pushReason) error,
+	push func(context.Context, pushReason, *syncpkg.WatchBatch) error,
 ) (*pushLoop, *time.Ticker) {
 	ticker := time.NewTicker(interval)
 	return &pushLoop{
-		debounce:     debounce,
-		dirty:        make(chan struct{}, 1),
-		floor:        ticker.C,
-		after:        time.After,
-		push:         push,
-		label:        label,
-		flushTimeout: defaultFlushTimeout,
+		debounce:        debounce,
+		dirty:           make(chan struct{}, 1),
+		floor:           ticker.C,
+		after:           time.After,
+		push:            push,
+		label:           label,
+		flushTimeout:    defaultFlushTimeout,
+		promotionCounts: make(map[syncpkg.WatchBatchPromotionReason]int),
 	}, ticker
 }
 
@@ -75,7 +82,19 @@ func newPushLoopWithLabel(
 // collapses into a single pending push.
 func (l *pushLoop) NotifyDirty() {
 	l.pendingMu.Lock()
-	l.pending = true
+	l.pendingUnscoped = true
+	l.pendingBatch = nil
+	l.pendingMu.Unlock()
+	l.signalDirty()
+}
+
+// NotifyBatch retains one bounded watcher batch for the next push. A pending
+// unscoped notification already covers it and remains authoritative.
+func (l *pushLoop) NotifyBatch(batch syncpkg.WatchBatch) {
+	l.pendingMu.Lock()
+	if !l.pendingUnscoped {
+		l.batchAccumulatorLocked().Add(batch)
+	}
 	l.pendingMu.Unlock()
 	l.signalDirty()
 }
@@ -86,11 +105,44 @@ func (l *pushLoop) NotifyDirty() {
 func (l *pushLoop) NotifyDirtyWithAck() <-chan error {
 	waiter := make(chan error, 1)
 	l.pendingMu.Lock()
-	l.pending = true
+	l.pendingUnscoped = true
+	l.pendingBatch = nil
 	l.waiters = append(l.waiters, waiter)
 	l.pendingMu.Unlock()
 	l.signalDirty()
 	return waiter
+}
+
+// NotifyBatchWithAck retains a bounded watcher batch and completes its waiter
+// only after a push that includes or supersedes that scope succeeds.
+func (l *pushLoop) NotifyBatchWithAck(batch syncpkg.WatchBatch) <-chan error {
+	waiter := make(chan error, 1)
+	l.pendingMu.Lock()
+	if !l.pendingUnscoped {
+		l.batchAccumulatorLocked().Add(batch)
+	}
+	l.waiters = append(l.waiters, waiter)
+	l.pendingMu.Unlock()
+	l.signalDirty()
+	return waiter
+}
+
+func (l *pushLoop) batchAccumulatorLocked() *syncpkg.WatchBatchAccumulator {
+	if l.pendingBatch == nil {
+		l.pendingBatch = syncpkg.NewWatchBatchAccumulator(
+			func(reason syncpkg.WatchBatchPromotionReason) {
+				if l.promotionCounts == nil {
+					l.promotionCounts = make(map[syncpkg.WatchBatchPromotionReason]int)
+				}
+				l.promotionCounts[reason]++
+				log.Printf(
+					"%s: watcher batch promoted reason=%s promotion_count=%d",
+					l.label, reason, l.promotionCounts[reason],
+				)
+			},
+		)
+	}
+	return l.pendingBatch
 }
 
 func (l *pushLoop) signalDirty() {
@@ -115,7 +167,7 @@ func (l *pushLoop) Run(ctx context.Context) {
 				flushCtx, cancel = context.WithTimeout(flushCtx, l.flushTimeout)
 				defer cancel()
 			}
-			l.doPush(flushCtx, reasonShutdown)
+			l.doPush(flushCtx, reasonShutdown, true)
 			return
 		case <-l.dirty:
 			if !armed {
@@ -125,47 +177,77 @@ func (l *pushLoop) Run(ctx context.Context) {
 		case <-fire:
 			armed = false
 			fire = nil
-			l.doPush(ctx, reasonChange)
+			l.doPush(ctx, reasonChange, false)
 		case <-l.floor:
 			// A floor tick supersedes any pending debounce.
 			armed = false
 			fire = nil
-			l.doPush(ctx, reasonInterval)
+			l.doPush(ctx, reasonInterval, false)
 		}
 	}
 }
 
-func (l *pushLoop) doPush(ctx context.Context, reason pushReason) {
-	hadPending, waiters := l.claimPending()
-	if err := l.push(ctx, reason); err != nil {
+type pushClaim struct {
+	hadPending bool
+	unscoped   bool
+	batch      *syncpkg.WatchBatch
+	waiters    []chan error
+}
+
+func (l *pushLoop) doPush(ctx context.Context, reason pushReason, final bool) {
+	claim := l.claimPending()
+	if err := l.push(ctx, reason, claim.batch); err != nil {
 		log.Printf("%s: push (%s) failed: %v", l.label, reason, err)
-		if hadPending {
-			l.restorePending(waiters)
+		if claim.hadPending {
+			if final {
+				completePushWaiters(claim.waiters, err)
+			} else {
+				l.restorePending(claim)
+			}
 		}
 		return
 	}
-	for _, waiter := range waiters {
-		waiter <- nil
-		close(waiter)
-	}
+	completePushWaiters(claim.waiters, nil)
 }
 
-func (l *pushLoop) claimPending() (bool, []chan error) {
+func (l *pushLoop) claimPending() pushClaim {
 	l.pendingMu.Lock()
 	defer l.pendingMu.Unlock()
-	hadPending := l.pending
-	waiters := l.waiters
-	l.pending = false
+	claim := pushClaim{
+		hadPending: l.pendingUnscoped ||
+			(l.pendingBatch != nil && !l.pendingBatch.Empty()),
+		unscoped: l.pendingUnscoped,
+		waiters:  l.waiters,
+	}
+	if !claim.unscoped && l.pendingBatch != nil {
+		if batch, ok := l.pendingBatch.Take(); ok {
+			claim.batch = &batch
+		}
+	}
+	l.pendingUnscoped = false
+	l.pendingBatch = nil
 	l.waiters = nil
-	return hadPending, waiters
+	return claim
 }
 
-func (l *pushLoop) restorePending(waiters []chan error) {
+func (l *pushLoop) restorePending(claim pushClaim) {
 	l.pendingMu.Lock()
-	l.pending = true
-	if len(waiters) > 0 {
-		l.waiters = append(waiters, l.waiters...)
+	if claim.unscoped {
+		l.pendingUnscoped = true
+		l.pendingBatch = nil
+	} else if claim.batch != nil && !l.pendingUnscoped {
+		l.batchAccumulatorLocked().Add(*claim.batch)
+	}
+	if len(claim.waiters) > 0 {
+		l.waiters = append(claim.waiters, l.waiters...)
 	}
 	l.pendingMu.Unlock()
 	l.signalDirty()
+}
+
+func completePushWaiters(waiters []chan error, err error) {
+	for _, waiter := range waiters {
+		waiter <- err
+		close(waiter)
+	}
 }

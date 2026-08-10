@@ -120,7 +120,7 @@ func validateTargetSetPaths(targets TargetSet) error {
 			}
 		}
 	}
-	for _, file := range targets.ExtraFiles {
+	for _, file := range targets.AllExtraFiles() {
 		if _, err := safeRemotePathArchiveName(file); err != nil {
 			return fmt.Errorf("target file %q: %w", file, err)
 		}

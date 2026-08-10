@@ -270,7 +270,7 @@ func TestRemoteSyncHermesSidecarRemovalRaces(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			handler, targets, wal, removeWAL := newHermesRemoteSyncServer(t)
-			assert.Contains(t, targets.ExtraFiles, wal)
+			assert.Contains(t, targets.AllExtraFiles(), wal)
 			tt.run(t, handler, targets, wal, removeWAL)
 		})
 	}

@@ -474,6 +474,27 @@ func TestImporterMapsHermesStateDBExtraFileAndRefreshesWALChanges(t *testing.T) 
 	assert.Equal(t, "WAL-refreshed profile", *refreshed.DisplayName)
 }
 
+func TestFilterDisabledTargetsRemovesProviderExtraFiles(t *testing.T) {
+	targets := TargetSet{
+		Dirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {"/sessions/claude"},
+			parser.AgentCodex:  {"/sessions/codex"},
+		},
+		ExtraFiles: []string{"/shared/metadata"},
+		ProviderExtraFiles: map[parser.AgentType][]string{
+			parser.AgentClaude: {"/metadata/claude"},
+			parser.AgentCodex:  {"/metadata/codex"},
+		},
+	}
+
+	filtered := FilterDisabledTargets(targets, []parser.AgentType{parser.AgentCodex})
+
+	assert.Equal(t, []string{"/shared/metadata"}, filtered.ExtraFiles)
+	assert.Equal(t, []string{"/metadata/claude"},
+		filtered.ProviderExtraFiles[parser.AgentClaude])
+	assert.NotContains(t, filtered.ProviderExtraFiles, parser.AgentCodex)
+}
+
 func openHermesImportWALWriter(t *testing.T, stateDB string) *sql.DB {
 	t.Helper()
 	writer, err := sql.Open("sqlite3", stateDB)

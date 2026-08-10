@@ -67,6 +67,21 @@ type MirrorDelta struct {
 // archive right after, so only the remote's current export survives —
 // the same parity the legacy temp-dir path had.
 func MirrorDiff(mirrorRoot string, m Manifest) (MirrorDelta, error) {
+	return mirrorDiff(mirrorRoot, m, nil)
+}
+
+// MirrorDiffRetainingTargets excludes files owned by retained targets from
+// deletion discovery. Disabled-provider mirror files remain cached and ignored
+// until that provider is enabled again; every other stale file is deleted.
+func MirrorDiffRetainingTargets(
+	mirrorRoot string, m Manifest, retained TargetSet,
+) (MirrorDelta, error) {
+	return mirrorDiff(mirrorRoot, m, &retained)
+}
+
+func mirrorDiff(
+	mirrorRoot string, m Manifest, retainedTargets *TargetSet,
+) (MirrorDelta, error) {
 	delta := MirrorDelta{Total: len(m.Files)}
 	expected := make(map[string]ManifestEntry, len(m.Files))
 	for _, entry := range m.Files {
@@ -89,12 +104,44 @@ func MirrorDiff(mirrorRoot string, m Manifest) (MirrorDelta, error) {
 	}
 	for localPath := range local {
 		if _, ok := expected[localPath]; !ok {
+			if retainedTargets != nil &&
+				mirrorFileOwnedByTargets(mirrorRoot, localPath, *retainedTargets) {
+				continue
+			}
 			delta.Deletions = append(delta.Deletions, localPath)
 		}
 	}
 	sort.Strings(delta.Fetch)
 	sort.Strings(delta.Deletions)
 	return delta, nil
+}
+
+func mirrorFileOwnedByTargets(
+	mirrorRoot, localPath string, targets TargetSet,
+) bool {
+	for _, dirs := range targets.Dirs {
+		for _, remoteRoot := range dirs {
+			localRoot, err := safeRemappedRemotePath(mirrorRoot, remoteRoot)
+			if err == nil && (localPath == localRoot || within(localRoot, localPath)) {
+				return true
+			}
+		}
+	}
+	for _, files := range targets.Files {
+		for _, remoteFile := range files {
+			localFile, err := safeRemappedRemotePath(mirrorRoot, remoteFile)
+			if err == nil && localPath == localFile {
+				return true
+			}
+		}
+	}
+	for _, remoteFile := range targets.AllExtraFiles() {
+		localFile, err := safeRemappedRemotePath(mirrorRoot, remoteFile)
+		if err == nil && localPath == localFile {
+			return true
+		}
+	}
+	return false
 }
 
 // mtimeMicros truncates a Unix-nanosecond mtime to microseconds. Some

@@ -260,6 +260,7 @@ func (b localArchiveQueryBackend) SessionUsage(
 		engine := sync.NewEngine(b.database, sync.EngineConfig{
 			AgentDirs:               b.cfg.SyncAgentDirs(),
 			SourceMachines:          b.cfg.SyncSourceMachines(),
+			PreserveAgents:          b.cfg.DisabledAgents,
 			IncludeCwdPrefixes:      b.cfg.SyncIncludeCwdPrefixes,
 			ScanProtectedPaths:      b.cfg.ScanProtectedPaths,
 			Machine:                 b.cfg.LocalMachineName,

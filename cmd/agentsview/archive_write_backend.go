@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"sort"
 	stdsync "sync"
 	"time"
 
@@ -63,13 +64,13 @@ type archivePushWatchHooks struct {
 	) (func(), func(), []string)
 	newLoop func(
 		string, time.Duration, time.Duration,
-		func(context.Context, pushReason) error,
+		func(context.Context, pushReason, *syncpkg.WatchBatch) error,
 	) (*pushLoop, func())
 	duckDBPush func(
 		context.Context, pushReason, bool,
 	) (duckdbsync.PushResult, error)
 	pgPush func(
-		context.Context, pushReason, bool,
+		context.Context, pushReason, PGPushConfig,
 	) (postgres.PushResult, error)
 	pgStartupSync func(
 		context.Context, *syncpkg.Engine, bool,
@@ -130,7 +131,7 @@ func newArchivePushLoop(
 	hooks *archivePushWatchHooks,
 	label string,
 	debounce, interval time.Duration,
-	push func(context.Context, pushReason) error,
+	push func(context.Context, pushReason, *syncpkg.WatchBatch) error,
 ) (*pushLoop, func()) {
 	if hooks != nil && hooks.newLoop != nil {
 		return hooks.newLoop(label, debounce, interval, push)
@@ -179,16 +180,9 @@ func archivePushWatchWatcherOptions(
 
 func archivePushWatchBatchCallback(
 	appCfg config.Config,
-	engine watchSyncer,
 	loop *pushLoop,
 ) syncpkg.WatchCallback {
 	return func(callbackCtx context.Context, batch syncpkg.WatchBatch) error {
-		scope := func() watchRecoveryScope {
-			return probeWatchRecoveryScope(appCfg)
-		}
-		if err := syncWatchBatch(callbackCtx, engine, batch, scope); err != nil {
-			return err
-		}
 		return notifyPushForWatchBatchWithConfig(
 			callbackCtx, loop, appCfg, batch,
 		)
@@ -239,10 +233,10 @@ func notifyPushForWatchBatch(
 	ctx context.Context, loop *pushLoop, batch syncpkg.WatchBatch,
 ) error {
 	if !watchBatchNeedsPushAck(batch) {
-		loop.NotifyDirty()
+		loop.NotifyBatch(batch)
 		return nil
 	}
-	ack := loop.NotifyDirtyWithAck()
+	ack := loop.NotifyBatchWithAck(batch)
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -352,6 +346,24 @@ func watchBatchNeedsPushAck(batch syncpkg.WatchBatch) bool {
 		}
 	}
 	return false
+}
+
+func watchRecoveryForBatch(
+	cfg config.Config, batch *syncpkg.WatchBatch,
+) *syncpkg.WatchRecoveryScope {
+	if batch == nil || (!batch.FullSync && len(batch.Renames) == 0) {
+		return nil
+	}
+	probed := probeWatchRecoveryScope(cfg)
+	deferred := make([]string, 0, len(probed.deferred))
+	for root := range probed.deferred {
+		deferred = append(deferred, root)
+	}
+	sort.Strings(deferred)
+	return &syncpkg.WatchRecoveryScope{
+		AvailableRoots: append([]string(nil), probed.available...),
+		DeferredRoots:  deferred,
+	}
 }
 
 func resolveArchiveWriteBackend(
@@ -489,6 +501,8 @@ func (b daemonArchiveWriteBackend) PGPush(
 				ScopeVectorsToChangedSessions,
 			LastReconciledVectorGeneration: cfg.
 				LastReconciledVectorGeneration,
+			WatchBatch:    cfg.WatchBatch,
+			WatchRecovery: cfg.WatchRecovery,
 		},
 		onProgress,
 	)
@@ -519,7 +533,10 @@ func (b daemonArchiveWriteBackend) DuckDBPushWatch(
 	if debounce <= 0 {
 		debounce = defaultWatchDebounce
 	}
-	push := func(pctx context.Context, reason pushReason, full bool) error {
+	push := func(
+		pctx context.Context, reason pushReason, full bool,
+		_ *syncpkg.WatchBatch,
+	) error {
 		pushCfg := cfg
 		pushCfg.Full = full
 		// Watch pushes are automatic: a mirror held by a live serve
@@ -555,8 +572,8 @@ func (b daemonArchiveWriteBackend) DuckDBPushWatch(
 	loop, stopLoop := newArchivePushLoop(
 		b.watchHooks,
 		"duckdb watch", debounce, interval,
-		func(c context.Context, r pushReason) error {
-			return push(c, r, false)
+		func(c context.Context, r pushReason, batch *syncpkg.WatchBatch) error {
+			return push(c, r, false, batch)
 		},
 	)
 	defer stopLoop()
@@ -577,7 +594,7 @@ func (b daemonArchiveWriteBackend) DuckDBPushWatch(
 			len(unwatchedDirs), interval,
 		)
 	}
-	initialErr := push(ctx, reasonStartup, cfg.Full)
+	initialErr := push(ctx, reasonStartup, cfg.Full, nil)
 	if initialErr != nil {
 		log.Printf("duckdb watch: initial daemon push failed: %v", initialErr)
 	}
@@ -647,9 +664,14 @@ func (b daemonArchiveWriteBackend) PGPushWatch(
 	// local-mode state.
 	vectorReconcileNeeded := true
 	lastReconciledVectorGeneration := int64(0)
-	push := func(pctx context.Context, reason pushReason, full bool) error {
+	push := func(
+		pctx context.Context, reason pushReason, full bool,
+		batch *syncpkg.WatchBatch,
+	) error {
 		pushCfg := cfg
 		pushCfg.Full = full
+		pushCfg.WatchBatch = batch
+		pushCfg.WatchRecovery = watchRecoveryForBatch(b.appCfg, batch)
 		scoped := scopedVectorPush(reason, full, vectorReconcileNeeded)
 		pushCfg.ScopeVectorsToChangedSessions = scoped
 		pushCfg.LastReconciledVectorGeneration =
@@ -657,7 +679,7 @@ func (b daemonArchiveWriteBackend) PGPushWatch(
 		var res postgres.PushResult
 		var err error
 		if b.watchHooks != nil && b.watchHooks.pgPush != nil {
-			res, err = b.watchHooks.pgPush(pctx, reason, full)
+			res, err = b.watchHooks.pgPush(pctx, reason, pushCfg)
 		} else {
 			backend := archiveWriteBackend(b)
 			cleanup := func() {}
@@ -687,8 +709,8 @@ func (b daemonArchiveWriteBackend) PGPushWatch(
 	}
 	loop, stopLoop := newArchivePushLoop(
 		b.watchHooks, "pg watch", debounce, interval,
-		func(c context.Context, r pushReason) error {
-			return push(c, r, false)
+		func(c context.Context, r pushReason, batch *syncpkg.WatchBatch) error {
+			return push(c, r, false, batch)
 		},
 	)
 	defer stopLoop()
@@ -709,7 +731,7 @@ func (b daemonArchiveWriteBackend) PGPushWatch(
 			len(unwatchedDirs), interval,
 		)
 	}
-	initialErr := push(ctx, reasonStartup, cfg.Full)
+	initialErr := push(ctx, reasonStartup, cfg.Full, nil)
 	if initialErr != nil {
 		log.Printf("pg watch: initial daemon push failed: %v", initialErr)
 	}
@@ -937,6 +959,7 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 	engine := syncpkg.NewEngine(b.database, syncpkg.EngineConfig{
 		AgentDirs:               b.appCfg.SyncAgentDirs(),
 		SourceMachines:          b.appCfg.SyncSourceMachines(),
+		PreserveAgents:          b.appCfg.DisabledAgents,
 		IncludeCwdPrefixes:      b.appCfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths:      b.appCfg.ScanProtectedPaths,
 		Machine:                 b.appCfg.LocalMachineName,
@@ -950,12 +973,23 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 	} else {
 		pusher = b.newDuckDBPusher(engine, duckCfg, cfg, projects, exclude)
 	}
+	pusher.scopedSync = func(
+		c context.Context,
+		batch syncpkg.WatchBatch,
+		recovery *syncpkg.WatchRecoveryScope,
+		work func() error,
+	) error {
+		_, err := engine.SyncWatchBatchThenRun(c, batch, recovery, work)
+		return err
+	}
 
 	loop, stopLoop := newArchivePushLoop(
 		b.watchHooks,
 		"duckdb watch", debounce, interval,
-		func(c context.Context, r pushReason) error {
-			return pusher.push(c, r, false)
+		func(c context.Context, r pushReason, batch *syncpkg.WatchBatch) error {
+			return pusher.pushBatch(
+				c, r, false, batch, watchRecoveryForBatch(b.appCfg, batch),
+			)
 		},
 	)
 	defer stopLoop()
@@ -965,7 +999,7 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 
 	stopWatcher, openDispatch, unwatchedDirs := startArchivePushWatcher(
 		b.watchHooks, b.appCfg, engine,
-		archivePushWatchBatchCallback(b.appCfg, engine, loop),
+		archivePushWatchBatchCallback(b.appCfg, loop),
 		archivePushWatchWatcherOptions(loop, poller),
 	)
 	defer stopWatcher()
@@ -1056,6 +1090,7 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 	engine := syncpkg.NewEngine(b.database, syncpkg.EngineConfig{
 		AgentDirs:               b.appCfg.SyncAgentDirs(),
 		SourceMachines:          b.appCfg.SyncSourceMachines(),
+		PreserveAgents:          b.appCfg.DisabledAgents,
 		IncludeCwdPrefixes:      b.appCfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths:      b.appCfg.ScanProtectedPaths,
 		Machine:                 b.appCfg.LocalMachineName,
@@ -1103,6 +1138,15 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 			},
 		)
 	}
+	pusher.scopedSync = func(
+		c context.Context,
+		batch syncpkg.WatchBatch,
+		recovery *syncpkg.WatchRecoveryScope,
+		work func() error,
+	) error {
+		_, err := engine.SyncWatchBatchThenRun(c, batch, recovery, work)
+		return err
+	}
 	defer pusher.reset()
 
 	fmt.Printf(
@@ -1113,8 +1157,10 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 
 	loop, stopLoop := newArchivePushLoop(
 		b.watchHooks, "pg watch", debounce, interval,
-		func(c context.Context, r pushReason) error {
-			return pusher.push(c, r, false)
+		func(c context.Context, r pushReason, batch *syncpkg.WatchBatch) error {
+			return pusher.pushBatch(
+				c, r, false, batch, watchRecoveryForBatch(b.appCfg, batch),
+			)
 		},
 	)
 	defer stopLoop()
@@ -1124,7 +1170,7 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 
 	stopWatcher, openDispatch, unwatchedDirs := startArchivePushWatcher(
 		b.watchHooks, b.appCfg, engine,
-		archivePushWatchBatchCallback(b.appCfg, engine, loop),
+		archivePushWatchBatchCallback(b.appCfg, loop),
 		archivePushWatchWatcherOptions(loop, poller),
 	)
 	defer stopWatcher()

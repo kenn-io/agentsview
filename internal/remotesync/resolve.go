@@ -15,7 +15,7 @@ import (
 func ResolveTargets(cfg config.Config) TargetSet {
 	dirs := make(map[parser.AgentType][]string)
 	files := make(map[parser.AgentType][]string)
-	var extra []string
+	providerExtraFiles := make(map[parser.AgentType][]string)
 	var forbiddenRoots []string
 	for _, def := range parser.Registry {
 		resolvedDirs := cfg.ResolveDirs(def.Type)
@@ -43,8 +43,8 @@ func ResolveTargets(cfg config.Config) TargetSet {
 					dirs[def.Type] = append(dirs[def.Type], hermesDirs...)
 				}
 				for _, file := range hermesFiles {
-					if !slices.Contains(extra, file) {
-						extra = append(extra, file)
+					if !slices.Contains(providerExtraFiles[def.Type], file) {
+						providerExtraFiles[def.Type] = append(providerExtraFiles[def.Type], file)
 					}
 				}
 				continue
@@ -94,15 +94,18 @@ func ResolveTargets(cfg config.Config) TargetSet {
 			if def.Type == parser.AgentCodex {
 				index := filepath.Join(filepath.Dir(dir), parser.CodexSessionIndexFilename)
 				if info, err := os.Stat(index); err == nil && !info.IsDir() {
-					if !slices.Contains(extra, index) {
-						extra = append(extra, index)
+					if !slices.Contains(providerExtraFiles[def.Type], index) {
+						providerExtraFiles[def.Type] = append(
+							providerExtraFiles[def.Type], index,
+						)
 					}
 				}
 			}
 		}
 	}
 	return filterForbiddenTargets(TargetSet{
-		Dirs: dirs, Files: files, ExtraFiles: extra, ForbiddenRoots: forbiddenRoots,
+		Dirs: dirs, Files: files, ProviderExtraFiles: providerExtraFiles,
+		ForbiddenRoots: forbiddenRoots,
 	})
 }
 
@@ -159,6 +162,14 @@ func filterForbiddenTargets(t TargetSet) TargetSet {
 		}
 	}
 	t.ExtraFiles = withoutForbidden(t.ExtraFiles, forbidden)
+	for agent, files := range t.ProviderExtraFiles {
+		kept := withoutForbidden(files, forbidden)
+		if len(kept) == 0 {
+			delete(t.ProviderExtraFiles, agent)
+			continue
+		}
+		t.ProviderExtraFiles[agent] = kept
+	}
 	return t
 }
 
@@ -561,6 +572,24 @@ func SelectAllowedTargets(allowed TargetSet, requested TargetSet) (TargetSet, bo
 		}
 		selected.ExtraFiles = append(selected.ExtraFiles, selectedFile)
 	}
+	for agent, files := range requested.ProviderExtraFiles {
+		allowedFiles, ok := allowed.ProviderExtraFiles[agent]
+		if !ok {
+			return TargetSet{}, false
+		}
+		for _, file := range files {
+			selectedFile, ok := selectAllowedString(allowedFiles, file)
+			if !ok || forbidden.within(selectedFile) {
+				return TargetSet{}, false
+			}
+			if selected.ProviderExtraFiles == nil {
+				selected.ProviderExtraFiles = make(map[parser.AgentType][]string)
+			}
+			selected.ProviderExtraFiles[agent] = append(
+				selected.ProviderExtraFiles[agent], selectedFile,
+			)
+		}
+	}
 	return selected, true
 }
 
@@ -709,7 +738,7 @@ func SelectAllowedFiles(allowed TargetSet, files []string) ([]string, bool) {
 func selectAllowedFile(
 	allowed TargetSet, forbidden forbiddenRootMatcher, file string,
 ) (string, bool) {
-	if canonical, ok := selectAllowedString(allowed.ExtraFiles, file); ok {
+	if canonical, ok := selectAllowedString(allowed.AllExtraFiles(), file); ok {
 		return canonical, !forbidden.within(canonical)
 	}
 	for agent, files := range allowed.Files {

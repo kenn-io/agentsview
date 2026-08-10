@@ -75,6 +75,7 @@ func syncService(
 	engine := sync.NewEngine(d, sync.EngineConfig{
 		AgentDirs:          cfg.SyncAgentDirs(),
 		SourceMachines:     cfg.SyncSourceMachines(),
+		PreserveAgents:     cfg.DisabledAgents,
 		IncludeCwdPrefixes: cfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths: cfg.ScanProtectedPaths,
 		Machine:            cfg.LocalMachineName,

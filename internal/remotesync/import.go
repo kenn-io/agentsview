@@ -51,8 +51,7 @@ func (im Importer) ImportExtracted(
 }
 
 // FilterDisabledTargets removes provider-owned roots and curated files before
-// remote collection or ingestion. Shared extra files remain because TargetSet
-// does not attribute them to one provider.
+// remote collection or ingestion. Truly shared extra files remain.
 func FilterDisabledTargets(
 	targets TargetSet,
 	disabled []parser.AgentType,
@@ -79,7 +78,39 @@ func FilterDisabledTargets(
 		}
 		filtered.Files[agent] = append([]string(nil), files...)
 	}
+	filtered.ProviderExtraFiles = make(
+		map[parser.AgentType][]string, len(targets.ProviderExtraFiles),
+	)
+	for agent, files := range targets.ProviderExtraFiles {
+		if _, skip := disabledSet[agent]; skip {
+			continue
+		}
+		filtered.ProviderExtraFiles[agent] = append([]string(nil), files...)
+	}
 	return filtered
+}
+
+func disabledProviderTargets(
+	targets TargetSet,
+	disabled []parser.AgentType,
+) TargetSet {
+	retained := TargetSet{
+		Dirs:               make(map[parser.AgentType][]string),
+		Files:              make(map[parser.AgentType][]string),
+		ProviderExtraFiles: make(map[parser.AgentType][]string),
+	}
+	for _, agent := range disabled {
+		if dirs := targets.Dirs[agent]; len(dirs) > 0 {
+			retained.Dirs[agent] = append([]string(nil), dirs...)
+		}
+		if files := targets.Files[agent]; len(files) > 0 {
+			retained.Files[agent] = append([]string(nil), files...)
+		}
+		if files := targets.ProviderExtraFiles[agent]; len(files) > 0 {
+			retained.ProviderExtraFiles[agent] = append([]string(nil), files...)
+		}
+	}
+	return retained
 }
 
 // importLayout maps stable remote paths to one prepared source root. Keeping
@@ -122,7 +153,7 @@ func newImportLayout(targets TargetSet, root string) (importLayout, error) {
 	// paths like /__drive_C/... instead of the original remote path on
 	// Windows/UNC remotes. Registering each extra file as its own
 	// remote->local pair fixes both the skip cache and the rewriter.
-	for _, remoteFile := range targets.ExtraFiles {
+	for _, remoteFile := range targets.AllExtraFiles() {
 		local, err := safeRemappedRemotePath(root, remoteFile)
 		if err != nil {
 			return importLayout{}, err
@@ -147,7 +178,7 @@ func newImportInputs(
 	}
 	layout.paths.host = host
 	return layout, importEngineConfig(
-		host, blockedResultCategories, layout,
+		host, blockedResultCategories, disabledAgents, layout,
 	), nil
 }
 
@@ -166,10 +197,12 @@ func (p remotePathMap) pathRewriter() func(string) string {
 func importEngineConfig(
 	host string,
 	blockedResultCategories []string,
+	preserveAgents []parser.AgentType,
 	layout importLayout,
 ) syncpkg.EngineConfig {
 	return syncpkg.EngineConfig{
 		AgentDirs:               layout.engineDirs,
+		PreserveAgents:          append([]parser.AgentType(nil), preserveAgents...),
 		Machine:                 host,
 		IDPrefix:                host + "~",
 		PathRewriter:            layout.paths.pathRewriter(),

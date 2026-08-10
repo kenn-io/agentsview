@@ -34,18 +34,31 @@ func NewWatchBatchAccumulator(
 }
 
 func (a *WatchBatchAccumulator) Add(batch WatchBatch) {
+	if a.pending.fullSync {
+		a.pending.lostEvents = a.pending.lostEvents || batch.LostEvents
+		return
+	}
 	if batch.FullSync {
 		a.pending.makeFullSync(batch.LostEvents)
 		return
 	}
 	for _, path := range batch.Paths {
 		a.pending.Add(path)
+		if a.pending.fullSync {
+			return
+		}
 	}
 	for _, rename := range batch.Renames {
 		a.pending.AddRename(rename)
+		if a.pending.fullSync {
+			return
+		}
 	}
 	for _, root := range batch.ReconcileRoots {
 		a.pending.AddReconcileRoot(root)
+		if a.pending.fullSync {
+			return
+		}
 	}
 	a.pending.lostEvents = a.pending.lostEvents || batch.LostEvents
 }

@@ -144,7 +144,7 @@ func TestResolveTargetsFiltersAndIncludesSpecialFiles(t *testing.T) {
 	}, targets.Files[parser.AgentWindsurf])
 	assert.NotContains(t, targets.Files[parser.AgentWindsurf], windsurfStateSHM)
 	assert.NotContains(t, targets.Files[parser.AgentWindsurf], windsurfSecret)
-	assert.Contains(t, targets.ExtraFiles, codexIndex)
+	assert.Contains(t, targets.ProviderExtraFiles[parser.AgentCodex], codexIndex)
 }
 
 func TestResolveTargetsExcludesRemoteSyncExcludedAgentState(t *testing.T) {
@@ -339,7 +339,7 @@ func TestResolveTargetsExpandsHermesProfilesWithDatabaseFiles(t *testing.T) {
 		filepath.Join(databaseOnly, "state.db-wal"),
 		filepath.Join(databaseOnly, "state.db-shm"),
 		filepath.Join(databaseOnly, "state.db-journal"),
-	}, targets.ExtraFiles)
+	}, targets.ProviderExtraFiles[parser.AgentHermes])
 }
 
 func TestResolveTargetsIncludesFlatCustomHermesRoot(t *testing.T) {
@@ -573,7 +573,7 @@ func TestResolveTargetsMatchesSSHResolverForRepresentativeHome(t *testing.T) {
 	}, goTargets.Files[parser.AgentWindsurf])
 	assert.ElementsMatch(t, sshFiles[parser.AgentWindsurf], goTargets.Files[parser.AgentWindsurf])
 	assert.NotContains(t, sshDirs[parser.AgentWindsurf], windsurfWorkspaceRoot)
-	assert.ElementsMatch(t, sshExtra, goTargets.ExtraFiles)
+	assert.ElementsMatch(t, sshExtra, goTargets.AllExtraFiles())
 	// Poolside: both resolvers must narrow to the trajectories/
 	// subdirectory, not the application-data root.
 	assert.ElementsMatch(t, []string{poolsideTrajectories}, sshDirs[parser.AgentPoolside])

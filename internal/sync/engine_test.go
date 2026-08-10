@@ -951,12 +951,13 @@ func TestReconcileWatchRootsBaselinesParsedSourceOnce(t *testing.T) {
 
 type directStreamingProvider struct {
 	parser.ProviderBase
-	discoverCalls atomic.Int32
-	parseCalls    atomic.Int32
-	source        *parser.SourceRef
-	parseErr      error
-	parseOutcome  parser.ParseOutcome
-	fingerprint   parser.SourceFingerprint
+	discoverCalls    atomic.Int32
+	changedPathCalls atomic.Int32
+	parseCalls       atomic.Int32
+	source           *parser.SourceRef
+	parseErr         error
+	parseOutcome     parser.ParseOutcome
+	fingerprint      parser.SourceFingerprint
 }
 
 func (provider *directStreamingProvider) Discover(context.Context) ([]parser.SourceRef, error) {
@@ -983,6 +984,7 @@ func (*directStreamingProvider) WatchPlan(context.Context) (parser.WatchPlan, er
 func (provider *directStreamingProvider) SourcesForChangedPath(
 	_ context.Context, req parser.ChangedPathRequest,
 ) ([]parser.SourceRef, error) {
+	provider.changedPathCalls.Add(1)
 	if provider.source != nil && provider.source.DisplayPath == req.Path {
 		return []parser.SourceRef{*provider.source}, nil
 	}

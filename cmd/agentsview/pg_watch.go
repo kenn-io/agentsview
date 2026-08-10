@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/gofrs/flock"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/postgres"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/kit/daemon"
 )
 
@@ -30,7 +32,11 @@ type pgTarget interface {
 // connecting and reconnecting after errors so a transiently
 // unreachable database never crashes the daemon.
 type pgPusher struct {
-	localSync     func(context.Context) error
+	localSync  func(context.Context) error
+	scopedSync func(
+		context.Context, syncpkg.WatchBatch, *syncpkg.WatchRecoveryScope,
+		func() error,
+	) error
 	ensurePricing func(context.Context) error
 	connect       func() (pgTarget, error)
 	target        pgTarget
@@ -55,9 +61,32 @@ type pgPusher struct {
 func (p *pgPusher) push(
 	ctx context.Context, reason pushReason, full bool,
 ) error {
+	return p.pushBatch(ctx, reason, full, nil, nil)
+}
+
+func (p *pgPusher) pushBatch(
+	ctx context.Context,
+	reason pushReason,
+	full bool,
+	batch *syncpkg.WatchBatch,
+	recovery *syncpkg.WatchRecoveryScope,
+) error {
+	push := func() error { return p.pushAfterSync(ctx, reason, full) }
+	if batch != nil {
+		if p.scopedSync == nil {
+			return errors.New("scoped local sync is unavailable")
+		}
+		return p.scopedSync(ctx, *batch, recovery, push)
+	}
 	if err := p.localSync(ctx); err != nil {
 		return fmt.Errorf("local sync: %w", err)
 	}
+	return push()
+}
+
+func (p *pgPusher) pushAfterSync(
+	ctx context.Context, reason pushReason, full bool,
+) error {
 	if p.ensurePricing != nil {
 		if err := p.ensurePricing(ctx); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
@@ -76,8 +105,6 @@ func (p *pgPusher) push(
 		}
 		p.target = t
 	}
-	// EnsureSchema is idempotent and memoized inside *postgres.Sync,
-	// so calling it every cycle is cheap after the first success.
 	if err := p.target.EnsureSchema(ctx); err != nil {
 		p.reset()
 		return fmt.Errorf("ensure schema: %w", err)

@@ -12,7 +12,6 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	sessionsync "go.kenn.io/agentsview/internal/sync"
-	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 func TestDisabledProviderPreservesArchivedSession(t *testing.T) {
@@ -40,6 +39,7 @@ func TestDisabledProviderPreservesArchivedSession(t *testing.T) {
 	engine := sessionsync.NewEngine(database, sessionsync.EngineConfig{
 		AgentDirs:      cfg.SyncAgentDirs(),
 		SourceMachines: cfg.SyncSourceMachines(),
+		PreserveAgents: cfg.DisabledAgents,
 		Machine:        cfg.LocalMachineName,
 	})
 	t.Cleanup(engine.Close)
@@ -75,27 +75,16 @@ func TestDisabledProviderPreservesArchivedSessionAcrossRebuild(t *testing.T) {
 		Role: "user", Content: "preserve this archived message",
 	}}))
 
-	claudeRoot := filepath.Join(base, "claude")
-	claudeSource := filepath.Join(claudeRoot, "project", "enabled.jsonl")
-	require.NoError(t, os.MkdirAll(filepath.Dir(claudeSource), 0o755))
-	require.NoError(t, os.WriteFile(
-		claudeSource,
-		[]byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID(
-			"2026-08-09T10:00:00Z", "enabled session", "enabled-rebuild",
-		).String()),
-		0o644,
-	))
-
 	cfg := config.Config{
 		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentClaude: {claudeRoot},
 			parser.AgentGemini: {geminiRoot},
 		},
 		DisabledAgents:   []parser.AgentType{parser.AgentGemini},
 		LocalMachineName: "test-machine",
 	}
 	engine := sessionsync.NewEngine(database, sessionsync.EngineConfig{
-		AgentDirs: cfg.SyncAgentDirs(), Machine: cfg.LocalMachineName,
+		AgentDirs: cfg.SyncAgentDirs(), PreserveAgents: cfg.DisabledAgents,
+		Machine: cfg.LocalMachineName,
 	})
 	t.Cleanup(engine.Close)
 

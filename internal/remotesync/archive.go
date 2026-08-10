@@ -72,7 +72,7 @@ func WriteArchive(w io.Writer, targets TargetSet) error {
 			}
 		}
 	}
-	for _, path := range targets.ExtraFiles {
+	for _, path := range targets.AllExtraFiles() {
 		if err := writePath(path, true); err != nil {
 			return err
 		}

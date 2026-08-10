@@ -7,5 +7,6 @@ export type RemotesyncTargetSet = {
   extra_files?: any[] | null;
   files?: Record<string, any[] | null>;
   forbidden_roots?: any[] | null;
+  provider_extra_files?: Record<string, any[] | null>;
 };
 

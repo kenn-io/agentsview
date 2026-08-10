@@ -933,24 +933,57 @@ func TestPrepareHTTPSyncExcludesDisabledProviderBeforeTransfer(t *testing.T) {
 	remote := newMirrorTestRemote(t)
 	remote.writeSession(t, "enabled.jsonl", time.Now(), "enabled session")
 	disabledFile := remote.addFileScopedAgent(t)
+	codexRoot := filepath.Join(filepath.Dir(remote.dir), ".codex", "sessions")
+	require.NoError(t, os.MkdirAll(codexRoot, 0o755))
+	codexIndex := filepath.Join(filepath.Dir(codexRoot), parser.CodexSessionIndexFilename)
+	require.NoError(t, os.WriteFile(codexIndex, []byte("remote index\n"), 0o600))
+	remote.targets.Dirs[parser.AgentCodex] = []string{codexRoot}
+	remote.targets.ProviderExtraFiles = map[parser.AgentType][]string{
+		parser.AgentCodex: {codexIndex},
+	}
 	dataDir := t.TempDir()
 	_, hs := newMirrorSync(t, remote, dataDir)
-	hs.DisabledAgents = []parser.AgentType{parser.AgentGemini}
-
-	prepared, err := hs.Prepare(t.Context())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, prepared.Close()) })
-
-	assert.NotContains(t, prepared.Targets().Dirs, parser.AgentGemini)
-	assert.NotContains(t, prepared.Targets().Files, parser.AgentGemini)
-	require.Len(t, remote.archiveRequests, 1)
-	assert.NotContains(t, remote.archiveRequests[0].Dirs, parser.AgentGemini)
-	assert.NotContains(t, remote.archiveRequests[0].Files, parser.AgentGemini)
+	hs.DisabledAgents = []parser.AgentType{parser.AgentGemini, parser.AgentCodex}
 	disabledMirrorPath, err := safeRemappedRemotePath(
 		MirrorDir(dataDir, hs.Host), disabledFile,
 	)
 	require.NoError(t, err)
-	assert.NoFileExists(t, disabledMirrorPath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(disabledMirrorPath), 0o755))
+	require.NoError(t, os.WriteFile(disabledMirrorPath, []byte("retained"), 0o600))
+	codexMirrorPath, err := safeRemappedRemotePath(MirrorDir(dataDir, hs.Host), codexIndex)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(codexMirrorPath), 0o755))
+	require.NoError(t, os.WriteFile(codexMirrorPath, []byte("retained index"), 0o600))
+
+	prepared, err := hs.Prepare(t.Context())
+	require.NoError(t, err)
+
+	assert.NotContains(t, prepared.Targets().Dirs, parser.AgentGemini)
+	assert.NotContains(t, prepared.Targets().Files, parser.AgentGemini)
+	assert.NotContains(t, prepared.Targets().ProviderExtraFiles, parser.AgentCodex)
+	require.Len(t, remote.archiveRequests, 1)
+	assert.NotContains(t, remote.archiveRequests[0].Dirs, parser.AgentGemini)
+	assert.NotContains(t, remote.archiveRequests[0].Files, parser.AgentGemini)
+	assert.NotContains(t, remote.archiveRequests[0].ProviderExtraFiles, parser.AgentCodex)
+	assert.FileExists(t, disabledMirrorPath)
+	content, err := os.ReadFile(disabledMirrorPath)
+	require.NoError(t, err)
+	assert.Equal(t, "retained", string(content))
+	content, err = os.ReadFile(codexMirrorPath)
+	require.NoError(t, err)
+	assert.Equal(t, "retained index", string(content))
+	require.NoError(t, prepared.Close())
+
+	hs.DisabledAgents = nil
+	reenabled, err := hs.Prepare(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reenabled.Close()) })
+	content, err = os.ReadFile(disabledMirrorPath)
+	require.NoError(t, err)
+	assert.Equal(t, "file-scoped export\n", string(content))
+	content, err = os.ReadFile(codexMirrorPath)
+	require.NoError(t, err)
+	assert.Equal(t, "remote index\n", string(content))
 }
 
 func TestHTTPSyncMirrorSecondSyncTransfersOnlyDelta(t *testing.T) {
@@ -1580,6 +1613,51 @@ func TestPreparedHTTPSyncContributorKeepsLockUntilClose(t *testing.T) {
 
 	require.NoError(t, prepared.Close())
 	assertMirrorUnlocked(t, MirrorDir(hs.DataDir, hs.Host))
+}
+
+func TestPreparedHTTPSyncDisabledOnlyContributorPreservesArchivedSession(t *testing.T) {
+	remote := newMirrorTestRemote(t)
+	remote.targets = TargetSet{Dirs: map[parser.AgentType][]string{
+		parser.AgentGemini: {remote.dir},
+	}}
+	database, hs := newMirrorSync(t, remote, t.TempDir())
+	hs.DisabledAgents = []parser.AgentType{parser.AgentGemini}
+	sessionID := hs.Host + "~gemini-archived"
+	remotePath := hs.Host + ":" + filepath.Join(remote.dir, "session.json")
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: sessionID, Project: "archived-project",
+		Machine: hs.Host, Agent: string(parser.AgentGemini),
+		FilePath: &remotePath, MessageCount: 1, UserMessageCount: 1,
+	}))
+	require.NoError(t, database.InsertMessages([]db.Message{{
+		SessionID: sessionID, Ordinal: 0,
+		Role: "user", Content: "preserve disabled remote session",
+	}}))
+
+	prepared, err := hs.Prepare(context.Background())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, prepared.Close()) })
+	contributor, err := prepared.RebuildContributor()
+	require.NoError(t, err)
+	engine := syncpkg.NewEngine(database, syncpkg.EngineConfig{})
+	t.Cleanup(engine.Close)
+
+	stats, err := engine.ResyncAllWithOptions(
+		context.Background(), nil,
+		syncpkg.RebuildOptions{Contributors: []syncpkg.RebuildContributor{contributor}},
+	)
+	require.NoError(t, err)
+	assert.False(t, stats.Aborted, "rebuild warnings: %v", stats.Warnings)
+	stored, err := database.GetSessionFull(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Nil(t, stored.DeletedAt)
+	messages, err := database.GetMessages(
+		context.Background(), sessionID, 0, 10, true,
+	)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "preserve disabled remote session", messages[0].Content)
 }
 
 func TestPrepareHTTPSyncUnchangedFullMakesNoArchiveRequest(t *testing.T) {

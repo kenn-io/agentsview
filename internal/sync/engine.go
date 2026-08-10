@@ -259,8 +259,12 @@ type Emitter interface {
 // EngineConfig holds the configuration needed by the sync
 // engine, replacing per-agent positional parameters.
 type EngineConfig struct {
-	AgentDirs               map[parser.AgentType][]string
-	SourceMachines          map[parser.AgentType]map[string]string
+	AgentDirs      map[parser.AgentType][]string
+	SourceMachines map[parser.AgentType]map[string]string
+	// PreserveAgents identifies providers intentionally omitted from discovery.
+	// Rebuild safety excludes their archived sessions from empty-discovery
+	// accounting while orphan copy continues preserving the session data.
+	PreserveAgents          []parser.AgentType
 	Machine                 string
 	BlockedResultCategories []string
 	// IncludeCwdPrefixes, when non-empty, restricts ingestion to
@@ -323,6 +327,7 @@ type Engine struct {
 	archiveStore            db.Store
 	agentDirs               map[parser.AgentType][]string
 	sourceMachines          map[parser.AgentType]map[string]string
+	preserveAgents          []parser.AgentType
 	machine                 string
 	blockedResultCategories map[string]bool
 	cwdFilter               cwdPrefixFilter
@@ -642,6 +647,7 @@ func NewEngine(
 		lstat:                   os.Lstat,
 		agentDirs:               dirs,
 		sourceMachines:          sourceMachines,
+		preserveAgents:          append([]parser.AgentType(nil), cfg.PreserveAgents...),
 		machine:                 cfg.Machine,
 		blockedResultCategories: blockedCategorySet(cfg.BlockedResultCategories),
 		cwdFilter:               newCwdPrefixFilter(cfg.IncludeCwdPrefixes),
@@ -1265,89 +1271,107 @@ func (e *Engine) SyncPaths(paths []string) {
 // path waits for the in-flight onChange callback, so a watcher-driven sync
 // that ignored SIGTERM would hold shutdown until a service manager's kill
 // timeout instead of aborting between files like every other sync path.
-func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) error {
-	if e.refuseWriteInForceParse("SyncPaths") {
-		return nil
+type preparedChangedPathSync struct {
+	files              []parser.DiscoveredFile
+	missingPaths       []string
+	preContainerStates map[string]parser.SQLiteContainerState
+	classificationErr  error
+}
+
+func (p preparedChangedPathSync) empty() bool {
+	return len(p.files) == 0 && len(p.missingPaths) == 0
+}
+
+func (e *Engine) prepareChangedPathSync(
+	ctx context.Context, paths []string,
+) preparedChangedPathSync {
+	prepared := preparedChangedPathSync{
+		missingPaths: make([]string, 0, len(paths)),
 	}
-	missingPaths := make([]string, 0, len(paths))
 	for _, path := range paths {
 		if _, err := e.lstatSource(path); os.IsNotExist(err) {
-			missingPaths = append(missingPaths, path)
+			prepared.missingPaths = append(prepared.missingPaths, path)
 		}
 	}
 	// Capture container states before classifyPaths lists any session rows,
 	// matching the capture-before-discovery ordering of full syncs.
-	preContainerStates := e.captureSQLiteContainerStates(paths)
-	files, classificationErr := e.classifyPaths(ctx, paths)
-	missingPaths = omitMissingPersistentContainerPaths(missingPaths, files)
-	if len(files) == 0 && len(missingPaths) == 0 {
-		return classificationErr
+	prepared.preContainerStates = e.captureSQLiteContainerStates(paths)
+	prepared.files, prepared.classificationErr = e.classifyPaths(ctx, paths)
+	prepared.missingPaths = omitMissingPersistentContainerPaths(
+		prepared.missingPaths, prepared.files,
+	)
+	return prepared
+}
+
+func (e *Engine) applyChangedPathSyncLocked(
+	ctx context.Context, prepared preparedChangedPathSync,
+) (SyncStats, int, error) {
+	if prepared.empty() {
+		return SyncStats{}, 0, prepared.classificationErr
 	}
-
-	e.syncMu.Lock()
-	// Defers run LIFO: the emit closure (declared first) runs AFTER
-	// syncMu.Unlock, so an Emitter implementation cannot widen the
-	// critical section or deadlock by re-entering sync code. The
-	// stats variable is captured by the closure and populated below.
-	var stats SyncStats
-	var tombstoned int
-	defer func() {
-		if stats.Synced > 0 || tombstoned > 0 ||
-			stats.sourceMissingTombstoned > 0 {
-			e.emit("sessions")
-		}
-	}()
-	defer e.syncMu.Unlock()
-	defer e.clearCurrentProgress()
 	e.resetS3CodexIndexCache()
-
 	e.anomalies.reset()
 	// Begin a container pass so an already-trusted, unchanged container
-	// still gates its fan-out (a spurious watcher event on the DB file
-	// costs nothing), but never promote from here: a changed-path pass is
-	// not guaranteed to cover a container's complete session set (a hybrid
-	// root can fan a single message path out to one SQLite-backed
-	// session), and promotion from a subset would be unsound. The next
-	// full sync re-verifies and re-trusts (see opencode_container_gate.go).
-	e.beginSQLiteContainerPass(files, preContainerStates)
-	results := e.startWorkers(ctx, files)
-	stats = e.collectAndBatch(
-		ctx, results, len(files), len(files), nil,
+	// still gates its fan-out, but never promote from a changed-path subset.
+	e.beginSQLiteContainerPass(prepared.files, prepared.preContainerStates)
+	results := e.startWorkers(ctx, prepared.files)
+	stats := e.collectAndBatch(
+		ctx, results, len(prepared.files), len(prepared.files), nil,
 		syncWriteDefault,
 	)
 	e.finishSQLiteContainerPass(true, false)
 	e.anomalies.applyTo(&stats)
 	e.persistSkipCache()
-	complete := classificationErr == nil && ctx.Err() == nil &&
-		!stats.Aborted && stats.Failed == 0 &&
-		stats.providerFailures == 0
-	if complete && len(missingPaths) > 0 {
+	complete := prepared.classificationErr == nil && ctx.Err() == nil &&
+		!stats.Aborted && stats.Failed == 0 && stats.providerFailures == 0
+	tombstoned := 0
+	if complete && len(prepared.missingPaths) > 0 {
 		var err error
-		tombstoned, err = e.tombstoneMissingWatchSourcesLocked(ctx, missingPaths, nil)
+		tombstoned, err = e.tombstoneMissingWatchSourcesLocked(
+			ctx, prepared.missingPaths, nil,
+		)
 		if err != nil {
-			return fmt.Errorf("watcher source tombstone: %w", err)
+			return stats, tombstoned, fmt.Errorf("watcher source tombstone: %w", err)
 		}
 	}
 	e.mu.Lock()
 	e.lastSync = time.Now()
 	e.lastSyncStats = stats
 	e.mu.Unlock()
-
 	if stats.Synced > 0 {
-		log.Printf(
-			"sync: %d file(s) updated", stats.Synced,
-		)
+		log.Printf("sync: %d file(s) updated", stats.Synced)
 	}
-	if err := errors.Join(classificationErr, ctx.Err()); err != nil {
-		return err
+	if err := errors.Join(prepared.classificationErr, ctx.Err()); err != nil {
+		return stats, tombstoned, err
 	}
 	if !complete {
-		return fmt.Errorf(
+		return stats, tombstoned, fmt.Errorf(
 			"changed-path sync incomplete: %d source or archive failures",
 			stats.Failed,
 		)
 	}
-	return nil
+	return stats, tombstoned, nil
+}
+
+// SyncPathsContext is SyncPaths with caller-controlled cancellation. The
+// file watcher threads the serve shutdown context through here.
+func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) error {
+	if e.refuseWriteInForceParse("SyncPaths") {
+		return nil
+	}
+	prepared := e.prepareChangedPathSync(ctx, paths)
+	if prepared.empty() {
+		return prepared.classificationErr
+	}
+	e.syncMu.Lock()
+	stats, tombstoned, err := e.applyChangedPathSyncLocked(ctx, prepared)
+	e.clearCurrentProgress()
+	e.syncMu.Unlock()
+	if stats.Synced > 0 || tombstoned > 0 ||
+		stats.sourceMissingTombstoned > 0 {
+		e.emit("sessions")
+	}
+	return err
 }
 
 // omitMissingPersistentContainerPaths drops missing changed paths that are
@@ -2429,6 +2453,9 @@ func (e *Engine) resyncBuildLocked(
 			string(parser.AgentMiMoCode),
 			string(parser.AgentIcodemate),
 		}
+		for _, agent := range e.preserveAgents {
+			excludedAgents = append(excludedAgents, string(agent))
+		}
 		localOldFileSessions, err = origDB.FileBackedSessionCountForRebuildOwner(
 			context.Background(), e.machine, contributorPrefixes, excludedAgents,
 		)
@@ -2437,10 +2464,11 @@ func (e *Engine) resyncBuildLocked(
 			localOldFileSessions = 1
 		}
 		for i, contributor := range opts.Contributors {
-			count, countErr := e.protectedFileSessionCount(
+			count, countErr := protectedFileSessionCount(
 				origDB, contributor.Config.Machine,
 				contributor.Config.IDPrefix,
 				contributor.Config.Machine != "",
+				contributor.Config.PreserveAgents,
 			)
 			if countErr != nil {
 				log.Printf(
@@ -3232,12 +3260,9 @@ func removeWAL(path string) {
 	os.Remove(path + "-shm")
 }
 
-func (e *Engine) countRootOpenCodeFormatSessions(
+func countRootSessionsForAgent(
 	database *db.DB, agent parser.AgentType, machine, idPrefix string, scoped bool,
 ) int {
-	if !isOpenCodeFormatStorageAgent(agent) {
-		return 0
-	}
 	machinePredicate := ""
 	args := []any{string(agent)}
 	if scoped {
@@ -3265,6 +3290,15 @@ func (e *Engine) countRootOpenCodeFormatSessions(
 func (e *Engine) protectedFileSessionCount(
 	database *db.DB, machine, idPrefix string, scoped bool,
 ) (int, error) {
+	return protectedFileSessionCount(
+		database, machine, idPrefix, scoped, e.preserveAgents,
+	)
+}
+
+func protectedFileSessionCount(
+	database *db.DB, machine, idPrefix string, scoped bool,
+	preserveAgents []parser.AgentType,
+) (int, error) {
 	var count int
 	var err error
 	if scoped {
@@ -3289,7 +3323,22 @@ func (e *Engine) protectedFileSessionCount(
 		parser.AgentMiMoCode,
 		parser.AgentIcodemate,
 	} {
-		count -= e.countRootOpenCodeFormatSessions(
+		count -= countRootSessionsForAgent(
+			database, agent, machine, idPrefix, scoped,
+		)
+	}
+	seenPreserved := make(map[parser.AgentType]struct{}, len(preserveAgents))
+	for _, agent := range preserveAgents {
+		if _, seen := seenPreserved[agent]; seen {
+			continue
+		}
+		seenPreserved[agent] = struct{}{}
+		def, ok := parser.AgentByType(agent)
+		if !ok || (!def.FileBased && agent != parser.AgentDevin) ||
+			isOpenCodeFormatStorageAgent(agent) {
+			continue
+		}
+		count -= countRootSessionsForAgent(
 			database, agent, machine, idPrefix, scoped,
 		)
 	}

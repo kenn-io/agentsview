@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func TestMirrorDirDisambiguatesSanitizedCollisions(t *testing.T) {
@@ -82,6 +83,22 @@ func TestMirrorDiffEmptyMirrorFetchesEverything(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, delta.Fetch, 1)
 	assert.Empty(t, delta.Deletions)
+}
+
+func TestMirrorDiffRetainingTargetsPreservesDisabledProviders(t *testing.T) {
+	root := t.TempDir()
+	base := time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC)
+	enabledRoot := "/sessions/claude"
+	disabledRoot := "/sessions/gemini"
+	enabledStale := writeMirrorFile(t, root, enabledRoot+"/stale.jsonl", "a", base)
+	disabledRetained := writeMirrorFile(t, root, disabledRoot+"/retained.json", "b", base)
+
+	delta, err := MirrorDiffRetainingTargets(root, Manifest{}, TargetSet{
+		Dirs: map[parser.AgentType][]string{parser.AgentGemini: {disabledRoot}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{enabledStale}, delta.Deletions)
+	assert.NotContains(t, delta.Deletions, disabledRetained)
 }
 
 func TestApplyMirrorDeletionsConfinedToRoot(t *testing.T) {

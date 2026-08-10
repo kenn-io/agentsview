@@ -276,6 +276,16 @@ func duckDBPushSyncOptions(req daemonPushRequest) duckdbsync.SyncOptions {
 	}
 }
 
+func validatePushWatchScope(req daemonPushRequest) error {
+	if req.WatchBatch == nil {
+		if req.WatchRecovery != nil {
+			return errors.New("watch recovery requires a watch batch")
+		}
+		return nil
+	}
+	return syncpkg.ValidateWatchBatch(*req.WatchBatch, req.WatchRecovery)
+}
+
 // syncThenRunForPush brings the local archive current and then runs the push
 // work serialized against sync passes. Full and stale-archive pushes are
 // archive-scale: with the worker-backed resync runner wired they route the
@@ -283,18 +293,27 @@ func duckDBPushSyncOptions(req daemonPushRequest) duckdbsync.SyncOptions {
 // resync) instead of running an in-process resync in the long-lived daemon,
 // and the push work then runs under the engine's exclusive sync lock — after
 // the deferred-signal flush — so it still observes the post-rebuild archive
-// and stays serialized against watcher and periodic syncs. Per-batch pushes
-// (not full, archive current) keep the in-process SyncThenRun path: their
-// catch-up sync's parse work is bounded by the changed batch via the skip
-// cache. Without a runner (tests, remote-mode-less setups) every case keeps
-// the in-process SyncThenRun path.
+// and stays serialized against watcher and periodic syncs. A validated batch
+// on a current archive uses SyncWatchBatchThenRun, applying only its bounded
+// changed scope before the push under that same lock. Requests without a batch
+// retain SyncThenRun. Without a runner (tests, remote-mode-less setups), full
+// and stale cases keep the in-process SyncThenRun path.
 func (s *Server) syncThenRunForPush(
 	ctx context.Context,
 	engine *syncpkg.Engine,
 	local *db.DB,
 	full bool,
+	watchBatch *syncpkg.WatchBatch,
+	watchRecovery *syncpkg.WatchRecoveryScope,
 	work func(forceFull bool) error,
 ) error {
+	if watchBatch != nil && !full && !local.NeedsResync() {
+		_, err := engine.SyncWatchBatchThenRun(
+			ctx, *watchBatch, watchRecovery,
+			func() error { return work(false) },
+		)
+		return err
+	}
 	if s.localResyncRunner == nil || (!full && !local.NeedsResync()) {
 		_, err := engine.SyncThenRun(ctx, full, nil, work)
 		return err
@@ -335,6 +354,9 @@ func (s *Server) humaPGPush(
 	if pgCfg.URL == "" {
 		return nil, apiError(http.StatusBadRequest, "pg push: url not configured")
 	}
+	if err := validatePushWatchScope(in.Body); err != nil {
+		return nil, apiError(http.StatusBadRequest, err.Error())
+	}
 
 	engine := s.syncEngineForLocal(local)
 	vectorSource := s.pgPushVectorSource(pgCfg, in.Body.NoVectors)
@@ -347,7 +369,8 @@ func (s *Server) humaPGPush(
 				newPGPushProgressLogger(), streamProgress,
 			)
 			var result postgres.PushResult
-			err := s.syncThenRunForPush(ctx, engine, local, body.Full,
+			err := s.syncThenRunForPush(
+				ctx, engine, local, body.Full, body.WatchBatch, body.WatchRecovery,
 				func(forceFull bool) error {
 					if refreshErr := s.ensurePricing(ctx, local); refreshErr != nil {
 						if ctxErr := ctx.Err(); ctxErr != nil {
@@ -384,7 +407,8 @@ func (s *Server) humaPGPush(
 							LastReconciledVectorGeneration,
 					}, onProgress)
 					return err
-				})
+				},
+			)
 			return result, err
 		})
 	}}, nil
@@ -428,7 +452,7 @@ func (s *Server) humaDuckDBPush(
 				newDuckDBPushProgressLogger(), streamProgress,
 			)
 			var result duckdbsync.PushResult
-			err := s.syncThenRunForPush(ctx, engine, local, body.Full,
+			err := s.syncThenRunForPush(ctx, engine, local, body.Full, nil, nil,
 				func(forceFull bool) error {
 					var pushErr error
 					result, pushErr = duckdbsync.Push(
