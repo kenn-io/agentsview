@@ -275,11 +275,10 @@ func canonicalMessageRow(message Message) (bunmodel.Message, error) {
 	message.PromptSource = SanitizeUTF8(message.PromptSource)
 	message.SourceUUID = SanitizeUTF8(message.SourceUUID)
 	message.SourceParentUUID = SanitizeUTF8(message.SourceParentUUID)
-	row, err := messageToBunRow(message)
+	row, err := messageToBunRowWithoutID(message)
 	if err != nil {
 		return bunmodel.Message{}, err
 	}
-	row.ID = nil
 	truncateCanonicalTimestamp(row.Timestamp)
 	return row, nil
 }
@@ -379,7 +378,12 @@ func writeArchiveMessageRows(
 	ctx context.Context, tx bun.IDB, sessionID string, messages []Message,
 	conflict string,
 ) error {
-	rows := make([]bunmodel.Message, len(messages))
+	if len(messages) == 0 {
+		return nil
+	}
+	lease := archiveMessageRowPool.acquire(len(messages))
+	defer archiveMessageRowPool.release(lease)
+	rows := lease.rows
 	for index, message := range messages {
 		if message.SessionID != sessionID {
 			return fmt.Errorf(
@@ -392,9 +396,6 @@ func writeArchiveMessageRows(
 			return err
 		}
 		rows[index] = row
-	}
-	if len(rows) == 0 {
-		return nil
 	}
 	return writeCanonicalBatches(rows, func(batch []bunmodel.Message) error {
 		query := tx.NewInsert().Model(&batch).
