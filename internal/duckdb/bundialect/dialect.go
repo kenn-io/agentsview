@@ -112,6 +112,13 @@ func (*Dialect) AppendTime(b []byte, value time.Time) []byte {
 	return b
 }
 
+// AppendCanonicalTimestamp keeps canonical Bun values on DuckDB's typed
+// microsecond literal path. Quoted RFC3339 strings can round one microsecond
+// low when DuckDB casts them on Windows.
+func (d *Dialect) AppendCanonicalTimestamp(b []byte, value time.Time) []byte {
+	return d.AppendTime(b, value)
+}
+
 // AppendSequence deliberately leaves the column definition unchanged.
 // Mirror primary keys are assigned by the source archive.
 func (*Dialect) AppendSequence(b []byte, _ *schema.Table, _ *schema.Field) []byte {

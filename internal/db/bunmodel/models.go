@@ -84,8 +84,13 @@ func (t Timestamp) Value() (driver.Value, error) {
 // Formatting through driver.Valuer would allocate one intermediate string for
 // every timestamp in a canonical batch.
 func (t Timestamp) AppendQuery(
-	_ schema.QueryGen, query []byte,
+	gen schema.QueryGen, query []byte,
 ) ([]byte, error) {
+	if dialect, ok := gen.Dialect().(interface {
+		AppendCanonicalTimestamp([]byte, time.Time) []byte
+	}); ok {
+		return dialect.AppendCanonicalTimestamp(query, t.Time), nil
+	}
 	query = append(query, '\'')
 	query = t.UTC().AppendFormat(query, time.RFC3339Nano)
 	query = append(query, '\'')
