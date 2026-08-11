@@ -79,13 +79,13 @@ func (db *DB) WriteSessionBatch(
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
 	for i, write := range writes {
-		write = sanitizeSessionBatchWrite(write)
 		savepoint := fmt.Sprintf("session_batch_%d", i)
 		if _, err := rawTx.Exec("SAVEPOINT " + savepoint); err != nil {
 			return result, fmt.Errorf(
 				"creating savepoint %s: %w", savepoint, err,
 			)
 		}
+		write, sanitization := sanitizeSessionBatchWrite(write)
 
 		var sessionRecallRevocations recallEvidenceRevocationEvents
 		messagesWritten, err := writeOneSessionBatchTx(
@@ -93,6 +93,7 @@ func (db *DB) WriteSessionBatch(
 			write,
 			&sessionRecallRevocations,
 		)
+		sanitization.release()
 		switch {
 		case err == nil:
 			if _, err := rawTx.Exec("RELEASE SAVEPOINT " + savepoint); err != nil {
@@ -170,12 +171,13 @@ func (db *DB) writeArchiveSessionBatchAtomic(
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
 	for i, write := range writes {
-		write = sanitizeSessionBatchWrite(write)
+		write, sanitization := sanitizeSessionBatchWrite(write)
 		messagesWritten, err := writeOneSessionBatchTx(
 			ctx, rawTx, tx,
 			write,
 			&pendingRecallRevocations,
 		)
+		sanitization.release()
 		if err != nil {
 			result.WrittenSessions = 0
 			result.WrittenMessages = 0
@@ -215,9 +217,24 @@ func (db *DB) writeArchiveSessionBatchAtomic(
 	return result, nil
 }
 
-func sanitizeSessionBatchWrite(write SessionBatchWrite) SessionBatchWrite {
-	write.Messages = append([]Message(nil), write.Messages...)
-	write.UsageEvents = append([]UsageEvent(nil), write.UsageEvents...)
+func sanitizeSessionBatchWrite(
+	write SessionBatchWrite,
+) (SessionBatchWrite, sessionBatchSanitization) {
+	var sanitization sessionBatchSanitization
+	if len(write.Messages) > 0 {
+		sanitization.messages = sanitizedMessagePool.acquire(len(write.Messages))
+		copy(sanitization.messages.rows, write.Messages)
+		write.Messages = sanitization.messages.rows
+	} else {
+		write.Messages = nil
+	}
+	if len(write.UsageEvents) > 0 {
+		sanitization.usage = sanitizedUsagePool.acquire(len(write.UsageEvents))
+		copy(sanitization.usage.rows, write.UsageEvents)
+		write.UsageEvents = sanitization.usage.rows
+	} else {
+		write.UsageEvents = nil
+	}
 
 	msgTotal, msgHasOut, msgPeak, msgHasCtx :=
 		batchMessageTokenTotals(write.Messages)
@@ -252,7 +269,7 @@ func sanitizeSessionBatchWrite(write SessionBatchWrite) SessionBatchWrite {
 		write.Session.PeakContextTokens = p
 		write.Session.HasPeakContextTokens = h
 	}
-	return write
+	return write, sanitization
 }
 
 func batchMessageTokenTotals(

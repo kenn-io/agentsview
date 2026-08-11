@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/schema"
 )
 
 // ErrUnsupportedTimestamp identifies a non-empty persistent timestamp that
@@ -77,6 +78,18 @@ func (t *Timestamp) Scan(src any) error {
 // Value implements driver.Valuer.
 func (t Timestamp) Value() (driver.Value, error) {
 	return t.UTC().Format(time.RFC3339Nano), nil
+}
+
+// AppendQuery keeps canonical timestamp formatting inside Bun's query buffer.
+// Formatting through driver.Valuer would allocate one intermediate string for
+// every timestamp in a canonical batch.
+func (t Timestamp) AppendQuery(
+	_ schema.QueryGen, query []byte,
+) ([]byte, error) {
+	query = append(query, '\'')
+	query = t.UTC().AppendFormat(query, time.RFC3339Nano)
+	query = append(query, '\'')
+	return query, nil
 }
 
 // ModelPricing is one model-pattern pricing row.
