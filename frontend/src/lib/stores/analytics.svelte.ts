@@ -21,6 +21,8 @@ import { sessions } from "./sessions.svelte.js";
 import { perf, type PerfEntryStatus } from "./perf.svelte.js";
 import { rollingRange, today } from "../utils/dates.js";
 
+export const ANALYTICS_DEFAULT_WINDOW_DAYS = 365;
+
 type AnalyticsParams = Parameters<
   typeof AnalyticsService.getApiV1AnalyticsSummary
 >[0];
@@ -52,10 +54,12 @@ type Panel =
 type FetchResult = "ok" | "error" | "aborted";
 
 class AnalyticsStore {
-  from: string = $state(rollingRange(365).from);
+  from: string = $state(
+    rollingRange(ANALYTICS_DEFAULT_WINDOW_DAYS).from,
+  );
   to: string = $state(today());
   isPinned: boolean = $state(false);
-  windowDays: number = $state(365);
+  windowDays: number = $state(ANALYTICS_DEFAULT_WINDOW_DAYS);
   granularity: Granularity = $state("day");
   skillsGranularity: Granularity = $state("week");
   metric: HeatmapMetric = $state("messages");

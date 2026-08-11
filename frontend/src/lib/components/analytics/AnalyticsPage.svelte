@@ -24,7 +24,10 @@
   import SessionFilterControl from "../filters/SessionFilterControl.svelte";
   import SidebarToggleButton from "../layout/SidebarToggleButton.svelte";
   import FilterDropdown from "../usage/FilterDropdown.svelte";
-  import { analytics } from "../../stores/analytics.svelte.js";
+  import {
+    analytics,
+    ANALYTICS_DEFAULT_WINDOW_DAYS,
+  } from "../../stores/analytics.svelte.js";
   import { analyticsPageDates } from "../../stores/analyticsPageDates.js";
   import {
     sessions,
@@ -420,6 +423,9 @@
       if (route !== "sessions") return;
       if (router.isRootPath) {
         if (lastAnalyticsDateUrlSignature !== "root-landing") {
+          analytics.applyRollingWindow(
+            ANALYTICS_DEFAULT_WINDOW_DAYS,
+          );
           analytics.fetchAll();
         }
         lastAnalyticsDateUrlSignature = "root-landing";

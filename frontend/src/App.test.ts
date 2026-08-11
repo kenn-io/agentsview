@@ -1107,8 +1107,26 @@ describe("App root Sessions landing", () => {
   });
 
   it("pushes date-filter promotion from root and restores the unfiltered root on Back", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-25T12:00:00"));
     stubAppDependencies();
+    const analyticsFetchRanges: Array<{
+      from: string;
+      to: string;
+      isPinned: boolean;
+      windowDays: number;
+    }> = [];
+    vi.mocked(analytics.fetchAll).mockImplementation(() => {
+      analyticsFetchRanges.push({
+        from: analytics.from,
+        to: analytics.to,
+        isPinned: analytics.isPinned,
+        windowDays: analytics.windowDays,
+      });
+      return Promise.resolve();
+    });
     vi.spyOn(sessions, "load").mockResolvedValue();
+    yokedDates.setEnabled(true);
     setRootUrl();
 
     component = mount(App, { target: document.body });
@@ -1120,6 +1138,8 @@ describe("App root Sessions landing", () => {
     expect(window.location.pathname).toBe("/sessions");
     expect(router.params.window_days).toBe("30");
     expect(window.history.length).toBeGreaterThan(historyLength);
+    const preservedYoke = { ...yokedDates.range! };
+    analyticsFetchRanges.length = 0;
 
     window.history.replaceState(null, "", "/");
     window.dispatchEvent(new PopStateEvent("popstate"));
@@ -1128,6 +1148,19 @@ describe("App root Sessions landing", () => {
     expect(router.isRootPath).toBe(true);
     expect(sessions.filters.dateFrom).toBe("");
     expect(sessions.filters.dateTo).toBe("");
+    expect(
+      document.querySelector(".kit-date-range-picker__trigger-label")
+        ?.textContent,
+    ).toBe("Last year");
+    expect(analyticsFetchRanges).toEqual([
+      {
+        from: "2025-04-26",
+        to: "2026-04-25",
+        isPinned: false,
+        windowDays: 365,
+      },
+    ]);
+    expect(yokedDates.range).toEqual(preservedYoke);
   });
 
   it("restores shared dates after Back returns a root detail to the landing", async () => {
