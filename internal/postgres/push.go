@@ -2171,10 +2171,14 @@ func (s *Sync) pushSession(
 		if err := db.UpsertSessionRow(ctx, store, row); err != nil {
 			return err
 		}
+		var sourceDeletedAt any
+		if sourceRow.DeletedAt != nil {
+			sourceDeletedAt = *sourceRow.DeletedAt
+		}
 		if _, err := store.NewUpdate().Table("sessions").
 			Set("owner_marker = ?", markerID).
 			Set("source_display_name = ?", sourceRow.DisplayName).
-			Set("source_deleted_at = ?", sourceRow.DeletedAt).
+			Set("source_deleted_at = ?", sourceDeletedAt).
 			Set("updated_at = NOW()").Where("id = ?", sess.ID).Exec(ctx); err != nil {
 			return fmt.Errorf("writing pg session policy %s: %w", sess.ID, err)
 		}

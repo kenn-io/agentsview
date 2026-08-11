@@ -908,6 +908,7 @@ func (s *BunStore) bunContentCandidateQuery(
 	}
 	searchDialect := s.backend.Capabilities().SearchDialect
 	pattern := searchDialect.contentSearchPattern(literal)
+	timestampNull := searchDialect.contentTimestampNullExpr()
 	var branches []string
 	var args []any
 	addArgs := func() {
@@ -931,7 +932,7 @@ func (s *BunStore) bunContentCandidateQuery(
 		branches = append(branches, fmt.Sprintf(`
 			SELECT message.session_id, message.ordinal, 'message' AS location,
 				'' AS tool_name, message.content AS body,
-				CAST(message.timestamp AS VARCHAR) AS source_timestamp,
+				message.timestamp AS source_timestamp,
 				-1 AS call_index, -1 AS event_index,
 				COALESCE(session.ended_at, session.started_at, session.created_at) AS sort_ts,
 				0 AS source_order, COALESCE(message.id, 0) AS row_order
@@ -946,13 +947,13 @@ func (s *BunStore) bunContentCandidateQuery(
 			SELECT call.session_id, call.message_ordinal AS ordinal,
 				'tool_input' AS location, call.tool_name,
 				COALESCE(call.input_json, '') AS body,
-				CAST(NULL AS VARCHAR) AS source_timestamp,
+				%s AS source_timestamp,
 				call.call_index, -1 AS event_index,
 				COALESCE(session.ended_at, session.started_at, session.created_at) AS sort_ts,
 				1 AS source_order, COALESCE(call.id, 0) AS row_order
 			FROM tool_calls AS call
 			JOIN sessions AS session ON session.id = call.session_id
-			WHERE %s AND %s`, predicate("call.input_json"),
+			WHERE %s AND %s`, timestampNull, predicate("call.input_json"),
 			scope("call.session_id")))
 		addArgs()
 	}
@@ -961,7 +962,7 @@ func (s *BunStore) bunContentCandidateQuery(
 			SELECT call.session_id, call.message_ordinal AS ordinal,
 				'tool_result' AS location, call.tool_name,
 				COALESCE(call.result_content, '') AS body,
-				CAST(NULL AS VARCHAR) AS source_timestamp,
+				%s AS source_timestamp,
 				call.call_index, -1 AS event_index,
 				COALESCE(session.ended_at, session.started_at, session.created_at) AS sort_ts,
 				2 AS source_order, COALESCE(call.id, 0) AS row_order
@@ -975,14 +976,15 @@ func (s *BunStore) bunContentCandidateQuery(
 						AND event.call_index = call.call_index
 						AND call.tool_use_id <> ''
 				)
-				AND %s`, predicate("call.result_content"), scope("call.session_id")))
+				AND %s`, timestampNull, predicate("call.result_content"),
+			scope("call.session_id")))
 		addArgs()
 		branches = append(branches, fmt.Sprintf(`
 			SELECT event.session_id,
 				event.tool_call_message_ordinal AS ordinal,
 				'tool_result' AS location, COALESCE(call.tool_name, '') AS tool_name,
 				event.content AS body,
-				CAST(event.timestamp AS VARCHAR) AS source_timestamp,
+				event.timestamp AS source_timestamp,
 				event.call_index, event.event_index,
 				COALESCE(session.ended_at, session.started_at, session.created_at) AS sort_ts,
 				3 AS source_order, COALESCE(event.id, 0) AS row_order

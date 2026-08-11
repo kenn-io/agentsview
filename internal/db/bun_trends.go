@@ -53,8 +53,7 @@ func streamBunTrendMessages(
 		sessionIDs, bunAnalyticsContentSessionBatchSize,
 		func(chunk []string) error {
 			rows, err := store.NewSelect().Table("messages").
-				Column("session_id", "ordinal", "role", "model", "is_system", "content").
-				ColumnExpr("CAST(timestamp AS VARCHAR) AS timestamp").
+				Column("session_id", "ordinal", "role", "model", "is_system", "content", "timestamp").
 				Where("session_id IN (?)", bun.List(chunk)).
 				OrderExpr("session_id ASC, ordinal ASC").Rows(ctx)
 			if err != nil {
