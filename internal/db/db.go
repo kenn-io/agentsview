@@ -399,7 +399,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // fork to its original session as a continuation. Existing Claude rows need
 // re-parsing so already-ingested fork sessions drop their duplicated
 // messages and usage and stop appearing as unrelated top-level sessions.)
-const dataVersion = 83
+// (84: Amp usage accounting. Exported Amp threads carry a per-inference
+// usage object with model and token counts that the parser previously
+// ignored. Existing Amp rows need re-parsing so their model, token
+// usage, and computed cost appear in usage reports.)
+const dataVersion = 84
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

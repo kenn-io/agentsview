@@ -1009,8 +1009,8 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 }
 
 func TestCurrentDataVersionUsageReparses(t *testing.T) {
-	assert.Equal(t, 83, CurrentDataVersion(),
-		"Claude background-fork lineage requires a full resync so stored fork sessions drop replayed messages")
+	assert.Equal(t, 84, CurrentDataVersion(),
+		"Claude background-fork lineage and Amp usage accounting require sequential reparses")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
