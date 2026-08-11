@@ -10,6 +10,7 @@ import (
 	"net/http"
 	httppprof "net/http/pprof"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,6 +20,8 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
+	"go.kenn.io/agentsview/internal/cloudsync/claudeai"
+	"go.kenn.io/agentsview/internal/cloudsync/transport"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/insight"
@@ -62,18 +65,20 @@ const (
 
 // Server is the HTTP server that serves the SPA and REST API.
 type Server struct {
-	mu             gosync.RWMutex
-	cfg            config.Config
-	db             db.Store
-	engine         *sync.Engine
-	onDemandEngine *sync.Engine
-	sessions       service.SessionService
-	broadcaster    *Broadcaster
-	mux            *http.ServeMux
-	api            huma.API
-	httpSrv        *http.Server
-	version        VersionInfo
-	dataDir        string
+	mu              gosync.RWMutex
+	cfg             config.Config
+	db              db.Store
+	engine          *sync.Engine
+	onDemandEngine  *sync.Engine
+	sessions        service.SessionService
+	broadcaster     *Broadcaster
+	mux             *http.ServeMux
+	api             huma.API
+	httpSrv         *http.Server
+	version         VersionInfo
+	dataDir         string
+	claudeTransport *transport.Broker
+	claudeSync      *claudeai.Service
 
 	httpRemoteCleanupRegistry *remotesync.CleanupRegistry
 
@@ -184,6 +189,7 @@ func New(
 	s := &Server{
 		cfg:                       cfg,
 		db:                        database,
+		claudeTransport:           transport.NewBroker(),
 		engine:                    engine,
 		sessions:                  sessions,
 		mux:                       http.NewServeMux(),
@@ -205,6 +211,9 @@ func New(
 		spaFS:      dist,
 		spaHandler: http.FileServerFS(dist),
 	}
+	s.claudeSync = claudeai.NewService(s.claudeTransport, database,
+		filepath.Join(cfg.DataDir, "cloud-cache", "claude-ai"), cfg.LocalMachineName,
+		s.serializeArchiveWrite)
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -1118,6 +1127,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if engine != nil {
 		engine.Close()
 	}
+	s.claudeSync.Close()
 	return err
 }
 

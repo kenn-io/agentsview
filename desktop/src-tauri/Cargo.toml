@@ -13,16 +13,16 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
-tauri-plugin-shell = "2"
-tauri-plugin-opener = "2"
-tauri-plugin-updater = "2"
-tauri-plugin-dialog = "2"
+tauri = { version = "2.11.1", features = [] }
+tauri-plugin-shell = "2.3.1"
+tauri-plugin-opener = "2.3.1"
+tauri-plugin-updater = "2.3.1"
+tauri-plugin-dialog = "2.3.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-keyring = { version = "3", features = ["apple-native"] }
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 tempfile = "3"
 tokio = { version = "1", features = ["time", "sync"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-tauri = { version = "2", features = ["image-png", "tray-icon"] }
+tauri = { version = "2.11.1", features = ["image-png", "tray-icon"] }

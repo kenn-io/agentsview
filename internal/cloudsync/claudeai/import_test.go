@@ -1,51 +1,13 @@
 package claudeai
 
 import (
-	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"path/filepath"
-	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestPrepareImportCachesChangedConversationsAndBuildsExport(t *testing.T) {
-	t.Parallel()
-	var detailCalls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/organizations/org-123/chat_conversations_v2":
-			_, _ = w.Write([]byte(`{"conversations":[{"uuid":"conversation-1","name":"Hello","created_at":"2025-01-01T00:00:00Z","updated_at":"2025-01-02T00:00:00Z"}],"has_more":false}`))
-		case "/api/organizations/org-123/chat_conversations/conversation-1":
-			detailCalls.Add(1)
-			_, _ = w.Write([]byte(`{"uuid":"conversation-1","name":"Hello","created_at":"2025-01-01T00:00:00Z","updated_at":"2025-01-02T00:00:00Z","current_leaf_message_uuid":"m2","chat_messages":[{"uuid":"m1","sender":"human","text":"hi","created_at":"2025-01-01T00:00:00Z"},{"uuid":"m2","parent_message_uuid":"m1","sender":"assistant","content":[{"type":"text","text":"hello"}],"created_at":"2025-01-01T00:00:01Z"}]}`))
-		default:
-			t.Fatalf("unexpected path %s", r.URL.Path)
-		}
-	}))
-	t.Cleanup(server.Close)
-
-	client, err := NewClient(server.Client(), server.URL, Credentials{Cookie: "sessionKey=secret; lastActiveOrg=org-123"})
-	require.NoError(t, err)
-	root := t.TempDir()
-
-	first, err := PrepareImport(context.Background(), client, root, 0)
-	require.NoError(t, err)
-	assert.Equal(t, 1, first.Downloaded)
-	assert.Equal(t, 0, first.Unchanged)
-	assert.JSONEq(t, `[{"uuid":"conversation-1","name":"Hello","created_at":"2025-01-01T00:00:00Z","updated_at":"2025-01-02T00:00:00Z","chat_messages":[{"uuid":"m1","sender":"human","text":"hi","created_at":"2025-01-01T00:00:00Z"},{"uuid":"m2","parent_message_uuid":"m1","sender":"assistant","content":[{"type":"text","text":"hello"}],"created_at":"2025-01-01T00:00:01Z"}]}]`, string(first.ExportJSON))
-	require.NoError(t, first.Commit())
-
-	second, err := PrepareImport(context.Background(), client, root, 0)
-	require.NoError(t, err)
-	assert.Equal(t, 0, second.Downloaded)
-	assert.Equal(t, 1, second.Unchanged)
-	assert.Equal(t, int32(1), detailCalls.Load())
-}
 
 func TestPlanBrowserImportSkipsCachedSummaryAndPersistsState(t *testing.T) {
 	t.Parallel()
@@ -72,6 +34,18 @@ func TestPlanBrowserImportSkipsCachedSummaryAndPersistsState(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "failed", state.Status)
 	assert.Equal(t, 1, state.Failed)
+}
+
+func TestPrepareBrowserImportUsesOnlySuppliedBatchAndForceOverwritesCache(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	summary := json.RawMessage(`{"uuid":"conversation-1","name":"one","created_at":"2025-01-01T00:00:00Z","updated_at":"2025-01-02T00:00:00Z"}`)
+	first, err := PrepareBrowserImport(root, []BrowserConversation{{Summary: summary, Conversation: json.RawMessage(`{"uuid":"conversation-1","chat_messages":[{"uuid":"m1","sender":"human","text":"old","created_at":"2025-01-01T00:00:00Z"}]}`)}})
+	require.NoError(t, err)
+	require.NoError(t, first.Commit())
+	second, err := PrepareBrowserImportWithForce(root, []BrowserConversation{{Summary: summary, Conversation: json.RawMessage(`{"uuid":"conversation-1","chat_messages":[{"uuid":"m1","sender":"human","text":"new","created_at":"2025-01-01T00:00:00Z"}]}`)}}, true)
+	require.NoError(t, err)
+	assert.JSONEq(t, `[{"uuid":"conversation-1","name":"one","created_at":"2025-01-01T00:00:00Z","updated_at":"2025-01-02T00:00:00Z","chat_messages":[{"uuid":"m1","sender":"human","text":"new","created_at":"2025-01-01T00:00:00Z"}]}]`, string(second.ExportJSON))
 }
 
 func TestNormalizeConversationUsesActiveBranch(t *testing.T) {

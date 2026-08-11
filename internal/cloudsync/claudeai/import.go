@@ -1,7 +1,6 @@
 package claudeai
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,8 +9,6 @@ import (
 	"strings"
 	"time"
 )
-
-const detailRequestDelay = 250 * time.Millisecond
 
 const (
 	cacheManifestName = "index.json"
@@ -172,8 +169,14 @@ type BrowserConversation struct {
 
 // PrepareBrowserImport updates the content cache from browser-fetched
 // conversations and produces the same export-compatible payload as
-// PrepareImport. It deliberately has no HTTP or Keychain dependency.
+// Browser imports deliberately have no HTTP or Keychain dependency.
 func PrepareBrowserImport(cacheRoot string, conversations []BrowserConversation) (PreparedImport, error) {
+	return PrepareBrowserImportWithForce(cacheRoot, conversations, false)
+}
+
+// PrepareBrowserImportWithForce saves and imports only the supplied batch.
+// The durable cache is never replayed wholesale, avoiding quadratic imports.
+func PrepareBrowserImportWithForce(cacheRoot string, conversations []BrowserConversation, force bool) (PreparedImport, error) {
 	if err := os.MkdirAll(cacheRoot, 0o700); err != nil {
 		return PreparedImport{}, fmt.Errorf("create Claude cache: %w", err)
 	}
@@ -183,13 +186,14 @@ func PrepareBrowserImport(cacheRoot string, conversations []BrowserConversation)
 		return PreparedImport{}, err
 	}
 	result := PreparedImport{manifest: manifest, manifestPath: manifestPath}
+	batch := make([]json.RawMessage, 0, len(conversations))
 	for _, item := range conversations {
 		id, updatedAt, err := conversationMarker(item.Summary)
 		if err != nil {
 			return PreparedImport{}, fmt.Errorf("invalid Claude conversation summary: %w", err)
 		}
 		path := conversationCachePath(cacheRoot, id)
-		if manifest[id] == updatedAt && fileExists(path) {
+		if !force && manifest[id] == updatedAt && fileExists(path) {
 			result.Unchanged++
 			continue
 		}
@@ -202,10 +206,15 @@ func PrepareBrowserImport(cacheRoot string, conversations []BrowserConversation)
 		}
 		manifest[id] = updatedAt
 		result.Downloaded++
+		normalized, err := normalizeConversation(conversation)
+		if err != nil {
+			return PreparedImport{}, fmt.Errorf("normalise Claude import conversation %s: %w", id, err)
+		}
+		batch = append(batch, normalized)
 	}
-	payload, err := cachedExport(cacheRoot)
+	payload, err := json.Marshal(batch)
 	if err != nil {
-		return PreparedImport{}, err
+		return PreparedImport{}, fmt.Errorf("encode Claude import batch: %w", err)
 	}
 	result.ExportJSON = payload
 	return result, nil
@@ -217,63 +226,6 @@ func (p PreparedImport) Commit() error {
 		return nil
 	}
 	return atomicWriteJSON(p.manifestPath, p.manifest)
-}
-
-// PrepareImport fetches changed Claude conversations into cacheRoot and builds
-// an export-compatible array from the complete local cache. The cache contains
-// conversation content, never browser credentials.
-func PrepareImport(ctx context.Context, client *Client, cacheRoot string, limit int) (PreparedImport, error) {
-	if err := os.MkdirAll(cacheRoot, 0o700); err != nil {
-		return PreparedImport{}, fmt.Errorf("create Claude cache: %w", err)
-	}
-	manifestPath := filepath.Join(cacheRoot, cacheManifestName)
-	manifest, err := readManifest(manifestPath)
-	if err != nil {
-		return PreparedImport{}, err
-	}
-
-	summaries, err := client.ListConversations(ctx, limit)
-	if err != nil {
-		return PreparedImport{}, err
-	}
-	result := PreparedImport{manifest: manifest, manifestPath: manifestPath}
-	for _, raw := range summaries {
-		id, updatedAt, err := conversationMarker(raw)
-		if err != nil {
-			continue
-		}
-		path := conversationCachePath(cacheRoot, id)
-		if manifest[id] == updatedAt && fileExists(path) {
-			result.Unchanged++
-			continue
-		}
-
-		if result.Downloaded > 0 {
-			if err := waitFor(ctx, detailRequestDelay); err != nil {
-				return PreparedImport{}, err
-			}
-		}
-		conversation, err := client.Conversation(ctx, id)
-		if err != nil {
-			return PreparedImport{}, fmt.Errorf("fetch Claude conversation %s: %w", id, err)
-		}
-		conversation, err = mergeSummary(conversation, raw)
-		if err != nil {
-			return PreparedImport{}, fmt.Errorf("normalise Claude conversation %s: %w", id, err)
-		}
-		if err := atomicWriteJSON(path, json.RawMessage(conversation)); err != nil {
-			return PreparedImport{}, fmt.Errorf("cache Claude conversation %s: %w", id, err)
-		}
-		manifest[id] = updatedAt
-		result.Downloaded++
-	}
-
-	payload, err := cachedExport(cacheRoot)
-	if err != nil {
-		return PreparedImport{}, err
-	}
-	result.ExportJSON = payload
-	return result, nil
 }
 
 func readManifest(path string) (map[string]string, error) {
@@ -428,17 +380,6 @@ func safeConversationID(id string) bool {
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
-}
-
-func waitFor(ctx context.Context, delay time.Duration) error {
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
 }
 
 func atomicWriteJSON(path string, value any) error {

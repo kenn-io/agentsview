@@ -10,6 +10,9 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "core:webview:allow-set-webview-zoom"
+    "core:webview:allow-set-webview-zoom",
+    "allow-claude-auth-start",
+    "allow-claude-auth-disconnect",
+    "allow-claude-auth-status"
   ]
 }
