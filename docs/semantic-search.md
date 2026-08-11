@@ -281,15 +281,21 @@ asks Ollama to unload it immediately after the response. The configured endpoint
 must be an absolute HTTP(S) URL ending in `/v1`, from which AgentsView derives
 the native route while preserving proxy prefixes and query parameters.
 
-The CPU recovery can incur model-load and CPU-inference latency, followed by
-another model load for the next Metal request. AgentsView gates its own primary
-and fallback traffic to the same native endpoint so another AgentsView request
-cannot race that runner transition. With Ollama 0.32.7 during diagnosis, the CPU
-request was observed to replace the Metal runner, unload after its response, and
-cause the next request to load a fresh Metal runner. That sequence is observed
-behavior, not an Ollama scheduler guarantee, and AgentsView does not attempt to
-verify Ollama's internal runner lifecycle. The setting is therefore intended as
-automatic recovery for rare invalid output, not as a permanent CPU serving mode.
+Each CPU recovery can incur model-load and CPU-inference latency, followed by
+another model load for the next Metal request. AgentsView gates primary and
+fallback traffic only among fallback-enabled encoders whose derived native URL
+matches exactly. The process-local gate does not cover fallback-disabled server
+entries, differently spelled aliases or query strings, or external Ollama
+clients; reserve the endpoint for AgentsView during fallback, or configure every
+AgentsView entry for that Ollama instance with the same endpoint and opt-in.
+Canceled requests leave the gate queue promptly.
+
+With Ollama 0.32.7 during diagnosis, the CPU request was observed to replace the
+Metal runner, unload after its response, and cause the next request to load a
+fresh Metal runner. That sequence is observed behavior, not an Ollama scheduler
+guarantee, and AgentsView does not attempt to verify Ollama's internal runner
+lifecycle. The setting is therefore intended as automatic recovery for rare
+invalid output, not as a permanent CPU serving mode.
 
 ### Direct `llama-server` for high-throughput Ollama models
 

@@ -376,16 +376,18 @@ type ollamaEmbedResponse struct {
 }
 ```
 
-Derive both request URLs by parsing `cfg.Endpoint` and clearing `RawPath`.
+Derive both request URLs by parsing `cfg.Endpoint` and updating `Path` and
+`RawPath` together so escaped path components keep their routing semantics.
 Append `/embeddings` to the primary path without moving it into the query
 string. For the native URL, trim one trailing slash and replace the final `/v1`
-with `/api/embed`. Preserve scheme, host, proxy prefix, and query values for
-both.
+with `/api/embed`. Preserve scheme, host, proxy prefix, escaped path, and query
+values for both.
 
 Add `TestEmbeddingURLsPreserveEndpointComponents` as a table test for a plain
-`/v1` endpoint and a `/proxy/v1/?tenant=local` endpoint. Assert the exact native
-URL, including the proxy prefix and query string, so dropping queries or
-mishandling a trailing slash cannot pass.
+`/v1` endpoint, a `/proxy/v1/?tenant=local` endpoint, and an endpoint containing
+an encoded path separator. Assert the exact URLs, including escaped proxy
+prefixes and query strings, so path rewriting, dropped queries, or mishandled
+trailing slashes cannot pass.
 
 Add an HTTP-boundary test that drives fallback through the query-bearing proxy
 endpoint and asserts both `/proxy/v1/embeddings?tenant=local` and
@@ -412,12 +414,13 @@ primary strings.
 1. Copy the outer primary slice and replace only invalid positions.
 
 All opted-in encoders whose derived native URL is identical share a process-wide
-`sync.RWMutex`. Each primary request holds `RLock` for its HTTP attempt. The CPU
-fallback takes `Lock` after the invalid primary attempt returns, waiting for
-active primary requests and preventing new ones until the native response and
-requested unload complete. Add a concurrent HTTP test using two independently
-constructed encoders to prove no primary request reaches the server during the
-exclusive fallback.
+context-aware read/write gate. Each primary request holds shared access for its
+HTTP attempt. The CPU fallback takes exclusive access after the invalid primary
+attempt returns, waiting for active primary requests and preventing new ones
+until the native response and requested unload complete. Canceled primary and
+fallback waiters return `ctx.Err()` without waiting for the active request. Add
+concurrent HTTP tests using independently constructed encoders to cover traffic
+exclusion and both cancellation paths.
 
 At this step, implement the successful native-request path and only the minimum
 response-count guard needed to merge without indexing outside the response.
@@ -569,9 +572,10 @@ Explain that invalid Metal responses first use normal retries, then only bad
 inputs are sent to `/api/embed` with `num_gpu: 0`; the request asks Ollama for a
 CPU-only runner and immediate unload. State that the diagnosed Ollama version
 was observed to swap out Metal, unload CPU after the response, and reload fresh
-Metal on the next request; AgentsView gates its own endpoint traffic around this
-sequence but does not verify Ollama's scheduler lifecycle. Call out the one-time
-latency cost and the requirement that the configured endpoint end in `/v1`.
+Metal on the next request; matching opted-in encoders in one AgentsView process
+are gated around this sequence, but aliases, mixed opt-ins, and external clients
+are not. Call out the per-fallback latency cost, cancellation-aware gate waits,
+and the requirement that the configured endpoint end in `/v1`.
 
 - [ ] **Step 3: Correct the direct llama-server cache guidance**
 

@@ -71,6 +71,12 @@ func TestEmbeddingURLsPreserveEndpointComponents(t *testing.T) {
 			wantPrimary: "https://example.test/proxy/v1/embeddings?tenant=local",
 			wantNative:  "https://example.test/proxy/api/embed?tenant=local",
 		},
+		{
+			name:        "encoded proxy separator",
+			endpoint:    "https://example.test/proxy%2Ftenant/v1?tenant=local",
+			wantPrimary: "https://example.test/proxy%2Ftenant/v1/embeddings?tenant=local",
+			wantNative:  "https://example.test/proxy%2Ftenant/api/embed?tenant=local",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -452,6 +458,138 @@ func TestEncoderOllamaCPUFallbackQuiescesSharedEndpointTraffic(t *testing.T) {
 	assert.False(t, primaryEscapedGate,
 		"primary request reached Ollama while the CPU fallback held the endpoint")
 	assert.Equal(t, int32(2), primaryCalls.Load())
+}
+
+func TestEncoderOllamaGatePrimaryWaitHonorsCancellation(t *testing.T) {
+	var primaryCalls atomic.Int32
+	cpuStarted := make(chan struct{})
+	releaseCPU := make(chan struct{})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/embeddings":
+			primaryCalls.Add(1)
+			writeJSON(t, w, http.StatusOK, map[string]any{"data": []map[string]any{
+				{"index": 0, "embedding": base64Embedding([]float32{0, 0, 0})},
+			}})
+		case "/api/embed":
+			close(cpuStarted)
+			<-releaseCPU
+			writeJSON(t, w, http.StatusOK, map[string]any{
+				"embeddings": [][]float32{{1, 2, 3}},
+			})
+		default:
+			require.FailNow(t, "unexpected request path", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := EncoderConfig{
+		Endpoint: srv.URL + "/v1", Model: "test-model", Dimension: 3,
+		Timeout: 5 * time.Second, MaxRetries: 1, OllamaCPUFallback: true,
+	}
+	firstEncoder := NewEncoder(cfg)
+	secondEncoder := NewEncoder(cfg)
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := firstEncoder(context.Background(), []string{"alpha"})
+		firstDone <- err
+	}()
+	<-cpuStarted
+
+	ctx, cancel := context.WithCancel(context.Background())
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := secondEncoder(ctx, []string{"beta"})
+		secondDone <- err
+	}()
+	cancel()
+
+	select {
+	case err := <-secondDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		close(releaseCPU)
+		require.NoError(t, <-firstDone)
+		<-secondDone
+		t.Fatal("canceled primary request remained blocked behind CPU fallback")
+	}
+
+	close(releaseCPU)
+	require.NoError(t, <-firstDone)
+	assert.Equal(t, int32(1), primaryCalls.Load())
+}
+
+func TestEncoderOllamaGateFallbackWaitHonorsCancellation(t *testing.T) {
+	blockerStarted := make(chan struct{})
+	releaseBlocker := make(chan struct{})
+	invalidSent := make(chan struct{})
+	var cpuCalls atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/embeddings":
+			var req embeddingsRequest
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+			require.Len(t, req.Input, 1)
+			if req.Input[0] == "blocker" {
+				close(blockerStarted)
+				<-releaseBlocker
+				writeJSON(t, w, http.StatusOK, map[string]any{"data": []map[string]any{
+					{"index": 0, "embedding": base64Embedding([]float32{1, 2, 3})},
+				}})
+				return
+			}
+			writeJSON(t, w, http.StatusOK, map[string]any{"data": []map[string]any{
+				{"index": 0, "embedding": base64Embedding([]float32{0, 0, 0})},
+			}})
+			close(invalidSent)
+		case "/api/embed":
+			cpuCalls.Add(1)
+			writeJSON(t, w, http.StatusOK, map[string]any{
+				"embeddings": [][]float32{{4, 5, 6}},
+			})
+		default:
+			require.FailNow(t, "unexpected request path", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := EncoderConfig{
+		Endpoint: srv.URL + "/v1", Model: "test-model", Dimension: 3,
+		Timeout: 5 * time.Second, MaxRetries: 1, OllamaCPUFallback: true,
+	}
+	blocker := NewEncoder(cfg)
+	repair := NewEncoder(cfg)
+	blockerDone := make(chan error, 1)
+	go func() {
+		_, err := blocker(context.Background(), []string{"blocker"})
+		blockerDone <- err
+	}()
+	<-blockerStarted
+
+	ctx, cancel := context.WithCancel(context.Background())
+	repairDone := make(chan error, 1)
+	go func() {
+		_, err := repair(ctx, []string{"repair"})
+		repairDone <- err
+	}()
+	<-invalidSent
+	cancel()
+
+	select {
+	case err := <-repairDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		close(releaseBlocker)
+		require.NoError(t, <-blockerDone)
+		<-repairDone
+		t.Fatal("canceled CPU fallback remained blocked behind a primary request")
+	}
+
+	close(releaseBlocker)
+	require.NoError(t, <-blockerDone)
+	assert.Equal(t, int32(0), cpuCalls.Load())
 }
 
 func TestEncoderOllamaCPUFallbackDisabledLeavesInvalidResponseFailed(t *testing.T) {

@@ -45,9 +45,9 @@ ollama_cpu_fallback = true
 The setting defaults to `false`. When enabled, the endpoint path must end in a
 `/v1` path component. The encoder derives the native Ollama endpoint by
 replacing that final component with `/api/embed`, preserving any preceding proxy
-path and query values. The primary `/embeddings` URL is derived through the same
-parsed-URL path handling. The existing API key, when configured, is sent to both
-endpoints.
+path, escaped path components, and query values. The primary `/embeddings` URL
+is derived through the same parsed-URL path handling. The existing API key, when
+configured, is sent to both endpoints.
 
 This flag is server transport behavior. It does not join the vector generation
 parameters or fingerprint, because both backends use the same model, dimensions,
@@ -62,11 +62,12 @@ path:
 1. Send the batch to `<endpoint>/embeddings` through Metal.
 1. Reorder and validate the response as today.
 1. Retry retryable Metal failures up to `max_retries` as today.
-1. Coordinate every opted-in encoder for the same native Ollama endpoint through
-   one process-wide gate. Primary requests hold a shared lock; a CPU fallback
-   waits for active primary requests and holds the exclusive lock until its
-   response and requested unload complete, blocking new Metal traffic
-   meanwhile.
+1. Coordinate every opted-in encoder whose derived native Ollama URL is exactly
+   equal through one process-wide gate. Primary requests hold shared access; a
+   CPU fallback waits for active primary requests and holds exclusive access
+   until its response and requested unload complete, blocking new Metal
+   traffic meanwhile. A caller canceled while waiting leaves the gate
+   promptly.
 1. If the final Metal response contains zero-norm or non-finite vectors and
    `ollama_cpu_fallback` is enabled, retain the valid vectors and collect
    every invalid response position.
@@ -95,9 +96,13 @@ The request asks Ollama to use a CPU-only runner through `num_gpu: 0` and to
 unload it through `keep_alive: "0s"`. With the diagnosed Ollama version,
 changing runner options was observed to swap out the Metal runner, load CPU on
 demand, unload CPU after the response, and load fresh Metal on the next primary
-request. The gate prevents other AgentsView requests from racing that observed
-lifecycle; tests cover AgentsView's request ordering, not Ollama's internal
-scheduler.
+request. The gate prevents matching, fallback-enabled encoders in this
+AgentsView process from racing that observed lifecycle. It cannot coordinate
+fallback-disabled server entries, differently spelled aliases or query strings,
+or external Ollama clients. Operators should use the Ollama endpoint exclusively
+during fallback or configure every AgentsView entry for that instance with the
+same endpoint and opt-in. Tests cover AgentsView's request ordering, not
+Ollama's internal scheduler.
 
 ## Error Handling
 
@@ -145,8 +150,9 @@ encoder behavior:
   the whole encode call failed.
 - Native JSON `null` components are rejected.
 - Non-vector primary failures never trigger the CPU endpoint.
-- Concurrent opted-in encoders for one endpoint cannot send primary traffic
-  while a CPU fallback is in flight.
+- Concurrent opted-in encoders with the same derived native URL cannot send
+  primary traffic while a CPU fallback is in flight, and canceled gate waiters
+  return promptly.
 - Config parsing and validation accept the explicit flag and reject an enabled
   fallback whose endpoint does not end in `/v1`.
 

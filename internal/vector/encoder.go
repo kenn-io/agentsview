@@ -20,6 +20,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/sync/semaphore"
+
 	kitvec "go.kenn.io/kit/vector"
 )
 
@@ -280,7 +282,7 @@ type encoderClient struct {
 	url    string
 	urlErr error
 	cfg    EncoderConfig
-	gate   *sync.RWMutex
+	gate   *ollamaEndpointGate
 	// floatMode flips to true (for the encoder's lifetime) when the server
 	// rejects the encoding_format field, so every later request goes back
 	// to plain JSON float arrays instead of failing the same way again.
@@ -288,6 +290,36 @@ type encoderClient struct {
 }
 
 var ollamaEndpointGates sync.Map
+
+// ollamaEndpointGate is a context-aware, writer-preferring read/write gate.
+// Primary requests share read access. A CPU fallback takes write access so it
+// waits for active primaries and prevents new ones from entering, while a
+// canceled caller can leave the queue immediately.
+type ollamaEndpointGate struct {
+	weighted *semaphore.Weighted
+}
+
+const ollamaEndpointGateCapacity int64 = 1<<63 - 1
+
+func newOllamaEndpointGate() *ollamaEndpointGate {
+	return &ollamaEndpointGate{weighted: semaphore.NewWeighted(ollamaEndpointGateCapacity)}
+}
+
+func (g *ollamaEndpointGate) acquireRead(ctx context.Context) error {
+	return g.weighted.Acquire(ctx, 1)
+}
+
+func (g *ollamaEndpointGate) releaseRead() {
+	g.weighted.Release(1)
+}
+
+func (g *ollamaEndpointGate) acquireWrite(ctx context.Context) error {
+	return g.weighted.Acquire(ctx, ollamaEndpointGateCapacity)
+}
+
+func (g *ollamaEndpointGate) releaseWrite() {
+	g.weighted.Release(ollamaEndpointGateCapacity)
+}
 
 // NewEncoder returns a kitvec.EncodeFunc that POSTs to an OpenAI-compatible
 // embeddings endpoint. Each invocation makes primary calls according to the
@@ -309,8 +341,8 @@ func NewEncoder(cfg EncoderConfig) kitvec.EncodeFunc {
 	}
 	if cfg.OllamaCPUFallback {
 		if nativeURL, nativeErr := ollamaEmbedURL(cfg.Endpoint); nativeErr == nil {
-			gate, _ := ollamaEndpointGates.LoadOrStore(nativeURL, &sync.RWMutex{})
-			ec.gate = gate.(*sync.RWMutex)
+			gate, _ := ollamaEndpointGates.LoadOrStore(nativeURL, newOllamaEndpointGate())
+			ec.gate = gate.(*ollamaEndpointGate)
 		}
 	}
 	return ec.encode
@@ -321,8 +353,15 @@ func openAIEmbeddingsURL(endpoint string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("parse embeddings endpoint: %w", err)
 	}
-	u.Path = strings.TrimRight(u.Path, "/") + "/embeddings"
-	u.RawPath = ""
+	basePath := strings.TrimRight(u.Path, "/")
+	if u.RawPath != "" {
+		rawBase, err := rawPathPrefix(u.RawPath, basePath, u.Path[len(basePath):])
+		if err != nil {
+			return "", fmt.Errorf("parse embeddings endpoint path: %w", err)
+		}
+		u.RawPath = rawBase + "/embeddings"
+	}
+	u.Path = basePath + "/embeddings"
 	return u.String(), nil
 }
 
@@ -335,9 +374,37 @@ func ollamaEmbedURL(endpoint string) (string, error) {
 	if !strings.HasSuffix(endpointPath, "/v1") {
 		return "", fmt.Errorf("ollama endpoint path %q does not end in /v1", u.Path)
 	}
-	u.Path = strings.TrimSuffix(endpointPath, "/v1") + "/api/embed"
-	u.RawPath = ""
+	basePath := strings.TrimSuffix(endpointPath, "/v1")
+	if u.RawPath != "" {
+		rawBase, err := rawPathPrefix(u.RawPath, basePath, u.Path[len(basePath):])
+		if err != nil {
+			return "", fmt.Errorf("parse Ollama endpoint path: %w", err)
+		}
+		u.RawPath = rawBase + "/api/embed"
+	}
+	u.Path = basePath + "/api/embed"
 	return u.String(), nil
+}
+
+// rawPathPrefix finds the byte prefix of an escaped URL path that decodes to
+// decodedPrefix while the remainder decodes to decodedSuffix. Keeping the
+// caller's original escaped prefix preserves meaningful encodings such as
+// %2F instead of silently rewriting the endpoint route.
+func rawPathPrefix(rawPath, decodedPrefix, decodedSuffix string) (string, error) {
+	for split := 0; split <= len(rawPath); split++ {
+		prefix, prefixErr := url.PathUnescape(rawPath[:split])
+		if prefixErr != nil || prefix != decodedPrefix {
+			continue
+		}
+		suffix, suffixErr := url.PathUnescape(rawPath[split:])
+		if suffixErr == nil && suffix == decodedSuffix {
+			return rawPath[:split], nil
+		}
+	}
+	return "", fmt.Errorf(
+		"escaped path %q does not match decoded path %q%s",
+		rawPath, decodedPrefix, decodedSuffix,
+	)
 }
 
 func (ec *encoderClient) requestInputs(texts []string) []string {
@@ -438,8 +505,10 @@ func (ec *encoderClient) ollamaCPUFallback(
 	ctx context.Context, texts []string, primaryVectors [][]float32,
 ) ([][]float32, error) {
 	if ec.gate != nil {
-		ec.gate.Lock()
-		defer ec.gate.Unlock()
+		if err := ec.gate.acquireWrite(ctx); err != nil {
+			return nil, err
+		}
+		defer ec.gate.releaseWrite()
 	}
 
 	requestInputs := ec.requestInputs(texts)
@@ -560,8 +629,10 @@ func (ec *encoderClient) attemptEncode(
 	ctx context.Context, reqBody []byte, texts []string,
 ) ([][]float32, bool, error) {
 	if ec.gate != nil {
-		ec.gate.RLock()
-		defer ec.gate.RUnlock()
+		if err := ec.gate.acquireRead(ctx); err != nil {
+			return nil, false, err
+		}
+		defer ec.gate.releaseRead()
 	}
 
 	client, url, cfg := ec.client, ec.url, ec.cfg
