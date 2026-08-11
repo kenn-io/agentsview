@@ -162,7 +162,10 @@ func TestParseClaudeAIExport_ContentBlocks(t *testing.T) {
 
 	// Message with tool_use/tool_result blocks should use
 	// text blocks, not the truncated top-level text.
-	assert.Equal(t, "First part.\n\nSecond part.", msgs[0].Content)
+	assert.Contains(t, msgs[0].Content, "First part.")
+	assert.Contains(t, msgs[0].Content, "Second part.")
+	assert.Contains(t, msgs[0].Content, "[Claude block: tool_use]")
+	assert.Contains(t, msgs[0].Content, "[Claude block: tool_result]")
 	assert.False(t, msgs[0].HasThinking)
 
 	// Message with thinking block.
@@ -274,11 +277,9 @@ func TestParseClaudeAIExport_AttachmentFallbackPaths(t *testing.T) {
 		"Top-level text survives.\n\nattachment with no filename",
 		msgs[0].Content,
 	)
-	assert.Equal(
-		t,
-		"Fallback text survives too.\n\nattachment after unsupported block",
-		msgs[1].Content,
-	)
+	assert.Contains(t, msgs[1].Content, "Fallback text survives too.")
+	assert.Contains(t, msgs[1].Content, "attachment after unsupported block")
+	assert.Contains(t, msgs[1].Content, "[Claude block: tool_use]")
 }
 
 func TestParseClaudeAIExport_IgnoredAttachments(t *testing.T) {

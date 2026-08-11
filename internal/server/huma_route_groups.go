@@ -26,6 +26,7 @@ func (s *Server) registerTypedAPIRoutes() {
 	s.registerStarredRoutes()
 	s.registerPinRoutes()
 	s.registerImportRoutes()
+	s.registerCloudRoutes()
 	s.registerAssetRoutes()
 	s.registerEmbeddingsRoutes()
 }

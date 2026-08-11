@@ -558,6 +558,12 @@ func (s *Store) ListTrashedSessions(
 	return scanPGSessionRows(rows)
 }
 
+// RestoreExcludedSessions is local-archive recovery state and is unavailable
+// when serving through PostgreSQL.
+func (s *Store) RestoreExcludedSessions(_ []string) (int, error) {
+	return 0, db.ErrReadOnly
+}
+
 // EmptyTrash permanently deletes every trashed session.
 func (s *Store) EmptyTrash() (int, error) {
 	ctx := context.Background()

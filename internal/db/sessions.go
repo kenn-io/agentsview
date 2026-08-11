@@ -1222,6 +1222,35 @@ func (db *DB) IsSessionExcluded(id string) bool {
 }
 
 // IsSessionTrashed returns true if the session ID exists in the trash.
+// RestoreExcludedSessions removes permanent deletion markers for the supplied
+// session IDs. It does not restore a trashed row; callers must re-import a
+// trusted source after explicitly requesting this recovery.
+func (db *DB) RestoreExcludedSessions(ids []string) (int, error) {
+	if err := db.requireWritable(); err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	result, err := db.getWriter().Exec(
+		"DELETE FROM excluded_sessions WHERE id IN ("+placeholders+")", args...)
+	if err != nil {
+		return 0, fmt.Errorf("restore excluded sessions: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("count restored excluded sessions: %w", err)
+	}
+	return int(count), nil
+}
+
 func (db *DB) IsSessionTrashed(id string) bool {
 	var n int
 	_ = db.getReader().QueryRow(

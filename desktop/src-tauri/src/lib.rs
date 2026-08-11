@@ -21,7 +21,7 @@ use tauri::plugin::Builder as PluginBuilder;
 #[cfg(target_os = "macos")]
 use tauri::tray::TrayIconBuilder;
 use tauri::{
-    App, AppHandle, Emitter, Manager, RunEvent, Url, WebviewUrl, WebviewWindow,
+    App, AppHandle, Emitter, Manager, RunEvent, State, Url, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
@@ -61,6 +61,8 @@ const CLAUDE_AUTH_WINDOW_LABEL: &str = "claude-auth";
 const CLAUDE_AUTH_URL: &str = "https://claude.ai/login?return_url=%2Fnew";
 const CLAUDE_KEYCHAIN_SERVICE: &str = "io.agentsview.desktop";
 const CLAUDE_KEYCHAIN_ACCOUNT: &str = "claude-ai/default";
+const CLAUDE_BROWSER_FETCH_TIMEOUT: Duration = Duration::from_secs(45);
+const CLAUDE_BROWSER_RESPONSE_MAX_BYTES: usize = 16 * 1024 * 1024;
 // Delay after navigating to the backend before probing whether the
 // Linux WebKitGTK web content process is actually alive. Gives the
 // process time to spawn so we don't false-positive on slow startup.
@@ -94,6 +96,31 @@ struct SidecarProcess {
 #[derive(Default)]
 struct ClaudeAuthState {
     connected_this_launch: AtomicBool,
+    next_browser_request: AtomicU64,
+    pending_browser_request: Mutex<Option<ClaudeBrowserRequest>>,
+    import_cancel_requested: AtomicBool,
+}
+
+struct ClaudeBrowserRequest {
+    id: u64,
+    response: SyncSender<ClaudeBrowserResponse>,
+}
+
+struct ClaudeBrowserResponse {
+    status: u16,
+    body: String,
+    error: Option<String>,
+    retry_after: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeBrowserFetchResult {
+    request_id: u64,
+    status: u16,
+    body: String,
+    error: Option<String>,
+    retry_after: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -101,6 +128,72 @@ struct ClaudeAuthState {
 struct ClaudeAuthStatus {
     connected: bool,
     message: String,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeScheduleConfig {
+    enabled: bool,
+    interval_minutes: u64,
+    #[serde(default)]
+    last_started_at: Option<String>,
+    #[serde(default)]
+    last_completed_at: Option<String>,
+    #[serde(default)]
+    last_error: Option<String>,
+    #[serde(default)]
+    last_scanned: u64,
+    #[serde(default)]
+    last_changed: u64,
+    #[serde(default)]
+    last_fetched: u64,
+    #[serde(default)]
+    last_imported: u64,
+    #[serde(default)]
+    last_skipped: u64,
+    #[serde(default)]
+    last_failed: u64,
+}
+
+impl Default for ClaudeScheduleConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_minutes: 360,
+            last_started_at: None,
+            last_completed_at: None,
+            last_error: None,
+            last_scanned: 0,
+            last_changed: 0,
+            last_fetched: 0,
+            last_imported: 0,
+            last_skipped: 0,
+            last_failed: 0,
+        }
+    }
+}
+
+#[derive(Clone, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeScheduleStatus {
+    enabled: bool,
+    interval_minutes: u64,
+    last_started_at: Option<String>,
+    last_completed_at: Option<String>,
+    last_error: Option<String>,
+    running: bool,
+    last_scanned: u64,
+    last_changed: u64,
+    last_fetched: u64,
+    last_imported: u64,
+    last_skipped: u64,
+    last_failed: u64,
+}
+
+#[derive(Default)]
+struct ClaudeScheduleState {
+    config: Mutex<ClaudeScheduleConfig>,
+    status: Mutex<ClaudeScheduleStatus>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -175,13 +268,22 @@ pub fn run() {
         .plugin(init_navigation_guard_plugin())
         .manage(SidecarState::default())
         .manage(ClaudeAuthState::default())
+        .manage(ClaudeScheduleState::default())
         .invoke_handler(tauri::generate_handler![
             claude_auth_start,
             claude_auth_disconnect,
             claude_auth_status,
             claude_auth_test_connection,
+            claude_auth_browser_list_test,
+            claude_auth_fetch_import_batch,
+            claude_auth_fetch_import_details,
+            claude_auth_cancel_import,
+            claude_schedule_status,
+            claude_schedule_configure,
+            claude_auth_fetch_result,
         ])
         .setup(|app| {
+            start_claude_scheduler(app.handle().clone());
             if let Err(err) = setup_menu(app) {
                 eprintln!("[agentsview] failed to set up desktop menu: {err}");
             }
@@ -592,6 +694,594 @@ fn claude_session_cookie_header(handle: &AppHandle) -> Result<String, String> {
         .join("; "))
 }
 
+fn claude_schedule_path(handle: &AppHandle) -> Result<PathBuf, String> {
+    let root = handle
+        .path()
+        .app_data_dir()
+        .map_err(|err| err.to_string())?;
+    fs::create_dir_all(&root).map_err(|err| err.to_string())?;
+    Ok(root.join("claude-sync-schedule.json"))
+}
+
+fn load_claude_schedule(handle: &AppHandle) -> ClaudeScheduleConfig {
+    let mut config: ClaudeScheduleConfig = claude_schedule_path(handle)
+        .ok()
+        .and_then(|path| fs::read(path).ok())
+        .and_then(|data| serde_json::from_slice(&data).ok())
+        .unwrap_or_default();
+    // Older/dev config files may contain a custom or zero interval. Keep the
+    // UI select valid and constrain scheduling to the advertised choices.
+    if !matches!(config.interval_minutes, 60 | 360 | 720 | 1440) {
+        config.interval_minutes = 360;
+    }
+    config
+}
+
+fn save_claude_schedule(handle: &AppHandle, config: &ClaudeScheduleConfig) -> Result<(), String> {
+    let path = claude_schedule_path(handle)?;
+    let data = serde_json::to_vec(config).map_err(|err| err.to_string())?;
+    fs::write(path, data).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn claude_schedule_status(handle: AppHandle) -> ClaudeScheduleStatus {
+    let state = handle.state::<ClaudeScheduleState>();
+    let config = state
+        .config
+        .lock()
+        .ok()
+        .map(|v| v.clone())
+        .unwrap_or_default();
+    let mut status = state
+        .status
+        .lock()
+        .ok()
+        .map(|v| v.clone())
+        .unwrap_or_default();
+    status.enabled = config.enabled;
+    status.interval_minutes = config.interval_minutes;
+    status.last_started_at = config.last_started_at;
+    status.last_completed_at = config.last_completed_at;
+    status.last_error = config.last_error;
+    status.last_scanned = config.last_scanned;
+    status.last_changed = config.last_changed;
+    status.last_fetched = config.last_fetched;
+    status.last_imported = config.last_imported;
+    status.last_skipped = config.last_skipped;
+    status.last_failed = config.last_failed;
+    status
+}
+
+#[tauri::command]
+fn claude_schedule_configure(
+    handle: AppHandle,
+    enabled: bool,
+    interval_minutes: u64,
+) -> Result<ClaudeScheduleStatus, String> {
+    let state = handle.state::<ClaudeScheduleState>();
+    let mut config = state
+        .config
+        .lock()
+        .map_err(|_| "Claude schedule lock failed")?
+        .clone();
+    config.enabled = enabled;
+    config.interval_minutes = interval_minutes.clamp(15, 24 * 60);
+    save_claude_schedule(&handle, &config)?;
+    *state
+        .config
+        .lock()
+        .map_err(|_| "Claude schedule lock failed")? = config.clone();
+    let mut status = state
+        .status
+        .lock()
+        .map_err(|_| "Claude schedule lock failed")?;
+    status.enabled = config.enabled;
+    status.interval_minutes = config.interval_minutes;
+    Ok(status.clone())
+}
+
+fn start_claude_scheduler(handle: AppHandle) {
+    let config = load_claude_schedule(&handle);
+    if let Ok(mut saved) = handle.state::<ClaudeScheduleState>().config.lock() {
+        *saved = config.clone();
+    }
+    if let Ok(mut status) = handle.state::<ClaudeScheduleState>().status.lock() {
+        status.enabled = config.enabled;
+        status.interval_minutes = config.interval_minutes;
+        status.last_started_at = config.last_started_at.clone();
+        status.last_completed_at = config.last_completed_at.clone();
+        status.last_error = config.last_error.clone();
+        status.last_scanned = config.last_scanned;
+        status.last_changed = config.last_changed;
+        status.last_fetched = config.last_fetched;
+        status.last_imported = config.last_imported;
+        status.last_skipped = config.last_skipped;
+        status.last_failed = config.last_failed;
+    }
+    thread::spawn(move || {
+        let mut last_run = Instant::now();
+        loop {
+            thread::sleep(Duration::from_secs(30));
+            let config = handle
+                .state::<ClaudeScheduleState>()
+                .config
+                .lock()
+                .ok()
+                .map(|v| v.clone())
+                .unwrap_or_default();
+            if !config.enabled
+                || last_run.elapsed() < Duration::from_secs(config.interval_minutes * 60)
+            {
+                continue;
+            }
+            last_run = Instant::now();
+            let state = handle.state::<ClaudeScheduleState>();
+            if let Ok(mut status) = state.status.lock() {
+                status.running = true;
+                status.last_started_at = Some(chrono_like_now());
+                status.last_error = None;
+            }
+            let result = run_claude_scheduled_sync(&handle);
+            let mut persisted = state
+                .config
+                .lock()
+                .ok()
+                .map(|v| v.clone())
+                .unwrap_or_default();
+            persisted.last_started_at = state
+                .status
+                .lock()
+                .ok()
+                .and_then(|v| v.last_started_at.clone());
+            match result {
+                Ok(counts) => {
+                    persisted.last_completed_at = Some(chrono_like_now());
+                    persisted.last_error = None;
+                    persisted.last_scanned = counts.scanned;
+                    persisted.last_changed = counts.changed;
+                    persisted.last_fetched = counts.fetched;
+                    persisted.last_imported = counts.imported;
+                    persisted.last_skipped = counts.skipped;
+                    persisted.last_failed = counts.failed;
+                }
+                Err(err) => {
+                    persisted.last_error = Some(err);
+                    persisted.last_failed += 1;
+                }
+            }
+            let _ = save_claude_schedule(&handle, &persisted);
+            if let Ok(mut config) = state.config.lock() {
+                *config = persisted.clone();
+            }
+            if let Ok(mut status) = state.status.lock() {
+                status.running = false;
+                status.last_started_at = persisted.last_started_at;
+                status.last_completed_at = persisted.last_completed_at;
+                status.last_error = persisted.last_error;
+                status.last_scanned = persisted.last_scanned;
+                status.last_changed = persisted.last_changed;
+                status.last_fetched = persisted.last_fetched;
+                status.last_imported = persisted.last_imported;
+                status.last_skipped = persisted.last_skipped;
+                status.last_failed = persisted.last_failed;
+            };
+        }
+    });
+}
+
+#[derive(Default)]
+struct ClaudeScheduleCounts {
+    scanned: u64,
+    changed: u64,
+    fetched: u64,
+    imported: u64,
+    skipped: u64,
+    failed: u64,
+}
+
+// RFC3339 is unnecessary for scheduler correctness; this wall-clock marker is
+// user-facing only and deliberately contains no authentication material.
+fn chrono_like_now() -> String {
+    format!("{:?}", std::time::SystemTime::now())
+}
+
+fn run_claude_scheduled_sync(handle: &AppHandle) -> Result<ClaudeScheduleCounts, String> {
+    let mut counts = ClaudeScheduleCounts::default();
+    // The scheduler owns orchestration, but uses exactly the same constrained
+    // WKWebView paths and loopback Go endpoints as a foreground import.
+    let mut offset = 0;
+    loop {
+        let batch = claude_auth_fetch_import_batch_inner(handle.clone(), offset, 50)?;
+        if batch.summaries.is_empty() {
+            break;
+        }
+        counts.scanned += batch.summaries.len() as u64;
+        let plan = claude_loopback_post(
+            handle,
+            "/api/v1/cloud/claude-ai/plan",
+            serde_json::json!({"summaries": batch.summaries.clone()}),
+        )?;
+        let ids = plan
+            .get("changed_ids")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let wanted: std::collections::BTreeSet<String> = ids
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect();
+        counts.changed += wanted.len() as u64;
+        let summaries: Vec<serde_json::Value> = batch
+            .summaries
+            .into_iter()
+            .filter(|v| {
+                v.get("uuid")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|id| wanted.contains(id))
+            })
+            .collect();
+        if !summaries.is_empty() {
+            let details = claude_auth_fetch_import_details_inner(handle.clone(), summaries)?;
+            counts.skipped += details.skipped as u64;
+            counts.fetched += details.conversations.len() as u64;
+            if !details.conversations.is_empty() {
+                let imported = claude_loopback_post(
+                    handle,
+                    "/api/v1/cloud/claude-ai/import",
+                    serde_json::json!({"conversations": details.conversations}),
+                )?;
+                counts.imported += imported
+                    .get("imported")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0)
+                    + imported
+                        .get("updated")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0);
+                counts.failed += imported
+                    .get("errors")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+            }
+        }
+        offset += 50;
+        if !batch.has_more {
+            break;
+        }
+    }
+    let _ = claude_loopback_post(
+        handle,
+        "/api/v1/cloud/claude-ai/complete",
+        serde_json::json!({}),
+    )?;
+    Ok(counts)
+}
+
+fn claude_loopback_post(
+    handle: &AppHandle,
+    path: &str,
+    payload: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let port = handle
+        .state::<SidecarState>()
+        .backend_port
+        .lock()
+        .ok()
+        .and_then(|v| *v)
+        .ok_or_else(|| "AgentsView backend is not running".to_string())?;
+    let body = serde_json::to_vec(&payload).map_err(|err| err.to_string())?;
+    let mut stream = TcpStream::connect((HOST, port))
+        .map_err(|err| format!("connect local AgentsView backend: {err}"))?;
+    let request = format!("POST {path} HTTP/1.1\r\nHost: {HOST}:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+    stream
+        .write_all(request.as_bytes())
+        .and_then(|_| stream.write_all(&body))
+        .map_err(|err| err.to_string())?;
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .map_err(|err| err.to_string())?;
+    let (head, raw) = response
+        .split_once("\r\n\r\n")
+        .ok_or_else(|| "invalid local backend response".to_string())?;
+    if !head.contains(" 200 ") {
+        return Err(format!(
+            "local backend request failed: {}",
+            head.lines().next().unwrap_or("unknown")
+        ));
+    }
+    serde_json::from_str(raw).map_err(|err| format!("decode local backend response: {err}"))
+}
+
+fn claude_browser_fetch(handle: &AppHandle, path: &str) -> Result<ClaudeBrowserResponse, String> {
+    if !path.starts_with("/api/organizations/") || path.contains('\n') || path.contains('\r') {
+        return Err("unsupported Claude API path".into());
+    }
+    let window = handle
+        .get_webview_window(CLAUDE_AUTH_WINDOW_LABEL)
+        .ok_or_else(|| {
+            "Claude browser session is not available. Reconnect Claude and try again.".to_string()
+        })?;
+    let state = handle.state::<ClaudeAuthState>();
+    let request_id = state.next_browser_request.fetch_add(1, Ordering::SeqCst);
+    let (sender, receiver) = sync_channel(1);
+    {
+        let mut pending = state
+            .pending_browser_request
+            .lock()
+            .map_err(|_| "Claude browser request lock failed")?;
+        if pending.is_some() {
+            return Err("another Claude browser request is already running".into());
+        }
+        *pending = Some(ClaudeBrowserRequest {
+            id: request_id,
+            response: sender,
+        });
+    }
+
+    let url = format!("https://claude.ai{path}");
+    let url = serde_json::to_string(&url).map_err(|err| err.to_string())?;
+    let script = format!(
+        r#"(async () => {{
+            try {{
+                const response = await fetch({url}, {{ credentials: "include" }});
+                const body = await response.text();
+                const retryAfter = response.headers.get("retry-after") ?? undefined;
+                await window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id}, status: response.status, body, retryAfter }} }});
+            }} catch (error) {{
+                await window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id}, status: 0, body: "", error: String(error), retryAfter: undefined }} }});
+            }}
+        }})()"#,
+    );
+    if let Err(err) = window.eval(&script) {
+        let mut pending = state
+            .pending_browser_request
+            .lock()
+            .map_err(|_| "Claude browser request lock failed")?;
+        *pending = None;
+        return Err(format!("could not start Claude browser request: {err}"));
+    }
+    match receiver.recv_timeout(CLAUDE_BROWSER_FETCH_TIMEOUT) {
+        Ok(response) => Ok(response),
+        Err(_) => {
+            let mut pending = state
+                .pending_browser_request
+                .lock()
+                .map_err(|_| "Claude browser request lock failed")?;
+            *pending = None;
+            Err("Claude browser request timed out".into())
+        }
+    }
+}
+
+fn claude_browser_fetch_retry(
+    handle: &AppHandle,
+    path: &str,
+) -> Result<ClaudeBrowserResponse, String> {
+    const MAX_ATTEMPTS: u32 = 5;
+    for attempt in 0..MAX_ATTEMPTS {
+        let response = claude_browser_fetch(handle, path)?;
+        let retryable = response.error.is_some()
+            || response.status == 0
+            || response.status == 429
+            || response.status >= 500;
+        if !retryable || attempt + 1 == MAX_ATTEMPTS {
+            return Ok(response);
+        }
+        let retry_after = response
+            .retry_after
+            .as_deref()
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(Duration::from_secs);
+        // Deterministic jitter avoids synchronized retries without adding a new
+        // dependency or placing authentication state in the frontend.
+        let backoff = Duration::from_millis(500 * (1_u64 << attempt) + u64::from(attempt) * 137);
+        thread::sleep(retry_after.unwrap_or(backoff).min(Duration::from_secs(30)));
+    }
+    unreachable!("retry loop returns on its final attempt")
+}
+
+#[tauri::command]
+fn claude_auth_fetch_result(
+    window: WebviewWindow,
+    state: State<'_, ClaudeAuthState>,
+    payload: ClaudeBrowserFetchResult,
+) -> Result<(), String> {
+    if window.label() != CLAUDE_AUTH_WINDOW_LABEL {
+        return Err("Claude browser response came from an unexpected window".into());
+    }
+    if payload.body.len() > CLAUDE_BROWSER_RESPONSE_MAX_BYTES {
+        return Err("Claude browser response was too large".into());
+    }
+    let mut pending = state
+        .pending_browser_request
+        .lock()
+        .map_err(|_| "Claude browser request lock failed")?;
+    let Some(request) = pending.take() else {
+        return Err("no Claude browser request is pending".into());
+    };
+    if request.id != payload.request_id {
+        *pending = Some(request);
+        return Err("Claude browser response did not match the pending request".into());
+    }
+    request
+        .response
+        .send(ClaudeBrowserResponse {
+            status: payload.status,
+            body: payload.body,
+            error: payload.error,
+            retry_after: payload.retry_after,
+        })
+        .map_err(|_| "Claude browser request was cancelled".into())
+}
+
+#[derive(serde::Serialize)]
+struct ClaudeBrowserSummaryBatch {
+    summaries: Vec<serde_json::Value>,
+    has_more: bool,
+}
+
+#[derive(serde::Serialize)]
+struct ClaudeBrowserDetailBatch {
+    conversations: Vec<serde_json::Value>,
+    skipped: usize,
+}
+
+#[tauri::command]
+fn claude_auth_cancel_import(state: State<'_, ClaudeAuthState>) {
+    state.import_cancel_requested.store(true, Ordering::SeqCst);
+}
+
+#[tauri::command]
+async fn claude_auth_fetch_import_batch(
+    handle: AppHandle,
+    offset: usize,
+    limit: usize,
+) -> Result<ClaudeBrowserSummaryBatch, String> {
+    if offset == 0 {
+        handle
+            .state::<ClaudeAuthState>()
+            .import_cancel_requested
+            .store(false, Ordering::SeqCst);
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        claude_auth_fetch_import_batch_inner(handle, offset, limit.clamp(1, 100))
+    })
+    .await
+    .map_err(|err| format!("Claude browser import task failed: {err}"))?
+}
+
+fn claude_auth_fetch_import_batch_inner(
+    handle: AppHandle,
+    offset: usize,
+    limit: usize,
+) -> Result<ClaudeBrowserSummaryBatch, String> {
+    let cookie_header = claude_session_cookie_header(&handle)?;
+    let org = cookie_header
+        .split(';')
+        .map(str::trim)
+        .find_map(|cookie| cookie.strip_prefix("lastActiveOrg="))
+        .ok_or_else(|| "Claude organisation was not found in the browser session".to_string())?;
+    let list = claude_browser_fetch_retry(&handle, &format!("/api/organizations/{org}/chat_conversations_v2?limit={limit}&offset={offset}&starred=false&consistency=eventual"))?;
+    if list.status != 200 {
+        return Err(format!("Claude browser list returned HTTP {}", list.status));
+    }
+    let payload: serde_json::Value = serde_json::from_str(&list.body)
+        .map_err(|_| "Claude browser list returned invalid JSON".to_string())?;
+    let summaries = ["conversations", "items", "data", "results"]
+        .iter()
+        .find_map(|key| payload.get(key).and_then(serde_json::Value::as_array))
+        .ok_or_else(|| "Claude browser list had no conversations".to_string())?;
+    Ok(ClaudeBrowserSummaryBatch {
+        summaries: summaries.to_vec(),
+        has_more: summaries.len() == limit,
+    })
+}
+
+#[tauri::command]
+async fn claude_auth_fetch_import_details(
+    handle: AppHandle,
+    summaries: Vec<serde_json::Value>,
+) -> Result<ClaudeBrowserDetailBatch, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        claude_auth_fetch_import_details_inner(handle, summaries)
+    })
+    .await
+    .map_err(|err| format!("Claude browser detail task failed: {err}"))?
+}
+
+fn claude_auth_fetch_import_details_inner(
+    handle: AppHandle,
+    summaries: Vec<serde_json::Value>,
+) -> Result<ClaudeBrowserDetailBatch, String> {
+    let cookie_header = claude_session_cookie_header(&handle)?;
+    let org = cookie_header
+        .split(';')
+        .map(str::trim)
+        .find_map(|cookie| cookie.strip_prefix("lastActiveOrg="))
+        .ok_or_else(|| "Claude organisation was not found in the browser session".to_string())?;
+    let mut conversations = Vec::with_capacity(summaries.len());
+    let mut skipped = 0;
+    for summary in summaries {
+        if handle
+            .state::<ClaudeAuthState>()
+            .import_cancel_requested
+            .load(Ordering::SeqCst)
+        {
+            return Err("Claude import cancelled".to_string());
+        }
+        let id = summary
+            .get("uuid")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| "Claude conversation summary had no uuid".to_string())?;
+        let detail = claude_browser_fetch_retry(&handle, &format!("/api/organizations/{org}/chat_conversations/{id}?tree=True&rendering_mode=messages&consistency=strong"))?;
+        if detail.status == 404 {
+            skipped += 1;
+            continue;
+        }
+        if detail.status != 200 {
+            return Err(format!(
+                "Claude conversation {id} returned HTTP {}",
+                detail.status
+            ));
+        }
+        let conversation: serde_json::Value = serde_json::from_str(&detail.body)
+            .map_err(|_| format!("Claude conversation {id} returned invalid JSON"))?;
+        conversations.push(serde_json::json!({"summary": summary, "conversation": conversation}));
+    }
+    Ok(ClaudeBrowserDetailBatch {
+        conversations,
+        skipped,
+    })
+}
+
+#[tauri::command]
+async fn claude_auth_browser_list_test(handle: AppHandle) -> Result<ClaudeAuthStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || claude_auth_browser_list_test_inner(handle))
+        .await
+        .map_err(|err| format!("Claude browser test task failed: {err}"))?
+}
+
+fn claude_auth_browser_list_test_inner(handle: AppHandle) -> Result<ClaudeAuthStatus, String> {
+    eprintln!("[agentsview] starting Claude browser list test");
+    let cookie_header = claude_session_cookie_header(&handle)?;
+    let org = cookie_header
+        .split(';')
+        .map(str::trim)
+        .find_map(|cookie| cookie.strip_prefix("lastActiveOrg="))
+        .ok_or_else(|| "Claude organisation was not found in the browser session".to_string())?;
+    let response = claude_browser_fetch(
+        &handle,
+        &format!("/api/organizations/{org}/chat_conversations_v2?limit=2&offset=0&starred=false&consistency=eventual"),
+    )?;
+    eprintln!(
+        "[agentsview] Claude browser list response: HTTP {} ({} bytes)",
+        response.status,
+        response.body.len()
+    );
+    if let Some(error) = response.error {
+        return Err(format!("Claude browser request failed: {error}"));
+    }
+    if response.status != 200 {
+        return Err(format!(
+            "Claude browser list returned HTTP {}",
+            response.status
+        ));
+    }
+    let body: serde_json::Value = serde_json::from_str(&response.body)
+        .map_err(|_| "Claude browser list returned invalid JSON".to_string())?;
+    let count = ["conversations", "items", "data", "results"]
+        .iter()
+        .find_map(|key| body.get(key).and_then(serde_json::Value::as_array))
+        .map_or(0, Vec::len);
+    Ok(ClaudeAuthStatus {
+        connected: true,
+        message: format!(
+            "Claude browser transport verified. Retrieved {count} conversation summaries."
+        ),
+    })
+}
+
 fn store_claude_session(handle: &AppHandle) -> Result<(), String> {
     let cookie_header = claude_session_cookie_header(handle)?;
     let entry = keyring::Entry::new(CLAUDE_KEYCHAIN_SERVICE, CLAUDE_KEYCHAIN_ACCOUNT)
@@ -627,7 +1317,9 @@ fn start_claude_auth_watcher(handle: AppHandle) {
                 .connected_this_launch
                 .store(true, Ordering::SeqCst);
             if let Some(window) = handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
-                let _ = window.close();
+                // Keep the isolated webview alive, but out of the user's way:
+                // later imports use its same-origin browser fetch transport.
+                let _ = window.hide();
             }
             return;
         }
@@ -3256,6 +3948,29 @@ mod tests {
     #[cfg(unix)]
     use std::time::{SystemTime, UNIX_EPOCH};
     use tempfile::tempdir;
+
+    #[test]
+    fn claude_schedule_config_persists_result_without_secrets() {
+        let config = ClaudeScheduleConfig {
+            enabled: true,
+            interval_minutes: 60,
+            last_started_at: Some("started".into()),
+            last_completed_at: Some("completed".into()),
+            last_error: Some("network unavailable".into()),
+            last_scanned: 12,
+            last_changed: 3,
+            last_fetched: 3,
+            last_imported: 3,
+            last_skipped: 9,
+            last_failed: 1,
+        };
+        let encoded = serde_json::to_string(&config).unwrap();
+        assert!(!encoded.contains("sessionKey"));
+        let decoded: ClaudeScheduleConfig = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded.last_completed_at.as_deref(), Some("completed"));
+        assert_eq!(decoded.last_scanned, 12);
+        assert_eq!(decoded.last_failed, 1);
+    }
 
     #[test]
     fn sidecar_args_use_cobra_long_flags() {

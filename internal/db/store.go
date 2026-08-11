@@ -141,6 +141,7 @@ type Store interface {
 	DeleteSessionIfTrashed(id string) (int64, error)
 	ListTrashedSessions(ctx context.Context) ([]Session, error)
 	EmptyTrash() (int, error)
+	RestoreExcludedSessions(ids []string) (int, error)
 
 	// Upload (local-only; PG returns ErrReadOnly).
 	UpsertSession(s Session) error

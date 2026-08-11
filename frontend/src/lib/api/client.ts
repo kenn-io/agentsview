@@ -582,6 +582,80 @@ async function readImportSSE(
   return result;
 }
 
+export interface CloudImportStats extends ImportStats {
+  downloaded: number;
+  unchanged: number;
+}
+
+export interface ClaudeImportPlan {
+  changed_ids: string[];
+  unchanged: number;
+  state: {
+    status: string;
+    scanned: number;
+    changed: number;
+    fetched: number;
+    imported: number;
+    skipped: number;
+    failed: number;
+  };
+}
+
+export async function planClaudeAICloud(summaries: unknown[], repair = false): Promise<ClaudeImportPlan> {
+  const init = authHeaders({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ summaries, repair }),
+  });
+  const res = await fetch(`${getBase()}/cloud/claude-ai/plan`, init);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message ?? `Claude import plan failed (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function completeClaudeAICloud(): Promise<void> {
+  const init = authHeaders({ method: "POST" });
+  const res = await fetch(`${getBase()}/cloud/claude-ai/complete`, init);
+  if (!res.ok) throw new Error(`Claude import completion failed (${res.status})`);
+}
+
+export async function failClaudeAICloud(): Promise<void> {
+  const res = await fetch(`${getBase()}/cloud/claude-ai/fail`, authHeaders({ method: "POST" }));
+  if (!res.ok) throw new Error(`Claude import failure state update failed (${res.status})`);
+}
+
+export async function importClaudeAICloud(
+  conversations: unknown[],
+  cb?: ImportCallbacks,
+  repair = false,
+): Promise<CloudImportStats> {
+  const init = authHeaders({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ conversations, repair }),
+  });
+  const headers = new Headers(init.headers);
+  headers.set("Accept", "text/event-stream");
+  const res = await fetch(
+    `${getBase()}/cloud/claude-ai/import`,
+    { ...init, headers },
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(
+      (err as { error?: string; message?: string }).error
+      ?? (err as { message?: string }).message
+      ?? `Claude import failed (${res.status})`,
+    );
+  }
+  if (res.headers.get("content-type")?.includes("text/event-stream")) {
+    return readImportSSE(res, cb) as Promise<CloudImportStats>;
+  }
+  return res.json();
+}
+
 export async function importClaudeAI(
   file: File,
   cb?: ImportCallbacks,

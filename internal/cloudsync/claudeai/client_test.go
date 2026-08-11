@@ -28,7 +28,23 @@ func TestFirstConversationPage(t *testing.T) {
 	page, err := client.FirstConversationPage(context.Background())
 	require.NoError(t, err)
 	assert.Len(t, page.Conversations, 1)
-	assert.True(t, page.HasMore)
+	require.NotNil(t, page.HasMore)
+	assert.True(t, *page.HasMore)
+}
+
+func TestListConversationsUsesRequestedSmallPage(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "2", r.URL.Query().Get("limit"))
+		_, _ = w.Write([]byte(`{"conversations":[{"uuid":"conversation-1"},{"uuid":"conversation-2"}],"has_more":true}`))
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := NewClient(server.Client(), server.URL, Credentials{Cookie: "sessionKey=secret; lastActiveOrg=org-123"})
+	require.NoError(t, err)
+	conversations, err := client.ListConversations(context.Background(), 2)
+	require.NoError(t, err)
+	assert.Len(t, conversations, 2)
 }
 
 func TestFirstConversationPageDoesNotExposeCookieOnHTTPError(t *testing.T) {

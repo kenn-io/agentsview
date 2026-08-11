@@ -11,11 +11,6 @@ import (
 	"go.kenn.io/agentsview/internal/cloudsync/claudeai"
 )
 
-const (
-	claudeKeychainService = "io.agentsview.desktop"
-	claudeKeychainAccount = "claude-ai/default"
-)
-
 func newCloudCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "cloud",
@@ -47,7 +42,7 @@ func newCloudClaudeAITestConnectionCommand(getSecret keychainGet) *cobra.Command
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cookie, err := getSecret(claudeKeychainService, claudeKeychainAccount)
+			cookie, err := getSecret(claudeai.KeychainService, claudeai.KeychainAccount)
 			if err != nil {
 				return fmt.Errorf("read saved Claude.ai session: %w", err)
 			}

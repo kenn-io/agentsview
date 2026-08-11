@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,9 +30,23 @@ type claudeAIMessage struct {
 // Block types: text, thinking, tool_use, tool_result,
 // voice_note, token_budget.
 type claudeAIBlock struct {
-	Type     string `json:"type"`
-	Text     string `json:"text"`
-	Thinking string `json:"thinking"`
+	Type     string          `json:"type"`
+	Text     string          `json:"text"`
+	Thinking string          `json:"thinking"`
+	Raw      json.RawMessage `json:"-"`
+}
+
+// UnmarshalJSON retains every provider block verbatim. Claude regularly adds
+// block types; rendering an unknown block must not turn into data loss.
+func (b *claudeAIBlock) UnmarshalJSON(data []byte) error {
+	type plain claudeAIBlock
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	decoded.Raw = append(decoded.Raw[:0], data...)
+	*b = claudeAIBlock(decoded)
+	return nil
 }
 
 // ClaudeAIExportParser is implemented by the Claude.ai import-only provider to
@@ -120,10 +135,12 @@ func assembleClaudeAIContent(
 	}
 
 	var contentParts []string
+	hasTextBlock := false
 	for _, b := range m.Content {
 		switch b.Type {
 		case "text":
 			if b.Text != "" {
+				hasTextBlock = true
 				contentParts = append(contentParts, b.Text)
 			}
 		case "thinking":
@@ -132,9 +149,19 @@ func assembleClaudeAIContent(
 				contentParts = append(contentParts,
 					"[Thinking]\n"+b.Thinking+"\n[/Thinking]")
 			}
-			// tool_use, tool_result, voice_note, token_budget
-			// are metadata blocks — skip for display content.
+		default:
+			// Persist non-text blocks in message content as typed JSON fallback.
+			// This is deliberately verbose: data stays searchable/exportable until
+			// the UI grows a dedicated renderer for this Claude block type.
+			var pretty bytes.Buffer
+			if json.Indent(&pretty, b.Raw, "", "  ") == nil {
+				contentParts = append(contentParts, "[Claude block: "+b.Type+"]\n```json\n"+pretty.String()+"\n```")
+			}
 		}
+	}
+
+	if !hasTextBlock && m.Text != "" {
+		contentParts = append([]string{m.Text}, contentParts...)
 	}
 
 	if len(contentParts) == 0 {
