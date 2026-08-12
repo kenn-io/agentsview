@@ -190,6 +190,7 @@ async function flushPromises() {
 
 beforeEach(() => {
   generateForSession.mockReset();
+  vi.mocked(copyToClipboard).mockReset().mockResolvedValue(true);
   openersService.getApiV1Openers.mockReset().mockResolvedValue({ openers: [] });
   sessionsService.getApiV1SessionsIdDirectory.mockReset().mockResolvedValue({ path: "" });
   sessionsService.getApiV1SessionsIdUsage.mockReset().mockResolvedValue(makeUsage());
@@ -326,6 +327,46 @@ describe("SessionBreadcrumb", () => {
 
     expect(document.body.textContent).toContain("重命名");
     expect(document.body.textContent).toContain("删除");
+
+    unmount(component);
+  });
+
+  it("shows clipboard failures as errors when copying the directory path", async () => {
+    vi.mocked(copyToClipboard).mockResolvedValue(false);
+    sessionsService.getApiV1SessionsIdDirectory.mockResolvedValue({
+      path: "/tmp/project",
+    });
+
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("claude", {
+          file_path: "/tmp/project/session.jsonl",
+        }),
+        onBack: () => {},
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(document.querySelector(".resume-btn")).toBeTruthy();
+    });
+    document.querySelector<HTMLButtonElement>(".resume-btn")?.click();
+    await tick();
+
+    const copyPathButton = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".open-menu-item"),
+    ).find((button) => button.textContent?.includes("Copy directory path"));
+    expect(copyPathButton).toBeTruthy();
+    copyPathButton!.click();
+
+    await vi.waitFor(() => {
+      const feedback = document.querySelector<HTMLButtonElement>(".resume-btn");
+      expect(feedback?.textContent?.trim()).toBe("Failed");
+      expect(feedback?.classList.contains("has-feedback-error")).toBe(true);
+      expect(feedback?.classList.contains("has-feedback-success")).toBe(false);
+      expect(feedback?.querySelector(".lucide-triangle-alert")).toBeTruthy();
+      expect(feedback?.querySelector(".lucide-check")).toBeNull();
+    });
 
     unmount(component);
   });

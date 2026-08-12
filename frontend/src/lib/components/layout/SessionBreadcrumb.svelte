@@ -13,6 +13,7 @@
     LinkIcon,
     SearchIcon,
     SquareTerminalIcon,
+    TriangleAlertIcon,
   } from "../../icons.js";
   import { onDestroy, onMount } from "svelte";
   import type { Session } from "../../api/types.js";
@@ -74,6 +75,7 @@
   let showOpenMenu = $state(false);
   let openers: Opener[] = $state([]);
   let openFeedback = $state("");
+  let openFeedbackKind = $state<"success" | "error">("success");
   let feedbackTimer: ReturnType<typeof setTimeout> | undefined;
   let sessionDir = $state<string | null>(null);
   const openersRead = new LatestRead();
@@ -490,8 +492,9 @@
     }
   }
 
-  function showFeedback(msg: string) {
+  function showFeedback(msg: string, kind: "success" | "error" = "success") {
     openFeedback = msg;
+    openFeedbackKind = kind;
     clearTimeout(feedbackTimer);
     feedbackTimer = setTimeout(() => { openFeedback = ""; }, 2000);
   }
@@ -518,9 +521,12 @@
       if (resp.command) {
         const cmd = formatResumeResponseCommand(session.agent, resp);
         const ok = cmd ? await copyToClipboard(cmd) : false;
-        showFeedback(ok
-          ? m.session_breadcrumb_command_copied()
-          : m.session_breadcrumb_failed());
+        showFeedback(
+          ok
+            ? m.session_breadcrumb_command_copied()
+            : m.session_breadcrumb_failed(),
+          ok ? "success" : "error",
+        );
         return;
       }
     } catch {
@@ -531,11 +537,14 @@
     });
     if (cmd) {
       const ok = await copyToClipboard(cmd);
-      showFeedback(ok
-        ? m.session_breadcrumb_command_copied()
-        : m.session_breadcrumb_failed());
+      showFeedback(
+        ok
+          ? m.session_breadcrumb_command_copied()
+          : m.session_breadcrumb_failed(),
+        ok ? "success" : "error",
+      );
     } else {
-      showFeedback(m.session_breadcrumb_not_supported());
+      showFeedback(m.session_breadcrumb_not_supported(), "error");
     }
   }
 
@@ -552,9 +561,12 @@
       if (resp.command) {
         const cmd = formatResumeResponseCommand(session.agent, resp);
         const ok = cmd ? await copyToClipboard(cmd) : false;
-        showFeedback(ok
-          ? m.session_breadcrumb_command_copied()
-          : m.session_breadcrumb_failed());
+        showFeedback(
+          ok
+            ? m.session_breadcrumb_command_copied()
+            : m.session_breadcrumb_failed(),
+          ok ? "success" : "error",
+        );
         return;
       }
     } catch {
@@ -565,24 +577,30 @@
     });
     if (cmd) {
       const ok = await copyToClipboard(cmd);
-      showFeedback(ok
-        ? m.session_breadcrumb_command_copied()
-        : m.session_breadcrumb_failed());
+      showFeedback(
+        ok
+          ? m.session_breadcrumb_command_copied()
+          : m.session_breadcrumb_failed(),
+        ok ? "success" : "error",
+      );
     } else {
-      showFeedback(m.session_breadcrumb_not_supported());
+      showFeedback(m.session_breadcrumb_not_supported(), "error");
     }
   }
 
   async function handleCopyFilePath() {
     showOpenMenu = false;
     if (!sessionDir) {
-      showFeedback(m.session_breadcrumb_no_path_available());
+      showFeedback(m.session_breadcrumb_no_path_available(), "error");
       return;
     }
     const ok = await copyToClipboard(sessionDir);
-    showFeedback(ok
-      ? m.session_breadcrumb_path_copied()
-      : m.session_breadcrumb_failed());
+    showFeedback(
+      ok
+        ? m.session_breadcrumb_path_copied()
+        : m.session_breadcrumb_failed(),
+      ok ? "success" : "error",
+    );
   }
 
   async function handleOpenIn(opener: Opener) {
@@ -598,7 +616,7 @@
         target: opener.name,
       }));
     } catch {
-      showFeedback(m.session_breadcrumb_failed_to_open());
+      showFeedback(m.session_breadcrumb_failed_to_open(), "error");
     }
   }
 
@@ -623,9 +641,12 @@
       if (resp.command) {
         const cmd = formatResumeResponseCommand(session.agent, resp);
         const ok = cmd ? await copyToClipboard(cmd) : false;
-        showFeedback(ok
-          ? m.session_breadcrumb_command_copied()
-          : m.session_breadcrumb_failed());
+        showFeedback(
+          ok
+            ? m.session_breadcrumb_command_copied()
+            : m.session_breadcrumb_failed(),
+          ok ? "success" : "error",
+        );
         return;
       }
     } catch {
@@ -636,11 +657,14 @@
     });
     if (cmd) {
       const ok = await copyToClipboard(cmd);
-      showFeedback(ok
-        ? m.session_breadcrumb_command_copied()
-        : m.session_breadcrumb_failed());
+      showFeedback(
+        ok
+          ? m.session_breadcrumb_command_copied()
+          : m.session_breadcrumb_failed(),
+        ok ? "success" : "error",
+      );
     } else {
-      showFeedback(m.session_breadcrumb_not_supported());
+      showFeedback(m.session_breadcrumb_not_supported(), "error");
     }
   }
 
@@ -842,7 +866,8 @@
         <span class="open-group">
           <button
             class="resume-btn"
-            class:has-feedback={openFeedback !== ""}
+            class:has-feedback-success={openFeedback !== "" && openFeedbackKind === "success"}
+            class:has-feedback-error={openFeedback !== "" && openFeedbackKind === "error"}
             onclick={(e) => { e.stopPropagation(); showOpenMenu = !showOpenMenu; }}
             title={canResume
               ? m.session_breadcrumb_resume_session_in_terminal()
@@ -852,7 +877,11 @@
               : m.session_breadcrumb_session_actions()}
           >
             {#if openFeedback}
-              <CheckIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+              {#if openFeedbackKind === "error"}
+                <TriangleAlertIcon size="11" strokeWidth="2.2" aria-hidden="true" />
+              {:else}
+                <CheckIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+              {/if}
               {openFeedback}
             {:else}
               {canResume
@@ -1312,8 +1341,12 @@
     background: var(--bg-surface-hover);
   }
 
-  .resume-btn.has-feedback {
+  .resume-btn.has-feedback-success {
     color: var(--accent-green, #2ea043);
+  }
+
+  .resume-btn.has-feedback-error {
+    color: var(--accent-red, #e55);
   }
 
   .open-menu {
