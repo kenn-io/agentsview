@@ -130,11 +130,12 @@ func qoderCollectFlatProject(
 // dir's basename (typically "cli") and falls back to "SharedClientCache"
 // when the root has no parent (e.g. user-supplied QODER_PROJECTS_DIR).
 func qoderFlatProjectHint(root string) string {
-	parent := filepath.Base(filepath.Dir(root))
-	if parent == "." || parent == "/" || parent == "" {
+	root = filepath.Clean(root)
+	parentDir := filepath.Dir(root)
+	if parentDir == root || parentDir == "." {
 		return "SharedClientCache"
 	}
-	return parent
+	return filepath.Base(parentDir)
 }
 
 func FindQoderSourceFile(projectsDir, rawID string) string {

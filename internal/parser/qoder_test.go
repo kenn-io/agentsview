@@ -431,4 +431,7 @@ func TestQoderFlatProjectHint(t *testing.T) {
 	t.Run("root with no parent", func(t *testing.T) {
 		assert.Equal(t, "SharedClientCache", qoderFlatProjectHint("/"))
 	})
+	t.Run("relative root with no parent", func(t *testing.T) {
+		assert.Equal(t, "SharedClientCache", qoderFlatProjectHint("projects"))
+	})
 }
