@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -47,6 +48,11 @@ func (s *Server) humaStartClaudeAICloud(ctx context.Context, in *cloudSyncInput)
 		return nil, apiError(http.StatusNotImplemented, "cloud import not available in read-only mode")
 	}
 	status, err := s.claudeSync.Start(ctx, in.Body.Mode)
+	if errors.Is(err, claudeai.ErrSyncAlreadyRunning) {
+		// Starting an already-running local job is idempotent. This also lets a
+		// freshly loaded settings page attach to a scheduled sync.
+		return &cloudSyncResponse{Body: status}, nil
+	}
 	if err != nil {
 		return nil, apiError(http.StatusConflict, err.Error())
 	}

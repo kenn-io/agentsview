@@ -26,6 +26,7 @@
   let busy = $state(false);
   let cancelRequested = $state(false);
   let error = $state("");
+  const syncActive = $derived(sync.status === "running" || sync.status === "cancelling");
   let pollTimer: ReturnType<typeof setInterval> | undefined;
   const isDesktop = $derived(desktopInvoke() !== null);
 
@@ -55,6 +56,23 @@
     try { schedule = await getClaudeAISchedule(); } catch (reason) { error = reason instanceof Error ? reason.message : String(reason); }
   }
 
+  async function refreshSync() {
+    try {
+      sync = await getClaudeAISyncStatus();
+    } catch (reason) {
+      error = reason instanceof Error ? reason.message : String(reason);
+    }
+  }
+
+  async function waitForSync() {
+    while (sync.status === "running" || sync.status === "cancelling") {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await refreshSync();
+    }
+    status = { ...status, message: `Claude sync ${sync.status}: scanned ${sync.scanned}, changed ${sync.changed}, imported ${sync.imported + sync.updated}, skipped ${sync.skipped}, failed ${sync.failed}.` };
+    if (sync.error) error = sync.error;
+  }
+
   async function configureSchedule(enabled: boolean) {
     try { schedule = await configureClaudeAISchedule({ ...schedule, enabled }); } catch (reason) { error = reason instanceof Error ? reason.message : String(reason); }
   }
@@ -65,14 +83,18 @@
     error = "";
     try {
       sync = await startClaudeAISync(repair ? "repair" : "incremental");
-      while (sync.status === "running" || sync.status === "cancelling") {
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        sync = await getClaudeAISyncStatus();
-      }
-      status = { ...status, message: `Claude sync ${sync.status}: scanned ${sync.scanned}, changed ${sync.changed}, imported ${sync.imported + sync.updated}, skipped ${sync.skipped}, failed ${sync.failed}.` };
-      if (sync.error) error = sync.error;
+      await waitForSync();
     } catch (reason) {
-      error = reason instanceof Error ? reason.message : String(reason);
+      // The scheduler or another browser tab can start a job between the last
+      // status read and this click. Attach to that job instead of presenting a
+      // misleading failed import.
+      await refreshSync();
+      if (syncActive) {
+        error = "";
+        await waitForSync();
+      } else {
+        error = reason instanceof Error ? reason.message : String(reason);
+      }
     } finally {
       busy = false;
       cancelRequested = false;
@@ -104,6 +126,7 @@
     if (desktopInvoke()) {
       void refreshStatus();
       void refreshSchedule();
+      void refreshSync();
     }
   });
 
@@ -136,13 +159,13 @@
         Connect
       </Button>
       {#if status.connected}
-        <Button size="sm" disabled={busy} onclick={() => void importConversations()}>
+        <Button size="sm" disabled={busy || syncActive} onclick={() => void importConversations()}>
           Import
         </Button>
-        <Button size="sm" disabled={busy} onclick={() => void importConversations(true)}>
+        <Button size="sm" disabled={busy || syncActive} onclick={() => void importConversations(true)}>
           Repair import
         </Button>
-        {#if busy}
+        {#if busy || syncActive}
           <Button size="sm" disabled={cancelRequested} onclick={() => void cancelImport()}>
             {cancelRequested ? "Cancelling…" : "Cancel"}
           </Button>

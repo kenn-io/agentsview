@@ -134,6 +134,9 @@ func (s *Service) Close() {
 	}
 }
 func (s *Service) Status() JobStatus { s.mu.Lock(); defer s.mu.Unlock(); return s.status }
+
+var ErrSyncAlreadyRunning = errors.New("Claude sync already running")
+
 func (s *Service) Start(ctx context.Context, mode SyncMode) (JobStatus, error) {
 	if mode != SyncIncremental && mode != SyncRepair {
 		return JobStatus{}, fmt.Errorf("unsupported Claude sync mode %q", mode)
@@ -141,7 +144,7 @@ func (s *Service) Start(ctx context.Context, mode SyncMode) (JobStatus, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.status.Status == "running" || s.status.Status == "cancelling" {
-		return JobStatus{}, errors.New("Claude sync already running")
+		return s.status, ErrSyncAlreadyRunning
 	}
 	// HTTP request contexts end as soon as the start endpoint returns. The job
 	// owns its cancellation lifecycle instead of inheriting that short-lived

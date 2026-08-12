@@ -28,6 +28,19 @@ func TestDecodeBrowserPageHonorsExplicitHasMore(t *testing.T) {
 	assert.False(t, hasMore)
 }
 
+func TestServiceStartReturnsRunningJobIdempotently(t *testing.T) {
+	t.Parallel()
+	service := NewService(transport.NewBroker(), nil, t.TempDir(), "local")
+	t.Cleanup(service.Close)
+
+	started, err := service.Start(context.Background(), SyncIncremental)
+	require.NoError(t, err)
+	attached, err := service.Start(context.Background(), SyncIncremental)
+	require.ErrorIs(t, err, ErrSyncAlreadyRunning)
+	assert.Equal(t, started.ID, attached.ID)
+	assert.Equal(t, "running", attached.Status)
+}
+
 func TestServiceRunsBeyondStartRequestContext(t *testing.T) {
 	t.Parallel()
 	broker := transport.NewBroker()
