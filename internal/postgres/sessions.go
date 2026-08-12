@@ -58,10 +58,11 @@ func (b *postgresBunBackend) Capabilities() db.BackendCapabilities {
 		writes[db.WriteInsightDelete] = true
 	}
 	return db.BackendCapabilities{
-		FullText:      postgresFullTextCapability{},
-		SessionSearch: postgresFullTextCapability{},
-		HybridLexical: postgresFullTextCapability{},
-		SearchDialect: db.PostgresBunSearchDialect(),
+		AnalyticsDialect: db.PostgresBunAnalyticsDialect(),
+		FullText:         postgresFullTextCapability{},
+		SessionSearch:    postgresFullTextCapability{},
+		HybridLexical:    postgresFullTextCapability{},
+		SearchDialect:    db.PostgresBunSearchDialect(),
 		Semantic: db.NewVectorSemanticCapability(
 			b.store.getVectorSearcher,
 			b.store.semanticUnavailableError,
