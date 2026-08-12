@@ -99,7 +99,9 @@ func parseAmpSession(
 		content, thinkingText, hasThinking, hasToolUse, tcs, trs :=
 			ExtractTextContent(msg.Get("content"))
 		trs = append(trs, extractAmpToolResults(msg.Get("content"))...)
-		if strings.TrimSpace(content) == "" && len(trs) == 0 {
+		usage := msg.Get("usage")
+		if strings.TrimSpace(content) == "" && len(trs) == 0 &&
+			(role != RoleAssistant || !ampUsageHasTokenCounters(usage)) {
 			return true
 		}
 
@@ -121,7 +123,7 @@ func parseAmpSession(
 			ToolCalls:     tcs,
 			ToolResults:   trs,
 		}
-		applyAmpTokenUsage(&parsed, msg.Get("usage"))
+		applyAmpTokenUsage(&parsed, usage)
 
 		messages = append(messages, parsed)
 		ordinal++
@@ -165,6 +167,13 @@ func parseAmpSession(
 	accumulateMessageTokenUsage(sess, messages)
 
 	return sess, messages, nil
+}
+
+func ampUsageHasTokenCounters(usage gjson.Result) bool {
+	return usage.Get("inputTokens").Exists() ||
+		usage.Get("outputTokens").Exists() ||
+		usage.Get("cacheCreationInputTokens").Exists() ||
+		usage.Get("cacheReadInputTokens").Exists()
 }
 
 // ampFoldsCacheCreationIntoInput reports whether an Amp usage model

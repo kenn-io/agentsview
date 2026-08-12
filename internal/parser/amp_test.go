@@ -770,6 +770,45 @@ func TestAmpProviderParsesFullyCachedUsage(t *testing.T) {
 	assert.Equal(t, 18655, assistant.ContextTokens)
 }
 
+func TestAmpProviderPreservesUsageOnlyAssistantMessage(t *testing.T) {
+	content := `{
+		"v": 1,
+		"id": "T-usage-only-response",
+		"created": 1704067200000,
+		"messages": [
+			{"role": "user", "content": [{"type": "text", "text": "hi"}]},
+			{"role": "assistant", "content": [],
+			 "usage": {"model": "gpt-5.6-sol", "inputTokens": 0,
+				"outputTokens": 0, "cacheReadInputTokens": 75,
+				"cacheCreationInputTokens": 25}}
+		]
+	}`
+
+	sess, msgs, err := runAmpParserTest(t, content)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, msgs, 2)
+
+	assistant := msgs[1]
+	assert.Equal(t, RoleAssistant, assistant.Role)
+	assert.Empty(t, assistant.Content)
+	assert.Equal(t, "gpt-5.6-sol", assistant.Model)
+	assert.JSONEq(t, `{
+		"input_tokens": 25,
+		"output_tokens": 0,
+		"cache_read_input_tokens": 75
+	}`, string(assistant.TokenUsage))
+	assert.True(t, assistant.HasContextTokens)
+	assert.Equal(t, 100, assistant.ContextTokens)
+	assert.True(t, assistant.HasOutputTokens)
+	assert.Zero(t, assistant.OutputTokens)
+
+	assert.True(t, sess.HasPeakContextTokens)
+	assert.Equal(t, 100, sess.PeakContextTokens)
+	assert.True(t, sess.HasTotalOutputTokens)
+	assert.Zero(t, sess.TotalOutputTokens)
+}
+
 // Assistant messages without a usage object are normal, not corruption.
 func TestAmpProviderParsesMessageWithoutUsage(t *testing.T) {
 	msgs := ampUsageThread(t, `
