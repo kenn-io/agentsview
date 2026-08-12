@@ -290,14 +290,18 @@ Grok section and remove the explicit registry exception in the coverage test.
   transcript, including its `token_count` records. Agentsview recognizes the
   copied parent `session_meta` and discards that leading replay through the
   last pre-creation UUIDv7 `turn_id`, preserving only usage produced by the
-  derived session. Child-only subagent transcripts are left unchanged.
-  Reverified 2026-08-11 against locally observed multi-agent rollouts and the
-  pinned format sources; the pinned TUI is the evidenced `history.jsonl`
-  producer. No `append_entry` producer call exists under the pinned
-  `app-server` or `exec` trees, so this evidence does not establish IDE,
-  desktop, or `codex exec` activity-hint coverage. Locally observed Codex app
-  builds can write the same schema, but that is observational evidence rather
-  than a public compatibility guarantee. Agentsview derives the hint path as
+  derived session. Child-only subagent transcripts are left unchanged. An
+  appended `session_meta` after an incremental-sync offset forces an
+  authoritative replacement of that derived session, because the metadata can
+  be the copied parent record that activates replay filtering. The original
+  parent session remains valid and is not reparsed. Reverified 2026-08-12
+  against locally observed multi-agent rollouts and the pinned format sources;
+  the pinned TUI is the evidenced `history.jsonl` producer. No `append_entry`
+  producer call exists under the pinned `app-server` or `exec` trees, so this
+  evidence does not establish IDE, desktop, or `codex exec` activity-hint
+  coverage. Locally observed Codex app builds can write the same schema, but
+  that is observational evidence rather than a public compatibility guarantee.
+  Agentsview derives the hint path as
   `<configured-sessions-root>/../history.jsonl`; a custom sessions root
   without that sibling, or `HistoryPersistence::None`, degrades to ordinary
   watcher behavior, degraded-coverage polling when applicable, and the daily

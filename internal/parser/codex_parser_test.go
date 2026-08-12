@@ -2691,11 +2691,11 @@ func TestParseCodexSessionFrom_DedupsReemittedPrompt(t *testing.T) {
 	})
 }
 
-func TestParseCodexSessionFrom_SkipsSessionMeta(t *testing.T) {
+func TestParseCodexSessionFrom_SessionMetaNeedsFullParse(t *testing.T) {
 	t.Parallel()
 
-	// File where session_meta appears after the offset
-	// (shouldn't happen in practice but should be skipped).
+	// A session_meta after the offset can be copied parent metadata that
+	// activates subagent replay filtering, so the incremental result is stale.
 	initial := testjsonl.JoinJSONL(
 		testjsonl.CodexSessionMetaJSON(
 			"meta-2", "/tmp", "codex_cli_rs", tsEarly,
@@ -2722,13 +2722,10 @@ func TestParseCodexSessionFrom_SkipsSessionMeta(t *testing.T) {
 	f.WriteString(extra)
 	f.Close()
 
-	newMsgs, _, _, err := parseCodexTestSessionFrom(t,
+	_, _, _, err := parseCodexTestSessionFrom(t,
 		path, offset, 5, false,
 	)
-	require.NoError(t, err)
-	// Only the assistant message, not the session_meta.
-	assert.Equal(t, 1, len(newMsgs))
-	assert.Equal(t, 5, newMsgs[0].Ordinal)
+	require.ErrorIs(t, err, errCodexIncrementalNeedsFullParse)
 }
 
 func TestParseCodexSessionFrom_NoNewData(t *testing.T) {

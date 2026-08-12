@@ -2168,10 +2168,12 @@ func (p *codexProvider) parseSessionFromWithSources(
 			if fallbackErr != nil {
 				return
 			}
-			// Skip session_meta — already processed in
-			// the initial full parse.
+			// A session_meta after the persisted offset can change fork or
+			// subagent replay classification. Rebuild the current session
+			// authoritatively instead of appending against stale gate state.
 			if gjson.Get(line, "type").Str ==
 				codexTypeSessionMeta {
+				fallbackErr = errCodexIncrementalNeedsFullParse
 				return
 			}
 			if codexIncrementalNeedsFullParse(line) {

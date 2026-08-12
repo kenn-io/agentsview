@@ -528,6 +528,50 @@ func TestCodexProviderIncrementalSnapshotKeepsCapturedEOFConservative(t *testing
 	assert.False(t, newStaged)
 }
 
+func TestCodexProviderIncrementalAppendedSessionMetaNeedsFullParse(t *testing.T) {
+	root := t.TempDir()
+	childID := "019eb791-cf7d-75c1-8439-9ed74c1229f3"
+	parentID := "019eb791-cb95-7a14-830f-9968e582f290"
+	prefix := testjsonl.JoinJSONL(
+		testjsonl.CodexSubagentSessionMetaJSON(
+			childID, parentID, "/workspace/project-a", "codex_cli_rs", tsEarly,
+		),
+	)
+	path := writeCodexProviderSessionContent(t, root, childID, prefix)
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	source := requireCodexProviderSource(t, provider, childID)
+	initialFingerprint, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+
+	appendCodexProviderContent(t, path, testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			parentID, "/workspace/project-a", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexMsgJSON(
+			"assistant", "replayed parent answer", tsEarlyS5,
+		),
+	))
+	currentFingerprint, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+
+	outcome, status, err := provider.ParseIncremental(
+		context.Background(),
+		IncrementalRequest{
+			Source:       source,
+			Fingerprint:  currentFingerprint,
+			SessionID:    "codex:" + childID,
+			Offset:       initialFingerprint.Size,
+			StartOrdinal: 0,
+		},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, IncrementalNeedsFullParse, status)
+	assert.True(t, outcome.ForceReplace)
+	assert.Empty(t, outcome.Messages)
+}
+
 func TestCodexProviderIncrementalRejectsFingerprintIdentityMismatch(t *testing.T) {
 	root := t.TempDir()
 	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229f3"
