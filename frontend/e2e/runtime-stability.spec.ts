@@ -45,7 +45,7 @@ test.describe("Runtime stability", () => {
           throw error;
         }
         throw new Error(
-          `session startup failed after browser errors:\n${startupErrors.join("\n")}`,
+          `session startup failed after browser errors:\n${startupErrors.join("\n")}\n${monitor.diagnosticSummary()}`,
           { cause: error },
         );
       }
@@ -75,7 +75,7 @@ test.describe("Runtime stability", () => {
       const otherErrors = monitor
         .excluding(DEPTH_ERROR_RE)
         .filter((m) => !KNOWN_SVELTE_WARNINGS_RE.test(m));
-      expect(otherErrors).toEqual([]);
+      expect(otherErrors, monitor.diagnosticSummary()).toEqual([]);
     },
   );
 });
