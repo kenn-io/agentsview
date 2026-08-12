@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button } from "@kenn-io/kit-ui";
+  import { Button, Spinner } from "@kenn-io/kit-ui";
   import { onDestroy, onMount } from "svelte";
   import { cancelClaudeAISync, configureClaudeAISchedule, getClaudeAISchedule, getClaudeAISyncStatus, startClaudeAISync, type ClaudeScheduleConfig, type ClaudeSyncStatus } from "../../api/client.js";
 
@@ -28,6 +28,7 @@
   let error = $state("");
   const syncActive = $derived(sync.status === "running" || sync.status === "cancelling");
   let pollTimer: ReturnType<typeof setInterval> | undefined;
+  let syncPollTimer: ReturnType<typeof setInterval> | undefined;
   const isDesktop = $derived(desktopInvoke() !== null);
 
   function stopPolling() {
@@ -38,6 +39,16 @@
   function startPolling() {
     stopPolling();
     pollTimer = setInterval(() => void refreshStatus(), 1000);
+  }
+
+  function stopSyncPolling() {
+    if (syncPollTimer) clearInterval(syncPollTimer);
+    syncPollTimer = undefined;
+  }
+
+  function startSyncPolling() {
+    if (syncPollTimer) return;
+    syncPollTimer = setInterval(() => void refreshSync(), 500);
   }
 
   async function refreshStatus() {
@@ -59,12 +70,16 @@
   async function refreshSync() {
     try {
       sync = await getClaudeAISyncStatus();
+      if (syncActive) startSyncPolling();
+      else stopSyncPolling();
     } catch (reason) {
       error = reason instanceof Error ? reason.message : String(reason);
+      stopSyncPolling();
     }
   }
 
   async function waitForSync() {
+    startSyncPolling();
     while (sync.status === "running" || sync.status === "cancelling") {
       await new Promise((resolve) => setTimeout(resolve, 500));
       await refreshSync();
@@ -130,7 +145,10 @@
     }
   });
 
-  onDestroy(stopPolling);
+  onDestroy(() => {
+    stopPolling();
+    stopSyncPolling();
+  });
 </script>
 
 <div class="claude-ai-settings">
@@ -150,6 +168,22 @@
     {/if}
     {#if error}
       <p class="connection-error" role="alert">{error}</p>
+    {/if}
+    {#if syncActive}
+      <div class="sync-progress" role="status" aria-live="polite">
+        <span class="sync-progress-spinner" aria-hidden="true"><Spinner size={14} /></span>
+        <div>
+          <strong>{sync.status === "cancelling" ? "Cancelling Claude sync…" : "Syncing Claude conversations…"}</strong>
+          <span>
+            Scanned {sync.scanned} · changed {sync.changed} · fetched {sync.fetched} · imported {sync.imported + sync.updated} · skipped {sync.skipped}
+          </span>
+          <small>You can leave this page. The sync continues while AgentsView is running.</small>
+        </div>
+      </div>
+    {:else if sync.status === "completed" || sync.status === "cancelled" || sync.status === "failed"}
+      <p class:connection-error={sync.status === "failed"} class="sync-result" role="status">
+        Claude sync {sync.status}: scanned {sync.scanned}, changed {sync.changed}, imported {sync.imported + sync.updated}, skipped {sync.skipped}, failed {sync.failed}.
+      </p>
     {/if}
   </div>
 
@@ -234,7 +268,40 @@
     color: var(--accent-red, #ef4444);
   }
 
+  .sync-progress {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    margin-top: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-muted);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.45;
+  }
 
+  .sync-progress-spinner {
+    display: flex;
+    margin-top: 2px;
+    color: var(--accent-blue);
+  }
+
+  .sync-progress strong,
+  .sync-progress span,
+  .sync-progress small {
+    display: block;
+  }
+
+  .sync-progress strong {
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+
+  .sync-progress small,
+  .sync-result {
+    color: var(--text-muted);
+  }
 
   .schedule-control {
     color: var(--text-secondary);
