@@ -16,6 +16,17 @@ const (
 	bunAnalyticsToolFactsCTE         = "analytics_tool_facts"
 )
 
+// bunAnalyticsDateScope makes the fact grain that owns From/To explicit.
+// Session-scoped panels filter sessions by their local start date. Fact-scoped
+// panels leave From/To for message or tool predicates, while both scopes keep
+// day/hour predicates at message grain.
+type bunAnalyticsDateScope uint8
+
+const (
+	bunAnalyticsFactDateScope bunAnalyticsDateScope = iota
+	bunAnalyticsSessionDateScope
+)
+
 // bunAnalyticsSQL builds the relational input shared by analytics panels.
 // It owns filtering and pairing; a BunAnalyticsDialect supplies only scalar
 // expressions whose spelling differs between engines.
@@ -45,7 +56,7 @@ func newBunAnalyticsSQL(
 // day/hour filters intentionally remain outside this CTE: panels choose
 // whether those predicates qualify a session or individual message facts.
 func (b *bunAnalyticsSQL) filteredSessionsCTE(
-	store bun.IDB, timestampOrderExpr func(string) string, applyDate bool,
+	store bun.IDB, timestampOrderExpr func(string) string, dateScope bunAnalyticsDateScope,
 ) BunCTEFragment {
 	query := store.NewSelect().TableExpr("sessions AS session").
 		ColumnExpr("session.*").
@@ -112,11 +123,15 @@ func (b *bunAnalyticsSQL) filteredSessionsCTE(
 			bunNullableTimestamp("session.started_at") + ", session.created_at)")
 		query = query.Where(activity+" >= "+timestampOrderExpr("?"), b.filter.ActiveSince)
 	}
-	if applyDate {
-		local := b.dialect.LocalTimestamp(
-			"COALESCE("+bunNullableTimestamp("session.started_at")+
-				", session.created_at)", b.zone,
-		)
+	if dateScope == bunAnalyticsSessionDateScope &&
+		(b.filter.From != "" || b.filter.To != "") {
+		instant := "COALESCE(" + bunNullableTimestamp("session.started_at") +
+			", session.created_at)"
+		from, to := b.filter.utcRange()
+		ordered := timestampOrderExpr(instant)
+		query = query.Where(ordered+" >= "+timestampOrderExpr("?"), from).
+			Where(ordered+" <= "+timestampOrderExpr("?"), to)
+		local := b.dialect.LocalTimestamp(instant, b.zone)
 		query = appendBunAnalyticsFragmentRange(
 			query, b.dialect.Date(local), b.filter.From, b.filter.To,
 		)

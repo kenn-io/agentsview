@@ -272,6 +272,31 @@ func TestAppendBunUsageTerminationFilterUsesProvidedReference(t *testing.T) {
 	assert.Equal(t, []string{"active", "stale", "unclean"}, ids)
 }
 
+func TestBunDailyUsageQueriesUseProvidedReference(t *testing.T) {
+	database := testDB(t)
+	reference := time.Date(2030, 1, 2, 12, 0, 0, 0, time.UTC)
+	ended := reference.Add(-5 * time.Minute).Format(time.RFC3339Nano)
+	require.NoError(t, database.UpsertSession(Session{
+		ID: "active-at-reference", Project: "clock", Machine: "host", Agent: "codex",
+		CreatedAt: ended, StartedAt: &ended, EndedAt: &ended,
+		MessageCount: 1,
+	}))
+	insertMessages(t, database, Message{
+		SessionID: "active-at-reference", Ordinal: 0, Role: "assistant",
+		Timestamp: ended, Model: "usage-model",
+		TokenUsage: []byte(`{"input_tokens":1}`),
+	})
+
+	messageQuery, _ := NewBunStore(&sqliteBunBackend{store: database}).
+		bunDailyUsageQueries(
+			database.bunReader, UsageFilter{Termination: "active"}, false, reference,
+		)
+	var rows []bunDailyUsageProjection
+	require.NoError(t, messageQuery.Scan(t.Context(), &rows))
+	require.Len(t, rows, 1)
+	assert.Equal(t, "active-at-reference", rows[0].SessionID)
+}
+
 func TestAppendBunUsageTerminationFilterKeepsExactCutoffSemantics(t *testing.T) {
 	database := testDB(t)
 	reference := time.Date(2026, time.August, 4, 12, 0, 0, 0, time.UTC)

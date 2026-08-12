@@ -814,7 +814,9 @@ func (s *BunStore) loadBunSessionUsageRows(
 func (s *BunStore) loadBunDailyUsageProjections(
 	ctx context.Context, store bun.IDB, filter UsageFilter, matching bool,
 ) ([]bunDailyUsageProjection, error) {
-	messageQuery, eventQuery := s.bunDailyUsageQueries(store, filter, matching)
+	messageQuery, eventQuery := s.bunDailyUsageQueries(
+		store, filter, matching, time.Now().UTC(),
+	)
 	rows := make([]bunDailyUsageProjection, 0)
 	if err := streamBunDailyUsageProjections(
 		ctx, messageQuery, true, false,
@@ -843,12 +845,16 @@ func (s *BunStore) loadBunNormalizedDailyUsageRows(
 	loc := filter.location()
 	bounded := usageBoundsForFilter(filter).bounded()
 	referenceTime := time.Now().UTC()
-	messageQuery, eventQuery := s.bunDailyUsageQueries(store, filter, false)
+	messageQuery, eventQuery := s.bunDailyUsageQueries(
+		store, filter, false, referenceTime,
+	)
 	messageQuery = messageQuery.
 		Where("(m.claude_message_id = ? OR m.claude_request_id = ?)", "", "").
 		ColumnExpr("COUNT(*) OVER() AS candidate_count")
 	eventQuery = eventQuery.ColumnExpr("COUNT(*) OVER() AS candidate_count")
-	claudeMessageQuery, _ := s.bunDailyUsageQueries(store, queryFilter, false)
+	claudeMessageQuery, _ := s.bunDailyUsageQueries(
+		store, queryFilter, false, referenceTime,
+	)
 	claudeMessageQuery = claudeMessageQuery.
 		Where("m.claude_message_id != ?", "").
 		Where("m.claude_request_id != ?", "")
@@ -1073,9 +1079,8 @@ func bunDailyUsageSessionMatches(
 }
 
 func (s *BunStore) bunDailyUsageQueries(
-	store bun.IDB, filter UsageFilter, matching bool,
+	store bun.IDB, filter UsageFilter, matching bool, referenceTime time.Time,
 ) (*bun.SelectQuery, *bun.SelectQuery) {
-	referenceTime := time.Now().UTC()
 	timestampOrder := s.backend.TimestampOrderExpr
 	messageTimestampValue := func(column string) string {
 		return column

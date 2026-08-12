@@ -835,6 +835,8 @@ func TestUsageFallsBackForUnsupportedMessageTimestamp(t *testing.T) {
 		{name: "date only", timestamp: "2026-08-09"},
 		{name: "time only", timestamp: "12:34:56"},
 		{name: "numeric", timestamp: "2451545"},
+		{name: "zero time", timestamp: "0001-01-01T00:00:00Z"},
+		{name: "fractional zero time", timestamp: "0001-01-01T00:00:00.000000Z"},
 		{name: "invalid calendar date", timestamp: "2024-02-30T10:30:00Z"},
 		{name: "invalid end of day", timestamp: "2024-06-15T24:00:00Z"},
 	} {
