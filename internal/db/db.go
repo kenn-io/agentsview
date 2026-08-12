@@ -403,7 +403,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // usage object with model and token counts that the parser previously
 // ignored. Existing Amp rows need re-parsing so their model, token
 // usage, and computed cost appear in usage reports.)
-const dataVersion = 84
+// (85: Codex subagent replay accounting. Codex can copy a parent's complete
+// rollout prefix into a newly spawned subagent file, re-stamping messages and
+// token_count events at child creation. Existing Codex-format rows need
+// re-parsing so derived sessions retain only child-owned messages and usage.)
+const dataVersion = 85
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

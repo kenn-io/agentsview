@@ -1009,8 +1009,8 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 }
 
 func TestCurrentDataVersionUsageReparses(t *testing.T) {
-	assert.Equal(t, 84, CurrentDataVersion(),
-		"Claude background-fork lineage and Amp usage accounting require sequential reparses")
+	assert.Equal(t, 85, CurrentDataVersion(),
+		"Amp usage and Codex subagent replay accounting require sequential reparses")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {

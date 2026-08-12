@@ -1626,6 +1626,83 @@ func TestParseCodexSession_ForkedSessionSkipsReplayedHistory(t *testing.T) {
 	})
 }
 
+func TestParseCodexSession_SubagentSessionSkipsReplayedHistory(t *testing.T) {
+	childCreatedMs := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC).UnixMilli()
+	childID := testUUIDv7(childCreatedMs, 1)
+	parentID := testUUIDv7(childCreatedMs-3600_000, 2)
+	parentTurnID := testUUIDv7(childCreatedMs-1800_000, 3)
+	childTurnID := testUUIDv7(childCreatedMs+1000, 4)
+
+	tests := []struct {
+		name string
+		meta string
+	}{
+		{
+			name: "current nested parent metadata",
+			meta: testjsonl.CodexSubagentSessionMetaJSON(
+				childID, parentID, "/tmp/project", "user", tsEarly,
+			),
+		},
+		{
+			name: "legacy top-level parent metadata",
+			meta: fmt.Sprintf(
+				`{"timestamp":%q,"type":"session_meta","payload":{"id":%q,"cwd":"/tmp/project","thread_source":"subagent","parent_thread_id":%q}}`,
+				tsEarly, childID, parentID,
+			),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content := testjsonl.JoinJSONL(
+				tt.meta,
+				// Codex copies and re-stamps the parent's transcript at
+				// subagent creation, including its usage events.
+				testjsonl.CodexSessionMetaJSON(
+					parentID, "/tmp/project", "user", tsEarly,
+				),
+				testjsonl.CodexTurnContextWithIDJSON(
+					"gpt-5.4", parentTurnID, tsEarly,
+				),
+				testjsonl.CodexMsgJSON(
+					"user", "replayed parent question", tsEarly,
+				),
+				testjsonl.CodexMsgJSON(
+					"assistant", "replayed parent answer", tsEarly,
+				),
+				testjsonl.CodexTokenCountJSON(
+					tsEarly, 50_000, 9_000, 0,
+				),
+				// The child's first turn marks the end of the copied prefix.
+				testjsonl.CodexTurnContextWithIDJSON(
+					"gpt-5.5", childTurnID, tsEarlyS1,
+				),
+				testjsonl.CodexMsgJSON(
+					"user", "genuine child task", tsEarlyS1,
+				),
+				testjsonl.CodexMsgJSON(
+					"assistant", "genuine child answer", tsEarlyS5,
+				),
+				testjsonl.CodexTokenCountJSON(
+					tsEarlyS5, 10_000, 500, 6_000,
+				),
+			)
+
+			sess, msgs := runCodexParserTest(
+				t, "subagent.jsonl", content, false,
+			)
+			require.NotNil(t, sess)
+			assert.Equal(t, "codex:"+childID, sess.ID)
+			assert.Equal(t, "codex:"+parentID, sess.ParentSessionID)
+			require.Len(t, msgs, 2)
+			assert.Equal(t, "genuine child task", msgs[0].Content)
+			assert.Equal(t, "genuine child answer", msgs[1].Content)
+			assert.Equal(t, 500, sess.TotalOutputTokens)
+			assert.Equal(t, 10_000, sess.PeakContextTokens)
+		})
+	}
+}
+
 // TestParseCodexSessionFrom_ForkReplaySpansOffset covers the
 // incremental case of the fork replay gate (#643): a sync boundary
 // lands inside the replayed parent history, so the rest of the replay
@@ -1684,6 +1761,77 @@ func TestParseCodexSessionFrom_ForkReplaySpansOffset(t *testing.T) {
 	assert.Equal(t, "genuine question", newMsgs[0].Content)
 	assert.Equal(t, "genuine answer", newMsgs[1].Content)
 	assert.Equal(t, "gpt-5.5", newMsgs[1].Model)
+	assert.Equal(t, 500, newMsgs[1].OutputTokens)
+}
+
+func TestParseCodexSessionFrom_SubagentReplaySpansOffset(t *testing.T) {
+	t.Parallel()
+
+	childCreatedMs := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC).UnixMilli()
+	childID := testUUIDv7(childCreatedMs, 1)
+	parentID := testUUIDv7(childCreatedMs-3600_000, 2)
+	parentTurnID := testUUIDv7(childCreatedMs-1800_000, 3)
+	childTurnID := testUUIDv7(childCreatedMs+1000, 4)
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSubagentSessionMetaJSON(
+			childID, parentID, "/tmp/project", "user", tsEarly,
+		),
+		testjsonl.CodexSessionMetaJSON(
+			parentID, "/tmp/project", "user", tsEarly,
+		),
+		testjsonl.CodexTurnContextWithIDJSON(
+			"gpt-5.4", parentTurnID, tsEarly,
+		),
+		testjsonl.CodexMsgJSON(
+			"user", "replayed parent question", tsEarly,
+		),
+	)
+	path := createTestFile(t, "subagent-incremental.jsonl", initial)
+
+	sess, msgs, err := parseCodexTestSession(t, path, "local", false)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "codex:"+childID, sess.ID)
+	require.Empty(t, msgs)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	offset := info.Size()
+
+	appended := testjsonl.JoinJSONL(
+		testjsonl.CodexMsgJSON(
+			"assistant", "replayed parent answer", tsEarly,
+		),
+		testjsonl.CodexTokenCountJSON(
+			tsEarly, 50_000, 9_000, 0,
+		),
+		testjsonl.CodexTurnContextWithIDJSON(
+			"gpt-5.5", childTurnID, tsEarlyS1,
+		),
+		testjsonl.CodexMsgJSON(
+			"user", "genuine child task", tsEarlyS1,
+		),
+		testjsonl.CodexMsgJSON(
+			"assistant", "genuine child answer", tsEarlyS5,
+		),
+		testjsonl.CodexTokenCountJSON(
+			tsEarlyS5, 10_000, 500, 6_000,
+		),
+	)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(appended)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	newMsgs, _, _, err := parseCodexTestSessionFrom(
+		t, path, offset, 0, false,
+	)
+	require.NoError(t, err)
+	require.Len(t, newMsgs, 2)
+	assert.Equal(t, "genuine child task", newMsgs[0].Content)
+	assert.Equal(t, "genuine child answer", newMsgs[1].Content)
 	assert.Equal(t, 500, newMsgs[1].OutputTokens)
 }
 

@@ -75,36 +75,40 @@ type codexSessionBuilder struct {
 	unattachedTokenUsage bool
 }
 
-// codexForkGate drops the replayed parent history at the top of a
-// forked Codex rollout (#643).
+// codexForkGate drops replayed parent history at the top of a Codex
+// fork or subagent rollout (#643).
 //
-// `codex fork` copies the parent's lines — its session_meta, turns,
-// messages and token_count events — into the new file with re-stamped
-// envelope timestamps, so the same usage exists in two session files
-// and gets counted twice. Envelope timestamps cannot locate the
-// boundary (the replay is re-stamped at fork creation), but turn ids
-// are UUIDv7 values minted when the turn originally ran: every
-// replayed turn predates the fork instant, and the first genuine turn
+// Codex copies the parent's lines — its session_meta, turns, messages
+// and token_count events — into both kinds of derived rollout with
+// re-stamped envelope timestamps, so the same usage exists in multiple
+// session files and gets counted repeatedly. Envelope timestamps cannot
+// locate the boundary (the replay is re-stamped at child creation), but
+// turn ids are UUIDv7 values minted when the turn originally ran: every
+// replayed turn predates the child instant, and the first genuine turn
 // is minted at or after it. The gate stays closed until the first
-// turn_context whose turn_id timestamp is >= the fork's own creation
+// turn_context whose turn_id timestamp is >= the child's own creation
 // time, then everything flows normally.
 //
 // Replayed turn_context entries from parents recorded before Codex
 // stamped turn ids carry no turn_id at all; a CLI new enough to write
-// forked_from_id always stamps genuine turns, so a missing turn_id
-// while gated means replayed history. An unparseable turn_id fails
-// open (pre-#643 behaviour) rather than risk dropping live data.
+// forked_from_id or subagent parent metadata always stamps genuine
+// turns, so a missing turn_id while gated means replayed history. An
+// unparseable turn_id fails open (pre-#643 behaviour) rather than risk
+// dropping live data.
 type codexForkGate struct {
-	active    bool
-	createdMs int64
+	active           bool
+	createdMs        int64
+	subagentParentID string
 }
 
 // armFromMeta activates the gate when the session_meta belongs to a
-// forked session and its creation instant can be anchored: from the
-// fork's UUIDv7 id, the payload timestamp, or the JSONL envelope
-// timestamp, in that order.
+// forked or subagent session and its creation instant can be anchored:
+// from the child's UUIDv7 id, the payload timestamp, or the JSONL
+// envelope timestamp, in that order.
 func (g *codexForkGate) armFromMeta(payload gjson.Result, envelopeTS time.Time) {
-	if payload.Get("forked_from_id").Str == "" {
+	forked := payload.Get("forked_from_id").Str != ""
+	parentID := codexSubagentParentThreadID(payload)
+	if !forked && parentID == "" {
 		return
 	}
 	ms := uuidV7Millis(payload.Get("id").Str)
@@ -119,8 +123,40 @@ func (g *codexForkGate) armFromMeta(payload gjson.Result, envelopeTS time.Time) 
 	if ms == 0 {
 		return // no anchor for the boundary — fail open
 	}
-	g.active = true
 	g.createdMs = ms
+	if forked {
+		g.active = true
+		return
+	}
+	// Parent metadata alone also appears in child-only transcripts. Wait
+	// for the copied parent's session_meta before suppressing anything.
+	g.subagentParentID = parentID
+}
+
+// suppressesSessionMeta identifies the copied parent session_meta that
+// positively distinguishes a replay-prefix subagent from a child-only
+// transcript. Explicit forks are already active when their copied meta
+// arrives.
+func (g *codexForkGate) suppressesSessionMeta(payload gjson.Result) bool {
+	if g.active {
+		return true
+	}
+	if g.subagentParentID == "" ||
+		payload.Get("id").Str != g.subagentParentID {
+		return false
+	}
+	g.active = true
+	return true
+}
+
+func codexSubagentParentThreadID(payload gjson.Result) string {
+	parentID := strings.TrimSpace(
+		payload.Get("source.subagent.thread_spawn.parent_thread_id").Str,
+	)
+	if parentID == "" && payload.Get("thread_source").Str == "subagent" {
+		parentID = strings.TrimSpace(payload.Get("parent_thread_id").Str)
+	}
+	return parentID
 }
 
 // suppresses reports whether the line is replayed parent history.
@@ -128,6 +164,9 @@ func (g *codexForkGate) armFromMeta(payload gjson.Result, envelopeTS time.Time) 
 // or after the fork instant.
 func (g *codexForkGate) suppresses(lineType string, payload gjson.Result) bool {
 	if !g.active {
+		// A child-owned event before a copied parent session_meta proves
+		// this is a child-only transcript, not a replay prefix.
+		g.subagentParentID = ""
 		return false
 	}
 	if lineType != codexTypeTurnContext {
@@ -141,6 +180,7 @@ func (g *codexForkGate) suppresses(lineType string, payload gjson.Result) bool {
 		return true
 	}
 	g.active = false
+	g.subagentParentID = ""
 	return false
 }
 
@@ -211,7 +251,7 @@ func (b *codexSessionBuilder) processLine(
 
 	switch gjson.Get(line, "type").Str {
 	case codexTypeSessionMeta:
-		if b.forkGate.active {
+		if b.forkGate.suppressesSessionMeta(payload) {
 			// A forked rollout replays the parent's session_meta
 			// too — the fork's own meta came first and wins.
 			return false
@@ -246,15 +286,7 @@ func (b *codexSessionBuilder) handleSessionMeta(
 			payload.Get("source.subagent.thread_spawn.agent_path").Str,
 		)
 	}
-	b.parentSessionID = strings.TrimSpace(
-		payload.Get("source.subagent.thread_spawn.parent_thread_id").Str,
-	)
-	if b.parentSessionID == "" &&
-		payload.Get("thread_source").Str == "subagent" {
-		b.parentSessionID = strings.TrimSpace(
-			payload.Get("parent_thread_id").Str,
-		)
-	}
+	b.parentSessionID = codexSubagentParentThreadID(payload)
 	if b.parentSessionID != "" {
 		b.parentSessionID = codexSubagentSessionID(b.parentSessionID)
 		b.relationshipType = RelSubagent
@@ -1806,7 +1838,7 @@ func seedCodexIncrementalStateFromReader(
 			// Mirror processLine: the fork's own meta arms the
 			// gate and supplies cwd, and replayed parent metas are
 			// dropped while it is active.
-			if !seed.forkGate.active {
+			if !seed.forkGate.suppressesSessionMeta(payload) {
 				if cwd := payload.Get("cwd").Str; cwd != "" {
 					seed.cwd = cwd
 				}
