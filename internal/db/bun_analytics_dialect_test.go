@@ -87,7 +87,7 @@ func TestBunAnalyticsSQLExecutesPairedMessageScopeThroughBun(t *testing.T) {
 	)
 	require.NoError(t, err)
 	ctes := []BunCTEFragment{builder.filteredSessionsCTE(
-		database.bunReader, sqliteTimestampOrderExpr, false,
+		database.bunReader, sqliteTimestampOrderExpr, bunAnalyticsFactDateScope,
 	)}
 	ctes = append(ctes, builder.scopedMessageCTEs()...)
 	with := renderBunCTEs(ctes...)
@@ -106,6 +106,43 @@ func TestBunAnalyticsSQLExecutesPairedMessageScopeThroughBun(t *testing.T) {
 		{Ordinal: 0, Role: "user"},
 		{Ordinal: 1, Role: "assistant"},
 	}, rows)
+}
+
+func TestBunAnalyticsSessionDateScopeUsesCoarseAndExactBounds(t *testing.T) {
+	database := testDB(t)
+	inside := "2026-08-04T10:00:00.123Z"
+	paddingOnly := "2026-08-04T09:59:59Z"
+	for _, session := range []Session{
+		{
+			ID: "inside-plus-fourteen", Project: "date-scope", Machine: "host",
+			Agent: "codex", CreatedAt: inside, StartedAt: &inside,
+			MessageCount: 1,
+		},
+		{
+			ID: "padding-only", Project: "date-scope", Machine: "host",
+			Agent: "codex", CreatedAt: paddingOnly, StartedAt: &paddingOnly,
+			MessageCount: 1,
+		},
+	} {
+		require.NoError(t, database.UpsertSession(session))
+	}
+
+	builder, err := newBunAnalyticsSQL(
+		SQLiteBunAnalyticsDialect(), AnalyticsFilter{
+			Project: "date-scope", From: "2026-08-05", To: "2026-08-05",
+			Timezone: "Pacific/Kiritimati",
+		},
+	)
+	require.NoError(t, err)
+	with := renderBunCTEs(builder.filteredSessionsCTE(
+		database.bunReader, sqliteTimestampOrderExpr, bunAnalyticsSessionDateScope,
+	))
+	var ids []string
+	err = database.bunReader.NewRaw("WITH "+with.SQL+
+		" SELECT id FROM "+bunAnalyticsFilteredSessionsCTE+" ORDER BY id",
+		with.Args...).Scan(t.Context(), &ids)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"inside-plus-fourteen"}, ids)
 }
 
 func TestBunAnalyticsModelScopeLeavesDateRangeAtSessionGrain(t *testing.T) {
