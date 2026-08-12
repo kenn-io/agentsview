@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 )
@@ -241,27 +240,6 @@ func readManifest(path string) (map[string]string, error) {
 		return nil, fmt.Errorf("decode Claude cache index: %w", err)
 	}
 	return manifest, nil
-}
-
-func cachedExport(root string) ([]byte, error) {
-	paths, err := filepath.Glob(filepath.Join(root, "conversations", "*.json"))
-	if err != nil {
-		return nil, fmt.Errorf("list cached Claude conversations: %w", err)
-	}
-	sort.Strings(paths)
-	conversations := make([]json.RawMessage, 0, len(paths))
-	for _, path := range paths {
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("read cached Claude conversation: %w", err)
-		}
-		normalized, err := normalizeConversation(raw)
-		if err != nil {
-			return nil, fmt.Errorf("normalise cached Claude conversation: %w", err)
-		}
-		conversations = append(conversations, normalized)
-	}
-	return json.Marshal(conversations)
 }
 
 func conversationMarker(raw json.RawMessage) (string, string, error) {
