@@ -126,7 +126,7 @@ func benchCodexQuietAppendSignals(b *testing.B, turns int) {
 func BenchmarkCodexColdFullSync(b *testing.B) {
 	silenceBenchLogs(b)
 	ctx := context.Background()
-	root, path, uuid := writeCodexSignalBenchmarkTranscript(b, 7500)
+	root, _, _ := writeCodexSignalBenchmarkTranscript(b, 7500)
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -147,8 +147,6 @@ func BenchmarkCodexColdFullSync(b *testing.B) {
 		if err := database.Close(); err != nil {
 			b.Fatalf("close bench db: %v", err)
 		}
-		_ = path
-		_ = uuid
 	}
 }
 

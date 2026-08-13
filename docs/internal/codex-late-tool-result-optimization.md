@@ -870,16 +870,24 @@ PR 仍保持关闭。
   `macrobench`，不进 `-bench .`），宏测流程写入
   docs/internal/performance-gates.md。
 
-### 实测（1x smoke，本机）
+### 实测（2026-08-13 第三轮）
 
-| 基准 | 结果 |
+`make bench-gate` 官方配置（20x × count 6，base = `da0d7eb3` 干净 worktree）：
+
+| 基准 | 结果（中位数） |
 |---|---:|
-| `BenchmarkCodexCheckpointAppendResume` | 837µs/op |
-| `BenchmarkCodexQuietAppendSignals500` | 3.50ms/op |
-| `BenchmarkCodexQuietAppendSignals5000` | 3.58ms/op |
-| `BenchmarkCodexQuietAppendSignals15000` | 4.02ms/op（500→15k 约 1.15×） |
-| `BenchmarkCodexColdFullSync`（约 9.5MB fixture） | 857ms/op |
+| `BenchmarkCodexCheckpointAppendResume` | 约 0.9–1.4ms/op，约 84KB B/op |
+| `BenchmarkCodexQuietAppendSignals500` | 3.38ms/op |
+| `BenchmarkCodexQuietAppendSignals5000` | 3.42ms/op |
+| `BenchmarkCodexQuietAppendSignals15000` | 4.50ms/op（500→15k 约 1.33×） |
+| `BenchmarkCodexColdFullSync`（约 9.5MB fixture） | 857ms/op（1x smoke） |
 
-500/5k/15k 三档斜率基本平坦（1.15×），满足目标 ① 的
-20–200ms p95 与"延迟不随历史增长"门禁。完整 `make bench-gate` 对比与
-945MB 真实宏测留待下一轮执行。
+500/5k/15k 三档斜率约 1.33×，满足"延迟基本不随历史增长"与
+20–200ms p95 目标。`benchgate` 对比结论：`no regressions beyond
+thresholds`（新 benchmark 无基线仅报告，下轮起自动门禁；旧名
+`BenchmarkCodexIncrementalSyncReads`/`BenchmarkCodexIncrementalLateToolOutput`
+按设计报告为 removed/new）。`SyncPathsIncrementalAppend` 因维护路径新增
+state 行写入为 1.13× B/op、1.08× sec/op，均在阈值内。
+
+945MB 真实档案宏测与 10MB vs 1GB macrobench 比率验证留待用户环境执行
+（流程见 docs/internal/performance-gates.md）。
