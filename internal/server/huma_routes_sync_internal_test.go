@@ -596,6 +596,7 @@ func TestRunRemoteSyncRequestContributorFailurePrecedesRetainedCleanupHost(t *te
 func TestRunRemoteSyncRequestUnifiedHTTPUsesMirrorDeltaAndBulkRebuild(t *testing.T) {
 	broadcaster := NewBroadcaster(0)
 	f := newSyncRouteFixture(t, withBroadcasterForSyncRoutes(broadcaster))
+	logs := captureServerLogOutput(t)
 	events, unsubscribe := broadcaster.Subscribe()
 	t.Cleanup(unsubscribe)
 	f.writeClaudeSession(t, "proj/local.jsonl", "unified local")
@@ -684,6 +685,13 @@ func TestRunRemoteSyncRequestUnifiedHTTPUsesMirrorDeltaAndBulkRebuild(t *testing
 	assert.Equal(t, 1, archiveRequests,
 		"unchanged full rebuild should reuse the prepared mirror")
 	assertSessionCount(t, f.db, 2)
+	output := logs.String()
+	assert.Contains(t, output,
+		"remote sync HTTP contributors started: hosts=1")
+	assert.Contains(t, output,
+		"remote sync HTTP contributors finished: hosts=1")
+	assert.Contains(t, output, "aggregate_synced=2")
+	assert.NotContains(t, output, "local_synced=")
 	select {
 	case err := <-serverErrors:
 		require.NoError(t, err)
