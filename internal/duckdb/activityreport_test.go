@@ -5,6 +5,7 @@ package duckdb
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -284,6 +285,52 @@ func TestDuckGetActivityReportFiltersAfterCrossSessionSnapshotSelection(
 	assert.Equal(t, 1, childReport.Totals.Sessions)
 	assert.Zero(t, childReport.Totals.OutputTokens,
 		"the child source must not claim usage attributed to the parent")
+}
+
+func TestDuckGetActivityReportSelectsPeersForLargeSnapshotKeySet(t *testing.T) {
+	const pairCount = duckMaxSQLVars + 1
+	ctx := context.Background()
+	candidate := syncSession(
+		"large-candidate", "included-project", "candidate",
+		"2026-06-14T10:00:00.000Z", pairCount)
+	peer := syncSession(
+		"large-peer", "excluded-project", "peer",
+		"2026-06-14T10:01:00.000Z", pairCount)
+	candidateMessages := make([]db.Message, pairCount)
+	peerMessages := make([]db.Message, pairCount)
+	for i := range pairCount {
+		messageID := fmt.Sprintf("large-message-%04d", i)
+		requestID := fmt.Sprintf("large-request-%04d", i)
+		candidateMessages[i] = syncMessage(
+			candidate.ID, i, "assistant", "partial",
+			"2026-06-14T10:00:00.000Z")
+		candidateMessages[i].ClaudeMessageID = messageID
+		candidateMessages[i].ClaudeRequestID = requestID
+		candidateMessages[i].TokenUsage = json.RawMessage(
+			`{"input_tokens":1,"output_tokens":1}`)
+		candidateMessages[i].OutputTokens = 1
+		peerMessages[i] = syncMessage(
+			peer.ID, i, "assistant", "complete",
+			"2026-06-14T10:01:00.000Z")
+		peerMessages[i].ClaudeMessageID = messageID
+		peerMessages[i].ClaudeRequestID = requestID
+		peerMessages[i].TokenUsage = json.RawMessage(
+			`{"input_tokens":1,"output_tokens":10}`)
+		peerMessages[i].OutputTokens = 10
+	}
+	store := activityReportStore(t, []db.SessionBatchWrite{
+		{Session: candidate, Messages: candidateMessages,
+			DataVersion: 1, ReplaceMessages: true},
+		{Session: peer, Messages: peerMessages,
+			DataVersion: 1, ReplaceMessages: true},
+	}, nil)
+
+	report, err := store.GetActivityReport(ctx, db.AnalyticsFilter{
+		Project: "included-project", Timezone: "UTC",
+	}, duckDayQuery(t, "2026-06-14", "UTC"))
+	require.NoError(t, err)
+	assert.Equal(t, pairCount*10, report.Totals.OutputTokens,
+		"every complete peer snapshot must remain attributed to the candidate")
 }
 
 func TestDuckGetActivityReportDeduplicatesAfterProjectFilter(t *testing.T) {
