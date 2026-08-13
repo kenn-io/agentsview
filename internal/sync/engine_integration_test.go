@@ -5396,9 +5396,9 @@ func TestSyncAllSinceCodexIndexRenameBelowStoredMtimeRefreshesName(t *testing.T)
 // Codex-upgrade scenario behind the eternal reparse loop: a session gains a
 // title while session_index.jsonl exists, then a newer Codex release stops
 // writing the index file. The next full sync of the untouched transcript must
-// skip; treating the absent index as a rename force-replaced every titled
-// session on every sync, and the rewrite preserved the title so the loop
-// never converged.
+// skip even though removing the newer index regresses the effective mtime;
+// treating that regression as stale force-replaced every titled session and
+// cleared its stored title.
 func TestSyncAllSkipsUnchangedTitledCodexSessionAfterIndexRemoval(t *testing.T) {
 	root := t.TempDir()
 	codexDir := filepath.Join(root, "sessions")
@@ -5417,16 +5417,16 @@ func TestSyncAllSkipsUnchangedTitledCodexSessionAfterIndexRemoval(t *testing.T) 
 		content,
 	)
 
-	// The index is older than the transcript so the stored file_mtime is the
-	// raw transcript mtime, matching an archive whose sessions were last
-	// rewritten after the index disappeared.
+	// The index is newer than the transcript, so its mtime becomes the stored
+	// effective watermark. Removing it later regresses the effective mtime to
+	// the untouched transcript mtime.
 	indexPath := filepath.Join(root, "session_index.jsonl")
 	require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
 		`{"id":"%s","thread_name":"Sticky title","updated_at":"2026-06-11T12:50:00Z"}`+"\n",
 		uuid,
 	), 0o644))
 	transcriptTime := time.Now().Add(-2 * time.Hour)
-	indexTime := transcriptTime.Add(-time.Hour)
+	indexTime := transcriptTime.Add(time.Hour)
 	require.NoError(t, os.Chtimes(path, transcriptTime, transcriptTime))
 	require.NoError(t, os.Chtimes(indexPath, indexTime, indexTime))
 
@@ -5450,6 +5450,57 @@ func TestSyncAllSkipsUnchangedTitledCodexSessionAfterIndexRemoval(t *testing.T) 
 	if assert.NotNil(t, sess.SessionName, "stored title must survive the skip") {
 		assert.Equal(t, "Sticky title", *sess.SessionName)
 	}
+}
+
+func TestSyncAllCodexExplicitBlankIndexTitleClearsStoredTitle(t *testing.T) {
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir}))
+
+	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229e3"
+	content := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/repo", "user").
+		AddCodexMessage(tsEarlyS1, "user", "Clear my title").
+		String()
+	path := env.writeCodexSession(
+		t,
+		filepath.Join("2026", "06", "11"),
+		"rollout-2026-06-11T12-44-06-"+uuid+".jsonl",
+		content,
+	)
+	transcriptTime := time.Now().Add(-3 * time.Hour)
+	require.NoError(t, os.Chtimes(path, transcriptTime, transcriptTime))
+
+	indexPath := filepath.Join(root, parser.CodexSessionIndexFilename)
+	writeIndex := func(title string, mtime time.Time) {
+		t.Helper()
+		require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
+			`{"id":"%s","thread_name":"%s","updated_at":"2026-06-11T12:50:00Z"}`+"\n",
+			uuid, title,
+		), 0o644))
+		require.NoError(t, os.Chtimes(indexPath, mtime, mtime))
+		parser.EvictCodexSessionIndex(indexPath)
+	}
+
+	writeIndex("Stored title", transcriptTime.Add(time.Hour))
+	first := env.engine.SyncAll(context.Background(), nil)
+	require.Equal(t, 1, first.Synced)
+	sess, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	if assert.NotNil(t, sess.SessionName) {
+		assert.Equal(t, "Stored title", *sess.SessionName)
+	}
+
+	writeIndex("", transcriptTime.Add(2*time.Hour))
+	second := env.engine.SyncAll(context.Background(), nil)
+	require.Equal(t, 1, second.Synced,
+		"an explicit blank index title must trigger a refresh")
+	sess, err = env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Nil(t, sess.SessionName, "the stored title must be cleared")
 }
 
 func TestSyncAllWarmGateCodexIndexSameStatRenameRefreshesName(t *testing.T) {

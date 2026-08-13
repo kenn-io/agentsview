@@ -395,7 +395,7 @@ func TestProcessS3CodexClearedSessionIndexTitleBypassesStoredSkip(t *testing.T) 
 	assert.Empty(t, res.results[0].Session.SessionName)
 }
 
-func TestProcessS3CodexMissingSessionIndexBypassesStoredSkip(t *testing.T) {
+func TestProcessS3CodexMissingSessionIndexUsesStoredSkip(t *testing.T) {
 	database := openTestDB(t)
 	const uuid = "11111111-1111-4111-8111-111111111111"
 	path := "s3://bucket/laptop/raw/codex/2026/06/24/" +
@@ -457,10 +457,18 @@ func TestProcessS3CodexMissingSessionIndexBypassesStoredSkip(t *testing.T) {
 	})
 
 	require.NoError(t, res.err)
-	require.False(t, res.skip)
-	require.True(t, fetchedRollout)
-	require.Len(t, res.results, 1)
-	assert.Empty(t, res.results[0].Session.SessionName)
+	require.True(t, res.skip)
+	assert.False(t, fetchedRollout)
+	assert.Empty(t, res.results)
+
+	sess, err := database.GetSessionFull(
+		context.Background(), "laptop~codex:"+uuid,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	if assert.NotNil(t, sess.SessionName) {
+		assert.Equal(t, "Old title", *sess.SessionName)
+	}
 }
 
 func TestProcessS3ClaudeSubagentPreservesParentLayout(t *testing.T) {

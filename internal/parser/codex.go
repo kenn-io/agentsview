@@ -1720,7 +1720,8 @@ func loadCodexSessionIndex(indexPath string) (map[string]string, error) {
 }
 
 // ParseCodexSessionIndexTitles reads a Codex session_index.jsonl stream and
-// returns session UUIDs mapped to non-empty thread titles.
+// returns session UUIDs mapped to their thread titles. Explicit blank titles
+// remain present so callers can distinguish them from absent entries.
 func ParseCodexSessionIndexTitles(r io.Reader) (map[string]string, error) {
 	titles := make(map[string]string)
 	s := bufio.NewScanner(r)
@@ -1731,11 +1732,11 @@ func ParseCodexSessionIndexTitles(r io.Reader) (map[string]string, error) {
 			continue
 		}
 		id := gjson.Get(line, "id").Str
-		title := strings.TrimSpace(gjson.Get(line, "thread_name").Str)
-		if id == "" || title == "" {
+		threadName := gjson.Get(line, "thread_name")
+		if id == "" || !threadName.Exists() {
 			continue
 		}
-		titles[id] = title
+		titles[id] = strings.TrimSpace(threadName.Str)
 	}
 	if err := s.Err(); err != nil {
 		return nil, err

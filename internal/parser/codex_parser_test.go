@@ -333,6 +333,20 @@ func TestParseCodexSession_LeavesSessionNameEmptyWithoutThreadName(t *testing.T)
 	assert.Equal(t, "Add rate limiting", sess.FirstMessage)
 }
 
+func TestParseCodexSessionIndexTitlesPreservesExplicitBlankTitle(t *testing.T) {
+	titles, err := ParseCodexSessionIndexTitles(strings.NewReader(
+		`{"id":"clear-me","thread_name":"   "}` + "\n" +
+			`{"id":"missing-field"}` + "\n",
+	))
+	require.NoError(t, err)
+
+	title, ok := titles["clear-me"]
+	require.True(t, ok, "an explicit blank title must remain a present entry")
+	assert.Empty(t, title)
+	assert.NotContains(t, titles, "missing-field",
+		"a row without thread_name must not become a clearing signal")
+}
+
 func TestParseCodexSession_UsesThreadNameFromArchivedSessions(t *testing.T) {
 	root := t.TempDir()
 	sessionDir := filepath.Join(root, "archived_sessions")

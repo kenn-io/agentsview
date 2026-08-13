@@ -11225,6 +11225,8 @@ func (e *Engine) shouldSkipProviderSourceByDB(
 //   - an effective mtime ahead of the stored mtime driven only by the index
 //     (the raw transcript mtime is still at or below the stored mtime) skips
 //     unless this session's stored title differs from the current index title.
+//   - an effective mtime below the stored mtime skips when the index is absent,
+//     because removing a newer index reveals the unchanged transcript mtime.
 func (e *Engine) shouldSkipCodexFingerprint(
 	agent parser.AgentType,
 	path string,
@@ -11264,6 +11266,14 @@ func (e *Engine) shouldSkipCodexFingerprint(
 	}
 	if agent != parser.AgentCodex {
 		return false
+	}
+	if effectiveMtime < storedMtime {
+		indexPath := parser.CodexSessionIndexPath(path)
+		if indexPath != "" {
+			if _, err := os.Stat(indexPath); errors.Is(err, os.ErrNotExist) {
+				return true
+			}
+		}
 	}
 	fileMtime := effectiveMtime
 	if info, err := os.Stat(path); err == nil {
