@@ -27,13 +27,14 @@ func TestProcessFileS3UsesObjectMetadataToSkipBeforeFetch(t *testing.T) {
 	mtime := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC).UnixNano()
 
 	sess := db.Session{
-		ID:        "laptop~codex:" + uuid,
-		Project:   "agentsview",
-		Machine:   "laptop",
-		Agent:     "codex",
-		FilePath:  strPtr(path),
-		FileSize:  int64Ptr(size),
-		FileMtime: int64Ptr(mtime),
+		ID:          "laptop~codex:" + uuid,
+		Project:     "agentsview",
+		Machine:     "laptop",
+		Agent:       "codex",
+		FilePath:    strPtr(path),
+		FileSize:    int64Ptr(size),
+		FileMtime:   int64Ptr(mtime),
+		SessionName: strPtr("Stored title"),
 	}
 	require.NoError(t, database.UpsertSession(sess))
 	require.NoError(t, database.SetSessionDataVersion(
@@ -513,7 +514,7 @@ func TestFilterFilesByMtimeKeepsS3CodexIndexFetchError(t *testing.T) {
 	assert.Equal(t, 1, fetchCalls)
 }
 
-func TestFilterFilesByMtimeKeepsS3CodexClearedIndexTitle(t *testing.T) {
+func TestFilterFilesByMtimeKeepsS3CodexExplicitBlankIndexTitle(t *testing.T) {
 	database := openTestDB(t)
 	const uuid = "11111111-1111-4111-8111-111111111111"
 	root := "s3://bucket/laptop/raw/codex"
@@ -538,56 +539,42 @@ func TestFilterFilesByMtimeKeepsS3CodexClearedIndexTitle(t *testing.T) {
 		"laptop~codex:"+uuid, db.CurrentDataVersion(),
 	))
 
-	for _, tc := range []struct {
-		name, index string
-	}{
-		{
-			name:  "blank title",
-			index: `{"id":"` + uuid + `","thread_name":"","updated_at":"2026-06-24T12:30:00Z"}` + "\n",
-		},
-		{
-			name:  "missing title row",
-			index: `{"id":"22222222-2222-4222-8222-222222222222","thread_name":"Other","updated_at":"2026-06-24T12:30:00Z"}` + "\n",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			oldStat := statS3Object
-			oldFetch := fetchS3Object
-			t.Cleanup(func() {
-				statS3Object = oldStat
-				fetchS3Object = oldFetch
-			})
-			statS3Object = func(got string) (parser.S3Object, error) {
-				require.Equal(t, indexPath, got)
-				return parser.S3Object{
-					URI:          indexPath,
-					Size:         int64(len(tc.index)),
-					LastModified: indexMtime,
-					Fingerprint:  "s3:fingerprint:index",
-				}, nil
-			}
-			fetchS3Object = func(got string) (io.ReadCloser, error) {
-				require.Equal(t, indexPath, got)
-				return io.NopCloser(strings.NewReader(tc.index)), nil
-			}
-
-			e := &Engine{db: database}
-			got := e.filterFilesByMtime(context.Background(), []parser.DiscoveredFile{{
-				Agent:             parser.AgentCodex,
-				Path:              path,
-				Machine:           "laptop",
-				SourceSize:        101,
-				SourceMtime:       mtime,
-				SourceFingerprint: "s3:fingerprint:rollout",
-			}}, indexMtime.Add(-time.Minute))
-
-			require.Len(t, got, 1)
-			assert.Equal(t, path, got[0].Path)
-		})
+	index := `{"id":"` + uuid + `","thread_name":"","updated_at":"2026-06-24T12:30:00Z"}` + "\n"
+	oldStat := statS3Object
+	oldFetch := fetchS3Object
+	t.Cleanup(func() {
+		statS3Object = oldStat
+		fetchS3Object = oldFetch
+	})
+	statS3Object = func(got string) (parser.S3Object, error) {
+		require.Equal(t, indexPath, got)
+		return parser.S3Object{
+			URI:          indexPath,
+			Size:         int64(len(index)),
+			LastModified: indexMtime,
+			Fingerprint:  "s3:fingerprint:index",
+		}, nil
 	}
+	fetchS3Object = func(got string) (io.ReadCloser, error) {
+		require.Equal(t, indexPath, got)
+		return io.NopCloser(strings.NewReader(index)), nil
+	}
+
+	e := &Engine{db: database}
+	got := e.filterFilesByMtime(context.Background(), []parser.DiscoveredFile{{
+		Agent:             parser.AgentCodex,
+		Path:              path,
+		Machine:           "laptop",
+		SourceSize:        101,
+		SourceMtime:       mtime,
+		SourceFingerprint: "s3:fingerprint:rollout",
+	}}, indexMtime.Add(-time.Minute))
+
+	require.Len(t, got, 1)
+	assert.Equal(t, path, got[0].Path)
 }
 
-func TestFilterFilesByMtimeKeepsS3CodexMissingIndexWhenTitleStored(t *testing.T) {
+func TestFilterFilesByMtimeSkipsS3CodexAbsentIndexSignals(t *testing.T) {
 	database := openTestDB(t)
 	const uuid = "11111111-1111-4111-8111-111111111111"
 	root := "s3://bucket/laptop/raw/codex"
@@ -611,35 +598,60 @@ func TestFilterFilesByMtimeKeepsS3CodexMissingIndexWhenTitleStored(t *testing.T)
 		"laptop~codex:"+uuid, db.CurrentDataVersion(),
 	))
 
-	oldStat := statS3Object
-	oldFetch := fetchS3Object
-	t.Cleanup(func() {
-		statS3Object = oldStat
-		fetchS3Object = oldFetch
-	})
-	var fetchCalls int
-	statS3Object = func(got string) (parser.S3Object, error) {
-		require.Equal(t, indexPath, got)
-		return parser.S3Object{}, missingS3ObjectError()
-	}
-	fetchS3Object = func(got string) (io.ReadCloser, error) {
-		fetchCalls++
-		return nil, missingS3ObjectError()
-	}
+	for _, tc := range []struct {
+		name  string
+		index string
+	}{
+		{name: "index missing"},
+		{
+			name:  "session entry missing",
+			index: `{"id":"22222222-2222-4222-8222-222222222222","thread_name":"Other"}` + "\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			oldStat := statS3Object
+			oldFetch := fetchS3Object
+			t.Cleanup(func() {
+				statS3Object = oldStat
+				fetchS3Object = oldFetch
+			})
+			var fetchCalls int
+			statS3Object = func(got string) (parser.S3Object, error) {
+				require.Equal(t, indexPath, got)
+				if tc.index == "" {
+					return parser.S3Object{}, missingS3ObjectError()
+				}
+				return parser.S3Object{
+					URI:          indexPath,
+					Size:         int64(len(tc.index)),
+					LastModified: time.Unix(0, mtime).Add(time.Minute),
+				}, nil
+			}
+			fetchS3Object = func(got string) (io.ReadCloser, error) {
+				require.Equal(t, indexPath, got)
+				fetchCalls++
+				return io.NopCloser(strings.NewReader(tc.index)), nil
+			}
 
-	e := &Engine{db: database}
-	got := e.filterFilesByMtime(context.Background(), []parser.DiscoveredFile{{
-		Agent:             parser.AgentCodex,
-		Path:              path,
-		Machine:           "laptop",
-		SourceSize:        101,
-		SourceMtime:       mtime,
-		SourceFingerprint: "s3:fingerprint:rollout",
-	}}, time.Unix(0, mtime).Add(time.Nanosecond))
+			e := &Engine{db: database}
+			got := e.filterFilesByMtime(context.Background(), []parser.DiscoveredFile{{
+				Agent:             parser.AgentCodex,
+				Path:              path,
+				Machine:           "laptop",
+				SourceSize:        101,
+				SourceMtime:       mtime,
+				SourceFingerprint: "s3:fingerprint:rollout",
+			}}, time.Unix(0, mtime).Add(time.Nanosecond))
 
-	require.Len(t, got, 1)
-	assert.Equal(t, path, got[0].Path)
-	assert.Equal(t, 0, fetchCalls)
+			assert.Empty(t, got,
+				"an absent index signal must not reparse an unchanged session")
+			if tc.index == "" {
+				assert.Equal(t, 0, fetchCalls)
+			} else {
+				assert.Equal(t, 1, fetchCalls)
+			}
+		})
+	}
 }
 
 func TestPickPreferredCodexDiscoveredFileUsesS3MachinePrefix(t *testing.T) {

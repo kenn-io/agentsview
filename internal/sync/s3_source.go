@@ -205,7 +205,7 @@ func (e *Engine) s3CodexIndexNeedsRefreshSince(
 		return false
 	}
 	if snapshot.missing {
-		return e.s3CodexStoredNameDiffers(file, uuid, "")
+		return false
 	}
 	if snapshot.mtime < cutoffNs {
 		return false
@@ -216,13 +216,16 @@ func (e *Engine) s3CodexIndexNeedsRefreshSince(
 		return true
 	}
 	if snapshot.missing {
-		return e.s3CodexStoredNameDiffers(file, uuid, "")
+		return false
 	}
 	if !snapshot.titlesLoaded {
 		return false
 	}
 
-	title := snapshot.titles[uuid]
+	title, ok := snapshot.titles[uuid]
+	if !ok {
+		return false
+	}
 	return e.s3CodexStoredNameDiffers(file, uuid, title)
 }
 
@@ -238,12 +241,15 @@ func (e *Engine) s3CodexIndexSessionNameChanged(
 		return false, snapshot.err
 	}
 	if snapshot.missing {
-		return e.s3CodexStoredNameDiffers(file, uuid, ""), nil
+		return false, nil
 	}
 	if !snapshot.statOK || !snapshot.titlesLoaded {
 		return false, nil
 	}
-	title := snapshot.titles[uuid]
+	title, ok := snapshot.titles[uuid]
+	if !ok {
+		return false, nil
+	}
 	return e.s3CodexStoredNameDiffers(file, uuid, title), nil
 }
 

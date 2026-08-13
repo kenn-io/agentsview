@@ -10866,6 +10866,36 @@ func TestCodexIndexSessionNameChangedDetectsTitleRenameBelowStoredMtime(t *testi
 		"title-only rename at or below stored watermark must report a change")
 }
 
+// TestCodexIndexSessionNameChangedIgnoresAbsentIndexEntry pins the reparse-loop
+// fix: a stored title with no session_index.jsonl entry to compare against is
+// not a rename signal. Modern Codex releases no longer write
+// session_index.jsonl at all, so treating the absent index as "renamed to
+// empty" made every titled session force a full re-parse on every sync,
+// forever — the full parse preserves the stored title, so the check could
+// never converge.
+func TestCodexIndexSessionNameChangedIgnoresAbsentIndexEntry(t *testing.T) {
+	t.Run("index file removed", func(t *testing.T) {
+		database := openTestDB(t)
+		f := seedCodexRenameCase(t, database)
+		idxPath := filepath.Join(f.root, parser.CodexSessionIndexFilename)
+		require.NoError(t, os.Remove(idxPath))
+
+		assert.False(t, f.e.codexIndexSessionNameChanged(f.path),
+			"a missing index must not report a stored title as renamed")
+	})
+
+	t.Run("index has no entry for this session", func(t *testing.T) {
+		database := openTestDB(t)
+		f := seedCodexRenameCase(t, database)
+		writeCodexIndexForTest(t, f.root,
+			"99999999-8888-7777-6666-555555555555", "Other Session",
+			time.Unix(0, f.effectiveMtime))
+
+		assert.False(t, f.e.codexIndexSessionNameChanged(f.path),
+			"an index without this session's entry must not report a rename")
+	})
+}
+
 func TestCodexStoredNameDiffersPreservesMissingSemantics(t *testing.T) {
 	database := openTestDB(t)
 	require.NoError(t, database.UpsertSession(db.Session{

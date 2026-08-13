@@ -11320,6 +11320,8 @@ func (e *Engine) shouldSkipProviderSourceByDB(
 //   - an effective mtime ahead of the stored mtime driven only by the index
 //     (the raw transcript mtime is still at or below the stored mtime) skips
 //     unless this session's stored title differs from the current index title.
+//   - an effective mtime below the stored mtime skips when the index is absent,
+//     because removing a newer index reveals the unchanged transcript mtime.
 func (e *Engine) shouldSkipCodexFingerprint(
 	agent parser.AgentType,
 	path string,
@@ -11360,6 +11362,14 @@ func (e *Engine) shouldSkipCodexFingerprint(
 	if agent != parser.AgentCodex {
 		return false
 	}
+	if effectiveMtime < storedMtime {
+		indexPath := parser.CodexSessionIndexPath(path)
+		if indexPath != "" {
+			if _, err := os.Stat(indexPath); errors.Is(err, os.ErrNotExist) {
+				return true
+			}
+		}
+	}
 	fileMtime := effectiveMtime
 	if info, err := os.Stat(path); err == nil {
 		fileMtime = info.ModTime().UnixNano()
@@ -11398,7 +11408,15 @@ func (e *Engine) codexIndexSessionNameChanged(path string) bool {
 	if uuid == "" {
 		return false
 	}
-	currentName := parser.LookupCodexThreadName(path, uuid)
+	currentName, ok := parser.LookupCodexThreadNameEntry(path, uuid)
+	if !ok {
+		// No index entry means no rename signal, not a rename to empty.
+		// Modern Codex releases stopped writing session_index.jsonl; a
+		// stored title compared against the absent index would force a
+		// full re-parse of every titled session on every sync, and the
+		// rewrite preserves the title, so the loop could never converge.
+		return false
+	}
 	storedName, found, err := e.db.GetSessionName(
 		context.Background(), e.idPrefix+"codex:"+uuid,
 	)
@@ -12119,6 +12137,18 @@ func (e *Engine) normalizePendingWriteMachines(
 				batch[i].sourceIdentityUnverified =
 					!sessionWriteIdentitySupportsStoredAttribution(stored, incoming)
 				batch[i].sess.Machine = stored.Machine
+				// A rebuild writes into a fresh database, so the upsert cannot
+				// preserve a title from the destination row. Carry the archived
+				// nullable title into index-less Codex parses; an explicitly
+				// present blank remains authoritative and bypasses this path.
+				if e.archiveStore != nil &&
+					batch[i].sess.Agent == parser.AgentCodex &&
+					!batch[i].sess.SessionNamePresent {
+					batch[i].sess.SessionName = ""
+					if stored.SessionName != nil {
+						batch[i].sess.SessionName = *stored.SessionName
+					}
+				}
 			}
 			continue
 		}
@@ -14669,6 +14699,8 @@ func toDBSession(pw pendingWrite) db.Session {
 		s.FirstMessage = &pw.sess.FirstMessage
 	}
 	s.SessionName = db.ParsedSessionName(pw.sess)
+	s.PreserveSessionName = pw.sess.Agent == parser.AgentCodex &&
+		!pw.sess.SessionNamePresent
 	if !pw.sess.StartedAt.IsZero() {
 		s.StartedAt = timeutil.Ptr(pw.sess.StartedAt)
 	}

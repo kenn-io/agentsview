@@ -411,7 +411,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // inline reference, and terminal command fields in shapes the parser previously
 // skipped. Existing VS Code Copilot and Positron rows need re-parsing so their
 // structured tool calls and visible file references are restored.)
-const dataVersion = 86
+// (87: Codex fork replay boundary correction. Turn identifiers are opaque;
+// existing Codex-format rows need re-parsing so copied parent turns with any
+// identifier shape remain excluded until the first child-owned turn.)
+const dataVersion = 87
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -3063,6 +3066,14 @@ func (db *DB) createPartialIndexesLocked(w *writerHandle) error {
 		 WHERE token_usage != ''
 		   AND model != ''
 		   AND model != '<synthetic>'`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_claude_snapshot
+		 ON messages(claude_message_id, claude_request_id,
+		             timestamp, session_id, ordinal)
+		 WHERE token_usage != ''
+		   AND model != ''
+		   AND model != '<synthetic>'
+		   AND claude_message_id != ''
+		   AND claude_request_id != ''`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_has_secret
 		 ON sessions(secret_leak_count) WHERE secret_leak_count > 0`,
 	}

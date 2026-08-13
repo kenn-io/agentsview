@@ -42,16 +42,18 @@ func codexProviderSpecForAgent(agent AgentType) codexProviderSpec {
 }
 
 type codexProviderFactory struct {
-	def         AgentDef
-	spec        codexProviderSpec
-	cursorCache *codexCursorCache
+	def             AgentDef
+	spec            codexProviderSpec
+	cursorCache     *codexCursorCache
+	parentTurnCache *codexParentTurnCache
 }
 
 func newCodexProviderFactory(def AgentDef) ProviderFactory {
 	return &codexProviderFactory{
-		def:         cloneAgentDef(def),
-		spec:        codexProviderSpecForAgent(AgentCodex),
-		cursorCache: newProductionCodexCursorCache(),
+		def:             cloneAgentDef(def),
+		spec:            codexProviderSpecForAgent(AgentCodex),
+		cursorCache:     newProductionCodexCursorCache(),
+		parentTurnCache: newCodexProductionParentTurnCache(),
 	}
 }
 
@@ -59,9 +61,10 @@ func newCodexProviderFactory(def AgentDef) ProviderFactory {
 // provider, relabeling every parsed session onto the traex: ID prefix.
 func newTraeXProviderFactory(def AgentDef) ProviderFactory {
 	return &codexProviderFactory{
-		def:         cloneAgentDef(def),
-		spec:        codexProviderSpecForAgent(AgentTraeX),
-		cursorCache: newProductionCodexCursorCache(),
+		def:             cloneAgentDef(def),
+		spec:            codexProviderSpecForAgent(AgentTraeX),
+		cursorCache:     newProductionCodexCursorCache(),
+		parentTurnCache: newCodexProductionParentTurnCache(),
 	}
 }
 
@@ -81,17 +84,19 @@ func (f *codexProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 			Caps:   codexProviderCapabilities(),
 			Config: cfg,
 		},
-		spec:        f.spec,
-		sources:     newCodexSourceSet(f.spec.agent, cfg.Roots),
-		cursorCache: f.cursorCache,
+		spec:            f.spec,
+		sources:         newCodexSourceSet(f.spec.agent, cfg.Roots),
+		cursorCache:     f.cursorCache,
+		parentTurnCache: f.parentTurnCache,
 	}
 }
 
 type codexProvider struct {
 	ProviderBase
-	spec        codexProviderSpec
-	sources     codexSourceSet
-	cursorCache *codexCursorCache
+	spec            codexProviderSpec
+	sources         codexSourceSet
+	cursorCache     *codexCursorCache
+	parentTurnCache *codexParentTurnCache
 }
 
 func (p *codexProvider) Discover(ctx context.Context) ([]SourceRef, error) {
@@ -264,6 +269,7 @@ func (p *codexProvider) Parse(
 		EvictCodexSessionIndexForSession(path)
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
+	parentID, parentResolved := p.codexParentResolution(path)
 	sess, msgs, err := p.parseSession(path, machine, false)
 	if err != nil {
 		return ParseOutcome{}, err
@@ -280,14 +286,19 @@ func (p *codexProvider) Parse(
 	if req.Fingerprint.Hash != "" {
 		sess.File.Hash = req.Fingerprint.Hash
 	}
+	result := ParseResultOutcome{
+		Result: ParseResult{
+			Session:  *sess,
+			Messages: msgs,
+		},
+		DataVersion: DataVersionCurrent,
+	}
+	if parentID != "" && !parentResolved {
+		result.DataVersion = DataVersionNeedsRetry
+		result.RetryReason = "codex parent turns unresolved for " + parentID
+	}
 	return ParseOutcome{
-		Results: []ParseResultOutcome{{
-			Result: ParseResult{
-				Session:  *sess,
-				Messages: msgs,
-			},
-			DataVersion: DataVersionCurrent,
-		}},
+		Results:           []ParseResultOutcome{result},
 		ResultSetComplete: true,
 		// A requested full parse is the authoritative message set, so
 		// force-replace the stored rows; this remains distinct from the provider's
@@ -454,7 +465,7 @@ func (s codexSourceSet) DiscoverEach(
 				continue
 			}
 			for _, file := range discoverCodexS3(root) {
-				if err := yield(s3SourceRefFromDiscoveredFile(file)); err != nil {
+				if err := yield(s3SourceRefFromDiscoveredFile(root, file)); err != nil {
 					return err
 				}
 			}
@@ -508,7 +519,7 @@ func (s codexSourceSet) discover(
 				continue
 			}
 			for _, file := range discoverCodexS3(root) {
-				source := s3SourceRefFromDiscoveredFile(file)
+				source := s3SourceRefFromDiscoveredFile(root, file)
 				if _, ok := byKey[source.Key]; ok {
 					continue
 				}

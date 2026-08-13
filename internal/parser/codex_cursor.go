@@ -232,6 +232,9 @@ func cloneCodexCursorState(state codexCursorState) codexCursorState {
 	state.cwd = strings.Clone(state.cwd)
 	state.agentPath = strings.Clone(state.agentPath)
 	state.lastTaskEvent = strings.Clone(state.lastTaskEvent)
+	state.forkGate.parentSessionID = strings.Clone(
+		state.forkGate.parentSessionID,
+	)
 	return state
 }
 
@@ -244,6 +247,7 @@ func estimateCodexCursorEntryBytes(
 			len(state.model)+
 			len(state.cwd)+
 			len(state.agentPath)+
-			len(state.lastTaskEvent),
+			len(state.lastTaskEvent)+
+			len(state.forkGate.parentSessionID),
 	)
 }

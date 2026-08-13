@@ -254,12 +254,16 @@ Grok section and remove the explicit registry exception in the coverage test.
 
 ## Codex (`codex`)
 
-- **Format:** Rollout JSONL files, with a separate JSONL session index used for
-  discovery and metadata. The TUI also maintains an append-oriented
-  `history.jsonl` whose records contain `session_id`, Unix-seconds `ts`, and
-  submitted prompt `text`; configured size enforcement can rewrite a retained
-  tail in place. Agentsview consumes only the first two fields as a
-  live-activity hint.
+- **Format:** Rollout JSONL files, with a separate JSONL session index used by
+  older releases for discovery and metadata. Current releases no longer write
+  `session_index.jsonl`; thread titles live in `thread_history_*.sqlite`
+  databases that agentsview does not read, so an absent index is the normal
+  state, not a rename signal (reverified 2026-08-13 against a live `~/.codex`
+  with no `session_index.jsonl` and a populated `thread_history_1.sqlite`).
+  The TUI also maintains an append-oriented `history.jsonl` whose records
+  contain `session_id`, Unix-seconds `ts`, and submitted prompt `text`;
+  configured size enforcement can rewrite a retained tail in place. Agentsview
+  consumes only the first two fields as a live-activity hint.
 - **Evidence:** `source`.
 - **Upstream:** Clone `https://github.com/openai/codex.git` at
   `406dc9239492aff6d295cca5eebe2a548548d42f`; see the pinned
@@ -287,21 +291,32 @@ Grok section and remove the explicit registry exception in the coverage test.
   `internal/parser/codex_provider.go`; usage is taken from the last-turn
   counters rather than repeatedly counting cumulative totals. Fork and
   subagent rollouts can begin with a re-stamped copy of the parent's
-  transcript, including its `token_count` records. Agentsview recognizes the
-  copied parent `session_meta` and discards that leading replay through the
-  last pre-creation UUIDv7 `turn_id`, preserving only usage produced by the
-  derived session. Child-only subagent transcripts are left unchanged. An
-  appended `session_meta` after an incremental-sync offset forces an
-  authoritative replacement of that derived session, because the metadata can
-  be the copied parent record that activates replay filtering. The original
-  parent session remains valid and is not reparsed. Reverified 2026-08-12
-  against locally observed multi-agent rollouts and the pinned format sources;
-  the pinned TUI is the evidenced `history.jsonl` producer. No `append_entry`
-  producer call exists under the pinned `app-server` or `exec` trees, so this
-  evidence does not establish IDE, desktop, or `codex exec` activity-hint
-  coverage. Locally observed Codex app builds can write the same schema, but
-  that is observational evidence rather than a public compatibility guarantee.
-  Agentsview derives the hint path as
+  transcript, including its `token_count` records. Agentsview follows the
+  explicit parent id, compares the ordered `turn_context.turn_id` sequence as
+  opaque identifiers, and discards the leading turns also present in the
+  parent. UUID versions and identifier bytes carry no chronological meaning;
+  the first turn id absent from the parent begins child-owned usage. Missing
+  parents fail open, and child-only subagent transcripts are left unchanged.
+  S3 imports list the child's configured Codex root for its explicitly named
+  parent and materialize only that one parent beside the child. When the
+  parent is not yet available or has no turns, the child remains visible but
+  is stored below the current data version so a later unchanged-object sync
+  retries and corrects the overcount. Reverified 2026-08-13 against the
+  materialized-S3 parser-to-SQLite path: the first missing-parent pass kept
+  replayed content as retryable, and the next pass fetched only the named
+  parent and replaced it with child-owned messages and usage. An appended
+  `session_meta` after an incremental-sync offset forces an authoritative
+  replacement of that derived session, because the metadata can be the copied
+  parent record that activates replay filtering. The original parent session
+  remains valid and is not reparsed. Reverified 2026-08-12 against locally
+  observed multi-agent rollouts that replayed differently shaped opaque turn
+  ids before the first child-owned turn, and against the pinned format
+  sources; the pinned TUI is the evidenced `history.jsonl` producer. No
+  `append_entry` producer call exists under the pinned `app-server` or `exec`
+  trees, so this evidence does not establish IDE, desktop, or `codex exec`
+  activity-hint coverage. Locally observed Codex app builds can write the same
+  schema, but that is observational evidence rather than a public compatibility
+  guarantee. Agentsview derives the hint path as
   `<configured-sessions-root>/../history.jsonl`; a custom sessions root
   without that sibling, or `HistoryPersistence::None`, degrades to ordinary
   watcher behavior, degraded-coverage polling when applicable, and the daily

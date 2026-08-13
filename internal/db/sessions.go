@@ -372,6 +372,12 @@ type Session struct {
 	LocalModifiedAt      *string `json:"local_modified_at,omitempty"`
 	TranscriptRevision   *string `json:"transcript_revision,omitempty"`
 	CreatedAt            string  `json:"created_at"`
+
+	// PreserveSessionName is transient write intent. Parser write paths set it
+	// when a provider supplied no authoritative title signal, so an upsert
+	// retains an existing session_name while a new row can still use the
+	// parser's fallback name.
+	PreserveSessionName bool `json:"-"`
 }
 
 // SessionCursor is the opaque pagination token. EndedAt carries the
@@ -1365,7 +1371,9 @@ const upsertSessionBaseSQL = insertSessionSQL + `
 			entrypoint = excluded.entrypoint,
 			session_kind = excluded.session_kind,
 			first_message = excluded.first_message,
-			-- session_name is always overwritten by re-parse; display_name
+			-- Parser writes resolve session_name before this statement: an
+			-- explicit title (including blank) replaces it, while an absent
+			-- provider signal may carry the existing value forward. display_name
 			-- is the user override and is only touched by RenameSession.
 			session_name = excluded.session_name,
 			started_at = excluded.started_at,
@@ -1521,10 +1529,14 @@ func upsertSessionExec(
 		return sessionUpsertResult{}, ErrSessionExcluded
 	}
 	var previousProject string
+	var previousSessionName sql.NullString
 	var deletedAt, deletionCause sql.NullString
 	err = queryRow(
-		"SELECT project, deleted_at, deletion_cause FROM sessions WHERE id = ?", s.ID,
-	).Scan(&previousProject, &deletedAt, &deletionCause)
+		"SELECT project, session_name, deleted_at, deletion_cause "+
+			"FROM sessions WHERE id = ?", s.ID,
+	).Scan(
+		&previousProject, &previousSessionName, &deletedAt, &deletionCause,
+	)
 	result := sessionUpsertResult{
 		inserted:        errors.Is(err, sql.ErrNoRows),
 		previousProject: previousProject,
@@ -1533,6 +1545,14 @@ func upsertSessionExec(
 	if err != nil && !result.inserted {
 		return sessionUpsertResult{},
 			fmt.Errorf("checking session %s: %w", s.ID, err)
+	}
+	if s.PreserveSessionName && !result.inserted {
+		if previousSessionName.Valid {
+			name := previousSessionName.String
+			s.SessionName = &name
+		} else {
+			s.SessionName = nil
+		}
 	}
 	if deletedAt.Valid &&
 		(!deletionCause.Valid || deletionCause.String != deletionCauseSourceMissing) {
@@ -3056,18 +3076,20 @@ func (db *DB) ListSessionIDsByFilePath(path, agent string) ([]string, error) {
 
 const sessionMachineBatchSize = 500
 
-// SessionWriteIdentity is the stored evidence used to decide whether a copied
-// source may reuse the session's machine for local project identity discovery.
+// SessionWriteIdentity is the stored state used to preserve immutable source
+// attribution and parser-owned Codex titles across session writes and rebuilds.
 type SessionWriteIdentity struct {
-	Machine  string
-	Agent    string
-	FilePath string
-	FileHash string
+	Machine     string
+	Agent       string
+	FilePath    string
+	FileHash    string
+	SessionName *string
 }
 
-// ListSessionWriteIdentitiesByID returns stored source evidence for each
-// requested session, including tombstoned rows that may be revived by a later
-// successful parse. Requests are chunked below SQLite's bind-variable limit.
+// ListSessionWriteIdentitiesByID returns stored source attribution and parser
+// title state for each requested session, including tombstoned rows that may be
+// revived by a later successful parse. Requests are chunked below SQLite's
+// bind-variable limit.
 func (db *DB) ListSessionWriteIdentitiesByID(
 	ctx context.Context,
 	ids []string,
@@ -3098,7 +3120,8 @@ func (db *DB) ListSessionWriteIdentitiesByID(
 		}
 		rows, err := db.getReader().QueryContext(ctx, `
 			SELECT id, machine, agent,
-			       COALESCE(file_path, ''), COALESCE(file_hash, '')
+			       COALESCE(file_path, ''), COALESCE(file_hash, ''),
+			       session_name
 			FROM sessions
 			WHERE id IN (`+placeholders+`)
 			ORDER BY id`, args...)
@@ -3110,7 +3133,7 @@ func (db *DB) ListSessionWriteIdentitiesByID(
 			var identity SessionWriteIdentity
 			if err := rows.Scan(
 				&id, &identity.Machine, &identity.Agent,
-				&identity.FilePath, &identity.FileHash,
+				&identity.FilePath, &identity.FileHash, &identity.SessionName,
 			); err != nil {
 				_ = rows.Close()
 				return nil, fmt.Errorf(
