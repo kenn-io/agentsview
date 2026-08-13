@@ -1022,6 +1022,14 @@ const (
 	IncrementalNeedsFullParse
 )
 
+// ErrIncrementalNeedsFullParse signals that a provider declined the
+// appended tail and the caller must fall back to a full parse that
+// replaces stored rows. It is provider-agnostic; parser-internal
+// fallbacks (Claude, Codex) are mapped to it at the provider seam.
+var ErrIncrementalNeedsFullParse = fmt.Errorf(
+	"incremental parse: appended lines require a replacing full parse",
+)
+
 // ProviderFactories returns one provider factory for every registered agent.
 func ProviderFactories() []ProviderFactory {
 	factories := make([]ProviderFactory, 0, len(Registry))

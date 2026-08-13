@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12105,6 +12106,62 @@ func TestIncrementalSync_ClaudeAgentIDLinksIncrementally(t *testing.T) {
 	require.Len(t, msgs[1].ToolCalls, 1)
 	assert.Equal(t, "done", msgs[1].ToolCalls[0].ResultContent)
 	assert.Equal(t, len("done"), msgs[1].ToolCalls[0].ResultContentLength)
+}
+
+// lockedLogBuffer captures process-global log output; the engine may log
+// from background goroutines while a sync runs.
+type lockedLogBuffer struct {
+	mu  gosync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// A Codex incremental decline must be logged with a provider-agnostic
+// fallback reason, not as appended Claude lines.
+func TestIncrementalSync_CodexFallbackLogIsProviderAgnostic(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
+	uuid := "c1d2e3f4-1234-4abc-9def-0123456789ab"
+	content := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/workspace/project", "user").
+		AddCodexMessage(tsEarlyS1, "user", "hello").
+		String()
+	path := env.writeCodexSession(
+		t, filepath.Join("2026", "07", "14"),
+		"rollout-2026-07-14T12-00-00-"+uuid+".jsonl", content,
+	)
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+
+	spawnEnd := `{"timestamp":"2024-01-01T10:01:05Z","type":"event_msg","payload":{"type":"collab_agent_spawn_end","call_id":"call_spawn","new_thread_id":"11111111-2222-4333-8444-555555555555","status":"pending_init"}}`
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, writeErr := f.WriteString(spawnEnd + "\n")
+	f.Close()
+	require.NoError(t, writeErr, "append")
+
+	var logBuf lockedLogBuffer
+	prev := log.Writer()
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+
+	env.engine.SyncPaths([]string{path})
+	log.SetOutput(prev)
+
+	logs := logBuf.String()
+	require.Contains(t, logs, "explicit full parse fallback",
+		"appended spawn-end event should force the full-parse fallback")
+	assert.NotContains(t, logs, "Claude",
+		"codex fallback must not be described as appended Claude lines")
 }
 
 // A plain tool_result (no toolUseResult.agentId) appended after its

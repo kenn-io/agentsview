@@ -10843,7 +10843,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 				// Signal the shared helper to fall back to a
 				// full parse that replaces stored messages.
 				return nil, nil, time.Time{}, 0, nil,
-					parser.ErrClaudeIncrementalNeedsFullParse
+					parser.ErrIncrementalNeedsFullParse
 			}
 			// A plain full-parse fallback without a replace request.
 			// The Claude provider always sets ForceReplace on its

@@ -2235,7 +2235,8 @@ func (p *codexProvider) parseSessionFrom(
 // parse error requires the caller to fall back to a full parse.
 func IsIncrementalFullParseFallback(err error) bool {
 	return errors.Is(err, errCodexIncrementalNeedsFullParse) ||
-		errors.Is(err, ErrClaudeIncrementalNeedsFullParse)
+		errors.Is(err, ErrClaudeIncrementalNeedsFullParse) ||
+		errors.Is(err, ErrIncrementalNeedsFullParse)
 }
 
 func isCodexSystemMessage(content string) bool {
