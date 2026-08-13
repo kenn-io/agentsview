@@ -2525,12 +2525,12 @@ func TestSyncEngineWorktreeProjectWhenPathMissing(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	mainContent := testjsonl.NewSessionBuilder().
-		AddRaw(`{"type":"user","timestamp":"2024-01-01T10:00:00Z","cwd":"/Users/wesm/code/agentsview","gitBranch":"main","message":{"content":"hello"}}`).
+		AddRaw(`{"type":"user","timestamp":"2024-01-01T10:00:00Z","cwd":"/workspace/agentsview","gitBranch":"main","message":{"content":"hello"}}`).
 		AddClaudeAssistant(tsEarlyS5, "ok").
 		String()
 
 	worktreeContent := testjsonl.NewSessionBuilder().
-		AddRaw(`{"type":"user","timestamp":"2024-01-01T10:00:00Z","cwd":"/Users/wesm/code/agentsview-worktree-tool-call-arguments","gitBranch":"worktree-tool-call-arguments","message":{"content":"hello"}}`).
+		AddRaw(`{"type":"user","timestamp":"2024-01-01T10:00:00Z","cwd":"/workspace/agentsview-worktree-tool-call-arguments","gitBranch":"worktree-tool-call-arguments","message":{"content":"hello"}}`).
 		AddClaudeAssistant(tsEarlyS5, "ok").
 		String()
 
