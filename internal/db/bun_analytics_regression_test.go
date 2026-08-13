@@ -23,7 +23,7 @@ func (*replayingAnalyticsBackend) Name() string { return "replaying-analytics" }
 func (*replayingAnalyticsBackend) ReadOnly() bool { return true }
 
 func (*replayingAnalyticsBackend) Capabilities() BackendCapabilities {
-	return BackendCapabilities{}
+	return BackendCapabilities{AnalyticsDialect: SQLiteBunAnalyticsDialect()}
 }
 
 func (*replayingAnalyticsBackend) TimestampOrderExpr(column string) string {
@@ -196,7 +196,7 @@ func TestBunRecentEditsHydratesOnlyRequestedGroups(t *testing.T) {
 	}}))
 
 	hook := new(countingQueryHook)
-	store := NewBunStore(&sessionContractBackend{
+	store := NewBunStore(&sqliteAnalyticsAggregateBackend{
 		store: database.bunReader.WithQueryHook(hook),
 	})
 	result, err := store.RecentEdits(t.Context(), RecentEditsParams{
@@ -237,7 +237,7 @@ func TestBunContentAnalyticsStreamsAcrossSessionBatches(t *testing.T) {
 	require.NoError(t, err)
 
 	hook := new(countingQueryHook)
-	store := NewBunStore(&sessionContractBackend{
+	store := NewBunStore(&sqliteAnalyticsAggregateBackend{
 		store: database.bunReader.WithQueryHook(hook),
 	})
 	terms, err := ParseTrendTerms([]string{"seam"})

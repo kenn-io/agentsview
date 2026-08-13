@@ -190,78 +190,14 @@ func (s *BunStore) BuildActivityReportArtifacts(
 
 	var artifacts activity.CandidateArtifacts
 	err := s.consistentView(ctx, func(store bun.IDB) error {
-		candidateSessions, err := s.bunAnalyticsSessionsFrom(ctx, store, f, false)
+		sessions, events, err := s.bunActivityReportScopeFrom(ctx, store, f, q)
 		if err != nil {
 			return err
 		}
-		candidateMessages, err := bunAnalyticsMessagesFrom(
-			ctx, store, bunAnalyticsSessionIDs(candidateSessions),
-		)
-		if err != nil {
-			return err
-		}
-		messagesBySession := bunAnalyticsMessagesBySession(candidateMessages)
-		var sessions []activity.SessionMeta
-		var ids []string
-		for _, row := range candidateSessions {
-			start := bunAnalyticsSessionTime(row)
-			end := start
-			if row.EndedAt != nil {
-				end = row.EndedAt.UTC()
-			} else {
-				for _, message := range messagesBySession[row.ID] {
-					if message.Timestamp != nil && message.Timestamp.After(end) {
-						end = message.Timestamp.UTC()
-					}
-				}
-			}
-			if end.Before(q.RangeStart.UTC()) || !start.Before(q.RangeEnd.UTC()) {
-				continue
-			}
-			title := row.ID
-			for _, candidate := range []*string{
-				row.DisplayName, row.SessionName, new(row.Project),
-			} {
-				if candidate != nil && *candidate != "" {
-					title = *candidate
-					break
-				}
-			}
-			sessions = append(sessions, activity.SessionMeta{
-				SessionID: row.ID, Title: title, Project: row.Project,
-				Agent: row.Agent, Machine: row.Machine,
-				StartedAt:   bunAnalyticsTimeString(row.StartedAt),
-				EndedAt:     bunAnalyticsTimeString(row.EndedAt),
-				IsAutomated: row.IsAutomated,
-			})
-			ids = append(ids, row.ID)
-		}
-		sort.Slice(sessions, func(i, j int) bool {
-			return sessions[i].SessionID < sessions[j].SessionID
-		})
-		ids = ids[:0]
-		allowed := make(map[string]struct{}, len(sessions))
+		ids := make([]string, 0, len(sessions))
 		for _, session := range sessions {
 			ids = append(ids, session.SessionID)
-			allowed[session.SessionID] = struct{}{}
 		}
-		events := make([]activity.ActivityEvent, 0, len(candidateMessages))
-		for _, message := range candidateMessages {
-			if _, ok := allowed[message.SessionID]; !ok || message.Timestamp == nil {
-				continue
-			}
-			events = append(events, activity.ActivityEvent{
-				SessionID: message.SessionID, Ordinal: message.Ordinal,
-				Role: message.Role, Timestamp: bunAnalyticsTimeString(message.Timestamp),
-				Model: message.Model,
-			})
-		}
-		sort.Slice(events, func(i, j int) bool {
-			if events[i].SessionID != events[j].SessionID {
-				return events[i].SessionID < events[j].SessionID
-			}
-			return events[i].Ordinal < events[j].Ordinal
-		})
 		reportProgress(onProgress, activity.Progress{
 			Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 		})
@@ -369,11 +305,11 @@ func (s *BunStore) bunActivityReportUsageFrom(
 	if loc == nil {
 		loc = time.UTC
 	}
-	projections, err := s.loadBunUsageProjections(ctx, store, UsageFilter{
+	projections, err := s.bunActivityReportUsageProjectionsFrom(ctx, store, ids, UsageFilter{
 		From:     q.RangeStart.In(loc).Format("2006-01-02"),
 		To:       q.RangeEnd.In(loc).Format("2006-01-02"),
 		Timezone: q.Timezone,
-	}, false, nil)
+	})
 	if err != nil {
 		return nil, nil, err
 	}
