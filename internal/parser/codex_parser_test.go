@@ -49,7 +49,9 @@ func parseCodexTestSession(
 	t *testing.T, path, machine string, includeExec bool,
 ) (*ParsedSession, []ParsedMessage, error) {
 	t.Helper()
-	return newCodexTestProvider(t).parseSession(path, machine, includeExec)
+	return newCodexTestProvider(t, filepath.Dir(path)).parseSession(
+		path, machine, includeExec,
+	)
 }
 
 // parseCodexTestSessionFrom parses appended Codex lines through the
@@ -450,7 +452,7 @@ func TestParseCodexSession_ExecOriginator(t *testing.T) {
 }
 
 func TestCodexInsertMessage_PreservesChronologyOnSameOrdinal(t *testing.T) {
-	b := newCodexSessionBuilder(false)
+	b := newCodexSessionBuilder(false, nil)
 	b.messages = []ParsedMessage{{
 		Ordinal:   2,
 		Role:      RoleAssistant,
@@ -1514,19 +1516,40 @@ func TestParseCodexSession_ForkedSessionSkipsReplayedHistory(t *testing.T) {
 	// `codex fork` replays the parent's history — its session_meta,
 	// turns, messages and token_count events — into the top of the new
 	// rollout with re-stamped envelope timestamps, so the same usage
-	// lives in two files and was counted twice (#643). Turn ids are
-	// UUIDv7 values minted when the turn originally ran, which is what
-	// locates the replay/genuine boundary.
+	// lives in two files and was counted twice (#643). The referenced
+	// parent's ordered turn ids locate the replay/genuine boundary
+	// without assigning chronological meaning to an identifier.
 	forkCreatedMs := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC).UnixMilli() // == tsEarly
 	forkID := testUUIDv7(forkCreatedMs, 1)
-	parentTurnID := testUUIDv7(forkCreatedMs-3600_000, 2) // minted an hour earlier
+	parentID := testUUIDv7(forkCreatedMs-7200_000, 0)
+	parentTurnID := testUUIDv7(forkCreatedMs-3600_000, 2)
 	genuineTurnID := testUUIDv7(forkCreatedMs+1000, 3)
+	root := t.TempDir()
+	parent := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(parentID, "/tmp", "user", tsEarly),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", parentTurnID, tsEarly),
+		testjsonl.CodexTurnContextJSON("gpt-5.3", tsEarly),
+	)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "rollout-2024-01-01T08-00-00-"+parentID+".jsonl"),
+		[]byte(parent), 0o600,
+	))
+	parse := func(t *testing.T, content string) (*ParsedSession, []ParsedMessage) {
+		t.Helper()
+		path := filepath.Join(root, strings.ReplaceAll(t.Name(), "/", "-")+"-fork.jsonl")
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+		sess, msgs, err := newCodexTestProvider(t, root).parseSession(
+			path, "local", false,
+		)
+		require.NoError(t, err)
+		return sess, msgs
+	}
 
 	t.Run("replayed history is dropped, genuine turns kept", func(t *testing.T) {
 		content := testjsonl.JoinJSONL(
-			testjsonl.CodexForkedSessionMetaJSON(forkID, "parent-1", "/tmp", "user", tsEarly),
+			testjsonl.CodexForkedSessionMetaJSON(forkID, parentID, "/tmp", "user", tsEarly),
 			// Replayed parent history (all re-stamped at fork creation):
-			testjsonl.CodexSessionMetaJSON("parent-1", "/other-project", "user", tsEarly),
+			testjsonl.CodexSessionMetaJSON(parentID, "/other-project", "user", tsEarly),
 			testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", parentTurnID, tsEarly),
 			testjsonl.CodexMsgJSON("user", "replayed question", tsEarly),
 			testjsonl.CodexMsgJSON("assistant", "replayed answer", tsEarly),
@@ -1540,7 +1563,7 @@ func TestParseCodexSession_ForkedSessionSkipsReplayedHistory(t *testing.T) {
 			testjsonl.CodexMsgJSON("assistant", "genuine answer", tsEarlyS5),
 			testjsonl.CodexTokenCountJSON(tsEarlyS5, 10_000, 500, 6_000),
 		)
-		sess, msgs := runCodexParserTest(t, "fork.jsonl", content, false)
+		sess, msgs := parse(t, content)
 		require.NotNil(t, sess)
 
 		// The fork keeps its own identity — the replayed parent
@@ -1560,27 +1583,24 @@ func TestParseCodexSession_ForkedSessionSkipsReplayedHistory(t *testing.T) {
 
 	t.Run("fork with no genuine turns yields no messages", func(t *testing.T) {
 		content := testjsonl.JoinJSONL(
-			testjsonl.CodexForkedSessionMetaJSON(forkID, "parent-1", "/tmp", "user", tsEarly),
-			testjsonl.CodexSessionMetaJSON("parent-1", "/tmp", "user", tsEarly),
+			testjsonl.CodexForkedSessionMetaJSON(forkID, parentID, "/tmp", "user", tsEarly),
+			testjsonl.CodexSessionMetaJSON(parentID, "/tmp", "user", tsEarly),
 			testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", parentTurnID, tsEarly),
 			testjsonl.CodexMsgJSON("user", "replayed question", tsEarly),
 			testjsonl.CodexMsgJSON("assistant", "replayed answer", tsEarly),
 			testjsonl.CodexTokenCountJSON(tsEarly, 50_000, 9_000, 0),
 		)
-		sess, msgs := runCodexParserTest(t, "fork.jsonl", content, false)
+		sess, msgs := parse(t, content)
 		require.NotNil(t, sess)
 		assert.Equal(t, "codex:"+forkID, sess.ID)
 		assert.Empty(t, msgs)
 		assert.Equal(t, 0, sess.TotalOutputTokens)
 	})
 
-	t.Run("non-v7 fork id anchors the boundary from the envelope timestamp", func(t *testing.T) {
-		// Neither the fork id nor the payload carries a usable
-		// timestamp here — the gate must fall back to the JSONL
-		// envelope timestamp and still suppress the replay.
+	t.Run("fork id shape does not affect the boundary", func(t *testing.T) {
 		content := testjsonl.JoinJSONL(
-			testjsonl.CodexForkedSessionMetaJSON("fork-plain-1", "parent-1", "/tmp", "user", tsEarly),
-			testjsonl.CodexSessionMetaJSON("parent-1", "/tmp", "user", tsEarly),
+			testjsonl.CodexForkedSessionMetaJSON("fork-plain-1", parentID, "/tmp", "user", tsEarly),
+			testjsonl.CodexSessionMetaJSON(parentID, "/tmp", "user", tsEarly),
 			testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", parentTurnID, tsEarly),
 			testjsonl.CodexMsgJSON("user", "replayed question", tsEarly),
 			testjsonl.CodexMsgJSON("assistant", "replayed answer", tsEarly),
@@ -1590,7 +1610,7 @@ func TestParseCodexSession_ForkedSessionSkipsReplayedHistory(t *testing.T) {
 			testjsonl.CodexMsgJSON("assistant", "genuine answer", tsEarlyS5),
 			testjsonl.CodexTokenCountJSON(tsEarlyS5, 10_000, 500, 6_000),
 		)
-		sess, msgs := runCodexParserTest(t, "fork.jsonl", content, false)
+		sess, msgs := parse(t, content)
 		require.NotNil(t, sess)
 		assert.Equal(t, "codex:fork-plain-1", sess.ID)
 		require.Len(t, msgs, 2)
@@ -1598,14 +1618,14 @@ func TestParseCodexSession_ForkedSessionSkipsReplayedHistory(t *testing.T) {
 		assert.Equal(t, 500, sess.TotalOutputTokens)
 	})
 
-	t.Run("unparseable turn_id fails open instead of dropping live data", func(t *testing.T) {
+	t.Run("child turn id absent from parent opens the gate", func(t *testing.T) {
 		content := testjsonl.JoinJSONL(
-			testjsonl.CodexForkedSessionMetaJSON(forkID, "parent-1", "/tmp", "user", tsEarly),
+			testjsonl.CodexForkedSessionMetaJSON(forkID, parentID, "/tmp", "user", tsEarly),
 			testjsonl.CodexTurnContextWithIDJSON("gpt-5.5", "not-a-uuid", tsEarlyS1),
 			testjsonl.CodexMsgJSON("user", "kept question", tsEarlyS1),
 			testjsonl.CodexMsgJSON("assistant", "kept answer", tsEarlyS5),
 		)
-		_, msgs := runCodexParserTest(t, "fork.jsonl", content, false)
+		_, msgs := parse(t, content)
 		require.Len(t, msgs, 2)
 		assert.Equal(t, "kept question", msgs[0].Content)
 	})
@@ -1626,12 +1646,73 @@ func TestParseCodexSession_ForkedSessionSkipsReplayedHistory(t *testing.T) {
 	})
 }
 
+func TestParseCodexSession_ForkBoundaryTreatsTurnIDsAsOpaque(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	parentID := "019fc451-42d5-7dc1-9186-e6e41a43461d"
+	childID := "019ff37b-7bda-76c0-9120-81a7ffc8cf19"
+	parentTurnID := "bba37251-227f-4546-9246-8dc55d47907e"
+	childTurnID := "child-owned-turn"
+	parent := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(parentID, "/tmp", "user", tsEarly),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", parentTurnID, tsEarly),
+		testjsonl.CodexMsgJSON("user", "parent question", tsEarly),
+		testjsonl.CodexMsgJSON("assistant", "parent answer", tsEarly),
+		testjsonl.CodexTokenCountJSON(tsEarly, 50_000, 9_000, 0),
+	)
+	parentPath := filepath.Join(
+		root,
+		"rollout-2024-01-01T09-00-00-"+parentID+".jsonl",
+	)
+	require.NoError(t, os.WriteFile(parentPath, []byte(parent), 0o600))
+
+	child := testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(
+			childID, parentID, "/tmp", "user", tsEarly,
+		),
+		testjsonl.CodexSessionMetaJSON(parentID, "/tmp", "user", tsEarly),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", parentTurnID, tsEarly),
+		testjsonl.CodexMsgJSON("user", "replayed parent question", tsEarly),
+		testjsonl.CodexMsgJSON("assistant", "replayed parent answer", tsEarly),
+		testjsonl.CodexTokenCountJSON(tsEarly, 50_000, 9_000, 0),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5.5", childTurnID, tsEarlyS1),
+		testjsonl.CodexMsgJSON("user", "genuine child task", tsEarlyS1),
+		testjsonl.CodexMsgJSON("assistant", "genuine child answer", tsEarlyS5),
+		testjsonl.CodexTokenCountJSON(tsEarlyS5, 10_000, 500, 6_000),
+	)
+	childPath := filepath.Join(
+		root,
+		"rollout-2024-01-01T10-00-00-"+childID+".jsonl",
+	)
+	require.NoError(t, os.WriteFile(childPath, []byte(child), 0o600))
+
+	sess, msgs, err := newCodexTestProvider(t, root).parseSession(
+		childPath, "local", false,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "genuine child task", msgs[0].Content)
+	assert.Equal(t, "genuine child answer", msgs[1].Content)
+	assert.Equal(t, 500, sess.TotalOutputTokens)
+}
+
 func TestParseCodexSession_SubagentSessionSkipsReplayedHistory(t *testing.T) {
 	childCreatedMs := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC).UnixMilli()
 	childID := testUUIDv7(childCreatedMs, 1)
 	parentID := testUUIDv7(childCreatedMs-3600_000, 2)
 	parentTurnID := testUUIDv7(childCreatedMs-1800_000, 3)
 	childTurnID := testUUIDv7(childCreatedMs+1000, 4)
+	root := t.TempDir()
+	parent := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(parentID, "/tmp/project", "user", tsEarly),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", parentTurnID, tsEarly),
+	)
+	parentPath := filepath.Join(
+		root, "rollout-2024-01-01T08-00-00-"+parentID+".jsonl",
+	)
+	require.NoError(t, os.WriteFile(parentPath, []byte(parent), 0o600))
 
 	tests := []struct {
 		name string
@@ -1688,9 +1769,15 @@ func TestParseCodexSession_SubagentSessionSkipsReplayedHistory(t *testing.T) {
 				),
 			)
 
-			sess, msgs := runCodexParserTest(
-				t, "subagent.jsonl", content, false,
+			path := filepath.Join(
+				root,
+				strings.ReplaceAll(t.Name(), "/", "-")+"-"+childID+".jsonl",
 			)
+			require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+			sess, msgs, err := newCodexTestProvider(t, root).parseSession(
+				path, "local", false,
+			)
+			require.NoError(t, err)
 			require.NotNil(t, sess)
 			assert.Equal(t, "codex:"+childID, sess.ID)
 			assert.Equal(t, "codex:"+parentID, sess.ParentSessionID)
@@ -1714,19 +1801,31 @@ func TestParseCodexSessionFrom_ForkReplaySpansOffset(t *testing.T) {
 
 	forkCreatedMs := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC).UnixMilli() // == tsEarly
 	forkID := testUUIDv7(forkCreatedMs, 1)
+	parentID := testUUIDv7(forkCreatedMs-7200_000, 0)
 	parentTurnID := testUUIDv7(forkCreatedMs-3600_000, 2)
 	genuineTurnID := testUUIDv7(forkCreatedMs+1000, 3)
+	root := t.TempDir()
+	parent := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(parentID, "/tmp", "user", tsEarly),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", parentTurnID, tsEarly),
+	)
+	parentPath := filepath.Join(
+		root, "rollout-2024-01-01T08-00-00-"+parentID+".jsonl",
+	)
+	require.NoError(t, os.WriteFile(parentPath, []byte(parent), 0o600))
 
 	// The initial sync sees only part of the replayed parent history.
 	initial := testjsonl.JoinJSONL(
-		testjsonl.CodexForkedSessionMetaJSON(forkID, "parent-1", "/tmp", "user", tsEarly),
-		testjsonl.CodexSessionMetaJSON("parent-1", "/tmp", "user", tsEarly),
+		testjsonl.CodexForkedSessionMetaJSON(forkID, parentID, "/tmp", "user", tsEarly),
+		testjsonl.CodexSessionMetaJSON(parentID, "/tmp", "user", tsEarly),
 		testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", parentTurnID, tsEarly),
 		testjsonl.CodexMsgJSON("user", "replayed question", tsEarly),
 	)
-	path := createTestFile(t, "fork-incremental.jsonl", initial)
+	path := filepath.Join(root, "rollout-2024-01-01T10-00-00-"+forkID+".jsonl")
+	require.NoError(t, os.WriteFile(path, []byte(initial), 0o600))
+	provider := newCodexTestProvider(t, root)
 
-	sess, msgs, err := parseCodexTestSession(t, path, "local", false)
+	sess, msgs, err := provider.parseSession(path, "local", false)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "codex:"+forkID, sess.ID)
@@ -1752,7 +1851,7 @@ func TestParseCodexSessionFrom_ForkReplaySpansOffset(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	newMsgs, _, _, err := parseCodexTestSessionFrom(t, path, offset, 0, false)
+	newMsgs, _, _, err := provider.parseSessionFrom(path, offset, 0, false)
 	require.NoError(t, err)
 
 	// Only the genuine turn survives; the replayed assistant answer
@@ -1764,6 +1863,60 @@ func TestParseCodexSessionFrom_ForkReplaySpansOffset(t *testing.T) {
 	assert.Equal(t, 500, newMsgs[1].OutputTokens)
 }
 
+func TestParseCodexSessionFrom_ForkReplayOpaqueTurnSpansOffset(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	parentID := "019fc451-42d5-7dc1-9186-e6e41a43461d"
+	childID := "019ff37b-7bda-76c0-9120-81a7ffc8cf19"
+	parentTurnID := "bba37251-227f-4546-9246-8dc55d47907e"
+	childTurnID := "child-owned-turn"
+	parent := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(parentID, "/tmp", "user", tsEarly),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", parentTurnID, tsEarly),
+	)
+	parentPath := filepath.Join(
+		root, "rollout-2024-01-01T08-00-00-"+parentID+".jsonl",
+	)
+	require.NoError(t, os.WriteFile(parentPath, []byte(parent), 0o600))
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(
+			childID, parentID, "/tmp", "user", tsEarly,
+		),
+		testjsonl.CodexSessionMetaJSON(parentID, "/tmp", "user", tsEarly),
+	)
+	childPath := filepath.Join(
+		root, "rollout-2024-01-01T10-00-00-"+childID+".jsonl",
+	)
+	require.NoError(t, os.WriteFile(childPath, []byte(initial), 0o600))
+	provider := newCodexTestProvider(t, root)
+
+	sess, messages, err := provider.parseSession(childPath, "local", false)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Empty(t, messages)
+	offset := sess.File.Size
+
+	appendCodexProviderContent(t, childPath, testjsonl.JoinJSONL(
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", parentTurnID, tsEarly),
+		testjsonl.CodexMsgJSON("assistant", "replayed parent answer", tsEarly),
+		testjsonl.CodexTokenCountJSON(tsEarly, 50_000, 9_000, 0),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5.5", childTurnID, tsEarlyS1),
+		testjsonl.CodexMsgJSON("user", "genuine child task", tsEarlyS1),
+		testjsonl.CodexMsgJSON("assistant", "genuine child answer", tsEarlyS5),
+		testjsonl.CodexTokenCountJSON(tsEarlyS5, 10_000, 500, 6_000),
+	))
+
+	newMessages, _, _, err := provider.parseSessionFrom(
+		childPath, offset, 0, false,
+	)
+	require.NoError(t, err)
+	require.Len(t, newMessages, 2)
+	assert.Equal(t, "genuine child task", newMessages[0].Content)
+	assert.Equal(t, 500, newMessages[1].OutputTokens)
+}
+
 func TestParseCodexSessionFrom_SubagentReplaySpansOffset(t *testing.T) {
 	t.Parallel()
 
@@ -1772,6 +1925,15 @@ func TestParseCodexSessionFrom_SubagentReplaySpansOffset(t *testing.T) {
 	parentID := testUUIDv7(childCreatedMs-3600_000, 2)
 	parentTurnID := testUUIDv7(childCreatedMs-1800_000, 3)
 	childTurnID := testUUIDv7(childCreatedMs+1000, 4)
+	root := t.TempDir()
+	parent := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(parentID, "/tmp/project", "user", tsEarly),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", parentTurnID, tsEarly),
+	)
+	parentPath := filepath.Join(
+		root, "rollout-2024-01-01T08-00-00-"+parentID+".jsonl",
+	)
+	require.NoError(t, os.WriteFile(parentPath, []byte(parent), 0o600))
 
 	initial := testjsonl.JoinJSONL(
 		testjsonl.CodexSubagentSessionMetaJSON(
@@ -1787,9 +1949,11 @@ func TestParseCodexSessionFrom_SubagentReplaySpansOffset(t *testing.T) {
 			"user", "replayed parent question", tsEarly,
 		),
 	)
-	path := createTestFile(t, "subagent-incremental.jsonl", initial)
+	path := filepath.Join(root, "rollout-2024-01-01T10-00-00-"+childID+".jsonl")
+	require.NoError(t, os.WriteFile(path, []byte(initial), 0o600))
+	provider := newCodexTestProvider(t, root)
 
-	sess, msgs, err := parseCodexTestSession(t, path, "local", false)
+	sess, msgs, err := provider.parseSession(path, "local", false)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "codex:"+childID, sess.ID)
@@ -1825,9 +1989,7 @@ func TestParseCodexSessionFrom_SubagentReplaySpansOffset(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	newMsgs, _, _, err := parseCodexTestSessionFrom(
-		t, path, offset, 0, false,
-	)
+	newMsgs, _, _, err := provider.parseSessionFrom(path, offset, 0, false)
 	require.NoError(t, err)
 	require.Len(t, newMsgs, 2)
 	assert.Equal(t, "genuine child task", newMsgs[0].Content)
@@ -3136,7 +3298,7 @@ func TestSeedCodexIncrementalState_SkipsInvalidJSON(
 
 	info, err := os.Stat(path)
 	require.NoError(t, err)
-	seed, err := seedCodexIncrementalState(path, info.Size())
+	seed, err := newCodexTestProvider(t).seedCodexIncrementalState(path, info.Size())
 	require.NoError(t, err)
 	got := seed.model
 	assert.Equal(t, "gpt-5.4", got,
@@ -3167,21 +3329,21 @@ func TestSeedCodexIncrementalState_Model(t *testing.T) {
 	t.Run("full file returns last model", func(t *testing.T) {
 		info, err := os.Stat(path)
 		require.NoError(t, err)
-		seed, err := seedCodexIncrementalState(path, info.Size())
+		seed, err := newCodexTestProvider(t).seedCodexIncrementalState(path, info.Size())
 		require.NoError(t, err)
 		got := seed.model
 		assert.Equal(t, "gpt-5.4", got)
 	})
 
 	t.Run("zero offset returns empty", func(t *testing.T) {
-		seed, err := seedCodexIncrementalState(path, 0)
+		seed, err := newCodexTestProvider(t).seedCodexIncrementalState(path, 0)
 		require.NoError(t, err)
 		got := seed.model
 		assert.Equal(t, "", got)
 	})
 
 	t.Run("nonexistent file returns error", func(t *testing.T) {
-		_, err := seedCodexIncrementalState("/no/such/file", 100)
+		_, err := newCodexTestProvider(t).seedCodexIncrementalState("/no/such/file", 100)
 		require.Error(t, err)
 	})
 }
@@ -3191,6 +3353,7 @@ func TestSeedCodexIncrementalStatePropagatesReaderError(t *testing.T) {
 
 	_, err := seedCodexIncrementalStateFromReader(
 		iotest.ErrReader(wantErr),
+		nil,
 	)
 
 	require.ErrorIs(t, err, wantErr)

@@ -57,6 +57,8 @@ type codexSessionIndexEntry struct {
 // JSONL session file line by line.
 type codexSessionBuilder struct {
 	codexCursorState
+	resolveParentTurns   codexParentTurnResolver
+	parentTurnIDs        map[string]struct{}
 	messages             []ParsedMessage
 	firstMessage         string
 	startedAt            time.Time
@@ -82,55 +84,39 @@ type codexSessionBuilder struct {
 // and token_count events — into both kinds of derived rollout with
 // re-stamped envelope timestamps, so the same usage exists in multiple
 // session files and gets counted repeatedly. Envelope timestamps cannot
-// locate the boundary (the replay is re-stamped at child creation), but
-// turn ids are UUIDv7 values minted when the turn originally ran: every
-// replayed turn predates the child instant, and the first genuine turn
-// is minted at or after it. The gate stays closed until the first
-// turn_context whose turn_id timestamp is >= the child's own creation
-// time, then everything flows normally.
-//
-// Replayed turn_context entries from parents recorded before Codex
-// stamped turn ids carry no turn_id at all; a CLI new enough to write
-// forked_from_id or subagent parent metadata always stamps genuine
-// turns, so a missing turn_id while gated means replayed history. An
-// unparseable turn_id fails open (pre-#643 behaviour) rather than risk
-// dropping live data.
+// locate the boundary. The referenced parent transcript can: while the
+// gate is active, turn ids also present in that parent are replayed and
+// the first turn id absent from it belongs to the child. Turn ids are
+// opaque equality keys here; their UUID version and bytes have no
+// chronological meaning.
 type codexForkGate struct {
-	active           bool
-	createdMs        int64
-	subagentParentID string
+	active          bool
+	parentSessionID string
+	parentResolved  bool
 }
 
-// armFromMeta activates the gate when the session_meta belongs to a
-// forked or subagent session and its creation instant can be anchored:
-// from the child's UUIDv7 id, the payload timestamp, or the JSONL
-// envelope timestamp, in that order.
-func (g *codexForkGate) armFromMeta(payload gjson.Result, envelopeTS time.Time) {
-	forked := payload.Get("forked_from_id").Str != ""
+type codexParentTurnResolver func(string) (map[string]struct{}, bool)
+
+// armFromMeta records explicit lineage and activates replay filtering only
+// when the referenced parent transcript was resolved. Missing parents fail
+// open so an incomplete source archive cannot erase child data.
+func (g *codexForkGate) armFromMeta(payload gjson.Result, parentResolved bool) {
+	forkedFromID := strings.TrimSpace(payload.Get("forked_from_id").Str)
 	parentID := codexSubagentParentThreadID(payload)
-	if !forked && parentID == "" {
+	if forkedFromID == "" && parentID == "" {
 		return
 	}
-	ms := uuidV7Millis(payload.Get("id").Str)
-	if ms == 0 {
-		if t := parseTimestamp(payload.Get("timestamp").Str); !t.IsZero() {
-			ms = t.UnixMilli()
-		}
+	if forkedFromID != "" {
+		parentID = forkedFromID
 	}
-	if ms == 0 && !envelopeTS.IsZero() {
-		ms = envelopeTS.UnixMilli()
-	}
-	if ms == 0 {
-		return // no anchor for the boundary — fail open
-	}
-	g.createdMs = ms
-	if forked {
-		g.active = true
+	g.parentSessionID = parentID
+	g.parentResolved = parentResolved
+	if forkedFromID != "" {
+		g.active = parentResolved
 		return
 	}
 	// Parent metadata alone also appears in child-only transcripts. Wait
 	// for the copied parent's session_meta before suppressing anything.
-	g.subagentParentID = parentID
 }
 
 // suppressesSessionMeta identifies the copied parent session_meta that
@@ -141,11 +127,11 @@ func (g *codexForkGate) suppressesSessionMeta(payload gjson.Result) bool {
 	if g.active {
 		return true
 	}
-	if g.subagentParentID == "" ||
-		payload.Get("id").Str != g.subagentParentID {
+	parentID := payload.Get("id").Str
+	if parentID == "" || parentID != g.parentSessionID {
 		return false
 	}
-	g.active = true
+	g.active = g.parentResolved
 	return true
 }
 
@@ -160,42 +146,26 @@ func codexSubagentParentThreadID(payload gjson.Result) string {
 }
 
 // suppresses reports whether the line is replayed parent history.
-// turn_context lines open the gate when their turn id was minted at
-// or after the fork instant.
-func (g *codexForkGate) suppresses(lineType string, payload gjson.Result) bool {
+// Parent turn ids are opaque membership keys. Once the first turn id
+// absent from the parent appears, every later line belongs to the child.
+func (g *codexForkGate) suppresses(
+	lineType string,
+	payload gjson.Result,
+	parentTurnIDs map[string]struct{},
+) bool {
 	if !g.active {
-		// A child-owned event before a copied parent session_meta proves
-		// this is a child-only transcript, not a replay prefix.
-		g.subagentParentID = ""
 		return false
 	}
 	if lineType != codexTypeTurnContext {
 		return true
 	}
 	tid := payload.Get("turn_id").Str
-	if tid == "" {
-		return true // pre-turn_id parent history
-	}
-	if ms := uuidV7Millis(tid); ms != 0 && ms < g.createdMs {
+	if _, replayed := parentTurnIDs[tid]; replayed {
 		return true
 	}
 	g.active = false
-	g.subagentParentID = ""
+	g.parentResolved = false
 	return false
-}
-
-// uuidV7Millis extracts the millisecond timestamp embedded in a
-// UUIDv7, returning 0 for anything that is not a v7 UUID.
-func uuidV7Millis(id string) int64 {
-	hex := strings.ReplaceAll(id, "-", "")
-	if len(hex) != 32 || hex[12] != '7' {
-		return 0
-	}
-	ms, err := strconv.ParseInt(hex[:12], 16, 64)
-	if err != nil {
-		return 0
-	}
-	return ms
 }
 
 type codexToolCallRef struct {
@@ -214,8 +184,10 @@ type codexPendingEvent struct {
 
 func newCodexSessionBuilder(
 	_ bool,
+	resolveParentTurns codexParentTurnResolver,
 ) *codexSessionBuilder {
 	return &codexSessionBuilder{
+		resolveParentTurns:   resolveParentTurns,
 		project:              "unknown",
 		callNames:            make(map[string]string),
 		callRefs:             make(map[string]codexToolCallRef),
@@ -224,6 +196,30 @@ func newCodexSessionBuilder(
 		pendingAgentEvents:   make(map[string][]codexPendingEvent),
 		orphanNotificationIx: make(map[string]int),
 	}
+}
+
+func (b *codexSessionBuilder) armForkGate(payload gjson.Result) {
+	parentID := strings.TrimSpace(payload.Get("forked_from_id").Str)
+	if parentID == "" {
+		parentID = codexSubagentParentThreadID(payload)
+	}
+	resolved := false
+	if parentID != "" && b.resolveParentTurns != nil {
+		b.parentTurnIDs, resolved = b.resolveParentTurns(parentID)
+	}
+	b.forkGate.armFromMeta(payload, resolved)
+}
+
+func (b *codexSessionBuilder) suppresses(
+	lineType string,
+	payload gjson.Result,
+) bool {
+	if b.forkGate.active && b.parentTurnIDs == nil &&
+		b.resolveParentTurns != nil {
+		b.parentTurnIDs, _ =
+			b.resolveParentTurns(b.forkGate.parentSessionID)
+	}
+	return b.forkGate.suppresses(lineType, payload, b.parentTurnIDs)
 }
 
 func (b *codexSessionBuilder) incrementalSeed() codexIncrementalSeed {
@@ -258,17 +254,17 @@ func (b *codexSessionBuilder) processLine(
 		}
 		return b.handleSessionMeta(payload, ts)
 	case codexTypeTurnContext:
-		if b.forkGate.suppresses(codexTypeTurnContext, payload) {
+		if b.suppresses(codexTypeTurnContext, payload) {
 			return false
 		}
 		b.model = payload.Get("model").Str
 	case codexTypeResponseItem:
-		if b.forkGate.suppresses(codexTypeResponseItem, payload) {
+		if b.suppresses(codexTypeResponseItem, payload) {
 			return false
 		}
 		b.handleResponseItem(payload, ts)
 	case codexTypeEventMsg:
-		if b.forkGate.suppresses(codexTypeEventMsg, payload) {
+		if b.suppresses(codexTypeEventMsg, payload) {
 			return false
 		}
 		b.handleEventMsg(payload)
@@ -302,7 +298,7 @@ func (b *codexSessionBuilder) handleSessionMeta(
 		}
 	}
 
-	b.forkGate.armFromMeta(payload, envelopeTS)
+	b.armForkGate(payload)
 
 	return false
 }
@@ -1493,6 +1489,50 @@ func (p *codexProvider) parseSession(
 	)
 }
 
+func (p *codexProvider) parentTurnResolver(
+	childPath string,
+) codexParentTurnResolver {
+	return func(parentID string) (map[string]struct{}, bool) {
+		parentKey := strings.Join(p.sources.roots, "\x00") + "\x00" + parentID
+		if turnIDs, ok := p.parentTurnCache.GetParent(parentKey); ok {
+			return turnIDs, true
+		}
+		parentPath := ""
+		for _, root := range p.sources.roots {
+			candidate := p.sources.findSourceFile(root, parentID)
+			if candidate == "" || filepath.Clean(candidate) == filepath.Clean(childPath) {
+				continue
+			}
+			parentPath = candidate
+			break
+		}
+		if parentPath == "" {
+			return nil, false
+		}
+		info, err := os.Stat(parentPath)
+		if err != nil || info.IsDir() {
+			return nil, false
+		}
+		cacheKey := codexParentTurnCacheKeyFor(parentPath, info)
+		if turnIDs, ok := p.parentTurnCache.Get(cacheKey); ok {
+			return turnIDs, true
+		}
+
+		turnIDs := make(map[string]struct{})
+		_, err = readCodexJSONLFrom(parentPath, 0, func(line string) {
+			if gjson.Get(line, "type").Str != codexTypeTurnContext {
+				return
+			}
+			turnIDs[gjson.Get(line, "payload.turn_id").Str] = struct{}{}
+		})
+		if err != nil && !errors.Is(err, errCodexIncrementalNeedsFullParse) {
+			return nil, false
+		}
+		p.parentTurnCache.PutParent(parentKey, cacheKey, turnIDs)
+		return turnIDs, true
+	}
+}
+
 // parseSessionSnapshot parses exactly the raw-size snapshot captured from f.
 // Limiting the reader prevents an append racing the scan from being folded into
 // a cursor keyed by the earlier size.
@@ -1504,7 +1544,7 @@ func (p *codexProvider) parseSessionSnapshot(
 ) (*ParsedSession, []ParsedMessage, error) {
 	lr := newLineReader(io.LimitReader(f, info.Size()), maxLineSize)
 	defer releaseLineReader(lr)
-	b := newCodexSessionBuilder(includeExec)
+	b := newCodexSessionBuilder(includeExec, p.parentTurnResolver(path))
 
 	for {
 		line, ok := lr.next()
@@ -1797,7 +1837,7 @@ type codexIncrementalSeed = codexCursorState
 // still active at the end of the scan means the stored offset landed
 // inside the replayed parent history of a forked rollout, so the
 // incremental parse must keep suppressing appended replay lines.
-func seedCodexIncrementalState(
+func (p *codexProvider) seedCodexIncrementalState(
 	path string, offset int64,
 ) (codexIncrementalSeed, error) {
 	f, err := os.Open(path)
@@ -1809,6 +1849,7 @@ func seedCodexIncrementalState(
 	defer f.Close()
 	seed, err := seedCodexIncrementalStateFromReader(
 		io.LimitReader(f, offset),
+		p.parentTurnResolver(path),
 	)
 	if err != nil {
 		return codexIncrementalSeed{}, fmt.Errorf(
@@ -1820,8 +1861,9 @@ func seedCodexIncrementalState(
 
 func seedCodexIncrementalStateFromReader(
 	r io.Reader,
+	resolveParentTurns codexParentTurnResolver,
 ) (codexIncrementalSeed, error) {
-	var seed codexIncrementalSeed
+	b := newCodexSessionBuilder(false, resolveParentTurns)
 	lr := newLineReader(r, maxLineSize)
 	defer releaseLineReader(lr)
 	for {
@@ -1838,48 +1880,45 @@ func seedCodexIncrementalStateFromReader(
 			// Mirror processLine: the fork's own meta arms the
 			// gate and supplies cwd, and replayed parent metas are
 			// dropped while it is active.
-			if !seed.forkGate.suppressesSessionMeta(payload) {
+			if !b.forkGate.suppressesSessionMeta(payload) {
 				if cwd := payload.Get("cwd").Str; cwd != "" {
-					seed.cwd = cwd
+					b.cwd = cwd
 				}
-				seed.agentPath = strings.TrimSpace(
+				b.agentPath = strings.TrimSpace(
 					payload.Get("agent_path").Str,
 				)
-				if seed.agentPath == "" {
-					seed.agentPath = strings.TrimSpace(payload.Get(
+				if b.agentPath == "" {
+					b.agentPath = strings.TrimSpace(payload.Get(
 						"source.subagent.thread_spawn.agent_path",
 					).Str)
 				}
-				seed.forkGate.armFromMeta(
-					payload,
-					parseTimestamp(gjson.Get(line, "timestamp").Str),
-				)
+				b.armForkGate(payload)
 			}
 			continue
 		}
-		if seed.forkGate.suppresses(lineType, payload) {
+		if b.suppresses(lineType, payload) {
 			continue
 		}
 		switch lineType {
 		case codexTypeTurnContext:
-			seed.model = payload.Get("model").Str
+			b.model = payload.Get("model").Str
 		case codexTypeEventMsg:
 			eventType := payload.Get("type").Str
-			seed.observeTaskEvent(eventType)
+			b.observeTaskEvent(eventType)
 			if eventType == "token_count" {
 				raw := payload.Get("info.last_token_usage").Raw
 				if raw != "" {
-					seed.observeTokenUsage(raw)
+					b.observeTokenUsage(raw)
 				}
 			}
 		case codexTypeResponseItem:
-			observeCodexIncrementalUserMessage(&seed, payload)
+			observeCodexIncrementalUserMessage(&b.codexCursorState, payload)
 		}
 	}
 	if err := lr.Err(); err != nil {
 		return codexIncrementalSeed{}, err
 	}
-	return seed, nil
+	return b.codexCursorState, nil
 }
 
 // observeUserMessage feeds one response_item into the
@@ -2085,6 +2124,7 @@ func (p *codexProvider) parseSessionFromSnapshot(
 		func() (codexIncrementalSeed, error) {
 			return seedCodexIncrementalStateFromReader(
 				io.NewSectionReader(f, 0, offset),
+				p.parentTurnResolver(path),
 			)
 		},
 	)
@@ -2103,7 +2143,7 @@ func (p *codexProvider) parseSessionFromWithReader(
 		startOrdinal,
 		includeExec,
 		readLines,
-		seedCodexIncrementalState,
+		p.seedCodexIncrementalState,
 	)
 }
 
@@ -2158,7 +2198,7 @@ func (p *codexProvider) parseSessionFromWithSources(
 		}
 	}
 
-	b := newCodexSessionBuilder(includeExec)
+	b := newCodexSessionBuilder(includeExec, p.parentTurnResolver(path))
 	b.ordinal = startOrdinal
 	b.codexCursorState = seed
 	var fallbackErr error

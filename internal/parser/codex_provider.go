@@ -42,16 +42,18 @@ func codexProviderSpecForAgent(agent AgentType) codexProviderSpec {
 }
 
 type codexProviderFactory struct {
-	def         AgentDef
-	spec        codexProviderSpec
-	cursorCache *codexCursorCache
+	def             AgentDef
+	spec            codexProviderSpec
+	cursorCache     *codexCursorCache
+	parentTurnCache *codexParentTurnCache
 }
 
 func newCodexProviderFactory(def AgentDef) ProviderFactory {
 	return &codexProviderFactory{
-		def:         cloneAgentDef(def),
-		spec:        codexProviderSpecForAgent(AgentCodex),
-		cursorCache: newProductionCodexCursorCache(),
+		def:             cloneAgentDef(def),
+		spec:            codexProviderSpecForAgent(AgentCodex),
+		cursorCache:     newProductionCodexCursorCache(),
+		parentTurnCache: newCodexProductionParentTurnCache(),
 	}
 }
 
@@ -59,9 +61,10 @@ func newCodexProviderFactory(def AgentDef) ProviderFactory {
 // provider, relabeling every parsed session onto the traex: ID prefix.
 func newTraeXProviderFactory(def AgentDef) ProviderFactory {
 	return &codexProviderFactory{
-		def:         cloneAgentDef(def),
-		spec:        codexProviderSpecForAgent(AgentTraeX),
-		cursorCache: newProductionCodexCursorCache(),
+		def:             cloneAgentDef(def),
+		spec:            codexProviderSpecForAgent(AgentTraeX),
+		cursorCache:     newProductionCodexCursorCache(),
+		parentTurnCache: newCodexProductionParentTurnCache(),
 	}
 }
 
@@ -81,17 +84,19 @@ func (f *codexProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 			Caps:   codexProviderCapabilities(),
 			Config: cfg,
 		},
-		spec:        f.spec,
-		sources:     newCodexSourceSet(f.spec.agent, cfg.Roots),
-		cursorCache: f.cursorCache,
+		spec:            f.spec,
+		sources:         newCodexSourceSet(f.spec.agent, cfg.Roots),
+		cursorCache:     f.cursorCache,
+		parentTurnCache: f.parentTurnCache,
 	}
 }
 
 type codexProvider struct {
 	ProviderBase
-	spec        codexProviderSpec
-	sources     codexSourceSet
-	cursorCache *codexCursorCache
+	spec            codexProviderSpec
+	sources         codexSourceSet
+	cursorCache     *codexCursorCache
+	parentTurnCache *codexParentTurnCache
 }
 
 func (p *codexProvider) Discover(ctx context.Context) ([]SourceRef, error) {

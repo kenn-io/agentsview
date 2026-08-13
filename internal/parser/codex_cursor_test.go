@@ -22,8 +22,9 @@ func TestCodexCursorCache(t *testing.T) {
 		sawUserTurnAfterFirst:    false,
 		mayReplayFirstUserPrompt: true,
 		forkGate: codexForkGate{
-			active:    true,
-			createdMs: 1720000000000,
+			active:          true,
+			parentSessionID: "parent-1",
+			parentResolved:  true,
 		},
 		lastTaskEvent: "turn_aborted",
 	}
