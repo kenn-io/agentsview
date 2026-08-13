@@ -70,6 +70,7 @@ type codexSessionBuilder struct {
 	ordinal              int
 	callNames            map[string]string
 	callRefs             map[string]codexToolCallRef
+	toolCallUpdates      []ParsedToolCallUpdate
 	agentSpawnCalls      map[string]string
 	agentWaitCalls       map[string]string
 	pendingAgentEvents   map[string][]codexPendingEvent
@@ -516,6 +517,7 @@ func (b *codexSessionBuilder) handleFunctionCall(
 	callID := payload.Get("call_id").Str
 	if callID != "" {
 		b.callNames[callID] = name
+		b.rememberToolCall(callID, name)
 	}
 
 	content := formatCodexFunctionCall(name, payload)
@@ -566,6 +568,7 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(
 	if callID == "" {
 		return
 	}
+	defer b.forgetToolCall(callID)
 
 	output, raw := parseCodexFunctionOutput(payload)
 	if !output.Exists() {
@@ -574,7 +577,7 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(
 		}
 	}
 
-	switch b.callNames[callID] {
+	switch b.toolCallNameForOutput(callID) {
 	case "spawn_agent":
 		agentID := strings.TrimSpace(output.Get("agent_id").Str)
 		if agentID == "" {
@@ -624,6 +627,14 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(
 			})
 		}
 	}
+}
+
+func (b *codexSessionBuilder) toolCallNameForOutput(callID string) string {
+	if name := b.callNames[callID]; name != "" {
+		return name
+	}
+	name, _ := b.toolCallName(callID)
+	return name
 }
 
 // setCallSubagentSessionID links a tool call to the session of
@@ -690,6 +701,7 @@ func (b *codexSessionBuilder) appendCallResultEvent(
 	}
 	ref, ok := b.callRefs[callID]
 	if !ok || ref.messageIndex < 0 || ref.messageIndex >= len(b.messages) {
+		b.appendToolCallUpdate(callID, ev)
 		return
 	}
 	if ref.callIndex < 0 || ref.callIndex >= len(b.messages[ref.messageIndex].ToolCalls) {
@@ -706,6 +718,29 @@ func (b *codexSessionBuilder) appendCallResultEvent(
 		return
 	}
 	tc.ResultEvents = append(tc.ResultEvents, ev)
+}
+
+func (b *codexSessionBuilder) appendToolCallUpdate(
+	callID string, ev ParsedToolResultEvent,
+) {
+	if ev.ToolUseID == "" {
+		ev.ToolUseID = callID
+	}
+	for i := range b.toolCallUpdates {
+		update := &b.toolCallUpdates[i]
+		if update.ToolUseID != callID {
+			continue
+		}
+		if b.hasEquivalentCallResultEvent(update.ResultEvents, ev) {
+			return
+		}
+		update.ResultEvents = append(update.ResultEvents, ev)
+		return
+	}
+	b.toolCallUpdates = append(b.toolCallUpdates, ParsedToolCallUpdate{
+		ToolUseID:    callID,
+		ResultEvents: []ParsedToolResultEvent{ev},
+	})
 }
 
 func (b *codexSessionBuilder) hasEquivalentCallResultEvent(
@@ -1985,13 +2020,30 @@ func seedCodexIncrementalStateFromReader(
 				}
 			}
 		case codexTypeResponseItem:
-			observeCodexIncrementalUserMessage(&b.codexCursorState, payload)
+			observeCodexIncrementalResponseItem(&b.codexCursorState, payload)
 		}
 	}
 	if err := lr.Err(); err != nil {
 		return codexIncrementalSeed{}, err
 	}
 	return b.codexCursorState, nil
+}
+
+func observeCodexIncrementalResponseItem(
+	s *codexIncrementalSeed,
+	payload gjson.Result,
+) {
+	switch payload.Get("type").Str {
+	case "function_call", "custom_tool_call":
+		s.rememberToolCall(
+			payload.Get("call_id").Str,
+			payload.Get("name").Str,
+		)
+	case "function_call_output", "custom_tool_call_output":
+		s.forgetToolCall(payload.Get("call_id").Str)
+	default:
+		observeCodexIncrementalUserMessage(s, payload)
+	}
 }
 
 // observeUserMessage feeds one response_item into the
@@ -2138,13 +2190,14 @@ func codexSafeResumeOffsetFile(f *os.File, offset int64) (bool, error) {
 }
 
 type codexIncrementalParseResult struct {
-	messages      []ParsedMessage
-	endedAt       time.Time
-	consumedBytes int64
-	initialCursor codexCursorState
-	cursor        codexCursorState
-	inode         uint64
-	device        uint64
+	messages        []ParsedMessage
+	toolCallUpdates []ParsedToolCallUpdate
+	endedAt         time.Time
+	consumedBytes   int64
+	initialCursor   codexCursorState
+	cursor          codexCursorState
+	inode           uint64
+	device          uint64
 }
 
 // parseSessionFromDetailed parses only new lines from a Codex JSONL file. It
@@ -2289,7 +2342,7 @@ func (p *codexProvider) parseSessionFromWithSources(
 				fallbackErr = errCodexIncrementalNeedsFullParse
 				return
 			}
-			if codexIncrementalNeedsFullParse(line) {
+			if b.codexIncrementalNeedsFullParse(line) {
 				fallbackErr = errCodexIncrementalNeedsFullParse
 				return
 			}
@@ -2323,13 +2376,14 @@ func (p *codexProvider) parseSessionFromWithSources(
 
 	b.flushPendingAgentResults()
 	result := codexIncrementalParseResult{
-		messages:      b.messages,
-		endedAt:       b.endedAt,
-		consumedBytes: consumed,
-		initialCursor: seed,
-		cursor:        b.incrementalSeed(),
-		inode:         inode,
-		device:        device,
+		messages:        b.messages,
+		toolCallUpdates: b.toolCallUpdates,
+		endedAt:         b.endedAt,
+		consumedBytes:   consumed,
+		initialCursor:   seed,
+		cursor:          b.incrementalSeed(),
+		inode:           inode,
+		device:          device,
 	}
 	return result, nil
 }
@@ -2359,8 +2413,8 @@ func (p *codexProvider) parseSessionFrom(
 // parse error requires the caller to fall back to a full parse.
 func IsIncrementalFullParseFallback(err error) bool {
 	return errors.Is(err, errCodexIncrementalNeedsFullParse) ||
-		errors.Is(err, ErrClaudeIncrementalNeedsFullParse) ||
-		errors.Is(err, ErrIncrementalNeedsFullParse)
+		errors.Is(err, ErrIncrementalNeedsFullParse) ||
+		errors.Is(err, ErrClaudeIncrementalNeedsFullParse)
 }
 
 func isCodexSystemMessage(content string) bool {
@@ -2464,6 +2518,13 @@ func isCodexSubagentNotification(content string) bool {
 }
 
 func codexIncrementalNeedsFullParse(line string) bool {
+	b := newCodexSessionBuilder(false)
+	return b.codexIncrementalNeedsFullParse(line)
+}
+
+func (b *codexSessionBuilder) codexIncrementalNeedsFullParse(
+	line string,
+) bool {
 	switch gjson.Get(line, "type").Str {
 	case codexTypeEventMsg:
 		payload := gjson.Get(line, "payload")
@@ -2484,6 +2545,17 @@ func codexIncrementalNeedsFullParse(line string) bool {
 	switch payload.Get("type").Str {
 	case "function_call", "custom_tool_call":
 		return isCodexWaitAgentCall(payload.Get("name").Str)
+	case "function_call_output", "custom_tool_call_output":
+		output, raw := parseCodexFunctionOutput(payload)
+		if isCodexSubagentFunctionOutput(output) {
+			return true
+		}
+		if strings.TrimSpace(raw) == "" {
+			return false
+		}
+		name := b.toolCallNameForOutput(payload.Get("call_id").Str)
+		return name == "" || name == "spawn_agent" ||
+			isCodexWaitAgentCall(name)
 	default:
 		role := payload.Get("role").Str
 		if role != "user" {

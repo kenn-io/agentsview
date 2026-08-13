@@ -391,6 +391,7 @@ func (p *codexProvider) ParseIncremental(
 	return IncrementalOutcome{
 		SessionID:            req.SessionID,
 		Messages:             result.messages,
+		ToolCallUpdates:      result.toolCallUpdates,
 		EndedAt:              result.endedAt,
 		ConsumedBytes:        result.consumedBytes,
 		MessageCount:         len(result.messages),

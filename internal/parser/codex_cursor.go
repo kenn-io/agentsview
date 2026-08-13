@@ -11,14 +11,21 @@ import (
 const (
 	codexCursorCacheMaxEntries = 256
 	codexCursorCacheMaxBytes   = 2 << 20
+	codexCursorMaxPendingCalls = 8
 
 	// Account for the map bucket, list element, pointers, string headers, and
 	// allocator overhead that are not represented by the variable-length path
-	// and cursor strings below. The cache is intentionally an estimate rather
+	// and cursor strings below. The fixed pending-call array contributes two
+	// string headers per slot. The cache is intentionally an estimate rather
 	// than a heap profiler, but this conservative allowance keeps its retained
 	// memory bounded near the configured byte limit.
-	codexCursorEntryOverheadBytes = 256
+	codexCursorEntryOverheadBytes = 256 + codexCursorMaxPendingCalls*32
 )
+
+type codexPendingToolCall struct {
+	id   string
+	name string
+}
 
 // codexCursorState is the compact state needed to make a tail parse behave as
 // though the already-persisted prefix had just been scanned. It deliberately
@@ -35,6 +42,52 @@ type codexCursorState struct {
 	lastTokenUsageSeen       bool
 	forkGate                 codexForkGate
 	lastTaskEvent            string
+	pendingCalls             [codexCursorMaxPendingCalls]codexPendingToolCall
+	pendingCallCount         uint8
+}
+
+func (s *codexCursorState) rememberToolCall(id, name string) bool {
+	id = strings.TrimSpace(id)
+	name = strings.TrimSpace(name)
+	if id == "" || name == "" {
+		return false
+	}
+	for i := 0; i < int(s.pendingCallCount); i++ {
+		if s.pendingCalls[i].id == id {
+			s.pendingCalls[i].name = name
+			return true
+		}
+	}
+	if int(s.pendingCallCount) >= len(s.pendingCalls) {
+		return false
+	}
+	s.pendingCalls[s.pendingCallCount] = codexPendingToolCall{
+		id: id, name: name,
+	}
+	s.pendingCallCount++
+	return true
+}
+
+func (s *codexCursorState) toolCallName(id string) (string, bool) {
+	for i := 0; i < int(s.pendingCallCount); i++ {
+		if s.pendingCalls[i].id == id {
+			return s.pendingCalls[i].name, true
+		}
+	}
+	return "", false
+}
+
+func (s *codexCursorState) forgetToolCall(id string) {
+	for i := 0; i < int(s.pendingCallCount); i++ {
+		if s.pendingCalls[i].id != id {
+			continue
+		}
+		last := int(s.pendingCallCount) - 1
+		copy(s.pendingCalls[i:last], s.pendingCalls[i+1:last+1])
+		s.pendingCalls[last] = codexPendingToolCall{}
+		s.pendingCallCount--
+		return
+	}
 }
 
 // observeUserPrompt advances the first-user replay state using only a digest
@@ -232,6 +285,10 @@ func cloneCodexCursorState(state codexCursorState) codexCursorState {
 	state.cwd = strings.Clone(state.cwd)
 	state.agentPath = strings.Clone(state.agentPath)
 	state.lastTaskEvent = strings.Clone(state.lastTaskEvent)
+	for i := 0; i < int(state.pendingCallCount); i++ {
+		state.pendingCalls[i].id = strings.Clone(state.pendingCalls[i].id)
+		state.pendingCalls[i].name = strings.Clone(state.pendingCalls[i].name)
+	}
 	state.forkGate.parentSessionID = strings.Clone(
 		state.forkGate.parentSessionID,
 	)
@@ -248,6 +305,15 @@ func estimateCodexCursorEntryBytes(
 			len(state.cwd)+
 			len(state.agentPath)+
 			len(state.lastTaskEvent)+
+			codexPendingCallStringBytes(state)+
 			len(state.forkGate.parentSessionID),
 	)
+}
+
+func codexPendingCallStringBytes(state codexCursorState) int {
+	total := 0
+	for i := 0; i < int(state.pendingCallCount); i++ {
+		total += len(state.pendingCalls[i].id) + len(state.pendingCalls[i].name)
+	}
+	return total
 }

@@ -799,6 +799,77 @@ func TestCodexProviderIncrementalFirstGenuinePromptNeedsFullParse(t *testing.T) 
 	}
 }
 
+func TestCodexProviderIncrementalCustomToolOutputUpdatesStoredCall(t *testing.T) {
+	const (
+		uuid   = "019eb791-cf7d-75c1-8439-9ed74c1229f7"
+		call   = `{"timestamp":"2026-08-02T09:00:02Z","type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch","call_id":"call_patch","input":"*** Begin Patch\n*** End Patch"}}`
+		output = `{"timestamp":"2026-08-02T09:00:03Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_patch","output":"Success. Updated one file.","status":"completed"}}`
+	)
+	prefix := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/workspace/project-a", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "apply the patch", tsEarlyS1),
+		call,
+	)
+	tail := testjsonl.JoinJSONL(output)
+
+	for _, mode := range []string{"warm", "cold"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			content := prefix
+			if mode == "cold" {
+				content += tail
+			}
+			path := writeCodexProviderSessionContent(
+				t, root, uuid, content,
+			)
+			provider, ok := NewProvider(
+				AgentCodex, ProviderConfig{Roots: []string{root}},
+			)
+			require.True(t, ok)
+			source := requireCodexProviderSource(t, provider, uuid)
+
+			if mode == "warm" {
+				fingerprint, err := provider.Fingerprint(
+					context.Background(), source,
+				)
+				require.NoError(t, err)
+				_, err = provider.Parse(context.Background(), ParseRequest{
+					Source: source, Fingerprint: fingerprint,
+				})
+				require.NoError(t, err)
+				appendCodexProviderContent(t, path, tail)
+			}
+
+			fingerprint, err := provider.Fingerprint(
+				context.Background(), source,
+			)
+			require.NoError(t, err)
+			outcome, status, err := provider.ParseIncremental(
+				context.Background(), IncrementalRequest{
+					Source:       source,
+					Fingerprint:  fingerprint,
+					SessionID:    "codex:" + uuid,
+					Offset:       int64(len(prefix)),
+					StartOrdinal: 2,
+				},
+			)
+
+			require.NoError(t, err)
+			assert.Equal(t, IncrementalApplied, status)
+			assert.Empty(t, outcome.Messages)
+			require.Len(t, outcome.ToolCallUpdates, 1)
+			assert.Equal(t, "call_patch", outcome.ToolCallUpdates[0].ToolUseID)
+			require.Len(t, outcome.ToolCallUpdates[0].ResultEvents, 1)
+			event := outcome.ToolCallUpdates[0].ResultEvents[0]
+			assert.Equal(t, "custom_tool_call_output", event.Source)
+			assert.Equal(t, "completed", event.Status)
+			assert.Equal(t, "Success. Updated one file.", event.Content)
+		})
+	}
+}
+
 func TestCodexProviderColdIncrementalStagesRetryCursorVersions(t *testing.T) {
 	root := t.TempDir()
 	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229ed"

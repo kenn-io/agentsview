@@ -94,6 +94,59 @@ type ToolResultEvent struct {
 	EventIndex        int    `json:"event_index"`
 }
 
+// SummarizeToolResultEvents derives the display result stored on a tool call
+// from its chronological result events. Anonymous events use the latest
+// content; agent-scoped events keep the latest content for each agent.
+func SummarizeToolResultEvents(events []ToolResultEvent) string {
+	if len(events) == 0 {
+		return ""
+	}
+	type agentSummary struct {
+		content string
+	}
+	latestByAgent := map[string]agentSummary{}
+	orderedAgents := make([]string, 0, len(events))
+	lastAnon := ""
+	allHaveAgentID := true
+	for _, ev := range events {
+		if strings.TrimSpace(ev.Content) == "" {
+			continue
+		}
+		agentID := strings.TrimSpace(ev.AgentID)
+		if agentID == "" {
+			allHaveAgentID = false
+			lastAnon = ev.Content
+			continue
+		}
+		if _, ok := latestByAgent[agentID]; !ok {
+			latestByAgent[agentID] = agentSummary{content: ev.Content}
+			orderedAgents = append(orderedAgents, agentID)
+			continue
+		}
+		entry := latestByAgent[agentID]
+		entry.content = ev.Content
+		latestByAgent[agentID] = entry
+	}
+	if len(latestByAgent) <= 1 {
+		if len(latestByAgent) == 1 {
+			summary := latestByAgent[orderedAgents[0]].content
+			if lastAnon != "" {
+				return summary + "\n\n" + lastAnon
+			}
+			return summary
+		}
+		return lastAnon
+	}
+	parts := make([]string, 0, len(orderedAgents))
+	for _, agentID := range orderedAgents {
+		parts = append(parts, agentID+":\n"+latestByAgent[agentID].content)
+	}
+	if !allHaveAgentID && lastAnon != "" {
+		parts = append(parts, lastAnon)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
 // Message represents a row in the messages table.
 type Message struct {
 	ID        int64  `json:"id"`
@@ -1026,6 +1079,16 @@ func (db *DB) WriteSessionIncremental(
 	for _, link := range update.SubagentLinks {
 		changed, err := applyToolCallSubagentLinkTx(
 			tx, sessionID, link, update.BlockedResultCategories,
+		)
+		if err != nil {
+			return err
+		}
+		transcriptChanged = transcriptChanged || changed
+	}
+	for _, resultUpdate := range update.ToolCallResultUpdates {
+		changed, err := applyToolCallResultUpdateTx(
+			tx, sessionID, resultUpdate,
+			update.BlockedResultCategories,
 		)
 		if err != nil {
 			return err
@@ -2465,6 +2528,155 @@ func applyToolCallSubagentLinkTx(
 		sessionID, link.ToolUseID,
 	)
 	return err == nil, err
+}
+
+func applyToolCallResultUpdateTx(
+	tx *sql.Tx, sessionID string, update ToolCallResultUpdate,
+	blockedResultCategories map[string]bool,
+) (bool, error) {
+	if strings.TrimSpace(update.ToolUseID) == "" || len(update.Events) == 0 {
+		return false, nil
+	}
+
+	var messageOrdinal, callIndex int
+	var category string
+	if err := tx.QueryRow(
+		`SELECT m.ordinal, COALESCE(tc.call_index, 0), tc.category
+		 FROM tool_calls tc
+		 JOIN messages m ON m.id = tc.message_id
+		 WHERE tc.session_id = ? AND tc.tool_use_id = ?`,
+		sessionID, update.ToolUseID,
+	).Scan(&messageOrdinal, &callIndex, &category); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf(
+			"checking tool result target for %s/%s: %w",
+			sessionID, update.ToolUseID, err,
+		)
+	}
+
+	rows, err := tx.Query(
+		`SELECT COALESCE(tool_use_id, ''), COALESCE(agent_id, ''),
+		        COALESCE(subagent_session_id, ''), source, status,
+		        content, content_length, COALESCE(timestamp, ''), event_index
+		 FROM tool_result_events
+		 WHERE session_id = ? AND tool_call_message_ordinal = ?
+		   AND call_index = ?
+		 ORDER BY event_index, id`,
+		sessionID, messageOrdinal, callIndex,
+	)
+	if err != nil {
+		return false, fmt.Errorf(
+			"loading tool result events for %s/%s: %w",
+			sessionID, update.ToolUseID, err,
+		)
+	}
+	var events []ToolResultEvent
+	nextEventIndex := 0
+	for rows.Next() {
+		var ev ToolResultEvent
+		if err := rows.Scan(
+			&ev.ToolUseID, &ev.AgentID, &ev.SubagentSessionID,
+			&ev.Source, &ev.Status, &ev.Content, &ev.ContentLength,
+			&ev.Timestamp, &ev.EventIndex,
+		); err != nil {
+			_ = rows.Close()
+			return false, fmt.Errorf(
+				"scanning tool result event for %s/%s: %w",
+				sessionID, update.ToolUseID, err,
+			)
+		}
+		events = append(events, ev)
+		nextEventIndex = max(nextEventIndex, ev.EventIndex+1)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return false, fmt.Errorf(
+			"reading tool result events for %s/%s: %w",
+			sessionID, update.ToolUseID, err,
+		)
+	}
+	if err := rows.Close(); err != nil {
+		return false, fmt.Errorf(
+			"closing tool result events for %s/%s: %w",
+			sessionID, update.ToolUseID, err,
+		)
+	}
+
+	incoming := append([]ToolResultEvent(nil), update.Events...)
+	for i := range incoming {
+		if incoming[i].ToolUseID == "" {
+			incoming[i].ToolUseID = update.ToolUseID
+		}
+		if incoming[i].ContentLength == 0 {
+			incoming[i].ContentLength = len(incoming[i].Content)
+		}
+	}
+	toolCall := ToolCall{ResultEvents: incoming}
+	_ = SanitizeToolCall(&toolCall)
+	incoming = toolCall.ResultEvents
+
+	blocked := blockedResultCategories[category]
+	insertRows := make([]toolResultEventRow, 0, len(incoming))
+	for _, candidate := range incoming {
+		if hasEquivalentToolResultEvent(events, candidate, blocked) {
+			continue
+		}
+		candidate.EventIndex = nextEventIndex
+		nextEventIndex++
+		events = append(events, candidate)
+		stored := candidate
+		if blocked {
+			stored.Content = ""
+		}
+		insertRows = append(insertRows, toolResultEventRow{
+			SessionID:      sessionID,
+			MessageOrdinal: messageOrdinal,
+			CallIndex:      callIndex,
+			Event:          stored,
+		})
+	}
+	if len(insertRows) == 0 {
+		return false, nil
+	}
+	if err := insertToolResultEventsTx(tx, insertRows); err != nil {
+		return false, err
+	}
+
+	summary := SummarizeToolResultEvents(events)
+	storedSummary := summary
+	if blocked {
+		storedSummary = ""
+	}
+	if _, err := tx.Exec(
+		`UPDATE tool_calls
+		 SET result_content_length = ?, result_content = ?
+		 WHERE session_id = ? AND tool_use_id = ?`,
+		len(summary), storedSummary, sessionID, update.ToolUseID,
+	); err != nil {
+		return false, fmt.Errorf(
+			"updating tool result summary for %s/%s: %w",
+			sessionID, update.ToolUseID, err,
+		)
+	}
+	return true, nil
+}
+
+func hasEquivalentToolResultEvent(
+	events []ToolResultEvent, candidate ToolResultEvent, blocked bool,
+) bool {
+	for _, existing := range events {
+		if existing.AgentID != candidate.AgentID ||
+			existing.Status != candidate.Status {
+			continue
+		}
+		if existing.Content == candidate.Content ||
+			(blocked && existing.ContentLength == candidate.ContentLength) {
+			return true
+		}
+	}
+	return false
 }
 
 // SystemMessageFingerprint returns the ordered, comma-separated list of

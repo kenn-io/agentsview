@@ -13684,6 +13684,9 @@ func TestIncrementalSync_CodexExecAppendRetainsEvents(t *testing.T) {
 		"rollout-20240101-inc-cx-exec.jsonl", initial,
 	)
 	env.engine.SyncAll(context.Background(), nil)
+	before := fetchMessages(t, env.db, "codex:inc-cx-exec")
+	require.Len(t, before, 2)
+	toolMessageID := before[1].ID
 
 	appended := testjsonl.JoinJSONL(
 		testjsonl.CodexFunctionCallOutputJSON(
@@ -13702,9 +13705,31 @@ func TestIncrementalSync_CodexExecAppendRetainsEvents(t *testing.T) {
 
 	msgs := fetchMessages(t, env.db, "codex:inc-cx-exec")
 	require.Len(t, msgs, 2)
+	assert.Equal(t, toolMessageID, msgs[1].ID,
+		"result-only append must preserve the existing tool message")
 	require.Len(t, msgs[1].ToolCalls, 1)
-	assert.Equal(t, "exec_command", msgs[1].ToolCalls[0].ToolName, "tool name")
-	assert.Equal(t, "done", msgs[1].ToolCalls[0].ResultContent, "result_content")
+	call := msgs[1].ToolCalls[0]
+	assert.Equal(t, "exec_command", call.ToolName, "tool name")
+	assert.Equal(t, "done", call.ResultContent, "result_content")
+	require.Len(t, call.ResultEvents, 1)
+	assert.Equal(t, "function_call_output", call.ResultEvents[0].Source)
+	assert.Equal(t, "done", call.ResultEvents[0].Content)
+	afterIncremental, err := env.db.GetSessionFull(
+		context.Background(), "codex:inc-cx-exec",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, afterIncremental)
+	assert.True(t, afterIncremental.LastWriteIncremental)
+
+	env.engine.ResyncAll(context.Background(), nil)
+	fullMsgs := fetchMessages(t, env.db, "codex:inc-cx-exec")
+	require.Len(t, fullMsgs, 2)
+	require.Len(t, fullMsgs[1].ToolCalls, 1)
+	fullCall := fullMsgs[1].ToolCalls[0]
+	assert.Equal(t, call.ResultContent, fullCall.ResultContent)
+	assert.Equal(t, call.ResultContentLength, fullCall.ResultContentLength)
+	assert.Equal(t, call.ResultEvents, fullCall.ResultEvents,
+		"incremental and authoritative full parses must store the same events")
 }
 
 func TestIncrementalSync_CodexLateTokenCountRewritesStoredMessage(t *testing.T) {

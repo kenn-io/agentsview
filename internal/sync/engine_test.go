@@ -6403,11 +6403,11 @@ func TestProjectIdentityIncrementalStatePreservesExplicitSourceProject(
 				func(
 					_ string,
 					inc *db.IncrementalInfo,
-				) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, time.Time, int64, *string, error) {
+				) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, time.Time, int64, *string, error) {
 					return []parser.ParsedMessage{{
 						Role: parser.RoleAssistant, Content: "appended",
 						Ordinal: inc.NextOrdinal,
-					}}, nil, appendedInfo.ModTime(), int64(len(appended)), nil, nil
+					}}, nil, nil, appendedInfo.ModTime(), int64(len(appended)), nil, nil
 				},
 			)
 			require.True(t, ok)
@@ -6504,9 +6504,9 @@ func TestProjectIdentityLegacyMappedSnapshotReparsesBeforeIncrementalAppend(
 		func(
 			_ string,
 			_ *db.IncrementalInfo,
-		) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, time.Time, int64, *string, error) {
+		) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, time.Time, int64, *string, error) {
 			parseCalled = true
-			return nil, nil, time.Time{}, 0, nil, nil
+			return nil, nil, nil, time.Time{}, 0, nil, nil
 		},
 	)
 	assert.False(t, ok,

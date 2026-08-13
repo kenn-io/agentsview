@@ -50,9 +50,14 @@ they are never published as safe cursor boundaries.
 
 Truncation, known file-identity replacement, manual or project refreshes,
 `session_index.jsonl` title changes, and records that retroactively update
-stored messages all fall back to an authoritative full replacement. Safe
-incremental writes preserve the index-folded mtime and lifecycle-derived
-termination status alongside message and token aggregates.
+stored messages all fall back to an authoritative full replacement. Late tool
+results are the exception: the cursor tracks pending tool calls (bounded), so
+a `function_call_output` / `custom_tool_call_output` that refers to a call
+committed in an earlier batch is applied as an idempotent point update
+(`ToolCallResultUpdates`) instead of a full reparse. Agent-scoped and unknown
+calls still fall back. Safe incremental writes preserve the index-folded mtime
+and lifecycle-derived termination status alongside message and token
+aggregates.
 
 ## Append-only limitation
 
@@ -76,6 +81,10 @@ provider's `Fingerprint` hashes the complete source and the engine's
 - `BenchmarkCodexIncrementalSyncReads` in `internal/sync` measures the warm tail
   between the two remaining linear reads. It is PR-gated because
   `internal/sync` is in `BENCH_GATE_PACKAGES`.
+- `BenchmarkCodexIncrementalLateToolOutput` in `internal/sync` measures a
+  stream where every appended batch carries the output for the previous
+  batch's call: the base code reparses the whole transcript per batch, while
+  the incremental path attaches each event to its stored call.
 
 The maintained behavioral gate inventory is in
 [Performance Gates](performance-gates.md).

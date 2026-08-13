@@ -54,10 +54,13 @@ runner noise and fail loudly:
   warm/cold parsing remains equivalent at safe offsets.
 - `TestIncrementalSync_CodexAppend`,
   `TestIncrementalSync_CodexLifecycleTailUpdatesTermination`, the partial-tail
-  tests, and the late-update/title tests in
+  tests, the late tool-result append test
+  (`TestIncrementalSync_CodexExecAppendRetainsEvents`), and the
+  late-update/title tests in
   `internal/sync/engine_integration_test.go` — safe Codex growth appends only
-  new rows while lifecycle metadata, incomplete records, title changes, and
-  retroactive updates preserve full-parse behavior.
+  new rows, late tool results update stored calls in place, and lifecycle
+  metadata, incomplete records, title changes, and other retroactive updates
+  preserve full-parse behavior.
 
 When you fix a performance bug, prefer adding a gate at this layer: expose or
 reuse a counter (`SyncStats`, `PhaseStats`, `AnomalyStats`, a swappable

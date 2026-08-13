@@ -1000,6 +1000,7 @@ type IncrementalOutcome struct {
 	SessionID            string
 	Messages             []ParsedMessage
 	SubagentLinks        []ClaudeSubagentLink
+	ToolCallUpdates      []ParsedToolCallUpdate
 	EndedAt              time.Time
 	ConsumedBytes        int64
 	MessageCount         int

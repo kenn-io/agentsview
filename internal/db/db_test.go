@@ -4033,6 +4033,79 @@ func TestWriteSessionIncrementalResultOnlyLink(t *testing.T) {
 		"result-only link must not disturb other calls")
 }
 
+func TestWriteSessionIncrementalToolCallResultUpdate(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "proj")
+	insertMessages(t, d, Message{
+		SessionID:  "s1",
+		Ordinal:    0,
+		Role:       "assistant",
+		HasToolUse: true,
+		ToolCalls: []ToolCall{{
+			SessionID: "s1",
+			ToolName:  "exec_command",
+			Category:  "Bash",
+			ToolUseID: "call_cmd",
+		}},
+	})
+
+	update := IncrementalSessionUpdate{
+		MsgCount:    1,
+		NextOrdinal: 1,
+		ToolCallResultUpdates: []ToolCallResultUpdate{{
+			ToolUseID: "call_cmd",
+			Events: []ToolResultEvent{{
+				ToolUseID:     "call_cmd",
+				Source:        "function_call_output",
+				Content:       "command finished",
+				ContentLength: len("command finished"),
+				Timestamp:     "2026-08-02T09:00:00Z",
+			}},
+		}},
+	}
+	require.NoError(t, d.WriteSessionIncremental("s1", nil, update))
+
+	var result string
+	var resultLen int
+	require.NoError(t, d.Reader().QueryRow(`
+		SELECT COALESCE(result_content, ''), result_content_length
+		FROM tool_calls
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"s1", "call_cmd",
+	).Scan(&result, &resultLen))
+	assert.Equal(t, "command finished", result)
+	assert.Equal(t, len("command finished"), resultLen)
+
+	var source, content, timestamp string
+	var eventIndex, eventCount int
+	require.NoError(t, d.Reader().QueryRow(`
+		SELECT source, content, COALESCE(timestamp, ''), event_index
+		FROM tool_result_events
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"s1", "call_cmd",
+	).Scan(&source, &content, &timestamp, &eventIndex))
+	assert.Equal(t, "function_call_output", source)
+	assert.Equal(t, "command finished", content)
+	assert.Equal(t, "2026-08-02T09:00:00Z", timestamp)
+	assert.Zero(t, eventIndex)
+
+	require.NoError(t, d.WriteSessionIncremental("s1", nil, update),
+		"replaying an identical output must be idempotent")
+	require.NoError(t, d.Reader().QueryRow(`
+		SELECT COUNT(*) FROM tool_result_events
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"s1", "call_cmd",
+	).Scan(&eventCount))
+	assert.Equal(t, 1, eventCount)
+
+	sess, err := d.GetSession(context.Background(), "s1")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.NotNil(t, sess.TranscriptRevision)
+	assert.Equal(t, "2", *sess.TranscriptRevision,
+		"idempotent replay must not bump the transcript revision")
+}
+
 // claude_linear_parse round-trips through upsert and the incremental
 // lookup, stays NULL for legacy rows, and survives an upsert that
 // carries no verdict.

@@ -8322,6 +8322,7 @@ type incrementalUpdate struct {
 	cwd                  string
 	msgs                 []parser.ParsedMessage
 	links                []parser.ClaudeSubagentLink
+	toolCallUpdates      []parser.ParsedToolCallUpdate
 	endedAt              time.Time
 	terminationStatus    *string
 	msgCount             int // total (old + new)
@@ -10830,7 +10831,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 
 	parseFn := func(
 		_ string, inc *db.IncrementalInfo,
-	) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, time.Time, int64, *string, error) {
+	) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, time.Time, int64, *string, error) {
 		// The Claude parser needs the stored tail's provider message id
 		// so its queued-command masking fallback fires only for a real
 		// same-message.id continuation; without it, every routine queued
@@ -10858,14 +10859,14 @@ func (e *Engine) tryProviderIncrementalAppend(
 			},
 		)
 		if perr != nil {
-			return nil, nil, time.Time{}, 0, nil, perr
+			return nil, nil, nil, time.Time{}, 0, nil, perr
 		}
 		switch status {
 		case parser.IncrementalNeedsFullParse:
 			if outcome.ForceReplace {
 				// Signal the shared helper to fall back to a
 				// full parse that replaces stored messages.
-				return nil, nil, time.Time{}, 0, nil,
+				return nil, nil, nil, time.Time{}, 0, nil,
 					parser.ErrIncrementalNeedsFullParse
 			}
 			// A plain full-parse fallback without a replace request.
@@ -10873,9 +10874,9 @@ func (e *Engine) tryProviderIncrementalAppend(
 			// fallbacks (a DAG fork can drop or re-branch stored
 			// rows), so this branch serves providers that only need
 			// an append-preserving full parse.
-			return nil, nil, time.Time{}, 0, nil, parser.ErrDAGDetected
+			return nil, nil, nil, time.Time{}, 0, nil, parser.ErrDAGDetected
 		case parser.IncrementalNoNewData:
-			return nil, nil, time.Time{}, 0, nil, nil
+			return nil, nil, nil, time.Time{}, 0, nil, nil
 		default:
 			var terminationStatus *string
 			if outcome.TerminationStatus != nil {
@@ -10883,6 +10884,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 				terminationStatus = &status
 			}
 			return outcome.Messages, outcome.SubagentLinks,
+				outcome.ToolCallUpdates,
 				outcome.EndedAt, outcome.ConsumedBytes, terminationStatus, nil
 		}
 	}
@@ -10898,7 +10900,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 // only complete, valid JSON lines so it can be used as a safe resume offset.
 type incrementalParseFunc func(
 	path string, inc *db.IncrementalInfo,
-) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, time.Time, int64, *string, error)
+) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, time.Time, int64, *string, error)
 
 // tryIncrementalJSONL attempts an incremental parse of an
 // append-only JSONL file by reading only bytes appended since
@@ -11020,7 +11022,7 @@ func (e *Engine) tryIncrementalJSONL(
 		return processResult{err: leaseErr}, true
 	}
 
-	newMsgs, links, endedAt, consumed, terminationStatus, err := parseFn(
+	newMsgs, links, toolCallUpdates, endedAt, consumed, terminationStatus, err := parseFn(
 		file.Path, inc,
 	)
 	if err != nil {
@@ -11077,6 +11079,7 @@ func (e *Engine) tryIncrementalJSONL(
 					machine:              inc.Machine,
 					cwd:                  inc.Cwd,
 					links:                links,
+					toolCallUpdates:      toolCallUpdates,
 					endedAt:              endedAt,
 					terminationStatus:    terminationStatus,
 					msgCount:             inc.MsgCount,
@@ -11196,6 +11199,7 @@ func (e *Engine) tryIncrementalJSONL(
 			cwd:                  inc.Cwd,
 			msgs:                 newMsgs,
 			links:                links,
+			toolCallUpdates:      toolCallUpdates,
 			endedAt:              endedAt,
 			terminationStatus:    terminationStatus,
 			msgCount:             inc.MsgCount + len(newMsgs),
@@ -14062,6 +14066,24 @@ func (e *Engine) writeIncremental(
 			HasResult:        link.HasResult,
 		}
 	}
+	toolCallResultUpdates := make(
+		[]db.ToolCallResultUpdate, len(inc.toolCallUpdates),
+	)
+	for i, update := range inc.toolCallUpdates {
+		toolCall := db.ToolCall{
+			ResultEvents: convertToolResultEvents(update.ResultEvents),
+		}
+		for j := range toolCall.ResultEvents {
+			toolCall.ResultEvents[j].SubagentSessionID = applyIDPrefixToID(
+				e.idPrefix, toolCall.ResultEvents[j].SubagentSessionID,
+			)
+		}
+		e.anomalies.recordSanitize(db.SanitizeToolCall(&toolCall))
+		toolCallResultUpdates[i] = db.ToolCallResultUpdate{
+			ToolUseID: update.ToolUseID,
+			Events:    toolCall.ResultEvents,
+		}
+	}
 
 	if err := e.db.WriteSessionIncremental(
 		inc.sessionID,
@@ -14081,6 +14103,7 @@ func (e *Engine) writeIncremental(
 			HasTotalOutputTokens:    inc.hasTotalOutputTokens,
 			HasPeakContextTokens:    inc.hasPeakContextTokens,
 			SubagentLinks:           subagentLinks,
+			ToolCallResultUpdates:   toolCallResultUpdates,
 			BlockedResultCategories: e.blockedResultCategories,
 		},
 	); err != nil {
@@ -16029,7 +16052,7 @@ func pairToolResultEventSummaries(
 			if len(tc.ResultEvents) == 0 {
 				continue
 			}
-			summary := summarizeToolResultEvents(tc.ResultEvents)
+			summary := db.SummarizeToolResultEvents(tc.ResultEvents)
 			tc.ResultContentLength = len(summary)
 			if blocked[tc.Category] {
 				tc.ResultContent = ""
@@ -16041,62 +16064,6 @@ func pairToolResultEventSummaries(
 			tc.ResultContent = summary
 		}
 	}
-}
-
-func summarizeToolResultEvents(
-	events []db.ToolResultEvent,
-) string {
-	if len(events) == 0 {
-		return ""
-	}
-	type agentSummary struct {
-		order   int
-		content string
-	}
-	latestByAgent := map[string]agentSummary{}
-	orderedAgents := make([]string, 0, len(events))
-	lastAnon := ""
-	allHaveAgentID := true
-	for _, ev := range events {
-		if strings.TrimSpace(ev.Content) == "" {
-			continue
-		}
-		agentID := strings.TrimSpace(ev.AgentID)
-		if agentID == "" {
-			allHaveAgentID = false
-			lastAnon = ev.Content
-			continue
-		}
-		if _, ok := latestByAgent[agentID]; !ok {
-			latestByAgent[agentID] = agentSummary{
-				order:   len(orderedAgents),
-				content: ev.Content,
-			}
-			orderedAgents = append(orderedAgents, agentID)
-			continue
-		}
-		entry := latestByAgent[agentID]
-		entry.content = ev.Content
-		latestByAgent[agentID] = entry
-	}
-	if len(latestByAgent) <= 1 {
-		if len(latestByAgent) == 1 {
-			summary := latestByAgent[orderedAgents[0]].content
-			if lastAnon != "" {
-				return summary + "\n\n" + lastAnon
-			}
-			return summary
-		}
-		return lastAnon
-	}
-	parts := make([]string, 0, len(orderedAgents))
-	for _, agentID := range orderedAgents {
-		parts = append(parts, agentID+":\n"+latestByAgent[agentID].content)
-	}
-	if !allHaveAgentID && lastAnon != "" {
-		parts = append(parts, lastAnon)
-	}
-	return strings.Join(parts, "\n\n")
 }
 
 // emit fires a refresh event if an emitter is wired. Safe to call

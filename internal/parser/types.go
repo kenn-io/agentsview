@@ -1230,6 +1230,14 @@ type ParsedToolCall struct {
 	ResultEvents      []ParsedToolResultEvent
 }
 
+// ParsedToolCallUpdate carries result events for a tool call that was parsed
+// before the current append-only chunk. Incremental sync uses the stable
+// tool_use_id to attach these events without rebuilding the whole transcript.
+type ParsedToolCallUpdate struct {
+	ToolUseID    string
+	ResultEvents []ParsedToolResultEvent
+}
+
 // ParsedToolResult holds metadata about a tool result block in a
 // user message (the response to a prior tool_use).
 type ParsedToolResult struct {

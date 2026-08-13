@@ -7,9 +7,11 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -264,4 +266,191 @@ func codexSyncBenchmarkOutcomeValid(
 		outcome.Messages[1].Role == parser.RoleAssistant &&
 		outcome.Messages[1].Content == codexSyncBenchmarkTailAgent &&
 		outcome.Messages[1].Ordinal == startOrdinal+1
+}
+
+const (
+	codexLateToolBenchmarkUUID  = "019eb791-cf7d-75c1-8439-9ed74c122b02"
+	codexLateToolBenchmarkTurns = 250
+)
+
+// BenchmarkCodexIncrementalLateToolOutput measures absorbing a stream in
+// which each batch appends a new function_call plus the function_call_output
+// for the previous batch's call. Output records therefore always refer to a
+// call committed in an earlier sync batch.
+//
+// Before the incremental tool-result path, every such output forced an
+// authoritative full reparse of the whole transcript, so per-op cost scaled
+// with stored history; the incremental path attaches each event to the
+// already-stored call and keeps per-op cost bounded by the
+// fingerprint/prefix-hash reads plus the tiny tail. The session grows by two
+// records per iteration, so per-op cost is only comparable between runs with
+// the same iteration count (the bench gate always runs with a fixed
+// -benchtime=Nx).
+func BenchmarkCodexIncrementalLateToolOutput(b *testing.B) {
+	silenceBenchLogs(b)
+	ctx := context.Background()
+	root, path, _ := writeCodexLateToolBenchmarkTranscript(b)
+
+	database, err := db.Open(filepath.Join(b.TempDir(), "bench.db"))
+	require.NoError(b, err)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {root},
+		},
+		Machine: "benchmark-host",
+	})
+	b.Cleanup(func() {
+		engine.Close()
+		if err := database.Close(); err != nil {
+			b.Errorf("close bench db: %v", err)
+		}
+	})
+
+	first := engine.SyncAll(ctx, nil)
+	require.Equal(b, 1, first.Synced)
+	require.Zero(b, first.Failed)
+
+	// Stretch the debounce window so the flush timer cannot fire inside
+	// the timed loop (same rationale as BenchmarkSyncPathsIncrementalAppend).
+	engine.signalSched.mu.Lock()
+	engine.signalSched.interval = time.Hour
+	engine.signalSched.quiet = time.Hour
+	engine.signalSched.mu.Unlock()
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(b, err)
+	defer f.Close()
+
+	// Pre-build the appended lines: constructing JSONL inside the timed loop
+	// would allocate and be gated as if it were sync work. Iteration i appends
+	// call_{i+1} and the output for call_i, so the output is always "late".
+	lines := make([]string, b.N)
+	for i := range lines {
+		lines[i] = testjsonl.JoinJSONL(
+			testjsonl.CodexFunctionCallWithCallIDJSON(
+				"exec_command",
+				codexLateToolBenchmarkCall(i+1),
+				nil,
+				codexLateToolBenchmarkTS(2*i+1),
+			),
+			testjsonl.CodexFunctionCallOutputJSON(
+				codexLateToolBenchmarkCall(i),
+				"result "+strconv.Itoa(i),
+				codexLateToolBenchmarkTS(2*i+2),
+			),
+		)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := range b.N {
+		if _, err := f.WriteString(lines[i]); err != nil {
+			b.Fatalf("append: %v", err)
+		}
+		stats := engine.SyncAll(ctx, nil)
+		if stats.Failed != 0 {
+			b.Fatalf("sync failed for appended output: %+v", stats)
+		}
+	}
+	b.StopTimer()
+
+	msgs, err := database.GetAllMessages(ctx, "codex:"+codexLateToolBenchmarkUUID)
+	require.NoError(b, err)
+	wantMsgs := 3 + 2*codexLateToolBenchmarkTurns + b.N
+	require.Len(b, msgs, wantMsgs,
+		"each appended call adds exactly one message row")
+	results := make(map[string]db.ToolCall, len(msgs))
+	for i := range msgs {
+		for j := range msgs[i].ToolCalls {
+			results[msgs[i].ToolCalls[j].ToolUseID] = msgs[i].ToolCalls[j]
+		}
+	}
+	for i := range b.N {
+		call, ok := results[codexLateToolBenchmarkCall(i)]
+		require.True(b, ok, "call %d must be stored", i)
+		assert.Equal(b, "exec_command", call.ToolName)
+		assert.Equal(b, "result "+strconv.Itoa(i), call.ResultContent)
+		require.Len(b, call.ResultEvents, 1,
+			"each call must carry exactly its own output event")
+		assert.Equal(b, "result "+strconv.Itoa(i), call.ResultEvents[0].Content)
+	}
+	newest, ok := results[codexLateToolBenchmarkCall(b.N)]
+	require.True(b, ok, "the newest call must be stored")
+	assert.Empty(b, newest.ResultContent)
+	assert.Empty(b, newest.ResultEvents)
+}
+
+func codexLateToolBenchmarkCall(i int) string {
+	return "call_" + strconv.Itoa(i)
+}
+
+func codexLateToolBenchmarkTS(i int) string {
+	return time.Date(
+		2026, 7, 10, 7, 12, i, 0, time.UTC,
+	).Format("2006-01-02T15:04:05Z")
+}
+
+func writeCodexLateToolBenchmarkTranscript(
+	b testing.TB,
+) (root, path, prefix string) {
+	b.Helper()
+	root = filepath.Join(b.TempDir(), "sessions")
+	path = filepath.Join(
+		root,
+		"2026",
+		"07",
+		"10",
+		"rollout-2026-07-10T07-12-15-"+codexLateToolBenchmarkUUID+".jsonl",
+	)
+	require.NoError(b, os.MkdirAll(filepath.Dir(path), 0o755))
+
+	fixture := testjsonl.NewSessionBuilder().
+		AddCodexMeta(
+			"2026-07-10T07:00:00Z",
+			codexLateToolBenchmarkUUID,
+			"/workspace/project-a",
+			"codex_cli_rs",
+		).
+		AddRaw(testjsonl.CodexTurnContextJSON(
+			"gpt-5.4", "2026-07-10T07:00:01Z",
+		)).
+		AddCodexMessage(
+			"2026-07-10T07:00:02Z",
+			"user",
+			"Initial request: inspect the project and make a careful change.",
+		).
+		AddCodexMessage(
+			"2026-07-10T07:00:03Z",
+			"assistant",
+			"Initial response: I will inspect the relevant code and tests.",
+		)
+	contextPayload := strings.Repeat(
+		"Retain concrete code, test, and validation context. ", 8,
+	)
+	for i := range codexLateToolBenchmarkTurns {
+		turn := strconv.Itoa(i)
+		fixture.AddCodexMessage(
+			"2026-07-10T07:01:00Z",
+			"user",
+			"Prior turn "+turn+" request: continue the implementation. "+
+				contextPayload,
+		)
+		fixture.AddCodexMessage(
+			"2026-07-10T07:01:01Z",
+			"assistant",
+			"Prior turn "+turn+" response: applied the next bounded change. "+
+				contextPayload,
+		)
+	}
+	// call_0 is committed in the prefix with no output; iteration 0 appends
+	// call_1 plus the late output for call_0.
+	fixture.AddRaw(testjsonl.CodexFunctionCallWithCallIDJSON(
+		"exec_command",
+		"call_0",
+		nil,
+		codexLateToolBenchmarkTS(0),
+	))
+	prefix = fixture.String()
+	require.NoError(b, os.WriteFile(path, []byte(prefix), 0o644))
+	return root, path, prefix
 }
