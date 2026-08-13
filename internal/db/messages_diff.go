@@ -264,8 +264,20 @@ func messagePinIdentityStable(
 		incomingUUIDCounts[incoming.SourceUUID] == 1 {
 		return true
 	}
-	return old.Ordinal == incoming.Ordinal &&
-		old.Role == incoming.Role && old.Content == incoming.Content
+	if old.Ordinal != incoming.Ordinal || old.Role != incoming.Role {
+		return false
+	}
+	if old.Content == incoming.Content {
+		return true
+	}
+	// A content extension is the same message completed by a later
+	// parse (e.g. a streamed partial response): the row keeps its
+	// ordinal, role, and source uuid (the caller refuses uuid
+	// changes), so the in-place update may retain the pin. The old
+	// content must be a non-empty prefix so an empty placeholder
+	// cannot claim an arbitrary replacement as its completion.
+	return old.Content != "" &&
+		strings.HasPrefix(incoming.Content, old.Content)
 }
 
 // messageDiffNeedsPinRemapTx reports whether an in-place update would
