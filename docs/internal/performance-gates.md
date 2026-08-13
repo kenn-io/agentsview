@@ -96,14 +96,29 @@ head and its merge base on the same runner, then compares the outputs with
   skip work only; also self-asserts nothing is re-synced or bulk-rewritten).
 - `BenchmarkSyncPathsIncrementalAppend` — absorb one appended line into a
   1,000-message session.
-- `BenchmarkCodexIncrementalSyncReads` — a warm Codex cursor append plus the
-  remaining full-source fingerprint and committed-prefix hash reads (the
-  pre-checkpoint cost model). See
+- `BenchmarkCodexCheckpointAppendResume` — the source-reading pipeline of a
+  checkpoint-resumed Codex append: checkpoint gate (stat + anchor digest +
+  fingerprint resume), seeded tail parse, committed-prefix resume hash, next
+  anchor digest, and next checkpoint assembly. Bounded by the anchor window
+  plus the tail — see
   [Background Sync Efficiency](background-sync-efficiency.md) for the
   cost-model boundary.
-- `BenchmarkCodexIncrementalLateToolOutput` — a checkpoint-resumed Codex
-  append stream: the base code reparses the transcript and re-hashes the
-  source per batch, the checkpoint path hashes only the appended bytes.
+- `BenchmarkCodexLateToolOutputDebouncedBurst` — a checkpoint-resumed Codex
+  append stream with the signal debounce stretched, so only the first
+  iteration pays the O(history) recompute and the rest are amortized. It
+  guards the late-result update path's per-append cost; it is deliberately
+  NOT the quiet-session gate (see the `BenchmarkCodexQuietAppendSignals*`
+  trio below).
+- `BenchmarkCodexQuietAppendSignals500` / `...5000` / `...15000` — the
+  non-amortized quiet-session append gate: every iteration appends a new
+  function_call plus the previous call's late output and pays the full
+  inline signal/secret maintenance (debounce disabled). The three sizes
+  prove per-append latency does not scale with stored history; each
+  self-asserts zero `GetAllMessages` calls in the timed loop.
+- `BenchmarkCodexColdFullSync` — a fresh database and engine ingesting the
+  transcript from scratch, including the single-pass checkpoint capture.
+  Per-op cost deliberately exceeds the micro-benchmark band; it exists to
+  catch a regression that adds a source read pass to the cold pipeline.
 - `BenchmarkSyncAllColdArchive` — first-sync ingest throughput through the
   default per-session write path.
 - `BenchmarkResyncBulkIngest` — the same archive through the resync bulk-write
@@ -181,6 +196,23 @@ Cross-backend query benchmarks live separately in `internal/backendbench`
 prefix reconstruction with an exact warm cursor. It is diagnostic rather than
 PR-gated: `BENCH_GATE_PACKAGES` currently contains only `./internal/sync`,
 `./internal/db`, and `./internal/secrets`.
+
+### 3. Macro ratio gate (run manually, build tag `macrobench`)
+
+The 10MB-vs-1GB same-append p95 ratio (`< 2x`) is not a CI benchmark: the
+1GB fixture takes minutes per run. `internal/sync/codex_macro_bench_test.go`
+is excluded from the PR gate by the `macrobench` build tag:
+
+```bash
+cd internal/sync
+go test -tags 'fts5,macrobench' -run '^$' \
+  -bench 'BenchmarkMacroCodexQuietAppend' -benchmem -count=6 -benchtime=5x
+```
+
+The gate: the p95 `sec/op` of `BenchmarkMacroCodexQuietAppend1GB` must stay
+within 2x of `BenchmarkMacroCodexQuietAppend10MB` for the same
+quiet-append shape (call + late output, full inline signal/secret
+maintenance).
 
 ## Adding a benchmark to the gate
 

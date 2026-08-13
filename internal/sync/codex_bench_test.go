@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -28,13 +29,42 @@ var (
 	codexSyncBenchmarkHashSink    string
 )
 
-// BenchmarkCodexIncrementalSyncReads measures the source-reading pipeline that
-// remains around a warm cursor append: Fingerprint hashes the full source and
-// ComputeFileHashPrefix hashes through the proposed committed offset.
-func BenchmarkCodexIncrementalSyncReads(b *testing.B) {
-	b.StopTimer()
+// BenchmarkCodexCheckpointAppendResume measures the source-reading pipeline a
+// checkpoint-resumed Codex append performs: the checkpoint gate (stat +
+// anchor digest + fingerprint resume), the seeded tail parse, the committed
+// prefix resume hash, the next anchor digest, and the next checkpoint
+// assembly. It replaces the pre-checkpoint benchmark that timed the old
+// full-source fingerprint plus prefix re-hash pipeline.
+func BenchmarkCodexCheckpointAppendResume(b *testing.B) {
+	silenceBenchLogs(b)
 	ctx := context.Background()
 	root, path, prefix, tail, startOrdinal := writeCodexSyncBenchmarkTranscript(b)
+
+	database, err := db.Open(filepath.Join(b.TempDir(), "bench.db"))
+	require.NoError(b, err)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {root},
+		},
+		Machine: "benchmark-host",
+	})
+	b.Cleanup(func() {
+		engine.Close()
+		if err := database.Close(); err != nil {
+			b.Errorf("close bench db: %v", err)
+		}
+	})
+	first := engine.SyncAll(ctx, nil)
+	require.Equal(b, 1, first.Synced)
+	require.Zero(b, first.Failed)
+	sessionID := "codex:" + codexSyncBenchmarkUUID
+	cp, ok, err := database.GetParserCheckpoint(sessionID)
+	require.NoError(b, err)
+	require.True(b, ok, "the full sync must persist a checkpoint")
+	blobs, ok, err := database.GetParserCheckpointBlobs(sessionID)
+	require.NoError(b, err)
+	require.True(b, ok)
+
 	cfg := parser.ProviderConfig{
 		Roots:   []string{root},
 		Machine: "benchmark-host",
@@ -42,113 +72,114 @@ func BenchmarkCodexIncrementalSyncReads(b *testing.B) {
 	provider, ok := parser.NewProvider(parser.AgentCodex, cfg)
 	require.True(b, ok)
 	source, found, err := provider.FindSource(ctx, parser.FindSourceRequest{
-		FullSessionID: "codex:" + codexSyncBenchmarkUUID,
+		FullSessionID: sessionID,
 	})
 	require.NoError(b, err)
 	require.True(b, found)
 
-	prefixFingerprint, err := provider.Fingerprint(ctx, source)
-	require.NoError(b, err)
-	assert.Equal(b, int64(len(prefix)), prefixFingerprint.Size)
-	full, err := provider.Parse(ctx, parser.ParseRequest{
-		Source:      source,
-		Fingerprint: prefixFingerprint,
-	})
-	require.NoError(b, err)
-	require.Len(b, full.Results, 1)
-	assert.Len(b, full.Results[0].Result.Messages, startOrdinal)
-
-	// Keep the timed provider untouched after its prefix-only full parse. A
-	// separately seeded provider handles output validation after the append.
-	validationProvider, ok := parser.NewProvider(parser.AgentCodex, cfg)
-	require.True(b, ok)
-	_, err = validationProvider.Parse(ctx, parser.ParseRequest{
-		Source:      source,
-		Fingerprint: prefixFingerprint,
-	})
-	require.NoError(b, err)
-
 	appendCodexSyncBenchmarkTail(b, path, tail)
-	req := parser.IncrementalRequest{
-		Source:       source,
-		SessionID:    "codex:" + codexSyncBenchmarkUUID,
-		Offset:       int64(len(prefix)),
-		StartOrdinal: startOrdinal,
-	}
 
-	currentFingerprint, outcome, status, committedHash, err :=
-		runCodexIncrementalSyncReads(ctx, validationProvider, source, path, req)
-	require.NoError(b, err)
-	requireCodexSyncBenchmarkOutcome(
-		b, outcome, status, startOrdinal, int64(len(tail)),
+	// Warm the timed pipeline once so the per-op loop measures the
+	// checkpoint resume work itself.
+	_, err = runCodexCheckpointAppendReads(
+		ctx, engine, provider, source, path, cp, blobs,
+		startOrdinal, len(prefix), len(tail),
 	)
-	require.Equal(b, int64(len(prefix)+len(tail)), currentFingerprint.Size)
-	require.Equal(b, currentFingerprint.Size, req.Offset+outcome.ConsumedBytes)
-	require.NotEmpty(b, currentFingerprint.Hash)
-	require.Len(b, committedHash, 64)
-	require.Equal(b, currentFingerprint.Hash, committedHash)
+	require.NoError(b, err)
 
-	// Two full-length linear reads dominate this pipeline: the provider source
-	// fingerprint and the engine's committed-prefix hash. The warm tail parse is
-	// intentionally left in the same measurement between them.
-	b.SetBytes(2 * int64(len(prefix)+len(tail)))
+	// Per append the source reads are bounded: the anchor window (twice)
+	// plus the tail (fingerprint resume, parse, committed-prefix resume).
+	b.SetBytes(int64(len(tail)) + 2*codexCheckpointAnchorSize)
 	b.ReportAllocs()
 	b.ResetTimer()
 	b.StartTimer()
 	for b.Loop() {
-		fingerprint, outcome, status, hash, err := runCodexIncrementalSyncReads(
-			ctx, provider, source, path, req,
+		outcome, err := runCodexCheckpointAppendReads(
+			ctx, engine, provider, source, path, cp, blobs,
+			startOrdinal, len(prefix), len(tail),
 		)
-		if err != nil || !codexSyncBenchmarkOutcomeValid(
-			outcome, status, startOrdinal, int64(len(tail)),
-		) || fingerprint.Size != int64(len(prefix)+len(tail)) ||
-			fingerprint.Hash == "" || len(hash) != 64 || fingerprint.Hash != hash {
+		if err != nil {
 			b.StopTimer()
 			require.NoError(b, err)
-			requireCodexSyncBenchmarkOutcome(
-				b, outcome, status, startOrdinal, int64(len(tail)),
-			)
-			assert.Equal(b, int64(len(prefix)+len(tail)), fingerprint.Size)
-			require.NotEmpty(b, fingerprint.Hash)
-			assert.Len(b, hash, 64)
-			assert.Equal(b, fingerprint.Hash, hash)
 			b.StartTimer()
 		}
 		codexSyncBenchmarkOutcomeSink = outcome
-		codexSyncBenchmarkHashSink = hash
 	}
 }
 
-func runCodexIncrementalSyncReads(
+func runCodexCheckpointAppendReads(
 	ctx context.Context,
+	engine *Engine,
 	provider parser.Provider,
 	source parser.SourceRef,
 	path string,
-	req parser.IncrementalRequest,
-) (
-	parser.SourceFingerprint,
-	parser.IncrementalOutcome,
-	parser.IncrementalStatus,
-	string,
-	error,
-) {
-	// Fingerprint retains the existing full-source content hash.
-	fingerprint, err := provider.Fingerprint(ctx, source)
-	if err != nil {
-		return parser.SourceFingerprint{}, parser.IncrementalOutcome{},
-			parser.IncrementalUnsupported, "", err
+	cp *db.ParserCheckpoint,
+	blobs db.ParserCheckpointBlobs,
+	startOrdinal int,
+	prefixLen, tailLen int,
+) (parser.IncrementalOutcome, error) {
+	file := parser.DiscoveredFile{
+		Path:  path,
+		Agent: parser.AgentCodex,
 	}
-	req.Fingerprint = fingerprint
-	outcome, status, err := provider.ParseIncremental(ctx, req)
+	res, err := engine.codexCheckpointFingerprint(ctx, source, file)
 	if err != nil {
-		return fingerprint, outcome, status, "", err
+		return parser.IncrementalOutcome{}, err
 	}
-	// This is the engine's second remaining linear read, through the offset
-	// that would be committed after the incremental database write succeeds.
-	committedHash, err := ComputeFileHashPrefix(
-		path, req.Offset+outcome.ConsumedBytes,
+	if res.decision != codexCheckpointAppend {
+		return parser.IncrementalOutcome{}, fmt.Errorf(
+			"checkpoint gate decided %d, want append", res.decision,
+		)
+	}
+	outcome, status, err := provider.ParseIncremental(ctx, parser.IncrementalRequest{
+		Source:       source,
+		Fingerprint:  res.fingerprint,
+		SessionID:    "codex:" + codexSyncBenchmarkUUID,
+		Offset:       cp.Offset,
+		StartOrdinal: startOrdinal,
+		Seed:         blobs.Cursor,
+	})
+	if err != nil {
+		return outcome, err
+	}
+	if status != parser.IncrementalApplied {
+		return outcome, fmt.Errorf("incremental status %v, want applied", status)
+	}
+	if outcome.ConsumedBytes != int64(tailLen) {
+		return outcome, fmt.Errorf(
+			"consumed %d, want %d", outcome.ConsumedBytes, tailLen,
+		)
+	}
+	// The engine's remaining checkpoint work for the append.
+	state, hash, err := codexResumeHash(path, cp.Offset, cp.Offset+outcome.ConsumedBytes, blobs.HashState)
+	if err != nil {
+		return outcome, err
+	}
+	anchorDigest, err := codexCheckpointAnchorDigest(
+		path, cp.Offset+outcome.ConsumedBytes,
 	)
-	return fingerprint, outcome, status, committedHash, err
+	if err != nil {
+		return outcome, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return outcome, err
+	}
+	built, _ := buildCodexCheckpoint(
+		"codex:"+codexSyncBenchmarkUUID,
+		"codex",
+		path,
+		info,
+		cp.Offset+outcome.ConsumedBytes,
+		info.ModTime().UnixNano(),
+		outcome.NextCursor,
+		state,
+		hash,
+		startOrdinal+2,
+		anchorDigest,
+	)
+	codexSyncBenchmarkHashSink = built.Hash
+	return outcome, nil
 }
 
 func writeCodexSyncBenchmarkTranscript(
@@ -226,67 +257,26 @@ func appendCodexSyncBenchmarkTail(b *testing.B, path, tail string) {
 	require.NoError(b, f.Close())
 }
 
-func requireCodexSyncBenchmarkOutcome(
-	b *testing.B,
-	outcome parser.IncrementalOutcome,
-	status parser.IncrementalStatus,
-	startOrdinal int,
-	tailBytes int64,
-) {
-	b.Helper()
-	require.Equal(b, parser.IncrementalApplied, status)
-	require.Len(b, outcome.Messages, 2)
-	assert.Equal(b, "codex:"+codexSyncBenchmarkUUID, outcome.SessionID)
-	assert.Equal(b, 2, outcome.MessageCount)
-	assert.Equal(b, 1, outcome.UserMessageCount)
-	assert.Equal(b, tailBytes, outcome.ConsumedBytes)
-	assert.Equal(b, parser.RoleUser, outcome.Messages[0].Role)
-	assert.Equal(b, codexSyncBenchmarkTailUser, outcome.Messages[0].Content)
-	assert.Equal(b, startOrdinal, outcome.Messages[0].Ordinal)
-	assert.Equal(b, parser.RoleAssistant, outcome.Messages[1].Role)
-	assert.Equal(b, codexSyncBenchmarkTailAgent, outcome.Messages[1].Content)
-	assert.Equal(b, startOrdinal+1, outcome.Messages[1].Ordinal)
-}
-
-func codexSyncBenchmarkOutcomeValid(
-	outcome parser.IncrementalOutcome,
-	status parser.IncrementalStatus,
-	startOrdinal int,
-	tailBytes int64,
-) bool {
-	return status == parser.IncrementalApplied &&
-		outcome.SessionID == "codex:"+codexSyncBenchmarkUUID &&
-		outcome.MessageCount == 2 &&
-		outcome.UserMessageCount == 1 &&
-		outcome.ConsumedBytes == tailBytes &&
-		len(outcome.Messages) == 2 &&
-		outcome.Messages[0].Role == parser.RoleUser &&
-		outcome.Messages[0].Content == codexSyncBenchmarkTailUser &&
-		outcome.Messages[0].Ordinal == startOrdinal &&
-		outcome.Messages[1].Role == parser.RoleAssistant &&
-		outcome.Messages[1].Content == codexSyncBenchmarkTailAgent &&
-		outcome.Messages[1].Ordinal == startOrdinal+1
-}
-
 const (
 	codexLateToolBenchmarkUUID  = "019eb791-cf7d-75c1-8439-9ed74c122b02"
 	codexLateToolBenchmarkTurns = 250
 )
 
-// BenchmarkCodexIncrementalLateToolOutput measures absorbing a stream in
+// BenchmarkCodexLateToolOutputDebouncedBurst measures absorbing a stream in
 // which each batch appends a new function_call plus the function_call_output
 // for the previous batch's call. Output records therefore always refer to a
 // call committed in an earlier sync batch.
 //
-// Before the incremental tool-result path, every such output forced an
-// authoritative full reparse of the whole transcript, so per-op cost scaled
-// with stored history; the incremental path attaches each event to the
-// already-stored call and keeps per-op cost bounded by the
-// fingerprint/prefix-hash reads plus the tiny tail. The session grows by two
-// records per iteration, so per-op cost is only comparable between runs with
-// the same iteration count (the bench gate always runs with a fixed
-// -benchtime=Nx).
-func BenchmarkCodexIncrementalLateToolOutput(b *testing.B) {
+// This is a debounced-burst benchmark, not a single-quiet-append gate: the
+// engine's signal scheduler is stretched to an hour so the O(history)
+// full recompute runs only on the first iteration and the remaining
+// iterations are amortized. It guards the late-result update path's
+// per-append cost, but it deliberately does not measure the quiet-session
+// first append (see BenchmarkCodexQuietAppendSignals* for that gate). The
+// session grows by two records per iteration, so per-op cost is only
+// comparable between runs with the same iteration count (the bench gate
+// always runs with a fixed -benchtime=Nx).
+func BenchmarkCodexLateToolOutputDebouncedBurst(b *testing.B) {
 	silenceBenchLogs(b)
 	ctx := context.Background()
 	root, path, _ := writeCodexLateToolBenchmarkTranscript(b)
