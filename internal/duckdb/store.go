@@ -76,7 +76,9 @@ func (*duckBunBackend) Capabilities() db.BackendCapabilities {
 	}
 }
 
-func (*duckBunBackend) TimestampOrderExpr(column string) string { return column }
+func (*duckBunBackend) TimestampOrderExpr(column string) string {
+	return "CAST(" + column + " AS TIMESTAMP)"
+}
 
 func (*duckBunBackend) SessionVersion(
 	ctx context.Context, store bun.IDB, id string,

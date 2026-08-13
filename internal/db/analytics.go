@@ -1556,19 +1556,6 @@ type VelocityResponse struct {
 	ByComplexity []VelocityBreakdown `json:"by_complexity"`
 }
 
-// complexityBucket returns the complexity label based on
-// message count.
-func complexityBucket(mc int) string {
-	switch {
-	case mc <= 15:
-		return "1-15"
-	case mc <= 60:
-		return "16-60"
-	default:
-		return "61+"
-	}
-}
-
 // velocityAccumulator collects raw values for a velocity group.
 type velocityAccumulator struct {
 	turnCycles     []float64

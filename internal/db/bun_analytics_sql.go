@@ -47,6 +47,11 @@ func newBunAnalyticsSQL(
 	if err != nil {
 		return nil, err
 	}
+	if f.ActiveSince != "" {
+		if cutoff, parseErr := parseTimestamp(f.ActiveSince); parseErr == nil {
+			f.ActiveSince = cutoff.UTC().Format(time.RFC3339Nano)
+		}
+	}
 	return &bunAnalyticsSQL{
 		dialect: dialect, filter: f, zone: zone, models: csvFilterValues(f.Model),
 	}, nil
