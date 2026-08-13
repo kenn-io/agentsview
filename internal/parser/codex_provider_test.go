@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,6 +96,79 @@ func TestCodexProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, "Renamed title", result.Result.Session.SessionName)
 	assert.Equal(t, fingerprint.Hash, result.Result.Session.File.Hash)
 	assert.Len(t, result.Result.Messages, 1)
+}
+
+func TestCodexProviderUnresolvedParentNeedsRetry(t *testing.T) {
+	root := t.TempDir()
+	const childID = "22222222-2222-4222-8222-222222222222"
+	const parentID = "11111111-1111-4111-8111-111111111111"
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(
+			childID, parentID, "/workspace/project", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", "child-turn", tsEarlyS1),
+		testjsonl.CodexMsgJSON("user", "child task", tsEarlyS1),
+		testjsonl.CodexMsgJSON("assistant", "child answer", tsEarlyS5),
+	)
+	writeCodexProviderSessionContent(t, root, childID, content)
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	source := requireCodexProviderSource(t, provider, childID)
+
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
+
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	result := outcome.Results[0]
+	assert.Equal(t, DataVersionNeedsRetry, result.DataVersion)
+	assert.Contains(t, result.RetryReason, "parent turns")
+	require.Len(t, result.Result.Messages, 2)
+	assert.Equal(t, "child task", result.Result.Messages[0].Content)
+	assert.Equal(t, "child answer", result.Result.Messages[1].Content)
+}
+
+func TestCodexProviderUnresolvedParentWithoutFinalNewlineNeedsRetry(t *testing.T) {
+	root := t.TempDir()
+	const childID = "22222222-2222-4222-8222-222222222222"
+	const parentID = "11111111-1111-4111-8111-111111111111"
+	content := strings.TrimSuffix(testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(
+			childID, parentID, "/workspace/project", "codex_cli_rs", tsEarly,
+		),
+	), "\n")
+	writeCodexProviderSessionContent(t, root, childID, content)
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	source := requireCodexProviderSource(t, provider, childID)
+
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
+
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, DataVersionNeedsRetry, outcome.Results[0].DataVersion)
+}
+
+func TestCodexProviderChildOnlySubagentWithoutParentStaysCurrent(t *testing.T) {
+	root := t.TempDir()
+	const childID = "22222222-2222-4222-8222-222222222222"
+	const parentID = "11111111-1111-4111-8111-111111111111"
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSubagentSessionMetaJSON(
+			childID, parentID, "/workspace/project", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", "child-turn", tsEarlyS1),
+		testjsonl.CodexMsgJSON("user", "child task", tsEarlyS1),
+	)
+	writeCodexProviderSessionContent(t, root, childID, content)
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	source := requireCodexProviderSource(t, provider, childID)
+
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
+
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, DataVersionCurrent, outcome.Results[0].DataVersion)
 }
 
 func TestCodexActivityHintsUseConfiguredRootParent(t *testing.T) {

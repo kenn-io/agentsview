@@ -25,13 +25,16 @@ into the same temporary Codex directory tree. The existing file-backed parent
 turn resolver will then compare opaque `turn_context.turn_id` values without a
 second parsing implementation.
 
-If the parent object is missing, unreadable, or not complete enough to resolve
-the child's replay prefix, parse fail-open so child-owned data cannot be lost,
-but return the child with `DataVersionNeedsRetry`. The sync layer must persist
-that retry marker rather than treating the possibly inflated result as current.
-A later audit or source sync will revisit the unchanged child and replace it
-once its parent can be resolved. This is the narrow eventual-correction
-mechanism; no dependency index is introduced.
+If the parent object is missing, unreadable, or has no turn identifiers, parse
+fail-open so child-owned data cannot be lost, but return the child with
+`DataVersionNeedsRetry`. The sync layer must persist that retry marker rather
+than treating the possibly inflated result as current. A later audit or source
+sync will revisit the unchanged child and replace it once its parent can be
+resolved. This is the narrow eventual-correction mechanism; no dependency index
+is introduced. A non-empty parent is authoritative for the current parse. The
+format has no marker that can distinguish a later replay turn omitted from a
+parent snapshot from the child's first real turn, so tracking future parent
+growth remains outside this repair.
 
 Parent hydration must remain bounded to one named object per child and must use
 the existing safe S3 path and temporary-file rules. A malformed parent ID or a

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path"
 	"slices"
 	"sort"
 	"strings"
@@ -356,9 +357,10 @@ type S3DiscoveredSource struct {
 // enumerated by a source set's discovery. The s3 URI is the stable identity
 // across Key, DisplayPath, and FingerprintKey, and the durable object metadata
 // rides in the Opaque payload for the engine to thread into the DiscoveredFile.
-func s3SourceRefFromDiscoveredFile(file DiscoveredFile) SourceRef {
+func s3SourceRefFromDiscoveredFile(root string, file DiscoveredFile) SourceRef {
 	return SourceRef{
 		Provider:       file.Agent,
+		ConfiguredRoot: root,
 		Key:            file.Path,
 		DisplayPath:    file.Path,
 		FingerprintKey: file.Path,
@@ -533,6 +535,84 @@ func discoverCodexS3(root string) []DiscoveredFile {
 			return isCodexSessionFilename(segs[len(segs)-1])
 		},
 	})
+}
+
+// FindCodexS3ParentSessionURI locates one explicitly named parent rollout
+// under the same configured Codex S3 root as childURI. It lists metadata only;
+// callers decide whether and where to materialize the matching object.
+func FindCodexS3ParentSessionURI(
+	configuredRoot, childURI, parentID string,
+) (string, bool) {
+	if parentID == "" || strings.TrimSpace(parentID) != parentID ||
+		strings.ContainsAny(parentID, `/\\`) ||
+		CodexSessionUUIDFromFilename("rollout-x-"+parentID+".jsonl") != parentID {
+		return "", false
+	}
+	root, ok := codexS3RootURI(configuredRoot, childURI)
+	if !ok {
+		return "", false
+	}
+	objects, err := listS3Objects(root)
+	if err != nil {
+		return "", false
+	}
+	var matches []string
+	for _, obj := range objects {
+		if _, withinRoot := s3RelativePath(root, obj.URI); !withinRoot {
+			continue
+		}
+		name := path.Base(obj.URI)
+		if CodexSessionUUIDFromFilename(name) == parentID {
+			matches = append(matches, obj.URI)
+		}
+	}
+	if len(matches) == 0 {
+		return "", false
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		iArchived := strings.Contains(matches[i], "/archived_sessions/")
+		jArchived := strings.Contains(matches[j], "/archived_sessions/")
+		if iArchived != jArchived {
+			return !iArchived
+		}
+		return matches[i] < matches[j]
+	})
+	return matches[0], true
+}
+
+func codexS3RootURI(configuredRoot, sessionURI string) (string, bool) {
+	if !strings.HasPrefix(sessionURI, "s3://") {
+		return "", false
+	}
+	if configuredRoot != "" {
+		configuredRoot = strings.TrimSuffix(configuredRoot, "/")
+		if !strings.HasPrefix(configuredRoot, "s3://") {
+			return "", false
+		}
+		if _, ok := s3RelativePath(configuredRoot, sessionURI); !ok {
+			return "", false
+		}
+		return configuredRoot, true
+	}
+	parts := strings.Split(strings.TrimPrefix(sessionURI, "s3://"), "/")
+	if len(parts) < 2 || !isCodexSessionFilename(parts[len(parts)-1]) {
+		return "", false
+	}
+	for i := len(parts) - 3; i >= 1; i-- {
+		if parts[i] == "raw" && parts[i+1] == "codex" {
+			return "s3://" + strings.Join(parts[:i+2], "/"), true
+		}
+	}
+	for i := len(parts) - 2; i >= 1; i-- {
+		if parts[i] == "sessions" || parts[i] == "archived_sessions" {
+			return "s3://" + strings.Join(parts[:i], "/"), true
+		}
+	}
+	if len(parts) >= 5 && IsDigits(parts[len(parts)-4]) &&
+		IsDigits(parts[len(parts)-3]) && IsDigits(parts[len(parts)-2]) {
+		return "s3://" + strings.Join(parts[:len(parts)-4], "/"), true
+	}
+	return "s3://" + strings.Join(parts[:len(parts)-1], "/"), true
 }
 
 // CodexS3SessionIndexURI returns the session_index.jsonl URI adjacent to the

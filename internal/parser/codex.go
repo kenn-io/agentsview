@@ -1533,6 +1533,61 @@ func (p *codexProvider) parentTurnResolver(
 	}
 }
 
+func (p *codexProvider) codexParentResolution(
+	childPath string,
+) (string, bool) {
+	parentID, resolutionNeeded := CodexReplayParentID(childPath)
+	if parentID == "" || !resolutionNeeded {
+		return "", false
+	}
+	turnIDs, resolved := p.parentTurnResolver(childPath)(parentID)
+	return parentID, resolved && len(turnIDs) > 0
+}
+
+// CodexReplayParentID returns the explicit parent only when the rollout has a
+// positive replay-prefix signal: forked_from_id, or a copied parent
+// session_meta after subagent lineage metadata. Child-only subagents return no
+// replay parent and remain current without resolving their parent transcript.
+func CodexReplayParentID(childPath string) (string, bool) {
+	f, err := os.Open(childPath)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+
+	parentID := ""
+	resolutionNeeded := false
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !gjson.Valid(line) {
+			continue
+		}
+		if resolutionNeeded || gjson.Get(line, "type").Str != codexTypeSessionMeta {
+			continue
+		}
+		payload := gjson.Get(line, "payload")
+		forkedFromID := strings.TrimSpace(payload.Get("forked_from_id").Str)
+		if forkedFromID != "" {
+			parentID = forkedFromID
+			resolutionNeeded = true
+			continue
+		}
+		if parentID == "" {
+			parentID = codexSubagentParentThreadID(payload)
+			continue
+		}
+		if payload.Get("id").Str == parentID {
+			resolutionNeeded = true
+		}
+	}
+	if scanner.Err() != nil || parentID == "" || !resolutionNeeded {
+		return "", false
+	}
+	return parentID, true
+}
+
 // parseSessionSnapshot parses exactly the raw-size snapshot captured from f.
 // Limiting the reader prevents an append racing the scan from being folded into
 // a cursor keyed by the earlier size.

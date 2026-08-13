@@ -12,6 +12,8 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
+var findCodexS3ParentSessionURI = parser.FindCodexS3ParentSessionURI
+
 func s3SessionIDPrefix(machine string) string {
 	if machine == "" {
 		return ""
@@ -170,6 +172,48 @@ func localCodexSessionIndexPath(sessionPath string) string {
 	return ""
 }
 
+func hydrateS3CodexParent(
+	tempDir, childPath, configuredRoot, childURI string,
+) bool {
+	parentID, resolutionNeeded := parser.CodexReplayParentID(childPath)
+	if !resolutionNeeded {
+		return false
+	}
+	parentURI, ok := findCodexS3ParentSessionURI(
+		configuredRoot, childURI, parentID,
+	)
+	if !ok || parentURI == childURI {
+		return false
+	}
+	relPath, err := safeS3TempRelPath(parser.DiscoveredFile{
+		Agent: parser.AgentCodex,
+		Path:  parentURI,
+	})
+	if err != nil {
+		return false
+	}
+	rc, err := fetchS3Object(parentURI)
+	if err != nil {
+		return false
+	}
+	defer rc.Close()
+	parentPath := filepath.Join(tempDir, filepath.Base(relPath))
+	if err := os.MkdirAll(filepath.Dir(parentPath), 0o755); err != nil {
+		return false
+	}
+	out, err := os.Create(parentPath)
+	if err != nil {
+		return false
+	}
+	_, copyErr := io.Copy(out, rc)
+	closeErr := out.Close()
+	if copyErr != nil || closeErr != nil {
+		_ = os.Remove(parentPath)
+		return false
+	}
+	return true
+}
+
 // processS3Session reads a Claude/Codex session JSONL directly from object
 // storage (in-process, no persistent local mirror): download the object's
 // bytes, buffer them to a transient temp file so the existing path-based
@@ -286,6 +330,11 @@ func (e *Engine) processS3Session(
 		hydratedToolResults = rewrote
 		sawPersistedToolResults = sawPersisted
 	case parser.AgentCodex:
+		configuredRoot := ""
+		if file.ProviderSource != nil {
+			configuredRoot = file.ProviderSource.ConfiguredRoot
+		}
+		hydrateS3CodexParent(dir, tmp, configuredRoot, file.Path)
 		indexPath, err := hydrateS3CodexSessionIndex(tmp, file.Path)
 		if err != nil {
 			return processResult{err: err, noCacheSkip: true, retentionLease: lease}
@@ -309,6 +358,13 @@ func (e *Engine) processS3Session(
 		if sourceFingerprint != "" {
 			res.results[i].Session.File.Hash = sourceFingerprint
 		}
+	}
+	if len(res.retrySessionIDs) > 0 && idPrefix != "" {
+		prefixed := make(map[string]bool, len(res.retrySessionIDs))
+		for id := range res.retrySessionIDs {
+			prefixed[applyIDPrefixToID(idPrefix, id)] = true
+		}
+		res.retrySessionIDs = prefixed
 	}
 	if sourceChanged || hydratedToolResults || sawPersistedToolResults {
 		res.forceReplace = true
@@ -363,6 +419,15 @@ func (e *Engine) parseMaterializedS3Source(
 	if err != nil {
 		return processResult{}, err
 	}
+	retrySessionIDs := make(map[string]bool)
+	for _, result := range outcome.Results {
+		if result.DataVersion == parser.DataVersionNeedsRetry {
+			retrySessionIDs[result.Result.Session.ID] = true
+		}
+	}
+	if len(retrySessionIDs) == 0 {
+		retrySessionIDs = nil
+	}
 	// Do not short-circuit on an empty Results slice: a content-free source can
 	// still carry ExcludedSessionIDs (a Claude /usage probe parses to no live
 	// session but excludes its ID), and the caller needs those IDs to drop the
@@ -371,5 +436,6 @@ func (e *Engine) parseMaterializedS3Source(
 		results:            parseOutcomeResults(outcome.Results),
 		excludedSessionIDs: append([]string(nil), outcome.ExcludedSessionIDs...),
 		forceReplace:       outcome.ForceReplace,
+		retrySessionIDs:    retrySessionIDs,
 	}, nil
 }

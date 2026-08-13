@@ -25,6 +25,8 @@ func TestCodexCapturedForkReplayTotals(t *testing.T) {
 	files, err := filepath.Glob(filepath.Join(root, "*.jsonl"))
 	require.NoError(t, err)
 	require.Len(t, files, 6)
+	children := capturedCodexForkChildren(t, files)
+	require.Len(t, children, 5)
 
 	provider := newCodexTestProvider(t, root)
 	var totalOutput int
@@ -56,12 +58,9 @@ func TestCodexCapturedForkReplayTotals(t *testing.T) {
 		})
 	}
 	resolver := export.NewPricingResolver(rows)
-	for _, path := range files {
+	for _, path := range children {
 		sess, messages, parseErr := provider.parseSession(path, "local", false)
 		require.NoError(t, parseErr)
-		if sess.RelationshipType != RelFork && sess.RelationshipType != RelSubagent {
-			continue
-		}
 		for _, message := range messages {
 			totalOutput += message.OutputTokens
 			if len(message.TokenUsage) != 0 {
@@ -96,6 +95,20 @@ func TestCodexCapturedForkReplayTotals(t *testing.T) {
 	assert.Equal(t, money.Money{Microdollars: 15_403_799}, totalCost)
 }
 
+func capturedCodexForkChildren(t *testing.T, files []string) []string {
+	t.Helper()
+	var children []string
+	for _, sourcePath := range files {
+		data, err := os.ReadFile(sourcePath)
+		require.NoError(t, err)
+		firstLine, _, _ := strings.Cut(string(data), "\n")
+		if gjson.Get(firstLine, "payload.forked_from_id").Str != "" {
+			children = append(children, sourcePath)
+		}
+	}
+	return children
+}
+
 func TestCodexCapturedForkLineReplayTotals(t *testing.T) {
 	sourceRoot := os.Getenv("AGENTSVIEW_CODEX_REPLAY_ROOT")
 	if sourceRoot == "" {
@@ -106,7 +119,8 @@ func TestCodexCapturedForkLineReplayTotals(t *testing.T) {
 	require.Len(t, files, 6)
 
 	replayRoot := t.TempDir()
-	var children []string
+	children := capturedCodexForkChildren(t, files)
+	require.Len(t, children, 5)
 	for _, sourcePath := range files {
 		data, readErr := os.ReadFile(sourcePath)
 		require.NoError(t, readErr)
@@ -114,11 +128,8 @@ func TestCodexCapturedForkLineReplayTotals(t *testing.T) {
 		firstLine, _, _ := strings.Cut(string(data), "\n")
 		if gjson.Get(firstLine, "payload.forked_from_id").Str == "" {
 			require.NoError(t, os.WriteFile(targetPath, data, 0o600))
-			continue
 		}
-		children = append(children, sourcePath)
 	}
-	require.Len(t, children, 5)
 
 	provider := newCodexTestProvider(t, replayRoot)
 	var totalOutput int

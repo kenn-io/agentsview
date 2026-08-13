@@ -255,6 +255,7 @@ func (p *codexProvider) Parse(
 		EvictCodexSessionIndexForSession(path)
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
+	parentID, parentResolved := p.codexParentResolution(path)
 	sess, msgs, err := p.parseSession(path, machine, false)
 	if err != nil {
 		return ParseOutcome{}, err
@@ -271,14 +272,19 @@ func (p *codexProvider) Parse(
 	if req.Fingerprint.Hash != "" {
 		sess.File.Hash = req.Fingerprint.Hash
 	}
+	result := ParseResultOutcome{
+		Result: ParseResult{
+			Session:  *sess,
+			Messages: msgs,
+		},
+		DataVersion: DataVersionCurrent,
+	}
+	if parentID != "" && !parentResolved {
+		result.DataVersion = DataVersionNeedsRetry
+		result.RetryReason = "codex parent turns unresolved for " + parentID
+	}
 	return ParseOutcome{
-		Results: []ParseResultOutcome{{
-			Result: ParseResult{
-				Session:  *sess,
-				Messages: msgs,
-			},
-			DataVersion: DataVersionCurrent,
-		}},
+		Results:           []ParseResultOutcome{result},
 		ResultSetComplete: true,
 		// A requested full parse is the authoritative message set, so
 		// force-replace the stored rows; this remains distinct from the provider's
@@ -445,7 +451,7 @@ func (s codexSourceSet) DiscoverEach(
 				continue
 			}
 			for _, file := range discoverCodexS3(root) {
-				if err := yield(s3SourceRefFromDiscoveredFile(file)); err != nil {
+				if err := yield(s3SourceRefFromDiscoveredFile(root, file)); err != nil {
 					return err
 				}
 			}
@@ -499,7 +505,7 @@ func (s codexSourceSet) discover(
 				continue
 			}
 			for _, file := range discoverCodexS3(root) {
-				source := s3SourceRefFromDiscoveredFile(file)
+				source := s3SourceRefFromDiscoveredFile(root, file)
 				if _, ok := byKey[source.Key]; ok {
 					continue
 				}
