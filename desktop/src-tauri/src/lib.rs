@@ -59,10 +59,8 @@ const SHOW_MAIN_WINDOW_MENU_ID: &str = "show_main_window";
 const QUIT_FROM_STATUS_ITEM_MENU_ID: &str = "quit_from_status_item";
 const CLAUDE_AUTH_WINDOW_LABEL: &str = "claude-auth";
 const CLAUDE_AUTH_URL: &str = "https://claude.ai/login?return_url=%2Fnew";
-const CLAUDE_KEYCHAIN_SERVICE: &str = "io.agentsview.desktop";
-const CLAUDE_KEYCHAIN_ACCOUNT: &str = "claude-ai/default";
 const CLAUDE_BROWSER_FETCH_TIMEOUT: Duration = Duration::from_secs(45);
-const CLAUDE_BROWSER_RESPONSE_MAX_BYTES: usize = 16 * 1024 * 1024;
+const CLAUDE_BROWSER_RESPONSE_MAX_BYTES: usize = 32 * 1024 * 1024;
 // Delay after navigating to the backend before probing whether the
 // Linux WebKitGTK web content process is actually alive. Gives the
 // process time to spawn so we don't false-positive on slow startup.
@@ -241,6 +239,10 @@ pub fn run() {
                             err.to_string().as_str(),
                         );
                     } else {
+                        // Restore the isolated Claude profile in a hidden window so
+                        // scheduled syncs can run after an app restart. The watcher
+                        // makes it visible only when interactive sign-in is needed.
+                        start_claude_auth_background(app.handle().clone());
                         schedule_auto_update_check(app.handle().clone());
                     }
                 }
@@ -506,13 +508,11 @@ fn combined_preflight_output(stdout: &str, stderr: &str) -> Option<String> {
 fn init_navigation_guard_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     PluginBuilder::new("navigation-guard")
         .on_navigation(|webview, url| {
-            // The auth window may only load Claude-owned HTTPS pages. Native
-            // commands are never exposed to arbitrary identity-provider pages.
+            // The auth window may visit Claude plus selected identity providers.
+            // Only Claude origins receive the fetch-result command capability;
+            // identity-provider documents have no native IPC permissions.
             if webview.label() == CLAUDE_AUTH_WINDOW_LABEL {
-                return url.scheme() == "https"
-                    && url
-                        .host_str()
-                        .is_some_and(|host| host == "claude.ai" || host.ends_with(".claude.ai"));
+                return is_allowed_claude_auth_navigation(url);
             }
             let backend_port = webview
                 .app_handle()
@@ -563,6 +563,23 @@ fn is_allowed_navigation_url(url: &Url, backend_port: Option<u16>) -> bool {
     false
 }
 
+fn is_allowed_claude_auth_navigation(url: &Url) -> bool {
+    if url.scheme() != "https" {
+        return false;
+    }
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    host == "claude.ai"
+        || host.ends_with(".claude.ai")
+        || matches!(
+            host,
+            "accounts.google.com" | "login.microsoftonline.com" | "appleid.apple.com"
+        )
+        || host.ends_with(".okta.com")
+        || host.ends_with(".auth0.com")
+}
+
 fn claude_auth_profile_dir(handle: &AppHandle) -> Result<PathBuf, String> {
     let directory = handle
         .path()
@@ -578,6 +595,31 @@ fn claude_auth_profile_dir(handle: &AppHandle) -> Result<PathBuf, String> {
     Ok(directory)
 }
 
+fn create_claude_auth_window(handle: &AppHandle, visible: bool) -> Result<WebviewWindow, String> {
+    let profile_dir = claude_auth_profile_dir(handle)?;
+    let url = Url::parse(CLAUDE_AUTH_URL).map_err(|err| err.to_string())?;
+    WebviewWindowBuilder::new(handle, CLAUDE_AUTH_WINDOW_LABEL, WebviewUrl::External(url))
+        .title("Connect Claude.ai to AgentsView")
+        .inner_size(1100.0, 800.0)
+        .min_inner_size(800.0, 600.0)
+        .visible(visible)
+        .data_directory(profile_dir)
+        .build()
+        .map_err(|err| format!("could not open the Claude sign-in window: {err}"))
+}
+
+fn start_claude_auth_background(handle: AppHandle) {
+    if handle
+        .get_webview_window(CLAUDE_AUTH_WINDOW_LABEL)
+        .is_some()
+    {
+        return;
+    }
+    if create_claude_auth_window(&handle, false).is_ok() {
+        start_claude_auth_watcher(handle);
+    }
+}
+
 #[tauri::command]
 fn claude_auth_start(handle: AppHandle) -> Result<ClaudeAuthStatus, String> {
     if let Some(window) = handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
@@ -585,47 +627,16 @@ fn claude_auth_start(handle: AppHandle) -> Result<ClaudeAuthStatus, String> {
         window.set_focus().map_err(|err| err.to_string())?;
         return Ok(ClaudeAuthStatus {
             connected: handle.state::<ClaudeAuthState>().connected_this_launch.load(Ordering::SeqCst),
-            message: "Claude sign-in is already open. AgentsView will capture the session automatically once sign-in completes.".into(),
+            message: "Claude sign-in is already open. AgentsView will verify the session automatically once sign-in completes.".into(),
         });
     }
 
-    let profile_dir = claude_auth_profile_dir(&handle)?;
-    let url = Url::parse(CLAUDE_AUTH_URL).map_err(|err| err.to_string())?;
-    WebviewWindowBuilder::new(&handle, CLAUDE_AUTH_WINDOW_LABEL, WebviewUrl::External(url))
-        .title("Connect Claude.ai to AgentsView")
-        .inner_size(1100.0, 800.0)
-        .min_inner_size(800.0, 600.0)
-        .data_directory(profile_dir)
-        .build()
-        .map_err(|err| format!("could not open the Claude sign-in window: {err}"))?;
+    create_claude_auth_window(&handle, true)?;
     start_claude_auth_watcher(handle.clone());
-
     Ok(ClaudeAuthStatus {
         connected: false,
-        message: "Sign in to Claude in the separate window. AgentsView will capture the session automatically.".into(),
+        message: "Sign in to Claude in the separate window. AgentsView will verify the session automatically.".into(),
     })
-}
-
-fn claude_session_cookie_header(handle: &AppHandle) -> Result<String, String> {
-    let window = handle
-        .get_webview_window(CLAUDE_AUTH_WINDOW_LABEL)
-        .ok_or_else(|| "Claude sign-in window was closed.".to_string())?;
-    let url = Url::parse("https://claude.ai/").map_err(|err| err.to_string())?;
-    let cookies = window
-        .cookies_for_url(url)
-        .map_err(|err| format!("could not read the Claude session: {err}"))?;
-    let has_session = cookies.iter().any(|cookie| cookie.name() == "sessionKey");
-    let has_org = cookies
-        .iter()
-        .any(|cookie| cookie.name() == "lastActiveOrg");
-    if !has_session || !has_org {
-        return Err("Claude is not signed in yet.".into());
-    }
-    Ok(cookies
-        .iter()
-        .map(|cookie| format!("{}={}", cookie.name(), cookie.value()))
-        .collect::<Vec<_>>()
-        .join("; "))
 }
 
 fn loopback_auth_token(handle: &AppHandle) -> Option<String> {
@@ -639,11 +650,15 @@ fn loopback_auth_token(handle: &AppHandle) -> Option<String> {
     })
 }
 
+struct LoopbackResponse {
+    body: String,
+}
+
 fn claude_loopback_post(
     handle: &AppHandle,
     path: &str,
     payload: serde_json::Value,
-) -> Result<serde_json::Value, String> {
+) -> Result<LoopbackResponse, String> {
     let port = handle
         .state::<SidecarState>()
         .backend_port
@@ -668,16 +683,28 @@ fn claude_loopback_post(
     stream
         .read_to_string(&mut response)
         .map_err(|err| err.to_string())?;
-    let (head, raw) = response
+    parse_loopback_response(&response)
+}
+
+fn parse_loopback_response(response: &str) -> Result<LoopbackResponse, String> {
+    let (head, body) = response
         .split_once("\r\n\r\n")
         .ok_or_else(|| "invalid local backend response".to_string())?;
-    if !head.contains(" 200 ") {
+    let status = head
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|status| status.parse::<u16>().ok())
+        .ok_or_else(|| "invalid local backend status".to_string())?;
+    if !(200..300).contains(&status) {
         return Err(format!(
             "local backend request failed: {}",
             head.lines().next().unwrap_or("unknown")
         ));
     }
-    serde_json::from_str(raw).map_err(|err| format!("decode local backend response: {err}"))
+    Ok(LoopbackResponse {
+        body: body.to_string(),
+    })
 }
 
 fn loopback_http_request(path: &str, port: u16, body_len: usize, token: Option<&str>) -> String {
@@ -705,13 +732,16 @@ fn start_claude_transport_worker(handle: AppHandle) {
             "/api/v1/cloud/transport/claim",
             serde_json::json!({}),
         ) {
-            Ok(value) => value,
+            Ok(response) => response,
             Err(_) => {
                 thread::sleep(Duration::from_millis(250));
                 continue;
             }
         };
-        let Ok(request) = serde_json::from_value::<ClaudeTransportRequest>(claimed) else {
+        let Ok(request) = serde_json::from_str::<ClaudeTransportRequest>(&claimed.body) else {
+            // A successful claim with an unusable body cannot represent work.
+            // Back off to avoid a tight local loop while the daemon is restarting.
+            thread::sleep(Duration::from_millis(250));
             continue;
         };
         if request.id.is_empty() {
@@ -726,7 +756,12 @@ fn start_claude_transport_worker(handle: AppHandle) {
                 serde_json::json!({"id":request.id,"lease":request.lease,"status":0,"body":null,"error":error})
             }
         };
-        let _ = claude_loopback_post(&handle, "/api/v1/cloud/transport/result", payload);
+        if let Err(err) = claude_loopback_post(&handle, "/api/v1/cloud/transport/result", payload) {
+            // Never include browser response bodies or credentials in diagnostics.
+            // This is intentionally visible: a failed completion otherwise leaves
+            // the Go broker waiting for its lease to expire with no useful signal.
+            eprintln!("[agentsview] Claude transport result delivery failed: {err}");
+        }
     });
 }
 
@@ -734,44 +769,75 @@ fn claude_execute_transport_request(
     handle: &AppHandle,
     request: &ClaudeTransportRequest,
 ) -> Result<ClaudeBrowserResponse, String> {
+    let path = validate_claude_transport_request(handle, request)?;
+    claude_browser_fetch(handle, &path)
+}
+
+fn validate_claude_transport_request(
+    handle: &AppHandle,
+    request: &ClaudeTransportRequest,
+) -> Result<String, String> {
     if request.provider != "claude-ai" {
         return Err("unsupported cloud provider".into());
     }
-    let cookie_header = claude_session_cookie_header(handle)?;
-    let org = cookie_header
-        .split(';')
-        .map(str::trim)
-        .find_map(|cookie| cookie.strip_prefix("lastActiveOrg="))
-        .ok_or_else(|| "Claude organisation was not found in the browser session".to_string())?;
-    let path = match request.operation.as_str() {
+    let organization = claude_session_organization(handle)?;
+    match request.operation.as_str() {
         "list_conversations" => {
             let offset = request
                 .params
                 .get("offset")
-                .and_then(serde_json::Value::as_u64)
-                .ok_or_else(|| "invalid Claude list offset".to_string())?;
+                .and_then(serde_json::Value::as_u64);
             let limit = request
                 .params
                 .get("limit")
-                .and_then(serde_json::Value::as_u64)
-                .filter(|limit| *limit > 0 && *limit <= 100)
-                .ok_or_else(|| "invalid Claude list limit".to_string())?;
-            format!("/api/organizations/{org}/chat_conversations_v2?limit={limit}&offset={offset}&starred=false&consistency=eventual")
+                .and_then(serde_json::Value::as_u64);
+            if offset.is_none() || !matches!(limit, Some(1..=100)) {
+                return Err("invalid Claude list request".into());
+            }
+            Ok(format!("/api/organizations/{organization}/chat_conversations_v2?limit={}&offset={}&starred=false&consistency=eventual", limit.unwrap(), offset.unwrap()))
         }
         "get_conversation" => {
             let id = request
                 .params
                 .get("conversation_id")
-                .and_then(serde_json::Value::as_str)
-                .filter(|id| {
-                    id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-                })
-                .ok_or_else(|| "invalid Claude conversation id".to_string())?;
-            format!("/api/organizations/{org}/chat_conversations/{id}?tree=True&rendering_mode=messages&consistency=strong")
+                .and_then(serde_json::Value::as_str);
+            if !id.is_some_and(valid_claude_identifier) {
+                return Err("invalid Claude conversation id".into());
+            }
+            Ok(format!("/api/organizations/{organization}/chat_conversations/{}?tree=True&rendering_mode=messages&consistency=strong", id.unwrap()))
         }
-        _ => return Err("unsupported Claude transport operation".into()),
-    };
-    claude_browser_fetch(handle, &path)
+        _ => Err("unsupported Claude transport operation".into()),
+    }
+}
+
+fn valid_claude_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+}
+
+// Read only session markers required to verify sign-in and scope the typed API
+// operation. They stay inside this process and are never persisted or logged.
+fn claude_session_organization(handle: &AppHandle) -> Result<String, String> {
+    let window = handle
+        .get_webview_window(CLAUDE_AUTH_WINDOW_LABEL)
+        .ok_or_else(|| "Claude sign-in window was closed.".to_string())?;
+    let url = Url::parse("https://claude.ai/").map_err(|err| err.to_string())?;
+    let cookies = window
+        .cookies_for_url(url)
+        .map_err(|err| format!("could not inspect Claude sign-in state: {err}"))?;
+    let signed_in = cookies.iter().any(|cookie| cookie.name() == "sessionKey");
+    let organization = cookies
+        .iter()
+        .find(|cookie| cookie.name() == "lastActiveOrg")
+        .map(|cookie| cookie.value().to_string())
+        .filter(|value| valid_claude_identifier(value));
+    if !signed_in || organization.is_none() {
+        return Err("Claude is not signed in yet.".into());
+    }
+    Ok(organization.expect("checked above"))
 }
 
 fn claude_browser_fetch(handle: &AppHandle, path: &str) -> Result<ClaudeBrowserResponse, String> {
@@ -853,6 +919,22 @@ fn claude_auth_fetch_result(
         return Err("Claude browser response came from an unexpected origin".into());
     }
     if payload.body.len() > CLAUDE_BROWSER_RESPONSE_MAX_BYTES {
+        let mut pending = state
+            .pending_browser_request
+            .lock()
+            .map_err(|_| "Claude browser request lock failed")?;
+        if pending
+            .as_ref()
+            .is_some_and(|request| request.id == payload.request_id)
+        {
+            let request = pending.take().expect("checked above");
+            let _ = request.response.send(ClaudeBrowserResponse {
+                status: 0,
+                body: String::new(),
+                error: Some("Claude browser response exceeded the 32 MiB safety limit".into()),
+                retry_after: None,
+            });
+        }
         return Err("Claude browser response was too large".into());
     }
     let mut pending = state
@@ -877,36 +959,16 @@ fn claude_auth_fetch_result(
         .map_err(|_| "Claude browser request was cancelled".into())
 }
 
-fn store_claude_session(handle: &AppHandle) -> Result<(), String> {
-    let cookie_header = claude_session_cookie_header(handle)?;
-    let entry = keyring::Entry::new(CLAUDE_KEYCHAIN_SERVICE, CLAUDE_KEYCHAIN_ACCOUNT)
-        .map_err(|err| format!("could not access the system credential store: {err}"))?;
-    entry.set_password(&cookie_header).map_err(|err| {
-        format!("could not save the Claude session in the system credential store: {err}")
-    })
-}
-
-fn delete_claude_session() -> Result<(), String> {
-    let entry = keyring::Entry::new(CLAUDE_KEYCHAIN_SERVICE, CLAUDE_KEYCHAIN_ACCOUNT)
-        .map_err(|err| format!("could not access the system credential store: {err}"))?;
-    match entry.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(err) => Err(format!(
-            "could not remove the Claude session from the system credential store: {err}"
-        )),
-    }
-}
-
 fn start_claude_auth_watcher(handle: AppHandle) {
     thread::spawn(move || {
-        // Cookie writes can lag the final Claude redirect. Poll only while this
-        // dedicated sign-in window exists, and stop after ten minutes.
+        // Poll only while this dedicated sign-in window exists, and stop after
+        // ten minutes. Session state is read ephemerally from WebKit only.
         for _ in 0..600 {
             thread::sleep(Duration::from_secs(1));
-            if store_claude_session(&handle).is_err() {
+            let authenticated = claude_session_organization(&handle).is_ok();
+            if !authenticated {
                 continue;
             }
-
             handle
                 .state::<ClaudeAuthState>()
                 .connected_this_launch
@@ -927,17 +989,19 @@ fn claude_auth_disconnect(handle: AppHandle) -> Result<ClaudeAuthStatus, String>
     if let Some(window) = handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
         window.close().map_err(|err| err.to_string())?;
     }
-    delete_claude_session()?;
     let profile_dir = claude_auth_profile_dir(&handle)?;
-    fs::remove_dir_all(&profile_dir)
-        .map_err(|err| format!("could not remove the Claude login profile: {err}"))?;
+    if profile_dir.exists() {
+        fs::remove_dir_all(&profile_dir)
+            .map_err(|err| format!("could not remove the Claude login profile: {err}"))?;
+    }
     handle
         .state::<ClaudeAuthState>()
         .connected_this_launch
         .store(false, Ordering::SeqCst);
     Ok(ClaudeAuthStatus {
         connected: false,
-        message: "Claude has been disconnected and its saved session was removed.".into(),
+        message: "Claude has been disconnected and its isolated browser session was removed."
+            .into(),
     })
 }
 
@@ -950,7 +1014,7 @@ fn claude_auth_status(handle: AppHandle) -> ClaudeAuthStatus {
     ClaudeAuthStatus {
         connected,
         message: if connected {
-            "Claude session is saved securely on this device.".into()
+            "Claude session is held in an isolated browser profile on this device.".into()
         } else {
             "Not connected.".into()
         },
@@ -3512,6 +3576,31 @@ mod tests {
         assert!(request.contains("Origin: http://127.0.0.1:18080\r\n"));
         assert!(request.contains("Authorization: Bearer secret\r\n"));
         assert!(!request.contains("token="));
+    }
+
+    #[test]
+    fn loopback_response_accepts_empty_204_completion() {
+        let response =
+            parse_loopback_response("HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+                .expect("204 response must complete transport work");
+        assert!(response.body.is_empty());
+    }
+
+    #[test]
+    fn loopback_response_rejects_non_success_status() {
+        assert!(parse_loopback_response("HTTP/1.1 401 Unauthorized\r\n\r\n{}").is_err());
+    }
+
+    #[test]
+    fn claude_browser_response_limit_allows_large_conversation_payloads() {
+        assert!(CLAUDE_BROWSER_RESPONSE_MAX_BYTES >= 32 * 1024 * 1024);
+    }
+
+    #[test]
+    fn claude_identifier_validation_is_allow_listed() {
+        assert!(valid_claude_identifier("abc-123"));
+        assert!(!valid_claude_identifier("../secret"));
+        assert!(!valid_claude_identifier("abc\n123"));
     }
 
     #[test]

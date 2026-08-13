@@ -54,23 +54,30 @@ type ftsSuspender interface {
 // (no message work happened), restore() is a no-op. This
 // avoids the expensive FTS rebuild when re-importing an
 // unchanged archive.
-type lazyFTS struct {
+// LazyFTS suspends FTS maintenance across one or more imports. Cloud syncs
+// reuse one instance across pages so the index is rebuilt once per job.
+type LazyFTS struct {
 	sus        ftsSuspender
 	dropped    bool
 	onIndexing func()
 }
 
-func newLazyFTS(
+func NewLazyFTS(
 	store db.Store, onIndexing func(),
-) *lazyFTS {
+) *LazyFTS {
 	s, ok := store.(ftsSuspender)
 	if !ok || !store.HasFTS() {
 		return nil
 	}
-	return &lazyFTS{sus: s, onIndexing: onIndexing}
+	return &LazyFTS{sus: s, onIndexing: onIndexing}
 }
 
-func (f *lazyFTS) suspend() {
+// newLazyFTS is retained for package-local callers and tests.
+func newLazyFTS(store db.Store, onIndexing func()) *LazyFTS {
+	return NewLazyFTS(store, onIndexing)
+}
+
+func (f *LazyFTS) suspend() {
 	if f == nil || f.dropped {
 		return
 	}
@@ -81,7 +88,7 @@ func (f *lazyFTS) suspend() {
 	f.dropped = true
 }
 
-func (f *lazyFTS) restore() error {
+func (f *LazyFTS) Restore() error {
 	if f == nil || !f.dropped {
 		return nil
 	}
@@ -91,6 +98,7 @@ func (f *lazyFTS) restore() error {
 	if err := f.sus.RebuildFTS(); err != nil {
 		return fmt.Errorf("rebuilding FTS index: %w", err)
 	}
+	f.dropped = false
 	return nil
 }
 
@@ -106,13 +114,48 @@ func ImportClaudeAI(
 	cb *ImportCallbacks,
 	machine ...string,
 ) (stats ImportStats, retErr error) {
-	fts := newLazyFTS(store, cb.indexing)
+	fts := NewLazyFTS(store, cb.indexing)
 	defer func() {
-		if err := fts.restore(); err != nil {
+		if err := fts.Restore(); err != nil {
 			retErr = errors.Join(retErr, err)
 		}
 	}()
+	return importClaudeAIWithFTS(ctx, store, r, cb, fts, machine...)
+}
 
+// ImportClaudeAIWithFTS imports a batch while sharing an FTS suspension with
+// its caller. The caller must call Restore after its complete import job.
+func ImportClaudeAIWithFTS(
+	ctx context.Context,
+	store db.Store,
+	r io.Reader,
+	cb *ImportCallbacks,
+	fts *LazyFTS,
+	machine ...string,
+) (stats ImportStats, retErr error) {
+	if fts == nil {
+		var onIndexing func()
+		if cb != nil {
+			onIndexing = cb.indexing
+		}
+		fts = NewLazyFTS(store, onIndexing)
+		defer func() {
+			if err := fts.Restore(); err != nil {
+				retErr = errors.Join(retErr, err)
+			}
+		}()
+	}
+	return importClaudeAIWithFTS(ctx, store, r, cb, fts, machine...)
+}
+
+func importClaudeAIWithFTS(
+	ctx context.Context,
+	store db.Store,
+	r io.Reader,
+	cb *ImportCallbacks,
+	fts *LazyFTS,
+	machine ...string,
+) (stats ImportStats, retErr error) {
 	provider, ok := parser.NewProvider(
 		parser.AgentClaudeAI, parser.ProviderConfig{},
 	)
@@ -178,7 +221,7 @@ func upsertConversation(
 	ctx context.Context,
 	store db.Store,
 	result parser.ParseResult,
-	fts *lazyFTS,
+	fts *LazyFTS,
 ) (importStatus, error) {
 	s := result.Session
 
@@ -292,9 +335,9 @@ func ImportChatGPT(
 	cb *ImportCallbacks,
 	machine ...string,
 ) (stats ImportStats, retErr error) {
-	fts := newLazyFTS(store, cb.indexing)
+	fts := NewLazyFTS(store, cb.indexing)
 	defer func() {
-		if err := fts.restore(); err != nil {
+		if err := fts.Restore(); err != nil {
 			retErr = errors.Join(retErr, err)
 		}
 	}()

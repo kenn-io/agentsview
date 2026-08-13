@@ -84,7 +84,6 @@
       await new Promise((resolve) => setTimeout(resolve, 500));
       await refreshSync();
     }
-    status = { ...status, message: `Claude sync ${sync.status}: scanned ${sync.scanned}, changed ${sync.changed}, imported ${sync.imported + sync.updated}, skipped ${sync.skipped}, failed ${sync.failed}.` };
     if (sync.error) error = sync.error;
   }
 
@@ -127,6 +126,9 @@
     busy = true;
     error = "";
     try {
+      if (command === "claude_auth_disconnect" && schedule.enabled) {
+        schedule = await configureClaudeAISchedule({ ...schedule, enabled: false });
+      }
       status = await invoke<ClaudeAuthStatus>(command);
       if (command === "claude_auth_start" && !status.connected) startPolling();
       if (status.connected || command === "claude_auth_disconnect") stopPolling();
@@ -158,8 +160,8 @@
       <span>{status.connected ? "Connected" : "Not connected"}</span>
     </div>
     <p>
-      Sign in through an isolated Claude.ai window. Your session is saved in the
-      system credential store and is never shown here.
+      Sign in through an isolated Claude.ai window. Its browser session stays in
+      that profile and is never shown here.
     </p>
     {#if !isDesktop}
       <p class="connection-note">Claude connection is available in the AgentsView desktop app.</p>

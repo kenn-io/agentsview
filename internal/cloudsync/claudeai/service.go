@@ -138,6 +138,9 @@ func (s *Service) Status() JobStatus { s.mu.Lock(); defer s.mu.Unlock(); return 
 var ErrSyncAlreadyRunning = errors.New("Claude sync already running")
 
 func (s *Service) Start(ctx context.Context, mode SyncMode) (JobStatus, error) {
+	if s.store != nil && s.store.ReadOnly() {
+		return JobStatus{}, errors.New("cloud import not available in read-only mode")
+	}
 	if mode != SyncIncremental && mode != SyncRepair {
 		return JobStatus{}, fmt.Errorf("unsupported Claude sync mode %q", mode)
 	}
@@ -208,6 +211,12 @@ func (s *Service) run(ctx context.Context) {
 		}
 	}()
 	seen := map[string]struct{}{}
+	fts := importer.NewLazyFTS(s.store, nil)
+	defer func() {
+		if err := fts.Restore(); err != nil {
+			s.fail(err)
+		}
+	}()
 	for offset := 0; ; {
 		response, err := s.request(ctx, OperationListConversations, ListParams{Offset: offset, Limit: 50})
 		if err != nil {
@@ -278,7 +287,7 @@ func (s *Service) run(ctx context.Context) {
 			s.update(func(st *JobStatus) { st.Fetched++ })
 		}
 		if len(batch) > 0 {
-			if err := s.importBatch(ctx, batch, s.Status().Mode == SyncRepair); err != nil {
+			if err := s.importBatch(ctx, batch, s.Status().Mode == SyncRepair, fts); err != nil {
 				s.fail(err)
 				return
 			}
@@ -320,7 +329,7 @@ func (s *Service) request(ctx context.Context, operation string, params any) (tr
 	}
 	panic("unreachable")
 }
-func (s *Service) importBatch(ctx context.Context, conversations []BrowserConversation, repair bool) error {
+func (s *Service) importBatch(ctx context.Context, conversations []BrowserConversation, repair bool, fts *importer.LazyFTS) error {
 	return s.withArchiveWrite(func() error {
 		prepared, err := PrepareBrowserImportWithForce(s.cacheRoot, conversations, repair)
 		if err != nil {
@@ -339,7 +348,7 @@ func (s *Service) importBatch(ctx context.Context, conversations []BrowserConver
 				return err
 			}
 		}
-		stats, err := importer.ImportClaudeAI(ctx, s.store, bytes.NewReader(prepared.ExportJSON), nil, s.machine)
+		stats, err := importer.ImportClaudeAIWithFTS(ctx, s.store, bytes.NewReader(prepared.ExportJSON), nil, fts, s.machine)
 		if err != nil {
 			return err
 		}

@@ -20,7 +20,6 @@ tauri-plugin-updater = "2.3.1"
 tauri-plugin-dialog = "2.3.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 tempfile = "3"
 tokio = { version = "1", features = ["time", "sync"] }
 

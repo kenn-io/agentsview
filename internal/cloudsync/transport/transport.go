@@ -16,7 +16,10 @@ import (
 
 var ErrUnavailable = errors.New("authenticated transport unavailable")
 
-var leaseTimeout = 45 * time.Second
+// The adapter allows a browser fetch up to 45 seconds, then still needs time
+// to deliver its result over loopback. Keep the broker lease comfortably longer
+// so a valid response cannot be reissued mid-delivery.
+var leaseTimeout = 75 * time.Second
 
 type Request struct {
 	ID        string          `json:"id"`
@@ -106,18 +109,21 @@ func (b *Broker) Claim(ctx context.Context) (Request, error) {
 }
 
 func (b *Broker) Complete(response Response) error {
+	// Lookup, lease validation, and timer cancellation must be atomic. Otherwise
+	// an expiry callback can requeue the same request between validation and send.
 	b.mu.Lock()
 	p, ok := b.pending[response.ID]
-	b.mu.Unlock()
 	if !ok {
+		b.mu.Unlock()
 		return errors.New("unknown or expired transport request")
 	}
 	if response.Lease == "" || response.Lease != p.request.Lease {
+		b.mu.Unlock()
 		return errors.New("invalid transport request lease")
 	}
-	b.mu.Lock()
 	if p.timer != nil {
 		p.timer.Stop()
+		p.timer = nil
 	}
 	b.mu.Unlock()
 	select {

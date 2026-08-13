@@ -41,6 +41,19 @@ func TestServiceStartReturnsRunningJobIdempotently(t *testing.T) {
 	assert.Equal(t, "running", attached.Status)
 }
 
+func TestServiceRejectsReadOnlyStore(t *testing.T) {
+	writable := serviceTestDB(t)
+	path := writable.Path()
+	require.NoError(t, writable.Close())
+	readonly, err := db.OpenReadOnly(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, readonly.Close()) })
+	service := NewService(transport.NewBroker(), readonly, t.TempDir(), "local")
+	t.Cleanup(service.Close)
+	_, err = service.Start(context.Background(), SyncIncremental)
+	require.EqualError(t, err, "cloud import not available in read-only mode")
+}
+
 func TestServiceRunsBeyondStartRequestContext(t *testing.T) {
 	t.Parallel()
 	broker := transport.NewBroker()
