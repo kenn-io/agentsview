@@ -15164,6 +15164,64 @@ func TestSyncAllPersistsClaudeStatDigestAcrossEngineRestart(t *testing.T) {
 		"fresh engine must skip the unchanged transcript")
 }
 
+// A path-rewritten (remote import) engine must not stamp stat digests for
+// content-authority providers (Claude, Codex family): each import
+// materializes a fresh physical file whose mtime is copied from the
+// remote and whose ctime comes from the import clock, so a same-stat
+// different-content re-download can collide with a stored digest inside
+// one coarse filesystem timestamp tick and skip a real rewrite. With no
+// digest row, the content hash always arbitrates remote freshness.
+func TestPathRewriterEngineDoesNotStampCodexStatDigest(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	database := dbtest.OpenTestDB(t)
+	root := filepath.Join(t.TempDir(), "sessions")
+	const (
+		uuid       = "019eb791-cf7d-75c1-8439-9ed74c1229f7"
+		remoteRoot = "/home/test/.codex/sessions"
+	)
+	relPath := filepath.Join(
+		"2024", "01", "01",
+		"rollout-2024-01-01T10-00-00-"+uuid+".jsonl",
+	)
+	path := filepath.Join(root, relPath)
+	content := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/tmp/proj", "codex_cli_rs").
+		AddCodexMessage(tsEarlyS1, "user", "remote request").
+		String()
+	dbtest.WriteTestFile(t, path, []byte(content))
+
+	logicalPath := "host:" + filepath.ToSlash(
+		filepath.Join(remoteRoot, relPath),
+	)
+	rewriter := func(p string) string {
+		rel, relErr := filepath.Rel(root, p)
+		if relErr == nil && !strings.HasPrefix(rel, "..") {
+			return "host:" + filepath.ToSlash(filepath.Join(remoteRoot, rel))
+		}
+		return "host:" + filepath.ToSlash(p)
+	}
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
+		Machine:   "host", IDPrefix: "host~", PathRewriter: rewriter,
+		Ephemeral: true,
+	})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+
+	for _, key := range []string{logicalPath, path} {
+		_, ok, err := database.GetProviderStatHash(
+			t.Context(), parser.AgentCodex, key,
+		)
+		require.NoError(t, err)
+		assert.False(t, ok,
+			"a path-rewritten import must not stamp a stat digest under "+
+				"%q: materialized stats cannot prove a re-download "+
+				"unchanged, only the content hash can", key)
+	}
+}
+
 // A Claude row that predates the stat-digest side-table (no
 // provider_freshness row) is confirmed unchanged by the content-verified
 // single-session skip. That skip must backfill the digest so the next

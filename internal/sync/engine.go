@@ -8667,8 +8667,14 @@ func (e *Engine) processProviderFile(
 	// snapshot feeds the warm-match comparison in
 	// providerSourceFreshBeforeFingerprint, the confirmed-unchanged-skip
 	// stamp, and the write-path staging, so all three always agree.
+	//
+	// providerStatDigestEligible withholds the capture for
+	// content-authority providers under a pathRewriter: materialized
+	// remote stats cannot prove a re-download unchanged, so their remote
+	// freshness stays content-hash arbitrated.
 	var preParseStatHash *pendingProviderStatHash
-	if hasher, ok := e.providerStatHashers[file.Agent]; ok {
+	if hasher, ok := e.providerStatHashers[file.Agent]; ok &&
+		e.providerStatDigestEligible(file.Agent) {
 		if physicalPath := providerDiscoveredPath(source); physicalPath != "" {
 			targetKey := physicalPath
 			if e.pathRewriter != nil {
@@ -9527,12 +9533,12 @@ func (e *Engine) applyProviderFilePathPolicies(
 		// veto, a failed upsert, or a parser-skipped session all bypass
 		// the persist call and keep the side-table clean.
 		// Fallback staging for results that bypassed processProviderFile's
-		// pre-parse capture (res.providerStatHash == nil). Today only
-		// Codebuff/Freebuff register a MultiFileStatHasher and their
-		// provider-authoritative path always captures, so this recomputes
-		// post-parse only for hypothetical non-processProviderFile
-		// producers; it is not the hot path.
-		if res.providerStatHash == nil {
+		// pre-parse capture (res.providerStatHash == nil), applying the
+		// same digest-eligibility rule so a path-rewritten import of a
+		// content-authority provider never re-stages what the pre-parse
+		// site deliberately withheld.
+		if res.providerStatHash == nil &&
+			e.providerStatDigestEligible(agent) {
 			if hasher, ok := e.providerStatHashers[agent]; ok {
 				targetKey := filePath
 				if e.pathRewriter != nil {
@@ -10529,6 +10535,26 @@ func providerStatFreshnessMtime(
 	default:
 		return chatInfo.ModTime().UnixNano()
 	}
+}
+
+// providerStatDigestEligible reports whether this engine may stage,
+// stamp, or consult a provider_freshness stat digest for the agent. The
+// content-hashing single-file JSONL providers (Claude, Codex family) are
+// ineligible under a pathRewriter: a remote import materializes a fresh
+// physical file whose mtime is copied from the remote and whose ctime is
+// the import clock, so a same-stat different-content re-download can
+// collide with a stored digest inside one coarse filesystem timestamp
+// tick and skip a real rewrite. Their remote freshness stays
+// content-hash arbitrated, matching the pathRewriter carve-outs in
+// providerIncrementalIdentityChanged. Codebuff stays eligible
+// everywhere: its remote flow deliberately stamps the per-component
+// composite under the logical key (see
+// TestSyncCodebuffProviderStatHashRemoteStoresUnderLogicalKey).
+func (e *Engine) providerStatDigestEligible(agent parser.AgentType) bool {
+	if e.pathRewriter == nil {
+		return true
+	}
+	return agent != parser.AgentClaude && !isCodexFormatAgent(agent)
 }
 
 // providerFreshnessAgents returns the stored-agent labels a provider's

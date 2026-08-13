@@ -634,7 +634,7 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 	t.Run("custom_tool_call_output for a stored call requests full parse", func(t *testing.T) {
 		line := `{"timestamp":"2026-07-08T03:20:43.376Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_abc","output":"Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess."}}`
 
-		b := newCodexSessionBuilder(false)
+		b := newCodexSessionBuilder(false, nil)
 		assert.True(t,
 			b.incrementalOutputNeedsFullParse(gjson.Get(line, "payload")))
 	})
