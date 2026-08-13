@@ -8657,16 +8657,35 @@ func (e *Engine) processProviderFile(
 		source.ProjectHint = file.Project
 	}
 
+	verifiedCapture, verifiedMtime, verifiedFresh, verifiedStateOK :=
+		e.verifiedProviderSourceState(provider, source, file)
+	if verifiedStateOK && verifiedFresh {
+		if e.verifiedProviderSourceFreshInDB(
+			verifiedCapture.key.agent, source,
+			verifiedCapture.signature.size, verifiedMtime,
+		) {
+			return processResult{
+				skip:  true,
+				mtime: verifiedMtime,
+			}, true
+		}
+		e.invalidateVerifiedSource(
+			verifiedCapture.key.agent, verifiedCapture.key.path,
+		)
+	}
+
 	// Capture the per-component stat digest from the same pre-parse
 	// snapshot that gates freshness, BEFORE fingerprinting or parsing
-	// reads the source. Persisting a digest computed after the parse
-	// would race a concurrent companion rewrite: the stored digest would
-	// describe the new file state while the session row holds the old
-	// parse payload, so every later warm sync would short-circuit on the
-	// new digest and the stale row would never be refreshed. This single
-	// snapshot feeds the warm-match comparison in
-	// providerSourceFreshBeforeFingerprint, the confirmed-unchanged-skip
-	// stamp, and the write-path staging, so all three always agree.
+	// reads the source. The in-memory verified-source gate runs first so
+	// a warm engine does not pay for a second stat snapshot it will never
+	// consult. Persisting a digest computed after the parse would race a
+	// concurrent companion rewrite: the stored digest would describe the
+	// new file state while the session row holds the old parse payload,
+	// so every later warm sync would short-circuit on the new digest and
+	// the stale row would never be refreshed. This single snapshot feeds
+	// the warm-match comparison in providerSourceFreshBeforeFingerprint,
+	// the confirmed-unchanged-skip stamp, and the write-path staging, so
+	// all three always agree.
 	//
 	// providerStatDigestEligible withholds the capture for
 	// content-authority providers under a pathRewriter: materialized
@@ -8689,23 +8708,6 @@ func (e *Engine) processProviderFile(
 		}
 	}
 
-	verifiedCapture, verifiedMtime, verifiedFresh, verifiedStateOK :=
-		e.verifiedProviderSourceState(provider, source, file)
-	if verifiedStateOK && verifiedFresh {
-		if e.verifiedProviderSourceFreshInDB(
-			verifiedCapture.key.agent, source,
-			verifiedCapture.signature.size, verifiedMtime,
-		) {
-			return processResult{
-				skip:  true,
-				mtime: verifiedMtime,
-			}, true
-		}
-		e.invalidateVerifiedSource(
-			verifiedCapture.key.agent, verifiedCapture.key.path,
-		)
-	}
-
 	// Persisted stat-digest skip. This runs before the single-session
 	// content guard below on purpose: a matching digest (size, mtime,
 	// ctime per component) plus a current stored row proves the source
@@ -8718,6 +8720,9 @@ func (e *Engine) processProviderFile(
 	if freshMtime, fresh := e.providerSourceFreshBeforeFingerprint(
 		ctx, source, file, preParseStatHash,
 	); fresh {
+		if verifiedStateOK {
+			e.promoteVerifiedSource(verifiedCapture)
+		}
 		return processResult{
 			skip:  true,
 			mtime: freshMtime,
