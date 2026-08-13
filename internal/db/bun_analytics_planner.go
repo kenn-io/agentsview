@@ -49,6 +49,7 @@ func (s *BunStore) bunAnalyticsTopSessionsFrom(
 	messageCount := "session.message_count"
 	outputTokens := "session.total_output_tokens"
 	hasOutputTokens := "session.has_total_output_tokens"
+	hasOutputTokensPredicate := hasOutputTokens + " = TRUE"
 	if strings.TrimSpace(f.Model) != "" {
 		ctes = append(ctes, BunCTEFragment{
 			Name: "analytics_top_message_stats",
@@ -66,6 +67,7 @@ func (s *BunStore) bunAnalyticsTopSessionsFrom(
 		messageCount = "message_stats.message_count"
 		outputTokens = "message_stats.output_tokens"
 		hasOutputTokens = "message_stats.has_output_tokens"
+		hasOutputTokensPredicate = hasOutputTokens + " != 0"
 	}
 
 	messageTimestamp := bunNullableTimestamp("message.timestamp")
@@ -77,7 +79,8 @@ func (s *BunStore) bunAnalyticsTopSessionsFrom(
 		message.session_id, `+gap.SQL+` AS gap_seconds
 	FROM messages AS message
 	JOIN `+bunAnalyticsFilteredSessionsCTE+` AS session
-		ON session.id = message.session_id`, gap.Args...)},
+		ON session.id = message.session_id
+	WHERE `+messageTimestamp+` IS NOT NULL`, gap.Args...)},
 		BunCTEFragment{Name: "analytics_top_active_duration", Query: BunSQL(`SELECT
 		session_id,
 		COALESCE(SUM(CASE
@@ -102,7 +105,7 @@ func (s *BunStore) bunAnalyticsTopSessionsFrom(
 			" >= " + s.backend.TimestampOrderExpr(bunNullableTimestamp("session.started_at"))
 		orderBy = "COALESCE(active.active_duration_min, 0)"
 	case "output_tokens":
-		where = hasOutputTokens + " = TRUE"
+		where = hasOutputTokensPredicate
 		orderBy = outputTokens
 	default:
 	}

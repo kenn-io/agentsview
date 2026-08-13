@@ -21,7 +21,7 @@ type bunActivityReportScopeRow struct {
 	IsAutomated bool                `bun:"is_automated"`
 	Ordinal     *int                `bun:"ordinal"`
 	Role        *string             `bun:"role"`
-	Timestamp   *string             `bun:"timestamp"`
+	Timestamp   *bunmodel.Timestamp `bun:"timestamp"`
 	Model       *string             `bun:"model"`
 }
 
@@ -68,7 +68,7 @@ func (s *BunStore) bunActivityReportScopeFrom(
 		session.project, session.agent, session.machine,
 		session.started_at, session.ended_at,
 		session.is_automated,
-		message.ordinal, message.role, CAST(message.timestamp AS VARCHAR) AS timestamp,
+		message.ordinal, message.role, message.timestamp,
 		message.model
 	FROM activity_report_sessions AS session
 	LEFT JOIN messages AS message ON message.session_id = session.id
@@ -95,16 +95,9 @@ func (s *BunStore) bunActivityReportScopeFrom(
 		if row.Ordinal == nil || row.Role == nil || row.Timestamp == nil || row.Model == nil {
 			continue
 		}
-		timestamp, err := canonicalStoredMessageTimestamp(*row.Timestamp)
-		if err != nil {
-			return nil, nil, fmt.Errorf(
-				"reading activity report message %s ordinal %d timestamp: %w",
-				row.SessionID, *row.Ordinal, err,
-			)
-		}
 		events = append(events, activity.ActivityEvent{
 			SessionID: row.SessionID, Ordinal: *row.Ordinal, Role: *row.Role,
-			Timestamp: timestamp, Model: *row.Model,
+			Timestamp: bunAnalyticsTimeString(row.Timestamp), Model: *row.Model,
 		})
 	}
 	return sessions, events, nil

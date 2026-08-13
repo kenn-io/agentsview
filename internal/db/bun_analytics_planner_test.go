@@ -40,6 +40,44 @@ func TestBunTopSessionsPlannerRanksActiveDurationAndLimitsInDatabase(t *testing.
 	assert.InDelta(t, 12.0/60.0, got.Sessions[0].ActiveDurationMin, 0.0001)
 }
 
+func TestBunTopSessionsPlannerSkipsUnavailableTimestampsInActiveDuration(t *testing.T) {
+	database := testDB(t)
+	base := time.Date(2026, 8, 4, 10, 0, 0, 0, time.UTC)
+	for _, session := range []Session{
+		{
+			ID: "null-between", Project: "timestamp-gaps", Machine: "host", Agent: "codex",
+			CreatedAt:    base.Format(time.RFC3339Nano),
+			StartedAt:    Ptr(base.Format(time.RFC3339Nano)),
+			EndedAt:      Ptr(base.Add(10 * time.Minute).Format(time.RFC3339Nano)),
+			MessageCount: 3,
+		},
+		{
+			ID: "shorter", Project: "timestamp-gaps", Machine: "host", Agent: "codex",
+			CreatedAt:    base.Format(time.RFC3339Nano),
+			StartedAt:    Ptr(base.Format(time.RFC3339Nano)),
+			EndedAt:      Ptr(base.Add(10 * time.Minute).Format(time.RFC3339Nano)),
+			MessageCount: 2,
+		},
+	} {
+		require.NoError(t, database.UpsertSession(session))
+	}
+	require.NoError(t, database.InsertMessages([]Message{
+		{SessionID: "null-between", Ordinal: 0, Role: "user", Timestamp: base.Format(time.RFC3339Nano)},
+		{SessionID: "null-between", Ordinal: 1, Role: "assistant"},
+		{SessionID: "null-between", Ordinal: 2, Role: "assistant", Timestamp: base.Add(2 * time.Minute).Format(time.RFC3339Nano)},
+		{SessionID: "shorter", Ordinal: 0, Role: "user", Timestamp: base.Format(time.RFC3339Nano)},
+		{SessionID: "shorter", Ordinal: 1, Role: "assistant", Timestamp: base.Add(time.Minute).Format(time.RFC3339Nano)},
+	}))
+
+	got, err := database.GetAnalyticsTopSessions(
+		t.Context(), AnalyticsFilter{Project: "timestamp-gaps"}, "duration",
+	)
+	require.NoError(t, err)
+	require.Len(t, got.Sessions, 2)
+	assert.Equal(t, "null-between", got.Sessions[0].ID)
+	assert.Equal(t, 2.0, got.Sessions[0].ActiveDurationMin)
+}
+
 func TestBunActivityReportPlannerScopesExactOverlapAndEvents(t *testing.T) {
 	database := testDB(t)
 	for _, session := range []Session{
