@@ -308,6 +308,69 @@ func (p *codexProvider) Parse(
 	}, nil
 }
 
+// ParseCodexSessionStreaming decodes one Codex snapshot, emitting every
+// normalized operation into sink instead of accumulating the message slice
+// inside the parser. It returns the assembled session, the finalized
+// message slice (result-event content omitted for staging sinks), the
+// marshaled continuation cursor, the single-pass hash state and anchor
+// digest covering the snapshot, and a retry reason when an explicit fork
+// parent could not be resolved. The cursor, hash state, and anchor digest
+// are empty when the snapshot does not end at a safe resume boundary.
+func ParseCodexSessionStreaming(
+	cfg ProviderConfig,
+	source SourceRef,
+	sink CodexSessionSink,
+) (*ParsedSession, []ParsedMessage, []byte, []byte, string, string, error) {
+	provider, ok := NewProvider(AgentCodex, cfg)
+	if !ok {
+		return nil, nil, nil, nil, "", "",
+			fmt.Errorf("constructing codex provider")
+	}
+	cp, ok := provider.(*codexProvider)
+	if !ok {
+		return nil, nil, nil, nil, "", "",
+			fmt.Errorf("unexpected codex provider type %T", provider)
+	}
+	path, ok := cp.sources.pathFromSource(source)
+	if !ok {
+		return nil, nil, nil, nil, "", "",
+			fmt.Errorf("codex source path unavailable")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, nil, nil, "", "", fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, nil, nil, nil, "", "", fmt.Errorf("stat %s: %w", path, err)
+	}
+	sess, msgs, cursor, safe, hashState, anchorDigest, retryReason, err :=
+		cp.parseCodexSessionSnapshotStreaming(
+			path, firstNonEmptyJSONLString("", cfg.Machine),
+			false, f, info, sink,
+		)
+	if err != nil {
+		return nil, nil, nil, nil, "", "", err
+	}
+	if sess == nil {
+		return nil, nil, nil, nil, "", "", fmt.Errorf(
+			"codex session unavailable in %s", path,
+		)
+	}
+	var cursorBlob []byte
+	if safe {
+		cursorBlob, err = cursor.MarshalBinary()
+		if err != nil {
+			return nil, nil, nil, nil, "", "", fmt.Errorf(
+				"encoding codex checkpoint %s: %w", path, err,
+			)
+		}
+	}
+	return sess, msgs, cursorBlob, hashState, anchorDigest,
+		retryReason, nil
+}
+
 func (p *codexProvider) ParseIncremental(
 	ctx context.Context,
 	req IncrementalRequest,

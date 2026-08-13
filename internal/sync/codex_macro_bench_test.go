@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/metrics"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -218,12 +219,9 @@ func TestMacroCodexStreamingMemoryGates(t *testing.T) {
 	var basePeak uint64
 	for i, size := range sizes {
 		t.Run(size.name, func(t *testing.T) {
-			root, dst, _, sizeBytes :=
-				writeCodexStreamingBenchmarkTranscript(
-					t, size.turns, size.outBytes,
-				)
-			_ = sizeBytes
-
+			root, _, _, _ := writeCodexStreamingBenchmarkTranscript(
+				t, size.turns, size.outBytes,
+			)
 			database, err := db.Open(filepath.Join(t.TempDir(), "macro.db"))
 			require.NoError(t, err)
 			engine := NewEngine(database, EngineConfig{
@@ -246,9 +244,6 @@ func TestMacroCodexStreamingMemoryGates(t *testing.T) {
 			peakLive := peak()
 			require.Equal(t, 1, stats.Synced)
 
-			forcedGCHeap := forcedGCLiveHeap()
-			peakRSS := peakProcessRSSBytes()
-
 			t.Logf(
 				"STREAMING_GATE %s file=%dMB dur=%s rchar=%d "+
 					"peak_live=%dMiB forced_gc=%dMiB peak_rss=%dMiB",
@@ -257,17 +252,13 @@ func TestMacroCodexStreamingMemoryGates(t *testing.T) {
 				dur,
 				rcharDelta,
 				peakLive/(1<<20),
-				forcedGCHeap/(1<<20),
-				peakRSS/(1<<20),
+				forcedGCLiveHeap()/(1<<20),
+				peakProcessRSSBytes()/(1<<20),
 			)
-			_ = dst
-
 			if i == 0 {
 				basePeak = peakLive
 			}
 			if size.name == "1GB" {
-				// The gate: bounded absolute peak and sub-linear growth.
-				// It red-lights the pre-P3 full-session-in-heap parser.
 				require.Less(t, peakLive, uint64(512<<20),
 					"1GB cold sync peak live heap must stay under 512MiB")
 				require.LessOrEqual(t, peakLive, 2*basePeak,
@@ -334,12 +325,14 @@ func writeCodexStreamingBenchmarkTranscript(
 	return root, dst, uuid, info.Size()
 }
 
-// pollPeakLiveHeap starts a poller capturing the highest live-heap value
-// until the returned function is called.
+// pollPeakLiveHeap samples the runtime's live-heap metric (the heap
+// occupied by live objects at the last GC, excluding uncollected garbage)
+// and returns the peak observed until the returned function is called.
 func pollPeakLiveHeap() func() uint64 {
 	var peak atomic.Uint64
 	stop := make(chan struct{})
 	done := make(chan struct{})
+	all := []metrics.Sample{{Name: "/gc/heap/live:bytes"}}
 	go func() {
 		defer close(done)
 		ticker := time.NewTicker(2 * time.Millisecond)
@@ -349,10 +342,9 @@ func pollPeakLiveHeap() func() uint64 {
 			case <-stop:
 				return
 			case <-ticker.C:
-				var ms runtime.MemStats
-				runtime.ReadMemStats(&ms)
-				if ms.HeapAlloc > peak.Load() {
-					peak.Store(ms.HeapAlloc)
+				metrics.Read(all)
+				if v := all[0].Value.Uint64(); v > peak.Load() {
+					peak.Store(v)
 				}
 			}
 		}
@@ -407,4 +399,113 @@ func macroRchar(t testing.TB) int64 {
 	}
 	t.Fatal("no rchar in /proc/self/io")
 	return 0
+}
+
+// TestMacroCodexStagedParseMemoryGates runs the same three sizes through
+// the streaming staged path end to end (scratch-backed parse plus the
+// staged publish) and applies the same bounds as the legacy gate. It is
+// the direct memory gate for the P3 staging sink; the engine wiring
+// behind the >128MB cutoff reuses exactly this path.
+func TestMacroCodexStagedParseMemoryGates(t *testing.T) {
+	sizes := []struct {
+		name     string
+		turns    int
+		outBytes int
+	}{
+		{name: "10MB", turns: 500, outBytes: 20 << 10},
+		{name: "100MB", turns: 500, outBytes: 200 << 10},
+		{name: "1GB", turns: 500, outBytes: 2 << 20},
+	}
+	var basePeak uint64
+	for i, size := range sizes {
+		t.Run(size.name, func(t *testing.T) {
+			root, _, uuid, _ := writeCodexStreamingBenchmarkTranscript(
+				t, size.turns, size.outBytes,
+			)
+			cfg := parser.ProviderConfig{
+				Roots:   []string{root},
+				Machine: "macro-host",
+			}
+			provider, ok := parser.NewProvider(parser.AgentCodex, cfg)
+			require.True(t, ok)
+			source, found, err := provider.FindSource(
+				context.Background(), parser.FindSourceRequest{
+					FullSessionID: "codex:" + uuid,
+				},
+			)
+			require.NoError(t, err)
+			require.True(t, found)
+
+			peak := pollPeakLiveHeap()
+			start := time.Now()
+			staged, err := newCodexStagingSink(nil)
+			require.NoError(t, err)
+			sess, msgs, _, _, _, err := parser.ParseCodexSessionStreaming(
+				cfg, source, staged,
+			)
+			require.NoError(t, err)
+			require.NotNil(t, sess)
+
+			database, err := db.Open(filepath.Join(t.TempDir(), "macro.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = database.Close() })
+			row := db.Session{
+				ID:               sess.ID,
+				Project:          sess.Project,
+				Machine:          sess.Machine,
+				Agent:            string(sess.Agent),
+				MessageCount:     sess.MessageCount,
+				UserMessageCount: sess.UserMessageCount,
+			}
+			require.NoError(t, database.UpsertSession(row))
+			dbMsgs := toDBMessages(pendingWrite{
+				sess: *sess, msgs: msgs,
+			}, nil)
+			update, findingsFromMsgs := computeSignalsAndSecrets(
+				row, dbMsgs,
+			)
+			positions := make(map[string]db.StagedToolCallPosition)
+			for _, m := range dbMsgs {
+				for callIdx, tc := range m.ToolCalls {
+					if tc.ToolUseID == "" {
+						continue
+					}
+					positions[tc.ToolUseID] = db.StagedToolCallPosition{
+						ToolUseID: tc.ToolUseID,
+						Ordinal:   m.Ordinal,
+						CallIndex: callIdx,
+					}
+				}
+			}
+			combined := append(
+				append([]db.SecretFinding(nil), findingsFromMsgs...),
+				staged.Findings(row.ID, positions)...,
+			)
+			update.SecretLeakCount = definiteFindingCount(combined)
+			require.NoError(t, database.ReplaceSessionContentStaged(
+				row.ID, dbMsgs, update, combined, staged,
+				map[string]bool{},
+			))
+			require.NoError(t, staged.Close())
+			peakLive := peak()
+			dur := time.Since(start)
+
+			t.Logf(
+				"STAGED_GATE %s dur=%s peak_live=%dMiB forced_gc=%dMiB peak_rss=%dMiB",
+				size.name, dur,
+				peakLive/(1<<20),
+				forcedGCLiveHeap()/(1<<20),
+				peakProcessRSSBytes()/(1<<20),
+			)
+			if i == 0 {
+				basePeak = peakLive
+			}
+			if size.name == "1GB" {
+				require.Less(t, peakLive, uint64(512<<20),
+					"1GB staged parse peak live heap must stay under 512MiB")
+				require.LessOrEqual(t, peakLive, 2*basePeak,
+					"10MB -> 1GB staged peak live heap must grow at most 2x")
+			}
+		})
+	}
 }

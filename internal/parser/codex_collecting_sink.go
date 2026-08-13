@@ -7,12 +7,12 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// codexCollectingSink is the in-memory codexSessionSink implementation
+// CodexCollectingSink is the in-memory CodexSessionSink implementation
 // that reproduces the pre-streaming decoder behavior byte for byte: all
 // messages stay in a slice, call ids index into it, and deferred updates
 // accumulate in memory. It exists so the slice-based parser remains
 // available to tests and other providers while the streaming sink lands.
-type codexCollectingSink struct {
+type CodexCollectingSink struct {
 	messages             []ParsedMessage
 	callRefs             map[string]codexToolCallRef
 	toolCallUpdates      []ParsedToolCallUpdate
@@ -20,15 +20,15 @@ type codexCollectingSink struct {
 	nextOrdinal          int
 }
 
-func newCodexCollectingSink(startOrdinal int) *codexCollectingSink {
-	return &codexCollectingSink{
+func NewCodexCollectingSink(startOrdinal int) *CodexCollectingSink {
+	return &CodexCollectingSink{
 		callRefs:             make(map[string]codexToolCallRef),
 		orphanNotificationIx: make(map[string]int),
 		nextOrdinal:          startOrdinal,
 	}
 }
 
-func (s *codexCollectingSink) AppendMessage(m ParsedMessage) {
+func (s *CodexCollectingSink) AppendMessage(m ParsedMessage) {
 	m.Ordinal = s.nextOrdinal
 	s.nextOrdinal++
 	s.messages = append(s.messages, m)
@@ -44,13 +44,13 @@ func (s *codexCollectingSink) AppendMessage(m ParsedMessage) {
 	}
 }
 
-func (s *codexCollectingSink) ReserveOrdinal() int {
+func (s *CodexCollectingSink) ReserveOrdinal() int {
 	ord := s.nextOrdinal
 	s.nextOrdinal++
 	return ord
 }
 
-func (s *codexCollectingSink) InsertMessage(m ParsedMessage) int {
+func (s *CodexCollectingSink) InsertMessage(m ParsedMessage) int {
 	idx := len(s.messages)
 	for i, existing := range s.messages {
 		if existing.Ordinal > m.Ordinal ||
@@ -74,7 +74,7 @@ func (s *codexCollectingSink) InsertMessage(m ParsedMessage) int {
 	return idx
 }
 
-func (s *codexCollectingSink) AppendToolResultEvent(
+func (s *CodexCollectingSink) AppendToolResultEvent(
 	callID string, ev ParsedToolResultEvent,
 ) {
 	if callID == "" {
@@ -103,7 +103,7 @@ func (s *codexCollectingSink) AppendToolResultEvent(
 	tc.ResultEvents = append(tc.ResultEvents, ev)
 }
 
-func (s *codexCollectingSink) appendToolCallUpdate(
+func (s *CodexCollectingSink) appendToolCallUpdate(
 	callID string, ev ParsedToolResultEvent,
 ) {
 	if ev.ToolUseID == "" {
@@ -126,7 +126,7 @@ func (s *codexCollectingSink) appendToolCallUpdate(
 	})
 }
 
-func (s *codexCollectingSink) SetCallSubagentSessionID(
+func (s *CodexCollectingSink) SetCallSubagentSessionID(
 	callID, sessionID string,
 ) {
 	if callID == "" || sessionID == "" {
@@ -148,7 +148,7 @@ func (s *codexCollectingSink) SetCallSubagentSessionID(
 // ApplyTokenUsageToLastAssistant applies normalized token usage to the
 // last assistant message without usage, scanning back to the current
 // turn's user boundary. Returns false when no target exists.
-func (s *codexCollectingSink) ApplyTokenUsageToLastAssistant(
+func (s *CodexCollectingSink) ApplyTokenUsageToLastAssistant(
 	raw string,
 ) bool {
 	for i := len(s.messages) - 1; i >= 0; i-- {
@@ -164,7 +164,7 @@ func (s *codexCollectingSink) ApplyTokenUsageToLastAssistant(
 	return false
 }
 
-func (s *codexCollectingSink) InsertOrphanMessage(
+func (s *CodexCollectingSink) InsertOrphanMessage(
 	key string, m ParsedMessage,
 ) bool {
 	if _, ok := s.orphanNotificationIx[key]; ok {
@@ -174,7 +174,7 @@ func (s *codexCollectingSink) InsertOrphanMessage(
 	return true
 }
 
-func (s *codexCollectingSink) Finalize() {
+func (s *CodexCollectingSink) Finalize() {
 	sort.SliceStable(s.messages, func(i, j int) bool {
 		if s.messages[i].Ordinal == s.messages[j].Ordinal {
 			return i < j
@@ -186,11 +186,11 @@ func (s *codexCollectingSink) Finalize() {
 	}
 }
 
-func (s *codexCollectingSink) Messages() []ParsedMessage {
+func (s *CodexCollectingSink) Messages() []ParsedMessage {
 	return s.messages
 }
 
-func (s *codexCollectingSink) ToolCallUpdates() []ParsedToolCallUpdate {
+func (s *CodexCollectingSink) ToolCallUpdates() []ParsedToolCallUpdate {
 	return s.toolCallUpdates
 }
 

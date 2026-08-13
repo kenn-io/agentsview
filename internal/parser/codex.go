@@ -58,9 +58,9 @@ type codexSessionBuilder struct {
 	// sink receives every normalized operation; the collecting
 	// implementation keeps the slice-based behavior, the streaming one
 	// batches into a scratch store.
-	sink                 codexSessionSink
-	resolveParentTurns   codexParentTurnResolver
-	parentTurnIDs        map[string]struct{}
+	sink               CodexSessionSink
+	resolveParentTurns codexParentTurnResolver
+	parentTurnIDs      map[string]struct{}
 	firstMessage         string
 	startedAt            time.Time
 	endedAt              time.Time
@@ -205,10 +205,10 @@ type codexPendingEvent struct {
 }
 
 func newCodexSessionBuilder(
-	_ bool, startOrdinal int,
+	_ bool, sink CodexSessionSink,
 ) *codexSessionBuilder {
 	return &codexSessionBuilder{
-		sink:               newCodexCollectingSink(startOrdinal),
+		sink:               sink,
 		project:            "unknown",
 		callNames:          make(map[string]string),
 		agentSpawnCalls:    make(map[string]string),
@@ -1514,10 +1514,27 @@ func (p *codexProvider) parseSessionSnapshotWithCursor(
 	f *os.File,
 	info os.FileInfo,
 ) (*ParsedSession, []ParsedMessage, codexCursorState, bool, []byte, string, string, error) {
+	return p.parseCodexSessionSnapshotStreaming(
+		path, machine, includeExec, f, info, NewCodexCollectingSink(0),
+	)
+}
+
+// parseCodexSessionSnapshotStreaming decodes one snapshot, emitting every
+// normalized operation into the caller's sink instead of accumulating a
+// full message slice inside the parser. The returned message slice comes
+// from the sink (for a collecting sink it is the complete transcript; for
+// a staging sink it omits result-event content).
+func (p *codexProvider) parseCodexSessionSnapshotStreaming(
+	path, machine string,
+	includeExec bool,
+	f *os.File,
+	info os.FileInfo,
+	sink CodexSessionSink,
+) (*ParsedSession, []ParsedMessage, codexCursorState, bool, []byte, string, string, error) {
 	tee := newCodexHashAnchorTee(io.LimitReader(f, info.Size()))
 	lr := newLineReader(tee, maxLineSize)
 	defer releaseLineReader(lr)
-	b := newCodexSessionBuilder(includeExec, 0)
+	b := newCodexSessionBuilder(includeExec, sink)
 	b.resolveParentTurns = p.parentTurnResolver(path)
 
 	for {
@@ -1873,7 +1890,7 @@ func seedCodexIncrementalStateFromReader(
 	r io.Reader,
 	resolveParentTurns codexParentTurnResolver,
 ) (codexIncrementalSeed, error) {
-	b := newCodexSessionBuilder(false, 0)
+	b := newCodexSessionBuilder(false, NewCodexCollectingSink(0))
 	b.resolveParentTurns = resolveParentTurns
 	lr := newLineReader(r, maxLineSize)
 	defer releaseLineReader(lr)
@@ -2255,7 +2272,7 @@ func (p *codexProvider) parseSessionFromWithSources(
 		}
 	}
 
-	b := newCodexSessionBuilder(includeExec, startOrdinal)
+	b := newCodexSessionBuilder(includeExec, NewCodexCollectingSink(startOrdinal))
 	b.resolveParentTurns = p.parentTurnResolver(path)
 	b.codexCursorState = seed
 	var fallbackErr error
@@ -2438,7 +2455,7 @@ func isCodexSubagentNotification(content string) bool {
 }
 
 func codexIncrementalNeedsFullParse(line string) bool {
-	b := newCodexSessionBuilder(false, 0)
+	b := newCodexSessionBuilder(false, NewCodexCollectingSink(0))
 	return b.codexIncrementalNeedsFullParse(line)
 }
 

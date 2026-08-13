@@ -503,7 +503,7 @@ func TestParseCodexSession_ExecOriginator(t *testing.T) {
 }
 
 func TestCodexInsertMessage_PreservesChronologyOnSameOrdinal(t *testing.T) {
-	s := newCodexCollectingSink(0)
+	s := NewCodexCollectingSink(0)
 	s.messages = []ParsedMessage{{
 		Ordinal:   2,
 		Role:      RoleAssistant,
@@ -637,7 +637,7 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		// gate must not request a full parse for them (P2 contract).
 		line := `{"timestamp":"2026-07-08T03:20:43.376Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_abc","output":"Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess."}}`
 
-		b := newCodexSessionBuilder(false, 0)
+		b := newCodexSessionBuilder(false, NewCodexCollectingSink(0))
 		b.rememberToolCall("call_abc", "exec_command")
 		assert.False(t, b.codexIncrementalNeedsFullParse(line))
 	})

@@ -1,6 +1,6 @@
 package parser
 
-// codexSessionSink receives the normalized operations of one Codex
+// CodexSessionSink receives the normalized operations of one Codex
 // transcript decode. The decoder owns parse-time state (cursor, fork
 // gate, prompt replay observation, pending-agent attribution) and emits
 // through this interface; the sink owns the message stream, its
@@ -32,7 +32,7 @@ package parser
 //     reserved ordinal, deduplicated by key
 //   - Finalize             — stable-sort by ordinal (ties keep emission
 //     order) and renumber 0..n-1
-type codexSessionSink interface {
+type CodexSessionSink interface {
 	AppendMessage(m ParsedMessage)
 	ReserveOrdinal() int
 	InsertMessage(m ParsedMessage) int

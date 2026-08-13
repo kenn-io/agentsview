@@ -971,3 +971,43 @@ TEMP 验证语义与内存，再决定是否升级。跨 attached 数据库的�
 usage/signals/findings/checkpoint 逐字段一致；追加保持 20–200ms；无变化
 同步 0B transcript 读取。磁盘侧 566MB×2 结果重复存储保持现状，不并入本
 PR。渐进启用：仅 Codex 且 `>128MB` 走新路径，特殊事件保守回退旧路径。
+
+## 第六阶段实施记录（2026-08-13 第五轮）
+
+### 已落地（提交 66232611 之后的本轮）
+
+- P3.1：`CodexSessionSink`（导出接口，8 个操作）+ collecting 实现 + 流式
+  解析入口 `ParseCodexSessionStreaming`（同一遍带 tee 哈希/锚点）。
+- P3.2/3.3 核心：`codexStagingSink`——事件行与按调用 agent 汇总状态写入
+  scratch SQLite（TEMP 文件，journal OFF）；内存模型只留占位符（实测
+  1GB fixture 模型事件内容仅 4.9KB）；发布侧
+  `db.ReplaceSessionContentStaged`：消息/tool_calls 分块插入（每调用
+  summary 经 scratch 瞬态解析、blocked 按类别抹除）、事件
+  `INSERT..SELECT`（ATTACH scratch，只读，final tx 只改 main）、同一
+  事务 bump revision/recall/automation/signals/findings。
+- parity：`TestCodexStreamingParseParityWithLegacy`——同一 transcript 双
+  路导入，messages/tool_calls/result_events（含 content/length/
+  event_index/summary）逐字段一致，findings 与 status 驱动信号一致，
+  通过。
+- 门禁指标修正：peak live heap 改用运行时 `/gc/heap/live:bytes`（排除
+  未回收垃圾），旧 HeapAlloc 口径会高估。
+
+### 门禁实测（live heap 口径，三档 synthetic）
+
+| 路径 | 10MB | 100MB | 1GB |
+|---|---:|---:|---:|
+| legacy 引擎冷全量 | 13MiB | 87MiB | **584MiB ✗** |
+| staged parse+发布 | 17MiB | 105MiB | **1777MiB ✗** |
+
+### 诚实标注的剩余问题（下一轮修）
+
+1. 解析器自身（legacy 路径同样存在）在解析中途保留约 0.6× 文件大小的
+   行字符串 live（gjson 惰性结果 + `strings.TrimSpace` 切片链 + GC 节奏），
+   解析结束后一次 GC 即全部回收；这是 P3 前就存在的行为，不是 staging
+   引入。
+2. scratch 逐事件 SQL（去重 SELECT + 事件 INSERT + 汇总 UPSERT，每事件
+   3 条语句）额外保留约 1.2× 文件大小 live——下轮改为有界批量
+   （多行 VALUES + 预处理语句 + 每 N 事件提交），预计降到解析器自身水平。
+3. 之后再做引擎接线（>128MB 渐进启用）、P3.4 流式信号 reducer（含
+   content-heuristic 失败判定与 secrets 归并）、P3.5 parity/fuzz/故障
+   注入，再跑 945MB 真实档案验收。
