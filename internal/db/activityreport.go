@@ -4,9 +4,9 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
@@ -666,19 +666,26 @@ func (db *DB) loadActivityReportUsageCandidatesFrom(
 	for _, id := range ids {
 		candidateIDs[id] = struct{}{}
 	}
-	for i := 0; i < len(keys); i += usageVarChunk {
-		end := min(i+usageVarChunk, len(keys))
-		predicates := make([]string, 0, end-i)
-		args := make([]any, 0, (end-i)*2)
-		for _, key := range keys[i:end] {
-			predicates = append(predicates,
-				"(m.claude_message_id = ? AND m.claude_request_id = ?)")
-			args = append(args, key.messageID, key.requestID)
+	if len(keys) > 0 {
+		pairs := make([][2]string, len(keys))
+		for i, key := range keys {
+			pairs[i] = [2]string{key.messageID, key.requestID}
+		}
+		encodedPairs, marshalErr := json.Marshal(pairs)
+		if marshalErr != nil {
+			return nil, nil, fmt.Errorf(
+				"encoding activity report Claude snapshot keys: %w", marshalErr)
 		}
 		rowsSQL := dailyUsageRowsSQLWithWhere(
-			usageMessageEligibility+" AND ("+strings.Join(predicates, " OR ")+")",
+			usageMessageEligibility+` AND m.claude_message_id != ''
+				AND m.claude_request_id != ''
+				AND (m.claude_message_id, m.claude_request_id) IN (
+					SELECT json_extract(peer.value, '$[0]'),
+					       json_extract(peer.value, '$[1]')
+					FROM json_each(?) AS peer
+				)`,
 			usageEventEligibility+" AND 1 = 0")
-		if err := loadRows(rowsSQL, args, candidateIDs); err != nil {
+		if err := loadRows(rowsSQL, []any{string(encodedPairs)}, candidateIDs); err != nil {
 			return nil, nil, err
 		}
 	}

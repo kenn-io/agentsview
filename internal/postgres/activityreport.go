@@ -578,14 +578,18 @@ func (s *Store) activityReportUsage(
 	for i := 0; i < len(keys); i += peerChunk {
 		end := min(i+peerChunk, len(keys))
 		pb := &paramBuilder{}
-		predicates := make([]string, 0, end-i)
+		pairs := make([]string, 0, end-i)
 		for _, key := range keys[i:end] {
-			predicates = append(predicates,
-				"(m.claude_message_id = "+pb.add(key.messageID)+
-					" AND m.claude_request_id = "+pb.add(key.requestID)+")")
+			pairs = append(pairs,
+				"("+pb.add(key.messageID)+", "+pb.add(key.requestID)+")")
 		}
 		rowsSQL := pgDailyUsageRowsSQLWithWhere(
-			pgUsageMessageEligibility+" AND ("+strings.Join(predicates, " OR ")+")",
+			pgUsageMessageEligibility+` AND EXISTS (
+				SELECT 1
+				FROM (VALUES `+strings.Join(pairs, ", ")+`) AS peer_keys(message_id, request_id)
+				WHERE peer_keys.message_id = m.claude_message_id
+				  AND peer_keys.request_id = m.claude_request_id
+			)`,
 			pgUsageEventEligibility+" AND FALSE")
 		if err := loadRows(rowsSQL, pb, candidateIDs); err != nil {
 			return nil, nil, err

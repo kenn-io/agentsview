@@ -635,17 +635,19 @@ func (s *Store) activityReportUsage(
 	for _, id := range ids {
 		candidateIDs[id] = struct{}{}
 	}
-	for i := 0; i < len(keys); i += usageChunk {
-		end := min(i+usageChunk, len(keys))
-		predicates := make([]string, 0, end-i)
-		args := make([]any, 0, (end-i)*2+2)
-		for _, key := range keys[i:end] {
-			predicates = append(predicates,
-				"(m.claude_message_id = ? AND m.claude_request_id = ?)")
+	if len(keys) > 0 {
+		pairs := make([]string, 0, len(keys))
+		args := make([]any, 0, len(keys)*2+2)
+		for _, key := range keys {
+			pairs = append(pairs, "(?, ?)")
 			args = append(args, key.messageID, key.requestID)
 		}
-		query := duckActivityReportUsageQuery(
-			"AND ("+strings.Join(predicates, " OR ")+")", "AND FALSE")
+		query := duckActivityReportUsageQuery(`AND EXISTS (
+			SELECT 1
+			FROM (VALUES `+strings.Join(pairs, ", ")+`) AS peer_keys(message_id, request_id)
+			WHERE peer_keys.message_id = m.claude_message_id
+			  AND peer_keys.request_id = m.claude_request_id
+		)`, "AND FALSE")
 		args = append(args, lowerBound, upperBound)
 		if err := loadRows(query, args, candidateIDs); err != nil {
 			return nil, nil, err

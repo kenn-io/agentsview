@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestUsageCoveringIndexMigration(t *testing.T) {
+func TestUsageAndActivityIndexesMigration(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
 
@@ -18,12 +18,15 @@ func TestUsageCoveringIndexMigration(t *testing.T) {
 	d.Close()
 
 	requireIndexPresence(t, path, "idx_messages_usage_covering", 1)
+	requireIndexPresence(t, path, "idx_messages_claude_snapshot", 1)
 	requireIndexPresence(t, path, "idx_messages_usage_timestamp", 0)
 
 	conn, err := sql.Open("sqlite3", path)
 	requireNoError(t, err, "raw open")
 	_, err = conn.Exec(`DROP INDEX IF EXISTS idx_messages_usage_covering`)
 	requireNoError(t, err, "drop covering index")
+	_, err = conn.Exec(`DROP INDEX IF EXISTS idx_messages_claude_snapshot`)
+	requireNoError(t, err, "drop Claude snapshot index")
 	_, err = conn.Exec(`CREATE INDEX idx_messages_usage_timestamp
 		ON messages(timestamp, session_id, ordinal)
 		WHERE token_usage != '' AND model != '' AND model != '<synthetic>'`)
@@ -35,6 +38,7 @@ func TestUsageCoveringIndexMigration(t *testing.T) {
 	defer d.Close()
 
 	requireIndexPresence(t, path, "idx_messages_usage_covering", 1)
+	requireIndexPresence(t, path, "idx_messages_claude_snapshot", 1)
 	requireIndexPresence(t, path, "idx_messages_usage_timestamp", 0)
 
 	var sessions int

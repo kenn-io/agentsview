@@ -3063,6 +3063,14 @@ func (db *DB) createPartialIndexesLocked(w *writerHandle) error {
 		 WHERE token_usage != ''
 		   AND model != ''
 		   AND model != '<synthetic>'`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_claude_snapshot
+		 ON messages(claude_message_id, claude_request_id,
+		             timestamp, session_id, ordinal)
+		 WHERE token_usage != ''
+		   AND model != ''
+		   AND model != '<synthetic>'
+		   AND claude_message_id != ''
+		   AND claude_request_id != ''`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_has_secret
 		 ON sessions(secret_leak_count) WHERE secret_leak_count > 0`,
 	}
