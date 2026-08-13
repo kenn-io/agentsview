@@ -2552,10 +2552,6 @@ func (s *Sync) pushMessages(
 		)
 	}
 	if localCount == 0 {
-		localPinOrdinals, err := s.localPinOrdinals(ctx, sessionID)
-		if err != nil {
-			return 0, err
-		}
 		if err := lockPinnedMessagesSession(ctx, tx, sessionID); err != nil {
 			return 0, err
 		}
@@ -2596,7 +2592,7 @@ func (s *Sync) pushMessages(
 			return 0, err
 		}
 		if err := restorePinnedMessages(
-			ctx, tx, sessionID, savedPins, localPinOrdinals,
+			ctx, tx, sessionID, savedPins,
 		); err != nil {
 			return 0, err
 		}
@@ -2815,10 +2811,6 @@ func (s *Sync) pushMessages(
 		}
 	}
 
-	localPinOrdinals, err := s.localPinOrdinals(ctx, sessionID)
-	if err != nil {
-		return 0, err
-	}
 	if err := lockPinnedMessagesSession(ctx, tx, sessionID); err != nil {
 		return 0, err
 	}
@@ -2900,7 +2892,7 @@ func (s *Sync) pushMessages(
 	}
 
 	if err := restorePinnedMessages(
-		ctx, tx, sessionID, savedPins, localPinOrdinals,
+		ctx, tx, sessionID, savedPins,
 	); err != nil {
 		return count, err
 	}
@@ -2934,21 +2926,20 @@ func (s *Sync) replaceUsageEvents(
 }
 
 type savedPostgresPin struct {
-	id                   int64
-	ordinal              int
-	anchorOrdinal        int
-	sourceUUID           string
-	role                 string
-	content              string
-	sourceUUIDCount      int
-	sourceIdentityCount  int
-	sourceIdentityRank   int
-	legacyIdentityCount  int
-	legacyIdentityRank   int
-	hiddenRowsThroughPin int
-	messageFound         bool
-	note                 sql.NullString
-	createdAt            time.Time
+	id                  int64
+	ordinal             int
+	anchorOrdinal       int
+	sourceUUID          string
+	role                string
+	content             string
+	sourceUUIDCount     int
+	sourceIdentityCount int
+	sourceIdentityRank  int
+	legacyIdentityCount int
+	legacyIdentityRank  int
+	messageFound        bool
+	note                sql.NullString
+	createdAt           time.Time
 }
 
 type resolvedPostgresPin struct {
@@ -3054,13 +3045,6 @@ const snapshotPinnedMessagesQuery = `
 					AND legacy_rank.content = current_message.content
 					AND NOT legacy_rank.is_system
 					AND legacy_rank.ordinal <= current_message.ordinal
-			),
-			(
-				SELECT COUNT(*)
-				FROM messages hidden
-				WHERE hidden.session_id = p.session_id
-					AND hidden.ordinal <= p.message_id
-					AND hidden.is_system
 			)
 		FROM pinned_messages p
 		LEFT JOIN messages current_message
@@ -3105,7 +3089,6 @@ func snapshotPinnedMessages(
 			&pin.sourceUUIDCount, &pin.sourceIdentityCount,
 			&pin.sourceIdentityRank,
 			&pin.legacyIdentityCount, &pin.legacyIdentityRank,
-			&pin.hiddenRowsThroughPin,
 		); err != nil {
 			return nil, fmt.Errorf("scanning pg pin snapshot: %w", err)
 		}
@@ -3117,34 +3100,12 @@ func snapshotPinnedMessages(
 	return pins, nil
 }
 
-// localPinOrdinals returns the ordinals of the pins the local SQLite
-// archive currently holds for a session, used to gate the PG legacy
-// ordinal-continuity fallback on the decision SQLite already made.
-func (s *Sync) localPinOrdinals(
-	ctx context.Context, sessionID string,
-) (map[int]bool, error) {
-	localPins, err := s.local.ListPinnedMessages(ctx, sessionID, "")
-	if err != nil {
-		return nil, fmt.Errorf("listing local pins: %w", err)
-	}
-	ordinals := make(map[int]bool, len(localPins))
-	for _, pin := range localPins {
-		ordinals[pin.Ordinal] = true
-	}
-	return ordinals, nil
-}
-
 // restorePinnedMessages re-attaches the snapshotted pins to the new
-// message rows. localPinOrdinals carries the ordinals of the pins the
-// local SQLite archive currently holds for this session: a UUID-less
-// pin whose identity resolution fails may fall back to its recorded
-// ordinal only when SQLite kept a pin at that ordinal, propagating the
-// explicit-upload ordinal-continuity decision SQLite already made.
-// Provider reparses drop such pins locally, so the fallback stays off
-// for them.
+// message rows through the guarded identity rules; pins whose message
+// can no longer be identified are dropped.
 func restorePinnedMessages(
 	ctx context.Context, tx *sql.Tx, sessionID string,
-	pins []savedPostgresPin, localPinOrdinals map[int]bool,
+	pins []savedPostgresPin,
 ) error {
 	// Delete only rows captured and locked by the snapshot. The session
 	// row lock taken before the snapshot (lockPinnedMessagesSession)
@@ -3173,15 +3134,6 @@ func restorePinnedMessages(
 		)
 		if err != nil {
 			return err
-		}
-		if !ok && pin.sourceUUID == "" && pin.messageFound &&
-			localPinOrdinals[pin.ordinal] {
-			target, sourceUUID, ok, err = resolveLegacyPinOrdinalFallback(
-				ctx, tx, sessionID, pin,
-			)
-			if err != nil {
-				return err
-			}
 		}
 		if !ok {
 			continue
@@ -3343,43 +3295,6 @@ func resolvePinnedMessageTarget(
 	if err != nil {
 		return 0, "", false, fmt.Errorf(
 			"resolving legacy pg pin ord=%d: %w", pin.ordinal, err,
-		)
-	}
-	return target, sourceUUID, ok, nil
-}
-
-// resolveLegacyPinOrdinalFallback mirrors SQLite's explicit-upload
-// ordinal continuity for a UUID-less pin whose identity resolution
-// failed: the pin re-attaches to the visible row at its recorded
-// ordinal only while the hidden-row layout through that ordinal is
-// unchanged, since inserted or removed metadata shifts which visible
-// message the ordinal names. Callers gate this on the local SQLite
-// archive still holding a pin at the same ordinal.
-func resolveLegacyPinOrdinalFallback(
-	ctx context.Context, tx *sql.Tx, sessionID string,
-	pin savedPostgresPin,
-) (int, string, bool, error) {
-	target, sourceUUID, ok, err := scanPinnedMessageTarget(
-		tx.QueryRowContext(ctx, `
-			SELECT m.ordinal, m.source_uuid
-			FROM messages m
-			WHERE m.session_id = $1
-				AND m.ordinal = $2
-				AND NOT m.is_system
-				AND (
-					SELECT COUNT(*)
-					FROM messages hidden
-					WHERE hidden.session_id = m.session_id
-						AND hidden.ordinal <= m.ordinal
-						AND hidden.is_system
-				) = $3`,
-			sessionID, pin.ordinal, pin.hiddenRowsThroughPin,
-		),
-	)
-	if err != nil {
-		return 0, "", false, fmt.Errorf(
-			"resolving legacy pg pin ordinal fallback ord=%d: %w",
-			pin.ordinal, err,
 		)
 	}
 	return target, sourceUUID, ok, nil

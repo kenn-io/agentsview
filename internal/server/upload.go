@@ -236,10 +236,9 @@ func sessionBatchWriteFromParsed(
 	// pipeline, so zero-valued signal columns and no findings rows are
 	// the expected state for freshly uploaded sessions.
 	return db.SessionBatchWrite{
-		Session:                     dbSess,
-		Messages:                    dbMsgs,
-		ReplaceMessages:             true,
-		PreserveLegacyPinsByOrdinal: true,
+		Session:         dbSess,
+		Messages:        dbMsgs,
+		ReplaceMessages: true,
 	}
 }
 

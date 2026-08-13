@@ -2280,11 +2280,10 @@ func TestWriteSessionBatchPreservesLegacyPinWhenMetadataBecomesHidden(
 		},
 	}
 	_, err = d.WriteSessionBatch([]SessionBatchWrite{{
-		Session:                     base,
-		Messages:                    reupload,
-		DataVersion:                 CurrentDataVersion(),
-		ReplaceMessages:             true,
-		PreserveLegacyPinsByOrdinal: true,
+		Session:         base,
+		Messages:        reupload,
+		DataVersion:     CurrentDataVersion(),
+		ReplaceMessages: true,
 	}})
 	require.NoError(t, err, "re-upload")
 

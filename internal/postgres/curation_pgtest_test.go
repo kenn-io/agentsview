@@ -20,7 +20,7 @@ func reconcilePinnedMessages(
 	if err != nil {
 		return err
 	}
-	return restorePinnedMessages(ctx, tx, sessionID, pins, nil)
+	return restorePinnedMessages(ctx, tx, sessionID, pins)
 }
 
 func TestStoreStarsAndPins(t *testing.T) {
@@ -258,13 +258,12 @@ func TestPushPreservesMultiplePGPinsBySourceUUID(t *testing.T) {
 	assert.Equal(t, 3, pin.Ordinal)
 }
 
-// TestPushFollowsEditedUploadLegacyPinContinuity covers the
-// explicit-upload workflow for UUID-less pins: SQLite preserves an
-// edited pinned row by ordinal continuity, so the next push must keep
-// the corresponding PG pin instead of dropping it when its exact
-// content no longer matches. A reparse-style replacement that drops
-// the local pin must still drop the PG pin.
-func TestPushFollowsEditedUploadLegacyPinContinuity(t *testing.T) {
+// TestPushDropsEditedLegacyPinInBothStores documents the intended
+// limit for UUID-less pins: a replacement that edits the pinned
+// message destroys the only identity the pin can follow, so both the
+// local SQLite archive and the next PostgreSQL push drop the pin —
+// the stores stay consistent instead of diverging on heuristics.
+func TestPushDropsEditedLegacyPinInBothStores(t *testing.T) {
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
@@ -326,8 +325,7 @@ func TestPushFollowsEditedUploadLegacyPinContinuity(t *testing.T) {
 	pinBoth("pg-pin-upload-edit")
 	pinBoth("pg-pin-reparse-edit")
 
-	// Explicit re-upload with edited content: SQLite keeps the pin by
-	// ordinal continuity.
+	// Both replacement entry points edit the pinned message.
 	edited := func(sessionID string) []db.Message {
 		return []db.Message{
 			{
@@ -341,44 +339,37 @@ func TestPushFollowsEditedUploadLegacyPinContinuity(t *testing.T) {
 		}
 	}
 	_, err = local.WriteSessionBatch([]db.SessionBatchWrite{{
-		Session:                     uploadSess,
-		Messages:                    edited("pg-pin-upload-edit"),
-		DataVersion:                 db.CurrentDataVersion(),
-		ReplaceMessages:             true,
-		PreserveLegacyPinsByOrdinal: true,
+		Session:         uploadSess,
+		Messages:        edited("pg-pin-upload-edit"),
+		DataVersion:     db.CurrentDataVersion(),
+		ReplaceMessages: true,
 	}})
 	require.NoError(t, err, "explicit re-upload")
-	// Reparse-style replacement: SQLite drops the pin.
 	require.NoError(t, local.ReplaceSessionMessages(
 		"pg-pin-reparse-edit", edited("pg-pin-reparse-edit"),
 	), "reparse replacement")
 
-	localPins, err := local.ListPinnedMessages(
-		ctx, "pg-pin-upload-edit", "",
-	)
-	require.NoError(t, err, "local pins after upload")
-	require.Len(t, localPins, 1, "upload must keep the local pin")
-	localPins, err = local.ListPinnedMessages(
-		ctx, "pg-pin-reparse-edit", "",
-	)
-	require.NoError(t, err, "local pins after reparse")
-	require.Empty(t, localPins, "reparse must drop the local pin")
+	for _, sessionID := range []string{
+		"pg-pin-upload-edit", "pg-pin-reparse-edit",
+	} {
+		localPins, err := local.ListPinnedMessages(ctx, sessionID, "")
+		require.NoError(t, err, "local pins %s", sessionID)
+		require.Empty(t, localPins,
+			"editing the pinned message drops the local pin (%s)",
+			sessionID)
+	}
 
 	_, err = ps.Push(ctx, true, nil)
 	require.NoError(t, err, "Push rewrite")
 
-	pins, err := store.ListPinnedMessages(ctx, "pg-pin-upload-edit", "")
-	require.NoError(t, err, "pg pins after upload push")
-	require.Len(t, pins, 1,
-		"push must keep the edited upload's pg pin; pins = %v", pins)
-	assert.Equal(t, 1, pins[0].Ordinal, "pin stays at its ordinal")
-	require.NotNil(t, pins[0].Note)
-	assert.Equal(t, "keep pg-pin-upload-edit", *pins[0].Note)
-
-	pins, err = store.ListPinnedMessages(ctx, "pg-pin-reparse-edit", "")
-	require.NoError(t, err, "pg pins after reparse push")
-	assert.Empty(t, pins,
-		"push must mirror the local drop for the reparsed session")
+	for _, sessionID := range []string{
+		"pg-pin-upload-edit", "pg-pin-reparse-edit",
+	} {
+		pins, err := store.ListPinnedMessages(ctx, sessionID, "")
+		require.NoError(t, err, "pg pins %s", sessionID)
+		assert.Empty(t, pins,
+			"push must mirror the local drop (%s)", sessionID)
+	}
 }
 
 func TestPushReconcilesPGPinsByPriorMessageIdentity(t *testing.T) {
@@ -586,7 +577,7 @@ func TestRestorePinnedMessagesPreservesPinCreatedAfterSnapshot(t *testing.T) {
 		t.Fatalf("insert post-snapshot pin: %v", err)
 	}
 	if err := restorePinnedMessages(
-		ctx, tx, "pg-pin-snapshot-race", pins, nil,
+		ctx, tx, "pg-pin-snapshot-race", pins,
 	); err != nil {
 		_ = tx.Rollback()
 		t.Fatalf("restorePinnedMessages: %v", err)
@@ -888,7 +879,7 @@ func TestRestorePinnedMessagesUsesResolvedAnchorOrdinalForNewDuplicateUUID(t *te
 		t.Fatalf("replace messages: %v", err)
 	}
 	if err := restorePinnedMessages(
-		ctx, tx, "pg-pin-shifted-duplicate", pins, nil,
+		ctx, tx, "pg-pin-shifted-duplicate", pins,
 	); err != nil {
 		_ = tx.Rollback()
 		t.Fatalf("restorePinnedMessages: %v", err)
@@ -977,7 +968,7 @@ func restoreIdenticalDuplicatePins(
 		_ = tx.Rollback()
 		t.Fatalf("replace messages: %v", err)
 	}
-	if err := restorePinnedMessages(ctx, tx, sessionID, pins, nil); err != nil {
+	if err := restorePinnedMessages(ctx, tx, sessionID, pins); err != nil {
 		_ = tx.Rollback()
 		t.Fatalf("restorePinnedMessages: %v", err)
 	}
@@ -1124,7 +1115,7 @@ func TestRestorePinnedMessagesFollowsShiftedEqualLegacyMessages(
 		_ = tx.Rollback()
 		t.Fatalf("replace messages: %v", err)
 	}
-	if err := restorePinnedMessages(ctx, tx, sessionID, pins, nil); err != nil {
+	if err := restorePinnedMessages(ctx, tx, sessionID, pins); err != nil {
 		_ = tx.Rollback()
 		t.Fatalf("restorePinnedMessages: %v", err)
 	}

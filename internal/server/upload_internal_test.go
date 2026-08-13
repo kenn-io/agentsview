@@ -92,8 +92,6 @@ func TestSessionBatchWriteFromParsedPreservesMessageIdentity(t *testing.T) {
 	assert.Equal(t, "entry-1:ide-context", result.Messages[0].SourceUUID)
 	assert.Equal(t, "parent-1", result.Messages[0].SourceParentUUID)
 	assert.True(t, result.Messages[0].IsSidechain)
-	assert.True(t, result.PreserveLegacyPinsByOrdinal,
-		"explicit re-uploads preserve existing UUID-less pins by ordinal")
 }
 
 func TestSessionBatchWriteFromParsedPreservesCompactBoundary(t *testing.T) {

@@ -25,11 +25,6 @@ type SessionBatchWrite struct {
 	Findings                []SecretFinding
 	DataVersion             int
 	ReplaceMessages         bool
-	// PreserveLegacyPinsByOrdinal is for explicit replacement workflows that
-	// define ordinal continuity even when UUID-less message content changes.
-	// Provider reparses must leave this false so identity-changing rows cannot
-	// inherit a pin merely by occupying the same ordinal.
-	PreserveLegacyPinsByOrdinal bool
 }
 
 // SessionBatchResult summarizes a WriteSessionBatch call.
@@ -444,7 +439,6 @@ func writeOneSessionBatchTx(
 	if replaceMessages {
 		if err := restorePinsTx(
 			tx, write.Session.ID, pins,
-			write.PreserveLegacyPinsByOrdinal,
 		); err != nil {
 			return 0, err
 		}

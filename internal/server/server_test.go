@@ -3981,8 +3981,10 @@ func TestUploadSession_ReuploadPreservesPins(t *testing.T) {
 	_, err = te.db.PinMessage("upload-pinned", msgs[0].ID, &note)
 	require.NoError(t, err, "PinMessage")
 
+	// The pinned message is unchanged; only the reply was edited, so
+	// the pin re-attaches to its message through the identity rules.
 	updated := testjsonl.NewSessionBuilder().
-		AddClaudeUser(tsEarly, "updated upload").
+		AddClaudeUser(tsEarly, "original upload").
 		AddClaudeAssistant(tsEarlyS5, "updated reply").
 		String()
 	w = te.upload(t, "upload-pinned.jsonl", updated,
@@ -4000,6 +4002,46 @@ func TestUploadSession_ReuploadPreservesPins(t *testing.T) {
 	if pins[0].Note == nil || *pins[0].Note != note {
 		t.Fatalf("pin note = %v, want %q", pins[0].Note, note)
 	}
+}
+
+// TestUploadSession_ReuploadDropsPinOnEditedMessage documents the
+// intended limit: a re-upload that edits the pinned UUID-less message
+// itself destroys the only identity the pin can follow, so the pin is
+// dropped rather than guessed onto the edited row. Both stores apply
+// the same rule, keeping SQLite and PostgreSQL consistent.
+func TestUploadSession_ReuploadDropsPinOnEditedMessage(t *testing.T) {
+	te := setup(t)
+
+	initial := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "original upload").
+		AddClaudeAssistant(tsEarlyS5, "original reply").
+		String()
+	w := te.upload(t, "upload-pin-edited.jsonl", initial,
+		"project=myproj&machine=remote")
+	assertStatus(t, w, http.StatusOK)
+
+	msgs, err := te.db.GetAllMessages(
+		context.Background(), "upload-pin-edited",
+	)
+	require.NoError(t, err, "GetAllMessages")
+	require.Len(t, msgs, 2, "initial messages")
+	_, err = te.db.PinMessage("upload-pin-edited", msgs[0].ID, nil)
+	require.NoError(t, err, "PinMessage")
+
+	updated := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "edited upload").
+		AddClaudeAssistant(tsEarlyS5, "original reply").
+		String()
+	w = te.upload(t, "upload-pin-edited.jsonl", updated,
+		"project=myproj&machine=remote")
+	assertStatus(t, w, http.StatusOK)
+
+	pins, err := te.db.ListPinnedMessages(
+		context.Background(), "upload-pin-edited", "",
+	)
+	require.NoError(t, err, "ListPinnedMessages")
+	assert.Empty(t, pins,
+		"editing the pinned message drops the pin")
 }
 
 func TestUploadSession_ReuploadDoesNotMoveLegacyPinToIDEEnvelope(t *testing.T) {
