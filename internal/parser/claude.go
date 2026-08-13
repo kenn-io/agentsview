@@ -1172,6 +1172,28 @@ func extractMessagesFrom(
 				ordinal++
 				continue
 			}
+			// The VS Code extension sometimes prepends an IDE-context
+			// wrapper directly onto a real prompt in the same entry.
+			// Split it into a hidden system-metadata message plus the
+			// real prompt, so first_message and the visible transcript
+			// show only the prompt.
+			if subtype, envelope, remainder, ok :=
+				splitClaudeIDEEnvelopePrompt(text); ok {
+				hidden := claudeIDEEnvelopeMessage(e, ordinal, subtype, envelope)
+				if remainder == "" || isClaudeSystemMessage(remainder) {
+					// The remainder is discarded, so no visible
+					// message remains to carry the entry's tool
+					// results; keep them on the hidden envelope row
+					// like the standalone classify branch does.
+					hidden.ToolResults = trs
+				}
+				messages = append(messages, hidden)
+				ordinal++
+				if remainder == "" {
+					continue
+				}
+				text = remainder
+			}
 			// Skip unclassified noise (e.g. non-caveat
 			// <local-command-*> envelopes).
 			if isClaudeSystemMessage(text) {
@@ -2114,6 +2136,12 @@ func isCountedClaudeUserTurn(entry dagEntry) bool {
 	if skip || strings.TrimSpace(text) == "" {
 		return false
 	}
+	if _, _, remainder, ok := splitClaudeIDEEnvelopePrompt(text); ok {
+		if remainder == "" {
+			return false
+		}
+		text = remainder
+	}
 	return !isClaudeSystemMessage(text)
 }
 
@@ -2214,6 +2242,28 @@ func extractMessages(entries []dagEntry) (
 				})
 				ordinal++
 				continue
+			}
+			// The VS Code extension sometimes prepends an IDE-context
+			// wrapper directly onto a real prompt in the same entry.
+			// Split it into a hidden system-metadata message plus the
+			// real prompt, so first_message and the visible transcript
+			// show only the prompt.
+			if subtype, envelope, remainder, ok :=
+				splitClaudeIDEEnvelopePrompt(text); ok {
+				hidden := claudeIDEEnvelopeMessage(e, ordinal, subtype, envelope)
+				if remainder == "" || isClaudeSystemMessage(remainder) {
+					// The remainder is discarded, so no visible
+					// message remains to carry the entry's tool
+					// results; keep them on the hidden envelope row
+					// like the standalone classify branch does.
+					hidden.ToolResults = trs
+				}
+				messages = append(messages, hidden)
+				ordinal++
+				if remainder == "" {
+					continue
+				}
+				text = remainder
 			}
 			if isClaudeSystemMessage(text) {
 				continue
@@ -2703,6 +2753,104 @@ func isStandaloneClaudeTaggedMessage(content, tag string) bool {
 	afterOpen := trimmed[len(openTag):]
 	return strings.Index(afterOpen, closeTag) ==
 		len(afterOpen)-len(closeTag)
+}
+
+// claudeIDEEnvelopeTags are the VS Code extension's IDE-context
+// wrapper tags: standalone messages using these are already
+// promoted to hidden system metadata by classifyClaudeSystemMessage.
+// splitLeadingClaudeIDEEnvelope handles the remaining case where the
+// extension prepends one of these wrappers directly onto a real
+// prompt in the same user entry.
+var claudeIDEEnvelopeTags = [...]string{"ide_opened_file", "ide_selection"}
+
+// claudeIDEEnvelopeSourceUUID derives a distinct source UUID for the
+// synthetic hidden message a split envelope becomes. The real prompt
+// keeps the entry's own uuid: pins and Recall evidence resolve source
+// UUIDs and require them to be unique per session, so the two rows
+// produced from one entry must not share an identity. An empty entry
+// uuid stays empty rather than becoming a shared non-empty value.
+func claudeIDEEnvelopeSourceUUID(entryUUID string) string {
+	if entryUUID == "" {
+		return ""
+	}
+	return entryUUID + ":ide-context"
+}
+
+// splitLeadingClaudeIDEEnvelope detects a well-formed IDE-context
+// envelope at the very start of content that is followed by
+// additional real prompt text, and separates the two. The standalone
+// case (envelope with nothing else) is left alone here; that is
+// handled by classifyClaudeSystemMessage so the whole message
+// promotes to system metadata.
+//
+// Splitting keeps the envelope recorded as hidden system metadata
+// (same subtype as the standalone case) while letting first_message
+// and the visible transcript show only the real prompt that follows,
+// instead of raw IDE-context markup.
+// splitClaudeIDEEnvelopePrompt splits a leading IDE-context envelope
+// off a user entry's text and re-runs the revealed remainder through
+// the same command/system-reminder preprocessing a bare prompt gets,
+// so command XML normalizes (e.g. "/clear") instead of surfacing raw
+// markup in first_message. A remainder that preprocessing skips or
+// empties comes back as "": the entry carries no visible prompt.
+func splitClaudeIDEEnvelopePrompt(
+	text string,
+) (subtype, envelope, remainder string, ok bool) {
+	subtype, envelope, remainder, ok = splitLeadingClaudeIDEEnvelope(text)
+	if !ok {
+		return "", "", "", false
+	}
+	remainder, skip := preprocessClaudeUserText(remainder)
+	if skip || strings.TrimSpace(remainder) == "" {
+		return subtype, envelope, "", true
+	}
+	return subtype, envelope, remainder, true
+}
+
+// claudeIDEEnvelopeMessage builds the hidden system-metadata message a
+// split envelope becomes. Role stays "user" so role-keyed analytics
+// treat it as input, matching the standalone classify branch.
+func claudeIDEEnvelopeMessage(
+	e dagEntry, ordinal int, subtype, envelope string,
+) ParsedMessage {
+	return ParsedMessage{
+		Ordinal:          ordinal,
+		Role:             RoleUser,
+		Content:          envelope,
+		Timestamp:        e.timestamp,
+		IsSystem:         true,
+		ContentLength:    len(envelope),
+		SourceType:       "system",
+		SourceSubtype:    subtype,
+		SourceUUID:       claudeIDEEnvelopeSourceUUID(e.uuid),
+		SourceParentUUID: e.parentUuid,
+		IsSidechain:      gjson.Get(e.line, "isSidechain").Bool(),
+	}
+}
+
+func splitLeadingClaudeIDEEnvelope(
+	content string,
+) (subtype, envelope, remainder string, ok bool) {
+	trimmed := trimClaudeSystemMessagePrefix(content)
+	for _, tag := range claudeIDEEnvelopeTags {
+		openTag := "<" + tag + ">"
+		closeTag := "</" + tag + ">"
+		if !strings.HasPrefix(trimmed, openTag) {
+			continue
+		}
+		closeIdx := strings.Index(trimmed, closeTag)
+		if closeIdx < 0 {
+			continue
+		}
+		envelopeEnd := closeIdx + len(closeTag)
+		rest := strings.TrimSpace(trimmed[envelopeEnd:])
+		if rest == "" {
+			// Standalone: classifyClaudeSystemMessage handles this.
+			continue
+		}
+		return tag, trimmed[:envelopeEnd], rest, true
+	}
+	return "", "", "", false
 }
 
 func stripLeadingClaudeSystemReminderContent(content string) string {

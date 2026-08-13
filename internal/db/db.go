@@ -414,7 +414,12 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (87: Codex fork replay boundary correction. Turn identifiers are opaque;
 // existing Codex-format rows need re-parsing so copied parent turns with any
 // identifier shape remain excluded until the first child-owned turn.)
-const dataVersion = 87
+// (88: Claude Code IDE context wrappers prepended onto a real prompt in
+// the same entry are now split into a hidden system-metadata message plus
+// the real prompt, instead of leaving the raw wrapper in first_message and
+// the visible transcript. Existing rows need re-parsing so first_message
+// and message content drop the leading markup.)
+const dataVersion = 88
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
