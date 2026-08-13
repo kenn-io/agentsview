@@ -1428,7 +1428,10 @@ func TestSyncCodebuffSingleSessionWritesProviderStatHash(t *testing.T) {
 //
 // The test does not depend on any Codebuff fixture; constructing an
 // engine with the default registry must produce a non-nil entry only
-// for Codebuff (and any future agent that opts in via the capability).
+// for the agents that opt in via the capability: Codebuff, plus the
+// content-hashing single-file providers (Claude, Codex, TraeX) whose
+// persisted stat digest spares a full-content fingerprint on every
+// fresh-process sweep.
 func TestSyncEngineProviderStatHashersRegistrationIsCapabilityGated(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -1443,22 +1446,27 @@ func TestSyncEngineProviderStatHashersRegistrationIsCapabilityGated(t *testing.T
 	})
 	t.Cleanup(engine.Close)
 
-	require.NotNil(t,
-		engine.ProviderStatHasher(parser.AgentCodebuff),
-		"Codebuff declares Source.MultiFileStatHash=Supported and "+
-			"must land in providerStatHashers; a nil here means the "+
-			"capability gate is missing or codebuffProviderCapabilities "+
-			"lost the override")
 	for _, agent := range []parser.AgentType{
+		parser.AgentCodebuff,
 		parser.AgentClaude,
 		parser.AgentCodex,
+		parser.AgentTraeX,
+	} {
+		require.NotNil(t, engine.ProviderStatHasher(agent),
+			"%s declares Source.MultiFileStatHash=Supported and "+
+				"must land in providerStatHashers; a nil here means the "+
+				"capability gate dropped it or its provider capabilities "+
+				"lost the override",
+			agent)
+	}
+	for _, agent := range []parser.AgentType{
 		parser.AgentRooCode,
 		parser.AgentKiloLegacy,
 		parser.AgentGemini,
 		parser.AgentCopilot,
 	} {
 		assert.Nil(t, engine.ProviderStatHasher(agent),
-			"%s is a single-file (non-multi-file) agent and must "+
+			"%s does not declare Source.MultiFileStatHash and must "+
 				"NOT be registered in providerStatHashers; a non-nil "+
 				"entry means the SourceSetProvider forwarding method "+
 				"is registering 0-returning stubs that would falsely "+

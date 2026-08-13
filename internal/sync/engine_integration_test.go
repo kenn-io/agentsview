@@ -14920,6 +14920,161 @@ func TestSyncAllPersistsClaudeStatDigestAcrossEngineRestart(t *testing.T) {
 		"fresh engine must skip the unchanged transcript")
 }
 
+// A Claude row that predates the stat-digest side-table (no
+// provider_freshness row) is confirmed unchanged by the content-verified
+// single-session skip. That skip must backfill the digest so the next
+// fresh process can skip on stats alone; without the stamp the row would
+// pay a full content hash on every restart forever, since a skip never
+// writes and only writes stamped the digest.
+func TestRestartedEngineBackfillsClaudeStatDigestOnVerifiedSkip(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "backfill me", "/workspace/api").
+		String()
+	path := env.writeClaudeSession(
+		t, "-workspace-api", "backfill-sess.jsonl", content,
+	)
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+	require.NoError(t, env.db.DeleteProviderStatHash(
+		t.Context(), parser.AgentClaude, path,
+	), "simulate a row written before the digest side-table existed")
+
+	restarted := sync.NewEngine(env.db, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {env.claudeDir},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(restarted.Close)
+	stats := restarted.SyncAll(t.Context(), nil)
+	require.Equal(t, 0, stats.Synced,
+		"unchanged transcript must skip, not rewrite")
+
+	digest, ok, err := env.db.GetProviderStatHash(
+		t.Context(), parser.AgentClaude, path,
+	)
+	require.NoError(t, err)
+	assert.True(t, ok,
+		"a content-verified unchanged skip must backfill the digest; "+
+			"without it every restart re-hashes the transcript")
+	assert.NotZero(t, digest)
+}
+
+// A Codex row without a provider_freshness digest returns through the
+// validated cache-skip or DB-fingerprint skip, both of which verify the
+// current content hash against the stored row. Those skips must backfill
+// the digest so pre-digest archives stop content-hashing on every fresh
+// process.
+func TestRestartedEngineBackfillsCodexStatDigestOnConfirmedSkip(t *testing.T) {
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir}))
+
+	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229e4"
+	content := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
+		AddCodexMessage(tsEarlyS1, "user", "backfill my digest").
+		String()
+	path := env.writeCodexSession(
+		t,
+		filepath.Join("2026", "06", "11"),
+		"rollout-2026-06-11T12-44-06-"+uuid+".jsonl",
+		content,
+	)
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+	require.NoError(t, env.db.DeleteProviderStatHash(
+		t.Context(), parser.AgentCodex, path,
+	), "simulate a row written before the digest side-table existed")
+
+	restarted := sync.NewEngine(env.db, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {codexDir},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(restarted.Close)
+	stats := restarted.SyncAll(t.Context(), nil)
+	require.Equal(t, 0, stats.Synced,
+		"unchanged rollout must skip, not rewrite")
+
+	digest, ok, err := env.db.GetProviderStatHash(
+		t.Context(), parser.AgentCodex, path,
+	)
+	require.NoError(t, err)
+	assert.True(t, ok,
+		"a DB-confirmed unchanged skip must backfill the digest; "+
+			"without it every restart re-hashes the rollout")
+	assert.NotZero(t, digest)
+}
+
+// A session_index.jsonl touch (any title change elsewhere) breaks every
+// rollout's stored digest at once. Rollouts whose own title did not change
+// are confirmed unchanged by the fingerprint-path skips, which must
+// refresh the stored digest to fold the new index stat; otherwise the
+// whole archive re-hashes after every restart until something rewrites it.
+func TestRestartedEngineCodexIndexTouchRefreshesStoredDigest(t *testing.T) {
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir}))
+
+	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229e5"
+	content := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
+		AddCodexMessage(tsEarlyS1, "user", "keep my title").
+		String()
+	path := env.writeCodexSession(
+		t,
+		filepath.Join("2026", "06", "11"),
+		"rollout-2026-06-11T12-44-06-"+uuid+".jsonl",
+		content,
+	)
+	indexPath := filepath.Join(root, parser.CodexSessionIndexFilename)
+	indexContent := fmt.Appendf(nil,
+		`{"id":"%s","thread_name":"Stable title","updated_at":"2026-06-11T17:34:20Z"}`+"\n",
+		uuid,
+	)
+	require.NoError(t, os.WriteFile(indexPath, indexContent, 0o644))
+	transcriptTime := time.Now().Add(-3 * time.Hour)
+	indexTime := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(path, transcriptTime, transcriptTime))
+	require.NoError(t, os.Chtimes(indexPath, indexTime, indexTime))
+
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+	staleDigest, ok, err := env.db.GetProviderStatHash(
+		t.Context(), parser.AgentCodex, path,
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	// Same index content, newer mtime: another session's rename would look
+	// like this to a rollout whose own title is unchanged.
+	touchedTime := time.Now().Add(-1 * time.Hour)
+	require.NoError(t, os.WriteFile(indexPath, indexContent, 0o644))
+	require.NoError(t, os.Chtimes(indexPath, touchedTime, touchedTime))
+
+	restarted := sync.NewEngine(env.db, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {codexDir},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(restarted.Close)
+	stats := restarted.SyncAll(t.Context(), nil)
+	require.Equal(t, 0, stats.Synced,
+		"an index touch without a title change must not rewrite the rollout")
+
+	refreshed, ok, err := env.db.GetProviderStatHash(
+		t.Context(), parser.AgentCodex, path,
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.NotEqual(t, staleDigest, refreshed,
+		"the confirmed-unchanged skip must refresh the digest to the new "+
+			"index stat; a stale digest re-hashes the archive every restart")
+}
+
 // The Codex stat digest folds session_index.jsonl, so a title rename can
 // never hide behind a warm digest match across an engine restart: the
 // index change breaks the digest and the rename is picked up.

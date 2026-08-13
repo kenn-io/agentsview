@@ -8700,12 +8700,34 @@ func (e *Engine) processProviderFile(
 		)
 	}
 
+	// Persisted stat-digest skip. This runs before the single-session
+	// content guard below on purpose: a matching digest (size, mtime,
+	// ctime per component) plus a current stored row proves the source
+	// unchanged without opening it, so a fresh process (daemon restart or
+	// one-shot CLI sync) skips on stats alone instead of re-hashing the
+	// full transcript through providerIncrementalContentChanged. Any real
+	// change -- including a same-size same-mtime in-place rewrite --
+	// bumps a ctime and breaks the digest, falling through to the
+	// content-verified gates.
+	if freshMtime, fresh := e.providerSourceFreshBeforeFingerprint(
+		ctx, source, file, preParseStatHash,
+	); fresh {
+		return processResult{
+			skip:  true,
+			mtime: freshMtime,
+		}, true
+	}
+
 	// DB-freshness skip for single-session JSONL providers (Claude):
 	// when the stored session's size, mtime, and data version already
 	// match the source and its project does not need reparse, skip the
 	// parse entirely. This reproduces the legacy process arm's
 	// shouldSkipFile gate so an unchanged session is not re-parsed on
-	// every full sync.
+	// every full sync. A content-verified skip confirmed the current
+	// bytes against the stored row hash, so it backfills the stat digest
+	// for rows that predate the side-table (or whose digest an index or
+	// companion touch invalidated); without the stamp those rows would
+	// re-hash on every fresh process forever, since a skip never writes.
 	sourceForceReplace := false
 	if mtime, fresh, forceReplace, contentVerified := e.providerSingleSessionFresh(
 		ctx, provider, source, file,
@@ -8713,6 +8735,11 @@ func (e *Engine) processProviderFile(
 		if !verifiedStateOK || contentVerified {
 			if verifiedStateOK {
 				e.promoteVerifiedSource(verifiedCapture)
+			}
+			if contentVerified {
+				e.stampProviderStatHashForConfirmedSource(
+					ctx, preParseStatHash,
+				)
 			}
 			return processResult{
 				skip:  true,
@@ -8725,14 +8752,6 @@ func (e *Engine) processProviderFile(
 		// ever earning verified-source trust.
 	} else if forceReplace {
 		sourceForceReplace = true
-	}
-	if freshMtime, fresh := e.providerSourceFreshBeforeFingerprint(
-		ctx, source, file, preParseStatHash,
-	); fresh {
-		return processResult{
-			skip:  true,
-			mtime: freshMtime,
-		}, true
 	}
 
 	// Watermark-only shared-container sources (changed-path classification)
@@ -8783,12 +8802,13 @@ func (e *Engine) processProviderFile(
 			// self-healing (e.g. a parser data-version bump or generated
 			// roborev CI worktree project): clear the entry and fall through
 			// to a full reparse, mirroring the legacy process arm.
-			if !e.providerSkipCacheEntryFreshInDB(
+			cacheFresh, cacheRowHashVerified := e.providerSkipCacheEntryFreshInDB(
 				file,
 				source,
 				fingerprint,
 				providerSemantics,
-			) {
+			)
+			if !cacheFresh {
 				e.clearSkip(cacheKey)
 			} else if e.pathNeedsCachedSkipBypass(file.Agent, file.Path) {
 				e.clearSkip(cacheKey)
@@ -8839,6 +8859,16 @@ func (e *Engine) processProviderFile(
 							file, fingerprint, providerSemantics,
 						) {
 						e.promoteVerifiedSource(verifiedCapture)
+					}
+					// The fingerprint just content-hashed the current
+					// source and matched the stored row, so this skip may
+					// backfill or refresh the stat digest for rows that
+					// predate the side-table or whose digest a shared
+					// index touch invalidated.
+					if cacheRowHashVerified {
+						e.stampProviderStatHashForConfirmedSource(
+							ctx, preParseStatHash,
+						)
 					}
 					return processResult{
 						skip:      true,
@@ -8893,6 +8923,14 @@ func (e *Engine) processProviderFile(
 		if verifiedStateOK {
 			e.promoteVerifiedSource(verifiedCapture)
 		}
+		// The Codex-family fingerprint content-hashed the rollout and
+		// shouldSkipCodexFingerprint verified it against the stored row
+		// (hash, project, data version, index title), so this skip may
+		// backfill or refresh the stat digest: rows that predate the
+		// side-table, and rollouts whose digest a shared index touch
+		// invalidated without changing their own title, would otherwise
+		// re-hash on every fresh process forever.
+		e.stampProviderStatHashForConfirmedSource(ctx, preParseStatHash)
 		return processResult{
 			skip:        true,
 			mtime:       fingerprint.MTimeNS,
@@ -9664,19 +9702,26 @@ func providerProcessCacheKeyWithHash(
 	return key + "?source_hash=" + fingerprint.Hash
 }
 
+// providerSkipCacheEntryFreshInDB reports whether a skip-cache hit is
+// still consistent with the archive. rowHashVerified additionally reports
+// that the current fingerprint's content hash was compared against a
+// stored session row and matched -- the only cache outcome strong enough
+// to stamp a provider_freshness digest, since the other fresh returns
+// (hash-free semantics, whole-container identity, no stored row yet)
+// never consult a row.
 func (e *Engine) providerSkipCacheEntryFreshInDB(
 	file parser.DiscoveredFile,
 	source parser.SourceRef,
 	fingerprint parser.SourceFingerprint,
 	providerSemantics parser.ProviderSyncSemantics,
-) bool {
+) (fresh, rowHashVerified bool) {
 	agent := file.Agent
 	if agent == "" {
 		agent = source.Provider
 	}
 	if fingerprint.Hash == "" ||
 		!providerSemantics.FingerprintHashRequiredForFreshness {
-		return true
+		return true, false
 	}
 	if parser.IsOmnigentContainerSource(source) {
 		// A whole-container omnigent source has only virtual member rows in
@@ -9686,7 +9731,7 @@ func (e *Engine) providerSkipCacheEntryFreshInDB(
 		// ProviderSyncSemantics.SkipCacheFreshWithoutStoredRow below, which
 		// trusts an entry only while NO row exists yet and resumes stored-row
 		// hash validation once the provider persists one.
-		return true
+		return true, false
 	}
 	lookupPath := providerSkipLookupPath(file, source, fingerprint)
 	if e.pathRewriter != nil {
@@ -9702,13 +9747,14 @@ func (e *Engine) providerSkipCacheEntryFreshInDB(
 			// mtime/source-signal based until a row exists: a same-mtime rewrite
 			// cannot be distinguished in this no-row state. Hash validation applies
 			// once a session has actually been stored.
-			return true
+			return true, false
 		}
 	}
-	return e.providerFingerprintHashMatchesDB(
+	matched := e.providerFingerprintHashMatchesDB(
 		agent, lookupPath, fingerprint,
 		providerSemantics.FingerprintHashRequiredForFreshness,
 	)
+	return matched, matched
 }
 
 func processFileUsesProvider(agent parser.AgentType) bool {
@@ -10199,12 +10245,14 @@ func (e *Engine) providerSourceUnchangedInDB(
 }
 
 // stampProviderStatHashForConfirmedSource persists the pre-parse
-// per-component stat digest for a source whose provider.Fingerprint was
-// just verified against an existing current session row (the
-// providerSourceUnchangedInDB skip). This is the only pre-write moment a
-// digest may safely be written: a transient failure between an eager stamp
-// and the fingerprint/parse/write that follows would leave a matching
-// digest that permanently suppresses every later retry. The digest is the
+// per-component stat digest for a source whose current content was just
+// verified against an existing current session row: the Claude
+// content-verified single-session skip, the hash-validated cache skip,
+// the Codex-family DB-fingerprint skip, and providerSourceUnchangedInDB.
+// These are the only pre-write moments a digest may safely be written: a
+// transient failure between an eager stamp and the fingerprint/parse/write
+// that follows would leave a matching digest that permanently suppresses
+// every later retry. The digest is the
 // pre-parse snapshot captured in processProviderFile, so it describes
 // exactly the file state the fingerprint verified, and the DB key uses the
 // pathRewriter's logical key, mirroring the write path. Providers without
@@ -10483,21 +10531,52 @@ func providerStatFreshnessMtime(
 	}
 }
 
+// providerFreshnessAgents returns the stored-agent labels a provider's
+// sessions may carry for digest-currency checks. Codebuff relabels
+// free-tier sessions to Freebuff while discovery and the
+// provider_freshness side-table stay keyed on Codebuff, so both labels
+// are this provider's own rows; every other hasher stores under its
+// discovery label.
+func providerFreshnessAgents(agent parser.AgentType) []parser.AgentType {
+	if agent == parser.AgentCodebuff {
+		return []parser.AgentType{parser.AgentCodebuff, parser.AgentFreebuff}
+	}
+	return []parser.AgentType{agent}
+}
+
 // providerFreshDigestSourceCurrentInDB reports whether the stored session
 // row for a digest-matched source is still current: the row exists, its
 // data version is current, and it does not need a project reparse. A
 // matching provider_freshness digest proves only that the file stat is
 // unchanged; these checks are what allow the digest short-circuit to skip
-// safely, mirroring the tail guards of providerSourceUnchangedInDB.
-func (e *Engine) providerFreshDigestSourceCurrentInDB(lookupPath string) bool {
-	if _, _, ok := e.db.GetFileInfoByPath(lookupPath); !ok {
-		return false
+// safely, mirroring the tail guards of providerSourceUnchangedInDB. Every
+// lookup is scoped to the provider's own stored-agent labels: Codex and
+// TraeX can index the same rollout path, and a path-only lookup would let
+// this agent's skip borrow the other agent's newer row and hide a repair
+// (e.g. a stale generated project) on its own row.
+func (e *Engine) providerFreshDigestSourceCurrentInDB(
+	agent parser.AgentType, lookupPath string,
+) bool {
+	rowFound := false
+	for _, owned := range providerFreshnessAgents(agent) {
+		if _, _, ok := e.db.GetFileInfoByAgentPath(
+			lookupPath, string(owned),
+		); !ok {
+			continue
+		}
+		rowFound = true
+		if project, ok := e.db.GetProjectByAgentPath(
+			lookupPath, string(owned),
+		); ok && parser.NeedsProjectReparse(project) {
+			return false
+		}
+		if e.db.GetDataVersionByAgentPath(
+			lookupPath, string(owned),
+		) < db.CurrentDataVersion() {
+			return false
+		}
 	}
-	if project, ok := e.db.GetProjectByPath(lookupPath); ok &&
-		parser.NeedsProjectReparse(project) {
-		return false
-	}
-	return e.db.GetDataVersionByPath(lookupPath) >= db.CurrentDataVersion()
+	return rowFound
 }
 
 func (e *Engine) providerSourceFreshBeforeFingerprint(
@@ -10542,10 +10621,13 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 	// cancel out in sum-of-sizes). The side-table is populated
 	// only after an outcome the engine can trust: a successful
 	// write's flushPending, a single-session writeSessionFull
-	// commit, or the DB-confirmed unchanged skip in processFile
-	// (stampProviderStatHashForConfirmedSource, which runs only
-	// after the current fingerprint was verified against an
-	// existing current session row). Nothing here ever persists
+	// commit, or a confirmed-unchanged skip in processProviderFile
+	// (stampProviderStatHashForConfirmedSource at the Claude
+	// content-verified skip, the hash-validated cache skip, the
+	// Codex-family DB-fingerprint skip, and
+	// providerSourceUnchangedInDB — each runs only after the
+	// current source content was verified against an existing
+	// current session row). Nothing here ever persists
 	// the digest before fingerprinting, parsing, or session
 	// writing succeeds — a transient failure must not leave a
 	// matching digest that suppresses every later retry.
@@ -10579,10 +10661,13 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 			// old cold-stamp): a transient failure after the stamp
 			// would leave a matching digest that suppresses every
 			// later retry. Instead the loop is closed at the
-			// DB-confirmed unchanged skip in processFile, which runs
-			// after provider.Fingerprint verified the current source
-			// against an existing current session row — the only
-			// pre-write moment the digest may safely be persisted.
+			// confirmed-unchanged skips in processProviderFile
+			// (Claude content-verified, hash-validated cache,
+			// Codex-family DB-fingerprint, providerSourceUnchangedInDB),
+			// each of which runs only after the current source content
+			// was verified against an existing current session row —
+			// the only pre-write moments the digest may safely be
+			// persisted.
 			// A genuinely new or changed source flows through a
 			// successful write whose flushPending (or writeSessionFull)
 			// persists the digest; CWD-filtered sources stay absent
@@ -10609,7 +10694,9 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 			// because this short-circuit never reaches fingerprinting or
 			// parsing. Defer to the fingerprint path whenever the stored
 			// row is missing, stale, or needs project reclassification.
-			if !e.providerFreshDigestSourceCurrentInDB(lookupPath) {
+			if !e.providerFreshDigestSourceCurrentInDB(
+				file.Agent, lookupPath,
+			) {
 				return 0, false
 			}
 			return providerStatFreshnessMtime(file.Agent, lookupPath, info), true

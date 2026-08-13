@@ -346,7 +346,7 @@ func TestOmnigentContainerSkipCacheEntryFreshWithoutStoredRow(t *testing.T) {
 		FingerprintHashRequiredForFreshness: true,
 	}
 
-	containerFresh := engine.providerSkipCacheEntryFreshInDB(
+	containerFresh, containerHashVerified := engine.providerSkipCacheEntryFreshInDB(
 		parser.DiscoveredFile{Path: container, Agent: parser.AgentOmnigent},
 		parser.SourceRef{
 			Provider: parser.AgentOmnigent, Key: container,
@@ -355,7 +355,7 @@ func TestOmnigentContainerSkipCacheEntryFreshWithoutStoredRow(t *testing.T) {
 		parser.SourceFingerprint{Key: container, Hash: "container-hash"},
 		providerSemantics,
 	)
-	memberFresh := engine.providerSkipCacheEntryFreshInDB(
+	memberFresh, _ := engine.providerSkipCacheEntryFreshInDB(
 		parser.DiscoveredFile{Path: memberPath, Agent: parser.AgentOmnigent},
 		parser.SourceRef{
 			Provider: parser.AgentOmnigent, Key: memberPath,
@@ -367,6 +367,9 @@ func TestOmnigentContainerSkipCacheEntryFreshWithoutStoredRow(t *testing.T) {
 
 	assert.True(t, containerFresh,
 		"a whole-container entry needs no stored physical-path row")
+	assert.False(t, containerHashVerified,
+		"container identity freshness never compares a stored row hash, "+
+			"so it must not authorize a stat-digest stamp")
 	assert.False(t, memberFresh,
 		"a virtual member entry must still validate against its stored row")
 }
