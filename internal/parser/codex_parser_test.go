@@ -503,15 +503,16 @@ func TestParseCodexSession_ExecOriginator(t *testing.T) {
 }
 
 func TestCodexInsertMessage_PreservesChronologyOnSameOrdinal(t *testing.T) {
-	b := newCodexSessionBuilder(false, nil)
-	b.messages = []ParsedMessage{{
+	s := newCodexCollectingSink(0)
+	s.messages = []ParsedMessage{{
 		Ordinal:   2,
 		Role:      RoleAssistant,
 		Content:   "later assistant message",
 		Timestamp: parseTimestamp("2024-01-01T10:01:06Z"),
 	}}
+	s.nextOrdinal = 3
 
-	idx := b.insertMessage(ParsedMessage{
+	idx := s.InsertMessage(ParsedMessage{
 		Ordinal:   2,
 		Role:      RoleUser,
 		Content:   "earlier orphan notification",
@@ -519,12 +520,12 @@ func TestCodexInsertMessage_PreservesChronologyOnSameOrdinal(t *testing.T) {
 	})
 
 	assert.Equal(t, 0, idx)
-	b.normalizeOrdinals()
-	require.Len(t, b.messages, 2)
-	assert.Equal(t, "earlier orphan notification", b.messages[0].Content)
-	assert.Equal(t, "later assistant message", b.messages[1].Content)
-	assert.Equal(t, 0, b.messages[0].Ordinal)
-	assert.Equal(t, 1, b.messages[1].Ordinal)
+	s.Finalize()
+	require.Len(t, s.messages, 2)
+	assert.Equal(t, "earlier orphan notification", s.messages[0].Content)
+	assert.Equal(t, "later assistant message", s.messages[1].Content)
+	assert.Equal(t, 0, s.messages[0].Ordinal)
+	assert.Equal(t, 1, s.messages[1].Ordinal)
 }
 
 func TestParseCodexSession_FunctionCalls(t *testing.T) {
@@ -636,7 +637,7 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		// gate must not request a full parse for them (P2 contract).
 		line := `{"timestamp":"2026-07-08T03:20:43.376Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_abc","output":"Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess."}}`
 
-		b := newCodexSessionBuilder(false, nil)
+		b := newCodexSessionBuilder(false, 0)
 		b.rememberToolCall("call_abc", "exec_command")
 		assert.False(t, b.codexIncrementalNeedsFullParse(line))
 	})
