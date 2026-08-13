@@ -8820,6 +8820,10 @@ func (e *Engine) processProviderFile(
 	var codexFullHash string
 	var codexHashState []byte
 	codexForceFullParse := false
+	// codexFingerprintFromParse marks a never-synced Codex-format source
+	// whose fingerprint is derived from the parser's single-pass hash
+	// state instead of a separate full-file fingerprint read.
+	codexFingerprintFromParse := false
 	if isCodexFormatAgent(file.Agent) {
 		cpResult, cpErr := e.codexCheckpointFingerprint(ctx, source, file)
 		if cpErr != nil {
@@ -8848,7 +8852,55 @@ func (e *Engine) processProviderFile(
 	}
 	if codexCheckpoint == nil {
 		var err error
-		fingerprint, err = provider.Fingerprint(ctx, source)
+		if isCodexFormatAgent(file.Agent) &&
+			!verifiedFresh &&
+			!e.forceParse && !file.ForceParse {
+			// A never-synced Codex-format source has no stored hash to
+			// compare: skip the standalone fingerprint read and derive
+			// the hash from the parser's single-pass capture after the
+			// parse, so the cold full sync reads the source once instead
+			// of twice. Only the identity fields are needed up front;
+			// every skip gate above this point requires a stored row or
+			// cache entry, which a new source does not have. A persisted
+			// skip-cache entry for the same base path (e.g. a parse-error
+			// entry keyed by the real source hash) keeps the fingerprint
+			// read so its cache key still matches.
+			lookupPath := file.Path
+			if e.pathRewriter != nil {
+				lookupPath = e.pathRewriter(file.Path)
+			}
+			_, hasHash := e.db.GetFileHashByAgentPath(
+				lookupPath, string(file.Agent),
+			)
+			e.skipMu.RLock()
+			skipBase := providerAgentSkipCacheKey(file.Path, file.Agent)
+			_, hasSkipEntry := e.skipHashKeys[skipBase]
+			e.skipMu.RUnlock()
+			if !hasHash && !hasSkipEntry {
+				if info, statErr := os.Stat(file.Path); statErr == nil {
+					inode, device := getFileIdentity(file.Path, info)
+					mtime := info.ModTime().UnixNano()
+					if file.Agent == parser.AgentCodex {
+						mtime = parser.CodexEffectiveMtime(
+							file.Path, mtime,
+						)
+					}
+					fingerprint = parser.SourceFingerprint{
+						Key: codexCheckpointFingerprintKey(
+							source, file.Path,
+						),
+						Size:    info.Size(),
+						MTimeNS: mtime,
+						Inode:   uint64(inode),
+						Device:  uint64(device),
+					}
+					codexFingerprintFromParse = true
+				}
+			}
+		}
+		if !codexFingerprintFromParse {
+			fingerprint, err = provider.Fingerprint(ctx, source)
+		}
 		if err != nil {
 			if file.ForceParse &&
 				providerDeletedPhysicalSQLiteSource(file.Agent, file.Path) &&
@@ -9079,6 +9131,32 @@ func (e *Engine) processProviderFile(
 		}, true
 	}
 	applyProviderFingerprintFileInfo(file.Agent, fingerprint, outcome.Results)
+	if codexFingerprintFromParse && fingerprint.Hash == "" {
+		// Derive the fingerprint hash from the parser's single-pass
+		// capture so the stored file_hash matches what a fingerprint
+		// read would have produced, without re-reading the source.
+		for i := range outcome.Results {
+			state := outcome.Results[i].Result.CheckpointHashState
+			if len(state) == 0 {
+				continue
+			}
+			hash, hashErr := codexHashStateDigest(state)
+			if hashErr != nil {
+				log.Printf(
+					"fingerprint from parse %s: %v",
+					file.Path, hashErr,
+				)
+				continue
+			}
+			outcome.Results[i].Result.Session.File.Hash = hash
+			fingerprint.Hash = hash
+		}
+		if fingerprint.Hash != "" {
+			cacheKey = providerProcessCacheKey(
+				file, source, fingerprint, providerSemantics,
+			)
+		}
+	}
 	cleanCache := providerOutcomeAllowsCleanSkipCache(outcome)
 	providerFailureCount := len(outcome.SourceErrors)
 	if !outcome.ResultSetComplete {
