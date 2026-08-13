@@ -2934,6 +2934,9 @@ type savedPostgresPin struct {
 	content             string
 	sourceUUIDCount     int
 	sourceIdentityCount int
+	sourceIdentityRank  int
+	legacyIdentityCount int
+	legacyIdentityRank  int
 	messageFound        bool
 	note                sql.NullString
 	createdAt           time.Time
@@ -3007,7 +3010,42 @@ const snapshotPinnedMessagesQuery = `
 					AND same_identity.role = current_message.role
 					AND same_identity.content = current_message.content
 					AND current_message.source_uuid <> ''
-			) END
+			) END,
+			CASE WHEN p.source_uuid <> '' THEN (
+				SELECT COUNT(*)
+				FROM messages identity_rank
+				WHERE identity_rank.session_id = p.session_id
+					AND identity_rank.source_uuid = p.source_uuid
+					AND identity_rank.role = anchored.role
+					AND identity_rank.content = anchored.content
+					AND identity_rank.ordinal <= anchored.ordinal
+			) ELSE (
+				SELECT COUNT(*)
+				FROM messages identity_rank
+				WHERE identity_rank.session_id = p.session_id
+					AND identity_rank.source_uuid = current_message.source_uuid
+					AND identity_rank.role = current_message.role
+					AND identity_rank.content = current_message.content
+					AND identity_rank.ordinal <= current_message.ordinal
+					AND current_message.source_uuid <> ''
+			) END,
+			(
+				SELECT COUNT(*)
+				FROM messages legacy_identity
+				WHERE legacy_identity.session_id = p.session_id
+					AND legacy_identity.role = current_message.role
+					AND legacy_identity.content = current_message.content
+					AND NOT legacy_identity.is_system
+			),
+			(
+				SELECT COUNT(*)
+				FROM messages legacy_rank
+				WHERE legacy_rank.session_id = p.session_id
+					AND legacy_rank.role = current_message.role
+					AND legacy_rank.content = current_message.content
+					AND NOT legacy_rank.is_system
+					AND legacy_rank.ordinal <= current_message.ordinal
+			)
 		FROM pinned_messages p
 		LEFT JOIN messages current_message
 			ON current_message.session_id = p.session_id
@@ -3049,6 +3087,8 @@ func snapshotPinnedMessages(
 			&pin.messageFound, &pin.sourceUUID,
 			&pin.role, &pin.content,
 			&pin.sourceUUIDCount, &pin.sourceIdentityCount,
+			&pin.sourceIdentityRank,
+			&pin.legacyIdentityCount, &pin.legacyIdentityRank,
 		); err != nil {
 			return nil, fmt.Errorf("scanning pg pin snapshot: %w", err)
 		}
@@ -3168,19 +3208,21 @@ func resolvePinnedMessageTarget(
 			}
 		}
 		// Identical (uuid, role, content) rows are distinguishable only
-		// by ordinal, so anchor at the saved ordinal and require the
-		// identity multiplicity to be unchanged. A different count
-		// means duplicates were inserted or removed and the saved
-		// ordinal may name another message, so the pin is dropped.
+		// by position, so require the identity multiplicity to be
+		// unchanged and re-attach at the pin's occurrence rank inside
+		// the group. Rank, unlike the saved ordinal, follows the
+		// pinned occurrence across shifts caused by rows inserted
+		// before the group. A different count means duplicates were
+		// inserted or removed and the rank no longer identifies an
+		// occurrence, so the pin is dropped.
 		target, sourceUUID, ok, err := scanPinnedMessageTarget(
 			tx.QueryRowContext(ctx, `
 				SELECT m.ordinal, m.source_uuid
 				FROM messages m
 				WHERE m.session_id = $1
-					AND m.ordinal = $2
-					AND m.source_uuid = $3
-					AND m.role = $4
-					AND m.content = $5
+					AND m.source_uuid = $2
+					AND m.role = $3
+					AND m.content = $4
 					AND (
 						SELECT COUNT(*)
 						FROM messages same_identity
@@ -3188,9 +3230,19 @@ func resolvePinnedMessageTarget(
 							AND same_identity.source_uuid = m.source_uuid
 							AND same_identity.role = m.role
 							AND same_identity.content = m.content
+					) = $5
+					AND (
+						SELECT COUNT(*)
+						FROM messages identity_rank
+						WHERE identity_rank.session_id = m.session_id
+							AND identity_rank.source_uuid = m.source_uuid
+							AND identity_rank.role = m.role
+							AND identity_rank.content = m.content
+							AND identity_rank.ordinal <= m.ordinal
 					) = $6`,
-				sessionID, pin.anchorOrdinal, pin.sourceUUID,
-				pin.role, pin.content, pin.sourceIdentityCount,
+				sessionID, pin.sourceUUID,
+				pin.role, pin.content,
+				pin.sourceIdentityCount, pin.sourceIdentityRank,
 			),
 		)
 		if err != nil {
@@ -3202,15 +3254,39 @@ func resolvePinnedMessageTarget(
 		return target, sourceUUID, ok, nil
 	}
 
+	// A UUID-less pin re-attaches to the visible row holding its role,
+	// content, and occurrence rank within the visible (role, content)
+	// group, provided the group kept its size. Rank follows the pinned
+	// occurrence across ordinal shifts; matching the saved ordinal
+	// instead could attach the pin to an earlier equal message that
+	// shifted into its place.
 	target, sourceUUID, ok, err := scanPinnedMessageTarget(
 		tx.QueryRowContext(ctx, `
 			SELECT m.ordinal, m.source_uuid
 			FROM messages m
 			WHERE m.session_id = $1
-				AND m.ordinal = $2
-				AND m.role = $3
-				AND m.content = $4`,
-			sessionID, pin.ordinal, pin.role, pin.content,
+				AND m.role = $2
+				AND m.content = $3
+				AND NOT m.is_system
+				AND (
+					SELECT COUNT(*)
+					FROM messages legacy_identity
+					WHERE legacy_identity.session_id = m.session_id
+						AND legacy_identity.role = m.role
+						AND legacy_identity.content = m.content
+						AND NOT legacy_identity.is_system
+				) = $4
+				AND (
+					SELECT COUNT(*)
+					FROM messages legacy_rank
+					WHERE legacy_rank.session_id = m.session_id
+						AND legacy_rank.role = m.role
+						AND legacy_rank.content = m.content
+						AND NOT legacy_rank.is_system
+						AND legacy_rank.ordinal <= m.ordinal
+				) = $5`,
+			sessionID, pin.role, pin.content,
+			pin.legacyIdentityCount, pin.legacyIdentityRank,
 		),
 	)
 	if err != nil {

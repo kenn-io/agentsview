@@ -902,6 +902,125 @@ func TestRestorePinnedMessagesDropsPinOnChangedDuplicateMultiplicity(
 		"changed duplicate multiplicity must drop the ambiguous pin")
 }
 
+func TestRestorePinnedMessagesFollowsShiftedIdenticalDuplicates(
+	t *testing.T,
+) {
+	// A context row inserted before the duplicates shifts both while
+	// their multiplicity stays equal: the pin must follow its
+	// occurrence rank instead of staying on the saved ordinal where
+	// the first duplicate now sits.
+	got := restoreIdenticalDuplicatePins(t,
+		"agentsview_pin_identical_dup_shift_test",
+		"pg-pin-identical-dup-shift", `
+		('pg-pin-identical-dup-shift', 0, 'user', 'context',
+		 '2026-05-01T00:00:00Z'::timestamptz, 7, 'ctx'),
+		('pg-pin-identical-dup-shift', 1, 'user', 'same',
+		 '2026-05-01T00:00:01Z'::timestamptz, 4, 'dup'),
+		('pg-pin-identical-dup-shift', 2, 'user', 'same',
+		 '2026-05-01T00:00:02Z'::timestamptz, 4, 'dup')`)
+	require.Len(t, got, 1,
+		"shifted duplicates must keep the pin; pins = %v", got)
+	assert.Equal(t, 2, got[0].Ordinal,
+		"pin follows the second occurrence, not the saved ordinal")
+}
+
+func TestRestorePinnedMessagesFollowsShiftedEqualLegacyMessages(
+	t *testing.T,
+) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_pin_legacy_shift_test"
+	const sessionID = "pg-pin-legacy-shift"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+	defer func() {
+		_, _ = pg.ExecContext(
+			context.Background(),
+			`DROP SCHEMA IF EXISTS `+schema+` CASCADE`,
+		)
+	}()
+
+	ctx := context.Background()
+	_, err = pg.ExecContext(ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	_, err = pg.ExecContext(ctx, `
+		INSERT INTO sessions
+			(id, machine, project, agent, first_message,
+			 started_at, message_count, user_message_count)
+		VALUES
+			('`+sessionID+`', 'machine-a', 'proj-curation',
+			 'claude', 'equal legacy messages',
+			 '2026-05-01T00:00:00Z'::timestamptz, 3, 3);
+		INSERT INTO messages
+			(session_id, ordinal, role, content, timestamp,
+			 content_length, source_uuid)
+		VALUES
+			('`+sessionID+`', 0, 'user', 'intro',
+			 '2026-05-01T00:00:00Z'::timestamptz, 5, ''),
+			('`+sessionID+`', 1, 'user', 'x',
+			 '2026-05-01T00:00:01Z'::timestamptz, 1, ''),
+			('`+sessionID+`', 2, 'user', 'x',
+			 '2026-05-01T00:00:02Z'::timestamptz, 1, '');
+		INSERT INTO pinned_messages
+			(session_id, message_id, ordinal, source_uuid,
+			 note, created_at)
+		VALUES
+			('`+sessionID+`', 2, 2, '',
+			 'legacy pin on second x',
+			 '2026-05-01T00:01:00Z'::timestamptz)`)
+	require.NoError(t, err, "seed legacy pin")
+
+	tx, err := pg.BeginTx(ctx, nil)
+	require.NoError(t, err, "begin tx")
+	pins, err := snapshotPinnedMessages(ctx, tx, sessionID)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("snapshotPinnedMessages: %v", err)
+	}
+	// A hidden row inserted at the front shifts two equal visible
+	// messages; the pin on the second "x" must follow its occurrence
+	// rank to the shifted ordinal.
+	_, err = tx.ExecContext(ctx, `
+		DELETE FROM messages WHERE session_id = '`+sessionID+`';
+		INSERT INTO messages
+			(session_id, ordinal, role, content, timestamp,
+			 content_length, source_uuid, is_system)
+		VALUES
+			('`+sessionID+`', 0, 'user', 'context',
+			 '2026-05-01T00:00:00Z'::timestamptz, 7, '', TRUE),
+			('`+sessionID+`', 1, 'user', 'intro',
+			 '2026-05-01T00:00:01Z'::timestamptz, 5, '', FALSE),
+			('`+sessionID+`', 2, 'user', 'x',
+			 '2026-05-01T00:00:02Z'::timestamptz, 1, '', FALSE),
+			('`+sessionID+`', 3, 'user', 'x',
+			 '2026-05-01T00:00:03Z'::timestamptz, 1, '', FALSE)`)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("replace messages: %v", err)
+	}
+	if err := restorePinnedMessages(ctx, tx, sessionID, pins); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("restorePinnedMessages: %v", err)
+	}
+	require.NoError(t, tx.Commit(), "commit tx")
+
+	store, err := NewStore(pgURL, schema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	got, err := store.ListPinnedMessages(ctx, sessionID, "")
+	require.NoError(t, err, "ListPinnedMessages")
+	require.Len(t, got, 1,
+		"shifted equal messages must keep the pin; pins = %v", got)
+	assert.Equal(t, 3, got[0].Ordinal,
+		"pin follows the second occurrence, not the saved ordinal")
+	require.NotNil(t, got[0].Note)
+	assert.Equal(t, "legacy pin on second x", *got[0].Note)
+}
+
 // TestReconcilePinnedMessagesPrunesPinWhenSourceUUIDGone covers the
 // case where a source-backed pin's source_uuid no longer exists in
 // the messages table, but a different message now occupies the

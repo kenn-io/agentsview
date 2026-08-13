@@ -2131,6 +2131,96 @@ func TestReplaceSessionContentIdenticalDuplicateMultiplicityChangeDropsPin(
 		"changed duplicate multiplicity must drop the ambiguous pin")
 }
 
+func TestReplaceSessionMessagesIdenticalDuplicatesFollowLeadingInsert(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "s1", "p")
+	insertMessages(t, d,
+		Message{
+			SessionID: "s1", Ordinal: 0, Role: "user",
+			Content: "same", SourceUUID: "dup",
+		},
+		Message{
+			SessionID: "s1", Ordinal: 1, Role: "user",
+			Content: "same", SourceUUID: "dup",
+		},
+	)
+	msgs, err := d.GetAllMessages(ctx, "s1")
+	require.NoError(t, err, "GetAllMessages")
+	require.Len(t, msgs, 2, "seeded messages")
+	_, err = d.PinMessage("s1", msgs[1].ID, nil)
+	require.NoError(t, err, "PinMessage")
+
+	// A hidden row inserted before the duplicates shifts both while
+	// their multiplicity stays equal: the pin must follow its
+	// occurrence rank, not stay on the saved ordinal where the first
+	// duplicate now sits.
+	require.NoError(t, d.ReplaceSessionMessages("s1", []Message{
+		{
+			SessionID: "s1", Ordinal: 0, Role: "user",
+			Content: "context", SourceUUID: "env", IsSystem: true,
+			SourceType: "system", SourceSubtype: "ide_opened_file",
+		},
+		{
+			SessionID: "s1", Ordinal: 1, Role: "user",
+			Content: "same", SourceUUID: "dup",
+		},
+		{
+			SessionID: "s1", Ordinal: 2, Role: "user",
+			Content: "same", SourceUUID: "dup",
+		},
+	}), "ReplaceSessionMessages")
+
+	pins, err := d.ListPinnedMessages(ctx, "s1", "")
+	require.NoError(t, err, "ListPinnedMessages")
+	require.Len(t, pins, 1, "shifted duplicates must keep the pin")
+	assert.Equal(t, 2, pins[0].Ordinal,
+		"pin follows the second occurrence, not the saved ordinal")
+}
+
+func TestReplaceSessionMessagesLegacyPinFollowsEqualMessageShift(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "s1", "p")
+	insertMessages(t, d,
+		Message{SessionID: "s1", Ordinal: 0, Role: "user", Content: "intro"},
+		Message{SessionID: "s1", Ordinal: 1, Role: "user", Content: "x"},
+		Message{SessionID: "s1", Ordinal: 2, Role: "user", Content: "x"},
+	)
+	msgs, err := d.GetAllMessages(ctx, "s1")
+	require.NoError(t, err, "GetAllMessages")
+	require.Len(t, msgs, 3, "seeded messages")
+	_, err = d.PinMessage("s1", msgs[2].ID, nil)
+	require.NoError(t, err, "PinMessage")
+
+	// A hidden row inserted at the front shifts two equal visible
+	// messages. The pin on the second "x" must follow its occurrence
+	// rank to the shifted ordinal instead of re-attaching to the first
+	// "x" that now occupies the saved ordinal.
+	require.NoError(t, d.ReplaceSessionMessages("s1", []Message{
+		{
+			SessionID: "s1", Ordinal: 0, Role: "user",
+			Content: "context", IsSystem: true,
+			SourceType: "system", SourceSubtype: "ide_opened_file",
+		},
+		{SessionID: "s1", Ordinal: 1, Role: "user", Content: "intro"},
+		{SessionID: "s1", Ordinal: 2, Role: "user", Content: "x"},
+		{SessionID: "s1", Ordinal: 3, Role: "user", Content: "x"},
+	}), "ReplaceSessionMessages")
+
+	pins, err := d.ListPinnedMessages(ctx, "s1", "")
+	require.NoError(t, err, "ListPinnedMessages")
+	require.Len(t, pins, 1, "shifted equal messages must keep the pin")
+	assert.Equal(t, 3, pins[0].Ordinal,
+		"pin follows the second occurrence, not the saved ordinal")
+}
+
 // TestWriteSessionBatchPreservesLegacyPinWhenMetadataBecomesHidden
 // models re-uploading an unchanged transcript across the server change
 // that started preserving IsSystem: the first upload stored every row
@@ -6181,7 +6271,14 @@ func TestCopySessionMetadataFrom_IdenticalDuplicatePins(t *testing.T) {
 	// pinned and the pin is dropped.
 	insertSession(t, srcDB, "dup-changed", "proj")
 	insertMessages(t, srcDB, identical("dup-changed", 0, 1)...)
-	for _, sessionID := range []string{"dup-keep", "dup-changed"} {
+	// Shifted duplicate set: the fresh DB inserted a context row
+	// before the duplicates, so the pin must follow its occurrence
+	// rank to the shifted ordinal.
+	insertSession(t, srcDB, "dup-shifted", "proj")
+	insertMessages(t, srcDB, identical("dup-shifted", 0, 1)...)
+	for _, sessionID := range []string{
+		"dup-keep", "dup-changed", "dup-shifted",
+	} {
 		var msgID int64
 		require.NoError(t, srcDB.getReader().QueryRow(
 			"SELECT id FROM messages WHERE session_id = ? AND ordinal = 1",
@@ -6200,6 +6297,11 @@ func TestCopySessionMetadataFrom_IdenticalDuplicatePins(t *testing.T) {
 	insertMessages(t, dstDB, identical("dup-keep", 0, 1)...)
 	insertSession(t, dstDB, "dup-changed", "proj")
 	insertMessages(t, dstDB, identical("dup-changed", 0, 1, 2)...)
+	insertSession(t, dstDB, "dup-shifted", "proj")
+	insertMessages(t, dstDB, append([]Message{{
+		SessionID: "dup-shifted", Ordinal: 0, Role: "user",
+		Content: "context", ContentLength: 7, SourceUUID: "env",
+	}}, identical("dup-shifted", 1, 2)...)...)
 
 	require.NoError(t, dstDB.CopySessionMetadataFrom(srcPath),
 		"CopySessionMetadataFrom")
@@ -6214,6 +6316,13 @@ func TestCopySessionMetadataFrom_IdenticalDuplicatePins(t *testing.T) {
 	require.NoError(t, err, "ListPinnedMessages dup-changed")
 	assert.Empty(t, pins,
 		"changed duplicate multiplicity must drop the ambiguous pin")
+
+	pins, err = dstDB.ListPinnedMessages(ctx, "dup-shifted", "")
+	require.NoError(t, err, "ListPinnedMessages dup-shifted")
+	require.Len(t, pins, 1,
+		"shifted duplicates must keep the pin")
+	assert.Equal(t, 2, pins[0].Ordinal,
+		"pin follows the second occurrence, not the saved ordinal")
 }
 
 func TestCopySessionMetadataFrom_PinsFollowSourceUUID(t *testing.T) {

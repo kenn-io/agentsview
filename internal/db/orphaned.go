@@ -1197,15 +1197,14 @@ func (d *DB) CopySessionMetadataFrom(
 	// old DB means the uuid does not identify which message the pin
 	// was on, so transferring it to a lone same-uuid survivor could
 	// misattach a pin whose real target was removed by the re-parse.
-	// Fall back to ordinal only when the row at the old ordinal also
-	// matches the pinned row's role and content: unconditionally for
-	// legacy pins whose source row has no source_uuid, and for
-	// duplicated uuids additionally requiring the same tuple
-	// multiplicity on both sides. Equal multiplicity means the
-	// duplicate set survived intact, so the row at the old ordinal is
-	// the pinned message; a changed count could mean a surviving
-	// duplicate shifted into the pinned row's old ordinal after the
-	// real target was removed. A nonempty uuid with no safe
+	// Duplicated uuids fall back to the pin's occurrence rank inside
+	// its (uuid, role, content) group, requiring the group to keep its
+	// size on both sides: rank follows the pinned occurrence across
+	// ordinal shifts, while a changed group size means the rank no
+	// longer identifies an occurrence. Legacy pins whose source row
+	// has no source_uuid fall back to the old ordinal when the row
+	// there also matches the pinned row's role and content. A
+	// nonempty uuid with no safe
 	// match means the pinned message is gone: the pin is dropped rather
 	// than silently attached to whatever now occupies its ordinal.
 	if oldDBHasTable(ctx, tx, "pinned_messages") {
@@ -1244,46 +1243,80 @@ func (d *DB) CopySessionMetadataFrom(
 				)
 			}
 		}
-		// Ordinal fallback: legacy pins without a uuid, or an ordinal
-		// candidate whose uuid, role, and content match the pinned
-		// source row with the same tuple multiplicity on both sides.
-		// When the uuid was unique the source_uuid pass already
-		// restored the same row and INSERT OR IGNORE dedupes. For
-		// duplicated uuids, identical rows are distinguishable only by
-		// ordinal: equal multiplicity means the duplicate set survived
-		// intact, while a changed count means the old ordinal may name
-		// a shifted survivor, so the pin is dropped.
+		// Rank fallback for duplicated uuids: identical (uuid, role,
+		// content) rows are distinguishable only by position, so a pin
+		// transfers to the row holding the same occurrence rank inside
+		// its identity group, provided the group kept its size on both
+		// sides. Rank, unlike the old ordinal, follows the pinned
+		// occurrence across shifts caused by rows inserted before the
+		// group; a changed group size means the rank no longer
+		// identifies an occurrence and the pin is dropped. When the
+		// uuid was unique the source_uuid pass already restored the
+		// same row and INSERT OR IGNORE dedupes.
+		if hasSourceUUID {
+			if _, err := tx.ExecContext(ctx, `
+				INSERT OR IGNORE INTO main.pinned_messages
+					(session_id, message_id, ordinal, note, created_at)
+				SELECT
+					op.session_id, new_m.id, new_m.ordinal,
+					op.note, op.created_at
+				FROM old_db.pinned_messages op
+				JOIN old_db.messages old_m
+					ON old_m.id = op.message_id
+				JOIN main.messages new_m
+					ON new_m.session_id = old_m.session_id
+					AND new_m.source_uuid = old_m.source_uuid
+					AND new_m.role = old_m.role
+					AND new_m.content = old_m.content
+				WHERE op.session_id IN (
+					SELECT id FROM main.sessions
+				)
+				AND old_m.source_uuid != ''
+				AND (
+					SELECT COUNT(*) FROM old_db.messages y
+					WHERE y.session_id = old_m.session_id
+					AND y.source_uuid = old_m.source_uuid
+					AND y.role = old_m.role
+					AND y.content = old_m.content
+				) = (
+					SELECT COUNT(*) FROM main.messages x
+					WHERE x.session_id = old_m.session_id
+					AND x.source_uuid = old_m.source_uuid
+					AND x.role = old_m.role
+					AND x.content = old_m.content
+				)
+				AND (
+					SELECT COUNT(*) FROM old_db.messages y2
+					WHERE y2.session_id = old_m.session_id
+					AND y2.source_uuid = old_m.source_uuid
+					AND y2.role = old_m.role
+					AND y2.content = old_m.content
+					AND y2.ordinal <= old_m.ordinal
+				) = (
+					SELECT COUNT(*) FROM main.messages x2
+					WHERE x2.session_id = old_m.session_id
+					AND x2.source_uuid = old_m.source_uuid
+					AND x2.role = old_m.role
+					AND x2.content = old_m.content
+					AND x2.ordinal <= new_m.ordinal
+				)`); err != nil {
+				return fmt.Errorf(
+					"copying duplicated-uuid pinned messages: %w", err,
+				)
+			}
+		}
+		// Ordinal fallback for legacy pins without a uuid: the row at
+		// the old ordinal must also match the pinned row's role and
+		// content.
 		uuidFallbackGuard := `
 			AND new_m.role = old_m.role
 			AND new_m.content = old_m.content`
 		if hasSourceUUID {
 			uuidFallbackGuard = `
-				AND (
-					(
-						(old_m.source_uuid IS NULL
-							OR old_m.source_uuid = '')
-						AND new_m.role = old_m.role
-						AND new_m.content = old_m.content
-					)
-					OR (
-						new_m.source_uuid = old_m.source_uuid
-						AND old_m.source_uuid != ''
-						AND new_m.role = old_m.role
-						AND new_m.content = old_m.content
-						AND (
-							SELECT COUNT(*) FROM old_db.messages y
-							WHERE y.session_id = old_m.session_id
-							AND y.source_uuid = old_m.source_uuid
-							AND y.role = old_m.role
-							AND y.content = old_m.content
-						) = (
-							SELECT COUNT(*) FROM main.messages x
-							WHERE x.session_id = old_m.session_id
-							AND x.source_uuid = old_m.source_uuid
-							AND x.role = old_m.role
-							AND x.content = old_m.content
-						)
-					))`
+				AND (old_m.source_uuid IS NULL
+					OR old_m.source_uuid = '')
+				AND new_m.role = old_m.role
+				AND new_m.content = old_m.content`
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT OR IGNORE INTO main.pinned_messages

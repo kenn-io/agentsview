@@ -1108,8 +1108,11 @@ func (db *DB) LastClaudeMessageID(sessionID string) string {
 
 // savedPin captures the message identity needed to re-attach a pin
 // after a full message replacement. source_uuid is preferred because
-// it survives ordinal shifts. Role and content guard the ordinal
-// fallback used for legacy rows and ambiguous source UUIDs.
+// it survives ordinal shifts. Role and content, together with the
+// pin's occurrence rank inside its identity group, guard the
+// fallback used for legacy rows and ambiguous source UUIDs: rank
+// follows a message across ordinal shifts that leave the group
+// intact, where a saved ordinal would name a different occurrence.
 type savedPin struct {
 	sourceUUID           string
 	role                 string
@@ -1117,6 +1120,9 @@ type savedPin struct {
 	ordinal              int
 	sourceUUIDCount      int
 	sourceIdentityCount  int
+	sourceIdentityRank   int
+	legacyIdentityCount  int
+	legacyIdentityRank   int
 	hiddenRowsThroughPin int
 	messageFound         int
 	note                 *string
@@ -1577,6 +1583,33 @@ func savePinsTx(tx *sql.Tx, sessionID string) ([]savedPin, error) {
 			),
 			(
 				SELECT COUNT(*)
+				FROM messages identity_rank
+				WHERE identity_rank.session_id = m.session_id
+					AND identity_rank.source_uuid = m.source_uuid
+					AND identity_rank.role = m.role
+					AND identity_rank.content = m.content
+					AND identity_rank.ordinal <= m.ordinal
+					AND m.source_uuid != ''
+			),
+			(
+				SELECT COUNT(*)
+				FROM messages legacy_identity
+				WHERE legacy_identity.session_id = m.session_id
+					AND legacy_identity.role = m.role
+					AND legacy_identity.content = m.content
+					AND legacy_identity.is_system = 0
+			),
+			(
+				SELECT COUNT(*)
+				FROM messages legacy_rank
+				WHERE legacy_rank.session_id = m.session_id
+					AND legacy_rank.role = m.role
+					AND legacy_rank.content = m.content
+					AND legacy_rank.is_system = 0
+					AND legacy_rank.ordinal <= m.ordinal
+			),
+			(
+				SELECT COUNT(*)
 				FROM messages hidden
 				WHERE hidden.session_id = m.session_id
 					AND hidden.ordinal <= p.ordinal
@@ -1598,7 +1631,9 @@ func savePinsTx(tx *sql.Tx, sessionID string) ([]savedPin, error) {
 		if err := pinRows.Scan(
 			&sp.ordinal, &sp.sourceUUID, &sp.role, &sp.content,
 			&sp.messageFound, &sp.sourceUUIDCount,
-			&sp.sourceIdentityCount, &sp.hiddenRowsThroughPin,
+			&sp.sourceIdentityCount, &sp.sourceIdentityRank,
+			&sp.legacyIdentityCount, &sp.legacyIdentityRank,
+			&sp.hiddenRowsThroughPin,
 			&sp.note, &sp.createdAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning pin: %w", err)
@@ -1679,17 +1714,19 @@ func restorePinBySourceUUIDTx(
 		}
 	}
 	// Identical (uuid, role, content) rows are distinguishable only by
-	// ordinal, so anchor at the saved ordinal and require the identity
-	// multiplicity to be unchanged. Equal multiplicity means the
-	// duplicate set survived intact; a different count means duplicates
-	// were inserted or removed and the saved ordinal may name another
-	// message, so the pin is dropped instead.
+	// position, so require the identity multiplicity to be unchanged
+	// and re-attach at the pin's occurrence rank inside the group.
+	// Rank, unlike the saved ordinal, follows the pinned occurrence
+	// across shifts caused by rows inserted before the group. A
+	// different count means duplicates were inserted or removed and
+	// the rank no longer identifies an occurrence, so the pin is
+	// dropped instead.
 	if _, err := tx.Exec(`
 		INSERT OR IGNORE INTO pinned_messages
 			(session_id, message_id, ordinal, note, created_at)
 		SELECT ?, m.id, m.ordinal, ?, ?
 		FROM messages m
-		WHERE m.session_id = ? AND m.ordinal = ?
+		WHERE m.session_id = ?
 			AND m.source_uuid = ?
 			AND m.role = ? AND m.content = ?
 			AND (
@@ -1699,9 +1736,19 @@ func restorePinBySourceUUIDTx(
 					AND same_identity.source_uuid = m.source_uuid
 					AND same_identity.role = m.role
 					AND same_identity.content = m.content
+			) = ?
+			AND (
+				SELECT COUNT(*)
+				FROM messages identity_rank
+				WHERE identity_rank.session_id = m.session_id
+					AND identity_rank.source_uuid = m.source_uuid
+					AND identity_rank.role = m.role
+					AND identity_rank.content = m.content
+					AND identity_rank.ordinal <= m.ordinal
 			) = ?`,
-		sessionID, sp.note, sp.createdAt, sessionID, sp.ordinal,
-		sp.sourceUUID, sp.role, sp.content, sp.sourceIdentityCount,
+		sessionID, sp.note, sp.createdAt, sessionID,
+		sp.sourceUUID, sp.role, sp.content,
+		sp.sourceIdentityCount, sp.sourceIdentityRank,
 	); err != nil {
 		return fmt.Errorf(
 			"restoring ambiguous pin uuid=%s ord=%d: %w",
@@ -1714,44 +1761,29 @@ func restorePinBySourceUUIDTx(
 func restoreLegacyPinByOrdinalTx(
 	tx *sql.Tx, sessionID string, sp savedPin,
 ) error {
-	// A visible row at the saved ordinal with unchanged role and
-	// content is the pinned message, regardless of the hidden-row
-	// layout: uploads written before the server preserved IsSystem
-	// stored every row with is_system = 0, so re-uploading the same
-	// transcript reclassifies metadata rows without moving anything.
-	res, err := tx.Exec(`
-		INSERT OR IGNORE INTO pinned_messages
-			(session_id, message_id, ordinal, note, created_at)
-		SELECT ?, m.id, m.ordinal, ?, ?
-		FROM messages m
-		WHERE m.session_id = ? AND m.ordinal = ?
-			AND m.is_system = 0
-			AND m.role = ? AND m.content = ?`,
-		sessionID, sp.note, sp.createdAt,
-		sessionID, sp.ordinal, sp.role, sp.content,
-	)
+	// A visible row with the pinned role and content at the pin's
+	// occurrence rank is the pinned message, regardless of the
+	// hidden-row layout or the saved ordinal: uploads written before
+	// the server preserved IsSystem stored every row with
+	// is_system = 0, so re-uploading the same transcript can
+	// reclassify metadata rows without moving anything, and an
+	// envelope split can shift the whole visible tail.
+	restored, err := restoreLegacyPinByRankTx(tx, sessionID, sp)
 	if err != nil {
-		return fmt.Errorf(
-			"restoring unchanged legacy pin ord=%d: %w", sp.ordinal, err,
-		)
+		return err
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf(
-			"checking restored legacy pin ord=%d: %w", sp.ordinal, err,
-		)
-	}
-	if n > 0 {
+	if restored {
 		return nil
 	}
-	// Otherwise the row at the saved ordinal was edited. Explicit
-	// re-uploads define ordinal continuity for visible legacy rows, so
-	// no role or content match is required. The only guard is the
-	// hidden-row layout: if the count of hidden rows at or before the
-	// saved ordinal changed, inserted or removed metadata has shifted
-	// which visible message the ordinal names, so the pin is dropped.
-	// Inserted or removed visible rows are not detected; the upload's
-	// visible-row order is taken as the intended continuity.
+	// Otherwise the pinned row was edited or its identity group
+	// changed size. Explicit re-uploads define ordinal continuity for
+	// visible legacy rows, so no role or content match is required.
+	// The only guard is the hidden-row layout: if the count of hidden
+	// rows at or before the saved ordinal changed, inserted or removed
+	// metadata has shifted which visible message the ordinal names, so
+	// the pin is dropped. Inserted or removed visible rows are not
+	// detected; the upload's visible-row order is taken as the
+	// intended continuity.
 	if _, err := tx.Exec(`
 		INSERT OR IGNORE INTO pinned_messages
 			(session_id, message_id, ordinal, note, created_at)
@@ -1779,19 +1811,61 @@ func restoreLegacyPinByOrdinalTx(
 func restoreLegacyPinByIdentityTx(
 	tx *sql.Tx, sessionID string, sp savedPin,
 ) error {
-	if _, err := tx.Exec(`
+	_, err := restoreLegacyPinByRankTx(tx, sessionID, sp)
+	return err
+}
+
+// restoreLegacyPinByRankTx re-attaches a UUID-less pin to the visible
+// row holding the pin's role, content, and occurrence rank within the
+// visible (role, content) group, provided the group kept its size.
+// Rank follows the pinned occurrence across ordinal shifts; matching
+// the saved ordinal instead could attach the pin to an earlier equal
+// message that shifted into its place. A changed group size means the
+// rank no longer identifies an occurrence and nothing is restored.
+func restoreLegacyPinByRankTx(
+	tx *sql.Tx, sessionID string, sp savedPin,
+) (bool, error) {
+	res, err := tx.Exec(`
 		INSERT OR IGNORE INTO pinned_messages
 			(session_id, message_id, ordinal, note, created_at)
 		SELECT ?, m.id, m.ordinal, ?, ?
 		FROM messages m
-		WHERE m.session_id = ? AND m.ordinal = ?
-			AND m.role = ? AND m.content = ?`,
-		sessionID, sp.note, sp.createdAt, sessionID, sp.ordinal,
+		WHERE m.session_id = ?
+			AND m.is_system = 0
+			AND m.role = ? AND m.content = ?
+			AND (
+				SELECT COUNT(*)
+				FROM messages legacy_identity
+				WHERE legacy_identity.session_id = m.session_id
+					AND legacy_identity.role = m.role
+					AND legacy_identity.content = m.content
+					AND legacy_identity.is_system = 0
+			) = ?
+			AND (
+				SELECT COUNT(*)
+				FROM messages legacy_rank
+				WHERE legacy_rank.session_id = m.session_id
+					AND legacy_rank.role = m.role
+					AND legacy_rank.content = m.content
+					AND legacy_rank.is_system = 0
+					AND legacy_rank.ordinal <= m.ordinal
+			) = ?`,
+		sessionID, sp.note, sp.createdAt, sessionID,
 		sp.role, sp.content,
-	); err != nil {
-		return fmt.Errorf("restoring pin ord=%d: %w", sp.ordinal, err)
+		sp.legacyIdentityCount, sp.legacyIdentityRank,
+	)
+	if err != nil {
+		return false, fmt.Errorf(
+			"restoring legacy pin ord=%d: %w", sp.ordinal, err,
+		)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf(
+			"checking restored legacy pin ord=%d: %w", sp.ordinal, err,
+		)
+	}
+	return n > 0, nil
 }
 
 // attachToolCalls loads tool_calls for the given messages

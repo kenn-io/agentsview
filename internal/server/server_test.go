@@ -4039,7 +4039,7 @@ func TestUploadSession_ReuploadDoesNotMoveLegacyPinToIDEEnvelope(t *testing.T) {
 	assert.Equal(t, "Explain this file.", msgs[1].Content)
 }
 
-func TestUploadSession_ReuploadDoesNotShiftLaterLegacyPinPastIDEEnvelope(t *testing.T) {
+func TestUploadSession_ReuploadFollowsLegacyPinAcrossIDEEnvelopeSplit(t *testing.T) {
 	te := setup(t)
 	const sessionID = "upload-pinned-after-envelope"
 	const mixedPrompt = "<ide_opened_file>The user opened /workspace/app/README.md.</ide_opened_file> Explain this file."
@@ -4071,10 +4071,15 @@ func TestUploadSession_ReuploadDoesNotShiftLaterLegacyPinPastIDEEnvelope(t *test
 		"project=myproj&machine=remote")
 	assertStatus(t, w, http.StatusOK)
 
+	// The envelope split shifts the whole visible tail. The pin's
+	// role, content, and occurrence rank identify its message, so the
+	// pin follows "Legacy reply" to its shifted ordinal instead of
+	// re-attaching to the visible prompt at the saved ordinal.
 	pins, err := te.db.ListPinnedMessages(context.Background(), sessionID, "")
 	require.NoError(t, err, "ListPinnedMessages")
-	assert.Empty(t, pins,
-		"legacy assistant pin must not shift onto the visible prompt")
+	require.Len(t, pins, 1, "legacy pin must survive the envelope split")
+	assert.Equal(t, 2, pins[0].Ordinal,
+		"pin follows its message, not the saved ordinal")
 
 	msgs, err = te.db.GetAllMessages(context.Background(), sessionID)
 	require.NoError(t, err, "GetAllMessages after re-upload")
