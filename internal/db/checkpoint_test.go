@@ -125,3 +125,80 @@ func TestParserCheckpointRollsBackWithTransaction(t *testing.T) {
 	assert.False(t, ok,
 		"an aborted transaction must not leave a checkpoint behind")
 }
+
+// TestParserCheckpointSchemaMigratesFromPreSplitShape simulates an archive
+// written by the pre-split schema (raw tail_anchor/cursor/hash_state
+// columns): reopening must add the digest column, drop the dead columns,
+// and leave a version-1 row readable (the engine rebuilds it
+// authoritatively) while new version-2 upserts succeed.
+func TestParserCheckpointSchemaMigratesFromPreSplitShape(t *testing.T) {
+	d := testDB(t)
+	_, err := d.getWriter().Exec(`DROP TABLE parser_checkpoints`)
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(`
+		CREATE TABLE parser_checkpoints (
+		    session_id         TEXT PRIMARY KEY,
+		    agent              TEXT NOT NULL,
+		    file_path          TEXT NOT NULL,
+		    file_inode         INTEGER NOT NULL,
+		    file_device        INTEGER NOT NULL,
+		    file_mtime         INTEGER NOT NULL,
+		    offset             INTEGER NOT NULL,
+		    tail_anchor        BLOB NOT NULL,
+		    cursor             BLOB NOT NULL,
+		    hash_state         BLOB,
+		    hash               TEXT NOT NULL,
+		    next_ordinal       INTEGER NOT NULL,
+		    checkpoint_version INTEGER NOT NULL,
+		    updated_at         TEXT NOT NULL
+		)`)
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(`
+		INSERT INTO parser_checkpoints (
+		    session_id, agent, file_path, file_inode, file_device,
+		    file_mtime, offset, tail_anchor, cursor, hash_state, hash,
+		    next_ordinal, checkpoint_version, updated_at
+		) VALUES (
+		    'legacy-session', 'codex', '/sessions/legacy.jsonl', 1, 2,
+		    100, 512, X'616E', X'637572', X'6861', 'h',
+		    1, 1, '2026-08-13T00:00:00Z'
+		)`)
+	require.NoError(t, err)
+	path := d.path
+	require.NoError(t, d.Close())
+
+	reopened, err := Open(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+
+	cp, ok, err := reopened.GetParserCheckpoint("legacy-session")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, 1, cp.Version,
+		"a pre-split row keeps its version so the engine rebuilds it")
+	assert.Empty(t, cp.TailAnchorDigest,
+		"the migration leaves the digest empty; the gate treats it as invalid")
+
+	// The new shape must accept a version-2 upsert.
+	require.NoError(t, reopened.UpsertParserCheckpoint(
+		ParserCheckpoint{
+			SessionID:        "new-session",
+			Agent:            "codex",
+			FilePath:         "/sessions/new.jsonl",
+			Offset:           64,
+			TailAnchorDigest: "digest",
+			Hash:             "hash",
+			NextOrdinal:      1,
+			Version:          ParserCheckpointVersion,
+		},
+		ParserCheckpointBlobs{
+			SessionID: "new-session",
+			Cursor:    []byte("c"),
+			HashState: []byte("h"),
+		},
+	))
+	got, ok, err := reopened.GetParserCheckpoint("new-session")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, ParserCheckpointVersion, got.Version)
+}

@@ -2220,7 +2220,64 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"sessions", "sync_marker",
 			"ALTER TABLE sessions ADD COLUMN sync_marker TEXT",
 		},
+		{
+			// Checkpoint rows from the pre-split schema gain the digest
+			// column empty; the append gate treats an empty digest as
+			// invalid and rebuilds authoritatively.
+			"parser_checkpoints", "tail_anchor_digest",
+			"ALTER TABLE parser_checkpoints ADD COLUMN tail_anchor_digest TEXT NOT NULL DEFAULT ''",
+		},
 	}
+}
+
+// migrateParserCheckpointSchema drops the pre-split checkpoint columns
+// (tail_anchor, cursor, hash_state) that earlier branch builds persisted in
+// parser_checkpoints. The cursor/hash-state payload moved to
+// parser_checkpoint_blobs and the raw anchor to a digest, so the old
+// columns are dead weight whose NOT NULL constraints would reject new
+// rows. The rows themselves are version-1 and already rebuild
+// authoritatively; dropping only the dead columns loses no archive data.
+func migrateParserCheckpointSchema(
+	queryRow func(string, ...any) rowScanner,
+	exec func(string, ...any) (sql.Result, error),
+) error {
+	var tableCount int
+	if err := queryRow(
+		`SELECT count(*) FROM sqlite_master
+		 WHERE type = 'table' AND name = 'parser_checkpoints'`,
+	).Scan(&tableCount); err != nil {
+		return fmt.Errorf("checking parser_checkpoints: %w", err)
+	}
+	if tableCount == 0 {
+		return nil
+	}
+	for _, column := range []string{
+		"tail_anchor", "cursor", "hash_state",
+	} {
+		var count int
+		if err := queryRow(fmt.Sprintf(
+			"SELECT count(*) FROM pragma_table_info('parser_checkpoints')"+
+				" WHERE name = '%s'", column,
+		)).Scan(&count); err != nil {
+			return fmt.Errorf(
+				"probing parser_checkpoints.%s: %w", column, err,
+			)
+		}
+		if count == 0 {
+			continue
+		}
+		if _, err := exec(fmt.Sprintf(
+			"ALTER TABLE parser_checkpoints DROP COLUMN %s", column,
+		)); err != nil {
+			return fmt.Errorf(
+				"dropping parser_checkpoints.%s: %w", column, err,
+			)
+		}
+		log.Printf(
+			"migration: dropped column parser_checkpoints.%s", column,
+		)
+	}
+	return nil
 }
 
 func applySchemaColumnMigrations(w *writerHandle) error {
@@ -2237,6 +2294,14 @@ func applySchemaColumnMigrations(w *writerHandle) error {
 
 	if err := applyColumnMigrations(
 		schemaColumnMigrations(),
+		func(query string, args ...any) rowScanner {
+			return tx.QueryRow(query, args...)
+		},
+		tx.Exec,
+	); err != nil {
+		return err
+	}
+	if err := migrateParserCheckpointSchema(
 		func(query string, args ...any) rowScanner {
 			return tx.QueryRow(query, args...)
 		},
