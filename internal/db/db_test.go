@@ -6325,6 +6325,76 @@ func TestCopySessionMetadataFrom_IdenticalDuplicatePins(t *testing.T) {
 		"pin follows the second occurrence, not the saved ordinal")
 }
 
+// TestCopySessionMetadataFrom_LegacyPinFollowsShiftedReply models a
+// full resync of a pre-uuid session across the IDE-envelope split: the
+// re-parse inserts a hidden envelope row, shifting the unchanged
+// pinned reply by one ordinal. The pin must follow its visible
+// (role, content) occurrence rank to the shifted row instead of being
+// dropped at the stale ordinal.
+func TestCopySessionMetadataFrom_LegacyPinFollowsShiftedReply(
+	t *testing.T,
+) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	srcPath := filepath.Join(dir, "src.db")
+	srcDB := testDBAtPath(t, srcPath, "src")
+	insertSession(t, srcDB, "s1", "proj")
+	insertMessages(t, srcDB,
+		Message{
+			SessionID: "s1", Ordinal: 1, Role: "user",
+			Content:       "<ide_opened_file>f</ide_opened_file> explain",
+			ContentLength: 44,
+		},
+		Message{
+			SessionID: "s1", Ordinal: 2, Role: "assistant",
+			Content: "Legacy reply", ContentLength: 12,
+		},
+	)
+	var msgID int64
+	require.NoError(t, srcDB.getReader().QueryRow(
+		"SELECT id FROM messages WHERE session_id = 's1' AND ordinal = 2",
+	).Scan(&msgID), "resolve pinned reply")
+	pinID, err := srcDB.PinMessage("s1", msgID, nil)
+	require.NoError(t, err, "pin legacy reply")
+	require.NotZero(t, pinID, "pin not created")
+	require.NoError(t, srcDB.Close(), "close source database")
+
+	// Fresh DB: the re-parse split the combined prompt and stamped
+	// provider uuids, shifting the unchanged reply to ordinal 3.
+	dstPath := filepath.Join(dir, "dst.db")
+	dstDB := testDBAtPath(t, dstPath, "dst")
+	defer dstDB.Close()
+	insertSession(t, dstDB, "s1", "proj")
+	insertMessages(t, dstDB,
+		Message{
+			SessionID: "s1", Ordinal: 1, Role: "user",
+			Content:       "<ide_opened_file>f</ide_opened_file>",
+			ContentLength: 36, IsSystem: true,
+			SourceType: "system", SourceSubtype: "ide_opened_file",
+			SourceUUID: "u1:ide-context",
+		},
+		Message{
+			SessionID: "s1", Ordinal: 2, Role: "user",
+			Content: "explain", ContentLength: 7, SourceUUID: "u1",
+		},
+		Message{
+			SessionID: "s1", Ordinal: 3, Role: "assistant",
+			Content: "Legacy reply", ContentLength: 12, SourceUUID: "u2",
+		},
+	)
+
+	require.NoError(t, dstDB.CopySessionMetadataFrom(srcPath),
+		"CopySessionMetadataFrom")
+
+	pins, err := dstDB.ListPinnedMessages(ctx, "s1", "")
+	require.NoError(t, err, "ListPinnedMessages")
+	require.Len(t, pins, 1,
+		"shifted legacy reply must keep the pin")
+	assert.Equal(t, 3, pins[0].Ordinal,
+		"pin follows the reply to its shifted ordinal")
+}
+
 func TestCopySessionMetadataFrom_PinsFollowSourceUUID(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
