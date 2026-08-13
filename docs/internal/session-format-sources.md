@@ -730,7 +730,14 @@ Grok section and remove the explicit registry exception in the coverage test.
   the consumed shape. Copilot credits are not treated as currency.
 - **Agentsview:** `internal/parser/vscode_copilot.go` and
   `internal/parser/vscode_copilot_provider.go`; both compact snapshots and
-  operation logs are supported.
+  operation logs are supported. Reverified 2026-08-12 against the VS Code
+  1.132 JSONL artifact from
+  [#1351](https://github.com/kenn-io/agentsview/issues/1351): completed tools
+  can persist object-valued `isConfirmed`, terminal commands under
+  `toolSpecificData.commandLine.original`, and ordered `inlineReference`
+  response items. Agentsview consumes the final response array, which also
+  preserves display order, rather than the duplicate tool calls under
+  `result.metadata.toolCallRounds`.
 
 ## Windsurf (`windsurf`)
 

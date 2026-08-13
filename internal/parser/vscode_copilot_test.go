@@ -264,6 +264,46 @@ func TestParseVSCodeCopilotSession_TerminalToolData(t *testing.T) {
 		"content should contain command, got: %s", assistant.Content)
 }
 
+func TestParseVSCodeCopilotSession_VSCode132ResponseItems(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vscode-132.jsonl")
+	lines := []string{
+		`{"kind":0,"v":{"version":3,"sessionId":"vscode-132","creationDate":1786000235709,"requests":[]}}`,
+		`{"kind":2,"k":["requests"],"v":[{"requestId":"request-1","timestamp":1786000291425,"message":{"text":"Read test.txt and run its command."},"response":[{"value":"I'll read "},{"kind":"inlineReference","inlineReference":{"fsPath":"/workspace/test.txt","external":"file:///workspace/test.txt","path":"/workspace/test.txt","scheme":"file"}},{"value":" first. "},{"kind":"toolInvocationSerialized","pastTenseMessage":{"value":"Read instructions"},"isConfirmed":{"type":1},"isComplete":true,"toolCallId":"call-read-instructions","toolId":"copilot_readFile"},{"kind":"toolInvocationSerialized","pastTenseMessage":{"value":"Read test.txt"},"isConfirmed":{"type":1},"isComplete":true,"toolCallId":"call-read-test","toolId":"copilot_readFile"},{"kind":"inlineReference","inlineReference":{"fsPath":"/workspace/test.txt","external":"file:///workspace/test.txt","path":"/workspace/test.txt","scheme":"file"}},{"value":" contains the command."},{"kind":"toolInvocationSerialized","pastTenseMessage":{"value":"Running uname"},"isConfirmed":{"type":1},"isComplete":true,"toolSpecificData":{"kind":"terminal","commandLine":{"original":"uname -a","forDisplay":"uname -a"}},"toolCallId":"call-terminal","toolId":"run_in_terminal"},{"value":" Done."}],"modelId":"gpt-5.6-terra"}]}`,
+	}
+	require.NoError(t, os.WriteFile(
+		path, []byte(strings.Join(lines, "\n")+"\n"), 0o644,
+	))
+
+	_, msgs, err := parseVSCodeCopilotTestSession(
+		t, path, "project", "machine",
+	)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2, "user and assistant messages")
+
+	assistant := msgs[1]
+	assert.True(t, assistant.HasToolUse)
+	require.Len(t, assistant.ToolCalls, 3)
+	assert.Equal(t,
+		[]string{"copilot_readFile", "copilot_readFile", "run_in_terminal"},
+		[]string{
+			assistant.ToolCalls[0].ToolName,
+			assistant.ToolCalls[1].ToolName,
+			assistant.ToolCalls[2].ToolName,
+		},
+	)
+	assert.JSONEq(t,
+		`{"command":"uname -a","message":"Running uname"}`,
+		assistant.ToolCalls[2].InputJSON,
+	)
+	assert.Contains(t, assistant.Content,
+		"I'll read `/workspace/test.txt` first.",
+	)
+	assert.Contains(t, assistant.Content,
+		"`/workspace/test.txt` contains the command.",
+	)
+}
+
 func TestExtractProjectFromURI(t *testing.T) {
 	tests := []struct {
 		uri  string

@@ -407,7 +407,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // rollout prefix into a newly spawned subagent file, re-stamping messages and
 // token_count events at child creation. Existing Codex-format rows need
 // re-parsing so derived sessions retain only child-owned messages and usage.)
-const dataVersion = 85
+// (86: VS Code Copilot response item parsing. VS Code 1.132 persists status,
+// inline reference, and terminal command fields in shapes the parser previously
+// skipped. Existing VS Code Copilot and Positron rows need re-parsing so their
+// structured tool calls and visible file references are restored.)
+const dataVersion = 86
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

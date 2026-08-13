@@ -88,8 +88,6 @@ type vscodeCopilotResponseItem struct {
 	Value             string          `json:"value,omitempty"`
 	ToolID            string          `json:"toolId,omitempty"`
 	ToolCallID        string          `json:"toolCallId,omitempty"`
-	IsConfirmed       bool            `json:"isConfirmed,omitempty"`
-	IsComplete        bool            `json:"isComplete,omitempty"`
 	InvocationMessage json.RawMessage `json:"invocationMessage,omitempty"`
 	PastTenseMessage  json.RawMessage `json:"pastTenseMessage,omitempty"`
 	ToolName          string          `json:"toolName,omitempty"`
@@ -99,14 +97,23 @@ type vscodeCopilotResponseItem struct {
 
 // vscodeCopilotToolData holds terminal-specific tool data.
 type vscodeCopilotToolData struct {
-	Kind     string `json:"kind"`
-	Language string `json:"language,omitempty"`
-	Command  string `json:"command,omitempty"`
+	Kind        string `json:"kind"`
+	Language    string `json:"language,omitempty"`
+	Command     string `json:"command,omitempty"`
+	CommandLine struct {
+		Original string `json:"original"`
+	} `json:"commandLine,omitempty"`
 }
 
 // vscodeCopilotInvocationMsg holds a structured invocation message.
 type vscodeCopilotInvocationMsg struct {
 	Value string `json:"value"`
+}
+
+type vscodeCopilotInlineReference struct {
+	FSPath   string `json:"fsPath"`
+	Path     string `json:"path"`
+	External string `json:"external"`
 }
 
 // vscodeCopilotWorkspace holds the workspace.json manifest.
@@ -379,8 +386,13 @@ func parseVSCodeCopilotResponse(
 			}
 		case "prepareToolInvocation":
 			// Skip, the actual invocation comes later.
-		case "inlineReference", "undoStop",
-			"codeblockUri", "textEditGroup":
+		case "inlineReference":
+			if ref := extractVSCodeInlineReference(
+				item.InlineReference,
+			); ref != "" {
+				textParts = append(textParts, ref)
+			}
+		case "undoStop", "codeblockUri", "textEditGroup":
 			// Skip non-text items.
 		case "":
 			// Items without a kind are markdown text
@@ -397,6 +409,25 @@ func parseVSCodeCopilotResponse(
 
 	text := strings.TrimSpace(strings.Join(textParts, ""))
 	return text, toolCalls
+}
+
+func extractVSCodeInlineReference(raw json.RawMessage) string {
+	var ref vscodeCopilotInlineReference
+	if err := json.Unmarshal(raw, &ref); err != nil {
+		return ""
+	}
+
+	path := ref.FSPath
+	if path == "" {
+		path = ref.Path
+	}
+	if path == "" {
+		path = strings.TrimPrefix(ref.External, "file://")
+	}
+	if path == "" {
+		return ""
+	}
+	return "`" + path + "`"
 }
 
 // normalizeVSCodeToolName maps VSCode Copilot tool IDs to
@@ -544,8 +575,12 @@ func extractVSCopilotInputJSON(
 	if len(toolData) > 0 {
 		var td vscodeCopilotToolData
 		if err := json.Unmarshal(toolData, &td); err == nil {
-			if td.Command != "" {
-				result["command"] = td.Command
+			command := td.Command
+			if command == "" {
+				command = td.CommandLine.Original
+			}
+			if command != "" {
+				result["command"] = command
 			}
 		}
 	}
