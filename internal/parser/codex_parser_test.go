@@ -309,6 +309,8 @@ func TestParseCodexSession_UsesThreadNameFromSessionIndex(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "Renamed from Codex", sess.SessionName)
+	assert.True(t, sess.SessionNamePresent,
+		"an index entry must remain authoritative at the write boundary")
 	assert.Equal(t, "Add rate limiting", sess.FirstMessage)
 	assert.Len(t, msgs, 2)
 }
@@ -330,6 +332,8 @@ func TestParseCodexSession_LeavesSessionNameEmptyWithoutThreadName(t *testing.T)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Empty(t, sess.SessionName)
+	assert.False(t, sess.SessionNamePresent,
+		"a missing thread_name field must not become a clearing signal")
 	assert.Equal(t, "Add rate limiting", sess.FirstMessage)
 }
 

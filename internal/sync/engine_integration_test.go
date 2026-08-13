@@ -5452,6 +5452,105 @@ func TestSyncAllSkipsUnchangedTitledCodexSessionAfterIndexRemoval(t *testing.T) 
 	}
 }
 
+func TestCodexRequiredReparseWithoutIndexPreservesStoredTitle(t *testing.T) {
+	tests := []struct {
+		name        string
+		wantReparse bool
+		resync      func(
+			t *testing.T, env *testEnv, sessionID, indexPath string,
+		)
+	}{
+		{
+			name: "removed index through SyncPaths",
+			resync: func(
+				t *testing.T, env *testEnv, _, indexPath string,
+			) {
+				t.Helper()
+				require.NoError(t, env.engine.SyncPathsContext(
+					context.Background(), []string{indexPath},
+				))
+			},
+		},
+		{
+			name:        "stale data version",
+			wantReparse: true,
+			resync: func(
+				t *testing.T, env *testEnv, sessionID, _ string,
+			) {
+				t.Helper()
+				require.Greater(t, db.CurrentDataVersion(), 1)
+				require.NoError(t, env.db.SetSessionDataVersion(
+					sessionID, db.CurrentDataVersion()-1,
+				))
+				stats := env.engine.SyncAll(context.Background(), nil)
+				require.Equal(t, 1, stats.Synced,
+					"stale data version must force a full reparse")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			codexDir := filepath.Join(root, "sessions")
+			require.NoError(t, os.MkdirAll(codexDir, 0o755))
+			env := setupTestEnv(t, WithCodexDirs([]string{codexDir}))
+
+			uuid := "019eb791-cf7d-75c1-8439-9ed74c1229e4"
+			sessionID := "codex:" + uuid
+			content := testjsonl.NewSessionBuilder().
+				AddCodexMeta(tsEarly, uuid, "/repo", "user").
+				AddCodexMessage(tsEarlyS1, "user", "Keep my title").
+				String()
+			path := env.writeCodexSession(
+				t,
+				filepath.Join("2026", "06", "11"),
+				"rollout-2026-06-11T12-44-06-"+uuid+".jsonl",
+				content,
+			)
+
+			indexPath := filepath.Join(root, parser.CodexSessionIndexFilename)
+			require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
+				`{"id":"%s","thread_name":"Sticky title"}`+"\n", uuid,
+			), 0o644))
+			transcriptTime := time.Now().Add(-2 * time.Hour)
+			indexTime := transcriptTime.Add(time.Hour)
+			require.NoError(t, os.Chtimes(path, transcriptTime, transcriptTime))
+			require.NoError(t, os.Chtimes(indexPath, indexTime, indexTime))
+
+			first := env.engine.SyncAll(context.Background(), nil)
+			require.Equal(t, 1, first.Synced)
+			sess, err := env.db.GetSessionFull(context.Background(), sessionID)
+			require.NoError(t, err)
+			require.NotNil(t, sess)
+			require.NotNil(t, sess.SessionName)
+			require.Equal(t, "Sticky title", *sess.SessionName)
+			require.NotNil(t, sess.FileMtime)
+			require.Equal(t, indexTime.UnixNano(), *sess.FileMtime)
+
+			require.NoError(t, os.Remove(indexPath))
+			tt.resync(t, env, sessionID, indexPath)
+
+			sess, err = env.db.GetSessionFull(context.Background(), sessionID)
+			require.NoError(t, err)
+			require.NotNil(t, sess)
+			if assert.NotNil(t, sess.SessionName,
+				"a missing index entry must not erase the stored title") {
+				assert.Equal(t, "Sticky title", *sess.SessionName)
+			}
+			require.NotNil(t, sess.FileMtime)
+			if tt.wantReparse {
+				assert.Equal(t, transcriptTime.UnixNano(), *sess.FileMtime,
+					"the transcript must have been reparsed and persisted")
+			} else {
+				assert.Equal(t, indexTime.UnixNano(), *sess.FileMtime,
+					"the removed-index event may leave an unchanged transcript skipped")
+			}
+			assert.Equal(t, db.CurrentDataVersion(), sess.DataVersion)
+		})
+	}
+}
+
 func TestSyncAllCodexExplicitBlankIndexTitleClearsStoredTitle(t *testing.T) {
 	root := t.TempDir()
 	codexDir := filepath.Join(root, "sessions")

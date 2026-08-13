@@ -14592,6 +14592,8 @@ func toDBSession(pw pendingWrite) db.Session {
 		s.FirstMessage = &pw.sess.FirstMessage
 	}
 	s.SessionName = db.ParsedSessionName(pw.sess)
+	s.PreserveSessionName = pw.sess.Agent == parser.AgentCodex &&
+		!pw.sess.SessionNamePresent
 	if !pw.sess.StartedAt.IsZero() {
 		s.StartedAt = timeutil.Ptr(pw.sess.StartedAt)
 	}

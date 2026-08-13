@@ -1169,11 +1169,16 @@ type ParsedSession struct {
 	IsTruncated             bool
 	FirstMessage            string
 	SessionName             string
-	StartedAt               time.Time
-	EndedAt                 time.Time
-	MessageCount            int
-	UserMessageCount        int
-	File                    FileInfo
+	// SessionNamePresent distinguishes an explicitly present provider title
+	// (including a blank title) from no title signal. Codex needs this because
+	// current releases may omit session_index.jsonl entirely, while an older
+	// index entry with a blank thread_name explicitly clears a stored title.
+	SessionNamePresent bool
+	StartedAt          time.Time
+	EndedAt            time.Time
+	MessageCount       int
+	UserMessageCount   int
+	File               FileInfo
 
 	// TerminationStatus describes how the session appears to have
 	// ended. Empty string = unknown (parser did not classify, or

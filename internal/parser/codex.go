@@ -1527,8 +1527,11 @@ func (p *codexProvider) parseSessionSnapshot(
 	}
 
 	sessionName := ""
+	sessionNamePresent := false
 	if p.spec.agent == AgentCodex {
-		sessionName = LookupCodexThreadName(path, b.sessionID)
+		sessionName, sessionNamePresent = LookupCodexThreadNameEntry(
+			path, b.sessionID,
+		)
 	}
 	if sessionName == "" && b.firstMessage == "" &&
 		b.relationshipType == RelSubagent {
@@ -1536,20 +1539,21 @@ func (p *codexProvider) parseSessionSnapshot(
 	}
 
 	sess := &ParsedSession{
-		ID:                sessionID,
-		Project:           b.project,
-		Machine:           machine,
-		Agent:             AgentCodex,
-		ParentSessionID:   b.parentSessionID,
-		RelationshipType:  b.relationshipType,
-		Cwd:               b.cwd,
-		FirstMessage:      b.firstMessage,
-		SessionName:       sessionName,
-		StartedAt:         b.startedAt,
-		EndedAt:           b.endedAt,
-		MessageCount:      len(b.messages),
-		UserMessageCount:  userCount,
-		TerminationStatus: classifyCodexTermination(b.lastTaskEvent),
+		ID:                 sessionID,
+		Project:            b.project,
+		Machine:            machine,
+		Agent:              AgentCodex,
+		ParentSessionID:    b.parentSessionID,
+		RelationshipType:   b.relationshipType,
+		Cwd:                b.cwd,
+		FirstMessage:       b.firstMessage,
+		SessionName:        sessionName,
+		SessionNamePresent: sessionNamePresent,
+		StartedAt:          b.startedAt,
+		EndedAt:            b.endedAt,
+		MessageCount:       len(b.messages),
+		UserMessageCount:   userCount,
+		TerminationStatus:  classifyCodexTermination(b.lastTaskEvent),
 		File: FileInfo{
 			Path:   path,
 			Size:   info.Size(),
