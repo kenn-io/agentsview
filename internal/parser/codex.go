@@ -2168,17 +2168,28 @@ func (p *codexProvider) parseSessionFromWithSources(
 			if fallbackErr != nil {
 				return
 			}
+			lineType := gjson.Get(line, "type").Str
 			// A session_meta after the persisted offset can change fork or
 			// subagent replay classification. Rebuild the current session
 			// authoritatively instead of appending against stale gate state.
-			if gjson.Get(line, "type").Str ==
-				codexTypeSessionMeta {
+			if lineType == codexTypeSessionMeta {
 				fallbackErr = errCodexIncrementalNeedsFullParse
 				return
 			}
 			if codexIncrementalNeedsFullParse(line) {
 				fallbackErr = errCodexIncrementalNeedsFullParse
 				return
+			}
+			if lineType == codexTypeResponseItem {
+				payload := gjson.Get(line, "payload")
+				switch payload.Get("type").Str {
+				case "function_call_output",
+					"custom_tool_call_output":
+					if b.incrementalOutputNeedsFullParse(payload) {
+						fallbackErr = errCodexIncrementalNeedsFullParse
+						return
+					}
+				}
 			}
 			b.processLine(line)
 			if b.unattachedTokenUsage {
@@ -2359,10 +2370,6 @@ func codexIncrementalNeedsFullParse(line string) bool {
 	switch payload.Get("type").Str {
 	case "function_call", "custom_tool_call":
 		return isCodexWaitAgentCall(payload.Get("name").Str)
-	case "function_call_output", "custom_tool_call_output":
-		output, raw := parseCodexFunctionOutput(payload)
-		return isCodexSubagentFunctionOutput(output) ||
-			strings.TrimSpace(raw) != ""
 	default:
 		role := payload.Get("role").Str
 		if role != "user" {
@@ -2373,4 +2380,35 @@ func codexIncrementalNeedsFullParse(line string) bool {
 		)
 		return agentID != "" && text != ""
 	}
+}
+
+// incrementalOutputNeedsFullParse reports whether an appended
+// function_call_output / custom_tool_call_output line cannot be
+// represented by an append-only incremental write. Subagent outputs
+// repair lineage on rows outside the append, and an output whose call
+// is not part of this appended chunk belongs to an already-stored tool
+// call; both need a replacing full parse. An output paired with its
+// call in the same chunk attaches in memory exactly as a full parse
+// would, so it stays on the incremental path.
+func (b *codexSessionBuilder) incrementalOutputNeedsFullParse(
+	payload gjson.Result,
+) bool {
+	output, raw := parseCodexFunctionOutput(payload)
+	if isCodexSubagentFunctionOutput(output) {
+		return true
+	}
+	if strings.TrimSpace(raw) == "" {
+		return false
+	}
+	callID := payload.Get("call_id").Str
+	if callID == "" {
+		// A full parse drops outputs without a call id too.
+		return false
+	}
+	switch b.callNames[callID] {
+	case "spawn_agent", "wait", "wait_agent":
+		return true
+	}
+	_, attachable := b.callRefs[callID]
+	return !attachable
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
@@ -577,10 +578,12 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		assert.False(t, msgs[0].HasToolUse)
 	})
 
-	t.Run("custom_tool_call_output requests full parse", func(t *testing.T) {
+	t.Run("custom_tool_call_output for a stored call requests full parse", func(t *testing.T) {
 		line := `{"timestamp":"2026-07-08T03:20:43.376Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_abc","output":"Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess."}}`
 
-		assert.True(t, codexIncrementalNeedsFullParse(line))
+		b := newCodexSessionBuilder(false)
+		assert.True(t,
+			b.incrementalOutputNeedsFullParse(gjson.Get(line, "payload")))
 	})
 
 	t.Run("write_stdin formats with session and chars", func(t *testing.T) {
@@ -2552,6 +2555,55 @@ func TestParseCodexSessionFrom_FunctionCallOutputRequiresFullParse(t *testing.T)
 	_, _, _, err = parseCodexTestSessionFrom(t, path, offset, 2, false)
 	require.Error(t, err)
 	assert.True(t, IsIncrementalFullParseFallback(err))
+}
+
+// A tool call and its output that both arrive in the same appended
+// chunk are fully representable by an append: the builder pairs them
+// in memory exactly as a full parse would, so no fallback is needed.
+func TestParseCodexSessionFrom_InChunkFunctionCallOutputParsesIncrementally(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			"inc-in-chunk-output", "/projects/api",
+			"codex_exec", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "run command", tsEarlyS1),
+	)
+	path := createTestFile(t, "in-chunk-call-output.jsonl", initial)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	offset := info.Size()
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(testjsonl.JoinJSONL(
+		testjsonl.CodexFunctionCallWithCallIDJSON(
+			"exec_command", "call_cmd",
+			map[string]any{"cmd": "ls"}, tsEarlyS5,
+		),
+		testjsonl.CodexFunctionCallOutputJSON(
+			"call_cmd", "done", tsLate,
+		),
+	))
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	msgs, _, _, err := parseCodexTestSessionFrom(t, path, offset, 1, false)
+	require.NoError(t,
+		err, "an in-chunk call and output pair must parse incrementally")
+	require.Len(t, msgs, 1)
+	require.Len(t, msgs[0].ToolCalls, 1)
+	assert.Equal(t, "call_cmd", msgs[0].ToolCalls[0].ToolUseID)
+	assertToolResultEvents(t,
+		msgs[0].ToolCalls[0].ResultEvents, []ParsedToolResultEvent{{
+			ToolUseID: "call_cmd",
+			Source:    "function_call_output",
+			Content:   "done",
+		}})
 }
 
 // TestParseCodexSessionFrom_DedupsReemittedPrompt covers the
