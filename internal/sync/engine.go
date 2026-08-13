@@ -12042,6 +12042,18 @@ func (e *Engine) normalizePendingWriteMachines(
 				batch[i].sourceIdentityUnverified =
 					!sessionWriteIdentitySupportsStoredAttribution(stored, incoming)
 				batch[i].sess.Machine = stored.Machine
+				// A rebuild writes into a fresh database, so the upsert cannot
+				// preserve a title from the destination row. Carry the archived
+				// nullable title into index-less Codex parses; an explicitly
+				// present blank remains authoritative and bypasses this path.
+				if e.archiveStore != nil &&
+					batch[i].sess.Agent == parser.AgentCodex &&
+					!batch[i].sess.SessionNamePresent {
+					batch[i].sess.SessionName = ""
+					if stored.SessionName != nil {
+						batch[i].sess.SessionName = *stored.SessionName
+					}
+				}
 			}
 			continue
 		}

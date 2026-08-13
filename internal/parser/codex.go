@@ -1533,7 +1533,7 @@ func (p *codexProvider) parseSessionSnapshot(
 			path, b.sessionID,
 		)
 	}
-	if sessionName == "" && b.firstMessage == "" &&
+	if !sessionNamePresent && sessionName == "" && b.firstMessage == "" &&
 		b.relationshipType == RelSubagent {
 		sessionName = codexAgentPathLeaf(b.agentPath)
 	}

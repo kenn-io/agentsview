@@ -3076,18 +3076,20 @@ func (db *DB) ListSessionIDsByFilePath(path, agent string) ([]string, error) {
 
 const sessionMachineBatchSize = 500
 
-// SessionWriteIdentity is the stored evidence used to decide whether a copied
-// source may reuse the session's machine for local project identity discovery.
+// SessionWriteIdentity is the stored state used to preserve immutable source
+// attribution and parser-owned Codex titles across session writes and rebuilds.
 type SessionWriteIdentity struct {
-	Machine  string
-	Agent    string
-	FilePath string
-	FileHash string
+	Machine     string
+	Agent       string
+	FilePath    string
+	FileHash    string
+	SessionName *string
 }
 
-// ListSessionWriteIdentitiesByID returns stored source evidence for each
-// requested session, including tombstoned rows that may be revived by a later
-// successful parse. Requests are chunked below SQLite's bind-variable limit.
+// ListSessionWriteIdentitiesByID returns stored source attribution and parser
+// title state for each requested session, including tombstoned rows that may be
+// revived by a later successful parse. Requests are chunked below SQLite's
+// bind-variable limit.
 func (db *DB) ListSessionWriteIdentitiesByID(
 	ctx context.Context,
 	ids []string,
@@ -3118,7 +3120,8 @@ func (db *DB) ListSessionWriteIdentitiesByID(
 		}
 		rows, err := db.getReader().QueryContext(ctx, `
 			SELECT id, machine, agent,
-			       COALESCE(file_path, ''), COALESCE(file_hash, '')
+			       COALESCE(file_path, ''), COALESCE(file_hash, ''),
+			       session_name
 			FROM sessions
 			WHERE id IN (`+placeholders+`)
 			ORDER BY id`, args...)
@@ -3130,7 +3133,7 @@ func (db *DB) ListSessionWriteIdentitiesByID(
 			var identity SessionWriteIdentity
 			if err := rows.Scan(
 				&id, &identity.Machine, &identity.Agent,
-				&identity.FilePath, &identity.FileHash,
+				&identity.FilePath, &identity.FileHash, &identity.SessionName,
 			); err != nil {
 				_ = rows.Close()
 				return nil, fmt.Errorf(

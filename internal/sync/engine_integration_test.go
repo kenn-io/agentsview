@@ -5487,6 +5487,18 @@ func TestCodexRequiredReparseWithoutIndexPreservesStoredTitle(t *testing.T) {
 					"stale data version must force a full reparse")
 			},
 		},
+		{
+			name:        "ResyncAll rebuild",
+			wantReparse: true,
+			resync: func(
+				t *testing.T, env *testEnv, _, _ string,
+			) {
+				t.Helper()
+				stats := env.engine.ResyncAll(context.Background(), nil)
+				require.False(t, stats.Aborted, "ResyncAll aborted: %v", stats.Warnings)
+				require.Equal(t, 1, stats.Synced)
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -5551,7 +5563,7 @@ func TestCodexRequiredReparseWithoutIndexPreservesStoredTitle(t *testing.T) {
 	}
 }
 
-func TestSyncAllCodexExplicitBlankIndexTitleClearsStoredTitle(t *testing.T) {
+func TestCodexExplicitBlankIndexTitleClearsStoredTitle(t *testing.T) {
 	root := t.TempDir()
 	codexDir := filepath.Join(root, "sessions")
 	require.NoError(t, os.MkdirAll(codexDir, 0o755))
@@ -5600,6 +5612,28 @@ func TestSyncAllCodexExplicitBlankIndexTitleClearsStoredTitle(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Nil(t, sess.SessionName, "the stored title must be cleared")
+
+	// Rebuilds parse into a fresh database and seed absent titles from the old
+	// archive. Prove that an explicitly present blank still bypasses that carry
+	// forward instead of resurrecting the archived title.
+	writeIndex("Stored title", transcriptTime.Add(3*time.Hour))
+	restored := env.engine.SyncAll(context.Background(), nil)
+	require.Equal(t, 1, restored.Synced)
+	sess, err = env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.NotNil(t, sess.SessionName)
+	require.Equal(t, "Stored title", *sess.SessionName)
+
+	writeIndex("", transcriptTime.Add(4*time.Hour))
+	rebuilt := env.engine.ResyncAll(context.Background(), nil)
+	require.False(t, rebuilt.Aborted, "ResyncAll aborted: %v", rebuilt.Warnings)
+	require.Equal(t, 1, rebuilt.Synced)
+	sess, err = env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Nil(t, sess.SessionName,
+		"an explicit blank title must clear through a fresh-database rebuild")
 }
 
 func TestSyncAllWarmGateCodexIndexSameStatRenameRefreshesName(t *testing.T) {
