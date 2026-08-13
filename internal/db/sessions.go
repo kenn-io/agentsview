@@ -2499,9 +2499,11 @@ type IncrementalSessionUpdate struct {
 	HasPeakContextTokens  bool
 	SubagentLinks         []ToolCallSubagentLink
 	ToolCallResultUpdates []ToolCallResultUpdate
-	// Checkpoint is the machine-local parser checkpoint to persist in the
-	// same transaction as this delta. nil keeps any existing checkpoint.
+	// Checkpoint/CheckpointBlobs are the machine-local parser checkpoint
+	// metadata and lazy payload to persist in the same transaction as this
+	// delta. nil keeps any existing checkpoint.
 	Checkpoint              *ParserCheckpoint
+	CheckpointBlobs         *ParserCheckpointBlobs
 	BlockedResultCategories map[string]bool
 }
 

@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding"
@@ -16,7 +15,7 @@ import (
 )
 
 const (
-	codexCheckpointVersion    = 1
+	codexCheckpointVersion    = 2
 	codexCheckpointAnchorSize = 128 << 10
 )
 
@@ -44,8 +43,11 @@ type codexCheckpointResult struct {
 	fingerprint parser.SourceFingerprint
 	checkpoint  *db.ParserCheckpoint
 	decision    codexCheckpointDecision
-	// hashState is the resumable SHA-256 state after hashing through the
-	// current file size, ready for the next checkpoint.
+	// seed is the persisted parser cursor for the append resume; loaded
+	// lazily from the checkpoint blobs only on the append branch.
+	seed []byte
+	// hashState is the resumable SHA-256 state through the committed
+	// prefix, ready for the incremental resume to continue from.
 	hashState []byte
 }
 
@@ -54,9 +56,9 @@ type codexCheckpointResult struct {
 //
 //   - unchanged: stat identity + size match the checkpoint offset, so the
 //     committed prefix is trusted (append-trust mode) and the file is skipped;
-//   - append: identity matches, the file only grew, the tail anchor matches,
-//     and a resumable SHA-256 state exists, so the full-file fingerprint is
-//     derived by hashing only [offset, size);
+//   - append: identity matches, the file only grew, the tail anchor digest
+//     matches, and a resumable SHA-256 state exists, so the full-file
+//     fingerprint is derived by hashing only [offset, size);
 //   - otherwise fallback, which keeps every existing conservative path.
 func (e *Engine) codexCheckpointFingerprint(
 	ctx context.Context,
@@ -166,7 +168,7 @@ func (e *Engine) codexCheckpointFingerprint(
 		res.decision = codexCheckpointInvalid // truncation: never resume
 		return res, nil
 	}
-	if len(cp.HashState) == 0 || len(cp.TailAnchor) == 0 {
+	if cp.TailAnchorDigest == "" {
 		res.decision = codexCheckpointInvalid
 		return res, nil
 	}
@@ -175,8 +177,18 @@ func (e *Engine) codexCheckpointFingerprint(
 		res.decision = codexCheckpointInvalid
 		return res, nil
 	}
+	// The append branch loads the lazy payload (cursor + hash state); the
+	// unchanged branch above never touches it.
+	blobs, hasBlobs, err := e.db.GetParserCheckpointBlobs(inc.ID)
+	if err != nil {
+		return res, fmt.Errorf("loading checkpoint blobs %s: %w", inc.ID, err)
+	}
+	if !hasBlobs || len(blobs.HashState) == 0 {
+		res.decision = codexCheckpointInvalid
+		return res, nil
+	}
 	_, hash, err := codexResumeHash(
-		path, cp.Offset, info.Size(), cp.HashState,
+		path, cp.Offset, info.Size(), blobs.HashState,
 	)
 	if err != nil {
 		res.decision = codexCheckpointInvalid
@@ -184,11 +196,12 @@ func (e *Engine) codexCheckpointFingerprint(
 	}
 	res.decision = codexCheckpointAppend
 	res.checkpoint = cp
+	res.seed = blobs.Cursor
 	// The incremental path resumes from the OLD state through the committed
 	// safe offset (which may stop before a partial tail at EOF); the
 	// full-file hash above is only the fingerprint. Advancing the state here
 	// would double-count the tail when newOffset < info.Size().
-	res.hashState = cp.HashState
+	res.hashState = blobs.HashState
 	res.fingerprint = parser.SourceFingerprint{
 		Key:     codexCheckpointFingerprintKey(source, path),
 		Size:    info.Size(),
@@ -213,13 +226,15 @@ func codexCheckpointFingerprintKey(
 	return path
 }
 
-// codexCheckpointTailAnchor returns the last min(anchorSize, offset) bytes of
-// the committed prefix [0, offset).
-func codexCheckpointTailAnchor(
+// codexCheckpointAnchorDigest returns the SHA-256 digest of the last
+// min(codexCheckpointAnchorSize, offset) bytes of the committed prefix
+// [0, offset). The append gate reads that bounded window once and compares
+// the digest, instead of storing the raw anchor bytes in the checkpoint row.
+func codexCheckpointAnchorDigest(
 	path string, offset int64,
-) ([]byte, error) {
+) (string, error) {
 	if offset <= 0 {
-		return nil, nil
+		return "", nil
 	}
 	start := offset - codexCheckpointAnchorSize
 	if start < 0 {
@@ -227,33 +242,29 @@ func codexCheckpointTailAnchor(
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	defer f.Close()
 	if _, err := f.Seek(start, io.SeekStart); err != nil {
-		return nil, err
+		return "", err
 	}
-	anchor, err := io.ReadAll(io.LimitReader(f, offset-start))
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(anchor)) != offset-start {
-		return nil, fmt.Errorf(
-			"short anchor read for %s: got %d want %d",
-			path, len(anchor), offset-start,
+	h := sha256.New()
+	if _, err := io.CopyN(h, f, offset-start); err != nil {
+		return "", fmt.Errorf(
+			"reading anchor window for %s: %w", path, err,
 		)
 	}
-	return anchor, nil
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func codexCheckpointAnchorMatches(
 	path string, cp *db.ParserCheckpoint,
 ) (bool, error) {
-	anchor, err := codexCheckpointTailAnchor(path, cp.Offset)
+	digest, err := codexCheckpointAnchorDigest(path, cp.Offset)
 	if err != nil {
 		return false, err
 	}
-	return bytes.Equal(anchor, cp.TailAnchor), nil
+	return digest == cp.TailAnchorDigest, nil
 }
 
 // codexResumeHash continues a persisted SHA-256 state over [offset, size) and
@@ -290,31 +301,6 @@ func codexResumeHash(
 	return newState, hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// codexBuildInitialHashState hashes the whole file once and returns the
-// resumable SHA-256 state. Called when persisting a checkpoint after a full
-// parse; the full parse already read the file, so this is the one-time cost
-// that makes every later append Θ(d).
-func codexBuildInitialHashState(
-	path string, size int64,
-) ([]byte, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.CopyN(h, f, size); err != nil {
-		return nil, fmt.Errorf(
-			"hashing full source %s: %w", path, err,
-		)
-	}
-	marshaler, ok := h.(encoding.BinaryMarshaler)
-	if !ok {
-		return nil, fmt.Errorf("sha256 does not support state capture")
-	}
-	return marshaler.MarshalBinary()
-}
-
 // codexHashStateDigest finalizes a resumable SHA-256 state into its digest.
 func codexHashStateDigest(state []byte) (string, error) {
 	h := sha256.New()
@@ -329,13 +315,25 @@ func codexHashStateDigest(state []byte) (string, error) {
 }
 
 // persistFullParseCheckpoint stores a session's checkpoint after its full
-// parse rows committed. It re-reads the committed file size and next ordinal
+// parse rows committed. It uses the hash state and anchor digest the parser
+// captured on its single read pass, so persisting the checkpoint never
+// re-reads the source. It re-reads the committed file size and next ordinal
 // from the database so the checkpoint always matches what a future
 // incremental parse will see.
 func (e *Engine) persistFullParseCheckpoint(
 	ctx context.Context, pw pendingWrite,
 ) {
 	if len(pw.checkpoint) == 0 {
+		return
+	}
+	if len(pw.checkpointHashState) == 0 ||
+		pw.checkpointAnchorDigest == "" {
+		// The provider did not carry the single-pass hash/anchor state;
+		// skip persisting rather than re-reading the source.
+		log.Printf(
+			"checkpoint skip %s: parser supplied no single-pass hash state",
+			pw.sess.File.Path,
+		)
 		return
 	}
 	path := pw.sess.File.Path
@@ -364,27 +362,25 @@ func (e *Engine) persistFullParseCheckpoint(
 		// disagree with the stored cursor.
 		return
 	}
-	// The checkpoint must describe exactly the committed prefix: hash only
-	// [0, inc.FileSize), never the live file's current size. If the
-	// transcript kept growing while the full parse wrote, hashing
-	// info.Size() would poison the resumable state with bytes that the next
-	// incremental resume would hash a second time.
+	// The parser state covers exactly the parsed snapshot
+	// [0, pw.sess.File.Size); the checkpoint must describe exactly the
+	// committed prefix. If the committed size disagrees with the snapshot
+	// the state is unusable — never persist it.
 	committed := inc.FileSize
-	if committed <= 0 || committed > info.Size() {
-		log.Printf("checkpoint bounds %s: committed=%d live=%d", path, committed, info.Size())
+	if committed <= 0 || committed > info.Size() ||
+		committed != pw.sess.File.Size {
+		log.Printf(
+			"checkpoint bounds %s: committed=%d snapshot=%d live=%d",
+			path, committed, pw.sess.File.Size, info.Size(),
+		)
 		return
 	}
-	hashState, err := codexBuildInitialHashState(path, committed)
-	if err != nil {
-		log.Printf("checkpoint hash %s: %v", path, err)
-		return
-	}
-	committedHash, err := codexHashStateDigest(hashState)
+	committedHash, err := codexHashStateDigest(pw.checkpointHashState)
 	if err != nil {
 		log.Printf("checkpoint digest %s: %v", path, err)
 		return
 	}
-	cp, buildErr := buildCodexCheckpoint(
+	cp, blobs := buildCodexCheckpoint(
 		inc.ID,
 		string(pw.sess.Agent),
 		e.effectiveSourcePath(path),
@@ -392,21 +388,21 @@ func (e *Engine) persistFullParseCheckpoint(
 		committed,
 		mtime,
 		pw.checkpoint,
-		hashState,
+		pw.checkpointHashState,
 		committedHash,
 		inc.NextOrdinal,
+		pw.checkpointAnchorDigest,
 	)
-	if buildErr != nil {
-		log.Printf("checkpoint build %s: %v", path, buildErr)
-		return
-	}
-	if err := e.db.UpsertParserCheckpoint(*cp); err != nil {
+	if err := e.db.UpsertParserCheckpoint(*cp, blobs); err != nil {
 		log.Printf("checkpoint persist %s: %v", path, err)
 	}
 }
 
-// buildCodexCheckpoint constructs the next checkpoint for a committed prefix
-// of size newOffset with the given cursor/hash continuation state.
+// buildCodexCheckpoint assembles the checkpoint metadata row and the lazy
+// blob payload for a committed prefix of size newOffset. anchorDigest is the
+// digest of the prefix's trailing anchor window; callers obtain it either
+// from the parser's single-pass capture (full parse) or from a bounded
+// read of the file tail (incremental path).
 func buildCodexCheckpoint(
 	sessionID, agent, storedPath string,
 	info os.FileInfo,
@@ -416,28 +412,24 @@ func buildCodexCheckpoint(
 	hashState []byte,
 	hash string,
 	nextOrdinal int,
-) (*db.ParserCheckpoint, error) {
-	anchor, err := codexCheckpointTailAnchor(storedPath, newOffset)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"building checkpoint anchor %s at %d: %w",
-			storedPath, newOffset, err,
-		)
-	}
+	anchorDigest string,
+) (*db.ParserCheckpoint, db.ParserCheckpointBlobs) {
 	inode, device := getFileIdentity(storedPath, info)
 	return &db.ParserCheckpoint{
-		SessionID:   sessionID,
-		Agent:       agent,
-		FilePath:    storedPath,
-		FileInode:   uint64(inode),
-		FileDevice:  uint64(device),
-		FileMTime:   mtime,
-		Offset:      newOffset,
-		TailAnchor:  anchor,
-		Cursor:      cursor,
-		HashState:   hashState,
-		Hash:        hash,
-		NextOrdinal: nextOrdinal,
-		Version:     codexCheckpointVersion,
-	}, nil
+			SessionID:        sessionID,
+			Agent:            agent,
+			FilePath:         storedPath,
+			FileInode:        uint64(inode),
+			FileDevice:       uint64(device),
+			FileMTime:        mtime,
+			Offset:           newOffset,
+			TailAnchorDigest: anchorDigest,
+			Hash:             hash,
+			NextOrdinal:      nextOrdinal,
+			Version:          codexCheckpointVersion,
+		}, db.ParserCheckpointBlobs{
+			SessionID: sessionID,
+			Cursor:    cursor,
+			HashState: hashState,
+		}
 }

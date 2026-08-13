@@ -1335,11 +1335,19 @@ CREATE TABLE IF NOT EXISTS parser_checkpoints (
     file_device        INTEGER NOT NULL,
     file_mtime         INTEGER NOT NULL,
     offset             INTEGER NOT NULL,
-    tail_anchor        BLOB NOT NULL,
-    cursor             BLOB NOT NULL,
-    hash_state         BLOB,
+    tail_anchor_digest TEXT NOT NULL,
     hash               TEXT NOT NULL,
     next_ordinal       INTEGER NOT NULL,
     checkpoint_version INTEGER NOT NULL,
     updated_at         TEXT NOT NULL
 );
+
+-- Lazy-loaded checkpoint payload: the provider cursor and the resumable
+-- hash state. Kept out of parser_checkpoints so the stat-only freshness
+-- gate reads the small metadata row without touching the blobs.
+CREATE TABLE IF NOT EXISTS parser_checkpoint_blobs (
+    session_id TEXT PRIMARY KEY,
+    cursor     BLOB NOT NULL,
+    hash_state BLOB
+);
+

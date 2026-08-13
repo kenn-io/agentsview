@@ -8159,16 +8159,18 @@ func (e *Engine) collectAndBatch(
 				needsRetry := r.providerFailureCount > 0 ||
 					r.needsRetryForSession(pr.Session.ID)
 				pw := pendingWrite{
-					sess:              pr.Session,
-					msgs:              pr.Messages,
-					usageEvents:       pr.UsageEvents,
-					checkpoint:        pr.Checkpoint,
-					needsRetry:        needsRetry,
-					forceReplace:      r.forceReplace,
-					baselineEligible:  vetoed == 0 && r.providerFailureCount == 0 && !needsRetry,
-					storageTrustPath:  r.storageTrustPath,
-					storageTrustState: r.storageTrustState,
-					storageTrustSnap:  r.storageTrustSnap,
+					sess:                   pr.Session,
+					msgs:                   pr.Messages,
+					usageEvents:            pr.UsageEvents,
+					checkpoint:             pr.Checkpoint,
+					checkpointHashState:    pr.CheckpointHashState,
+					checkpointAnchorDigest: pr.CheckpointAnchorDigest,
+					needsRetry:             needsRetry,
+					forceReplace:           r.forceReplace,
+					baselineEligible:       vetoed == 0 && r.providerFailureCount == 0 && !needsRetry,
+					storageTrustPath:       r.storageTrustPath,
+					storageTrustState:      r.storageTrustState,
+					storageTrustSnap:       r.storageTrustSnap,
 				}
 				// The source's per-component digest (providerStatHash) is
 				// a one-row side-table entry keyed by (agent, file_path),
@@ -8358,6 +8360,7 @@ type incrementalUpdate struct {
 	// same transaction as this incremental delta. nil keeps the existing
 	// checkpoint (or leaves none).
 	checkpoint           *db.ParserCheckpoint
+	checkpointBlobs      *db.ParserCheckpointBlobs
 	endedAt              time.Time
 	terminationStatus    *string
 	msgCount             int // total (old + new)
@@ -8832,7 +8835,7 @@ func (e *Engine) processProviderFile(
 			case codexCheckpointAppend:
 				fingerprint = cpResult.fingerprint
 				codexCheckpoint = cpResult.checkpoint
-				codexSeed = cpResult.checkpoint.Cursor
+				codexSeed = cpResult.seed
 				codexFullHash = cpResult.fingerprint.Hash
 				codexHashState = cpResult.hashState
 			case codexCheckpointInvalid:
@@ -11179,29 +11182,35 @@ func (e *Engine) tryIncrementalJSONL(
 	// Persist the advanced parser checkpoint in the same transaction as the
 	// delta when this append was resumed from one.
 	var nextCheckpoint *db.ParserCheckpoint
+	var nextCheckpointBlobs *db.ParserCheckpointBlobs
 	if checkpoint != nil && len(cursor) > 0 && hashState != nil {
 		cpNextOrdinal := inc.NextOrdinal
 		if len(newMsgs) > 0 {
 			cpNextOrdinal = nextParsedOrdinal(inc.NextOrdinal, newMsgs)
 		}
-		built, buildErr := buildCodexCheckpoint(
-			inc.ID,
-			string(agent),
-			e.effectiveSourcePath(file.Path),
-			info,
-			newOffset,
-			incMtime,
-			cursor,
-			hashState,
-			incHash,
-			cpNextOrdinal,
+		anchorDigest, anchorErr := codexCheckpointAnchorDigest(
+			file.Path, newOffset,
 		)
-		if buildErr != nil {
+		if anchorErr != nil {
 			log.Printf(
-				"building codex checkpoint %s: %v", file.Path, buildErr,
+				"building codex checkpoint %s: %v", file.Path, anchorErr,
 			)
 		} else {
+			built, blobs := buildCodexCheckpoint(
+				inc.ID,
+				string(agent),
+				e.effectiveSourcePath(file.Path),
+				info,
+				newOffset,
+				incMtime,
+				cursor,
+				hashState,
+				incHash,
+				cpNextOrdinal,
+				anchorDigest,
+			)
 			nextCheckpoint = built
+			nextCheckpointBlobs = &blobs
 		}
 	}
 
@@ -11222,6 +11231,7 @@ func (e *Engine) tryIncrementalJSONL(
 					links:                links,
 					toolCallUpdates:      toolCallUpdates,
 					checkpoint:           nextCheckpoint,
+					checkpointBlobs:      nextCheckpointBlobs,
 					endedAt:              endedAt,
 					terminationStatus:    terminationStatus,
 					msgCount:             inc.MsgCount,
@@ -11343,6 +11353,7 @@ func (e *Engine) tryIncrementalJSONL(
 			links:                links,
 			toolCallUpdates:      toolCallUpdates,
 			checkpoint:           nextCheckpoint,
+			checkpointBlobs:      nextCheckpointBlobs,
 			endedAt:              endedAt,
 			terminationStatus:    terminationStatus,
 			msgCount:             inc.MsgCount + len(newMsgs),
@@ -12083,9 +12094,15 @@ type pendingWrite struct {
 	// parse. The flush path persists it as a parser_checkpoints row after the
 	// session rows commit, so later appends can resume without rescanning the
 	// transcript prefix. Empty for providers without checkpoints.
-	checkpoint   []byte
-	needsRetry   bool
-	forceReplace bool
+	checkpoint []byte
+	// checkpointHashState/checkpointAnchorDigest carry the single-pass
+	// hash state and tail-anchor digest the parser captured while reading
+	// the snapshot; persisting them avoids any second source read after a
+	// full parse. Empty when the provider did not supply them.
+	checkpointHashState    []byte
+	checkpointAnchorDigest string
+	needsRetry             bool
+	forceReplace           bool
 	// sourceIdentityUnverified marks a copy that shares a native session ID
 	// without matching the stored machine, source path, or content hash. The
 	// copy still follows native-ID deduplication, but it cannot borrow the
@@ -14253,6 +14270,7 @@ func (e *Engine) writeIncremental(
 			SubagentLinks:           subagentLinks,
 			ToolCallResultUpdates:   toolCallResultUpdates,
 			Checkpoint:              inc.checkpoint,
+			CheckpointBlobs:         inc.checkpointBlobs,
 			BlockedResultCategories: e.blockedResultCategories,
 		},
 	); err != nil {
@@ -15870,12 +15888,14 @@ func (e *Engine) processAndWriteSessionFile(
 	written := 0
 	for i, pr := range res.results {
 		write := pendingWrite{
-			sess:         pr.Session,
-			msgs:         pr.Messages,
-			usageEvents:  pr.UsageEvents,
-			checkpoint:   pr.Checkpoint,
-			needsRetry:   res.needsRetryForSession(pr.Session.ID),
-			forceReplace: res.forceReplace,
+			sess:                   pr.Session,
+			msgs:                   pr.Messages,
+			usageEvents:            pr.UsageEvents,
+			checkpoint:             pr.Checkpoint,
+			checkpointHashState:    pr.CheckpointHashState,
+			checkpointAnchorDigest: pr.CheckpointAnchorDigest,
+			needsRetry:             res.needsRetryForSession(pr.Session.ID),
+			forceReplace:           res.forceReplace,
 		}
 		// The session upsert commits parser-derived parent provenance before
 		// the later content, usage, and completion stages. Queue the attempted

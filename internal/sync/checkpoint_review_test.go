@@ -2,6 +2,9 @@ package sync
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"testing"
@@ -55,7 +58,10 @@ func TestCodexCheckpointHashStateBoundedToCommittedOffset(t *testing.T) {
 	require.Equal(t, int64(len(initial)), before.Offset)
 
 	// Model a rollout append after the full parse/DB commit but before
-	// persistFullParseCheckpoint hashes the live source.
+	// persistFullParseCheckpoint runs. The persisted state must still
+	// cover exactly the committed snapshot, never the appended bytes:
+	// build the snapshot-bounded hash state and anchor digest the way the
+	// parser's single-pass tee would have captured them.
 	tail := testjsonl.JoinJSONL(testjsonl.CodexFunctionCallOutputJSON(
 		"call_race", "done", "2024-01-01T10:00:03Z",
 	))
@@ -65,16 +71,32 @@ func TestCodexCheckpointHashStateBoundedToCommittedOffset(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
+	snapshotHash := sha256.New()
+	_, err = snapshotHash.Write([]byte(initial))
+	require.NoError(t, err)
+	snapshotState, err := snapshotHash.(encoding.BinaryMarshaler).
+		MarshalBinary()
+	require.NoError(t, err)
+	anchor := initial[max(0, len(initial)-128<<10):]
+	anchorSum := sha256.Sum256([]byte(anchor))
+
+	blobs, ok, err := database.GetParserCheckpointBlobs("codex:" + uuid)
+	require.NoError(t, err)
+	require.True(t, ok)
+
 	engine.persistFullParseCheckpoint(context.Background(), pendingWrite{
 		sess: parser.ParsedSession{
 			ID:    "codex:" + uuid,
 			Agent: parser.AgentCodex,
 			File: parser.FileInfo{
 				Path: path,
+				Size: int64(len(initial)),
 				Hash: before.Hash,
 			},
 		},
-		checkpoint: before.Cursor,
+		checkpoint:             blobs.Cursor,
+		checkpointHashState:    snapshotState,
+		checkpointAnchorDigest: hex.EncodeToString(anchorSum[:]),
 	})
 
 	after, ok, err := database.GetParserCheckpoint("codex:" + uuid)
@@ -85,8 +107,11 @@ func TestCodexCheckpointHashStateBoundedToCommittedOffset(t *testing.T) {
 	require.Equal(t, int64(len(initial)), after.Offset,
 		"DB still commits only the original prefix")
 
+	afterBlobs, ok, err := database.GetParserCheckpointBlobs("codex:" + uuid)
+	require.NoError(t, err)
+	require.True(t, ok)
 	_, resumedHash, err := codexResumeHash(
-		path, after.Offset, info.Size(), after.HashState,
+		path, after.Offset, info.Size(), afterBlobs.HashState,
 	)
 	require.NoError(t, err)
 	actualHash, err := ComputeFileHash(path)
@@ -179,6 +204,9 @@ func TestCodexCheckpointStaleCannotResumeFromNewerDBOffset(t *testing.T) {
 	oldCheckpoint, ok, err := database.GetParserCheckpoint("codex:" + uuid)
 	require.NoError(t, err)
 	require.True(t, ok)
+	oldBlobs, ok, err := database.GetParserCheckpointBlobs("codex:" + uuid)
+	require.NoError(t, err)
+	require.True(t, ok)
 
 	appendLine := func(line string) {
 		t.Helper()
@@ -204,7 +232,7 @@ func TestCodexCheckpointStaleCannotResumeFromNewerDBOffset(t *testing.T) {
 	// Recreate the state left by a crash after a full replacement commits its
 	// newer file_size/next_ordinal but before its out-of-transaction checkpoint
 	// upsert: the DB prefix is newer than the surviving checkpoint seed.
-	require.NoError(t, database.UpsertParserCheckpoint(*oldCheckpoint))
+	require.NoError(t, database.UpsertParserCheckpoint(*oldCheckpoint, oldBlobs))
 	appendLine(testjsonl.CodexMsgJSON(
 		"assistant", "new reply", "2024-01-01T10:00:03Z",
 	))
