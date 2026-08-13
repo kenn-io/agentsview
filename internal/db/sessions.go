@@ -2505,6 +2505,11 @@ type IncrementalSessionUpdate struct {
 	Checkpoint              *ParserCheckpoint
 	CheckpointBlobs         *ParserCheckpointBlobs
 	BlockedResultCategories map[string]bool
+	// SignalMaintainer, when set, computes the incremental signal/secret
+	// delta inside the write transaction (after messages and result
+	// updates are applied). nil keeps the legacy behavior: signals are
+	// invalidated and recomputed by the debounced full path.
+	SignalMaintainer SignalMaintainer
 }
 
 type ToolCallSubagentLink struct {

@@ -505,14 +505,22 @@ func jaccard(a, b []string) float64 {
 
 func hasContextToolActivity(calls []ToolCallRow) bool {
 	for _, c := range calls {
-		switch c.Category {
-		case "Read", "Grep", "Glob":
+		if IsContextToolCall(c) {
 			return true
-		case "Bash":
-			if isContextCommand(commandText(c.InputJSON)) {
-				return true
-			}
 		}
+	}
+	return false
+}
+
+// IsContextToolCall reports whether a tool call counts as context-gathering
+// activity for the no-code-context heuristic (Read/Grep/Glob or a Bash
+// context command).
+func IsContextToolCall(c ToolCallRow) bool {
+	switch c.Category {
+	case "Read", "Grep", "Glob":
+		return true
+	case "Bash":
+		return isContextCommand(commandText(c.InputJSON))
 	}
 	return false
 }

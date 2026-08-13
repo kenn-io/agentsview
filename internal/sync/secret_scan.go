@@ -1,9 +1,21 @@
 package sync
 
 import (
+	"sync/atomic"
+
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/secrets"
 )
+
+// secretScanBytes counts the content bytes passed to the secret scanner.
+// Tests use deltas of it to gate the incremental path: a maintained delta
+// must scan no more than the delta's own content.
+var secretScanBytes atomic.Int64
+
+// SecretScanBytes returns the total scanned byte count so far. Monotonic.
+func SecretScanBytes() int64 {
+	return secretScanBytes.Load()
+}
 
 // computeSignalsAndSecrets computes a session's signal update and its secret
 // findings from the same message slice, returning the update with the
@@ -35,7 +47,8 @@ func scanSecretsFromMessages(
 	_ db.Session, msgs []db.Message, scan func(string) []secrets.Match,
 ) (findings []db.SecretFinding, definiteCount int) {
 	findings = make([]db.SecretFinding, 0)
-	add := func(sessionID, loc string, ord int, call, event *int, matches []secrets.Match) {
+	add := func(sessionID, loc string, ord int, call, event *int, content string, matches []secrets.Match) {
+		secretScanBytes.Add(int64(len(content)))
 		for _, m := range matches {
 			findings = append(findings, db.SecretFinding{
 				SessionID:      sessionID,
@@ -57,12 +70,12 @@ func scanSecretsFromMessages(
 	}
 	for _, msg := range msgs {
 		add(msg.SessionID, "message", msg.Ordinal, nil, nil,
-			scan(msg.Content))
+			msg.Content, scan(msg.Content))
 		for ci := range msg.ToolCalls {
 			tc := msg.ToolCalls[ci]
 			callIdx := ci
 			add(msg.SessionID, "tool_input", msg.Ordinal, &callIdx, nil,
-				scan(tc.InputJSON))
+				tc.InputJSON, scan(tc.InputJSON))
 			if len(tc.ResultEvents) > 0 {
 				for ei := range tc.ResultEvents {
 					// Store the slice position, which is what the persistence
@@ -71,11 +84,12 @@ func scanSecretsFromMessages(
 					// normalized value, so --reveal can re-locate the source.
 					evIdx := ei
 					add(msg.SessionID, "tool_result_event", msg.Ordinal,
-						&callIdx, &evIdx, scan(tc.ResultEvents[ei].Content))
+						&callIdx, &evIdx, tc.ResultEvents[ei].Content,
+						scan(tc.ResultEvents[ei].Content))
 				}
 			} else {
 				add(msg.SessionID, "tool_result", msg.Ordinal, &callIdx, nil,
-					scan(tc.ResultContent))
+					tc.ResultContent, scan(tc.ResultContent))
 			}
 		}
 	}

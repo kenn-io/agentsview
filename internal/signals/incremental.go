@@ -289,12 +289,19 @@ func factsFor(calls []ToolCallRow) []ToolFact {
 				CallIndex:      c.CallIndex,
 			},
 			Failure:        IsFailure(c),
-			ExactSignature: toolSignature(c),
-			CommandClass:   commandClass(c),
+			ExactSignature: ExactToolSignature(c),
+			CommandClass:   CommandClass(c),
 		})
 	}
 	return facts
 }
+
+// ExactToolSignature returns the exact signature the runaway exact-run
+// detector uses for a call.
+func ExactToolSignature(c ToolCallRow) string { return toolSignature(c) }
+
+// CommandClass returns the command class the runaway window detector uses.
+func CommandClass(c ToolCallRow) string { return commandClass(c) }
 
 func callOrdinals(calls []ToolCallRow) []ToolCallOrdinal {
 	ords := make([]ToolCallOrdinal, 0, len(calls))

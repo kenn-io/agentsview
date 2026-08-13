@@ -3936,9 +3936,8 @@ func TestWriteSessionIncrementalBlocksLinkedResultContent(t *testing.T) {
 		}},
 		BlockedResultCategories: map[string]bool{"Task": true},
 	}
-	require.NoError(t, d.WriteSessionIncremental(
-		"s1", nil, update,
-	), "incremental write")
+	_, werr := d.WriteSessionIncremental("s1", nil, update)
+	require.NoError(t, werr, "incremental write")
 
 	var subagent, content string
 	var contentLen int
@@ -3958,8 +3957,8 @@ func TestWriteSessionIncrementalBlocksLinkedResultContent(t *testing.T) {
 	require.NotNil(t, after.TranscriptRevision)
 	assert.Equal(t, "2", *after.TranscriptRevision)
 
-	require.NoError(t, d.WriteSessionIncremental("s1", nil, update),
-		"idempotent incremental write")
+	_, werr = d.WriteSessionIncremental("s1", nil, update)
+	require.NoError(t, werr, "idempotent incremental write")
 	idempotent, err := d.GetSession(context.Background(), "s1")
 	require.NoError(t, err)
 	require.NotNil(t, idempotent)
@@ -4008,7 +4007,8 @@ func TestWriteSessionIncrementalResultOnlyLink(t *testing.T) {
 			HasResult:        true,
 		}},
 	}
-	require.NoError(t, d.WriteSessionIncremental("s1", nil, update))
+	_, werr := d.WriteSessionIncremental("s1", nil, update)
+	require.NoError(t, werr)
 
 	var subagent, content string
 	var contentLen int
@@ -4063,7 +4063,8 @@ func TestWriteSessionIncrementalToolCallResultUpdate(t *testing.T) {
 			}},
 		}},
 	}
-	require.NoError(t, d.WriteSessionIncremental("s1", nil, update))
+	_, werr := d.WriteSessionIncremental("s1", nil, update)
+	require.NoError(t, werr)
 
 	var result string
 	var resultLen int
@@ -4089,7 +4090,8 @@ func TestWriteSessionIncrementalToolCallResultUpdate(t *testing.T) {
 	assert.Equal(t, "2026-08-02T09:00:00Z", timestamp)
 	assert.Zero(t, eventIndex)
 
-	require.NoError(t, d.WriteSessionIncremental("s1", nil, update),
+	_, werr = d.WriteSessionIncremental("s1", nil, update)
+	require.NoError(t, werr,
 		"replaying an identical output must be idempotent")
 	require.NoError(t, d.Reader().QueryRow(`
 		SELECT COUNT(*) FROM tool_result_events
@@ -7834,7 +7836,7 @@ func TestLastWriteIncrementalMarker(t *testing.T) {
 	assert.False(t, got.LastWriteIncremental,
 		"full write path must leave last_write_incremental false")
 
-	requireNoError(t, d.WriteSessionIncremental(
+	_, werr := d.WriteSessionIncremental(
 		"inc-marker",
 		[]Message{asstMsg("inc-marker", 1, "appended reply")},
 		IncrementalSessionUpdate{
@@ -7844,7 +7846,8 @@ func TestLastWriteIncrementalMarker(t *testing.T) {
 			FileMtime:    200,
 			NextOrdinal:  2,
 		},
-	), "incremental write")
+	)
+	requireNoError(t, werr, "incremental write")
 
 	got, err = d.GetSessionFull(context.Background(), "inc-marker")
 	requireNoError(t, err, "get after incremental write")
@@ -7900,11 +7903,12 @@ func TestBatchWriteIncrementalMarkerReplaceMode(t *testing.T) {
 		UserMessageCount: 1,
 	}
 	requireNoError(t, d.UpsertSession(base), "initial upsert")
-	requireNoError(t, d.WriteSessionIncremental(
+	_, werr := d.WriteSessionIncremental(
 		"batch-marker",
 		[]Message{asstMsg("batch-marker", 1, "appended reply")},
 		IncrementalSessionUpdate{MsgCount: 2, UserMsgCount: 1, NextOrdinal: 2},
-	), "incremental write")
+	)
+	requireNoError(t, werr, "incremental write")
 
 	got, err := d.GetSessionFull(context.Background(), "batch-marker")
 	requireNoError(t, err, "get after incremental write")
@@ -7971,8 +7975,8 @@ func TestIncrementalWriteAtomicityRollsBackMessages(t *testing.T) {
 			reflect.ValueOf(msgsToWrite),
 			update,
 		})
-		if !results[0].IsNil() {
-			err = results[0].Interface().(error)
+		if !results[1].IsNil() {
+			err = results[1].Interface().(error)
 		} else {
 			err = nil
 		}

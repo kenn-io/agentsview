@@ -93,12 +93,13 @@ func TestWriteSessionIncrementalPersistsCheckpointInSameTx(t *testing.T) {
 		Cursor:    []byte("c"),
 		HashState: []byte("h"),
 	}
-	require.NoError(t, d.WriteSessionIncremental("s1", nil, IncrementalSessionUpdate{
+	_, werr := d.WriteSessionIncremental("s1", nil, IncrementalSessionUpdate{
 		MsgCount:        1,
 		NextOrdinal:     1,
 		Checkpoint:      &cp,
 		CheckpointBlobs: &blobs,
-	}))
+	})
+	require.NoError(t, werr)
 
 	got, ok, err := d.GetParserCheckpoint("s1")
 	require.NoError(t, err)
@@ -110,10 +111,11 @@ func TestWriteSessionIncrementalPersistsCheckpointInSameTx(t *testing.T) {
 	assert.Equal(t, []byte("c"), gotBlobs.Cursor)
 
 	// A delta without a checkpoint must not disturb the stored one.
-	require.NoError(t, d.WriteSessionIncremental("s1", nil, IncrementalSessionUpdate{
+	_, werr = d.WriteSessionIncremental("s1", nil, IncrementalSessionUpdate{
 		MsgCount:    1,
 		NextOrdinal: 2,
-	}))
+	})
+	require.NoError(t, werr)
 	got, ok, err = d.GetParserCheckpoint("s1")
 	require.NoError(t, err)
 	require.True(t, ok)
