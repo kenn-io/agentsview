@@ -5392,6 +5392,66 @@ func TestSyncAllSinceCodexIndexRenameBelowStoredMtimeRefreshesName(t *testing.T)
 	}
 }
 
+// TestSyncAllSkipsUnchangedTitledCodexSessionAfterIndexRemoval replays the
+// Codex-upgrade scenario behind the eternal reparse loop: a session gains a
+// title while session_index.jsonl exists, then a newer Codex release stops
+// writing the index file. The next full sync of the untouched transcript must
+// skip; treating the absent index as a rename force-replaced every titled
+// session on every sync, and the rewrite preserved the title so the loop
+// never converged.
+func TestSyncAllSkipsUnchangedTitledCodexSessionAfterIndexRemoval(t *testing.T) {
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir}))
+
+	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229e2"
+	content := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
+		AddCodexMessage(tsEarlyS1, "user", "Keep my title").
+		String()
+	path := env.writeCodexSession(
+		t,
+		filepath.Join("2026", "06", "11"),
+		"rollout-2026-06-11T12-44-06-"+uuid+".jsonl",
+		content,
+	)
+
+	// The index is older than the transcript so the stored file_mtime is the
+	// raw transcript mtime, matching an archive whose sessions were last
+	// rewritten after the index disappeared.
+	indexPath := filepath.Join(root, "session_index.jsonl")
+	require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
+		`{"id":"%s","thread_name":"Sticky title","updated_at":"2026-06-11T12:50:00Z"}`+"\n",
+		uuid,
+	), 0o644))
+	transcriptTime := time.Now().Add(-2 * time.Hour)
+	indexTime := transcriptTime.Add(-time.Hour)
+	require.NoError(t, os.Chtimes(path, transcriptTime, transcriptTime))
+	require.NoError(t, os.Chtimes(indexPath, indexTime, indexTime))
+
+	env.engine.SyncAll(context.Background(), nil)
+	sess, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err, "GetSessionFull")
+	require.NotNil(t, sess, "expected Codex session to sync")
+	require.NotNil(t, sess.SessionName, "expected session_name to be imported")
+	require.Equal(t, "Sticky title", *sess.SessionName)
+
+	// A Codex upgrade removes session_index.jsonl; the transcript is untouched.
+	require.NoError(t, os.Remove(indexPath))
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	assert.Equal(t, 0, stats.Synced,
+		"an unchanged titled session must skip once the index is gone")
+
+	sess, err = env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err, "GetSessionFull after index removal")
+	require.NotNil(t, sess, "expected Codex session to remain")
+	if assert.NotNil(t, sess.SessionName, "stored title must survive the skip") {
+		assert.Equal(t, "Sticky title", *sess.SessionName)
+	}
+}
+
 func TestSyncAllWarmGateCodexIndexSameStatRenameRefreshesName(t *testing.T) {
 	root := t.TempDir()
 	codexDir := filepath.Join(root, "sessions")

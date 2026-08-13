@@ -11303,7 +11303,15 @@ func (e *Engine) codexIndexSessionNameChanged(path string) bool {
 	if uuid == "" {
 		return false
 	}
-	currentName := parser.LookupCodexThreadName(path, uuid)
+	currentName, ok := parser.LookupCodexThreadNameEntry(path, uuid)
+	if !ok {
+		// No index entry means no rename signal, not a rename to empty.
+		// Modern Codex releases stopped writing session_index.jsonl; a
+		// stored title compared against the absent index would force a
+		// full re-parse of every titled session on every sync, and the
+		// rewrite preserves the title, so the loop could never converge.
+		return false
+	}
 	storedName, found, err := e.db.GetSessionName(
 		context.Background(), e.idPrefix+"codex:"+uuid,
 	)
