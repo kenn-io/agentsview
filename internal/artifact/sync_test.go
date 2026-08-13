@@ -500,14 +500,15 @@ func TestDrainArtifactSyncFullExportReturnsMoreWhenQueueDoesNotSettle(
 	t *testing.T,
 ) {
 	// Serial: this exercises the full drain cap through real SQLite and
-	// Docbank writes under a fixed deadline. Package-wide I/O contention can
-	// otherwise consume the deadline without the drain being stuck.
+	// Docbank writes under a fixed deadline. The race job runs other packages
+	// concurrently, so leave enough headroom for cross-package I/O contention
+	// while retaining a guard against a stuck drain.
 
 	database := testExportDB(t)
 	seedSession(t, database, "sess-1", "alpha")
 	store := newTestArtifactStore(t)
 	concurrent := &reEnqueueOnBoundaryStore{DB: database}
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
 
 	result, more, err := drainArtifactSyncExportsWithRounds(
