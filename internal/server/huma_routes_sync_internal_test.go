@@ -903,6 +903,66 @@ func TestRunRemoteSyncHostsOwnedLogsPerHostLifecycle(t *testing.T) {
 	assert.NotContains(t, output, "secret-token")
 }
 
+func TestRunRemoteSyncRequestLogsRemoteOnlyAggregateStats(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	logs := captureServerLogOutput(t)
+	stubRunHTTPRemoteSync(t, func(
+		_ context.Context, _ config.RemoteHost, _ bool,
+	) (remotesync.SyncStats, error) {
+		return remotesync.SyncStats{
+			SessionsSynced: 3, SessionsTotal: 5, Skipped: 1, Failed: 1,
+		}, nil
+	})
+
+	response := f.srv.runRemoteSyncRequest(
+		context.Background(), f.db, f.srv.syncEngineForLocal(f.db),
+		remoteSyncRequest{
+			Hosts: []config.RemoteHost{{
+				Host: "alpha", Transport: config.RemoteTransportHTTP,
+			}},
+		}, nil,
+	)
+
+	require.Empty(t, response.Error)
+	output := logs.String()
+	assert.Contains(t, output,
+		"aggregate_synced=3 aggregate_total=5 aggregate_skipped=1 aggregate_failed=1")
+}
+
+func TestRunRemoteSyncRequestCombinesMixedTransportAggregateStats(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	logs := captureServerLogOutput(t)
+	stubRunHTTPRemoteSync(t, func(
+		_ context.Context, _ config.RemoteHost, _ bool,
+	) (remotesync.SyncStats, error) {
+		return remotesync.SyncStats{
+			SessionsSynced: 2, SessionsTotal: 3, Skipped: 1,
+		}, nil
+	})
+	stubRunRemoteSync(t, func(
+		_ context.Context, _ *ssh.RemoteSync,
+	) (ssh.SyncStats, error) {
+		return ssh.SyncStats{
+			SessionsSynced: 4, SessionsTotal: 5, Skipped: 2, Failed: 1,
+		}, nil
+	})
+
+	response := f.srv.runRemoteSyncRequest(
+		context.Background(), f.db, f.srv.syncEngineForLocal(f.db),
+		remoteSyncRequest{
+			Hosts: []config.RemoteHost{
+				{Host: "alpha", Transport: config.RemoteTransportHTTP},
+				{Host: "beta", Transport: config.RemoteTransportSSH},
+			},
+		}, nil,
+	)
+
+	require.Empty(t, response.Error)
+	output := logs.String()
+	assert.Contains(t, output,
+		"aggregate_synced=6 aggregate_total=8 aggregate_skipped=3 aggregate_failed=1")
+}
+
 func TestRunRemoteSyncRequestSanitizesWrappedContextErrors(t *testing.T) {
 	tests := []struct {
 		name  string

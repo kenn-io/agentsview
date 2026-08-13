@@ -439,6 +439,7 @@ func (s *Server) runRemoteSyncRequest(
 	progress func(syncpkg.Progress),
 ) (response remoteSyncResponse) {
 	started := time.Now()
+	var remoteStats remotesync.SyncStats
 	log.Printf(
 		"remote sync request started: include_local=%t full=%t hosts=%d",
 		req.IncludeLocal, req.Full, len(req.Hosts),
@@ -452,6 +453,10 @@ func (s *Server) runRemoteSyncRequest(
 			aggregateSkipped = stats.Skipped
 			aggregateFailed = stats.Failed
 		}
+		aggregateSynced += remoteStats.SessionsSynced
+		aggregateTotal += remoteStats.SessionsTotal
+		aggregateSkipped += remoteStats.Skipped
+		aggregateFailed += remoteStats.Failed
 		duration := time.Since(started).Round(time.Millisecond)
 		if response.Error != "" {
 			log.Printf(
@@ -472,7 +477,6 @@ func (s *Server) runRemoteSyncRequest(
 
 	var localStats *syncpkg.SyncStats
 	failures := make([]remoteSyncFailure, 0)
-	var remoteStats remotesync.SyncStats
 	var blocked error
 	if req.IncludeLocal {
 		httpHosts, sshHosts := partitionRemoteHosts(req.Hosts)
