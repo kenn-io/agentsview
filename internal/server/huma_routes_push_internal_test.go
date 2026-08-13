@@ -19,6 +19,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/postgres"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
@@ -662,6 +663,105 @@ func TestPGPushRejectsMalformedWatchScopeBeforeSSE(t *testing.T) {
 			assert.NotContains(t, w.Header().Get("Content-Type"), "text/event-stream")
 		})
 	}
+}
+
+func TestPGPushRejectsWatchPathsOutsideStartupProviderRoots(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	outside := filepath.Join(t.TempDir(), "session.jsonl")
+	for _, tt := range []struct {
+		name  string
+		body  map[string]any
+		match string
+	}{
+		{
+			name: "changed path", match: "watch path",
+			body: map[string]any{"watch_batch": map[string]any{
+				"paths": []string{outside},
+			}},
+		},
+		{
+			name: "UNC changed path", match: "watch path",
+			body: map[string]any{"watch_batch": map[string]any{
+				"paths": []string{`\\server\share\session.jsonl`},
+			}},
+		},
+		{
+			name: "reconciliation root", match: "watch reconciliation root",
+			body: map[string]any{"watch_batch": map[string]any{
+				"reconcile_roots": []string{outside},
+			}},
+		},
+		{
+			name: "rename path", match: "watch rename path",
+			body: map[string]any{
+				"watch_batch": map[string]any{"renames": []map[string]any{{
+					"path": outside, "root": f.claudeDir, "item_type": 1,
+				}}},
+				"watch_recovery": map[string]any{},
+			},
+		},
+		{
+			name: "rename root", match: "watch rename root",
+			body: map[string]any{
+				"watch_batch": map[string]any{"renames": []map[string]any{{
+					"path": filepath.Join(f.claudeDir, "session.jsonl"),
+					"root": outside, "item_type": 1,
+				}}},
+				"watch_recovery": map[string]any{},
+			},
+		},
+		{
+			name: "available recovery root", match: "watch recovery root",
+			body: map[string]any{
+				"watch_batch": map[string]any{"full_sync": true},
+				"watch_recovery": map[string]any{
+					"available_roots": []string{outside},
+				},
+			},
+		},
+		{
+			name: "deferred recovery root", match: "watch recovery root",
+			body: map[string]any{
+				"watch_batch": map[string]any{"full_sync": true},
+				"watch_recovery": map[string]any{
+					"deferred_roots": []string{outside},
+				},
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.body["full"] = false
+			tt.body["pg"] = map[string]any{
+				"url":            "postgres://nobody:nobody@127.0.0.1:1/test?sslmode=disable",
+				"schema":         "agentsview",
+				"machine_name":   "test",
+				"allow_insecure": false,
+			}
+			w := serveJSON(
+				t, f.handler, http.MethodPost, "/api/v1/push/pg",
+				tt.body,
+				withAccept("text/event-stream"),
+			)
+
+			require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+			assert.Contains(t, w.Body.String(), tt.match)
+			assert.NotContains(t, w.Header().Get("Content-Type"), "text/event-stream")
+		})
+	}
+}
+
+func TestValidatePushWatchScopeAcceptsConfiguredAndProviderWatchRoots(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "sessions")
+	index := filepath.Join(filepath.Dir(root), parser.CodexSessionIndexFilename)
+	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{
+		parser.AgentCodex: {root},
+	}}
+
+	require.NoError(t, validatePushWatchScope(t.Context(), daemonPushRequest{
+		WatchBatch: &syncpkg.WatchBatch{Paths: []string{
+			filepath.Join(root, "2026", "session.jsonl"), index,
+		}},
+	}, cfg))
 }
 
 // TestPGPushFullRoutesResyncThroughWorkerRunner is the handler-level twin of

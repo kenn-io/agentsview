@@ -28,7 +28,7 @@ func (s *Server) humaRemoteSyncTargets(
 		return nil, apiError(http.StatusNotImplemented, "not available in remote mode")
 	}
 	return &jsonOutput[remotesync.TargetSet]{
-		Body: remotesync.ResolveTargets(s.cfg),
+		Body: remotesync.ResolveTargets(s.ingestionConfig()),
 	}, nil
 }
 
@@ -46,7 +46,7 @@ func (s *Server) remoteSyncManifestHTTP(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid manifest request", http.StatusBadRequest)
 		return
 	}
-	allowed := remotesync.ResolveTargets(s.cfg)
+	allowed := remotesync.ResolveTargets(s.ingestionConfig())
 	manifestTargets, ok := remotesync.SelectAllowedTargets(allowed, req)
 	if !ok {
 		http.Error(w, "remote sync target is not allowed", http.StatusForbidden)
@@ -98,7 +98,7 @@ func (s *Server) remoteSyncArchiveHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid archive request", http.StatusBadRequest)
 		return
 	}
-	allowed := remotesync.ResolveTargets(s.cfg)
+	allowed := remotesync.ResolveTargets(s.ingestionConfig())
 	archiveTargets, ok := remotesync.SelectAllowedTargets(allowed, req.TargetSet)
 	if !ok {
 		http.Error(w, "remote sync target is not allowed", http.StatusForbidden)

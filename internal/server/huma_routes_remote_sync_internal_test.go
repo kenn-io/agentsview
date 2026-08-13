@@ -76,6 +76,57 @@ func TestRemoteSyncArchiveRejectsUnresolvedPath(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
+func TestRemoteSyncRoutesKeepStartupProviderSelectionUntilRestart(t *testing.T) {
+	dir := t.TempDir()
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "test.db"))
+	claudeDir := filepath.Join(dir, "claude")
+	geminiDir := filepath.Join(dir, "gemini")
+	require.NoError(t, os.MkdirAll(claudeDir, 0o755))
+	require.NoError(t, os.MkdirAll(geminiDir, 0o755))
+	srv := New(config.Config{
+		Host:           "127.0.0.1",
+		Port:           8080,
+		DataDir:        dir,
+		DBPath:         filepath.Join(dir, "test.db"),
+		AuthToken:      "remote-token",
+		DisabledAgents: []parser.AgentType{parser.AgentGemini},
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {claudeDir},
+			parser.AgentGemini: {geminiDir},
+		},
+	}, database, nil)
+	handler := srv.Handler()
+
+	srv.mu.Lock()
+	srv.cfg.DisabledAgents = nil
+	srv.mu.Unlock()
+
+	targetReq := httptest.NewRequest(http.MethodGet, "/api/v1/remote-sync/targets", nil)
+	targetReq.Header.Set("Authorization", "Bearer remote-token")
+	targetW := httptest.NewRecorder()
+	handler.ServeHTTP(targetW, targetReq)
+	require.Equal(t, http.StatusOK, targetW.Code, "body: %s", targetW.Body.String())
+	var targets remotesync.TargetSet
+	require.NoError(t, json.Unmarshal(targetW.Body.Bytes(), &targets))
+	assert.NotContains(t, targets.Dirs, parser.AgentGemini)
+
+	payload, err := json.Marshal(remotesync.TargetSet{
+		Dirs: map[parser.AgentType][]string{parser.AgentGemini: {geminiDir}},
+	})
+	require.NoError(t, err)
+	for _, path := range []string{
+		"/api/v1/remote-sync/manifest",
+		"/api/v1/remote-sync/archive",
+	} {
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(payload))
+		req.Header.Set("Authorization", "Bearer remote-token")
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusForbidden, w.Code, "path: %s; body: %s", path, w.Body.String())
+	}
+}
+
 func TestRemoteSyncArchiveStreamsTar(t *testing.T) {
 	_, handler, sessionPath := newRemoteSyncServer(t)
 	targets := map[string]any{

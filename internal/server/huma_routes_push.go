@@ -14,6 +14,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/postgres"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
@@ -276,14 +277,127 @@ func duckDBPushSyncOptions(req daemonPushRequest) duckdbsync.SyncOptions {
 	}
 }
 
-func validatePushWatchScope(req daemonPushRequest) error {
+func validatePushWatchScope(
+	ctx context.Context, req daemonPushRequest, cfg config.Config,
+) error {
 	if req.WatchBatch == nil {
 		if req.WatchRecovery != nil {
 			return errors.New("watch recovery requires a watch batch")
 		}
 		return nil
 	}
-	return syncpkg.ValidateWatchBatch(*req.WatchBatch, req.WatchRecovery)
+	if err := syncpkg.ValidateWatchBatch(*req.WatchBatch, req.WatchRecovery); err != nil {
+		return err
+	}
+	roots, err := pushWatchScopeRoots(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	validate := func(kind, path string) error {
+		if path == "" {
+			return nil
+		}
+		if unsafeWindowsWatchPath(path) || !watchPathWithinRoots(path, roots) {
+			return fmt.Errorf("%s %q is outside configured provider roots", kind, path)
+		}
+		return nil
+	}
+	for _, path := range req.WatchBatch.Paths {
+		if err := validate("watch path", path); err != nil {
+			return err
+		}
+	}
+	for _, root := range req.WatchBatch.ReconcileRoots {
+		if err := validate("watch reconciliation root", root); err != nil {
+			return err
+		}
+	}
+	for _, rename := range req.WatchBatch.Renames {
+		if err := validate("watch rename path", rename.Path); err != nil {
+			return err
+		}
+		if err := validate("watch rename root", rename.Root); err != nil {
+			return err
+		}
+	}
+	if req.WatchRecovery != nil {
+		for _, root := range req.WatchRecovery.AvailableRoots {
+			if err := validate("watch recovery root", root); err != nil {
+				return err
+			}
+		}
+		for _, root := range req.WatchRecovery.DeferredRoots {
+			if err := validate("watch recovery root", root); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func pushWatchScopeRoots(
+	ctx context.Context, cfg config.Config,
+) ([]string, error) {
+	dirs := cfg.SyncAgentDirs()
+	seen := make(map[string]struct{})
+	roots := make([]string, 0, len(dirs))
+	add := func(root string) {
+		if root == "" || unsafeWindowsWatchPath(root) {
+			return
+		}
+		root = filepath.Clean(root)
+		if _, ok := seen[root]; ok {
+			return
+		}
+		seen[root] = struct{}{}
+		roots = append(roots, root)
+	}
+	for agent, configured := range dirs {
+		for _, root := range configured {
+			add(root)
+		}
+		provider, ok := parser.NewProvider(agent, parser.ProviderConfig{
+			Roots: configured,
+		})
+		if !ok {
+			continue
+		}
+		planned, err := parser.ResolveWatchRoots(ctx, provider)
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s watch roots: %w", agent, err)
+		}
+		for _, root := range planned {
+			add(root.Path)
+		}
+	}
+	return roots, nil
+}
+
+func unsafeWindowsWatchPath(path string) bool {
+	slash := strings.ReplaceAll(strings.TrimSpace(path), `\`, "/")
+	lower := strings.ToLower(slash)
+	return strings.HasPrefix(slash, "//") ||
+		strings.HasPrefix(lower, "/device/") ||
+		strings.HasPrefix(lower, "/??/")
+}
+
+func watchPathWithinRoots(path string, roots []string) bool {
+	path, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	for _, root := range roots {
+		root, err := filepath.Abs(filepath.Clean(root))
+		if err != nil {
+			continue
+		}
+		rel, err := filepath.Rel(root, path)
+		if err == nil && rel != ".." &&
+			!strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 // syncThenRunForPush brings the local archive current and then runs the push
@@ -354,7 +468,7 @@ func (s *Server) humaPGPush(
 	if pgCfg.URL == "" {
 		return nil, apiError(http.StatusBadRequest, "pg push: url not configured")
 	}
-	if err := validatePushWatchScope(in.Body); err != nil {
+	if err := validatePushWatchScope(ctx, in.Body, s.ingestionConfig()); err != nil {
 		return nil, apiError(http.StatusBadRequest, err.Error())
 	}
 
