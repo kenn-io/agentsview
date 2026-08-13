@@ -43,6 +43,14 @@ runner noise and fail loudly:
   atomically with the delta, truncation/anchor mismatch force an
   authoritative rebuild, and an unchanged checkpointed source is trusted on
   stat alone (append-trust; the audit path still catches rewrites).
+- `TestCodexCheckpointStaleCannotResumeFromNewerDBOffset`,
+  `TestCodexCheckpointHashStateBoundedToCommittedOffset`,
+  `TestCodexCheckpointColdRestartResumeParity`, and
+  `TestCodexCheckpointAuditRepairsSameStatRewrite`
+  (`internal/sync/checkpoint_review_test.go`) — a surviving checkpoint must
+  agree with the committed DB offset/ordinal/hash, hash state covers exactly
+  the committed prefix, cold restarts resume with parity, and the audit
+  repairs same-stat rewrites.
 - `TestParserCheckpointRoundTrip` and
   `TestWriteSessionIncrementalPersistsCheckpointInSameTx` (`internal/db`) —
   checkpoint rows round-trip and are committed in the same transaction as the

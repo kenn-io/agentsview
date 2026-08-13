@@ -10,7 +10,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"path/filepath"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
@@ -65,31 +64,54 @@ func (e *Engine) codexCheckpointFingerprint(
 	file parser.DiscoveredFile,
 ) (codexCheckpointResult, error) {
 	res := codexCheckpointResult{decision: codexCheckpointFallback}
-	if e.forceParse || file.ForceParse {
+	if e.forceParse || file.ForceParse || e.checkpointAudit.Load() {
+		// Audit mode deliberately bypasses the checkpoint gate so the
+		// provider's full-source fingerprint can verify content and repair
+		// same-stat in-place rewrites that append-trust would otherwise miss.
 		return res, nil
 	}
 	path := providerDiscoveredPath(source)
 	if path == "" {
 		return res, nil
 	}
-	uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(path))
-	if uuid == "" {
-		return res, nil
-	}
-	sessionID := applyIDPrefixToID(e.idPrefix, "codex:"+uuid)
-	cp, ok, err := e.db.GetParserCheckpoint(sessionID)
-	if err != nil {
-		return res, fmt.Errorf("loading checkpoint %s: %w", sessionID, err)
-	}
-	if !ok || cp.Version != codexCheckpointVersion {
-		return res, nil
-	}
 	lookupPath := path
 	if e.pathRewriter != nil {
 		lookupPath = e.pathRewriter(path)
 	}
-	if cp.FilePath != e.effectiveSourcePath(path) ||
+	// Resolve the session through the DB so codex-format forks (TraeX)
+	// use their real session id prefix, and use the same row to validate
+	// the checkpoint against the committed offset/ordinal/hash. A
+	// checkpoint that disagrees with the DB (e.g. a crash after a full
+	// replacement committed but before its checkpoint upsert) must never
+	// seed a resume: mark it invalid so the caller rebuilds
+	// authoritatively.
+	inc, ok := e.db.GetSessionForIncremental(
+		lookupPath, string(file.Agent),
+	)
+	if !ok {
+		return res, nil
+	}
+	cp, hasCP, err := e.db.GetParserCheckpoint(inc.ID)
+	if err != nil {
+		return res, fmt.Errorf("loading checkpoint %s: %w", inc.ID, err)
+	}
+	if !hasCP || cp.Version != codexCheckpointVersion {
+		return res, nil
+	}
+	if cp.SessionID != inc.ID ||
+		cp.FilePath != e.effectiveSourcePath(path) ||
 		cp.Agent != string(file.Agent) {
+		return res, nil
+	}
+	storedHash, hasStoredHash := e.db.GetFileHashByAgentPath(
+		lookupPath, string(file.Agent),
+	)
+	if !hasStoredHash || storedHash != cp.Hash ||
+		inc.FileSize != cp.Offset || inc.NextOrdinal != cp.NextOrdinal {
+		// The committed DB prefix is newer than (or inconsistent with) the
+		// surviving checkpoint: resuming from the old seed would silently
+		// parse against the wrong prefix. Rebuild instead.
+		res.decision = codexCheckpointInvalid
 		return res, nil
 	}
 	if e.db.GetDataVersionByAgentPath(lookupPath, string(file.Agent)) <
@@ -293,6 +315,19 @@ func codexBuildInitialHashState(
 	return marshaler.MarshalBinary()
 }
 
+// codexHashStateDigest finalizes a resumable SHA-256 state into its digest.
+func codexHashStateDigest(state []byte) (string, error) {
+	h := sha256.New()
+	unmarshaler, ok := h.(encoding.BinaryUnmarshaler)
+	if !ok {
+		return "", fmt.Errorf("sha256 does not support state restore")
+	}
+	if err := unmarshaler.UnmarshalBinary(state); err != nil {
+		return "", fmt.Errorf("restoring hash state: %w", err)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
 // persistFullParseCheckpoint stores a session's checkpoint after its full
 // parse rows committed. It re-reads the committed file size and next ordinal
 // from the database so the checkpoint always matches what a future
@@ -312,11 +347,6 @@ func (e *Engine) persistFullParseCheckpoint(
 		log.Printf("checkpoint stat %s: %v", path, err)
 		return
 	}
-	hashState, err := codexBuildInitialHashState(path, info.Size())
-	if err != nil {
-		log.Printf("checkpoint hash %s: %v", path, err)
-		return
-	}
 	mtime := info.ModTime().UnixNano()
 	if pw.sess.Agent == parser.AgentCodex {
 		mtime = parser.CodexEffectiveMtime(path, mtime)
@@ -334,16 +364,36 @@ func (e *Engine) persistFullParseCheckpoint(
 		// disagree with the stored cursor.
 		return
 	}
+	// The checkpoint must describe exactly the committed prefix: hash only
+	// [0, inc.FileSize), never the live file's current size. If the
+	// transcript kept growing while the full parse wrote, hashing
+	// info.Size() would poison the resumable state with bytes that the next
+	// incremental resume would hash a second time.
+	committed := inc.FileSize
+	if committed <= 0 || committed > info.Size() {
+		log.Printf("checkpoint bounds %s: committed=%d live=%d", path, committed, info.Size())
+		return
+	}
+	hashState, err := codexBuildInitialHashState(path, committed)
+	if err != nil {
+		log.Printf("checkpoint hash %s: %v", path, err)
+		return
+	}
+	committedHash, err := codexHashStateDigest(hashState)
+	if err != nil {
+		log.Printf("checkpoint digest %s: %v", path, err)
+		return
+	}
 	cp, buildErr := buildCodexCheckpoint(
 		inc.ID,
 		string(pw.sess.Agent),
 		e.effectiveSourcePath(path),
 		info,
-		inc.FileSize,
+		committed,
 		mtime,
 		pw.checkpoint,
 		hashState,
-		pw.sess.File.Hash,
+		committedHash,
 		inc.NextOrdinal,
 	)
 	if buildErr != nil {

@@ -353,6 +353,11 @@ type Engine struct {
 	skipHashKeys      map[string]string
 	s3CodexIndexMu    gosync.Mutex
 	s3CodexIndexCache map[string]s3CodexIndexSnapshot
+	// checkpointAudit, when set, bypasses the checkpoint stat-trust gate so
+	// the provider's full-source fingerprint verifies content. The periodic
+	// archive audit sets it to catch same-stat in-place rewrites that
+	// append-trust would otherwise keep stale.
+	checkpointAudit atomic.Bool
 	// idPrefix and pathRewriter support remote sync:
 	// prefix all session IDs to avoid collisions, rewrite
 	// temp paths to "host:/remote/path" form.
@@ -1161,6 +1166,18 @@ func (e *Engine) Machine() string {
 		return ""
 	}
 	return e.machine
+}
+
+// SetCheckpointAudit enables or disables the checkpoint-bypassing content
+// audit. When enabled, checkpointed sources are re-hashed with the provider's
+// full-source fingerprint instead of being trusted on stat, so same-stat
+// in-place rewrites are detected and repaired. The periodic archive audit
+// toggles this around its reconciliation pass.
+func (e *Engine) SetCheckpointAudit(enabled bool) {
+	if e == nil {
+		return
+	}
+	e.checkpointAudit.Store(enabled)
 }
 
 type syncJob struct {

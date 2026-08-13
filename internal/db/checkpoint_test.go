@@ -102,3 +102,26 @@ func TestWriteSessionIncrementalPersistsCheckpointInSameTx(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, int64(1024), got.Offset)
 }
+
+func TestParserCheckpointRollsBackWithTransaction(t *testing.T) {
+	d := testDB(t)
+	tx, err := d.getWriter().Begin()
+	require.NoError(t, err)
+	require.NoError(t, upsertParserCheckpointTx(tx, ParserCheckpoint{
+		SessionID:   "s-rollback",
+		Agent:       "codex",
+		FilePath:    "/sessions/rollout-s-rollback.jsonl",
+		Offset:      512,
+		TailAnchor:  []byte("a"),
+		Cursor:      []byte("c"),
+		Hash:        "h",
+		NextOrdinal: 1,
+		Version:     ParserCheckpointVersion,
+	}))
+	require.NoError(t, tx.Rollback())
+
+	_, ok, err := d.GetParserCheckpoint("s-rollback")
+	require.NoError(t, err)
+	assert.False(t, ok,
+		"an aborted transaction must not leave a checkpoint behind")
+}

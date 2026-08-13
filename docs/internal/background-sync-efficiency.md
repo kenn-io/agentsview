@@ -88,11 +88,20 @@ mode:
 A warm Codex cursor makes continuation-state parsing scale with appended records
 rather than transcript history. With a persisted checkpoint, end-to-end append
 sync is O(d): the engine resumes the SHA-256 state over only the appended
-bytes, verifies the 128 KiB tail anchor, and parses only the new tail. An
-unchanged checkpointed source costs a stat and a DB lookup, not a transcript
-read. Without a checkpoint (legacy sessions, first sync after upgrade) the
-previous O(file) fingerprint and prefix-hash reads still apply until the next
-full parse persists one.
+bytes, verifies the 128 KiB tail anchor, and parses only the new tail. The
+append path reads the source roughly three times the delta (fingerprint
+resume, parser tail, final checkpoint resume) plus the 128 KiB anchor — for a
+1 KiB append that is well inside the 256 KiB source-read gate. An unchanged
+checkpointed source costs a stat plus the checkpoint row read (128 KiB anchor
++ cursor + hash state ≈ 125 KiB/session; ~96.75 MiB for 774 sessions) and
+reads 0 transcript bytes. Without a checkpoint (legacy sessions, first sync
+after upgrade) the previous O(file) fingerprint and prefix-hash reads still
+apply until the next full parse persists one.
+
+The daily archive audit (`sync_worker` audit mode) bypasses the checkpoint
+stat-trust gate so the provider's full-source fingerprint verifies content and
+repairs same-stat in-place rewrites that append-trust would otherwise keep
+stale.
 
 - `BenchmarkCodexIncrementalCursor` in `internal/parser` compares cold prefix
   reconstruction with the exact warm cursor. It is diagnostic because

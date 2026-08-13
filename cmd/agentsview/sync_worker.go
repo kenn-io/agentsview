@@ -195,11 +195,17 @@ func runSyncWorkerStartup(
 		var stats sync.SyncStats
 		var tombstoned int
 		var auditErr error
+		// The audit is also the periodic content-verification pass for
+		// checkpointed sources: bypass the stat-trust gate so the provider's
+		// full-source fingerprint detects and repairs same-stat in-place
+		// rewrites that append-trust would otherwise keep stale.
+		engine.SetCheckpointAudit(true)
 		if auditRoots := reconcileRootPaths(cfg); len(auditRoots) > 0 {
 			stats, tombstoned, auditErr = engine.ReconcileWatchRootsWithStats(
 				ctx, auditRoots, false,
 			)
 		}
+		engine.SetCheckpointAudit(false)
 		result = workerResultFromStats(ctx, stats)
 		result.Tombstoned = tombstoned
 		if auditErr != nil && result.Status == "ok" {
