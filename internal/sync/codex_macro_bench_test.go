@@ -7,14 +7,17 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 // Macro benchmarks for the 10MB-vs-1GB same-append ratio gate. They are
@@ -187,4 +190,221 @@ func copyFilePrefix(src, dst string, limit int64) error {
 		return copyErr
 	}
 	return closeErr
+}
+
+// TestMacroCodexStreamingMemoryGates is the P3 streaming-parse memory gate:
+// it cold-syncs synthetic Codex transcripts whose content is dominated by
+// tool outputs at 10MB / 100MB / 1GB, recording wall time, rchar delta,
+// peak live heap (polled during the sync), forced-GC live heap, and peak
+// RSS. The gate fails on the pre-P3 implementation (the parser keeps the
+// whole session in the Go heap) and must pass once the single-pass
+// staging sink lands:
+//
+//   - 1GB peak live heap < 512MiB (stretch: < 350MiB);
+//   - 10MB -> 1GB peak growth <= 2x.
+//
+// Message count is held constant across sizes (500 turns) so the
+// measurement isolates content-proportional memory.
+func TestMacroCodexStreamingMemoryGates(t *testing.T) {
+	sizes := []struct {
+		name     string
+		turns    int
+		outBytes int
+	}{
+		{name: "10MB", turns: 500, outBytes: 20 << 10},
+		{name: "100MB", turns: 500, outBytes: 200 << 10},
+		{name: "1GB", turns: 500, outBytes: 2 << 20},
+	}
+	var basePeak uint64
+	for i, size := range sizes {
+		t.Run(size.name, func(t *testing.T) {
+			root, dst, _, sizeBytes :=
+				writeCodexStreamingBenchmarkTranscript(
+					t, size.turns, size.outBytes,
+				)
+			_ = sizeBytes
+
+			database, err := db.Open(filepath.Join(t.TempDir(), "macro.db"))
+			require.NoError(t, err)
+			engine := NewEngine(database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					parser.AgentCodex: {root},
+				},
+				Machine: "macro-host",
+			})
+			t.Cleanup(func() {
+				engine.Close()
+				_ = database.Close()
+			})
+
+			peak := pollPeakLiveHeap()
+			r0 := macroRchar(t)
+			start := time.Now()
+			stats := engine.SyncAll(context.Background(), nil)
+			dur := time.Since(start)
+			rcharDelta := macroRchar(t) - r0
+			peakLive := peak()
+			require.Equal(t, 1, stats.Synced)
+
+			forcedGCHeap := forcedGCLiveHeap()
+			peakRSS := peakProcessRSSBytes()
+
+			t.Logf(
+				"STREAMING_GATE %s file=%dMB dur=%s rchar=%d "+
+					"peak_live=%dMiB forced_gc=%dMiB peak_rss=%dMiB",
+				size.name,
+				(size.turns*size.outBytes)/(1<<20),
+				dur,
+				rcharDelta,
+				peakLive/(1<<20),
+				forcedGCHeap/(1<<20),
+				peakRSS/(1<<20),
+			)
+			_ = dst
+
+			if i == 0 {
+				basePeak = peakLive
+			}
+			if size.name == "1GB" {
+				// The gate: bounded absolute peak and sub-linear growth.
+				// It red-lights the pre-P3 full-session-in-heap parser.
+				require.Less(t, peakLive, uint64(512<<20),
+					"1GB cold sync peak live heap must stay under 512MiB")
+				require.LessOrEqual(t, peakLive, 2*basePeak,
+					"10MB -> 1GB peak live heap must grow at most 2x")
+			}
+		})
+	}
+}
+
+// writeCodexStreamingBenchmarkTranscript writes a synthetic Codex
+// transcript with `turns` turns, each ending in a function_call plus a
+// function_call_output carrying outBytes of content. Lines are written
+// directly to the file so the fixture itself never allocates a
+// file-sized string.
+func writeCodexStreamingBenchmarkTranscript(
+	t testing.TB, turns, outBytes int,
+) (root, dst, uuid string, sizeBytes int64) {
+	t.Helper()
+	uuid = codexSignalBenchmarkUUID
+	root = filepath.Join(t.TempDir(), "sessions")
+	day := filepath.Join(root, "2026", "07", "10")
+	require.NoError(t, os.MkdirAll(day, 0o755))
+	dst = filepath.Join(day, "rollout-2026-07-10T07-00-00-"+uuid+".jsonl")
+	f, err := os.Create(dst)
+	require.NoError(t, err)
+	write := func(line string) {
+		t.Helper()
+		_, err := f.WriteString(line + "\n")
+		require.NoError(t, err)
+	}
+	write(testjsonl.CodexSessionMetaJSON(
+		uuid, "/workspace/project-a", "codex_cli_rs",
+		"2026-07-10T07:00:00Z",
+	))
+	write(testjsonl.CodexTurnContextJSON(
+		"gpt-5.4", "2026-07-10T07:00:01Z",
+	))
+	seed := "tool output: build log line with realistic command content. "
+	pad := strings.Repeat(
+		seed, (outBytes+len(seed)-1)/len(seed),
+	)[:outBytes]
+	for i := range turns {
+		ts := time.Date(
+			2026, 7, 10, 7, 1, 0, 0, time.UTC,
+		).Add(time.Duration(i) * time.Second)
+		tsStr := ts.Format("2006-01-02T15:04:05Z")
+		callID := "call_" + strconv.Itoa(i)
+		write(testjsonl.CodexMsgJSON(
+			"user", "run task "+strconv.Itoa(i), tsStr,
+		))
+		write(testjsonl.CodexMsgJSON(
+			"assistant", "running task "+strconv.Itoa(i), tsStr,
+		))
+		write(testjsonl.CodexFunctionCallWithCallIDJSON(
+			"exec_command", callID, nil, tsStr,
+		))
+		write(testjsonl.CodexFunctionCallOutputJSON(
+			callID, pad, tsStr,
+		))
+	}
+	require.NoError(t, f.Close())
+	info, err := os.Stat(dst)
+	require.NoError(t, err)
+	return root, dst, uuid, info.Size()
+}
+
+// pollPeakLiveHeap starts a poller capturing the highest live-heap value
+// until the returned function is called.
+func pollPeakLiveHeap() func() uint64 {
+	var peak atomic.Uint64
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(2 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				var ms runtime.MemStats
+				runtime.ReadMemStats(&ms)
+				if ms.HeapAlloc > peak.Load() {
+					peak.Store(ms.HeapAlloc)
+				}
+			}
+		}
+	}()
+	return func() uint64 {
+		close(stop)
+		<-done
+		return peak.Load()
+	}
+}
+
+func forcedGCLiveHeap() uint64 {
+	runtime.GC()
+	runtime.GC()
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	return ms.HeapAlloc
+}
+
+func peakProcessRSSBytes() uint64 {
+	data, err := os.ReadFile("/proc/self/status")
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "VmHWM:") {
+			fields := strings.Fields(line)
+			if len(fields) == 3 {
+				kb, err := strconv.ParseUint(fields[1], 10, 64)
+				if err == nil {
+					return kb << 10
+				}
+			}
+		}
+	}
+	return 0
+}
+
+func macroRchar(t testing.TB) int64 {
+	t.Helper()
+	data, err := os.ReadFile("/proc/self/io")
+	require.NoError(t, err)
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "rchar: ") {
+			v, err := strconv.ParseInt(
+				strings.TrimSpace(strings.TrimPrefix(line, "rchar: ")),
+				10, 64,
+			)
+			require.NoError(t, err)
+			return v
+		}
+	}
+	t.Fatal("no rchar in /proc/self/io")
+	return 0
 }
