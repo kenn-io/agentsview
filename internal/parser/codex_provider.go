@@ -235,6 +235,20 @@ func (p *codexProvider) Fingerprint(
 	return p.sources.Fingerprint(ctx, source)
 }
 
+// ComputeMultiFileStatHash implements parser.MultiFileStatHasher over the
+// rollout transcript plus its session_index.jsonl sidecar, mirroring the
+// sidecar folding of the verified-source gate: an index-only change (a
+// thread title rename) breaks the digest even when the transcript is
+// byte-identical, so the warm short-circuit can never mask a metadata
+// refresh. An absent index contributes a stable (0, 0, 0) tuple, which
+// matches modern Codex releases that no longer write the index. The
+// digest persists stat-verified freshness in provider_freshness across
+// process restarts, sparing a fresh engine the full-content hash that
+// Fingerprint performs for every unchanged rollout.
+func (p *codexProvider) ComputeMultiFileStatHash(chatPath string) uint64 {
+	return fileStatTupleDigest(0xC2, chatPath, codexSessionIndexPath(chatPath))
+}
+
 func (p *codexProvider) Parse(
 	ctx context.Context,
 	req ParseRequest,
@@ -964,6 +978,7 @@ func codexProviderCapabilities() Capabilities {
 			ExcludedSessions:     CapabilityNotApplicable,
 			ForceReplaceOnParse:  CapabilitySupported,
 			VerifiedLocalStat:    CapabilitySupported,
+			MultiFileStatHash:    CapabilitySupported,
 		},
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,

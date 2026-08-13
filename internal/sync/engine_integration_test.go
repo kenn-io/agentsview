@@ -14886,3 +14886,100 @@ func TestSyncSingleSessionChildCaptureFailurePreservesEdges(t *testing.T) {
 	assert.Equal(t, 1, edgeCount,
 		"failed capture must not remove the sole spawn edge")
 }
+
+// A successful Claude write stamps a provider_freshness stat digest, so a
+// fresh engine (daemon restart or a one-shot CLI sync) skips the unchanged
+// transcript on its first pass without content-hashing it.
+func TestSyncAllPersistsClaudeStatDigestAcrossEngineRestart(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "digest me", "/workspace/api").
+		String()
+	path := env.writeClaudeSession(
+		t, "-workspace-api", "digest-sess.jsonl", content,
+	)
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+
+	digest, ok, err := env.db.GetProviderStatHash(
+		t.Context(), parser.AgentClaude, path,
+	)
+	require.NoError(t, err)
+	require.True(t, ok,
+		"successful write must stamp a provider_freshness digest")
+	require.NotZero(t, digest)
+
+	restarted := sync.NewEngine(env.db, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {env.claudeDir},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(restarted.Close)
+	stats := restarted.SyncAll(t.Context(), nil)
+	assert.Equal(t, 0, stats.Synced,
+		"fresh engine must skip the unchanged transcript")
+}
+
+// The Codex stat digest folds session_index.jsonl, so a title rename can
+// never hide behind a warm digest match across an engine restart: the
+// index change breaks the digest and the rename is picked up.
+func TestRestartedEngineCodexIndexRenameNotMaskedByStatDigest(t *testing.T) {
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir}))
+
+	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229e3"
+	content := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
+		AddCodexMessage(tsEarlyS1, "user", "Rename me later").
+		String()
+	path := env.writeCodexSession(
+		t,
+		filepath.Join("2026", "06", "11"),
+		"rollout-2026-06-11T12-44-06-"+uuid+".jsonl",
+		content,
+	)
+	indexPath := filepath.Join(root, parser.CodexSessionIndexFilename)
+	indexLine := func(title string) []byte {
+		return fmt.Appendf(nil,
+			`{"id":"%s","thread_name":"%s","updated_at":"2026-06-11T17:34:20Z"}`+"\n",
+			uuid, title,
+		)
+	}
+	require.NoError(t, os.WriteFile(indexPath, indexLine("Original title"), 0o644))
+	transcriptTime := time.Now().Add(-3 * time.Hour)
+	indexTime := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(path, transcriptTime, transcriptTime))
+	require.NoError(t, os.Chtimes(indexPath, indexTime, indexTime))
+
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+	digest, ok, err := env.db.GetProviderStatHash(
+		t.Context(), parser.AgentCodex, path,
+	)
+	require.NoError(t, err)
+	require.True(t, ok,
+		"successful write must stamp a provider_freshness digest")
+	require.NotZero(t, digest)
+
+	restarted := sync.NewEngine(env.db, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {codexDir},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(restarted.Close)
+
+	renamedTime := time.Now().Add(-1 * time.Hour)
+	require.NoError(t, os.WriteFile(indexPath, indexLine("Renamed title"), 0o644))
+	require.NoError(t, os.Chtimes(indexPath, renamedTime, renamedTime))
+
+	require.Equal(t, 1, restarted.SyncAll(t.Context(), nil).Synced,
+		"index rename must defeat the persisted digest")
+	sess, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	if assert.NotNil(t, sess.SessionName) {
+		assert.Equal(t, "Renamed title", *sess.SessionName)
+	}
+}

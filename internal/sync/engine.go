@@ -10462,17 +10462,25 @@ func (e *Engine) providerIncrementalContentChanged(
 // rule the provider's cold-write fingerprint uses. Codebuff/Freebuff
 // delegate to parser.CodebuffCompanionMtime, which is the single
 // source of truth for the max(chat, run-state, chat-meta) derivation;
-// other MultiFileStatHasher agents fall through to chat-only since
-// they have no sibling companions to fold in.
+// Codex folds session_index.jsonl exactly as its fingerprint stamps
+// file_mtime (parser.CodexEffectiveMtime), so a cold→warm cycle does
+// not drift; other MultiFileStatHasher agents fall through to
+// chat-only since they have no sibling companions to fold in.
 func providerStatFreshnessMtime(
 	agent parser.AgentType,
 	lookupPath string,
 	chatInfo os.FileInfo,
 ) int64 {
-	if agent != parser.AgentCodebuff && agent != parser.AgentFreebuff {
+	switch agent {
+	case parser.AgentCodebuff, parser.AgentFreebuff:
+		return parser.CodebuffCompanionMtime(lookupPath, chatInfo)
+	case parser.AgentCodex:
+		return parser.CodexEffectiveMtime(
+			lookupPath, chatInfo.ModTime().UnixNano(),
+		)
+	default:
 		return chatInfo.ModTime().UnixNano()
 	}
-	return parser.CodebuffCompanionMtime(lookupPath, chatInfo)
 }
 
 // providerFreshDigestSourceCurrentInDB reports whether the stored session

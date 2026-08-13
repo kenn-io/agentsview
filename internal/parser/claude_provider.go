@@ -78,6 +78,17 @@ func (p *claudeProvider) Fingerprint(
 	return p.sources.Fingerprint(ctx, source)
 }
 
+// ComputeMultiFileStatHash implements parser.MultiFileStatHasher for the
+// single-file Claude transcript. Claude has no sibling companions; the
+// digest exists so stat-verified freshness persists in provider_freshness
+// across process restarts, sparing a fresh engine (daemon restart or a
+// one-shot CLI sync) the full-content hash that Fingerprint performs for
+// every unchanged transcript. The ctime term in the tuple preserves the
+// in-place-rewrite detection the content hash provided.
+func (p *claudeProvider) ComputeMultiFileStatHash(chatPath string) uint64 {
+	return fileStatTupleDigest(0xC1, chatPath)
+}
+
 func (p *claudeProvider) Parse(
 	ctx context.Context,
 	req ParseRequest,
@@ -665,6 +676,7 @@ func claudeProviderCapabilities() Capabilities {
 			ExcludedSessions:     CapabilitySupported,
 			ForceReplaceOnParse:  CapabilitySupported,
 			VerifiedLocalStat:    CapabilitySupported,
+			MultiFileStatHash:    CapabilitySupported,
 		},
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
