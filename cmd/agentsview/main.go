@@ -367,20 +367,13 @@ func runServe(cfg config.Config, opts serveOptions) {
 				// startup maintenance keeps waiting until
 				// RecordStartupReconciled fires.
 				completeWorkerStartup = func() {
-					var gapErr error
-					if gapRoots := reconcileRootPaths(cfg); len(gapRoots) > 0 {
-						gapErr = engine.ReconcileWatchRoots(ctx, gapRoots, false)
-					}
-					if gapErr != nil && ctx.Err() == nil {
-						// Hand the failed gap reconciliation to the watcher's
-						// retry queue before dispatch opens, so the affected
-						// roots are re-reconciled with backoff instead of
-						// staying undiscovered until another event, manual
-						// sync, or the daily audit.
-						queueWatchRetry(gapReconciliationRetryBatch(gapErr))
-					}
-					engine.RecordStartupReconciled(
-						statsFromWorkerResult(workerStartupResult), gapErr,
+					completeWorkerStartupReconciliation(
+						ctx,
+						reconcileRootPaths(cfg),
+						statsFromWorkerResult(workerStartupResult),
+						engine.ReconcileWatchRoots,
+						queueWatchRetry,
+						engine.RecordStartupReconciled,
 					)
 				}
 			} else if database.NeedsResync() {
@@ -2968,11 +2961,27 @@ func scheduledReconcileTargets(cfg config.Config) []scheduledReconcileTarget {
 func runScheduledSyncPass(
 	ctx context.Context, engine scheduledSyncEngine, targets []scheduledReconcileTarget,
 ) {
+	started := time.Now()
+	log.Printf("scheduled reconciliation started: targets=%d", len(targets))
+	var firstErr error
+	failed := 0
 	for _, target := range targets {
 		if err := engine.ReconcileProviderRoots(ctx, target.Agent, target.Roots); err != nil {
-			log.Printf("scheduled reconciliation for %s: %v", target.Agent, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			failed++
+			log.Printf(
+				"scheduled reconciliation for %s failed: error_type=%T",
+				target.Agent, err,
+			)
 		}
 	}
+	log.Printf(
+		"scheduled reconciliation finished: targets=%d failed=%d duration=%s outcome=%s",
+		len(targets), failed, time.Since(started).Round(time.Millisecond),
+		syncLifecycleOutcome(ctx, firstErr),
+	)
 }
 
 func startRemoteHostSync(

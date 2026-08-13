@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -48,6 +49,15 @@ type syncRouteFixtureConfig struct {
 }
 
 type syncRouteFixtureOption func(*syncRouteFixtureConfig)
+
+func captureServerLogOutput(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	return &buf
+}
 
 func withStaleDB() syncRouteFixtureOption {
 	return func(c *syncRouteFixtureConfig) { c.stale = true }
@@ -804,6 +814,7 @@ func TestServerUsesInjectedHTTPRemoteCleanupRegistry(t *testing.T) {
 
 func TestRunRemoteSyncRequestCanceledRebuildReportsCancellation(t *testing.T) {
 	f := newSyncRouteFixture(t)
+	logs := captureServerLogOutput(t)
 	stubPrepareHTTPRebuild(t, func(
 		context.Context, []remotesync.HTTPSync,
 	) (preparedHTTPRebuild, error) {
@@ -827,6 +838,61 @@ func TestRunRemoteSyncRequestCanceledRebuildReportsCancellation(t *testing.T) {
 	assert.Equal(t, context.Canceled.Error(), response.Error)
 	assert.NotEqual(t, syncpkg.ErrUnifiedRebuildAborted.Error(), response.Error)
 	assert.Empty(t, response.Failures)
+	output := logs.String()
+	assert.Contains(t, output,
+		"remote sync request started: include_local=true full=true hosts=1")
+	assert.Contains(t, output, "remote sync request finished: include_local=true full=true")
+	assert.Contains(t, output, "duration=")
+	assert.Contains(t, output, "outcome=canceled")
+	assert.Contains(t, output, "error=\"context canceled\"")
+	assert.NotContains(t, output, "secret")
+}
+
+func TestRunRemoteSyncHostsOwnedLogsPerHostLifecycle(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	logs := captureServerLogOutput(t)
+	privateURL := "http://example.invalid/private/archive?token=secret-token"
+	stubRunHTTPRemoteSync(t, func(
+		_ context.Context, rh config.RemoteHost, _ bool,
+	) (remotesync.SyncStats, error) {
+		if rh.Host == "alpha" {
+			return remotesync.SyncStats{
+				SessionsSynced: 3, SessionsTotal: 5, Skipped: 1,
+			}, nil
+		}
+		return remotesync.SyncStats{}, &url.Error{
+			Op: "Get", URL: privateURL, Err: errors.New("private response"),
+		}
+	})
+
+	failures, totals, err := f.srv.runRemoteSyncHostsOwned(
+		context.Background(), f.db,
+		[]config.RemoteHost{
+			{Host: "alpha", Transport: config.RemoteTransportHTTP, Token: "secret-token"},
+			{Host: "beta", Transport: config.RemoteTransportHTTP, Token: "secret-token"},
+		}, true, nil, true,
+	)
+
+	require.NoError(t, err)
+	require.Len(t, failures, 1)
+	assert.Equal(t, 3, totals.SessionsSynced)
+	assert.Equal(t, 5, totals.SessionsTotal)
+	assert.Equal(t, 1, totals.Skipped)
+	output := logs.String()
+	assert.Contains(t, output,
+		"remote sync host started: host=alpha transport=http full=true")
+	assert.Contains(t, output,
+		"remote sync host finished: host=alpha transport=http")
+	assert.Contains(t, output, "sessions_synced=3")
+	assert.Contains(t, output, "outcome=completed")
+	assert.Contains(t, output,
+		"remote sync host started: host=beta transport=http full=true")
+	assert.Contains(t, output,
+		"remote sync host finished: host=beta transport=http")
+	assert.Contains(t, output, "outcome=failed")
+	assert.Contains(t, output, "error=\"HTTP remote sync failed\"")
+	assert.NotContains(t, output, privateURL)
+	assert.NotContains(t, output, "secret-token")
 }
 
 func TestRunRemoteSyncRequestSanitizesWrappedContextErrors(t *testing.T) {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -225,4 +226,35 @@ func TestRunScheduledSyncPassCallsPerAgent(t *testing.T) {
 	require.Len(t, engine.calls, 1)
 	assert.Equal(t, parser.AgentAider, engine.calls[0].Agent)
 	assert.Equal(t, []string{"/a"}, engine.calls[0].Roots)
+}
+
+func TestRunScheduledSyncPassLogsLifecycle(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         error
+		wantOutcome string
+	}{
+		{name: "completed", wantOutcome: "completed"},
+		{name: "failed", err: errors.New("provider unavailable"), wantOutcome: "failed"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureLogOutput(t)
+			engine := &fakeScheduledEngine{err: tc.err}
+			runScheduledSyncPass(context.Background(), engine,
+				[]scheduledReconcileTarget{{
+					Agent: parser.AgentAider, Roots: []string{"/a"},
+				}},
+			)
+
+			output := logs.String()
+			assert.Contains(t, output,
+				"scheduled reconciliation started: targets=1")
+			assert.Contains(t, output,
+				"scheduled reconciliation finished: targets=1")
+			assert.Contains(t, output, "duration=")
+			assert.Contains(t, output, "outcome="+tc.wantOutcome)
+		})
+	}
 }
