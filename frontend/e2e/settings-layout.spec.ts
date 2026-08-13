@@ -41,8 +41,8 @@ test.describe("Settings layout", () => {
       .poll(() => host.evaluate((element) => element.scrollHeight))
       .toBe(await host.evaluate((element) => element.clientHeight));
 
-    await nav.locator("button", { hasText: "Agent Directories" }).click();
-    await expect(page.getByRole("heading", { name: "Agent Directories" })).toBeVisible();
+    await nav.locator("button", { hasText: "Session Providers" }).click();
+    await expect(page.getByRole("heading", { name: "Session Providers" })).toBeVisible();
 
     const scroller = page.locator(".kit-settings__scroll");
     await expect
