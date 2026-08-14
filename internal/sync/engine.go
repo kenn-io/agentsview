@@ -268,6 +268,9 @@ type EngineConfig struct {
 	// the default (stagedCodexParseMinBytes). Tests lower it so the staged
 	// wiring is covered by small fixtures in the default test build.
 	StagedCodexParseMinBytes int64
+	// CodexStagingDir selects the directory for staged Codex scratch
+	// databases. Empty means the system temporary directory.
+	CodexStagingDir string
 	// IncludeCwdPrefixes, when non-empty, restricts ingestion to
 	// sessions whose working directory equals one of the prefixes
 	// or lives underneath one. Sessions without a recorded cwd are
@@ -333,6 +336,8 @@ type Engine struct {
 	// stagedCodexMin is the resolved full-parse size above which Codex
 	// sources take the staged streaming path.
 	stagedCodexMin int64
+	// stagedCodexDir is the scratch directory for staged Codex parses.
+	stagedCodexDir string
 	cwdFilter      cwdPrefixFilter
 	// scanProtectedPaths, homeDir, and goos gate passive probing of macOS
 	// TCC-protected locations. homeDir is empty when the home directory
@@ -658,6 +663,7 @@ func NewEngine(
 		machine:                 cfg.Machine,
 		blockedResultCategories: blockedCategorySet(cfg.BlockedResultCategories),
 		stagedCodexMin:          stagedCodexMinBytes(cfg.StagedCodexParseMinBytes),
+		stagedCodexDir:          cfg.CodexStagingDir,
 		cwdFilter:               newCwdPrefixFilter(cfg.IncludeCwdPrefixes),
 		scanProtectedPaths:      cfg.ScanProtectedPaths,
 		homeDir:                 userHomeDirOrEmpty(),
@@ -9203,7 +9209,9 @@ func (e *Engine) processProviderFile(
 	var stagedGCRelease func()
 	if file.Agent == parser.AgentCodex &&
 		sourceBytes > e.stagedCodexMin {
-		stagedSink, err = newCodexStagingSink(e.blockedResultCategories)
+		stagedSink, err = newCodexStagingSink(
+			e.stagedCodexDir, e.blockedResultCategories,
+		)
 		if err != nil {
 			lease.Release()
 			return processResult{

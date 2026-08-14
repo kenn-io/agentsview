@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"log"
 	"os"
 	"runtime/debug"
@@ -80,6 +81,32 @@ type stagedFindingPos struct {
 	eventIndex int
 }
 
+// checkCodexStagingSpace fails a staged parse before it writes a byte when
+// the scratch directory has less than a conservative floor of free space.
+// The scratch holds the event rows plus indexes, so a nearly-full disk
+// must fail the sync loudly (the archive keeps its prior content) instead
+// of surfacing as a mid-parse I/O error with a partial scratch.
+func checkCodexStagingSpace(dir string) error {
+	if dir == "" {
+		dir = os.TempDir()
+	}
+	var st unix.Statfs_t
+	if err := unix.Statfs(dir, &st); err != nil {
+		// Filesystems without statfs support (or an unreadable scratch
+		// dir) fail open here; the CreateTemp below reports real errors.
+		return nil
+	}
+	available := st.Bavail * uint64(st.Bsize)
+	const stagedScratchMinFree = 256 << 20
+	if available < stagedScratchMinFree {
+		return fmt.Errorf(
+			"codex staging: %s has %dMiB free, need at least %dMiB",
+			dir, available/(1<<20), stagedScratchMinFree/(1<<20),
+		)
+	}
+	return nil
+}
+
 // stagedCodexParseMinBytes is the full-parse size above which a Codex
 // source streams through the scratch staging path instead of the
 // collecting parser. Engines may override it (see
@@ -151,10 +178,16 @@ CREATE INDEX idx_stage_events_call ON stage_events(tool_use_id, seq);`
 
 // newCodexStagingSink opens a scratch SQLite database for one streaming
 // parse. The caller must Close it once the staged write has published.
+// dir selects the scratch directory; empty means the system temporary
+// directory.
 func newCodexStagingSink(
+	dir string,
 	blocked map[string]bool,
 ) (*codexStagingSink, error) {
-	f, err := os.CreateTemp("", "agentsview-codex-stage-*.sqlite")
+	if err := checkCodexStagingSpace(dir); err != nil {
+		return nil, err
+	}
+	f, err := os.CreateTemp(dir, "agentsview-codex-stage-*.sqlite")
 	if err != nil {
 		return nil, fmt.Errorf("creating codex staging file: %w", err)
 	}
@@ -493,10 +526,11 @@ func (s *codexStagingSink) InsertEventsTx(
 // walking its staged event rows in emission order, mirroring
 // db.SummarizeToolResultEvents: the latest raw content per agent in
 // first-write order, followed by the trailing anonymous content. Memory is
-// transient and bounded by the call's distinct agents. While the summary
-// is in hand it also records the call's content-failure verdict (see
-// ContentFailures), so the engine's post-publish signal fold never
-// resolves summaries a second time.
+// transient and bounded by the call's distinct agents: the strict bound
+// is one call's aggregate output (the summary string itself), not the
+// whole transcript. While the summary is in hand it also records the
+// call's content-failure verdict (see ContentFailures), so the engine's
+// post-publish signal fold never resolves summaries a second time.
 func (s *codexStagingSink) ResolveSummary(
 	ctx context.Context, toolUseID string,
 ) (summary string, contentLength int, err error) {
@@ -559,9 +593,17 @@ func (s *codexStagingSink) ResolveSummary(
 			summary += "\n\n" + lastAnon
 		}
 	}
+	verdictContent := summary
+	if s.blocked[s.categoryByCall[toolUseID]] {
+		// The legacy path blanks blocked summaries before computing
+		// signals (pairToolResultEventSummaries), so a status-less
+		// blocked call is never a content failure regardless of its raw
+		// output. Evaluate the verdict against the same empty content.
+		verdictContent = ""
+	}
 	verdict := signals.IsFailure(signals.ToolCallRow{
 		Category:      s.categoryByCall[toolUseID],
-		ResultContent: summary,
+		ResultContent: verdictContent,
 	})
 	if s.contentFailures == nil {
 		s.contentFailures = make(map[string]bool)

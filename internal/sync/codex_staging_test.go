@@ -275,7 +275,7 @@ func assertCodexStagedParity(t *testing.T, uuid, content string) {
 	require.NotNil(t, legacySess)
 
 	// Staging parse.
-	stagedSink, err := newCodexStagingSink(map[string]bool{})
+	stagedSink, err := newCodexStagingSink("", map[string]bool{})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, stagedSink.Close()) }()
 	stagedSess, stagedMsgs, stagedCursor, stagedHash, stagedAnchor, _, err :=
@@ -463,6 +463,96 @@ func assertCodexStagedParity(t *testing.T, uuid, content string) {
 		sessS.ConsecutiveFailureMax)
 	assert.Equal(t, sessL.FinalFailureStreak, sessS.FinalFailureStreak)
 	assert.Equal(t, sessL.SecretLeakCount, sessS.SecretLeakCount)
+}
+
+// TestCodexStagedBlockedCategorySignalParity pins the blocked-category
+// parity: a blocked Bash call whose status-less output contains a failure
+// marker must not be classified as a content failure. The legacy path
+// blanks the summary before computing signals, so the staged summary
+// resolver must evaluate its verdict against empty content too.
+func TestCodexStagedBlockedCategorySignalParity(t *testing.T) {
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b09"
+	blocked := map[string]bool{"Bash": true}
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/workspace/project-a", "codex_cli_rs",
+			"2024-01-01T10:00:00Z",
+		),
+		testjsonl.CodexMsgJSON("user", "run it", "2024-01-01T10:00:01Z"),
+		testjsonl.CodexFunctionCallWithCallIDJSON(
+			"exec_command", "call_a", nil, "2024-01-01T10:00:02Z",
+		),
+		testjsonl.CodexFunctionCallOutputJSON(
+			"call_a", "command not found", "2024-01-01T10:00:03Z",
+		),
+	)
+
+	root := t.TempDir()
+	day := filepath.Join(root, "2024", "01", "01")
+	require.NoError(t, os.MkdirAll(day, 0o755))
+	path := filepath.Join(
+		day, "rollout-2024-01-01T10-00-00-"+uuid+".jsonl",
+	)
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	cfg := parser.ProviderConfig{Roots: []string{root}, Machine: "local"}
+	provider, ok := parser.NewProvider(parser.AgentCodex, cfg)
+	require.True(t, ok)
+	source, found, err := provider.FindSource(
+		context.Background(), parser.FindSourceRequest{
+			FullSessionID: "codex:" + uuid,
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+
+	// Legacy collecting parse: the blocked map blanks Bash content, so the
+	// status-less "command not found" output is not a content failure.
+	legacySink := parser.NewCodexCollectingSink(0)
+	legacySess, legacyMsgs, _, _, _, _, err :=
+		parser.ParseCodexSessionStreaming(cfg, source, legacySink)
+	require.NoError(t, err)
+	require.NotNil(t, legacySess)
+	legacyDBMsgs := toDBMessages(pendingWrite{
+		sess: *legacySess, msgs: legacyMsgs,
+	}, blocked)
+	legacyUpdate, _ := computeSignalsAndSecrets(
+		db.Session{ID: legacySess.ID}, legacyDBMsgs,
+	)
+
+	// Staging parse with the same blocked map; resolving summaries records
+	// the per-call content-failure verdicts the publish transaction folds.
+	stagedSink, err := newCodexStagingSink("", blocked)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, stagedSink.Close()) }()
+	stagedSess, stagedMsgs, _, _, _, _, err :=
+		parser.ParseCodexSessionStreaming(cfg, source, stagedSink)
+	require.NoError(t, err)
+	require.NotNil(t, stagedSess)
+	stagedDBMsgs := toDBMessages(pendingWrite{
+		sess: *stagedSess, msgs: stagedMsgs,
+	}, blocked)
+	for _, m := range stagedDBMsgs {
+		for _, tc := range m.ToolCalls {
+			if tc.ToolUseID == "" {
+				continue
+			}
+			_, _, err := stagedSink.ResolveSummary(
+				context.Background(), tc.ToolUseID,
+			)
+			require.NoError(t, err)
+		}
+	}
+	stagedUpdate, _ := computeSignalsAndSecretsWithContentFailures(
+		db.Session{ID: stagedSess.ID}, stagedDBMsgs,
+		stagedSink.ContentFailures(),
+	)
+
+	assert.Equal(t, legacyUpdate.ToolFailureSignalCount,
+		stagedUpdate.ToolFailureSignalCount,
+		"blocked-category failure signals must match the legacy path")
+	assert.Zero(t, legacyUpdate.ToolFailureSignalCount,
+		"a blocked output with a failure marker must never be a content failure")
 }
 
 func timePtr(s string) *string { return &s }

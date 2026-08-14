@@ -173,7 +173,7 @@ func TestCodexStagedPublishFailureKeepsPriorContent(t *testing.T) {
 		{name: "event insert failure", events: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			staged, err := newCodexStagingSink(map[string]bool{})
+			staged, err := newCodexStagingSink("", map[string]bool{})
 			require.NoError(t, err)
 			failing := &failingStagedResults{
 				codexStagingSink: staged,
@@ -236,7 +236,7 @@ func TestCodexStagedPublishFailureKeepsPriorContent(t *testing.T) {
 	// pool, a successful staged publish must still work: the ATTACH is
 	// torn down after every transaction, so no stale codex_staging schema
 	// can collide with the next publish.
-	staged, err := newCodexStagingSink(map[string]bool{})
+	staged, err := newCodexStagingSink("", map[string]bool{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, staged.Close()) })
 	stagedSess, stagedMsgs, _, _, _, _, err :=
@@ -314,7 +314,7 @@ func TestCodexStagedScratchFailureIsSticky(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 
-	staged, err := newCodexStagingSink(map[string]bool{})
+	staged, err := newCodexStagingSink("", map[string]bool{})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = staged.Close() })
 	// Poison the scratch so every staged write fails.
@@ -388,7 +388,7 @@ func FuzzCodexStagedParityWithCollecting(f *testing.F) {
 		legacy := parser.NewCodexCollectingSink(0)
 		sessL, msgsL, curL, hashL, anchorL, retryL, errL :=
 			parser.ParseCodexSessionStreaming(cfg, source, legacy)
-		staged, err := newCodexStagingSink(map[string]bool{})
+		staged, err := newCodexStagingSink("", map[string]bool{})
 		require.NoError(t, err)
 		sessS, msgsS, curS, hashS, anchorS, retryS, errS :=
 			parser.ParseCodexSessionStreaming(cfg, source, staged)
