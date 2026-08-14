@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"os"
+	"strconv"
 	"time"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/server"
+	"go.kenn.io/kit/daemon"
 )
 
 type serveRuntimeOptions struct {
@@ -73,8 +77,8 @@ func startServerWithOptionalCaddy(
 		serveErrCh <- srv.ListenAndServe()
 	}()
 
-	if err := waitForLocalPort(
-		ctx, cfg.Host, cfg.Port, 5*time.Second, serveErrCh,
+	if err := waitForBackendReady(
+		ctx, cfg, 5*time.Second, serveErrCh,
 	); err != nil {
 		shutdownCtx, cancel := context.WithTimeout(
 			context.Background(), 5*time.Second,
@@ -137,6 +141,78 @@ func startServerWithOptionalCaddy(
 		ServeErrCh: serveErrCh,
 		Caddy:      caddy,
 	}, nil
+}
+
+// waitForBackendReady waits until the started HTTP server answers the daemon
+// ping contract as this process. A bare TCP dial is not enough: on a split
+// IPv4/IPv6 port collision an unrelated process can accept the probe
+// connection while this server listens on the other family, and another
+// AgentsView daemon would answer the ping contract with a different PID.
+func waitForBackendReady(
+	ctx context.Context,
+	cfg config.Config,
+	timeout time.Duration,
+	errCh <-chan error,
+) error {
+	deadline := time.Now().Add(timeout)
+	address := net.JoinHostPort(
+		probeHostForDial(cfg.Host), strconv.Itoa(cfg.Port),
+	)
+	rec := daemon.RuntimeRecord{
+		PID:     os.Getpid(),
+		Network: daemon.NetworkTCP,
+		Address: address,
+		Service: daemonService,
+	}
+	var lastErr error
+	for time.Now().Before(deadline) {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err := <-errCh:
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if err == nil {
+				return fmt.Errorf(
+					"service exited before becoming ready on %s",
+					address,
+				)
+			}
+			return err
+		default:
+		}
+		info, err := probeRuntime(
+			ctx, rec, cfg.AuthToken, daemon.ProbeOptions{
+				ExpectedService: daemonService,
+				Timeout:         200 * time.Millisecond,
+			},
+		)
+		if err == nil && info.PID == os.Getpid() {
+			return nil
+		}
+		if err == nil {
+			err = fmt.Errorf(
+				"daemon ping on %s answered from pid %d, want %d",
+				address, info.PID, os.Getpid(),
+			)
+		}
+		lastErr = err
+		timer := time.NewTimer(50 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("timed out waiting for %s", address)
+	}
+	return lastErr
 }
 
 func waitForServerRuntime(

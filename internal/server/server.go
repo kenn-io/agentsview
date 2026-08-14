@@ -1136,15 +1136,61 @@ func FindAvailablePort(host string, start int) int {
 		return start
 	}
 
+	probes := listenProbes(host)
 	for port := start; port < start+100; port++ {
-		addr := net.JoinHostPort(host, strconv.Itoa(port))
-		ln, err := net.Listen("tcp", addr)
-		if err == nil {
-			ln.Close()
+		if listenProbesFree(probes, port) {
 			return port
 		}
 	}
 	return start
+}
+
+type listenProbe struct {
+	network string
+	host    string
+}
+
+// listenProbes returns the bind attempts that must all succeed before a
+// port counts as available on host. Wildcard hosts probe the IPv4 and IPv6
+// wildcard addresses separately: a combined dual-stack listen can succeed
+// on one family while an unrelated process still owns the port on the
+// other (observed on macOS), handing out a port the server cannot fully
+// claim. A family that cannot bind at all (for example IPv6-disabled
+// hosts) is excluded from the check rather than treated as occupied.
+func listenProbes(host string) []listenProbe {
+	switch host {
+	case "", "0.0.0.0", "::":
+	default:
+		return []listenProbe{{network: "tcp", host: host}}
+	}
+	var probes []listenProbe
+	for _, probe := range []listenProbe{
+		{network: "tcp4", host: "0.0.0.0"},
+		{network: "tcp6", host: "::"},
+	} {
+		ln, err := net.Listen(probe.network, net.JoinHostPort(probe.host, "0"))
+		if err != nil {
+			continue
+		}
+		ln.Close()
+		probes = append(probes, probe)
+	}
+	if len(probes) == 0 {
+		return []listenProbe{{network: "tcp", host: host}}
+	}
+	return probes
+}
+
+func listenProbesFree(probes []listenProbe, port int) bool {
+	for _, probe := range probes {
+		addr := net.JoinHostPort(probe.host, strconv.Itoa(port))
+		ln, err := net.Listen(probe.network, addr)
+		if err != nil {
+			return false
+		}
+		ln.Close()
+	}
+	return true
 }
 
 // isMutating returns true for HTTP methods that change state.

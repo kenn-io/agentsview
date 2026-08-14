@@ -13,16 +13,21 @@ after the real server has started on IPv6.
 ## Design
 
 Port selection will treat a wildcard port as unavailable when either the IPv4
-or IPv6 wildcard address is occupied. The existing next-port fallback remains
+or IPv6 wildcard address is occupied. The wildcard hosts are the empty host,
+`0.0.0.0`, and `::`. Each address family is probed with its own bind attempt,
+and a family that cannot bind at all (an IPv6-disabled host, for example) is
+excluded from the check rather than treated as occupied, so IPv4-only hosts
+keep their current behavior. The existing next-port fallback remains
 the user-visible behavior: a collision on port 8080 selects port 8081 and emits
 the existing fallback message.
 
 Backend readiness will verify an AgentsView HTTP endpoint instead of accepting
 any successful TCP connection. The probe will use the configured authentication
-token and require the daemon ping contract. An unrelated HTTP server therefore
-cannot make startup publish a runtime record. Managed Caddy readiness remains a
-generic TCP check because Caddy does not implement the AgentsView daemon
-protocol.
+token and require the daemon ping contract, including a process ID match
+against the serving process. Neither an unrelated HTTP server nor another
+AgentsView daemon can therefore make startup publish a runtime record. Managed
+Caddy readiness remains a generic TCP check because Caddy does not implement
+the AgentsView daemon protocol.
 
 This is a focused fix rather than an atomic listener-handoff refactor. A process
 can still claim a selected port between the availability check and the server
@@ -44,5 +49,6 @@ needed.
 - When IPv6 is available, occupy a port on IPv6 and verify wildcard port
   selection skips it.
 - Verify backend readiness rejects an unrelated HTTP listener.
+- Verify backend readiness rejects a daemon ping answered by another process.
 - Verify backend readiness accepts an authenticated AgentsView daemon endpoint.
 
