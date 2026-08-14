@@ -9224,6 +9224,7 @@ func TestEngine_ZeroSyncedSuccessfulResyncEmits(t *testing.T) {
 					func() (RebuildOptions, RebuildCleanup, error) {
 						return RebuildOptions{}, nil, nil
 					},
+					nil,
 					func(forceFull, rebuilt bool) error {
 						assert.True(t, forceFull)
 						assert.True(t, rebuilt)

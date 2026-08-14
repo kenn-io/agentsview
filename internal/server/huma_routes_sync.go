@@ -526,6 +526,13 @@ func (s *Server) runRemoteSyncRequest(
 							release:  release,
 						}, nil
 				},
+				func(stats syncpkg.SyncStats, err error) {
+					if !httpContributorsStarted.IsZero() {
+						logRemoteHTTPContributorsFinished(
+							ctx, httpContributorsStarted, len(httpHosts), stats, err,
+						)
+					}
+				},
 				func(forceFull, rebuilt bool) error {
 					hosts := req.Hosts
 					if rebuilt {
@@ -538,11 +545,6 @@ func (s *Server) runRemoteSyncRequest(
 				},
 			)
 			localStats = &stats
-			if !httpContributorsStarted.IsZero() {
-				logRemoteHTTPContributorsFinished(
-					ctx, httpContributorsStarted, len(httpHosts), stats, err,
-				)
-			}
 			return remotesync.SyncStats{}, err
 		}
 		var coordinatorErr error

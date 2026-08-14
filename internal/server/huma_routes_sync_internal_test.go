@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	stdlibsync "sync"
 	"testing"
 	"time"
@@ -458,6 +459,7 @@ func TestRebuildCleanupFailureIsRetainedByHTTPCleanupRegistry(t *testing.T) {
 			func() (syncpkg.RebuildOptions, syncpkg.RebuildCleanup, error) {
 				return syncpkg.RebuildOptions{}, cleanup, nil
 			},
+			nil,
 			func(bool, bool) error { return nil },
 		)
 		return remotesync.SyncStats{}, err
@@ -662,12 +664,24 @@ func TestRunRemoteSyncRequestUnifiedHTTPUsesMirrorDeltaAndBulkRebuild(t *testing
 		Host: "alpha", Transport: config.RemoteTransportHTTP,
 		URL: ts.URL, Token: "remote-token",
 	}
+	sshCalls := 0
+	stubRunRemoteSync(t, func(
+		_ context.Context, rs *ssh.RemoteSync,
+	) (ssh.SyncStats, error) {
+		assert.Equal(t, "beta", rs.Host)
+		sshCalls++
+		return ssh.SyncStats{}, nil
+	})
 
 	for range 2 {
 		response := f.srv.runRemoteSyncRequest(
 			context.Background(), f.db, f.srv.syncEngineForLocal(f.db),
 			remoteSyncRequest{
-				Full: true, IncludeLocal: true, Hosts: []config.RemoteHost{host},
+				Full: true, IncludeLocal: true,
+				Hosts: []config.RemoteHost{
+					host,
+					{Host: "beta", Transport: config.RemoteTransportSSH},
+				},
 			}, nil,
 		)
 		assert.Empty(t, response.Failures)
@@ -684,12 +698,21 @@ func TestRunRemoteSyncRequestUnifiedHTTPUsesMirrorDeltaAndBulkRebuild(t *testing
 
 	assert.Equal(t, 1, archiveRequests,
 		"unchanged full rebuild should reuse the prepared mirror")
+	assert.Equal(t, 2, sshCalls)
 	assertSessionCount(t, f.db, 2)
 	output := logs.String()
 	assert.Contains(t, output,
 		"remote sync HTTP contributors started: hosts=1")
 	assert.Contains(t, output,
 		"remote sync HTTP contributors finished: hosts=1")
+	httpFinished := strings.Index(output,
+		"remote sync HTTP contributors finished: hosts=1")
+	sshStarted := strings.Index(output,
+		"remote sync host started: host=beta transport=ssh")
+	require.NotEqual(t, -1, httpFinished)
+	require.NotEqual(t, -1, sshStarted)
+	assert.Less(t, httpFinished, sshStarted,
+		"HTTP contributor completion must precede post-rebuild SSH work")
 	assert.Contains(t, output, "aggregate_synced=2")
 	assert.NotContains(t, output, "local_synced=")
 	select {

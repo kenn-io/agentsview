@@ -949,7 +949,7 @@ func coordinateLocalSync(
 		)
 	} else {
 		stats, err = engine.SyncThenRunWithRebuild(
-			ctx, full, progress, prepare, work,
+			ctx, full, progress, prepare, nil, work,
 		)
 	}
 	engine.PhaseStats().Log("sync")
