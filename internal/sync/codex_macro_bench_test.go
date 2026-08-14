@@ -277,7 +277,18 @@ func writeCodexStreamingBenchmarkTranscript(
 	t testing.TB, turns, outBytes int,
 ) (root, dst, uuid string, sizeBytes int64) {
 	t.Helper()
-	uuid = codexSignalBenchmarkUUID
+	return writeCodexStreamingBenchmarkTranscriptUUID(
+		t, turns, outBytes, codexSignalBenchmarkUUID,
+	)
+}
+
+// writeCodexStreamingBenchmarkTranscriptUUID is the fixture writer with an
+// explicit session UUID, for tests that need more than one source.
+func writeCodexStreamingBenchmarkTranscriptUUID(
+	t testing.TB, turns, outBytes int, uuid string,
+) (root, dst string, sessionUUID string, sizeBytes int64) {
+	t.Helper()
+	sessionUUID = uuid
 	root = filepath.Join(t.TempDir(), "sessions")
 	day := filepath.Join(root, "2026", "07", "10")
 	require.NoError(t, os.MkdirAll(day, 0o755))
