@@ -8847,6 +8847,11 @@ func (e *Engine) processProviderFile(
 				// committed prefix. Never append against it: rebuild the
 				// session authoritatively and replace stored rows.
 				codexForceFullParse = true
+			case codexCheckpointBootstrap:
+				// A stored Codex session without a usable checkpoint
+				// (upgraded archive) earns one authoritative full parse;
+				// the write commits content and checkpoint together.
+				codexForceFullParse = true
 			}
 		}
 	}
@@ -12719,7 +12724,25 @@ func (e *Engine) writeBatchWithOutcome(
 
 		var werr error
 		if replaceMessages {
-			werr = e.db.ReplaceSessionContent(s.ID, msgs, update, findings)
+			if isCodexFormatAgent(pw.sess.Agent) {
+				cp, blobs, cpErr := e.buildCodexFullParseCheckpoint(
+					pw.sess.File.Path, pw,
+				)
+				if cpErr != nil {
+					log.Printf(
+						"checkpoint build %s: %v",
+						pw.sess.File.Path, cpErr,
+					)
+					cp, blobs = nil, nil
+				}
+				werr = e.db.ReplaceSessionContentWithCheckpoint(
+					s.ID, msgs, update, findings, cp, blobs,
+				)
+			} else {
+				werr = e.db.ReplaceSessionContent(
+					s.ID, msgs, update, findings,
+				)
+			}
 		} else {
 			werr = e.writeMessages(s.ID, msgs)
 		}

@@ -1449,6 +1449,26 @@ func (db *DB) ReplaceSessionContent(
 	sessionID string, msgs []Message,
 	signals SessionSignalUpdate, findings []SecretFinding,
 ) error {
+	return db.replaceSessionContent(sessionID, msgs, signals, findings, nil, nil)
+}
+
+// ReplaceSessionContentWithCheckpoint replaces a session's content and
+// persists the parser checkpoint in the same transaction, so the archive
+// can never contain committed content whose resume state is missing. The
+// checkpoint params are optional (nil skips the upsert).
+func (db *DB) ReplaceSessionContentWithCheckpoint(
+	sessionID string, msgs []Message,
+	signals SessionSignalUpdate, findings []SecretFinding,
+	cp *ParserCheckpoint, blobs *ParserCheckpointBlobs,
+) error {
+	return db.replaceSessionContent(sessionID, msgs, signals, findings, cp, blobs)
+}
+
+func (db *DB) replaceSessionContent(
+	sessionID string, msgs []Message,
+	signals SessionSignalUpdate, findings []SecretFinding,
+	cp *ParserCheckpoint, blobs *ParserCheckpointBlobs,
+) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -1523,6 +1543,14 @@ func (db *DB) ReplaceSessionContent(
 		tx, sessionID, queueGenerationBefore, queueExistedBefore,
 	); err != nil {
 		return err
+	}
+	if cp != nil {
+		c := *cp
+		b := *blobs
+		b.SessionID = sessionID
+		if err := upsertParserCheckpointTx(tx, c, b); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return err

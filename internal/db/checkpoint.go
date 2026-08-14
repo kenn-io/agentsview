@@ -10,7 +10,7 @@ import (
 // ParserCheckpointVersion is the codec version for parser_checkpoints rows.
 // Bump it when the cursor, hash-state, or anchor encoding changes; a version
 // mismatch makes the engine fall back to a full parse instead of resuming.
-const ParserCheckpointVersion = 2
+const ParserCheckpointVersion = 1
 
 // ParserCheckpoint is the machine-local continuation metadata needed to
 // resume parsing an append-only transcript without re-reading the committed

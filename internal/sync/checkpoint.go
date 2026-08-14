@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	codexCheckpointVersion    = 2
+	codexCheckpointVersion    = 1
 	codexCheckpointAnchorSize = 128 << 10
 )
 
@@ -37,6 +37,13 @@ const (
 	// The caller must authoritatively reparse and replace stored rows —
 	// never resume and never append against the unverified prefix.
 	codexCheckpointInvalid
+	// codexCheckpointBootstrap means a stored Codex session has no usable
+	// checkpoint (upgrade from an archive written before checkpoints
+	// existed). The caller performs one authoritative full parse whose
+	// content and resume state commit atomically, so the next sync earns
+	// the no-op and append paths instead of skipping by fingerprint
+	// forever.
+	codexCheckpointBootstrap
 )
 
 type codexCheckpointResult struct {
@@ -98,6 +105,7 @@ func (e *Engine) codexCheckpointFingerprint(
 		return res, fmt.Errorf("loading checkpoint %s: %w", inc.ID, err)
 	}
 	if !hasCP || cp.Version != codexCheckpointVersion {
+		res.decision = codexCheckpointBootstrap
 		return res, nil
 	}
 	if cp.SessionID != inc.ID ||
@@ -321,6 +329,52 @@ func codexHashStateDigest(state []byte) (string, error) {
 		return "", fmt.Errorf("restoring hash state: %w", err)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// buildCodexFullParseCheckpoint assembles the checkpoint row and blob
+// payload for a just-parsed full snapshot from the pending write's
+// captured state. It returns nil when the write carries no usable resume
+// payload (the parse did not end at a safe boundary).
+func (e *Engine) buildCodexFullParseCheckpoint(
+	path string, pw pendingWrite,
+) (*db.ParserCheckpoint, *db.ParserCheckpointBlobs, error) {
+	if len(pw.checkpoint) == 0 || len(pw.checkpointHashState) == 0 ||
+		pw.checkpointAnchorDigest == "" {
+		return nil, nil, nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	mtime := info.ModTime().UnixNano()
+	if pw.sess.Agent == parser.AgentCodex {
+		mtime = parser.CodexEffectiveMtime(path, mtime)
+	}
+	hash, err := codexHashStateDigest(pw.checkpointHashState)
+	if err != nil {
+		return nil, nil, err
+	}
+	inode, device := getFileIdentity(path, info)
+	changeTime, _ := fileChangeTime(path, info)
+	cp := &db.ParserCheckpoint{
+		SessionID:        pw.sess.ID,
+		Agent:            string(pw.sess.Agent),
+		FilePath:         e.effectiveSourcePath(path),
+		FileInode:        uint64(inode),
+		FileDevice:       uint64(device),
+		FileMTime:        mtime,
+		FileChangeTime:   changeTime,
+		Offset:           pw.sess.File.Size,
+		TailAnchorDigest: pw.checkpointAnchorDigest,
+		Hash:             hash,
+		NextOrdinal:      pw.sess.MessageCount,
+		Version:          codexCheckpointVersion,
+	}
+	return cp, &db.ParserCheckpointBlobs{
+		SessionID: pw.sess.ID,
+		Cursor:    pw.checkpoint,
+		HashState: pw.checkpointHashState,
+	}, nil
 }
 
 // persistFullParseCheckpoint stores a session's checkpoint after its full

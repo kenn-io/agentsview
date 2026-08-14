@@ -2231,20 +2231,6 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"sessions", "sync_marker",
 			"ALTER TABLE sessions ADD COLUMN sync_marker TEXT",
 		},
-		{
-			// Checkpoint rows from the pre-split schema gain the digest
-			// column empty; the append gate treats an empty digest as
-			// invalid and rebuilds authoritatively.
-			"parser_checkpoints", "tail_anchor_digest",
-			"ALTER TABLE parser_checkpoints ADD COLUMN tail_anchor_digest TEXT NOT NULL DEFAULT ''",
-		},
-		{
-			// Change-time strengthens the unchanged-file identity check;
-			// rows written before the column existed carry 0 and are
-			// treated as unverified (conservative rebuild).
-			"parser_checkpoints", "file_change_time",
-			"ALTER TABLE parser_checkpoints ADD COLUMN file_change_time INTEGER NOT NULL DEFAULT 0",
-		},
 	}
 }
 
