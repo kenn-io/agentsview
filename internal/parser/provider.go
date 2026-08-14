@@ -1077,6 +1077,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newImportOnlyProviderFactory(def)
 	case AgentDeepSeekTUI:
 		return newDeepSeekTUIProviderFactory(def)
+	case AgentDeepSeekHarness:
+		return newDeepSeekHarnessProviderFactory(def)
 	case AgentForge:
 		return newForgeProviderFactory(def)
 	case AgentDevin:

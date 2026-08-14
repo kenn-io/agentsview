@@ -1154,6 +1154,65 @@ func TestResolveDirs_ClaudeConfigDirRootEnvVar(t *testing.T) {
 	})
 }
 
+func TestResolveDirs_DeepSeekHarnessPrecedence(t *testing.T) {
+	t.Run("config array overrides default", func(t *testing.T) {
+		dir := setupTestEnv(t)
+		writeConfig(t, dir, map[string]any{
+			"deepseek_harness_sessions_dirs": []string{"/one", "/two"},
+		})
+
+		cfg, err := LoadMinimal()
+		require.NoError(t, err)
+
+		assert.Equal(t, []string{"/one", "/two"},
+			cfg.ResolveDirs(parser.AgentDeepSeekHarness))
+		assert.True(t, cfg.IsUserConfigured(parser.AgentDeepSeekHarness))
+	})
+
+	t.Run("DSH_HOME re-roots implicit default", func(t *testing.T) {
+		dir := setupTestEnv(t)
+		root := t.TempDir()
+		t.Setenv("DSH_HOME", root)
+		writeConfig(t, dir, map[string]any{})
+
+		cfg, err := LoadMinimal()
+		require.NoError(t, err)
+
+		assert.Equal(t, []string{filepath.Join(root, "sessions")},
+			cfg.ResolveDirs(parser.AgentDeepSeekHarness))
+		assert.False(t, cfg.IsUserConfigured(parser.AgentDeepSeekHarness))
+	})
+
+	t.Run("sessions env beats DSH_HOME", func(t *testing.T) {
+		dir := setupTestEnv(t)
+		t.Setenv("DSH_HOME", t.TempDir())
+		t.Setenv("DEEPSEEK_HARNESS_SESSIONS_DIR", "/from/env")
+		writeConfig(t, dir, map[string]any{})
+
+		cfg, err := LoadMinimal()
+		require.NoError(t, err)
+
+		assert.Equal(t, []string{"/from/env"},
+			cfg.ResolveDirs(parser.AgentDeepSeekHarness))
+		assert.True(t, cfg.IsUserConfigured(parser.AgentDeepSeekHarness))
+	})
+
+	t.Run("environment beats config array", func(t *testing.T) {
+		dir := setupTestEnv(t)
+		t.Setenv("DEEPSEEK_HARNESS_SESSIONS_DIR", "/from/env")
+		writeConfig(t, dir, map[string]any{
+			"deepseek_harness_sessions_dirs": []string{"/one", "/two"},
+		})
+
+		cfg, err := LoadMinimal()
+		require.NoError(t, err)
+
+		assert.Equal(t, []string{"/from/env"},
+			cfg.ResolveDirs(parser.AgentDeepSeekHarness))
+		assert.True(t, cfg.IsUserConfigured(parser.AgentDeepSeekHarness))
+	})
+}
+
 func TestResolveDirs_DevinPrecedenceAndMergeRules(t *testing.T) {
 	t.Run("config overrides defaults", func(t *testing.T) {
 		cfg := loadMinimalWithConfig(t, map[string]any{

@@ -1246,6 +1246,8 @@ agentsview help
 | `CORTEX_DIR`                      | `~/.snowflake/cortex/conversations`                  | Cortex Code conversations directory                                                                 |
 | `CURSOR_PROJECTS_DIR`             | `~/.cursor/projects`                                 | Cursor transcripts directory                                                                        |
 | `DEEPSEEK_TUI_SESSIONS_DIR`       | `~/.codewhale/sessions` and `~/.deepseek/sessions`   | DeepSeek TUI sessions directory                                                                     |
+| `DEEPSEEK_HARNESS_SESSIONS_DIR`   | `~/.dsh/sessions`                                    | DeepSeek Harness sessions directory                                                                 |
+| `DSH_HOME`                        | unset                                                | DeepSeek Harness home that re-roots the default `sessions/` discovery path                          |
 | `FORGE_DIR`                       | `~/.forge`                                           | Forge directory (contains `.forge.db`)                                                              |
 | `GEMINI_DIR`                      | `~/.gemini`                                          | Gemini CLI directory                                                                                |
 | `GOOSE_PATH_ROOT`                 | (platform-specific)                                  | Goose path root; sessions are read from `<root>/data/sessions/sessions.db`                          |

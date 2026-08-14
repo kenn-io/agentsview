@@ -9,6 +9,8 @@ description: Release history for AgentsView
 
 - Add Prime Agent session discovery, Pi-family conversation parsing, fork
   lineage, and RLM-attributed token usage.
+- Add DeepSeek Harness session discovery for plain and multi-frame zstd JSONL,
+  including reasoning, tools, lineage, interrupted replies, and token usage.
 
 **Bug fixes**
 

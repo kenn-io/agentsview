@@ -1,12 +1,24 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vite-plus/test";
 import {
   ApiError,
   callGenerated,
+  configureGeneratedClient,
 } from "./runtime.js";
 import {
   ApiError as GeneratedApiError,
   CancelablePromise,
+  OpenAPI,
 } from "./generated/index";
+
+describe("configureGeneratedClient", () => {
+  it("encodes generated path parameters as individual segments", () => {
+    configureGeneratedClient();
+
+    expect(OpenAPI.ENCODE_PATH?.("deepseek-harness:child%7E/%25?#")).toBe(
+      "deepseek-harness%3Achild%257E%2F%2525%3F%23",
+    );
+  });
+});
 
 describe("callGenerated", () => {
   it("detaches abort handling after the transport settles", async () => {

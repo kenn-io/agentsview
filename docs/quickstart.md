@@ -244,6 +244,7 @@ export COPILOT_DIR=~/custom/copilot
 export CORTEX_DIR=~/custom/cortex
 export CURSOR_PROJECTS_DIR=~/custom/cursor/projects
 export DEEPSEEK_TUI_SESSIONS_DIR=~/custom/deepseek/sessions
+export DEEPSEEK_HARNESS_SESSIONS_DIR=~/custom/deepseek-harness/sessions
 export FORGE_DIR=~/custom/forge
 export GEMINI_DIR=~/custom/gemini
 export GOOSE_PATH_ROOT=~/custom/goose

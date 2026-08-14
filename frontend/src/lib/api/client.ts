@@ -163,7 +163,7 @@ export function watchSession(
   onUpdate: () => void,
   onTiming?: (t: SessionTiming) => void,
 ): EventSource {
-  const url = `${getBase()}/sessions/${sessionId}/watch`;
+  const url = `${getBase()}/sessions/${encodeURIComponent(sessionId)}/watch`;
   const token = getAuthToken();
   // EventSource does not support custom headers, so pass the
   // auth token as a query parameter for remote connections.
@@ -316,7 +316,7 @@ export function watchEvents(
  * token in the URL query string.
  */
 export function getExportUrl(sessionId: string): string {
-  return `${getBase()}/sessions/${sessionId}/export`;
+  return `${getBase()}/sessions/${encodeURIComponent(sessionId)}/export`;
 }
 
 export function getInsightExportUrl(insightId: number): string {
@@ -329,7 +329,7 @@ export function getMarkdownExportUrl(
   depth?: 1 | "all",
 ): string {
   const url = new URL(
-    `${getBase()}/sessions/${sessionId}/md`,
+    `${getBase()}/sessions/${encodeURIComponent(sessionId)}/md`,
     window.location.origin,
   );
   if (depth !== undefined) {

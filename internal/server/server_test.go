@@ -1834,6 +1834,19 @@ func TestGetSession_Found(t *testing.T) {
 	}
 }
 
+func TestGetSession_RoundTripsReservedIDCharacters(t *testing.T) {
+	te := setup(t)
+	const sessionID = "deepseek-harness:child%7E/%25?#"
+	te.seedSession(t, sessionID, "my-app", 2)
+
+	w := te.get(t, "/api/v1/sessions/"+
+		"deepseek-harness%3Achild%257E%2F%2525%3F%23")
+	assertStatus(t, w, http.StatusOK)
+
+	resp := decode[db.Session](t, w)
+	assert.Equal(t, sessionID, resp.ID)
+}
+
 func TestGetSession_NotFound(t *testing.T) {
 	te := setup(t)
 
