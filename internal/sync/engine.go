@@ -10825,6 +10825,12 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 	// writing succeeds — a transient failure must not leave a
 	// matching digest that suppresses every later retry.
 	if preParseStatHash != nil {
+		// Zero is the hasher's unverified sentinel. Do not consult the
+		// side-table: even a corrupt or legacy zero row must not turn an
+		// unavailable change-time into trusted freshness.
+		if preParseStatHash.digest == 0 {
+			return 0, false
+		}
 		stored, hasStored, hashErr :=
 			e.db.GetProviderStatHash(ctx, file.Agent, lookupPath)
 		switch {

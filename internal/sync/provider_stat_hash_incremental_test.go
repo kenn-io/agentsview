@@ -9,9 +9,51 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
+
+func TestProviderSourceFreshBeforeFingerprintRejectsUnverifiedStatDigest(
+	t *testing.T,
+) {
+	database := openTestDB(t)
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte("unchanged\n"), 0o644))
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:        "session",
+		Agent:     string(parser.AgentClaude),
+		Project:   "project-a",
+		Machine:   "local",
+		FilePath:  strPtr(path),
+		FileSize:  int64Ptr(info.Size()),
+		FileMtime: int64Ptr(info.ModTime().UnixNano()),
+	}))
+	require.NoError(t, database.SetSessionDataVersion(
+		"session", db.CurrentDataVersion(),
+	))
+	require.NoError(t, database.UpsertProviderStatHash(
+		t.Context(), parser.AgentClaude, path, 0,
+	))
+
+	engine := &Engine{db: database}
+	_, fresh := engine.providerSourceFreshBeforeFingerprint(
+		t.Context(),
+		parser.SourceRef{Provider: parser.AgentClaude, DisplayPath: path},
+		parser.DiscoveredFile{Agent: parser.AgentClaude, Path: path},
+		&pendingProviderStatHash{
+			agent:        parser.AgentClaude,
+			physicalPath: path,
+			targetKey:    path,
+			digest:       0,
+		},
+	)
+
+	assert.False(t, fresh,
+		"an unverified stat digest must not accept persisted freshness")
+}
 
 func TestClaudeIncrementalWritePersistsCompleteSourceStatHash(t *testing.T) {
 	database := openTestDB(t)
