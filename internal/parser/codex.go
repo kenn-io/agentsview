@@ -58,9 +58,9 @@ type codexSessionBuilder struct {
 	// sink receives every normalized operation; the collecting
 	// implementation keeps the slice-based behavior, the streaming one
 	// batches into a scratch store.
-	sink               codexSessionSink
-	resolveParentTurns codexParentTurnResolver
-	parentTurnIDs      map[string]struct{}
+	sink                 codexSessionSink
+	resolveParentTurns   codexParentTurnResolver
+	parentTurnIDs        map[string]struct{}
 	firstMessage         string
 	startedAt            time.Time
 	endedAt              time.Time
@@ -91,6 +91,22 @@ type codexForkGate struct {
 	active          bool
 	parentSessionID string
 	parentResolved  bool
+	// lineagePositive marks an explicit replay-prefix signal seen in the
+	// transcript itself: forked_from_id, or a copied parent session_meta
+	// after subagent lineage metadata. Only a positive signal can mark a
+	// session for retry; child-only subagents stay current.
+	lineagePositive bool
+}
+
+// retryReason reports the unresolved-parent retry condition captured
+// during the single scan: an explicit replay parent that could not
+// provide turn ids keeps the child visible but marks its data version
+// for retry. Empty when the parse is current.
+func (g *codexForkGate) retryReason() string {
+	if !g.lineagePositive || g.parentResolved || g.parentSessionID == "" {
+		return ""
+	}
+	return "codex parent turns unresolved for " + g.parentSessionID
 }
 
 type codexParentTurnResolver func(string) (map[string]struct{}, bool)
@@ -111,6 +127,7 @@ func (g *codexForkGate) armFromMeta(payload gjson.Result, parentResolved bool) {
 	g.parentResolved = parentResolved
 	if forkedFromID != "" {
 		g.active = parentResolved
+		g.lineagePositive = true
 		return
 	}
 	// Parent metadata alone also appears in child-only transcripts. Wait
@@ -130,6 +147,7 @@ func (g *codexForkGate) suppressesSessionMeta(payload gjson.Result) bool {
 		return false
 	}
 	g.active = g.parentResolved
+	g.lineagePositive = true
 	return true
 }
 
@@ -1347,16 +1365,16 @@ func (p *codexProvider) parseSession(
 // continuation cursor (and whether the end is a safe resume boundary).
 func (p *codexProvider) parseSessionWithCursor(
 	path, machine string, includeExec bool,
-) (*ParsedSession, []ParsedMessage, codexCursorState, bool, []byte, string, error) {
+) (*ParsedSession, []ParsedMessage, codexCursorState, bool, []byte, string, string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, nil, codexCursorState{}, false, nil, "",
+		return nil, nil, codexCursorState{}, false, nil, "", "",
 			fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		return nil, nil, codexCursorState{}, false, nil, "",
+		return nil, nil, codexCursorState{}, false, nil, "", "",
 			fmt.Errorf("stat %s: %w", path, err)
 	}
 	return p.parseSessionSnapshotWithCursor(
@@ -1472,7 +1490,7 @@ func (p *codexProvider) parseSessionSnapshot(
 	f *os.File,
 	info os.FileInfo,
 ) (*ParsedSession, []ParsedMessage, error) {
-	sess, msgs, _, _, _, _, err := p.parseSessionSnapshotWithCursor(
+	sess, msgs, _, _, _, _, _, err := p.parseSessionSnapshotWithCursor(
 		path, machine, includeExec, f, info,
 	)
 	return sess, msgs, err
@@ -1489,7 +1507,7 @@ func (p *codexProvider) parseSessionSnapshotWithCursor(
 	includeExec bool,
 	f *os.File,
 	info os.FileInfo,
-) (*ParsedSession, []ParsedMessage, codexCursorState, bool, []byte, string, error) {
+) (*ParsedSession, []ParsedMessage, codexCursorState, bool, []byte, string, string, error) {
 	tee := newCodexHashAnchorTee(io.LimitReader(f, info.Size()))
 	lr := newLineReader(tee, maxLineSize)
 	defer releaseLineReader(lr)
@@ -1505,13 +1523,13 @@ func (p *codexProvider) parseSessionSnapshotWithCursor(
 			continue
 		}
 		if b.processLine(line) {
-			return nil, nil, codexCursorState{}, false, nil, "", nil
+			return nil, nil, codexCursorState{}, false, nil, "", "", nil
 		}
 	}
 
 	if err := lr.Err(); err != nil {
 		return nil, nil,
-			codexCursorState{}, false, nil, "",
+			codexCursorState{}, false, nil, "", "",
 			fmt.Errorf("reading codex %s: %w", path, err)
 	}
 
@@ -1597,14 +1615,15 @@ func (p *codexProvider) parseSessionSnapshotWithCursor(
 	if safe {
 		state, err := tee.HashState()
 		if err != nil {
-			return nil, nil, codexCursorState{}, false, nil, "",
+			return nil, nil, codexCursorState{}, false, nil, "", "",
 				fmt.Errorf("capturing codex hash state %s: %w", path, err)
 		}
 		hashState = state
 		anchorDigest = tee.AnchorDigest()
 	}
 
-	return sess, msgs, seed, safe, hashState, anchorDigest, nil
+	return sess, msgs, seed, safe, hashState, anchorDigest,
+		b.forkGate.retryReason(), nil
 }
 
 // CodexSessionIndexFilename is the name of the Codex index file that maps
