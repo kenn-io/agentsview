@@ -338,9 +338,8 @@ func validatePushWatchScope(
 func pushWatchScopeRoots(
 	ctx context.Context, cfg config.Config,
 ) ([]string, error) {
-	dirs := cfg.SyncAgentDirs()
 	seen := make(map[string]struct{})
-	roots := make([]string, 0, len(dirs))
+	var roots []string
 	add := func(root string) {
 		if root == "" || unsafeWindowsWatchPath(root) {
 			return
@@ -352,16 +351,18 @@ func pushWatchScopeRoots(
 		seen[root] = struct{}{}
 		roots = append(roots, root)
 	}
-	for agent, configured := range dirs {
+	for _, factory := range cfg.LocalProviderFactories() {
+		agent := factory.Definition().Type
+		configured := cfg.ResolveDirs(agent)
+		if len(configured) == 0 {
+			continue
+		}
 		for _, root := range configured {
 			add(root)
 		}
-		provider, ok := parser.NewProvider(agent, parser.ProviderConfig{
+		provider := factory.NewProvider(parser.ProviderConfig{
 			Roots: configured,
 		})
-		if !ok {
-			continue
-		}
 		planned, err := parser.ResolveWatchRoots(ctx, provider)
 		if err != nil {
 			return nil, fmt.Errorf("resolve %s watch roots: %w", agent, err)

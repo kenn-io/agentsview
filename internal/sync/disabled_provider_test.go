@@ -7,17 +7,25 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	sessionsync "go.kenn.io/agentsview/internal/sync"
+	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 func TestDisabledProviderPreservesArchivedSession(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 	root := filepath.Join(t.TempDir(), "gemini")
 	source := filepath.Join(root, "tmp", "chat", "session-existing.json")
+	newSource := filepath.Join(root, "tmp", "project", "chats", "session-new.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(newSource), 0o755))
+	require.NoError(t, os.WriteFile(newSource, []byte(testjsonl.GeminiSessionJSON(
+		"new-local", "project", "2026-08-09T10:00:00Z", "2026-08-09T10:01:00Z",
+		[]map[string]any{testjsonl.GeminiUserMsg(
+			"user", "2026-08-09T10:00:00Z", "do not import locally",
+		)},
+	)), 0o644))
 	require.NoError(t, database.UpsertSession(db.Session{
 		ID:       "archived-gemini-session",
 		Project:  "archived-project",
@@ -26,27 +34,25 @@ func TestDisabledProviderPreservesArchivedSession(t *testing.T) {
 		FilePath: &source,
 	}))
 
-	cfg := config.Config{
+	engine := sessionsync.NewEngine(database, sessionsync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentGemini: {root},
 		},
 		SourceMachines: map[parser.AgentType]map[string]string{
 			parser.AgentGemini: {root: "test-machine"},
 		},
-		DisabledAgents:   []parser.AgentType{parser.AgentGemini},
-		LocalMachineName: "test-machine",
-	}
-	engine := sessionsync.NewEngine(database, sessionsync.EngineConfig{
-		AgentDirs:      cfg.SyncAgentDirs(),
-		SourceMachines: cfg.SyncSourceMachines(),
-		PreserveAgents: cfg.DisabledAgents,
-		Machine:        cfg.LocalMachineName,
+		DisabledAgents: []parser.AgentType{parser.AgentGemini},
+		Machine:        "test-machine",
 	})
 	t.Cleanup(engine.Close)
 
 	stats := engine.SyncAll(t.Context(), nil)
 	assert.Zero(t, stats.Synced)
+	engine.SyncPaths([]string{newSource})
 	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), nil, true))
+	imported, err := database.GetSessionFull(t.Context(), "gemini:new-local")
+	require.NoError(t, err)
+	assert.Nil(t, imported)
 
 	stored, err := database.GetSessionFull(t.Context(), "archived-gemini-session")
 	require.NoError(t, err)
@@ -75,16 +81,12 @@ func TestDisabledProviderPreservesArchivedSessionAcrossRebuild(t *testing.T) {
 		Role: "user", Content: "preserve this archived message",
 	}}))
 
-	cfg := config.Config{
+	engine := sessionsync.NewEngine(database, sessionsync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentGemini: {geminiRoot},
 		},
-		DisabledAgents:   []parser.AgentType{parser.AgentGemini},
-		LocalMachineName: "test-machine",
-	}
-	engine := sessionsync.NewEngine(database, sessionsync.EngineConfig{
-		AgentDirs: cfg.SyncAgentDirs(), PreserveAgents: cfg.DisabledAgents,
-		Machine: cfg.LocalMachineName,
+		DisabledAgents: []parser.AgentType{parser.AgentGemini},
+		Machine:        "test-machine",
 	})
 	t.Cleanup(engine.Close)
 

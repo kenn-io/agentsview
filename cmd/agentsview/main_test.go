@@ -603,6 +603,23 @@ func TestCollectWatchRootsPreservesDirsSharingWatchRoot(t *testing.T) {
 	assert.Empty(t, archived.persistentPollingDirs)
 }
 
+func TestCollectWatchRootsOmitsLocallyDisabledProvider(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{
+		DisabledAgents: []parser.AgentType{parser.AgentGemini},
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentGemini: {root},
+		},
+	}
+
+	roots, unwatched, symlinkGated, persistent := collectWatchRoots(cfg)
+
+	assert.Empty(t, roots)
+	assert.Empty(t, unwatched)
+	assert.Empty(t, symlinkGated)
+	assert.Empty(t, persistent)
+}
+
 func TestCollectWatchRootsPollsRecursiveSymlinkProviderRoot(t *testing.T) {
 	root := t.TempDir()
 	targetVSRoot := filepath.Join(t.TempDir(), "vs-target")

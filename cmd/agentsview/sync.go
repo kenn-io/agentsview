@@ -503,7 +503,6 @@ var runSSHRemoteSync = func(
 		Port:                    rh.Port,
 		Full:                    full,
 		DB:                      database,
-		DisabledAgents:          appCfg.DisabledAgents,
 		BlockedResultCategories: appCfg.ResultContentBlockedCategories,
 	}
 	return rs.Run(ctx)
@@ -530,7 +529,6 @@ var runHTTPRemoteSync = func(
 		Full:                    full,
 		DataDir:                 appCfg.DataDir,
 		DB:                      database,
-		DisabledAgents:          appCfg.DisabledAgents,
 		BlockedResultCategories: appCfg.ResultContentBlockedCategories,
 	}.Run(ctx)
 }
@@ -742,7 +740,6 @@ func prepareConfiguredHTTPHosts(
 			Full:                    true,
 			DataDir:                 appCfg.DataDir,
 			DB:                      database,
-			DisabledAgents:          appCfg.DisabledAgents,
 			BlockedResultCategories: appCfg.ResultContentBlockedCategories,
 			Progress:                progress,
 		})
@@ -935,9 +932,9 @@ func coordinateLocalSync(
 	cleanResyncTemp(appCfg.DBPath)
 
 	engine := sync.NewEngine(database, sync.EngineConfig{
-		AgentDirs:               appCfg.SyncAgentDirs(),
-		SourceMachines:          appCfg.SyncSourceMachines(),
-		PreserveAgents:          appCfg.DisabledAgents,
+		AgentDirs:               appCfg.AgentDirs,
+		SourceMachines:          appCfg.SourceMachines,
+		DisabledAgents:          appCfg.DisabledAgents,
 		IncludeCwdPrefixes:      appCfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths:      appCfg.ScanProtectedPaths,
 		Machine:                 appCfg.LocalMachineName,

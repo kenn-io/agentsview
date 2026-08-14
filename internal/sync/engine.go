@@ -261,10 +261,10 @@ type Emitter interface {
 type EngineConfig struct {
 	AgentDirs      map[parser.AgentType][]string
 	SourceMachines map[parser.AgentType]map[string]string
-	// PreserveAgents identifies providers intentionally omitted from discovery.
-	// Rebuild safety excludes their archived sessions from empty-discovery
-	// accounting while orphan copy continues preserving the session data.
-	PreserveAgents          []parser.AgentType
+	// DisabledAgents identifies providers omitted from this local filesystem
+	// engine. Remote import engines leave it empty and import every transferred
+	// provider.
+	DisabledAgents          []parser.AgentType
 	Machine                 string
 	BlockedResultCategories []string
 	// IncludeCwdPrefixes, when non-empty, restricts ingestion to
@@ -627,6 +627,13 @@ func NewEngine(
 	if cfg.ProviderFactories != nil {
 		providerFactories = cfg.ProviderFactories
 	}
+	disabledAgents := append([]parser.AgentType(nil), cfg.DisabledAgents...)
+	providerFactories = slices.DeleteFunc(
+		providerFactories,
+		func(factory parser.ProviderFactory) bool {
+			return slices.Contains(disabledAgents, factory.Definition().Type)
+		},
+	)
 	providerModes := parser.ProviderMigrationModes()
 	if cfg.ProviderMigrationModes != nil {
 		maps.Copy(providerModes, cfg.ProviderMigrationModes)
@@ -647,7 +654,7 @@ func NewEngine(
 		lstat:                   os.Lstat,
 		agentDirs:               dirs,
 		sourceMachines:          sourceMachines,
-		preserveAgents:          append([]parser.AgentType(nil), cfg.PreserveAgents...),
+		preserveAgents:          disabledAgents,
 		machine:                 cfg.Machine,
 		blockedResultCategories: blockedCategorySet(cfg.BlockedResultCategories),
 		cwdFilter:               newCwdPrefixFilter(cfg.IncludeCwdPrefixes),
@@ -2468,7 +2475,7 @@ func (e *Engine) resyncBuildLocked(
 				origDB, contributor.Config.Machine,
 				contributor.Config.IDPrefix,
 				contributor.Config.Machine != "",
-				contributor.Config.PreserveAgents,
+				contributor.Config.DisabledAgents,
 			)
 			if countErr != nil {
 				log.Printf(
@@ -4034,7 +4041,11 @@ func (e *Engine) ReconcileWatchRootsAfterLostEvents(
 // Directory rename events use the complete provider scope because FSEvents may
 // report only one endpoint of a move between that provider's roots.
 func (e *Engine) ReconciliationRootsForAgent(agent string) []string {
-	return append([]string(nil), e.agentDirs[parser.AgentType(agent)]...)
+	agentType := parser.AgentType(agent)
+	if _, enabled := e.providerFactories[agentType]; !enabled {
+		return nil
+	}
+	return append([]string(nil), e.agentDirs[agentType]...)
 }
 
 // providerReconciliationPlan pairs one authoritative provider with the scope

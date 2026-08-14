@@ -211,7 +211,7 @@ func TestImporterImportsExtractedRemoteFiles(t *testing.T) {
 	assert.Contains(t, *full.FilePath, "devbox:/home/wes/.claude/projects/test-project/session.jsonl")
 }
 
-func TestImporterExcludesLocallyDisabledProvider(t *testing.T) {
+func TestImporterImportsEveryRemoteProviderTarget(t *testing.T) {
 	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
@@ -256,9 +256,8 @@ func TestImporterExcludesLocallyDisabledProvider(t *testing.T) {
 	))
 
 	stats, err := Importer{
-		Host:           "devbox",
-		DB:             database,
-		DisabledAgents: []parser.AgentType{parser.AgentGemini},
+		Host: "devbox",
+		DB:   database,
 	}.ImportExtracted(t.Context(), TargetSet{
 		Dirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {claudeRoot},
@@ -267,12 +266,15 @@ func TestImporterExcludesLocallyDisabledProvider(t *testing.T) {
 	}, extracted)
 
 	require.NoError(t, err)
-	assert.Equal(t, 1, stats.SessionsSynced)
+	assert.Equal(t, 2, stats.SessionsSynced)
 	page, err := database.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
 	require.NoError(t, err)
-	require.Len(t, page.Sessions, 1)
-	assert.Equal(t, "devbox~enabled", page.Sessions[0].ID)
-	assert.Equal(t, string(parser.AgentClaude), page.Sessions[0].Agent)
+	require.Len(t, page.Sessions, 2)
+	ids := []string{page.Sessions[0].ID, page.Sessions[1].ID}
+	assert.ElementsMatch(t, []string{
+		"devbox~enabled",
+		"devbox~gemini:disabled-remote",
+	}, ids)
 }
 
 func TestImporterImportsHermesDatabaseOnlySession(t *testing.T) {
@@ -473,27 +475,6 @@ func TestImporterMapsHermesStateDBExtraFileAndRefreshesWALChanges(t *testing.T) 
 	assert.Equal(t, "WAL-refreshed profile", *refreshed.DisplayName)
 }
 
-func TestFilterDisabledTargetsRemovesProviderExtraFiles(t *testing.T) {
-	targets := TargetSet{
-		Dirs: map[parser.AgentType][]string{
-			parser.AgentClaude: {"/sessions/claude"},
-			parser.AgentCodex:  {"/sessions/codex"},
-		},
-		ExtraFiles: []string{"/shared/metadata"},
-		ProviderExtraFiles: map[parser.AgentType][]string{
-			parser.AgentClaude: {"/metadata/claude"},
-			parser.AgentCodex:  {"/metadata/codex"},
-		},
-	}
-
-	filtered := FilterDisabledTargets(targets, []parser.AgentType{parser.AgentCodex})
-
-	assert.Equal(t, []string{"/shared/metadata"}, filtered.ExtraFiles)
-	assert.Equal(t, []string{"/metadata/claude"},
-		filtered.ProviderExtraFiles[parser.AgentClaude])
-	assert.NotContains(t, filtered.ProviderExtraFiles, parser.AgentCodex)
-}
-
 func openHermesImportWALWriter(t *testing.T, stateDB string) *sql.DB {
 	t.Helper()
 	writer, err := sql.Open("sqlite3", stateDB)
@@ -600,7 +581,7 @@ func TestRemoteSkipCacheRoundTripsQualifiedExtraFile(t *testing.T) {
 		qualified  = remoteFile + "?agent=hermes"
 	)
 	targets := TargetSet{ExtraFiles: []string{remoteFile}}
-	layout, cfg, err := newImportInputs(host, nil, nil, targets, root)
+	layout, cfg, err := newImportInputs(host, nil, targets, root)
 	require.NoError(t, err)
 
 	localFile := remappedRemotePath(root, remoteFile) + "?agent=hermes"

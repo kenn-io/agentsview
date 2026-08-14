@@ -312,7 +312,7 @@ func configuredWatchPathRelevanceProviders(
 	cfg config.Config,
 ) []watchPathRelevanceProvider {
 	var providers []watchPathRelevanceProvider
-	for _, factory := range parser.ProviderFactories() {
+	for _, factory := range cfg.LocalProviderFactories() {
 		relevanceSupported := factory.Capabilities().Source.ChangedPathRelevance ==
 			parser.CapabilitySupported
 		roots := cfg.ResolveDirs(factory.Definition().Type)
@@ -957,9 +957,9 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 	cleanResyncTemp(b.appCfg.DBPath)
 
 	engine := syncpkg.NewEngine(b.database, syncpkg.EngineConfig{
-		AgentDirs:               b.appCfg.SyncAgentDirs(),
-		SourceMachines:          b.appCfg.SyncSourceMachines(),
-		PreserveAgents:          b.appCfg.DisabledAgents,
+		AgentDirs:               b.appCfg.AgentDirs,
+		SourceMachines:          b.appCfg.SourceMachines,
+		DisabledAgents:          b.appCfg.DisabledAgents,
 		IncludeCwdPrefixes:      b.appCfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths:      b.appCfg.ScanProtectedPaths,
 		Machine:                 b.appCfg.LocalMachineName,
@@ -1088,9 +1088,9 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 	cleanResyncTemp(b.appCfg.DBPath)
 
 	engine := syncpkg.NewEngine(b.database, syncpkg.EngineConfig{
-		AgentDirs:               b.appCfg.SyncAgentDirs(),
-		SourceMachines:          b.appCfg.SyncSourceMachines(),
-		PreserveAgents:          b.appCfg.DisabledAgents,
+		AgentDirs:               b.appCfg.AgentDirs,
+		SourceMachines:          b.appCfg.SourceMachines,
+		DisabledAgents:          b.appCfg.DisabledAgents,
 		IncludeCwdPrefixes:      b.appCfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths:      b.appCfg.ScanProtectedPaths,
 		Machine:                 b.appCfg.LocalMachineName,

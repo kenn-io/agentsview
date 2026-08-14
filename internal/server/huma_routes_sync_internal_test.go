@@ -2145,6 +2145,73 @@ func TestRunHTTPRemoteSyncReachesMirrorPath(t *testing.T) {
 		"configured DataDir must route HTTP sync through the manifest/mirror path")
 }
 
+func TestRunHTTPRemoteSyncImportsLocallyDisabledProvider(t *testing.T) {
+	remoteRoot := t.TempDir()
+	remoteSession := filepath.Join(
+		remoteRoot, "tmp", "project", "chats", "session-remote.json",
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(remoteSession), 0o755))
+	require.NoError(t, os.WriteFile(remoteSession, []byte(testjsonl.GeminiSessionJSON(
+		"remote-gemini", "project",
+		"2026-08-09T10:00:00Z", "2026-08-09T10:01:00Z",
+		[]map[string]any{testjsonl.GeminiUserMsg(
+			"user", "2026-08-09T10:00:00Z", "import remote session",
+		)},
+	)), 0o644))
+	targets := remotesync.TargetSet{Dirs: map[parser.AgentType][]string{
+		parser.AgentGemini: {remoteRoot},
+	}}
+	manifest, err := remotesync.BuildManifest(targets)
+	require.NoError(t, err)
+	serverErrors := make(chan error, 4)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		remotesync.SetProtocolHeader(w.Header())
+		switch r.URL.Path {
+		case "/api/v1/remote-sync/targets":
+			w.Header().Set("Content-Type", "application/json")
+			serverErrors <- json.NewEncoder(w).Encode(targets)
+		case "/api/v1/remote-sync/manifest":
+			w.Header().Set("Content-Type", "application/json")
+			serverErrors <- json.NewEncoder(w).Encode(manifest)
+		case "/api/v1/remote-sync/archive":
+			w.Header().Set("Content-Type", "application/x-tar")
+			serverErrors <- remotesync.WriteArchive(w, targets)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(ts.Close)
+	database := dbtest.OpenTestDB(t)
+
+	stats, err := runHTTPRemoteSync(
+		t.Context(),
+		config.Config{
+			DataDir:        t.TempDir(),
+			DisabledAgents: []parser.AgentType{parser.AgentGemini},
+		},
+		database,
+		config.RemoteHost{
+			Host: "devbox", Transport: config.RemoteTransportHTTP,
+			URL: ts.URL, Token: "remote-token",
+		},
+		false,
+		nil,
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.SessionsSynced)
+	close(serverErrors)
+	for serverErr := range serverErrors {
+		require.NoError(t, serverErr)
+	}
+	stored, err := database.GetSession(
+		t.Context(), "devbox~gemini:remote-gemini",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, string(parser.AgentGemini), stored.Agent)
+}
+
 func TestOnDemandSyncEngineExcludesDisabledProvider(t *testing.T) {
 	geminiDir := filepath.Join(t.TempDir(), "gemini")
 	f := newSyncRouteFixture(t, withDisabledAgents(

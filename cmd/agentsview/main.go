@@ -296,9 +296,9 @@ func runServe(cfg config.Config, opts serveOptions) {
 	if !cfg.NoSync {
 		var onStartupReconciled func(sync.SyncStats, error)
 		engine = sync.NewEngine(database, sync.EngineConfig{
-			AgentDirs:               cfg.SyncAgentDirs(),
-			SourceMachines:          cfg.SyncSourceMachines(),
-			PreserveAgents:          cfg.DisabledAgents,
+			AgentDirs:               cfg.AgentDirs,
+			SourceMachines:          cfg.SourceMachines,
+			DisabledAgents:          cfg.DisabledAgents,
 			IncludeCwdPrefixes:      cfg.SyncIncludeCwdPrefixes,
 			ScanProtectedPaths:      cfg.ScanProtectedPaths,
 			Machine:                 cfg.LocalMachineName,
@@ -2354,12 +2354,12 @@ func collectWatchRoots(cfg config.Config) (
 			scopes:    []watchScope{scope},
 		})
 	}
-	for _, def := range parser.Registry {
+	for _, factory := range cfg.LocalProviderFactories() {
+		def := factory.Definition()
 		for _, d := range cfg.ResolveDirs(def.Type) {
 			addAgentRoot := func(dir, root string, recursive, exists bool) {
 				addRoot(def.Type, dir, root, recursive, exists)
 			}
-			_, hasProvider := parser.ProviderFactoryByType(def.Type)
 			if providerWatched, polling := collectProviderWatchRoots(def, d, addAgentRoot); providerWatched {
 				if polling.persistent {
 					addPersistent(def.Type, d)
@@ -2383,9 +2383,7 @@ func collectWatchRoots(cfg config.Config) (
 				continue
 			}
 			if !def.FileBased {
-				if hasProvider {
-					addPersistent(def.Type, d)
-				}
+				addPersistent(def.Type, d)
 				continue
 			}
 			fallbackUnwatched := collectLegacyWatchRoots(def, d, addAgentRoot)

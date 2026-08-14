@@ -20,7 +20,7 @@ func collectLiveActivityTargets(
 ) ([]agentsync.LiveActivityTarget, error) {
 	var targets []agentsync.LiveActivityTarget
 	var targetErrors []error
-	for _, factory := range parser.ProviderFactories() {
+	for _, factory := range cfg.LocalProviderFactories() {
 		roots := cfg.ResolveDirs(factory.Definition().Type)
 		if len(roots) == 0 {
 			continue

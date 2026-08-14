@@ -19,12 +19,11 @@ func (im Importer) ImportExtracted(
 	if err := validateTargetSetPaths(targets); err != nil {
 		return stats, err
 	}
-	targets = FilterDisabledTargets(targets, im.DisabledAgents)
 	if len(targets.Dirs) == 0 {
 		return stats, nil
 	}
 	layout, config, err := newImportInputs(
-		im.Host, im.BlockedResultCategories, im.DisabledAgents, targets, root,
+		im.Host, im.BlockedResultCategories, targets, root,
 	)
 	if err != nil {
 		return stats, err
@@ -48,69 +47,6 @@ func (im Importer) ImportExtracted(
 	stats.Skipped = engineStats.Skipped
 	stats.Failed = engineStats.Failed
 	return stats, nil
-}
-
-// FilterDisabledTargets removes provider-owned roots and curated files before
-// remote collection or ingestion. Truly shared extra files remain.
-func FilterDisabledTargets(
-	targets TargetSet,
-	disabled []parser.AgentType,
-) TargetSet {
-	if len(disabled) == 0 {
-		return targets
-	}
-	disabledSet := make(map[parser.AgentType]struct{}, len(disabled))
-	for _, agent := range disabled {
-		disabledSet[agent] = struct{}{}
-	}
-	filtered := targets
-	filtered.Dirs = make(map[parser.AgentType][]string, len(targets.Dirs))
-	for agent, dirs := range targets.Dirs {
-		if _, skip := disabledSet[agent]; skip {
-			continue
-		}
-		filtered.Dirs[agent] = append([]string(nil), dirs...)
-	}
-	filtered.Files = make(map[parser.AgentType][]string, len(targets.Files))
-	for agent, files := range targets.Files {
-		if _, skip := disabledSet[agent]; skip {
-			continue
-		}
-		filtered.Files[agent] = append([]string(nil), files...)
-	}
-	filtered.ProviderExtraFiles = make(
-		map[parser.AgentType][]string, len(targets.ProviderExtraFiles),
-	)
-	for agent, files := range targets.ProviderExtraFiles {
-		if _, skip := disabledSet[agent]; skip {
-			continue
-		}
-		filtered.ProviderExtraFiles[agent] = append([]string(nil), files...)
-	}
-	return filtered
-}
-
-func disabledProviderTargets(
-	targets TargetSet,
-	disabled []parser.AgentType,
-) TargetSet {
-	retained := TargetSet{
-		Dirs:               make(map[parser.AgentType][]string),
-		Files:              make(map[parser.AgentType][]string),
-		ProviderExtraFiles: make(map[parser.AgentType][]string),
-	}
-	for _, agent := range disabled {
-		if dirs := targets.Dirs[agent]; len(dirs) > 0 {
-			retained.Dirs[agent] = append([]string(nil), dirs...)
-		}
-		if files := targets.Files[agent]; len(files) > 0 {
-			retained.Files[agent] = append([]string(nil), files...)
-		}
-		if files := targets.ProviderExtraFiles[agent]; len(files) > 0 {
-			retained.ProviderExtraFiles[agent] = append([]string(nil), files...)
-		}
-	}
-	return retained
 }
 
 // importLayout maps stable remote paths to one prepared source root. Keeping
@@ -167,19 +103,15 @@ func newImportLayout(targets TargetSet, root string) (importLayout, error) {
 func newImportInputs(
 	host string,
 	blockedResultCategories []string,
-	disabledAgents []parser.AgentType,
 	targets TargetSet,
 	root string,
 ) (importLayout, syncpkg.EngineConfig, error) {
-	targets = FilterDisabledTargets(targets, disabledAgents)
 	layout, err := newImportLayout(targets, root)
 	if err != nil {
 		return importLayout{}, syncpkg.EngineConfig{}, err
 	}
 	layout.paths.host = host
-	return layout, importEngineConfig(
-		host, blockedResultCategories, disabledAgents, layout,
-	), nil
+	return layout, importEngineConfig(host, blockedResultCategories, layout), nil
 }
 
 func (p remotePathMap) pathRewriter() func(string) string {
@@ -197,12 +129,10 @@ func (p remotePathMap) pathRewriter() func(string) string {
 func importEngineConfig(
 	host string,
 	blockedResultCategories []string,
-	preserveAgents []parser.AgentType,
 	layout importLayout,
 ) syncpkg.EngineConfig {
 	return syncpkg.EngineConfig{
 		AgentDirs:               layout.engineDirs,
-		PreserveAgents:          append([]parser.AgentType(nil), preserveAgents...),
 		Machine:                 host,
 		IDPrefix:                host + "~",
 		PathRewriter:            layout.paths.pathRewriter(),

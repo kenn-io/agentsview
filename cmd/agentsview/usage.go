@@ -344,9 +344,9 @@ func ensureFreshData(
 
 	if database.NeedsResync() {
 		engine := sync.NewEngine(database, sync.EngineConfig{
-			AgentDirs:          appCfg.SyncAgentDirs(),
-			SourceMachines:     appCfg.SyncSourceMachines(),
-			PreserveAgents:     appCfg.DisabledAgents,
+			AgentDirs:          appCfg.AgentDirs,
+			SourceMachines:     appCfg.SourceMachines,
+			DisabledAgents:     appCfg.DisabledAgents,
 			IncludeCwdPrefixes: appCfg.SyncIncludeCwdPrefixes,
 			ScanProtectedPaths: appCfg.ScanProtectedPaths,
 			Machine:            appCfg.LocalMachineName,
@@ -371,9 +371,9 @@ func ensureFreshData(
 	}
 
 	engine := sync.NewEngine(database, sync.EngineConfig{
-		AgentDirs:          appCfg.SyncAgentDirs(),
-		SourceMachines:     appCfg.SyncSourceMachines(),
-		PreserveAgents:     appCfg.DisabledAgents,
+		AgentDirs:          appCfg.AgentDirs,
+		SourceMachines:     appCfg.SourceMachines,
+		DisabledAgents:     appCfg.DisabledAgents,
 		IncludeCwdPrefixes: appCfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths: appCfg.ScanProtectedPaths,
 		Machine:            appCfg.LocalMachineName,

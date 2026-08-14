@@ -623,35 +623,16 @@ func (c Config) ConfiguredDirs(agent parser.AgentType) []string {
 }
 
 func (c Config) ResolveDirs(agent parser.AgentType) []string {
-	if c.AgentDisabled(agent) {
-		return nil
-	}
 	return c.ConfiguredDirs(agent)
 }
 
-func (c Config) SyncAgentDirs() map[parser.AgentType][]string {
-	dirs := make(map[parser.AgentType][]string, len(c.AgentDirs))
-	for agent, configured := range c.AgentDirs {
-		if c.AgentDisabled(agent) {
-			continue
-		}
-		dirs[agent] = append([]string(nil), configured...)
-	}
-	return dirs
-}
-
-func (c Config) SyncSourceMachines() map[parser.AgentType]map[string]string {
-	machines := make(
-		map[parser.AgentType]map[string]string,
-		len(c.SourceMachines),
-	)
-	for agent, configured := range c.SourceMachines {
-		if c.AgentDisabled(agent) {
-			continue
-		}
-		machines[agent] = maps.Clone(configured)
-	}
-	return machines
+// LocalProviderFactories returns the provider set used for local filesystem
+// ingestion. Remote import and export deliberately use the full registry.
+func (c Config) LocalProviderFactories() []parser.ProviderFactory {
+	factories := parser.ProviderFactories()
+	return slices.DeleteFunc(factories, func(factory parser.ProviderFactory) bool {
+		return c.AgentDisabled(factory.Definition().Type)
+	})
 }
 
 func NormalizeDisabledAgents(

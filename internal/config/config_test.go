@@ -2402,7 +2402,7 @@ func TestLoadFileSessionSourceAbsoluteDirDeduplicatesRelativeLegacyRoot(t *testi
 		"the structured entry must relabel the equivalent legacy root")
 }
 
-func TestDisabledAgentsNormalizeAndFilterEffectiveDirs(t *testing.T) {
+func TestDisabledAgentsNormalizeWithoutHidingConfiguredDirs(t *testing.T) {
 	cfg, err := Default()
 	require.NoError(t, err)
 	geminiDirs := append([]string(nil), cfg.AgentDirs[parser.AgentGemini]...)
@@ -2415,10 +2415,7 @@ disabled_agents = [" gemini ", "claude", "gemini"]
 		[]parser.AgentType{parser.AgentClaude, parser.AgentGemini},
 		cfg.DisabledAgents,
 	)
-	assert.Empty(t, cfg.ResolveDirs(parser.AgentGemini))
-	assert.Equal(t, geminiDirs, cfg.ConfiguredDirs(parser.AgentGemini))
-	assert.NotContains(t, cfg.SyncAgentDirs(), parser.AgentGemini)
-	assert.NotContains(t, cfg.SyncSourceMachines(), parser.AgentGemini)
+	assert.Equal(t, geminiDirs, cfg.ResolveDirs(parser.AgentGemini))
 }
 
 func TestDisabledAgentsRejectInvalidSessionProviders(t *testing.T) {

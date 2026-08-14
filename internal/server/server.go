@@ -225,10 +225,10 @@ func New(
 	return s
 }
 
-// ingestionConfig returns the daemon-start configuration for session-provider
-// selection. Settings updates are persisted and reflected by GET immediately,
-// but the running engine, watchers, polling, and remote ingestion must keep one
-// provider set until restart.
+// ingestionConfig returns the daemon-start configuration for local filesystem
+// provider selection. Settings updates are persisted and reflected by GET
+// immediately, but the running local engine, watchers, and polling keep one
+// provider set until restart. Remote import and export ignore DisabledAgents.
 func (s *Server) ingestionConfig() config.Config {
 	s.mu.RLock()
 	cfg := s.cfg

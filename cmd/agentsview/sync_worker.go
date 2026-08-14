@@ -359,9 +359,9 @@ func openWorkerWriteDB(cfg config.Config) (*db.DB, *writeOwnerLock, error) {
 // daemon-only callbacks (emitter, watcher reconciliation, deferred maintenance).
 func workerEngineConfig(cfg config.Config) sync.EngineConfig {
 	return sync.EngineConfig{
-		AgentDirs:               cfg.SyncAgentDirs(),
-		SourceMachines:          cfg.SyncSourceMachines(),
-		PreserveAgents:          cfg.DisabledAgents,
+		AgentDirs:               cfg.AgentDirs,
+		SourceMachines:          cfg.SourceMachines,
+		DisabledAgents:          cfg.DisabledAgents,
 		IncludeCwdPrefixes:      cfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths:      cfg.ScanProtectedPaths,
 		Machine:                 cfg.LocalMachineName,

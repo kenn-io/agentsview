@@ -120,7 +120,7 @@ func TestRemoteSyncArchiveRejectsUnresolvedPath(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
-func TestRemoteSyncRoutesKeepStartupProviderSelectionUntilRestart(t *testing.T) {
+func TestRemoteSyncRoutesExportLocallyDisabledProvider(t *testing.T) {
 	dir := t.TempDir()
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "test.db"))
 	claudeDir := filepath.Join(dir, "claude")
@@ -141,10 +141,6 @@ func TestRemoteSyncRoutesKeepStartupProviderSelectionUntilRestart(t *testing.T) 
 	}, database, nil)
 	handler := currentRemoteSyncHandler(srv.Handler())
 
-	srv.mu.Lock()
-	srv.cfg.DisabledAgents = nil
-	srv.mu.Unlock()
-
 	targetReq := httptest.NewRequest(http.MethodGet, "/api/v1/remote-sync/targets", nil)
 	targetReq.Header.Set("Authorization", "Bearer remote-token")
 	targetW := httptest.NewRecorder()
@@ -152,7 +148,7 @@ func TestRemoteSyncRoutesKeepStartupProviderSelectionUntilRestart(t *testing.T) 
 	require.Equal(t, http.StatusOK, targetW.Code, "body: %s", targetW.Body.String())
 	var targets remotesync.TargetSet
 	require.NoError(t, json.Unmarshal(targetW.Body.Bytes(), &targets))
-	assert.NotContains(t, targets.Dirs, parser.AgentGemini)
+	assert.Equal(t, []string{geminiDir}, targets.Dirs[parser.AgentGemini])
 
 	payload, err := json.Marshal(remotesync.TargetSet{
 		Dirs: map[parser.AgentType][]string{parser.AgentGemini: {geminiDir}},
@@ -167,7 +163,7 @@ func TestRemoteSyncRoutesKeepStartupProviderSelectionUntilRestart(t *testing.T) 
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusForbidden, w.Code, "path: %s; body: %s", path, w.Body.String())
+		assert.Equal(t, http.StatusOK, w.Code, "path: %s; body: %s", path, w.Body.String())
 	}
 }
 

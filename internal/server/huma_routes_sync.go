@@ -91,7 +91,6 @@ var runHTTPRemoteSync = func(
 		Full:                    full,
 		DataDir:                 cfg.DataDir,
 		DB:                      local,
-		DisabledAgents:          cfg.DisabledAgents,
 		BlockedResultCategories: cfg.ResultContentBlockedCategories,
 		Progress:                progress,
 	}.Run(ctx)
@@ -187,9 +186,9 @@ func (s *Server) syncEngineForLocal(local *db.DB) *syncpkg.Engine {
 		emitter = s.broadcaster
 	}
 	s.onDemandEngine = syncpkg.NewEngine(local, syncpkg.EngineConfig{
-		AgentDirs:               cfg.SyncAgentDirs(),
-		SourceMachines:          cfg.SyncSourceMachines(),
-		PreserveAgents:          cfg.DisabledAgents,
+		AgentDirs:               cfg.AgentDirs,
+		SourceMachines:          cfg.SourceMachines,
+		DisabledAgents:          cfg.DisabledAgents,
 		IncludeCwdPrefixes:      cfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths:      cfg.ScanProtectedPaths,
 		Machine:                 cfg.LocalMachineName,
@@ -766,7 +765,6 @@ func prepareHTTPHosts(
 			Full:                    true,
 			DataDir:                 cfg.DataDir,
 			DB:                      local,
-			DisabledAgents:          cfg.DisabledAgents,
 			BlockedResultCategories: cfg.ResultContentBlockedCategories,
 			Progress:                progress,
 			Lifecycle:               newUnifiedHTTPHostLifecycle(ctx, host),
@@ -901,7 +899,6 @@ func (s *Server) runRemoteSyncHostsOwned(
 				Port:                    rh.Port,
 				Full:                    full,
 				DB:                      local,
-				DisabledAgents:          ingestionCfg.DisabledAgents,
 				BlockedResultCategories: ingestionCfg.ResultContentBlockedCategories,
 				Progress:                progress,
 			}

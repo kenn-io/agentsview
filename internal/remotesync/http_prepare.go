@@ -245,9 +245,6 @@ func (hs HTTPSync) prepare(
 	if err := validateTargetSetPaths(targets); err != nil {
 		return nil, err
 	}
-	retainedTargets := disabledProviderTargets(targets, hs.DisabledAgents)
-	targets = FilterDisabledTargets(targets, hs.DisabledAgents)
-
 	prepared := &PreparedHTTP{
 		sync:        hs,
 		targets:     targets,
@@ -302,7 +299,6 @@ func (hs HTTPSync) prepare(
 	err = hs.prepareMirror(ctx, client, splitTargets{
 		dirScoped:  dirScoped,
 		fileScoped: fileScoped,
-		retained:   retainedTargets,
 	}, manifest, mirrorRoot)
 	if err != nil {
 		return nil, err
@@ -334,8 +330,7 @@ func (p *PreparedHTTP) RebuildContributor() (syncpkg.RebuildContributor, error) 
 		)
 	}
 	layout, config, err := newImportInputs(
-		p.sync.Host, p.sync.BlockedResultCategories, p.sync.DisabledAgents,
-		p.targets, p.root,
+		p.sync.Host, p.sync.BlockedResultCategories, p.targets, p.root,
 	)
 	if err != nil {
 		return syncpkg.RebuildContributor{}, err
@@ -399,7 +394,6 @@ func (hs HTTPSync) reportLegacyFallback() {
 type splitTargets struct {
 	dirScoped  TargetSet
 	fileScoped TargetSet
-	retained   TargetSet
 }
 
 // prepareMirror applies the manifest delta to the persistent mirror. The
@@ -412,7 +406,7 @@ func (hs HTTPSync) prepareMirror(
 	manifest Manifest,
 	mirrorRoot string,
 ) error {
-	delta, err := MirrorDiffRetainingTargets(mirrorRoot, manifest, targets.retained)
+	delta, err := MirrorDiff(mirrorRoot, manifest)
 	if err != nil {
 		return err
 	}

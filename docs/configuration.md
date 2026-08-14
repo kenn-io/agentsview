@@ -72,7 +72,7 @@ chart_palette = "agentsview"
 | `public_origins`                    | Array of additional trusted CORS origins                                                                                                                                                                                                             |
 | `daemon_idle_timeout`               | Idle timeout for detached writable daemons; set to `"0s"` to keep them alive                                                                                                                                                                         |
 | `chart_palette`                     | Server-wide categorical chart colors: `"agentsview"` (default) or `"matplotlib"`; also configurable under **Settings > Appearance**                                                                                                                  |
-| `disabled_agents`                   | Session providers to exclude from discovery and ingestion; changes require a daemon restart — see [Disabling Session Providers](#disabling-session-providers)                                                                                         |
+| `disabled_agents`                   | Session providers to exclude from local filesystem scanning; changes require a daemon restart — see [Disabling Session Providers](#disabling-session-providers)                                                                                     |
 | `[proxy]`                           | Managed proxy configuration table — see [Remote Access](/remote-access/)                                                                                                                                                                             |
 | `disable_update_check`              | Disable the automatic update check (see [Privacy](#privacy-and-telemetry))                                                                                                                                                                           |
 | `scan_protected_paths`              | Allow Git discovery inside macOS privacy-protected folders, accepting one consent prompt per folder — see [macOS Protected Folders](#macos-protected-folders)                                                                                        |
@@ -694,12 +694,16 @@ Exclude session providers you do not use by listing their IDs in
 disabled_agents = ["gemini"]
 ```
 
-The setting applies to local discovery, file watching, scheduled polling,
-session-source diagnostics, and remote session collection and ingestion.
+The setting applies only to local filesystem discovery, targeted local file
+sync, file watching, and scheduled polling. It does not affect HTTP or SSH
+remote imports, and it does not restrict HTTP, SSH, PostgreSQL, DuckDB, or
+archive exports. `RemoteSyncExcluded` is the separate provider capability that
+keeps unsafe source trees out of remote exports.
+
 Restart the AgentsView daemon and any separate `pg push --watch` or
-`duckdb push --watch` process after changing it. Previously archived sessions
-from a disabled provider remain available and are not deleted, including during
-archive rebuilds. The setting does not disable that provider as a Recall
+`duckdb push --watch` process after changing the setting. Previously archived
+sessions from a disabled provider remain available and exportable, including
+during archive rebuilds. The setting does not disable that provider as a Recall
 execution backend.
 
 ### Multiple Directories

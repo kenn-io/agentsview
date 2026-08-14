@@ -4,12 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path"
-	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/sync"
 )
@@ -28,7 +25,6 @@ type RemoteSync struct {
 	Port                    int
 	Full                    bool
 	DB                      *db.DB
-	DisabledAgents          []parser.AgentType
 	SSHOpts                 []string // extra args passed to ssh (e.g. -i keyfile)
 	BlockedResultCategories []string
 	Progress                sync.ProgressFunc
@@ -54,13 +50,6 @@ func (rs *RemoteSync) Run(
 			"resolve dirs on %s: %w", rs.Host, err,
 		)
 	}
-	filtered := filterDisabledResolvedTargets(
-		dirs, files, extraFiles, forbiddenRoots, rs.DisabledAgents,
-	)
-	dirs = filtered.Dirs
-	files = filtered.Files
-	extraFiles = filtered.AllExtraFiles()
-	forbiddenRoots = filtered.ForbiddenRoots
 	if len(dirs) == 0 {
 		rs.reportProgress("No agent directories found on " + rs.Host)
 		fmt.Printf("No agent directories found on %s\n", rs.Host)
@@ -115,14 +104,12 @@ func (rs *RemoteSync) Run(
 		Host:                    rs.Host,
 		Full:                    rs.Full,
 		DB:                      rs.DB,
-		DisabledAgents:          rs.DisabledAgents,
 		BlockedResultCategories: rs.BlockedResultCategories,
 		Progress:                progress,
 	}.ImportExtracted(ctx, remotesync.TargetSet{
-		Dirs:               dirs,
-		Files:              files,
-		ExtraFiles:         filtered.ExtraFiles,
-		ProviderExtraFiles: filtered.ProviderExtraFiles,
+		Dirs:       dirs,
+		Files:      files,
+		ExtraFiles: extraFiles,
 		// ForbiddenRoots is intentionally omitted: the tar script already
 		// pruned forbidden content before it reached tmpDir, and these
 		// values are remote POSIX paths, not paths in the local-path
@@ -153,69 +140,6 @@ func (rs *RemoteSync) Run(
 	fmt.Println()
 	rs.reportProgress(remoteSyncSummary(rs.Host, stats))
 	return stats, nil
-}
-
-func filterDisabledResolvedTargets(
-	dirs map[parser.AgentType][]string,
-	files map[parser.AgentType][]string,
-	extraFiles, forbiddenRoots []string,
-	disabled []parser.AgentType,
-) remotesync.TargetSet {
-	sharedExtraFiles, providerExtraFiles := attributeResolvedExtraFiles(
-		dirs, extraFiles,
-	)
-	return remotesync.FilterDisabledTargets(remotesync.TargetSet{
-		Dirs: dirs, Files: files, ExtraFiles: sharedExtraFiles,
-		ProviderExtraFiles: providerExtraFiles, ForbiddenRoots: forbiddenRoots,
-	}, disabled)
-}
-
-func attributeResolvedExtraFiles(
-	dirs map[parser.AgentType][]string,
-	extraFiles []string,
-) ([]string, map[parser.AgentType][]string) {
-	providerFiles := make(map[parser.AgentType][]string)
-	var shared []string
-	for _, file := range extraFiles {
-		agent := resolvedExtraFileAgent(dirs, file)
-		if agent == "" {
-			shared = append(shared, file)
-			continue
-		}
-		providerFiles[agent] = append(providerFiles[agent], file)
-	}
-	return shared, providerFiles
-}
-
-func resolvedExtraFileAgent(
-	dirs map[parser.AgentType][]string, file string,
-) parser.AgentType {
-	clean := path.Clean(file)
-	if path.Base(clean) == parser.CodexSessionIndexFilename {
-		for _, dir := range dirs[parser.AgentCodex] {
-			if clean == path.Join(path.Dir(path.Clean(dir)), parser.CodexSessionIndexFilename) {
-				return parser.AgentCodex
-			}
-		}
-	}
-	stateDB := clean
-	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
-		stateDB = strings.TrimSuffix(stateDB, suffix)
-	}
-	if path.Base(stateDB) != "state.db" {
-		return ""
-	}
-	for _, dir := range dirs[parser.AgentHermes] {
-		dir = path.Clean(dir)
-		expected := dir
-		if path.Base(dir) == "sessions" {
-			expected = path.Join(path.Dir(dir), "state.db")
-		}
-		if stateDB == expected {
-			return parser.AgentHermes
-		}
-	}
-	return ""
 }
 
 func (rs *RemoteSync) reportProgress(detail string) {
