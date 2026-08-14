@@ -153,6 +153,18 @@ func (s *codexStagingSink) AppendToolResultEvent(
 	if callID == "" {
 		return
 	}
+	// The parser extracts event fields as gjson substrings of the source
+	// line. Storing those small strings in the in-memory model (event
+	// identity fields, map keys below) would pin the entire line's backing
+	// buffer — for large tool outputs that keeps the whole transcript's
+	// line bytes reachable across the parse. Clone the fields the model
+	// keeps; content is replaced by a placeholder after staging.
+	callID = strings.Clone(callID)
+	ev.ToolUseID = strings.Clone(ev.ToolUseID)
+	ev.AgentID = strings.Clone(ev.AgentID)
+	ev.SubagentSessionID = strings.Clone(ev.SubagentSessionID)
+	ev.Status = strings.Clone(ev.Status)
+	ev.Source = strings.Clone(ev.Source)
 	// The legacy deduplication compares raw parser content; the staged
 	// rows keep the raw content plus a blank flag, so the equivalence
 	// check matches even for blocked categories.

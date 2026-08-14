@@ -133,6 +133,7 @@ func replaceSessionMessagesTxStaged(
 
 	positions := make(map[string]StagedToolCallPosition)
 	chunk := make([]ToolCall, 0, toolCallStagedChunkSize)
+	var chunkBytes int64
 	flush := func() error {
 		if len(chunk) == 0 {
 			return nil
@@ -141,6 +142,7 @@ func replaceSessionMessagesTxStaged(
 			return err
 		}
 		chunk = chunk[:0]
+		chunkBytes = 0
 		return nil
 	}
 	for i, m := range msgs {
@@ -176,9 +178,16 @@ func replaceSessionMessagesTxStaged(
 				if !blocked[tc.Category] {
 					tc.ResultContent = summary
 				}
+				chunkBytes += int64(length)
 			}
 			chunk = append(chunk, tc)
-			if len(chunk) >= toolCallStagedChunkSize {
+			// Flush by byte budget as well as count: resolved summaries
+			// are the largest per-call strings, and a count-only bound
+			// (toolCallStagedChunkSize) would still accumulate up to
+			// count * max-summary-size bytes of resolved content before
+			// the insert.
+			if len(chunk) >= toolCallStagedChunkSize ||
+				chunkBytes >= toolCallStagedChunkBytes {
 				if err := flush(); err != nil {
 					return err
 				}
@@ -198,5 +207,10 @@ func replaceSessionMessagesTxStaged(
 }
 
 // toolCallStagedChunkSize bounds the tool-call insert chunks so the
-// transient per-chunk summary memory stays fixed.
-const toolCallStagedChunkSize = 500
+// transient per-chunk summary memory stays fixed. toolCallStagedChunkBytes
+// bounds the same chunks by resolved summary content bytes, since one
+// call's summary can dwarf hundreds of ordinary rows.
+const (
+	toolCallStagedChunkSize  = 500
+	toolCallStagedChunkBytes = 16 << 20
+)
