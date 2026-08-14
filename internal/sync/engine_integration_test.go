@@ -15377,6 +15377,131 @@ func TestRestartedEngineCodexIndexTouchRefreshesStoredDigest(t *testing.T) {
 			"index stat; a stale digest re-hashes the archive every restart")
 }
 
+// A successful transcript write must not stamp a stat digest when its title
+// index could not be read. The session remains useful without title metadata,
+// but the next pass must retry the index rather than trust unchecked state.
+func TestSyncAllCodexUnreadableIndexDoesNotPersistStatDigest(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix file permissions are required to force an index read error")
+	}
+
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir}))
+
+	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229e7"
+	content := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/workspace/api", "user").
+		AddCodexMessage(tsEarlyS1, "user", "sync without title metadata").
+		String()
+	path := env.writeCodexSession(
+		t,
+		filepath.Join("2026", "06", "11"),
+		"rollout-2026-06-11T12-44-06-"+uuid+".jsonl",
+		content,
+	)
+	indexPath := filepath.Join(root, parser.CodexSessionIndexFilename)
+	indexContent := fmt.Appendf(nil,
+		`{"id":"%s","thread_name":"Unchecked title","updated_at":"2026-06-11T17:34:20Z"}`+"\n",
+		uuid,
+	)
+	require.NoError(t, os.WriteFile(indexPath, indexContent, 0o600))
+	require.NoError(t, os.Chmod(indexPath, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(indexPath, 0o600) })
+	if f, openErr := os.Open(indexPath); openErr == nil {
+		_ = f.Close()
+		require.NoError(t, os.Chmod(indexPath, 0o600))
+		t.Skip("test process can read mode-000 files")
+	}
+
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+	_, ok, err := env.db.GetProviderStatHash(
+		t.Context(), parser.AgentCodex, path,
+	)
+	require.NoError(t, err)
+	assert.False(t, ok,
+		"a write with unchecked title metadata must not persist a digest")
+}
+
+// A transient session_index.jsonl read failure must not earn the new stat
+// digest. The rollout content hash can still prove the transcript unchanged,
+// but it cannot prove the stored title current. Persisting the unreadable
+// index's digest would let the next fresh engine skip the title check forever.
+func TestRestartedEngineCodexIndexReadFailureDoesNotRefreshStoredDigest(
+	t *testing.T,
+) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix file permissions are required to force an index read error")
+	}
+
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir}))
+
+	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229e6"
+	content := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/workspace/api", "user").
+		AddCodexMessage(tsEarlyS1, "user", "do not lose my title").
+		String()
+	path := env.writeCodexSession(
+		t,
+		filepath.Join("2026", "06", "11"),
+		"rollout-2026-06-11T12-44-06-"+uuid+".jsonl",
+		content,
+	)
+	indexPath := filepath.Join(root, parser.CodexSessionIndexFilename)
+	indexContent := fmt.Appendf(nil,
+		`{"id":"%s","thread_name":"Original title","updated_at":"2026-06-11T17:34:20Z"}`+"\n",
+		uuid,
+	)
+	require.NoError(t, os.WriteFile(indexPath, indexContent, 0o600))
+	transcriptTime := time.Now().Add(-3 * time.Hour)
+	indexTime := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(path, transcriptTime, transcriptTime))
+	require.NoError(t, os.Chtimes(indexPath, indexTime, indexTime))
+
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+	storedDigest, ok, err := env.db.GetProviderStatHash(
+		t.Context(), parser.AgentCodex, path,
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	// A rename or unrelated index update advances the stat tuple, but a
+	// transient permission failure prevents the title map from being checked.
+	require.NoError(t, os.Chtimes(
+		indexPath, time.Now().Add(-time.Hour), time.Now().Add(-time.Hour),
+	))
+	require.NoError(t, os.Chmod(indexPath, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(indexPath, 0o600) })
+	if f, openErr := os.Open(indexPath); openErr == nil {
+		_ = f.Close()
+		require.NoError(t, os.Chmod(indexPath, 0o600))
+		t.Skip("test process can read mode-000 files")
+	}
+
+	restarted := sync.NewEngine(env.db, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {codexDir},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(restarted.Close)
+	stats := restarted.SyncAll(t.Context(), nil)
+	require.Equal(t, 0, stats.Synced,
+		"an unreadable title index does not change transcript content")
+
+	digestAfterFailure, ok, err := env.db.GetProviderStatHash(
+		t.Context(), parser.AgentCodex, path,
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, storedDigest, digestAfterFailure,
+		"an unreadable title index must not stamp its new stat digest")
+}
+
 // The Codex stat digest folds session_index.jsonl, so a title rename can
 // never hide behind a warm digest match across an engine restart: the
 // index change breaks the digest and the rename is picked up.

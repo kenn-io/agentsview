@@ -1753,19 +1753,50 @@ func LookupCodexThreadName(sessionPath, sessionID string) string {
 func LookupCodexThreadNameEntry(
 	sessionPath, sessionID string,
 ) (string, bool) {
+	name, ok, _ := ReadCodexThreadNameEntry(sessionPath, sessionID)
+	return name, ok
+}
+
+// ReadCodexThreadNameEntry returns the session_index.jsonl title for the
+// session, whether the index holds an entry, and any read or scan failure.
+// A missing index is a verified absence and returns no error; modern Codex
+// releases no longer create this file. Callers that persist freshness state
+// use the error to distinguish that normal absence from a transient failure.
+func ReadCodexThreadNameEntry(
+	sessionPath, sessionID string,
+) (string, bool, error) {
 	if strings.TrimSpace(sessionID) == "" {
-		return "", false
+		return "", false, nil
 	}
 	indexPath := codexSessionIndexPath(sessionPath)
 	if indexPath == "" {
-		return "", false
+		return "", false, nil
 	}
 	titles, err := loadCodexSessionIndex(indexPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
+	}
 	if err != nil {
-		return "", false
+		return "", false, err
 	}
 	title, ok := titles[sessionID]
-	return strings.TrimSpace(title), ok
+	return strings.TrimSpace(title), ok, nil
+}
+
+// VerifyCodexSessionIndex reports whether the title index associated with a
+// rollout was read successfully or confirmed absent. It preserves non-ENOENT
+// failures so callers cannot persist a freshness digest for unchecked title
+// metadata.
+func VerifyCodexSessionIndex(sessionPath string) error {
+	indexPath := codexSessionIndexPath(sessionPath)
+	if indexPath == "" {
+		return nil
+	}
+	_, err := loadCodexSessionIndex(indexPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 // CodexEffectiveMtime returns the effective mtime for a Codex session file,

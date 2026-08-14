@@ -316,14 +316,16 @@ Grok section and remove the explicit registry exception in the coverage test.
   trees, so this evidence does not establish IDE, desktop, or `codex exec`
   activity-hint coverage. Locally observed Codex app builds can write the same
   schema, but that is observational evidence rather than a public compatibility
-  guarantee. Agentsview derives the hint path as
-  `<configured-sessions-root>/../history.jsonl`; a custom sessions root
-  without that sibling, or `HistoryPersistence::None`, degrades to ordinary
-  watcher behavior, degraded-coverage polling when applicable, and the daily
-  archive audit. Restart bootstrap reads at most the newest 4 MiB and accepts
-  records from the preceding 24 hours. If a daemon restarts during a longer
-  autonomous run whose last prompt falls outside those bounds, the rollout
-  relies on those fallbacks until its next prompt.
+  guarantee. A missing `session_index.jsonl` is verified as normal absence;
+  read or scan failures remain unverified and cannot earn persisted freshness
+  trust, so a transient failure cannot pin a stale stored title. Agentsview
+  derives the hint path as `<configured-sessions-root>/../history.jsonl`; a
+  custom sessions root without that sibling, or `HistoryPersistence::None`,
+  degrades to ordinary watcher behavior, degraded-coverage polling when
+  applicable, and the daily archive audit. Restart bootstrap reads at most the
+  newest 4 MiB and accepts records from the preceding 24 hours. If a daemon
+  restarts during a longer autonomous run whose last prompt falls outside
+  those bounds, the rollout relies on those fallbacks until its next prompt.
 
 ## TraeX (`traex`)
 

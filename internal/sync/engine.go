@@ -942,6 +942,9 @@ func (e *Engine) recordProviderStatHash(
 	if _, ok := e.providerStatHashers[hash.agent]; !ok {
 		return
 	}
+	if !providerStatHashMetadataVerified(hash) {
+		return
+	}
 	if err := e.db.UpsertProviderStatHash(
 		ctx, hash.agent, hash.targetKey, hash.digest,
 	); err != nil {
@@ -950,6 +953,24 @@ func (e *Engine) recordProviderStatHash(
 			hash.agent, hash.targetKey, err,
 		)
 	}
+}
+
+// providerStatHashMetadataVerified prevents Codex freshness from outrunning
+// its title sidecar. A missing session_index.jsonl is normal and verified;
+// read and scan failures are transient and must leave the previous digest in
+// place so a later pass retries the title check.
+func providerStatHashMetadataVerified(hash pendingProviderStatHash) bool {
+	if hash.agent != parser.AgentCodex {
+		return true
+	}
+	if err := parser.VerifyCodexSessionIndex(hash.physicalPath); err != nil {
+		log.Printf(
+			"verify Codex title index before freshness write for %s: %v",
+			hash.physicalPath, err,
+		)
+		return false
+	}
+	return true
 }
 
 // migrateLegacyCodexExecSkips removes skip cache entries
@@ -8819,12 +8840,16 @@ func (e *Engine) processProviderFile(
 				fingerprint,
 				providerSemantics,
 			)
+			indexChanged, indexVerified := false, true
+			if file.Agent == parser.AgentCodex {
+				indexChanged, indexVerified =
+					e.codexCachedIndexSessionNameState(file.Path)
+			}
 			if !cacheFresh {
 				e.clearSkip(cacheKey)
 			} else if e.pathNeedsCachedSkipBypass(file.Agent, file.Path) {
 				e.clearSkip(cacheKey)
-			} else if file.Agent == parser.AgentCodex &&
-				e.codexCachedIndexSessionNameChanged(file.Path) {
+			} else if indexChanged {
 				// The transcript fingerprint can remain byte-for-byte identical
 				// while session_index.jsonl changes this session's title. Do not
 				// let a pre-existing transcript skip entry hide that metadata
@@ -8865,7 +8890,7 @@ func (e *Engine) processProviderFile(
 					}
 				}
 				if cacheStillFresh {
-					if verifiedStateOK &&
+					if verifiedStateOK && indexVerified &&
 						e.shouldSkipProviderSourceByDB(
 							file, fingerprint, providerSemantics,
 						) {
@@ -8876,7 +8901,7 @@ func (e *Engine) processProviderFile(
 					// backfill or refresh the stat digest for rows that
 					// predate the side-table or whose digest a shared
 					// index touch invalidated.
-					if cacheRowHashVerified {
+					if cacheRowHashVerified && indexVerified {
 						e.stampProviderStatHashForConfirmedSource(
 							ctx, preParseStatHash,
 						)
@@ -8927,11 +8952,11 @@ func (e *Engine) processProviderFile(
 	// engine). For Codex this also folds in the session_index.jsonl sidecar:
 	// a shared index mtime bump that did not change this session's title must
 	// not trigger a reparse.
-	if !incForceReplace && !e.forceParse && !file.ForceParse &&
-		e.shouldSkipProviderSourceByDB(
+	if !incForceReplace && !e.forceParse && !file.ForceParse {
+		dbFresh, metadataVerified := e.providerSourceFreshnessByDB(
 			file, fingerprint, providerSemantics,
-		) {
-		if verifiedStateOK {
+		)
+		if dbFresh && verifiedStateOK && metadataVerified {
 			e.promoteVerifiedSource(verifiedCapture)
 		}
 		// The Codex-family fingerprint content-hashed the rollout and
@@ -8941,14 +8966,20 @@ func (e *Engine) processProviderFile(
 		// side-table, and rollouts whose digest a shared index touch
 		// invalidated without changing their own title, would otherwise
 		// re-hash on every fresh process forever.
-		e.stampProviderStatHashForConfirmedSource(ctx, preParseStatHash)
-		return processResult{
-			skip:        true,
-			mtime:       fingerprint.MTimeNS,
-			cacheSkip:   cacheSkip,
-			cacheKey:    cacheKey,
-			noCacheSkip: true,
-		}, true
+		if dbFresh {
+			if metadataVerified {
+				e.stampProviderStatHashForConfirmedSource(
+					ctx, preParseStatHash,
+				)
+			}
+			return processResult{
+				skip:        true,
+				mtime:       fingerprint.MTimeNS,
+				cacheSkip:   cacheSkip,
+				cacheKey:    cacheKey,
+				noCacheSkip: true,
+			}, true
+		}
 	}
 
 	// DB-stored-file-info skip: a session whose persisted file_size/file_mtime
@@ -10276,6 +10307,9 @@ func (e *Engine) stampProviderStatHashForConfirmedSource(
 	if statHash == nil || statHash.digest == 0 {
 		return
 	}
+	if !providerStatHashMetadataVerified(*statHash) {
+		return
+	}
 	if err := e.db.UpsertProviderStatHash(
 		ctx, statHash.agent, statHash.targetKey, statHash.digest,
 	); err != nil {
@@ -11334,10 +11368,23 @@ func (e *Engine) shouldSkipProviderSourceByDB(
 	fingerprint parser.SourceFingerprint,
 	semantics parser.ProviderSyncSemantics,
 ) bool {
+	fresh, _ := e.providerSourceFreshnessByDB(file, fingerprint, semantics)
+	return fresh
+}
+
+// providerSourceFreshnessByDB returns the Codex-family DB freshness decision
+// and whether all metadata needed to persist local stat trust was verified.
+// A transient Codex title-index failure may still skip unchanged transcript
+// content, but it cannot promote in-memory trust or stamp a stat digest.
+func (e *Engine) providerSourceFreshnessByDB(
+	file parser.DiscoveredFile,
+	fingerprint parser.SourceFingerprint,
+	semantics parser.ProviderSyncSemantics,
+) (fresh, metadataVerified bool) {
 	if !isCodexFormatAgent(file.Agent) {
-		return false
+		return false, false
 	}
-	return e.shouldSkipCodexFingerprint(
+	return e.codexFingerprintFreshness(
 		file.Agent, file.Path, fingerprint, semantics,
 	)
 }
@@ -11359,6 +11406,18 @@ func (e *Engine) shouldSkipCodexFingerprint(
 	fingerprint parser.SourceFingerprint,
 	semantics parser.ProviderSyncSemantics,
 ) bool {
+	fresh, _ := e.codexFingerprintFreshness(
+		agent, path, fingerprint, semantics,
+	)
+	return fresh
+}
+
+func (e *Engine) codexFingerprintFreshness(
+	agent parser.AgentType,
+	path string,
+	fingerprint parser.SourceFingerprint,
+	semantics parser.ProviderSyncSemantics,
+) (fresh, metadataVerified bool) {
 	lookupPath := path
 	if e.pathRewriter != nil {
 		lookupPath = e.pathRewriter(path)
@@ -11367,47 +11426,53 @@ func (e *Engine) shouldSkipCodexFingerprint(
 		lookupPath, string(agent),
 	)
 	if !ok || storedSize != fingerprint.Size {
-		return false
+		return false, false
 	}
 	if !e.providerFingerprintHashMatchesDB(
 		agent, lookupPath,
 		fingerprint,
 		semantics.FingerprintHashRequiredForFreshness,
 	) {
-		return false
+		return false, false
 	}
 	if project, ok := e.db.GetProjectByAgentPath(
 		lookupPath, string(agent),
 	); ok &&
 		parser.NeedsProjectReparse(project) {
-		return false
+		return false, false
 	}
 	if e.db.GetDataVersionByAgentPath(lookupPath, string(agent)) <
 		db.CurrentDataVersion() {
-		return false
+		return false, false
 	}
 	effectiveMtime := fingerprint.MTimeNS
-	if storedMtime == effectiveMtime {
-		return true
-	}
 	if agent != parser.AgentCodex {
-		return false
+		return storedMtime == effectiveMtime, true
 	}
+	statFresh := storedMtime == effectiveMtime
 	if effectiveMtime < storedMtime {
 		indexPath := parser.CodexSessionIndexPath(path)
 		if indexPath != "" {
 			if _, err := os.Stat(indexPath); errors.Is(err, os.ErrNotExist) {
-				return true
+				statFresh = true
 			}
 		}
 	}
-	fileMtime := effectiveMtime
-	if info, err := os.Stat(path); err == nil {
-		fileMtime = info.ModTime().UnixNano()
+	if effectiveMtime > storedMtime {
+		fileMtime := effectiveMtime
+		if info, err := os.Stat(path); err == nil {
+			fileMtime = info.ModTime().UnixNano()
+		}
+		statFresh = fileMtime <= storedMtime
 	}
-	return effectiveMtime > storedMtime &&
-		fileMtime <= storedMtime &&
-		!e.codexIndexSessionNameChanged(path)
+	if !statFresh {
+		return false, false
+	}
+	changed, verified := e.codexIndexSessionNameState(path)
+	if !verified {
+		return true, false
+	}
+	return !changed, true
 }
 
 // codexIndexNeedsRefreshSince reports whether a Codex session whose transcript
@@ -11435,40 +11500,53 @@ func (e *Engine) codexIndexNeedsRefreshSince(
 }
 
 func (e *Engine) codexIndexSessionNameChanged(path string) bool {
+	changed, _ := e.codexIndexSessionNameState(path)
+	return changed
+}
+
+func (e *Engine) codexIndexSessionNameState(
+	path string,
+) (changed, verified bool) {
 	uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(path))
 	if uuid == "" {
-		return false
+		return false, false
 	}
-	currentName, ok := parser.LookupCodexThreadNameEntry(path, uuid)
+	currentName, ok, err := parser.ReadCodexThreadNameEntry(path, uuid)
+	if err != nil {
+		return false, false
+	}
 	if !ok {
 		// No index entry means no rename signal, not a rename to empty.
 		// Modern Codex releases stopped writing session_index.jsonl; a
 		// stored title compared against the absent index would force a
 		// full re-parse of every titled session on every sync, and the
 		// rewrite preserves the title, so the loop could never converge.
-		return false
+		return false, true
 	}
 	storedName, found, err := e.db.GetSessionName(
 		context.Background(), e.idPrefix+"codex:"+uuid,
 	)
 	if err != nil || !found {
-		return true
+		return true, true
 	}
-	return codexSessionNameDiffers(storedName, currentName)
+	return codexSessionNameDiffers(storedName, currentName), true
 }
 
-// codexCachedIndexSessionNameChanged limits title-based cache invalidation to
-// sources that already have stored session state. A cached parse failure has no
-// title to refresh and must retain its retry-suppression semantics.
-func (e *Engine) codexCachedIndexSessionNameChanged(path string) bool {
+// codexCachedIndexSessionNameState limits title-based cache invalidation to
+// sources that already have stored session state. A cached parse failure has
+// no title to refresh and its missing row counts as verified for cache-only
+// retry suppression; no digest can be stamped without a stored row hash.
+func (e *Engine) codexCachedIndexSessionNameState(
+	path string,
+) (changed, verified bool) {
 	lookupPath := path
 	if e.pathRewriter != nil {
 		lookupPath = e.pathRewriter(path)
 	}
 	if _, _, ok := e.db.GetFileInfoByPath(lookupPath); !ok {
-		return false
+		return false, true
 	}
-	return e.codexIndexSessionNameChanged(path)
+	return e.codexIndexSessionNameState(path)
 }
 
 // classifyCodexIndexPath maps a Codex session_index.jsonl change to the
