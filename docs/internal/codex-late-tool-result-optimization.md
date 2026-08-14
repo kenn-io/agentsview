@@ -1011,3 +1011,70 @@ PR。渐进启用：仅 Codex 且 `>128MB` 走新路径，特殊事件保守回�
 3. 之后再做引擎接线（>128MB 渐进启用）、P3.4 流式信号 reducer（含
    content-heuristic 失败判定与 secrets 归并）、P3.5 parity/fuzz/故障
    注入，再跑 945MB 真实档案验收。
+
+## 第六阶段实施记录（2026-08-13 第七轮，P3 完成）
+
+### 根因与修复
+
+1. **行字符串钉扎（legacy 与 staged 共有的 0.6–1.2× 留存）**：事件身份
+   字段（`call_id`、`status`、`agent_id` 等）是 gjson 对源行的切片，存入
+   内存模型后把整条输出行的 backing buffer 钉住——解析期间每次 GC 都把
+   "到目前为止全部行"标为 live，峰值随文件线性增长（1GB 时 staged
+   1777MiB、legacy 584MiB 都源于此）。staging sink 在入口处
+   `strings.Clone` 模型保留的小字段；content 本就以占位符替换。
+   修复后 1GB synthetic：peak live 21–25MiB、RSS ≤208MiB。
+2. **发布分块按 summary 字节数**：`tool_calls` 分块原按 500 行，2MB
+   summary 使单块累积整会话内容（1GB）；现按 16MiB 内容字节与行数双
+   上限 flush。
+3. **scratch 汇总表删除**：逐事件汇总 UPSERT（每事件第 3 条语句 + 内容
+   双写）移除，`ResolveSummary` 改为按 `seq` 顺序 Go 遍历该调用事件行
+   （每 agent 最后内容 + 首次出现顺序，与 legacy `SummarizeToolResultEvents`
+   逐字节一致）。SQL window-query 变体曾实装并回退：其内存 TEMP B 树把
+   真实档案 RSS 推高约 200MiB。UNIQUE(content) 索引 + `INSERT OR
+   IGNORE` 变体同样回退：2MB 键的 B 树比较使 rchar 从 4.5GB 涨到
+   16.5GB。
+4. **P3.4 流式信号 reducer**：content-heuristic 失败判定在发布事务解析
+   summary 时顺带捕获（`ContentFailures()`），发布后引擎用其重算
+   signals/findings 并 seed 增量状态；summary 全程只解析一遍、瞬时内存
+   有界。
+5. **渐进启用**：引擎在 Codex 且 `>128MB` 时走 staged 路径
+   （`stagedCodexParseMinBytes`），sink 随 retention lease 同生命周期释放；
+   期间进程 GC percent 临时降到 30（引用计数、结束恢复），把峰值堆压在
+   live set 附近。
+6. **orphan 对齐**：全量解析中未注册调用的事件与 collecting 路径一致地
+   进入 `toolCallUpdates`（legacy 全量消费者本就丢弃），不再被 staged
+   发布——乱序输出 perturbation 由此逐字段 parity。
+
+### P3.5 验证
+
+- `TestCodexStreamingParseParityWithLegacy`：双路导入逐字段比较（含
+  content/length/event_index/summary/findings/signals/checkpoint），
+  fixture 含 AWS key、status-errored、content-failure 三例。
+- perturbation 表：倒序、截断、重复/交错输出、垃圾/空行、forked meta
+  replay，全部通过完整双路 DB 比较。
+- 故障注入：summary 解析与事件插入两处注入失败，事务回滚后档案保持
+  完整旧内容。
+- `FuzzCodexStagedParityWithCollecting`：任意 transcript 体双路投影
+  parity（256KB/2000 行上限；更深的分支为两路共有的既有 O(n²)
+  orphan 插入，不区分路径）。
+- 引擎级：`TestMacroCodexEngineStagedFullParse`（150MB 真实引擎同步）；
+  追加延迟 `BenchmarkMacroCodexQuietAppend` 4.0–4.5ms（20–200ms 内）。
+
+### 真实 945MB 档案验收（`TestMacroCodexRealArchiveColdSync`）
+
+| 指标 | 实测 |
+|---|---:|
+| 冷全量 peak live heap | 117–129MiB |
+| 冷全量 RSS（三次） | 469 / 486 / 477MiB ✓ `<512MB` |
+| 冷全量源读取（rchar） | 4.5GB（转录一遍 + scratch 发布/汇总读回） |
+| 无变化二次同步 | 36KiB 读取、0 会话写入 ✓ |
+| 时长 | 23–35s |
+
+### 剩余偏差与边界
+
+- staged 路径的 orphan 事件与 legacy 全量路径一致地丢弃（见上 6）；
+  晚到输出仍由增量追加路径合并，行为未变。
+- `ResolveSummary` 的 agent 键归一化沿用 SQL 侧 `trim()` 语义差异点：
+  两路均以 `strings.TrimSpace` 在 Go 侧处理，fixture 与真实档案 parity
+  覆盖。
+- 磁盘侧 566MB×2 结果重复存储保持现状（不在本 PR）。
