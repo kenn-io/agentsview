@@ -756,6 +756,7 @@
   "settings_search_keywords_github": "GitHub Gist 令牌 发布 集成 token publish integration",
   "settings_search_keywords_remote_access": "远程 服务器 连接 鉴权 令牌 网络 remote server connection auth token network",
   "settings_loading": "正在加载设置...",
+  "settings_save_error_label": "错误",
   "settings_date_ranges_title": "日期范围",
   "settings_date_ranges_description": "在会话、用量、活动、趋势和质量页面之间共享日期选择。",
   "settings_date_ranges_link": "跨页面关联日期范围",

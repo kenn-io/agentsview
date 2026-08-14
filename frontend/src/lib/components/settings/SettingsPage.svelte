@@ -1,13 +1,15 @@
 <script lang="ts">
   import {
     Button,
+    FlashBanner,
     SearchInput,
     SettingsLayout,
     SettingsSection,
+    showFlash,
     TextInput,
     type SettingsCategory,
   } from "@kenn-io/kit-ui";
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { settings } from "../../stores/settings.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
@@ -91,6 +93,13 @@
     if (scroller) scroller.scrollTop = 0;
   });
 
+  $effect(() => {
+    const saveError = settings.saveError;
+    if (saveError) {
+      untrack(() => showFlash(saveError, { tone: "danger" }));
+    }
+  });
+
   onMount(() => {
     authTokenInput = getAuthToken();
     settings.load();
@@ -109,6 +118,7 @@
   class:settings-no-results={noSearchResults}
   bind:this={pageElement}
 >
+  <FlashBanner toneLabels={{ danger: m.settings_save_error_label() }} />
   {#if settings.loading || !settings.loaded || settings.needsAuth || settings.error}
     <div class="settings-standalone">
       <div class="settings-header">

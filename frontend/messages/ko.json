@@ -758,6 +758,7 @@
   "settings_search_keywords_github": "GitHub Gist 토큰 게시 통합 token publish integration",
   "settings_search_keywords_remote_access": "원격 서버 연결 인증 토큰 네트워크 remote server connection auth token network",
   "settings_loading": "설정을 불러오는 중...",
+  "settings_save_error_label": "오류",
   "settings_date_ranges_title": "날짜 범위",
   "settings_date_ranges_description": "세션, 사용량, 활동, 트렌드, 품질 페이지에서 선택한 날짜 범위를 공유합니다.",
   "settings_date_ranges_link": "페이지 간 날짜 범위 연결",

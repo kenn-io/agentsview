@@ -783,6 +783,7 @@
   "settings_search_keywords_github": "GitHub Gist token publish integration",
   "settings_search_keywords_remote_access": "remote server connection auth token network",
   "settings_loading": "Loading settings...",
+  "settings_save_error_label": "Error",
   "settings_date_ranges_title": "Date ranges",
   "settings_date_ranges_description": "Share date selections across Sessions, Usage, Activity, Trends, and Quality.",
   "settings_date_ranges_link": "Link date ranges across pages",

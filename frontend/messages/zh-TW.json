@@ -756,6 +756,7 @@
   "settings_search_keywords_github": "GitHub Gist 權杖 發佈 整合 token publish integration",
   "settings_search_keywords_remote_access": "遠端 伺服器 連線 驗證 權杖 網路 remote server connection auth token network",
   "settings_loading": "正在載入設定...",
+  "settings_save_error_label": "錯誤",
   "settings_date_ranges_title": "日期範圍",
   "settings_date_ranges_description": "在對話、用量、活動、趨勢和品質頁面之間共享日期選擇。",
   "settings_date_ranges_link": "跨頁面連結日期範圍",
