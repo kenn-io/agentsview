@@ -231,6 +231,93 @@ func TestProcessFileS3ChangedFingerprintBypassesMtimeSkipCache(t *testing.T) {
 	require.Len(t, res.results, 1)
 }
 
+func TestProcessFileS3RestoredSessionBypassesSkipCache(t *testing.T) {
+	database := openTestDB(t)
+	path := "s3://bucket/laptop/raw/claude/test-proj/restored.jsonl"
+	first := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T00:00:00Z", "Before").
+		AddClaudeAssistant("2024-01-01T00:00:05Z", "old reply").
+		String()
+	second := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T00:00:00Z", "After!").
+		AddClaudeAssistant("2024-01-01T00:00:05Z", "new reply").
+		String()
+	require.Len(t, second, len(first), "test fixture must keep size stable")
+	mtime := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC).UnixNano()
+	const fingerprint = "s3:fingerprint:stable"
+
+	var content atomic.Value
+	content.Store(first)
+	oldFetch := fetchS3Object
+	t.Cleanup(func() { fetchS3Object = oldFetch })
+	var fetchCalls atomic.Int64
+	fetchS3Object = func(got string) (io.ReadCloser, error) {
+		require.Equal(t, path, got)
+		fetchCalls.Add(1)
+		return io.NopCloser(strings.NewReader(content.Load().(string))), nil
+	}
+
+	e := &Engine{
+		db:               database,
+		ephemeral:        true,
+		skipCache:        make(map[string]int64),
+		skipFingerprints: make(map[string]string),
+		skipHashKeys:     make(map[string]string),
+	}
+	file := parser.DiscoveredFile{
+		Agent:             parser.AgentClaude,
+		Path:              path,
+		Project:           "test-proj",
+		Machine:           "laptop",
+		SourceSize:        int64(len(first)),
+		SourceMtime:       mtime,
+		SourceFingerprint: fingerprint,
+	}
+	initial := e.processFile(t.Context(), file)
+	require.NoError(t, initial.err)
+	require.Len(t, initial.results, 1)
+	written, _, failed, _ := e.writeBatch([]pendingWrite{{
+		sess:         initial.results[0].Session,
+		msgs:         initial.results[0].Messages,
+		forceReplace: initial.forceReplace,
+	}}, syncWriteDefault, false)
+	require.Equal(t, 1, written)
+	require.Zero(t, failed)
+	e.cacheSkip(path, mtime, fingerprint)
+
+	require.NoError(t, database.SoftDeleteSession("laptop~restored"))
+	content.Store(second)
+	restored, err := database.RestoreSession("laptop~restored")
+	require.NoError(t, err)
+	require.EqualValues(t, 1, restored)
+	require.Less(t, database.GetSessionDataVersion("laptop~restored"),
+		db.CurrentDataVersion())
+	fetchCalls.Store(0)
+
+	result := e.processFile(t.Context(), file)
+
+	require.NoError(t, result.err)
+	assert.False(t, result.skip,
+		"restore-invalidated data must bypass an unchanged S3 cache entry")
+	assert.EqualValues(t, 1, fetchCalls.Load())
+	require.Len(t, result.results, 1)
+	require.Len(t, result.results[0].Messages, 2)
+	assert.Equal(t, "After!", result.results[0].Messages[0].Content)
+	written, _, failed, _ = e.writeBatch([]pendingWrite{{
+		sess:         result.results[0].Session,
+		msgs:         result.results[0].Messages,
+		forceReplace: result.forceReplace,
+	}}, syncWriteDefault, false)
+	require.Equal(t, 1, written)
+	require.Zero(t, failed)
+	stored, err := database.GetAllMessages(t.Context(), "laptop~restored")
+	require.NoError(t, err)
+	require.Len(t, stored, 2)
+	assert.Equal(t, "After!", stored[0].Content)
+	assert.Equal(t, db.CurrentDataVersion(),
+		database.GetSessionDataVersion("laptop~restored"))
+}
+
 func TestFilterFilesByMtimeKeepsS3ChangedFingerprint(t *testing.T) {
 	database := openTestDB(t)
 	path := "s3://bucket/laptop/raw/claude/test-proj/fingerprint.jsonl"
