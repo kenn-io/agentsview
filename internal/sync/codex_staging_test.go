@@ -269,15 +269,6 @@ func timePtr(s string) *string { return &s }
 
 var _ = timePtr // retained for future helpers
 
-func definiteFindingCount(findings []db.SecretFinding) int {
-	n := 0
-	for _, f := range findings {
-		if f.Confidence == "definite" {
-			n++
-		}
-	}
-	return n
-}
 
 func sortFindings(findings []db.SecretFinding) {
 	sort.Slice(findings, func(i, j int) bool {

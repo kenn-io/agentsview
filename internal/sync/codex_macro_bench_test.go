@@ -518,3 +518,58 @@ func TestMacroCodexStagedParseMemoryGates(t *testing.T) {
 		})
 	}
 }
+
+// TestMacroCodexEngineStagedFullParse syncs a >128MB Codex transcript
+// through the real engine and asserts the staged streaming path (the
+// >stagedCodexParseMinBytes cutoff) publishes the message, tool-call,
+// event, and summary rows the archive expects: events carry real content,
+// summaries carry the per-call aggregated output, and the session counts
+// match the fixture shape.
+func TestMacroCodexEngineStagedFullParse(t *testing.T) {
+	const turns = 750
+	const outBytes = 200 << 10 // 150MB total, above the 128MB cutoff
+	root, _, uuid, _ := writeCodexStreamingBenchmarkTranscript(
+		t, turns, outBytes,
+	)
+
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {root},
+		},
+		Machine: "macro-host",
+	})
+	t.Cleanup(engine.Close)
+
+	stats := engine.SyncAll(t.Context(), nil)
+	require.Zero(t, stats.Failed)
+	require.Equal(t, 1, stats.Synced)
+
+	sessionID := "codex:" + uuid
+	got, err := database.GetSession(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, turns*3, got.MessageCount)
+	require.Equal(t, turns, got.UserMessageCount)
+
+	msgs, err := database.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Len(t, msgs, turns*3)
+	var eventCount int
+	var summaryBytes int
+	for _, m := range msgs {
+		for _, tc := range m.ToolCalls {
+			summaryBytes += len(tc.ResultContent)
+			for _, ev := range tc.ResultEvents {
+				eventCount++
+				require.NotEmpty(t, ev.Content,
+					"staged publish must store real event content")
+				require.GreaterOrEqual(t, ev.ContentLength, outBytes,
+					"event content length must match the staged row")
+			}
+		}
+	}
+	require.Equal(t, turns, eventCount)
+	require.Greater(t, summaryBytes, turns*(outBytes-1<<16),
+		"per-call summaries must carry the staged output content")
+}

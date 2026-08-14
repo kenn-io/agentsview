@@ -53,6 +53,11 @@ type stagedFindingPos struct {
 	eventIndex int
 }
 
+// stagedCodexParseMinBytes is the full-parse size above which a Codex
+// source streams through the scratch staging path instead of the
+// collecting parser.
+const stagedCodexParseMinBytes = 128 << 20
+
 const codexStagingSchema = `
 CREATE TABLE stage_events (
     seq INTEGER PRIMARY KEY,
@@ -133,6 +138,69 @@ func (s *codexStagingSink) Close() error {
 // Path returns the staging file path for ATTACH-based publishing.
 func (s *codexStagingSink) Path() string {
 	return s.path
+}
+
+// stagedCodexParseOutcome runs the streaming Codex parse through sink and
+// folds the result into the same ParseOutcome shape the provider's
+// collecting parse returns, so the engine's downstream outcome pipeline is
+// shared between the two paths.
+func stagedCodexParseOutcome(
+	cfg parser.ProviderConfig,
+	source parser.SourceRef,
+	sink *codexStagingSink,
+) (parser.ParseOutcome, error) {
+	sess, msgs, cursor, hashState, anchorDigest, retryReason, err :=
+		parser.ParseCodexSessionStreaming(cfg, source, sink)
+	if err != nil {
+		return parser.ParseOutcome{}, err
+	}
+	result := parser.ParseResultOutcome{
+		Result: parser.ParseResult{
+			Session:                *sess,
+			Messages:               msgs,
+			Checkpoint:             cursor,
+			CheckpointHashState:    hashState,
+			CheckpointAnchorDigest: anchorDigest,
+		},
+		DataVersion: parser.DataVersionCurrent,
+	}
+	if retryReason != "" {
+		// An explicit fork parent could not be resolved: keep the child
+		// visible but mark its stored data version for retry so a later
+		// unchanged-object sync can replace the temporary overcount.
+		result.DataVersion = parser.DataVersionNeedsRetry
+		result.RetryReason = retryReason
+	}
+	return parser.ParseOutcome{
+		Results:           []parser.ParseResultOutcome{result},
+		ResultSetComplete: true,
+		ForceReplace:      true,
+	}, nil
+}
+
+// definiteFindingCount counts the definite-confidence findings in a
+// merged findings slice, stamping the session's secret-leak signal.
+func definiteFindingCount(findings []db.SecretFinding) int {
+	n := 0
+	for _, f := range findings {
+		if f.Confidence == "definite" {
+			n++
+		}
+	}
+	return n
+}
+
+// closeCodexStagingSinks releases a batch of staging sinks, removing their
+// scratch files. It is the staging analog of releaseParseRetentionLeases.
+func closeCodexStagingSinks(sinks []*codexStagingSink) {
+	for _, s := range sinks {
+		if s == nil {
+			continue
+		}
+		if err := s.Close(); err != nil {
+			log.Printf("closing codex staging sink: %v", err)
+		}
+	}
 }
 
 func (s *codexStagingSink) AppendMessage(m parser.ParsedMessage) {
