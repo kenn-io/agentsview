@@ -12888,7 +12888,7 @@ func TestIncrementalSync_CodexAppend(t *testing.T) {
 	assert.Equal(t, 1, sess.UserMessageCount)
 }
 
-func TestSyncPathsCodexSameStatInPlaceRewriteUsesContentHash(t *testing.T) {
+func TestSyncPathsCodexSameStatInPlaceRewriteTrustedByCheckpoint(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
 
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229f5"
@@ -12934,17 +12934,31 @@ func TestSyncPathsCodexSameStatInPlaceRewriteUsesContentHash(t *testing.T) {
 
 	msgs := fetchMessages(t, env.db, "codex:"+uuid)
 	require.Len(t, msgs, 1)
-	assert.Equal(t, "bravo request", msgs[0].Content)
+	assert.Equal(t, "alpha request", msgs[0].Content,
+		"append-trust mode trusts the checkpoint stat gate over a same-stat rewrite")
 	after, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, after)
 	require.NotNil(t, after.FileHash)
-	assert.False(t, after.LastWriteIncremental,
-		"same-size rewrite must use a full replacement")
-	assert.NotEqual(t, beforeHash, *after.FileHash)
-	wantHash, err := sync.ComputeFileHash(path)
+	assert.Equal(t, beforeHash, *after.FileHash,
+		"a trusted skip must not rewrite the stored hash")
+	cp, ok, err := env.db.GetParserCheckpoint("codex:" + uuid)
 	require.NoError(t, err)
-	assert.Equal(t, wantHash, *after.FileHash)
+	require.True(t, ok)
+	assert.Equal(t, int64(len(original)), cp.Offset,
+		"a trusted skip must not advance the checkpoint")
+
+	// The periodic audit (an authoritative rebuild) still catches the
+	// in-place rewrite and re-establishes strong freshness.
+	env.engine.ResyncAll(context.Background(), nil)
+	msgs = fetchMessages(t, env.db, "codex:"+uuid)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "bravo request", msgs[0].Content)
+	audited, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err)
+	require.NotNil(t, audited)
+	require.NotNil(t, audited.FileHash)
+	assert.NotEqual(t, beforeHash, *audited.FileHash)
 }
 
 func TestSyncAllCodexPathRewriterSameStatRewriteUsesContentHash(t *testing.T) {

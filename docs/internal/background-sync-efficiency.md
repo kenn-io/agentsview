@@ -63,17 +63,36 @@ aggregates.
 
 Cursor correctness assumes that growth is append-only. A same-inode file can
 grow after bytes inside its already-committed prefix have been rewritten. Size,
-identity, and boundary checks do not detect that case, and the current
-full-source fingerprint is not compared with a separately verified stored prefix
-before incremental parsing. Closing this gap would require rolling hash state or
-explicit prefix verification and remains deferred.
+identity, and boundary checks cannot prove the prefix was never modified.
+
+Persisted checkpoints close most of the gap under the documented append-trust
+mode:
+
+- The checkpoint stores a 128 KiB tail anchor of the committed prefix, the
+  file identity, the committed offset, the parser cursor, and a resumable
+  SHA-256 state over the committed prefix.
+- An append is only resumed when the identity matches, the size only grew,
+  and the current bytes at the anchor region match the stored anchor; the
+  full-file fingerprint is then derived by hashing only the appended bytes.
+- An unchanged checkpointed source is skipped on stat alone (no transcript
+  read). An anchor mismatch, identity change, truncation, or undecodable
+  checkpoint forces an authoritative full parse and checkpoint rebuild.
+- A same-size, same-mtime in-place rewrite that preserves the anchor region is
+  trusted (append-trust). Periodic full audits (`ResyncAll`, `--full`,
+  force-reverification passes) still hash the whole source and repair such
+  rewrites. Strict verification remains available by bypassing the checkpoint
+  gate.
 
 ## Cost model and regression evidence
 
 A warm Codex cursor makes continuation-state parsing scale with appended records
-rather than transcript history. End-to-end append sync is still O(file): the
-provider's `Fingerprint` hashes the complete source and the engine's
-`ComputeFileHashPrefix` hashes through the newly committed offset.
+rather than transcript history. With a persisted checkpoint, end-to-end append
+sync is O(d): the engine resumes the SHA-256 state over only the appended
+bytes, verifies the 128 KiB tail anchor, and parses only the new tail. An
+unchanged checkpointed source costs a stat and a DB lookup, not a transcript
+read. Without a checkpoint (legacy sessions, first sync after upgrade) the
+previous O(file) fingerprint and prefix-hash reads still apply until the next
+full parse persists one.
 
 - `BenchmarkCodexIncrementalCursor` in `internal/parser` compares cold prefix
   reconstruction with the exact warm cursor. It is diagnostic because
@@ -84,7 +103,8 @@ provider's `Fingerprint` hashes the complete source and the engine's
 - `BenchmarkCodexIncrementalLateToolOutput` in `internal/sync` measures a
   stream where every appended batch carries the output for the previous
   batch's call: the base code reparses the whole transcript per batch, while
-  the incremental path attaches each event to its stored call.
+  the checkpoint path attaches each event to its stored call and hashes only
+  the appended bytes.
 
 The maintained behavioral gate inventory is in
 [Performance Gates](performance-gates.md).

@@ -6403,12 +6403,13 @@ func TestProjectIdentityIncrementalStatePreservesExplicitSourceProject(
 				func(
 					_ string,
 					inc *db.IncrementalInfo,
-				) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, time.Time, int64, *string, error) {
+				) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, time.Time, int64, *string, []byte, error) {
 					return []parser.ParsedMessage{{
 						Role: parser.RoleAssistant, Content: "appended",
 						Ordinal: inc.NextOrdinal,
-					}}, nil, nil, appendedInfo.ModTime(), int64(len(appended)), nil, nil
+					}}, nil, nil, appendedInfo.ModTime(), int64(len(appended)), nil, nil, nil
 				},
+				nil, "", nil,
 			)
 			require.True(t, ok)
 			require.NotNil(t, result.incremental)
@@ -6504,10 +6505,11 @@ func TestProjectIdentityLegacyMappedSnapshotReparsesBeforeIncrementalAppend(
 		func(
 			_ string,
 			_ *db.IncrementalInfo,
-		) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, time.Time, int64, *string, error) {
+		) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, time.Time, int64, *string, []byte, error) {
 			parseCalled = true
-			return nil, nil, nil, time.Time{}, 0, nil, nil
+			return nil, nil, nil, time.Time{}, 0, nil, nil, nil
 		},
+		nil, "", nil,
 	)
 	assert.False(t, ok,
 		"legacy snapshots must fall through to a source-aware full parse")
@@ -7974,6 +7976,7 @@ func TestTryProviderIncrementalAppendPassesPersistedSessionID(t *testing.T) {
 			Size:    info.Size(),
 			MTimeNS: info.ModTime().UnixNano(),
 		},
+		nil, "", nil, nil,
 	)
 
 	require.True(t, applied)

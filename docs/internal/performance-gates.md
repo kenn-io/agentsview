@@ -17,6 +17,7 @@ contracts are documented in
 | Discovery O(sources) root work | Gemini rebuilt its project map per session; positron/vscode-copilot re-read `workspace.json` per session. A large store spent 2m47s in discovery.                                                       | #912                                           |
 | Unchanged sources reparsed     | The provider migration dropped pre-parse DB-freshness skips; every full sync reparsed and rewrote untouched sessions.                                                                                   | `providerSourceUnchangedInDB` (#883 follow-up) |
 | O(history) incremental appends | Every streamed line ran a full signal recompute (reload all messages, secret regex scan) and chunk merges delete+reinserted every message row. ~4,700 session updates/day each paid O(session history). | #954                                           |
+| O(file) warm Codex appends     | A warm append still hashed the full source for the fingerprint and re-hashed the committed prefix after every write; late tool outputs forced a full transcript reparse, and unchanged startup hashed every source before the DB freshness skip. | persisted parser checkpoints (this PR)         |
 | Bulk ingest throughput         | Full resync ran per-row inserts and rebuilt FTS incrementally; 26.7k sessions took 1m17s.                                                                                                               | #411                                           |
 | Event storms                   | One SSE emit per watcher flush drove ~1/s dashboard refetch; SQLite WAL sidecar events fanned out to every session in a shared DB.                                                                      | #367, #956                                     |
 | Per-row query shape            | `GetDailyUsage` ran 1.2M `json_extract` calls per scan and had no date pushdown.                                                                                                                        | #309                                           |
@@ -37,6 +38,18 @@ runner noise and fail loudly:
 - `TestWriteIncrementalDebouncesSignalRecompute` and the rest of
   `internal/sync/signal_schedule_test.go` — streaming appends must debounce
   the O(history) signal recompute.
+- `TestCodexCheckpoint*` in `internal/sync/checkpoint_test.go` — a full Codex
+  parse persists a checkpoint, an append resumes from it and advances it
+  atomically with the delta, truncation/anchor mismatch force an
+  authoritative rebuild, and an unchanged checkpointed source is trusted on
+  stat alone (append-trust; the audit path still catches rewrites).
+- `TestParserCheckpointRoundTrip` and
+  `TestWriteSessionIncrementalPersistsCheckpointInSameTx` (`internal/db`) —
+  checkpoint rows round-trip and are committed in the same transaction as the
+  incremental delta.
+- `TestFullSyncPassIsByteBudgeted`, `TestBulkParseRetentionBudgetUsesWeightedAdmission`,
+  and `TestCollectAndBatchFlushesOnByteCap` (`internal/sync`) — bulk passes
+  and write batches are bounded by estimated bytes, not session count alone.
 - The count-based seam tests in `internal/parser`
   (`discovery_workspace_manifest_test.go`, gemini/antigravity provider tests)
   — root-derived project info is built once per root, not once per source.
@@ -79,9 +92,13 @@ head and its merge base on the same runner, then compares the outputs with
 - `BenchmarkSyncPathsIncrementalAppend` — absorb one appended line into a
   1,000-message session.
 - `BenchmarkCodexIncrementalSyncReads` — a warm Codex cursor append plus the
-  remaining full-source fingerprint and committed-prefix hash reads. See
+  remaining full-source fingerprint and committed-prefix hash reads (the
+  pre-checkpoint cost model). See
   [Background Sync Efficiency](background-sync-efficiency.md) for the
   cost-model boundary.
+- `BenchmarkCodexIncrementalLateToolOutput` — a checkpoint-resumed Codex
+  append stream: the base code reparses the transcript and re-hashes the
+  source per batch, the checkpoint path hashes only the appended bytes.
 - `BenchmarkSyncAllColdArchive` — first-sync ingest throughput through the
   default per-session write path.
 - `BenchmarkResyncBulkIngest` — the same archive through the resync bulk-write

@@ -2484,21 +2484,24 @@ type IncrementalInfo struct {
 }
 
 type IncrementalSessionUpdate struct {
-	EndedAt                 *string
-	TerminationStatus       *string
-	MsgCount                int
-	UserMsgCount            int
-	FileSize                int64
-	FileMtime               int64
-	FileHash                *string
-	NextOrdinal             int
-	LastEntryUUID           string
-	TotalOutputTokens       int
-	PeakContextTokens       int
-	HasTotalOutputTokens    bool
-	HasPeakContextTokens    bool
-	SubagentLinks           []ToolCallSubagentLink
-	ToolCallResultUpdates   []ToolCallResultUpdate
+	EndedAt               *string
+	TerminationStatus     *string
+	MsgCount              int
+	UserMsgCount          int
+	FileSize              int64
+	FileMtime             int64
+	FileHash              *string
+	NextOrdinal           int
+	LastEntryUUID         string
+	TotalOutputTokens     int
+	PeakContextTokens     int
+	HasTotalOutputTokens  bool
+	HasPeakContextTokens  bool
+	SubagentLinks         []ToolCallSubagentLink
+	ToolCallResultUpdates []ToolCallResultUpdate
+	// Checkpoint is the machine-local parser checkpoint to persist in the
+	// same transaction as this delta. nil keeps any existing checkpoint.
+	Checkpoint              *ParserCheckpoint
 	BlockedResultCategories map[string]bool
 }
 
@@ -2784,6 +2787,27 @@ func (db *DB) GetFileInfoByAgentPath(
 		return 0, 0, false
 	}
 	return s.Int64, m.Int64, true
+}
+
+// GetFileIdentityByAgentPath extends GetFileInfoByAgentPath with the stored
+// file identity (inode/device), used by the stat-only freshness gate that
+// skips a checkpointed Codex source without hashing its transcript.
+func (db *DB) GetFileIdentityByAgentPath(
+	path, agent string,
+) (size int64, mtime int64, inode, device uint64, ok bool) {
+	var s, m, i, d sql.NullInt64
+	err := db.getReader().QueryRow(
+		"SELECT file_size, file_mtime, file_inode, file_device FROM sessions"+
+			" WHERE file_path = ? AND agent = ?"+
+			" AND (deletion_cause IS NULL"+
+			" OR deletion_cause <> '"+deletionCauseSourceMissing+"')"+
+			" ORDER BY file_mtime DESC LIMIT 1",
+		path, agent,
+	).Scan(&s, &m, &i, &d)
+	if err != nil || !s.Valid || !m.Valid || !i.Valid || !d.Valid {
+		return 0, 0, 0, 0, false
+	}
+	return s.Int64, m.Int64, uint64(i.Int64), uint64(d.Int64), true
 }
 
 // VirtualContainerMemberFreshness is one stored virtual member's freshness

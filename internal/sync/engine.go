@@ -7595,13 +7595,13 @@ func (e *Engine) retentionBudget() *parseRetentionBudget {
 	return e.parseRetentionBudget
 }
 
-// beginBulkRetentionPass installs the unthrottled bulk retention budget for
+// beginBulkRetentionPass installs the byte-bounded bulk retention budget for
 // the duration of an archive-scale pass and returns the restore func the
 // caller must defer. Bulk passes (full sync, resync rebuild, remote import
-// processing) run at full worker parallelism; the memory they retain is
-// returned to the OS by the end-of-pass scavenge instead of being bounded
-// per source. The caller holds syncMu, so no other pass can observe the
-// switched budget.
+// processing) use the same weighted byte admission as daemon passes: large
+// sources run exclusively, small sources share the capacity, and batches
+// flush on count or estimated bytes. The caller holds syncMu, so no other
+// pass can observe the switched budget.
 func (e *Engine) beginBulkRetentionPass() func() {
 	e.bulkRetentionOnce.Do(func() {
 		if e.bulkRetentionBudget == nil {
@@ -7643,6 +7643,7 @@ func (e *Engine) collectAndBatch(
 	}
 
 	var pending []pendingWrite
+	var pendingBytes int64
 	var pendingLeases []*parseRetentionLease
 	var pendingCacheWrites []skipCacheWrite
 	baselineCacheWrites := make(
@@ -7866,8 +7867,22 @@ func (e *Engine) collectAndBatch(
 				}
 				e.recordProviderStatHash(ctx, *pw.providerStatHash)
 			}
+			// Persist full-parse checkpoints only for rows whose session
+			// commit succeeded, mirroring the providerStatHash gate: an
+			// unconfirmed checkpoint would let a later append resume from a
+			// prefix that was never durably parsed.
+			for i, pw := range pending {
+				if len(pw.checkpoint) == 0 {
+					continue
+				}
+				if i >= len(outcome.written) || !outcome.written[i] {
+					continue
+				}
+				e.persistFullParseCheckpoint(ctx, pw)
+			}
 		}()
 		pending = pending[:0]
+		pendingBytes = 0
 		pendingLeases = pendingLeases[:0]
 		pendingCacheWrites = pendingCacheWrites[:0]
 	}
@@ -8132,6 +8147,8 @@ func (e *Engine) collectAndBatch(
 					sess:              pr.Session,
 					msgs:              pr.Messages,
 					usageEvents:       pr.UsageEvents,
+					sourceBytes:       r.sourceBytes,
+					checkpoint:        pr.Checkpoint,
 					needsRetry:        needsRetry,
 					forceReplace:      r.forceReplace,
 					baselineEligible:  vetoed == 0 && r.providerFailureCount == 0 && !needsRetry,
@@ -8148,6 +8165,7 @@ func (e *Engine) collectAndBatch(
 					pw.providerStatHash = r.providerStatHash
 				}
 				pending = append(pending, pw)
+				pendingBytes += pw.sourceBytes
 				if runtimeMetrics != nil {
 					runtimeMetrics.pendingWrites(len(pending))
 				}
@@ -8164,7 +8182,8 @@ func (e *Engine) collectAndBatch(
 					sourceFingerprint: r.sourceFingerprint,
 				})
 			}
-			if len(pending) >= batchSize || budget.underPressure() {
+			if len(pending) >= batchSize || budget.underPressure() ||
+				pendingBytes >= parseBatchBytesLimit {
 				flushPending()
 			}
 			// A Kiro SQLite store is discovered as one container source
@@ -8315,14 +8334,18 @@ func drainResults(results <-chan syncJob, remaining int) {
 // incremental JSONL parse, used to partially update the
 // session row without overwriting unrelated columns.
 type incrementalUpdate struct {
-	sessionID            string
-	project              string
-	sourceProject        string
-	machine              string
-	cwd                  string
-	msgs                 []parser.ParsedMessage
-	links                []parser.ClaudeSubagentLink
-	toolCallUpdates      []parser.ParsedToolCallUpdate
+	sessionID       string
+	project         string
+	sourceProject   string
+	machine         string
+	cwd             string
+	msgs            []parser.ParsedMessage
+	links           []parser.ClaudeSubagentLink
+	toolCallUpdates []parser.ParsedToolCallUpdate
+	// checkpoint is the machine-local parser checkpoint to persist in the
+	// same transaction as this incremental delta. nil keeps the existing
+	// checkpoint (or leaves none).
+	checkpoint           *db.ParserCheckpoint
 	endedAt              time.Time
 	terminationStatus    *string
 	msgCount             int // total (old + new)
@@ -8358,6 +8381,10 @@ type sourceMissingMember struct {
 }
 
 type processResult struct {
+	// sourceBytes is the physical source size used to acquire the retention
+	// lease and to account this result against the pending write batch byte
+	// cap. Zero on lease-free skips.
+	sourceBytes        int64
 	results            []parser.ParseResult
 	excludedSessionIDs []string
 	// sourceMissingMembers carries stored sessions whose virtual member
@@ -8772,27 +8799,66 @@ func (e *Engine) processProviderFile(
 		}, true
 	}
 
-	fingerprint, err := provider.Fingerprint(ctx, source)
-	if err != nil {
-		if file.ForceParse &&
-			providerDeletedPhysicalSQLiteSource(file.Agent, file.Path) &&
-			errors.Is(err, os.ErrNotExist) {
-			excludedSessionIDs, ownershipErr :=
-				e.providerSourceSessionIDsForForceReplace(
-					ctx, provider, source,
-				)
-			if ownershipErr != nil {
+	// Codex checkpoint gate: when a persisted checkpoint proves the source is
+	// unchanged (stat-trust) or safely append-only (tail anchor + resumable
+	// hash), resolve the fingerprint without hashing the transcript prefix.
+	// Anything the checkpoint cannot prove falls through to provider.Fingerprint.
+	var fingerprint parser.SourceFingerprint
+	var codexCheckpoint *db.ParserCheckpoint
+	var codexSeed []byte
+	var codexFullHash string
+	var codexHashState []byte
+	codexForceFullParse := false
+	if isCodexFormatAgent(file.Agent) {
+		cpResult, cpErr := e.codexCheckpointFingerprint(ctx, source, file)
+		if cpErr != nil {
+			log.Printf("codex checkpoint %s: %v", file.Path, cpErr)
+		} else {
+			switch cpResult.decision {
+			case codexCheckpointUnchanged:
 				return processResult{
-					err:         ownershipErr,
+					skip:        true,
+					mtime:       cpResult.fingerprint.MTimeNS,
 					noCacheSkip: true,
 				}, true
+			case codexCheckpointAppend:
+				fingerprint = cpResult.fingerprint
+				codexCheckpoint = cpResult.checkpoint
+				codexSeed = cpResult.checkpoint.Cursor
+				codexFullHash = cpResult.fingerprint.Hash
+				codexHashState = cpResult.hashState
+			case codexCheckpointInvalid:
+				// The persisted checkpoint exists but cannot prove the
+				// committed prefix. Never append against it: rebuild the
+				// session authoritatively and replace stored rows.
+				codexForceFullParse = true
 			}
-			return processResult{
-				excludedSessionIDs: excludedSessionIDs,
-				forceReplace:       true,
-			}, true
 		}
-		return processResult{err: err}, true
+	}
+	if codexCheckpoint == nil {
+		var err error
+		fingerprint, err = provider.Fingerprint(ctx, source)
+		if err != nil {
+			if file.ForceParse &&
+				providerDeletedPhysicalSQLiteSource(file.Agent, file.Path) &&
+				errors.Is(err, os.ErrNotExist) {
+				excludedSessionIDs, ownershipErr :=
+					e.providerSourceSessionIDsForForceReplace(
+						ctx, provider, source,
+					)
+				if ownershipErr != nil {
+					return processResult{
+						err:         ownershipErr,
+						noCacheSkip: true,
+					}, true
+				}
+				return processResult{
+					excludedSessionIDs: excludedSessionIDs,
+					forceReplace:       true,
+				}, true
+			}
+			return processResult{err: err}, true
+		}
 	}
 	cacheKey := providerProcessCacheKey(
 		file, source, fingerprint, providerSemantics,
@@ -8891,9 +8957,16 @@ func (e *Engine) processProviderFile(
 	// When the incremental path declines but signals forceReplace,
 	// carry the flag onto the full parse so the write path replaces
 	// stored messages instead of appending on top of stale rows.
-	incRes, incOK := e.tryProviderIncrementalAppend(
-		ctx, provider, source, file, fingerprint,
-	)
+	var incRes processResult
+	var incOK bool
+	if codexForceFullParse {
+		incRes = processResult{forceReplace: true}
+	} else {
+		incRes, incOK = e.tryProviderIncrementalAppend(
+			ctx, provider, source, file, fingerprint,
+			codexSeed, codexFullHash, codexHashState, codexCheckpoint,
+		)
+	}
 	if incOK {
 		incRes.mtime = fingerprint.MTimeNS
 		incRes.cacheSkip = cacheSkip
@@ -8952,7 +9025,8 @@ func (e *Engine) processProviderFile(
 	// here the provider parses the source, so acquire the retention lease that
 	// bounds the parsed payload and attach it to every result carrying that
 	// data. A result still classified as a skip below releases it immediately.
-	lease, err := e.retentionBudget().acquire(ctx, parseRetentionSourceBytes(file))
+	sourceBytes := parseRetentionSourceBytes(file)
+	lease, err := e.retentionBudget().acquire(ctx, sourceBytes)
 	if err != nil {
 		return processResult{err: err}, true
 	}
@@ -9041,6 +9115,7 @@ func (e *Engine) processProviderFile(
 			skip:                  !outcome.ForceReplace,
 			excludedSessionIDs:    excludedSessionIDs,
 			sourceMissingMembers:  missingMembers,
+			sourceBytes:           sourceBytes,
 			mtime:                 fingerprint.MTimeNS,
 			cacheSkip:             cacheSkip,
 			cacheKey:              cacheKey,
@@ -9086,6 +9161,7 @@ func (e *Engine) processProviderFile(
 		results:               filteredResults,
 		excludedSessionIDs:    excludedSessionIDs,
 		sourceMissingMembers:  missingMembers,
+		sourceBytes:           sourceBytes,
 		mtime:                 fingerprint.MTimeNS,
 		cacheSkip:             cacheSkip,
 		cacheKey:              cacheKey,
@@ -10793,6 +10869,10 @@ func (e *Engine) tryProviderIncrementalAppend(
 	source parser.SourceRef,
 	file parser.DiscoveredFile,
 	fingerprint parser.SourceFingerprint,
+	seed []byte,
+	fullHash string,
+	hashState []byte,
+	checkpoint *db.ParserCheckpoint,
 ) (processResult, bool) {
 	// Match the legacy tryIncrementalJSONL gate, which suppressed append
 	// deltas only under the engine-wide forceParse (parse-diff) flag. A
@@ -10831,7 +10911,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 
 	parseFn := func(
 		_ string, inc *db.IncrementalInfo,
-	) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, time.Time, int64, *string, error) {
+	) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, time.Time, int64, *string, []byte, error) {
 		// The Claude parser needs the stored tail's provider message id
 		// so its queued-command masking fallback fires only for a real
 		// same-message.id continuation; without it, every routine queued
@@ -10850,6 +10930,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 				Offset:                    inc.FileSize,
 				StartOrdinal:              inc.NextOrdinal,
 				Machine:                   inc.Machine,
+				Seed:                      seed,
 				LastEntryUUID:             inc.LastEntryUUID,
 				StoredAgentLabel:          inc.AgentLabel,
 				StoredEntrypoint:          inc.Entrypoint,
@@ -10859,14 +10940,14 @@ func (e *Engine) tryProviderIncrementalAppend(
 			},
 		)
 		if perr != nil {
-			return nil, nil, nil, time.Time{}, 0, nil, perr
+			return nil, nil, nil, time.Time{}, 0, nil, nil, perr
 		}
 		switch status {
 		case parser.IncrementalNeedsFullParse:
 			if outcome.ForceReplace {
 				// Signal the shared helper to fall back to a
 				// full parse that replaces stored messages.
-				return nil, nil, nil, time.Time{}, 0, nil,
+				return nil, nil, nil, time.Time{}, 0, nil, nil,
 					parser.ErrIncrementalNeedsFullParse
 			}
 			// A plain full-parse fallback without a replace request.
@@ -10874,9 +10955,9 @@ func (e *Engine) tryProviderIncrementalAppend(
 			// fallbacks (a DAG fork can drop or re-branch stored
 			// rows), so this branch serves providers that only need
 			// an append-preserving full parse.
-			return nil, nil, nil, time.Time{}, 0, nil, parser.ErrDAGDetected
+			return nil, nil, nil, time.Time{}, 0, nil, nil, parser.ErrDAGDetected
 		case parser.IncrementalNoNewData:
-			return nil, nil, nil, time.Time{}, 0, nil, nil
+			return nil, nil, nil, time.Time{}, 0, nil, nil, nil
 		default:
 			var terminationStatus *string
 			if outcome.TerminationStatus != nil {
@@ -10885,11 +10966,15 @@ func (e *Engine) tryProviderIncrementalAppend(
 			}
 			return outcome.Messages, outcome.SubagentLinks,
 				outcome.ToolCallUpdates,
-				outcome.EndedAt, outcome.ConsumedBytes, terminationStatus, nil
+				outcome.EndedAt, outcome.ConsumedBytes, terminationStatus,
+				outcome.NextCursor, nil
 		}
 	}
 
-	return e.tryIncrementalJSONL(ctx, file, info, file.Agent, parseFn)
+	return e.tryIncrementalJSONL(
+		ctx, file, info, file.Agent, parseFn,
+		checkpoint, fullHash, hashState,
+	)
 }
 
 // incrementalParseFunc reads new JSONL lines from a file
@@ -10900,7 +10985,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 // only complete, valid JSON lines so it can be used as a safe resume offset.
 type incrementalParseFunc func(
 	path string, inc *db.IncrementalInfo,
-) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, time.Time, int64, *string, error)
+) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, time.Time, int64, *string, []byte, error)
 
 // tryIncrementalJSONL attempts an incremental parse of an
 // append-only JSONL file by reading only bytes appended since
@@ -10914,6 +10999,9 @@ func (e *Engine) tryIncrementalJSONL(
 	info os.FileInfo,
 	agent parser.AgentType,
 	parseFn incrementalParseFunc,
+	checkpoint *db.ParserCheckpoint,
+	fullHash string,
+	hashState []byte,
 ) (processResult, bool) {
 	if e.forceParse { // parse-diff: never produce append deltas
 		return processResult{}, false
@@ -11015,14 +11103,13 @@ func (e *Engine) tryIncrementalJSONL(
 	// retention lease that bounds the parsed payload. It is attached to the
 	// incremental results below and released on every decline (fall-through to
 	// a full parse re-acquires at the provider parse seam) or skip return.
-	lease, leaseErr := e.retentionBudget().acquire(
-		ctx, parseRetentionSourceBytes(file),
-	)
+	sourceBytes := parseRetentionSourceBytes(file)
+	lease, leaseErr := e.retentionBudget().acquire(ctx, sourceBytes)
 	if leaseErr != nil {
 		return processResult{err: leaseErr}, true
 	}
 
-	newMsgs, links, toolCallUpdates, endedAt, consumed, terminationStatus, err := parseFn(
+	newMsgs, links, toolCallUpdates, endedAt, consumed, terminationStatus, cursor, err := parseFn(
 		file.Path, inc,
 	)
 	if err != nil {
@@ -11058,9 +11145,55 @@ func (e *Engine) tryIncrementalJSONL(
 	// providerSingleSessionFresh can compare the stored hash against the
 	// on-disk bytes and catch a same-size, same-mtime, same-inode in-place
 	// rewrite that the size/mtime/identity skip signals cannot see.
-	if isCodexFormatAgent(agent) || agent == parser.AgentClaude {
+	if fullHash != "" {
+		// The stored fingerprint must cover only the committed safe prefix,
+		// not an unfinished partial tail at EOF. Resume the hash state
+		// through newOffset (the last complete record) rather than trusting
+		// the full-file hash computed by the checkpoint gate.
+		if state, hash, hashErr := codexResumeHash(
+			file.Path, inc.FileSize, newOffset, hashState,
+		); hashErr == nil {
+			incHash = hash
+			hashState = state
+		} else {
+			log.Printf(
+				"resuming codex hash for %s at %d: %v",
+				file.Path, newOffset, hashErr,
+			)
+			incHash = fullHash
+		}
+	} else if isCodexFormatAgent(agent) || agent == parser.AgentClaude {
 		if hash, err := ComputeFileHashPrefix(file.Path, newOffset); err == nil {
 			incHash = hash
+		}
+	}
+
+	// Persist the advanced parser checkpoint in the same transaction as the
+	// delta when this append was resumed from one.
+	var nextCheckpoint *db.ParserCheckpoint
+	if checkpoint != nil && len(cursor) > 0 && hashState != nil {
+		cpNextOrdinal := inc.NextOrdinal
+		if len(newMsgs) > 0 {
+			cpNextOrdinal = nextParsedOrdinal(inc.NextOrdinal, newMsgs)
+		}
+		built, buildErr := buildCodexCheckpoint(
+			inc.ID,
+			string(agent),
+			e.effectiveSourcePath(file.Path),
+			info,
+			newOffset,
+			incMtime,
+			cursor,
+			hashState,
+			incHash,
+			cpNextOrdinal,
+		)
+		if buildErr != nil {
+			log.Printf(
+				"building codex checkpoint %s: %v", file.Path, buildErr,
+			)
+		} else {
+			nextCheckpoint = built
 		}
 	}
 
@@ -11072,6 +11205,7 @@ func (e *Engine) tryIncrementalJSONL(
 		// with non-message timestamps (e.g. progress).
 		if consumed > 0 {
 			return processResult{
+				sourceBytes: sourceBytes,
 				incremental: &incrementalUpdate{
 					sessionID:            inc.ID,
 					project:              inc.Project,
@@ -11080,6 +11214,7 @@ func (e *Engine) tryIncrementalJSONL(
 					cwd:                  inc.Cwd,
 					links:                links,
 					toolCallUpdates:      toolCallUpdates,
+					checkpoint:           nextCheckpoint,
 					endedAt:              endedAt,
 					terminationStatus:    terminationStatus,
 					msgCount:             inc.MsgCount,
@@ -11191,6 +11326,7 @@ func (e *Engine) tryIncrementalJSONL(
 	}
 
 	return processResult{
+		sourceBytes: sourceBytes,
 		incremental: &incrementalUpdate{
 			sessionID:            inc.ID,
 			project:              inc.Project,
@@ -11200,6 +11336,7 @@ func (e *Engine) tryIncrementalJSONL(
 			msgs:                 newMsgs,
 			links:                links,
 			toolCallUpdates:      toolCallUpdates,
+			checkpoint:           nextCheckpoint,
 			endedAt:              endedAt,
 			terminationStatus:    terminationStatus,
 			msgCount:             inc.MsgCount + len(newMsgs),
@@ -11933,9 +12070,18 @@ func (e *Engine) recomputeSignalsFromDB(
 }
 
 type pendingWrite struct {
-	sess         parser.ParsedSession
-	msgs         []parser.ParsedMessage
-	usageEvents  []parser.ParsedUsageEvent
+	sess        parser.ParsedSession
+	msgs        []parser.ParsedMessage
+	usageEvents []parser.ParsedUsageEvent
+	// sourceBytes is the physical source size carried from the parse result;
+	// collectAndBatch uses it to flush batches on estimated bytes as well as
+	// session count.
+	sourceBytes int64
+	// checkpoint is the provider's persisted continuation cursor for a full
+	// parse. The flush path persists it as a parser_checkpoints row after the
+	// session rows commit, so later appends can resume without rescanning the
+	// transcript prefix. Empty for providers without checkpoints.
+	checkpoint   []byte
 	needsRetry   bool
 	forceReplace bool
 	// sourceIdentityUnverified marks a copy that shares a native session ID
@@ -14104,6 +14250,7 @@ func (e *Engine) writeIncremental(
 			HasPeakContextTokens:    inc.hasPeakContextTokens,
 			SubagentLinks:           subagentLinks,
 			ToolCallResultUpdates:   toolCallResultUpdates,
+			Checkpoint:              inc.checkpoint,
 			BlockedResultCategories: e.blockedResultCategories,
 		},
 	); err != nil {
@@ -14273,6 +14420,9 @@ func (e *Engine) writeSessionFullWithResolver(
 	if err := e.db.ReviveSourceMissingSession(s.ID); err != nil {
 		log.Printf("revive source-missing session %s: %v", s.ID, err)
 		return err
+	}
+	if len(pw.checkpoint) > 0 {
+		e.persistFullParseCheckpoint(context.Background(), pw)
 	}
 
 	return nil
@@ -15721,6 +15871,7 @@ func (e *Engine) processAndWriteSessionFile(
 			sess:         pr.Session,
 			msgs:         pr.Messages,
 			usageEvents:  pr.UsageEvents,
+			checkpoint:   pr.Checkpoint,
 			needsRetry:   res.needsRetryForSession(pr.Session.ID),
 			forceReplace: res.forceReplace,
 		}

@@ -1524,6 +1524,27 @@ func (p *codexProvider) parseSession(
 	)
 }
 
+// parseSessionWithCursor is parseSession plus the end-of-snapshot
+// continuation cursor (and whether the end is a safe resume boundary).
+func (p *codexProvider) parseSessionWithCursor(
+	path, machine string, includeExec bool,
+) (*ParsedSession, []ParsedMessage, codexCursorState, bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, codexCursorState{}, false,
+			fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, nil, codexCursorState{}, false,
+			fmt.Errorf("stat %s: %w", path, err)
+	}
+	return p.parseSessionSnapshotWithCursor(
+		path, machine, includeExec, f, info,
+	)
+}
+
 func (p *codexProvider) parentTurnResolver(
 	childPath string,
 ) codexParentTurnResolver {
@@ -1632,6 +1653,22 @@ func (p *codexProvider) parseSessionSnapshot(
 	f *os.File,
 	info os.FileInfo,
 ) (*ParsedSession, []ParsedMessage, error) {
+	sess, msgs, _, _, err := p.parseSessionSnapshotWithCursor(
+		path, machine, includeExec, f, info,
+	)
+	return sess, msgs, err
+}
+
+// parseSessionSnapshotWithCursor is parseSessionSnapshot plus the
+// continuation state at the end of the parsed snapshot. safe reports whether
+// the file's end is a safe resume boundary; a false safe means the returned
+// cursor must not be persisted.
+func (p *codexProvider) parseSessionSnapshotWithCursor(
+	path, machine string,
+	includeExec bool,
+	f *os.File,
+	info os.FileInfo,
+) (*ParsedSession, []ParsedMessage, codexCursorState, bool, error) {
 	lr := newLineReader(io.LimitReader(f, info.Size()), maxLineSize)
 	defer releaseLineReader(lr)
 	b := newCodexSessionBuilder(includeExec, p.parentTurnResolver(path))
@@ -1645,25 +1682,29 @@ func (p *codexProvider) parseSessionSnapshot(
 			continue
 		}
 		if b.processLine(line) {
-			return nil, nil, nil
+			return nil, nil, codexCursorState{}, false, nil
 		}
 	}
 
 	if err := lr.Err(); err != nil {
 		return nil, nil,
+			codexCursorState{}, false,
 			fmt.Errorf("reading codex %s: %w", path, err)
 	}
 
 	b.flushPendingAgentResults()
 	b.normalizeOrdinals()
+	seed := b.incrementalSeed()
 	inode, device := sourceFileIdentity(info)
-	if safe, safeErr := codexSafeResumeOffsetFile(f, info.Size()); safeErr == nil && safe {
+	safe := false
+	if safeCheck, safeErr := codexSafeResumeOffsetFile(f, info.Size()); safeErr == nil && safeCheck {
+		safe = true
 		p.cursorCache.Put(
 			path,
 			info.Size(),
 			inode,
 			device,
-			b.incrementalSeed(),
+			seed,
 		)
 	}
 
@@ -1727,7 +1768,7 @@ func (p *codexProvider) parseSessionSnapshot(
 
 	accumulateMessageTokenUsage(sess, b.messages)
 
-	return sess, b.messages, nil
+	return sess, b.messages, seed, safe, nil
 }
 
 // CodexSessionIndexFilename is the name of the Codex index file that maps
@@ -2252,6 +2293,34 @@ func (p *codexProvider) parseSessionFromSnapshot(
 				io.NewSectionReader(f, 0, offset),
 				p.parentTurnResolver(path),
 			)
+		},
+	)
+}
+
+// parseSessionFromCheckpoint is parseSessionFromSnapshot with the committed
+// prefix's continuation state supplied from a persisted checkpoint instead
+// of a prefix rescan.
+func (p *codexProvider) parseSessionFromCheckpoint(
+	path string,
+	offset int64,
+	startOrdinal int,
+	includeExec bool,
+	f *os.File,
+	info os.FileInfo,
+	limit int64,
+	seed codexCursorState,
+) (codexIncrementalParseResult, error) {
+	return p.parseSessionFromWithSources(
+		path,
+		offset,
+		startOrdinal,
+		includeExec,
+		info,
+		func(fn func(string)) (int64, error) {
+			return readCodexJSONLSection(f, offset, limit, fn)
+		},
+		func() (codexIncrementalSeed, error) {
+			return seed, nil
 		},
 	)
 }

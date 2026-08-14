@@ -1,8 +1,12 @@
 package parser
 
 import (
+	"bytes"
 	"container/list"
 	"crypto/sha256"
+	"encoding/binary"
+	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -12,6 +16,11 @@ const (
 	codexCursorCacheMaxEntries = 256
 	codexCursorCacheMaxBytes   = 2 << 20
 	codexCursorMaxPendingCalls = 8
+	// codexCursorCheckpointVersion is the wire version for the persisted
+	// cursor encoding. Bump when the encoding changes; decode failures fall
+	// back to a full parse.
+	codexCursorCheckpointVersion   = 1
+	codexCursorCheckpointMaxString = 1 << 20
 
 	// Account for the map bucket, list element, pointers, string headers, and
 	// allocator overhead that are not represented by the variable-length path
@@ -44,6 +53,173 @@ type codexCursorState struct {
 	lastTaskEvent            string
 	pendingCalls             [codexCursorMaxPendingCalls]codexPendingToolCall
 	pendingCallCount         uint8
+}
+
+// MarshalBinary encodes the compact continuation state for persistence.
+// The encoding is versioned and intentionally bounded: strings are
+// length-prefixed and capped on decode, and the pending-call array is
+// fixed-size.
+func (s *codexCursorState) MarshalBinary() ([]byte, error) {
+	var buf bytes.Buffer
+	write := func(v any) error {
+		return binary.Write(&buf, binary.LittleEndian, v)
+	}
+	writeStr := func(str string) error {
+		if err := write(uint32(len(str))); err != nil {
+			return err
+		}
+		_, err := buf.WriteString(str)
+		return err
+	}
+	if err := write(uint8(codexCursorCheckpointVersion)); err != nil {
+		return nil, err
+	}
+	for _, str := range []string{s.model, s.cwd, s.agentPath} {
+		if err := writeStr(str); err != nil {
+			return nil, err
+		}
+	}
+	if err := write(s.firstUserDigest); err != nil {
+		return nil, err
+	}
+	flags := uint8(0)
+	if s.firstUserSeen {
+		flags |= 1 << 0
+	}
+	if s.sawUserTurnAfterFirst {
+		flags |= 1 << 1
+	}
+	if s.mayReplayFirstUserPrompt {
+		flags |= 1 << 2
+	}
+	if s.lastTokenUsageSeen {
+		flags |= 1 << 3
+	}
+	if s.forkGate.active {
+		flags |= 1 << 4
+	}
+	if err := write(flags); err != nil {
+		return nil, err
+	}
+	if err := write(s.lastTokenUsageDigest); err != nil {
+		return nil, err
+	}
+	if err := write(s.forkGate.createdMs); err != nil {
+		return nil, err
+	}
+	if err := writeStr(s.forkGate.subagentParentID); err != nil {
+		return nil, err
+	}
+	if err := writeStr(s.lastTaskEvent); err != nil {
+		return nil, err
+	}
+	if err := write(uint8(s.pendingCallCount)); err != nil {
+		return nil, err
+	}
+	for i := 0; i < int(s.pendingCallCount); i++ {
+		if err := writeStr(s.pendingCalls[i].id); err != nil {
+			return nil, err
+		}
+		if err := writeStr(s.pendingCalls[i].name); err != nil {
+			return nil, err
+		}
+	}
+	return buf.Bytes(), nil
+}
+
+// UnmarshalBinary restores the state written by MarshalBinary. Any version,
+// length, or structure mismatch returns an error so the caller falls back
+// to an authoritative full parse.
+func (s *codexCursorState) UnmarshalBinary(data []byte) error {
+	r := bytes.NewReader(data)
+	read := func(v any) error {
+		return binary.Read(r, binary.LittleEndian, v)
+	}
+	readStr := func() (string, error) {
+		var n uint32
+		if err := read(&n); err != nil {
+			return "", err
+		}
+		if n > codexCursorCheckpointMaxString {
+			return "", fmt.Errorf(
+				"codex cursor string length %d exceeds bound %d",
+				n, codexCursorCheckpointMaxString,
+			)
+		}
+		b := make([]byte, n)
+		if _, err := io.ReadFull(r, b); err != nil {
+			return "", err
+		}
+		return string(b), nil
+	}
+
+	var version uint8
+	if err := read(&version); err != nil {
+		return err
+	}
+	if version != codexCursorCheckpointVersion {
+		return fmt.Errorf(
+			"unsupported codex cursor version %d", version,
+		)
+	}
+	*s = codexCursorState{}
+	var err error
+	if s.model, err = readStr(); err != nil {
+		return err
+	}
+	if s.cwd, err = readStr(); err != nil {
+		return err
+	}
+	if s.agentPath, err = readStr(); err != nil {
+		return err
+	}
+	if err := read(&s.firstUserDigest); err != nil {
+		return err
+	}
+	var flags uint8
+	if err := read(&flags); err != nil {
+		return err
+	}
+	s.firstUserSeen = flags&(1<<0) != 0
+	s.sawUserTurnAfterFirst = flags&(1<<1) != 0
+	s.mayReplayFirstUserPrompt = flags&(1<<2) != 0
+	s.lastTokenUsageSeen = flags&(1<<3) != 0
+	s.forkGate.active = flags&(1<<4) != 0
+	if err := read(&s.lastTokenUsageDigest); err != nil {
+		return err
+	}
+	if err := read(&s.forkGate.createdMs); err != nil {
+		return err
+	}
+	if s.forkGate.subagentParentID, err = readStr(); err != nil {
+		return err
+	}
+	if s.lastTaskEvent, err = readStr(); err != nil {
+		return err
+	}
+	var count uint8
+	if err := read(&count); err != nil {
+		return err
+	}
+	if count > codexCursorMaxPendingCalls {
+		return fmt.Errorf(
+			"codex cursor pending call count %d exceeds bound %d",
+			count, codexCursorMaxPendingCalls,
+		)
+	}
+	s.pendingCallCount = count
+	for i := 0; i < int(count); i++ {
+		if s.pendingCalls[i].id, err = readStr(); err != nil {
+			return err
+		}
+		if s.pendingCalls[i].name, err = readStr(); err != nil {
+			return err
+		}
+	}
+	if r.Len() != 0 {
+		return fmt.Errorf("codex cursor trailing bytes: %d", r.Len())
+	}
+	return nil
 }
 
 func (s *codexCursorState) rememberToolCall(id, name string) bool {

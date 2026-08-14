@@ -1494,6 +1494,11 @@ type ParseResult struct {
 	Session     ParsedSession
 	Messages    []ParsedMessage
 	UsageEvents []ParsedUsageEvent
+	// Checkpoint is opaque provider continuation state (a parser
+	// checkpoint) that the sync engine persists after this result's
+	// session rows commit, so later appends can resume without rescanning
+	// the transcript prefix. Empty for providers without checkpoints.
+	Checkpoint []byte
 }
 
 // InferRelationshipTypes sets RelationshipType on results that have

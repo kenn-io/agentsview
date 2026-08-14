@@ -1103,6 +1103,11 @@ func (db *DB) WriteSessionIncremental(
 	if err := updateSessionIncrementalTx(tx, sessionID, update); err != nil {
 		return err
 	}
+	if update.Checkpoint != nil {
+		if err := upsertParserCheckpointTx(tx, *update.Checkpoint); err != nil {
+			return err
+		}
+	}
 	if err := updateSessionAutomationFromMessagesTx(tx, sessionID); err != nil {
 		return err
 	}
