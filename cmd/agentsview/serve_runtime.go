@@ -78,7 +78,7 @@ func startServerWithOptionalCaddy(
 	}()
 
 	if err := waitForBackendReady(
-		ctx, cfg, 5*time.Second, serveErrCh,
+		ctx, cfg, srv.DaemonPingPath(), 5*time.Second, serveErrCh,
 	); err != nil {
 		shutdownCtx, cancel := context.WithTimeout(
 			context.Background(), 5*time.Second,
@@ -151,6 +151,7 @@ func startServerWithOptionalCaddy(
 func waitForBackendReady(
 	ctx context.Context,
 	cfg config.Config,
+	pingPath string,
 	timeout time.Duration,
 	errCh <-chan error,
 ) error {
@@ -187,6 +188,7 @@ func waitForBackendReady(
 		}
 		info, err := probeRuntime(
 			ctx, rec, cfg.AuthToken, daemon.ProbeOptions{
+				Path:            pingPath,
 				ExpectedService: daemonService,
 				Timeout:         200 * time.Millisecond,
 			},

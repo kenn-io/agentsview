@@ -292,6 +292,11 @@ func WithBasePath(path string) Option {
 	}
 }
 
+// DaemonPingPath returns the mounted path of the daemon identity endpoint.
+func (s *Server) DaemonPingPath() string {
+	return s.basePath + daemon.DefaultPingPath
+}
+
 // WithGenerateFunc overrides the insight generation function,
 // allowing tests to substitute a stub. Nil is ignored.
 func WithGenerateFunc(f insight.GenerateFunc) Option {

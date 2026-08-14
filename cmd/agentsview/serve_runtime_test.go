@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/kit/daemon"
 )
 
@@ -33,7 +34,7 @@ func TestWaitForBackendReadyRejectsUnrelatedHTTPListener(t *testing.T) {
 
 	err := waitForBackendReady(
 		context.Background(), testBackendReadyConfig(ts, ""),
-		300*time.Millisecond, nil,
+		daemon.DefaultPingPath, 300*time.Millisecond, nil,
 	)
 	require.Error(t, err,
 		"an unrelated HTTP listener must not satisfy backend readiness")
@@ -54,7 +55,7 @@ func TestWaitForBackendReadyRejectsDaemonPingFromAnotherProcess(t *testing.T) {
 
 	err := waitForBackendReady(
 		context.Background(), testBackendReadyConfig(ts, ""),
-		300*time.Millisecond, nil,
+		daemon.DefaultPingPath, 300*time.Millisecond, nil,
 	)
 	require.Error(t, err,
 		"a daemon ping answered by another process must not satisfy readiness")
@@ -80,8 +81,31 @@ func TestWaitForBackendReadyAcceptsAuthenticatedDaemonPing(t *testing.T) {
 
 	err := waitForBackendReady(
 		context.Background(), testBackendReadyConfig(ts, token),
-		2*time.Second, nil,
+		daemon.DefaultPingPath, 2*time.Second, nil,
 	)
 	require.NoError(t, err,
 		"an authenticated daemon ping from this process must satisfy readiness")
+}
+
+func TestStartServerWithOptionalCaddyWaitsForBasePathBackend(t *testing.T) {
+	cfg := config.Config{
+		Host: "127.0.0.1",
+		Port: server.FindAvailablePort("127.0.0.1", 0),
+	}
+	srv := server.New(cfg, nil, nil, server.WithBasePath("/viewer"))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	runtime, err := startServerWithOptionalCaddy(
+		ctx, cfg, srv, serveRuntimeOptions{Mode: "test"},
+	)
+	require.NoError(t, err,
+		"a server mounted below a base path must satisfy backend readiness")
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(
+		context.Background(), time.Second,
+	)
+	defer shutdownCancel()
+	require.NoError(t, srv.Shutdown(shutdownCtx))
+	require.ErrorIs(t, <-runtime.ServeErrCh, http.ErrServerClosed)
 }
