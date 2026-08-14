@@ -574,6 +574,85 @@ func TestMacroCodexEngineStagedFullParse(t *testing.T) {
 		"per-call summaries must carry the staged output content")
 }
 
+// TestMacroCodexStaged64MBLine pins the single-line bound: a transcript
+// whose tool output is one line just under the 64MB line limit must parse
+// and publish through the staged path with bounded peak memory (the line
+// plus its SQL copies, never line count times line size).
+func TestMacroCodexStaged64MBLine(t *testing.T) {
+	// Keep the full JSON record under maxLineSize (64MB) after the
+	// wrapper bytes.
+	const outBytes = 64<<20 - 128<<10
+	root, _, uuid, _ := writeCodexStreamingBenchmarkTranscript(
+		t, 1, outBytes,
+	)
+	cfg := parser.ProviderConfig{
+		Roots:   []string{root},
+		Machine: "macro-host",
+	}
+	provider, ok := parser.NewProvider(parser.AgentCodex, cfg)
+	require.True(t, ok)
+	source, found, err := provider.FindSource(
+		context.Background(), parser.FindSourceRequest{
+			FullSessionID: "codex:" + uuid,
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+
+	peak := pollPeakLiveHeap()
+	staged, err := newCodexStagingSink(nil)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, staged.Close()) }()
+	sess, msgs, _, _, _, err := parser.ParseCodexSessionStreaming(
+		cfg, source, staged,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	database, err := db.Open(filepath.Join(t.TempDir(), "macro.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = database.Close() })
+	row := db.Session{
+		ID:               sess.ID,
+		Project:          sess.Project,
+		Machine:          sess.Machine,
+		Agent:            string(sess.Agent),
+		MessageCount:     sess.MessageCount,
+		UserMessageCount: sess.UserMessageCount,
+	}
+	require.NoError(t, database.UpsertSession(row))
+	dbMsgs := toDBMessages(pendingWrite{
+		sess: *sess, msgs: msgs,
+	}, nil)
+	update, findings := computeSignalsAndSecrets(row, dbMsgs)
+	positions := make(map[string]db.StagedToolCallPosition)
+	for _, m := range dbMsgs {
+		for callIdx, tc := range m.ToolCalls {
+			if tc.ToolUseID == "" {
+				continue
+			}
+			positions[tc.ToolUseID] = db.StagedToolCallPosition{
+				ToolUseID: tc.ToolUseID,
+				Ordinal:   m.Ordinal,
+				CallIndex: callIdx,
+			}
+		}
+	}
+	combined := append(
+		append([]db.SecretFinding(nil), findings...),
+		staged.Findings(row.ID, positions)...,
+	)
+	update.SecretLeakCount = definiteFindingCount(combined)
+	require.NoError(t, database.ReplaceSessionContentStaged(
+		row.ID, dbMsgs, update, combined, staged, map[string]bool{},
+	))
+	peakLive := peak()
+	t.Logf("BIGLINE peak_live=%dMiB rss=%dMiB",
+		peakLive/(1<<20), peakProcessRSSBytes()/(1<<20))
+	require.Less(t, peakLive, uint64(512<<20),
+		"single near-limit line must stay bounded")
+}
+
 // TestMacroCodexRealArchiveColdSync is the acceptance run for the staged
 // streaming path against a real large Codex transcript. Set
 // MACRO_CODEX_945MB to the archive path; the test copies it into the test
