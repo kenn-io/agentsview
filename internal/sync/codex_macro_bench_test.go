@@ -717,7 +717,10 @@ func TestMacroCodexRealArchiveColdSync(t *testing.T) {
 	require.NoError(t, in.Close())
 	require.NoError(t, out.Close())
 
-	database := openTestDB(t)
+	dbPath := filepath.Join(t.TempDir(), "macro.db")
+	database, err := db.Open(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = database.Close() })
 	engine := NewEngine(database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
@@ -734,11 +737,16 @@ func TestMacroCodexRealArchiveColdSync(t *testing.T) {
 	rcharDelta := macroRchar(t) - rcharBefore
 	require.Zero(t, stats.Failed)
 	require.Equal(t, 1, stats.Synced)
+	dbInfo, dbErr := os.Stat(dbPath)
+	var dbSize int64
+	if dbErr == nil {
+		dbSize = dbInfo.Size()
+	}
 	t.Logf(
-		"REAL945 cold dur=%s peak_live=%dMiB rss=%dMiB read=%dMiB size=%dMiB",
+		"REAL945 cold dur=%s peak_live=%dMiB rss=%dMiB read=%dMiB size=%dMiB dbsize=%dMiB",
 		time.Since(start), peakLive/(1<<20),
 		peakProcessRSSBytes()/(1<<20), rcharDelta/(1<<20),
-		info.Size()/(1<<20),
+		info.Size()/(1<<20), dbSize/(1<<20),
 	)
 	require.Less(t, peakLive, uint64(512<<20),
 		"945MB cold sync peak live heap must stay under 512MiB")
