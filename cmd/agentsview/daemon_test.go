@@ -252,7 +252,8 @@ func TestDaemonStopUsesStartupStateFallbackWhileStarting(t *testing.T) {
 	deps.readStartupState = func(string) *startupState {
 		return &startupState{
 			PID: 77, Version: "v1.2.3-test", CreateTime: "123456789",
-			Phase: "starting HTTP server",
+			Phase: "starting HTTP server", CaddyPID: 88,
+			CaddyCreateTime: "222222222",
 		}
 	}
 	var stopped daemon.RuntimeRecord
@@ -263,11 +264,18 @@ func TestDaemonStopUsesStartupStateFallbackWhileStarting(t *testing.T) {
 		stopped = rec
 		return nil
 	}
+	var cleaned daemon.RuntimeRecord
+	deps.stopCaddy = func(_ io.Writer, rec daemon.RuntimeRecord) error {
+		cleaned = rec
+		return nil
+	}
 
 	err := executeDaemonCommand(t, *deps, out, "stop")
 	require.NoError(t, err)
 	assert.Equal(t, 77, stopped.PID)
 	assert.Equal(t, "v1.2.3-test", stopped.Version)
+	assert.Equal(t, "88", cleaned.Metadata[runtimeCaddyPID])
+	assert.Equal(t, "222222222", cleaned.Metadata[runtimeCaddyCreateTime])
 	assert.Contains(t, out.String(), "Stopped agentsview (pid 77).")
 	assert.NotContains(t, out.String(), "starting up")
 }

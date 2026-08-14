@@ -298,6 +298,7 @@ func startManagedCaddy(
 	parent context.Context,
 	cfg config.Config,
 	mode string,
+	onStarted func(int),
 ) (*managedCaddy, error) {
 	configPath, content, err := prepareManagedCaddyConfig(
 		cfg,
@@ -345,6 +346,9 @@ func startManagedCaddy(
 	if err := cmd.Start(); err != nil {
 		cancel()
 		return nil, fmt.Errorf("starting managed caddy: %w", err)
+	}
+	if onStarted != nil {
+		onStarted(cmd.Process.Pid)
 	}
 
 	// Bind Caddy's lifetime to this server process so it cannot outlive a

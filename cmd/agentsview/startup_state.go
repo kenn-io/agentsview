@@ -105,6 +105,24 @@ func (w *startupStateWriter) SetPhase(phase string) {
 	w.write()
 }
 
+// SetCaddyProcess publishes the managed proxy identity as soon as it starts,
+// before the daemon runtime record exists. This lets daemon stop clean up the
+// proxy even when startup is interrupted before runtime publication.
+func (w *startupStateWriter) SetCaddyProcess(pid int) {
+	if w == nil || pid <= 0 {
+		return
+	}
+	createTime := ""
+	if created, ok := processCreateTimeMillis(pid); ok {
+		createTime = strconv.FormatInt(created, 10)
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.state.CaddyPID = pid
+	w.state.CaddyCreateTime = createTime
+	w.write()
+}
+
 // SetDetail records fine-grained progress within the current phase,
 // persisted at most once per startupDetailThrottle.
 func (w *startupStateWriter) SetDetail(detail string) {

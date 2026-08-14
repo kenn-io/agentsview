@@ -77,6 +77,18 @@ func TestStartupStateDetailThrottle(t *testing.T) {
 	assert.Empty(t, st.Detail)
 }
 
+func TestStartupStatePublishesManagedCaddyIdentity(t *testing.T) {
+	dir := t.TempDir()
+	w := newStartupStateWriter(dir, time.Now)
+	w.SetCaddyProcess(os.Getpid())
+
+	st := readStartupState(dir)
+	require.NotNil(t, st)
+	assert.Equal(t, os.Getpid(), st.CaddyPID)
+	assert.NotEmpty(t, st.CaddyCreateTime)
+	assert.True(t, processCreateTimeMatches(st.CaddyPID, st.CaddyCreateTime))
+}
+
 func TestReadStartupStateMissingOrCorrupt(t *testing.T) {
 	dir := t.TempDir()
 	assert.Nil(t, readStartupState(dir), "missing file must read as nil")

@@ -12,8 +12,9 @@ import (
 )
 
 type serveRuntimeOptions struct {
-	Mode          string
-	RequestedPort int
+	Mode           string
+	RequestedPort  int
+	OnCaddyStarted func(int)
 }
 
 type serveRuntime struct {
@@ -90,7 +91,9 @@ func startServerWithOptionalCaddy(
 	var caddy *managedCaddy
 	if cfg.Proxy.Mode == "caddy" {
 		var err error
-		caddy, err = startManagedCaddy(ctx, cfg, opts.Mode)
+		caddy, err = startManagedCaddy(
+			ctx, cfg, opts.Mode, opts.OnCaddyStarted,
+		)
 		if err != nil {
 			shutdownCtx, cancel := context.WithTimeout(
 				context.Background(), 5*time.Second,

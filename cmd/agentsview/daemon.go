@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -425,7 +426,7 @@ func startupStateStopRecord(st *startupState) (daemon.RuntimeRecord, bool) {
 	if st == nil || st.PID <= 0 || st.CreateTime == "" {
 		return daemon.RuntimeRecord{}, false
 	}
-	return daemon.RuntimeRecord{
+	rec := daemon.RuntimeRecord{
 		PID:       st.PID,
 		Service:   daemonService,
 		Version:   st.Version,
@@ -433,7 +434,14 @@ func startupStateStopRecord(st *startupState) (daemon.RuntimeRecord, bool) {
 		Metadata: map[string]string{
 			runtimeCreateTime: st.CreateTime,
 		},
-	}, true
+	}
+	if st.CaddyPID > 0 {
+		rec.Metadata[runtimeCaddyPID] = strconv.Itoa(st.CaddyPID)
+	}
+	if st.CaddyCreateTime != "" {
+		rec.Metadata[runtimeCaddyCreateTime] = st.CaddyCreateTime
+	}
+	return rec, true
 }
 
 func writeDaemonStartResult(w io.Writer, result backgroundLaunchResult, restarted bool) {

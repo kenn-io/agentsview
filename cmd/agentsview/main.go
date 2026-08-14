@@ -455,8 +455,9 @@ func runServe(cfg config.Config, opts serveOptions) {
 	go startPeriodicPricingRefresh(ctx, database, pricingRefreshRunner)
 
 	rtOpts := serveRuntimeOptions{
-		Mode:          "serve",
-		RequestedPort: cfg.Port,
+		Mode:           "serve",
+		RequestedPort:  cfg.Port,
+		OnCaddyStarted: startupProgress.SetCaddyProcess,
 	}
 	preparedCfg, prepErr := prepareServeRuntimeConfig(cfg, rtOpts)
 	if prepErr != nil {
