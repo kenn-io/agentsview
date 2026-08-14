@@ -225,6 +225,10 @@ func stagedCodexParseOutcome(
 	if stageErr := sink.Err(); stageErr != nil {
 		return parser.ParseOutcome{}, stageErr
 	}
+	// Return the parse phase's transient arenas before the publish builds
+	// its own transient working set, so the process RSS high-water mark
+	// reflects the publish rather than the sum of both phases' slack.
+	debug.FreeOSMemory()
 	result := parser.ParseResultOutcome{
 		Result: parser.ParseResult{
 			Session:                *sess,
