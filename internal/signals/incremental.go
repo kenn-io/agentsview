@@ -27,12 +27,8 @@ const (
 	// IncrementalStateCodecVersion is the wire version for IncrementalState.
 	// Bump when the struct or any detector semantics change; a mismatch
 	// makes the caller fall back to a full recompute.
-	//
-	// v2: added EditChurnState.HasLast1/HasLast2 (distinguish "no prior
-	// edit" from "prior edit at ordinal 0") and IncrementalState.
-	// HasExplicitBoundaries (suppress token-drop compactions when explicit
-	// compact boundaries exist). Old v1 states decode as stale and reseed.
-	IncrementalStateCodecVersion = 2
+	// The codec has had a single released shape.
+	IncrementalStateCodecVersion = 1
 
 	// TrailingFactCount is the size of the trailing facts window. It must
 	// cover every window any delta can affect: a modified call in the last
