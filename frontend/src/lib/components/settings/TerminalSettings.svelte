@@ -25,6 +25,7 @@
   });
 
   async function saveTerminal() {
+    if (settings.saving) return;
     configureGeneratedClient();
     await ConfigService.postApiV1ConfigTerminal({
       requestBody: {

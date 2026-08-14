@@ -37,13 +37,57 @@ import (
 // delays failure output when the code under test genuinely hangs.
 const backgroundWaitTimeout = 30 * time.Second
 
+func newCurrentProtocolServer(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, strconv.Itoa(ProtocolVersion), r.Header.Get(ProtocolHeader))
+		SetProtocolHeader(w.Header())
+		handler.ServeHTTP(w, r)
+	}))
+}
+
+func TestHTTPSyncRejectsRemoteWithoutProtocolHandshake(t *testing.T) {
+	archiveRequested := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/remote-sync/targets":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"dirs":{"claude":["/sessions"]}}`))
+		case "/api/v1/remote-sync/archive":
+			archiveRequested = true
+			w.Header().Set("Content-Type", "application/x-tar")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(ts.Close)
+
+	_, err := HTTPSync{Host: "devbox", URL: ts.URL}.Prepare(t.Context())
+
+	require.ErrorContains(t, err, "remote sync protocol")
+	assert.False(t, archiveRequested)
+}
+
+func TestHTTPSyncRejectsMismatchedRemoteProtocol(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(ProtocolHeader, strconv.Itoa(ProtocolVersion+1))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(ts.Close)
+
+	_, err := HTTPSync{Host: "devbox", URL: ts.URL}.Prepare(t.Context())
+
+	require.ErrorContains(t, err, "incompatible")
+}
+
 func TestHTTPSyncDownloadsArchiveAndImports(t *testing.T) {
 	archive := buildHTTPTestTar(t, map[string]string{
 		"home/wes/.claude/projects/test-project/session.jsonl": testjsonl.NewSessionBuilder().
 			AddClaudeUser("2024-01-01T00:00:00Z", "http remote").
 			String(),
 	})
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := newCurrentProtocolServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "Bearer remote-token", r.Header.Get("Authorization"))
 		switch r.URL.Path {
 		case "/api/v1/remote-sync/targets":
@@ -79,7 +123,7 @@ func TestHTTPSyncReportsDownloadAndImportProgress(t *testing.T) {
 			AddClaudeUser("2024-01-01T00:00:00Z", "http remote progress").
 			String(),
 	})
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := newCurrentProtocolServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/remote-sync/targets":
 			w.Header().Set("Content-Type", "application/json")
@@ -134,7 +178,7 @@ func TestHTTPSyncReportsCompressedTransferThenExtraction(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, gz.Close())
 
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := newCurrentProtocolServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/v1/remote-sync/archive", r.URL.Path)
 		w.Header().Set("Content-Encoding", "gzip")
 		w.Header().Set("Content-Length", strconv.Itoa(compressed.Len()))
@@ -199,7 +243,7 @@ func TestHTTPSyncLegacyCompressedTransferPreservesWireProgress(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, gz.Close())
 
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := newCurrentProtocolServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "gzip", r.Header.Get("Accept-Encoding"))
 		w.Header().Set("Content-Encoding", "gzip")
 		w.Header().Set("Content-Length", strconv.Itoa(compressed.Len()))
@@ -271,7 +315,7 @@ func TestHTTPSyncRemovesSpooledArchive(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			ts := newCurrentProtocolServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				if tt.contentLength > 0 {
 					w.Header().Set("Content-Length", strconv.Itoa(tt.contentLength))
 				}
@@ -315,7 +359,7 @@ func TestHTTPSyncMirrorRetainsPostExtractionSpoolCleanup(t *testing.T) {
 	archive := buildHTTPTestTar(t, map[string]string{
 		"home/user/session.jsonl": "complete",
 	})
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	ts := newCurrentProtocolServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(archive)
 	}))
 	t.Cleanup(ts.Close)
@@ -348,7 +392,7 @@ func TestHTTPSyncLegacyRetainsCleanupWithoutLeakingExtractedRoot(t *testing.T) {
 	archive := buildHTTPTestTar(t, map[string]string{
 		"home/user/session.jsonl": "complete",
 	})
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	ts := newCurrentProtocolServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(archive)
 	}))
 	t.Cleanup(ts.Close)
@@ -384,7 +428,7 @@ func TestHTTPSyncLegacyRetainsSpoolWhenExtractionRootCreationFails(t *testing.T)
 	archive := buildHTTPTestTar(t, map[string]string{
 		"home/user/session.jsonl": "complete",
 	})
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	ts := newCurrentProtocolServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Length", strconv.Itoa(len(archive)))
 		_, _ = w.Write(archive)
 	}))
@@ -640,7 +684,7 @@ func TestHTTPSyncLegacyCancellationCleansOwnedRoots(t *testing.T) {
 	_, err := gz.Write(archive)
 	require.NoError(t, err)
 	require.NoError(t, gz.Close())
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	ts := newCurrentProtocolServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Encoding", "gzip")
 		w.Header().Set("Content-Length", strconv.Itoa(compressed.Len()))
 		_, _ = w.Write(compressed.Bytes())
@@ -803,7 +847,7 @@ func newMirrorTestRemote(t *testing.T) *mirrorTestRemote {
 	remote.targets = TargetSet{
 		Dirs: map[parser.AgentType][]string{parser.AgentClaude: {remote.dir}},
 	}
-	remote.ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	remote.ts = newCurrentProtocolServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/remote-sync/targets":
 			w.Header().Set("Content-Type", "application/json")
@@ -1176,7 +1220,7 @@ func TestHTTPSyncMirrorRefreshesStateDBWhenWALVanishesDuringDeltaArchive(t *test
 		"an unchanged standalone snapshot must match the consolidated manifest")
 }
 
-func TestHTTPSyncFallsBackToLegacyWhenManifestMissing(t *testing.T) {
+func TestHTTPSyncRejectsMissingManifestEndpoint(t *testing.T) {
 	remote := newMirrorTestRemote(t)
 	remote.manifestStatus = http.StatusNotFound
 	remote.writeSession(t, "a.jsonl",
@@ -1184,26 +1228,25 @@ func TestHTTPSyncFallsBackToLegacyWhenManifestMissing(t *testing.T) {
 	dataDir := t.TempDir()
 	_, hs := newMirrorSync(t, remote, dataDir)
 
-	stats, err := hs.Run(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, 1, stats.SessionsSynced)
-	require.Len(t, remote.archiveRequests, 1)
-	assert.Empty(t, remote.archiveRequests[0].DeltaFiles)
+	_, err := hs.Run(context.Background())
+	require.Error(t, err)
+	var statusErr *StatusError
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusNotFound, statusErr.Code)
+	assert.Empty(t, remote.archiveRequests)
 	assert.NoDirExists(t, MirrorDir(dataDir, "devbox"))
 }
 
-func TestHTTPSyncFallsBackToLegacyWhenManifestServesSPAHTML(t *testing.T) {
+func TestHTTPSyncRejectsNonJSONManifest(t *testing.T) {
 	remote := newMirrorTestRemote(t)
 	remote.writeSession(t, "a.jsonl",
 		time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC), "session a")
 	remote.manifestHTML = true
 	_, hs := newMirrorSync(t, remote, t.TempDir())
 
-	stats, err := hs.Run(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, 1, stats.SessionsSynced)
-	require.Len(t, remote.archiveRequests, 1)
-	assert.Empty(t, remote.archiveRequests[0].DeltaFiles)
+	_, err := hs.Run(context.Background())
+	require.ErrorContains(t, err, "decode remote manifest")
+	assert.Empty(t, remote.archiveRequests)
 }
 
 func TestHTTPSyncFallsBackToFullWhenDeltaRejected(t *testing.T) {
@@ -1732,7 +1775,7 @@ func TestPreparedHTTPSyncCloseReleasesLockAndRemovesLegacyRoot(t *testing.T) {
 
 	t.Run("legacy root is owned", func(t *testing.T) {
 		remote := newMirrorTestRemote(t)
-		remote.manifestStatus = http.StatusNotFound
+		remote.manifestStatus = http.StatusNotImplemented
 		remote.writeSession(t, "a.jsonl",
 			time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC), "session a")
 		dataDir := t.TempDir()
@@ -1755,7 +1798,7 @@ func TestPreparedHTTPSyncCloseReleasesLockAndRemovesLegacyRoot(t *testing.T) {
 
 func TestPreparedHTTPSyncCloseRetriesFailedCleanup(t *testing.T) {
 	remote := newMirrorTestRemote(t)
-	remote.manifestStatus = http.StatusNotFound
+	remote.manifestStatus = http.StatusNotImplemented
 	remote.writeSession(t, "a.jsonl",
 		time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC), "session a")
 	dataDir := t.TempDir()
@@ -1799,7 +1842,7 @@ func TestPreparedHTTPSyncCloseTracksCleanupIndependently(t *testing.T) {
 	prepareLegacy := func(t *testing.T) (*PreparedHTTP, string) {
 		t.Helper()
 		remote := newMirrorTestRemote(t)
-		remote.manifestStatus = http.StatusNotFound
+		remote.manifestStatus = http.StatusNotImplemented
 		remote.writeSession(t, "a.jsonl",
 			time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC), "session a")
 		dataDir := t.TempDir()
@@ -1953,7 +1996,7 @@ func TestPrepareHTTPSyncFailureCleansOwnedResources(t *testing.T) {
 
 	t.Run("legacy extraction failure removes temp root", func(t *testing.T) {
 		remote := newMirrorTestRemote(t)
-		remote.manifestStatus = http.StatusNotFound
+		remote.manifestStatus = http.StatusNotImplemented
 		path := remote.writeSession(t, "a.jsonl",
 			time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC), "session a")
 		name, err := safeRemotePathArchiveName(path)
@@ -2008,7 +2051,7 @@ func TestPrepareHTTPSyncFailureCleansOwnedResources(t *testing.T) {
 
 func TestPrepareHTTPSyncsSortsHostsAndUnwindsOnFailure(t *testing.T) {
 	remoteA := newMirrorTestRemote(t)
-	remoteA.manifestStatus = http.StatusNotFound
+	remoteA.manifestStatus = http.StatusNotImplemented
 	remoteA.writeSession(t, "a.jsonl",
 		time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC), "host a")
 	remoteB := newMirrorTestRemote(t)
@@ -2481,7 +2524,7 @@ func TestPreparedHTTPSyncsCloseReversesJoinsAndRetries(t *testing.T) {
 
 func TestPrepareHTTPSyncsReturnsFailedUnwindOwnership(t *testing.T) {
 	remoteA := newMirrorTestRemote(t)
-	remoteA.manifestStatus = http.StatusNotFound
+	remoteA.manifestStatus = http.StatusNotImplemented
 	remoteA.writeSession(t, "a.jsonl",
 		time.Date(2026, 7, 11, 15, 0, 0, 0, time.UTC), "legacy a")
 	remoteB := newMirrorTestRemote(t)

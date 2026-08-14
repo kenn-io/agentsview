@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"syscall"
 	"testing"
@@ -91,6 +92,13 @@ func TestFailureSummary(t *testing.T) {
 				"500 Internal Server Error",
 		},
 		{
+			name: "protocol upgrade required",
+			err:  &StatusError{Code: http.StatusUpgradeRequired},
+			want: "HTTP remote sync failed: collector and remote daemon use " +
+				"incompatible remote-sync protocol versions; upgrade " +
+				"agentsview on both hosts",
+		},
+		{
 			name: "remote-controlled reason phrase is ignored",
 			err: &StatusError{
 				Code:   401,
@@ -108,6 +116,13 @@ func TestFailureSummary(t *testing.T) {
 				Status: "599 Vendor Specific Nonsense",
 			},
 			want: "HTTP remote sync failed: remote daemon returned 599",
+		},
+		{
+			name: "incompatible protocol",
+			err:  &IncompatibleProtocolError{Got: "missing", Want: "1"},
+			want: "HTTP remote sync failed: collector and remote daemon use " +
+				"incompatible remote-sync protocol versions; upgrade " +
+				"agentsview on both hosts",
 		},
 		{
 			name: "connection refused",

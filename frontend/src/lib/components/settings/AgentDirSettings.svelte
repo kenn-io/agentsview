@@ -19,7 +19,7 @@
   }
 
   async function setProviderEnabled(id: string, enabled: boolean) {
-    if (providerSaving || settings.readOnly) return;
+    if (providerSaving || settings.saving || settings.readOnly) return;
 
     const confirmed = [...settings.disabledAgents];
     const next = enabled
@@ -60,7 +60,7 @@
       </div>
       <Toggle
         checked={providerEnabled(provider.id)}
-        disabled={providerSaving || settings.readOnly}
+        disabled={providerSaving || settings.saving || settings.readOnly}
         ariaLabel={m.settings_session_providers_enable_aria({
           provider: provider.display_name,
         })}

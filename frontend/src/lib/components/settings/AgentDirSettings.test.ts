@@ -99,4 +99,14 @@ describe("AgentDirSettings", () => {
     expect(providerSwitch("Enable Gemini session sync").disabled).toBe(true);
     unmount(component);
   });
+
+  it("disables provider switches while another settings save is active", async () => {
+    settings.saving = true;
+    const component = mount(AgentDirSettings, { target: document.body });
+    await tick();
+
+    expect(providerSwitch("Enable Claude Code session sync").disabled).toBe(true);
+    expect(providerSwitch("Enable Gemini session sync").disabled).toBe(true);
+    unmount(component);
+  });
 });

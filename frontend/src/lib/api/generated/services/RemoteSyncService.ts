@@ -12,16 +12,27 @@ export class RemoteSyncService {
    * @returns RemotesyncTargetSet OK
    * @throws ApiError
    */
-  public static getApiV1RemoteSyncTargets(): CancelablePromise<RemotesyncTargetSet> {
+  public static getApiV1RemoteSyncTargets({
+    xAgentsViewRemoteSyncVersion,
+  }: {
+    /**
+     * Required remote-sync protocol version
+     */
+    xAgentsViewRemoteSyncVersion?: string,
+  }): CancelablePromise<RemotesyncTargetSet> {
     return __request(OpenAPI, {
       method: 'GET',
       url: '/api/v1/remote-sync/targets',
+      headers: {
+        'X-AgentsView-Remote-Sync-Version': xAgentsViewRemoteSyncVersion,
+      },
       errors: {
         400: `Bad Request`,
         401: `Unauthorized`,
         403: `Forbidden`,
         404: `Not Found`,
         409: `Conflict`,
+        422: `Unprocessable Entity`,
         500: `Internal Server Error`,
         501: `Not Implemented`,
         502: `Bad Gateway`,

@@ -7,7 +7,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,7 +71,7 @@ func TestPreparedHTTPSyncRebuildContributor(t *testing.T) {
 	require.NoError(t, err)
 	manifestJSON, err := json.Marshal(manifest)
 	require.NoError(t, err)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newCurrentProtocolServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/remote-sync/targets":
 			w.Header().Set("Content-Type", "application/json")

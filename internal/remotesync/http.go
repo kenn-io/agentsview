@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -142,6 +141,7 @@ func (hs HTTPSync) fetchManifest(
 		return Manifest{}, false, err
 	}
 	hs.authorize(req)
+	SetProtocolHeader(req.Header)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept-Encoding", "gzip")
 	resp, err := client.Do(req)
@@ -149,27 +149,17 @@ func (hs HTTPSync) fetchManifest(
 		return Manifest{}, false, err
 	}
 	defer resp.Body.Close()
-	switch resp.StatusCode {
-	case http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusNotImplemented:
-		// Old daemon without the manifest endpoint; also gates delta
-		// archive usage (an old server would ignore the files field
-		// and return the full corpus).
+	if resp.StatusCode == http.StatusNotImplemented {
+		if err := ValidateProtocolHeader(resp.Header); err != nil {
+			return Manifest{}, false, err
+		}
 		return Manifest{}, false, nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return Manifest{}, false, httpStatusError(resp)
 	}
-	// A real old daemon has no manifest route at all: the POST falls
-	// through to the SPA catch-all, which serves index.html with a 200
-	// and Content-Type text/html rather than a 404. Treat any 2xx
-	// response that isn't JSON as manifest-unsupported instead of
-	// failing the decode below. A malformed Content-Type is treated the
-	// same way; only a genuine JSON response goes through the decoder,
-	// so truncated/corrupt JSON (e.g. bad gzip) still surfaces as a hard
-	// error rather than silently degrading to full syncs forever.
-	mediaType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
-	if err != nil || mediaType != "application/json" {
-		return Manifest{}, false, nil
+	if err := ValidateProtocolHeader(resp.Header); err != nil {
+		return Manifest{}, false, err
 	}
 	reader := io.Reader(resp.Body)
 	if resp.Header.Get("Content-Encoding") == "gzip" {
@@ -220,11 +210,18 @@ func (hs HTTPSync) downloadIntoMirror(
 		return err
 	}
 	hs.authorize(req)
+	SetProtocolHeader(req.Header)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept-Encoding", "gzip")
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
+	}
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		if err := ValidateProtocolHeader(resp.Header); err != nil {
+			_ = resp.Body.Close()
+			return err
+		}
 	}
 	archive, err := hs.downloadArchive(
 		ctx, resp, downloadLabel, filepath.Dir(mirrorRoot),
@@ -259,6 +256,7 @@ func (hs HTTPSync) fetchTargets(
 		return TargetSet{}, err
 	}
 	hs.authorize(req)
+	SetProtocolHeader(req.Header)
 	resp, err := client.Do(req)
 	if err != nil {
 		return TargetSet{}, err
@@ -266,6 +264,9 @@ func (hs HTTPSync) fetchTargets(
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return TargetSet{}, httpStatusError(resp)
+	}
+	if err := ValidateProtocolHeader(resp.Header); err != nil {
+		return TargetSet{}, err
 	}
 	var targets TargetSet
 	if err := json.NewDecoder(resp.Body).Decode(&targets); err != nil {
@@ -290,11 +291,18 @@ func (hs HTTPSync) downloadAndExtract(
 		return "", err
 	}
 	hs.authorize(req)
+	SetProtocolHeader(req.Header)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept-Encoding", "gzip")
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
+	}
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		if err := ValidateProtocolHeader(resp.Header); err != nil {
+			_ = resp.Body.Close()
+			return "", err
+		}
 	}
 	downloadLabel := fmt.Sprintf("Downloading session archive from %s", hs.Host)
 	archive, err := hs.downloadArchive(ctx, resp, downloadLabel, os.TempDir())

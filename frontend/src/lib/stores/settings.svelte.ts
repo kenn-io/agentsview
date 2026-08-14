@@ -54,6 +54,7 @@ function forbiddenMessage(serverMessage: string): string {
 }
 
 class SettingsStore {
+  private saveQueue: Promise<boolean> | null = null;
   agentDirs: Record<string, string[]> = $state({});
   sessionProviders: SessionProvider[] = $state([]);
   disabledAgents: string[] = $state([]);
@@ -121,8 +122,25 @@ class SettingsStore {
     }
   }
 
-  async save(patch: Partial<AppSettings>) {
+  save(patch: Partial<AppSettings>): Promise<boolean> {
     this.saving = true;
+    const previous = this.saveQueue;
+    const operation = previous
+      ? previous.then(
+          () => this.performSave(patch),
+          () => this.performSave(patch),
+        )
+      : this.performSave(patch);
+    this.saveQueue = operation;
+    return operation.finally(() => {
+      if (this.saveQueue === operation) {
+        this.saveQueue = null;
+        this.saving = false;
+      }
+    });
+  }
+
+  private async performSave(patch: Partial<AppSettings>): Promise<boolean> {
     this.saveError = null;
     try {
       configureGeneratedClient();
@@ -152,8 +170,6 @@ class SettingsStore {
     } catch (e) {
       this.saveError = e instanceof Error ? e.message : "Failed to save settings";
       return false;
-    } finally {
-      this.saving = false;
     }
   }
 }

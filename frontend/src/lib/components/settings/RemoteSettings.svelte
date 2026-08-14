@@ -84,6 +84,7 @@
   }
 
   async function handleToggleRemote(requireAuth: boolean) {
+    if (settings.saving || settings.readOnly) return;
     pendingRequireAuth = requireAuth;
     remoteToggling = true;
     try {
@@ -111,7 +112,7 @@
         <span class="toggle-label">{m.settings_remote_require_auth()}</span>
         <Toggle
           checked={pendingRequireAuth}
-          disabled={remoteToggling}
+          disabled={remoteToggling || settings.saving || settings.readOnly}
           ariaLabel={m.settings_remote_require_auth()}
           onchange={handleToggleRemote}
         >

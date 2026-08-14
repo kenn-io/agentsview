@@ -175,6 +175,37 @@ describe("SettingsStore session providers", () => {
     expect(settings.disabledAgents).toEqual(["gemini"]);
     expect(settings.saveError).toBe("save failed");
   });
+
+  it("serializes saves and keeps saving true until the queue drains", async () => {
+    let finishFirst!: (value: typeof response) => void;
+    settingsService.putApiV1Settings
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          finishFirst = resolve;
+        }),
+      )
+      .mockResolvedValueOnce({
+        ...response,
+        disabled_agents: [],
+        chart_palette: "matplotlib",
+      });
+
+    const first = settings.save({ disabled_agents: [] });
+    const second = settings.save({ chart_palette: "matplotlib" });
+
+    expect(settingsService.putApiV1Settings).toHaveBeenCalledTimes(1);
+    expect(settings.saving).toBe(true);
+
+    finishFirst({ ...response, disabled_agents: [] });
+    await first;
+    expect(settingsService.putApiV1Settings).toHaveBeenCalledTimes(2);
+    expect(settings.saving).toBe(true);
+
+    await second;
+    expect(settings.saving).toBe(false);
+    expect(settings.disabledAgents).toEqual([]);
+    expect(settings.chartPalette).toBe("matplotlib");
+  });
 });
 
 describe("SettingsStore.load auth handling", () => {

@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	stdlibsync "sync"
 	"testing"
@@ -634,6 +635,9 @@ func TestRunRemoteSyncRequestUnifiedHTTPUsesMirrorDeltaAndBulkRebuild(t *testing
 	archiveRequests := 0
 	serverErrors := make(chan error, 8)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, strconv.Itoa(remotesync.ProtocolVersion),
+			r.Header.Get(remotesync.ProtocolHeader))
+		remotesync.SetProtocolHeader(w.Header())
 		switch r.URL.Path {
 		case "/api/v1/remote-sync/targets":
 			w.Header().Set("Content-Type", "application/json")
@@ -2105,6 +2109,9 @@ func TestSyncRemotesRejectsAdHocHTTP(t *testing.T) {
 func TestRunHTTPRemoteSyncReachesMirrorPath(t *testing.T) {
 	manifestRequests := 0
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, strconv.Itoa(remotesync.ProtocolVersion),
+			r.Header.Get(remotesync.ProtocolHeader))
+		remotesync.SetProtocolHeader(w.Header())
 		switch r.URL.Path {
 		case "/api/v1/remote-sync/targets":
 			w.Header().Set("Content-Type", "application/json")

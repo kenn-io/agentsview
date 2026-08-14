@@ -46,12 +46,23 @@ func FailureSummary(err error) string {
 					"remote-sync endpoints (%s); upgrade agentsview on "+
 					"the remote host", statusLabel(statusErr.Code),
 			)
+		case http.StatusUpgradeRequired:
+			return "HTTP remote sync failed: collector and remote daemon use " +
+				"incompatible remote-sync protocol versions; upgrade agentsview " +
+				"on both hosts"
 		default:
 			return fmt.Sprintf(
 				"HTTP remote sync failed: remote daemon returned %s",
 				statusLabel(statusErr.Code),
 			)
 		}
+	}
+
+	var protocolErr *IncompatibleProtocolError
+	if errors.As(err, &protocolErr) {
+		return "HTTP remote sync failed: collector and remote daemon use " +
+			"incompatible remote-sync protocol versions; upgrade agentsview " +
+			"on both hosts"
 	}
 
 	if errors.Is(err, syscall.ECONNREFUSED) {

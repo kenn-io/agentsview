@@ -217,8 +217,6 @@ A full HTTP transfer occurs in these cases:
 - at least half of the manifest files are missing or changed
 - a delta request is rejected after a manifest succeeded; the collector retries
   once with a full archive
-- the remote daemon does not support manifests, in which case the collector uses
-  the legacy full-transfer path on every sync
 
 Windsurf's curated export is also fetched in full on every sync, independently
 of the directory-scoped archive decision.
@@ -229,20 +227,11 @@ the local database or turn remote sync into a destructive reconciliation.
 
 ### Compatibility And Recovery
 
-A current collector works with older remote daemons that already expose the
-HTTP remote-sync target and archive endpoints. A missing manifest route —
-including an old daemon's HTML app shell answering that route — makes the
-collector report that incremental transfer is unavailable and use the legacy
-full-archive flow. That flow extracts to a temporary directory and does not
-create or update the persistent mirror. During a configured full local sync,
-the temporary source still uses the collector's new batched ingest path.
-
-Therefore the collector can be upgraded and tested before its spokes. Upgrading
-only the collector provides the database-ingest speedup; upgrading each spoke
-adds manifest-delta transfer and avoids downloading its complete archive. A
-spoke old enough to lack the target or archive endpoints was not compatible
-with HTTP remote sync before this change either. Older collectors also continue
-to use the full-archive endpoint on a current remote.
+HTTP remote sync requires the collector and remote daemon to use the same
+remote-sync protocol version. Every target, manifest, and archive request and
+response carries that version. Missing or mismatched versions fail before
+targets or archive data are exchanged, so upgrade both hosts before syncing
+again after either side changes protocol.
 
 The normal mirror comparison detects interrupted extraction when the resulting
 file size or modification time differs from the manifest, and the next sync

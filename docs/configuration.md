@@ -147,9 +147,10 @@ deltas when fewer than half of the manifest files need fetching; see
 When a full or automatic data-version rebuild includes local sources, configured
 HTTP hosts join the same temporary-database bulk ingest and atomic swap. `--full`
 reparses the complete local and remote corpus without retransferring unchanged
-files from manifest-capable spokes. Older HTTP-capable spokes remain compatible
-through the full-archive fallback; upgrading them is required only to gain delta
-transfer.
+files from manifest-capable spokes. HTTP remote sync requires the collector and
+remote daemon to use the same remote-sync protocol version. After upgrading
+either host, upgrade the other before syncing again; incompatible peers fail
+before targets or archive data are exchanged.
 
 Each `remote_hosts.host` value must be unique and stable. It namespaces imported
 session IDs, the database skip cache, and the persistent mirror; changing it for

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -20,21 +21,48 @@ func (s *Server) registerRemoteSyncRoutes() {
 	s.mux.HandleFunc("/api/v1/remote-sync/manifest", s.remoteSyncManifestHTTP)
 }
 
+type remoteSyncTargetsInput struct {
+	ProtocolVersion string `header:"X-AgentsView-Remote-Sync-Version" doc:"Required remote-sync protocol version"`
+}
+
+type remoteSyncTargetsOutput struct {
+	ProtocolVersion string `header:"X-AgentsView-Remote-Sync-Version"`
+	Body            remotesync.TargetSet
+}
+
 func (s *Server) humaRemoteSyncTargets(
 	_ context.Context,
-	_ *emptyInput,
-) (*jsonOutput[remotesync.TargetSet], error) {
+	in *remoteSyncTargetsInput,
+) (*remoteSyncTargetsOutput, error) {
+	requestHeader := make(http.Header)
+	requestHeader.Set(remotesync.ProtocolHeader, in.ProtocolVersion)
+	if err := remotesync.ValidateProtocolHeader(requestHeader); err != nil {
+		return nil, apiError(http.StatusUpgradeRequired, err.Error())
+	}
 	if _, ok := s.db.(*db.DB); !ok {
 		return nil, apiError(http.StatusNotImplemented, "not available in remote mode")
 	}
-	return &jsonOutput[remotesync.TargetSet]{
-		Body: remotesync.ResolveTargets(s.ingestionConfig()),
+	return &remoteSyncTargetsOutput{
+		ProtocolVersion: strconv.Itoa(remotesync.ProtocolVersion),
+		Body:            remotesync.ResolveTargets(s.ingestionConfig()),
 	}, nil
+}
+
+func requireRemoteSyncProtocol(w http.ResponseWriter, r *http.Request) bool {
+	if err := remotesync.ValidateProtocolHeader(r.Header); err != nil {
+		http.Error(w, err.Error(), http.StatusUpgradeRequired)
+		return false
+	}
+	remotesync.SetProtocolHeader(w.Header())
+	return true
 }
 
 func (s *Server) remoteSyncManifestHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !requireRemoteSyncProtocol(w, r) {
 		return
 	}
 	if _, ok := s.db.(*db.DB); !ok {
@@ -87,6 +115,9 @@ func (s *Server) remoteSyncManifestHTTP(w http.ResponseWriter, r *http.Request) 
 func (s *Server) remoteSyncArchiveHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !requireRemoteSyncProtocol(w, r) {
 		return
 	}
 	if _, ok := s.db.(*db.DB); !ok {
