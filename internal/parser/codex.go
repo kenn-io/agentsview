@@ -96,6 +96,11 @@ type codexForkGate struct {
 	// after subagent lineage metadata. Only a positive signal can mark a
 	// session for retry; child-only subagents stay current.
 	lineagePositive bool
+	// resolvedOnce latches whether the parent was ever resolved during
+	// this parse. The in-parse gate resets parentResolved when the first
+	// child turn opens it, so the retry verdict reads this sticky flag
+	// instead.
+	resolvedOnce bool
 }
 
 // retryReason reports the unresolved-parent retry condition captured
@@ -103,7 +108,7 @@ type codexForkGate struct {
 // provide turn ids keeps the child visible but marks its data version
 // for retry. Empty when the parse is current.
 func (g *codexForkGate) retryReason() string {
-	if !g.lineagePositive || g.parentResolved || g.parentSessionID == "" {
+	if !g.lineagePositive || g.resolvedOnce || g.parentSessionID == "" {
 		return ""
 	}
 	return "codex parent turns unresolved for " + g.parentSessionID
@@ -125,6 +130,7 @@ func (g *codexForkGate) armFromMeta(payload gjson.Result, parentResolved bool) {
 	}
 	g.parentSessionID = parentID
 	g.parentResolved = parentResolved
+	g.resolvedOnce = g.resolvedOnce || parentResolved
 	if forkedFromID != "" {
 		g.active = parentResolved
 		g.lineagePositive = true
