@@ -69,6 +69,9 @@ type Service struct {
 	schedule           ScheduleConfig
 	archiveWrite       func(func() error) error
 	stopSchedule       chan struct{}
+	closed             bool
+	schedulerWG        sync.WaitGroup
+	jobsWG             sync.WaitGroup
 }
 
 func NewService(broker *transport.Broker, store db.Store, cacheRoot, machine string, archiveWrite ...func(func() error) error) *Service {
@@ -82,7 +85,11 @@ func NewService(broker *transport.Broker, store db.Store, cacheRoot, machine str
 	if s.schedule.IntervalMinutes < 15 {
 		s.schedule.IntervalMinutes = 360
 	}
-	go s.runSchedule()
+	s.schedulerWG.Add(1)
+	go func() {
+		defer s.schedulerWG.Done()
+		s.runSchedule()
+	}()
 	return s
 }
 
@@ -124,14 +131,23 @@ func (s *Service) runSchedule() {
 	}
 }
 
-// Close cancels a live job and stops the scheduler before archive shutdown.
+// Close stops the scheduler and joins all Claude work before archive shutdown.
 func (s *Service) Close() {
-	s.Cancel()
-	select {
-	case <-s.stopSchedule:
-	default:
-		close(s.stopSchedule)
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
 	}
+	s.closed = true
+	close(s.stopSchedule)
+	if s.cancel != nil && s.status.Status == "running" {
+		s.status.Status = "cancelling"
+		s.cancel()
+	}
+	s.mu.Unlock()
+
+	s.schedulerWG.Wait()
+	s.jobsWG.Wait()
 }
 func (s *Service) Status() JobStatus { s.mu.Lock(); defer s.mu.Unlock(); return s.status }
 
@@ -146,6 +162,9 @@ func (s *Service) Start(ctx context.Context, mode SyncMode) (JobStatus, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return JobStatus{}, errors.New("Claude sync service is closed")
+	}
 	if s.status.Status == "running" || s.status.Status == "cancelling" {
 		return s.status, ErrSyncAlreadyRunning
 	}
@@ -156,7 +175,11 @@ func (s *Service) Start(ctx context.Context, mode SyncMode) (JobStatus, error) {
 	jobCtx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
 	s.status = JobStatus{ID: fmt.Sprintf("claude-%d", time.Now().UnixNano()), Status: "running", Mode: mode}
-	go s.run(jobCtx)
+	s.jobsWG.Add(1)
+	go func() {
+		defer s.jobsWG.Done()
+		s.run(jobCtx)
+	}()
 	return s.status, nil
 }
 func (s *Service) Cancel() bool {
@@ -211,12 +234,6 @@ func (s *Service) run(ctx context.Context) {
 		}
 	}()
 	seen := map[string]struct{}{}
-	fts := importer.NewLazyFTS(s.store, nil)
-	defer func() {
-		if err := fts.Restore(); err != nil {
-			s.fail(err)
-		}
-	}()
 	for offset := 0; ; {
 		response, err := s.request(ctx, OperationListConversations, ListParams{Offset: offset, Limit: 50})
 		if err != nil {
@@ -287,7 +304,7 @@ func (s *Service) run(ctx context.Context) {
 			s.update(func(st *JobStatus) { st.Fetched++ })
 		}
 		if len(batch) > 0 {
-			if err := s.importBatch(ctx, batch, s.Status().Mode == SyncRepair, fts); err != nil {
+			if err := s.importBatch(ctx, batch, s.Status().Mode == SyncRepair); err != nil {
 				s.fail(err)
 				return
 			}
@@ -329,8 +346,16 @@ func (s *Service) request(ctx context.Context, operation string, params any) (tr
 	}
 	panic("unreachable")
 }
-func (s *Service) importBatch(ctx context.Context, conversations []BrowserConversation, repair bool, fts *importer.LazyFTS) error {
-	return s.withArchiveWrite(func() error {
+func (s *Service) importBatch(ctx context.Context, conversations []BrowserConversation, repair bool) error {
+	// Keep FTS suspension inside this short archive-write critical section. Remote
+	// pagination and detail requests continue while search remains available.
+	return s.withArchiveWrite(func() (workErr error) {
+		fts := importer.NewLazyFTS(s.store, nil)
+		defer func() {
+			if err := fts.Restore(); err != nil {
+				workErr = errors.Join(workErr, err)
+			}
+		}()
 		prepared, err := PrepareBrowserImportWithForce(s.cacheRoot, conversations, repair)
 		if err != nil {
 			return err

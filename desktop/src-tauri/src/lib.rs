@@ -74,6 +74,9 @@ type CommandRx = Receiver<CommandEvent>;
 struct SidecarState {
     child: Mutex<Option<SidecarProcess>>,
     backend_port: Mutex<Option<u16>>,
+    // Resolved once from the exact environment supplied to the Go sidecar.
+    // It is held in memory only and cleared when that sidecar terminates.
+    loopback_auth_token: Mutex<Option<String>>,
     active_generation: Mutex<Option<u64>>,
     stopping_generation: Mutex<Option<u64>>,
     restart_after_stop_timeout_generation: Mutex<Option<u64>>,
@@ -94,6 +97,8 @@ struct SidecarProcess {
 #[derive(Default)]
 struct ClaudeAuthState {
     connected_this_launch: AtomicBool,
+    auth_watcher_active: AtomicBool,
+    transport_worker_active: AtomicBool,
     next_browser_request: AtomicU64,
     pending_browser_request: Mutex<Option<ClaudeBrowserRequest>>,
 }
@@ -625,6 +630,13 @@ fn claude_auth_start(handle: AppHandle) -> Result<ClaudeAuthStatus, String> {
     if let Some(window) = handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
         window.show().map_err(|err| err.to_string())?;
         window.set_focus().map_err(|err| err.to_string())?;
+        if !handle
+            .state::<ClaudeAuthState>()
+            .connected_this_launch
+            .load(Ordering::SeqCst)
+        {
+            start_claude_auth_watcher(handle.clone());
+        }
         return Ok(ClaudeAuthStatus {
             connected: handle.state::<ClaudeAuthState>().connected_this_launch.load(Ordering::SeqCst),
             message: "Claude sign-in is already open. AgentsView will verify the session automatically once sign-in completes.".into(),
@@ -640,8 +652,34 @@ fn claude_auth_start(handle: AppHandle) -> Result<ClaudeAuthStatus, String> {
 }
 
 fn loopback_auth_token(handle: &AppHandle) -> Option<String> {
-    let path = handle.path().app_data_dir().ok()?.join("config.toml");
-    let config = fs::read_to_string(path).ok()?;
+    handle
+        .state::<SidecarState>()
+        .loopback_auth_token
+        .lock()
+        .ok()
+        .and_then(|token| token.clone())
+}
+
+// Resolve from the same merged environment passed to Go, rather than Tauri's
+// app-data directory. This covers AGENTSVIEW_AUTH_TOKEN and
+// AGENTSVIEW_DATA_DIR overrides; the resulting value is retained only for the
+// lifetime of the matching sidecar generation.
+fn resolve_sidecar_loopback_auth_token() -> Option<String> {
+    let environment = sidecar_env();
+    let lookup = |name: &str| {
+        environment
+            .iter()
+            .find_map(|(key, value)| (key == name).then(|| value.to_string_lossy().into_owned()))
+            .filter(|value| !value.is_empty())
+    };
+    if let Some(token) = lookup("AGENTSVIEW_AUTH_TOKEN") {
+        return Some(token);
+    }
+    let data_dir = lookup("AGENTSVIEW_DATA_DIR")
+        .or_else(|| lookup("AGENT_VIEWER_DATA_DIR"))
+        .map(PathBuf::from)
+        .or_else(|| resolve_home_dir().map(|home| home.join(".agentsview")))?;
+    let config = fs::read_to_string(data_dir.join("config.toml")).ok()?;
     config.lines().find_map(|line| {
         let (key, value) = line.split_once('=')?;
         (key.trim() == "auth_token")
@@ -718,6 +756,10 @@ fn loopback_http_request(path: &str, port: u16, body_len: usize, token: Option<&
 // typed work from the Go sync service and returns one browser response. It
 // contains no pagination, retry, scheduling, cache, or import policy.
 fn start_claude_transport_worker(handle: AppHandle) {
+    let state = handle.state::<ClaudeAuthState>();
+    if state.transport_worker_active.swap(true, Ordering::SeqCst) {
+        return;
+    }
     thread::spawn(move || loop {
         if !handle
             .state::<ClaudeAuthState>()
@@ -960,9 +1002,13 @@ fn claude_auth_fetch_result(
 }
 
 fn start_claude_auth_watcher(handle: AppHandle) {
+    let state = handle.state::<ClaudeAuthState>();
+    if state.auth_watcher_active.swap(true, Ordering::SeqCst) {
+        return;
+    }
     thread::spawn(move || {
         // Poll only while this dedicated sign-in window exists, and stop after
-        // ten minutes. Session state is read ephemerally from WebKit only.
+        // ten minutes. Reopening an unauthenticated window starts a new watcher.
         for _ in 0..600 {
             thread::sleep(Duration::from_secs(1));
             let authenticated = claude_session_organization(&handle).is_ok();
@@ -979,14 +1025,23 @@ fn start_claude_auth_watcher(handle: AppHandle) {
                 let _ = window.hide();
             }
             start_claude_transport_worker(handle.clone());
-            return;
+            break;
         }
+        handle
+            .state::<ClaudeAuthState>()
+            .auth_watcher_active
+            .store(false, Ordering::SeqCst);
     });
 }
 
 #[tauri::command]
 fn claude_auth_disconnect(handle: AppHandle) -> Result<ClaudeAuthStatus, String> {
     if let Some(window) = handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
+        // On macOS, deleting the WebKit profile directory alone can leave the
+        // persistent WKWebsiteDataStore (and its Claude session) intact.
+        window
+            .clear_all_browsing_data()
+            .map_err(|err| format!("could not clear the Claude browser session: {err}"))?;
         window.close().map_err(|err| err.to_string())?;
     }
     let profile_dir = claude_auth_profile_dir(&handle)?;
@@ -1408,6 +1463,9 @@ fn save_sidecar(app: &AppHandle, child: CommandChild) -> Result<u64, DynError> {
     if let Ok(mut active_generation) = state.active_generation.lock() {
         *active_generation = Some(generation);
     }
+    if let Ok(mut token) = state.loopback_auth_token.lock() {
+        *token = resolve_sidecar_loopback_auth_token();
+    }
     if let Ok(mut stopping_generation) = state.stopping_generation.lock() {
         *stopping_generation = None;
     }
@@ -1433,6 +1491,12 @@ fn set_sidecar_port(state: &SidecarState, port: Option<u16>) {
     }
 }
 
+fn clear_sidecar_loopback_auth_token(state: &SidecarState) {
+    if let Ok(mut token) = state.loopback_auth_token.lock() {
+        *token = None;
+    }
+}
+
 fn handle_sidecar_terminated(
     state: &SidecarState,
     startup_handled: &AtomicBool,
@@ -1440,6 +1504,7 @@ fn handle_sidecar_terminated(
 ) -> bool {
     if mark_sidecar_inactive_if_current(state, generation) {
         set_sidecar_port(state, None);
+        clear_sidecar_loopback_auth_token(state);
     }
     clear_sidecar_child_if_current(state, generation);
     clear_stopping_generation_if_current(state, generation);

@@ -84,7 +84,7 @@ func TestSchedulePersistsAndCloseStopsActiveJob(t *testing.T) {
 	_, err := service.Start(context.Background(), SyncIncremental)
 	require.NoError(t, err)
 	service.Close()
-	require.Eventually(t, func() bool { return service.Status().Status == "cancelled" }, time.Second, 10*time.Millisecond)
+	assert.Equal(t, "cancelled", service.Status().Status, "Close must join the cancelled sync job")
 }
 
 func TestDecodeBrowserPageFallsBackWhenHasMoreIsAbsent(t *testing.T) {
@@ -97,6 +97,7 @@ func TestDecodeBrowserPageFallsBackWhenHasMoreIsAbsent(t *testing.T) {
 func TestServiceImportsExplicitlyPaginatedConversationPages(t *testing.T) {
 	broker := transport.NewBroker()
 	database := serviceTestDB(t)
+	hadFTS := database.HasFTS()
 	service := NewService(broker, database, t.TempDir(), "local")
 	t.Cleanup(service.Close)
 
@@ -113,6 +114,7 @@ func TestServiceImportsExplicitlyPaginatedConversationPages(t *testing.T) {
 			if params.Offset == 0 {
 				return transportResponse(request, 200, `{"conversations":[`+string(testSummary("one"))+`],"has_more":true}`)
 			}
+			assert.Equal(t, hadFTS, database.HasFTS(), "FTS availability must be restored before the next remote page is fetched")
 			return transportResponse(request, 200, `{"conversations":[`+string(testSummary("two"))+`],"has_more":false}`)
 		case OperationGetConversation:
 			var params DetailParams

@@ -2,6 +2,7 @@
   import { Button, Spinner } from "@kenn-io/kit-ui";
   import { onDestroy, onMount } from "svelte";
   import { cancelClaudeAISync, configureClaudeAISchedule, getClaudeAISchedule, getClaudeAISyncStatus, startClaudeAISync, type ClaudeScheduleConfig, type ClaudeSyncStatus } from "../../api/client.js";
+  import { isRemoteConnection } from "../../api/runtime.js";
 
   type ClaudeAuthStatus = {
     connected: boolean;
@@ -30,6 +31,7 @@
   let pollTimer: ReturnType<typeof setInterval> | undefined;
   let syncPollTimer: ReturnType<typeof setInterval> | undefined;
   const isDesktop = $derived(desktopInvoke() !== null);
+  const canUseClaudeBrowser = $derived(isDesktop && !isRemoteConnection());
 
   function stopPolling() {
     if (pollTimer) clearInterval(pollTimer);
@@ -140,7 +142,7 @@
   }
 
   onMount(() => {
-    if (desktopInvoke()) {
+    if (canUseClaudeBrowser) {
       void refreshStatus();
       void refreshSchedule();
       void refreshSync();
@@ -165,6 +167,8 @@
     </p>
     {#if !isDesktop}
       <p class="connection-note">Claude connection is available in the AgentsView desktop app.</p>
+    {:else if !canUseClaudeBrowser}
+      <p class="connection-note">Claude connection is unavailable while viewing a remote AgentsView server.</p>
     {:else}
       <p class="connection-note" role="status">{status.message}</p>
     {/if}
@@ -189,7 +193,7 @@
     {/if}
   </div>
 
-  {#if isDesktop}
+  {#if canUseClaudeBrowser}
     <div class="connection-actions">
       <Button size="sm" disabled={busy} onclick={() => void run("claude_auth_start")}>
         Connect
