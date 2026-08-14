@@ -229,6 +229,9 @@ func serveStartingStatusLines(st *startupState, now time.Time) []string {
 	if st.PID > 0 {
 		lines = append(lines, fmt.Sprintf("  pid:     %d", st.PID))
 	}
+	if st.Version != "" {
+		lines = append(lines, "  version: "+st.Version)
+	}
 	if !st.StartedAt.IsZero() {
 		if elapsed := now.Sub(st.StartedAt).Round(time.Second); elapsed >= 0 {
 			lines = append(lines, fmt.Sprintf("  elapsed: %s", elapsed))

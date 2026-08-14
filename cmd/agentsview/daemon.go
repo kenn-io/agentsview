@@ -417,6 +417,25 @@ func daemonPersistentStartupError(
 	)
 }
 
+// startupStateStopRecord turns a pre-runtime startup snapshot into the
+// identity-bearing record used by daemon stop and restart. Older snapshots
+// without an OS process create time remain deliberately un-stoppable: a PID
+// alone is not enough evidence to signal a process safely.
+func startupStateStopRecord(st *startupState) (daemon.RuntimeRecord, bool) {
+	if st == nil || st.PID <= 0 || st.CreateTime == "" {
+		return daemon.RuntimeRecord{}, false
+	}
+	return daemon.RuntimeRecord{
+		PID:       st.PID,
+		Service:   daemonService,
+		Version:   st.Version,
+		StartedAt: st.StartedAt,
+		Metadata: map[string]string{
+			runtimeCreateTime: st.CreateTime,
+		},
+	}, true
+}
+
 func writeDaemonStartResult(w io.Writer, result backgroundLaunchResult, restarted bool) {
 	if result.Runtime != nil && !result.Started {
 		fmt.Fprintf(w, "agentsview already running at %s (pid %d)\n", urlFromDaemonRuntime(result.Runtime), result.Runtime.Record.PID)
@@ -615,20 +634,31 @@ func runDaemonStop(w io.Writer, deps daemonCommandDeps) error {
 	if err := validateLockedDataDir(dataDir, cfg.DataDir); err != nil {
 		return fmt.Errorf("daemon stop: %w", err)
 	}
+	starting := deps.isStarting(cfg.DataDir)
+	startupSnapshot := deps.readStartupState(cfg.DataDir)
 	records, err := deps.writableRecords(cfg.DataDir, cfg.AuthToken)
 	if err != nil {
 		fallback := writableRuntimeFallbackForCommand(cfg, deps)
 		if fallback == nil {
-			return fmt.Errorf("daemon stop: inspecting runtime store: %w", err)
+			if startupRecord, ok := startupStateStopRecord(startupSnapshot); starting && ok {
+				records = []daemon.RuntimeRecord{startupRecord}
+			} else {
+				return fmt.Errorf("daemon stop: inspecting runtime store: %w", err)
+			}
+		} else {
+			records = []daemon.RuntimeRecord{fallback.Record}
 		}
-		records = []daemon.RuntimeRecord{fallback.Record}
 	} else {
 		var fallback bool
 		records, fallback = writableDaemonRecordsWithFallback(records, func() *DaemonRuntime {
 			return writableRuntimeFallbackForCommand(cfg, deps)
 		})
-		if !fallback && deps.isStarting(cfg.DataDir) {
-			return daemonPersistentStartupError("daemon stop", cfg.DataDir, deps.readStartupState(cfg.DataDir), deps.now())
+		if !fallback && starting {
+			if startupRecord, ok := startupStateStopRecord(startupSnapshot); ok && len(records) == 0 {
+				records = []daemon.RuntimeRecord{startupRecord}
+			} else {
+				return daemonPersistentStartupError("daemon stop", cfg.DataDir, startupSnapshot, deps.now())
+			}
 		}
 	}
 	if len(records) == 0 {
@@ -675,9 +705,16 @@ func runDaemonRestartWithPolicy(
 	if err := validateLockedDataDir(dataDir, cfg.DataDir); err != nil {
 		return fmt.Errorf("daemon restart: %w", err)
 	}
+	starting := deps.isStarting(cfg.DataDir)
+	startupSnapshot := deps.readStartupState(cfg.DataDir)
 	fallback := writableRuntimeFallbackForCommand(cfg, deps)
-	if fallback == nil && deps.isStarting(cfg.DataDir) {
-		return daemonPersistentStartupError("daemon restart", cfg.DataDir, deps.readStartupState(cfg.DataDir), deps.now())
+	var startupRecord *daemon.RuntimeRecord
+	if fallback == nil && starting {
+		rec, ok := startupStateStopRecord(startupSnapshot)
+		if !ok {
+			return daemonPersistentStartupError("daemon restart", cfg.DataDir, startupSnapshot, deps.now())
+		}
+		startupRecord = &rec
 	}
 	if err := deps.validateConfig(cfg); err != nil {
 		return fmt.Errorf("daemon restart: invalid config: %w", err)
@@ -687,12 +724,17 @@ func runDaemonRestartWithPolicy(
 	}
 	records, err := deps.writableRecords(cfg.DataDir, cfg.AuthToken)
 	if err != nil {
-		if fallback == nil {
+		if fallback == nil && startupRecord == nil {
 			return fmt.Errorf("daemon restart: inspecting runtime store: %w", err)
 		}
 	}
 	if fallback != nil {
 		records = []daemon.RuntimeRecord{fallback.Record}
+	} else if startupRecord != nil {
+		if len(records) > 0 {
+			return daemonPersistentStartupError("daemon restart", cfg.DataDir, startupSnapshot, deps.now())
+		}
+		records = []daemon.RuntimeRecord{*startupRecord}
 	}
 	wasRunning := len(records) > 0
 	if wasRunning {
