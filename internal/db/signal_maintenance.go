@@ -364,6 +364,24 @@ func (db *DB) TranscriptRevision(sessionID string) (string, error) {
 	return rev, nil
 }
 
+// SessionSecretsRulesVersion returns a session's stored secrets rules
+// version. The incremental signal maintainer uses the pre-write value to
+// verify the session was scanned at the current definite rules version
+// before folding a delta: the write transaction blanks the column when it
+// bumps the transcript revision, so only the pre-write value is meaningful.
+func (db *DB) SessionSecretsRulesVersion(sessionID string) (string, error) {
+	var ver string
+	if err := db.getReader().QueryRow(
+		`SELECT secrets_rules_version FROM sessions WHERE id = ?`,
+		sessionID,
+	).Scan(&ver); err != nil {
+		return "", fmt.Errorf(
+			"loading secrets rules version %s: %w", sessionID, err,
+		)
+	}
+	return ver, nil
+}
+
 // GetSessionSignalState loads a session's compact signal state row.
 // ok=false means no row exists.
 func (db *DB) GetSessionSignalState(
@@ -445,6 +463,13 @@ func applySignalDeltaTx(
 	addedDefinite := 0
 	for i := range d.InsertFindings {
 		f := &d.InsertFindings[i]
+		// Unlike replaceSecretFindingsTx (which overrides RulesVersion
+		// with the caller's stamp), this path inserts f.RulesVersion
+		// verbatim. Default an un-stamped finding to the current definite
+		// version so it stays visible to current-version listings.
+		if f.RulesVersion == "" {
+			f.RulesVersion = secrets.DefiniteRulesVersion()
+		}
 		res, err := tx.Exec(`
 			INSERT INTO secret_findings (
 				session_id, rule_name, confidence,

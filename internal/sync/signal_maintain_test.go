@@ -11,8 +11,288 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/secrets"
+	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
+
+// fakeSignalQuery is a minimal in-memory db.SignalQuery for maintainer
+// unit tests. It lets the maintainer run without a live transaction.
+type fakeSignalQuery struct {
+	sess     *db.Session
+	state    db.SessionSignalState
+	hasState bool
+	revision string
+}
+
+func (f *fakeSignalQuery) Session(context.Context) (*db.Session, error) {
+	return f.sess, nil
+}
+
+func (f *fakeSignalQuery) TranscriptRevision(context.Context) (string, error) {
+	return f.revision, nil
+}
+
+func (f *fakeSignalQuery) SignalState(
+	context.Context,
+) (db.SessionSignalState, bool, error) {
+	return f.state, f.hasState, nil
+}
+
+func (f *fakeSignalQuery) TrailingToolCalls(
+	context.Context, int,
+) ([]db.ToolCallSignalFact, error) {
+	return nil, nil
+}
+
+func (f *fakeSignalQuery) ToolCallsByUseID(
+	context.Context, []string,
+) ([]db.ToolCallSignalFact, error) {
+	return nil, nil
+}
+
+func (f *fakeSignalQuery) CallResultEvents(
+	context.Context, int, int,
+) ([]db.ToolResultEvent, error) {
+	return nil, nil
+}
+
+// newTestMaintainer builds a maintainer stamped with the current quality
+// and secrets rules versions, mirroring newIncrementalSignalMaintainer.
+func newTestMaintainer(
+	preWriteRevision, preWriteSecretsVersion string, appended []db.Message,
+) *incrementalSignalMaintainer {
+	return &incrementalSignalMaintainer{
+		sessionID:              "s1",
+		appended:               appended,
+		preWriteRevision:       preWriteRevision,
+		preWriteSecretsVersion: preWriteSecretsVersion,
+		qualitySignalVersion:   db.CurrentQualitySignalVersion,
+		secretsRulesVersion:    secrets.DefiniteRulesVersion(),
+	}
+}
+
+func currentStateBlob(t *testing.T) []byte {
+	t.Helper()
+	state := signals.SeedIncrementalState(
+		nil, nil, "", "", nil, nil, 0, 0,
+	)
+	blob, err := state.MarshalBinary()
+	require.NoError(t, err)
+	return blob
+}
+
+// TestIncrementalMaintainerDeclinesStaleVersions pins the version gate: a
+// state or session whose quality/secret versions are not current must
+// decline (nil delta) so the debounced full recompute reseeds — even when
+// the stored state and session versions agree with each other but are both
+// stale.
+func TestIncrementalMaintainerDeclinesStaleVersions(t *testing.T) {
+	blob := currentStateBlob(t)
+	cases := []struct {
+		name            string
+		sessQuality     int
+		preWriteSecrets string
+		storedSignal    int
+	}{
+		{
+			name:            "both versions stale but equal",
+			sessQuality:     db.CurrentQualitySignalVersion - 1,
+			preWriteSecrets: secrets.DefiniteRulesVersion(),
+			storedSignal:    db.CurrentQualitySignalVersion - 1,
+		},
+		{
+			name:            "stale stored signal version",
+			sessQuality:     db.CurrentQualitySignalVersion,
+			preWriteSecrets: secrets.DefiniteRulesVersion(),
+			storedSignal:    db.CurrentQualitySignalVersion - 1,
+		},
+		{
+			name:            "stale session quality version",
+			sessQuality:     db.CurrentQualitySignalVersion - 1,
+			preWriteSecrets: secrets.DefiniteRulesVersion(),
+			storedSignal:    db.CurrentQualitySignalVersion,
+		},
+		{
+			name:            "stale pre-write secrets version",
+			sessQuality:     db.CurrentQualitySignalVersion,
+			preWriteSecrets: "stale-secrets-version",
+			storedSignal:    db.CurrentQualitySignalVersion,
+		},
+		{
+			name:            "un-stamped pre-write secrets version",
+			sessQuality:     db.CurrentQualitySignalVersion,
+			preWriteSecrets: "",
+			storedSignal:    db.CurrentQualitySignalVersion,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newTestMaintainer("rev", tc.preWriteSecrets, nil)
+			q := &fakeSignalQuery{
+				sess: &db.Session{
+					QualitySignalVersion: tc.sessQuality,
+				},
+				state: db.SessionSignalState{
+					State:              blob,
+					TranscriptRevision: "rev",
+					SignalVersion:      tc.storedSignal,
+				},
+				hasState: true,
+				revision: "rev",
+			}
+			delta, err := m.MaintainTx(context.Background(), q)
+			require.NoError(t, err)
+			assert.Nil(t, delta, "stale versions must decline")
+		})
+	}
+}
+
+// TestIncrementalMaintainerProceedsCurrentVersions pins the positive case:
+// with a current transcript revision, current quality version, and current
+// secrets rules version, the maintainer must produce a delta.
+func TestIncrementalMaintainerProceedsCurrentVersions(t *testing.T) {
+	m := newTestMaintainer("rev", secrets.DefiniteRulesVersion(), nil)
+	q := &fakeSignalQuery{
+		sess: &db.Session{
+			QualitySignalVersion: db.CurrentQualitySignalVersion,
+		},
+		state: db.SessionSignalState{
+			State:              currentStateBlob(t),
+			TranscriptRevision: "rev",
+			SignalVersion:      db.CurrentQualitySignalVersion,
+		},
+		hasState: true,
+		revision: "rev",
+	}
+	delta, err := m.MaintainTx(context.Background(), q)
+	require.NoError(t, err)
+	require.NotNil(t, delta,
+		"current versions with a matching revision must proceed")
+}
+
+// TestIncrementalMaintainerCompactionExplicitBoundaryParity pins parity
+// between the full compute and the incremental fold for compaction count:
+// an explicit compact boundary suppresses token-drop compactions, so a
+// session with both must count only the boundary.
+func TestIncrementalMaintainerCompactionExplicitBoundaryParity(t *testing.T) {
+	boundary := db.Message{SessionID: "s1", Ordinal: 0, Role: "assistant",
+		IsCompactBoundary: true}
+	preCtx := db.Message{SessionID: "s1", Ordinal: 1, Role: "assistant",
+		HasContextTokens: true, ContextTokens: 1000}
+	drop := db.Message{SessionID: "s1", Ordinal: 2, Role: "assistant",
+		HasContextTokens: true, ContextTokens: 500}
+
+	t.Run("explicit boundary suppresses token drop", func(t *testing.T) {
+		full := computeSignalsFromMessages(
+			db.Session{}, []db.Message{boundary, preCtx, drop},
+		)
+		require.Equal(t, 1, full.CompactionCount)
+
+		state := signals.SeedIncrementalState(
+			nil, []int{0}, "", "", nil, nil, 0, 1000,
+		)
+		blob, err := state.MarshalBinary()
+		require.NoError(t, err)
+
+		m := newTestMaintainer("rev", secrets.DefiniteRulesVersion(), []db.Message{drop})
+		q := &fakeSignalQuery{
+			sess: &db.Session{
+				CompactionCount:      1,
+				QualitySignalVersion: db.CurrentQualitySignalVersion,
+			},
+			state: db.SessionSignalState{
+				State:              blob,
+				TranscriptRevision: "rev",
+				SignalVersion:      db.CurrentQualitySignalVersion,
+			},
+			hasState: true,
+			revision: "rev",
+		}
+		delta, err := m.MaintainTx(context.Background(), q)
+		require.NoError(t, err)
+		require.NotNil(t, delta)
+		assert.Equal(t, full.CompactionCount, delta.Update.CompactionCount,
+			"explicit boundaries must suppress token-drop compactions")
+	})
+
+	t.Run("no boundary counts token drop", func(t *testing.T) {
+		full := computeSignalsFromMessages(
+			db.Session{}, []db.Message{preCtx, drop},
+		)
+		require.Equal(t, 1, full.CompactionCount)
+
+		state := signals.SeedIncrementalState(
+			nil, nil, "", "", nil, nil, 0, 1000,
+		)
+		blob, err := state.MarshalBinary()
+		require.NoError(t, err)
+
+		m := newTestMaintainer("rev", secrets.DefiniteRulesVersion(), []db.Message{drop})
+		q := &fakeSignalQuery{
+			sess: &db.Session{
+				QualitySignalVersion: db.CurrentQualitySignalVersion,
+			},
+			state: db.SessionSignalState{
+				State:              blob,
+				TranscriptRevision: "rev",
+				SignalVersion:      db.CurrentQualitySignalVersion,
+			},
+			hasState: true,
+			revision: "rev",
+		}
+		delta, err := m.MaintainTx(context.Background(), q)
+		require.NoError(t, err)
+		require.NotNil(t, delta)
+		assert.Equal(t, full.CompactionCount, delta.Update.CompactionCount,
+			"without a boundary the token drop must still be counted")
+	})
+}
+
+// TestIncrementalMaintainerContextPressureSessionPeakParity pins parity
+// for context pressure when the session-level peak exceeds per-message
+// maxima: both paths must feed sess.PeakContextTokens into
+// ComputeContextPressure and land the same ContextPressureMax.
+func TestIncrementalMaintainerContextPressureSessionPeakParity(t *testing.T) {
+	const model = "claude-sonnet-4-5"
+	sess := db.Session{
+		PeakContextTokens:    200_000,
+		HasPeakContextTokens: true,
+		QualitySignalVersion: db.CurrentQualitySignalVersion,
+		SecretsRulesVersion:  secrets.DefiniteRulesVersion(),
+	}
+	msgs := []db.Message{{
+		SessionID: "s1", Ordinal: 0, Role: "assistant", Model: model,
+		HasContextTokens: true, ContextTokens: 1000,
+	}}
+	full := computeSignalsFromMessages(sess, msgs)
+	require.NotNil(t, full.ContextPressureMax)
+
+	state := signals.SeedIncrementalState(
+		nil, nil, "", "",
+		map[string]int{model: 1}, map[string]int{model: 0}, 1, 0,
+	)
+	blob, err := state.MarshalBinary()
+	require.NoError(t, err)
+
+	m := newTestMaintainer("rev", secrets.DefiniteRulesVersion(), nil)
+	q := &fakeSignalQuery{
+		sess: &sess,
+		state: db.SessionSignalState{
+			State:              blob,
+			TranscriptRevision: "rev",
+			SignalVersion:      db.CurrentQualitySignalVersion,
+		},
+		hasState: true,
+		revision: "rev",
+	}
+	delta, err := m.MaintainTx(context.Background(), q)
+	require.NoError(t, err)
+	require.NotNil(t, delta)
+	require.NotNil(t, delta.Update.ContextPressureMax)
+	assert.Equal(t, full.ContextPressureMax, delta.Update.ContextPressureMax,
+		"session-level peak must feed context pressure in both paths")
+}
 
 // signalSnapshot captures the session signal columns for parity
 // comparisons between the incremental maintainer and an authoritative

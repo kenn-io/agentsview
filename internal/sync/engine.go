@@ -14408,9 +14408,15 @@ func (e *Engine) writeIncremental(
 	if !inc.hasSubstantiveUserMessage() && !inc.hasCompactBoundary() {
 		preRev, err := e.db.TranscriptRevision(inc.sessionID)
 		if err == nil {
-			maintainer = e.newIncrementalSignalMaintainer(
-				inc, dbMsgs, toolCallResultUpdates, preRev,
-			)
+			var preSecrets string
+			if preSecrets, err = e.db.SessionSecretsRulesVersion(
+				inc.sessionID,
+			); err == nil {
+				maintainer = e.newIncrementalSignalMaintainer(
+					inc, dbMsgs, toolCallResultUpdates,
+					preRev, preSecrets,
+				)
+			}
 		}
 	}
 	signalsMaintained, err := e.db.WriteSessionIncremental(

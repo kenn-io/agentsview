@@ -62,6 +62,11 @@ func scanSecretsFromMessages(
 				MatchEnd:       m.End,
 				MatchIndex:     m.Index,
 				RedactedMatch:  m.Redacted,
+				// The incremental persist path (applySignalDeltaTx) inserts
+				// f.RulesVersion verbatim, unlike replaceSecretFindingsTx
+				// which overrides it; stamp it here so inline findings are
+				// visible to current-version listings.
+				RulesVersion: secrets.DefiniteRulesVersion(),
 			})
 			if m.Confidence == secrets.ConfidenceDefinite {
 				definiteCount++

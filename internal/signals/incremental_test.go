@@ -3,6 +3,7 @@ package signals
 import (
 	"fmt"
 	"math/rand"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -350,6 +351,88 @@ func TestIncrementalFoldRetryAcrossSeed(t *testing.T) {
 		row = ToolHealthRow{RetryCount: got.RetryCount}
 		state = next
 	}
+}
+
+// TestIncrementalFinalFailureStreakAcrossWindow pins the final-failure
+// streak for a run longer than the trailing window: the fold must carry
+// the pre-window run length forward instead of reporting the window size.
+func TestIncrementalFinalFailureStreakAcrossWindow(t *testing.T) {
+	mk := func(ordinal int, fail bool) ToolCallRow {
+		status := "completed"
+		if fail {
+			status = "errored"
+		}
+		return ToolCallRow{
+			ToolName:       "exec_command",
+			Category:       "Bash",
+			InputJSON:      `{"command":"npm test"}`,
+			MessageOrdinal: ordinal,
+			EventStatus:    status,
+		}
+	}
+	calls := make([]ToolCallRow, 0, 41)
+	for i := range 40 {
+		calls = append(calls, mk(i, true))
+	}
+	state := SeedIncrementalState(
+		calls, nil, "", "", nil, nil, 0, 0,
+	)
+	row := ToolHealthRow{FailureCount: 40}
+
+	// The 40-failure list itself: the final streak must be 40, not the
+	// 35-fact trailing window size.
+	next, got, ok := state.FoldToolHealth(nil, nil, row)
+	require.True(t, ok)
+	full := fullToolHealth(calls)
+	assert.Equal(t, full.FinalFailureStreak, got.FinalFailureStreak,
+		"final failure streak across the trailing window")
+	assert.Equal(t, full.ConsecutiveFailureMax, got.ConsecutiveFailureMax)
+
+	// Append a success and fold one call at a time: every fold must match
+	// the full recompute over the grown list.
+	appended := []ToolCallRow{mk(40, false), mk(41, false)}
+	for i := range appended {
+		full = fullToolHealth(append(slices.Clone(calls), appended[:i+1]...))
+		next, got, ok = state.FoldToolHealth(appended[i:i+1], nil, row)
+		require.True(t, ok, "append step %d", i)
+		assert.Equal(t, full.FinalFailureStreak, got.FinalFailureStreak,
+			"append step %d: final streak", i)
+		assert.Equal(t, full.ConsecutiveFailureMax, got.ConsecutiveFailureMax,
+			"append step %d: max streak", i)
+		assert.Equal(t, full.FailureCount, got.FailureCount,
+			"append step %d: failure count", i)
+		row = ToolHealthRow{FailureCount: got.FailureCount}
+		state = next
+	}
+}
+
+// TestIncrementalEditChurnOrdinalZero pins churn detection when the first
+// edit sits at ordinal 0: the sentinel must distinguish "no prior edit"
+// from "prior edit at ordinal 0" so three edits at 0,1,2 count one churn.
+func TestIncrementalEditChurnOrdinalZero(t *testing.T) {
+	mk := func(ordinal int) ToolCallRow {
+		return ToolCallRow{
+			ToolName:       "edit_file",
+			Category:       "Edit",
+			InputJSON:      `{"file_path":"/src/a.go"}`,
+			MessageOrdinal: ordinal,
+			EventStatus:    "completed",
+		}
+	}
+	full := ComputeToolHealth([]ToolCallRow{mk(0), mk(1), mk(2)})
+	require.Equal(t, 1, full.EditChurnCount,
+		"full compute must count one churn for edits at 0,1,2")
+
+	state := SeedIncrementalState(
+		[]ToolCallRow{mk(0), mk(1)}, nil, "", "", nil, nil, 0, 0,
+	)
+	next, got, ok := state.FoldToolHealth(
+		[]ToolCallRow{mk(2)}, nil, ToolHealthRow{},
+	)
+	require.True(t, ok)
+	assert.Equal(t, full.EditChurnCount, got.EditChurnCount,
+		"incremental fold must count one churn for edits at 0,1,2")
+	_ = next
 }
 
 // TestIncrementalFoldMidTaskAcrossSeed pins mid-task counting for a

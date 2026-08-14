@@ -27,7 +27,12 @@ const (
 	// IncrementalStateCodecVersion is the wire version for IncrementalState.
 	// Bump when the struct or any detector semantics change; a mismatch
 	// makes the caller fall back to a full recompute.
-	IncrementalStateCodecVersion = 1
+	//
+	// v2: added EditChurnState.HasLast1/HasLast2 (distinguish "no prior
+	// edit" from "prior edit at ordinal 0") and IncrementalState.
+	// HasExplicitBoundaries (suppress token-drop compactions when explicit
+	// compact boundaries exist). Old v1 states decode as stale and reseed.
+	IncrementalStateCodecVersion = 2
 
 	// TrailingFactCount is the size of the trailing facts window. It must
 	// cover every window any delta can affect: a modified call in the last
@@ -57,11 +62,14 @@ type ToolFact struct {
 }
 
 // EditChurnState tracks one file path's churn detection: the last two edit
-// ordinals plus a counted latch (churn counts once per file).
+// ordinals plus a counted latch (churn counts once per file). HasLast1 and
+// HasLast2 distinguish "no prior edit" from "prior edit at ordinal 0".
 type EditChurnState struct {
-	Last1   int  `json:"last1"`
-	Last2   int  `json:"last2"`
-	Counted bool `json:"counted"`
+	Last1    int  `json:"last1"`
+	Last2    int  `json:"last2"`
+	HasLast1 bool `json:"has_last1"`
+	HasLast2 bool `json:"has_last2"`
+	Counted  bool `json:"counted"`
 }
 
 // PendingBoundary tracks a compact boundary whose after-window is still
@@ -121,6 +129,14 @@ type IncrementalState struct {
 	// TotalCalls counts calls folded so far; used for window arithmetic.
 	TotalCalls int `json:"total_calls"`
 
+	// HasExplicitBoundaries records whether the session has explicit
+	// compact-boundary messages. When true, the full compute derives the
+	// compaction count from the boundary count and ignores token-drop
+	// compactions; the incremental fold must do the same. Appends never
+	// carry boundaries (the maintainer declines them), so this is fixed at
+	// seed time.
+	HasExplicitBoundaries bool `json:"has_explicit_boundaries"`
+
 	// PendingBoundaries are compact boundaries with an open after-window.
 	PendingBoundaries []PendingBoundary `json:"pending_boundaries,omitempty"`
 
@@ -165,15 +181,16 @@ func SeedIncrementalState(
 	lastValidTokens int,
 ) IncrementalState {
 	s := IncrementalState{
-		CodecVersion:    IncrementalStateCodecVersion,
-		EditLast:        map[string]EditChurnState{},
-		LastRole:        lastRole,
-		LastContent:     lastContent,
-		LastValidTokens: lastValidTokens,
-		MsgIndex:        msgIndex,
-		ModelCounts:     modelCounts,
-		ModelFirstSeen:  modelFirstSeen,
-		TotalCalls:      len(calls),
+		CodecVersion:          IncrementalStateCodecVersion,
+		EditLast:              map[string]EditChurnState{},
+		LastRole:              lastRole,
+		LastContent:           lastContent,
+		LastValidTokens:       lastValidTokens,
+		MsgIndex:              msgIndex,
+		ModelCounts:           modelCounts,
+		ModelFirstSeen:        modelFirstSeen,
+		TotalCalls:            len(calls),
+		HasExplicitBoundaries: len(boundaries) > 0,
 	}
 	cut := max(0, len(calls)-TrailingFactCount)
 	s.Trailing = factsFor(calls[cut:])
@@ -230,9 +247,11 @@ func SeedIncrementalState(
 		st := EditChurnState{Counted: hasChurnWindow(ords, 3, 10)}
 		if n := len(ords); n >= 1 {
 			st.Last2 = ords[n-1]
+			st.HasLast2 = true
 		}
 		if n := len(ords); n >= 2 {
 			st.Last1 = ords[n-2]
+			st.HasLast1 = true
 		}
 		s.EditLast[path] = st
 	}
@@ -440,7 +459,15 @@ func (s *IncrementalState) FoldToolHealth(
 	out.ConsecutiveFailureMax = max(
 		prefixMax, tailRun, crossingRun, maxRunWithin(newBits),
 	)
-	out.FinalFailureStreak = trailingRun(newBits)
+	finalStreak := trailingRun(newBits)
+	// A failure run that fills the whole trailing window continues before
+	// it; tailRun is the pre-window length of exactly that crossing run.
+	// Carry it forward so a run longer than TrailingFactCount reports its
+	// full length instead of capping at the window size.
+	if finalStreak == len(newBits) && tailRun > 0 {
+		finalStreak += tailRun
+	}
+	out.FinalFailureStreak = finalStreak
 
 	// Retry runs: only appends change name/input runs.
 	out.RetryCount = row.RetryCount
@@ -477,12 +504,13 @@ func (s *IncrementalState) FoldToolHealth(
 			continue
 		}
 		st := editLast[path]
-		if !st.Counted && st.Last1 > 0 && st.Last2 > 0 &&
+		if !st.Counted && st.HasLast1 && st.HasLast2 &&
 			c.MessageOrdinal-st.Last1 < 10 {
 			out.EditChurnCount++
 			st.Counted = true
 		}
-		st.Last1, st.Last2 = st.Last2, c.MessageOrdinal
+		st.Last1, st.HasLast1 = st.Last2, st.HasLast2
+		st.Last2, st.HasLast2 = c.MessageOrdinal, true
 		editLast[path] = st
 	}
 	next.EditLast = editLast

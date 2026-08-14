@@ -195,6 +195,34 @@ func TestScanSecretsBreakdown(t *testing.T) {
 	}
 }
 
+// TestScanSecretsFromMessagesStampsRulesVersion pins that every finding the
+// inline scanner builds carries the current definite rules version. The
+// incremental persist path (applySignalDeltaTx) inserts f.RulesVersion
+// verbatim — unlike replaceSecretFindingsTx, which overrides it — so a
+// missing stamp here would persist empty-version findings invisible to
+// current-version listings.
+func TestScanSecretsFromMessagesStampsRulesVersion(t *testing.T) {
+	sess := db.Session{ID: "s1"}
+	msgs := []db.Message{
+		{SessionID: "s1", Ordinal: 0, Role: "user",
+			Content: "AKIA7QHWN2DKR4FYPLJM"},
+		{SessionID: "s1", Ordinal: 1, Role: "assistant",
+			ToolCalls: []db.ToolCall{{
+				ToolName: "Bash", ToolUseID: "tu1",
+				InputJSON:     `{"command":"x"}`,
+				ResultContent: "AKIA7QHWN2DKR4FYPLJM",
+			}}},
+	}
+	findings, _ := scanSecretsFromMessages(
+		sess, msgs, secrets.ScanDefinite,
+	)
+	require.NotEmpty(t, findings, "expected definite findings")
+	for _, f := range findings {
+		assert.Equal(t, secrets.DefiniteRulesVersion(), f.RulesVersion,
+			"finding %s/%s has no rules version", f.LocationKind, f.RuleName)
+	}
+}
+
 func countConfidence(findings []db.SecretFinding, confidence string) int {
 	n := 0
 	for _, f := range findings {

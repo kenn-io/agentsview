@@ -28,20 +28,39 @@ type incrementalSignalMaintainer struct {
 	// preWriteRevision is the transcript revision before this write's
 	// bump; the persisted state token must match it.
 	preWriteRevision string
+
+	// preWriteSecretsVersion is the session's secrets rules version
+	// before this write. The incremental write transaction blanks the
+	// session's secrets_rules_version when it bumps the transcript
+	// revision (the recorded scan no longer covers the new rows), so the
+	// maintainer must compare the pre-write value against the current
+	// definite version instead of reading the blanked session row.
+	preWriteSecretsVersion string
+
+	// qualitySignalVersion and secretsRulesVersion are the current
+	// detector versions. Maintenance is only valid when the persisted
+	// state and the pre-write session row are both at these versions;
+	// otherwise a stale-but-self-consistent session would be folded with
+	// newly-added rules and stamped current without rescanning history.
+	qualitySignalVersion int
+	secretsRulesVersion  string
 }
 
 func (e *Engine) newIncrementalSignalMaintainer(
 	inc *incrementalUpdate,
 	appended []db.Message,
 	resultUpdates []db.ToolCallResultUpdate,
-	preWriteRevision string,
+	preWriteRevision, preWriteSecretsVersion string,
 ) db.SignalMaintainer {
 	return &incrementalSignalMaintainer{
-		engine:           e,
-		sessionID:        inc.sessionID,
-		appended:         appended,
-		resultUpdates:    resultUpdates,
-		preWriteRevision: preWriteRevision,
+		engine:                 e,
+		sessionID:              inc.sessionID,
+		appended:               appended,
+		resultUpdates:          resultUpdates,
+		preWriteRevision:       preWriteRevision,
+		preWriteSecretsVersion: preWriteSecretsVersion,
+		qualitySignalVersion:   db.CurrentQualitySignalVersion,
+		secretsRulesVersion:    secrets.DefiniteRulesVersion(),
 	}
 }
 
@@ -67,8 +86,18 @@ func (m *incrementalSignalMaintainer) MaintainTx(
 	if err := state.UnmarshalBinary(stored.State); err != nil {
 		return nil, nil
 	}
+	// The persisted state and the pre-write session row must both be at
+	// the current quality and secrets rules versions. Requiring the
+	// state's signal version to equal the current version (not merely the
+	// session's) and the pre-write secrets version to equal the current
+	// definite version prevents a rules-version upgrade from folding a
+	// stale-but-equal session and stamping it current without rescanning
+	// history. An empty pre-write secrets version means the row was never
+	// stamped, which also reseeds.
 	if stored.TranscriptRevision != m.preWriteRevision ||
-		stored.SignalVersion != sess.QualitySignalVersion {
+		stored.SignalVersion != m.qualitySignalVersion ||
+		sess.QualitySignalVersion != m.qualitySignalVersion ||
+		m.preWriteSecretsVersion != m.secretsRulesVersion {
 		return nil, nil // state fell behind the rows: reseed
 	}
 
@@ -226,7 +255,14 @@ func (m *incrementalSignalMaintainer) MaintainTx(
 			}
 		}
 	}
-	compactionCount := sess.CompactionCount + compactionDelta
+	// When the session has explicit compact boundaries the full compute
+	// derives the compaction count from the boundary count and ignores
+	// token-drop compactions; the fold must match by not adding the
+	// token-drop delta on top.
+	compactionCount := sess.CompactionCount
+	if !nextState.HasExplicitBoundaries {
+		compactionCount += compactionDelta
+	}
 	midTaskCount := sess.MidTaskCompactionCount +
 		toolHealth.MidTaskCompactions
 
