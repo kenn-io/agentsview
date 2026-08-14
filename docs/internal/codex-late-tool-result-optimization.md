@@ -1078,3 +1078,40 @@ PR。渐进启用：仅 Codex 且 `>128MB` 走新路径，特殊事件保守回�
   两路均以 `strings.TrimSpace` 在 Go 侧处理，fixture 与真实档案 parity
   覆盖。
 - 磁盘侧 566MB×2 结果重复存储保持现状（不在本 PR）。
+
+## 审阅修复轮（Changes requested → 修复中）
+
+审阅结论（分支 `da0d7eb3...6ad71379` 对 `upstream/main=5daa8adc`）提出的
+11 类问题按序修复：
+
+1. **bulk/resync 占位符**：`writeBatchBulkWithOutcome` 对 staged 结果走
+   `writeStagedFullParse`（先 upsert 会话行，再 staged 事务发布），不再把
+   占位符消息批量写库；默认 CI 测试 `TestCodexEngineStagedSyncParity` /
+   `TestCodexEngineResyncBulkStagedParity` 经
+   `EngineConfig.StagedCodexParseMinBytes` seam 用小 fixture 覆盖两条路径。
+2. **ATTACH 生命周期**：`ReplaceSessionContentStaged` pin 单 writer 连接，
+   事务前 `ATTACH`、settle 后 `DETACH`（失败则丢弃连接）；db 层
+   `TestReplaceSessionContentStagedAttachLifecycle` /
+   `...RollbackDetaches` 断言连续发布成功与 `PRAGMA database_list` 清洁。
+3. **sticky stageErr**：scratch 写失败记录 `stageErr`，后续事件拒绝、解析
+   outcome 失败、发布返回错误；内存 fallback 删除。`...ScratchFailureIsSticky`
+   覆盖。
+4. **signals 原子**：发布事务内解析 summary 捕获 verdict，`StagedSignalsFunc`
+   回调在提交前计算并持久化 signals/findings，与消息/事件/汇总同一事务。
+5. **上游集成**：cherry-pick `5a78d51d`（fork parent turn_id opaque 匹配，
+   cursor codec 升级 v2、fork gate 改为进程态）、`6b743bd2`（保留本分支 P2
+   晚到输出契约，拒绝其跨 chunk 回退）、`57e84ed8`（session_index 缺失不再
+   视为清空标题）；dataVersion=87（fork 重建）。
+6. **增量信号版本校验**：见下一节（typed reducer 修复）。
+7. **reducer 四反例**：见下一节。
+8. **RulesVersion / blocked parity**：见下一节。
+9. **晚到结果 O(delta)**：新增机器本地 `tool_call_agent_state`（每调用每
+   agent 最新内容 + 首次顺序），事件写入维护；晚到结果去重改定点探针、
+   汇总改读状态表，首次晚到结果一次性 backfill（staged 发布与旧库兼容）；
+   硬删除清理孤儿行。
+10. **资源边界**：GC 引用计数改进程级；scratch 目录经
+    `EngineConfig.CodexStagingDir` 可配置并做空间预检（<256MiB 拒绝）；
+    `ResolveSummary` 内存上界注释明确为“单调用聚合输出”。
+11. **存储清理**：硬删除会话同步清理 `parser_checkpoints` /
+    `parser_checkpoint_blobs` / `session_signal_state` /
+    `tool_call_agent_state`；计划文档真实路径与 UUID 脱敏。
