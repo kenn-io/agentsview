@@ -37,6 +37,21 @@ func computeSignalsAndSecrets(
 	return update, findings
 }
 
+// computeSignalsAndSecretsWithContentFailures is the staged streaming
+// variant: the signal pass receives pre-computed per-call content-failure
+// verdicts in place of the placeholder result content, while the secret
+// scan is unchanged (staged event findings arrive through the sink's
+// Findings instead).
+func computeSignalsAndSecretsWithContentFailures(
+	s db.Session, msgs []db.Message, failures map[string]bool,
+) (db.SessionSignalUpdate, []db.SecretFinding) {
+	update := computeSignalsFromMessagesWithContentFailures(s, msgs, failures)
+	findings, leak := scanSecretsFromMessages(s, msgs, secrets.ScanDefinite)
+	update.SecretLeakCount = leak
+	update.SecretsRulesVersion = secrets.DefiniteRulesVersion()
+	return update, findings
+}
+
 // scanSecretsFromMessages detects secrets across a session's message content,
 // tool inputs, and canonical tool output (result events when present, else
 // result_content) using scan: secrets.ScanDefinite for the fast inline path,

@@ -13,6 +13,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/secrets"
+	"go.kenn.io/agentsview/internal/signals"
 )
 
 // codexStagingSink implements parser.CodexSessionSink for the streaming
@@ -201,6 +202,38 @@ func closeCodexStagingSinks(sinks []*codexStagingSink) {
 			log.Printf("closing codex staging sink: %v", err)
 		}
 	}
+}
+
+// stagedContentFailures resolves per-call content-failure verdicts from the
+// staging sink for tool calls whose last event carries no status
+// (status-driven verdicts come from the placeholder model directly). Each
+// summary is resolved transiently, so memory stays bounded by one call's
+// distinct agents.
+func stagedContentFailures(
+	staged *codexStagingSink, msgs []db.Message,
+) (map[string]bool, error) {
+	failures := make(map[string]bool)
+	for _, m := range msgs {
+		for _, tc := range m.ToolCalls {
+			if tc.ToolUseID == "" {
+				continue
+			}
+			if n := len(tc.ResultEvents); n > 0 &&
+				tc.ResultEvents[n-1].Status != "" {
+				continue
+			}
+			failed, err := staged.ResolveContentFailure(
+				context.Background(), tc.ToolUseID,
+			)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"content failure for %s: %w", tc.ToolUseID, err,
+				)
+			}
+			failures[tc.ToolUseID] = failed
+		}
+	}
+	return failures, nil
 }
 
 func (s *codexStagingSink) AppendMessage(m parser.ParsedMessage) {
@@ -467,4 +500,22 @@ func (s *codexStagingSink) ResolveSummary(
 		}
 	}
 	return summary, len(summary), nil
+}
+
+// ResolveContentFailure resolves the stored result summary for one call
+// and reports whether the content heuristics mark it a failure. The
+// summary is transient: the engine calls this while folding
+// content-driven tool-failure signals into the placeholder model, before
+// the staged publish resolves summaries again inside its transaction.
+func (s *codexStagingSink) ResolveContentFailure(
+	ctx context.Context, toolUseID string,
+) (bool, error) {
+	summary, _, err := s.ResolveSummary(ctx, toolUseID)
+	if err != nil {
+		return false, err
+	}
+	return signals.IsFailure(signals.ToolCallRow{
+		Category:      s.categoryByCall[toolUseID],
+		ResultContent: summary,
+	}), nil
 }

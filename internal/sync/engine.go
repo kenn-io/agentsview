@@ -12851,53 +12851,70 @@ func (e *Engine) writeBatchWithOutcome(
 			pw, forceReplace, stale, revivingSourceMissing,
 		)
 
-		update, findings := computeSignalsAndSecrets(s, msgs)
-
+		var update db.SessionSignalUpdate
+		var findings []db.SecretFinding
+		var contentFailures map[string]bool
 		var werr error
 		if replaceMessages {
 			if pw.staged != nil {
-				positions := make(map[string]db.StagedToolCallPosition)
-				for _, m := range msgs {
-					for callIdx, tc := range m.ToolCalls {
-						if tc.ToolUseID == "" {
-							continue
-						}
-						positions[tc.ToolUseID] = db.StagedToolCallPosition{
-							ToolUseID: tc.ToolUseID,
-							Ordinal:   m.Ordinal,
-							CallIndex: callIdx,
+				contentFailures, err = stagedContentFailures(pw.staged, msgs)
+				if err != nil {
+					werr = fmt.Errorf(
+						"resolving staged content failures: %w", err,
+					)
+				} else {
+					update, findings =
+						computeSignalsAndSecretsWithContentFailures(
+							s, msgs, contentFailures,
+						)
+					positions := make(map[string]db.StagedToolCallPosition)
+					for _, m := range msgs {
+						for callIdx, tc := range m.ToolCalls {
+							if tc.ToolUseID == "" {
+								continue
+							}
+							positions[tc.ToolUseID] =
+								db.StagedToolCallPosition{
+									ToolUseID: tc.ToolUseID,
+									Ordinal:   m.Ordinal,
+									CallIndex: callIdx,
+								}
 						}
 					}
-				}
-				combined := append(
-					append([]db.SecretFinding(nil), findings...),
-					pw.staged.Findings(s.ID, positions)...,
-				)
-				update.SecretLeakCount = definiteFindingCount(combined)
-				werr = e.db.ReplaceSessionContentStaged(
-					s.ID, msgs, update, combined, pw.staged,
-					e.blockedResultCategories,
-				)
-			} else if isCodexFormatAgent(pw.sess.Agent) {
-				cp, blobs, cpErr := e.buildCodexFullParseCheckpoint(
-					pw.sess.File.Path, pw,
-				)
-				if cpErr != nil {
-					log.Printf(
-						"checkpoint build %s: %v",
-						pw.sess.File.Path, cpErr,
+					combined := append(
+						append([]db.SecretFinding(nil), findings...),
+						pw.staged.Findings(s.ID, positions)...,
 					)
-					cp, blobs = nil, nil
+					update.SecretLeakCount = definiteFindingCount(combined)
+					werr = e.db.ReplaceSessionContentStaged(
+						s.ID, msgs, update, combined, pw.staged,
+						e.blockedResultCategories,
+					)
 				}
-				werr = e.db.ReplaceSessionContentWithCheckpoint(
-					s.ID, msgs, update, findings, cp, blobs,
-				)
 			} else {
-				werr = e.db.ReplaceSessionContent(
-					s.ID, msgs, update, findings,
-				)
+				update, findings = computeSignalsAndSecrets(s, msgs)
+				if isCodexFormatAgent(pw.sess.Agent) {
+					cp, blobs, cpErr := e.buildCodexFullParseCheckpoint(
+						pw.sess.File.Path, pw,
+					)
+					if cpErr != nil {
+						log.Printf(
+							"checkpoint build %s: %v",
+							pw.sess.File.Path, cpErr,
+						)
+						cp, blobs = nil, nil
+					}
+					werr = e.db.ReplaceSessionContentWithCheckpoint(
+						s.ID, msgs, update, findings, cp, blobs,
+					)
+				} else {
+					werr = e.db.ReplaceSessionContent(
+						s.ID, msgs, update, findings,
+					)
+				}
 			}
 		} else {
+			update, findings = computeSignalsAndSecrets(s, msgs)
 			werr = e.writeMessages(s.ID, msgs)
 		}
 		if werr != nil {
@@ -12910,9 +12927,17 @@ func (e *Engine) writeBatchWithOutcome(
 			continue
 		}
 		if replaceMessages {
-			if err := e.seedSignalStateFromFull(s.ID, msgs); err != nil {
+			var seedErr error
+			if pw.staged != nil {
+				seedErr = e.seedSignalStateFromFullWithContentFailures(
+					s.ID, msgs, contentFailures,
+				)
+			} else {
+				seedErr = e.seedSignalStateFromFull(s.ID, msgs)
+			}
+			if seedErr != nil {
 				log.Printf(
-					"signals: seed state %s: %v", s.ID, err,
+					"signals: seed state %s: %v", s.ID, seedErr,
 				)
 			}
 		}

@@ -427,6 +427,26 @@ func extractModelCounts(
 func (e *Engine) seedSignalStateFromFull(
 	sessionID string, msgs []db.Message,
 ) error {
+	return e.seedSignalStateFromRows(
+		sessionID, msgs, extractToolCallRows(msgs),
+	)
+}
+
+// seedSignalStateFromFullWithContentFailures is the staged streaming
+// variant: the seeded incremental state must see the same pre-computed
+// content-failure verdicts the signal pass used, or later deltas fold
+// against a different failure history.
+func (e *Engine) seedSignalStateFromFullWithContentFailures(
+	sessionID string, msgs []db.Message, failures map[string]bool,
+) error {
+	toolRows := extractToolCallRows(msgs)
+	patchToolCallRowsWithContentFailures(toolRows, msgs, failures)
+	return e.seedSignalStateFromRows(sessionID, msgs, toolRows)
+}
+
+func (e *Engine) seedSignalStateFromRows(
+	sessionID string, msgs []db.Message, toolRows []signals.ToolCallRow,
+) error {
 	lastRole, lastContent := extractLastMessageRole(msgs)
 	counts, firstSeen, msgIndex := extractModelCounts(msgs)
 	lastTokens := 0
@@ -437,7 +457,7 @@ func (e *Engine) seedSignalStateFromFull(
 		}
 	}
 	state := signals.SeedIncrementalState(
-		extractToolCallRows(msgs),
+		toolRows,
 		extractCompactBoundaryOrdinals(msgs),
 		lastRole, lastContent,
 		counts, firstSeen, msgIndex, lastTokens,

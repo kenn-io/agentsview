@@ -60,6 +60,17 @@ func TestCodexStreamingParseParityWithLegacy(t *testing.T) {
 		// (content heuristics arrive with the streaming signal reducer),
 		// so parity here pins the status-based path.
 		`{"timestamp":"2024-01-01T10:00:09Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_b","status":"errored","output":[{"type":"input_text","text":"command not found"}]}}`,
+		// A status-less output whose failure lives only in the content
+		// heuristics: the streaming reducer must classify it identically.
+		testjsonl.CodexMsgJSON("user", "third", "2024-01-01T10:00:10Z"),
+		testjsonl.CodexFunctionCallWithCallIDJSON(
+			"exec_command", "call_c", nil, "2024-01-01T10:00:11Z",
+		),
+		testjsonl.CodexFunctionCallOutputJSON(
+			"call_c",
+			"bash: python3: command not found",
+			"2024-01-01T10:00:12Z",
+		),
 	)
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
@@ -163,8 +174,10 @@ func TestCodexStreamingParseParityWithLegacy(t *testing.T) {
 		rowL.ID, legacyDBMsgs, updateL, findingsL,
 	))
 
-	updateS, findingsFromMsgs := computeSignalsAndSecrets(
-		rowS, stagedDBMsgs,
+	contentFailures, err := stagedContentFailures(stagedSink, stagedDBMsgs)
+	require.NoError(t, err)
+	updateS, findingsFromMsgs := computeSignalsAndSecretsWithContentFailures(
+		rowS, stagedDBMsgs, contentFailures,
 	)
 	positions := make(map[string]db.StagedToolCallPosition)
 	for _, m := range stagedDBMsgs {
@@ -251,8 +264,9 @@ func TestCodexStreamingParseParityWithLegacy(t *testing.T) {
 			findingsStored[i].MatchStart)
 	}
 
-	// Status-driven signals parity (the fixture's failures come from
-	// event statuses, which the staged model keeps).
+	// Signals parity: call_b fails by event status (kept in the staged
+	// model) and call_c by content heuristics (folded in through the
+	// streaming reducer), so both classification paths must agree.
 	sessL, err := dbLegacy.GetSessionFull(context.Background(), rowL.ID)
 	require.NoError(t, err)
 	sessS, err := dbStaged.GetSessionFull(context.Background(), rowS.ID)
@@ -263,6 +277,11 @@ func TestCodexStreamingParseParityWithLegacy(t *testing.T) {
 		sessS.ConsecutiveFailureMax)
 	assert.Equal(t, sessL.FinalFailureStreak, sessS.FinalFailureStreak)
 	assert.Equal(t, sessL.SecretLeakCount, sessS.SecretLeakCount)
+	// call_b fails by status and call_c by content heuristics; both paths
+	// must see exactly those two failures.
+	assert.Equal(t, 2, sessL.ToolFailureSignalCount)
+	assert.Equal(t, 2, sessS.ConsecutiveFailureMax)
+	assert.Equal(t, 2, sessS.FinalFailureStreak)
 }
 
 func timePtr(s string) *string { return &s }
