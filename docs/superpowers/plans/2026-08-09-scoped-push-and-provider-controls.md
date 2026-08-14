@@ -450,15 +450,15 @@ git commit -m "feat(sync): add bounded watcher batch transport"
 
 - [ ] **Step 1: Write failing loop tests**
 
-Prove union coalescing, unscoped supersession, floor claiming pending scope,
-exact failure restoration plus concurrent merge, overflow retry, waiter
-ordering, shutdown batch flush, and aggregate promotion logs containing a
-reason/count but no paths.
+Prove union coalescing, unscoped supersession, an interval task absorbing older
+pending scope while leaving later watcher work queued, exact failure
+restoration, overflow retry, waiter ordering, shutdown batch flush, and
+aggregate promotion logs containing a reason/count but no paths.
 
 - [ ] **Step 2: Write failing daemon watch tests**
 
 Ordinary callback sends its path. Full/rename sends a recovery snapshot from
-`probeWatchRecoveryScope`. Startup/interval with no pending event omits scope.
+`probeWatchRecoveryScope`. Startup and every interval task omit scope.
 
 - [ ] **Step 3: Run and verify failure**
 
@@ -469,20 +469,19 @@ CGO_ENABLED=1 go test -tags fts5 ./cmd/agentsview \
 
 - [ ] **Step 4: Implement pending ownership**
 
-Use:
+Use a bounded task queue whose scoped tasks own their accumulators and waiters:
 
 ```go
-pendingUnscoped bool
-pendingBatch    *sync.WatchBatchAccumulator
-waiters         []chan error
+pendingTasks []queuedPushTask
 ```
 
-Dirty marks unscoped; batch methods add bounded scope unless superseded. Claim
-returns nil for unscoped or a copied batch. The push loop is the sole retry
-owner: restore merges failed scope with arrivals and preserves waiter order;
-waiters remain pending through failed attempts and complete after eventual
-success, cancellation, or the final shutdown result. Pass the claim for every
-push reason.
+Timer and watcher producers enqueue explicit tasks. Dirty and interval tasks are
+unscoped; watcher tasks carry bounded scope. An unscoped task absorbs older
+queued scope and its waiters, while watcher work arriving after that task is
+claimed remains next in the queue. The push loop is the sole retry owner: a
+failed task returns to the head without changing scope, waiters remain pending
+through failed attempts, and completion happens only after eventual success,
+cancellation, or the final shutdown result.
 
 - [ ] **Step 5: Wire daemon PG**
 

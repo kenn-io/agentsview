@@ -676,9 +676,11 @@ func (h *pushWatchOwnerHarness) pending() (bool, int) {
 func pushLoopPendingState(loop *pushLoop) (bool, int) {
 	loop.pendingMu.Lock()
 	defer loop.pendingMu.Unlock()
-	pending := loop.pendingUnscoped ||
-		(loop.pendingBatch != nil && !loop.pendingBatch.Empty())
-	return pending, len(loop.waiters)
+	var waiters int
+	for i := range loop.pendingTasks {
+		waiters += len(loop.pendingTasks[i].waiters)
+	}
+	return len(loop.pendingTasks) > 0, waiters
 }
 
 func (h *pushWatchOwnerHarness) snapshot() (
@@ -1307,7 +1309,8 @@ func TestArchivePushWatchCallbackRetainsUnfilteredBatchForPush(t *testing.T) {
 	})
 	callback := archivePushWatchBatchCallback(cfg, loop)
 	require.NoError(t, callback(t.Context(), syncpkg.WatchBatch{Paths: []string{path}}))
-	claim := loop.claimPending()
+	claim, ok := loop.claimPending()
+	require.True(t, ok)
 	require.NotNil(t, claim.batch)
 	assert.Equal(t, []string{path}, claim.batch.Paths)
 	t.Log("engine_sync=deferred push_scope=changed_batch")

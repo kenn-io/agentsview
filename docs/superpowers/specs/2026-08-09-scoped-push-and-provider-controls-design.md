@@ -101,7 +101,9 @@ changed paths, rename metadata, reconciliation roots, `FullSync`, and
 `LostEvents`. Backend lifecycle tokens remain local to the watcher and are not
 serialized.
 
-The push loop keeps one bounded pending batch while a push is running:
+Watcher callbacks and the periodic timer enqueue explicit work tasks into one
+serialized push queue. A task is either an unscoped sync or one bounded watcher
+batch:
 
 - ordinary paths, reconciliation roots, and renames are deduplicated and merged;
 - `LostEvents` is sticky;
@@ -109,11 +111,14 @@ The push loop keeps one bounded pending batch while a push is running:
 - exceeding the existing watcher batch count or byte bounds promotes to
   `FullSync: true, LostEvents: true`, because discarding the individual paths
   also invalidates path-dependent freshness caches;
-- the push loop owns retry: acknowledgements and their exact scope remain
-  pending across failed attempts and complete only after eventual success,
-  caller cancellation, or final shutdown failure;
-- a failed push restores its pending batch ahead of concurrent arrivals without
-  changing waiter order.
+- an interval tick enqueues an unscoped task, which absorbs older queued watcher
+  work and its acknowledgements so the periodic catch-up scan cannot be
+  starved;
+- watcher work arriving after an unscoped task is claimed remains queued and
+  runs afterward;
+- the push queue owns retry: a failed task returns to the head with the same
+  scope and waiter order, and acknowledgements complete only after eventual
+  success, caller cancellation, or final shutdown failure.
 
 Startup, manual, and other unscoped dirty notifications keep their existing
 unscoped synchronization behavior. Only notifications originating in a known

@@ -86,27 +86,92 @@ func TestPushLoopUnscopedDirtySupersedesPendingBatch(t *testing.T) {
 	assert.Nil(t, receivePushLoopValue(t, pushed))
 }
 
-func TestPushLoopFloorClaimsPendingBatch(t *testing.T) {
+func TestPushLoopIntervalTaskSupersedesPendingBatchAndLeavesLaterBatchQueued(t *testing.T) {
 	type attempt struct {
 		reason pushReason
 		batch  *syncpkg.WatchBatch
 	}
-	pushed := make(chan attempt, 1)
-	loop, _, floor := newBatchTestLoop(func(
+	attempts := make(chan attempt, 2)
+	intervalStarted := make(chan struct{})
+	releaseInterval := make(chan struct{})
+	loop, fire, floor := newBatchTestLoop(func(
 		_ context.Context, reason pushReason, batch *syncpkg.WatchBatch,
 	) error {
-		pushed <- attempt{reason: reason, batch: batch}
+		attempts <- attempt{reason: reason, batch: batch}
+		if reason == reasonInterval {
+			close(intervalStarted)
+			<-releaseInterval
+		}
 		return nil
 	})
 	go loop.Run(t.Context())
 
-	loop.NotifyBatch(syncpkg.WatchBatch{Paths: []string{"/sessions/changed"}})
+	covered := loop.NotifyBatchWithAck(syncpkg.WatchBatch{
+		Paths: []string{"/sessions/before-interval"},
+	})
 	floor <- time.Now()
 
-	got := receivePushLoopValue(t, pushed)
-	assert.Equal(t, reasonInterval, got.reason)
-	require.NotNil(t, got.batch)
-	assert.Equal(t, []string{"/sessions/changed"}, got.batch.Paths)
+	interval := receivePushLoopValue(t, attempts)
+	assert.Equal(t, reasonInterval, interval.reason)
+	assert.Nil(t, interval.batch)
+	<-intervalStarted
+
+	later := loop.NotifyBatchWithAck(syncpkg.WatchBatch{
+		Paths: []string{"/sessions/after-interval"},
+	})
+	close(releaseInterval)
+	require.NoError(t, receivePushLoopValue(t, covered))
+
+	fire <- time.Now()
+	change := receivePushLoopValue(t, attempts)
+	assert.Equal(t, reasonChange, change.reason)
+	require.NotNil(t, change.batch)
+	assert.Equal(t, []string{"/sessions/after-interval"}, change.batch.Paths)
+	require.NoError(t, receivePushLoopValue(t, later))
+}
+
+func TestPushLoopFailedIntervalTaskRetriesUnscopedBeforeLaterBatch(t *testing.T) {
+	type attempt struct {
+		reason pushReason
+		batch  *syncpkg.WatchBatch
+	}
+	attempts := make(chan attempt, 3)
+	pushCount := 0
+	loop, fire, floor := newBatchTestLoop(func(
+		_ context.Context, reason pushReason, batch *syncpkg.WatchBatch,
+	) error {
+		pushCount++
+		attempts <- attempt{reason: reason, batch: batch}
+		if pushCount == 1 {
+			return errors.New("target unavailable")
+		}
+		return nil
+	})
+	go loop.Run(t.Context())
+
+	covered := loop.NotifyBatchWithAck(syncpkg.WatchBatch{
+		Paths: []string{"/sessions/before-interval"},
+	})
+	floor <- time.Now()
+	first := receivePushLoopValue(t, attempts)
+	assert.Equal(t, reasonInterval, first.reason)
+	assert.Nil(t, first.batch)
+
+	later := loop.NotifyBatchWithAck(syncpkg.WatchBatch{
+		Paths: []string{"/sessions/after-interval"},
+	})
+	fire <- time.Now()
+	retry := receivePushLoopValue(t, attempts)
+	assert.Equal(t, reasonInterval, retry.reason)
+	assert.Nil(t, retry.batch)
+	require.NoError(t, receivePushLoopValue(t, covered))
+
+	fire <- time.Now()
+	change := receivePushLoopValue(t, attempts)
+	assert.Equal(t, reasonChange, change.reason)
+	require.NotNil(t, change.batch)
+	assert.Equal(t, []string{"/sessions/after-interval"}, change.batch.Paths)
+	require.NoError(t, receivePushLoopValue(t, later))
 }
 
 func TestPushLoopFailedBatchRestoresAndMergesConcurrentArrival(t *testing.T) {
