@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"crypto/sha256"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,16 +15,16 @@ func TestCodexCursorStateCheckpointRoundTrip(t *testing.T) {
 	seed := codexCursorState{
 		model:                    "gpt-5.6-luna",
 		cwd:                      "/workspace/project-a",
-		agentPath:                "/home/chris/.codex/agents/a",
+		agentPath:                "codex/agents/a",
 		firstUserSeen:            true,
 		sawUserTurnAfterFirst:    true,
 		mayReplayFirstUserPrompt: false,
 		lastTokenUsageSeen:       true,
 		lastTokenUsageDigest:     [sha256.Size]byte{1, 2, 3},
 		forkGate: codexForkGate{
-			active:           true,
-			createdMs:        123456789,
-			subagentParentID: "019f0000-0000-7000-8000-000000000000",
+			active:          true,
+			parentSessionID: "019f0000-0000-7000-8000-000000000000",
+			parentResolved:  true,
 		},
 		lastTaskEvent: "task_complete",
 	}
@@ -35,6 +36,9 @@ func TestCodexCursorStateCheckpointRoundTrip(t *testing.T) {
 
 	var got codexCursorState
 	require.NoError(t, got.UnmarshalBinary(blob))
+	// The fork replay gate is process-only state: it is re-armed from the
+	// transcript on every parse and is not part of the persisted cursor.
+	got.forkGate = seed.forkGate
 	assert.Equal(t, seed, got)
 }
 
@@ -118,4 +122,76 @@ func TestCodexProviderIncrementalResumesFromCheckpointSeed(t *testing.T) {
 	assert.Equal(t, callID, incOutcome.ToolCallUpdates[0].ToolUseID)
 	assert.NotEmpty(t, incOutcome.NextCursor,
 		"an applied incremental parse must advance the cursor")
+}
+
+// TestCodexParseCarriesSinglePassHashState verifies the full parse captures
+// the resumable SHA-256 state and tail-anchor digest on its own read pass:
+// the state digest must equal the snapshot hash and the anchor digest must
+// equal the hash of the trailing window, so checkpoint persistence never
+// needs a second source read.
+func TestCodexParseCarriesSinglePassHashState(t *testing.T) {
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122a02"
+	prefix := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/workspace/project-a", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "run the command", tsEarlyS1),
+		testjsonl.CodexFunctionCallWithCallIDJSON(
+			"exec_command", "call_tee", nil, tsEarlyS5,
+		),
+	)
+	root := t.TempDir()
+	path := writeCodexProviderSessionContent(t, root, uuid, prefix)
+	provider, ok := NewProvider(
+		AgentCodex, ProviderConfig{Roots: []string{root}},
+	)
+	require.True(t, ok)
+	source := requireCodexProviderSource(t, provider, uuid)
+
+	fingerprint, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: source, Fingerprint: fingerprint,
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	result := outcome.Results[0].Result
+	require.NotEmpty(t, result.CheckpointHashState,
+		"the parse must capture the resumable hash state")
+
+	// The state digest must equal the snapshot's full hash.
+	stateHash := sha256.New()
+	require.NoError(t, stateHash.(interface{ UnmarshalBinary([]byte) error }).
+		UnmarshalBinary(result.CheckpointHashState))
+	assert.Equal(t, fingerprint.Hash, result.Session.File.Hash)
+	wantDigest := sha256.Sum256([]byte(prefix))
+	assert.Equal(t, fingerprint.Hash,
+		fmt.Sprintf("%x", wantDigest[:]),
+		"sanity: the provider fingerprint is the snapshot hash")
+	stateSum := stateHash.Sum(nil)
+	assert.Equal(t, wantDigest[:], stateSum,
+		"the captured state must hash exactly the parsed snapshot")
+
+	// The anchor digest must equal the trailing window's hash.
+	window := prefix[max(0, len(prefix)-codexCheckpointAnchorSize):]
+	wantAnchor := sha256.Sum256([]byte(window))
+	assert.Equal(t, fmt.Sprintf("%x", wantAnchor[:]),
+		result.CheckpointAnchorDigest)
+
+	// Resuming the state over an appended tail must reproduce the real
+	// full-file hash — the same property the engine's resume path relies
+	// on.
+	tail := testjsonl.JoinJSONL(testjsonl.CodexFunctionCallOutputJSON(
+		"call_tee", "done", "2026-08-02T09:00:03Z",
+	))
+	appendCodexProviderContent(t, path, tail)
+	resumed := sha256.New()
+	require.NoError(t, resumed.(interface{ UnmarshalBinary([]byte) error }).
+		UnmarshalBinary(result.CheckpointHashState))
+	_, err = resumed.Write([]byte(tail))
+	require.NoError(t, err)
+	full := append([]byte(prefix), []byte(tail)...)
+	wantFull := sha256.Sum256(full)
+	assert.Equal(t, wantFull[:], resumed.Sum(nil),
+		"resuming the captured state must reproduce the full-file hash")
 }

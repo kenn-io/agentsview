@@ -1499,6 +1499,14 @@ type ParseResult struct {
 	// session rows commit, so later appends can resume without rescanning
 	// the transcript prefix. Empty for providers without checkpoints.
 	Checkpoint []byte
+	// CheckpointHashState is the resumable SHA-256 state covering the
+	// parsed snapshot [0, Session.File.Size), captured on the same read
+	// pass as the parse. CheckpointAnchorDigest is the digest of the
+	// snapshot's trailing anchor window. Both are empty for providers
+	// without single-pass hashing; the engine persists them with the
+	// checkpoint so it never re-reads the source after a full parse.
+	CheckpointHashState    []byte
+	CheckpointAnchorDigest string
 }
 
 // InferRelationshipTypes sets RelationshipType on results that have

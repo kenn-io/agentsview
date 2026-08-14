@@ -1528,16 +1528,16 @@ func (p *codexProvider) parseSession(
 // continuation cursor (and whether the end is a safe resume boundary).
 func (p *codexProvider) parseSessionWithCursor(
 	path, machine string, includeExec bool,
-) (*ParsedSession, []ParsedMessage, codexCursorState, bool, error) {
+) (*ParsedSession, []ParsedMessage, codexCursorState, bool, []byte, string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, nil, codexCursorState{}, false,
+		return nil, nil, codexCursorState{}, false, nil, "",
 			fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		return nil, nil, codexCursorState{}, false,
+		return nil, nil, codexCursorState{}, false, nil, "",
 			fmt.Errorf("stat %s: %w", path, err)
 	}
 	return p.parseSessionSnapshotWithCursor(
@@ -1653,7 +1653,7 @@ func (p *codexProvider) parseSessionSnapshot(
 	f *os.File,
 	info os.FileInfo,
 ) (*ParsedSession, []ParsedMessage, error) {
-	sess, msgs, _, _, err := p.parseSessionSnapshotWithCursor(
+	sess, msgs, _, _, _, _, err := p.parseSessionSnapshotWithCursor(
 		path, machine, includeExec, f, info,
 	)
 	return sess, msgs, err
@@ -1662,14 +1662,17 @@ func (p *codexProvider) parseSessionSnapshot(
 // parseSessionSnapshotWithCursor is parseSessionSnapshot plus the
 // continuation state at the end of the parsed snapshot. safe reports whether
 // the file's end is a safe resume boundary; a false safe means the returned
-// cursor must not be persisted.
+// cursor must not be persisted. hashState and anchorDigest cover the whole
+// snapshot [0, info.Size()) from the same read pass the parser performed;
+// they are meaningful only when safe is true.
 func (p *codexProvider) parseSessionSnapshotWithCursor(
 	path, machine string,
 	includeExec bool,
 	f *os.File,
 	info os.FileInfo,
-) (*ParsedSession, []ParsedMessage, codexCursorState, bool, error) {
-	lr := newLineReader(io.LimitReader(f, info.Size()), maxLineSize)
+) (*ParsedSession, []ParsedMessage, codexCursorState, bool, []byte, string, error) {
+	tee := newCodexHashAnchorTee(io.LimitReader(f, info.Size()))
+	lr := newLineReader(tee, maxLineSize)
 	defer releaseLineReader(lr)
 	b := newCodexSessionBuilder(includeExec, p.parentTurnResolver(path))
 
@@ -1682,13 +1685,13 @@ func (p *codexProvider) parseSessionSnapshotWithCursor(
 			continue
 		}
 		if b.processLine(line) {
-			return nil, nil, codexCursorState{}, false, nil
+			return nil, nil, codexCursorState{}, false, nil, "", nil
 		}
 	}
 
 	if err := lr.Err(); err != nil {
 		return nil, nil,
-			codexCursorState{}, false,
+			codexCursorState{}, false, nil, "",
 			fmt.Errorf("reading codex %s: %w", path, err)
 	}
 
@@ -1768,7 +1771,19 @@ func (p *codexProvider) parseSessionSnapshotWithCursor(
 
 	accumulateMessageTokenUsage(sess, b.messages)
 
-	return sess, b.messages, seed, safe, nil
+	var hashState []byte
+	var anchorDigest string
+	if safe {
+		state, err := tee.HashState()
+		if err != nil {
+			return nil, nil, codexCursorState{}, false, nil, "",
+				fmt.Errorf("capturing codex hash state %s: %w", path, err)
+		}
+		hashState = state
+		anchorDigest = tee.AnchorDigest()
+	}
+
+	return sess, b.messages, seed, safe, hashState, anchorDigest, nil
 }
 
 // CodexSessionIndexFilename is the name of the Codex index file that maps
@@ -2587,7 +2602,7 @@ func isCodexSubagentNotification(content string) bool {
 }
 
 func codexIncrementalNeedsFullParse(line string) bool {
-	b := newCodexSessionBuilder(false)
+	b := newCodexSessionBuilder(false, nil)
 	return b.codexIncrementalNeedsFullParse(line)
 }
 

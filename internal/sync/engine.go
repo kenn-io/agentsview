@@ -7595,13 +7595,13 @@ func (e *Engine) retentionBudget() *parseRetentionBudget {
 	return e.parseRetentionBudget
 }
 
-// beginBulkRetentionPass installs the byte-bounded bulk retention budget for
+// beginBulkRetentionPass installs the unthrottled bulk retention budget for
 // the duration of an archive-scale pass and returns the restore func the
 // caller must defer. Bulk passes (full sync, resync rebuild, remote import
-// processing) use the same weighted byte admission as daemon passes: large
-// sources run exclusively, small sources share the capacity, and batches
-// flush on count or estimated bytes. The caller holds syncMu, so no other
-// pass can observe the switched budget.
+// processing) never throttle parse admission: their peak memory is bounded
+// by worker parallelism, and the pass's retained memory is returned to the
+// OS by the end-of-pass scavenge instead of being bounded up front. The
+// caller holds syncMu, so no other pass can observe the switched budget.
 func (e *Engine) beginBulkRetentionPass() func() {
 	e.bulkRetentionOnce.Do(func() {
 		if e.bulkRetentionBudget == nil {
@@ -7643,7 +7643,6 @@ func (e *Engine) collectAndBatch(
 	}
 
 	var pending []pendingWrite
-	var pendingBytes int64
 	var pendingLeases []*parseRetentionLease
 	var pendingCacheWrites []skipCacheWrite
 	baselineCacheWrites := make(
@@ -7882,7 +7881,6 @@ func (e *Engine) collectAndBatch(
 			}
 		}()
 		pending = pending[:0]
-		pendingBytes = 0
 		pendingLeases = pendingLeases[:0]
 		pendingCacheWrites = pendingCacheWrites[:0]
 	}
@@ -8147,7 +8145,6 @@ func (e *Engine) collectAndBatch(
 					sess:              pr.Session,
 					msgs:              pr.Messages,
 					usageEvents:       pr.UsageEvents,
-					sourceBytes:       r.sourceBytes,
 					checkpoint:        pr.Checkpoint,
 					needsRetry:        needsRetry,
 					forceReplace:      r.forceReplace,
@@ -8165,7 +8162,6 @@ func (e *Engine) collectAndBatch(
 					pw.providerStatHash = r.providerStatHash
 				}
 				pending = append(pending, pw)
-				pendingBytes += pw.sourceBytes
 				if runtimeMetrics != nil {
 					runtimeMetrics.pendingWrites(len(pending))
 				}
@@ -8182,8 +8178,7 @@ func (e *Engine) collectAndBatch(
 					sourceFingerprint: r.sourceFingerprint,
 				})
 			}
-			if len(pending) >= batchSize || budget.underPressure() ||
-				pendingBytes >= parseBatchBytesLimit {
+			if len(pending) >= batchSize || budget.underPressure() {
 				flushPending()
 			}
 			// A Kiro SQLite store is discovered as one container source
@@ -8381,10 +8376,6 @@ type sourceMissingMember struct {
 }
 
 type processResult struct {
-	// sourceBytes is the physical source size used to acquire the retention
-	// lease and to account this result against the pending write batch byte
-	// cap. Zero on lease-free skips.
-	sourceBytes        int64
 	results            []parser.ParseResult
 	excludedSessionIDs []string
 	// sourceMissingMembers carries stored sessions whose virtual member
@@ -9025,8 +9016,9 @@ func (e *Engine) processProviderFile(
 	// here the provider parses the source, so acquire the retention lease that
 	// bounds the parsed payload and attach it to every result carrying that
 	// data. A result still classified as a skip below releases it immediately.
-	sourceBytes := parseRetentionSourceBytes(file)
-	lease, err := e.retentionBudget().acquire(ctx, sourceBytes)
+	lease, err := e.retentionBudget().acquire(
+		ctx, parseRetentionSourceBytes(file),
+	)
 	if err != nil {
 		return processResult{err: err}, true
 	}
@@ -9115,7 +9107,6 @@ func (e *Engine) processProviderFile(
 			skip:                  !outcome.ForceReplace,
 			excludedSessionIDs:    excludedSessionIDs,
 			sourceMissingMembers:  missingMembers,
-			sourceBytes:           sourceBytes,
 			mtime:                 fingerprint.MTimeNS,
 			cacheSkip:             cacheSkip,
 			cacheKey:              cacheKey,
@@ -9161,7 +9152,6 @@ func (e *Engine) processProviderFile(
 		results:               filteredResults,
 		excludedSessionIDs:    excludedSessionIDs,
 		sourceMissingMembers:  missingMembers,
-		sourceBytes:           sourceBytes,
 		mtime:                 fingerprint.MTimeNS,
 		cacheSkip:             cacheSkip,
 		cacheKey:              cacheKey,
@@ -11103,8 +11093,9 @@ func (e *Engine) tryIncrementalJSONL(
 	// retention lease that bounds the parsed payload. It is attached to the
 	// incremental results below and released on every decline (fall-through to
 	// a full parse re-acquires at the provider parse seam) or skip return.
-	sourceBytes := parseRetentionSourceBytes(file)
-	lease, leaseErr := e.retentionBudget().acquire(ctx, sourceBytes)
+	lease, leaseErr := e.retentionBudget().acquire(
+		ctx, parseRetentionSourceBytes(file),
+	)
 	if leaseErr != nil {
 		return processResult{err: leaseErr}, true
 	}
@@ -11205,7 +11196,6 @@ func (e *Engine) tryIncrementalJSONL(
 		// with non-message timestamps (e.g. progress).
 		if consumed > 0 {
 			return processResult{
-				sourceBytes: sourceBytes,
 				incremental: &incrementalUpdate{
 					sessionID:            inc.ID,
 					project:              inc.Project,
@@ -11326,7 +11316,6 @@ func (e *Engine) tryIncrementalJSONL(
 	}
 
 	return processResult{
-		sourceBytes: sourceBytes,
 		incremental: &incrementalUpdate{
 			sessionID:            inc.ID,
 			project:              inc.Project,
@@ -12073,10 +12062,6 @@ type pendingWrite struct {
 	sess        parser.ParsedSession
 	msgs        []parser.ParsedMessage
 	usageEvents []parser.ParsedUsageEvent
-	// sourceBytes is the physical source size carried from the parse result;
-	// collectAndBatch uses it to flush batches on estimated bytes as well as
-	// session count.
-	sourceBytes int64
 	// checkpoint is the provider's persisted continuation cursor for a full
 	// parse. The flush path persists it as a parser_checkpoints row after the
 	// session rows commit, so later appends can resume without rescanning the

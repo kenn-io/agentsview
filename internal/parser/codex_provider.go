@@ -256,9 +256,8 @@ func (p *codexProvider) Parse(
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
 	parentID, parentResolved := p.codexParentResolution(path)
-	sess, msgs, cursor, safe, err := p.parseSessionWithCursor(
-		path, machine, false,
-	)
+	sess, msgs, cursor, safe, hashState, anchorDigest, err :=
+		p.parseSessionWithCursor(path, machine, false)
 	if err != nil {
 		return ParseOutcome{}, err
 	}
@@ -285,9 +284,11 @@ func (p *codexProvider) Parse(
 	}
 	result := ParseResultOutcome{
 		Result: ParseResult{
-			Session:    *sess,
-			Messages:   msgs,
-			Checkpoint: checkpoint,
+			Session:                *sess,
+			Messages:               msgs,
+			Checkpoint:             checkpoint,
+			CheckpointHashState:    hashState,
+			CheckpointAnchorDigest: anchorDigest,
 		},
 		DataVersion: DataVersionCurrent,
 	}

@@ -19,6 +19,8 @@ const (
 	// codexCursorCheckpointVersion is the wire version for the persisted
 	// cursor encoding. Bump when the encoding changes; decode failures fall
 	// back to a full parse.
+	// The fork replay gate is process-only state: it is re-armed from the
+	// transcript on every parse and is not part of the persisted cursor.
 	codexCursorCheckpointVersion   = 1
 	codexCursorCheckpointMaxString = 1 << 20
 
@@ -95,19 +97,10 @@ func (s *codexCursorState) MarshalBinary() ([]byte, error) {
 	if s.lastTokenUsageSeen {
 		flags |= 1 << 3
 	}
-	if s.forkGate.active {
-		flags |= 1 << 4
-	}
 	if err := write(flags); err != nil {
 		return nil, err
 	}
 	if err := write(s.lastTokenUsageDigest); err != nil {
-		return nil, err
-	}
-	if err := write(s.forkGate.createdMs); err != nil {
-		return nil, err
-	}
-	if err := writeStr(s.forkGate.subagentParentID); err != nil {
 		return nil, err
 	}
 	if err := writeStr(s.lastTaskEvent); err != nil {
@@ -184,14 +177,7 @@ func (s *codexCursorState) UnmarshalBinary(data []byte) error {
 	s.sawUserTurnAfterFirst = flags&(1<<1) != 0
 	s.mayReplayFirstUserPrompt = flags&(1<<2) != 0
 	s.lastTokenUsageSeen = flags&(1<<3) != 0
-	s.forkGate.active = flags&(1<<4) != 0
 	if err := read(&s.lastTokenUsageDigest); err != nil {
-		return err
-	}
-	if err := read(&s.forkGate.createdMs); err != nil {
-		return err
-	}
-	if s.forkGate.subagentParentID, err = readStr(); err != nil {
 		return err
 	}
 	if s.lastTaskEvent, err = readStr(); err != nil {

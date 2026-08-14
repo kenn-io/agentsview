@@ -47,9 +47,6 @@ runner noise and fail loudly:
   `TestWriteSessionIncrementalPersistsCheckpointInSameTx` (`internal/db`) —
   checkpoint rows round-trip and are committed in the same transaction as the
   incremental delta.
-- `TestFullSyncPassIsByteBudgeted`, `TestBulkParseRetentionBudgetUsesWeightedAdmission`,
-  and `TestCollectAndBatchFlushesOnByteCap` (`internal/sync`) — bulk passes
-  and write batches are bounded by estimated bytes, not session count alone.
 - The count-based seam tests in `internal/parser`
   (`discovery_workspace_manifest_test.go`, gemini/antigravity provider tests)
   — root-derived project info is built once per root, not once per source.
