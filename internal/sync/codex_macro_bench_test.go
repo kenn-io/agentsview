@@ -573,3 +573,89 @@ func TestMacroCodexEngineStagedFullParse(t *testing.T) {
 	require.Greater(t, summaryBytes, turns*(outBytes-1<<16),
 		"per-call summaries must carry the staged output content")
 }
+
+// TestMacroCodexRealArchiveColdSync is the acceptance run for the staged
+// streaming path against a real large Codex transcript. Set
+// MACRO_CODEX_945MB to the archive path; the test copies it into the test
+// root (never touching the original), syncs it through the real engine,
+// and gates peak live heap and RSS under 512MiB. A second no-op sync then
+// asserts the unchanged transcript is skipped without re-reading it.
+func TestMacroCodexRealArchiveColdSync(t *testing.T) {
+	src := os.Getenv("MACRO_CODEX_945MB")
+	if src == "" {
+		t.Skip("set MACRO_CODEX_945MB to a large real Codex transcript")
+	}
+	info, err := os.Stat(src)
+	require.NoError(t, err)
+	require.Greater(t, info.Size(), int64(500<<20),
+		"MACRO_CODEX_945MB must point at a >500MiB transcript")
+
+	// Rebuild the dated codex layout under the test root so discovery
+	// sees a real transcript copy, and keep the original untouched.
+	srcDir := filepath.Dir(src)
+	rel := filepath.Join(
+		filepath.Base(filepath.Dir(filepath.Dir(srcDir))),
+		filepath.Base(filepath.Dir(srcDir)),
+		filepath.Base(srcDir),
+		filepath.Base(src),
+	)
+	root := filepath.Join(t.TempDir(), "sessions")
+	dst := filepath.Join(root, rel)
+	require.NoError(t, os.MkdirAll(filepath.Dir(dst), 0o755))
+	in, err := os.Open(src)
+	require.NoError(t, err)
+	out, err := os.Create(dst)
+	require.NoError(t, err)
+	_, err = io.Copy(out, in)
+	require.NoError(t, err)
+	require.NoError(t, in.Close())
+	require.NoError(t, out.Close())
+
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {root},
+		},
+		Machine: "macro-host",
+	})
+	t.Cleanup(engine.Close)
+
+	start := time.Now()
+	peak := pollPeakLiveHeap()
+	rcharBefore := macroRchar(t)
+	stats := engine.SyncAll(t.Context(), nil)
+	peakLive := peak()
+	rcharDelta := macroRchar(t) - rcharBefore
+	require.Zero(t, stats.Failed)
+	require.Equal(t, 1, stats.Synced)
+	t.Logf(
+		"REAL945 cold dur=%s peak_live=%dMiB rss=%dMiB read=%dMiB size=%dMiB",
+		time.Since(start), peakLive/(1<<20),
+		peakProcessRSSBytes()/(1<<20), rcharDelta/(1<<20),
+		info.Size()/(1<<20),
+	)
+	require.Less(t, peakLive, uint64(512<<20),
+		"945MB cold sync peak live heap must stay under 512MiB")
+	require.Less(t, peakProcessRSSBytes(), uint64(512<<20),
+		"945MB cold sync RSS must stay under 512MiB")
+	// The single-pass tee bounds transcript reads to one file pass. The
+	// remaining rchar is scratch publish I/O: the staged rows and
+	// summaries are read back once each while the replace transaction
+	// copies them into the archive. The ceiling excludes any second
+	// transcript pass (the pre-P3 cold path re-read the source multiple
+	// times and exceeded this several times over).
+	require.LessOrEqual(t, rcharDelta, 6*info.Size(),
+		"cold sync must not re-read the source multiple times")
+
+	// No-op sync: the unchanged transcript must be skipped without
+	// touching the source bytes again.
+	noopBefore := macroRchar(t)
+	stats = engine.SyncAll(t.Context(), nil)
+	noopDelta := macroRchar(t) - noopBefore
+	require.Zero(t, stats.Failed)
+	require.Zero(t, stats.Synced, "unchanged archive must be skipped")
+	t.Logf("REAL945 noop dur=%s read=%dKiB",
+		time.Since(start), noopDelta/(1<<10))
+	require.LessOrEqual(t, noopDelta, int64(16<<20),
+		"no-op sync must not re-read the transcript")
+}

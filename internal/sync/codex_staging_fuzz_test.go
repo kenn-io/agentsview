@@ -160,9 +160,10 @@ func TestCodexStagedPublishFailureKeepsPriorContent(t *testing.T) {
 	require.NotEmpty(t, before)
 
 	// A failed staged publish must leave the prior rows untouched. The
-	// summary-resolution failure aborts the pre-write signal fold; the
-	// event-insert failure aborts inside the replace transaction after
-	// messages and tool calls were staged into it, exercising rollback.
+	// summary-resolution failure aborts while the transaction resolves
+	// per-call summaries; the event-insert failure aborts after messages
+	// and tool calls were staged into the same transaction. Both must
+	// roll back to the complete prior content.
 	for _, tc := range []struct {
 		name    string
 		resolve bool
@@ -187,43 +188,34 @@ func TestCodexStagedPublishFailureKeepsPriorContent(t *testing.T) {
 			stagedDBMsgs := toDBMessages(pendingWrite{
 				sess: *stagedSess, msgs: stagedMsgs,
 			}, nil)
-			contentFailures, err := stagedContentFailures(
-				failing, stagedDBMsgs,
+			update, findingsFromMsgs := computeSignalsAndSecrets(
+				row, stagedDBMsgs,
 			)
-			if err != nil {
-				require.True(t, tc.resolve,
-					"only the injected summary failure may fail the fold")
-			} else {
-				update, findingsFromMsgs :=
-					computeSignalsAndSecretsWithContentFailures(
-						row, stagedDBMsgs, contentFailures,
-					)
-				positions := make(map[string]db.StagedToolCallPosition)
-				for _, m := range stagedDBMsgs {
-					for callIdx, tc := range m.ToolCalls {
-						if tc.ToolUseID == "" {
-							continue
-						}
-						positions[tc.ToolUseID] =
-							db.StagedToolCallPosition{
-								ToolUseID: tc.ToolUseID,
-								Ordinal:   m.Ordinal,
-								CallIndex: callIdx,
-							}
+			positions := make(map[string]db.StagedToolCallPosition)
+			for _, m := range stagedDBMsgs {
+				for callIdx, tc := range m.ToolCalls {
+					if tc.ToolUseID == "" {
+						continue
 					}
+					positions[tc.ToolUseID] =
+						db.StagedToolCallPosition{
+							ToolUseID: tc.ToolUseID,
+							Ordinal:   m.Ordinal,
+							CallIndex: callIdx,
+						}
 				}
-				combined := append(
-					append([]db.SecretFinding(nil), findingsFromMsgs...),
-					failing.Findings(row.ID, positions)...,
-				)
-				update.SecretLeakCount = definiteFindingCount(combined)
-				err = database.ReplaceSessionContentStaged(
-					row.ID, stagedDBMsgs, update, combined, failing,
-					map[string]bool{},
-				)
-				require.Error(t, err,
-					"the injected failure must abort the publish")
 			}
+			combined := append(
+				append([]db.SecretFinding(nil), findingsFromMsgs...),
+				failing.Findings(row.ID, positions)...,
+			)
+			update.SecretLeakCount = definiteFindingCount(combined)
+			err = database.ReplaceSessionContentStaged(
+				row.ID, stagedDBMsgs, update, combined, failing,
+				map[string]bool{},
+			)
+			require.Error(t, err,
+				"the injected failure must abort the publish")
 			after, err := database.GetAllMessages(
 				context.Background(), row.ID,
 			)

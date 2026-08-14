@@ -221,11 +221,6 @@ func assertCodexStagedParity(t *testing.T, uuid, content string) {
 		rowL.ID, legacyDBMsgs, updateL, findingsL,
 	))
 
-	contentFailures, err := stagedContentFailures(stagedSink, stagedDBMsgs)
-	require.NoError(t, err)
-	updateS, findingsFromMsgs := computeSignalsAndSecretsWithContentFailures(
-		rowS, stagedDBMsgs, contentFailures,
-	)
 	positions := make(map[string]db.StagedToolCallPosition)
 	for _, m := range stagedDBMsgs {
 		for callIdx, tc := range m.ToolCalls {
@@ -239,6 +234,9 @@ func assertCodexStagedParity(t *testing.T, uuid, content string) {
 			}
 		}
 	}
+	updateS, findingsFromMsgs := computeSignalsAndSecrets(
+		rowS, stagedDBMsgs,
+	)
 	combinedFindings := append(
 		append([]db.SecretFinding(nil), findingsFromMsgs...),
 		stagedSink.Findings(rowS.ID, positions)...,
@@ -248,6 +246,22 @@ func assertCodexStagedParity(t *testing.T, uuid, content string) {
 		rowS.ID, stagedDBMsgs, updateS, combinedFindings,
 		stagedSink, map[string]bool{},
 	))
+	// The publish transaction resolved each summary once and captured the
+	// content-failure verdicts; fold them into the signal pass exactly
+	// like the engine's post-publish recompute.
+	updateS, findingsFromMsgs = computeSignalsAndSecretsWithContentFailures(
+		rowS, stagedDBMsgs, stagedSink.ContentFailures(),
+	)
+	combinedFindings = append(
+		append([]db.SecretFinding(nil), findingsFromMsgs...),
+		stagedSink.Findings(rowS.ID, positions)...,
+	)
+	updateS.SecretLeakCount = definiteFindingCount(combinedFindings)
+	require.NoError(t, dbStaged.ReplaceSessionSecretFindings(
+		rowS.ID, combinedFindings, updateS.SecretLeakCount,
+		updateS.SecretsRulesVersion,
+	))
+	require.NoError(t, dbStaged.UpdateSessionSignals(rowS.ID, updateS))
 
 	msgsL, err := dbLegacy.GetAllMessages(context.Background(), rowL.ID)
 	require.NoError(t, err)

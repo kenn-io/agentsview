@@ -325,7 +325,14 @@ type Engine struct {
 	sourceMachines          map[parser.AgentType]map[string]string
 	machine                 string
 	blockedResultCategories map[string]bool
-	cwdFilter               cwdPrefixFilter
+	// stagedGCRefs counts in-flight staged Codex cold syncs. While any is
+	// running, the process GC percent is lowered (stagedColdSyncGCPercent)
+	// to keep the peak RSS of a large streaming parse bounded; the previous
+	// value is restored when the last one finishes. Guarded by stagedGCMu.
+	stagedGCMu   gosync.Mutex
+	stagedGCRefs int
+	stagedGCPrev int
+	cwdFilter    cwdPrefixFilter
 	// scanProtectedPaths, homeDir, and goos gate passive probing of macOS
 	// TCC-protected locations. homeDir is empty when the home directory
 	// cannot be resolved, which disables the gate rather than guessing.
@@ -7663,6 +7670,7 @@ func (e *Engine) collectAndBatch(
 	var pendingBytes int64
 	var pendingLeases []*parseRetentionLease
 	var pendingStaged []*codexStagingSink
+	var pendingStagedGC []func()
 	var pendingCacheWrites []skipCacheWrite
 	baselineCacheWrites := make(
 		map[machineSessionSource]map[string]skipCacheWrite,
@@ -7814,6 +7822,7 @@ func (e *Engine) collectAndBatch(
 		func() {
 			defer releaseParseRetentionLeases(pendingLeases)
 			defer closeCodexStagingSinks(pendingStaged)
+			defer releaseStagedGCGuards(pendingStagedGC)
 			var outcome writeBatchOutcome
 			if e.writeBatchOverride != nil {
 				writtenSessions, writtenMessages, failedSessions, cwdFiltered :=
@@ -7904,6 +7913,7 @@ func (e *Engine) collectAndBatch(
 		pendingBytes = 0
 		pendingLeases = pendingLeases[:0]
 		pendingStaged = pendingStaged[:0]
+		pendingStagedGC = pendingStagedGC[:0]
 		pendingCacheWrites = pendingCacheWrites[:0]
 	}
 
@@ -8203,6 +8213,12 @@ func (e *Engine) collectAndBatch(
 			if r.staged != nil {
 				pendingStaged = append(pendingStaged, r.staged)
 				r.staged = nil
+			}
+			if r.stagedGCRelease != nil {
+				pendingStagedGC = append(
+					pendingStagedGC, r.stagedGCRelease,
+				)
+				r.stagedGCRelease = nil
 			}
 			if r.cacheAfterWrite && vetoed == 0 && len(r.retrySessionIDs) == 0 {
 				pendingCacheWrites = append(pendingCacheWrites, skipCacheWrite{
@@ -8523,19 +8539,29 @@ type processResult struct {
 	// write (and into pendingStaged for release after the batch commits);
 	// every path that drops the result without writing must releaseStaged.
 	staged *codexStagingSink
+	// stagedGCRelease restores the process GC percent after this result's
+	// staged sink is released. nil when the result carries no sink.
+	stagedGCRelease func()
 }
 
-// releaseStaged closes the result's staging sink and clears the handle. It
-// must be called exactly once on every processResult that carries one and
-// is not moving the sink onto a pending write.
+// releaseStaged closes the result's staging sink, restores the GC percent
+// window it opened, and clears the handles. It must be called exactly once
+// on every processResult that carries a sink and is not moving the sink
+// onto a pending write.
 func (r *processResult) releaseStaged() {
-	if r.staged == nil {
+	if r.staged == nil && r.stagedGCRelease == nil {
 		return
 	}
-	if err := r.staged.Close(); err != nil {
-		log.Printf("closing codex staging sink: %v", err)
+	if r.staged != nil {
+		if err := r.staged.Close(); err != nil {
+			log.Printf("closing codex staging sink: %v", err)
+		}
+		r.staged = nil
 	}
-	r.staged = nil
+	if r.stagedGCRelease != nil {
+		r.stagedGCRelease()
+		r.stagedGCRelease = nil
+	}
 }
 
 func (r processResult) needsRetryForSession(sessionID string) bool {
@@ -9172,6 +9198,7 @@ func (e *Engine) processProviderFile(
 	// peak memory stays bounded by messages + one scratch batch rather than
 	// the transcript size. Small files keep the collecting path.
 	var stagedSink *codexStagingSink
+	var stagedGCRelease func()
 	if file.Agent == parser.AgentCodex &&
 		sourceBytes > stagedCodexParseMinBytes {
 		stagedSink, err = newCodexStagingSink(e.blockedResultCategories)
@@ -9185,6 +9212,7 @@ func (e *Engine) processProviderFile(
 				noCacheSkip: true,
 			}, true
 		}
+		stagedGCRelease = e.beginStagedColdSync()
 	}
 	var outcome parser.ParseOutcome
 	if stagedSink != nil {
@@ -9213,6 +9241,9 @@ func (e *Engine) processProviderFile(
 		if stagedSink != nil {
 			stagedSink.Close()
 		}
+		if stagedGCRelease != nil {
+			stagedGCRelease()
+		}
 		return processResult{
 			err:            err,
 			mtime:          fingerprint.MTimeNS,
@@ -9230,6 +9261,9 @@ func (e *Engine) processProviderFile(
 	); err != nil {
 		if stagedSink != nil {
 			stagedSink.Close()
+		}
+		if stagedGCRelease != nil {
+			stagedGCRelease()
 		}
 		return processResult{
 			err:            err,
@@ -9362,6 +9396,8 @@ func (e *Engine) processProviderFile(
 		// staged rows, so release the scratch sink now.
 		stagedSink.Close()
 		stagedSink = nil
+		stagedGCRelease()
+		stagedGCRelease = nil
 	}
 	res := processResult{
 		results:               filteredResults,
@@ -9378,6 +9414,7 @@ func (e *Engine) processProviderFile(
 		retentionLease:        lease,
 		providerStatHash:      preParseStatHash,
 		staged:                stagedSink,
+		stagedGCRelease:       stagedGCRelease,
 	}
 	if file.Agent == parser.AgentOmnigent && cacheSkip && cleanCache &&
 		!e.forceParse && !file.ForceParse &&
@@ -12857,39 +12894,62 @@ func (e *Engine) writeBatchWithOutcome(
 		var werr error
 		if replaceMessages {
 			if pw.staged != nil {
-				contentFailures, err = stagedContentFailures(pw.staged, msgs)
-				if err != nil {
-					werr = fmt.Errorf(
-						"resolving staged content failures: %w", err,
-					)
-				} else {
+				update, findings = computeSignalsAndSecrets(s, msgs)
+				positions := make(map[string]db.StagedToolCallPosition)
+				for _, m := range msgs {
+					for callIdx, tc := range m.ToolCalls {
+						if tc.ToolUseID == "" {
+							continue
+						}
+						positions[tc.ToolUseID] =
+							db.StagedToolCallPosition{
+								ToolUseID: tc.ToolUseID,
+								Ordinal:   m.Ordinal,
+								CallIndex: callIdx,
+							}
+					}
+				}
+				combined := append(
+					append([]db.SecretFinding(nil), findings...),
+					pw.staged.Findings(s.ID, positions)...,
+				)
+				update.SecretLeakCount = definiteFindingCount(combined)
+				werr = e.db.ReplaceSessionContentStaged(
+					s.ID, msgs, update, combined, pw.staged,
+					e.blockedResultCategories,
+				)
+				if werr == nil {
+					// The publish transaction resolved every summary
+					// once, capturing content-failure verdicts. Fold
+					// them into the signal pass now and persist, then
+					// seed the incremental state with the same rows.
+					contentFailures = pw.staged.ContentFailures()
 					update, findings =
 						computeSignalsAndSecretsWithContentFailures(
 							s, msgs, contentFailures,
 						)
-					positions := make(map[string]db.StagedToolCallPosition)
-					for _, m := range msgs {
-						for callIdx, tc := range m.ToolCalls {
-							if tc.ToolUseID == "" {
-								continue
-							}
-							positions[tc.ToolUseID] =
-								db.StagedToolCallPosition{
-									ToolUseID: tc.ToolUseID,
-									Ordinal:   m.Ordinal,
-									CallIndex: callIdx,
-								}
-						}
-					}
-					combined := append(
+					combined = append(
 						append([]db.SecretFinding(nil), findings...),
 						pw.staged.Findings(s.ID, positions)...,
 					)
-					update.SecretLeakCount = definiteFindingCount(combined)
-					werr = e.db.ReplaceSessionContentStaged(
-						s.ID, msgs, update, combined, pw.staged,
-						e.blockedResultCategories,
-					)
+					update.SecretLeakCount =
+						definiteFindingCount(combined)
+					if ferr := e.db.ReplaceSessionSecretFindings(
+						s.ID, combined, update.SecretLeakCount,
+						update.SecretsRulesVersion,
+					); ferr != nil {
+						log.Printf(
+							"secrets: staged recompute %s: %v",
+							s.ID, ferr,
+						)
+					} else if ferr := e.db.UpdateSessionSignals(
+						s.ID, update,
+					); ferr != nil {
+						log.Printf(
+							"signals: staged recompute %s: %v",
+							s.ID, ferr,
+						)
+					}
 				}
 			} else {
 				update, findings = computeSignalsAndSecrets(s, msgs)

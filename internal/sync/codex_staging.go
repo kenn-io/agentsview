@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime/debug"
 	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -47,6 +48,10 @@ type codexStagingSink struct {
 	findingPos  []stagedFindingPos
 	eventByCall map[string]int64
 	eventSeq    int64
+	// contentFailures records per-call content-failure verdicts captured
+	// while the publish transaction resolves summaries, so the engine can
+	// fold them into the signal pass after the atomic publish.
+	contentFailures map[string]bool
 }
 
 type stagedFindingPos struct {
@@ -58,6 +63,37 @@ type stagedFindingPos struct {
 // source streams through the scratch staging path instead of the
 // collecting parser.
 const stagedCodexParseMinBytes = 128 << 20
+
+// stagedColdSyncGCPercent is the GC percent held while a staged Codex cold
+// sync is in flight. The streaming path's live set is bounded, so a lower
+// target keeps the peak heap (and with it RSS) near the live set instead
+// of letting transient per-event garbage double it. Restored on release.
+const stagedColdSyncGCPercent = 30
+
+// beginStagedColdSync lowers the process GC percent for the duration of one
+// staged Codex cold sync and returns the function that restores the prior
+// value. Concurrent staged syncs share one lowered window via a refcount.
+func (e *Engine) beginStagedColdSync() func() {
+	e.stagedGCMu.Lock()
+	defer e.stagedGCMu.Unlock()
+	if e.stagedGCRefs == 0 {
+		e.stagedGCPrev = debug.SetGCPercent(stagedColdSyncGCPercent)
+	}
+	e.stagedGCRefs++
+	released := false
+	return func() {
+		e.stagedGCMu.Lock()
+		defer e.stagedGCMu.Unlock()
+		if released {
+			return
+		}
+		released = true
+		e.stagedGCRefs--
+		if e.stagedGCRefs == 0 {
+			debug.SetGCPercent(e.stagedGCPrev)
+		}
+	}
+}
 
 const codexStagingSchema = `
 CREATE TABLE stage_events (
@@ -72,15 +108,7 @@ CREATE TABLE stage_events (
     timestamp TEXT NOT NULL DEFAULT '',
     blanked INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX idx_stage_events_call ON stage_events(tool_use_id, seq);
-CREATE TABLE stage_agent_summary (
-    tool_use_id TEXT NOT NULL,
-    agent_id TEXT NOT NULL,
-    content TEXT NOT NULL,
-    content_length INTEGER NOT NULL,
-    first_seq INTEGER NOT NULL,
-    PRIMARY KEY (tool_use_id, agent_id)
-);`
+CREATE INDEX idx_stage_events_call ON stage_events(tool_use_id, seq);`
 
 // newCodexStagingSink opens a scratch SQLite database for one streaming
 // parse. The caller must Close it once the staged write has published.
@@ -204,45 +232,14 @@ func closeCodexStagingSinks(sinks []*codexStagingSink) {
 	}
 }
 
-// stagedContentFailureResolver is the slice of the staging sink the
-// engine's pre-write signal fold needs; wrappers in fault-injection tests
-// implement it to abort the fold at a chosen point.
-type stagedContentFailureResolver interface {
-	ResolveContentFailure(
-		ctx context.Context, toolUseID string,
-	) (bool, error)
-}
-
-// stagedContentFailures resolves per-call content-failure verdicts from the
-// staging sink for tool calls whose last event carries no status
-// (status-driven verdicts come from the placeholder model directly). Each
-// summary is resolved transiently, so memory stays bounded by one call's
-// distinct agents.
-func stagedContentFailures(
-	staged stagedContentFailureResolver, msgs []db.Message,
-) (map[string]bool, error) {
-	failures := make(map[string]bool)
-	for _, m := range msgs {
-		for _, tc := range m.ToolCalls {
-			if tc.ToolUseID == "" {
-				continue
-			}
-			if n := len(tc.ResultEvents); n > 0 &&
-				tc.ResultEvents[n-1].Status != "" {
-				continue
-			}
-			failed, err := staged.ResolveContentFailure(
-				context.Background(), tc.ToolUseID,
-			)
-			if err != nil {
-				return nil, fmt.Errorf(
-					"content failure for %s: %w", tc.ToolUseID, err,
-				)
-			}
-			failures[tc.ToolUseID] = failed
+// releaseStagedGCGuards restores the process GC percent after a batch of
+// staged cold syncs finished, in reverse open order.
+func releaseStagedGCGuards(guards []func()) {
+	for i := len(guards) - 1; i >= 0; i-- {
+		if guards[i] != nil {
+			guards[i]()
 		}
 	}
-	return failures, nil
 }
 
 func (s *codexStagingSink) AppendMessage(m parser.ParsedMessage) {
@@ -332,25 +329,6 @@ func (s *codexStagingSink) AppendToolResultEvent(
 	); err != nil {
 		s.CodexCollectingSink.AppendToolResultEvent(callID, ev)
 		return
-	}
-
-	// Per-call summary state: latest raw content per agent, keeping the
-	// first-write order the legacy summary walks.
-	if strings.TrimSpace(ev.Content) != "" {
-		if _, err := s.scratch.Exec(
-			`INSERT INTO stage_agent_summary (
-			     tool_use_id, agent_id, content, content_length, first_seq
-			 ) VALUES (?, ?, ?, ?, ?)
-			 ON CONFLICT(tool_use_id, agent_id) DO UPDATE SET
-			     content = excluded.content,
-			     content_length = excluded.content_length`,
-			callID, strings.TrimSpace(ev.AgentID), ev.Content,
-			contentLength, seq,
-		); err != nil {
-			log.Printf("codex staging summary upsert %s: %v", callID, err)
-			s.CodexCollectingSink.AppendToolResultEvent(callID, ev)
-			return
-		}
 	}
 
 	// Definite findings from the stored (blanked) content — the same
@@ -468,41 +446,58 @@ func (s *codexStagingSink) InsertEventsTx(
 	return nil
 }
 
-// ResolveSummary computes the stored result summary for one call from the
-// staged per-agent state, mirroring db.SummarizeToolResultEvents: the
-// latest raw content per agent in first-write order, followed by the
-// trailing anonymous content. Memory is transient and bounded by the
-// call's distinct agents.
+// ResolveSummary computes the stored result summary for one call by
+// walking its staged event rows in emission order, mirroring
+// db.SummarizeToolResultEvents: the latest raw content per agent in
+// first-write order, followed by the trailing anonymous content. Memory is
+// transient and bounded by the call's distinct agents. While the summary
+// is in hand it also records the call's content-failure verdict (see
+// ContentFailures), so the engine's post-publish signal fold never
+// resolves summaries a second time.
 func (s *codexStagingSink) ResolveSummary(
 	ctx context.Context, toolUseID string,
 ) (summary string, contentLength int, err error) {
 	rows, err := s.scratch.QueryContext(ctx, `
-		SELECT agent_id, content, content_length
-		FROM stage_agent_summary
+		SELECT agent_id, content
+		FROM stage_events
 		WHERE tool_use_id = ?
-		ORDER BY first_seq`,
+		ORDER BY seq`,
 		toolUseID,
 	)
 	if err != nil {
 		return "", 0, err
 	}
 	defer rows.Close()
-	var parts []string
+	// Emission order makes the first seen row per agent both the
+	// first-write anchor and the earliest summary part; later rows simply
+	// overwrite the content.
+	var order []string
+	latest := make(map[string]string)
 	var lastAnon string
 	for rows.Next() {
 		var agentID, content string
-		var length int
-		if err := rows.Scan(&agentID, &content, &length); err != nil {
+		if err := rows.Scan(&agentID, &content); err != nil {
 			return "", 0, err
 		}
-		if agentID == "" {
+		if strings.TrimSpace(content) == "" {
+			continue
+		}
+		agent := strings.TrimSpace(agentID)
+		if agent == "" {
 			lastAnon = content
 			continue
 		}
-		parts = append(parts, agentID+":\n"+content)
+		if _, ok := latest[agent]; !ok {
+			order = append(order, agent)
+		}
+		latest[agent] = content
 	}
 	if err := rows.Err(); err != nil {
 		return "", 0, err
+	}
+	var parts []string
+	for _, agent := range order {
+		parts = append(parts, agent+":\n"+latest[agent])
 	}
 	switch {
 	case len(parts) == 0:
@@ -518,23 +513,20 @@ func (s *codexStagingSink) ResolveSummary(
 			summary += "\n\n" + lastAnon
 		}
 	}
+	verdict := signals.IsFailure(signals.ToolCallRow{
+		Category:      s.categoryByCall[toolUseID],
+		ResultContent: summary,
+	})
+	if s.contentFailures == nil {
+		s.contentFailures = make(map[string]bool)
+	}
+	s.contentFailures[toolUseID] = verdict
 	return summary, len(summary), nil
 }
 
-// ResolveContentFailure resolves the stored result summary for one call
-// and reports whether the content heuristics mark it a failure. The
-// summary is transient: the engine calls this while folding
-// content-driven tool-failure signals into the placeholder model, before
-// the staged publish resolves summaries again inside its transaction.
-func (s *codexStagingSink) ResolveContentFailure(
-	ctx context.Context, toolUseID string,
-) (bool, error) {
-	summary, _, err := s.ResolveSummary(ctx, toolUseID)
-	if err != nil {
-		return false, err
-	}
-	return signals.IsFailure(signals.ToolCallRow{
-		Category:      s.categoryByCall[toolUseID],
-		ResultContent: summary,
-	}), nil
+// ContentFailures returns the per-call content-failure verdicts captured
+// during summary resolution in the publish transaction. Calls the
+// transaction never resolved (no registered tool call) are absent.
+func (s *codexStagingSink) ContentFailures() map[string]bool {
+	return s.contentFailures
 }
