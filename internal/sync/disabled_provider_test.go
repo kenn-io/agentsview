@@ -105,3 +105,76 @@ func TestDisabledProviderPreservesArchivedSessionAcrossRebuild(t *testing.T) {
 	require.Len(t, messages, 1)
 	assert.Equal(t, "preserve this archived message", messages[0].Content)
 }
+
+func TestDisabledCodebuffPreservesArchivedFreebuffAcrossRebuild(t *testing.T) {
+	tests := []struct {
+		name            string
+		withContributor bool
+	}{
+		{name: "local rebuild"},
+		{name: "rebuild with contributor", withContributor: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database := dbtest.OpenTestDB(t)
+			codebuffRoot := filepath.Join(t.TempDir(), "manicode")
+			freebuffSource := filepath.Join(
+				codebuffRoot, "project", "chats", "session-existing",
+				"chat-messages.json",
+			)
+			require.NoError(t, os.MkdirAll(filepath.Dir(freebuffSource), 0o755))
+			require.NoError(t, os.WriteFile(freebuffSource, []byte(`[]`), 0o644))
+			require.NoError(t, database.UpsertSession(db.Session{
+				ID: "freebuff:project:session-existing", Project: "project",
+				Machine: "test-machine", Agent: string(parser.AgentFreebuff),
+				FilePath: &freebuffSource, MessageCount: 1, UserMessageCount: 1,
+			}))
+			require.NoError(t, database.InsertMessages([]db.Message{{
+				SessionID: "freebuff:project:session-existing", Ordinal: 0,
+				Role: "user", Content: "preserve this Freebuff message",
+			}}))
+
+			engine := sessionsync.NewEngine(database, sessionsync.EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					parser.AgentCodebuff: {codebuffRoot},
+				},
+				DisabledAgents: []parser.AgentType{parser.AgentCodebuff},
+				Machine:        "test-machine",
+			})
+			t.Cleanup(engine.Close)
+
+			var stats sessionsync.SyncStats
+			if tt.withContributor {
+				var err error
+				stats, err = engine.ResyncAllWithOptions(
+					t.Context(), nil, sessionsync.RebuildOptions{
+						Contributors: []sessionsync.RebuildContributor{{
+							Name: "remote",
+							Config: sessionsync.EngineConfig{
+								Machine: "remote", IDPrefix: "remote~", Ephemeral: true,
+							},
+						}},
+					},
+				)
+				require.NoError(t, err)
+			} else {
+				stats = engine.ResyncAll(t.Context(), nil)
+			}
+			require.False(t, stats.Aborted, "rebuild warnings: %v", stats.Warnings)
+
+			stored, err := database.GetSessionFull(
+				t.Context(), "freebuff:project:session-existing",
+			)
+			require.NoError(t, err)
+			require.NotNil(t, stored)
+			assert.Equal(t, string(parser.AgentFreebuff), stored.Agent)
+			messages, err := database.GetMessages(
+				t.Context(), stored.ID, 0, 10, true,
+			)
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			assert.Equal(t, "preserve this Freebuff message", messages[0].Content)
+		})
+	}
+}

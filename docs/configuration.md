@@ -694,6 +694,9 @@ Exclude session providers you do not use by listing their IDs in
 disabled_agents = ["gemini"]
 ```
 
+Because Freebuff shares the Codebuff provider, listing `"codebuff"` disables
+local filesystem ingestion for both Codebuff and Freebuff.
+
 The setting applies only to local filesystem discovery, targeted local file
 sync, file watching, and scheduled polling. It does not affect HTTP or SSH
 remote imports, and it does not restrict HTTP, SSH, PostgreSQL, DuckDB, or

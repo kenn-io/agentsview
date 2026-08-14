@@ -2460,7 +2460,7 @@ func (e *Engine) resyncBuildLocked(
 			string(parser.AgentMiMoCode),
 			string(parser.AgentIcodemate),
 		}
-		for _, agent := range e.preserveAgents {
+		for _, agent := range storageAgentsForDisabledProviders(e.preserveAgents) {
 			excludedAgents = append(excludedAgents, string(agent))
 		}
 		localOldFileSessions, err = origDB.FileBackedSessionCountForRebuildOwner(
@@ -3294,6 +3294,18 @@ func countRootSessionsForAgent(
 	return count
 }
 
+func storageAgentsForDisabledProviders(
+	disabledProviders []parser.AgentType,
+) []parser.AgentType {
+	agents := append([]parser.AgentType(nil), disabledProviders...)
+	// Codebuff and Freebuff share one provider but persist distinct agent labels.
+	if slices.Contains(disabledProviders, parser.AgentCodebuff) &&
+		!slices.Contains(agents, parser.AgentFreebuff) {
+		agents = append(agents, parser.AgentFreebuff)
+	}
+	return agents
+}
+
 func (e *Engine) protectedFileSessionCount(
 	database *db.DB, machine, idPrefix string, scoped bool,
 ) (int, error) {
@@ -3334,13 +3346,18 @@ func protectedFileSessionCount(
 			database, agent, machine, idPrefix, scoped,
 		)
 	}
-	seenPreserved := make(map[parser.AgentType]struct{}, len(preserveAgents))
-	for _, agent := range preserveAgents {
+	storageAgents := storageAgentsForDisabledProviders(preserveAgents)
+	seenPreserved := make(map[parser.AgentType]struct{}, len(storageAgents))
+	for _, agent := range storageAgents {
 		if _, seen := seenPreserved[agent]; seen {
 			continue
 		}
 		seenPreserved[agent] = struct{}{}
-		def, ok := parser.AgentByType(agent)
+		providerAgent := agent
+		if agent == parser.AgentFreebuff {
+			providerAgent = parser.AgentCodebuff
+		}
+		def, ok := parser.AgentByType(providerAgent)
 		if !ok || (!def.FileBased && agent != parser.AgentDevin) ||
 			isOpenCodeFormatStorageAgent(agent) {
 			continue
