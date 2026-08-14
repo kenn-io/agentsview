@@ -45,6 +45,10 @@ func TestStoreSessionManagementCRUD(t *testing.T) {
 			 '2026-03-12T14:30:00Z'::timestamptz, 2, 1)
 	`, project)
 	require.NoError(t, err, "inserting session rows")
+	_, err = store.DB().Exec(`
+		UPDATE sessions SET data_version = $1 WHERE id = 'mgmt-trash'
+	`, db.CurrentDataVersion())
+	require.NoError(t, err, "marking restore target current")
 
 	renamed := "Renamed by PG store"
 	require.NoError(t, store.RenameSession("mgmt-rename", &renamed),
@@ -67,6 +71,8 @@ func TestStoreSessionManagementCRUD(t *testing.T) {
 	sess, err = store.GetSession(ctx, "mgmt-trash")
 	require.NoError(t, err, "GetSession after restore")
 	require.NotNil(t, sess)
+	assert.Less(t, sess.DataVersion, db.CurrentDataVersion(),
+		"restoring a session must force a source reparse")
 
 	require.NoError(t, store.SoftDeleteSession("mgmt-delete"),
 		"SoftDeleteSession delete target")

@@ -462,16 +462,18 @@ func (s *Store) SoftDeleteSessions(ids []string) (int, error) {
 	return total, nil
 }
 
-// RestoreSession restores a trashed session.
+// RestoreSession restores a trashed session and invalidates source freshness
+// so changes made while it was trashed are parsed.
 func (s *Store) RestoreSession(id string) (int64, error) {
 	res, err := s.pg.Exec(
 		`UPDATE sessions
 		 SET deleted_at = NULL,
 		     deletion_cause = NULL,
+		     data_version = $2,
 		     updated_at = NOW()
 		 WHERE id = $1 AND deleted_at IS NOT NULL
 		   AND deletion_cause IS NULL`,
-		id,
+		id, max(db.CurrentDataVersion()-1, 0),
 	)
 	if err != nil {
 		return 0, mapPGWriteError(
