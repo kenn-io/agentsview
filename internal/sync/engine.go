@@ -10524,13 +10524,13 @@ func (f fakeSnapshotInfo) Sys() any    { return nil }
 
 // providerSingleSessionFresh reports whether a single-session JSONL
 // provider's source (Claude) maps to a stored session that is already
-// up to date: the source size and mtime match what is stored, the row
-// is at the current parser data version, and its project does not need
-// reparse. It reproduces the legacy Claude process arm's shouldSkipFile
-// gate so an unchanged session is skipped instead of re-parsed every
-// full sync. Providers without incremental append, multi-session
-// sources, or sources that are not a single physical file are never
-// considered fresh here and always fall through to the full parse.
+// up to date: the source size and mtime match what is stored, every active row
+// for the source is at the current parser data version, and the main row's
+// project does not need reparse. It reproduces the legacy Claude process arm's
+// shouldSkipFile gate so an unchanged session is skipped instead of re-parsed
+// every full sync. Providers without incremental append, multi-session sources,
+// or sources that are not a single physical file are never considered fresh
+// here and always fall through to the full parse.
 func (e *Engine) providerSingleSessionFresh(
 	ctx context.Context,
 	provider parser.Provider,
@@ -10591,6 +10591,16 @@ func (e *Engine) providerSingleSessionFresh(
 		}
 	}
 	if !e.shouldSkipFile(sessionID, info) {
+		return 0, false, false, false
+	}
+	// Claude transcripts can fan out into several active DAG sessions. The
+	// filename stem identifies only the main row, so its current version cannot
+	// hide a stale restored fork that shares the same source path.
+	_, sourceDataVersion, _, _, sourceFound :=
+		e.db.GetSourceRepairStateByAgentPath(
+			lookupPath, string(parser.AgentClaude),
+		)
+	if !sourceFound || sourceDataVersion < db.CurrentDataVersion() {
 		return 0, false, false, false
 	}
 	if e.providerIncrementalIdentityChanged(lookupPath, info) {

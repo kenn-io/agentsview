@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -235,10 +236,44 @@ func TestSyncClaudeDAGIntentionalSkipCompletesActiveMembers(t *testing.T) {
 			assert.False(t, hasDigest,
 				"restoring a fork must invalidate the source digest")
 
-			restoredSync := restarted.SyncAll(context.Background(), nil)
-			require.Zero(t, restoredSync.Failed)
-			assert.Equal(t, 2, restoredSync.Synced,
-				"restoring a fork must reparse the complete DAG")
+			// Pin the source stat to the current main row. The restored fork's
+			// stale data version must still defeat the stem-based Claude gate.
+			// Normalize the project and unavailable file identity so this does
+			// not depend on temporary-directory naming or inode reuse by the host.
+			raw, err := sql.Open("sqlite3", database.Path())
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, raw.Close()) })
+			_, err = raw.Exec(
+				`UPDATE sessions
+				 SET project = ?, file_inode = 0, file_device = 0
+				 WHERE file_path = ?`,
+				"project-a", path,
+			)
+			require.NoError(t, err)
+			mainSession, err := database.GetSession(t.Context(), "forked")
+			require.NoError(t, err)
+			require.NotNil(t, mainSession)
+			require.Equal(t, "project-a", mainSession.Project)
+			require.Equal(t, path, database.GetSessionFilePath("forked"))
+			storedSize, storedMtime, ok := database.GetSessionFileInfo("forked")
+			require.True(t, ok)
+			info, err := os.Stat(path)
+			require.NoError(t, err)
+			require.Equal(t, storedSize, info.Size())
+			storedTime := time.Unix(0, storedMtime)
+			require.NoError(t, os.Chtimes(path, storedTime, storedTime))
+			info, err = os.Stat(path)
+			require.NoError(t, err)
+			require.Equal(t, storedMtime, info.ModTime().UnixNano())
+
+			if tc.syncSingle {
+				require.NoError(t, restarted.SyncSingleSession("forked"))
+			} else {
+				restoredSync := restarted.SyncAll(context.Background(), nil)
+				require.Zero(t, restoredSync.Failed)
+				assert.Equal(t, 2, restoredSync.Synced,
+					"restoring a fork must reparse the complete DAG")
+			}
 			assert.Equal(t, db.CurrentDataVersion(),
 				database.GetSessionDataVersion("forked-i"))
 		})
