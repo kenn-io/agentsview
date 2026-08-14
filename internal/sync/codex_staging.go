@@ -204,13 +204,22 @@ func closeCodexStagingSinks(sinks []*codexStagingSink) {
 	}
 }
 
+// stagedContentFailureResolver is the slice of the staging sink the
+// engine's pre-write signal fold needs; wrappers in fault-injection tests
+// implement it to abort the fold at a chosen point.
+type stagedContentFailureResolver interface {
+	ResolveContentFailure(
+		ctx context.Context, toolUseID string,
+	) (bool, error)
+}
+
 // stagedContentFailures resolves per-call content-failure verdicts from the
 // staging sink for tool calls whose last event carries no status
 // (status-driven verdicts come from the placeholder model directly). Each
 // summary is resolved transiently, so memory stays bounded by one call's
 // distinct agents.
 func stagedContentFailures(
-	staged *codexStagingSink, msgs []db.Message,
+	staged stagedContentFailureResolver, msgs []db.Message,
 ) (map[string]bool, error) {
 	failures := make(map[string]bool)
 	for _, m := range msgs {
@@ -266,6 +275,16 @@ func (s *codexStagingSink) AppendToolResultEvent(
 	ev.SubagentSessionID = strings.Clone(ev.SubagentSessionID)
 	ev.Status = strings.Clone(ev.Status)
 	ev.Source = strings.Clone(ev.Source)
+	// Events for calls that never registered in the message model follow
+	// the legacy orphan path (toolCallUpdates, discarded by full-parse
+	// consumers) instead of being staged: publishing them would diverge
+	// from the collecting path, which has always dropped full-parse
+	// orphans. Late outputs still merge through the incremental append
+	// path on later syncs, unchanged.
+	if _, ok := s.categoryByCall[callID]; !ok {
+		s.CodexCollectingSink.AppendToolResultEvent(callID, ev)
+		return
+	}
 	// The legacy deduplication compares raw parser content; the staged
 	// rows keep the raw content plus a blank flag, so the equivalence
 	// check matches even for blocked categories.

@@ -19,16 +19,48 @@ import (
 // through both the collecting parse (legacy full write) and the staging
 // parse (scratch-backed write), then compares the stored message, tool
 // call, and result-event projections field by field, plus findings and
-// status-driven signals.
+// status- and content-driven signals.
 func TestCodexStreamingParseParityWithLegacy(t *testing.T) {
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b05"
+	assertCodexStagedParity(t, uuid, codexParityTranscript(uuid))
+
+	// The base fixture pins the absolute classification: call_b fails by
+	// status and call_c by content heuristics, so both paths must see
+	// exactly those two failures.
 	root := t.TempDir()
 	day := filepath.Join(root, "2024", "01", "01")
 	require.NoError(t, os.MkdirAll(day, 0o755))
 	path := filepath.Join(
 		day, "rollout-2024-01-01T10-00-00-"+uuid+".jsonl",
 	)
-	content := testjsonl.JoinJSONL(
+	require.NoError(t, os.WriteFile(
+		path, []byte(codexParityTranscript(uuid)), 0o644,
+	))
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	stats := engine.SyncAll(t.Context(), nil)
+	require.Zero(t, stats.Failed)
+	require.Equal(t, 1, stats.Synced)
+	sess, err := database.GetSessionFull(t.Context(), "codex:"+uuid)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Equal(t, 2, sess.ToolFailureSignalCount)
+	require.Equal(t, 2, sess.ConsecutiveFailureMax)
+	require.Equal(t, 2, sess.FinalFailureStreak)
+	require.Equal(t, 1, sess.SecretLeakCount)
+}
+
+// codexParityTranscript is the deterministic dual-path fixture: a session
+// meta, one token-counted turn with a secret-bearing output, a
+// status-errored output, and a status-less content-failure output.
+func codexParityTranscript(uuid string) string {
+	return testjsonl.JoinJSONL(
 		testjsonl.CodexSessionMetaJSON(
 			uuid, "/workspace/project-a", "codex_cli_rs",
 			"2024-01-01T10:00:00Z",
@@ -71,6 +103,21 @@ func TestCodexStreamingParseParityWithLegacy(t *testing.T) {
 			"bash: python3: command not found",
 			"2024-01-01T10:00:12Z",
 		),
+	)
+}
+
+// assertCodexStagedParity runs one transcript through the collecting and
+// staging parse paths and asserts the parser projections and stored DB
+// projections agree field by field. It is shared by the deterministic
+// parity test and the perturbation table so every variant gets the full
+// dual-path comparison.
+func assertCodexStagedParity(t *testing.T, uuid, content string) {
+	t.Helper()
+	root := t.TempDir()
+	day := filepath.Join(root, "2024", "01", "01")
+	require.NoError(t, os.MkdirAll(day, 0o755))
+	path := filepath.Join(
+		day, "rollout-2024-01-01T10-00-00-"+uuid+".jsonl",
 	)
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
@@ -277,11 +324,6 @@ func TestCodexStreamingParseParityWithLegacy(t *testing.T) {
 		sessS.ConsecutiveFailureMax)
 	assert.Equal(t, sessL.FinalFailureStreak, sessS.FinalFailureStreak)
 	assert.Equal(t, sessL.SecretLeakCount, sessS.SecretLeakCount)
-	// call_b fails by status and call_c by content heuristics; both paths
-	// must see exactly those two failures.
-	assert.Equal(t, 2, sessL.ToolFailureSignalCount)
-	assert.Equal(t, 2, sessS.ConsecutiveFailureMax)
-	assert.Equal(t, 2, sessS.FinalFailureStreak)
 }
 
 func timePtr(s string) *string { return &s }
