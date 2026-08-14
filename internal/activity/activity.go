@@ -36,6 +36,7 @@ type SessionMeta struct {
 	Project     string
 	Agent       string
 	Machine     string
+	GitBranch   string // "" when unknown
 	StartedAt   string // RFC3339 or ""
 	EndedAt     string // RFC3339 or ""
 	IsAutomated bool   // automated (e.g. roborev) vs interactive session
@@ -189,6 +190,7 @@ type Report struct {
 	ByProject          []KeyMinutes                      `json:"by_project"`
 	ByModel            []KeyMinutes                      `json:"by_model"`
 	ByAgent            []KeyMinutes                      `json:"by_agent"`
+	ByBranch           []BranchKeyMinutes                `json:"by_branch"`
 	BySession          []SessionRow                      `json:"by_session"`
 	Intervals          []ReportInterval                  `json:"intervals"`
 }
@@ -203,6 +205,11 @@ func SanitizeProjectLabels(
 		report.ByProject[i].Key = export.SafeProjectDisplayLabel(
 			report.ByProject[i].Key,
 		)
+	}
+	for i := range report.ByBranch {
+		raw := report.ByBranch[i].Project
+		report.ByBranch[i].ProjectKey = export.ProjectKeyForEntry(projects[raw])
+		report.ByBranch[i].Project = export.SafeProjectDisplayLabel(raw)
 	}
 	for i := range report.BySession {
 		title := export.SafeProjectDisplayLabel(report.BySession[i].Title)
@@ -277,6 +284,20 @@ type Totals struct {
 type KeyMinutes struct {
 	ProjectKey              string      `json:"project_key,omitempty"`
 	Key                     string      `json:"key"`
+	AgentMinutes            float64     `json:"agent_minutes"`
+	Cost                    money.Money `json:"cost"`
+	AutomatedAgentMinutes   float64     `json:"automated_agent_minutes"`
+	InteractiveAgentMinutes float64     `json:"interactive_agent_minutes"`
+	AutomatedCost           money.Money `json:"automated_cost"`
+	InteractiveCost         money.Money `json:"interactive_cost"`
+}
+
+// BranchKeyMinutes is one (project, branch) breakdown row, matching
+// db.BranchBreakdown/service.BranchTotal's typed Project/Branch fields.
+type BranchKeyMinutes struct {
+	ProjectKey              string      `json:"project_key"`
+	Project                 string      `json:"project"`
+	Branch                  string      `json:"branch"`
 	AgentMinutes            float64     `json:"agent_minutes"`
 	Cost                    money.Money `json:"cost"`
 	AutomatedAgentMinutes   float64     `json:"automated_agent_minutes"`
@@ -1080,9 +1101,11 @@ func buildSessionsTable(r *Report, start, end, effEnd time.Time,
 	byProject := map[string]*keyAgg{}
 	byAgent := map[string]*keyAgg{}
 	byModel := map[string]*keyAgg{}
+	byBranch := map[branchPair]*keyAgg{}
 	r.BySession = make([]SessionRow, 0, len(sessions))
 	for _, s := range sessions {
 		au := s.IsAutomated
+		branchKey := branchPair{Project: s.Project, Branch: s.GitBranch}
 		if au {
 			r.Totals.AutomatedSessions++
 		} else {
@@ -1107,6 +1130,9 @@ func buildSessionsTable(r *Report, start, end, effEnd time.Time,
 			if err := addKey(byAgent, s.Agent, mins, money.Money{}, au); err != nil {
 				return fmt.Errorf("summing activity agent minutes: %w", err)
 			}
+			if err := addKey(byBranch, branchKey, mins, money.Money{}, au); err != nil {
+				return fmt.Errorf("summing activity branch minutes: %w", err)
+			}
 			for m, mm := range a.modelMins {
 				if err := addKey(byModel, m, mm, money.Money{}, au); err != nil {
 					return fmt.Errorf("summing activity model minutes: %w", err)
@@ -1129,6 +1155,9 @@ func buildSessionsTable(r *Report, start, end, effEnd time.Time,
 			if err := addKey(byAgent, s.Agent, 0, c.cost, au); err != nil {
 				return fmt.Errorf("summing activity agent cost: %w", err)
 			}
+			if err := addKey(byBranch, branchKey, 0, c.cost, au); err != nil {
+				return fmt.Errorf("summing activity branch cost: %w", err)
+			}
 			for m, mc := range c.models {
 				if err := addKey(byModel, m, 0, mc, au); err != nil {
 					return fmt.Errorf("summing activity model cost: %w", err)
@@ -1148,8 +1177,14 @@ func buildSessionsTable(r *Report, start, end, effEnd time.Time,
 	r.Totals.DistinctModels = len(modelSet)
 	r.ByProject = breakdownRows(byProject, false)
 	r.ByAgent = breakdownRows(byAgent, false)
+	r.ByBranch = branchBreakdownRows(byBranch)
 	r.ByModel = breakdownRows(byModel, true)
 	return nil
+}
+
+type branchPair struct {
+	Project string
+	Branch  string
 }
 
 // keyAgg accumulates a breakdown key's combined agent-minutes and cost plus the
@@ -1166,8 +1201,8 @@ type keyAgg struct {
 
 // addKey accumulates minutes and cost into the key's aggregate, routing the
 // values into the automated or interactive segment by the session's class.
-func addKey(
-	m map[string]*keyAgg, key string, minutes float64, cost money.Money,
+func addKey[K comparable](
+	m map[K]*keyAgg, key K, minutes float64, cost money.Money,
 	automated bool,
 ) error {
 	a := m[key]
@@ -1219,6 +1254,35 @@ func breakdownRows(m map[string]*keyAgg, dropModelKeys bool) []KeyMinutes {
 			return out[i].Key < out[j].Key
 		}
 		return out[i].AgentMinutes > out[j].AgentMinutes
+	})
+	return out
+}
+
+func branchBreakdownRows(m map[branchPair]*keyAgg) []BranchKeyMinutes {
+	out := make([]BranchKeyMinutes, 0, len(m))
+	for k, v := range m {
+		if v.minutes == 0 && v.cost.Microdollars == 0 {
+			continue
+		}
+		out = append(out, BranchKeyMinutes{
+			Project:                 k.Project,
+			Branch:                  k.Branch,
+			AgentMinutes:            v.minutes,
+			Cost:                    v.cost,
+			AutomatedAgentMinutes:   v.autoMinutes,
+			InteractiveAgentMinutes: v.interMinutes,
+			AutomatedCost:           v.autoCost,
+			InteractiveCost:         v.interCost,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].AgentMinutes != out[j].AgentMinutes {
+			return out[i].AgentMinutes > out[j].AgentMinutes
+		}
+		if out[i].Project != out[j].Project {
+			return out[i].Project < out[j].Project
+		}
+		return out[i].Branch < out[j].Branch
 	})
 	return out
 }

@@ -118,11 +118,13 @@ for filter options:
 GET /api/v1/projects
 GET /api/v1/machines
 GET /api/v1/branches
+GET /api/v1/branch-names
 GET /api/v1/agents
 ```
 
-`GET /api/v1/branches` returns distinct `(project, branch)` pairs
-plus an opaque `token` field:
+`GET /api/v1/branches` preserves the stable project-qualified metadata
+contract. It returns distinct `(project, branch)` pairs, ordered by project and
+branch, plus an opaque token for exact filtering:
 
 ```json
 {
@@ -136,11 +138,38 @@ plus an opaque `token` field:
 }
 ```
 
-Pass the returned token back as the `git_branch` query parameter on
-branch-aware endpoints. Treat it as opaque and URL-encode it in
-manual HTTP calls. The token is scoped by both project and branch,
-so `app-a/main` and `app-b/main` remain distinct, and an empty
-branch remains distinct from a literal `unknown` branch.
+Pass the token back as `git_branch` when project identity must remain exact;
+treat it as opaque and URL-encode it in manual HTTP calls.
+
+`GET /api/v1/branch-names` is the bounded name-search contract used by filter
+pickers. It deduplicates same-named branches after applying project scope and
+orders names by the most recent matching session activity, then branch name.
+Search is case-insensitive and matches branch-name substrings.
+
+| Query parameter | Meaning |
+|-----------------|---------|
+| `search` | Optional case-insensitive branch-name substring |
+| `projects` | Optional repeated project filter applied before branch-name deduplication |
+| `scope` | `roots` by default; `all` also includes subagent and fork sessions |
+| `limit` | Maximum branch names, from 1 through 100; default 100 |
+| `include_one_shot` | Include one-shot sessions; default false |
+| `include_automated` | Include automated sessions; default false |
+
+```json
+{
+  "branches": [
+    {
+      "branch": "main"
+    }
+  ],
+  "has_more": false
+}
+```
+
+`has_more` is true when additional matching names exist beyond the requested
+limit. Branch-aware endpoints accept these names directly in `git_branch` for
+name-based filtering, or the token from `/api/v1/branches` for an exact
+project/branch identity.
 
 ## Commands
 
@@ -258,7 +287,7 @@ therefore appear on both dates.
 | `--project`           | `project`           | string                            |
 | `--exclude-project`   | `exclude_project`   | string                            |
 | `--machine`           | `machine`           | string                            |
-| —                     | `git_branch`        | opaque token from `GET /api/v1/branches` |
+| `--branch`            | `git_branch`        | Branch name; the CLI requires `--project` and sends an exact opaque token. Direct HTTP callers may use a name or token |
 | `--agent`             | `agent`             | string                            |
 | `--date`              | `date`              | `YYYY-MM-DD`                      |
 | `--date-from`         | `date_from`         | `YYYY-MM-DD`                      |
@@ -602,7 +631,7 @@ default; opt back in with `--include-one-shot`,
 | `--project`           | `project`           | string                                                 |
 | `--exclude-project`   | `exclude_project`   | string                                                 |
 | `--machine`           | `machine`           | string                                                 |
-| —                     | `git_branch`        | opaque token from `GET /api/v1/branches`               |
+| `--branch`            | `git_branch`        | Branch name; requires `--project`. The HTTP param takes an opaque token from `GET /api/v1/branches`, which the flag encodes |
 | `--agent`             | `agent`             | string                                                 |
 | `--date`              | `date`              | `YYYY-MM-DD`                                           |
 | `--date-from`         | `date_from`         | `YYYY-MM-DD`                                           |
@@ -899,7 +928,7 @@ metadata contract as `agentsview activity report --json`.
 | `timezone` | IANA timezone name; default `UTC` |
 | `bucket` | Optional bucket override: `5m`, `15m`, `1h`, `1d`, or `1w` |
 | `project` | Filter by project |
-| `git_branch` | Filter by opaque branch token from `GET /api/v1/branches` |
+| `git_branch` | Opaque (project, branch) token from `GET /api/v1/branches`; the CLI `--branch` flag encodes it |
 | `agent` | Filter by agent |
 | `machine` | Filter by machine |
 | `automation` | `all`, `interactive`, or `automated`; default `all` |
@@ -993,6 +1022,7 @@ Response excerpt:
   "by_project": [{"key": "agentsview", "agent_minutes": 96.4, "cost": 4.20}],
   "by_model": [{"key": "claude-sonnet-4-6", "agent_minutes": 80.0, "cost": 3.10}],
   "by_agent": [{"key": "codex", "agent_minutes": 64.0, "cost": 2.85}],
+  "by_branch": [{"project": "agentsview", "branch": "main", "agent_minutes": 96.4, "cost": 4.20}],
   "by_session": [
     {
       "session_id": "codex:abc",
@@ -1021,7 +1051,9 @@ Response excerpt:
 ```
 
 Breakdown rows include total, automated, and interactive minutes and
-costs. Session rows with no reliable timestamped activity use
+costs. `by_branch` rows carry `project`/`branch` as separate fields; an
+empty `branch` means no recorded branch. Session rows with no reliable
+timestamped activity use
 `"timing_quality": "untimed"` and `agent_minutes: null`; they can
 still contribute cost and output tokens when usage rows exist.
 

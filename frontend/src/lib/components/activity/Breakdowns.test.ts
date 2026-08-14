@@ -1,21 +1,31 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import Breakdowns from "./Breakdowns.svelte";
 import { router } from "../../stores/router.svelte.js";
 import type { Report } from "../../api/types.js";
 import { testMoney } from "../../test/money.js";
+import { BRANCH_TOKEN_SEP } from "../../branchFilters.js";
 
 function makeReport(): Report {
   return {
     peak: { agents: 0, at: null },
     totals: {
-      active_minutes: 0, idle_minutes: 0, agent_minutes: 0, sessions: 0,
-      untimed_sessions: 0, distinct_projects: 0, distinct_models: 0,
-      output_tokens: 0, cost: testMoney(0),
-      automated_agent_minutes: 0, interactive_agent_minutes: 0,
-      automated_cost: testMoney(0), interactive_cost: testMoney(0),
-      automated_sessions: 0, interactive_sessions: 0,
+      active_minutes: 0,
+      idle_minutes: 0,
+      agent_minutes: 0,
+      sessions: 0,
+      untimed_sessions: 0,
+      distinct_projects: 0,
+      distinct_models: 0,
+      output_tokens: 0,
+      cost: testMoney(0),
+      automated_agent_minutes: 0,
+      interactive_agent_minutes: 0,
+      automated_cost: testMoney(0),
+      interactive_cost: testMoney(0),
+      automated_sessions: 0,
+      interactive_sessions: 0,
     },
     partial: false,
     as_of: null,
@@ -30,18 +40,29 @@ function makeReport(): Report {
     buckets: [],
     by_project: [
       {
-        key: "alpha", project_key: "pl1:sha256:alpha", agent_minutes: 30, cost: testMoney(0),
-        interactive_agent_minutes: 20, automated_agent_minutes: 10,
-        interactive_cost: testMoney(0), automated_cost: testMoney(0),
+        key: "alpha",
+        project_key: "pl1:sha256:alpha",
+        agent_minutes: 30,
+        cost: testMoney(0),
+        interactive_agent_minutes: 20,
+        automated_agent_minutes: 10,
+        interactive_cost: testMoney(0),
+        automated_cost: testMoney(0),
       },
       {
-        key: "beta", project_key: "pl1:sha256:beta", agent_minutes: 10, cost: testMoney(0),
-        interactive_agent_minutes: 10, automated_agent_minutes: 0,
-        interactive_cost: testMoney(0), automated_cost: testMoney(0),
+        key: "beta",
+        project_key: "pl1:sha256:beta",
+        agent_minutes: 10,
+        cost: testMoney(0),
+        interactive_agent_minutes: 10,
+        automated_agent_minutes: 0,
+        interactive_cost: testMoney(0),
+        automated_cost: testMoney(0),
       },
     ],
     by_model: [],
     by_agent: [],
+    by_branch: [],
     by_session: [],
     intervals: [],
     projects: {},
@@ -103,14 +124,22 @@ describe("Breakdowns", () => {
     // usage; they must not render as empty "0" bars in the minutes view.
     report.by_project = [
       {
-        key: "timed", agent_minutes: 30, cost: testMoney(1),
-        interactive_agent_minutes: 30, automated_agent_minutes: 0,
-        interactive_cost: testMoney(1), automated_cost: testMoney(0),
+        key: "timed",
+        agent_minutes: 30,
+        cost: testMoney(1),
+        interactive_agent_minutes: 30,
+        automated_agent_minutes: 0,
+        interactive_cost: testMoney(1),
+        automated_cost: testMoney(0),
       },
       {
-        key: "costonly", agent_minutes: 0, cost: testMoney(5),
-        interactive_agent_minutes: 0, automated_agent_minutes: 0,
-        interactive_cost: testMoney(5), automated_cost: testMoney(0),
+        key: "costonly",
+        agent_minutes: 0,
+        cost: testMoney(5),
+        interactive_agent_minutes: 0,
+        automated_agent_minutes: 0,
+        interactive_cost: testMoney(5),
+        automated_cost: testMoney(0),
       },
     ] as Report["by_project"];
     const target = document.createElement("div");
@@ -130,14 +159,22 @@ describe("Breakdowns", () => {
     const report = makeReport();
     report.by_project = [
       {
-        key: "timed", agent_minutes: 30, cost: testMoney(1),
-        interactive_agent_minutes: 30, automated_agent_minutes: 0,
-        interactive_cost: testMoney(1), automated_cost: testMoney(0),
+        key: "timed",
+        agent_minutes: 30,
+        cost: testMoney(1),
+        interactive_agent_minutes: 30,
+        automated_agent_minutes: 0,
+        interactive_cost: testMoney(1),
+        automated_cost: testMoney(0),
       },
       {
-        key: "costonly", agent_minutes: 0, cost: testMoney(5),
-        interactive_agent_minutes: 0, automated_agent_minutes: 0,
-        interactive_cost: testMoney(5), automated_cost: testMoney(0),
+        key: "costonly",
+        agent_minutes: 0,
+        cost: testMoney(5),
+        interactive_agent_minutes: 0,
+        automated_agent_minutes: 0,
+        interactive_cost: testMoney(5),
+        automated_cost: testMoney(0),
       },
     ] as Report["by_project"];
     const target = document.createElement("div");
@@ -182,8 +219,8 @@ describe("Breakdowns", () => {
 
   it("links project rows to Data and leaves other panels plain", async () => {
     const report = makeReport();
-    report.by_model = [{ ...report.by_project![0], key: "model-a" }];
-    report.by_agent = [{ ...report.by_project![0], key: "agent-a" }];
+    report.by_model = [{ ...report.by_project![0]!, key: "model-a" }];
+    report.by_agent = [{ ...report.by_project![0]!, key: "agent-a" }];
     const target = document.createElement("div");
     document.body.appendChild(target);
     const component = mount(Breakdowns, { target, props: { report } });
@@ -191,9 +228,7 @@ describe("Breakdowns", () => {
 
     const links = target.querySelectorAll("a.bar-label");
     expect(links).toHaveLength(2);
-    expect(links[0]!.getAttribute("href")).toBe(
-      "/data?project_key=pl1%3Asha256%3Aalpha",
-    );
+    expect(links[0]!.getAttribute("href")).toBe("/data?project_key=pl1%3Asha256%3Aalpha");
     expect(links[0]!.getAttribute("title")).toBe("View alpha in Data");
     // Model/agent panels render plain spans, and no action buttons remain.
     expect(target.querySelectorAll("span.bar-label")).toHaveLength(2);
@@ -212,9 +247,7 @@ describe("Breakdowns", () => {
 
     try {
       const link = target.querySelector("a.bar-label") as HTMLAnchorElement;
-      expect(link.getAttribute("href")).toBe(
-        "/data?desktop=&project_key=pl1%3Asha256%3Aalpha",
-      );
+      expect(link.getAttribute("href")).toBe("/data?desktop=&project_key=pl1%3Asha256%3Aalpha");
     } finally {
       unmount(component);
       window.history.replaceState(null, "", "/");
@@ -280,5 +313,132 @@ describe("Breakdowns", () => {
     expect(navigate).not.toHaveBeenCalled();
     unmount(component);
     navigate.mockRestore();
+  });
+
+  it("renders branch rows as project/branch labels, never raw tokens", async () => {
+    const report = makeReport();
+    report.by_branch = [
+      {
+        project_key: "pl1:sha256:alpha",
+        project: "alpha",
+        branch: "main",
+        agent_minutes: 12,
+        cost: testMoney(0),
+        interactive_agent_minutes: 12,
+        automated_agent_minutes: 0,
+        interactive_cost: testMoney(0),
+        automated_cost: testMoney(0),
+      },
+      {
+        project_key: "pl1:sha256:alpha",
+        project: "alpha",
+        branch: "",
+        agent_minutes: 3,
+        cost: testMoney(0),
+        interactive_agent_minutes: 3,
+        automated_agent_minutes: 0,
+        interactive_cost: testMoney(0),
+        automated_cost: testMoney(0),
+      },
+    ];
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const c = mount(Breakdowns, { target, props: { report } });
+    await tick();
+    const labels = [...target.querySelectorAll(".bar-label")].map(
+      (el) => el.textContent?.trim() ?? "",
+    );
+    expect(labels).toContain("alpha/main");
+    expect(labels).toContain("alpha/(no branch)");
+    expect(labels.some((l) => l.includes(BRANCH_TOKEN_SEP))).toBe(false);
+    unmount(c);
+    target.remove();
+  });
+
+  it("keeps branch rows with colliding display labels distinct", async () => {
+    const report = makeReport();
+    report.by_branch = [
+      {
+        project_key: "pl1:sha256:first",
+        project: "",
+        branch: "main",
+        agent_minutes: 12,
+        cost: testMoney(0),
+        interactive_agent_minutes: 12,
+        automated_agent_minutes: 0,
+        interactive_cost: testMoney(0),
+        automated_cost: testMoney(0),
+      },
+      {
+        project_key: "pl1:sha256:second",
+        project: "",
+        branch: "main",
+        agent_minutes: 3,
+        cost: testMoney(0),
+        interactive_agent_minutes: 3,
+        automated_agent_minutes: 0,
+        interactive_cost: testMoney(0),
+        automated_cost: testMoney(0),
+      },
+    ];
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(Breakdowns, { target, props: { report } });
+    await tick();
+
+    const branchPanel = Array.from(target.querySelectorAll<HTMLElement>(".breakdown-panel")).find(
+      (panel) => panel.querySelector(".panel-title")?.textContent === "Branch",
+    );
+    expect(branchPanel?.querySelectorAll(".bar-row")).toHaveLength(2);
+    expect(target.textContent).not.toContain("pl1:sha256:");
+    unmount(component);
+    target.remove();
+  });
+
+  it("caps large branch panels with an aggregated Other row", async () => {
+    const report = makeReport();
+    report.by_branch = Array.from({ length: 41 }, (_, index) => {
+      const value = index < 39 ? 2 : 1;
+      return {
+        project_key: `pl1:sha256:${index}`,
+        project: `project-${index}`,
+        branch: `branch-${index}`,
+        agent_minutes: value,
+        cost: testMoney(value),
+        interactive_agent_minutes: value,
+        automated_agent_minutes: 0,
+        interactive_cost: testMoney(value),
+        automated_cost: testMoney(0),
+      };
+    });
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(Breakdowns, { target, props: { report } });
+    await tick();
+
+    const branchPanel = Array.from(
+      target.querySelectorAll<HTMLElement>(".breakdown-panel"),
+    ).find(
+      (panel) => panel.querySelector(".panel-title")?.textContent === "Branch",
+    );
+    expect(branchPanel?.querySelectorAll(".bar-row")).toHaveLength(40);
+    const otherRow = Array.from(
+      branchPanel?.querySelectorAll<HTMLElement>(".bar-row") ?? [],
+    ).find((row) => row.querySelector(".bar-label")?.textContent === "Other");
+    expect(otherRow?.querySelector(".bar-value")?.textContent?.trim()).toBe("2");
+    expect(branchPanel?.textContent).not.toContain("project-39/branch-39");
+    expect(branchPanel?.textContent).not.toContain("project-40/branch-40");
+
+    const costButton = Array.from(
+      target.querySelectorAll<HTMLButtonElement>(".metric-btn"),
+    ).find((button) => button.textContent?.trim() === "Cost");
+    costButton?.click();
+    await tick();
+    expect(otherRow?.querySelector(".bar-value")?.textContent?.trim()).toBe(
+      "$2.00",
+    );
+
+    await unmount(component);
+    target.remove();
   });
 });

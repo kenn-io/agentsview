@@ -158,7 +158,8 @@
             "microdollars": 4200
           }
         }
-      ]
+      ],
+      "branchBreakdowns": []
     },
     {
       "date": "2026-07-02",
@@ -220,7 +221,8 @@
             "microdollars": 2880
           }
         }
-      ]
+      ],
+      "branchBreakdowns": []
     },
     {
       "date": "2026-07-03",
@@ -314,7 +316,8 @@
             "microdollars": 17260
           }
         }
-      ]
+      ],
+      "branchBreakdowns": []
     }
   ],
   "totals": {

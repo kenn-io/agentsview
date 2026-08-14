@@ -7,6 +7,7 @@ export { CancelablePromise, CancelError } from './core/CancelablePromise';
 export { OpenAPI } from './core/OpenAPI';
 export type { OpenAPIConfig } from './core/OpenAPI';
 
+export type { ActivityBranchKeyMinutes } from './models/ActivityBranchKeyMinutes';
 export type { ActivityBucket } from './models/ActivityBucket';
 export type { ActivityKeyMinutes } from './models/ActivityKeyMinutes';
 export type { ActivityPeak } from './models/ActivityPeak';
@@ -21,6 +22,7 @@ export type { ApplyWorktreeMappingsRequest } from './models/ApplyWorktreeMapping
 export type { ApplyWorktreeMappingsResponse } from './models/ApplyWorktreeMappingsResponse';
 export type { BatchDeleteInputBody } from './models/BatchDeleteInputBody';
 export type { BranchesResponse } from './models/BranchesResponse';
+export type { BranchTotal } from './models/BranchTotal';
 export type { BulkStarInputBody } from './models/BulkStarInputBody';
 export type { CacheStats } from './models/CacheStats';
 export type { Comparison } from './models/Comparison';
@@ -36,7 +38,10 @@ export type { DbAgentBreakdown } from './models/DbAgentBreakdown';
 export type { DbAgentInfo } from './models/DbAgentInfo';
 export type { DbAgentSummary } from './models/DbAgentSummary';
 export type { DbAnalyticsSummary } from './models/DbAnalyticsSummary';
+export type { DbBranchBreakdown } from './models/DbBranchBreakdown';
 export type { DbBranchInfo } from './models/DbBranchInfo';
+export type { DbBranchOption } from './models/DbBranchOption';
+export type { DbBranchResult } from './models/DbBranchResult';
 export type { DbCacheHitRatioDistribution } from './models/DbCacheHitRatioDistribution';
 export type { DbCallTiming } from './models/DbCallTiming';
 export type { DbCategoryTotal } from './models/DbCategoryTotal';

@@ -54,7 +54,7 @@ export class ActivityService {
      */
     project?: string,
     /**
-     * Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+     * Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
      */
     gitBranch?: string,
     /**

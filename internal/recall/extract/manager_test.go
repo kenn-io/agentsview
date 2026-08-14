@@ -264,9 +264,7 @@ func TestManagerRunPassExtractsMapsAndActivates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRecallEntry: %v", err)
 	}
-	if entry == nil {
-		t.Fatal("expected entry at deterministic id for unit 0")
-	}
+	require.NotNil(t, entry, "expected entry at deterministic id for unit 0")
 	if entry.Type != "decision" || entry.Title != "t" {
 		t.Fatalf("entry type/title = %s/%s", entry.Type, entry.Title)
 	}

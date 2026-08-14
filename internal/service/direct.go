@@ -742,6 +742,8 @@ func (b *directBackend) UsagePairwiseComparison(
 	}
 	leftFilter.Breakdowns = false
 	rightFilter.Breakdowns = false
+	leftFilter.BranchBreakdowns = false
+	rightFilter.BranchBreakdowns = false
 	leftFilter.SkipSessionCounts = false
 	rightFilter.SkipSessionCounts = false
 

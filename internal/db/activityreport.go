@@ -382,7 +382,8 @@ func (db *DB) activityReportSessionsFrom(
 		s.machine,
 		COALESCE(s.started_at, ''),
 		COALESCE(s.ended_at, ''),
-		COALESCE(s.is_automated, 0)
+		COALESCE(s.is_automated, 0),
+		s.git_branch
 	FROM sessions s
 	WHERE ` + where + `
 		AND COALESCE(NULLIF(s.ended_at, ''),
@@ -405,6 +406,7 @@ func (db *DB) activityReportSessionsFrom(
 		if err := rows.Scan(
 			&s.SessionID, &s.Title, &s.Project, &s.Agent,
 			&s.Machine, &s.StartedAt, &s.EndedAt, &s.IsAutomated,
+			&s.GitBranch,
 		); err != nil {
 			return nil, nil, fmt.Errorf(
 				"scanning activity report session: %w", err)
@@ -568,7 +570,9 @@ func (db *DB) loadActivityReportUsageCandidatesFrom(
 	loadRows := func(
 		rowsSQL string, args []any, skipSessionIDs map[string]struct{},
 	) error {
-		query := dailyUsageRowSelectFromRowsWithMachine(rowsSQL, true) + `
+		query := dailyUsageRowSelectFromRowsWithBreakdowns(
+			rowsSQL, true, false,
+		) + `
 			AND u.ts >= ? AND u.ts <= ?`
 		args = append(args, lowerBound, upperBound)
 
@@ -579,7 +583,7 @@ func (db *DB) loadActivityReportUsageCandidatesFrom(
 		defer rows.Close()
 
 		for rows.Next() {
-			r, scanErr := scanDailyUsageRowWithMachine(rows, true)
+			r, scanErr := scanDailyUsageRowWithBreakdowns(rows, true, false)
 			if scanErr != nil {
 				return fmt.Errorf(
 					"scanning activity report usage: %w", scanErr)

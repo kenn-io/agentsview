@@ -16,6 +16,7 @@ func (s *Server) registerMetadataRoutes() {
 	get(s, group, "/projects", "List projects", s.humaListProjects)
 	get(s, group, "/machines", "List machines", s.humaListMachines)
 	get(s, group, "/branches", "List branches", s.humaListBranches)
+	get(s, group, "/branch-names", "Search branch names", s.humaSearchBranchNames)
 	get(s, group, "/agents", "List agents", s.humaListAgents)
 	get(s, group, "/stats", "Get stats", s.humaGetStats)
 	get(s, group, "/session-stats", "Get session stats", s.humaGetSessionStats)
@@ -50,6 +51,8 @@ type machinesResponse struct {
 type branchesResponse struct {
 	Branches []db.BranchInfo `json:"branches"`
 }
+
+type branchNamesResponse = db.BranchResult
 
 type agentsResponse struct {
 	Agents []db.AgentInfo `json:"agents"`
@@ -126,6 +129,16 @@ func (s *Server) humaListMachines(
 	return &jsonOutput[machinesResponse]{Body: machinesResponse{Machines: machines}}, nil
 }
 
+type branchScopeParam string
+
+type branchNamesInput struct {
+	BoolIncludeInput
+	Scope    branchScopeParam `query:"scope" enum:"roots,all" doc:"Session scope: roots (default) counts only root sessions; all also counts subagent and fork sessions, matching the activity and usage rollups"`
+	Projects []string         `query:"projects,explode" doc:"Restrict to these projects before deduplicating branch names"`
+	Search   string           `query:"search" doc:"Case-insensitive branch name substring"`
+	Limit    int              `query:"limit" minimum:"1" maximum:"100" default:"100" doc:"Maximum number of branch names"`
+}
+
 func (s *Server) humaListBranches(
 	ctx context.Context,
 	in *statsInput,
@@ -135,6 +148,28 @@ func (s *Server) humaListBranches(
 		return nil, serverError(err)
 	}
 	return &jsonOutput[branchesResponse]{Body: branchesResponse{Branches: branches}}, nil
+}
+
+func (s *Server) humaSearchBranchNames(
+	ctx context.Context,
+	in *branchNamesInput,
+) (*jsonOutput[branchNamesResponse], error) {
+	scope := db.BranchScopeRoots
+	if in.Scope == "all" {
+		scope = db.BranchScopeAll
+	}
+	branches, err := s.db.SearchBranchNames(ctx, db.BranchQuery{
+		Projects:         in.Projects,
+		Search:           in.Search,
+		Limit:            in.Limit,
+		Scope:            scope,
+		ExcludeOneShot:   !in.IncludeOneShot,
+		ExcludeAutomated: !in.IncludeAutomated,
+	})
+	if err != nil {
+		return nil, serverError(err)
+	}
+	return &jsonOutput[branchNamesResponse]{Body: branches}, nil
 }
 
 func (s *Server) humaListAgents(

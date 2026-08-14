@@ -7,6 +7,7 @@ export const SESSION_FILTER_KEYS: ReadonlySet<string> = new Set([
   "project",
   "starred",
   "machine",
+  "git_branch",
   "agent",
   "termination",
   "date",

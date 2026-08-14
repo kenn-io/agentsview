@@ -950,6 +950,7 @@ func TestGetDailyUsageIncludesCursorUsageEvents(t *testing.T) {
 	require.Len(t, day.AgentBreakdowns, 1)
 	assert.Equal(t, "cursor", day.AgentBreakdowns[0].Agent)
 	assert.Equal(t, money.MustParseDollars("0.1566"), day.AgentBreakdowns[0].Cost)
+	assert.Empty(t, day.BranchBreakdowns, "cursor-only usage has no branch attribution")
 	assert.Empty(t, result.Projects, "cursor-only usage should not emit project identities")
 	assert.NotContains(t, result.Projects, "")
 	assert.Equal(t, 0, result.SessionCounts.Total, "cursor rows should not count as sessions")
@@ -1015,6 +1016,33 @@ func TestGetDailyUsageSkipsCursorUsageEventsForExcludeOneShot(t *testing.T) {
 	assert.Empty(t, result.Daily, "daily entries should be empty")
 	assert.Zero(t, result.Totals.InputTokens, "InputTokens")
 	assert.Zero(t, result.SessionCounts.Total, "cursor rows should not count as sessions")
+}
+
+func TestGetDailyUsageSkipsCursorUsageEventsForExcludeGitBranch(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	require.NoError(t, d.InsertCursorUsageEvents([]CursorUsageEvent{{
+		OccurredAt:      "2026-05-14T10:05:00Z",
+		Model:           "claude-4.6-opus-high-thinking",
+		Kind:            "USAGE_EVENT_KIND_USAGE_BASED",
+		InputTokens:     1234,
+		OutputTokens:    567,
+		CacheReadTokens: 8901,
+		Charged:         money.MustParseDollars("0.1566"),
+		CursorTokenFee:  money.MustParseDollars("0.0332"),
+		UserID:          "152683922",
+		UserEmail:       "member@example.com",
+	}}), "InsertCursorUsageEvents")
+
+	result, err := d.GetDailyUsage(ctx, UsageFilter{
+		From:             "2026-05-14",
+		To:               "2026-05-14",
+		ExcludeGitBranch: EncodeBranchFilterToken("proj", "main"),
+	})
+	require.NoError(t, err, "GetDailyUsage cursor exclude git branch")
+	assert.Empty(t, result.Daily, "daily entries should be empty")
+	assert.Zero(t, result.Totals.InputTokens, "InputTokens")
 }
 
 func TestGetDailyUsageSkipsCursorUsageEventsForTerminationFilter(t *testing.T) {
@@ -4405,6 +4433,20 @@ func TestCopilotReportedCostSuppressesSessionEstimates(t *testing.T) {
 		"authoritative reported cost must surface in pricing provenance")
 	assert.Equal(t, export.CostSourceComputed,
 		daily.Pricing.Models["claude-opus-4-6"].CostSource)
+
+	branchOnly, err := d.GetDailyUsage(ctx, UsageFilter{
+		From: "2026-05-20", To: "2026-05-21", Timezone: "UTC",
+		BranchBreakdowns: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, branchOnly.Daily, 2)
+	for _, day := range branchOnly.Daily {
+		assert.Empty(t, day.AgentBreakdowns,
+			"branch-only requests do not populate agent breakdowns")
+		assert.NotEmpty(t, day.BranchBreakdowns)
+	}
+	assert.InDelta(t, 4.5, branchOnly.Totals.CopilotAICredits, 1e-9,
+		"branch-only credits derive from the agent-keyed usage accumulator")
 
 	earlyDay, err := d.GetDailyUsage(ctx, UsageFilter{
 		From: "2026-05-20", To: "2026-05-20", Timezone: "UTC",

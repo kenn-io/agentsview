@@ -20,6 +20,7 @@ import {
 import { sessions } from "./sessions.svelte.js";
 import { perf, type PerfEntryStatus } from "./perf.svelte.js";
 import { rollingRange, today } from "../utils/dates.js";
+import { BRANCH_LIST_SEP } from "../branchFilters.js";
 
 export const ANALYTICS_DEFAULT_WINDOW_DAYS = 365;
 
@@ -66,6 +67,7 @@ class AnalyticsStore {
   selectedDate: string | null = $state(null);
   project: string = $state("");
   machine: string = $state("");
+  branch: string = $state("");
   agent: string = $state("");
   model: string = $state("");
   termination: string = $state("");
@@ -164,6 +166,7 @@ class AnalyticsStore {
       this.selectedDate !== null ||
       this.project !== "" ||
       this.machine !== "" ||
+      this.branch !== "" ||
       this.agent !== "" ||
       this.model !== "" ||
       this.termination !== "" ||
@@ -195,6 +198,7 @@ class AnalyticsStore {
     this.selectedDate = null;
     this.project = "";
     this.machine = "";
+    this.branch = "";
     this.agent = "";
     this.model = "";
     this.termination = "";
@@ -207,6 +211,7 @@ class AnalyticsStore {
     this.selectedHour = null;
     sessions.filters.project = "";
     sessions.filters.machine = "";
+    sessions.filters.branch = "";
     sessions.filters.agent = "";
     sessions.filters.termination = "";
     sessions.filters.minUserMessages = 0;
@@ -338,6 +343,19 @@ class AnalyticsStore {
     this.fetchAll();
   }
 
+  removeBranch(token: string) {
+    const current = this.branch
+      ? this.branch.split(BRANCH_LIST_SEP)
+      : [];
+    this.branch = current
+      .filter((t) => t !== token)
+      .join(BRANCH_LIST_SEP);
+    sessions.filters.branch = this.branch;
+    sessions.activeSessionId = null;
+    sessions.load();
+    this.fetchAll();
+  }
+
   clearTermination() {
     this.termination = "";
     sessions.filters.termination = "";
@@ -394,6 +412,7 @@ class AnalyticsStore {
       p.project = this.project;
     }
     if (this.machine) p.machine = this.machine;
+    if (this.branch) p.gitBranch = this.branch;
     if (this.agent) p.agent = this.agent;
     if (includeModel && this.model) p.model = this.model;
     if (this.termination) p.termination = this.termination;
@@ -438,6 +457,7 @@ class AnalyticsStore {
         p.project = this.project;
       }
       if (this.machine) p.machine = this.machine;
+      if (this.branch) p.gitBranch = this.branch;
       if (this.agent) p.agent = this.agent;
       if (includeModel && this.model) p.model = this.model;
       if (this.termination) p.termination = this.termination;
