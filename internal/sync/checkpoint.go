@@ -105,7 +105,17 @@ func (e *Engine) codexCheckpointFingerprint(
 		return res, fmt.Errorf("loading checkpoint %s: %w", inc.ID, err)
 	}
 	if !hasCP || cp.Version != codexCheckpointVersion {
+		// A stored session without a usable checkpoint bootstraps one
+		// regardless of the surrounding pass or a path rewriter: an
+		// upgraded archive's first ordinary sync must repair its resume
+		// state.
 		res.decision = codexCheckpointBootstrap
+		return res, nil
+	}
+	if e.pathRewriter != nil {
+		// Remote materializations have no trustworthy local identity:
+		// the checkpoint gate cannot stat-trust a rewritten path, so the
+		// caller deep-verifies on every pass.
 		return res, nil
 	}
 	if cp.SessionID != inc.ID ||
@@ -117,7 +127,8 @@ func (e *Engine) codexCheckpointFingerprint(
 		lookupPath, string(file.Agent),
 	)
 	if !hasStoredHash || storedHash != cp.Hash ||
-		inc.FileSize != cp.Offset || inc.NextOrdinal != cp.NextOrdinal {
+		inc.FileSize != cp.Offset || inc.NextOrdinal != cp.NextOrdinal ||
+		inc.FileMtime != cp.FileMTime {
 		// The committed DB prefix is newer than (or inconsistent with) the
 		// surviving checkpoint: resuming from the old seed would silently
 		// parse against the wrong prefix. Rebuild instead.
