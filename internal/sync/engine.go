@@ -263,6 +263,11 @@ type EngineConfig struct {
 	SourceMachines          map[parser.AgentType]map[string]string
 	Machine                 string
 	BlockedResultCategories []string
+	// StagedCodexParseMinBytes overrides the full-parse size above which a
+	// Codex source streams through the scratch staging path. Zero selects
+	// the default (stagedCodexParseMinBytes). Tests lower it so the staged
+	// wiring is covered by small fixtures in the default test build.
+	StagedCodexParseMinBytes int64
 	// IncludeCwdPrefixes, when non-empty, restricts ingestion to
 	// sessions whose working directory equals one of the prefixes
 	// or lives underneath one. Sessions without a recorded cwd are
@@ -325,14 +330,10 @@ type Engine struct {
 	sourceMachines          map[parser.AgentType]map[string]string
 	machine                 string
 	blockedResultCategories map[string]bool
-	// stagedGCRefs counts in-flight staged Codex cold syncs. While any is
-	// running, the process GC percent is lowered (stagedColdSyncGCPercent)
-	// to keep the peak RSS of a large streaming parse bounded; the previous
-	// value is restored when the last one finishes. Guarded by stagedGCMu.
-	stagedGCMu   gosync.Mutex
-	stagedGCRefs int
-	stagedGCPrev int
-	cwdFilter    cwdPrefixFilter
+	// stagedCodexMin is the resolved full-parse size above which Codex
+	// sources take the staged streaming path.
+	stagedCodexMin int64
+	cwdFilter      cwdPrefixFilter
 	// scanProtectedPaths, homeDir, and goos gate passive probing of macOS
 	// TCC-protected locations. homeDir is empty when the home directory
 	// cannot be resolved, which disables the gate rather than guessing.
@@ -656,6 +657,7 @@ func NewEngine(
 		sourceMachines:          sourceMachines,
 		machine:                 cfg.Machine,
 		blockedResultCategories: blockedCategorySet(cfg.BlockedResultCategories),
+		stagedCodexMin:          stagedCodexMinBytes(cfg.StagedCodexParseMinBytes),
 		cwdFilter:               newCwdPrefixFilter(cfg.IncludeCwdPrefixes),
 		scanProtectedPaths:      cfg.ScanProtectedPaths,
 		homeDir:                 userHomeDirOrEmpty(),
@@ -9200,7 +9202,7 @@ func (e *Engine) processProviderFile(
 	var stagedSink *codexStagingSink
 	var stagedGCRelease func()
 	if file.Agent == parser.AgentCodex &&
-		sourceBytes > stagedCodexParseMinBytes {
+		sourceBytes > e.stagedCodexMin {
 		stagedSink, err = newCodexStagingSink(e.blockedResultCategories)
 		if err != nil {
 			lease.Release()
@@ -9212,7 +9214,7 @@ func (e *Engine) processProviderFile(
 				noCacheSkip: true,
 			}, true
 		}
-		stagedGCRelease = e.beginStagedColdSync()
+		stagedGCRelease = beginStagedColdSync()
 	}
 	var outcome parser.ParseOutcome
 	if stagedSink != nil {
@@ -12890,67 +12892,10 @@ func (e *Engine) writeBatchWithOutcome(
 
 		var update db.SessionSignalUpdate
 		var findings []db.SecretFinding
-		var contentFailures map[string]bool
 		var werr error
 		if replaceMessages {
 			if pw.staged != nil {
-				update, findings = computeSignalsAndSecrets(s, msgs)
-				positions := make(map[string]db.StagedToolCallPosition)
-				for _, m := range msgs {
-					for callIdx, tc := range m.ToolCalls {
-						if tc.ToolUseID == "" {
-							continue
-						}
-						positions[tc.ToolUseID] =
-							db.StagedToolCallPosition{
-								ToolUseID: tc.ToolUseID,
-								Ordinal:   m.Ordinal,
-								CallIndex: callIdx,
-							}
-					}
-				}
-				combined := append(
-					append([]db.SecretFinding(nil), findings...),
-					pw.staged.Findings(s.ID, positions)...,
-				)
-				update.SecretLeakCount = definiteFindingCount(combined)
-				werr = e.db.ReplaceSessionContentStaged(
-					s.ID, msgs, update, combined, pw.staged,
-					e.blockedResultCategories,
-				)
-				if werr == nil {
-					// The publish transaction resolved every summary
-					// once, capturing content-failure verdicts. Fold
-					// them into the signal pass now and persist, then
-					// seed the incremental state with the same rows.
-					contentFailures = pw.staged.ContentFailures()
-					update, findings =
-						computeSignalsAndSecretsWithContentFailures(
-							s, msgs, contentFailures,
-						)
-					combined = append(
-						append([]db.SecretFinding(nil), findings...),
-						pw.staged.Findings(s.ID, positions)...,
-					)
-					update.SecretLeakCount =
-						definiteFindingCount(combined)
-					if ferr := e.db.ReplaceSessionSecretFindings(
-						s.ID, combined, update.SecretLeakCount,
-						update.SecretsRulesVersion,
-					); ferr != nil {
-						log.Printf(
-							"secrets: staged recompute %s: %v",
-							s.ID, ferr,
-						)
-					} else if ferr := e.db.UpdateSessionSignals(
-						s.ID, update,
-					); ferr != nil {
-						log.Printf(
-							"signals: staged recompute %s: %v",
-							s.ID, ferr,
-						)
-					}
-				}
+				werr = e.writeStagedFullParse(s, msgs, pw)
 			} else {
 				update, findings = computeSignalsAndSecrets(s, msgs)
 				if isCodexFormatAgent(pw.sess.Agent) {
@@ -12986,18 +12931,10 @@ func (e *Engine) writeBatchWithOutcome(
 			outcome.failedSessions++
 			continue
 		}
-		if replaceMessages {
-			var seedErr error
-			if pw.staged != nil {
-				seedErr = e.seedSignalStateFromFullWithContentFailures(
-					s.ID, msgs, contentFailures,
-				)
-			} else {
-				seedErr = e.seedSignalStateFromFull(s.ID, msgs)
-			}
-			if seedErr != nil {
+		if replaceMessages && pw.staged == nil {
+			if err := e.seedSignalStateFromFull(s.ID, msgs); err != nil {
 				log.Printf(
-					"signals: seed state %s: %v", s.ID, seedErr,
+					"signals: seed state %s: %v", s.ID, err,
 				)
 			}
 		}
@@ -13882,6 +13819,64 @@ type localGitIdentity struct {
 	worktreeKind   export.WorktreeRelationship
 }
 
+// stagedToolCallPositions maps every tool_use_id in the message model to
+// its final message/call coordinates for the staged publish.
+func stagedToolCallPositions(
+	msgs []db.Message,
+) map[string]db.StagedToolCallPosition {
+	positions := make(map[string]db.StagedToolCallPosition)
+	for _, m := range msgs {
+		for callIdx, tc := range m.ToolCalls {
+			if tc.ToolUseID == "" {
+				continue
+			}
+			positions[tc.ToolUseID] = db.StagedToolCallPosition{
+				ToolUseID: tc.ToolUseID,
+				Ordinal:   m.Ordinal,
+				CallIndex: callIdx,
+			}
+		}
+	}
+	return positions
+}
+
+// writeStagedFullParse publishes one staged streaming result. The publish
+// transaction resolves every per-call summary once and runs the signals
+// closure before commit, so the content-failure-aware signals and
+// findings persist atomically with the message, tool-call, and event
+// rows. The incremental signal state is then seeded with the captured
+// verdicts.
+func (e *Engine) writeStagedFullParse(
+	s db.Session, msgs []db.Message, pw pendingWrite,
+) error {
+	positions := stagedToolCallPositions(msgs)
+	closure := func(verdicts map[string]bool) (
+		db.SessionSignalUpdate, []db.SecretFinding, error,
+	) {
+		update, findings := computeSignalsAndSecretsWithContentFailures(
+			s, msgs, verdicts,
+		)
+		combined := append(
+			append([]db.SecretFinding(nil), findings...),
+			pw.staged.Findings(s.ID, positions)...,
+		)
+		update.SecretLeakCount = definiteFindingCount(combined)
+		return update, combined, nil
+	}
+	if err := e.db.ReplaceSessionContentStaged(
+		context.Background(), s.ID, msgs, pw.staged,
+		e.blockedResultCategories, closure,
+	); err != nil {
+		return err
+	}
+	if err := e.seedSignalStateFromFullWithContentFailures(
+		s.ID, msgs, pw.staged.ContentFailures(),
+	); err != nil {
+		log.Printf("signals: seed state %s: %v", s.ID, err)
+	}
+	return nil
+}
+
 func (e *Engine) writeBatchBulkWithOutcome(
 	batch []pendingWrite, forceReplace bool,
 ) writeBatchOutcome {
@@ -13902,6 +13897,77 @@ func (e *Engine) writeBatchBulkWithOutcome(
 			if verdict == sessionWriteCwdFiltered {
 				outcome.cwdFiltered++
 			}
+			continue
+		}
+		if pw.staged != nil {
+			// Staged streaming results bypass the bulk batch: their
+			// tool-result rows live in the staging scratch database and
+			// must be published through the staged transaction, which
+			// also persists the content-failure-aware signals in the
+			// same commit. A staged full parse always force-replaces.
+			// The bulk batch would normally create the session row, so
+			// mirror the standard write path's session upsert and
+			// post-write sequence here.
+			revivingSourceMissing, err :=
+				e.upsertSessionPendingContentForWrite(pw, s)
+			if err != nil {
+				if isIntentionalSessionSkip(err) {
+					if pw.sess.File.Path != "" {
+						e.cacheSkip(
+							pw.sess.File.Path,
+							pw.sess.File.Mtime,
+							pw.sess.File.Hash,
+						)
+					}
+					continue
+				}
+				log.Printf("upsert session %s: %v", s.ID, err)
+				e.markStaleFailedMemberWrite(pw)
+				outcome.failedSessions++
+				continue
+			}
+			tWrite := time.Now()
+			err = e.writeStagedFullParse(s, msgs, pw)
+			e.phaseStats.WriteNanos.Add(int64(time.Since(tWrite)))
+			if err != nil {
+				log.Printf(
+					"write staged session %s: %v", s.ID, err,
+				)
+				e.markStaleFailedMemberWrite(pw)
+				outcome.failedSessions++
+				continue
+			}
+			if err := e.db.ReplaceSessionUsageEvents(
+				s.ID, e.usageEventsForWrite(s.ID, pw.usageEvents),
+			); err != nil {
+				log.Printf(
+					"write usage events for %s: %v", s.ID, err,
+				)
+				e.markStaleFailedMemberWrite(pw)
+				outcome.failedSessions++
+				continue
+			}
+			if err := e.db.SetSessionDataVersion(
+				s.ID, dataVersionForWrite(pw),
+			); err != nil {
+				log.Printf(
+					"set data_version for %s: %v", s.ID, err,
+				)
+				e.markStaleFailedMemberWrite(pw)
+				outcome.failedSessions++
+				continue
+			}
+			if err := e.db.ReviveSourceMissingSession(s.ID); err != nil {
+				log.Printf(
+					"revive source-missing session %s: %v", s.ID, err,
+				)
+				outcome.failedSessions++
+				continue
+			}
+			_ = revivingSourceMissing
+			outcome.written[pendingIndex] = true
+			outcome.writtenSessions++
+			outcome.writtenMessages += len(msgs)
 			continue
 		}
 		replaceMessages := shouldReplaceFullParseMessages(

@@ -8,6 +8,7 @@ import (
 	"os"
 	"runtime/debug"
 	"strings"
+	"sync"
 
 	_ "github.com/mattn/go-sqlite3"
 
@@ -15,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/signals"
+	"go.kenn.io/agentsview/internal/timeutil"
 )
 
 // codexStagingSink implements parser.CodexSessionSink for the streaming
@@ -52,6 +54,25 @@ type codexStagingSink struct {
 	// while the publish transaction resolves summaries, so the engine can
 	// fold them into the signal pass after the atomic publish.
 	contentFailures map[string]bool
+	// stageErr is the sticky first scratch failure. Once set, staging is
+	// unrecoverable for this parse: events are no longer accepted and the
+	// publish must fail, so a disk-full or I/O error can never commit a
+	// "successful" archive missing tool outputs.
+	stageErr error
+}
+
+// fail records the sticky staging failure. Later events and the publish
+// path consult Err and refuse to proceed.
+func (s *codexStagingSink) fail(err error) {
+	if s.stageErr == nil {
+		s.stageErr = fmt.Errorf("codex staging: %w", err)
+	}
+}
+
+// Err returns the sticky staging failure, or nil when the scratch
+// database has been healthy for this parse.
+func (s *codexStagingSink) Err() error {
+	return s.stageErr
 }
 
 type stagedFindingPos struct {
@@ -61,8 +82,17 @@ type stagedFindingPos struct {
 
 // stagedCodexParseMinBytes is the full-parse size above which a Codex
 // source streams through the scratch staging path instead of the
-// collecting parser.
+// collecting parser. Engines may override it (see
+// EngineConfig.StagedCodexParseMinBytes) for tests.
 const stagedCodexParseMinBytes = 128 << 20
+
+// stagedCodexMinBytes resolves a configured override to the default.
+func stagedCodexMinBytes(override int64) int64 {
+	if override > 0 {
+		return override
+	}
+	return stagedCodexParseMinBytes
+}
 
 // stagedColdSyncGCPercent is the GC percent held while a staged Codex cold
 // sync is in flight. The streaming path's live set is bounded, so a lower
@@ -70,27 +100,36 @@ const stagedCodexParseMinBytes = 128 << 20
 // of letting transient per-event garbage double it. Restored on release.
 const stagedColdSyncGCPercent = 30
 
+// The GC percent is process-global state, so the refcount lives at package
+// scope: two engines interleaving staged syncs must share one lowered
+// window rather than racing to restore each other's baseline.
+var (
+	stagedGCMu   sync.Mutex
+	stagedGCRefs int
+	stagedGCPrev int
+)
+
 // beginStagedColdSync lowers the process GC percent for the duration of one
 // staged Codex cold sync and returns the function that restores the prior
 // value. Concurrent staged syncs share one lowered window via a refcount.
-func (e *Engine) beginStagedColdSync() func() {
-	e.stagedGCMu.Lock()
-	defer e.stagedGCMu.Unlock()
-	if e.stagedGCRefs == 0 {
-		e.stagedGCPrev = debug.SetGCPercent(stagedColdSyncGCPercent)
+func beginStagedColdSync() func() {
+	stagedGCMu.Lock()
+	defer stagedGCMu.Unlock()
+	if stagedGCRefs == 0 {
+		stagedGCPrev = debug.SetGCPercent(stagedColdSyncGCPercent)
 	}
-	e.stagedGCRefs++
+	stagedGCRefs++
 	released := false
 	return func() {
-		e.stagedGCMu.Lock()
-		defer e.stagedGCMu.Unlock()
+		stagedGCMu.Lock()
+		defer stagedGCMu.Unlock()
 		if released {
 			return
 		}
 		released = true
-		e.stagedGCRefs--
-		if e.stagedGCRefs == 0 {
-			debug.SetGCPercent(e.stagedGCPrev)
+		stagedGCRefs--
+		if stagedGCRefs == 0 {
+			debug.SetGCPercent(stagedGCPrev)
 		}
 	}
 }
@@ -183,6 +222,9 @@ func stagedCodexParseOutcome(
 	if err != nil {
 		return parser.ParseOutcome{}, err
 	}
+	if stageErr := sink.Err(); stageErr != nil {
+		return parser.ParseOutcome{}, stageErr
+	}
 	result := parser.ParseResultOutcome{
 		Result: parser.ParseResult{
 			Session:                *sess,
@@ -257,7 +299,7 @@ func (s *codexStagingSink) AppendMessage(m parser.ParsedMessage) {
 func (s *codexStagingSink) AppendToolResultEvent(
 	callID string, ev parser.ParsedToolResultEvent,
 ) {
-	if callID == "" {
+	if callID == "" || s.stageErr != nil {
 		return
 	}
 	// The parser extracts event fields as gjson substrings of the source
@@ -272,6 +314,10 @@ func (s *codexStagingSink) AppendToolResultEvent(
 	ev.SubagentSessionID = strings.Clone(ev.SubagentSessionID)
 	ev.Status = strings.Clone(ev.Status)
 	ev.Source = strings.Clone(ev.Source)
+	// The legacy write path normalizes event timestamps through
+	// timeutil.Format before storing them; the staged rows must store the
+	// same normalized form so stored projections match byte for byte.
+	tsStr := timeutil.Format(ev.Timestamp)
 	// Events for calls that never registered in the message model follow
 	// the legacy orphan path (toolCallUpdates, discarded by full-parse
 	// consumers) instead of being staged: publishing them would diverge
@@ -296,9 +342,7 @@ func (s *codexStagingSink) AppendToolResultEvent(
 		return // equivalent event already staged
 	}
 	if err != sql.ErrNoRows {
-		// A query failure must not drop transcript content: fall back to
-		// keeping the content in memory for this event.
-		s.CodexCollectingSink.AppendToolResultEvent(callID, ev)
+		s.fail(err)
 		return
 	}
 
@@ -325,9 +369,9 @@ func (s *codexStagingSink) AppendToolResultEvent(
 		     timestamp, blanked
 		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		seq, callID, ev.AgentID, subagent, ev.Source, ev.Status,
-		ev.Content, contentLength, ev.Timestamp, blanked,
+		ev.Content, contentLength, tsStr, blanked,
 	); err != nil {
-		s.CodexCollectingSink.AppendToolResultEvent(callID, ev)
+		s.fail(err)
 		return
 	}
 
@@ -397,23 +441,18 @@ func (s *codexStagingSink) Findings(
 
 // InsertEventsTx inserts the staged result events into tool_result_events
 // within the caller's publish transaction, ordered by emission so
-// event_index matches the legacy slice order.
+// event_index matches the legacy slice order. The caller attached the
+// scratch database as codex_staging on the transaction's connection and
+// detaches it after the transaction settles; the transaction itself only
+// ever modifies main, so the cross-database crash-atomicity limit for
+// WAL-mode attached databases is respected.
 func (s *codexStagingSink) InsertEventsTx(
 	ctx context.Context, tx *sql.Tx, sessionID string,
 	messageOrdinals map[string]db.StagedToolCallPosition,
 ) error {
-	// The publish transaction runs on the main archive connection; attach
-	// the scratch database for the copy. The transaction only ever
-	// modifies main, so the cross-database crash-atomicity limit for
-	// WAL-mode attached databases is respected.
-	if _, err := tx.ExecContext(ctx,
-		"ATTACH DATABASE ? AS codex_staging", s.path,
-	); err != nil {
-		return fmt.Errorf("attaching codex staging db: %w", err)
+	if s.stageErr != nil {
+		return s.stageErr
 	}
-	defer func() {
-		_, _ = tx.ExecContext(ctx, "DETACH DATABASE codex_staging")
-	}()
 	for toolUseID, pos := range messageOrdinals {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO tool_result_events (
@@ -457,6 +496,9 @@ func (s *codexStagingSink) InsertEventsTx(
 func (s *codexStagingSink) ResolveSummary(
 	ctx context.Context, toolUseID string,
 ) (summary string, contentLength int, err error) {
+	if s.stageErr != nil {
+		return "", 0, s.stageErr
+	}
 	rows, err := s.scratch.QueryContext(ctx, `
 		SELECT agent_id, content
 		FROM stage_events

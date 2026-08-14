@@ -3,7 +3,9 @@ package db
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
+	"log"
 )
 
 // StagedToolResults is the publish-side handle for tool-result rows staged
@@ -20,7 +22,8 @@ type StagedToolResults interface {
 	) (string, int, error)
 	// InsertEventsTx inserts the staged rows for the whole session into
 	// tool_result_events within tx, keyed by tool_use_id through the
-	// final message coordinates in positions.
+	// final message coordinates in positions. The scratch database is
+	// already attached to the tx's connection by the caller.
 	InsertEventsTx(
 		ctx context.Context,
 		tx *sql.Tx,
@@ -33,12 +36,26 @@ type StagedToolResults interface {
 	Close() error
 }
 
+// StagedSignalsFunc computes the final signal update and secret findings
+// for a staged session once every per-call summary has been resolved in
+// the publish transaction. verdicts carries the per-call content-failure
+// verdicts the summary resolution recorded, so the returned values can be
+// persisted atomically with the message, tool-call, and event rows instead
+// of being recomputed after commit.
+type StagedSignalsFunc func(
+	verdicts map[string]bool,
+) (SessionSignalUpdate, []SecretFinding, error)
+
 // StagedToolCallPosition identifies one tool call's final coordinates.
 type StagedToolCallPosition struct {
 	ToolUseID string
 	Ordinal   int
 	CallIndex int
 }
+
+// stagedAttachName is the schema name the scratch database is attached
+// under for the publish transaction.
+const stagedAttachName = "codex_staging"
 
 // ReplaceSessionContentStaged replaces a session's content from a
 // streaming parse: messages and tool-call metadata arrive as the (small)
@@ -48,19 +65,43 @@ type StagedToolCallPosition struct {
 // atomic publish of the staged cold-import path; it mirrors
 // ReplaceSessionContent's transaction sequence with the event/summary
 // inserts replaced by staged sources.
+//
+// The scratch database is attached to the writer connection before the
+// transaction begins and detached after it settles, so consecutive staged
+// publishes on the same single-connection writer pool never collide with
+// a leftover attachment. signalsFn runs inside the transaction after all
+// summaries are resolved, so the persisted signals and findings carry the
+// real content-failure verdicts in the same atomic commit as the rows
+// they describe.
 func (db *DB) ReplaceSessionContentStaged(
+	ctx context.Context,
 	sessionID string, msgs []Message,
-	signals SessionSignalUpdate, findings []SecretFinding,
 	staged StagedToolResults, blocked map[string]bool,
+	signalsFn StagedSignalsFunc,
 ) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	tx, err := db.getWriter().Begin()
+	conn, err := db.getWriter().Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("pinning writer connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(
+		ctx,
+		"ATTACH DATABASE ? AS "+stagedAttachName,
+		staged.Path(),
+	); err != nil {
+		return fmt.Errorf("attaching codex staging db: %w", err)
+	}
+	defer detachStagedConn(ctx, conn)
+
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+
 	queueGenerationBefore, queueExistedBefore, err := artifactExportGenerationTx(
 		tx, sessionID,
 	)
@@ -74,11 +115,20 @@ func (db *DB) ReplaceSessionContentStaged(
 	); err != nil {
 		return err
 	}
+	// Summary resolution above recorded per-call content-failure
+	// verdicts; fold them into the final signal update and findings now,
+	// inside the same transaction as the rows they describe.
+	signals, findings, err := signalsFn(contentFailureVerdicts(staged))
+	if err != nil {
+		return fmt.Errorf(
+			"computing staged signals for %s: %w", sessionID, err,
+		)
+	}
 	if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 		return err
 	}
 	if err := reconcileRecallEvidenceForSessionTx(
-		context.Background(), tx, sessionID, &pendingRecallRevocations,
+		ctx, tx, sessionID, &pendingRecallRevocations,
 	); err != nil {
 		return err
 	}
@@ -105,6 +155,32 @@ func (db *DB) ReplaceSessionContentStaged(
 	}
 	pendingRecallRevocations.flush()
 	return nil
+}
+
+// contentFailureVerdicts reads the per-call verdicts a staging handle
+// captured during summary resolution. Handles that do not expose them
+// yield nil, which signalsFn treats as an empty verdict set.
+func contentFailureVerdicts(staged StagedToolResults) map[string]bool {
+	if v, ok := staged.(interface {
+		ContentFailures() map[string]bool
+	}); ok {
+		return v.ContentFailures()
+	}
+	return nil
+}
+
+// detachStagedConn detaches the scratch database from the writer
+// connection. It runs after the transaction settles (deferred), so the
+// connection returns to the pool clean. A failed detach would poison the
+// single-connection writer pool for every later publish, so the
+// connection is discarded instead.
+func detachStagedConn(ctx context.Context, conn *sql.Conn) {
+	if _, err := conn.ExecContext(
+		ctx, "DETACH DATABASE "+stagedAttachName,
+	); err != nil {
+		log.Printf("detaching codex staging db: %v", err)
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+	}
 }
 
 // replaceSessionMessagesTxStaged mirrors replaceSessionMessagesTx with the

@@ -461,9 +461,6 @@ func TestMacroCodexStagedParseMemoryGates(t *testing.T) {
 			dbMsgs := toDBMessages(pendingWrite{
 				sess: *sess, msgs: msgs,
 			}, nil)
-			update, findingsFromMsgs := computeSignalsAndSecrets(
-				row, dbMsgs,
-			)
 			positions := make(map[string]db.StagedToolCallPosition)
 			for _, m := range dbMsgs {
 				for callIdx, tc := range m.ToolCalls {
@@ -477,14 +474,24 @@ func TestMacroCodexStagedParseMemoryGates(t *testing.T) {
 					}
 				}
 			}
-			combined := append(
-				append([]db.SecretFinding(nil), findingsFromMsgs...),
-				staged.Findings(row.ID, positions)...,
-			)
-			update.SecretLeakCount = definiteFindingCount(combined)
 			require.NoError(t, database.ReplaceSessionContentStaged(
-				row.ID, dbMsgs, update, combined, staged,
+				context.Background(), row.ID, dbMsgs, staged,
 				map[string]bool{},
+				func(verdicts map[string]bool) (
+					db.SessionSignalUpdate, []db.SecretFinding, error,
+				) {
+					update, findings :=
+						computeSignalsAndSecretsWithContentFailures(
+							row, dbMsgs, verdicts,
+						)
+					combined := append(
+						append([]db.SecretFinding(nil), findings...),
+						staged.Findings(row.ID, positions)...,
+					)
+					update.SecretLeakCount =
+						definiteFindingCount(combined)
+					return update, combined, nil
+				},
 			))
 			require.NoError(t, staged.Close())
 			peakLive := peak()
@@ -624,7 +631,6 @@ func TestMacroCodexStaged64MBLine(t *testing.T) {
 	dbMsgs := toDBMessages(pendingWrite{
 		sess: *sess, msgs: msgs,
 	}, nil)
-	update, findings := computeSignalsAndSecrets(row, dbMsgs)
 	positions := make(map[string]db.StagedToolCallPosition)
 	for _, m := range dbMsgs {
 		for callIdx, tc := range m.ToolCalls {
@@ -638,13 +644,23 @@ func TestMacroCodexStaged64MBLine(t *testing.T) {
 			}
 		}
 	}
-	combined := append(
-		append([]db.SecretFinding(nil), findings...),
-		staged.Findings(row.ID, positions)...,
-	)
-	update.SecretLeakCount = definiteFindingCount(combined)
 	require.NoError(t, database.ReplaceSessionContentStaged(
-		row.ID, dbMsgs, update, combined, staged, map[string]bool{},
+		context.Background(), row.ID, dbMsgs, staged,
+		map[string]bool{},
+		func(verdicts map[string]bool) (
+			db.SessionSignalUpdate, []db.SecretFinding, error,
+		) {
+			update, findings :=
+				computeSignalsAndSecretsWithContentFailures(
+					row, dbMsgs, verdicts,
+				)
+			combined := append(
+				append([]db.SecretFinding(nil), findings...),
+				staged.Findings(row.ID, positions)...,
+			)
+			update.SecretLeakCount = definiteFindingCount(combined)
+			return update, combined, nil
+		},
 	))
 	peakLive := peak()
 	t.Logf("BIGLINE peak_live=%dMiB rss=%dMiB",

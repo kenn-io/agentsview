@@ -59,6 +59,41 @@ func TestCodexStreamingParseParityWithLegacy(t *testing.T) {
 // codexParityTranscript is the deterministic dual-path fixture: a session
 // meta, one token-counted turn with a secret-bearing output, a
 // status-errored output, and a status-less content-failure output.
+// writeCodexParityRoot writes the dual-path fixture into a fresh codex
+// session root and returns the root path.
+func writeCodexParityRoot(t *testing.T, uuid string) string {
+	t.Helper()
+	root := t.TempDir()
+	day := filepath.Join(root, "2024", "01", "01")
+	require.NoError(t, os.MkdirAll(day, 0o755))
+	path := filepath.Join(
+		day, "rollout-2024-01-01T10-00-00-"+uuid+".jsonl",
+	)
+	require.NoError(t, os.WriteFile(
+		path, []byte(codexParityTranscript(uuid)), 0o644,
+	))
+	return root
+}
+
+// syncCodexParityEngine builds an engine over the fixture root with the
+// given staged threshold and runs one cold sync.
+func syncCodexParityEngine(
+	t *testing.T, database *db.DB, root string, stagedMin int64,
+) {
+	t.Helper()
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {root},
+		},
+		Machine:                  "local",
+		StagedCodexParseMinBytes: stagedMin,
+	})
+	t.Cleanup(engine.Close)
+	stats := engine.SyncAll(t.Context(), nil)
+	require.Zero(t, stats.Failed)
+	require.Equal(t, 1, stats.Synced)
+}
+
 func codexParityTranscript(uuid string) string {
 	return testjsonl.JoinJSONL(
 		testjsonl.CodexSessionMetaJSON(
@@ -104,6 +139,103 @@ func codexParityTranscript(uuid string) string {
 			"2024-01-01T10:00:12Z",
 		),
 	)
+}
+
+// TestCodexEngineStagedSyncParity syncs the same transcript through two
+// real engines — one on the collecting path, one on the staged streaming
+// path (threshold lowered to a byte) — and asserts the stored projections
+// match exactly. This is the default-CI coverage for the staged wiring
+// that the macro gates cannot provide.
+func TestCodexEngineStagedSyncParity(t *testing.T) {
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b05"
+	legacyDB := openTestDB(t)
+	stagedDB := openTestDB(t)
+	syncCodexParityEngine(
+		t, legacyDB, writeCodexParityRoot(t, uuid), 0,
+	)
+	syncCodexParityEngine(
+		t, stagedDB, writeCodexParityRoot(t, uuid), 1,
+	)
+	sessionID := "codex:" + uuid
+
+	msgsL, err := legacyDB.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	msgsS, err := stagedDB.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Equal(t, msgsL, msgsS,
+		"staged engine sync must match the collecting projection")
+
+	sessL, err := legacyDB.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	sessS, err := stagedDB.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Equal(t, sessL.ToolFailureSignalCount,
+		sessS.ToolFailureSignalCount)
+	require.Equal(t, sessL.ConsecutiveFailureMax,
+		sessS.ConsecutiveFailureMax)
+	require.Equal(t, sessL.FinalFailureStreak, sessS.FinalFailureStreak)
+	require.Equal(t, sessL.SecretLeakCount, sessS.SecretLeakCount)
+
+	findingsL, err := legacyDB.SessionSecretFindings(
+		t.Context(), sessionID,
+	)
+	require.NoError(t, err)
+	findingsS, err := stagedDB.SessionSecretFindings(
+		t.Context(), sessionID,
+	)
+	require.NoError(t, err)
+	sortFindings(findingsL)
+	sortFindings(findingsS)
+	require.Equal(t, len(findingsL), len(findingsS))
+	for i := range findingsL {
+		require.Equal(t, findingsL[i].RuleName, findingsS[i].RuleName)
+		require.Equal(t, findingsL[i].MessageOrdinal,
+			findingsS[i].MessageOrdinal)
+		require.Equal(t, findingsL[i].EventIndex, findingsS[i].EventIndex)
+	}
+}
+
+// TestCodexEngineResyncBulkStagedParity pins the bulk-write blocker: a
+// full rebuild (ResyncAll) with the staged streaming path active must
+// publish real tool outputs, never the staged placeholders, and must
+// match the plain cold sync projection.
+func TestCodexEngineResyncBulkStagedParity(t *testing.T) {
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b05"
+	sessionID := "codex:" + uuid
+
+	legacyDB := openTestDB(t)
+	syncCodexParityEngine(
+		t, legacyDB, writeCodexParityRoot(t, uuid), 0,
+	)
+
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {writeCodexParityRoot(t, uuid)},
+		},
+		Machine:                  "local",
+		StagedCodexParseMinBytes: 1,
+	})
+	t.Cleanup(engine.Close)
+	stats := engine.ResyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted, "resync aborted: %v", stats.Warnings)
+	require.Zero(t, stats.Failed)
+	require.Equal(t, 1, stats.Synced)
+
+	msgsL, err := legacyDB.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	msgsS, err := database.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Equal(t, msgsL, msgsS,
+		"bulk resync must publish real tool outputs, not placeholders")
+	for _, m := range msgsS {
+		for _, tc := range m.ToolCalls {
+			for _, ev := range tc.ResultEvents {
+				require.NotContains(t, ev.Content, "staged:",
+					"bulk resync wrote a staging placeholder")
+			}
+		}
+	}
 }
 
 // assertCodexStagedParity runs one transcript through the collecting and
@@ -234,34 +366,27 @@ func assertCodexStagedParity(t *testing.T, uuid, content string) {
 			}
 		}
 	}
-	updateS, findingsFromMsgs := computeSignalsAndSecrets(
-		rowS, stagedDBMsgs,
-	)
-	combinedFindings := append(
-		append([]db.SecretFinding(nil), findingsFromMsgs...),
-		stagedSink.Findings(rowS.ID, positions)...,
-	)
-	updateS.SecretLeakCount = definiteFindingCount(combinedFindings)
+	// The publish transaction resolves each summary once and runs this
+	// closure before commit, so the content-failure-aware signals and
+	// findings persist atomically with the rows they describe.
 	require.NoError(t, dbStaged.ReplaceSessionContentStaged(
-		rowS.ID, stagedDBMsgs, updateS, combinedFindings,
-		stagedSink, map[string]bool{},
+		context.Background(), rowS.ID, stagedDBMsgs, stagedSink,
+		map[string]bool{},
+		func(verdicts map[string]bool) (
+			db.SessionSignalUpdate, []db.SecretFinding, error,
+		) {
+			update, findings :=
+				computeSignalsAndSecretsWithContentFailures(
+					rowS, stagedDBMsgs, verdicts,
+				)
+			combined := append(
+				append([]db.SecretFinding(nil), findings...),
+				stagedSink.Findings(rowS.ID, positions)...,
+			)
+			update.SecretLeakCount = definiteFindingCount(combined)
+			return update, combined, nil
+		},
 	))
-	// The publish transaction resolved each summary once and captured the
-	// content-failure verdicts; fold them into the signal pass exactly
-	// like the engine's post-publish recompute.
-	updateS, findingsFromMsgs = computeSignalsAndSecretsWithContentFailures(
-		rowS, stagedDBMsgs, stagedSink.ContentFailures(),
-	)
-	combinedFindings = append(
-		append([]db.SecretFinding(nil), findingsFromMsgs...),
-		stagedSink.Findings(rowS.ID, positions)...,
-	)
-	updateS.SecretLeakCount = definiteFindingCount(combinedFindings)
-	require.NoError(t, dbStaged.ReplaceSessionSecretFindings(
-		rowS.ID, combinedFindings, updateS.SecretLeakCount,
-		updateS.SecretsRulesVersion,
-	))
-	require.NoError(t, dbStaged.UpdateSessionSignals(rowS.ID, updateS))
 
 	msgsL, err := dbLegacy.GetAllMessages(context.Background(), rowL.ID)
 	require.NoError(t, err)

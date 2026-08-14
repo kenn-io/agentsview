@@ -135,7 +135,7 @@ func TestCodexStagedPublishFailureKeepsPriorContent(t *testing.T) {
 	// Prior content via the collecting path (the complete old version).
 	database := openTestDB(t)
 	legacySink := parser.NewCodexCollectingSink(0)
-	legacySess, legacyMsgs, _, _, _, err :=
+	legacySess, legacyMsgs, _, _, _, _, err :=
 		parser.ParseCodexSessionStreaming(cfg, source, legacySink)
 	require.NoError(t, err)
 	require.NotNil(t, legacySess)
@@ -181,16 +181,13 @@ func TestCodexStagedPublishFailureKeepsPriorContent(t *testing.T) {
 				failEvents:       tc.events,
 			}
 			t.Cleanup(func() { require.NoError(t, failing.Close()) })
-			stagedSess, stagedMsgs, _, _, _, err :=
+			stagedSess, stagedMsgs, _, _, _, _, err :=
 				parser.ParseCodexSessionStreaming(cfg, source, failing)
 			require.NoError(t, err)
 			require.NotNil(t, stagedSess)
 			stagedDBMsgs := toDBMessages(pendingWrite{
 				sess: *stagedSess, msgs: stagedMsgs,
 			}, nil)
-			update, findingsFromMsgs := computeSignalsAndSecrets(
-				row, stagedDBMsgs,
-			)
 			positions := make(map[string]db.StagedToolCallPosition)
 			for _, m := range stagedDBMsgs {
 				for callIdx, tc := range m.ToolCalls {
@@ -205,14 +202,24 @@ func TestCodexStagedPublishFailureKeepsPriorContent(t *testing.T) {
 						}
 				}
 			}
-			combined := append(
-				append([]db.SecretFinding(nil), findingsFromMsgs...),
-				failing.Findings(row.ID, positions)...,
-			)
-			update.SecretLeakCount = definiteFindingCount(combined)
 			err = database.ReplaceSessionContentStaged(
-				row.ID, stagedDBMsgs, update, combined, failing,
+				context.Background(), row.ID, stagedDBMsgs, failing,
 				map[string]bool{},
+				func(verdicts map[string]bool) (
+					db.SessionSignalUpdate, []db.SecretFinding, error,
+				) {
+					update, findings :=
+						computeSignalsAndSecretsWithContentFailures(
+							row, stagedDBMsgs, verdicts,
+						)
+					combined := append(
+						append([]db.SecretFinding(nil), findings...),
+						failing.Findings(row.ID, positions)...,
+					)
+					update.SecretLeakCount =
+						definiteFindingCount(combined)
+					return update, combined, nil
+				},
 			)
 			require.Error(t, err,
 				"the injected failure must abort the publish")
@@ -224,12 +231,108 @@ func TestCodexStagedPublishFailureKeepsPriorContent(t *testing.T) {
 				"aborted staged publish must keep the prior content")
 		})
 	}
+
+	// After two aborted publishes on the same single-connection writer
+	// pool, a successful staged publish must still work: the ATTACH is
+	// torn down after every transaction, so no stale codex_staging schema
+	// can collide with the next publish.
+	staged, err := newCodexStagingSink(map[string]bool{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, staged.Close()) })
+	stagedSess, stagedMsgs, _, _, _, _, err :=
+		parser.ParseCodexSessionStreaming(cfg, source, staged)
+	require.NoError(t, err)
+	require.NotNil(t, stagedSess)
+	stagedDBMsgs := toDBMessages(pendingWrite{
+		sess: *stagedSess, msgs: stagedMsgs,
+	}, nil)
+	positions := make(map[string]db.StagedToolCallPosition)
+	for _, m := range stagedDBMsgs {
+		for callIdx, tc := range m.ToolCalls {
+			if tc.ToolUseID == "" {
+				continue
+			}
+			positions[tc.ToolUseID] = db.StagedToolCallPosition{
+				ToolUseID: tc.ToolUseID,
+				Ordinal:   m.Ordinal,
+				CallIndex: callIdx,
+			}
+		}
+	}
+	require.NoError(t, database.ReplaceSessionContentStaged(
+		context.Background(), row.ID, stagedDBMsgs, staged,
+		map[string]bool{},
+		func(verdicts map[string]bool) (
+			db.SessionSignalUpdate, []db.SecretFinding, error,
+		) {
+			update, findings :=
+				computeSignalsAndSecretsWithContentFailures(
+					row, stagedDBMsgs, verdicts,
+				)
+			combined := append(
+				append([]db.SecretFinding(nil), findings...),
+				staged.Findings(row.ID, positions)...,
+			)
+			update.SecretLeakCount = definiteFindingCount(combined)
+			return update, combined, nil
+		},
+	))
+	after, err := database.GetAllMessages(context.Background(), row.ID)
+	require.NoError(t, err)
+	require.Equal(t, before, after,
+		"successful staged publish after aborts must match the legacy projection")
 }
 
 // FuzzCodexStagedParityWithCollecting asserts parser-level parity between
 // the collecting and staging paths over arbitrary transcript bodies. The
 // fuzzed bytes follow a fixed valid session meta so both paths always
 // face the same session shape.
+// TestCodexStagedScratchFailureIsSticky pins the failure contract: a
+// scratch write failure must stick to the sink, fail the parse outcome
+// and the publish, and never silently commit an archive missing tool
+// outputs. The scratch connection is poisoned by closing it under the
+// sink, which is the same failure shape a disk-full or I/O error takes.
+func TestCodexStagedScratchFailureIsSticky(t *testing.T) {
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b05"
+	root := t.TempDir()
+	day := filepath.Join(root, "2024", "01", "01")
+	require.NoError(t, os.MkdirAll(day, 0o755))
+	path := filepath.Join(
+		day, "rollout-2024-01-01T10-00-00-"+uuid+".jsonl",
+	)
+	require.NoError(t, os.WriteFile(
+		path, []byte(codexParityTranscript(uuid)), 0o644,
+	))
+	cfg := parser.ProviderConfig{Roots: []string{root}, Machine: "local"}
+	provider, ok := parser.NewProvider(parser.AgentCodex, cfg)
+	require.True(t, ok)
+	source, found, err := provider.FindSource(
+		context.Background(), parser.FindSourceRequest{
+			FullSessionID: "codex:" + uuid,
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+
+	staged, err := newCodexStagingSink(map[string]bool{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = staged.Close() })
+	// Poison the scratch so every staged write fails.
+	require.NoError(t, staged.scratch.Close())
+
+	_, _, _, _, _, _, err = parser.ParseCodexSessionStreaming(
+		cfg, source, staged,
+	)
+	require.NoError(t, err, "the parser itself completes; the sink fails")
+	require.Error(t, staged.Err())
+
+	// The outcome wrapper must surface the sticky error so the engine
+	// treats the parse as failed and keeps prior archive content.
+	_, err = stagedCodexParseOutcome(cfg, source, staged)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "codex staging")
+}
+
 func FuzzCodexStagedParityWithCollecting(f *testing.F) {
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b05"
 	f.Add([]byte(testjsonl.JoinJSONL(
@@ -283,11 +386,11 @@ func FuzzCodexStagedParityWithCollecting(f *testing.F) {
 		}
 
 		legacy := parser.NewCodexCollectingSink(0)
-		sessL, msgsL, curL, hashL, anchorL, errL :=
+		sessL, msgsL, curL, hashL, anchorL, retryL, errL :=
 			parser.ParseCodexSessionStreaming(cfg, source, legacy)
 		staged, err := newCodexStagingSink(map[string]bool{})
 		require.NoError(t, err)
-		sessS, msgsS, curS, hashS, anchorS, errS :=
+		sessS, msgsS, curS, hashS, anchorS, retryS, errS :=
 			parser.ParseCodexSessionStreaming(cfg, source, staged)
 		require.NoError(t, staged.Close())
 
@@ -297,6 +400,7 @@ func FuzzCodexStagedParityWithCollecting(f *testing.F) {
 		if errL != nil {
 			return
 		}
+		require.Equal(t, retryL, retryS)
 		if sessL == nil || sessS == nil {
 			require.True(t, sessL == nil && sessS == nil)
 			return
