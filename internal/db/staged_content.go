@@ -79,6 +79,33 @@ func (db *DB) ReplaceSessionContentStaged(
 	staged StagedToolResults, blocked map[string]bool,
 	signalsFn StagedSignalsFunc,
 ) error {
+	return db.replaceSessionContentStaged(
+		ctx, sessionID, msgs, staged, blocked, signalsFn, nil, nil,
+	)
+}
+
+// ReplaceSessionContentStagedWithCheckpoint is the staged publish plus an
+// in-transaction parser checkpoint upsert, so content and resume state
+// commit atomically.
+func (db *DB) ReplaceSessionContentStagedWithCheckpoint(
+	ctx context.Context,
+	sessionID string, msgs []Message,
+	staged StagedToolResults, blocked map[string]bool,
+	signalsFn StagedSignalsFunc,
+	cp *ParserCheckpoint, blobs *ParserCheckpointBlobs,
+) error {
+	return db.replaceSessionContentStaged(
+		ctx, sessionID, msgs, staged, blocked, signalsFn, cp, blobs,
+	)
+}
+
+func (db *DB) replaceSessionContentStaged(
+	ctx context.Context,
+	sessionID string, msgs []Message,
+	staged StagedToolResults, blocked map[string]bool,
+	signalsFn StagedSignalsFunc,
+	cp *ParserCheckpoint, blobs *ParserCheckpointBlobs,
+) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -149,6 +176,14 @@ func (db *DB) ReplaceSessionContentStaged(
 		tx, sessionID, queueGenerationBefore, queueExistedBefore,
 	); err != nil {
 		return err
+	}
+	if cp != nil {
+		c := *cp
+		b := *blobs
+		b.SessionID = sessionID
+		if err := upsertParserCheckpointTx(tx, c, b); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return err

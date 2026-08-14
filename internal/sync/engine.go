@@ -13871,9 +13871,16 @@ func (e *Engine) writeStagedFullParse(
 		update.SecretLeakCount = definiteFindingCount(combined)
 		return update, combined, nil
 	}
-	if err := e.db.ReplaceSessionContentStaged(
+	cp, blobs, cpErr := e.buildCodexFullParseCheckpoint(
+		pw.sess.File.Path, pw,
+	)
+	if cpErr != nil {
+		log.Printf("checkpoint build %s: %v", pw.sess.File.Path, cpErr)
+		cp, blobs = nil, nil
+	}
+	if err := e.db.ReplaceSessionContentStagedWithCheckpoint(
 		context.Background(), s.ID, msgs, pw.staged,
-		e.blockedResultCategories, closure,
+		e.blockedResultCategories, closure, cp, blobs,
 	); err != nil {
 		return err
 	}
