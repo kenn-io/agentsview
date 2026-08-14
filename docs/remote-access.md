@@ -228,10 +228,10 @@ the local database or turn remote sync into a destructive reconciliation.
 ### Compatibility And Recovery
 
 HTTP remote sync requires the collector and remote daemon to use the same
-remote-sync protocol version. Every target, manifest, and archive request and
-response carries that version. Missing or mismatched versions fail before
-targets or archive data are exchanged, so upgrade both hosts before syncing
-again after either side changes protocol.
+remote-sync protocol version. Every target, manifest, and archive request
+carries that version, and successful responses echo it. A missing or mismatched
+request version returns HTTP 426 before targets or archive data are exchanged,
+so upgrade both hosts before syncing again after either side changes protocol.
 
 The normal mirror comparison detects interrupted extraction when the resulting
 file size or modification time differs from the manifest, and the next sync
