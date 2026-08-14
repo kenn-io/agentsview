@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { settings } from "./settings.svelte.js";
 import { ApiError, SettingsService } from "../api/generated/index";
 import { DEFAULT_CHART_PALETTE } from "../utils/chartPalette.js";
@@ -205,6 +205,58 @@ describe("SettingsStore session providers", () => {
     expect(settings.saving).toBe(false);
     expect(settings.disabledAgents).toEqual([]);
     expect(settings.chartPalette).toBe("matplotlib");
+  });
+
+  it("serializes custom server-backed mutations with settings saves", async () => {
+    let finishCustom!: () => void;
+    const custom = settings.runMutation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishCustom = resolve;
+        }),
+    );
+    settingsService.putApiV1Settings.mockResolvedValue({
+      ...response,
+      disabled_agents: [],
+    });
+
+    const save = settings.save({ disabled_agents: [] });
+
+    expect(settingsService.putApiV1Settings).not.toHaveBeenCalled();
+    expect(settings.saving).toBe(true);
+
+    finishCustom();
+    await custom;
+    expect(settingsService.putApiV1Settings).toHaveBeenCalledTimes(1);
+    expect(settings.saving).toBe(true);
+
+    await save;
+    expect(settings.saving).toBe(false);
+  });
+
+  it("continues queued settings saves after a custom mutation fails", async () => {
+    let failCustom!: (error: Error) => void;
+    const custom = settings.runMutation(
+      () =>
+        new Promise<void>((_, reject) => {
+          failCustom = reject;
+        }),
+    );
+    settingsService.putApiV1Settings.mockResolvedValue({
+      ...response,
+      disabled_agents: [],
+    });
+
+    const save = settings.save({ disabled_agents: [] });
+
+    expect(settingsService.putApiV1Settings).not.toHaveBeenCalled();
+
+    failCustom(new Error("custom failed"));
+    await expect(custom).rejects.toThrow("custom failed");
+    expect(settingsService.putApiV1Settings).toHaveBeenCalledTimes(1);
+
+    await save;
+    expect(settings.saving).toBe(false);
   });
 });
 

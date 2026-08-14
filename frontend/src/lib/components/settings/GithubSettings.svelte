@@ -16,13 +16,15 @@
     error = null;
     success = null;
     try {
-      configureGeneratedClient();
-      await ConfigService.postApiV1ConfigGithub({
-        requestBody: { token: tokenInput.trim() },
+      await settings.runMutation(async () => {
+        configureGeneratedClient();
+        await ConfigService.postApiV1ConfigGithub({
+          requestBody: { token: tokenInput.trim() },
+        });
+        tokenInput = "";
+        success = m.settings_github_token_saved();
+        await settings.load();
       });
-      tokenInput = "";
-      success = m.settings_github_token_saved();
-      await settings.load();
     } catch (e) {
       error = e instanceof Error ? e.message : m.settings_github_save_failed();
     } finally {

@@ -54,7 +54,7 @@ function forbiddenMessage(serverMessage: string): string {
 }
 
 class SettingsStore {
-  private saveQueue: Promise<boolean> | null = null;
+  private mutationQueue: Promise<void> | null = null;
   agentDirs: Record<string, string[]> = $state({});
   sessionProviders: SessionProvider[] = $state([]);
   disabledAgents: string[] = $state([]);
@@ -123,18 +123,20 @@ class SettingsStore {
   }
 
   save(patch: Partial<AppSettings>): Promise<boolean> {
+    return this.runMutation(() => this.performSave(patch));
+  }
+
+  runMutation<T>(mutation: () => Promise<T>): Promise<T> {
     this.saving = true;
-    const previous = this.saveQueue;
-    const operation = previous
-      ? previous.then(
-          () => this.performSave(patch),
-          () => this.performSave(patch),
-        )
-      : this.performSave(patch);
-    this.saveQueue = operation;
+    const operation = this.mutationQueue ? this.mutationQueue.then(mutation) : mutation();
+    const queueEnd = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.mutationQueue = queueEnd;
     return operation.finally(() => {
-      if (this.saveQueue === operation) {
-        this.saveQueue = null;
+      if (this.mutationQueue === queueEnd) {
+        this.mutationQueue = null;
         this.saving = false;
       }
     });
