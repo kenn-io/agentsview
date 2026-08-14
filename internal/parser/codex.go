@@ -2656,10 +2656,11 @@ func (b *codexSessionBuilder) codexIncrementalNeedsFullParse(
 // function_call_output / custom_tool_call_output line cannot be
 // represented by an append-only incremental write. Subagent outputs
 // repair lineage on rows outside the append, and an output whose call
-// is not part of this appended chunk belongs to an already-stored tool
-// call; both need a replacing full parse. An output paired with its
-// call in the same chunk attaches in memory exactly as a full parse
-// would, so it stays on the incremental path.
+// is not part of this appended chunk or of the persisted cursor's
+// pending calls belongs to an already-stored tool call; both need a
+// replacing full parse. An output paired with its call in the same chunk
+// attaches in memory exactly as a full parse would, so it stays on the
+// incremental path.
 func (b *codexSessionBuilder) incrementalOutputNeedsFullParse(
 	payload gjson.Result,
 ) bool {
@@ -2675,10 +2676,7 @@ func (b *codexSessionBuilder) incrementalOutputNeedsFullParse(
 		// A full parse drops outputs without a call id too.
 		return false
 	}
-	switch b.callNames[callID] {
-	case "spawn_agent", "wait", "wait_agent":
-		return true
-	}
-	_, attachable := b.callRefs[callID]
-	return !attachable
+	name := b.toolCallNameForOutput(callID)
+	return name == "" || name == "spawn_agent" ||
+		isCodexWaitAgentCall(name)
 }
