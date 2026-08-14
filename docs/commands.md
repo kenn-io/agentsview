@@ -252,13 +252,15 @@ rebuilds FTS once, and atomically swaps the completed archive into place. SSH
 hosts run through their existing active-archive path only after that swap.
 
 `--full` reparses every discovered local and remote session, but it does not
-force unchanged HTTP mirror files to be transferred again. Spokes still send
-only changed files. HTTP collectors and spokes must use the same remote-sync
-protocol version; incompatible peers fail before exchanging targets or archive
-data. An HTTP preparation or contributor failure aborts the combined rebuild
-without replacing the active archive or running SSH. Ordinary incremental and
-post-swap SSH failures retain per-host reporting, and the command exits non-zero
-if any host failed. See [Incremental Sync](/remote-access/#incremental-sync).
+force unchanged manifest-capable files to transfer again. Directory-scoped and
+verbatim curated content still use delta transfer. Windsurf's sanitized curated
+export remains a separate full-archive transfer on every sync. HTTP collectors
+and spokes must use the same remote-sync protocol version; incompatible peers
+fail before exchanging targets or archive data. An HTTP preparation or
+contributor failure aborts the combined rebuild without replacing the active
+archive or running SSH. Ordinary incremental and post-swap SSH failures retain
+per-host reporting, and the command exits non-zero if any host failed. See
+[Incremental Sync](/remote-access/#incremental-sync).
 
 `agentsview sync --host X` syncs one host, not the whole configured list. When
 the local daemon knows a configured host with that identity, it uses the stored
