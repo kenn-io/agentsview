@@ -16,6 +16,10 @@ const (
 	parseRetentionFixedBytes        = int64(64 << 10)
 	parseRetentionMultiplier        = int64(4)
 	parseRetentionScavengeThreshold = int64(16 << 20)
+	// parseBatchBytesLimit bounds a pending write batch by estimated source
+	// bytes as well as by session count: a 5KiB session and a 945MiB session
+	// must not both count as "1". Batches flush when either limit is reached.
+	parseBatchBytesLimit = defaultParseRetentionBytes
 )
 
 type parseRetentionBudget struct {
@@ -43,28 +47,20 @@ func newParseRetentionBudget(capacity int64) *parseRetentionBudget {
 }
 
 // newBulkParseRetentionBudget returns the budget archive-scale passes use
-// (full sync, resync rebuild, remote import processing). It never throttles
-// parse admission: peak memory during a bulk pass is bounded by worker
-// parallelism, not by a byte budget. Instead it releases the pass's retained
-// memory back to the OS in one scavenge once the pass completes, keeping the
-// long-running daemon's settled footprint low without serializing the pass.
+// (full sync, resync rebuild, remote import processing). Bulk passes are
+// byte-budgeted like every other pass: large sources acquire the whole
+// capacity and run exclusively, small sources share it, and batches flush
+// when the pending estimated bytes reach the capacity. This keeps a bulk
+// pass's peak parse memory bounded by the configured budget plus one
+// oversized parse instead of by worker parallelism. The pass still releases
+// retained memory back to the OS in one scavenge once it completes.
 func newBulkParseRetentionBudget() *parseRetentionBudget {
-	return &parseRetentionBudget{
-		pressure: make(chan struct{}, 1),
-		scavenge: debug.FreeOSMemory,
-	}
+	return newParseRetentionBudget(defaultParseRetentionBytes)
 }
 
 func (budget *parseRetentionBudget) acquire(
 	ctx context.Context, sourceBytes int64,
 ) (*parseRetentionLease, error) {
-	if budget.weighted == nil {
-		// Bulk pass: admit immediately and remember that parsed payloads
-		// were retained so the end-of-pass scavenge runs exactly once.
-		budget.scavengePending.Store(true)
-		budget.acquired.Add(1)
-		return &parseRetentionLease{}, nil
-	}
 	weight := budget.weight(sourceBytes)
 	if budget.weighted.TryAcquire(weight) {
 		budget.noteKnownLargeSource(sourceBytes)

@@ -62,7 +62,7 @@ func TestWarmNoopSyncAcquiresNoRetentionLeases(t *testing.T) {
 		"warm no-op pass must not acquire parse-retention leases")
 }
 
-func TestFullSyncPassIsUnthrottledAndScavengesOnce(t *testing.T) {
+func TestFullSyncPassIsByteBudgeted(t *testing.T) {
 	e, ctx := newWarmBenchEngine(t)
 	var scavenges int
 	e.bulkRetentionBudget = newBulkParseRetentionBudget()
@@ -72,16 +72,18 @@ func TestFullSyncPassIsUnthrottledAndScavengesOnce(t *testing.T) {
 	acquired := e.bulkRetentionBudget.acquired.Load()
 	require.Positive(t, acquired,
 		"full pass must admit parses through the bulk budget")
+	require.NotNil(t, e.bulkRetentionBudget.weighted,
+		"bulk pass must run under the weighted byte budget")
 	if e.parseRetentionBudget != nil {
 		assert.Zero(t, e.parseRetentionBudget.acquired.Load(),
 			"full pass must not consume the bounded daemon budget")
 	}
-	assert.Equal(t, 1, scavenges,
-		"a parse-bearing bulk pass must release memory once at the end")
+	assert.Zero(t, scavenges,
+		"small sources do not set the scavenge flag (covered by the large-source test)")
 
 	stats := e.SyncAll(ctx, nil) // warm pass: everything skips
 	require.Equal(t, 0, stats.Synced)
-	assert.Equal(t, 1, scavenges,
+	assert.Zero(t, scavenges,
 		"a warm no-op pass must not force another scavenge")
 	assert.Nil(t, e.activeRetention.Load(),
 		"bulk budget must be uninstalled after the pass")
@@ -100,20 +102,23 @@ func TestScopedSyncKeepsBoundedRetentionBudget(t *testing.T) {
 		"a cutoff-scoped pass must not create the bulk budget")
 }
 
-func TestBulkParseRetentionBudgetNeverBlocks(t *testing.T) {
+func TestBulkParseRetentionBudgetUsesWeightedAdmission(t *testing.T) {
 	budget := newBulkParseRetentionBudget()
 	first, err := budget.acquire(t.Context(), defaultParseRetentionBytes)
 	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	_, err = budget.acquire(ctx, defaultParseRetentionBytes)
+	assert.ErrorIs(t, err, context.DeadlineExceeded,
+		"a second oversized bulk admission must wait for capacity")
+	first.Release()
 	second, err := budget.acquire(t.Context(), defaultParseRetentionBytes)
 	require.NoError(t, err)
-	assert.False(t, budget.underPressure(),
-		"bulk admissions must never report pressure")
-	first.Release()
 	second.Release()
 	assert.Equal(t, int64(2), budget.acquired.Load())
 }
 
-func TestBulkParseRetentionBudgetScavengesOncePerParseBearingPass(t *testing.T) {
+func TestBulkParseRetentionBudgetScavengesOnceAfterLargeSource(t *testing.T) {
 	budget := newBulkParseRetentionBudget()
 	var scavenges int
 	budget.scavenge = func() { scavenges++ }
@@ -121,13 +126,51 @@ func TestBulkParseRetentionBudgetScavengesOncePerParseBearingPass(t *testing.T) 
 	budget.scavengeIfNeeded()
 	assert.Zero(t, scavenges, "a pass with no parses must not scavenge")
 
-	lease, err := budget.acquire(t.Context(), 1)
+	lease, err := budget.acquire(
+		t.Context(), parseRetentionScavengeThreshold,
+	)
 	require.NoError(t, err)
 	lease.Release()
 	budget.scavengeIfNeeded()
 	budget.scavengeIfNeeded()
 	assert.Equal(t, 1, scavenges,
 		"one parse-bearing pass needs exactly one end-of-pass scavenge")
+}
+
+func TestCollectAndBatchFlushesOnByteCap(t *testing.T) {
+	engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
+	t.Cleanup(engine.Close)
+	var batchLengths []int
+	engine.writeBatchOverride = func(
+		batch []pendingWrite, _ syncWriteMode, _ bool,
+	) (int, int, int, int) {
+		batchLengths = append(batchLengths, len(batch))
+		return len(batch), 0, 0, 0
+	}
+	results := make(chan syncJob, 2)
+	for i := range 2 {
+		results <- syncJob{
+			path: fmt.Sprintf("/sessions/large-%d.jsonl", i),
+			processResult: processResult{
+				sourceBytes: parseBatchBytesLimit,
+				results: []parser.ParseResult{{
+					Session: parser.ParsedSession{
+						ID:    fmt.Sprintf("byte-cap-%d", i),
+						Agent: parser.AgentClaude,
+					},
+				}},
+			},
+		}
+	}
+	close(results)
+
+	stats := engine.collectAndBatch(
+		t.Context(), results, 2, 2, nil, syncWriteDefault,
+	)
+
+	assert.Equal(t, []int{1, 1}, batchLengths,
+		"each oversized pending result must flush its own batch")
+	assert.Equal(t, 2, stats.Synced)
 }
 
 func TestParseRetentionBudgetBoundsConcurrentSourceWeight(t *testing.T) {
