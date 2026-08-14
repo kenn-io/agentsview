@@ -537,9 +537,9 @@ stat
 | 945MB 首次完整解析 | 15.34s | checkpoint/单遍读取后约 9–12s |
 | 完整档案同步峰值 | 曾约 9.3GB | P0 背压后约 1.3–2GB；流式全量解析后目标 300–600MB |
 
-945MB/794B 的原始宏测位置：
-`/home/chris/.codex/sessions/2026/08/13/rollout-2026-08-13T02-14-18-019ffa66-a276-77a2-a970-f2e06702055e.jsonl:779`
-与 `:786`。
+945MB/794B 的原始宏测来自本地 Codex 会话档案的 rollout 文件（第
+779/786 行附近）；仓库内不记录真实路径，复现时用
+`MACRO_CODEX_945MB` 指向同类档案即可。
 
 最关键的不是延迟估算，而是可硬性验收的 I/O：
 
@@ -657,7 +657,7 @@ checkpoint 事务）；subagent 链接（`SubagentLinks`）与 token 统计继�
 
 ### 真实数据宏观实测（945MB 会话，base=`da0d7eb3`）
 
-方法：真实 `019fe581…`（944,716,046B 截断快照，最后 call 无 output）+ 真实
+方法：真实大档案（944,716,046B 截断快照，最后 call 无 output）+ 真实
 794B 晚到输出；`/proc/self/io` rchar 与 `strace -y` 按源文件路径归因；
 `/usr/bin/time -v` 测进程峰值 RSS。
 
@@ -821,3 +821,260 @@ P1 评审阻断项已全部关闭；PR 仍保持关闭状态，等待用户决�
 - 三档规模延迟斜率基本不随历史增长；GetAllMessages=0；
 - 增量/全量 parity 测试与既有 checkpoint 测试全部通过；
 - `make bench-gate` 无回归；文档同步更新。
+
+## 第五阶段：实施记录（2026-08-13 第三轮）
+
+三项工作已全部实现并提交（提交 `04c4c626`、`9d10b532`、`f38bc772`），
+PR 仍保持关闭。
+
+### 目标 ①：增量信号/秘密维护 — 已完成
+
+- `internal/signals/incremental.go`：typed reducer 状态机（JSON 版控），
+  尾部 35 调用 facts 窗口精确维护 failure/retry/churn（每文件 counted
+  锁存）/runaway（窗口退出折叠）/final-streak/mid-task；修改窗口 = 尾部
+  12 调用，越界拒绝。
+- db：`session_signal_state` 表（SQLite-only，revision+version token）；
+  `WriteSessionIncremental` 内 `SignalMaintainer` 回调，信号列、findings
+  定点增删（INSERT..WHERE NOT EXISTS 去重 + RowsAffected 精确 leak
+  count）、state、checkpoint 同一事务提交。
+- 回退边界：delta 含实质 user 消息或 compact boundary、被更新调用在
+  尾窗外、state 缺失/token 不匹配 → invalidate + debounce 全量重算并
+  reseed；所有全量路径（writeBatch/bulk/writeSessionFull/
+  recomputeSignalsFromDB）现在都 seed state。
+- 测试：300 步随机化 parity（增量 fold vs 权威全量逐字段一致）、端到端
+  parity（增量后与同尺寸原位重写触发的权威全量重建一致）、
+  GetAllMessages=0 与 secret 扫描字节 ≤ delta 断言。
+
+### 目标 ②：冷全量单遍流式 hash/anchor — 已完成
+
+- `internal/parser/codex_hash_tee.go`：全量解析在读快照的同一遍上计算
+  可续算 SHA-256 state 与 128KiB 尾锚 digest；`ParseResult` 携带两者。
+- `persistFullParseCheckpoint` 直接用解析结果，删除第二次完整 hash 读
+  与 anchor 重读；`parser_checkpoints` 只存元数据 + anchor digest，
+  cursor/hash_state 拆到 `parser_checkpoint_blobs` 懒加载（版本 2，旧行
+  视为无效强制重建）。
+- 测试：tee 携带 state digest == 快照哈希、anchor digest == 尾窗哈希、
+  续算复现全文件哈希；快照边界回归测试改写后仍通过。
+
+### 目标 ③：新性能门禁 — 已完成
+
+- `BenchmarkCodexIncrementalLateToolOutput` 改名
+  `BenchmarkCodexLateToolOutputDebouncedBurst`（文档注明 debounce 摊薄）。
+- `BenchmarkCodexIncrementalSyncReads` 替换为
+  `BenchmarkCodexCheckpointAppendResume`（真实 checkpoint 续算管线：
+  gate + 种子尾解析 + 续算哈希 + 锚 digest + checkpoint 组装）。
+- 新增 gated：`BenchmarkCodexQuietAppendSignals500/5000/15000`（单次
+  quiet append，debounce 关闭，每次迭代完整付 signals/secrets，自断言
+  GetAllMessages=0）；`BenchmarkCodexColdFullSync`（冷全量单独 gate）。
+- 10MB vs 1GB p95 比率 `<2×`：`codex_macro_bench_test.go`（build tag
+  `macrobench`，不进 `-bench .`），宏测流程写入
+  docs/internal/performance-gates.md。
+
+### 实测（2026-08-13 第三轮）
+
+`make bench-gate` 官方配置（20x × count 6，base = `da0d7eb3` 干净 worktree）：
+
+| 基准 | 结果（中位数） |
+|---|---:|
+| `BenchmarkCodexCheckpointAppendResume` | 约 0.9–1.4ms/op，约 84KB B/op |
+| `BenchmarkCodexQuietAppendSignals500` | 3.38ms/op |
+| `BenchmarkCodexQuietAppendSignals5000` | 3.42ms/op |
+| `BenchmarkCodexQuietAppendSignals15000` | 4.50ms/op（500→15k 约 1.33×） |
+| `BenchmarkCodexColdFullSync`（约 9.5MB fixture） | 857ms/op（1x smoke） |
+
+500/5k/15k 三档斜率约 1.33×，满足"延迟基本不随历史增长"与
+20–200ms p95 目标。`benchgate` 对比结论：`no regressions beyond
+thresholds`（新 benchmark 无基线仅报告，下轮起自动门禁；旧名
+`BenchmarkCodexIncrementalSyncReads`/`BenchmarkCodexIncrementalLateToolOutput`
+按设计报告为 removed/new）。`SyncPathsIncrementalAppend` 因维护路径新增
+state 行写入为 1.13× B/op、1.08× sec/op，均在阈值内。
+
+945MB 真实档案宏测与 10MB vs 1GB macrobench 比率验证留待用户环境执行
+（流程见 docs/internal/performance-gates.md）。
+
+## 第五阶段补充：真实 945MB 档案 A/B 宏测（2026-08-13 第四轮）
+
+在同一真实会话（944,717,852B 截断快照 + 794B 真实晚到输出）上，
+同一台机器同一天 base（`da0d7eb3`）与候选交替各跑多轮：
+
+| 场景 | base | 候选 | 判定 |
+|---|---:|---:|---|
+| 冷全量同步 | 15.16–15.47s，rchar 4.26GB | **15.65–15.91s，rchar 3.31GB** | 少读一遍源（−945MB），wall 持平 |
+| **追加 794B 晚到输出** | 13.56–13.71s，rchar 3.09GB | **22.2–25.5ms，rchar 68MB** | 约 600×，落在 20–200ms 目标带 |
+| 无变化再同步 | — | **1.04–1.24ms** | 达标 |
+| 进程峰值 RSS | 1.93GB | **1.15–1.17GB** | 约 −40% |
+
+候选首版冷全量曾测得 18.5–19.0s：tee 的逐字节 ring 更新引入约 1.4s，
+改为块拷贝后降至 17.6s；进一步把**新文件的 fingerprint 从解析的同一遍
+哈希里派生**（跳过独立的 fingerprint 读+哈希，已同步文件与
+verified/skip-cache 场景保持原双遍语义），降到 15.65s 并少读 945MB。
+
+宏测驱动为 `TestMacroCodexRealSession`（macrobench tag，路径经环境变量
+传入，流式复制不整读源文件，live 档案不被引擎触碰）。
+
+## 第六阶段：P3 流式全量解析（设计，2026-08-13 第四轮）
+
+宏观结论：当前 1.15–1.27GB 峰值不是算法必需，而是"流式读文件、全量留
+结果"的半流式实现。真实 945MB 会话的主要内容是工具输出
+（`tool_result_events.content` 566MB + `tool_calls.result_content` 566MB，
+两者同源双份存储），逻辑数据本身约 1.1GB；解析器把 `[]ParsedMessage`、
+完整 `[]db.Message`、result-event 汇总文本、signals/secrets 临时切片同时
+驻留 Go 堆（活跃堆峰值约 1.06GB，GC 后仍有约 591MB 活对象）。
+
+没有任何核心语义要求整文件驻留内存或重扫源文件：晚到工具结果按
+`call_id` 定点回填、token_count 更新最近 assistant、orphan 在 EOF 定
+ordinal——需要的是小型状态机 + call_id 索引 + 可修改暂存区，不是全量
+常驻。合理目标：源一遍读取，内存 `O(batch + unresolved state)`。
+
+### 架构蓝本
+
+- Lucene/Tantivy IndexWriter 生命周期：有界缓冲、满额 flush、
+  prepare/commit/rollback、commit 前不可见——解析事件写暂存
+  generation，结束后一次发布。
+- SQLite TEMP 数据库：磁盘溢写、索引随机更新、失败自动丢弃。
+- SQLite window function（`row_number()`）：最终统一生成 ordinal，不
+  在 Go 中保存并排序全部消息。
+- pgx CopyFromSource 的拉取接口风格：`Decoder -> Sink`，不构造完整
+  切片（借接口，不引入依赖）。
+- git fast-import：marks/checkpoint、成功后发布；故障恢复模型。
+- GJSON `GetBytes`：消除逐行 string 复制（现有依赖）。
+
+### 数据流
+
+```text
+lineReader.nextBytes()
+  → CodexDecoder.Emit(operation)
+  → BoundedSink（16–32MiB 或 1000 行触发 flush，满则背压）
+  → SQLite staging/generation（message 按 source_seq 写、tool_call 建
+     call_id 索引、晚到 result 定点 UPDATE、signals/secrets 流式 reducer）
+  → Finalize（SQL 处理 orphan、row_number() 定 ordinal、校验 identity）
+  → 原子发布 active_generation（单事务，同事务 checkpoint）
+```
+
+发布方式取舍：TEMP SQLite 暂存 + `INSERT … SELECT` 风险最低但数据写
+两遍；generation + 指针切换是最终形态但 schema 改造最大。按推荐顺序先
+TEMP 验证语义与内存，再决定是否升级。跨 attached 数据库的崩溃原子性
+限制：最终事务只修改 main，scratch 只读（SQLite ATTACH 文档约束）。
+
+### 实施顺序与验收
+
+1. `Decoder -> Sink` 接口 + collecting adapter 兼容现有测试；
+2. `nextBytes()` + `gjson.GetBytes()` 消除逐行 string 复制；
+3. SQLite staging sink（call_id + source order 索引）；
+4. TEMP 方案先行，generation 发布后议；
+5. 旧/新解析器同库 dual-import，稳定字段投影 go-cmp 对比 + Go fuzzing
+   （乱序 tool result、截断、compact boundary）；
+6. 故障注入：解析/finalize/发布中止后只见完整旧版或完整新版。
+
+验收：945MB 冷全量 RSS `<512MB`（目标 `<350MB`）；10MB→1GB 峰值增长
+`≤2×`；64MB 单行有界；源只读一遍；messages/tool calls/result events/
+usage/signals/findings/checkpoint 逐字段一致；追加保持 20–200ms；无变化
+同步 0B transcript 读取。磁盘侧 566MB×2 结果重复存储保持现状，不并入本
+PR。渐进启用：仅 Codex 且 `>128MB` 走新路径，特殊事件保守回退旧路径。
+
+## 第六阶段实施记录（2026-08-13 第五轮）
+
+### 已落地（提交 66232611 之后的本轮）
+
+- P3.1：`CodexSessionSink`（导出接口，8 个操作）+ collecting 实现 + 流式
+  解析入口 `ParseCodexSessionStreaming`（同一遍带 tee 哈希/锚点）。
+- P3.2/3.3 核心：`codexStagingSink`——事件行与按调用 agent 汇总状态写入
+  scratch SQLite（TEMP 文件，journal OFF）；内存模型只留占位符（实测
+  1GB fixture 模型事件内容仅 4.9KB）；发布侧
+  `db.ReplaceSessionContentStaged`：消息/tool_calls 分块插入（每调用
+  summary 经 scratch 瞬态解析、blocked 按类别抹除）、事件
+  `INSERT..SELECT`（ATTACH scratch，只读，final tx 只改 main）、同一
+  事务 bump revision/recall/automation/signals/findings。
+- parity：`TestCodexStreamingParseParityWithLegacy`——同一 transcript 双
+  路导入，messages/tool_calls/result_events（含 content/length/
+  event_index/summary）逐字段一致，findings 与 status 驱动信号一致，
+  通过。
+- 门禁指标修正：peak live heap 改用运行时 `/gc/heap/live:bytes`（排除
+  未回收垃圾），旧 HeapAlloc 口径会高估。
+
+### 门禁实测（live heap 口径，三档 synthetic）
+
+| 路径 | 10MB | 100MB | 1GB |
+|---|---:|---:|---:|
+| legacy 引擎冷全量 | 13MiB | 87MiB | **584MiB ✗** |
+| staged parse+发布 | 17MiB | 105MiB | **1777MiB ✗** |
+
+### 诚实标注的剩余问题（下一轮修）
+
+1. 解析器自身（legacy 路径同样存在）在解析中途保留约 0.6× 文件大小的
+   行字符串 live（gjson 惰性结果 + `strings.TrimSpace` 切片链 + GC 节奏），
+   解析结束后一次 GC 即全部回收；这是 P3 前就存在的行为，不是 staging
+   引入。
+2. scratch 逐事件 SQL（去重 SELECT + 事件 INSERT + 汇总 UPSERT，每事件
+   3 条语句）额外保留约 1.2× 文件大小 live——下轮改为有界批量
+   （多行 VALUES + 预处理语句 + 每 N 事件提交），预计降到解析器自身水平。
+3. 之后再做引擎接线（>128MB 渐进启用）、P3.4 流式信号 reducer（含
+   content-heuristic 失败判定与 secrets 归并）、P3.5 parity/fuzz/故障
+   注入，再跑 945MB 真实档案验收。
+
+## 第六阶段实施记录（2026-08-13 第七轮，P3 完成）
+
+### 根因与修复
+
+1. **行字符串钉扎（legacy 与 staged 共有的 0.6–1.2× 留存）**：事件身份
+   字段（`call_id`、`status`、`agent_id` 等）是 gjson 对源行的切片，存入
+   内存模型后把整条输出行的 backing buffer 钉住——解析期间每次 GC 都把
+   "到目前为止全部行"标为 live，峰值随文件线性增长（1GB 时 staged
+   1777MiB、legacy 584MiB 都源于此）。staging sink 在入口处
+   `strings.Clone` 模型保留的小字段；content 本就以占位符替换。
+   修复后 1GB synthetic：peak live 21–25MiB、RSS ≤208MiB。
+2. **发布分块按 summary 字节数**：`tool_calls` 分块原按 500 行，2MB
+   summary 使单块累积整会话内容（1GB）；现按 16MiB 内容字节与行数双
+   上限 flush。
+3. **scratch 汇总表删除**：逐事件汇总 UPSERT（每事件第 3 条语句 + 内容
+   双写）移除，`ResolveSummary` 改为按 `seq` 顺序 Go 遍历该调用事件行
+   （每 agent 最后内容 + 首次出现顺序，与 legacy `SummarizeToolResultEvents`
+   逐字节一致）。SQL window-query 变体曾实装并回退：其内存 TEMP B 树把
+   真实档案 RSS 推高约 200MiB。UNIQUE(content) 索引 + `INSERT OR
+   IGNORE` 变体同样回退：2MB 键的 B 树比较使 rchar 从 4.5GB 涨到
+   16.5GB。
+4. **P3.4 流式信号 reducer**：content-heuristic 失败判定在发布事务解析
+   summary 时顺带捕获（`ContentFailures()`），发布后引擎用其重算
+   signals/findings 并 seed 增量状态；summary 全程只解析一遍、瞬时内存
+   有界。
+5. **渐进启用**：引擎在 Codex 且 `>128MB` 时走 staged 路径
+   （`stagedCodexParseMinBytes`），sink 随 retention lease 同生命周期释放；
+   期间进程 GC percent 临时降到 30（引用计数、结束恢复），把峰值堆压在
+   live set 附近。
+6. **orphan 对齐**：全量解析中未注册调用的事件与 collecting 路径一致地
+   进入 `toolCallUpdates`（legacy 全量消费者本就丢弃），不再被 staged
+   发布——乱序输出 perturbation 由此逐字段 parity。
+
+### P3.5 验证
+
+- `TestCodexStreamingParseParityWithLegacy`：双路导入逐字段比较（含
+  content/length/event_index/summary/findings/signals/checkpoint），
+  fixture 含 AWS key、status-errored、content-failure 三例。
+- perturbation 表：倒序、截断、重复/交错输出、垃圾/空行、forked meta
+  replay，全部通过完整双路 DB 比较。
+- 故障注入：summary 解析与事件插入两处注入失败，事务回滚后档案保持
+  完整旧内容。
+- `FuzzCodexStagedParityWithCollecting`：任意 transcript 体双路投影
+  parity（256KB/2000 行上限；更深的分支为两路共有的既有 O(n²)
+  orphan 插入，不区分路径）。
+- 引擎级：`TestMacroCodexEngineStagedFullParse`（150MB 真实引擎同步）；
+  追加延迟 `BenchmarkMacroCodexQuietAppend` 4.0–4.5ms（20–200ms 内）。
+
+### 真实 945MB 档案验收（`TestMacroCodexRealArchiveColdSync`）
+
+| 指标 | 实测 |
+|---|---:|
+| 冷全量 peak live heap | 117–129MiB |
+| 冷全量 RSS（三次） | 469 / 486 / 477MiB ✓ `<512MB` |
+| 冷全量源读取（rchar） | 4.5GB（转录一遍 + scratch 发布/汇总读回） |
+| 无变化二次同步 | 36KiB 读取、0 会话写入 ✓ |
+| 时长 | 23–35s |
+
+### 剩余偏差与边界
+
+- staged 路径的 orphan 事件与 legacy 全量路径一致地丢弃（见上 6）；
+  晚到输出仍由增量追加路径合并，行为未变。
+- `ResolveSummary` 的 agent 键归一化沿用 SQL 侧 `trim()` 语义差异点：
+  两路均以 `strings.TrimSpace` 在 Go 侧处理，fixture 与真实档案 parity
+  覆盖。
+- 磁盘侧 566MB×2 结果重复存储保持现状（不在本 PR）。
