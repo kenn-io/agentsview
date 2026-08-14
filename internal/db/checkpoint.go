@@ -25,6 +25,7 @@ type ParserCheckpoint struct {
 	FileInode        uint64
 	FileDevice       uint64
 	FileMTime        int64
+	FileChangeTime   int64
 	Offset           int64
 	TailAnchorDigest string
 	Hash             string
@@ -50,6 +51,7 @@ func (db *DB) GetParserCheckpoint(
 	var inode, device, nextOrdinal int64
 	err := db.getReader().QueryRow(
 		`SELECT agent, file_path, file_inode, file_device, file_mtime,
+		        file_change_time,
 		        offset, tail_anchor_digest, hash,
 		        next_ordinal, checkpoint_version, updated_at
 		 FROM parser_checkpoints
@@ -57,6 +59,7 @@ func (db *DB) GetParserCheckpoint(
 		sessionID,
 	).Scan(
 		&cp.Agent, &cp.FilePath, &inode, &device, &cp.FileMTime,
+		&cp.FileChangeTime,
 		&cp.Offset, &cp.TailAnchorDigest, &cp.Hash,
 		&nextOrdinal, &cp.Version, &cp.UpdatedAt,
 	)
@@ -182,15 +185,17 @@ func upsertParserCheckpointExec(
 	if _, err := exec.Exec(
 		`INSERT INTO parser_checkpoints (
 		    session_id, agent, file_path, file_inode, file_device, file_mtime,
+		    file_change_time,
 		    offset, tail_anchor_digest, hash,
 		    next_ordinal, checkpoint_version, updated_at
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(session_id) DO UPDATE SET
 		    agent = excluded.agent,
 		    file_path = excluded.file_path,
 		    file_inode = excluded.file_inode,
 		    file_device = excluded.file_device,
 		    file_mtime = excluded.file_mtime,
+		    file_change_time = excluded.file_change_time,
 		    offset = excluded.offset,
 		    tail_anchor_digest = excluded.tail_anchor_digest,
 		    hash = excluded.hash,
@@ -199,6 +204,7 @@ func upsertParserCheckpointExec(
 		    updated_at = excluded.updated_at`,
 		cp.SessionID, cp.Agent, cp.FilePath,
 		int64(cp.FileInode), int64(cp.FileDevice), cp.FileMTime,
+		cp.FileChangeTime,
 		cp.Offset, cp.TailAnchorDigest, cp.Hash,
 		cp.NextOrdinal, cp.Version, cp.UpdatedAt,
 	); err != nil {

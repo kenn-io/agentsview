@@ -637,6 +637,17 @@ type DB struct {
 	vectorMu       sync.RWMutex
 	vectorSearcher VectorSearcher
 	recallSearcher RecallVectorSearcher
+
+	// messagesLoadCount counts GetAllMessages calls. Tests use it to gate
+	// the incremental signal path: a maintained delta must not load
+	// session history.
+	messagesLoadCount atomic.Int64
+}
+
+// MessagesLoadCount returns the total number of GetAllMessages calls the
+// database has served. Monotonic; used by the incremental-path gates.
+func (db *DB) MessagesLoadCount() int64 {
+	return db.messagesLoadCount.Load()
 }
 
 // Reader exposes guarded read-only query operations. It intentionally does
@@ -2227,57 +2238,14 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"parser_checkpoints", "tail_anchor_digest",
 			"ALTER TABLE parser_checkpoints ADD COLUMN tail_anchor_digest TEXT NOT NULL DEFAULT ''",
 		},
+		{
+			// Change-time strengthens the unchanged-file identity check;
+			// rows written before the column existed carry 0 and are
+			// treated as unverified (conservative rebuild).
+			"parser_checkpoints", "file_change_time",
+			"ALTER TABLE parser_checkpoints ADD COLUMN file_change_time INTEGER NOT NULL DEFAULT 0",
+		},
 	}
-}
-
-// migrateParserCheckpointSchema drops the pre-split checkpoint columns
-// (tail_anchor, cursor, hash_state) that earlier branch builds persisted in
-// parser_checkpoints. The cursor/hash-state payload moved to
-// parser_checkpoint_blobs and the raw anchor to a digest, so the old
-// columns are dead weight whose NOT NULL constraints would reject new
-// rows. The rows themselves are version-1 and already rebuild
-// authoritatively; dropping only the dead columns loses no archive data.
-func migrateParserCheckpointSchema(
-	queryRow func(string, ...any) rowScanner,
-	exec func(string, ...any) (sql.Result, error),
-) error {
-	var tableCount int
-	if err := queryRow(
-		`SELECT count(*) FROM sqlite_master
-		 WHERE type = 'table' AND name = 'parser_checkpoints'`,
-	).Scan(&tableCount); err != nil {
-		return fmt.Errorf("checking parser_checkpoints: %w", err)
-	}
-	if tableCount == 0 {
-		return nil
-	}
-	for _, column := range []string{
-		"tail_anchor", "cursor", "hash_state",
-	} {
-		var count int
-		if err := queryRow(fmt.Sprintf(
-			"SELECT count(*) FROM pragma_table_info('parser_checkpoints')"+
-				" WHERE name = '%s'", column,
-		)).Scan(&count); err != nil {
-			return fmt.Errorf(
-				"probing parser_checkpoints.%s: %w", column, err,
-			)
-		}
-		if count == 0 {
-			continue
-		}
-		if _, err := exec(fmt.Sprintf(
-			"ALTER TABLE parser_checkpoints DROP COLUMN %s", column,
-		)); err != nil {
-			return fmt.Errorf(
-				"dropping parser_checkpoints.%s: %w", column, err,
-			)
-		}
-		log.Printf(
-			"migration: dropped column parser_checkpoints.%s", column,
-		)
-	}
-	return nil
 }
 
 func applySchemaColumnMigrations(w *writerHandle) error {
@@ -2294,14 +2262,6 @@ func applySchemaColumnMigrations(w *writerHandle) error {
 
 	if err := applyColumnMigrations(
 		schemaColumnMigrations(),
-		func(query string, args ...any) rowScanner {
-			return tx.QueryRow(query, args...)
-		},
-		tx.Exec,
-	); err != nil {
-		return err
-	}
-	if err := migrateParserCheckpointSchema(
 		func(query string, args ...any) rowScanner {
 			return tx.QueryRow(query, args...)
 		},

@@ -149,3 +149,9 @@ func TestParserCheckpointRollsBackWithTransaction(t *testing.T) {
 	assert.False(t, ok,
 		"an aborted transaction must not leave checkpoint blobs behind")
 }
+
+// TestParserCheckpointSchemaMigratesFromPreSplitShape simulates an archive
+// written by the pre-split schema (raw tail_anchor/cursor/hash_state
+// columns): reopening must add the digest column, drop the dead columns,
+// and leave a version-1 row readable (the engine rebuilds it
+// authoritatively) while new version-2 upserts succeed.

@@ -143,6 +143,15 @@ func (e *Engine) codexCheckpointFingerprint(
 	}
 
 	if info.Size() == cp.Offset {
+		// Change-time guards same-size same-mtime rewrites for free: a
+		// write restores mtime but cannot restore ctime, so a mismatch
+		// here proves the bytes changed even when every other identity
+		// field matches. Rows without a stored change time (0) stay
+		// conservative and rebuild.
+		if changeTime, ok := fileChangeTime(path, info); !ok ||
+			cp.FileChangeTime == 0 || changeTime != cp.FileChangeTime {
+			return res, nil
+		}
 		// The mtime gate applies only to the unchanged branch: an append
 		// naturally moves the mtime, and the append branch is proven by
 		// identity + tail anchor + monotonic size instead. An index-only
@@ -415,8 +424,10 @@ func buildCodexCheckpoint(
 	anchorDigest string,
 ) (*db.ParserCheckpoint, db.ParserCheckpointBlobs) {
 	inode, device := getFileIdentity(storedPath, info)
+	changeTime, _ := fileChangeTime(storedPath, info)
 	return &db.ParserCheckpoint{
 			SessionID:        sessionID,
+			FileChangeTime:   changeTime,
 			Agent:            agent,
 			FilePath:         storedPath,
 			FileInode:        uint64(inode),

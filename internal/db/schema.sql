@@ -1323,6 +1323,7 @@ CREATE TABLE IF NOT EXISTS artifact_imported_sessions (
     PRIMARY KEY (origin, gid)
 );
 
+
 -- Machine-local parse checkpoints. SQLite-only, never mirrored to
 -- PostgreSQL or DuckDB: parsers never run against those read-side stores,
 -- and a copy that drops this table degrades to the conservative no-checkpoint
@@ -1334,6 +1335,7 @@ CREATE TABLE IF NOT EXISTS parser_checkpoints (
     file_inode         INTEGER NOT NULL,
     file_device        INTEGER NOT NULL,
     file_mtime         INTEGER NOT NULL,
+    file_change_time   INTEGER NOT NULL DEFAULT 0,
     offset             INTEGER NOT NULL,
     tail_anchor_digest TEXT NOT NULL,
     hash               TEXT NOT NULL,

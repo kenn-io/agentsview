@@ -182,7 +182,7 @@ func TestCodexCheckpointAnchorMismatchFallsBackToFullParse(t *testing.T) {
 		"the corrupted call id must come from the authoritative full parse")
 }
 
-func TestCodexCheckpointInPlaceRewriteSameSizeSameMtimeIsTrusted(t *testing.T) {
+func TestCodexCheckpointInPlaceRewriteSameSizeSameMtimeIsRejected(t *testing.T) {
 	env := setupTestEnv(t)
 	ctx := context.Background()
 	initial := checkpointCodexInitial()
@@ -192,12 +192,17 @@ func TestCodexCheckpointInPlaceRewriteSameSizeSameMtimeIsTrusted(t *testing.T) {
 	require.NoError(t, err)
 	origMtime := info.ModTime()
 
-	// In-place rewrite, same size, same mtime: append-trust mode skips it via
-	// the checkpoint stat gate. This is the documented tradeoff; a periodic
-	// full audit catches such rewrites.
+	// In-place rewrite with restored size and mtime: the stored
+	// change-time no longer matches, so the checkpoint no-op path must
+	// decline and the engine must re-parse the rewritten bytes instead of
+	// trusting the stale checkpoint.
 	raw, err := os.ReadFile(path)
 	require.NoError(t, err)
-	raw[0] ^= 0x01
+	// Flip the final character of the user message's text so the JSON
+	// stays valid and the re-parse must produce different content.
+	textEnd := bytes.Index(raw, []byte("run command")) + len("run command")
+	require.Greater(t, textEnd, len("run command"))
+	raw[textEnd-1] ^= 0x01
 	require.NoError(t, os.WriteFile(path, raw, 0o644))
 	require.NoError(t, os.Chtimes(path, time.Now(), origMtime))
 
@@ -205,11 +210,11 @@ func TestCodexCheckpointInPlaceRewriteSameSizeSameMtimeIsTrusted(t *testing.T) {
 
 	msgs := fetchMessages(t, env.db, "codex:"+checkpointTestUUID)
 	require.Len(t, msgs, 2)
-	assert.Equal(t, "run command", msgs[0].Content,
-		"the trusted skip must not rewrite stored messages")
+	assert.NotEqual(t, "run command", msgs[0].Content,
+		"a same-stat rewrite must be re-parsed, not trusted")
 	cp, ok, err := env.db.GetParserCheckpoint("codex:" + checkpointTestUUID)
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, int64(len(initial)), cp.Offset,
-		"the trusted skip must not advance the checkpoint")
+		"the rewritten bytes are the same length, so the checkpoint offset stays")
 }
