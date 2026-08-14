@@ -19,6 +19,15 @@ import (
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
+// HTTPSyncLifecycle observes the preparation and atomic rebuild work for one
+// HTTP host. Callbacks run synchronously around the operation they describe.
+type HTTPSyncLifecycle struct {
+	PrepareStarted  func()
+	PrepareFinished func(error)
+	RebuildStarted  func()
+	RebuildFinished func(syncpkg.SyncStats, error)
+}
+
 type HTTPSync struct {
 	Host                    string
 	URL                     string
@@ -29,6 +38,7 @@ type HTTPSync struct {
 	BlockedResultCategories []string
 	Progress                syncpkg.ProgressFunc
 	Client                  *http.Client
+	Lifecycle               *HTTPSyncLifecycle
 	runPrepare              func(context.Context) (*PreparedHTTP, error)
 	removeArchiveSpool      func(string) error
 }

@@ -22,6 +22,8 @@ type RebuildContributor struct {
 	Name      string
 	Config    EngineConfig
 	Progress  func(Progress) Progress
+	Started   func()
+	Finished  func(SyncStats, error)
 	AfterSync func(*Engine, *db.DB) error
 }
 

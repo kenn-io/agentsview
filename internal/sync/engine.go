@@ -2551,6 +2551,9 @@ func (e *Engine) resyncBuildLocked(
 	}
 
 	for contributorIndex, contributor := range opts.Contributors {
+		if contributor.Started != nil {
+			contributor.Started()
+		}
 		contributorEngine := NewEngine(newDB, contributor.Config)
 		contributorEngine.archiveStore = origDB
 		contributorProgress := func(p Progress) {
@@ -2573,6 +2576,9 @@ func (e *Engine) resyncBuildLocked(
 			contributorOldFileSessions[contributorIndex],
 			0,
 		)
+		if contributorSafetyAbort {
+			contributorStats.Aborted = true
+		}
 		mergeSyncStats(&stats, contributorStats)
 		if opts.includePhaseDiagnostics {
 			stats.RebuildPhases = append(stats.RebuildPhases, phase)
@@ -2580,6 +2586,9 @@ func (e *Engine) resyncBuildLocked(
 		if contributorStats.Aborted || stats.Aborted || ctx.Err() != nil ||
 			contributorSafetyAbort {
 			contributorEngine.Close()
+			if contributor.Finished != nil {
+				contributor.Finished(contributorStats, ctx.Err())
+			}
 			newDB.Close()
 			removeTempDB(tempPath)
 			restoreSkipCache()
@@ -2599,6 +2608,9 @@ func (e *Engine) resyncBuildLocked(
 		if contributor.AfterSync != nil {
 			if err := contributor.AfterSync(contributorEngine, newDB); err != nil {
 				contributorEngine.Close()
+				if contributor.Finished != nil {
+					contributor.Finished(contributorStats, err)
+				}
 				newDB.Close()
 				removeTempDB(tempPath)
 				restoreSkipCache()
@@ -2617,6 +2629,9 @@ func (e *Engine) resyncBuildLocked(
 			}
 		}
 		contributorEngine.Close()
+		if contributor.Finished != nil {
+			contributor.Finished(contributorStats, nil)
+		}
 	}
 
 	localSafetyAbort := false

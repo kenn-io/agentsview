@@ -660,8 +660,12 @@ func TestRunRemoteSyncRequestUnifiedHTTPUsesMirrorDeltaAndBulkRebuild(t *testing
 		}
 	}))
 	t.Cleanup(ts.Close)
-	host := config.RemoteHost{
+	hostAlpha := config.RemoteHost{
 		Host: "alpha", Transport: config.RemoteTransportHTTP,
+		URL: ts.URL, Token: "remote-token",
+	}
+	hostGamma := config.RemoteHost{
+		Host: "gamma", Transport: config.RemoteTransportHTTP,
 		URL: ts.URL, Token: "remote-token",
 	}
 	sshCalls := 0
@@ -679,15 +683,16 @@ func TestRunRemoteSyncRequestUnifiedHTTPUsesMirrorDeltaAndBulkRebuild(t *testing
 			remoteSyncRequest{
 				Full: true, IncludeLocal: true,
 				Hosts: []config.RemoteHost{
-					host,
+					hostGamma,
 					{Host: "beta", Transport: config.RemoteTransportSSH},
+					hostAlpha,
 				},
 			}, nil,
 		)
 		assert.Empty(t, response.Failures)
 		require.NotNil(t, response.LocalStats)
 		assert.False(t, response.LocalStats.Aborted)
-		assert.Equal(t, 2, response.LocalStats.Synced)
+		assert.Equal(t, 3, response.LocalStats.Synced)
 		select {
 		case event := <-events:
 			assert.Equal(t, "sync", event.Scope)
@@ -696,24 +701,53 @@ func TestRunRemoteSyncRequestUnifiedHTTPUsesMirrorDeltaAndBulkRebuild(t *testing
 		}
 	}
 
-	assert.Equal(t, 1, archiveRequests,
+	assert.Equal(t, 2, archiveRequests,
 		"unchanged full rebuild should reuse the prepared mirror")
 	assert.Equal(t, 2, sshCalls)
-	assertSessionCount(t, f.db, 2)
+	assertSessionCount(t, f.db, 3)
 	output := logs.String()
 	assert.Contains(t, output,
-		"remote sync HTTP contributors started: hosts=1")
+		"remote sync HTTP contributors started: hosts=2")
 	assert.Contains(t, output,
-		"remote sync HTTP contributors finished: hosts=1")
+		"remote sync HTTP contributors finished: hosts=2")
+	for _, host := range []string{"alpha", "gamma"} {
+		assert.Equal(t, 2, strings.Count(output,
+			"remote sync HTTP host preparation started: host="+host))
+		assert.Equal(t, 2, strings.Count(output,
+			"remote sync HTTP host preparation finished: host="+host))
+		assert.Regexp(t,
+			"remote sync HTTP host preparation finished: host="+host+
+				`[^\n]*duration=[^\n]*outcome=completed`,
+			output,
+		)
+		assert.Equal(t, 2, strings.Count(output,
+			"remote sync host started: host="+host+
+				" transport=http full=true mode=unified_rebuild"))
+		assert.Equal(t, 2, strings.Count(output,
+			"remote sync host finished: host="+host+" transport=http"))
+		assert.Regexp(t,
+			"remote sync host finished: host="+host+
+				` transport=http[^\n]*sessions_synced=1`+
+				`[^\n]*sessions_total=1[^\n]*outcome=completed`,
+			output,
+		)
+	}
 	httpFinished := strings.Index(output,
-		"remote sync HTTP contributors finished: hosts=1")
+		"remote sync HTTP contributors finished: hosts=2")
 	sshStarted := strings.Index(output,
 		"remote sync host started: host=beta transport=ssh")
 	require.NotEqual(t, -1, httpFinished)
 	require.NotEqual(t, -1, sshStarted)
+	for _, host := range []string{"alpha", "gamma"} {
+		hostFinished := strings.Index(output,
+			"remote sync host finished: host="+host+" transport=http")
+		require.NotEqual(t, -1, hostFinished)
+		assert.Less(t, hostFinished, sshStarted,
+			"each HTTP contributor must finish before post-rebuild SSH work")
+	}
 	assert.Less(t, httpFinished, sshStarted,
 		"HTTP contributor completion must precede post-rebuild SSH work")
-	assert.Contains(t, output, "aggregate_synced=2")
+	assert.Contains(t, output, "aggregate_synced=3")
 	assert.NotContains(t, output, "local_synced=")
 	select {
 	case err := <-serverErrors:

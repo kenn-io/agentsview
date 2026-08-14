@@ -643,6 +643,67 @@ func logRemoteHTTPContributorsFinished(
 	)
 }
 
+func newUnifiedHTTPHostLifecycle(
+	ctx context.Context,
+	host config.RemoteHost,
+) *remotesync.HTTPSyncLifecycle {
+	var preparationStarted time.Time
+	var rebuildStarted time.Time
+	return &remotesync.HTTPSyncLifecycle{
+		PrepareStarted: func() {
+			preparationStarted = time.Now()
+			log.Printf(
+				"remote sync HTTP host preparation started: host=%s",
+				host.Host,
+			)
+		},
+		PrepareFinished: func(err error) {
+			outcome := remoteSyncLifecycleOutcome(ctx, err)
+			duration := time.Since(preparationStarted).Round(time.Millisecond)
+			if err != nil {
+				log.Printf(
+					"remote sync HTTP host preparation finished: host=%s duration=%s outcome=%s error=%q",
+					host.Host, duration, outcome,
+					remoteSyncLifecycleError(ctx, host, err),
+				)
+				return
+			}
+			log.Printf(
+				"remote sync HTTP host preparation finished: host=%s duration=%s outcome=%s",
+				host.Host, duration, outcome,
+			)
+		},
+		RebuildStarted: func() {
+			rebuildStarted = time.Now()
+			log.Printf(
+				"remote sync host started: host=%s transport=http full=true mode=unified_rebuild",
+				host.Host,
+			)
+		},
+		RebuildFinished: func(stats syncpkg.SyncStats, err error) {
+			outcome := remoteSyncLifecycleOutcome(ctx, err)
+			if stats.Aborted && outcome == "completed" {
+				outcome = "failed"
+			}
+			duration := time.Since(rebuildStarted).Round(time.Millisecond)
+			if err != nil {
+				log.Printf(
+					"remote sync host finished: host=%s transport=http mode=unified_rebuild duration=%s sessions_synced=%d sessions_total=%d skipped=%d failed=%d outcome=%s error=%q",
+					host.Host, duration, stats.Synced, stats.TotalSessions,
+					stats.Skipped, stats.Failed, outcome,
+					remoteSyncLifecycleError(ctx, host, err),
+				)
+				return
+			}
+			log.Printf(
+				"remote sync host finished: host=%s transport=http mode=unified_rebuild duration=%s sessions_synced=%d sessions_total=%d skipped=%d failed=%d outcome=%s",
+				host.Host, duration, stats.Synced, stats.TotalSessions,
+				stats.Skipped, stats.Failed, outcome,
+			)
+		},
+	}
+}
+
 func remoteSyncTopLevelError(err error) string {
 	if err == nil {
 		return ""
@@ -703,6 +764,7 @@ func prepareHTTPHosts(
 			DB:                      local,
 			BlockedResultCategories: cfg.ResultContentBlockedCategories,
 			Progress:                progress,
+			Lifecycle:               newUnifiedHTTPHostLifecycle(ctx, host),
 		})
 	}
 	return prepareHTTPRebuild(ctx, syncs)

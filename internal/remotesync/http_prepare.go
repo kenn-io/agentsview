@@ -112,7 +112,13 @@ func prepareHTTPSyncs(
 	}
 	for _, input := range ordered {
 		hs := input.sync
+		if hs.Lifecycle != nil && hs.Lifecycle.PrepareStarted != nil {
+			hs.Lifecycle.PrepareStarted()
+		}
 		source, err := prepare(ctx, hs)
+		if hs.Lifecycle != nil && hs.Lifecycle.PrepareFinished != nil {
+			hs.Lifecycle.PrepareFinished(err)
+		}
 		if err != nil {
 			if source != nil {
 				prepared.sources = append(prepared.sources, source)
@@ -330,7 +336,7 @@ func (p *PreparedHTTP) RebuildContributor() (syncpkg.RebuildContributor, error) 
 	if err != nil {
 		return syncpkg.RebuildContributor{}, err
 	}
-	return syncpkg.RebuildContributor{
+	contributor := syncpkg.RebuildContributor{
 		Name:   p.sync.Host,
 		Config: config,
 		Progress: func(progress syncpkg.Progress) syncpkg.Progress {
@@ -339,7 +345,12 @@ func (p *PreparedHTTP) RebuildContributor() (syncpkg.RebuildContributor, error) 
 		AfterSync: func(engine *syncpkg.Engine, database *db.DB) error {
 			return saveEngineSkipCache(database, engine, layout.paths)
 		},
-	}, nil
+	}
+	if p.sync.Lifecycle != nil {
+		contributor.Started = p.sync.Lifecycle.RebuildStarted
+		contributor.Finished = p.sync.Lifecycle.RebuildFinished
+	}
+	return contributor, nil
 }
 
 // Close releases the mirror lock and removes an owned legacy root. It is safe
