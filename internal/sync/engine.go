@@ -8219,16 +8219,15 @@ func (e *Engine) collectAndBatch(
 			sourceNeedsRetry := vetoed > 0 ||
 				r.providerFailureCount > 0 || len(r.retrySessionIDs) > 0
 			for i, pr := range allowed {
-				sessionNeedsRetry := sourceNeedsRetry ||
+				sessionNeedsRetry := r.providerWideFailureCount > 0 ||
 					r.needsRetryForSession(pr.Session.ID)
-				needsRetry := sessionNeedsRetry || claudeDAG
 				pw := pendingWrite{
 					sess:                    pr.Session,
 					msgs:                    pr.Messages,
 					usageEvents:             pr.UsageEvents,
-					needsRetry:              needsRetry,
+					needsRetry:              sessionNeedsRetry || claudeDAG,
 					forceReplace:            r.forceReplace,
-					baselineEligible:        !sessionNeedsRetry,
+					baselineEligible:        !sourceNeedsRetry,
 					storageTrustPath:        r.storageTrustPath,
 					storageTrustState:       r.storageTrustState,
 					storageTrustSnap:        r.storageTrustSnap,
@@ -8520,6 +8519,10 @@ type processResult struct {
 	// valid partial writes. Reconciliation may persist the valid results, but
 	// must not acknowledge the pass as complete.
 	providerFailureCount int
+	// providerWideFailureCount is the subset of provider failures that applies
+	// to every result in the source. Per-result retry state stays in
+	// retrySessionIDs so one member cannot demote otherwise valid siblings.
+	providerWideFailureCount int
 	// storageTrustPath/State/Snap carry an OpenCode-family storage
 	// session's pre-parse stat signature and invalidation snapshot to
 	// the write path, which promotes it once the session's batch is
@@ -9158,10 +9161,11 @@ func (e *Engine) processProviderFile(
 	}
 	applyProviderFingerprintFileInfo(file.Agent, fingerprint, outcome.Results)
 	cleanCache := providerOutcomeAllowsCleanSkipCache(outcome)
-	providerFailureCount := len(outcome.SourceErrors)
+	providerWideFailureCount := len(outcome.SourceErrors)
 	if !outcome.ResultSetComplete {
-		providerFailureCount++
+		providerWideFailureCount++
 	}
+	providerFailureCount := providerWideFailureCount
 	if outcome.SkipReason != parser.SkipNone {
 		if outcome.SkipReason == parser.SkipUnsupportedSource {
 			e.anomalies.recordUnsupportedSourceLayout(string(file.Agent), file.Path)
@@ -9202,16 +9206,17 @@ func (e *Engine) processProviderFile(
 			}
 		}
 		skipRes := processResult{
-			skip:                  !outcome.ForceReplace,
-			excludedSessionIDs:    excludedSessionIDs,
-			sourceMissingMembers:  missingMembers,
-			mtime:                 fingerprint.MTimeNS,
-			cacheSkip:             cacheSkip,
-			cacheKey:              cacheKey,
-			noCacheSkip:           !cleanCache,
-			forceReplace:          outcome.ForceReplace,
-			suppressPresenceSweep: !outcome.ResultSetComplete,
-			providerFailureCount:  providerFailureCount,
+			skip:                     !outcome.ForceReplace,
+			excludedSessionIDs:       excludedSessionIDs,
+			sourceMissingMembers:     missingMembers,
+			mtime:                    fingerprint.MTimeNS,
+			cacheSkip:                cacheSkip,
+			cacheKey:                 cacheKey,
+			noCacheSkip:              !cleanCache,
+			forceReplace:             outcome.ForceReplace,
+			suppressPresenceSweep:    !outcome.ResultSetComplete,
+			providerFailureCount:     providerFailureCount,
+			providerWideFailureCount: providerWideFailureCount,
 		}
 		// A SkipReason outcome without a force-replace carries no parsed data,
 		// so it stays a lease-free skip; a force-replace is parse-bearing.
@@ -9247,18 +9252,19 @@ func (e *Engine) processProviderFile(
 		file, parsedResults, providerSemantics.UnchangedResults,
 	)
 	res := processResult{
-		results:               filteredResults,
-		excludedSessionIDs:    excludedSessionIDs,
-		sourceMissingMembers:  missingMembers,
-		mtime:                 fingerprint.MTimeNS,
-		cacheSkip:             cacheSkip,
-		cacheKey:              cacheKey,
-		noCacheSkip:           !cleanCache,
-		forceReplace:          outcome.ForceReplace || incForceReplace,
-		suppressPresenceSweep: !outcome.ResultSetComplete,
-		providerFailureCount:  providerFailureCount,
-		retentionLease:        lease,
-		providerStatHash:      preParseStatHash,
+		results:                  filteredResults,
+		excludedSessionIDs:       excludedSessionIDs,
+		sourceMissingMembers:     missingMembers,
+		mtime:                    fingerprint.MTimeNS,
+		cacheSkip:                cacheSkip,
+		cacheKey:                 cacheKey,
+		noCacheSkip:              !cleanCache,
+		forceReplace:             outcome.ForceReplace || incForceReplace,
+		suppressPresenceSweep:    !outcome.ResultSetComplete,
+		providerFailureCount:     providerFailureCount,
+		providerWideFailureCount: providerWideFailureCount,
+		retentionLease:           lease,
+		providerStatHash:         preParseStatHash,
 	}
 	if file.Agent == parser.AgentOmnigent && cacheSkip && cleanCache &&
 		!e.forceParse && !file.ForceParse &&
@@ -16051,12 +16057,13 @@ func (e *Engine) processAndWriteSessionFile(
 		}
 	}
 	for i, pr := range res.results {
+		sessionNeedsRetry := res.providerWideFailureCount > 0 ||
+			res.needsRetryForSession(pr.Session.ID)
 		write := pendingWrite{
-			sess:        pr.Session,
-			msgs:        pr.Messages,
-			usageEvents: pr.UsageEvents,
-			needsRetry: sourceNeedsRetry || claudeDAG ||
-				res.needsRetryForSession(pr.Session.ID),
+			sess:         pr.Session,
+			msgs:         pr.Messages,
+			usageEvents:  pr.UsageEvents,
+			needsRetry:   sessionNeedsRetry || claudeDAG,
 			forceReplace: res.forceReplace,
 		}
 		// The session upsert commits parser-derived parent provenance before

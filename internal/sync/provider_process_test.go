@@ -521,7 +521,6 @@ func TestProcessFileProviderAuthoritativeUsesInjectedProvider(t *testing.T) {
 }
 
 func TestProcessFileProviderAuthoritativeKeepsRetryStatePerResult(t *testing.T) {
-
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(t, root, "retry.jsonl")
 	provider := newProcessFixtureProvider(
@@ -565,6 +564,54 @@ func TestProcessFileProviderAuthoritativeKeepsRetryStatePerResult(t *testing.T) 
 	assert.False(t, res.needsRetryForSession("cowork:current"))
 	assert.True(t, res.needsRetryForSession("cowork:retry"))
 	assert.False(t, res.suppressesPresenceSweepForRetry())
+}
+
+func TestSyncSingleSessionKeepsRetryStatePerResult(t *testing.T) {
+	root := t.TempDir()
+	sourcePath, fingerprint := writeProcessProviderSource(t, root, "retry.jsonl")
+	provider := newProcessFixtureProvider(
+		processFixtureSource(sourcePath),
+		fingerprint,
+		parser.ParseOutcome{
+			Results: []parser.ParseResultOutcome{
+				{
+					Result: processFixtureResult(
+						"cowork:current",
+						parser.AgentCowork,
+						"fixture-project",
+						sourcePath,
+						fingerprint,
+					),
+					DataVersion: parser.DataVersionCurrent,
+				},
+				{
+					Result: processFixtureResult(
+						"cowork:retry",
+						parser.AgentCowork,
+						"fixture-project",
+						sourcePath,
+						fingerprint,
+					),
+					DataVersion: parser.DataVersionNeedsRetry,
+				},
+			},
+			ResultSetComplete: true,
+		},
+	)
+	engine := newProcessFixtureEngine(t, root, provider)
+
+	_, err := engine.processAndWriteSessionFile(
+		context.Background(),
+		parser.DiscoveredFile{Path: sourcePath, Agent: parser.AgentCowork},
+		"cowork:current",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, db.CurrentDataVersion(),
+		engine.db.GetSessionDataVersion("cowork:current"),
+		"a sibling retry must not leave the valid session stale")
+	assert.Less(t, engine.db.GetSessionDataVersion("cowork:retry"),
+		db.CurrentDataVersion(),
+		"the retrying session must remain stale")
 }
 
 func TestSyncSingleSessionPartialFullWritesQueueNewChild(t *testing.T) {

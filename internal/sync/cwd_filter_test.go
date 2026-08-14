@@ -148,6 +148,47 @@ func TestCollectAndBatchGatesParserExclusionsByCwdFilter(t *testing.T) {
 	})
 }
 
+func TestCollectAndBatchKeepsAllowedSourceSiblingCurrent(t *testing.T) {
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		Machine:            "local",
+		IncludeCwdPrefixes: []string{"/allowed"},
+	})
+	results := make(chan syncJob, 1)
+	results <- syncJob{
+		agent: parser.AgentCowork,
+		path:  "/src/shared.jsonl",
+		processResult: processResult{results: []parser.ParseResult{
+			{Session: parser.ParsedSession{
+				ID: "cowork:allowed", Agent: parser.AgentCowork,
+				Machine: "local", Project: "proj", Cwd: "/allowed/repo",
+				File: parser.FileInfo{Path: "/src/shared.jsonl"},
+			}},
+			{Session: parser.ParsedSession{
+				ID: "cowork:filtered", Agent: parser.AgentCowork,
+				Machine: "local", Project: "proj", Cwd: "/outside/repo",
+				File: parser.FileInfo{Path: "/src/shared.jsonl"},
+			}},
+		}},
+	}
+	close(results)
+
+	stats := engine.collectAndBatch(
+		context.Background(), results, 1, 1, nil, syncWriteDefault,
+	)
+
+	assert.Equal(t, 1, stats.Synced)
+	assert.Equal(t, 1, stats.cwdFilteredSessions)
+	allowed, err := database.GetSession(context.Background(), "cowork:allowed")
+	require.NoError(t, err)
+	require.NotNil(t, allowed)
+	assert.Equal(t, db.CurrentDataVersion(), allowed.DataVersion,
+		"a sibling's cwd veto must not leave the allowed session stale")
+	filtered, err := database.GetSession(context.Background(), "cowork:filtered")
+	require.NoError(t, err)
+	assert.Nil(t, filtered)
+}
+
 func TestShouldAbortResyncSwap(t *testing.T) {
 	tests := []struct {
 		name            string
