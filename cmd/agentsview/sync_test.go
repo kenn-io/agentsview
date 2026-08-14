@@ -623,6 +623,7 @@ func TestDoSyncConfiguredFullUnifiedHTTPUsesManifestDeltaAndOrderedProgress(
 	}}
 	var archiveRequests atomic.Int32
 	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		remotesync.SetProtocolHeader(w.Header())
 		switch r.URL.Path {
 		case "/api/v1/remote-sync/targets":
 			w.Header().Set("Content-Type", "application/json")
@@ -2232,6 +2233,7 @@ func TestRemoteFailureDisplaySanitizesHTTPErrors(t *testing.T) {
 func TestRunHTTPRemoteSyncReachesMirrorPath(t *testing.T) {
 	manifestRequests := 0
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		remotesync.SetProtocolHeader(w.Header())
 		switch r.URL.Path {
 		case "/api/v1/remote-sync/targets":
 			w.Header().Set("Content-Type", "application/json")
