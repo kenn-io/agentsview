@@ -6,13 +6,11 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"strconv"
 	"time"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/server"
-	"go.kenn.io/kit/daemon"
 )
 
 type serveRuntimeOptions struct {
@@ -37,7 +35,10 @@ func prepareServeRuntimeConfig(
 		requestedPort = cfg.Port
 	}
 
-	port := server.FindAvailablePort(cfg.Host, cfg.Port)
+	port, err := server.FindAvailablePort(cfg.Host, cfg.Port)
+	if err != nil {
+		return cfg, err
+	}
 	if port != cfg.Port {
 		if cfg.Port == 0 {
 			fmt.Printf("Using available port %d\n", port)
@@ -78,7 +79,7 @@ func startServerWithOptionalCaddy(
 	}()
 
 	if err := waitForBackendReady(
-		ctx, cfg, srv.DaemonPingPath(), 5*time.Second, serveErrCh,
+		ctx, cfg, srv, 5*time.Second, serveErrCh,
 	); err != nil {
 		shutdownCtx, cancel := context.WithTimeout(
 			context.Background(), 5*time.Second,
@@ -143,27 +144,35 @@ func startServerWithOptionalCaddy(
 	}, nil
 }
 
-// waitForBackendReady waits until the started HTTP server answers the daemon
-// ping contract as this process. A bare TCP dial is not enough: on a split
-// IPv4/IPv6 port collision an unrelated process can accept the probe
-// connection while this server listens on the other family, and another
-// AgentsView daemon would answer the ping contract with a different PID.
+// waitForBackendReady waits until the started HTTP server proves that the
+// readiness request reached this Server instance. The proof uses a temporary
+// server-held secret, so a colliding listener never receives the persistent
+// bearer token.
 func waitForBackendReady(
 	ctx context.Context,
 	cfg config.Config,
-	pingPath string,
+	srv *server.Server,
 	timeout time.Duration,
 	errCh <-chan error,
 ) error {
+	if err := srv.EnableStartupProbe(); err != nil {
+		return err
+	}
+	defer srv.DisableStartupProbe()
+
 	deadline := time.Now().Add(timeout)
 	address := net.JoinHostPort(
 		probeHostForDial(cfg.Host), strconv.Itoa(cfg.Port),
 	)
-	rec := daemon.RuntimeRecord{
-		PID:     os.Getpid(),
-		Network: daemon.NetworkTCP,
-		Address: address,
-		Service: daemonService,
+	probeURL := "http://" + address + srv.StartupProbePath()
+	transport := &http.Transport{}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   200 * time.Millisecond,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
 	var lastErr error
 	for time.Now().Before(deadline) {
@@ -186,21 +195,28 @@ func waitForBackendReady(
 			return err
 		default:
 		}
-		info, err := probeRuntime(
-			ctx, rec, cfg.AuthToken, daemon.ProbeOptions{
-				Path:            pingPath,
-				ExpectedService: daemonService,
-				Timeout:         200 * time.Millisecond,
-			},
-		)
-		if err == nil && info.PID == os.Getpid() {
-			return nil
+		challenge, expectedProof, err := srv.StartupProbeChallenge()
+		if err != nil {
+			return err
 		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+		if err != nil {
+			return fmt.Errorf("create startup probe request: %w", err)
+		}
+		server.SetStartupProbeChallenge(req, challenge)
+		resp, err := client.Do(req)
 		if err == nil {
-			err = fmt.Errorf(
-				"daemon ping on %s answered from pid %d, want %d",
-				address, info.PID, os.Getpid(),
-			)
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusNoContent {
+				err = fmt.Errorf(
+					"startup probe on %s returned status %d",
+					address, resp.StatusCode,
+				)
+			} else if !server.ValidStartupProbeResponse(resp, expectedProof) {
+				err = fmt.Errorf("startup probe on %s returned an invalid proof", address)
+			} else {
+				return nil
+			}
 		}
 		lastErr = err
 		timer := time.NewTimer(50 * time.Millisecond)

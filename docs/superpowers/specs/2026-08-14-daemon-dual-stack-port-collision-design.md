@@ -19,22 +19,26 @@ and a family that cannot bind at all (an IPv6-disabled host, for example) is
 excluded from the check rather than treated as occupied, so IPv4-only hosts
 keep their current behavior. The existing next-port fallback remains the
 user-visible behavior: a collision on port 8080 selects port 8081 and emits the
-existing fallback message.
+existing fallback message. Ephemeral wildcard selection validates the assigned
+port against both supported address families and retries a cross-family
+collision. Startup returns an error instead of reusing the occupied requested
+port when the 100-port candidate range is exhausted.
 
-Backend readiness will verify an AgentsView HTTP endpoint instead of accepting
-any successful TCP connection. The probe will use the configured authentication
-token, use the server's mounted ping path for base-path deployments, and require
-the daemon ping contract, including a process ID match against the serving
-process. Neither an unrelated HTTP server nor another AgentsView daemon can
-therefore make startup publish a runtime record. Managed Caddy readiness remains
-a generic TCP check because Caddy does not implement the AgentsView daemon
-protocol.
+Backend readiness will verify an AgentsView startup endpoint instead of
+accepting any successful TCP connection. The server creates a temporary random
+key, and the readiness client sends a fresh challenge to the endpoint mounted
+under the configured base path. The server returns a keyed proof of the
+challenge. A colliding listener can see the challenge but cannot forge the
+proof, redirect the probe to another listener, or receive the persistent bearer
+token. The temporary key is cleared as soon as readiness finishes. Managed
+Caddy readiness remains a generic TCP check because Caddy does not implement
+the AgentsView startup proof.
 
 This is a focused fix rather than an atomic listener-handoff refactor. A process
 can still claim a selected port between the availability check and the server
-bind, but the server then fails startup or the identity-aware readiness check
-rejects the wrong listener. It cannot publish a healthy runtime for another
-process.
+bind, but the server then fails startup or the keyed readiness check rejects
+the wrong listener. It cannot publish a healthy runtime for another process or
+disclose the reusable authentication token.
 
 ## Compatibility
 
@@ -50,6 +54,11 @@ needed.
 - When IPv6 is available, occupy a port on IPv6 and verify wildcard port
   selection skips it.
 - Verify backend readiness rejects an unrelated HTTP listener.
-- Verify backend readiness rejects a daemon ping answered by another process.
-- Verify backend readiness accepts an authenticated AgentsView daemon endpoint.
+- Verify an unrelated listener does not receive the configured bearer token.
+- Verify backend readiness rejects a counterfeit startup proof.
+- Verify backend readiness rejects a redirect to the serving server.
+- Verify backend readiness accepts the proof from the serving server instance
+  and disables the temporary endpoint afterward.
 - Verify a server mounted below a base path satisfies backend readiness.
+- Verify wildcard ephemeral selection retries a cross-family collision.
+- Verify an exhausted requested-port search returns an error.

@@ -277,7 +277,8 @@ func TestRunPGRuntimeWarningHelperProcess(t *testing.T) {
 		t, filepath.Join(os.Getenv("AGENTSVIEW_DATA_DIR"), "pg.db"),
 	)
 	ctx, cancel := context.WithCancel(context.Background())
-	port := server.FindAvailablePort("127.0.0.1", 0)
+	port, err := server.FindAvailablePort("127.0.0.1", 0)
+	require.NoError(t, err)
 	appCfg := config.Config{
 		Host:    "127.0.0.1",
 		Port:    port,
