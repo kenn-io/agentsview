@@ -449,7 +449,7 @@ func TestMacroCodexStagedParseMemoryGates(t *testing.T) {
 
 			peak := pollPeakLiveHeap()
 			start := time.Now()
-			staged, err := newCodexStagingSink(nil)
+			staged, err := newCodexStagingSink("", nil)
 			require.NoError(t, err)
 			sess, msgs, _, _, _, _, err := parser.ParseCodexSessionStreaming(
 				cfg, source, staged,
@@ -618,7 +618,7 @@ func TestMacroCodexStaged64MBLine(t *testing.T) {
 	require.True(t, found)
 
 	peak := pollPeakLiveHeap()
-	staged, err := newCodexStagingSink(nil)
+	staged, err := newCodexStagingSink("", nil)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, staged.Close()) }()
 	sess, msgs, _, _, _, _, err := parser.ParseCodexSessionStreaming(
@@ -678,6 +678,124 @@ func TestMacroCodexStaged64MBLine(t *testing.T) {
 		peakLive/(1<<20), peakProcessRSSBytes()/(1<<20))
 	require.Less(t, peakLive, uint64(512<<20),
 		"single near-limit line must stay bounded")
+}
+
+// TestMacroCodexEngineTwoLargeStagedSources syncs two >threshold Codex
+// transcripts in one pass and asserts both staged publishes land on the
+// same archive (the consecutive-ATTACH path the single-connection writer
+// pool exercises).
+func TestMacroCodexEngineTwoLargeStagedSources(t *testing.T) {
+	const turns = 700
+	const outBytes = 200 << 10 // 140MB each, above the 128MB cutoff
+	rootA, _, uuidA, _ := writeCodexStreamingBenchmarkTranscriptUUID(
+		t, turns, outBytes, codexSignalBenchmarkUUID,
+	)
+	rootB, _, uuidB, _ := writeCodexStreamingBenchmarkTranscriptUUID(
+		t, turns, outBytes, codexSignalBenchmarkUUID+"-b",
+	)
+
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {rootA, rootB},
+		},
+		Machine: "macro-host",
+	})
+	t.Cleanup(engine.Close)
+
+	stats := engine.SyncAll(t.Context(), nil)
+	require.Zero(t, stats.Failed)
+	require.Equal(t, 2, stats.Synced)
+
+	for _, uuid := range []string{uuidA, uuidB} {
+		sessionID := "codex:" + uuid
+		msgs, err := database.GetAllMessages(t.Context(), sessionID)
+		require.NoError(t, err)
+		var eventCount int
+		for _, m := range msgs {
+			for _, tc := range m.ToolCalls {
+				eventCount += len(tc.ResultEvents)
+				for _, ev := range tc.ResultEvents {
+					require.NotContains(t, ev.Content, "staged:",
+						"second publish wrote a staging placeholder")
+				}
+			}
+		}
+		require.Equal(t, turns, eventCount)
+	}
+}
+
+// TestMacroCodexRealArchiveResyncColdSync is the ResyncAll acceptance leg
+// for the real archive: the bulk rebuild path must publish real tool
+// outputs through the staged transaction with the same RSS bound as the
+// plain cold sync. Uses its own process-level copy and gate.
+func TestMacroCodexRealArchiveResyncColdSync(t *testing.T) {
+	src := os.Getenv("MACRO_CODEX_945MB")
+	if src == "" {
+		t.Skip("set MACRO_CODEX_945MB to a large real Codex transcript")
+	}
+	info, err := os.Stat(src)
+	require.NoError(t, err)
+	require.Greater(t, info.Size(), int64(500<<20))
+
+	srcDir := filepath.Dir(src)
+	rel := filepath.Join(
+		filepath.Base(filepath.Dir(filepath.Dir(srcDir))),
+		filepath.Base(filepath.Dir(srcDir)),
+		filepath.Base(srcDir),
+		filepath.Base(src),
+	)
+	root := filepath.Join(t.TempDir(), "sessions")
+	dst := filepath.Join(root, rel)
+	require.NoError(t, os.MkdirAll(filepath.Dir(dst), 0o755))
+	in, err := os.Open(src)
+	require.NoError(t, err)
+	out, err := os.Create(dst)
+	require.NoError(t, err)
+	_, err = io.Copy(out, in)
+	require.NoError(t, err)
+	require.NoError(t, in.Close())
+	require.NoError(t, out.Close())
+
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {root},
+		},
+		Machine: "macro-host",
+	})
+	t.Cleanup(engine.Close)
+
+	start := time.Now()
+	peak := pollPeakLiveHeap()
+	stats := engine.ResyncAll(t.Context(), nil)
+	peakLive := peak()
+	require.False(t, stats.Aborted, "resync aborted: %v", stats.Warnings)
+	require.Zero(t, stats.Failed)
+	require.Equal(t, 1, stats.Synced)
+	t.Logf("REAL945 resync dur=%s peak_live=%dMiB rss=%dMiB",
+		time.Since(start), peakLive/(1<<20),
+		peakProcessRSSBytes()/(1<<20))
+	require.Less(t, peakLive, uint64(512<<20),
+		"945MB resync peak live heap must stay under 512MiB")
+	require.Less(t, peakProcessRSSBytes(), uint64(512<<20),
+		"945MB resync RSS must stay under 512MiB")
+
+	// The bulk rebuild must have published real content, never staged
+	// placeholders.
+	msgs, err := database.GetAllMessages(
+		t.Context(), "codex:"+filepath.Base(src),
+	)
+	if err == nil && len(msgs) > 0 {
+		for _, m := range msgs {
+			for _, tc := range m.ToolCalls {
+				for _, ev := range tc.ResultEvents {
+					require.NotContains(t, ev.Content, "staged:",
+						"bulk resync wrote a staging placeholder")
+				}
+			}
+		}
+	}
 }
 
 // TestMacroCodexRealArchiveColdSync is the acceptance run for the staged

@@ -122,15 +122,11 @@ func TestCodexCheckpointBootstrapForUpgradedArchive(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.True(t, found)
-	fingerprint, err := provider.Fingerprint(context.Background(), source)
+	collecting := parser.NewCodexCollectingSink(0)
+	_, msgs, _, _, _, _, err := parser.ParseCodexSessionStreaming(
+		cfg, source, collecting,
+	)
 	require.NoError(t, err)
-	outcome, err := provider.Parse(context.Background(), parser.ParseRequest{
-		Source:      source,
-		Fingerprint: fingerprint,
-	})
-	require.NoError(t, err)
-	require.Len(t, outcome.Results, 1)
-	msgs := outcome.Results[0].Result.Messages
 	var wantEvents int
 	for _, m := range msgs {
 		for _, tc := range m.ToolCalls {
