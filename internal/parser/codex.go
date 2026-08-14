@@ -2430,17 +2430,6 @@ func (p *codexProvider) parseSessionFromWithSources(
 				fallbackErr = errCodexIncrementalNeedsFullParse
 				return
 			}
-			if lineType == codexTypeResponseItem {
-				payload := gjson.Get(line, "payload")
-				switch payload.Get("type").Str {
-				case "function_call_output",
-					"custom_tool_call_output":
-					if b.incrementalOutputNeedsFullParse(payload) {
-						fallbackErr = errCodexIncrementalNeedsFullParse
-						return
-					}
-				}
-			}
 			b.processLine(line)
 			if b.unattachedTokenUsage {
 				fallbackErr = errCodexIncrementalNeedsFullParse
@@ -2650,33 +2639,4 @@ func (b *codexSessionBuilder) codexIncrementalNeedsFullParse(
 		)
 		return agentID != "" && text != ""
 	}
-}
-
-// incrementalOutputNeedsFullParse reports whether an appended
-// function_call_output / custom_tool_call_output line cannot be
-// represented by an append-only incremental write. Subagent outputs
-// repair lineage on rows outside the append, and an output whose call
-// is not part of this appended chunk or of the persisted cursor's
-// pending calls belongs to an already-stored tool call; both need a
-// replacing full parse. An output paired with its call in the same chunk
-// attaches in memory exactly as a full parse would, so it stays on the
-// incremental path.
-func (b *codexSessionBuilder) incrementalOutputNeedsFullParse(
-	payload gjson.Result,
-) bool {
-	output, raw := parseCodexFunctionOutput(payload)
-	if isCodexSubagentFunctionOutput(output) {
-		return true
-	}
-	if strings.TrimSpace(raw) == "" {
-		return false
-	}
-	callID := payload.Get("call_id").Str
-	if callID == "" {
-		// A full parse drops outputs without a call id too.
-		return false
-	}
-	name := b.toolCallNameForOutput(callID)
-	return name == "" || name == "spawn_agent" ||
-		isCodexWaitAgentCall(name)
 }

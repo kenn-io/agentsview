@@ -12,7 +12,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tidwall/gjson"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
@@ -631,12 +630,15 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		assert.False(t, msgs[0].HasToolUse)
 	})
 
-	t.Run("custom_tool_call_output for a stored call requests full parse", func(t *testing.T) {
+	t.Run("custom_tool_call_output for a seeded call stays incremental", func(t *testing.T) {
+		// The late-output path merges outputs for calls recorded in the
+		// persisted prefix through toolCallUpdates, so the incremental
+		// gate must not request a full parse for them (P2 contract).
 		line := `{"timestamp":"2026-07-08T03:20:43.376Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_abc","output":"Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess."}}`
 
 		b := newCodexSessionBuilder(false, nil)
-		assert.True(t,
-			b.incrementalOutputNeedsFullParse(gjson.Get(line, "payload")))
+		b.rememberToolCall("call_abc", "exec_command")
+		assert.False(t, b.codexIncrementalNeedsFullParse(line))
 	})
 
 	t.Run("write_stdin formats with session and chars", func(t *testing.T) {
