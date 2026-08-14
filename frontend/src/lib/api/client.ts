@@ -582,6 +582,63 @@ async function readImportSSE(
   return result;
 }
 
+export interface ClaudeSyncStatus {
+  id: string;
+  status: "idle" | "running" | "cancelling" | "cancelled" | "completed" | "failed";
+  mode: "incremental" | "repair";
+  scanned: number;
+  changed: number;
+  fetched: number;
+  imported: number;
+  updated: number;
+  skipped: number;
+  failed: number;
+  error?: string;
+}
+
+export async function startClaudeAISync(mode: "incremental" | "repair"): Promise<ClaudeSyncStatus> {
+  const res = await fetch(`${getBase()}/cloud/claude-ai/sync`, authHeaders({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode }),
+  }));
+  if (!res.ok) throw new Error(`Claude sync could not start (${res.status})`);
+  return res.json();
+}
+
+export async function getClaudeAISyncStatus(): Promise<ClaudeSyncStatus> {
+  const res = await fetch(`${getBase()}/cloud/claude-ai/status`, authHeaders());
+  if (!res.ok) throw new Error(`Claude sync status failed (${res.status})`);
+  return res.json();
+}
+
+export async function cancelClaudeAISync(): Promise<ClaudeSyncStatus> {
+  const res = await fetch(`${getBase()}/cloud/claude-ai/cancel`, authHeaders({ method: "POST" }));
+  if (!res.ok) throw new Error(`Claude sync cancellation failed (${res.status})`);
+  return res.json();
+}
+
+export interface ClaudeScheduleConfig {
+  enabled: boolean;
+  interval_minutes: number;
+}
+
+export async function getClaudeAISchedule(): Promise<ClaudeScheduleConfig> {
+  const res = await fetch(`${getBase()}/cloud/claude-ai/schedule`, authHeaders());
+  if (!res.ok) throw new Error(`Claude schedule lookup failed (${res.status})`);
+  return res.json();
+}
+
+export async function configureClaudeAISchedule(config: ClaudeScheduleConfig): Promise<ClaudeScheduleConfig> {
+  const res = await fetch(`${getBase()}/cloud/claude-ai/schedule`, authHeaders({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+  }));
+  if (!res.ok) throw new Error(`Claude schedule update failed (${res.status})`);
+  return res.json();
+}
+
 export async function importClaudeAI(
   file: File,
   cb?: ImportCallbacks,

@@ -2995,6 +2995,22 @@ func TestDeleteSessions(t *testing.T) {
 	assert.Equal(t, 0, deleted, "deleted empty")
 }
 
+func TestRestoreExcludedSessions(t *testing.T) {
+	d := testDB(t)
+	for _, id := range []string{"claude-ai:one", "claude-ai:two", "other:one"} {
+		insertSession(t, d, id, "p")
+	}
+	_, err := d.DeleteSessions([]string{"claude-ai:one", "claude-ai:two", "other:one"})
+	require.NoError(t, err)
+
+	restored, err := d.RestoreExcludedSessions([]string{"claude-ai:one", "claude-ai:two", "missing"})
+	require.NoError(t, err)
+	assert.Equal(t, 2, restored)
+	assert.False(t, d.IsSessionExcluded("claude-ai:one"))
+	assert.False(t, d.IsSessionExcluded("claude-ai:two"))
+	assert.True(t, d.IsSessionExcluded("other:one"))
+}
+
 func TestDeleteSessionNonExistentNoGhostExclusion(t *testing.T) {
 	d := testDB(t)
 

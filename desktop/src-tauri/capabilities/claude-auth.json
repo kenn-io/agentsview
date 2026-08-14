@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "claude-auth",
+  "description": "Claude authentication webview may return an authenticated fetch result only.",
+  "remote": {
+    "urls": [
+      "https://claude.ai/*",
+      "https://*.claude.ai/*"
+    ]
+  },
+  "windows": ["claude-auth"],
+  "permissions": [
+    "allow-claude-auth-fetch-result"
+  ]
+}
