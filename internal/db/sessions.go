@@ -2758,19 +2758,22 @@ func (db *DB) GetFileInfoByPath(
 }
 
 // GetFileInfoByAgentPath is GetFileInfoByPath scoped to the agent that owns
-// the source path.
+// the source path. Agent-scoped freshness queries force the path index because
+// SQLite otherwise prefers idx_sessions_agent and scans every session for the
+// agent once per discovered source, making archive reconciliation quadratic.
+const getFileInfoByAgentPathQuery = "SELECT file_size, file_mtime FROM sessions" +
+	" INDEXED BY idx_sessions_file_path" +
+	" WHERE file_path = ? AND agent = ?" +
+	" AND (deletion_cause IS NULL" +
+	" OR deletion_cause <> '" + deletionCauseSourceMissing + "')" +
+	" ORDER BY file_mtime DESC LIMIT 1"
+
 func (db *DB) GetFileInfoByAgentPath(
 	path, agent string,
 ) (size int64, mtime int64, ok bool) {
 	var s, m sql.NullInt64
-	err := db.getReader().QueryRow(
-		"SELECT file_size, file_mtime FROM sessions"+
-			" WHERE file_path = ? AND agent = ?"+
-			" AND (deletion_cause IS NULL"+
-			" OR deletion_cause <> '"+deletionCauseSourceMissing+"')"+
-			" ORDER BY file_mtime DESC LIMIT 1",
-		path, agent,
-	).Scan(&s, &m)
+	err := db.getReader().QueryRow(getFileInfoByAgentPathQuery, path, agent).
+		Scan(&s, &m)
 	if err != nil {
 		return 0, 0, false
 	}
@@ -3027,18 +3030,19 @@ func (db *DB) GetFileHashByPath(path string) (hash string, ok bool) {
 
 // GetFileHashByAgentPath is GetFileHashByPath scoped to the agent that owns
 // the source path.
+const getFileHashByAgentPathQuery = "SELECT file_hash FROM sessions" +
+	" INDEXED BY idx_sessions_file_path" +
+	" WHERE file_path = ? AND agent = ?" +
+	" AND (deletion_cause IS NULL" +
+	" OR deletion_cause <> '" + deletionCauseSourceMissing + "')" +
+	" ORDER BY file_mtime DESC LIMIT 1"
+
 func (db *DB) GetFileHashByAgentPath(
 	path, agent string,
 ) (hash string, ok bool) {
 	var h sql.NullString
-	err := db.getReader().QueryRow(
-		"SELECT file_hash FROM sessions"+
-			" WHERE file_path = ? AND agent = ?"+
-			" AND (deletion_cause IS NULL"+
-			" OR deletion_cause <> '"+deletionCauseSourceMissing+"')"+
-			" ORDER BY file_mtime DESC LIMIT 1",
-		path, agent,
-	).Scan(&h)
+	err := db.getReader().QueryRow(getFileHashByAgentPathQuery, path, agent).
+		Scan(&h)
 	if err != nil {
 		return "", false
 	}
@@ -4015,15 +4019,16 @@ func (db *DB) GetDataVersionByPath(path string) int {
 
 // GetDataVersionByAgentPath is GetDataVersionByPath scoped to the agent that
 // owns the source path.
+const getDataVersionByAgentPathQuery = "SELECT MIN(data_version) FROM sessions" +
+	" INDEXED BY idx_sessions_file_path" +
+	" WHERE file_path = ? AND agent = ?" +
+	" AND (deletion_cause IS NULL" +
+	" OR deletion_cause <> '" + deletionCauseSourceMissing + "')"
+
 func (db *DB) GetDataVersionByAgentPath(path, agent string) int {
 	var v int
-	err := db.getReader().QueryRow(
-		"SELECT MIN(data_version) FROM sessions"+
-			" WHERE file_path = ? AND agent = ?"+
-			" AND (deletion_cause IS NULL"+
-			" OR deletion_cause <> '"+deletionCauseSourceMissing+"')",
-		path, agent,
-	).Scan(&v)
+	err := db.getReader().QueryRow(getDataVersionByAgentPathQuery, path, agent).
+		Scan(&v)
 	if err != nil {
 		return 0
 	}
