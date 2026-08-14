@@ -10733,9 +10733,10 @@ func providerFreshnessAgents(agent parser.AgentType) []parser.AgentType {
 	return []parser.AgentType{agent}
 }
 
-// providerFreshDigestSourceCurrentInDB reports whether the stored session
-// row for a digest-matched source is still current: the row exists, its
-// data version is current, and it does not need a project reparse. A
+// providerFreshDigestSourceCurrentInDB reports whether the active stored
+// sessions for a digest-matched source are still current. User-trashed rows
+// are resolved until restoration invalidates the digest and marks the row
+// stale, so they do not participate in the repair check. A
 // matching provider_freshness digest proves only that the file stat is
 // unchanged; these checks are what allow the digest short-circuit to skip
 // safely, mirroring the tail guards of providerSourceUnchangedInDB. Every
@@ -10754,14 +10755,17 @@ func (e *Engine) providerFreshDigestSourceCurrentInDB(
 			continue
 		}
 		rowFound = true
-		if project, ok := e.db.GetProjectByAgentPath(
-			lookupPath, string(owned),
-		); ok && parser.NeedsProjectReparse(project) {
+		project, dataVersion, _, _, active :=
+			e.db.GetSourceRepairStateByAgentPath(
+				lookupPath, string(owned),
+			)
+		if !active {
+			continue
+		}
+		if parser.NeedsProjectReparse(project) {
 			return false
 		}
-		if e.db.GetDataVersionByAgentPath(
-			lookupPath, string(owned),
-		) < db.CurrentDataVersion() {
+		if dataVersion < db.CurrentDataVersion() {
 			return false
 		}
 	}

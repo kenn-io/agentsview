@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +16,46 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
+
+type digestFingerprintCountingProvider struct {
+	parser.Provider
+	calls atomic.Int64
+}
+
+func (p *digestFingerprintCountingProvider) Fingerprint(
+	ctx context.Context, source parser.SourceRef,
+) (parser.SourceFingerprint, error) {
+	p.calls.Add(1)
+	return p.Provider.Fingerprint(ctx, source)
+}
+
+func (p *digestFingerprintCountingProvider) ComputeMultiFileStatHash(
+	path string,
+) uint64 {
+	hasher, ok := p.Provider.(parser.MultiFileStatHasher)
+	if !ok {
+		return 0
+	}
+	return hasher.ComputeMultiFileStatHash(path)
+}
+
+type digestFingerprintCountingFactory struct {
+	provider *digestFingerprintCountingProvider
+}
+
+func (f digestFingerprintCountingFactory) Definition() parser.AgentDef {
+	return f.provider.Definition()
+}
+
+func (f digestFingerprintCountingFactory) Capabilities() parser.Capabilities {
+	return f.provider.Capabilities()
+}
+
+func (f digestFingerprintCountingFactory) NewProvider(
+	parser.ProviderConfig,
+) parser.Provider {
+	return f.provider
+}
 
 // TestSyncClaudeForkWriteFailureRetriesWholeSource proves that freshness is a
 // source-level outcome for Claude DAG transcripts. One committed branch cannot
@@ -137,6 +178,90 @@ func TestSyncClaudeForkWriteFailureRetriesWholeSource(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, hasDigest,
 		"the digest may persist after every branch commits")
+}
+
+func TestRestartedDigestGateIgnoresStaleTrashedClaudeMembers(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		trashMainToo bool
+	}{
+		{name: "active main with trashed fork"},
+		{name: "all members trashed", trashMainToo: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database := openTestDB(t)
+			root := t.TempDir()
+			projectDir := filepath.Join(root, "project-a")
+			require.NoError(t, os.MkdirAll(projectDir, 0o755))
+			path := filepath.Join(projectDir, "forked.jsonl")
+			require.NoError(t, os.WriteFile(
+				path, []byte(newClaudeDAGBuilder(true).String()), 0o644,
+			))
+
+			initial := NewEngine(database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					parser.AgentClaude: {root},
+				},
+				Machine: "local",
+			})
+			require.Equal(t, 2, initial.SyncAll(t.Context(), nil).Synced)
+			initial.Close()
+			_, hasDigest, err := database.GetProviderStatHash(
+				t.Context(), parser.AgentClaude, path,
+			)
+			require.NoError(t, err)
+			require.True(t, hasDigest)
+
+			require.NoError(t, database.SoftDeleteSession("forked-i"))
+			require.NoError(t, database.SetSessionDataVersion(
+				"forked-i", db.CurrentDataVersion()-1,
+			))
+			if tc.trashMainToo {
+				require.NoError(t, database.SoftDeleteSession("forked"))
+				require.NoError(t, database.SetSessionDataVersion(
+					"forked", db.CurrentDataVersion()-1,
+				))
+			}
+
+			innerFactory, ok := parser.ProviderFactoryByType(parser.AgentClaude)
+			require.True(t, ok)
+			inner := innerFactory.NewProvider(parser.ProviderConfig{
+				Roots: []string{root}, Machine: "local",
+			})
+			require.NotNil(t, inner)
+			counting := &digestFingerprintCountingProvider{Provider: inner}
+			restarted := NewEngine(database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					parser.AgentClaude: {root},
+				},
+				Machine: "local",
+				ProviderFactories: []parser.ProviderFactory{
+					digestFingerprintCountingFactory{provider: counting},
+				},
+			})
+			t.Cleanup(restarted.Close)
+			var contentHashCalls atomic.Int64
+			originalComputeFileHashPrefix := computeFileHashPrefix
+			computeFileHashPrefix = func(
+				path string, size int64,
+			) (string, error) {
+				contentHashCalls.Add(1)
+				return originalComputeFileHashPrefix(path, size)
+			}
+			t.Cleanup(func() {
+				computeFileHashPrefix = originalComputeFileHashPrefix
+			})
+
+			stats := restarted.SyncAll(t.Context(), nil)
+
+			assert.Zero(t, stats.Synced)
+			assert.Zero(t, stats.Failed)
+			assert.Zero(t, counting.calls.Load(),
+				"stale trashed members must not defeat the persisted digest")
+			assert.Zero(t, contentHashCalls.Load(),
+				"stale trashed members must not force a transcript hash")
+		})
+	}
 }
 
 func TestSyncClaudeDAGIntentionalSkipCompletesActiveMembers(t *testing.T) {
