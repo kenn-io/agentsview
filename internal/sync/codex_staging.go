@@ -106,10 +106,11 @@ func checkCodexStagingSpace(dir string) error {
 	if dir == "" {
 		dir = os.TempDir()
 	}
-	available, err := codexStagingAvailableBytes(dir)
-	if err != nil {
-		// Filesystems without statfs support (or an unreadable scratch
-		// dir) fail open here; the CreateTemp below reports real errors.
+	available, ok, err := stagingDirFreeBytes(dir)
+	if err != nil || !ok {
+		// Filesystems without a capacity query (or an unreadable
+		// scratch dir) fail open here; the CreateTemp below reports
+		// real errors.
 		return nil
 	}
 	const stagedScratchMinFree = 256 << 20
