@@ -4727,9 +4727,10 @@ func (db *DB) SoftDeleteSessions(ids []string) (int, error) {
 	return total, nil
 }
 
-// RestoreSession clears deleted_at, making the session visible again.
-// Returns the number of rows affected (0 if session doesn't exist
-// or is not in trash).
+// RestoreSession clears deleted_at, makes the session visible again, and
+// invalidates source freshness so changes made while it was trashed are parsed.
+// Returns the number of rows affected (0 if session doesn't exist or is not in
+// trash).
 func (db *DB) RestoreSession(id string) (int64, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -4742,10 +4743,11 @@ func (db *DB) RestoreSession(id string) (int64, error) {
 		`UPDATE sessions
 		 SET deleted_at = NULL,
 		     deletion_cause = NULL,
+		     data_version = ?,
 		     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		 WHERE id = ? AND deleted_at IS NOT NULL
 		   AND deletion_cause IS NULL`,
-		id,
+		max(CurrentDataVersion()-1, 0), id,
 	)
 	if err != nil {
 		return 0, err
@@ -4757,6 +4759,19 @@ func (db *DB) RestoreSession(id string) (int64, error) {
 	if n > 0 {
 		if _, err := tx.Exec(
 			"DELETE FROM local_session_source_baselines WHERE session_id = ?", id,
+		); err != nil {
+			return 0, err
+		}
+		// The source may have changed while this member was in trash. Force the
+		// next sync to reparse it instead of trusting a digest persisted while
+		// the member was intentionally skipped. Delete by path because a path can
+		// have provider aliases in the freshness table.
+		if _, err := tx.Exec(
+			`DELETE FROM provider_freshness
+			 WHERE file_path = (
+				SELECT file_path FROM sessions WHERE id = ?
+			 )`,
+			id,
 		); err != nil {
 			return 0, err
 		}

@@ -993,6 +993,27 @@ func (e *Engine) clearProviderSourceFreshness(
 	}
 }
 
+// partitionIntentionalSourceSkips separates active source members from rows
+// that user policy permanently excludes or keeps in trash. Those policy skips
+// already resolve the member for source freshness and must not make active
+// Claude DAG branches stale.
+func (e *Engine) partitionIntentionalSourceSkips(
+	ids []string,
+) (active []string, skipped map[string]bool) {
+	active = make([]string, 0, len(ids))
+	for _, id := range ids {
+		if e.db.IsSessionExcluded(id) || e.db.IsSessionTrashed(id) {
+			if skipped == nil {
+				skipped = make(map[string]bool)
+			}
+			skipped[id] = true
+			continue
+		}
+		active = append(active, id)
+	}
+	return active, skipped
+}
+
 // migrateLegacyCodexExecSkips removes skip cache entries
 // created by older agentsview builds that excluded Codex exec
 // sessions from bulk sync. The scrub runs once per database:
@@ -7822,11 +7843,13 @@ func (e *Engine) collectAndBatch(
 					failedSessions:  failedSessions,
 					cwdFiltered:     cwdFiltered,
 					written:         make([]bool, len(pending)),
+					resolved:        make([]bool, len(pending)),
 				}
 				if failedSessions == 0 && cwdFiltered == 0 &&
 					writtenSessions == len(pending) {
 					for i := range outcome.written {
 						outcome.written[i] = true
+						outcome.resolved[i] = true
 					}
 				}
 			} else {
@@ -7834,9 +7857,9 @@ func (e *Engine) collectAndBatch(
 			}
 			// Claude can emit several session rows from one DAG transcript.
 			// Those rows are initially written below the current data version,
-			// then promoted together only after every member succeeds. A crash,
-			// veto, or failed member therefore cannot make the primary row hide
-			// unfinished forks on the next pass.
+			// then promoted together only after every active member succeeds.
+			// User-excluded and trashed members are already resolved by policy;
+			// a crash, veto, or failed active member still leaves the source stale.
 			for i, pw := range pending {
 				if pw.sourceWriteCount == 0 {
 					continue
@@ -7845,13 +7868,23 @@ func (e *Engine) collectAndBatch(
 				sourceComplete := pw.sourceCompletionEligible &&
 					end <= len(pending) && end <= len(outcome.written)
 				for j := i; j < min(end, len(pending)); j++ {
-					if j >= len(outcome.written) || !outcome.written[j] {
+					memberResolved := pending[j].sourceCompletionSkipped
+					if j < len(outcome.written) && outcome.written[j] {
+						memberResolved = true
+					}
+					if j < len(outcome.resolved) && outcome.resolved[j] {
+						memberResolved = true
+					}
+					if !memberResolved {
 						sourceComplete = false
 					}
 				}
 				if sourceComplete && pw.promoteSourceOnComplete {
 					ids := make([]string, 0, pw.sourceWriteCount)
 					for j := i; j < end; j++ {
+						if !outcome.written[j] {
+							continue
+						}
 						ids = append(ids, applyIDPrefixToID(
 							e.idPrefix, pending[j].sess.ID,
 						))
@@ -8016,10 +8049,14 @@ func (e *Engine) collectAndBatch(
 			continue
 		}
 		claudeDAG := r.agent == parser.AgentClaude && len(r.results) > 1
+		var sourceCompletionSkipped map[string]bool
 		if claudeDAG {
+			activeResultIDs, skipped :=
+				e.partitionIntentionalSourceSkips(resultIDs)
+			sourceCompletionSkipped = skipped
 			staleVersion := max(db.CurrentDataVersion()-1, 0)
 			if err := e.db.SetExistingSessionDataVersions(
-				resultIDs, staleVersion,
+				activeResultIDs, staleVersion,
 			); err != nil {
 				e.clearProviderSourceFreshness(ctx, r.providerStatHash)
 				log.Printf("stage Claude source data versions: %v", err)
@@ -8186,15 +8223,16 @@ func (e *Engine) collectAndBatch(
 					r.needsRetryForSession(pr.Session.ID)
 				needsRetry := sessionNeedsRetry || claudeDAG
 				pw := pendingWrite{
-					sess:              pr.Session,
-					msgs:              pr.Messages,
-					usageEvents:       pr.UsageEvents,
-					needsRetry:        needsRetry,
-					forceReplace:      r.forceReplace,
-					baselineEligible:  !sessionNeedsRetry,
-					storageTrustPath:  r.storageTrustPath,
-					storageTrustState: r.storageTrustState,
-					storageTrustSnap:  r.storageTrustSnap,
+					sess:                    pr.Session,
+					msgs:                    pr.Messages,
+					usageEvents:             pr.UsageEvents,
+					needsRetry:              needsRetry,
+					forceReplace:            r.forceReplace,
+					baselineEligible:        !sessionNeedsRetry,
+					storageTrustPath:        r.storageTrustPath,
+					storageTrustState:       r.storageTrustState,
+					storageTrustSnap:        r.storageTrustSnap,
+					sourceCompletionSkipped: sourceCompletionSkipped[applyIDPrefixToID(e.idPrefix, pr.Session.ID)],
 				}
 				if i == 0 &&
 					(r.agent == parser.AgentClaude || r.providerStatHash != nil) {
@@ -8398,6 +8436,7 @@ type incrementalUpdate struct {
 	peakContextTokens    int // absolute max(old, new)
 	hasTotalOutputTokens bool
 	hasPeakContextTokens bool
+	providerStatHash     *pendingProviderStatHash
 }
 
 // sessionParseError is a per-session parse failure inside a shared
@@ -9005,6 +9044,10 @@ func (e *Engine) processProviderFile(
 		incRes.mtime = fingerprint.MTimeNS
 		incRes.cacheSkip = cacheSkip
 		incRes.cacheKey = cacheKey
+		if incRes.incremental != nil &&
+			incRes.incremental.fileSize == fingerprint.Size {
+			incRes.incremental.providerStatHash = preParseStatHash
+		}
 		return incRes, true
 	}
 	incForceReplace := sourceForceReplace || incRes.forceReplace
@@ -12200,6 +12243,9 @@ type pendingWrite struct {
 	sourceWriteCount         int
 	sourceCompletionEligible bool
 	promoteSourceOnComplete  bool
+	// sourceCompletionSkipped marks a user-excluded or trashed member that
+	// resolves source completeness without requiring a write or promotion.
+	sourceCompletionSkipped bool
 	// storageTrustPath/State/Snap promote the session's OpenCode
 	// storage-gate trust after its batch is confirmed fully written.
 	// Empty for everything else.
@@ -12347,6 +12393,9 @@ type writeBatchOutcome struct {
 	failedSessions  int
 	cwdFiltered     int
 	written         []bool
+	// resolved includes actual writes plus user-excluded or trashed sessions.
+	// It stays separate from written so stats and baselines count real writes.
+	resolved []bool
 }
 
 type skipCacheWrite struct {
@@ -12642,7 +12691,10 @@ func (e *Engine) writeBatchWithOutcome(
 	)
 	if err != nil {
 		log.Printf("normalize pending write machines: %v", err)
-		outcome := writeBatchOutcome{written: make([]bool, len(batch))}
+		outcome := writeBatchOutcome{
+			written:  make([]bool, len(batch)),
+			resolved: make([]bool, len(batch)),
+		}
 		for _, pw := range batch {
 			e.markStaleFailedMemberWrite(pw)
 		}
@@ -12654,7 +12706,10 @@ func (e *Engine) writeBatchWithOutcome(
 	)
 	if err != nil {
 		log.Printf("preserve unavailable source projects: %v", err)
-		outcome := writeBatchOutcome{written: make([]bool, len(batch))}
+		outcome := writeBatchOutcome{
+			written:  make([]bool, len(batch)),
+			resolved: make([]bool, len(batch)),
+		}
 		for _, pw := range batch {
 			e.markStaleFailedMemberWrite(pw)
 		}
@@ -12665,7 +12720,10 @@ func (e *Engine) writeBatchWithOutcome(
 		return e.writeBatchBulkWithOutcome(batch, forceReplace)
 	}
 
-	outcome := writeBatchOutcome{written: make([]bool, len(batch))}
+	outcome := writeBatchOutcome{
+		written:  make([]bool, len(batch)),
+		resolved: make([]bool, len(batch)),
+	}
 	resolveWorktreeProject := e.loadWorktreeProjectResolver()
 	for i, pw := range batch {
 		s, msgs, verdict := e.prepareSessionWrite(
@@ -12698,6 +12756,7 @@ func (e *Engine) writeBatchWithOutcome(
 			e.upsertSessionPendingContentForWrite(pw, s)
 		if err != nil {
 			if isIntentionalSessionSkip(err) {
+				outcome.resolved[i] = true
 				if pw.sess.File.Path != "" {
 					e.cacheSkip(
 						pw.sess.File.Path,
@@ -12781,6 +12840,7 @@ func (e *Engine) writeBatchWithOutcome(
 		outcome.writtenSessions++
 		outcome.writtenMessages += len(msgs)
 		outcome.written[i] = true
+		outcome.resolved[i] = true
 	}
 	return outcome
 }
@@ -13617,11 +13677,15 @@ type localGitIdentity struct {
 func (e *Engine) writeBatchBulkWithOutcome(
 	batch []pendingWrite, forceReplace bool,
 ) writeBatchOutcome {
-	outcome := writeBatchOutcome{written: make([]bool, len(batch))}
+	outcome := writeBatchOutcome{
+		written:  make([]bool, len(batch)),
+		resolved: make([]bool, len(batch)),
+	}
 	writes := make([]db.SessionBatchWrite, 0, len(batch))
 	pendingIndexes := make([]int, 0, len(batch))
 	sources := make(map[string]batchSourceFile, len(batch))
 	pendingByID := make(map[string]pendingWrite, len(batch))
+	pendingIndexByID := make(map[string]int, len(batch))
 	resolveWorktreeProject := e.loadWorktreeProjectResolver()
 
 	for pendingIndex, pw := range batch {
@@ -13658,6 +13722,7 @@ func (e *Engine) writeBatchBulkWithOutcome(
 		})
 		pendingIndexes = append(pendingIndexes, pendingIndex)
 		pendingByID[s.ID] = pw
+		pendingIndexByID[s.ID] = pendingIndex
 		if pw.sess.File.Path != "" {
 			sources[s.ID] = batchSourceFile{
 				path:        pw.sess.File.Path,
@@ -13686,7 +13751,9 @@ func (e *Engine) writeBatchBulkWithOutcome(
 	}
 	for _, writtenIndex := range result.WrittenIndexes {
 		if writtenIndex >= 0 && writtenIndex < len(pendingIndexes) {
-			outcome.written[pendingIndexes[writtenIndex]] = true
+			pendingIndex := pendingIndexes[writtenIndex]
+			outcome.written[pendingIndex] = true
+			outcome.resolved[pendingIndex] = true
 		}
 	}
 	for _, id := range result.FailedIDs {
@@ -13695,6 +13762,9 @@ func (e *Engine) writeBatchBulkWithOutcome(
 		}
 	}
 	for _, id := range result.ExcludedIDs {
+		if pendingIndex, ok := pendingIndexByID[id]; ok {
+			outcome.resolved[pendingIndex] = true
+		}
 		if source, ok := sources[id]; ok && source.path != "" {
 			e.cacheSkip(
 				source.path, source.mtime, source.fingerprint,
@@ -14369,6 +14439,11 @@ func (e *Engine) writeIncremental(
 	// errors are logged inside recomputeSignalsFromDB and are
 	// non-fatal; a later write or flush retries.
 	e.signalSched.markDirty(inc.sessionID)
+	if inc.providerStatHash != nil {
+		e.recordProviderStatHash(
+			context.Background(), *inc.providerStatHash,
+		)
+	}
 
 	return nil
 }
@@ -15845,10 +15920,14 @@ func (e *Engine) processAndWriteSessionFile(
 		return false, fmt.Errorf("queue subagent parent repairs: %w", err)
 	}
 	claudeDAG := file.Agent == parser.AgentClaude && len(res.results) > 1
+	var sourceCompletionSkipped map[string]bool
 	if claudeDAG {
+		activeResultIDs, skipped :=
+			e.partitionIntentionalSourceSkips(resultIDs)
+		sourceCompletionSkipped = skipped
 		staleVersion := max(db.CurrentDataVersion()-1, 0)
 		if err := e.db.SetExistingSessionDataVersions(
-			resultIDs, staleVersion,
+			activeResultIDs, staleVersion,
 		); err != nil {
 			e.clearProviderSourceFreshness(ctx, res.providerStatHash)
 			return false, fmt.Errorf(
@@ -15954,7 +16033,8 @@ func (e *Engine) processAndWriteSessionFile(
 
 	sourceNeedsRetry := res.providerFailureCount > 0 ||
 		len(res.retrySessionIDs) > 0
-	written := 0
+	resolved := 0
+	writtenIDs := make([]string, 0, len(res.results))
 	markSourceIncomplete := func() {
 		if file.Agent == parser.AgentClaude {
 			e.clearProviderSourceFreshness(ctx, res.providerStatHash)
@@ -15983,16 +16063,21 @@ func (e *Engine) processAndWriteSessionFile(
 		}
 		repairQueued = true
 		writeErr := e.writeSessionFull(write)
+		memberPolicySkipped := sourceCompletionSkipped[resultIDs[i]]
 		// Full-write stages commit independently. Message content (and a new
 		// spawn edge) can persist even when a later usage, data-version, or
 		// sibling write fails, so discover and queue children after every
 		// attempt rather than waiting for the entire result set to finish.
 		queueErr := queueWrittenChildren([]string{resultIDs[i]})
 		if writeErr == nil {
-			written++
+			resolved++
+			writtenIDs = append(writtenIDs, resultIDs[i])
+		} else if isIntentionalSessionSkip(writeErr) || memberPolicySkipped {
+			resolved++
 		}
 		if writeErr != nil &&
 			!isIntentionalSessionSkip(writeErr) &&
+			!memberPolicySkipped &&
 			!errors.Is(writeErr, errSessionPreserved) {
 			// Mirror the batch write paths: a partial write (session
 			// row updated, messages or usage not) must demote the
@@ -16010,14 +16095,15 @@ func (e *Engine) processAndWriteSessionFile(
 			markSourceIncomplete()
 			return false, queueErr
 		}
-		if errors.Is(writeErr, errSessionPreserved) {
+		if !memberPolicySkipped && errors.Is(writeErr, errSessionPreserved) {
 			preserved = true
 		}
 	}
-	// A source-level digest is valid only when every emitted result and its
-	// hierarchy links committed without retry state or archive preservation.
-	// Claude DAG members remain stale until that source-level decision succeeds.
-	sourceComplete := written == len(res.results) &&
+	// A source-level digest is valid only when every active result and its
+	// hierarchy links commit without retry state or archive preservation.
+	// User-excluded and trashed members are resolved without writes; the other
+	// Claude DAG members stay stale until the source-level decision succeeds.
+	sourceComplete := resolved == len(res.results) &&
 		!preserved && !sourceNeedsRetry
 	if !sourceComplete {
 		markSourceIncomplete()
@@ -16028,7 +16114,7 @@ func (e *Engine) processAndWriteSessionFile(
 	}
 	if sourceComplete && claudeDAG {
 		if err := e.db.SetSessionDataVersions(
-			resultIDs, db.CurrentDataVersion(),
+			writtenIDs, db.CurrentDataVersion(),
 		); err != nil {
 			markSourceIncomplete()
 			return false, fmt.Errorf(

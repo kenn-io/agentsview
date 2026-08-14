@@ -50,3 +50,30 @@ func TestResetAllMtimes_ZeroesMtimesAndClearsFreshness(t *testing.T) {
 		"provider_freshness must be cleared so the stat-digest "+
 			"shortcut cannot defeat the forced re-sync")
 }
+
+func TestRestoreSessionStalesSourceAndClearsFreshness(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	path := "/sessions/project/transcript.jsonl"
+
+	insertSessionWithSourcePath(t, d, "restored", "claude", path)
+	require.NoError(t, d.SetSessionDataVersion(
+		"restored", CurrentDataVersion(),
+	))
+	require.NoError(t, d.UpsertProviderStatHash(
+		ctx, parser.AgentClaude, path, 42,
+	))
+	require.NoError(t, d.SoftDeleteSession("restored"))
+
+	restored, err := d.RestoreSession("restored")
+	require.NoError(t, err)
+	require.EqualValues(t, 1, restored)
+	assert.Less(t, d.GetSessionDataVersion("restored"), CurrentDataVersion(),
+		"restoring a source member must force a source reparse")
+	_, present, err := d.GetProviderStatHash(
+		ctx, parser.AgentClaude, path,
+	)
+	require.NoError(t, err)
+	assert.False(t, present,
+		"restoring a source member must invalidate its source digest")
+}
