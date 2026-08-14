@@ -70,25 +70,29 @@ or non-session provider IDs produce a clear configuration error, including on a
 Settings API update, so a typo cannot appear to disable work while doing
 nothing.
 
-Disabling a provider excludes it from local discovery, sync, watch plans,
-watcher fallback polling, explicit session-source diagnostics, and remote
-session-source collection and ingestion. It does not delete archived data and
-does not affect agent binaries used outside session-source processing, such as
-Recall execution. The enabled-provider predicate is centralized and applied at
-sync engine and watch-plan boundaries rather than repeated as ad hoc checks in
-individual providers.
+Disabling a provider excludes it only from local filesystem ingestion: startup
+and manual discovery, targeted local file sync, watch plans, and watcher
+fallback polling. The local sync engine applies the setting once while building
+its provider-factory set, and the watcher derives coverage from that same
+selection. The setting does not alter configured directory resolution and is
+never passed into HTTP or SSH remote import code.
+
+Remote sessions always import, even when their provider is disabled for local
+scanning on the collector. Disabled providers also remain eligible for every
+export path: HTTP and SSH source export, PostgreSQL, DuckDB, and archive export.
+Existing archived sessions stay searchable and exportable. The separate
+`RemoteSyncExcluded` provider capability remains the permanent safety boundary
+for source trees that must not be exported. Disabling does not affect agent
+binaries used outside session-source processing, such as Recall execution.
 
 Configuration-file and Settings changes take effect for ingestion after the
 relevant long-running ingestion processes restart: the daemon and any separate
 `pg push --watch` or `duckdb push --watch` process. The running daemon retains
 an immutable startup provider set even though GET Settings immediately returns
-the new persisted selection. This keeps engines, watcher coverage, polling, and
-remote collection consistent. Other persisted settings continue to apply
-according to their existing behavior.
-
-Disabled-provider content already present in a persistent HTTP mirror is
-retained but ignored. It is not refreshed while disabled; re-enabling the
-provider refreshes its manifest and files before ingestion.
+the new persisted selection. This keeps the local engines, watcher coverage, and
+polling consistent. Remote collection and import are independent of that
+selection. Other persisted settings continue to apply according to their
+existing behavior.
 
 ## Watch Batch Transport and Coalescing
 
@@ -196,8 +200,10 @@ PostgreSQL work.
 Behavior tests will cover:
 
 - parsing, normalization, persistence, and invalid values for `disabled_agents`;
-- exclusion of disabled providers from discovery, watch plans, polling, and
-  pre-transfer remote collection without deleting archived sessions;
+- exclusion of disabled providers from local discovery, targeted local sync,
+  watch plans, and polling without deleting archived sessions;
+- import and export of remote sessions for a locally disabled provider;
+- export of archived disabled-provider sessions to configured backends;
 - preservation of disabled-provider sessions, messages, and push eligibility
   across local and multi-source archive rebuilds;
 - transport serialization and bounded coalescing of paths, roots, renames,

@@ -10,21 +10,25 @@ batch and let users disable unused session providers from config or Settings.
 **Approved spec/design:**
 `docs/superpowers/specs/2026-08-09-scoped-push-and-provider-controls-design.md`
 
-**Architecture:** Config owns a normalized disabled-provider set and exposes
-filtered ingestion roots while retaining raw roots for presentation. Watcher
-batches reuse existing bounds, travel through the push loop and daemon request,
-and are applied by one engine operation that keeps the PostgreSQL push
-serialized. Gemini project metadata initializes lazily only after discovery
-finds a session file.
+**Architecture:** Config owns a normalized disabled-provider set while directory
+resolution always returns configured roots. The local sync engine omits disabled
+providers once while constructing its provider-factory set, and local watcher
+coverage derives from that same selection; remote import and every export path
+remain independent. Watcher batches reuse existing bounds, travel through the
+push loop and daemon request, and are applied by one serialized engine
+operation. Gemini project metadata initializes lazily only after discovery finds
+a session file.
 
-**Tech Stack:** Go 1.26.3, Cobra, Huma/OpenAPI, SQLite with CGO/FTS5, Testify,
+**Tech Stack:** Go 1.26.6, Cobra, Huma/OpenAPI, SQLite with CGO/FTS5, Testify,
 Svelte 5, TypeScript, Paraglide JS, kit-ui, Vite+/Vitest.
 
 ## Global Constraints
 
-- `disabled_agents` changes session-source processing only; Recall execution is
-  unchanged.
+- `disabled_agents` changes only local filesystem ingestion; HTTP and SSH remote
+  imports and all export paths are unchanged.
 - Disabling never deletes or hides archived sessions, including during rebuilds.
+- Explicit targeted local file sync honors the disabled provider selection.
+- `RemoteSyncExcluded` remains the only provider-level remote export exclusion.
 - Provider changes require restart of the daemon and any separate push-watch
   process; the UI never restarts them.
 - Ordinary batches remain bounded; ambiguous events remain authoritative.
@@ -42,13 +46,14 @@ Svelte 5, TypeScript, Paraglide JS, kit-ui, Vite+/Vitest.
 
 ______________________________________________________________________
 
-### Task 1: Disabled-provider config and effective roots
+### Task 1: Local-only disabled-provider boundary
 
 **Files:**
 
 - Modify: `internal/config/config.go`
 - Modify: `internal/config/config_test.go`
 - Modify: `internal/config/persistence_test.go`
+- Modify: `internal/sync/engine.go`
 - Modify production engine construction in `cmd/agentsview/main.go`, `sync.go`,
   `sync_worker.go`, `session_sync.go`, `usage.go`, `parse_diff.go`,
   `archive_write_backend.go`, and `archive_query_backend.go`
@@ -56,6 +61,12 @@ ______________________________________________________________________
 - Modify: `internal/server/huma_routes_sync_internal_test.go`
 - Modify: `internal/remotesync/import.go`
 - Modify: `internal/remotesync/import_test.go`
+- Modify: `internal/remotesync/http.go`
+- Modify: `internal/remotesync/http_prepare.go`
+- Modify: `internal/remotesync/http_test.go`
+- Modify: `internal/remotesync/mirror.go`
+- Modify: `internal/ssh/sync.go`
+- Modify: `internal/ssh/sync_test.go`
 - Create: `internal/sync/disabled_provider_test.go`
 - Modify: `cmd/agentsview/main_test.go`
 - Modify: `cmd/agentsview/remote_source_sync_test.go`
@@ -67,8 +78,11 @@ ______________________________________________________________________
 
 - Produces `NormalizeDisabledAgents([]string) ([]parser.AgentType, error)`.
 
-- Produces `AgentDisabled`, `ConfiguredDirs`, `ResolveDirs`, `SyncAgentDirs`,
-  and `SyncSourceMachines`.
+- Produces `EngineConfig.DisabledAgents []parser.AgentType`, supplied only by
+  local engine construction.
+
+- `Config.ResolveDirs` returns configured roots regardless of local provider
+  selection.
 
 - [ ] **Step 1: Write failing config/filter tests**
 
@@ -85,18 +99,23 @@ assert.Equal(t,
     []parser.AgentType{parser.AgentClaude, parser.AgentGemini},
     cfg.DisabledAgents,
 )
-assert.Empty(t, cfg.ResolveDirs(parser.AgentGemini))
-assert.NotEmpty(t, cfg.ConfiguredDirs(parser.AgentGemini))
-assert.NotContains(t, cfg.SyncAgentDirs(), parser.AgentGemini)
+assert.NotEmpty(t, cfg.ResolveDirs(parser.AgentGemini))
 ```
 
 Reject unknown `not-an-agent` and import-only `chatgpt` with errors naming the
-ID. Prove disabled Gemini creates no watcher/polling plan and no remote upload
-root. Exercise session-usage refresh, the no-sync/on-demand server engine, and
-the receiving side of HTTP/SSH remote import so none can ingest Gemini when
-disabled. Seed an archived Gemini session, run ordinary sync and authoritative
-reconciliation with Gemini disabled, and assert the stored session remains
-unchanged and queryable.
+ID. With real temporary Gemini and Claude sources, prove a local engine imports
+Claude but neither discovers nor targeted-syncs Gemini when Gemini is disabled.
+Prove the watcher/polling plan also omits Gemini. Seed an archived Gemini
+session, run ordinary sync, authoritative reconciliation, and rebuild, and
+assert the stored session and messages remain unchanged and queryable.
+
+Run an HTTP remote import through the command or server boundary with Gemini
+disabled in the collector config and assert the remote Gemini session is stored.
+Resolve HTTP remote-sync targets with Gemini locally disabled and assert Gemini
+is still advertised and transferable unless its provider has
+`RemoteSyncExcluded`. Use the existing backend exporter tests to prove an
+archived Gemini session remains eligible for PostgreSQL, DuckDB, and archive
+export; do not duplicate backend mechanics.
 
 - [ ] **Step 2: Run and verify failure**
 
@@ -106,32 +125,37 @@ CGO_ENABLED=1 go test -tags fts5 ./internal/config ./internal/remotesync \
   -run 'DisabledAgents|DisabledProvider|DisabledRemoteSource' -count=1
 ```
 
-- [ ] **Step 3: Implement normalization and filtered views**
+- [ ] **Step 3: Implement one local provider-selection boundary**
 
 Add the field and signatures:
 
 ```go
 func NormalizeDisabledAgents(values []string) ([]parser.AgentType, error)
 func (c Config) AgentDisabled(agent parser.AgentType) bool
-func (c Config) ConfiguredDirs(agent parser.AgentType) []string
 func (c Config) ResolveDirs(agent parser.AgentType) []string
-func (c Config) SyncAgentDirs() map[parser.AgentType][]string
-func (c Config) SyncSourceMachines() map[parser.AgentType]map[string]string
 ```
 
 Trim/lowercase, accept only registry entries matching
 `FileBased || EnvVar != ""`, dedupe, and output registry order. Honor an
 explicit empty TOML array. Make `SaveSettings` accept a typed provider slice,
-validate before locking, persist, then update memory. Use the `Sync*` maps at
-every production engine constructor, including session-usage refresh and the
-server's on-demand/no-sync engine; existing `ResolveDirs` callers then omit
-disabled watch, poll, live-activity, diagnostic, and remote-source work. Capture
-an immutable daemon-start provider set so a Settings mutation cannot partially
-hot-apply to lazy engines or remote sync. Filter the receiving-side remote
-`TargetSet` before HTTP manifest/archive transfer and SSH download, as well as
-before active and rebuild import engines. Keep already mirrored disabled files
-but ignore them until re-enabling triggers a fresh manifest. Prove rebuild
-orphan-copy preserves disabled sessions and messages.
+validate before locking, persist, then update memory. Restore `ResolveDirs` to
+return a defensive copy of the configured roots and remove `SyncAgentDirs` and
+`SyncSourceMachines`.
+
+Add `DisabledAgents` to `sync.EngineConfig`. In `NewEngine`, build the provider
+factory map once and omit disabled agent factories there; derive rebuild
+preservation from the same disabled set. Local engine constructors pass the
+daemon-start selection while remote import engine constructors leave the field
+empty. Make watch plans, polling, and recovery scopes consume the local engine's
+enabled provider selection rather than re-reading `disabled_agents` in each
+downstream path. Capture an immutable daemon-start provider set only for local
+engine and watcher construction so a Settings mutation cannot partially
+hot-apply before restart.
+
+Delete `DisabledAgents` from `remotesync.HTTPSync`, `remotesync.Importer`, and
+`ssh.RemoteSync`; delete disabled-target filtering and mirror-retention logic.
+HTTP and SSH transfer/import then process every advertised target. Keep
+`RemoteSyncExcluded` checks and strict protocol-version negotiation unchanged.
 
 - [ ] **Step 4: Document the config**
 
@@ -141,7 +165,8 @@ Add a “Disabling Session Providers” subsection:
 disabled_agents = ["gemini"]
 ```
 
-State restart, archived-session, and Recall boundaries.
+State the local-filesystem-only, restart, archived-session, export, remote
+import, `RemoteSyncExcluded`, and Recall boundaries.
 
 - [ ] **Step 5: Test, format, and commit**
 
@@ -149,8 +174,8 @@ State restart, archived-session, and Recall boundaries.
 CGO_ENABLED=1 go test -tags fts5 ./internal/config ./internal/remotesync \
   ./internal/sync ./internal/server ./cmd/agentsview \
   -run 'DisabledAgents|DisabledProvider|DisabledRemoteSource' -count=1
-go fmt ./internal/config ./internal/remotesync ./internal/sync \
-  ./internal/server ./cmd/agentsview
+go fmt ./...
+go vet ./...
 git diff --check
 git add internal/config internal/remotesync internal/sync \
   internal/server/huma_routes_sync.go \
