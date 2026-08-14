@@ -973,6 +973,26 @@ func providerStatHashMetadataVerified(hash pendingProviderStatHash) bool {
 	return true
 }
 
+// clearProviderSourceFreshness removes a digest that no longer represents a
+// completely committed provider source. Claude DAG members are written stale
+// up front, so correctness does not depend on cleanup succeeding after a
+// partial write.
+func (e *Engine) clearProviderSourceFreshness(
+	ctx context.Context,
+	statHash *pendingProviderStatHash,
+) {
+	if statHash != nil {
+		if err := e.db.DeleteProviderStatHash(
+			ctx, statHash.agent, statHash.targetKey,
+		); err != nil {
+			log.Printf(
+				"delete incomplete provider freshness for %s/%s: %v",
+				statHash.agent, statHash.targetKey, err,
+			)
+		}
+	}
+}
+
 // migrateLegacyCodexExecSkips removes skip cache entries
 // created by older agentsview builds that excluded Codex exec
 // sessions from bulk sync. The scrub runs once per database:
@@ -7812,6 +7832,51 @@ func (e *Engine) collectAndBatch(
 			} else {
 				outcome = e.writeBatchWithOutcome(pending, writeMode, false)
 			}
+			// Claude can emit several session rows from one DAG transcript.
+			// Those rows are initially written below the current data version,
+			// then promoted together only after every member succeeds. A crash,
+			// veto, or failed member therefore cannot make the primary row hide
+			// unfinished forks on the next pass.
+			for i, pw := range pending {
+				if pw.sourceWriteCount == 0 {
+					continue
+				}
+				end := i + pw.sourceWriteCount
+				sourceComplete := pw.sourceCompletionEligible &&
+					end <= len(pending) && end <= len(outcome.written)
+				for j := i; j < min(end, len(pending)); j++ {
+					if j >= len(outcome.written) || !outcome.written[j] {
+						sourceComplete = false
+					}
+				}
+				if sourceComplete && pw.promoteSourceOnComplete {
+					ids := make([]string, 0, pw.sourceWriteCount)
+					for j := i; j < end; j++ {
+						ids = append(ids, applyIDPrefixToID(
+							e.idPrefix, pending[j].sess.ID,
+						))
+					}
+					if err := e.db.SetSessionDataVersions(
+						ids, db.CurrentDataVersion(),
+					); err != nil {
+						log.Printf(
+							"complete provider source data versions: %v", err,
+						)
+						sourceComplete = false
+						outcome.failedSessions++
+						for j := i; j < end; j++ {
+							outcome.written[j] = false
+						}
+					}
+				}
+				if !sourceComplete {
+					e.clearProviderSourceFreshness(ctx, pw.providerStatHash)
+					continue
+				}
+				if pw.providerStatHash != nil {
+					e.recordProviderStatHash(ctx, *pw.providerStatHash)
+				}
+			}
 			baselineErr := e.baselinePendingWriteSources(
 				ctx, pending, outcome.written,
 			)
@@ -7840,30 +7905,6 @@ func (e *Engine) collectAndBatch(
 			stats.cwdFilteredSessions += outcome.cwdFiltered
 			progress.MessagesIndexed += outcome.writtenMessages
 			stats.messagesIndexed = progress.MessagesIndexed
-			// Persist per-component freshness digests for the per-row
-			// entries whose write succeeded. outcome.written[i]
-			// is the authoritative per-source success flag:
-			// writeBatchWithOutcome sets it to false for any row
-			// that was CWD-filtered or whose session upsert failed,
-			// so a single failing row in a mixed batch correctly
-			// suppresses only its own digest persist. Successful
-			// rows in the same batch still get their digests
-			// stamped; a pendingStatHash source whose whole session
-			// row committed is exactly the invariant the side-table
-			// needs to recognize on the next warm pass. A pending
-			// row with no matching written entry fails closed:
-			// without a per-row success flag the write cannot be
-			// confirmed, and an unconfirmed digest persist could
-			// mark an absent session as fresh forever.
-			for i, pw := range pending {
-				if pw.providerStatHash == nil {
-					continue
-				}
-				if i >= len(outcome.written) || !outcome.written[i] {
-					continue
-				}
-				e.recordProviderStatHash(ctx, *pw.providerStatHash)
-			}
 		}()
 		pending = pending[:0]
 		pendingLeases = pendingLeases[:0]
@@ -7973,6 +8014,20 @@ func (e *Engine) collectAndBatch(
 			e.noteSQLiteContainerResult(r.path, false)
 			r.releaseRetention()
 			continue
+		}
+		claudeDAG := r.agent == parser.AgentClaude && len(r.results) > 1
+		if claudeDAG {
+			staleVersion := max(db.CurrentDataVersion()-1, 0)
+			if err := e.db.SetExistingSessionDataVersions(
+				resultIDs, staleVersion,
+			); err != nil {
+				e.clearProviderSourceFreshness(ctx, r.providerStatHash)
+				log.Printf("stage Claude source data versions: %v", err)
+				stats.RecordFailed()
+				e.noteSQLiteContainerResult(r.path, false)
+				r.releaseRetention()
+				continue
+			}
 		}
 		excludedSessionIDs, err := e.deleteParserExcludedSessions(
 			r.processResult, sourceAllowsParserExclusions,
@@ -8094,6 +8149,7 @@ func (e *Engine) collectAndBatch(
 			r.path, vetoed == 0 && len(r.retrySessionIDs) == 0,
 		)
 		if vetoed > 0 && len(allowed) == 0 {
+			e.clearProviderSourceFreshness(ctx, r.providerStatHash)
 			stats.cwdFilteredFiles++
 			if r.providerFailureCount == 0 {
 				baselineProcessedSource(r, false)
@@ -8123,27 +8179,36 @@ func (e *Engine) collectAndBatch(
 			stats.messagesIndexed = progress.MessagesIndexed
 			r.releaseRetention()
 		} else {
+			sourceNeedsRetry := vetoed > 0 ||
+				r.providerFailureCount > 0 || len(r.retrySessionIDs) > 0
 			for i, pr := range allowed {
-				needsRetry := r.providerFailureCount > 0 ||
+				sessionNeedsRetry := sourceNeedsRetry ||
 					r.needsRetryForSession(pr.Session.ID)
+				needsRetry := sessionNeedsRetry || claudeDAG
 				pw := pendingWrite{
 					sess:              pr.Session,
 					msgs:              pr.Messages,
 					usageEvents:       pr.UsageEvents,
 					needsRetry:        needsRetry,
 					forceReplace:      r.forceReplace,
-					baselineEligible:  vetoed == 0 && r.providerFailureCount == 0 && !needsRetry,
+					baselineEligible:  !sessionNeedsRetry,
 					storageTrustPath:  r.storageTrustPath,
 					storageTrustState: r.storageTrustState,
 					storageTrustSnap:  r.storageTrustSnap,
 				}
-				// The source's per-component digest (providerStatHash) is
-				// a one-row side-table entry keyed by (agent, file_path),
-				// so tagging only the first allowed result is enough.
-				// The flush path below persists it after the matching
-				// session row commits successfully.
-				if i == 0 && r.providerStatHash != nil {
+				if i == 0 &&
+					(r.agent == parser.AgentClaude || r.providerStatHash != nil) {
+					// Claude can emit several DAG branches from one transcript.
+					// Carry their contiguous write count so the flush can make
+					// one source-level completion decision. Other digest-backed
+					// providers currently emit one result per source.
+					pw.sourceWriteCount = 1
+					if r.agent == parser.AgentClaude {
+						pw.sourceWriteCount = len(allowed)
+					}
 					pw.providerStatHash = r.providerStatHash
+					pw.sourceCompletionEligible = !sourceNeedsRetry
+					pw.promoteSourceOnComplete = claudeDAG
 				}
 				pending = append(pending, pw)
 				if runtimeMetrics != nil {
@@ -8154,7 +8219,7 @@ func (e *Engine) collectAndBatch(
 				pendingLeases = append(pendingLeases, r.retentionLease)
 				r.retentionLease = nil
 			}
-			if r.cacheAfterWrite && vetoed == 0 && len(r.retrySessionIDs) == 0 {
+			if r.cacheAfterWrite && !sourceNeedsRetry {
 				pendingCacheWrites = append(pendingCacheWrites, skipCacheWrite{
 					agent:             r.agent,
 					key:               r.skipCacheKey(),
@@ -12127,12 +12192,14 @@ type pendingWrite struct {
 	// outcome is safe to make deletion-eligible after this write succeeds.
 	baselineEligible bool
 	// providerStatHash is set on the first allowed ParseResult of a
-	// source whose processResult staged a per-component freshness
-	// digest. The flush path persists it after the matching session
-	// row commits successfully, so a downstream write failure or a
-	// CWD-filter veto never marks an absent or stale session as
-	// fresh. nil when the source is not a multi-file hasher agent.
-	providerStatHash *pendingProviderStatHash
+	// source whose processResult staged a per-component freshness digest.
+	// sourceWriteCount tells the flush how many contiguous results must commit
+	// before it may persist the digest. Claude uses the full DAG result count;
+	// other digest-backed providers currently use one.
+	providerStatHash         *pendingProviderStatHash
+	sourceWriteCount         int
+	sourceCompletionEligible bool
+	promoteSourceOnComplete  bool
 	// storageTrustPath/State/Snap promote the session's OpenCode
 	// storage-gate trust after its batch is confirmed fully written.
 	// Empty for everything else.
@@ -15777,6 +15844,18 @@ func (e *Engine) processAndWriteSessionFile(
 	if err := e.db.QueueSubagentParentCleanupRepairs(priorChildren); err != nil {
 		return false, fmt.Errorf("queue subagent parent repairs: %w", err)
 	}
+	claudeDAG := file.Agent == parser.AgentClaude && len(res.results) > 1
+	if claudeDAG {
+		staleVersion := max(db.CurrentDataVersion()-1, 0)
+		if err := e.db.SetExistingSessionDataVersions(
+			resultIDs, staleVersion,
+		); err != nil {
+			e.clearProviderSourceFreshness(ctx, res.providerStatHash)
+			return false, fmt.Errorf(
+				"stage Claude source data versions: %w", err,
+			)
+		}
+	}
 	// Always attempt queued work after mutations begin, including when a later
 	// write or scoped link fails. Post-write capture below expands this flag
 	// when the write introduces children that did not exist before it.
@@ -15873,13 +15952,21 @@ func (e *Engine) processAndWriteSessionFile(
 		return false, nil
 	}
 
+	sourceNeedsRetry := res.providerFailureCount > 0 ||
+		len(res.retrySessionIDs) > 0
 	written := 0
+	markSourceIncomplete := func() {
+		if file.Agent == parser.AgentClaude {
+			e.clearProviderSourceFreshness(ctx, res.providerStatHash)
+		}
+	}
 	for i, pr := range res.results {
 		write := pendingWrite{
-			sess:         pr.Session,
-			msgs:         pr.Messages,
-			usageEvents:  pr.UsageEvents,
-			needsRetry:   res.needsRetryForSession(pr.Session.ID),
+			sess:        pr.Session,
+			msgs:        pr.Messages,
+			usageEvents: pr.UsageEvents,
+			needsRetry: sourceNeedsRetry || claudeDAG ||
+				res.needsRetryForSession(pr.Session.ID),
 			forceReplace: res.forceReplace,
 		}
 		// The session upsert commits parser-derived parent provenance before
@@ -15889,6 +15976,7 @@ func (e *Engine) processAndWriteSessionFile(
 		if err := e.db.QueueSubagentParentRepairs(
 			[]string{resultIDs[i]},
 		); err != nil {
+			markSourceIncomplete()
 			return false, fmt.Errorf(
 				"queue attempted session parent repair: %w", err,
 			)
@@ -15901,9 +15989,6 @@ func (e *Engine) processAndWriteSessionFile(
 		// attempt rather than waiting for the entire result set to finish.
 		queueErr := queueWrittenChildren([]string{resultIDs[i]})
 		if writeErr == nil {
-			// A nil writeSessionFull is the single-session analog of
-			// outcome.written[i]=true in flushPending; only counted
-			// successes advance the persisted-digest gate below.
 			written++
 		}
 		if writeErr != nil &&
@@ -15917,30 +16002,42 @@ func (e *Engine) processAndWriteSessionFile(
 			if queueErr != nil {
 				writeErr = errors.Join(writeErr, queueErr)
 			}
+			markSourceIncomplete()
 			return false, fmt.Errorf("write session %s: %w",
 				pr.Session.ID, writeErr)
 		}
 		if queueErr != nil {
+			markSourceIncomplete()
 			return false, queueErr
 		}
 		if errors.Is(writeErr, errSessionPreserved) {
 			preserved = true
 		}
 	}
-	// Persist staged digest only when at least one session row
-	// actually committed. Mirrors the per-row gate in flushPending:
-	// a session-trashed, parser-excluded, or otherwise skipped
-	// batch must NOT stamp provider_freshness with a digest whose
-	// matching session row was not actually persisted. Without this
-	// the single-session sync path would leave provider_freshness
-	// empty for Codebuff/Freebuff forever, leaving the digest gate
-	// un-armed on the next warm pass and a stale session row
-	// unrepaired by the per-component digest.
-	if written > 0 && res.providerStatHash != nil {
-		e.recordProviderStatHash(ctx, *res.providerStatHash)
+	// A source-level digest is valid only when every emitted result and its
+	// hierarchy links committed without retry state or archive preservation.
+	// Claude DAG members remain stale until that source-level decision succeeds.
+	sourceComplete := written == len(res.results) &&
+		!preserved && !sourceNeedsRetry
+	if !sourceComplete {
+		markSourceIncomplete()
 	}
 	if err := e.db.LinkSubagentSessionsForSessions(resultIDs); err != nil {
+		markSourceIncomplete()
 		return false, fmt.Errorf("link changed subagent sessions: %w", err)
+	}
+	if sourceComplete && claudeDAG {
+		if err := e.db.SetSessionDataVersions(
+			resultIDs, db.CurrentDataVersion(),
+		); err != nil {
+			markSourceIncomplete()
+			return false, fmt.Errorf(
+				"complete Claude source data versions: %w", err,
+			)
+		}
+	}
+	if sourceComplete && res.providerStatHash != nil {
+		e.recordProviderStatHash(ctx, *res.providerStatHash)
 	}
 
 	return preserved, nil

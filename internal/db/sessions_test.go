@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -285,6 +286,47 @@ func TestUpsertSessionDoesNotAdvanceDataVersion(t *testing.T) {
 	}), "UpsertSession (update)")
 	assert.Equal(t, CurrentDataVersion(), d.GetSessionDataVersion("dv-1"),
 		"after re-upsert, data_version (must be preserved across UpsertSession)")
+}
+
+func TestSetSessionDataVersionsIsAtomic(t *testing.T) {
+	d := testDB(t)
+	for _, id := range []string{"source-main", "source-fork"} {
+		require.NoError(t, d.UpsertSession(Session{
+			ID: id, Project: "p", Machine: "m", Agent: "claude",
+		}))
+		require.NoError(t, d.SetSessionDataVersion(id, 1))
+	}
+
+	raw, err := sql.Open("sqlite3", d.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	_, err = raw.Exec(`
+		CREATE TRIGGER fail_fork_promotion
+		BEFORE UPDATE OF data_version ON sessions
+		WHEN NEW.id = 'source-fork' AND NEW.data_version > OLD.data_version
+		BEGIN
+			SELECT RAISE(FAIL, 'injected fork promotion failure');
+		END;
+	`)
+	require.NoError(t, err)
+
+	err = d.SetSessionDataVersions(
+		[]string{"source-main", "source-fork"}, CurrentDataVersion(),
+	)
+	require.ErrorContains(t, err, "injected fork promotion failure")
+	assert.Equal(t, 1, d.GetSessionDataVersion("source-main"),
+		"a later member failure must roll back an earlier promotion")
+	assert.Equal(t, 1, d.GetSessionDataVersion("source-fork"))
+
+	_, err = raw.Exec(`DROP TRIGGER fail_fork_promotion`)
+	require.NoError(t, err)
+	require.NoError(t, d.SetSessionDataVersions(
+		[]string{"source-main", "source-fork"}, CurrentDataVersion(),
+	))
+	assert.Equal(t, CurrentDataVersion(),
+		d.GetSessionDataVersion("source-main"))
+	assert.Equal(t, CurrentDataVersion(),
+		d.GetSessionDataVersion("source-fork"))
 }
 
 func TestSessionTranscriptFidelityRoundTrips(t *testing.T) {

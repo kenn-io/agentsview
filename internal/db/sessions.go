@@ -2393,6 +2393,70 @@ func (db *DB) SetSessionDataVersion(id string, version int) error {
 	return nil
 }
 
+// SetSessionDataVersions atomically stamps the parser data_version on every
+// listed session. This is used when several session rows represent one source:
+// either every member becomes current, or all remain eligible for retry.
+func (db *DB) SetSessionDataVersions(ids []string, version int) error {
+	return db.setSessionDataVersions(ids, version, true)
+}
+
+// SetExistingSessionDataVersions atomically stamps every listed session that
+// already exists, ignoring IDs that have not been inserted yet.
+func (db *DB) SetExistingSessionDataVersions(ids []string, version int) error {
+	return db.setSessionDataVersions(ids, version, false)
+}
+
+func (db *DB) setSessionDataVersions(
+	ids []string, version int, requireAll bool,
+) error {
+	if err := db.requireWritable(); err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return fmt.Errorf("beginning data version update: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, id := range ids {
+		result, err := tx.Exec(
+			`UPDATE sessions SET
+				data_version = ?,
+				local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+			 WHERE id = ?`,
+			version, id,
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"setting data_version for %s: %w", id, err,
+			)
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf(
+				"checking data_version update for %s: %w", id, err,
+			)
+		}
+		if rows == 0 && !requireAll {
+			continue
+		}
+		if rows != 1 {
+			return fmt.Errorf(
+				"setting data_version for %s: session not found", id,
+			)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing data version update: %w", err)
+	}
+	return nil
+}
+
 // GetSessionMessageCount returns the message_count for a
 // session. Returns (0, false) when the session does not exist.
 func (db *DB) GetSessionMessageCount(
