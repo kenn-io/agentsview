@@ -13877,6 +13877,7 @@ func (e *Engine) writeStagedFullParse(
 	); err != nil {
 		return err
 	}
+	e.anomalies.recordSanitize(pw.staged.ValidationStats())
 	if err := e.seedSignalStateFromFullWithContentFailures(
 		s.ID, msgs, pw.staged.ContentFailures(),
 	); err != nil {

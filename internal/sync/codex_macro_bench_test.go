@@ -451,7 +451,7 @@ func TestMacroCodexStagedParseMemoryGates(t *testing.T) {
 			start := time.Now()
 			staged, err := newCodexStagingSink(nil)
 			require.NoError(t, err)
-			sess, msgs, _, _, _, err := parser.ParseCodexSessionStreaming(
+			sess, msgs, _, _, _, _, err := parser.ParseCodexSessionStreaming(
 				cfg, source, staged,
 			)
 			require.NoError(t, err)
@@ -621,7 +621,7 @@ func TestMacroCodexStaged64MBLine(t *testing.T) {
 	staged, err := newCodexStagingSink(nil)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, staged.Close()) }()
-	sess, msgs, _, _, _, err := parser.ParseCodexSessionStreaming(
+	sess, msgs, _, _, _, _, err := parser.ParseCodexSessionStreaming(
 		cfg, source, staged,
 	)
 	require.NoError(t, err)

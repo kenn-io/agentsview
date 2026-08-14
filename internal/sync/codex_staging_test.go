@@ -63,6 +63,11 @@ func TestCodexStreamingParseParityWithLegacy(t *testing.T) {
 // session root and returns the root path.
 func writeCodexParityRoot(t *testing.T, uuid string) string {
 	t.Helper()
+	return writeCodexTranscriptRoot(t, uuid, codexParityTranscript(uuid))
+}
+
+func writeCodexTranscriptRoot(t *testing.T, uuid, transcript string) string {
+	t.Helper()
 	root := t.TempDir()
 	day := filepath.Join(root, "2024", "01", "01")
 	require.NoError(t, os.MkdirAll(day, 0o755))
@@ -70,7 +75,7 @@ func writeCodexParityRoot(t *testing.T, uuid string) string {
 		day, "rollout-2024-01-01T10-00-00-"+uuid+".jsonl",
 	)
 	require.NoError(t, os.WriteFile(
-		path, []byte(codexParityTranscript(uuid)), 0o644,
+		path, []byte(transcript), 0o644,
 	))
 	return root
 }
@@ -195,6 +200,74 @@ func TestCodexEngineStagedSyncParity(t *testing.T) {
 	}
 }
 
+// TestCodexEngineStagedSanitizesToolResultContent protects the central
+// persistence contract at the staged boundary. The expected string is a
+// literal oracle: NUL, ESC, and C1 controls are removed while printable bytes
+// remain, in both the event row and its denormalized tool-call summary.
+func TestCodexEngineStagedSanitizesToolResultContent(t *testing.T) {
+	const (
+		uuid       = "019eb791-cf7d-75c1-8439-9ed74c122b11"
+		rawOutput  = "before\x00after\x1b[31mred\u0085done"
+		wantOutput = "beforeafter[31mreddone"
+	)
+	transcript := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/workspace/project-a", "codex_cli_rs",
+			"2024-01-01T10:00:00Z",
+		),
+		testjsonl.CodexMsgJSON(
+			"user", "run it", "2024-01-01T10:00:01Z",
+		),
+		testjsonl.CodexFunctionCallWithCallIDJSON(
+			"exec_command", "call_a", nil, "2024-01-01T10:00:02Z",
+		),
+		testjsonl.CodexFunctionCallOutputJSON(
+			"call_a", rawOutput, "2024-01-01T10:00:03Z",
+		),
+		// Exact raw duplicates collapse before sanitization, while an event
+		// differing only by stripped controls remains distinct. This pins the
+		// collecting path's existing identity contract at the staged boundary.
+		testjsonl.CodexFunctionCallOutputJSON(
+			"call_a", rawOutput, "2024-01-01T10:00:04Z",
+		),
+		testjsonl.CodexFunctionCallOutputJSON(
+			"call_a", wantOutput, "2024-01-01T10:00:05Z",
+		),
+	)
+
+	legacyDB := openTestDB(t)
+	stagedDB := openTestDB(t)
+	syncCodexParityEngine(
+		t, legacyDB, writeCodexTranscriptRoot(t, uuid, transcript), 0,
+	)
+	syncCodexParityEngine(
+		t, stagedDB, writeCodexTranscriptRoot(t, uuid, transcript), 1,
+	)
+
+	assertStored := func(t *testing.T, database *db.DB) []db.Message {
+		t.Helper()
+		msgs, err := database.GetAllMessages(t.Context(), "codex:"+uuid)
+		require.NoError(t, err)
+		var calls []db.ToolCall
+		for _, msg := range msgs {
+			calls = append(calls, msg.ToolCalls...)
+		}
+		require.Len(t, calls, 1)
+		assert.Equal(t, wantOutput, calls[0].ResultContent)
+		assert.Equal(t, len(wantOutput), calls[0].ResultContentLength)
+		require.Len(t, calls[0].ResultEvents, 2)
+		for _, event := range calls[0].ResultEvents {
+			assert.Equal(t, wantOutput, event.Content)
+			assert.Equal(t, len(wantOutput), event.ContentLength)
+		}
+		return msgs
+	}
+
+	legacyMsgs := assertStored(t, legacyDB)
+	stagedMsgs := assertStored(t, stagedDB)
+	assert.Equal(t, legacyMsgs, stagedMsgs)
+}
+
 // TestCodexEngineResyncBulkStagedParity pins the bulk-write blocker: a
 // full rebuild (ResyncAll) with the staged streaming path active must
 // publish real tool outputs, never the staged placeholders, and must
@@ -269,7 +342,7 @@ func assertCodexStagedParity(t *testing.T, uuid, content string) {
 
 	// Legacy collecting parse.
 	legacySink := parser.NewCodexCollectingSink(0)
-	legacySess, legacyMsgs, legacyCursor, legacyHash, legacyAnchor, _, err :=
+	legacySess, legacyMsgs, legacyCursor, legacyHash, legacyAnchor, legacyRetry, err :=
 		parser.ParseCodexSessionStreaming(cfg, source, legacySink)
 	require.NoError(t, err)
 	require.NotNil(t, legacySess)
@@ -278,7 +351,7 @@ func assertCodexStagedParity(t *testing.T, uuid, content string) {
 	stagedSink, err := newCodexStagingSink("", map[string]bool{})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, stagedSink.Close()) }()
-	stagedSess, stagedMsgs, stagedCursor, stagedHash, stagedAnchor, _, err :=
+	stagedSess, stagedMsgs, stagedCursor, stagedHash, stagedAnchor, stagedRetry, err :=
 		parser.ParseCodexSessionStreaming(cfg, source, stagedSink)
 	require.NoError(t, err)
 	require.NotNil(t, stagedSess)
@@ -287,6 +360,7 @@ func assertCodexStagedParity(t *testing.T, uuid, content string) {
 	assert.Equal(t, legacyCursor, stagedCursor)
 	assert.Equal(t, legacyHash, stagedHash)
 	assert.Equal(t, legacyAnchor, stagedAnchor)
+	assert.Equal(t, legacyRetry, stagedRetry)
 	assert.Equal(t, legacySess.ID, stagedSess.ID)
 	assert.Equal(t, legacySess.MessageCount, stagedSess.MessageCount)
 	require.Len(t, stagedMsgs, len(legacyMsgs))

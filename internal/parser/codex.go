@@ -58,9 +58,9 @@ type codexSessionBuilder struct {
 	// sink receives every normalized operation; the collecting
 	// implementation keeps the slice-based behavior, the streaming one
 	// batches into a scratch store.
-	sink               CodexSessionSink
-	resolveParentTurns codexParentTurnResolver
-	parentTurnIDs      map[string]struct{}
+	sink                 CodexSessionSink
+	resolveParentTurns   codexParentTurnResolver
+	parentTurnIDs        map[string]struct{}
 	firstMessage         string
 	startedAt            time.Time
 	endedAt              time.Time

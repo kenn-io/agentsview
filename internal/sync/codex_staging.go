@@ -2,9 +2,9 @@ package sync
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"fmt"
-	"golang.org/x/sys/unix"
 	"log"
 	"os"
 	"runtime/debug"
@@ -59,7 +59,8 @@ type codexStagingSink struct {
 	// unrecoverable for this parse: events are no longer accepted and the
 	// publish must fail, so a disk-full or I/O error can never commit a
 	// "successful" archive missing tool outputs.
-	stageErr error
+	stageErr        error
+	validationStats db.ValidationStats
 }
 
 // fail records the sticky staging failure. Later events and the publish
@@ -76,6 +77,21 @@ func (s *codexStagingSink) Err() error {
 	return s.stageErr
 }
 
+func (s *codexStagingSink) addValidationStats(stats db.ValidationStats) {
+	s.validationStats.ControlCharsStripped += stats.ControlCharsStripped
+	s.validationStats.ModelClamped += stats.ModelClamped
+	s.validationStats.TokensClamped += stats.TokensClamped
+	s.validationStats.RoleCoerced += stats.RoleCoerced
+	s.validationStats.TimestampsBlanked += stats.TimestampsBlanked
+}
+
+// ValidationStats returns fixes applied to real staged result content. The
+// ordinary message validation pass sees placeholders, so the engine records
+// these additional counts after the staged publish resolves its summaries.
+func (s *codexStagingSink) ValidationStats() db.ValidationStats {
+	return s.validationStats
+}
+
 type stagedFindingPos struct {
 	toolUseID  string
 	eventIndex int
@@ -90,13 +106,12 @@ func checkCodexStagingSpace(dir string) error {
 	if dir == "" {
 		dir = os.TempDir()
 	}
-	var st unix.Statfs_t
-	if err := unix.Statfs(dir, &st); err != nil {
+	available, err := codexStagingAvailableBytes(dir)
+	if err != nil {
 		// Filesystems without statfs support (or an unreadable scratch
 		// dir) fail open here; the CreateTemp below reports real errors.
 		return nil
 	}
-	available := st.Bavail * uint64(st.Bsize)
 	const stagedScratchMinFree = 256 << 20
 	if available < stagedScratchMinFree {
 		return fmt.Errorf(
@@ -170,6 +185,7 @@ CREATE TABLE stage_events (
     source TEXT NOT NULL,
     status TEXT NOT NULL,
     content TEXT NOT NULL,
+    raw_content_digest BLOB NOT NULL,
     content_length INTEGER NOT NULL,
     timestamp TEXT NOT NULL DEFAULT '',
     blanked INTEGER NOT NULL DEFAULT 0
@@ -365,15 +381,18 @@ func (s *codexStagingSink) AppendToolResultEvent(
 		s.CodexCollectingSink.AppendToolResultEvent(callID, ev)
 		return
 	}
-	// The legacy deduplication compares raw parser content; the staged
-	// rows keep the raw content plus a blank flag, so the equivalence
-	// check matches even for blocked categories.
+	// The legacy deduplication compares raw parser content before the central
+	// sanitizer runs. Keep that identity as a digest so the staged row can
+	// store sanitized content without collapsing events that differed only by
+	// stripped controls. The digest also avoids retaining a second copy of a
+	// potentially very large raw result in scratch.
+	rawContentDigest := sha256.Sum256([]byte(ev.Content))
 	var exists int
 	err := s.scratch.QueryRow(
 		`SELECT 1 FROM stage_events
 		 WHERE tool_use_id = ? AND agent_id = ? AND status = ?
-		   AND content = ? LIMIT 1`,
-		callID, ev.AgentID, ev.Status, ev.Content,
+		   AND raw_content_digest = ? LIMIT 1`,
+		callID, ev.AgentID, ev.Status, rawContentDigest[:],
 	).Scan(&exists)
 	if err == nil {
 		return // equivalent event already staged
@@ -399,14 +418,29 @@ func (s *codexStagingSink) AppendToolResultEvent(
 		blanked = 1
 	}
 	contentLength := len(ev.Content)
+	if blanked == 0 {
+		// The collecting path sanitizes result-event content in the central
+		// db validation pass. Staged events bypass that pass because the
+		// in-memory message carries only a placeholder, so apply the same
+		// contract before the real content enters the scratch publish source.
+		// Keep dedup above this point raw: two provider events that differ
+		// only by stripped controls remain two events on the collecting path.
+		toolCall := db.ToolCall{ResultEvents: []db.ToolResultEvent{{
+			Content:       ev.Content,
+			ContentLength: contentLength,
+		}}}
+		s.addValidationStats(db.SanitizeToolCall(&toolCall))
+		ev.Content = toolCall.ResultEvents[0].Content
+		contentLength = toolCall.ResultEvents[0].ContentLength
+	}
 	if _, err := s.scratch.Exec(
 		`INSERT INTO stage_events (
 		     seq, tool_use_id, agent_id, subagent_session_id,
-		     source, status, content, content_length,
+		     source, status, content, raw_content_digest, content_length,
 		     timestamp, blanked
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		seq, callID, ev.AgentID, subagent, ev.Source, ev.Status,
-		ev.Content, contentLength, tsStr, blanked,
+		ev.Content, rawContentDigest[:], contentLength, tsStr, blanked,
 	); err != nil {
 		s.fail(err)
 		return
@@ -593,8 +627,22 @@ func (s *codexStagingSink) ResolveSummary(
 			summary += "\n\n" + lastAnon
 		}
 	}
+	blocked := s.blocked[s.categoryByCall[toolUseID]]
+	contentLength = len(summary)
+	if !blocked {
+		// Agent labels become part of result_content but are not themselves
+		// result-event content. Sanitize the assembled summary as the normal
+		// message validation pass does after SummarizeToolResultEvents.
+		toolCall := db.ToolCall{
+			ResultContent:       summary,
+			ResultContentLength: contentLength,
+		}
+		s.addValidationStats(db.SanitizeToolCall(&toolCall))
+		summary = toolCall.ResultContent
+		contentLength = toolCall.ResultContentLength
+	}
 	verdictContent := summary
-	if s.blocked[s.categoryByCall[toolUseID]] {
+	if blocked {
 		// The legacy path blanks blocked summaries before computing
 		// signals (pairToolResultEventSummaries), so a status-less
 		// blocked call is never a content failure regardless of its raw
@@ -609,7 +657,7 @@ func (s *codexStagingSink) ResolveSummary(
 		s.contentFailures = make(map[string]bool)
 	}
 	s.contentFailures[toolUseID] = verdict
-	return summary, len(summary), nil
+	return summary, contentLength, nil
 }
 
 // ContentFailures returns the per-call content-failure verdicts captured
