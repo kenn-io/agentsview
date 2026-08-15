@@ -326,6 +326,30 @@ func TestSyncWatchBatchThenRunReportsProgressBeforeChangedPathParseReturns(
 	}
 }
 
+func TestSyncWatchBatchThenRunClearsProgressBeforePostSyncWork(t *testing.T) {
+	const agent parser.AgentType = "watch-batch-post-sync-work"
+	_, engine, _, _, path := newChangedPathOutcomeEngine(
+		t, agent, func(string) parser.ParseOutcome {
+			return parser.ParseOutcome{ResultSetComplete: true}
+		},
+	)
+	workCalled := false
+
+	_, err := engine.SyncWatchBatchThenRun(
+		t.Context(), WatchBatch{Paths: []string{path}}, nil,
+		func() error {
+			workCalled = true
+			_, active := engine.CurrentProgress()
+			assert.False(t, active,
+				"post-sync work must not inherit completed sync progress")
+			return nil
+		},
+	)
+
+	require.NoError(t, err)
+	assert.True(t, workCalled)
+}
+
 func TestValidateWatchBatchAcceptsBoundedAndAuthoritativeScopes(t *testing.T) {
 	root := t.TempDir()
 	other := t.TempDir()

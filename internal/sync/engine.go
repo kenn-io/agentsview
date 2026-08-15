@@ -1347,6 +1347,21 @@ func (e *Engine) prepareChangedPathSync(
 	return prepared
 }
 
+// syncChangedPathsLocked tracks changed-path preparation and application as
+// one owned pass. The caller holds syncMu, so this progress cannot overwrite a
+// different pass while waiting to enter the serialized sync path.
+func (e *Engine) syncChangedPathsLocked(
+	ctx context.Context, paths []string,
+) (SyncStats, int, error) {
+	e.reportProgress(nil, Progress{
+		Phase:  PhaseDiscovering,
+		Detail: "Preparing changed session paths",
+	})
+	return e.applyChangedPathSyncLocked(
+		ctx, e.prepareChangedPathSync(ctx, paths),
+	)
+}
+
 func (e *Engine) applyChangedPathSyncLocked(
 	ctx context.Context, prepared preparedChangedPathSync,
 ) (SyncStats, int, error) {
@@ -1408,14 +1423,12 @@ func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) error {
 	if e.refuseWriteInForceParse("SyncPaths") {
 		return nil
 	}
-	prepared := e.prepareChangedPathSync(ctx, paths)
-	if prepared.empty() {
-		return prepared.classificationErr
-	}
-	e.syncMu.Lock()
-	stats, tombstoned, err := e.applyChangedPathSyncLocked(ctx, prepared)
-	e.clearCurrentProgress()
-	e.syncMu.Unlock()
+	stats, tombstoned, err := func() (SyncStats, int, error) {
+		e.syncMu.Lock()
+		defer e.syncMu.Unlock()
+		defer e.clearCurrentProgress()
+		return e.syncChangedPathsLocked(ctx, paths)
+	}()
 	if stats.Synced > 0 || tombstoned > 0 ||
 		stats.sourceMissingTombstoned > 0 {
 		e.emit("sessions")
@@ -3498,6 +3511,7 @@ func (e *Engine) syncThenRunLocked(
 	// deferred signal recomputes first (inline: syncMu is held) or
 	// pushed sessions could carry stale signal/secret fields.
 	e.signalSched.flushAllInline()
+	e.clearCurrentProgress()
 	if err := work(full || didResync); err != nil {
 		return stats, err
 	}
@@ -3598,6 +3612,7 @@ func (e *Engine) SyncThenRunWithRebuild(
 		return stats, err
 	}
 	e.signalSched.flushAllInline()
+	e.clearCurrentProgress()
 	if err := work(full || didResync, didResync); err != nil {
 		return stats, err
 	}

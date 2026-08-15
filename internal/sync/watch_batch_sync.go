@@ -276,11 +276,6 @@ func (e *Engine) SyncWatchBatchThenRun(
 	if err != nil {
 		return SyncStats{}, err
 	}
-	var prepared preparedChangedPathSync
-	if len(plan.paths) > 0 {
-		prepared = e.prepareChangedPathSync(ctx, plan.paths)
-	}
-
 	changed := false
 	e.syncMu.Lock()
 	defer func() {
@@ -292,7 +287,7 @@ func (e *Engine) SyncWatchBatchThenRun(
 	}()
 
 	if len(plan.paths) > 0 {
-		pathStats, tombstoned, pathErr := e.applyChangedPathSyncLocked(ctx, prepared)
+		pathStats, tombstoned, pathErr := e.syncChangedPathsLocked(ctx, plan.paths)
 		mergeSyncStats(&stats, pathStats)
 		changed = changed || pathStats.Synced > 0 || tombstoned > 0 ||
 			pathStats.sourceMissingTombstoned > 0
@@ -329,6 +324,7 @@ func (e *Engine) SyncWatchBatchThenRun(
 		return stats, err
 	}
 	e.signalSched.flushAllInline()
+	e.clearCurrentProgress()
 	if work != nil {
 		if err := work(); err != nil {
 			return stats, err

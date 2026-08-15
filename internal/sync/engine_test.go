@@ -9291,6 +9291,104 @@ func TestEngine_ReconcileWatchRootsReportsProgressBeforeDiscoveryReturns(t *test
 	}
 }
 
+func TestEngine_SyncPathsReportsProgressBeforeChangedPathStatReturns(t *testing.T) {
+	fx := newEngineFixture(t)
+	path := fx.writeClaudeSession(t, "proj", "blocked-stat.jsonl", "hello")
+	fx.engine.progressStallAfter = time.Nanosecond
+	started := make(chan struct{}, 1)
+	release := make(chan struct{}, 1)
+	defer func() {
+		select {
+		case release <- struct{}{}:
+		default:
+		}
+	}()
+	realLstat := fx.engine.lstat
+	var calls atomic.Int32
+	fx.engine.lstat = func(got string) (os.FileInfo, error) {
+		if calls.Add(1) == 1 {
+			assert.Equal(t, path, got)
+			started <- struct{}{}
+			<-release
+		}
+		return realLstat(got)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- fx.engine.SyncPathsContext(t.Context(), []string{path})
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		require.FailNow(t, "changed-path sync did not enter source stat")
+	}
+
+	progress, active := fx.engine.CurrentProgress()
+	require.True(t, active,
+		"health must observe changed-path preparation blocked in source stat")
+	assert.Equal(t, PhaseDiscovering, progress.Phase)
+	assert.True(t, progress.Stalled)
+
+	release <- struct{}{}
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.FailNow(t, "changed-path sync did not finish after stat resumed")
+	}
+	_, active = fx.engine.CurrentProgress()
+	assert.False(t, active)
+}
+
+func TestEngine_CoordinatedSyncClearsProgressBeforePostSyncWork(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*Engine, func() error) error
+	}{
+		{
+			name: "sync then run",
+			run: func(engine *Engine, work func() error) error {
+				_, err := engine.SyncThenRun(
+					t.Context(), false, nil, func(bool) error { return work() },
+				)
+				return err
+			},
+		},
+		{
+			name: "sync then run with rebuild",
+			run: func(engine *Engine, work func() error) error {
+				_, err := engine.SyncThenRunWithRebuild(
+					t.Context(), false, nil,
+					func() (RebuildOptions, RebuildCleanup, error) {
+						return RebuildOptions{}, nil, nil
+					},
+					nil,
+					func(bool, bool) error { return work() },
+				)
+				return err
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fx := newEngineFixture(t)
+			fx.writeClaudeSession(t, "proj", "post-sync.jsonl", "hello")
+			workCalled := false
+
+			err := tt.run(fx.engine, func() error {
+				workCalled = true
+				_, active := fx.engine.CurrentProgress()
+				assert.False(t, active,
+					"post-sync work must not inherit completed sync progress")
+				return nil
+			})
+
+			require.NoError(t, err)
+			assert.True(t, workCalled)
+		})
+	}
+}
+
 func TestEngine_TryRunExclusiveRejectsBusySyncWithoutRunningWork(t *testing.T) {
 	engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
 	t.Cleanup(engine.Close)
