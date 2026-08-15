@@ -99,6 +99,28 @@ func TestSyncWorkerStartupModeSyncsAndEmitsTerminalResult(t *testing.T) {
 		"public SyncStats fields must survive the NDJSON protocol")
 }
 
+func TestSyncWorkerAuditModeForwardsReconciliationProgress(t *testing.T) {
+	cfg := testConfigWithClaudeFixture(t)
+	var out bytes.Buffer
+	require.NoError(t, runSyncWorker(cfg, "audit", &out))
+
+	sawActiveProgress := false
+	sc := bufio.NewScanner(&out)
+	for sc.Scan() {
+		var line workerLine
+		require.NoError(t, json.Unmarshal(sc.Bytes(), &line),
+			"every stdout line must be a workerLine JSON object")
+		if line.Progress != nil &&
+			line.Progress.Phase == sync.PhaseSyncing &&
+			line.Progress.SessionsDone > 0 {
+			sawActiveProgress = true
+		}
+	}
+	require.NoError(t, sc.Err())
+	assert.True(t, sawActiveProgress,
+		"audit worker must forward active reconciliation progress")
+}
+
 func TestSyncWorkerStartupUsesConfiguredSourceMachine(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	claudeRoot := cfg.AgentDirs[parser.AgentClaude][0]

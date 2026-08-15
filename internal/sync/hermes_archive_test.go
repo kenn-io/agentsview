@@ -753,7 +753,7 @@ func TestReconcileHermesSiblingMemberChangeBoundsUnchangedMemberWork(
 		require.NoError(t, os.Chtimes(stateDB, bumped, bumped))
 
 		stats, _, err := engine.ReconcileWatchRootsWithStats(
-			t.Context(), []string{sessionsDir}, false,
+			t.Context(), []string{sessionsDir}, false, nil,
 		)
 		require.NoError(t, err)
 		scans = engine.LastReconciliationResult().Metrics.SharedContainerScans

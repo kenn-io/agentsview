@@ -197,7 +197,7 @@ func runSyncWorkerStartup(
 		var auditErr error
 		if auditRoots := reconcileRootPaths(cfg); len(auditRoots) > 0 {
 			stats, tombstoned, auditErr = engine.ReconcileWatchRootsWithStats(
-				ctx, auditRoots, false,
+				ctx, auditRoots, false, onProgress,
 			)
 		}
 		result = workerResultFromStats(ctx, stats)

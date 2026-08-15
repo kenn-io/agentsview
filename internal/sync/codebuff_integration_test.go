@@ -1101,7 +1101,7 @@ func TestSyncCodebuffTombstoneClearsProviderStatHash(t *testing.T) {
 			"still consider the source present")
 
 	_, _, err = engine.ReconcileWatchRootsWithStats(
-		context.Background(), []string{root}, true,
+		context.Background(), []string{root}, true, nil,
 	)
 	require.NoError(t, err,
 		"reconcile must complete; an error here would mask whether "+

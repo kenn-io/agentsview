@@ -331,7 +331,7 @@ func (e *Engine) SyncWatchBatchThenRun(
 	if len(reconcileRoots) > 0 {
 		reconcileStats, tombstoned, _, reconcileErr :=
 			e.reconcileScopedWatchRootsLocked(
-				ctx, "", reconcileRoots, false, plan.lostEvents,
+				ctx, "", reconcileRoots, false, plan.lostEvents, nil,
 			)
 		mergeSyncStats(&stats, reconcileStats)
 		changed = changed || reconcileStats.Synced > 0 || tombstoned > 0
