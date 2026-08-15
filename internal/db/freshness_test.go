@@ -77,3 +77,42 @@ func TestRestoreSessionStalesSourceAndClearsFreshness(t *testing.T) {
 	assert.False(t, present,
 		"restoring a source member must invalidate its source digest")
 }
+
+func TestGetSessionFilePathNotSourceMissing(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	path := "/sessions/project/transcript.jsonl"
+	insertSessionWithSourcePath(t, d, "active", "claude", path)
+	insertSessionWithSourcePath(t, d, "trashed", "claude", path)
+	require.NoError(t, d.SoftDeleteSession("trashed"))
+	insertSessionWithSourcePath(t, d, "missing", "claude", path,
+		func(s *Session) { s.Machine = "local" })
+	require.NoError(t, d.BaselineActiveSessionSourceOwnerships(
+		ctx, []SessionSourceOwnership{{
+			ID: "missing", Machine: "local", Agent: "claude", FilePath: path,
+		}},
+	))
+	tombstoned, err := d.SoftDeleteSessionSourceOwnership(
+		ctx, "local", "claude", "missing", path,
+	)
+	require.NoError(t, err)
+	require.True(t, tombstoned)
+	require.Equal(t, path, d.GetSessionFilePath("missing"),
+		"the unfiltered lookup still returns tombstoned paths")
+
+	tests := []struct {
+		name string
+		id   string
+		want string
+	}{
+		{name: "active row keeps its path", id: "active", want: path},
+		{name: "user-trashed row keeps its path", id: "trashed", want: path},
+		{name: "source-missing row reads as absent", id: "missing", want: ""},
+		{name: "unknown id reads as absent", id: "unknown", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, d.GetSessionFilePathNotSourceMissing(tt.id))
+		})
+	}
+}

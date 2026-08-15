@@ -17,7 +17,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/importer"
 	"go.kenn.io/agentsview/internal/parser"
@@ -926,23 +925,21 @@ func TestParseDiff_JSONSessionsAndDBPath(t *testing.T) {
 
 // TestDoParseDiff_FailOnChangeDirections exercises both directions of
 // the exit-code conjunction (cfg.FailOnChange && report.HasFailures()).
-// A stored session at the current data version whose source file no
-// longer emits it is a presence change, so HasFailures() is true; the
-// flag then decides the exit. Staging it via a valid source file plus a
-// phantom stored row keeps the test independent of the parser's session
-// ID derivation.
+// A stored session whose first message differs from a fresh parse makes
+// HasFailures() true; the flag then decides the exit.
 func TestDoParseDiff_FailOnChangeDirections(t *testing.T) {
 	// Isolate every other agent's directory env var to a temp path so an
 	// inherited dir from the developer or CI environment cannot be scanned and
 	// trip --fail-on-change with an unrelated parse error. The data dir and
-	// Claude dir are then overridden to the paths this test controls.
+	// Claude dir is then overridden to the path this test controls.
 	isolateParseDiffEnv(t)
 	dataDir := os.Getenv("AGENTSVIEW_DATA_DIR")
 	require.NotEmpty(t, dataDir)
 	claudeDir := t.TempDir()
 	t.Setenv("CLAUDE_PROJECTS_DIR", claudeDir)
 
-	// A valid Claude source file so discovery and parse succeed.
+	// Sync a valid Claude source so the stored file fingerprint exactly matches
+	// the source that parse-diff will inspect.
 	projDir := filepath.Join(claudeDir, "-home-proj")
 	require.NoError(t, os.MkdirAll(projDir, 0o755))
 	srcPath := filepath.Join(projDir, "real-session.jsonl")
@@ -952,17 +949,23 @@ func TestDoParseDiff_FailOnChangeDirections(t *testing.T) {
 		String()
 	require.NoError(t, os.WriteFile(srcPath, []byte(content), 0o644))
 
-	// A phantom stored row under that file at the current data version:
-	// the re-parse never emits this id, so it reports as a presence
-	// change (HasFailures() == true).
 	d := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
-	require.NoError(t, d.UpsertSession(db.Session{
-		ID: "phantom-session", Project: "proj", Machine: "m",
-		Agent: "claude", MessageCount: 4, UserMessageCount: 2,
-		FilePath: &srcPath,
+	engine := sync.NewEngine(d, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {claudeDir},
+		},
+		Machine: "local",
+	})
+	stats := engine.SyncAll(context.Background(), nil)
+	require.Equal(t, 1, stats.Synced, "one session synced")
+	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+		_, err := tx.Exec(
+			"UPDATE sessions SET first_message = ? WHERE id = ?",
+			"drifted first message", "real-session",
+		)
+		return err
 	}))
-	require.NoError(t,
-		d.SetSessionDataVersion("phantom-session", db.CurrentDataVersion()))
+	engine.Close()
 	require.NoError(t, d.Close())
 
 	var failBuf bytes.Buffer
@@ -970,7 +973,7 @@ func TestDoParseDiff_FailOnChangeDirections(t *testing.T) {
 		FailOnChange: true, Stdout: &failBuf, Stderr: &failBuf,
 	})
 	assert.True(t, failed,
-		"a presence change with --fail-on-change must fail")
+		"a changed session with --fail-on-change must fail")
 	assert.Contains(t, failBuf.String(), "sessions changed")
 
 	var cleanBuf bytes.Buffer

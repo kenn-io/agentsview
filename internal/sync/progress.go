@@ -67,6 +67,10 @@ type SyncStats struct {
 	Warnings       []string            `json:"warnings,omitempty"`
 	Aborted        bool                `json:"aborted,omitempty"`
 	RebuildPhases  []RebuildPhaseStats `json:"rebuild_phases,omitempty"`
+	// Tombstoned counts committed session removals that are not ordinary sync
+	// writes. It remains meaningful on a partially failed or aborted pass: a
+	// later retry cannot rediscover an already-tombstoned row to notify clients.
+	Tombstoned int `json:"tombstoned,omitempty"`
 
 	// Anomalies aggregates per-run parser/sanitizer anomaly signals
 	// surfaced in the CLI sync summary. These are live per-run counters
@@ -75,12 +79,12 @@ type SyncStats struct {
 	Anomalies AnomalyStats `json:"anomalies,omitzero"`
 
 	filesOK int // unexported: file-level success counter
-	// sourceMissingTombstoned counts stored virtual members tombstoned
-	// during this run because their member source vanished from a
-	// still-existing shared container. Changed-path syncs use it to emit
-	// a sessions event even when nothing else was written.
-	sourceMissingTombstoned int
-	filesDiscovered         int // file-based total, excludes DB-backed agents
+	// sourceMissingArchiveMembers carries members discovered in the original
+	// archive while a full resync writes into its replacement. Orphan copy must
+	// materialize them before the rebuild can apply the same guarded tombstone
+	// transition used by an in-place sync.
+	sourceMissingArchiveMembers []sourceMissingMember
+	filesDiscovered             int // file-based total, excludes DB-backed agents
 	// nonContainerDiscovered counts discovered files that are not part of
 	// a self-preserving container store (OpenCode-format storage and its
 	// SQLite virtual paths). The resync empty-discovery guard uses it so a
@@ -110,7 +114,8 @@ type SyncStats struct {
 }
 
 func (s SyncStats) shouldEmitSync() bool {
-	return !s.Aborted && (s.Synced > 0 || s.ArchiveRebuilt)
+	return s.Tombstoned > 0 ||
+		(!s.Aborted && (s.Synced > 0 || s.ArchiveRebuilt))
 }
 
 // AnomalyStats aggregates parser-output anomaly signals observed during a

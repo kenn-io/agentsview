@@ -105,7 +105,7 @@ func TestStartPeriodicPricingRefreshWaitsForResyncSwap(t *testing.T) {
 		swapDone <- engine.RunExclusive(func() error {
 			close(swapEntered)
 			<-releaseSwap
-			if err := engine.SwapResyncDatabase(
+			if _, err := engine.SwapResyncDatabase(
 				engine.ResyncTempPath(),
 			); err != nil {
 				return err
@@ -191,7 +191,7 @@ func TestSeedPricingWaitsForResyncSwap(t *testing.T) {
 		swapDone <- engine.RunExclusive(func() error {
 			close(swapEntered)
 			<-releaseSwap
-			if err := engine.SwapResyncDatabase(
+			if _, err := engine.SwapResyncDatabase(
 				engine.ResyncTempPath(),
 			); err != nil {
 				return err

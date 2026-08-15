@@ -704,6 +704,87 @@ func TestSyncClaudeS3SubagentTranscriptsContextPreservesStoredParentNamespace(
 	assert.Nil(t, rawChild, "the child must not collide with a local session")
 }
 
+func TestSyncClaudeS3SubagentTranscriptsEmitsSessionsForForkTombstone(
+	t *testing.T,
+) {
+	database := openTestDB(t)
+	const root = "s3://bucket/laptop/raw/claude"
+	const childPath = root +
+		"/-home-proj/parent-uuid/subagents/agent-replay.jsonl"
+	content := strings.Join([]string{
+		`{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-01-01T10:00:00Z","sessionId":"agent-replay","sessionKind":"bg","message":{"content":"first question"}}`,
+		`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-01-01T10:00:05Z","sessionId":"agent-replay","sessionKind":"bg","message":{"id":"msg_01","content":[{"type":"text","text":"first answer"}]}}`,
+	}, "\n") + "\n"
+	mtime := time.Date(2026, 5, 20, 10, 2, 0, 0, time.UTC)
+
+	oldFetch := fetchS3Object
+	oldStat := statClaudeS3Session
+	t.Cleanup(func() {
+		fetchS3Object = oldFetch
+		statClaudeS3Session = oldStat
+	})
+	fetchS3Object = func(got string) (io.ReadCloser, error) {
+		require.Equal(t, childPath, got)
+		return io.NopCloser(strings.NewReader(content)), nil
+	}
+	statClaudeS3Session = func(got string) (parser.S3Object, error) {
+		require.Equal(t, childPath, got)
+		return parser.S3Object{
+			URI:          childPath,
+			Size:         int64(len(content)),
+			LastModified: mtime,
+			Fingerprint:  "s3-meta:agent-replay",
+		}, nil
+	}
+
+	parentPath := root + "/-home-proj/parent-uuid.jsonl"
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:       "laptop~parent-uuid",
+		Project:  "proj",
+		Machine:  "laptop",
+		Agent:    "claude",
+		FilePath: &parentPath,
+	}))
+	replayID := "laptop~agent-replay"
+	staleID := replayID + "-11111111-2222-4333-8444-555555555555"
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:               staleID,
+		Project:          "proj",
+		Machine:          "laptop",
+		Agent:            "claude",
+		ParentSessionID:  &replayID,
+		RelationshipType: "fork",
+		FilePath:         strPtr(childPath),
+		FileSize:         int64Ptr(int64(len(content))),
+		FileMtime:        int64Ptr(mtime.UnixNano()),
+		FileHash:         strPtr("s3-meta:agent-replay"),
+	}))
+	require.NoError(t, database.SetSessionDataVersion(staleID, 0))
+	require.NoError(t, database.BaselineActiveSessionSourceOwnerships(
+		t.Context(), []db.SessionSourceOwnership{{
+			ID: staleID, Machine: "laptop", Agent: "claude", FilePath: childPath,
+		}},
+	))
+
+	emitter := &fakeEmitter{}
+	engine := NewEngine(database, EngineConfig{
+		Machine: "central",
+		Emitter: emitter,
+	})
+	t.Cleanup(engine.Close)
+	require.NoError(t, engine.SyncClaudeS3SubagentTranscriptsContext(
+		t.Context(), "laptop~parent-uuid", []string{childPath},
+	))
+
+	assert.Equal(t, []string{"messages", "sessions"}, emitter.got(),
+		"S3 fork cleanup must refresh messages and the session index")
+	stale, err := database.GetSessionFull(t.Context(), staleID)
+	require.NoError(t, err)
+	require.NotNil(t, stale)
+	require.NotNil(t, stale.DeletionCause)
+	assert.Equal(t, "source_missing", *stale.DeletionCause)
+}
+
 func TestSyncClaudeS3SubagentTranscriptsContextUsesPrefixedChildProject(
 	t *testing.T,
 ) {

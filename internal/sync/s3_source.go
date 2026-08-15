@@ -401,11 +401,15 @@ func (e *Engine) SyncClaudeS3SubagentTranscriptsContext(
 	}
 	e.syncMu.Lock()
 	synced := false
+	sessionsChanged := false
 	// Defers run LIFO: emit runs after syncMu.Unlock, matching the
 	// other sync entry points.
 	defer func() {
 		if synced {
 			e.emit("messages")
+		}
+		if sessionsChanged {
+			e.emit("sessions")
 		}
 	}()
 	defer e.syncMu.Unlock()
@@ -435,7 +439,10 @@ func (e *Engine) SyncClaudeS3SubagentTranscriptsContext(
 		if file.Project == "" {
 			file.Project = parentProject
 		}
-		preserved, err := e.processAndWriteSessionFile(ctx, file, childID)
+		preserved, sourceSessionsChanged, err := e.processAndWriteSessionFile(
+			ctx, file, childID,
+		)
+		sessionsChanged = sessionsChanged || sourceSessionsChanged
 		if err != nil {
 			errs = errors.Join(errs, fmt.Errorf(
 				"sync subagent transcript %s: %w", p, err))

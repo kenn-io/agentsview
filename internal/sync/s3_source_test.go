@@ -69,6 +69,130 @@ func TestProcessFileS3UsesObjectMetadataToSkipBeforeFetch(t *testing.T) {
 	assert.False(t, fetched, "unchanged S3 object should not be fetched")
 }
 
+func TestProcessS3ClaudeForceParseBypassesPrimarylessFreshness(t *testing.T) {
+	database := openTestDB(t)
+	const uri = "s3://bucket/root/claude/project/force-replay.jsonl"
+	content := strings.Join([]string{
+		`{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-01-01T10:00:00Z","sessionId":"force-replay","sessionKind":"bg","message":{"content":"first question"}}`,
+		`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-01-01T10:00:05Z","sessionId":"force-replay","sessionKind":"bg","message":{"id":"msg_01","content":[{"type":"text","text":"first answer"}]}}`,
+	}, "\n") + "\n"
+	mtime := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC).UnixNano()
+	fingerprint := "s3:fingerprint:force-replay"
+	parentID := "remote-box~force-replay"
+	staleID := parentID + "-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:               staleID,
+		Project:          "project",
+		Machine:          "remote-box",
+		Agent:            "claude",
+		Cwd:              "/workspace/personal/project",
+		ParentSessionID:  &parentID,
+		RelationshipType: "fork",
+		FilePath:         strPtr(uri),
+		FileSize:         int64Ptr(int64(len(content))),
+		FileMtime:        int64Ptr(mtime),
+		FileHash:         strPtr(fingerprint),
+	}))
+	require.NoError(t, database.SetSessionDataVersion(staleID, 0))
+
+	oldFetch := fetchS3Object
+	t.Cleanup(func() { fetchS3Object = oldFetch })
+	fetched := false
+	fetchS3Object = func(got string) (io.ReadCloser, error) {
+		require.Equal(t, uri, got)
+		fetched = true
+		return io.NopCloser(strings.NewReader(content)), nil
+	}
+
+	engine := NewDiffEngine(database, EngineConfig{
+		Machine:            "local",
+		IncludeCwdPrefixes: []string{"/workspace/work"},
+	})
+	t.Cleanup(engine.Close)
+	marker := engine.claudeRowlessFreshnessCacheKey(uri, fingerprint)
+	engine.cacheSkip(marker, mtime)
+	file := parser.DiscoveredFile{
+		Agent:             parser.AgentClaude,
+		Path:              uri,
+		Machine:           "remote-box",
+		SourceSize:        int64(len(content)),
+		SourceMtime:       mtime,
+		SourceFingerprint: fingerprint,
+	}
+	info, err := s3SourceFileInfo(file)
+	require.NoError(t, err)
+
+	res := engine.processS3Session(t.Context(), file, info)
+	require.NoError(t, res.err)
+	assert.True(t, fetched,
+		"parse-diff must fetch and parse a primary-less S3 Claude source")
+}
+
+func TestProcessS3ClaudeChangedPrimarylessSourceUsesCurrentRowlessMarker(
+	t *testing.T,
+) {
+	database := openTestDB(t)
+	const uri = "s3://bucket/root/claude/project/changed-replay.jsonl"
+	content := strings.Join([]string{
+		`{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-01-01T10:00:00Z","sessionId":"changed-replay","sessionKind":"bg","message":{"content":"current question"}}`,
+		`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-01-01T10:00:05Z","sessionId":"changed-replay","sessionKind":"bg","message":{"id":"msg_01","content":[{"type":"text","text":"current answer"}]}}`,
+	}, "\n") + "\n"
+	currentMtime := time.Date(2026, 8, 14, 14, 0, 0, 0, time.UTC).UnixNano()
+	const currentFingerprint = "s3:fingerprint:changed-replay"
+	parentID := "remote-box~changed-replay"
+	staleID := parentID + "-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	oldSize := int64(17)
+	oldMtime := currentMtime - int64(time.Hour)
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: staleID, Project: "project", Machine: "remote-box", Agent: "claude",
+		Cwd: "/workspace/personal/project", ParentSessionID: &parentID,
+		RelationshipType: "fork", FilePath: strPtr(uri),
+		FileSize: &oldSize, FileMtime: &oldMtime, FileHash: strPtr("old-hash"),
+	}))
+	require.NoError(t, database.SetSessionDataVersion(staleID, 0))
+
+	oldFetch := fetchS3Object
+	t.Cleanup(func() { fetchS3Object = oldFetch })
+	var fetches int
+	fetchS3Object = func(got string) (io.ReadCloser, error) {
+		require.Equal(t, uri, got)
+		fetches++
+		return io.NopCloser(strings.NewReader(content)), nil
+	}
+
+	engine := NewEngine(database, EngineConfig{
+		Machine:            "local",
+		IncludeCwdPrefixes: []string{"/workspace/work"},
+	})
+	t.Cleanup(engine.Close)
+	file := parser.DiscoveredFile{
+		Agent: parser.AgentClaude, Path: uri, Project: "project",
+		Machine: "remote-box", SourceSize: int64(len(content)),
+		SourceMtime: currentMtime, SourceFingerprint: currentFingerprint,
+	}
+
+	first := engine.processFile(t.Context(), file)
+	require.NoError(t, first.err)
+	require.Equal(t, 1, fetches)
+	jobs := make(chan syncJob, 1)
+	jobs <- syncJob{
+		path: file.Path, agent: file.Agent, machine: file.Machine,
+		processResult: first,
+	}
+	close(jobs)
+	stats := engine.collectAndBatch(
+		t.Context(), jobs, 1, 1, nil, syncWriteDefault,
+	)
+	require.Zero(t, stats.Failed)
+
+	second := engine.processFile(t.Context(), file)
+	require.NoError(t, second.err)
+	assert.True(t, second.skip,
+		"the current rowless marker must skip an unchanged replay-only source")
+	assert.Equal(t, 1, fetches,
+		"rowless freshness must avoid downloading the unchanged S3 object again")
+}
+
 func TestProcessFileS3SameMetadataDifferentFingerprintFetches(t *testing.T) {
 	database := openTestDB(t)
 	path := "s3://bucket/laptop/raw/claude/test-proj/fingerprint.jsonl"
@@ -1591,4 +1715,287 @@ func TestSyncRootsSinceScopedRemoteRootSyncsNewObject(t *testing.T) {
 	require.NotNil(t, sess.FilePath)
 	assert.Equal(t, uri, *sess.FilePath,
 		"the stored source must be the s3:// URI, not a temp path")
+}
+
+func TestSyncRootsSinceTombstonesStaleClaudeS3Fork(t *testing.T) {
+	database := openTestDB(t)
+	const remoteRoot = "s3://bucket/remote-box/raw/claude"
+	const uri = remoteRoot + "/test-proj/new-session.jsonl"
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T00:00:00Z", "Hello from S3").
+		AddClaudeAssistant("2024-01-01T00:00:05Z", "Hi.").
+		String()
+	mtime := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC).UnixNano()
+	staleID := "remote-box~new-session-11111111-2222-4333-8444-555555555555"
+	parentID := "remote-box~new-session"
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:               staleID,
+		Project:          "test-proj",
+		Machine:          "remote-box",
+		Agent:            "claude",
+		ParentSessionID:  &parentID,
+		RelationshipType: "fork",
+		FilePath:         strPtr(uri),
+	}))
+	require.NoError(t, database.SetSessionDataVersion(staleID, 0))
+
+	oldFetch := fetchS3Object
+	oldStat := statS3Object
+	t.Cleanup(func() {
+		fetchS3Object = oldFetch
+		statS3Object = oldStat
+	})
+	fetchS3Object = func(got string) (io.ReadCloser, error) {
+		require.Equal(t, uri, got)
+		return io.NopCloser(strings.NewReader(content)), nil
+	}
+	statS3Object = func(string) (parser.S3Object, error) {
+		return parser.S3Object{}, missingS3ObjectError()
+	}
+
+	factory := &scopeRecordingS3Factory{source: parser.SourceRef{
+		Provider:       parser.AgentClaude,
+		Key:            uri,
+		DisplayPath:    uri,
+		FingerprintKey: uri,
+		ProjectHint:    "test-proj",
+		Opaque: parser.S3DiscoveredSource{
+			URI:         uri,
+			Project:     "test-proj",
+			Machine:     "remote-box",
+			Size:        int64(len(content)),
+			MtimeNS:     mtime,
+			Fingerprint: "s3:fingerprint:new-session",
+		},
+	}}
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {remoteRoot},
+		},
+		Machine:           "local",
+		ProviderFactories: []parser.ProviderFactory{factory},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentClaude: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	t.Cleanup(engine.Close)
+
+	first := engine.SyncRootsSince(
+		t.Context(), []string{remoteRoot}, time.Time{}, nil,
+	)
+	require.Zero(t, first.Failed)
+	stale, err := database.GetSessionFull(t.Context(), staleID)
+	require.NoError(t, err)
+	require.NotNil(t, stale)
+	assert.Nil(t, stale.DeletedAt,
+		"the first pass must preserve a fork without deletion authority")
+
+	second := engine.SyncRootsSince(
+		t.Context(), []string{remoteRoot}, time.Time{}, nil,
+	)
+	require.Zero(t, second.Failed)
+	stale, err = database.GetSessionFull(t.Context(), staleID)
+	require.NoError(t, err)
+	require.NotNil(t, stale)
+	require.NotNil(t, stale.DeletedAt,
+		"the omitted S3 fork must be tombstoned")
+	require.NotNil(t, stale.DeletionCause)
+	assert.Equal(t, "source_missing", *stale.DeletionCause)
+}
+
+func TestSyncRootsSinceSkipsZeroResultClaudeS3SourceWithOnlyRejectedFork(
+	t *testing.T,
+) {
+	database := openTestDB(t)
+	const remoteRoot = "s3://bucket/remote-box/raw/claude"
+	const uri = remoteRoot + "/test-proj/replay-session.jsonl"
+	content := strings.Join([]string{
+		`{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-01-01T10:00:00Z","sessionId":"replay-session","sessionKind":"bg","message":{"content":"first question"}}`,
+		`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-01-01T10:00:05Z","sessionId":"replay-session","sessionKind":"bg","message":{"id":"msg_01","content":[{"type":"text","text":"first answer"}]}}`,
+	}, "\n") + "\n"
+	mtime := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC).UnixNano()
+	parentID := "remote-box~replay-session"
+	allowedID := parentID + "-11111111-2222-4333-8444-555555555555"
+	rejectedID := parentID + "-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	for id, cwd := range map[string]string{
+		allowedID:  "/workspace/work/project",
+		rejectedID: "/workspace/personal/project",
+	} {
+		require.NoError(t, database.UpsertSession(db.Session{
+			ID:               id,
+			Project:          "test-proj",
+			Machine:          "remote-box",
+			Agent:            "claude",
+			Cwd:              cwd,
+			ParentSessionID:  &parentID,
+			RelationshipType: "fork",
+			FilePath:         strPtr(uri),
+			FileSize:         int64Ptr(int64(len(content))),
+			FileMtime:        int64Ptr(mtime),
+			FileHash:         strPtr("s3:fingerprint:replay-session"),
+		}))
+		require.NoError(t, database.SetSessionDataVersion(id, 0))
+	}
+	require.NoError(t, database.BaselineActiveSessionSourceOwnerships(
+		t.Context(), []db.SessionSourceOwnership{{
+			ID:       allowedID,
+			Machine:  "remote-box",
+			Agent:    "claude",
+			FilePath: uri,
+		}},
+	))
+
+	oldFetch := fetchS3Object
+	oldStat := statS3Object
+	t.Cleanup(func() {
+		fetchS3Object = oldFetch
+		statS3Object = oldStat
+	})
+	fetches := 0
+	fetchS3Object = func(got string) (io.ReadCloser, error) {
+		require.Equal(t, uri, got)
+		fetches++
+		return io.NopCloser(strings.NewReader(content)), nil
+	}
+	statS3Object = func(string) (parser.S3Object, error) {
+		return parser.S3Object{}, missingS3ObjectError()
+	}
+
+	factory := &scopeRecordingS3Factory{source: parser.SourceRef{
+		Provider:       parser.AgentClaude,
+		Key:            uri,
+		DisplayPath:    uri,
+		FingerprintKey: uri,
+		ProjectHint:    "test-proj",
+		Opaque: parser.S3DiscoveredSource{
+			URI:         uri,
+			Project:     "test-proj",
+			Machine:     "remote-box",
+			Size:        int64(len(content)),
+			MtimeNS:     mtime,
+			Fingerprint: "s3:fingerprint:replay-session",
+		},
+	}}
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {remoteRoot},
+		},
+		Machine:            "local",
+		IncludeCwdPrefixes: []string{"/workspace/work"},
+		ProviderFactories:  []parser.ProviderFactory{factory},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentClaude: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	t.Cleanup(engine.Close)
+
+	first := engine.SyncRootsSince(
+		t.Context(), []string{remoteRoot}, time.Time{}, nil,
+	)
+	require.Zero(t, first.Failed)
+	require.Equal(t, 1, fetches,
+		"an actionable stale fork must force a complete source parse")
+	allowed, err := database.GetSessionFull(t.Context(), allowedID)
+	require.NoError(t, err)
+	require.NotNil(t, allowed)
+	require.NotNil(t, allowed.DeletionCause,
+		"the admitted stale fork must be retired before steady state")
+
+	second := engine.SyncRootsSince(
+		t.Context(), []string{remoteRoot}, time.Time{}, nil,
+	)
+	require.Zero(t, second.Failed)
+	assert.Equal(t, 1, second.Skipped)
+	assert.Equal(t, 1, fetches,
+		"unchanged source freshness must prevent another S3 download")
+	stale, err := database.GetSession(t.Context(), rejectedID)
+	require.NoError(t, err)
+	assert.NotNil(t, stale,
+		"the CWD-rejected stale fork must remain active")
+}
+
+func TestProcessS3ClaudeSourceMissingPrimaryUsesRowlessMarker(
+	t *testing.T,
+) {
+	database := openTestDB(t)
+	const uri = "s3://bucket/root/claude/project/missing-primary.jsonl"
+	content := strings.Join([]string{
+		`{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-01-01T10:00:00Z","sessionId":"missing-primary","sessionKind":"bg","message":{"content":"current question"}}`,
+		`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-01-01T10:00:05Z","sessionId":"missing-primary","sessionKind":"bg","message":{"id":"msg_01","content":[{"type":"text","text":"current answer"}]}}`,
+	}, "\n") + "\n"
+	currentMtime := time.Date(2026, 8, 14, 14, 0, 0, 0, time.UTC).UnixNano()
+	const currentFingerprint = "s3:fingerprint:missing-primary"
+	parentID := "remote-box~missing-primary"
+	staleID := parentID + "-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	oldSize := int64(17)
+	oldMtime := currentMtime - int64(time.Hour)
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: parentID, Project: "project", Machine: "remote-box",
+		Agent: "claude", Cwd: "/workspace/work/project", FilePath: strPtr(uri),
+		FileSize: &oldSize, FileMtime: &oldMtime, FileHash: strPtr("old-hash"),
+	}))
+	require.NoError(t, database.BaselineActiveSessionSourceOwnerships(
+		t.Context(), []db.SessionSourceOwnership{{
+			ID: parentID, Machine: "remote-box", Agent: "claude", FilePath: uri,
+		}},
+	))
+	tombstoned, err := database.SoftDeleteSessionSourceOwnership(
+		t.Context(), "remote-box", "claude", parentID, uri,
+	)
+	require.NoError(t, err)
+	require.True(t, tombstoned, "seed a source-missing canonical primary")
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: staleID, Project: "project", Machine: "remote-box", Agent: "claude",
+		Cwd: "/workspace/personal/project", ParentSessionID: &parentID,
+		RelationshipType: "fork", FilePath: strPtr(uri),
+		FileSize: &oldSize, FileMtime: &oldMtime, FileHash: strPtr("old-hash"),
+	}))
+	require.NoError(t, database.SetSessionDataVersion(staleID, 0))
+
+	oldFetch := fetchS3Object
+	t.Cleanup(func() { fetchS3Object = oldFetch })
+	var fetches int
+	fetchS3Object = func(got string) (io.ReadCloser, error) {
+		require.Equal(t, uri, got)
+		fetches++
+		return io.NopCloser(strings.NewReader(content)), nil
+	}
+
+	engine := NewEngine(database, EngineConfig{
+		Machine:            "local",
+		IncludeCwdPrefixes: []string{"/workspace/work"},
+	})
+	t.Cleanup(engine.Close)
+	file := parser.DiscoveredFile{
+		Agent: parser.AgentClaude, Path: uri, Project: "project",
+		Machine: "remote-box", SourceSize: int64(len(content)),
+		SourceMtime: currentMtime, SourceFingerprint: currentFingerprint,
+	}
+
+	first := engine.processFile(t.Context(), file)
+	require.NoError(t, first.err)
+	require.Equal(t, 1, fetches)
+	jobs := make(chan syncJob, 1)
+	jobs <- syncJob{
+		path: file.Path, agent: file.Agent, machine: file.Machine,
+		processResult: first,
+	}
+	close(jobs)
+	stats := engine.collectAndBatch(
+		t.Context(), jobs, 1, 1, nil, syncWriteDefault,
+	)
+	require.Zero(t, stats.Failed)
+
+	second := engine.processFile(t.Context(), file)
+	require.NoError(t, second.err)
+	assert.True(t, second.skip,
+		"a source-missing primary must not hide the rowless marker")
+	assert.Equal(t, 1, fetches,
+		"rowless freshness must avoid downloading the unchanged S3 object again")
+	primary, err := database.GetSessionFull(t.Context(), parentID)
+	require.NoError(t, err)
+	require.NotNil(t, primary)
+	require.NotNil(t, primary.DeletionCause,
+		"the source-missing primary must stay tombstoned")
+	assert.Equal(t, "source_missing", *primary.DeletionCause)
 }

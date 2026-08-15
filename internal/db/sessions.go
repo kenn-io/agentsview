@@ -2210,6 +2210,26 @@ func (db *DB) GetSessionFileHash(id string) (hash string, ok bool) {
 	return h.String, true
 }
 
+// GetSessionFilePathNotSourceMissing returns the stored file_path for a
+// session unless the row is tombstoned as source-missing. Freshness gates use
+// it to decide whether a canonical primary row still vouches for its source: a
+// source-missing tombstone must not, or a rowless source could never be marked
+// fresh, while a user-trashed row keeps its path so trash handling is
+// unchanged. It returns "" when no eligible row exists or file_path is NULL.
+func (db *DB) GetSessionFilePathNotSourceMissing(id string) string {
+	var fp sql.NullString
+	err := db.getReader().QueryRow(
+		"SELECT file_path FROM sessions WHERE id = ?"+
+			" AND (deletion_cause IS NULL"+
+			" OR deletion_cause <> '"+deletionCauseSourceMissing+"')",
+		id,
+	).Scan(&fp)
+	if err != nil || !fp.Valid {
+		return ""
+	}
+	return fp.String
+}
+
 // GetSessionFilePath returns the stored file_path for a session,
 // or empty string if not found or NULL.
 func (db *DB) GetSessionFilePath(id string) string {
@@ -3142,6 +3162,87 @@ func (db *DB) ListSessionIDsByFilePath(path, agent string) ([]string, error) {
 	return ids, nil
 }
 
+// ListStaleForkSessionOwnerships returns every active fork row written by an
+// older parser data version for one agent, with its stored machine and source
+// path. A rebuild loads this once from the write-barriered original archive so
+// per-file legacy fork checks read memory instead of opening archive
+// connections while the replacement database is being written.
+func (db *DB) ListStaleForkSessionOwnerships(
+	agent string,
+) ([]SessionSourceOwnership, error) {
+	rows, err := db.getReader().Query(
+		"SELECT id, machine, file_path FROM sessions"+
+			" WHERE agent = ? AND deleted_at IS NULL"+
+			" AND relationship_type = 'fork' AND data_version < ?"+
+			" AND file_path IS NOT NULL"+
+			" ORDER BY file_path, id",
+		agent, dataVersion,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing stale fork session ownerships: %w", err)
+	}
+	defer rows.Close()
+
+	var ownerships []SessionSourceOwnership
+	for rows.Next() {
+		var ownership SessionSourceOwnership
+		if err := rows.Scan(
+			&ownership.ID, &ownership.Machine, &ownership.FilePath,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"scanning stale fork session ownership: %w", err,
+			)
+		}
+		ownership.Agent = agent
+		ownerships = append(ownerships, ownership)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf(
+			"iterating stale fork session ownerships: %w", err,
+		)
+	}
+	return ownerships, nil
+}
+
+// ListStaleForkSessionIDsByFilePath returns active fork rows written by an
+// older parser data version for one provider-owned source path. Both signals
+// are required before a caller may treat a row omitted by a current complete
+// parse as a legacy fork artifact rather than parser presence drift.
+func (db *DB) ListStaleForkSessionIDsByFilePath(
+	path, agent string,
+) ([]string, error) {
+	rows, err := db.getReader().Query(
+		"SELECT id FROM sessions"+
+			" WHERE file_path = ? AND agent = ? AND deleted_at IS NULL"+
+			" AND relationship_type = 'fork' AND data_version < ?"+
+			" ORDER BY id",
+		path, agent, dataVersion,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"listing stale fork session IDs by file path: %w", err,
+		)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf(
+				"scanning stale fork session ID by file path: %w", err,
+			)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf(
+			"iterating stale fork session IDs by file path: %w", err,
+		)
+	}
+	return ids, nil
+}
+
 const sessionMachineBatchSize = 500
 
 // SessionWriteIdentity is the stored state used to preserve immutable source
@@ -3550,6 +3651,140 @@ func (db *DB) BaselineActiveSessionSourcePaths(
 	return nil
 }
 
+// BaselineActiveSessionSourceOwnerships marks only the supplied exact active
+// ownerships as observed. It is used when source-wide admission would include
+// archived members that a per-session policy deliberately rejects.
+func (db *DB) BaselineActiveSessionSourceOwnerships(
+	ctx context.Context,
+	ownerships []SessionSourceOwnership,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(ownerships) == 0 {
+		return nil
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	tx, err := db.getWriter().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("starting exact source baseline transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := baselineActiveSessionSourceOwnershipsTx(
+		ctx, tx, ownerships,
+	); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing exact source baselines: %w", err)
+	}
+	return nil
+}
+
+// CopySessionSourceOwnershipBaselinesFrom copies deletion proof from another
+// archive only for the supplied exact active ownerships. Rebuilds use this for
+// admitted archive-only members without granting proof to unrelated or
+// policy-rejected orphaned sessions.
+func (db *DB) CopySessionSourceOwnershipBaselinesFrom(
+	ctx context.Context,
+	sourcePath string,
+	ownerships []SessionSourceOwnership,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(ownerships) == 0 {
+		return nil
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	conn, err := db.getWriter().Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquiring source baseline copy connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(
+		ctx, "ATTACH DATABASE ? AS old_db", sourcePath,
+	); err != nil {
+		return fmt.Errorf("attaching source baseline archive: %w", err)
+	}
+	defer func() {
+		_, _ = conn.ExecContext(ctx, "DETACH DATABASE old_db")
+	}()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("starting source baseline copy transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if oldDBHasTable(ctx, tx, "local_session_source_baselines") {
+		for _, ownership := range ownerships {
+			if ownership.ID == "" || ownership.Agent == "" || ownership.FilePath == "" {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO main.local_session_source_baselines
+					(session_id, machine, agent, file_path)
+				SELECT b.session_id, b.machine, b.agent, b.file_path
+				FROM old_db.local_session_source_baselines AS b
+				JOIN main.sessions AS s
+				  ON s.id = b.session_id
+				 AND s.machine = b.machine
+				 AND s.agent = b.agent
+				 AND s.file_path = b.file_path
+				WHERE b.session_id = ? AND b.machine = ?
+				  AND b.agent = ? AND b.file_path = ?
+				  AND s.deleted_at IS NULL
+				ON CONFLICT(session_id) DO UPDATE SET
+					machine = excluded.machine,
+					agent = excluded.agent,
+					file_path = excluded.file_path`,
+				ownership.ID, ownership.Machine,
+				ownership.Agent, ownership.FilePath,
+			); err != nil {
+				return fmt.Errorf(
+					"copying exact session source baseline: %w", err,
+				)
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing source baseline copy: %w", err)
+	}
+	return nil
+}
+
+// RemoveSessionSourceOwnershipBaselines revokes deletion proof only for the
+// supplied exact ownerships. It preserves other active rows sharing the same
+// source path.
+func (db *DB) RemoveSessionSourceOwnershipBaselines(
+	ctx context.Context,
+	ownerships []SessionSourceOwnership,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(ownerships) == 0 {
+		return nil
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	tx, err := db.getWriter().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("starting exact source baseline removal: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := removeSessionSourceOwnershipBaselinesTx(
+		ctx, tx, ownerships,
+	); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing exact source baseline removal: %w", err)
+	}
+	return nil
+}
+
 // ReplaceActiveSessionSourceBaselines makes admitted the exact subset of a
 // bounded candidate page that carries deletion proof. Machine is an exact
 // stored key, including the empty key retained by legacy sessions. Existing
@@ -3567,10 +3802,28 @@ func (db *DB) ReplaceActiveSessionSourceBaselines(
 	candidates []SessionSourcePath,
 	admitted []SessionSourcePath,
 ) error {
+	return db.ReplaceActiveSessionSourceBaselinesWithExceptions(
+		ctx, machine, candidates, admitted, nil, nil,
+	)
+}
+
+// ReplaceActiveSessionSourceBaselinesWithExceptions replaces source-wide
+// deletion proof and applies per-session CWD exceptions in one transaction.
+// This prevents a canceled or failed pass from committing broad proof before
+// it revokes proof from rejected members of the same source.
+func (db *DB) ReplaceActiveSessionSourceBaselinesWithExceptions(
+	ctx context.Context,
+	machine string,
+	candidates []SessionSourcePath,
+	admitted []SessionSourcePath,
+	exactAdmitted []SessionSourceOwnership,
+	exactRejected []SessionSourceOwnership,
+) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if len(candidates) == 0 {
+	if len(candidates) == 0 && len(exactAdmitted) == 0 &&
+		len(exactRejected) == 0 {
 		return nil
 	}
 	rejected := rejectedSourceCandidates(candidates, admitted)
@@ -3604,8 +3857,71 @@ func (db *DB) ReplaceActiveSessionSourceBaselines(
 	); err != nil {
 		return err
 	}
+	if err := removeSessionSourceOwnershipBaselinesTx(
+		ctx, tx, exactRejected,
+	); err != nil {
+		return err
+	}
+	if err := baselineActiveSessionSourceOwnershipsTx(
+		ctx, tx, exactAdmitted,
+	); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing source baseline replacement: %w", err)
+	}
+	return nil
+}
+
+func baselineActiveSessionSourceOwnershipsTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	ownerships []SessionSourceOwnership,
+) error {
+	for _, ownership := range ownerships {
+		if ownership.ID == "" || ownership.Agent == "" || ownership.FilePath == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO local_session_source_baselines
+				(session_id, machine, agent, file_path)
+			SELECT id, machine, agent, file_path
+			FROM sessions
+			WHERE id = ? AND machine = ? AND agent = ? AND file_path = ?
+			  AND deleted_at IS NULL
+			ON CONFLICT(session_id) DO UPDATE SET
+				machine = excluded.machine,
+				agent = excluded.agent,
+				file_path = excluded.file_path
+			WHERE local_session_source_baselines.machine IS NOT excluded.machine
+			   OR local_session_source_baselines.agent IS NOT excluded.agent
+			   OR local_session_source_baselines.file_path IS NOT excluded.file_path`,
+			ownership.ID, ownership.Machine,
+			ownership.Agent, ownership.FilePath,
+		); err != nil {
+			return fmt.Errorf("baselining exact active session ownership: %w", err)
+		}
+	}
+	return nil
+}
+
+func removeSessionSourceOwnershipBaselinesTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	ownerships []SessionSourceOwnership,
+) error {
+	for _, ownership := range ownerships {
+		if ownership.ID == "" || ownership.Agent == "" || ownership.FilePath == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM local_session_source_baselines
+			WHERE session_id = ? AND machine = ? AND agent = ? AND file_path = ?`,
+			ownership.ID, ownership.Machine,
+			ownership.Agent, ownership.FilePath,
+		); err != nil {
+			return fmt.Errorf("removing exact session source baseline: %w", err)
+		}
 	}
 	return nil
 }

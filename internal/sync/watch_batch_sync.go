@@ -311,7 +311,7 @@ func (e *Engine) SyncWatchBatchThenRun(
 		pathStats, tombstoned, pathErr := e.syncChangedPathsLocked(ctx, plan.paths)
 		mergeSyncStats(&stats, pathStats)
 		changed = changed || pathStats.Synced > 0 || tombstoned > 0 ||
-			pathStats.sourceMissingTombstoned > 0
+			pathStats.Tombstoned > 0
 		if pathErr != nil {
 			retry := WatchBatch{FullSync: plan.full, LostEvents: plan.lostEvents}
 			if !plan.full {

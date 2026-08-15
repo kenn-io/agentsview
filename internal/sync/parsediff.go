@@ -949,14 +949,27 @@ func (e *Engine) parseDiffCollectFile(
 	}
 
 	// Virtual members gone from a still-existing shared container are
-	// tombstone-bound on a real sync; mark them visited so the presence
-	// sweep does not misreport them as parser drift.
+	// tombstone-bound on a real sync only when their archived CWD passes the
+	// active allow-list. Mark both tombstone-bound and policy-preserved members
+	// visited so the presence sweep does not misreport them as parser drift.
 	for _, member := range job.sourceMissingMembers {
 		stored := storedByID[member.sessionID]
 		if stored == nil {
 			continue
 		}
 		visited[stored.ID] = true
+		if !e.cwdFilter.allows(stored.Cwd) {
+			report.Sessions = append(report.Sessions, SessionDiff{
+				SessionID:         stored.ID,
+				Agent:             stored.Agent,
+				FilePath:          member.filePath,
+				Class:             DiffSkipped,
+				Reason:            "member source missing (policy-preserved by CWD filter)",
+				StoredDataVersion: stored.DataVersion,
+			})
+			report.Totals.Skipped++
+			continue
+		}
 		report.Sessions = append(report.Sessions, SessionDiff{
 			SessionID:         stored.ID,
 			Agent:             stored.Agent,

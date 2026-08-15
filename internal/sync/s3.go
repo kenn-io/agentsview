@@ -234,10 +234,20 @@ func (e *Engine) processS3Session(
 	case parser.AgentClaude:
 		sessionID := strings.TrimSuffix(sourceInfo.Name(), ".jsonl")
 		fullID := applyIDPrefixToID(idPrefix, sessionID)
+		primaryPath := e.db.GetSessionFilePathNotSourceMissing(fullID)
+		if primaryPath == "" && !e.forceParse {
+			fresh, _ := e.claudeSourceFreshWithoutPrimary(
+				ctx, file.Path, file.Path, sourceInfo, sourceFingerprint,
+			)
+			if fresh {
+				return processResult{skip: true}
+			}
+		}
 		if e.shouldSkipFileWithPrefix(
 			idPrefix, sessionID, sourceInfo, sourceFingerprint,
 		) &&
-			e.db.GetSessionFilePath(fullID) == file.Path {
+			primaryPath == file.Path &&
+			!e.claudeSourceNeedsStaleForkReconciliation(ctx, file.Path) {
 			sess, _ := e.db.GetSession(ctx, fullID)
 			if sess != nil &&
 				sess.Project != "" &&
@@ -372,6 +382,28 @@ func (e *Engine) processS3Session(
 	res.excludedSessionIDs = applyIDPrefixToIDs(
 		idPrefix, res.excludedSessionIDs,
 	)
+	if file.Agent == parser.AgentClaude {
+		missing, err := e.claudeSourceMissingSessionOwnershipsForCompleteResult(
+			ctx,
+			file.Path,
+			res.excludedSessionIDs,
+			res.results,
+		)
+		if err != nil {
+			return processResult{
+				err:            err,
+				noCacheSkip:    true,
+				retentionLease: lease,
+			}
+		}
+		res.sourceMissingMembers = missing
+		if !e.forceParse && !file.ForceParse &&
+			!res.suppressPresenceSweep && res.providerFailureCount == 0 &&
+			len(res.retrySessionIDs) == 0 && !res.noCacheSkip {
+			res.claudeRowlessFreshnessKey =
+				e.claudeRowlessFreshnessCacheKey(file.Path, sourceFingerprint)
+		}
+	}
 	res.retentionLease = lease
 	return res
 }

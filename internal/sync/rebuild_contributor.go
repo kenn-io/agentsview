@@ -119,6 +119,7 @@ func mergeSyncStats(dst *SyncStats, src SyncStats) {
 	dst.Skipped += src.Skipped
 	dst.Failed += src.Failed
 	dst.OrphanedCopied += src.OrphanedCopied
+	dst.Tombstoned += src.Tombstoned
 	dst.Warnings = append(dst.Warnings, src.Warnings...)
 	dst.Aborted = dst.Aborted || src.Aborted
 	dst.RebuildPhases = append(dst.RebuildPhases, src.RebuildPhases...)
@@ -129,6 +130,9 @@ func mergeSyncStats(dst *SyncStats, src SyncStats) {
 	dst.messagesIndexed += src.messagesIndexed
 	dst.parserExcludedFiles += src.parserExcludedFiles
 	dst.parserExcludedIDs = append(dst.parserExcludedIDs, src.parserExcludedIDs...)
+	dst.sourceMissingArchiveMembers = append(
+		dst.sourceMissingArchiveMembers, src.sourceMissingArchiveMembers...,
+	)
 	dst.cwdFilteredSessions += src.cwdFilteredSessions
 	dst.cwdFilteredFiles += src.cwdFilteredFiles
 }

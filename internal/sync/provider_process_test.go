@@ -600,7 +600,7 @@ func TestSyncSingleSessionKeepsRetryStatePerResult(t *testing.T) {
 	)
 	engine := newProcessFixtureEngine(t, root, provider)
 
-	_, err := engine.processAndWriteSessionFile(
+	_, _, err := engine.processAndWriteSessionFile(
 		context.Background(),
 		parser.DiscoveredFile{Path: sourcePath, Agent: parser.AgentCowork},
 		"cowork:current",

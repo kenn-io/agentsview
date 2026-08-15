@@ -1068,6 +1068,38 @@ func TestReplaceActiveSessionSourceBaselinesWarmPassWritesBounded(t *testing.T) 
 	}
 }
 
+func TestReplaceActiveSessionSourceBaselinesRollsBackBroadProofWhenExceptionFails(
+	t *testing.T,
+) {
+	d := testDB(t)
+	path := filepath.Join(t.TempDir(), "mixed.jsonl")
+	insertSessionWithSourcePath(t, d, "allowed", "claude", path)
+	insertSessionWithSourcePath(t, d, "rejected", "claude", path)
+	_, err := d.getWriter().Exec(`
+		CREATE TRIGGER fail_rejected_baseline_removal
+		BEFORE DELETE ON local_session_source_baselines
+		WHEN OLD.session_id = 'rejected'
+		BEGIN
+			SELECT RAISE(FAIL, 'injected exact baseline failure');
+		END;
+	`)
+	require.NoError(t, err)
+	source := SessionSourcePath{Agent: "claude", FilePath: path}
+
+	err = d.ReplaceActiveSessionSourceBaselinesWithExceptions(
+		t.Context(), defaultMachine,
+		[]SessionSourcePath{source}, []SessionSourcePath{source}, nil,
+		[]SessionSourceOwnership{{
+			ID: "rejected", Machine: defaultMachine,
+			Agent: "claude", FilePath: path,
+		}},
+	)
+
+	require.ErrorContains(t, err, "injected exact baseline failure")
+	assert.Empty(t, listBaselineOwnership(t, d, defaultMachine),
+		"a failed exception must roll back the source-wide baseline grant")
+}
+
 func TestListActiveSessionSourceAttributionsReturnsEveryMachine(t *testing.T) {
 	d := testDB(t)
 	root := t.TempDir()
@@ -1171,4 +1203,43 @@ func insertSessionsWithSourcePaths(
 	result, err := d.WriteSessionBatchAtomic(writes)
 	require.NoError(t, err, "insert source path sessions")
 	require.Equal(t, len(seeds), result.WrittenSessions, "WrittenSessions")
+}
+
+func TestListStaleForkSessionOwnerships(t *testing.T) {
+	d := testDB(t)
+	path := "/sessions/project/transcript.jsonl"
+	otherPath := "/sessions/project/other.jsonl"
+	parentID := "primary"
+	fork := func(id, machine, p string, opts ...func(*Session)) {
+		t.Helper()
+		insertSessionWithSourcePath(t, d, id, "claude", p, append([]func(*Session){
+			func(s *Session) {
+				s.Machine = machine
+				s.ParentSessionID = &parentID
+				s.RelationshipType = "fork"
+			},
+		}, opts...)...)
+	}
+	insertSessionWithSourcePath(t, d, parentID, "claude", path)
+	fork("stale-a", "local", path)
+	fork("stale-b", "remote", otherPath)
+	fork("stale-deleted", "local", path)
+	fork("stale-codex", "local", path, func(s *Session) { s.Agent = "codex" })
+	fork("current", "local", path)
+	for _, id := range []string{"stale-a", "stale-b", "stale-deleted", "stale-codex"} {
+		require.NoError(t, d.SetSessionDataVersion(id, 0))
+	}
+	require.NoError(t, d.SoftDeleteSession("stale-deleted"))
+	require.NoError(t, d.SetSessionDataVersion("current", CurrentDataVersion()))
+
+	got, err := d.ListStaleForkSessionOwnerships("claude")
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []SessionSourceOwnership{
+		{ID: "stale-a", Machine: "local", Agent: "claude", FilePath: path},
+		{ID: "stale-b", Machine: "remote", Agent: "claude", FilePath: otherPath},
+	}, got, "only active stale fork rows for the agent are listed")
+
+	none, err := d.ListStaleForkSessionOwnerships("gemini")
+	require.NoError(t, err)
+	assert.Empty(t, none)
 }

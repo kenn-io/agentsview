@@ -3444,6 +3444,120 @@ func TestResyncAllExcludesExistingClaudeUsageProbe(t *testing.T) {
 		"parser exclusions must not become permanent user deletions")
 }
 
+func TestResyncAllTombstonesOmittedStaleClaudeFork(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+	original := strings.Join([]string{
+		`{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-01-01T10:00:00Z","sessionId":"orig-resync","message":{"content":"first question"}}`,
+		`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-01-01T10:00:05Z","sessionId":"orig-resync","message":{"id":"msg_01","content":[{"type":"text","text":"first answer"}]}}`,
+	}, "\n") + "\n"
+	pureReplay := strings.Join([]string{
+		`{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-01-01T10:00:00Z","sessionId":"fork-resync","sessionKind":"bg","message":{"content":"first question"}}`,
+		`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-01-01T10:00:05Z","sessionId":"fork-resync","sessionKind":"bg","message":{"id":"msg_01","content":[{"type":"text","text":"first answer"}]}}`,
+	}, "\n") + "\n"
+	env.writeClaudeSession(t, "project", "orig-resync.jsonl", original)
+	forkPath := env.writeClaudeSession(
+		t, "project", "fork-resync.jsonl", pureReplay,
+	)
+
+	parentID := "fork-resync"
+	staleID := parentID + "-11111111-2222-4333-8444-555555555555"
+	result, err := env.db.WriteSessionBatch([]db.SessionBatchWrite{{
+		Session: db.Session{
+			ID:               staleID,
+			Project:          "project",
+			Machine:          "local",
+			Agent:            "claude",
+			ParentSessionID:  &parentID,
+			RelationshipType: "fork",
+			FilePath:         &forkPath,
+		},
+		Messages: []db.Message{{
+			SessionID: staleID,
+			Ordinal:   0,
+			Role:      "user",
+			Content:   "archived fork message",
+		}},
+	}})
+	require.NoError(t, err)
+	require.Equal(t, 1, result.WrittenSessions)
+	require.NoError(t, env.db.SetSessionDataVersion(staleID, 0))
+	require.NoError(t, env.db.BaselineActiveSessionSourceOwnerships(
+		t.Context(), []db.SessionSourceOwnership{{
+			ID: staleID, Machine: "local", Agent: "claude", FilePath: forkPath,
+		}},
+	))
+
+	stats := env.engine.ResyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted, "ResyncAll aborted: %+v", stats)
+
+	stale, err := env.db.GetSessionFull(t.Context(), staleID)
+	require.NoError(t, err)
+	require.NotNil(t, stale,
+		"the archived fork must remain available as a revivable tombstone")
+	require.NotNil(t, stale.DeletedAt,
+		"the complete rebuild parse must retire the omitted stale fork")
+	require.NotNil(t, stale.DeletionCause)
+	assert.Equal(t, "source_missing", *stale.DeletionCause)
+	messages, err := env.db.GetAllMessages(t.Context(), staleID)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "archived fork message", messages[0].Content)
+}
+
+func TestResyncContributorTombstonesOmittedStaleClaudeFork(t *testing.T) {
+	localRoot := t.TempDir()
+	remoteRoot := t.TempDir()
+	env := setupSingleAgentTestEnvWithDirs(t, parser.AgentClaude, []string{localRoot})
+	dbtest.WriteTestFile(t, filepath.Join(localRoot, "local", "local.jsonl"),
+		[]byte(testjsonl.NewSessionBuilder().AddClaudeUser(tsZero, "local").String()))
+	pureReplay := strings.Join([]string{
+		`{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-01-01T10:00:00Z","sessionId":"fork-remote","sessionKind":"bg","message":{"content":"first question"}}`,
+		`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-01-01T10:00:05Z","sessionId":"fork-remote","sessionKind":"bg","message":{"id":"msg_01","content":[{"type":"text","text":"first answer"}]}}`,
+	}, "\n") + "\n"
+	remotePath := filepath.Join(remoteRoot, "remote", "fork-remote.jsonl")
+	dbtest.WriteTestFile(t, remotePath, []byte(pureReplay))
+	storedPath := "remote:" + remotePath
+
+	parentID := "remote~fork-remote"
+	staleID := parentID + "-11111111-2222-4333-8444-555555555555"
+	require.NoError(t, env.db.UpsertSession(db.Session{
+		ID:               staleID,
+		Project:          "remote",
+		Machine:          "remote",
+		Agent:            "claude",
+		ParentSessionID:  &parentID,
+		RelationshipType: "fork",
+		FilePath:         &storedPath,
+	}))
+	require.NoError(t, env.db.SetSessionDataVersion(staleID, 0))
+	require.NoError(t, env.db.BaselineActiveSessionSourceOwnerships(
+		t.Context(), []db.SessionSourceOwnership{{
+			ID: staleID, Machine: "remote", Agent: "claude", FilePath: storedPath,
+		}},
+	))
+
+	stats, err := env.engine.ResyncAllWithOptions(context.Background(), nil,
+		sync.RebuildOptions{Contributors: []sync.RebuildContributor{{
+			Name: "remote",
+			Config: sync.EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {remoteRoot}},
+				Machine:   "remote", IDPrefix: "remote~", Ephemeral: true,
+				PathRewriter: func(path string) string { return "remote:" + path },
+			},
+		}}})
+	require.NoError(t, err)
+	require.False(t, stats.Aborted, "resync aborted: %+v", stats)
+
+	stale, err := env.db.GetSessionFull(t.Context(), staleID)
+	require.NoError(t, err)
+	require.NotNil(t, stale,
+		"the archived contributor fork must remain a revivable tombstone")
+	require.NotNil(t, stale.DeletedAt,
+		"the contributor rebuild parse must retire the omitted stale fork")
+	require.NotNil(t, stale.DeletionCause)
+	assert.Equal(t, "source_missing", *stale.DeletionCause)
+}
+
 func TestResyncContributorExclusionIsNotRestoredAsOrphan(t *testing.T) {
 	localRoot := t.TempDir()
 	remoteRoot := t.TempDir()
@@ -15119,12 +15233,12 @@ func TestSyncSingleSessionRepairFailurePersistsFormerChildForRetry(t *testing.T)
 		"retry must repair a child no longer discoverable from the removed edge")
 }
 
-// TestSyncSingleSessionChildCaptureFailurePreservesEdges pins the fail-closed
+// TestSyncSingleSessionPreWriteReadFailurePreservesEdges pins the fail-closed
 // boundary before a full rewrite. The rewritten spawner transcript is about to
-// remove its sole spawn edge; if the engine cannot first capture the affected
-// child, it must return that read failure before any exclusion or replacement
-// can erase the evidence needed to repair the hierarchy.
-func TestSyncSingleSessionChildCaptureFailurePreservesEdges(t *testing.T) {
+// remove its sole spawn edge; if any pre-write archive read fails, the engine
+// must return before an exclusion or replacement can erase the evidence needed
+// to repair the hierarchy.
+func TestSyncSingleSessionPreWriteReadFailurePreservesEdges(t *testing.T) {
 	env := setupTestEnv(t)
 
 	env.writeClaudeSession(
@@ -15174,7 +15288,7 @@ func TestSyncSingleSessionChildCaptureFailurePreservesEdges(t *testing.T) {
 	require.NoError(t, env.db.CloseConnections(), "close database connections")
 	syncErr := env.engine.SyncSingleSession("agent-spawner")
 	require.NoError(t, env.db.Reopen(), "reopen database")
-	require.ErrorContains(t, syncErr, "list pre-write subagent children")
+	require.ErrorContains(t, syncErr, "database is closed")
 
 	spawner, err := env.db.GetSession(context.Background(), "agent-spawner")
 	require.NoError(t, err, "get spawner after failed sync")
@@ -15620,5 +15734,344 @@ func TestRestartedEngineCodexIndexRenameNotMaskedByStatDigest(t *testing.T) {
 	require.NotNil(t, sess)
 	if assert.NotNil(t, sess.SessionName) {
 		assert.Equal(t, "Renamed title", *sess.SessionName)
+	}
+}
+
+// A stored Claude session the current parser no longer derives from its
+// transcript (e.g. a fork branch an older parser split out) makes the
+// path map to multiple DB sessions, so GetSessionForIncremental declines
+// and every append full-parses the whole file, forever — re-parsing can
+// never re-emit the stale ID. A complete full parse must tombstone such
+// rows as source-missing so the incremental path recovers; a later parse
+// that re-emits the ID revives the row.
+func TestSyncAllTombstonesStaleClaudeForkRow(t *testing.T) {
+	env := setupTestEnv(t)
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "hello there", "/workspace/api").
+		String()
+	path := env.writeClaudeSession(
+		t, "-workspace-api", "main-sess.jsonl", content,
+	)
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+
+	staleID := "main-sess-11111111-2222-4333-8444-555555555555"
+	parentID := "main-sess"
+	result, err := env.db.WriteSessionBatch([]db.SessionBatchWrite{{
+		Session: db.Session{
+			ID:               staleID,
+			Project:          "api",
+			Machine:          "local",
+			Agent:            "claude",
+			ParentSessionID:  &parentID,
+			RelationshipType: "fork",
+			FilePath:         &path,
+		},
+	}})
+	require.NoError(t, err, "seed stale fork row")
+	require.Equal(t, 1, result.WrittenSessions, "seed stale fork row")
+	// Zero data_version mirrors fork rows written before data-version
+	// stamping existed.
+	require.NoError(t, env.db.SetSessionDataVersion(staleID, 0))
+	// Real fork rows carry a source-ownership baseline from earlier
+	// discovery passes; the tombstone requires that deletion authority.
+	require.NoError(t, env.db.BaselineActiveSessionSourcePaths(
+		t.Context(), "local",
+		[]db.SessionSourcePath{{Agent: "claude", FilePath: path}},
+	))
+
+	appendLine := func(line string) {
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+		require.NoError(t, err, "open transcript for append")
+		_, writeErr := f.WriteString(line + "\n")
+		f.Close()
+		require.NoError(t, writeErr, "append transcript line")
+	}
+
+	// The stale sibling forces this append onto the full-parse path; the
+	// complete parse no longer emits the fork ID and must tombstone it.
+	appendLine(testjsonl.ClaudeAssistantJSON(
+		[]map[string]any{{"type": "text", "text": "first append"}},
+		tsEarlyS1,
+	))
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+
+	var deletedAt, cause sql.NullString
+	require.NoError(t, env.db.Reader().QueryRow(
+		`SELECT deleted_at, deletion_cause FROM sessions WHERE id = ?`,
+		staleID,
+	).Scan(&deletedAt, &cause), "query stale fork row")
+	assert.True(t, deletedAt.Valid,
+		"stale fork row should be tombstoned as source-missing")
+	assert.Equal(t, "source_missing", cause.String)
+
+	// With the transcript mapping to a single active session again, the
+	// next append stays on the incremental path instead of re-parsing
+	// the whole file.
+	appendLine(testjsonl.ClaudeAssistantJSON(
+		[]map[string]any{{"type": "text", "text": "second append"}},
+		tsEarlyS5,
+	))
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+
+	var lastWriteIncremental bool
+	require.NoError(t, env.db.Reader().QueryRow(
+		`SELECT last_write_incremental FROM sessions WHERE id = ?`,
+		"main-sess",
+	).Scan(&lastWriteIncremental), "query incremental marker")
+	assert.True(t, lastWriteIncremental,
+		"append after tombstone should take the incremental path")
+}
+
+func TestSyncAllRetriesStaleClaudeForkCleanupAfterEstablishingBaseline(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "hello there", "/workspace/api").
+		String()
+	path := env.writeClaudeSession(
+		t, "-workspace-api", "upgrade-sess.jsonl", content,
+	)
+
+	staleID := "upgrade-sess-11111111-2222-4333-8444-555555555555"
+	parentID := "upgrade-sess"
+	require.NoError(t, env.db.UpsertSession(db.Session{
+		ID:               staleID,
+		Project:          "api",
+		Machine:          "local",
+		Agent:            "claude",
+		ParentSessionID:  &parentID,
+		RelationshipType: "fork",
+		FilePath:         &path,
+	}))
+	require.NoError(t, env.db.SetSessionDataVersion(staleID, 0))
+
+	// An archive created before source baselines existed cannot authorize
+	// deletion on its first upgrade parse. That pass writes the current primary
+	// row and establishes the baseline needed by the next pass.
+	first := env.engine.SyncAll(t.Context(), nil)
+	require.Zero(t, first.Failed)
+	stale, err := env.db.GetSessionFull(t.Context(), staleID)
+	require.NoError(t, err)
+	require.NotNil(t, stale)
+	assert.Nil(t, stale.DeletedAt,
+		"the first pass must preserve a fork without deletion authority")
+
+	// The unchanged primary row must not hide the still-active stale fork.
+	second := env.engine.SyncAll(t.Context(), nil)
+	require.Zero(t, second.Failed)
+	stale, err = env.db.GetSessionFull(t.Context(), staleID)
+	require.NoError(t, err)
+	require.NotNil(t, stale)
+	require.NotNil(t, stale.DeletedAt,
+		"the second pass must retry and tombstone the stale fork")
+	require.NotNil(t, stale.DeletionCause)
+	assert.Equal(t, "source_missing", *stale.DeletionCause)
+}
+
+func TestSyncAllTombstonesStaleClaudeForkAfterZeroResultParse(t *testing.T) {
+	env := setupTestEnv(t)
+	original := strings.Join([]string{
+		`{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-01-01T10:00:00Z","sessionId":"orig-1111","message":{"content":"first question"}}`,
+		`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-01-01T10:00:05Z","sessionId":"orig-1111","message":{"id":"msg_01","content":[{"type":"text","text":"first answer"}]}}`,
+	}, "\n") + "\n"
+	pureReplay := strings.Join([]string{
+		`{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-01-01T10:00:00Z","sessionId":"fork-2222","sessionKind":"bg","message":{"content":"first question"}}`,
+		`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-01-01T10:00:05Z","sessionId":"fork-2222","sessionKind":"bg","message":{"id":"msg_01","content":[{"type":"text","text":"first answer"}]}}`,
+	}, "\n") + "\n"
+	env.writeClaudeSession(t, "project", "orig-1111.jsonl", original)
+	forkPath := env.writeClaudeSession(
+		t, "project", "fork-2222.jsonl", pureReplay,
+	)
+
+	legacyForkID := "fork-2222-11111111-2222-4333-8444-555555555555"
+	parentID := "fork-2222"
+	result, err := env.db.WriteSessionBatch([]db.SessionBatchWrite{{
+		Session: db.Session{
+			ID:               legacyForkID,
+			Project:          "project",
+			Machine:          "local",
+			Agent:            "claude",
+			ParentSessionID:  &parentID,
+			RelationshipType: "fork",
+			FilePath:         &forkPath,
+		},
+	}})
+	require.NoError(t, err, "seed legacy fork row")
+	require.Equal(t, 1, result.WrittenSessions, "seed legacy fork row")
+	require.NoError(t, env.db.SetSessionDataVersion(legacyForkID, 0))
+	require.NoError(t, env.db.BaselineActiveSessionSourcePaths(
+		t.Context(), "local",
+		[]db.SessionSourcePath{{Agent: "claude", FilePath: forkPath}},
+	))
+
+	stats := env.engine.SyncAll(t.Context(), nil)
+	assert.Equal(t, 1, stats.Synced,
+		"the original session should sync while the replay is excluded")
+
+	var deletedAt, cause sql.NullString
+	require.NoError(t, env.db.Reader().QueryRow(
+		`SELECT deleted_at, deletion_cause FROM sessions WHERE id = ?`,
+		legacyForkID,
+	).Scan(&deletedAt, &cause), "query legacy fork row")
+	assert.True(t, deletedAt.Valid,
+		"legacy fork should be tombstoned after a complete zero-result parse")
+	assert.Equal(t, "source_missing", cause.String)
+
+	steady := env.engine.SyncAll(t.Context(), nil)
+	require.Zero(t, steady.Failed)
+	assert.Equal(t, 2, steady.Skipped,
+		"the unchanged original and rowless replay should both use source freshness")
+}
+
+func TestFullSyncEntryPointsEmitForZeroResultClaudeForkTombstone(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*testEnv, context.Context) sync.SyncStats
+	}{
+		{
+			name: "SyncAll",
+			run: func(env *testEnv, ctx context.Context) sync.SyncStats {
+				return env.engine.SyncAll(ctx, nil)
+			},
+		},
+		{
+			name: "SyncAllSince",
+			run: func(env *testEnv, ctx context.Context) sync.SyncStats {
+				return env.engine.SyncAllSince(ctx, time.Time{}, nil)
+			},
+		},
+		{
+			name: "SyncRootsSince",
+			run: func(env *testEnv, ctx context.Context) sync.SyncStats {
+				return env.engine.SyncRootsSince(
+					ctx, []string{env.claudeDir}, time.Time{}, nil,
+				)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			emitter := &fakeEmitter{}
+			env := setupTestEnv(t, WithEmitter(emitter))
+			original := strings.Join([]string{
+				`{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-01-01T10:00:00Z","sessionId":"notify-original","message":{"content":"first question"}}`,
+				`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-01-01T10:00:05Z","sessionId":"notify-original","message":{"id":"msg_01","content":[{"type":"text","text":"first answer"}]}}`,
+			}, "\n") + "\n"
+			pureReplay := strings.Join([]string{
+				`{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-01-01T10:00:00Z","sessionId":"notify-replay","sessionKind":"bg","message":{"content":"first question"}}`,
+				`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-01-01T10:00:05Z","sessionId":"notify-replay","sessionKind":"bg","message":{"id":"msg_01","content":[{"type":"text","text":"first answer"}]}}`,
+			}, "\n") + "\n"
+			env.writeClaudeSession(
+				t, "project", "notify-original.jsonl", original,
+			)
+			forkPath := env.writeClaudeSession(
+				t, "project", "notify-replay.jsonl", pureReplay,
+			)
+			require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+			emitter.mu.Lock()
+			emitter.scopes = nil
+			emitter.mu.Unlock()
+
+			parentID := "notify-replay"
+			staleID := parentID + "-11111111-2222-4333-8444-555555555555"
+			require.NoError(t, env.db.UpsertSession(db.Session{
+				ID:               staleID,
+				Project:          "project",
+				Machine:          "local",
+				Agent:            "claude",
+				ParentSessionID:  &parentID,
+				RelationshipType: "fork",
+				FilePath:         &forkPath,
+			}))
+			require.NoError(t, env.db.SetSessionDataVersion(staleID, 0))
+			require.NoError(t, env.db.BaselineActiveSessionSourcePaths(
+				t.Context(), "local",
+				[]db.SessionSourcePath{{Agent: "claude", FilePath: forkPath}},
+			))
+
+			stats := tt.run(env, t.Context())
+			assert.Zero(t, stats.Synced,
+				"the replay tombstone must not count as an ordinary sync write")
+			assert.Equal(t, []string{"sessions"}, emitter.got(),
+				"a member-only tombstone must notify connected clients")
+			stale, err := env.db.GetSessionFull(t.Context(), staleID)
+			require.NoError(t, err)
+			require.NotNil(t, stale)
+			require.NotNil(t, stale.DeletionCause)
+			assert.Equal(t, "source_missing", *stale.DeletionCause)
+		})
+	}
+}
+
+func TestSyncAllPreservesUnprovenClaudeMissingRows(t *testing.T) {
+	tests := []struct {
+		name             string
+		relationshipType string
+		dataVersion      int
+	}{
+		{
+			name:             "current fork",
+			relationshipType: "fork",
+			dataVersion:      db.CurrentDataVersion(),
+		},
+		{
+			name:             "stale root",
+			relationshipType: "root",
+			dataVersion:      0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := setupTestEnv(t)
+			content := testjsonl.NewSessionBuilder().
+				AddClaudeUser(tsEarly, "hello there", "/workspace/api").
+				String()
+			path := env.writeClaudeSession(
+				t, "-workspace-api", "main-sess.jsonl", content,
+			)
+			require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+
+			missingID := "missing-session"
+			parentID := "main-sess"
+			result, err := env.db.WriteSessionBatch([]db.SessionBatchWrite{{
+				Session: db.Session{
+					ID:               missingID,
+					Project:          "api",
+					Machine:          "local",
+					Agent:            "claude",
+					ParentSessionID:  &parentID,
+					RelationshipType: tt.relationshipType,
+					FilePath:         &path,
+				},
+			}})
+			require.NoError(t, err, "seed missing row")
+			require.Equal(t, 1, result.WrittenSessions, "seed missing row")
+			require.NoError(t,
+				env.db.SetSessionDataVersion(missingID, tt.dataVersion))
+			require.NoError(t, env.db.BaselineActiveSessionSourcePaths(
+				t.Context(), "local",
+				[]db.SessionSourcePath{{Agent: "claude", FilePath: path}},
+			))
+
+			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+			require.NoError(t, err, "open transcript for append")
+			_, writeErr := f.WriteString(testjsonl.ClaudeAssistantJSON(
+				[]map[string]any{{"type": "text", "text": "append"}},
+				tsEarlyS1,
+			) + "\n")
+			require.NoError(t, f.Close(), "close transcript")
+			require.NoError(t, writeErr, "append transcript line")
+			require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+
+			var deletedAt, cause sql.NullString
+			require.NoError(t, env.db.Reader().QueryRow(
+				`SELECT deleted_at, deletion_cause FROM sessions WHERE id = ?`,
+				missingID,
+			).Scan(&deletedAt, &cause), "query preserved row")
+			assert.False(t, deletedAt.Valid,
+				"missing row without both legacy and fork evidence must survive")
+			assert.False(t, cause.Valid, "preserved row must not gain a cause")
+		})
 	}
 }

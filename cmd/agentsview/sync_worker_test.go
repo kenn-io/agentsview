@@ -155,6 +155,22 @@ func TestSyncWorkerReportsAbortAsFailure(t *testing.T) {
 	assert.False(t, result.DiscoveryComplete)
 }
 
+func TestWorkerResultPreservesTombstonesAcrossProtocol(t *testing.T) {
+	result := workerResultFromStats(context.Background(), sync.SyncStats{
+		Tombstoned: 2,
+		Aborted:    true,
+	})
+	var wire bytes.Buffer
+	require.NoError(t, json.NewEncoder(&wire).Encode(workerLine{Result: &result}))
+
+	decoded, err := readWorkerResult(&wire, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, decoded.Tombstoned,
+		"the terminal summary must carry committed tombstones")
+	assert.Equal(t, 2, statsFromWorkerResult(decoded).Tombstoned,
+		"the daemon-side stats must retain tombstones after JSON decoding")
+}
+
 func TestSyncWorkerFailsWhenWriteLockHeld(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	holdWriteOwnerLockForTest(t, cfg.DataDir) // hold db.write.lock like a daemon

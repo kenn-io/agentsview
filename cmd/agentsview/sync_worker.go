@@ -279,6 +279,7 @@ func resyncBuildResultFromStats(
 		Synced:            stats.Synced,
 		Skipped:           stats.Skipped,
 		Failed:            stats.Failed,
+		Tombstoned:        stats.Tombstoned,
 		DiscoveryComplete: stats.AuthoritativeDiscoveryComplete(),
 		Stats:             &statsCopy,
 	}
@@ -326,6 +327,7 @@ func workerResultFromStats(
 		Synced:            stats.Synced,
 		Skipped:           stats.Skipped,
 		Failed:            stats.Failed,
+		Tombstoned:        stats.Tombstoned,
 		DiscoveryComplete: stats.AuthoritativeDiscoveryComplete(),
 		Stats:             &statsCopy,
 	}

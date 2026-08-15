@@ -698,7 +698,9 @@ func TestRunWorkerSyncPassWorkerFailureStillRecords(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	database, lock := openTestWriteDB(t, cfg)
 	reconciled := make(chan error, 1)
+	em := &scopedEmitter{scopes: make(chan string, 1)}
 	engine := sync.NewEngine(database, sync.EngineConfig{
+		Emitter: em,
 		OnStartupReconciled: func(_ sync.SyncStats, err error) {
 			reconciled <- err
 		},
@@ -709,7 +711,7 @@ func TestRunWorkerSyncPassWorkerFailureStillRecords(t *testing.T) {
 	restore := stubLaunchSyncWorker(t, func(
 		context.Context, config.Config, string, func(workerLine),
 	) (workerResult, error) {
-		return workerResult{Status: "failed"}, workerErr
+		return workerResult{Status: "failed", Tombstoned: 1}, workerErr
 	})
 	defer restore()
 
@@ -723,6 +725,13 @@ func TestRunWorkerSyncPassWorkerFailureStillRecords(t *testing.T) {
 		"an incomplete worker pass must surface as aborted stats")
 	assert.Equal(t, stats, engine.LastSyncStats(),
 		"the failed pass must reach last-sync bookkeeping")
+	select {
+	case scope := <-em.scopes:
+		assert.Equal(t, "sync", scope)
+	default:
+		require.FailNow(t,
+			"committed worker tombstones must emit despite a later failure")
+	}
 	select {
 	case cbErr := <-reconciled:
 		assert.ErrorIs(t, cbErr, workerErr,
@@ -1152,4 +1161,43 @@ func TestRunWorkerWritePassShutdownStopsPersistentRecovery(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("recovery kept retrying past daemon shutdown")
 	}
+}
+
+// TestRunWorkerResyncBuildDropsTombstonesWhenSwapFailsBeforeInstall pins the
+// daemon-side counterpart of the in-process rule: a worker build's tombstones
+// live only in the staged replacement, so a swap that fails before the rename
+// must not report them.
+func TestRunWorkerResyncBuildDropsTombstonesWhenSwapFailsBeforeInstall(
+	t *testing.T,
+) {
+	cfg := testConfigWithClaudeFixture(t)
+	database, _ := openTestWriteDB(t, cfg)
+	engine := sync.NewEngine(database, sync.EngineConfig{})
+	defer engine.Close()
+
+	restore := stubLaunchSyncWorker(t, func(
+		_ context.Context, _ config.Config, mode string, _ func(workerLine),
+	) (workerResult, error) {
+		assert.Equal(t, "resync-build", mode)
+		// Report a build that tombstoned a row but stage no replacement, so
+		// the daemon's swap fails at the rename with the original intact.
+		return workerResult{
+			Status: "ok", DiscoveryComplete: true, Tombstoned: 1,
+			Stats: &sync.SyncStats{Tombstoned: 1},
+		}, nil
+	})
+	defer restore()
+
+	result, err, spawnFailed := runWorkerResyncBuild(
+		context.Background(), context.Background(), cfg, engine, database, nil,
+	)
+	require.False(t, spawnFailed)
+	require.ErrorContains(t, err, "swap resync database")
+	assert.Zero(t, result.Tombstoned,
+		"a discarded replacement's tombstones must not be reported")
+	require.NotNil(t, result.Stats)
+	assert.Zero(t, result.Stats.Tombstoned,
+		"the worker stats payload must not carry discarded tombstones")
+	assert.NoError(t, writeOneSession(database),
+		"writes must recover without a daemon restart")
 }

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -113,7 +114,11 @@ func (e *Engine) missingMemberTombstoneAllowed(
 	if e.cwdFilter.empty() {
 		return true, nil
 	}
-	sess, err := e.db.GetSession(ctx, sessionID)
+	store := db.Store(e.db)
+	if e.archiveStore != nil {
+		store = e.archiveStore
+	}
+	sess, err := store.GetSession(ctx, sessionID)
 	if err != nil {
 		return false, fmt.Errorf(
 			"read archived cwd for missing member %s: %w", sessionID, err,

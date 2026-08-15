@@ -2284,9 +2284,8 @@ func TestParseDiffEngineRefusesWrites(t *testing.T) {
 		"refused scans must not persist secret findings")
 }
 
-func TestParseDiffPresenceSweep(t *testing.T) {
-
-	t.Run("current-version row no longer emitted", func(t *testing.T) {
+func TestParseDiffClaudeMissingRowsRequireLegacyForkEvidence(t *testing.T) {
+	t.Run("current-version fork is presence drift", func(t *testing.T) {
 		env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 		path := env.writeClaudeSession(t, "test-proj", "pd-real.jsonl",
 			parseDiffClaudeContent("real prompt", "real reply"))
@@ -2294,11 +2293,12 @@ func TestParseDiffPresenceSweep(t *testing.T) {
 			TotalSessions: 1, Synced: 1,
 		})
 
-		// A current-version row under the same source file with an ID
-		// today's parser never derives: the loudest drift signal.
+		// A current-version fork row under the same transcript has already
+		// been accepted by this parser version. Its unexplained absence must
+		// stay visible as parser drift.
 		require.NoError(t, env.db.UpsertSession(db.Session{
 			ID: "pd-phantom", Project: "test-proj", Machine: "local",
-			Agent: "claude", FilePath: &path,
+			Agent: "claude", RelationshipType: "fork", FilePath: &path,
 		}), "insert phantom session")
 		require.NoError(t,
 			env.db.SetSessionDataVersion(
@@ -2318,10 +2318,10 @@ func TestParseDiffPresenceSweep(t *testing.T) {
 		assert.Contains(t, sessionDiffFieldNames(sd, false),
 			sync.FieldPresence, "presence diff")
 		assert.True(t, report.HasFailures(),
-			"a current-version presence drop is parser drift")
+			"a current-version missing fork is parser drift")
 	})
 
-	t.Run("stale row no longer emitted is pending resync", func(t *testing.T) {
+	t.Run("stale non-fork is pending resync", func(t *testing.T) {
 		env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 		path := env.writeClaudeSession(t, "test-proj", "pd-real.jsonl",
 			parseDiffClaudeContent("real prompt", "real reply"))
@@ -2329,11 +2329,11 @@ func TestParseDiffPresenceSweep(t *testing.T) {
 			TotalSessions: 1, Synced: 1,
 		})
 
-		// Data version 0: an incomplete write preserved by the
-		// archive (e.g. a transient fork row left by a live sync).
+		// Data version 0: an incomplete non-fork write preserved by the
+		// archive. Staleness alone is not enough deletion evidence.
 		require.NoError(t, env.db.UpsertSession(db.Session{
 			ID: "pd-zombie", Project: "test-proj", Machine: "local",
-			Agent: "claude", FilePath: &path,
+			Agent: "claude", RelationshipType: "root", FilePath: &path,
 		}), "insert zombie session")
 
 		report := runParseDiff(t, env, sync.ParseDiffOptions{})
@@ -2347,9 +2347,84 @@ func TestParseDiffPresenceSweep(t *testing.T) {
 		require.NotNil(t, sd, "zombie session not listed")
 		assert.Equal(t, sync.DiffPendingResync, sd.Class, "class")
 		assert.Contains(t, sessionDiffFieldNames(sd, true),
-			sync.FieldPresence,
-			"presence field attached for drill-down")
+			sync.FieldPresence, "presence field attached for drill-down")
 		assert.False(t, report.HasFailures(),
 			"stale rows must not trip --fail-on-change")
+	})
+
+	t.Run("stale fork is tombstone-bound", func(t *testing.T) {
+		env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+		path := env.writeClaudeSession(t, "test-proj", "pd-real.jsonl",
+			parseDiffClaudeContent("real prompt", "real reply"))
+		runSyncAndAssert(t, env.engine, sync.SyncStats{
+			TotalSessions: 1, Synced: 1,
+		})
+
+		parentID := "pd-real"
+		require.NoError(t, env.db.UpsertSession(db.Session{
+			ID: "pd-legacy-fork", Project: "test-proj", Machine: "local",
+			Agent: "claude", ParentSessionID: &parentID,
+			RelationshipType: "fork", FilePath: &path,
+		}), "insert legacy fork")
+
+		report := runParseDiff(t, env, sync.ParseDiffOptions{})
+		assert.Equal(t, sync.ParseDiffTotals{
+			Examined: 1, Identical: 1, ExcludedByParser: 1,
+		}, report.Totals, "totals")
+		assert.Empty(t, report.FieldCounts,
+			"tombstone-bound rows are not parser drift")
+
+		sd := findSessionDiff(report, "pd-legacy-fork")
+		require.NotNil(t, sd, "legacy fork not listed")
+		assert.Equal(t, sync.DiffExcluded, sd.Class, "class")
+		assert.Equal(t, "member source missing (would tombstone)", sd.Reason)
+		assert.False(t, report.HasFailures(),
+			"an intentional source-missing tombstone must not trip --fail-on-change")
+	})
+
+	t.Run("stale fork outside CWD filter is policy-preserved", func(t *testing.T) {
+		env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+		content := testjsonl.NewSessionBuilder().
+			AddClaudeUser(
+				tsEarly, "real prompt", "/workspace/work/project",
+			).
+			AddClaudeAssistant(tsEarlyS5, "real reply").
+			String()
+		path := env.writeClaudeSession(
+			t, "test-proj", "pd-real.jsonl", content,
+		)
+		runSyncAndAssert(t, env.engine, sync.SyncStats{
+			TotalSessions: 1, Synced: 1,
+		})
+
+		parentID := "pd-real"
+		require.NoError(t, env.db.UpsertSession(db.Session{
+			ID: "pd-filtered-fork", Project: "test-proj", Machine: "local",
+			Agent: "claude", Cwd: "/workspace/personal/project",
+			ParentSessionID: &parentID, RelationshipType: "fork", FilePath: &path,
+		}), "insert filtered legacy fork")
+
+		diffEngine := sync.NewDiffEngine(env.db, sync.EngineConfig{
+			AgentDirs:          parseDiffAgentDirs(env),
+			Machine:            "local",
+			IncludeCwdPrefixes: []string{"/workspace/work"},
+		})
+		t.Cleanup(diffEngine.Close)
+		report, err := diffEngine.ParseDiff(
+			t.Context(), sync.ParseDiffOptions{},
+		)
+		require.NoError(t, err)
+		require.NotNil(t, report)
+
+		assert.Equal(t, sync.ParseDiffTotals{
+			Examined: 1, Identical: 1, Skipped: 1,
+		}, report.Totals, "totals")
+		sd := findSessionDiff(report, "pd-filtered-fork")
+		require.NotNil(t, sd, "filtered legacy fork not listed")
+		assert.Equal(t, sync.DiffSkipped, sd.Class, "class")
+		assert.Equal(t, "member source missing (policy-preserved by CWD filter)",
+			sd.Reason)
+		assert.False(t, report.HasFailures(),
+			"a CWD-preserved fork must not trip --fail-on-change")
 	})
 }

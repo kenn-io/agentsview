@@ -754,14 +754,18 @@ func deferStartupMaintenance(skipInitialSync, workerSyncDone bool) bool {
 func statsFromWorkerResult(r workerResult) sync.SyncStats {
 	if r.Stats != nil {
 		stats := *r.Stats
+		if r.Tombstoned > stats.Tombstoned {
+			stats.Tombstoned = r.Tombstoned
+		}
 		stats.Aborted = !r.DiscoveryComplete
 		return stats
 	}
 	return sync.SyncStats{
-		Synced:  r.Synced,
-		Skipped: r.Skipped,
-		Failed:  r.Failed,
-		Aborted: !r.DiscoveryComplete,
+		Synced:     r.Synced,
+		Skipped:    r.Skipped,
+		Failed:     r.Failed,
+		Tombstoned: r.Tombstoned,
+		Aborted:    !r.DiscoveryComplete,
 	}
 }
 
@@ -1078,7 +1082,17 @@ func runWorkerResyncBuild(
 			}
 			return launchErr
 		}
-		if serr := engine.SwapResyncDatabase(engine.ResyncTempPath()); serr != nil {
+		installed, serr := engine.SwapResyncDatabase(engine.ResyncTempPath())
+		if serr != nil {
+			if !installed {
+				// The replacement was discarded, so its tombstones never
+				// reached the archive. A post-install failure keeps them:
+				// the replacement is the live archive there.
+				result.Tombstoned = 0
+				if result.Stats != nil {
+					result.Stats.Tombstoned = 0
+				}
+			}
 			// Swap failures happen at or after CloseConnections closed the
 			// reader pool, so when the swap's own recovery did not restore
 			// the archive only a full Reopen brings reads back; ReopenWriter

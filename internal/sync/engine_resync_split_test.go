@@ -58,7 +58,9 @@ func TestResyncBuildThenSwapMatchesResyncAll(t *testing.T) {
 	require.False(t, stats.Aborted)
 	require.FileExists(t, tempPath)
 
-	require.NoError(t, e.SwapResyncDatabase(tempPath))
+	installed, err := e.SwapResyncDatabase(tempPath)
+	require.NoError(t, err)
+	assert.True(t, installed)
 	require.NoError(t, e.ResetCachesAfterSwap())
 
 	assert.False(t, database.NeedsResync())
@@ -87,7 +89,9 @@ func TestSwapWindowRejectsDirectWrites(t *testing.T) {
 	// proceeds while the writer is closed. The swap reopens the writer.
 	tempPath, _, err := e.ResyncBuild(context.Background(), nil)
 	require.NoError(t, err)
-	require.NoError(t, e.SwapResyncDatabase(tempPath))
+	installed, err := e.SwapResyncDatabase(tempPath)
+	require.NoError(t, err)
+	assert.True(t, installed)
 	require.NoError(t, e.ResetCachesAfterSwap())
 
 	starred, err := database.ListStarredSessionIDs(context.Background())

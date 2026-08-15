@@ -3357,6 +3357,7 @@ func TestReconciliationSourceBaselineUsesStoredPathRewrite(t *testing.T) {
 			Machine: "host",
 			Source:  db.SessionSourcePath{Agent: "claude", FilePath: storedPath},
 		}},
+		nil, nil,
 	))
 	changed, err := database.SoftDeleteSessionSourceOwnership(
 		t.Context(), "host", "claude", "session", storedPath,
