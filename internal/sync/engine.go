@@ -3998,10 +3998,6 @@ func (e *Engine) ReconcileProviderRootsGrouped(
 		e.syncMu.Lock()
 		defer e.syncMu.Unlock()
 		defer e.clearCurrentProgress()
-		e.reportProgress(nil, Progress{
-			Phase:  PhaseDiscovering,
-			Detail: "Reconciling watched session roots",
-		})
 		linkEligible := false
 		persistEligible := false
 		for _, group := range groups {
@@ -4058,10 +4054,6 @@ func (e *Engine) reconcileScopedWatchRoots(
 		e.syncMu.Lock()
 		defer e.syncMu.Unlock()
 		defer e.clearCurrentProgress()
-		e.reportProgress(nil, Progress{
-			Phase:  PhaseDiscovering,
-			Detail: "Reconciling watched session roots",
-		})
 		return e.reconcileScopedWatchRootsLocked(ctx, agent, roots, full, force)
 	}()
 	// Emit outside syncMu so an Emitter implementation cannot widen the
@@ -4080,6 +4072,10 @@ func (e *Engine) reconcileScopedWatchRoots(
 func (e *Engine) reconcileScopedWatchRootsLocked(
 	ctx context.Context, agent parser.AgentType, roots []string, full, force bool,
 ) (SyncStats, int, passEpilogueEligibility, error) {
+	e.reportProgress(nil, Progress{
+		Phase:  PhaseDiscovering,
+		Detail: "Reconciling watched session roots",
+	})
 	fullCoverage := full || (agent == "" && len(roots) == 0)
 	plans, excludedRemoteRoots := e.resolveReconciliationPlans(
 		ctx, agent, roots, full, fullCoverage,

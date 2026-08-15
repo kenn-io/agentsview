@@ -188,6 +188,71 @@ func TestSyncWatchBatchThenRunMissingPathTombstoneIsCardinalityBounded(t *testin
 	assert.Equal(t, int32(1), classifications[0])
 }
 
+func TestSyncWatchBatchThenRunReportsProgressBeforeReconciliationDiscoveryReturns(
+	t *testing.T,
+) {
+	const agent parser.AgentType = "watch-batch-blocked-discovery"
+	root := t.TempDir()
+	started := make(chan struct{}, 1)
+	release := make(chan struct{}, 1)
+	defer func() {
+		select {
+		case release <- struct{}{}:
+		default:
+		}
+	}()
+	provider := &directStreamingProvider{
+		ProviderBase: parser.ProviderBase{
+			Def: parser.AgentDef{Type: agent, FileBased: true},
+			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+				DiscoverSources:    parser.CapabilitySupported,
+				StreamingDiscovery: parser.CapabilitySupported,
+				WatchSources:       parser.CapabilitySupported,
+			}},
+		},
+		discoverStarted: started,
+		discoverRelease: release,
+	}
+	engine := NewEngine(openTestDB(t), EngineConfig{
+		AgentDirs:          map[parser.AgentType][]string{agent: {root}},
+		Machine:            "local",
+		ProgressStallAfter: time.Nanosecond,
+		ProviderFactories: []parser.ProviderFactory{
+			directStreamingFactory{provider: provider},
+		},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			agent: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	t.Cleanup(engine.Close)
+	done := make(chan error, 1)
+	go func() {
+		_, err := engine.SyncWatchBatchThenRun(
+			t.Context(), WatchBatch{ReconcileRoots: []string{root}}, nil, nil,
+		)
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		require.FailNow(t, "watch batch did not enter reconciliation discovery")
+	}
+
+	progress, active := engine.CurrentProgress()
+	require.True(t, active,
+		"health must observe a watch batch blocked in reconciliation discovery")
+	assert.Equal(t, PhaseDiscovering, progress.Phase)
+	assert.True(t, progress.Stalled)
+
+	release <- struct{}{}
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.FailNow(t, "watch batch did not finish after discovery resumed")
+	}
+}
+
 func TestValidateWatchBatchAcceptsBoundedAndAuthoritativeScopes(t *testing.T) {
 	root := t.TempDir()
 	other := t.TempDir()
