@@ -251,7 +251,7 @@ func messageDiffNeedsPinRemap(
 			SELECT 1
 			FROM pinned_messages
 			WHERE message_id IN (?)
-		)`, bun.In(plan.unsafePinUpdateIDs)).Scan(ctx, &exists)
+		)`, bun.List(plan.unsafePinUpdateIDs)).Scan(ctx, &exists)
 	if err != nil {
 		return false, fmt.Errorf("checking diff pins: %w", err)
 	}
