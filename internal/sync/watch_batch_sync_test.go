@@ -238,11 +238,8 @@ func TestSyncWatchBatchThenRunReportsProgressBeforeReconciliationDiscoveryReturn
 		require.FailNow(t, "watch batch did not enter reconciliation discovery")
 	}
 
-	progress, active := engine.CurrentProgress()
-	require.True(t, active,
-		"health must observe a watch batch blocked in reconciliation discovery")
+	progress := requireStalledCurrentProgress(t, engine)
 	assert.Equal(t, PhaseDiscovering, progress.Phase)
-	assert.True(t, progress.Stalled)
 
 	release <- struct{}{}
 	select {
@@ -311,11 +308,8 @@ func TestSyncWatchBatchThenRunReportsProgressBeforeChangedPathParseReturns(
 		require.FailNow(t, "watch batch did not enter changed-path parsing")
 	}
 
-	progress, active := engine.CurrentProgress()
-	require.True(t, active,
-		"health must observe a watch batch blocked in changed-path parsing")
+	progress := requireStalledCurrentProgress(t, engine)
 	assert.Equal(t, PhaseSyncing, progress.Phase)
-	assert.True(t, progress.Stalled)
 
 	release <- struct{}{}
 	select {
@@ -392,11 +386,8 @@ func TestApplyWatchBatchReportsProgressBeforeUnknownRenameStatReturns(
 		require.FailNow(t, "watch batch did not enter rename planning stat")
 	}
 
-	progress, active := engine.CurrentProgress()
-	require.True(t, active,
-		"health must observe watch-batch planning blocked in source stat")
+	progress := requireStalledCurrentProgress(t, engine)
 	assert.Equal(t, PhaseDiscovering, progress.Phase)
-	assert.True(t, progress.Stalled)
 
 	release <- struct{}{}
 	select {
@@ -405,7 +396,7 @@ func TestApplyWatchBatchReportsProgressBeforeUnknownRenameStatReturns(
 	case <-time.After(time.Second):
 		require.FailNow(t, "watch batch did not finish after planning resumed")
 	}
-	_, active = engine.CurrentProgress()
+	_, active := engine.CurrentProgress()
 	assert.False(t, active)
 }
 

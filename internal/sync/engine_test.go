@@ -9231,6 +9231,21 @@ func TestEngine_ReconcileWatchRootsClearsCurrentProgress(t *testing.T) {
 		"completed reconciliation must not leave the daemon reporting an active sync")
 }
 
+func requireStalledCurrentProgress(t *testing.T, engine *Engine) Progress {
+	t.Helper()
+	var progress Progress
+	require.Eventually(t, func() bool {
+		current, active := engine.CurrentProgress()
+		if !active || !current.Stalled {
+			return false
+		}
+		progress = current
+		return true
+	}, time.Second, time.Millisecond,
+		"active progress did not age into the stalled state")
+	return progress
+}
+
 func TestEngine_ReconcileWatchRootsReportsProgressBeforeDiscoveryReturns(t *testing.T) {
 	const agent parser.AgentType = "blocked-discovery"
 	root := t.TempDir()
@@ -9276,11 +9291,8 @@ func TestEngine_ReconcileWatchRootsReportsProgressBeforeDiscoveryReturns(t *test
 		require.FailNow(t, "reconciliation did not enter discovery")
 	}
 
-	progress, active := engine.CurrentProgress()
-	require.True(t, active,
-		"health must observe reconciliation blocked before its first source")
+	progress := requireStalledCurrentProgress(t, engine)
 	assert.Equal(t, PhaseDiscovering, progress.Phase)
-	assert.True(t, progress.Stalled)
 
 	release <- struct{}{}
 	select {
@@ -9323,11 +9335,8 @@ func TestEngine_SyncPathsReportsProgressBeforeChangedPathStatReturns(t *testing.
 		require.FailNow(t, "changed-path sync did not enter source stat")
 	}
 
-	progress, active := fx.engine.CurrentProgress()
-	require.True(t, active,
-		"health must observe changed-path preparation blocked in source stat")
+	progress := requireStalledCurrentProgress(t, fx.engine)
 	assert.Equal(t, PhaseDiscovering, progress.Phase)
-	assert.True(t, progress.Stalled)
 
 	release <- struct{}{}
 	select {
@@ -9336,7 +9345,7 @@ func TestEngine_SyncPathsReportsProgressBeforeChangedPathStatReturns(t *testing.
 	case <-time.After(time.Second):
 		require.FailNow(t, "changed-path sync did not finish after stat resumed")
 	}
-	_, active = fx.engine.CurrentProgress()
+	_, active := fx.engine.CurrentProgress()
 	assert.False(t, active)
 }
 

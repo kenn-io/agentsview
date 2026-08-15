@@ -3259,6 +3259,11 @@ func TestPingReportsStalledSyncWithoutLosingDaemonIdentity(t *testing.T) {
 	case <-time.After(time.Second):
 		require.FailNow(t, "sync did not publish progress")
 	}
+	require.Eventually(t, func() bool {
+		progress, active := engine.CurrentProgress()
+		return active && progress.Stalled
+	}, time.Second, time.Millisecond,
+		"sync progress did not age into the stalled state")
 
 	stalled := decode[pingResponse](t, te.get(t, "/api/ping"))
 	assert.True(t, stalled.OK,
