@@ -238,9 +238,11 @@ can still be parsed.
 
 The matching environment variable and `*_dirs` configuration key override an
 agent's default directories. Environment variables take precedence when both
-are set. Set a `*_dirs` key to an explicit empty array, such as
-`grok_dirs = []`, to disable discovery for that provider. Omitting the key
-keeps its default directories.
+are set. An explicit empty `*_dirs` array, such as `grok_dirs = []`, clears that
+agent's default local directories, so local discovery finds nothing there.
+Matching `session_sources` entries for that agent still apply. Provider-wide
+exclusion is documented under [Disabling Session Providers](#disabling-session-providers).
+Omitting the key keeps its default directories.
 
 | Agent                 | Default Directory                                                                | File Format                                                                                                                     |
 | --------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
