@@ -253,6 +253,79 @@ func TestSyncWatchBatchThenRunReportsProgressBeforeReconciliationDiscoveryReturn
 	}
 }
 
+func TestSyncWatchBatchThenRunReportsProgressBeforeChangedPathParseReturns(
+	t *testing.T,
+) {
+	const agent parser.AgentType = "watch-batch-blocked-changed-path"
+	root := t.TempDir()
+	path := filepath.Join(root, "source.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
+	started := make(chan struct{}, 1)
+	release := make(chan struct{}, 1)
+	defer func() {
+		select {
+		case release <- struct{}{}:
+		default:
+		}
+	}()
+	source := parser.SourceRef{
+		Provider: agent, Key: path, DisplayPath: path, FingerprintKey: path,
+	}
+	provider := &directStreamingProvider{
+		ProviderBase: parser.ProviderBase{
+			Def: parser.AgentDef{Type: agent, FileBased: true},
+			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+				DiscoverSources:    parser.CapabilitySupported,
+				StreamingDiscovery: parser.CapabilitySupported,
+				WatchSources:       parser.CapabilitySupported,
+				FindSource:         parser.CapabilitySupported,
+			}},
+		},
+		source:       &source,
+		parseStarted: started,
+		parseRelease: release,
+		parseOutcome: parser.ParseOutcome{ResultSetComplete: true},
+	}
+	engine := NewEngine(openTestDB(t), EngineConfig{
+		AgentDirs:          map[parser.AgentType][]string{agent: {root}},
+		Machine:            "local",
+		ProgressStallAfter: time.Nanosecond,
+		ProviderFactories: []parser.ProviderFactory{
+			directStreamingFactory{provider: provider},
+		},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			agent: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	t.Cleanup(engine.Close)
+	done := make(chan error, 1)
+	go func() {
+		_, err := engine.SyncWatchBatchThenRun(
+			t.Context(), WatchBatch{Paths: []string{path}}, nil, nil,
+		)
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		require.FailNow(t, "watch batch did not enter changed-path parsing")
+	}
+
+	progress, active := engine.CurrentProgress()
+	require.True(t, active,
+		"health must observe a watch batch blocked in changed-path parsing")
+	assert.Equal(t, PhaseSyncing, progress.Phase)
+	assert.True(t, progress.Stalled)
+
+	release <- struct{}{}
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.FailNow(t, "watch batch did not finish after parsing resumed")
+	}
+}
+
 func TestValidateWatchBatchAcceptsBoundedAndAuthoritativeScopes(t *testing.T) {
 	root := t.TempDir()
 	other := t.TempDir()

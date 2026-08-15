@@ -956,6 +956,8 @@ type directStreamingProvider struct {
 	parseCalls       atomic.Int32
 	discoverStarted  chan<- struct{}
 	discoverRelease  <-chan struct{}
+	parseStarted     chan<- struct{}
+	parseRelease     <-chan struct{}
 	source           *parser.SourceRef
 	parseErr         error
 	parseOutcome     parser.ParseOutcome
@@ -1013,9 +1015,22 @@ func (provider *directStreamingProvider) Fingerprint(
 }
 
 func (provider *directStreamingProvider) Parse(
-	context.Context, parser.ParseRequest,
+	ctx context.Context, _ parser.ParseRequest,
 ) (parser.ParseOutcome, error) {
 	provider.parseCalls.Add(1)
+	if provider.parseStarted != nil {
+		select {
+		case provider.parseStarted <- struct{}{}:
+		default:
+		}
+	}
+	if provider.parseRelease != nil {
+		select {
+		case <-provider.parseRelease:
+		case <-ctx.Done():
+			return parser.ParseOutcome{}, ctx.Err()
+		}
+	}
 	return provider.parseOutcome, provider.parseErr
 }
 

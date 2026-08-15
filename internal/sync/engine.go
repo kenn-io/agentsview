@@ -1358,6 +1358,11 @@ func (e *Engine) applyChangedPathSyncLocked(
 	// Begin a container pass so an already-trusted, unchanged container
 	// still gates its fan-out, but never promote from a changed-path subset.
 	e.beginSQLiteContainerPass(prepared.files, prepared.preContainerStates)
+	e.reportProgress(nil, Progress{
+		Phase:         PhaseSyncing,
+		Detail:        "Syncing changed session paths",
+		SessionsTotal: len(prepared.files),
+	})
 	results := e.startWorkers(ctx, prepared.files)
 	stats := e.collectAndBatch(
 		ctx, results, len(prepared.files), len(prepared.files), nil,
