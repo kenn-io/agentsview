@@ -23,7 +23,6 @@ type deepSeekHarnessUsage struct {
 	CacheReadTokens  int
 	CacheWriteTokens int
 	ReasoningTokens  int
-	Raw              json.RawMessage
 }
 
 type deepSeekHarnessBlockState struct {
@@ -1109,7 +1108,6 @@ func parseDeepSeekHarnessUsage(raw json.RawMessage) (deepSeekHarnessUsage, error
 	}
 	usage := deepSeekHarnessUsage{
 		InputTokens: int(input), OutputTokens: int(output),
-		Raw: append(json.RawMessage(nil), raw...),
 	}
 	optional := []struct {
 		key    string
@@ -1212,7 +1210,6 @@ func deepSeekHarnessApplyUsage(
 	message ParsedMessage, usage *deepSeekHarnessUsage, model string,
 ) ParsedMessage {
 	message.Model = firstNonEmptyJSONLString(message.Model, model)
-	message.TokenUsage = append(json.RawMessage(nil), usage.Raw...)
 	message.ContextTokens = usage.InputTokens + usage.CacheReadTokens + usage.CacheWriteTokens
 	message.OutputTokens = usage.OutputTokens
 	message.HasContextTokens = true

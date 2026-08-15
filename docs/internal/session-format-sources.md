@@ -186,9 +186,9 @@ Grok section and remove the explicit registry exception in the coverage test.
   real operator prompt inside a single `user` record (envelope first, prompt
   text after the closing tag, one shared `uuid` for the whole record); the
   parser splits these into a hidden system-metadata message plus the visible
-  prompt.
-  Reverified 2026-08-09 against controlled `--resume <session> --fork-session`
-  reproductions and inspection of the Claude Code 2.1.226 bundle
+  prompt. Reverified 2026-08-09 against controlled
+  `--resume <session> --fork-session` reproductions and inspection of the
+  Claude Code 2.1.226 bundle
   ([#1370](https://github.com/kenn-io/agentsview/issues/1370)): the background
   handoff (left-arrow picker, Ctrl+B, `/background`) spawns
   `claude --resume <transcript> --fork-session` with
@@ -974,26 +974,37 @@ Grok section and remove the explicit registry exception in the coverage test.
   sessions root belongs to one physical encoding; the upstream backend rejects
   an opposite-suffix artifact rather than providing mixed-root fallback or
   migration.
+
 - **Evidence:** `source`.
+
 - **Upstream:** Clone `https://github.com/deepseek-ai/deepseek-harness.git` at
   `47f943859bef60e4160492346772ded9b24f765a`. See the pinned
   [JSONL layout, header, and scanner](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/session/session-persistence-jsonl/src/format.ts),
-  [multi-frame zstd backend](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/session/session-persistence-jsonl/src/index.ts),
-  [packed chunk codec](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/core/session/src/chunk-rows.ts),
-  [session event and seed schema](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/core/session/src/types.ts),
-  [turn and step production order](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/core/agent-loop/src/agent.ts#L245-L292),
-  [turn and step invariants](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/core/session/src/invariant.ts),
-  [agent preset reconstruction](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/preset/agent-presets/src/session.ts),
-  [compaction model-call facts](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/compaction/compaction/src/types.ts),
-  and the
-  [message/content schema](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/llm/llm/src/message.ts)
-  plus the
-  [usage schema](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/llm/llm/src/types.ts).
+
+    [multi-frame zstd backend](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/session/session-persistence-jsonl/src/index.ts),
+
+    [packed chunk codec](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/core/session/src/chunk-rows.ts),
+
+    [session event and seed schema](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/core/session/src/types.ts),
+
+    [turn and step production order](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/core/agent-loop/src/agent.ts#L245-L292),
+
+    [turn and step invariants](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/core/session/src/invariant.ts),
+
+    [agent preset reconstruction](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/preset/agent-presets/src/session.ts),
+
+    [compaction model-call facts](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/compaction/compaction/src/types.ts),
+    and the
+    [message/content schema](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/llm/llm/src/message.ts)
+    plus the
+    [usage schema](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/llm/llm/src/types.ts).
+
 - **Usage and cost:** Each model response and summarizing compaction can persist
   disjoint input, output, cache-read, cache-write, and reasoning token counts.
   Assistant provenance, request headers, and compaction summaries carry model
-  IDs. Harness persists no USD amount; Agentsview prices recognized models from
-  its catalog.
+  IDs. Harness persists no USD amount; Agentsview prices recognized models
+  from its catalog.
+
 - **Agentsview:** `internal/parser/deepseek_harness.go`,
   `internal/parser/deepseek_harness_format.go`, and
   `internal/parser/deepseek_harness_provider.go`. Only events at or after a
@@ -1004,10 +1015,14 @@ Grok section and remove the explicit registry exception in the coverage test.
   first assistant chunk and reconstructed until a final assistant message
   replaces it on the next authoritative parse. Agentsview reversibly escapes
   `%` and the reserved remote-host separator `~` in canonical session IDs.
+  Explicit raw-ID lookups remain literal; canonical escaping is decoded only
+  when lookup starts from a full session ID. Per-response usage events are the
+  sole analytics rows, while messages retain explicit context/output token
+  fields without duplicating the raw Harness usage blob into `token_usage`.
   Plain and zstd artifacts in one session directory are treated as one logical
-  source and rejected while both exist; a change maps directly to the surviving
-  sibling once that conflict is removed. The optional Harness SQLite persistence
-  backend is not supported.
+  source and rejected while both exist; a change maps directly to the
+  surviving sibling once that conflict is removed. The optional Harness SQLite
+  persistence backend is not supported.
 
 ## OpenClaw (`openclaw`)
 

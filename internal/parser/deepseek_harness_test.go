@@ -113,6 +113,8 @@ func TestDeepSeekHarnessPlainAndMultiframeZstdNormalizeTheSameSession(t *testing
 			assert.True(t, assistant.HasThinking)
 			assert.Equal(t, "deepseek-chat", assistant.Model)
 			assert.Equal(t, "tool-calls", assistant.StopReason)
+			assert.Empty(t, assistant.TokenUsage,
+				"usage events are the sole analytics source")
 			assert.Equal(t, 15, assistant.ContextTokens)
 			assert.Equal(t, 5, assistant.OutputTokens)
 			require.Len(t, assistant.ToolCalls, 1)
@@ -149,11 +151,12 @@ func TestDeepSeekHarnessPlainAndMultiframeZstdNormalizeTheSameSession(t *testing
 
 func TestDeepSeekHarnessCanonicalIDEscapesRemoteSeparator(t *testing.T) {
 	root := t.TempDir()
-	records := deepSeekHarnessCompleteFixture("child~branch%7E1/part?#", map[string]any{
+	const rawID = "child~branch%7E1%25/part?#"
+	records := deepSeekHarnessCompleteFixture(rawID, map[string]any{
 		"parentSession": "parent%25~root/path?#",
 	})
 	path := writeDeepSeekHarnessFixture(
-		t, root, "child~branch%7E1/part?#", deepSeekHarnessFixtureCwd, "plain", records,
+		t, root, rawID, deepSeekHarnessFixtureCwd, "plain", records,
 	)
 	provider, ok := NewProvider(
 		AgentDeepSeekHarness,
@@ -168,22 +171,83 @@ func TestDeepSeekHarnessCanonicalIDEscapesRemoteSeparator(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	session := outcome.Results[0].Result.Session
-	assert.Equal(t, "deepseek-harness:child%7Ebranch%257E1/part?#", session.ID)
-	assert.Equal(t, "child~branch%7E1/part?#", session.SourceSessionID)
+	assert.Equal(t, "deepseek-harness:child%7Ebranch%257E1%2525/part?#", session.ID)
+	assert.Equal(t, rawID, session.SourceSessionID)
 	assert.Equal(t, "deepseek-harness:parent%2525%7Eroot/path?#", session.ParentSessionID)
-	host, rawID := StripHostPrefix(session.ID)
+	host, strippedID := StripHostPrefix(session.ID)
 	assert.Empty(t, host)
-	assert.Equal(t, session.ID, rawID)
+	assert.Equal(t, session.ID, strippedID)
 	def, found := AgentByPrefix(session.ID)
 	require.True(t, found)
 	assert.Equal(t, AgentDeepSeekHarness, def.Type)
 
-	foundSource, found, err := provider.FindSource(t.Context(), FindSourceRequest{
-		FullSessionID: session.ID,
+	for _, test := range []struct {
+		name string
+		req  FindSourceRequest
+	}{
+		{
+			name: "explicit raw ID stays literal",
+			req: FindSourceRequest{
+				StoredFilePath: filepath.Join(root, "stale", "session.jsonl"),
+				RawSessionID:   rawID,
+			},
+		},
+		{
+			name: "canonical full ID is decoded",
+			req: FindSourceRequest{
+				StoredFilePath: filepath.Join(root, "stale", "session.jsonl"),
+				FullSessionID:  session.ID,
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			foundSource, ok, err := provider.FindSource(t.Context(), test.req)
+			require.NoError(t, err)
+			require.True(t, ok)
+			assert.Equal(t, path, foundSource.DisplayPath)
+		})
+	}
+}
+
+func TestDeepSeekHarnessAbsentRootDoesNotWalkFilesystem(t *testing.T) {
+	missingRoot := filepath.Join(t.TempDir(), "missing")
+	provider, ok := NewProvider(
+		AgentDeepSeekHarness,
+		ProviderConfig{Roots: []string{missingRoot}},
+	)
+	require.True(t, ok)
+	directoryReads := 0
+	ctx := withStreamingDirectoryReader(t.Context(), func(
+		context.Context, string, func(os.DirEntry) error,
+	) error {
+		directoryReads++
+		return nil
 	})
+
+	discovered, err := provider.Discover(ctx)
+
 	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, path, foundSource.DisplayPath)
+	assert.Empty(t, discovered)
+	assert.Zero(t, directoryReads,
+		"a missing default Harness root must not start a directory walk")
+}
+
+func BenchmarkDeepSeekHarnessAbsentRootDiscovery(b *testing.B) {
+	missingRoot := filepath.Join(b.TempDir(), "missing")
+	provider, ok := NewProvider(
+		AgentDeepSeekHarness,
+		ProviderConfig{Roots: []string{missingRoot}},
+	)
+	if !ok {
+		b.Fatal("DeepSeek Harness provider is not registered")
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, err := provider.Discover(context.Background()); err != nil {
+			b.Fatal(err)
+		}
+	}
 }
 
 func TestDeepSeekHarnessRebuildsInterruptedReplyFromPackedChunks(t *testing.T) {

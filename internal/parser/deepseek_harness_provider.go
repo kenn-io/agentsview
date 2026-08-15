@@ -12,13 +12,43 @@ import (
 const deepSeekHarnessSessionPrefix = "deepseek-harness:"
 
 func newDeepSeekHarnessProviderFactory(def AgentDef) ProviderFactory {
-	return NewSourceSetFactory(
+	inner := NewSourceSetFactory(
 		def,
 		deepSeekHarnessProviderCapabilities(),
 		func(cfg ProviderConfig) SourceSet {
 			return newDeepSeekHarnessSourceSet(cfg.Roots)
 		},
 	)
+	return deepSeekHarnessProviderFactory{ProviderFactory: inner}
+}
+
+// deepSeekHarnessProviderFactory keeps Harness's arbitrary raw IDs out of the
+// generic provider normalizer. Other providers intentionally accept prefixed
+// RawSessionID values, while Harness must preserve literal '~', "%7E", and
+// "%25" bytes and only decode the canonical escaping used by FullSessionID.
+type deepSeekHarnessProviderFactory struct {
+	ProviderFactory
+}
+
+func (f deepSeekHarnessProviderFactory) NewProvider(cfg ProviderConfig) Provider {
+	provider := f.ProviderFactory.NewProvider(cfg).(*SourceSetProvider)
+	return &deepSeekHarnessProvider{SourceSetProvider: provider}
+}
+
+type deepSeekHarnessProvider struct {
+	*SourceSetProvider
+}
+
+func (p *deepSeekHarnessProvider) FindSource(
+	ctx context.Context,
+	req FindSourceRequest,
+) (SourceRef, bool, error) {
+	if req.RawSessionID == "" {
+		req.RawSessionID = decodeDeepSeekHarnessCanonicalRawID(
+			ProviderRawSessionIDFromFull(p.Def, req.FullSessionID),
+		)
+	}
+	return p.sources.FindSource(ctx, req)
 }
 
 func newDeepSeekHarnessSourceSet(roots []string) JSONLSourceSet {
@@ -28,7 +58,6 @@ func newDeepSeekHarnessSourceSet(roots []string) JSONLSourceSet {
 		WithIncludePath(isPreferredDeepSeekHarnessSourcePath),
 		WithProjectHint(deepSeekHarnessProjectHint),
 		WithSessionIDFromPath(deepSeekHarnessSessionIDFromPath),
-		WithRawSessionIDForLookup(decodeDeepSeekHarnessCanonicalRawID),
 		WithLookupIDValid(func(rawID string) bool {
 			return strings.TrimSpace(rawID) != ""
 		}),

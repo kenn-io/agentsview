@@ -12,7 +12,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 )
@@ -24,6 +26,18 @@ func TestDeepSeekHarnessSyncReplacesPartialResponseAndDeduplicatesSeedUsage(t *t
 
 	root := t.TempDir()
 	database := dbtest.OpenTestDB(t)
+	require.NoError(t, database.UpsertModelPricing([]db.ModelPricing{
+		{
+			ModelPattern:  "deepseek-chat",
+			InputPerMTok:  money.MustParseDollars("1"),
+			OutputPerMTok: money.MustParseDollars("2"),
+		},
+		{
+			ModelPattern:  "deepseek-summary",
+			InputPerMTok:  money.MustParseDollars("1"),
+			OutputPerMTok: money.MustParseDollars("2"),
+		},
+	}))
 	engine := sync.NewEngine(database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentDeepSeekHarness: {root},
@@ -88,7 +102,23 @@ func TestDeepSeekHarnessSyncReplacesPartialResponseAndDeduplicatesSeedUsage(t *t
 	require.Len(t, messages, 2)
 	assert.Equal(t, "final reply", messages[1].Content)
 	assert.NotContains(t, messages[1].Content, "draft")
+	assert.Empty(t, messages[1].TokenUsage,
+		"the usage event must be the only persisted analytics row")
 	assert.Equal(t, 5, messages[1].OutputTokens)
+	daily, err := database.GetDailyUsage(t.Context(), db.UsageFilter{
+		From: "2023-11-14", To: "2023-11-14",
+		Agent: "deepseek-harness", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, daily.Pricing)
+	require.Contains(t, daily.Pricing.Models, "deepseek-chat")
+	chatPricing := daily.Pricing.Models["deepseek-chat"]
+	require.Len(t, chatPricing.Resolutions, 1)
+	assert.Equal(t, 1,
+		chatPricing.Resolutions[0].Application.BaseRequestCount,
+		"one model response must produce one priced request")
+	assert.Equal(t, 30, daily.Totals.InputTokens)
+	assert.Equal(t, 8, daily.Totals.OutputTokens)
 
 	childEvents := append([]any(nil), parentEvents...)
 	childEvents = append(childEvents,
