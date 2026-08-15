@@ -1459,6 +1459,7 @@ func (c *Config) applyConfigTOML(data string) error {
 			continue
 		}
 		dirs := make([]string, 0, len(rawSlice))
+		valid := true
 		for _, v := range rawSlice {
 			s, ok := v.(string)
 			if !ok {
@@ -1466,12 +1467,12 @@ func (c *Config) applyConfigTOML(data string) error {
 					"config: %s: expected string array: element is %T",
 					def.ConfigKey, v,
 				)
-				dirs = nil
+				valid = false
 				break
 			}
 			dirs = append(dirs, s)
 		}
-		if len(dirs) > 0 {
+		if valid {
 			c.AgentDirs[def.Type] = dirs
 			c.agentDirSource[def.Type] = dirFile
 		}

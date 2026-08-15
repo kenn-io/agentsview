@@ -236,6 +236,12 @@ support is deprecated because current Amp releases may keep full threads
 server-side and leave only local stubs; historical local Amp thread JSON files
 can still be parsed.
 
+The matching environment variable and `*_dirs` configuration key override an
+agent's default directories. Environment variables take precedence when both
+are set. Set a `*_dirs` key to an explicit empty array, such as
+`grok_dirs = []`, to disable discovery for that provider. Omitting the key
+keeps its default directories.
+
 | Agent                 | Default Directory                                                                | File Format                                                                                                                     |
 | --------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | Aider                 | No default; opt in with `AIDER_DIR` or `aider_dirs`                              | `.aider.chat.history.md` Markdown history files                                                                                 |

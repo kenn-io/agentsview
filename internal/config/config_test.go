@@ -855,6 +855,123 @@ func TestLoadFile_ReadsDirArrays(t *testing.T) {
 	assert.True(t, cfg.IsUserConfigured(parser.AgentAider))
 }
 
+func TestAgentDirsExplicitEmptyArrayOverridesDefaults(t *testing.T) {
+	t.Setenv("GROK_DIR", "")
+	t.Setenv("COPILOT_DIR", "")
+	defaults, err := Default()
+	require.NoError(t, err)
+	require.NotEmpty(t, defaults.ResolveDirs(parser.AgentGrok))
+	require.NotEmpty(t, defaults.ResolveDirs(parser.AgentCopilot))
+
+	cfg := loadMinimalWithConfig(t, map[string]any{
+		"grok_dirs":    []string{},
+		"copilot_dirs": []string{},
+	})
+
+	assert.Empty(t, cfg.ResolveDirs(parser.AgentGrok))
+	assert.True(t, cfg.IsUserConfigured(parser.AgentGrok))
+	assert.Empty(t, cfg.ResolveDirs(parser.AgentCopilot))
+	assert.True(t, cfg.IsUserConfigured(parser.AgentCopilot))
+}
+
+func TestAgentDirsEnvBeatsExplicitEmptyArray(t *testing.T) {
+	f := newConfigFixture(t)
+	f.WriteConfigText(t, "grok_dirs = []\n")
+	t.Setenv("GROK_DIR", "/from/env/grok")
+
+	cfg := f.LoadMinimal(t)
+
+	assert.Equal(t, []string{"/from/env/grok"}, cfg.ResolveDirs(parser.AgentGrok))
+	assert.True(t, cfg.IsUserConfigured(parser.AgentGrok))
+}
+
+func TestAgentDirsArrayPresenceTable(t *testing.T) {
+	t.Setenv("GROK_DIR", "")
+	tests := []struct {
+		name     string
+		config   string
+		wantUser bool
+		want     []string
+		empty    bool
+	}{
+		{name: "omitted retains defaults"},
+		{name: "non-empty replaces defaults", config: `grok_dirs = ["/from/config"]`, wantUser: true, want: []string{"/from/config"}},
+		{name: "empty clears defaults", config: "grok_dirs = []", wantUser: true, empty: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newConfigFixture(t)
+			f.WriteConfigText(t, tt.config)
+			cfg := f.LoadMinimal(t)
+
+			dirs := cfg.ResolveDirs(parser.AgentGrok)
+			assert.Equal(t, tt.wantUser, cfg.IsUserConfigured(parser.AgentGrok))
+			switch {
+			case tt.empty:
+				assert.Empty(t, dirs)
+			case tt.want != nil:
+				assert.Equal(t, tt.want, dirs)
+			default:
+				assert.NotEmpty(t, dirs)
+			}
+		})
+	}
+}
+
+func TestAgentDirsMalformedValuePreservesDefaults(t *testing.T) {
+	t.Setenv("GROK_DIR", "")
+	tests := []struct {
+		name   string
+		config string
+	}{
+		{name: "non-array", config: `grok_dirs = "not-an-array"`},
+		{name: "non-string element", config: "grok_dirs = [\"/valid\", 7]"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newConfigFixture(t)
+			f.WriteConfigText(t, tt.config)
+			cfg := f.LoadMinimal(t)
+
+			assert.NotEmpty(t, cfg.ResolveDirs(parser.AgentGrok))
+			assert.False(t, cfg.IsUserConfigured(parser.AgentGrok))
+		})
+	}
+}
+
+func TestAgentDirsNonexistentOverrideAndBlankEntry(t *testing.T) {
+	t.Setenv("GROK_DIR", "")
+	f := newConfigFixture(t)
+	f.WriteConfigText(t, "grok_dirs = [\"  \", \"C:/path/that/does/not/exist\"]\n")
+
+	cfg := f.LoadMinimal(t)
+
+	assert.Equal(t, []string{"C:/path/that/does/not/exist"},
+		cfg.ResolveDirs(parser.AgentGrok))
+	assert.True(t, cfg.IsUserConfigured(parser.AgentGrok))
+}
+
+func TestAgentDirsEmptyArrayWithSessionSource(t *testing.T) {
+	t.Setenv("GROK_DIR", "")
+	f := newConfigFixture(t)
+	f.WriteConfigText(t, `grok_dirs = []
+
+[[session_sources]]
+agent = "grok"
+dir = "/sessions/archive"
+machine = "archivebox"
+`)
+
+	cfg := f.LoadMinimal(t)
+
+	assert.Equal(t, []string{"/sessions/archive"}, cfg.ResolveDirs(parser.AgentGrok))
+	assert.Equal(t, "archivebox",
+		cfg.SourceMachines[parser.AgentGrok]["/sessions/archive"])
+	assert.True(t, cfg.IsUserConfigured(parser.AgentGrok))
+}
+
 func TestLoadFileSessionSourcesAreAdditiveAndOverrideDuplicateMachine(t *testing.T) {
 	f := newConfigFixture(t)
 	f.WriteConfigText(t, `
