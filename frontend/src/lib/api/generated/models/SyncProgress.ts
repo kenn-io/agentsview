@@ -15,5 +15,8 @@ export type SyncProgress = {
   resync?: boolean;
   sessions_done: number;
   sessions_total: number;
+  stalled?: boolean;
+  started_at?: string;
+  updated_at?: string;
 };
 

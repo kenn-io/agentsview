@@ -954,6 +954,8 @@ type directStreamingProvider struct {
 	discoverCalls    atomic.Int32
 	changedPathCalls atomic.Int32
 	parseCalls       atomic.Int32
+	discoverStarted  chan<- struct{}
+	discoverRelease  <-chan struct{}
 	source           *parser.SourceRef
 	parseErr         error
 	parseOutcome     parser.ParseOutcome
@@ -970,6 +972,19 @@ func (provider *directStreamingProvider) DiscoverEach(
 ) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if provider.discoverStarted != nil {
+		select {
+		case provider.discoverStarted <- struct{}{}:
+		default:
+		}
+	}
+	if provider.discoverRelease != nil {
+		select {
+		case <-provider.discoverRelease:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	if provider.source != nil {
 		return yield(*provider.source)
@@ -9185,6 +9200,117 @@ func TestEngine_SyncAllDoesNotEmitOnEmptyRun(t *testing.T) {
 	stats := fx.engine.SyncAll(context.Background(), nil)
 	require.Zero(t, stats.Synced)
 	assert.Empty(t, em.got(), "expected no emissions")
+}
+
+func TestEngine_ReconcileWatchRootsClearsCurrentProgress(t *testing.T) {
+	fx := newEngineFixture(t)
+	fx.writeClaudeSession(t, "proj", "s1.jsonl", "hello")
+
+	err := fx.engine.ReconcileWatchRoots(
+		t.Context(), []string{fx.claudeDir}, false,
+	)
+
+	require.NoError(t, err)
+	_, active := fx.engine.CurrentProgress()
+	assert.False(t, active,
+		"completed reconciliation must not leave the daemon reporting an active sync")
+}
+
+func TestEngine_ReconcileWatchRootsReportsProgressBeforeDiscoveryReturns(t *testing.T) {
+	const agent parser.AgentType = "blocked-discovery"
+	root := t.TempDir()
+	started := make(chan struct{}, 1)
+	release := make(chan struct{}, 1)
+	defer func() {
+		select {
+		case release <- struct{}{}:
+		default:
+		}
+	}()
+	provider := &directStreamingProvider{
+		ProviderBase: parser.ProviderBase{
+			Def: parser.AgentDef{Type: agent, FileBased: true},
+			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+				DiscoverSources:    parser.CapabilitySupported,
+				StreamingDiscovery: parser.CapabilitySupported,
+				WatchSources:       parser.CapabilitySupported,
+			}},
+		},
+		discoverStarted: started,
+		discoverRelease: release,
+	}
+	engine := NewEngine(openTestDB(t), EngineConfig{
+		AgentDirs:          map[parser.AgentType][]string{agent: {root}},
+		Machine:            "local",
+		ProgressStallAfter: time.Nanosecond,
+		ProviderFactories: []parser.ProviderFactory{
+			directStreamingFactory{provider: provider},
+		},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			agent: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	t.Cleanup(engine.Close)
+	done := make(chan error, 1)
+	go func() {
+		done <- engine.ReconcileWatchRoots(t.Context(), []string{root}, false)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		require.FailNow(t, "reconciliation did not enter discovery")
+	}
+
+	progress, active := engine.CurrentProgress()
+	require.True(t, active,
+		"health must observe reconciliation blocked before its first source")
+	assert.Equal(t, PhaseDiscovering, progress.Phase)
+	assert.True(t, progress.Stalled)
+
+	release <- struct{}{}
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.FailNow(t, "reconciliation did not finish after discovery resumed")
+	}
+}
+
+func TestEngine_TryRunExclusiveRejectsBusySyncWithoutRunningWork(t *testing.T) {
+	engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
+	t.Cleanup(engine.Close)
+	entered := make(chan struct{})
+	release := make(chan struct{}, 1)
+	defer func() {
+		select {
+		case release <- struct{}{}:
+		default:
+		}
+	}()
+	done := make(chan error, 1)
+	go func() {
+		done <- engine.RunExclusive(func() error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		require.FailNow(t, "first exclusive sync did not acquire the lock")
+	}
+
+	workRan := false
+	err := engine.TryRunExclusive(func() error {
+		workRan = true
+		return nil
+	})
+
+	require.ErrorIs(t, err, ErrSyncInProgress)
+	assert.False(t, workRan)
+	release <- struct{}{}
+	require.NoError(t, <-done)
 }
 
 func TestEngine_ZeroSyncedSuccessfulResyncEmits(t *testing.T) {

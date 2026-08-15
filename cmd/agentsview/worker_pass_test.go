@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/sync"
 )
 
@@ -373,6 +374,112 @@ func TestRunWorkerSyncPassRecordsSyncBookkeeping(t *testing.T) {
 	default:
 		require.FailNow(t, "a worker-backed sync with changes must emit the sync event")
 	}
+}
+
+func TestRunForegroundWorkerSyncPassRejectsBusyEngineBeforeWorkerLaunch(
+	t *testing.T,
+) {
+	engine := sync.NewEngine(dbtest.OpenTestDB(t), sync.EngineConfig{})
+	t.Cleanup(engine.Close)
+	entered := make(chan struct{})
+	release := make(chan struct{}, 1)
+	defer func() {
+		select {
+		case release <- struct{}{}:
+		default:
+		}
+	}()
+	done := make(chan error, 1)
+	go func() {
+		done <- engine.RunExclusive(func() error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		require.FailNow(t, "first exclusive sync did not acquire the lock")
+	}
+	restore := stubLaunchSyncWorker(t, func(
+		context.Context, config.Config, string, func(workerLine),
+	) (workerResult, error) {
+		t.Error("busy foreground sync must not launch another worker")
+		return workerResult{}, nil
+	})
+	defer restore()
+
+	_, ran, err := runForegroundWorkerSyncPass(
+		t.Context(), t.Context(), config.Config{}, engine, nil, nil, nil,
+	)
+
+	require.ErrorIs(t, err, sync.ErrSyncInProgress)
+	assert.False(t, ran)
+	release <- struct{}{}
+	require.NoError(t, <-done)
+}
+
+func TestRunForegroundWorkerSyncPassPublishesAndClearsWorkerProgress(
+	t *testing.T,
+) {
+	cfg := testConfigWithClaudeFixture(t)
+	database, lock := openTestWriteDB(t, cfg)
+	engine := sync.NewEngine(database, sync.EngineConfig{})
+	t.Cleanup(engine.Close)
+	progressSeen := make(chan struct{})
+	release := make(chan struct{}, 1)
+	defer func() {
+		select {
+		case release <- struct{}{}:
+		default:
+		}
+	}()
+	restore := stubLaunchSyncWorker(t, func(
+		_ context.Context, _ config.Config, _ string, onLine func(workerLine),
+	) (workerResult, error) {
+		onLine(workerLine{Progress: &sync.Progress{
+			Phase: sync.PhaseSyncing, SessionsTotal: 4, SessionsDone: 1,
+		}})
+		close(progressSeen)
+		<-release
+		return workerResult{Status: "ok", DiscoveryComplete: true}, nil
+	})
+	defer restore()
+	type passResult struct {
+		ran bool
+		err error
+	}
+	done := make(chan passResult, 1)
+	go func() {
+		_, ran, err := runForegroundWorkerSyncPass(
+			t.Context(), t.Context(), cfg, engine, database, lock,
+			func(workerLine) {},
+		)
+		done <- passResult{ran: ran, err: err}
+	}()
+	select {
+	case <-progressSeen:
+	case <-time.After(time.Second):
+		require.FailNow(t, "worker did not publish progress")
+	}
+
+	current, active := engine.CurrentProgress()
+	require.True(t, active,
+		"daemon health must observe progress from the worker process")
+	assert.Equal(t, sync.PhaseSyncing, current.Phase)
+	assert.Equal(t, 4, current.SessionsTotal)
+	assert.Equal(t, 1, current.SessionsDone)
+	assert.False(t, current.StartedAt.IsZero())
+	assert.False(t, current.UpdatedAt.IsZero())
+
+	release <- struct{}{}
+	result := <-done
+	require.NoError(t, result.err)
+	assert.True(t, result.ran)
+	_, active = engine.CurrentProgress()
+	assert.False(t, active,
+		"completed worker pass must clear daemon-visible progress")
 }
 
 // TestRunWorkerSyncPassNoWorkerRecordsNothing pins first-attempt semantics for

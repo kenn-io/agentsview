@@ -4,6 +4,9 @@ export interface SyncProgress {
   detail?: string;
   hint?: string;
   resync?: boolean;
+  stalled?: boolean;
+  started_at?: string;
+  updated_at?: string;
   current_project?: string;
   projects_total: number;
   projects_done: number;

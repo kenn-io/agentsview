@@ -1,6 +1,9 @@
 package sync
 
-import gosync "sync"
+import (
+	gosync "sync"
+	"time"
+)
 
 // Phase describes the current sync phase.
 type Phase string
@@ -18,20 +21,25 @@ const (
 	PhaseDone             Phase = "done"
 )
 
+const defaultProgressStallAfter = 5 * time.Minute
+
 // Progress reports sync progress to listeners.
 type Progress struct {
-	Phase           Phase  `json:"phase"`
-	Detail          string `json:"detail,omitempty"`
-	Hint            string `json:"hint,omitempty"`
-	Resync          bool   `json:"resync,omitempty"`
-	CurrentProject  string `json:"current_project,omitempty"`
-	ProjectsTotal   int    `json:"projects_total"`
-	ProjectsDone    int    `json:"projects_done"`
-	SessionsTotal   int    `json:"sessions_total"`
-	SessionsDone    int    `json:"sessions_done"`
-	MessagesIndexed int    `json:"messages_indexed"`
-	BytesDone       int64  `json:"bytes_done,omitempty"`
-	BytesTotal      int64  `json:"bytes_total,omitempty"`
+	Phase           Phase     `json:"phase"`
+	Detail          string    `json:"detail,omitempty"`
+	Hint            string    `json:"hint,omitempty"`
+	Resync          bool      `json:"resync,omitempty"`
+	StartedAt       time.Time `json:"started_at,omitzero"`
+	UpdatedAt       time.Time `json:"updated_at,omitzero"`
+	Stalled         bool      `json:"stalled,omitempty"`
+	CurrentProject  string    `json:"current_project,omitempty"`
+	ProjectsTotal   int       `json:"projects_total"`
+	ProjectsDone    int       `json:"projects_done"`
+	SessionsTotal   int       `json:"sessions_total"`
+	SessionsDone    int       `json:"sessions_done"`
+	MessagesIndexed int       `json:"messages_indexed"`
+	BytesDone       int64     `json:"bytes_done,omitempty"`
+	BytesTotal      int64     `json:"bytes_total,omitempty"`
 }
 
 // SyncResult describes the outcome of syncing a single session.

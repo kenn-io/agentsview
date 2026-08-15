@@ -308,6 +308,10 @@ type EngineConfig struct {
 	// startup discovery completed authoritatively. Failed, cancelled, and
 	// aborted attempts leave it eligible for a later successful owner.
 	OnStartupReconciled func(SyncStats, error)
+	// ProgressStallAfter controls when CurrentProgress marks an active pass as
+	// stalled. Zero uses the production default. Tests and embedders may use a
+	// shorter interval without changing the daemon-wide policy.
+	ProgressStallAfter time.Duration
 	// ProviderFactories and ProviderMigrationModes select which concrete
 	// providers own discovery and parsing for their agents. Nil uses the
 	// parser package registry/manifest.
@@ -343,6 +347,7 @@ type Engine struct {
 	lastSync           time.Time
 	lastSyncStats      SyncStats
 	currentProgress    *Progress
+	progressStallAfter time.Duration
 	// skipCache tracks paths that should be skipped on
 	// subsequent syncs, keyed by path with the file mtime
 	// at time of caching. Covers parse errors and
@@ -648,6 +653,10 @@ func NewEngine(
 		// choice.
 		parser.SetAllowProtectedPathProbes(true)
 	}
+	progressStallAfter := cfg.ProgressStallAfter
+	if progressStallAfter <= 0 {
+		progressStallAfter = defaultProgressStallAfter
+	}
 	e := &Engine{
 		db:                      database,
 		stat:                    os.Stat,
@@ -680,6 +689,7 @@ func NewEngine(
 		startupReconciledReady:  make(chan struct{}),
 		startupAttemptReady:     make(chan struct{}),
 		onStartupReconciled:     cfg.OnStartupReconciled,
+		progressStallAfter:      progressStallAfter,
 		reconciliationSpoolFactory: func(path string) (reconciliationSpoolStore, error) {
 			return newReconciliationSpool(path)
 		},
@@ -1210,14 +1220,41 @@ func (e *Engine) CurrentProgress() (Progress, bool) {
 	if e.currentProgress == nil {
 		return Progress{}, false
 	}
-	return *e.currentProgress, true
+	p := *e.currentProgress
+	if !p.UpdatedAt.IsZero() && e.progressStallAfter > 0 &&
+		time.Since(p.UpdatedAt) >= e.progressStallAfter {
+		p.Stalled = true
+	}
+	return p, true
+}
+
+// UpdateProgress records progress produced by work running outside the engine,
+// such as the isolated sync worker process.
+func (e *Engine) UpdateProgress(p Progress) {
+	e.reportProgress(nil, p)
+}
+
+// FinishProgress clears progress produced by work running outside the engine.
+func (e *Engine) FinishProgress() {
+	e.clearCurrentProgress()
 }
 
 func (e *Engine) reportProgress(
 	onProgress ProgressFunc, p Progress,
 ) {
+	now := time.Now()
 	e.mu.Lock()
-	e.currentProgress = &p
+	tracked := p
+	if tracked.StartedAt.IsZero() {
+		if e.currentProgress != nil && !e.currentProgress.StartedAt.IsZero() {
+			tracked.StartedAt = e.currentProgress.StartedAt
+		} else {
+			tracked.StartedAt = now
+		}
+	}
+	tracked.UpdatedAt = now
+	tracked.Stalled = false
+	e.currentProgress = &tracked
 	e.mu.Unlock()
 	if onProgress != nil {
 		onProgress(p)
@@ -3765,6 +3802,27 @@ func (e *Engine) RunExclusive(work func() error) error {
 	return work()
 }
 
+// ErrSyncInProgress reports that non-blocking foreground sync coordination
+// found another sync or maintenance pass holding the exclusive engine lock.
+var ErrSyncInProgress = errors.New("sync already in progress")
+
+// TryRunExclusive is the non-blocking foreground counterpart to RunExclusive.
+// Background work keeps using RunExclusive so scheduled obligations are not
+// lost; user-triggered sync requests use this method to fail promptly instead
+// of waiting behind a filesystem operation that may be stalled.
+func (e *Engine) TryRunExclusive(work func() error) error {
+	if e.refuseWriteInForceParse("TryRunExclusive") {
+		return errors.New(
+			"TryRunExclusive refused on report-only parse-diff engine",
+		)
+	}
+	if !e.syncMu.TryLock() {
+		return ErrSyncInProgress
+	}
+	defer e.syncMu.Unlock()
+	return work()
+}
+
 // RunExclusiveFlushed runs work while holding the exclusive sync lock, after
 // flushing deferred signal recomputes inline. It is the push half of
 // SyncThenRun for daemon push routes whose sync or resync already ran through
@@ -3939,6 +3997,11 @@ func (e *Engine) ReconcileProviderRootsGrouped(
 	func() {
 		e.syncMu.Lock()
 		defer e.syncMu.Unlock()
+		defer e.clearCurrentProgress()
+		e.reportProgress(nil, Progress{
+			Phase:  PhaseDiscovering,
+			Detail: "Reconciling watched session roots",
+		})
 		linkEligible := false
 		persistEligible := false
 		for _, group := range groups {
@@ -3994,6 +4057,11 @@ func (e *Engine) reconcileScopedWatchRoots(
 	stats, tombstoned, _, err := func() (SyncStats, int, passEpilogueEligibility, error) {
 		e.syncMu.Lock()
 		defer e.syncMu.Unlock()
+		defer e.clearCurrentProgress()
+		e.reportProgress(nil, Progress{
+			Phase:  PhaseDiscovering,
+			Detail: "Reconciling watched session roots",
+		})
 		return e.reconcileScopedWatchRootsLocked(ctx, agent, roots, full, force)
 	}()
 	// Emit outside syncMu so an Emitter implementation cannot widen the

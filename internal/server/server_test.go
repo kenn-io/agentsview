@@ -3209,6 +3209,78 @@ func TestAuthRequiredProtectsPing(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 }
 
+func TestPingReportsStalledSyncWithoutLosingDaemonIdentity(t *testing.T) {
+	dir := tempDirWithRetryCleanup(t)
+	cfg := config.Config{
+		Host: "127.0.0.1", Port: 0, DataDir: dir,
+		DBPath: filepath.Join(dir, "test.db"), WriteTimeout: 30 * time.Second,
+	}
+	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		Machine: "test", ProgressStallAfter: time.Nanosecond,
+	})
+	t.Cleanup(engine.Close)
+	te := &testEnv{
+		srv: server.New(cfg, database, engine), db: database, engine: engine,
+		dataDir: dir,
+	}
+	te.handler = wrapTestHandler(cfg, te.srv.Handler())
+	type pingResponse struct {
+		OK      bool `json:"ok"`
+		Healthy bool `json:"healthy"`
+		Sync    *struct {
+			Phase     sync.Phase `json:"phase"`
+			Stalled   bool       `json:"stalled"`
+			StartedAt string     `json:"started_at"`
+			UpdatedAt string     `json:"updated_at"`
+		} `json:"sync,omitempty"`
+	}
+
+	healthy := decode[pingResponse](t, te.get(t, "/api/ping"))
+	assert.True(t, healthy.OK)
+	assert.True(t, healthy.Healthy)
+	assert.Nil(t, healthy.Sync)
+
+	progressSeen := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce stdlibsync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	done := make(chan struct{})
+	var once stdlibsync.Once
+	go func() {
+		engine.SyncAll(t.Context(), func(sync.Progress) {
+			once.Do(func() { close(progressSeen) })
+			<-release
+		})
+		close(done)
+	}()
+	select {
+	case <-progressSeen:
+	case <-time.After(time.Second):
+		require.FailNow(t, "sync did not publish progress")
+	}
+
+	stalled := decode[pingResponse](t, te.get(t, "/api/ping"))
+	assert.True(t, stalled.OK,
+		"ping must keep proving the running daemon's identity")
+	assert.False(t, stalled.Healthy)
+	require.NotNil(t, stalled.Sync)
+	assert.Equal(t, sync.PhaseDiscovering, stalled.Sync.Phase)
+	assert.True(t, stalled.Sync.Stalled)
+	assert.NotEmpty(t, stalled.Sync.StartedAt)
+	assert.NotEmpty(t, stalled.Sync.UpdatedAt)
+
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.FailNow(t, "sync did not finish after progress callback returned")
+	}
+	finished := decode[pingResponse](t, te.get(t, "/api/ping"))
+	assert.True(t, finished.Healthy)
+	assert.Nil(t, finished.Sync)
+}
+
 func TestGetGithubConfig(t *testing.T) {
 	t.Setenv("AGENTSVIEW_GITHUB_TOKEN", "")
 	t.Setenv("PATH", t.TempDir())

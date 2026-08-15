@@ -141,13 +141,61 @@ func runWorkerSyncPass(
 	skipIfReconciled bool,
 	onLine func(workerLine),
 ) (stats sync.SyncStats, ran bool, err error) {
+	return runWorkerSyncPassExclusive(
+		ctx, recoveryCtx, cfg, engine, database, lock, skipIfReconciled,
+		onLine, engine.RunExclusive,
+	)
+}
+
+// runForegroundWorkerSyncPass keeps a user-triggered sync from waiting behind
+// an existing sync or maintenance pass. The worker handoff is unchanged once
+// the lock is acquired.
+func runForegroundWorkerSyncPass(
+	ctx context.Context,
+	recoveryCtx context.Context,
+	cfg config.Config,
+	engine *sync.Engine,
+	database *db.DB,
+	lock *writeOwnerLock,
+	onLine func(workerLine),
+) (stats sync.SyncStats, ran bool, err error) {
+	return runWorkerSyncPassExclusive(
+		ctx, recoveryCtx, cfg, engine, database, lock, false, onLine,
+		engine.TryRunExclusive,
+	)
+}
+
+func runWorkerSyncPassExclusive(
+	ctx context.Context,
+	recoveryCtx context.Context,
+	cfg config.Config,
+	engine *sync.Engine,
+	database *db.DB,
+	lock *writeOwnerLock,
+	skipIfReconciled bool,
+	onLine func(workerLine),
+	runExclusive func(func() error) error,
+) (stats sync.SyncStats, ran bool, err error) {
 	recorded := false
-	err = engine.RunExclusive(func() error {
+	err = runExclusive(func() error {
 		if skipIfReconciled && engine.StartupReconciled() {
 			return nil
 		}
+		engine.UpdateProgress(sync.Progress{
+			Phase:  sync.PhaseDiscovering,
+			Detail: "Starting sync worker",
+		})
+		defer engine.FinishProgress()
+		relayLine := func(line workerLine) {
+			if line.Progress != nil {
+				engine.UpdateProgress(*line.Progress)
+			}
+			if onLine != nil {
+				onLine(line)
+			}
+		}
 		result, workerErr := workerWritePassLocked(
-			ctx, recoveryCtx, cfg, engine, database, lock, "sync", onLine,
+			ctx, recoveryCtx, cfg, engine, database, lock, "sync", relayLine,
 		)
 		if workerNeverRan(workerErr) {
 			return workerErr

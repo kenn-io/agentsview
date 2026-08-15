@@ -939,8 +939,8 @@ func newForegroundSyncRunner(
 			// closes before the exclusive lock is released, and last-sync
 			// state plus the "sync" emit fire after it, so /sync/status and
 			// SSE subscribers observe the worker-backed pass.
-			stats, _, err := runWorkerSyncPass(
-				ctx, daemonCtx, cfg, engine, database, lock, false, onLine,
+			stats, _, err := runForegroundWorkerSyncPass(
+				ctx, daemonCtx, cfg, engine, database, lock, onLine,
 			)
 			if err == nil || !workerNeverRan(err) {
 				return stats, err
