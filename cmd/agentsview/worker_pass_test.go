@@ -482,6 +482,86 @@ func TestRunForegroundWorkerSyncPassPublishesAndClearsWorkerProgress(
 		"completed worker pass must clear daemon-visible progress")
 }
 
+func TestRunWorkerResyncBuildPublishesAndClearsWorkerProgress(t *testing.T) {
+	cfg := testConfigWithClaudeFixture(t)
+	database, _ := openTestWriteDB(t, cfg)
+	engine := sync.NewEngine(database, sync.EngineConfig{})
+	t.Cleanup(engine.Close)
+	workerStarted := make(chan struct{})
+	emitProgress := make(chan struct{}, 1)
+	progressSeen := make(chan struct{})
+	release := make(chan struct{}, 1)
+	defer func() {
+		select {
+		case emitProgress <- struct{}{}:
+		default:
+		}
+		select {
+		case release <- struct{}{}:
+		default:
+		}
+	}()
+	sentinel := errors.New("resync worker stopped")
+	restore := stubLaunchSyncWorker(t, func(
+		_ context.Context, _ config.Config, mode string, onLine func(workerLine),
+	) (workerResult, error) {
+		assert.Equal(t, "resync-build", mode)
+		close(workerStarted)
+		<-emitProgress
+		onLine(workerLine{Progress: &sync.Progress{
+			Phase: sync.PhaseSyncing, SessionsTotal: 8, SessionsDone: 3,
+		}})
+		close(progressSeen)
+		<-release
+		return workerResult{}, sentinel
+	})
+	defer restore()
+	type buildResult struct {
+		err         error
+		spawnFailed bool
+	}
+	done := make(chan buildResult, 1)
+	go func() {
+		_, err, spawnFailed := runWorkerResyncBuild(
+			t.Context(), t.Context(), cfg, engine, database, nil,
+		)
+		done <- buildResult{err: err, spawnFailed: spawnFailed}
+	}()
+	select {
+	case <-workerStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "resync worker did not start")
+	}
+
+	current, active := engine.CurrentProgress()
+	require.True(t, active,
+		"daemon health must observe resync before its first worker update")
+	assert.Equal(t, sync.PhasePreparingResync, current.Phase)
+	assert.False(t, current.StartedAt.IsZero())
+	assert.False(t, current.UpdatedAt.IsZero())
+
+	emitProgress <- struct{}{}
+	select {
+	case <-progressSeen:
+	case <-time.After(time.Second):
+		require.FailNow(t, "resync worker did not publish progress")
+	}
+	current, active = engine.CurrentProgress()
+	require.True(t, active,
+		"daemon health must receive progress from the resync worker")
+	assert.Equal(t, sync.PhaseSyncing, current.Phase)
+	assert.Equal(t, 8, current.SessionsTotal)
+	assert.Equal(t, 3, current.SessionsDone)
+
+	release <- struct{}{}
+	result := <-done
+	require.ErrorIs(t, result.err, sentinel)
+	assert.False(t, result.spawnFailed)
+	_, active = engine.CurrentProgress()
+	assert.False(t, active,
+		"completed resync worker must clear daemon-visible progress")
+}
+
 // TestRunWorkerSyncPassNoWorkerRecordsNothing pins first-attempt semantics for
 // every failure mode in which no worker process ran: a pre-launch writer-close
 // failure, a pre-launch lock-release failure, and a spawn failure. The pass

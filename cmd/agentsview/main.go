@@ -1042,15 +1042,23 @@ func runWorkerResyncBuild(
 	database *db.DB,
 	progress func(sync.Progress),
 ) (workerResult, error, bool) {
-	relay := func(l workerLine) {
-		if l.Progress != nil && progress != nil {
-			progress(*l.Progress)
-		}
-	}
 	var result workerResult
 	var launchErr error
 	var doneStats sync.SyncStats
 	barrierErr := engine.RunExclusive(func() error {
+		engine.UpdateProgress(sync.Progress{
+			Phase:  sync.PhasePreparingResync,
+			Detail: "Starting resync worker",
+		})
+		defer engine.FinishProgress()
+		relay := func(line workerLine) {
+			if line.Progress != nil {
+				engine.UpdateProgress(*line.Progress)
+			}
+			if progress != nil && line.Progress != nil {
+				progress(*line.Progress)
+			}
+		}
 		if cerr := closeWriterForPass(
 			recoveryCtx, database, "resync build",
 		); cerr != nil {

@@ -350,6 +350,65 @@ func TestSyncWatchBatchThenRunClearsProgressBeforePostSyncWork(t *testing.T) {
 	assert.True(t, workCalled)
 }
 
+func TestApplyWatchBatchReportsProgressBeforeUnknownRenameStatReturns(
+	t *testing.T,
+) {
+	const agent parser.AgentType = "watch-batch-blocked-rename-plan"
+	_, engine, _, _, path := newChangedPathOutcomeEngine(
+		t, agent, func(string) parser.ParseOutcome {
+			return parser.ParseOutcome{ResultSetComplete: true}
+		},
+	)
+	engine.progressStallAfter = time.Nanosecond
+	started := make(chan struct{}, 1)
+	release := make(chan struct{}, 1)
+	defer func() {
+		select {
+		case release <- struct{}{}:
+		default:
+		}
+	}()
+	realStat := engine.stat
+	engine.stat = func(got string) (os.FileInfo, error) {
+		assert.Equal(t, path, got)
+		started <- struct{}{}
+		<-release
+		return realStat(got)
+	}
+	done := make(chan error, 1)
+	go func() {
+		err := ApplyWatchBatch(
+			t.Context(), engine, WatchBatch{Renames: []WatchRename{{
+				Path: path, Agent: string(agent), ItemType: ItemIsUnknown,
+			}}}, &WatchRecoveryScope{},
+		)
+		done <- err
+	}()
+	select {
+	case <-started:
+	case err := <-done:
+		require.FailNow(t, "watch batch bypassed the owned planning stat", "%v", err)
+	case <-time.After(time.Second):
+		require.FailNow(t, "watch batch did not enter rename planning stat")
+	}
+
+	progress, active := engine.CurrentProgress()
+	require.True(t, active,
+		"health must observe watch-batch planning blocked in source stat")
+	assert.Equal(t, PhaseDiscovering, progress.Phase)
+	assert.True(t, progress.Stalled)
+
+	release <- struct{}{}
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.FailNow(t, "watch batch did not finish after planning resumed")
+	}
+	_, active = engine.CurrentProgress()
+	assert.False(t, active)
+}
+
 func TestValidateWatchBatchAcceptsBoundedAndAuthoritativeScopes(t *testing.T) {
 	root := t.TempDir()
 	other := t.TempDir()

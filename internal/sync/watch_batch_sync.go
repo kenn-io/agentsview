@@ -20,6 +20,12 @@ type WatchBatchSyncer interface {
 	ReconcileWatchRootsAfterLostEvents(context.Context, []string, bool) error
 }
 
+type ownedWatchBatchSyncer interface {
+	SyncWatchBatchThenRun(
+		context.Context, WatchBatch, *WatchRecoveryScope, func() error,
+	) (SyncStats, error)
+}
+
 // ValidateWatchBatch rejects malformed or ambiguous public watcher scope
 // before any archive work begins.
 func ValidateWatchBatch(batch WatchBatch, recovery *WatchRecoveryScope) error {
@@ -119,7 +125,10 @@ func watchBatchReconciliationError(
 }
 
 func planWatchBatch(
-	engine WatchBatchSyncer, batch WatchBatch, recovery *WatchRecoveryScope,
+	engine WatchBatchSyncer,
+	batch WatchBatch,
+	recovery *WatchRecoveryScope,
+	statPath func(string) (os.FileInfo, error),
 ) (watchBatchPlan, error) {
 	plan := watchBatchPlan{
 		paths:          append([]string(nil), batch.Paths...),
@@ -159,7 +168,7 @@ func planWatchBatch(
 			authoritativeRenames[owner] = struct{}{}
 			plan.paths = watchRemoveString(plan.paths, rename.Path)
 		case ItemIsUnknown:
-			info, err := os.Stat(rename.Path)
+			info, err := statPath(rename.Path)
 			if err == nil {
 				if info.IsDir() {
 					promoteDirectoryRename(rename)
@@ -206,7 +215,11 @@ func ApplyWatchBatch(
 	if err := ValidateWatchBatch(batch, recovery); err != nil {
 		return err
 	}
-	plan, err := planWatchBatch(engine, batch, recovery)
+	if owned, ok := engine.(ownedWatchBatchSyncer); ok {
+		_, err := owned.SyncWatchBatchThenRun(ctx, batch, recovery, nil)
+		return err
+	}
+	plan, err := planWatchBatch(engine, batch, recovery, os.Stat)
 	if err != nil {
 		return err
 	}
@@ -272,10 +285,6 @@ func (e *Engine) SyncWatchBatchThenRun(
 	if err := ValidateWatchBatch(batch, recovery); err != nil {
 		return SyncStats{}, err
 	}
-	plan, err := planWatchBatch(e, batch, recovery)
-	if err != nil {
-		return SyncStats{}, err
-	}
 	changed := false
 	e.syncMu.Lock()
 	defer func() {
@@ -285,6 +294,18 @@ func (e *Engine) SyncWatchBatchThenRun(
 			e.emit("sessions")
 		}
 	}()
+	e.reportProgress(nil, Progress{
+		Phase:  PhaseDiscovering,
+		Detail: "Planning watcher batch",
+	})
+	statPath := e.stat
+	if statPath == nil {
+		statPath = os.Stat
+	}
+	plan, err := planWatchBatch(e, batch, recovery, statPath)
+	if err != nil {
+		return SyncStats{}, err
+	}
 
 	if len(plan.paths) > 0 {
 		pathStats, tombstoned, pathErr := e.syncChangedPathsLocked(ctx, plan.paths)
