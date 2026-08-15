@@ -1349,6 +1349,9 @@ func buildDeepSeekHarnessPartialMessage(
 	blocks := make([]json.RawMessage, 0, len(indexes))
 	for _, index := range indexes {
 		block := response.Blocks[index]
+		if block == nil {
+			continue
+		}
 		if len(block.CompletedBlock) > 0 {
 			blocks = append(blocks, block.CompletedBlock)
 			continue

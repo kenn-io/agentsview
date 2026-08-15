@@ -71,6 +71,35 @@ func TestDeepSeekHarnessSafeIntegerJSONSemantics(t *testing.T) {
 	}
 }
 
+func TestBuildDeepSeekHarnessPartialMessageSkipsMissingBlockState(t *testing.T) {
+	response := &deepSeekHarnessResponse{
+		FirstChunkTime: 1234,
+		Blocks: map[int64]*deepSeekHarnessBlockState{
+			0: nil,
+			1: {BlockType: "text", Text: *new(strings.Builder)},
+		},
+	}
+	response.Blocks[1].Text.WriteString("visible")
+
+	message, err := buildDeepSeekHarnessPartialMessage(response)
+	require.NoError(t, err)
+	assert.Equal(t, "visible", message.Content)
+}
+
+func TestDeepSeekHarnessLineReaderReturnsBlankLine(t *testing.T) {
+	reader := newDeepSeekHarnessLineReader(strings.NewReader("\nnext"))
+
+	line, terminated, err := reader.next()
+	require.NoError(t, err)
+	assert.True(t, terminated)
+	assert.Empty(t, line)
+
+	line, terminated, err = reader.next()
+	require.NoError(t, err)
+	assert.False(t, terminated)
+	assert.Equal(t, []byte("next"), line)
+}
+
 func TestDeepSeekHarnessPlainAndMultiframeZstdNormalizeTheSameSession(t *testing.T) {
 	records := deepSeekHarnessCompleteFixture("session:one", nil)
 

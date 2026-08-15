@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -468,7 +469,7 @@ func (r *deepSeekHarnessLineReader) next() ([]byte, bool, error) {
 			if tooLong {
 				return nil, true, errors.New("event row exceeds 64 MiB limit")
 			}
-			return line[:len(line)-1], true, nil
+			return bytes.TrimSuffix(line, []byte{'\n'}), true, nil
 		case errors.Is(err, bufio.ErrBufferFull):
 			continue
 		case errors.Is(err, io.EOF):
