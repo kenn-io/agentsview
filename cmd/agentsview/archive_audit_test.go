@@ -70,6 +70,80 @@ func TestArchiveAuditRetriesWithBackoffOnFailure(t *testing.T) {
 		"the audit must never run an in-process sync pass")
 }
 
+func TestArchiveAuditPublishesAndClearsWorkerProgress(t *testing.T) {
+	cfg := testConfigWithClaudeFixture(t)
+	database, lock := openTestWriteDB(t, cfg)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		ProgressStallAfter: time.Nanosecond,
+	})
+	t.Cleanup(engine.Close)
+	workerStarted := make(chan struct{})
+	emitProgress := make(chan struct{}, 1)
+	progressSeen := make(chan struct{})
+	release := make(chan struct{}, 1)
+	defer func() {
+		select {
+		case emitProgress <- struct{}{}:
+		default:
+		}
+		select {
+		case release <- struct{}{}:
+		default:
+		}
+	}()
+	sentinel := errors.New("audit worker stopped")
+	restore := stubLaunchSyncWorker(t, func(
+		_ context.Context, _ config.Config, mode string, onLine func(workerLine),
+	) (workerResult, error) {
+		assert.Equal(t, "audit", mode)
+		close(workerStarted)
+		<-emitProgress
+		if onLine != nil {
+			onLine(workerLine{Progress: &sync.Progress{
+				Phase: sync.PhaseSyncing, SessionsTotal: 9, SessionsDone: 4,
+			}})
+		}
+		close(progressSeen)
+		<-release
+		return workerResult{}, sentinel
+	})
+	defer restore()
+	done := make(chan error, 1)
+	go func() {
+		done <- runArchiveAudit(t.Context(), cfg, engine, database, lock, nil)
+	}()
+	select {
+	case <-workerStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "audit worker did not start")
+	}
+
+	progress, active := engine.CurrentProgress()
+	require.True(t, active,
+		"daemon health must observe an audit blocked in its worker pass")
+	assert.Equal(t, sync.PhaseDiscovering, progress.Phase)
+	assert.True(t, progress.Stalled)
+
+	emitProgress <- struct{}{}
+	select {
+	case <-progressSeen:
+	case <-time.After(time.Second):
+		require.FailNow(t, "audit worker did not publish progress")
+	}
+	progress, active = engine.CurrentProgress()
+	require.True(t, active,
+		"daemon health must receive progress from the audit worker")
+	assert.Equal(t, sync.PhaseSyncing, progress.Phase)
+	assert.Equal(t, 9, progress.SessionsTotal)
+	assert.Equal(t, 4, progress.SessionsDone)
+
+	release <- struct{}{}
+	require.ErrorIs(t, <-done, sentinel)
+	_, active = engine.CurrentProgress()
+	assert.False(t, active,
+		"completed audit pass must clear daemon-visible progress")
+}
+
 // TestArchiveAuditEmitsOnDataChange asserts a successful audit that changed data
 // emits the sessions scope so connected clients refresh.
 func TestArchiveAuditEmitsOnDataChange(t *testing.T) {

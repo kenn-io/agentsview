@@ -111,9 +111,22 @@ func runWorkerWritePass(
 ) (workerResult, error) {
 	var result workerResult
 	err := engine.RunExclusive(func() error {
+		engine.UpdateProgress(sync.Progress{
+			Phase:  sync.PhaseDiscovering,
+			Detail: "Starting " + mode + " worker",
+		})
+		defer engine.FinishProgress()
+		relayLine := func(line workerLine) {
+			if line.Progress != nil {
+				engine.UpdateProgress(*line.Progress)
+			}
+			if onLine != nil {
+				onLine(line)
+			}
+		}
 		var workerErr error
 		result, workerErr = workerWritePassLocked(
-			ctx, recoveryCtx, cfg, engine, database, lock, mode, onLine,
+			ctx, recoveryCtx, cfg, engine, database, lock, mode, relayLine,
 		)
 		return workerErr
 	})
