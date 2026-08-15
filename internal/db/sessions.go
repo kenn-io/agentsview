@@ -765,7 +765,7 @@ func upsertArchiveSessionRow(
 
 	var current bunmodel.Session
 	err = store.NewSelect().Model(&current).
-		Column("project").
+		Column("project", "session_name").
 		Column(bunmodel.SessionColumnsOwnedBy(bunmodel.SessionColumnArchive)...).
 		Where("id = ?", s.ID).Scan(ctx)
 	inserted := errors.Is(err, sql.ErrNoRows)
