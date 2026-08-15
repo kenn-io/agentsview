@@ -118,11 +118,17 @@ func TestArchiveAuditPublishesAndClearsWorkerProgress(t *testing.T) {
 		require.FailNow(t, "audit worker did not start")
 	}
 
-	progress, active := engine.CurrentProgress()
-	require.True(t, active,
-		"daemon health must observe an audit blocked in its worker pass")
+	var progress sync.Progress
+	require.Eventually(t, func() bool {
+		current, active := engine.CurrentProgress()
+		if !active || !current.Stalled {
+			return false
+		}
+		progress = current
+		return true
+	}, time.Second, time.Millisecond,
+		"daemon health must observe a stalled audit blocked in its worker pass")
 	assert.Equal(t, sync.PhaseDiscovering, progress.Phase)
-	assert.True(t, progress.Stalled)
 
 	emitProgress <- struct{}{}
 	select {
@@ -130,7 +136,7 @@ func TestArchiveAuditPublishesAndClearsWorkerProgress(t *testing.T) {
 	case <-time.After(time.Second):
 		require.FailNow(t, "audit worker did not publish progress")
 	}
-	progress, active = engine.CurrentProgress()
+	progress, active := engine.CurrentProgress()
 	require.True(t, active,
 		"daemon health must receive progress from the audit worker")
 	assert.Equal(t, sync.PhaseSyncing, progress.Phase)
