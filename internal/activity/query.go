@@ -99,6 +99,59 @@ func ResolveQuery(input QueryInput, now time.Time) (Query, error) {
 	}, nil
 }
 
+// ValidateResolvedQuery applies the same bounded-query contract to a Query
+// reconstructed from a signed report token. Tokens are an optimization hint,
+// not authority to bypass the public request limits.
+func ValidateResolvedQuery(q Query) error {
+	if !q.RangeStart.Before(q.RangeEnd) {
+		return fmt.Errorf("from must be before to")
+	}
+	if q.RangeEnd.Sub(q.RangeStart) > maxRange {
+		return fmt.Errorf("range exceeds maximum of one year")
+	}
+	if !allowedBucketSpec(q.Bucket) {
+		return fmt.Errorf("invalid bucket specification")
+	}
+	if q.GapCapSeconds != defaultGapCap {
+		return fmt.Errorf("invalid gap cap")
+	}
+	if q.EffectiveEnd.Before(q.RangeStart) || q.EffectiveEnd.After(q.RangeEnd) {
+		return fmt.Errorf("effective end is outside report range")
+	}
+	if q.Partial {
+		if !q.EffectiveEnd.Before(q.RangeEnd) {
+			return fmt.Errorf("partial report must end before report range")
+		}
+	} else if !q.EffectiveEnd.Equal(q.RangeEnd) {
+		return fmt.Errorf("complete report must use the full report range")
+	}
+	loc, err := loadLocation(q.Timezone)
+	if err != nil {
+		return err
+	}
+	windows, err := BuildBuckets(q.RangeStart, q.RangeEnd, q.Bucket, loc)
+	if err != nil {
+		return err
+	}
+	if len(windows) > maxBuckets {
+		return fmt.Errorf("bucket configuration would produce too many buckets")
+	}
+	return nil
+}
+
+func allowedBucketSpec(spec BucketSpec) bool {
+	switch spec {
+	case BucketSpec{Unit: BucketMinute, NominalSeconds: 300},
+		BucketSpec{Unit: BucketMinute, NominalSeconds: 900},
+		BucketSpec{Unit: BucketHour, NominalSeconds: 3600},
+		BucketSpec{Unit: BucketDay, NominalSeconds: 86400},
+		BucketSpec{Unit: BucketWeek, NominalSeconds: 604800}:
+		return true
+	default:
+		return false
+	}
+}
+
 // loadLocation resolves an IANA timezone name; empty and "UTC" map to time.UTC.
 func loadLocation(tz string) (*time.Location, error) {
 	if tz == "" || tz == "UTC" {

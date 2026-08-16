@@ -53,6 +53,59 @@ func activityReportStore(
 	return NewStoreFromDB(syncer.DB())
 }
 
+func TestActivityReportSourceProbeTracksIdentityRevision(t *testing.T) {
+	ctx := context.Background()
+	conn := openTestDuckDB(t)
+	require.NoError(t, EnsureSchema(ctx, conn))
+	store := NewStoreFromDB(conn)
+
+	before, err := store.ActivityReportSourceProbe(ctx)
+	require.NoError(t, err)
+	require.NoError(t, recordMetadataKey(
+		ctx, conn, identityRevisionMetadataKey, "7",
+	))
+	after, err := store.ActivityReportSourceProbe(ctx)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, before, after,
+		"identity-only mirror updates must change the Activity probe")
+}
+
+func TestActivityReportCandidateSourcePreservesRangeEdgePairs(t *testing.T) {
+	const sessionID = "range-edge"
+	timestamps := []string{
+		"2026-06-13T23:54:59Z",
+		"2026-06-13T23:59:30Z",
+		"2026-06-14T00:00:30Z",
+		"2026-06-14T23:59:00Z",
+		"2026-06-15T00:20:00Z",
+	}
+	session := syncSession(sessionID, "edges", "edge", timestamps[0], len(timestamps))
+	session.EndedAt = &timestamps[len(timestamps)-1]
+	messages := make([]db.Message, 0, len(timestamps))
+	for ordinal, timestamp := range timestamps {
+		messages = append(messages, syncMessage(
+			sessionID, ordinal, "user", "edge", timestamp,
+		))
+	}
+	store := activityReportStore(t, []db.SessionBatchWrite{{
+		Session: session, Messages: messages,
+		DataVersion: 1, ReplaceMessages: true,
+	}}, nil)
+	q := duckDayQuery(t, "2026-06-14", "UTC")
+
+	var starts []int
+	err := store.ActivityReportCandidateSource(
+		[]string{sessionID}, q,
+	)(context.Background(), func(candidate activity.IntervalCandidate) error {
+		starts = append(starts, candidate.StartOrdinal)
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []int{1, 2, 3}, starts,
+		"left pruning and right successor lookup must preserve adjacency")
+}
+
 func TestDuckGetActivityReportBasicConcurrency(t *testing.T) {
 	ctx := context.Background()
 	// Two overlapping sessions on 2026-06-14 (UTC), each two timestamped

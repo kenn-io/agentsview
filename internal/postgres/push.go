@@ -923,6 +923,14 @@ func (s *Sync) syncProjectIdentityObservations(
 	); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO sync_metadata (key, value) VALUES ($1, '1')
+		ON CONFLICT (key) DO UPDATE SET
+			value = (sync_metadata.value::bigint + 1)::text`,
+		activityReportProjectIdentityGenerationKey,
+	); err != nil {
+		return fmt.Errorf("advancing activity report identity generation: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing project identity observation sync: %w", err)
 	}

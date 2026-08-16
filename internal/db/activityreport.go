@@ -52,6 +52,21 @@ func activityReportRangeBoundsUTC(q activity.Query) (string, string) {
 func (db *DB) GetActivityReport(
 	ctx context.Context, f AnalyticsFilter, q activity.Query,
 ) (activity.Report, error) {
+	artifacts, err := db.BuildActivityReportArtifacts(ctx, f, q, nil)
+	if err != nil {
+		return activity.Report{}, err
+	}
+	artifacts.Report.BySession = artifacts.Sessions
+	return artifacts.Report, nil
+}
+
+func (db *DB) BuildActivityReportArtifacts(
+	ctx context.Context,
+	f AnalyticsFilter,
+	q activity.Query,
+	onProgress activity.ProgressFunc,
+) (activity.CandidateArtifacts, error) {
+	reportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
 	f.IncludeSubagents = true
 	f.IncludeForks = true
 	rangeStartUTC, rangeEndUTC := activityReportRangeBoundsUTC(q)
@@ -61,20 +76,20 @@ func (db *DB) GetActivityReport(
 	sessions, ids, err := db.activityReportSessions(
 		ctx, f, rangeStartUTC, rangeEndUTC)
 	if err != nil {
-		return activity.Report{}, err
+		return activity.CandidateArtifacts{}, err
 	}
-
-	acts, err := db.activityReportActivity(ctx, ids)
-	if err != nil {
-		return activity.Report{}, err
-	}
+	reportProgress(onProgress, activity.Progress{
+		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
+	})
 
 	usage, pricing, err := db.activityReportUsage(ctx, ids, lowerBound, upperBound, q)
 	if err != nil {
-		return activity.Report{}, err
+		return activity.CandidateArtifacts{}, err
 	}
 
-	report, err := activity.Aggregate(activity.Params{
+	rowsProcessed := int64(0)
+	source := db.activityReportCandidateSource(ids, q)
+	artifacts, err := activity.BuildCandidateArtifactsFromSourceWithSurvivorUsage(ctx, activity.Params{
 		RangeStart:    q.RangeStart,
 		RangeEnd:      q.RangeEnd,
 		Loc:           q.Loc,
@@ -82,20 +97,51 @@ func (db *DB) GetActivityReport(
 		Partial:       q.Partial,
 		GapCapSeconds: q.GapCapSeconds,
 		Bucket:        q.Bucket,
-	}, sessions, acts, usage)
+	}, sessions, func(
+		ctx context.Context, yield func(activity.IntervalCandidate) error,
+	) error {
+		reportProgress(onProgress, activity.Progress{
+			Phase: activity.ProgressScanningActivity, SessionsTotal: len(sessions),
+		})
+		return source(ctx, func(candidate activity.IntervalCandidate) error {
+			rowsProcessed++
+			reportProgress(onProgress, activity.Progress{
+				Phase:         activity.ProgressScanningActivity,
+				SessionsTotal: len(sessions), RowsProcessed: rowsProcessed,
+			})
+			return yield(candidate)
+		})
+	}, usage)
 	if err != nil {
-		return activity.Report{}, fmt.Errorf("aggregating activity report: %w", err)
+		return activity.CandidateArtifacts{}, fmt.Errorf("aggregating activity report: %w", err)
 	}
-	report.SchemaVersion = export.ActivityReportSchemaVersion
-	report.Pricing = pricing
+	reportProgress(onProgress, activity.Progress{
+		Phase: activity.ProgressFinalizing, SessionsTotal: len(sessions),
+		SessionsProcessed: len(sessions), RowsProcessed: rowsProcessed,
+	})
+	artifacts.Report.SchemaVersion = export.ActivityReportSchemaVersion
+	artifacts.Report.Pricing = pricing
 	projects, err := db.BuildProjectIdentityMap(ctx,
 		activityReportProjectLabels(sessions))
 	if err != nil {
-		return activity.Report{}, err
+		return activity.CandidateArtifacts{}, err
 	}
-	activity.SanitizeProjectLabels(&report, projects)
-	report.Projects = export.ProjectMapForWire(projects)
-	return report, nil
+	artifacts.Report.BySession = artifacts.Sessions
+	activity.SanitizeProjectLabels(&artifacts.Report, projects)
+	artifacts.Sessions = artifacts.Report.BySession
+	artifacts.Report.BySession = []activity.SessionRow{}
+	artifacts.Report.Projects = export.ProjectMapForWire(projects)
+	reportProgress(onProgress, activity.Progress{
+		Phase: activity.ProgressDone, SessionsTotal: len(sessions),
+		SessionsProcessed: len(sessions), RowsProcessed: rowsProcessed,
+	})
+	return artifacts, nil
+}
+
+func reportProgress(callback activity.ProgressFunc, progress activity.Progress) {
+	if callback != nil {
+		callback(progress)
+	}
 }
 
 // GetSessionUsageRows returns the backend-priced usage rows for the supplied
@@ -426,15 +472,6 @@ func (db *DB) activityReportSessionsFrom(
 	return sessions, ids, nil
 }
 
-// activityReportActivity returns every timestamped message for the
-// candidate sessions, ordered for the aggregator's per-session
-// interval walk.
-func (db *DB) activityReportActivity(
-	ctx context.Context, ids []string,
-) ([]activity.ActivityEvent, error) {
-	return db.activityReportActivityFrom(ctx, db.getReader(), ids)
-}
-
 func (db *DB) activityReportActivityFrom(
 	ctx context.Context, q sessionExportQuerier, ids []string,
 ) ([]activity.ActivityEvent, error) {
@@ -492,6 +529,146 @@ func (db *DB) activityReportActivityFrom(
 		return a.Model < b.Model
 	})
 	return out, nil
+}
+
+// activityReportCandidates returns adjacent timestamped-message pairs whose
+// start can contribute to the report. The timestamp bound applies only to the
+// start row; the correlated successor lookup preserves true ordinal adjacency
+// and intentionally has no right timestamp bound.
+func (db *DB) activityReportCandidates(
+	ctx context.Context, ids []string, q activity.Query,
+) ([]activity.IntervalCandidate, error) {
+	var out []activity.IntervalCandidate
+	err := db.activityReportCandidateSource(ids, q)(
+		ctx, func(candidate activity.IntervalCandidate) error {
+			out = append(out, candidate)
+			return nil
+		},
+	)
+	return out, err
+}
+
+const activityReportCandidatesSQL = `SELECT
+	m.session_id, m.ordinal, successor.ordinal,
+	m.timestamp, successor.timestamp,
+	successor.role, successor.model,
+	COALESCE((
+		SELECT prior.model
+		FROM messages prior
+		WHERE prior.session_id = m.session_id
+			AND prior.ordinal <= m.ordinal
+			AND prior.role = 'assistant'
+			AND prior.model != ''
+			AND prior.timestamp IS NOT NULL
+			AND prior.timestamp != ''
+			AND agentsview_timestamp_unix_micro(prior.timestamp) IS NOT NULL
+			AND agentsview_timestamp_unix_micro(prior.timestamp) > (
+				SELECT agentsview_timestamp_unix_micro(prior_previous.timestamp)
+				FROM messages prior_previous
+				WHERE prior_previous.session_id = prior.session_id
+					AND prior_previous.ordinal < prior.ordinal
+					AND prior_previous.timestamp IS NOT NULL
+					AND prior_previous.timestamp != ''
+					AND agentsview_timestamp_unix_micro(
+						prior_previous.timestamp) IS NOT NULL
+				ORDER BY prior_previous.ordinal DESC
+				LIMIT 1
+			)
+		ORDER BY prior.ordinal DESC
+		LIMIT 1
+	), 'unknown')
+FROM messages m INDEXED BY idx_messages_velocity
+JOIN messages successor ON successor.id = (
+	SELECT next.id
+	FROM messages next
+	WHERE next.session_id = m.session_id
+		AND next.ordinal > m.ordinal
+		AND next.timestamp IS NOT NULL
+		AND next.timestamp != ''
+		AND agentsview_timestamp_unix_micro(next.timestamp) IS NOT NULL
+	ORDER BY next.ordinal
+	LIMIT 1
+)
+WHERE m.session_id IN (SELECT value FROM json_each(?))
+	AND m.timestamp IS NOT NULL
+	AND m.timestamp != ''
+	AND m.timestamp >= ?
+	AND m.timestamp < ?
+	AND agentsview_timestamp_unix_micro(m.timestamp) IS NOT NULL
+	AND agentsview_timestamp_unix_micro(m.timestamp) >= ?
+	AND agentsview_timestamp_unix_micro(m.timestamp) < ?
+ORDER BY agentsview_timestamp_unix_micro(m.timestamp),
+	m.session_id, m.ordinal`
+
+func (db *DB) activityReportCandidateSource(
+	ids []string, q activity.Query,
+) activity.CandidateSource {
+	return func(
+		ctx context.Context,
+		yield func(activity.IntervalCandidate) error,
+	) error {
+		if len(ids) == 0 {
+			return nil
+		}
+		encodedIDs, err := json.Marshal(ids)
+		if err != nil {
+			return fmt.Errorf("encoding activity report session IDs: %w", err)
+		}
+		gapCap := time.Duration(q.GapCapSeconds) * time.Second
+		lowerTime := q.RangeStart.Add(-gapCap).UTC()
+		upperTime := q.EffectiveEnd.UTC()
+		lower := lowerTime.UnixMicro()
+		upper := upperTime.UnixMicro()
+		paddedLower := paddedUTCBound(lowerTime.Format(time.RFC3339), -14)
+		paddedUpper := paddedUTCBound(upperTime.Format(time.RFC3339), 14)
+		args := []any{string(encodedIDs), paddedLower, paddedUpper, lower, upper}
+		rows, err := db.getReader().QueryContext(
+			ctx, activityReportCandidatesSQL, args...,
+		)
+		if err != nil {
+			return fmt.Errorf("querying activity report candidates: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			var candidate activity.IntervalCandidate
+			var start, end string
+			if err := rows.Scan(
+				&candidate.SessionID, &candidate.StartOrdinal,
+				&candidate.EndOrdinal, &start, &end,
+				&candidate.ClosingRole, &candidate.ClosingModel,
+				&candidate.PriorModel,
+			); err != nil {
+				return fmt.Errorf("scanning activity report candidate: %w", err)
+			}
+			var err error
+			candidate.Start, err = time.Parse(time.RFC3339Nano, start)
+			if err != nil {
+				return fmt.Errorf("parsing activity candidate start: %w", err)
+			}
+			candidate.End, err = time.Parse(time.RFC3339Nano, end)
+			if err != nil {
+				return fmt.Errorf("parsing activity candidate end: %w", err)
+			}
+			candidate.Start = candidate.Start.UTC()
+			candidate.End = candidate.End.UTC()
+			if err := yield(candidate); err != nil {
+				return err
+			}
+		}
+		return rows.Err()
+	}
+}
+
+// ActivityReportCandidateSource exposes the backend's mechanical pairing
+// stream for cross-backend contract tests. Activity semantics remain in the
+// shared aggregator.
+func (db *DB) ActivityReportCandidateSource(
+	ids []string, q activity.Query,
+) activity.CandidateSource {
+	return db.activityReportCandidateSource(ids, q)
 }
 
 // activityReportUsage selects complete snapshots across the padded range,

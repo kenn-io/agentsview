@@ -126,6 +126,7 @@ func TestMiddlewareTimeout(t *testing.T) {
 		{"Wrapped_ListSessions", "/api/v1/sessions", true, []string{"GET /api/v1/sessions", "10ms", "--write-timeout"}, 0},
 		{"Wrapped_GetStats", "/api/v1/stats", true, []string{"GET /api/v1/stats", "10ms", "--write-timeout"}, 0},
 		{"Unwrapped_SearchContent", "/api/v1/search/content?pattern=needle", false, nil, http.StatusOK},
+		{"Unwrapped_ActivitySessions", "/api/v1/activity/report/invalid/sessions", false, nil, http.StatusBadRequest},
 		{"Unwrapped_ExportSession", "/api/v1/sessions/invalid-id/export", false, nil, http.StatusNotFound},
 		{"Unwrapped_SPA", "/", false, nil, http.StatusOK},
 	}

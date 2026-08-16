@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log"
@@ -32,6 +33,27 @@ import (
 	agentsync "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
+
+type cursorSecretRecorder struct {
+	secret []byte
+}
+
+func (recorder *cursorSecretRecorder) SetCursorSecret(secret []byte) {
+	recorder.secret = append([]byte(nil), secret...)
+}
+
+func TestApplyRequiredCursorSecret(t *testing.T) {
+	recorder := &cursorSecretRecorder{}
+	err := applyRequiredCursorSecret(recorder, config.Config{})
+	assert.ErrorContains(t, err, "cursor secret is not configured")
+
+	want := []byte("configured cursor secret")
+	err = applyRequiredCursorSecret(recorder, config.Config{
+		CursorSecret: base64.StdEncoding.EncodeToString(want),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, want, recorder.secret)
+}
 
 func TestRuntimeWarningHelper(t *testing.T) {
 	logOutput := captureLogOutput(t)

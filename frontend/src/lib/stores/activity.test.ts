@@ -4,6 +4,7 @@ import { testMoney } from "../test/money.js";
 
 const api = vi.hoisted(() => ({
   getActivityReport: vi.fn(),
+  getActivitySessions: vi.fn(),
   getProjects: vi.fn(),
   getAgents: vi.fn(),
   getMachines: vi.fn(),
@@ -18,12 +19,15 @@ const eventBus = vi.hoisted(() => ({
 }));
 
 vi.mock("../api/generated/index", () => ({
-  ActivityService: { getApiV1ActivityReport: api.getActivityReport },
   MetadataService: {
     getApiV1Projects: api.getProjects,
     getApiV1Agents: api.getAgents,
     getApiV1Machines: api.getMachines,
   },
+}));
+vi.mock("../api/activity-report.js", () => ({
+  fetchActivityReport: api.getActivityReport,
+  fetchActivitySessions: api.getActivitySessions,
 }));
 vi.mock("../api/runtime.js", () => ({
   configureGeneratedClient: vi.fn(),
@@ -77,7 +81,8 @@ function makeReport(overrides: Partial<Report> = {}): Report {
     by_model: [],
     by_agent: [],
     by_session: [],
-    intervals: [],
+    sessions_total: 0,
+    projects: {},
     ...overrides,
   } as Report;
 }
@@ -88,6 +93,7 @@ let detach: (() => void) | null = null;
 
 beforeEach(() => {
   api.getActivityReport.mockReset();
+  api.getActivitySessions.mockReset();
   api.getProjects.mockReset();
   api.getAgents.mockReset();
   api.getMachines.mockReset();
@@ -99,6 +105,7 @@ beforeEach(() => {
   api.getAgents.mockResolvedValue({ agents: [] });
   api.getMachines.mockResolvedValue({ machines: [] });
   activity.report = null;
+  activity.reportGeneration = 0;
   activity.loading = false;
   activity.error = null;
   activity.lastUpdatedAt = null;
@@ -127,6 +134,15 @@ afterEach(() => {
 });
 
 describe("load", () => {
+  it("advances the report generation when the same report ID reloads", async () => {
+    api.getActivityReport.mockResolvedValue(makeReport({ report_id: "stable-report" }));
+
+    await activity.load();
+    expect(activity.reportGeneration).toBe(1);
+    await activity.load();
+    expect(activity.reportGeneration).toBe(2);
+  });
+
   it("builds one query object covering the full report scope", async () => {
     activity.setCustomRange("2026-06-10", "2026-06-16");
     activity.setProject("source-project");
@@ -139,7 +155,11 @@ describe("load", () => {
     api.getActivityReport.mockResolvedValue(makeReport());
     await activity.load();
 
-    expect(api.getActivityReport).toHaveBeenCalledWith(params);
+    expect(api.getActivityReport).toHaveBeenCalledWith(
+      params,
+      expect.any(AbortSignal),
+      expect.any(Function),
+    );
     expect(params).toEqual({
       preset: "custom",
       date: "2026-06-10",
@@ -156,14 +176,11 @@ describe("load", () => {
 
   it("aborts the obsolete report when a replacement starts", async () => {
     const signals: AbortSignal[] = [];
-    apiRuntimeMocks.callGenerated.mockImplementation(
-      (request: () => Promise<unknown>, signal?: AbortSignal) => {
-        signals.push(signal as AbortSignal);
-        return request();
-      },
-    );
     api.getActivityReport
-      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockImplementationOnce((_query, signal) => {
+        signals.push(signal);
+        return new Promise(() => {});
+      })
       .mockResolvedValueOnce(makeReport());
 
     void activity.load();
@@ -175,13 +192,10 @@ describe("load", () => {
 
   it("aborts the visible report on teardown", async () => {
     const signals: AbortSignal[] = [];
-    apiRuntimeMocks.callGenerated.mockImplementation(
-      (request: () => Promise<unknown>, signal?: AbortSignal) => {
-        signals.push(signal as AbortSignal);
-        return request();
-      },
-    );
-    api.getActivityReport.mockImplementationOnce(() => new Promise(() => {}));
+    api.getActivityReport.mockImplementationOnce((_query, signal) => {
+      signals.push(signal);
+      return new Promise(() => {});
+    });
 
     void activity.load();
     await Promise.resolve();
@@ -326,6 +340,60 @@ describe("load", () => {
     expect(activity.report).toBeNull();
     expect(activity.error).toBe("refresh down");
     expect(activity.loading).toBe(false);
+  });
+});
+
+describe("session paging", () => {
+  it("replaces the embedded page with a server-filtered bucket page", async () => {
+    activity.report = makeReport({
+      report_id: "signed-report",
+      sessions_total: 301,
+    });
+    api.getActivitySessions.mockResolvedValue({
+      report_id: "signed-report",
+      sessions: [{ session_id: "active" }],
+      next_cursor: "next-page",
+      total: 1,
+    });
+
+    await activity.loadSessionPage({ bucket: 7, sort: "cost", direction: "asc" });
+
+    expect(api.getActivitySessions).toHaveBeenCalledWith(
+      "signed-report",
+      {
+        limit: 200,
+        cursor: undefined,
+        sort: "cost",
+        direction: "asc",
+        bucket: 7,
+      },
+      expect.any(AbortSignal),
+    );
+    expect(activity.report?.by_session).toEqual([{ session_id: "active" }]);
+    expect(activity.report?.sessions_total).toBe(1);
+    expect(activity.sessionsBucket).toBe(7);
+  });
+
+  it("cancels a stale bucket page when a newer selection starts", async () => {
+    activity.report = makeReport({ report_id: "signed-report" });
+    const signals: AbortSignal[] = [];
+    api.getActivitySessions
+      .mockImplementationOnce((_id, _options, signal: AbortSignal) => {
+        signals.push(signal);
+        return new Promise(() => {});
+      })
+      .mockResolvedValueOnce({
+        report_id: "signed-report",
+        sessions: [],
+        total: 0,
+      });
+
+    void activity.loadSessionPage({ bucket: 1 });
+    await Promise.resolve();
+    await activity.loadSessionPage({ bucket: 2 });
+
+    expect(signals[0]?.aborted).toBe(true);
+    expect(activity.sessionsBucket).toBe(2);
   });
 });
 

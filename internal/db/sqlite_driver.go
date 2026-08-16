@@ -12,6 +12,13 @@ func init() {
 	sql.Register(sqliteUsageDriverName, &sqlite3.SQLiteDriver{
 		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
 			if err := conn.RegisterFunc(
+				"agentsview_timestamp_unix_micro",
+				sqliteTimestampUnixMicro,
+				true,
+			); err != nil {
+				return err
+			}
+			if err := conn.RegisterFunc(
 				"agentsview_usage_output_tokens",
 				sqliteUsageOutputTokens,
 				true,
@@ -25,6 +32,14 @@ func init() {
 			)
 		},
 	})
+}
+
+func sqliteTimestampUnixMicro(raw string) any {
+	timestamp, ok := ParseStoredTimestamp(raw)
+	if !ok {
+		return nil
+	}
+	return timestamp.UTC().UnixMicro()
 }
 
 func sqliteUsageOutputTokens(tokenJSON string) int {

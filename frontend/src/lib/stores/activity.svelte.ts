@@ -1,7 +1,16 @@
 import type { AgentInfo, ProjectInfo } from "../api/types.js";
 import type { Report } from "../api/types/activity.js";
-import { ActivityService, MetadataService } from "../api/generated/index";
+import { m } from "../i18n/index.js";
+import { MetadataService } from "../api/generated/index";
 import { callGenerated, configureGeneratedClient, isAbortError } from "../api/runtime.js";
+import {
+  fetchActivityReport,
+  fetchActivitySessions,
+  type ActivityReportProgress,
+  type ActivityReportQuery,
+  type ActivitySessionPageOptions,
+  type ActivitySessionSort,
+} from "../api/activity-report.js";
 import { sync } from "./sync.svelte.js";
 import { events } from "./events.svelte.js";
 import { router } from "./router.svelte.js";
@@ -39,7 +48,7 @@ function customToInstant(to: string): string {
   return end.toISOString();
 }
 
-export type ActivityQueryParams = Parameters<typeof ActivityService.getApiV1ActivityReport>[0];
+export type ActivityQueryParams = ActivityReportQuery;
 
 class ActivityStore {
   preset = $state<Preset>("day");
@@ -53,8 +62,18 @@ class ActivityStore {
   machine: string = $state("");
   automation: Automation = $state("all");
   report: Report | null = $state(null);
+  // Monotonic identity for successful full-report loads. report_id is
+  // deterministic for unchanged inputs, so it cannot signal that page-local
+  // drill-down state must be cleared after a manual refresh.
+  reportGeneration = $state(0);
   loading = $state(false);
+  progress: ActivityReportProgress | null = $state(null);
   error: string | null = $state(null);
+  sessionsLoading = $state(false);
+  sessionsError: string | null = $state(null);
+  sessionsSort: ActivitySessionSort = $state("agent_minutes");
+  sessionsDirection: "asc" | "desc" = $state("desc");
+  sessionsBucket: number | null = $state(null);
   // Epoch ms of the last successful report fetch, powering the "Updated Xm ago"
   // refresh label. null until the first load completes.
   lastUpdatedAt: number | null = $state(null);
@@ -76,6 +95,7 @@ class ActivityStore {
 
   private loadVersion = 0;
   private reportRead = new LatestRead();
+  private sessionsRead = new LatestRead();
   private filterOptionsRead = new LatestRead();
   #filterOptionsLoaded = false;
   #filterOptionsPromise: Promise<boolean> | null = null;
@@ -155,15 +175,27 @@ class ActivityStore {
       return false;
     }
     this.loading = true;
+    this.progress = null;
     this.error = null;
-    configureGeneratedClient();
     try {
-      const res = await callGenerated(
-        () => ActivityService.getApiV1ActivityReport(this.queryParams()),
+      const res = await fetchActivityReport(
+        this.queryParams(),
         signal,
+        (progress) => {
+          if (v === this.loadVersion && this.reportRead.isCurrent(signal)) {
+            this.progress = progress;
+          }
+        },
       );
       if (v !== this.loadVersion || !this.reportRead.isCurrent(signal)) return false;
-      this.report = res as unknown as Report;
+      this.sessionsRead.cancel();
+      this.sessionsLoading = false;
+      this.sessionsError = null;
+      this.sessionsSort = "agent_minutes";
+      this.sessionsDirection = "desc";
+      this.sessionsBucket = null;
+      this.report = res;
+      this.reportGeneration++;
       this.lastUpdatedAt = Date.now();
       this.hasNewData = false;
       return true;
@@ -182,16 +214,73 @@ class ActivityStore {
       this.error = e instanceof Error ? e.message : "Failed to load activity report";
       return false;
     } finally {
-      if (this.reportRead.finish(signal)) this.loading = false;
+      if (this.reportRead.finish(signal)) {
+        this.loading = false;
+        this.progress = null;
+      }
+    }
+  }
+
+  async loadSessionPage(options: ActivitySessionPageOptions = {}): Promise<boolean> {
+    const report = this.report;
+    if (!report?.report_id) return false;
+    const signal = this.sessionsRead.begin();
+    const sort = options.sort ?? this.sessionsSort;
+    const direction = options.direction ?? this.sessionsDirection;
+    const bucket = options.bucket === undefined
+      ? this.sessionsBucket ?? undefined
+      : options.bucket;
+    this.sessionsLoading = true;
+    this.sessionsError = null;
+    try {
+      const page = await fetchActivitySessions(report.report_id, {
+        limit: options.limit ?? 200,
+        cursor: options.cursor,
+        sort,
+        direction,
+        bucket,
+      }, signal);
+      if (!this.sessionsRead.isCurrent(signal) || this.report?.report_id !== report.report_id) {
+        return false;
+      }
+      if (page.refresh_required && page.report) {
+        this.report = page.report;
+        this.reportGeneration++;
+        this.sessionsSort = "agent_minutes";
+        this.sessionsDirection = "desc";
+        this.sessionsBucket = null;
+        this.lastUpdatedAt = Date.now();
+        this.hasNewData = false;
+        return true;
+      }
+      this.sessionsSort = sort;
+      this.sessionsDirection = direction;
+      this.sessionsBucket = bucket ?? null;
+      this.report = {
+        ...report,
+        report_id: page.report_id,
+        by_session: page.sessions,
+        sessions_next_cursor: page.next_cursor,
+        sessions_total: page.total,
+      };
+      return true;
+    } catch (e) {
+      if (isAbortError(e) || !this.sessionsRead.isCurrent(signal)) return false;
+      this.sessionsError = e instanceof Error ? e.message : m.activity_sessions_load_failed();
+      return false;
+    } finally {
+      if (this.sessionsRead.finish(signal)) this.sessionsLoading = false;
     }
   }
 
   cancelInFlightReads(): void {
     this.loadVersion++;
     this.reportRead.cancel();
+    this.sessionsRead.cancel();
     this.filterOptionsRead.cancel();
     this.#filterOptionsPromise = null;
     this.loading = false;
+    this.sessionsLoading = false;
   }
 
   /**

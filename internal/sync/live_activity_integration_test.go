@@ -158,7 +158,7 @@ func TestLiveActivityPollerRefreshesOpenCodexActivityAndUsage(t *testing.T) {
 	assert.Equal(t, secondAssistant.Format(time.RFC3339), *afterSecond.EndedAt)
 	secondUsage := requireDailyOutputTokens(t, env.db, "2026-07-29")
 	assert.Equal(t, 350, secondUsage)
-	requireActivityInterval(
+	requireActivityBucketMembership(
 		t, env.db, now, sessionID,
 		secondUser.Truncate(5*time.Minute),
 		secondUser.Truncate(5*time.Minute).Add(5*time.Minute),
@@ -189,7 +189,7 @@ func TestLiveActivityPollerRefreshesOpenCodexActivityAndUsage(t *testing.T) {
 	thirdUsage := requireDailyOutputTokens(t, env.db, "2026-07-29")
 	assert.Equal(t, 425, thirdUsage)
 	assert.Greater(t, thirdUsage, secondUsage)
-	requireActivityInterval(
+	requireActivityBucketMembership(
 		t, env.db, now, sessionID,
 		thirdUser.Truncate(5*time.Minute),
 		thirdUser.Truncate(5*time.Minute).Add(5*time.Minute),
@@ -209,7 +209,7 @@ func requireDailyOutputTokens(
 	return daily.Totals.OutputTokens
 }
 
-func requireActivityInterval(
+func requireActivityBucketMembership(
 	t *testing.T,
 	database *db.DB,
 	now time.Time,
@@ -225,20 +225,27 @@ func requireActivityInterval(
 		BucketOverride: "5m",
 	}, now)
 	require.NoError(t, err)
-	report, err := database.GetActivityReport(
+	artifacts, err := database.BuildActivityReportArtifacts(
 		t.Context(), db.AnalyticsFilter{Timezone: "UTC"}, query,
+		nil,
 	)
 	require.NoError(t, err)
-	assert.True(t, slices.ContainsFunc(report.BySession, func(row activity.SessionRow) bool {
+	assert.True(t, slices.ContainsFunc(artifacts.Sessions, func(row activity.SessionRow) bool {
 		return row.SessionID == sessionID
 	}), "activity report should include the refreshed session")
-	assert.True(t, slices.ContainsFunc(report.Intervals, func(interval activity.ReportInterval) bool {
-		if interval.SessionID != sessionID {
-			return false
-		}
-		start, startErr := time.Parse(time.RFC3339, interval.Start)
-		end, endErr := time.Parse(time.RFC3339, interval.End)
+	bucket := slices.IndexFunc(artifacts.Report.Buckets, func(slot activity.Bucket) bool {
+		start, startErr := time.Parse(time.RFC3339, slot.Start)
+		end, endErr := time.Parse(time.RFC3339, slot.End)
 		return startErr == nil && endErr == nil &&
-			start.Before(bucketEnd) && end.After(bucketStart)
-	}), "activity interval should overlap the second turn's five-minute bucket")
+			start.Equal(bucketStart) && end.Equal(bucketEnd)
+	})
+	require.NotEqual(t, -1, bucket, "activity report should contain the target bucket")
+	page, err := activity.PageSessions(
+		artifacts.Sessions, artifacts.Membership,
+		activity.SessionPageOptions{Bucket: &bucket},
+	)
+	require.NoError(t, err)
+	assert.True(t, slices.ContainsFunc(page.Sessions, func(row activity.SessionRow) bool {
+		return row.SessionID == sessionID
+	}), "activity bucket page should include the refreshed session")
 }

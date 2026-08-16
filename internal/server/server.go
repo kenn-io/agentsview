@@ -66,20 +66,22 @@ const (
 
 // Server is the HTTP server that serves the SPA and REST API.
 type Server struct {
-	mu                   gosync.RWMutex
-	cfg                  config.Config
-	activeDisabledAgents []parser.AgentType
-	db                   db.Store
-	engine               *sync.Engine
-	onDemandEngine       *sync.Engine
-	sessions             service.SessionService
-	broadcaster          *Broadcaster
-	mux                  *http.ServeMux
-	api                  huma.API
-	httpSrv              *http.Server
-	startupProbeKey      []byte
-	version              VersionInfo
-	dataDir              string
+	mu                    gosync.RWMutex
+	cfg                   config.Config
+	activeDisabledAgents  []parser.AgentType
+	db                    db.Store
+	activityReports       *activityReportCache
+	activityReportFlights *activityReportBuildGroup
+	engine                *sync.Engine
+	onDemandEngine        *sync.Engine
+	sessions              service.SessionService
+	broadcaster           *Broadcaster
+	mux                   *http.ServeMux
+	api                   huma.API
+	httpSrv               *http.Server
+	startupProbeKey       []byte
+	version               VersionInfo
+	dataDir               string
 
 	httpRemoteCleanupRegistry *remotesync.CleanupRegistry
 
@@ -213,6 +215,8 @@ func New(
 		cfg:                       cfg,
 		activeDisabledAgents:      append([]parser.AgentType(nil), cfg.DisabledAgents...),
 		db:                        database,
+		activityReports:           newActivityReportCache(),
+		activityReportFlights:     newActivityReportBuildGroup(),
 		engine:                    engine,
 		sessions:                  sessions,
 		mux:                       http.NewServeMux(),
@@ -1143,6 +1147,15 @@ func (s *Server) Serve(ln net.Listener) error {
 	s.mu.Lock()
 	s.httpSrv = srv
 	s.mu.Unlock()
+	if cache := s.activityReports; cache != nil {
+		cacheCtx := context.Background()
+		if s.baseCtx != nil {
+			cacheCtx = s.baseCtx
+		}
+		cacheCtx, stopCache := context.WithCancel(cacheCtx)
+		go cache.Run(cacheCtx)
+		defer stopCache()
+	}
 	log.Printf("Starting server at http://%s", addr)
 	return srv.Serve(ln)
 }

@@ -366,6 +366,15 @@ func streamJSONResponse() func(*huma.Operation) {
 	}
 }
 
+func streamJSONResponseSchema(schemaRef string) func(*huma.Operation) {
+	return func(op *huma.Operation) {
+		streamJSONResponse()(op)
+		op.Responses["200"].Content["application/json"].Schema = &huma.Schema{
+			Ref: "#/components/schemas/" + schemaRef,
+		}
+	}
+}
+
 func (s *Server) humaTimeout() func(*huma.Operation) {
 	return func(op *huma.Operation) {
 		op.Middlewares = append(op.Middlewares, func(ctx huma.Context, next func(huma.Context)) {

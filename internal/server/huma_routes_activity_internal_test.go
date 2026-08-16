@@ -1,7 +1,9 @@
 package server
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -44,4 +46,20 @@ func TestActivityAutomationFilter(t *testing.T) {
 				"the two exclusions are mutually exclusive")
 		})
 	}
+}
+
+func TestResolveActivitySelectionRejectsOversizeTokenInputs(t *testing.T) {
+	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+	_, err := resolveActivitySelection(activitySelectionInput{
+		Preset: "day", Date: "2026-08-15", Timezone: "UTC",
+		Project: strings.Repeat("p", activityReportFilterValueMaxBytes+1),
+	}, now)
+	require.Error(t, err)
+
+	_, err = resolveActivitySelection(activitySelectionInput{
+		Preset: "day", Date: "2026-08-15", Timezone: "UTC",
+		Project: strings.Repeat("p", 800), Agent: strings.Repeat("a", 800),
+		Machine: strings.Repeat("m", 800), GitBranch: strings.Repeat("b", 800),
+	}, now)
+	require.Error(t, err)
 }

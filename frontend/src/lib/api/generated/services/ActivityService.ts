@@ -3,6 +3,7 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { ActivityReport } from '../models/ActivityReport';
+import type { ActivityReportSessionsResponse } from '../models/ActivityReportSessionsResponse';
 import type { CancelablePromise } from '../core/CancelablePromise';
 import { OpenAPI } from '../core/OpenAPI';
 import { request as __request } from '../core/request';
@@ -85,6 +86,78 @@ export class ActivityService {
         'agent': agent,
         'machine': machine,
         'automation': automation,
+      },
+      errors: {
+        400: `Bad Request`,
+        401: `Unauthorized`,
+        403: `Forbidden`,
+        404: `Not Found`,
+        409: `Conflict`,
+        422: `Unprocessable Entity`,
+        500: `Internal Server Error`,
+        501: `Not Implemented`,
+        502: `Bad Gateway`,
+        503: `Service Unavailable`,
+        504: `Gateway Timeout`,
+      },
+    });
+  }
+  /**
+   * Page activity report sessions
+   * @returns ActivityReportSessionsResponse OK
+   * @throws ApiError
+   */
+  public static getApiV1ActivityReportReportIdSessions({
+    reportId,
+    limit,
+    cursor,
+    sort,
+    direction,
+    bucket,
+    includeReport,
+  }: {
+    /**
+     * Signed Activity report ID
+     */
+    reportId: string,
+    /**
+     * Maximum session rows
+     */
+    limit?: number,
+    /**
+     * Opaque page cursor
+     */
+    cursor?: string,
+    /**
+     * Sort: agent_minutes, cost, first_active, project, or agent
+     */
+    sort?: string,
+    /**
+     * Sort direction
+     */
+    direction?: 'asc' | 'desc',
+    /**
+     * Optional timeline bucket index
+     */
+    bucket?: number,
+    /**
+     * Include full report metadata for stateless clients
+     */
+    includeReport?: boolean,
+  }): CancelablePromise<ActivityReportSessionsResponse> {
+    return __request(OpenAPI, {
+      method: 'GET',
+      url: '/api/v1/activity/report/{report_id}/sessions',
+      path: {
+        'report_id': reportId,
+      },
+      query: {
+        'limit': limit,
+        'cursor': cursor,
+        'sort': sort,
+        'direction': direction,
+        'bucket': bucket,
+        'include_report': includeReport,
       },
       errors: {
         400: `Bad Request`,

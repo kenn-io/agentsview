@@ -1442,7 +1442,11 @@ func mustOpenWriteDB(
 	return database, lock
 }
 
-func applyCursorSecret(database *db.DB, cfg config.Config) error {
+type cursorSecretStore interface {
+	SetCursorSecret(secret []byte)
+}
+
+func applyCursorSecret(database cursorSecretStore, cfg config.Config) error {
 	if cfg.CursorSecret != "" {
 		secret, err := base64.StdEncoding.DecodeString(cfg.CursorSecret)
 		if err != nil {
@@ -1451,6 +1455,13 @@ func applyCursorSecret(database *db.DB, cfg config.Config) error {
 		database.SetCursorSecret(secret)
 	}
 	return nil
+}
+
+func applyRequiredCursorSecret(database cursorSecretStore, cfg config.Config) error {
+	if cfg.CursorSecret == "" {
+		return errors.New("cursor secret is not configured")
+	}
+	return applyCursorSecret(database, cfg)
 }
 
 // fatal prints a formatted error to stderr and exits.

@@ -1,13 +1,8 @@
 <script lang="ts">
   import { formatDateTime, m } from "../../i18n/index.js";
   import type { Report } from "../../api/types.js";
-  import { activeSessionsInSlot } from "./activeSessions.js";
   import { Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
-  import type {
-    ActivityBucket,
-    ActivityReportInterval,
-    ActivitySessionRow,
-  } from "../../api/generated/index";
+  import type { ActivityBucket } from "../../api/generated/index";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
 
   let {
@@ -18,7 +13,7 @@
     report: Report;
     selectedBucket?: number | null;
     onSelectBucket?: (
-      sel: { idx: number; label: string; sessionIds: string[] } | null,
+      sel: { idx: number; label: string } | null,
     ) => void;
   } = $props();
 
@@ -125,32 +120,8 @@
     tooltip = null;
   }
 
-  const intervals = $derived(
-    (report.intervals ?? []) as ActivityReportInterval[],
-  );
-  const bySession = $derived(
-    new Map(
-      ((report.by_session ?? []) as ActivitySessionRow[]).map(
-        (r) => [r.session_id, r],
-      ),
-    ),
-  );
-
-  // Half-open [startMs, endMs) for a slot, taken straight from the bucket's own
-  // bounds (variable-width across presets). A missing bucket yields NaN bounds;
-  // NaN comparisons are all false in activeSessionsInSlot, so the slot resolves
-  // to an empty membership rather than throwing. In practice idx always maps to
-  // a rendered bucket.
-  function slotBounds(idx: number): { startMs: number; endMs: number } {
-    const b = buckets[idx];
-    if (!b) return { startMs: NaN, endMs: NaN };
-    return { startMs: Date.parse(b.start), endMs: Date.parse(b.end) };
-  }
-
-  // Clicking a bucket hands its active-session membership to the parent, which
-  // owns the page-local sessions-table filter. Clicking the already selected
-  // bucket clears the filter. The parent resets `selectedBucket` to null
-  // whenever the report reloads, so a stale slot never points at a wrong bucket.
+  // Bucket membership is computed by the shared backend aggregator. The chart
+  // only selects an index; ActivityPage requests that page asynchronously.
   function selectSlot(idx: number) {
     if (!onSelectBucket) return;
     if (selectedBucket === idx) {
@@ -158,14 +129,7 @@
       return;
     }
     const b = buckets[idx];
-    const { startMs, endMs } = slotBounds(idx);
-    const sessionIds = activeSessionsInSlot(
-      intervals,
-      startMs,
-      endMs,
-      bySession,
-    ).map((r) => r.session_id);
-    onSelectBucket({ idx, label: b ? fmtBucketRange(b) : "", sessionIds });
+    onSelectBucket({ idx, label: b ? fmtBucketRange(b) : "" });
   }
 
   function onSlotKey(e: KeyboardEvent, idx: number) {

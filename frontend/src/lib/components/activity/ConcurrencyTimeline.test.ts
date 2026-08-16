@@ -96,7 +96,8 @@ function makeReport(overrides: Partial<Report> = {}): Report {
     by_model: null,
     by_agent: null,
     by_session: null,
-    intervals: [],
+    sessions_total: 0,
+    projects: {},
     ...overrides,
   } as Report;
   // Backfill the peak-automation split onto any bucket literal that omits it
@@ -156,11 +157,6 @@ function popoverReport(): Report {
         timing_quality: "timed",
       },
     ] as Report["by_session"],
-    intervals: [
-      { session_id: "a", start: "2026-06-16T10:00:00Z", end: "2026-06-16T10:01:00Z" },
-      { session_id: "a", start: "2026-06-16T10:01:00Z", end: "2026-06-16T10:02:00Z" },
-      { session_id: "b", start: "2026-06-16T10:01:00Z", end: "2026-06-16T10:03:00Z" },
-    ] as Report["intervals"],
   });
 }
 
@@ -398,7 +394,7 @@ describe("ConcurrencyTimeline", () => {
     target.remove();
   });
 
-  it("emits the active session ids for a clicked slot", async () => {
+  it("emits the bucket index for server-side membership paging", async () => {
     const onSelectBucket = vi.fn();
     const target = document.createElement("div");
     document.body.appendChild(target);
@@ -411,15 +407,14 @@ describe("ConcurrencyTimeline", () => {
       new MouseEvent("click", { bubbles: true }),
     );
     await tick();
-    // 3 intervals, "a" deduped to one row, sorted by earliest overlap then id.
     expect(onSelectBucket).toHaveBeenCalledWith(
-      expect.objectContaining({ idx: 0, sessionIds: ["a", "b"] }),
+      { idx: 0, label: "10:00–10:05" },
     );
     unmount(c);
     target.remove();
   });
 
-  it("emits an empty session list for an idle slot", async () => {
+  it("emits an idle bucket index without computing membership locally", async () => {
     const report = makeReport({
       bucket_unit: "minute",
       bucket_seconds: 300,
@@ -444,7 +439,6 @@ describe("ConcurrencyTimeline", () => {
         },
       ],
       by_session: [] as Report["by_session"],
-      intervals: [] as Report["intervals"],
     });
     const onSelectBucket = vi.fn();
     const target = document.createElement("div");
@@ -459,7 +453,7 @@ describe("ConcurrencyTimeline", () => {
     (hits[1] as SVGRectElement).dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await tick();
     expect(onSelectBucket).toHaveBeenCalledWith(
-      expect.objectContaining({ idx: 1, sessionIds: [] }),
+      { idx: 1, label: "10:05–10:10" },
     );
     unmount(c);
     target.remove();

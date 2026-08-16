@@ -6,6 +6,7 @@
 package activity
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"time"
@@ -171,6 +172,7 @@ func AllocateUsageCosts(usage []UsageRow) []UsageCostAllocation {
 // Report is the API payload.
 type Report struct {
 	SchemaVersion      int                               `json:"schema_version,omitempty"`
+	ReportID           string                            `json:"report_id,omitempty"`
 	Pricing            *export.PricingBlock              `json:"pricing,omitempty"`
 	Projects           map[string]export.ProjectMapEntry `json:"projects"`
 	Timezone           string                            `json:"timezone"`
@@ -190,7 +192,9 @@ type Report struct {
 	ByModel            []KeyMinutes                      `json:"by_model"`
 	ByAgent            []KeyMinutes                      `json:"by_agent"`
 	BySession          []SessionRow                      `json:"by_session"`
-	Intervals          []ReportInterval                  `json:"intervals"`
+	SessionsNextCursor string                            `json:"sessions_next_cursor,omitempty"`
+	SessionsTotal      int                               `json:"sessions_total"`
+	Intervals          []ReportInterval                  `json:"-"`
 }
 
 func SanitizeProjectLabels(
@@ -341,58 +345,38 @@ func Aggregate(
 	p Params, sessions []SessionMeta, activity []ActivityEvent, usage []UsageRow,
 ) (Report, error) {
 	gapCap := time.Duration(p.GapCapSeconds) * time.Second
-	startUTC, endUTC, effEnd := p.RangeStart, p.RangeEnd, p.EffectiveEnd
+	candidates := PairActivityEvents(
+		activity, p.RangeStart, p.EffectiveEnd, gapCap,
+	)
+	return AggregateCandidates(
+		context.Background(), p, sessions, candidates, usage,
+	)
+}
+
+func newReport(p Params, windows []BucketWindow) Report {
 	var asOf *string
 	if p.Partial {
-		s := effEnd.Format(time.RFC3339)
+		s := p.EffectiveEnd.Format(time.RFC3339)
 		asOf = &s
 	}
-
-	windows := rangeWindows(p)
-	intervals := buildIntervals(activity, gapCap, startUTC, effEnd)
-	automatedBy := automatedSet(sessions)
-
-	r := Report{
-		Timezone:      paramsLoc(p).String(),
-		RangeStart:    startUTC.Format(time.RFC3339),
-		RangeEnd:      endUTC.Format(time.RFC3339),
-		BucketUnit:    string(p.Bucket.Unit),
-		BucketSeconds: p.Bucket.NominalSeconds,
-		Partial:       p.Partial,
-		AsOf:          asOf,
-		EffectiveEnd:  effEnd.Format(time.RFC3339),
-		Buckets:       []Bucket{},
-		ByProject:     []KeyMinutes{},
-		ByModel:       []KeyMinutes{},
-		ByAgent:       []KeyMinutes{},
-		BySession:     []SessionRow{},
-		Intervals:     []ReportInterval{},
+	return Report{
+		Timezone:           paramsLoc(p).String(),
+		RangeStart:         p.RangeStart.Format(time.RFC3339),
+		RangeEnd:           p.RangeEnd.Format(time.RFC3339),
+		BucketUnit:         string(p.Bucket.Unit),
+		BucketSeconds:      p.Bucket.NominalSeconds,
+		BucketCount:        len(windows),
+		Partial:            p.Partial,
+		AsOf:               asOf,
+		EffectiveEnd:       p.EffectiveEnd.Format(time.RFC3339),
+		ElapsedBucketCount: elapsedBucketCount(windows, p.EffectiveEnd),
+		Buckets:            []Bucket{},
+		ByProject:          []KeyMinutes{},
+		ByModel:            []KeyMinutes{},
+		ByAgent:            []KeyMinutes{},
+		BySession:          []SessionRow{},
+		Intervals:          []ReportInterval{},
 	}
-	r.BucketCount = len(windows)
-	r.ElapsedBucketCount = elapsedBucketCount(windows, effEnd)
-
-	buildBuckets(&r, windows, effEnd, intervals, automatedBy)
-	r.Peak, r.Totals.ActiveMinutes, _, _ = sweepLine(intervals, automatedBy)
-	r.Totals.AgentMinutes = sumIntervalMinutes(intervals)
-	r.Totals.AutomatedAgentMinutes, r.Totals.InteractiveAgentMinutes =
-		splitIntervalMinutes(intervals, automatedBy)
-	r.Totals.IdleMinutes = effEnd.Sub(startUTC).Minutes() - r.Totals.ActiveMinutes
-	if r.Totals.IdleMinutes < 0 {
-		r.Totals.IdleMinutes = 0
-	}
-
-	if err := applyUsage(
-		&r, p, windows, startUTC, endUTC, usage, automatedBy,
-	); err != nil {
-		return Report{}, err
-	}
-	if err := buildSessionsTable(
-		&r, startUTC, endUTC, effEnd, sessions, intervals, usage,
-	); err != nil {
-		return Report{}, err
-	}
-	r.Intervals = reportIntervals(intervals)
-	return r, nil
 }
 
 // paramsLoc returns the params timezone, defaulting nil to UTC.
@@ -412,49 +396,6 @@ func elapsedBucketCount(windows []BucketWindow, effEnd time.Time) int {
 		}
 	}
 	return n
-}
-
-// buildIntervals groups activity by session (already ordered by ordinal),
-// emits one interval per adjacent pair with positive gap, caps at cap, and
-// clips to [start, effEnd). The interval's model is the closing assistant
-// message's model, else the session's last known model, else "unknown".
-func buildIntervals(activity []ActivityEvent, cap time.Duration,
-	start, effEnd time.Time) []interval {
-	bySession := map[string][]ActivityEvent{}
-	order := []string{}
-	for _, e := range activity {
-		if _, ok := bySession[e.SessionID]; !ok {
-			order = append(order, e.SessionID)
-		}
-		bySession[e.SessionID] = append(bySession[e.SessionID], e)
-	}
-	var out []interval
-	for _, sid := range order {
-		evs := bySession[sid]
-		lastModel := "unknown"
-		for i := 1; i < len(evs); i++ {
-			prev, ts := parseTS(evs[i-1].Timestamp)
-			cur, ts2 := parseTS(evs[i].Timestamp)
-			if !ts || !ts2 || !cur.After(prev) {
-				continue
-			}
-			intervalStart, intervalEnd, effective :=
-				EffectiveIntervalBounds(prev, cur, start, effEnd, cap)
-			// Model attribution: closing assistant message wins.
-			if evs[i].Role == "assistant" && evs[i].Model != "" {
-				lastModel = evs[i].Model
-			}
-			if effective {
-				out = append(out, interval{
-					sessionID: sid,
-					start:     intervalStart,
-					end:       intervalEnd,
-					model:     lastModel,
-				})
-			}
-		}
-	}
-	return out
 }
 
 // EffectiveIntervalBounds applies the activity gap cap and clips one positive
@@ -483,76 +424,6 @@ func EffectiveIntervalBounds(
 	return previous, intervalEnd, true
 }
 
-func clip(iv interval, start, end time.Time) (interval, bool) {
-	if iv.start.Before(start) {
-		iv.start = start
-	}
-	if iv.end.After(end) {
-		iv.end = end
-	}
-	if !iv.end.After(iv.start) {
-		return interval{}, false
-	}
-	return iv, true
-}
-
-// reportIntervals maps the aggregator's internal active intervals to the
-// exposed payload form, sorted on the time.Time bounds by (start, end,
-// sessionID) for a deterministic, format-independent order. Bounds are
-// formatted at second resolution (RFC3339), matching every other timestamp in
-// the report and keeping the payload identical across SQLite, PostgreSQL, and
-// DuckDB: the mirror backends store timestamps at microsecond resolution, so
-// exposing finer precision would let one session serialize differently per
-// backend. A sub-second span therefore collapses to a point (start == end); the
-// client places that instant in the slot containing it. Always returns a
-// non-nil slice.
-func reportIntervals(intervals []interval) []ReportInterval {
-	sorted := make([]interval, len(intervals))
-	copy(sorted, intervals)
-	sort.Slice(sorted, func(i, j int) bool {
-		a, b := sorted[i], sorted[j]
-		if !a.start.Equal(b.start) {
-			return a.start.Before(b.start)
-		}
-		if !a.end.Equal(b.end) {
-			return a.end.Before(b.end)
-		}
-		return a.sessionID < b.sessionID
-	})
-	out := make([]ReportInterval, 0, len(sorted))
-	for _, iv := range sorted {
-		out = append(out, ReportInterval{
-			SessionID: iv.sessionID,
-			Start:     iv.start.Format(time.RFC3339),
-			End:       iv.end.Format(time.RFC3339),
-		})
-	}
-	return out
-}
-
-func sumIntervalMinutes(ivs []interval) float64 {
-	var m float64
-	for _, iv := range ivs {
-		m += iv.end.Sub(iv.start).Minutes()
-	}
-	return m
-}
-
-// splitIntervalMinutes sums interval minutes into automated and interactive
-// totals by each interval's session class. The two sum to sumIntervalMinutes.
-func splitIntervalMinutes(ivs []interval, automatedBy map[string]bool) (float64, float64) {
-	var auto, inter float64
-	for _, iv := range ivs {
-		m := iv.end.Sub(iv.start).Minutes()
-		if automatedBy[iv.sessionID] {
-			auto += m
-		} else {
-			inter += m
-		}
-	}
-	return auto, inter
-}
-
 // automatedSet maps each session id to its automated class for the segment
 // split. Sessions absent from the map are treated as interactive (false).
 func automatedSet(sessions []SessionMeta) map[string]bool {
@@ -561,110 +432,6 @@ func automatedSet(sessions []SessionMeta) map[string]bool {
 		m[s.SessionID] = s.IsAutomated
 	}
 	return m
-}
-
-// sweepLine returns the exact peak concurrency (and the first instant it
-// occurs), the wall-clock minutes where >=1 interval is live, and the
-// automated/interactive split of the live count AT the peak instant. The split
-// counts sum to peak.Agents because they are snapshotted at the same event that
-// sets the peak, so a stacked bar never exceeds the true peak.
-func sweepLine(ivs []interval, automatedBy map[string]bool) (Peak, float64, int, int) {
-	type ev struct {
-		t     time.Time
-		delta int
-		auto  bool
-	}
-	evs := make([]ev, 0, len(ivs)*2)
-	for _, iv := range ivs {
-		a := automatedBy[iv.sessionID]
-		evs = append(evs, ev{iv.start, 1, a}, ev{iv.end, -1, a})
-	}
-	sort.Slice(evs, func(i, j int) bool {
-		if evs[i].t.Equal(evs[j].t) {
-			// Intervals are half-open [start,end): process closes (-1)
-			// before opens (+1) at a tie so two abutting intervals from one
-			// session are not counted as overlapping at the shared boundary.
-			return evs[i].delta < evs[j].delta
-		}
-		return evs[i].t.Before(evs[j].t)
-	})
-	var peak Peak
-	live, liveAuto, liveInter := 0, 0, 0
-	var autoAtPeak, interAtPeak int
-	var active time.Duration
-	var lastT time.Time
-	for i, e := range evs {
-		if i > 0 && live > 0 {
-			active += e.t.Sub(lastT)
-		}
-		live += e.delta
-		if e.auto {
-			liveAuto += e.delta
-		} else {
-			liveInter += e.delta
-		}
-		if live > peak.Agents {
-			peak.Agents = live
-			at := e.t.Format(time.RFC3339)
-			peak.At = &at
-			autoAtPeak, interAtPeak = liveAuto, liveInter
-		}
-		lastT = e.t
-	}
-	return peak, active.Minutes(), autoAtPeak, interAtPeak
-}
-
-// buildBuckets emits one r.Buckets entry per window (with Start/End bounds for
-// ALL windows, elapsed or not, since clients need every window's bounds) and
-// fills agent_minutes / max_agents for windows overlapping [.., effEnd). Each
-// window's own [Start, End) bounds the per-bucket clip, so variable-width
-// calendar buckets accumulate over their actual span, not a fixed step.
-func buildBuckets(r *Report, windows []BucketWindow, effEnd time.Time,
-	ivs []interval, automatedBy map[string]bool) {
-	r.Buckets = make([]Bucket, len(windows))
-	for i, w := range windows {
-		r.Buckets[i] = Bucket{
-			Start: w.Start.Format(time.RFC3339),
-			End:   w.End.Format(time.RFC3339),
-		}
-		if !w.Start.Before(effEnd) {
-			continue // window has not begun; leave metrics zero
-		}
-		for _, iv := range ivs {
-			lo := maxTime(iv.start, w.Start)
-			hi := minTime(iv.end, w.End)
-			if hi.After(lo) {
-				r.Buckets[i].AgentMinutes += hi.Sub(lo).Minutes()
-			}
-		}
-	}
-	fillBucketMaxAgents(r, windows, effEnd, ivs, automatedBy)
-}
-
-// fillBucketMaxAgents sets r.Buckets[b].MaxAgents to the peak concurrency seen
-// within window b. For each elapsed window it clips every interval to the
-// window's half-open span and runs the shared sweep over the survivors. A
-// range has at most maxBuckets windows, so a per-window sweep is fine.
-func fillBucketMaxAgents(r *Report, windows []BucketWindow, effEnd time.Time,
-	ivs []interval, automatedBy map[string]bool) {
-	for b, w := range windows {
-		if !w.Start.Before(effEnd) {
-			continue
-		}
-		var clipped []interval
-		for _, iv := range ivs {
-			if c, ok := clip(iv, w.Start, w.End); ok {
-				clipped = append(clipped, c)
-			}
-		}
-		if len(clipped) == 0 {
-			continue
-		}
-		peak, _, autoAtPeak, interAtPeak := sweepLine(clipped, automatedBy)
-		r.Buckets[b].MaxAgents = peak.Agents
-		r.Buckets[b].AutomatedAtPeak = autoAtPeak
-		r.Buckets[b].InteractiveAtPeak = interAtPeak
-	}
 }
 
 func maxTime(a, b time.Time) time.Time {
@@ -688,6 +455,14 @@ type usageAgg struct {
 	cost         money.Money
 	outputTokens int
 	models       map[string]money.Money // model -> cost (for primary/mixed)
+}
+
+type sessionIntervalAgg struct {
+	minutes       float64
+	modelMins     map[string]float64
+	modelDuration map[string]time.Duration
+	first, last   time.Time
+	hasIv         bool
 }
 
 type usageDedupToken struct {
@@ -931,8 +706,16 @@ func dedupUsage(start, end, effEnd time.Time, usage []UsageRow) []UsageRow {
 // timestamp.
 func applyUsage(r *Report, p Params, windows []BucketWindow, start, end time.Time,
 	usage []UsageRow, automatedBy map[string]bool) error {
-	usage = dedupUsage(start, end, p.EffectiveEnd, usage)
-	allocated := AllocateUsageCosts(usage)
+	survivors := dedupUsage(start, end, p.EffectiveEnd, usage)
+	return applyUsageRows(r, windows, survivors, AllocateUsageCosts(survivors),
+		automatedBy)
+}
+
+func applyUsageRows(
+	r *Report, windows []BucketWindow, usage []UsageRow,
+	allocated []UsageCostAllocation,
+	automatedBy map[string]bool,
+) error {
 	for i, u := range usage {
 		r.Totals.OutputTokens += u.OutputTokens
 		var err error
@@ -989,14 +772,10 @@ func windowIndex(windows []BucketWindow, t time.Time) int {
 	return -1
 }
 
-// buildSessionsTable populates r.BySession plus the by-project/agent/model
-// breakdowns and distinct counts. Per-session interval minutes, model minutes,
-// and the active window come from the timed intervals; cost, output tokens, and
-// model fallbacks come from the deduped usage survivors. Breakdowns roll the
-// per-session minutes up by project/agent (timed sessions only) and by interval
-// model, all sorted by minutes descending with empty/zero keys dropped.
-func buildSessionsTable(r *Report, start, end, effEnd time.Time,
-	sessions []SessionMeta, ivs []interval, usage []UsageRow) error {
+func buildSessionsTableFromDedupedUsage(
+	r *Report, sessions []SessionMeta, agg map[string]*sessionIntervalAgg,
+	usage []UsageRow, allocated []UsageCostAllocation,
+) error {
 	// Sort sessions by ID so the cost and minute rollups below accumulate in
 	// one deterministic order. addKey sums float64 values across sessions and
 	// float addition is not associative, so the unspecified per-backend row
@@ -1006,35 +785,8 @@ func buildSessionsTable(r *Report, start, end, effEnd time.Time,
 	sort.Slice(sessions, func(i, j int) bool {
 		return sessions[i].SessionID < sessions[j].SessionID
 	})
-	// Per-session interval minutes + model minutes + active window.
-	type sAgg struct {
-		minutes     float64
-		modelMins   map[string]float64
-		first, last time.Time
-		hasIv       bool
-	}
-	agg := map[string]*sAgg{}
-	for _, iv := range ivs {
-		a := agg[iv.sessionID]
-		if a == nil {
-			a = &sAgg{modelMins: map[string]float64{}}
-			agg[iv.sessionID] = a
-		}
-		m := iv.end.Sub(iv.start).Minutes()
-		a.minutes += m
-		a.modelMins[iv.model] += m
-		if !a.hasIv || iv.start.Before(a.first) {
-			a.first = iv.start
-		}
-		if !a.hasIv || iv.end.After(a.last) {
-			a.last = iv.end
-		}
-		a.hasIv = true
-	}
 	// Per-session cost/tokens/models from deduped usage.
 	cost := map[string]*usageAgg{}
-	usage = dedupUsage(start, end, effEnd, usage)
-	allocated := AllocateUsageCosts(usage)
 	for i, u := range usage {
 		c := cost[u.SessionID]
 		if c == nil {
@@ -1081,7 +833,7 @@ func buildSessionsTable(r *Report, start, end, effEnd time.Time,
 			f := a.first.Format(time.RFC3339)
 			l := a.last.Format(time.RFC3339)
 			row.FirstActive, row.LastActive = &f, &l
-			row.PrimaryModel, row.Models = primaryAndModels(a.modelMins)
+			row.PrimaryModel, row.Models = primaryAndDurations(a.modelDuration)
 			if err := addKey(byProject, s.Project, mins, money.Money{}, au); err != nil {
 				return fmt.Errorf("summing activity project minutes: %w", err)
 			}
@@ -1122,7 +874,11 @@ func buildSessionsTable(r *Report, start, end, effEnd time.Time,
 		r.BySession = append(r.BySession, row)
 	}
 	sort.Slice(r.BySession, func(i, j int) bool {
-		return minutesOf(r.BySession[i]) > minutesOf(r.BySession[j])
+		left, right := minutesOf(r.BySession[i]), minutesOf(r.BySession[j])
+		if left != right {
+			return left > right
+		}
+		return r.BySession[i].SessionID < r.BySession[j].SessionID
 	})
 	r.Totals.Sessions = len(sessions)
 	r.Totals.DistinctProjects = len(projSet)
@@ -1211,22 +967,20 @@ func minutesOf(s SessionRow) float64 {
 	return *s.AgentMinutes
 }
 
-// primaryAndModels returns the highest-weight model and the sorted set. When
-// no model carries positive weight (e.g. zero-cost or unpriced usage) it falls
-// back to the first model in sorted order, so a known-model session still
-// reports a primary; the primary is "" only when the set is empty. Caller
-// renders "mixed" when len>1.
-func primaryAndModels(w map[string]float64) (string, []string) {
+// primaryAndDurations returns the highest-duration model and sorted set.
+// Duration keeps primary-model ties deterministic across different stream
+// orders without relying on floating-point summation order.
+func primaryAndDurations(w map[string]time.Duration) (string, []string) {
 	var keys []string
 	primary := ""
-	var best float64
-	for k, v := range w {
-		if k == "" || k == "unknown" {
+	var best time.Duration
+	for key, duration := range w {
+		if key == "" || key == "unknown" {
 			continue
 		}
-		keys = append(keys, k)
-		if v > best {
-			best, primary = v, k
+		keys = append(keys, key)
+		if duration > best || duration == best && (primary == "" || key < primary) {
+			best, primary = duration, key
 		}
 	}
 	sort.Strings(keys)

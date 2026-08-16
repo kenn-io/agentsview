@@ -62,6 +62,21 @@ func TestParseDaemonPushSSE(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "missing done event")
 	})
+
+	t.Run("terminal report can exceed ten mebibytes", func(t *testing.T) {
+		type largeReport struct {
+			ProjectMetadata string `json:"project_metadata"`
+		}
+		metadata := strings.Repeat("x", 10*1024*1024+1)
+		reportEvent := "event: report\ndata: {\"project_metadata\":\"" +
+			metadata + "\"}\n\n"
+
+		result, err := parseDaemonPushSSE[largeReport, struct{}](
+			strings.NewReader(reportEvent), nil,
+		)
+		require.NoError(t, err)
+		assert.Equal(t, metadata, result.ProjectMetadata)
+	})
 }
 
 // TestPostDaemonPushConsumesSSE pins the daemon-delegated push end to end

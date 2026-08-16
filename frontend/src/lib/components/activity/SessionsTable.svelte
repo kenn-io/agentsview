@@ -5,122 +5,45 @@
   import { router } from "../../stores/router.svelte.js";
   import { XIcon } from "../../icons.js";
   import { TableHeaderCell } from "@kenn-io/kit-ui";
-  import { compareMoney, formatMoney } from "../../money.js";
+  import { formatMoney } from "../../money.js";
+  import type { ActivitySessionSort } from "../../api/activity-report.js";
 
   let {
     report,
-    filterIds = null,
+    filterActive = false,
     filterLabel = "",
+    loading = false,
+    error = null,
+    sortKey = "agent_minutes",
+    sortDir = "desc",
     onClearFilter,
+    onSort,
+    onNext,
   }: {
     report: Report;
-    filterIds?: string[] | null;
+    filterActive?: boolean;
     filterLabel?: string;
+    loading?: boolean;
+    error?: string | null;
+    sortKey?: ActivitySessionSort;
+    sortDir?: "asc" | "desc";
     onClearFilter?: () => void;
+    onSort?: (sort: ActivitySessionSort, direction: "asc" | "desc") => void;
+    onNext?: (cursor: string) => void;
   } = $props();
 
   // by_session is typed `any[] | null` by the codegen; cast to the
   // generated element model for field-level type safety.
-  const allRows = $derived(
+  const rows = $derived(
     (report.by_session ?? []) as ActivitySessionRow[],
   );
 
-  // Page-local time-slot filter from the Concurrency chart: a non-null id list
-  // restricts the table to the sessions active in the clicked slot. An empty
-  // set (an idle slot was clicked) correctly yields no rows but still shows the
-  // dismissible badge so the selection can be cleared.
-  const filterSet = $derived(filterIds ? new Set(filterIds) : null);
-  const rows = $derived(
-    filterSet
-      ? allRows.filter((r) => filterSet.has(r.session_id))
-      : allRows,
-  );
-
-  type SortKey =
-    | "agent_minutes"
-    | "cost"
-    | "first_active"
-    | "project"
-    | "agent";
-  type SortDir = "asc" | "desc";
-
-  let sortKey = $state<SortKey>("agent_minutes");
-  let sortDir = $state<SortDir>("desc");
-
-  function setSort(key: SortKey) {
-    if (sortKey === key) {
-      sortDir = sortDir === "asc" ? "desc" : "asc";
-    } else {
-      sortKey = key;
-      // Numeric/time columns read best high-to-low first; text
-      // columns alphabetically.
-      sortDir =
-        key === "project" || key === "agent" ? "asc" : "desc";
-    }
+  function setSort(key: ActivitySessionSort) {
+    const direction = sortKey === key
+      ? sortDir === "asc" ? "desc" : "asc"
+      : key === "project" || key === "agent" ? "asc" : "desc";
+    onSort?.(key, direction);
   }
-
-  function isUntimed(row: ActivitySessionRow): boolean {
-    return row.agent_minutes === null;
-  }
-
-  function compare(
-    a: ActivitySessionRow,
-    b: ActivitySessionRow,
-    key: SortKey,
-  ): number {
-    switch (key) {
-      case "agent_minutes":
-        return (a.agent_minutes ?? 0) - (b.agent_minutes ?? 0);
-      case "cost":
-        return compareMoney(a.cost, b.cost);
-      case "first_active": {
-        const av = a.first_active ?? "";
-        const bv = b.first_active ?? "";
-        return av < bv ? -1 : av > bv ? 1 : 0;
-      }
-      case "project":
-        return a.project.localeCompare(b.project);
-      case "agent":
-        return a.agent.localeCompare(b.agent);
-    }
-  }
-
-  function byKeyThenId(
-    a: ActivitySessionRow,
-    b: ActivitySessionRow,
-    dir: number,
-  ): number {
-    const primary = compare(a, b, sortKey) * dir;
-    if (primary !== 0) return primary;
-    // Stable tiebreak: equal primary keys order by session_id
-    // ascending regardless of direction, so toggling sortDir never
-    // reorders peers.
-    return a.session_id.localeCompare(b.session_id);
-  }
-
-  // Untimed rows only have a null value for the timing keys
-  // (agent_minutes, first_active); their cost/project/agent are real.
-  // Partition them to the bottom only when sorting by a timing key, so
-  // a high-cost untimed session still participates in the cost sort.
-  const sortedRows = $derived.by(() => {
-    const dir = sortDir === "asc" ? 1 : -1;
-    const partitionUntimed =
-      sortKey === "agent_minutes" || sortKey === "first_active";
-    if (!partitionUntimed) {
-      return [...rows].sort((a, b) => byKeyThenId(a, b, dir));
-    }
-    const timed: ActivitySessionRow[] = [];
-    const untimed: ActivitySessionRow[] = [];
-    for (const row of rows) {
-      if (isUntimed(row)) untimed.push(row);
-      else timed.push(row);
-    }
-    timed.sort((a, b) => byKeyThenId(a, b, dir));
-    // Keep appended untimed rows in a stable session_id order so they
-    // don't jump around between renders.
-    untimed.sort((a, b) => a.session_id.localeCompare(b.session_id));
-    return [...timed, ...untimed];
-  });
 
   function fmtMinutes(v: number | null): string {
     if (v === null) return "—";
@@ -157,7 +80,7 @@
   }
 
   interface Column {
-    key: SortKey;
+    key: ActivitySessionSort;
     label: string;
   }
 
@@ -175,7 +98,7 @@
   <div class="sessions-header">
     <h3 class="chart-title">{m.activity_sessions()}</h3>
     <div class="header-meta">
-      {#if filterSet}
+      {#if filterActive}
         <button
           type="button"
           class="filter-badge"
@@ -188,8 +111,8 @@
           </span>
         </button>
       {/if}
-      {#if rows.length > 0}
-        <span class="count">{m.activity_total_count({ count: rows.length })}</span>
+      {#if (report.sessions_total ?? rows.length) > 0}
+        <span class="count">{m.activity_total_count({ count: report.sessions_total ?? rows.length })}</span>
       {/if}
     </div>
   </div>
@@ -214,7 +137,7 @@
           </tr>
         </thead>
         <tbody>
-          {#each sortedRows as row (row.session_id)}
+          {#each rows as row (row.session_id)}
             <tr class="session-row" data-session-id={row.session_id}>
               <td class="col-session">
                 <div class="session-cell">
@@ -261,9 +184,21 @@
     </div>
   {:else}
     <div class="empty">
-      {filterSet
+      {filterActive
         ? m.activity_no_sessions_selected_slot()
         : m.shared_no_sessions_in_range()}
+    </div>
+  {/if}
+  {#if error}
+    <div class="page-error">{error}</div>
+  {/if}
+  {#if loading}
+    <div class="page-status">{m.activity_loading_sessions()}</div>
+  {:else if report.sessions_next_cursor}
+    <div class="pager">
+      <button type="button" onclick={() => onNext?.(report.sessions_next_cursor!)}>
+        {m.activity_next_sessions_page()}
+      </button>
     </div>
   {/if}
 </div>
@@ -413,5 +348,30 @@
     font-size: 12px;
     padding: 24px;
     text-align: center;
+  }
+
+  .page-status,
+  .page-error,
+  .pager {
+    padding-top: 8px;
+    text-align: center;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .page-error {
+    color: var(--accent-red);
+  }
+
+  .pager button {
+    padding: 4px 10px;
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+
+  .pager button:hover {
+    background: var(--bg-surface-hover);
   }
 </style>

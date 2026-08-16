@@ -197,6 +197,19 @@ func parityFixture() []parityFixtureSession {
 					claudeMessageID: "dup-m", claudeRequestID: "dup-r"},
 			},
 		},
+		{
+			// Candidate starts on both sides of the report boundary. The first
+			// row is just outside the safe left pruning bound; the last successor
+			// is beyond the right bound and must still close its predecessor.
+			id: "parity-edge", project: "edges", model: "model-x",
+			events: []parityEvent{
+				{role: "user", ts: "2026-06-13T23:54:59Z"},
+				{role: "assistant", ts: "2026-06-13T23:59:30Z"},
+				{role: "user", ts: parityDate + "T00:00:30Z"},
+				{role: "user", ts: parityDate + "T23:59:00Z"},
+				{role: "assistant", ts: "2026-06-15T00:20:00Z"},
+			},
+		},
 	}
 }
 
@@ -406,6 +419,7 @@ func TestGetActivityReportParityAcrossBackends(t *testing.T) {
 	// so we avoid building the DuckDB mirror needlessly on a skip.
 	pgStore := pushParityPostgres(t, ctx, local)
 	duckStore := pushParityDuckDB(t, ctx, local)
+	assertCandidateParity(t, ctx, local, pgStore, duckStore)
 
 	fixedNow, err := time.Parse(time.RFC3339, "2030-01-01T00:00:00Z")
 	require.NoError(t, err, "parsing fixed now")
@@ -453,6 +467,54 @@ func TestGetActivityReportParityAcrossBackends(t *testing.T) {
 	}
 }
 
+func assertCandidateParity(
+	t *testing.T, ctx context.Context,
+	local *db.DB, pgStore *postgresstore.Store, duckStore *duckdbstore.Store,
+) {
+	t.Helper()
+	q, err := activity.ResolveQuery(activity.QueryInput{
+		Preset: "day", Date: parityDate, Timezone: "UTC",
+	}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+
+	fixture := parityFixture()
+	ids := make([]string, 0, len(fixture))
+	events := make([]activity.ActivityEvent, 0)
+	for _, session := range fixture {
+		ids = append(ids, session.id)
+		for ordinal, event := range session.events {
+			model := ""
+			if event.role == "assistant" {
+				model = session.model
+				if event.model != "" {
+					model = event.model
+				}
+			}
+			events = append(events, activity.ActivityEvent{
+				SessionID: session.id, Ordinal: ordinal, Role: event.role,
+				Timestamp: event.ts, Model: model,
+			})
+		}
+	}
+	want := activity.PairActivityEvents(
+		events, q.RangeStart, q.EffectiveEnd,
+		time.Duration(q.GapCapSeconds)*time.Second,
+	)
+	collect := func(source activity.CandidateSource) []activity.IntervalCandidate {
+		t.Helper()
+		var candidates []activity.IntervalCandidate
+		require.NoError(t, source(ctx, func(candidate activity.IntervalCandidate) error {
+			candidates = append(candidates, candidate)
+			return nil
+		}))
+		return candidates
+	}
+
+	require.Equal(t, want, collect(local.ActivityReportCandidateSource(ids, q)))
+	require.Equal(t, want, collect(pgStore.ActivityReportCandidateSource(ids, q)))
+	require.Equal(t, want, collect(duckStore.ActivityReportCandidateSource(ids, q)))
+}
+
 // assertParityForCase queries all three backends with the resolved query and
 // filter, asserts the range is complete, deep-compares the canonicalized
 // reports (SQLite==PG and SQLite==DuckDB), and returns the canonicalized SQLite
@@ -497,7 +559,7 @@ func assertDayMinuteFixtureSanity(t *testing.T, r activity.Report) {
 	t.Helper()
 	require.False(t, r.Partial, "fixture day must be a full day")
 	require.Equal(t, 2, r.Peak.Agents, "fixture must reach peak concurrency 2")
-	require.Equal(t, 9, r.Totals.Sessions, "fixture session count")
+	require.Equal(t, 10, r.Totals.Sessions, "fixture session count")
 	require.Positive(t, r.Totals.Cost.Microdollars, "fixture must exercise cost")
 	// 2400 (parity-a) + 1600 (parity-b) + 300 (parity-c; synthetic 9999 row
 	// excluded) + 9000 (parity-d receives parity-e's complete snapshot) +

@@ -39,10 +39,60 @@ func TestActivityReportCommand_Flags(t *testing.T) {
 	for _, name := range []string{
 		"preset", "date", "from", "to", "timezone",
 		"bucket", "project", "agent", "machine", "json", "no-sync",
-		"offline",
+		"offline", "sessions-limit", "sessions-cursor", "sessions-sort",
+		"sessions-direction", "sessions-bucket", "sessions-report-id",
 	} {
 		assert.NotNilf(t, cmd.Flags().Lookup(name), "flag --%s must exist", name)
 	}
+}
+
+func TestResolveActivityReportPagesSessionsWithDirectCursor(t *testing.T) {
+	dataDir := setupExportGoldenDataDir(t)
+	database := dbtest.OpenTestDBAt(t, sessionsDBPath(dataDir))
+	database.SetCursorSecret(goldenCursorSecret)
+	base := ActivityReportConfig{
+		Preset: "custom", From: "2026-07-03T10:00:00Z",
+		To: "2026-07-03T13:00:00Z", Timezone: "UTC", Bucket: "1h",
+		SessionsLimit: 1,
+	}
+	first, err := resolveActivityReport(base, database)
+	require.NoError(t, err)
+	require.Len(t, first.BySession, 1)
+	require.NotEmpty(t, first.SessionsNextCursor)
+
+	base.SessionsCursor = first.SessionsNextCursor
+	second, err := resolveActivityReport(base, database)
+	require.NoError(t, err)
+	require.Len(t, second.BySession, 1)
+	assert.NotEqual(t, first.BySession[0].SessionID, second.BySession[0].SessionID)
+}
+
+func TestResolveActivityReportCursorPreservesPartialGeneration(t *testing.T) {
+	dataDir := setupExportGoldenDataDir(t)
+	database := dbtest.OpenTestDBAt(t, sessionsDBPath(dataDir))
+	database.SetCursorSecret(goldenCursorSecret)
+
+	now := goldenFixtureNow
+	oldNow := activityReportNow
+	activityReportNow = func() time.Time { return now }
+	t.Cleanup(func() { activityReportNow = oldNow })
+
+	base := ActivityReportConfig{
+		Preset: "day", Date: "2026-07-03", Timezone: "UTC",
+		SessionsLimit: 1,
+	}
+	first, err := resolveActivityReport(base, database)
+	require.NoError(t, err)
+	require.True(t, first.Partial)
+	require.NotEmpty(t, first.SessionsNextCursor)
+
+	now = now.Add(15 * time.Minute)
+	base.SessionsCursor = first.SessionsNextCursor
+	second, err := resolveActivityReport(base, database)
+	require.NoError(t, err)
+	assert.Equal(t, first.EffectiveEnd, second.EffectiveEnd)
+	assert.Equal(t, first.AsOf, second.AsOf)
+	assert.NotEqual(t, first.BySession[0].SessionID, second.BySession[0].SessionID)
 }
 
 func TestActivityReportCommand_HelpText(t *testing.T) {
@@ -118,6 +168,50 @@ func TestActivityReport_UsesDiscoveredDaemon(t *testing.T) {
 	assert.Equal(t, "UTC", payload.Timezone)
 	assert.Equal(t, 3, payload.Totals.Sessions)
 	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
+}
+
+func TestFetchHTTPActivityReportContinuesRequestedGeneration(t *testing.T) {
+	reportRequests := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/activity/report", func(w http.ResponseWriter, _ *http.Request) {
+		reportRequests++
+		require.NoError(t, json.NewEncoder(w).Encode(activity.Report{
+			ReportID: "fresh-report", Timezone: "UTC",
+		}))
+	})
+	mux.HandleFunc(
+		"/api/v1/activity/report/original-report/sessions",
+		func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "original-cursor", r.URL.Query().Get("cursor"))
+			assert.Equal(t, "true", r.URL.Query().Get("include_report"))
+			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+				"report_id": "original-report",
+				"sessions":  []activity.SessionRow{{SessionID: "continued"}},
+				"total":     2,
+				"report": activity.Report{
+					ReportID: "original-report", Timezone: "UTC",
+					BySession:     []activity.SessionRow{{SessionID: "continued"}},
+					SessionsTotal: 2,
+				},
+			}))
+		},
+	)
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	report, err := fetchHTTPActivityReport(
+		context.Background(), transport{URL: ts.URL}, "", ActivityReportConfig{
+			Preset: "day", Date: "2026-06-16", Timezone: "UTC",
+			SessionsReportID: "original-report",
+			SessionsCursor:   "original-cursor",
+		},
+	)
+	require.NoError(t, err)
+	assert.Zero(t, reportRequests,
+		"saved-generation continuation must not build an unrelated fresh report")
+	assert.Equal(t, "original-report", report.ReportID)
+	require.Len(t, report.BySession, 1)
+	assert.Equal(t, "continued", report.BySession[0].SessionID)
 }
 
 // mustLocation loads a named time zone, failing the test if it is unavailable.
@@ -342,5 +436,5 @@ func TestActivityReportGolden(t *testing.T) {
 	})
 	require.NoError(t, err, "activity report json golden command")
 
-	assertGoldenBytes(t, "activity_report_v5.json", []byte(stdout))
+	assertGoldenBytes(t, "activity_report_v6.json", []byte(stdout))
 }

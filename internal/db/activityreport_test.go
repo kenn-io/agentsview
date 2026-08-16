@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,6 +51,249 @@ func seedMessage(
 		Timestamp: ts,
 		Model:     model,
 	})
+}
+
+func TestSQLiteActivityReportCandidatesMatchGoPairingAtScanBounds(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	insertSession(t, d, "edge", "p", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = Ptr("2026-06-15T23:54:59Z")
+		s.EndedAt = Ptr("2026-06-17T00:20:00Z")
+	})
+	events := []activity.ActivityEvent{
+		{SessionID: "edge", Ordinal: 1, Timestamp: "2026-06-15T23:54:59Z", Role: "user"},
+		{SessionID: "edge", Ordinal: 2, Timestamp: "2026-06-15T23:59:30Z", Role: "assistant", Model: "old"},
+		{SessionID: "edge", Ordinal: 3, Timestamp: "2026-06-15T23:59:20Z", Role: "assistant", Model: "ignored"},
+		{SessionID: "edge", Ordinal: 4, Timestamp: "", Role: "user"},
+		{SessionID: "edge", Ordinal: 5, Timestamp: "not-a-timestamp", Role: "assistant", Model: "malformed"},
+		{SessionID: "edge", Ordinal: 6, Timestamp: "2026-06-16T23:59:00Z", Role: "user"},
+		{SessionID: "edge", Ordinal: 7, Timestamp: "2026-06-17T00:20:00Z", Role: "assistant", Model: "new"},
+	}
+	for _, event := range events {
+		seedMessage(t, d, event.SessionID, event.Ordinal, event.Role, event.Timestamp, event.Model)
+	}
+	q := dayQuery(t, "2026-06-16", "UTC")
+	want := activity.PairActivityEvents(
+		events, q.RangeStart, q.EffectiveEnd,
+		time.Duration(q.GapCapSeconds)*time.Second,
+	)
+
+	got, err := d.activityReportCandidates(ctx, []string{"edge"}, q)
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+}
+
+func TestSQLiteActivityReportCandidateQueryUsesExistingSessionIndex(t *testing.T) {
+	d := testDB(t)
+	q := dayQuery(t, "2026-06-16", "UTC")
+	rows, err := d.getReader().QueryContext(
+		context.Background(), "EXPLAIN QUERY PLAN "+activityReportCandidatesSQL,
+		`["session"]`, "2026-06-15T09:00:00Z", "2026-06-17T14:00:00Z",
+		q.RangeStart.Add(-5*time.Minute).UnixMicro(), q.EffectiveEnd.UnixMicro(),
+	)
+	require.NoError(t, err)
+	defer rows.Close()
+	var details []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		require.NoError(t, rows.Scan(&id, &parent, &unused, &detail))
+		details = append(details, detail)
+	}
+	require.NoError(t, rows.Err())
+	plan := strings.Join(details, "\n")
+	assert.Contains(t, plan, "idx_messages_velocity")
+	assert.NotContains(t, plan, "idx_messages_activity_timestamp")
+	assert.NotContains(t, plan, "SCAN m")
+}
+
+func TestSQLiteActivityReportCandidateSourceStopsOnCancellation(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "cancel", "p", func(s *Session) {
+		s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-16T10:03:00Z")
+	})
+	for ordinal, timestamp := range []string{
+		"2026-06-16T10:00:00Z",
+		"2026-06-16T10:01:00Z",
+		"2026-06-16T10:02:00Z",
+		"2026-06-16T10:03:00Z",
+	} {
+		seedMessage(t, d, "cancel", ordinal, "user", timestamp, "")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	seen := 0
+	err := d.activityReportCandidateSource(
+		[]string{"cancel"}, dayQuery(t, "2026-06-16", "UTC"),
+	)(ctx, func(activity.IntervalCandidate) error {
+		seen++
+		cancel()
+		return nil
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 1, seen)
+}
+
+func TestSQLiteActivityReportCandidateSourceDoesNotRequireGlobalTimestampIndex(
+	t *testing.T,
+) {
+	d := testDB(t)
+	_, err := d.getWriter().Exec(`DROP INDEX IF EXISTS idx_messages_activity_timestamp`)
+	require.NoError(t, err)
+	insertSession(t, d, "legacy-index", "p", func(s *Session) {
+		s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-16T10:01:00Z")
+	})
+	seedMessage(t, d, "legacy-index", 0, "user", "2026-06-16T10:00:00Z", "")
+	seedMessage(t, d, "legacy-index", 1, "assistant", "2026-06-16T10:01:00Z", "model")
+
+	candidates, err := d.activityReportCandidates(
+		context.Background(), []string{"legacy-index"},
+		dayQuery(t, "2026-06-16", "UTC"),
+	)
+	require.NoError(t, err)
+	require.Len(t, candidates, 1)
+}
+
+func BenchmarkSQLiteActivityReportCandidateSource100K(b *testing.B) {
+	d, ids, q := seedSQLiteActivityReportBenchmark(b)
+	source := d.activityReportCandidateSource(ids, q)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		count := 0
+		err := source(context.Background(), func(activity.IntervalCandidate) error {
+			count++
+			return nil
+		})
+		require.NoError(b, err)
+		require.Equal(b, 90_000, count)
+	}
+}
+
+// BenchmarkSQLiteActivityReportCandidateSourceLongSession covers the opposite
+// archive shape from the many-session benchmark: one transcript with a large
+// ordinal index range. It guards against accidentally turning the successor or
+// prior-model lookup into a per-candidate linear scan.
+func BenchmarkSQLiteActivityReportCandidateSourceLongSession(b *testing.B) {
+	d := testDB(b)
+	const messageCount = 100_001
+	_, err := d.getWriter().Exec(`
+		INSERT INTO sessions(
+			id, project, started_at, ended_at, message_count
+		) VALUES (
+			'bench-long', 'bench', '2026-07-01T00:00:00Z',
+			'2026-07-02T03:46:40Z', ?
+		)`, messageCount)
+	require.NoError(b, err)
+	_, err = d.getWriter().Exec(`
+		WITH RECURSIVE n(i) AS (
+			VALUES(0) UNION ALL SELECT i + 1 FROM n WHERE i < ?
+		)
+		INSERT INTO messages(
+			session_id, ordinal, role, content, timestamp, model
+		)
+		SELECT 'bench-long', i,
+			CASE WHEN i % 2 = 0 THEN 'user' ELSE 'assistant' END,
+			'x',
+			strftime('%Y-%m-%dT%H:%M:%SZ', '2026-07-01T00:00:00Z',
+				printf('+%d seconds', i)),
+			CASE WHEN i % 2 = 0 THEN '' ELSE 'model' END
+		FROM n`, messageCount-1)
+	require.NoError(b, err)
+	full, err := activity.ResolveQuery(activity.QueryInput{
+		Preset: "month", Date: "2026-07-01", Timezone: "UTC",
+	}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(b, err)
+	narrow, err := activity.ResolveQuery(activity.QueryInput{
+		Preset: "custom", Timezone: "UTC",
+		From: "2026-07-02T00:00:00Z", To: "2026-07-02T01:00:00Z",
+	}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(b, err)
+	for _, benchmark := range []struct {
+		name string
+		q    activity.Query
+		want int
+	}{
+		{name: "full-100k", q: full, want: messageCount - 1},
+		{name: "narrow-3900", q: narrow, want: 3900},
+	} {
+		b.Run(benchmark.name, func(b *testing.B) {
+			source := d.activityReportCandidateSource([]string{"bench-long"}, benchmark.q)
+			b.ReportAllocs()
+			for range b.N {
+				count := 0
+				err := source(context.Background(), func(activity.IntervalCandidate) error {
+					count++
+					return nil
+				})
+				require.NoError(b, err)
+				require.Equal(b, benchmark.want, count)
+			}
+		})
+	}
+}
+
+func BenchmarkSQLiteActivityReportArtifacts100K(b *testing.B) {
+	d, _, q := seedSQLiteActivityReportBenchmark(b)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		artifacts, err := d.BuildActivityReportArtifacts(
+			context.Background(), AnalyticsFilter{Timezone: "UTC"}, q, nil,
+		)
+		require.NoError(b, err)
+		require.Len(b, artifacts.Sessions, 100_000)
+		page, err := activity.PageSessions(
+			artifacts.Sessions, artifacts.Membership, activity.SessionPageOptions{},
+		)
+		require.NoError(b, err)
+		report := artifacts.Report
+		report.BySession = page.Sessions
+		encoded, err := json.Marshal(report)
+		require.NoError(b, err)
+		b.ReportMetric(float64(len(encoded)), "response_bytes")
+	}
+}
+
+func seedSQLiteActivityReportBenchmark(
+	b *testing.B,
+) (*DB, []string, activity.Query) {
+	b.Helper()
+	d := testDB(b)
+	const sessionCount = 100_000
+	_, err := d.getWriter().Exec(`
+		WITH RECURSIVE n(i) AS (
+			VALUES(1) UNION ALL SELECT i + 1 FROM n WHERE i < ?
+		)
+		INSERT INTO sessions(id, project, started_at, ended_at, message_count)
+		SELECT printf('bench-%06d', i), 'bench',
+			'2026-07-01T10:00:00Z', '2026-07-28T10:02:00Z', 2
+		FROM n`, sessionCount)
+	require.NoError(b, err)
+	_, err = d.getWriter().Exec(`
+		WITH RECURSIVE n(i) AS (
+			VALUES(1) UNION ALL SELECT i + 1 FROM n WHERE i < ?
+		)
+		INSERT INTO messages(session_id, ordinal, role, content, timestamp, model)
+		SELECT printf('bench-%06d', i), 1, 'user', 'x',
+			printf('2026-07-%02dT10:00:00Z', 1 + (i % 28)), ''
+		FROM n
+		UNION ALL
+		SELECT printf('bench-%06d', i), 2, 'assistant', 'x',
+			printf('2026-07-%02dT10:02:00Z', 1 + (i % 28)), 'model'
+		FROM n WHERE i % 10 != 0`, sessionCount)
+	require.NoError(b, err)
+	ids := make([]string, sessionCount)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("bench-%06d", i+1)
+	}
+	q, err := activity.ResolveQuery(activity.QueryInput{
+		Preset: "month", Date: "2026-07-01", Timezone: "UTC",
+	}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(b, err)
+	return d, ids, q
 }
 
 func TestGetActivityReport_BasicConcurrency(t *testing.T) {

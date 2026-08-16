@@ -1,13 +1,15 @@
 import type {
   ActivityReport,
   ActivityBucket,
-  ActivityReportInterval,
   ActivitySessionRow,
   ActivityKeyMinutes,
 } from "../generated/index";
 
-export type Report = ActivityReport;
+export type Report = ActivityReport & {
+  report_id?: string;
+  sessions_next_cursor?: string;
+  sessions_total?: number;
+};
 export type Bucket = ActivityBucket;
-export type ReportInterval = ActivityReportInterval;
 export type SessionRow = ActivitySessionRow;
 export type KeyMinutes = ActivityKeyMinutes;

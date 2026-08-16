@@ -1,9 +1,14 @@
 package server_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,6 +43,28 @@ func TestActivityProjectReclassificationCandidatesRouteRemoved(t *testing.T) {
 // activityDate is a fixed past calendar day so the activity report is
 // deterministic and complete (non-partial) regardless of wall clock.
 const activityDate = "2025-06-02"
+
+func TestActivityReportRejectsFilterWhoseSignedIDExceedsLimit(t *testing.T) {
+	te := setup(t)
+	values := url.Values{
+		"preset":     {"day"},
+		"date":       {activityDate},
+		"timezone":   {"UTC"},
+		"project":    {strings.Repeat("\"", 1024)},
+		"agent":      {strings.Repeat("\"", 1024)},
+		"machine":    {strings.Repeat("\"", 1024)},
+		"automation": {"all"},
+	}
+
+	req := httptest.NewRequest(
+		http.MethodGet, "/api/v1/activity/report?"+values.Encode(), nil,
+	)
+	req.Header.Set("Accept", "text/event-stream")
+	response := httptest.NewRecorder()
+	te.handler.ServeHTTP(response, req)
+	assertStatus(t, response, http.StatusBadRequest)
+	assert.Contains(t, response.Body.String(), "report ID")
+}
 
 // seedActivityReportFixture seeds two sessions that overlap in wall-clock
 // on activityDate so peak concurrency is 2. Each session gets distinct,
@@ -520,4 +547,127 @@ func TestActivityReportEndpoint_GitBranchFilter(t *testing.T) {
 	assertStatus(t, filtered, http.StatusOK)
 	assert.Equal(t, 1, decode[activity.Report](t, filtered).Totals.Sessions,
 		"git_branch filter restricts the activity report to alpha/main")
+}
+
+func TestActivityReportEndpointNegotiatesProgressAndPagesSessions(t *testing.T) {
+	te := setup(t)
+	seedActivityReportFixture(t, te)
+	path := "/api/v1/activity/report?preset=day&date=" + activityDate + "&timezone=UTC"
+
+	plain := te.get(t, path)
+	assertStatus(t, plain, http.StatusOK)
+	report := decode[activity.Report](t, plain)
+	require.NotEmpty(t, report.ReportID)
+	require.Len(t, report.BySession, 2)
+	assert.Equal(t, 2, report.SessionsTotal)
+	assert.NotContains(t, plain.Body.String(), `"intervals"`)
+
+	pageResponse := te.get(t, "/api/v1/activity/report/"+report.ReportID+
+		"/sessions?limit=1")
+	assertStatus(t, pageResponse, http.StatusOK)
+	var first struct {
+		Sessions   []activity.SessionRow `json:"sessions"`
+		NextCursor string                `json:"next_cursor"`
+		Total      int                   `json:"total"`
+		Report     *activity.Report      `json:"report"`
+	}
+	require.NoError(t, json.Unmarshal(pageResponse.Body.Bytes(), &first))
+	require.Len(t, first.Sessions, 1)
+	require.NotEmpty(t, first.NextCursor)
+	assert.Equal(t, 2, first.Total)
+	assert.Nil(t, first.Report, "ordinary browser pages omit full report metadata")
+
+	metadataResponse := te.get(t, "/api/v1/activity/report/"+report.ReportID+
+		"/sessions?limit=1&include_report=true")
+	assertStatus(t, metadataResponse, http.StatusOK)
+	var metadataPage struct {
+		Sessions []activity.SessionRow `json:"sessions"`
+		Report   *activity.Report      `json:"report"`
+	}
+	require.NoError(t, json.Unmarshal(metadataResponse.Body.Bytes(), &metadataPage))
+	require.NotNil(t, metadataPage.Report)
+	assert.Equal(t, report.ReportID, metadataPage.Report.ReportID)
+	assert.Equal(t, metadataPage.Sessions, metadataPage.Report.BySession)
+	secondResponse := te.get(t, "/api/v1/activity/report/"+report.ReportID+
+		"/sessions?limit=1&cursor="+url.QueryEscape(first.NextCursor))
+	assertStatus(t, secondResponse, http.StatusOK)
+	var second struct {
+		Sessions []activity.SessionRow `json:"sessions"`
+	}
+	require.NoError(t, json.Unmarshal(secondResponse.Body.Bytes(), &second))
+	require.Len(t, second.Sessions, 1)
+	assert.NotEqual(t, first.Sessions[0].SessionID, second.Sessions[0].SessionID)
+
+	started, ended := activityDate+"T11:00:00Z", activityDate+"T11:03:00Z"
+	te.seedSession(t, "d3", "gamma", 2, func(s *db.Session) {
+		s.StartedAt, s.EndedAt = &started, &ended
+	})
+	te.seedMessages(t, "d3", 2, func(i int, message *db.Message) {
+		message.Timestamp = []string{started, activityDate + "T11:02:00Z"}[i]
+	})
+	refreshResponse := te.get(t, "/api/v1/activity/report/"+report.ReportID+
+		"/sessions?limit=1")
+	assertStatus(t, refreshResponse, http.StatusOK)
+	var refreshed struct {
+		RefreshRequired bool             `json:"refresh_required"`
+		Report          *activity.Report `json:"report"`
+	}
+	require.NoError(t, json.Unmarshal(refreshResponse.Body.Bytes(), &refreshed))
+	assert.True(t, refreshed.RefreshRequired)
+	require.NotNil(t, refreshed.Report)
+	assert.Equal(t, 3, refreshed.Report.Totals.Sessions)
+	assert.NotEqual(t, report.ReportID, refreshed.Report.ReportID)
+
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("Accept", "text/event-stream")
+	recorder := httptest.NewRecorder()
+	te.handler.ServeHTTP(recorder, req)
+	assertStatus(t, recorder, http.StatusOK)
+	assert.True(t, strings.Contains(recorder.Body.String(), "event: progress\n"))
+	assert.True(t, strings.Contains(recorder.Body.String(), "event: report\n"))
+}
+
+func TestActivityReportSessionPageRefreshesAfterIdentityOnlyChange(t *testing.T) {
+	te := setup(t)
+	seedActivityReportFixture(t, te)
+	path := "/api/v1/activity/report?preset=day&date=" + activityDate +
+		"&timezone=UTC"
+
+	initialResponse := te.get(t, path)
+	assertStatus(t, initialResponse, http.StatusOK)
+	initial := decode[activity.Report](t, initialResponse)
+	require.NotEmpty(t, initial.ReportID)
+
+	require.NoError(t, te.db.UpsertProjectIdentityObservation(
+		context.Background(), export.ProjectIdentityObservation{
+			Project: "alpha", Machine: "test", RootPath: "/fixtures/alpha",
+			GitRemote:     "https://example.com/acme/alpha.git",
+			GitRemoteName: "origin",
+			ObservedAt:    time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC),
+		},
+	))
+
+	pageResponse := te.get(t, "/api/v1/activity/report/"+initial.ReportID+
+		"/sessions?limit=1")
+	assertStatus(t, pageResponse, http.StatusOK)
+	var page struct {
+		RefreshRequired bool             `json:"refresh_required"`
+		Report          *activity.Report `json:"report"`
+	}
+	require.NoError(t, json.Unmarshal(pageResponse.Body.Bytes(), &page))
+	assert.True(t, page.RefreshRequired)
+	require.NotNil(t, page.Report)
+	assert.NotEqual(t, initial.ReportID, page.Report.ReportID)
+	var alphaProjectKey string
+	for _, row := range page.Report.BySession {
+		if row.Project == "alpha" {
+			alphaProjectKey = row.ProjectKey
+			break
+		}
+	}
+	require.NotEmpty(t, alphaProjectKey)
+	project, ok := page.Report.Projects[alphaProjectKey]
+	require.True(t, ok)
+	require.NotNil(t, project.Identity,
+		"replacement report must carry refreshed project identity metadata")
 }

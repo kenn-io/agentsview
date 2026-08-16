@@ -154,8 +154,7 @@ func parseDaemonPushSSE[T, P any](
 	r io.Reader, onProgress func(P),
 ) (T, error) {
 	var zero T
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	reader := bufio.NewReaderSize(r, 64*1024)
 	var event string
 	var data strings.Builder
 	var done bool
@@ -166,7 +165,7 @@ func parseDaemonPushSSE[T, P any](
 			return nil
 		}
 		switch event {
-		case "done":
+		case "done", "report":
 			if err := json.Unmarshal([]byte(data.String()), &result); err != nil {
 				return fmt.Errorf("decoding daemon push result: %w", err)
 			}
@@ -194,29 +193,30 @@ func parseDaemonPushSSE[T, P any](
 		}
 		return nil
 	}
-	for scanner.Scan() {
-		line := scanner.Text()
+	for {
+		line, readErr := reader.ReadString('\n')
+		line = strings.TrimSuffix(line, "\n")
+		line = strings.TrimSuffix(line, "\r")
 		if line == "" {
 			if err := dispatch(); err != nil {
 				return zero, err
 			}
 			event = ""
 			data.Reset()
-			continue
-		}
-		if value, ok := strings.CutPrefix(line, "event: "); ok {
+		} else if value, ok := strings.CutPrefix(line, "event: "); ok {
 			event = value
-			continue
-		}
-		if value, ok := strings.CutPrefix(line, "data: "); ok {
+		} else if value, ok := strings.CutPrefix(line, "data: "); ok {
 			if data.Len() > 0 {
 				data.WriteByte('\n')
 			}
 			data.WriteString(value)
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return zero, err
+		if readErr != nil {
+			if !errors.Is(readErr, io.EOF) {
+				return zero, readErr
+			}
+			break
+		}
 	}
 	if err := dispatch(); err != nil {
 		return zero, err

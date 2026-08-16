@@ -228,6 +228,10 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS idx_messages_velocity
     ON messages (session_id, ordinal, role, timestamp, content_length);
 
+CREATE INDEX IF NOT EXISTS idx_messages_activity_timestamp
+    ON messages (timestamp, session_id, ordinal)
+    WHERE timestamp IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS usage_events (
     id BIGSERIAL PRIMARY KEY,
     session_id TEXT NOT NULL,
@@ -1496,6 +1500,9 @@ func createPartialIndexesPG(ctx context.Context, db *sql.DB) error {
 		 WHERE token_usage != ''
 		   AND model != ''
 		   AND model != '<synthetic>'`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_activity_timestamp
+		 ON messages(timestamp, session_id, ordinal)
+		 WHERE timestamp IS NOT NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_has_secret
 		 ON sessions(secret_leak_count) WHERE secret_leak_count > 0`,
 		// idx_tool_calls_file_path backs the cross-session Recent Edits feed.

@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestUsageAndActivityIndexesMigration(t *testing.T) {
+func TestUsageIndexesMigration(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
 
@@ -19,6 +19,7 @@ func TestUsageAndActivityIndexesMigration(t *testing.T) {
 
 	requireIndexPresence(t, path, "idx_messages_usage_covering", 1)
 	requireIndexPresence(t, path, "idx_messages_claude_snapshot", 1)
+	requireIndexPresence(t, path, "idx_messages_activity_timestamp", 0)
 	requireIndexPresence(t, path, "idx_messages_usage_timestamp", 0)
 
 	conn, err := sql.Open("sqlite3", path)
@@ -39,6 +40,7 @@ func TestUsageAndActivityIndexesMigration(t *testing.T) {
 
 	requireIndexPresence(t, path, "idx_messages_usage_covering", 1)
 	requireIndexPresence(t, path, "idx_messages_claude_snapshot", 1)
+	requireIndexPresence(t, path, "idx_messages_activity_timestamp", 0)
 	requireIndexPresence(t, path, "idx_messages_usage_timestamp", 0)
 
 	var sessions int

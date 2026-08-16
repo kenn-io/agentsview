@@ -172,9 +172,6 @@ func TestAggregate_ArbitraryRangeIntervalClip(t *testing.T) {
 		{SessionID: "a", Ordinal: 2, Timestamp: "2026-06-16T10:40:00Z", Role: "assistant", Model: "m1"},
 	}
 	r := mustAggregate(t, p, nil, act, nil)
-	require.Len(t, r.Intervals, 1)
-	assert.Equal(t, "2026-06-16T10:30:00Z", r.Intervals[0].Start, "clipped to range_start, not midnight")
-	assert.Equal(t, "2026-06-16T10:33:00Z", r.Intervals[0].End)
 	assert.InDelta(t, 3.0, r.Totals.AgentMinutes, 1e-9)
 }
 
@@ -380,97 +377,6 @@ func TestAggregate_MidnightClipWithFarSuccessor(t *testing.T) {
 	}
 	r := mustAggregate(t, p, nil, act, nil)
 	assert.InDelta(t, 1.0, r.Totals.AgentMinutes, 1e-9)
-}
-
-func TestAggregate_IntervalsExposedSortedAndContiguous(t *testing.T) {
-	p := baseParams(t, "2026-06-16", "UTC")
-	// Session "a" has THREE messages in the 10:00-10:05 slot, so buildIntervals
-	// emits TWO contiguous consecutive-pair intervals there: [10:00,10:01) and
-	// [10:01,10:02). The frontend must dedup these by session id. Session "b"
-	// yields one interval [10:01,10:03).
-	act := []ActivityEvent{
-		{SessionID: "a", Ordinal: 1, Timestamp: "2026-06-16T10:00:00Z", Role: "user"},
-		{SessionID: "a", Ordinal: 2, Timestamp: "2026-06-16T10:01:00Z", Role: "assistant", Model: "m1"},
-		{SessionID: "a", Ordinal: 3, Timestamp: "2026-06-16T10:02:00Z", Role: "assistant", Model: "m1"},
-		{SessionID: "b", Ordinal: 1, Timestamp: "2026-06-16T10:01:00Z", Role: "user"},
-		{SessionID: "b", Ordinal: 2, Timestamp: "2026-06-16T10:03:00Z", Role: "assistant", Model: "m1"},
-	}
-	r := mustAggregate(t, p, nil, act, nil)
-	want := []ReportInterval{
-		{SessionID: "a", Start: "2026-06-16T10:00:00Z", End: "2026-06-16T10:01:00Z"},
-		{SessionID: "a", Start: "2026-06-16T10:01:00Z", End: "2026-06-16T10:02:00Z"},
-		{SessionID: "b", Start: "2026-06-16T10:01:00Z", End: "2026-06-16T10:03:00Z"},
-	}
-	assert.Equal(t, want, r.Intervals,
-		"intervals exposed, sorted by (start,end,session); a's two contiguous "+
-			"intervals are both present so the frontend dedups by session id")
-}
-
-func TestAggregate_IntervalsClippedToEffEnd(t *testing.T) {
-	loc := mustLoad(t, "UTC")
-	start, err := time.Parse(time.RFC3339, "2026-06-16T00:00:00Z")
-	require.NoError(t, err)
-	end := start.AddDate(0, 0, 1)
-	effEnd, err := time.Parse(time.RFC3339, "2026-06-16T12:00:00Z")
-	require.NoError(t, err)
-	p := Params{
-		RangeStart: start, RangeEnd: end, Loc: loc,
-		EffectiveEnd: effEnd, Partial: true,
-		GapCapSeconds: 300, Bucket: BucketSpec{BucketMinute, 300},
-	}
-	// Pair [11:58,12:10): the 12-min gap caps to 5 min -> [11:58,12:03); the clip
-	// to effEnd (12:00) is binding, so the exposed interval ends at 12:00.
-	act := []ActivityEvent{
-		{SessionID: "s1", Ordinal: 1, Timestamp: "2026-06-16T11:58:00Z", Role: "user"},
-		{SessionID: "s1", Ordinal: 2, Timestamp: "2026-06-16T12:10:00Z", Role: "assistant", Model: "m1"},
-	}
-	r := mustAggregate(t, p, nil, act, nil)
-	require.True(t, r.Partial)
-	require.Len(t, r.Intervals, 1)
-	assert.Equal(t, "2026-06-16T11:58:00Z", r.Intervals[0].Start)
-	assert.Equal(t, "2026-06-16T12:00:00Z", r.Intervals[0].End,
-		"interval straddling effEnd is clipped to it")
-}
-
-func TestAggregate_OverlapExceedsPeakConcurrency(t *testing.T) {
-	p := baseParams(t, "2026-06-16", "UTC")
-	// Within the single 5-min slot [10:05,10:10): session a is active
-	// [10:05,10:07) and session b [10:08,10:10). They never overlap in time, so
-	// peak concurrency is 1 -- but TWO distinct sessions overlap the slot. This
-	// is exactly why the popover's "N active" can exceed the bar's max_agents.
-	act := []ActivityEvent{
-		{SessionID: "a", Ordinal: 1, Timestamp: "2026-06-16T10:05:00Z", Role: "user"},
-		{SessionID: "a", Ordinal: 2, Timestamp: "2026-06-16T10:07:00Z", Role: "assistant", Model: "m1"},
-		{SessionID: "b", Ordinal: 1, Timestamp: "2026-06-16T10:08:00Z", Role: "user"},
-		{SessionID: "b", Ordinal: 2, Timestamp: "2026-06-16T10:10:00Z", Role: "assistant", Model: "m1"},
-	}
-	r := mustAggregate(t, p, nil, act, nil)
-	assert.Equal(t, 1, r.Peak.Agents, "sessions never overlap in time -> peak concurrency 1")
-	want := []ReportInterval{
-		{SessionID: "a", Start: "2026-06-16T10:05:00Z", End: "2026-06-16T10:07:00Z"},
-		{SessionID: "b", Start: "2026-06-16T10:08:00Z", End: "2026-06-16T10:10:00Z"},
-	}
-	assert.Equal(t, want, r.Intervals,
-		"two distinct sessions overlap the slot though peak concurrency is 1")
-}
-
-func TestAggregate_IntervalsUseSecondResolutionForParity(t *testing.T) {
-	p := baseParams(t, "2026-06-16", "UTC")
-	// Two messages 0.5s apart yield a sub-second interval. Bounds are exposed at
-	// second resolution (RFC3339) so they stay byte-identical across the
-	// microsecond-resolution PostgreSQL/DuckDB mirrors; finer precision would let
-	// the same session serialize differently per backend. The span therefore
-	// collapses to a point (start == end), which the client places in the slot
-	// containing the instant. See activeSessions.ts.
-	act := []ActivityEvent{
-		{SessionID: "a", Ordinal: 1, Timestamp: "2026-06-16T10:00:00.300Z", Role: "user"},
-		{SessionID: "a", Ordinal: 2, Timestamp: "2026-06-16T10:00:00.800Z", Role: "assistant", Model: "m1"},
-	}
-	r := mustAggregate(t, p, nil, act, nil)
-	require.Len(t, r.Intervals, 1)
-	assert.Equal(t, "2026-06-16T10:00:00Z", r.Intervals[0].Start)
-	assert.Equal(t, "2026-06-16T10:00:00Z", r.Intervals[0].End,
-		"sub-second bounds collapse to second resolution for cross-backend parity")
 }
 
 func TestAggregate_BucketPeakSplitAtTotalPeakInstant(t *testing.T) {

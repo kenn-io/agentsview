@@ -509,6 +509,10 @@ func preparePGServeImpl(appCfg config.Config, basePath string) (pgServeStartup, 
 		return pgServeStartup{}, fmt.Errorf("pg serve: %w", err)
 	}
 	cleanupStore := func() { _ = store.Close() }
+	if err := applyRequiredCursorSecret(store, appCfg); err != nil {
+		cleanupStore()
+		return pgServeStartup{}, fmt.Errorf("pg serve: %w", err)
+	}
 
 	if len(appCfg.CustomModelPricing) > 0 {
 		store.SetCustomPricing(appCfg.CustomModelPricing)

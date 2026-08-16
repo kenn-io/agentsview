@@ -59,7 +59,8 @@ function makeReport(rows: ActivitySessionRow[]): Report {
     by_model: null,
     by_agent: null,
     by_session: rows,
-    intervals: null,
+    sessions_total: rows.length,
+    projects: {},
   } as Report;
 }
 
@@ -69,16 +70,16 @@ function makeReport(rows: ActivitySessionRow[]): Report {
 function fixtureRows(): ActivitySessionRow[] {
   return [
     makeRow({
-      session_id: "low-min",
-      title: "Low minutes high cost",
-      agent_minutes: 5,
-      cost: testMoney(9),
-    }),
-    makeRow({
       session_id: "high-min",
       title: "High minutes low cost",
       agent_minutes: 40,
       cost: testMoney(1),
+    }),
+    makeRow({
+      session_id: "low-min",
+      title: "Low minutes high cost",
+      agent_minutes: 5,
+      cost: testMoney(9),
     }),
     makeRow({
       session_id: "untimed",
@@ -138,11 +139,12 @@ describe("SessionsTable", () => {
     unmount(c);
   });
 
-  it("sorts the untimed row by its real cost when the Cost header is clicked", async () => {
+  it("requests a server sort when the Cost header is clicked", async () => {
+    const onSort = vi.fn();
     const report = makeReport(fixtureRows());
     const c = mount(SessionsTable, {
       target: document.body,
-      props: { report },
+      props: { report, onSort },
     });
     await tick();
 
@@ -153,10 +155,8 @@ describe("SessionsTable", () => {
     costHeader!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await tick();
 
-    // Cost desc over the full set: low-min (9), untimed (4), high-min (1).
-    // The untimed row carries real cost, so it participates in the cost
-    // sort instead of being pinned last.
-    expect(rowOrder()).toEqual(["low-min", "untimed", "high-min"]);
+    expect(onSort).toHaveBeenCalledWith("cost", "desc");
+    expect(rowOrder()).toEqual(["high-min", "low-min", "untimed"]);
 
     unmount(c);
   });
@@ -194,11 +194,12 @@ describe("SessionsTable", () => {
     unmount(c);
   });
 
-  it("restricts rows to the active session ids when filtered", async () => {
-    const report = makeReport(fixtureRows());
+  it("renders the server-filtered bucket page and its total", async () => {
+    const report = makeReport([fixtureRows()[0]!]);
+    report.sessions_total = 1;
     const c = mount(SessionsTable, {
       target: document.body,
-      props: { report, filterIds: ["high-min"], filterLabel: "06:00–09:00" },
+      props: { report, filterActive: true, filterLabel: "06:00–09:00" },
     });
     await tick();
 
@@ -215,7 +216,7 @@ describe("SessionsTable", () => {
       target: document.body,
       props: {
         report,
-        filterIds: ["high-min"],
+        filterActive: true,
         filterLabel: "06:00–09:00",
         onClearFilter,
       },
@@ -235,12 +236,11 @@ describe("SessionsTable", () => {
   });
 
   it("shows a filter-aware empty message for a slot with no matches", async () => {
-    const report = makeReport(fixtureRows());
-    // An empty (but non-null) id list is an active filter that matches nothing,
-    // e.g. an idle slot was clicked. The badge stays so it can be cleared.
+    const report = makeReport([]);
+    report.sessions_total = 0;
     const c = mount(SessionsTable, {
       target: document.body,
-      props: { report, filterIds: [], filterLabel: "12:00–15:00" },
+      props: { report, filterActive: true, filterLabel: "12:00–15:00" },
     });
     await tick();
 

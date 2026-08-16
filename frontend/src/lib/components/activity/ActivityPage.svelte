@@ -59,15 +59,36 @@
   let slotFilter = $state<{
     idx: number;
     label: string;
-    sessionIds: string[];
   } | null>(null);
+  let slotReportGeneration = -1;
 
-  // A reloaded report (range/filter change) gets fresh buckets and sessions, so
-  // a slot index/membership captured against the old report is stale; clear it.
+  // Every successful full-report load gets fresh buckets and sessions, even
+  // when its deterministic report_id is unchanged. Clear any slot membership
+  // captured against the previous generation.
   $effect(() => {
-    void activity.report;
-    slotFilter = null;
+    const generation = activity.reportGeneration;
+    if (generation !== slotReportGeneration) {
+      slotReportGeneration = generation;
+      slotFilter = null;
+    }
   });
+
+  async function selectBucket(sel: { idx: number; label: string } | null) {
+    const generation = activity.reportGeneration;
+    if (
+      await activity.loadSessionPage({ bucket: sel?.idx ?? null })
+      && activity.reportGeneration === generation
+    ) {
+      slotFilter = sel;
+    }
+  }
+
+  async function sortSessions(
+    sort: import("../../api/activity-report.js").ActivitySessionSort,
+    direction: "asc" | "desc",
+  ) {
+    await activity.loadSessionPage({ sort, direction });
+  }
 
   const earliestSession = $derived(sync.stats?.earliest_session ?? null);
   let today = $state(localDateStr(new Date()));
@@ -376,27 +397,42 @@
          remounting the charts (which read as a blank flash). The loading and
          error states only show before the first report exists. -->
     {#if activity.report}
+      {#if activity.loading && activity.progress}
+        <div class="report-progress">
+          {m.activity_report_progress({ count: activity.progress.rows_processed ?? activity.progress.sessions_processed ?? 0 })}
+        </div>
+      {/if}
       <SummaryCards report={activity.report} />
       <Card level="default" padding="none" class="chart-panel">
         <ConcurrencyTimeline
           report={activity.report}
           selectedBucket={slotFilter?.idx ?? null}
-          onSelectBucket={(sel) => (slotFilter = sel)}
+          onSelectBucket={selectBucket}
         />
       </Card>
       <Card level="default" padding="none" class="chart-panel">
         <SessionsTable
           report={activity.report}
-          filterIds={slotFilter?.sessionIds ?? null}
+          filterActive={slotFilter !== null}
           filterLabel={slotFilter?.label ?? ""}
-          onClearFilter={() => (slotFilter = null)}
+          loading={activity.sessionsLoading}
+          error={activity.sessionsError}
+          sortKey={activity.sessionsSort}
+          sortDir={activity.sessionsDirection}
+          onClearFilter={() => selectBucket(null)}
+          onSort={sortSessions}
+          onNext={(cursor) => activity.loadSessionPage({ cursor })}
         />
       </Card>
       <Card level="default" padding="none" class="chart-panel">
         <Breakdowns report={activity.report} />
       </Card>
     {:else if activity.loading}
-      <div class="status">{m.activity_loading_report()}</div>
+      <div class="status">
+        {activity.progress
+          ? m.activity_report_progress({ count: activity.progress.rows_processed ?? activity.progress.sessions_processed ?? 0 })
+          : m.activity_loading_report()}
+      </div>
     {:else if activity.error}
       <div class="status error">
         <span>{activity.error}</span>
@@ -474,6 +510,12 @@
     color: var(--text-muted);
     font-size: 12px;
     padding: 24px;
+    text-align: center;
+  }
+
+  .report-progress {
+    color: var(--text-muted);
+    font-size: 11px;
     text-align: center;
   }
 

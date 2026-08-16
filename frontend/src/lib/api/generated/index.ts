@@ -11,7 +11,7 @@ export type { ActivityBucket } from './models/ActivityBucket';
 export type { ActivityKeyMinutes } from './models/ActivityKeyMinutes';
 export type { ActivityPeak } from './models/ActivityPeak';
 export type { ActivityReport } from './models/ActivityReport';
-export type { ActivityReportInterval } from './models/ActivityReportInterval';
+export type { ActivityReportSessionsResponse } from './models/ActivityReportSessionsResponse';
 export type { ActivitySessionRow } from './models/ActivitySessionRow';
 export type { ActivityTotals } from './models/ActivityTotals';
 export type { AgentsResponse } from './models/AgentsResponse';

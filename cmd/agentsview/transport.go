@@ -89,6 +89,10 @@ var openPGReadStore = func(
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := applyRequiredCursorSecret(store, cfg); err != nil {
+		_ = store.Close()
+		return nil, nil, err
+	}
 	return store, func() { _ = store.Close() }, nil
 }
 

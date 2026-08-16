@@ -18,14 +18,16 @@ export type ActivityReport = {
   by_session: any[] | null;
   effective_end: string;
   elapsed_bucket_count: number;
-  intervals: any[] | null;
   partial: boolean;
   peak: ActivityPeak;
   pricing?: ExportPricingBlock;
   projects: Record<string, ExportProjectMapEntry>;
   range_end: string;
   range_start: string;
+  report_id?: string;
   schema_version?: number;
+  sessions_next_cursor?: string;
+  sessions_total: number;
   timezone: string;
   totals: ActivityTotals;
 };

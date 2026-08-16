@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/server"
@@ -597,6 +598,18 @@ func newActivityReportCommand() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.Project, "project", "", "Filter by project")
 	cmd.Flags().StringVar(&cfg.Agent, "agent", "", "Filter by agent name")
 	cmd.Flags().StringVar(&cfg.Machine, "machine", "", "Filter by machine name")
+	cmd.Flags().IntVar(&cfg.SessionsLimit, "sessions-limit", activity.DefaultSessionPageLimit,
+		"Session rows per page (maximum 500)")
+	cmd.Flags().StringVar(&cfg.SessionsReportID, "sessions-report-id", "",
+		"Report ID paired with --sessions-cursor in daemon mode")
+	cmd.Flags().StringVar(&cfg.SessionsCursor, "sessions-cursor", "",
+		"Continue from an Activity session page cursor")
+	cmd.Flags().StringVar(&cfg.SessionsSort, "sessions-sort", "agent_minutes",
+		"Session sort: agent_minutes, cost, first_active, project, agent")
+	cmd.Flags().StringVar(&cfg.SessionsDirection, "sessions-direction", "desc",
+		"Session sort direction: asc or desc")
+	cmd.Flags().StringVar(&cfg.SessionsBucket, "sessions-bucket", "",
+		"Only sessions active in this zero-based bucket index")
 	registerFormatFlags(cmd.Flags())
 	cmd.Flags().BoolVar(&cfg.NoSync, "no-sync", false, "Skip on-demand sync before querying")
 	cmd.Flags().BoolVar(&cfg.Offline, "offline", false, "Use fallback pricing only")

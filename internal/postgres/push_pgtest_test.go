@@ -113,6 +113,13 @@ func TestPushMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 		pg: pg, local: local, machine: "laptop", schema: schema, schemaDone: true,
 	}
 	require.NoError(t, syncer.syncProjectIdentityObservations(ctx, false, nil))
+	var identityGeneration int64
+	require.NoError(t, pg.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM sync_metadata
+		WHERE key = 'activity_report_project_identity_generation'
+	`).Scan(&identityGeneration))
+	assert.Equal(t, int64(1), identityGeneration,
+		"identity publication must advance the target report generation")
 
 	var gotArchive, gotGeneration, gotSession, gotRemote string
 	var gotRelationship export.WorktreeRelationship

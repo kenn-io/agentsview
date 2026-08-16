@@ -881,7 +881,13 @@ summary totals, breakdowns, and contributing sessions.
 
 ```http
 GET /api/v1/activity/report
+GET /api/v1/activity/report/{report_id}/sessions
 ```
+
+Session-page responses omit the complete report by default so browser sorting,
+bucket filtering, and pagination stay page-bounded. Stateless clients can add
+`include_report=true`; a `refresh_required` response includes its complete
+replacement report regardless.
 
 Activity includes one-shot sessions by default. Automated sessions
 are also included by default and can be filtered with the
@@ -889,6 +895,11 @@ are also included by default and can be filtered with the
 
 The JSON response shares the same `schema_version`, `pricing`, and `projects`
 metadata contract as `agentsview activity report --json`.
+
+The report route negotiates its response with `Accept`. Ordinary clients receive
+plain JSON. Clients requesting `text/event-stream` receive throttled `progress`
+events followed by one terminal `report` event. Both forms use the long-running
+route and are not subject to the ordinary 30-second operation timeout.
 
 | Query param | Notes |
 |-------------|-------|
@@ -904,11 +915,19 @@ metadata contract as `agentsview activity report --json`.
 | `machine` | Filter by machine |
 | `automation` | `all`, `interactive`, or `automated`; default `all` |
 
+Project, branch, agent, and machine filters are limited to 1,024 UTF-8 bytes
+each and 3,072 bytes combined. The fully encoded signed report ID is also
+validated before aggregation so JSON escaping cannot overflow the session-page
+URL token.
+
 Response excerpt:
 
 ```json
 {
-  "schema_version": 5,
+  "schema_version": 6,
+  "report_id": "v1.eyJ2IjoxLC4uLn0.signature",
+  "sessions_total": 18,
+  "sessions_next_cursor": "v1.eyJvZmZzZXQiOjIwMH0.signature",
   "pricing": {
     "source": "fetched",
     "table_version": "litellm-398a0b15378c",
@@ -1009,13 +1028,6 @@ Response excerpt:
       "timing_quality": "timed",
       "is_automated": false
     }
-  ],
-  "intervals": [
-    {
-      "session_id": "codex:abc",
-      "start": "2026-06-20T15:04:00Z",
-      "end": "2026-06-20T15:38:00Z"
-    }
   ]
 }
 ```
@@ -1024,6 +1036,14 @@ Breakdown rows include total, automated, and interactive minutes and
 costs. Session rows with no reliable timestamped activity use
 `"timing_quality": "untimed"` and `agent_minutes: null`; they can
 still contribute cost and output tokens when usage rows exist.
+
+Schema v6 returns at most the first 200 session rows in `by_session` and no
+longer returns raw activity intervals. Fetch later pages, alternate sorts, or a
+bucket drill-down through the sessions endpoint. It accepts `limit` (default
+200, maximum 500), `cursor`, `sort`, `direction`, and a zero-based `bucket`.
+If the archive changed since the signed `report_id` was created, the response
+sets `refresh_required` and includes a complete replacement `report` so clients
+never combine different report generations.
 
 ---
 

@@ -1,5 +1,5 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "pricing": {
     "source": "fetched",
     "table_version": "2026-07-03T12:00:00Z",
@@ -308,36 +308,5 @@
       "is_automated": false
     }
   ],
-  "intervals": [
-    {
-      "session_id": "remote-current",
-      "start": "2026-07-03T10:00:00Z",
-      "end": "2026-07-03T10:00:30Z"
-    },
-    {
-      "session_id": "remote-current",
-      "start": "2026-07-03T10:00:30Z",
-      "end": "2026-07-03T10:02:00Z"
-    },
-    {
-      "session_id": "remote-current",
-      "start": "2026-07-03T10:02:00Z",
-      "end": "2026-07-03T10:03:00Z"
-    },
-    {
-      "session_id": "path-current",
-      "start": "2026-07-03T11:00:00Z",
-      "end": "2026-07-03T11:00:30Z"
-    },
-    {
-      "session_id": "path-current",
-      "start": "2026-07-03T11:00:30Z",
-      "end": "2026-07-03T11:02:00Z"
-    },
-    {
-      "session_id": "path-current",
-      "start": "2026-07-03T11:02:00Z",
-      "end": "2026-07-03T11:03:00Z"
-    }
-  ]
+  "sessions_total": 2
 }
