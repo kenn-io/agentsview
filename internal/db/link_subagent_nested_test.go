@@ -244,7 +244,6 @@ func TestLinkSubagentSessionsRejectsSelfEdges(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "child", "p", func(s *Session) {
 				s.MessageCount = 1
-				s.RelationshipType = "direct"
 			})
 			if tc.withParent {
 				insertSession(t, d, "real-parent", "p", func(s *Session) {
@@ -266,7 +265,7 @@ func TestLinkSubagentSessionsRejectsSelfEdges(t *testing.T) {
 				assert.Equal(t, "subagent", child.RelationshipType)
 			} else {
 				assert.Nil(t, child.ParentSessionID)
-				assert.Equal(t, "direct", child.RelationshipType)
+				assert.Empty(t, child.RelationshipType)
 			}
 		})
 	}
