@@ -254,6 +254,7 @@ fn show_main_window(handle: &AppHandle) {
 }
 
 trait MainWindowVisibility {
+    #[cfg(target_os = "macos")]
     fn hide_main_window(&self);
     fn show_main_window(&self);
     fn unminimize_main_window(&self);
@@ -261,6 +262,7 @@ trait MainWindowVisibility {
 }
 
 impl MainWindowVisibility for WebviewWindow {
+    #[cfg(target_os = "macos")]
     fn hide_main_window(&self) {
         let _ = self.hide();
     }
@@ -278,6 +280,7 @@ impl MainWindowVisibility for WebviewWindow {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn hide_main_window_on_close(window: &impl MainWindowVisibility, prevent_close: impl FnOnce()) {
     prevent_close();
     window.hide_main_window();
