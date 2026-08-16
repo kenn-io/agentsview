@@ -324,6 +324,7 @@ func TestGetActivityReport_BasicConcurrency(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, r.Peak.Agents)
 	assert.Equal(t, 2, r.Totals.Sessions)
+	assert.Equal(t, 2, r.SessionsTotal)
 	assert.GreaterOrEqual(t, len(r.ByModel), 2)
 }
 

@@ -49,6 +49,7 @@ func (s *Store) GetActivityReport(
 		return activity.Report{}, err
 	}
 	artifacts.Report.BySession = artifacts.Sessions
+	artifacts.Report.SessionsTotal = len(artifacts.Sessions)
 	return artifacts.Report, nil
 }
 
