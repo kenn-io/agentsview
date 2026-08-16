@@ -140,6 +140,7 @@ func kimiProviderCapabilities() Capabilities {
 			Thinking:     CapabilitySupported,
 			ToolCalls:    CapabilitySupported,
 			ToolResults:  CapabilitySupported,
+			Cwd:          CapabilitySupported,
 		},
 	}
 }

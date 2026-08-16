@@ -1062,6 +1062,11 @@ Grok section and remove the explicit registry exception in the coverage test.
 - **Format:** Session directories containing `wire.jsonl`, with both current and
   legacy wire layouts.
 
+- **Working directory:** Native Kimi Code `config.update` records can carry the
+  provider-emitted absolute `cwd`; Agentsview preserves the last non-empty
+  value for sync filtering. The exact issue artifact is covered by
+  `internal/parser/testdata/kimi-config-update-cwd.jsonl`.
+
 - **Evidence:** `source`.
 
 - **Upstream:** Clone `https://github.com/MoonshotAI/kimi-cli.git` at

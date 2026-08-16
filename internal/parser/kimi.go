@@ -182,6 +182,7 @@ func parseKimiSessionWithFallbackModel(
 		pendingUsageMessageIndex = -1
 		hasThinking              bool
 		hasToolUse               bool
+		cwd                      string
 
 		// Track token usage from StatusUpdate.
 		totalOutputTokens    int
@@ -310,6 +311,9 @@ func parseKimiSessionWithFallbackModel(
 			case "config.update":
 				if model := root.Get("modelAlias").Str; model != "" {
 					currentModel = model
+				}
+				if value := root.Get("cwd").Str; value != "" {
+					cwd = value
 				}
 
 			case "turn.prompt", "turn.steer":
@@ -695,6 +699,7 @@ func parseKimiSessionWithFallbackModel(
 		Project:                     displayProject,
 		Machine:                     machine,
 		Agent:                       AgentKimi,
+		Cwd:                         cwd,
 		FirstMessage:                firstMessage,
 		StartedAt:                   startTime,
 		EndedAt:                     endTime,

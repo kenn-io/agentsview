@@ -6,12 +6,47 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 )
+
+func TestSyncKimiConfigUpdateCwdPrefix(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	kimiDir := t.TempDir()
+	testDB := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(testDB, sync.EngineConfig{
+		AgentDirs:          map[parser.AgentType][]string{parser.AgentKimi: {kimiDir}},
+		IncludeCwdPrefixes: []string{"/Users/helix/Code"},
+		Machine:            "local",
+	})
+
+	workdirDir := "wd_kimi-code_057f5c09ee3f"
+	sessionDir := "session_uuid-cwd"
+	wirePath := filepath.Join(kimiDir, workdirDir, sessionDir, "wire.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(wirePath), 0o755))
+	fixture, err := os.ReadFile(filepath.Join(
+		"..", "parser", "testdata", "kimi-config-update-cwd.jsonl",
+	))
+	require.NoError(t, err)
+	content := append(fixture,
+		[]byte(`{"type":"turn.prompt","input":[{"type":"text","text":"cwd"}]}`+"\n")...)
+	require.NoError(t, os.WriteFile(wirePath, content, 0o644))
+
+	sessionID := "kimi:" + workdirDir + ":" + sessionDir
+	engine.SyncPaths([]string{wirePath})
+
+	session, err := testDB.GetSession(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "/Users/helix/Code/mcp-hub", session.Cwd)
+}
 
 // TestSyncPathsAndSingleSession_KimiNewLayout pins down both engine
 // sites that previously broke for the new .kimi-code layout:

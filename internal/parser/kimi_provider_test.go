@@ -150,6 +150,28 @@ func TestKimiProviderParse(t *testing.T) {
 	assert.Len(t, outcome.Results[0].Result.Messages, 2)
 }
 
+func TestKimiProviderCwdCapabilityAndParse(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := filepath.Join(
+		root, "wd_kimi-code_057f5c09ee3f", "session_uuid-cwd",
+		"agents", "main", "wire.jsonl",
+	)
+	writeSourceFile(t, sourcePath, kimiConfigUpdateCwdLine(t)+"\n"+
+		`{"type":"turn.prompt","input":[{"type":"text","text":"cwd"}]}`+"\n")
+
+	provider, ok := NewProvider(AgentKimi, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	assert.Equal(t, CapabilitySupported, provider.Capabilities().Content.Cwd)
+
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, "/Users/helix/Code/mcp-hub", outcome.Results[0].Result.Session.Cwd)
+}
+
 func TestKimiProviderParseNewLayoutRoundTrip(t *testing.T) {
 	root := t.TempDir()
 	rawID := "wd_kimi-code_057f5c09ee3f:main:session_uuid-2"

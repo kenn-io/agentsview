@@ -220,6 +220,27 @@ func TestKimiWorkProviderParse(t *testing.T) {
 	}
 }
 
+func TestKimiWorkProviderParseRetainsProviderCwd(t *testing.T) {
+	root := t.TempDir()
+	wd := "wd_agentsview_e901f41e2366"
+	sessionDir := "conv-cwd"
+	sourcePath := filepath.Join(
+		root, wd, sessionDir, "agents", "main", "wire.jsonl",
+	)
+	writeSourceFile(t, sourcePath, kimiConfigUpdateCwdLine(t)+"\n"+
+		kimiWorkFixture("provider cwd"))
+
+	provider, ok := NewProvider(AgentKimiWork, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, "/Users/helix/Code/mcp-hub", outcome.Results[0].Result.Session.Cwd)
+}
+
 func TestKimiWorkProviderMissingModelUsesDateAmbiguousAlias(t *testing.T) {
 	tests := []struct {
 		name      string

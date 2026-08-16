@@ -52,6 +52,18 @@ func parseKimiSessionForTest(
 	return parseKimiSession(path, project, machine)
 }
 
+func kimiConfigUpdateCwdLine(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/kimi-config-update-cwd.jsonl")
+	require.NoError(t, err)
+	line := strings.TrimSpace(string(raw))
+	require.Equal(t,
+		`{"type":"config.update","cwd":"/Users/helix/Code/mcp-hub","modelAlias":"kimi-code/kimi-for-coding"}`,
+		line,
+	)
+	return line
+}
+
 func TestParseKimiSession_Basic(t *testing.T) {
 	path := writeKimiWireJSONL(t,
 		"abc123", "sess-uuid-1234",
@@ -705,6 +717,7 @@ func TestParseKimiSession_NativeKimiCodeEvents(t *testing.T) {
 	assert.Contains(t, msgs[1].Content,
 		"Hello! How can I help you today?")
 	assert.Equal(t, "kimi-code/kimi-for-coding", msgs[1].Model)
+	assert.Empty(t, sess.Cwd)
 	assert.Equal(t, "end_turn", msgs[1].StopReason)
 	assert.True(t, msgs[1].HasOutputTokens)
 	assert.True(t, msgs[1].HasContextTokens)
@@ -716,6 +729,54 @@ func TestParseKimiSession_NativeKimiCodeEvents(t *testing.T) {
 	)
 	assertTimestamp(t, msgs[1].Timestamp,
 		time.UnixMilli(1782012668557))
+}
+
+func TestParseKimiSession_ConfigUpdateCwd(t *testing.T) {
+	cwdLine := kimiConfigUpdateCwdLine(t)
+	tests := []struct {
+		name  string
+		lines []string
+		want  string
+	}{
+		{
+			name:  "present",
+			lines: []string{cwdLine},
+			want:  "/Users/helix/Code/mcp-hub",
+		},
+		{
+			name:  "absent",
+			lines: []string{`{"type":"config.update","modelAlias":"kimi-code/kimi-for-coding"}`},
+		},
+		{
+			name:  "empty",
+			lines: []string{`{"type":"config.update","cwd":"","modelAlias":"kimi-code/kimi-for-coding"}`},
+		},
+		{
+			name: "last non-empty value wins",
+			lines: []string{
+				cwdLine,
+				`{"type":"config.update","cwd":"/Users/helix/Code/other"}`,
+				`{"type":"config.update","modelAlias":"kimi-code/kimi-for-coding"}`,
+			},
+			want: "/Users/helix/Code/other",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeKimiCodeWireJSONL(t,
+				"wd_myproject_a1b2c3d4", "session-cwd", "main",
+				append(tt.lines,
+					`{"type":"turn.prompt","input":[{"type":"text","text":"hello"}]}`,
+				),
+			)
+			sess, msgs, err := parseKimiSessionForTest(t, path, "myproject", "local")
+			require.NoError(t, err)
+			require.NotNil(t, sess)
+			assert.Equal(t, tt.want, sess.Cwd)
+			require.NotEmpty(t, msgs)
+		})
+	}
 }
 
 func TestParseKimiSession_NativeKimiCodeToolCall(t *testing.T) {
