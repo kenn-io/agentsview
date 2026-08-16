@@ -930,6 +930,47 @@ func TestReconstructJSONLResultDetailsArrayProjection(t *testing.T) {
 	}
 }
 
+func TestReconstructJSONLIndexedResultDetailsMutations(t *testing.T) {
+	initial := `{"kind":0,"v":{"requests":[{"response":[{"resultDetails":[{"input":"initial","output":[{"value":"drop"}],"label":"keep"}]}]}]}}`
+	tests := []struct {
+		name string
+		line string
+		want string
+	}{
+		{
+			name: "set indexed detail",
+			line: `{"kind":1,"k":["requests",0,"response",0,"resultDetails",0],"v":{"input":"replacement","output":[{"value":"drop"}],"label":"keep"}}`,
+			want: "replacement",
+		},
+		{
+			name: "set indexed output",
+			line: `{"kind":1,"k":["requests",0,"response",0,"resultDetails",0,"output"],"v":[{"value":"drop"}]}`,
+			want: "initial",
+		},
+		{
+			name: "push indexed output",
+			line: `{"kind":2,"k":["requests",0,"response",0,"resultDetails",0,"output"],"v":[{"value":"drop"}]}`,
+			want: "initial",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "indexed-result-details.jsonl")
+			content := strings.Join([]string{initial, tt.line}, "\n") + "\n"
+			require.NoError(t, os.WriteFile(path, []byte(content), 0644))
+			data, err := reconstructJSONLWithLimit(path, testVSCodeCopilotHardRecordLimit)
+			require.NoError(t, err)
+			var state map[string]any
+			require.NoError(t, json.Unmarshal(data, &state))
+			item := state["requests"].([]any)[0].(map[string]any)["response"].([]any)[0].(map[string]any)["resultDetails"].([]any)[0].(map[string]any)
+			assert.Equal(t, tt.want, item["input"])
+			assert.Empty(t, item["output"])
+			assert.Equal(t, "keep", item["label"])
+		})
+	}
+}
+
 func TestReconstructJSONLCumulativeResultOutputPushes(t *testing.T) {
 	lines := []string{
 		`{"kind":0,"v":{"sessionId":"cumulative","requests":[{"response":[{"resultDetails":{"input":"keep","output":[]}}]}]}}`,
