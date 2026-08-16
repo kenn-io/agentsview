@@ -244,6 +244,11 @@ func TestLinkSubagentSessionsRejectsSelfEdges(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "child", "p", func(s *Session) {
 				s.MessageCount = 1
+				if tc.withParent {
+					// Make the invalid self edge rank ahead of the valid edge
+					// under the pre-fix chronology, so the guard is exercised.
+					s.StartedAt = Ptr("2026-02-01T00:00:00.000Z")
+				}
 			})
 			if tc.withParent {
 				insertSession(t, d, "real-parent", "p", func(s *Session) {
