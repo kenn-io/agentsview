@@ -824,6 +824,10 @@ func TestReconstructJSONLResultOutputDestinationMatrix(t *testing.T) {
 			line: `{"kind":1,"k":["requests",0,"response",0,"resultDetails","output"],"v":[{"value":"drop"}]}`,
 		},
 		{
+			name: "kind two exact result details",
+			line: `{"kind":2,"k":["requests",0,"response",0,"resultDetails"],"v":[` + resultDetails + `]}`,
+		},
+		{
 			name: "kind one below output",
 			line: `{"kind":1,"k":["requests",0,"response",0,"resultDetails","output",0],"v":{"value":"drop"}}`,
 		},
@@ -868,7 +872,7 @@ func TestReconstructJSONLCumulativeResultOutputPushes(t *testing.T) {
 	lines := []string{
 		`{"kind":0,"v":{"sessionId":"cumulative","requests":[{"response":[{"resultDetails":{"input":"keep","output":[]}}]}]}}`,
 	}
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		lines = append(lines, `{"kind":2,"k":["requests",0,"response",0,"resultDetails","output"],"v":[{"value":"drop"}]}`)
 	}
 	path := filepath.Join(t.TempDir(), "cumulative.jsonl")

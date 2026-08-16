@@ -778,7 +778,13 @@ func reconstructJSONLWithLimit(path string, hardRecordLimit int) ([]byte, error)
 			if err := json.Unmarshal(op.V, &items); err != nil {
 				continue
 			}
-			projectVSCodeCopilotResultOutput(items)
+			if classifyVSCodeCopilotDestination(keys) == vscodeCopilotDestinationExactResultDetails {
+				for _, item := range items {
+					projectVSCodeCopilotResultDetails(item)
+				}
+			} else {
+				projectVSCodeCopilotResultOutput(items)
+			}
 			jsonlPush(state, keys, items, op.I)
 
 		case 3: // Delete
@@ -877,7 +883,7 @@ const (
 )
 
 func classifyVSCodeCopilotDestination(keys []string) vscodeCopilotDestination {
-	for i := 0; i < len(keys); i++ {
+	for i := range len(keys) {
 		if keys[i] != "resultDetails" {
 			continue
 		}
