@@ -886,6 +886,24 @@ func TestReconstructJSONLCumulativeResultOutputPushes(t *testing.T) {
 	assert.Equal(t, "keep", result["input"])
 }
 
+func TestReconstructJSONLKindTwoExactResultDetailsProjectsItems(t *testing.T) {
+	lines := []string{
+		`{"kind":0,"v":{"sessionId":"exact-details","requests":[{"response":[{"resultDetails":[]}]}]}}`,
+		`{"kind":2,"k":["requests",0,"response",0,"resultDetails"],"v":[{"input":"keep","output":[{"value":"drop"}]}]}`,
+	}
+	path := filepath.Join(t.TempDir(), "exact-result-details.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0644))
+	data, err := reconstructJSONLWithLimit(path, testVSCodeCopilotHardRecordLimit)
+	require.NoError(t, err)
+	var state map[string]any
+	require.NoError(t, json.Unmarshal(data, &state))
+	details := state["requests"].([]any)[0].(map[string]any)["response"].([]any)[0].(map[string]any)["resultDetails"].([]any)
+	require.Len(t, details, 1)
+	item := details[0].(map[string]any)
+	assert.Equal(t, "keep", item["input"])
+	assert.Empty(t, item["output"])
+}
+
 func TestReconstructJSONLHardCeiling(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hard-ceiling.jsonl")
 	f, err := os.Create(path)
@@ -925,7 +943,7 @@ func TestReconstructJSONLRejectsTrailingJSON(t *testing.T) {
 
 func TestReconstructJSONLAtHardCeiling(t *testing.T) {
 	prefix := `{"kind":0,"v":{"version":3,"sessionId":"normal-boundary","requests":[{"message":{"text":"boundary"},"response":[{"value":"`
-	suffix := `"}]}]}}` + "\n"
+	suffix := `"}]}]}}`
 	value := strings.Repeat("x", testVSCodeCopilotHardRecordLimit)
 	line := prefix + value + suffix
 	value = value[:len(value)-(len([]byte(line))-testVSCodeCopilotHardRecordLimit)]
