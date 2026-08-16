@@ -14,7 +14,7 @@ name: Bench Gate
 #
 # Both sides run `make bench-gate` — the Makefile is the single
 # source of truth for the gated package list, sample count, and
-# iteration count — and cmd/benchgate compares the outputs. It gates
+# per-tier iteration counts — and cmd/benchgate compares the outputs. It gates
 # on allocs/op and B/op (deterministic on a given machine, tight
 # thresholds) and on ns/op with a loose 2x threshold that only
 # catches algorithmic blowups; both sides run on the same runner
@@ -67,11 +67,13 @@ jobs:
         # exists on both sides. The warning makes the degraded run
         # visible instead of a silently green vacuous pass.
         #
-        # The sample count and fixed iteration count are evaluated
-        # from the PR head's Makefile and passed into the base run:
-        # two benchmarks grow their fixture per iteration, so a PR
-        # that changes BENCH_GATE_COUNT/TIME must not compare against
-        # a baseline measured with the old values. The package list
+        # The sample count, fixed iteration counts, and heavy-tier
+        # regex are evaluated from the PR head's Makefile and passed
+        # into the base run: two benchmarks grow their fixture per
+        # iteration, so a PR that changes BENCH_GATE_COUNT/TIME or
+        # moves a benchmark between tiers must not compare against a
+        # baseline measured with the old values. A base Makefile that
+        # predates a variable simply ignores it. The package list
         # intentionally stays per-side, so growing the gate cannot
         # break the base run.
         run: |
@@ -81,7 +83,9 @@ jobs:
           git worktree add /tmp/bench-base "$base"
           if ! make -s -C /tmp/bench-base bench-gate \
               BENCH_GATE_COUNT="$BENCH_GATE_COUNT" \
-              BENCH_GATE_TIME="$BENCH_GATE_TIME" > /tmp/bench-old.txt; then
+              BENCH_GATE_TIME="$BENCH_GATE_TIME" \
+              BENCH_GATE_HEAVY="$BENCH_GATE_HEAVY" \
+              BENCH_GATE_HEAVY_TIME="$BENCH_GATE_HEAVY_TIME" > /tmp/bench-old.txt; then
             echo "::warning title=Bench Gate::merge-base benchmark run exited non-zero; gating against its partial output"
           fi
 

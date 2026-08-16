@@ -317,16 +317,32 @@ bench-backends: pricing-snapshot ensure-embed-dir
 BENCH_GATE_PACKAGES ?= ./internal/sync ./internal/db ./internal/secrets \
 	./internal/signals
 # Count must stay >= 5: benchgate's time gate needs at least 5
-# candidate samples for its significance test.
-BENCH_GATE_COUNT ?= 6
+# candidate samples for its significance test. Every -count run
+# rebuilds each benchmark's fixture, so this is also the multiplier
+# on the 100k-row seeds below.
+BENCH_GATE_COUNT ?= 5
 # Fixed iterations, not a duration: some gated benchmarks grow their
 # fixture as they iterate, so baseline and candidate must run the
 # same iteration count to measure identical workloads.
 BENCH_GATE_TIME ?= 20x
+# Benchmarks whose single iteration costs hundreds of milliseconds to
+# seconds (100k-row usage and activity-report fixtures, cold-archive
+# ingest) run in a second pass with fewer iterations. Their per-op
+# ratios are stable at that scale, and at BENCH_GATE_TIME these few
+# benchmarks were most of the gate's wall clock. The regex is matched
+# against top-level benchmark names, so sub-benchmarks follow their
+# parent; the cheap benchmarks keep the full iteration count because
+# their millisecond-scale samples are what needs the averaging.
+BENCH_GATE_HEAVY ?= GetDailyUsage|SQLiteActivityReport|SyncAllColdArchive|ResyncBulk
+BENCH_GATE_HEAVY_TIME ?= 5x
 bench-gate: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5" -run '^$$' \
-		-bench . -benchmem \
+		-bench . -skip '$(BENCH_GATE_HEAVY)' -benchmem \
 		-count $(BENCH_GATE_COUNT) -benchtime $(BENCH_GATE_TIME) \
+		-timeout 25m $(BENCH_GATE_PACKAGES)
+	CGO_ENABLED=1 go test -tags "fts5" -run '^$$' \
+		-bench '$(BENCH_GATE_HEAVY)' -benchmem \
+		-count $(BENCH_GATE_COUNT) -benchtime $(BENCH_GATE_HEAVY_TIME) \
 		-timeout 25m $(BENCH_GATE_PACKAGES)
 
 # Prints the gate's sample/iteration configuration in shell-evalable
@@ -336,6 +352,7 @@ bench-gate: pricing-snapshot ensure-embed-dir
 # package list intentionally stays per-side).
 bench-gate-config:
 	@echo "BENCH_GATE_COUNT=$(BENCH_GATE_COUNT) BENCH_GATE_TIME=$(BENCH_GATE_TIME)"
+	@echo "BENCH_GATE_HEAVY='$(BENCH_GATE_HEAVY)' BENCH_GATE_HEAVY_TIME=$(BENCH_GATE_HEAVY_TIME)"
 
 # Start test PostgreSQL container
 postgres-up:

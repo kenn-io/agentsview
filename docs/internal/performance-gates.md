@@ -70,9 +70,9 @@ sessions" or "the manifest is read once per root regardless of session count".
 ### 2. Benchmark gate (runs on every PR via `bench.yml`)
 
 `.github/workflows/bench.yml` runs `make bench-gate` — the single source of
-truth for the gated package list, sample count, and iteration count — on the PR
-head and its merge base on the same runner, then compares the outputs with
-`cmd/benchgate`:
+truth for the gated package list, sample count, and per-tier iteration counts —
+on the PR head and its merge base on the same runner, then compares the outputs
+with `cmd/benchgate`:
 
 - `BenchmarkSyncAllWarmNoop` — full sync over an already-synced archive (stat +
   skip work only; also self-asserts nothing is re-synced or bulk-rewritten).
@@ -90,7 +90,16 @@ head and its merge base on the same runner, then compares the outputs with
 - `BenchmarkReplaceSessionMessagesStreamingMerge` — the streaming chunk-merge
   diff path (one UPDATE, not a full delete+reinsert).
 - `BenchmarkInsertMessagesBatch` — multi-row batched ingest.
+- `BenchmarkResyncBulkContributorIngest` — the same archive entering the atomic
+  rebuild through a contributor engine.
+- `BenchmarkSearchContentSubstringPage` / `BenchmarkSearchContentFTSPage` — one
+  page of content search through the substring and FTS paths.
 - `BenchmarkGetDailyUsage` — usage aggregation over 100k message rows.
+- `BenchmarkSQLiteActivityReportCandidateSource100K`,
+  `BenchmarkSQLiteActivityReportCandidateSourceLongSession`, and
+  `BenchmarkSQLiteActivityReportArtifacts100K` — activity-report candidate
+  streaming and artifact building over 100k sessions or a 100k-message
+  session.
 - `BenchmarkScan` / `BenchmarkScanDefinite` — secret-scan regex throughput.
 - `BenchmarkCountDuplicatePromptsLargeSession` — duplicate-prompt analysis over
   a long session with shared vocabulary and distinct prompt context.
@@ -131,10 +140,19 @@ older or partial — is reported as not gated.
 The gate always runs with a fixed `-benchtime=Nx` iteration count (not a
 duration): two of the benchmarks grow their fixture as they iterate, so the
 baseline and candidate must run the same number of iterations to measure
-identical workloads. CI evaluates `make bench-gate-config` on the PR head and
-passes the count and benchtime into the merge-base run, so a PR that changes
-those defaults still compares identical workloads; do the same locally if you
-override them.
+identical workloads. Iterations come in two tiers. Benchmarks whose single
+iteration costs hundreds of milliseconds to seconds (the 100k-row usage and
+activity-report fixtures and cold-archive ingest, matched by `BENCH_GATE_HEAVY`)
+run in a second `go test` pass with `BENCH_GATE_HEAVY_TIME` iterations; every
+other benchmark runs with `BENCH_GATE_TIME`. Per-op ratios at that scale do not
+need the averaging that millisecond-scale samples do, and at the full iteration
+count those few benchmarks were most of the gate's wall clock.
+`BENCH_GATE_COUNT` samples are taken per benchmark, and every sample rebuilds
+the fixture, so the count is kept at benchgate's significance minimum. CI
+evaluates `make bench-gate-config` on the PR head and passes the count, both
+iteration counts, and the heavy-tier regex into the merge-base run, so a PR that
+changes those defaults still compares identical workloads; do the same locally
+if you override them.
 
 Report identifiers are package-qualified benchmark names
 (`go.kenn.io/agentsview/internal/db.InsertMessagesBatch-18`) when the captured
@@ -179,7 +197,12 @@ reported without gating; it gates automatically once merged.
    Makefile; each side of the comparison benchmarks its own commit's list, so
    growing the gate cannot break the base run.
 1. Keep per-op cost roughly in the 100µs–100ms band: below the benchgate floors
-   nothing is gated, and far above it the job gets slow.
+   nothing is gated, and far above it the job gets slow. A benchmark that
+   needs a large fixture to expose per-row scaling belongs in
+   `BENCH_GATE_HEAVY` so it runs with the reduced iteration count; a
+   fixture-growing benchmark does not, because its per-op cost depends on the
+   iteration count. Keep fixture seeding cheap too: it is repeated once per
+   `-count` sample.
 1. Keep per-iteration setup out of the timed region (`b.ResetTimer`, pre-built
    fixtures): helper allocations inside the loop are gated as if they were
    product cost and dilute or distort the ratio.
