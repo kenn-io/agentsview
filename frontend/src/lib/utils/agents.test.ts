@@ -34,6 +34,7 @@ describe("KNOWN_AGENTS", () => {
       "qwen",
       "qwenpaw",
       "deepseek-tui",
+      "deepseek-harness",
       "openclaw",
       "qclaw",
       "iflow",
@@ -117,6 +118,9 @@ describe("agentColor", () => {
       "var(--accent-cyan)",
     );
     expect(agentColor("deepseek-tui")).toBe(
+      "var(--accent-cyan)",
+    );
+    expect(agentColor("deepseek-harness")).toBe(
       "var(--accent-cyan)",
     );
     expect(agentColor("vscode-copilot")).toBe(
@@ -215,6 +219,7 @@ describe("agentLabel", () => {
     expect(agentLabel("qwen")).toBe("Qwen Code");
     expect(agentLabel("qwenpaw")).toBe("QwenPaw");
     expect(agentLabel("deepseek-tui")).toBe("DeepSeek TUI");
+    expect(agentLabel("deepseek-harness")).toBe("DeepSeek Harness");
     expect(agentLabel("prime-agent")).toBe("Prime Agent");
     expect(agentLabel("qoder")).toBe("Qoder");
     expect(agentLabel("roocode")).toBe("RooCode");

@@ -112,6 +112,7 @@ export async function responseErrorMessage(res: Response): Promise<string> {
 export function configureGeneratedClient(): void {
   OpenAPI.BASE = getGeneratedBase();
   OpenAPI.TOKEN = async () => getAuthToken();
+  OpenAPI.ENCODE_PATH = encodeURIComponent;
 }
 
 export function generatedErrorMessage(err: GeneratedApiError): string {

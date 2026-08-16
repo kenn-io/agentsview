@@ -45,6 +45,11 @@ export const KNOWN_AGENTS: readonly AgentMeta[] = [
     label: "DeepSeek TUI",
   },
   {
+    name: "deepseek-harness",
+    color: "var(--accent-cyan)",
+    label: "DeepSeek Harness",
+  },
+  {
     name: "openclaw",
     color: "var(--accent-orange)",
     label: "OpenClaw",

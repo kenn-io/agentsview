@@ -49,6 +49,7 @@ across every project, model, and tool.
   <a class="agent-chip" data-agent="visualstudio-copilot" href="https://visualstudio.microsoft.com" target="_blank" rel="noopener"><span class="agent-chip__glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use xlink:href="#i-visualstudio"/></svg></span><span class="agent-chip__name">Visual Studio Copilot</span></a>
   <a class="agent-chip" data-agent="qwen" href="https://github.com/QwenLM/qwen-code" target="_blank" rel="noopener"><span class="agent-chip__glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use xlink:href="#i-qwen"/></svg></span><span class="agent-chip__name">Qwen Code</span></a>
   <a class="agent-chip" data-agent="deepseek-tui" href="https://www.deepseek.com" target="_blank" rel="noopener"><span class="agent-chip__glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use xlink:href="#i-deepseek"/></svg></span><span class="agent-chip__name">DeepSeek TUI</span></a>
+  <a class="agent-chip" data-agent="deepseek-harness" href="https://github.com/deepseek-ai/deepseek-harness" target="_blank" rel="noopener"><span class="agent-chip__glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use xlink:href="#i-deepseek"/></svg></span><span class="agent-chip__name">DeepSeek Harness</span></a>
   <a class="agent-chip" data-agent="vibe" href="https://mistral.ai" target="_blank" rel="noopener"><span class="agent-chip__glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use xlink:href="#i-mistral"/></svg></span><span class="agent-chip__name">Mistral Vibe</span></a>
   <a class="agent-chip" data-agent="zed" href="https://zed.dev" target="_blank" rel="noopener"><span class="agent-chip__glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use xlink:href="#i-zed"/></svg></span><span class="agent-chip__name">Zed</span></a>
   <a class="agent-chip" data-agent="warp" href="https://www.warp.dev" target="_blank" rel="noopener"><span class="agent-chip__glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use xlink:href="#i-warp"/></svg></span><span class="agent-chip__name">Warp</span></a>
@@ -273,7 +274,7 @@ read [out-of-band filesystem copies](/filesystem-sync/), or
 
     Works with [dozens of AI coding session sources](/configuration/#session-discovery)
     including Claude Code, OpenClaude, Codex, Copilot, Cursor,
-    Gemini, OpenHands, Aider, Claude Cowork, DeepSeek TUI, Goose,
+    Gemini, OpenHands, Aider, Claude Cowork, DeepSeek TUI, DeepSeek Harness, Goose,
     gptme, Grok, Kilo, Kilo (legacy), Kimi Work, MiMoCode, Mistral Vibe,
     OhMyPi, Omnigent, Poolside, Prime Agent, QwenPaw, Reasonix, RooCode, Shelley,
     Trae, Visual Studio Copilot, and ZCode. Auto-discovers session

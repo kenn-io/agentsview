@@ -232,6 +232,7 @@ func TestAgentByType(t *testing.T) {
 		{AgentOMP, true},
 		{AgentDevin, true},
 		{AgentDeepSeekTUI, true},
+		{AgentDeepSeekHarness, true},
 		{"unknown", false},
 	}
 	for _, tt := range tests {
@@ -386,6 +387,12 @@ func TestAgentByPrefix(t *testing.T) {
 			true,
 		},
 		{
+			"deepseek harness prefix",
+			"deepseek-harness:sess-id",
+			AgentDeepSeekHarness,
+			true,
+		},
+		{
 			"qoder prefix",
 			"qoder:sess-id",
 			AgentQoder,
@@ -454,6 +461,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentQwen,
 		AgentCommandCode,
 		AgentDeepSeekTUI,
+		AgentDeepSeekHarness,
 		AgentOpenClaw,
 		AgentQClaw,
 		AgentKimi,
@@ -798,6 +806,18 @@ func TestDeepSeekTUIRegistryEntry(t *testing.T) {
 	assert.Equal(t, "deepseek_tui_sessions_dirs", def.ConfigKey)
 	assert.Equal(t, []string{".codewhale/sessions", ".deepseek/sessions"}, def.DefaultDirs)
 	assert.Equal(t, "deepseek-tui:", def.IDPrefix)
+}
+
+func TestDeepSeekHarnessRegistryEntry(t *testing.T) {
+	def, ok := AgentByType(AgentDeepSeekHarness)
+	require.True(t, ok, "AgentDeepSeekHarness missing from Registry")
+	require.True(t, def.FileBased, "DeepSeek Harness FileBased")
+	assert.Equal(t, "DeepSeek Harness", def.DisplayName)
+	assert.Equal(t, "DEEPSEEK_HARNESS_SESSIONS_DIR", def.EnvVar)
+	assert.Equal(t, "DSH_HOME", def.DefaultRootEnvVar)
+	assert.Equal(t, "deepseek_harness_sessions_dirs", def.ConfigKey)
+	assert.Equal(t, []string{".dsh/sessions"}, def.DefaultDirs)
+	assert.Equal(t, "deepseek-harness:", def.IDPrefix)
 }
 
 func TestResolveOpenCodeSourcePrefersStorage(t *testing.T) {

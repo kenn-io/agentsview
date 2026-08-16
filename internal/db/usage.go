@@ -1872,7 +1872,9 @@ func usageRowIsRequestScoped(
 // UsageSourceIsRequestScoped reports whether a usage source represents one
 // provider request even when the provider cannot attach it to a message.
 func UsageSourceIsRequestScoped(source string) bool {
-	return source == "message" || source == "goose-request"
+	return source == "message" ||
+		source == "goose-request" ||
+		source == "deepseek-harness"
 }
 
 func recordComputedUsagePricing(

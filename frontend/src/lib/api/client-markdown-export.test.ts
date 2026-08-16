@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import {
+  getExportUrl,
   getInsightMarkdownExportUrl,
   getMarkdownExportUrl,
 } from "./client.js";
@@ -44,6 +45,17 @@ describe("markdown export URLs", () => {
 
     expect(getMarkdownExportUrl("sess-123", "all")).toBe(
       "https://remote.example.test/agentsview/api/v1/sessions/sess-123/md?depth=all",
+    );
+  });
+
+  it("encodes session IDs as one export path segment", () => {
+    const sessionId = "deepseek-harness:child%7E/%25?#";
+
+    expect(getExportUrl(sessionId)).toBe(
+      "/api/v1/sessions/deepseek-harness%3Achild%257E%2F%2525%3F%23/export",
+    );
+    expect(getMarkdownExportUrl(sessionId)).toBe(
+      "/api/v1/sessions/deepseek-harness%3Achild%257E%2F%2525%3F%23/md",
     );
   });
 

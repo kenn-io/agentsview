@@ -58,6 +58,17 @@ func TestDailyUsageAmountsPricingBandRequestScope(t *testing.T) {
 			},
 		},
 		{
+			name:        "DeepSeek Harness compaction uses band without message ordinal",
+			usageSource: "deepseek-harness",
+			wantCost:    600_000,
+			wantApplication: export.PricingApplication{
+				Bands: []export.AppliedPricingBand{{
+					AboveInputTokens: 200_000,
+					RequestCount:     1,
+				}},
+			},
+		},
+		{
 			name:        "unbound aggregate uses base",
 			usageSource: "usage-event",
 			wantCost:    300_000,

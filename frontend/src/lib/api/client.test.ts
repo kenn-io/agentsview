@@ -635,4 +635,12 @@ describe("watchSession", () => {
     }
     expect(es.closed).toBe(false);
   });
+
+  it("encodes the session ID as one URL path segment", () => {
+    watchSession("deepseek-harness:child%7E/%25?#", () => {});
+
+    expect(FakeEventSource.instances[0]?.url).toBe(
+      "/api/v1/sessions/deepseek-harness%3Achild%257E%2F%2525%3F%23/watch",
+    );
+  });
 });
