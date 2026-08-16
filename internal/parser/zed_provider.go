@@ -135,10 +135,9 @@ func zedFingerprintSource(ctx context.Context, src multiSessionSource) (SourceFi
 			return SourceFingerprint{}, nil
 		case err == nil:
 			mtime = sessionMtime
+		default:
+			return SourceFingerprint{}, err
 		}
-		// A non-ErrNoRows error (unreadable DB, non-virtual path) keeps the
-		// physical DB mtime fallback, preserving the prior behavior for
-		// transient failures.
 	} else if compositeMtime, err := sqliteDBCompositeMtime(
 		src.Container, sqliteDBJournalSuffixes,
 	); err == nil {

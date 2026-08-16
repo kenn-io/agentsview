@@ -180,6 +180,12 @@ func TestZedProviderMalformedSchemaReturnsError(t *testing.T) {
 	sources, err := provider.Discover(context.Background())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
+	_, err = zedFingerprintSource(context.Background(), multiSessionSource{
+		Root: root, Path: ZedSQLiteVirtualPath(dbPath, "malformed"),
+		Container: dbPath, MemberID: "malformed",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing required Zed threads column data")
 	_, err = provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing required Zed threads column data")
