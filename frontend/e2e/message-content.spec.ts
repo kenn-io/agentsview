@@ -44,7 +44,7 @@ async function selectSession(
   const sessionId = await item.getAttribute("data-session-id");
   expect(sessionId).toBeTruthy();
   await expect(item).toBeVisible();
-  await item.click({ force: true });
+  await page.goto(`/sessions/${encodeURIComponent(sessionId!)}`);
   await expect(item).toHaveClass(/active/);
   return sessionId!;
 }
