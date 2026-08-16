@@ -433,6 +433,49 @@ type AgentConfig struct {
 	AllowUnsafe bool   `json:"allow_unsafe,omitempty" toml:"allow_unsafe"`
 }
 
+// InsightsConfig controls an optional OpenAI-compatible chat-completions
+// endpoint for generated insights.
+type InsightsConfig struct {
+	Endpoint  string `json:"endpoint,omitempty" toml:"endpoint"`
+	Model     string `json:"model,omitempty" toml:"model"`
+	APIKeyEnv string `json:"api_key_env,omitempty" toml:"api_key_env"`
+	AllowHTTP bool   `json:"allow_http,omitempty" toml:"allow_http"`
+}
+
+// APIKey reads the configured key from the environment. The key itself is
+// intentionally never part of the serialized configuration.
+func (c InsightsConfig) APIKey() string {
+	if strings.TrimSpace(c.APIKeyEnv) == "" {
+		return ""
+	}
+	return os.Getenv(strings.TrimSpace(c.APIKeyEnv))
+}
+
+// Validate checks endpoint intent and transport safety.
+func (c InsightsConfig) Validate() error {
+	endpoint := strings.TrimSpace(c.Endpoint)
+	model := strings.TrimSpace(c.Model)
+	configured := endpoint != "" || model != "" ||
+		strings.TrimSpace(c.APIKeyEnv) != "" || c.AllowHTTP
+	if !configured {
+		return nil
+	}
+	if endpoint == "" || model == "" {
+		return fmt.Errorf("[insights] endpoint and model are required together")
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("[insights] endpoint %q must be an http(s) URL", RedactedEndpoint(endpoint))
+	}
+	if u.User != nil {
+		return fmt.Errorf("[insights] endpoint must not contain URL credentials: %q", RedactedEndpoint(endpoint))
+	}
+	if err := ValidateExtractTransport(u, c.AllowHTTP); err != nil {
+		return fmt.Errorf("[insights] %w", err)
+	}
+	return nil
+}
+
 type CustomModelRate struct {
 	InputMicrodollarsPerMTok         int64 `json:"input_microdollars_per_mtok" toml:"input_microdollars_per_mtok"`
 	OutputMicrodollarsPerMTok        int64 `json:"output_microdollars_per_mtok" toml:"output_microdollars_per_mtok"`
@@ -529,9 +572,11 @@ type Config struct {
 	DuckDB               DuckDBConfig           `json:"duckdb,omitempty" toml:"duckdb"`
 	Vector               VectorConfig           `json:"vector,omitempty" toml:"vector"`
 	Recall               RecallConfig           `json:"recall,omitempty" toml:"recall"`
+	Insights             InsightsConfig         `json:"insights,omitempty" toml:"insights"`
 	Automated            AutomatedConfig        `json:"automated,omitempty" toml:"automated"`
 	Agent                map[string]AgentConfig `json:"agent,omitempty" toml:"agent"`
-	WriteTimeout         time.Duration          `json:"-" toml:"-"`
+	insightsConfigured   bool
+	WriteTimeout         time.Duration `json:"-" toml:"-"`
 	// LocalMachineName is the operating-system hostname used to identify
 	// sessions ingested from this machine. It is runtime-derived rather than
 	// persisted configuration so local and remote source labels share the same
@@ -1175,6 +1220,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		DuckDB                         DuckDBConfig               `toml:"duckdb"`
 		Vector                         VectorConfig               `toml:"vector"`
 		Recall                         RecallConfig               `toml:"recall"`
+		Insights                       InsightsConfig             `toml:"insights"`
 		Automated                      AutomatedConfig            `toml:"automated"`
 		Agent                          map[string]AgentConfig     `toml:"agent"`
 		EventsCoalesceInterval         time.Duration              `toml:"events_coalesce_interval"`
@@ -1376,6 +1422,13 @@ func (c *Config) applyConfigTOML(data string) error {
 		c.Vector.Embed.BackstopInterval = file.Vector.Embed.BackstopInterval
 	}
 	c.mergeRecallExtractTOML(file.Recall, meta)
+	if meta.IsDefined("insights") {
+		c.Insights = file.Insights
+		c.Insights.Endpoint = strings.TrimSpace(c.Insights.Endpoint)
+		c.Insights.Model = strings.TrimSpace(c.Insights.Model)
+		c.Insights.APIKeyEnv = strings.TrimSpace(c.Insights.APIKeyEnv)
+		c.insightsConfigured = true
+	}
 	// IsDefined distinguishes "unset" (leave default 10s) from an
 	// explicit "0s" (disable coalescing). Checking != 0 would silently
 	// ignore the latter.
@@ -1924,6 +1977,13 @@ func finalize(cfg *Config) error {
 	}
 	if err := cfg.Recall.Extract.Validate(); err != nil {
 		return err
+	}
+	if cfg.insightsConfigured || cfg.Insights.Endpoint != "" ||
+		cfg.Insights.Model != "" || cfg.Insights.APIKeyEnv != "" ||
+		cfg.Insights.AllowHTTP {
+		if err := cfg.Insights.Validate(); err != nil {
+			return err
+		}
 	}
 	return nil
 }

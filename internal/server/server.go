@@ -204,9 +204,7 @@ func New(
 		) (insight.Result, error) {
 			return insight.GenerateStreamWithOptions(
 				ctx, agent, prompt, onLog,
-				insight.GenerateOptions{
-					Agents: insightAgentConfig(cfg.Agent),
-				},
+				insightGenerateOptions(cfg),
 			)
 		},
 		spaFS:      dist,
@@ -223,6 +221,19 @@ func New(
 	}
 	s.routes()
 	return s
+}
+
+func insightGenerateOptions(cfg config.Config) insight.GenerateOptions {
+	opts := insight.GenerateOptions{Agents: insightAgentConfig(cfg.Agent)}
+	if strings.TrimSpace(cfg.Insights.Endpoint) != "" &&
+		strings.TrimSpace(cfg.Insights.Model) != "" {
+		opts.Endpoint = &insight.EndpointConfig{
+			Endpoint: cfg.Insights.Endpoint,
+			Model:    cfg.Insights.Model,
+			APIKey:   cfg.Insights.APIKey(),
+		}
+	}
+	return opts
 }
 
 // ingestionConfig returns the daemon-start configuration for local filesystem

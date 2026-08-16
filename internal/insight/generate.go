@@ -80,7 +80,8 @@ type AgentConfig struct {
 
 // GenerateOptions holds optional insight generation overrides.
 type GenerateOptions struct {
-	Agents map[string]AgentConfig
+	Agents   map[string]AgentConfig
+	Endpoint *EndpointConfig
 }
 
 // Generate invokes an AI agent CLI to generate an insight.
@@ -112,6 +113,9 @@ func GenerateStreamWithOptions(
 		return Result{}, fmt.Errorf(
 			"unsupported agent: %s", agent,
 		)
+	}
+	if opts.Endpoint != nil {
+		return generateEndpoint(ctx, *opts.Endpoint, prompt)
 	}
 
 	path, err := resolveAgentBinary(agent, opts)

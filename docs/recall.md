@@ -53,11 +53,28 @@ links use `/recall?tab=generated&insight=<id>`.
 
 ![Generated insights](/assets/generated/screenshots/recall-generated-insights.png)
 
-Generated insights run through the selected agent CLI on your machine. The CLI
-receives content from sessions matching the visible scope, and the completed
-markdown is saved in the local SQLite archive. AgentsView does not manage the
-CLI's provider credentials; review that agent's privacy behavior before
-generating a report.
+Generated insights use the configured OpenAI-compatible endpoint when
+`[insights]` has both an `endpoint` and `model`; otherwise they use the selected
+agent CLI on your machine. Endpoint mode sends one non-streaming
+`POST /chat/completions` request with the generated prompt as a user message.
+It accepts the first choice's string `message.content` and optional response
+`model`. It does not support streaming, `/responses`, legacy completions,
+tool calls, or content-part arrays. An endpoint failure returns an error and
+does not retry through a CLI.
+
+```toml
+[insights]
+endpoint = "http://127.0.0.1:11434/v1"
+model = "llama3.1"
+api_key_env = "OPENAI_API_KEY" # optional; the value is read at runtime
+# allow_http = true            # required for non-loopback HTTP endpoints
+```
+
+Loopback HTTP endpoints are allowed for local models. Remote endpoints must
+use HTTPS unless `allow_http = true` explicitly opts into plaintext transport.
+The endpoint receives transcript-derived content, so review the provider's
+privacy and retention behavior. API keys stay in the environment and are sent
+only as a bearer header; they are not stored in the AgentsView configuration.
 
 ### Configuring agent binaries
 
