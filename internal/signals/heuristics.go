@@ -455,48 +455,83 @@ func hasFileRef(content string) bool {
 	return fileRefRe.MatchString(content)
 }
 
+type promptTokenPosting struct {
+	promptIndex int
+	frequency   int
+}
+
 func countDuplicatePrompts(prompts []promptInfo) int {
-	seen := make([]promptInfo, 0, len(prompts))
+	// The existing score treats the current prompt as a token set and each
+	// previous prompt as a token multiset. Keep that behavior, but index the
+	// previous frequencies so prompts only visit candidates that share a token.
+	seenNormalized := make(map[string]struct{}, len(prompts))
+	seenTokenCounts := make([]int, 0, len(prompts))
+	postings := make(map[string][]promptTokenPosting)
+	overlaps := make([]int, len(prompts))
+	touched := make([]int, 0, len(prompts))
 	repeats := 0
 	for _, p := range prompts {
 		if isControlPrompt(p.Normalized) ||
 			len(p.Normalized) < 20 || len(p.Tokens) < 4 {
 			continue
 		}
+		if _, ok := seenNormalized[p.Normalized]; ok {
+			repeats++
+			continue
+		}
+
+		tokenFrequencies := make(map[string]int, len(p.Tokens))
+		for _, token := range p.Tokens {
+			tokenFrequencies[token]++
+		}
+
+		touched = touched[:0]
+		for token := range tokenFrequencies {
+			for _, posting := range postings[token] {
+				if overlaps[posting.promptIndex] == 0 {
+					touched = append(touched, posting.promptIndex)
+				}
+				overlaps[posting.promptIndex] += posting.frequency
+			}
+		}
+
 		duplicate := false
-		for _, prev := range seen {
-			if p.Normalized == prev.Normalized ||
-				jaccard(p.Tokens, prev.Tokens) >= 0.85 {
+		for _, promptIndex := range touched {
+			if jaccardFromOverlap(
+				len(tokenFrequencies),
+				seenTokenCounts[promptIndex],
+				overlaps[promptIndex],
+			) >= 0.85 {
 				duplicate = true
 				break
 			}
+		}
+		for _, promptIndex := range touched {
+			overlaps[promptIndex] = 0
 		}
 		if duplicate {
 			repeats++
 			continue
 		}
-		seen = append(seen, p)
+
+		promptIndex := len(seenTokenCounts)
+		seenNormalized[p.Normalized] = struct{}{}
+		seenTokenCounts = append(seenTokenCounts, len(p.Tokens))
+		for token, frequency := range tokenFrequencies {
+			postings[token] = append(postings[token], promptTokenPosting{
+				promptIndex: promptIndex,
+				frequency:   frequency,
+			})
+		}
 	}
 	return repeats
 }
 
-func jaccard(a, b []string) float64 {
-	if len(a) == 0 || len(b) == 0 {
+func jaccardFromOverlap(currentUnique, previousTotal, intersections int) float64 {
+	if currentUnique == 0 || previousTotal == 0 {
 		return 0
 	}
-	seen := map[string]struct{}{}
-	for _, token := range a {
-		seen[token] = struct{}{}
-	}
-	intersections := 0
-	union := len(seen)
-	for _, token := range b {
-		if _, ok := seen[token]; ok {
-			intersections++
-		} else {
-			union++
-		}
-	}
+	union := currentUnique + previousTotal - intersections
 	if union == 0 {
 		return 0
 	}
