@@ -75,7 +75,12 @@ func (db *DB) applyArtifactImportedSession(
 	write = sanitizeSessionBatchWrite(write)
 
 	db.mu.Lock()
-	defer db.mu.Unlock()
+	locked := true
+	defer func() {
+		if locked {
+			db.mu.Unlock()
+		}
+	}()
 	tx, err := db.getWriter().BeginTx(ctx, nil)
 	if err != nil {
 		return result, fmt.Errorf("beginning artifact imported session: %w", err)
@@ -100,6 +105,14 @@ func (db *DB) applyArtifactImportedSession(
 		if err := tx.Commit(); err != nil {
 			return result, fmt.Errorf(
 				"committing suppressed artifact imported session: %w", err,
+			)
+		}
+		locked = false
+		db.mu.Unlock()
+		if err := db.RepairQueuedSubagentParents(); err != nil {
+			return result, fmt.Errorf(
+				"repairing queued subagent parents after artifact import: %w",
+				err,
 			)
 		}
 		result.Suppressed = true
@@ -136,6 +149,13 @@ func (db *DB) applyArtifactImportedSession(
 			fmt.Errorf("committing artifact imported session: %w", err)
 	}
 	pendingRecallRevocations.flush()
+	locked = false
+	db.mu.Unlock()
+	if err := db.RepairQueuedSubagentParents(); err != nil {
+		return result, fmt.Errorf(
+			"repairing queued subagent parents after artifact import: %w", err,
+		)
+	}
 	return result, nil
 }
 

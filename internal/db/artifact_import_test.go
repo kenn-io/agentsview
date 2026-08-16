@@ -604,7 +604,7 @@ func TestApplyArtifactImportedSessionPreservesLocalCollision(t *testing.T) {
 	assert.Equal(t, map[string]string{gid: imported.ManifestHash}, provenance)
 }
 
-func TestApplyArtifactImportedSessionQueuesSelfParentRepair(t *testing.T) {
+func TestApplyArtifactImportedSessionRepairsSelfParent(t *testing.T) {
 	database := testDB(t)
 	ctx := t.Context()
 	origin := "peer-a1b2c3"
@@ -631,9 +631,8 @@ func TestApplyArtifactImportedSessionQueuesSelfParentRepair(t *testing.T) {
 	require.NoError(t, database.Reader().QueryRow(`
 		SELECT count(*) FROM subagent_parent_repair_queue WHERE session_id = ?`,
 		gid).Scan(&queued))
-	assert.Equal(t, 1, queued,
-		"artifact imports must route self-parented rows into bounded repair")
-	require.NoError(t, database.RepairQueuedSubagentParents())
+	assert.Zero(t, queued,
+		"artifact import must drain self-parent repair before returning")
 	session, err := database.GetSession(ctx, gid)
 	require.NoError(t, err)
 	assert.Nil(t, session.ParentSessionID)
