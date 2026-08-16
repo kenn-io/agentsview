@@ -1764,7 +1764,10 @@ const linkSubagentSessionsQuery = `
 	)
 	AND (
 		(relationship_type != 'subagent' AND (` + subagentSpawnerExpr + `) IS NOT NULL)
-		OR parent_session_id IS NOT (` + subagentSpawnerExpr + `
+		OR (
+			parent_session_id IS NOT (` + subagentSpawnerExpr + `
+			)
+			AND ((` + subagentSpawnerExpr + `) IS NOT NULL OR parent_session_id IS s.id)
 		)
 	)`
 
@@ -1839,7 +1842,10 @@ func linkSubagentSessionsForSessionsQuery(ph string) string {
 	)
 	AND (
 		(relationship_type != 'subagent' AND (` + subagentSpawnerExpr + `) IS NOT NULL)
-		OR parent_session_id IS NOT (` + subagentSpawnerExpr + `
+		OR (
+			parent_session_id IS NOT (` + subagentSpawnerExpr + `
+			)
+			AND ((` + subagentSpawnerExpr + `) IS NOT NULL OR parent_session_id IS s.id)
 		)
 	)`
 }

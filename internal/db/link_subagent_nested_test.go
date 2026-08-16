@@ -343,6 +343,94 @@ func TestLinkSubagentSessionsRejectsSelfEdges(t *testing.T) {
 		assert.Equal(t, "subagent", child.RelationshipType,
 			"queued repair must preserve subagent classification")
 	})
+
+	for _, tc := range []struct {
+		name         string
+		relationship string
+		link         func(*DB) error
+	}{
+		{
+			name:         "global_preserves_continuation_parent",
+			relationship: "continuation",
+			link:         func(d *DB) error { return d.LinkSubagentSessions() },
+		},
+		{
+			name:         "scoped_preserves_fork_parent",
+			relationship: "fork",
+			link: func(d *DB) error {
+				return d.LinkSubagentSessionsForSessions([]string{"child"})
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "parser-parent", "p", func(s *Session) {
+				s.MessageCount = 1
+			})
+			insertSession(t, d, "child", "p", func(s *Session) {
+				s.MessageCount = 1
+				s.ParentSessionID = Ptr("parser-parent")
+				s.RelationshipType = tc.relationship
+			})
+			insertMessages(t, d, spawnEdgeTo("child", "child", "legacy self spawn"))
+
+			require.NoError(t, tc.link(d))
+			child, err := d.GetSession(context.Background(), "child")
+			requireNoError(t, err, "GetSession child")
+			require.NotNil(t, child.ParentSessionID)
+			assert.Equal(t, "parser-parent", *child.ParentSessionID,
+				"self-only edge must not erase parser-derived parent")
+			assert.Equal(t, tc.relationship, child.RelationshipType,
+				"self-only edge must not retag parser-derived lineage")
+		})
+	}
+
+	for _, tc := range []struct {
+		name string
+		link func(*DB) error
+	}{
+		{
+			name: "scoped",
+			link: func(d *DB) error {
+				return d.LinkSubagentSessionsForSessions([]string{"child"})
+			},
+		},
+		{
+			name: "queued",
+			link: func(d *DB) error {
+				require.NoError(t, d.QueueSubagentParentCleanupRepairs([]string{"child"}))
+				return d.RepairQueuedSubagentParents()
+			},
+		},
+	} {
+		t.Run("bumps_local_modified_at_"+tc.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "child", "p", func(s *Session) {
+				s.MessageCount = 1
+				s.ParentSessionID = Ptr("child")
+				s.RelationshipType = "subagent"
+			})
+			_, err := d.getWriter().Exec(
+				"UPDATE sessions SET local_modified_at = ? WHERE id = ?",
+				"2026-01-01T00:00:00.000Z", "child",
+			)
+			require.NoError(t, err, "seed local_modified_at")
+			if tc.name == "scoped" {
+				insertMessages(t, d, spawnEdgeTo("child", "child", "legacy self spawn"))
+			}
+			before, err := d.GetSessionFull(context.Background(), "child")
+			requireNoError(t, err, "GetSessionFull before")
+			require.NotNil(t, before.LocalModifiedAt)
+			time.Sleep(5 * time.Millisecond)
+
+			require.NoError(t, tc.link(d))
+			after, err := d.GetSessionFull(context.Background(), "child")
+			requireNoError(t, err, "GetSessionFull after")
+			require.NotNil(t, after.LocalModifiedAt)
+			assert.Greater(t, *after.LocalModifiedAt, *before.LocalModifiedAt,
+				"repair must advance local_modified_at for mirror sync")
+		})
+	}
 }
 
 // TestLinkSubagentSessionsConvergesAcrossIngestionOrder covers the
