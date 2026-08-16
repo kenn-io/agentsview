@@ -253,7 +253,7 @@ func TestLinkSubagentSessionsRejectsSelfEdges(t *testing.T) {
 			if tc.withParent {
 				insertSession(t, d, "real-parent", "p", func(s *Session) {
 					s.MessageCount = 1
-					s.StartedAt = Ptr("2026-01-01T00:00:00.000Z")
+					s.StartedAt = Ptr("2026-03-01T00:00:00.000Z")
 				})
 			}
 			insertMessages(t, d, spawnEdgeTo("child", "child", "self spawn"))
