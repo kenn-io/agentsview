@@ -1,9 +1,13 @@
 package parser
 
 import (
+	"bufio"
 	"encoding/json"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -721,6 +725,73 @@ func TestReconstructJSONL(t *testing.T) {
 			tt.check(t, data)
 		})
 	}
+}
+
+func TestReconstructJSONLOversizedCopilotSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "oversized.jsonl")
+	output := strings.Repeat("x", 12*1024)
+	var b strings.Builder
+	b.WriteString(`{"kind":0,"v":{"version":3,"sessionId":"large","creationDate":1770650022790,"requests":[{"requestId":"req1","timestamp":1770650031889,"message":{"text":"Run subagents"},"response":[{"kind":"toolInvocationSerialized","toolId":"runSubagent","toolCallId":"tc1","resultDetails":{"output":[`)
+	for i := 0; i < 6000; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, `{"type":"embed","isText":true,"value":%q}`, output)
+	}
+	b.WriteString(`],"input":"retained"},"toolSpecificData":{"kind":"terminal","terminalCommandOutput":{"text":`)
+	b.WriteString(strconv.Quote(strings.Repeat("y", 2*1024*1024)))
+	b.WriteString(`}}}]}]}}` + "\n")
+	require.Greater(t, b.Len(), vscodeCopilotNormalRecordLimit)
+	require.NoError(t, os.WriteFile(path, []byte(b.String()), 0644))
+
+	sess, msgs, err := parseVSCodeCopilotTestSession(t,
+		path, "proj", "local",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "vscode-copilot:large", sess.ID)
+	assert.Len(t, msgs, 2)
+	require.True(t, msgs[1].HasToolUse)
+	require.Len(t, msgs[1].ToolCalls, 1)
+
+	data, err := reconstructJSONL(path)
+	require.NoError(t, err)
+	var state map[string]any
+	require.NoError(t, json.Unmarshal(data, &state))
+	request := state["requests"].([]any)[0].(map[string]any)
+	response := request["response"].([]any)[0].(map[string]any)
+	resultDetails := response["resultDetails"].(map[string]any)
+	assert.Empty(t, resultDetails["output"])
+	toolData := response["toolSpecificData"].(map[string]any)
+	terminal := toolData["terminalCommandOutput"].(map[string]any)
+	assert.Equal(t, "[elided oversized VS Code Copilot value]", terminal["text"])
+
+	laterPath := filepath.Join(dir, "later.jsonl")
+	require.NoError(t, os.WriteFile(laterPath, []byte(
+		`{"kind":0,"v":{"version":3,"sessionId":"later","requests":[{"message":{"text":"later"},"response":[{"value":"indexed"}]}]}}`+"\n",
+	), 0644))
+	later, _, err := parseVSCodeCopilotTestSession(t,
+		laterPath, "proj", "local",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, later)
+	assert.Equal(t, "vscode-copilot:later", later.ID)
+}
+
+func TestReadVSCodeCopilotRecordSafetyCeiling(t *testing.T) {
+	reader := bufio.NewReaderSize(
+		io.LimitReader(
+			strings.NewReader(strings.Repeat(
+				"x", vscodeCopilotHardRecordLimit+1,
+			)),
+			int64(vscodeCopilotHardRecordLimit+1),
+		),
+		64*1024,
+	)
+	_, err := readVSCodeCopilotRecord(reader)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "safety ceiling")
 }
 
 func TestDiscoverVSCodeCopilot_JSONLDedup(t *testing.T) {

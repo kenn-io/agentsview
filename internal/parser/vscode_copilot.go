@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -675,6 +676,12 @@ type jsonlOp struct {
 	I    *int              `json:"i,omitempty"`
 }
 
+const (
+	vscodeCopilotNormalRecordLimit = 64 << 20
+	vscodeCopilotHardRecordLimit   = 256 << 20
+	vscodeCopilotLargeValueLimit   = 1 << 20
+)
+
 // reconstructJSONL reads a VSCode JSONL operation log and
 // replays mutations to reconstruct the full session JSON.
 //
@@ -690,13 +697,18 @@ func reconstructJSONL(path string) ([]byte, error) {
 	}
 	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
+	reader := bufio.NewReaderSize(f, 64*1024)
 
 	var state any
 
-	for scanner.Scan() {
-		line := scanner.Bytes()
+	for {
+		line, readErr := readVSCodeCopilotRecord(reader)
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return nil, fmt.Errorf("read %s: %w", path, readErr)
+		}
 		if len(line) == 0 {
 			continue
 		}
@@ -708,7 +720,11 @@ func reconstructJSONL(path string) ([]byte, error) {
 
 		switch op.Kind {
 		case 0: // Initial
-			if err := json.Unmarshal(op.V, &state); err != nil {
+			value, err := boundedVSCodeCopilotValue(op.V)
+			if err != nil {
+				return nil, fmt.Errorf("jsonl initial: %w", err)
+			}
+			if err := json.Unmarshal(value, &state); err != nil {
 				return nil, fmt.Errorf(
 					"jsonl initial: %w", err,
 				)
@@ -719,8 +735,12 @@ func reconstructJSONL(path string) ([]byte, error) {
 				continue
 			}
 			keys := decodeJSONLKeys(op.K)
+			value, err := boundedVSCodeCopilotValue(op.V)
+			if err != nil {
+				continue
+			}
 			var val any
-			if err := json.Unmarshal(op.V, &val); err != nil {
+			if err := json.Unmarshal(value, &val); err != nil {
 				continue
 			}
 			jsonlSet(state, keys, val)
@@ -730,8 +750,12 @@ func reconstructJSONL(path string) ([]byte, error) {
 				continue
 			}
 			keys := decodeJSONLKeys(op.K)
+			value, err := boundedVSCodeCopilotValue(op.V)
+			if err != nil {
+				continue
+			}
 			var items []any
-			if err := json.Unmarshal(op.V, &items); err != nil {
+			if err := json.Unmarshal(value, &items); err != nil {
 				continue
 			}
 			jsonlPush(state, keys, items, op.I)
@@ -745,15 +769,82 @@ func reconstructJSONL(path string) ([]byte, error) {
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("scan %s: %w", path, err)
-	}
-
 	if state == nil {
 		return nil, nil
 	}
 
 	return json.Marshal(state)
+}
+
+func readVSCodeCopilotRecord(r *bufio.Reader) ([]byte, error) {
+	var line []byte
+	for {
+		chunk, prefix, err := r.ReadLine()
+		if err == io.EOF {
+			if len(line) == 0 {
+				return nil, io.EOF
+			}
+			return line, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if len(line)+len(chunk) > vscodeCopilotHardRecordLimit {
+			for prefix {
+				_, prefix, err = r.ReadLine()
+				if err != nil {
+					if err == io.EOF {
+						break
+					}
+					return nil, err
+				}
+			}
+			return nil, fmt.Errorf(
+				"VS Code Copilot JSONL record exceeds %d-byte safety ceiling",
+				vscodeCopilotHardRecordLimit,
+			)
+		}
+		line = append(line, chunk...)
+		if !prefix {
+			return line, nil
+		}
+	}
+}
+
+func boundedVSCodeCopilotValue(raw json.RawMessage) ([]byte, error) {
+	if len(raw) <= vscodeCopilotNormalRecordLimit {
+		return raw, nil
+	}
+
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, fmt.Errorf("oversized value: %w", err)
+	}
+	return json.Marshal(elideVSCodeCopilotLargeValues(value, ""))
+}
+
+func elideVSCodeCopilotLargeValues(value any, key string) any {
+	if key == "output" {
+		if _, ok := value.([]any); ok {
+			return []any{}
+		}
+	}
+
+	switch v := value.(type) {
+	case map[string]any:
+		for childKey, child := range v {
+			v[childKey] = elideVSCodeCopilotLargeValues(child, childKey)
+		}
+	case []any:
+		for i, child := range v {
+			v[i] = elideVSCodeCopilotLargeValues(child, key)
+		}
+	case string:
+		if len(v) > vscodeCopilotLargeValueLimit {
+			return "[elided oversized VS Code Copilot value]"
+		}
+	}
+	return value
 }
 
 // decodeJSONLKeys converts raw JSON key elements to strings.
