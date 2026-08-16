@@ -3,7 +3,6 @@ package parser
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,6 +12,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+var testVSCodeCopilotReplayLimits = vscodeCopilotReplayLimits{
+	normalRecordLimit: 8 * 1024,
+	hardRecordLimit:   16 * 1024,
+}
 
 func TestParseVSCodeCopilotSession(t *testing.T) {
 	tests := []struct {
@@ -729,14 +733,17 @@ func TestReconstructJSONL(t *testing.T) {
 func TestReconstructJSONLOversizedCopilotIssueShape(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "oversized.jsonl")
-	response := oversizedVSCodeCopilotResponse(6200)
-	indexedResponse := strings.Repeat("preserved-", 150000)
+	response := oversizedVSCodeCopilotResponse(
+		testVSCodeCopilotReplayLimits.normalRecordLimit + 512,
+	)
+	indexedResponse := strings.Repeat("preserved-", 150)
 	line := `{"kind":0,"v":{"version":3,"sessionId":"large","creationDate":1770650022790,"requests":[{"requestId":"req1","timestamp":1770650031889,"message":{"text":"Run subagents"},"response":[` + response + `,{"value":` + strconv.Quote(indexedResponse) + `}]}]}}` + "\n"
 	var raw struct {
 		V json.RawMessage `json:"v"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(line), &raw))
-	require.Greater(t, len(raw.V), vscodeCopilotNormalRecordLimit)
+	require.Greater(t, len(raw.V), testVSCodeCopilotReplayLimits.normalRecordLimit)
+	require.Less(t, len([]byte(line)), 20*1024)
 	require.NoError(t, os.WriteFile(path, []byte(line), 0644))
 
 	sess, msgs, err := parseVSCodeCopilotTestSession(t,
@@ -750,7 +757,7 @@ func TestReconstructJSONLOversizedCopilotIssueShape(t *testing.T) {
 	require.Len(t, msgs[1].ToolCalls, 1)
 	assert.Contains(t, msgs[1].Content, indexedResponse)
 
-	data, err := reconstructJSONL(path)
+	data, err := reconstructJSONLWithLimits(path, testVSCodeCopilotReplayLimits)
 	require.NoError(t, err)
 	var state map[string]any
 	require.NoError(t, json.Unmarshal(data, &state))
@@ -761,22 +768,27 @@ func TestReconstructJSONLOversizedCopilotIssueShape(t *testing.T) {
 	assert.Equal(t, "retained input", resultDetails["input"])
 	toolData := responseState["toolSpecificData"].(map[string]any)
 	terminal := toolData["terminalCommandOutput"].(map[string]any)
-	assert.Len(t, terminal["text"], 10840)
+	assert.Len(t, terminal["text"], 1024)
 	assert.Equal(t, float64(200), terminal["lineCount"])
 	assert.Equal(t, float64(0), toolData["terminalCommandState"].(map[string]any)["exitCode"])
 }
 
 func TestReconstructJSONLOversizedKindOneAndTwo(t *testing.T) {
 	dir := t.TempDir()
-	response := oversizedVSCodeCopilotResponse(6200)
+	response := oversizedVSCodeCopilotResponse(
+		testVSCodeCopilotReplayLimits.normalRecordLimit + 512,
+	)
 	lines := []string{
 		`{"kind":0,"v":{"version":3,"sessionId":"mutations","requests":[{"message":{"text":"initial"},"response":[{}]}]}}`,
 		`{"kind":1,"k":["requests",0,"response",0],"v":` + response + `}`,
 		`{"kind":2,"k":["requests"],"v":[{"message":{"text":"pushed"},"response":[` + response + `]}]}`,
 	}
 	path := filepath.Join(dir, "mutations.jsonl")
+	for _, line := range lines {
+		require.Less(t, len(line), 12*1024)
+	}
 	require.NoError(t, os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0644))
-	data, err := reconstructJSONL(path)
+	data, err := reconstructJSONLWithLimits(path, testVSCodeCopilotReplayLimits)
 	require.NoError(t, err)
 	var state struct {
 		Requests []struct {
@@ -798,14 +810,13 @@ func TestReconstructJSONLHardCeiling(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hard-ceiling.jsonl")
 	f, err := os.Create(path)
 	require.NoError(t, err)
-	source := &repeatingBytesReader{
-		remaining: int64(vscodeCopilotHardRecordLimit) + 1,
-	}
-	_, err = io.Copy(f, source)
+	_, err = f.Write([]byte(strings.Repeat(
+		"x", testVSCodeCopilotReplayLimits.hardRecordLimit+1,
+	)))
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, err = reconstructJSONL(path)
+	_, err = reconstructJSONLWithLimits(path, testVSCodeCopilotReplayLimits)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "safety ceiling")
 }
@@ -835,20 +846,21 @@ func TestReconstructJSONLRejectsTrailingJSON(t *testing.T) {
 func TestReconstructJSONLAtNormalLimit(t *testing.T) {
 	prefix := `{"kind":0,"v":{"version":3,"sessionId":"normal-boundary","requests":[{"message":{"text":"boundary"},"response":[{"value":"`
 	suffix := `"}]}]}}` + "\n"
-	value := strings.Repeat("x", vscodeCopilotNormalRecordLimit)
+	value := strings.Repeat("x", testVSCodeCopilotReplayLimits.normalRecordLimit)
 	line := prefix + value + suffix
 	var raw struct {
 		V json.RawMessage `json:"v"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(line), &raw))
-	value = value[:len(value)-(len(raw.V)-vscodeCopilotNormalRecordLimit)]
+	value = value[:len(value)-(len(raw.V)-testVSCodeCopilotReplayLimits.normalRecordLimit)]
 	line = prefix + value + suffix
 	require.NoError(t, json.Unmarshal([]byte(line), &raw))
-	require.Len(t, raw.V, vscodeCopilotNormalRecordLimit)
+	require.Len(t, raw.V, testVSCodeCopilotReplayLimits.normalRecordLimit)
+	require.Less(t, len([]byte(line)), 12*1024)
 
 	path := filepath.Join(t.TempDir(), "normal-boundary.jsonl")
 	require.NoError(t, os.WriteFile(path, []byte(line), 0644))
-	data, err := reconstructJSONL(path)
+	data, err := reconstructJSONLWithLimits(path, testVSCodeCopilotReplayLimits)
 	require.NoError(t, err)
 	var state map[string]any
 	require.NoError(t, json.Unmarshal(data, &state))
@@ -856,39 +868,51 @@ func TestReconstructJSONLAtNormalLimit(t *testing.T) {
 	assert.Len(t, state["requests"].([]any)[0].(map[string]any)["response"].([]any)[0].(map[string]any)["value"], len(value))
 }
 
-type repeatingBytesReader struct {
-	remaining int64
-}
-
-func (r *repeatingBytesReader) Read(p []byte) (int, error) {
-	if r.remaining == 0 {
-		return 0, io.EOF
-	}
-	n := len(p)
-	if int64(n) > r.remaining {
-		n = int(r.remaining)
-	}
-	for i := 0; i < n; i++ {
-		p[i] = 'x'
-	}
-	r.remaining -= int64(n)
-	return n, nil
-}
-
-func oversizedVSCodeCopilotResponse(outputCount int) string {
-	output := strings.Repeat("x", 11028)
+func oversizedVSCodeCopilotResponse(outputSize int) string {
+	output := strings.Repeat("x", outputSize)
 	var b strings.Builder
 	b.WriteString(`{"kind":"toolInvocationSerialized","toolId":"runSubagent","toolCallId":"tc1","subAgentInvocationId":"toolu_1","isComplete":true,"invocationMessage":{"value":"Run subagent","isTrusted":false},"resultDetails":{"input":"retained input","output":[`)
-	for i := range outputCount {
-		if i > 0 {
-			b.WriteByte(',')
-		}
-		fmt.Fprintf(&b, `{"type":"embed","isText":true,"value":%q}`, output)
-	}
+	fmt.Fprintf(&b, `{"type":"embed","isText":true,"value":%q}`, output)
 	b.WriteString(`]},"toolSpecificData":{"kind":"terminal","commandLine":{"original":"go test","toolEdited":"go test ./..."},"cwd":{"path":"/Users/user/project","scheme":"file"},"terminalCommandOutput":{"text":`)
-	b.WriteString(strconv.Quote(strings.Repeat("y", 10840)))
+	b.WriteString(strconv.Quote(strings.Repeat("y", 1024)))
 	b.WriteString(`,"lineCount":200},"terminalCommandState":{"exitCode":0,"timestamp":1786390616101}}}`)
 	return b.String()
+}
+
+func TestVSCodeCopilotReplayLimitsRejectInvalid(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "unused.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte(`{"kind":0,"v":{}}`), 0644))
+	for name, test := range map[string]struct {
+		limits vscodeCopilotReplayLimits
+		want   string
+	}{
+		"zero normal": {
+			limits: vscodeCopilotReplayLimits{hardRecordLimit: 1},
+			want:   "normal replay limit must be positive",
+		},
+		"zero hard": {
+			limits: vscodeCopilotReplayLimits{normalRecordLimit: 1},
+			want:   "hard replay limit must be positive",
+		},
+		"hard below normal": {
+			limits: vscodeCopilotReplayLimits{
+				normalRecordLimit: 2,
+				hardRecordLimit:   1,
+			},
+			want: "hard replay limit must be at least the normal replay limit",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := reconstructJSONLWithLimits(path, test.limits)
+			require.ErrorContains(t, err, test.want)
+		})
+	}
+}
+
+func TestVSCodeCopilotReplayDefaults(t *testing.T) {
+	defaults := vscodeCopilotDefaultReplayLimits()
+	assert.Equal(t, 64<<20, defaults.normalRecordLimit)
+	assert.Equal(t, 128<<20, defaults.hardRecordLimit)
 }
 
 func TestDiscoverVSCodeCopilot_JSONLDedup(t *testing.T) {

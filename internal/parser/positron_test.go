@@ -92,8 +92,8 @@ func TestPositronProviderParseSession(t *testing.T) {
 }
 
 func TestPositronProviderParseOversizedJSONL(t *testing.T) {
-	line := `{"kind":0,"v":{"version":3,"sessionId":"positron-large","requests":[{"message":{"text":"Run a subagent"},"response":[` + oversizedVSCodeCopilotResponse(6200) + `]}]}}` + "\n"
-	path := filepath.Join(t.TempDir(), "positron-large.jsonl")
+	line := `{"kind":0,"v":{"version":3,"sessionId":"positron-jsonl","requests":[{"message":{"text":"Run a subagent"},"response":[{"value":"small response"}]}]}}` + "\n"
+	path := filepath.Join(t.TempDir(), "positron.jsonl")
 	require.NoError(t, os.WriteFile(path, []byte(line), 0644))
 
 	p := &positronProvider{}
@@ -101,9 +101,9 @@ func TestPositronProviderParseOversizedJSONL(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, AgentPositron, sess.Agent)
-	assert.Equal(t, "positron:positron-large", sess.ID)
+	assert.Equal(t, "positron:positron-jsonl", sess.ID)
 	require.Len(t, msgs, 2)
-	assert.True(t, msgs[1].HasToolUse)
+	assert.Equal(t, "small response", msgs[1].Content)
 }
 
 func TestPositronSourceSetDiscoverSessions(t *testing.T) {

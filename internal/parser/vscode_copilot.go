@@ -681,6 +681,18 @@ const (
 	vscodeCopilotHardRecordLimit   = 128 << 20
 )
 
+type vscodeCopilotReplayLimits struct {
+	normalRecordLimit int
+	hardRecordLimit   int
+}
+
+func vscodeCopilotDefaultReplayLimits() vscodeCopilotReplayLimits {
+	return vscodeCopilotReplayLimits{
+		normalRecordLimit: vscodeCopilotNormalRecordLimit,
+		hardRecordLimit:   vscodeCopilotHardRecordLimit,
+	}
+}
+
 // reconstructJSONL reads a VSCode JSONL operation log and
 // replays mutations to reconstruct the full session JSON.
 //
@@ -690,6 +702,25 @@ const (
 //   - kind=2 (Push): append/splice items into array at path k
 //   - kind=3 (Delete): remove property at path k
 func reconstructJSONL(path string) ([]byte, error) {
+	return reconstructJSONLWithLimits(path, vscodeCopilotDefaultReplayLimits())
+}
+
+func reconstructJSONLWithLimits(
+	path string,
+	limits vscodeCopilotReplayLimits,
+) ([]byte, error) {
+	if limits.normalRecordLimit <= 0 {
+		return nil, fmt.Errorf("VS Code Copilot normal replay limit must be positive")
+	}
+	if limits.hardRecordLimit <= 0 {
+		return nil, fmt.Errorf("VS Code Copilot hard replay limit must be positive")
+	}
+	if limits.hardRecordLimit < limits.normalRecordLimit {
+		return nil, fmt.Errorf(
+			"VS Code Copilot hard replay limit must be at least the normal replay limit",
+		)
+	}
+
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -701,7 +732,7 @@ func reconstructJSONL(path string) ([]byte, error) {
 	var state any
 
 	for {
-		record := newVSCodeCopilotRecordReader(reader)
+		record := newVSCodeCopilotRecordReader(reader, limits)
 		var op jsonlOp
 		decoder := json.NewDecoder(record)
 		decodeErr := decoder.Decode(&op)
@@ -730,7 +761,7 @@ func reconstructJSONL(path string) ([]byte, error) {
 
 		switch op.Kind {
 		case 0: // Initial
-			value, err := boundedVSCodeCopilotValue(op.V)
+			value, err := boundedVSCodeCopilotValue(op.V, limits)
 			if err != nil {
 				return nil, fmt.Errorf("jsonl initial: %w", err)
 			}
@@ -745,7 +776,7 @@ func reconstructJSONL(path string) ([]byte, error) {
 				continue
 			}
 			keys := decodeJSONLKeys(op.K)
-			value, err := boundedVSCodeCopilotValue(op.V)
+			value, err := boundedVSCodeCopilotValue(op.V, limits)
 			if err != nil {
 				continue
 			}
@@ -760,7 +791,7 @@ func reconstructJSONL(path string) ([]byte, error) {
 				continue
 			}
 			keys := decodeJSONLKeys(op.K)
-			value, err := boundedVSCodeCopilotValue(op.V)
+			value, err := boundedVSCodeCopilotValue(op.V, limits)
 			if err != nil {
 				continue
 			}
@@ -788,6 +819,7 @@ func reconstructJSONL(path string) ([]byte, error) {
 
 type vscodeCopilotRecordReader struct {
 	source  *bufio.Reader
+	limits  vscodeCopilotReplayLimits
 	chunk   []byte
 	prefix  bool
 	read    int
@@ -796,8 +828,11 @@ type vscodeCopilotRecordReader struct {
 	err     error
 }
 
-func newVSCodeCopilotRecordReader(source *bufio.Reader) *vscodeCopilotRecordReader {
-	return &vscodeCopilotRecordReader{source: source}
+func newVSCodeCopilotRecordReader(
+	source *bufio.Reader,
+	limits vscodeCopilotReplayLimits,
+) *vscodeCopilotRecordReader {
+	return &vscodeCopilotRecordReader{source: source, limits: limits}
 }
 
 func (r *vscodeCopilotRecordReader) Read(p []byte) (int, error) {
@@ -819,11 +854,11 @@ func (r *vscodeCopilotRecordReader) Read(p []byte) (int, error) {
 			return 0, err
 		}
 		r.sawLine = true
-		if r.read+len(chunk) > vscodeCopilotHardRecordLimit {
+		if r.read+len(chunk) > r.limits.hardRecordLimit {
 			r.done = true
 			r.err = fmt.Errorf(
 				"VS Code Copilot JSONL record exceeds %d-byte safety ceiling",
-				vscodeCopilotHardRecordLimit,
+				r.limits.hardRecordLimit,
 			)
 			return 0, r.err
 		}
@@ -852,8 +887,11 @@ func (r *vscodeCopilotRecordReader) drain() error {
 	return err
 }
 
-func boundedVSCodeCopilotValue(raw json.RawMessage) ([]byte, error) {
-	if len(raw) <= vscodeCopilotNormalRecordLimit {
+func boundedVSCodeCopilotValue(
+	raw json.RawMessage,
+	limits vscodeCopilotReplayLimits,
+) ([]byte, error) {
+	if len(raw) <= limits.normalRecordLimit {
 		return raw, nil
 	}
 
