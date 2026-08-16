@@ -1182,6 +1182,11 @@ func TestRepairQueuedSubagentParentsSelfEdgeUpgradeIsIdempotent(t *testing.T) {
 	afterFirst, err := d.GetSessionFull(context.Background(), "child")
 	requireNoError(t, err, "GetSessionFull after first upgrade")
 	require.NotNil(t, afterFirst.LocalModifiedAt)
+	var queued int
+	require.NoError(t, d.Reader().QueryRow(`
+		SELECT (SELECT count(*) FROM subagent_parent_repair_queue) +
+		       (SELECT count(*) FROM subagent_parent_cleanup_queue)`).Scan(&queued))
+	assert.Zero(t, queued, "the second call must exercise the marker-only fast path")
 
 	require.NoError(t, d.RepairQueuedSubagentParents())
 	afterSecond, err := d.GetSessionFull(context.Background(), "child")

@@ -363,7 +363,9 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 			SELECT key, value FROM old_db.pg_sync_state
 			WHERE key = 'pg_push_marker_id'
 			   OR key LIKE 'artifact\_%' ESCAPE '\'
-			   OR key = ?`, subagentParentRepairQueueStateKey); err != nil {
+			   OR key = ?
+			   OR key = ?`, subagentParentRepairQueueStateKey,
+			subagentParentRepairStateUpgradeKey); err != nil {
 			return fmt.Errorf("copying sync state: %w", err)
 		}
 	}

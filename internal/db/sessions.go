@@ -2049,9 +2049,7 @@ func (db *DB) RepairQueuedSubagentParents() error {
 	var pending int
 	err = tx.QueryRow(`
 		SELECT EXISTS(SELECT 1 FROM subagent_parent_repair_queue)
-		    OR EXISTS(SELECT 1 FROM subagent_parent_cleanup_queue)
-		    OR EXISTS(SELECT 1 FROM pg_sync_state WHERE key = ?)`,
-		subagentParentRepairStateUpgradeKey,
+		    OR EXISTS(SELECT 1 FROM subagent_parent_cleanup_queue)`,
 	).Scan(&pending)
 	if err != nil {
 		return fmt.Errorf("checking subagent parent repair queue: %w", err)

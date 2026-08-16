@@ -6095,6 +6095,9 @@ func TestCopySyncStateFrom_OnlyCopiesDurableKeys(t *testing.T) {
 	require.NoError(t, srcDB.QueueSubagentParentCleanupRepairs(
 		[]string{"queued-former-child"},
 	), "seed durable hierarchy cleanup")
+	sourceUpgradeMarker, err := srcDB.GetSyncState(subagentParentRepairStateUpgradeKey)
+	require.NoError(t, err, "GetSyncState source hierarchy upgrade marker")
+	assert.Equal(t, "1", sourceUpgradeMarker)
 	require.NoError(t, srcDB.UpsertSession(Session{
 		ID: "queued-session", Project: "p", Machine: "local", Agent: "claude",
 	}), "seed source queued session")
@@ -6108,12 +6111,16 @@ func TestCopySyncStateFrom_OnlyCopiesDurableKeys(t *testing.T) {
 	require.NoError(t, dstDB.SetSyncState("last_sync_finished_at", "new-finish"),
 		"seed destination finished")
 
-	err := dstDB.CopySyncStateFrom(srcPath)
+	err = dstDB.CopySyncStateFrom(srcPath)
 	require.NoError(t, err, "CopySyncStateFrom")
 
 	gotMarker, err := dstDB.GetSyncState("pg_push_marker_id")
 	require.NoError(t, err, "GetSyncState pg_push_marker_id")
 	assert.Equal(t, "marker-123", gotMarker)
+	destinationUpgradeMarker, err := dstDB.GetSyncState(subagentParentRepairStateUpgradeKey)
+	require.NoError(t, err, "GetSyncState destination hierarchy upgrade marker")
+	assert.Equal(t, sourceUpgradeMarker, destinationUpgradeMarker,
+		"the committed hierarchy upgrade marker must survive an archive rebuild")
 
 	gotOrigin, err := dstDB.GetSyncState("artifact_origin_id")
 	require.NoError(t, err, "GetSyncState artifact_origin_id")
