@@ -92,4 +92,17 @@ describe("formatMessageForCopy", () => {
     expect(result).toContain("-port: 3000");
     expect(result).toContain("+port: 8080");
   });
+
+  it("copies the canonical long path in tool metadata", () => {
+    const path = "/workspace/packages/agentsview/frontend/src/lib/components/content/ToolBlock.svelte";
+    const result = formatMessageForCopy({
+      id: 4, session_id: "s1", ordinal: 4, role: "assistant", content: "",
+      timestamp: "", has_thinking: false, thinking_text: "", has_tool_use: true,
+      content_length: 0, model: "", context_tokens: 0, output_tokens: 0,
+      is_system: false, tool_calls: [{
+        tool_name: "Read", category: "Read", input_json: JSON.stringify({ file_path: path }),
+      }],
+    });
+    expect(result).toContain(`file: ${path}`);
+  });
 });

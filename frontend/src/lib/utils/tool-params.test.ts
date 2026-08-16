@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   truncate,
+  pathDisplayValue,
   extractToolParamMeta,
   generateFallbackContent,
 } from "./tool-params.js";
@@ -16,6 +17,21 @@ describe("truncate", () => {
 
   it("returns exact-length strings unchanged", () => {
     expect(truncate("abc", 3)).toBe("abc");
+  });
+});
+
+describe("pathDisplayValue", () => {
+  it.each([
+    ["/" + "a".repeat(90), "/" + "a".repeat(90)],
+    ["C:\\" + "a".repeat(85), "C:\\" + "a".repeat(85)],
+    ["\\\\server\\share\\" + "a".repeat(75), "\\\\server\\share\\" + "a".repeat(75)],
+  ])("preserves root markers for long paths", (path, expected) => {
+    expect(pathDisplayValue(path)).toBe(expected);
+  });
+
+  it("caps long relative paths", () => {
+    const path = "src/" + "nested/".repeat(30) + "file.ts";
+    expect(pathDisplayValue(path)).toBe(path.slice(0, 100) + "…");
   });
 });
 

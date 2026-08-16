@@ -45,10 +45,7 @@ async function selectSession(
   expect(sessionId).toBeTruthy();
   await expect(item).toBeVisible();
   await item.click({ force: true });
-  await expect(page.locator(LOC.listScroll)).toHaveAttribute(
-    "data-session-id",
-    sessionId!,
-  );
+  await expect(item).toHaveClass(/active/);
   return sessionId!;
 }
 
@@ -85,8 +82,6 @@ test.describe("Mixed content rendering", () => {
 
   test.beforeEach(async ({ page }) => {
     await page.goto("/sessions");
-    const sidebarToggle = page.getByRole("button", { name: "Toggle sidebar" });
-    if (await sidebarToggle.isVisible()) await sidebarToggle.click();
     await expect(
       page.locator(LOC.sessionItem).first(),
     ).toBeVisible({ timeout: 5_000 });
@@ -156,6 +151,7 @@ test.describe("Mixed content rendering", () => {
     await toolBlock.locator(".tool-header").click();
     const outputHeader = toolBlock.locator(".output-header");
     await expect(outputHeader).toBeVisible();
+    await expect(toolBlock.locator(".output-mode")).toHaveCount(0);
     await outputHeader.click();
     const mode = toolBlock.getByRole("radiogroup", { name: "Output format" });
     await expect(mode).toBeVisible();

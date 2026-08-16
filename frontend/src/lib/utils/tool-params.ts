@@ -12,10 +12,18 @@ export function isAbsolutePath(value: string): boolean {
 }
 
 export function pathDisplayValue(value: string): string {
-  if (!isAbsolutePath(value)) return value;
+  if (!isAbsolutePath(value)) return truncate(value, 100);
   if (value.length <= 80) return value;
   const parts = value.split(/[\\/]+/).filter(Boolean);
-  return parts.length > 2 ? parts.slice(-2).join("/") : parts.join("/");
+  const rootParts = value.startsWith("/")
+    ? 0
+    : /^[A-Za-z]:[\\/]/.test(value)
+      ? 1
+      : /^\\\\/.test(value)
+        ? 2
+        : 0;
+  if (parts.length <= rootParts + 2) return value;
+  return parts.slice(-2).join("/");
 }
 
 function pathMetaValue(value: unknown): Pick<MetaTag, "value" | "displayValue"> {

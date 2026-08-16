@@ -1,7 +1,7 @@
 // ABOUTME: Builds a structured one-line summary for a tool call header.
 // ABOUTME: Pure; reads input_json + result_content, conservative on counts.
 import type { ToolCall } from "../api/types.js";
-import { pathDisplayValue } from "./tool-params.js";
+import { isAbsolutePath, pathDisplayValue } from "./tool-params.js";
 
 const MAX = 100;
 
@@ -53,7 +53,24 @@ function fileArg(p: Params): string | null {
 
 export function summarizeToolCallPath(toolCall: ToolCall): string | null {
   const p = parseParams(toolCall);
-  return p ? fileArg(p) : null;
+  if (!p) return null;
+
+  const key = toolCall.category || toolCall.tool_name;
+  const hasPathSummary =
+    key === "Read" ||
+    key === "Edit" ||
+    key === "Write" ||
+    (!["Bash", "Grep", "Glob"].includes(key) &&
+      !asString(p.command) &&
+      !asString(p.cmd) &&
+      !asString(p.pattern) &&
+      !asString(p.query));
+  if (!hasPathSummary) return null;
+
+  const path = fileArg(p);
+  return path && isAbsolutePath(path) && pathDisplayValue(path) !== path
+    ? path
+    : null;
 }
 
 function todoSummary(p: Params): string | null {

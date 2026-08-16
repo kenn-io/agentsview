@@ -1,7 +1,7 @@
 // ABOUTME: Table-driven unit tests for summarizeToolCall.
 import { describe, it, expect } from "vite-plus/test";
 import type { ToolCall } from "../api/types.js";
-import { summarizeToolCall } from "./tool-summary.js";
+import { summarizeToolCall, summarizeToolCallPath } from "./tool-summary.js";
 
 function call(partial: Partial<ToolCall>): ToolCall {
   return { tool_name: "Tool", ...partial };
@@ -469,6 +469,33 @@ describe("summarizeToolCall", () => {
         category: "Other",
         input_json: JSON.stringify({ file_path: path }),
       }))).toBe("content/ToolBlock.svelte");
+    });
+
+    it("does not title a Grep summary from its path argument", () => {
+      expect(summarizeToolCallPath(call({
+        tool_name: "Grep",
+        category: "Grep",
+        input_json: JSON.stringify({ pattern: "TODO", path: "/workspace/packages/agentsview" }),
+      }))).toBeNull();
+    });
+
+    it("caps long relative path summaries", () => {
+      const path = "src/" + "nested/".repeat(30) + "file.ts";
+      expect(summarizeToolCall(call({
+        tool_name: "Read",
+        category: "Read",
+        input_json: JSON.stringify({ file_path: path }),
+      }))).toBe(path.slice(0, 100) + "…");
+    });
+
+    it("preserves short and root-marked absolute paths", () => {
+      for (const path of ["/" + "a".repeat(90), "C:\\" + "a".repeat(85), "\\\\server\\share\\" + "a".repeat(75)]) {
+        expect(summarizeToolCall(call({
+          tool_name: "Read",
+          category: "Read",
+          input_json: JSON.stringify({ file_path: path }),
+        }))).toBe(path);
+      }
     });
   });
 });

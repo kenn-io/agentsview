@@ -423,7 +423,7 @@ func generateMixedContentMessages(
 					ToolName:            "Read",
 					Category:            "Read",
 					ToolUseID:           "tu_mixed_read",
-					InputJSON:           `{"file_path":"/src/main.ts"}`,
+					InputJSON:           `{"file_path":"/workspace/packages/agentsview/frontend/src/lib/components/content/ToolBlock.svelte"}`,
 					ResultContentLength: len(resultContent),
 					ResultContent:       resultContent,
 				},

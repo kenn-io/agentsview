@@ -12,6 +12,7 @@
   import { m } from "../../i18n/index.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { applyHighlight, escapeHTML } from "../../utils/highlight.js";
+  import { highlightCodeFences } from "../../utils/highlight-fences.js";
   import { ChevronRightIcon } from "../../icons.js";
   import { summarizeToolCall, summarizeToolCallPath } from "../../utils/tool-summary.js";
   import { CopyButton, SegmentedControl, type SegmentedControlOption } from "@kenn-io/kit-ui";
@@ -419,7 +420,11 @@
         <span class="tool-label">{label}</span>
       {/if}
       {#if structuredSummary}
-        <span class="tool-preview" title={structuredSummaryTitle ?? undefined}>{structuredSummary}</span>
+        <span class="tool-preview" title={structuredSummaryTitle ?? undefined}>
+          {structuredSummary}{#if structuredSummaryTitle}
+            <span class="kit-sr-only">{structuredSummaryTitle}</span>
+          {/if}
+        </span>
       {:else if collapsed && legacyPreview}
         <span class="tool-preview">{legacyPreview}</span>
       {/if}
@@ -452,7 +457,13 @@
         {#each metaTags as { label: metaLabel, value, displayValue }}
           <span class="meta-tag">
             <span class="meta-label">{metaLabel}:</span>
-            <span title={value} aria-label={value}>{displayValue ?? value}</span>
+            {#if displayValue}
+              <span class="meta-value" title={value}>
+                {displayValue}<span class="kit-sr-only">{value}</span>
+              </span>
+            {:else}
+              <span>{value}</span>
+            {/if}
           </span>
         {/each}
       </div>
@@ -501,13 +512,15 @@
             <span class="tool-preview">{outputPreviewLine}</span>
           {/if}
         </button>
-        <SegmentedControl
-          class="output-mode"
-          options={outputModeOptions}
-          value={outputMode}
-          ariaLabel={m.tool_block_output_mode()}
-          onchange={(next) => (outputMode = next as "raw" | "formatted")}
-        />
+        {#if !outputCollapsed}
+          <SegmentedControl
+            class="output-mode"
+            options={outputModeOptions}
+            value={outputMode}
+            ariaLabel={m.tool_block_output_mode()}
+            onchange={(next) => (outputMode = next as "raw" | "formatted")}
+          />
+        {/if}
         {#if toolCall.result_content}
           <CopyButton
             class="tool-copy output-copy"
@@ -523,7 +536,11 @@
       </div>
       {#if !outputCollapsed}
         {#if outputMode === "formatted"}
-          <div class="tool-content output-content formatted-output">
+          <div
+            class="tool-content output-content formatted-output"
+            use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content: toolCall.result_content }}
+            use:highlightCodeFences={{ q: highlightQuery, current: isCurrentHighlight, content: toolCall.result_content }}
+          >
             {@html renderMarkdown(toolCall.result_content)}
           </div>
         {:else}
@@ -749,13 +766,28 @@
     min-width: 0;
   }
 
-  :global(.output-mode) {
+  :global(.tool-block .output-mode) {
     flex: 0 0 auto;
     margin-left: auto;
   }
 
   .formatted-output :global(pre) {
     white-space: pre-wrap;
+  }
+
+  .tool-preview,
+  .meta-value {
+    position: relative;
+  }
+
+  :global(.tool-preview .kit-sr-only),
+  :global(.meta-tag .kit-sr-only) {
+    left: 0;
+    top: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .output-header:hover {
