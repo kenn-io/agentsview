@@ -479,6 +479,21 @@ describe("summarizeToolCall", () => {
       }))).toBeNull();
     });
 
+    it("does not title special summaries from path-like extra fields", () => {
+      for (const tool_name of ["Task", "Skill", "TodoWrite"]) {
+        expect(summarizeToolCallPath(call({
+          tool_name,
+          category: tool_name === "Task" ? "Task" : undefined,
+          input_json: JSON.stringify({
+            path: "/workspace/packages/agentsview/frontend/src/lib/components/content/ToolBlock.svelte",
+            description: "Inspect the task",
+            skill: "review-branch",
+            todos: [{ content: "Inspect the task", status: "in_progress" }],
+          }),
+        }))).toBeNull();
+      }
+    });
+
     it("caps long relative path summaries", () => {
       const path = "src/" + "nested/".repeat(30) + "file.ts";
       expect(summarizeToolCall(call({

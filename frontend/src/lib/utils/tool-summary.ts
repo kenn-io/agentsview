@@ -51,6 +51,13 @@ function fileArg(p: Params): string | null {
   );
 }
 
+function isSpecialSummaryTool(name: string, category: string | undefined): boolean {
+  return (
+    isTaskCall(name, category) ||
+    ["TodoWrite", "TaskCreate", "TaskUpdate", "Skill", "skill", "ToolSearch"].includes(name)
+  );
+}
+
 export function summarizeToolCallPath(toolCall: ToolCall): string | null {
   const p = parseParams(toolCall);
   if (!p) return null;
@@ -60,7 +67,8 @@ export function summarizeToolCallPath(toolCall: ToolCall): string | null {
     key === "Read" ||
     key === "Edit" ||
     key === "Write" ||
-    (!["Bash", "Grep", "Glob"].includes(key) &&
+    (!isSpecialSummaryTool(toolCall.tool_name, toolCall.category) &&
+      !["Bash", "Grep", "Glob"].includes(key) &&
       !asString(p.command) &&
       !asString(p.cmd) &&
       !asString(p.pattern) &&

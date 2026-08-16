@@ -16,6 +16,11 @@ const BETA_7 = {
   displayRows: 6,
 };
 
+const TOOL_BLOCK_PATH =
+  "/workspace/packages/agentsview/frontend/src/lib/components/content/ToolBlock.svelte";
+const TOOL_VIEWPORTS = [1280, 768] as const;
+const TOOL_THEMES = ["light", "dark"] as const;
+
 function getSessionItem(
   page: Page,
   project: string,
@@ -145,26 +150,41 @@ test.describe("Mixed content rendering", () => {
 
   test("tool output raw/formatted selection preserves the current output", async ({ page }) => {
     const { project, count, displayRows } = BETA_7;
-    const sid = await selectSession(page, project, count);
-    await expectSessionLoaded(page, sid, displayRows);
-    const toolBlock = page.locator(".tool-block").first();
-    await toolBlock.locator(".tool-header").click();
-    const outputHeader = toolBlock.locator(".output-header");
-    await expect(outputHeader).toBeVisible();
-    await expect(toolBlock.locator(".output-mode")).toHaveCount(0);
-    await outputHeader.click();
-    const mode = toolBlock.getByRole("radiogroup", { name: "Output format" });
-    await expect(mode).toBeVisible();
-    await mode.getByRole("radio", { name: "Formatted" }).click();
-    const formattedOutput = toolBlock.locator(".formatted-output");
-    await expect(formattedOutput).toBeVisible();
-    await expect(formattedOutput).toContainText("safe");
-    await expect(formattedOutput.locator("script")).toHaveCount(0);
-    await mode.getByRole("radio", { name: "Raw" }).click();
-    await expect(toolBlock.locator(".formatted-output")).toHaveCount(0);
-    await expect(toolBlock.locator(".output-content")).toContainText(
-      '<script>alert("xss")</script>',
-    );
+    for (const theme of TOOL_THEMES) {
+      await page.evaluate((value) => localStorage.setItem("theme", value), theme);
+      for (const width of TOOL_VIEWPORTS) {
+        await page.setViewportSize({ width, height: 900 });
+        await page.reload();
+        await expect(
+          page.locator(LOC.sessionItem).first(),
+        ).toBeVisible({ timeout: 5_000 });
+        const sid = await selectSession(page, project, count);
+        await expectSessionLoaded(page, sid, displayRows);
+        const pathTool = page.locator(".tool-block").filter({
+          has: page.locator(`.tool-preview[title="${TOOL_BLOCK_PATH}"]`),
+        }).first();
+        const pathPreview = pathTool.locator(".tool-preview");
+        await expect(pathPreview).toHaveAttribute("title", TOOL_BLOCK_PATH);
+        await expect(pathPreview.locator(".kit-sr-only")).toHaveText(TOOL_BLOCK_PATH);
+        await pathTool.locator(".tool-header").click();
+        const outputHeader = pathTool.locator(".output-header");
+        await expect(outputHeader).toBeVisible();
+        await expect(pathTool.locator(".output-mode")).toHaveCount(0);
+        await outputHeader.click();
+        const mode = pathTool.getByRole("radiogroup", { name: "Output format" });
+        await expect(mode).toBeVisible();
+        await mode.getByRole("radio", { name: "Formatted" }).click();
+        const formattedOutput = pathTool.locator(".formatted-output");
+        await expect(formattedOutput).toBeVisible();
+        await expect(formattedOutput).toContainText("safe");
+        await expect(formattedOutput.locator("script")).toHaveCount(0);
+        await mode.getByRole("radio", { name: "Raw" }).click();
+        await expect(pathTool.locator(".formatted-output")).toHaveCount(0);
+        await expect(pathTool.locator(".output-content")).toContainText(
+          '<script>alert("xss")</script>',
+        );
+      }
+    }
   });
 
   test("text selection does not collapse tool block", async ({
