@@ -678,8 +678,7 @@ type jsonlOp struct {
 
 const (
 	vscodeCopilotNormalRecordLimit = 64 << 20
-	vscodeCopilotHardRecordLimit   = 256 << 20
-	vscodeCopilotLargeValueLimit   = 1 << 20
+	vscodeCopilotHardRecordLimit   = 128 << 20
 )
 
 // reconstructJSONL reads a VSCode JSONL operation log and
@@ -702,19 +701,19 @@ func reconstructJSONL(path string) ([]byte, error) {
 	var state any
 
 	for {
-		line, readErr := readVSCodeCopilotRecord(reader)
-		if readErr == io.EOF {
+		record := newVSCodeCopilotRecordReader(reader)
+		var op jsonlOp
+		decodeErr := json.NewDecoder(record).Decode(&op)
+		if !record.sawLine && decodeErr == io.EOF {
 			break
 		}
-		if readErr != nil {
-			return nil, fmt.Errorf("read %s: %w", path, readErr)
+		if record.err != nil {
+			return nil, fmt.Errorf("read %s: %w", path, record.err)
 		}
-		if len(line) == 0 {
-			continue
+		if drainErr := record.drain(); drainErr != nil {
+			return nil, fmt.Errorf("read %s: %w", path, drainErr)
 		}
-
-		var op jsonlOp
-		if err := json.Unmarshal(line, &op); err != nil {
+		if decodeErr != nil {
 			continue
 		}
 
@@ -776,6 +775,72 @@ func reconstructJSONL(path string) ([]byte, error) {
 	return json.Marshal(state)
 }
 
+type vscodeCopilotRecordReader struct {
+	source  *bufio.Reader
+	chunk   []byte
+	prefix  bool
+	read    int
+	sawLine bool
+	done    bool
+	err     error
+}
+
+func newVSCodeCopilotRecordReader(source *bufio.Reader) *vscodeCopilotRecordReader {
+	return &vscodeCopilotRecordReader{source: source}
+}
+
+func (r *vscodeCopilotRecordReader) Read(p []byte) (int, error) {
+	for len(r.chunk) == 0 {
+		if r.done {
+			if r.err != nil {
+				return 0, r.err
+			}
+			return 0, io.EOF
+		}
+
+		chunk, prefix, err := r.source.ReadLine()
+		if err != nil {
+			r.done = true
+			if err == io.EOF {
+				return 0, io.EOF
+			}
+			r.err = err
+			return 0, err
+		}
+		r.sawLine = true
+		if r.read+len(chunk) > vscodeCopilotHardRecordLimit {
+			r.done = true
+			r.err = fmt.Errorf(
+				"VS Code Copilot JSONL record exceeds %d-byte safety ceiling",
+				vscodeCopilotHardRecordLimit,
+			)
+			return 0, r.err
+		}
+		r.read += len(chunk)
+		r.chunk = chunk
+		r.prefix = prefix
+		if len(chunk) == 0 && !prefix {
+			r.done = true
+			return 0, io.EOF
+		}
+	}
+
+	n := copy(p, r.chunk)
+	r.chunk = r.chunk[n:]
+	if len(r.chunk) == 0 && !r.prefix {
+		r.done = true
+	}
+	return n, nil
+}
+
+func (r *vscodeCopilotRecordReader) drain() error {
+	if r.done {
+		return r.err
+	}
+	_, err := io.Copy(io.Discard, r)
+	return err
+}
+
 func readVSCodeCopilotRecord(r *bufio.Reader) ([]byte, error) {
 	var line []byte
 	for {
@@ -790,15 +855,6 @@ func readVSCodeCopilotRecord(r *bufio.Reader) ([]byte, error) {
 			return nil, err
 		}
 		if len(line)+len(chunk) > vscodeCopilotHardRecordLimit {
-			for prefix {
-				_, prefix, err = r.ReadLine()
-				if err != nil {
-					if err == io.EOF {
-						break
-					}
-					return nil, err
-				}
-			}
 			return nil, fmt.Errorf(
 				"VS Code Copilot JSONL record exceeds %d-byte safety ceiling",
 				vscodeCopilotHardRecordLimit,
@@ -820,31 +876,36 @@ func boundedVSCodeCopilotValue(raw json.RawMessage) ([]byte, error) {
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return nil, fmt.Errorf("oversized value: %w", err)
 	}
-	return json.Marshal(elideVSCodeCopilotLargeValues(value, ""))
+	return json.Marshal(elideVSCodeCopilotResultOutput(value))
 }
 
-func elideVSCodeCopilotLargeValues(value any, key string) any {
-	if key == "output" {
-		if _, ok := value.([]any); ok {
-			return []any{}
-		}
-	}
-
+func elideVSCodeCopilotResultOutput(value any) any {
 	switch v := value.(type) {
 	case map[string]any:
 		for childKey, child := range v {
-			v[childKey] = elideVSCodeCopilotLargeValues(child, childKey)
+			if childKey == "resultDetails" {
+				v[childKey] = elideVSCodeCopilotResultDetails(child)
+				continue
+			}
+			v[childKey] = elideVSCodeCopilotResultOutput(child)
 		}
 	case []any:
 		for i, child := range v {
-			v[i] = elideVSCodeCopilotLargeValues(child, key)
-		}
-	case string:
-		if len(v) > vscodeCopilotLargeValueLimit {
-			return "[elided oversized VS Code Copilot value]"
+			v[i] = elideVSCodeCopilotResultOutput(child)
 		}
 	}
 	return value
+}
+
+func elideVSCodeCopilotResultDetails(value any) any {
+	details, ok := value.(map[string]any)
+	if !ok {
+		return value
+	}
+	if _, ok := details["output"].([]any); ok {
+		details["output"] = []any{}
+	}
+	return details
 }
 
 // decodeJSONLKeys converts raw JSON key elements to strings.
