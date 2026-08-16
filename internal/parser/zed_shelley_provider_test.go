@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -182,6 +183,37 @@ func TestZedProviderMalformedSchemaReturnsError(t *testing.T) {
 	_, err = provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing required Zed threads column data")
+}
+
+func TestZedProviderPropagatesParseAndFingerprintContext(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, zedThreadsDBRelPath)
+	threadID := "10431c84-c47b-4e6c-b2df-f9f3b9ad025b"
+	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
+	createZedThreadsDBAt(t, dbPath, []zedTestThread{{
+		id: threadID, summary: "Context", updatedAt: "2026-06-08T09:14:10Z",
+		dataType: "json", data: []byte(`{"messages":[]}`),
+	}})
+	src := multiSessionSource{
+		Root: root, Path: ZedSQLiteVirtualPath(dbPath, threadID),
+		Container: dbPath, MemberID: threadID,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := zedParseContainer(ctx, multiSessionSource{
+		Root: root, Path: dbPath, Container: dbPath,
+	}, ParseRequest{})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+
+	_, err = zedParseMember(ctx, src, ParseRequest{})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+
+	_, err = zedFingerprintSource(ctx, src)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, context.Canceled), "fingerprint error = %v", err)
 }
 
 func TestZedProviderFingerprintIncludesWALSiblings(t *testing.T) {

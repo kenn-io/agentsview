@@ -44,6 +44,10 @@ func ZedSQLiteSessionExists(dbPath, sessionID string) bool {
 // ZedSQLiteSourceMtime resolves the per-thread updated_at timestamp
 // for a virtual Zed SQLite source path.
 func ZedSQLiteSourceMtime(path string) (int64, error) {
+	return ZedSQLiteSourceMtimeContext(context.Background(), path)
+}
+
+func ZedSQLiteSourceMtimeContext(ctx context.Context, path string) (int64, error) {
 	dbPath, sessionID, ok := parseZedVirtualPath(path)
 	if !ok {
 		return 0, fmt.Errorf("not a zed sqlite virtual path: %s", path)
@@ -53,12 +57,12 @@ func ZedSQLiteSourceMtime(path string) (int64, error) {
 		return 0, err
 	}
 	defer db.Close()
-	shape, err := inspectZedSchema(context.Background(), db)
+	shape, err := inspectZedSchema(ctx, db)
 	if err != nil {
 		return 0, err
 	}
 	var updatedAt string
-	err = db.QueryRow(fmt.Sprintf(`SELECT COALESCE(updated_at, '') FROM threads WHERE id = ? %s LIMIT 1`, shape.parentFilter()), sessionID).Scan(&updatedAt)
+	err = db.QueryRowContext(ctx, fmt.Sprintf(`SELECT COALESCE(updated_at, '') FROM threads WHERE id = ? %s LIMIT 1`, shape.parentFilter()), sessionID).Scan(&updatedAt)
 	if err != nil {
 		return 0, fmt.Errorf("loading zed thread mtime %s: %w", sessionID, err)
 	}
@@ -222,15 +226,15 @@ func parseZedThreadFromDB(
 	if err != nil {
 		return nil, wrapZedLoadingError(rawID, err)
 	}
-	return parseZedThreadFromDBWithSchema(conn, dbPath, rawID, machine, dbInfo, shape)
+	return parseZedThreadFromDBWithSchema(context.Background(), conn, dbPath, rawID, machine, dbInfo, shape)
 }
 
 func parseZedThreadFromDBWithSchema(
-	conn *sql.DB, dbPath, rawID, machine string, dbInfo os.FileInfo, shape zedSchema,
+	ctx context.Context, conn *sql.DB, dbPath, rawID, machine string, dbInfo os.FileInfo, shape zedSchema,
 ) (*ParseResult, error) {
 	var row zedThreadRow
 	row.id = rawID
-	err := conn.QueryRow(fmt.Sprintf(
+	err := conn.QueryRowContext(ctx, fmt.Sprintf(
 		`SELECT COALESCE(summary, ''), COALESCE(updated_at, ''), COALESCE(data_type, ''), data, %s, %s, %s FROM threads WHERE id = ?%s`,
 		shape.parentExpr(), shape.folderExpr(), shape.createdExpr(), shape.parentFilter()),
 		rawID,

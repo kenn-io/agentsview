@@ -165,7 +165,8 @@ type multiSessionConfig struct {
 	// parseContainer parses every member of a container into one result each.
 	// The full ParseRequest is passed so a closure can read req.Machine and
 	// per-request hints such as req.Source.ProjectHint.
-	parseContainer func(src multiSessionSource, req ParseRequest) ([]ParseResult, error)
+	parseContainer        func(src multiSessionSource, req ParseRequest) ([]ParseResult, error)
+	parseContainerContext func(context.Context, multiSessionSource, ParseRequest) ([]ParseResult, error)
 	// parseMember parses a single member; a nil result is a clean no-session.
 	parseMember        func(src multiSessionSource, req ParseRequest) (*ParseResult, error)
 	parseMemberContext func(context.Context, multiSessionSource, ParseRequest) (*ParseResult, error)
@@ -277,6 +278,12 @@ func WithContainerParse(
 	return func(c *multiSessionConfig) { c.parseContainer = fn }
 }
 
+func WithContextContainerParse(
+	fn func(context.Context, multiSessionSource, ParseRequest) ([]ParseResult, error),
+) MultiSessionOption {
+	return func(c *multiSessionConfig) { c.parseContainerContext = fn }
+}
+
 func WithContainerParseOutcome(
 	fn func(src multiSessionSource, req ParseRequest) (ParseOutcome, error),
 ) MultiSessionOption {
@@ -335,7 +342,7 @@ func NewMultiSessionContainerSourceSet(
 		panic("multi-session container: missing WithMemberLookup")
 	case cfg.fingerprint == nil && cfg.fingerprintContext == nil:
 		panic("multi-session container: missing WithFingerprint")
-	case cfg.parseContainer == nil && cfg.parseContainerOutcome == nil:
+	case cfg.parseContainer == nil && cfg.parseContainerContext == nil && cfg.parseContainerOutcome == nil:
 		panic("multi-session container: missing WithContainerParse or WithContainerParseOutcome")
 	case cfg.parseMember == nil && cfg.parseMemberContext == nil:
 		panic("multi-session container: missing WithMemberParse")
@@ -779,7 +786,13 @@ func (s multiSessionContainerSourceSet) parse(
 		return outcome, nil
 	}
 
-	results, err := s.cfg.parseContainer(src, req)
+	var results []ParseResult
+	var err error
+	if s.cfg.parseContainerContext != nil {
+		results, err = s.cfg.parseContainerContext(ctx, src, req)
+	} else {
+		results, err = s.cfg.parseContainer(src, req)
+	}
 	if err != nil {
 		return ParseOutcome{}, err
 	}
