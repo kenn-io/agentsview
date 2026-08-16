@@ -213,6 +213,82 @@ func parentOfSession(t *testing.T, d *DB, id string) string {
 	return *s.ParentSessionID
 }
 
+func TestLinkSubagentSessionsRejectsSelfEdges(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		link       func(*DB) error
+		withParent bool
+	}{
+		{
+			name: "global_self_only",
+			link: func(d *DB) error { return d.LinkSubagentSessions() },
+		},
+		{
+			name: "scoped_self_only",
+			link: func(d *DB) error {
+				return d.LinkSubagentSessionsForSessions([]string{"child"})
+			},
+		},
+		{
+			name:       "global_self_and_real",
+			link:       func(d *DB) error { return d.LinkSubagentSessions() },
+			withParent: true,
+		},
+		{
+			name:       "scoped_self_and_real",
+			link:       func(d *DB) error { return d.LinkSubagentSessionsForSessions([]string{"real-parent", "child"}) },
+			withParent: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "child", "p", func(s *Session) {
+				s.MessageCount = 1
+				s.RelationshipType = "direct"
+			})
+			if tc.withParent {
+				insertSession(t, d, "real-parent", "p", func(s *Session) {
+					s.MessageCount = 1
+					s.StartedAt = Ptr("2026-01-01T00:00:00.000Z")
+				})
+			}
+			insertMessages(t, d, spawnEdgeTo("child", "child", "self spawn"))
+			if tc.withParent {
+				insertMessages(t, d, spawnEdgeTo("real-parent", "child", "real spawn"))
+			}
+
+			require.NoError(t, tc.link(d))
+			child, err := d.GetSession(context.Background(), "child")
+			requireNoError(t, err, "GetSession child")
+			if tc.withParent {
+				require.NotNil(t, child.ParentSessionID)
+				assert.Equal(t, "real-parent", *child.ParentSessionID)
+				assert.Equal(t, "subagent", child.RelationshipType)
+			} else {
+				assert.Nil(t, child.ParentSessionID)
+				assert.Equal(t, "direct", child.RelationshipType)
+			}
+		})
+	}
+
+	t.Run("scoped_cleanup_ignores_self_only_edge", func(t *testing.T) {
+		d := testDB(t)
+		insertSession(t, d, "child", "p", func(s *Session) {
+			s.MessageCount = 1
+			s.ParentSessionID = Ptr("deleted-parent")
+			s.RelationshipType = "subagent"
+		})
+		insertMessages(t, d, spawnEdgeTo("child", "child", "self spawn"))
+		require.NoError(t, d.QueueSubagentParentCleanupRepairs([]string{"child"}))
+		require.NoError(t, d.RepairQueuedSubagentParents())
+
+		child, err := d.GetSession(context.Background(), "child")
+		requireNoError(t, err, "GetSession child")
+		assert.Nil(t, child.ParentSessionID)
+		assert.Equal(t, "subagent", child.RelationshipType)
+	})
+}
+
 // TestLinkSubagentSessionsConvergesAcrossIngestionOrder covers the
 // ingestion-order case raised in review. Conflicting spawn edges (reachable
 // through copied or forked history) can arrive in any order, and either one
