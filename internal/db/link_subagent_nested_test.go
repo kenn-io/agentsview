@@ -291,6 +291,58 @@ func TestLinkSubagentSessionsRejectsSelfEdges(t *testing.T) {
 		assert.Nil(t, child.ParentSessionID)
 		assert.Equal(t, "subagent", child.RelationshipType)
 	})
+
+	for _, tc := range []struct {
+		name string
+		link func(*DB) error
+	}{
+		{
+			name: "global_repairs_existing_self_parent",
+			link: func(d *DB) error { return d.LinkSubagentSessions() },
+		},
+		{
+			name: "scoped_repairs_existing_self_parent",
+			link: func(d *DB) error {
+				return d.LinkSubagentSessionsForSessions([]string{"child"})
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "child", "p", func(s *Session) {
+				s.MessageCount = 1
+				s.ParentSessionID = Ptr("child")
+				s.RelationshipType = "subagent"
+			})
+			insertMessages(t, d, spawnEdgeTo("child", "child", "legacy self spawn"))
+
+			require.NoError(t, tc.link(d))
+			child, err := d.GetSession(context.Background(), "child")
+			requireNoError(t, err, "GetSession child")
+			assert.Nil(t, child.ParentSessionID,
+				"existing self parent must be cleared")
+			assert.Equal(t, "subagent", child.RelationshipType,
+				"repair must preserve subagent classification")
+		})
+	}
+
+	t.Run("queued_repairs_existing_self_parent_without_edge", func(t *testing.T) {
+		d := testDB(t)
+		insertSession(t, d, "child", "p", func(s *Session) {
+			s.MessageCount = 1
+			s.ParentSessionID = Ptr("child")
+			s.RelationshipType = "subagent"
+		})
+		require.NoError(t, d.QueueSubagentParentCleanupRepairs([]string{"child"}))
+		require.NoError(t, d.RepairQueuedSubagentParents())
+
+		child, err := d.GetSession(context.Background(), "child")
+		requireNoError(t, err, "GetSession child")
+		assert.Nil(t, child.ParentSessionID,
+			"queued repair must clear an existing self parent without an edge")
+		assert.Equal(t, "subagent", child.RelationshipType,
+			"queued repair must preserve subagent classification")
+	})
 }
 
 // TestLinkSubagentSessionsConvergesAcrossIngestionOrder covers the

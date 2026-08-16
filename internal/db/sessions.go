@@ -1761,10 +1761,9 @@ const linkSubagentSessionsQuery = `
 	WHERE s.id IN (
 		SELECT tc.subagent_session_id FROM tool_calls tc
 		WHERE tc.subagent_session_id IS NOT NULL
-		AND tc.session_id IS NOT tc.subagent_session_id
 	)
 	AND (
-		relationship_type != 'subagent'
+		(relationship_type != 'subagent' AND (` + subagentSpawnerExpr + `) IS NOT NULL)
 		OR parent_session_id IS NOT (` + subagentSpawnerExpr + `
 		)
 	)`
@@ -1834,17 +1833,25 @@ func linkSubagentSessionsForSessionsQuery(ph string) string {
 		SELECT tc.subagent_session_id FROM tool_calls tc
 		WHERE tc.session_id IN ` + ph + `
 		AND tc.subagent_session_id IS NOT NULL
-		AND tc.session_id IS NOT tc.subagent_session_id
 		UNION
 		SELECT tc.subagent_session_id FROM tool_calls tc
 		WHERE tc.subagent_session_id IN ` + ph + `
-		AND tc.session_id IS NOT tc.subagent_session_id
 	)
 	AND (
-		relationship_type != 'subagent'
+		(relationship_type != 'subagent' AND (` + subagentSpawnerExpr + `) IS NOT NULL)
 		OR parent_session_id IS NOT (` + subagentSpawnerExpr + `
 		)
 	)`
+}
+
+func clearSelfSubagentParentForSessionsQuery(ph string) string {
+	return `
+	UPDATE sessions AS s
+	SET parent_session_id = NULL,
+	local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+	WHERE s.id IN ` + ph + `
+	AND s.relationship_type = 'subagent'
+	AND s.parent_session_id IS s.id`
 }
 
 // clearDanglingSubagentParentQuery repairs a captured former child whose LAST spawn
@@ -1905,6 +1912,14 @@ func (db *DB) LinkSubagentSessionsForSessions(ids []string) error {
 		if err != nil {
 			return fmt.Errorf(
 				"linking subagent sessions for %d changed sessions: %w",
+				len(chunk), err,
+			)
+		}
+		if _, err := db.getWriter().Exec(
+			clearSelfSubagentParentForSessionsQuery(ph), args...,
+		); err != nil {
+			return fmt.Errorf(
+				"clearing self-referential subagent parents for %d changed sessions: %w",
 				len(chunk), err,
 			)
 		}
@@ -2045,6 +2060,15 @@ func (db *DB) RepairQueuedSubagentParents() error {
 		); err != nil {
 			return fmt.Errorf(
 				"linking queued subagent parents for %d sessions: %w",
+				len(chunk), err,
+			)
+		}
+		if _, err := tx.Exec(
+			clearSelfSubagentParentForSessionsQuery(ph), args...,
+		); err != nil {
+			return fmt.Errorf(
+				"clearing queued self-referential subagent parents for %d "+
+					"sessions: %w",
 				len(chunk), err,
 			)
 		}
