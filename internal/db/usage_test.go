@@ -449,7 +449,7 @@ func TestTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {
 	assert.NotContains(t, normalized, "user_message_count")
 	assert.NotContains(t, normalized, "session_activity_at")
 	assert.NotContains(t, normalized, " as started_at")
-	assert.NotContains(t, normalized, "u.machine")
+	assert.NotContains(t, normalized, " as machine")
 	assert.Contains(t, normalized, "m.timestamp is not null")
 	assert.Contains(t, normalized, "m.timestamp != ''")
 	assert.Contains(t, normalized, "ue.occurred_at is not null")
@@ -465,19 +465,21 @@ func TestTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {
 	assert.Contains(t, normalized, "ue.occurred_at <= ?")
 	assert.Contains(t, normalized, "julianday(u.ts) >= julianday(?)")
 	assert.Contains(t, normalized, "julianday(u.ts) < julianday(?)")
-	require.Len(t, args, 12)
-	assert.Equal(t, "2024-05-31T10:00:00Z", args[0])
-	assert.Equal(t, "2024-07-01T13:59:59Z", args[1])
-	assert.Equal(t, "2024-05-31T10:00:00Z", args[2])
-	assert.Equal(t, "2024-07-01T13:59:59Z", args[3])
-	assert.Equal(t, "2024-05-31T10:00:00Z", args[4])
-	assert.Equal(t, "2024-07-01T13:59:59Z", args[5])
-	assert.Equal(t, "2024-05-31T10:00:00Z", args[6])
-	assert.Equal(t, "2024-07-01T13:59:59Z", args[7])
-	assert.Equal(t, "2024-06-01T04:00:00Z", args[8])
-	assert.Equal(t, "2024-06-01", args[9])
-	assert.Equal(t, "2024-07-01T04:00:00Z", args[10])
-	assert.Equal(t, "2024-06-30", args[11])
+	padded := []any{"2024-05-31T10:00:00Z", "2024-07-01T13:59:59Z"}
+	window := []any{
+		"2024-06-01T04:00:00Z", "2024-06-01",
+		"2024-07-01T04:00:00Z", "2024-06-30",
+	}
+	var want []any
+	want = append(want, padded...) // duplicate-request pass
+	want = append(want, padded...) // ranked rows: m.timestamp
+	want = append(want, padded...) // ranked rows: s.started_at
+	want = append(want, window...) // ranked rows: exact window
+	for range 4 {                  // row source branches
+		want = append(want, padded...)
+	}
+	want = append(want, window...) // survivors: exact window
+	assert.Equal(t, want, args)
 }
 
 func TestUsageEventsReplaceAndList(t *testing.T) {
@@ -1776,32 +1778,77 @@ func TestGetDailyUsagePrefersTimestampedEqualClaudeSnapshot(t *testing.T) {
 	assert.Equal(t, 100, result.Totals.OutputTokens)
 }
 
+// seedSnapshotTiePair stores one Claude request (msg-tie/req-tie) streamed
+// into two sessions with equal output tokens: z-snapshot carries the larger
+// input count at zTimestamp and a-snapshot the smaller one at aTimestamp.
+func seedSnapshotTiePair(t *testing.T, d *DB, zTimestamp, aTimestamp string) {
+	t.Helper()
+	for _, id := range []string{"z-snapshot", "a-snapshot"} {
+		insertSession(t, d, id, "proj", func(s *Session) {
+			s.Agent = "claude"
+			s.StartedAt = new("2026-05-20T10:00:00Z")
+		})
+	}
+	insertMessages(t, d,
+		Message{
+			SessionID: "z-snapshot", Ordinal: 0, Role: "assistant",
+			Timestamp: zTimestamp, Model: "claude-opus-4-6",
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":900,"output_tokens":100}`),
+			OutputTokens: 100, HasOutputTokens: true,
+			ClaudeMessageID: "msg-tie", ClaudeRequestID: "req-tie",
+		},
+		Message{
+			SessionID: "a-snapshot", Ordinal: 0, Role: "assistant",
+			Timestamp: aTimestamp, Model: "claude-opus-4-6",
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":10,"output_tokens":100}`),
+			OutputTokens: 100, HasOutputTokens: true,
+			ClaudeMessageID: "msg-tie", ClaudeRequestID: "req-tie",
+		},
+	)
+}
+
+// querySnapshotRankedRows runs the snapshot ranking over the real usage row
+// source for f and returns the surviving rows as
+// (session_id, snapshot_attribution_session_id, token_usage) triples.
+func querySnapshotRankedRows(
+	t *testing.T, d *DB, f UsageFilter,
+) [][3]string {
+	t.Helper()
+	bounds := usageBoundsForFilter(f)
+	rowsSQL, rowsArgs := usageRowsSQLForBounds(
+		usageSnapshotInputFilter(f), bounds)
+	ranked, args := snapshotRankedDailyUsageRowsSQL(
+		rowsSQL, rowsArgs, f, bounds)
+	rows, err := d.getReader().Query(`
+		SELECT session_id, snapshot_attribution_session_id, token_usage
+		FROM (`+ranked+`)
+		ORDER BY session_id`, args...)
+	require.NoError(t, err)
+	defer rows.Close()
+	var out [][3]string
+	for rows.Next() {
+		var row [3]string
+		require.NoError(t, rows.Scan(&row[0], &row[1], &row[2]))
+		out = append(out, row)
+	}
+	require.NoError(t, rows.Err())
+	return out
+}
+
 func TestSnapshotRankedDailyUsageRowsPrefersLatestEqualOutput(t *testing.T) {
 	d := testDB(t)
-	rowsSQL := `
-		SELECT 'z-snapshot' AS session_id, 0 AS message_ordinal,
-			'message' AS usage_source, '2026-05-20T10:31:00Z' AS ts,
-			'{"input_tokens":900,"output_tokens":100}' AS token_usage,
-			0 AS output_tokens, 'msg-tie' AS claude_message_id,
-			'req-tie' AS claude_request_id
-		UNION ALL
-		SELECT 'a-snapshot', 0, 'message', '2026-05-20T10:30:00Z',
-			'{"input_tokens":10,"output_tokens":100}', 0,
-			'msg-tie', 'req-tie'`
-	ranked, args := snapshotRankedDailyUsageRowsSQL(rowsSQL, UsageFilter{})
-	var sessionID, attributionSessionID, tokenJSON string
-	err := d.getReader().QueryRow(`
-		SELECT session_id, snapshot_attribution_session_id, token_usage
-		FROM (`+ranked+`)`, args...).Scan(
-		&sessionID, &attributionSessionID, &tokenJSON)
-	require.NoError(t, err)
-	assert.Equal(t, "z-snapshot", sessionID)
-	assert.Equal(t, "a-snapshot", attributionSessionID)
-	assert.JSONEq(t, `{"input_tokens":900,"output_tokens":100}`, tokenJSON)
+	seedSnapshotTiePair(t, d,
+		"2026-05-20T10:31:00Z", "2026-05-20T10:30:00Z")
+	got := querySnapshotRankedRows(t, d, UsageFilter{})
+	require.Len(t, got, 1)
+	assert.Equal(t, "z-snapshot", got[0][0])
+	assert.Equal(t, "a-snapshot", got[0][1])
+	assert.JSONEq(t, `{"input_tokens":900,"output_tokens":100}`, got[0][2])
 }
 
 func TestSnapshotRankedDailyUsageRowsNormalizesRFC3339Timestamps(t *testing.T) {
-	d := testDB(t)
 	tests := []struct {
 		name         string
 		zTimestamp   string
@@ -1829,32 +1876,70 @@ func TestSnapshotRankedDailyUsageRowsNormalizesRFC3339Timestamps(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rowsSQL := `
-				SELECT 'z-snapshot' AS session_id, 0 AS message_ordinal,
-					'message' AS usage_source, ? AS ts,
-					'{"input_tokens":900,"output_tokens":100}' AS token_usage,
-					0 AS output_tokens, 'msg-tie' AS claude_message_id,
-					'req-tie' AS claude_request_id
-				UNION ALL
-				SELECT 'a-snapshot', 0, 'message', ?,
-					'{"input_tokens":10,"output_tokens":100}', 0,
-					'msg-tie', 'req-tie'`
-			ranked, rankArgs := snapshotRankedDailyUsageRowsSQL(
-				rowsSQL, UsageFilter{})
-			args := append([]any{tt.zTimestamp, tt.aTimestamp}, rankArgs...)
-			var sessionID, attributionSessionID, tokenJSON string
-			err := d.getReader().QueryRow(`
-				SELECT session_id, snapshot_attribution_session_id, token_usage
-				FROM (`+ranked+`)`, args...).Scan(
-				&sessionID, &attributionSessionID, &tokenJSON)
-			require.NoError(t, err)
-			assert.Equal(t, tt.wantSession, sessionID)
-			assert.Equal(t, tt.wantAttribut, attributionSessionID)
+			d := testDB(t)
+			seedSnapshotTiePair(t, d, tt.zTimestamp, tt.aTimestamp)
+			got := querySnapshotRankedRows(t, d, UsageFilter{})
+			require.Len(t, got, 1)
+			assert.Equal(t, tt.wantSession, got[0][0])
+			assert.Equal(t, tt.wantAttribut, got[0][1])
 			assert.JSONEq(t, fmt.Sprintf(
 				`{"input_tokens":%d,"output_tokens":100}`, tt.wantInput),
-				tokenJSON)
+				got[0][2])
 		})
 	}
+}
+
+// Only duplicated Claude requests pass through the ranking; every other row
+// survives untouched, attributed to its own session, including rows outside
+// the window that the ranking must not drag back in.
+func TestSnapshotRankedDailyUsageRowsRanksOnlyDuplicatedRequests(t *testing.T) {
+	d := testDB(t)
+	seedSnapshotTiePair(t, d,
+		"2026-05-20T10:31:00Z", "2026-05-20T10:30:00Z")
+	insertSession(t, d, "solo", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = new("2026-05-20T10:00:00Z")
+	})
+	insertMessages(t, d,
+		Message{
+			SessionID: "solo", Ordinal: 0, Role: "assistant",
+			Timestamp: "2026-05-20T10:32:00Z", Model: "claude-opus-4-6",
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":5,"output_tokens":7}`),
+			OutputTokens: 7, HasOutputTokens: true,
+			ClaudeMessageID: "msg-solo", ClaudeRequestID: "req-solo",
+		},
+		Message{
+			SessionID: "solo", Ordinal: 1, Role: "assistant",
+			Timestamp: "2026-05-20T10:33:00Z", Model: "claude-opus-4-6",
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":6,"output_tokens":8}`),
+			OutputTokens: 8, HasOutputTokens: true,
+		},
+		Message{
+			SessionID: "solo", Ordinal: 2, Role: "assistant",
+			Timestamp: "2026-05-21T10:00:00Z", Model: "claude-opus-4-6",
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":1,"output_tokens":200}`),
+			OutputTokens: 200, HasOutputTokens: true,
+			ClaudeMessageID: "msg-tie", ClaudeRequestID: "req-tie",
+		},
+	)
+
+	got := querySnapshotRankedRows(t, d, UsageFilter{})
+	require.Equal(t, [][3]string{
+		{"solo", "solo", `{"input_tokens":5,"output_tokens":7}`},
+		{"solo", "solo", `{"input_tokens":6,"output_tokens":8}`},
+		{"solo", "a-snapshot", `{"input_tokens":1,"output_tokens":200}`},
+	}, got)
+
+	got = querySnapshotRankedRows(t, d, UsageFilter{
+		From: "2026-05-20", To: "2026-05-20", Timezone: "UTC"})
+	require.Equal(t, [][3]string{
+		{"solo", "solo", `{"input_tokens":5,"output_tokens":7}`},
+		{"solo", "solo", `{"input_tokens":6,"output_tokens":8}`},
+		{"z-snapshot", "a-snapshot", `{"input_tokens":900,"output_tokens":100}`},
+	}, got)
 }
 
 func TestGetDailyUsage_DedupKeyVariants(t *testing.T) {

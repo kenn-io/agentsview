@@ -790,28 +790,24 @@ func dailyUsageRowSelectFromRows(rowsSQL string) string {
 	return dailyUsageRowSelectFromRowsWithMachine(rowsSQL, false)
 }
 
+// dailyUsageRowColumns names the per-row sources the daily usage select
+// reads: the session a row is attributed to, its billed web-search count,
+// and the session metadata reported alongside it.
+type dailyUsageRowColumns struct {
+	session   string
+	webSearch string
+	project   string
+	agent     string
+	machine   string
+}
+
 func dailyUsageRowSelectFromRowsWithMachine(
 	rowsSQL string, includeMachine bool,
 ) string {
-	return dailyUsageRowSelectFromRowsWithSession(
-		rowsSQL, includeMachine, "u.session_id", false)
-}
-
-func dailyUsageRowSelectFromSnapshotRowsWithMachine(
-	rowsSQL string, includeMachine bool,
-) string {
-	return dailyUsageRowSelectFromRowsWithSession(
-		rowsSQL, includeMachine, "u.snapshot_attribution_session_id", true)
-}
-
-func dailyUsageRowSelectFromRowsWithSession(
-	rowsSQL string, includeMachine bool, sessionColumn string,
-	reloadSessionMetadata bool,
-) string {
-	projectColumn := "u.project"
-	agentColumn := "u.agent"
-	machineColumnExpr := "u.machine"
-	webSearchColumn := `CASE
+	return dailyUsageRowSelectFromRowsWithColumns(
+		rowsSQL, includeMachine, dailyUsageRowColumns{
+			session: "u.session_id",
+			webSearch: `CASE
 		WHEN u.usage_source = 'message' THEN MAX(COALESCE(CASE
 			WHEN json_valid(u.token_usage) THEN CAST(json_extract(
 				u.token_usage, '$.server_tool_use.web_search_requests'
@@ -819,30 +815,46 @@ func dailyUsageRowSelectFromRowsWithSession(
 			ELSE agentsview_usage_web_search_requests(u.token_usage)
 		END, 0), 0)
 		ELSE 0
-	END`
-	metadataJoin := ""
-	if reloadSessionMetadata {
-		metadataJoin = `
-LEFT JOIN sessions attributed
-	ON attributed.id = u.snapshot_attribution_session_id`
-		projectColumn = "CASE WHEN attributed.id IS NULL THEN u.project ELSE attributed.project END"
-		agentColumn = "CASE WHEN attributed.id IS NULL THEN u.agent ELSE attributed.agent END"
-		machineColumnExpr = "CASE WHEN attributed.id IS NULL THEN u.machine ELSE attributed.machine END"
-		webSearchColumn = "u.snapshot_web_search_requests"
-	}
+	END`,
+			project: "u.project",
+			agent:   "u.agent",
+			machine: "u.machine",
+		})
+}
+
+// dailyUsageRowSelectFromSnapshotRowsWithMachine reads rows produced by
+// snapshotRankedDailyUsageRowsSQL, which already carry the attributed
+// session, its metadata, and the partition-wide web-search count (NULL
+// for rows that were not ranked, which the scanner parses in Go).
+func dailyUsageRowSelectFromSnapshotRowsWithMachine(
+	rowsSQL string, includeMachine bool,
+) string {
+	return dailyUsageRowSelectFromRowsWithColumns(
+		rowsSQL, includeMachine, dailyUsageRowColumns{
+			session:   "u.snapshot_attribution_session_id",
+			webSearch: "u.snapshot_web_search_requests",
+			project:   "u.snapshot_project",
+			agent:     "u.snapshot_agent",
+			machine:   "u.snapshot_machine",
+		})
+}
+
+func dailyUsageRowSelectFromRowsWithColumns(
+	rowsSQL string, includeMachine bool, cols dailyUsageRowColumns,
+) string {
 	machineColumn := ""
 	if includeMachine {
-		machineColumn = ",\n\t" + machineColumnExpr
+		machineColumn = ",\n\t" + cols.machine + " AS machine"
 	}
 	return `
 SELECT
-	` + sessionColumn + `,
+	` + cols.session + `,
 	u.message_ordinal,
 	u.usage_source,
 	u.ts,
 	u.model,
 	u.token_usage,
-	` + webSearchColumn + ` AS web_search_requests,
+	` + cols.webSearch + ` AS web_search_requests,
 	u.input_tokens,
 		u.output_tokens,
 		u.cache_creation_input_tokens,
@@ -854,9 +866,9 @@ SELECT
 	u.claude_request_id,
 	u.source_uuid,
 	u.usage_dedup_key,
-	` + projectColumn + ` AS project,
-	` + agentColumn + ` AS agent` + machineColumn + `
-FROM (` + rowsSQL + `) u` + metadataJoin + `
+	` + cols.project + ` AS project,
+	` + cols.agent + ` AS agent` + machineColumn + `
+FROM (` + rowsSQL + `) u
 WHERE 1=1`
 }
 
@@ -1011,10 +1023,11 @@ func usageRowQuery(f UsageFilter) (string, []any) {
 }
 
 func topSessionsUsageRowQuery(f UsageFilter) (string, []any) {
-	rowsSQL, args := usageRowsSQLForBounds(
-		usageSnapshotInputFilter(f), usageBoundsForFilter(f))
-	rowsSQL, snapshotArgs := snapshotRankedDailyUsageRowsSQL(rowsSQL, f)
-	args = append(args, snapshotArgs...)
+	bounds := usageBoundsForFilter(f)
+	rowsSQL, rowsArgs := usageRowsSQLForBounds(
+		usageSnapshotInputFilter(f), bounds)
+	rowsSQL, args := snapshotRankedDailyUsageRowsSQL(
+		rowsSQL, rowsArgs, f, bounds)
 	return dailyUsageRowSelectFromSnapshotRowsWithMachine(rowsSQL, false), args
 }
 
@@ -1129,12 +1142,121 @@ func exactUsageUTCWindow(f UsageFilter) usageBounds {
 	return out
 }
 
-// snapshotRankedDailyUsageRowsSQL keeps the greatest output snapshot and the
-// maximum billed web-search count for each Claude request before rows cross
-// into Go. Rows without complete Claude request identity bypass the window.
+// snapshotRankedDailyUsageRowsSQL wraps rowsSQL so that each Claude request
+// (claude_message_id, claude_request_id) contributes one row: the greatest
+// output snapshot, attributed to the session that streamed the request
+// first, carrying the maximum billed web-search count across its snapshots.
+// Rows without complete Claude request identity bypass the ranking.
+//
+// Only requests that appear more than once are ranked. usage_snapshot_dups
+// finds them with an index-only pass over messages, usage_snapshot_ranked
+// runs the window functions over just those rows, and every other row
+// passes through with itself as attribution and a NULL web-search count that
+// the scanner parses from token_usage in Go. Ranking every row through the
+// window functions cost two to five times the underlying scan, because
+// SQLite sorts and materializes the full-width rows once per window.
+//
+// rowsArgs are the placeholders of rowsSQL; the returned args carry them in
+// position with the ranking's own placeholders. Callers finish with
+// dailyUsageRowSelectFromSnapshotRowsWithMachine.
 func snapshotRankedDailyUsageRowsSQL(
-	rowsSQL string, f UsageFilter,
+	rowsSQL string, rowsArgs []any, f UsageFilter, b usageBounds,
 ) (string, []any) {
+	windowWhere, windowArgs := usageSnapshotWindowWhere(f)
+	dupsSQL, dupsArgs := usageSnapshotDuplicateRequestsSQL(b)
+	claudeRowsSQL, claudeArgs := usageSnapshotClaudeMessageRowsSQL(b)
+	filterWhere := "1=1"
+	var filterArgs []any
+	filterWhere, filterArgs = f.appendUsageSourceFilterClauses(
+		filterWhere, filterArgs, "survivor.model")
+	filterWhere, filterArgs = f.appendUsageSessionFilterClauses(
+		filterWhere, filterArgs)
+	survivorFilter := ""
+	if filterWhere != "1=1" {
+		survivorFilter = `
+		LEFT JOIN sessions s
+			ON s.id = survivor.snapshot_attribution_session_id
+		WHERE survivor.snapshot_attribution_session_id = ''
+			OR (` + filterWhere + `)`
+	}
+	outputTokens := fmt.Sprintf(`MIN(MAX(COALESCE(CASE
+						WHEN json_valid(u.token_usage) THEN CAST(json_extract(
+							u.token_usage, '$.output_tokens') AS INTEGER)
+						ELSE agentsview_usage_output_tokens(u.token_usage)
+					END, 0), 0), %d)`, MaxPlausibleTokens)
+	webSearchRequests := `MAX(COALESCE(CASE
+					WHEN json_valid(u.token_usage) THEN CAST(json_extract(
+						u.token_usage, '$.server_tool_use.web_search_requests'
+					) AS INTEGER)
+					ELSE agentsview_usage_web_search_requests(u.token_usage)
+				END, 0), 0)`
+
+	args := make([]any, 0,
+		len(dupsArgs)+len(claudeArgs)+2*len(windowArgs)+
+			len(rowsArgs)+len(filterArgs))
+	args = append(args, dupsArgs...)
+	args = append(args, claudeArgs...)
+	args = append(args, windowArgs...)
+	args = append(args, rowsArgs...)
+	args = append(args, windowArgs...)
+	args = append(args, filterArgs...)
+	return fmt.Sprintf(`
+		WITH usage_snapshot_dups AS (%[1]s),
+		usage_snapshot_ranked AS (
+			SELECT u.session_id, u.message_ordinal,
+				FIRST_VALUE(u.session_id) OVER attribution
+					AS snapshot_attribution_session_id,
+				FIRST_VALUE(u.project) OVER attribution AS snapshot_project,
+				FIRST_VALUE(u.agent) OVER attribution AS snapshot_agent,
+				FIRST_VALUE(u.machine) OVER attribution AS snapshot_machine,
+				ROW_NUMBER() OVER ranking AS snapshot_rank,
+				MAX(%[5]s) OVER (
+					ranking ROWS BETWEEN UNBOUNDED PRECEDING
+						AND UNBOUNDED FOLLOWING
+				) AS snapshot_web_search_requests
+			FROM (%[2]s) u
+			WHERE %[3]s
+			WINDOW attribution AS (
+				PARTITION BY u.claude_message_id, u.claude_request_id
+				ORDER BY julianday(u.ts) IS NULL ASC,
+					julianday(u.ts) ASC, u.session_id ASC,
+					COALESCE(u.message_ordinal, -1) ASC,
+					CASE WHEN julianday(u.ts) IS NULL THEN u.ts ELSE '' END ASC
+			), ranking AS (
+				PARTITION BY u.claude_message_id, u.claude_request_id
+				ORDER BY %[4]s DESC,
+					julianday(u.ts) IS NULL ASC, julianday(u.ts) DESC,
+					u.session_id DESC, COALESCE(u.message_ordinal, -1) DESC,
+					CASE WHEN julianday(u.ts) IS NULL THEN u.ts ELSE '' END DESC
+			)
+		),
+		usage_snapshot_survivors AS (
+			SELECT u.*,
+				COALESCE(r.snapshot_attribution_session_id, u.session_id)
+					AS snapshot_attribution_session_id,
+				COALESCE(r.snapshot_project, u.project) AS snapshot_project,
+				COALESCE(r.snapshot_agent, u.agent) AS snapshot_agent,
+				COALESCE(r.snapshot_machine, u.machine) AS snapshot_machine,
+				r.snapshot_web_search_requests
+			FROM (%[6]s) u
+			LEFT JOIN usage_snapshot_ranked r
+				ON u.usage_source = 'message'
+				AND r.session_id = u.session_id
+				AND r.message_ordinal = u.message_ordinal
+			WHERE %[3]s
+				AND (r.snapshot_rank IS NULL OR r.snapshot_rank = 1)
+		)
+		SELECT survivor.*
+		FROM usage_snapshot_survivors survivor%[7]s`,
+		dupsSQL, claudeRowsSQL, windowWhere, outputTokens,
+		webSearchRequests, rowsSQL, survivorFilter), args
+}
+
+// usageSnapshotWindowWhere restricts rows to the filter's exact UTC window
+// so snapshots outside the requested dates neither win a partition nor
+// reach the scanner. Rows whose timestamp julianday cannot parse fall back
+// to a date-prefix comparison, mirroring the scanner's local-date filter.
+func usageSnapshotWindowWhere(f UsageFilter) (string, []any) {
 	window := exactUsageUTCWindow(f)
 	where := "1=1"
 	var args []any
@@ -1154,78 +1276,79 @@ func snapshotRankedDailyUsageRowsSQL(
 			)`
 		args = append(args, window.to, f.To)
 	}
-	filterWhere := "1=1"
-	filterWhere, args = f.appendUsageSourceFilterClauses(
-		filterWhere, args, "survivor.model")
-	filterWhere, args = f.appendUsageSessionFilterClauses(filterWhere, args)
-	outputTokens := fmt.Sprintf(`CASE
-				WHEN u.usage_source = 'message'
-					THEN MIN(MAX(COALESCE(CASE
-						WHEN json_valid(u.token_usage) THEN CAST(json_extract(
-							u.token_usage, '$.output_tokens') AS INTEGER)
-						ELSE agentsview_usage_output_tokens(u.token_usage)
-					END, 0), 0), %[1]d)
-				WHEN u.usage_source = 'session'
-					THEN MAX(u.output_tokens, 0)
-				ELSE MIN(MAX(u.output_tokens, 0), %[1]d)
-			END`, MaxPlausibleTokens)
-	webSearchRequests := `CASE
-				WHEN u.usage_source = 'message' THEN MAX(COALESCE(CASE
-					WHEN json_valid(u.token_usage) THEN CAST(json_extract(
-						u.token_usage, '$.server_tool_use.web_search_requests'
-					) AS INTEGER)
-					ELSE agentsview_usage_web_search_requests(u.token_usage)
-				END, 0), 0)
-				ELSE 0
-			END`
-	return fmt.Sprintf(`
-		WITH usage_snapshot_window AS (
-			SELECT u.*, %[1]s AS snapshot_output_tokens,
-				%[5]s AS snapshot_row_web_search_requests
-			FROM (%[2]s) u
-			WHERE %[3]s
-		),
-		usage_snapshot_ranked AS (
-			SELECT usage_snapshot_window.*,
-				FIRST_VALUE(session_id) OVER (
-					PARTITION BY claude_message_id, claude_request_id
-					ORDER BY julianday(ts) IS NULL ASC,
-						julianday(ts) ASC, session_id ASC,
-						COALESCE(message_ordinal, -1) ASC,
-						CASE WHEN julianday(ts) IS NULL THEN ts ELSE '' END ASC
-				) AS snapshot_attribution_session_id,
-				ROW_NUMBER() OVER (
-					PARTITION BY claude_message_id, claude_request_id
-					ORDER BY snapshot_output_tokens DESC,
-						julianday(ts) IS NULL ASC, julianday(ts) DESC,
-						session_id DESC, COALESCE(message_ordinal, -1) DESC,
-						CASE WHEN julianday(ts) IS NULL THEN ts ELSE '' END DESC
-				) AS snapshot_rank,
-				MAX(snapshot_row_web_search_requests) OVER (
-					PARTITION BY claude_message_id, claude_request_id
-				) AS snapshot_web_search_requests
-			FROM usage_snapshot_window
-			WHERE claude_message_id != '' AND claude_request_id != ''
-		),
-		usage_snapshot_survivors AS (
-			SELECT *
-			FROM usage_snapshot_ranked
-			WHERE snapshot_rank = 1
-			UNION ALL
-			SELECT usage_snapshot_window.*,
-				session_id AS snapshot_attribution_session_id,
-				1 AS snapshot_rank,
-				snapshot_row_web_search_requests AS snapshot_web_search_requests
-			FROM usage_snapshot_window
-			WHERE claude_message_id = '' OR claude_request_id = ''
-		)
-		SELECT survivor.*
-		FROM usage_snapshot_survivors survivor
-		LEFT JOIN sessions s
-			ON s.id = survivor.snapshot_attribution_session_id
-		WHERE survivor.snapshot_attribution_session_id = ''
-			OR (%[4]s)`,
-		outputTokens, rowsSQL, where, filterWhere, webSearchRequests), args
+	return where, args
+}
+
+// usageSnapshotClaudeIdentity selects the message rows that carry complete
+// Claude request identity and could enter the usage row source.
+const usageSnapshotClaudeIdentity = usageMessageSourceEligibility + `
+	AND m.claude_message_id != ''
+	AND m.claude_request_id != ''`
+
+// usageSnapshotDuplicateRequestsSQL lists the Claude requests that appear on
+// more than one eligible message. It over-approximates the ranked set (it
+// ignores session eligibility and the fallback session bounds), which only
+// sends extra rows through the ranking; the ranking itself applies the exact
+// row-source predicates. Bounded filters seek idx_messages_usage_covering
+// per timestamp branch so the pass stays proportional to the window;
+// unbounded filters read idx_messages_claude_snapshot in partition order.
+func usageSnapshotDuplicateRequestsSQL(b usageBounds) (string, []any) {
+	const key = `m.claude_message_id, m.claude_request_id`
+	if !b.bounded() {
+		return `
+			SELECT ` + key + `
+			FROM messages m
+			WHERE ` + usageSnapshotClaudeIdentity + `
+			GROUP BY ` + key + `
+			HAVING COUNT(*) > 1`, nil
+	}
+	timestampWhere, args := appendUsageColumnBounds(
+		usageSnapshotClaudeIdentity, "m.timestamp", b, nil)
+	return `
+			SELECT claude_message_id, claude_request_id
+			FROM (
+				SELECT ` + key + `
+				FROM messages m
+				WHERE ` + timestampWhere + `
+				UNION ALL
+				SELECT ` + key + `
+				FROM messages m
+				WHERE ` + usageSnapshotClaudeIdentity + `
+					AND m.timestamp IS NULL
+				UNION ALL
+				SELECT ` + key + `
+				FROM messages m
+				WHERE ` + usageSnapshotClaudeIdentity + `
+					AND m.timestamp = ''
+			)
+			GROUP BY claude_message_id, claude_request_id
+			HAVING COUNT(*) > 1`, args
+}
+
+// usageSnapshotClaudeMessageRowsSQL produces the row-source shape for the
+// messages of duplicated Claude requests, using the same eligibility and
+// bounds as usageRowsSQLForBounds's message branches so the ranked rows are
+// exactly the row source's Claude rows for those requests.
+func usageSnapshotClaudeMessageRowsSQL(b usageBounds) (string, []any) {
+	where := usageMessageEligibility + `
+	AND m.claude_message_id != ''
+	AND m.claude_request_id != ''
+	AND (m.claude_message_id, m.claude_request_id) IN (
+		SELECT claude_message_id, claude_request_id FROM usage_snapshot_dups
+	)`
+	var args []any
+	if b.bounded() {
+		timestampWhere, timestampArgs := appendUsageColumnBounds(
+			"m.timestamp IS NOT NULL AND m.timestamp != ''",
+			"m.timestamp", b, nil)
+		fallbackWhere, fallbackArgs := appendUsageColumnBounds(
+			"NULLIF(m.timestamp, '') IS NULL", "s.started_at", b, nil)
+		where += `
+	AND ((` + timestampWhere + `) OR (` + fallbackWhere + `))`
+		args = append(args, timestampArgs...)
+		args = append(args, fallbackArgs...)
+	}
+	return fmt.Sprintf(dailyUsageMessageRowsSQLTemplate, "messages", where), args
 }
 
 func scanUsageRow(rows *sql.Rows) (usageScanRow, error) {
@@ -2316,9 +2439,10 @@ func (db *DB) GetDailyUsage(
 	// long-lived sessions that span date boundaries are included.
 	// Pad by +/-14h to cover all timezone offsets; the actual
 	// date filtering happens post-query via localDate.
-	query, args := dailyUsageRowsSQLForBounds(f, usageBoundsForFilter(f), db.hasCursorUsageTable())
-	query, snapshotArgs := snapshotRankedDailyUsageRowsSQL(query, f)
-	args = append(args, snapshotArgs...)
+	bounds := usageBoundsForFilter(f)
+	query, rowsArgs := dailyUsageRowsSQLForBounds(
+		f, bounds, db.hasCursorUsageTable())
+	query, args := snapshotRankedDailyUsageRowsSQL(query, rowsArgs, f, bounds)
 	query = dailyUsageRowSelectFromSnapshotRowsWithMachine(
 		query, f.Breakdowns)
 	query += ` ORDER BY u.ts ASC, u.session_id ASC,
