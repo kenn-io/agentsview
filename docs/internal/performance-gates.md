@@ -58,6 +58,9 @@ runner noise and fail loudly:
   `internal/sync/engine_integration_test.go` — safe Codex growth appends only
   new rows while lifecycle metadata, incomplete records, title changes, and
   retroactive updates preserve full-parse behavior.
+- `TestCountDuplicatePromptsAllocationGrowthStaysNearLinear`
+  (`internal/signals/heuristics_test.go`) — session-quality analysis must not
+  rebuild token sets for every pair of user prompts.
 
 When you fix a performance bug, prefer adding a gate at this layer: expose or
 reuse a counter (`SyncStats`, `PhaseStats`, `AnomalyStats`, a swappable
@@ -89,6 +92,8 @@ head and its merge base on the same runner, then compares the outputs with
 - `BenchmarkInsertMessagesBatch` — multi-row batched ingest.
 - `BenchmarkGetDailyUsage` — usage aggregation over 100k message rows.
 - `BenchmarkScan` / `BenchmarkScanDefinite` — secret-scan regex throughput.
+- `BenchmarkCountDuplicatePromptsLargeSession` — duplicate-prompt analysis over
+  a long session with shared vocabulary and distinct prompt context.
 
 `benchgate` builds on `golang.org/x/perf`: `benchfmt` parses the output and
 `benchmath` — the statistics engine behind `benchstat` — summarizes samples and
@@ -154,8 +159,8 @@ Cross-backend query benchmarks live separately in `internal/backendbench`
 
 `BenchmarkCodexIncrementalCursor` lives in `internal/parser` and compares cold
 prefix reconstruction with an exact warm cursor. It is diagnostic rather than
-PR-gated: `BENCH_GATE_PACKAGES` currently contains only `./internal/sync`,
-`./internal/db`, and `./internal/secrets`.
+PR-gated: `BENCH_GATE_PACKAGES` currently contains `./internal/sync`,
+`./internal/db`, `./internal/secrets`, and `./internal/signals`.
 
 ## Adding a benchmark to the gate
 

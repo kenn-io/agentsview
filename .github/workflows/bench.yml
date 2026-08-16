@@ -1,15 +1,16 @@
 name: Bench Gate
 
 # Compares hot-path benchmarks between the PR head and its merge
-# base, so performance regressions in the sync engine and DB write
-# paths fail the PR instead of shipping. The gated regression classes
-# have all shipped before:
+# base, so performance regressions in sync, DB access, secret scanning,
+# and signal analysis fail the PR instead of shipping. The gated
+# regression classes have all shipped before:
 #
 #   - discovery/skip work scaling with archive size instead of new
 #     data (#912, the providerSourceUnchangedInDB gap)
 #   - O(session history) work per incremental append (#954)
 #   - bulk ingest throughput (#411)
 #   - per-row query-shape regressions in usage aggregation (#309)
+#   - repeated token-set construction during duplicate-prompt analysis
 #
 # Both sides run `make bench-gate` — the Makefile is the single
 # source of truth for the gated package list, sample count, and
