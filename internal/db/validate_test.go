@@ -22,6 +22,13 @@ func TestSanitizeSessionDropsSelfParent(t *testing.T) {
 			parent: Ptr("s1"),
 		},
 		{
+			name:             "self parent falls back to parser parent",
+			parent:           Ptr("s1"),
+			parserParent:     Ptr("main"),
+			wantParent:       Ptr("main"),
+			wantParserParent: Ptr("main"),
+		},
+		{
 			name:         "self parser parent cleared",
 			parserParent: Ptr("s1"),
 		},

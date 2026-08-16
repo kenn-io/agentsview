@@ -22,8 +22,9 @@ description: Release history for AgentsView
   `scan_protected_paths` to opt back in to Git remote, worktree, and branch
   detail there.
 - Ignore self-referential subagent spawn edges when linking session
-  hierarchy, drop a self-parent claim at ingest, and clear rows an earlier
-  build had linked to themselves once per archive.
+  hierarchy, and resolve a self-parent claim to the parser-derived parent (or
+  no parent) at ingest and once per archive for rows an earlier build had
+  linked to themselves.
 
 ---
 

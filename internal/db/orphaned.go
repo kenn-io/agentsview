@@ -510,7 +510,7 @@ func clearCopiedSelfParents(
 ) error {
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE main.sessions
-		SET parent_session_id = NULL,
+		SET parent_session_id = NULLIF(parser_parent_session_id, id),
 		local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE id IN (SELECT id FROM `+tempIDsTable+`)
 		  AND parent_session_id IS id`); err != nil {

@@ -215,7 +215,8 @@ func parentOfSession(t *testing.T, d *DB, id string) string {
 
 // forceSelfParent writes parent_session_id = id directly, bypassing the
 // ingest sanitizer, to reproduce a row linked by a build that still treated
-// self-referential spawn edges as evidence.
+// self-referential spawn edges as evidence. parser_parent_session_id is left
+// as ingest wrote it, matching the linker, which never touches it.
 func forceSelfParent(t *testing.T, d *DB, id string) {
 	t.Helper()
 	_, err := d.getWriter().Exec(`
@@ -224,6 +225,17 @@ func forceSelfParent(t *testing.T, d *DB, id string) {
 		    local_modified_at = '2026-01-01T00:00:00.000Z'
 		WHERE id = ?`, id)
 	require.NoError(t, err, "forceSelfParent %s", id)
+}
+
+// forceBackfilledSelfParent reproduces a row that was already self-parented
+// when parser_parent_session_id was introduced: the column backfill copied
+// the self reference, so no parser parent is recoverable.
+func forceBackfilledSelfParent(t *testing.T, d *DB, id string) {
+	t.Helper()
+	forceSelfParent(t, d, id)
+	_, err := d.getWriter().Exec(`
+		UPDATE sessions SET parser_parent_session_id = id WHERE id = ?`, id)
+	require.NoError(t, err, "forceBackfilledSelfParent %s", id)
 }
 
 func TestLinkSubagentSessionsRejectsSelfEdges(t *testing.T) {
@@ -357,24 +369,40 @@ func TestLinkSubagentSessionsRepairsLegacySelfParentOnce(t *testing.T) {
 	insertSession(t, d, "with-edge", "p")
 	insertMessages(t, d, spawnEdgeTo("with-edge", "with-edge", "legacy self spawn"))
 	insertSession(t, d, "edgeless", "p")
+	insertSession(t, d, "backfilled", "p")
+	insertSession(t, d, "path-derived", "p", func(s *Session) {
+		s.ParentSessionID = Ptr("main")
+		s.RelationshipType = "subagent"
+	})
 	insertSession(t, d, "untouched", "p", func(s *Session) {
 		s.ParentSessionID = Ptr("real")
 		s.RelationshipType = "subagent"
 	})
 	forceSelfParent(t, d, "with-edge")
 	forceSelfParent(t, d, "edgeless")
+	forceSelfParent(t, d, "path-derived")
+	forceBackfilledSelfParent(t, d, "backfilled")
 
 	require.NoError(t, d.LinkSubagentSessions())
 
-	for _, id := range []string{"with-edge", "edgeless"} {
-		s, err := d.GetSessionFull(context.Background(), id)
-		requireNoError(t, err, "GetSessionFull "+id)
-		assert.Nil(t, s.ParentSessionID, "%s must lose its self parent", id)
+	for _, tc := range []struct {
+		id         string
+		wantParent *string
+	}{
+		{id: "with-edge"},
+		{id: "edgeless"},
+		{id: "backfilled"},
+		{id: "path-derived", wantParent: Ptr("main")},
+	} {
+		s, err := d.GetSessionFull(context.Background(), tc.id)
+		requireNoError(t, err, "GetSessionFull "+tc.id)
+		assert.Equal(t, tc.wantParent, s.ParentSessionID,
+			"%s: self parent must give way to the parser parent or nothing", tc.id)
 		assert.Equal(t, "subagent", s.RelationshipType,
-			"%s must keep its subagent classification", id)
+			"%s must keep its subagent classification", tc.id)
 		require.NotNil(t, s.LocalModifiedAt)
 		assert.Greater(t, *s.LocalModifiedAt, "2026-01-01T00:00:00.000Z",
-			"%s must advance local_modified_at for mirror re-push", id)
+			"%s must advance local_modified_at for mirror re-push", tc.id)
 	}
 	assert.Equal(t, "real", parentOfSession(t, d, "untouched"),
 		"a real parent must survive the repair")

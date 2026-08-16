@@ -6060,11 +6060,16 @@ func TestCopyOrphanedDataFromClearsCopiedSelfParent(t *testing.T) {
 	srcDB := testDBAtPath(t, srcPath, "src")
 	insertSession(t, srcDB, "child", "p")
 	insertMessages(t, srcDB, spawnEdgeTo("child", "child", "legacy self spawn"))
+	insertSession(t, srcDB, "path-derived", "p", func(s *Session) {
+		s.ParentSessionID = Ptr("main")
+		s.RelationshipType = "subagent"
+	})
 	insertSession(t, srcDB, "kept", "p", func(s *Session) {
 		s.ParentSessionID = Ptr("real")
 		s.RelationshipType = "subagent"
 	})
 	forceSelfParent(t, srcDB, "child")
+	forceSelfParent(t, srcDB, "path-derived")
 	require.NoError(t, srcDB.Close(), "Close src")
 
 	dstDB := testDBAtPath(t, filepath.Join(dir, "dst.db"), "dst")
@@ -6073,7 +6078,7 @@ func TestCopyOrphanedDataFromClearsCopiedSelfParent(t *testing.T) {
 		"fresh archive linking pass runs before orphans are copied")
 	copied, err := dstDB.CopyOrphanedDataFrom(srcPath)
 	require.NoError(t, err, "CopyOrphanedDataFrom")
-	assert.Equal(t, 2, copied)
+	assert.Equal(t, 3, copied)
 	require.NoError(t, dstDB.LinkSubagentSessions(), "post-copy relink")
 
 	child, err := dstDB.GetSession(context.Background(), "child")
@@ -6081,6 +6086,8 @@ func TestCopyOrphanedDataFromClearsCopiedSelfParent(t *testing.T) {
 	assert.Nil(t, child.ParentSessionID,
 		"copied self-parent must be cleared even after the one-time repair ran")
 	assert.Equal(t, "subagent", child.RelationshipType)
+	assert.Equal(t, "main", parentOfSession(t, dstDB, "path-derived"),
+		"copied self-parent must fall back to the parser parent")
 	assert.Equal(t, "real", parentOfSession(t, dstDB, "kept"),
 		"copied real parents must survive")
 }

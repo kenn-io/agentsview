@@ -1820,15 +1820,19 @@ func (db *DB) LinkSubagentSessions() error {
 // edges were ignored. See repairLegacySelfParentedSessions.
 const selfParentRepairStateKey = "subagent_self_parent_repair_v1"
 
-// clearSelfParentedSessionsSQL nulls the parent of any session that points
-// at itself. Row-level ingest sanitization (SanitizeSession) and the
+// clearSelfParentedSessionsSQL repairs any session that points at itself.
+// The linker never writes parser_parent_session_id, so when it holds a
+// different session that is the path-derived parent the legacy linker
+// overwrote, and the row gets it back; otherwise (no parser parent, or the
+// column was backfilled from an already self-parented row) the parent is
+// cleared. Row-level ingest sanitization (SanitizeSession) and the
 // self-edge guard in subagentSpawnerExpr keep new rows out of that state,
 // so this only ever matches rows written by earlier builds. The
 // archive-rebuild orphan copy applies the same repair to copied rows
 // (clearCopiedSelfParents).
 const clearSelfParentedSessionsSQL = `
 	UPDATE sessions
-	SET parent_session_id = NULL,
+	SET parent_session_id = NULLIF(parser_parent_session_id, id),
 	local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 	WHERE parent_session_id IS id`
 
