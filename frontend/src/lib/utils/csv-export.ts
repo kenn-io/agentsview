@@ -198,7 +198,7 @@ export function generateAnalyticsCSV(
     .join("\n\n");
 }
 
-export function downloadCSV(
+function downloadCSV(
   csv: string,
   filename: string,
 ): void {

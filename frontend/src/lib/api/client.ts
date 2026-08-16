@@ -319,7 +319,7 @@ export function getExportUrl(sessionId: string): string {
   return `${getBase()}/sessions/${encodeURIComponent(sessionId)}/export`;
 }
 
-export function getInsightExportUrl(insightId: number): string {
+function getInsightExportUrl(insightId: number): string {
   return `${getBase()}/insights/${insightId}/export`;
 }
 

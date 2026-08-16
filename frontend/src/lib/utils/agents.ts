@@ -125,7 +125,7 @@ export function agentColor(agent: string): string {
   return agentColorMap.get(agent) ?? defaultFillColor;
 }
 
-export function accentForeground(color: string): string {
+function accentForeground(color: string): string {
   return accentForegroundMap.get(color) ?? "var(--accent-blue-foreground)";
 }
 

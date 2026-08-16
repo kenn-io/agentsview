@@ -1,11 +1,11 @@
 // Keep these in sync with internal/db branch token separators.
-export const BRANCH_TOKEN_SEP = "\u001f";
+const BRANCH_TOKEN_SEP = "\u001f";
 
 export function branchFilterToken(project: string, branch: string): string {
   return project + BRANCH_TOKEN_SEP + branch;
 }
 
-export function splitBranchFilterToken(token: string): {
+function splitBranchFilterToken(token: string): {
   project: string;
   branch: string;
 } {

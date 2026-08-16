@@ -14,7 +14,7 @@ export interface DateRangePreset {
   days: number;
 }
 
-export const DATE_RANGE_PRESETS: DateRangePreset[] = [
+const DATE_RANGE_PRESETS: DateRangePreset[] = [
   { label: "7d", days: 7 },
   { label: "30d", days: 30 },
   { label: "90d", days: 90 },

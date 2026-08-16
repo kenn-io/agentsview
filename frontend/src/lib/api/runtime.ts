@@ -82,7 +82,7 @@ export class ApiError extends Error {
   }
 }
 
-export function apiErrorMessage(status: number, body: string): string {
+function apiErrorMessage(status: number, body: string): string {
   const text = body.trim();
   if (!text) return `API ${status}`;
 
@@ -131,7 +131,7 @@ export function generatedErrorMessage(err: GeneratedApiError): string {
   return err.message || `API ${err.status}`;
 }
 
-export function generatedErrorCode(err: GeneratedApiError): string | undefined {
+function generatedErrorCode(err: GeneratedApiError): string | undefined {
   if (
     err.body !== null &&
     typeof err.body === "object" &&
@@ -167,7 +167,7 @@ export interface CancelableLike<T> extends Promise<T> {
   cancel: () => void;
 }
 
-export function isCancelable<T>(value: Promise<T>): value is CancelableLike<T> {
+function isCancelable<T>(value: Promise<T>): value is CancelableLike<T> {
   return typeof (value as { cancel?: unknown }).cancel === "function";
 }
 

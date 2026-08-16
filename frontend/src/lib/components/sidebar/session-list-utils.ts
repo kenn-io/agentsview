@@ -4,8 +4,8 @@ import type {
 } from "../../stores/sessions.svelte.js";
 
 export const ITEM_HEIGHT = 42;
-export const CHILD_ITEM_HEIGHT = 34;
-export const TEAM_HEADER_HEIGHT = 28;
+const CHILD_ITEM_HEIGHT = 34;
+const TEAM_HEADER_HEIGHT = 28;
 export const HEADER_HEIGHT = 28;
 export const OVERSCAN = 10;
 export const STORAGE_KEY = "agentsview-group-by-agent";

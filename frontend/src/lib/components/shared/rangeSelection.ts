@@ -183,5 +183,4 @@ export function selectionFromRange(
   return { mode: "custom", from, to };
 }
 
-export { allFromDate, daysAgo, localDateStr, todayStr };
 export type { DateRange };

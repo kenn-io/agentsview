@@ -121,7 +121,7 @@ export function sessionRouteParamsForFilters(
   return next;
 }
 
-export function currentSessionRouteParams(
+function currentSessionRouteParams(
   currentParams: Record<string, string>,
 ): Record<string, string> {
   const next: Record<string, string> = {};

@@ -13,7 +13,7 @@ export function getScrollTop(locator: Locator): Promise<number> {
 }
 
 /** Returns the current scrollHeight of a scrollable container. */
-export function getScrollHeight(locator: Locator): Promise<number> {
+function getScrollHeight(locator: Locator): Promise<number> {
   return locator.evaluate((el) => el.scrollHeight);
 }
 
