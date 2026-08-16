@@ -747,8 +747,9 @@ The corresponding fields are `aider_dirs`, `amp_dirs`, `antigravity_dirs`,
 `shelley_dirs`, `traex_sessions_dirs`, `visualstudio_copilot_dirs`,
 `vscode_copilot_dirs`, `windsurf_dirs`, `warp_dirs`,
 `workbuddy_project_dirs`, `zcode_dirs`, `zed_dirs`, and `zencoder_dirs`. Each
-accepts an array of paths. When set, these take precedence over the
-single-directory environment variable and the default path.
+accepts an array of paths. Environment variables take precedence over these
+arrays when both are set; otherwise, a non-empty array replaces the default
+path and an explicit empty array clears the default local directory.
 
 All listed directories are discovered, watched, and synced independently.
 
