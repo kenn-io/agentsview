@@ -6050,6 +6050,37 @@ func TestCopyExcludedSessionsFrom(t *testing.T) {
 		"UpsertSession = %v, want ErrSessionExcluded", err)
 }
 
+func TestCopyOrphanedDataFromQueuesCopiedSelfParentRepair(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "src.db")
+	srcDB := testDBAtPath(t, srcPath, "src")
+	insertSession(t, srcDB, "child", "p", func(s *Session) {
+		s.MessageCount = 1
+		s.ParentSessionID = Ptr("child")
+		s.RelationshipType = "subagent"
+	})
+	insertMessages(t, srcDB, spawnEdgeTo("child", "child", "legacy self spawn"))
+	require.NoError(t, srcDB.SetSyncState(
+		subagentParentRepairStateUpgradeKey, "1",
+	), "seed committed hierarchy upgrade marker")
+	require.NoError(t, srcDB.Close(), "Close src")
+
+	dstDB := testDBAtPath(t, filepath.Join(dir, "dst.db"), "dst")
+	defer dstDB.Close()
+	require.NoError(t, dstDB.CopySyncStateFrom(srcPath), "CopySyncStateFrom")
+	copied, err := dstDB.CopyOrphanedDataFrom(srcPath)
+	require.NoError(t, err, "CopyOrphanedDataFrom")
+	assert.Equal(t, 1, copied)
+	require.NoError(t, dstDB.LinkSubagentSessions(), "LinkSubagentSessions")
+	require.NoError(t, dstDB.RepairQueuedSubagentParents(),
+		"repair copied self-parent")
+
+	child, err := dstDB.GetSession(context.Background(), "child")
+	requireNoError(t, err, "GetSession child")
+	assert.Nil(t, child.ParentSessionID,
+		"copied self-parent must be repaired after the marker is committed")
+}
+
 func TestCopySyncStateFrom_NoSourceTable(t *testing.T) {
 	dir := t.TempDir()
 

@@ -218,6 +218,14 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		); err != nil {
 			return 0, fmt.Errorf("sanitizing orphaned data: %w", err)
 		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT OR IGNORE INTO subagent_parent_repair_queue (session_id)
+			SELECT id FROM sessions
+			WHERE id IN (SELECT id FROM _orphaned_ids)
+			  AND relationship_type = 'subagent'
+			  AND parent_session_id IS id`); err != nil {
+			return 0, fmt.Errorf("queueing copied self-parent repairs: %w", err)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
