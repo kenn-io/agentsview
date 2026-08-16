@@ -887,6 +887,7 @@ func classifyVSCodeCopilotDestination(keys []string) vscodeCopilotDestination {
 		if keys[i] != "resultDetails" {
 			continue
 		}
+		valid := true
 		for j := i + 1; j < len(keys); j++ {
 			if keys[j] == "output" {
 				if j == len(keys)-1 {
@@ -895,10 +896,13 @@ func classifyVSCodeCopilotDestination(keys []string) vscodeCopilotDestination {
 				return vscodeCopilotDestinationBelowOutput
 			}
 			if _, err := strconv.Atoi(keys[j]); err != nil {
-				return vscodeCopilotDestinationOutside
+				valid = false
+				break
 			}
 		}
-		return vscodeCopilotDestinationExactResultDetails
+		if valid {
+			return vscodeCopilotDestinationExactResultDetails
+		}
 	}
 	return vscodeCopilotDestinationOutside
 }

@@ -971,6 +971,39 @@ func TestReconstructJSONLIndexedResultDetailsMutations(t *testing.T) {
 	}
 }
 
+func TestReconstructJSONLNestedResultDetailsMutations(t *testing.T) {
+	initial := `{"kind":0,"v":{"requests":[{"response":[{"resultDetails":{"nested":{"resultDetails":{"input":"nested","output":[{"value":"drop"}],"label":"keep"}}}}]}]}}`
+	tests := []struct {
+		name string
+		line string
+	}{
+		{
+			name: "set nested output",
+			line: `{"kind":1,"k":["requests",0,"response",0,"resultDetails","nested","resultDetails","output"],"v":[{"value":"drop"}]}`,
+		},
+		{
+			name: "push nested output",
+			line: `{"kind":2,"k":["requests",0,"response",0,"resultDetails","nested","resultDetails","output"],"v":[{"value":"drop"}]}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "nested-result-details.jsonl")
+			content := strings.Join([]string{initial, tt.line}, "\n") + "\n"
+			require.NoError(t, os.WriteFile(path, []byte(content), 0644))
+			data, err := reconstructJSONLWithLimit(path, testVSCodeCopilotHardRecordLimit)
+			require.NoError(t, err)
+			var state map[string]any
+			require.NoError(t, json.Unmarshal(data, &state))
+			details := state["requests"].([]any)[0].(map[string]any)["response"].([]any)[0].(map[string]any)["resultDetails"].(map[string]any)["nested"].(map[string]any)["resultDetails"].(map[string]any)
+			assert.Equal(t, "nested", details["input"])
+			assert.Empty(t, details["output"])
+			assert.Equal(t, "keep", details["label"])
+		})
+	}
+}
+
 func TestReconstructJSONLCumulativeResultOutputPushes(t *testing.T) {
 	lines := []string{
 		`{"kind":0,"v":{"sessionId":"cumulative","requests":[{"response":[{"resultDetails":{"input":"keep","output":[]}}]}]}}`,
