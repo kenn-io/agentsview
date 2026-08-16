@@ -906,14 +906,7 @@ func projectVSCodeCopilotResultOutput(value any) {
 	case map[string]any:
 		for key, child := range v {
 			if key == "resultDetails" {
-				if details, ok := child.(map[string]any); ok {
-					details["output"] = []any{}
-					for detailKey, detailValue := range details {
-						if detailKey != "output" {
-							projectVSCodeCopilotResultOutput(detailValue)
-						}
-					}
-				}
+				projectVSCodeCopilotResultDetails(child)
 				continue
 			}
 			projectVSCodeCopilotResultOutput(child)
@@ -926,14 +919,17 @@ func projectVSCodeCopilotResultOutput(value any) {
 }
 
 func projectVSCodeCopilotResultDetails(value any) {
-	details, ok := value.(map[string]any)
-	if !ok {
-		return
-	}
-	details["output"] = []any{}
-	for key, child := range details {
-		if key != "output" {
-			projectVSCodeCopilotResultOutput(child)
+	switch details := value.(type) {
+	case map[string]any:
+		details["output"] = []any{}
+		for key, child := range details {
+			if key != "output" {
+				projectVSCodeCopilotResultOutput(child)
+			}
+		}
+	case []any:
+		for _, child := range details {
+			projectVSCodeCopilotResultDetails(child)
 		}
 	}
 }

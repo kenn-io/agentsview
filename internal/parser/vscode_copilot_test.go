@@ -868,6 +868,68 @@ func TestReconstructJSONLResultOutputDestinationMatrix(t *testing.T) {
 	}
 }
 
+func TestReconstructJSONLResultDetailsArrayProjection(t *testing.T) {
+	detail := func(input string) string {
+		return `{"input":` + strconv.Quote(input) + `,"output":[{"value":"drop"}],"label":"keep"}`
+	}
+	tests := []struct {
+		name  string
+		lines []string
+		want  []string
+	}{
+		{
+			name: "initial snapshot",
+			lines: []string{
+				`{"kind":0,"v":{"requests":[{"response":[{"resultDetails":[` + detail("initial") + `]}]}]}}`,
+			},
+			want: []string{"initial"},
+		},
+		{
+			name: "set mutation",
+			lines: []string{
+				`{"kind":0,"v":{"requests":[{"response":[{"resultDetails":[]}]}]}}`,
+				`{"kind":1,"k":["requests",0,"response",0,"resultDetails"],"v":[` + detail("set") + `]}`,
+			},
+			want: []string{"set"},
+		},
+		{
+			name: "push mutation",
+			lines: []string{
+				`{"kind":0,"v":{"requests":[{"response":[{"resultDetails":[]}]}]}}`,
+				`{"kind":2,"k":["requests",0,"response",0,"resultDetails"],"v":[` + detail("push") + `]}`,
+			},
+			want: []string{"push"},
+		},
+		{
+			name: "nested push mutation",
+			lines: []string{
+				`{"kind":0,"v":{"requests":[]}}`,
+				`{"kind":2,"k":["requests"],"v":[{"response":[{"resultDetails":[` + detail("nested") + `]}]}]}`,
+			},
+			want: []string{"nested"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "result-details-array.jsonl")
+			require.NoError(t, os.WriteFile(path, []byte(strings.Join(tt.lines, "\n")+"\n"), 0644))
+			data, err := reconstructJSONLWithLimit(path, testVSCodeCopilotHardRecordLimit)
+			require.NoError(t, err)
+			var state map[string]any
+			require.NoError(t, json.Unmarshal(data, &state))
+			for i, want := range tt.want {
+				details := state["requests"].([]any)[i].(map[string]any)["response"].([]any)[0].(map[string]any)["resultDetails"].([]any)
+				require.Len(t, details, 1)
+				item := details[0].(map[string]any)
+				assert.Equal(t, want, item["input"])
+				assert.Empty(t, item["output"])
+				assert.Equal(t, "keep", item["label"])
+			}
+		})
+	}
+}
+
 func TestReconstructJSONLCumulativeResultOutputPushes(t *testing.T) {
 	lines := []string{
 		`{"kind":0,"v":{"sessionId":"cumulative","requests":[{"response":[{"resultDetails":{"input":"keep","output":[]}}]}]}}`,
