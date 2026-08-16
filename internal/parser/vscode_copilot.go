@@ -921,6 +921,9 @@ func projectVSCodeCopilotResultOutput(value any) {
 func projectVSCodeCopilotResultDetails(value any) {
 	switch details := value.(type) {
 	case map[string]any:
+		if details == nil {
+			return
+		}
 		details["output"] = []any{}
 		for key, child := range details {
 			if key != "output" {
