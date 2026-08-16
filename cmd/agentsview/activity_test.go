@@ -67,6 +67,59 @@ func TestResolveActivityReportPagesSessionsWithDirectCursor(t *testing.T) {
 	assert.NotEqual(t, first.BySession[0].SessionID, second.BySession[0].SessionID)
 }
 
+func TestResolveActivityReportCursorInheritsPagingOptions(t *testing.T) {
+	dataDir := setupExportGoldenDataDir(t)
+	database := dbtest.OpenTestDBAt(t, sessionsDBPath(dataDir))
+	database.SetCursorSecret(goldenCursorSecret)
+	first, err := resolveActivityReport(ActivityReportConfig{
+		Preset: "custom", From: "2026-07-03T10:00:00Z",
+		To: "2026-07-03T13:00:00Z", Timezone: "UTC", Bucket: "1d",
+		SessionsLimit: 1, SessionsSort: "project", SessionsDirection: "asc",
+		SessionsBucket: "0",
+	}, database)
+	require.NoError(t, err)
+	require.Len(t, first.BySession, 1)
+	require.NotEmpty(t, first.SessionsNextCursor)
+
+	second, err := resolveActivityReport(ActivityReportConfig{
+		SessionsCursor: first.SessionsNextCursor,
+	}, database)
+	require.NoError(t, err)
+	require.Len(t, second.BySession, 1)
+	assert.NotEqual(t, first.BySession[0].SessionID, second.BySession[0].SessionID)
+}
+
+func TestResolveActivityReportCursorRejectsExplicitPagingMismatch(t *testing.T) {
+	dataDir := setupExportGoldenDataDir(t)
+	database := dbtest.OpenTestDBAt(t, sessionsDBPath(dataDir))
+	database.SetCursorSecret(goldenCursorSecret)
+	first, err := resolveActivityReport(ActivityReportConfig{
+		Preset: "custom", From: "2026-07-03T10:00:00Z",
+		To: "2026-07-03T13:00:00Z", Timezone: "UTC", Bucket: "1d",
+		SessionsLimit: 1, SessionsSort: "project", SessionsDirection: "asc",
+		SessionsBucket: "0",
+	}, database)
+	require.NoError(t, err)
+	require.NotEmpty(t, first.SessionsNextCursor)
+
+	tests := []struct {
+		name   string
+		change func(*ActivityReportConfig)
+	}{
+		{"sort", func(cfg *ActivityReportConfig) { cfg.SessionsSort = "agent" }},
+		{"direction", func(cfg *ActivityReportConfig) { cfg.SessionsDirection = "desc" }},
+		{"bucket", func(cfg *ActivityReportConfig) { cfg.SessionsBucket = "1" }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := ActivityReportConfig{SessionsCursor: first.SessionsNextCursor}
+			tc.change(&cfg)
+			_, pageErr := resolveActivityReport(cfg, database)
+			require.EqualError(t, pageErr, "invalid sessions cursor")
+		})
+	}
+}
+
 func TestResolveActivityReportCursorPreservesPartialGeneration(t *testing.T) {
 	dataDir := setupExportGoldenDataDir(t)
 	database := dbtest.OpenTestDBAt(t, sessionsDBPath(dataDir))
@@ -183,6 +236,9 @@ func TestFetchHTTPActivityReportContinuesRequestedGeneration(t *testing.T) {
 		"/api/v1/activity/report/original-report/sessions",
 		func(w http.ResponseWriter, r *http.Request) {
 			assert.Equal(t, "original-cursor", r.URL.Query().Get("cursor"))
+			assert.False(t, r.URL.Query().Has("sort"))
+			assert.False(t, r.URL.Query().Has("direction"))
+			assert.False(t, r.URL.Query().Has("bucket"))
 			assert.Equal(t, "true", r.URL.Query().Get("include_report"))
 			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
 				"report_id": "original-report",

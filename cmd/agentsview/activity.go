@@ -178,16 +178,23 @@ func fetchHTTPActivitySessionPage(
 			"daemon does not support Activity session paging",
 		)
 	}
-	options, err := activitySessionPageOptions(cfg)
+	options, err := activitySessionPageOptions(cfg, nil)
 	if err != nil {
 		return activity.Report{}, err
 	}
 	query := url.Values{}
 	query.Set("limit", strconv.Itoa(options.Limit))
-	query.Set("sort", string(options.Sort))
-	query.Set("direction", options.Direction)
 	if cfg.SessionsCursor != "" {
 		query.Set("cursor", cfg.SessionsCursor)
+		if cfg.SessionsSort != "" {
+			query.Set("sort", string(options.Sort))
+		}
+		if cfg.SessionsDirection != "" {
+			query.Set("direction", options.Direction)
+		}
+	} else {
+		query.Set("sort", string(options.Sort))
+		query.Set("direction", options.Direction)
 	}
 	if options.Bucket != nil {
 		query.Set("bucket", strconv.Itoa(*options.Bucket))
@@ -294,7 +301,10 @@ type cliActivityCursorFilter struct {
 	ExcludeAutomated bool   `json:"exclude_automated"`
 }
 
-func activitySessionPageOptions(cfg ActivityReportConfig) (activity.SessionPageOptions, error) {
+func activitySessionPageOptions(
+	cfg ActivityReportConfig,
+	cursor *cliActivitySessionCursor,
+) (activity.SessionPageOptions, error) {
 	options := activity.SessionPageOptions{
 		Limit: cfg.SessionsLimit, Sort: activity.SessionSort(cfg.SessionsSort),
 		Direction: cfg.SessionsDirection,
@@ -308,7 +318,22 @@ func activitySessionPageOptions(cfg ActivityReportConfig) (activity.SessionPageO
 		}
 		options.Bucket = &bucket
 	}
-	return activity.NormalizeSessionPageOptions(options)
+	var continuation *activity.SessionPageOptions
+	if cursor != nil {
+		continuation = &activity.SessionPageOptions{
+			Sort: cursor.Sort, Direction: cursor.Direction, Bucket: cursor.Bucket,
+		}
+	}
+	resolved, err := activity.ResolveSessionPageOptions(
+		options, continuation, activity.SessionPageOptionPresence{
+			Sort: cfg.SessionsSort != "", Direction: cfg.SessionsDirection != "",
+			Bucket: cfg.SessionsBucket != "",
+		},
+	)
+	if err != nil && cursor != nil {
+		return activity.SessionPageOptions{}, fmt.Errorf("invalid sessions cursor")
+	}
+	return resolved, err
 }
 
 // resolveActivityReportPriced seeds fallback pricing so fresh-DB token usage is
@@ -329,27 +354,26 @@ func resolveActivityReportPriced(
 func resolveActivityReport(
 	cfg ActivityReportConfig, database *db.DB,
 ) (activity.Report, error) {
-	options, err := activitySessionPageOptions(cfg)
-	if err != nil {
-		return activity.Report{}, err
-	}
-
 	var q activity.Query
 	var f db.AnalyticsFilter
 	var cursor *cliActivitySessionCursor
 	if cfg.SessionsCursor != "" {
-		decoded, decodeErr := decodeCLIActivitySessionCursor(
-			database, cfg.SessionsCursor, options,
-		)
+		decoded, decodeErr := decodeCLIActivitySessionCursor(database, cfg.SessionsCursor)
 		if decodeErr != nil {
 			return activity.Report{}, decodeErr
 		}
 		cursor = &decoded
-		q, f, err = decoded.selection()
+	}
+	options, err := activitySessionPageOptions(cfg, cursor)
+	if err != nil {
+		return activity.Report{}, err
+	}
+	if cursor != nil {
+		q, f, err = cursor.selection()
 		if err != nil {
 			return activity.Report{}, fmt.Errorf("invalid sessions cursor")
 		}
-		options.Offset = decoded.Offset
+		options.Offset = cursor.Offset
 	} else {
 		q, f, err = resolveCLIActivitySelection(cfg)
 		if err != nil {
@@ -436,7 +460,6 @@ func resolveCLIActivitySelection(
 func decodeCLIActivitySessionCursor(
 	database *db.DB,
 	token string,
-	options activity.SessionPageOptions,
 ) (cliActivitySessionCursor, error) {
 	payload, err := database.DecodeActivityReportToken(token)
 	if err != nil {
@@ -445,9 +468,7 @@ func decodeCLIActivitySessionCursor(
 	var cursor cliActivitySessionCursor
 	if err := json.Unmarshal(payload, &cursor); err != nil ||
 		cursor.Version != 2 || cursor.Schema != export.ActivityReportSchemaVersion ||
-		cursor.Offset < 0 || cursor.Digest == "" || cursor.Sort != options.Sort ||
-		cursor.Direction != options.Direction ||
-		!sameActivityBucket(cursor.Bucket, options.Bucket) {
+		cursor.Offset < 0 || cursor.Digest == "" {
 		return cliActivitySessionCursor{}, fmt.Errorf("invalid sessions cursor")
 	}
 	return cursor, nil
@@ -500,13 +521,6 @@ func newCLIActivitySessionCursor(
 			ExcludeAutomated: f.ExcludeAutomated,
 		},
 	}
-}
-
-func sameActivityBucket(left, right *int) bool {
-	if left == nil || right == nil {
-		return left == nil && right == nil
-	}
-	return *left == *right
 }
 
 // todayIn returns today's date as YYYY-MM-DD in the given IANA timezone,

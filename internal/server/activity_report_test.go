@@ -598,6 +598,39 @@ func TestActivityReportEndpointNegotiatesProgressAndPagesSessions(t *testing.T) 
 	require.Len(t, second.Sessions, 1)
 	assert.NotEqual(t, first.Sessions[0].SessionID, second.Sessions[0].SessionID)
 
+	nonDefaultResponse := te.get(t, "/api/v1/activity/report/"+report.ReportID+
+		"/sessions?limit=1&sort=project&direction=asc&bucket=120")
+	assertStatus(t, nonDefaultResponse, http.StatusOK)
+	var nonDefaultFirst struct {
+		Sessions   []activity.SessionRow `json:"sessions"`
+		NextCursor string                `json:"next_cursor"`
+	}
+	require.NoError(t, json.Unmarshal(nonDefaultResponse.Body.Bytes(), &nonDefaultFirst))
+	require.Len(t, nonDefaultFirst.Sessions, 1)
+	require.NotEmpty(t, nonDefaultFirst.NextCursor)
+
+	inheritedResponse := te.get(t, "/api/v1/activity/report/"+report.ReportID+
+		"/sessions?cursor="+url.QueryEscape(nonDefaultFirst.NextCursor))
+	assertStatus(t, inheritedResponse, http.StatusOK)
+	var inherited struct {
+		Sessions []activity.SessionRow `json:"sessions"`
+	}
+	require.NoError(t, json.Unmarshal(inheritedResponse.Body.Bytes(), &inherited))
+	require.Len(t, inherited.Sessions, 1)
+	assert.NotEqual(t, nonDefaultFirst.Sessions[0].SessionID, inherited.Sessions[0].SessionID)
+
+	for name, query := range map[string]string{
+		"sort":      "&sort=agent",
+		"direction": "&direction=desc",
+		"bucket":    "&bucket=121",
+	} {
+		t.Run("cursor rejects explicit "+name+" mismatch", func(t *testing.T) {
+			mismatch := te.get(t, "/api/v1/activity/report/"+report.ReportID+
+				"/sessions?cursor="+url.QueryEscape(nonDefaultFirst.NextCursor)+query)
+			assertStatus(t, mismatch, http.StatusBadRequest)
+		})
+	}
+
 	started, ended := activityDate+"T11:00:00Z", activityDate+"T11:03:00Z"
 	te.seedSession(t, "d3", "gamma", 2, func(s *db.Session) {
 		s.StartedAt, s.EndedAt = &started, &ended

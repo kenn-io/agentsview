@@ -113,27 +113,43 @@ func (s *Server) humaActivityReportSessions(
 	}
 	if in.Bucket.IsSet {
 		bucket := in.Bucket.Value
-		if bucket < 0 || bucket >= artifacts.Report.BucketCount {
-			return nil, apiError(http.StatusBadRequest, "invalid activity report bucket")
-		}
 		options.Bucket = &bucket
 	}
-	options, err = activity.NormalizeSessionPageOptions(options)
-	if err != nil {
-		return nil, apiError(http.StatusBadRequest, err.Error())
-	}
+	var continuation *activity.SessionPageOptions
+	var cursorOffset int
 	if in.Cursor != "" {
 		cursor, cursorErr := decodeActivityToken[activitySessionCursorPayload](
 			tokenStore, in.Cursor,
 		)
 		if cursorErr != nil || cursor.Version != activityReportTokenVersion ||
 			cursor.Schema != export.ActivityReportSchemaVersion ||
-			cursor.Digest != digest || cursor.Sort != options.Sort ||
-			cursor.Direction != options.Direction || !sameOptionalBucket(cursor.Bucket, options.Bucket) {
+			cursor.Digest != digest || cursor.Offset < 0 {
 			return nil, apiError(http.StatusBadRequest, "invalid activity session cursor")
 		}
-		options.Offset = cursor.Offset
+		continuation = &activity.SessionPageOptions{
+			Sort: cursor.Sort, Direction: cursor.Direction, Bucket: cursor.Bucket,
+		}
+		cursorOffset = cursor.Offset
 	}
+	options, err = activity.ResolveSessionPageOptions(
+		options, continuation, activity.SessionPageOptionPresence{
+			Sort: in.Sort != "", Direction: in.Direction != "", Bucket: in.Bucket.IsSet,
+		},
+	)
+	if err != nil {
+		if in.Cursor != "" {
+			return nil, apiError(http.StatusBadRequest, "invalid activity session cursor")
+		}
+		return nil, apiError(http.StatusBadRequest, err.Error())
+	}
+	if options.Bucket != nil &&
+		(*options.Bucket < 0 || *options.Bucket >= artifacts.Report.BucketCount) {
+		if in.Cursor != "" {
+			return nil, apiError(http.StatusBadRequest, "invalid activity session cursor")
+		}
+		return nil, apiError(http.StatusBadRequest, "invalid activity report bucket")
+	}
+	options.Offset = cursorOffset
 	page, pageCached, err := s.activityReports.page(in.ReportID, options)
 	if err != nil {
 		return nil, apiError(http.StatusBadRequest, err.Error())
@@ -168,11 +184,4 @@ func (s *Server) humaActivityReportSessions(
 		response.Report = &pageReport
 	}
 	return &jsonOutput[activityReportSessionsResponse]{Body: response}, nil
-}
-
-func sameOptionalBucket(left, right *int) bool {
-	if left == nil || right == nil {
-		return left == nil && right == nil
-	}
-	return *left == *right
 }

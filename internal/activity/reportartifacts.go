@@ -65,6 +65,15 @@ type SessionPageOptions struct {
 	Bucket    *int
 }
 
+// SessionPageOptionPresence records which cursor-bound options the caller
+// explicitly supplied. Omitted options inherit their values from a
+// continuation cursor; explicit values must match it.
+type SessionPageOptionPresence struct {
+	Sort      bool
+	Direction bool
+	Bucket    bool
+}
+
 type SessionPage struct {
 	Sessions   []SessionRow `json:"sessions"`
 	Next       int          `json:"-"`
@@ -101,6 +110,43 @@ func NormalizeSessionPageOptions(options SessionPageOptions) (SessionPageOptions
 		)
 	}
 	return options, nil
+}
+
+// ResolveSessionPageOptions applies cursor state before request defaults. This
+// lets a cursor stand alone while still rejecting attempts to change its sort
+// or bucket membership midway through a deterministic ordering.
+func ResolveSessionPageOptions(
+	requested SessionPageOptions,
+	continuation *SessionPageOptions,
+	presence SessionPageOptionPresence,
+) (SessionPageOptions, error) {
+	if continuation == nil {
+		return NormalizeSessionPageOptions(requested)
+	}
+	normalizedContinuation, err := NormalizeSessionPageOptions(*continuation)
+	if err != nil {
+		return SessionPageOptions{}, err
+	}
+	if presence.Sort && requested.Sort != normalizedContinuation.Sort {
+		return SessionPageOptions{}, fmt.Errorf("activity session sort does not match cursor")
+	}
+	if presence.Direction && requested.Direction != normalizedContinuation.Direction {
+		return SessionPageOptions{}, fmt.Errorf("activity session direction does not match cursor")
+	}
+	if presence.Bucket && !sameSessionBucket(requested.Bucket, normalizedContinuation.Bucket) {
+		return SessionPageOptions{}, fmt.Errorf("activity session bucket does not match cursor")
+	}
+	requested.Sort = normalizedContinuation.Sort
+	requested.Direction = normalizedContinuation.Direction
+	requested.Bucket = normalizedContinuation.Bucket
+	return NormalizeSessionPageOptions(requested)
+}
+
+func sameSessionBucket(left, right *int) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 // PageSessions applies backend-independent membership and deterministic total
