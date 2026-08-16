@@ -73,6 +73,18 @@ func TestSyncAllZedLegacySchemaPreservesOtherProviders(t *testing.T) {
 	_, err = db.Exec(string(artifact))
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
+	provider, ok := parser.NewProvider(parser.AgentZed, parser.ProviderConfig{
+		Roots: []string{zedDir}, Machine: "local",
+	})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	parsed, err := provider.Parse(t.Context(), parser.ParseRequest{Source: sources[0]})
+	require.NoError(t, err)
+	assert.True(t, parsed.ResultSetComplete)
+	assert.Equal(t, parser.SkipNoSession, parsed.SkipReason)
+	assert.Empty(t, parsed.Results)
 
 	aiderDir := filepath.Join(root, "aider", "repo")
 	require.NoError(t, os.MkdirAll(aiderDir, 0o755))
