@@ -2033,6 +2033,70 @@ func (db *DB) queueSubagentParentRepairs(ids []string, cleanup bool) error {
 	return nil
 }
 
+func repairSubagentParentsForSessionsTx(tx *sql.Tx, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	ph, args := inPlaceholders(ids)
+	allArgs := append(append([]any{}, args...), args...)
+	if _, err := tx.Exec(
+		linkSubagentSessionsForSessionsQuery(ph), allArgs...,
+	); err != nil {
+		return fmt.Errorf(
+			"linking queued subagent parents for %d sessions: %w",
+			len(ids), err,
+		)
+	}
+	if _, err := tx.Exec(
+		clearSelfSubagentParentQuery(ph), args...,
+	); err != nil {
+		return fmt.Errorf(
+			"clearing queued self-referential subagent parents for %d "+
+				"sessions: %w",
+			len(ids), err,
+		)
+	}
+	cleanupSeeds := `(SELECT session_id
+		FROM subagent_parent_cleanup_queue WHERE session_id IN ` + ph + `)`
+	if _, err := tx.Exec(
+		clearDanglingSubagentParentQuery(cleanupSeeds), args...,
+	); err != nil {
+		return fmt.Errorf(
+			"clearing queued dangling subagent parents for %d sessions: %w",
+			len(ids), err,
+		)
+	}
+	return nil
+}
+
+func removeSubagentParentRepairQueueForSessionsTx(
+	tx *sql.Tx, ids []string,
+) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	ph, args := inPlaceholders(ids)
+	if _, err := tx.Exec(
+		"DELETE FROM subagent_parent_cleanup_queue WHERE session_id IN "+ph,
+		args...,
+	); err != nil {
+		return fmt.Errorf(
+			"clearing %d queued subagent parent cleanups: %w",
+			len(ids), err,
+		)
+	}
+	if _, err := tx.Exec(
+		"DELETE FROM subagent_parent_repair_queue WHERE session_id IN "+ph,
+		args...,
+	); err != nil {
+		return fmt.Errorf(
+			"clearing %d queued subagent parent repairs: %w",
+			len(ids), err,
+		)
+	}
+	return nil
+}
+
 // RepairQueuedSubagentParents re-evaluates every durably queued session and
 // clears the queue in the same transaction. A failed link or cleanup rolls
 // back both the hierarchy changes and queue deletion so a later sync retries
@@ -2091,53 +2155,11 @@ func (db *DB) RepairQueuedSubagentParents() error {
 		}
 
 		chunk := ids
-		ph, args := inPlaceholders(chunk)
-		allArgs := append(append([]any{}, args...), args...)
-		if _, err := tx.Exec(
-			linkSubagentSessionsForSessionsQuery(ph), allArgs...,
-		); err != nil {
-			return fmt.Errorf(
-				"linking queued subagent parents for %d sessions: %w",
-				len(chunk), err,
-			)
+		if err := repairSubagentParentsForSessionsTx(tx, chunk); err != nil {
+			return err
 		}
-		if _, err := tx.Exec(
-			clearSelfSubagentParentQuery(ph), args...,
-		); err != nil {
-			return fmt.Errorf(
-				"clearing queued self-referential subagent parents for %d "+
-					"sessions: %w",
-				len(chunk), err,
-			)
-		}
-		cleanupSeeds := `(SELECT session_id
-			FROM subagent_parent_cleanup_queue WHERE session_id IN ` + ph + `)`
-		if _, err := tx.Exec(
-			clearDanglingSubagentParentQuery(cleanupSeeds), args...,
-		); err != nil {
-			return fmt.Errorf(
-				"clearing queued dangling subagent parents for %d "+
-					"sessions: %w",
-				len(chunk), err,
-			)
-		}
-		if _, err := tx.Exec(
-			"DELETE FROM subagent_parent_cleanup_queue WHERE session_id IN "+ph,
-			args...,
-		); err != nil {
-			return fmt.Errorf(
-				"clearing %d queued subagent parent cleanups: %w",
-				len(chunk), err,
-			)
-		}
-		if _, err := tx.Exec(
-			"DELETE FROM subagent_parent_repair_queue WHERE session_id IN "+ph,
-			args...,
-		); err != nil {
-			return fmt.Errorf(
-				"clearing %d queued subagent parent repairs: %w",
-				len(chunk), err,
-			)
+		if err := removeSubagentParentRepairQueueForSessionsTx(tx, chunk); err != nil {
+			return err
 		}
 	}
 	if err := tx.Commit(); err != nil {

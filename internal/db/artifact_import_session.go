@@ -75,12 +75,7 @@ func (db *DB) applyArtifactImportedSession(
 	write = sanitizeSessionBatchWrite(write)
 
 	db.mu.Lock()
-	locked := true
-	defer func() {
-		if locked {
-			db.mu.Unlock()
-		}
-	}()
+	defer db.mu.Unlock()
 	tx, err := db.getWriter().BeginTx(ctx, nil)
 	if err != nil {
 		return result, fmt.Errorf("beginning artifact imported session: %w", err)
@@ -107,14 +102,6 @@ func (db *DB) applyArtifactImportedSession(
 				"committing suppressed artifact imported session: %w", err,
 			)
 		}
-		locked = false
-		db.mu.Unlock()
-		if err := db.RepairQueuedSubagentParents(); err != nil {
-			return result, fmt.Errorf(
-				"repairing queued subagent parents after artifact import: %w",
-				err,
-			)
-		}
 		result.Suppressed = true
 		return result, nil
 	case err != nil && !errors.Is(err, sql.ErrNoRows):
@@ -129,6 +116,20 @@ func (db *DB) applyArtifactImportedSession(
 	case err == nil:
 		result.Written = true
 		result.WrittenMessages = messagesWritten
+		if err := repairSubagentParentsForSessionsTx(
+			tx, []string{write.Session.ID},
+		); err != nil {
+			return ArtifactImportedSessionResult{}, fmt.Errorf(
+				"repairing imported subagent parent: %w", err,
+			)
+		}
+		if err := removeSubagentParentRepairQueueForSessionsTx(
+			tx, []string{write.Session.ID},
+		); err != nil {
+			return ArtifactImportedSessionResult{}, fmt.Errorf(
+				"clearing imported subagent parent repair: %w", err,
+			)
+		}
 	case errors.Is(err, ErrSessionExcluded):
 		result.Suppressed = true
 	case errors.Is(err, ErrSessionTrashed):
@@ -149,13 +150,6 @@ func (db *DB) applyArtifactImportedSession(
 			fmt.Errorf("committing artifact imported session: %w", err)
 	}
 	pendingRecallRevocations.flush()
-	locked = false
-	db.mu.Unlock()
-	if err := db.RepairQueuedSubagentParents(); err != nil {
-		return result, fmt.Errorf(
-			"repairing queued subagent parents after artifact import: %w", err,
-		)
-	}
 	return result, nil
 }
 

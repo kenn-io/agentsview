@@ -570,6 +570,12 @@ func TestApplyArtifactImportedSessionPreservesLocalCollision(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, 1, result.WrittenSessions)
+	queuedID := "queued-unrelated"
+	insertSession(t, database, queuedID, "queued-project", func(s *Session) {
+		s.ParentSessionID = Ptr(queuedID)
+		s.RelationshipType = "subagent"
+	})
+	require.NoError(t, database.QueueSubagentParentRepairs([]string{queuedID}))
 
 	imported := ArtifactImportedSession{
 		Origin:            origin,
@@ -587,6 +593,12 @@ func TestApplyArtifactImportedSessionPreservesLocalCollision(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, applied.Suppressed)
 	assert.False(t, applied.Written)
+	var queued int
+	require.NoError(t, database.Reader().QueryRow(`
+		SELECT count(*) FROM subagent_parent_repair_queue WHERE session_id = ?`,
+		queuedID).Scan(&queued))
+	assert.Equal(t, 1, queued,
+		"suppressed artifact imports must not drain unrelated repairs")
 
 	session, err := database.GetSession(ctx, gid)
 	require.NoError(t, err)
