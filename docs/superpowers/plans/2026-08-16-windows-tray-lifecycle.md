@@ -23,7 +23,8 @@ Tauri's packaged default window icon on Windows.
 - The tray menu remains Show AgentsView, Open Logs Folder, Check for Updates,
   and Quit.
 - Closing hides the main window on macOS and Windows; Quit explicitly exits.
-- Preserve the current non-fatal logging behavior for setup errors.
+- Preserve non-fatal logging for setup errors, but only register close
+  interception after tray creation succeeds.
 - Do not add dependencies beyond Tauri's existing `tray-icon` feature.
 
 ______________________________________________________________________
@@ -143,8 +144,9 @@ ______________________________________________________________________
     ```
 
     Rename `setup_macos_window_lifecycle` to `setup_window_lifecycle`, and keep
-    `macos_status_item_icon` macOS-only. Use platform-neutral startup log
-    messages for the shared setup calls.
+    `macos_status_item_icon` macOS-only. Sequence tray and lifecycle setup so a
+    tray error skips close interception, preserving normal close behavior. Use a
+    platform-neutral startup log message for the combined setup path.
 
 - [ ] **Step 5: Update the desktop documentation**
 

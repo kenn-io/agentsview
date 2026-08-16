@@ -158,12 +158,10 @@ pub fn run() {
                 eprintln!("[agentsview] failed to set up desktop menu: {err}");
             }
             #[cfg(any(target_os = "macos", target_os = "windows"))]
-            if let Err(err) = setup_status_item(app) {
-                eprintln!("[agentsview] failed to set up system tray: {err}");
-            }
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            if let Err(err) = setup_window_lifecycle(app) {
-                eprintln!("[agentsview] failed to set up window lifecycle: {err}");
+            if let Err(err) =
+                setup_close_to_tray_with(app, setup_status_item, setup_window_lifecycle)
+            {
+                eprintln!("[agentsview] failed to set up close-to-tray behavior: {err}");
             }
             match tauri::async_runtime::block_on(run_data_version_preflight(app.handle())) {
                 Ok(()) => {
@@ -2038,6 +2036,16 @@ fn setup_status_item(app: &mut App) -> Result<(), DynError> {
 
     builder.build(app)?;
     Ok(())
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn setup_close_to_tray_with<T>(
+    target: &mut T,
+    setup_status_item: impl FnOnce(&mut T) -> Result<(), DynError>,
+    setup_window_lifecycle: impl FnOnce(&T) -> Result<(), DynError>,
+) -> Result<(), DynError> {
+    setup_status_item(target)?;
+    setup_window_lifecycle(target)
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -3998,6 +4006,27 @@ agentsview running at http://127.0.0.1:18082
             *window.calls.lock().expect("lock calls for assertion"),
             vec!["prevent_close", "hide", "show", "unminimize", "focus"]
         );
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn tray_setup_failure_does_not_register_window_lifecycle() {
+        let calls = std::cell::RefCell::new(Vec::new());
+
+        let result = setup_close_to_tray_with(
+            &mut (),
+            |_| {
+                calls.borrow_mut().push("tray");
+                Err(io::Error::other("tray setup failed").into())
+            },
+            |_| {
+                calls.borrow_mut().push("lifecycle");
+                Ok(())
+            },
+        );
+
+        assert!(result.is_err());
+        assert_eq!(*calls.borrow(), vec!["tray"]);
     }
 
     #[cfg(target_os = "macos")]

@@ -23,8 +23,10 @@ This avoids adding Linux AppIndicator packaging requirements in this change.
 
 ## Error Handling
 
-Tray and window-lifecycle setup keep the existing non-fatal startup behavior:
-setup failures are logged and do not abort the desktop wrapper.
+Close-to-tray setup keeps the existing non-fatal startup behavior: setup
+failures are logged and do not abort the desktop wrapper. Window-lifecycle setup
+only runs after tray creation succeeds, so a tray setup failure preserves normal
+close behavior rather than hiding the window without a restore surface.
 Platform-specific icon selection occurs during tray setup and propagates errors
 through the same setup result.
 
