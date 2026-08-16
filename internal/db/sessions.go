@@ -35,8 +35,8 @@ var ErrSessionTrashed = errors.New("session trashed")
 const deletionCauseSourceMissing = "source_missing"
 
 // subagentParentRepairQueueStateKey is the temporary JSON queue used by early
-// builds of the nested-hierarchy change. RepairQueuedSubagentParents migrates
-// it into subagent_parent_repair_queue before processing queued children.
+// builds of the nested-hierarchy change. The repair-state upgrade migrates it
+// into subagent_parent_repair_queue before processing queued children.
 const subagentParentRepairQueueStateKey = "subagent_parent_repair_queue_v1"
 
 const subagentParentRepairStateUpgradeKey = "subagent_parent_repair_state_upgrade_v1"
@@ -1715,10 +1715,8 @@ func (db *DB) GetChildSessions(
 // The LEFT JOIN keeps an edge whose spawner has no sessions row as a
 // last-resort candidate (it sorts with the unknown start times) rather
 // than discarding it.
-func nonSelfSubagentEdgePredicate(spawnerExpr, childExpr string) string {
-	return spawnerExpr + " IS NOT " + childExpr
-}
-
+//
+// subagentSpawnerExpr resolves the parent of the session aliased `s`.
 var subagentSpawnerExpr = `
 		SELECT tc.session_id
 		FROM tool_calls tc
@@ -1731,6 +1729,11 @@ var subagentSpawnerExpr = `
 			(tc.session_id IS NOT s.parser_parent_session_id),
 			tc.session_id
 		LIMIT 1`
+
+// nonSelfSubagentEdgePredicate returns the identity guard for a spawn edge.
+func nonSelfSubagentEdgePredicate(spawnerExpr, childExpr string) string {
+	return spawnerExpr + " IS NOT " + childExpr
+}
 
 // linkSubagentSessionsQuery re-points every session that carries a spawn edge
 // at the spawner subagentSpawnerExpr resolves for it.
@@ -1774,7 +1777,7 @@ var linkSubagentSessionsQuery = `
 		OR (
 			parent_session_id IS NOT (` + subagentSpawnerExpr + `
 			)
-			AND ((` + subagentSpawnerExpr + `) IS NOT NULL OR parent_session_id IS s.id)
+			AND (` + subagentSpawnerExpr + `) IS NOT NULL
 		)
 	)`
 
@@ -1865,7 +1868,7 @@ func linkSubagentSessionsForSessionsQuery(ph string) string {
 		OR (
 			parent_session_id IS NOT (` + subagentSpawnerExpr + `
 			)
-			AND ((` + subagentSpawnerExpr + `) IS NOT NULL OR parent_session_id IS s.id)
+			AND (` + subagentSpawnerExpr + `) IS NOT NULL
 		)
 	)`
 }

@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -357,16 +358,26 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	sourceHasUpgradeMarker := false
 	if oldDBHasTable(ctx, tx, "pg_sync_state") {
+		var marker int
+		if err := tx.QueryRowContext(ctx, `
+			SELECT EXISTS(
+				SELECT 1 FROM old_db.pg_sync_state WHERE key = ?
+			)`, subagentParentRepairStateUpgradeKey).Scan(&marker); err != nil {
+			return fmt.Errorf("checking source hierarchy upgrade marker: %w", err)
+		}
+		sourceHasUpgradeMarker = marker != 0
 		if _, err := tx.ExecContext(ctx, `
 			INSERT OR REPLACE INTO main.pg_sync_state (key, value)
 			SELECT key, value FROM old_db.pg_sync_state
 			WHERE key = 'pg_push_marker_id'
 			   OR key LIKE 'artifact\_%' ESCAPE '\'
-			   OR key = ?
-			   OR key = ?`, subagentParentRepairQueueStateKey,
-			subagentParentRepairStateUpgradeKey); err != nil {
+			   OR key = ?`, subagentParentRepairStateUpgradeKey); err != nil {
 			return fmt.Errorf("copying sync state: %w", err)
+		}
+		if err := copyLegacySubagentParentRepairQueueFromSource(ctx, tx); err != nil {
+			return err
 		}
 	}
 	if oldDBHasTable(ctx, tx, "subagent_parent_repair_queue") {
@@ -377,8 +388,12 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 		}
 	}
 	if oldDBHasTable(ctx, tx, "subagent_parent_cleanup_queue") {
+		cleanupTarget := "main.subagent_parent_cleanup_queue"
+		if !sourceHasUpgradeMarker {
+			cleanupTarget = "main.subagent_parent_repair_queue"
+		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT OR IGNORE INTO main.subagent_parent_cleanup_queue (session_id)
+			INSERT OR IGNORE INTO `+cleanupTarget+` (session_id)
 			SELECT session_id FROM old_db.subagent_parent_cleanup_queue`); err != nil {
 			return fmt.Errorf("copying subagent parent cleanup queue: %w", err)
 		}
@@ -493,6 +508,44 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing sync state copy: %w", err)
+	}
+	return nil
+}
+
+func copyLegacySubagentParentRepairQueueFromSource(
+	ctx context.Context,
+	tx *sql.Tx,
+) error {
+	var encoded string
+	err := tx.QueryRowContext(ctx, `
+		SELECT value FROM old_db.pg_sync_state WHERE key = ?`,
+		subagentParentRepairQueueStateKey).Scan(&encoded)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("reading source legacy subagent parent repair queue: %w", err)
+	}
+	var ids []string
+	if err := json.Unmarshal([]byte(encoded), &ids); err != nil {
+		return fmt.Errorf("decoding source legacy subagent parent repair queue: %w", err)
+	}
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT OR IGNORE INTO main.subagent_parent_repair_queue (session_id)
+		VALUES (?)`)
+	if err != nil {
+		return fmt.Errorf("preparing source legacy subagent parent repair queue: %w", err)
+	}
+	defer stmt.Close()
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, err := stmt.ExecContext(ctx, id); err != nil {
+			return fmt.Errorf(
+				"copying source legacy subagent parent repair for %s: %w", id, err,
+			)
+		}
 	}
 	return nil
 }

@@ -1182,6 +1182,15 @@ func TestRepairQueuedSubagentParentsSelfEdgeUpgradeIsIdempotent(t *testing.T) {
 	afterFirst, err := d.GetSessionFull(context.Background(), "child")
 	requireNoError(t, err, "GetSessionFull after first upgrade")
 	require.NotNil(t, afterFirst.LocalModifiedAt)
+	markerPlan := queryPlanOf(t, d,
+		"SELECT EXISTS(SELECT 1 FROM pg_sync_state WHERE key = ?)",
+		subagentParentRepairStateUpgradeKey,
+	)
+	assert.Contains(t, markerPlan, "sqlite_autoindex_pg_sync_state_1",
+		"upgrade marker lookup must use the pg_sync_state primary key")
+	clearPlan := queryPlanOf(t, d, clearSelfSubagentParentQuery("(?)"), "child")
+	assert.NotContains(t, clearPlan, "SCAN s",
+		"scoped self-parent repair must seek sessions by primary key")
 	var queued int
 	require.NoError(t, d.Reader().QueryRow(`
 		SELECT (SELECT count(*) FROM subagent_parent_repair_queue) +
