@@ -81,6 +81,9 @@ func (db *DB) applyArtifactImportedSession(
 		return result, fmt.Errorf("beginning artifact imported session: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := upgradeSubagentParentRepairStateTx(tx); err != nil {
+		return result, err
+	}
 
 	var machine string
 	err = tx.QueryRowContext(ctx, `

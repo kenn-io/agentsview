@@ -650,6 +650,58 @@ func TestApplyArtifactImportedSessionRepairsSelfParent(t *testing.T) {
 	assert.Nil(t, session.ParentSessionID)
 }
 
+func TestApplyArtifactImportedSessionDemotesPreUpgradeCleanup(t *testing.T) {
+	database := testDB(t)
+	ctx := t.Context()
+	origin := "peer-a1b2c3"
+	parserParent := "parser-parent"
+	gid := origin + "~pre-upgrade"
+	insertSession(t, database, gid, "peer-project", func(s *Session) {
+		s.Machine = origin
+		s.ParentSessionID = Ptr(parserParent)
+		s.RelationshipType = "subagent"
+	})
+	_, err := database.getWriter().Exec(
+		"INSERT INTO subagent_parent_cleanup_queue(session_id) VALUES (?)", gid,
+	)
+	require.NoError(t, err)
+
+	write := SessionBatchWrite{
+		Session: Session{
+			ID: gid, Project: "peer-project", Machine: origin,
+			Agent: "claude", ParentSessionID: Ptr(parserParent),
+			RelationshipType: "subagent",
+		},
+		Messages:        []Message{{SessionID: gid, Ordinal: 0, Role: "user"}},
+		ReplaceMessages: true,
+	}
+	imported := ArtifactImportedSession{
+		Origin: origin, GID: gid,
+		ManifestHash:      strings.Repeat("c", 64),
+		ImportedSessionID: gid,
+	}
+	result, err := database.ApplyArtifactImportedSession(ctx, imported, write)
+	require.NoError(t, err)
+	assert.True(t, result.Written)
+
+	session, err := database.GetSession(ctx, gid)
+	require.NoError(t, err)
+	require.NotNil(t, session.ParentSessionID)
+	assert.Equal(t, parserParent, *session.ParentSessionID)
+	marker, err := database.GetSyncState(subagentParentRepairStateUpgradeKey)
+	require.NoError(t, err)
+	assert.Equal(t, "1", marker)
+	var cleanups, repairs int
+	require.NoError(t, database.Reader().QueryRow(
+		"SELECT count(*) FROM subagent_parent_cleanup_queue",
+	).Scan(&cleanups))
+	require.NoError(t, database.Reader().QueryRow(
+		"SELECT count(*) FROM subagent_parent_repair_queue",
+	).Scan(&repairs))
+	assert.Zero(t, cleanups)
+	assert.Zero(t, repairs)
+}
+
 func TestArtifactImportedManifestHashesChunksWithinSQLiteVariableLimit(
 	t *testing.T,
 ) {
