@@ -570,12 +570,6 @@ func TestApplyArtifactImportedSessionPreservesLocalCollision(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, 1, result.WrittenSessions)
-	queuedID := "queued-unrelated"
-	insertSession(t, database, queuedID, "queued-project", func(s *Session) {
-		s.ParentSessionID = Ptr(queuedID)
-		s.RelationshipType = "subagent"
-	})
-	require.NoError(t, database.QueueSubagentParentRepairs([]string{queuedID}))
 
 	imported := ArtifactImportedSession{
 		Origin:            origin,
@@ -593,12 +587,6 @@ func TestApplyArtifactImportedSessionPreservesLocalCollision(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, applied.Suppressed)
 	assert.False(t, applied.Written)
-	var queued int
-	require.NoError(t, database.Reader().QueryRow(`
-		SELECT count(*) FROM subagent_parent_repair_queue WHERE session_id = ?`,
-		queuedID).Scan(&queued))
-	assert.Equal(t, 1, queued,
-		"suppressed artifact imports must not drain unrelated repairs")
 
 	session, err := database.GetSession(ctx, gid)
 	require.NoError(t, err)
@@ -614,92 +602,6 @@ func TestApplyArtifactImportedSessionPreservesLocalCollision(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{gid: imported.ManifestHash}, provenance)
-}
-
-func TestApplyArtifactImportedSessionRepairsSelfParent(t *testing.T) {
-	database := testDB(t)
-	ctx := t.Context()
-	origin := "peer-a1b2c3"
-	gid := origin + "~self-parent"
-	write := SessionBatchWrite{
-		Session: Session{
-			ID: gid, Project: "peer-project", Machine: origin,
-			Agent: "claude", ParentSessionID: Ptr(gid),
-			RelationshipType: "subagent",
-		},
-		Messages:        []Message{spawnEdgeTo(gid, gid, "artifact self spawn")},
-		ReplaceMessages: true,
-	}
-	imported := ArtifactImportedSession{
-		Origin: origin, GID: gid,
-		ManifestHash:      strings.Repeat("b", 64),
-		ImportedSessionID: gid,
-	}
-	result, err := database.ApplyArtifactImportedSession(ctx, imported, write)
-	require.NoError(t, err)
-	assert.True(t, result.Written)
-
-	var queued int
-	require.NoError(t, database.Reader().QueryRow(`
-		SELECT count(*) FROM subagent_parent_repair_queue WHERE session_id = ?`,
-		gid).Scan(&queued))
-	assert.Zero(t, queued,
-		"artifact import must drain self-parent repair before returning")
-	session, err := database.GetSession(ctx, gid)
-	require.NoError(t, err)
-	assert.Nil(t, session.ParentSessionID)
-}
-
-func TestApplyArtifactImportedSessionDemotesPreUpgradeCleanup(t *testing.T) {
-	database := testDB(t)
-	ctx := t.Context()
-	origin := "peer-a1b2c3"
-	parserParent := "parser-parent"
-	gid := origin + "~pre-upgrade"
-	insertSession(t, database, gid, "peer-project", func(s *Session) {
-		s.Machine = origin
-		s.ParentSessionID = Ptr(parserParent)
-		s.RelationshipType = "subagent"
-	})
-	_, err := database.getWriter().Exec(
-		"INSERT INTO subagent_parent_cleanup_queue(session_id) VALUES (?)", gid,
-	)
-	require.NoError(t, err)
-
-	write := SessionBatchWrite{
-		Session: Session{
-			ID: gid, Project: "peer-project", Machine: origin,
-			Agent: "claude", ParentSessionID: Ptr(parserParent),
-			RelationshipType: "subagent",
-		},
-		Messages:        []Message{{SessionID: gid, Ordinal: 0, Role: "user"}},
-		ReplaceMessages: true,
-	}
-	imported := ArtifactImportedSession{
-		Origin: origin, GID: gid,
-		ManifestHash:      strings.Repeat("c", 64),
-		ImportedSessionID: gid,
-	}
-	result, err := database.ApplyArtifactImportedSession(ctx, imported, write)
-	require.NoError(t, err)
-	assert.True(t, result.Written)
-
-	session, err := database.GetSession(ctx, gid)
-	require.NoError(t, err)
-	require.NotNil(t, session.ParentSessionID)
-	assert.Equal(t, parserParent, *session.ParentSessionID)
-	marker, err := database.GetSyncState(subagentParentRepairStateUpgradeKey)
-	require.NoError(t, err)
-	assert.Equal(t, "1", marker)
-	var cleanups, repairs int
-	require.NoError(t, database.Reader().QueryRow(
-		"SELECT count(*) FROM subagent_parent_cleanup_queue",
-	).Scan(&cleanups))
-	require.NoError(t, database.Reader().QueryRow(
-		"SELECT count(*) FROM subagent_parent_repair_queue",
-	).Scan(&repairs))
-	assert.Zero(t, cleanups)
-	assert.Zero(t, repairs)
 }
 
 func TestArtifactImportedManifestHashesChunksWithinSQLiteVariableLimit(

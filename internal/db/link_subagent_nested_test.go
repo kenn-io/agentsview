@@ -213,6 +213,19 @@ func parentOfSession(t *testing.T, d *DB, id string) string {
 	return *s.ParentSessionID
 }
 
+// forceSelfParent writes parent_session_id = id directly, bypassing the
+// ingest sanitizer, to reproduce a row linked by a build that still treated
+// self-referential spawn edges as evidence.
+func forceSelfParent(t *testing.T, d *DB, id string) {
+	t.Helper()
+	_, err := d.getWriter().Exec(`
+		UPDATE sessions
+		SET parent_session_id = id, relationship_type = 'subagent',
+		    local_modified_at = '2026-01-01T00:00:00.000Z'
+		WHERE id = ?`, id)
+	require.NoError(t, err, "forceSelfParent %s", id)
+}
+
 func TestLinkSubagentSessionsRejectsSelfEdges(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -235,30 +248,33 @@ func TestLinkSubagentSessionsRejectsSelfEdges(t *testing.T) {
 			withParent: true,
 		},
 		{
-			name:       "scoped_self_and_real",
-			link:       func(d *DB) error { return d.LinkSubagentSessionsForSessions([]string{"real-parent", "child"}) },
+			name: "scoped_self_and_real",
+			link: func(d *DB) error {
+				return d.LinkSubagentSessionsForSessions(
+					[]string{"real-parent", "child"},
+				)
+			},
 			withParent: true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "child", "p", func(s *Session) {
-				s.MessageCount = 1
 				if tc.withParent {
 					// Make the invalid self edge rank ahead of the valid edge
-					// under the pre-fix chronology, so the guard is exercised.
+					// under chronology, so the guard is what decides.
 					s.StartedAt = Ptr("2026-02-01T00:00:00.000Z")
 				}
 			})
 			if tc.withParent {
 				insertSession(t, d, "real-parent", "p", func(s *Session) {
-					s.MessageCount = 1
 					s.StartedAt = Ptr("2026-03-01T00:00:00.000Z")
 				})
 			}
 			insertMessages(t, d, spawnEdgeTo("child", "child", "self spawn"))
 			if tc.withParent {
-				insertMessages(t, d, spawnEdgeTo("real-parent", "child", "real spawn"))
+				insertMessages(t, d,
+					spawnEdgeTo("real-parent", "child", "real spawn"))
 			}
 
 			require.NoError(t, tc.link(d))
@@ -274,75 +290,6 @@ func TestLinkSubagentSessionsRejectsSelfEdges(t *testing.T) {
 			}
 		})
 	}
-
-	t.Run("scoped_cleanup_ignores_self_only_edge", func(t *testing.T) {
-		d := testDB(t)
-		insertSession(t, d, "child", "p", func(s *Session) {
-			s.MessageCount = 1
-			s.ParentSessionID = Ptr("deleted-parent")
-			s.RelationshipType = "subagent"
-		})
-		insertMessages(t, d, spawnEdgeTo("child", "child", "self spawn"))
-		require.NoError(t, d.QueueSubagentParentCleanupRepairs([]string{"child"}))
-		require.NoError(t, d.RepairQueuedSubagentParents())
-
-		child, err := d.GetSession(context.Background(), "child")
-		requireNoError(t, err, "GetSession child")
-		assert.Nil(t, child.ParentSessionID)
-		assert.Equal(t, "subagent", child.RelationshipType)
-	})
-
-	for _, tc := range []struct {
-		name string
-		link func(*DB) error
-	}{
-		{
-			name: "global_repairs_existing_self_parent",
-			link: func(d *DB) error { return d.LinkSubagentSessions() },
-		},
-		{
-			name: "scoped_repairs_existing_self_parent",
-			link: func(d *DB) error {
-				return d.LinkSubagentSessionsForSessions([]string{"child"})
-			},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			d := testDB(t)
-			insertSession(t, d, "child", "p", func(s *Session) {
-				s.MessageCount = 1
-				s.ParentSessionID = Ptr("child")
-				s.RelationshipType = "subagent"
-			})
-			insertMessages(t, d, spawnEdgeTo("child", "child", "legacy self spawn"))
-
-			require.NoError(t, tc.link(d))
-			child, err := d.GetSession(context.Background(), "child")
-			requireNoError(t, err, "GetSession child")
-			assert.Nil(t, child.ParentSessionID,
-				"existing self parent must be cleared")
-			assert.Equal(t, "subagent", child.RelationshipType,
-				"repair must preserve subagent classification")
-		})
-	}
-
-	t.Run("queued_repairs_existing_self_parent_without_edge", func(t *testing.T) {
-		d := testDB(t)
-		insertSession(t, d, "child", "p", func(s *Session) {
-			s.MessageCount = 1
-			s.ParentSessionID = Ptr("child")
-			s.RelationshipType = "subagent"
-		})
-		require.NoError(t, d.QueueSubagentParentCleanupRepairs([]string{"child"}))
-		require.NoError(t, d.RepairQueuedSubagentParents())
-
-		child, err := d.GetSession(context.Background(), "child")
-		requireNoError(t, err, "GetSession child")
-		assert.Nil(t, child.ParentSessionID,
-			"queued repair must clear an existing self parent without an edge")
-		assert.Equal(t, "subagent", child.RelationshipType,
-			"queued repair must preserve subagent classification")
-	})
 
 	for _, tc := range []struct {
 		name         string
@@ -364,15 +311,12 @@ func TestLinkSubagentSessionsRejectsSelfEdges(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
-			insertSession(t, d, "parser-parent", "p", func(s *Session) {
-				s.MessageCount = 1
-			})
+			insertSession(t, d, "parser-parent", "p")
 			insertSession(t, d, "child", "p", func(s *Session) {
-				s.MessageCount = 1
 				s.ParentSessionID = Ptr("parser-parent")
 				s.RelationshipType = tc.relationship
 			})
-			insertMessages(t, d, spawnEdgeTo("child", "child", "legacy self spawn"))
+			insertMessages(t, d, spawnEdgeTo("child", "child", "self spawn"))
 
 			require.NoError(t, tc.link(d))
 			child, err := d.GetSession(context.Background(), "child")
@@ -385,52 +329,63 @@ func TestLinkSubagentSessionsRejectsSelfEdges(t *testing.T) {
 		})
 	}
 
-	for _, tc := range []struct {
-		name string
-		link func(*DB) error
-	}{
-		{
-			name: "scoped",
-			link: func(d *DB) error {
-				return d.LinkSubagentSessionsForSessions([]string{"child"})
-			},
-		},
-		{
-			name: "queued",
-			link: func(d *DB) error {
-				require.NoError(t, d.QueueSubagentParentCleanupRepairs([]string{"child"}))
-				return d.RepairQueuedSubagentParents()
-			},
-		},
-	} {
-		t.Run("bumps_local_modified_at_"+tc.name, func(t *testing.T) {
-			d := testDB(t)
-			insertSession(t, d, "child", "p", func(s *Session) {
-				s.MessageCount = 1
-				s.ParentSessionID = Ptr("child")
-				s.RelationshipType = "subagent"
-			})
-			_, err := d.getWriter().Exec(
-				"UPDATE sessions SET local_modified_at = ? WHERE id = ?",
-				"2026-01-01T00:00:00.000Z", "child",
-			)
-			require.NoError(t, err, "seed local_modified_at")
-			if tc.name == "scoped" {
-				insertMessages(t, d, spawnEdgeTo("child", "child", "legacy self spawn"))
-			}
-			before, err := d.GetSessionFull(context.Background(), "child")
-			requireNoError(t, err, "GetSessionFull before")
-			require.NotNil(t, before.LocalModifiedAt)
-			time.Sleep(5 * time.Millisecond)
-
-			require.NoError(t, tc.link(d))
-			after, err := d.GetSessionFull(context.Background(), "child")
-			requireNoError(t, err, "GetSessionFull after")
-			require.NotNil(t, after.LocalModifiedAt)
-			assert.Greater(t, *after.LocalModifiedAt, *before.LocalModifiedAt,
-				"repair must advance local_modified_at for mirror sync")
+	t.Run("cleanup_ignores_self_only_edge_as_evidence", func(t *testing.T) {
+		d := testDB(t)
+		insertSession(t, d, "child", "p", func(s *Session) {
+			s.ParentSessionID = Ptr("deleted-parent")
+			s.RelationshipType = "subagent"
 		})
+		insertMessages(t, d, spawnEdgeTo("child", "child", "self spawn"))
+		require.NoError(t, d.QueueSubagentParentCleanupRepairs([]string{"child"}))
+		require.NoError(t, d.RepairQueuedSubagentParents())
+
+		child, err := d.GetSession(context.Background(), "child")
+		requireNoError(t, err, "GetSession child")
+		assert.Nil(t, child.ParentSessionID,
+			"a self edge is not a surviving spawn edge; the dangling parent must clear")
+		assert.Equal(t, "subagent", child.RelationshipType)
+	})
+}
+
+// TestLinkSubagentSessionsRepairsLegacySelfParentOnce covers rows written by
+// builds that resolved a self edge to the session itself. The bulk linker
+// clears them once per archive; new rows are protected at ingest
+// (SanitizeSession) and by the linker's self-edge guard, so the pass must not
+// re-run its full scan on later syncs.
+func TestLinkSubagentSessionsRepairsLegacySelfParentOnce(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "with-edge", "p")
+	insertMessages(t, d, spawnEdgeTo("with-edge", "with-edge", "legacy self spawn"))
+	insertSession(t, d, "edgeless", "p")
+	insertSession(t, d, "untouched", "p", func(s *Session) {
+		s.ParentSessionID = Ptr("real")
+		s.RelationshipType = "subagent"
+	})
+	forceSelfParent(t, d, "with-edge")
+	forceSelfParent(t, d, "edgeless")
+
+	require.NoError(t, d.LinkSubagentSessions())
+
+	for _, id := range []string{"with-edge", "edgeless"} {
+		s, err := d.GetSessionFull(context.Background(), id)
+		requireNoError(t, err, "GetSessionFull "+id)
+		assert.Nil(t, s.ParentSessionID, "%s must lose its self parent", id)
+		assert.Equal(t, "subagent", s.RelationshipType,
+			"%s must keep its subagent classification", id)
+		require.NotNil(t, s.LocalModifiedAt)
+		assert.Greater(t, *s.LocalModifiedAt, "2026-01-01T00:00:00.000Z",
+			"%s must advance local_modified_at for mirror re-push", id)
 	}
+	assert.Equal(t, "real", parentOfSession(t, d, "untouched"),
+		"a real parent must survive the repair")
+
+	forceSelfParent(t, d, "edgeless")
+	require.NoError(t, d.LinkSubagentSessions())
+	again, err := d.GetSession(context.Background(), "edgeless")
+	requireNoError(t, err, "GetSession edgeless after second link")
+	require.NotNil(t, again.ParentSessionID)
+	assert.Equal(t, "edgeless", *again.ParentSessionID,
+		"the repair is one-time per archive; ingest sanitization protects new rows")
 }
 
 // TestLinkSubagentSessionsConvergesAcrossIngestionOrder covers the
@@ -1104,112 +1059,6 @@ func TestSubagentChildSessionIDs(t *testing.T) {
 	assert.Empty(t, none)
 }
 
-func TestRepairQueuedSubagentParentsSelfEdgeUpgrade(t *testing.T) {
-	t.Run("repairs legacy self parent without queues", func(t *testing.T) {
-		d := testDB(t)
-		insertSession(t, d, "child", "p", func(s *Session) {
-			s.MessageCount = 1
-			s.ParentSessionID = Ptr("child")
-			s.RelationshipType = "subagent"
-		})
-		_, err := d.getWriter().Exec(
-			"UPDATE sessions SET local_modified_at = ? WHERE id = ?",
-			"2026-01-01T00:00:00.000Z", "child",
-		)
-		require.NoError(t, err, "seed local_modified_at")
-		before, err := d.GetSessionFull(context.Background(), "child")
-		requireNoError(t, err, "GetSessionFull before")
-		require.NotNil(t, before.LocalModifiedAt)
-
-		require.NoError(t, d.RepairQueuedSubagentParents())
-		child, err := d.GetSession(context.Background(), "child")
-		requireNoError(t, err, "GetSession child")
-		assert.Nil(t, child.ParentSessionID)
-		assert.Equal(t, "subagent", child.RelationshipType)
-		after, err := d.GetSessionFull(context.Background(), "child")
-		requireNoError(t, err, "GetSessionFull after")
-		require.NotNil(t, after.LocalModifiedAt)
-		assert.NotEqual(t, *before.LocalModifiedAt, *after.LocalModifiedAt)
-		marker, err := d.GetSyncState(subagentParentRepairStateUpgradeKey)
-		require.NoError(t, err, "upgrade marker")
-		assert.Equal(t, "1", marker)
-	})
-
-	t.Run("demotes ambiguous pre-upgrade cleanup", func(t *testing.T) {
-		d := testDB(t)
-		insertSession(t, d, "child", "p", func(s *Session) {
-			s.MessageCount = 1
-			s.ParentSessionID = Ptr("parser-parent")
-			s.RelationshipType = "subagent"
-		})
-		insertMessages(t, d, spawnEdgeTo("child", "child", "legacy self spawn"))
-		_, err := d.getWriter().Exec(
-			"INSERT INTO subagent_parent_repair_queue(session_id) VALUES (?)", "child")
-		require.NoError(t, err, "seed legacy repair queue")
-		_, err = d.getWriter().Exec(
-			"INSERT INTO subagent_parent_cleanup_queue(session_id) VALUES (?)", "child")
-		require.NoError(t, err, "seed legacy cleanup queue")
-		_, err = d.getWriter().Exec("DELETE FROM tool_calls WHERE session_id = ?", "child")
-		require.NoError(t, err, "remove legacy self edge")
-
-		require.NoError(t, d.RepairQueuedSubagentParents())
-		child, err := d.GetSession(context.Background(), "child")
-		requireNoError(t, err, "GetSession child")
-		require.NotNil(t, child.ParentSessionID)
-		assert.Equal(t, "parser-parent", *child.ParentSessionID)
-		assert.Equal(t, "subagent", child.RelationshipType)
-		var repairs, cleanups int
-		require.NoError(t, d.Reader().QueryRow("SELECT count(*) FROM subagent_parent_repair_queue").Scan(&repairs))
-		require.NoError(t, d.Reader().QueryRow("SELECT count(*) FROM subagent_parent_cleanup_queue").Scan(&cleanups))
-		assert.Zero(t, repairs)
-		assert.Zero(t, cleanups)
-	})
-}
-
-func TestRepairQueuedSubagentParentsSelfEdgeUpgradeIsIdempotent(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "child", "p", func(s *Session) {
-		s.MessageCount = 1
-		s.ParentSessionID = Ptr("child")
-		s.RelationshipType = "subagent"
-	})
-	_, err := d.getWriter().Exec(
-		"UPDATE sessions SET local_modified_at = ? WHERE id = ?",
-		"2026-01-01T00:00:00.000Z", "child",
-	)
-	require.NoError(t, err, "seed local_modified_at")
-	require.NoError(t, d.RepairQueuedSubagentParents())
-	afterFirst, err := d.GetSessionFull(context.Background(), "child")
-	requireNoError(t, err, "GetSessionFull after first upgrade")
-	require.NotNil(t, afterFirst.LocalModifiedAt)
-	markerPlan := queryPlanOf(t, d,
-		"SELECT EXISTS(SELECT 1 FROM pg_sync_state WHERE key = ?)",
-		subagentParentRepairStateUpgradeKey,
-	)
-	assert.Contains(t, markerPlan, "sqlite_autoindex_pg_sync_state_1",
-		"upgrade marker lookup must use the pg_sync_state primary key")
-	clearPlan := queryPlanOf(t, d, clearSelfSubagentParentQuery("(?)"), "child")
-	assert.NotContains(t, clearPlan, "SCAN s",
-		"scoped self-parent repair must seek sessions by primary key")
-	var queued int
-	require.NoError(t, d.Reader().QueryRow(`
-		SELECT (SELECT count(*) FROM subagent_parent_repair_queue) +
-		       (SELECT count(*) FROM subagent_parent_cleanup_queue)`).Scan(&queued))
-	assert.Zero(t, queued, "the second call must exercise the marker-only fast path")
-
-	require.NoError(t, d.RepairQueuedSubagentParents())
-	afterSecond, err := d.GetSessionFull(context.Background(), "child")
-	requireNoError(t, err, "GetSessionFull after second upgrade")
-	require.NotNil(t, afterSecond.LocalModifiedAt)
-	assert.Equal(t, *afterFirst.LocalModifiedAt, *afterSecond.LocalModifiedAt)
-	var markers int
-	require.NoError(t, d.Reader().QueryRow(
-		"SELECT count(*) FROM pg_sync_state WHERE key = ?",
-		subagentParentRepairStateUpgradeKey,
-	).Scan(&markers))
-	assert.Equal(t, 1, markers)
-}
-
 // TestQueueSubagentParentRepairsAdditionWorkIsQueueSizeIndependent protects
 // the watcher/bulk-sync cost shape: adding one affected child must not decode
 // and rewrite every child already waiting for repair. Repeating an existing
@@ -1267,7 +1116,7 @@ func TestRepairQueuedSubagentParentsMigratesLegacyJSONQueue(t *testing.T) {
 	assert.Zero(t, queued, "successful repair must clear migrated rows")
 }
 
-func TestRepairQueuedSubagentParentsDemotesLegacyCleanupIntent(t *testing.T) {
+func TestRepairQueuedSubagentParentsMigratesLegacyCleanupIntent(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "spawner", "p", func(s *Session) {
 		s.MessageCount = 1
@@ -1289,9 +1138,8 @@ func TestRepairQueuedSubagentParentsDemotesLegacyCleanupIntent(t *testing.T) {
 	kid, err := d.GetSession(context.Background(), "kid")
 	require.NoError(t, err)
 	require.NotNil(t, kid)
-	require.NotNil(t, kid.ParentSessionID)
-	assert.Equal(t, "spawner", *kid.ParentSessionID,
-		"legacy cleanup intent must be demoted before destructive repair")
+	assert.Nil(t, kid.ParentSessionID,
+		"the legacy queue contained pre-write children and must retain cleanup intent")
 }
 
 // TestLinkSubagentSessionsForSessionsPlanIsBatchBounded pins the cost shape

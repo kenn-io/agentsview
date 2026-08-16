@@ -323,6 +323,19 @@ func SanitizeSession(s *Session) ValidationStats {
 		stats.TimestampsBlanked++
 	}
 
+	// A session cannot be its own parent. A parser or an imported artifact
+	// that reports one (corrupt or crafted source data) must not store it:
+	// the hierarchy queries would treat the row as a non-root and hide it,
+	// and linking ignores self-referential spawn edges, so nothing would
+	// later correct it. Dropping the claim leaves relationship_type intact
+	// so a real spawn edge can still link the row.
+	if s.ParentSessionID != nil && *s.ParentSessionID == s.ID {
+		s.ParentSessionID = nil
+	}
+	if s.ParserParentSessionID != nil && *s.ParserParentSessionID == s.ID {
+		s.ParserParentSessionID = nil
+	}
+
 	return stats
 }
 

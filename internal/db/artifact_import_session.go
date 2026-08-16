@@ -81,9 +81,6 @@ func (db *DB) applyArtifactImportedSession(
 		return result, fmt.Errorf("beginning artifact imported session: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := upgradeSubagentParentRepairStateTx(tx); err != nil {
-		return result, err
-	}
 
 	var machine string
 	err = tx.QueryRowContext(ctx, `
@@ -119,20 +116,6 @@ func (db *DB) applyArtifactImportedSession(
 	case err == nil:
 		result.Written = true
 		result.WrittenMessages = messagesWritten
-		if err := repairSubagentParentsForSessionsTx(
-			tx, []string{write.Session.ID},
-		); err != nil {
-			return ArtifactImportedSessionResult{}, fmt.Errorf(
-				"repairing imported subagent parent: %w", err,
-			)
-		}
-		if err := removeSubagentParentRepairQueueForSessionsTx(
-			tx, []string{write.Session.ID},
-		); err != nil {
-			return ArtifactImportedSessionResult{}, fmt.Errorf(
-				"clearing imported subagent parent repair: %w", err,
-			)
-		}
 	case errors.Is(err, ErrSessionExcluded):
 		result.Suppressed = true
 	case errors.Is(err, ErrSessionTrashed):

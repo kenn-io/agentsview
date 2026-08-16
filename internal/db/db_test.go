@@ -6050,35 +6050,39 @@ func TestCopyExcludedSessionsFrom(t *testing.T) {
 		"UpsertSession = %v, want ErrSessionExcluded", err)
 }
 
-func TestCopyOrphanedDataFromQueuesCopiedSelfParentRepair(t *testing.T) {
+// TestCopyOrphanedDataFromClearsCopiedSelfParent covers an archive rebuild
+// whose source predates the self-edge guard: the fresh archive has already
+// run its one-time self-parent repair, so the copy itself must clear the
+// self-parented rows it brings over.
+func TestCopyOrphanedDataFromClearsCopiedSelfParent(t *testing.T) {
 	dir := t.TempDir()
 	srcPath := filepath.Join(dir, "src.db")
 	srcDB := testDBAtPath(t, srcPath, "src")
-	insertSession(t, srcDB, "child", "p", func(s *Session) {
-		s.MessageCount = 1
-		s.ParentSessionID = Ptr("child")
+	insertSession(t, srcDB, "child", "p")
+	insertMessages(t, srcDB, spawnEdgeTo("child", "child", "legacy self spawn"))
+	insertSession(t, srcDB, "kept", "p", func(s *Session) {
+		s.ParentSessionID = Ptr("real")
 		s.RelationshipType = "subagent"
 	})
-	insertMessages(t, srcDB, spawnEdgeTo("child", "child", "legacy self spawn"))
-	require.NoError(t, srcDB.SetSyncState(
-		subagentParentRepairStateUpgradeKey, "1",
-	), "seed committed hierarchy upgrade marker")
+	forceSelfParent(t, srcDB, "child")
 	require.NoError(t, srcDB.Close(), "Close src")
 
 	dstDB := testDBAtPath(t, filepath.Join(dir, "dst.db"), "dst")
 	defer dstDB.Close()
-	require.NoError(t, dstDB.CopySyncStateFrom(srcPath), "CopySyncStateFrom")
+	require.NoError(t, dstDB.LinkSubagentSessions(),
+		"fresh archive linking pass runs before orphans are copied")
 	copied, err := dstDB.CopyOrphanedDataFrom(srcPath)
 	require.NoError(t, err, "CopyOrphanedDataFrom")
-	assert.Equal(t, 1, copied)
-	require.NoError(t, dstDB.LinkSubagentSessions(), "LinkSubagentSessions")
-	require.NoError(t, dstDB.RepairQueuedSubagentParents(),
-		"repair copied self-parent")
+	assert.Equal(t, 2, copied)
+	require.NoError(t, dstDB.LinkSubagentSessions(), "post-copy relink")
 
 	child, err := dstDB.GetSession(context.Background(), "child")
 	requireNoError(t, err, "GetSession child")
 	assert.Nil(t, child.ParentSessionID,
-		"copied self-parent must be repaired after the marker is committed")
+		"copied self-parent must be cleared even after the one-time repair ran")
+	assert.Equal(t, "subagent", child.RelationshipType)
+	assert.Equal(t, "real", parentOfSession(t, dstDB, "kept"),
+		"copied real parents must survive")
 }
 
 func TestCopySyncStateFrom_NoSourceTable(t *testing.T) {
@@ -6126,9 +6130,6 @@ func TestCopySyncStateFrom_OnlyCopiesDurableKeys(t *testing.T) {
 	require.NoError(t, srcDB.QueueSubagentParentCleanupRepairs(
 		[]string{"queued-former-child"},
 	), "seed durable hierarchy cleanup")
-	sourceUpgradeMarker, err := srcDB.GetSyncState(subagentParentRepairStateUpgradeKey)
-	require.NoError(t, err, "GetSyncState source hierarchy upgrade marker")
-	assert.Equal(t, "1", sourceUpgradeMarker)
 	require.NoError(t, srcDB.UpsertSession(Session{
 		ID: "queued-session", Project: "p", Machine: "local", Agent: "claude",
 	}), "seed source queued session")
@@ -6142,16 +6143,12 @@ func TestCopySyncStateFrom_OnlyCopiesDurableKeys(t *testing.T) {
 	require.NoError(t, dstDB.SetSyncState("last_sync_finished_at", "new-finish"),
 		"seed destination finished")
 
-	err = dstDB.CopySyncStateFrom(srcPath)
+	err := dstDB.CopySyncStateFrom(srcPath)
 	require.NoError(t, err, "CopySyncStateFrom")
 
 	gotMarker, err := dstDB.GetSyncState("pg_push_marker_id")
 	require.NoError(t, err, "GetSyncState pg_push_marker_id")
 	assert.Equal(t, "marker-123", gotMarker)
-	destinationUpgradeMarker, err := dstDB.GetSyncState(subagentParentRepairStateUpgradeKey)
-	require.NoError(t, err, "GetSyncState destination hierarchy upgrade marker")
-	assert.Equal(t, sourceUpgradeMarker, destinationUpgradeMarker,
-		"the committed hierarchy upgrade marker must survive an archive rebuild")
 
 	gotOrigin, err := dstDB.GetSyncState("artifact_origin_id")
 	require.NoError(t, err, "GetSyncState artifact_origin_id")
@@ -6183,59 +6180,6 @@ func TestCopySyncStateFrom_OnlyCopiesDurableKeys(t *testing.T) {
 	gotFinished, err := dstDB.GetSyncState("last_sync_finished_at")
 	require.NoError(t, err, "GetSyncState last_sync_finished_at")
 	assert.Equal(t, "new-finish", gotFinished)
-}
-
-func TestCopySyncStateFromDemotesPreUpgradeHierarchyState(t *testing.T) {
-	dir := t.TempDir()
-
-	srcPath := filepath.Join(dir, "src.db")
-	srcDB := testDBAtPath(t, srcPath, "src")
-	_, err := srcDB.getWriter().Exec(`
-		INSERT INTO subagent_parent_cleanup_queue(session_id) VALUES (?)`,
-		"child")
-	require.NoError(t, err, "seed source pre-upgrade cleanup")
-	require.NoError(t, srcDB.SetSyncState(
-		subagentParentRepairQueueStateKey, `["legacy-child"]`,
-	), "seed source legacy repair queue")
-	require.NoError(t, srcDB.Close(), "Close src")
-
-	dstPath := filepath.Join(dir, "dst.db")
-	dstDB := testDBAtPath(t, dstPath, "dst")
-	defer dstDB.Close()
-	insertSession(t, dstDB, "child", "p", func(s *Session) {
-		s.MessageCount = 1
-		s.ParentSessionID = Ptr("parser-parent")
-		s.RelationshipType = "subagent"
-	})
-	require.NoError(t, dstDB.LinkSubagentSessions(), "commit destination upgrade")
-	marker, err := dstDB.GetSyncState(subagentParentRepairStateUpgradeKey)
-	require.NoError(t, err, "destination upgrade marker")
-	assert.Equal(t, "1", marker)
-
-	require.NoError(t, dstDB.CopySyncStateFrom(srcPath), "CopySyncStateFrom")
-
-	var repairs, cleanups int
-	require.NoError(t, dstDB.Reader().QueryRow(`
-		SELECT count(*) FROM subagent_parent_repair_queue
-		WHERE session_id IN ('child', 'legacy-child')`).Scan(&repairs))
-	require.NoError(t, dstDB.Reader().QueryRow(
-		"SELECT count(*) FROM subagent_parent_cleanup_queue",
-	).Scan(&cleanups))
-	assert.Equal(t, 2, repairs,
-		"pre-upgrade cleanup and legacy JSON intent must become relink-only")
-	assert.Zero(t, cleanups,
-		"pre-upgrade cleanup must not regain destructive authority")
-
-	require.NoError(t, dstDB.RepairQueuedSubagentParents(),
-		"consume copied relink-only intent")
-	child, err := dstDB.GetSession(context.Background(), "child")
-	requireNoError(t, err, "GetSession child")
-	require.NotNil(t, child.ParentSessionID)
-	assert.Equal(t, "parser-parent", *child.ParentSessionID,
-		"copied pre-upgrade cleanup must not clear parser lineage")
-	legacy, err := dstDB.GetSyncState(subagentParentRepairQueueStateKey)
-	require.NoError(t, err, "legacy queue state")
-	assert.Empty(t, legacy, "legacy queue state must not leak into a marked archive")
 }
 
 func TestCopySyncStateFrom_PropagatesErrors(t *testing.T) {
