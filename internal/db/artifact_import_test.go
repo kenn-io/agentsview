@@ -604,6 +604,41 @@ func TestApplyArtifactImportedSessionPreservesLocalCollision(t *testing.T) {
 	assert.Equal(t, map[string]string{gid: imported.ManifestHash}, provenance)
 }
 
+func TestApplyArtifactImportedSessionQueuesSelfParentRepair(t *testing.T) {
+	database := testDB(t)
+	ctx := t.Context()
+	origin := "peer-a1b2c3"
+	gid := origin + "~self-parent"
+	write := SessionBatchWrite{
+		Session: Session{
+			ID: gid, Project: "peer-project", Machine: origin,
+			Agent: "claude", ParentSessionID: Ptr(gid),
+			RelationshipType: "subagent",
+		},
+		Messages:        []Message{spawnEdgeTo(gid, gid, "artifact self spawn")},
+		ReplaceMessages: true,
+	}
+	imported := ArtifactImportedSession{
+		Origin: origin, GID: gid,
+		ManifestHash:      strings.Repeat("b", 64),
+		ImportedSessionID: gid,
+	}
+	result, err := database.ApplyArtifactImportedSession(ctx, imported, write)
+	require.NoError(t, err)
+	assert.True(t, result.Written)
+
+	var queued int
+	require.NoError(t, database.Reader().QueryRow(`
+		SELECT count(*) FROM subagent_parent_repair_queue WHERE session_id = ?`,
+		gid).Scan(&queued))
+	assert.Equal(t, 1, queued,
+		"artifact imports must route self-parented rows into bounded repair")
+	require.NoError(t, database.RepairQueuedSubagentParents())
+	session, err := database.GetSession(ctx, gid)
+	require.NoError(t, err)
+	assert.Nil(t, session.ParentSessionID)
+}
+
 func TestArtifactImportedManifestHashesChunksWithinSQLiteVariableLimit(
 	t *testing.T,
 ) {

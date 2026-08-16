@@ -483,8 +483,23 @@ func writeOneSessionBatchTx(
 	); err != nil {
 		return 0, err
 	}
+	if err := queueSelfParentRepairTx(tx, write.Session.ID); err != nil {
+		return 0, err
+	}
 
 	return len(msgs), nil
+}
+
+func queueSelfParentRepairTx(tx *sql.Tx, sessionID string) error {
+	if _, err := tx.Exec(`
+		INSERT OR IGNORE INTO subagent_parent_repair_queue (session_id)
+		SELECT id FROM sessions
+		WHERE id = ?
+		  AND relationship_type = 'subagent'
+		  AND parent_session_id IS id`, sessionID); err != nil {
+		return fmt.Errorf("queueing self-parent repair for %s: %w", sessionID, err)
+	}
+	return nil
 }
 
 func sessionMessagesTx(
