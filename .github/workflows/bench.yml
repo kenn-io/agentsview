@@ -40,7 +40,11 @@ permissions:
 jobs:
   bench-gate:
     name: Benchmark Gate
-    runs-on: ${{ github.repository == 'kenn-io/agentsview' && (github.event_name == 'push' && github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.base.repo.full_name == github.repository)) && 'kenn-linux-x64-public' || 'ubuntu-latest' }}
+    # Always GitHub-hosted, unlike the rest of CI: both sides of the
+    # comparison run on the same runner within one job, so absolute
+    # speed is what matters, and ubuntu-latest runs this I/O-heavy
+    # workload 2-4x faster than the managed fleet.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -50,7 +54,6 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
-          cache: ${{ github.repository == 'kenn-io/agentsview' && (github.event_name == 'push' && github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.base.repo.full_name == github.repository)) && 'false' || 'true' }}
 
       - name: Run benchmarks (PR head)
         run: |

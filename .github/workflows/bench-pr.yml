@@ -1,8 +1,7 @@
 name: Bench Gate
 
-# The PR dispatcher always calls the main-pinned workflow. That workflow
-# independently routes same-repository Linux jobs to the managed public fleet
-# and fork jobs to GitHub-hosted runners.
+# The PR dispatcher always calls the main-pinned workflow, which runs
+# on GitHub-hosted runners for every PR.
 on:
   pull_request:
     # Docs/frontend-only PRs cannot change the gated Go paths. If
