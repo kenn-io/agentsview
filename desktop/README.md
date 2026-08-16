@@ -9,8 +9,9 @@ The wrapper does not reimplement the web app. Instead, it:
 1. Starts it with `serve --background --host 127.0.0.1` on a local port.
 1. Loads the local URL in a native webview.
 
-On macOS, the same desktop process also provides a menu-bar status item for
-showing the AgentsView window, opening logs, checking for updates, and quitting.
+On macOS and Windows, the same desktop process also provides a system tray item
+for showing the AgentsView window, opening logs, checking for updates, and
+quitting.
 
 ## Requirements
 
