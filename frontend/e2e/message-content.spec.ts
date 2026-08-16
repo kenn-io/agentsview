@@ -45,7 +45,10 @@ async function selectSession(
   expect(sessionId).toBeTruthy();
   await expect(item).toBeVisible();
   await item.click({ force: true });
-  await expect(item).toHaveClass(/active/);
+  await expect(page.locator(LOC.listScroll)).toHaveAttribute(
+    "data-session-id",
+    sessionId!,
+  );
   return sessionId!;
 }
 
@@ -81,7 +84,9 @@ test.describe("Mixed content rendering", () => {
   test.describe.configure({ timeout: COLD_WEBKIT_TEST_TIMEOUT_MS });
 
   test.beforeEach(async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/sessions");
+    const sidebarToggle = page.getByRole("button", { name: "Toggle sidebar" });
+    if (await sidebarToggle.isVisible()) await sidebarToggle.click();
     await expect(
       page.locator(LOC.sessionItem).first(),
     ).toBeVisible({ timeout: 5_000 });
@@ -141,6 +146,29 @@ test.describe("Mixed content rendering", () => {
       return style.userSelect !== "none";
     });
     expect(headerSelectable).toBe(true);
+  });
+
+  test("tool output raw/formatted selection preserves the current output", async ({ page }) => {
+    const { project, count, displayRows } = BETA_7;
+    const sid = await selectSession(page, project, count);
+    await expectSessionLoaded(page, sid, displayRows);
+    const toolBlock = page.locator(".tool-block").first();
+    await toolBlock.locator(".tool-header").click();
+    const outputHeader = toolBlock.locator(".output-header");
+    await expect(outputHeader).toBeVisible();
+    await outputHeader.click();
+    const mode = toolBlock.getByRole("radiogroup", { name: "Output format" });
+    await expect(mode).toBeVisible();
+    await mode.getByRole("radio", { name: "Formatted" }).click();
+    const formattedOutput = toolBlock.locator(".formatted-output");
+    await expect(formattedOutput).toBeVisible();
+    await expect(formattedOutput).toContainText("safe");
+    await expect(formattedOutput.locator("script")).toHaveCount(0);
+    await mode.getByRole("radio", { name: "Raw" }).click();
+    await expect(toolBlock.locator(".formatted-output")).toHaveCount(0);
+    await expect(toolBlock.locator(".output-content")).toContainText(
+      '<script>alert("xss")</script>',
+    );
   });
 
   test("text selection does not collapse tool block", async ({

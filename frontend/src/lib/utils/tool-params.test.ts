@@ -210,13 +210,13 @@ describe("extractToolParamMeta", () => {
     ]);
   });
 
-  it("truncates long file paths", () => {
+  it("keeps the canonical long path and provides a trailing display value", () => {
     const longPath = "/a".repeat(50);
     const meta = extractToolParamMeta("Read", {
       file_path: longPath,
     });
-    expect(meta![0]!.value.length).toBeLessThanOrEqual(81);
-    expect(meta![0]!.value).toContain("\u2026");
+    expect(meta![0]!.value).toBe(longPath);
+    expect(meta![0]!.displayValue).toBe("a/a");
   });
 
   it("extracts Read file path from pi 'path' field", () => {

@@ -125,6 +125,29 @@ describe("ToolBlock output section", () => {
     expect(outputContent!.textContent).toBe(resultText);
   });
 
+  it("switches the expanded current output between raw and formatted modes", async () => {
+    const toolCall: ToolCall = {
+      tool_name: "Read",
+      category: "Read",
+      result_content: "# Result\n\n**bold** <script>alert(1)</script>",
+    };
+    component = mount(ToolBlock, { target: document.body, props: { content: "", toolCall } });
+    await tick();
+    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
+    await tick();
+    document.querySelector<HTMLButtonElement>(".output-header")!.click();
+    await tick();
+    expect(document.querySelector(".output-mode")).not.toBeNull();
+    expect(document.querySelector(".formatted-output")).toBeNull();
+    const formatted = Array.from(document.querySelectorAll<HTMLButtonElement>(".output-mode button"))
+      .find((button) => button.textContent?.trim() === "Formatted");
+    expect(formatted).not.toBeNull();
+    formatted!.click();
+    await tick();
+    expect(document.querySelector(".formatted-output h1")?.textContent).toBe("Result");
+    expect(document.querySelector(".formatted-output script")).toBeNull();
+  });
+
   it("shows first line as preview when output is collapsed", async () => {
     const toolCall: ToolCall = {
       tool_name: "Read",

@@ -461,5 +461,14 @@ describe("summarizeToolCall", () => {
         ),
       ).toBe("/etc/hosts");
     });
+
+    it("uses a trailing display form for long absolute paths", () => {
+      const path = "/workspace/packages/agentsview/frontend/src/lib/components/content/ToolBlock.svelte";
+      expect(summarizeToolCall(call({
+        tool_name: "custom",
+        category: "Other",
+        input_json: JSON.stringify({ file_path: path }),
+      }))).toBe("content/ToolBlock.svelte");
+    });
   });
 });
