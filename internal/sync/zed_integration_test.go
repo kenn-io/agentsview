@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	dbpkg "go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
@@ -58,6 +59,45 @@ func TestSyncSingleSessionZedUsesVirtualSourcePath(t *testing.T) {
 	other, err := database.GetSession(t.Context(), "zed:other")
 	require.NoError(t, err)
 	assert.Nil(t, other)
+}
+
+func TestSyncAllZedLegacySchemaPreservesOtherProviders(t *testing.T) {
+	root := t.TempDir()
+	zedDir := filepath.Join(root, "zed")
+	dbPath := filepath.Join(zedDir, "threads", "threads.db")
+	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
+	artifact, err := os.ReadFile(filepath.Join("..", "parser", "testdata", "zed-legacy-threads.sql"))
+	require.NoError(t, err)
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = db.Exec(string(artifact))
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO threads (id, summary, updated_at, data_type, data) VALUES (?, ?, ?, ?, ?)`,
+		"legacy", "Legacy", "2026-06-08T09:14:10Z", "json", []byte(`{"messages":[{"User":{"content":[{"Text":"hello"}]}}]}`))
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	aiderDir := filepath.Join(root, "aider", "repo")
+	require.NoError(t, os.MkdirAll(aiderDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(aiderDir, parser.AiderHistoryFileName()),
+		[]byte("# aider chat started at 2026-06-09 14:01:00\n#### prompt\nanswer\n"), 0o644))
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentZed: {zedDir}, parser.AgentAider: {filepath.Join(root, "aider")},
+		},
+		Machine: "local",
+	})
+	stats := engine.SyncAll(t.Context(), nil)
+	assert.Zero(t, stats.Failed)
+	assert.GreaterOrEqual(t, stats.Synced, 2)
+	zed, err := database.GetSession(t.Context(), "zed:legacy")
+	require.NoError(t, err)
+	assert.NotNil(t, zed)
+	page, err := database.ListSessions(t.Context(), dbpkg.SessionFilter{Agent: string(parser.AgentAider), Limit: 10})
+	require.NoError(t, err)
+	assert.Len(t, page.Sessions, 1)
 }
 
 func TestSyncSingleSessionZedForceRewritesUnchangedSession(t *testing.T) {

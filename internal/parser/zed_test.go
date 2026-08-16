@@ -6,9 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // parseZedAll parses every top-level thread in a Zed threads.db using the same
@@ -242,6 +245,45 @@ func TestParseZedSessions_ZstdAndFiltersChildren(t *testing.T) {
 	if results[0].Messages[0].Content != "Hello" {
 		t.Fatalf("message = %+v", results[0].Messages[0])
 	}
+}
+
+func TestParseZedSessions_LegacyFiveColumnSchema(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "threads.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+	artifact, err := os.ReadFile(filepath.Join("testdata", "zed-legacy-threads.sql"))
+	require.NoError(t, err)
+	_, err = db.Exec(string(artifact))
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO threads (id, summary, updated_at, data_type, data) VALUES (?, ?, ?, ?, ?)`,
+		"legacy", "Legacy thread", "2026-06-08T09:14:10Z", "json", []byte(`{"messages":[{"User":{"content":[{"Text":"hello"}]}}]}`))
+	require.NoError(t, err)
+
+	results, err := parseZedAll(dbPath, "local")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	sess := results[0].Session
+	assert.Equal(t, "zed:legacy", sess.ID)
+	assert.Equal(t, "Legacy thread", sess.SessionName)
+	assert.Equal(t, "", sess.ParentSessionID)
+	assert.Equal(t, "", sess.Cwd)
+	assert.Equal(t, "unknown", sess.Project)
+	assert.Equal(t, "2026-06-08T09:14:10Z", sess.StartedAt.Format(time.RFC3339))
+}
+
+func TestZedLegacyCompatibilityRequiresCoreColumns(t *testing.T) {
+	dbPath := createZedThreadsDB(t, nil)
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = db.Exec(`ALTER TABLE threads RENAME TO old_threads`)
+	require.NoError(t, err)
+	_, err = db.Exec(`CREATE TABLE threads (id TEXT, summary TEXT, updated_at TEXT, data_type TEXT)`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+	_, err = parseZedAll(dbPath, "local")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing required Zed threads column data")
 }
 
 func TestParseZedSessions_SkipsUnsupportedDataType(t *testing.T) {

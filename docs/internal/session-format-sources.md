@@ -1435,6 +1435,10 @@ Grok section and remove the explicit registry exception in the coverage test.
 
 - **Format:** `threads/threads.db`, whose thread payload is JSON or zstd-
   compressed JSON depending on generation.
+- **Compatibility:** Agentsview accepts the legacy five-column `threads` table
+  (`id`, `summary`, `updated_at`, `data_type`, and `data`). Modern lineage and
+  metadata columns are optional; a present `parent_id` continues to exclude
+  child threads.
 - **Evidence:** `source`.
 - **Upstream:** Clone `https://github.com/zed-industries/zed.git` at
   `f14fea9bf3c93797d5161f7440ed418655bc6c57`; see

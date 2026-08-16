@@ -49,7 +49,11 @@ func zedDiscoverEach(
 		return err
 	}
 	defer conn.Close()
-	return ForEachZedThreadMeta(ctx, conn, dbPath, func(meta ZedThreadMeta) error {
+	shape, err := inspectZedSchema(conn)
+	if err != nil {
+		return fmt.Errorf("listing zed thread metas: %w", err)
+	}
+	return forEachZedThreadMeta(ctx, conn, dbPath, shape, func(meta ZedThreadMeta) error {
 		return yield(multiSessionMatch{
 			Path: meta.VirtualPath, Container: dbPath, MemberID: meta.RawID,
 		})
@@ -177,8 +181,12 @@ func zedParseMember(
 		return nil, err
 	}
 	defer conn.Close()
-	return parseZedThreadFromDB(
-		conn, src.Container, src.MemberID, req.Machine, dbInfo,
+	shape, err := inspectZedSchema(conn)
+	if err != nil {
+		return nil, err
+	}
+	return parseZedThreadFromDBWithSchema(
+		conn, src.Container, src.MemberID, req.Machine, dbInfo, shape,
 	)
 }
 
@@ -197,7 +205,15 @@ func zedParseContainer(
 		return nil, err
 	}
 	defer conn.Close()
-	metas, err := ListZedThreadMetas(conn, src.Container)
+	shape, err := inspectZedSchema(conn)
+	if err != nil {
+		return nil, err
+	}
+	var metas []ZedThreadMeta
+	err = forEachZedThreadMeta(context.Background(), conn, src.Container, shape, func(meta ZedThreadMeta) error {
+		metas = append(metas, meta)
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -208,8 +224,8 @@ func zedParseContainer(
 	dbHash, _ := hashJSONLSourceFile(src.Container)
 	results := make([]ParseResult, 0, len(metas))
 	for _, meta := range metas {
-		result, err := parseZedThreadFromDB(
-			conn, src.Container, meta.RawID, req.Machine, dbInfo,
+		result, err := parseZedThreadFromDBWithSchema(
+			conn, src.Container, meta.RawID, req.Machine, dbInfo, shape,
 		)
 		if err != nil {
 			return nil, err
