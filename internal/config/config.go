@@ -575,8 +575,7 @@ type Config struct {
 	Insights             InsightsConfig         `json:"insights,omitempty" toml:"insights"`
 	Automated            AutomatedConfig        `json:"automated,omitempty" toml:"automated"`
 	Agent                map[string]AgentConfig `json:"agent,omitempty" toml:"agent"`
-	insightsConfigured   bool
-	WriteTimeout         time.Duration `json:"-" toml:"-"`
+	WriteTimeout         time.Duration          `json:"-" toml:"-"`
 	// LocalMachineName is the operating-system hostname used to identify
 	// sessions ingested from this machine. It is runtime-derived rather than
 	// persisted configuration so local and remote source labels share the same
@@ -1427,7 +1426,6 @@ func (c *Config) applyConfigTOML(data string) error {
 		c.Insights.Endpoint = strings.TrimSpace(c.Insights.Endpoint)
 		c.Insights.Model = strings.TrimSpace(c.Insights.Model)
 		c.Insights.APIKeyEnv = strings.TrimSpace(c.Insights.APIKeyEnv)
-		c.insightsConfigured = true
 	}
 	// IsDefined distinguishes "unset" (leave default 10s) from an
 	// explicit "0s" (disable coalescing). Checking != 0 would silently
@@ -1978,12 +1976,8 @@ func finalize(cfg *Config) error {
 	if err := cfg.Recall.Extract.Validate(); err != nil {
 		return err
 	}
-	if cfg.insightsConfigured || cfg.Insights.Endpoint != "" ||
-		cfg.Insights.Model != "" || cfg.Insights.APIKeyEnv != "" ||
-		cfg.Insights.AllowHTTP {
-		if err := cfg.Insights.Validate(); err != nil {
-			return err
-		}
+	if err := cfg.Insights.Validate(); err != nil {
+		return err
 	}
 	return nil
 }

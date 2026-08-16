@@ -7,12 +7,14 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestGenerateStreamWithOptions_OpenAIEndpoint(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
 	var got endpointRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodPost, r.Method)
@@ -48,6 +50,48 @@ func TestOpenAIEndpoint_BearerAuth(t *testing.T) {
 	defer server.Close()
 	_, err := generateEndpoint(context.Background(), EndpointConfig{Endpoint: server.URL, Model: "m", APIKey: "secret"}, "p")
 	require.NoError(t, err)
+}
+
+func TestOpenAIEndpoint_AnonymousRequestOmitsBearer(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Empty(t, r.Header.Get("Authorization"))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer server.Close()
+	_, err := generateEndpoint(context.Background(), EndpointConfig{Endpoint: server.URL, Model: "m"}, "p")
+	require.NoError(t, err)
+}
+
+func TestOpenAIEndpoint_HonorsCancellation(t *testing.T) {
+	started := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errs := make(chan error, 1)
+	go func() {
+		_, err := generateEndpoint(ctx, EndpointConfig{Endpoint: server.URL, Model: "m"}, "p")
+		errs <- err
+	}()
+	<-started
+	cancel()
+	select {
+	case err := <-errs:
+		require.Error(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("endpoint request did not honor cancellation")
+	}
+}
+
+func TestOpenAIEndpoint_RejectsUnsafeTransport(t *testing.T) {
+	_, err := generateEndpoint(context.Background(), EndpointConfig{Endpoint: "ftp://models.example/v1", Model: "m"}, "p")
+	require.Error(t, err)
+	_, err = generateEndpoint(context.Background(), EndpointConfig{Endpoint: "http://models.example/v1", Model: "m"}, "p")
+	require.Error(t, err)
 }
 
 func TestOpenAIEndpoint_ResponseContract(t *testing.T) {

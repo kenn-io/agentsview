@@ -228,9 +228,10 @@ func insightGenerateOptions(cfg config.Config) insight.GenerateOptions {
 	if strings.TrimSpace(cfg.Insights.Endpoint) != "" &&
 		strings.TrimSpace(cfg.Insights.Model) != "" {
 		opts.Endpoint = &insight.EndpointConfig{
-			Endpoint: cfg.Insights.Endpoint,
-			Model:    cfg.Insights.Model,
-			APIKey:   cfg.Insights.APIKey(),
+			Endpoint:  cfg.Insights.Endpoint,
+			Model:     cfg.Insights.Model,
+			APIKey:    cfg.Insights.APIKey(),
+			AllowHTTP: cfg.Insights.AllowHTTP,
 		}
 	}
 	return opts

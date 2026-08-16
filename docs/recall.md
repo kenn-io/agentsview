@@ -75,6 +75,9 @@ use HTTPS unless `allow_http = true` explicitly opts into plaintext transport.
 The endpoint receives transcript-derived content, so review the provider's
 privacy and retention behavior. API keys stay in the environment and are sent
 only as a bearer header; they are not stored in the AgentsView configuration.
+Canned insight cache keys do not include the endpoint or model. Use the
+force-refresh option after changing `[insights]` if the existing cached report
+must be regenerated with the new provider.
 
 ### Configuring agent binaries
 

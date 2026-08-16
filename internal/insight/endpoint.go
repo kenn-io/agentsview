@@ -9,24 +9,29 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"go.kenn.io/agentsview/internal/config"
 )
 
 const maxEndpointResponseBytes int64 = 2_000_000
 
 // EndpointConfig is the immutable, validated endpoint choice for one call.
 type EndpointConfig struct {
-	Endpoint string
-	Model    string
-	APIKey   string
+	Endpoint  string
+	Model     string
+	APIKey    string
+	AllowHTTP bool
+}
+
+type endpointMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 type endpointRequest struct {
-	Model    string `json:"model"`
-	Messages []struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	} `json:"messages"`
-	Stream bool `json:"stream"`
+	Model    string            `json:"model"`
+	Messages []endpointMessage `json:"messages"`
+	Stream   bool              `json:"stream"`
 }
 
 type endpointResponse struct {
@@ -40,24 +45,17 @@ type endpointResponse struct {
 
 func generateEndpoint(ctx context.Context, cfg EndpointConfig, prompt string) (Result, error) {
 	u, err := url.Parse(cfg.Endpoint)
-	if err != nil || u.Scheme == "" || u.Host == "" {
+	if err != nil || u.Host == "" || u.User != nil {
+		return Result{}, errorsEndpoint("invalid endpoint")
+	}
+	if err := config.ValidateExtractTransport(u, cfg.AllowHTTP); err != nil {
 		return Result{}, errorsEndpoint("invalid endpoint")
 	}
 	u.Path = strings.TrimRight(u.Path, "/") + "/chat/completions"
 	u.RawPath = ""
 
-	requestBody := struct {
-		Model    string `json:"model"`
-		Messages []struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
-		} `json:"messages"`
-		Stream bool `json:"stream"`
-	}{Model: cfg.Model, Stream: false}
-	requestBody.Messages = append(requestBody.Messages, struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}{Role: "user", Content: prompt})
+	requestBody := endpointRequest{Model: cfg.Model, Stream: false}
+	requestBody.Messages = append(requestBody.Messages, endpointMessage{Role: "user", Content: prompt})
 	body, err := json.Marshal(requestBody)
 	if err != nil {
 		return Result{}, errorsEndpoint("encode request")
