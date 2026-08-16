@@ -30,10 +30,41 @@ test.describe("Runtime error diagnostics", () => {
         monitor
           .all()
           .some((message) =>
-            /^diagnostic console failure \(\/diagnostic-console-error\.js:\d+:\d+\)$/.test(message),
+            /^diagnostic console failure \(\/diagnostic-console-error\.js:\d+:\d+\)$/.test(
+              message,
+            ),
           ),
       )
       .toBe(true);
+  });
+
+  test("ignores browser resource errors from external origins", async ({
+    page,
+  }) => {
+    const monitor = new RuntimeErrorMonitor(page);
+    await page.route(
+      "https://fonts.gstatic.com/diagnostic-font.woff2",
+      async (route) => {
+        await route.fulfill({ status: 404, body: "missing" });
+      },
+    );
+    await page.goto("/");
+
+    await page.evaluate(async () => {
+      const style = document.createElement("style");
+      style.textContent = `
+        @font-face {
+          font-family: "Diagnostic Font";
+          src: url("https://fonts.gstatic.com/diagnostic-font.woff2") format("woff2");
+        }
+      `;
+      document.head.append(style);
+      await document.fonts
+        .load('16px "Diagnostic Font"')
+        .catch(() => undefined);
+    });
+
+    expect(monitor.all()).toEqual([]);
   });
 
   test("identifies a failed HTTP response", async ({ page }) => {
@@ -44,14 +75,18 @@ test.describe("Runtime error diagnostics", () => {
     await page.goto("/");
 
     const status = await page.evaluate(async () => {
-      const response = await fetch("/diagnostic-http-failure?token=private-value");
+      const response = await fetch(
+        "/diagnostic-http-failure?token=private-value",
+      );
       return response.status;
     });
 
     expect(status).toBe(404);
     await expect
       .poll(() => monitor.diagnostics())
-      .toContain("HTTP 404 GET /diagnostic-http-failure?token=[redacted] [fetch]");
+      .toContain(
+        "HTTP 404 GET /diagnostic-http-failure?token=[redacted] [fetch]",
+      );
   });
 
   test("identifies a request without an HTTP response", async ({ page }) => {
@@ -70,7 +105,9 @@ test.describe("Runtime error diagnostics", () => {
         monitor
           .diagnostics()
           .some((message) =>
-            /^REQUEST FAILED GET \/diagnostic-network-failure \[fetch\]: .+/.test(message),
+            /^REQUEST FAILED GET \/diagnostic-network-failure \[fetch\]: .+/.test(
+              message,
+            ),
           ),
       )
       .toBe(true);

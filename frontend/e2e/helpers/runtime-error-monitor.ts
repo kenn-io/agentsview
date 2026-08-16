@@ -14,13 +14,21 @@ export class RuntimeErrorMonitor {
       this.errors.push(err.message);
     });
     page.on("console", (msg) => {
-      if (msg.type() === "error") {
-        const location = msg.location();
-        const suffix = location.url
-          ? ` (${formatURL(location.url, page.url())}:${location.line + 1}:${location.column + 1})`
-          : "";
-        this.errors.push(`${msg.text()}${suffix}`);
+      if (msg.type() !== "error") {
+        return;
       }
+      const location = msg.location();
+      if (
+        msg.text().startsWith("Failed to load resource:") &&
+        location.url &&
+        !isMonitoredOrigin(location.url, page)
+      ) {
+        return;
+      }
+      const suffix = location.url
+        ? ` (${formatURL(location.url, page.url())}:${location.line + 1}:${location.column + 1})`
+        : "";
+      this.errors.push(`${msg.text()}${suffix}`);
     });
     page.on("response", (response) => {
       if (response.status() < 400 || !isMonitoredOrigin(response.url(), page)) {
