@@ -159,6 +159,31 @@ func TestZedProviderLegacySchemaPhysicalAndVirtual(t *testing.T) {
 	assert.Equal(t, "zed:legacy", parsed.Results[0].Result.Session.ID)
 }
 
+func TestZedProviderMalformedSchemaReturnsError(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, zedThreadsDBRelPath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = db.Exec(`CREATE TABLE threads (
+		id TEXT PRIMARY KEY,
+		summary TEXT NOT NULL,
+		updated_at TEXT NOT NULL,
+		data_type TEXT NOT NULL
+	)`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	provider, ok := NewProvider(AgentZed, ProviderConfig{Roots: []string{root}, Machine: "devbox"})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	_, err = provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing required Zed threads column data")
+}
+
 func TestZedProviderFingerprintIncludesWALSiblings(t *testing.T) {
 
 	root := t.TempDir()

@@ -49,9 +49,9 @@ func zedDiscoverEach(
 		return err
 	}
 	defer conn.Close()
-	shape, err := inspectZedSchema(conn)
+	shape, err := inspectZedSchema(ctx, conn)
 	if err != nil {
-		return fmt.Errorf("listing zed thread metas: %w", err)
+		return wrapZedListingError(err)
 	}
 	return forEachZedThreadMeta(ctx, conn, dbPath, shape, func(meta ZedThreadMeta) error {
 		return yield(multiSessionMatch{
@@ -181,9 +181,9 @@ func zedParseMember(
 		return nil, err
 	}
 	defer conn.Close()
-	shape, err := inspectZedSchema(conn)
+	shape, err := inspectZedSchema(context.Background(), conn)
 	if err != nil {
-		return nil, err
+		return nil, wrapZedLoadingError(src.MemberID, err)
 	}
 	return parseZedThreadFromDBWithSchema(
 		conn, src.Container, src.MemberID, req.Machine, dbInfo, shape,
@@ -205,9 +205,9 @@ func zedParseContainer(
 		return nil, err
 	}
 	defer conn.Close()
-	shape, err := inspectZedSchema(conn)
+	shape, err := inspectZedSchema(context.Background(), conn)
 	if err != nil {
-		return nil, err
+		return nil, wrapZedListingError(err)
 	}
 	var metas []ZedThreadMeta
 	err = forEachZedThreadMeta(context.Background(), conn, src.Container, shape, func(meta ZedThreadMeta) error {

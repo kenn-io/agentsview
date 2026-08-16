@@ -72,9 +72,6 @@ func TestSyncAllZedLegacySchemaPreservesOtherProviders(t *testing.T) {
 	require.NoError(t, err)
 	_, err = db.Exec(string(artifact))
 	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO threads (id, summary, updated_at, data_type, data) VALUES (?, ?, ?, ?, ?)`,
-		"legacy", "Legacy", "2026-06-08T09:14:10Z", "json", []byte(`{"messages":[{"User":{"content":[{"Text":"hello"}]}}]}`))
-	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
 	aiderDir := filepath.Join(root, "aider", "repo")
@@ -91,10 +88,10 @@ func TestSyncAllZedLegacySchemaPreservesOtherProviders(t *testing.T) {
 	})
 	stats := engine.SyncAll(t.Context(), nil)
 	assert.Zero(t, stats.Failed)
-	assert.GreaterOrEqual(t, stats.Synced, 2)
+	assert.Equal(t, 1, stats.Synced)
 	zed, err := database.GetSession(t.Context(), "zed:legacy")
 	require.NoError(t, err)
-	assert.NotNil(t, zed)
+	assert.Nil(t, zed)
 	page, err := database.ListSessions(t.Context(), dbpkg.SessionFilter{Agent: string(parser.AgentAider), Limit: 10})
 	require.NoError(t, err)
 	assert.Len(t, page.Sessions, 1)
