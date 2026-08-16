@@ -560,17 +560,6 @@ func (b *SessionBuilder) AddCodexMessage(
 	return b
 }
 
-// AddCodexFunctionCall appends a Codex function_call line.
-func (b *SessionBuilder) AddCodexFunctionCall(
-	timestamp, name, summary string,
-) *SessionBuilder {
-	b.lines = append(
-		b.lines,
-		CodexFunctionCallJSON(name, summary, timestamp),
-	)
-	return b
-}
-
 // AddRaw appends an arbitrary raw line.
 func (b *SessionBuilder) AddRaw(line string) *SessionBuilder {
 	b.lines = append(b.lines, line)
@@ -683,18 +672,6 @@ func GeminiAssistantMsg(
 		m["toolCalls"] = tcs
 	}
 	return m
-}
-
-// GeminiInfoMsg builds a Gemini info/system message object.
-func GeminiInfoMsg(
-	id, timestamp, content, msgType string,
-) map[string]any {
-	return map[string]any{
-		"id":        id,
-		"timestamp": timestamp,
-		"type":      msgType,
-		"content":   content,
-	}
 }
 
 // GeminiSessionJSON builds a complete Gemini session JSON

@@ -94,21 +94,6 @@ func SeedFallback(database *db.DB) error {
 	return database.SetPricingMeta(pricingStorageMetaKey, pricingStorageVersion)
 }
 
-// Refresh fetches and stores the upstream pricing catalog immediately.
-func Refresh(
-	database *db.DB,
-	fetch func() ([]pricing.ModelPricing, error),
-) error {
-	prices, err := fetch()
-	if err != nil {
-		return fmt.Errorf("litellm fetch failed: %w", err)
-	}
-	if err := upsert(database, prices); err != nil {
-		return fmt.Errorf("upsert failed: %w", err)
-	}
-	return nil
-}
-
 // RefreshIfStale refreshes when the last attempt is older than cooldown.
 func RefreshIfStale(
 	database *db.DB,

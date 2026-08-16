@@ -963,17 +963,6 @@ var Registry = []AgentDef{
 	},
 }
 
-// NonFileBackedAgents returns agent types where FileBased is false.
-func NonFileBackedAgents() []AgentType {
-	var agents []AgentType
-	for _, def := range Registry {
-		if !def.FileBased {
-			agents = append(agents, def.Type)
-		}
-	}
-	return agents
-}
-
 // AgentByType returns the AgentDef for the given type.
 func AgentByType(t AgentType) (AgentDef, bool) {
 	for _, def := range Registry {

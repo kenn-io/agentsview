@@ -83,25 +83,6 @@ type GenerateOptions struct {
 	Agents map[string]AgentConfig
 }
 
-// Generate invokes an AI agent CLI to generate an insight.
-// The agent parameter selects which CLI to use (claude,
-// codex, gemini). The prompt is passed via stdin.
-func Generate(
-	ctx context.Context, agent, prompt string,
-) (Result, error) {
-	return GenerateStream(ctx, agent, prompt, nil)
-}
-
-// GenerateStream invokes an AI agent CLI to generate an
-// insight while optionally streaming process logs.
-func GenerateStream(
-	ctx context.Context, agent, prompt string, onLog LogFunc,
-) (Result, error) {
-	return GenerateStreamWithOptions(
-		ctx, agent, prompt, onLog, GenerateOptions{},
-	)
-}
-
 // GenerateStreamWithOptions invokes an AI agent CLI to generate an
 // insight, using configured binary paths before falling back to PATH.
 func GenerateStreamWithOptions(

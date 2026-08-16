@@ -9,14 +9,6 @@ export function moneyFromMicrodollars(microdollars: number): Money {
   return { microdollars };
 }
 
-export function addMoney(left: Money, right: Money): Money {
-  return moneyFromMicrodollars(left.microdollars + right.microdollars);
-}
-
-export function subtractMoney(left: Money, right: Money): Money {
-  return moneyFromMicrodollars(left.microdollars - right.microdollars);
-}
-
 export function divideMoney(value: Money, divisor: number): Money {
   if (divisor === 0) return ZERO_MONEY;
   return moneyFromMicrodollars(Math.round(value.microdollars / divisor));

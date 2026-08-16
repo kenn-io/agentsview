@@ -1675,12 +1675,6 @@ setInterval(() => {
   now = Date.now();
 }, 30_000);
 
-export function isRecentlyActive(session: Session): boolean {
-  const key = recencyKey(session);
-  const ts = new Date(key).getTime();
-  return now - ts < RECENTLY_ACTIVE_MS;
-}
-
 export type SessionStatus =
   | "working"
   | "waiting"

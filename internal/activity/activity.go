@@ -722,17 +722,6 @@ func usageDedupTokenForRow(u UsageRow) (usageDedupToken, bool) {
 	return usageDedupToken{}, false
 }
 
-// ClaudeSnapshotSurvivorMask returns a same-length mask that keeps the most
-// complete output-token snapshot for each Claude request across the supplied
-// rows.
-// Claude Code can persist several assistant rows with the same message and
-// request IDs while a tool turn streams; the final row carries the full output
-// count. Equal snapshots retain their latest occurrence.
-func ClaudeSnapshotSurvivorMask(usage []UsageRow) []bool {
-	mask, _, _ := ClaudeSnapshotSurvivorSelection(usage)
-	return mask
-}
-
 // ClaudeSnapshotSurvivorSelection also returns the earliest session and the
 // maximum billed web-search count for each surviving snapshot. Callers use the
 // former for attribution and the latter when pricing the selected token row.
@@ -843,14 +832,6 @@ func LegacyUsageSurvivorMask(
 		}
 		mask[i] = true
 	}
-	return mask
-}
-
-// UsageSurvivorMask returns a same-length mask for rows that survive the
-// report's range, effective-end, complete-snapshot, and cross-session dedup
-// filters.
-func UsageSurvivorMask(start, end, effEnd time.Time, usage []UsageRow) []bool {
-	mask, _, _ := UsageSurvivorSelection(start, end, effEnd, usage)
 	return mask
 }
 

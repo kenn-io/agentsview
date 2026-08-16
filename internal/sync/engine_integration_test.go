@@ -90,18 +90,6 @@ func WithOpenCodeDirs(dirs []string) TestEnvOption {
 	}
 }
 
-func WithKiloDirs(dirs []string) TestEnvOption {
-	return func(o *testEnvOpts) {
-		o.kiloDirs = dirs
-	}
-}
-
-func WithKiroDirs(dirs []string) TestEnvOption {
-	return func(o *testEnvOpts) {
-		o.kiroDirs = dirs
-	}
-}
-
 func WithEmitter(em sync.Emitter) TestEnvOption {
 	return func(o *testEnvOpts) {
 		o.emitter = em

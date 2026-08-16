@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 )
 
@@ -268,15 +267,4 @@ func Fingerprint(
 	}
 	sum := sha256.Sum256(canonical)
 	return hex.EncodeToString(sum[:]), nil
-}
-
-// ProfileNames lists the built-in profiles for error messages and doctor
-// output, sorted for stable display.
-func ProfileNames() []string {
-	names := make([]string, 0, len(builtinProfiles))
-	for _, profile := range builtinProfiles {
-		names = append(names, profile.Name)
-	}
-	sort.Strings(names)
-	return names
 }

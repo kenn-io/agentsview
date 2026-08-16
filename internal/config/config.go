@@ -924,22 +924,6 @@ func LoadPFlags(fs *pflag.FlagSet) (Config, error) {
 	return cfg, nil
 }
 
-// LoadPGServe builds a Config for `pg serve` by preserving
-// shared and PG settings from defaults/env/config file while
-// resetting serve-specific network/browser settings to defaults.
-// Only explicitly provided serve flags are applied on top.
-func LoadPGServe(fs *flag.FlagSet) (Config, error) {
-	cfg, err := loadPGServeBase()
-	if err != nil {
-		return cfg, err
-	}
-	applyFlags(&cfg, fs)
-	if err := finalize(&cfg); err != nil {
-		return cfg, err
-	}
-	return cfg, nil
-}
-
 // LoadPGServePFlags builds a PG serve config from a parsed Cobra/pflag FlagSet.
 func LoadPGServePFlags(fs *pflag.FlagSet) (Config, error) {
 	cfg, err := loadPGServeBase()
@@ -2757,11 +2741,6 @@ func IsEnvDependentURL(s string) bool {
 // bareEnvWarned tracks which bare $VAR names have already been warned
 // about, so each distinct variable triggers a warning at most once.
 var bareEnvWarned sync.Map
-
-// ResetBareEnvWarned clears the warning dedup state. Exported for tests.
-func ResetBareEnvWarned() {
-	bareEnvWarned.Range(func(k, _ any) bool { bareEnvWarned.Delete(k); return true })
-}
 
 // expandBracedEnv expands ${VAR} references in s. As a convenience,
 // if the entire string is a single bare $VAR (e.g. "$PGURL"), it is

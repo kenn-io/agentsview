@@ -297,18 +297,6 @@ type AutomationTextEvidence struct {
 	Valid          bool
 }
 
-// AutomationVerdictFromEvidence combines the first stored user message and
-// fallback first_message using the same ordering and single-turn rule as the
-// full-text classifier. An inconclusive result requires full-text fallback.
-func AutomationVerdictFromEvidence(
-	userMessageCount int,
-	firstUser, firstMessage AutomationTextEvidence,
-) (matched, conclusive bool) {
-	return SnapshotAutomationClassifier().VerdictFromEvidence(
-		userMessageCount, firstUser, firstMessage,
-	)
-}
-
 // VerdictFromEvidence classifies bounded evidence using this snapshot.
 func (classifier AutomationClassifier) VerdictFromEvidence(
 	userMessageCount int,

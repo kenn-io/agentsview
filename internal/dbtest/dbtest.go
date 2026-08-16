@@ -269,11 +269,6 @@ func WithMessageCount(n int) func(*db.Session) {
 	return func(s *db.Session) { s.MessageCount = n }
 }
 
-// WithUserMessageCount sets the session's user message count.
-func WithUserMessageCount(n int) func(*db.Session) {
-	return func(s *db.Session) { s.UserMessageCount = n }
-}
-
 // WithMessageCounts sets the session's total and user message counts.
 func WithMessageCounts(total, user int) func(*db.Session) {
 	return func(s *db.Session) {

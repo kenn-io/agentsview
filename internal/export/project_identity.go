@@ -727,19 +727,6 @@ func BuildProjectsMapWithScope(
 	return out
 }
 
-func PublicProjectIdentityFromStored(stored StoredProjectIdentity) (ProjectIdentity, bool) {
-	if stored.KeySource != ProjectIdentityKeySourceGitRemote || stored.NormalizedRemote == "" {
-		return ProjectIdentity{}, false
-	}
-	repositoryKey := scopedProjectKey("repo1", "agentsview/repository/git/v1", stored.NormalizedRemote)
-	return ProjectIdentity{
-		Key:              scopedProjectKey("p1", "agentsview/project/git/v1", stored.NormalizedRemote),
-		Kind:             ProjectKindGitRemote,
-		NormalizedRemote: stored.NormalizedRemote,
-		RepositoryKey:    repositoryKey,
-	}, true
-}
-
 func projectIdentityKey(source, normalized string) string {
 	sum := sha256.Sum256([]byte(source + "\n" + normalized))
 	return "sha256:" + fmt.Sprintf("%x", sum)

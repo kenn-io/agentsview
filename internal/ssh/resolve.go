@@ -589,14 +589,6 @@ func parseResolvedDirs(
 	return dirs, extraFiles, err
 }
 
-// ParseResolvedTargetsForTest exposes SSH resolver output parsing to
-// internal/remotesync parity tests.
-func ParseResolvedTargetsForTest(
-	output string,
-) (map[parser.AgentType][]string, []string, error) {
-	return parseResolvedDirs(output)
-}
-
 // ParseResolvedTargetsWithFilesForTest exposes SSH resolver output parsing
 // to internal/remotesync parity tests, discarding forbidden roots that
 // those tests don't assert on.

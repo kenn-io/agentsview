@@ -5336,10 +5336,6 @@ func signalValue(r SignalRow, signal string) int {
 	return 0
 }
 
-func SignalValue(r SignalRow, signal string) int {
-	return signalValue(r, signal)
-}
-
 func isIncompleteOrLowQuality(r SignalRow) bool {
 	if r.Outcome == "errored" || r.Outcome == "abandoned" {
 		return true

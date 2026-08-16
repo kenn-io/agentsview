@@ -116,14 +116,6 @@ export function buildGroupSections(
     .map(([label, groups]) => ({ label, groups }));
 }
 
-/** @deprecated Use buildGroupSections */
-export function buildAgentSections(
-  groups: SessionGroup[],
-  groupByAgent: boolean,
-): GroupSection[] {
-  return buildGroupSections(groups, groupByAgent ? "agent" : "none");
-}
-
 /** Check if a session is a teammate (received a <teammate-message>). */
 function isTeammateByMessage(s: SessionGroupInput): boolean {
   return s.is_teammate

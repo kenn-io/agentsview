@@ -87,14 +87,6 @@ function isGoalContextMessage(trimmedContent: string): boolean {
   return GOAL_CONTEXT_SOURCE_ATTR_RE.test(openTag);
 }
 
-/**
- * Returns true when a message represents an explicit compact
- * boundary inserted by the agent runtime.
- */
-export function isCompactBoundary(m: Message): boolean {
-  return Boolean(m.is_compact_boundary);
-}
-
 export interface MessagePreview {
   /** Display text, with Claude Code shell-shortcut wrappers
    *  replaced: `<bash-input>cmd</bash-input>` becomes `!cmd`,

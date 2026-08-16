@@ -159,22 +159,6 @@ async function flushEffects() {
   await tick();
 }
 
-async function selectRelativeRange(days: number) {
-  const trigger = document.querySelector<HTMLButtonElement>(
-    ".kit-date-range-picker__trigger",
-  );
-  expect(trigger).not.toBeNull();
-  trigger!.click();
-  await flushEffects();
-
-  const preset = [
-    ...document.querySelectorAll<HTMLButtonElement>("button"),
-  ].find((button) => button.textContent?.trim() === `${days}d`);
-  expect(preset).not.toBeUndefined();
-  preset!.click();
-  await flushEffects();
-}
-
 async function selectCustomRange(fromLabel: string, toLabel: string) {
   const trigger = document.querySelector<HTMLButtonElement>(
     ".kit-date-range-picker__trigger",

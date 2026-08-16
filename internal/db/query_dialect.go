@@ -404,15 +404,6 @@ func (b *QueryBuilder) Limit(limit int) string {
 	return "LIMIT " + b.Add(limit)
 }
 
-// NullsLast returns an ORDER BY expression with dialect-appropriate NULL
-// placement when the backend supports it.
-func (d QueryDialect) NullsLast(expr string) string {
-	if d.nullsLast {
-		return expr + " NULLS LAST"
-	}
-	return expr
-}
-
 // EscapeLikePattern escapes SQL LIKE wildcard characters so a bind parameter
 // is treated as literal user text.
 func EscapeLikePattern(s string) string {
@@ -464,10 +455,6 @@ func (d QueryDialect) CanonicalChildRelationshipsSQL() string {
 		quoted = append(quoted, "'"+rel+"'")
 	}
 	return strings.Join(quoted, ", ")
-}
-
-func SidebarChildRelationshipPredicate(dialect QueryDialect, sessionAlias string) string {
-	return sessionAlias + ".relationship_type IN (" + dialect.SidebarChildRelationshipsSQL() + ")"
 }
 
 func CanonicalChildRelationshipPredicate(dialect QueryDialect, sessionAlias string) string {

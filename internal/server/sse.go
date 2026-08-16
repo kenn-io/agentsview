@@ -16,21 +16,6 @@ type SSEStream struct {
 	f http.Flusher
 }
 
-// NewSSEStream initializes an SSE connection by setting the
-// required headers and flushing them to the client. Returns an
-// error if the ResponseWriter does not support streaming.
-func NewSSEStream(w http.ResponseWriter) (*SSEStream, error) {
-	f, ok := w.(http.Flusher)
-	if !ok {
-		return nil, fmt.Errorf("streaming not supported")
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	f.Flush()
-	return &SSEStream{w: w, f: f}, nil
-}
-
 // Send writes an SSE event with the given name and string data.
 // It returns false when the write fails.
 func (s *SSEStream) Send(event, data string) bool {
