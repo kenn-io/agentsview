@@ -795,6 +795,32 @@ func TestReconstructJSONLOversizedKindOneAndTwo(t *testing.T) {
 	}
 }
 
+func TestReconstructJSONLHardCeiling(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hard-ceiling.jsonl")
+	f, err := os.Create(path)
+	require.NoError(t, err)
+	source := &repeatingBytesReader{
+		remaining: int64(vscodeCopilotHardRecordLimit) + 1,
+	}
+	_, err = io.Copy(f, source)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	_, err = reconstructJSONL(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "safety ceiling")
+}
+
+func TestReconstructJSONLRejectsTrailingJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "trailing.jsonl")
+	line := `{"kind":0,"v":{"version":3,"sessionId":"trailing","requests":[]}} {"kind":0}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(line), 0644))
+
+	data, err := reconstructJSONL(path)
+	require.NoError(t, err)
+	assert.Nil(t, data)
+}
+
 func TestReadVSCodeCopilotRecordSafetyCeiling(t *testing.T) {
 	source := &repeatingBytesReader{
 		remaining: int64(vscodeCopilotHardRecordLimit) + 1,

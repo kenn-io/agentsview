@@ -703,9 +703,20 @@ func reconstructJSONL(path string) ([]byte, error) {
 	for {
 		record := newVSCodeCopilotRecordReader(reader)
 		var op jsonlOp
-		decodeErr := json.NewDecoder(record).Decode(&op)
+		decoder := json.NewDecoder(record)
+		decodeErr := decoder.Decode(&op)
 		if !record.sawLine && decodeErr == io.EOF {
 			break
+		}
+		if decodeErr == nil {
+			var trailing json.RawMessage
+			if err := decoder.Decode(&trailing); err != io.EOF {
+				if err == nil {
+					decodeErr = fmt.Errorf("trailing JSON value")
+				} else {
+					decodeErr = fmt.Errorf("trailing JSON: %w", err)
+				}
+			}
 		}
 		if record.err != nil {
 			return nil, fmt.Errorf("read %s: %w", path, record.err)
