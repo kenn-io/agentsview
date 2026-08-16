@@ -197,8 +197,9 @@ func (s *Server) generateCannedInsight(
 	if !status("building_payload") {
 		return
 	}
+	generationOptions := s.currentInsightGenerateOptions(ctx)
 	payload, aggregateHash, cacheKey, err := s.buildCannedPayload(
-		ctx, kind, req,
+		ctx, kind, req, generationOptions,
 	)
 	if err != nil {
 		log.Printf("canned insight payload error: %v", err)
@@ -243,6 +244,9 @@ func (s *Server) generateCannedInsight(
 		ctx, 3*time.Minute,
 	)
 	defer cancel()
+	genCtx = context.WithValue(
+		genCtx, insightGenerationOptionsContextKey{}, generationOptions,
+	)
 	result, err := s.generateStreamFunc(
 		genCtx, req.Agent, prompt, nil,
 	)
@@ -393,6 +397,7 @@ func (s *Server) buildCannedPayload(
 	ctx context.Context,
 	kind insight.CannedKind,
 	req generateInsightRequest,
+	generationOptions insight.GenerateOptions,
 ) (insight.CannedAggregatePayload, string, string, error) {
 	filters := insight.CannedSessionFilters{
 		Timezone:       "UTC",
@@ -486,6 +491,7 @@ func (s *Server) buildCannedPayload(
 		req.Agent, req.Prompt, aggregateHash,
 		filters.AutomatedScope,
 		filters,
+		generationOptions,
 	)
 	if err != nil {
 		return insight.CannedAggregatePayload{}, "", "", err

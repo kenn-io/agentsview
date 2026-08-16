@@ -165,6 +165,28 @@ type Server struct {
 	ensurePricing func(context.Context, *db.DB) error
 }
 
+type insightGenerationOptionsContextKey struct{}
+
+func (s *Server) currentInsightGenerateOptions(
+	ctx context.Context,
+) insight.GenerateOptions {
+	if options, ok := ctx.Value(insightGenerationOptionsContextKey{}).(insight.GenerateOptions); ok {
+		return options
+	}
+	s.mu.RLock()
+	cfg := s.cfg
+	s.mu.RUnlock()
+	return insightGenerateOptions(cfg)
+}
+
+func (s *Server) defaultInsightGenerateStream(
+	ctx context.Context, agent, prompt string, onLog insight.LogFunc,
+) (insight.Result, error) {
+	return insight.GenerateStreamWithOptions(
+		ctx, agent, prompt, onLog, s.currentInsightGenerateOptions(ctx),
+	)
+}
+
 // New creates a new Server.
 func New(
 	cfg config.Config, database db.Store, engine *sync.Engine,
@@ -198,18 +220,10 @@ func New(
 		insightLogDrainTimeout:    defaultInsightLogDrainTimeout,
 		insightLogStopWaitTimeout: defaultInsightLogStopWaitTimeout,
 		ensurePricing:             pricingrefresh.EnsureCurrent,
-		generateStreamFunc: func(
-			ctx context.Context, agent, prompt string,
-			onLog insight.LogFunc,
-		) (insight.Result, error) {
-			return insight.GenerateStreamWithOptions(
-				ctx, agent, prompt, onLog,
-				insightGenerateOptions(cfg),
-			)
-		},
-		spaFS:      dist,
-		spaHandler: http.FileServerFS(dist),
+		spaFS:                     dist,
+		spaHandler:                http.FileServerFS(dist),
 	}
+	s.generateStreamFunc = s.defaultInsightGenerateStream
 	for _, opt := range opts {
 		opt(s)
 	}

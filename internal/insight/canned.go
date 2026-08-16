@@ -286,6 +286,7 @@ func CannedCacheKey(
 	dateFrom, dateTo, project, requestedAgent, focus, aggregateHash string,
 	automatedScope string,
 	filters CannedSessionFilters,
+	generation GenerateOptions,
 ) (string, error) {
 	t, ok := CannedTemplate(kind)
 	if !ok {
@@ -297,18 +298,37 @@ func CannedCacheKey(
 		return "", err
 	}
 	filterSum := sha256.Sum256(filterData)
+	generationBackend := requestedAgent
+	generationModel := ""
+	generationEndpointHash := ""
+	if generation.Endpoint != nil &&
+		strings.TrimSpace(generation.Endpoint.Endpoint) != "" &&
+		strings.TrimSpace(generation.Endpoint.Model) != "" {
+		generationBackend = "openai"
+		generationModel = strings.TrimSpace(generation.Endpoint.Model)
+		endpointSum := sha256.Sum256(
+			[]byte(strings.TrimSpace(generation.Endpoint.Endpoint)),
+		)
+		generationEndpointHash = hex.EncodeToString(endpointSum[:])
+		requestedAgent = ""
+	} else if requestedAgent == "gemini" {
+		generationModel = geminiInsightModel
+	}
 	input := map[string]string{
-		"kind":             string(kind),
-		"date_from":        dateFrom,
-		"date_to":          dateTo,
-		"project":          project,
-		"requested_agent":  requestedAgent,
-		"template_version": t.Version,
-		"schema_version":   CannedSchemaVersion,
-		"aggregate_hash":   aggregateHash,
-		"focus_hash":       hex.EncodeToString(focusSum[:]),
-		"automated_scope":  automatedScope,
-		"filter_hash":      hex.EncodeToString(filterSum[:]),
+		"kind":                     string(kind),
+		"date_from":                dateFrom,
+		"date_to":                  dateTo,
+		"project":                  project,
+		"requested_agent":          requestedAgent,
+		"template_version":         t.Version,
+		"schema_version":           CannedSchemaVersion,
+		"aggregate_hash":           aggregateHash,
+		"focus_hash":               hex.EncodeToString(focusSum[:]),
+		"automated_scope":          automatedScope,
+		"filter_hash":              hex.EncodeToString(filterSum[:]),
+		"generation_backend":       generationBackend,
+		"generation_model":         generationModel,
+		"generation_endpoint_hash": generationEndpointHash,
 	}
 	data, err := canonicalJSON(input)
 	if err != nil {
