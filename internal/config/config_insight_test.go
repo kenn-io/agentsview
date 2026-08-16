@@ -44,3 +44,27 @@ func TestInsightsConfigAPIKey(t *testing.T) {
 	assert.Empty(t, c.APIKey())
 	assert.NotContains(t, os.Getenv("AGENTSVIEW_TEST_INSIGHTS_KEY"), "secret")
 }
+
+func TestInsightsConfigTOMLLoadAndFinalize(t *testing.T) {
+	cfg := loadMinimalWithConfig(t, map[string]any{
+		"insights": map[string]any{
+			"endpoint":    " http://127.0.0.1:11434/v1 ",
+			"model":       " llama3.1 ",
+			"api_key_env": " AGENTSVIEW_INSIGHTS_KEY ",
+			"allow_http":  true,
+		},
+	})
+	assert.Equal(t, "http://127.0.0.1:11434/v1", cfg.Insights.Endpoint)
+	assert.Equal(t, "llama3.1", cfg.Insights.Model)
+	assert.Equal(t, "AGENTSVIEW_INSIGHTS_KEY", cfg.Insights.APIKeyEnv)
+	assert.True(t, cfg.Insights.AllowHTTP)
+
+	err := loadMinimalErrWithConfig(t, map[string]any{
+		"insights": map[string]any{
+			"endpoint": "http://models.example/v1",
+			"model":    "remote",
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "plaintext")
+}

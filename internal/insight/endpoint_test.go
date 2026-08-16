@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,9 +16,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMain(m *testing.M) {
+	if marker := os.Getenv("AGENTSVIEW_TEST_CLI_MARKER"); marker != "" {
+		_ = os.WriteFile(marker, []byte("invoked"), 0o600)
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
 func TestGenerateStreamWithOptions_OpenAIEndpoint(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
-	var got endpointRequest
+	var got struct {
+		Model    string `json:"model"`
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+		Stream bool `json:"stream"`
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodPost, r.Method)
 		require.Equal(t, "/v1/chat/completions", r.URL.Path)
@@ -24,7 +42,7 @@ func TestGenerateStreamWithOptions_OpenAIEndpoint(t *testing.T) {
 		require.Equal(t, "Bearer test-key", r.Header.Get("Authorization"))
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"model":"served-model","choices":[{"message":{"content":"answer"}}]}`))
+		_, _ = w.Write([]byte(`{"model":"served-model","choices":[{"message":{"role":"assistant","content":"answer"}}]}`))
 	}))
 	defer server.Close()
 
@@ -45,7 +63,7 @@ func TestGenerateStreamWithOptions_OpenAIEndpoint(t *testing.T) {
 func TestOpenAIEndpoint_BearerAuth(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "Bearer secret", r.Header.Get("Authorization"))
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
 	}))
 	defer server.Close()
 	_, err := generateEndpoint(context.Background(), EndpointConfig{Endpoint: server.URL, Model: "m", APIKey: "secret"}, "p")
@@ -55,7 +73,7 @@ func TestOpenAIEndpoint_BearerAuth(t *testing.T) {
 func TestOpenAIEndpoint_AnonymousRequestOmitsBearer(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Empty(t, r.Header.Get("Authorization"))
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
 	}))
 	defer server.Close()
 	_, err := generateEndpoint(context.Background(), EndpointConfig{Endpoint: server.URL, Model: "m"}, "p")
@@ -64,11 +82,20 @@ func TestOpenAIEndpoint_AnonymousRequestOmitsBearer(t *testing.T) {
 
 func TestOpenAIEndpoint_HonorsCancellation(t *testing.T) {
 	started := make(chan struct{})
+	release := make(chan struct{})
+	handlerDone := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseHandler := func() { releaseOnce.Do(func() { close(release) }) }
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		close(started)
-		<-r.Context().Done()
+		<-release
+		close(handlerDone)
 	}))
-	defer server.Close()
+	defer func() {
+		releaseHandler()
+		server.CloseClientConnections()
+		server.Close()
+	}()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -82,6 +109,9 @@ func TestOpenAIEndpoint_HonorsCancellation(t *testing.T) {
 	select {
 	case err := <-errs:
 		require.Error(t, err)
+		releaseHandler()
+		<-handlerDone
+		server.CloseClientConnections()
 	case <-time.After(time.Second):
 		t.Fatal("endpoint request did not honor cancellation")
 	}
@@ -101,7 +131,8 @@ func TestOpenAIEndpoint_ResponseContract(t *testing.T) {
 		code int
 		bad  bool
 	}{
-		{name: "valid without model", body: `{"choices":[{"message":{"content":"ok"}}]}`},
+		{name: "valid without model", body: `{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`},
+		{name: "wrong role", body: `{"choices":[{"message":{"role":"user","content":"ok"}}]}`, bad: true},
 		{name: "malformed", body: `{`, bad: true},
 		{name: "no choices", body: `{"choices":[]}`, bad: true},
 		{name: "non string", body: `{"choices":[{"message":{"content":[]}}]}`, bad: true},
@@ -163,14 +194,17 @@ func TestOpenAIEndpoint_RejectsOversizedResponse(t *testing.T) {
 }
 
 func TestGenerateStreamWithOptions_EndpointFailureDoesNotFallbackToCLI(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "cli-invoked")
+	t.Setenv("AGENTSVIEW_TEST_CLI_MARKER", marker)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }))
 	defer server.Close()
 	_, err := GenerateStreamWithOptions(context.Background(), "claude", "prompt", nil, GenerateOptions{
-		Agents:   map[string]AgentConfig{"claude": {Binary: "this-binary-must-not-run"}},
+		Agents:   map[string]AgentConfig{"claude": {Binary: os.Args[0]}},
 		Endpoint: &EndpointConfig{Endpoint: server.URL, Model: "m"},
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "HTTP 503")
+	assert.NoFileExists(t, marker)
 }
 
 func TestGenerateStreamWithOptions_EndpointUnsetUsesCLI(t *testing.T) {

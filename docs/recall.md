@@ -57,8 +57,8 @@ Generated insights use the configured OpenAI-compatible endpoint when
 `[insights]` has both an `endpoint` and `model`; otherwise they use the selected
 agent CLI on your machine. Endpoint mode sends one non-streaming
 `POST /chat/completions` request with the generated prompt as a user message.
-It accepts the first choice's string `message.content` and optional response
-`model`. It does not support streaming, `/responses`, legacy completions,
+It accepts the first choice's `assistant` message with string `message.content`
+and optional response `model`. It does not support streaming, `/responses`, legacy completions,
 tool calls, or content-part arrays. An endpoint failure returns an error and
 does not retry through a CLI.
 

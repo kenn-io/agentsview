@@ -38,7 +38,8 @@ type endpointResponse struct {
 	Model   string `json:"model"`
 	Choices []struct {
 		Message struct {
-			Content any `json:"content"`
+			Role    string `json:"role"`
+			Content any    `json:"content"`
 		} `json:"message"`
 	} `json:"choices"`
 }
@@ -92,6 +93,9 @@ func generateEndpoint(ctx context.Context, cfg EndpointConfig, prompt string) (R
 	}
 	if len(decoded.Choices) == 0 {
 		return Result{}, errorsEndpoint("response has no choices")
+	}
+	if decoded.Choices[0].Message.Role != "assistant" {
+		return Result{}, errorsEndpoint("response message role is invalid")
 	}
 	content, ok := decoded.Choices[0].Message.Content.(string)
 	if !ok || strings.TrimSpace(content) == "" {
