@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -813,39 +812,52 @@ func TestReconstructJSONLHardCeiling(t *testing.T) {
 
 func TestReconstructJSONLRejectsTrailingJSON(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "trailing.jsonl")
-	line := `{"kind":0,"v":{"version":3,"sessionId":"trailing","requests":[]}} {"kind":0}` + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(line), 0644))
+	lines := []string{
+		`{"kind":0,"v":{"version":3,"sessionId":"trailing","requests":[]}}`,
+		`{"kind":2,"k":["requests"],"v":[]}{"kind":2}`,
+		`{"kind":2,"k":["requests"],"v":[{"message":{"text":"after malformed"},"response":[{"value":"kept"}]}]}`,
+	}
+	require.NoError(t, os.WriteFile(path,
+		[]byte(strings.Join(lines, "\n")+"\n"), 0644,
+	))
 
 	data, err := reconstructJSONL(path)
 	require.NoError(t, err)
-	assert.Nil(t, data)
-}
-
-func TestReadVSCodeCopilotRecordSafetyCeiling(t *testing.T) {
-	source := &repeatingBytesReader{
-		remaining: int64(vscodeCopilotHardRecordLimit) + 1,
+	var state struct {
+		SessionID string `json:"sessionId"`
+		Requests  []any  `json:"requests"`
 	}
-	reader := bufio.NewReaderSize(source, 64*1024)
-	_, err := readVSCodeCopilotRecord(reader)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "safety ceiling")
-	assert.LessOrEqual(t, source.read,
-		int64(vscodeCopilotHardRecordLimit)+64*1024,
-	)
+	require.NoError(t, json.Unmarshal(data, &state))
+	assert.Equal(t, "trailing", state.SessionID)
+	assert.Len(t, state.Requests, 1)
 }
 
-func TestReadVSCodeCopilotRecordAtNormalLimit(t *testing.T) {
-	reader := bufio.NewReaderSize(&repeatingBytesReader{
-		remaining: vscodeCopilotNormalRecordLimit,
-	}, 64*1024)
-	line, err := readVSCodeCopilotRecord(reader)
+func TestReconstructJSONLAtNormalLimit(t *testing.T) {
+	prefix := `{"kind":0,"v":{"version":3,"sessionId":"normal-boundary","requests":[{"message":{"text":"boundary"},"response":[{"value":"`
+	suffix := `"}]}]}}` + "\n"
+	value := strings.Repeat("x", vscodeCopilotNormalRecordLimit)
+	line := prefix + value + suffix
+	var raw struct {
+		V json.RawMessage `json:"v"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(line), &raw))
+	value = value[:len(value)-(len(raw.V)-vscodeCopilotNormalRecordLimit)]
+	line = prefix + value + suffix
+	require.NoError(t, json.Unmarshal([]byte(line), &raw))
+	require.Len(t, raw.V, vscodeCopilotNormalRecordLimit)
+
+	path := filepath.Join(t.TempDir(), "normal-boundary.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte(line), 0644))
+	data, err := reconstructJSONL(path)
 	require.NoError(t, err)
-	assert.Len(t, line, vscodeCopilotNormalRecordLimit)
+	var state map[string]any
+	require.NoError(t, json.Unmarshal(data, &state))
+	assert.Equal(t, "normal-boundary", state["sessionId"])
+	assert.Len(t, state["requests"].([]any)[0].(map[string]any)["response"].([]any)[0].(map[string]any)["value"], len(value))
 }
 
 type repeatingBytesReader struct {
 	remaining int64
-	read      int64
 }
 
 func (r *repeatingBytesReader) Read(p []byte) (int, error) {
@@ -860,14 +872,13 @@ func (r *repeatingBytesReader) Read(p []byte) (int, error) {
 		p[i] = 'x'
 	}
 	r.remaining -= int64(n)
-	r.read += int64(n)
 	return n, nil
 }
 
 func oversizedVSCodeCopilotResponse(outputCount int) string {
 	output := strings.Repeat("x", 11028)
 	var b strings.Builder
-	b.WriteString(`{"kind":"toolInvocationSerialized","toolId":"runSubagent","toolCallId":"tc1","subAgentInvocationId":"toolu_1","invocationMessage":{"value":"Run subagent"},"resultDetails":{"input":"retained input","output":[`)
+	b.WriteString(`{"kind":"toolInvocationSerialized","toolId":"runSubagent","toolCallId":"tc1","subAgentInvocationId":"toolu_1","isComplete":true,"invocationMessage":{"value":"Run subagent","isTrusted":false},"resultDetails":{"input":"retained input","output":[`)
 	for i := 0; i < outputCount; i++ {
 		if i > 0 {
 			b.WriteByte(',')

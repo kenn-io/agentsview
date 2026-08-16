@@ -852,32 +852,6 @@ func (r *vscodeCopilotRecordReader) drain() error {
 	return err
 }
 
-func readVSCodeCopilotRecord(r *bufio.Reader) ([]byte, error) {
-	var line []byte
-	for {
-		chunk, prefix, err := r.ReadLine()
-		if err == io.EOF {
-			if len(line) == 0 {
-				return nil, io.EOF
-			}
-			return line, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		if len(line)+len(chunk) > vscodeCopilotHardRecordLimit {
-			return nil, fmt.Errorf(
-				"VS Code Copilot JSONL record exceeds %d-byte safety ceiling",
-				vscodeCopilotHardRecordLimit,
-			)
-		}
-		line = append(line, chunk...)
-		if !prefix {
-			return line, nil
-		}
-	}
-}
-
 func boundedVSCodeCopilotValue(raw json.RawMessage) ([]byte, error) {
 	if len(raw) <= vscodeCopilotNormalRecordLimit {
 		return raw, nil
