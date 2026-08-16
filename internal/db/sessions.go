@@ -39,6 +39,8 @@ const deletionCauseSourceMissing = "source_missing"
 // it into subagent_parent_repair_queue before processing queued children.
 const subagentParentRepairQueueStateKey = "subagent_parent_repair_queue_v1"
 
+const subagentParentRepairStateUpgradeKey = "subagent_parent_repair_state_upgrade_v1"
+
 // sessionBaseCols is the column list for standard session queries
 // (list, get). Keep in sync with scanSessionRow.
 const sessionBaseCols = `id, project, machine, agent,
@@ -1713,12 +1715,16 @@ func (db *DB) GetChildSessions(
 // The LEFT JOIN keeps an edge whose spawner has no sessions row as a
 // last-resort candidate (it sorts with the unknown start times) rather
 // than discarding it.
-const subagentSpawnerExpr = `
+func nonSelfSubagentEdgePredicate(spawnerExpr, childExpr string) string {
+	return spawnerExpr + " IS NOT " + childExpr
+}
+
+var subagentSpawnerExpr = `
 		SELECT tc.session_id
 		FROM tool_calls tc
 		LEFT JOIN sessions ps ON ps.id = tc.session_id
 		WHERE tc.subagent_session_id = s.id
-		AND tc.session_id IS NOT s.id
+		AND ` + nonSelfSubagentEdgePredicate("tc.session_id", "s.id") + `
 		ORDER BY
 			(strftime('%Y-%m-%dT%H:%M:%fZ', ps.started_at) IS NULL),
 			strftime('%Y-%m-%dT%H:%M:%fZ', ps.started_at),
@@ -1739,7 +1745,7 @@ const subagentSpawnerExpr = `
 // The IS NOT NULL filter keeps the candidate list free of NULLs, so the IN
 // comparison cannot go three-valued (the partial index carries exactly those
 // rows, so the filter is free).
-const linkSubagentSessionsQuery = `
+var linkSubagentSessionsQuery = `
 	UPDATE sessions AS s
 	SET parent_session_id = (` + subagentSpawnerExpr + `
 	),
@@ -1761,6 +1767,7 @@ const linkSubagentSessionsQuery = `
 	WHERE s.id IN (
 		SELECT tc.subagent_session_id FROM tool_calls tc
 		WHERE tc.subagent_session_id IS NOT NULL
+		AND ` + nonSelfSubagentEdgePredicate("tc.session_id", "tc.subagent_session_id") + `
 	)
 	AND (
 		(relationship_type != 'subagent' AND (` + subagentSpawnerExpr + `) IS NOT NULL)
@@ -1792,6 +1799,17 @@ const linkSubagentSessionsQuery = `
 func (db *DB) LinkSubagentSessions() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	upgradeTx, err := db.getWriter().Begin()
+	if err != nil {
+		return fmt.Errorf("beginning subagent parent repair state upgrade: %w", err)
+	}
+	if err := upgradeSubagentParentRepairStateTx(upgradeTx); err != nil {
+		_ = upgradeTx.Rollback()
+		return err
+	}
+	if err := upgradeTx.Commit(); err != nil {
+		return fmt.Errorf("committing subagent parent repair state upgrade: %w", err)
+	}
 
 	// local_modified_at is bumped so the sync_marker trigger fires and
 	// push targets (PostgreSQL and the DuckDB mirror) re-select the linked
@@ -1800,7 +1818,7 @@ func (db *DB) LinkSubagentSessions() error {
 	// session after a mirror's cutoff would otherwise never re-push it
 	// (see updateSessionSignalsTx and ReplaceSessionUsageEvents for the
 	// same pattern).
-	_, err := db.getWriter().Exec(linkSubagentSessionsQuery)
+	_, err = db.getWriter().Exec(linkSubagentSessionsQuery)
 	if err != nil {
 		return fmt.Errorf("linking subagent sessions: %w", err)
 	}
@@ -1836,9 +1854,11 @@ func linkSubagentSessionsForSessionsQuery(ph string) string {
 		SELECT tc.subagent_session_id FROM tool_calls tc
 		WHERE tc.session_id IN ` + ph + `
 		AND tc.subagent_session_id IS NOT NULL
+		AND ` + nonSelfSubagentEdgePredicate("tc.session_id", "tc.subagent_session_id") + `
 		UNION
 		SELECT tc.subagent_session_id FROM tool_calls tc
 		WHERE tc.subagent_session_id IN ` + ph + `
+		AND ` + nonSelfSubagentEdgePredicate("tc.session_id", "tc.subagent_session_id") + `
 	)
 	AND (
 		(relationship_type != 'subagent' AND (` + subagentSpawnerExpr + `) IS NOT NULL)
@@ -1850,13 +1870,16 @@ func linkSubagentSessionsForSessionsQuery(ph string) string {
 	)`
 }
 
-func clearSelfSubagentParentForSessionsQuery(ph string) string {
+func clearSelfSubagentParentQuery(ph string) string {
+	scope := ""
+	if ph != "" {
+		scope = "s.id IN " + ph + "\n\tAND "
+	}
 	return `
 	UPDATE sessions AS s
 	SET parent_session_id = NULL,
 	local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-	WHERE s.id IN ` + ph + `
-	AND s.relationship_type = 'subagent'
+	WHERE ` + scope + `s.relationship_type = 'subagent'
 	AND s.parent_session_id IS s.id`
 }
 
@@ -1881,7 +1904,7 @@ func clearDanglingSubagentParentQuery(ph string) string {
 	AND s.parent_session_id IS NOT NULL
 	AND NOT EXISTS (
 		SELECT 1 FROM tool_calls tc WHERE tc.subagent_session_id = s.id
-		AND tc.session_id IS NOT tc.subagent_session_id
+		AND ` + nonSelfSubagentEdgePredicate("tc.session_id", "tc.subagent_session_id") + `
 	)
 	AND NOT EXISTS (
 		SELECT 1 FROM sessions p WHERE p.id = s.parent_session_id
@@ -1922,7 +1945,7 @@ func (db *DB) LinkSubagentSessionsForSessions(ids []string) error {
 			)
 		}
 		if _, err := db.getWriter().Exec(
-			clearSelfSubagentParentForSessionsQuery(ph), args...,
+			clearSelfSubagentParentQuery(ph), args...,
 		); err != nil {
 			return fmt.Errorf(
 				"clearing self-referential subagent parents for %d changed sessions: %w",
@@ -1961,6 +1984,11 @@ func (db *DB) queueSubagentParentRepairs(ids []string, cleanup bool) error {
 		return fmt.Errorf("beginning subagent parent repair queue update: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if cleanup {
+		if err := upgradeSubagentParentRepairStateTx(tx); err != nil {
+			return err
+		}
+	}
 
 	repairStmt, err := tx.Prepare(`
 		INSERT INTO subagent_parent_repair_queue (session_id) VALUES (?)
@@ -2010,26 +2038,29 @@ func (db *DB) RepairQueuedSubagentParents() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	var pending int
-	err := db.getWriter().QueryRow(`
-		SELECT EXISTS(SELECT 1 FROM subagent_parent_repair_queue)
-		    OR EXISTS(SELECT 1 FROM subagent_parent_cleanup_queue)
-		    OR EXISTS(SELECT 1 FROM pg_sync_state WHERE key = ?)`,
-		subagentParentRepairQueueStateKey,
-	).Scan(&pending)
-	if err != nil {
-		return fmt.Errorf("checking subagent parent repair queue: %w", err)
-	}
-	if pending == 0 {
-		return nil
-	}
 	tx, err := db.getWriter().Begin()
 	if err != nil {
 		return fmt.Errorf("beginning queued subagent parent repair: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := migrateLegacySubagentParentRepairQueueTx(tx); err != nil {
+	if err := upgradeSubagentParentRepairStateTx(tx); err != nil {
 		return err
+	}
+	var pending int
+	err = tx.QueryRow(`
+		SELECT EXISTS(SELECT 1 FROM subagent_parent_repair_queue)
+		    OR EXISTS(SELECT 1 FROM subagent_parent_cleanup_queue)
+		    OR EXISTS(SELECT 1 FROM pg_sync_state WHERE key = ?)`,
+		subagentParentRepairStateUpgradeKey,
+	).Scan(&pending)
+	if err != nil {
+		return fmt.Errorf("checking subagent parent repair queue: %w", err)
+	}
+	if pending == 0 {
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing empty queued subagent parent repair: %w", err)
+		}
+		return nil
 	}
 	for {
 		rows, err := tx.Query(`
@@ -2070,7 +2101,7 @@ func (db *DB) RepairQueuedSubagentParents() error {
 			)
 		}
 		if _, err := tx.Exec(
-			clearSelfSubagentParentForSessionsQuery(ph), args...,
+			clearSelfSubagentParentQuery(ph), args...,
 		); err != nil {
 			return fmt.Errorf(
 				"clearing queued self-referential subagent parents for %d "+
@@ -2169,6 +2200,41 @@ func migrateLegacySubagentParentRepairQueueTx(tx *sql.Tx) error {
 	return nil
 }
 
+func upgradeSubagentParentRepairStateTx(tx *sql.Tx) error {
+	var upgraded int
+	if err := tx.QueryRow(
+		"SELECT EXISTS(SELECT 1 FROM pg_sync_state WHERE key = ?)",
+		subagentParentRepairStateUpgradeKey,
+	).Scan(&upgraded); err != nil {
+		return fmt.Errorf("checking subagent parent repair state upgrade: %w", err)
+	}
+	if upgraded != 0 {
+		return nil
+	}
+	if err := migrateLegacySubagentParentRepairQueueTx(tx); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO subagent_parent_repair_queue (session_id)
+		SELECT session_id FROM subagent_parent_cleanup_queue
+		WHERE 1
+		ON CONFLICT(session_id) DO NOTHING`); err != nil {
+		return fmt.Errorf("demoting legacy subagent parent cleanup queue: %w", err)
+	}
+	if _, err := tx.Exec("DELETE FROM subagent_parent_cleanup_queue"); err != nil {
+		return fmt.Errorf("clearing legacy subagent parent cleanup queue: %w", err)
+	}
+	if _, err := tx.Exec(clearSelfSubagentParentQuery("")); err != nil {
+		return fmt.Errorf("repairing legacy self-parented subagent sessions: %w", err)
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO pg_sync_state (key, value) VALUES (?, ?)
+		ON CONFLICT(key) DO NOTHING`, subagentParentRepairStateUpgradeKey, "1"); err != nil {
+		return fmt.Errorf("recording subagent parent repair state upgrade: %w", err)
+	}
+	return nil
+}
+
 // SubagentChildSessionIDs returns the distinct children the given sessions'
 // spawn edges currently reference (tool_calls.subagent_session_id). Sync
 // captures this BEFORE a full rewrite or parser-exclusion delete: those
@@ -2187,7 +2253,8 @@ func (db *DB) SubagentChildSessionIDs(ids []string) ([]string, error) {
 			SELECT DISTINCT tc.subagent_session_id
 			FROM tool_calls tc
 			WHERE tc.session_id IN `+ph+`
-			AND tc.subagent_session_id IS NOT NULL`, args...)
+			AND tc.subagent_session_id IS NOT NULL
+			AND `+nonSelfSubagentEdgePredicate("tc.session_id", "tc.subagent_session_id")+``, args...)
 		if err != nil {
 			return fmt.Errorf(
 				"listing subagent children of %d sessions: %w",

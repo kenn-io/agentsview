@@ -1087,7 +1087,10 @@ func TestSubagentChildSessionIDs(t *testing.T) {
 	for _, id := range []string{"s1", "s2", "quiet"} {
 		insertSession(t, d, id, "p", func(s *Session) { s.MessageCount = 1 })
 	}
+	selfEdge := spawnEdgeTo("s1", "s1", "invalid self spawn")
+	selfEdge.Ordinal = 1
 	insertMessages(t, d,
+		selfEdge,
 		spawnEdgeTo("s1", "kid-a", "spawn a"),
 		spawnEdgeTo("s2", "kid-b", "spawn b"),
 	)
@@ -1099,6 +1102,98 @@ func TestSubagentChildSessionIDs(t *testing.T) {
 	none, err := d.SubagentChildSessionIDs(nil)
 	require.NoError(t, err, "empty input")
 	assert.Empty(t, none)
+}
+
+func TestRepairQueuedSubagentParentsSelfEdgeUpgrade(t *testing.T) {
+	t.Run("repairs legacy self parent without queues", func(t *testing.T) {
+		d := testDB(t)
+		insertSession(t, d, "child", "p", func(s *Session) {
+			s.MessageCount = 1
+			s.ParentSessionID = Ptr("child")
+			s.RelationshipType = "subagent"
+		})
+		_, err := d.getWriter().Exec(
+			"UPDATE sessions SET local_modified_at = ? WHERE id = ?",
+			"2026-01-01T00:00:00.000Z", "child",
+		)
+		require.NoError(t, err, "seed local_modified_at")
+		before, err := d.GetSessionFull(context.Background(), "child")
+		requireNoError(t, err, "GetSessionFull before")
+		require.NotNil(t, before.LocalModifiedAt)
+
+		require.NoError(t, d.RepairQueuedSubagentParents())
+		child, err := d.GetSession(context.Background(), "child")
+		requireNoError(t, err, "GetSession child")
+		assert.Nil(t, child.ParentSessionID)
+		assert.Equal(t, "subagent", child.RelationshipType)
+		after, err := d.GetSessionFull(context.Background(), "child")
+		requireNoError(t, err, "GetSessionFull after")
+		require.NotNil(t, after.LocalModifiedAt)
+		assert.NotEqual(t, *before.LocalModifiedAt, *after.LocalModifiedAt)
+		marker, err := d.GetSyncState(subagentParentRepairStateUpgradeKey)
+		require.NoError(t, err, "upgrade marker")
+		assert.Equal(t, "1", marker)
+	})
+
+	t.Run("demotes ambiguous pre-upgrade cleanup", func(t *testing.T) {
+		d := testDB(t)
+		insertSession(t, d, "child", "p", func(s *Session) {
+			s.MessageCount = 1
+			s.ParentSessionID = Ptr("parser-parent")
+			s.RelationshipType = "subagent"
+		})
+		insertMessages(t, d, spawnEdgeTo("child", "child", "legacy self spawn"))
+		_, err := d.getWriter().Exec(
+			"INSERT INTO subagent_parent_repair_queue(session_id) VALUES (?)", "child")
+		require.NoError(t, err, "seed legacy repair queue")
+		_, err = d.getWriter().Exec(
+			"INSERT INTO subagent_parent_cleanup_queue(session_id) VALUES (?)", "child")
+		require.NoError(t, err, "seed legacy cleanup queue")
+		_, err = d.getWriter().Exec("DELETE FROM tool_calls WHERE session_id = ?", "child")
+		require.NoError(t, err, "remove legacy self edge")
+
+		require.NoError(t, d.RepairQueuedSubagentParents())
+		child, err := d.GetSession(context.Background(), "child")
+		requireNoError(t, err, "GetSession child")
+		require.NotNil(t, child.ParentSessionID)
+		assert.Equal(t, "parser-parent", *child.ParentSessionID)
+		assert.Equal(t, "subagent", child.RelationshipType)
+		var repairs, cleanups int
+		require.NoError(t, d.Reader().QueryRow("SELECT count(*) FROM subagent_parent_repair_queue").Scan(&repairs))
+		require.NoError(t, d.Reader().QueryRow("SELECT count(*) FROM subagent_parent_cleanup_queue").Scan(&cleanups))
+		assert.Zero(t, repairs)
+		assert.Zero(t, cleanups)
+	})
+}
+
+func TestRepairQueuedSubagentParentsSelfEdgeUpgradeIsIdempotent(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "child", "p", func(s *Session) {
+		s.MessageCount = 1
+		s.ParentSessionID = Ptr("child")
+		s.RelationshipType = "subagent"
+	})
+	_, err := d.getWriter().Exec(
+		"UPDATE sessions SET local_modified_at = ? WHERE id = ?",
+		"2026-01-01T00:00:00.000Z", "child",
+	)
+	require.NoError(t, err, "seed local_modified_at")
+	require.NoError(t, d.RepairQueuedSubagentParents())
+	afterFirst, err := d.GetSessionFull(context.Background(), "child")
+	requireNoError(t, err, "GetSessionFull after first upgrade")
+	require.NotNil(t, afterFirst.LocalModifiedAt)
+
+	require.NoError(t, d.RepairQueuedSubagentParents())
+	afterSecond, err := d.GetSessionFull(context.Background(), "child")
+	requireNoError(t, err, "GetSessionFull after second upgrade")
+	require.NotNil(t, afterSecond.LocalModifiedAt)
+	assert.Equal(t, *afterFirst.LocalModifiedAt, *afterSecond.LocalModifiedAt)
+	var markers int
+	require.NoError(t, d.Reader().QueryRow(
+		"SELECT count(*) FROM pg_sync_state WHERE key = ?",
+		subagentParentRepairStateUpgradeKey,
+	).Scan(&markers))
+	assert.Equal(t, 1, markers)
 }
 
 // TestQueueSubagentParentRepairsAdditionWorkIsQueueSizeIndependent protects
@@ -1158,7 +1253,7 @@ func TestRepairQueuedSubagentParentsMigratesLegacyJSONQueue(t *testing.T) {
 	assert.Zero(t, queued, "successful repair must clear migrated rows")
 }
 
-func TestRepairQueuedSubagentParentsMigratesLegacyCleanupIntent(t *testing.T) {
+func TestRepairQueuedSubagentParentsDemotesLegacyCleanupIntent(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "spawner", "p", func(s *Session) {
 		s.MessageCount = 1
@@ -1180,8 +1275,9 @@ func TestRepairQueuedSubagentParentsMigratesLegacyCleanupIntent(t *testing.T) {
 	kid, err := d.GetSession(context.Background(), "kid")
 	require.NoError(t, err)
 	require.NotNil(t, kid)
-	assert.Nil(t, kid.ParentSessionID,
-		"the legacy queue contained pre-write children and must retain cleanup intent")
+	require.NotNil(t, kid.ParentSessionID)
+	assert.Equal(t, "spawner", *kid.ParentSessionID,
+		"legacy cleanup intent must be demoted before destructive repair")
 }
 
 // TestLinkSubagentSessionsForSessionsPlanIsBatchBounded pins the cost shape
