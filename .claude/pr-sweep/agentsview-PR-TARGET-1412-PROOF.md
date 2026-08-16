@@ -2,7 +2,7 @@
 
 Working tree: `D:\Repos\agentsview-pr-1412-copilot-long-lines`
 Base commit: `0e27e4d029cd1a7ece3dda448c5695c0b5a6feb4`.
-Committed HEAD: `fdfae269f`.
+Implementation commit: `eea160244fcdb358f9e126fad11668a3b16ee70a`.
 The focused captures below were produced from the committed working tree.
 
 The replay path now carries one validated `vscodeCopilotReplayLimits` value.
