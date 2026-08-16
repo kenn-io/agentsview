@@ -604,10 +604,11 @@ func newActivityReportCommand() *cobra.Command {
 		"Report ID paired with --sessions-cursor in daemon mode")
 	cmd.Flags().StringVar(&cfg.SessionsCursor, "sessions-cursor", "",
 		"Continue from an Activity session page cursor")
-	cmd.Flags().StringVar(&cfg.SessionsSort, "sessions-sort", "agent_minutes",
-		"Session sort: agent_minutes, cost, first_active, project, agent")
-	cmd.Flags().StringVar(&cfg.SessionsDirection, "sessions-direction", "desc",
-		"Session sort direction: asc or desc")
+	cmd.Flags().StringVar(&cfg.SessionsSort, "sessions-sort", "",
+		"Session sort (default agent_minutes): "+
+			"agent_minutes, cost, first_active, project, agent")
+	cmd.Flags().StringVar(&cfg.SessionsDirection, "sessions-direction", "",
+		"Session sort direction (default desc): asc or desc")
 	cmd.Flags().StringVar(&cfg.SessionsBucket, "sessions-bucket", "",
 		"Only sessions active in this zero-based bucket index")
 	registerFormatFlags(cmd.Flags())

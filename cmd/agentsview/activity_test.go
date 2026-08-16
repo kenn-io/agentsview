@@ -270,6 +270,77 @@ func TestFetchHTTPActivityReportContinuesRequestedGeneration(t *testing.T) {
 	assert.Equal(t, "continued", report.BySession[0].SessionID)
 }
 
+func TestActivityReportCommandCursorInheritsNonDefaultPagingFlags(t *testing.T) {
+	dataDir := testDataDir(t)
+	queries := make(chan url.Values, 2)
+	pageResponse := func(sessionID, nextCursor string) string {
+		report := activity.Report{
+			ReportID: "saved-report", Timezone: "UTC",
+			BySession:     []activity.SessionRow{{SessionID: sessionID}},
+			SessionsTotal: 2, SessionsNextCursor: nextCursor,
+		}
+		payload, err := json.Marshal(map[string]any{
+			"report_id": "saved-report", "sessions": report.BySession,
+			"next_cursor": nextCursor, "total": 2, "report": report,
+		})
+		require.NoError(t, err)
+		return string(payload)
+	}
+	firstPage := pageResponse("first", "project-ascending-cursor")
+	secondPage := pageResponse("second", "")
+	ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
+		"/api/v1/activity/report/saved-report/sessions": func(
+			w http.ResponseWriter, r *http.Request,
+		) {
+			query := r.URL.Query()
+			queries <- query
+			response := secondPage
+			if query.Get("cursor") == "" {
+				response = firstPage
+			}
+			writeJSONResponse(w, response)
+		},
+	})
+	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
+
+	firstCommand := newRootCommand()
+	firstCommand.SetArgs([]string{
+		"activity", "report", "--json", "--sessions-report-id", "saved-report",
+		"--sessions-sort", "project", "--sessions-direction", "asc",
+	})
+	var firstErr error
+	firstOutput := captureStdout(t, func() {
+		_, firstErr = firstCommand.ExecuteC()
+	})
+	require.NoError(t, firstErr)
+	var first activity.Report
+	require.NoError(t, json.Unmarshal([]byte(firstOutput), &first))
+	require.Equal(t, "project-ascending-cursor", first.SessionsNextCursor)
+
+	secondCommand := newRootCommand()
+	secondCommand.SetArgs([]string{
+		"activity", "report", "--json", "--sessions-report-id", "saved-report",
+		"--sessions-cursor", first.SessionsNextCursor,
+	})
+	var secondErr error
+	secondOutput := captureStdout(t, func() {
+		_, secondErr = secondCommand.ExecuteC()
+	})
+	require.NoError(t, secondErr)
+	var second activity.Report
+	require.NoError(t, json.Unmarshal([]byte(secondOutput), &second))
+	require.Len(t, second.BySession, 1)
+	assert.Equal(t, "second", second.BySession[0].SessionID)
+
+	firstQuery := <-queries
+	assert.Equal(t, "project", firstQuery.Get("sort"))
+	assert.Equal(t, "asc", firstQuery.Get("direction"))
+	secondQuery := <-queries
+	assert.Equal(t, "project-ascending-cursor", secondQuery.Get("cursor"))
+	assert.False(t, secondQuery.Has("sort"))
+	assert.False(t, secondQuery.Has("direction"))
+}
+
 // mustLocation loads a named time zone, failing the test if it is unavailable.
 func mustLocation(t *testing.T, name string) *time.Location {
 	t.Helper()
