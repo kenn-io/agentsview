@@ -92,8 +92,44 @@ describe("ActivityPage refresh control layout", () => {
   it("keeps the shared refresh control inline with the toolbar filters", () => {
     expect(source).toContain("<RefreshControl");
     expect(source).toContain("activity.lastUpdatedAt");
+    expect(source).toContain("flex: 0 0 220px");
     expect(source).not.toContain("refresh-slot");
     expect(source).not.toContain("margin-left: auto");
+  });
+
+  it("shows report progress in the refresh status instead of the report body", async () => {
+    stubActivityPageCollaborators();
+    activity.report = projectReport();
+    activity.lastUpdatedAt = Date.now() - 3 * 60_000;
+    activity.loading = true;
+    activity.progress = { phase: "scanning_activity", rows_processed: 120 };
+
+    const component = mount(ActivityPage, { target: document.body });
+    await flushEffects();
+
+    const refresh = document.body.querySelector(".activity-refresh");
+    expect(refresh?.textContent).toContain("Processing activity… 120 rows");
+    expect(refresh?.textContent).not.toContain("Updated 3m ago");
+    expect(
+      document.body.querySelector(".activity-content")?.textContent,
+    ).not.toContain("Processing activity");
+
+    activity.progress = { phase: "loading_usage" };
+    await flushEffects();
+    expect(refresh?.textContent).toContain("Loading usage…");
+
+    activity.progress = { phase: "finalizing", sessions_processed: 2 };
+    await flushEffects();
+    expect(refresh?.textContent).toContain("Finalizing report…");
+
+    unmount(component);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = "";
+    activity.report = null;
+    activity.loading = false;
+    activity.progress = null;
+    activity.lastUpdatedAt = null;
   });
 });
 

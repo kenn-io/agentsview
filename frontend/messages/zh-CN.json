@@ -1947,6 +1947,8 @@
   "activity_loading_report": "正在加载活动报告...",
   "activity_report_progress": "正在处理活动… {count} 行",
   "activity_loading_sessions": "正在加载会话…",
+  "activity_loading_usage": "正在加载用量…",
+  "activity_finalizing_report": "正在完成报告…",
   "activity_next_sessions_page": "下一页会话",
   "activity_sessions_load_failed": "无法加载活动会话",
   "appearance_high_contrast": "高对比度",

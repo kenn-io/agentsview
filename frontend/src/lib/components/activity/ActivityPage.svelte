@@ -6,6 +6,7 @@
     localDateStr,
     type Automation,
   } from "../../stores/activity.svelte.js";
+  import type { ActivityReportProgress } from "../../api/activity-report.js";
   import { sync } from "../../stores/sync.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import {
@@ -89,6 +90,27 @@
   ) {
     await activity.loadSessionPage({ sort, direction });
   }
+
+  function reportProgressLabel(progress: ActivityReportProgress | null): string {
+    if (!progress) return m.activity_loading_report();
+    switch (progress.phase) {
+      case "loading_sessions":
+        return m.activity_loading_sessions();
+      case "loading_usage":
+        return m.activity_loading_usage();
+      case "scanning_activity":
+        return m.activity_report_progress({
+          count: progress.rows_processed ?? 0,
+        });
+      case "finalizing":
+      case "done":
+        return m.activity_finalizing_report();
+    }
+  }
+
+  const refreshStatus = $derived(
+    activity.loading ? reportProgressLabel(activity.progress) : undefined,
+  );
 
   const earliestSession = $derived(sync.stats?.earliest_session ?? null);
   let today = $state(localDateStr(new Date()));
@@ -382,12 +404,15 @@
       />
     </div>
 
-    <RefreshControl
-      lastUpdatedAt={activity.lastUpdatedAt}
-      busy={activity.loading}
-      onRefresh={() => activity.load({ background: true })}
-      label={m.activity_refresh()}
-    />
+    <div class="activity-refresh" aria-live="polite">
+      <RefreshControl
+        lastUpdatedAt={activity.lastUpdatedAt}
+        busy={activity.loading}
+        status={refreshStatus}
+        onRefresh={() => activity.load({ background: true })}
+        label={m.activity_refresh()}
+      />
+    </div>
   </div>
 
   <div class="activity-content">
@@ -397,11 +422,6 @@
          remounting the charts (which read as a blank flash). The loading and
          error states only show before the first report exists. -->
     {#if activity.report}
-      {#if activity.loading && activity.progress}
-        <div class="report-progress">
-          {m.activity_report_progress({ count: activity.progress.rows_processed ?? activity.progress.sessions_processed ?? 0 })}
-        </div>
-      {/if}
       <SummaryCards report={activity.report} />
       <Card level="default" padding="none" class="chart-panel">
         <ConcurrencyTimeline
@@ -428,11 +448,7 @@
         <Breakdowns report={activity.report} />
       </Card>
     {:else if activity.loading}
-      <div class="status">
-        {activity.progress
-          ? m.activity_report_progress({ count: activity.progress.rows_processed ?? activity.progress.sessions_processed ?? 0 })
-          : m.activity_loading_report()}
-      </div>
+      <div class="status">{m.activity_loading_report()}</div>
     {:else if activity.error}
       <div class="status error">
         <span>{activity.error}</span>
@@ -492,6 +508,32 @@
     --typeahead-max-width: 150px;
   }
 
+  /* The refresh control always owns the same toolbar footprint. Progress
+     replaces its age label inside this box, so phase and row-count updates
+     cannot reflow the filters or report body. */
+  .activity-refresh {
+    flex: 0 0 220px;
+    width: 220px;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .activity-refresh :global(.kit-refresh-control) {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .activity-refresh :global(.kit-refresh-control__status) {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .activity-refresh :global(.kit-refresh-control__status span) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   .activity-content {
     flex: 1;
     overflow-y: auto;
@@ -510,12 +552,6 @@
     color: var(--text-muted);
     font-size: 12px;
     padding: 24px;
-    text-align: center;
-  }
-
-  .report-progress {
-    color: var(--text-muted);
-    font-size: 11px;
     text-align: center;
   }
 

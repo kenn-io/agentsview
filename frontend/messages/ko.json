@@ -1947,6 +1947,8 @@
   "activity_loading_report": "활동 보고서 로드 중...",
   "activity_report_progress": "활동 처리 중… {count}개 행",
   "activity_loading_sessions": "세션 로드 중…",
+  "activity_loading_usage": "사용량 로드 중…",
+  "activity_finalizing_report": "보고서 마무리 중…",
   "activity_next_sessions_page": "다음 세션",
   "activity_sessions_load_failed": "활동 세션을 불러오지 못했습니다",
   "appearance_high_contrast": "고대비",

@@ -2012,6 +2012,8 @@
   "activity_loading_report": "Loading activity report...",
   "activity_report_progress": "Processing activity… {count} rows",
   "activity_loading_sessions": "Loading sessions…",
+  "activity_loading_usage": "Loading usage…",
+  "activity_finalizing_report": "Finalizing report…",
   "activity_next_sessions_page": "Next sessions",
   "activity_sessions_load_failed": "Failed to load activity sessions",
   "appearance_high_contrast": "High contrast",

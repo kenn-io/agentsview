@@ -38,4 +38,22 @@ describe("RefreshControl", () => {
     unmount(component);
     document.body.innerHTML = "";
   });
+
+  it("replaces the age with a transient status", async () => {
+    const component = mount(RefreshControl, {
+      target: document.body,
+      props: {
+        lastUpdatedAt: Date.now() - 3 * 60_000,
+        onRefresh: vi.fn(),
+        status: "Processing activity… 120 rows",
+      },
+    });
+    await tick();
+
+    expect(document.body.textContent).toContain("Processing activity… 120 rows");
+    expect(document.body.textContent).not.toContain("Updated 3m ago");
+
+    unmount(component);
+    document.body.innerHTML = "";
+  });
 });

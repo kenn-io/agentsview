@@ -2011,6 +2011,8 @@
   "activity_loading_report": "Chargement du rapport d'activité...",
   "activity_report_progress": "Traitement de l’activité… {count} lignes",
   "activity_loading_sessions": "Chargement des sessions…",
+  "activity_loading_usage": "Chargement des données d’utilisation…",
+  "activity_finalizing_report": "Finalisation du rapport…",
   "activity_next_sessions_page": "Sessions suivantes",
   "activity_sessions_load_failed": "Impossible de charger les sessions d’activité",
   "appearance_high_contrast": "Contraste élevé",

@@ -12,9 +12,17 @@
   type Props = Omit<
     ComponentProps<typeof KitRefreshControl>,
     "formatAge" | "locale"
-  >;
+  > & {
+    /** Replaces the relative age while a parent operation reports progress. */
+    status?: string;
+  };
 
-  let { ...rest }: Props = $props();
+  let { status = undefined, lastUpdatedAt, ...rest }: Props = $props();
 </script>
 
-<KitRefreshControl {...rest} formatAge={formatRefreshAge} locale={getLocale()} />
+<KitRefreshControl
+  {...rest}
+  lastUpdatedAt={status === undefined ? lastUpdatedAt : null}
+  formatAge={status === undefined ? formatRefreshAge : () => status ?? ""}
+  locale={getLocale()}
+/>
