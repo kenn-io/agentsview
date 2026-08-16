@@ -879,7 +879,7 @@ func oversizedVSCodeCopilotResponse(outputCount int) string {
 	output := strings.Repeat("x", 11028)
 	var b strings.Builder
 	b.WriteString(`{"kind":"toolInvocationSerialized","toolId":"runSubagent","toolCallId":"tc1","subAgentInvocationId":"toolu_1","isComplete":true,"invocationMessage":{"value":"Run subagent","isTrusted":false},"resultDetails":{"input":"retained input","output":[`)
-	for i := 0; i < outputCount; i++ {
+	for i := range outputCount {
 		if i > 0 {
 			b.WriteByte(',')
 		}
