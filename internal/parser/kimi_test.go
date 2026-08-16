@@ -756,6 +756,7 @@ func TestParseKimiSession_ConfigUpdateCwd(t *testing.T) {
 			lines: []string{
 				cwdLine,
 				`{"type":"config.update","cwd":"/Users/helix/Code/other"}`,
+				`{"type":"config.update","cwd":""}`,
 				`{"type":"config.update","modelAlias":"kimi-code/kimi-for-coding"}`,
 			},
 			want: "/Users/helix/Code/other",

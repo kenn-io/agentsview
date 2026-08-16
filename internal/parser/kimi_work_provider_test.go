@@ -19,6 +19,13 @@ func kimiWorkFixture(firstMessage string) string {
 	return kimiWorkFixtureAt(firstMessage, 1704067200)
 }
 
+func kimiWorkSessionUsageFixture() string {
+	return `{"timestamp":1704067200.0,"message":{"type":"TurnBegin","payload":{"user_input":[{"type":"text","text":"usage question"}]}}}` + "\n" +
+		`{"timestamp":1704067201.0,"message":{"type":"ContentPart","payload":{"type":"text","text":"Done."}}}` + "\n" +
+		`{"timestamp":1704067202.0,"message":{"type":"StatusUpdate","payload":{"token_usage":{"output":42}}}}` + "\n" +
+		`{"timestamp":1704067203.0,"message":{"type":"TurnEnd","payload":{}}}` + "\n"
+}
+
 func kimiWorkFixtureAt(firstMessage string, timestamp int64) string {
 	return fmt.Sprintf(
 		`{"type":"metadata","protocol_version":"1.4","created_at":%d}`+"\n"+
@@ -228,7 +235,7 @@ func TestKimiWorkProviderParseRetainsProviderCwd(t *testing.T) {
 		root, wd, sessionDir, "agents", "main", "wire.jsonl",
 	)
 	writeSourceFile(t, sourcePath, kimiConfigUpdateCwdLine(t)+"\n"+
-		kimiWorkFixture("provider cwd"))
+		kimiWorkSessionUsageFixture())
 
 	provider, ok := NewProvider(AgentKimiWork, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
@@ -238,7 +245,12 @@ func TestKimiWorkProviderParseRetainsProviderCwd(t *testing.T) {
 	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
-	assert.Equal(t, "/Users/helix/Code/mcp-hub", outcome.Results[0].Result.Session.Cwd)
+	result := outcome.Results[0].Result
+	assert.Equal(t, "/Users/helix/Code/mcp-hub", result.Session.Cwd)
+	require.Len(t, result.Session.UsageEvents, 1)
+	assert.Equal(t, result.Session.ID, result.Session.UsageEvents[0].SessionID)
+	assert.Equal(t, "kimi-work:session:"+wd+":main:"+sessionDir, result.Session.UsageEvents[0].DedupKey)
+	assert.Equal(t, 42, result.Session.UsageEvents[0].OutputTokens)
 }
 
 func TestKimiWorkProviderMissingModelUsesDateAmbiguousAlias(t *testing.T) {
