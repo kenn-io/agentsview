@@ -44,12 +44,6 @@ var inputThresholdRatePattern = regexp.MustCompile(
 	`^input_cost_per_token_above_([0-9]+)(k?)_tokens$`,
 )
 
-// FetchLiteLLMPricing downloads the LiteLLM pricing JSON
-// and parses it into ModelPricing entries.
-func FetchLiteLLMPricing() ([]ModelPricing, error) {
-	return FetchLiteLLMPricingContext(context.Background())
-}
-
 // FetchLiteLLMPricingContext downloads the LiteLLM pricing JSON and binds the
 // request lifetime to ctx.
 func FetchLiteLLMPricingContext(

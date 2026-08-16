@@ -21,6 +21,7 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/pricing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1509,6 +1510,69 @@ func TestSyncModelPricingPreservesExistingMirrorRows(t *testing.T) {
 	).Scan(&input, &output))
 	assert.Equal(t, 1.0, input)
 	assert.Equal(t, 2.0, output)
+}
+
+func TestSyncModelPricingRetiresOpenRouterRows(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.ReconcileModelPricing(
+		[]db.ModelPricing{{
+			ModelPattern: "minimax/minimax-m3",
+			InputPerMTok: money.MustParseDollars("9"),
+			Bands: []db.PricingBand{{
+				AboveInputTokens: 1000,
+				InputPerMTok:     money.MustParseDollars("10"),
+			}},
+		}},
+		nil,
+		db.PricingMeta{
+			Key:   pricing.OpenRouterModelsMetaKey,
+			Value: `["minimax/minimax-m3"]`,
+		},
+	))
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	require.NoError(t, syncer.syncModelPricing(ctx))
+
+	// LiteLLM now covers the model: the local refresh retires the
+	// OpenRouter row and rewrites the ownership sentinel.
+	require.NoError(t, local.ReconcileModelPricing(
+		[]db.ModelPricing{{
+			ModelPattern: "minimax/MiniMax-M3",
+			InputPerMTok: money.MustParseDollars("2"),
+		}},
+		[]string{"minimax/minimax-m3"},
+		db.PricingMeta{
+			Key: pricing.OpenRouterModelsMetaKey, Value: `[]`,
+		},
+	))
+	require.NoError(t, syncer.syncModelPricing(ctx))
+
+	var count int
+	require.NoError(t, syncer.DB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM model_pricing WHERE model_pattern = ?`,
+		"minimax/minimax-m3",
+	).Scan(&count))
+	assert.Zero(t, count, "retired row removed from the mirror")
+	require.NoError(t, syncer.DB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM model_pricing_bands WHERE model_pattern = ?`,
+		"minimax/minimax-m3",
+	).Scan(&count))
+	assert.Zero(t, count, "retired row's bands removed from the mirror")
+
+	var input int64
+	require.NoError(t, syncer.DB().QueryRowContext(ctx,
+		`SELECT input_microdollars_per_mtok FROM model_pricing
+		 WHERE model_pattern = ?`,
+		"minimax/MiniMax-M3",
+	).Scan(&input))
+	assert.Equal(t, int64(2_000_000), input, "replacement row mirrored")
+	var meta string
+	require.NoError(t, syncer.DB().QueryRowContext(ctx,
+		`SELECT updated_at FROM model_pricing WHERE model_pattern = ?`,
+		pricing.OpenRouterModelsMetaKey,
+	).Scan(&meta))
+	assert.Equal(t, `[]`, meta, "ownership sentinel mirrored by value")
 }
 
 func TestSyncModelPricingSkipsUnchangedMirrorRows(t *testing.T) {

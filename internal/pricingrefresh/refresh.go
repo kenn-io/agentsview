@@ -4,6 +4,8 @@ package pricingrefresh
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -75,7 +77,7 @@ func SeedFallback(database *db.DB) error {
 	if stored == pricing.SeedVersion && storageVersion == pricingStorageVersion {
 		return nil
 	}
-	if err := upsert(database, pricing.FallbackPricing()); err != nil {
+	if err := storeFallback(database); err != nil {
 		return err
 	}
 	// Only delete while reseeding (version mismatch). A later LiteLLM
@@ -97,7 +99,7 @@ func SeedFallback(database *db.DB) error {
 // RefreshIfStale refreshes when the last attempt is older than cooldown.
 func RefreshIfStale(
 	database *db.DB,
-	fetch func() ([]pricing.ModelPricing, error),
+	fetch func() (pricing.Catalog, error),
 	cooldown time.Duration,
 	now time.Time,
 ) (bool, error) {
@@ -116,7 +118,7 @@ func RefreshIfStale(
 
 func refreshAt(
 	database *db.DB,
-	fetch func() ([]pricing.ModelPricing, error),
+	fetch func() (pricing.Catalog, error),
 	now time.Time,
 ) (bool, error) {
 	if err := database.SetPricingMeta(
@@ -126,11 +128,11 @@ func refreshAt(
 			"recording pricing refresh attempt: %w", err,
 		)
 	}
-	prices, err := fetch()
+	catalog, err := fetch()
 	if err != nil {
 		return false, err
 	}
-	if err := upsert(database, prices); err != nil {
+	if err := storeCatalog(database, catalog); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -140,11 +142,11 @@ func refreshAt(
 func Ensure(
 	database *db.DB,
 	offline bool,
-	fetch func() ([]pricing.ModelPricing, error),
+	fetch func() (pricing.Catalog, error),
 	now time.Time,
 ) (bool, error) {
 	if offline {
-		return false, upsert(database, pricing.FallbackPricing())
+		return false, storeFallback(database)
 	}
 	if err := SeedFallback(database); err != nil {
 		return false, err
@@ -155,7 +157,7 @@ func Ensure(
 // EnsureCurrent applies the standard online pricing lifecycle.
 func EnsureCurrent(ctx context.Context, database *db.DB) error {
 	return ensureCurrent(
-		ctx, database, pricing.FetchLiteLLMPricingContext, time.Now(),
+		ctx, database, pricing.FetchCatalogContext, time.Now(),
 	)
 }
 
@@ -163,14 +165,14 @@ func EnsureCurrent(ctx context.Context, database *db.DB) error {
 // of the most recent refresh attempt.
 func RefreshCurrent(ctx context.Context, database *db.DB) error {
 	return refreshCurrent(
-		ctx, database, pricing.FetchLiteLLMPricingContext, time.Now(),
+		ctx, database, pricing.FetchCatalogContext, time.Now(),
 	)
 }
 
 func refreshCurrent(
 	ctx context.Context,
 	database *db.DB,
-	fetch func(context.Context) ([]pricing.ModelPricing, error),
+	fetch func(context.Context) (pricing.Catalog, error),
 	now time.Time,
 ) error {
 	return runCurrent(ctx, database, fetch, now, true)
@@ -179,7 +181,7 @@ func refreshCurrent(
 func ensureCurrent(
 	ctx context.Context,
 	database *db.DB,
-	fetch func(context.Context) ([]pricing.ModelPricing, error),
+	fetch func(context.Context) (pricing.Catalog, error),
 	now time.Time,
 ) error {
 	return runCurrent(ctx, database, fetch, now, false)
@@ -188,7 +190,7 @@ func ensureCurrent(
 func runCurrent(
 	ctx context.Context,
 	database *db.DB,
-	fetch func(context.Context) ([]pricing.ModelPricing, error),
+	fetch func(context.Context) (pricing.Catalog, error),
 	now time.Time,
 	force bool,
 ) error {
@@ -217,7 +219,7 @@ func runCurrent(
 	if err != nil {
 		return fmt.Errorf("reading pricing refresh meta: %w", err)
 	}
-	fetchCurrent := func() ([]pricing.ModelPricing, error) {
+	fetchCurrent := func() (pricing.Catalog, error) {
 		return fetch(ctx)
 	}
 	if force {
@@ -241,7 +243,81 @@ func runCurrent(
 	return err
 }
 
-func upsert(database *db.DB, prices []pricing.ModelPricing) error {
+// storeCatalog reconciles a fetched catalog with the stored table (see
+// pricing.Catalog.Reconcile) and writes rows, retirements, and the
+// OpenRouter ownership sentinel in one transaction, so a crash or a
+// concurrent push never sees rows without the metadata that retires them.
+func storeCatalog(database *db.DB, catalog pricing.Catalog) error {
+	value, err := database.GetPricingMeta(pricing.OpenRouterModelsMetaKey)
+	if err != nil {
+		return err
+	}
+	previous, err := pricing.DecodeOpenRouterModels(value)
+	if err != nil {
+		return err
+	}
+	existing, err := database.ListModelPricing(context.Background())
+	if err != nil {
+		return fmt.Errorf("listing stored pricing: %w", err)
+	}
+	stored := make([]string, 0, len(existing))
+	for _, row := range existing {
+		if !strings.HasPrefix(row.ModelPattern, "_") {
+			stored = append(stored, row.ModelPattern)
+		}
+	}
+	prices, owned, retired := catalog.Reconcile(stored, previous)
+	return database.ReconcileModelPricing(
+		dbModelPricing(prices), retired,
+		db.PricingMeta{
+			Key:   pricing.OpenRouterModelsMetaKey,
+			Value: pricing.EncodeOpenRouterModels(owned),
+		},
+	)
+}
+
+// storeFallback writes the embedded catalog over the stored table. Like
+// any non-OpenRouter source it outranks OpenRouter, so OpenRouter-owned
+// rows it covers under another spelling are retired and rows it lists
+// exactly pass to its ownership, in the same transaction, so a reseed
+// never leaves an OpenRouter row beside or under an embedded one while
+// the sentinel still claims it. Databases that never stored the sentinel
+// keep none.
+func storeFallback(database *db.DB) error {
+	value, err := database.GetPricingMeta(pricing.OpenRouterModelsMetaKey)
+	if err != nil {
+		return err
+	}
+	previous, err := pricing.DecodeOpenRouterModels(value)
+	if err != nil {
+		return err
+	}
+	fallback := pricing.FallbackPricing()
+	patterns := make([]string, len(fallback))
+	for i, p := range fallback {
+		patterns[i] = p.ModelPattern
+	}
+	retired := pricing.ShadowedPatterns(patterns, previous)
+	var owned []string
+	for _, pattern := range previous {
+		if !slices.Contains(patterns, pattern) &&
+			!slices.Contains(retired, pattern) {
+			owned = append(owned, pattern)
+		}
+	}
+	var meta db.PricingMeta
+	if value != "" {
+		meta = db.PricingMeta{
+			Key:   pricing.OpenRouterModelsMetaKey,
+			Value: pricing.EncodeOpenRouterModels(owned),
+		}
+	}
+	return database.ReconcileModelPricing(
+		dbModelPricing(fallback), retired, meta,
+	)
+}
+
+func dbModelPricing(prices []pricing.ModelPricing) []db.ModelPricing {
 	dbPrices := make([]db.ModelPricing, len(prices))
 	for i, price := range prices {
 		bands := make([]db.PricingBand, len(price.Bands))
@@ -263,5 +339,5 @@ func upsert(database *db.DB, prices []pricing.ModelPricing) error {
 			Bands:                bands,
 		}
 	}
-	return database.UpsertModelPricing(dbPrices)
+	return dbPrices
 }

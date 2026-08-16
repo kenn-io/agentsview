@@ -438,7 +438,7 @@ func seedPricing(
 
 func ensurePricing(database *db.DB, offline bool) {
 	if _, err := pricingrefresh.Ensure(
-		database, offline, pricing.FetchLiteLLMPricing, time.Now(),
+		database, offline, pricing.FetchCatalog, time.Now(),
 	); err != nil {
 		fmt.Fprintf(os.Stderr,
 			"warning: pricing refresh failed: %v\n", err)

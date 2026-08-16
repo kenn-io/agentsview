@@ -189,6 +189,8 @@ func TestUpsertModelPricingOverwrites(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("1.00"), got.CacheReadPerMTok)
 }
 
+// Model rows compare by rate; sentinel metadata rows keep their value in
+// updated_at, so a new value is a change.
 func TestFilterChangedModelPricingIgnoresUpdatedAtOnlyDifferences(t *testing.T) {
 	existing := []ModelPricing{
 		{
@@ -256,12 +258,13 @@ func TestFilterChangedModelPricingIgnoresUpdatedAtOnlyDifferences(t *testing.T) 
 	assert.Equal(t, PricingChangeSummary{
 		Total:     4,
 		Missing:   1,
-		Changed:   1,
-		Unchanged: 2,
+		Changed:   2,
+		Unchanged: 1,
 	}, gotSummary)
-	require.Len(t, gotRows, 2)
-	assert.Equal(t, "changed-model", gotRows[0].ModelPattern)
-	assert.Equal(t, "missing-model", gotRows[1].ModelPattern)
+	require.Len(t, gotRows, 3)
+	assert.Equal(t, "_fallback_version", gotRows[0].ModelPattern)
+	assert.Equal(t, "changed-model", gotRows[1].ModelPattern)
+	assert.Equal(t, "missing-model", gotRows[2].ModelPattern)
 }
 
 func TestPricingMeta(t *testing.T) {
@@ -295,6 +298,166 @@ func TestPricingMeta(t *testing.T) {
 		assert.Zero(t, p.InputPerMTok,
 			"sentinel should have zero pricing, got %+v", p)
 	}
+}
+
+func TestReconcileModelPricing(t *testing.T) {
+	d := testDB(t)
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{
+		{
+			ModelPattern: "minimax/minimax-m3",
+			InputPerMTok: money.MustParseDollars("9"),
+			Bands: []PricingBand{{
+				AboveInputTokens: 1000,
+				InputPerMTok:     money.MustParseDollars("10"),
+			}},
+		},
+		{ModelPattern: "acme/keep", InputPerMTok: money.MustParseDollars("1")},
+	}))
+
+	require.NoError(t, d.ReconcileModelPricing(
+		[]ModelPricing{
+			{
+				ModelPattern: "minimax/MiniMax-M3",
+				InputPerMTok: money.MustParseDollars("2"),
+			},
+			// Removed and desired at once: the upsert wins.
+			{ModelPattern: "acme/keep", InputPerMTok: money.MustParseDollars("1")},
+		},
+		[]string{"minimax/minimax-m3", "acme/keep"},
+		PricingMeta{Key: "_openrouter_models", Value: `[]`},
+	))
+
+	removed, err := d.GetModelPricing("minimax/minimax-m3")
+	require.NoError(t, err)
+	assert.Nil(t, removed)
+	var bands int
+	require.NoError(t, d.getReader().QueryRow(
+		`SELECT COUNT(*) FROM model_pricing_bands WHERE model_pattern = ?`,
+		"minimax/minimax-m3",
+	).Scan(&bands))
+	assert.Zero(t, bands, "bands of a removed pattern are deleted")
+	kept, err := d.GetModelPricing("acme/keep")
+	require.NoError(t, err)
+	require.NotNil(t, kept)
+	assert.Equal(t, money.MustParseDollars("1"), kept.InputPerMTok)
+	added, err := d.GetModelPricing("minimax/MiniMax-M3")
+	require.NoError(t, err)
+	require.NotNil(t, added)
+	meta, err := d.GetPricingMeta("_openrouter_models")
+	require.NoError(t, err)
+	assert.Equal(t, `[]`, meta, "meta written with the rows")
+
+	require.NoError(t, d.ReconcileModelPricing(
+		nil, nil, PricingMeta{Key: "_openrouter_models", Value: `["x"]`},
+	))
+	meta, err = d.GetPricingMeta("_openrouter_models")
+	require.NoError(t, err)
+	assert.Equal(t, `["x"]`, meta, "meta-only reconcile still writes")
+}
+
+func TestPlanModelPricingSync(t *testing.T) {
+	model := func(pattern, dollars string) ModelPricing {
+		return ModelPricing{
+			ModelPattern: pattern,
+			InputPerMTok: money.MustParseDollars(dollars),
+		}
+	}
+	meta := func(value string) ModelPricing {
+		return ModelPricing{
+			ModelPattern: "_openrouter_models", UpdatedAt: value,
+		}
+	}
+	tests := []struct {
+		name       string
+		existing   []ModelPricing
+		desired    []ModelPricing
+		wantChange []ModelPricing
+		wantRemove []string
+	}{
+		{
+			name: "retired pattern removed and ownership dropped",
+			existing: []ModelPricing{
+				model("minimax/minimax-m3", "9"),
+				meta(`["minimax/minimax-m3"]`),
+			},
+			desired: []ModelPricing{
+				model("minimax/MiniMax-M3", "2"),
+				meta(`[]`),
+			},
+			wantChange: []ModelPricing{
+				model("minimax/MiniMax-M3", "2"), meta(`[]`),
+			},
+			wantRemove: []string{"minimax/minimax-m3"},
+		},
+		{
+			name: "pattern adopted by a local non-OpenRouter row loses ownership",
+			existing: []ModelPricing{
+				model("acme/model", "9"),
+				meta(`["acme/model"]`),
+			},
+			desired: []ModelPricing{
+				model("acme/model", "9"),
+				meta(`[]`),
+			},
+			wantChange: []ModelPricing{meta(`[]`)},
+		},
+		{
+			name: "delisted row another machine owns keeps its ownership",
+			existing: []ModelPricing{
+				model("acme/delisted", "9"),
+				meta(`["acme/delisted"]`),
+			},
+			desired: []ModelPricing{
+				model("acme/local", "1"),
+				meta(`["acme/local"]`),
+			},
+			wantChange: []ModelPricing{
+				model("acme/local", "1"),
+				meta(`["acme/delisted","acme/local"]`),
+			},
+		},
+		{
+			name: "local OpenRouter row covered by a target row is withheld",
+			existing: []ModelPricing{
+				model("acme/Stale-Model", "9"),
+				meta(`[]`),
+			},
+			desired: []ModelPricing{
+				model("acme/stale-model", "5"),
+				model("acme/fresh", "1"),
+				meta(`["acme/fresh","acme/stale-model"]`),
+			},
+			wantChange: []ModelPricing{
+				model("acme/fresh", "1"),
+				meta(`["acme/fresh"]`),
+			},
+		},
+		{
+			name:     "no sentinel anywhere pushes plain rows",
+			existing: []ModelPricing{model("acme/model", "9")},
+			desired:  []ModelPricing{model("other", "1")},
+			wantChange: []ModelPricing{
+				model("other", "1"),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			changed, remove, err := PlanModelPricingSync(
+				tt.existing, tt.desired,
+			)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantChange, changed)
+			assert.Equal(t, tt.wantRemove, remove)
+		})
+	}
+}
+
+func TestPlanModelPricingSyncRejectsCorruptSentinel(t *testing.T) {
+	_, _, err := PlanModelPricingSync([]ModelPricing{{
+		ModelPattern: "_openrouter_models", UpdatedAt: "not json",
+	}}, nil)
+	require.Error(t, err)
 }
 
 func TestGetModelPricingNotFound(t *testing.T) {

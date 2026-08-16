@@ -300,7 +300,7 @@ func (b localArchiveQueryBackend) SessionUsage(
 	}
 	if len(u.UnpricedModels) > 0 && !b.offline {
 		refreshed, refErr := pricingrefresh.RefreshIfStale(
-			b.database, pricing.FetchLiteLLMPricing,
+			b.database, pricing.FetchCatalog,
 			pricingrefresh.RefreshCooldown, time.Now(),
 		)
 		if refErr != nil {

@@ -206,7 +206,7 @@ agentsview usage statusline
 
 Features:
 
-- Automatic pricing via LiteLLM rates (with offline fallback)
+- Automatic pricing via LiteLLM and OpenRouter rates (with offline fallback)
 - Authoritative Copilot CLI billing totals when session logs provide them
 - Prompt-caching-aware cost calculation (cache creation / read tokens)
 - Per-model breakdown with `--breakdown`

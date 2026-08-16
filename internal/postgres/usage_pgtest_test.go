@@ -14,6 +14,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -1671,6 +1672,78 @@ func TestPushSyncsModelPricingToPostgres(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, secondRevision.After(firstRevision),
 		"band removal must advance the parent pricing revision")
+}
+
+func TestPushRetiresOpenRouterPricingRows(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanPGSchema(t, pgURL)
+	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+
+	local := testDB(t)
+	require.NoError(t, local.ReconcileModelPricing(
+		[]db.ModelPricing{{
+			ModelPattern: "minimax/minimax-m3",
+			InputPerMTok: money.MustParseDollars("9"),
+			Bands: []db.PricingBand{{
+				AboveInputTokens: 1000,
+				InputPerMTok:     money.MustParseDollars("10"),
+			}},
+		}},
+		nil,
+		db.PricingMeta{
+			Key:   pricing.OpenRouterModelsMetaKey,
+			Value: `["minimax/minimax-m3"]`,
+		},
+	))
+	ps, err := New(pgURL, "agentsview", local, "test-machine", true, SyncOptions{})
+	require.NoError(t, err, "New")
+	defer ps.Close()
+	_, err = ps.Push(context.Background(), false, nil)
+	require.NoError(t, err, "first push")
+
+	// LiteLLM now covers the model: the local refresh retires the
+	// OpenRouter row and rewrites the ownership sentinel.
+	require.NoError(t, local.ReconcileModelPricing(
+		[]db.ModelPricing{{
+			ModelPattern: "minimax/MiniMax-M3",
+			InputPerMTok: money.MustParseDollars("2"),
+		}},
+		[]string{"minimax/minimax-m3"},
+		db.PricingMeta{Key: pricing.OpenRouterModelsMetaKey, Value: `[]`},
+	))
+	_, err = ps.Push(context.Background(), false, nil)
+	require.NoError(t, err, "second push")
+
+	store, err := NewStore(pgURL, "agentsview", true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+	var patterns []string
+	rows, err := store.DB().QueryContext(context.Background(), `
+		SELECT model_pattern FROM model_pricing
+		WHERE model_pattern IN ('minimax/minimax-m3', 'minimax/MiniMax-M3')
+		ORDER BY model_pattern`)
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var pattern string
+		require.NoError(t, rows.Scan(&pattern))
+		patterns = append(patterns, pattern)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []string{"minimax/MiniMax-M3"}, patterns,
+		"retired row deleted, replacement pushed")
+
+	var bandCount int
+	require.NoError(t, store.DB().QueryRowContext(context.Background(), `
+		SELECT COUNT(*) FROM model_pricing_bands
+		WHERE model_pattern = 'minimax/minimax-m3'`).Scan(&bandCount))
+	assert.Zero(t, bandCount, "retired row's bands deleted")
+
+	var meta string
+	require.NoError(t, store.DB().QueryRowContext(context.Background(), `
+		SELECT updated_at FROM model_pricing WHERE model_pattern = $1`,
+		pricing.OpenRouterModelsMetaKey).Scan(&meta))
+	assert.Equal(t, `[]`, meta, "ownership sentinel mirrored by value")
 }
 
 func TestPushFallsBackToBuiltinPricingWhenLocalTableEmpty(t *testing.T) {

@@ -38,9 +38,15 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	_, prices = db.FilterChangedModelPricing(existing, prices)
-	if len(prices) == 0 {
+	prices, removePatterns, err := db.PlanModelPricingSync(existing, prices)
+	if err != nil {
+		return fmt.Errorf("planning duckdb pricing sync: %w", err)
+	}
+	if len(prices) == 0 && len(removePatterns) == 0 {
 		return nil
+	}
+	if err := s.removeDuckModelPricing(ctx, removePatterns); err != nil {
+		return err
 	}
 
 	tx, err := s.duck.BeginTx(ctx, nil)
@@ -98,14 +104,58 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	return nil
 }
 
-func duckPricingBandDeleteStatement(prices []db.ModelPricing) (string, []any) {
-	placeholders := make([]string, len(prices))
-	args := make([]any, len(prices))
-	for i, price := range prices {
-		placeholders[i] = "?"
-		args[i] = price.ModelPattern
+// removeDuckModelPricing deletes retired pricing rows, committing the
+// band rows before the parent rows: DuckDB rejects deleting a parent row
+// in the same transaction that deleted its children. The mirror is
+// disposable, so a crash between the two leaves nothing worse than a
+// band-less row the next push deletes again.
+func (s *Sync) removeDuckModelPricing(
+	ctx context.Context, patterns []string,
+) error {
+	if len(patterns) == 0 {
+		return nil
 	}
-	return `DELETE FROM model_pricing_bands WHERE model_pattern IN (` +
+	for _, table := range []string{"model_pricing_bands", "model_pricing"} {
+		tx, err := s.duck.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("beginning duckdb %s delete: %w", table, err)
+		}
+		for i := 0; i < len(patterns); i += duckPricingUpsertBatch {
+			end := min(i+duckPricingUpsertBatch, len(patterns))
+			query, args := duckPricingDeleteStatement(table, patterns[i:end])
+			if err := s.execMutation(ctx, tx, query, args...); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf(
+					"deleting duckdb %s rows starting at %d: %w",
+					table, i, err,
+				)
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing duckdb %s delete: %w", table, err)
+		}
+	}
+	return nil
+}
+
+func duckPricingBandDeleteStatement(prices []db.ModelPricing) (string, []any) {
+	patterns := make([]string, len(prices))
+	for i, price := range prices {
+		patterns[i] = price.ModelPattern
+	}
+	return duckPricingDeleteStatement("model_pricing_bands", patterns)
+}
+
+func duckPricingDeleteStatement(
+	table string, patterns []string,
+) (string, []any) {
+	placeholders := make([]string, len(patterns))
+	args := make([]any, len(patterns))
+	for i, pattern := range patterns {
+		placeholders[i] = "?"
+		args[i] = pattern
+	}
+	return `DELETE FROM ` + table + ` WHERE model_pattern IN (` +
 		strings.Join(placeholders, ", ") + `)`, args
 }
 

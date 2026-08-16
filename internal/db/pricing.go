@@ -45,7 +45,8 @@ const pricingWriteBatch = 100
 // FilterChangedModelPricing returns the subset of desired rows that
 // would actually insert or update pricing fields. UpdatedAt-only
 // differences are intentionally ignored to match the upsert WHERE
-// clause used by both SQLite and PostgreSQL.
+// clause used by both SQLite and PostgreSQL, except on sentinel
+// metadata rows, whose value lives in updated_at.
 func FilterChangedModelPricing(
 	existing, desired []ModelPricing,
 ) (PricingChangeSummary, []ModelPricing) {
@@ -74,6 +75,9 @@ func FilterChangedModelPricing(
 }
 
 func pricingFieldsEqual(a, b ModelPricing) bool {
+	if isPricingMetaPattern(a.ModelPattern) && a.UpdatedAt != b.UpdatedAt {
+		return false
+	}
 	return a.InputPerMTok == b.InputPerMTok &&
 		a.OutputPerMTok == b.OutputPerMTok &&
 		a.CacheCreationPerMTok == b.CacheCreationPerMTok &&
@@ -178,10 +182,28 @@ func sqlitePricingInsertMissingStatement(
 func (db *DB) UpsertModelPricing(
 	prices []ModelPricing,
 ) error {
+	return db.ReconcileModelPricing(prices, nil, PricingMeta{})
+}
+
+// PricingMeta is a sentinel metadata row (see SetPricingMeta) written
+// in the same transaction as a pricing reconciliation. A zero Key
+// writes nothing.
+type PricingMeta struct {
+	Key   string
+	Value string
+}
+
+// ReconcileModelPricing deletes removePatterns, upserts prices, and
+// writes meta in one transaction. A pattern that is both removed and
+// desired ends up upserted, so retiring one source's row never drops a
+// pattern another source still publishes.
+func (db *DB) ReconcileModelPricing(
+	prices []ModelPricing, removePatterns []string, meta PricingMeta,
+) error {
 	if err := db.requireWritable(); err != nil {
 		return err
 	}
-	if len(prices) == 0 {
+	if len(prices) == 0 && len(removePatterns) == 0 && meta.Key == "" {
 		return nil
 	}
 
@@ -194,8 +216,18 @@ func (db *DB) UpsertModelPricing(
 			"listing current pricing before upsert: %w", err,
 		)
 	}
-	_, prices = FilterChangedModelPricing(existing, prices)
-	if len(prices) == 0 {
+	removeSet := make(map[string]struct{}, len(removePatterns))
+	for _, pattern := range removePatterns {
+		removeSet[pattern] = struct{}{}
+	}
+	kept := make([]ModelPricing, 0, len(existing))
+	for _, price := range existing {
+		if _, removing := removeSet[price.ModelPattern]; !removing {
+			kept = append(kept, price)
+		}
+	}
+	_, prices = FilterChangedModelPricing(kept, prices)
+	if len(prices) == 0 && len(removePatterns) == 0 && meta.Key == "" {
 		return nil
 	}
 
@@ -205,6 +237,9 @@ func (db *DB) UpsertModelPricing(
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if err := deleteModelPricingTx(tx, removePatterns); err != nil {
+		return err
+	}
 	for i := 0; i < len(prices); i += pricingWriteBatch {
 		end := min(i+pricingWriteBatch, len(prices))
 		query, args := sqlitePricingUpsertStatement(prices[i:end])
@@ -235,7 +270,42 @@ func (db *DB) UpsertModelPricing(
 	if err := replaceModelPricingBands(tx, prices); err != nil {
 		return err
 	}
+	if meta.Key != "" {
+		if _, err := tx.Exec(
+			setPricingMetaSQL, meta.Key, meta.Value,
+		); err != nil {
+			return fmt.Errorf(
+				"setting pricing meta %q: %w", meta.Key, err,
+			)
+		}
+	}
 	return tx.Commit()
+}
+
+func deleteModelPricingTx(tx *sql.Tx, patterns []string) error {
+	for i := 0; i < len(patterns); i += pricingWriteBatch {
+		end := min(i+pricingWriteBatch, len(patterns))
+		placeholders := make([]string, end-i)
+		args := make([]any, end-i)
+		for j, pattern := range patterns[i:end] {
+			placeholders[j] = "?"
+			args[j] = pattern
+		}
+		in := strings.Join(placeholders, ", ")
+		for _, table := range []string{
+			"model_pricing_bands", "model_pricing",
+		} {
+			if _, err := tx.Exec(
+				`DELETE FROM `+table+` WHERE model_pattern IN (`+in+`)`,
+				args...,
+			); err != nil {
+				return fmt.Errorf(
+					"deleting %s rows starting at %d: %w", table, i, err,
+				)
+			}
+		}
+	}
+	return nil
 }
 
 func replaceModelPricingBands(tx *sql.Tx, prices []ModelPricing) error {
@@ -329,19 +399,24 @@ func (db *DB) GetPricingMeta(key string) (string, error) {
 	return val, nil
 }
 
+const setPricingMetaSQL = `INSERT INTO model_pricing
+		(model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
+		 cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok,
+		 updated_at)
+	 VALUES (?, 0, 0, 0, 0, ?)
+	 ON CONFLICT(model_pattern) DO UPDATE SET
+		updated_at = excluded.updated_at`
+
+// isPricingMetaPattern reports whether a model_pricing pattern is a
+// sentinel metadata row rather than a model.
+func isPricingMetaPattern(pattern string) bool {
+	return strings.HasPrefix(pattern, "_")
+}
+
 // SetPricingMeta stores a metadata value as a sentinel row
 // in model_pricing with zero pricing fields.
 func (db *DB) SetPricingMeta(key, value string) error {
-	_, err := db.getWriter().Exec(
-		`INSERT INTO model_pricing
-			(model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
-			 cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok,
-			 updated_at)
-		 VALUES (?, 0, 0, 0, 0, ?)
-		 ON CONFLICT(model_pattern) DO UPDATE SET
-			updated_at = excluded.updated_at`,
-		key, value,
-	)
+	_, err := db.getWriter().Exec(setPricingMetaSQL, key, value)
 	if err != nil {
 		return fmt.Errorf(
 			"setting pricing meta %q: %w", key, err,

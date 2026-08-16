@@ -397,7 +397,7 @@ agentsview usage daily [flags]
 | `--all`       | `false`       | Scan all history; overrides the default 30-day window                    |
 | `--agent`     |               | Filter by agent name                                                     |
 | `--breakdown` | `false`       | Show per-model rows and populate detailed JSON breakdown arrays          |
-| `--offline`   | `false`       | Skip the LiteLLM pricing fetch; use embedded fallback                    |
+| `--offline`   | `false`       | Skip the pricing catalog fetch; use embedded fallback                    |
 | `--no-sync`   | `false`       | Skip the on-demand sync pass before querying                             |
 | `--timezone`  | system        | IANA timezone name for date bucketing                                    |
 
