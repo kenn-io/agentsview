@@ -54,8 +54,9 @@ links use `/recall?tab=generated&insight=<id>`.
 ![Generated insights](/assets/generated/screenshots/recall-generated-insights.png)
 
 Generated insights use the configured OpenAI-compatible endpoint when
-`[insights]` has both an `endpoint` and `model`; otherwise they use the selected
-agent CLI on your machine. Endpoint mode sends one non-streaming
+`[insights]` has both an `endpoint` and `model`; when `[insights]` is absent,
+they use the selected agent CLI on your machine. Partial endpoint configuration
+is rejected during configuration validation. Endpoint mode sends one non-streaming
 `POST /chat/completions` request with the generated prompt as a user message.
 It accepts the first choice's `assistant` message with string `message.content`
 and optional response `model`. It does not support streaming, `/responses`, legacy completions,
@@ -77,8 +78,9 @@ privacy and retention behavior. API keys stay in the environment and are sent
 only as a bearer header; they are not stored in the AgentsView configuration.
 Canned insight cache keys include the effective backend, model, and a safe
 endpoint identity, so changing `[insights]` after restarting the server selects
-a separate cached report. Force refresh remains available when the same
-provider configuration should regenerate the report.
+a separate cached report. Changes to credentials or transport opt-ins do not
+change that identity; use force refresh when those changes should regenerate a
+report under the same endpoint and model.
 
 ### Configuring agent binaries
 
