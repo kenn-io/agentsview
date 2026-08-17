@@ -8806,9 +8806,14 @@ func TestCopySessionMetadataKeepsFreshProjectIdentityObservationOnConflict(t *te
 	ctx := context.Background()
 	oldPath := filepath.Join(dir, "old.db")
 	root := filepath.Join(dir, "repo")
+	stableSalt := strings.Repeat("a", 64)
+	temporarySalt := strings.Repeat("b", 64)
 
 	oldDB, err := Open(oldPath)
 	requireNoError(t, err, "open old")
+	requireNoError(t, oldDB.SetArchiveIdentityForTest(
+		ctx, "stable-archive", stableSalt,
+	), "set old archive identity")
 	requireNoError(t, oldDB.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project:          "alpha",
@@ -8821,6 +8826,9 @@ func TestCopySessionMetadataKeepsFreshProjectIdentityObservationOnConflict(t *te
 	requireNoError(t, oldDB.Close(), "close old")
 
 	fresh := testDB(t)
+	requireNoError(t, fresh.SetArchiveIdentityForTest(
+		ctx, "temporary-archive", temporarySalt,
+	), "set fresh archive identity")
 	requireNoError(t, fresh.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project:          "alpha",
@@ -8839,6 +8847,8 @@ func TestCopySessionMetadataKeepsFreshProjectIdentityObservationOnConflict(t *te
 	require.Len(t, observations, 1)
 	assert.Equal(t, root, observations[0].WorktreeRootPath)
 	assert.Equal(t, filepath.Base(root), observations[0].WorktreeName)
+	assert.Equal(t, "stable-archive", observations[0].SourceArchiveID)
+	assert.Equal(t, stableSalt, observations[0].SourceArchiveSalt)
 }
 
 func TestCopySessionMetadataKeepsIdentityRevisionMonotonic(t *testing.T) {

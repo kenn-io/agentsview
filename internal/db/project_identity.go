@@ -406,6 +406,7 @@ func (db *DB) CopyArchiveIdentityFrom(sourcePath string) error {
 		if err := rekeyLocalArchiveRows(
 			ctx, tx, previousArchiveID,
 			metadata[archiveMetadataArchiveIDKey].value,
+			metadata[archiveMetadataArchiveSaltKey].value,
 		); err != nil {
 			return err
 		}
@@ -726,7 +727,7 @@ func (db *DB) SetArchiveIdentityForTest(ctx context.Context, id, salt string) er
 	}
 	if previousArchiveID != id {
 		if err := rekeyLocalArchiveRows(
-			ctx, tx, previousArchiveID, id,
+			ctx, tx, previousArchiveID, id, salt,
 		); err != nil {
 			return err
 		}

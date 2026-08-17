@@ -17421,14 +17421,14 @@ func (e *Engine) processAndWriteSessionFile(
 		// session with parser-derived parentage when an incoming spawn edge is
 		// already authoritative.
 		if err := e.db.QueueSubagentParentRepairs([]string{resultIDs[i]}); err != nil {
-			return false, fmt.Errorf(
+			return false, sessionsChanged, fmt.Errorf(
 				"queue written session parent repair: %w", err,
 			)
 		}
 		repairQueued = true
 		if err := queueWrittenChildren([]string{resultIDs[i]}); err != nil {
 			markSourceIncomplete()
-			return false, err
+			return false, sessionsChanged, err
 		}
 	}
 	// A source-level digest is valid only when every active result and its
