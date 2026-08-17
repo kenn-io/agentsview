@@ -4,7 +4,7 @@ import {
 } from "../paraglide/runtime.js";
 
 export { m } from "../paraglide/messages.js";
-// Current BCP 47 tag (en / ja / zh-CN / zh-TW / ko / fr) for kit-ui components that
+// Current BCP 47 tag (en / zh-CN / zh-TW / ko / fr / ja) for kit-ui components that
 // take a `locale` prop, so their date/tooltip formatting follows the app
 // language setting instead of the browser locale.
 export { getLocale };
@@ -23,7 +23,6 @@ function matchingLocale(value: string | null | undefined): SupportedLocale | nul
   const normalized = value?.trim().toLowerCase();
   if (!normalized) return null;
   if (normalized === "en" || normalized.startsWith("en-")) return "en";
-  if (normalized === "ja" || normalized.startsWith("ja-")) return "ja";
   if (normalized === "zh-cn" || normalized.startsWith("zh-hans")) {
     return "zh-CN";
   }
@@ -36,6 +35,7 @@ function matchingLocale(value: string | null | undefined): SupportedLocale | nul
   }
   if (normalized === "ko" || normalized.startsWith("ko-")) return "ko";
   if (normalized === "fr" || normalized.startsWith("fr-")) return "fr";
+  if (normalized === "ja" || normalized.startsWith("ja-")) return "ja";
   return null;
 }
 

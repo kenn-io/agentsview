@@ -12,11 +12,11 @@ import {
 import { m } from "../paraglide/messages.js";
 import * as runtime from "../paraglide/runtime.js";
 import en from "../../../messages/en.json";
-import ja from "../../../messages/ja.json";
 import zhCN from "../../../messages/zh-CN.json";
 import zhTW from "../../../messages/zh-TW.json";
 import ko from "../../../messages/ko.json";
 import fr from "../../../messages/fr.json";
+import ja from "../../../messages/ja.json";
 
 describe("i18n locale selection", () => {
   beforeEach(() => {
@@ -27,8 +27,6 @@ describe("i18n locale selection", () => {
 
   it("normalizes supported locale variants", () => {
     expect(normalizeLocale("en-US")).toBe("en");
-    expect(normalizeLocale("ja")).toBe("ja");
-    expect(normalizeLocale("ja-JP")).toBe("ja");
     expect(normalizeLocale("zh-Hans-CN")).toBe("zh-CN");
     expect(normalizeLocale("zh-cn")).toBe("zh-CN");
     expect(normalizeLocale("zh-TW-TW")).toBe("zh-TW");
@@ -40,6 +38,8 @@ describe("i18n locale selection", () => {
     expect(normalizeLocale("fr-FR")).toBe("fr");
     expect(normalizeLocale("fr-CA")).toBe("fr");
     expect(normalizeLocale("fr-CH")).toBe("fr");
+    expect(normalizeLocale("ja")).toBe("ja");
+    expect(normalizeLocale("ja-JP")).toBe("ja");
   });
 
   it("falls back to English for unsupported locales", () => {
@@ -89,11 +89,11 @@ describe("i18n locale selection", () => {
   });
 
   it("keeps every translated locale's keys aligned with English", () => {
-    expect(Object.keys(ja).sort()).toEqual(Object.keys(en).sort());
     expect(Object.keys(zhCN).sort()).toEqual(Object.keys(en).sort());
     expect(Object.keys(zhTW).sort()).toEqual(Object.keys(en).sort());
     expect(Object.keys(ko).sort()).toEqual(Object.keys(en).sort());
     expect(Object.keys(fr).sort()).toEqual(Object.keys(en).sort());
+    expect(Object.keys(ja).sort()).toEqual(Object.keys(en).sort());
   });
 
   it("points auth recovery at pre-auth token sources", () => {
@@ -114,9 +114,6 @@ describe("i18n locale selection", () => {
       count: 12,
       countLabel: "12",
     })).toBe("12 sessions");
-
-    runtime.setLocale("ja", { reload: false });
-    expect(m.nav_sessions()).toBe(ja.nav_sessions);
 
     runtime.setLocale("zh-CN", { reload: false });
     expect(m.nav_sessions()).toBe("会话");
@@ -145,6 +142,9 @@ describe("i18n locale selection", () => {
       count: 12,
       countLabel: "12",
     })).toBe("12 sessions");
+
+    runtime.setLocale("ja", { reload: false });
+    expect(m.nav_sessions()).toBe(ja.nav_sessions);
   });
 
   it("selects cardinal plural variants per locale", () => {
