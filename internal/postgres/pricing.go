@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/ccoveille/go-safecast/v2"
@@ -40,8 +39,6 @@ func fallbackPricingRows() []db.ModelPricing {
 	return out
 }
 
-const pricingUpsertBatch = 100
-
 const pgModelPricingSelect = `SELECT
 	p.model_pattern,
 	p.input_microdollars_per_mtok,
@@ -58,62 +55,6 @@ const pgModelPricingSelect = `SELECT
 FROM model_pricing p
 LEFT JOIN model_pricing_bands b ON b.model_pattern = p.model_pattern
 ORDER BY p.model_pattern, b.above_input_tokens`
-
-func pgPricingUpsertStatement(
-	prices []db.ModelPricing, defaultUpdatedAt string,
-) (string, []any) {
-	var b strings.Builder
-	b.WriteString(`INSERT INTO model_pricing
-		(model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
-		 cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok,
-		 updated_at)
-	VALUES `)
-	args := make([]any, 0, len(prices)*6)
-	for i, p := range prices {
-		if i > 0 {
-			b.WriteString(", ")
-		}
-		base := i*6 + 1
-		fmt.Fprintf(
-			&b,
-			"($%d, $%d, $%d, $%d, $%d, $%d)",
-			base, base+1, base+2, base+3, base+4, base+5,
-		)
-		updatedAt := p.UpdatedAt
-		if updatedAt == "" {
-			updatedAt = defaultUpdatedAt
-		}
-		args = append(args,
-			sanitizePG(p.ModelPattern),
-			p.InputPerMTok,
-			p.OutputPerMTok,
-			p.CacheCreationPerMTok,
-			p.CacheReadPerMTok,
-			sanitizePG(updatedAt),
-		)
-	}
-	b.WriteString(`
-	ON CONFLICT (model_pattern) DO UPDATE SET
-		input_microdollars_per_mtok = EXCLUDED.input_microdollars_per_mtok,
-		output_microdollars_per_mtok = EXCLUDED.output_microdollars_per_mtok,
-		cache_creation_microdollars_per_mtok = EXCLUDED.cache_creation_microdollars_per_mtok,
-		cache_read_microdollars_per_mtok = EXCLUDED.cache_read_microdollars_per_mtok,
-		updated_at = CASE
-			WHEN model_pricing.updated_at >= EXCLUDED.updated_at
-			THEN model_pricing.updated_at + INTERVAL '1 microsecond'
-			ELSE EXCLUDED.updated_at
-		END
-	WHERE model_pricing.input_microdollars_per_mtok IS DISTINCT FROM
-			EXCLUDED.input_microdollars_per_mtok
-		OR model_pricing.output_microdollars_per_mtok IS DISTINCT FROM
-			EXCLUDED.output_microdollars_per_mtok
-		OR model_pricing.cache_creation_microdollars_per_mtok IS DISTINCT FROM
-			EXCLUDED.cache_creation_microdollars_per_mtok
-		OR model_pricing.cache_read_microdollars_per_mtok IS DISTINCT FROM
-			EXCLUDED.cache_read_microdollars_per_mtok
-	RETURNING model_pattern`)
-	return b.String(), args
-}
 
 func listPGModelPricing(
 	ctx context.Context, pg *sql.DB,
@@ -190,190 +131,6 @@ func scanPGModelPricingRows(rows *sql.Rows) ([]db.ModelPricing, error) {
 	return out, nil
 }
 
-func pgPricingTouchStatement(
-	prices []db.ModelPricing, defaultUpdatedAt string,
-) (string, []any) {
-	var b strings.Builder
-	b.WriteString(`UPDATE model_pricing AS p
-		SET updated_at = CASE
-			WHEN p.updated_at >= v.updated_at
-			THEN p.updated_at + INTERVAL '1 microsecond'
-			ELSE v.updated_at
-		END
-		FROM (VALUES `)
-	args := make([]any, 0, len(prices)*2)
-	for i, price := range prices {
-		if i > 0 {
-			b.WriteString(", ")
-		}
-		base := i*2 + 1
-		fmt.Fprintf(&b, "($%d::text, $%d::timestamptz)", base, base+1)
-		updatedAt := price.UpdatedAt
-		if updatedAt == "" {
-			updatedAt = defaultUpdatedAt
-		}
-		args = append(args, sanitizePG(price.ModelPattern), updatedAt)
-	}
-	b.WriteString(`) AS v(model_pattern, updated_at)
-		WHERE p.model_pattern = v.model_pattern`)
-	return b.String(), args
-}
-
-func pgPricingBandDeleteStatement(
-	prices []db.ModelPricing,
-) (string, []any) {
-	var b strings.Builder
-	b.WriteString(`DELETE FROM model_pricing_bands WHERE model_pattern IN (`)
-	args := make([]any, len(prices))
-	for i, price := range prices {
-		if i > 0 {
-			b.WriteString(", ")
-		}
-		fmt.Fprintf(&b, "$%d", i+1)
-		args[i] = sanitizePG(price.ModelPattern)
-	}
-	b.WriteByte(')')
-	return b.String(), args
-}
-
-type pgModelPricingBand struct {
-	model string
-	band  db.PricingBand
-}
-
-func pgPricingBandInsertStatement(
-	bands []pgModelPricingBand,
-	defaultUpdatedAt string,
-) (string, []any) {
-	var b strings.Builder
-	b.WriteString(`INSERT INTO model_pricing_bands
-		(model_pattern, above_input_tokens,
-		 input_microdollars_per_mtok, output_microdollars_per_mtok,
-		 cache_creation_microdollars_per_mtok,
-		 cache_read_microdollars_per_mtok, updated_at)
-	VALUES `)
-	args := make([]any, 0, len(bands)*7)
-	for i, item := range bands {
-		if i > 0 {
-			b.WriteString(", ")
-		}
-		base := i*7 + 1
-		fmt.Fprintf(&b, "($%d, $%d, $%d, $%d, $%d, $%d, $%d)",
-			base, base+1, base+2, base+3, base+4, base+5, base+6)
-		updatedAt := item.band.UpdatedAt
-		if updatedAt == "" {
-			updatedAt = defaultUpdatedAt
-		}
-		args = append(args,
-			sanitizePG(item.model),
-			item.band.AboveInputTokens,
-			item.band.InputPerMTok,
-			item.band.OutputPerMTok,
-			item.band.CacheCreationPerMTok,
-			item.band.CacheReadPerMTok,
-			sanitizePG(updatedAt),
-		)
-	}
-	return b.String(), args
-}
-
-func upsertModelPricing(
-	ctx context.Context, pg *sql.DB,
-	prices []db.ModelPricing,
-) error {
-	if len(prices) == 0 {
-		return nil
-	}
-
-	tx, err := pg.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("beginning pg pricing upsert: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	defaultUpdatedAt := time.Now().UTC().Format(time.RFC3339Nano)
-	baseChanged := make(map[string]struct{}, len(prices))
-	for i := 0; i < len(prices); i += pricingUpsertBatch {
-		end := min(i+pricingUpsertBatch, len(prices))
-		query, args := pgPricingUpsertStatement(
-			prices[i:end], defaultUpdatedAt,
-		)
-		rows, err := tx.QueryContext(ctx, query, args...)
-		if err != nil {
-			return fmt.Errorf(
-				"upserting pg pricing batch starting at %d: %w",
-				i, err,
-			)
-		}
-		for rows.Next() {
-			var modelPattern string
-			if err := rows.Scan(&modelPattern); err != nil {
-				rows.Close()
-				return fmt.Errorf(
-					"scanning changed pg pricing at batch %d: %w", i, err)
-			}
-			baseChanged[modelPattern] = struct{}{}
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return fmt.Errorf(
-				"iterating changed pg pricing at batch %d: %w", i, err)
-		}
-		if err := rows.Close(); err != nil {
-			return fmt.Errorf(
-				"closing changed pg pricing at batch %d: %w", i, err)
-		}
-	}
-	modelPrices := prices
-	bandOnlyPrices := make([]db.ModelPricing, 0, len(prices))
-	for _, price := range prices {
-		if _, changed := baseChanged[price.ModelPattern]; !changed {
-			bandOnlyPrices = append(bandOnlyPrices, price)
-		}
-	}
-	for i := 0; i < len(bandOnlyPrices); i += pricingUpsertBatch {
-		end := min(i+pricingUpsertBatch, len(bandOnlyPrices))
-		batch := bandOnlyPrices[i:end]
-		query, args := pgPricingTouchStatement(batch, defaultUpdatedAt)
-		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-			return fmt.Errorf(
-				"advancing pg pricing timestamps at batch %d: %w", i, err)
-		}
-	}
-	for i := 0; i < len(modelPrices); i += pricingUpsertBatch {
-		end := min(i+pricingUpsertBatch, len(modelPrices))
-		batch := modelPrices[i:end]
-		query, args := pgPricingBandDeleteStatement(batch)
-		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-			return fmt.Errorf(
-				"deleting pg pricing bands at batch %d: %w", i, err)
-		}
-	}
-	var bands []pgModelPricingBand
-	for _, price := range modelPrices {
-		for _, band := range price.Bands {
-			bands = append(bands, pgModelPricingBand{
-				model: price.ModelPattern,
-				band:  band,
-			})
-		}
-	}
-	for i := 0; i < len(bands); i += pricingUpsertBatch {
-		end := min(i+pricingUpsertBatch, len(bands))
-		query, args := pgPricingBandInsertStatement(
-			bands[i:end], defaultUpdatedAt)
-		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-			return fmt.Errorf(
-				"inserting pg pricing bands at batch %d: %w", i, err)
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing pg pricing upsert: %w", err)
-	}
-	return nil
-}
-
 func (s *Sync) syncModelPricing(ctx context.Context) error {
 	prices, err := s.local.ListModelPricing(ctx)
 	if err != nil {
@@ -392,7 +149,17 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if len(changedPrices) == 0 {
 		return nil
 	}
-	if err := upsertModelPricing(ctx, s.pg, changedPrices); err != nil {
+	defaultUpdatedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	for i := range changedPrices {
+		if changedPrices[i].UpdatedAt == "" {
+			changedPrices[i].UpdatedAt = defaultUpdatedAt
+		}
+	}
+	rows, bands, err := db.CanonicalModelPricingRows(changedPrices)
+	if err != nil {
+		return fmt.Errorf("converting pg model pricing: %w", err)
+	}
+	if err := db.UpsertModelPricingRows(ctx, s.bunDB(), rows, bands); err != nil {
 		return fmt.Errorf("syncing model pricing to pg: %w", err)
 	}
 	return nil

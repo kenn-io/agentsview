@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 
@@ -11,8 +12,25 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/postgres"
 )
+
+type disabledPGVectorStore struct {
+	reason      string
+	reasonCalls int
+}
+
+func (*disabledPGVectorStore) DB() *sql.DB {
+	panic("disabled vector branch must not query PostgreSQL")
+}
+
+func (s *disabledPGVectorStore) SetSemanticUnavailableReason(reason string) {
+	s.reason = reason
+	s.reasonCalls++
+}
+
+func (*disabledPGVectorStore) SetVectorSearcher(db.VectorSearcher) {
+	panic("disabled vector branch must not install a searcher")
+}
 
 func TestResolvePGServeVectorState(t *testing.T) {
 	tests := []struct {
@@ -78,18 +96,17 @@ func TestResolvePGServeVectorState(t *testing.T) {
 }
 
 func TestWirePGVectorSearchRecordsVectorDisabledReason(t *testing.T) {
-	store := &postgres.Store{}
+	store := &disabledPGVectorStore{}
 	require.NoError(t, wirePGVectorSearch(
 		context.Background(), config.Config{}, store, "pg serve"))
 
-	_, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
-		Pattern: "hello", Mode: "semantic",
-	})
-	require.Error(t, err)
-	assert.ErrorIs(t, err, db.ErrSemanticUnavailable)
-	assert.Contains(t, err.Error(), "PostgreSQL requires [vector] enabled")
-	assert.Contains(t, err.Error(), "agentsview pg push")
-	assert.NotContains(t, err.Error(), "agentsview embeddings build")
+	assert.Equal(t, 1, store.reasonCalls)
+	assert.Equal(t,
+		"semantic search: PostgreSQL requires [vector] enabled with a "+
+			"matching [vector.embeddings] config and a generation pushed "+
+			"by 'agentsview pg push'",
+		store.reason,
+	)
 }
 
 // TestNewPGReadServiceRunsVectorWiring proves the CLI direct-read constructor

@@ -4,7 +4,6 @@ package duckdb
 
 import (
 	"context"
-	"encoding/json"
 	"path/filepath"
 	"testing"
 
@@ -58,9 +57,7 @@ func TestDuckSessionFingerprintFieldsIncludesTranscriptFidelity(t *testing.T) {
 		CreatedAt:        "2026-03-11T12:00:00Z",
 	}
 	encode := func(s db.Session) string {
-		data, err := json.Marshal(duckSessionFingerprintFields(s, "laptop"))
-		require.NoError(t, err)
-		return string(data)
+		return encodeDuckSessionFingerprint(t, s)
 	}
 	fp1 := encode(base)
 

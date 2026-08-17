@@ -541,7 +541,7 @@ func TestDuckBunStoreSearchContentFTSOrdersByCanonicalRecency(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	page, err := store.BunStore.SearchContent(ctx, db.ContentSearchFilter{
+	page, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "parityorderterm", Mode: "fts", Sources: []string{"messages"},
 		IncludeOneShot: true, Limit: 1,
 	})
