@@ -79,6 +79,8 @@ type claudeParseOptions struct {
 	// siblingLineage enables background-fork lineage resolution
 	// against sibling transcripts in the same directory.
 	siblingLineage bool
+	// uploadIdentity enables adoption of explicit rooted transcript IDs.
+	uploadIdentity bool
 }
 
 // claudeLineagePlan describes an established fork lineage: the leading

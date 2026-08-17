@@ -64,12 +64,9 @@ type claudeQueuedCommand struct {
 // and also returns session IDs intentionally excluded from the
 // archive, such as content-free /usage probes. Sync uses those IDs
 // during full resync so orphan preservation does not restore rows the
-// current parser deliberately dropped. This is the provider-owned
-// parse body shared by the Claude provider (both its discovered-session
-// Parse path and its ParseUploadedTranscript entry) and the Cowork
-// parser (which reuses the Claude transcript format); it carries no
-// legacy entrypoint naming so the provider can call it without shimming
-// a Parse* free function.
+// current parser deliberately dropped. This is the zero-option parse body
+// used by Claude discovered-session parsing and the Cowork/Qoder parsers;
+// upload parsing calls claudeParseFile with its upload option.
 func claudeParseWithExclusions(
 	path, project, machine string,
 ) ([]ParseResult, []string, error) {
@@ -119,6 +116,10 @@ func claudeParseFile(
 		entrypoint      string
 		sessionKind     string
 		foundParentSID  bool
+		uploadSessionID string
+		uploadRoot      bool
+		uploadSidechain bool
+		uploadEvidence  = true
 		lineIndex       int
 		uuidLineOrdinal int
 		malformedLines  int
@@ -129,7 +130,9 @@ func claudeParseFile(
 		globalEnd       time.Time
 	)
 	allHaveUUID = true
-	parentSessionID = claudeCompanionParentSessionID(path, sessionID)
+	if !opts.uploadIdentity {
+		parentSessionID = claudeCompanionParentSessionID(path, sessionID)
+	}
 	if lineage != nil {
 		parentSessionID = lineage.parentSessionID
 	}
@@ -260,6 +263,23 @@ func claudeParseFile(
 		if entryType != "user" && entryType != "assistant" {
 			continue
 		}
+		if opts.uploadIdentity {
+			sid := gjson.GetBytes(lineBytes, "sessionId").Str
+			if sid == "" || !isValidClaudeUploadIdentity(sid) ||
+				(uploadSessionID != "" && uploadSessionID != sid) {
+				uploadEvidence = false
+			} else if uploadSessionID == "" {
+				uploadSessionID = strings.Clone(sid)
+			}
+			marker := gjson.GetBytes(lineBytes, "isSidechain")
+			if marker.Type != gjson.True && marker.Type != gjson.False {
+				uploadEvidence = false
+			} else if marker.Bool() {
+				uploadSidechain = true
+			} else {
+				uploadRoot = true
+			}
+		}
 		line := resolveClaudePersistedToolResults(
 			path, compactClaudeEntry(lineBytes),
 		)
@@ -320,6 +340,13 @@ func claudeParseFile(
 
 	if err := lr.Err(); err != nil {
 		return nil, nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	if opts.uploadIdentity && uploadEvidence && uploadRoot &&
+		!uploadSidechain && uploadSessionID != "" {
+		sessionID = uploadSessionID
+		if parentSessionID == sessionID {
+			parentSessionID = ""
+		}
 	}
 
 	// Detect truncation: last line is non-empty, invalid JSON,
@@ -427,6 +454,22 @@ func claudeParseFile(
 		kept = append(kept, r)
 	}
 	return kept, excluded, nil
+}
+
+func isValidClaudeUploadIdentity(id string) bool {
+	// Reserve the .jsonl suffix within common 255-byte component limits.
+	if len(id) > 249 || !IsValidSessionID(id) {
+		return false
+	}
+	upper := strings.ToUpper(id)
+	switch upper {
+	case "CON", "PRN", "AUX", "NUL":
+		return false
+	}
+	if len(upper) == 4 && (strings.HasPrefix(upper, "COM") || strings.HasPrefix(upper, "LPT")) {
+		return upper[3] < '1' || upper[3] > '9'
+	}
+	return true
 }
 
 type claudeCompactField struct {

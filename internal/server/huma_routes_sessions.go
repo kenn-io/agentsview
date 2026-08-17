@@ -1089,6 +1089,10 @@ func (s *Server) humaUploadSession(
 	if len(results) == 0 {
 		return nil, apiError(http.StatusBadRequest, "no sessions parsed from upload")
 	}
+	stem := strings.TrimSuffix(safeName, ".jsonl")
+	if results[0].Session.ID != stem && parser.IsValidSessionID(results[0].Session.ID) {
+		upload.finalPath = filepath.Join(filepath.Dir(upload.finalPath), results[0].Session.ID+".jsonl")
+	}
 	for i := range results {
 		results[i].Session.File.Path = upload.finalPath
 	}
