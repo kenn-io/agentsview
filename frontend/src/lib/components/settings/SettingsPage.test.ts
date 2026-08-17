@@ -136,14 +136,14 @@ describe("SettingsPage", () => {
     await tick();
 
     const option = Array.from(document.body.querySelectorAll('[role="option"]')).find((el) =>
-      el.textContent?.includes("简体中文"),
+      el.textContent?.includes("日本語"),
     );
     expect(option).toBeTruthy();
 
     (option as HTMLElement).dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     await tick();
 
-    expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBe("zh-CN");
+    expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBe("ja");
     expect(document.body.textContent).toContain("Settings");
 
     unmount(component);

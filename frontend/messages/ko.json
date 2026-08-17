@@ -772,6 +772,7 @@
   "settings_language_description": "인터페이스 언어를 선택하세요.",
   "settings_language_label": "인터페이스 언어",
   "settings_language_english": "English",
+  "settings_language_japanese": "日本語",
   "settings_language_simplified_chinese": "简体中文",
   "settings_language_traditional_chinese": "繁體中文",
   "settings_language_korean": "한국어",

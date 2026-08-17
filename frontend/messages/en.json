@@ -797,6 +797,7 @@
   "settings_language_description": "Choose the interface language.",
   "settings_language_label": "Interface language",
   "settings_language_english": "English",
+  "settings_language_japanese": "日本語",
   "settings_language_simplified_chinese": "简体中文",
   "settings_language_traditional_chinese": "繁體中文",
   "settings_language_korean": "한국어",
