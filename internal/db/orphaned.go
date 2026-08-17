@@ -1532,9 +1532,15 @@ func (d *DB) CopySessionMetadataFrom(
 		).Scan(&copiedArchiveID); err != nil {
 			return fmt.Errorf("reading copied archive identity: %w", err)
 		}
+		var copiedArchiveSalt string
+		if err := tx.QueryRowContext(ctx, `
+			SELECT value FROM main.archive_metadata WHERE key = 'archive_salt'`,
+		).Scan(&copiedArchiveSalt); err != nil {
+			return fmt.Errorf("reading copied archive salt: %w", err)
+		}
 		if copiedArchiveID != previousArchiveID {
 			if err := rekeyLocalArchiveRows(
-				ctx, tx, previousArchiveID, copiedArchiveID,
+				ctx, tx, previousArchiveID, copiedArchiveID, copiedArchiveSalt,
 			); err != nil {
 				return err
 			}
@@ -1626,9 +1632,20 @@ func rekeyLocalArchiveRows(
 	tx *sql.Tx,
 	previousArchiveID string,
 	copiedArchiveID string,
+	copiedArchiveSalt string,
 ) error {
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE main.source_project_identity_observations
+		SET source_archive_id = ?, source_archive_salt = ?
+		WHERE source_archive_id = ?`,
+		copiedArchiveID, copiedArchiveSalt, previousArchiveID,
+	); err != nil {
+		return fmt.Errorf(
+			"rekeying copied archive table source_project_identity_observations: %w",
+			err,
+		)
+	}
 	for _, table := range []string{
-		"source_project_identity_observations",
 		"source_session_project_identity_snapshots",
 		"source_worktree_project_mappings",
 		"sessions",
