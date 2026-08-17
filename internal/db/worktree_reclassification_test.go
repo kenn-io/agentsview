@@ -251,7 +251,7 @@ func TestWorktreeReclassificationApplyRollsBackEveryWriteStage(t *testing.T) {
 		{
 			name: "mapping",
 			triggerSQL: `CREATE TEMP TRIGGER fail_mapping_write
-				BEFORE INSERT ON worktree_project_mappings
+				BEFORE INSERT ON source_worktree_project_mappings
 				BEGIN SELECT RAISE(ABORT, 'injected mapping write failure'); END`,
 		},
 		{
@@ -263,7 +263,7 @@ func TestWorktreeReclassificationApplyRollsBackEveryWriteStage(t *testing.T) {
 		{
 			name: "identity",
 			triggerSQL: `CREATE TEMP TRIGGER fail_identity_write
-				BEFORE DELETE ON project_identity_observations
+				BEFORE DELETE ON source_project_identity_observations
 				BEGIN SELECT RAISE(ABORT, 'injected identity write failure'); END`,
 		},
 	}
@@ -389,8 +389,8 @@ func TestProjectIdentityReclassificationPreservesLegacySourceMissingEvidence(
 	))
 	require.NoError(t, d.SetSessionDataVersion("legacy-missing", 75))
 	_, err := d.getWriter().ExecContext(ctx, `
-		DELETE FROM session_project_identity_snapshots
-		WHERE session_id = 'legacy-missing'`)
+		DELETE FROM source_session_project_identity_snapshots
+		WHERE source_session_id = 'legacy-missing'`)
 	require.NoError(t, err)
 	_, err = d.getWriter().ExecContext(ctx, `
 		UPDATE sessions

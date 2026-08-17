@@ -23,6 +23,8 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 )
@@ -815,11 +817,13 @@ func TestMigration_ResultContentColumn(t *testing.T) {
 			SELECT id, message_id, session_id, tool_name,
 			       category, tool_use_id, input_json,
 			       skill_name, result_content_length,
-			       subagent_session_id
+			       subagent_session_id, file_path, call_index,
+			       message_ordinal
 			FROM tool_calls;
 		DROP TABLE tool_calls;
 		ALTER TABLE tool_calls_old RENAME TO tool_calls;
-	`)
+		DELETE FROM archive_metadata WHERE key = ?;
+	`, CommonSchemaCompatibilityMetadataKey)
 	requireNoError(t, err, "drop result_content column")
 
 	// Verify column is gone and tool_calls row exists.
@@ -978,7 +982,8 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 	_, err = conn.Exec(fmt.Sprintf(`
 		DROP TABLE tool_result_events;
 		PRAGMA user_version = %d;
-	`, legacyVersion))
+		DELETE FROM archive_metadata WHERE key = ?;
+	`, legacyVersion), CommonSchemaCompatibilityMetadataKey)
 	requireNoError(t, err, "drop tool_result_events")
 
 	var count int
@@ -3613,7 +3618,7 @@ func TestToolCallNewColumns(t *testing.T) {
 	insertSession(t, d, "s1", "proj")
 	insertMessages(t, d, Message{
 		SessionID:     "s1",
-		Ordinal:       0,
+		Ordinal:       4,
 		Role:          "assistant",
 		Content:       "[Read: main.go]",
 		ContentLength: 15,
@@ -3630,10 +3635,11 @@ func TestToolCallNewColumns(t *testing.T) {
 
 	var toolUseID, inputJSON sql.NullString
 	var resultLen sql.NullInt64
+	var messageOrdinal int
 	err := d.Reader().QueryRow(`
-        SELECT tool_use_id, input_json, result_content_length
+		SELECT tool_use_id, input_json, result_content_length, message_ordinal
         FROM tool_calls WHERE session_id = 's1'
-    `).Scan(&toolUseID, &inputJSON, &resultLen)
+	`).Scan(&toolUseID, &inputJSON, &resultLen, &messageOrdinal)
 	requireNoError(t, err, "query tool_calls")
 	require.True(t, toolUseID.Valid, "tool_use_id valid")
 	assert.Equal(t, "toolu_abc", toolUseID.String, "tool_use_id")
@@ -3641,6 +3647,7 @@ func TestToolCallNewColumns(t *testing.T) {
 	assert.Equal(t, `{"file_path":"main.go"}`, inputJSON.String, "input_json")
 	require.True(t, resultLen.Valid, "result_content_length valid")
 	assert.Equal(t, int64(500), resultLen.Int64, "result_content_length")
+	assert.Equal(t, 4, messageOrdinal, "message_ordinal")
 }
 
 func TestToolCallSkillName(t *testing.T) {
@@ -4192,6 +4199,78 @@ func TestReopen(t *testing.T) {
 	// Writes should work after reopen.
 	insertSession(t, d, "s2", "proj2")
 	requireSessionExists(t, d, "s2")
+}
+
+func TestSQLiteBunReopenUsesCurrentGuardedHandle(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "bun-reopen", "before")
+
+	readProject := func() (string, error) {
+		var project string
+		err := d.view(t.Context(), func(store bun.IDB) error {
+			return store.NewSelect().Model((*bunmodel.Session)(nil)).
+				Column("project").Where("id = ?", "bun-reopen").
+				Scan(t.Context(), &project)
+		})
+		return project, err
+	}
+
+	project, err := readProject()
+	require.NoError(t, err)
+	assert.Equal(t, "before", project)
+	_, err = d.getWriter().Exec(
+		`UPDATE sessions SET project = ? WHERE id = ?`, "after", "bun-reopen",
+	)
+	require.NoError(t, err)
+	require.NoError(t, d.Reopen())
+
+	project, err = readProject()
+	require.NoError(t, err)
+	assert.Equal(t, "after", project)
+}
+
+func TestSQLiteBunViewKeepsReopenBehindInFlightCallback(t *testing.T) {
+	d := testDB(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	viewDone := make(chan error, 1)
+	go func() {
+		viewDone <- d.view(t.Context(), func(bun.IDB) error {
+			close(started)
+			<-release
+			return nil
+		})
+	}()
+	<-started
+
+	reopenDone := make(chan error, 1)
+	go func() { reopenDone <- d.Reopen() }()
+	select {
+	case err := <-reopenDone:
+		close(release)
+		require.Failf(t, "Reopen returned during guarded Bun view", "error: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	require.NoError(t, <-viewDone)
+	require.NoError(t, <-reopenDone)
+}
+
+func TestSQLiteCursorSecretUpdatesLegacyAndSharedState(t *testing.T) {
+	d := testDB(t)
+	secret := []byte("configured-cursor-secret")
+	d.SetCursorSecret(secret)
+	secret[0] = 'X'
+
+	d.cursorMu.RLock()
+	legacy := append([]byte(nil), d.cursorSecret...)
+	d.cursorMu.RUnlock()
+	d.BunStore.cursorMu.RLock()
+	shared := append([]byte(nil), d.BunStore.cursorSecret...)
+	d.BunStore.cursorMu.RUnlock()
+
+	assert.Equal(t, []byte("configured-cursor-secret"), legacy)
+	assert.Equal(t, legacy, shared)
 }
 
 func TestReopenAfterSwap(t *testing.T) {
@@ -4867,7 +4946,7 @@ func TestCopyInsightsFrom(t *testing.T) {
 func TestCopyModelPricingFrom(t *testing.T) {
 	dir := t.TempDir()
 
-	// Source DB with pricing rows and a sentinel meta row.
+	// Source DB with pricing rows and separate refresh metadata.
 	srcPath := filepath.Join(dir, "src.db")
 	srcDB := testDBAtPath(t, srcPath, "src")
 	require.NoError(t, srcDB.UpsertModelPricing([]ModelPricing{
@@ -5635,6 +5714,8 @@ func TestCopyOrphanedDataFrom_LegacyNoIsSystem(t *testing.T) {
 			content_length
 		FROM messages`)
 	requireNoError(t, err, "copy to messages_new")
+	_, err = raw.Exec("DROP TRIGGER IF EXISTS tool_calls_fill_message_ordinal")
+	requireNoError(t, err, "drop tool call ordinal trigger")
 	_, err = raw.Exec("DROP TABLE messages")
 	requireNoError(t, err, "drop messages")
 	_, err = raw.Exec(
@@ -7278,8 +7359,13 @@ func TestOpenRepairsLegacyCurrentSchemaTokenCoverageOnce(t *testing.T) {
 		`INSERT INTO sessions (
 			id, project, machine, agent, message_count,
 			total_output_tokens, peak_context_tokens,
-			has_total_output_tokens, has_peak_context_tokens
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			has_total_output_tokens, has_peak_context_tokens,
+			source_archive_id, source_database_generation
+		)
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, archive.value, generation.value
+		FROM archive_metadata archive
+		JOIN archive_metadata generation ON generation.key = 'database_id'
+		WHERE archive.key = 'archive_id'`,
 		"current", "proj", "local", "claude", 1,
 		0, 0, false, false,
 	)
@@ -8699,11 +8785,16 @@ func TestCopySessionMetadataScrubsProjectIdentityGitRemoteCredentials(t *testing
 	oldDB, err := Open(oldPath)
 	requireNoError(t, err, "open old")
 	_, err = oldDB.rawWriter().Exec(`
-		INSERT INTO project_identity_observations (
+		INSERT INTO source_project_identity_observations (
+			source_archive_id, source_archive_salt,
 			project, machine, root_path, git_remote, git_remote_name,
 			worktree_name, worktree_root_path, observed_at,
 			normalized_remote, key_source, key
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		)
+		SELECT archive.value, salt.value, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		FROM archive_metadata archive
+		JOIN archive_metadata salt ON salt.key = 'archive_salt'
+		WHERE archive.key = 'archive_id'`,
 		"alpha", "laptop", root,
 		"https://"+"user:token@"+"github.com/acme/alpha.git", "origin",
 		"", "", "2026-05-01T00:00:00Z",

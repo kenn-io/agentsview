@@ -310,13 +310,12 @@ func (db *DB) DeleteModelPricing(patterns []string) error {
 	return nil
 }
 
-// GetPricingMeta reads a metadata value stored as a sentinel
-// row in model_pricing. Returns "" if not found.
+// GetPricingMeta reads SQLite-local pricing refresh state. Returns "" if not
+// found.
 func (db *DB) GetPricingMeta(key string) (string, error) {
 	var val string
 	err := db.getReader().QueryRow(
-		`SELECT updated_at FROM model_pricing
-		 WHERE model_pattern = ?`, key,
+		`SELECT value FROM pricing_metadata WHERE key = ?`, key,
 	).Scan(&val)
 	if err == sql.ErrNoRows {
 		return "", nil
@@ -329,17 +328,15 @@ func (db *DB) GetPricingMeta(key string) (string, error) {
 	return val, nil
 }
 
-// SetPricingMeta stores a metadata value as a sentinel row
-// in model_pricing with zero pricing fields.
+// SetPricingMeta stores SQLite-local pricing refresh state separately from
+// model rates.
 func (db *DB) SetPricingMeta(key, value string) error {
 	_, err := db.getWriter().Exec(
-		`INSERT INTO model_pricing
-			(model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
-			 cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok,
-			 updated_at)
-		 VALUES (?, 0, 0, 0, 0, ?)
-		 ON CONFLICT(model_pattern) DO UPDATE SET
-			updated_at = excluded.updated_at`,
+		`INSERT INTO pricing_metadata (key, value)
+		 VALUES (?, ?)
+		 ON CONFLICT(key) DO UPDATE SET
+			value = excluded.value,
+			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
 		key, value,
 	)
 	if err != nil {
@@ -350,9 +347,8 @@ func (db *DB) SetPricingMeta(key, value string) error {
 	return nil
 }
 
-// CopyModelPricingFrom copies every model_pricing row (including
-// sentinel metadata rows such as the fallback-version and
-// refresh-attempt markers) from the database file at sourcePath.
+// CopyModelPricingFrom copies model pricing, bands, and SQLite-local pricing
+// refresh metadata from the database file at sourcePath.
 // Called during a resync so the rebuilt DB keeps pricing across the
 // swap; without it every usage cost reads as zero until the next
 // daemon startup re-seeds the table.
@@ -409,6 +405,12 @@ func (db *DB) CopyModelPricingFrom(sourcePath string) error {
 		FROM old_db.model_pricing_bands`,
 	); err != nil {
 		return fmt.Errorf("copying model pricing bands: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT OR REPLACE INTO pricing_metadata (key, value, updated_at)
+		SELECT key, value, updated_at FROM old_db.pricing_metadata`,
+	); err != nil {
+		return fmt.Errorf("copying pricing metadata: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing model pricing copy: %w", err)
@@ -470,14 +472,11 @@ func (db *DB) InsertMissingModelPricing(
 
 // GetModelPricing returns pricing for an exact model match.
 // Returns nil, nil if not found.
-// HasModelPricingRows reports whether any non-meta pricing rows are
-// stored, using the same meta-row exclusion as pricing map loads.
+// HasModelPricingRows reports whether any pricing rows are stored.
 func (db *DB) HasModelPricingRows(ctx context.Context) (bool, error) {
 	var exists bool
 	err := db.getReader().QueryRowContext(ctx,
-		`SELECT EXISTS(
-			SELECT 1 FROM model_pricing
-			WHERE model_pattern NOT LIKE '\_%' ESCAPE '\')`,
+		`SELECT EXISTS(SELECT 1 FROM model_pricing)`,
 	).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("checking pricing rows: %w", err)
