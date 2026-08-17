@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 	"go.kenn.io/agentsview/internal/money"
 )
 
@@ -70,67 +71,31 @@ func (db *DB) ReplaceSessionUsageEvents(
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	tx, err := db.getWriter().Begin()
+	ctx := context.Background()
+	tx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning usage events tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := replaceSessionUsageEventsTx(tx, sessionID, events, true); err != nil {
-		return err
-	}
-
-	return tx.Commit()
-}
-
-func replaceSessionUsageEventsTx(
-	tx *sql.Tx, sessionID string, events []UsageEvent, enqueueArtifact bool,
-) error {
-	if _, err := tx.Exec(
-		`DELETE FROM usage_events WHERE session_id = ?`,
-		sessionID,
-	); err != nil {
-		return fmt.Errorf("deleting usage events: %w", err)
-	}
-
-	for _, ev := range events {
-		if ev.SessionID == "" {
-			ev.SessionID = sessionID
+	events = append([]UsageEvent(nil), events...)
+	for i := range events {
+		if events[i].SessionID == "" {
+			events[i].SessionID = sessionID
 		}
-		if ev.SessionID != sessionID {
+		if events[i].SessionID != sessionID {
 			return fmt.Errorf(
 				"usage event session_id %q does not match %q",
-				ev.SessionID, sessionID,
+				events[i].SessionID, sessionID,
 			)
 		}
-		var ordinal any
-		if ev.MessageOrdinal != nil {
-			ordinal = *ev.MessageOrdinal
-		}
-		var cost any
-		if ev.Cost != nil {
-			cost = ev.Cost.Microdollars
-		}
-		var occurredAt any
-		if ev.OccurredAt != "" {
-			occurredAt = ev.OccurredAt
-		}
-		if _, err := tx.Exec(`
-			INSERT INTO usage_events (
-				session_id, message_ordinal, source, model,
-				input_tokens, output_tokens,
-				cache_creation_input_tokens, cache_read_input_tokens,
-				reasoning_tokens, cost_microdollars, cost_status, cost_source,
-				occurred_at, dedup_key
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			ev.SessionID, ordinal, ev.Source, ev.Model,
-			ev.InputTokens, ev.OutputTokens,
-			ev.CacheCreationInputTokens, ev.CacheReadInputTokens,
-			ev.ReasoningTokens, cost, ev.CostStatus, ev.CostSource,
-			occurredAt, ev.DedupKey,
-		); err != nil {
-			return fmt.Errorf("inserting usage event: %w", err)
-		}
+	}
+	rows, err := CanonicalUsageEventRows(events)
+	if err != nil {
+		return err
+	}
+	if err := ReplaceUsageEventRows(ctx, tx, sessionID, rows); err != nil {
+		return err
 	}
 
 	// Bump local_modified_at so the sync_marker trigger fires and push
@@ -138,23 +103,18 @@ func replaceSessionUsageEventsTx(
 	// a usage-only rewrite (e.g. a pricing-driven recompute) touches no
 	// other marker signal, so without this the change would never become
 	// an incremental push candidate (see updateSessionSignalsTx).
-	if _, err := tx.Exec(
-		`UPDATE sessions
-		    SET local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		  WHERE id = ?`,
-		sessionID,
-	); err != nil {
+	if _, err := tx.NewUpdate().Model((*bunmodel.Session)(nil)).
+		Set("local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')").
+		Where("id = ?", sessionID).Exec(ctx); err != nil {
 		return fmt.Errorf(
 			"bumping local_modified_at for %s after usage replace: %w",
 			sessionID, err,
 		)
 	}
-	if enqueueArtifact {
-		if err := enqueueArtifactExportTx(tx, sessionID); err != nil {
-			return err
-		}
+	if err := enqueueArtifactExportTx(tx.Tx, sessionID); err != nil {
+		return err
 	}
-	return nil
+	return tx.Commit()
 }
 
 // GetUsageEvents returns usage events for one session in stable order.

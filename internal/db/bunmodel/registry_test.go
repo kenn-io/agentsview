@@ -342,6 +342,25 @@ func TestBunRowTimestampValuePersistsRFC3339NanoText(t *testing.T) {
 	assert.Equal(t, "2026-08-02T16:30:00.123456789Z", got)
 }
 
+func TestBunRowTimestampAppenderPersistsRFC3339NanoWithoutAllocation(t *testing.T) {
+	value := NewTimestamp(time.Date(
+		2026, 8, 2, 12, 30, 0, 123_456_789,
+		time.FixedZone("EDT", -4*60*60),
+	))
+	gen := schema.NewQueryGen(sqlitedialect.New())
+	query := make([]byte, 0, 64)
+	var appendErr error
+
+	allocations := testing.AllocsPerRun(100, func() {
+		query = query[:0]
+		query, appendErr = value.AppendQuery(gen, query)
+	})
+
+	require.NoError(t, appendErr)
+	assert.Equal(t, `'2026-08-02T16:30:00.123456789Z'`, string(query))
+	assert.Zero(t, allocations)
+}
+
 func TestBunRowTimestampScannerPreservesDatabaseNull(t *testing.T) {
 	var got Timestamp
 	require.NoError(t, got.Scan(nil))

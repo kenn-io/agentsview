@@ -112,6 +112,25 @@ func TestGetDailyUsageKeepsPricingRowsAndIdentityInOneView(t *testing.T) {
 	assert.Equal(t, 2, backend.attempts)
 }
 
+func TestLoadBunNormalizedDailyUsageRowsFiltersOrdinaryStreamsBeforeScan(t *testing.T) {
+	database := testDB(t)
+	hook := new(countingQueryHook)
+	store := database.bunReader.WithQueryHook(hook)
+	common := NewBunStore(&sessionContractBackend{store: store})
+	filter := UsageFilter{Timezone: "UTC", Model: "wanted-model"}
+
+	_, err := common.loadBunNormalizedDailyUsageRows(
+		t.Context(), store, usageSnapshotInputFilter(filter), filter,
+	)
+	require.NoError(t, err)
+	require.Len(t, hook.queries, 3)
+	assert.Contains(t, hook.queries[0], "m.model IN ('wanted-model')")
+	assert.Contains(t, hook.queries[0], "m.claude_message_id = ''")
+	assert.Contains(t, hook.queries[1], "ue.model IN ('wanted-model')")
+	assert.NotContains(t, hook.queries[2], "m.model IN ('wanted-model')")
+	assert.Contains(t, hook.queries[2], "m.claude_message_id != ''")
+}
+
 // A missing ID predicate would admit ignored-session rows, adapter-specific
 // ordering would choose the wrong cross-session duplicate, and treating a
 // Copilot total as an ordinary row cost would double-count the root session.
@@ -251,6 +270,31 @@ func TestAppendBunUsageTerminationFilterUsesProvidedReference(t *testing.T) {
 	)
 	require.NoError(t, query.OrderExpr("s.id ASC").Scan(t.Context(), &ids))
 	assert.Equal(t, []string{"active", "stale", "unclean"}, ids)
+}
+
+func TestBunDailyUsageQueriesUseProvidedReference(t *testing.T) {
+	database := testDB(t)
+	reference := time.Date(2030, 1, 2, 12, 0, 0, 0, time.UTC)
+	ended := reference.Add(-5 * time.Minute).Format(time.RFC3339Nano)
+	require.NoError(t, database.UpsertSession(Session{
+		ID: "active-at-reference", Project: "clock", Machine: "host", Agent: "codex",
+		CreatedAt: ended, StartedAt: &ended, EndedAt: &ended,
+		MessageCount: 1,
+	}))
+	insertMessages(t, database, Message{
+		SessionID: "active-at-reference", Ordinal: 0, Role: "assistant",
+		Timestamp: ended, Model: "usage-model",
+		TokenUsage: []byte(`{"input_tokens":1}`),
+	})
+
+	messageQuery, _ := NewBunStore(&sqliteBunBackend{store: database}).
+		bunDailyUsageQueries(
+			database.bunReader, UsageFilter{Termination: "active"}, false, reference,
+		)
+	var rows []bunDailyUsageProjection
+	require.NoError(t, messageQuery.Scan(t.Context(), &rows))
+	require.Len(t, rows, 1)
+	assert.Equal(t, "active-at-reference", rows[0].SessionID)
 }
 
 func TestAppendBunUsageTerminationFilterKeepsExactCutoffSemantics(t *testing.T) {
@@ -394,6 +438,30 @@ func TestCanonicalModelPricingRowsPreserveBandsAndMoney(t *testing.T) {
 	assert.Equal(t, int64(200_000), bands[0].AboveInputTokens)
 	assert.Equal(t, int64(55), bands[0].InputMicrodollarsPerMTok)
 	assert.Equal(t, prices[0].UpdatedAt, bands[0].UpdatedAt)
+}
+
+func TestCanonicalModelPricingRowsRoundTimestampsToPostgresPrecision(
+	t *testing.T,
+) {
+	prices, bands, err := CanonicalModelPricingRows([]ModelPricing{{
+		ModelPattern: "base-model",
+		UpdatedAt:    "2026-08-09T04:09:57.836404600Z",
+		Bands: []PricingBand{{
+			AboveInputTokens: 100,
+			UpdatedAt:        "2026-08-09T04:09:57.310283500Z",
+		}},
+	}})
+	require.NoError(t, err)
+	require.Len(t, prices, 1)
+	require.Len(t, bands, 1)
+	assert.Equal(t,
+		time.Date(2026, 8, 9, 4, 9, 57, 836_405_000, time.UTC),
+		prices[0].UpdatedAt.Time,
+	)
+	assert.Equal(t,
+		time.Date(2026, 8, 9, 4, 9, 57, 310_284_000, time.UTC),
+		bands[0].UpdatedAt.Time,
+	)
 }
 
 func TestCanonicalModelPricingRowsRejectInvalidTimestamp(t *testing.T) {

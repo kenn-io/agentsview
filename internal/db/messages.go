@@ -13,6 +13,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/uptrace/bun"
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -28,16 +30,6 @@ const (
 		source_type, source_subtype, prompt_source, source_uuid,
 		source_parent_uuid, is_sidechain, is_compact_boundary`
 
-	insertMessageCols = `session_id, ordinal, role, content,
-		thinking_text,
-		timestamp, has_thinking, has_tool_use, content_length,
-		is_system,
-		model, token_usage, context_tokens, output_tokens,
-		has_context_tokens, has_output_tokens,
-		claude_message_id, claude_request_id,
-		source_type, source_subtype, prompt_source, source_uuid,
-		source_parent_uuid, is_sidechain, is_compact_boundary`
-
 	// DefaultMessageLimit is the default number of messages returned.
 	DefaultMessageLimit = 100
 	// MaxMessageLimit is the maximum number of messages returned.
@@ -46,13 +38,6 @@ const (
 	// Keep query parameter counts conservative so large sessions
 	// do not exceed SQLite variable limits when hydrating tool calls.
 	attachToolCallBatchSize = 500
-
-	// Keep multi-row INSERT statements below SQLite's historic
-	// 999-variable limit so binaries built against older SQLite
-	// versions still work.
-	messageInsertRowsPerStmt         = 38 // 26 params per row
-	toolCallInsertRowsPerStmt        = 76 // 13 params per row (999/13 = 76)
-	toolResultEventInsertRowsPerStmt = 80 // 12 params per row
 )
 
 // ToolCall represents a single tool invocation stored in
@@ -92,6 +77,29 @@ type ToolResultEvent struct {
 	ContentLength     int    `json:"content_length"`
 	Timestamp         string `json:"timestamp,omitempty"`
 	EventIndex        int    `json:"event_index"`
+}
+
+// CanonicalToolResultEventIndexes returns the event indexes used by every
+// persistence consumer. Distinct provider indexes are preserved; duplicate
+// indexes fall back to slice positions so the canonical key remains unique.
+func CanonicalToolResultEventIndexes(events []ToolResultEvent) []int {
+	indexes := make([]int, len(events))
+	seen := make(map[int]struct{}, len(events))
+	unique := true
+	for _, event := range events {
+		if _, exists := seen[event.EventIndex]; exists {
+			unique = false
+			break
+		}
+		seen[event.EventIndex] = struct{}{}
+	}
+	for position, event := range events {
+		indexes[position] = event.EventIndex
+		if !unique {
+			indexes[position] = position
+		}
+	}
+	return indexes
 }
 
 // Message represents a row in the messages table.
@@ -481,179 +489,11 @@ func parseEndedAt(s string) (time.Time, error) {
 	return time.Parse(time.RFC3339, s)
 }
 
-// insertMessagesTx batch-inserts messages within an existing
-// transaction. Returns a slice of message IDs parallel to the
-// input msgs slice. The caller must hold db.mu.
-func insertMessagesTx(
-	tx *sql.Tx, msgs []Message,
-) ([]int64, error) {
-	ids := make([]int64, len(msgs))
-	nextID, err := nextMessageIDTx(tx)
-	if err != nil {
-		return nil, err
-	}
-
-	for start := 0; start < len(msgs); start += messageInsertRowsPerStmt {
-		end := min(start+messageInsertRowsPerStmt, len(msgs))
-		batch := msgs[start:end]
-		args := make([]any, 0, len(batch)*26)
-		for i, m := range batch {
-			id := nextID + int64(start+i)
-			ids[start+i] = id
-			args = append(args, id)
-			args = append(args, messageInsertArgs(m)...)
-		}
-		query := fmt.Sprintf(
-			"INSERT INTO messages (id, %s) VALUES %s",
-			insertMessageCols,
-			multiRowPlaceholders(len(batch), 26),
-		)
-		if _, err := tx.Exec(query, args...); err != nil {
-			first := batch[0].Ordinal
-			last := batch[len(batch)-1].Ordinal
-			return nil, fmt.Errorf(
-				"inserting messages ord=%d..%d: %w",
-				first, last, err,
-			)
-		}
-	}
-	return ids, nil
-}
-
-func nextMessageIDTx(tx *sql.Tx) (int64, error) {
-	var n sql.NullInt64
-	if err := tx.QueryRow("SELECT MAX(id) FROM messages").Scan(&n); err != nil {
-		return 0, fmt.Errorf("reading next message id: %w", err)
-	}
-	if !n.Valid {
-		return 1, nil
-	}
-	return n.Int64 + 1, nil
-}
-
-func multiRowPlaceholders(rows, cols int) string {
-	var b strings.Builder
-	for i := range rows {
-		if i > 0 {
-			b.WriteByte(',')
-		}
-		b.WriteByte('(')
-		for j := range cols {
-			if j > 0 {
-				b.WriteByte(',')
-			}
-			b.WriteByte('?')
-		}
-		b.WriteByte(')')
-	}
-	return b.String()
-}
-
-func insertToolCallsChunkTx(
-	tx *sql.Tx, calls []ToolCall,
-) error {
-	args := make([]any, 0, len(calls)*13)
-	for _, tc := range calls {
-		args = append(args,
-			tc.MessageID, tc.SessionID, tc.MessageOrdinal,
-			tc.ToolName, tc.Category,
-			nilIfEmpty(tc.ToolUseID),
-			nilIfEmpty(tc.InputJSON),
-			nilIfEmpty(tc.SkillName),
-			nilIfZero(tc.ResultContentLength),
-			nilIfEmpty(tc.ResultContent),
-			nilIfEmpty(tc.SubagentSessionID),
-			nilIfEmpty(tc.FilePath),
-			tc.CallIndex,
-		)
-	}
-	query := `
-		INSERT INTO tool_calls
-			(message_id, session_id, message_ordinal, tool_name, category,
-			 tool_use_id, input_json, skill_name,
-			 result_content_length, result_content, subagent_session_id,
-			 file_path, call_index)
-		VALUES ` + multiRowPlaceholders(len(calls), 13)
-	if _, err := tx.Exec(query, args...); err != nil {
-		return fmt.Errorf(
-			"inserting tool_calls batch (%d rows): %w",
-			len(calls), err,
-		)
-	}
-	return nil
-}
-
-func insertToolResultEventsChunkTx(
-	tx *sql.Tx, rows []toolResultEventRow,
-) error {
-	args := make([]any, 0, len(rows)*12)
-	for _, r := range rows {
-		args = append(args,
-			r.SessionID, r.MessageOrdinal, r.CallIndex,
-			nilIfEmpty(r.Event.ToolUseID),
-			nilIfEmpty(r.Event.AgentID),
-			nilIfEmpty(r.Event.SubagentSessionID),
-			r.Event.Source, r.Event.Status,
-			r.Event.Content,
-			r.Event.ContentLength,
-			nilIfEmpty(r.Event.Timestamp),
-			r.Event.EventIndex,
-		)
-	}
-	query := `
-		INSERT INTO tool_result_events
-			(session_id, tool_call_message_ordinal, call_index,
-			 tool_use_id, agent_id, subagent_session_id,
-			 source, status, content, content_length,
-			 timestamp, event_index)
-		VALUES ` + multiRowPlaceholders(len(rows), 12)
-	if _, err := tx.Exec(query, args...); err != nil {
-		return fmt.Errorf(
-			"inserting tool_result_events batch (%d rows): %w",
-			len(rows), err,
-		)
-	}
-	return nil
-}
-
 func nilIfEmpty(s string) any {
 	if s == "" {
 		return nil
 	}
 	return s
-}
-
-func nilIfZero(n int) any {
-	if n == 0 {
-		return nil
-	}
-	return n
-}
-
-// insertToolCallsTx batch-inserts tool calls within an
-// existing transaction.
-func insertToolCallsTx(
-	tx *sql.Tx, calls []ToolCall,
-) error {
-	for start := 0; start < len(calls); start += toolCallInsertRowsPerStmt {
-		end := min(start+toolCallInsertRowsPerStmt, len(calls))
-		if err := insertToolCallsChunkTx(tx, calls[start:end]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func insertToolResultEventsTx(
-	tx *sql.Tx, rows []toolResultEventRow,
-) error {
-	for start := 0; start < len(rows); start += toolResultEventInsertRowsPerStmt {
-		end := min(start+toolResultEventInsertRowsPerStmt, len(rows))
-		if err := insertToolResultEventsChunkTx(tx, rows[start:end]); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 const slowOpThreshold = 100 * time.Millisecond
@@ -666,6 +506,8 @@ func (db *DB) InsertMessages(msgs []Message) error {
 	if len(msgs) == 0 {
 		return nil
 	}
+	msgs = append([]Message(nil), msgs...)
+	_ = ValidateAndSanitize(nil, msgs, nil)
 	t := time.Now()
 	defer func() {
 		if d := time.Since(t); d > slowOpThreshold {
@@ -679,26 +521,31 @@ func (db *DB) InsertMessages(msgs []Message) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	tx, err := db.getWriter().Begin()
+	sessionID := msgs[0].SessionID
+	for _, msg := range msgs {
+		if msg.SessionID == "" {
+			return errors.New("inserting canonical message: empty session id")
+		}
+	}
+
+	ctx := context.Background()
+	bunTx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = bunTx.Rollback() }()
+	tx := bunTx.Tx
+	var pendingRecallRevocations recallEvidenceRevocationEvents
 
-	ids, err := insertMessagesTx(tx, msgs)
-	if err != nil {
-		return err
-	}
-
-	toolCalls := resolveToolCalls(msgs, ids)
-	if err := insertToolCallsTx(tx, toolCalls); err != nil {
-		return err
-	}
-	events := resolveToolResultEvents(msgs)
-	if err := insertToolResultEventsTx(tx, events); err != nil {
-		return err
-	}
-	for _, sessionID := range messageSessionIDs(msgs) {
+	writeSession := func(sessionID string, sessionMessages []Message) error {
+		if err := appendCanonicalMessageGraph(ctx, bunTx, sessionID, sessionMessages); err != nil {
+			return err
+		}
+		if err := reconcileRecallEvidenceForSessionTx(
+			ctx, tx, sessionID, &pendingRecallRevocations,
+		); err != nil {
+			return err
+		}
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 			return err
 		}
@@ -710,8 +557,35 @@ func (db *DB) InsertMessages(msgs []Message) error {
 		if err := invalidateSessionSignalsTx(tx, sessionID); err != nil {
 			return err
 		}
+		return nil
 	}
-	return tx.Commit()
+	oneSession := true
+	for _, msg := range msgs[1:] {
+		if msg.SessionID != sessionID {
+			oneSession = false
+			break
+		}
+	}
+	if oneSession {
+		if err := writeSession(sessionID, msgs); err != nil {
+			return err
+		}
+	} else {
+		grouped := make(map[string][]Message)
+		for _, msg := range msgs {
+			grouped[msg.SessionID] = append(grouped[msg.SessionID], msg)
+		}
+		for _, groupedSessionID := range messageSessionIDs(msgs) {
+			if err := writeSession(groupedSessionID, grouped[groupedSessionID]); err != nil {
+				return err
+			}
+		}
+	}
+	if err := bunTx.Commit(); err != nil {
+		return err
+	}
+	pendingRecallRevocations.flush()
+	return nil
 }
 
 // invalidateSessionSignalsTx zeroes quality_signal_version so the
@@ -734,23 +608,49 @@ func invalidateSessionSignalsTx(tx *sql.Tx, sessionID string) error {
 	return nil
 }
 
-func writeMessagesTx(tx *sql.Tx, msgs []Message) error {
-	if len(msgs) == 0 {
-		return nil
+func appendCanonicalMessageGraph(
+	ctx context.Context, tx bun.IDB, sessionID string, msgs []Message,
+) error {
+	for _, msg := range msgs {
+		if msg.SessionID != sessionID {
+			return fmt.Errorf(
+				"canonical message session id %q does not match %q",
+				msg.SessionID, sessionID,
+			)
+		}
 	}
-	ids, err := insertMessagesTx(tx, msgs)
+	if err := appendArchiveMessageRows(ctx, tx, sessionID, msgs); err != nil {
+		return err
+	}
+	callRows, resultRows, err := canonicalToolRows(msgs)
 	if err != nil {
 		return err
 	}
-	toolCalls := resolveToolCalls(msgs, ids)
-	if err := insertToolCallsTx(tx, toolCalls); err != nil {
+	return AppendToolRows(ctx, tx, sessionID, callRows, resultRows)
+}
+
+func repairArchiveMessageGraph(
+	ctx context.Context, tx bun.IDB, sessionID string,
+	affectedOrdinals []int, messages []Message,
+) error {
+	canonicalInput := append([]Message(nil), messages...)
+	for i := range canonicalInput {
+		canonicalInput[i].Timestamp = ""
+	}
+	messageRows, callRows, resultRows, err := CanonicalMessageRows(canonicalInput)
+	if err != nil {
 		return err
 	}
-	events := resolveToolResultEvents(msgs)
-	if err := insertToolResultEventsTx(tx, events); err != nil {
+	if err := prepareMessageRepair(
+		ctx, tx, sessionID, affectedOrdinals,
+		messageRows, callRows, resultRows,
+	); err != nil {
 		return err
 	}
-	return nil
+	if err := repairArchiveMessageRows(ctx, tx, sessionID, messages); err != nil {
+		return err
+	}
+	return appendToolRows(ctx, tx, sessionID, callRows, resultRows)
 }
 
 func (db *DB) WriteSessionIncremental(
@@ -769,13 +669,18 @@ func (db *DB) WriteSessionIncremental(
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	tx, err := db.getWriter().Begin()
+	ctx := context.Background()
+	bunTx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning incremental write tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = bunTx.Rollback() }()
+	tx := bunTx.Tx
+	var pendingRecallRevocations recallEvidenceRevocationEvents
 
-	if err := writeMessagesTx(tx, msgs); err != nil {
+	if err := appendCanonicalMessageGraph(
+		ctx, bunTx, sessionID, msgs,
+	); err != nil {
 		return err
 	}
 	transcriptChanged := len(msgs) > 0
@@ -787,6 +692,13 @@ func (db *DB) WriteSessionIncremental(
 			return err
 		}
 		transcriptChanged = transcriptChanged || changed
+	}
+	if transcriptChanged {
+		if err := reconcileRecallEvidenceForSessionTx(
+			ctx, tx, sessionID, &pendingRecallRevocations,
+		); err != nil {
+			return err
+		}
 	}
 	if transcriptChanged {
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
@@ -802,9 +714,10 @@ func (db *DB) WriteSessionIncremental(
 	if err := invalidateSessionSignalsTx(tx, sessionID); err != nil {
 		return err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := bunTx.Commit(); err != nil {
 		return fmt.Errorf("committing incremental write tx: %w", err)
 	}
+	pendingRecallRevocations.flush()
 	return nil
 }
 
@@ -919,13 +832,15 @@ func (db *DB) replaceArchiveSessionMessages(
 	transcriptChanged := !storedLoaded ||
 		!transcriptMessagesEqual(stored, msgs)
 
-	tx, err := db.getWriter().Begin()
+	ctx := context.Background()
+	bunTx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = bunTx.Rollback() }()
+	tx := bunTx.Tx
 	if useDiff {
-		needsPinRemap, err := messageDiffNeedsPinRemapTx(tx, plan)
+		needsPinRemap, err := messageDiffNeedsPinRemap(ctx, bunTx, plan)
 		if err != nil {
 			return err
 		}
@@ -942,10 +857,14 @@ func (db *DB) replaceArchiveSessionMessages(
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
 	if useDiff {
-		if err := applySessionMessageDiffTx(tx, sessionID, plan); err != nil {
+		if err := applySessionMessageDiffTx(
+			ctx, bunTx, sessionID, plan,
+		); err != nil {
 			return err
 		}
-	} else if err := replaceSessionMessagesTx(tx, sessionID, msgs); err != nil {
+	} else if err := replaceSessionMessagesTx(
+		ctx, bunTx, tx, sessionID, msgs,
+	); err != nil {
 		return err
 	}
 	if transcriptChanged {
@@ -953,7 +872,7 @@ func (db *DB) replaceArchiveSessionMessages(
 			return err
 		}
 	}
-	if !useDiff || len(plan.updates) > 0 {
+	if !useDiff || len(plan.updates) > 0 || len(plan.inserts) > 0 {
 		if err := reconcileRecallEvidenceForSessionTx(
 			context.Background(), tx, sessionID, &pendingRecallRevocations,
 		); err != nil {
@@ -971,8 +890,10 @@ func (db *DB) replaceArchiveSessionMessages(
 	// The new messages invalidate any findings scanned from the old content, so
 	// clear them and reset the scan state (empty version => secrets scan
 	// --backfill re-scans). ReplaceSessionContent does not call this method; it
-	// supplies fresh findings via replaceSecretFindingsTx directly.
-	if err := replaceSecretFindingsTx(tx, sessionID, nil, 0, ""); err != nil {
+	// supplies fresh findings through the same canonical replacement helper.
+	if err := replaceSessionSecretFindingsBunTx(
+		ctx, bunTx, sessionID, nil, 0, "",
+	); err != nil {
 		return err
 	}
 	if err := invalidateSessionSignalsTx(tx, sessionID); err != nil {
@@ -983,7 +904,7 @@ func (db *DB) replaceArchiveSessionMessages(
 	); err != nil {
 		return err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := bunTx.Commit(); err != nil {
 		return err
 	}
 	pendingRecallRevocations.flush()
@@ -996,7 +917,8 @@ func (db *DB) replaceArchiveSessionMessages(
 // + tool_calls + tool_result_events, then restores pins. Caller owns the lock
 // and transaction lifecycle.
 func replaceSessionMessagesTx(
-	tx *sql.Tx, sessionID string, msgs []Message,
+	ctx context.Context, bunTx bun.IDB, tx *sql.Tx,
+	sessionID string, msgs []Message,
 ) error {
 	pins, err := savePinsTx(tx, sessionID)
 	if err != nil {
@@ -1007,19 +929,10 @@ func replaceSessionMessagesTx(
 		return err
 	}
 
-	if len(msgs) > 0 {
-		ids, err := insertMessagesTx(tx, msgs)
-		if err != nil {
-			return err
-		}
-		toolCalls := resolveToolCalls(msgs, ids)
-		if err := insertToolCallsTx(tx, toolCalls); err != nil {
-			return err
-		}
-		events := resolveToolResultEvents(msgs)
-		if err := insertToolResultEventsTx(tx, events); err != nil {
-			return err
-		}
+	if err := appendCanonicalMessageGraph(
+		ctx, bunTx, sessionID, msgs,
+	); err != nil {
+		return err
 	}
 
 	return restorePinsTx(tx, sessionID, pins)
@@ -1146,13 +1059,15 @@ func (db *DB) ReplaceSessionContent(
 	transcriptChanged := !storedLoaded ||
 		!transcriptMessagesEqual(stored, msgs)
 
-	tx, err := db.getWriter().Begin()
+	ctx := context.Background()
+	bunTx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = bunTx.Rollback() }()
+	tx := bunTx.Tx
 	if useDiff {
-		needsPinRemap, err := messageDiffNeedsPinRemapTx(tx, plan)
+		needsPinRemap, err := messageDiffNeedsPinRemap(ctx, bunTx, plan)
 		if err != nil {
 			return err
 		}
@@ -1169,10 +1084,14 @@ func (db *DB) ReplaceSessionContent(
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
 	if useDiff {
-		if err := applySessionMessageDiffTx(tx, sessionID, plan); err != nil {
+		if err := applySessionMessageDiffTx(
+			ctx, bunTx, sessionID, plan,
+		); err != nil {
 			return err
 		}
-	} else if err := replaceSessionMessagesTx(tx, sessionID, msgs); err != nil {
+	} else if err := replaceSessionMessagesTx(
+		ctx, bunTx, tx, sessionID, msgs,
+	); err != nil {
 		return err
 	}
 	if transcriptChanged {
@@ -1180,7 +1099,7 @@ func (db *DB) ReplaceSessionContent(
 			return err
 		}
 	}
-	if !useDiff || len(plan.updates) > 0 {
+	if !useDiff || len(plan.updates) > 0 || len(plan.inserts) > 0 {
 		if err := reconcileRecallEvidenceForSessionTx(
 			context.Background(), tx, sessionID, &pendingRecallRevocations,
 		); err != nil {
@@ -1198,11 +1117,13 @@ func (db *DB) ReplaceSessionContent(
 	if err := updateSessionSignalsTx(tx, sessionID, signals); err != nil {
 		return err
 	}
-	// replaceSecretFindingsTx is the sole writer of secret_leak_count/
+	// The canonical findings helper owns secret_leak_count and
 	// secrets_rules_version (updateSessionSignalsTx leaves them untouched), so
 	// the count cannot diverge from the findings it summarizes.
-	if err := replaceSecretFindingsTx(tx, sessionID, findings,
-		signals.SecretLeakCount, signals.SecretsRulesVersion); err != nil {
+	if err := replaceSessionSecretFindingsBunTx(
+		ctx, bunTx, sessionID, findings,
+		signals.SecretLeakCount, signals.SecretsRulesVersion,
+	); err != nil {
 		return err
 	}
 	if err := enqueueArtifactExportIfGenerationUnchangedTx(
@@ -1210,7 +1131,7 @@ func (db *DB) ReplaceSessionContent(
 	); err != nil {
 		return err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := bunTx.Commit(); err != nil {
 		return err
 	}
 	pendingRecallRevocations.flush()
@@ -1793,12 +1714,34 @@ func scanMessages(rows *sql.Rows) ([]Message, error) {
 		if err != nil {
 			return nil, fmt.Errorf("scanning message: %w", err)
 		}
+		m.Timestamp, err = canonicalStoredMessageTimestamp(m.Timestamp)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"scanning message %s ordinal %d timestamp: %w",
+				m.SessionID, m.Ordinal, err,
+			)
+		}
 		if tokenUsage != "" {
 			m.TokenUsage = json.RawMessage(tokenUsage)
 		}
 		msgs = append(msgs, m)
 	}
 	return msgs, rows.Err()
+}
+
+func canonicalStoredMessageTimestamp(value string) (string, error) {
+	if value == "" {
+		return "", nil
+	}
+	timestamp, err := bunmodel.ParseTimestamp(value)
+	if err != nil {
+		return "", err
+	}
+	if !isPlausibleTime(timestamp.Time) {
+		return "", fmt.Errorf("implausible timestamp %q", value)
+	}
+	return timestamp.Time.UTC().Truncate(time.Microsecond).
+		Format(time.RFC3339Nano), nil
 }
 
 // MessageCount returns the number of messages for a session.
@@ -1947,8 +1890,7 @@ func (db *DB) MessageContentHashFingerprint(sessionID string) (string, error) {
 // MessageTokenFingerprint, which deliberately excludes these two
 // columns; without it, role-only or timestamp-only parser drift would
 // never trigger the tier-2 row comparison. Role is sanitized to mirror
-// the tier-2 compare in messageMetadataDiff; timestamp is compared raw
-// there, so it stays raw here. timestamp is nullable, so a NULL is
+// the tier-2 compare in messageMetadataDiff. timestamp is nullable, so a NULL is
 // coalesced to the empty string to match both the in-memory twin (which
 // emits "" for a zero-value Go timestamp) and the tier-2 read path
 // (selectMessageCols coalesces the same way); without it a single
@@ -1986,6 +1928,13 @@ func (db *DB) MessageRoleTimeFingerprintWithTimestampNormalizer(
 		var role, timestamp string
 		if err := rows.Scan(&ordinal, &role, &timestamp); err != nil {
 			return "", err
+		}
+		timestamp, err = canonicalStoredMessageTimestamp(timestamp)
+		if err != nil {
+			return "", fmt.Errorf(
+				"fingerprinting message %s ordinal %d timestamp: %w",
+				sessionID, ordinal, err,
+			)
 		}
 		appendRoleTimeFingerprintRow(
 			&b, ordinal, role, timestamp, normalizeTimestamp,
@@ -2360,79 +2309,15 @@ func (db *DB) GetMessageByOrdinal(
 	if err != nil {
 		return nil, err
 	}
+	m.Timestamp, err = canonicalStoredMessageTimestamp(m.Timestamp)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"reading message %s ordinal %d timestamp: %w",
+			sessionID, ordinal, err,
+		)
+	}
 	if tokenUsage != "" {
 		m.TokenUsage = json.RawMessage(tokenUsage)
 	}
 	return &m, nil
-}
-
-// resolveToolCalls builds ToolCall rows from messages using
-// the parallel IDs slice from insertMessagesTx. CallIndex is derived
-// from each call's position within its message, so callers (sync,
-// importer) need not prepopulate it. Panics if len(ids) != len(msgs)
-// since that indicates a caller bug.
-func resolveToolCalls(
-	msgs []Message, ids []int64,
-) []ToolCall {
-	if len(ids) != len(msgs) {
-		panic(fmt.Sprintf(
-			"resolveToolCalls: len(ids)=%d != len(msgs)=%d",
-			len(ids), len(msgs),
-		))
-	}
-	var calls []ToolCall
-	for i, m := range msgs {
-		for callIdx, tc := range m.ToolCalls {
-			calls = append(calls, ToolCall{
-				MessageID:           ids[i],
-				SessionID:           m.SessionID,
-				MessageOrdinal:      m.Ordinal,
-				ToolName:            tc.ToolName,
-				Category:            tc.Category,
-				ToolUseID:           tc.ToolUseID,
-				InputJSON:           tc.InputJSON,
-				SkillName:           tc.SkillName,
-				ResultContentLength: tc.ResultContentLength,
-				ResultContent:       tc.ResultContent,
-				SubagentSessionID:   tc.SubagentSessionID,
-				FilePath:            tc.FilePath,
-				CallIndex:           callIdx,
-			})
-		}
-	}
-	return calls
-}
-
-type toolResultEventRow struct {
-	SessionID      string
-	MessageOrdinal int
-	CallIndex      int
-	Event          ToolResultEvent
-}
-
-func resolveToolResultEvents(msgs []Message) []toolResultEventRow {
-	var rows []toolResultEventRow
-	for _, m := range msgs {
-		for callIndex, tc := range m.ToolCalls {
-			for eventIndex, ev := range tc.ResultEvents {
-				ev.EventIndex = eventIndex
-				if ev.ContentLength == 0 {
-					ev.ContentLength = len(ev.Content)
-				}
-				if ev.ToolUseID == "" {
-					ev.ToolUseID = tc.ToolUseID
-				}
-				if ev.SubagentSessionID == "" {
-					ev.SubagentSessionID = tc.SubagentSessionID
-				}
-				rows = append(rows, toolResultEventRow{
-					SessionID:      m.SessionID,
-					MessageOrdinal: m.Ordinal,
-					CallIndex:      callIndex,
-					Event:          ev,
-				})
-			}
-		}
-	}
-	return rows
 }

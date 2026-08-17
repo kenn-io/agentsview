@@ -10,11 +10,15 @@ import (
 	"go.kenn.io/agentsview/internal/secrets"
 )
 
+func syntheticAWSAccessKey() string {
+	return "AKIA" + "7QHWN2DKR4FYPLJM"
+}
+
 func TestScanSecretsFromMessages(t *testing.T) {
 	sess := db.Session{ID: "s1"}
 	msgs := []db.Message{
 		{SessionID: "s1", Ordinal: 0, Role: "user",
-			Content: "my key AKIA7QHWN2DKR4FYPLJM here"},
+			Content: "my key " + syntheticAWSAccessKey() + " here"},
 		{SessionID: "s1", Ordinal: 1, Role: "assistant", Content: "running",
 			ToolCalls: []db.ToolCall{{
 				ToolName: "Bash", ToolUseID: "tu1",
@@ -44,10 +48,10 @@ func TestScanSecretsDedupEventsVsResult(t *testing.T) {
 		SessionID: "s1", Ordinal: 0, Role: "assistant",
 		ToolCalls: []db.ToolCall{{
 			ToolName: "Bash", ToolUseID: "tu1",
-			ResultContent: "AKIA7QHWN2DKR4FYPLJM",
+			ResultContent: syntheticAWSAccessKey(),
 			ResultEvents: []db.ToolResultEvent{{
 				ToolUseID: "tu1", Status: "completed",
-				Content: "AKIA7QHWN2DKR4FYPLJM", EventIndex: 0,
+				Content: syntheticAWSAccessKey(), EventIndex: 0,
 			}},
 		}},
 	}}
@@ -61,22 +65,15 @@ func TestScanSecretsDedupEventsVsResult(t *testing.T) {
 	require.Equal(t, 1, n, "expected 1 aws finding (event canonical), got %d", n)
 }
 
-// TestScanSecretsResultEventIndexIsSlicePosition pins the contract that makes
-// --reveal work for tool_result_event findings: the scanner must record the
-// slice position (what resolveToolResultEvents persists as event_index), not
-// the ToolResultEvent.EventIndex field, so SecretFindingSource can re-locate
-// the source after a round-trip.
-func TestScanSecretsResultEventIndexIsSlicePosition(t *testing.T) {
+func TestScanSecretsResultEventIndexUsesCanonicalIndex(t *testing.T) {
 	sess := db.Session{ID: "s1"}
-	// The secret is in the second event (slice position 1); its EventIndex
-	// field is a non-positional value to prove the scanner ignores it.
 	msgs := []db.Message{{
 		SessionID: "s1", Ordinal: 0, Role: "assistant",
 		ToolCalls: []db.ToolCall{{
 			ToolName: "Bash", ToolUseID: "tu1",
 			ResultEvents: []db.ToolResultEvent{
 				{Status: "running", Content: "starting up", EventIndex: 5},
-				{Status: "completed", Content: "AKIA7QHWN2DKR4FYPLJM", EventIndex: 9},
+				{Status: "completed", Content: syntheticAWSAccessKey(), EventIndex: 9},
 			},
 		}},
 	}}
@@ -90,8 +87,103 @@ func TestScanSecretsResultEventIndexIsSlicePosition(t *testing.T) {
 	}
 	require.NotNil(t, got, "no aws-access-key finding: %+v", findings)
 	assert.Equal(t, "tool_result_event", got.LocationKind)
-	require.NotNil(t, got.EventIndex, "EventIndex = nil, want slice position 1")
-	assert.Equal(t, 1, *got.EventIndex, "EventIndex = %v, want slice position 1", *got.EventIndex)
+	require.NotNil(t, got.EventIndex)
+	assert.Equal(t, 9, *got.EventIndex)
+}
+
+func TestScanSecretsResultEventIndexSurvivesPersistence(t *testing.T) {
+	fx := newEngineFixture(t)
+	const sessionID = "persisted-event-index"
+	session := db.Session{
+		ID: sessionID, Project: "proj", Machine: "machine", Agent: "claude",
+		MessageCount: 1,
+	}
+	messages := []db.Message{{
+		SessionID: sessionID, Ordinal: 0, Role: "assistant",
+		ToolCalls: []db.ToolCall{{
+			ToolName: "Bash", ToolUseID: "tool-1",
+			ResultEvents: []db.ToolResultEvent{
+				{Status: "running", Content: "starting up", EventIndex: 5},
+				{Status: "completed", Content: syntheticAWSAccessKey(), EventIndex: 9},
+			},
+		}},
+	}}
+	require.NoError(t, fx.db.UpsertSession(session))
+	require.NoError(t, fx.db.ReplaceSessionMessages(sessionID, messages))
+	findings, leak := scanSecretsFromMessages(session, messages, secrets.Scan)
+	require.NoError(t, fx.db.ReplaceSessionSecretFindings(
+		sessionID, findings, leak, "test-rules",
+	))
+	var finding *db.SecretFinding
+	for index := range findings {
+		if findings[index].RuleName == "aws-access-key" {
+			finding = &findings[index]
+			break
+		}
+	}
+	require.NotNil(t, finding)
+
+	source, ok, err := fx.db.SecretFindingSource(t.Context(), *finding)
+
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, syntheticAWSAccessKey(), source)
+}
+
+func TestBackfillRewritesPreCanonicalEventCoordinateFindings(t *testing.T) {
+	fx := newEngineFixture(t)
+	ctx := context.Background()
+	const (
+		sessionID                = "pre-canonical-event-coordinate"
+		preCanonicalRulesVersion = "bd4c273e0d48a52d630b8c3c270b5444891b447cd47d31ae979935e5c0810a93"
+	)
+	session := db.Session{
+		ID: sessionID, Project: "proj", Machine: "machine", Agent: "claude",
+		MessageCount: 1,
+	}
+	messages := []db.Message{{
+		SessionID: sessionID, Ordinal: 0, Role: "assistant",
+		ToolCalls: []db.ToolCall{{
+			ToolName: "Bash", ToolUseID: "tool-1",
+			ResultEvents: []db.ToolResultEvent{
+				{Status: "running", Content: "starting up", EventIndex: 5},
+				{Status: "completed", Content: syntheticAWSAccessKey(), EventIndex: 9},
+			},
+		}},
+	}}
+	require.NoError(t, fx.db.UpsertSession(session))
+	require.NoError(t, fx.db.ReplaceSessionMessages(sessionID, messages))
+	callIndex, oldEventIndex := 0, 1
+	require.NoError(t, fx.db.ReplaceSessionSecretFindings(
+		sessionID,
+		[]db.SecretFinding{{
+			RuleName: "aws-access-key", Confidence: secrets.ConfidenceDefinite,
+			LocationKind: "tool_result_event", MessageOrdinal: 0,
+			CallIndex: &callIndex, EventIndex: &oldEventIndex,
+			MatchStart: 0, MatchEnd: len(syntheticAWSAccessKey()),
+			RedactedMatch: "AKIA…PLJM",
+		}},
+		1,
+		preCanonicalRulesVersion,
+	))
+
+	summary, err := fx.engine.ScanSecrets(
+		ctx, SecretScanInput{Backfill: true}, nil,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, summary.Scanned,
+		"the pre-canonical rules stamp must be stale")
+	findings, err := fx.db.SessionSecretFindings(ctx, sessionID)
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	require.NotNil(t, findings[0].EventIndex)
+	assert.Equal(t, 9, *findings[0].EventIndex)
+	assert.Equal(t, secrets.RulesVersion(), findings[0].RulesVersion)
+	source, ok, err := fx.db.SecretFindingSource(ctx, findings[0])
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, syntheticAWSAccessKey(), source)
 }
 
 // TestComputeSignalsAndSecretsDefiniteOnly pins the inline-sync contract: the
@@ -102,7 +194,8 @@ func TestComputeSignalsAndSecretsDefiniteOnly(t *testing.T) {
 	sess := db.Session{ID: "s1"}
 	msgs := []db.Message{{
 		SessionID: "s1", Ordinal: 0, Role: "user",
-		Content: "aws AKIA7QHWN2DKR4FYPLJM and SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6",
+		Content: "aws " + syntheticAWSAccessKey() +
+			" and SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6",
 	}}
 	update, findings := computeSignalsAndSecrets(sess, msgs)
 	require.NotEmpty(t, findings, "expected at least one definite finding")
@@ -129,7 +222,8 @@ func TestInlineScanThenBackfillStoresCandidates(t *testing.T) {
 	}))
 	require.NoError(t, fx.db.ReplaceSessionMessages(id, []db.Message{
 		{SessionID: id, Ordinal: 0, Role: "user",
-			Content: "aws AKIA7QHWN2DKR4FYPLJM and SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6"},
+			Content: "aws " + syntheticAWSAccessKey() +
+				" and SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6"},
 	}))
 
 	// Inline sync path: definite-only findings, definite version.
@@ -170,7 +264,8 @@ func TestScanSecretsBreakdown(t *testing.T) {
 	// high-entropy assignment.
 	if err := fx.db.ReplaceSessionMessages(id, []db.Message{
 		{SessionID: id, Ordinal: 0, Role: "user",
-			Content: "aws AKIA7QHWN2DKR4FYPLJM and SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6"},
+			Content: "aws " + syntheticAWSAccessKey() +
+				" and SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6"},
 	}); err != nil {
 		t.Fatalf("ReplaceSessionMessages: %v", err)
 	}
@@ -217,7 +312,7 @@ func TestEngineScanSecretsBackfillResumable(t *testing.T) {
 		}))
 		require.NoError(t, fx.db.ReplaceSessionMessages(id, []db.Message{
 			{SessionID: id, Ordinal: 0, Role: "user",
-				Content: "my key AKIA7QHWN2DKR4FYPLJM here"},
+				Content: "my key " + syntheticAWSAccessKey() + " here"},
 		}))
 	}
 	ticks := 0
@@ -250,7 +345,7 @@ func TestScanSecretsCanceledContextReturnsError(t *testing.T) {
 	}))
 	require.NoError(t, fx.db.ReplaceSessionMessages("s1", []db.Message{
 		{SessionID: "s1", Ordinal: 0, Role: "user",
-			Content: "my key AKIA7QHWN2DKR4FYPLJM here"},
+			Content: "my key " + syntheticAWSAccessKey() + " here"},
 	}))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

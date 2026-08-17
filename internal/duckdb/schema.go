@@ -24,8 +24,9 @@ import (
 // accounting rebuild boundary and moves common table creation to the canonical
 // Bun registry on top of schema v9's session launch and prompt provenance
 // columns. v11 adds an opaque mirror generation token for coherent multi-query
-// Quack reads.
-const SchemaVersion = 11
+// Quack reads. v12 rebuilds pricing timestamps written before canonical
+// PostgreSQL-compatible microsecond normalization.
+const SchemaVersion = 12
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 

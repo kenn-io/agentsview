@@ -64,12 +64,9 @@ func scanSecretsFromMessages(
 			add(msg.SessionID, "tool_input", msg.Ordinal, &callIdx, nil,
 				scan(tc.InputJSON))
 			if len(tc.ResultEvents) > 0 {
+				eventIndexes := db.CanonicalToolResultEventIndexes(tc.ResultEvents)
 				for ei := range tc.ResultEvents {
-					// Store the slice position, which is what the persistence
-					// layer (resolveToolResultEvents) writes as event_index.
-					// SecretFindingSource reads findings back through the same
-					// normalized value, so --reveal can re-locate the source.
-					evIdx := ei
+					evIdx := eventIndexes[ei]
 					add(msg.SessionID, "tool_result_event", msg.Ordinal,
 						&callIdx, &evIdx, scan(tc.ResultEvents[ei].Content))
 				}

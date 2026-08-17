@@ -40,7 +40,7 @@ func seedRebuildFixture(t *testing.T, local *db.DB) []string {
 	return ids
 }
 
-func TestRebuildMirrorCreatesCanonicalSchemaVersion11(t *testing.T) {
+func TestRebuildMirrorCreatesCanonicalSchemaVersion(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	ids := seedRebuildFixture(t, local)
@@ -59,7 +59,7 @@ func TestRebuildMirrorCreatesCanonicalSchemaVersion11(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, probe.FileExists)
 	assert.True(t, probe.ShapeOK)
-	assert.Equal(t, 11, probe.SchemaVersion)
+	assert.Equal(t, SchemaVersion, probe.SchemaVersion)
 	assert.Equal(t, db.CurrentDataVersion(), probe.DataVersion)
 	assert.Equal(t, "", probe.Scope)
 	assert.NotEmpty(t, probe.LastPushCutoff)

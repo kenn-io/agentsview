@@ -77,7 +77,8 @@ func (db *DB) applyArtifactImportedSession(
 		return result, err
 	}
 	stampSessionArchiveIdentity(&write.Session, identity)
-	write = sanitizeSessionBatchWrite(write)
+	write, sanitization := sanitizeSessionBatchWrite(write)
+	defer sanitization.release()
 
 	db.mu.Lock()
 	defer db.mu.Unlock()

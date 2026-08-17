@@ -421,7 +421,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // the same entry are now split into a hidden system-metadata message plus
 // the real prompt, instead of leaving the raw wrapper in first_message and
 // the visible transcript. Existing rows need re-parsing so first_message
-// and message content drop the leading markup.)
+// and message content drop the leading markup. The same resync blanks
+// unsupported archived message timestamps across live, orphaned, and trashed
+// sessions before replication can read them.)
 const dataVersion = 88
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"

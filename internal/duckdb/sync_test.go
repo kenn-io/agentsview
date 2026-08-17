@@ -889,6 +889,43 @@ func TestPushRebuildsOverOldSchemaVersionMirror(t *testing.T) {
 	assertMirrorMessageCount(t, path, "sess-1", 2)
 }
 
+func TestPushRebuildsVersion11MirrorForPricingTimestampPrecision(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "pricing-precision-model",
+		InputPerMTok: money.MustParseDollars("1"),
+		UpdatedAt:    "2026-08-09T04:09:57.836404600Z",
+	}}))
+	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+
+	conn, err := Open(path)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `
+		UPDATE model_pricing SET updated_at = TIMESTAMP '2026-08-09 04:09:57.836404'
+		WHERE model_pattern = 'pricing-precision-model'`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	setMirrorMetadataValue(t, path, schemaVersionMetadataKey, "11")
+
+	result, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.True(t, result.Diagnostics.Full)
+	assert.Contains(t, result.Diagnostics.RebuildReason, "schema version")
+
+	conn, err = Open(path)
+	require.NoError(t, err)
+	defer conn.Close()
+	var updatedAtMicros int64
+	require.NoError(t, conn.QueryRowContext(ctx, `
+		SELECT epoch_us(updated_at) FROM model_pricing
+		WHERE model_pattern = 'pricing-precision-model'`).Scan(&updatedAtMicros))
+	assert.Equal(t, int64(1_786_248_597_836_405), updatedAtMicros,
+		"stored pricing timestamp microseconds",
+	)
+}
+
 // TestPushRebuildReasonReportsFullFlag verifies an explicitly requested
 // --full push records that as its RebuildReason even though the existing
 // mirror would otherwise be valid for an incremental push.
@@ -1092,47 +1129,31 @@ func TestPushRebuildsWhenMachineNameChanges(t *testing.T) {
 	assertDuckDBCountWhere(t, conn, "sessions", "machine = ?", "machine-a", 0)
 }
 
-// TestPushDoesNotAdvanceStateOnError injects a session that fails to push
-// and verifies the mirror's cutoff/last-push-at metadata are left exactly
-// as they were: a partially failed incremental push must not let the
-// failed session silently fall out of the next window.
-func TestPushDoesNotAdvanceStateOnError(t *testing.T) {
+func TestPushRepairsMalformedProviderMessageTimestamp(t *testing.T) {
 	ctx := context.Background()
 	local, path := newPushFixture(t, 1)
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.NoError(t, err)
-	before, err := ProbeMirror(ctx, path)
-	require.NoError(t, err)
-	require.NotEmpty(t, before.LastPushCutoff)
-
 	badID := "sess-bad"
-	_, err = local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
 		Session: syncSession(badID, "alpha", "bad first", "2026-02-02T00:00:00.000Z", 1),
 		Messages: []db.Message{
-			syncMessage(badID, 0, "user", "bad first", "2026-02-02T00:00:00.000Z"),
+			syncMessage(badID, 0, "user", "bad first", "not-a-timestamp"),
 		},
 		DataVersion:     1,
 		ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
-	require.NoError(t, local.Update(func(tx *sql.Tx) error {
-		_, updateErr := tx.Exec(
-			`UPDATE messages SET timestamp = ? WHERE session_id = ?`,
-			"not-a-timestamp", badID,
-		)
-		return updateErr
-	}), "seed a legacy unsupported timestamp")
 
 	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
 	require.NoError(t, err)
-	assert.Equal(t, 1, res.Errors)
+	assert.Zero(t, res.Errors)
 
-	after, err := ProbeMirror(ctx, path)
+	conn, err := Open(path)
 	require.NoError(t, err)
-	assert.Equal(t, before.LastPushCutoff, after.LastPushCutoff)
-	assert.Equal(t, before.LastPushAt, after.LastPushAt)
-	assert.Equal(t, before.DeletionRevision, after.DeletionRevision)
-	assertMirrorSessionAbsent(t, path, badID)
+	defer conn.Close()
+	assertDuckDBCountWhere(t, conn, "sessions", "id = ?", badID, 1)
+	assertDuckDBCountWhere(
+		t, conn, "messages", "session_id = ? AND timestamp IS NULL", badID, 1,
+	)
 }
 
 func TestSyncFullPushCreatesExpectedRows(t *testing.T) {

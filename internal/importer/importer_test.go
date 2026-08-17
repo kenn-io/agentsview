@@ -408,7 +408,7 @@ func TestImportAdvancesLocalModifiedAt(t *testing.T) {
 
 	// local_modified_at must be non-NULL after import so incremental PG push
 	// picks up session_name changes without relying on file_mtime.
-	// In practice this is set by replaceSecretFindingsTx which is called
+	// In practice this is set by the canonical finding replacement called
 	// inside ReplaceSessionMessages on every message-replacing import.
 	full, err := d.GetSessionFull(ctx, "claude-ai:import-test-001")
 	require.NoError(t, err)

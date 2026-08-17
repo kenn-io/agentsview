@@ -343,7 +343,7 @@ func TestStoreUsageAggregatesPreferCompleteClaudeSnapshotAcrossSessions(t *testi
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, 'seed');
+		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, '2026-01-01T00:00:00Z');
 		INSERT INTO sessions (
 			id, machine, project, agent, display_name, started_at,
 			message_count, user_message_count
@@ -439,7 +439,7 @@ func TestStoreGetDailyUsagePrefersTimestampedEqualClaudeSnapshot(t *testing.T) {
 			output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok,
 			cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, 'seed');
+		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, '2026-01-01T00:00:00Z');
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at,
 			message_count, user_message_count
@@ -475,7 +475,7 @@ func TestStoreUsageRanksNumericStringClaudeSnapshot(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, 'seed');
+		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, '2026-01-01T00:00:00Z');
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at,
 			message_count, user_message_count
@@ -504,35 +504,6 @@ func TestStoreUsageRanksNumericStringClaudeSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1000, result.Totals.InputTokens)
 	assert.Equal(t, 631, result.Totals.OutputTokens)
-}
-
-func TestPGSnapshotRankedDailyUsageRowsPrefersLatestEqualOutput(t *testing.T) {
-	_, store := prepareUsageSchema(
-		t, "agentsview_daily_usage_snapshot_tie_test")
-	pb := &paramBuilder{}
-	rowsSQL := `
-		SELECT 'z-snapshot' AS session_id, 0 AS message_ordinal,
-			'message' AS usage_source,
-			'2026-05-20T10:31:00Z'::timestamptz AS ts,
-			'{"input_tokens":900,"output_tokens":100}' AS token_usage,
-			0 AS output_tokens, 'msg-tie' AS claude_message_id,
-			'req-tie' AS claude_request_id
-		UNION ALL
-		SELECT 'a-snapshot', 0, 'message',
-			'2026-05-20T10:30:00Z'::timestamptz,
-			'{"input_tokens":10,"output_tokens":100}', 0,
-			'msg-tie', 'req-tie'`
-	ranked := pgSnapshotRankedDailyUsageRowsSQL(
-		pb, rowsSQL, db.UsageFilter{})
-	var sessionID, attributionSessionID, tokenJSON string
-	err := store.DB().QueryRow(`
-		SELECT session_id, snapshot_attribution_session_id, token_usage
-		FROM (`+ranked+`)`, pb.args...).Scan(
-		&sessionID, &attributionSessionID, &tokenJSON)
-	require.NoError(t, err)
-	assert.Equal(t, "z-snapshot", sessionID)
-	assert.Equal(t, "a-snapshot", attributionSessionID)
-	assert.JSONEq(t, `{"input_tokens":900,"output_tokens":100}`, tokenJSON)
 }
 
 func TestStoreGetSessionUsagePricedModel(t *testing.T) {
@@ -765,7 +736,7 @@ func TestStoreGetSessionUsagePrefersCompleteClaudeSnapshot(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, 'seed');
+		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, '2026-01-01T00:00:00Z');
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at,
 			message_count, user_message_count,
@@ -1870,7 +1841,7 @@ func TestStoreSessionUsageWithSubagentsParity(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('test-opus', 2000000, 10000000, 0, 0, 'seed')`)
+		) VALUES ('test-opus', 2000000, 10000000, 0, 0, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err)
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (

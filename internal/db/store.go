@@ -145,6 +145,10 @@ type Store interface {
 	// Upload (local-only; PG returns ErrReadOnly).
 	UpsertSession(s Session) error
 	ReplaceSessionMessages(sessionID string, msgs []Message) error
+	WriteSessionAtomic(
+		write SessionBatchWrite,
+		beforeCommit ...func() error,
+	) (SessionBatchResult, error)
 	WriteSessionBatchAtomic(
 		writes []SessionBatchWrite,
 		beforeCommit ...func() error,

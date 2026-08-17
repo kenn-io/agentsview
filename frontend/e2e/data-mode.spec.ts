@@ -86,7 +86,27 @@ test.describe("Data mode project reclassification", () => {
     ).toBeVisible();
     await expect(ws.getByText("1 project", { exact: true })).toBeVisible();
 
+    const reclassifyResponse = page.waitForResponse((response) => {
+      const request = response.request();
+      return (
+        request.method() === "POST" &&
+        new URL(response.url()).pathname ===
+          "/api/v1/settings/worktree-mappings/reclassify"
+      );
+    });
+    const inventoryResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === "GET" &&
+        new URL(response.url()).pathname === "/api/v1/data/projects",
+    );
+
     await ws.getByRole("button", { name: "Save and apply mapping" }).click();
+    const [reclassified, refreshedInventory] = await Promise.all([
+      reclassifyResponse,
+      inventoryResponse,
+    ]);
+    expect(reclassified.ok()).toBe(true);
+    expect(refreshedInventory.ok()).toBe(true);
 
     // Explicit inventory reload; selection follows the applied target.
     await expect(

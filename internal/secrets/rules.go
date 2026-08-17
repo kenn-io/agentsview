@@ -685,7 +685,11 @@ func looksLikePEMHeaderStart(body string) bool {
 // interrupted, and they can arrive later from machines still running old
 // binaries, so they must read as stale by value everywhere; a one-time
 // local migration could not invalidate either case.
-const rulesAlgorithmVersion = 7
+//
+// v8: result-event findings now use the same canonical event indexes as
+// message persistence. Rescan v7 findings so coordinates recorded as slice
+// positions are replaced and --reveal can locate their source.
+const rulesAlgorithmVersion = 8
 
 // Verify reports whether the named rule still produces a finding at exactly
 // [start:end) within source. Used by --reveal to confirm a stored finding's

@@ -406,6 +406,7 @@ func (db *DB) CopyArchiveIdentityFrom(sourcePath string) error {
 		if err := rekeyLocalArchiveRows(
 			ctx, tx, previousArchiveID,
 			metadata[archiveMetadataArchiveIDKey].value,
+			metadata[archiveMetadataArchiveSaltKey].value,
 		); err != nil {
 			return err
 		}
@@ -726,7 +727,7 @@ func (db *DB) SetArchiveIdentityForTest(ctx context.Context, id, salt string) er
 	}
 	if previousArchiveID != id {
 		if err := rekeyLocalArchiveRows(
-			ctx, tx, previousArchiveID, id,
+			ctx, tx, previousArchiveID, id, salt,
 		); err != nil {
 			return err
 		}
@@ -818,31 +819,15 @@ func (db *DB) UpsertSessionWithProjectIdentity(
 	snapshotProject string,
 ) error {
 	_, err := db.upsertSessionWithProjectIdentity(
-		s, obs, snapshotProject, true,
+		s, obs, snapshotProject,
 	)
 	return err
-}
-
-// UpsertSessionPendingContentWithProjectIdentity atomically updates a session
-// and its parser-time project identity without reviving a source-missing
-// tombstone. The returned bool reports whether retained content must be
-// replaced before the caller makes the session visible again.
-func (db *DB) UpsertSessionPendingContentWithProjectIdentity(
-	s Session,
-	obs export.ProjectIdentityObservation,
-	snapshotProject string,
-) (bool, error) {
-	result, err := db.upsertSessionWithProjectIdentity(
-		s, obs, snapshotProject, false,
-	)
-	return result.sourceMissing, err
 }
 
 func (db *DB) upsertSessionWithProjectIdentity(
 	s Session,
 	obs export.ProjectIdentityObservation,
 	snapshotProject string,
-	reviveSourceMissing bool,
 ) (sessionUpsertResult, error) {
 	if err := db.requireWritable(); err != nil {
 		return sessionUpsertResult{}, err
@@ -884,9 +869,7 @@ func (db *DB) upsertSessionWithProjectIdentity(
 			fmt.Errorf("beginning session identity upsert: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	result, err := upsertArchiveSessionRow(
-		context.Background(), tx, s, reviveSourceMissing,
-	)
+	result, err := upsertArchiveSessionRow(context.Background(), tx, s)
 	if err != nil {
 		return sessionUpsertResult{}, err
 	}

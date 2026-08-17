@@ -496,6 +496,58 @@ func TestUsageEventsReplaceAndList(t *testing.T) {
 	require.Len(t, got, 0, "usage events after clear =")
 }
 
+func TestReplaceSessionUsageEventsCanonicalizesTimestamp(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "usage-canonical-time", "proj")
+
+	require.NoError(t, d.ReplaceSessionUsageEvents("usage-canonical-time", []UsageEvent{{
+		Source: "session", Model: "model",
+		OccurredAt: "2026-01-01T00:30:00.123456789+01:00",
+	}}))
+
+	events, err := d.GetUsageEvents(t.Context(), "usage-canonical-time")
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, "usage-canonical-time", events[0].SessionID)
+	assert.Equal(t, "2025-12-31T23:30:00.123456Z", events[0].OccurredAt)
+}
+
+func TestReplaceSessionUsageEventsRejectsInvalidTimestampWithoutReplacing(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "usage-invalid-time", "proj")
+	require.NoError(t, d.ReplaceSessionUsageEvents("usage-invalid-time", []UsageEvent{{
+		Source: "session", Model: "prior", OccurredAt: "2026-01-01T00:00:00Z",
+	}}))
+
+	err := d.ReplaceSessionUsageEvents("usage-invalid-time", []UsageEvent{{
+		Source: "session", Model: "invalid", OccurredAt: "not-a-timestamp",
+	}})
+	require.Error(t, err)
+
+	events, readErr := d.GetUsageEvents(t.Context(), "usage-invalid-time")
+	require.NoError(t, readErr)
+	require.Len(t, events, 1)
+	assert.Equal(t, "prior", events[0].Model)
+}
+
+func TestReplaceSessionUsageEventsRejectsMismatchedSessionWithoutReplacing(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "usage-session-scope", "proj")
+	require.NoError(t, d.ReplaceSessionUsageEvents("usage-session-scope", []UsageEvent{{
+		Source: "session", Model: "prior",
+	}}))
+
+	err := d.ReplaceSessionUsageEvents("usage-session-scope", []UsageEvent{{
+		SessionID: "another-session", Source: "session", Model: "invalid",
+	}})
+	require.ErrorContains(t, err, "does not match")
+
+	events, readErr := d.GetUsageEvents(t.Context(), "usage-session-scope")
+	require.NoError(t, readErr)
+	require.Len(t, events, 1)
+	assert.Equal(t, "prior", events[0].Model)
+}
+
 func TestGetUsageEventsOrdersOffsetTimestampsChronologically(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
@@ -775,7 +827,57 @@ func TestGetDailyUsageFallsBackForEmptyMessageTimestamp(t *testing.T) {
 	assert.Equal(t, 500, result.Totals.OutputTokens, "OutputTokens")
 }
 
-func TestBoundedUsagePreservesMalformedTimestampDateFallbackBeforeSnapshotRanking(
+func TestUsageFallsBackForUnsupportedMessageTimestamp(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		timestamp string
+	}{
+		{name: "date only", timestamp: "2026-08-09"},
+		{name: "time only", timestamp: "12:34:56"},
+		{name: "numeric", timestamp: "2451545"},
+		{name: "zero time", timestamp: "0001-01-01T00:00:00Z"},
+		{name: "fractional zero time", timestamp: "0001-01-01T00:00:00.000000Z"},
+		{name: "invalid calendar date", timestamp: "2024-02-30T10:30:00Z"},
+		{name: "invalid end of day", timestamp: "2024-06-15T24:00:00Z"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database := testDB(t)
+			insertSession(t, database, "unsupported-ts", "project", func(session *Session) {
+				session.Agent = "claude"
+				session.StartedAt = new("2024-06-15T10:00:00Z")
+			})
+			insertMessages(t, database, Message{
+				SessionID: "unsupported-ts", Ordinal: 0, Role: "assistant",
+				Timestamp: tc.timestamp, Model: "test-model",
+				TokenUsage: json.RawMessage(
+					`{"input_tokens":1000,"output_tokens":500}`,
+				),
+			})
+
+			result, err := database.GetDailyUsage(t.Context(), UsageFilter{
+				From: "2024-06-15", To: "2024-06-15", Timezone: "UTC",
+			})
+			require.NoError(t, err)
+			require.Len(t, result.Daily, 1)
+			assert.Equal(t, "2024-06-15", result.Daily[0].Date)
+			assert.Equal(t, 1000, result.Totals.InputTokens)
+			assert.Equal(t, 500, result.Totals.OutputTokens)
+
+			sessionUsage, err := database.GetSessionUsage(
+				t.Context(), "unsupported-ts", true,
+			)
+			require.NoError(t, err)
+			require.NotNil(t, sessionUsage)
+			assert.Equal(t, 1, sessionUsage.BreakdownCount)
+			require.Len(t, sessionUsage.Breakdown, 1)
+			assert.Equal(t, "2024-06-15T10:00:00Z", sessionUsage.Breakdown[0].Timestamp)
+			assert.Equal(t, 1000, sessionUsage.Breakdown[0].InputTokens)
+			assert.Equal(t, 500, sessionUsage.Breakdown[0].OutputTokens)
+		})
+	}
+}
+
+func TestBoundedUsageRepairsMalformedTimestampBeforeSnapshotRanking(
 	t *testing.T,
 ) {
 	d := testDB(t)

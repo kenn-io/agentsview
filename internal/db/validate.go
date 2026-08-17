@@ -2,6 +2,8 @@ package db
 
 import (
 	"time"
+
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
 
 // This file is the single centralized validation and sanitization pass
@@ -199,11 +201,26 @@ func SanitizeMessage(m *Message) ValidationStats {
 		stats.TokensClamped++
 	}
 
-	if BlankImplausibleTimestamp(&m.Timestamp) {
+	if blankInvalidMessageTimestamp(&m.Timestamp) {
 		stats.TimestampsBlanked++
 	}
 
 	return stats
+}
+
+// blankInvalidMessageTimestamp removes timestamps that cannot be represented
+// by the canonical storage model, as well as parseable but implausible values.
+// A missing provider timestamp remains represented by the empty string.
+func blankInvalidMessageTimestamp(p *string) bool {
+	if *p == "" {
+		return false
+	}
+	timestamp, err := bunmodel.ParseTimestamp(*p)
+	if err == nil && isPlausibleTime(timestamp.Time) {
+		return false
+	}
+	*p = ""
+	return true
 }
 
 func sanitizeToolCallContent(

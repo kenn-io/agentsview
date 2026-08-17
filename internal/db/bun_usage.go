@@ -16,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/db/bunmodel"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/timeutil"
 )
 
 const bunPricingWriteBatchSize = 500
@@ -41,6 +42,9 @@ func CanonicalModelPricingRows(
 					"converting model pricing timestamp for %q: %w", pattern, err,
 				)
 			}
+			updatedAt.Time = timeutil.NormalizePostgresTimestampPrecision(
+				updatedAt.Time,
+			)
 		}
 		rows = append(rows, bunmodel.ModelPricing{
 			ModelPattern:                     pattern,
@@ -71,6 +75,9 @@ func CanonicalModelPricingRows(
 						pattern, err,
 					)
 				}
+				bandUpdatedAt.Time = timeutil.NormalizePostgresTimestampPrecision(
+					bandUpdatedAt.Time,
+				)
 			}
 			bands = append(bands, bunmodel.ModelPricingBand{
 				ModelPattern: pattern, AboveInputTokens: threshold,
@@ -202,7 +209,9 @@ func UpsertModelPricingRows(
 		for _, existing := range existingPrices {
 			existingPriceByPattern[existing.ModelPattern] = existing
 		}
-		defaultRevision := bunmodel.NewTimestamp(time.Now())
+		defaultRevision := bunmodel.NewTimestamp(
+			timeutil.NormalizePostgresTimestampPrecision(time.Now()),
+		)
 		var existingBands []bunmodel.ModelPricingBand
 		if len(patterns) > 0 {
 			if err := tx.NewSelect().Model(&existingBands).
@@ -322,6 +331,9 @@ func modelPricingBandValuesEqual(
 func nextPricingRevision(
 	existing, proposed, fallback bunmodel.Timestamp,
 ) bunmodel.Timestamp {
+	existing.Time = timeutil.NormalizePostgresTimestampPrecision(existing.Time)
+	proposed.Time = timeutil.NormalizePostgresTimestampPrecision(proposed.Time)
+	fallback.Time = timeutil.NormalizePostgresTimestampPrecision(fallback.Time)
 	if proposed.IsZero() {
 		proposed = fallback
 	}
@@ -591,6 +603,7 @@ type bunUsageProjection struct {
 
 type bunDailyUsageProjection struct {
 	ID                       int64               `bun:"id"`
+	CandidateCount           int                 `bun:"candidate_count"`
 	SessionID                string              `bun:"session_id"`
 	MessageOrdinal           sql.NullInt64       `bun:"message_ordinal"`
 	UsageTimestamp           bunmodel.Timestamp  `bun:"usage_timestamp"`
@@ -660,11 +673,11 @@ const bunDailyUsageSessionColumns = `
 	s.created_at AS session_created_at,
 	s.termination_status AS termination_status`
 
-func bunMessageUsageColumns(timestampOrder func(string) string) string {
+func bunMessageUsageColumns() string {
 	return `
 	m.session_id AS session_id,
 	m.ordinal AS message_ordinal,
-	` + bunUsageTimestampColumn(timestampOrder, "m.timestamp") + ` AS usage_timestamp,
+	m.timestamp AS usage_timestamp,
 	m.model AS model,
 	m.token_usage AS token_json,
 	m.claude_message_id AS claude_message_id,
@@ -672,12 +685,12 @@ func bunMessageUsageColumns(timestampOrder func(string) string) string {
 	m.source_uuid AS source_uuid`
 }
 
-func bunEventUsageColumns(timestampOrder func(string) string) string {
+func bunEventUsageColumns() string {
 	return `
 	ue.id AS id,
 	ue.session_id AS session_id,
 	ue.message_ordinal AS message_ordinal,
-	` + bunUsageTimestampColumn(timestampOrder, "ue.occurred_at") + ` AS usage_timestamp,
+	ue.occurred_at AS usage_timestamp,
 	ue.model AS model,
 	ue.input_tokens AS input_tokens,
 	ue.output_tokens AS output_tokens,
@@ -691,18 +704,11 @@ func bunEventUsageColumns(timestampOrder func(string) string) string {
 	ue.dedup_key AS dedup_key`
 }
 
-func bunUsageTimestampColumn(
-	timestampOrder func(string) string, column string,
-) string {
-	return "CASE WHEN " + timestampOrder(bunNullableTimestamp(column)) +
-		" IS NULL THEN NULL ELSE " + column + " END"
-}
-
-func bunDailyMessageUsageColumns(timestampOrder func(string) string) string {
+func bunDailyMessageUsageColumns() string {
 	return `
 	m.session_id AS session_id,
 	m.ordinal AS message_ordinal,
-	` + bunUsageTimestampColumn(timestampOrder, "m.timestamp") + ` AS usage_timestamp,
+	m.timestamp AS usage_timestamp,
 	m.model AS model,
 	m.token_usage AS token_json,
 	m.claude_message_id AS claude_message_id,
@@ -710,12 +716,12 @@ func bunDailyMessageUsageColumns(timestampOrder func(string) string) string {
 	m.source_uuid AS source_uuid`
 }
 
-func bunDailyEventUsageColumns(timestampOrder func(string) string) string {
+func bunDailyEventUsageColumns() string {
 	return `
 	ue.id AS id,
 	ue.session_id AS session_id,
 	ue.message_ordinal AS message_ordinal,
-	` + bunUsageTimestampColumn(timestampOrder, "ue.occurred_at") + ` AS usage_timestamp,
+	ue.occurred_at AS usage_timestamp,
 	ue.model AS model,
 	ue.input_tokens AS input_tokens,
 	ue.output_tokens AS output_tokens,
@@ -789,14 +795,14 @@ func (s *BunStore) loadBunSessionUsageRows(
 		// is then attributed to its earliest session.
 		queryFilter = usageSnapshotInputFilter(filter)
 	}
+	if !matching {
+		return s.loadBunNormalizedDailyUsageRows(ctx, store, queryFilter, filter)
+	}
 	projections, err := s.loadBunDailyUsageProjections(
-		ctx, store, queryFilter, matching,
+		ctx, store, queryFilter, true,
 	)
 	if err != nil {
 		return nil, err
-	}
-	if !matching {
-		return normalizeBunDailyUsageProjections(projections, filter), nil
 	}
 	rows := make([]dailyUsageScanRow, 0, len(projections))
 	for _, row := range projections {
@@ -808,68 +814,129 @@ func (s *BunStore) loadBunSessionUsageRows(
 func (s *BunStore) loadBunDailyUsageProjections(
 	ctx context.Context, store bun.IDB, filter UsageFilter, matching bool,
 ) ([]bunDailyUsageProjection, error) {
-	messageQuery, eventQuery := s.bunDailyUsageQueries(store, filter, matching)
-	var messages []bunDailyUsageProjection
-	if err := messageQuery.Scan(ctx, &messages); err != nil {
+	messageQuery, eventQuery := s.bunDailyUsageQueries(
+		store, filter, matching, time.Now().UTC(),
+	)
+	rows := make([]bunDailyUsageProjection, 0)
+	if err := streamBunDailyUsageProjections(
+		ctx, messageQuery, true, false,
+		func(row bunDailyUsageProjection) error {
+			rows = append(rows, row)
+			return nil
+		},
+	); err != nil {
 		return nil, fmt.Errorf("querying daily usage messages: %w", err)
 	}
-
-	var events []bunDailyUsageProjection
-	if err := eventQuery.Scan(ctx, &events); err != nil {
+	if err := streamBunDailyUsageProjections(
+		ctx, eventQuery, false, false,
+		func(row bunDailyUsageProjection) error {
+			rows = append(rows, row)
+			return nil
+		},
+	); err != nil {
 		return nil, fmt.Errorf("querying daily usage events: %w", err)
-	}
-
-	rows := make([]bunDailyUsageProjection, 0, len(messages)+len(events))
-	for _, row := range messages {
-		row.UsageSource = "message"
-		rows = append(rows, row)
-	}
-	for _, row := range events {
-		row.UsageDedupKey = dailyUsageEventProjectionDedupKey(row)
-		rows = append(rows, row)
 	}
 	return rows, nil
 }
 
-func normalizeBunDailyUsageProjections(
-	projections []bunDailyUsageProjection, filter UsageFilter,
-) []dailyUsageScanRow {
+func (s *BunStore) loadBunNormalizedDailyUsageRows(
+	ctx context.Context, store bun.IDB, queryFilter, filter UsageFilter,
+) ([]dailyUsageScanRow, error) {
 	loc := filter.location()
 	bounded := usageBoundsForFilter(filter).bounded()
-	eligible := make([]bunDailyUsageProjection, 0, len(projections))
-	for _, row := range projections {
-		daily := dailyUsageProjectionToRow(row)
-		if bounded {
-			date := dailyUsageLocalDate(daily, loc)
-			if date == "" || filter.From != "" && date < filter.From ||
-				filter.To != "" && date > filter.To {
-				continue
-			}
+	referenceTime := time.Now().UTC()
+	messageQuery, eventQuery := s.bunDailyUsageQueries(
+		store, filter, false, referenceTime,
+	)
+	messageQuery = messageQuery.
+		Where("(m.claude_message_id = ? OR m.claude_request_id = ?)", "", "").
+		ColumnExpr("COUNT(*) OVER() AS candidate_count")
+	eventQuery = eventQuery.ColumnExpr("COUNT(*) OVER() AS candidate_count")
+	claudeMessageQuery, _ := s.bunDailyUsageQueries(
+		store, queryFilter, false, referenceTime,
+	)
+	claudeMessageQuery = claudeMessageQuery.
+		Where("m.claude_message_id != ?", "").
+		Where("m.claude_request_id != ?", "")
+	rows := make([]dailyUsageScanRow, 0)
+	claudeRows := make([]bunDailyUsageProjection, 0)
+	snapshotRows := make([]activity.UsageRow, 0)
+	metadata := make(map[string]bunDailyUsageProjection)
+	withinBounds := func(daily dailyUsageScanRow) bool {
+		if !bounded {
+			return true
 		}
-		eligible = append(eligible, row)
+		date := dailyUsageLocalDate(daily, loc)
+		return date != "" && (filter.From == "" || date >= filter.From) &&
+			(filter.To == "" || date <= filter.To)
 	}
-
-	snapshotRows := make([]activity.UsageRow, len(eligible))
-	metadata := make(map[string]bunDailyUsageProjection, len(eligible))
-	for i, row := range eligible {
+	consumeOrdinary := func(row bunDailyUsageProjection) error {
 		daily := dailyUsageProjectionToRow(row)
+		if !withinBounds(daily) {
+			return nil
+		}
+		if usageSourceMatches(row.Model, filter) &&
+			bunDailyUsageSessionMatches(row, filter, referenceTime) {
+			rows = append(rows, daily)
+		}
+		return nil
+	}
+	consumeClaude := func(row bunDailyUsageProjection) error {
+		daily := dailyUsageProjectionToRow(row)
+		if !withinBounds(daily) {
+			return nil
+		}
 		metadata[row.SessionID] = row
 		_, outputTokens, _, _, _ := dailyUsageRowTokens(daily)
-		snapshotRows[i] = activity.UsageRow{
-			SessionID: row.SessionID, Timestamp: daily.ts,
+		claudeRows = append(claudeRows, row)
+		snapshotRows = append(snapshotRows, activity.UsageRow{
+			SessionID:      row.SessionID,
+			Timestamp:      dailyUsageProjectionSnapshotTimestamp(row),
 			MessageOrdinal: usageRowMessageOrdinal(daily.messageOrdinal),
 			OutputTokens:   outputTokens,
 			WebSearchRequests: usageRowWebSearchRequests(
 				daily.usageSource, daily.tokenJSON),
 			ClaudeMessageID: row.ClaudeMessageID,
 			ClaudeRequestID: row.ClaudeRequestID,
-		}
+		})
+		return nil
 	}
+
+	messageCapacityPrepared := false
+	if err := streamBunDailyUsageProjections(
+		ctx, messageQuery, true, true,
+		func(row bunDailyUsageProjection) error {
+			if !messageCapacityPrepared {
+				rows = slices.Grow(rows, row.CandidateCount)
+				messageCapacityPrepared = true
+			}
+			return consumeOrdinary(row)
+		},
+	); err != nil {
+		return nil, fmt.Errorf("querying daily usage messages: %w", err)
+	}
+	eventCapacityPrepared := false
+	if err := streamBunDailyUsageProjections(
+		ctx, eventQuery, false, true,
+		func(row bunDailyUsageProjection) error {
+			if !eventCapacityPrepared {
+				rows = slices.Grow(rows, row.CandidateCount)
+				eventCapacityPrepared = true
+			}
+			return consumeOrdinary(row)
+		},
+	); err != nil {
+		return nil, fmt.Errorf("querying daily usage events: %w", err)
+	}
+	if err := streamBunDailyUsageProjections(
+		ctx, claudeMessageQuery, true, false, consumeClaude,
+	); err != nil {
+		return nil, fmt.Errorf("querying Claude daily usage messages: %w", err)
+	}
+
 	mask, attribution, webSearchRequests :=
 		activity.ClaudeSnapshotSurvivorSelection(snapshotRows)
-	referenceTime := time.Now().UTC()
-	rows := make([]dailyUsageScanRow, 0, len(eligible))
-	for i, row := range eligible {
+	for i, row := range claudeRows {
 		if !mask[i] {
 			continue
 		}
@@ -887,7 +954,97 @@ func normalizeBunDailyUsageProjections(
 		rows = append(rows, daily)
 	}
 	sortDailyUsageRows(rows)
-	return rows
+	return rows, nil
+}
+
+func streamBunDailyUsageProjections(
+	ctx context.Context,
+	query *bun.SelectQuery,
+	message bool,
+	withCandidateCount bool,
+	consume func(bunDailyUsageProjection) error,
+) error {
+	rows, err := query.Rows(ctx)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var row bunDailyUsageProjection
+	var sessionEndedAt bunmodel.Timestamp
+	var terminationStatus sql.NullString
+	sessionColumns := []any{
+		&row.Project,
+		&row.Agent,
+		&row.Machine,
+		&row.GitBranch,
+		&row.UserMessageCount,
+		&row.IsAutomated,
+		&row.SessionStartedAt,
+		&sessionEndedAt,
+		&row.SessionCreatedAt,
+		&terminationStatus,
+	}
+	var dest []any
+	if message {
+		dest = []any{
+			&row.SessionID,
+			&row.MessageOrdinal,
+			&row.UsageTimestamp,
+			&row.Model,
+			&row.TokenJSON,
+			&row.ClaudeMessageID,
+			&row.ClaudeRequestID,
+			&row.SourceUUID,
+		}
+	} else {
+		dest = []any{
+			&row.ID,
+			&row.SessionID,
+			&row.MessageOrdinal,
+			&row.UsageTimestamp,
+			&row.Model,
+			&row.InputTokens,
+			&row.OutputTokens,
+			&row.CacheCreationInputTokens,
+			&row.CacheReadInputTokens,
+			&row.ReasoningTokens,
+			&row.CostMicrodollars,
+			&row.CostSource,
+			&row.UsageSource,
+			&row.DedupKey,
+		}
+	}
+	dest = append(dest, sessionColumns...)
+	if withCandidateCount {
+		dest = append(dest, &row.CandidateCount)
+	}
+
+	for rows.Next() {
+		row = bunDailyUsageProjection{}
+		sessionEndedAt = bunmodel.Timestamp{}
+		terminationStatus = sql.NullString{}
+		if err := rows.Scan(dest...); err != nil {
+			return err
+		}
+		if message {
+			row.UsageSource = "message"
+		} else {
+			row.UsageDedupKey = dailyUsageEventProjectionDedupKey(row)
+		}
+		if !sessionEndedAt.IsZero() {
+			value := sessionEndedAt
+			row.SessionEndedAt = &value
+		}
+		if terminationStatus.Valid {
+			value := terminationStatus.String
+			row.TerminationStatus = &value
+		}
+		if err := consume(row); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 func bunDailyUsageProjectionWithSessionMetadata(
@@ -922,12 +1079,14 @@ func bunDailyUsageSessionMatches(
 }
 
 func (s *BunStore) bunDailyUsageQueries(
-	store bun.IDB, filter UsageFilter, matching bool,
+	store bun.IDB, filter UsageFilter, matching bool, referenceTime time.Time,
 ) (*bun.SelectQuery, *bun.SelectQuery) {
-	referenceTime := time.Now().UTC()
 	timestampOrder := s.backend.TimestampOrderExpr
+	messageTimestampValue := func(column string) string {
+		return column
+	}
 	messageQuery := store.NewSelect().TableExpr("messages AS m").
-		ColumnExpr(bunDailyMessageUsageColumns(timestampOrder) + "," +
+		ColumnExpr(bunDailyMessageUsageColumns() + "," +
 			bunDailyUsageSessionColumns).
 		Join("JOIN sessions AS s ON s.id = m.session_id").
 		Where("s.deleted_at IS NULL")
@@ -942,10 +1101,11 @@ func (s *BunStore) bunDailyUsageQueries(
 		messageQuery, filter, "m.model", s.backend.TimestampOrderExpr, referenceTime,
 	)
 	messageQuery = appendBunUsageBounds(
-		messageQuery, filter, "m.timestamp", true, s.backend.TimestampOrderExpr,
+		messageQuery, filter, "m.timestamp", true,
+		messageTimestampValue, s.backend.TimestampOrderExpr,
 	)
 	messageTimestamp := "COALESCE(" +
-		timestampOrder(bunNullableTimestamp("m.timestamp")) + ", " +
+		timestampOrder(messageTimestampValue("m.timestamp")) + ", " +
 		timestampOrder(bunNullableTimestamp("s.started_at")) + ", " +
 		timestampOrder("s.created_at") + ")"
 	messageQuery = messageQuery.
@@ -954,7 +1114,7 @@ func (s *BunStore) bunDailyUsageQueries(
 		OrderExpr("m.ordinal ASC")
 
 	eventQuery := store.NewSelect().TableExpr("usage_events AS ue").
-		ColumnExpr(bunDailyEventUsageColumns(timestampOrder)+","+
+		ColumnExpr(bunDailyEventUsageColumns()+","+
 			bunDailyUsageSessionColumns).
 		Join("JOIN sessions AS s ON s.id = ue.session_id").
 		Where("s.deleted_at IS NULL").Where("ue.model != ?", "")
@@ -962,7 +1122,8 @@ func (s *BunStore) bunDailyUsageQueries(
 		eventQuery, filter, "ue.model", s.backend.TimestampOrderExpr, referenceTime,
 	)
 	eventQuery = appendBunUsageBounds(
-		eventQuery, filter, "ue.occurred_at", true, s.backend.TimestampOrderExpr,
+		eventQuery, filter, "ue.occurred_at", true,
+		bunNullableTimestamp, s.backend.TimestampOrderExpr,
 	)
 	eventTimestamp := "COALESCE(" +
 		timestampOrder(bunNullableTimestamp("ue.occurred_at")) + ", " +
@@ -998,10 +1159,12 @@ func (s *BunStore) loadBunUsageProjections(
 	matching bool, sessionIDs []string,
 ) ([]bunUsageProjection, error) {
 	referenceTime := time.Now().UTC()
-	timestampOrder := s.backend.TimestampOrderExpr
+	messageTimestampValue := func(column string) string {
+		return column
+	}
 	var messages []bunUsageProjection
 	messageQuery := store.NewSelect().TableExpr("messages AS m").
-		ColumnExpr(bunMessageUsageColumns(timestampOrder) + "," + bunUsageSessionColumns).
+		ColumnExpr(bunMessageUsageColumns() + "," + bunUsageSessionColumns).
 		Join("JOIN sessions AS s ON s.id = m.session_id").
 		Where("s.deleted_at IS NULL")
 	if matching {
@@ -1021,7 +1184,7 @@ func (s *BunStore) loadBunUsageProjections(
 	)
 	messageQuery = appendBunUsageBounds(
 		messageQuery, filter, "m.timestamp", true,
-		s.backend.TimestampOrderExpr,
+		messageTimestampValue, s.backend.TimestampOrderExpr,
 	)
 	if err := messageQuery.Scan(ctx, &messages); err != nil {
 		return nil, fmt.Errorf("querying usage messages: %w", err)
@@ -1033,7 +1196,7 @@ func (s *BunStore) loadBunUsageProjections(
 
 	var events []bunUsageProjection
 	eventQuery := store.NewSelect().TableExpr("usage_events AS ue").
-		ColumnExpr(bunEventUsageColumns(timestampOrder)+","+bunUsageSessionColumns).
+		ColumnExpr(bunEventUsageColumns()+","+bunUsageSessionColumns).
 		Join("JOIN sessions AS s ON s.id = ue.session_id").
 		Where("s.deleted_at IS NULL").Where("ue.model != ?", "")
 	if len(sessionIDs) > 0 {
@@ -1046,7 +1209,7 @@ func (s *BunStore) loadBunUsageProjections(
 	)
 	eventQuery = appendBunUsageBounds(
 		eventQuery, filter, "ue.occurred_at", true,
-		s.backend.TimestampOrderExpr,
+		bunNullableTimestamp, s.backend.TimestampOrderExpr,
 	)
 	if err := eventQuery.Scan(ctx, &events); err != nil {
 		return nil, fmt.Errorf("querying usage events: %w", err)
@@ -1074,12 +1237,12 @@ func (s *BunStore) loadBunUsageProjections(
 
 func appendBunUsageBounds(
 	query *bun.SelectQuery, filter UsageFilter, timestampColumn string,
-	withSessionFallback bool, timestampOrder func(string) string,
+	withSessionFallback bool, timestampValue, timestampOrder func(string) string,
 ) *bun.SelectQuery {
 	bounds := usageBoundsForFilter(filter)
-	expr := timestampOrder(bunNullableTimestamp(timestampColumn))
+	expr := timestampOrder(timestampValue(timestampColumn))
 	if withSessionFallback {
-		expr = "COALESCE(" + timestampOrder(bunNullableTimestamp(timestampColumn)) +
+		expr = "COALESCE(" + timestampOrder(timestampValue(timestampColumn)) +
 			", " + timestampOrder(bunNullableTimestamp("s.started_at")) +
 			", " + timestampOrder("s.created_at") + ")"
 	}
@@ -1288,6 +1451,16 @@ func dailyUsageProjectionTime(row bunDailyUsageProjection) time.Time {
 	return time.Time{}
 }
 
+func dailyUsageProjectionSnapshotTimestamp(row bunDailyUsageProjection) string {
+	if !row.UsageTimestamp.IsZero() {
+		return formatRequiredUsageTimestamp(row.UsageTimestamp)
+	}
+	if !row.SessionStartedAt.IsZero() {
+		return formatRequiredUsageTimestamp(row.SessionStartedAt)
+	}
+	return ""
+}
+
 func formatRequiredUsageTime(value time.Time) string {
 	if value.IsZero() {
 		return ""
@@ -1362,7 +1535,8 @@ func (s *BunStore) loadBunCursorUsageRows(
 		query = query.Where("cu.is_headless = ?", true)
 	}
 	query = appendBunUsageBounds(
-		query, filter, "cu.occurred_at", false, s.backend.TimestampOrderExpr,
+		query, filter, "cu.occurred_at", false,
+		bunNullableTimestamp, s.backend.TimestampOrderExpr,
 	)
 	if err := query.Scan(ctx, &rows); err != nil {
 		return nil, fmt.Errorf("querying cursor usage events: %w", err)

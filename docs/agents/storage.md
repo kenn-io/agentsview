@@ -44,6 +44,12 @@ atomically. Preserve sessions even when their source files no longer exist.
   DuckDB `USE`, handle swap/drain/close lifecycle, connector state, and
   unavoidable compatibility or capability probes. Keep each such seam inside
   its backend adapter and document why Bun cannot own it.
+- Attached archive recovery pins a guarded `bun.Conn`: the adapter owns
+  `ATTACH`/`DETACH` and temporary-table lifecycle on that connection, while
+  canonical child copies use registry-derived `INSERT ... SELECT` projections
+  through the connection's `bun.Tx`. Explicit SQLite transforms remain only
+  where physical IDs, pins, provenance, legacy relationships, or legacy
+  content sanitization must be remapped.
 - Backend-specific query construction is limited to this closed set of seams:
   lifecycle and connection-local operations; canonical schema creation,
   convergence, and validation; replication or mirror synchronization and
@@ -71,6 +77,27 @@ atomically. Preserve sessions even when their source files no longer exist.
   driver-side bind array. Chunk bounded reads and writes, keep sensitive
   values out of ad hoc logging, and inspect the formatted query when
   diagnosing placeholder or dialect failures.
+- Canonical slice writes use a 16 MiB approximate dynamic-payload budget,
+  matching the largest tool result the archive deliberately persists. This is
+  a pre-format row-payload target, not a statement-length, row-count, or
+  bind-variable guarantee: SQL syntax, escaping, and Bun's intermediate copies
+  add overhead. One larger logical row is written alone rather than split
+  across statements.
+
+### Timestamp compatibility
+
+- Canonical non-empty timestamps use the layouts accepted by
+  `bunmodel.ParseTimestamp`, normalize to UTC, and persist at microsecond
+  precision on every backend. Empty timestamps are unavailable.
+- Unsupported provider message timestamps are blanked during archive ingestion
+  and counted as a validation repair. The data-version 84 rebuild repairs
+  already archived live, orphaned, and trashed sessions so all backends read
+  the same canonical timestamp shape.
+- PostgreSQL, DuckDB, SQLite tool-result rows, and other common timestamp models
+  remain strict: unsupported non-empty values reject the session write or
+  replication transaction. Correcting the source value makes the next
+  canonical rewrite eligible to succeed; failed target transactions do not
+  advance their synchronization cursor.
 
 ## DuckDB Mirror
 

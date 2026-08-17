@@ -26,6 +26,21 @@ func Format(t time.Time) string {
 	return t.UTC().Format(time.RFC3339Nano)
 }
 
+// NormalizePostgresTimestampPrecision rounds a timestamp to PostgreSQL's
+// microsecond precision. Exact half-microsecond ties round to even.
+func NormalizePostgresTimestampPrecision(value time.Time) time.Time {
+	value = value.UTC()
+	microseconds := value.Nanosecond() / int(time.Microsecond)
+	remainder := value.Nanosecond() % int(time.Microsecond)
+	if remainder > int(time.Microsecond)/2 ||
+		remainder == int(time.Microsecond)/2 && microseconds%2 != 0 {
+		microseconds++
+	}
+	return value.Truncate(time.Second).Add(
+		time.Duration(microseconds) * time.Microsecond,
+	)
+}
+
 // IsValidDate reports whether s is a well-formed YYYY-MM-DD string.
 func IsValidDate(s string) bool {
 	_, err := time.Parse("2006-01-02", s)

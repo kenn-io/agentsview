@@ -341,7 +341,7 @@ func TestGetTrendsTermsSQLiteAppliesDayAndHourToMessageTimestamp(t *testing.T) {
 		"hour-filtered message total")
 }
 
-func TestGetTrendsTermsSQLiteTimestampFallback(t *testing.T) {
+func TestGetTrendsTermsRepairsMalformedProviderTimestamp(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 	start := "2024-06-05T09:00:00Z"
