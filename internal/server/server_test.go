@@ -1172,6 +1172,20 @@ func (te *testEnv) upload(
 	return w
 }
 
+func claudeTranscriptWithMessageCount(count int) string {
+	b := testjsonl.NewSessionBuilder()
+	base := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
+	for i := range count {
+		timestamp := base.Add(time.Duration(i) * time.Second).Format(time.RFC3339)
+		if i%2 == 0 {
+			b.AddClaudeUser(timestamp, fmt.Sprintf("question %d", i/2))
+		} else {
+			b.AddClaudeAssistant(timestamp, fmt.Sprintf("answer %d", i/2))
+		}
+	}
+	return b.String()
+}
+
 // decode unmarshals the response body into a typed struct.
 func decode[T any](
 	t *testing.T, w *httptest.ResponseRecorder,
@@ -4110,6 +4124,47 @@ func TestUploadSession_ExcludedOrTrashedConflict(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestUploadSession_RejectsShorterReplacementWithoutConsent(t *testing.T) {
+	te := setup(t)
+	const sessionID = "upload-shorter"
+	query := "project=myproj&machine=remote"
+	longTranscript := claudeTranscriptWithMessageCount(96)
+	shortTranscript := claudeTranscriptWithMessageCount(24)
+
+	w := te.upload(t, sessionID+".jsonl", longTranscript, query)
+	assertStatus(t, w, http.StatusOK)
+	destPath := filepath.Join(
+		te.dataDir, "uploads", "myproj", sessionID+".jsonl",
+	)
+	requireSessionMessages := func(want int) {
+		t.Helper()
+		messages, err := te.db.GetAllMessages(t.Context(), sessionID)
+		require.NoError(t, err)
+		require.Len(t, messages, want)
+	}
+	requireArchive := func(want string) {
+		t.Helper()
+		content, err := os.ReadFile(destPath)
+		require.NoError(t, err)
+		require.Equal(t, want, string(content))
+	}
+	requireSessionMessages(96)
+	requireArchive(longTranscript)
+
+	w = te.upload(t, sessionID+".jsonl", shortTranscript, query)
+	assertStatus(t, w, http.StatusConflict)
+	assertErrorResponse(t, w,
+		"session upload rejected: session upload-shorter has 96 messages, upload has 24; retry with allow_shorter=true")
+	requireSessionMessages(96)
+	requireArchive(longTranscript)
+
+	w = te.upload(t, sessionID+".jsonl", shortTranscript,
+		query+"&allow_shorter=true")
+	assertStatus(t, w, http.StatusOK)
+	requireSessionMessages(24)
+	requireArchive(shortTranscript)
 }
 
 func TestUploadSession_MultiSessionConflictDoesNotPartiallyWrite(t *testing.T) {
