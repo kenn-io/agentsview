@@ -5,15 +5,77 @@ description: Release history for AgentsView
 
 ## Unreleased
 
+**Bug fixes**
+
+- Ignore self-referential subagent spawn edges when linking session
+  hierarchy, and resolve a self-parent claim to the parser-derived parent (or
+  no parent) at ingest and once per archive for rows an earlier build had
+  linked to themselves.
+
+---
+
+## 0.41.0
+
+<small>2026-08-16</small>
+
 **New features**
 
-- Add Prime Agent session discovery, Pi-family conversation parsing, fork
-  lineage, and RLM-attributed token usage.
-- Add DeepSeek Harness session discovery for plain and multi-frame zstd JSONL,
-  including reasoning, tools, lineage, interrupted replies, and token usage.
+- Add session support for **DeepSeek Harness**, **TraeX (TRAE CLI 2.0)**,
+  **Codebuff and Freebuff**, **Prime Agent**, and **Goose**. The new parsers
+  preserve the formats' available reasoning, tool activity, relationships, and
+  usage or recorded costs; Prime Agent also carries Pi-family fork lineage and
+  RLM-attributed usage.
+- Import **Gemini Apps** `Prompted` activity from English-language Google
+  Takeout exports with `agentsview import --type gemini-apps`. Each activity
+  record becomes a one-turn session with its exported timezone preserved.
+- Discover **Qoder IDE** sessions from the platform-specific
+  `SharedClientCache/cli/projects` store in addition to the legacy export
+  directories.
+- Generate insights through a configured OpenAI-compatible
+  `/chat/completions` endpoint as an alternative to local agent CLIs.
+- Let expanded tool results switch between escaped raw text and sanitized,
+  rendered Markdown.
+- Organize model-written reports under **Recall → Generated insights**, add a
+  separate deterministic **Quality** page, expose Recall extraction coverage,
+  and manage extraction generations.
+- Record Amp's model and token counts per inference so model switches retain
+  their own usage rows.
+- Attribute complete delegated-session costs to the session that spawned the
+  work in usage reports, with `--own-only` available for the root session's
+  direct cost.
+- Add versioned JSON output to `agentsview usage statusline` for shell scripts
+  and status integrations.
+
+**Improvements**
+
+- Scale large activity reports with streaming aggregation, bounded pagination,
+  and fewer repeated snapshot scans.
+- Speed up daily usage reporting and duplicate-prompt analysis with narrower
+  indexed queries.
+- Make HTTP sync transfer and parse only sessions whose source files changed.
+- Reduce idle polling CPU and add `disabled_agents` so unused local session
+  sources can be turned off without removing archived sessions.
+- Persist Claude and Codex freshness digests across daemon restarts to avoid
+  reparsing unchanged sessions.
+- Bound startup reconciliation and expose daemon process identity, coverage,
+  and synchronization health in runtime status.
+- Recover from invalid Ollama embedding responses on CPU systems by retrying
+  through the compatible native endpoint.
 
 **Bug fixes**
 
+- Populate working directories for Kimi sessions.
+- Support legacy Zed thread schemas and restore response items from current VS
+  Code Copilot session files.
+- Preserve Codex tool outputs during incremental parsing and associate forked
+  turns with their actual parents.
+- Exclude replayed Codex subagent usage and stop repeatedly parsing titled
+  sessions when `session_index.jsonl` is absent.
+- Remove replayed prefixes from backgrounded Claude sessions and keep
+  IDE-context envelopes out of session previews.
+- Remove stored Claude sessions that a complete current parse no longer emits.
+- Honor explicitly empty agent-directory arrays instead of restoring default
+  discovery roots.
 - Stop the macOS app from asking for access to Documents, Downloads, Desktop,
   iCloud Drive, and cloud-provider folders such as Dropbox. Discovery read Git
   metadata from every recorded session working directory, so a first sync
@@ -21,10 +83,48 @@ description: Release history for AgentsView
   Sessions in those folders now keep path-only project identity; set
   `scan_protected_paths` to opt back in to Git remote, worktree, and branch
   detail there.
-- Ignore self-referential subagent spawn edges when linking session
-  hierarchy, and resolve a self-parent claim to the parser-derived parent (or
-  no parent) at ingest and once per archive for rows an earlier build had
-  linked to themselves.
+- Keep OpenCode's session container from consuming recursive watch capacity.
+- Keep root-session navigation unfiltered when returning from a child session.
+- Distinguish failed frontend actions from successful ones.
+- Start reliably when IPv4 and IPv6 listeners encounter port collisions.
+- Report stalled synchronization as unhealthy.
+
+**Acknowledgements**
+
+- Thanks to [Wes McKinney](https://github.com/wesm) for Recall extraction
+  progress and generation management; Generated insights and Quality; protected
+  path discovery; Codex and Claude freshness, parsing, and cleanup fixes; daemon
+  identity and health; HTTP sync, bounded startup, and activity scaling; usage
+  performance; and release documentation.
+- Thanks to [Marius van Niekerk](https://github.com/mariusvniekerk) for Prime
+  Agent support, Ollama CPU recovery, Codex replay and fork fixes, accurate
+  frontend action outcomes, bounded activity scans, lower idle CPU, and
+  agent-source controls.
+- Thanks to [Rod Boev](https://github.com/rodboev) for Gemini Apps import,
+  OpenCode watcher capacity, explicitly empty directory settings, raw and
+  formatted tool output, legacy Zed support, OpenAI-compatible insight
+  endpoints, Kimi working directories, and related documentation.
+- Thanks to [Matthew Jacobs](https://github.com/mjacobs) for complete delegated
+  session cost attribution.
+- Thanks to [Stephen Cross](https://github.com/scross01) for Codebuff and
+  Freebuff support.
+- Thanks to [Joonas Bergius](https://github.com/joonas) for Goose support.
+- Thanks to [GhostFlying](https://github.com/GhostFlying) for TraeX support.
+- Thanks to [Shrivatsa](https://github.com/shrivatsas) for Amp per-inference
+  model and token usage.
+- Thanks to [Wahaj Ahmed](https://github.com/wahajahmed010) for Qoder
+  SharedClientCache discovery.
+- Thanks to [Weng Jialin](https://github.com/Stool233) for DeepSeek Harness
+  support.
+- Thanks to [kai](https://github.com/dpanbug) for JSON statusline output.
+- Thanks to [Adam Malcontenti-Wilson](https://github.com/adammw) for keeping
+  Claude IDE context out of session previews.
+- Thanks to [Naveen Jain](https://github.com/naveenspark) for indexed duplicate
+  prompt comparisons.
+- Thanks to [Phillip Cloud](https://github.com/cpcloud) for stronger end-to-end
+  request failure reporting and more reliable Windows CI coverage.
+- Thanks to [Elliot Murphy](https://github.com/statik) for Windows-compatible
+  parser fixtures.
 
 ---
 

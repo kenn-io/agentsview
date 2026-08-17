@@ -290,7 +290,7 @@ Omitting the key keeps its default directories.
 | Posit Assistant       | `~/.posit/assistant/workspaces/`                                                 | Per-conversation `conversation.json` tree plus `lm-messages.jsonl` transcript                                                   |
 | Positron Assistant    | (platform-specific, see below)                                                   | JSON / JSONL per session                                                                                                        |
 | QClaw                 | `~/.qclaw/assets/static/agents/`                                                 | JSONL per session                                                                                                               |
-| Qoder                 | `~/.qoder/projects/` and `~/.qoderwork/projects/`                                | JSONL project transcripts plus sidecar metadata                                                                                 |
+| Qoder                 | Legacy export roots plus platform-specific `SharedClientCache` (see below)       | JSONL project transcripts plus sidecar metadata                                                                                 |
 | Qwen Code             | `~/.qwen/projects/`                                                              | JSONL per session                                                                                                               |
 | QwenPaw               | `~/.copaw/workspaces/`                                                           | JSON session files                                                                                                              |
 | Reasonix              | `~/.reasonix/` and `~/AppData/Roaming/reasonix/`                                 | JSONL sessions plus `.jsonl.meta` sidecars                                                                                      |
@@ -318,6 +318,17 @@ Prime Agent support targets the current flat session layout in v0.7.0. That
 release migrates the older per-project layout when Prime Agent opens its
 session store, so open the current Prime Agent once before syncing a legacy
 archive with AgentsView.
+
+**Qoder default directories** include the legacy `~/.qoder/projects/` and
+`~/.qoderwork/projects/` export roots plus the current IDE store:
+
+- **macOS:**
+  `~/Library/Application Support/Qoder/SharedClientCache/cli/projects/`
+- **Linux:** `~/.config/Qoder/SharedClientCache/cli/projects/`
+- **Windows:** `%APPDATA%\Qoder\SharedClientCache\cli\projects\`
+
+Set `QODER_PROJECTS_DIR` or `qoder_project_dirs` to replace these defaults with
+one or more explicit roots.
 
 Grok sessions are read from `summary.json` (title, timestamps, project),
 optional `signals.json` (token counters), and `chat_history.jsonl` when

@@ -1283,7 +1283,7 @@ agentsview help
 | `POSIT_ASSISTANT_DIR`             | `~/.posit/assistant/workspaces`                      | Posit Assistant workspaces directory                                                                |
 | `POSITRON_DIR`                    | (platform-specific)                                  | Positron Assistant user directory                                                                   |
 | `QCLAW_DIR`                       | `~/.qclaw/agents`                                    | QClaw agents directory                                                                              |
-| `QODER_PROJECTS_DIR`              | `~/.qoder/projects` and `~/.qoderwork/projects`      | Qoder projects directory                                                                            |
+| `QODER_PROJECTS_DIR`              | Legacy and platform-specific roots                   | Qoder projects directory; see [Session Discovery](/configuration/#session-discovery)                 |
 | `QWEN_PROJECTS_DIR`               | `~/.qwen/projects`                                   | Qwen Code projects directory                                                                        |
 | `QWENPAW_DIR`                     | `~/.copaw/workspaces`                                | QwenPaw workspaces directory                                                                        |
 | `REASONIX_DIR`                    | `~/.reasonix` and `~/AppData/Roaming/reasonix`       | Reasonix data directory                                                                             |

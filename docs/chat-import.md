@@ -3,7 +3,7 @@ title: Chat Import
 description: Import Claude.ai, ChatGPT, and Gemini Apps conversations into AgentsView
 ---
 
-AgentsView can import your conversation history from Claude.ai
+AgentsView can import your conversation history from Claude.ai,
 ChatGPT, and Gemini Apps. These services let you export your data as a zip
 file — AgentsView reads these exports and adds the conversations
 to your local database alongside your agent coding sessions.
@@ -43,6 +43,9 @@ unsupported localized Gemini candidates and malformed zone tokens are reported
 as unsupported before any sessions are emitted.
 
 ## Importing via the UI
+
+The web import dialog currently supports Claude.ai and ChatGPT. Import Gemini
+Apps exports with the [CLI](#importing-via-the-cli).
 
 Click the **Import conversations** button in the header
 (the upload icon in the top-right area) to open the import

@@ -24,6 +24,34 @@ async function snapEl(loc: Locator, name: string) {
   });
 }
 
+async function snapRange(
+  page: Page,
+  first: Locator,
+  last: Locator,
+  name: string
+) {
+  const firstBox = await first.boundingBox();
+  const lastBox = await last.boundingBox();
+  if (!firstBox || !lastBox) {
+    throw new Error(`cannot resolve screenshot bounds for ${name}`);
+  }
+  const x = Math.min(firstBox.x, lastBox.x);
+  const right = Math.max(
+    firstBox.x + firstBox.width,
+    lastBox.x + lastBox.width
+  );
+  await page.screenshot({
+    path: join(DIR, `${name}.png`),
+    type: 'png',
+    clip: {
+      x,
+      y: firstBox.y,
+      width: right - x,
+      height: lastBox.y + lastBox.height - firstBox.y,
+    },
+  });
+}
+
 async function waitForApp(page: Page) {
   await page.goto('/');
   await page.waitForSelector('.session-item', {
@@ -753,6 +781,41 @@ test.describe('Message viewer', () => {
     throw new Error('no visible .tool-block found in selected session');
   }
 
+  async function findVisibleToolBlockWithOutput(
+    page: Page
+  ): Promise<Locator> {
+    const rows = page.locator('.message, .virtual-row');
+    const count = await rows.count();
+    for (let i = 0; i < Math.min(count, 80); i++) {
+      await rows.nth(i).scrollIntoViewIfNeeded();
+      await page.waitForTimeout(100);
+
+      const tools = page.locator('.tool-block');
+      const toolCount = await tools.count();
+      for (let j = 0; j < toolCount; j++) {
+        const tool = tools.nth(j);
+        if (!(await tool.isVisible())) continue;
+
+        const header = tool.locator('.tool-header');
+        const isExpanded =
+          (await tool.locator('.tool-chevron.open').count()) > 0;
+        if (!isExpanded && (await header.count()) > 0) {
+          await header.click();
+          await page.waitForTimeout(100);
+        }
+        if (
+          await tool.locator('.output-header').isVisible().catch(() => false)
+        ) {
+          return tool;
+        }
+      }
+    }
+
+    throw new Error(
+      'no visible .tool-block with output found in selected session'
+    );
+  }
+
   test('full message view', async ({ page }) => {
     await selectRichSession(page);
     await snap(page, 'message-viewer');
@@ -852,6 +915,43 @@ test.describe('Message viewer', () => {
         }
       }
     }
+  });
+
+  test('formatted tool output', async ({ page }) => {
+    const toolOutputId = process.env.SCREENSHOT_TOOL_OUTPUT_SESSION_ID;
+    if (toolOutputId) {
+      await page.goto('/sessions/' + encodeURIComponent(toolOutputId));
+      await page.waitForSelector('.tool-block', { timeout: 15_000 });
+      await page.waitForTimeout(500);
+    } else {
+      await selectRichSession(page);
+    }
+
+    const tool = await findVisibleToolBlockWithOutput(page);
+
+    const outputHeader = tool.locator('.output-header');
+    await expect(outputHeader).toBeVisible({ timeout: 5_000 });
+    if (!(await tool.locator('.output-mode').isVisible().catch(() => false))) {
+      await outputHeader.click();
+      await page.waitForTimeout(300);
+    }
+
+    const formatted = tool.getByRole('radio', {
+      name: 'Formatted',
+      exact: true,
+    });
+    await expect(formatted).toBeVisible({ timeout: 5_000 });
+    await formatted.click();
+    await expect(tool.locator('.formatted-output')).toBeVisible({
+      timeout: 5_000,
+    });
+    await page.waitForTimeout(500);
+    await snapRange(
+      page,
+      tool.locator('.output-header-row'),
+      tool.locator('.formatted-output'),
+      'tool-output-formatted'
+    );
   });
 
   test('copy buttons on tool block', async ({ page }) => {
@@ -965,27 +1065,36 @@ test.describe('Message viewer', () => {
   });
 
   test('copy button on code block', async ({ page }) => {
+    const codeBlockId = process.env.SCREENSHOT_CODE_BLOCK_SESSION_ID;
+    if (codeBlockId) {
+      await page.goto('/sessions/' + encodeURIComponent(codeBlockId));
+      await page.waitForSelector('.code-block', { timeout: 15_000 });
+      await page.waitForTimeout(500);
+    }
+
     // Walk sessions until we find one with at least one fenced
     // code block. We scan more aggressively than selectRichSession
     // because most sessions have only inline code or no code at
     // all, and we need a `.code-block` (CodeBlock.svelte:34) for
     // this test to be meaningful.
-    const items = page.locator('.session-item');
-    const total = await items.count();
-    const max = Math.min(40, total);
-    let found = false;
-    for (let i = 0; i < max; i++) {
-      await items.nth(i).click();
-      await page.waitForSelector('.message', { timeout: 10_000 });
-      await page.waitForTimeout(400);
-      if (await page.locator('.code-block').first().count() > 0) {
-        found = true;
-        break;
+    if (!codeBlockId) {
+      const items = page.locator('.session-item');
+      const total = await items.count();
+      const max = Math.min(40, total);
+      let found = false;
+      for (let i = 0; i < max; i++) {
+        await items.nth(i).click();
+        await page.waitForSelector('.message', { timeout: 10_000 });
+        await page.waitForTimeout(400);
+        if (await page.locator('.code-block').first().count() > 0) {
+          found = true;
+          break;
+        }
       }
-    }
-    if (!found) {
-      test.skip(true,
-        `No .code-block found in the first ${max} sessions`);
+      if (!found) {
+        test.skip(true,
+          `No .code-block found in the first ${max} sessions`);
+      }
     }
 
     // Capture just the top of a code block where the copy

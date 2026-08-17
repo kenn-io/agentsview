@@ -79,6 +79,7 @@ expected_assets=(
   "screenshots/tool-block-copy-btn.png"
   "screenshots/tool-blocks.png"
   "screenshots/tool-groups.png"
+  "screenshots/tool-output-formatted.png"
   "screenshots/tool-usage.png"
   "screenshots/top-sessions.png"
   "screenshots/top-skills.png"

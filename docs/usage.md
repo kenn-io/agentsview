@@ -676,6 +676,14 @@ heredocs that would otherwise be truncated. Tool result content
 is stored alongside the tool call when available, giving a
 complete view of input and output.
 
+Expanded outputs start in **Raw** mode, which preserves the exact escaped text
+recorded by the agent. Switch to **Formatted** to render Markdown, including
+headings, lists, tables, and highlighted fenced code; HTML is sanitized before
+display. The mode changes presentation only—the stored result and copy button
+continue to use the raw output.
+
+![Formatted tool output](/assets/generated/screenshots/tool-output-formatted.png)
+
 Hover or focus a tool block to reveal copy buttons for the
 structured input and, when present, the tool output.
 
