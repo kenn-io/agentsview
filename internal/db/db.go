@@ -3824,12 +3824,12 @@ func (db *DB) RebuildFTS() error {
 	return nil
 }
 
-// HasFTS checks if Full Text Search is available.
-func (db *DB) HasFTS() bool {
+// Available checks if Full Text Search is available.
+func (capability sqliteFullTextCapability) Available() bool {
 	// We need to actually try to access the table, because it might exist
 	// in sqlite_master but fail to load if the fts5 module is missing
 	// in the current runtime.
-	_, err := db.getReader().Exec(
+	_, err := capability.store.getReader().Exec(
 		"SELECT 1 FROM messages_fts LIMIT 1",
 	)
 	return err == nil

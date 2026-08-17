@@ -424,6 +424,134 @@ func TestStoreSearchesMessagesContentAndSecrets(t *testing.T) {
 	assert.Equal(t, "secret token sk-duckdb", source)
 }
 
+func TestDuckSearchSessionJoinsToolResultsByCanonicalMessageKey(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	const sessionID = "canonical-session-search"
+	writes := []db.SessionBatchWrite{{
+		Session: syncSession(
+			sessionID, "alpha", "plain user message",
+			"2026-02-01T12:00:00Z", 2,
+		),
+		Messages: []db.Message{
+			syncMessage(
+				sessionID, 0, "user", "plain user message",
+				"2026-02-01T12:00:00Z",
+			),
+			syncMessage(
+				sessionID, 1, "assistant", "plain assistant message",
+				"2026-02-01T12:01:00Z", db.ToolCall{
+					ToolName:      "Bash",
+					Category:      "execution",
+					ResultContent: "canonical-only-result",
+				},
+			),
+		},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}}
+	_, err := local.WriteSessionBatchAtomic(writes)
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+	_, err = syncer.DB().ExecContext(ctx,
+		`UPDATE messages SET id = NULL WHERE session_id = ? AND ordinal = 1`,
+		sessionID,
+	)
+	require.NoError(t, err)
+
+	ordinals, err := NewStoreFromDB(syncer.DB()).SearchSession(
+		ctx, sessionID, "canonical-only-result",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []int{1}, ordinals)
+}
+
+func TestDuckBunStoreSearchUsesFullTextCapability(t *testing.T) {
+	store, fixture := newSyncedStore(t)
+
+	common := store.BunStore
+	page, err := common.Search(t.Context(), db.SearchFilter{
+		Query: "secret token", Project: "alpha", Limit: 10,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	assert.Equal(t, fixture.alphaID, page.Results[0].SessionID)
+	assert.Equal(t, 1, page.Results[0].Ordinal)
+}
+
+func TestDuckBunStoreSearchContentUsesCanonicalRows(t *testing.T) {
+	store, fixture := newSyncedStore(t)
+	common := store.BunStore
+
+	page, err := common.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: "secret token", Project: "alpha", Sources: []string{"messages"},
+		IncludeOneShot: true, Limit: 10,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, fixture.alphaID, page.Matches[0].SessionID)
+}
+
+func TestDuckBunStoreSearchContentUsesPortableFTS(t *testing.T) {
+	store, fixture := newSyncedStore(t)
+	common := store.BunStore
+
+	page, err := common.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: "secret token", Mode: "fts", Project: "alpha",
+		Sources: []string{"messages"}, IncludeOneShot: true, Limit: 10,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, fixture.alphaID, page.Matches[0].SessionID)
+}
+
+func TestDuckBunStoreSearchContentFTSOrdersByCanonicalRecency(t *testing.T) {
+	store, _ := newSyncedStore(t)
+	ctx := t.Context()
+	for _, fixture := range []struct {
+		id      string
+		endedAt string
+	}{
+		{id: "duck-fts-older", endedAt: "2026-01-01 00:00:00"},
+		{id: "duck-fts-newer", endedAt: "2026-02-01 00:00:00"},
+	} {
+		_, err := store.DB().ExecContext(ctx, `
+			INSERT INTO sessions (
+				id, project, machine, agent, message_count,
+				user_message_count, ended_at, created_at
+			) VALUES (?, 'parity', 'local', 'claude', 1, 2,
+				CAST(? AS TIMESTAMP), CAST(? AS TIMESTAMP))`,
+			fixture.id, fixture.endedAt, fixture.endedAt,
+		)
+		require.NoError(t, err)
+		_, err = store.DB().ExecContext(ctx, `
+			INSERT INTO messages (
+				session_id, ordinal, role, content, timestamp, content_length
+			) VALUES (?, 0, 'user', 'parityorderterm',
+				CAST(? AS TIMESTAMP), 15)`,
+			fixture.id, fixture.endedAt,
+		)
+		require.NoError(t, err)
+	}
+
+	page, err := store.BunStore.SearchContent(ctx, db.ContentSearchFilter{
+		Pattern: "parityorderterm", Mode: "fts", Sources: []string{"messages"},
+		IncludeOneShot: true, Limit: 1,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "duck-fts-newer", page.Matches[0].SessionID)
+	assert.Equal(t, 1, page.NextCursor)
+}
+
 func TestSearchContentFTSSingleTermFallback(t *testing.T) {
 	ctx := context.Background()
 	store, fixture := newSyncedStore(t)
