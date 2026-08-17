@@ -13,6 +13,7 @@ extra_javascript = ["javascripts/lightbox.js"]
 use_directory_urls = true
 nav = [
   {"Quick Start" = "quickstart.md"},
+  {"Changelog" = "changelog.md"},
   {"Contributing" = "contributing.md"},
   {"Configuration" = "configuration.md"},
   {"Usage Guide" = "usage.md"},
@@ -37,7 +38,6 @@ nav = [
   {"Filesystem Session Sync" = "filesystem-sync.md"},
   {"PostgreSQL Sync" = "pg-sync.md"},
   {"DuckDB Mirror" = "duckdb.md"},
-  {"Changelog" = "changelog.md"},
 ]
 
 [project.extra]
