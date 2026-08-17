@@ -28,6 +28,8 @@ func TestEnsureSchemaConvergesCommonColumnsAndRetainsPriorRows(t *testing.T) {
 	defer pg.Close()
 	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
 	_, err = pg.ExecContext(t.Context(), `
+		INSERT INTO source_archives (source_archive_id, source_archive_salt)
+		VALUES ('archive-1', 'salt-1');
 		INSERT INTO sessions (
 			id, machine, project, agent, created_at,
 			source_archive_id, source_database_generation
@@ -86,6 +88,8 @@ func TestPostgresCommonConvergenceRollsBackDDLAndStamp(t *testing.T) {
 	defer pg.Close()
 	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
 	_, err = pg.ExecContext(t.Context(), `
+		INSERT INTO source_archives (source_archive_id, source_archive_salt)
+		VALUES ('archive-1', 'salt-1');
 		INSERT INTO sessions (
 			id, machine, project, agent, created_at,
 			source_archive_id, source_database_generation
@@ -260,6 +264,65 @@ func TestEnsureSchemaMigratesPricingSentinelsBeforeTimestampConversion(
 	assert.Equal(t, int64(1500000), privateOutput)
 }
 
+func TestPostgresStampedCommonSchemaRejectsDrift(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanSchemaTestPG(t, pgURL)
+	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
+	pg, err := Open(pgURL, schemaTestSchema, true)
+	require.NoError(t, err)
+	defer pg.Close()
+	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
+	_, err = pg.ExecContext(t.Context(), `ALTER TABLE messages DROP COLUMN id`)
+	require.NoError(t, err)
+
+	err = convergePostgresCommonSchema(t.Context(), pg, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "validating stamped common PostgreSQL schema")
+
+	var exists bool
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = $1 AND table_name = 'messages' AND column_name = 'id'
+		)`, schemaTestSchema).Scan(&exists))
+	assert.False(t, exists, "stamped validation must not repair drift")
+}
+
+func TestPostgresSessionVersionTracksUpdatedAt(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanSchemaTestPG(t, pgURL)
+	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
+	pg, err := Open(pgURL, schemaTestSchema, true)
+	require.NoError(t, err)
+	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
+	store := newStore(pg)
+	defer store.Close()
+	_, err = pg.ExecContext(t.Context(), `
+		INSERT INTO source_archives (source_archive_id, source_archive_salt)
+		VALUES ('version-archive', 'version-salt');
+		INSERT INTO sessions (
+			id, machine, project, agent, message_count, file_mtime, file_hash,
+			created_at, updated_at, source_archive_id, source_database_generation
+		) VALUES (
+			'updated-version-session', 'machine', 'project', 'agent', 3, 42, 'hash',
+			'2026-08-02T12:00:00Z', '2026-08-02T12:00:00Z',
+			'version-archive', 'generation'
+		)`)
+	require.NoError(t, err)
+
+	count, before, ok := store.GetSessionVersion("updated-version-session")
+	require.True(t, ok)
+	assert.Equal(t, 3, count)
+	_, err = pg.ExecContext(t.Context(), `
+		UPDATE sessions SET updated_at = '2026-08-02T12:00:01Z'
+		WHERE id = 'updated-version-session'`)
+	require.NoError(t, err)
+	count, after, ok := store.GetSessionVersion("updated-version-session")
+	require.True(t, ok)
+	assert.Equal(t, 3, count)
+	assert.NotEqual(t, before, after)
+}
+
 func cleanSchemaTestPG(t *testing.T, pgURL string) {
 	t.Helper()
 	pg, err := sql.Open("pgx", pgURL)
@@ -288,8 +351,15 @@ func TestSessionDeletionCauseSchemaMigrationPreservesRows(t *testing.T) {
 		)`, schemaTestSchema).Scan(&exists))
 	require.True(t, exists, "fresh schema must include sessions.deletion_cause")
 	_, err = pg.Exec(`
-		INSERT INTO sessions (id, machine, project, agent, deleted_at)
-		VALUES ('preserved-trash', 'machine', 'project', 'claude', NOW())`)
+		INSERT INTO source_archives (source_archive_id, source_archive_salt)
+		VALUES ('migration-archive', 'migration-salt');
+		INSERT INTO sessions (
+			id, machine, project, agent, deleted_at,
+			source_archive_id, source_database_generation
+		) VALUES (
+			'preserved-trash', 'machine', 'project', 'claude', NOW(),
+			'migration-archive', 'migration-generation'
+		)`)
 	require.NoError(t, err)
 	_, err = pg.Exec(`ALTER TABLE sessions DROP COLUMN deletion_cause`)
 	require.NoError(t, err)
@@ -462,8 +532,15 @@ func TestEnsureSchemaMigratesLegacyMoneyColumns(t *testing.T) {
 	require.NoError(t, EnsureSchema(ctx, pg, schemaTestSchema),
 		"create current schema")
 	_, err = pg.ExecContext(ctx, `
-		INSERT INTO sessions (id, machine, project, agent)
-		VALUES ('legacy-money-session', 'host', 'project', 'codex');
+		INSERT INTO source_archives (source_archive_id, source_archive_salt)
+		VALUES ('money-archive', 'money-salt');
+		INSERT INTO sessions (
+			id, machine, project, agent,
+			source_archive_id, source_database_generation
+		) VALUES (
+			'legacy-money-session', 'host', 'project', 'codex',
+			'money-archive', 'money-generation'
+		);
 		INSERT INTO usage_events (
 			session_id, source, model, cost_microdollars, dedup_key
 		) VALUES (

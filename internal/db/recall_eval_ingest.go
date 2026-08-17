@@ -66,7 +66,7 @@ type EvalTrajectoryIngestResult struct {
 // creates a distinct eval corpus instead of silently retaining stale rows. It
 // mirrors the /import write path — a placeholder session satisfies the
 // source_session_id FK, then each chunk is inserted only if absent.
-func (db *DB) IngestEvalTrajectory(
+func (db *DB) ingestEvalTrajectory(
 	ctx context.Context, in EvalTrajectoryIngest,
 ) (EvalTrajectoryIngestResult, error) {
 	in = normalizeEvalTrajectoryIngest(in)

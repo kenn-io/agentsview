@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
@@ -189,21 +190,13 @@ func (db *DB) ExportSessionSummaries(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return SessionExportResult{}, fmt.Errorf(
-			"starting session export snapshot: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	result, err := db.exportSessionSummariesTx(ctx, tx, opts, true)
-	if err != nil {
-		return SessionExportResult{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return SessionExportResult{}, fmt.Errorf(
-			"committing session export snapshot: %w", err)
-	}
-	return result, nil
+	var result SessionExportResult
+	err := db.consistentView(ctx, func(store bun.IDB) error {
+		var err error
+		result, err = db.exportSessionSummariesTx(ctx, store, opts, true)
+		return err
+	})
+	return result, err
 }
 
 // ExportAllSessionSummaries follows every page inside one read transaction so
@@ -222,36 +215,33 @@ func (db *DB) exportAllSessionSummaries(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return nil, fmt.Errorf("starting complete session export snapshot: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
 	pages := []SessionExportResult{}
-	for {
-		result, err := db.exportSessionSummariesTx(ctx, tx, opts, false)
-		if err != nil {
-			return nil, err
-		}
-		pages = append(pages, result)
-		if afterPage != nil {
-			if err := afterPage(len(pages)); err != nil {
-				return nil, err
+	err := db.consistentView(ctx, func(store bun.IDB) error {
+		for {
+			result, err := db.exportSessionSummariesTx(ctx, store, opts, false)
+			if err != nil {
+				return err
 			}
+			pages = append(pages, result)
+			if afterPage != nil {
+				if err := afterPage(len(pages)); err != nil {
+					return err
+				}
+			}
+			if result.NextCursor == "" {
+				return nil
+			}
+			opts.Cursor = result.NextCursor
 		}
-		if result.NextCursor == "" {
-			break
-		}
-		opts.Cursor = result.NextCursor
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("committing complete session export snapshot: %w", err)
+	})
+	if err != nil {
+		return nil, err
 	}
 	return pages, nil
 }
 
 func (db *DB) exportSessionSummariesTx(
-	ctx context.Context, tx *sql.Tx, opts SessionExportOptions,
+	ctx context.Context, tx bun.IDB, opts SessionExportOptions,
 	cursorIntegrity bool,
 ) (SessionExportResult, error) {
 	if opts.Limit <= 0 || opts.Limit > MaxSessionLimit {
@@ -732,7 +722,7 @@ LIMIT ?`
 }
 
 func (db *DB) attachSessionExportUsage(
-	ctx context.Context, q sessionExportQuerier, rows []SessionSummaryRow,
+	ctx context.Context, q bun.IDB, rows []SessionSummaryRow,
 ) (*export.PricingBlock, error) {
 	if len(rows) == 0 {
 		return nil, nil

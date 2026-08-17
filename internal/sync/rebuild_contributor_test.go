@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -385,6 +386,66 @@ func TestResyncContributorPostSwapReopenRecoversOnRetry(t *testing.T) {
 	assert.Contains(t, stats.Warnings,
 		"resync reopen required a retry: transient reopen failure")
 	assert.False(t, database.WriterClosed())
+	session, getErr := database.GetSession(context.Background(), "session")
+	require.NoError(t, getErr)
+	require.NotNil(t, session)
+}
+
+func TestResyncContributorCancellationAfterInstallKeepsReplacementCurrent(t *testing.T) {
+	root := t.TempDir()
+	archivePath := filepath.Join(t.TempDir(), "archive.db")
+	database, err := db.Open(archivePath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "stale-before-resync", Project: "stale", Machine: "local", Agent: "codex",
+	}))
+	require.NoError(t, database.Close())
+	raw, err := sql.Open("sqlite3", archivePath)
+	require.NoError(t, err)
+	_, err = raw.Exec("PRAGMA user_version = 80")
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	database, err = db.Open(archivePath)
+	require.NoError(t, err)
+	require.True(t, database.NeedsResync(),
+		"the cancellation scenario must begin with genuinely stale parser data")
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+	path := filepath.Join(root, "project", "session.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().
+		AddClaudeUser("2026-01-01T00:00:00Z", "installed cancellation fixture").String()), 0o644))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stats, err := engine.resyncAllWithOptionsAndOperations(
+		ctx, nil, RebuildOptions{}, rebuildOperations{
+			rebuildFTS: productionRebuildOperations.rebuildFTS,
+			reopen: func(database *db.DB) error {
+				reopenErr := database.Reopen()
+				cancel()
+				return reopenErr
+			},
+		},
+	)
+
+	require.NoError(t, err)
+	assert.False(t, stats.Aborted)
+	assert.False(t, database.NeedsResync(),
+		"the installed replacement was finalized before rename")
+	raw, err = sql.Open("sqlite3", archivePath)
+	require.NoError(t, err)
+	var installedVersion int
+	require.NoError(t, raw.QueryRow("PRAGMA user_version").Scan(&installedVersion))
+	require.NoError(t, raw.Close())
+	assert.Equal(t, db.CurrentDataVersion(), installedVersion)
+	require.NoError(t, database.CloseConnections())
+	require.NoError(t, database.Reopen())
+	assert.False(t, database.NeedsResync(),
+		"the installed replacement must remain current after reopening")
 	session, getErr := database.GetSession(context.Background(), "session")
 	require.NoError(t, getErr)
 	require.NotNil(t, session)

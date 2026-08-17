@@ -1461,6 +1461,14 @@ func insertPinnedMessages(
 ) error {
 	for _, p := range pins {
 		if _, err := exec.ExecContext(ctx, `
+			UPDATE pinned_messages SET id = -id
+			WHERE id = ? AND id > 0
+				AND (session_id != ? OR ordinal != ?)`,
+			p.ID, p.SessionID, p.Ordinal,
+		); err != nil {
+			return fmt.Errorf("reconciling duckdb pinned_message id %d: %w", p.ID, err)
+		}
+		if _, err := exec.ExecContext(ctx, `
 			INSERT INTO pinned_messages (
 				id, session_id, message_id, ordinal, note, created_at
 			) VALUES (?, ?, ?, ?, ?, ?)

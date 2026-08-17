@@ -64,6 +64,83 @@ func TestEnsureSchemaCreatesRequiredMirrorTables(t *testing.T) {
 		schemaVersionMetadataKey,
 	).Scan(&version))
 	assert.Equal(t, strconv.Itoa(SchemaVersion), version)
+	var generation string
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT value FROM sync_metadata WHERE key = ?`,
+		mirrorGenerationMetadataKey,
+	).Scan(&generation))
+	assert.NotEmpty(t, generation)
+}
+
+func TestWriteMirrorMetadataPublishesFreshGeneration(t *testing.T) {
+	conn := openTestDuckDB(t)
+	require.NoError(t, createSchema(t.Context(), conn))
+
+	meta := mirrorMetadata{SchemaVersion: SchemaVersion, DataVersion: 81}
+	require.NoError(t, writeMirrorMetadata(t.Context(), conn, meta))
+	first, err := readMetadataKey(
+		t.Context(), conn, "agentsview_mirror_generation",
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, first)
+
+	require.NoError(t, writeMirrorMetadata(t.Context(), conn, meta))
+	second, err := readMetadataKey(
+		t.Context(), conn, "agentsview_mirror_generation",
+	)
+	require.NoError(t, err)
+	assert.NotEqual(t, first, second)
+}
+
+func TestWriteMirrorMetadataRollsBackBeforePublishingGeneration(t *testing.T) {
+	conn := openTestDuckDB(t)
+	_, err := conn.ExecContext(t.Context(), `
+		CREATE TABLE sync_metadata (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL,
+			CHECK (key != 'agentsview_last_push_machine' OR value != 'host')
+		);
+		INSERT INTO sync_metadata (key, value) VALUES
+			('agentsview_schema_version', '11'),
+			('agentsview_data_version', '80'),
+			('agentsview_source_database_id', 'old-database'),
+			('agentsview_source_archive_id', 'old-archive'),
+			('agentsview_push_scope', 'old-scope'),
+			('agentsview_last_push_cutoff', 'old-cutoff'),
+			('agentsview_last_push_at', 'old-at'),
+			('agentsview_last_push_machine', 'old-host'),
+			('agentsview_deletion_revision', '7'),
+			('agentsview_identity_revision', '8'),
+			('agentsview_mapping_revision', '9'),
+			('agentsview_mirror_generation', 'old-generation')`)
+	require.NoError(t, err)
+	before := readAllMirrorMetadataForTest(t, conn)
+
+	err = writeMirrorMetadata(t.Context(), conn, mirrorMetadata{
+		SchemaVersion: SchemaVersion, DataVersion: 81,
+		SourceDatabaseID: "new-database", SourceArchiveID: "new-archive",
+		Scope: "new-scope", LastPushCutoff: "new-cutoff",
+		LastPushAt: "new-at", LastPushMachine: "host",
+		DeletionRevision: 17, IdentityRevision: 18, MappingRevision: 19,
+	})
+	require.Error(t, err)
+	assert.Equal(t, before, readAllMirrorMetadataForTest(t, conn))
+}
+
+func readAllMirrorMetadataForTest(t *testing.T, conn *sql.DB) map[string]string {
+	t.Helper()
+	rows, err := conn.QueryContext(t.Context(), `
+		SELECT key, value FROM sync_metadata ORDER BY key`)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rows.Close()) }()
+	values := make(map[string]string)
+	for rows.Next() {
+		var key, value string
+		require.NoError(t, rows.Scan(&key, &value))
+		values[key] = value
+	}
+	require.NoError(t, rows.Err())
+	return values
 }
 
 func TestUsageEventsDedupIndexAllowsRepeatedEmptyKeysAndRejectsDuplicates(t *testing.T) {
@@ -127,6 +204,19 @@ func TestCheckSchemaCompatPassesAfterCreateSchema(t *testing.T) {
 
 	require.NoError(t, createSchema(ctx, db), "createSchema")
 	require.NoError(t, CheckSchemaCompat(ctx, db), "CheckSchemaCompat")
+}
+
+func TestCheckSchemaCompatRejectsMissingMirrorGeneration(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDuckDB(t)
+	require.NoError(t, createSchema(ctx, db), "createSchema")
+	_, err := db.ExecContext(ctx,
+		`DELETE FROM sync_metadata WHERE key = ?`, mirrorGenerationMetadataKey)
+	require.NoError(t, err)
+
+	err = CheckSchemaCompat(ctx, db)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), mirrorGenerationMetadataKey)
 }
 
 func TestCheckSchemaCompatViaQuackRejectsPreReportedCostMirror(t *testing.T) {

@@ -2,14 +2,8 @@ package duckdb
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/base64"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"regexp"
 	"sort"
@@ -19,7 +13,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/uptrace/bun"
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/duckdb/bundialect"
 	"go.kenn.io/agentsview/internal/secrets"
@@ -59,9 +52,6 @@ type Store struct {
 
 	quack          *quackClient
 	connectionKind duckDBConnectionKind
-	cursorMu       sync.RWMutex
-	cursorSecret   []byte
-	customPricing  map[string]config.CustomModelRate
 }
 
 type duckBunBackend struct {
@@ -78,12 +68,94 @@ func (*duckBunBackend) Capabilities() db.BackendCapabilities {
 	return db.BackendCapabilities{}
 }
 
+func (*duckBunBackend) SessionQueryDialect() db.QueryDialect {
+	return db.PortableBunSessionQueryDialect()
+}
+
+func (*duckBunBackend) SessionVersion(
+	ctx context.Context, store bun.IDB, id string,
+) (int, int64, error) {
+	return db.FileSessionVersion(ctx, store, id)
+}
+
 func (b *duckBunBackend) View(
 	_ context.Context, fn func(bun.IDB) error,
 ) error {
 	b.store.handleMu.RLock()
 	defer b.store.handleMu.RUnlock()
 	return fn(b.store.bun)
+}
+
+// ConsistentView keeps one coherent database image for a composite read. Local
+// serving mirrors are immutable for the lifetime of their guarded handle,
+// direct mutable connections use a read transaction, and Quack retries the
+// complete callback across a server-side mirror replacement detected through
+// its opaque generation token. Callbacks must stage their output because a
+// retry can replay them before ConsistentView returns.
+func (b *duckBunBackend) ConsistentView(
+	ctx context.Context, fn func(bun.IDB) error,
+) error {
+	b.store.handleMu.RLock()
+	defer b.store.handleMu.RUnlock()
+	if b.store.connectionKind == duckDBQuackClientConnection {
+		return stableDuckDBView(
+			ctx,
+			func(ctx context.Context) (string, error) {
+				return b.store.mirrorReadToken(ctx)
+			},
+			func() error { return fn(b.store.bun) },
+		)
+	}
+	if b.store.path != "" {
+		return fn(b.store.bun)
+	}
+	return b.store.bun.RunInTx(
+		ctx, nil,
+		func(_ context.Context, tx bun.Tx) error { return fn(tx) },
+	)
+}
+
+func (s *Store) mirrorReadToken(ctx context.Context) (string, error) {
+	var token string
+	err := queryDuckDBRowContext(
+		ctx, s.duck, s.connectionKind, s.quack,
+		`SELECT value FROM sync_metadata WHERE key = ?`,
+		mirrorGenerationMetadataKey,
+	).Scan(&token)
+	if err != nil {
+		return "", fmt.Errorf("reading duckdb mirror consistency token: %w", err)
+	}
+	if err := validateMirrorGeneration(token); err != nil {
+		return "", fmt.Errorf("reading duckdb mirror consistency token: %w", err)
+	}
+	return token, nil
+}
+
+const stableDuckDBViewAttempts = 3
+
+func stableDuckDBView(
+	ctx context.Context,
+	readToken func(context.Context) (string, error),
+	view func() error,
+) error {
+	for range stableDuckDBViewAttempts {
+		before, err := readToken(ctx)
+		if err != nil {
+			return err
+		}
+		viewErr := view()
+		after, err := readToken(ctx)
+		if err != nil {
+			return err
+		}
+		if before == after {
+			return viewErr
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	return fmt.Errorf("duckdb mirror changed during %d read attempts", stableDuckDBViewAttempts)
 }
 
 func (*duckBunBackend) Update(
@@ -277,191 +349,7 @@ func (r duckSingleRow) Scan(dest ...any) error {
 	return r.rows.Err()
 }
 
-func (s *Store) SetCustomPricing(p map[string]config.CustomModelRate) {
-	if s.BunStore != nil {
-		s.BunStore.SetCustomPricing(p)
-	}
-	s.customPricing = p
-}
-
-func (s *Store) SetCursorSecret(secret []byte) {
-	if s.BunStore != nil {
-		s.BunStore.SetCursorSecret(secret)
-	}
-	s.cursorMu.Lock()
-	defer s.cursorMu.Unlock()
-	s.cursorSecret = append([]byte(nil), secret...)
-}
-
 func (s *Store) ReadOnly() bool { return true }
-
-func (s *Store) ListRecallEntries(
-	_ context.Context, _ db.RecallQuery,
-) ([]db.RecallEntry, error) {
-	return nil, db.ErrReadOnly
-}
-
-func (s *Store) GetRecallEntry(
-	_ context.Context, _ string,
-) (*db.RecallEntry, error) {
-	return nil, db.ErrReadOnly
-}
-
-func (s *Store) QueryRecallEntries(
-	_ context.Context, _ db.RecallQuery,
-) (db.RecallPage, error) {
-	return db.RecallPage{}, db.ErrReadOnly
-}
-
-func (s *Store) RecordRecallQueryEvent(
-	_ context.Context, _ db.RecallQueryEvent,
-) (string, error) {
-	return "", db.ErrReadOnly
-}
-
-func (s *Store) InsertRecallEntry(_ db.RecallEntry) (string, error) {
-	return "", db.ErrReadOnly
-}
-
-func (s *Store) ImportAcceptedRecallEntriesJSONL(
-	_ context.Context, _ io.Reader,
-) (db.RecallImportResult, error) {
-	return db.RecallImportResult{}, db.ErrReadOnly
-}
-
-func (s *Store) ImportAcceptedRecallEntriesJSONLWithOptions(
-	_ context.Context, _ io.Reader, _ db.RecallImportOptions,
-) (db.RecallImportResult, error) {
-	return db.RecallImportResult{}, db.ErrReadOnly
-}
-
-func (s *Store) IngestEvalTrajectory(
-	_ context.Context, _ db.EvalTrajectoryIngest,
-) (db.EvalTrajectoryIngestResult, error) {
-	return db.EvalTrajectoryIngestResult{}, db.ErrReadOnly
-}
-
-const duckSessionCols = `id, project, machine, agent,
-	agent_label, entrypoint, session_kind,
-	first_message, COALESCE(display_name, session_name) AS display_name, created_at, started_at,
-	ended_at, message_count, user_message_count,
-	parent_session_id, relationship_type,
-	total_output_tokens, peak_context_tokens,
-	has_total_output_tokens, has_peak_context_tokens,
-	is_automated,
-	tool_failure_signal_count, tool_retry_count,
-	edit_churn_count, consecutive_failure_max,
-	outcome, outcome_confidence,
-	ended_with_role, final_failure_streak,
-	signals_pending_since,
-	compaction_count, mid_task_compaction_count,
-	context_pressure_max,
-	health_score, health_grade,
-	has_tool_calls, has_context_data,
-	quality_signal_version, short_prompt_count, unstructured_start,
-	missing_success_criteria_count, missing_verification_count,
-	duplicate_prompt_count, no_code_context_count, runaway_tool_loop_count,
-	data_version,
-	cwd, git_branch, source_session_id, source_version, transcript_fidelity,
-	parser_malformed_lines, is_truncated,
-	secret_leak_count, secrets_rules_version,
-	deleted_at, deletion_cause, termination_status, transcript_revision`
-
-func scanSession(rs interface{ Scan(...any) error }) (db.Session, error) {
-	var s db.Session
-	var createdAt any
-	var startedAt, endedAt, deletedAt any
-	err := rs.Scan(
-		&s.ID, &s.Project, &s.Machine, &s.Agent,
-		&s.AgentLabel, &s.Entrypoint, &s.SessionKind,
-		&s.FirstMessage, &s.DisplayName,
-		&createdAt, &startedAt, &endedAt,
-		&s.MessageCount, &s.UserMessageCount,
-		&s.ParentSessionID, &s.RelationshipType,
-		&s.TotalOutputTokens, &s.PeakContextTokens,
-		&s.HasTotalOutputTokens, &s.HasPeakContextTokens,
-		&s.IsAutomated,
-		&s.ToolFailureSignalCount, &s.ToolRetryCount,
-		&s.EditChurnCount, &s.ConsecutiveFailureMax,
-		&s.Outcome, &s.OutcomeConfidence,
-		&s.EndedWithRole, &s.FinalFailureStreak,
-		&s.SignalsPendingSince,
-		&s.CompactionCount, &s.MidTaskCompactionCount,
-		&s.ContextPressureMax,
-		&s.HealthScore, &s.HealthGrade,
-		&s.HasToolCalls, &s.HasContextData,
-		&s.QualitySignalVersion, &s.ShortPromptCount,
-		&s.UnstructuredStart, &s.MissingSuccessCriteriaCount,
-		&s.MissingVerificationCount, &s.DuplicatePromptCount,
-		&s.NoCodeContextCount, &s.RunawayToolLoopCount,
-		&s.DataVersion,
-		&s.Cwd, &s.GitBranch,
-		&s.SourceSessionID, &s.SourceVersion, &s.TranscriptFidelity,
-		&s.ParserMalformedLines, &s.IsTruncated,
-		&s.SecretLeakCount, &s.SecretsRulesVersion,
-		&deletedAt, &s.DeletionCause, &s.TerminationStatus, &s.TranscriptRevision,
-	)
-	if err != nil {
-		return s, err
-	}
-	s.CreatedAt = formatDBTime(createdAt)
-	if v := formatDBTime(startedAt); v != "" {
-		s.StartedAt = &v
-	}
-	if v := formatDBTime(endedAt); v != "" {
-		s.EndedAt = &v
-	}
-	if v := formatDBTime(deletedAt); v != "" {
-		s.DeletedAt = &v
-	}
-	return s, nil
-}
-
-func scanSessionRows(rows *sql.Rows) ([]db.Session, error) {
-	sessions := []db.Session{}
-	for rows.Next() {
-		s, err := scanSession(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scanning duckdb session: %w", err)
-		}
-		sessions = append(sessions, s)
-	}
-	return sessions, rows.Err()
-}
-
-func (s *Store) FindSessionIDsByPartial(
-	ctx context.Context, partial string, limit int,
-) ([]string, error) {
-	if partial == "" {
-		return nil, nil
-	}
-	if limit <= 0 {
-		limit = 5
-	}
-	rows, err := s.queryContext(ctx,
-		`SELECT id FROM sessions
-		 WHERE strpos(id, ?) > 0 AND deleted_at IS NULL
-		 ORDER BY COALESCE(ended_at, started_at, created_at) DESC
-		 LIMIT ?`,
-		partial, limit,
-	)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"finding sessions by partial id %q: %w",
-			partial, err,
-		)
-	}
-	defer rows.Close()
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
-}
 
 func formatDBTime(v any) string {
 	switch t := v.(type) {
@@ -476,460 +364,6 @@ func formatDBTime(v any) string {
 	default:
 		return fmt.Sprint(t)
 	}
-}
-
-func (s *Store) EncodeCursor(c db.SessionCursor) string {
-	data, _ := json.Marshal(c)
-	s.cursorMu.RLock()
-	secret := append([]byte(nil), s.cursorSecret...)
-	s.cursorMu.RUnlock()
-	mac := hmac.New(sha256.New, secret)
-	mac.Write(data)
-	sig := mac.Sum(nil)
-	return base64.RawURLEncoding.EncodeToString(data) + "." +
-		base64.RawURLEncoding.EncodeToString(sig)
-}
-
-func (s *Store) DecodeCursor(raw string) (db.SessionCursor, error) {
-	parts := strings.Split(raw, ".")
-	if len(parts) == 1 {
-		data, err := base64.RawURLEncoding.DecodeString(parts[0])
-		if err != nil {
-			return db.SessionCursor{}, fmt.Errorf("%w: %v", db.ErrInvalidCursor, err)
-		}
-		var c db.SessionCursor
-		if err := json.Unmarshal(data, &c); err != nil {
-			return db.SessionCursor{}, fmt.Errorf("%w: %v", db.ErrInvalidCursor, err)
-		}
-		c.Total = 0
-		return c, nil
-	}
-	if len(parts) != 2 {
-		return db.SessionCursor{}, fmt.Errorf("%w: invalid format", db.ErrInvalidCursor)
-	}
-	data, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil {
-		return db.SessionCursor{}, fmt.Errorf("%w: invalid payload: %v", db.ErrInvalidCursor, err)
-	}
-	sig, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return db.SessionCursor{}, fmt.Errorf("%w: invalid signature: %v", db.ErrInvalidCursor, err)
-	}
-	s.cursorMu.RLock()
-	secret := append([]byte(nil), s.cursorSecret...)
-	s.cursorMu.RUnlock()
-	mac := hmac.New(sha256.New, secret)
-	mac.Write(data)
-	if !hmac.Equal(sig, mac.Sum(nil)) {
-		return db.SessionCursor{}, fmt.Errorf("%w: signature mismatch", db.ErrInvalidCursor)
-	}
-	var c db.SessionCursor
-	if err := json.Unmarshal(data, &c); err != nil {
-		return db.SessionCursor{}, fmt.Errorf("%w: invalid json: %v", db.ErrInvalidCursor, err)
-	}
-	return c, nil
-}
-
-func (s *Store) ListSessions(ctx context.Context, f db.SessionFilter) (db.SessionPage, error) {
-	if f.Limit <= 0 || f.Limit > db.MaxSessionLimit {
-		f.Limit = db.DefaultSessionLimit
-	}
-	where, args := db.BuildSessionFilterSQL(f, db.DuckDBQueryDialect())
-	rs := db.ResolveSort(f)
-	total := 0
-	var cur db.SessionCursor
-	if f.Cursor != "" {
-		var err error
-		cur, err = s.DecodeCursor(f.Cursor)
-		if err != nil {
-			return db.SessionPage{}, err
-		}
-		total = cur.Total
-	}
-	if total <= 0 {
-		if err := s.queryRowContext(ctx,
-			"SELECT COUNT(*) FROM sessions WHERE "+where,
-			args...,
-		).Scan(&total); err != nil {
-			return db.SessionPage{}, fmt.Errorf("counting duckdb sessions: %w", err)
-		}
-	}
-	cursorArgs := append([]any{}, args...)
-	pageBuilder := db.NewQueryBuilder(db.DuckDBQueryDialect(), len(args))
-	cursorWhere := where
-	if f.Cursor != "" {
-		vals, err := db.CursorPredicateValues(cur, rs)
-		if err != nil {
-			return db.SessionPage{}, err
-		}
-		cursorWhere += " AND " + pageBuilder.CursorPredicate(rs, f, vals, cur.ID)
-	}
-	query := "SELECT " + duckSessionCols +
-		" FROM sessions WHERE " + cursorWhere + " " +
-		pageBuilder.OrderByClause(rs, f) + " " +
-		pageBuilder.Limit(f.Limit+1)
-	cursorArgs = append(cursorArgs, pageBuilder.Args()...)
-	rows, err := s.queryContext(ctx, query, cursorArgs...)
-	if err != nil {
-		return db.SessionPage{}, fmt.Errorf("querying duckdb sessions: %w", err)
-	}
-	defer rows.Close()
-	sessions, err := scanSessionRows(rows)
-	if err != nil {
-		return db.SessionPage{}, err
-	}
-	page := db.SessionPage{Sessions: sessions, Total: total}
-	if len(sessions) > f.Limit {
-		page.Sessions = sessions[:f.Limit]
-		last := page.Sessions[f.Limit-1]
-		page.NextCursor = s.EncodeCursor(db.NextSessionCursor(&last, rs, total, f))
-	}
-	return page, nil
-}
-
-func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) (db.SidebarSessionIndex, error) {
-	f.IncludeChildren = true
-	f.IncludeOrphans = true
-	f.Cursor = ""
-	f.Limit = 0
-
-	dialect := db.DuckDBQueryDialect()
-	where, args := db.BuildSessionFilterSQL(f, dialect)
-	rootFilter := f
-	rootFilter.IncludeChildren = false
-	rootWhere, rootArgs := db.BuildSessionBaseFilterSQL(rootFilter, dialect)
-	canonicalRootWhere := db.BuildCanonicalRootWhere(
-		dialect, "sessions", f.IncludeOrphans,
-	)
-	var total int
-	if err := s.queryRowContext(
-		ctx,
-		"SELECT COUNT(*) FROM sessions WHERE "+rootWhere+
-			" AND "+canonicalRootWhere,
-		rootArgs...,
-	).Scan(&total); err != nil {
-		return db.SidebarSessionIndex{},
-			fmt.Errorf("counting duckdb sidebar roots: %w", err)
-	}
-	query := `
-		SELECT
-			id,
-			parent_session_id,
-			relationship_type,
-			project,
-			machine,
-			agent,
-			agent_label,
-			entrypoint,
-			session_kind,
-			COALESCE(display_name, session_name) AS display_name,
-			started_at,
-			ended_at,
-			created_at,
-			termination_status,
-			message_count,
-			user_message_count,
-			transcript_revision,
-			is_automated,
-			position('<teammate-message' in COALESCE(first_message, '')) > 0
-		FROM sessions
-		WHERE ` + where + `
-		ORDER BY COALESCE(
-			ended_at, started_at, created_at
-		) DESC, id DESC`
-
-	rows, err := s.queryContext(ctx, query, args...)
-	if err != nil {
-		return db.SidebarSessionIndex{},
-			fmt.Errorf("querying duckdb sidebar session index: %w", err)
-	}
-	defer rows.Close()
-
-	index := db.SidebarSessionIndex{
-		Sessions: []db.SidebarSessionIndexRow{},
-		Total:    total,
-	}
-	for rows.Next() {
-		var row db.SidebarSessionIndexRow
-		var startedAt, endedAt, createdAt any
-		if err := rows.Scan(
-			&row.ID,
-			&row.ParentSessionID,
-			&row.RelationshipType,
-			&row.Project,
-			&row.Machine,
-			&row.Agent,
-			&row.AgentLabel,
-			&row.Entrypoint,
-			&row.SessionKind,
-			&row.DisplayName,
-			&startedAt,
-			&endedAt,
-			&createdAt,
-			&row.TerminationStatus,
-			&row.MessageCount,
-			&row.UserMessageCount,
-			&row.TranscriptRevision,
-			&row.IsAutomated,
-			&row.IsTeammate,
-		); err != nil {
-			return db.SidebarSessionIndex{},
-				fmt.Errorf(
-					"scanning duckdb sidebar session index: %w",
-					err,
-				)
-		}
-		if v := formatDBTime(startedAt); v != "" {
-			row.StartedAt = &v
-		}
-		if v := formatDBTime(endedAt); v != "" {
-			row.EndedAt = &v
-		}
-		row.CreatedAt = formatDBTime(createdAt)
-		index.Sessions = append(index.Sessions, row)
-	}
-	if err := rows.Err(); err != nil {
-		return db.SidebarSessionIndex{},
-			fmt.Errorf("iterating duckdb sidebar session index: %w", err)
-	}
-	return index, nil
-}
-
-func (s *Store) GetSession(ctx context.Context, id string) (*db.Session, error) {
-	row := s.queryRowContext(ctx,
-		"SELECT "+duckSessionCols+" FROM sessions WHERE id = ? AND deleted_at IS NULL",
-		id,
-	)
-	sess, err := scanSession(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("getting duckdb session: %w", err)
-	}
-	return &sess, nil
-}
-
-func (s *Store) GetSessionFull(ctx context.Context, id string) (*db.Session, error) {
-	row := s.queryRowContext(ctx,
-		"SELECT "+duckSessionCols+" FROM sessions WHERE id = ?",
-		id,
-	)
-	sess, err := scanSession(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("getting duckdb full session: %w", err)
-	}
-	return &sess, nil
-}
-
-func (s *Store) ListTrashedSessions(ctx context.Context) ([]db.Session, error) {
-	rows, err := s.queryContext(ctx,
-		"SELECT "+duckSessionCols+
-			" FROM sessions WHERE deleted_at IS NOT NULL"+
-			" AND deletion_cause IS NULL"+
-			" ORDER BY deleted_at DESC LIMIT 500",
-	)
-	if err != nil {
-		return nil, fmt.Errorf("listing duckdb trash: %w", err)
-	}
-	defer rows.Close()
-	return scanSessionRows(rows)
-}
-
-func (s *Store) GetChildSessions(ctx context.Context, parentID string) ([]db.Session, error) {
-	rows, err := s.queryContext(ctx,
-		"SELECT "+duckSessionCols+` FROM sessions
-		 WHERE parent_session_id = ? AND deleted_at IS NULL
-		 ORDER BY COALESCE(started_at, created_at) ASC`,
-		parentID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("querying duckdb child sessions: %w", err)
-	}
-	defer rows.Close()
-	return scanSessionRows(rows)
-}
-
-func (s *Store) GetSessionVersion(id string) (int, int64, bool) {
-	var count int
-	var fileMtime sql.NullInt64
-	var fileHash sql.NullString
-	var updated any
-	err := s.queryRowContext(context.Background(),
-		`SELECT message_count, file_mtime, file_hash,
-		        COALESCE(local_modified_at, ended_at, started_at, created_at)
-		 FROM sessions WHERE id = ?`,
-		id,
-	).Scan(&count, &fileMtime, &fileHash, &updated)
-	if err != nil {
-		return 0, 0, false
-	}
-	fileMtimePart := ""
-	if fileMtime.Valid {
-		fileMtimePart = fmt.Sprintf("%d", fileMtime.Int64)
-	}
-	fileHashPart := ""
-	if fileHash.Valid {
-		fileHashPart = fileHash.String
-	}
-	return count, db.SessionVersionMarker(
-		fileMtimePart,
-		fileHashPart,
-		formatDBTime(updated),
-	), true
-}
-
-func (s *Store) GetStats(ctx context.Context, excludeOneShot, excludeAutomated bool) (db.Stats, error) {
-	filter := rootSessionWhere(excludeOneShot, excludeAutomated)
-	query := fmt.Sprintf(`
-		SELECT
-			COUNT(*),
-			COALESCE(SUM(message_count), 0),
-			COUNT(DISTINCT project),
-			COUNT(DISTINCT machine),
-			MIN(COALESCE(started_at, created_at))
-		FROM sessions
-		WHERE %s`,
-		filter)
-	var stats db.Stats
-	var earliest any
-	if err := s.queryRowContext(ctx, query).Scan(
-		&stats.SessionCount, &stats.MessageCount,
-		&stats.ProjectCount, &stats.MachineCount, &earliest,
-	); err != nil {
-		return db.Stats{}, fmt.Errorf("fetching duckdb stats: %w", err)
-	}
-	if v := formatDBTime(earliest); v != "" {
-		stats.EarliestSession = &v
-	}
-	return stats, nil
-}
-
-func (s *Store) GetProjects(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]db.ProjectInfo, error) {
-	rows, err := s.queryContext(ctx,
-		`SELECT project, COUNT(*) FROM sessions WHERE `+
-			rootSessionWhere(excludeOneShot, excludeAutomated)+
-			` GROUP BY project ORDER BY project`,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []db.ProjectInfo
-	for rows.Next() {
-		var p db.ProjectInfo
-		if err := rows.Scan(&p.Name, &p.SessionCount); err != nil {
-			return nil, err
-		}
-		out = append(out, p)
-	}
-	return out, rows.Err()
-}
-
-func (s *Store) GetActiveProjectLabels(ctx context.Context) ([]string, error) {
-	rows, err := s.queryContext(ctx,
-		`SELECT DISTINCT project
-		 FROM sessions
-		 WHERE deleted_at IS NULL
-		 ORDER BY project`)
-	if err != nil {
-		return nil, fmt.Errorf("querying active project labels: %w", err)
-	}
-	defer rows.Close()
-
-	var labels []string
-	for rows.Next() {
-		var label string
-		if err := rows.Scan(&label); err != nil {
-			return nil, fmt.Errorf("scanning active project label: %w", err)
-		}
-		labels = append(labels, label)
-	}
-	return labels, rows.Err()
-}
-
-func (s *Store) GetAgents(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]db.AgentInfo, error) {
-	rows, err := s.queryContext(ctx,
-		`SELECT agent, COUNT(*) FROM sessions WHERE agent <> '' AND `+
-			rootSessionWhere(excludeOneShot, excludeAutomated)+
-			` GROUP BY agent ORDER BY agent`,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []db.AgentInfo
-	for rows.Next() {
-		var a db.AgentInfo
-		if err := rows.Scan(&a.Name, &a.SessionCount); err != nil {
-			return nil, err
-		}
-		out = append(out, a)
-	}
-	return out, rows.Err()
-}
-
-func (s *Store) GetMachines(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]string, error) {
-	rows, err := s.queryContext(ctx,
-		`SELECT DISTINCT machine FROM sessions WHERE `+
-			rootSessionWhere(excludeOneShot, excludeAutomated)+
-			` ORDER BY machine`,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var machine string
-		if err := rows.Scan(&machine); err != nil {
-			return nil, err
-		}
-		out = append(out, machine)
-	}
-	return out, rows.Err()
-}
-
-func (s *Store) GetBranches(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]db.BranchInfo, error) {
-	rows, err := s.queryContext(ctx,
-		`SELECT DISTINCT project, git_branch FROM sessions WHERE `+
-			rootSessionWhere(excludeOneShot, excludeAutomated)+
-			` ORDER BY project, git_branch`,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("querying duckdb branches: %w", err)
-	}
-	defer rows.Close()
-	out := []db.BranchInfo{}
-	for rows.Next() {
-		var bi db.BranchInfo
-		if err := rows.Scan(&bi.Project, &bi.Branch); err != nil {
-			return nil, fmt.Errorf("scanning duckdb branch: %w", err)
-		}
-		bi.Token = db.EncodeBranchFilterToken(bi.Project, bi.Branch)
-		out = append(out, bi)
-	}
-	return out, rows.Err()
-}
-
-func rootSessionWhere(excludeOneShot, excludeAutomated bool) string {
-	filter := `message_count > 0
-		AND relationship_type NOT IN ('subagent', 'fork')
-		AND deleted_at IS NULL`
-	if excludeOneShot {
-		if !excludeAutomated {
-			filter += " AND (user_message_count > 1 OR is_automated = TRUE)"
-		} else {
-			filter += " AND user_message_count > 1"
-		}
-	}
-	if excludeAutomated {
-		filter += " AND is_automated = FALSE"
-	}
-	return filter
 }
 
 func (s *Store) HasFTS() bool { return true }
@@ -1614,7 +1048,7 @@ func scanDuckContentCandidateRows(rows *sql.Rows) ([]duckContentCandidate, error
 		}
 		candidate.match.Timestamp = formatDBTime(ts)
 		candidate.sortTS = formatDBTime(sortTS)
-		candidate.sortTime, candidate.hasSort = parseAnalyticsTime(candidate.sortTS)
+		candidate.sortTime, candidate.hasSort = parseDuckTime(candidate.sortTS)
 		candidate.match.Snippet = candidate.body
 		out = append(out, candidate)
 	}

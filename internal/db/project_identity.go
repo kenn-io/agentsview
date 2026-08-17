@@ -1591,23 +1591,9 @@ func scrubProjectIdentityGitRemoteCredentialsTx(
 	return nil
 }
 
-// ListProjectIdentityObservations returns the aggregate identity
-// observations for the given raw project labels, or every stored
-// observation when labels is nil. Rows are ordered by (project, machine,
-// root_path, git_remote). Label lists of any size are supported: labels
-// are sorted, deduplicated, and split into maxSQLVars-sized chunks so the
-// IN list never exceeds SQLite's bind-variable limit. Because project is
-// the leading ORDER BY key, the chunks partition the sorted label list
-// into disjoint ranges, and SQLite's default BINARY collation matches
-// Go's byte-wise string order, concatenating per-chunk results preserves
-// the single-query global ordering.
-func (db *DB) ListProjectIdentityObservations(
-	ctx context.Context,
-	labels []string,
-) ([]export.ProjectIdentityObservation, error) {
-	return db.listProjectIdentityObservationsFrom(ctx, db.getReader(), labels)
-}
-
+// listProjectIdentityObservationsFrom retains the transaction-scoped identity
+// projection used by export snapshots. Serving reads use BunStore's canonical
+// source-scoped implementation.
 func (db *DB) listProjectIdentityObservationsFrom(
 	ctx context.Context,
 	q sessionExportQuerier,
@@ -1942,33 +1928,6 @@ func (db *DB) ListPublishableSessionProjectIdentitySnapshots(
 		return nil
 	})
 	return out, err
-}
-
-func (db *DB) BuildProjectIdentityMap(
-	ctx context.Context,
-	labels []string,
-) (map[string]export.ProjectMapEntry, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if labels != nil && len(labels) == 0 {
-		return map[string]export.ProjectMapEntry{}, nil
-	}
-	observations, err := db.ListProjectIdentityObservations(ctx, labels)
-	if err != nil {
-		return nil, err
-	}
-	archiveID, err := db.GetArchiveID(ctx)
-	if err != nil {
-		return nil, err
-	}
-	archiveSalt, err := db.GetArchiveSalt(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return export.BuildProjectsMapWithScope(labels, observations, export.IdentityScope{
-		ArchiveID: archiveID, ArchiveSalt: archiveSalt,
-	}), nil
 }
 
 func newUUIDv4() (string, error) {

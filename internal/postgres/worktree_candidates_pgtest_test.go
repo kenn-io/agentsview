@@ -121,7 +121,7 @@ func TestPGWorktreeCandidatesArchiveWideMatchesSQLite(t *testing.T) {
 	localCandidates, err := localDB.ListArchiveWorktreeCandidates(ctx, req)
 	require.NoError(t, err, "local ListArchiveWorktreeCandidates")
 
-	pgStore := &Store{pg: pg}
+	pgStore := newStore(pg)
 	pgCandidates, err := pgStore.ListArchiveWorktreeCandidates(ctx, req)
 	require.NoError(t, err, "pg ListArchiveWorktreeCandidates")
 
@@ -194,7 +194,7 @@ func TestPGWorktreeCandidatesIncludeResolvedProjectAliases(t *testing.T) {
 		localDB.ListArchiveWorktreeCandidates(ctx, request)
 	require.NoError(t, err)
 	pgCandidates, err :=
-		(&Store{pg: pg}).ListArchiveWorktreeCandidates(ctx, request)
+		newStore(pg).ListArchiveWorktreeCandidates(ctx, request)
 	require.NoError(t, err)
 
 	assert.Equal(t, localCandidates, pgCandidates)
@@ -263,7 +263,7 @@ func TestPGWorktreeCandidatesUseSessionDatabaseGeneration(t *testing.T) {
 	require.Equal(t, 2, snapshotCount,
 		"independent filtered scopes preserve both database generations")
 
-	store := &Store{pg: pg}
+	store := newStore(pg)
 	projects, err := store.BuildProjectIdentityMap(ctx, []string{newProject})
 	require.NoError(t, err)
 	request := db.ArchiveWorktreeCandidateRequest{
@@ -294,7 +294,7 @@ func TestPGListArchiveWorktreeCandidatesKeyMismatch(t *testing.T) {
 	_, err := sync.Push(ctx, false, nil)
 	require.NoError(t, err, "Push")
 
-	pgStore := &Store{pg: pg}
+	pgStore := newStore(pg)
 
 	candidates, err := pgStore.ListArchiveWorktreeCandidates(ctx,
 		db.ArchiveWorktreeCandidateRequest{
