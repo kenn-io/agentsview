@@ -85,7 +85,7 @@ describe("i18n locale selection", () => {
   });
 
   it("keeps the supported locale list explicit", () => {
-    expect(SUPPORTED_LOCALES).toEqual(["en", "ja", "zh-CN", "zh-TW", "ko", "fr"]);
+    expect(SUPPORTED_LOCALES).toEqual(["en", "zh-CN", "zh-TW", "ko", "fr", "ja"]);
   });
 
   it("keeps every translated locale's keys aligned with English", () => {

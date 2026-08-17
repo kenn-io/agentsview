@@ -20,10 +20,6 @@
       label: m.settings_language_english(),
     },
     {
-      name: "ja",
-      label: m.settings_language_japanese(),
-    },
-    {
       name: "zh-CN",
       label: m.settings_language_simplified_chinese(),
     },
@@ -38,6 +34,10 @@
     {
       name: "fr",
       label: m.settings_language_french(),
+    },
+    {
+      name: "ja",
+      label: m.settings_language_japanese(),
     },
   ]);
 

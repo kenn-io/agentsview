@@ -11,7 +11,7 @@ export { getLocale };
 
 export const DEFAULT_LOCALE = "en";
 export const LOCALE_STORAGE_KEY = "agentsview-locale";
-export const SUPPORTED_LOCALES = ["en", "ja", "zh-CN", "zh-TW", "ko", "fr"] as const;
+export const SUPPORTED_LOCALES = ["en", "zh-CN", "zh-TW", "ko", "fr", "ja"] as const;
 
 export type SupportedLocale = typeof SUPPORTED_LOCALES[number];
 
