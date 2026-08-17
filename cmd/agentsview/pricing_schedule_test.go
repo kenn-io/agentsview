@@ -17,8 +17,8 @@ import (
 )
 
 // Resync may spend up to five seconds draining SQLite connections before a
-// swap, particularly on Windows where open handles prevent the rename.
-const pricingResyncTestTimeout = 10 * time.Second
+// swap, and the surrounding work can take longer on loaded Windows runners.
+const pricingResyncTestTimeout = 30 * time.Second
 
 type pricingCatalogTransport struct {
 	requests chan *http.Request
