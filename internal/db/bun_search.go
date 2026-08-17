@@ -3,23 +3,9 @@ package db
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/uptrace/bun"
-	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
-
-type bunSearchSession struct {
-	ID           string              `bun:"id"`
-	Project      string              `bun:"project"`
-	Agent        string              `bun:"agent"`
-	FirstMessage *string             `bun:"first_message"`
-	DisplayName  *string             `bun:"display_name"`
-	SessionName  *string             `bun:"session_name"`
-	CreatedAt    bunmodel.Timestamp  `bun:"created_at"`
-	StartedAt    *bunmodel.Timestamp `bun:"started_at"`
-	EndedAt      *bunmodel.Timestamp `bun:"ended_at"`
-}
 
 // HasFTS reports whether the adapter has an available lexical capability.
 func (s *BunStore) HasFTS() bool {
@@ -57,52 +43,12 @@ func (s *BunStore) Search(
 			return nil
 		}
 
-		ids := make([]string, 0, len(hits))
-		seen := make(map[string]struct{}, len(hits))
+		attempt.Results = hits[:0]
 		for _, hit := range hits {
 			if hit.SessionID == "" {
 				continue
 			}
-			if _, ok := seen[hit.SessionID]; ok {
-				continue
-			}
-			seen[hit.SessionID] = struct{}{}
-			ids = append(ids, hit.SessionID)
-		}
-		if len(ids) == 0 {
-			page = attempt
-			return nil
-		}
-
-		var rows []bunSearchSession
-		query := store.NewSelect().Table("sessions").
-			Column("id", "project", "agent", "first_message", "display_name", "session_name").
-			Column("created_at", "started_at", "ended_at").
-			Where("id IN (?)", bun.List(ids)).
-			Where("deleted_at IS NULL")
-		if filter.Project != "" {
-			query = query.Where("project = ?", filter.Project)
-		}
-		if err := query.Scan(ctx, &rows); err != nil {
-			return fmt.Errorf("hydrating search sessions: %w", err)
-		}
-		byID := make(map[string]bunSearchSession, len(rows))
-		for _, row := range rows {
-			byID[row.ID] = row
-		}
-		attempt.Results = make([]SearchResult, 0, min(len(rows), filter.Limit+1))
-		for _, hit := range hits {
-			row, ok := byID[hit.SessionID]
-			if !ok {
-				continue
-			}
-			attempt.Results = append(attempt.Results, SearchResult{
-				SessionID: row.ID, Project: row.Project, Agent: row.Agent,
-				Name: searchSessionName(row), Ordinal: hit.Ordinal,
-				SessionEndedAt: searchSessionActivity(row),
-				Snippet:        hit.Snippet, Rank: hit.Rank,
-			})
-			delete(byID, hit.SessionID)
+			attempt.Results = append(attempt.Results, hit)
 		}
 		if len(attempt.Results) > filter.Limit {
 			attempt.Results = attempt.Results[:filter.Limit]
@@ -135,22 +81,4 @@ func (s *BunStore) SearchSession(
 		return nil
 	})
 	return ordinals, err
-}
-
-func searchSessionName(row bunSearchSession) string {
-	for _, value := range []*string{row.DisplayName, row.SessionName, row.FirstMessage} {
-		if value != nil && *value != "" {
-			return *value
-		}
-	}
-	return ""
-}
-
-func searchSessionActivity(row bunSearchSession) string {
-	for _, value := range []*bunmodel.Timestamp{row.EndedAt, row.StartedAt, &row.CreatedAt} {
-		if value != nil && !value.IsZero() {
-			return value.UTC().Format(time.RFC3339Nano)
-		}
-	}
-	return ""
 }

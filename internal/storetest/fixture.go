@@ -155,14 +155,18 @@ func InsertSQLiteCoreFixture(
 	}
 
 	messageRows := []struct {
+		sessionID                string
 		ordinal                  int
 		role, content, timestamp string
 		hasToolUse               bool
 		model                    string
 	}{
-		{ordinal: 0, role: "user", content: "question", timestamp: "2026-08-02T10:00:00Z"},
-		{ordinal: 1, role: "assistant", content: "working", timestamp: "2026-08-02T10:01:00Z", hasToolUse: true, model: "model-a"},
-		{ordinal: 2, role: "assistant", content: "done", timestamp: "2026-08-02T10:02:00Z", model: "model-a"},
+		{sessionID: rootNewID, ordinal: 0, role: "user", content: "question", timestamp: "2026-08-02T10:00:00Z"},
+		{sessionID: rootNewID, ordinal: 1, role: "assistant", content: "working", timestamp: "2026-08-02T10:01:00Z", hasToolUse: true, model: "model-a"},
+		{sessionID: rootNewID, ordinal: 2, role: "assistant", content: "done", timestamp: "2026-08-02T10:02:00Z", model: "model-a"},
+		{sessionID: rootOldID, ordinal: 0, role: "user", content: "visibilityneedle first", timestamp: "2026-08-01T09:00:00Z"},
+		{sessionID: rootOldID, ordinal: 1, role: "assistant", content: "visibilityneedle second", timestamp: "2026-08-01T09:01:00Z"},
+		{sessionID: deletedID, ordinal: 0, role: "user", content: "visibilityneedle deleted", timestamp: "2026-08-02T11:00:00Z"},
 	}
 	for _, row := range messageRows {
 		_, err := tx.ExecContext(ctx, `
@@ -170,7 +174,7 @@ func InsertSQLiteCoreFixture(
 				session_id, ordinal, role, content, content_length,
 				timestamp, has_tool_use, model, token_usage
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}')`,
-			rootNewID, row.ordinal, row.role, row.content, len(row.content),
+			row.sessionID, row.ordinal, row.role, row.content, len(row.content),
 			row.timestamp, row.hasToolUse, row.model,
 		)
 		if err != nil {
@@ -291,11 +295,14 @@ func bunCoreRows(
 			SourceArchiveID: archiveID, SourceDatabaseGeneration: generation,
 		},
 	}
-	messageIDs := []int64{801, 802, 803}
+	messageIDs := []int64{801, 802, 803, 804, 805, 806}
 	messages := []bunmodel.Message{
 		{ID: &messageIDs[0], SessionID: rootNewID, Ordinal: 0, Role: "user", Content: "question", ContentLength: 8, Timestamp: timestamp("2026-08-02T10:00:00Z"), TokenUsage: json.RawMessage(`{}`)},
 		{ID: &messageIDs[1], SessionID: rootNewID, Ordinal: 1, Role: "assistant", Content: "working", ContentLength: 7, Timestamp: timestamp("2026-08-02T10:01:00Z"), HasToolUse: true, Model: "model-a", TokenUsage: json.RawMessage(`{}`)},
 		{ID: &messageIDs[2], SessionID: rootNewID, Ordinal: 2, Role: "assistant", Content: "done", ContentLength: 4, Timestamp: timestamp("2026-08-02T10:02:00Z"), Model: "model-a", TokenUsage: json.RawMessage(`{}`)},
+		{ID: &messageIDs[3], SessionID: rootOldID, Ordinal: 0, Role: "user", Content: "visibilityneedle first", ContentLength: 22, Timestamp: timestamp("2026-08-01T09:00:00Z"), TokenUsage: json.RawMessage(`{}`)},
+		{ID: &messageIDs[4], SessionID: rootOldID, Ordinal: 1, Role: "assistant", Content: "visibilityneedle second", ContentLength: 23, Timestamp: timestamp("2026-08-01T09:01:00Z"), TokenUsage: json.RawMessage(`{}`)},
+		{ID: &messageIDs[5], SessionID: deletedID, Ordinal: 0, Role: "user", Content: "visibilityneedle deleted", ContentLength: 24, Timestamp: timestamp("2026-08-02T11:00:00Z"), TokenUsage: json.RawMessage(`{}`)},
 	}
 	toolID := int64(901)
 	input := `{"file_path":"README.md"}`

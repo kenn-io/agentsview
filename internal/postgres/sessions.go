@@ -102,9 +102,7 @@ func (postgresSessionMutationAdapter) BeforeDelete(
 	return nil
 }
 
-func (*postgresBunBackend) SessionQueryDialect() db.QueryDialect {
-	return db.PortableBunSessionQueryDialect()
-}
+func (*postgresBunBackend) TimestampOrderExpr(column string) string { return column }
 
 func (*postgresBunBackend) BunTableExists(
 	ctx context.Context, store bun.IDB, table string,
@@ -199,70 +197,14 @@ const pgSessionCols = `id, project, machine, agent,
 	deleted_at, deletion_cause, termination_status, transcript_revision,
 	file_path`
 
-// paramBuilder generates numbered PostgreSQL placeholders.
-type paramBuilder struct {
-	n    int
+// bunParamBuilder generates reusable Bun indexed placeholders for portable
+// question-mark binding while preserving the existing dynamic SQL assembly.
+type bunParamBuilder struct {
 	args []any
 }
 
-func (pb *paramBuilder) add(v any) string {
-	pb.n++
-	pb.args = append(pb.args, v)
-	return fmt.Sprintf("$%d", pb.n)
-}
-
-// buildPGSessionFilter returns a WHERE clause with $N
-// placeholders and the corresponding args.
-func buildPGSessionFilter(
-	f db.SessionFilter,
-) (string, []any) {
-	return db.BuildSessionFilterSQL(f, db.PostgresQueryDialect())
-}
-
-// FindSessionIDsByRawSuffix returns up to limit session IDs whose
-// stored id is either the exact raw input or the raw input preceded
-// by an agent prefix. The suffix comparison is literal and results
-// match SQLite ordering: exact match first, then most recent session.
-func (s *Store) FindSessionIDsByRawSuffix(
-	ctx context.Context, raw string, limit int,
-) ([]string, error) {
-	if raw == "" {
-		return nil, nil
-	}
-	if limit <= 0 {
-		limit = 5
-	}
-	rows, err := s.pg.QueryContext(ctx,
-		`SELECT id FROM sessions
-		 WHERE (id = $1
-		        OR RIGHT(id, LENGTH($1) + 1) = ':' || $1)
-		   AND deleted_at IS NULL
-		 ORDER BY (id = $1) DESC,
-		          COALESCE(ended_at, started_at, created_at) DESC
-		 LIMIT $2`,
-		raw, limit,
-	)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"finding pg sessions by raw suffix %q: %w",
-			raw, err,
-		)
-	}
-	defer rows.Close()
-	ids := []string{}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf(
-				"scanning pg session id: %w", err,
-			)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf(
-			"iterating pg raw suffix session ids: %w", err,
-		)
-	}
-	return ids, nil
+func (pb *bunParamBuilder) add(value any) string {
+	index := len(pb.args)
+	pb.args = append(pb.args, value)
+	return fmt.Sprintf("?%d", index)
 }

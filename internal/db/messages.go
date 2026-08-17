@@ -884,12 +884,12 @@ type savedPin struct {
 	createdAt           string
 }
 
-// ReplaceSessionMessages deletes existing and inserts new messages
+// replaceArchiveSessionMessages deletes existing and inserts new messages
 // in a single transaction. Any existing pins are preserved by
 // re-attaching them to the new message rows that share the same
 // unambiguous message identity (pins whose message no longer exists
 // are dropped).
-func (db *DB) ReplaceSessionMessages(
+func (db *DB) replaceArchiveSessionMessages(
 	sessionID string, msgs []Message,
 ) error {
 	msgs = append([]Message(nil), msgs...)

@@ -113,16 +113,16 @@ func EnsureSchema(ctx context.Context, db *sql.DB) error {
 // version does not match is rejected by CheckSchemaCompat and must be
 // rebuilt with 'agentsview duckdb push --full' rather than patched here.
 func createSchema(ctx context.Context, db *sql.DB) error {
-	if _, err := db.ExecContext(ctx, syncMetadataDDL); err != nil {
+	store := bun.NewDB(db, bundialect.New())
+	if _, err := store.NewRaw(syncMetadataDDL).Exec(ctx); err != nil {
 		return fmt.Errorf("creating duckdb table sync_metadata: %w", err)
 	}
-	store := bun.NewDB(db, bundialect.New())
 	if err := commondb.CreateCommonSchema(ctx, store); err != nil {
 		return err
 	}
-	if _, err := db.ExecContext(ctx,
+	if _, err := store.NewRaw(
 		`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS agentsview_push_fingerprint TEXT`,
-	); err != nil {
+	).Exec(ctx); err != nil {
 		return fmt.Errorf("creating DuckDB session fingerprint extension: %w", err)
 	}
 	for _, stmt := range []string{
@@ -131,16 +131,16 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 		"CREATE INDEX IF NOT EXISTS idx_tool_calls_message ON tool_calls(message_id)",
 		"CREATE INDEX IF NOT EXISTS idx_pinned_message ON pinned_messages(message_id)",
 	} {
-		if _, err := db.ExecContext(ctx, stmt); err != nil {
+		if _, err := store.NewRaw(stmt).Exec(ctx); err != nil {
 			return fmt.Errorf("creating DuckDB serving extension index: %w", err)
 		}
 	}
 	if err := recordMetadataKey(
-		ctx, db, schemaVersionMetadataKey, strconv.Itoa(SchemaVersion),
+		ctx, store, schemaVersionMetadataKey, strconv.Itoa(SchemaVersion),
 	); err != nil {
 		return fmt.Errorf("recording duckdb schema version: %w", err)
 	}
-	generation, err := readMetadataKey(ctx, db, mirrorGenerationMetadataKey)
+	generation, err := readMetadataKey(ctx, store, mirrorGenerationMetadataKey)
 	if err != nil {
 		return err
 	}
@@ -150,7 +150,7 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 			return err
 		}
 		if err := recordMetadataKey(
-			ctx, db, mirrorGenerationMetadataKey, generation,
+			ctx, store, mirrorGenerationMetadataKey, generation,
 		); err != nil {
 			return fmt.Errorf("recording initial duckdb mirror generation: %w", err)
 		}
@@ -245,7 +245,8 @@ func writeMirrorMetadata(ctx context.Context, db *sql.DB, meta mirrorMetadata) e
 		// until every descriptive metadata field has been finalized.
 		{mirrorGenerationMetadataKey, generation},
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	store := bun.NewDB(db, bundialect.New())
+	tx, err := store.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning duckdb mirror metadata update: %w", err)
 	}
@@ -284,6 +285,7 @@ func validateMirrorGeneration(value string) error {
 // errors so callers (ProbeMirror) can surface them as shape issues rather
 // than silently treating a corrupt mirror as version 0.
 func readMirrorMetadata(ctx context.Context, db *sql.DB) (mirrorMetadata, error) {
+	store := bun.NewDB(db, bundialect.New())
 	raw := make(map[string]string, 12)
 	for _, key := range []string{
 		schemaVersionMetadataKey, dataVersionMetadataKey,
@@ -293,7 +295,7 @@ func readMirrorMetadata(ctx context.Context, db *sql.DB) (mirrorMetadata, error)
 		deletionRevisionMetadataKey, identityRevisionMetadataKey,
 		mappingRevisionMetadataKey, mirrorGenerationMetadataKey,
 	} {
-		value, err := readMetadataKey(ctx, db, key)
+		value, err := readMetadataKey(ctx, store, key)
 		if err != nil {
 			return mirrorMetadata{}, err
 		}
@@ -340,7 +342,7 @@ func readMirrorMetadata(ctx context.Context, db *sql.DB) (mirrorMetadata, error)
 	return meta, nil
 }
 
-func readMetadataKey(ctx context.Context, db *sql.DB, key string) (string, error) {
+func readMetadataKey(ctx context.Context, db metadataStore, key string) (string, error) {
 	var value string
 	err := db.QueryRowContext(ctx,
 		`SELECT value FROM sync_metadata WHERE key = ?`, key,

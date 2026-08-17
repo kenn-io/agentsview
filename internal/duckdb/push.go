@@ -55,7 +55,7 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 }
 
 func (s *Sync) listDuckModelPricing(ctx context.Context) ([]db.ModelPricing, error) {
-	rows, err := s.duck.QueryContext(
+	rows, err := s.bun.QueryContext(
 		ctx,
 		`SELECT p.model_pattern, p.input_microdollars_per_mtok,
 			p.output_microdollars_per_mtok, p.cache_creation_microdollars_per_mtok,
@@ -141,7 +141,7 @@ func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
 		return nil
 	}
 
-	stored, err := readMetadataKey(ctx, s.duck, cursorUsageMaxIDMetadataKey)
+	stored, err := readMetadataKey(ctx, s.bun, cursorUsageMaxIDMetadataKey)
 	if err != nil {
 		return err
 	}
@@ -185,7 +185,7 @@ func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
 		}
 	}
 	return recordMetadataKey(
-		ctx, s.duck, cursorUsageMaxIDMetadataKey,
+		ctx, s.bun, cursorUsageMaxIDMetadataKey,
 		strconv.FormatInt(maxID, 10),
 	)
 }
@@ -253,7 +253,7 @@ func (s *Sync) identityArchivePresent(
 	ctx context.Context, archiveID string,
 ) (bool, error) {
 	var present bool
-	if err := s.duck.QueryRowContext(ctx, `
+	if err := s.bun.QueryRowContext(ctx, `
 		SELECT count(*) > 0 FROM source_archives
 		WHERE source_archive_id = ?`, archiveID).Scan(&present); err != nil {
 		return false, fmt.Errorf("checking duckdb project identity publication: %w", err)
@@ -349,7 +349,7 @@ func (s *Sync) writeIdentityPublication(
 	observations, snapshots []export.ProjectIdentityObservation,
 	refreshSessionIDs []string,
 ) error {
-	tx, err := s.duck.BeginTx(ctx, nil)
+	tx, err := s.bun.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning duckdb project identity sync: %w", err)
 	}
@@ -357,13 +357,7 @@ func (s *Sync) writeIdentityPublication(
 		_ = tx.Rollback()
 	}()
 	if err := upsertSourceArchiveScope(
-		func(stmt string, args ...any) error {
-			return s.execMutation(ctx, tx, stmt, args...)
-		},
-		func(stmt string, args ...any) *sql.Row {
-			return tx.QueryRowContext(ctx, stmt, args...)
-		},
-		archiveID, archiveSalt,
+		ctx, tx, archiveID, archiveSalt,
 	); err != nil {
 		return err
 	}
@@ -395,6 +389,7 @@ func (s *Sync) writeIdentityPublication(
 		obs.SourceArchiveSalt = archiveSalt
 		obs = export.SanitizeStoredProjectIdentityObservation(obs)
 		if err := upsertProjectIdentityObservation(
+			ctx, tx,
 			func(stmt string, args ...any) error {
 				return s.execMutation(ctx, tx, stmt, args...)
 			},
@@ -413,10 +408,7 @@ func (s *Sync) writeIdentityPublication(
 		snapshots[i] = export.SanitizeStoredProjectIdentityObservation(snapshots[i])
 	}
 	if err := upsertSessionProjectIdentitySnapshots(
-		func(stmt string, args ...any) error {
-			return s.execMutation(ctx, tx, stmt, args...)
-		},
-		archiveID, databaseGeneration, snapshots,
+		ctx, tx, archiveID, databaseGeneration, snapshots,
 	); err != nil {
 		return fmt.Errorf("syncing duckdb session project identity snapshots: %w", err)
 	}
@@ -507,7 +499,7 @@ func (s *Sync) applyDeletionDelta(
 	if len(apply) == 0 {
 		return nil
 	}
-	if err := s.withDuckTx(ctx, "apply session deletion delta", func(tx *sql.Tx) error {
+	if err := s.withDuckTx(ctx, "apply session deletion delta", func(tx bun.Tx) error {
 		for _, sessionID := range apply {
 			if err := s.deleteMirrorSession(ctx, tx, sessionID); err != nil {
 				return err
@@ -702,7 +694,7 @@ func (s *Sync) replaceCuration(
 		return "", err
 	}
 
-	err = s.withDuckTx(ctx, "replace curation rows", func(tx *sql.Tx) error {
+	err = s.withDuckTx(ctx, "replace curation rows", func(tx bun.Tx) error {
 		for _, id := range residentPinned {
 			if err := insertPinnedMessages(ctx, tx, written.pinsBySession[id]); err != nil {
 				return err
@@ -795,7 +787,7 @@ func (s *Sync) refreshCurationIfChanged(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	stored, err := readMetadataKey(ctx, s.duck, curationFingerprintMetadataKey)
+	stored, err := readMetadataKey(ctx, s.bun, curationFingerprintMetadataKey)
 	if err != nil {
 		return false, err
 	}
@@ -807,7 +799,7 @@ func (s *Sync) refreshCurationIfChanged(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	if err := recordMetadataKey(
-		ctx, s.duck, curationFingerprintMetadataKey, written,
+		ctx, s.bun, curationFingerprintMetadataKey, written,
 	); err != nil {
 		return false, err
 	}
@@ -906,7 +898,7 @@ func (s *Sync) replaceSessionDependents(
 }
 
 func (s *Sync) deleteMirrorSession(
-	ctx context.Context, tx *sql.Tx, sessionID string,
+	ctx context.Context, tx duckMutationExecutor, sessionID string,
 ) error {
 	for _, stmt := range []string{
 		`DELETE FROM pinned_messages WHERE session_id = ?`,
