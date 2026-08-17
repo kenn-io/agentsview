@@ -782,32 +782,25 @@ test.describe('Message viewer', () => {
   }
 
   async function findVisibleToolBlockWithOutput(
-    page: Page
+    scope: Page | Locator
   ): Promise<Locator> {
-    const rows = page.locator('.message, .virtual-row');
-    const count = await rows.count();
-    for (let i = 0; i < Math.min(count, 80); i++) {
-      await rows.nth(i).scrollIntoViewIfNeeded();
-      await page.waitForTimeout(100);
+    const tools = scope.locator('.tool-block');
+    const toolCount = await tools.count();
+    for (let i = 0; i < toolCount; i++) {
+      const tool = tools.nth(i);
+      if (!(await tool.isVisible())) continue;
 
-      const tools = page.locator('.tool-block');
-      const toolCount = await tools.count();
-      for (let j = 0; j < toolCount; j++) {
-        const tool = tools.nth(j);
-        if (!(await tool.isVisible())) continue;
-
-        const header = tool.locator('.tool-header');
-        const isExpanded =
-          (await tool.locator('.tool-chevron.open').count()) > 0;
-        if (!isExpanded && (await header.count()) > 0) {
-          await header.click();
-          await page.waitForTimeout(100);
-        }
-        if (
-          await tool.locator('.output-header').isVisible().catch(() => false)
-        ) {
-          return tool;
-        }
+      const header = tool.locator('.tool-header');
+      const isExpanded =
+        (await tool.locator('.tool-chevron.open').count()) > 0;
+      if (!isExpanded && (await header.count()) > 0) {
+        await header.click();
+        await tool.page().waitForTimeout(100);
+      }
+      if (
+        await tool.locator('.output-header').isVisible().catch(() => false)
+      ) {
+        return tool;
       }
     }
 
@@ -919,15 +912,31 @@ test.describe('Message viewer', () => {
 
   test('formatted tool output', async ({ page }) => {
     const toolOutputId = process.env.SCREENSHOT_TOOL_OUTPUT_SESSION_ID;
-    if (toolOutputId) {
-      await page.goto('/sessions/' + encodeURIComponent(toolOutputId));
-      await page.waitForSelector('.tool-block', { timeout: 15_000 });
-      await page.waitForTimeout(500);
+    const toolOutputOrdinal =
+      process.env.SCREENSHOT_TOOL_OUTPUT_MESSAGE_ORDINAL;
+    let toolScope: Page | Locator = page;
+    if (toolOutputId || toolOutputOrdinal) {
+      if (!toolOutputId || toolOutputOrdinal === undefined) {
+        throw new Error(
+          'tool-output screenshot requires both session id and message ordinal'
+        );
+      }
+      const ordinal = Number(toolOutputOrdinal);
+      if (!Number.isSafeInteger(ordinal) || ordinal < 0) {
+        throw new Error('tool-output screenshot ordinal must be non-negative');
+      }
+      await page.goto(
+        '/sessions/' + encodeURIComponent(toolOutputId) +
+          '?msg=' + encodeURIComponent(String(ordinal))
+      );
+      const selectedRow = page.locator('.virtual-row.selected');
+      await expect(selectedRow).toBeVisible({ timeout: 15_000 });
+      toolScope = selectedRow;
     } else {
       await selectRichSession(page);
     }
 
-    const tool = await findVisibleToolBlockWithOutput(page);
+    const tool = await findVisibleToolBlockWithOutput(toolScope);
 
     const outputHeader = tool.locator('.output-header');
     await expect(outputHeader).toBeVisible({ timeout: 5_000 });
