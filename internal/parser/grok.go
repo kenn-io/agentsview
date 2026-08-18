@@ -617,10 +617,15 @@ func parseGrokUpdateTimestampAnchors(
 			}
 
 		case "tool_call":
-			builder.start(RoleAssistant, timestamp)
-			if id := strings.TrimSpace(update.Get("toolCallId").Str); id != "" {
-				builder.toolCallIDs = append(builder.toolCallIDs, id)
+			builder.flush()
+			anchor := grokTimestampAnchor{
+				role:      RoleAssistant,
+				timestamp: timestamp,
 			}
+			if id := strings.TrimSpace(update.Get("toolCallId").Str); id != "" {
+				anchor.toolCallIDs = []string{id}
+			}
+			builder.anchors = append(builder.anchors, anchor)
 
 		case "tool_call_update":
 			status := update.Get("status").Str

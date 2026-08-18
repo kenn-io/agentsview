@@ -888,8 +888,9 @@ func TestGrokProviderUpdateTimestampsFollowToolBoundaries(t *testing.T) {
 		filepath.Join(sessionDir, "chat_history.jsonl"),
 		strings.Join([]string{
 			`{"type":"user","content":"inspect the sample"}`,
-			`{"type":"assistant","content":"","tool_calls":[{"id":"call-sample","name":"read_file","arguments":"{\"target_file\":\"sample.txt\"}"}]}`,
+			`{"type":"assistant","content":"","tool_calls":[{"id":"call-sample","name":"read_file","arguments":"{\"target_file\":\"sample.txt\"}"},{"id":"call-reference","name":"read_file","arguments":"{\"target_file\":\"reference.txt\"}"}]}`,
 			`{"type":"tool_result","tool_call_id":"call-sample","content":"example contents"}`,
+			`{"type":"tool_result","tool_call_id":"call-reference","content":"reference contents"}`,
 			`{"type":"assistant","content":"inspection complete"}`,
 		}, "\n")+"\n",
 	)
@@ -899,7 +900,9 @@ func TestGrokProviderUpdateTimestampsFollowToolBoundaries(t *testing.T) {
 		strings.Join([]string{
 			`{"timestamp":1700000000,"method":"session/update","params":{"sessionId":"session-tools","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"inspect the sample"}}}}`,
 			`{"timestamp":1700000010,"method":"session/update","params":{"sessionId":"session-tools","update":{"sessionUpdate":"tool_call","toolCallId":"call-sample","title":"read_file"}}}`,
+			`{"timestamp":1700000012,"method":"session/update","params":{"sessionId":"session-tools","update":{"sessionUpdate":"tool_call","toolCallId":"call-reference","title":"read_file"}}}`,
 			`{"timestamp":1700000020,"method":"session/update","params":{"sessionId":"session-tools","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-sample","status":"completed"}}}`,
+			`{"timestamp":1700000022,"method":"session/update","params":{"sessionId":"session-tools","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-reference","status":"completed"}}}`,
 			`{"timestamp":1700000030,"method":"session/update","params":{"sessionId":"session-tools","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"inspection complete"}}}}`,
 		}, "\n")+"\n",
 	)
@@ -908,11 +911,12 @@ func TestGrokProviderUpdateTimestampsFollowToolBoundaries(t *testing.T) {
 		filepath.Join(sessionDir, "summary.json"), "sample-project", "test-machine",
 	)
 	require.NoError(t, err)
-	require.Len(t, result.Messages, 4)
+	require.Len(t, result.Messages, 5)
 	for i, seconds := range []int64{
 		1_700_000_000,
 		1_700_000_010,
 		1_700_000_020,
+		1_700_000_022,
 		1_700_000_030,
 	} {
 		assert.Equal(t, time.Unix(seconds, 0).UTC(), result.Messages[i].Timestamp)
@@ -958,6 +962,56 @@ func TestGrokProviderUpdateTimestampsRejectMismatchedToolIDs(t *testing.T) {
 	assert.Equal(
 		t, time.Unix(1_700_000_010, 0).UTC(), result.Messages[3].Timestamp,
 	)
+}
+
+func TestGrokProviderUpdateTimestampsSeparateParallelBackendTools(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "workspace-key", "session-parallel-tools")
+	writeGrokFixtureFile(t, filepath.Join(sessionDir, "summary.json"), `{
+		"info":{"id":"session-parallel-tools","cwd":"/workspace/sample-project"},
+		"session_summary":"parallel tool conversation",
+		"created_at":"2023-11-14T22:13:20Z",
+		"updated_at":"2023-11-14T22:15:20Z"
+	}`)
+	writeGrokFixtureFile(
+		t,
+		filepath.Join(sessionDir, "chat_history.jsonl"),
+		strings.Join([]string{
+			`{"type":"user","content":"compare two examples"}`,
+			`{"type":"backend_tool_call","kind":{"tool_type":"web_search","id":"search-first","status":"completed","action":{"type":"search","query":"first example","sources":[]}}}`,
+			`{"type":"backend_tool_call","kind":{"tool_type":"web_search","id":"search-second","status":"completed","action":{"type":"search","query":"second example","sources":[]}}}`,
+			`{"type":"assistant","content":"comparison complete"}`,
+		}, "\n")+"\n",
+	)
+	writeGrokFixtureFile(
+		t,
+		filepath.Join(sessionDir, "updates.jsonl"),
+		strings.Join([]string{
+			`{"timestamp":1700000000,"method":"session/update","params":{"sessionId":"session-parallel-tools","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"compare two examples"}}}}`,
+			`{"timestamp":1700000010,"method":"session/update","params":{"sessionId":"session-parallel-tools","update":{"sessionUpdate":"tool_call","toolCallId":"search-first","title":"Web search:"}}}`,
+			`{"timestamp":1700000012,"method":"session/update","params":{"sessionId":"session-parallel-tools","update":{"sessionUpdate":"tool_call","toolCallId":"search-second","title":"Web search:"}}}`,
+			`{"timestamp":1700000020,"method":"session/update","params":{"sessionId":"session-parallel-tools","update":{"sessionUpdate":"tool_call_update","toolCallId":"search-first","status":"completed"}}}`,
+			`{"timestamp":1700000022,"method":"session/update","params":{"sessionId":"session-parallel-tools","update":{"sessionUpdate":"tool_call_update","toolCallId":"search-second","status":"completed"}}}`,
+			`{"timestamp":1700000030,"method":"session/update","params":{"sessionId":"session-parallel-tools","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"comparison complete"}}}}`,
+		}, "\n")+"\n",
+	)
+
+	result, err := ParseGrokSummary(
+		filepath.Join(sessionDir, "summary.json"), "sample-project", "test-machine",
+	)
+	require.NoError(t, err)
+	require.Len(t, result.Messages, 4)
+	assert.Equal(t, []time.Time{
+		time.Unix(1_700_000_000, 0).UTC(),
+		time.Unix(1_700_000_010, 0).UTC(),
+		time.Unix(1_700_000_012, 0).UTC(),
+		time.Unix(1_700_000_030, 0).UTC(),
+	}, []time.Time{
+		result.Messages[0].Timestamp,
+		result.Messages[1].Timestamp,
+		result.Messages[2].Timestamp,
+		result.Messages[3].Timestamp,
+	})
 }
 
 func TestGrokProviderUnwrapsOpenAIStyleToolArguments(t *testing.T) {
