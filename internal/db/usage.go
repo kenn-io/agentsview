@@ -1275,7 +1275,7 @@ func snapshotRankedDailyUsageRowsSQL(
 // length prefix keeps the encoding injective for any identifier content.
 // prefix qualifies the column references, for example "u.".
 func usageSnapshotRequestKey(prefix string) string {
-	return "length(" + prefix + "claude_message_id) || ':' || " +
+	return "length(CAST(" + prefix + "claude_message_id AS BLOB)) || ':' || " +
 		prefix + "claude_message_id || " + prefix + "claude_request_id"
 }
 
