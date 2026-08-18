@@ -592,3 +592,171 @@ func TestFSNotifyBackendAddRecursiveCountsUnreadableSubtreeAsUnwatched(
 	assert.Positive(t, result.Unwatched,
 		"an unenumerable subtree must count as degraded coverage")
 }
+
+// serialNativeWatcher models fsnotify's Windows backend contract: one reader
+// goroutine delivers events on an unbuffered channel and is the only thing
+// that services Add and Remove requests, and it does so only between
+// deliveries. A request issued while the reader is blocked delivering the
+// next event completes only after that event is consumed.
+type serialNativeWatcher struct {
+	events   chan fsnotify.Event
+	requests chan chan struct{}
+	deliver  chan []fsnotify.Event
+	stop     chan struct{}
+	stopOnce sync.Once
+}
+
+func newSerialNativeWatcher() *serialNativeWatcher {
+	return &serialNativeWatcher{
+		events:   make(chan fsnotify.Event),
+		requests: make(chan chan struct{}, 1),
+		deliver:  make(chan []fsnotify.Event),
+		stop:     make(chan struct{}),
+	}
+}
+
+func (w *serialNativeWatcher) run() {
+	for {
+		select {
+		case <-w.stop:
+			return
+		case reply := <-w.requests:
+			close(reply)
+		case batch := <-w.deliver:
+			for _, event := range batch {
+				select {
+				case w.events <- event:
+				case <-w.stop:
+					return
+				}
+			}
+		}
+	}
+}
+
+func (w *serialNativeWatcher) Stop() { w.stopOnce.Do(func() { close(w.stop) }) }
+
+func (w *serialNativeWatcher) Add(string) error    { return w.request() }
+func (w *serialNativeWatcher) Remove(string) error { return w.request() }
+
+func (w *serialNativeWatcher) request() error {
+	reply := make(chan struct{})
+	select {
+	case w.requests <- reply:
+	case <-w.stop:
+		return errors.New("native watcher stopped")
+	}
+	select {
+	case <-reply:
+		return nil
+	case <-w.stop:
+		return errors.New("native watcher stopped")
+	}
+}
+
+// A directory removal that arrives in the same native batch as another event
+// must not deadlock the backend: the event loop calls Remove on the native
+// watcher, and on Windows that call is serviced by the same goroutine that is
+// blocked delivering the next event to the loop.
+func TestFSNotifyBackendRemoveDuringBatchDoesNotDeadlockEventLoop(t *testing.T) {
+	backend := testFSNotifyBackend(t)
+	native := newSerialNativeWatcher()
+	go native.run()
+	t.Cleanup(native.Stop)
+	backend.watchOps = native
+	backend.eventInput = native.events
+
+	root := t.TempDir()
+	sub := filepath.Join(root, "sub")
+	require.NoError(t, os.Mkdir(sub, 0o755))
+	result := backend.AddRecursive(root, 8)
+	require.NoError(t, result.Err)
+	require.Equal(t, 2, result.Watched)
+	require.NoError(t, backend.Start())
+
+	file := filepath.Join(root, "session.jsonl")
+	native.deliver <- []fsnotify.Event{
+		{Name: sub, Op: fsnotify.Remove},
+		{Name: file, Op: fsnotify.Write},
+	}
+
+	first := requireReceiveWithin(t, backend.Events(), 2*time.Second)
+	assert.Equal(t, sub, first.Path)
+	assert.Equal(t, backendOpRemove, first.Op)
+	second := requireReceiveWithin(t, backend.Events(), 2*time.Second)
+	assert.Equal(t, file, second.Path)
+	assert.Equal(t, backendOpWrite, second.Op)
+
+	stopped := make(chan struct{})
+	go func() {
+		backend.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("fsnotify backend Stop hung after a Remove during a native batch")
+	}
+}
+
+func TestNativeEventQueueOverflowSurfacesLostEventsOnce(t *testing.T) {
+	queue := newNativeEventQueue()
+	stop := make(chan struct{})
+	for range nativeEventQueueLimit + 1 {
+		queue.push(nativeItem{event: fsnotify.Event{Name: "before", Op: fsnotify.Write}})
+	}
+	queue.push(nativeItem{event: fsnotify.Event{Name: "after", Op: fsnotify.Write}})
+
+	first, ok := queue.next(stop)
+	require.True(t, ok)
+	assert.ErrorIs(t, first.err, fsnotify.ErrEventOverflow)
+	remaining := []string{}
+	for {
+		item, ok := queue.next(stop)
+		if !ok {
+			break
+		}
+		require.NoError(t, item.err, "overflow must be reported once")
+		remaining = append(remaining, item.event.Name)
+		if item.event.Name == "after" {
+			break
+		}
+	}
+	assert.Equal(t, []string{"after"}, remaining, "events after the overflow survive")
+
+	queue.close()
+	_, ok = queue.next(stop)
+	assert.False(t, ok, "a closed and drained queue reports no more items")
+}
+
+func TestFSNotifyBackendQueueOverflowRequestsFullSync(t *testing.T) {
+	backend := testFSNotifyBackend(t)
+	native := newSerialNativeWatcher()
+	go native.run()
+	t.Cleanup(native.Stop)
+	backend.watchOps = native
+	backend.eventInput = native.events
+	require.NoError(t, backend.Start())
+
+	root := t.TempDir()
+	burst := make([]fsnotify.Event, 0, nativeEventQueueLimit+8)
+	for range cap(burst) {
+		burst = append(burst, fsnotify.Event{Name: filepath.Join(root, "f"), Op: fsnotify.Write})
+	}
+	native.deliver <- burst
+	// The loop is parked on its first forward because nothing reads events
+	// yet, so the pump alone must absorb the rest of the burst. A second
+	// batch is accepted only once the first has been fully delivered.
+	native.deliver <- nil
+
+	sawFullSync := false
+	deadline := time.After(5 * time.Second)
+	for !sawFullSync {
+		select {
+		case event := <-backend.Events():
+			sawFullSync = event.Op == backendOpFullSync
+		case <-deadline:
+			t.Fatal("queue overflow did not request a full sync")
+		}
+	}
+}
