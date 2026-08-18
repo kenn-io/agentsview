@@ -485,7 +485,7 @@
   "sidebar_filters_no_machines": "マシンはありません",
   "sidebar_filters_min_prompts": "最小プロンプト",
   "sidebar_filters_clear_filters": "フィルターをクリアする",
-  "sidebar_row_expand": "拡大する",
+  "sidebar_row_expand": "展開する",
   "sidebar_row_collapse": "折りたたむ",
   "sidebar_row_select_session": "セッションの選択",
   "sidebar_row_deselect_session": "セッションの選択を解除する",
@@ -1901,7 +1901,7 @@
   "pinned_none_hint": "メッセージ ヘッダーのピン アイコンをクリックして、任意のセッションからメッセージをピン留めします。",
   "pinned_go_to_message": "メッセージに移動",
   "pinned_collapse": "折りたたむ",
-  "pinned_expand": "拡大する",
+  "pinned_expand": "展開する",
   "pinned_copy_message": "メッセージをコピーする",
   "pinned_copied_message": "コピーされたメッセージ",
   "pinned_unpin": "ピン留めを外す",
@@ -2112,7 +2112,7 @@
       }
     }
   ],
-  "trash_deleted_ago": "{time}に削除",
+  "trash_deleted_ago": "削除: {time}",
   "trash_restore_session": "セッションを復元する",
   "trash_restore": "復元する",
   "trash_permanently_delete": "完全に削除",

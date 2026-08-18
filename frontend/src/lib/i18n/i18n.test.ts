@@ -149,7 +149,7 @@ describe("i18n locale selection", () => {
       count: 5,
       countLabel: "5",
     })).toBe("5 ステップ");
-    expect(m.trash_deleted_ago({ time: "5分前" })).toBe("5分前に削除");
+    expect(m.trash_deleted_ago({ time: "ちょうど今" })).toBe("削除: ちょうど今");
   });
 
   it("selects cardinal plural variants per locale", () => {
