@@ -63,7 +63,7 @@ func (s *Service) FinalizeObject(
 	if err := validateProvider(provider); err != nil {
 		return PutResult{}, err
 	}
-	if err := validateServiceObject(object); err != nil {
+	if err := s.validateServiceObject(object); err != nil {
 		return PutResult{}, err
 	}
 	if body == nil {
@@ -102,7 +102,7 @@ func (s *Service) MissingObjects(
 		return nil, err
 	}
 	for _, object := range objects {
-		if err := validateServiceObject(object); err != nil {
+		if err := s.validateServiceObject(object); err != nil {
 			return nil, err
 		}
 	}
@@ -169,10 +169,17 @@ func validateServiceIdentity(identity AuthIdentity) error {
 	return nil
 }
 
-func validateServiceObject(object ObjectRef) error {
+// validateServiceObject rejects noncanonical references and objects no valid
+// manifest could reference, so oversized uploads never become orphans.
+func (s *Service) validateServiceObject(object ObjectRef) error {
 	canonical, err := NewObjectRef(object.SHA256, object.Length)
 	if err != nil || canonical != object {
 		return fmt.Errorf("%w: raw object reference is not canonical", ErrInvalid)
+	}
+	if object.Length > s.limits.MaxFileBytes {
+		return fmt.Errorf(
+			"%w: raw object exceeds the %d byte file limit", ErrInvalid, s.limits.MaxFileBytes,
+		)
 	}
 	return nil
 }

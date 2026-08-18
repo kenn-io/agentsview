@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -129,6 +130,26 @@ func TestServiceRejectsExcludedProvidersBeforeCustody(t *testing.T) {
 			assert.Empty(t, events, "excluded providers must never reach custody")
 		})
 	}
+}
+
+func TestServiceRejectsObjectsLargerThanAnyManifestFile(t *testing.T) {
+	t.Parallel()
+
+	events := []string{}
+	objects := &recordingObjectStore{events: &events}
+	service := newTestService(t, objects, &recordingMetadataStore{events: &events})
+	identity, _ := validServiceInput(t)
+	oversized := ObjectRef{
+		SHA256: strings.Repeat("c", 64), Length: DefaultManifestLimits().MaxFileBytes + 1,
+	}
+
+	_, err := service.FinalizeObject(
+		t.Context(), identity, parser.AgentCodex, oversized, bytes.NewBufferString("body"),
+	)
+	assert.ErrorIs(t, err, ErrInvalid)
+	_, err = service.MissingObjects(t.Context(), identity, parser.AgentCodex, []ObjectRef{oversized})
+	assert.ErrorIs(t, err, ErrInvalid)
+	assert.Empty(t, events, "unreferenceable objects must never reach custody")
 }
 
 func TestServiceMissingObjectsUsesPhysicalCustody(t *testing.T) {
