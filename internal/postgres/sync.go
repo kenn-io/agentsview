@@ -433,6 +433,9 @@ func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 		if _, err := ensureVectorBaseSchemaPG(ctx, s.pg); err != nil {
 			log.Printf("pg schema: vector schema setup failed: %v", err)
 		}
+		if err := ensureRawIngestSchemaPG(ctx, s.pg); err != nil {
+			return err
+		}
 		s.schemaDone = true
 		return nil
 	}

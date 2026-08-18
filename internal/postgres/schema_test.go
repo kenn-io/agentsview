@@ -580,7 +580,7 @@ func TestEnsureSchemaChecksDataVersionBeforeDDL(t *testing.T) {
 		"EnsureSchema must not mutate PG before data-version refusal")
 }
 
-func TestSyncEnsureSchemaSkipsDDLWhenSchemaCompatible(t *testing.T) {
+func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
 	state.existingTables = map[string]bool{
 		"model_pricing":                                   true,
@@ -602,14 +602,18 @@ func TestSyncEnsureSchemaSkipsDDLWhenSchemaCompatible(t *testing.T) {
 	require.NoError(t, syncer.EnsureSchema(context.Background()))
 
 	executed := strings.ToLower(state.executedSQL())
-	assert.NotContains(t, executed, "create index",
-		"compatible PG schema must skip index DDL")
+	assert.NotContains(t, executed, "create table if not exists sessions",
+		"compatible PG schema must skip legacy table DDL")
+	assert.NotContains(t, executed, "create index if not exists idx_sessions_parent",
+		"compatible PG schema must skip legacy index DDL")
 	assert.NotContains(t, executed, "alter index",
-		"compatible PG schema must skip index DDL")
-	assert.NotContains(t, executed, "create table",
-		"compatible PG schema must skip table DDL")
+		"compatible PG schema must skip legacy index migrations")
 	assert.Equal(t, 0, state.alterTableExecCount(),
 		"compatible PG schema must not run column migrations")
+	assert.Contains(t, executed, "create table if not exists raw_objects",
+		"raw custody tables must be bootstrapped independently")
+	assert.Contains(t, executed, "create index if not exists idx_raw_ingest_jobs_ready",
+		"raw custody indexes must be bootstrapped independently")
 	assert.Contains(t, executed, "insert into sync_metadata",
 		"compatible PG schema must still run row-level data repairs")
 }

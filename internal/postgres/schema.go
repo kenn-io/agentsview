@@ -904,6 +904,9 @@ func EnsureSchema(
 	if _, err := db.ExecContext(ctx, coreDDL); err != nil {
 		return fmt.Errorf("creating pg tables: %w", err)
 	}
+	if err := ensureRawIngestSchemaPG(ctx, db); err != nil {
+		return err
+	}
 	log.Printf(
 		"pg schema: core DDL step completed in %s",
 		time.Since(step).Round(time.Millisecond),
