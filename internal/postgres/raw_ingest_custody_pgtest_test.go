@@ -52,17 +52,17 @@ func TestRawCustodyEndToEnd(t *testing.T) {
 	assert.Equal(t, rawIngestCounts{}, readRawIngestCounts(t, pg))
 
 	missing, err := service.MissingObjects(
-		t.Context(), identity, []rawsync.ObjectRef{firstRef, secondRef},
+		t.Context(), identity, parser.AgentCodex, []rawsync.ObjectRef{firstRef, secondRef},
 	)
 	require.NoError(t, err)
 	assert.Equal(t, []rawsync.ObjectRef{firstRef, secondRef}, missing)
 	firstPut, err := service.FinalizeObject(
-		t.Context(), identity, firstRef, bytes.NewReader(firstBody),
+		t.Context(), identity, parser.AgentCodex, firstRef, bytes.NewReader(firstBody),
 	)
 	require.NoError(t, err)
 	assert.True(t, firstPut.Created)
 	firstRetry, err := service.FinalizeObject(
-		t.Context(), identity, firstRef, bytes.NewReader(firstBody),
+		t.Context(), identity, parser.AgentCodex, firstRef, bytes.NewReader(firstBody),
 	)
 	require.NoError(t, err)
 	assert.False(t, firstRetry.Created)
@@ -86,7 +86,7 @@ func TestRawCustodyEndToEnd(t *testing.T) {
 	assert.Equal(t, firstAccepted.Generation, firstAcceptedRetry.Generation)
 
 	_, err = service.FinalizeObject(
-		t.Context(), identity, secondRef, bytes.NewReader(secondBody),
+		t.Context(), identity, parser.AgentCodex, secondRef, bytes.NewReader(secondBody),
 	)
 	require.NoError(t, err)
 	secondManifest := rawCustodyManifest(

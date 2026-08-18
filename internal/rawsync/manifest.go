@@ -279,7 +279,7 @@ func validateManifestHeader(manifest Manifest) error {
 	if manifest.SchemaVersion != ManifestSchemaVersion {
 		return fmt.Errorf("%w: unsupported manifest schema version %d", ErrInvalid, manifest.SchemaVersion)
 	}
-	if err := validateOpaqueID("provider", string(manifest.Provider)); err != nil {
+	if err := validateProvider(manifest.Provider); err != nil {
 		return err
 	}
 	if err := validateOpaqueID("configured root", manifest.ConfiguredRootID); err != nil {
@@ -419,6 +419,22 @@ func isPlatformUnsafeEntryPath(value string) bool {
 		}
 	}
 	return false
+}
+
+// validateProvider fails closed for providers the server cannot classify and
+// for providers whose raw source trees must never leave the device.
+func validateProvider(provider parser.AgentType) error {
+	if err := validateOpaqueID("provider", string(provider)); err != nil {
+		return err
+	}
+	def, ok := parser.AgentByType(provider)
+	if !ok {
+		return fmt.Errorf("%w: unknown provider %q", ErrInvalid, provider)
+	}
+	if def.RemoteSyncExcluded {
+		return fmt.Errorf("%w: provider %q is excluded from remote sync", ErrInvalid, provider)
+	}
+	return nil
 }
 
 func cloneEntries(source []Entry) []Entry {

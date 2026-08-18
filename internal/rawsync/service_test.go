@@ -67,7 +67,7 @@ func TestServiceFinalizeObjectOrdersCustodyBeforeRegistration(t *testing.T) {
 		identity, _ := validServiceInput(t)
 
 		result, err := service.FinalizeObject(
-			t.Context(), identity, object, bytes.NewBufferString("body"),
+			t.Context(), identity, parser.AgentCodex, object, bytes.NewBufferString("body"),
 		)
 		require.NoError(t, err)
 		assert.True(t, result.Created)
@@ -86,7 +86,7 @@ func TestServiceFinalizeObjectOrdersCustodyBeforeRegistration(t *testing.T) {
 		identity, object := validServiceInput(t)
 
 		_, err := service.FinalizeObject(
-			t.Context(), identity, object.Objects[0], bytes.NewBufferString("body"),
+			t.Context(), identity, parser.AgentCodex, object.Objects[0], bytes.NewBufferString("body"),
 		)
 		assert.ErrorIs(t, err, putErr)
 		assert.Equal(t, []string{"put-object"}, events)
@@ -102,11 +102,33 @@ func TestServiceFinalizeObjectOrdersCustodyBeforeRegistration(t *testing.T) {
 		identity, manifest := validServiceInput(t)
 
 		_, err := service.FinalizeObject(
-			t.Context(), identity, manifest.Objects[0], bytes.NewBufferString("body"),
+			t.Context(), identity, parser.AgentCodex, manifest.Objects[0], bytes.NewBufferString("body"),
 		)
 		assert.ErrorIs(t, err, metadataErr)
 		assert.Equal(t, []string{"put-object", "record-object"}, events)
 	})
+}
+
+func TestServiceRejectsExcludedProvidersBeforeCustody(t *testing.T) {
+	t.Parallel()
+
+	for _, provider := range []parser.AgentType{"", "not-an-agent", parser.AgentOmnigent, parser.AgentTrae} {
+		t.Run(string(provider), func(t *testing.T) {
+			t.Parallel()
+			events := []string{}
+			objects := &recordingObjectStore{events: &events}
+			service := newTestService(t, objects, &recordingMetadataStore{events: &events})
+			identity, manifest := validServiceInput(t)
+
+			_, err := service.FinalizeObject(
+				t.Context(), identity, provider, manifest.Objects[0], bytes.NewBufferString("body"),
+			)
+			assert.ErrorIs(t, err, ErrInvalid)
+			_, err = service.MissingObjects(t.Context(), identity, provider, manifest.Objects)
+			assert.ErrorIs(t, err, ErrInvalid)
+			assert.Empty(t, events, "excluded providers must never reach custody")
+		})
+	}
 }
 
 func TestServiceMissingObjectsUsesPhysicalCustody(t *testing.T) {
@@ -120,7 +142,7 @@ func TestServiceMissingObjectsUsesPhysicalCustody(t *testing.T) {
 	}
 	service := newTestService(t, objects, &recordingMetadataStore{events: &events})
 
-	missing, err := service.MissingObjects(t.Context(), identity, manifest.Objects)
+	missing, err := service.MissingObjects(t.Context(), identity, parser.AgentCodex, manifest.Objects)
 	require.NoError(t, err)
 	assert.Equal(t, manifest.Objects, missing)
 	assert.Equal(t, []string{"missing-objects"}, events)

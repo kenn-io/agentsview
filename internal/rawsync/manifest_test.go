@@ -152,6 +152,8 @@ func TestValidateAndCanonicalizeRejectsMalformedManifest(t *testing.T) {
 	}{
 		{name: "unsupported schema", mutate: func(m *Manifest, _ *ManifestLimits) { m.SchemaVersion = 2 }},
 		{name: "missing provider", mutate: func(m *Manifest, _ *ManifestLimits) { m.Provider = "" }},
+		{name: "unknown provider", mutate: func(m *Manifest, _ *ManifestLimits) { m.Provider = "not-an-agent" }},
+		{name: "remote sync excluded provider", mutate: func(m *Manifest, _ *ManifestLimits) { m.Provider = parser.AgentOmnigent }},
 		{name: "missing root", mutate: func(m *Manifest, _ *ManifestLimits) { m.ConfiguredRootID = "" }},
 		{name: "missing source", mutate: func(m *Manifest, _ *ManifestLimits) { m.SourceKey = "" }},
 		{name: "source control", mutate: func(m *Manifest, _ *ManifestLimits) { m.SourceKey = "bad\nsource" }},

@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -219,6 +220,56 @@ func TestSyncEnsureSchemaCreatesRawCustodyOnLegacyFastPath(t *testing.T) {
 		)`, schemaTestSchema).Scan(&exists))
 	assert.True(t, exists,
 		"schema-current sync must still install newly introduced custody tables")
+}
+
+// TestSyncEnsureSchemaFastPathToleratesRestrictedRole pins the restricted-role
+// push path: a privileged role provisioned the schema, including the raw
+// custody tables, but the push role cannot CREATE. PostgreSQL still checks
+// CREATE for CREATE TABLE IF NOT EXISTS, so the fast path must skip raw
+// custody DDL on SQLSTATE 42501 rather than fail every push.
+func TestSyncEnsureSchemaFastPathToleratesRestrictedRole(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_raw_privilege_test"
+	const role = "agentsview_raw_restricted"
+	const rolePassword = "agentsview_raw_restricted_pw"
+
+	admin, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open admin")
+	t.Cleanup(func() { _ = admin.Close() })
+	_, err = admin.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(t.Context(), admin, schema))
+	require.True(t, pushSchemaCurrent(t.Context(), admin),
+		"fixture must exercise the schema-current sync fast path")
+
+	_, _ = admin.Exec(`DROP OWNED BY ` + role)
+	_, _ = admin.Exec(`DROP ROLE IF EXISTS ` + role)
+	_, err = admin.Exec(`CREATE ROLE ` + role + ` LOGIN PASSWORD '` + rolePassword + `'`)
+	require.NoError(t, err, "create restricted role")
+	t.Cleanup(func() {
+		_, _ = admin.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+		_, _ = admin.Exec(`DROP OWNED BY ` + role)
+		_, _ = admin.Exec(`DROP ROLE IF EXISTS ` + role)
+	})
+	for _, grant := range []string{
+		`GRANT USAGE ON SCHEMA ` + schema + ` TO ` + role,
+		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ` + schema + ` TO ` + role,
+	} {
+		_, err = admin.Exec(grant)
+		require.NoError(t, err, grant)
+	}
+
+	restrictedURL, err := url.Parse(pgURL)
+	require.NoError(t, err)
+	restrictedURL.User = url.UserPassword(role, rolePassword)
+	restricted, err := Open(restrictedURL.String(), schema, true)
+	require.NoError(t, err, "Open restricted")
+	t.Cleanup(func() { _ = restricted.Close() })
+
+	syncer := &Sync{pg: restricted, schema: schema}
+	require.NoError(t, syncer.EnsureSchema(t.Context()),
+		"restricted push role must not fail on raw custody DDL")
+	assert.True(t, syncer.schemaDone)
 }
 
 func repeatedHex(value string) string {

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // Service coordinates physical custody with durable metadata acceptance.
@@ -46,13 +48,19 @@ func NewService(
 }
 
 // FinalizeObject verifies immutable physical custody before metadata registration.
+// The provider is the upload's declared source and gates custody so excluded
+// providers never persist bytes; objects remain content-addressed per tenant.
 func (s *Service) FinalizeObject(
 	ctx context.Context,
 	identity AuthIdentity,
+	provider parser.AgentType,
 	object ObjectRef,
 	body io.Reader,
 ) (PutResult, error) {
 	if err := validateServiceIdentity(identity); err != nil {
+		return PutResult{}, err
+	}
+	if err := validateProvider(provider); err != nil {
 		return PutResult{}, err
 	}
 	if err := validateServiceObject(object); err != nil {
@@ -84,9 +92,13 @@ func (s *Service) FinalizeObject(
 func (s *Service) MissingObjects(
 	ctx context.Context,
 	identity AuthIdentity,
+	provider parser.AgentType,
 	objects []ObjectRef,
 ) ([]ObjectRef, error) {
 	if err := validateServiceIdentity(identity); err != nil {
+		return nil, err
+	}
+	if err := validateProvider(provider); err != nil {
 		return nil, err
 	}
 	for _, object := range objects {
