@@ -1141,7 +1141,7 @@
   "recent_edits_empty": "ファイル編集はまだ見つかりません。",
   "recent_edits_loading": "最近の編集内容を読み込んでいます...",
   "recent_edits_count": "{count} 件の編集",
-  "recent_edits_truncated": "{shown} 件中最新の {total} 件を表示しています",
+  "recent_edits_truncated": "{total} 件中最新の {shown} 件を表示しています",
   "recent_edits_load_more": "さらにロードする",
   "recent_edits_refresh": "リフレッシュ",
   "recent_edits_search_placeholder": "ファイルパスでフィルタリングする",
@@ -1549,7 +1549,7 @@
   "signal_panel_outcome_confidence": "{outcome} ({confidence} の信頼度)",
   "signal_panel_based_on": "に基づく：",
   "signal_panel_basis_title": "{factor} がスコアに組み込まれます",
-  "signal_panel_compaction_interrupted": "{mid} 件中 {total} 件がアクティブな作業を中断しました",
+  "signal_panel_compaction_interrupted": "{total} 件中 {mid} 件がアクティブな作業を中断しました",
   "signal_panel_compaction_title": "このセッションでのコンテキストの圧縮",
   "signal_panel_compaction_count": "{count} 回の圧縮",
   "signal_panel_mid_task": "{count} 個のタスク中",
@@ -1608,7 +1608,7 @@
   "insights_page_severity_clear": "クリア",
   "insights_page_severity_unavailable": "データなし",
   "insights_page_no_computed_sessions": "計算されたセッションはありません",
-  "insights_page_affected_sessions": "{affected} セッション中 {total}",
+  "insights_page_affected_sessions": "{total} セッション中 {affected}",
   "insights_page_calibration_outcome_cohort": "結果コホート",
   "insights_page_calibration_examples_only": "例のみ",
   "insights_page_calibration_no_affected": "影響を受けるセッションはありません",
@@ -1666,8 +1666,8 @@
         "totalPlural"
       ],
       "match": {
-        "totalPlural=one": "{affected} セッションの {total} には、この決定的なパターンがあります。",
-        "totalPlural=other": "{affected} セッション中 {total} にこの決定的なパターンがあります。"
+        "totalPlural=one": "{total} セッションの {affected} には、この決定的なパターンがあります。",
+        "totalPlural=other": "{total} セッション中 {affected} にこの決定的なパターンがあります。"
       }
     }
   ],
