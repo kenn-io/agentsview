@@ -5,14 +5,260 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
+	commondb "go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
 
 const schemaTestSchema = "agentsview_schema_test"
+
+func TestEnsureSchemaConvergesCommonColumnsAndRetainsPriorRows(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanSchemaTestPG(t, pgURL)
+	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
+	pg, err := Open(pgURL, schemaTestSchema, true)
+	require.NoError(t, err)
+	defer pg.Close()
+	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
+	_, err = pg.ExecContext(t.Context(), `
+		INSERT INTO sessions (
+			id, machine, project, agent, created_at,
+			source_archive_id, source_database_generation
+		) VALUES (
+			'prior-common-session', 'machine', 'project', 'agent', NOW(),
+			'archive-1', 'generation-1'
+		);
+		ALTER TABLE sessions DROP COLUMN IF EXISTS file_size;
+		ALTER TABLE messages DROP COLUMN IF EXISTS id;
+		ALTER TABLE tool_calls DROP COLUMN IF EXISTS message_id;
+		ALTER TABLE pinned_messages ALTER COLUMN message_id SET NOT NULL;
+		DELETE FROM sync_metadata WHERE key = 'bun_common_schema_v1';
+	`)
+	require.NoError(t, err)
+
+	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
+	store := bun.NewDB(pg, pgdialect.New())
+	require.NoError(t, commondb.CheckCommonSchema(t.Context(), store))
+	var project string
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
+		SELECT project FROM sessions WHERE id = 'prior-common-session'`,
+	).Scan(&project))
+	assert.Equal(t, "project", project)
+	var stamp string
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
+		SELECT value FROM sync_metadata WHERE key = 'bun_common_schema_v1'`,
+	).Scan(&stamp))
+	assert.Equal(t, "1", stamp)
+	var pinMessageIDNullable string
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
+		SELECT is_nullable FROM information_schema.columns
+		WHERE table_schema = $1 AND table_name = 'pinned_messages'
+		  AND column_name = 'message_id'`, schemaTestSchema,
+	).Scan(&pinMessageIDNullable))
+	assert.Equal(t, "YES", pinMessageIDNullable)
+
+	_, err = pg.ExecContext(t.Context(), `
+		INSERT INTO messages (session_id, ordinal, role, content)
+		VALUES ('prior-common-session', 4, 'assistant', 'done')`)
+	require.NoError(t, err)
+	createdAt := bunmodel.NewTimestamp(
+		time.Date(2026, 8, 2, 12, 1, 0, 0, time.UTC),
+	)
+	_, err = store.NewInsert().Model(&bunmodel.PinnedMessage{
+		SessionID: "prior-common-session", Ordinal: 4, CreatedAt: createdAt,
+	}).Exec(t.Context())
+	require.NoError(t, err)
+}
+
+func TestPostgresCommonConvergenceRollsBackDDLAndStamp(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanSchemaTestPG(t, pgURL)
+	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
+	pg, err := Open(pgURL, schemaTestSchema, true)
+	require.NoError(t, err)
+	defer pg.Close()
+	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
+	_, err = pg.ExecContext(t.Context(), `
+		INSERT INTO sessions (
+			id, machine, project, agent, created_at,
+			source_archive_id, source_database_generation
+		) VALUES (
+			'rollback-common-session', 'machine', 'project', 'agent', NOW(),
+			'archive-1', 'generation-1'
+		);
+		ALTER TABLE sessions DROP COLUMN IF EXISTS file_size;
+		ALTER TABLE messages DROP COLUMN IF EXISTS id;
+		ALTER TABLE tool_calls DROP COLUMN IF EXISTS message_id;
+		DELETE FROM sync_metadata WHERE key = 'bun_common_schema_v1';
+	`)
+	require.NoError(t, err)
+
+	injected := errors.New("injected PostgreSQL common convergence failure")
+	err = convergePostgresCommonSchema(t.Context(), pg, func() error {
+		return injected
+	})
+	require.ErrorIs(t, err, injected)
+
+	for table, column := range map[string]string{
+		"sessions": "file_size", "messages": "id", "tool_calls": "message_id",
+	} {
+		var exists bool
+		require.NoError(t, pg.QueryRowContext(t.Context(), `
+			SELECT EXISTS (
+				SELECT 1 FROM information_schema.columns
+				WHERE table_schema = $1 AND table_name = $2 AND column_name = $3
+			)`, schemaTestSchema, table, column,
+		).Scan(&exists))
+		assert.False(t, exists, "%s.%s", table, column)
+	}
+	var stampCount, sessionCount int
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
+		SELECT count(*) FROM sync_metadata WHERE key = 'bun_common_schema_v1'`,
+	).Scan(&stampCount))
+	assert.Zero(t, stampCount)
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
+		SELECT count(*) FROM sessions WHERE id = 'rollback-common-session'`,
+	).Scan(&sessionCount))
+	assert.Equal(t, 1, sessionCount)
+}
+
+func TestEnsureSchemaUsesNativePricingTimestamps(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanSchemaTestPG(t, pgURL)
+	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
+	pg, err := Open(pgURL, schemaTestSchema, true)
+	require.NoError(t, err)
+	defer pg.Close()
+	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
+
+	for _, table := range []string{"model_pricing", "model_pricing_bands"} {
+		var dataType string
+		require.NoError(t, pg.QueryRowContext(t.Context(), `
+			SELECT data_type FROM information_schema.columns
+			WHERE table_schema = $1 AND table_name = $2
+			  AND column_name = 'updated_at'`,
+			schemaTestSchema, table,
+		).Scan(&dataType))
+		assert.Equal(t, "timestamp with time zone", dataType, table)
+	}
+
+	_, err = pg.ExecContext(t.Context(), `
+		INSERT INTO model_pricing (
+			model_pattern, input_microdollars_per_mtok,
+			output_microdollars_per_mtok, updated_at
+		) VALUES ('metadata-is-not-pricing', 0, 0, '2')`)
+	require.Error(t, err)
+}
+
+func TestPostgresPricingTimestampCompatibilityRejectsTextDrift(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanSchemaTestPG(t, pgURL)
+	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
+	pg, err := Open(pgURL, schemaTestSchema, true)
+	require.NoError(t, err)
+	defer pg.Close()
+	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
+
+	_, err = pg.ExecContext(t.Context(), `
+		ALTER TABLE model_pricing
+			ALTER COLUMN updated_at DROP DEFAULT;
+		ALTER TABLE model_pricing
+			ALTER COLUMN updated_at TYPE TEXT USING updated_at::TEXT;
+		ALTER TABLE model_pricing_bands
+			ALTER COLUMN updated_at DROP DEFAULT;
+		ALTER TABLE model_pricing_bands
+			ALTER COLUMN updated_at TYPE TEXT USING updated_at::TEXT;
+	`)
+	require.NoError(t, err)
+
+	err = CheckSchemaCompat(t.Context(), pg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "model_pricing.updated_at")
+	assert.False(t, pushSchemaCurrent(t.Context(), pg))
+
+	_, err = pg.ExecContext(t.Context(), `
+		ALTER TABLE model_pricing
+			ALTER COLUMN updated_at TYPE TIMESTAMPTZ
+			USING updated_at::timestamptz;
+		ALTER TABLE model_pricing
+			ALTER COLUMN updated_at SET DEFAULT NOW();
+	`)
+	require.NoError(t, err)
+	err = CheckSchemaCompat(t.Context(), pg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "model_pricing_bands.updated_at")
+
+	err = convergePostgresCommonSchema(t.Context(), pg, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "validating stamped common PostgreSQL schema")
+}
+
+func TestEnsureSchemaMigratesPricingSentinelsBeforeTimestampConversion(
+	t *testing.T,
+) {
+	pgURL := testPGURL(t)
+	cleanSchemaTestPG(t, pgURL)
+	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
+	pg, err := Open(pgURL, schemaTestSchema, true)
+	require.NoError(t, err)
+	defer pg.Close()
+	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
+
+	_, err = pg.ExecContext(t.Context(), `
+		ALTER TABLE model_pricing_bands
+			ALTER COLUMN updated_at DROP DEFAULT;
+		ALTER TABLE model_pricing_bands
+			ALTER COLUMN updated_at TYPE TEXT USING updated_at::TEXT;
+		ALTER TABLE model_pricing_bands
+			ALTER COLUMN updated_at SET DEFAULT '';
+		ALTER TABLE model_pricing
+			ALTER COLUMN updated_at DROP DEFAULT;
+		ALTER TABLE model_pricing
+			ALTER COLUMN updated_at TYPE TEXT USING updated_at::TEXT;
+		ALTER TABLE model_pricing
+			ALTER COLUMN updated_at SET DEFAULT '';
+		INSERT INTO model_pricing (
+			model_pattern, input_microdollars_per_mtok,
+			output_microdollars_per_mtok, updated_at
+		) VALUES
+			('_fallback_version', 0, 0, 'legacy-v42'),
+			('_private-model', 750000, 1500000, '2026-08-05T11:00:00Z'),
+			('real-model', 1250000, 2500000, '2026-08-05T12:00:00Z');
+		DELETE FROM sync_metadata WHERE key = 'bun_common_schema_v1';
+	`)
+	require.NoError(t, err)
+
+	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
+
+	var sentinelCount int
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
+		SELECT count(*) FROM model_pricing
+		WHERE model_pattern = '_fallback_version'`,
+	).Scan(&sentinelCount))
+	assert.Zero(t, sentinelCount)
+	var input int64
+	var updatedAt time.Time
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
+		SELECT input_microdollars_per_mtok, updated_at
+		FROM model_pricing WHERE model_pattern = 'real-model'`,
+	).Scan(&input, &updatedAt))
+	assert.Equal(t, int64(1250000), input)
+	assert.True(t, time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC).Equal(updatedAt))
+	var privateInput, privateOutput int64
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
+		SELECT input_microdollars_per_mtok, output_microdollars_per_mtok
+		FROM model_pricing WHERE model_pattern = '_private-model'`,
+	).Scan(&privateInput, &privateOutput))
+	assert.Equal(t, int64(750000), privateInput)
+	assert.Equal(t, int64(1500000), privateOutput)
+}
 
 func cleanSchemaTestPG(t *testing.T, pgURL string) {
 	t.Helper()
@@ -236,7 +482,10 @@ func TestEnsureSchemaMigratesLegacyMoneyColumns(t *testing.T) {
 			output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok,
 			cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('legacy-rate', 1250000, 9876543, 2500000, 125000, 'seed');
+		) VALUES (
+			'legacy-rate', 1250000, 9876543, 2500000, 125000,
+			'2026-08-05T12:00:00Z'
+		);
 
 		ALTER TABLE usage_events
 			ALTER COLUMN cost_microdollars TYPE DOUBLE PRECISION

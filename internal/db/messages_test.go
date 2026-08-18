@@ -818,25 +818,25 @@ func TestToolCallFilePathCallIndexRoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	insertSession(t, d, "sess-1", "proj")
-	insertMessages(t, d, userMsg("sess-1", 0, "hello"))
+	insertMessages(t, d, userMsg("sess-1", 7, "hello"))
 
 	// Fetch the message id assigned by the DB.
 	var msgID int64
 	require.NoError(t, d.getReader().QueryRowContext(ctx,
-		`SELECT id FROM messages WHERE session_id = 'sess-1' AND ordinal = 0`,
+		`SELECT id FROM messages WHERE session_id = 'sess-1' AND ordinal = 7`,
 	).Scan(&msgID))
 
 	tx, err := d.getWriter().Begin()
 	require.NoError(t, err, "begin tx")
 	err = insertToolCallsChunkTx(tx, []ToolCall{
 		{
-			MessageID: msgID, SessionID: "sess-1",
+			MessageID: msgID, SessionID: "sess-1", MessageOrdinal: 7,
 			ToolName: "Edit", Category: "Edit",
 			ToolUseID: "tu1", InputJSON: `{"file_path":"/a/b.go"}`,
 			FilePath: "/a/b.go", CallIndex: 0,
 		},
 		{
-			MessageID: msgID, SessionID: "sess-1",
+			MessageID: msgID, SessionID: "sess-1", MessageOrdinal: 7,
 			ToolName: "Write", Category: "Write",
 			ToolUseID: "tu2", InputJSON: `{"file":"/c/d.go"}`,
 			FilePath: "/c/d.go", CallIndex: 1,
@@ -846,10 +846,11 @@ func TestToolCallFilePathCallIndexRoundTrip(t *testing.T) {
 	require.NoError(t, tx.Commit(), "commit")
 
 	var fp string
-	var ci int
+	var ordinal, ci int
 	require.NoError(t, d.getReader().QueryRowContext(ctx,
-		`SELECT file_path, call_index FROM tool_calls
-		 WHERE tool_use_id = 'tu2'`).Scan(&fp, &ci))
+		`SELECT file_path, message_ordinal, call_index FROM tool_calls
+		 WHERE tool_use_id = 'tu2'`).Scan(&fp, &ordinal, &ci))
 	assert.Equal(t, "/c/d.go", fp)
+	assert.Equal(t, 7, ordinal)
 	assert.Equal(t, 1, ci)
 }

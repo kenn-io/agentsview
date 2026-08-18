@@ -139,7 +139,7 @@ func worktreePathMatches(prefix string, cwd string) bool {
 
 func scanWorktreeMapping(rows *sql.Rows) (WorktreeProjectMapping, error) {
 	var m WorktreeProjectMapping
-	var enabled int
+	var enabled bool
 	if err := rows.Scan(
 		&m.ID,
 		&m.Machine,
@@ -156,13 +156,13 @@ func scanWorktreeMapping(rows *sql.Rows) (WorktreeProjectMapping, error) {
 	if m.Layout == "" {
 		m.Layout = WorktreeMappingLayoutExplicit
 	}
-	m.Enabled = enabled != 0
+	m.Enabled = enabled
 	return m, nil
 }
 
 func scanWorktreeMappingRow(row rowScanner) (WorktreeProjectMapping, error) {
 	var m WorktreeProjectMapping
-	var enabled int
+	var enabled bool
 	if err := row.Scan(
 		&m.ID,
 		&m.Machine,
@@ -179,7 +179,7 @@ func scanWorktreeMappingRow(row rowScanner) (WorktreeProjectMapping, error) {
 	if m.Layout == "" {
 		m.Layout = WorktreeMappingLayoutExplicit
 	}
-	m.Enabled = enabled != 0
+	m.Enabled = enabled
 	return m, nil
 }
 
@@ -190,8 +190,10 @@ func (db *DB) ListWorktreeProjectMappings(
 	rows, err := db.getReader().QueryContext(ctx, `
 		SELECT id, machine, path_prefix, layout, project, original_project,
 			enabled, created_at, updated_at
-		FROM worktree_project_mappings
-		WHERE machine = ?
+		FROM source_worktree_project_mappings
+		WHERE source_archive_id = (
+			SELECT value FROM archive_metadata WHERE key = 'archive_id'
+		) AND machine = ?
 		ORDER BY path_prefix`, strings.TrimSpace(machine))
 	if err != nil {
 		return nil, fmt.Errorf("listing worktree mappings: %w", err)
@@ -232,10 +234,29 @@ func (db *DB) CreateWorktreeProjectMapping(
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	res, err := db.getWriter().ExecContext(ctx, `
-		INSERT INTO worktree_project_mappings
-			(machine, path_prefix, layout, project, original_project, enabled)
-		VALUES (?, ?, ?, ?, ?, ?)`,
+	tx, err := db.getWriter().BeginTx(ctx, nil)
+	if err != nil {
+		return WorktreeProjectMapping{}, fmt.Errorf("beginning worktree mapping create: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COALESCE(MAX(id), 0) + 1
+		FROM source_worktree_project_mappings
+		WHERE source_archive_id = (
+			SELECT value FROM archive_metadata WHERE key = 'archive_id'
+		)`,
+	).Scan(&normalized.ID); err != nil {
+		return WorktreeProjectMapping{}, fmt.Errorf("allocating worktree mapping id: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO source_worktree_project_mappings
+			(id, source_archive_id, machine, path_prefix, layout,
+			 project, original_project, enabled, created_at, updated_at)
+		SELECT ?, value, ?, ?, ?, ?, ?, ?,
+			strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+			strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		FROM archive_metadata WHERE key = 'archive_id'`,
+		normalized.ID,
 		normalized.Machine,
 		normalized.PathPrefix,
 		normalized.Layout,
@@ -249,7 +270,9 @@ func (db *DB) CreateWorktreeProjectMapping(
 		}
 		return WorktreeProjectMapping{}, fmt.Errorf("creating worktree mapping: %w", err)
 	}
-	normalized.ID, _ = res.LastInsertId()
+	if err := tx.Commit(); err != nil {
+		return WorktreeProjectMapping{}, fmt.Errorf("committing worktree mapping create: %w", err)
+	}
 	return db.getWorktreeProjectMappingLocked(ctx, normalized.Machine, normalized.ID)
 }
 
@@ -273,7 +296,7 @@ func (db *DB) UpdateWorktreeProjectMapping(
 	defer db.mu.Unlock()
 
 	res, err := db.getWriter().ExecContext(ctx, `
-		UPDATE worktree_project_mappings
+		UPDATE source_worktree_project_mappings
 		SET path_prefix = ?,
 			layout = ?,
 			project = ?,
@@ -283,7 +306,9 @@ func (db *DB) UpdateWorktreeProjectMapping(
 			END,
 			enabled = ?,
 			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		WHERE id = ? AND machine = ?`,
+		WHERE source_archive_id = (
+			SELECT value FROM archive_metadata WHERE key = 'archive_id'
+		) AND id = ? AND machine = ?`,
 		normalized.PathPrefix,
 		normalized.Layout,
 		normalized.Project,
@@ -314,7 +339,10 @@ func (db *DB) DeleteWorktreeProjectMapping(
 	defer db.mu.Unlock()
 
 	res, err := db.getWriter().ExecContext(ctx,
-		`DELETE FROM worktree_project_mappings WHERE id = ? AND machine = ?`,
+		`DELETE FROM source_worktree_project_mappings
+		 WHERE source_archive_id = (
+			 SELECT value FROM archive_metadata WHERE key = 'archive_id'
+		 ) AND id = ? AND machine = ?`,
 		id,
 		strings.TrimSpace(machine),
 	)
@@ -336,8 +364,10 @@ func (db *DB) getWorktreeProjectMappingLocked(
 	row := db.getWriter().QueryRowContext(ctx, `
 		SELECT id, machine, path_prefix, layout, project, original_project,
 			enabled, created_at, updated_at
-		FROM worktree_project_mappings
-		WHERE id = ? AND machine = ?`,
+		FROM source_worktree_project_mappings
+		WHERE source_archive_id = (
+			SELECT value FROM archive_metadata WHERE key = 'archive_id'
+		) AND id = ? AND machine = ?`,
 		id,
 		machine,
 	)
@@ -356,8 +386,10 @@ func (db *DB) GetWorktreeProjectMapping(
 	row := db.getReader().QueryRowContext(ctx, `
 		SELECT id, machine, path_prefix, layout, project, original_project,
 			enabled, created_at, updated_at
-		FROM worktree_project_mappings
-		WHERE id = ?`, id)
+		FROM source_worktree_project_mappings
+		WHERE source_archive_id = (
+			SELECT value FROM archive_metadata WHERE key = 'archive_id'
+		) AND id = ?`, id)
 	return scanWorktreeMappingRow(row)
 }
 
@@ -369,7 +401,10 @@ func (db *DB) ListWorktreeProjectMappingMachines(
 	rows, err := db.getReader().QueryContext(ctx, `
 		SELECT machine FROM sessions WHERE deleted_at IS NULL AND machine != ''
 		UNION
-		SELECT machine FROM worktree_project_mappings WHERE machine != ''
+		SELECT machine FROM source_worktree_project_mappings
+		WHERE source_archive_id = (
+			SELECT value FROM archive_metadata WHERE key = 'archive_id'
+		) AND machine != ''
 		ORDER BY machine`)
 	if err != nil {
 		return nil, fmt.Errorf("listing worktree mapping machines: %w", err)
@@ -398,8 +433,10 @@ func (db *DB) ListActiveWorktreeProjectMappingMachines(
 ) ([]string, error) {
 	rows, err := db.getReader().QueryContext(ctx, `
 		SELECT DISTINCT machine
-		FROM worktree_project_mappings
-		WHERE enabled = 1 AND machine != ''
+		FROM source_worktree_project_mappings
+		WHERE source_archive_id = (
+			SELECT value FROM archive_metadata WHERE key = 'archive_id'
+		) AND enabled = 1 AND machine != ''
 		ORDER BY machine`)
 	if err != nil {
 		return nil, fmt.Errorf("listing active worktree mapping machines: %w", err)
@@ -476,32 +513,8 @@ func (db *DB) CopyWorktreeProjectMappingsFrom(sourcePath string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if oldDBHasTable(ctx, tx, "worktree_project_mappings") {
-		layoutSelect := "'" + WorktreeMappingLayoutExplicit + "'"
-		if oldDBHasColumn(ctx, tx, "worktree_project_mappings", "layout") {
-			layoutSelect = "layout"
-		}
-		originalProjectSelect := "''"
-		if oldDBHasColumn(ctx, tx, "worktree_project_mappings", "original_project") {
-			originalProjectSelect = "original_project"
-		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO main.worktree_project_mappings
-				(machine, path_prefix, layout, project, original_project,
-				 enabled, created_at, updated_at)
-			SELECT machine, replace(path_prefix, char(92), '/'),
-				`+layoutSelect+`, project,
-				`+originalProjectSelect+`, enabled, created_at, updated_at
-			FROM old_db.worktree_project_mappings
-			WHERE TRUE
-			ON CONFLICT(machine, path_prefix) DO UPDATE SET
-				original_project = CASE
-					WHEN worktree_project_mappings.original_project = ''
-						THEN excluded.original_project
-					ELSE worktree_project_mappings.original_project
-				END`); err != nil {
-			return fmt.Errorf("copying worktree project mappings: %w", err)
-		}
+	if err := copyWorktreeProjectMappingsFromAttached(ctx, tx, false); err != nil {
+		return err
 	}
 
 	return tx.Commit()
@@ -570,8 +583,10 @@ func (db *DB) activeWorktreeProjectMappings(
 	rows, err := db.getReader().QueryContext(ctx, `
 		SELECT id, machine, path_prefix, layout, project, original_project,
 			enabled, created_at, updated_at
-		FROM worktree_project_mappings
-		WHERE machine = ? AND enabled = 1
+		FROM source_worktree_project_mappings
+		WHERE source_archive_id = (
+			SELECT value FROM archive_metadata WHERE key = 'archive_id'
+		) AND machine = ? AND enabled = 1
 		ORDER BY length(path_prefix) DESC, path_prefix`,
 		strings.TrimSpace(machine),
 	)
@@ -675,8 +690,10 @@ func loadActiveWorktreeMappingsTx(
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, machine, path_prefix, layout, project, original_project,
 			enabled, created_at, updated_at
-		FROM worktree_project_mappings
-		WHERE machine = ? AND enabled = 1
+		FROM source_worktree_project_mappings
+		WHERE source_archive_id = (
+			SELECT value FROM archive_metadata WHERE key = 'archive_id'
+		) AND machine = ? AND enabled = 1
 		ORDER BY length(path_prefix) DESC, path_prefix`,
 		machine,
 	)
@@ -694,8 +711,10 @@ func loadActiveWorktreeMappingsByMachineTx(
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, machine, path_prefix, layout, project, original_project,
 			enabled, created_at, updated_at
-		FROM worktree_project_mappings
-		WHERE enabled = 1
+		FROM source_worktree_project_mappings
+		WHERE source_archive_id = (
+			SELECT value FROM archive_metadata WHERE key = 'archive_id'
+		) AND enabled = 1
 		ORDER BY machine, length(path_prefix) DESC, path_prefix`,
 	)
 	if err != nil {
@@ -1168,6 +1187,9 @@ func (db *DB) applyWorktreeProjectMappingsToSessionsByPath(
 
 func isSQLiteUniqueConstraint(err error) bool {
 	var sqliteErr sqlite3.Error
-	return errors.As(err, &sqliteErr) &&
-		sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	return sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique ||
+		sqliteErr.ExtendedCode == sqlite3.ErrConstraintPrimaryKey
 }

@@ -2897,9 +2897,6 @@ func (s *Store) loadPricing(ctx context.Context) (map[string]duckRates, error) {
 		); err != nil {
 			return nil, err
 		}
-		if strings.HasPrefix(model, "_") {
-			continue
-		}
 		stored, exists := out[model]
 		if !exists {
 			if parsed, err := time.Parse(time.RFC3339Nano, updatedAt); err == nil {
@@ -2972,9 +2969,6 @@ func duckFallbackPricingMap() map[string]duckRates {
 	prices := pricingpkg.FallbackPricing()
 	out := make(map[string]duckRates, len(prices))
 	for _, p := range prices {
-		if strings.HasPrefix(p.ModelPattern, "_") {
-			continue
-		}
 		out[p.ModelPattern] = duckRates{
 			input:         p.InputPerMTok,
 			output:        p.OutputPerMTok,

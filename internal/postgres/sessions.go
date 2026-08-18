@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -19,7 +21,10 @@ import (
 // Store wraps a PostgreSQL connection for read-only session
 // queries.
 type Store struct {
+	*db.BunStore
+
 	pg           *sql.DB
+	bun          *bun.DB
 	cursorMu     sync.RWMutex
 	cursorSecret []byte
 
@@ -40,6 +45,46 @@ type Store struct {
 	vectorMu                  sync.RWMutex
 	vectorSearcher            db.VectorSearcher
 	semanticUnavailableReason string
+}
+
+type postgresBunBackend struct {
+	store *Store
+}
+
+var _ db.BunBackend = (*postgresBunBackend)(nil)
+
+func (*postgresBunBackend) Name() string { return "postgres" }
+
+func (*postgresBunBackend) ReadOnly() bool { return true }
+
+func (b *postgresBunBackend) Capabilities() db.BackendCapabilities {
+	writes := map[db.WriteOperation]bool{
+		db.WriteCuration:          true,
+		db.WriteSessionManagement: true,
+	}
+	if b.store.InsightGenerationAvailable() {
+		writes[db.WriteInsight] = true
+	}
+	return db.BackendCapabilities{Writes: writes}
+}
+
+func (b *postgresBunBackend) View(
+	_ context.Context, fn func(bun.IDB) error,
+) error {
+	return fn(b.store.bun)
+}
+
+func (b *postgresBunBackend) Update(
+	_ context.Context, fn func(bun.IDB) error,
+) error {
+	return fn(b.store.bun)
+}
+
+func newStore(pg *sql.DB) *Store {
+	store := &Store{pg: pg}
+	store.bun = bun.NewDB(pg, pgdialect.New())
+	store.BunStore = db.NewBunStore(&postgresBunBackend{store: store})
+	return store
 }
 
 // pgSessionCols is the column list for standard PG session queries.

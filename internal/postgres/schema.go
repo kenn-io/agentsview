@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
@@ -339,7 +341,7 @@ CREATE TABLE IF NOT EXISTS model_pricing (
     output_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
     cache_creation_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
     cache_read_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
-    updated_at TEXT NOT NULL DEFAULT ''
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS model_pricing_bands (
@@ -350,7 +352,7 @@ CREATE TABLE IF NOT EXISTS model_pricing_bands (
     output_microdollars_per_mtok BIGINT NOT NULL,
     cache_creation_microdollars_per_mtok BIGINT NOT NULL,
     cache_read_microdollars_per_mtok BIGINT NOT NULL,
-    updated_at TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (model_pattern, above_input_tokens)
 );
 
@@ -1363,6 +1365,9 @@ func EnsureSchema(
 		time.Since(step).Round(time.Millisecond),
 		len(addedColumns),
 	)
+	if err := convergePostgresCommonSchema(ctx, db, nil); err != nil {
+		return err
+	}
 	step = time.Now()
 	sourceBackfilled, err := runSourceCurationBackfill(
 		ctx, db, sourceCurationColumnsAdded,
@@ -1477,6 +1482,175 @@ func EnsureSchema(
 		"pg schema: EnsureSchema completed in %s",
 		time.Since(start).Round(time.Millisecond),
 	)
+	return nil
+}
+
+var postgresCommonColumnMigrations = []struct {
+	table      string
+	column     string
+	definition string
+}{
+	{"sessions", "file_size", "BIGINT"},
+	{"sessions", "file_mtime", "BIGINT"},
+	{"sessions", "file_inode", "BIGINT"},
+	{"sessions", "file_device", "BIGINT"},
+	{"sessions", "file_hash", "TEXT"},
+	{"sessions", "local_modified_at", "TIMESTAMPTZ"},
+	{"messages", "id", "BIGINT"},
+	{"tool_calls", "message_id", "BIGINT"},
+	{"source_worktree_project_mappings", "id", "BIGINT NOT NULL DEFAULT 0"},
+	{"source_worktree_project_mappings", "created_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()"},
+}
+
+var postgresCommonConstraintMigrations = []string{
+	"ALTER TABLE pinned_messages ALTER COLUMN message_id DROP NOT NULL",
+}
+
+func convergePostgresCommonSchema(
+	ctx context.Context, conn *sql.DB, beforeStamp func() error,
+) error {
+	store := bun.NewDB(conn, pgdialect.New())
+	tx, err := store.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("starting common PostgreSQL schema migration: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(
+		hashtext(current_database()), hashtext(current_schema())
+	)`); err != nil {
+		return fmt.Errorf("locking common PostgreSQL schema migration: %w", err)
+	}
+	var complete bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM sync_metadata WHERE key = ?
+		)`, db.CommonSchemaCompatibilityMetadataKey,
+	).Scan(&complete); err != nil {
+		return fmt.Errorf("rechecking common PostgreSQL schema stamp: %w", err)
+	}
+	if complete {
+		if err := checkPostgresPricingTimestampTypes(ctx, tx); err != nil {
+			return fmt.Errorf(
+				"validating stamped common PostgreSQL schema: %w", err,
+			)
+		}
+		if err := db.CheckCommonSchemaStructure(ctx, tx); err != nil {
+			return fmt.Errorf("validating stamped common PostgreSQL schema: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("closing common PostgreSQL schema validation: %w", err)
+		}
+		return nil
+	}
+	for _, migration := range postgresCommonColumnMigrations {
+		query := fmt.Sprintf(
+			"ALTER TABLE %s ADD COLUMN IF NOT EXISTS %s %s",
+			migration.table, migration.column, migration.definition,
+		)
+		if _, err := tx.ExecContext(ctx, query); err != nil {
+			return fmt.Errorf(
+				"adding common PostgreSQL column %s.%s: %w",
+				migration.table, migration.column, err,
+			)
+		}
+	}
+	for _, query := range postgresCommonConstraintMigrations {
+		if _, err := tx.ExecContext(ctx, query); err != nil {
+			return fmt.Errorf("converging common PostgreSQL constraint: %w", err)
+		}
+	}
+	if err := convergePostgresPricingTimestamps(ctx, tx); err != nil {
+		return err
+	}
+	if err := db.CreateCommonSchema(ctx, tx); err != nil {
+		return err
+	}
+	if err := checkPostgresPricingTimestampTypes(ctx, tx); err != nil {
+		return err
+	}
+	if err := db.CheckCommonSchema(ctx, tx); err != nil {
+		return err
+	}
+	if beforeStamp != nil {
+		if err := beforeStamp(); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO sync_metadata (key, value)
+		VALUES (?, '1')
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+		db.CommonSchemaCompatibilityMetadataKey,
+	); err != nil {
+		return fmt.Errorf("stamping common PostgreSQL schema: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing common PostgreSQL schema migration: %w", err)
+	}
+	return nil
+}
+
+func convergePostgresPricingTimestamps(ctx context.Context, store bun.IDB) error {
+	if _, err := store.ExecContext(ctx, `
+		DELETE FROM model_pricing
+		WHERE model_pattern IN (
+			'_fallback_version',
+			'_litellm_last_attempt',
+			'_pricing_storage_version'
+		)`); err != nil {
+		return fmt.Errorf("removing PostgreSQL pricing metadata sentinels: %w", err)
+	}
+	for _, table := range []string{"model_pricing", "model_pricing_bands"} {
+		var dataType string
+		if err := store.NewRaw(`
+			SELECT data_type
+			FROM information_schema.columns
+			WHERE table_schema = current_schema()
+			  AND table_name = ?
+			  AND column_name = 'updated_at'`, table).Scan(ctx, &dataType); err != nil {
+			return fmt.Errorf("reading PostgreSQL %s.updated_at type: %w", table, err)
+		}
+		if dataType == "text" || dataType == "character varying" {
+			if _, err := store.ExecContext(ctx, fmt.Sprintf(`
+				ALTER TABLE %s ALTER COLUMN updated_at DROP DEFAULT;
+				ALTER TABLE %s ALTER COLUMN updated_at TYPE TIMESTAMPTZ
+				USING CASE
+					WHEN BTRIM(updated_at) = '' THEN NOW()
+					ELSE updated_at::timestamptz
+				END`, table, table)); err != nil {
+				return fmt.Errorf("converting PostgreSQL %s.updated_at: %w", table, err)
+			}
+		}
+		if _, err := store.ExecContext(ctx, fmt.Sprintf(`
+			ALTER TABLE %s ALTER COLUMN updated_at SET DEFAULT NOW()`,
+			table)); err != nil {
+			return fmt.Errorf("defaulting PostgreSQL %s.updated_at: %w", table, err)
+		}
+	}
+	return nil
+}
+
+func checkPostgresPricingTimestampTypes(
+	ctx context.Context, conn bun.IConn,
+) error {
+	for _, table := range []string{"model_pricing", "model_pricing_bands"} {
+		var dataType string
+		query := fmt.Sprintf(`
+			SELECT data_type
+			FROM information_schema.columns
+			WHERE table_schema = current_schema()
+			  AND table_name = '%s'
+			  AND column_name = 'updated_at'`, table)
+		if err := conn.QueryRowContext(ctx, query).Scan(&dataType); err != nil {
+			return fmt.Errorf("reading PostgreSQL %s.updated_at type: %w", table, err)
+		}
+		if dataType != "timestamp with time zone" {
+			return fmt.Errorf(
+				"PostgreSQL %s.updated_at has type %s, want timestamp with time zone",
+				table, dataType,
+			)
+		}
+	}
 	return nil
 }
 
@@ -2553,6 +2727,9 @@ func CheckSchemaCompat(
 			)
 		}
 		rows.Close()
+		if err := checkPostgresPricingTimestampTypes(ctx, db); err != nil {
+			return err
+		}
 	}
 
 	rows, err = db.QueryContext(ctx,
