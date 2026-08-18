@@ -271,10 +271,10 @@
   "session_find_search_query": "検索クエリ",
   "session_find_no_results": "結果はありません",
   "session_find_match_count": "{current}/{total}",
-  "session_find_previous_match_title": "前回の試合 (⇧ ↩)",
-  "session_find_previous_match": "前回の試合",
-  "session_find_next_match_title": "次の試合 (↩)",
-  "session_find_next_match": "次の試合",
+  "session_find_previous_match_title": "前の一致 (⇧ ↩)",
+  "session_find_previous_match": "前の一致",
+  "session_find_next_match_title": "次の一致 (↩)",
+  "session_find_next_match": "次の一致",
   "session_find_close_title": "閉じる(⎋)",
   "session_find_close": "検索バーを閉じる",
   "message_list_empty": "メッセージを表示するセッションを選択してください",
@@ -311,7 +311,7 @@
       ],
       "match": {
         "countPlural=one": "{duration} · {count} 回の呼び出しを行う",
-        "countPlural=other": "{duration} · {count} 回の通話を開始します"
+        "countPlural=other": "{duration} · {count} 回の呼び出しを開始します"
       }
     }
   ],
@@ -361,7 +361,7 @@
         "countPlural"
       ],
       "match": {
-        "countPlural=one": "{count} 回の通話",
+        "countPlural=one": "{count} 回の呼び出し",
         "countPlural=other": "{count} 回の呼び出し"
       }
     }
@@ -581,7 +581,7 @@
   "analytics_summary_projects": "プロジェクト",
   "analytics_summary_active_days": "アクティブな日",
   "analytics_summary_messages_per_session": "メッセージ/セッション",
-  "analytics_summary_median_p90": "med {median} / p90 {p90}",
+  "analytics_summary_median_p90": "中央値 {median} / P90 {p90}",
   "analytics_summary_concentration": "上位3プロジェクト比率",
   "analytics_status_active": "アクティブ",
   "analytics_status_stale": "古い",
@@ -1004,7 +1004,7 @@
         "countPlural"
       ],
       "match": {
-        "countPlural=one": "{countNumber} enabled rule targets this project",
+        "countPlural=one": "{countNumber} 件の有効なルールがこのプロジェクトに適用されています",
         "countPlural=other": "{countNumber} 個の有効なルールがこのプロジェクトをターゲットにしています"
       }
     }
@@ -1113,16 +1113,16 @@
     }
   ],
   "data_reclassify_zero_matches": "このプレフィックスは、アーカイブ内のどのセッションにも一致しません。",
-  "data_reclassify_conflict": "プレビュー以降、マッピングが変更されました。インパクトは一新されました。申請する前に確認してください。",
+  "data_reclassify_conflict": "プレビュー以降、マッピングが変更されました。影響範囲を更新しました。適用前に確認してください。",
   "data_reclassify_apply": "マッピングを保存して適用する",
   "data_reclassify_applying": "保存して適用…",
   "data_reclassify_apply_failed": "マッピングの保存と適用に失敗しました",
   "data_reclassify_applied_refresh_failed": "マッピングは保存されましたが、プロジェクト インベントリを更新できませんでした。更新のみを再試行します。",
   "data_reclassify_retry_refresh": "リフレッシュを再試行する",
-  "data_reclassify_refreshing": "爽やか…",
+  "data_reclassify_refreshing": "更新中…",
   "data_reclassify_read_only": "このストアは読み取り専用です。このマシンのセッションを取り込む書き込み可能なアーカイブから分類ルールを管理します。",
   "data_reclassify_managed_in_rules": "ここで作成したマッピングは、ルール ビューで編集できます。",
-  "data_reclassify_open_rules": "オープンルール",
+  "data_reclassify_open_rules": "ルールを開く",
   "data_workspace_all_projects": "すべてのプロジェクト",
   "data_workspace_close": "プロジェクトの詳細を閉じる",
   "data_workspace_activity": "活動",
@@ -1133,14 +1133,14 @@
   "data_rules_col_original": "オリジナルラベル",
   "data_rules_col_enabled": "有効",
   "data_rules_col_updated": "更新されました",
-  "data_rules_col_governed": "",
+  "data_rules_col_governed": "ルール適用セッション",
   "data_rules_col_actions": "アクション",
   "data_rules_read_only": "このストアは読み取り専用です。このマシンのセッションを取り込む書き込み可能なアーカイブからルールを管理します。",
-  "data_rules_view_project": "Show {project} in the inventory",
+  "data_rules_view_project": "インベントリで {project} を表示",
   "recent_edits_title": "最近の編集",
   "recent_edits_empty": "ファイル編集はまだ見つかりません。",
   "recent_edits_loading": "最近の編集内容を読み込んでいます...",
-  "recent_edits_count": "{count} edits",
+  "recent_edits_count": "{count} 件の編集",
   "recent_edits_truncated": "{shown} 件中最新の {total} 件を表示しています",
   "recent_edits_load_more": "さらにロードする",
   "recent_edits_refresh": "リフレッシュ",
@@ -1165,7 +1165,7 @@
   "activity_all_machines": "すべてのマシン",
   "activity_filter_by_automation": "自動化によるフィルター",
   "activity_all_sessions": "すべてのセッション",
-  "activity_interactive": "相互の作用",
+  "activity_interactive": "対話",
   "activity_automated": "自動化",
   "activity_refresh": "活動を更新する",
   "activity_project": "プロジェクト",
@@ -1179,7 +1179,7 @@
   "activity_agent_min": "エージェント分",
   "activity_cost": "料金",
   "activity_none_lower": "なし",
-  "activity_int_auto_short": "{int} int / {auto} auto",
+  "activity_int_auto_short": "{int} 対話 / {auto} 自動",
   "activity_peak_label": "ピーク {count}",
   "activity_agent_min_value": "{value} エージェント分",
   "activity_no_sessions_selected_slot": "選択したスロットにはアクティブなセッションがありません。",
@@ -1302,7 +1302,7 @@
   "analytics_session_shape": "セッションの形状",
   "analytics_active_days": "アクティブな日",
   "analytics_messages_per_session": "メッセージ/セッション",
-  "analytics_med_p90": "med {med} / p90 {p90}",
+  "analytics_med_p90": "中央値 {med} / P90 {p90}",
   "analytics_concentration": "上位3プロジェクト比率",
   "analytics_tool_usage": "ツール使用状況",
   "analytics_calls_count": "{count} 回の呼び出し",
@@ -1879,7 +1879,7 @@
   "shortcuts_export_session": "エクスポートセッション",
   "shortcuts_publish_gist": "Gist に公開する",
   "shortcuts_copy_resume": "コピー再開コマンド",
-  "shortcuts_delete_session": "",
+  "shortcuts_delete_session": "セッションを削除",
   "shortcuts_show_modal": "このモーダルを表示する",
   "shortcuts_zoom_in": "ズームイン",
   "shortcuts_zoom_out": "ズームアウト",
@@ -1996,7 +1996,7 @@
   "settings_embeddings_last_build_label": "最終ビルド",
   "settings_embeddings_last_build_completed": "完了",
   "settings_embeddings_last_build_failed": "失敗した",
-  "settings_embeddings_last_build_activated": "新世代が活性化",
+  "settings_embeddings_last_build_activated": "新しい世代を有効化しました",
   "settings_embeddings_last_build_documents": "埋め込まれたドキュメント",
   "settings_embeddings_last_build_chunks": "埋め込まれたチャンク",
   "settings_embeddings_generations_title": "世代",
