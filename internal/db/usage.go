@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/export"
@@ -1156,6 +1157,13 @@ func exactUsageUTCWindow(f UsageFilter) usageBounds {
 // window functions cost two to five times the underlying scan, because
 // SQLite sorts and materializes the full-width rows once per window.
 //
+// The pass-through rows are selected with an IN probe against
+// usage_snapshot_dups rather than a LEFT JOIN onto usage_snapshot_ranked.
+// SQLite always builds an ephemeral index for an IN subquery, whereas
+// joining onto a materialized CTE relies on the planner choosing an
+// automatic index; if it scans instead, the join is quadratic in the row
+// source. The ranked survivors are appended with UNION ALL.
+//
 // rowsArgs are the placeholders of rowsSQL; the returned args carry them in
 // position with the ranking's own placeholders. Callers finish with
 // dailyUsageRowSelectFromSnapshotRowsWithMachine.
@@ -1203,17 +1211,17 @@ func snapshotRankedDailyUsageRowsSQL(
 	return fmt.Sprintf(`
 		WITH usage_snapshot_dups AS (%[1]s),
 		usage_snapshot_ranked AS (
-			SELECT u.session_id, u.message_ordinal,
+			SELECT u.*,
 				FIRST_VALUE(u.session_id) OVER attribution
 					AS snapshot_attribution_session_id,
 				FIRST_VALUE(u.project) OVER attribution AS snapshot_project,
 				FIRST_VALUE(u.agent) OVER attribution AS snapshot_agent,
 				FIRST_VALUE(u.machine) OVER attribution AS snapshot_machine,
-				ROW_NUMBER() OVER ranking AS snapshot_rank,
 				MAX(%[5]s) OVER (
 					ranking ROWS BETWEEN UNBOUNDED PRECEDING
 						AND UNBOUNDED FOLLOWING
-				) AS snapshot_web_search_requests
+				) AS snapshot_web_search_requests,
+				ROW_NUMBER() OVER ranking AS snapshot_rank
 			FROM (%[2]s) u
 			WHERE %[3]s
 			WINDOW attribution AS (
@@ -1232,24 +1240,43 @@ func snapshotRankedDailyUsageRowsSQL(
 		),
 		usage_snapshot_survivors AS (
 			SELECT u.*,
-				COALESCE(r.snapshot_attribution_session_id, u.session_id)
-					AS snapshot_attribution_session_id,
-				COALESCE(r.snapshot_project, u.project) AS snapshot_project,
-				COALESCE(r.snapshot_agent, u.agent) AS snapshot_agent,
-				COALESCE(r.snapshot_machine, u.machine) AS snapshot_machine,
-				r.snapshot_web_search_requests
+				u.session_id AS snapshot_attribution_session_id,
+				u.project AS snapshot_project,
+				u.agent AS snapshot_agent,
+				u.machine AS snapshot_machine,
+				NULL AS snapshot_web_search_requests,
+				1 AS snapshot_rank
 			FROM (%[6]s) u
-			LEFT JOIN usage_snapshot_ranked r
-				ON u.usage_source = 'message'
-				AND r.session_id = u.session_id
-				AND r.message_ordinal = u.message_ordinal
 			WHERE %[3]s
-				AND (r.snapshot_rank IS NULL OR r.snapshot_rank = 1)
+				AND NOT (
+					u.usage_source = 'message'
+					AND u.claude_message_id != ''
+					AND u.claude_request_id != ''
+					AND (%[8]s) IN (
+						SELECT %[9]s FROM usage_snapshot_dups
+					)
+				)
+			UNION ALL
+			SELECT r.*
+			FROM usage_snapshot_ranked r
+			WHERE r.snapshot_rank = 1
 		)
 		SELECT survivor.*
 		FROM usage_snapshot_survivors survivor%[7]s`,
 		dupsSQL, claudeRowsSQL, windowWhere, outputTokens,
-		webSearchRequests, rowsSQL, survivorFilter), args
+		webSearchRequests, rowsSQL, survivorFilter,
+		usageSnapshotRequestKey("u."), usageSnapshotRequestKey("")), args
+}
+
+// usageSnapshotRequestKey encodes a Claude request identity as one text
+// value so the pass-through IN probe hashes a single column: SQLite builds
+// a Bloom filter for a single-column IN list but not for a row-value IN,
+// which made the probe cost more than the ranking it guards. The
+// length prefix keeps the encoding injective for any identifier content.
+// prefix qualifies the column references, for example "u.".
+func usageSnapshotRequestKey(prefix string) string {
+	return "length(" + prefix + "claude_message_id) || ':' || " +
+		prefix + "claude_message_id || " + prefix + "claude_request_id"
 }
 
 // usageSnapshotWindowWhere restricts rows to the filter's exact UTC window
@@ -1645,18 +1672,30 @@ func skipJSONSpace(tokenJSON string, i int) int {
 	return i
 }
 
+// parseJSONString reads the JSON string literal starting at tokenJSON[i]
+// and returns its decoded value and the index after the closing quote.
+// Literals without escapes or control characters, which is every usage key
+// and nearly every value, are returned as a substring so the hot per-row
+// scan does not allocate; anything else goes through encoding/json so the
+// result matches json.Unmarshal exactly.
 func parseJSONString(tokenJSON string, i int) (string, int, bool) {
 	if i >= len(tokenJSON) || tokenJSON[i] != '"' {
 		return "", i, false
 	}
+	plain := true
 	for j := i + 1; j < len(tokenJSON); j++ {
-		switch tokenJSON[j] {
-		case '\\':
+		c := tokenJSON[j]
+		switch {
+		case c == '\\':
 			if j+1 >= len(tokenJSON) {
 				return "", len(tokenJSON), false
 			}
+			plain = false
 			j++
-		case '"':
+		case c == '"':
+			if plain && utf8.ValidString(tokenJSON[i+1:j]) {
+				return tokenJSON[i+1 : j], j + 1, true
+			}
 			raw := tokenJSON[i : j+1]
 			var value string
 			err := json.Unmarshal([]byte(raw), &value)
@@ -1664,6 +1703,8 @@ func parseJSONString(tokenJSON string, i int) (string, int, bool) {
 				return "", j + 1, false
 			}
 			return value, j + 1, true
+		case c < 0x20:
+			plain = false
 		}
 	}
 	return "", len(tokenJSON), false
