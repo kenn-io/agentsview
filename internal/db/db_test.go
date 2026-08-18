@@ -1009,9 +1009,14 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 }
 
 func TestCurrentDataVersionIncludesOpenCodeProjectMetadataChange(t *testing.T) {
-	assert.Equal(t, 89, CurrentDataVersion(),
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 89,
 		"version 89 is the data-version boundary for file-backed OpenCode metadata changes")
 	t.Logf("CurrentDataVersion=%d", CurrentDataVersion())
+}
+
+func TestCurrentDataVersionGrokMessageTimestamps(t *testing.T) {
+	assert.Equal(t, 90, CurrentDataVersion(),
+		"Grok message timestamps require a sequential backfill")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {

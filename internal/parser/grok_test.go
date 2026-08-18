@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -823,6 +824,99 @@ func TestGrokProviderParsesChatHistoryTranscript(t *testing.T) {
 
 	assert.Equal(t, RoleUser, result.Messages[4].Role)
 	assert.Equal(t, "fix the issues", result.Messages[4].Content)
+}
+
+func TestGrokProviderEnrichesTranscriptWithUpdateTimestamps(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "workspace-key", "session-timing")
+	writeGrokFixtureFile(t, filepath.Join(sessionDir, "summary.json"), `{
+		"info":{"id":"session-timing","cwd":"/workspace/sample-project"},
+		"session_summary":"sample conversation",
+		"created_at":"2023-11-14T22:13:20Z",
+		"updated_at":"2023-11-14T22:15:20Z"
+	}`)
+	writeGrokFixtureFile(
+		t,
+		filepath.Join(sessionDir, "chat_history.jsonl"),
+		strings.Join([]string{
+			`{"type":"user","content":"first request"}`,
+			`{"type":"assistant","content":"first response"}`,
+			`{"type":"user","content":"follow-up request"}`,
+			`{"type":"assistant","content":"second response"}`,
+		}, "\n")+"\n",
+	)
+	writeGrokFixtureFile(
+		t,
+		filepath.Join(sessionDir, "updates.jsonl"),
+		strings.Join([]string{
+			`{"timestamp":1700000000,"method":"session/update","params":{"sessionId":"session-timing","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"first request"}}}}`,
+			`{"timestamp":1700000010,"method":"session/update","params":{"sessionId":"session-timing","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"first response"}}}}`,
+			`{"timestamp":1700000060,"method":"session/update","params":{"sessionId":"session-timing","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"follow-up request"}}}}`,
+			`{"timestamp":1700000075,"method":"session/update","params":{"sessionId":"session-timing","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"second response"}}}}`,
+		}, "\n")+"\n",
+	)
+
+	result, err := ParseGrokSummary(
+		filepath.Join(sessionDir, "summary.json"), "sample-project", "test-machine",
+	)
+	require.NoError(t, err)
+	require.Len(t, result.Messages, 4)
+	assert.Equal(t, []time.Time{
+		time.Unix(1_700_000_000, 0).UTC(),
+		time.Unix(1_700_000_010, 0).UTC(),
+		time.Unix(1_700_000_060, 0).UTC(),
+		time.Unix(1_700_000_075, 0).UTC(),
+	}, []time.Time{
+		result.Messages[0].Timestamp,
+		result.Messages[1].Timestamp,
+		result.Messages[2].Timestamp,
+		result.Messages[3].Timestamp,
+	})
+}
+
+func TestGrokProviderUpdateTimestampsFollowToolBoundaries(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "workspace-key", "session-tools")
+	writeGrokFixtureFile(t, filepath.Join(sessionDir, "summary.json"), `{
+		"info":{"id":"session-tools","cwd":"/workspace/sample-project"},
+		"session_summary":"tool conversation",
+		"created_at":"2023-11-14T22:13:20Z",
+		"updated_at":"2023-11-14T22:15:20Z"
+	}`)
+	writeGrokFixtureFile(
+		t,
+		filepath.Join(sessionDir, "chat_history.jsonl"),
+		strings.Join([]string{
+			`{"type":"user","content":"inspect the sample"}`,
+			`{"type":"assistant","content":"","tool_calls":[{"id":"call-sample","name":"read_file","arguments":"{\"target_file\":\"sample.txt\"}"}]}`,
+			`{"type":"tool_result","tool_call_id":"call-sample","content":"example contents"}`,
+			`{"type":"assistant","content":"inspection complete"}`,
+		}, "\n")+"\n",
+	)
+	writeGrokFixtureFile(
+		t,
+		filepath.Join(sessionDir, "updates.jsonl"),
+		strings.Join([]string{
+			`{"timestamp":1700000000,"method":"session/update","params":{"sessionId":"session-tools","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"inspect the sample"}}}}`,
+			`{"timestamp":1700000010,"method":"session/update","params":{"sessionId":"session-tools","update":{"sessionUpdate":"tool_call","toolCallId":"call-sample","title":"read_file"}}}`,
+			`{"timestamp":1700000020,"method":"session/update","params":{"sessionId":"session-tools","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-sample","status":"completed"}}}`,
+			`{"timestamp":1700000030,"method":"session/update","params":{"sessionId":"session-tools","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"inspection complete"}}}}`,
+		}, "\n")+"\n",
+	)
+
+	result, err := ParseGrokSummary(
+		filepath.Join(sessionDir, "summary.json"), "sample-project", "test-machine",
+	)
+	require.NoError(t, err)
+	require.Len(t, result.Messages, 4)
+	for i, seconds := range []int64{
+		1_700_000_000,
+		1_700_000_010,
+		1_700_000_020,
+		1_700_000_030,
+	} {
+		assert.Equal(t, time.Unix(seconds, 0).UTC(), result.Messages[i].Timestamp)
+	}
 }
 
 func TestGrokProviderUnwrapsOpenAIStyleToolArguments(t *testing.T) {

@@ -49,11 +49,8 @@ func TestSessionFormatSourcesCoverRegistry(t *testing.T) {
 		documented[agent] = true
 	}
 
-	expected := make(map[AgentType]bool, len(Registry)-1)
+	expected := make(map[AgentType]bool, len(Registry))
 	for _, def := range Registry {
-		if def.Type == AgentGrok {
-			continue
-		}
 		expected[def.Type] = true
 	}
 

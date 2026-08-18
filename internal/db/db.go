@@ -419,7 +419,13 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // the real prompt, instead of leaving the raw wrapper in first_message and
 // the visible transcript. Existing rows need re-parsing so first_message
 // and message content drop the leading markup.)
-const dataVersion = 89
+// (89: OpenCode project metadata recovery. Existing file-backed sessions need
+// re-parsing so missing or unusable working directories can be recovered from
+// their project metadata.)
+// (90: Grok message timestamp backfill. Grok chat-history rows do not carry
+// timestamps; re-parsing enriches them from the authoritative timestamped
+// updates stream so existing sessions participate in activity aggregation.)
+const dataVersion = 90
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

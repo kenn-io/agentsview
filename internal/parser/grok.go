@@ -95,6 +95,13 @@ func ParseGrokSummary(
 	if transcriptErr != nil && !os.IsNotExist(transcriptErr) {
 		return ParseResult{}, transcriptErr
 	}
+	timestampAnchors, timestampErr := parseGrokUpdateTimestampAnchors(
+		filepath.Join(sessionDir, "updates.jsonl"),
+	)
+	if timestampErr != nil && !errors.Is(timestampErr, os.ErrNotExist) {
+		return ParseResult{}, timestampErr
+	}
+	enrichGrokMessageTimestamps(messages, timestampAnchors)
 
 	firstPrompt := ""
 	for _, msg := range messages {
@@ -519,6 +526,180 @@ func parseGrokChatHistory(path string) ([]ParsedMessage, int, error) {
 	return messages, malformed, nil
 }
 
+type grokTimestampAnchor struct {
+	role         RoleType
+	content      string
+	timestamp    time.Time
+	toolCallIDs  []string
+	toolResultID string
+}
+
+type grokTimestampAnchorBuilder struct {
+	anchors     []grokTimestampAnchor
+	role        RoleType
+	content     strings.Builder
+	timestamp   time.Time
+	toolCallIDs []string
+}
+
+func (b *grokTimestampAnchorBuilder) flush() {
+	if b.role == "" {
+		return
+	}
+	b.anchors = append(b.anchors, grokTimestampAnchor{
+		role:        b.role,
+		content:     b.content.String(),
+		timestamp:   b.timestamp,
+		toolCallIDs: append([]string(nil), b.toolCallIDs...),
+	})
+	b.role = ""
+	b.content.Reset()
+	b.timestamp = time.Time{}
+	b.toolCallIDs = b.toolCallIDs[:0]
+}
+
+func (b *grokTimestampAnchorBuilder) start(role RoleType, timestamp time.Time) {
+	if b.role != role {
+		b.flush()
+		b.role = role
+	}
+	if b.timestamp.IsZero() && !timestamp.IsZero() {
+		b.timestamp = timestamp
+	}
+}
+
+func (b *grokTimestampAnchorBuilder) addUserText(text string) {
+	if text == "" {
+		return
+	}
+	if b.content.Len() > 0 {
+		b.content.WriteByte('\n')
+	}
+	b.content.WriteString(text)
+}
+
+func parseGrokUpdateTimestampAnchors(
+	path string,
+) ([]grokTimestampAnchor, error) {
+	var builder grokTimestampAnchorBuilder
+	_, err := readJSONLFrom(path, 0, func(line string) {
+		if !gjson.Valid(line) {
+			return
+		}
+		root := gjson.Parse(line)
+		update := root.Get("params.update")
+		if !update.Exists() {
+			update = root.Get("update")
+		}
+		if !update.Exists() {
+			return
+		}
+		timestamp := hermesUnixTime(root.Get("timestamp").Float())
+		switch update.Get("sessionUpdate").Str {
+		case "user_message_chunk":
+			if update.Get("_meta.hostTurn").Bool() {
+				builder.flush()
+				return
+			}
+			builder.start(RoleUser, timestamp)
+			if update.Get("content.type").Str == "text" {
+				builder.addUserText(update.Get("content.text").Str)
+			}
+
+		case "agent_message_chunk":
+			if update.Get("_meta.hostTurn").Bool() {
+				builder.flush()
+				return
+			}
+			builder.start(RoleAssistant, timestamp)
+			if update.Get("content.type").Str == "text" {
+				builder.content.WriteString(update.Get("content.text").Str)
+			}
+
+		case "tool_call":
+			builder.start(RoleAssistant, timestamp)
+			if id := strings.TrimSpace(update.Get("toolCallId").Str); id != "" {
+				builder.toolCallIDs = append(builder.toolCallIDs, id)
+			}
+
+		case "tool_call_update":
+			status := update.Get("status").Str
+			if status != "completed" && status != "failed" {
+				return
+			}
+			builder.flush()
+			if id := strings.TrimSpace(update.Get("toolCallId").Str); id != "" {
+				builder.anchors = append(builder.anchors, grokTimestampAnchor{
+					role:         RoleUser,
+					timestamp:    timestamp,
+					toolResultID: id,
+				})
+			}
+
+		case "compaction_checkpoint":
+			builder = grokTimestampAnchorBuilder{}
+		}
+	})
+	builder.flush()
+	return builder.anchors, err
+}
+
+func enrichGrokMessageTimestamps(
+	messages []ParsedMessage, anchors []grokTimestampAnchor,
+) {
+	anchorIndex := 0
+	for i := range messages {
+		for j := anchorIndex; j < len(anchors); j++ {
+			if !grokTimestampAnchorMatches(messages[i], anchors[j]) {
+				continue
+			}
+			messages[i].Timestamp = anchors[j].timestamp
+			anchorIndex = j + 1
+			break
+		}
+	}
+}
+
+func grokTimestampAnchorMatches(
+	message ParsedMessage, anchor grokTimestampAnchor,
+) bool {
+	if message.Role != anchor.role {
+		return false
+	}
+	if len(message.ToolResults) > 0 {
+		for _, result := range message.ToolResults {
+			if result.ToolUseID != "" && result.ToolUseID == anchor.toolResultID {
+				return true
+			}
+		}
+		return false
+	}
+	if len(message.ToolCalls) > 0 && len(anchor.toolCallIDs) > 0 {
+		for _, call := range message.ToolCalls {
+			for _, id := range anchor.toolCallIDs {
+				if call.ToolUseID != "" && call.ToolUseID == id {
+					return true
+				}
+			}
+		}
+	}
+	switch message.Role {
+	case RoleUser:
+		return message.Content == grokNormalizeUserText(anchor.content)
+	case RoleAssistant:
+		content := message.Content
+		if message.HasThinking {
+			content = strings.TrimPrefix(
+				content,
+				"[Thinking]\n"+message.ThinkingText+"\n[/Thinking]\n",
+			)
+		}
+		return content == strings.TrimSpace(anchor.content)
+	default:
+		return false
+	}
+}
+
 func grokChatRowKind(root gjson.Result) string {
 	switch kind := strings.TrimSpace(root.Get("type").Str); kind {
 	case "system", "user", "reasoning", "backend_tool_call", "assistant", "tool_result":
@@ -668,6 +849,10 @@ func grokUserContent(content gjson.Result) string {
 	default:
 		return ""
 	}
+	return grokNormalizeUserText(text)
+}
+
+func grokNormalizeUserText(text string) string {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return ""
