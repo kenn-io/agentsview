@@ -5,12 +5,30 @@ description: Release history for AgentsView
 
 ## Unreleased
 
+---
+
+## 0.41.1
+
+<small>2026-08-18</small>
+
+**New features**
+
+- Add Windows system tray support with proper lifecycle behavior.
+
 **Bug fixes**
 
-- Ignore self-referential subagent spawn edges when linking session
-  hierarchy, and resolve a self-parent claim to the parser-derived parent (or
-  no parent) at ingest and once per archive for rows an earlier build had
-  linked to themselves.
+- Keep oversized VS Code Copilot snapshots searchable and indexable.
+- Make daily usage snapshots reliable regardless of database query planning.
+- Ignore invalid self-referential subagent links.
+
+**Acknowledgements**
+
+- Thanks to [Marius van Niekerk](https://github.com/mariusvniekerk) for Windows
+  system tray support.
+- Thanks to [Rod Boev](https://github.com/rodboev) for keeping oversized VS Code
+  Copilot snapshots indexable and ignoring self-referential subagent links.
+- Thanks to [Wes McKinney](https://github.com/wesm) for reliable daily usage
+  snapshots and release documentation.
 
 ---
 
