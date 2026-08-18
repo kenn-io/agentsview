@@ -919,6 +919,47 @@ func TestGrokProviderUpdateTimestampsFollowToolBoundaries(t *testing.T) {
 	}
 }
 
+func TestGrokProviderUpdateTimestampsRejectMismatchedToolIDs(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "workspace-key", "session-tool-mismatch")
+	writeGrokFixtureFile(t, filepath.Join(sessionDir, "summary.json"), `{
+		"info":{"id":"session-tool-mismatch","cwd":"/workspace/sample-project"},
+		"session_summary":"tool conversation",
+		"created_at":"2023-11-14T22:13:20Z",
+		"updated_at":"2023-11-14T22:15:20Z"
+	}`)
+	writeGrokFixtureFile(
+		t,
+		filepath.Join(sessionDir, "chat_history.jsonl"),
+		strings.Join([]string{
+			`{"type":"user","content":"inspect the sample"}`,
+			`{"type":"assistant","content":"","tool_calls":[{"id":"call-missing","name":"read_file","arguments":"{\"target_file\":\"missing.txt\"}"}]}`,
+			`{"type":"tool_result","tool_call_id":"call-missing","content":"missing result"}`,
+			`{"type":"assistant","content":"","tool_calls":[{"id":"call-current","name":"read_file","arguments":"{\"target_file\":\"current.txt\"}"}]}`,
+			`{"type":"tool_result","tool_call_id":"call-current","content":"current result"}`,
+		}, "\n")+"\n",
+	)
+	writeGrokFixtureFile(
+		t,
+		filepath.Join(sessionDir, "updates.jsonl"),
+		strings.Join([]string{
+			`{"timestamp":1700000000,"method":"session/update","params":{"sessionId":"session-tool-mismatch","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"inspect the sample"}}}}`,
+			`{"timestamp":1700000010,"method":"session/update","params":{"sessionId":"session-tool-mismatch","update":{"sessionUpdate":"tool_call","toolCallId":"call-current","title":"read_file"}}}`,
+			`{"timestamp":1700000020,"method":"session/update","params":{"sessionId":"session-tool-mismatch","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-current","status":"completed"}}}`,
+		}, "\n")+"\n",
+	)
+
+	result, err := ParseGrokSummary(
+		filepath.Join(sessionDir, "summary.json"), "sample-project", "test-machine",
+	)
+	require.NoError(t, err)
+	require.Len(t, result.Messages, 5)
+	assert.True(t, result.Messages[1].Timestamp.IsZero())
+	assert.Equal(
+		t, time.Unix(1_700_000_010, 0).UTC(), result.Messages[3].Timestamp,
+	)
+}
+
 func TestGrokProviderUnwrapsOpenAIStyleToolArguments(t *testing.T) {
 	// OpenAI-style tool calls nest name/arguments under "function" and encode
 	// arguments as a JSON string. InputJSON must be the decoded object so

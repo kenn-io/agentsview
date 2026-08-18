@@ -675,12 +675,20 @@ func grokTimestampAnchorMatches(
 		return false
 	}
 	if len(message.ToolCalls) > 0 && len(anchor.toolCallIDs) > 0 {
+		hasComparableIDs := false
 		for _, call := range message.ToolCalls {
 			for _, id := range anchor.toolCallIDs {
-				if call.ToolUseID != "" && call.ToolUseID == id {
+				if call.ToolUseID == "" || id == "" {
+					continue
+				}
+				hasComparableIDs = true
+				if call.ToolUseID == id {
 					return true
 				}
 			}
+		}
+		if hasComparableIDs {
+			return false
 		}
 	}
 	switch message.Role {
