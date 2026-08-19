@@ -450,3 +450,20 @@ func TestSyncStatsJSONOmitsZeroAnomalies(t *testing.T) {
 	assert.NotContains(t, got, "sanitize",
 		"malformed-only run must not emit an empty sanitize object")
 }
+
+func TestSyncStatsCwdUpdatedSurvivesWorkerJSONRoundTrip(t *testing.T) {
+	stats := SyncStats{}
+	stats.RecordCwdUpdated(2)
+	require.True(t, stats.hasSessionChanges())
+	require.True(t, stats.shouldEmitSync())
+
+	payload, err := json.Marshal(stats)
+	require.NoError(t, err)
+	var restored SyncStats
+	require.NoError(t, json.Unmarshal(payload, &restored))
+
+	assert.Equal(t, 2, restored.CwdUpdated,
+		"worker-process passes marshal SyncStats; cwd-only updates must survive")
+	assert.True(t, restored.hasSessionChanges())
+	assert.True(t, restored.shouldEmitSync())
+}

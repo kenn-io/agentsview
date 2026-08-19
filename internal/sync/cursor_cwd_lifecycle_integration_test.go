@@ -253,7 +253,7 @@ func TestResyncCursorFilteredCwdSurvivesOrphanCopy(t *testing.T) {
 	stats := rebuild.ResyncAll(context.Background(), nil)
 	assert.Zero(t, stats.Failed)
 	assert.False(t, stats.Aborted)
-	assert.NotZero(t, stats.CwdUpdates())
+	assert.NotZero(t, stats.CwdUpdated)
 
 	stored, err := d.GetSession(context.Background(), "cursor:"+sessionID)
 	require.NoError(t, err)
@@ -355,7 +355,7 @@ func TestSyncEngineCursorResolvedFilteredCwdIsReconciled(t *testing.T) {
 	stats := filtered.SyncAll(context.Background(), nil)
 	assert.Zero(t, stats.Failed)
 	assert.False(t, stats.Aborted)
-	assert.NotZero(t, stats.CwdUpdates())
+	assert.NotZero(t, stats.CwdUpdated)
 
 	stored, err := d.GetSession(context.Background(), fullID)
 	require.NoError(t, err)

@@ -130,7 +130,7 @@ func phaseSnapshot(name string, stats *PhaseStats) RebuildPhaseStats {
 func mergeSyncStats(dst *SyncStats, src SyncStats) {
 	dst.TotalSessions += src.TotalSessions
 	dst.Synced += src.Synced
-	dst.cwdUpdated += src.cwdUpdated
+	dst.CwdUpdated += src.CwdUpdated
 	dst.Skipped += src.Skipped
 	dst.Failed += src.Failed
 	dst.OrphanedCopied += src.OrphanedCopied
