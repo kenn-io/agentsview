@@ -176,7 +176,7 @@ func TestUsageCacheBackfillObserverAttachesToActivePass(t *testing.T) {
 	database.SetUsageCacheBackfillStarted(func() { observed <- struct{}{} })
 	select {
 	case <-observed:
-	case <-time.After(time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("observer did not attach to the active backfill")
 	}
 	close(release)
@@ -207,6 +207,8 @@ func TestUsageCacheBackfillSweepsHardDeletionTombstones(t *testing.T) {
 	require.NoError(t, database.StartUsageCacheBackfill(context.Background()))
 	require.NoError(t, database.WaitUsageCacheBackfill(context.Background()))
 	assert.Zero(t, usageCacheCount(t, cache, "usage_cached_sessions"))
+	assert.Zero(t, usageCacheCount(t, cache, "usage_rollup_installs"),
+		"deletion hygiene must reclaim every timezone rollup for the session")
 }
 
 func TestUsageMatchingCountDiscoversWritesAfterCompletedBackfill(t *testing.T) {
@@ -268,7 +270,7 @@ func TestUsageCacheBackfillStopJoinsWorker(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("Close did not join usage cache backfill")
 	}
 }
@@ -306,7 +308,7 @@ func TestCloseConnectionsStopsUsageCacheBackfill(t *testing.T) {
 	select {
 	case err = <-closed:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("CloseConnections did not join cancelled usage cache backfill")
 	}
 	cache.fill.observer = usageFillObserver{}

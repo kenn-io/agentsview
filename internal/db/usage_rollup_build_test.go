@@ -24,6 +24,14 @@ func TestUsageRollupExceptionClassification(t *testing.T) {
 		rollupGeneralFact(1, 2, "session-a", "2026-08-01", "model-a", "shared", 30)))
 }
 
+func TestCompareUsageFactTiesUsesAscendingIdentity(t *testing.T) {
+	left := rollupGeneralFact(1, 0, "session-a", "2026-08-01", "model-a", "key", 1)
+	right := rollupGeneralFact(2, 0, "session-b", "2026-08-01", "model-a", "key", 1)
+
+	assert.Negative(t, compareUsageFactTies(left, right))
+	assert.Positive(t, compareUsageFactTies(right, left))
+}
+
 func TestPriceUsageFactRoundsEachSurvivor(t *testing.T) {
 	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
 		ModelPattern: "model-a",

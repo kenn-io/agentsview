@@ -11,13 +11,16 @@ import (
 
 func (db *DB) queryUsageRollups(
 	ctx context.Context, filter UsageFilter, kind usageQueryKind,
+	includeCursor bool,
 ) (usageQuerySnapshot, usageFactsResult, *export.PricingResolver, error) {
 	for attempt := 1; attempt <= usageFillMaxAttempts; attempt++ {
 		snapshot, captureErr := db.captureUsageQuery(ctx, filter, kind)
 		if captureErr != nil {
 			return usageQuerySnapshot{}, usageFactsResult{}, nil, captureErr
 		}
-		snapshot.CursorHighWater = 0
+		if !includeCursor || !usageCursorIncluded(filter) {
+			snapshot.CursorHighWater = 0
+		}
 		cache, generationErr := db.usageCache.Generation(ctx, snapshot.DatabaseID)
 		if generationErr != nil {
 			return usageQuerySnapshot{}, usageFactsResult{}, nil, generationErr
@@ -75,7 +78,7 @@ func (db *DB) GetTopSessionsByCost(
 	ctx context.Context, filter UsageFilter, limit int,
 ) ([]TopSessionEntry, error) {
 	snapshot, facts, _, err := db.queryUsageRollups(
-		ctx, filter, usageQueryKindToken)
+		ctx, filter, usageQueryKindToken, false)
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +147,8 @@ func (db *DB) GetTopSessionsByCost(
 func (db *DB) GetUsageSessionCounts(
 	ctx context.Context, filter UsageFilter,
 ) (UsageSessionCounts, error) {
-	_, facts, _, err := db.queryUsageRollups(ctx, filter, usageQueryKindToken)
+	_, facts, _, err := db.queryUsageRollups(
+		ctx, filter, usageQueryKindToken, false)
 	if err != nil {
 		return UsageSessionCounts{}, err
 	}
@@ -155,7 +159,8 @@ func (db *DB) GetUsageSessionCounts(
 func (db *DB) GetUsageMatchingSessionCount(
 	ctx context.Context, filter UsageFilter,
 ) (int, error) {
-	_, facts, _, err := db.queryUsageRollups(ctx, filter, usageQueryKindActivity)
+	_, facts, _, err := db.queryUsageRollups(
+		ctx, filter, usageQueryKindActivity, false)
 	if err != nil {
 		return 0, err
 	}

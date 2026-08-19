@@ -15,19 +15,17 @@ import (
 )
 
 const (
-	usageCacheFormatVersion = 7
+	usageCacheFormatVersion = 8
 	usageCacheApplicationID = 0x41565543
 	usageCacheKind          = "agentsview-usage-facts"
 
 	usageCacheMetadataKind                = "cache_kind"
 	usageCacheMetadataFormatVersion       = "format_version"
-	usageCacheMetadataExtractorVersion    = "extractor_version"
 	usageCacheMetadataSourceDatabaseID    = "source_database_id"
 	usageCacheMetadataNextInstallRevision = "next_install_revision"
 	usageCacheMetadataNextRollupRevision  = "next_rollup_install_revision"
 	usageCacheMetadataDeletionRevision    = "deletion_revision"
 	usageCacheMetadataCursorHighWaterMark = "cursor_high_water_mark"
-	usageCacheMetadataBackfillProgress    = "backfill_progress_session_id"
 	usageCacheMetadataBackfillCompletedAt = "backfill_completed_at"
 )
 
@@ -42,10 +40,7 @@ CREATE TABLE usage_cached_sessions (
     source_sync_marker TEXT NOT NULL,
     source_transcript_rev TEXT NOT NULL,
     usage_event_fingerprint TEXT NOT NULL,
-    install_revision INTEGER NOT NULL,
-    fact_count INTEGER NOT NULL,
-    min_fact_timestamp_ms INTEGER,
-    max_fact_timestamp_ms INTEGER
+    install_revision INTEGER NOT NULL
 );
 CREATE TABLE usage_facts (
     cached_session_id INTEGER NOT NULL REFERENCES usage_cached_sessions(id)
@@ -75,34 +70,16 @@ CREATE TABLE usage_facts (
     activity_eligible INTEGER NOT NULL CHECK (activity_eligible IN (0, 1)),
     PRIMARY KEY (cached_session_id, fact_index)
 ) WITHOUT ROWID;
-CREATE INDEX usage_facts_timestamp
-ON usage_facts(timestamp_ms, cached_session_id, fact_index)
-WHERE timestamp_ms IS NOT NULL;
-CREATE INDEX usage_facts_snapshot
-ON usage_facts(claude_message_id, claude_request_id, timestamp_ms,
-               cached_session_id, fact_index)
-WHERE token_eligible = 1
-  AND claude_message_id != '' AND claude_request_id != '';
-CREATE INDEX usage_facts_session_start
-ON usage_facts(cached_session_id, fact_index) WHERE uses_session_start = 1;
-CREATE INDEX usage_facts_raw_timestamp
-ON usage_facts(raw_timestamp, cached_session_id, fact_index)
-WHERE timestamp_ms IS NULL AND uses_session_start = 0 AND raw_timestamp != '';
 CREATE TABLE cursor_usage_facts (
     source_id INTEGER PRIMARY KEY,
     timestamp_ms INTEGER,
-    timestamp_ns INTEGER,
     raw_timestamp TEXT NOT NULL DEFAULT '',
     model TEXT NOT NULL,
-    kind TEXT NOT NULL DEFAULT '',
     input_tokens INTEGER NOT NULL,
     output_tokens INTEGER NOT NULL,
     cache_creation_tokens INTEGER NOT NULL,
     cache_read_tokens INTEGER NOT NULL,
     charged_microdollars INTEGER NOT NULL,
-    cursor_token_fee_microdollars INTEGER NOT NULL,
-    user_id TEXT NOT NULL DEFAULT '',
-    user_email TEXT NOT NULL DEFAULT '',
     is_headless INTEGER NOT NULL CHECK (is_headless IN (0, 1)),
     dedup_key TEXT NOT NULL
 );
@@ -111,8 +88,7 @@ CREATE TABLE usage_rollup_timezones (
     timezone_key TEXT NOT NULL UNIQUE,
     timezone_name TEXT NOT NULL,
     interval_fingerprint TEXT NOT NULL,
-    last_requested_at TEXT NOT NULL,
-    build_completed_at TEXT
+    last_requested_at TEXT NOT NULL
 );
 CREATE TABLE usage_rollup_days (
     timezone_id INTEGER NOT NULL REFERENCES usage_rollup_timezones(id)
@@ -202,6 +178,7 @@ CREATE TABLE usage_rollup_exceptions (
     reported_cost_microdollars INTEGER,
     cost_source TEXT NOT NULL,
     request_scoped INTEGER NOT NULL CHECK (request_scoped IN (0, 1)),
+    is_headless INTEGER NOT NULL CHECK (is_headless IN (0, 1)),
     claude_message_id TEXT NOT NULL,
     claude_request_id TEXT NOT NULL,
     source_uuid TEXT NOT NULL,
@@ -440,13 +417,11 @@ func initializeUsageCache(
 	metadata := []struct{ key, value string }{
 		{usageCacheMetadataKind, usageCacheKind},
 		{usageCacheMetadataFormatVersion, strconv.Itoa(usageCacheFormatVersion)},
-		{usageCacheMetadataExtractorVersion, "1"},
 		{usageCacheMetadataSourceDatabaseID, databaseID},
 		{usageCacheMetadataNextInstallRevision, "1"},
 		{usageCacheMetadataNextRollupRevision, "1"},
 		{usageCacheMetadataDeletionRevision, "0"},
 		{usageCacheMetadataCursorHighWaterMark, "0"},
-		{usageCacheMetadataBackfillProgress, ""},
 		{usageCacheMetadataBackfillCompletedAt, ""},
 	}
 	for _, item := range metadata {
@@ -582,19 +557,18 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 	if err := database.QueryRowContext(ctx, `
 		SELECT count(*) FROM usage_cache_metadata
 		WHERE key IN (
-			'cache_kind', 'format_version', 'extractor_version',
+			'cache_kind', 'format_version',
 			'source_database_id', 'next_install_revision',
 			'next_rollup_install_revision',
 			'deletion_revision', 'cursor_high_water_mark',
-			'backfill_progress_session_id', 'backfill_completed_at'
-		)`).Scan(&metadataCount); err != nil || metadataCount != 10 {
+			'backfill_completed_at'
+		)`).Scan(&metadataCount); err != nil || metadataCount != 8 {
 		return false
 	}
 	queries := []string{
 		`SELECT key, value FROM usage_cache_metadata LIMIT 0`,
 		`SELECT id, session_id, source_sync_marker, source_transcript_rev,
-		        usage_event_fingerprint, install_revision, fact_count,
-		        min_fact_timestamp_ms, max_fact_timestamp_ms
+		        usage_event_fingerprint, install_revision
 		 FROM usage_cached_sessions LIMIT 0`,
 		`SELECT cached_session_id, fact_index, source, message_ordinal,
 		        timestamp_ms, timestamp_ns, raw_timestamp, uses_session_start, model,
@@ -604,14 +578,13 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		        claude_message_id, claude_request_id, source_uuid,
 		        usage_dedup_key, token_eligible, activity_eligible
 		 FROM usage_facts LIMIT 0`,
-		`SELECT source_id, timestamp_ms, timestamp_ns, raw_timestamp, model, kind,
+		`SELECT source_id, timestamp_ms, raw_timestamp, model,
 		        input_tokens, output_tokens, cache_creation_tokens,
 		        cache_read_tokens, charged_microdollars,
-		        cursor_token_fee_microdollars, user_id, user_email,
 		        is_headless, dedup_key
 		 FROM cursor_usage_facts LIMIT 0`,
 		`SELECT id, timezone_key, timezone_name, interval_fingerprint,
-		        last_requested_at, build_completed_at
+		        last_requested_at
 		 FROM usage_rollup_timezones LIMIT 0`,
 		`SELECT timezone_id, local_date, from_ms, to_ms
 		 FROM usage_rollup_days LIMIT 0`,
@@ -637,7 +610,7 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		        uses_session_start, model, input_tokens, output_tokens,
 		        reasoning_tokens, cache_creation_tokens, cache_read_tokens,
 		        web_search_requests, reported_cost_microdollars, cost_source,
-		        request_scoped, claude_message_id, claude_request_id,
+		        request_scoped, is_headless, claude_message_id, claude_request_id,
 		        source_uuid, usage_dedup_key
 		 FROM usage_rollup_exceptions LIMIT 0`,
 	}
@@ -651,9 +624,7 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		}
 	}
 	for _, index := range []string{
-		"usage_facts_timestamp", "usage_facts_snapshot", "usage_facts_session_start",
-		"usage_facts_raw_timestamp", "usage_daily_rollups_window",
-		"usage_rollup_exceptions_window",
+		"usage_daily_rollups_window", "usage_rollup_exceptions_window",
 	} {
 		var exists bool
 		if err := database.QueryRowContext(ctx,
@@ -701,6 +672,33 @@ func (m *usageCacheManager) Reset() error {
 		return nil
 	}
 	return m.resetLocked()
+}
+
+func (m *usageCacheManager) RetireExcept(databaseID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return nil
+	}
+	var errs []error
+	for cachedID, cache := range m.generations {
+		if cachedID == databaseID {
+			continue
+		}
+		cache.rollup = nil
+		if cache.fill != nil {
+			cache.fill.Close()
+			cache.fill = nil
+		}
+		if cache.db != nil {
+			errs = append(errs, cache.db.Close())
+		}
+		if cache.temporary {
+			errs = append(errs, removeUsageCacheFiles(cache.path))
+		}
+		delete(m.generations, cachedID)
+	}
+	return errors.Join(errs...)
 }
 
 func (m *usageCacheManager) Close() error {

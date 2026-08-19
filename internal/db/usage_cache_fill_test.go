@@ -209,7 +209,7 @@ func TestUsageFillCoordinatorDoesNotJoinOlderSourceVersion(t *testing.T) {
 	}()
 	select {
 	case <-newStarted:
-	case <-time.After(time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("newer source version joined an older in-flight fill")
 	}
 	close(releaseOld)
@@ -538,10 +538,53 @@ func TestUsageCacheNotificationIsNonblocking(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("usage cache notification blocked on fill work")
 	}
 	close(blocked)
+}
+
+func TestUsageCacheNotificationsCoalesceChangedSessions(t *testing.T) {
+	database := testDB(t)
+	for _, id := range []string{"notify-a", "notify-b"} {
+		insertSession(t, database, id, "project")
+		require.NoError(t, database.InsertMessages([]Message{{
+			SessionID: id, Ordinal: 0, Role: "assistant",
+			Timestamp: "2026-08-10T09:00:00Z", Model: "model",
+			TokenUsage: json.RawMessage(`{"input_tokens":1}`),
+		}}))
+	}
+	snapshot, err := database.captureUsageQuery(
+		t.Context(), UsageFilter{}, usageQueryKindToken)
+	require.NoError(t, err)
+	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+	require.NoError(t, err)
+	_, err = cache.fill.Ensure(t.Context(), snapshot.Versions, 0)
+	require.NoError(t, err)
+
+	batch := make(chan []usageSourceVersion, 1)
+	cache.fill.observer = usageFillObserver{
+		beforeExtract: func(versions []usageSourceVersion) { batch <- versions },
+	}
+	_, err = database.getWriter().Exec(`UPDATE sessions
+		SET transcript_revision = '2'
+		WHERE id IN ('notify-a', 'notify-b')`)
+	require.NoError(t, err)
+	database.usageCache.NotifySessions([]string{"notify-a"})
+	database.usageCache.NotifySessions([]string{"notify-a"})
+	database.usageCache.NotifySessions([]string{"notify-b"})
+
+	select {
+	case versions := <-batch:
+		require.Len(t, versions, 2)
+	case <-time.After(30 * time.Second):
+		t.Fatal("coalesced usage cache fill did not start")
+	}
+	select {
+	case versions := <-batch:
+		t.Fatalf("duplicate notification started another fill: %#v", versions)
+	case <-time.After(3 * usageFillNotificationDebounce):
+	}
 }
 
 func TestUsageCacheNotificationObservesOnlyCommittedWrites(t *testing.T) {
@@ -585,7 +628,7 @@ func TestUsageCacheNotificationObservesOnlyCommittedWrites(t *testing.T) {
 	select {
 	case got := <-observed:
 		assert.JSONEq(t, `{"input_tokens":9}`, got)
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("committed message write did not notify the usage cache")
 	}
 

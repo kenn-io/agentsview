@@ -4174,10 +4174,14 @@ func BenchmarkUsageRollup(b *testing.B) {
 			require.NoError(b, queryErr)
 			requireDailyUsageBenchmarkResult(b, result, cold.want)
 			requireUsageFactsCount(b, cache, cold.wantFacts)
+			exceptionRows, exceptionGroups := usageRollupExceptionMetrics(
+				b, cache, cold.filter)
 			clearUsageFactsBenchmarkCache(b, cache)
 			b.ReportAllocs()
-			b.ReportMetric(float64(cold.wantFacts), "facts/op")
 			b.ResetTimer()
+			b.ReportMetric(float64(cold.wantFacts), "facts/op")
+			b.ReportMetric(float64(exceptionRows), "exception-rows/op")
+			b.ReportMetric(float64(exceptionGroups), "exception-groups/op")
 			for range b.N {
 				b.StopTimer()
 				clearUsageFactsBenchmarkCache(b, cache)
@@ -4199,13 +4203,65 @@ func BenchmarkUsageRollup(b *testing.B) {
 			result, queryErr := database.GetDailyUsage(ctx, window.filter)
 			require.NoError(b, queryErr)
 			requireDailyUsageBenchmarkResult(b, result, window.want)
+			exceptionRows, exceptionGroups := usageRollupExceptionMetrics(
+				b, cache, window.filter)
+			cacheBytes := usageCacheDiskBytes(cache.path)
 			b.ReportAllocs()
-			b.ReportMetric(float64(usageCacheDiskBytes(cache.path)), "cache-bytes")
 			b.ResetTimer()
+			b.ReportMetric(float64(exceptionRows), "exception-rows/op")
+			b.ReportMetric(float64(exceptionGroups), "exception-groups/op")
+			b.ReportMetric(float64(cacheBytes), "cache-bytes")
 			for range b.N {
 				if _, queryErr = database.GetDailyUsage(
 					ctx, window.filter); queryErr != nil {
 					b.Fatal(queryErr)
+				}
+			}
+		})
+	}
+	for _, window := range windows[2:] {
+		b.Run("exceptions/"+window.name, func(b *testing.B) {
+			snapshot, captureErr := database.captureUsageQuery(
+				ctx, window.filter, usageQueryKindToken)
+			require.NoError(b, captureErr)
+			resolver := export.NewPricingResolver(snapshot.PricingRows)
+			conn, connErr := cache.db.Conn(ctx)
+			require.NoError(b, connErr)
+			defer conn.Close()
+			identity := usageTimezoneIdentityFor(
+				snapshot.location, snapshot.Intervals)
+			var timezoneID int64
+			require.NoError(b, conn.QueryRowContext(ctx,
+				`SELECT id FROM usage_rollup_timezones WHERE timezone_key = ?`,
+				identity.Key,
+			).Scan(&timezoneID))
+			exceptions, readErr := readUsageRollupExceptions(
+				ctx, conn, timezoneID, snapshot, window.filter)
+			require.NoError(b, readErr)
+			groups, aggregateErr := aggregateUsageRollupExceptions(
+				exceptions, snapshot, window.filter, resolver)
+			require.NoError(b, aggregateErr)
+			exceptionRows := len(exceptions)
+			exceptionGroups := len(groups)
+			require.NotZero(b, exceptionRows)
+			b.ReportAllocs()
+			b.ResetTimer()
+			b.ReportMetric(float64(exceptionRows), "exception-rows/op")
+			b.ReportMetric(float64(exceptionGroups), "resolved-groups/op")
+			for range b.N {
+				exceptions, readErr = readUsageRollupExceptions(
+					ctx, conn, timezoneID, snapshot, window.filter)
+				if readErr != nil {
+					b.Fatal(readErr)
+				}
+				groups, aggregateErr = aggregateUsageRollupExceptions(
+					exceptions, snapshot, window.filter, resolver)
+				if aggregateErr != nil {
+					b.Fatal(aggregateErr)
+				}
+				if len(groups) != exceptionGroups {
+					b.Fatalf("exception groups = %d, want %d",
+						len(groups), exceptionGroups)
 				}
 			}
 		})
@@ -4284,6 +4340,25 @@ func requireUsageFactsCount(tb testing.TB, cache *usageCache, want int) {
 	var got int
 	require.NoError(tb, cache.db.QueryRow(`SELECT COUNT(*) FROM usage_facts`).Scan(&got))
 	require.Equal(tb, want, got, "usage facts")
+}
+
+func usageRollupExceptionMetrics(
+	tb testing.TB, cache *usageCache, filter UsageFilter,
+) (int64, int64) {
+	tb.Helper()
+	identity := usageTimezoneIdentityFor(filter.location(), nil)
+	var rows, groups int64
+	require.NoError(tb, cache.db.QueryRow(`SELECT COUNT(*),
+		COUNT(DISTINCT e.group_kind || char(0) || e.group_key)
+		FROM usage_rollup_exceptions e
+		JOIN usage_rollup_installs i ON i.id = e.rollup_install_id
+		JOIN usage_rollup_timezones z ON z.id = i.timezone_id
+		WHERE z.timezone_key = ?
+		  AND (? = '' OR e.local_date >= ?)
+		  AND (? = '' OR e.local_date <= ?)`,
+		identity.Key, filter.From, filter.From, filter.To, filter.To,
+	).Scan(&rows, &groups))
+	return rows, groups
 }
 
 func usageCacheDiskBytes(path string) int64 {

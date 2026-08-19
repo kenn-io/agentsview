@@ -5,11 +5,14 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"maps"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
@@ -17,6 +20,7 @@ import (
 const usageFillMaxAttempts = 3
 const usageFillInstallBatchSize = 256
 const usageCursorCopyBatchSize = 1_000
+const usageFillNotificationDebounce = 100 * time.Millisecond
 
 var errUsageCacheSourceChanged = errors.New("usage cache source archive changed")
 
@@ -833,8 +837,7 @@ func installSpoolSessions(
 			session_id TEXT PRIMARY KEY, source_sync_marker TEXT NOT NULL,
 			source_transcript_rev TEXT NOT NULL,
 			usage_event_fingerprint TEXT NOT NULL,
-			install_revision INTEGER NOT NULL, fact_count INTEGER NOT NULL DEFAULT 0,
-			min_fact_timestamp_ms INTEGER, max_fact_timestamp_ms INTEGER
+			install_revision INTEGER NOT NULL
 		) WITHOUT ROWID;
 		DELETE FROM usage_install_sessions`); err != nil {
 		return nil, err
@@ -861,35 +864,18 @@ func installSpoolSessions(
 		return nil, err
 	}
 	if _, err := cacheConn.ExecContext(ctx, `
-		UPDATE usage_install_sessions AS install SET
-			fact_count = (SELECT COUNT(*) FROM usage_fill_spool.facts f
-			              WHERE f.session_id = install.session_id),
-			min_fact_timestamp_ms = (SELECT MIN(timestamp_ms)
-			              FROM usage_fill_spool.facts f
-			              WHERE f.session_id = install.session_id),
-			max_fact_timestamp_ms = (SELECT MAX(timestamp_ms)
-			              FROM usage_fill_spool.facts f
-			              WHERE f.session_id = install.session_id)`); err != nil {
-		return nil, err
-	}
-	if _, err := cacheConn.ExecContext(ctx, `
 		INSERT INTO usage_cached_sessions(
 			session_id, source_sync_marker, source_transcript_rev,
-			usage_event_fingerprint, install_revision, fact_count,
-			min_fact_timestamp_ms, max_fact_timestamp_ms
+			usage_event_fingerprint, install_revision
 		)
 		SELECT session_id, source_sync_marker, source_transcript_rev,
-		       usage_event_fingerprint, install_revision, fact_count,
-		       min_fact_timestamp_ms, max_fact_timestamp_ms
+		       usage_event_fingerprint, install_revision
 		FROM usage_install_sessions WHERE 1
 		ON CONFLICT(session_id) DO UPDATE SET
 			source_sync_marker=excluded.source_sync_marker,
 			source_transcript_rev=excluded.source_transcript_rev,
 			usage_event_fingerprint=excluded.usage_event_fingerprint,
-			install_revision=excluded.install_revision,
-			fact_count=excluded.fact_count,
-			min_fact_timestamp_ms=excluded.min_fact_timestamp_ms,
-			max_fact_timestamp_ms=excluded.max_fact_timestamp_ms`); err != nil {
+			install_revision=excluded.install_revision`); err != nil {
 		return nil, err
 	}
 	if _, err := cacheConn.ExecContext(ctx, `
@@ -995,13 +981,12 @@ func (c *usageFillCoordinator) fillCursor() {
 }
 
 type usageCursorInstall struct {
-	id, charged, fee  int64
-	timestamp         string
-	model, kind       string
-	userID, userEmail string
-	dedup             string
-	headless          int
-	fact              usagefacts.Fact
+	id, charged int64
+	timestamp   string
+	model       string
+	dedup       string
+	headless    int
+	fact        usagefacts.Fact
 }
 
 func (c *usageFillCoordinator) copyCursorThrough(ctx context.Context, target int64) error {
@@ -1050,9 +1035,8 @@ func (c *usageFillCoordinator) readCursorBatch(
 			fmt.Errorf("%w while copying Cursor usage", errUsageCacheSourceChanged)
 	}
 	rows, err := archiveTx.QueryContext(ctx, `
-		SELECT id, occurred_at, model, kind, input_tokens, output_tokens,
+		SELECT id, occurred_at, model, input_tokens, output_tokens,
 		       cache_write_tokens, cache_read_tokens, charged_microdollars,
-		       cursor_token_fee_microdollars, user_id, user_email,
 		       is_headless, dedup_key
 		FROM cursor_usage_events WHERE id > ? AND id <= ?
 		ORDER BY id LIMIT ?`, from, target, usageCursorCopyBatchSize)
@@ -1064,9 +1048,8 @@ func (c *usageFillCoordinator) readCursorBatch(
 		var install usageCursorInstall
 		var input, output, cacheWrite, cacheRead int64
 		if err := rows.Scan(
-			&install.id, &install.timestamp, &install.model, &install.kind,
+			&install.id, &install.timestamp, &install.model,
 			&input, &output, &cacheWrite, &cacheRead, &install.charged,
-			&install.fee, &install.userID, &install.userEmail,
 			&install.headless, &install.dedup,
 		); err != nil {
 			_ = rows.Close()
@@ -1101,17 +1084,15 @@ func (c *usageFillCoordinator) installCursorBatch(
 	defer func() { _ = tx.Rollback() }()
 	for _, install := range installs {
 		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO cursor_usage_facts(
-			source_id, timestamp_ms, timestamp_ns, raw_timestamp, model, kind,
+			source_id, timestamp_ms, raw_timestamp, model,
 			input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
-			charged_microdollars, cursor_token_fee_microdollars,
-			user_id, user_email, is_headless, dedup_key
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			install.id, install.fact.TimestampMillis, install.fact.TimestampNanos,
-			install.timestamp, install.model, install.kind,
+			charged_microdollars, is_headless, dedup_key
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			install.id, install.fact.TimestampMillis,
+			install.timestamp, install.model,
 			install.fact.InputTokens, install.fact.OutputTokens,
 			install.fact.CacheCreationTokens, install.fact.CacheReadTokens,
-			install.charged, install.fee, install.userID, install.userEmail,
-			install.headless, install.dedup,
+			install.charged, install.headless, install.dedup,
 		); err != nil {
 			return err
 		}
@@ -1176,30 +1157,116 @@ func (db *DB) notifyCursorUsage() {
 
 func (c *usageFillCoordinator) runNotifications() {
 	defer close(c.done)
+	pending := make(map[string]bool)
+	var cursorPending bool
+	var timer *time.Timer
+	var timerC <-chan time.Time
 	for {
 		select {
 		case <-c.ctx.Done():
+			if timer != nil {
+				timer.Stop()
+			}
 			return
 		case notification := <-c.notify:
 			if notification.cursor {
-				var target int64
-				if err := c.archive.getReader().QueryRowContext(c.ctx,
-					`SELECT COALESCE(MAX(id), 0) FROM cursor_usage_events`,
-				).Scan(&target); err == nil && target > 0 {
-					_, _ = c.Ensure(c.ctx, nil, target)
-				}
-				continue
+				cursorPending = true
+			} else if notification.sessionID != "" {
+				pending[notification.sessionID] = true
 			}
-			versions, err := c.recheckSourceVersions(c.ctx,
-				[]usageSourceVersion{{SessionID: notification.sessionID}})
-			version, exists := versions[notification.sessionID]
-			if err == nil && exists {
-				_, _ = c.Ensure(c.ctx, []usageSourceVersion{version}, 0)
-			} else if err == nil {
-				_, _ = c.cache.db.ExecContext(c.ctx,
-					`DELETE FROM usage_cached_sessions WHERE session_id = ?`,
-					notification.sessionID)
+			if timer == nil {
+				timer = time.NewTimer(usageFillNotificationDebounce)
+			} else {
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(usageFillNotificationDebounce)
+			}
+			timerC = timer.C
+		case <-timerC:
+			timerC = nil
+			c.processNotificationBatch(pending, cursorPending)
+			clear(pending)
+			cursorPending = false
+		}
+	}
+}
+
+func (c *usageFillCoordinator) processNotificationBatch(
+	pending map[string]bool, cursorPending bool,
+) {
+	if len(pending) > 0 {
+		ids := make([]string, 0, len(pending))
+		for id := range pending {
+			ids = append(ids, id)
+		}
+		slices.Sort(ids)
+		requested := make([]usageSourceVersion, len(ids))
+		for index, id := range ids {
+			requested[index].SessionID = id
+		}
+		versions, err := c.recheckSourceVersions(c.ctx, requested)
+		if err != nil {
+			if c.ctx.Err() == nil {
+				log.Printf("usage cache notification source check: %v", err)
+			}
+		} else {
+			current := make([]usageSourceVersion, 0, len(versions))
+			deleted := make([]string, 0, len(ids)-len(versions))
+			for _, id := range ids {
+				if version, exists := versions[id]; exists {
+					current = append(current, version)
+					continue
+				}
+				deleted = append(deleted, id)
+			}
+			if len(deleted) > 0 {
+				if err := c.deleteNotificationSessions(deleted); err != nil &&
+					c.ctx.Err() == nil {
+					log.Printf("usage cache notification delete: %v", err)
+				}
+			}
+			if len(current) > 0 {
+				if _, err := c.Ensure(c.ctx, current, 0); err != nil && c.ctx.Err() == nil {
+					log.Printf("usage cache notification fill: %v", err)
+				}
 			}
 		}
 	}
+	if cursorPending {
+		var target int64
+		err := c.archive.getReader().QueryRowContext(c.ctx,
+			`SELECT COALESCE(MAX(id), 0) FROM cursor_usage_events`,
+		).Scan(&target)
+		if err == nil && target > 0 {
+			_, err = c.Ensure(c.ctx, nil, target)
+		}
+		if err != nil && c.ctx.Err() == nil {
+			log.Printf("usage cache Cursor notification fill: %v", err)
+		}
+	}
+}
+
+func (c *usageFillCoordinator) deleteNotificationSessions(ids []string) error {
+	tx, err := c.cache.db.BeginTx(c.ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, id := range ids {
+		if _, err := tx.ExecContext(c.ctx,
+			`DELETE FROM usage_rollup_installs WHERE session_id = ?`, id,
+		); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(c.ctx,
+			`DELETE FROM usage_cached_sessions WHERE session_id = ?`, id,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }

@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 
@@ -20,61 +19,18 @@ type usageDailyFactsSessionCost struct {
 	authoritative *money.Money
 }
 
-// GetDailyUsage serves exact daily usage from normalized facts. Archive state
-// is captured first, missing facts are filled without holding that snapshot,
-// and one cache read transaction verifies and aggregates the installed rows.
+// GetDailyUsage serves exact daily usage from timezone rollups. Archive state
+// is captured first, missing facts and rollups are built without holding that
+// snapshot, and one cache read transaction verifies the installed rows.
 func (db *DB) GetDailyUsage(
 	ctx context.Context, filter UsageFilter,
 ) (DailyUsageResult, error) {
-	for attempt := 1; attempt <= usageFillMaxAttempts; attempt++ {
-		snapshot, captureErr := db.captureUsageQuery(ctx, filter, usageQueryKindToken)
-		if captureErr != nil {
-			return DailyUsageResult{}, captureErr
-		}
-		if !usageCursorIncluded(filter) {
-			snapshot.CursorHighWater = 0
-		}
-		cache, generationErr := db.usageCache.Generation(ctx, snapshot.DatabaseID)
-		if generationErr != nil {
-			return DailyUsageResult{}, generationErr
-		}
-		if sweepErr := cache.sweepDeletionJournal(ctx, db); sweepErr != nil {
-			return DailyUsageResult{}, sweepErr
-		}
-		fills, fillErr := cache.fill.Ensure(
-			ctx, snapshot.Versions, snapshot.CursorHighWater,
-		)
-		if fillErr != nil {
-			if errors.Is(fillErr, errUsageCacheSourceChanged) &&
-				attempt < usageFillMaxAttempts {
-				continue
-			}
-			return DailyUsageResult{}, fillErr
-		}
-		snapshot.dropDeleted(fills)
-		resolver := export.NewPricingResolver(snapshot.PricingRows)
-		installs, _, rollupErr := cache.rollup.Ensure(
-			ctx, snapshot, fills, resolver)
-		if rollupErr != nil {
-			if errors.Is(rollupErr, errUsageCacheSourceChanged) &&
-				attempt < usageFillMaxAttempts {
-				continue
-			}
-			return DailyUsageResult{}, rollupErr
-		}
-		facts, queryErr := cache.usageRollupQuery(
-			ctx, snapshot, filter, installs, resolver)
-		if queryErr == nil {
-			return db.assembleDailyUsageFacts(ctx, filter, facts, resolver)
-		}
-		if !usageCacheReadShouldRecapture(queryErr) || attempt == usageFillMaxAttempts {
-			return DailyUsageResult{}, queryErr
-		}
+	_, facts, resolver, err := db.queryUsageRollups(
+		ctx, filter, usageQueryKindToken, true)
+	if err != nil {
+		return DailyUsageResult{}, err
 	}
-	return DailyUsageResult{}, fmt.Errorf(
-		"usage cache read could not stabilize after %d attempts",
-		usageFillMaxAttempts,
-	)
+	return db.assembleDailyUsageFacts(ctx, filter, facts, resolver)
 }
 
 func (snapshot *usageQuerySnapshot) dropDeleted(

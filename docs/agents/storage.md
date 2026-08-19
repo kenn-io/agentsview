@@ -45,6 +45,12 @@ session `agent` and `started_at`, because those fields affect deduplication and
 day bucketing. All other session metadata and filters come from the archive read
 snapshot. Do not widen or narrow this live/baked boundary implicitly.
 
+The cache format version is also the extractor compatibility version. Bump
+`usageCacheFormatVersion` whenever fact extraction, `priceUsageFact`, web-search
+fees, deduplication, or rollup semantics change. Catalog and user-pricing
+changes are covered separately by the pricing content digest; do not add a
+write-only extractor-version metadata key.
+
 Daily rows exclude every fact that can participate in snapshot or general
 deduplication. A timezone-specific exception tier resolves those narrow rows at
 read time. This conservative boundary covers cross-day, cross-model,
@@ -73,6 +79,34 @@ data. `cached_at` is diagnostic only.
 recomputes the maximum of mutable timestamp fields, so it can decrease. A fill
 must recheck the full source fingerprint before installation. Do not replace
 that recheck with ordering comparisons.
+
+### Usage archive indexes
+
+The usage cache discovers bounded-window candidates through
+`idx_messages_usage_timestamp` and `idx_messages_activity_timestamp`, then
+extracts each selected session through the index-only
+`idx_messages_usage_session_covering` scan. The global activity index is for
+usage-cache candidate discovery, not the Activity report; that report continues
+to avoid a global timestamp scan. Keep these indexes narrow except for the
+single session-keyed covering index that carries `token_usage`.
+
+Changing any of these index column lists rebuilds the affected archive index on
+the next writable open, before HTTP readiness, and must log that startup is
+waiting for the migration. Read-only opens require the current indexes and may
+therefore reject an archive that has not first been opened by the matching
+writable version. Treat this as executable/archive version skew, not as a reason
+to mutate the archive from a read-only command.
+
+### Transcript usage identity
+
+Token usage, Claude message/request identities, and source UUID participate in
+transcript revision equality. Finalizing a streamed message can therefore bump
+`transcript_revision` and `local_modified_at`, invalidate secret-scan freshness,
+mark the session updated for read-progress/UI purposes, and enqueue the normal
+artifact, recall, PostgreSQL, and DuckDB refreshes. Full resync reconciliation
+must compare the same fields so incremental and resync paths agree. A no-op
+message replacement preserves existing secret findings; changed transcript
+content clears them for a fresh scan.
 
 ## DuckDB Mirror
 

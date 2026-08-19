@@ -237,7 +237,7 @@ func readUsageRollupExceptions(
 		e.model, e.input_tokens, e.output_tokens, e.reasoning_tokens,
 		e.cache_creation_tokens, e.cache_read_tokens, e.web_search_requests,
 		e.reported_cost_microdollars, e.cost_source, e.request_scoped,
-		e.claude_message_id, e.claude_request_id, e.source_uuid,
+		e.is_headless, e.claude_message_id, e.claude_request_id, e.source_uuid,
 		e.usage_dedup_key, COUNT(*) OVER ()
 		FROM usage_rollup_exceptions e
 		JOIN usage_rollup_installs i ON i.id = e.rollup_install_id
@@ -257,14 +257,15 @@ func readUsageRollupExceptions(
 	for rows.Next() {
 		var fact usageRollupFact
 		var ordinal, millis, nanos, reported sql.NullInt64
-		var usesStart, requestScoped, resultCount int
+		var usesStart, requestScoped, isHeadless, resultCount int
 		if err := rows.Scan(&fact.CachedSessionID, &fact.FactIndex,
 			&fact.SourceSessionID, &fact.LocalDate, &fact.Fact.Source, &ordinal,
 			&millis, &nanos, &fact.Fact.RawTimestamp, &usesStart, &fact.Model,
 			&fact.Fact.InputTokens, &fact.Fact.OutputTokens,
 			&fact.Fact.ReasoningTokens, &fact.Fact.CacheCreationTokens,
 			&fact.Fact.CacheReadTokens, &fact.Fact.WebSearchRequests, &reported,
-			&fact.Fact.CostSource, &requestScoped, &fact.Fact.ClaudeMessageID,
+			&fact.Fact.CostSource, &requestScoped, &isHeadless,
+			&fact.Fact.ClaudeMessageID,
 			&fact.Fact.ClaudeRequestID, &fact.Fact.SourceUUID,
 			&fact.Fact.UsageDedupKey, &resultCount); err != nil {
 			return nil, err
@@ -296,6 +297,7 @@ func readUsageRollupExceptions(
 		}
 		fact.Fact.UsesSessionStart = usesStart != 0
 		fact.Fact.RequestScoped = requestScoped != 0
+		fact.IsHeadless = isHeadless != 0
 		fact.Fact.TokenEligible = true
 		fact.DedupTimestamp = fact.Fact.RawTimestamp
 		session := sessions[fact.SourceSessionID]
@@ -392,6 +394,12 @@ func aggregateUsageRollupExceptions(
 		band                                            int
 	}
 	groups := make(map[key]*usageFactsGroup)
+	type authoritativeCandidate struct {
+		fact  usageRollupFact
+		cost  int64
+		group *usageFactsGroup
+	}
+	authoritative := make(map[string]authoritativeCandidate)
 	for _, fact := range survivors {
 		priced, err := priceUsageFact(usagePriceInput{
 			Fact: fact.Fact, Timestamp: fact.DedupTimestamp,
@@ -426,12 +434,47 @@ func aggregateUsageRollupExceptions(
 		if err := addUsageFactToGroup(group, fact, priced); err != nil {
 			return nil, err
 		}
+		if priced.AuthoritativeCost != nil {
+			candidate, exists := authoritative[fact.AttributionSessionID]
+			if !exists || compareUsageAuthoritativeOrder(candidate.fact, fact) < 0 {
+				authoritative[fact.AttributionSessionID] = authoritativeCandidate{
+					fact: fact, cost: priced.AuthoritativeCost.Microdollars, group: group,
+				}
+			}
+		}
+	}
+	for _, group := range groups {
+		group.AuthoritativeCostMicrodollars = nil
+	}
+	for _, candidate := range authoritative {
+		value := candidate.cost
+		candidate.group.AuthoritativeCostMicrodollars = &value
 	}
 	result := make([]usageFactsGroup, 0, len(groups))
 	for _, group := range groups {
 		result = append(result, *group)
 	}
 	return result, nil
+}
+
+func compareUsageAuthoritativeOrder(left, right usageRollupFact) int {
+	if order := cmp.Compare(left.DedupTimestamp, right.DedupTimestamp); order != 0 {
+		return order
+	}
+	if order := cmp.Compare(left.SourceSessionID, right.SourceSessionID); order != 0 {
+		return order
+	}
+	leftOrdinal, rightOrdinal := -1, -1
+	if left.Fact.MessageOrdinal != nil {
+		leftOrdinal = *left.Fact.MessageOrdinal
+	}
+	if right.Fact.MessageOrdinal != nil {
+		rightOrdinal = *right.Fact.MessageOrdinal
+	}
+	if order := cmp.Compare(leftOrdinal, rightOrdinal); order != 0 {
+		return order
+	}
+	return compareUsageRollupFactIdentity(left, right)
 }
 
 func rankUsageRollupSnapshots(
@@ -548,7 +591,9 @@ func filterUsageRollupOwners(
 	result := facts[:0]
 	for _, fact := range facts {
 		if fact.AttributionSessionID == "" {
-			if usageCursorIncluded(filter) && usageRollupModelPasses(filter, fact.Model) {
+			if usageCursorIncluded(filter) &&
+				usageCursorAutomatedScopePasses(filter, fact.IsHeadless) &&
+				usageRollupModelPasses(filter, fact.Model) {
 				fact.Agent = "cursor"
 				result = append(result, fact)
 			}
@@ -561,6 +606,17 @@ func filterUsageRollupOwners(
 		}
 	}
 	return result
+}
+
+func usageCursorAutomatedScopePasses(filter UsageFilter, isHeadless bool) bool {
+	switch normalizeAutomatedScope(filter.AutomatedScope, filter.ExcludeAutomated) {
+	case "human":
+		return !isHeadless
+	case "automated":
+		return isHeadless
+	default:
+		return true
+	}
 }
 
 func deduplicateUsageRollupGeneral(facts []usageRollupFact) []usageRollupFact {
@@ -623,7 +679,7 @@ func compareUsageSnapshotAttribution(left, right usageRollupFact) int {
 	if order := compareNullableInt64(left.EffectiveNanos, right.EffectiveNanos, true); order != 0 {
 		return order
 	}
-	return compareUsageFactTies(left, right, false)
+	return compareUsageFactTies(left, right)
 }
 
 func compareUsageSnapshotWinner(left, right usageRollupFact) int {
@@ -636,17 +692,17 @@ func compareUsageSnapshotWinner(left, right usageRollupFact) int {
 	if order := compareNullableInt64(left.EffectiveNanos, right.EffectiveNanos, false); order != 0 {
 		return order
 	}
-	return compareUsageFactTies(left, right, true)
+	return compareUsageFactTies(left, right)
 }
 
 func compareUsageGeneralWinner(left, right usageRollupFact) int {
 	if order := cmp.Compare(left.DedupTimestamp, right.DedupTimestamp); order != 0 {
 		return order
 	}
-	return compareUsageFactTies(left, right, false)
+	return compareUsageFactTies(left, right)
 }
 
-func compareUsageFactTies(left, right usageRollupFact, descending bool) int {
+func compareUsageFactTies(left, right usageRollupFact) int {
 	values := [][2]string{{left.SourceSessionID, right.SourceSessionID},
 		{left.Fact.Source, right.Fact.Source}, {left.Fact.SourceUUID, right.Fact.SourceUUID},
 		{left.Fact.UsageDedupKey, right.Fact.UsageDedupKey}}
@@ -665,9 +721,6 @@ func compareUsageFactTies(left, right usageRollupFact, descending bool) int {
 	orders = append(orders, cmp.Compare(left.FactIndex, right.FactIndex))
 	for _, order := range orders {
 		if order != 0 {
-			if descending {
-				return order
-			}
 			return order
 		}
 	}

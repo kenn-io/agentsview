@@ -5230,6 +5230,7 @@ func TestCopyOrphanedDataFromReconcilesTranscriptRevisions(t *testing.T) {
 	ids := []string{
 		"unchanged", "changed", "tool-changed",
 		"compact-changed", "subtype-changed",
+		"usage-changed", "claude-identity-changed", "source-identity-changed",
 	}
 	for _, id := range ids {
 		insertSession(t, srcDB, id, "proj")
@@ -5240,11 +5241,23 @@ func TestCopyOrphanedDataFromReconcilesTranscriptRevisions(t *testing.T) {
 		asstMsg("tool-changed", 0, "tool"),
 		userMsg("compact-changed", 0, "boundary"),
 		userMsg("subtype-changed", 0, "system event"),
+		asstMsg("usage-changed", 0, "same response"),
+		asstMsg("claude-identity-changed", 0, "same response"),
+		asstMsg("source-identity-changed", 0, "same response"),
 	)
 	_, err := srcDB.getWriter().Exec(`
 		UPDATE messages SET is_system = 1
 		WHERE session_id = 'subtype-changed'`)
 	requireNoError(t, err, "mark source system message")
+	_, err = srcDB.getWriter().Exec(`
+		UPDATE messages SET token_usage = '{"input_tokens":10}'
+		WHERE session_id = 'usage-changed';
+		UPDATE messages
+		SET claude_message_id = 'msg-old', claude_request_id = 'req-old'
+		WHERE session_id = 'claude-identity-changed';
+		UPDATE messages SET source_uuid = 'source-old'
+		WHERE session_id = 'source-identity-changed'`)
+	requireNoError(t, err, "seed source usage identities")
 	_, err = srcDB.getWriter().Exec(`
 		INSERT INTO tool_calls
 			(message_id, session_id, tool_name, category, input_json, call_index)
@@ -5269,6 +5282,9 @@ func TestCopyOrphanedDataFromReconcilesTranscriptRevisions(t *testing.T) {
 		asstMsg("tool-changed", 0, "tool"),
 		userMsg("compact-changed", 0, "boundary"),
 		userMsg("subtype-changed", 0, "system event"),
+		asstMsg("usage-changed", 0, "same response"),
+		asstMsg("claude-identity-changed", 0, "same response"),
+		asstMsg("source-identity-changed", 0, "same response"),
 	)
 	_, err = dstDB.getWriter().Exec(`
 		UPDATE messages
@@ -5276,7 +5292,14 @@ func TestCopyOrphanedDataFromReconcilesTranscriptRevisions(t *testing.T) {
 		WHERE session_id = 'compact-changed';
 		UPDATE messages
 		SET is_system = 1, source_subtype = 'resume'
-		WHERE session_id = 'subtype-changed'`)
+		WHERE session_id = 'subtype-changed';
+		UPDATE messages SET token_usage = '{"input_tokens":20}'
+		WHERE session_id = 'usage-changed';
+		UPDATE messages
+		SET claude_message_id = 'msg-new', claude_request_id = 'req-new'
+		WHERE session_id = 'claude-identity-changed';
+		UPDATE messages SET source_uuid = 'source-new'
+		WHERE session_id = 'source-identity-changed'`)
 	requireNoError(t, err, "change destination display fields")
 	_, err = dstDB.getWriter().Exec(`
 		INSERT INTO tool_calls
@@ -5309,7 +5332,10 @@ func TestCopyOrphanedDataFromReconcilesTranscriptRevisions(t *testing.T) {
 	require.NotNil(t, toolChanged.TranscriptRevision)
 	assert.Equal(t, "8", *toolChanged.TranscriptRevision)
 
-	for _, id := range []string{"compact-changed", "subtype-changed"} {
+	for _, id := range []string{
+		"compact-changed", "subtype-changed", "usage-changed",
+		"claude-identity-changed", "source-identity-changed",
+	} {
 		session, err := dstDB.GetSession(context.Background(), id)
 		requireNoError(t, err, "GetSession "+id)
 		require.NotNil(t, session)

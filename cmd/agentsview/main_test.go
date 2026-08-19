@@ -39,15 +39,25 @@ type cursorSecretRecorder struct {
 }
 
 type usageCacheBackfillRecorder struct {
-	started chan struct{}
-	release chan struct{}
-	waited  chan struct{}
+	started  chan struct{}
+	release  chan struct{}
+	waited   chan struct{}
+	observer func()
+}
+
+func (recorder *usageCacheBackfillRecorder) SetUsageCacheBackfillStarted(
+	observer func(),
+) {
+	recorder.observer = observer
 }
 
 func (recorder *usageCacheBackfillRecorder) StartUsageCacheBackfill(
 	context.Context,
 ) error {
 	close(recorder.started)
+	if recorder.observer != nil {
+		recorder.observer()
+	}
 	return nil
 }
 

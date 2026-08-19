@@ -148,6 +148,7 @@ func (db *DB) runUsageCacheBackfill(ctx context.Context) error {
 	orderUsageBackfillSnapshot(&snapshot, activity)
 	resolver := export.NewPricingResolver(snapshot.PricingRows)
 	covered, deleted := 0, 0
+	var dailyRows, exceptionGroups, exceptionRows int64
 	for start := 0; start < len(snapshot.Versions); start += usageCacheBackfillBatchSize {
 		end := min(start+usageCacheBackfillBatchSize, len(snapshot.Versions))
 		cursorTarget := int64(0)
@@ -166,8 +167,12 @@ func (db *DB) runUsageCacheBackfill(ctx context.Context) error {
 		for _, location := range locations {
 			zoned := batch
 			zoned.location = location
-			if _, _, err := cache.rollup.Ensure(ctx, zoned, results, resolver); err != nil {
+			if _, metrics, err := cache.rollup.Ensure(ctx, zoned, results, resolver); err != nil {
 				return fmt.Errorf("building usage rollups during backfill: %w", err)
+			} else {
+				dailyRows += metrics.DailyRows
+				exceptionGroups += metrics.ExceptionGroups
+				exceptionRows += metrics.ExceptionRows
 			}
 		}
 		if _, err := cache.db.ExecContext(ctx, `PRAGMA optimize`); err != nil {
@@ -183,13 +188,6 @@ func (db *DB) runUsageCacheBackfill(ctx context.Context) error {
 				covered++
 			}
 		}
-		if _, err := cache.db.ExecContext(ctx, `
-			UPDATE usage_cache_metadata SET value = ? WHERE key = ?`,
-			snapshot.Versions[end-1].SessionID,
-			usageCacheMetadataBackfillProgress,
-		); err != nil {
-			return fmt.Errorf("recording usage cache backfill progress: %w", err)
-		}
 	}
 	if len(snapshot.Versions) == 0 {
 		results, err := cache.fill.FillBackground(ctx, nil, snapshot.CursorHighWater)
@@ -199,8 +197,12 @@ func (db *DB) runUsageCacheBackfill(ctx context.Context) error {
 		for _, location := range locations {
 			zoned := snapshot
 			zoned.location = location
-			if _, _, err := cache.rollup.Ensure(ctx, zoned, results, resolver); err != nil {
+			if _, metrics, err := cache.rollup.Ensure(ctx, zoned, results, resolver); err != nil {
 				return fmt.Errorf("building Cursor usage rollups during backfill: %w", err)
+			} else {
+				dailyRows += metrics.DailyRows
+				exceptionGroups += metrics.ExceptionGroups
+				exceptionRows += metrics.ExceptionRows
 			}
 		}
 	}
@@ -222,8 +224,9 @@ func (db *DB) runUsageCacheBackfill(ctx context.Context) error {
 	); err != nil {
 		return fmt.Errorf("recording usage cache completion time: %w", err)
 	}
-	log.Printf("usage cache backfill: covered %d sessions (%d deleted) in %s",
-		covered, deleted, time.Since(started).Round(time.Millisecond))
+	log.Printf("usage cache backfill: covered %d sessions (%d deleted), built %d daily rows and %d exception rows in %d groups in %s",
+		covered, deleted, dailyRows, exceptionRows, exceptionGroups,
+		time.Since(started).Round(time.Millisecond))
 	return nil
 }
 
@@ -364,6 +367,12 @@ func (cache *usageCache) sweepDeletionJournal(ctx context.Context, archive *DB) 
 	}
 	defer func() { _ = tx.Rollback() }()
 	for _, tombstone := range tombstones {
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM usage_rollup_installs WHERE session_id = ?`,
+			tombstone.SessionID,
+		); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx,
 			`DELETE FROM usage_cached_sessions WHERE session_id = ?`,
 			tombstone.SessionID,

@@ -545,7 +545,7 @@ func installUsageRollupRows(
 	for _, row := range build.Exceptions {
 		fact := row.Fact
 		_, err := tx.ExecContext(ctx, `INSERT INTO usage_rollup_exceptions VALUES(
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			installID, row.GroupKind, row.GroupKey, fact.CachedSessionID,
 			fact.FactIndex, fact.SourceSessionID, fact.LocalDate, fact.Fact.Source,
 			fact.Fact.MessageOrdinal, fact.Fact.TimestampMillis, fact.Fact.TimestampNanos,
@@ -553,7 +553,7 @@ func installUsageRollupRows(
 			fact.Fact.InputTokens, fact.Fact.OutputTokens, fact.Fact.ReasoningTokens,
 			fact.Fact.CacheCreationTokens, fact.Fact.CacheReadTokens,
 			fact.Fact.WebSearchRequests, fact.Fact.ReportedCostMicrodollars,
-			fact.Fact.CostSource, boolInt(fact.Fact.RequestScoped),
+			fact.Fact.CostSource, boolInt(fact.Fact.RequestScoped), boolInt(fact.IsHeadless),
 			fact.Fact.ClaudeMessageID, fact.Fact.ClaudeRequestID,
 			fact.Fact.SourceUUID, fact.Fact.UsageDedupKey)
 		if err != nil {

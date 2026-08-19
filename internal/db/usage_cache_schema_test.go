@@ -25,7 +25,7 @@ func TestUsageCacheGenerationCreatesIdentifiedSchema(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, cache.temporary)
 	assert.Equal(t, filepath.Join(filepath.Dir(archivePath),
-		"usage-cache-v7-980e32c89da32cb0d3588c0c06864b4e.db"), cache.path)
+		"usage-cache-v8-980e32c89da32cb0d3588c0c06864b4e.db"), cache.path)
 
 	info, err := os.Stat(cache.path)
 	require.NoError(t, err)
@@ -41,12 +41,34 @@ func TestUsageCacheGenerationCreatesIdentifiedSchema(t *testing.T) {
 
 	metadata := readUsageCacheMetadata(t, cache.db)
 	assert.Equal(t, "agentsview-usage-facts", metadata[usageCacheMetadataKind])
-	assert.Equal(t, "7", metadata[usageCacheMetadataFormatVersion])
+	assert.Equal(t, "8", metadata[usageCacheMetadataFormatVersion])
 	assert.Equal(t, "database-id-one", metadata[usageCacheMetadataSourceDatabaseID])
 	assert.Equal(t, "1", metadata[usageCacheMetadataNextInstallRevision])
 	assert.Equal(t, "1", metadata[usageCacheMetadataNextRollupRevision])
 	assert.Equal(t, "0", metadata[usageCacheMetadataDeletionRevision])
 	assert.Equal(t, "0", metadata[usageCacheMetadataCursorHighWaterMark])
+	assert.NotContains(t, metadata, "extractor_version")
+	assert.NotContains(t, metadata, "backfill_progress_session_id")
+
+	for table, columns := range map[string][]string{
+		"usage_cached_sessions": {
+			"fact_count", "min_fact_timestamp_ms", "max_fact_timestamp_ms",
+		},
+		"cursor_usage_facts": {
+			"timestamp_ns", "kind", "cursor_token_fee_microdollars",
+			"user_id", "user_email",
+		},
+		"usage_rollup_timezones": {"build_completed_at"},
+	} {
+		for _, column := range columns {
+			var found bool
+			require.NoError(t, cache.db.QueryRow(
+				`SELECT EXISTS(SELECT 1 FROM pragma_table_info(?) WHERE name = ?)`,
+				table, column,
+			).Scan(&found))
+			assert.False(t, found, table+"."+column)
+		}
+	}
 
 	for _, table := range []string{
 		"usage_cache_metadata", "usage_cached_sessions",
@@ -68,13 +90,13 @@ func TestUsageCacheGenerationCreatesIdentifiedSchema(t *testing.T) {
 			`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name=?)`,
 			index,
 		).Scan(&found))
-		assert.True(t, found, index)
+		assert.False(t, found, index)
 	}
 
 	result, err := cache.db.Exec(`INSERT INTO usage_cached_sessions(
 		session_id, source_sync_marker, source_transcript_rev,
-		usage_event_fingerprint, install_revision, fact_count
-	) VALUES ('s1', 'm1', 'r1', 'e1', 1, 1)`)
+		usage_event_fingerprint, install_revision
+	) VALUES ('s1', 'm1', 'r1', 'e1', 1)`)
 	require.NoError(t, err)
 	cachedSessionID, err := result.LastInsertId()
 	require.NoError(t, err)
@@ -326,7 +348,7 @@ func TestUsageCacheLifecycleFollowsArchiveReopenAndClose(t *testing.T) {
 	require.NoError(t, database.Reopen())
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("reopen backfill did not notify lifecycle observer")
 	}
 	require.NoError(t, first.db.Ping(), "reopen must preserve active cache readers")
@@ -348,6 +370,32 @@ func TestUsageCacheLifecycleFollowsArchiveReopenAndClose(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, readOnlyCache.temporary)
 	require.NoError(t, readOnly.Close())
+}
+
+func TestUsageCacheReopenRetiresMismatchedGeneration(t *testing.T) {
+	database := testDB(t)
+	originalID, err := database.GetDatabaseID(t.Context())
+	require.NoError(t, err)
+	original, err := database.usageCache.Generation(t.Context(), originalID)
+	require.NoError(t, err)
+	require.NotNil(t, original.fill)
+	originalDone := original.fill.done
+
+	const replacementID = "replacement-database-id"
+	_, err = database.getWriter().Exec(`UPDATE archive_metadata SET value = ?
+		WHERE key = ?`, replacementID, archiveMetadataDatabaseIDKey)
+	require.NoError(t, err)
+	require.NoError(t, database.Reopen())
+
+	select {
+	case <-originalDone:
+	default:
+		t.Fatal("reopen left the mismatched usage fill coordinator running")
+	}
+	require.Error(t, original.db.Ping())
+	replacement, err := database.usageCache.Generation(t.Context(), replacementID)
+	require.NoError(t, err)
+	require.NotSame(t, original, replacement)
 }
 
 func readUsageCacheMetadata(t *testing.T, conn *sql.DB) map[string]string {

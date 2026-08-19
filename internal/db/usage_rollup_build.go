@@ -39,6 +39,7 @@ type usageRollupFact struct {
 	LocalDate            string
 	Model                string
 	Agent                string
+	IsHeadless           bool
 	EffectiveMillis      *int64
 	EffectiveNanos       *int64
 	DedupTimestamp       string
@@ -380,9 +381,10 @@ func loadCursorUsageRollupBuild(
 		FactRevision: highWater,
 	}
 	rows, err := conn.QueryContext(ctx, `SELECT source_id, timestamp_ms,
-		timestamp_ns, raw_timestamp, model, input_tokens, output_tokens,
+		raw_timestamp, model, input_tokens, output_tokens,
 		cache_creation_tokens, cache_read_tokens, charged_microdollars,
-		dedup_key FROM cursor_usage_facts WHERE source_id <= ? ORDER BY source_id`,
+		is_headless, dedup_key
+		FROM cursor_usage_facts WHERE source_id <= ? ORDER BY source_id`,
 		highWater)
 	if err != nil {
 		return build, err
@@ -392,14 +394,16 @@ func loadCursorUsageRollupBuild(
 	for rows.Next() {
 		var fact usageRollupFact
 		var sourceID int64
-		var millis, nanos sql.NullInt64
+		var millis sql.NullInt64
 		var charged int64
-		if err := rows.Scan(&sourceID, &millis, &nanos, &fact.Fact.RawTimestamp,
+		var isHeadless int
+		if err := rows.Scan(&sourceID, &millis, &fact.Fact.RawTimestamp,
 			&fact.Model, &fact.Fact.InputTokens, &fact.Fact.OutputTokens,
 			&fact.Fact.CacheCreationTokens, &fact.Fact.CacheReadTokens, &charged,
-			&fact.Fact.UsageDedupKey); err != nil {
+			&isHeadless, &fact.Fact.UsageDedupKey); err != nil {
 			return build, err
 		}
+		fact.IsHeadless = isHeadless != 0
 		fact.FactIndex = int(sourceID)
 		fact.Fact.Source = "cursor"
 		fact.Fact.Model = fact.Model
@@ -410,10 +414,6 @@ func loadCursorUsageRollupBuild(
 		if millis.Valid {
 			value := millis.Int64
 			fact.Fact.TimestampMillis, fact.EffectiveMillis = &value, &value
-		}
-		if nanos.Valid {
-			value := nanos.Int64
-			fact.Fact.TimestampNanos, fact.EffectiveNanos = &value, &value
 		}
 		fact.DedupTimestamp = fact.Fact.RawTimestamp
 		fact.LocalDate = usageRollupLocalDate(fact, location)

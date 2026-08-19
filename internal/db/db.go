@@ -3194,6 +3194,17 @@ var usageSessionCoveringIndexColumns = []string{
 }
 
 func ensureUsageIndexesLocked(w *writerHandle) error {
+	var supersededUsageIndex int
+	if err := w.QueryRow(`
+		SELECT EXISTS(
+			SELECT 1 FROM sqlite_master
+			WHERE type = 'index' AND name = 'idx_messages_usage_covering'
+		)`).Scan(&supersededUsageIndex); err != nil {
+		return fmt.Errorf("probing superseded usage covering index: %w", err)
+	}
+	if supersededUsageIndex != 0 {
+		log.Printf("rebuilding SQLite usage indexes; startup continues after the archive index migration completes")
+	}
 	if _, err := w.Exec(`DROP INDEX IF EXISTS idx_messages_usage_covering`); err != nil {
 		return fmt.Errorf("dropping superseded usage covering index: %w", err)
 	}
@@ -3214,11 +3225,14 @@ func ensureUsageIndexesLocked(w *writerHandle) error {
 	); err != nil {
 		return err
 	}
-	if _, err := w.Exec(`
-		CREATE INDEX IF NOT EXISTS idx_messages_activity_timestamp
-		ON messages(timestamp, session_id, ordinal, model)
-		WHERE role = 'assistant' AND model != '<synthetic>'`); err != nil {
-		return fmt.Errorf("creating usage activity index: %w", err)
+	if err := ensureUsageIndexColumnsLocked(
+		w, "idx_messages_activity_timestamp",
+		[]string{"timestamp", "session_id", "ordinal", "model"},
+		`CREATE INDEX IF NOT EXISTS idx_messages_activity_timestamp
+		 ON messages(timestamp, session_id, ordinal, model)
+		 WHERE role = 'assistant' AND model != '<synthetic>'`,
+	); err != nil {
+		return err
 	}
 	return nil
 }
@@ -3237,6 +3251,12 @@ func ensureUsageIndexColumnsLocked(
 		return fmt.Errorf("probing usage index %s: %w", name, err)
 	}
 	if columns.String != strings.Join(want, ",") {
+		if columns.Valid && columns.String != "" {
+			log.Printf(
+				"rebuilding stale SQLite usage index %s; startup continues after the archive index migration completes",
+				name,
+			)
+		}
 		if _, err := w.Exec(
 			`DROP INDEX IF EXISTS ` + name,
 		); err != nil {
@@ -4445,9 +4465,16 @@ func (db *DB) Reopen() error {
 	}
 	db.startWALCheckpointLoop()
 	db.mu.Unlock()
-	// Reopen can follow a full archive replacement. The next snapshot derives
-	// the matching generation from database_id; existing generation handles
-	// stay alive so concurrent readers are never closed underneath a query.
+	// Reopen can follow a full archive replacement. Retire cache generations
+	// tied to the old database ID so their notification workers do not keep
+	// querying the replacement archive or retain SQLite pools indefinitely.
+	databaseID, err := db.GetDatabaseID(context.Background())
+	if err != nil {
+		return fmt.Errorf("reading reopened database ID: %w", err)
+	}
+	if err := db.usageCache.RetireExcept(databaseID); err != nil {
+		return fmt.Errorf("retiring old usage cache generation: %w", err)
+	}
 	return db.StartUsageCacheBackfill(context.Background())
 }
 

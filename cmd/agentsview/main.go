@@ -610,9 +610,6 @@ func runServe(cfg config.Config, opts serveOptions) {
 type usageCacheBackfiller interface {
 	StartUsageCacheBackfill(context.Context) error
 	WaitUsageCacheBackfill(context.Context) error
-}
-
-type usageCacheBackfillStartObserver interface {
 	SetUsageCacheBackfillStarted(func())
 }
 
@@ -620,42 +617,22 @@ func startDaemonUsageCacheBackfill(
 	ctx context.Context, backfiller usageCacheBackfiller,
 	idleTracker *server.IdleTracker,
 ) {
-	if observed, ok := backfiller.(usageCacheBackfillStartObserver); ok {
-		observed.SetUsageCacheBackfillStarted(func() {
-			done, ok := idleTracker.BeginWork()
-			if !ok {
-				return
+	backfiller.SetUsageCacheBackfillStarted(func() {
+		done, ok := idleTracker.BeginWork()
+		if !ok {
+			return
+		}
+		go func() {
+			defer done()
+			if err := backfiller.WaitUsageCacheBackfill(ctx); err != nil &&
+				ctx.Err() == nil {
+				log.Printf("usage cache backfill: %v", err)
 			}
-			go func() {
-				defer done()
-				if err := backfiller.WaitUsageCacheBackfill(ctx); err != nil &&
-					ctx.Err() == nil {
-					log.Printf("usage cache backfill: %v", err)
-				}
-			}()
-		})
-		if err := backfiller.StartUsageCacheBackfill(ctx); err != nil && ctx.Err() == nil {
-			log.Printf("usage cache backfill: %v", err)
-		}
-		return
+		}()
+	})
+	if err := backfiller.StartUsageCacheBackfill(ctx); err != nil && ctx.Err() == nil {
+		log.Printf("usage cache backfill: %v", err)
 	}
-	done, ok := idleTracker.BeginWork()
-	if !ok {
-		return
-	}
-	if err := backfiller.StartUsageCacheBackfill(ctx); err != nil {
-		done()
-		if ctx.Err() == nil {
-			log.Printf("usage cache backfill: %v", err)
-		}
-		return
-	}
-	go func() {
-		defer done()
-		if err := backfiller.WaitUsageCacheBackfill(ctx); err != nil && ctx.Err() == nil {
-			log.Printf("usage cache backfill: %v", err)
-		}
-	}()
 }
 
 func runDeferredStartupSyncFallback(
