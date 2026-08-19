@@ -172,15 +172,26 @@ func TestUsageQuerySnapshotPinsPricingRows(t *testing.T) {
 func TestUsageRollupAgentChangeInvalidatesInstalledRows(t *testing.T) {
 	database := testDB(t)
 	started := "2026-08-10T08:00:00Z"
-	insertSession(t, database, "rollup-session", "project-a", func(session *Session) {
-		session.Agent = "codex"
-		session.StartedAt = &started
-	})
-	require.NoError(t, database.InsertMessages([]Message{{
-		SessionID: "rollup-session", Ordinal: 0, Role: "assistant",
-		Timestamp: "2026-08-10T09:00:00Z", Model: "model-a",
-		TokenUsage: json.RawMessage(`{"input_tokens":2,"output_tokens":3}`),
-	}}))
+	for _, id := range []string{"rollup-session", "rollup-peer"} {
+		insertSession(t, database, id, "project-a", func(session *Session) {
+			session.Agent = "codex"
+			session.StartedAt = &started
+		})
+	}
+	require.NoError(t, database.InsertMessages([]Message{
+		{
+			SessionID: "rollup-session", Ordinal: 0, Role: "assistant",
+			Timestamp: "2026-08-10T09:00:00Z", Model: "model-a",
+			TokenUsage: json.RawMessage(`{"input_tokens":2,"output_tokens":3}`),
+			SourceUUID: "shared-source",
+		},
+		{
+			SessionID: "rollup-peer", Ordinal: 0, Role: "assistant",
+			Timestamp: "2026-08-10T09:01:00Z", Model: "model-a",
+			TokenUsage: json.RawMessage(`{"input_tokens":2,"output_tokens":3}`),
+			SourceUUID: "shared-source",
+		},
+	}))
 
 	firstSnapshot, firstFills, cache := prepareUsageRollupTest(t, database)
 	first, _, err := cache.rollup.Ensure(
@@ -189,14 +200,36 @@ func TestUsageRollupAgentChangeInvalidatesInstalledRows(t *testing.T) {
 	)
 	require.NoError(t, err)
 	firstInstall := first["rollup-session"]
+	filter := UsageFilter{
+		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
+	}
+	beforeDaily, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 2, beforeDaily.Totals.InputTokens,
+		"same-agent source identities deduplicate")
+	assert.Equal(t, 3, beforeDaily.Totals.OutputTokens)
 
-	beforeVersion := firstSnapshot.Versions[0]
+	var beforeVersion usageSourceVersion
+	for _, version := range firstSnapshot.Versions {
+		if version.SessionID == "rollup-session" {
+			beforeVersion = version
+			break
+		}
+	}
+	require.Equal(t, "rollup-session", beforeVersion.SessionID)
 	_, err = database.getWriter().Exec(`UPDATE sessions SET agent = 'claude'
 		WHERE id = 'rollup-session'`)
 	require.NoError(t, err)
 	secondSnapshot, secondFills, _ := prepareUsageRollupTest(t, database)
-	require.Len(t, secondSnapshot.Versions, 1)
-	assert.True(t, beforeVersion.Equal(secondSnapshot.Versions[0]),
+	var afterVersion usageSourceVersion
+	for _, version := range secondSnapshot.Versions {
+		if version.SessionID == "rollup-session" {
+			afterVersion = version
+			break
+		}
+	}
+	require.Equal(t, "rollup-session", afterVersion.SessionID)
+	assert.True(t, beforeVersion.Equal(afterVersion),
 		"agent is intentionally outside the normalized-facts fingerprint")
 
 	second, _, err := cache.rollup.Ensure(
@@ -206,6 +239,11 @@ func TestUsageRollupAgentChangeInvalidatesInstalledRows(t *testing.T) {
 	require.NoError(t, err)
 	assert.Greater(t, second["rollup-session"].InstallRevision,
 		firstInstall.InstallRevision)
+	afterDaily, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 4, afterDaily.Totals.InputTokens,
+		"changing the baked agent must split the source identity groups")
+	assert.Equal(t, 6, afterDaily.Totals.OutputTokens)
 }
 
 func TestUsageRollupStartedAtChangeInvalidatesInstalledRows(t *testing.T) {
@@ -230,8 +268,15 @@ func TestUsageRollupStartedAtChangeInvalidatesInstalledRows(t *testing.T) {
 		export.NewPricingResolver(firstSnapshot.PricingRows),
 	)
 	require.NoError(t, err)
+	filter := UsageFilter{
+		From: "2026-08-10", To: "2026-08-11", Timezone: "UTC",
+	}
+	beforeDaily, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	require.Len(t, beforeDaily.Daily, 1)
+	assert.Equal(t, "2026-08-10", beforeDaily.Daily[0].Date)
 	_, err = database.getWriter().Exec(`UPDATE sessions
-		SET started_at = '2026-08-10T08:30:00Z' WHERE id = 'rollup-start'`)
+		SET started_at = '2026-08-11T08:30:00Z' WHERE id = 'rollup-start'`)
 	require.NoError(t, err)
 	secondSnapshot, secondFills, _ := prepareUsageRollupTest(t, database)
 	assert.True(t, firstSnapshot.Versions[0].Equal(secondSnapshot.Versions[0]),
@@ -244,6 +289,11 @@ func TestUsageRollupStartedAtChangeInvalidatesInstalledRows(t *testing.T) {
 	require.NoError(t, err)
 	assert.Greater(t, second["rollup-start"].InstallRevision,
 		first["rollup-start"].InstallRevision)
+	afterDaily, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	require.Len(t, afterDaily.Daily, 1)
+	assert.Equal(t, "2026-08-11", afterDaily.Daily[0].Date,
+		"null-timestamp usage must move with the rebuilt session start")
 }
 
 func TestUsageRollupPricingChangeInvalidatesInstalledRows(t *testing.T) {
