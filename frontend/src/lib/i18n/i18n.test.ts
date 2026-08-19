@@ -150,6 +150,10 @@ describe("i18n locale selection", () => {
       countLabel: "5",
     })).toBe("5 ステップ");
     expect(m.trash_deleted_ago({ time: "ちょうど今" })).toBe("削除: ちょうど今");
+    expect(m.data_view_inventory()).toBe("インベントリ");
+    expect(m.activity_untimed_count({ count: "3" })).toBe("3 件（時間情報なし）");
+    expect(m.insights_page_no_generated_saved()).toBe("保存済みの生成済み分析はありません。");
+    expect(m.activity_loading_usage()).toBe("使用状況を読み込み中…");
   });
 
   it("selects cardinal plural variants per locale", () => {
