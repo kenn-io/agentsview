@@ -54,7 +54,8 @@ project classification takes precedence.
 **Project rule set**:
 
 The archive-wide, versioned collection of project rules. Undo walks backward
-through its linear history one version at a time.
+through its linear history one version at a time; a later save continues from
+the restored version while skipped versions remain audit records.
 
 **Session assignment**:
 
