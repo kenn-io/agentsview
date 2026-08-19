@@ -3248,7 +3248,10 @@ func TestPrepareHTTPSyncsOrdersConcurrentCallersByMirrorLockPath(t *testing.T) {
 		prepared *PreparedHTTPSyncs
 		err      error
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// The timeout is a deadlock watchdog, not a latency budget: a real
+	// lock-order deadlock never resolves, while a loaded Windows CI runner
+	// has taken over 4s to finish both preparations legitimately.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	start := make(chan struct{})
 	results := make(chan result, 2)
