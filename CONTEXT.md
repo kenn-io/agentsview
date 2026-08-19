@@ -16,6 +16,17 @@ inferred from session evidence, governed by a project rule, or set by a session
 assignment. A session assignment takes precedence over a project rule, and a
 project rule takes precedence over inferred classification.
 
+**Inferred classification**:
+
+A session's project classification derived from session evidence before project
+rules or session assignments apply.
+
+**Effective classification**:
+
+A session's project classification after precedence rules apply. It can be
+reconstructed from inferred classification, the active project rule set, and any
+session assignment.
+
 **Observed folder**:
 
 A working directory recorded by one or more sessions and used as evidence for
@@ -41,8 +52,8 @@ precedence.
 
 **Project rule set**:
 
-The versioned collection of project rules. Undo restores the previous version
-instead of creating new rules that attempt to reverse the change.
+The versioned collection of project rules. Undo is linear and restores only the
+immediately previous version.
 
 **Session assignment**:
 
