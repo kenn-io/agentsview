@@ -3,10 +3,75 @@ package db
 import (
 	"database/sql"
 	"path/filepath"
+	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestUsageCoveringIndexColumns(t *testing.T) {
+	database := testDB(t)
+
+	rows, err := database.getReader().Query(
+		`SELECT name FROM pragma_index_info('idx_messages_usage_covering')
+		 ORDER BY seqno`,
+	)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var got []string
+	for rows.Next() {
+		var name string
+		require.NoError(t, rows.Scan(&name))
+		got = append(got, name)
+	}
+	require.NoError(t, rows.Err())
+
+	want := []string{
+		"timestamp", "session_id", "ordinal", "role", "model",
+		"claude_message_id", "claude_request_id", "token_usage", "source_uuid",
+	}
+	assert.Equal(t, want, got)
+}
+
+func TestUsageCoveringIndexConcurrentRepair(t *testing.T) {
+	database := testDB(t)
+	_, err := database.getWriter().Exec(`
+		DROP INDEX idx_messages_usage_covering;
+		CREATE INDEX idx_messages_usage_covering
+		ON messages(timestamp, session_id, ordinal, model)
+		WHERE token_usage != '' AND model != '' AND model != '<synthetic>'`)
+	require.NoError(t, err)
+	database.writer.Load().SetMaxOpenConns(2)
+	start := make(chan struct{})
+	errors := make(chan error, 2)
+	var wait sync.WaitGroup
+	for range 2 {
+		wait.Go(func() {
+			<-start
+			errors <- ensureUsageCoveringIndexLocked(database.getWriter())
+		})
+	}
+	close(start)
+	wait.Wait()
+	close(errors)
+	for err := range errors {
+		require.NoError(t, err)
+	}
+	rows, err := database.getReader().Query(
+		`SELECT name FROM pragma_index_info('idx_messages_usage_covering')
+		 ORDER BY seqno`)
+	require.NoError(t, err)
+	defer rows.Close()
+	var columns []string
+	for rows.Next() {
+		var column string
+		require.NoError(t, rows.Scan(&column))
+		columns = append(columns, column)
+	}
+	assert.Equal(t, usageCoveringIndexColumns, columns)
+}
 
 func TestUsageIndexesMigration(t *testing.T) {
 	dir := t.TempDir()
@@ -19,13 +84,19 @@ func TestUsageIndexesMigration(t *testing.T) {
 
 	requireIndexPresence(t, path, "idx_messages_usage_covering", 1)
 	requireIndexPresence(t, path, "idx_messages_claude_snapshot", 1)
-	requireIndexPresence(t, path, "idx_messages_activity_timestamp", 0)
+	requireIndexPresence(t, path, "idx_messages_activity_timestamp", 1)
+	requireIndexPresence(t, path, "idx_messages_usage_session_covering", 1)
 	requireIndexPresence(t, path, "idx_messages_usage_timestamp", 0)
 
 	conn, err := sql.Open("sqlite3", path)
 	requireNoError(t, err, "raw open")
 	_, err = conn.Exec(`DROP INDEX IF EXISTS idx_messages_usage_covering`)
 	requireNoError(t, err, "drop covering index")
+	_, err = conn.Exec(`CREATE INDEX idx_messages_usage_covering
+		ON messages(timestamp, session_id, ordinal, model,
+		            claude_message_id, claude_request_id, token_usage)
+		WHERE token_usage != '' AND model != '' AND model != '<synthetic>'`)
+	requireNoError(t, err, "recreate stale covering index")
 	_, err = conn.Exec(`DROP INDEX IF EXISTS idx_messages_claude_snapshot`)
 	requireNoError(t, err, "drop Claude snapshot index")
 	_, err = conn.Exec(`CREATE INDEX idx_messages_usage_timestamp
@@ -40,8 +111,27 @@ func TestUsageIndexesMigration(t *testing.T) {
 
 	requireIndexPresence(t, path, "idx_messages_usage_covering", 1)
 	requireIndexPresence(t, path, "idx_messages_claude_snapshot", 1)
-	requireIndexPresence(t, path, "idx_messages_activity_timestamp", 0)
+	requireIndexPresence(t, path, "idx_messages_activity_timestamp", 1)
+	requireIndexPresence(t, path, "idx_messages_usage_session_covering", 1)
 	requireIndexPresence(t, path, "idx_messages_usage_timestamp", 0)
+
+	rows, err := d.getReader().Query(
+		`SELECT name FROM pragma_index_info('idx_messages_usage_covering')
+		 ORDER BY seqno`,
+	)
+	requireNoError(t, err, "read migrated covering columns")
+	defer rows.Close()
+	var columns []string
+	for rows.Next() {
+		var name string
+		requireNoError(t, rows.Scan(&name), "scan migrated covering column")
+		columns = append(columns, name)
+	}
+	requireNoError(t, rows.Err(), "iterate migrated covering columns")
+	require.Equal(t, []string{
+		"timestamp", "session_id", "ordinal", "role", "model",
+		"claude_message_id", "claude_request_id", "token_usage", "source_uuid",
+	}, columns)
 
 	var sessions int
 	row := d.reader.Load().QueryRow(`SELECT count(*) FROM sessions`)

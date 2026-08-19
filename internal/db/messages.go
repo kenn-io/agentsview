@@ -942,7 +942,8 @@ func (db *DB) InsertMessages(msgs []Message) error {
 	if err := insertToolResultEventsTx(tx, events); err != nil {
 		return err
 	}
-	for _, sessionID := range messageSessionIDs(msgs) {
+	sessionIDs := messageSessionIDs(msgs)
+	for _, sessionID := range sessionIDs {
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 			return err
 		}
@@ -955,7 +956,11 @@ func (db *DB) InsertMessages(msgs []Message) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	db.notifyUsageSessions(sessionIDs)
+	return nil
 }
 
 // invalidateSessionSignalsTx zeroes quality_signal_version so the
@@ -1049,6 +1054,7 @@ func (db *DB) WriteSessionIncremental(
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing incremental write tx: %w", err)
 	}
+	db.notifyUsageSessions([]string{sessionID})
 	return nil
 }
 
@@ -1216,8 +1222,10 @@ func (db *DB) ReplaceSessionMessages(
 	// clear them and reset the scan state (empty version => secrets scan
 	// --backfill re-scans). ReplaceSessionContent does not call this method; it
 	// supplies fresh findings via replaceSecretFindingsTx directly.
-	if err := replaceSecretFindingsTx(tx, sessionID, nil, 0, ""); err != nil {
-		return err
+	if transcriptChanged {
+		if err := replaceSecretFindingsTx(tx, sessionID, nil, 0, ""); err != nil {
+			return err
+		}
 	}
 	if err := invalidateSessionSignalsTx(tx, sessionID); err != nil {
 		return err
@@ -1230,6 +1238,7 @@ func (db *DB) ReplaceSessionMessages(
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	db.notifyUsageSessions([]string{sessionID})
 	pendingRecallRevocations.flush()
 	return nil
 }
@@ -1281,6 +1290,7 @@ func bumpTranscriptRevisionTx(tx *sql.Tx, sessionID string) error {
 		 SET transcript_revision = CAST(
 			CAST(transcript_revision AS INTEGER) + 1 AS TEXT
 		 ),
+		     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
 		     secrets_rules_version = ''
 		 WHERE id = ?`,
 		sessionID,
@@ -1457,6 +1467,7 @@ func (db *DB) ReplaceSessionContent(
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	db.notifyUsageSessions([]string{sessionID})
 	pendingRecallRevocations.flush()
 	return nil
 }
@@ -2385,24 +2396,14 @@ func (db *DB) SetToolCallSubagentSession(
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 			return err
 		}
-		// Bump local_modified_at so the sync_marker trigger fires and push
-		// targets re-select the session: the linkage lands in mirrored
-		// data (tool_calls.subagent_session_id and transcript_revision)
-		// but touches no sync_marker signal on its own (see
-		// LinkSubagentSessions for the same pattern).
-		if _, err := tx.Exec(
-			`UPDATE sessions
-			    SET local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-			  WHERE id = ?`,
-			sessionID,
-		); err != nil {
-			return fmt.Errorf(
-				"bumping local_modified_at for %s after subagent link: %w",
-				sessionID, err,
-			)
-		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if changed {
+		db.notifyUsageSessions([]string{sessionID})
+	}
+	return nil
 }
 
 func applyToolCallSubagentLinkTx(

@@ -4,11 +4,158 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type usageVersion struct {
+	revision string
+	marker   string
+}
+
+func readUsageVersion(t *testing.T, database *DB, id string) usageVersion {
+	t.Helper()
+	var got usageVersion
+	require.NoError(t, database.getReader().QueryRow(
+		`SELECT transcript_revision, sync_marker FROM sessions WHERE id = ?`, id,
+	).Scan(&got.revision, &got.marker))
+	return got
+}
+
+func freezeUsageVersionSignals(t *testing.T, database *DB, id string) usageVersion {
+	t.Helper()
+	_, err := database.getWriter().Exec(
+		`UPDATE sessions
+		 SET created_at = '2026-07-01T10:00:00.000Z',
+		     local_modified_at = '2026-07-01T10:00:00.000Z',
+		     started_at = NULL, ended_at = NULL, file_mtime = 0
+		 WHERE id = ?`, id,
+	)
+	require.NoError(t, err)
+	return readUsageVersion(t, database, id)
+}
+
+func usageVersionMessage(id string, tokenUsage string) Message {
+	return Message{
+		SessionID: id, Ordinal: 0, Role: "assistant", Content: "answer",
+		ContentLength: len("answer"), Model: "model-x",
+		TokenUsage: json.RawMessage(tokenUsage),
+	}
+}
+
+func TestMessageMutationAdvancesUsageVersion(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*testing.T, *DB, string, Message)
+		write func(*testing.T, *DB, string, Message)
+	}{
+		{
+			name: "InsertMessages",
+			setup: func(t *testing.T, d *DB, id string, _ Message) {
+				insertSession(t, d, id, "proj")
+			},
+			write: func(t *testing.T, d *DB, _ string, changed Message) {
+				require.NoError(t, d.InsertMessages([]Message{changed}))
+			},
+		},
+		{
+			name: "WriteSessionIncremental",
+			setup: func(t *testing.T, d *DB, id string, _ Message) {
+				insertSession(t, d, id, "proj")
+			},
+			write: func(t *testing.T, d *DB, id string, changed Message) {
+				require.NoError(t, d.WriteSessionIncremental(
+					id, []Message{changed}, IncrementalSessionUpdate{},
+				))
+			},
+		},
+		{
+			name: "ReplaceSessionMessages",
+			setup: func(t *testing.T, d *DB, id string, original Message) {
+				insertSession(t, d, id, "proj")
+				insertMessages(t, d, original)
+			},
+			write: func(t *testing.T, d *DB, id string, changed Message) {
+				require.NoError(t, d.ReplaceSessionMessages(id, []Message{changed}))
+			},
+		},
+		{
+			name: "ReplaceSessionContent",
+			setup: func(t *testing.T, d *DB, id string, original Message) {
+				insertSession(t, d, id, "proj")
+				insertMessages(t, d, original)
+			},
+			write: func(t *testing.T, d *DB, id string, changed Message) {
+				require.NoError(t, d.ReplaceSessionContent(
+					id, []Message{changed}, SessionSignalUpdate{}, nil,
+				))
+			},
+		},
+		{
+			name: "WriteSessionBatch",
+			setup: func(t *testing.T, d *DB, id string, original Message) {
+				insertSession(t, d, id, "proj")
+				insertMessages(t, d, original)
+			},
+			write: func(t *testing.T, d *DB, id string, changed Message) {
+				result, err := d.WriteSessionBatch([]SessionBatchWrite{{
+					Session:  Session{ID: id, Project: "proj", Machine: "m", Agent: "a"},
+					Messages: []Message{changed}, ReplaceMessages: true,
+				}})
+				require.NoError(t, err)
+				require.Equal(t, 1, result.WrittenSessions)
+			},
+		},
+		{
+			name: "WriteSessionBatchAtomic",
+			setup: func(t *testing.T, d *DB, id string, original Message) {
+				insertSession(t, d, id, "proj")
+				insertMessages(t, d, original)
+			},
+			write: func(t *testing.T, d *DB, id string, changed Message) {
+				result, err := d.WriteSessionBatchAtomic([]SessionBatchWrite{{
+					Session:  Session{ID: id, Project: "proj", Machine: "m", Agent: "a"},
+					Messages: []Message{changed}, ReplaceMessages: true,
+				}})
+				require.NoError(t, err)
+				require.Equal(t, 1, result.WrittenSessions)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			database := testDB(t)
+			id := "usage-version-" + tc.name
+			original := usageVersionMessage(id, `{"input_tokens":1}`)
+			changed := usageVersionMessage(id, `{"input_tokens":2}`)
+			tc.setup(t, database, id, original)
+			before := freezeUsageVersionSignals(t, database, id)
+
+			tc.write(t, database, id, changed)
+
+			after := readUsageVersion(t, database, id)
+			assert.NotEqual(t, before.revision, after.revision)
+			assert.Greater(t, after.marker, before.marker)
+		})
+	}
+}
+
+func TestMessageNoOpPreservesUsageVersion(t *testing.T) {
+	database := testDB(t)
+	id := "usage-noop-replacement"
+	msg := usageVersionMessage(id, `{"input_tokens":1}`)
+	insertSession(t, database, id, "proj")
+	insertMessages(t, database, msg)
+	before := freezeUsageVersionSignals(t, database, id)
+
+	require.NoError(t, database.ReplaceSessionMessages(id, []Message{msg}))
+
+	assert.Equal(t, before, readUsageVersion(t, database, id))
+}
 
 func TestSyncMarkerMaintainedByTriggers(t *testing.T) {
 	database := testDB(t)

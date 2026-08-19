@@ -38,6 +38,47 @@ type cursorSecretRecorder struct {
 	secret []byte
 }
 
+type usageCacheBackfillRecorder struct {
+	started chan struct{}
+	release chan struct{}
+	waited  chan struct{}
+}
+
+func (recorder *usageCacheBackfillRecorder) StartUsageCacheBackfill(
+	context.Context,
+) error {
+	close(recorder.started)
+	return nil
+}
+
+func (recorder *usageCacheBackfillRecorder) WaitUsageCacheBackfill(
+	context.Context,
+) error {
+	close(recorder.waited)
+	<-recorder.release
+	return nil
+}
+
+func TestServeStartsUsageCacheBackfill(t *testing.T) {
+	recorder := &usageCacheBackfillRecorder{
+		started: make(chan struct{}), release: make(chan struct{}),
+		waited: make(chan struct{}),
+	}
+	idle := server.NewIdleTracker(time.Minute, func() {})
+	startDaemonUsageCacheBackfill(context.Background(), recorder, idle)
+	select {
+	case <-recorder.started:
+	case <-time.After(time.Second):
+		t.Fatal("usage cache backfill did not start")
+	}
+	select {
+	case <-recorder.waited:
+	case <-time.After(time.Second):
+		t.Fatal("usage cache backfill was not joined by tracked work")
+	}
+	close(recorder.release)
+}
+
 func (recorder *cursorSecretRecorder) SetCursorSecret(secret []byte) {
 	recorder.secret = append([]byte(nil), secret...)
 }

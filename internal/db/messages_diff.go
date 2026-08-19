@@ -151,11 +151,7 @@ func transcriptMessageEqual(a, b Message) bool {
 	comparableTranscriptMessage := func(msg Message) Message {
 		msg.ID = 0
 		msg.ContentLength = 0
-		msg.TokenUsage = nil
-		msg.ClaudeMessageID = ""
-		msg.ClaudeRequestID = ""
 		msg.SourceType = ""
-		msg.SourceUUID = ""
 		msg.SourceParentUUID = ""
 		msg.IsSidechain = false
 		msg.ToolCalls = append([]ToolCall(nil), msg.ToolCalls...)

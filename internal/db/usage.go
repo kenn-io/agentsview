@@ -7,16 +7,15 @@ import (
 	"fmt"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
 // CopilotReportedCostSource identifies the authoritative cumulative cost
@@ -1452,200 +1451,22 @@ func scanDailyUsageRowWithMachine(
 func parseUsageTokenCounters(
 	tokenJSON string,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok int) {
-	inputTok, outputTok, cacheCrTok, cacheRdTok, _ =
-		parseUsageTokenCountersWithReasoning(tokenJSON)
-	return
+	parsed := usagefacts.ParseTokenUsage(tokenJSON)
+	return int(parsed.InputTokens), int(parsed.OutputTokens),
+		int(parsed.CacheCreationTokens), int(parsed.CacheReadTokens)
 }
 
 func parseUsageTokenCountersWithReasoning(
 	tokenJSON string,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok int) {
-	i := skipJSONSpace(tokenJSON, 0)
-	if i >= len(tokenJSON) || tokenJSON[i] != '{' {
-		return
-	}
-	i++
-	for i < len(tokenJSON) {
-		i = skipJSONSpace(tokenJSON, i)
-		if i >= len(tokenJSON) || tokenJSON[i] == '}' {
-			break
-		}
-		if tokenJSON[i] == ',' {
-			i++
-			continue
-		}
-		if tokenJSON[i] != '"' {
-			next, ok := skipJSONValue(tokenJSON, i)
-			if !ok || next <= i {
-				i++
-			} else {
-				i = next
-			}
-			continue
-		}
-		key, next, ok := parseJSONString(tokenJSON, i)
-		if !ok {
-			break
-		}
-		i = skipJSONSpace(tokenJSON, next)
-		if i >= len(tokenJSON) || tokenJSON[i] != ':' {
-			continue
-		}
-		i = skipJSONSpace(tokenJSON, i+1)
-		if isUsageTokenCounterKey(key) {
-			value, valueNext, ok := parseUsageTokenInt(tokenJSON, i)
-			if ok {
-				switch key {
-				case "input_tokens":
-					inputTok = value
-				case "output_tokens":
-					outputTok = value
-				case "cache_creation_input_tokens":
-					cacheCrTok = value
-				case "cache_read_input_tokens":
-					cacheRdTok = value
-				case "reasoning_tokens":
-					reasoningTok = value
-				}
-			}
-			if valueNext <= i {
-				i++
-			} else {
-				i = valueNext
-			}
-			continue
-		}
-		valueNext, ok := skipJSONValue(tokenJSON, i)
-		if !ok {
-			break
-		}
-		i = valueNext
-	}
-	return
+	parsed := usagefacts.ParseTokenUsage(tokenJSON)
+	return int(parsed.InputTokens), int(parsed.OutputTokens),
+		int(parsed.CacheCreationTokens), int(parsed.CacheReadTokens),
+		int(parsed.ReasoningTokens)
 }
 
-func isUsageTokenCounterKey(key string) bool {
-	switch key {
-	case "input_tokens", "output_tokens",
-		"cache_creation_input_tokens", "cache_read_input_tokens",
-		"reasoning_tokens":
-		return true
-	default:
-		return false
-	}
-}
-
-// usageServerToolUseKey is the nested object Anthropic reports server tool
-// use under, and usageWebSearchRequestsKey the billed web search count
-// inside it. Only Anthropic's wire format uses these names, so their
-// presence is what identifies a row as carrying Anthropic web search spend.
-const (
-	usageServerToolUseKey     = "server_tool_use"
-	usageWebSearchRequestsKey = "web_search_requests"
-)
-
-// parseUsageWebSearchRequests reads server_tool_use.web_search_requests out
-// of a stored token_usage blob. It is a separate scan from
-// parseUsageTokenCountersWithReasoning because the value is nested and is
-// not a token count: it must never be clamped or summed as tokens. Blobs
-// without the key exit on a substring check before any parsing.
 func parseUsageWebSearchRequests(tokenJSON string) int {
-	if !strings.Contains(tokenJSON, usageServerToolUseKey) {
-		return 0
-	}
-	serverToolUse, ok := usageObjectRawValue(tokenJSON, usageServerToolUseKey)
-	if !ok {
-		return 0
-	}
-	requests, ok := usageObjectInt(serverToolUse, usageWebSearchRequestsKey)
-	if !ok || requests < 0 {
-		return 0
-	}
-	return requests
-}
-
-// usageObjectRawValue returns the raw JSON text of want's value in a
-// top-level JSON object.
-func usageObjectRawValue(
-	tokenJSON, want string,
-) (string, bool) {
-	i := skipJSONSpace(tokenJSON, 0)
-	if i >= len(tokenJSON) || tokenJSON[i] != '{' {
-		return "", false
-	}
-	i++
-	for i < len(tokenJSON) {
-		i = skipJSONSpace(tokenJSON, i)
-		if i >= len(tokenJSON) || tokenJSON[i] == '}' {
-			return "", false
-		}
-		if tokenJSON[i] == ',' {
-			i++
-			continue
-		}
-		if tokenJSON[i] != '"' {
-			return "", false
-		}
-		key, next, ok := parseJSONString(tokenJSON, i)
-		if !ok {
-			return "", false
-		}
-		i = skipJSONSpace(tokenJSON, next)
-		if i >= len(tokenJSON) || tokenJSON[i] != ':' {
-			return "", false
-		}
-		i = skipJSONSpace(tokenJSON, i+1)
-		valueNext, ok := skipJSONValue(tokenJSON, i)
-		if !ok || valueNext <= i {
-			return "", false
-		}
-		if key == want {
-			return tokenJSON[i:valueNext], true
-		}
-		i = valueNext
-	}
-	return "", false
-}
-
-// usageObjectInt reads want's integer value out of a flat JSON object.
-func usageObjectInt(obj, want string) (int, bool) {
-	i := skipJSONSpace(obj, 0)
-	if i >= len(obj) || obj[i] != '{' {
-		return 0, false
-	}
-	i++
-	for i < len(obj) {
-		i = skipJSONSpace(obj, i)
-		if i >= len(obj) || obj[i] == '}' {
-			return 0, false
-		}
-		if obj[i] == ',' {
-			i++
-			continue
-		}
-		if obj[i] != '"' {
-			return 0, false
-		}
-		key, next, ok := parseJSONString(obj, i)
-		if !ok {
-			return 0, false
-		}
-		i = skipJSONSpace(obj, next)
-		if i >= len(obj) || obj[i] != ':' {
-			return 0, false
-		}
-		i = skipJSONSpace(obj, i+1)
-		if key == want {
-			value, _, ok := parseUsageTokenInt(obj, i)
-			return value, ok
-		}
-		valueNext, ok := skipJSONValue(obj, i)
-		if !ok || valueNext <= i {
-			return 0, false
-		}
-		i = valueNext
-	}
-	return 0, false
+	return int(usagefacts.ParseTokenUsage(tokenJSON).WebSearchRequests)
 }
 
 // usageRowWebSearchRequests returns how many billed Anthropic server-side
@@ -1663,208 +1484,6 @@ func dailyUsageRowWebSearchRequests(r dailyUsageScanRow) int {
 		return max(int(r.webSearchRequests.Int64), 0)
 	}
 	return usageRowWebSearchRequests(r.usageSource, r.tokenJSON)
-}
-
-func skipJSONSpace(tokenJSON string, i int) int {
-	for i < len(tokenJSON) && isJSONSpace(tokenJSON[i]) {
-		i++
-	}
-	return i
-}
-
-// parseJSONString reads the JSON string literal starting at tokenJSON[i]
-// and returns its decoded value and the index after the closing quote.
-// Literals without escapes or control characters, which is every usage key
-// and nearly every value, are returned as a substring so the hot per-row
-// scan does not allocate; anything else goes through encoding/json so the
-// result matches json.Unmarshal exactly.
-func parseJSONString(tokenJSON string, i int) (string, int, bool) {
-	if i >= len(tokenJSON) || tokenJSON[i] != '"' {
-		return "", i, false
-	}
-	plain := true
-	for j := i + 1; j < len(tokenJSON); j++ {
-		c := tokenJSON[j]
-		switch {
-		case c == '\\':
-			if j+1 >= len(tokenJSON) {
-				return "", len(tokenJSON), false
-			}
-			plain = false
-			j++
-		case c == '"':
-			if plain && utf8.ValidString(tokenJSON[i+1:j]) {
-				return tokenJSON[i+1 : j], j + 1, true
-			}
-			raw := tokenJSON[i : j+1]
-			var value string
-			err := json.Unmarshal([]byte(raw), &value)
-			if err != nil {
-				return "", j + 1, false
-			}
-			return value, j + 1, true
-		case c < 0x20:
-			plain = false
-		}
-	}
-	return "", len(tokenJSON), false
-}
-
-func parseUsageTokenInt(tokenJSON string, i int) (int, int, bool) {
-	if i >= len(tokenJSON) {
-		return 0, i, false
-	}
-	if tokenJSON[i] == '"' {
-		value, next, ok := parseJSONString(tokenJSON, i)
-		if !ok {
-			return 0, next, false
-		}
-		parsed, ok := parseUsageTokenIntLiteral(strings.TrimSpace(value))
-		return parsed, next, ok
-	}
-	start := i
-	if tokenJSON[i] == '-' {
-		i++
-	}
-	digitStart := i
-	for i < len(tokenJSON) && tokenJSON[i] >= '0' && tokenJSON[i] <= '9' {
-		i++
-	}
-	if i == digitStart {
-		next, ok := skipJSONValue(tokenJSON, start)
-		if ok {
-			return 0, next, false
-		}
-		return 0, start, false
-	}
-	parsed, ok := parseUsageTokenIntLiteral(tokenJSON[start:i])
-	return parsed, i, ok
-}
-
-func parseUsageTokenIntLiteral(value string) (int, bool) {
-	parsed, err := strconv.ParseInt(value, 10, 0)
-	if err == nil {
-		return int(parsed), true
-	}
-	if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
-		if strings.HasPrefix(value, "-") {
-			return -int(^uint(0)>>1) - 1, true
-		}
-		return int(^uint(0) >> 1), true
-	}
-	return 0, false
-}
-
-func skipJSONValue(tokenJSON string, i int) (int, bool) {
-	i = skipJSONSpace(tokenJSON, i)
-	if i >= len(tokenJSON) {
-		return i, false
-	}
-	switch tokenJSON[i] {
-	case '"':
-		_, next, ok := parseJSONString(tokenJSON, i)
-		return next, ok
-	case '{', '[':
-		return skipJSONComposite(tokenJSON, i)
-	case 't':
-		if strings.HasPrefix(tokenJSON[i:], "true") {
-			return i + len("true"), true
-		}
-	case 'f':
-		if strings.HasPrefix(tokenJSON[i:], "false") {
-			return i + len("false"), true
-		}
-	case 'n':
-		if strings.HasPrefix(tokenJSON[i:], "null") {
-			return i + len("null"), true
-		}
-	default:
-		return skipJSONNumber(tokenJSON, i)
-	}
-	return i, false
-}
-
-func skipJSONComposite(tokenJSON string, i int) (int, bool) {
-	var stack []byte
-	switch tokenJSON[i] {
-	case '{':
-		stack = append(stack, '}')
-	case '[':
-		stack = append(stack, ']')
-	default:
-		return i, false
-	}
-	i++
-	for i < len(tokenJSON) {
-		switch tokenJSON[i] {
-		case '"':
-			_, next, ok := parseJSONString(tokenJSON, i)
-			if !ok {
-				return next, false
-			}
-			i = next
-		case '{':
-			stack = append(stack, '}')
-			i++
-		case '[':
-			stack = append(stack, ']')
-			i++
-		case '}', ']':
-			if len(stack) == 0 || tokenJSON[i] != stack[len(stack)-1] {
-				return i + 1, false
-			}
-			stack = stack[:len(stack)-1]
-			i++
-			if len(stack) == 0 {
-				return i, true
-			}
-		default:
-			i++
-		}
-	}
-	return len(tokenJSON), false
-}
-
-func skipJSONNumber(tokenJSON string, i int) (int, bool) {
-	start := i
-	if tokenJSON[i] == '-' {
-		i++
-	}
-	digitStart := i
-	for i < len(tokenJSON) && tokenJSON[i] >= '0' && tokenJSON[i] <= '9' {
-		i++
-	}
-	if i == digitStart {
-		return start, false
-	}
-	if i < len(tokenJSON) && tokenJSON[i] == '.' {
-		i++
-		fracStart := i
-		for i < len(tokenJSON) && tokenJSON[i] >= '0' && tokenJSON[i] <= '9' {
-			i++
-		}
-		if i == fracStart {
-			return start, false
-		}
-	}
-	if i < len(tokenJSON) && (tokenJSON[i] == 'e' || tokenJSON[i] == 'E') {
-		i++
-		if i < len(tokenJSON) && (tokenJSON[i] == '+' || tokenJSON[i] == '-') {
-			i++
-		}
-		expStart := i
-		for i < len(tokenJSON) && tokenJSON[i] >= '0' && tokenJSON[i] <= '9' {
-			i++
-		}
-		if i == expStart {
-			return start, false
-		}
-	}
-	return i, true
-}
-
-func isJSONSpace(b byte) bool {
-	return b == ' ' || b == '\n' || b == '\r' || b == '\t'
 }
 
 func clampedUsageRowTokens(
@@ -1940,91 +1559,74 @@ func dailyUsageAmounts(
 	cost, savings money.Money,
 	err error,
 ) {
-	reasoningTok := 0
-	inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok =
-		dailyUsageRowTokens(r)
-
-	pricedModel, lookup := pricing.Resolve(
-		r.model, usageLookupModel(r.model, r.ts))
-	rates := lookup.Rates
-	requestScoped := usageRowIsRequestScoped(r.usageSource, r.messageOrdinal)
-	if r.cost.Valid && r.costSource != CopilotReportedCostSource {
-		cost = money.Money{Microdollars: r.cost.Int64}
-		pricing.RecordResolvedReported(r.model, pricedModel, lookup)
+	fact, _ := dailyUsageFact(r)
+	if r.webSearchRequests.Valid {
+		fact.WebSearchRequests = int64(max(int(r.webSearchRequests.Int64), 0))
+	}
+	inputTok = int(fact.InputTokens)
+	outputTok = int(fact.OutputTokens)
+	cacheCrTok = int(fact.CacheCreationTokens)
+	cacheRdTok = int(fact.CacheReadTokens)
+	priced, err := priceUsageFact(usagePriceInput{
+		Fact: fact, Timestamp: r.ts, ReportedModel: r.model,
+	}, pricing)
+	if err != nil {
+		return 0, 0, 0, 0, money.Money{}, money.Money{}, err
+	}
+	_, lookup := pricing.Resolve(r.model, usageLookupModel(r.model, r.ts))
+	if priced.Reported > 0 {
+		pricing.RecordResolvedReported(r.model, priced.PricedModel, lookup)
 	} else {
-		cost, err = rates.CostForTokensScoped(
-			requestScoped,
-			inputTok, outputTok, reasoningTok, cacheCrTok, cacheRdTok)
-		if err != nil {
-			return 0, 0, 0, 0, money.Money{}, money.Money{},
-				fmt.Errorf("pricing usage row for model %q: %w", r.model, err)
-		}
-		// Anthropic bills server-side web search per request on top of
-		// tokens; see sessionRowCost for why a reported cost skips it.
-		cost, err = export.AddWebSearchFee(
-			cost, dailyUsageRowWebSearchRequests(r))
-		if err != nil {
-			return 0, 0, 0, 0, money.Money{}, money.Money{},
-				fmt.Errorf("pricing usage row for model %q: %w", r.model, err)
-		}
 		recordComputedUsagePricing(
-			pricing,
-			r.model,
-			pricedModel,
-			lookup,
-			requestScoped,
-			inputTok,
-			cacheCrTok,
-			cacheRdTok,
+			pricing, r.model, priced.PricedModel, lookup, fact.RequestScoped,
+			inputTok, cacheCrTok, cacheRdTok,
 		)
 	}
-
-	selectedRates := rates
-	if requestScoped {
-		selectedRates = rates.RatesForTokens(inputTok, cacheCrTok, cacheRdTok)
-	}
-	readRate, err := money.Sub(
-		selectedRates.InputPerMTok,
-		selectedRates.CacheReadPerMTok,
-	)
-	if err != nil {
-		return 0, 0, 0, 0, money.Money{}, money.Money{},
-			fmt.Errorf("deriving cache read rate for model %q: %w", r.model, err)
-	}
-	creationRate, err := money.Sub(
-		selectedRates.InputPerMTok,
-		selectedRates.CacheWritePerMTok,
-	)
-	if err != nil {
-		return 0, 0, 0, 0, money.Money{}, money.Money{},
-			fmt.Errorf("deriving cache creation rate for model %q: %w", r.model, err)
-	}
-	savings, err = money.SignedCostPerMillion([]money.RatedTokens{
-		{Tokens: int64(cacheRdTok), Rate: readRate},
-		{Tokens: int64(cacheCrTok), Rate: creationRate},
-	})
-	if err != nil {
-		return 0, 0, 0, 0, money.Money{}, money.Money{},
-			fmt.Errorf("pricing cache savings for model %q: %w", r.model, err)
-	}
+	cost = priced.Cost
+	savings = priced.Savings
 	return
 }
 
 func dailyUsageRowTokens(
 	r dailyUsageScanRow,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok int) {
-	reasoningTok = r.reasoningTokens
+	fact, _ := dailyUsageFact(r)
+	return int(fact.InputTokens), int(fact.OutputTokens),
+		int(fact.CacheCreationTokens), int(fact.CacheReadTokens),
+		int(fact.ReasoningTokens)
+}
+
+func dailyUsageFact(r dailyUsageScanRow) (usagefacts.Fact, bool) {
 	if r.usageSource == "message" {
-		inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok =
-			clampedUsageTokenCountersWithReasoning(r.tokenJSON)
-	} else {
-		inputTok, outputTok, cacheCrTok, cacheRdTok =
-			usageEventRowTokens(
-				r.usageSource,
-				r.inputTokens, r.outputTokens,
-				r.cacheCreationInputTokens, r.cacheReadInputTokens)
+		return usagefacts.FromMessage(usagefacts.MessageInput{
+			Ordinal: int(r.messageOrdinal.Int64), Role: "assistant",
+			Timestamp: r.ts, Model: r.model, TokenUsage: r.tokenJSON,
+			ClaudeMessageID: r.claudeMessageID,
+			ClaudeRequestID: r.claudeRequestID,
+			SourceUUID:      r.sourceUUID,
+		})
 	}
-	return
+	var ordinal *int
+	if r.messageOrdinal.Valid {
+		value := int(r.messageOrdinal.Int64)
+		ordinal = &value
+	}
+	var reportedCost *int64
+	if r.cost.Valid {
+		value := r.cost.Int64
+		reportedCost = &value
+	}
+	return usagefacts.FromEvent(usagefacts.EventInput{
+		MessageOrdinal: ordinal, Source: r.usageSource,
+		Timestamp: r.ts, Model: r.model,
+		CostSource: r.costSource, DedupKey: r.usageDedupKey,
+		InputTokens:              int64(r.inputTokens),
+		OutputTokens:             int64(r.outputTokens),
+		ReasoningTokens:          int64(r.reasoningTokens),
+		CacheCreationTokens:      int64(r.cacheCreationInputTokens),
+		CacheReadTokens:          int64(r.cacheReadInputTokens),
+		ReportedCostMicrodollars: reportedCost,
+	})
 }
 
 func usageRowIsRequestScoped(
@@ -2459,12 +2061,9 @@ func paddedUTCBound(ts string, hours int) string {
 	return t.Add(time.Duration(hours) * time.Hour).Format(time.RFC3339)
 }
 
-// GetDailyUsage returns token usage and cost aggregated by day.
-// It scans messages with non-empty token_usage JSON blobs,
-// parses them in Go (faster than SQLite's json_extract per row),
-// joins against an in-memory pricing map, and buckets by
-// local date.
-func (db *DB) GetDailyUsage(
+// getDailyUsageLegacy is the wide-row test oracle for the facts-backed path.
+// Production callers enter through GetDailyUsage in usage_cache_daily.go.
+func (db *DB) getDailyUsageLegacy(
 	ctx context.Context, f UsageFilter,
 ) (DailyUsageResult, error) {
 	loc := f.location()
@@ -3124,10 +2723,8 @@ func SortAndLimitTopSessions(
 	return result
 }
 
-// GetTopSessionsByCost returns sessions ranked by total cost, or by total
-// tokens when f.TopSessionsSort is "tokens",
-// over the filter range. Default limit 20, max 100.
-func (db *DB) GetTopSessionsByCost(
+// getTopSessionsByCostLegacy is the wide-row test oracle for the facts path.
+func (db *DB) getTopSessionsByCostLegacy(
 	ctx context.Context, f UsageFilter, limit int,
 ) ([]TopSessionEntry, error) {
 	pricing, err := db.loadPricingMap(ctx)
@@ -3474,8 +3071,8 @@ func sessionUsageBreakdownLabel(r usageScanRow) string {
 		nullInt64Pointer(r.messageOrdinal), r.usageSource)
 }
 
-// GetSessionUsage returns one session's token totals and cost
-// estimate. It starts from GetSession (so metadata and session-level
+// getSessionUsageLegacy is the wide-row test oracle. It starts from GetSession
+// (so metadata and session-level
 // token aggregates are reported even when there are no per-message
 // usage rows), then aggregates cost over the session's own usage
 // rows. Dedup is intra-session only; this reports the session's own
@@ -3484,7 +3081,7 @@ func sessionUsageBreakdownLabel(r usageScanRow) string {
 // the session does not exist. BreakdownCount is always populated;
 // per-row Breakdown entries are built only when includeBreakdown is
 // true so callers that need just the totals avoid the row payload.
-func (db *DB) GetSessionUsage(
+func (db *DB) getSessionUsageLegacy(
 	ctx context.Context, sessionID string, includeBreakdown bool,
 ) (*SessionUsage, error) {
 	sess, err := db.GetSession(ctx, sessionID)
@@ -3695,15 +3292,15 @@ func NewUsageSessionCounts(
 	return out
 }
 
-// GetUsageSessionCounts returns distinct session counts grouped
-// by project and agent. Sessions spanning multiple days count
+// getUsageSessionCountsLegacy is the wide-row test oracle. Sessions spanning
+// multiple days count
 // once. Soft-deleted sessions are excluded via
 // usageMessageEligibility.
 //
 // Like GetDailyUsage and GetTopSessionsByCost, this query pads
 // the UTC bounds by +/-14h and applies a post-query localDate
 // filter so timezone-boundary messages are counted correctly.
-func (db *DB) GetUsageSessionCounts(
+func (db *DB) getUsageSessionCountsLegacy(
 	ctx context.Context, f UsageFilter,
 ) (UsageSessionCounts, error) {
 	query, args := topSessionsUsageRowQuery(f)
@@ -3792,14 +3389,15 @@ func (db *DB) GetUsageSessionCounts(
 	return out, nil
 }
 
-// GetUsageMatchingSessionCount counts sessions that match the usage filter
+// getUsageMatchingSessionCountLegacy is the wide-row test oracle for sessions
+// that match the usage filter
 // even when they have no token-bearing usage rows. Bounded ranges are
 // resolved against the timestamps of the sessions' messages/usage_events
 // rows (falling back to s.started_at for rows with no timestamp of their
 // own), the same shape usageRowsSQLForBounds uses, so a session whose
 // started_at/ended_at fall outside the window but whose message activity
 // falls inside it is still counted.
-func (db *DB) GetUsageMatchingSessionCount(
+func (db *DB) getUsageMatchingSessionCountLegacy(
 	ctx context.Context, f UsageFilter,
 ) (int, error) {
 	bounds := usageBoundsForFilter(f)

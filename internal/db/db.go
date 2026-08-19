@@ -610,12 +610,18 @@ END;
 // concurrent HTTP handler goroutines can safely read while
 // Reopen/CloseConnections swap the underlying *sql.DB.
 type DB struct {
-	path    string
-	writer  atomic.Pointer[sql.DB]
-	reader  atomic.Pointer[sql.DB]
-	mu      sync.Mutex // serializes writes
-	connMu  sync.RWMutex
-	retired []*sql.DB // old pools kept open for in-flight reads
+	path                 string
+	writer               atomic.Pointer[sql.DB]
+	reader               atomic.Pointer[sql.DB]
+	usageCache           *usageCacheManager
+	usageBackfillMu      sync.Mutex
+	usageBackfillCancel  context.CancelFunc
+	usageBackfillDone    chan struct{}
+	usageBackfillErr     error
+	usageBackfillStarted func()
+	mu                   sync.Mutex // serializes writes
+	connMu               sync.RWMutex
+	retired              []*sql.DB // old pools kept open for in-flight reads
 	// undrainedPools holds closed pools whose connections had not drained
 	// when CloseWriter or CloseConnections gave up. They must drain before
 	// a later close reports success, or write ownership could be released
@@ -724,6 +730,12 @@ func (r *readerHandle) BeginTx(
 	r.owner.connMu.RLock()
 	defer r.owner.connMu.RUnlock()
 	return r.current().BeginTx(ctx, opts)
+}
+
+func (r *readerHandle) Conn(ctx context.Context) (*sql.Conn, error) {
+	r.owner.connMu.RLock()
+	defer r.owner.connMu.RUnlock()
+	return r.current().Conn(ctx)
 }
 
 func (w *writerHandle) current() (*sql.DB, error) {
@@ -1444,7 +1456,11 @@ func OpenReadOnly(path string) (*DB, error) {
 		return nil, err
 	}
 
-	db := &DB{path: path, readOnly: true}
+	db := &DB{
+		path: path, readOnly: true,
+		usageCache: newUsageCacheManager(path),
+	}
+	db.usageCache.attachArchive(db)
 	db.reader.Store(reader)
 	db.cursorSecret = make([]byte, 32)
 	if _, err := rand.Read(db.cursorSecret); err != nil {
@@ -1590,9 +1606,13 @@ func tableColumns(
 type SchemaUpgradeRequiredError struct {
 	Table  string
 	Column string
+	Index  string
 }
 
 func (e *SchemaUpgradeRequiredError) Error() string {
+	if e.Index != "" {
+		return "opening read-only database: schema missing index " + e.Index
+	}
 	return fmt.Sprintf(
 		"opening read-only database: schema missing %s.%s",
 		e.Table, e.Column,
@@ -1628,6 +1648,19 @@ func checkReadOnlySchemaCompatibility(conn *sql.DB) error {
 					Column: column,
 				}
 			}
+		}
+	}
+	for _, index := range []string{
+		"idx_messages_usage_session_covering",
+		"idx_messages_activity_timestamp",
+	} {
+		var present bool
+		if err := conn.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master
+			WHERE type = 'index' AND name = ?)`, index).Scan(&present); err != nil {
+			return fmt.Errorf("checking read-only index %s: %w", index, err)
+		}
+		if !present {
+			return &SchemaUpgradeRequiredError{Index: index}
 		}
 	}
 	return nil
@@ -3071,12 +3104,6 @@ func (db *DB) createPartialIndexesLocked(w *writerHandle) error {
 		 ON messages(session_id) WHERE is_sidechain = 1`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_source_uuid
 		 ON messages(source_uuid) WHERE source_uuid != ''`,
-		`CREATE INDEX IF NOT EXISTS idx_messages_usage_covering
-		 ON messages(timestamp, session_id, ordinal, model,
-		             claude_message_id, claude_request_id, token_usage)
-		 WHERE token_usage != ''
-		   AND model != ''
-		   AND model != '<synthetic>'`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_claude_snapshot
 		 ON messages(claude_message_id, claude_request_id,
 		             timestamp, session_id, ordinal)
@@ -3092,6 +3119,9 @@ func (db *DB) createPartialIndexesLocked(w *writerHandle) error {
 		if _, err := w.Exec(ddl); err != nil {
 			return fmt.Errorf("creating index: %w", err)
 		}
+	}
+	if err := ensureUsageCoveringIndexLocked(w); err != nil {
+		return err
 	}
 	var sourceIndexColumns sql.NullString
 	if err := w.QueryRow(`
@@ -3158,6 +3188,56 @@ func (db *DB) createPartialIndexesLocked(w *writerHandle) error {
 		 ON insights(type, date_from, date_to, project)`,
 	); err != nil {
 		return fmt.Errorf("recreating idx_insights_lookup: %w", err)
+	}
+	return nil
+}
+
+var usageCoveringIndexColumns = []string{
+	"timestamp", "session_id", "ordinal", "role", "model",
+	"claude_message_id", "claude_request_id", "token_usage", "source_uuid",
+}
+
+func ensureUsageCoveringIndexLocked(w *writerHandle) error {
+	var columns sql.NullString
+	if err := w.QueryRow(`
+		SELECT group_concat(name, ',')
+		FROM (
+			SELECT name
+			FROM pragma_index_info('idx_messages_usage_covering')
+			ORDER BY seqno
+		)`).Scan(&columns); err != nil {
+		return fmt.Errorf("probing usage covering index: %w", err)
+	}
+	if columns.String != strings.Join(usageCoveringIndexColumns, ",") {
+		if _, err := w.Exec(
+			`DROP INDEX IF EXISTS idx_messages_usage_covering`,
+		); err != nil {
+			return fmt.Errorf("dropping stale usage covering index: %w", err)
+		}
+		if _, err := w.Exec(`
+			CREATE INDEX IF NOT EXISTS idx_messages_usage_covering
+			ON messages(timestamp, session_id, ordinal, role, model,
+			            claude_message_id, claude_request_id, token_usage, source_uuid)
+			WHERE token_usage != ''
+			  AND model != ''
+			  AND model != '<synthetic>'`); err != nil {
+			return fmt.Errorf("creating usage covering index: %w", err)
+		}
+	}
+	if _, err := w.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_messages_usage_session_covering
+		ON messages(session_id, ordinal, timestamp, role, model,
+		            claude_message_id, claude_request_id, token_usage, source_uuid)
+		WHERE token_usage != ''
+		  AND model != ''
+		  AND model != '<synthetic>'`); err != nil {
+		return fmt.Errorf("creating session usage covering index: %w", err)
+	}
+	if _, err := w.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_messages_activity_timestamp
+		ON messages(timestamp, session_id, ordinal, model)
+		WHERE role = 'assistant' AND model != '<synthetic>'`); err != nil {
+		return fmt.Errorf("creating usage activity index: %w", err)
 	}
 	return nil
 }
@@ -3758,7 +3838,8 @@ func openAndInit(path string, schemaRepairNeeded bool) (*DB, error) {
 	}
 	configureReaderPool(reader)
 
-	db := &DB{path: path}
+	db := &DB{path: path, usageCache: newUsageCacheManager(path)}
+	db.usageCache.attachArchive(db)
 	db.writer.Store(writer)
 	db.reader.Store(reader)
 
@@ -4138,6 +4219,11 @@ func (db *DB) init() error {
 // error, and the undrained pools are retained so a retry cannot succeed
 // before they actually drain.
 func (db *DB) Close() error {
+	db.StopUsageCacheBackfill()
+	var cacheErr error
+	if db.usageCache != nil {
+		cacheErr = db.usageCache.Close()
+	}
 	db.stopWALCheckpointLoop()
 	db.mu.Lock()
 	db.connMu.Lock()
@@ -4153,7 +4239,7 @@ func (db *DB) Close() error {
 	// Close the writer last: SQLite checkpoints and removes the WAL when
 	// the final connection closes, and the reader pool is mode=ro so its
 	// close cannot perform that checkpoint.
-	var errs []error
+	errs := []error{cacheErr}
 	closed := make([]*sql.DB, 0, len(retired)+len(undrained)+2)
 	for _, p := range retired {
 		errs = append(errs, p.Close())
@@ -4212,6 +4298,7 @@ func (db *DB) CloseConnections() error {
 	if db.readOnly {
 		return ErrReadOnly
 	}
+	db.StopUsageCacheBackfill()
 	db.stopWALCheckpointLoop()
 	// db.mu stays held through the drain: a concurrent Reopen or
 	// ReopenWriter would open fresh handles on the same path, letting this
@@ -4343,13 +4430,18 @@ func (db *DB) Reopen() error {
 	if db.readOnly {
 		return ErrReadOnly
 	}
+	db.StopUsageCacheBackfill()
 	db.mu.Lock()
-	defer db.mu.Unlock()
 	if err := db.reopenLocked(); err != nil {
+		db.mu.Unlock()
 		return err
 	}
 	db.startWALCheckpointLoop()
-	return nil
+	db.mu.Unlock()
+	// Reopen can follow a full archive replacement. The next snapshot derives
+	// the matching generation from database_id; existing generation handles
+	// stay alive so concurrent readers are never closed underneath a query.
+	return db.StartUsageCacheBackfill(context.Background())
 }
 
 // reopenLocked performs the reopen while db.mu is already

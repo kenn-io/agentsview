@@ -20,6 +20,7 @@ contracts are documented in
 | Bulk ingest throughput         | Full resync ran per-row inserts and rebuilt FTS incrementally; 26.7k sessions took 1m17s.                                                                                                               | #411                                           |
 | Event storms                   | One SSE emit per watcher flush drove ~1/s dashboard refetch; SQLite WAL sidecar events fanned out to every session in a shared DB.                                                                      | #367, #956                                     |
 | Per-row query shape            | `GetDailyUsage` ran 1.2M `json_extract` calls per scan and had no date pushdown.                                                                                                                        | #309                                           |
+| Usage archive scaling          | Normalized facts removed JSON parsing but warm requests still ranked and priced hundreds of thousands of rows instead of reading daily aggregates.                                                      | Usage aggregate cache                          |
 
 ## Two layers of gates
 
@@ -94,7 +95,10 @@ with `cmd/benchgate`:
   rebuild through a contributor engine.
 - `BenchmarkSearchContentSubstringPage` / `BenchmarkSearchContentFTSPage` — one
   page of content search through the substring and FTS paths.
-- `BenchmarkGetDailyUsage` — usage aggregation over 100k message rows.
+- `BenchmarkGetDailyUsage` — usage aggregation over 100k message rows. The usage
+  aggregate implementation keeps this benchmark name so the gate compares it
+  with the merge-base request path. Its warm cases must scan no normalized
+  facts and scale with aggregate plus exceptional rows.
 - `BenchmarkSQLiteActivityReportCandidateSource100K`,
   `BenchmarkSQLiteActivityReportCandidateSourceLongSession`, and
   `BenchmarkSQLiteActivityReportArtifacts100K` — activity-report candidate
@@ -174,6 +178,26 @@ go run ./cmd/benchgate -old old.txt -new new.txt
 
 Cross-backend query benchmarks live separately in `internal/backendbench`
 (`make bench-backends`, requires Docker) and are not part of the PR gate.
+
+## Usage aggregate release gates
+
+CI uses fixture-based work invariants and benchmark ratios. Machine-specific
+targets are manual release gates on the protected production-scale clone. Run
+them after cache statistics maintenance so planner state does not exaggerate the
+aggregate tier's benefit.
+
+- Complete warm 30-day CLI result: at most two seconds.
+- Warm in-process 30-day result: target 1.5 seconds.
+- Report warm 1-day, 7-day, 30-day, and all-history results.
+- Report cold timezone/component construction and steady-state rebuild
+  throughput separately.
+- Report exception group and row counts plus exception-resolution time for
+  30-day and all-history reads.
+- Newest-first facts plus process-local rollups: complete within 30 seconds.
+- Full facts plus process-local rollup coverage: complete within five minutes.
+
+The detailed architecture and oracle requirements are in
+[Usage Aggregate Cache](usage-aggregate-cache.md).
 
 `BenchmarkCodexIncrementalCursor` lives in `internal/parser` and compares cold
 prefix reconstruction with an exact warm cursor. It is diagnostic rather than

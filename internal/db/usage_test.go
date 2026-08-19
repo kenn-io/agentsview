@@ -1028,6 +1028,15 @@ func TestGetDailyUsageSkipsCursorUsageEventsForExcludeOneShot(t *testing.T) {
 	assert.Empty(t, result.Daily, "daily entries should be empty")
 	assert.Zero(t, result.Totals.InputTokens, "InputTokens")
 	assert.Zero(t, result.SessionCounts.Total, "cursor rows should not count as sessions")
+	databaseID, err := d.GetDatabaseID(ctx)
+	require.NoError(t, err)
+	cache, err := d.usageCache.Generation(ctx, databaseID)
+	require.NoError(t, err)
+	var cursorFacts int
+	require.NoError(t, cache.db.QueryRow(
+		`SELECT COUNT(*) FROM cursor_usage_facts`).Scan(&cursorFacts))
+	assert.Zero(t, cursorFacts,
+		"a filtered request must not copy unrelated Cursor history")
 }
 
 func TestGetDailyUsageSkipsCursorUsageEventsForTerminationFilter(t *testing.T) {
@@ -1480,7 +1489,7 @@ func TestParseUsageTokenCounters(t *testing.T) {
 		`{"input_tokens":"-5","cache_read_input_tokens":"100",` +
 			`"output_tokens":"42"}`,
 	)
-	assert.Equal(t, -5, in)
+	assert.Zero(t, in)
 	assert.Equal(t, 42, out)
 	assert.Zero(t, cacheCreate)
 	assert.Equal(t, 100, cacheRead)
@@ -1502,49 +1511,6 @@ func TestParseUsageTokenCounters(t *testing.T) {
 	assert.Equal(t, 42, out)
 	assert.Zero(t, cacheCreate)
 	assert.Zero(t, cacheRead)
-}
-
-// TestParseJSONStringMatchesEncodingJSON pins the string scanner to
-// json.Unmarshal: the escape-free fast path and the encoding/json fallback
-// must decode identically and reject the same input.
-func TestParseJSONStringMatchesEncodingJSON(t *testing.T) {
-	cases := []struct {
-		name  string
-		input string
-		want  string
-		next  int
-		ok    bool
-	}{
-		{"plain", `"input_tokens":1`, "input_tokens", 14, true},
-		{"empty", `""`, "", 2, true},
-		{"escaped quote", `"a\"b"`, `a"b`, 6, true},
-		{"escaped slash", `"https:\/\/x"`, "https://x", 13, true},
-		{"unicode escape", `"\u00e9"`, "é", 8, true},
-		{"raw utf8", `"é"`, "é", 4, true},
-		{"trailing escape", `"abc\`, "", 5, false},
-		{"unterminated", `"abc`, "", 4, false},
-		{"not a string", `123`, "", 0, false},
-		{"raw control char", "\"a\tb\"", "", 5, false},
-		{"invalid utf8", "\"a\xffb\"", "a\ufffdb", 5, true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, next, ok := parseJSONString(tc.input, 0)
-			assert.Equal(t, tc.ok, ok, "ok")
-			assert.Equal(t, tc.next, next, "next")
-			assert.Equal(t, tc.want, got, "value")
-			var want string
-			if !tc.ok {
-				require.Error(t,
-					json.Unmarshal([]byte(tc.input), &want),
-					"json.Unmarshal parity")
-				return
-			}
-			require.NoError(t, json.Unmarshal(
-				[]byte(tc.input[:tc.next]), &want))
-			assert.Equal(t, want, got, "json.Unmarshal parity")
-		})
-	}
 }
 
 func TestUsageAggregationClampsMessageTokenJSON(t *testing.T) {
@@ -4083,27 +4049,240 @@ func BenchmarkGetDailyUsageSnapshotWindows(b *testing.B) {
 	}
 }
 
-// BenchmarkGetDailyUsageSnapshotAutomaticIndexOff keeps the survivor query
-// fast even when SQLite cannot create an automatic join index.
-func BenchmarkGetDailyUsageSnapshotAutomaticIndexOff(b *testing.B) {
-	d := testDB(b)
-	seedDailyUsageSnapshotBenchmark(b, d)
-	reader := d.rawReader()
-	reader.SetMaxOpenConns(1)
-	_, err := reader.ExecContext(b.Context(), "PRAGMA automatic_index = OFF")
-	require.NoError(b, err)
-	var automaticIndex int
-	require.NoError(b,
-		reader.QueryRowContext(b.Context(), "PRAGMA automatic_index").
-			Scan(&automaticIndex))
-	require.Zero(b, automaticIndex)
-
-	benchmarkDailyUsageSnapshotWindow(
-		b, d, "2024-07-01", benchmarkDailyUsageExpectation{
-			days: 30, input: 57_600_000, output: 23_040_000,
-			cacheCreation: 14_400_000, cacheRead: 115_200_000,
+func BenchmarkUsageRollup(b *testing.B) {
+	database := testDB(b)
+	seedDailyUsageSnapshotBenchmark(b, database)
+	seedLongLivedUsageBenchmark(b, database)
+	ctx := context.Background()
+	windows := []struct {
+		name         string
+		filter       UsageFilter
+		wantSessions int
+		want         benchmarkDailyUsageExpectation
+	}{
+		{
+			name: "1d", filter: usageFactsBenchmarkFilter("2024-07-30"),
+			wantSessions: 13,
+			want: benchmarkDailyUsageExpectation{
+				days: 1, input: 1_920_500, output: 768_250,
+				cacheCreation: 480_000, cacheRead: 3_840_000,
+			},
 		},
-	)
+		{
+			name: "7d", filter: usageFactsBenchmarkFilter("2024-07-24"),
+			wantSessions: 69,
+			want: benchmarkDailyUsageExpectation{
+				days: 7, input: 13_443_500, output: 5_377_750,
+				cacheCreation: 3_360_000, cacheRead: 26_880_000,
+			},
+		},
+		{
+			name: "30d", filter: usageFactsBenchmarkFilter("2024-07-01"),
+			wantSessions: 253,
+			want: benchmarkDailyUsageExpectation{
+				days: 30, input: 57_615_000, output: 23_047_500,
+				cacheCreation: 14_400_000, cacheRead: 115_200_000,
+			},
+		},
+		{
+			name:         "all",
+			filter:       UsageFilter{Timezone: "UTC", SkipSessionCounts: true},
+			wantSessions: 505,
+			want: benchmarkDailyUsageExpectation{
+				days: 366, input: 120_183_000, output: 48_091_500,
+				cacheCreation: 30_000_000, cacheRead: 240_000_000,
+			},
+		},
+	}
+	allSnapshot, err := database.captureUsageQuery(
+		ctx, windows[len(windows)-1].filter, usageQueryKindToken)
+	require.NoError(b, err, "capture all-history snapshot")
+	require.Len(b, allSnapshot.Sessions, 505)
+	cache, err := database.usageCache.Generation(ctx, allSnapshot.DatabaseID)
+	require.NoError(b, err)
+
+	for _, window := range windows {
+		b.Run("candidate/"+window.name, func(b *testing.B) {
+			captured, captureErr := database.captureUsageQuery(
+				ctx, window.filter, usageQueryKindToken)
+			require.NoError(b, captureErr)
+			require.Len(b, captured.Sessions, window.wantSessions)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				captured, captureErr = database.captureUsageQuery(
+					ctx, window.filter, usageQueryKindToken)
+				if captureErr != nil {
+					b.Fatal(captureErr)
+				}
+				if len(captured.Sessions) != window.wantSessions {
+					b.Fatalf("candidate sessions = %d, want %d",
+						len(captured.Sessions), window.wantSessions)
+				}
+			}
+		})
+	}
+
+	coldCases := []struct {
+		name      string
+		filter    UsageFilter
+		want      benchmarkDailyUsageExpectation
+		wantFacts int
+	}{
+		{"30d", windows[2].filter, windows[2].want, 53_190},
+		{
+			"long-lived-30d",
+			UsageFilter{
+				From: "2024-07-01", To: "2024-07-30", Timezone: "UTC",
+				Project: "long-lived", SkipSessionCounts: true,
+			},
+			benchmarkDailyUsageExpectation{
+				days: 30, input: 15_000, output: 7_500,
+			},
+			53_190,
+		},
+		{"all", windows[3].filter, windows[3].want, 105_150},
+	}
+	for _, cold := range coldCases {
+		b.Run("cold/"+cold.name, func(b *testing.B) {
+			clearUsageFactsBenchmarkCache(b, cache)
+			result, queryErr := database.GetDailyUsage(ctx, cold.filter)
+			require.NoError(b, queryErr)
+			requireDailyUsageBenchmarkResult(b, result, cold.want)
+			requireUsageFactsCount(b, cache, cold.wantFacts)
+			clearUsageFactsBenchmarkCache(b, cache)
+			b.ReportAllocs()
+			b.ReportMetric(float64(cold.wantFacts), "facts/op")
+			b.ResetTimer()
+			for range b.N {
+				b.StopTimer()
+				clearUsageFactsBenchmarkCache(b, cache)
+				b.StartTimer()
+				_, queryErr = database.GetDailyUsage(ctx, cold.filter)
+				if queryErr != nil {
+					b.Fatal(queryErr)
+				}
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(usageCacheDiskBytes(cache.path)), "cache-bytes")
+		})
+	}
+
+	_, err = database.GetDailyUsage(ctx, windows[3].filter)
+	require.NoError(b, err, "warm all facts")
+	for _, window := range windows {
+		b.Run("warm/"+window.name, func(b *testing.B) {
+			result, queryErr := database.GetDailyUsage(ctx, window.filter)
+			require.NoError(b, queryErr)
+			requireDailyUsageBenchmarkResult(b, result, window.want)
+			b.ReportAllocs()
+			b.ReportMetric(float64(usageCacheDiskBytes(cache.path)), "cache-bytes")
+			b.ResetTimer()
+			for range b.N {
+				if _, queryErr = database.GetDailyUsage(
+					ctx, window.filter); queryErr != nil {
+					b.Fatal(queryErr)
+				}
+			}
+		})
+	}
+
+	b.Run("fill-throughput", func(b *testing.B) {
+		clearUsageFactsBenchmarkCache(b, cache)
+		fills, fillErr := cache.fill.Ensure(
+			ctx, allSnapshot.Versions, allSnapshot.CursorHighWater)
+		require.NoError(b, fillErr)
+		require.Len(b, fills, 505)
+		requireUsageFactsCount(b, cache, 105_150)
+		clearUsageFactsBenchmarkCache(b, cache)
+		b.ReportAllocs()
+		b.ReportMetric(105_150, "facts/op")
+		b.ResetTimer()
+		for range b.N {
+			b.StopTimer()
+			clearUsageFactsBenchmarkCache(b, cache)
+			b.StartTimer()
+			if _, fillErr = cache.fill.Ensure(
+				ctx, allSnapshot.Versions, allSnapshot.CursorHighWater,
+			); fillErr != nil {
+				b.Fatal(fillErr)
+			}
+		}
+		b.StopTimer()
+		b.ReportMetric(
+			float64(105_150*b.N)/b.Elapsed().Seconds(), "facts/s")
+		b.ReportMetric(float64(usageCacheDiskBytes(cache.path)), "cache-bytes")
+	})
+
+	b.Run("relaxed-discovery", func(b *testing.B) {
+		filter := windows[2].filter
+		captured, captureErr := database.captureUsageQuery(
+			ctx, filter, usageQueryKindActivity)
+		require.NoError(b, captureErr)
+		require.Len(b, captured.Sessions, 253)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			captured, captureErr = database.captureUsageQuery(
+				ctx, filter, usageQueryKindActivity)
+			if captureErr != nil {
+				b.Fatal(captureErr)
+			}
+			if len(captured.Sessions) != 253 {
+				b.Fatalf("relaxed candidates = %d, want 253",
+					len(captured.Sessions))
+			}
+		}
+	})
+}
+
+func usageFactsBenchmarkFilter(from string) UsageFilter {
+	return UsageFilter{
+		From: from, To: "2024-07-30", Timezone: "UTC",
+		SkipSessionCounts: true,
+	}
+}
+
+func requireDailyUsageBenchmarkResult(
+	tb testing.TB, result DailyUsageResult, want benchmarkDailyUsageExpectation,
+) {
+	tb.Helper()
+	require.Len(tb, result.Daily, want.days)
+	assert.Equal(tb, want.input, result.Totals.InputTokens)
+	assert.Equal(tb, want.output, result.Totals.OutputTokens)
+	assert.Equal(tb, want.cacheCreation, result.Totals.CacheCreationTokens)
+	assert.Equal(tb, want.cacheRead, result.Totals.CacheReadTokens)
+	assert.Zero(tb, result.SessionCounts.Total)
+}
+
+func requireUsageFactsCount(tb testing.TB, cache *usageCache, want int) {
+	tb.Helper()
+	var got int
+	require.NoError(tb, cache.db.QueryRow(`SELECT COUNT(*) FROM usage_facts`).Scan(&got))
+	require.Equal(tb, want, got, "usage facts")
+}
+
+func usageCacheDiskBytes(path string) int64 {
+	var size int64
+	for _, candidate := range []string{path, path + "-wal"} {
+		if info, err := os.Stat(candidate); err == nil {
+			size += info.Size()
+		}
+	}
+	return size
+}
+
+func clearUsageFactsBenchmarkCache(tb testing.TB, cache *usageCache) {
+	tb.Helper()
+	_, err := cache.db.Exec(`
+		DELETE FROM usage_rollup_timezones;
+		DELETE FROM usage_cached_sessions;
+		DELETE FROM cursor_usage_facts;
+		UPDATE usage_cache_metadata SET value = '0'
+		WHERE key = 'cursor_high_water_mark';
+		UPDATE usage_cache_metadata SET value = '1'
+		WHERE key IN ('next_install_revision', 'next_rollup_install_revision')`)
+	require.NoError(tb, err)
 }
 
 type benchmarkDailyUsageExpectation struct {
@@ -4256,6 +4435,37 @@ func seedDailyUsageSnapshotBenchmark(tb testing.TB, d *DB) {
 	require.Equal(tb, 103_320, messageRows)
 	require.Equal(tb, 103_320, recordedMessages)
 	require.Equal(tb, 3_320, duplicateRequests)
+}
+
+// seedLongLivedUsageBenchmark adds sessions whose full-history extraction is
+// much larger than their 30-day query contribution. This guards the cold-fill
+// cost that activity-bound candidate discovery alone cannot predict.
+func seedLongLivedUsageBenchmark(tb testing.TB, database *DB) {
+	tb.Helper()
+	const (
+		sessionCount = 5
+		messageCount = 366
+	)
+	start, err := time.Parse(time.RFC3339, "2023-07-31T12:00:00Z")
+	require.NoError(tb, err)
+	usage := json.RawMessage(`{"input_tokens":100,"output_tokens":50}`)
+	for sessionIndex := range sessionCount {
+		sessionID := "bench-long-lived-" + strconv.Itoa(sessionIndex)
+		messages := make([]Message, messageCount)
+		for ordinal := range messageCount {
+			messages[ordinal] = Message{
+				SessionID: sessionID, Ordinal: ordinal, Role: "assistant",
+				Timestamp: start.AddDate(0, 0, ordinal).Format(time.RFC3339),
+				Model:     "gpt-5", TokenUsage: usage,
+			}
+		}
+		startedAt := start.Format(time.RFC3339)
+		require.NoError(tb, database.UpsertSession(Session{
+			ID: sessionID, Project: "long-lived", Machine: defaultMachine,
+			Agent: "codex", StartedAt: &startedAt, MessageCount: messageCount,
+		}))
+		require.NoError(tb, database.InsertMessages(messages))
+	}
 }
 
 func benchClaudeID(kind string, session, ordinal int) string {

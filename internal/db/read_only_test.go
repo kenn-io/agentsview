@@ -281,6 +281,19 @@ func TestOpenReadOnlyRejectsMissingMigratedColumn(t *testing.T) {
 	requireOpenReadOnlyFails(t, path, "schema missing sessions.deletion_cause")
 }
 
+func TestOpenReadOnlyRejectsMissingUsageCacheIndexes(t *testing.T) {
+	for _, index := range []string{
+		"idx_messages_usage_session_covering",
+		"idx_messages_activity_timestamp",
+	} {
+		t.Run(index, func(t *testing.T) {
+			path := createClosedTestDB(t, tempDBPath(t, "sessions.db"), nil)
+			execRawSQLite(t, path, "DROP INDEX "+index)
+			requireOpenReadOnlyFails(t, path, "schema missing index "+index)
+		})
+	}
+}
+
 func TestReadOnlySchemaCompatibilityRejectsMissingReadColumn(t *testing.T) {
 	tests := []struct {
 		name   string
