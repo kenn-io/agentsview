@@ -960,17 +960,44 @@ func TestGrokProviderFirstPromptKeepsSessionVisibleWithoutNumMessages(t *testing
 	assert.Equal(t, "Locate the Grok source", outcome.Results[0].Result.Messages[0].Content)
 }
 
+func TestGrokProviderPromptContextClassifiesNonInteractive(t *testing.T) {
+	root := t.TempDir()
+	summary := grokSummaryPath(root, "cwd-key", "sess-1")
+	writeGrokFixtureFile(t, summary, `{
+		"summary":"Inspect a function",
+		"firstPrompt":"Explain this function",
+		"createdAt":"2026-07-08T10:00:00Z"
+	}`)
+	writeGrokFixtureFile(
+		t,
+		filepath.Join(root, "cwd-key", "sess-1", "prompt_context.json"),
+		`{"is_non_interactive":true}`,
+	)
+
+	provider := newGrokTestProvider(t, root)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+
+	assert.Equal(t, "non-interactive", outcome.Results[0].Result.Session.SessionKind)
+}
+
 func TestGrokProviderFingerprintTracksParsedFiles(t *testing.T) {
 	root := t.TempDir()
 	summary := grokSummaryPath(root, "cwd-key", "sess-1")
 	signals := filepath.Join(root, "cwd-key", "sess-1", "signals.json")
 	updates := filepath.Join(root, "cwd-key", "sess-1", "updates.jsonl")
 	chat := filepath.Join(root, "cwd-key", "sess-1", "chat_history.jsonl")
+	promptContext := filepath.Join(root, "cwd-key", "sess-1", "prompt_context.json")
 	unrelated := filepath.Join(root, "cwd-key", "sess-1", "notes.txt")
 	writeGrokFixtureFile(t, summary, `{"summary":"Fingerprint","firstPrompt":"hello","createdAt":"2026-07-08T10:00:00Z"}`)
 	writeGrokFixtureFile(t, signals, `{"tokenUsage":{"totalOutputTokens":1}}`)
 	writeGrokFixtureFile(t, updates, "{}\n")
 	writeGrokFixtureFile(t, chat, "{}\n")
+	writeGrokFixtureFile(t, promptContext, `{"is_non_interactive":false}`)
 	writeGrokFixtureFile(t, unrelated, "ignored")
 
 	provider := newGrokTestProvider(t, root)
@@ -1003,10 +1030,15 @@ func TestGrokProviderFingerprintTracksParsedFiles(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEqual(t, afterChat.Hash, afterUpdates.Hash)
 
+	writeGrokFixtureFile(t, promptContext, `{"is_non_interactive":true}`)
+	afterPromptContext, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	assert.NotEqual(t, afterUpdates.Hash, afterPromptContext.Hash)
+
 	writeGrokFixtureFile(t, unrelated, "still ignored")
 	afterUnrelated, err := provider.Fingerprint(context.Background(), source)
 	require.NoError(t, err)
-	assert.Equal(t, afterUpdates.Hash, afterUnrelated.Hash)
+	assert.Equal(t, afterPromptContext.Hash, afterUnrelated.Hash)
 }
 
 func TestGrokProviderChangedPathTracksParsedFiles(t *testing.T) {
@@ -1015,7 +1047,12 @@ func TestGrokProviderChangedPathTracksParsedFiles(t *testing.T) {
 	writeGrokFixtureFile(t, summary, `{"summary":"Changed path","firstPrompt":"hello","createdAt":"2026-07-08T10:00:00Z"}`)
 	provider := newGrokTestProvider(t, root)
 
-	for _, name := range []string{"summary.json", "signals.json", "chat_history.jsonl"} {
+	for _, name := range []string{
+		"summary.json",
+		"signals.json",
+		"chat_history.jsonl",
+		"prompt_context.json",
+	} {
 		changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
 			Path: filepath.Join(root, "cwd-key", "sess-1", name),
 		})
@@ -1032,7 +1069,7 @@ func TestGrokProviderChangedPathTracksParsedFiles(t *testing.T) {
 	assert.Equal(t, filepath.Clean(summary), filepath.Clean(changed[0].FingerprintKey))
 }
 
-func TestGrokProviderWatchPlanIncludesUpdates(t *testing.T) {
+func TestGrokProviderWatchPlanIncludesParsedCompanions(t *testing.T) {
 	root := t.TempDir()
 	provider := newGrokTestProvider(t, root)
 
@@ -1040,7 +1077,13 @@ func TestGrokProviderWatchPlanIncludesUpdates(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.ElementsMatch(t,
-		[]string{"summary.json", "signals.json", "chat_history.jsonl", "updates.jsonl"},
+		[]string{
+			"summary.json",
+			"signals.json",
+			"chat_history.jsonl",
+			"updates.jsonl",
+			"prompt_context.json",
+		},
 		plan.Roots[0].IncludeGlobs,
 	)
 }

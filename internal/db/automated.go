@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // automatedPrefixes are first_message prefixes that identify
@@ -63,6 +65,13 @@ const userPatternMaxLen = 1024
 // AutomationEvidencePrefixBytes is the bounded prefix size used by backend
 // integrity audits. It is large enough to hold every accepted user pattern.
 const AutomationEvidencePrefixBytes = userPatternMaxLen
+
+// IsAutomatedSessionMetadata classifies durable provider-owned session
+// metadata that explicitly identifies an automated invocation.
+func IsAutomatedSessionMetadata(agent, sessionKind string) bool {
+	return agent == string(parser.AgentGrok) &&
+		sessionKind == parser.SessionKindNonInteractive
+}
 
 var (
 	userPatternsMu   sync.RWMutex

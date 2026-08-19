@@ -27,6 +27,8 @@ func auditAutomatedFull(
 	rows, err := w.Query(
 		`SELECT
 			s.id,
+			s.agent,
+			s.session_kind,
 			s.first_message,
 			s.user_message_count,
 			s.is_automated,
@@ -62,6 +64,8 @@ func auditAutomatedMatchingHash(
 	rows, err := w.Query(
 		`SELECT
 			s.id,
+			s.agent,
+			s.session_kind,
 			s.user_message_count,
 			s.is_automated,
 			substr(CAST(first_user.content AS BLOB), 1, ?)
@@ -102,6 +106,8 @@ func auditAutomatedMatchingHash(
 	for rows.Next() {
 		var (
 			id               string
+			agent            string
+			sessionKind      string
 			userMessageCount int
 			rowAutomated     bool
 			firstUser        boundedAutomationText
@@ -109,6 +115,8 @@ func auditAutomatedMatchingHash(
 		)
 		if err := rows.Scan(
 			&id,
+			&agent,
+			&sessionKind,
 			&userMessageCount,
 			&rowAutomated,
 			&firstUser.prefix,
@@ -120,6 +128,12 @@ func auditAutomatedMatchingHash(
 			return nil, nil, fmt.Errorf(
 				"scanning bounded automated audit candidate: %w", err,
 			)
+		}
+		if IsAutomatedSessionMetadata(agent, sessionKind) {
+			setIDs, clearIDs = appendAutomationFlagChange(
+				setIDs, clearIDs, id, rowAutomated, true,
+			)
+			continue
 		}
 
 		want, conclusive := patterns.verdictFromEvidence(
@@ -146,6 +160,8 @@ func auditAutomatedMatchingHash(
 		fullRows, err := w.Query(
 			`SELECT
 				s.id,
+				s.agent,
+				s.session_kind,
 				s.first_message,
 				s.user_message_count,
 				s.is_automated,
@@ -194,21 +210,25 @@ func scanFullAutomationCandidates(
 	for rows.Next() {
 		var (
 			id           string
+			agent        string
+			sessionKind  string
 			firstMessage sql.NullString
 			firstUser    sql.NullString
 			userCount    int
 			rowAutomated bool
 		)
 		if err := rows.Scan(
-			&id, &firstMessage, &userCount, &rowAutomated, &firstUser,
+			&id, &agent, &sessionKind,
+			&firstMessage, &userCount, &rowAutomated, &firstUser,
 		); err != nil {
 			return nil, nil, fmt.Errorf(
 				"scanning automated audit candidate: %w", err,
 			)
 		}
-		want := patterns.matchesTextCandidates(
-			userCount, firstUser, firstMessage,
-		)
+		want := IsAutomatedSessionMetadata(agent, sessionKind) ||
+			patterns.matchesTextCandidates(
+				userCount, firstUser, firstMessage,
+			)
 		setIDs, clearIDs = appendAutomationFlagChange(
 			setIDs, clearIDs, id, rowAutomated, want,
 		)

@@ -39,6 +39,10 @@ type grokSignalMetrics struct {
 	HasUserMessages   bool
 }
 
+type grokPromptContext struct {
+	IsNonInteractive bool `json:"is_non_interactive"`
+}
+
 func ParseGrokSummary(
 	path, projectHint, machine string,
 ) (ParseResult, error) {
@@ -63,6 +67,16 @@ func ParseGrokSummary(
 	signals, err := parseGrokSignals(filepath.Join(sessionDir, "signals.json"))
 	if err != nil {
 		return ParseResult{}, err
+	}
+	promptContext, err := parseGrokPromptContext(
+		filepath.Join(sessionDir, "prompt_context.json"),
+	)
+	if err != nil {
+		return ParseResult{}, err
+	}
+	sessionKind := ""
+	if promptContext.IsNonInteractive {
+		sessionKind = SessionKindNonInteractive
 	}
 
 	project, cwd := grokProjectAndCwd(summary, projectHint)
@@ -141,6 +155,7 @@ func ParseGrokSummary(
 			Project:            project,
 			Machine:            machine,
 			Agent:              AgentGrok,
+			SessionKind:        sessionKind,
 			ParentSessionID:    parentSessionID,
 			RelationshipType:   relationshipType,
 			Cwd:                cwd,
@@ -191,6 +206,21 @@ func ParseGrokSummary(
 		result.Session.HasTotalOutputTokens ||
 			result.Session.HasPeakContextTokens
 	return result, nil
+}
+
+func parseGrokPromptContext(path string) (grokPromptContext, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return grokPromptContext{}, nil
+	}
+	if err != nil {
+		return grokPromptContext{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	var context grokPromptContext
+	if err := json.Unmarshal(data, &context); err != nil {
+		return grokPromptContext{}, fmt.Errorf("decode %s: %w", path, err)
+	}
+	return context, nil
 }
 
 // Grok Build writes one usage payload per completed turn, and those

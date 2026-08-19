@@ -14446,9 +14446,10 @@ func applySessionMessageDerivedFields(
 	if !countsAuthoritative {
 		s.MessageCount, s.UserMessageCount = postFilterCounts(msgs)
 	}
-	s.IsAutomated = db.IsAutomatedTranscript(
-		s.UserMessageCount, msgs, s.FirstMessage,
-	)
+	s.IsAutomated = db.IsAutomatedSessionMetadata(s.Agent, s.SessionKind) ||
+		db.IsAutomatedTranscript(
+			s.UserMessageCount, msgs, s.FirstMessage,
+		)
 }
 
 // messageTokenTotals computes the message-derived session token

@@ -104,6 +104,43 @@ func TestBackfillIsAutomatedPGMatchingHashUsesBoundedEvidence(t *testing.T) {
 	}
 }
 
+func TestBackfillIsAutomatedPGPreservesDurableClassification(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanPGSchema(t, pgURL)
+	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+
+	local := testDB(t)
+	ps, err := New(
+		pgURL, "agentsview", local,
+		"automation-metadata-machine", true,
+		SyncOptions{},
+	)
+	require.NoError(t, err, "creating sync")
+	defer ps.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	require.NoError(t, ps.EnsureSchema(ctx), "ensure schema")
+
+	_, err = ps.DB().ExecContext(ctx,
+		`INSERT INTO sessions (
+			id, machine, project, agent, session_kind, first_message,
+			user_message_count, is_automated
+		 ) VALUES ($1, 'host', 'proj', 'grok', 'non-interactive', $2, 2, true)`,
+		"grok-headless", "Explain this function",
+	)
+	require.NoError(t, err, "insert durably classified session")
+
+	require.NoError(t, backfillIsAutomatedPG(ctx, ps.DB()), "backfill automation")
+
+	var got bool
+	require.NoError(t, ps.DB().QueryRowContext(ctx,
+		`SELECT is_automated FROM sessions WHERE id = $1`,
+		"grok-headless",
+	).Scan(&got), "query automation classification")
+	assert.True(t, got)
+}
+
 // TestPushSessionTrustsLocalIsAutomated verifies that
 // pushSession copies sess.IsAutomated verbatim instead of
 // re-running db.IsAutomatedSession on the first_message.

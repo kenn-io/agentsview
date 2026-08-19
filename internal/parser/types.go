@@ -1130,6 +1130,10 @@ const (
 	TranscriptFidelitySummary = "summary"
 )
 
+// SessionKindNonInteractive marks a provider session whose durable metadata
+// identifies a non-interactive invocation.
+const SessionKindNonInteractive = "non-interactive"
+
 // FileInfo holds file system metadata for a session source file.
 type FileInfo struct {
 	Path   string
@@ -1148,9 +1152,9 @@ type ParsedSession struct {
 	Agent      AgentType
 	AgentLabel string
 	Entrypoint string
-	// SessionKind is the top-level Claude Code session-kind marker
-	// (e.g. "bg" for background/headless sessions); empty for
-	// interactive sessions and for agents that do not emit it.
+	// SessionKind is a provider-owned top-level session classification marker
+	// (for example, Claude Code "bg" or Grok "non-interactive"); empty for
+	// interactive sessions and for agents that do not emit one.
 	SessionKind      string
 	ParentSessionID  string
 	RelationshipType RelationshipType

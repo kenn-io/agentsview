@@ -72,6 +72,25 @@ Grok is temporarily excluded at the user's request because a separate
 format-alignment change owns that provider. Once that alignment lands, add a
 Grok section and remove the explicit registry exception in the coverage test.
 
+The narrow Grok automation-provenance claim is independently verified against
+`xai-org/grok-build` at `d92c5b0b8582fda358de1f97446aa74af44a464f`, checked
+2026-08-18. The first-party
+[headless guide](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-pager/docs/user-guide/14-headless-mode.md)
+defines prompt flags as non-interactive invocation. The producer propagates
+that startup mode into
+[`PromptContext.is_non_interactive`](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs#L936-L944),
+whose schema identifies headless, SDK, stdio, and generic ACP execution and
+defaults false for interactive or older contexts
+([schema](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-agent/src/prompt/context.rs#L145-L150),
+[default](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-agent/src/prompt/context.rs#L177-L199)).
+The producer then writes that context to the same session directory as
+`prompt_context.json`
+([persistence](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-shell/src/session/acp_session.rs#L1384-L1404),
+[spawn call](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs#L1049-L1055)).
+Agentsview treats only an explicit true value in a valid, session-associated
+file as durable automation evidence; file presence, a missing field, or a
+missing file does not classify a session as automated.
+
 ## Claude Code (`claude`)
 
 - **Format:** Project-scoped JSONL transcripts, including subagent JSONL, with

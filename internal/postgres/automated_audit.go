@@ -18,6 +18,8 @@ type automatedAuditPGProgress struct {
 
 const fullAutomationCandidatesPG = `SELECT
 	s.id,
+	s.agent,
+	s.session_kind,
 	s.first_message,
 	s.user_message_count,
 	s.is_automated,
@@ -126,6 +128,8 @@ func auditAutomatedMatchingHashPG(
 	rows, err := pg.QueryContext(ctx,
 		`SELECT
 			s.id,
+			s.agent,
+			s.session_kind,
 			s.user_message_count,
 			s.is_automated,
 			CASE WHEN s.user_message_count <= 1
@@ -171,6 +175,8 @@ func auditAutomatedMatchingHashPG(
 	for rows.Next() {
 		var (
 			id                 string
+			agent              string
+			sessionKind        string
 			userMessageCount   int
 			rowAutomated       bool
 			firstUserPrefix    []byte
@@ -180,6 +186,8 @@ func auditAutomatedMatchingHashPG(
 		)
 		if err := rows.Scan(
 			&id,
+			&agent,
+			&sessionKind,
 			&userMessageCount,
 			&rowAutomated,
 			&firstUserPrefix,
@@ -193,6 +201,12 @@ func auditAutomatedMatchingHashPG(
 			)
 		}
 		progress.RowsPrefetched++
+		if db.IsAutomatedSessionMetadata(agent, sessionKind) {
+			setIDs, clearIDs = appendAutomationFlagChangePG(
+				setIDs, clearIDs, id, rowAutomated, true,
+			)
+			continue
+		}
 
 		want, conclusive := classifier.VerdictFromEvidence(
 			userMessageCount,
@@ -257,22 +271,26 @@ func scanFullAutomationCandidatesPG(
 	for rows.Next() {
 		var (
 			id           string
+			agent        string
+			sessionKind  string
 			firstMessage sql.NullString
 			firstUser    sql.NullString
 			userCount    int
 			rowAutomated bool
 		)
 		if err := rows.Scan(
-			&id, &firstMessage, &userCount, &rowAutomated, &firstUser,
+			&id, &agent, &sessionKind,
+			&firstMessage, &userCount, &rowAutomated, &firstUser,
 		); err != nil {
 			return nil, nil, count, fmt.Errorf(
 				"scanning PG automated audit candidate: %w", err,
 			)
 		}
 		count++
-		want := classifier.IsAutomatedFromTextCandidates(
-			userCount, firstUser, firstMessage,
-		)
+		want := db.IsAutomatedSessionMetadata(agent, sessionKind) ||
+			classifier.IsAutomatedFromTextCandidates(
+				userCount, firstUser, firstMessage,
+			)
 		setIDs, clearIDs = appendAutomationFlagChangePG(
 			setIDs, clearIDs, id, rowAutomated, want,
 		)
