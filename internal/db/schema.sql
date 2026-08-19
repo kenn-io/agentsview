@@ -325,6 +325,9 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 
 CREATE INDEX IF NOT EXISTS idx_tool_calls_session
     ON tool_calls(session_id);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_session_tool_use
+    ON tool_calls(session_id, tool_use_id)
+    WHERE tool_use_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_tool_calls_session_category
     ON tool_calls(session_id, category);
 -- idx_tool_calls_message backs the ON DELETE CASCADE from
@@ -1321,4 +1324,62 @@ CREATE TABLE IF NOT EXISTS artifact_imported_sessions (
         strftime('%Y-%m-%dT%H:%M:%fZ','now')
     ),
     PRIMARY KEY (origin, gid)
+);
+
+-- Machine-local per-call-occurrence agent content state for incremental
+-- summary recomputation: the latest raw content per agent in first-write
+-- order. Provider call IDs are not unique, so the natural stored coordinates
+-- (message ordinal, call index) are the authoritative key. A late result
+-- update reads only this table (O(distinct agents)) instead of rescanning the
+-- call's full event history. Never mirrored to PostgreSQL or DuckDB.
+CREATE TABLE IF NOT EXISTS tool_call_occurrence_agent_state (
+    session_id         TEXT NOT NULL,
+    message_ordinal    INTEGER NOT NULL,
+    call_index         INTEGER NOT NULL,
+    agent_id           TEXT NOT NULL,
+    first_event_index  INTEGER NOT NULL,
+    latest_event_index INTEGER NOT NULL,
+    PRIMARY KEY (session_id, message_ordinal, call_index, agent_id)
+);
+
+-- Machine-local parse checkpoints. SQLite-only, never mirrored to
+-- PostgreSQL or DuckDB: parsers never run against those read-side stores,
+-- and a copy that drops this table degrades to the conservative no-checkpoint
+-- behavior (full parse / prefix rescan), never to a wrong resume.
+CREATE TABLE IF NOT EXISTS parser_checkpoints (
+    session_id         TEXT PRIMARY KEY,
+    agent              TEXT NOT NULL,
+    file_path          TEXT NOT NULL,
+    file_inode         INTEGER NOT NULL,
+    file_device        INTEGER NOT NULL,
+    file_mtime         INTEGER NOT NULL,
+    file_change_time   INTEGER NOT NULL DEFAULT 0,
+    offset             INTEGER NOT NULL,
+    tail_anchor_digest TEXT NOT NULL,
+    hash               TEXT NOT NULL,
+    next_ordinal       INTEGER NOT NULL,
+    checkpoint_version INTEGER NOT NULL,
+    updated_at         TEXT NOT NULL
+);
+
+-- Lazy-loaded checkpoint payload: the provider cursor and the resumable
+-- hash state. Kept out of parser_checkpoints so the stat-only freshness
+-- gate reads the small metadata row without touching the blobs.
+CREATE TABLE IF NOT EXISTS parser_checkpoint_blobs (
+    session_id TEXT PRIMARY KEY,
+    cursor     BLOB NOT NULL,
+    hash_state BLOB
+);
+
+-- Compact per-session signal/secret maintenance state. SQLite-only: the
+-- state is machine-local sync bookkeeping and is never mirrored to
+-- PostgreSQL or DuckDB. The state row carries a verification token
+-- (transcript revision + signal version); a row whose token disagrees with
+-- the stored session must never be folded into an incremental delta.
+CREATE TABLE IF NOT EXISTS session_signal_state (
+    session_id          TEXT PRIMARY KEY,
+    state               BLOB NOT NULL,
+    transcript_revision TEXT NOT NULL,
+    signal_version      INTEGER NOT NULL,
+    updated_at          TEXT NOT NULL
 );

@@ -269,8 +269,8 @@ func (p *codexProvider) Parse(
 		EvictCodexSessionIndexForSession(path)
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
-	parentID, parentResolved := p.codexParentResolution(path)
-	sess, msgs, err := p.parseSession(path, machine, false)
+	sess, msgs, cursor, safe, hashState, anchorDigest, retryReason, err :=
+		p.parseSessionWithCursor(path, machine, false)
 	if err != nil {
 		return ParseOutcome{}, err
 	}
@@ -286,16 +286,28 @@ func (p *codexProvider) Parse(
 	if req.Fingerprint.Hash != "" {
 		sess.File.Hash = req.Fingerprint.Hash
 	}
+	var checkpoint []byte
+	if safe {
+		checkpoint, err = cursor.MarshalBinary()
+		if err != nil {
+			return ParseOutcome{}, fmt.Errorf(
+				"encoding codex checkpoint %s: %w", path, err,
+			)
+		}
+	}
 	result := ParseResultOutcome{
 		Result: ParseResult{
-			Session:  *sess,
-			Messages: msgs,
+			Session:                *sess,
+			Messages:               msgs,
+			Checkpoint:             checkpoint,
+			CheckpointHashState:    hashState,
+			CheckpointAnchorDigest: anchorDigest,
 		},
 		DataVersion: DataVersionCurrent,
 	}
-	if parentID != "" && !parentResolved {
+	if retryReason != "" {
 		result.DataVersion = DataVersionNeedsRetry
-		result.RetryReason = "codex parent turns unresolved for " + parentID
+		result.RetryReason = retryReason
 	}
 	return ParseOutcome{
 		Results:           []ParseResultOutcome{result},
@@ -308,6 +320,69 @@ func (p *codexProvider) Parse(
 		// an append-only write.
 		ForceReplace: true,
 	}, nil
+}
+
+// ParseCodexSessionStreaming decodes one Codex snapshot, emitting every
+// normalized operation into sink instead of accumulating the message slice
+// inside the parser. It returns the assembled session, the finalized
+// message slice (result-event content omitted for staging sinks), the
+// marshaled continuation cursor, the single-pass hash state and anchor
+// digest covering the snapshot, and a retry reason when an explicit fork
+// parent could not be resolved. The cursor, hash state, and anchor digest
+// are empty when the snapshot does not end at a safe resume boundary.
+func ParseCodexSessionStreaming(
+	cfg ProviderConfig,
+	source SourceRef,
+	sink CodexSessionSink,
+) (*ParsedSession, []ParsedMessage, []byte, []byte, string, string, error) {
+	provider, ok := NewProvider(AgentCodex, cfg)
+	if !ok {
+		return nil, nil, nil, nil, "", "",
+			fmt.Errorf("constructing codex provider")
+	}
+	cp, ok := provider.(*codexProvider)
+	if !ok {
+		return nil, nil, nil, nil, "", "",
+			fmt.Errorf("unexpected codex provider type %T", provider)
+	}
+	path, ok := cp.sources.pathFromSource(source)
+	if !ok {
+		return nil, nil, nil, nil, "", "",
+			fmt.Errorf("codex source path unavailable")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, nil, nil, "", "", fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, nil, nil, nil, "", "", fmt.Errorf("stat %s: %w", path, err)
+	}
+	sess, msgs, cursor, safe, hashState, anchorDigest, retryReason, err :=
+		cp.parseCodexSessionSnapshotStreaming(
+			path, firstNonEmptyJSONLString("", cfg.Machine),
+			false, f, info, sink,
+		)
+	if err != nil {
+		return nil, nil, nil, nil, "", "", err
+	}
+	if sess == nil {
+		return nil, nil, nil, nil, "", "", fmt.Errorf(
+			"codex session unavailable in %s", path,
+		)
+	}
+	var cursorBlob []byte
+	if safe {
+		cursorBlob, err = cursor.MarshalBinary()
+		if err != nil {
+			return nil, nil, nil, nil, "", "", fmt.Errorf(
+				"encoding codex checkpoint %s: %w", path, err,
+			)
+		}
+	}
+	return sess, msgs, cursorBlob, hashState, anchorDigest,
+		retryReason, nil
 }
 
 func (p *codexProvider) ParseIncremental(
@@ -335,7 +410,7 @@ func (p *codexProvider) ParseIncremental(
 	if err != nil {
 		return IncrementalOutcome{}, IncrementalNeedsFullParse, err
 	}
-	inode, device := sourceFileIdentity(info)
+	inode, device := sourceFileIdentityForFile(f, info)
 	if (req.Fingerprint.Inode != 0 && req.Fingerprint.Inode != inode) ||
 		(req.Fingerprint.Device != 0 && req.Fingerprint.Device != device) ||
 		info.Size() < req.Fingerprint.Size {
@@ -354,15 +429,38 @@ func (p *codexProvider) ParseIncremental(
 		return IncrementalOutcome{}, IncrementalNoNewData, nil
 	}
 
-	result, err := p.parseSessionFromSnapshot(
-		path,
-		req.Offset,
-		req.StartOrdinal,
-		false,
-		f,
-		info,
-		req.Fingerprint.Size,
-	)
+	var result codexIncrementalParseResult
+	if len(req.Seed) > 0 {
+		var seed codexCursorState
+		if err := seed.UnmarshalBinary(req.Seed); err != nil {
+			// A persisted cursor the current binary cannot decode must not
+			// resume; rebuild the transcript authoritatively.
+			return IncrementalOutcome{ForceReplace: true},
+				IncrementalNeedsFullParse, nil
+		}
+		result, err = p.parseSessionFromCheckpoint(
+			path,
+			req.Offset,
+			req.StartOrdinal,
+			false,
+			f,
+			info,
+			req.Fingerprint.Size,
+			seed,
+			req.StoredPendingUsageOrdinal,
+		)
+	} else {
+		result, err = p.parseSessionFromSnapshot(
+			path,
+			req.Offset,
+			req.StartOrdinal,
+			false,
+			f,
+			info,
+			req.Fingerprint.Size,
+			req.StoredPendingUsageOrdinal,
+		)
+	}
 	if err != nil {
 		if IsIncrementalFullParseFallback(err) {
 			return IncrementalOutcome{ForceReplace: true},
@@ -402,18 +500,27 @@ func (p *codexProvider) ParseIncremental(
 	totalOut, peakCtx, hasTotalOut, hasPeakCtx :=
 		codexProviderTokenTotals(result.messages)
 	termination := codexIncrementalTermination(result.cursor.lastTaskEvent)
+	nextCursor, err := result.cursor.MarshalBinary()
+	if err != nil {
+		return IncrementalOutcome{}, IncrementalNeedsFullParse, fmt.Errorf(
+			"encoding codex cursor %s: %w", path, err,
+		)
+	}
 	return IncrementalOutcome{
-		SessionID:            req.SessionID,
-		Messages:             result.messages,
-		EndedAt:              result.endedAt,
-		ConsumedBytes:        result.consumedBytes,
-		MessageCount:         len(result.messages),
-		UserMessageCount:     codexProviderUserMessageCount(result.messages),
-		TotalOutputTokens:    totalOut,
-		PeakContextTokens:    peakCtx,
-		HasTotalOutputTokens: hasTotalOut,
-		HasPeakContextTokens: hasPeakCtx,
-		TerminationStatus:    termination,
+		SessionID:                req.SessionID,
+		Messages:                 result.messages,
+		ToolCallUpdates:          result.toolCallUpdates,
+		MessageTokenUsageUpdates: result.messageUsageUpdates,
+		NextCursor:               nextCursor,
+		EndedAt:                  result.endedAt,
+		ConsumedBytes:            result.consumedBytes,
+		MessageCount:             len(result.messages),
+		UserMessageCount:         codexProviderUserMessageCount(result.messages),
+		TotalOutputTokens:        totalOut,
+		PeakContextTokens:        peakCtx,
+		HasTotalOutputTokens:     hasTotalOut,
+		HasPeakContextTokens:     hasPeakCtx,
+		TerminationStatus:        termination,
 	}, IncrementalApplied, nil
 }
 
@@ -774,7 +881,7 @@ func (s codexSourceSet) Fingerprint(
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
-	inode, device := sourceFileIdentity(info)
+	inode, device := sourceFileIdentityForPath(path, info)
 	mtime := info.ModTime().UnixNano()
 	if s.agent == AgentCodex {
 		mtime = CodexEffectiveMtime(path, mtime)

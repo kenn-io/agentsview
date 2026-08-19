@@ -25,6 +25,8 @@ type SessionBatchWrite struct {
 	Findings                []SecretFinding
 	DataVersion             int
 	ReplaceMessages         bool
+	Checkpoint              *ParserCheckpoint
+	CheckpointBlobs         *ParserCheckpointBlobs
 }
 
 // SessionBatchResult summarizes a WriteSessionBatch call.
@@ -477,6 +479,21 @@ func writeOneSessionBatchTx(
 	if err := replaceSecretFindingsTx(tx, write.Session.ID, write.Findings,
 		write.Signals.SecretLeakCount, write.Signals.SecretsRulesVersion); err != nil {
 		return 0, err
+	}
+	if write.ReplaceMessages {
+		if write.Checkpoint == nil || write.CheckpointBlobs == nil {
+			if err := deleteParserCheckpointTx(tx, write.Session.ID); err != nil {
+				return 0, err
+			}
+		} else {
+			checkpoint := *write.Checkpoint
+			blobs := *write.CheckpointBlobs
+			checkpoint.SessionID = write.Session.ID
+			blobs.SessionID = write.Session.ID
+			if err := upsertParserCheckpointTx(tx, checkpoint, blobs); err != nil {
+				return 0, err
+			}
+		}
 	}
 	if err := enqueueArtifactExportIfGenerationUnchangedTx(
 		tx, write.Session.ID, queueGenerationBefore, queueExistedBefore,

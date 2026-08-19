@@ -33,6 +33,80 @@ func openTestDB(t *testing.T) *db.DB {
 	return dbtest.OpenTestDB(t)
 }
 
+func TestIncrementalClaudeLateResultLinkScansDefiniteSecret(t *testing.T) {
+	// Assemble the AWS-shaped fixture key at runtime so push protection
+	// does not treat the test source itself as a leaked credential.
+	secret := "AKIA" + "7QHWN2DKR4FYPLJM"
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "proj-a")
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+	path := filepath.Join(projectDir, "session.jsonl")
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("hello", "2024-01-01T10:00:00Z"),
+		testjsonl.ClaudeAssistantJSON("hi", "2024-01-01T10:00:01Z"),
+		`{"type":"assistant","uuid":"a2","parentUuid":"a1",`+
+			`"timestamp":"2024-01-01T10:00:02Z",`+
+			`"message":{"id":"msg_tool","content":[{"type":"tool_use",`+
+			`"id":"toolu_r","name":"Bash","input":{"command":"ls"}}]}}`,
+	)
+	require.NoError(t, os.WriteFile(path, []byte(initial), 0o600))
+
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	ids, err := database.ListSessionIDsByFilePath(path, "claude")
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	sessionID := ids[0]
+
+	appended := `{"type":"user","timestamp":"2024-01-01T10:00:05Z",` +
+		`"uuid":"u2","parentUuid":"a2","message":{"content":[` +
+		`{"type":"tool_result","tool_use_id":"toolu_r",` +
+		`"content":"` + secret + `","is_error":false}]}}` + "\n"
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	require.NoError(t, err)
+	_, err = f.WriteString(appended)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	sess, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.True(t, sess.LastWriteIncremental,
+		"the late result must take the incremental path")
+
+	var stored string
+	require.NoError(t, database.Reader().QueryRow(
+		`SELECT COALESCE(result_content, '') FROM tool_calls
+		 WHERE session_id = ? AND tool_use_id = ?`,
+		sessionID, "toolu_r",
+	).Scan(&stored))
+	require.Contains(t, stored, secret,
+		"the late link must update the stored result content")
+
+	findings, err := database.SessionSecretFindings(
+		t.Context(), sessionID,
+	)
+	require.NoError(t, err)
+	found := false
+	for _, finding := range findings {
+		if finding.LocationKind == "tool_result" &&
+			strings.Contains(finding.RedactedMatch, "AKIA") {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found,
+		"a definite secret in a late Claude result link must be reported")
+}
+
 func requireClassifyPaths(
 	t *testing.T, engine *Engine, paths []string,
 ) []parser.DiscoveredFile {
@@ -6541,12 +6615,13 @@ func TestProjectIdentityIncrementalStatePreservesExplicitSourceProject(
 				func(
 					_ string,
 					inc *db.IncrementalInfo,
-				) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, time.Time, int64, *string, error) {
+				) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, []parser.ParsedMessageTokenUsageUpdate, time.Time, int64, *string, []byte, error) {
 					return []parser.ParsedMessage{{
 						Role: parser.RoleAssistant, Content: "appended",
 						Ordinal: inc.NextOrdinal,
-					}}, nil, appendedInfo.ModTime(), int64(len(appended)), nil, nil
+					}}, nil, nil, nil, appendedInfo.ModTime(), int64(len(appended)), nil, nil, nil
 				},
+				nil, "", nil,
 			)
 			require.True(t, ok)
 			require.NotNil(t, result.incremental)
@@ -6642,10 +6717,11 @@ func TestProjectIdentityLegacyMappedSnapshotReparsesBeforeIncrementalAppend(
 		func(
 			_ string,
 			_ *db.IncrementalInfo,
-		) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, time.Time, int64, *string, error) {
+		) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, []parser.ParsedMessageTokenUsageUpdate, time.Time, int64, *string, []byte, error) {
 			parseCalled = true
-			return nil, nil, time.Time{}, 0, nil, nil
+			return nil, nil, nil, nil, time.Time{}, 0, nil, nil, nil
 		},
+		nil, "", nil,
 	)
 	assert.False(t, ok,
 		"legacy snapshots must fall through to a source-aware full parse")
@@ -7678,15 +7754,25 @@ func TestProcessFileCodexDBFreshSkipIsNotCached(t *testing.T) {
 		},
 	}
 
-	res := e.processFile(context.Background(), parser.DiscoveredFile{
-		Agent:   parser.AgentCodex,
-		Path:    path,
-		Machine: "host",
-	})
-	require.NoError(t, res.err)
-	require.True(t, res.skip)
-	assert.True(t, res.noCacheSkip)
-	assert.Empty(t, e.SnapshotSkipCache())
+	_ = parser.AgentCodex
+	// A checkpointless stored session earns one lazy bootstrap: the first
+	// sync parses authoritatively and persists the checkpoint atomically
+	// with the content. The second sync then takes the fresh-session skip
+	// and must not cache it.
+	stats := e.SyncAll(context.Background(), nil)
+	require.Zero(t, stats.Failed)
+	require.Equal(t, 1, stats.Synced)
+	_, cpOk, cpErr := database.GetParserCheckpoint("host~codex:abc")
+	require.NoError(t, cpErr)
+	require.True(t, cpOk,
+		"the bootstrap must persist the checkpoint")
+
+	stats = e.SyncAll(context.Background(), nil)
+	require.Zero(t, stats.Failed)
+	require.Zero(t, stats.Synced,
+		"the second sync must skip the fresh session")
+	assert.Empty(t, e.SnapshotSkipCache(),
+		"the fresh skip must not be cached")
 }
 
 func TestClassifyCodexIndexPathSkipsMissingTranscript(t *testing.T) {
@@ -8112,6 +8198,7 @@ func TestTryProviderIncrementalAppendPassesPersistedSessionID(t *testing.T) {
 			Size:    info.Size(),
 			MTimeNS: info.ModTime().UnixNano(),
 		},
+		nil, "", nil, nil,
 	)
 
 	require.True(t, applied)

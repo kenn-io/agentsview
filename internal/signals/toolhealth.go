@@ -14,6 +14,13 @@ type ToolCallRow struct {
 	MessageOrdinal int
 	CallIndex      int
 	EventStatus    string // "", "completed", "errored", "cancelled", "running"
+	// ContentFailure is a pre-computed content-heuristic verdict used by
+	// streaming writers whose rows carry placeholder result content (the
+	// real summary lives in staging). When the last event carries no
+	// status, IsFailure prefers this verdict over re-scanning
+	// ResultContent. Legacy rows leave it false and fall through to the
+	// content scan as before.
+	ContentFailure bool
 }
 
 // ToolHealthSignals holds computed health metrics for a session's
@@ -46,11 +53,15 @@ func ComputeToolHealth(calls []ToolCallRow) ToolHealthSignals {
 }
 
 // IsFailure returns true when a tool call represents a failure,
-// either by event status or by content heuristics.
+// either by event status, by a pre-computed content verdict, or
+// by content heuristics.
 func IsFailure(c ToolCallRow) bool {
 	if c.EventStatus != "" {
 		return c.EventStatus == "errored" ||
 			c.EventStatus == "cancelled"
+	}
+	if c.ContentFailure {
+		return true
 	}
 	return isContentFailure(c.Category, c.ResultContent)
 }

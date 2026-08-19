@@ -63,32 +63,79 @@ they are never published as safe cursor boundaries.
 
 Truncation, known file-identity replacement, manual or project refreshes,
 `session_index.jsonl` title changes, and records that retroactively update
-stored messages all fall back to an authoritative full replacement. Safe
-incremental writes preserve the index-folded mtime and lifecycle-derived
-termination status alongside message and token aggregates.
+stored messages all fall back to an authoritative full replacement. Late tool
+results are the exception: the cursor tracks pending tool calls (bounded), so
+a `function_call_output` / `custom_tool_call_output` that refers to a call
+committed in an earlier batch is applied as an idempotent point update
+(`ToolCallResultUpdates`) instead of a full reparse. Agent-scoped and unknown
+calls still fall back. Safe incremental writes preserve the index-folded mtime
+and lifecycle-derived termination status alongside message and token
+aggregates.
 
 ## Append-only limitation
 
 Cursor correctness assumes that growth is append-only. A same-inode file can
 grow after bytes inside its already-committed prefix have been rewritten. Size,
-identity, and boundary checks do not detect that case, and the current
-full-source fingerprint is not compared with a separately verified stored prefix
-before incremental parsing. Closing this gap would require rolling hash state or
-explicit prefix verification and remains deferred.
+identity, and boundary checks cannot prove the prefix was never modified.
+
+Persisted checkpoints close most of the gap under the documented append-trust
+mode:
+
+- The checkpoint stores a 128 KiB tail anchor of the committed prefix, the
+  file identity, the committed offset, the parser cursor, and a resumable
+  SHA-256 state over the committed prefix.
+- An append is only resumed when the identity matches, the size only grew,
+  and the current bytes at the anchor region match the stored anchor; the
+  full-file fingerprint is then derived by hashing only the appended bytes.
+- An unchanged checkpointed source is skipped on stat alone (no transcript
+  read). An anchor mismatch, identity change, truncation, or undecodable
+  checkpoint forces an authoritative full parse and checkpoint rebuild.
+- A same-size, same-mtime in-place rewrite that preserves the anchor region is
+  trusted (append-trust). Periodic full audits (`ResyncAll`, `--full`,
+  force-reverification passes) still hash the whole source and repair such
+  rewrites. Strict verification remains available by bypassing the checkpoint
+  gate.
 
 ## Cost model and regression evidence
 
 A warm Codex cursor makes continuation-state parsing scale with appended records
-rather than transcript history. End-to-end append sync is still O(file): the
-provider's `Fingerprint` hashes the complete source and the engine's
-`ComputeFileHashPrefix` hashes through the newly committed offset.
+rather than transcript history. With a persisted checkpoint, end-to-end append
+sync is O(d): the engine resumes the SHA-256 state over only the appended
+bytes, verifies the 128 KiB tail anchor by digest, and parses only the new
+tail. The append path reads the source roughly three times the delta
+(fingerprint resume, parser tail, final checkpoint resume) plus the 128 KiB
+anchor — for a 1 KiB append that is well inside the 256 KiB source-read gate.
+An unchanged checkpointed source costs a stat plus the small checkpoint
+metadata row read (the cursor and hash-state blobs live in a separate table
+and are never loaded on the stat-only path) and reads 0 transcript bytes.
+A full parse captures the resumable hash state and anchor digest on its own
+read pass, so persisting the checkpoint adds no second source read. Without
+a checkpoint (legacy sessions, first sync after upgrade) the previous
+O(file) fingerprint and prefix-hash reads still apply until the next full
+parse persists one.
+
+The daily archive audit (`sync_worker` audit mode) bypasses the checkpoint
+stat-trust gate so the provider's full-source fingerprint verifies content and
+repairs same-stat in-place rewrites that append-trust would otherwise keep
+stale.
 
 - `BenchmarkCodexIncrementalCursor` in `internal/parser` compares cold prefix
   reconstruction with the exact warm cursor. It is diagnostic because
   `internal/parser` is not in `BENCH_GATE_PACKAGES`.
-- `BenchmarkCodexIncrementalSyncReads` in `internal/sync` measures the warm tail
-  between the two remaining linear reads. It is PR-gated because
-  `internal/sync` is in `BENCH_GATE_PACKAGES`.
+- `BenchmarkCodexCheckpointAppendResume` in `internal/sync` measures the
+  checkpoint-resumed append's source pipeline (checkpoint gate, seeded tail
+  parse, resume hash, next anchor digest, checkpoint assembly), bounded by
+  the anchor window plus the tail. It is PR-gated because `internal/sync` is
+  in `BENCH_GATE_PACKAGES`.
+- `BenchmarkCodexQuietAppendSignals500/5000/15000` in `internal/sync` measure
+  the non-amortized quiet-session append (call + late output) with full
+  inline signal/secret maintenance; the three sizes gate the
+  history-independent latency slope.
+- `BenchmarkCodexLateToolOutputDebouncedBurst` in `internal/sync` measures a
+  debounced stream where every appended batch carries the output for the
+  previous batch's call: only the first iteration pays the O(history)
+  signal recompute, so it guards per-append cost without pretending to be
+  the quiet-session gate.
 
 The maintained behavioral gate inventory is in
 [Performance Gates](performance-gates.md).

@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -12,7 +13,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tidwall/gjson"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
@@ -504,15 +504,16 @@ func TestParseCodexSession_ExecOriginator(t *testing.T) {
 }
 
 func TestCodexInsertMessage_PreservesChronologyOnSameOrdinal(t *testing.T) {
-	b := newCodexSessionBuilder(false, nil)
-	b.messages = []ParsedMessage{{
+	s := NewCodexCollectingSink(0)
+	s.messages = []ParsedMessage{{
 		Ordinal:   2,
 		Role:      RoleAssistant,
 		Content:   "later assistant message",
 		Timestamp: parseTimestamp("2024-01-01T10:01:06Z"),
 	}}
+	s.nextOrdinal = 3
 
-	idx := b.insertMessage(ParsedMessage{
+	idx := s.InsertMessage(ParsedMessage{
 		Ordinal:   2,
 		Role:      RoleUser,
 		Content:   "earlier orphan notification",
@@ -520,12 +521,12 @@ func TestCodexInsertMessage_PreservesChronologyOnSameOrdinal(t *testing.T) {
 	})
 
 	assert.Equal(t, 0, idx)
-	b.normalizeOrdinals()
-	require.Len(t, b.messages, 2)
-	assert.Equal(t, "earlier orphan notification", b.messages[0].Content)
-	assert.Equal(t, "later assistant message", b.messages[1].Content)
-	assert.Equal(t, 0, b.messages[0].Ordinal)
-	assert.Equal(t, 1, b.messages[1].Ordinal)
+	s.Finalize()
+	require.Len(t, s.messages, 2)
+	assert.Equal(t, "earlier orphan notification", s.messages[0].Content)
+	assert.Equal(t, "later assistant message", s.messages[1].Content)
+	assert.Equal(t, 0, s.messages[0].Ordinal)
+	assert.Equal(t, 1, s.messages[1].Ordinal)
 }
 
 func TestParseCodexSession_FunctionCalls(t *testing.T) {
@@ -631,12 +632,15 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		assert.False(t, msgs[0].HasToolUse)
 	})
 
-	t.Run("custom_tool_call_output for a stored call requests full parse", func(t *testing.T) {
+	t.Run("custom_tool_call_output for a seeded call stays incremental", func(t *testing.T) {
+		// The late-output path merges outputs for calls recorded in the
+		// persisted prefix through toolCallUpdates, so the incremental
+		// gate must not request a full parse for them (P2 contract).
 		line := `{"timestamp":"2026-07-08T03:20:43.376Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_abc","output":"Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess."}}`
 
-		b := newCodexSessionBuilder(false, nil)
-		assert.True(t,
-			b.incrementalOutputNeedsFullParse(gjson.Get(line, "payload")))
+		b := newCodexSessionBuilder(false, NewCodexCollectingSink(0))
+		b.rememberToolCall("call_abc", "exec_command", &ParsedToolCallPosition{MessageOrdinal: 1, CallIndex: 0})
+		assert.False(t, b.codexIncrementalNeedsFullParse(line))
 	})
 
 	t.Run("write_stdin formats with session and chars", func(t *testing.T) {
@@ -1700,6 +1704,53 @@ func TestParseCodexSession_ForkedSessionSkipsReplayedHistory(t *testing.T) {
 	})
 }
 
+func TestParseCodexSessionWithCursorActiveForkGateNeverPersistsCheckpoint(
+	t *testing.T,
+) {
+	forkCreatedMs := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC).UnixMilli()
+	forkID := testUUIDv7(forkCreatedMs, 1)
+	parentID := testUUIDv7(forkCreatedMs-7200_000, 0)
+	parentTurnID := testUUIDv7(forkCreatedMs-3600_000, 2)
+	root := t.TempDir()
+	parent := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(parentID, "/tmp", "user", tsEarly),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", parentTurnID, tsEarly),
+	)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "rollout-2024-01-01T08-00-00-"+parentID+".jsonl"),
+		[]byte(parent), 0o600,
+	))
+
+	// The fork ends while the replay gate is still open: only the copied
+	// parent meta and a replayed parent turn have arrived so far. Such a
+	// snapshot must not persist a resume cursor, or a later append would
+	// import the remaining replayed parent records as child content.
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(
+			forkID, parentID, "/tmp", "user", tsEarly,
+		),
+		testjsonl.CodexSessionMetaJSON(parentID, "/tmp", "user", tsEarly),
+		testjsonl.CodexTurnContextWithIDJSON(
+			"gpt-5.4", parentTurnID, tsEarly,
+		),
+	)
+	path := filepath.Join(
+		root, "rollout-2024-01-01T10-00-00-"+forkID+".jsonl",
+	)
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+	provider := newCodexTestProvider(t, root)
+	source := requireCodexProviderSource(t, provider, forkID)
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: source,
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Empty(t, outcome.Results[0].Result.Checkpoint,
+		"a snapshot ending inside replayed parent history must not "+
+			"persist a checkpoint")
+}
+
 func TestParseCodexSession_ForkBoundaryTreatsTurnIDsAsOpaque(t *testing.T) {
 	t.Parallel()
 
@@ -2524,7 +2575,7 @@ func TestCodexCursorWarmColdParity(t *testing.T) {
 	prefixInfo, err := os.Stat(path)
 	require.NoError(t, err)
 	prefixOffset := prefixInfo.Size()
-	inode, device := sourceFileIdentity(prefixInfo)
+	inode, device := sourceFileIdentityForPath(path, prefixInfo)
 	_, cursorHit := warmProvider.cursorCache.Get(
 		path, prefixOffset, inode, device,
 	)
@@ -2593,7 +2644,7 @@ func TestCodexPromptReplayDigestParity(t *testing.T) {
 	prefixInfo, err := os.Stat(path)
 	require.NoError(t, err)
 	prefixOffset := prefixInfo.Size()
-	inode, device := sourceFileIdentity(prefixInfo)
+	inode, device := sourceFileIdentityForPath(path, prefixInfo)
 	seed, cursorHit := warmProvider.cursorCache.Get(
 		path, prefixOffset, inode, device,
 	)
@@ -2735,7 +2786,7 @@ func TestParseCodexSessionFrom_LateTokenCountRequiresFullParse(t *testing.T) {
 	assert.True(t, IsIncrementalFullParseFallback(err))
 }
 
-func TestParseCodexSessionFrom_FunctionCallOutputRequiresFullParse(t *testing.T) {
+func TestParseCodexSessionFrom_FunctionCallOutputUpdatesStoredCall(t *testing.T) {
 	t.Parallel()
 
 	initial := testjsonl.JoinJSONL(
@@ -2765,9 +2816,21 @@ func TestParseCodexSessionFrom_FunctionCallOutputRequiresFullParse(t *testing.T)
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, _, _, err = parseCodexTestSessionFrom(t, path, offset, 2, false)
-	require.Error(t, err)
-	assert.True(t, IsIncrementalFullParseFallback(err))
+	result, err := newCodexTestProvider(t).parseSessionFromDetailed(
+		path, offset, 2, false,
+	)
+	require.NoError(t, err)
+	assert.Empty(t, result.messages)
+	require.Len(t, result.toolCallUpdates, 1)
+	assert.Equal(t, "call_cmd", result.toolCallUpdates[0].ToolUseID)
+	assertToolResultEvents(t,
+		result.toolCallUpdates[0].ResultEvents,
+		[]ParsedToolResultEvent{{
+			ToolUseID: "call_cmd",
+			Source:    "function_call_output",
+			Content:   "done",
+		}},
+	)
 }
 
 // A tool call and its output that both arrive in the same appended
@@ -3487,4 +3550,35 @@ func TestParseCodexSession_TurnAbortedNotCountedAsUser(t *testing.T) {
 		assert.NotContains(t, m.Content, "<turn_aborted>",
 			"<turn_aborted> synthetic must be filtered from message list")
 	}
+}
+
+func TestCodexDuplicateCallIDsAttachOutputsByOccurrence(t *testing.T) {
+	const callID = "reused-call"
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			"duplicate-call-ids", "/tmp", "user", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "run both", tsEarlyS1),
+		testjsonl.CodexFunctionCallWithCallIDJSON(
+			"exec_command", callID, nil, tsEarlyS5,
+		),
+		testjsonl.CodexFunctionCallWithCallIDJSON(
+			"apply_patch", callID, nil, tsLate,
+		),
+		testjsonl.CodexFunctionCallOutputJSON(
+			callID, "first result", tsLateS5,
+		),
+		testjsonl.CodexFunctionCallOutputJSON(
+			callID, "second result", "2024-01-01T10:01:06Z",
+		),
+	)
+
+	_, msgs := runCodexParserTest(t, "duplicate-call-ids.jsonl", content, false)
+	require.Len(t, msgs, 3)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	require.Len(t, msgs[2].ToolCalls, 1)
+	require.Len(t, msgs[1].ToolCalls[0].ResultEvents, 1)
+	require.Len(t, msgs[2].ToolCalls[0].ResultEvents, 1)
+	assert.Equal(t, "first result", msgs[1].ToolCalls[0].ResultEvents[0].Content)
+	assert.Equal(t, "second result", msgs[2].ToolCalls[0].ResultEvents[0].Content)
 }

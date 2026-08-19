@@ -18,7 +18,60 @@ import (
 func computeSignalsFromMessages(
 	sess db.Session, msgs []db.Message,
 ) db.SessionSignalUpdate {
+	return computeSignalsFromToolRows(sess, msgs, extractToolCallRows(msgs))
+}
+
+// computeSignalsFromMessagesWithContentFailures is the staged streaming
+// variant: tool rows whose placeholder content hides a pre-computed
+// content-failure verdict get that verdict stamped before the signal pass,
+// so content-driven tool-health signals match the collecting path byte for
+// byte.
+func computeSignalsFromMessagesWithContentFailures(
+	sess db.Session, msgs []db.Message, failures map[string]bool,
+) db.SessionSignalUpdate {
 	toolRows := extractToolCallRows(msgs)
+	patchToolCallRowsWithContentFailures(toolRows, msgs, failures)
+	return computeSignalsFromToolRows(sess, msgs, toolRows)
+}
+
+// patchToolCallRowsWithContentFailures stamps pre-computed content-failure
+// verdicts onto rows whose last event status is empty (status-driven
+// verdicts win). toolRows must be the output of extractToolCallRows over
+// the same msgs slice, so the walk order is identical.
+func patchToolCallRowsWithContentFailures(
+	toolRows []signals.ToolCallRow,
+	msgs []db.Message,
+	failures map[string]bool,
+) {
+	if len(failures) == 0 {
+		return
+	}
+	idx := 0
+	callOccurrences := make(map[string]int)
+	for _, m := range msgs {
+		for _, tc := range m.ToolCalls {
+			if idx >= len(toolRows) {
+				return
+			}
+			failed := false
+			if tc.ToolUseID != "" {
+				occurrence := callOccurrences[tc.ToolUseID]
+				callOccurrences[tc.ToolUseID] = occurrence + 1
+				failed = failures[db.StagedToolCallKey(
+					tc.ToolUseID, occurrence,
+				)] || failures[tc.ToolUseID]
+			}
+			if failed && toolRows[idx].EventStatus == "" {
+				toolRows[idx].ContentFailure = true
+			}
+			idx++
+		}
+	}
+}
+
+func computeSignalsFromToolRows(
+	sess db.Session, msgs []db.Message, toolRows []signals.ToolCallRow,
+) db.SessionSignalUpdate {
 	heuristics := signals.AnalyzeHeuristics(signals.HeuristicInput{
 		Messages: extractHeuristicMessages(msgs),
 		ToolRows: toolRows,

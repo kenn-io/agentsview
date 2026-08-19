@@ -966,6 +966,12 @@ type IncrementalRequest struct {
 	Offset       int64
 	StartOrdinal int
 	Machine      string
+	// Seed is opaque provider continuation state persisted by the sync
+	// engine (a parser checkpoint). A provider that recognizes the format
+	// resumes from it instead of rescanning the committed prefix; empty
+	// means cold-start reconstruction. A seed the provider cannot decode
+	// must be treated as IncrementalNeedsFullParse.
+	Seed []byte
 	// LastEntryUUID is the UUID of the last entry stored for this
 	// session, used by DAG-aware parsers (Claude) to detect when an
 	// appended tail forks away from the stored tip and must trigger a
@@ -996,13 +1002,23 @@ type IncrementalRequest struct {
 	// the appended assistant head continues exactly this message id.
 	// nil keeps the conservative fallback.
 	StoredLastClaudeMessageID *string
+	// StoredPendingUsageOrdinal is the last assistant message without token
+	// usage in the current turn, as resolved from the committed transcript.
+	// Codex uses it to attach a token_count that follows a late tool result
+	// without re-reading or rebuilding the committed prefix.
+	StoredPendingUsageOrdinal *int
 }
 
 // IncrementalOutcome is the append-only parse output.
 type IncrementalOutcome struct {
-	SessionID            string
-	Messages             []ParsedMessage
-	SubagentLinks        []ClaudeSubagentLink
+	SessionID                string
+	Messages                 []ParsedMessage
+	SubagentLinks            []ClaudeSubagentLink
+	ToolCallUpdates          []ParsedToolCallUpdate
+	MessageTokenUsageUpdates []ParsedMessageTokenUsageUpdate
+	// NextCursor is the provider's continuation state after consuming the
+	// appended tail, for persistence alongside the committed offset.
+	NextCursor           []byte
 	EndedAt              time.Time
 	ConsumedBytes        int64
 	MessageCount         int
