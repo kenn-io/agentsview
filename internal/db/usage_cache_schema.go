@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	usageCacheFormatVersion = 9
+	usageCacheFormatVersion = 1
 	usageCacheApplicationID = 0x41565543
 	usageCacheKind          = "agentsview-usage-facts"
 

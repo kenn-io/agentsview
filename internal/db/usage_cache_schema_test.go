@@ -25,7 +25,7 @@ func TestUsageCacheGenerationCreatesIdentifiedSchema(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, cache.temporary)
 	assert.Equal(t, filepath.Join(filepath.Dir(archivePath),
-		"usage-cache-v8-980e32c89da32cb0d3588c0c06864b4e.db"), cache.path)
+		"usage-cache-v1-980e32c89da32cb0d3588c0c06864b4e.db"), cache.path)
 
 	info, err := os.Stat(cache.path)
 	require.NoError(t, err)
@@ -41,7 +41,7 @@ func TestUsageCacheGenerationCreatesIdentifiedSchema(t *testing.T) {
 
 	metadata := readUsageCacheMetadata(t, cache.db)
 	assert.Equal(t, "agentsview-usage-facts", metadata[usageCacheMetadataKind])
-	assert.Equal(t, "8", metadata[usageCacheMetadataFormatVersion])
+	assert.Equal(t, "1", metadata[usageCacheMetadataFormatVersion])
 	assert.Equal(t, "database-id-one", metadata[usageCacheMetadataSourceDatabaseID])
 	assert.Equal(t, "1", metadata[usageCacheMetadataNextInstallRevision])
 	assert.Equal(t, "1", metadata[usageCacheMetadataNextRollupRevision])
