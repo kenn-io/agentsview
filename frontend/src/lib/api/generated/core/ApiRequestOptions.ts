@@ -13,5 +13,9 @@ export type ApiRequestOptions = {
   readonly body?: any;
   readonly mediaType?: string;
   readonly responseHeader?: string;
+  readonly responseHeaders?: Record<string, {
+    readonly name: string;
+    readonly type: 'string' | 'number' | 'boolean';
+  }>;
   readonly errors?: Record<number, string>;
 };

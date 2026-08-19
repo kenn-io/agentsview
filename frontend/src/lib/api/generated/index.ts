@@ -184,6 +184,9 @@ export type { RawSyncMissingObjectsResponse } from './models/RawSyncMissingObjec
 export type { RawsyncObjectRef } from './models/RawsyncObjectRef';
 export type { RawSyncTokenInputBody } from './models/RawSyncTokenInputBody';
 export type { RawSyncTokenResponse } from './models/RawSyncTokenResponse';
+export type { RawSyncUploadResponse } from './models/RawSyncUploadResponse';
+export type { RawSyncUploadStatusResponse } from './models/RawSyncUploadStatusResponse';
+export type { RawSyncUploadStartInputBody } from './models/RawSyncUploadStartInputBody';
 export type { RemoteSyncRequest } from './models/RemoteSyncRequest';
 export type { RemotesyncTargetSet } from './models/RemotesyncTargetSet';
 export type { RenameRequest } from './models/RenameRequest';

@@ -111,14 +111,14 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		// and scoped tokens before Host and CORS middleware relax remote
 		// restrictions. They never compare against the legacy shared bearer.
 		if s.isRawSyncOwnAuthPath(r.URL.Path) {
-			requestCtx := r.Context()
+			baseCtx := r.Context()
+			authCtx := baseCtx
 			cancel := func() {}
 			if writeTimeout > 0 {
-				requestCtx, cancel = context.WithTimeout(requestCtx, writeTimeout)
+				authCtx, cancel = context.WithTimeout(authCtx, writeTimeout)
 			}
 			defer cancel()
-			r = r.WithContext(requestCtx)
-			identity, err := s.authenticateRawSyncRequest(r)
+			identity, err := s.authenticateRawSyncRequest(r.WithContext(authCtx))
 			if err != nil {
 				if errors.Is(err, context.DeadlineExceeded) {
 					http.Error(w, "raw sync authentication timed out", http.StatusGatewayTimeout)
@@ -133,7 +133,15 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 				http.Error(w, "raw sync authentication failed", http.StatusInternalServerError)
 				return
 			}
-			ctx := context.WithValue(requestCtx, ctxKeyRawSyncIdentity, identity)
+			handlerCtx := authCtx
+			if r.Method == http.MethodPatch && isRawSyncUploadPath(r.URL.Path) {
+				// Upload authentication stays bounded by WriteTimeout, but body
+				// transfer and checksum finalization use the client's request
+				// lifetime plus the route's extended transport read deadline.
+				cancel()
+				handlerCtx = baseCtx
+			}
+			ctx := context.WithValue(handlerCtx, ctxKeyRawSyncIdentity, identity)
 			ctx = context.WithValue(ctx, ctxKeyRemoteAuth, true)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
@@ -220,8 +228,11 @@ func (s *Server) isRawSyncOwnAuthPath(path string) bool {
 	if s.rawSyncCustody == nil {
 		return false
 	}
-	return path == "/api/v1/raw-sync/objects/missing" ||
-		path == "/api/v1/raw-sync/manifests"
+	if path == "/api/v1/raw-sync/objects/missing" ||
+		path == "/api/v1/raw-sync/manifests" {
+		return true
+	}
+	return s.rawSyncUploads != nil && isRawSyncUploadPath(path)
 }
 
 func (s *Server) authenticateRawSyncRequest(
@@ -245,8 +256,21 @@ func (s *Server) authenticateRawSyncRequest(
 			r.Context(), secret, rawsync.ScopeCommit,
 		)
 	default:
+		if s.rawSyncUploads != nil && isRawSyncUploadPath(r.URL.Path) {
+			return s.rawSyncDeviceAuth.AuthenticateToken(
+				r.Context(), secret, rawsync.ScopeUpload,
+			)
+		}
 		return rawsync.AuthIdentity{}, rawsync.ErrUnauthorized
 	}
+}
+
+func isRawSyncUploadPath(path string) bool {
+	if path == "/api/v1/raw-sync/uploads" {
+		return true
+	}
+	remainder, ok := strings.CutPrefix(path, "/api/v1/raw-sync/uploads/")
+	return ok && remainder != "" && !strings.Contains(remainder, "/")
 }
 
 // setCORSOnAuthError adds CORS headers to 401 responses so
