@@ -37,18 +37,19 @@ different observed folder.
 
 **Mapped folder**:
 
-An observed folder to which a project rule applies.
+An observed folder for which a project rule produces a project classification.
 
 **Unmapped folder**:
 
-An observed folder to which no project rule applies. Session classifications do
-not map the folder. An unmapped folder may contain mapped child folders.
+An observed folder for which no project rule produces a project classification.
+Session classifications do not map the folder. An unmapped folder may contain
+mapped child folders.
 
 **Project rule**:
 
 A reusable, machine-specific instruction that classifies sessions under a folder
-path as a project. When paths overlap, the longest matching path takes
-precedence.
+path as a project. When paths overlap, the longest matching rule that produces a
+project classification takes precedence.
 
 **Project rule set**:
 
