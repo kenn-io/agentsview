@@ -108,8 +108,8 @@
     displayedOrdinals.join(","),
   );
 
-  function itemAt(index: number) {
-    if (ui.sortNewestFirst) {
+  function itemAt(index: number, newestFirst = ui.sortNewestFirst) {
+    if (newestFirst) {
       const mapped = displayItemsAsc.length - 1 - index;
       return displayItemsAsc[mapped];
     }
@@ -120,6 +120,7 @@
     const count = displayItemsAsc.length;
     const el = containerRef ?? null;
     const sid = sessions.activeSessionId ?? "";
+    const newestFirst = ui.sortNewestFirst;
     return {
       count,
       getScrollElement: () => el,
@@ -128,7 +129,7 @@
       useAnimationFrameWithResizeObserver: true,
       measureCacheKey: sid,
       getItemKey: (index: number) => {
-        const item = itemAt(index);
+        const item = itemAt(index, newestFirst);
         if (!item) return `${sid}-${index}`;
         if (item.kind === "tool-group") {
           return `${sid}-tg-${item.ordinals[0]}`;

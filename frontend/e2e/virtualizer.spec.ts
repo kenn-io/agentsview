@@ -17,6 +17,7 @@ const SESSIONS = {
   ALPHA_5: { project: "project-alpha", count: 3, displayRows: 5 },
   ALPHA_2: { project: "project-alpha", count: 2, displayRows: 2 },
   BETA_6: { project: "project-beta", count: 3, displayRows: 5 },
+  DELTA_5500: { project: "project-delta", count: 2750 },
 };
 
 function getSessionItem(
@@ -102,6 +103,10 @@ async function waitForLayoutSettle(page: Page, itemCount: number) {
  * virtual rows by checking translateY positions against heights.
  */
 async function verifyNoVerticalGaps(rows: Locator) {
+  expect(await maxVerticalGap(rows)).toBeLessThanOrEqual(1);
+}
+
+async function maxVerticalGap(rows: Locator) {
   const positions = await rows.evaluateAll((els) =>
     els.map((el) => {
       const style = el.style.transform;
@@ -115,13 +120,17 @@ async function verifyNoVerticalGaps(rows: Locator) {
     }),
   );
 
+  let maxGap = 0;
   for (let i = 0; i < positions.length - 1; i++) {
     const current = positions[i]!;
     const next = positions[i + 1]!;
     const expectedNextStart = current.translateY + current.height;
-    expect(Math.abs(expectedNextStart - next.translateY))
-      .toBeLessThanOrEqual(1);
+    maxGap = Math.max(
+      maxGap,
+      Math.abs(expectedNextStart - next.translateY),
+    );
   }
+  return maxGap;
 }
 
 test.beforeEach(async ({ page }) => {
@@ -242,20 +251,43 @@ test.describe("Virtualizer measurement", () => {
     expect(heightA).not.toBe(heightB);
   });
 
-  test("message virtualizer stays populated across sort toggles", async ({
+  test("message rows stay adjacent across deep sort toggles", async ({
     page,
   }) => {
-    const { project, count, displayRows } = SESSIONS.ALPHA_5;
+    const { project, count } = SESSIONS.DELTA_5500;
     const sid = await selectSession(page, project, count);
-    await expectSessionLoaded(page, sid, displayRows);
+    await expectSessionLoaded(page, sid);
 
     const rows = page.locator(LOC.row);
+    const scroller = page.locator(LOC.listScroll);
     const sortButton = page.getByLabel("Toggle sort order");
-    await sortButton.click();
-    await expect(rows.first()).toBeVisible({ timeout: 5_000 });
+    await page.addStyleTag({
+      content: `
+        .message.is-user { height: 320px; overflow: hidden; }
+        .message:not(.is-user) { height: 80px; overflow: hidden; }
+      `,
+    });
+    await scroller.evaluate((element) => {
+      element.scrollTop = element.scrollHeight * 0.65;
+    });
+    await expect
+      .poll(() => scroller.evaluate((element) => element.scrollTop))
+      .toBeGreaterThan(0);
+    await expect
+      .poll(() => maxVerticalGap(rows))
+      .toBeLessThanOrEqual(1);
 
     await sortButton.click();
     await expect(rows.first()).toBeVisible({ timeout: 5_000 });
+    await expect
+      .poll(() => maxVerticalGap(rows))
+      .toBeLessThanOrEqual(1);
+
+    await sortButton.click();
+    await expect(rows.first()).toBeVisible({ timeout: 5_000 });
+    await expect
+      .poll(() => maxVerticalGap(rows))
+      .toBeLessThanOrEqual(1);
   });
 
   test("session switch without explicit row count wait", async ({
