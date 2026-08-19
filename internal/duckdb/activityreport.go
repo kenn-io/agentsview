@@ -486,12 +486,19 @@ func duckActivityReportCandidateWhere(
 	where, args := duckBuildAnalyticsWhere(
 		f, "COALESCE(s.started_at, s.created_at)", "s.", false, false)
 	where += `
-		AND COALESCE(s.ended_at,
-			(SELECT MAX(m.timestamp) FROM messages m
-				WHERE m.session_id = s.id AND m.timestamp IS NOT NULL),
-			s.started_at, s.created_at) >= CAST(? AS TIMESTAMP)
+		AND (COALESCE(s.ended_at,
+				(SELECT MAX(m.timestamp) FROM messages m
+					WHERE m.session_id = s.id AND m.timestamp IS NOT NULL),
+				s.started_at, s.created_at) >= CAST(? AS TIMESTAMP)
+			OR EXISTS (
+				SELECT 1 FROM tool_result_events tre
+				WHERE tre.session_id = s.id
+					AND tre.source = 'tool_execution'
+					AND tre.status IN ('completed', 'errored')
+					AND tre.timestamp >= CAST(? AS TIMESTAMP)
+			))
 		AND COALESCE(s.started_at, s.created_at) < CAST(? AS TIMESTAMP)`
-	return where, append(args, rangeStartUTC, rangeEndUTC)
+	return where, append(args, rangeStartUTC, rangeStartUTC, rangeEndUTC)
 }
 
 func (s *Store) activityReportCandidateSource(

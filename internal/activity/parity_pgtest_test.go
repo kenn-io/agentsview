@@ -190,7 +190,8 @@ func parityFixture() []parityFixtureSession {
 		},
 		{
 			// A completion just after the report range closes the final message;
-			// aggregation clips the interval at the range boundary.
+			// aggregation clips the interval at the range boundary. The session
+			// summary predates the terminal event, as real provider metadata can.
 			id: "parity-tool-boundary", project: "tools", model: "model-x",
 			events: []parityEvent{
 				{role: "assistant", ts: parityDate + "T23:59:00Z",
@@ -275,16 +276,11 @@ func seedParitySQLite(t *testing.T) *db.DB {
 }
 
 // paritySessionWrite turns one fixture session into a SessionBatchWrite. The
-// session window spans its first and last event; assistant messages carry the
-// model and token_usage so they feed the usage path.
+// session window spans its first and last transcript event; assistant messages
+// carry the model and token_usage so they feed the usage path.
 func paritySessionWrite(fs parityFixtureSession) db.SessionBatchWrite {
 	first := fs.events[0].ts
 	last := fs.events[len(fs.events)-1].ts
-	for _, event := range fs.events {
-		if event.toolCompletedAt > last {
-			last = event.toolCompletedAt
-		}
-	}
 	firstMsg := "parity " + fs.id
 	relationship := fs.relationship
 	if relationship == "" {
@@ -517,6 +513,51 @@ func TestGetActivityReportParityAcrossBackends(t *testing.T) {
 			if tc.name == "day-minute" {
 				assertDayMinuteFixtureSanity(t, sqliteReport)
 			}
+		})
+	}
+}
+
+func TestGetActivityReportIncludesTerminalAfterSessionEndAcrossBackends(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	local := seedParitySQLite(t)
+	pgStore := pushParityPostgres(t, ctx, local)
+	duckStore := pushParityDuckDB(t, ctx, local)
+
+	q, err := activity.ResolveQuery(activity.QueryInput{
+		Preset: "day", Date: "2026-06-15", Timezone: "UTC",
+	}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	filter := db.AnalyticsFilter{Timezone: "UTC"}
+
+	sqliteReport, err := local.GetActivityReport(ctx, filter, q)
+	require.NoError(t, err)
+	pgReport, err := pgStore.GetActivityReport(ctx, filter, q)
+	require.NoError(t, err)
+	duckReport, err := duckStore.GetActivityReport(ctx, filter, q)
+	require.NoError(t, err)
+
+	reports := []struct {
+		name   string
+		report activity.Report
+	}{
+		{name: "sqlite", report: sqliteReport},
+		{name: "postgres", report: pgReport},
+		{name: "duckdb", report: duckReport},
+	}
+	for _, backend := range reports {
+		t.Run(backend.name, func(t *testing.T) {
+			bySession := make(map[string]activity.SessionRow,
+				len(backend.report.BySession))
+			for _, session := range backend.report.BySession {
+				bySession[session.SessionID] = session
+			}
+			require.Contains(t, bySession, "parity-tool-boundary")
+			row := bySession["parity-tool-boundary"]
+			require.NotNil(t, row.AgentMinutes)
+			require.InDelta(t, 1.0, *row.AgentMinutes, 1e-9,
+				"terminal completion after ended_at must close next-day activity")
 		})
 	}
 }

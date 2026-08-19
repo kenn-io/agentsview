@@ -396,6 +396,8 @@ func activityReportProjectLabels(sessions []activity.SessionMeta) []string {
 // that began before the range but has messages inside it is not dropped,
 // matching SQLite and DuckDB. COALESCE short-circuits, so the correlated
 // MAX subquery runs only for the rare sessions missing an ended_at.
+// A terminal tool event can outlive ended_at metadata, so it independently
+// keeps the session eligible when it reaches the report range.
 func (s *Store) activityReportSessions(
 	ctx context.Context, f db.AnalyticsFilter, rangeStartUTC, rangeEndUTC string,
 ) ([]activity.SessionMeta, []string, error) {
@@ -418,11 +420,18 @@ func (s *Store) activityReportSessions(
 		COALESCE(s.is_automated, false) AS is_automated
 	FROM sessions s
 	WHERE ` + where + `
-		AND COALESCE(s.ended_at,
-			(SELECT MAX(m.timestamp) FROM messages m
-				WHERE m.session_id = s.id AND m.timestamp IS NOT NULL),
-			s.started_at, s.created_at) >= ` +
+		AND (COALESCE(s.ended_at,
+				(SELECT MAX(m.timestamp) FROM messages m
+					WHERE m.session_id = s.id AND m.timestamp IS NOT NULL),
+				s.started_at, s.created_at) >= ` +
 		lower + `::timestamptz
+			OR EXISTS (
+				SELECT 1 FROM tool_result_events tre
+				WHERE tre.session_id = s.id
+					AND tre.source = 'tool_execution'
+					AND tre.status IN ('completed', 'errored')
+					AND tre.timestamp >= ` + lower + `::timestamptz
+			))
 		AND COALESCE(s.started_at, s.created_at) < ` +
 		upper + `::timestamptz`
 

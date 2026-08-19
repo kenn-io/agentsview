@@ -400,6 +400,8 @@ func activityReportProjectLabels(
 // partially-parsed session that began before the range but has messages
 // inside it is not dropped. COALESCE short-circuits, so the correlated
 // MAX subquery runs only for the rare sessions missing an ended_at.
+// A terminal tool event can outlive ended_at metadata, so it independently
+// keeps the session eligible when it reaches the report range.
 func (db *DB) activityReportSessions(
 	ctx context.Context, f AnalyticsFilter, rangeStartUTC, rangeEndUTC string,
 ) ([]activity.SessionMeta, []string, error) {
@@ -415,7 +417,7 @@ func (db *DB) activityReportSessionsFrom(
 	rangeStartUTC, rangeEndUTC string,
 ) ([]activity.SessionMeta, []string, error) {
 	where, args := f.buildWhereWithDate("", false, "s.id")
-	args = append(args, rangeStartUTC, rangeEndUTC)
+	args = append(args, rangeStartUTC, rangeStartUTC, rangeEndUTC)
 
 	// Each Title candidate is NULLIF'd independently (not a nested
 	// COALESCE-then-NULLIF) so an empty display_name cannot mask a real
@@ -432,10 +434,20 @@ func (db *DB) activityReportSessionsFrom(
 		COALESCE(s.is_automated, 0)
 	FROM sessions s
 	WHERE ` + where + `
-		AND COALESCE(NULLIF(s.ended_at, ''),
-			(SELECT MAX(m.timestamp) FROM messages m
-				WHERE m.session_id = s.id AND m.timestamp != ''),
-			NULLIF(s.started_at, ''), s.created_at) >= ?
+		AND (COALESCE(NULLIF(s.ended_at, ''),
+				(SELECT MAX(m.timestamp) FROM messages m
+					WHERE m.session_id = s.id AND m.timestamp != ''),
+				NULLIF(s.started_at, ''), s.created_at) >= ?
+			OR EXISTS (
+				SELECT 1 FROM tool_result_events tre
+				WHERE tre.session_id = s.id
+					AND tre.source = 'tool_execution'
+					AND tre.status IN ('completed', 'errored')
+					AND tre.timestamp IS NOT NULL
+					AND tre.timestamp != ''
+					AND agentsview_timestamp_unix_micro(tre.timestamp) IS NOT NULL
+					AND tre.timestamp >= ?
+			))
 		AND COALESCE(NULLIF(s.started_at, ''), s.created_at) < ?`
 
 	rows, err := q.QueryContext(ctx, query, args...)
