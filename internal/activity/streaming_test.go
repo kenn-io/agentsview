@@ -189,6 +189,33 @@ func TestAggregateCandidatesCarriesConcurrencyAcrossBucketBoundary(t *testing.T)
 	assert.Equal(t, 2, got.Peak.Agents)
 }
 
+func TestAggregateCandidatesKeepsTrimmedOverlapInStartOrder(t *testing.T) {
+	p := baseParams(t, "2026-06-16", "UTC")
+	at := func(value string) time.Time { return mustStart(t, value) }
+	candidates := []IntervalCandidate{
+		{
+			SessionID: "overlap", StartOrdinal: 0, EndOrdinal: 1,
+			Start: at("2026-06-16T00:00:00Z"), End: at("2026-06-16T00:05:00Z"),
+		},
+		{
+			SessionID: "overlap", StartOrdinal: 1, EndOrdinal: 2,
+			Start: at("2026-06-16T00:01:00Z"), End: at("2026-06-16T00:06:00Z"),
+		},
+		{
+			SessionID: "interleaved", StartOrdinal: 0, EndOrdinal: 1,
+			Start: at("2026-06-16T00:02:00Z"), End: at("2026-06-16T00:03:00Z"),
+		},
+	}
+
+	got, err := AggregateCandidates(context.Background(), p, nil, candidates, nil)
+	require.NoError(t, err)
+	require.Len(t, got.Buckets, 288)
+	assert.Equal(t, 2, got.Buckets[0].MaxAgents,
+		"the interleaved session overlaps in the first bucket")
+	assert.Equal(t, 1, got.Buckets[1].MaxAgents,
+		"the interleaved session must not move with the trimmed overlap")
+}
+
 func TestAggregateCandidatesRandomizedDifferential(t *testing.T) {
 	p := baseParams(t, "2026-06-16", "UTC")
 	random := rand.New(rand.NewSource(42))

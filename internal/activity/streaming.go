@@ -255,11 +255,11 @@ func buildCandidateArtifactsFromSource(
 	state := candidateSweep{
 		report: &report, windows: windows, effectiveEnd: p.EffectiveEnd,
 		last: p.RangeStart, automatedBy: automatedBy,
+		sessionEnds: make(map[string]time.Time),
 	}
 	heap.Init(&state.ends)
 	aggregates := make(map[string]*sessionIntervalAgg)
 	membership := make(map[string]BucketMembership)
-	sessionEnds := make(map[string]time.Time)
 	words := (len(windows) + 63) / 64
 	var previousStart time.Time
 	err := source(ctx, func(candidate IntervalCandidate) error {
@@ -278,16 +278,16 @@ func buildCandidateArtifactsFromSource(
 			)
 		}
 		previousStart = iv.start
-		if previousEnd, ok := sessionEnds[iv.sessionID]; ok &&
-			previousEnd.After(iv.start) {
+		state.advance(iv.start)
+		if previousEnd, ok := state.sessionEnds[iv.sessionID]; ok {
 			if !iv.end.After(previousEnd) {
 				return nil
 			}
 			iv.start = previousEnd
+			state.extend(iv)
+		} else {
+			state.open(iv)
 		}
-		sessionEnds[iv.sessionID] = iv.end
-		state.advance(iv.start)
-		state.open(iv)
 		foldCandidateInterval(
 			&report, windows, membershipWindows, aggregates, membership, words,
 			automatedBy, iv,
@@ -353,6 +353,7 @@ func effectiveCandidateInterval(p Params, candidate IntervalCandidate) (interval
 }
 
 type activeCandidateEnd struct {
+	sessionID string
 	end       time.Time
 	automated bool
 }
@@ -380,6 +381,7 @@ type candidateSweep struct {
 	effectiveEnd time.Time
 	automatedBy  map[string]bool
 	ends         activeCandidateHeap
+	sessionEnds  map[string]time.Time
 	bucket       int
 	last         time.Time
 	live         int
@@ -406,6 +408,11 @@ func (s *candidateSweep) advance(target time.Time) {
 		s.accrue(next)
 		for len(s.ends) > 0 && s.ends[0].end.Equal(next) {
 			ended := heap.Pop(&s.ends).(activeCandidateEnd)
+			currentEnd, ok := s.sessionEnds[ended.sessionID]
+			if !ok || !currentEnd.Equal(ended.end) {
+				continue
+			}
+			delete(s.sessionEnds, ended.sessionID)
 			s.live--
 			if ended.automated {
 				s.liveAuto--
@@ -435,7 +442,10 @@ func (s *candidateSweep) accrue(target time.Time) {
 
 func (s *candidateSweep) open(iv interval) {
 	automated := s.automatedBy[iv.sessionID]
-	heap.Push(&s.ends, activeCandidateEnd{end: iv.end, automated: automated})
+	s.sessionEnds[iv.sessionID] = iv.end
+	heap.Push(&s.ends, activeCandidateEnd{
+		sessionID: iv.sessionID, end: iv.end, automated: automated,
+	})
 	s.live++
 	if automated {
 		s.liveAuto++
@@ -448,6 +458,14 @@ func (s *candidateSweep) open(iv interval) {
 		s.report.Peak.At = &at
 	}
 	s.recordBucketPeak()
+}
+
+func (s *candidateSweep) extend(iv interval) {
+	automated := s.automatedBy[iv.sessionID]
+	s.sessionEnds[iv.sessionID] = iv.end
+	heap.Push(&s.ends, activeCandidateEnd{
+		sessionID: iv.sessionID, end: iv.end, automated: automated,
+	})
 }
 
 func (s *candidateSweep) recordBucketPeak() {
