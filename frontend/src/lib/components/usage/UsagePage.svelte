@@ -60,54 +60,16 @@
     usageChartColorMaps(usage.summary, settings.chartPalette),
   );
 
-  interface ProjectFilterItem {
-    id: string;
-    name: string;
-    count?: number;
-  }
-
   // Keep projects already returned by the summary so a project remains
-  // available in the dropdown after filtering removes it from the response.
-  let knownProjects: ProjectFilterItem[] = $state([]);
-
-  function mergeIntoKnownProjects(
-    projects: Array<{ project_key: string; project: string }>,
-    counts: Record<string, number>,
-  ): void {
-    if (projects.length === 0) return;
-    const byKey = new Map(knownProjects.map((project) => [project.id, project]));
-    let changed = false;
-    for (const project of projects) {
-      if (!project.project_key || !project.project) continue;
-      const existing = byKey.get(project.project_key);
-      const count = counts[project.project_key];
-      if (
-        !existing ||
-        existing.name !== project.project ||
-        existing.count !== count
-      ) {
-        byKey.set(project.project_key, {
-          id: project.project_key,
-          name: project.project,
-          count,
-        });
-        changed = true;
-      }
-    }
-    if (changed) {
-      knownProjects = [...byKey.values()].sort(
-        (a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
-      );
-    }
-  }
+  // available after filtering removes it or the page is remounted.
 
   $effect(() => {
     const fromSummary = usage.summary?.projectTotals ?? [];
     const counts = usage.summary?.sessionCounts.byProject ?? {};
-    untrack(() => mergeIntoKnownProjects(fromSummary, counts));
+    untrack(() => usage.mergeKnownProjects(fromSummary, counts));
   });
 
-  const projectItems = $derived(knownProjects);
+  const projectItems = $derived(usage.knownProjects);
 
   const legacyExcludedProjectCount = $derived(
     usage.excludedProjects

@@ -140,6 +140,7 @@ afterEach(() => {
   usage.toggles.attribution.view = "treemap";
   usage.excludedProjects = "";
   usage.excludedProjectKeys = "";
+  usage.knownProjects = [];
   settings.chartPalette = "agentsview";
   sessions.projects = [];
   yokedDates.setEnabled(false);
@@ -207,10 +208,25 @@ describe("UsagePage refresh behavior", () => {
       ...summary,
       projectTotals: [summary.projectTotals[0]!],
     };
+    await unmount(component);
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+
+    const remountedProjectFilter = document.querySelector<HTMLButtonElement>(
+      ".usage-toolbar .kit-filter-dropdown__btn",
+    );
+    expect(remountedProjectFilter).not.toBeNull();
+    remountedProjectFilter!.click();
     await tick();
     expect(
       document.querySelectorAll(".kit-filter-dropdown__item"),
     ).toHaveLength(2);
+    const remountedOptions = document.querySelectorAll<HTMLButtonElement>(
+      ".kit-filter-dropdown__item",
+    );
+    remountedOptions[1]!.click();
+    expect(usage.excludedProjectKeys).toBe("");
+
     usage.excludedProjectKeys = "unlisted-project-key";
 
     const deselectAll = Array.from(
