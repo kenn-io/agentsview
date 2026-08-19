@@ -122,6 +122,21 @@ func (db *DB) StopUsageCacheBackfill() {
 
 func (db *DB) runUsageCacheBackfill(ctx context.Context) error {
 	started := time.Now()
+	var lastErr error
+	for attempt := 1; attempt <= usageFillMaxAttempts; attempt++ {
+		lastErr = db.runUsageCacheBackfillPass(ctx, started)
+		if !errors.Is(lastErr, errUsageCacheSourceChanged) {
+			return lastErr
+		}
+	}
+	return fmt.Errorf(
+		"usage cache backfill could not stabilize after %d attempts: %w",
+		usageFillMaxAttempts, lastErr)
+}
+
+func (db *DB) runUsageCacheBackfillPass(
+	ctx context.Context, started time.Time,
+) error {
 	snapshot, err := db.captureUsageQuery(
 		ctx, UsageFilter{}, usageQueryKindActivity)
 	if err != nil {

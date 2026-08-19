@@ -515,7 +515,7 @@ func usageRollupActivityContributions(
 	type key struct{ date, model string }
 	counts := make(map[key]int)
 	for _, fact := range facts {
-		if fact.Fact.ActivityEligible && fact.LocalDate != "" {
+		if fact.Fact.ActivityEligible {
 			counts[key{fact.LocalDate, fact.Fact.Model}]++
 		}
 	}

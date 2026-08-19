@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -63,6 +64,54 @@ func TestUsageCacheBackfillNewestFirstAndResumesInstalledCoverage(t *testing.T) 
 	require.NoError(t, database.StartUsageCacheBackfill(context.Background()))
 	require.NoError(t, database.WaitUsageCacheBackfill(context.Background()))
 	assert.Empty(t, extracted, "installed versions are coverage truth on restart")
+}
+
+func TestUsageCacheBackfillRecapturesChangedSource(t *testing.T) {
+	database := testDB(t)
+	started := "2026-08-10T08:00:00Z"
+	insertSession(t, database, "moving-backfill", "project", func(session *Session) {
+		session.StartedAt = &started
+	})
+	require.NoError(t, database.InsertMessages([]Message{{
+		SessionID: "moving-backfill", Ordinal: 0, Role: "assistant",
+		Timestamp: "2026-08-10T09:00:00Z", Model: "model",
+		TokenUsage: json.RawMessage(`{"input_tokens":1}`),
+	}}))
+
+	snapshot, err := database.captureUsageQuery(
+		context.Background(), UsageFilter{}, usageQueryKindToken)
+	require.NoError(t, err)
+	cache, err := database.usageCache.Generation(
+		context.Background(), snapshot.DatabaseID)
+	require.NoError(t, err)
+	var mutations atomic.Int32
+	var mutationErr atomic.Value
+	cache.fill.observer.afterExtract = func([]usageSourceVersion) {
+		if mutations.Add(1) != 1 {
+			return
+		}
+		_, updateErr := database.getWriter().Exec(`
+			UPDATE messages SET token_usage = '{"input_tokens":9}'
+			WHERE session_id = 'moving-backfill';
+			UPDATE sessions SET transcript_revision = 'later'
+			WHERE id = 'moving-backfill'`)
+		if updateErr != nil {
+			mutationErr.Store(updateErr)
+		}
+	}
+
+	require.NoError(t, database.StartUsageCacheBackfill(context.Background()))
+	require.NoError(t, database.WaitUsageCacheBackfill(context.Background()))
+	if stored := mutationErr.Load(); stored != nil {
+		require.NoError(t, stored.(error))
+	}
+	require.Positive(t, mutations.Load())
+
+	daily, err := database.GetDailyUsage(context.Background(), UsageFilter{
+		From: "2026-08-10", To: "2026-08-10", SkipSessionCounts: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 9, daily.Totals.InputTokens)
 }
 
 func TestUsageCacheBackfillBatchesNewestSessionsFirst(t *testing.T) {

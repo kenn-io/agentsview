@@ -66,6 +66,33 @@ func TestUsageMatchingSessionCountRollupMatchesLegacy(t *testing.T) {
 	assert.Equal(t, legacy, facts)
 }
 
+func TestUsageMatchingSessionCountRollupPreservesUndatedActivity(t *testing.T) {
+	database := testDB(t)
+	insertSession(t, database, "undated", "project")
+	require.NoError(t, database.InsertMessages([]Message{{
+		SessionID: "undated", Ordinal: 0, Role: "assistant",
+	}}))
+
+	ctx := context.Background()
+	unbounded := UsageFilter{}
+	legacy, err := database.getUsageMatchingSessionCountLegacy(ctx, unbounded)
+	require.NoError(t, err)
+	require.Equal(t, 1, legacy)
+	got, err := database.GetUsageMatchingSessionCount(ctx, unbounded)
+	require.NoError(t, err)
+	assert.Equal(t, legacy, got)
+
+	bounded := UsageFilter{
+		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
+	}
+	legacy, err = database.getUsageMatchingSessionCountLegacy(ctx, bounded)
+	require.NoError(t, err)
+	require.Zero(t, legacy)
+	got, err = database.GetUsageMatchingSessionCount(ctx, bounded)
+	require.NoError(t, err)
+	assert.Equal(t, legacy, got)
+}
+
 func TestUsageMatchingSessionCountRollupCountsDuplicateActivityOwners(t *testing.T) {
 	database := testDB(t)
 	for _, id := range []string{"first", "second"} {

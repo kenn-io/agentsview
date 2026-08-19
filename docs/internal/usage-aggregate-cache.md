@@ -62,8 +62,10 @@ the next request verifies every candidate session and resolves the group from
 the latest exception rows of all members.
 
 Cursor usage uses the same exception representation under a synthetic source
-install keyed by the Cursor high-water mark. User-message activity has compact
-`(session_id, day, model)` rows for relaxed counts.
+install keyed by the Cursor high-water mark. Matching-session activity has
+compact `(session_id, day, model)` rows for relaxed counts. An eligible fact
+with neither its own timestamp nor a session start is retained with an empty
+day: unbounded matching counts include it, while bounded reads exclude it.
 
 ## Freshness contract
 
@@ -125,6 +127,9 @@ The worker runs `PRAGMA optimize` between batches, performs bounded incremental
 vacuum when the freelist is large, and runs full `ANALYZE` after generation
 creation and completed backfill. Deletion-journal sweeps are hygiene; aggregate
 reads require current archive candidates and cannot expose orphaned cache rows.
+If source data moves during a pass, the worker recaptures and retries the whole
+snapshot at most three times. Installed fingerprints let unchanged batches be
+reused across attempts.
 
 ## Verification and gates
 
