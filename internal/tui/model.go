@@ -647,8 +647,8 @@ func (m *model) executeCommand(command string) (tea.Model, tea.Cmd) {
 		return m, m.mutate(mutation)
 	case "sync-remote":
 		full := false
-		if strings.HasSuffix(value, " force") {
-			value, full = strings.TrimSpace(strings.TrimSuffix(value, " force")), true
+		if trimmed, ok := strings.CutSuffix(value, " force"); ok {
+			value, full = strings.TrimSpace(trimmed), true
 		}
 		return m, m.mutate(Mutation{Kind: name, Value: value, Flag: full})
 	case "import-claude", "import-chatgpt":
@@ -936,7 +936,7 @@ func (m *model) openReferencedSession(id string, ordinal int) (tea.Model, tea.Cm
 			return sessionLoadedMsg{generation: gen, sessionID: id, err: err}
 		}
 		messages, err := m.client.Messages(ctx, id, service.MessageFilter{
-			Around: &ordinal, Before: intPointer(50), After: intPointer(50),
+			Around: &ordinal, Before: new(50), After: new(50),
 		})
 		return sessionLoadedMsg{generation: gen, sessionID: id, detail: detail, extras: extras, messages: messages, anchor: &ordinal, err: err}
 	}
@@ -982,7 +982,7 @@ func (m *model) loadMessageWindow(ordinal int) tea.Cmd {
 		ctx, cancel := context.WithTimeout(m.ctx, 30*time.Second)
 		defer cancel()
 		messages, err := m.client.Messages(ctx, id, service.MessageFilter{
-			Around: &ordinal, Before: intPointer(25), After: intPointer(25),
+			Around: &ordinal, Before: new(25), After: new(25),
 		})
 		return sessionLoadedMsg{generation: gen, sessionID: id, messages: messages, anchor: &ordinal, err: err}
 	}
@@ -996,8 +996,6 @@ func (m *model) nextFindMatch(delta int) (tea.Model, tea.Cmd) {
 	m.status = fmt.Sprintf("transcript match %d of %d", m.findIndex+1, len(m.findMatches))
 	return m, m.loadMessageWindow(m.findMatches[m.findIndex])
 }
-
-func intPointer(value int) *int { return &value }
 
 func (m *model) mutate(mutation Mutation) tea.Cmd {
 	if m.readOnly {
@@ -1152,7 +1150,4 @@ func clamp(value, low, high int) int {
 }
 func looksLikeLocation(value string) bool {
 	return strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") || strings.HasPrefix(value, "/")
-}
-func (m *model) debugState() string {
-	return fmt.Sprintf("page=%s focus=%d selected=%d", m.page, m.focus, m.selected)
 }

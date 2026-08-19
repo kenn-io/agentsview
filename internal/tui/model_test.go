@@ -224,6 +224,17 @@ func TestReportPagesScrollWithoutSessionRows(t *testing.T) {
 	assert.Equal(t, 1, next.(*model).scroll)
 }
 
+func TestAnalyticsLinesIgnoreNilAgentRows(t *testing.T) {
+	m := newModel(context.Background(), &fakeDataClient{}, Options{})
+	m.pageData.Analytics = &db.AnalyticsSummary{
+		Agents: map[string]*db.AgentSummary{"codex": nil},
+	}
+
+	var lines []string
+	require.NotPanics(t, func() { lines = m.analyticsLines() })
+	assert.NotEmpty(t, lines)
+}
+
 func TestModelIgnoresDetailForPreviouslySelectedSession(t *testing.T) {
 	m := newModel(context.Background(), &fakeDataClient{}, Options{})
 	m.generation = 4
