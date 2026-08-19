@@ -255,51 +255,7 @@ func (c *Client) LoadPage(ctx context.Context, page Page, q PageQuery) (PageData
 	case PageDashboard:
 		return c.loadDashboard(ctx, values)
 	case PageUsage:
-		out, err := c.sessions.UsageSummary(ctx, service.UsageRequest{
-			From: q.From, To: q.To, Timezone: q.Timezone, Project: q.Project,
-			Agent: q.Agent, Machine: q.Machine, Model: q.Model,
-			GitBranch: q.GitBranch, ExcludeProject: q.ExcludeProject,
-			ExcludeAgent: q.ExcludeAgent, ExcludeModel: q.ExcludeModel,
-			ActiveSince: q.ActiveSince, Termination: q.Termination,
-			MinUserMessages: q.MinUserMessages, IncludeOneShot: q.IncludeOneShot,
-			IncludeAutomated: q.IncludeAutomated,
-		})
-		if err != nil {
-			return PageData{}, err
-		}
-		data := PageData{Usage: out}
-		values.Set("include_one_shot", strconv.FormatBool(q.IncludeOneShot))
-		values.Set("include_automated", strconv.FormatBool(q.IncludeAutomated))
-		values.Set("limit", "20")
-		if err := c.get(ctx, "/api/v1/usage/top-sessions", values, &data.UsageTopSessions); err != nil {
-			return PageData{}, err
-		}
-		values.Del("limit")
-		values.Set("current_microdollars", strconv.FormatInt(out.Totals.TotalCost.Microdollars, 10))
-		var comparison UsageComparison
-		if err := c.get(ctx, "/api/v1/usage/comparison", values, &comparison); err != nil {
-			return PageData{}, err
-		}
-		data.UsageComparison = &comparison
-		if q.CompareDimension != "" && q.CompareLeft != "" && q.CompareRight != "" {
-			data.UsagePairwise, err = c.sessions.UsagePairwiseComparison(ctx, service.UsagePairwiseComparisonRequest{
-				UsageRequest: service.UsageRequest{
-					From: q.From, To: q.To, Timezone: q.Timezone, Project: q.Project,
-					Agent: q.Agent, Machine: q.Machine, Model: q.Model,
-					GitBranch: q.GitBranch, ExcludeProject: q.ExcludeProject,
-					ExcludeAgent: q.ExcludeAgent, ExcludeModel: q.ExcludeModel,
-					ActiveSince: q.ActiveSince, Termination: q.Termination,
-					MinUserMessages: q.MinUserMessages,
-					IncludeOneShot:  q.IncludeOneShot, IncludeAutomated: q.IncludeAutomated,
-				},
-				LeftDimension: q.CompareDimension, LeftValue: q.CompareLeft,
-				RightDimension: q.CompareDimension, RightValue: q.CompareRight,
-			})
-			if err != nil {
-				return PageData{}, err
-			}
-		}
-		return data, nil
+		return c.loadUsage(ctx, q, values)
 	case PageActivity:
 		preset := q.ActivityPreset
 		if preset == "" {
@@ -384,6 +340,73 @@ func (c *Client) LoadPage(ctx context.Context, page Page, q PageQuery) (PageData
 	}
 }
 
+func (c *Client) loadUsage(ctx context.Context, q PageQuery, values url.Values) (PageData, error) {
+	usageRequest := service.UsageRequest{
+		From: q.From, To: q.To, Timezone: q.Timezone, Project: q.Project,
+		Agent: q.Agent, Machine: q.Machine, Model: q.Model,
+		GitBranch: q.GitBranch, ExcludeProject: q.ExcludeProject,
+		ExcludeAgent: q.ExcludeAgent, ExcludeModel: q.ExcludeModel,
+		ActiveSince: q.ActiveSince, Termination: q.Termination,
+		MinUserMessages: q.MinUserMessages, IncludeOneShot: q.IncludeOneShot,
+		IncludeAutomated: q.IncludeAutomated,
+	}
+	values.Set("include_one_shot", strconv.FormatBool(q.IncludeOneShot))
+	values.Set("include_automated", strconv.FormatBool(q.IncludeAutomated))
+	values.Set("limit", "20")
+	var summary *service.UsageSummaryResult
+	var topSessions []db.TopSessionEntry
+	var summaryErr, topSessionsErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		summary, summaryErr = c.sessions.UsageSummary(ctx, usageRequest)
+	}()
+	go func() {
+		defer wg.Done()
+		topSessionsErr = c.get(ctx, "/api/v1/usage/top-sessions", values, &topSessions)
+	}()
+	wg.Wait()
+	if summaryErr != nil {
+		return PageData{}, summaryErr
+	}
+	if topSessionsErr != nil {
+		return PageData{}, topSessionsErr
+	}
+
+	data := PageData{Usage: summary, UsageTopSessions: topSessions}
+	values.Del("limit")
+	values.Set("current_microdollars",
+		strconv.FormatInt(summary.Totals.TotalCost.Microdollars, 10))
+	var comparison UsageComparison
+	var comparisonErr, pairwiseErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		comparisonErr = c.get(ctx, "/api/v1/usage/comparison", values, &comparison)
+	}()
+	if q.CompareDimension != "" && q.CompareLeft != "" && q.CompareRight != "" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			data.UsagePairwise, pairwiseErr = c.sessions.UsagePairwiseComparison(ctx, service.UsagePairwiseComparisonRequest{
+				UsageRequest:  usageRequest,
+				LeftDimension: q.CompareDimension, LeftValue: q.CompareLeft,
+				RightDimension: q.CompareDimension, RightValue: q.CompareRight,
+			})
+		}()
+	}
+	wg.Wait()
+	if comparisonErr != nil {
+		return PageData{}, comparisonErr
+	}
+	if pairwiseErr != nil {
+		return PageData{}, pairwiseErr
+	}
+	data.UsageComparison = &comparison
+	return data, nil
+}
+
 func (c *Client) loadDashboard(ctx context.Context, values url.Values) (PageData, error) {
 	data := PageData{}
 	loads := []struct {
@@ -402,8 +425,18 @@ func (c *Client) loadDashboard(ctx context.Context, values url.Values) (PageData
 		{"/api/v1/analytics/top-sessions", new(db.TopSessionsResponse)},
 		{"/api/v1/analytics/signals", new(db.SignalsAnalyticsResponse)},
 	}
-	for _, load := range loads {
-		if err := c.get(ctx, load.path, values, load.out); err != nil {
+	errs := make([]error, len(loads))
+	var wg sync.WaitGroup
+	wg.Add(len(loads))
+	for i := range loads {
+		go func() {
+			defer wg.Done()
+			errs[i] = c.get(ctx, loads[i].path, values, loads[i].out)
+		}()
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
 			return PageData{}, err
 		}
 	}

@@ -8,11 +8,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 func TestClientMutationAuthenticatesAndSetsOrigin(t *testing.T) {
@@ -114,7 +116,10 @@ func TestClientLoadsEveryDashboardSurfaceWithSharedFilters(t *testing.T) {
 		"/api/v1/analytics/skills": false, "/api/v1/analytics/top-sessions": false,
 		"/api/v1/analytics/signals": false,
 	}
+	var mu sync.Mutex
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
 		_, known := wantPaths[r.URL.Path]
 		assert.True(t, known, "unexpected dashboard path %s", r.URL.Path)
 		assert.Equal(t, "app", r.URL.Query().Get("project"))
@@ -134,6 +139,36 @@ func TestClientLoadsEveryDashboardSurfaceWithSharedFilters(t *testing.T) {
 	for path, called := range wantPaths {
 		assert.True(t, called, "dashboard did not request %s", path)
 	}
+}
+
+func TestClientLoadsDashboardSurfacesConcurrently(t *testing.T) {
+	const surfaceCount = 11
+	started := make(chan struct{}, surfaceCount)
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		started <- struct{}{}
+		<-release
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	t.Cleanup(server.Close)
+	errs := make(chan error, 1)
+	go func() {
+		_, err := NewClient(server.URL, "", false).LoadPage(
+			context.Background(), PageDashboard, PageQuery{},
+		)
+		errs <- err
+	}()
+
+	for range surfaceCount {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			require.FailNow(t, "dashboard requests did not start concurrently")
+		}
+	}
+	close(release)
+
+	require.NoError(t, <-errs)
 }
 
 func TestClientLoadsSessionExtrasConcurrently(t *testing.T) {
@@ -213,6 +248,85 @@ func TestClientUsesActivityAndInsightPageControls(t *testing.T) {
 	assert.Equal(t, map[string]string{
 		"date_from": "2026-08-01", "date_to": "2026-08-07", "type": "weekly",
 	}, insightQuery)
+}
+
+func TestClientUsesExactMoneyForUsageComparison(t *testing.T) {
+	var comparisonQuery map[string]string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/usage/summary":
+			_, _ = io.WriteString(w, `{"from":"2026-08-01","to":"2026-08-02","totals":{"totalCost":{"microdollars":1250001}}}`)
+		case "/api/v1/usage/top-sessions":
+			_, _ = io.WriteString(w, `[]`)
+		case "/api/v1/usage/comparison":
+			comparisonQuery = make(map[string]string)
+			for key := range r.URL.Query() {
+				comparisonQuery[key] = r.URL.Query().Get(key)
+			}
+			_, _ = io.WriteString(w, `{"priorFrom":"2026-07-30","priorTo":"2026-07-31","priorTotalCost":{"microdollars":500000},"deltaPct":1.5}`)
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	data, err := NewClient(server.URL, "", false).LoadPage(
+		context.Background(), PageUsage,
+		PageQuery{From: "2026-08-01", To: "2026-08-02"},
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, data.UsageComparison)
+	assert.Equal(t, "1250001", comparisonQuery["current_microdollars"])
+	assert.NotContains(t, comparisonQuery, "current_cost")
+	assert.Equal(t, money.Money{Microdollars: 500000},
+		data.UsageComparison.PriorTotalCost)
+}
+
+func TestClientLoadsUsageSummaryAndTopSessionsConcurrently(t *testing.T) {
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/usage/summary", "/api/v1/usage/top-sessions":
+			started <- r.URL.Path
+			<-release
+			if r.URL.Path == "/api/v1/usage/top-sessions" {
+				_, _ = io.WriteString(w, `[]`)
+				return
+			}
+			_, _ = io.WriteString(w, `{}`)
+		case "/api/v1/usage/comparison":
+			_, _ = io.WriteString(w, `{}`)
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	errs := make(chan error, 1)
+	go func() {
+		_, err := NewClient(server.URL, "", false).LoadPage(
+			context.Background(), PageUsage, PageQuery{},
+		)
+		errs <- err
+	}()
+
+	seen := make(map[string]bool)
+	for range 2 {
+		select {
+		case path := <-started:
+			seen[path] = true
+		case <-time.After(time.Second):
+			require.FailNow(t, "usage requests did not start concurrently")
+		}
+	}
+	close(release)
+
+	require.NoError(t, <-errs)
+	assert.Equal(t, map[string]bool{
+		"/api/v1/usage/summary":      true,
+		"/api/v1/usage/top-sessions": true,
+	}, seen)
 }
 
 func TestClientReturnsDaemonErrorMessage(t *testing.T) {
