@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -14,25 +15,40 @@ import (
 )
 
 type fakeDataClient struct {
-	list      *service.SessionList
-	detail    *service.SessionDetail
-	messages  *service.MessageList
-	page      PageData
-	mutations []Mutation
-	find      []int
-	filters   []service.MessageFilter
+	list            *service.SessionList
+	detail          *service.SessionDetail
+	messages        *service.MessageList
+	page            PageData
+	mutations       []Mutation
+	find            []int
+	filters         []service.MessageFilter
+	getSessionFn    func(context.Context, string) (*service.SessionDetail, error)
+	sessionExtrasFn func(context.Context, string) (SessionExtras, error)
+	messagesFn      func(context.Context, string, service.MessageFilter) (*service.MessageList, error)
 }
 
 func (f *fakeDataClient) ListSessions(context.Context, service.ListFilter) (*service.SessionList, error) {
 	return f.list, nil
 }
-func (f *fakeDataClient) GetSession(context.Context, string) (*service.SessionDetail, error) {
+
+func (f *fakeDataClient) GetSession(ctx context.Context, id string) (*service.SessionDetail, error) {
+	if f.getSessionFn != nil {
+		return f.getSessionFn(ctx, id)
+	}
 	return f.detail, nil
 }
-func (*fakeDataClient) SessionExtras(context.Context, string) (SessionExtras, error) {
+
+func (f *fakeDataClient) SessionExtras(ctx context.Context, id string) (SessionExtras, error) {
+	if f.sessionExtrasFn != nil {
+		return f.sessionExtrasFn(ctx, id)
+	}
 	return SessionExtras{}, nil
 }
-func (f *fakeDataClient) Messages(_ context.Context, _ string, filter service.MessageFilter) (*service.MessageList, error) {
+
+func (f *fakeDataClient) Messages(ctx context.Context, id string, filter service.MessageFilter) (*service.MessageList, error) {
+	if f.messagesFn != nil {
+		return f.messagesFn(ctx, id, filter)
+	}
 	f.filters = append(f.filters, filter)
 	return f.messages, nil
 }
@@ -122,6 +138,21 @@ func TestModelIgnoresStaleSessionPage(t *testing.T) {
 	assert.Equal(t, uint64(4), got.generation)
 }
 
+func TestModelDoesNotReloadForServerHeartbeat(t *testing.T) {
+	m := newModel(context.Background(), &fakeDataClient{}, Options{})
+	m.generation = 4
+	events := make(chan ServerEvent)
+
+	next, command := m.Update(eventMsg{
+		event:  ServerEvent{Event: "heartbeat", Data: "2026-08-19T00:00:00Z"},
+		events: events,
+	})
+
+	require.NotNil(t, command)
+	assert.Equal(t, uint64(4), next.(*model).generation)
+	assert.False(t, next.(*model).loading)
+}
+
 func TestModelLoadsSessionAndRendersSafeTranscript(t *testing.T) {
 	name := "Build release"
 	fake := &fakeDataClient{}
@@ -143,9 +174,13 @@ func TestModelLoadsSessionAndRendersSafeTranscript(t *testing.T) {
 			ResultContent: "contents\x1b]52;c;ZXZpbA==\x07",
 		}},
 	}}}
-	loaded := command().(sessionLoadedMsg)
-	next, _ = m.Update(loaded)
-	m = next.(*model)
+	batch, ok := command().(tea.BatchMsg)
+	require.True(t, ok)
+	require.Len(t, batch, 2)
+	for _, load := range batch {
+		next, _ = m.Update(load())
+		m = next.(*model)
+	}
 
 	view := m.View()
 	assert.Contains(t, view.Content, "Build release")
@@ -153,6 +188,63 @@ func TestModelLoadsSessionAndRendersSafeTranscript(t *testing.T) {
 	assert.Contains(t, view.Content, "tool Read")
 	assert.Contains(t, view.Content, "README.md")
 	assert.NotContains(t, view.Content, "\x1b]52")
+}
+
+func TestSelectedSessionLoadsTranscriptAndVitalsConcurrently(t *testing.T) {
+	started := make(chan string, 3)
+	release := make(chan struct{})
+	wait := func(ctx context.Context, name string) error {
+		started <- name
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	fake := &fakeDataClient{}
+	fake.getSessionFn = func(ctx context.Context, id string) (*service.SessionDetail, error) {
+		err := wait(ctx, "detail")
+		return &service.SessionDetail{Session: db.Session{ID: id}}, err
+	}
+	fake.messagesFn = func(ctx context.Context, _ string, _ service.MessageFilter) (*service.MessageList, error) {
+		err := wait(ctx, "messages")
+		return &service.MessageList{Messages: []db.Message{{ID: 1}}}, err
+	}
+	fake.sessionExtrasFn = func(ctx context.Context, _ string) (SessionExtras, error) {
+		err := wait(ctx, "extras")
+		return SessionExtras{Timing: &db.SessionTiming{}}, err
+	}
+	m := newModel(context.Background(), fake, Options{})
+	m.sessions = []db.Session{{ID: "session"}}
+
+	command := m.loadSelectedSession()
+	batch, ok := command().(tea.BatchMsg)
+	require.True(t, ok)
+	require.Len(t, batch, 2)
+	results := make(chan tea.Msg, len(batch))
+	for _, load := range batch {
+		go func() { results <- load() }()
+	}
+	seen := make(map[string]bool)
+	for range 3 {
+		select {
+		case name := <-started:
+			seen[name] = true
+		case <-time.After(time.Second):
+			require.FailNow(t, "session requests did not start concurrently")
+		}
+	}
+	close(release)
+	for range batch {
+		next, _ := m.Update(<-results)
+		m = next.(*model)
+	}
+
+	assert.Equal(t, map[string]bool{"detail": true, "messages": true, "extras": true}, seen)
+	require.NotNil(t, m.detail)
+	require.Len(t, m.messages, 1)
+	assert.NotNil(t, m.extras.Timing)
 }
 
 func TestPersistedStateRoundTrip(t *testing.T) {

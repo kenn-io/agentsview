@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
@@ -202,23 +203,35 @@ func (c *Client) GetSession(ctx context.Context, id string) (*service.SessionDet
 
 func (c *Client) SessionExtras(ctx context.Context, id string) (SessionExtras, error) {
 	sid := url.PathEscape(id)
-	var out SessionExtras
 	var activityResponse db.SessionActivityResponse
-	if err := c.get(ctx, "/api/v1/sessions/"+sid+"/activity", nil, &activityResponse); err != nil {
-		return out, err
-	}
-	out.Activity = &activityResponse
 	var timing db.SessionTiming
-	if err := c.get(ctx, "/api/v1/sessions/"+sid+"/timing", nil, &timing); err != nil {
-		return out, err
-	}
-	out.Timing = &timing
 	var usage db.SessionUsage
-	if err := c.get(ctx, "/api/v1/sessions/"+sid+"/usage", url.Values{"breakdown": {"false"}}, &usage); err != nil {
-		return out, err
+	var activityErr, timingErr, usageErr error
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		activityErr = c.get(ctx, "/api/v1/sessions/"+sid+"/activity", nil, &activityResponse)
+	}()
+	go func() {
+		defer wg.Done()
+		timingErr = c.get(ctx, "/api/v1/sessions/"+sid+"/timing", nil, &timing)
+	}()
+	go func() {
+		defer wg.Done()
+		usageErr = c.get(ctx, "/api/v1/sessions/"+sid+"/usage", url.Values{"breakdown": {"false"}}, &usage)
+	}()
+	wg.Wait()
+	if activityErr != nil {
+		return SessionExtras{}, activityErr
 	}
-	out.Usage = &usage
-	return out, nil
+	if timingErr != nil {
+		return SessionExtras{}, timingErr
+	}
+	if usageErr != nil {
+		return SessionExtras{}, usageErr
+	}
+	return SessionExtras{Activity: &activityResponse, Timing: &timing, Usage: &usage}, nil
 }
 
 func (c *Client) Messages(ctx context.Context, id string, f service.MessageFilter) (*service.MessageList, error) {

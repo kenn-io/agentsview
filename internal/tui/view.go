@@ -240,11 +240,7 @@ func (m *model) renderTranscript(width, height int) string {
 			prefix += "  " + safe(message.Model)
 		}
 		lines = append(lines, selectedLine(truncateWidth(prefix, width-4), i == m.messageSelected))
-		raw := message.Content
-		if m.messageLayout == "skim" {
-			raw = firstLine(raw)
-		}
-		content := renderMarkdown(raw, max(20, width-6), m.theme)
+		content := m.renderMessage(i, message, max(20, width-6))
 		lines = append(lines, strings.Split(strings.TrimSpace(content), "\n")...)
 		if m.showTools {
 			lines = append(lines, m.toolCallLines(message, width)...)
@@ -263,6 +259,25 @@ func (m *model) renderTranscript(width, height int) string {
 		lines = append(lines, mutedStyle.Render(fmt.Sprintf("n loads more messages · %d loaded", len(m.messages))))
 	}
 	return panel(windowLines(lines, max(1, height-2), 0), width, height, m.focus == 2)
+}
+
+func (m *model) renderMessage(index int, message db.Message, width int) string {
+	raw := message.Content
+	if m.messageLayout == "skim" {
+		raw = firstLine(raw)
+	}
+	if cached, ok := m.renderedMessages[index]; ok &&
+		cached.content == raw && cached.width == width && cached.theme == m.theme && cached.layout == m.messageLayout {
+		return cached.rendered
+	}
+	rendered := renderMarkdown(raw, width, m.theme)
+	if m.renderedMessages == nil {
+		m.renderedMessages = make(map[int]renderedMessage)
+	}
+	m.renderedMessages[index] = renderedMessage{
+		content: raw, rendered: rendered, width: width, theme: m.theme, layout: m.messageLayout,
+	}
+	return rendered
 }
 
 func (m *model) toolCallLines(message db.Message, width int) []string {

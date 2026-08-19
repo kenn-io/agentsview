@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -133,6 +134,46 @@ func TestClientLoadsEveryDashboardSurfaceWithSharedFilters(t *testing.T) {
 	for path, called := range wantPaths {
 		assert.True(t, called, "dashboard did not request %s", path)
 	}
+}
+
+func TestClientLoadsSessionExtrasConcurrently(t *testing.T) {
+	started := make(chan string, 3)
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started <- r.URL.Path
+		<-release
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	t.Cleanup(server.Close)
+	result := make(chan SessionExtras, 1)
+	errs := make(chan error, 1)
+	go func() {
+		extras, err := NewClient(server.URL, "", false).SessionExtras(context.Background(), "s1")
+		result <- extras
+		errs <- err
+	}()
+
+	seen := make(map[string]bool)
+	for range 3 {
+		select {
+		case path := <-started:
+			seen[path] = true
+		case <-time.After(time.Second):
+			require.FailNow(t, "session extra requests did not start concurrently")
+		}
+	}
+	close(release)
+	extras := <-result
+
+	require.NoError(t, <-errs)
+	assert.Equal(t, map[string]bool{
+		"/api/v1/sessions/s1/activity": true,
+		"/api/v1/sessions/s1/timing":   true,
+		"/api/v1/sessions/s1/usage":    true,
+	}, seen)
+	assert.NotNil(t, extras.Activity)
+	assert.NotNil(t, extras.Timing)
+	assert.NotNil(t, extras.Usage)
 }
 
 func TestClientUsesActivityAndInsightPageControls(t *testing.T) {
