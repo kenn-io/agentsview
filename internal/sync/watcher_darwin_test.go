@@ -17,6 +17,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/fsevents"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -558,6 +559,23 @@ func TestDarwinWatcherExcludesRecursiveEvents(t *testing.T) {
 			return false
 		}
 	}, 400*time.Millisecond, 10*time.Millisecond)
+}
+
+// TestDarwinWatcherKqueueLostEventsReachConsumer covers the kqueue backend's
+// lost-events full sync. That event carries no path, and the wrapper drops
+// kqueue events it cannot attribute to a root, so the full sync must bypass
+// root matching or the events it stands in for are never reconciled.
+func TestDarwinWatcherKqueueLostEventsReachConsumer(t *testing.T) {
+	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
+	require.NoError(t, err)
+	errorInput := make(chan error, 1)
+	backend.kqueue.errorInput = errorInput
+	watcher, batches := newDarwinTestWatcherWithBackend(t, backend)
+	watcher.Start()
+
+	errorInput <- fsnotify.ErrEventOverflow
+
+	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool { return batch.FullSync })
 }
 
 func TestDarwinWatcherExcludedDirectoryRenameIsFiltered(t *testing.T) {

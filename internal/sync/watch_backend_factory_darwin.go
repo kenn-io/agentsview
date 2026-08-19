@@ -1703,6 +1703,12 @@ func (b *darwinWatchBackend) handleKqueueEvent(
 	if b.collectFallbackEvent(event) {
 		return backendEvent{}, false
 	}
+	// A lost-events full sync carries no path, so it never matches a root.
+	// It stands in for kqueue events that were dropped and must reach the
+	// consumer regardless of root ownership.
+	if event.Op&backendOpFullSync != 0 {
+		return event, true
+	}
 	if b.fallbackPhaseValue() == darwinFallbackOpen {
 		if !ok {
 			return backendEvent{}, false
