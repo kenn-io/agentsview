@@ -24,6 +24,15 @@ remains relevant when the folder no longer exists because historical sessions
 still refer to it, and it may still receive a project rule. A renamed path is a
 different observed folder.
 
+**Mapped folder**:
+
+An observed folder to which a project rule applies.
+
+**Unmapped folder**:
+
+An observed folder to which no project rule applies. Session classifications do
+not map the folder. An unmapped folder may contain mapped child folders.
+
 **Project rule**:
 
 A reusable, machine-specific instruction that classifies sessions under a folder
