@@ -2360,7 +2360,7 @@ func removeGeneratedIdentitySnapshotsWithoutSource(
 const (
 	sanitizedSourceDataVersion      = 58
 	sanitizedInputSourceDataVersion = 59
-	canonicalTimestampDataVersion   = 84
+	canonicalTimestampDataVersion   = 91
 )
 
 // projectIdentitySourceSnapshotDataVersion is the first archive version whose

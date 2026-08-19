@@ -1741,10 +1741,10 @@ func TestSyncModelPricingRetiresOpenRouterRows(t *testing.T) {
 	assert.Equal(t, int64(2_000_000), input, "replacement row mirrored")
 	var meta string
 	require.NoError(t, syncer.DB().QueryRowContext(ctx,
-		`SELECT updated_at FROM model_pricing WHERE model_pattern = ?`,
+		`SELECT value FROM sync_metadata WHERE key = ?`,
 		pricing.OpenRouterModelsMetaKey,
 	).Scan(&meta))
-	assert.Equal(t, `[]`, meta, "ownership sentinel mirrored by value")
+	assert.Equal(t, `[]`, meta, "ownership metadata mirrored by value")
 }
 
 func TestSyncModelPricingSkipsUnchangedMirrorRows(t *testing.T) {

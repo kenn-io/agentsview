@@ -494,7 +494,11 @@ func TestSyncShelleySameSecondInPlaceRewrite(t *testing.T) {
 		"same-second rewrite keeps the real Shelley updated_at timestamp")
 	assert.NotEqual(t, *before.FileHash, *after.FileHash,
 		"same-count same-second rewrite changes the content fingerprint")
-	assert.Greater(t, *after.LocalModifiedAt, *before.LocalModifiedAt,
+	beforeModified, err := time.Parse(time.RFC3339Nano, *before.LocalModifiedAt)
+	require.NoError(t, err, "parse local_modified_at before rewrite")
+	afterModified, err := time.Parse(time.RFC3339Nano, *after.LocalModifiedAt)
+	require.NoError(t, err, "parse local_modified_at after rewrite")
+	assert.True(t, afterModified.After(beforeModified),
 		"successful rewrite must bump local_modified_at for push windows")
 
 	candidates, err := database.ListSessionsModifiedBetween(

@@ -183,6 +183,7 @@ func copyCanonicalRowsFromAttached(
 
 // CanonicalSessionRow converts one public session into its portable Bun row.
 func CanonicalSessionRow(session Session) (bunmodel.Session, error) {
+	session.IsAutomated = sessionIsAutomated(session)
 	row, err := sessionToBunRow(session)
 	if err != nil {
 		return bunmodel.Session{}, err

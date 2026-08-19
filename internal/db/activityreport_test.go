@@ -5,7 +5,6 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -85,30 +84,6 @@ func TestSQLiteActivityReportCandidatesMatchGoPairingAtScanBounds(t *testing.T) 
 	assert.Equal(t, want, got)
 }
 
-func TestSQLiteActivityReportCandidateQueryUsesExistingSessionIndex(t *testing.T) {
-	d := testDB(t)
-	q := dayQuery(t, "2026-06-16", "UTC")
-	rows, err := d.getReader().QueryContext(
-		context.Background(), "EXPLAIN QUERY PLAN "+activityReportCandidatesSQL,
-		`["session"]`, "2026-06-15T09:00:00Z", "2026-06-17T14:00:00Z",
-		q.RangeStart.Add(-5*time.Minute).UnixMicro(), q.EffectiveEnd.UnixMicro(),
-	)
-	require.NoError(t, err)
-	defer rows.Close()
-	var details []string
-	for rows.Next() {
-		var id, parent, unused int
-		var detail string
-		require.NoError(t, rows.Scan(&id, &parent, &unused, &detail))
-		details = append(details, detail)
-	}
-	require.NoError(t, rows.Err())
-	plan := strings.Join(details, "\n")
-	assert.Contains(t, plan, "idx_messages_velocity")
-	assert.NotContains(t, plan, "idx_messages_activity_timestamp")
-	assert.NotContains(t, plan, "SCAN m")
-}
-
 func TestSQLiteActivityReportCandidateSourceStopsOnCancellation(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "cancel", "p", func(s *Session) {
@@ -125,7 +100,7 @@ func TestSQLiteActivityReportCandidateSourceStopsOnCancellation(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	seen := 0
-	err := d.activityReportCandidateSource(
+	err := d.ActivityReportCandidateSource(
 		[]string{"cancel"}, dayQuery(t, "2026-06-16", "UTC"),
 	)(ctx, func(activity.IntervalCandidate) error {
 		seen++
@@ -207,7 +182,7 @@ func TestGetActivityReport_ToolCompletionAfterRangeClosesFinalMessage(t *testing
 
 func BenchmarkSQLiteActivityReportCandidateSource100K(b *testing.B) {
 	d, ids, q := seedSQLiteActivityReportBenchmark(b)
-	source := d.activityReportCandidateSource(ids, q)
+	source := d.ActivityReportCandidateSource(ids, q)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
@@ -269,7 +244,7 @@ func BenchmarkSQLiteActivityReportCandidateSourceLongSession(b *testing.B) {
 		{name: "narrow-3900", q: narrow, want: 3900},
 	} {
 		b.Run(benchmark.name, func(b *testing.B) {
-			source := d.activityReportCandidateSource([]string{"bench-long"}, benchmark.q)
+			source := d.ActivityReportCandidateSource([]string{"bench-long"}, benchmark.q)
 			b.ReportAllocs()
 			for range b.N {
 				count := 0

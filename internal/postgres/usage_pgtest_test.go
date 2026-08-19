@@ -1744,9 +1744,9 @@ func TestPushRetiresOpenRouterPricingRows(t *testing.T) {
 
 	var meta string
 	require.NoError(t, store.DB().QueryRowContext(context.Background(), `
-		SELECT updated_at FROM model_pricing WHERE model_pattern = $1`,
+		SELECT value FROM sync_metadata WHERE key = $1`,
 		pricing.OpenRouterModelsMetaKey).Scan(&meta))
-	assert.Equal(t, `[]`, meta, "ownership sentinel mirrored by value")
+	assert.Equal(t, `[]`, meta, "ownership metadata mirrored by value")
 }
 
 func TestPushFallsBackToBuiltinPricingWhenLocalTableEmpty(t *testing.T) {

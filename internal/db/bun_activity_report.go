@@ -190,7 +190,7 @@ func (s *BunStore) BuildActivityReportArtifacts(
 
 	var artifacts activity.CandidateArtifacts
 	err := s.consistentView(ctx, func(store bun.IDB) error {
-		sessions, events, err := s.bunActivityReportScopeFrom(ctx, store, f, q)
+		sessions, err := s.bunActivityReportScopeFrom(ctx, store, f, q)
 		if err != nil {
 			return err
 		}
@@ -208,10 +208,7 @@ func (s *BunStore) BuildActivityReportArtifacts(
 			return err
 		}
 
-		candidates := activity.PairActivityEvents(
-			events, q.RangeStart, q.EffectiveEnd,
-			time.Duration(q.GapCapSeconds)*time.Second,
-		)
+		candidateSource := s.bunActivityReportCandidateSourceFrom(store, ids, q)
 		rowsProcessed := int64(0)
 		built, err := activity.BuildCandidateArtifactsFromSourceWithSurvivorUsage(
 			ctx,
@@ -233,21 +230,15 @@ func (s *BunStore) BuildActivityReportArtifacts(
 					Phase:         activity.ProgressScanningActivity,
 					SessionsTotal: len(sessions),
 				})
-				for _, candidate := range candidates {
-					if err := ctx.Err(); err != nil {
-						return err
-					}
+				return candidateSource(ctx, func(candidate activity.IntervalCandidate) error {
 					rowsProcessed++
 					reportProgress(onProgress, activity.Progress{
 						Phase:         activity.ProgressScanningActivity,
 						SessionsTotal: len(sessions),
 						RowsProcessed: rowsProcessed,
 					})
-					if err := yield(candidate); err != nil {
-						return err
-					}
-				}
-				return nil
+					return yield(candidate)
+				})
 			},
 			usage,
 		)

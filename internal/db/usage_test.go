@@ -1919,7 +1919,7 @@ func TestGetDailyUsage_DedupesByClaudeMessageAndRequestID(t *testing.T) {
 	assert.Equal(t, 55000, day.CacheReadTokens, "cache_rd")
 }
 
-func TestGetDailyUsage_DistinguishesClaudeIDsContainingNUL(t *testing.T) {
+func TestGetDailyUsage_DedupesCanonicalizedClaudeIDs(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "nul-identities", "project", func(s *Session) {
 		s.Agent = "claude"
@@ -1949,14 +1949,25 @@ func TestGetDailyUsage_DistinguishesClaudeIDsContainingNUL(t *testing.T) {
 				`{"input_tokens":300,"output_tokens":30}`),
 		},
 	)
+	var messageID, requestID string
+	var identities int
+	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `
+		SELECT MIN(claude_message_id), MIN(claude_request_id),
+			COUNT(DISTINCT claude_message_id || ':' || claude_request_id)
+		FROM messages WHERE session_id = ?`,
+		"nul-identities",
+	).Scan(&messageID, &requestID, &identities))
+	assert.Equal(t, "a", messageID)
+	assert.Equal(t, "x", requestID)
+	assert.Equal(t, 1, identities)
 
 	result, err := d.GetDailyUsage(t.Context(), UsageFilter{
 		From: "2026-04-10", To: "2026-04-10", Timezone: "UTC",
 	})
 	require.NoError(t, err)
 	require.Len(t, result.Daily, 1)
-	assert.Equal(t, 500, result.Daily[0].InputTokens)
-	assert.Equal(t, 50, result.Daily[0].OutputTokens)
+	assert.Equal(t, 300, result.Daily[0].InputTokens)
+	assert.Equal(t, 30, result.Daily[0].OutputTokens)
 }
 
 func TestUsageAggregatesPreferCompleteClaudeSnapshotAcrossSessions(t *testing.T) {

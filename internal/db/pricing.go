@@ -436,19 +436,7 @@ func (db *DB) GetPricingMeta(key string) (string, error) {
 
 // GetPricingMetaContext is GetPricingMeta with caller cancellation.
 func (db *DB) GetPricingMetaContext(ctx context.Context, key string) (string, error) {
-	var val string
-	err := db.getReader().QueryRowContext(ctx,
-		`SELECT value FROM pricing_metadata WHERE key = ?`, key,
-	).Scan(&val)
-	if err == sql.ErrNoRows {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf(
-			"reading pricing meta %q: %w", key, err,
-		)
-	}
-	return val, nil
+	return db.BunStore.GetPricingMetaContext(ctx, key)
 }
 
 const setPricingMetaSQL = `INSERT INTO pricing_metadata (key, value)

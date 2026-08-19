@@ -78,7 +78,7 @@ func TestBunTopSessionsPlannerSkipsUnavailableTimestampsInActiveDuration(t *test
 	assert.Equal(t, 2.0, got.Sessions[0].ActiveDurationMin)
 }
 
-func TestBunActivityReportPlannerScopesExactOverlapAndEvents(t *testing.T) {
+func TestBunActivityReportPlannerScopesExactOverlapAndCandidates(t *testing.T) {
 	database := testDB(t)
 	for _, session := range []Session{
 		{
@@ -96,22 +96,33 @@ func TestBunActivityReportPlannerScopesExactOverlapAndEvents(t *testing.T) {
 	}
 	require.NoError(t, database.InsertMessages([]Message{
 		{SessionID: "inside", Ordinal: 0, Role: "assistant", Timestamp: "2026-08-04T10:01:00Z"},
+		{SessionID: "inside", Ordinal: 1, Role: "user", Timestamp: "2026-08-04T10:02:00Z"},
 		{SessionID: "outside", Ordinal: 0, Role: "assistant", Timestamp: "2026-08-03T10:01:00Z"},
+		{SessionID: "outside", Ordinal: 1, Role: "user", Timestamp: "2026-08-03T10:02:00Z"},
 	}))
 
 	q := dayQuery(t, "2026-08-04", "UTC")
 	var sessions []activity.SessionMeta
-	var events []activity.ActivityEvent
+	var candidates []activity.IntervalCandidate
 	err := database.consistentView(t.Context(), func(store bun.IDB) error {
 		var queryErr error
-		sessions, events, queryErr = database.bunActivityReportScopeFrom(
+		sessions, queryErr = database.bunActivityReportScopeFrom(
 			t.Context(), store, AnalyticsFilter{Project: "activity-scope"}, q,
 		)
-		return queryErr
+		if queryErr != nil {
+			return queryErr
+		}
+		return database.bunActivityReportCandidateSourceFrom(
+			store, []string{sessions[0].SessionID}, q,
+		)(t.Context(), func(candidate activity.IntervalCandidate) error {
+			candidates = append(candidates, candidate)
+			return nil
+		})
 	})
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
 	assert.Equal(t, "inside", sessions[0].SessionID)
-	require.Len(t, events, 1)
-	assert.Equal(t, "inside", events[0].SessionID)
+	require.Len(t, candidates, 1)
+	assert.Equal(t, "inside", candidates[0].SessionID)
+	assert.Equal(t, time.Minute, candidates[0].End.Sub(candidates[0].Start))
 }

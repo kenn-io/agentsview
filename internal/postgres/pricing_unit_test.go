@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 
@@ -21,6 +22,8 @@ type pricingProbeDriver struct{}
 type pricingProbeConn struct {
 	state *pricingProbeState
 }
+
+type pricingProbeTx struct{}
 
 type pricingProbeRows struct {
 	columns []string
@@ -77,12 +80,24 @@ func (c *pricingProbeConn) Prepare(string) (driver.Stmt, error) {
 func (c *pricingProbeConn) Close() error { return nil }
 
 func (c *pricingProbeConn) Begin() (driver.Tx, error) {
-	return nil, errors.New("begin not implemented")
+	return pricingProbeTx{}, nil
+}
+
+func (pricingProbeTx) Commit() error   { return nil }
+func (pricingProbeTx) Rollback() error { return nil }
+
+func (c *pricingProbeConn) ExecContext(
+	_ context.Context, _ string, _ []driver.NamedValue,
+) (driver.Result, error) {
+	return driver.RowsAffected(1), nil
 }
 
 func (c *pricingProbeConn) QueryContext(
-	_ context.Context, _ string, _ []driver.NamedValue,
+	_ context.Context, query string, _ []driver.NamedValue,
 ) (driver.Rows, error) {
+	if strings.Contains(query, "sync_metadata") {
+		return &pricingProbeRows{columns: []string{"value"}}, nil
+	}
 	c.state.mu.Lock()
 	c.state.queries++
 	values := append([][]driver.Value(nil), c.state.rows...)

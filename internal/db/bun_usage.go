@@ -20,10 +20,6 @@ import (
 	"go.kenn.io/agentsview/internal/timeutil"
 )
 
-const bunPricingWriteBatchSize = 500
-
-const bunCursorUsageWriteBatchSize = 50
-
 // CanonicalModelPricingRows converts public pricing records and their bands
 // into the common persistence models used by every adapter.
 func CanonicalModelPricingRows(
@@ -112,6 +108,111 @@ func (s *BunStore) UpsertModelPricingContext(
 	})
 }
 
+// ReconcileModelPricing atomically removes retired pricing, writes the desired
+// catalog, and advances SQLite-local refresh metadata through Bun.
+func (s *BunStore) ReconcileModelPricing(
+	prices []ModelPricing, removePatterns []string, meta PricingMeta,
+) error {
+	rows, bands, err := CanonicalModelPricingRows(prices)
+	if err != nil {
+		return err
+	}
+	patterns, err := validateModelPricingRows(rows, bands)
+	if err != nil {
+		return err
+	}
+	removePatterns = append([]string(nil), removePatterns...)
+	for index := range removePatterns {
+		removePatterns[index] = SanitizeUTF8(removePatterns[index])
+	}
+	meta.Key = SanitizeUTF8(meta.Key)
+	meta.Value = SanitizeUTF8(meta.Value)
+
+	ctx := context.Background()
+	return s.update(ctx, WriteArchive, func(store bun.IDB) error {
+		return store.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+			if err := deleteModelPricingRows(ctx, tx, removePatterns); err != nil {
+				return err
+			}
+			if len(rows) > 0 {
+				if err := upsertModelPricingRowsTx(
+					ctx, tx, rows, bands, patterns,
+				); err != nil {
+					return err
+				}
+			}
+			if meta.Key != "" {
+				if _, err := tx.NewRaw(`
+					INSERT INTO pricing_metadata (key, value)
+					VALUES (?, ?)
+					ON CONFLICT (key) DO UPDATE SET
+						value = EXCLUDED.value,
+						updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
+					meta.Key, meta.Value,
+				).Exec(ctx); err != nil {
+					return fmt.Errorf("setting pricing meta %q: %w", meta.Key, err)
+				}
+			}
+			return nil
+		})
+	})
+}
+
+// GetPricingMeta reads SQLite-local pricing refresh state through the guarded
+// Bun view. Missing keys return an empty value.
+func (s *BunStore) GetPricingMeta(key string) (string, error) {
+	return s.GetPricingMetaContext(context.Background(), key)
+}
+
+// GetPricingMetaContext is GetPricingMeta with caller cancellation.
+func (s *BunStore) GetPricingMetaContext(ctx context.Context, key string) (string, error) {
+	var value string
+	err := s.view(ctx, func(store bun.IDB) error {
+		return store.NewSelect().Table("pricing_metadata").Column("value").
+			Where("key = ?", key).Scan(ctx, &value)
+	})
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("reading pricing meta %q: %w", key, err)
+	}
+	return value, nil
+}
+
+// ReadSyncMetadata reads adapter-local synchronization state through Bun.
+func ReadSyncMetadata(
+	ctx context.Context, store bun.IDB, key string,
+) (string, error) {
+	var value string
+	err := store.NewSelect().Table("sync_metadata").Column("value").
+		Where("key = ?", key).Scan(ctx, &value)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("reading sync metadata %q: %w", key, err)
+	}
+	return value, nil
+}
+
+// WriteSyncMetadata upserts adapter-local synchronization state through Bun.
+func WriteSyncMetadata(
+	ctx context.Context, store bun.IDB, meta PricingMeta,
+) error {
+	if meta.Key == "" {
+		return nil
+	}
+	if _, err := store.NewRaw(`
+		INSERT INTO sync_metadata (key, value) VALUES (?, ?)
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+		SanitizeUTF8(meta.Key), SanitizeUTF8(meta.Value),
+	).Exec(ctx); err != nil {
+		return fmt.Errorf("writing sync metadata %q: %w", meta.Key, err)
+	}
+	return nil
+}
+
 // CanonicalCursorUsageEventRows converts append-only Cursor usage into
 // portable rows. Source IDs are deliberately omitted because every target
 // assigns storage IDs independently and deduplicates by the stable event key.
@@ -156,15 +257,13 @@ func CanonicalCursorUsageEventRows(
 func AppendCursorUsageEventRows(
 	ctx context.Context, store bun.IDB, rows []bunmodel.CursorUsageEvent,
 ) error {
-	for start := 0; start < len(rows); start += bunCursorUsageWriteBatchSize {
-		end := min(start+bunCursorUsageWriteBatchSize, len(rows))
-		batch := rows[start:end]
+	return writeCanonicalBatches(rows, func(batch []bunmodel.CursorUsageEvent) error {
 		if _, err := store.NewInsert().Model(&batch).ExcludeColumn("id").
 			On("CONFLICT DO NOTHING").Returning("").Exec(ctx); err != nil {
 			return fmt.Errorf("appending cursor usage rows: %w", err)
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // UpsertModelPricingRows writes canonical base prices and replaces the bands
@@ -175,14 +274,69 @@ func UpsertModelPricingRows(
 	prices []bunmodel.ModelPricing,
 	bands []bunmodel.ModelPricingBand,
 ) error {
+	patterns, err := validateModelPricingRows(prices, bands)
+	if err != nil {
+		return err
+	}
+	if len(prices) == 0 {
+		return nil
+	}
+
+	return store.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		return upsertModelPricingRowsTx(ctx, tx, prices, bands, patterns)
+	})
+}
+
+// ReconcileModelPricingRows atomically removes retired rows and writes the
+// desired canonical catalog on backends that support both operations in one
+// transaction.
+func ReconcileModelPricingRows(
+	ctx context.Context,
+	store bun.IDB,
+	prices []bunmodel.ModelPricing,
+	bands []bunmodel.ModelPricingBand,
+	removePatterns []string,
+) error {
+	return store.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		return ApplyModelPricingRows(ctx, tx, prices, bands, removePatterns)
+	})
+}
+
+// ApplyModelPricingRows applies one pricing plan to an existing Bun
+// transaction. Adapters use it when pricing rows and ownership metadata must
+// commit under the same target-side lock.
+func ApplyModelPricingRows(
+	ctx context.Context,
+	store bun.IDB,
+	prices []bunmodel.ModelPricing,
+	bands []bunmodel.ModelPricingBand,
+	removePatterns []string,
+) error {
+	patterns, err := validateModelPricingRows(prices, bands)
+	if err != nil {
+		return err
+	}
+	if err := deleteModelPricingRows(ctx, store, removePatterns); err != nil {
+		return err
+	}
+	if len(prices) == 0 {
+		return nil
+	}
+	return upsertModelPricingRowsTx(ctx, store, prices, bands, patterns)
+}
+
+func validateModelPricingRows(
+	prices []bunmodel.ModelPricing,
+	bands []bunmodel.ModelPricingBand,
+) ([]string, error) {
 	patterns := make([]string, 0, len(prices))
 	allowed := make(map[string]struct{}, len(prices))
 	for _, price := range prices {
 		if price.ModelPattern == "" {
-			return fmt.Errorf("upserting model pricing rows: empty model pattern")
+			return nil, fmt.Errorf("upserting model pricing rows: empty model pattern")
 		}
 		if _, exists := allowed[price.ModelPattern]; exists {
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"upserting model pricing rows: duplicate model pattern %q",
 				price.ModelPattern,
 			)
@@ -192,92 +346,115 @@ func UpsertModelPricingRows(
 	}
 	for _, band := range bands {
 		if _, ok := allowed[band.ModelPattern]; !ok {
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"upserting model pricing rows: band model %q has no base row",
 				band.ModelPattern,
 			)
 		}
 	}
-	if len(prices) == 0 {
+	return patterns, nil
+}
+
+func upsertModelPricingRowsTx(
+	ctx context.Context,
+	tx bun.IDB,
+	prices []bunmodel.ModelPricing,
+	bands []bunmodel.ModelPricingBand,
+	patterns []string,
+) error {
+	prices = append([]bunmodel.ModelPricing(nil), prices...)
+	bands = append([]bunmodel.ModelPricingBand(nil), bands...)
+	var existingPrices []bunmodel.ModelPricing
+	if err := tx.NewSelect().Model(&existingPrices).
+		Where("model_pattern IN (?)", bun.List(patterns)).Scan(ctx); err != nil {
+		return fmt.Errorf("reading model pricing revisions: %w", err)
+	}
+	existingPriceByPattern := make(
+		map[string]bunmodel.ModelPricing, len(existingPrices),
+	)
+	for _, existing := range existingPrices {
+		existingPriceByPattern[existing.ModelPattern] = existing
+	}
+	defaultRevision := bunmodel.NewTimestamp(
+		timeutil.NormalizePostgresTimestampPrecision(time.Now()),
+	)
+	var existingBands []bunmodel.ModelPricingBand
+	if len(patterns) > 0 {
+		if err := tx.NewSelect().Model(&existingBands).
+			Where("model_pattern IN (?)", bun.List(patterns)).Scan(ctx); err != nil {
+			return fmt.Errorf("reading model pricing band revisions: %w", err)
+		}
+	}
+	type bandKey struct {
+		pattern   string
+		threshold int64
+	}
+	existingBandByKey := make(
+		map[bandKey]bunmodel.ModelPricingBand, len(existingBands),
+	)
+	incomingBandKeys := make(map[bandKey]struct{}, len(bands))
+	bandContentChanged := make(map[string]bool, len(patterns))
+	for _, existing := range existingBands {
+		existingBandByKey[bandKey{
+			existing.ModelPattern, existing.AboveInputTokens,
+		}] = existing
+	}
+	for i := range bands {
+		key := bandKey{bands[i].ModelPattern, bands[i].AboveInputTokens}
+		incomingBandKeys[key] = struct{}{}
+		existing, ok := existingBandByKey[key]
+		if ok && modelPricingBandValuesEqual(existing, bands[i]) {
+			bands[i].UpdatedAt = existing.UpdatedAt
+			continue
+		}
+		bandContentChanged[bands[i].ModelPattern] = true
+		bands[i].UpdatedAt = nextPricingRevision(
+			existing.UpdatedAt, bands[i].UpdatedAt, defaultRevision,
+		)
+	}
+	for key := range existingBandByKey {
+		if _, ok := incomingBandKeys[key]; !ok {
+			bandContentChanged[key.pattern] = true
+		}
+	}
+	for i := range prices {
+		existing, ok := existingPriceByPattern[prices[i].ModelPattern]
+		if ok && modelPricingValuesEqual(existing, prices[i]) &&
+			!bandContentChanged[prices[i].ModelPattern] {
+			prices[i].UpdatedAt = existing.UpdatedAt
+			continue
+		}
+		prices[i].UpdatedAt = nextPricingRevision(
+			existing.UpdatedAt,
+			prices[i].UpdatedAt, defaultRevision,
+		)
+	}
+	if err := writeCanonicalBatches(prices, func(batch []bunmodel.ModelPricing) error {
+		if err := upsertModelPricingRowBatch(ctx, tx, batch); err != nil {
+			return fmt.Errorf("upserting model pricing rows: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	return ReplaceModelPricingBandRows(ctx, tx, patterns, bands)
+}
+
+func deleteModelPricingRows(
+	ctx context.Context, store bun.IDB, patterns []string,
+) error {
+	if len(patterns) == 0 {
 		return nil
 	}
-
-	return store.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		prices = append([]bunmodel.ModelPricing(nil), prices...)
-		bands = append([]bunmodel.ModelPricingBand(nil), bands...)
-		var existingPrices []bunmodel.ModelPricing
-		if err := tx.NewSelect().Model(&existingPrices).
-			Where("model_pattern IN (?)", bun.List(patterns)).Scan(ctx); err != nil {
-			return fmt.Errorf("reading model pricing revisions: %w", err)
-		}
-		existingPriceByPattern := make(
-			map[string]bunmodel.ModelPricing, len(existingPrices),
-		)
-		for _, existing := range existingPrices {
-			existingPriceByPattern[existing.ModelPattern] = existing
-		}
-		defaultRevision := bunmodel.NewTimestamp(
-			timeutil.NormalizePostgresTimestampPrecision(time.Now()),
-		)
-		var existingBands []bunmodel.ModelPricingBand
-		if len(patterns) > 0 {
-			if err := tx.NewSelect().Model(&existingBands).
-				Where("model_pattern IN (?)", bun.List(patterns)).Scan(ctx); err != nil {
-				return fmt.Errorf("reading model pricing band revisions: %w", err)
-			}
-		}
-		type bandKey struct {
-			pattern   string
-			threshold int64
-		}
-		existingBandByKey := make(
-			map[bandKey]bunmodel.ModelPricingBand, len(existingBands),
-		)
-		incomingBandKeys := make(map[bandKey]struct{}, len(bands))
-		bandContentChanged := make(map[string]bool, len(patterns))
-		for _, existing := range existingBands {
-			existingBandByKey[bandKey{
-				existing.ModelPattern, existing.AboveInputTokens,
-			}] = existing
-		}
-		for i := range bands {
-			key := bandKey{bands[i].ModelPattern, bands[i].AboveInputTokens}
-			incomingBandKeys[key] = struct{}{}
-			existing, ok := existingBandByKey[key]
-			if ok && modelPricingBandValuesEqual(existing, bands[i]) {
-				bands[i].UpdatedAt = existing.UpdatedAt
-				continue
-			}
-			bandContentChanged[bands[i].ModelPattern] = true
-			bands[i].UpdatedAt = nextPricingRevision(
-				existing.UpdatedAt, bands[i].UpdatedAt, defaultRevision,
-			)
-		}
-		for key := range existingBandByKey {
-			if _, ok := incomingBandKeys[key]; !ok {
-				bandContentChanged[key.pattern] = true
-			}
-		}
-		for i := range prices {
-			existing, ok := existingPriceByPattern[prices[i].ModelPattern]
-			if ok && modelPricingValuesEqual(existing, prices[i]) &&
-				!bandContentChanged[prices[i].ModelPattern] {
-				prices[i].UpdatedAt = existing.UpdatedAt
-				continue
-			}
-			prices[i].UpdatedAt = nextPricingRevision(
-				existing.UpdatedAt,
-				prices[i].UpdatedAt, defaultRevision,
-			)
-		}
-		for start := 0; start < len(prices); start += bunPricingWriteBatchSize {
-			end := min(start+bunPricingWriteBatchSize, len(prices))
-			if err := upsertModelPricingRowBatch(ctx, tx, prices[start:end]); err != nil {
-				return fmt.Errorf("upserting model pricing rows: %w", err)
-			}
-		}
-		return ReplaceModelPricingBandRows(ctx, tx, patterns, bands)
-	})
+	if _, err := store.NewDelete().Model((*bunmodel.ModelPricingBand)(nil)).
+		Where("model_pattern IN (?)", bun.List(patterns)).Exec(ctx); err != nil {
+		return fmt.Errorf("deleting model pricing bands: %w", err)
+	}
+	if _, err := store.NewDelete().Model((*bunmodel.ModelPricing)(nil)).
+		Where("model_pattern IN (?)", bun.List(patterns)).Exec(ctx); err != nil {
+		return fmt.Errorf("deleting model pricing rows: %w", err)
+	}
+	return nil
 }
 
 func upsertModelPricingRowBatch(
@@ -384,13 +561,12 @@ func ReplaceModelPricingBandRows(
 		Where("model_pattern IN (?)", bun.List(modelPatterns)).Exec(ctx); err != nil {
 		return fmt.Errorf("deleting model pricing bands: %w", err)
 	}
-	for start := 0; start < len(bands); start += bunPricingWriteBatchSize {
-		end := min(start+bunPricingWriteBatchSize, len(bands))
-		if err := insertModelPricingBandRowBatch(ctx, store, bands[start:end]); err != nil {
+	return writeCanonicalBatches(bands, func(batch []bunmodel.ModelPricingBand) error {
+		if err := insertModelPricingBandRowBatch(ctx, store, batch); err != nil {
 			return fmt.Errorf("inserting model pricing bands: %w", err)
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 func insertModelPricingBandRowBatch(

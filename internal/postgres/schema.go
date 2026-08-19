@@ -1672,11 +1672,19 @@ func validateStampedPostgresCommonSchema(
 
 func convergePostgresPricingTimestamps(ctx context.Context, store bun.IDB) error {
 	if _, err := store.ExecContext(ctx, `
+		INSERT INTO sync_metadata (key, value)
+		SELECT model_pattern, updated_at FROM model_pricing
+		WHERE model_pattern = '_openrouter_models'
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`); err != nil {
+		return fmt.Errorf("moving PostgreSQL pricing ownership metadata: %w", err)
+	}
+	if _, err := store.ExecContext(ctx, `
 		DELETE FROM model_pricing
 		WHERE model_pattern IN (
 			'_fallback_version',
 			'_litellm_last_attempt',
-			'_pricing_storage_version'
+			'_pricing_storage_version',
+			'_openrouter_models'
 		)`); err != nil {
 		return fmt.Errorf("removing PostgreSQL pricing metadata sentinels: %w", err)
 	}

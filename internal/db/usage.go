@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/activity"
@@ -1452,17 +1453,18 @@ func parseJSONString(tokenJSON string, i int) (string, int, bool) {
 	if i >= len(tokenJSON) || tokenJSON[i] != '"' {
 		return "", i, false
 	}
-	escaped := false
+	plain := true
 	for j := i + 1; j < len(tokenJSON); j++ {
-		switch tokenJSON[j] {
-		case '\\':
+		c := tokenJSON[j]
+		switch {
+		case c == '\\':
 			if j+1 >= len(tokenJSON) {
 				return "", len(tokenJSON), false
 			}
-			escaped = true
+			plain = false
 			j++
-		case '"':
-			if !escaped {
+		case c == '"':
+			if plain && utf8.ValidString(tokenJSON[i+1:j]) {
 				return tokenJSON[i+1 : j], j + 1, true
 			}
 			raw := tokenJSON[i : j+1]
@@ -1472,6 +1474,8 @@ func parseJSONString(tokenJSON string, i int) (string, int, bool) {
 				return "", j + 1, false
 			}
 			return value, j + 1, true
+		case c < 0x20:
+			plain = false
 		}
 	}
 	return "", len(tokenJSON), false

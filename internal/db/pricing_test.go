@@ -8,6 +8,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/pricing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -434,74 +435,63 @@ func TestPlanModelPricingSync(t *testing.T) {
 			InputPerMTok: money.MustParseDollars(dollars),
 		}
 	}
-	meta := func(value string) ModelPricing {
-		return ModelPricing{
-			ModelPattern: "_openrouter_models", UpdatedAt: value,
-		}
-	}
 	tests := []struct {
 		name       string
 		existing   []ModelPricing
 		desired    []ModelPricing
+		targetMeta string
+		localMeta  string
 		wantChange []ModelPricing
 		wantRemove []string
+		wantMeta   PricingMeta
 	}{
 		{
-			name: "retired pattern removed and ownership dropped",
-			existing: []ModelPricing{
-				model("minimax/minimax-m3", "9"),
-				meta(`["minimax/minimax-m3"]`),
-			},
-			desired: []ModelPricing{
-				model("minimax/MiniMax-M3", "2"),
-				meta(`[]`),
-			},
-			wantChange: []ModelPricing{
-				model("minimax/MiniMax-M3", "2"), meta(`[]`),
-			},
+			name:       "retired pattern removed and ownership dropped",
+			existing:   []ModelPricing{model("minimax/minimax-m3", "9")},
+			desired:    []ModelPricing{model("minimax/MiniMax-M3", "2")},
+			targetMeta: `["minimax/minimax-m3"]`,
+			localMeta:  `[]`,
+			wantChange: []ModelPricing{model("minimax/MiniMax-M3", "2")},
 			wantRemove: []string{"minimax/minimax-m3"},
-		},
-		{
-			name: "pattern adopted by a local non-OpenRouter row loses ownership",
-			existing: []ModelPricing{
-				model("acme/model", "9"),
-				meta(`["acme/model"]`),
-			},
-			desired: []ModelPricing{
-				model("acme/model", "9"),
-				meta(`[]`),
-			},
-			wantChange: []ModelPricing{meta(`[]`)},
-		},
-		{
-			name: "delisted row another machine owns keeps its ownership",
-			existing: []ModelPricing{
-				model("acme/delisted", "9"),
-				meta(`["acme/delisted"]`),
-			},
-			desired: []ModelPricing{
-				model("acme/local", "1"),
-				meta(`["acme/local"]`),
-			},
-			wantChange: []ModelPricing{
-				model("acme/local", "1"),
-				meta(`["acme/delisted","acme/local"]`),
+			wantMeta: PricingMeta{
+				Key: pricing.OpenRouterModelsMetaKey, Value: `[]`,
 			},
 		},
 		{
-			name: "local OpenRouter row covered by a target row is withheld",
-			existing: []ModelPricing{
-				model("acme/Stale-Model", "9"),
-				meta(`[]`),
+			name:       "pattern adopted by a local non-OpenRouter row loses ownership",
+			existing:   []ModelPricing{model("acme/model", "9")},
+			desired:    []ModelPricing{model("acme/model", "9")},
+			targetMeta: `["acme/model"]`,
+			localMeta:  `[]`,
+			wantChange: []ModelPricing{},
+			wantMeta: PricingMeta{
+				Key: pricing.OpenRouterModelsMetaKey, Value: `[]`,
 			},
+		},
+		{
+			name:       "delisted row another machine owns keeps its ownership",
+			existing:   []ModelPricing{model("acme/delisted", "9")},
+			desired:    []ModelPricing{model("acme/local", "1")},
+			targetMeta: `["acme/delisted"]`,
+			localMeta:  `["acme/local"]`,
+			wantChange: []ModelPricing{model("acme/local", "1")},
+			wantMeta: PricingMeta{
+				Key:   pricing.OpenRouterModelsMetaKey,
+				Value: `["acme/delisted","acme/local"]`,
+			},
+		},
+		{
+			name:     "local OpenRouter row covered by a target row is withheld",
+			existing: []ModelPricing{model("acme/Stale-Model", "9")},
 			desired: []ModelPricing{
 				model("acme/stale-model", "5"),
 				model("acme/fresh", "1"),
-				meta(`["acme/fresh","acme/stale-model"]`),
 			},
-			wantChange: []ModelPricing{
-				model("acme/fresh", "1"),
-				meta(`["acme/fresh"]`),
+			targetMeta: `[]`,
+			localMeta:  `["acme/fresh","acme/stale-model"]`,
+			wantChange: []ModelPricing{model("acme/fresh", "1")},
+			wantMeta: PricingMeta{
+				Key: pricing.OpenRouterModelsMetaKey, Value: `["acme/fresh"]`,
 			},
 		},
 		{
@@ -515,20 +505,19 @@ func TestPlanModelPricingSync(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			changed, remove, err := PlanModelPricingSync(
-				tt.existing, tt.desired,
+			changed, remove, meta, err := PlanModelPricingSync(
+				tt.existing, tt.desired, tt.targetMeta, tt.localMeta,
 			)
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantChange, changed)
 			assert.Equal(t, tt.wantRemove, remove)
+			assert.Equal(t, tt.wantMeta, meta)
 		})
 	}
 }
 
 func TestPlanModelPricingSyncRejectsCorruptSentinel(t *testing.T) {
-	_, _, err := PlanModelPricingSync([]ModelPricing{{
-		ModelPattern: "_openrouter_models", UpdatedAt: "not json",
-	}}, nil)
+	_, _, _, err := PlanModelPricingSync(nil, nil, "not json", "")
 	require.Error(t, err)
 }
 
