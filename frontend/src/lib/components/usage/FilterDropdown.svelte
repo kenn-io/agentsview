@@ -24,6 +24,8 @@
     onDeselectAll?: () => void;
     color?: (name: string) => string;
     mode?: "exclude" | "include";
+    /** Exclusions that are not present in items, such as stable project keys. */
+    unlistedExcludedCount?: number;
   }
 
   let {
@@ -35,15 +37,18 @@
     onDeselectAll,
     color,
     mode = "exclude",
+    unlistedExcludedCount = 0,
   }: Props = $props();
 
   const filterSet = $derived(
     new Set(excludedCsv ? excludedCsv.split(",") : []),
   );
 
-  const filteredCount = $derived(filterSet.size);
+  const filteredCount = $derived(
+    filterSet.size + Math.max(0, unlistedExcludedCount),
+  );
   const visibleCount = $derived(
-    items.length - filteredCount,
+    items.length - filterSet.size,
   );
 
   const buttonLabel = $derived.by(() => {
@@ -55,7 +60,7 @@
         countLabel: filteredCount.toLocaleString(),
       });
     }
-    if (visibleCount === 1) {
+    if (visibleCount === 1 && unlistedExcludedCount === 0) {
       const visible = items.find(
         (i) => !filterSet.has(i.name),
       );
@@ -67,7 +72,9 @@
         return `${label}: ${visible.name}`;
       }
     }
-    if (visibleCount === 0) return m.usage_filter_none({ label });
+    if (visibleCount === 0 && unlistedExcludedCount === 0) {
+      return m.usage_filter_none({ label });
+    }
     return m.usage_filter_hidden({
       label,
       countLabel: filteredCount.toLocaleString(),

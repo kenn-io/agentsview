@@ -67,6 +67,12 @@
     })),
   );
 
+  const excludedProjectKeyCount = $derived(
+    usage.excludedProjectKeys
+      ? usage.excludedProjectKeys.split(",").filter(Boolean).length
+      : 0,
+  );
+
   const agentItems = $derived(
     sessions.agents.map((a) => ({
       name: a.name,
@@ -484,6 +490,7 @@
         label={m.analytics_col_project()}
         items={projectItems}
         excludedCsv={usage.excludedProjects}
+        unlistedExcludedCount={excludedProjectKeyCount}
         onToggle={(name) => usage.toggleProject(name)}
         onSelectAll={() => usage.selectAllProjects()}
         onDeselectAll={() =>

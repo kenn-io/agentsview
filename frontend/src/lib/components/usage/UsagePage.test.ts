@@ -138,6 +138,7 @@ afterEach(() => {
   usage.toggles.timeSeries.groupBy = "project";
   usage.toggles.attribution.groupBy = "project";
   usage.toggles.attribution.view = "treemap";
+  usage.excludedProjectKeys = "";
   settings.chartPalette = "agentsview";
   sessions.projects = [];
   yokedDates.setEnabled(false);
@@ -145,6 +146,42 @@ afterEach(() => {
 });
 
 describe("UsagePage refresh behavior", () => {
+  it("shows and clears project-key exclusions from the Project filter", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    router.route = "usage";
+    router.params = {};
+    usage.excludedProjectKeys = "project-key-1,project-key-2";
+    sessions.projects = [{ name: "visible-project", session_count: 4 }];
+
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+
+    const projectFilter = document.querySelector<HTMLButtonElement>(
+      '.kit-filter-dropdown__btn[aria-label="Project: 2 hidden"]',
+    );
+    expect(projectFilter).not.toBeNull();
+
+    projectFilter!.click();
+    await tick();
+    const selectAll = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        ".kit-filter-dropdown__bulk-btn",
+      ),
+    ).find((button) => button.textContent?.trim() === "Select all");
+    expect(selectAll).not.toBeUndefined();
+
+    selectAll!.click();
+    expect(usage.excludedProjectKeys).toBe("");
+  });
+
   it("hydrates token mode from the canonical URL before fetching", async () => {
     vi.stubGlobal(
       "ResizeObserver",
