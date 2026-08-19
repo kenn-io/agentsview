@@ -505,7 +505,7 @@ func parseGrokChatHistory(path string) ([]ParsedMessage, int, error) {
 			}
 			messages = append(messages, ParsedMessage{
 				Ordinal:       ordinal,
-				Role:          RoleUser,
+				Role:          RoleTool,
 				ContentLength: contentLen,
 				ToolResults: []ParsedToolResult{{
 					ToolUseID:     toolCallID,
@@ -635,7 +635,7 @@ func parseGrokUpdateTimestampAnchors(
 			builder.flush()
 			if id := strings.TrimSpace(update.Get("toolCallId").Str); id != "" {
 				builder.anchors = append(builder.anchors, grokTimestampAnchor{
-					role:         RoleUser,
+					role:         RoleTool,
 					timestamp:    timestamp,
 					toolResultID: id,
 				})

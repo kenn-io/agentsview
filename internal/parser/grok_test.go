@@ -814,7 +814,7 @@ func TestGrokProviderParsesChatHistoryTranscript(t *testing.T) {
 	assert.JSONEq(t, `{"target_file":"SKILL.md"}`, result.Messages[1].ToolCalls[0].InputJSON)
 	assert.Equal(t, "grok-4.5", result.Messages[1].Model)
 
-	assert.Equal(t, RoleUser, result.Messages[2].Role)
+	assert.Equal(t, RoleTool, result.Messages[2].Role)
 	require.Len(t, result.Messages[2].ToolResults, 1)
 	assert.Equal(t, "call-1", result.Messages[2].ToolResults[0].ToolUseID)
 	assert.Equal(t, 10, result.Messages[2].ToolResults[0].ContentLength)
