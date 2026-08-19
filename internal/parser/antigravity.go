@@ -2,6 +2,7 @@ package parser
 
 import (
 	"database/sql"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -326,6 +327,8 @@ func roleForAntigravityStepKind(kind antigravityStepKind) RoleType {
 func loadAntigravityStepsWithRawCount(
 	db *sql.DB,
 ) (antigravityStepLoadResult, error) {
+	generations := loadAntigravityGenerationMetadata(db)
+	executors := loadAntigravityExecutorMetadata(db)
 	rows, err := db.Query(
 		`SELECT idx, step_type, step_payload FROM steps ` +
 			`ORDER BY idx`,
@@ -334,23 +337,10 @@ func loadAntigravityStepsWithRawCount(
 		return antigravityStepLoadResult{}, fmt.Errorf("query steps: %w", err)
 	}
 	defer rows.Close()
-
-	// Gracefully query gen_metadata if the table exists
-	var genMeta map[int][]byte
-	if genRows, err := db.Query("SELECT idx, data FROM gen_metadata"); err == nil {
-		defer genRows.Close()
-		genMeta = make(map[int][]byte)
-		for genRows.Next() {
-			var idx int
-			var data []byte
-			if err := genRows.Scan(&idx, &data); err == nil {
-				genMeta[idx] = data
-			}
-		}
-	}
-
+	steps := make([]antigravityLoadedStep, 0)
+	stepPositions := make(map[int]int)
 	var result antigravityStepLoadResult
-	result.hasGenMetadata = len(genMeta) > 0
+	result.hasGenMetadata = len(generations) > 0
 	for rows.Next() {
 		var (
 			idx      int
@@ -360,20 +350,236 @@ func loadAntigravityStepsWithRawCount(
 		if err := rows.Scan(&idx, &stepType, &payload); err != nil {
 			return antigravityStepLoadResult{}, fmt.Errorf("scan step: %w", err)
 		}
+		parsedStep, parsed := newAntigravityStep(idx, stepType, payload)
+		var msg ParsedMessage
+		var decoded bool
+		kind := antigravityStepKind(stepType)
+		if parsed {
+			kind = parsedStep.kind
+			msg, decoded = decodeAntigravityParsedStep(parsedStep)
+		}
+		stepPositions[idx] = len(steps)
+		steps = append(steps, antigravityLoadedStep{
+			kind: kind, msg: msg, decoded: decoded,
+		})
 		result.rawStepCount++
-		msg, decoded := decodeAntigravityStep(idx, stepType, payload)
-		if data, ok := genMeta[idx]; ok {
-			msg = result.appendGenMetadataUsage(data, msg, decoded)
-		}
-		if !decoded {
-			continue
-		}
-		result.messages = append(result.messages, msg)
 	}
 	if err := rows.Err(); err != nil {
 		return antigravityStepLoadResult{}, fmt.Errorf("iterate steps: %w", err)
 	}
+
+	for _, generation := range generations {
+		position, found := generationPlannerStep(
+			generation, steps, stepPositions,
+		)
+		executorModel := ""
+		if stepIndex, known := generation.maxStepIndex(); known {
+			executorModel = executorModelForStep(executors, stepIndex)
+		}
+		if !found {
+			result.appendGenMetadataUsage(
+				generation.data, ParsedMessage{}, false, executorModel,
+			)
+			continue
+		}
+		step := &steps[position]
+		step.msg = result.appendGenMetadataUsage(
+			generation.data, step.msg, step.decoded, executorModel,
+		)
+	}
+	for _, step := range steps {
+		if step.decoded {
+			result.messages = append(result.messages, step.msg)
+		}
+	}
 	return result, nil
+}
+
+type antigravityLoadedStep struct {
+	kind    antigravityStepKind
+	msg     ParsedMessage
+	decoded bool
+}
+
+type antigravityGenerationMetadata struct {
+	idx              int
+	data             []byte
+	stepIndices      []int
+	hasStepIndices   bool
+	stepIndicesValid bool
+}
+
+func (g antigravityGenerationMetadata) maxStepIndex() (int, bool) {
+	if !g.hasStepIndices {
+		return g.idx, true
+	}
+	if !g.stepIndicesValid || len(g.stepIndices) == 0 {
+		return 0, false
+	}
+	maxIdx := g.stepIndices[0]
+	for _, idx := range g.stepIndices[1:] {
+		if idx > maxIdx {
+			maxIdx = idx
+		}
+	}
+	return maxIdx, true
+}
+
+type antigravityExecutorMetadata struct {
+	endStep int
+	model   string
+}
+
+func loadAntigravityGenerationMetadata(
+	db *sql.DB,
+) []antigravityGenerationMetadata {
+	rows, err := db.Query("SELECT idx, data FROM gen_metadata ORDER BY idx")
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var generations []antigravityGenerationMetadata
+	for rows.Next() {
+		var generation antigravityGenerationMetadata
+		if err := rows.Scan(&generation.idx, &generation.data); err != nil {
+			continue
+		}
+		generation.stepIndices,
+			generation.hasStepIndices,
+			generation.stepIndicesValid =
+			extractAntigravityStepIndices(generation.data)
+		generations = append(generations, generation)
+	}
+	return generations
+}
+
+func loadAntigravityExecutorMetadata(
+	db *sql.DB,
+) []antigravityExecutorMetadata {
+	rows, err := db.Query("SELECT data FROM executor_metadata ORDER BY idx")
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var executors []antigravityExecutorMetadata
+	for rows.Next() {
+		var data []byte
+		if err := rows.Scan(&data); err != nil {
+			continue
+		}
+		executor, ok := extractAntigravityExecutorMetadata(data)
+		if ok {
+			executors = append(executors, executor)
+		}
+	}
+	sort.SliceStable(executors, func(i, j int) bool {
+		return executors[i].endStep < executors[j].endStep
+	})
+	return executors
+}
+
+func extractAntigravityStepIndices(
+	data []byte,
+) (indices []int, present bool, valid bool) {
+	fields, err := agProtoParse(data)
+	if err != nil {
+		return nil, false, false
+	}
+	maxInt := uint64(^uint(0) >> 1)
+	for _, field := range fields {
+		if field.Number != 2 {
+			continue
+		}
+		present = true
+		if field.Wire == pbWireVarint {
+			if field.Varint > maxInt {
+				return nil, true, false
+			}
+			indices = append(indices, int(field.Varint))
+			continue
+		}
+		if field.Wire != pbWireBytes {
+			return nil, true, false
+		}
+		for packed := field.Bytes; len(packed) > 0; {
+			value, size := binary.Uvarint(packed)
+			if size <= 0 || value > maxInt {
+				return nil, true, false
+			}
+			indices = append(indices, int(value))
+			packed = packed[size:]
+		}
+	}
+	return indices, present, true
+}
+
+func extractAntigravityExecutorMetadata(
+	data []byte,
+) (antigravityExecutorMetadata, bool) {
+	fields, err := agProtoParse(data)
+	if err != nil {
+		return antigravityExecutorMetadata{}, false
+	}
+	end, ok := agProtoFind(fields, 3)
+	if !ok || end.Wire != pbWireVarint {
+		return antigravityExecutorMetadata{}, false
+	}
+	executor, ok := agProtoFind(fields, 10)
+	if !ok || executor.Nested == nil {
+		return antigravityExecutorMetadata{}, false
+	}
+	association, ok := agProtoFind(executor.Nested, 1)
+	if !ok || association.Nested == nil {
+		return antigravityExecutorMetadata{}, false
+	}
+	variant, ok := agProtoFind(association.Nested, 28)
+	if !ok {
+		return antigravityExecutorMetadata{}, false
+	}
+	model, ok := agProtoString(variant)
+	if !ok || !isPlausibleModelName(model) {
+		return antigravityExecutorMetadata{}, false
+	}
+	return antigravityExecutorMetadata{
+		endStep: int(end.Varint),
+		model:   model,
+	}, true
+}
+
+func generationPlannerStep(
+	generation antigravityGenerationMetadata,
+	steps []antigravityLoadedStep,
+	positions map[int]int,
+) (int, bool) {
+	for _, idx := range generation.stepIndices {
+		position, ok := positions[idx]
+		if !ok {
+			continue
+		}
+		step := steps[position]
+		if step.kind == antigravityStepKindPlannerResponse &&
+			step.decoded {
+			return position, true
+		}
+	}
+	if generation.hasStepIndices {
+		return 0, false
+	}
+	position, ok := positions[generation.idx]
+	return position, ok
+}
+
+func executorModelForStep(
+	executors []antigravityExecutorMetadata, stepIndex int,
+) string {
+	for _, executor := range executors {
+		if executor.endStep >= stepIndex {
+			return executor.model
+		}
+	}
+	return ""
 }
 
 // appendGenMetadataUsage records a usage event from one gen_metadata
@@ -383,9 +589,12 @@ func loadAntigravityStepsWithRawCount(
 // cannot render can still be rescued by the CLI trajectory sidecar
 // transcript, and its usage must not be dropped.
 func (r *antigravityStepLoadResult) appendGenMetadataUsage(
-	data []byte, msg ParsedMessage, decoded bool,
+	data []byte,
+	msg ParsedMessage,
+	decoded bool,
+	executorModel string,
 ) ParsedMessage {
-	genModel := extractModelName(data)
+	genModel := resolveAntigravityGenerationModel(data, executorModel)
 	block, okUsage := extractTokenUsage(data)
 	if okUsage {
 		// gen_metadata field semantics (cross-validated against sidecar
@@ -549,39 +758,67 @@ func tokenBlockFrom(fs []agProtoField) (agTokenBlock, bool) {
 	return block, true
 }
 
-// extractModelName recursively walks fields to extract the model name from Field 21 or Field 19.
+// extractModelName prefers the complete display label in field 21 and falls
+// back to the base model slug in field 19.
 func extractModelName(data []byte) string {
+	model, _ := extractAntigravityGenerationModel(data)
+	return model
+}
+
+func extractAntigravityGenerationModel(data []byte) (string, bool) {
 	fields, err := agProtoParse(data)
 	if err != nil {
-		return ""
+		return "", false
 	}
-	var model string
-	var walk func([]agProtoField)
-	walk = func(fs []agProtoField) {
-		if model != "" {
-			return
-		}
-		if f21, ok := agProtoFind(fs, 21); ok {
-			if s, ok := agProtoString(f21); ok &&
-				isPlausibleModelName(s) {
-				model = s
-				return
-			}
-		}
-		if f19, ok := agProtoFind(fs, 19); ok {
-			if s, ok := agProtoString(f19); ok &&
-				isPlausibleModelName(s) {
-				model = s
-				return
-			}
-		}
-		for _, f := range fs {
-			if f.Nested != nil {
-				walk(f.Nested)
+	if model := extractModelNameFromFields(fields, 21); model != "" {
+		return model, true
+	}
+	return extractModelNameFromFields(fields, 19), false
+}
+
+func extractModelNameFromFields(
+	fields []agProtoField, fieldNumber int,
+) string {
+	for _, field := range fields {
+		if field.Number == fieldNumber {
+			if model, ok := agProtoString(field); ok &&
+				isPlausibleModelName(model) {
+				return model
 			}
 		}
 	}
-	walk(fields)
+	for _, field := range fields {
+		if field.Nested != nil {
+			if model := extractModelNameFromFields(
+				field.Nested, fieldNumber,
+			); model != "" {
+				return model
+			}
+		}
+	}
+	return ""
+}
+
+func resolveAntigravityGenerationModel(
+	data []byte, executorModel string,
+) string {
+	generationModel, hasDisplayLabel :=
+		extractAntigravityGenerationModel(data)
+	if hasDisplayLabel || executorModel == "" {
+		return generationModel
+	}
+	if antigravityBaseModel(executorModel) == generationModel {
+		return executorModel
+	}
+	return generationModel
+}
+
+func antigravityBaseModel(model string) string {
+	for _, suffix := range []string{"-low", "-medium", "-high"} {
+		if base, ok := strings.CutSuffix(model, suffix); ok {
+			return base
+		}
+	}
 	return model
 }
 
@@ -628,7 +865,12 @@ func decodeAntigravityStep(
 	if !ok {
 		return ParsedMessage{}, false
 	}
+	return decodeAntigravityParsedStep(step)
+}
 
+func decodeAntigravityParsedStep(
+	step antigravityStep,
+) (ParsedMessage, bool) {
 	// Extract tool calls for assistant steps before the content guard
 	// so that tool-only steps (no displayable text) are not silently
 	// dropped.

@@ -1511,10 +1511,13 @@ missing file does not classify a session as automated.
   CodeBurn evidence pinned in the `antigravity` entry also covers CLI
   discovery, live RPC metadata, and the shorter capture window, but not the
   encrypted producer format.
-- **Usage and cost:** Sidecar generator metadata can carry input, output,
-  thinking-output, cache-read, and model fields; output already includes
-  thinking. Agentsview avoids double counting and catalog-prices usage. No
-  provider USD cost is consumed.
+- **Usage and cost:** SQLite `gen_metadata` and trajectory sidecars can carry
+  input, output, thinking-output, cache-read, and model fields; output already
+  includes thinking. In CLI 1.1.5 SQLite, generation field 2 contains packed
+  step indices, field 19 can contain only the base model slug, and the matching
+  `executor_metadata` range carries the effort-qualified model in field 28.
+  Agentsview avoids double counting and catalog-prices usage. No provider USD
+  cost is consumed.
 - **Agentsview:** `internal/parser/antigravity_cli.go`,
   `internal/parser/antigravity_crypto.go`, and
   `internal/parser/antigravity_cli_provider.go`.

@@ -5,6 +5,11 @@ description: Release history for AgentsView
 
 ## Unreleased
 
+**Bug fixes**
+
+- Preserve Antigravity CLI 1.1.5 generation usage and Low/Medium/High model
+  effort from SQLite executor metadata.
+
 ---
 
 ## 0.41.1
