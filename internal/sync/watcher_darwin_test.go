@@ -624,6 +624,39 @@ func TestDarwinWatcherKqueueLostEventsInvalidateShallowRoots(t *testing.T) {
 		"kqueue overflow must move the shallow root through loss recovery")
 }
 
+// A kqueue overflow marker arriving while FSEvents fallback is collecting or
+// reconciling is buffered for replay, and replayed events bypass
+// handleKqueueEvent. The loss marking for kqueue-backed roots must therefore
+// happen before fallback collection or a dropped root removal permanently
+// loses coverage once fallback ends.
+func TestDarwinHandleKqueueFullSyncDuringFallbackMarksShallowRootsLost(t *testing.T) {
+	for _, phase := range []darwinFallbackPhase{
+		darwinFallbackCollecting, darwinFallbackReconciling,
+	} {
+		backend := &darwinWatchBackend{
+			fallbackEvents: make(map[backendEvent]struct{}),
+		}
+		state := &darwinLogicalRoot{}
+		root := t.TempDir()
+		backend.roots.Store(&darwinRootSnapshot{roots: []darwinWatchRoot{{
+			logicalPath: root,
+			nativePath:  canonicalWatchRoot(root),
+			state:       state,
+		}}})
+		backend.fallbackPhase.Store(uint32(phase))
+
+		marker := backendEvent{Op: backendOpFullSync}
+		_, dispatch := backend.handleKqueueEvent(marker)
+
+		assert.False(t, dispatch,
+			"phase %d: the marker must be buffered for fallback replay", phase)
+		assert.Contains(t, backend.fallbackEvents, marker,
+			"phase %d: the marker must replay with the reconciliation", phase)
+		assert.NotZero(t, state.signal.Load()&darwinRootSignalLoss,
+			"phase %d: shallow roots must be marked lost before collection", phase)
+	}
+}
+
 func TestDarwinWatcherExcludedDirectoryRenameIsFiltered(t *testing.T) {
 	root := t.TempDir()
 	backend, err := newDarwinWatchBackend([]string{".git"}, 50*time.Millisecond)

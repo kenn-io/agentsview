@@ -1,6 +1,7 @@
 package ssh
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path"
@@ -8,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -594,10 +596,22 @@ func skipScriptPathEqualityOnWindows(t *testing.T) {
 
 func runResolveScriptForTest(t *testing.T, env ...string) []byte {
 	t.Helper()
-	cmd := exec.Command("sh")
-	cmd.Stdin = strings.NewReader(buildResolveScript())
-	cmd.Env = env
-	out, err := cmd.CombinedOutput()
+	var out []byte
+	var err error
+	for range 3 {
+		cmd := exec.Command("sh")
+		cmd.Stdin = strings.NewReader(buildResolveScript())
+		cmd.Env = env
+		out, err = cmd.CombinedOutput()
+		if err == nil || !bytes.Contains(out, []byte("*** fatal error")) {
+			break
+		}
+		// MSYS bash on Windows runners occasionally dies during process
+		// initialization, before the script runs, with errors such as
+		// "fatal error - add_item (...) failed, errno 1". Retry the
+		// transient launch failure.
+		time.Sleep(time.Second)
+	}
 	require.NoError(t, err, "resolve script failed: output: %s", out)
 	return out
 }
