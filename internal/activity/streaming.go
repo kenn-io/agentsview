@@ -259,6 +259,7 @@ func buildCandidateArtifactsFromSource(
 	heap.Init(&state.ends)
 	aggregates := make(map[string]*sessionIntervalAgg)
 	membership := make(map[string]BucketMembership)
+	sessionEnds := make(map[string]time.Time)
 	words := (len(windows) + 63) / 64
 	var previousStart time.Time
 	err := source(ctx, func(candidate IntervalCandidate) error {
@@ -277,6 +278,14 @@ func buildCandidateArtifactsFromSource(
 			)
 		}
 		previousStart = iv.start
+		if previousEnd, ok := sessionEnds[iv.sessionID]; ok &&
+			previousEnd.After(iv.start) {
+			if !iv.end.After(previousEnd) {
+				return nil
+			}
+			iv.start = previousEnd
+		}
+		sessionEnds[iv.sessionID] = iv.end
 		state.advance(iv.start)
 		state.open(iv)
 		foldCandidateInterval(

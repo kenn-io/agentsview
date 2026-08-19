@@ -470,15 +470,42 @@ func (s *Store) activityReportCandidateSource(
 		lower := q.RangeStart.Add(
 			-time.Duration(q.GapCapSeconds) * time.Second,
 		)
-		tailQuery := `WITH terminal_events AS (
-			SELECT tre.session_id, tre.call_index, tre.event_index, tre.timestamp
+		terminalQuery := `WITH terminal_events AS (
+			SELECT tre.session_id, tre.tool_call_message_ordinal AS ordinal,
+				tre.call_index, tre.event_index, tre.timestamp
 			FROM tool_result_events tre
 			WHERE tre.session_id = ANY($1)
 				AND tre.source = 'tool_execution'
 				AND tre.status IN ('completed', 'errored')
 				AND tre.timestamp IS NOT NULL
+				AND tre.timestamp >= $2
 		), terminal_sessions AS (
 			SELECT DISTINCT session_id FROM terminal_events
+		), ordered_terminal AS (
+			SELECT te.*,
+				LEAD(te.ordinal) OVER terminal_order AS next_terminal_ordinal,
+				LEAD(te.timestamp) OVER terminal_order AS next_terminal_timestamp
+			FROM terminal_events te
+			WINDOW terminal_order AS (
+				PARTITION BY te.session_id
+				ORDER BY te.timestamp, te.call_index, te.event_index
+			)
+		), terminal_with_message AS (
+			SELECT ot.*, next_message.ordinal AS next_message_ordinal,
+				next_message.timestamp AS next_message_timestamp,
+				next_message.role AS next_message_role,
+				next_message.model AS next_message_model
+			FROM ordered_terminal ot
+			LEFT JOIN LATERAL (
+				SELECT next.ordinal, next.timestamp, next.role, next.model
+				FROM messages next
+				WHERE next.session_id = ot.session_id
+					AND next.ordinal > ot.ordinal
+					AND next.timestamp IS NOT NULL
+					AND next.timestamp > ot.timestamp
+				ORDER BY next.ordinal
+				LIMIT 1
+			) next_message ON TRUE
 		), last_messages AS (
 			SELECT latest.session_id, latest.ordinal, latest.timestamp
 			FROM terminal_sessions ts
@@ -490,46 +517,77 @@ func (s *Store) activityReportCandidateSource(
 				ORDER BY m.ordinal DESC
 				LIMIT 1
 			) latest ON TRUE
-		), tail_events AS (
-			SELECT lm.session_id, lm.ordinal, 0 AS event_kind,
-				0 AS call_index, 0 AS event_index, lm.timestamp
-			FROM last_messages lm
-			UNION ALL
-			SELECT lm.session_id, lm.ordinal, 1,
-				te.call_index, te.event_index, te.timestamp
+		), first_tail_events AS (
+			SELECT lm.session_id, lm.ordinal, lm.timestamp,
+				te.call_index, te.event_index, te.timestamp AS terminal_timestamp,
+				ROW_NUMBER() OVER (
+					PARTITION BY lm.session_id
+					ORDER BY te.timestamp, te.call_index, te.event_index
+				) AS row_num
 			FROM last_messages lm
 			JOIN terminal_events te ON te.session_id = lm.session_id
 			WHERE te.timestamp > lm.timestamp
-		), ordered_tail AS (
-			SELECT e.*,
-				LEAD(e.ordinal) OVER tail_order AS successor_ordinal,
-				LEAD(e.timestamp) OVER tail_order AS successor_timestamp
-			FROM tail_events e
-			WINDOW tail_order AS (
-				PARTITION BY e.session_id
-				ORDER BY e.timestamp, e.event_kind,
-					e.call_index, e.event_index
-			)
+		), candidates AS (
+			SELECT twm.session_id, twm.ordinal AS start_ordinal,
+				CASE
+					WHEN twm.next_terminal_timestamp IS NOT NULL AND
+						(twm.next_message_timestamp IS NULL OR
+						 twm.next_terminal_timestamp < twm.next_message_timestamp)
+					THEN twm.next_terminal_ordinal
+					ELSE twm.next_message_ordinal
+				END AS end_ordinal,
+				twm.timestamp AS start_timestamp,
+				CASE
+					WHEN twm.next_terminal_timestamp IS NOT NULL AND
+						(twm.next_message_timestamp IS NULL OR
+						 twm.next_terminal_timestamp < twm.next_message_timestamp)
+					THEN twm.next_terminal_timestamp
+					ELSE twm.next_message_timestamp
+				END AS end_timestamp,
+				CASE
+					WHEN twm.next_terminal_timestamp IS NOT NULL AND
+						(twm.next_message_timestamp IS NULL OR
+						 twm.next_terminal_timestamp < twm.next_message_timestamp)
+					THEN 'tool'
+					ELSE twm.next_message_role
+				END AS closing_role,
+				CASE
+					WHEN twm.next_terminal_timestamp IS NOT NULL AND
+						(twm.next_message_timestamp IS NULL OR
+						 twm.next_terminal_timestamp < twm.next_message_timestamp)
+					THEN ''
+					ELSE twm.next_message_model
+				END AS closing_model,
+				twm.call_index, twm.event_index
+			FROM terminal_with_message twm
+
+			UNION ALL
+
+			SELECT fte.session_id, fte.ordinal, fte.ordinal,
+				fte.timestamp, fte.terminal_timestamp, 'tool', '',
+				fte.call_index, fte.event_index
+			FROM first_tail_events fte
+			WHERE fte.row_num = 1
 		)
-		SELECT tail.session_id, tail.ordinal, tail.successor_ordinal,
-			tail.timestamp, tail.successor_timestamp,
-			'tool', '',
+		SELECT candidate.session_id, candidate.start_ordinal,
+			candidate.end_ordinal, candidate.start_timestamp,
+			candidate.end_timestamp, candidate.closing_role,
+			candidate.closing_model,
 			COALESCE((
 				SELECT prior.model
 				FROM messages prior
-				WHERE prior.session_id = tail.session_id
-					AND prior.ordinal <= tail.ordinal
+				WHERE prior.session_id = candidate.session_id
+					AND prior.ordinal <= candidate.start_ordinal
 					AND prior.role = 'assistant'
 					AND prior.model != ''
 				ORDER BY prior.ordinal DESC
 				LIMIT 1
 			), 'unknown')
-		FROM ordered_tail tail
-		WHERE tail.successor_timestamp IS NOT NULL
-			AND tail.timestamp >= $2
-			AND tail.timestamp < $3
-		ORDER BY tail.timestamp, tail.session_id, tail.ordinal,
-			tail.event_kind, tail.call_index, tail.event_index`
+		FROM candidates candidate
+		WHERE candidate.end_timestamp IS NOT NULL
+			AND candidate.start_timestamp < $3
+		ORDER BY candidate.start_timestamp, candidate.session_id,
+			candidate.start_ordinal, candidate.call_index, candidate.event_index`
 		scanCandidate := func(
 			row interface{ Scan(dest ...any) error },
 		) (activity.IntervalCandidate, error) {
@@ -548,26 +606,26 @@ func (s *Store) activityReportCandidateSource(
 			return candidate, nil
 		}
 
-		tailRows, err := s.pg.QueryContext(
-			ctx, tailQuery, ids, lower, q.EffectiveEnd,
+		terminalRows, err := s.pg.QueryContext(
+			ctx, terminalQuery, ids, lower, q.EffectiveEnd,
 		)
 		if err != nil {
-			return fmt.Errorf("querying pg activity report tail candidates: %w", err)
+			return fmt.Errorf("querying pg activity report terminal candidates: %w", err)
 		}
-		var tail []activity.IntervalCandidate
-		for tailRows.Next() {
-			candidate, scanErr := scanCandidate(tailRows)
+		var terminal []activity.IntervalCandidate
+		for terminalRows.Next() {
+			candidate, scanErr := scanCandidate(terminalRows)
 			if scanErr != nil {
-				tailRows.Close()
+				terminalRows.Close()
 				return scanErr
 			}
-			tail = append(tail, candidate)
+			terminal = append(terminal, candidate)
 		}
-		if err := tailRows.Err(); err != nil {
-			tailRows.Close()
+		if err := terminalRows.Err(); err != nil {
+			terminalRows.Close()
 			return err
 		}
-		if err := tailRows.Close(); err != nil {
+		if err := terminalRows.Close(); err != nil {
 			return err
 		}
 
@@ -638,7 +696,7 @@ func (s *Store) activityReportCandidateSource(
 			}
 			return rows.Err()
 		}
-		return activity.MergeCandidateSlice(tail, messageSource)(ctx, yield)
+		return activity.MergeCandidateSlice(terminal, messageSource)(ctx, yield)
 	}
 }
 

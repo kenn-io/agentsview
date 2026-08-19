@@ -601,12 +601,13 @@ WHERE m.session_id IN (SELECT value FROM json_each(?))
 ORDER BY agentsview_timestamp_unix_micro(m.timestamp),
 	m.session_id, m.ordinal`
 
-const activityReportTailCandidatesSQL = `WITH
+const activityReportTerminalCandidatesSQL = `WITH
 	session_ids AS (
 		SELECT value AS session_id FROM json_each(?)
 	),
 	terminal_events AS (
-		SELECT tre.session_id, tre.call_index, tre.event_index, tre.timestamp
+		SELECT tre.session_id, tre.tool_call_message_ordinal AS ordinal,
+			tre.call_index, tre.event_index, tre.timestamp
 		FROM tool_result_events tre
 		JOIN session_ids ids ON ids.session_id = tre.session_id
 		WHERE tre.source = 'tool_execution'
@@ -614,9 +615,40 @@ const activityReportTailCandidatesSQL = `WITH
 			AND tre.timestamp IS NOT NULL
 			AND tre.timestamp != ''
 			AND agentsview_timestamp_unix_micro(tre.timestamp) IS NOT NULL
+			AND agentsview_timestamp_unix_micro(tre.timestamp) >= ?
 	),
 	terminal_sessions AS (
 		SELECT DISTINCT session_id FROM terminal_events
+	),
+	ordered_terminal AS (
+		SELECT te.*,
+			LEAD(te.ordinal) OVER terminal_order AS next_terminal_ordinal,
+			LEAD(te.timestamp) OVER terminal_order AS next_terminal_timestamp
+		FROM terminal_events te
+		WINDOW terminal_order AS (
+			PARTITION BY te.session_id
+			ORDER BY agentsview_timestamp_unix_micro(te.timestamp),
+				te.call_index, te.event_index
+		)
+	),
+	terminal_with_message AS (
+		SELECT ot.*, next_message.ordinal AS next_message_ordinal,
+			next_message.timestamp AS next_message_timestamp,
+			next_message.role AS next_message_role,
+			next_message.model AS next_message_model
+		FROM ordered_terminal ot
+		LEFT JOIN messages next_message ON next_message.id = (
+			SELECT next.id
+			FROM messages next INDEXED BY idx_messages_velocity
+			WHERE next.session_id = ot.session_id
+				AND next.ordinal > ot.ordinal
+				AND next.timestamp IS NOT NULL
+				AND next.timestamp != ''
+				AND agentsview_timestamp_unix_micro(next.timestamp) >
+					agentsview_timestamp_unix_micro(ot.timestamp)
+			ORDER BY next.ordinal
+			LIMIT 1
+		)
 	),
 	last_messages AS (
 		SELECT m.session_id, m.ordinal, m.timestamp
@@ -632,49 +664,84 @@ const activityReportTailCandidatesSQL = `WITH
 			LIMIT 1
 		)
 	),
-	tail_events AS (
-		SELECT lm.session_id, lm.ordinal, 0 AS event_kind,
-			0 AS call_index, 0 AS event_index, lm.timestamp
-		FROM last_messages lm
-		UNION ALL
-		SELECT lm.session_id, lm.ordinal, 1,
-			te.call_index, te.event_index, te.timestamp
+	first_tail_events AS (
+		SELECT lm.session_id, lm.ordinal, lm.timestamp,
+			te.call_index, te.event_index, te.timestamp AS terminal_timestamp,
+			ROW_NUMBER() OVER (
+				PARTITION BY lm.session_id
+				ORDER BY agentsview_timestamp_unix_micro(te.timestamp),
+					te.call_index, te.event_index
+			) AS row_num
 		FROM last_messages lm
 		JOIN terminal_events te ON te.session_id = lm.session_id
 		WHERE agentsview_timestamp_unix_micro(te.timestamp) >
 				agentsview_timestamp_unix_micro(lm.timestamp)
 	),
-	ordered_tail AS (
-		SELECT e.*,
-			LEAD(e.ordinal) OVER tail_order AS successor_ordinal,
-			LEAD(e.timestamp) OVER tail_order AS successor_timestamp
-		FROM tail_events e
-		WINDOW tail_order AS (
-			PARTITION BY e.session_id
-			ORDER BY agentsview_timestamp_unix_micro(e.timestamp),
-				e.event_kind, e.call_index, e.event_index
-		)
+	candidates AS (
+		SELECT twm.session_id, twm.ordinal AS start_ordinal,
+			CASE
+				WHEN twm.next_terminal_timestamp IS NOT NULL AND
+					(twm.next_message_timestamp IS NULL OR
+					 agentsview_timestamp_unix_micro(twm.next_terminal_timestamp) <
+					 agentsview_timestamp_unix_micro(twm.next_message_timestamp))
+				THEN twm.next_terminal_ordinal
+				ELSE twm.next_message_ordinal
+			END AS end_ordinal,
+			twm.timestamp AS start_timestamp,
+			CASE
+				WHEN twm.next_terminal_timestamp IS NOT NULL AND
+					(twm.next_message_timestamp IS NULL OR
+					 agentsview_timestamp_unix_micro(twm.next_terminal_timestamp) <
+					 agentsview_timestamp_unix_micro(twm.next_message_timestamp))
+				THEN twm.next_terminal_timestamp
+				ELSE twm.next_message_timestamp
+			END AS end_timestamp,
+			CASE
+				WHEN twm.next_terminal_timestamp IS NOT NULL AND
+					(twm.next_message_timestamp IS NULL OR
+					 agentsview_timestamp_unix_micro(twm.next_terminal_timestamp) <
+					 agentsview_timestamp_unix_micro(twm.next_message_timestamp))
+				THEN 'tool'
+				ELSE twm.next_message_role
+			END AS closing_role,
+			CASE
+				WHEN twm.next_terminal_timestamp IS NOT NULL AND
+					(twm.next_message_timestamp IS NULL OR
+					 agentsview_timestamp_unix_micro(twm.next_terminal_timestamp) <
+					 agentsview_timestamp_unix_micro(twm.next_message_timestamp))
+				THEN ''
+				ELSE twm.next_message_model
+			END AS closing_model,
+			twm.call_index, twm.event_index
+		FROM terminal_with_message twm
+
+		UNION ALL
+
+		SELECT fte.session_id, fte.ordinal, fte.ordinal,
+			fte.timestamp, fte.terminal_timestamp, 'tool', '',
+			fte.call_index, fte.event_index
+		FROM first_tail_events fte
+		WHERE fte.row_num = 1
 	)
-SELECT tail.session_id, tail.ordinal, tail.successor_ordinal,
-	tail.timestamp, tail.successor_timestamp,
-	'tool', '',
+SELECT candidate.session_id, candidate.start_ordinal, candidate.end_ordinal,
+	candidate.start_timestamp, candidate.end_timestamp,
+	candidate.closing_role, candidate.closing_model,
 	COALESCE((
 		SELECT prior.model
 		FROM messages prior
-		WHERE prior.session_id = tail.session_id
-			AND prior.ordinal <= tail.ordinal
+		WHERE prior.session_id = candidate.session_id
+			AND prior.ordinal <= candidate.start_ordinal
 			AND prior.role = 'assistant'
 			AND prior.model != ''
 		ORDER BY prior.ordinal DESC
 		LIMIT 1
 	), 'unknown')
-FROM ordered_tail tail
-WHERE tail.successor_timestamp IS NOT NULL
-	AND agentsview_timestamp_unix_micro(tail.timestamp) >= ?
-	AND agentsview_timestamp_unix_micro(tail.timestamp) < ?
-ORDER BY agentsview_timestamp_unix_micro(tail.timestamp),
-	tail.session_id, tail.ordinal,
-	tail.event_kind, tail.call_index, tail.event_index`
+FROM candidates candidate
+WHERE candidate.end_timestamp IS NOT NULL
+	AND agentsview_timestamp_unix_micro(candidate.start_timestamp) < ?
+ORDER BY agentsview_timestamp_unix_micro(candidate.start_timestamp),
+	candidate.session_id, candidate.start_ordinal,
+	candidate.call_index, candidate.event_index`
 
 func (db *DB) activityReportCandidateSource(
 	ids []string, q activity.Query,
@@ -726,26 +793,27 @@ func (db *DB) activityReportCandidateSource(
 			return candidate, nil
 		}
 
-		tailRows, err := db.getReader().QueryContext(
-			ctx, activityReportTailCandidatesSQL, string(encodedIDs), lower, upper,
+		terminalRows, err := db.getReader().QueryContext(
+			ctx, activityReportTerminalCandidatesSQL,
+			string(encodedIDs), lower, upper,
 		)
 		if err != nil {
-			return fmt.Errorf("querying activity report tail candidates: %w", err)
+			return fmt.Errorf("querying activity report terminal candidates: %w", err)
 		}
-		var tail []activity.IntervalCandidate
-		for tailRows.Next() {
-			candidate, scanErr := scanCandidate(tailRows)
+		var terminal []activity.IntervalCandidate
+		for terminalRows.Next() {
+			candidate, scanErr := scanCandidate(terminalRows)
 			if scanErr != nil {
-				tailRows.Close()
+				terminalRows.Close()
 				return scanErr
 			}
-			tail = append(tail, candidate)
+			terminal = append(terminal, candidate)
 		}
-		if err := tailRows.Err(); err != nil {
-			tailRows.Close()
+		if err := terminalRows.Err(); err != nil {
+			terminalRows.Close()
 			return err
 		}
-		if err := tailRows.Close(); err != nil {
+		if err := terminalRows.Close(); err != nil {
 			return err
 		}
 
@@ -776,7 +844,7 @@ func (db *DB) activityReportCandidateSource(
 			}
 			return rows.Err()
 		}
-		return activity.MergeCandidateSlice(tail, messageSource)(ctx, yield)
+		return activity.MergeCandidateSlice(terminal, messageSource)(ctx, yield)
 	}
 }
 

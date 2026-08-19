@@ -178,15 +178,23 @@ func parityFixture() []parityFixtureSession {
 			},
 		},
 		{
-			// A completion between transcript messages is already covered by
-			// message adjacency and must not add an overlapping interval.
+			// A completion between transcript messages resets the gap cap before
+			// the later message without double-counting the message interval.
 			id: "parity-tool-inline", project: "tools", model: "model-x",
 			events: []parityEvent{
 				{role: "user", ts: parityDate + "T15:10:00Z"},
 				{role: "assistant", ts: parityDate + "T15:11:00Z",
-					toolCompletedAt: parityDate + "T15:12:00Z"},
-				{role: "assistant", ts: parityDate + "T15:11:30Z"},
-				{role: "assistant", ts: parityDate + "T15:13:00Z"},
+					toolCompletedAt: parityDate + "T15:20:00Z"},
+				{role: "assistant", ts: parityDate + "T15:21:00Z"},
+			},
+		},
+		{
+			// A completion just after the report range closes the final message;
+			// aggregation clips the interval at the range boundary.
+			id: "parity-tool-boundary", project: "tools", model: "model-x",
+			events: []parityEvent{
+				{role: "assistant", ts: parityDate + "T23:59:00Z",
+					toolCompletedAt: "2026-06-15T00:01:00Z"},
 			},
 		},
 		{
@@ -554,6 +562,23 @@ func assertCandidateParity(
 		End:          time.Date(2026, 6, 14, 15, 2, 0, 0, time.UTC),
 		ClosingRole:  "tool",
 		PriorModel:   "model-x",
+	}, activity.IntervalCandidate{
+		SessionID:    "parity-tool-inline",
+		StartOrdinal: 1,
+		EndOrdinal:   2,
+		Start:        time.Date(2026, 6, 14, 15, 20, 0, 0, time.UTC),
+		End:          time.Date(2026, 6, 14, 15, 21, 0, 0, time.UTC),
+		ClosingRole:  "assistant",
+		ClosingModel: "model-x",
+		PriorModel:   "model-x",
+	}, activity.IntervalCandidate{
+		SessionID:    "parity-tool-boundary",
+		StartOrdinal: 0,
+		EndOrdinal:   0,
+		Start:        time.Date(2026, 6, 14, 23, 59, 0, 0, time.UTC),
+		End:          time.Date(2026, 6, 15, 0, 1, 0, 0, time.UTC),
+		ClosingRole:  "tool",
+		PriorModel:   "model-x",
 	})
 	sort.Slice(want, func(i, j int) bool {
 		if !want[i].Start.Equal(want[j].Start) {
@@ -611,7 +636,7 @@ func assertParityForCase(
 }
 
 // assertDayMinuteFixtureSanity checks the day-minute report actually exercises
-// the fixture: a full day with peak concurrency 2, twelve sessions, non-zero
+// the fixture: a full day with peak concurrency 2, thirteen sessions, non-zero
 // cost, and exactly 22550 output tokens. The token total proves the
 // synthetic-model usage row (9999 tokens) is excluded, the dedup pair
 // keeps its complete 9000-token snapshot with earlier attribution, the
@@ -623,7 +648,7 @@ func assertDayMinuteFixtureSanity(t *testing.T, r activity.Report) {
 	t.Helper()
 	require.False(t, r.Partial, "fixture day must be a full day")
 	require.Equal(t, 2, r.Peak.Agents, "fixture must reach peak concurrency 2")
-	require.Equal(t, 12, r.Totals.Sessions, "fixture session count")
+	require.Equal(t, 13, r.Totals.Sessions, "fixture session count")
 	require.Positive(t, r.Totals.Cost.Microdollars, "fixture must exercise cost")
 	// 2400 (parity-a) + 1600 (parity-b) + 300 (parity-c; synthetic 9999 row
 	// excluded) + 9000 (parity-d receives parity-e's complete snapshot) +
@@ -656,4 +681,10 @@ func assertDayMinuteFixtureSanity(t *testing.T, r activity.Report) {
 		"the later fractional duplicate is dropped")
 	require.Equal(t, "model-x", bySession["parity-f"].PrimaryModel,
 		"zero-cost usage still reports its known model as primary")
+	require.NotNil(t, bySession["parity-tool-inline"].AgentMinutes)
+	require.InDelta(t, 7.0, *bySession["parity-tool-inline"].AgentMinutes, 1e-9,
+		"inline completion resets the gap cap before the final message")
+	require.NotNil(t, bySession["parity-tool-boundary"].AgentMinutes)
+	require.InDelta(t, 1.0, *bySession["parity-tool-boundary"].AgentMinutes, 1e-9,
+		"post-range completion closes the final in-range message")
 }
