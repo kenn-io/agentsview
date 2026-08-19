@@ -699,6 +699,69 @@ func TestFSNotifyBackendRemoveDuringBatchDoesNotDeadlockEventLoop(t *testing.T) 
 	}
 }
 
+// On Windows, fsnotify delivers events and services Add on the same
+// goroutine, and registration installs watches before Start runs. An event
+// arriving between registration Adds must not block the next Add until Start:
+// the pump has to consume native events as soon as watches exist.
+func TestFSNotifyBackendEventBeforeStartDoesNotBlockRegistration(t *testing.T) {
+	backend := testFSNotifyBackend(t)
+	native := newSerialNativeWatcher()
+	go native.run()
+	t.Cleanup(native.Stop)
+	backend.watchOps = native
+	backend.eventInput = native.events
+
+	root := t.TempDir()
+	sub := filepath.Join(root, "sub")
+	require.NoError(t, os.Mkdir(sub, 0o755))
+
+	file := filepath.Join(root, "session.jsonl")
+	// Once deliver hands the batch to the native reader, the reader is
+	// committed to the delivery and services no Add requests until the event
+	// is consumed, exactly like a Windows event arriving mid-registration.
+	native.deliver <- []fsnotify.Event{{Name: file, Op: fsnotify.Write}}
+
+	registered := make(chan RecursiveWatchResult, 1)
+	go func() { registered <- backend.AddRecursive(root, 8) }()
+	select {
+	case result := <-registered:
+		require.NoError(t, result.Err)
+		require.Equal(t, 2, result.Watched)
+	case <-time.After(2 * time.Second):
+		t.Fatal("AddRecursive blocked on a native event delivered before Start")
+	}
+
+	require.NoError(t, backend.Start())
+	event := requireReceiveWithin(t, backend.Events(), 2*time.Second)
+	assert.Equal(t, file, event.Path)
+	assert.Equal(t, backendOpWrite, event.Op)
+}
+
+// Overflow drops raw native events before their watch-maintenance side
+// effects run, so missed creates can leave recursive subtrees without native
+// watches. A full sync recovers the data but not the watches, so the
+// backend must hand recursive roots to polling.
+func TestFSNotifyBackendOverflowTransfersRecursiveRootsToPolling(t *testing.T) {
+	backend := testFSNotifyBackend(t)
+	errorInput := make(chan error, 1)
+	backend.errorInput = errorInput
+	root := t.TempDir()
+	require.NoError(t, backend.AddRecursive(root, 8).Err)
+	obligations := make(chan PollingObligation, 1)
+	backend.bindPollingOwnership(func(obligation PollingObligation) error {
+		obligations <- obligation
+		return nil
+	}, func(string) error { return nil })
+	require.NoError(t, backend.Start())
+
+	errorInput <- fsnotify.ErrEventOverflow
+
+	batch := requireReceiveWithin(t, backend.Events(), 2*time.Second)
+	assert.Equal(t, backendOpFullSync, batch.Op)
+	obligation := requireReceiveWithin(t, obligations, 2*time.Second)
+	assert.Equal(t, "fsnotify-runtime:"+root, obligation.Key)
+}
+
 func TestNativeEventQueueOverflowSurfacesLostEventsOnce(t *testing.T) {
 	queue := newNativeEventQueue()
 	stop := make(chan struct{})
