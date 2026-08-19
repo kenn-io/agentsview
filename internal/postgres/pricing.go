@@ -753,6 +753,32 @@ func upsertPGModelPricing(
 	return nil
 }
 
+// pricingSyncLockKey names the sync_metadata row a pricing sync locks
+// for the life of its transaction.
+const pricingSyncLockKey = "model_pricing_sync_lock"
+
+// lockPGModelPricing serializes concurrent pricing syncs by locking a
+// dedicated sync_metadata row until tx ends. A row lock is used instead
+// of pg_advisory_xact_lock because supported CockroachDB versions do not
+// implement advisory locks, and sync_metadata lives in the target
+// schema, so the lock is schema-scoped on both engines.
+func lockPGModelPricing(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO sync_metadata (key, value) VALUES ($1, '')
+		 ON CONFLICT (key) DO NOTHING`,
+		pricingSyncLockKey,
+	); err != nil {
+		return fmt.Errorf("creating pg model pricing lock row: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`SELECT value FROM sync_metadata WHERE key = $1 FOR UPDATE`,
+		pricingSyncLockKey,
+	); err != nil {
+		return fmt.Errorf("locking pg model pricing: %w", err)
+	}
+	return nil
+}
+
 func (s *Sync) syncModelPricing(ctx context.Context) error {
 	prices, err := s.local.ListModelPricing(ctx)
 	if err != nil {
@@ -770,10 +796,8 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	// each write a merged copy, so read, plan, and write are serialized
 	// under one lock; otherwise a slower push could overwrite ownership a
 	// faster one recorded and leave its rows untracked.
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(
-		hashtext(current_schema()), hashtext('model_pricing')
-	)`); err != nil {
-		return fmt.Errorf("locking pg model pricing: %w", err)
+	if err := lockPGModelPricing(ctx, tx); err != nil {
+		return err
 	}
 	existing, err := listPGModelPricing(ctx, tx)
 	if err != nil {

@@ -756,6 +756,7 @@ func TestSyncModelPricingSkipsWriteWhenRemoteRowsUnchanged(t *testing.T) {
 	require.NoError(t, sync.syncModelPricing(ctx))
 	assert.Equal(t, 1, state.queryCount(), "pg pricing reads")
 	execs := state.execStatements()
-	require.Len(t, execs, 1, "only the serialization lock, no writes")
-	assert.Contains(t, execs[0], "pg_advisory_xact_lock")
+	require.Len(t, execs, 2, "only the serialization lock, no writes")
+	assert.Contains(t, execs[0], "ON CONFLICT (key) DO NOTHING")
+	assert.Contains(t, execs[1], "FOR UPDATE")
 }
