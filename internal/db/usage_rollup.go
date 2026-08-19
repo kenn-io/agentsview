@@ -35,11 +35,16 @@ type usageRollupMetrics struct {
 	BuildDuration, InstallDuration            time.Duration
 }
 
+var usageTimezoneIdentityCache sync.Map
+
 func usageTimezoneIdentityFor(
 	location *time.Location, _ []usageQueryInterval,
 ) usageTimezoneIdentity {
 	if location == nil {
 		location = time.Local
+	}
+	if cached, ok := usageTimezoneIdentityCache.Load(location); ok {
+		return cached.(usageTimezoneIdentity)
 	}
 	name := usageLocationName(location)
 	digest := sha256.New()
@@ -57,7 +62,11 @@ func usageTimezoneIdentityFor(
 	if key == "" || key == "Local" {
 		key = "local:" + fingerprint
 	}
-	return usageTimezoneIdentity{Key: key, Name: name, IntervalFingerprint: fingerprint}
+	identity := usageTimezoneIdentity{
+		Key: key, Name: name, IntervalFingerprint: fingerprint,
+	}
+	actual, _ := usageTimezoneIdentityCache.LoadOrStore(location, identity)
+	return actual.(usageTimezoneIdentity)
 }
 
 func usageLocationName(location *time.Location) string {

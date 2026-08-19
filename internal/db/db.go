@@ -1651,6 +1651,7 @@ func checkReadOnlySchemaCompatibility(conn *sql.DB) error {
 		}
 	}
 	for _, index := range []string{
+		"idx_messages_usage_timestamp",
 		"idx_messages_usage_session_covering",
 		"idx_messages_activity_timestamp",
 	} {
@@ -3120,7 +3121,7 @@ func (db *DB) createPartialIndexesLocked(w *writerHandle) error {
 			return fmt.Errorf("creating index: %w", err)
 		}
 	}
-	if err := ensureUsageCoveringIndexLocked(w); err != nil {
+	if err := ensureUsageIndexesLocked(w); err != nil {
 		return err
 	}
 	var sourceIndexColumns sql.NullString
@@ -3159,11 +3160,6 @@ func (db *DB) createPartialIndexesLocked(w *writerHandle) error {
 		return fmt.Errorf("creating active session source index: %w", err)
 	}
 	if _, err := w.Exec(
-		`DROP INDEX IF EXISTS idx_messages_usage_timestamp`,
-	); err != nil {
-		return fmt.Errorf("dropping legacy usage index: %w", err)
-	}
-	if _, err := w.Exec(
 		`DROP INDEX IF EXISTS idx_artifact_checkpoint_stage_pending`,
 	); err != nil {
 		return fmt.Errorf("dropping superseded artifact stage index: %w", err)
@@ -3192,52 +3188,63 @@ func (db *DB) createPartialIndexesLocked(w *writerHandle) error {
 	return nil
 }
 
-var usageCoveringIndexColumns = []string{
-	"timestamp", "session_id", "ordinal", "role", "model",
+var usageSessionCoveringIndexColumns = []string{
+	"session_id", "ordinal", "timestamp", "role", "model",
 	"claude_message_id", "claude_request_id", "token_usage", "source_uuid",
 }
 
-func ensureUsageCoveringIndexLocked(w *writerHandle) error {
-	var columns sql.NullString
-	if err := w.QueryRow(`
-		SELECT group_concat(name, ',')
-		FROM (
-			SELECT name
-			FROM pragma_index_info('idx_messages_usage_covering')
-			ORDER BY seqno
-		)`).Scan(&columns); err != nil {
-		return fmt.Errorf("probing usage covering index: %w", err)
+func ensureUsageIndexesLocked(w *writerHandle) error {
+	if _, err := w.Exec(`DROP INDEX IF EXISTS idx_messages_usage_covering`); err != nil {
+		return fmt.Errorf("dropping superseded usage covering index: %w", err)
 	}
-	if columns.String != strings.Join(usageCoveringIndexColumns, ",") {
-		if _, err := w.Exec(
-			`DROP INDEX IF EXISTS idx_messages_usage_covering`,
-		); err != nil {
-			return fmt.Errorf("dropping stale usage covering index: %w", err)
-		}
-		if _, err := w.Exec(`
-			CREATE INDEX IF NOT EXISTS idx_messages_usage_covering
-			ON messages(timestamp, session_id, ordinal, role, model,
-			            claude_message_id, claude_request_id, token_usage, source_uuid)
-			WHERE token_usage != ''
-			  AND model != ''
-			  AND model != '<synthetic>'`); err != nil {
-			return fmt.Errorf("creating usage covering index: %w", err)
-		}
+	if err := ensureUsageIndexColumnsLocked(
+		w, "idx_messages_usage_timestamp", []string{"timestamp", "session_id"},
+		`CREATE INDEX IF NOT EXISTS idx_messages_usage_timestamp
+		 ON messages(timestamp, session_id)
+		 WHERE token_usage != '' AND model != '' AND model != '<synthetic>'`,
+	); err != nil {
+		return err
 	}
-	if _, err := w.Exec(`
-		CREATE INDEX IF NOT EXISTS idx_messages_usage_session_covering
-		ON messages(session_id, ordinal, timestamp, role, model,
-		            claude_message_id, claude_request_id, token_usage, source_uuid)
-		WHERE token_usage != ''
-		  AND model != ''
-		  AND model != '<synthetic>'`); err != nil {
-		return fmt.Errorf("creating session usage covering index: %w", err)
+	if err := ensureUsageIndexColumnsLocked(
+		w, "idx_messages_usage_session_covering", usageSessionCoveringIndexColumns,
+		`CREATE INDEX IF NOT EXISTS idx_messages_usage_session_covering
+		 ON messages(session_id, ordinal, timestamp, role, model,
+		             claude_message_id, claude_request_id, token_usage, source_uuid)
+		 WHERE token_usage != '' AND model != '' AND model != '<synthetic>'`,
+	); err != nil {
+		return err
 	}
 	if _, err := w.Exec(`
 		CREATE INDEX IF NOT EXISTS idx_messages_activity_timestamp
 		ON messages(timestamp, session_id, ordinal, model)
 		WHERE role = 'assistant' AND model != '<synthetic>'`); err != nil {
 		return fmt.Errorf("creating usage activity index: %w", err)
+	}
+	return nil
+}
+
+func ensureUsageIndexColumnsLocked(
+	w *writerHandle, name string, want []string, ddl string,
+) error {
+	var columns sql.NullString
+	if err := w.QueryRow(fmt.Sprintf(`
+		SELECT group_concat(name, ',')
+		FROM (
+			SELECT name
+			FROM pragma_index_info('%s')
+			ORDER BY seqno
+		)`, name)).Scan(&columns); err != nil {
+		return fmt.Errorf("probing usage index %s: %w", name, err)
+	}
+	if columns.String != strings.Join(want, ",") {
+		if _, err := w.Exec(
+			`DROP INDEX IF EXISTS ` + name,
+		); err != nil {
+			return fmt.Errorf("dropping stale usage index %s: %w", name, err)
+		}
+		if _, err := w.Exec(ddl); err != nil {
+			return fmt.Errorf("creating usage index %s: %w", name, err)
+		}
 	}
 	return nil
 }

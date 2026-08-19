@@ -131,6 +131,9 @@ func (db *DB) runUsageCacheBackfill(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if cache == nil || cache.fill == nil || cache.rollup == nil {
+		return fmt.Errorf("usage cache generation is not attached to the archive")
+	}
 	locations, err := usageBackfillLocations(ctx, cache, snapshot.location)
 	if err != nil {
 		return err
@@ -263,7 +266,7 @@ func (db *DB) usageBackfillActivity(ctx context.Context) (map[string]string, err
 	rows, err := db.getReader().QueryContext(ctx, `
 		SELECT session_id, MAX(activity_at) FROM (
 			SELECT m.session_id, m.timestamp AS activity_at
-			FROM messages m INDEXED BY idx_messages_usage_covering
+			FROM messages m INDEXED BY idx_messages_usage_timestamp
 			WHERE `+usageMessageSourceEligibility+`
 			UNION ALL
 			SELECT m.session_id, m.timestamp AS activity_at

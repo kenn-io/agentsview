@@ -283,6 +283,7 @@ func TestOpenReadOnlyRejectsMissingMigratedColumn(t *testing.T) {
 
 func TestOpenReadOnlyRejectsMissingUsageCacheIndexes(t *testing.T) {
 	for _, index := range []string{
+		"idx_messages_usage_timestamp",
 		"idx_messages_usage_session_covering",
 		"idx_messages_activity_timestamp",
 	} {

@@ -3998,14 +3998,15 @@ func BenchmarkGetDailyUsage(b *testing.B) {
 		}
 	}
 
+	filter := UsageFilter{From: "2024-06-01", To: "2024-08-01"}
+	if _, err := d.GetDailyUsage(ctx, filter); err != nil {
+		b.Fatalf("warming GetDailyUsage: %v", err)
+	}
 	log.SetOutput(origLog)
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_, err := d.GetDailyUsage(ctx, UsageFilter{
-			From: "2024-06-01",
-			To:   "2024-08-01",
-		})
+		_, err := d.GetDailyUsage(ctx, filter)
 		if err != nil {
 			b.Fatalf("GetDailyUsage: %v", err)
 		}
@@ -4047,6 +4048,29 @@ func BenchmarkGetDailyUsageSnapshotWindows(b *testing.B) {
 			)
 		})
 	}
+}
+
+// BenchmarkGetDailyUsageSnapshotAutomaticIndexOff keeps the cache query fast
+// when SQLite automatic indexes are unavailable.
+func BenchmarkGetDailyUsageSnapshotAutomaticIndexOff(b *testing.B) {
+	d := testDB(b)
+	seedDailyUsageSnapshotBenchmark(b, d)
+	reader := d.rawReader()
+	reader.SetMaxOpenConns(1)
+	_, err := reader.ExecContext(b.Context(), "PRAGMA automatic_index = OFF")
+	require.NoError(b, err)
+	var automaticIndex int
+	require.NoError(b,
+		reader.QueryRowContext(b.Context(), "PRAGMA automatic_index").
+			Scan(&automaticIndex))
+	require.Zero(b, automaticIndex)
+
+	benchmarkDailyUsageSnapshotWindow(
+		b, d, "2024-07-01", benchmarkDailyUsageExpectation{
+			days: 30, input: 57_600_000, output: 23_040_000,
+			cacheCreation: 14_400_000, cacheRead: 115_200_000,
+		},
+	)
 }
 
 func BenchmarkUsageRollup(b *testing.B) {

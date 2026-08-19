@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -28,7 +29,9 @@ func TestUsageCacheGenerationCreatesIdentifiedSchema(t *testing.T) {
 
 	info, err := os.Stat(cache.path)
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	if runtime.GOOS != "windows" {
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	}
 
 	var applicationID, autoVacuum int
 	require.NoError(t, cache.db.QueryRow(`PRAGMA application_id`).Scan(&applicationID))

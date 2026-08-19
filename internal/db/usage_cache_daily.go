@@ -168,8 +168,13 @@ func (db *DB) assembleDailyUsageFacts(
 			resolver.RecordUnattributedReported()
 		}
 		for key, cost := range costs {
+			bucket := accum[key]
+			if bucket == nil {
+				return DailyUsageResult{}, fmt.Errorf(
+					"daily usage cost has no token bucket")
+			}
 			var addErr error
-			accum[key].cost, addErr = money.Add(accum[key].cost, cost)
+			bucket.cost, addErr = money.Add(bucket.cost, cost)
 			if addErr != nil {
 				return DailyUsageResult{}, fmt.Errorf(
 					"summing daily usage cost: %w", addErr)
@@ -285,6 +290,10 @@ func buildDailyUsageFactsEntries(
 	var totals UsageTotals
 	for _, date := range dates {
 		day := days[date]
+		if day == nil {
+			return nil, UsageTotals{}, fmt.Errorf(
+				"daily usage date %q has no aggregate", date)
+		}
 		entry := DailyUsageEntry{Date: date}
 		models := sortedUsageDailyBucketNames(day.models)
 		entry.ModelsUsed = append([]string(nil), models...)

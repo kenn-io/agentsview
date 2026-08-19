@@ -238,7 +238,7 @@ func readUsageRollupExceptions(
 		e.cache_creation_tokens, e.cache_read_tokens, e.web_search_requests,
 		e.reported_cost_microdollars, e.cost_source, e.request_scoped,
 		e.claude_message_id, e.claude_request_id, e.source_uuid,
-		e.usage_dedup_key
+		e.usage_dedup_key, COUNT(*) OVER ()
 		FROM usage_rollup_exceptions e
 		JOIN usage_rollup_installs i ON i.id = e.rollup_install_id
 		WHERE i.timezone_id = ? AND (? = '' OR e.local_date >= ?)
@@ -257,7 +257,7 @@ func readUsageRollupExceptions(
 	for rows.Next() {
 		var fact usageRollupFact
 		var ordinal, millis, nanos, reported sql.NullInt64
-		var usesStart, requestScoped int
+		var usesStart, requestScoped, resultCount int
 		if err := rows.Scan(&fact.CachedSessionID, &fact.FactIndex,
 			&fact.SourceSessionID, &fact.LocalDate, &fact.Fact.Source, &ordinal,
 			&millis, &nanos, &fact.Fact.RawTimestamp, &usesStart, &fact.Model,
@@ -266,8 +266,11 @@ func readUsageRollupExceptions(
 			&fact.Fact.CacheReadTokens, &fact.Fact.WebSearchRequests, &reported,
 			&fact.Fact.CostSource, &requestScoped, &fact.Fact.ClaudeMessageID,
 			&fact.Fact.ClaudeRequestID, &fact.Fact.SourceUUID,
-			&fact.Fact.UsageDedupKey); err != nil {
+			&fact.Fact.UsageDedupKey, &resultCount); err != nil {
 			return nil, err
+		}
+		if result == nil && resultCount > 0 {
+			result = make([]usageRollupFact, 0, resultCount)
 		}
 		if _, ok := sessions[fact.SourceSessionID]; !ok &&
 			fact.SourceSessionID != "" {
@@ -434,43 +437,108 @@ func aggregateUsageRollupExceptions(
 func rankUsageRollupSnapshots(
 	facts []usageRollupFact,
 ) (plain, general []usageRollupFact, discarded int64) {
-	bySnapshot := make(map[string][]usageRollupFact)
-	for _, fact := range facts {
-		key := usageRollupSnapshotKey(fact)
+	type survivorRef struct {
+		index   int
+		general bool
+	}
+	type snapshotGroup struct {
+		first int
+		rest  []int
+	}
+	// Keep only indexes in the grouping map. usageRollupFact is intentionally
+	// wide enough to resolve every dedup edge; copying it into each group made
+	// warm aggregate reads allocate another full exception set.
+	bySnapshot := make(map[string]snapshotGroup)
+	survivors := make([]survivorRef, 0, len(facts))
+	for index := range facts {
+		key := usageRollupSnapshotKey(facts[index])
 		if key == "" {
-			general = append(general, fact)
+			survivors = append(survivors, survivorRef{index: index, general: true})
 			continue
 		}
-		bySnapshot[key] = append(bySnapshot[key], fact)
+		group, exists := bySnapshot[key]
+		if !exists {
+			bySnapshot[key] = snapshotGroup{first: index}
+			continue
+		}
+		group.rest = append(group.rest, index)
+		bySnapshot[key] = group
 	}
 	keys := usageSortedMapKeys(bySnapshot)
 	for _, key := range keys {
-		members := bySnapshot[key]
-		if len(members) == 1 {
-			if usageRollupGeneralKey(members[0]) == "" {
-				plain = append(plain, members[0])
-			} else {
-				general = append(general, members[0])
-			}
+		group := bySnapshot[key]
+		if len(group.rest) == 0 {
+			member := facts[group.first]
+			survivors = append(survivors, survivorRef{
+				index: group.first, general: usageRollupGeneralKey(member) != "",
+			})
 			continue
 		}
-		attribution := slices.MinFunc(members, compareUsageSnapshotAttribution)
-		winner := slices.MaxFunc(members, compareUsageSnapshotWinner)
+		attribution := facts[group.first]
+		winnerIndex := group.first
+		winner := attribution
+		for _, index := range group.rest {
+			member := facts[index]
+			if compareUsageSnapshotAttribution(member, attribution) < 0 {
+				attribution = member
+			}
+			if compareUsageSnapshotWinner(member, winner) > 0 {
+				winnerIndex = index
+				winner = member
+			}
+		}
 		winner.AttributionSessionID = attribution.SourceSessionID
-		for _, member := range members {
+		first := facts[group.first]
+		winner.Fact.WebSearchRequests = max(
+			winner.Fact.WebSearchRequests, first.Fact.WebSearchRequests)
+		if usageRollupFactIdentity(first) != usageRollupFactIdentity(winner) {
+			discarded += first.Fact.OutputTokens
+		}
+		for _, index := range group.rest {
+			member := facts[index]
 			winner.Fact.WebSearchRequests = max(
 				winner.Fact.WebSearchRequests, member.Fact.WebSearchRequests)
 			if usageRollupFactIdentity(member) != usageRollupFactIdentity(winner) {
 				discarded += member.Fact.OutputTokens
 			}
 		}
-		if winner.Fact.UsageDedupKey == "" {
-			plain = append(plain, winner)
-		} else {
-			general = append(general, winner)
+		facts[winnerIndex] = winner
+		survivors = append(survivors, survivorRef{
+			index: winnerIndex, general: winner.Fact.UsageDedupKey != "",
+		})
+	}
+
+	// Compact survivors into the input backing array in source order. The nth
+	// survivor's source index is always at least n, so no unread survivor is
+	// overwritten. Partitioning that compacted prefix then gives both result
+	// slices without allocating another wide-fact backing array.
+	slices.SortFunc(survivors, func(a, b survivorRef) int {
+		return cmp.Compare(a.index, b.index)
+	})
+	classes := make([]bool, len(survivors))
+	plainCount := 0
+	for output, survivor := range survivors {
+		facts[output] = facts[survivor.index]
+		classes[output] = survivor.general
+		if !survivor.general {
+			plainCount++
 		}
 	}
-	return plain, general, discarded
+	left, right := 0, len(survivors)-1
+	for left < plainCount {
+		if !classes[left] {
+			left++
+			continue
+		}
+		for classes[right] {
+			right--
+		}
+		facts[left], facts[right] = facts[right], facts[left]
+		classes[left], classes[right] = classes[right], classes[left]
+		left++
+		right--
+	}
+	return facts[:plainCount], facts[plainCount:len(survivors)], discarded
 }
 
 func filterUsageRollupOwners(

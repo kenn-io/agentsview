@@ -106,7 +106,7 @@ func TestUsageCandidateDiscoveryQueryPlans(t *testing.T) {
 
 	tokenSQL, tokenArgs := usageCandidateDiscoverySQL(bounds, usageQueryKindToken)
 	tokenPlan := explainUsageCandidatePlan(t, database, tokenSQL, tokenArgs)
-	assert.Contains(t, tokenPlan, "idx_messages_usage_covering")
+	assert.Contains(t, tokenPlan, "idx_messages_usage_timestamp")
 
 	activitySQL, activityArgs := usageCandidateDiscoverySQL(
 		bounds, usageQueryKindActivity,

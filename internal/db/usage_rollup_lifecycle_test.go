@@ -30,6 +30,14 @@ func TestUsageTimezoneIdentityUsesNamedZone(t *testing.T) {
 	assert.NotEmpty(t, got.IntervalFingerprint)
 }
 
+func TestUsageTimezoneIdentityTracksNamedZoneRules(t *testing.T) {
+	left := usageTimezoneIdentityFor(time.FixedZone("Named/Zone", -6*60*60), nil)
+	right := usageTimezoneIdentityFor(time.FixedZone("Named/Zone", 9*60*60), nil)
+
+	assert.Equal(t, left.Name, right.Name)
+	assert.NotEqual(t, left.IntervalFingerprint, right.IntervalFingerprint)
+}
+
 func TestUsageTimezoneIdentitySeparatesAnonymousLocalIntervals(t *testing.T) {
 	left := usageTimezoneIdentityFor(time.FixedZone("Local", -6*60*60),
 		[]usageQueryInterval{{

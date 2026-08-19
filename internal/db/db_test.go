@@ -8424,7 +8424,7 @@ func TestSessionsTerminationStatusIndex(t *testing.T) {
 		count)
 }
 
-func TestMessagesUsageCoveringIndex(t *testing.T) {
+func TestMessagesUsageIndexes(t *testing.T) {
 	d := testDB(t)
 
 	var count int
@@ -8434,17 +8434,17 @@ func TestMessagesUsageCoveringIndex(t *testing.T) {
 	).Scan(&count)
 	requireNoError(t, err, "probing idx_messages_usage_covering")
 
-	require.Equal(t, 1, count,
-		"expected idx_messages_usage_covering to exist, got count=%d",
+	require.Equal(t, 0, count,
+		"expected superseded idx_messages_usage_covering to be absent, got count=%d",
 		count)
 
 	err = d.getReader().QueryRow(
 		`SELECT count(*) FROM sqlite_master
 		 WHERE type = 'index' AND name = 'idx_messages_usage_timestamp'`,
 	).Scan(&count)
-	requireNoError(t, err, "probing legacy idx_messages_usage_timestamp")
-	require.Equal(t, 0, count,
-		"expected idx_messages_usage_timestamp to be dropped")
+	requireNoError(t, err, "probing idx_messages_usage_timestamp")
+	require.Equal(t, 1, count,
+		"expected idx_messages_usage_timestamp to exist")
 }
 
 // TestMigration_TerminationStatusColumn simulates upgrading from a

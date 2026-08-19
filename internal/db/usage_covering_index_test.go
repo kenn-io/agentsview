@@ -10,11 +10,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestUsageCoveringIndexColumns(t *testing.T) {
+func TestUsageSessionCoveringIndexColumns(t *testing.T) {
 	database := testDB(t)
 
 	rows, err := database.getReader().Query(
-		`SELECT name FROM pragma_index_info('idx_messages_usage_covering')
+		`SELECT name FROM pragma_index_info('idx_messages_usage_session_covering')
 		 ORDER BY seqno`,
 	)
 	require.NoError(t, err)
@@ -29,18 +29,18 @@ func TestUsageCoveringIndexColumns(t *testing.T) {
 	require.NoError(t, rows.Err())
 
 	want := []string{
-		"timestamp", "session_id", "ordinal", "role", "model",
+		"session_id", "ordinal", "timestamp", "role", "model",
 		"claude_message_id", "claude_request_id", "token_usage", "source_uuid",
 	}
 	assert.Equal(t, want, got)
 }
 
-func TestUsageCoveringIndexConcurrentRepair(t *testing.T) {
+func TestUsageIndexesConcurrentRepair(t *testing.T) {
 	database := testDB(t)
 	_, err := database.getWriter().Exec(`
-		DROP INDEX idx_messages_usage_covering;
-		CREATE INDEX idx_messages_usage_covering
-		ON messages(timestamp, session_id, ordinal, model)
+		DROP INDEX idx_messages_usage_session_covering;
+		CREATE INDEX idx_messages_usage_session_covering
+		ON messages(session_id, ordinal, timestamp, model)
 		WHERE token_usage != '' AND model != '' AND model != '<synthetic>'`)
 	require.NoError(t, err)
 	database.writer.Load().SetMaxOpenConns(2)
@@ -50,7 +50,7 @@ func TestUsageCoveringIndexConcurrentRepair(t *testing.T) {
 	for range 2 {
 		wait.Go(func() {
 			<-start
-			errors <- ensureUsageCoveringIndexLocked(database.getWriter())
+			errors <- ensureUsageIndexesLocked(database.getWriter())
 		})
 	}
 	close(start)
@@ -60,7 +60,7 @@ func TestUsageCoveringIndexConcurrentRepair(t *testing.T) {
 		require.NoError(t, err)
 	}
 	rows, err := database.getReader().Query(
-		`SELECT name FROM pragma_index_info('idx_messages_usage_covering')
+		`SELECT name FROM pragma_index_info('idx_messages_usage_session_covering')
 		 ORDER BY seqno`)
 	require.NoError(t, err)
 	defer rows.Close()
@@ -70,7 +70,7 @@ func TestUsageCoveringIndexConcurrentRepair(t *testing.T) {
 		require.NoError(t, rows.Scan(&column))
 		columns = append(columns, column)
 	}
-	assert.Equal(t, usageCoveringIndexColumns, columns)
+	assert.Equal(t, usageSessionCoveringIndexColumns, columns)
 }
 
 func TestUsageIndexesMigration(t *testing.T) {
@@ -82,11 +82,11 @@ func TestUsageIndexesMigration(t *testing.T) {
 	insertSession(t, d, "s1", "proj")
 	d.Close()
 
-	requireIndexPresence(t, path, "idx_messages_usage_covering", 1)
+	requireIndexPresence(t, path, "idx_messages_usage_covering", 0)
 	requireIndexPresence(t, path, "idx_messages_claude_snapshot", 1)
 	requireIndexPresence(t, path, "idx_messages_activity_timestamp", 1)
 	requireIndexPresence(t, path, "idx_messages_usage_session_covering", 1)
-	requireIndexPresence(t, path, "idx_messages_usage_timestamp", 0)
+	requireIndexPresence(t, path, "idx_messages_usage_timestamp", 1)
 
 	conn, err := sql.Open("sqlite3", path)
 	requireNoError(t, err, "raw open")
@@ -99,6 +99,8 @@ func TestUsageIndexesMigration(t *testing.T) {
 	requireNoError(t, err, "recreate stale covering index")
 	_, err = conn.Exec(`DROP INDEX IF EXISTS idx_messages_claude_snapshot`)
 	requireNoError(t, err, "drop Claude snapshot index")
+	_, err = conn.Exec(`DROP INDEX IF EXISTS idx_messages_usage_timestamp`)
+	requireNoError(t, err, "drop current timestamp index")
 	_, err = conn.Exec(`CREATE INDEX idx_messages_usage_timestamp
 		ON messages(timestamp, session_id, ordinal)
 		WHERE token_usage != '' AND model != '' AND model != '<synthetic>'`)
@@ -109,14 +111,14 @@ func TestUsageIndexesMigration(t *testing.T) {
 	requireNoError(t, err, "reopen")
 	defer d.Close()
 
-	requireIndexPresence(t, path, "idx_messages_usage_covering", 1)
+	requireIndexPresence(t, path, "idx_messages_usage_covering", 0)
 	requireIndexPresence(t, path, "idx_messages_claude_snapshot", 1)
 	requireIndexPresence(t, path, "idx_messages_activity_timestamp", 1)
 	requireIndexPresence(t, path, "idx_messages_usage_session_covering", 1)
-	requireIndexPresence(t, path, "idx_messages_usage_timestamp", 0)
+	requireIndexPresence(t, path, "idx_messages_usage_timestamp", 1)
 
 	rows, err := d.getReader().Query(
-		`SELECT name FROM pragma_index_info('idx_messages_usage_covering')
+		`SELECT name FROM pragma_index_info('idx_messages_usage_session_covering')
 		 ORDER BY seqno`,
 	)
 	requireNoError(t, err, "read migrated covering columns")
@@ -129,7 +131,7 @@ func TestUsageIndexesMigration(t *testing.T) {
 	}
 	requireNoError(t, rows.Err(), "iterate migrated covering columns")
 	require.Equal(t, []string{
-		"timestamp", "session_id", "ordinal", "role", "model",
+		"session_id", "ordinal", "timestamp", "role", "model",
 		"claude_message_id", "claude_request_id", "token_usage", "source_uuid",
 	}, columns)
 

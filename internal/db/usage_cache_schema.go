@@ -301,6 +301,9 @@ func (m *usageCacheManager) Generation(
 			return nil, fmt.Errorf("opening temporary usage cache: %w", err)
 		}
 	}
+	if cache == nil {
+		return nil, fmt.Errorf("opening usage cache returned no database")
+	}
 	m.generations[databaseID] = cache
 	if m.archive != nil {
 		cache.fill = newUsageFillCoordinator(m.ctx, m.archive, cache)
@@ -327,7 +330,7 @@ func (m *usageCacheManager) openPersistentGeneration(
 		if published {
 			return cache, nil
 		}
-		probe = probeUsageCache(ctx, path)
+		probe = probeUsageCacheWithBusyTimeout(ctx, path, 5000)
 		if probe.Err != nil {
 			return nil, probe.Err
 		}
@@ -497,6 +500,12 @@ func openUsageCacheDatabase(path string) (*sql.DB, error) {
 }
 
 func probeUsageCache(ctx context.Context, path string) usageCacheProbe {
+	return probeUsageCacheWithBusyTimeout(ctx, path, 0)
+}
+
+func probeUsageCacheWithBusyTimeout(
+	ctx context.Context, path string, busyTimeoutMillis int,
+) usageCacheProbe {
 	probe := usageCacheProbe{}
 	if ctx == nil {
 		ctx = context.Background()
@@ -509,7 +518,8 @@ func probeUsageCache(ctx context.Context, path string) usageCacheProbe {
 		return probe
 	}
 	probe.Exists = true
-	dsn := strings.Replace(makeDSN(path, true), "_busy_timeout=5000", "_busy_timeout=0", 1)
+	dsn := strings.Replace(makeDSN(path, true), "_busy_timeout=5000",
+		"_busy_timeout="+strconv.Itoa(busyTimeoutMillis), 1)
 	database, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		probe.Err = fmt.Errorf("probing usage cache %s: %w", path, err)

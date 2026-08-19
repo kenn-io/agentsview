@@ -207,18 +207,18 @@ func usageCandidateDiscoverySQL(
 		args = append(args, branchArgs...)
 	}
 	appendBranch(`SELECT m.session_id
-		FROM messages AS m INDEXED BY idx_messages_usage_covering
+		FROM messages AS m INDEXED BY idx_messages_usage_timestamp
 		JOIN sessions s ON s.id = m.session_id
 		WHERE `+usageMessageSourceEligibility+`
 		  AND s.deleted_at IS NULL
 		  AND m.timestamp IS NOT NULL AND m.timestamp != ''`, "m.timestamp")
 	appendBranch(`SELECT m.session_id
-		FROM messages AS m INDEXED BY idx_messages_usage_covering
+		FROM messages AS m INDEXED BY idx_messages_usage_timestamp
 		JOIN sessions s ON s.id = m.session_id
 		WHERE `+usageMessageSourceEligibility+`
 		  AND s.deleted_at IS NULL AND m.timestamp IS NULL`, "s.started_at")
 	appendBranch(`SELECT m.session_id
-		FROM messages AS m INDEXED BY idx_messages_usage_covering
+		FROM messages AS m INDEXED BY idx_messages_usage_timestamp
 		JOIN sessions s ON s.id = m.session_id
 		WHERE `+usageMessageSourceEligibility+`
 		  AND s.deleted_at IS NULL AND m.timestamp = ''`, "s.started_at")

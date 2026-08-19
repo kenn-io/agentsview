@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
@@ -339,15 +340,21 @@ func buildUsageTerminationPredSQLite(status string) (string, []any) {
 }
 
 // location loads the timezone or returns the system local timezone.
+var usageLocationCache sync.Map
+
 func (f UsageFilter) location() *time.Location {
 	if f.Timezone == "" {
 		return time.Local
+	}
+	if cached, ok := usageLocationCache.Load(f.Timezone); ok {
+		return cached.(*time.Location)
 	}
 	loc, err := time.LoadLocation(f.Timezone)
 	if err != nil {
 		return time.Local
 	}
-	return loc
+	actual, _ := usageLocationCache.LoadOrStore(f.Timezone, loc)
+	return actual.(*time.Location)
 }
 
 // usageMessageEligibility is the WHERE-clause fragment that selects
@@ -1315,7 +1322,7 @@ const usageSnapshotClaudeIdentity = usageMessageSourceEligibility + `
 // more than one eligible message. It over-approximates the ranked set (it
 // ignores session eligibility and the fallback session bounds), which only
 // sends extra rows through the ranking; the ranking itself applies the exact
-// row-source predicates. Bounded filters seek idx_messages_usage_covering
+// row-source predicates. Bounded filters seek idx_messages_usage_timestamp
 // per timestamp branch so the pass stays proportional to the window;
 // unbounded filters read idx_messages_claude_snapshot in partition order.
 func usageSnapshotDuplicateRequestsSQL(b usageBounds) (string, []any) {
