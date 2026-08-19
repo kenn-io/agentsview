@@ -43,6 +43,9 @@ states, and acceptance criteria.
 - [Audit current project-classification capabilities](issues/12-audit-current-project-classification-capabilities.md):
   Reads span SQLite and the mirrors; conflict-checked preview and
   transactional apply are SQLite-only, and there is no reversal API.
+- [Define project-classification jobs and invariants](issues/01-define-project-classification-jobs-and-invariants.md):
+  Machine-scoped folder rules drive mapping, ordinary saves stay direct, broad
+  changes get review, and stored classification layers support linear Undo.
 
 ## Not yet specified
 
