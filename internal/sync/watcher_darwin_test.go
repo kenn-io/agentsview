@@ -578,6 +578,52 @@ func TestDarwinWatcherKqueueLostEventsReachConsumer(t *testing.T) {
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool { return batch.FullSync })
 }
 
+// TestDarwinWatcherKqueueLostEventsInvalidateShallowRoots covers shallow-root
+// recovery after kqueue overflow. A dropped event can be the shallow root's
+// own removal, which normally signals loss through handleKqueueEvent; the
+// full-sync marker must therefore mark every active kqueue-backed root lost
+// so lifecycle recovery revalidates its watch or hands it to polling.
+func TestDarwinWatcherKqueueLostEventsInvalidateShallowRoots(t *testing.T) {
+	root := t.TempDir()
+	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
+	require.NoError(t, err)
+	backend.retryInitial = 5 * time.Millisecond
+	backend.retryMax = 10 * time.Millisecond
+	errorInput := make(chan error, 1)
+	backend.kqueue.errorInput = errorInput
+
+	polling := make(chan PollingObligation, 4)
+	batches := make(chan WatchBatch, 8)
+	watcher, err := newWatcherWithBackendOptions(
+		0, 0, func(_ context.Context, batch WatchBatch) error {
+			batches <- batch
+			return nil
+		}, backend, defaultWatchBatchMaxEntries, defaultWatchBatchMaxPathBytes,
+		WatcherOptions{
+			OnPollingRequired: func(obligation PollingObligation) error {
+				polling <- obligation
+				return nil
+			},
+			OnPollingReleased: func(string) error { return nil },
+		},
+	)
+	require.NoError(t, err)
+	t.Cleanup(watcher.Stop)
+	results := watcher.RegisterRoots([]WatchRoot{{
+		Path: root, Exists: true,
+		Scopes: []WatchScope{{Agent: "agent-a", SyncDir: root}},
+	}}, 10)
+	require.Equal(t, []RecursiveWatchResult{{Watched: 1}}, results)
+	require.NoError(t, watcher.Start())
+
+	errorInput <- fsnotify.ErrEventOverflow
+
+	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool { return batch.FullSync })
+	obligation := requireReceiveWithin(t, polling, 5*time.Second)
+	assert.Equal(t, root, obligation.Key,
+		"kqueue overflow must move the shallow root through loss recovery")
+}
+
 func TestDarwinWatcherExcludedDirectoryRenameIsFiltered(t *testing.T) {
 	root := t.TempDir()
 	backend, err := newDarwinWatchBackend([]string{".git"}, 50*time.Millisecond)

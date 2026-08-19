@@ -470,8 +470,10 @@ func (b *fsnotifyBackend) forwardNativeError(err error) bool {
 		// Overflow dropped raw events before their watch-maintenance side
 		// effects ran, so creates under recursive roots may have left
 		// subtrees without native watches. The full sync recovers the data
-		// but not the watches; polling covers the lost subtrees.
+		// but not the watches; polling covers the lost subtrees. Shallow
+		// roots are revalidated in place instead.
 		b.requireRuntimePolling(b.recursiveRootsSnapshot())
+		b.reinstallShallowWatches()
 		select {
 		case b.events <- backendEvent{Op: backendOpFullSync}:
 			return true
@@ -737,6 +739,26 @@ func normalizeExcludePatterns(patterns []string) []string {
 		}
 	}
 	return out
+}
+
+// reinstallShallowWatches revalidates shallow-root coverage after overflow.
+// A dropped removal loses the native watch even when the directory was
+// recreated, so every shallow root is re-added; a root that cannot be
+// re-added moves to polling exactly as an observed removal would.
+func (b *fsnotifyBackend) reinstallShallowWatches() {
+	b.rootsMu.RLock()
+	shallow := append([]string(nil), b.shallow...)
+	b.rootsMu.RUnlock()
+	lost := make([]string, 0, len(shallow))
+	for _, root := range shallow {
+		b.watchMu.Lock()
+		err := b.watchOps.Add(root)
+		b.watchMu.Unlock()
+		if err != nil {
+			lost = append(lost, root)
+		}
+	}
+	b.requireRuntimePolling(lost)
 }
 
 func (b *fsnotifyBackend) recursiveRootsSnapshot() []string {

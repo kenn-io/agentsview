@@ -762,6 +762,79 @@ func TestFSNotifyBackendOverflowTransfersRecursiveRootsToPolling(t *testing.T) {
 	assert.Equal(t, "fsnotify-runtime:"+root, obligation.Key)
 }
 
+type scriptedWatchOps struct {
+	mu    sync.Mutex
+	fail  map[string]error
+	added []string
+}
+
+func (o *scriptedWatchOps) Add(path string) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if err := o.fail[path]; err != nil {
+		return err
+	}
+	o.added = append(o.added, path)
+	return nil
+}
+
+func (o *scriptedWatchOps) Remove(string) error { return nil }
+
+func (o *scriptedWatchOps) setFail(path string, err error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.fail[path] = err
+}
+
+func (o *scriptedWatchOps) addCount(path string) int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	count := 0
+	for _, added := range o.added {
+		if added == path {
+			count++
+		}
+	}
+	return count
+}
+
+// A dropped shallow-root removal loses the native watch even though the
+// one-time full sync recovers the data, so overflow must revalidate shallow
+// coverage: re-add every shallow watch and hand roots that cannot be
+// re-added to polling, exactly as an observed removal would.
+func TestFSNotifyBackendOverflowReinstallsShallowWatches(t *testing.T) {
+	backend := testFSNotifyBackend(t)
+	errorInput := make(chan error, 1)
+	backend.errorInput = errorInput
+	ops := &scriptedWatchOps{fail: map[string]error{}}
+	backend.watchOps = ops
+	kept := filepath.Join(t.TempDir(), "kept")
+	lost := filepath.Join(t.TempDir(), "lost")
+	require.NoError(t, backend.AddShallow(kept))
+	require.NoError(t, backend.AddShallow(lost))
+	ops.setFail(lost, errors.New("directory removed"))
+	obligations := make(chan PollingObligation, 2)
+	backend.bindPollingOwnership(func(obligation PollingObligation) error {
+		obligations <- obligation
+		return nil
+	}, func(string) error { return nil })
+	require.NoError(t, backend.Start())
+
+	errorInput <- fsnotify.ErrEventOverflow
+
+	event := requireReceiveWithin(t, backend.Events(), 2*time.Second)
+	assert.Equal(t, backendOpFullSync, event.Op)
+	obligation := requireReceiveWithin(t, obligations, 2*time.Second)
+	assert.Equal(t, "fsnotify-runtime:"+lost, obligation.Key)
+	assert.Equal(t, 2, ops.addCount(kept),
+		"a reachable shallow root must have its native watch re-added")
+	select {
+	case extra := <-obligations:
+		t.Fatalf("re-addable shallow root was degraded to polling: %+v", extra)
+	default:
+	}
+}
+
 func TestNativeEventQueueOverflowSurfacesLostEventsOnce(t *testing.T) {
 	queue := newNativeEventQueue()
 	stop := make(chan struct{})

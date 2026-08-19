@@ -1705,8 +1705,17 @@ func (b *darwinWatchBackend) handleKqueueEvent(
 	}
 	// A lost-events full sync carries no path, so it never matches a root.
 	// It stands in for kqueue events that were dropped and must reach the
-	// consumer regardless of root ownership.
+	// consumer regardless of root ownership. The dropped events can include
+	// a shallow root's own removal, which normally signals loss here, so
+	// every active kqueue-backed root is marked lost and revalidated by
+	// lifecycle recovery.
 	if event.Op&backendOpFullSync != 0 {
+		for _, root := range snapshot.activeRoots() {
+			if !root.recursive && root.state != nil {
+				root.state.signal.Or(darwinRootSignalLoss)
+			}
+		}
+		b.signalLifecycle()
 		return event, true
 	}
 	if b.fallbackPhaseValue() == darwinFallbackOpen {
@@ -1973,6 +1982,13 @@ func (b *darwinWatchBackend) removeRootLocked(root string, recursive bool) {
 		},
 	)}
 	b.roots.Store(next)
+}
+
+func (s *darwinRootSnapshot) activeRoots() []darwinWatchRoot {
+	if s == nil {
+		return nil
+	}
+	return s.roots
 }
 
 func (s *darwinRootSnapshot) mostSpecificRoot(path string) (darwinWatchRoot, bool) {
