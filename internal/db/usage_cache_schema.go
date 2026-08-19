@@ -199,6 +199,12 @@ type usageCache struct {
 	databaseID string
 	fill       *usageFillCoordinator
 	rollup     *usageRollupCoordinator
+	cancel     context.CancelFunc
+
+	lifecycleMu sync.Mutex
+	users       int
+	retiring    bool
+	retired     chan struct{}
 }
 
 type usageCacheProbe struct {
@@ -218,6 +224,7 @@ type usageCacheManager struct {
 
 	mu          sync.Mutex
 	generations map[string]*usageCache
+	currentID   string
 	closed      bool
 }
 
@@ -263,6 +270,10 @@ func (m *usageCacheManager) Generation(
 	if m.closed {
 		return nil, fmt.Errorf("usage cache manager is closed")
 	}
+	if m.currentID != "" && databaseID != m.currentID {
+		return nil, fmt.Errorf("%w before opening generation %s",
+			errUsageCacheSourceChanged, databaseID)
+	}
 	if cache := m.generations[databaseID]; cache != nil {
 		return cache, nil
 	}
@@ -281,12 +292,67 @@ func (m *usageCacheManager) Generation(
 	if cache == nil {
 		return nil, fmt.Errorf("opening usage cache returned no database")
 	}
+	cacheContext, cancel := context.WithCancel(m.ctx)
+	cache.cancel = cancel
+	cache.retired = make(chan struct{})
 	m.generations[databaseID] = cache
 	if m.archive != nil {
-		cache.fill = newUsageFillCoordinator(m.ctx, m.archive, cache)
-		cache.rollup = newUsageRollupCoordinator(m.ctx, m.archive, cache)
+		cache.fill = newUsageFillCoordinator(cacheContext, m.archive, cache)
+		cache.rollup = newUsageRollupCoordinator(cacheContext, m.archive, cache)
 	}
 	return cache, nil
+}
+
+func (m *usageCacheManager) acquireGeneration(
+	ctx context.Context, databaseID string,
+) (*usageCache, func(), error) {
+	cache, err := m.Generation(ctx, databaseID)
+	if err != nil {
+		return nil, nil, err
+	}
+	release, ok := cache.acquire()
+	if !ok {
+		return nil, nil, fmt.Errorf("%w while acquiring generation %s",
+			errUsageCacheSourceChanged, databaseID)
+	}
+	return cache, release, nil
+}
+
+func (cache *usageCache) acquire() (func(), bool) {
+	cache.lifecycleMu.Lock()
+	defer cache.lifecycleMu.Unlock()
+	if cache.retiring {
+		return nil, false
+	}
+	cache.users++
+	var once sync.Once
+	return func() {
+		once.Do(cache.release)
+	}, true
+}
+
+func (cache *usageCache) release() {
+	cache.lifecycleMu.Lock()
+	defer cache.lifecycleMu.Unlock()
+	cache.users--
+	if cache.retiring && cache.users == 0 {
+		close(cache.retired)
+	}
+}
+
+func (cache *usageCache) beginRetirement() <-chan struct{} {
+	cache.lifecycleMu.Lock()
+	defer cache.lifecycleMu.Unlock()
+	if !cache.retiring {
+		cache.retiring = true
+		if cache.cancel != nil {
+			cache.cancel()
+		}
+		if cache.users == 0 {
+			close(cache.retired)
+		}
+	}
+	return cache.retired
 }
 
 func (m *usageCacheManager) openPersistentGeneration(
@@ -647,10 +713,14 @@ func removeUsageCacheFiles(path string) error {
 	return errors.Join(errs...)
 }
 
-func (m *usageCacheManager) resetLocked() error {
+func retireUsageCaches(caches []*usageCache) error {
+	retired := make([]<-chan struct{}, len(caches))
+	for index, cache := range caches {
+		retired[index] = cache.beginRetirement()
+	}
 	var errs []error
-	for databaseID, cache := range m.generations {
-		cache.rollup = nil
+	for index, cache := range caches {
+		<-retired[index]
 		if cache.fill != nil {
 			cache.fill.Close()
 		}
@@ -660,54 +730,59 @@ func (m *usageCacheManager) resetLocked() error {
 		if cache.temporary {
 			errs = append(errs, removeUsageCacheFiles(cache.path))
 		}
-		delete(m.generations, databaseID)
 	}
 	return errors.Join(errs...)
+}
+
+func (m *usageCacheManager) detachAllLocked() []*usageCache {
+	caches := make([]*usageCache, 0, len(m.generations))
+	for databaseID, cache := range m.generations {
+		caches = append(caches, cache)
+		delete(m.generations, databaseID)
+	}
+	return caches
 }
 
 func (m *usageCacheManager) Reset() error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.closed {
+		m.mu.Unlock()
 		return nil
 	}
-	return m.resetLocked()
+	m.currentID = ""
+	caches := m.detachAllLocked()
+	m.mu.Unlock()
+	return retireUsageCaches(caches)
 }
 
 func (m *usageCacheManager) RetireExcept(databaseID string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.closed {
+		m.mu.Unlock()
 		return nil
 	}
-	var errs []error
+	m.currentID = databaseID
+	caches := make([]*usageCache, 0, len(m.generations))
 	for cachedID, cache := range m.generations {
 		if cachedID == databaseID {
 			continue
 		}
-		cache.rollup = nil
-		if cache.fill != nil {
-			cache.fill.Close()
-			cache.fill = nil
-		}
-		if cache.db != nil {
-			errs = append(errs, cache.db.Close())
-		}
-		if cache.temporary {
-			errs = append(errs, removeUsageCacheFiles(cache.path))
-		}
+		caches = append(caches, cache)
 		delete(m.generations, cachedID)
 	}
-	return errors.Join(errs...)
+	m.mu.Unlock()
+	return retireUsageCaches(caches)
 }
 
 func (m *usageCacheManager) Close() error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.closed {
+		m.mu.Unlock()
 		return nil
 	}
 	m.closed = true
 	m.cancel()
-	return m.resetLocked()
+	caches := m.detachAllLocked()
+	m.mu.Unlock()
+	return retireUsageCaches(caches)
 }

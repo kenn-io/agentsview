@@ -26,8 +26,8 @@ func TestUsageTimezoneIdentityUsesNamedZone(t *testing.T) {
 	got := usageTimezoneIdentityFor(loc, intervals)
 
 	assert.Equal(t, "America/Chicago", got.Name)
-	assert.Equal(t, "America/Chicago", got.Key)
 	assert.NotEmpty(t, got.IntervalFingerprint)
+	assert.Equal(t, "America/Chicago:"+got.IntervalFingerprint, got.Key)
 }
 
 func TestUsageTimezoneIdentityTracksNamedZoneRules(t *testing.T) {
@@ -36,6 +36,8 @@ func TestUsageTimezoneIdentityTracksNamedZoneRules(t *testing.T) {
 
 	assert.Equal(t, left.Name, right.Name)
 	assert.NotEqual(t, left.IntervalFingerprint, right.IntervalFingerprint)
+	assert.NotEqual(t, left.Key, right.Key,
+		"changed named-zone rules must select a new rollup generation")
 }
 
 func TestUsageTimezoneIdentitySeparatesAnonymousLocalIntervals(t *testing.T) {
@@ -84,6 +86,28 @@ func TestUsageRollupCallKeyIncludesCursorHighWater(t *testing.T) {
 	snapshot.CursorHighWater = 2
 	second := usageRollupCallKey(snapshot, nil, "pricing")
 	assert.NotEqual(t, first, second)
+}
+
+func TestUsageRollupCallKeyIncludesBakedSessionMetadata(t *testing.T) {
+	snapshot := usageQuerySnapshot{
+		location: time.UTC,
+		Versions: []usageSourceVersion{{SessionID: "session-a"}},
+		Sessions: []usageQuerySession{{
+			ID: "session-a", Agent: "codex", StartedAt: "2026-08-10T08:00:00Z",
+		}},
+	}
+	fills := map[string]usageFillResult{
+		"session-a": {InstallRevision: 1},
+	}
+
+	original := usageRollupCallKey(snapshot, fills, "pricing")
+	snapshot.Sessions[0].Agent = "claude"
+	agentChanged := usageRollupCallKey(snapshot, fills, "pricing")
+	snapshot.Sessions[0].StartedAt = "2026-08-11T08:00:00Z"
+	startedAtChanged := usageRollupCallKey(snapshot, fills, "pricing")
+
+	assert.NotEqual(t, original, agentChanged)
+	assert.NotEqual(t, agentChanged, startedAtChanged)
 }
 
 func TestUsagePricingHashTracksPricingSemantics(t *testing.T) {

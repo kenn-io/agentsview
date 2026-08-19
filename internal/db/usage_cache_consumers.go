@@ -21,17 +21,24 @@ func (db *DB) queryUsageRollups(
 		if !includeCursor || !usageCursorIncluded(filter) {
 			snapshot.CursorHighWater = 0
 		}
-		cache, generationErr := db.usageCache.Generation(ctx, snapshot.DatabaseID)
+		cache, release, generationErr := db.usageCache.acquireGeneration(
+			ctx, snapshot.DatabaseID)
 		if generationErr != nil {
+			if errors.Is(generationErr, errUsageCacheSourceChanged) &&
+				attempt < usageFillMaxAttempts {
+				continue
+			}
 			return usageQuerySnapshot{}, usageFactsResult{}, nil, generationErr
 		}
 		if sweepErr := cache.sweepDeletionJournal(ctx, db); sweepErr != nil {
+			release()
 			return usageQuerySnapshot{}, usageFactsResult{}, nil, sweepErr
 		}
 		fills, fillErr := cache.fill.Ensure(
 			ctx, snapshot.Versions, snapshot.CursorHighWater,
 		)
 		if fillErr != nil {
+			release()
 			if errors.Is(fillErr, errUsageCacheSourceChanged) &&
 				attempt < usageFillMaxAttempts {
 				continue
@@ -43,6 +50,7 @@ func (db *DB) queryUsageRollups(
 		installs, _, rollupErr := cache.rollup.Ensure(
 			ctx, snapshot, fills, resolver)
 		if rollupErr != nil {
+			release()
 			if errors.Is(rollupErr, errUsageCacheSourceChanged) &&
 				attempt < usageFillMaxAttempts {
 				continue
@@ -61,8 +69,10 @@ func (db *DB) queryUsageRollups(
 				ctx, snapshot, filter, installs, resolver)
 		}
 		if queryErr == nil {
+			release()
 			return snapshot, facts, resolver, nil
 		}
+		release()
 		if !usageCacheReadShouldRecapture(queryErr) || attempt == usageFillMaxAttempts {
 			return usageQuerySnapshot{}, usageFactsResult{}, nil, queryErr
 		}

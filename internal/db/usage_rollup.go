@@ -58,8 +58,8 @@ func usageTimezoneIdentityFor(
 		writeUsageHashInt64(digest, int64(offset))
 	}
 	fingerprint := hex.EncodeToString(digest.Sum(nil))
-	key := name
-	if key == "" || key == "Local" {
+	key := name + ":" + fingerprint
+	if name == "" || name == "Local" {
 		key = "local:" + fingerprint
 	}
 	identity := usageTimezoneIdentity{
@@ -596,9 +596,16 @@ func usageRollupCallKey(
 		usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals).Key)
 	writeUsageHashString(digest, pricingHash)
 	writeUsageHashInt64(digest, snapshot.CursorHighWater)
+	sessions := make(map[string]usageQuerySession, len(snapshot.Sessions))
+	for _, session := range snapshot.Sessions {
+		sessions[session.ID] = session
+	}
 	for _, version := range snapshot.Versions {
 		writeUsageHashString(digest, usageFillCallKey(version))
 		writeUsageHashInt64(digest, fills[version.SessionID].InstallRevision)
+		session := sessions[version.SessionID]
+		writeUsageHashString(digest, session.Agent)
+		writeUsageHashString(digest, session.StartedAt)
 	}
 	return hex.EncodeToString(digest.Sum(nil))
 }

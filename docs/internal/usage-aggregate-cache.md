@@ -106,11 +106,13 @@ agentsview usage cache; a filename match is insufficient.
 If the sibling directory is unwritable, the process uses the same schema and
 read path in a temporary database and warns that it will rebuild after restart.
 
-Timezone identity is stable across request windows. Named zones use their IANA
-name. When the process-local zone reports only `Local`, agentsview resolves the
-platform zoneinfo symlink when possible and otherwise fingerprints timezone
-rules from 1970 through 2100. This prevents lazy `time.Local` initialization or
-a different request range from creating another generation.
+Timezone identity is stable across request windows. Named zones combine their
+IANA name with a fingerprint of timezone rules from 1970 through 2100, so a
+zoneinfo update cannot reuse obsolete day buckets. When the process-local zone
+reports only `Local`, agentsview resolves the platform zoneinfo symlink when
+possible and otherwise uses the same rule fingerprint. This prevents lazy
+`time.Local` initialization or a different request range from creating another
+generation.
 
 ## Background maintenance
 

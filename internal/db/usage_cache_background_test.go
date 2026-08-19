@@ -132,11 +132,19 @@ func TestUsageCacheBackfillRewarmsEightRecentExplicitTimezones(t *testing.T) {
 	cache, err := database.usageCache.Generation(
 		context.Background(), snapshot.DatabaseID)
 	require.NoError(t, err)
+	oldestKey := ""
 	for index := 1; index <= 9; index++ {
 		name := fmt.Sprintf("Etc/GMT+%d", index)
-		_, err := cache.db.Exec(`INSERT INTO usage_rollup_timezones(
+		location, err := time.LoadLocation(name)
+		require.NoError(t, err)
+		identity := usageTimezoneIdentityFor(location, nil)
+		if index == 1 {
+			oldestKey = identity.Key
+		}
+		_, err = cache.db.Exec(`INSERT INTO usage_rollup_timezones(
 			timezone_key, timezone_name, interval_fingerprint, last_requested_at
-		) VALUES (?, ?, ?, ?)`, name, name, name,
+		) VALUES (?, ?, ?, ?)`, identity.Key, identity.Name,
+			identity.IntervalFingerprint,
 			fmt.Sprintf("2026-08-%02dT00:00:00Z", index))
 		require.NoError(t, err)
 	}
@@ -151,7 +159,7 @@ func TestUsageCacheBackfillRewarmsEightRecentExplicitTimezones(t *testing.T) {
 	require.NoError(t, cache.db.QueryRow(`SELECT COUNT(*)
 		FROM usage_rollup_installs i JOIN usage_rollup_timezones tz
 		  ON tz.id = i.timezone_id
-		WHERE tz.timezone_key = 'Etc/GMT+1'`).Scan(&oldestInstalls))
+		WHERE tz.timezone_key = ?`, oldestKey).Scan(&oldestInstalls))
 	assert.Zero(t, oldestInstalls, "the ninth explicit zone should not be rewarmed")
 }
 

@@ -127,10 +127,11 @@ func (db *DB) runUsageCacheBackfill(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	cache, err := db.usageCache.Generation(ctx, snapshot.DatabaseID)
+	cache, release, err := db.usageCache.acquireGeneration(ctx, snapshot.DatabaseID)
 	if err != nil {
 		return err
 	}
+	defer release()
 	if cache == nil || cache.fill == nil || cache.rollup == nil {
 		return fmt.Errorf("usage cache generation is not attached to the archive")
 	}

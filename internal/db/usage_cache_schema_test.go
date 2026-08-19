@@ -398,6 +398,40 @@ func TestUsageCacheReopenRetiresMismatchedGeneration(t *testing.T) {
 	require.NotSame(t, original, replacement)
 }
 
+func TestUsageCacheRetirementWaitsForActiveGeneration(t *testing.T) {
+	database := testDB(t)
+	databaseID, err := database.GetDatabaseID(t.Context())
+	require.NoError(t, err)
+	cache, release, err := database.usageCache.acquireGeneration(
+		t.Context(), databaseID)
+	require.NoError(t, err)
+	fill, rollup := cache.fill, cache.rollup
+
+	retired := make(chan error, 1)
+	go func() {
+		retired <- database.usageCache.RetireExcept("replacement-database-id")
+	}()
+	select {
+	case <-fill.ctx.Done():
+	case <-time.After(30 * time.Second):
+		require.FailNow(t, "generation retirement did not cancel background work")
+	}
+	select {
+	case err := <-retired:
+		require.FailNow(t, "retirement closed an actively pinned generation", "%v", err)
+	default:
+	}
+	assert.Same(t, fill, cache.fill)
+	assert.Same(t, rollup, cache.rollup)
+	require.NoError(t, cache.db.PingContext(t.Context()))
+
+	release()
+	require.NoError(t, <-retired)
+	require.Error(t, cache.db.PingContext(t.Context()))
+	_, _, err = database.usageCache.acquireGeneration(t.Context(), databaseID)
+	require.ErrorIs(t, err, errUsageCacheSourceChanged)
+}
+
 func readUsageCacheMetadata(t *testing.T, conn *sql.DB) map[string]string {
 	t.Helper()
 	rows, err := conn.Query(`SELECT key, value FROM usage_cache_metadata`)
