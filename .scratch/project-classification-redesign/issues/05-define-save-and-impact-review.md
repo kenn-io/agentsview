@@ -11,4 +11,6 @@ Blocked by: 02
 What should happen between choosing a folder and seeing the updated project?
 Define the one-action normal path, the conditions that require an impact review,
 the information shown in that review, conflict handling, and feedback after
-persistence and archive reclassification.
+persistence and archive reclassification. Specify interruption and partial-
+failure behavior without promising atomicity beyond the verified storage
+boundary.
