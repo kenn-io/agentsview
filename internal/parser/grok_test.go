@@ -814,7 +814,7 @@ func TestGrokProviderParsesChatHistoryTranscript(t *testing.T) {
 	assert.JSONEq(t, `{"target_file":"SKILL.md"}`, result.Messages[1].ToolCalls[0].InputJSON)
 	assert.Equal(t, "grok-4.5", result.Messages[1].Model)
 
-	assert.Equal(t, RoleTool, result.Messages[2].Role)
+	assert.Equal(t, RoleUser, result.Messages[2].Role)
 	require.Len(t, result.Messages[2].ToolResults, 1)
 	assert.Equal(t, "call-1", result.Messages[2].ToolResults[0].ToolUseID)
 	assert.Equal(t, 10, result.Messages[2].ToolResults[0].ContentLength)
@@ -902,7 +902,7 @@ func TestGrokProviderUpdateTimestampsFollowToolBoundaries(t *testing.T) {
 			`{"timestamp":1700000010,"method":"session/update","params":{"sessionId":"session-tools","update":{"sessionUpdate":"tool_call","toolCallId":"call-sample","title":"read_file"}}}`,
 			`{"timestamp":1700000012,"method":"session/update","params":{"sessionId":"session-tools","update":{"sessionUpdate":"tool_call","toolCallId":"call-reference","title":"read_file"}}}`,
 			`{"timestamp":1700000020,"method":"session/update","params":{"sessionId":"session-tools","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-sample","status":"completed"}}}`,
-			`{"timestamp":1700000022,"method":"session/update","params":{"sessionId":"session-tools","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-reference","status":"completed"}}}`,
+			`{"timestamp":1700000022,"method":"session/update","params":{"sessionId":"session-tools","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-reference","status":"failed"}}}`,
 			`{"timestamp":1700000030,"method":"session/update","params":{"sessionId":"session-tools","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"inspection complete"}}}}`,
 		}, "\n")+"\n",
 	)
@@ -912,14 +912,24 @@ func TestGrokProviderUpdateTimestampsFollowToolBoundaries(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, result.Messages, 5)
-	for i, seconds := range []int64{
-		1_700_000_000,
-		1_700_000_010,
-		1_700_000_020,
-		1_700_000_022,
-		1_700_000_030,
+	assert.Equal(t, time.Unix(1_700_000_000, 0).UTC(), result.Messages[0].Timestamp)
+	assert.Equal(t, time.Unix(1_700_000_010, 0).UTC(), result.Messages[1].Timestamp)
+	assert.True(t, result.Messages[2].Timestamp.IsZero())
+	assert.True(t, result.Messages[3].Timestamp.IsZero())
+	assert.Equal(t, time.Unix(1_700_000_030, 0).UTC(), result.Messages[4].Timestamp)
+	require.Len(t, result.Messages[1].ToolCalls, 2)
+	for i, want := range []struct {
+		started, completed int64
+		status             string
+	}{
+		{1_700_000_010, 1_700_000_020, "completed"},
+		{1_700_000_012, 1_700_000_022, "errored"},
 	} {
-		assert.Equal(t, time.Unix(seconds, 0).UTC(), result.Messages[i].Timestamp)
+		require.Len(t, result.Messages[1].ToolCalls[i].ResultEvents, 2)
+		assert.Equal(t, "started", result.Messages[1].ToolCalls[i].ResultEvents[0].Status)
+		assert.Equal(t, time.Unix(want.started, 0).UTC(), result.Messages[1].ToolCalls[i].ResultEvents[0].Timestamp)
+		assert.Equal(t, want.status, result.Messages[1].ToolCalls[i].ResultEvents[1].Status)
+		assert.Equal(t, time.Unix(want.completed, 0).UTC(), result.Messages[1].ToolCalls[i].ResultEvents[1].Timestamp)
 	}
 }
 

@@ -246,6 +246,7 @@ func grokProviderCapabilities() Capabilities {
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
 			SessionName:          CapabilitySupported,
+			ToolResultEvents:     CapabilitySupported,
 			TerminationStatus:    CapabilityNotApplicable,
 			MalformedLineCount:   CapabilityNotApplicable,
 			AggregateUsageEvents: CapabilitySupported,

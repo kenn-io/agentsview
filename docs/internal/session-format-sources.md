@@ -458,6 +458,9 @@ add an archived or maintained mirror without replacing the original identity.
   wraps each persisted update in a Unix-second timestamp envelope. The
   [conversation types](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-sampling-types/src/conversation.rs)
   confirm that the derived chat rows themselves carry no message timestamps.
+  Agentsview maps timestamped `tool_call` and terminal `tool_call_update`
+  records to the existing tool-result event model, so Activity can use tool
+  completion time without adding derived transcript messages.
 - **Usage and cost:** Durable `turn_completed` updates may carry per-model
   input, output, cache-read, cache-creation, and reasoning tokens plus optional
   `costUsdTicks` (10^10 ticks per USD), as defined by the

@@ -70,6 +70,9 @@ type parityFixtureSession struct {
 type parityEvent struct {
 	role string
 	ts   string
+	// toolCompletedAt adds one tool execution whose start is this message's
+	// timestamp and whose completion is a non-transcript activity event.
+	toolCompletedAt string
 	// model and outputTokens override the session defaults for this one
 	// assistant message. They exist so the fixture can inject an
 	// ineligible (synthetic-model) usage row that every backend must
@@ -165,6 +168,28 @@ func parityFixture() []parityFixtureSession {
 			},
 		},
 		{
+			// Tool completion is stored outside the transcript. Every backend
+			// must include it in activity without adding a message row.
+			id: "parity-tool", project: "tools", model: "model-x",
+			events: []parityEvent{
+				{role: "user", ts: parityDate + "T15:00:00Z"},
+				{role: "assistant", ts: parityDate + "T15:01:00Z",
+					toolCompletedAt: parityDate + "T15:02:00Z"},
+			},
+		},
+		{
+			// A completion between transcript messages is already covered by
+			// message adjacency and must not add an overlapping interval.
+			id: "parity-tool-inline", project: "tools", model: "model-x",
+			events: []parityEvent{
+				{role: "user", ts: parityDate + "T15:10:00Z"},
+				{role: "assistant", ts: parityDate + "T15:11:00Z",
+					toolCompletedAt: parityDate + "T15:12:00Z"},
+				{role: "assistant", ts: parityDate + "T15:11:30Z"},
+				{role: "assistant", ts: parityDate + "T15:13:00Z"},
+			},
+		},
+		{
 			// Subagent of parity-a: a usage-only single message. Its tokens
 			// must count in every backend (the report includes subagent
 			// sessions so its cost matches daily usage) and its session row
@@ -247,6 +272,11 @@ func seedParitySQLite(t *testing.T) *db.DB {
 func paritySessionWrite(fs parityFixtureSession) db.SessionBatchWrite {
 	first := fs.events[0].ts
 	last := fs.events[len(fs.events)-1].ts
+	for _, event := range fs.events {
+		if event.toolCompletedAt > last {
+			last = event.toolCompletedAt
+		}
+	}
 	firstMsg := "parity " + fs.id
 	relationship := fs.relationship
 	if relationship == "" {
@@ -304,6 +334,22 @@ func paritySessionWrite(fs parityFixtureSession) db.SessionBatchWrite {
 			m.TokenUsage = usage
 			m.OutputTokens = outputTokens
 			m.HasOutputTokens = true
+		}
+		if ev.toolCompletedAt != "" {
+			m.HasToolUse = true
+			m.ToolCalls = []db.ToolCall{{
+				SessionID: fs.id,
+				ToolName:  "sample_tool",
+				Category:  "Other",
+				ToolUseID: fs.id + "-tool",
+				CallIndex: 0,
+				ResultEvents: []db.ToolResultEvent{
+					{ToolUseID: fs.id + "-tool", Source: "tool_execution",
+						Status: "started", Timestamp: ev.ts, EventIndex: 0},
+					{ToolUseID: fs.id + "-tool", Source: "tool_execution",
+						Status: "completed", Timestamp: ev.toolCompletedAt, EventIndex: 1},
+				},
+			}}
 		}
 		msgs = append(msgs, m)
 	}
@@ -500,6 +546,24 @@ func assertCandidateParity(
 		events, q.RangeStart, q.EffectiveEnd,
 		time.Duration(q.GapCapSeconds)*time.Second,
 	)
+	want = append(want, activity.IntervalCandidate{
+		SessionID:    "parity-tool",
+		StartOrdinal: 1,
+		EndOrdinal:   1,
+		Start:        time.Date(2026, 6, 14, 15, 1, 0, 0, time.UTC),
+		End:          time.Date(2026, 6, 14, 15, 2, 0, 0, time.UTC),
+		ClosingRole:  "tool",
+		PriorModel:   "model-x",
+	})
+	sort.Slice(want, func(i, j int) bool {
+		if !want[i].Start.Equal(want[j].Start) {
+			return want[i].Start.Before(want[j].Start)
+		}
+		if want[i].SessionID != want[j].SessionID {
+			return want[i].SessionID < want[j].SessionID
+		}
+		return want[i].StartOrdinal < want[j].StartOrdinal
+	})
 	collect := func(source activity.CandidateSource) []activity.IntervalCandidate {
 		t.Helper()
 		var candidates []activity.IntervalCandidate

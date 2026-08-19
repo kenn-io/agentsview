@@ -470,47 +470,109 @@ func (s *Store) activityReportCandidateSource(
 		lower := q.RangeStart.Add(
 			-time.Duration(q.GapCapSeconds) * time.Second,
 		)
-		query := `SELECT
-			m.session_id, m.ordinal, successor.ordinal,
-			m.timestamp, successor.timestamp,
-			successor.role, successor.model,
-			COALESCE((
-				SELECT prior.model
-				FROM messages prior
-				WHERE prior.session_id = m.session_id
-					AND prior.ordinal <= m.ordinal
-					AND prior.role = 'assistant'
-					AND prior.model != ''
-					AND prior.timestamp IS NOT NULL
-					AND prior.timestamp > (
-						SELECT prior_previous.timestamp
-						FROM messages prior_previous
-						WHERE prior_previous.session_id = prior.session_id
-							AND prior_previous.ordinal < prior.ordinal
-							AND prior_previous.timestamp IS NOT NULL
-						ORDER BY prior_previous.ordinal DESC
-						LIMIT 1
-					)
-				ORDER BY prior.ordinal DESC
-				LIMIT 1
-			), 'unknown')
-		FROM messages m
-		JOIN messages successor
-			ON successor.session_id = m.session_id
-			AND successor.ordinal = (
-				SELECT next.ordinal
-				FROM messages next
-				WHERE next.session_id = m.session_id
-					AND next.ordinal > m.ordinal
-					AND next.timestamp IS NOT NULL
-				ORDER BY next.ordinal
-				LIMIT 1
+		query := `WITH last_messages AS (
+			SELECT DISTINCT ON (m.session_id)
+				m.session_id, m.ordinal, m.timestamp
+			FROM messages m
+			WHERE m.session_id = ANY($1)
+				AND m.timestamp IS NOT NULL
+			ORDER BY m.session_id, m.ordinal DESC
+		), tail_events AS (
+			SELECT lm.session_id, lm.ordinal, 0 AS event_kind,
+				0 AS call_index, 0 AS event_index, lm.timestamp
+			FROM last_messages lm
+			UNION ALL
+			SELECT lm.session_id, lm.ordinal, 1,
+				tre.call_index, tre.event_index, tre.timestamp
+			FROM last_messages lm
+			JOIN tool_result_events tre ON tre.session_id = lm.session_id
+			WHERE tre.source = 'tool_execution'
+				AND tre.status IN ('completed', 'errored')
+				AND tre.timestamp IS NOT NULL
+				AND tre.timestamp > lm.timestamp
+		), ordered_tail AS (
+			SELECT e.*,
+				LEAD(e.ordinal) OVER tail_order AS successor_ordinal,
+				LEAD(e.timestamp) OVER tail_order AS successor_timestamp
+			FROM tail_events e
+			WINDOW tail_order AS (
+				PARTITION BY e.session_id
+				ORDER BY e.timestamp, e.event_kind,
+					e.call_index, e.event_index
 			)
-		WHERE m.session_id = ANY($1)
-			AND m.timestamp IS NOT NULL
-			AND m.timestamp >= $2
-			AND m.timestamp < $3
-		ORDER BY m.timestamp, m.session_id, m.ordinal`
+		), candidates AS (
+			SELECT
+				m.session_id, m.ordinal AS start_ordinal,
+				successor.ordinal AS end_ordinal,
+				m.timestamp AS start_timestamp,
+				successor.timestamp AS end_timestamp,
+				successor.role AS closing_role,
+				successor.model AS closing_model,
+				COALESCE((
+					SELECT prior.model
+					FROM messages prior
+					WHERE prior.session_id = m.session_id
+						AND prior.ordinal <= m.ordinal
+						AND prior.role = 'assistant'
+						AND prior.model != ''
+						AND prior.timestamp IS NOT NULL
+						AND prior.timestamp > (
+							SELECT prior_previous.timestamp
+							FROM messages prior_previous
+							WHERE prior_previous.session_id = prior.session_id
+								AND prior_previous.ordinal < prior.ordinal
+								AND prior_previous.timestamp IS NOT NULL
+							ORDER BY prior_previous.ordinal DESC
+							LIMIT 1
+						)
+					ORDER BY prior.ordinal DESC
+					LIMIT 1
+				), 'unknown') AS prior_model,
+				0 AS event_kind, 0 AS call_index, 0 AS event_index
+			FROM messages m
+			JOIN messages successor
+				ON successor.session_id = m.session_id
+				AND successor.ordinal = (
+					SELECT next.ordinal
+					FROM messages next
+					WHERE next.session_id = m.session_id
+						AND next.ordinal > m.ordinal
+						AND next.timestamp IS NOT NULL
+					ORDER BY next.ordinal
+					LIMIT 1
+				)
+			WHERE m.session_id = ANY($1)
+				AND m.timestamp IS NOT NULL
+				AND m.timestamp >= $2
+				AND m.timestamp < $3
+
+			UNION ALL
+
+			SELECT tail.session_id, tail.ordinal, tail.successor_ordinal,
+				tail.timestamp, tail.successor_timestamp,
+				'tool', '',
+				COALESCE((
+					SELECT prior.model
+					FROM messages prior
+					WHERE prior.session_id = tail.session_id
+						AND prior.ordinal <= tail.ordinal
+						AND prior.role = 'assistant'
+						AND prior.model != ''
+					ORDER BY prior.ordinal DESC
+					LIMIT 1
+				), 'unknown'),
+				tail.event_kind, tail.call_index, tail.event_index
+			FROM ordered_tail tail
+			WHERE tail.successor_timestamp IS NOT NULL
+		)
+		SELECT session_id, start_ordinal, end_ordinal,
+			start_timestamp, end_timestamp,
+			closing_role, closing_model, prior_model
+		FROM candidates
+		WHERE start_timestamp >= $2
+			AND start_timestamp < $3
+		ORDER BY start_timestamp, session_id, start_ordinal,
+			event_kind, call_index, event_index`
 		rows, err := s.pg.QueryContext(ctx, query, ids, lower, q.EffectiveEnd)
 		if err != nil {
 			return fmt.Errorf("querying pg activity report candidates: %w", err)

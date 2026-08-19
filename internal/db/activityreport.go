@@ -549,57 +549,140 @@ func (db *DB) activityReportCandidates(
 	return out, err
 }
 
-const activityReportCandidatesSQL = `SELECT
-	m.session_id, m.ordinal, successor.ordinal,
-	m.timestamp, successor.timestamp,
-	successor.role, successor.model,
-	COALESCE((
-		SELECT prior.model
-		FROM messages prior
-		WHERE prior.session_id = m.session_id
-			AND prior.ordinal <= m.ordinal
-			AND prior.role = 'assistant'
-			AND prior.model != ''
-			AND prior.timestamp IS NOT NULL
-			AND prior.timestamp != ''
-			AND agentsview_timestamp_unix_micro(prior.timestamp) IS NOT NULL
-			AND agentsview_timestamp_unix_micro(prior.timestamp) > (
-				SELECT agentsview_timestamp_unix_micro(prior_previous.timestamp)
-				FROM messages prior_previous
-				WHERE prior_previous.session_id = prior.session_id
-					AND prior_previous.ordinal < prior.ordinal
-					AND prior_previous.timestamp IS NOT NULL
-					AND prior_previous.timestamp != ''
-					AND agentsview_timestamp_unix_micro(
-						prior_previous.timestamp) IS NOT NULL
-				ORDER BY prior_previous.ordinal DESC
+const activityReportCandidatesSQL = `WITH
+	session_ids AS (
+		SELECT value AS session_id FROM json_each(?)
+	),
+	bounds AS (
+		SELECT ? AS padded_lower, ? AS padded_upper,
+			? AS lower_micro, ? AS upper_micro
+	),
+	last_messages AS (
+		SELECT * FROM (
+			SELECT m.session_id, m.ordinal, m.timestamp,
+				ROW_NUMBER() OVER (
+					PARTITION BY m.session_id ORDER BY m.ordinal DESC
+				) AS row_num
+			FROM messages m
+			JOIN session_ids ids ON ids.session_id = m.session_id
+			WHERE m.timestamp IS NOT NULL
+				AND m.timestamp != ''
+				AND agentsview_timestamp_unix_micro(m.timestamp) IS NOT NULL
+		) ranked
+		WHERE row_num = 1
+	),
+	tail_events AS (
+		SELECT lm.session_id, lm.ordinal, 0 AS event_kind,
+			0 AS call_index, 0 AS event_index, lm.timestamp
+		FROM last_messages lm
+		UNION ALL
+		SELECT lm.session_id, lm.ordinal, 1,
+			tre.call_index, tre.event_index, tre.timestamp
+		FROM last_messages lm
+		JOIN tool_result_events tre ON tre.session_id = lm.session_id
+		WHERE tre.source = 'tool_execution'
+			AND tre.status IN ('completed', 'errored')
+			AND tre.timestamp IS NOT NULL
+			AND tre.timestamp != ''
+			AND agentsview_timestamp_unix_micro(tre.timestamp) IS NOT NULL
+			AND agentsview_timestamp_unix_micro(tre.timestamp) >
+				agentsview_timestamp_unix_micro(lm.timestamp)
+	),
+	ordered_tail AS (
+		SELECT e.*,
+			LEAD(e.ordinal) OVER tail_order AS successor_ordinal,
+			LEAD(e.timestamp) OVER tail_order AS successor_timestamp
+		FROM tail_events e
+		WINDOW tail_order AS (
+			PARTITION BY e.session_id
+			ORDER BY agentsview_timestamp_unix_micro(e.timestamp),
+				e.event_kind, e.call_index, e.event_index
+		)
+	),
+	candidates AS (
+		SELECT
+			m.session_id, m.ordinal AS start_ordinal,
+			successor.ordinal AS end_ordinal,
+			m.timestamp AS start_timestamp,
+			successor.timestamp AS end_timestamp,
+			successor.role AS closing_role,
+			successor.model AS closing_model,
+			COALESCE((
+				SELECT prior.model
+				FROM messages prior
+				WHERE prior.session_id = m.session_id
+					AND prior.ordinal <= m.ordinal
+					AND prior.role = 'assistant'
+					AND prior.model != ''
+					AND prior.timestamp IS NOT NULL
+					AND prior.timestamp != ''
+					AND agentsview_timestamp_unix_micro(prior.timestamp) IS NOT NULL
+					AND agentsview_timestamp_unix_micro(prior.timestamp) > (
+						SELECT agentsview_timestamp_unix_micro(prior_previous.timestamp)
+						FROM messages prior_previous
+						WHERE prior_previous.session_id = prior.session_id
+							AND prior_previous.ordinal < prior.ordinal
+							AND prior_previous.timestamp IS NOT NULL
+							AND prior_previous.timestamp != ''
+							AND agentsview_timestamp_unix_micro(
+								prior_previous.timestamp) IS NOT NULL
+						ORDER BY prior_previous.ordinal DESC
+						LIMIT 1
+					)
+				ORDER BY prior.ordinal DESC
 				LIMIT 1
-			)
-		ORDER BY prior.ordinal DESC
-		LIMIT 1
-	), 'unknown')
-FROM messages m INDEXED BY idx_messages_velocity
-JOIN messages successor ON successor.id = (
-	SELECT next.id
-	FROM messages next
-	WHERE next.session_id = m.session_id
-		AND next.ordinal > m.ordinal
-		AND next.timestamp IS NOT NULL
-		AND next.timestamp != ''
-		AND agentsview_timestamp_unix_micro(next.timestamp) IS NOT NULL
-	ORDER BY next.ordinal
-	LIMIT 1
-)
-WHERE m.session_id IN (SELECT value FROM json_each(?))
-	AND m.timestamp IS NOT NULL
-	AND m.timestamp != ''
-	AND m.timestamp >= ?
-	AND m.timestamp < ?
-	AND agentsview_timestamp_unix_micro(m.timestamp) IS NOT NULL
-	AND agentsview_timestamp_unix_micro(m.timestamp) >= ?
-	AND agentsview_timestamp_unix_micro(m.timestamp) < ?
-ORDER BY agentsview_timestamp_unix_micro(m.timestamp),
-	m.session_id, m.ordinal`
+			), 'unknown') AS prior_model,
+			0 AS event_kind, 0 AS call_index, 0 AS event_index
+		FROM messages m INDEXED BY idx_messages_velocity
+		JOIN messages successor ON successor.id = (
+			SELECT next.id
+			FROM messages next
+			WHERE next.session_id = m.session_id
+				AND next.ordinal > m.ordinal
+				AND next.timestamp IS NOT NULL
+				AND next.timestamp != ''
+				AND agentsview_timestamp_unix_micro(next.timestamp) IS NOT NULL
+			ORDER BY next.ordinal
+			LIMIT 1
+		)
+		JOIN session_ids ids ON ids.session_id = m.session_id
+		CROSS JOIN bounds b
+		WHERE m.timestamp IS NOT NULL
+			AND m.timestamp != ''
+			AND m.timestamp >= b.padded_lower
+			AND m.timestamp < b.padded_upper
+			AND agentsview_timestamp_unix_micro(m.timestamp) IS NOT NULL
+
+		UNION ALL
+
+		SELECT tail.session_id, tail.ordinal, tail.successor_ordinal,
+			tail.timestamp, tail.successor_timestamp,
+			'tool', '',
+			COALESCE((
+				SELECT prior.model
+				FROM messages prior
+				WHERE prior.session_id = tail.session_id
+					AND prior.ordinal <= tail.ordinal
+					AND prior.role = 'assistant'
+					AND prior.model != ''
+				ORDER BY prior.ordinal DESC
+				LIMIT 1
+			), 'unknown'),
+			tail.event_kind, tail.call_index, tail.event_index
+		FROM ordered_tail tail
+		WHERE tail.successor_timestamp IS NOT NULL
+	)
+SELECT
+	c.session_id, c.start_ordinal, c.end_ordinal,
+	c.start_timestamp, c.end_timestamp,
+	c.closing_role, c.closing_model, c.prior_model
+FROM candidates c
+CROSS JOIN bounds b
+WHERE agentsview_timestamp_unix_micro(c.start_timestamp) >= b.lower_micro
+	AND agentsview_timestamp_unix_micro(c.start_timestamp) < b.upper_micro
+ORDER BY agentsview_timestamp_unix_micro(c.start_timestamp),
+	c.session_id, c.start_ordinal,
+	c.event_kind, c.call_index, c.event_index`
 
 func (db *DB) activityReportCandidateSource(
 	ids []string, q activity.Query,

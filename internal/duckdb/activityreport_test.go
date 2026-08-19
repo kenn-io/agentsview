@@ -106,6 +106,92 @@ func TestActivityReportCandidateSourcePreservesRangeEdgePairs(t *testing.T) {
 		"left pruning and right successor lookup must preserve adjacency")
 }
 
+func TestDuckActivityReportIncludesToolCompletionEvents(t *testing.T) {
+	const sessionID = "tool-completion"
+	started := "2026-06-14T10:00:00Z"
+	called := "2026-06-14T10:01:00Z"
+	completed := "2026-06-14T10:02:00Z"
+	session := syncSession(sessionID, "tools", "tool timing", started, 2)
+	session.EndedAt = &completed
+	callMessage := syncMessage(
+		sessionID, 1, "assistant", "", called,
+	)
+	callMessage.Model = "model-x"
+	callMessage.HasToolUse = true
+	callMessage.ToolCalls = []db.ToolCall{{
+		SessionID: sessionID,
+		ToolName:  "sample_tool",
+		Category:  "Other",
+		ToolUseID: "sample-call",
+		CallIndex: 0,
+		ResultEvents: []db.ToolResultEvent{
+			{ToolUseID: "sample-call", Source: "tool_execution",
+				Status: "started", Timestamp: called, EventIndex: 0},
+			{ToolUseID: "sample-call", Source: "tool_execution",
+				Status: "completed", Timestamp: completed, EventIndex: 1},
+		},
+	}}
+	store := activityReportStore(t, []db.SessionBatchWrite{{
+		Session: session,
+		Messages: []db.Message{
+			syncMessage(sessionID, 0, "user", "run the sample", started),
+			callMessage,
+		},
+		DataVersion: 1, ReplaceMessages: true,
+	}}, nil)
+
+	report, err := store.GetActivityReport(
+		context.Background(), db.AnalyticsFilter{Timezone: "UTC"},
+		duckDayQuery(t, "2026-06-14", "UTC"),
+	)
+	require.NoError(t, err)
+	require.Len(t, report.BySession, 1)
+	require.NotNil(t, report.BySession[0].AgentMinutes)
+	assert.InDelta(t, 2.0, *report.BySession[0].AgentMinutes, 1e-9)
+}
+
+func TestDuckActivityReportDoesNotDoubleCountInlineToolCompletion(t *testing.T) {
+	const sessionID = "inline-tool-completion"
+	started := "2026-06-14T10:00:00Z"
+	called := "2026-06-14T10:01:00Z"
+	continued := "2026-06-14T10:01:30Z"
+	completed := "2026-06-14T10:02:00Z"
+	ended := "2026-06-14T10:03:00Z"
+	session := syncSession(sessionID, "tools", "inline tool timing", started, 4)
+	session.EndedAt = &ended
+	callMessage := syncMessage(sessionID, 1, "assistant", "", called)
+	callMessage.HasToolUse = true
+	callMessage.ToolCalls = []db.ToolCall{{
+		SessionID: sessionID, ToolName: "sample_tool", Category: "Other",
+		ToolUseID: "sample-call", CallIndex: 0,
+		ResultEvents: []db.ToolResultEvent{
+			{ToolUseID: "sample-call", Source: "tool_execution",
+				Status: "started", Timestamp: called, EventIndex: 0},
+			{ToolUseID: "sample-call", Source: "tool_execution",
+				Status: "completed", Timestamp: completed, EventIndex: 1},
+		},
+	}}
+	store := activityReportStore(t, []db.SessionBatchWrite{{
+		Session: session,
+		Messages: []db.Message{
+			syncMessage(sessionID, 0, "user", "run the sample", started),
+			callMessage,
+			syncMessage(sessionID, 2, "assistant", "continuing", continued),
+			syncMessage(sessionID, 3, "assistant", "finished", ended),
+		},
+		DataVersion: 1, ReplaceMessages: true,
+	}}, nil)
+
+	report, err := store.GetActivityReport(
+		context.Background(), db.AnalyticsFilter{Timezone: "UTC"},
+		duckDayQuery(t, "2026-06-14", "UTC"),
+	)
+	require.NoError(t, err)
+	require.Len(t, report.BySession, 1)
+	require.NotNil(t, report.BySession[0].AgentMinutes)
+	assert.InDelta(t, 3.0, *report.BySession[0].AgentMinutes, 1e-9)
+}
+
 func TestDuckGetActivityReportBasicConcurrency(t *testing.T) {
 	ctx := context.Background()
 	// Two overlapping sessions on 2026-06-14 (UTC), each two timestamped

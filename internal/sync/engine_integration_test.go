@@ -455,9 +455,79 @@ func TestGrokToolCompletionContributesToActivity(t *testing.T) {
 		context.Background(), "grok:session-tool-completion", 0, 100, true,
 	)
 	require.NoError(t, err)
-	require.Len(t, messages, 3)
-	assert.Equal(t, "tool", messages[2].Role)
-	assert.Equal(t, "2023-11-14T22:14:30Z", messages[2].Timestamp)
+	require.Len(t, messages, 2)
+	require.Len(t, messages[1].ToolCalls, 1)
+	require.Len(t, messages[1].ToolCalls[0].ResultEvents, 2)
+	assert.Equal(t, "started", messages[1].ToolCalls[0].ResultEvents[0].Status)
+	assert.Equal(t, "2023-11-14T22:13:30Z", messages[1].ToolCalls[0].ResultEvents[0].Timestamp)
+	assert.Equal(t, "completed", messages[1].ToolCalls[0].ResultEvents[1].Status)
+	assert.Equal(t, "2023-11-14T22:14:30Z", messages[1].ToolCalls[0].ResultEvents[1].Timestamp)
+
+	query, err := activity.ResolveQuery(activity.QueryInput{
+		Preset: "day", Date: "2023-11-14", Timezone: "UTC",
+	}, time.Date(2030, time.January, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	report, err := database.GetActivityReport(
+		context.Background(), db.AnalyticsFilter{Timezone: "UTC"}, query,
+	)
+	require.NoError(t, err)
+	require.Len(t, report.BySession, 1)
+	require.NotNil(t, report.BySession[0].AgentMinutes)
+	assert.InDelta(t, 70.0/60.0, *report.BySession[0].AgentMinutes, 1e-9)
+}
+
+func TestGrokBackendToolCompletionContributesToActivity(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "workspace-key", "session-backend-tool")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sessionDir, "summary.json"),
+		[]byte(`{
+			"info":{"id":"session-backend-tool","cwd":"/workspace/sample-project"},
+			"session_summary":"backend tool timing",
+			"created_at":"2023-11-14T22:13:20Z",
+			"updated_at":"2023-11-14T22:14:30Z"
+		}`),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sessionDir, "chat_history.jsonl"),
+		[]byte(strings.Join([]string{
+			`{"type":"user","content":"search for an example"}`,
+			`{"type":"backend_tool_call","kind":{"tool_type":"web_search","id":"search-sample","status":"completed","action":{"type":"search","query":"example query","sources":[]}}}`,
+		}, "\n")+"\n"),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sessionDir, "updates.jsonl"),
+		[]byte(strings.Join([]string{
+			`{"timestamp":1700000000,"method":"session/update","params":{"sessionId":"session-backend-tool","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"search for an example"}}}}`,
+			`{"timestamp":1700000010,"method":"session/update","params":{"sessionId":"session-backend-tool","update":{"sessionUpdate":"tool_call","toolCallId":"search-sample","title":"Web search:"}}}`,
+			`{"timestamp":1700000070,"method":"session/update","params":{"sessionId":"session-backend-tool","update":{"sessionUpdate":"tool_call_update","toolCallId":"search-sample","status":"completed"}}}`,
+		}, "\n")+"\n"),
+		0o644,
+	))
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentGrok: {root}},
+		Machine:   "test-machine",
+	})
+	stats := engine.SyncAll(context.Background(), nil)
+	require.Equal(t, 1, stats.Synced)
+
+	messages, err := database.GetMessages(
+		context.Background(), "grok:session-backend-tool", 0, 100, true,
+	)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	require.Len(t, messages[1].ToolCalls, 1)
+	require.Len(t, messages[1].ToolCalls[0].ResultEvents, 2)
+	assert.Equal(t, "started", messages[1].ToolCalls[0].ResultEvents[0].Status)
+	assert.Equal(t, "completed", messages[1].ToolCalls[0].ResultEvents[1].Status)
 
 	query, err := activity.ResolveQuery(activity.QueryInput{
 		Preset: "day", Date: "2023-11-14", Timezone: "UTC",

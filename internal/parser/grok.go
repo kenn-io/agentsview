@@ -102,6 +102,7 @@ func ParseGrokSummary(
 		return ParseResult{}, timestampErr
 	}
 	enrichGrokMessageTimestamps(messages, timestampAnchors)
+	enrichGrokToolResultEvents(messages, timestampAnchors)
 
 	firstPrompt := ""
 	for _, msg := range messages {
@@ -505,7 +506,7 @@ func parseGrokChatHistory(path string) ([]ParsedMessage, int, error) {
 			}
 			messages = append(messages, ParsedMessage{
 				Ordinal:       ordinal,
-				Role:          RoleTool,
+				Role:          RoleUser,
 				ContentLength: contentLen,
 				ToolResults: []ParsedToolResult{{
 					ToolUseID:     toolCallID,
@@ -532,6 +533,7 @@ type grokTimestampAnchor struct {
 	timestamp    time.Time
 	toolCallIDs  []string
 	toolResultID string
+	toolStatus   string
 }
 
 type grokTimestampAnchorBuilder struct {
@@ -634,10 +636,13 @@ func parseGrokUpdateTimestampAnchors(
 			}
 			builder.flush()
 			if id := strings.TrimSpace(update.Get("toolCallId").Str); id != "" {
+				if status == "failed" {
+					status = "errored"
+				}
 				builder.anchors = append(builder.anchors, grokTimestampAnchor{
-					role:         RoleTool,
 					timestamp:    timestamp,
 					toolResultID: id,
+					toolStatus:   status,
 				})
 			}
 
@@ -662,6 +667,54 @@ func enrichGrokMessageTimestamps(
 			anchorIndex = j + 1
 			break
 		}
+	}
+}
+
+func enrichGrokToolResultEvents(
+	messages []ParsedMessage, anchors []grokTimestampAnchor,
+) {
+	calls := make(map[string]*ParsedToolCall)
+	results := make(map[string]string)
+	for i := range messages {
+		for j := range messages[i].ToolCalls {
+			call := &messages[i].ToolCalls[j]
+			if id := strings.TrimSpace(call.ToolUseID); id != "" {
+				calls[id] = call
+			}
+		}
+		for _, result := range messages[i].ToolResults {
+			if id := strings.TrimSpace(result.ToolUseID); id != "" {
+				results[id] = DecodeContent(result.ContentRaw)
+			}
+		}
+	}
+	for _, anchor := range anchors {
+		for _, id := range anchor.toolCallIDs {
+			call := calls[id]
+			if call == nil {
+				continue
+			}
+			call.ResultEvents = append(call.ResultEvents, ParsedToolResultEvent{
+				ToolUseID: id,
+				Source:    "tool_execution",
+				Status:    "started",
+				Timestamp: anchor.timestamp,
+			})
+		}
+		if anchor.toolResultID == "" {
+			continue
+		}
+		call := calls[anchor.toolResultID]
+		if call == nil {
+			continue
+		}
+		call.ResultEvents = append(call.ResultEvents, ParsedToolResultEvent{
+			ToolUseID: anchor.toolResultID,
+			Source:    "tool_execution",
+			Status:    anchor.toolStatus,
+			Content:   results[anchor.toolResultID],
+			Timestamp: anchor.timestamp,
+		})
 	}
 }
 
