@@ -442,7 +442,7 @@ func reportValues(q PageQuery) url.Values {
 
 func splitTerms(raw string) []string {
 	var terms []string
-	for _, term := range strings.Split(raw, ",") {
+	for term := range strings.SplitSeq(raw, ",") {
 		if term = strings.TrimSpace(term); term != "" {
 			terms = append(terms, term)
 		}
@@ -949,11 +949,11 @@ func scanSSE(ctx context.Context, r io.Reader, out chan<- ServerEvent) {
 			}
 			continue
 		}
-		if strings.HasPrefix(line, "event:") {
-			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		if value, ok := strings.CutPrefix(line, "event:"); ok {
+			event = strings.TrimSpace(value)
 		}
-		if strings.HasPrefix(line, "data:") {
-			data = append(data, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		if value, ok := strings.CutPrefix(line, "data:"); ok {
+			data = append(data, strings.TrimSpace(value))
 		}
 	}
 	flush()

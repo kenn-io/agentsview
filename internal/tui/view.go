@@ -19,7 +19,6 @@ var (
 	colorAccent = lipgloss.Color("63")
 	colorMuted  = lipgloss.Color("244")
 	colorError  = lipgloss.Color("196")
-	colorGood   = lipgloss.Color("42")
 	titleStyle  = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
 	mutedStyle  = lipgloss.NewStyle().Foreground(colorMuted)
 	errorStyle  = lipgloss.NewStyle().Foreground(colorError)
@@ -302,7 +301,7 @@ func (m *model) toolPayloadLines(label, value string, width int) []string {
 		return []string{mutedStyle.Render(truncateWidth("  "+label+": "+firstLine(value), width-4))}
 	}
 	lines := []string{mutedStyle.Render("  " + label + ":")}
-	for _, line := range strings.Split(value, "\n") {
+	for line := range strings.SplitSeq(value, "\n") {
 		lines = append(lines, mutedStyle.Render(truncateWidth("    "+line, width-4)))
 	}
 	return lines
@@ -416,6 +415,9 @@ func (m *model) analyticsLines() []string {
 	keys := sortedKeys(a.Agents)
 	for _, key := range keys {
 		row := a.Agents[key]
+		if row == nil {
+			continue
+		}
 		lines = append(lines, fmt.Sprintf("%-18s %6d sessions  %8d messages", safe(key), row.Sessions, row.Messages))
 	}
 	if series := m.pageData.AnalyticsSeries; series != nil {
@@ -718,7 +720,7 @@ func (m *model) renderConfirm(width, height int) string {
 }
 
 func panel(content string, width, height int, focused bool) string {
-	style := borderStyle.Copy().Width(max(1, width-2)).Height(max(1, height-2))
+	style := borderStyle.Width(max(1, width-2)).Height(max(1, height-2))
 	if focused {
 		style = style.BorderForeground(colorAccent)
 	}

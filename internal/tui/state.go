@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 )
 
 type persistedState struct {
@@ -102,10 +103,5 @@ func saveState(path string, state persistedState) error {
 }
 
 func validPage(page Page) bool {
-	for _, candidate := range pages {
-		if page == candidate {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(pages, page)
 }
