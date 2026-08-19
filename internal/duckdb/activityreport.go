@@ -507,31 +507,36 @@ func (s *Store) activityReportCandidateSource(
 		lower := q.RangeStart.Add(
 			-time.Duration(q.GapCapSeconds) * time.Second,
 		)
-		query := `WITH last_messages AS (
-			SELECT session_id, ordinal, timestamp
-			FROM (
-				SELECT m.session_id, m.ordinal, m.timestamp,
-					ROW_NUMBER() OVER (
-						PARTITION BY m.session_id ORDER BY m.ordinal DESC
-					) AS row_num
+		tailQuery := `WITH terminal_events AS (
+			SELECT tre.session_id, tre.call_index, tre.event_index, tre.timestamp
+			FROM tool_result_events tre
+			WHERE tre.session_id IN (SELECT unnest(?))
+				AND tre.source = 'tool_execution'
+				AND tre.status IN ('completed', 'errored')
+				AND tre.timestamp IS NOT NULL
+		), terminal_sessions AS (
+			SELECT DISTINCT session_id FROM terminal_events
+		), last_messages AS (
+			SELECT latest.session_id, latest.ordinal, latest.timestamp
+			FROM terminal_sessions ts
+			JOIN LATERAL (
+				SELECT m.session_id, m.ordinal, m.timestamp
 				FROM messages m
-				WHERE m.session_id IN (SELECT unnest(?))
+				WHERE m.session_id = ts.session_id
 					AND m.timestamp IS NOT NULL
-			) ranked
-			WHERE row_num = 1
+				ORDER BY m.ordinal DESC
+				LIMIT 1
+			) latest ON TRUE
 		), tail_events AS (
 			SELECT lm.session_id, lm.ordinal, 0 AS event_kind,
 				0 AS call_index, 0 AS event_index, lm.timestamp
 			FROM last_messages lm
 			UNION ALL
 			SELECT lm.session_id, lm.ordinal, 1,
-				tre.call_index, tre.event_index, tre.timestamp
+				te.call_index, te.event_index, te.timestamp
 			FROM last_messages lm
-			JOIN tool_result_events tre ON tre.session_id = lm.session_id
-			WHERE tre.source = 'tool_execution'
-				AND tre.status IN ('completed', 'errored')
-				AND tre.timestamp IS NOT NULL
-				AND tre.timestamp > lm.timestamp
+			JOIN terminal_events te ON te.session_id = lm.session_id
+			WHERE te.timestamp > lm.timestamp
 		), ordered_tail AS (
 			SELECT e.*,
 				LEAD(e.ordinal) OVER tail_order AS successor_ordinal,
@@ -542,14 +547,90 @@ func (s *Store) activityReportCandidateSource(
 				ORDER BY e.timestamp, e.event_kind,
 					e.call_index, e.event_index
 			)
-		), candidates AS (
-			SELECT
-				m.session_id, m.ordinal AS start_ordinal,
-				successor.ordinal AS end_ordinal,
-				m.timestamp AS start_timestamp,
-				successor.timestamp AS end_timestamp,
-				successor.role AS closing_role,
-				successor.model AS closing_model,
+		)
+		SELECT tail.session_id, tail.ordinal, tail.successor_ordinal,
+			tail.timestamp, tail.successor_timestamp,
+			'tool', '',
+			COALESCE((
+				SELECT prior.model
+				FROM messages prior
+				WHERE prior.session_id = tail.session_id
+					AND prior.ordinal <= tail.ordinal
+					AND prior.role = 'assistant'
+					AND prior.model != ''
+				ORDER BY prior.ordinal DESC
+				LIMIT 1
+			), 'unknown')
+		FROM ordered_tail tail
+		WHERE tail.successor_timestamp IS NOT NULL
+			AND tail.timestamp >= CAST(? AS TIMESTAMP)
+			AND tail.timestamp < CAST(? AS TIMESTAMP)
+		ORDER BY tail.timestamp, tail.session_id, tail.ordinal,
+			tail.event_kind, tail.call_index, tail.event_index`
+		scanCandidate := func(
+			row interface{ Scan(dest ...any) error },
+		) (activity.IntervalCandidate, error) {
+			var candidate activity.IntervalCandidate
+			var start, end any
+			if err := row.Scan(
+				&candidate.SessionID, &candidate.StartOrdinal,
+				&candidate.EndOrdinal, &start, &end,
+				&candidate.ClosingRole, &candidate.ClosingModel,
+				&candidate.PriorModel,
+			); err != nil {
+				return candidate, fmt.Errorf(
+					"scanning duckdb activity report candidate: %w", err)
+			}
+			startText, endText := formatDBTime(start), formatDBTime(end)
+			var err error
+			candidate.Start, err = time.Parse(time.RFC3339Nano, startText)
+			if err != nil {
+				return candidate, fmt.Errorf(
+					"parsing duckdb activity candidate start: %w", err)
+			}
+			candidate.End, err = time.Parse(time.RFC3339Nano, endText)
+			if err != nil {
+				return candidate, fmt.Errorf(
+					"parsing duckdb activity candidate end: %w", err)
+			}
+			candidate.Start = candidate.Start.UTC()
+			candidate.End = candidate.End.UTC()
+			return candidate, nil
+		}
+
+		tailRows, err := s.queryContext(
+			ctx, tailQuery, ids,
+			lower.UTC().Format(time.RFC3339Nano),
+			q.EffectiveEnd.UTC().Format(time.RFC3339Nano),
+		)
+		if err != nil {
+			return fmt.Errorf("querying duckdb activity report tail candidates: %w", err)
+		}
+		var tail []activity.IntervalCandidate
+		for tailRows.Next() {
+			candidate, scanErr := scanCandidate(tailRows)
+			if scanErr != nil {
+				tailRows.Close()
+				return scanErr
+			}
+			tail = append(tail, candidate)
+		}
+		if err := tailRows.Err(); err != nil {
+			tailRows.Close()
+			return err
+		}
+		if err := tailRows.Close(); err != nil {
+			return err
+		}
+
+		messageSource := func(
+			ctx context.Context,
+			yield func(activity.IntervalCandidate) error,
+		) error {
+			query := `SELECT
+				m.session_id, m.ordinal, successor.ordinal,
+				m.timestamp, successor.timestamp,
+				successor.role, successor.model,
 				COALESCE((
 					SELECT prior.model
 					FROM messages prior
@@ -569,8 +650,7 @@ func (s *Store) activityReportCandidateSource(
 						)
 					ORDER BY prior.ordinal DESC
 					LIMIT 1
-				), 'unknown') AS prior_model,
-				0 AS event_kind, 0 AS call_index, 0 AS event_index
+				), 'unknown')
 			FROM messages m
 			JOIN messages successor
 				ON successor.session_id = m.session_id
@@ -587,75 +667,32 @@ func (s *Store) activityReportCandidateSource(
 				AND m.timestamp IS NOT NULL
 				AND m.timestamp >= CAST(? AS TIMESTAMP)
 				AND m.timestamp < CAST(? AS TIMESTAMP)
-
-			UNION ALL
-
-			SELECT tail.session_id, tail.ordinal, tail.successor_ordinal,
-				tail.timestamp, tail.successor_timestamp,
-				'tool', '',
-				COALESCE((
-					SELECT prior.model
-					FROM messages prior
-					WHERE prior.session_id = tail.session_id
-						AND prior.ordinal <= tail.ordinal
-						AND prior.role = 'assistant'
-						AND prior.model != ''
-					ORDER BY prior.ordinal DESC
-					LIMIT 1
-				), 'unknown'),
-				tail.event_kind, tail.call_index, tail.event_index
-			FROM ordered_tail tail
-			WHERE tail.successor_timestamp IS NOT NULL
-		)
-		SELECT session_id, start_ordinal, end_ordinal,
-			start_timestamp, end_timestamp,
-			closing_role, closing_model, prior_model
-		FROM candidates
-		WHERE start_timestamp >= CAST(? AS TIMESTAMP)
-			AND start_timestamp < CAST(? AS TIMESTAMP)
-		ORDER BY start_timestamp, session_id, start_ordinal,
-			event_kind, call_index, event_index`
-		rows, err := s.queryContext(
-			ctx, query, ids, ids,
-			lower.UTC().Format(time.RFC3339Nano),
-			q.EffectiveEnd.UTC().Format(time.RFC3339Nano),
-			lower.UTC().Format(time.RFC3339Nano),
-			q.EffectiveEnd.UTC().Format(time.RFC3339Nano),
-		)
-		if err != nil {
-			return fmt.Errorf("querying duckdb activity report candidates: %w", err)
+			ORDER BY m.timestamp, m.session_id, m.ordinal`
+			rows, queryErr := s.queryContext(
+				ctx, query, ids,
+				lower.UTC().Format(time.RFC3339Nano),
+				q.EffectiveEnd.UTC().Format(time.RFC3339Nano),
+			)
+			if queryErr != nil {
+				return fmt.Errorf(
+					"querying duckdb activity report candidates: %w", queryErr)
+			}
+			defer rows.Close()
+			for rows.Next() {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				candidate, scanErr := scanCandidate(rows)
+				if scanErr != nil {
+					return scanErr
+				}
+				if err := yield(candidate); err != nil {
+					return err
+				}
+			}
+			return rows.Err()
 		}
-		defer rows.Close()
-		for rows.Next() {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			var candidate activity.IntervalCandidate
-			var start, end any
-			if err := rows.Scan(
-				&candidate.SessionID, &candidate.StartOrdinal,
-				&candidate.EndOrdinal, &start, &end,
-				&candidate.ClosingRole, &candidate.ClosingModel,
-				&candidate.PriorModel,
-			); err != nil {
-				return fmt.Errorf("scanning duckdb activity report candidate: %w", err)
-			}
-			startText, endText := formatDBTime(start), formatDBTime(end)
-			candidate.Start, err = time.Parse(time.RFC3339Nano, startText)
-			if err != nil {
-				return fmt.Errorf("parsing duckdb activity candidate start: %w", err)
-			}
-			candidate.End, err = time.Parse(time.RFC3339Nano, endText)
-			if err != nil {
-				return fmt.Errorf("parsing duckdb activity candidate end: %w", err)
-			}
-			candidate.Start = candidate.Start.UTC()
-			candidate.End = candidate.End.UTC()
-			if err := yield(candidate); err != nil {
-				return err
-			}
-		}
-		return rows.Err()
+		return activity.MergeCandidateSlice(tail, messageSource)(ctx, yield)
 	}
 }
 

@@ -611,7 +611,7 @@ func assertParityForCase(
 }
 
 // assertDayMinuteFixtureSanity checks the day-minute report actually exercises
-// the fixture: a full day with peak concurrency 2, nine sessions, non-zero
+// the fixture: a full day with peak concurrency 2, twelve sessions, non-zero
 // cost, and exactly 22550 output tokens. The token total proves the
 // synthetic-model usage row (9999 tokens) is excluded, the dedup pair
 // keeps its complete 9000-token snapshot with earlier attribution, the
@@ -623,7 +623,7 @@ func assertDayMinuteFixtureSanity(t *testing.T, r activity.Report) {
 	t.Helper()
 	require.False(t, r.Partial, "fixture day must be a full day")
 	require.Equal(t, 2, r.Peak.Agents, "fixture must reach peak concurrency 2")
-	require.Equal(t, 10, r.Totals.Sessions, "fixture session count")
+	require.Equal(t, 12, r.Totals.Sessions, "fixture session count")
 	require.Positive(t, r.Totals.Cost.Microdollars, "fixture must exercise cost")
 	// 2400 (parity-a) + 1600 (parity-b) + 300 (parity-c; synthetic 9999 row
 	// excluded) + 9000 (parity-d receives parity-e's complete snapshot) +

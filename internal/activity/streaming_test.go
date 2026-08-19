@@ -53,6 +53,38 @@ func TestPairActivityEventsPreservesOrdinalAdjacencyAtRangeEdges(t *testing.T) {
 	}, got[3], "a successor beyond the right bound remains attached")
 }
 
+func TestMergeCandidateSlicePreservesCandidateOrder(t *testing.T) {
+	at := func(value string) time.Time { return mustStart(t, value) }
+	base := []IntervalCandidate{
+		{SessionID: "b", StartOrdinal: 1, Start: at("2026-06-16T10:00:00Z")},
+		{SessionID: "a", StartOrdinal: 2, Start: at("2026-06-16T10:03:00Z")},
+	}
+	extra := []IntervalCandidate{
+		{SessionID: "a", StartOrdinal: 1, Start: at("2026-06-16T10:00:00Z")},
+		{SessionID: "c", StartOrdinal: 1, Start: at("2026-06-16T10:02:00Z")},
+	}
+	baseSource := func(
+		ctx context.Context, yield func(IntervalCandidate) error,
+	) error {
+		for _, candidate := range base {
+			if err := yield(candidate); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	var got []IntervalCandidate
+	err := MergeCandidateSlice(extra, baseSource)(
+		context.Background(), func(candidate IntervalCandidate) error {
+			got = append(got, candidate)
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []IntervalCandidate{extra[0], base[0], extra[1], base[1]}, got)
+}
+
 func TestAggregateCandidatesDifferential(t *testing.T) {
 	p := baseParams(t, "2026-06-16", "UTC")
 	sessions := []SessionMeta{
