@@ -12,7 +12,9 @@
 
   const CHART_H = 180;
   const X_LABEL_H = 20;
-  const Y_LABEL_W = 40;
+  const MIN_Y_LABEL_W = 40;
+  const Y_LABEL_CHAR_W = 6;
+  const Y_LABEL_GAP = 4;
   const X_LABEL_RIGHT_PAD = 24;
   // Reserved headroom at the top of the plot area so the
   // maximum bar, its grid line, and the top y-axis label's
@@ -180,10 +182,6 @@
     return { points, keys, maxY: maxY || 1, labels };
   });
 
-  const chartWidth = $derived(
-    Math.max(containerWidth - Y_LABEL_W - X_LABEL_RIGHT_PAD, 100),
-  );
-
   const BAR_WIDTH = 40;
 
   // TICK_TARGET is the number of y-axis intervals we aim
@@ -216,6 +214,31 @@
 
   const scale = $derived(niceScale(seriesData.maxY));
 
+  const yTickValues = $derived.by(() => {
+    const { step, max } = scale;
+    if (max <= 0 || step <= 0) return [];
+    const count = Math.round(max / step);
+    return Array.from({ length: count + 1 }, (_, i) => step * i);
+  });
+
+  const yLabelWidth = $derived.by(() => {
+    let maxLength = 0;
+    for (const value of yTickValues) {
+      const label = isTokenMode
+        ? fmtTokenYLabel(value)
+        : fmtCostYLabel(value);
+      maxLength = Math.max(maxLength, [...label].length);
+    }
+    return Math.max(
+      MIN_Y_LABEL_W,
+      maxLength * Y_LABEL_CHAR_W + Y_LABEL_GAP,
+    );
+  });
+
+  const chartWidth = $derived(
+    Math.max(containerWidth - yLabelWidth - X_LABEL_RIGHT_PAD, 100),
+  );
+
   // scaleY maps a data value in [0, niceMax] onto the plot
   // area [TOP_PAD, h], inverted so 0 is at the bottom. Kept
   // as a function so both buildPaths and yTicks use identical
@@ -232,13 +255,14 @@
     w: number,
     h: number,
     colors: ReadonlyMap<string, string>,
+    labelWidth: number,
   ): Array<{ key: string; d: string; color: string }> {
     if (points.length === 0) return [];
 
     // Single data point: render stacked vertical bars instead
     // of degenerate zero-width areas.
     if (points.length === 1) {
-      const cx = Y_LABEL_W + w / 2;
+      const cx = labelWidth + w / 2;
       const x0 = cx - BAR_WIDTH / 2;
       const result: Array<{
         key: string;
@@ -277,7 +301,7 @@
       let d = "";
 
       for (let i = 0; i < points.length; i++) {
-        const x = Y_LABEL_W + i * xStep;
+        const x = labelWidth + i * xStep;
         const val = points[i]!.values[key] ?? 0;
         const top = scaleY(baselines[i]! + val, maxY, h);
         d += i === 0 ? `M${x},${top}` : `L${x},${top}`;
@@ -285,7 +309,7 @@
 
       // Close area back along baseline
       for (let i = points.length - 1; i >= 0; i--) {
-        const x = Y_LABEL_W + i * xStep;
+        const x = labelWidth + i * xStep;
         const base = scaleY(baselines[i]!, maxY, h);
         d += `L${x},${base}`;
       }
@@ -312,6 +336,7 @@
       chartWidth,
       CHART_H,
       colorMap,
+      yLabelWidth,
     ),
   );
 
@@ -326,7 +351,7 @@
   const xLabels = $derived.by(() => {
     const pts = seriesData.points;
     if (pts.length <= 1) {
-      return pts.map((p, i) => ({ x: Y_LABEL_W, label: dateLabel(p.date), idx: i }));
+      return pts.map((p, i) => ({ x: yLabelWidth, label: dateLabel(p.date), idx: i }));
     }
     const step = Math.max(
       Math.floor(pts.length / 6),
@@ -341,7 +366,7 @@
     }> = [];
     for (let i = 0; i < pts.length; i += step) {
       labels.push({
-        x: Y_LABEL_W + i * xStep,
+        x: yLabelWidth + i * xStep,
         label: dateLabel(pts[i]!.date),
         idx: i,
       });
@@ -361,23 +386,12 @@
   }
 
   const yTicks = $derived.by(() => {
-    const { step, max } = scale;
-    if (max <= 0 || step <= 0) return [];
-    const ticks: Array<{ y: number; label: string }> = [];
-    // Step-driven loop so every tick is an integer multiple
-    // of step and the top tick equals max exactly. Rounding
-    // guards against floating-point drift on sub-unit steps.
-    const count = Math.round(max / step);
-    for (let i = 0; i <= count; i++) {
-      const val = step * i;
-      ticks.push({
-        y: scaleY(val, max, CHART_H),
-        label: isTokenMode
-          ? fmtTokenYLabel(val)
-          : fmtCostYLabel(val),
-      });
-    }
-    return ticks;
+    return yTickValues.map((value) => ({
+      y: scaleY(value, scale.max, CHART_H),
+      label: isTokenMode
+        ? fmtTokenYLabel(value)
+        : fmtCostYLabel(value),
+    }));
   });
 
   function handleGroupByChange(g: GroupBy) {
@@ -424,20 +438,20 @@
       <svg
         width="100%"
         height={CHART_H + X_LABEL_H}
-        viewBox="0 0 {chartWidth + Y_LABEL_W + X_LABEL_RIGHT_PAD} {CHART_H + X_LABEL_H}"
+        viewBox="0 0 {chartWidth + yLabelWidth + X_LABEL_RIGHT_PAD} {CHART_H + X_LABEL_H}"
         preserveAspectRatio="xMidYMid meet"
         class="chart-svg"
       >
         {#each yTicks as tick}
           <line
-            x1={Y_LABEL_W}
+            x1={yLabelWidth}
             y1={tick.y}
-            x2={chartWidth + Y_LABEL_W}
+            x2={chartWidth + yLabelWidth}
             y2={tick.y}
             class="grid-line"
           />
           <text
-            x={Y_LABEL_W - 4}
+            x={yLabelWidth - Y_LABEL_GAP}
             y={tick.y + 3}
             class="y-label"
             text-anchor="end"
@@ -464,7 +478,7 @@
     </div>
 
     {#if seriesData.keys.length > 1}
-      <div class="legend">
+      <div class="legend" style:padding-left="{yLabelWidth}px">
         {#each seriesData.keys as key}
           <span class="legend-item">
             <span
@@ -558,7 +572,6 @@
     gap: 12px;
     flex-wrap: wrap;
     margin-top: 8px;
-    padding-left: 40px;
   }
 
   .legend-item {
