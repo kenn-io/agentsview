@@ -1,0 +1,1404 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Project classification prototype</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family:
+          Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+        --bg: oklch(0.975 0.004 255);
+        --surface: oklch(0.995 0.003 255);
+        --surface-raised: oklch(0.965 0.006 255);
+        --surface-hover: oklch(0.945 0.009 255);
+        --surface-selected: oklch(0.932 0.025 247);
+        --text: oklch(0.22 0.015 255);
+        --text-secondary: oklch(0.43 0.014 255);
+        --text-muted: oklch(0.58 0.012 255);
+        --border: oklch(0.86 0.008 255);
+        --border-strong: oklch(0.72 0.014 255);
+        --accent: oklch(0.56 0.16 252);
+        --accent-soft: oklch(0.93 0.035 252);
+        --accent-text: oklch(0.38 0.16 252);
+        --warning: oklch(0.62 0.14 72);
+        --warning-soft: oklch(0.94 0.04 78);
+        --danger: oklch(0.55 0.19 27);
+        --success: oklch(0.51 0.12 156);
+        --success-soft: oklch(0.93 0.035 156);
+        --shadow: 0 10px 30px oklch(0.22 0.02 255 / 0.14);
+        --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: oklch(0.19 0.012 255);
+          --surface: oklch(0.225 0.012 255);
+          --surface-raised: oklch(0.255 0.014 255);
+          --surface-hover: oklch(0.29 0.016 255);
+          --surface-selected: oklch(0.3 0.04 247);
+          --text: oklch(0.91 0.007 255);
+          --text-secondary: oklch(0.76 0.009 255);
+          --text-muted: oklch(0.62 0.01 255);
+          --border: oklch(0.34 0.014 255);
+          --border-strong: oklch(0.47 0.017 255);
+          --accent: oklch(0.7 0.14 248);
+          --accent-soft: oklch(0.31 0.055 248);
+          --accent-text: oklch(0.82 0.09 248);
+          --warning: oklch(0.76 0.12 78);
+          --warning-soft: oklch(0.31 0.04 78);
+          --danger: oklch(0.72 0.16 27);
+          --success: oklch(0.72 0.11 156);
+          --success-soft: oklch(0.3 0.04 156);
+          --shadow: 0 12px 34px oklch(0.08 0.01 255 / 0.5);
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+
+      body {
+        min-width: 320px;
+        overflow-x: hidden;
+        background: var(--bg);
+        color: var(--text);
+        font-size: 12px;
+      }
+
+      button,
+      input {
+        font: inherit;
+      }
+
+      button {
+        color: inherit;
+      }
+
+      button:focus-visible,
+      input:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+
+      .app-shell {
+        display: grid;
+        grid-template-rows: 38px minmax(0, 1fr) 24px;
+        height: 100%;
+      }
+
+      .app-header {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 0 12px;
+        border-bottom: 1px solid var(--border);
+        background: var(--surface);
+      }
+
+      .brand {
+        font-weight: 680;
+        letter-spacing: -0.01em;
+      }
+
+      .top-nav {
+        display: flex;
+        align-self: stretch;
+        gap: 2px;
+      }
+
+      .top-nav button {
+        padding: 0 9px;
+        border: 0;
+        border-bottom: 2px solid transparent;
+        background: transparent;
+        color: var(--text-muted);
+        cursor: default;
+      }
+
+      .top-nav button[aria-current="page"] {
+        border-bottom-color: var(--accent);
+        color: var(--text);
+      }
+
+      .header-meta {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin-left: auto;
+        color: var(--text-muted);
+        font-size: 11px;
+      }
+
+      .status-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--success);
+      }
+
+      main {
+        min-height: 0;
+        overflow: auto;
+      }
+
+      .status-bar {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 0 10px;
+        border-top: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--text-muted);
+        font-size: 10px;
+      }
+
+      .page {
+        display: flex;
+        width: 100%;
+        max-width: 100vw;
+        min-height: 100%;
+        flex-direction: column;
+        gap: 11px;
+        overflow-x: hidden;
+        padding: 12px 14px 92px;
+      }
+
+      .page-header,
+      .section-header,
+      .row-between {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: 15px;
+        line-height: 1.25;
+      }
+
+      h2 {
+        font-size: 13px;
+        line-height: 1.3;
+      }
+
+      h3 {
+        font-size: 11px;
+        line-height: 1.3;
+        color: var(--text-secondary);
+      }
+
+      .segmented,
+      .scenario-control,
+      .target-options {
+        display: inline-flex;
+        max-width: 100%;
+        gap: 2px;
+        padding: 2px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--surface-raised);
+      }
+
+      .segmented button,
+      .scenario-control button,
+      .target-options button {
+        min-height: 24px;
+        padding: 3px 8px;
+        border: 0;
+        border-radius: 4px;
+        background: transparent;
+        color: var(--text-muted);
+        cursor: pointer;
+      }
+
+      .segmented button.active,
+      .scenario-control button.active,
+      .target-options button.active {
+        background: var(--surface);
+        box-shadow: 0 1px 3px oklch(0.2 0.01 255 / 0.12);
+        color: var(--text);
+      }
+
+      .summary-strip {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 17px;
+        color: var(--text-muted);
+        font-size: 11px;
+      }
+
+      .prototype-context {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 7px 9px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--surface);
+      }
+
+      .prototype-context strong {
+        font-size: 11px;
+      }
+
+      .prototype-context .scenario-control {
+        margin-left: auto;
+      }
+
+      .tag,
+      .count-badge,
+      .state-pill {
+        display: inline-flex;
+        align-items: center;
+        width: fit-content;
+        min-height: 18px;
+        padding: 2px 6px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        color: var(--text-secondary);
+        font-size: 10px;
+        white-space: nowrap;
+      }
+
+      .tag.blue,
+      .state-pill.selected {
+        border-color: color-mix(in oklch, var(--accent) 45%, var(--border));
+        background: var(--accent-soft);
+        color: var(--accent-text);
+      }
+
+      .tag.warning {
+        border-color: color-mix(in oklch, var(--warning) 45%, var(--border));
+        background: var(--warning-soft);
+        color: var(--warning);
+      }
+
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 28px;
+        padding: 4px 10px;
+        border: 1px solid var(--border-strong);
+        border-radius: 5px;
+        background: var(--surface);
+        color: var(--text-secondary);
+        cursor: pointer;
+      }
+
+      .button:hover:not(:disabled),
+      .folder-button:hover,
+      .project-button:hover,
+      .ledger-action:hover {
+        background: var(--surface-hover);
+      }
+
+      .button.primary {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: oklch(0.98 0.01 250);
+      }
+
+      .button.quiet {
+        border-color: transparent;
+        background: transparent;
+      }
+
+      .button:disabled {
+        cursor: not-allowed;
+        opacity: 0.48;
+      }
+
+      .mono,
+      .path {
+        font-family: var(--mono);
+      }
+
+      .muted {
+        color: var(--text-muted);
+      }
+
+      .table-shell {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        overflow: auto;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--surface);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 11px;
+      }
+
+      th {
+        padding: 6px 8px;
+        background: var(--surface-raised);
+        color: var(--text-muted);
+        font-weight: 580;
+        text-align: left;
+        white-space: nowrap;
+      }
+
+      th.numeric,
+      td.numeric {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+
+      td {
+        padding: 6px 8px;
+        border-top: 1px solid var(--border);
+        color: var(--text-secondary);
+        white-space: nowrap;
+      }
+
+      tr.selected > td {
+        background: var(--surface-selected);
+      }
+
+      .project-button,
+      .folder-button,
+      .ledger-action {
+        width: 100%;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .split-view {
+        display: grid;
+        width: 100%;
+        grid-template-columns: minmax(380px, 1.18fr) minmax(320px, 0.82fr);
+        gap: 11px;
+        min-height: 500px;
+      }
+
+      .inspector {
+        display: flex;
+        min-width: 0;
+        flex-direction: column;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--surface);
+      }
+
+      .inspector > header,
+      .focus-header {
+        padding: 11px 12px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .project-facts {
+        display: flex;
+        gap: 16px;
+        margin-top: 8px;
+        color: var(--text-muted);
+        font-size: 10px;
+      }
+
+      .inspector-section {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .folder-list {
+        display: flex;
+        flex-direction: column;
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        overflow: hidden;
+      }
+
+      .folder-item {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 8px;
+        min-height: 36px;
+        padding: 5px 8px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .folder-item:last-child {
+        border-bottom: 0;
+      }
+
+      .folder-item.active {
+        background: var(--surface-selected);
+      }
+
+      .folder-item.suggested {
+        background: var(--surface-raised);
+      }
+
+      .folder-path {
+        display: block;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .folder-parent {
+        color: var(--text-muted);
+      }
+
+      .folder-name {
+        color: var(--text);
+      }
+
+      .folder-meta {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--text-muted);
+        font-size: 10px;
+      }
+
+      .composer {
+        display: flex;
+        flex-direction: column;
+        gap: 9px;
+        padding: 11px 12px;
+        background: var(--surface-raised);
+      }
+
+      .mapping-line {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .mapping-path {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        color: var(--text-secondary);
+        font-family: var(--mono);
+        font-size: 10px;
+        white-space: nowrap;
+      }
+
+      .composer-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+
+      .impact-line {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        color: var(--text-secondary);
+        font-size: 10px;
+      }
+
+      .impact-warning {
+        padding: 8px;
+        border: 1px solid color-mix(in oklch, var(--warning) 35%, var(--border));
+        border-radius: 5px;
+        background: var(--warning-soft);
+        color: var(--text-secondary);
+        line-height: 1.45;
+      }
+
+      .read-only-note {
+        padding: 9px 11px;
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        background: var(--surface-raised);
+        color: var(--text-secondary);
+      }
+
+      .save-toast {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 10px;
+        border: 1px solid color-mix(in oklch, var(--success) 35%, var(--border));
+        border-radius: 5px;
+        background: var(--success-soft);
+        color: var(--text-secondary);
+      }
+
+      .save-toast .button {
+        min-height: 23px;
+        margin-left: auto;
+      }
+
+      .ledger-wrap {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .expanded-row td {
+        padding: 0;
+        background: var(--surface-raised);
+      }
+
+      .ledger-panel {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(280px, 0.38fr);
+        gap: 14px;
+        padding: 12px;
+      }
+
+      .ledger-list {
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        background: var(--surface);
+        overflow: hidden;
+      }
+
+      .ledger-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 70px 90px 56px;
+        align-items: center;
+        gap: 8px;
+        min-height: 34px;
+        padding: 5px 8px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .ledger-row:last-child {
+        border-bottom: 0;
+      }
+
+      .ledger-row.active {
+        background: var(--surface-selected);
+      }
+
+      .ledger-side {
+        display: flex;
+        flex-direction: column;
+        gap: 9px;
+      }
+
+      .focus-layout {
+        display: grid;
+        grid-template-columns: 190px minmax(420px, 1fr) 280px;
+        min-height: 540px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--surface);
+        overflow: hidden;
+      }
+
+      .project-rail {
+        border-right: 1px solid var(--border);
+        background: var(--surface-raised);
+      }
+
+      .rail-heading {
+        padding: 9px 10px;
+        border-bottom: 1px solid var(--border);
+        color: var(--text-muted);
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+
+      .rail-project {
+        width: 100%;
+        padding: 8px 10px;
+        border: 0;
+        border-bottom: 1px solid var(--border);
+        background: transparent;
+        color: var(--text-secondary);
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .rail-project.active {
+        background: var(--surface-selected);
+        color: var(--text);
+      }
+
+      .rail-project small {
+        display: block;
+        margin-top: 2px;
+        color: var(--text-muted);
+      }
+
+      .focus-main {
+        min-width: 0;
+        border-right: 1px solid var(--border);
+      }
+
+      .focus-body {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 12px;
+      }
+
+      .path-command {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px;
+        border: 1px solid var(--border-strong);
+        border-radius: 6px;
+        background: var(--surface);
+      }
+
+      .path-command input,
+      .new-project-input {
+        min-width: 0;
+        flex: 1;
+        padding: 5px 7px;
+        border: 0;
+        background: transparent;
+        color: var(--text);
+      }
+
+      .path-command input::placeholder,
+      .new-project-input::placeholder {
+        color: var(--text-muted);
+      }
+
+      .focus-side {
+        display: flex;
+        flex-direction: column;
+        gap: 11px;
+        padding: 12px;
+        background: var(--surface-raised);
+      }
+
+      .focus-side .composer {
+        padding: 0;
+        background: transparent;
+      }
+
+      .triage-layout {
+        display: grid;
+        grid-template-columns: 200px minmax(520px, 1fr);
+        min-height: 540px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--surface);
+        overflow: hidden;
+      }
+
+      .triage-sidebar {
+        padding: 12px 10px;
+        border-right: 1px solid var(--border);
+        background: var(--surface-raised);
+      }
+
+      .triage-sidebar h2 {
+        margin-bottom: 10px;
+      }
+
+      .triage-filter {
+        display: flex;
+        width: 100%;
+        align-items: center;
+        justify-content: space-between;
+        padding: 7px 8px;
+        border: 0;
+        border-radius: 4px;
+        background: transparent;
+        color: var(--text-secondary);
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .triage-filter.active {
+        background: var(--surface-selected);
+        color: var(--text);
+      }
+
+      .triage-content {
+        min-width: 0;
+        padding: 12px;
+      }
+
+      .triage-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+
+      .triage-toolbar .path-command {
+        flex: 1;
+        padding: 4px 7px;
+      }
+
+      .triage-table td {
+        vertical-align: middle;
+      }
+
+      .triage-path {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+
+      .triage-path small {
+        color: var(--text-muted);
+      }
+
+      .inline-targets {
+        display: flex;
+        gap: 4px;
+      }
+
+      .inline-targets .button {
+        min-height: 23px;
+        padding: 2px 7px;
+      }
+
+      .prototype-dock {
+        position: fixed;
+        z-index: 20;
+        bottom: 34px;
+        left: 50%;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        width: min(760px, calc(100vw - 24px));
+        padding: 7px 8px;
+        border: 1px solid oklch(0.47 0.025 255);
+        border-radius: 8px;
+        background: oklch(0.22 0.02 255);
+        box-shadow: var(--shadow);
+        color: oklch(0.92 0.006 255);
+        transform: translateX(-50%);
+      }
+
+      .dock-arrow,
+      .dock-state {
+        min-width: 31px;
+        min-height: 30px;
+        border: 1px solid oklch(0.42 0.025 255);
+        border-radius: 5px;
+        background: oklch(0.29 0.02 255);
+        color: oklch(0.92 0.006 255);
+        cursor: pointer;
+      }
+
+      .dock-title {
+        min-width: 0;
+        flex: 1;
+      }
+
+      .dock-title strong,
+      .dock-title span {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .dock-title span {
+        margin-top: 2px;
+        color: oklch(0.72 0.01 255);
+        font-size: 10px;
+      }
+
+      .state-popover {
+        position: fixed;
+        z-index: 19;
+        right: 12px;
+        bottom: 82px;
+        width: min(360px, calc(100vw - 24px));
+        padding: 10px;
+        border: 1px solid var(--border-strong);
+        border-radius: 7px;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .state-popover pre {
+        margin: 8px 0 0;
+        overflow: auto;
+        color: var(--text-secondary);
+        font: 10px/1.5 var(--mono);
+      }
+
+      @media (max-width: 900px) {
+        .split-view,
+        .ledger-panel {
+          grid-template-columns: 1fr;
+        }
+
+        .focus-layout {
+          grid-template-columns: 150px minmax(360px, 1fr);
+        }
+
+        .focus-side {
+          grid-column: 1 / -1;
+          border-top: 1px solid var(--border);
+        }
+
+        .triage-layout {
+          grid-template-columns: 160px minmax(480px, 1fr);
+        }
+      }
+
+      @media (max-width: 650px) {
+        .top-nav button:not([aria-current="page"]),
+        .header-meta,
+        .prototype-context > span,
+        .summary-strip span:nth-child(n + 3) {
+          display: none;
+        }
+
+        .prototype-context {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .prototype-context .scenario-control {
+          width: 100%;
+          margin-left: 0;
+          overflow-x: auto;
+        }
+
+        .page-header {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .segmented,
+        .target-options {
+          overflow-x: auto;
+        }
+
+        .split-view,
+        .focus-layout,
+        .triage-layout {
+          display: flex;
+          min-width: 0;
+          flex-direction: column;
+        }
+
+        .inspector,
+        .ledger-wrap,
+        .focus-layout,
+        .triage-layout {
+          width: 100%;
+          max-width: 100%;
+        }
+
+        .focus-main,
+        .project-rail,
+        .triage-sidebar {
+          border-right: 0;
+          border-bottom: 1px solid var(--border);
+        }
+
+        .project-rail {
+          display: flex;
+          overflow-x: auto;
+        }
+
+        .rail-heading {
+          display: none;
+        }
+
+        .rail-project {
+          width: auto;
+          min-width: 130px;
+          border-right: 1px solid var(--border);
+        }
+
+        .triage-sidebar {
+          display: flex;
+          gap: 4px;
+          overflow-x: auto;
+        }
+
+        .triage-sidebar h2 {
+          display: none;
+        }
+
+        .triage-filter {
+          width: auto;
+          min-width: max-content;
+        }
+
+        .prototype-dock {
+          bottom: 30px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Three project-workspace variants plus one complementary triage view,
+         switchable with ?variant=A through ?variant=D. -->
+    <div class="app-shell">
+      <header class="app-header">
+        <span class="brand">Agents View</span>
+        <nav class="top-nav" aria-label="Primary navigation">
+          <button>Sessions</button>
+          <button>Activity</button>
+          <button>Usage</button>
+          <button aria-current="page">Data</button>
+        </nav>
+        <span class="header-meta"><i class="status-dot"></i>Archive current</span>
+      </header>
+      <main id="prototype"></main>
+      <footer class="status-bar">
+        <span>Local archive</span><span>4,812 sessions</span><span>Last sync 12s ago</span>
+      </footer>
+    </div>
+    <script type="module">
+      const variants = [
+        {
+          key: "A",
+          name: "Split inspector",
+          note: "Keep the inventory visible and edit the selected project in a side pane.",
+        },
+        {
+          key: "B",
+          name: "Inline ledger",
+          note: "Expand one project inside the inventory and edit folders in place.",
+        },
+        {
+          key: "C",
+          name: "Focused workspace",
+          note: "Trade overview width for a dedicated project correction canvas.",
+        },
+        {
+          key: "D",
+          name: "Folder triage",
+          note: "A complementary folder-first queue for cleanup across projects.",
+        },
+      ];
+
+      const projects = [
+        { key: "agentsview", name: "agentsview", sessions: 1684, machines: 2, folders: 5, rules: 2, last: "Today" },
+        { key: "kit-ui", name: "kit-ui", sessions: 806, machines: 1, folders: 3, rules: 1, last: "Today" },
+        { key: "docs-site", name: "docs-site", sessions: 594, machines: 2, folders: 4, rules: 2, last: "Yesterday" },
+        { key: "openapi-tools", name: "openapi-tools", sessions: 328, machines: 1, folders: 2, rules: 1, last: "Aug 17" },
+        { key: "unknown", name: "Unknown project", sessions: 214, machines: 2, folders: 6, rules: 0, last: "Today" },
+      ];
+
+      const folders = [
+        { id: "agentsview-main", path: "/work/src/agentsview", machine: "host-a.example", sessions: 1160, project: "agentsview", inferred: "agentsview", status: "mapped", children: 3 },
+        { id: "agentsview-pr", path: "/work/agentsview.worktrees/pr-482", machine: "host-a.example", sessions: 186, project: "agentsview", inferred: "agentsview", status: "inferred", children: 0 },
+        { id: "agentsview-feature", path: "/work/agentsview.worktrees/folder-redesign", machine: "host-a.example", sessions: 74, project: "kit-ui", inferred: "agentsview", status: "mismatch", children: 0 },
+        { id: "agentsview-laptop", path: "/repos/agentsview", machine: "host-b.example", sessions: 264, project: "agentsview", inferred: "agentsview", status: "mapped", children: 0 },
+        { id: "kit-ui-main", path: "/work/src/kit-ui", machine: "host-a.example", sessions: 603, project: "kit-ui", inferred: "kit-ui", status: "mapped", children: 2 },
+        { id: "kit-ui-fix", path: "/work/kit-ui.worktrees/menu-fix", machine: "host-a.example", sessions: 203, project: "kit-ui", inferred: "kit-ui", status: "inferred", children: 0 },
+        { id: "docs-site-main", path: "/work/src/docs-site", machine: "host-a.example", sessions: 482, project: "docs-site", inferred: "docs-site", status: "mapped", children: 1 },
+        { id: "scratch-parser", path: "/work/scratch/parser-bench", machine: "host-a.example", sessions: 31, project: "unknown", inferred: "openapi-tools", status: "unmapped", children: 0 },
+        { id: "legacy-agentsview", path: "/archive/agentsview-old", machine: "host-b.example", sessions: 11, project: "unknown", inferred: "agentsview", status: "missing", children: 0 },
+      ];
+
+      const state = {
+        variant: new URLSearchParams(location.search).get("variant")?.toUpperCase() || "A",
+        scenario: "ordinary",
+        selectedProject: "agentsview",
+        selectedFolder: "agentsview-feature",
+        targetProject: "agentsview",
+        newProject: "",
+        reviewAccepted: false,
+        lastSave: null,
+        undoNotice: "",
+        stateOpen: false,
+        triageFilter: "attention",
+      };
+
+      if (!variants.some((item) => item.key === state.variant)) state.variant = "A";
+
+      const root = document.querySelector("#prototype");
+
+      function esc(value) {
+        return String(value)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      function currentProject() {
+        return projects.find((project) => project.key === state.selectedProject) || projects[0];
+      }
+
+      function selectedFolder() {
+        return folders.find((folder) => folder.id === state.selectedFolder) || folders[0];
+      }
+
+      function targetLabel() {
+        return state.targetProject === "new"
+          ? state.newProject.trim() || "New project"
+          : projects.find((project) => project.key === state.targetProject)?.name || state.targetProject;
+      }
+
+      function impact() {
+        if (state.scenario === "broad") return { matched: 418, changing: 391, projects: 4, protected: 3, broad: true };
+        const folder = selectedFolder();
+        return {
+          matched: folder.sessions,
+          changing: folder.project === state.targetProject ? 0 : folder.sessions,
+          projects: folder.status === "mismatch" ? 2 : 1,
+          protected: folder.children,
+          broad: false,
+        };
+      }
+
+      function isReadOnly() {
+        return state.scenario === "readonly";
+      }
+
+      function folderPath(path) {
+        const slash = path.lastIndexOf("/");
+        return `<span class="folder-path path"><span class="folder-parent">${esc(path.slice(0, slash + 1))}</span><span class="folder-name">${esc(path.slice(slash + 1))}</span></span>`;
+      }
+
+      function projectTableRows(expand = false) {
+        return projects.map((project) => {
+          const selected = project.key === state.selectedProject;
+          const row = `<tr class="${selected ? "selected" : ""}">
+            <td><button class="project-button" data-action="project" data-project="${project.key}"><strong>${esc(project.name)}</strong></button></td>
+            <td class="numeric">${project.sessions.toLocaleString()}</td>
+            <td class="numeric">${project.machines}</td>
+            <td class="numeric">${project.folders}</td>
+            <td>${project.last}</td>
+            <td class="numeric">${project.rules || "−"}</td>
+          </tr>`;
+          if (!expand || !selected) return row;
+          return `${row}<tr class="expanded-row"><td colspan="6">${ledgerPanel()}</td></tr>`;
+        }).join("");
+      }
+
+      function inventoryTable(expand = false) {
+        return `<div class="table-shell">
+          <table>
+            <thead><tr><th>Project</th><th class="numeric">Sessions</th><th class="numeric">Machines</th><th class="numeric">Folders</th><th>Last activity</th><th class="numeric">Rules</th></tr></thead>
+            <tbody>${projectTableRows(expand)}</tbody>
+          </table>
+        </div>`;
+      }
+
+      function scenarioBar() {
+        return `<div class="prototype-context">
+          <strong>Review scenario</strong>
+          <span class="muted">Use the same state across every variant.</span>
+          <div class="scenario-control" aria-label="Review scenario">
+            <button data-action="scenario" data-scenario="ordinary" class="${state.scenario === "ordinary" ? "active" : ""}">Move one folder</button>
+            <button data-action="scenario" data-scenario="broad" class="${state.scenario === "broad" ? "active" : ""}">Broad impact</button>
+            <button data-action="scenario" data-scenario="readonly" class="${state.scenario === "readonly" ? "active" : ""}">Read-only source</button>
+          </div>
+        </div>`;
+      }
+
+      function pageLead(label = "Projects") {
+        return `<div class="page-header">
+          <h1>${label}</h1>
+          <div class="segmented" aria-label="Data view"><button class="active">Inventory</button><button>Project rules</button></div>
+        </div>
+        <div class="summary-strip"><span>5 projects</span><span>3,626 sessions</span><span>2,278 governed by rules</span><span>9 folders in review set</span></div>
+        ${scenarioBar()}
+        ${state.undoNotice ? `<div class="save-toast" role="status"><strong>Undone</strong><span>${esc(state.undoNotice)}</span></div>` : ""}
+        ${state.lastSave ? savedNotice() : ""}`;
+      }
+
+      function statusTag(folder) {
+        const labels = {
+          mapped: ["Rule", "blue"],
+          inferred: ["Suggested", ""],
+          mismatch: ["Mismatch", "warning"],
+          unmapped: ["Unmapped", "warning"],
+          missing: ["Missing", ""],
+        };
+        const [label, tone] = labels[folder.status];
+        return `<span class="tag ${tone}">${label}</span>`;
+      }
+
+      function folderItems(filterProject = state.selectedProject, includeSuggested = true) {
+        let rows = folders.filter((folder) => folder.project === filterProject || (includeSuggested && folder.inferred === filterProject));
+        return rows.map((folder) => `<div class="folder-item ${folder.id === state.selectedFolder ? "active" : ""} ${folder.project !== filterProject ? "suggested" : ""}">
+          <button class="folder-button" data-action="folder" data-folder="${folder.id}">
+            ${folderPath(folder.path)}
+            <span class="folder-meta"><span>${folder.machine}</span><span>${folder.sessions} sessions</span></span>
+          </button>
+          ${statusTag(folder)}
+        </div>`).join("");
+      }
+
+      function targetPicker() {
+        const options = ["agentsview", "kit-ui", "docs-site", "new"];
+        return `<div class="target-options" aria-label="Target project">
+          ${options.map((key) => `<button data-action="target" data-target="${key}" class="${state.targetProject === key ? "active" : ""}">${key === "new" ? "+ New" : esc(projects.find((item) => item.key === key).name)}</button>`).join("")}
+        </div>
+        ${state.targetProject === "new" ? `<div class="path-command"><input class="new-project-input" data-input="new-project" value="${esc(state.newProject)}" placeholder="Project name" aria-label="New project name" /></div>` : ""}`;
+      }
+
+      function composer(compact = false) {
+        const folder = selectedFolder();
+        const data = impact();
+        if (isReadOnly()) {
+          return `<div class="${compact ? "" : "composer"}"><div class="read-only-note"><strong>Changes are unavailable in this view.</strong><br />This source mirrors a remote archive. Open the writable archive on its source machine to change project rules.</div></div>`;
+        }
+        const needsReview = data.broad && !state.reviewAccepted;
+        return `<div class="composer">
+          <div class="row-between"><h3>Pending correction</h3><span class="tag">${folder.machine}</span></div>
+          <div class="mapping-line"><span class="mapping-path" title="${esc(folder.path)}">${esc(folder.path)}</span><span>→</span></div>
+          ${targetPicker()}
+          <div class="impact-line"><span>${data.matched} matched</span><span>${data.changing} changing</span><span>${data.projects} current project${data.projects === 1 ? "" : "s"}</span>${data.protected ? `<span>${data.protected} nested protected</span>` : ""}</div>
+          ${data.broad ? `<div class="impact-warning"><strong>This prefix reaches beyond the selected folder.</strong><br />It changes sessions from agentsview, kit-ui, docs-site, and Unknown project. Three nested rules keep their current classifications.</div>` : ""}
+          <div class="composer-actions">
+            <button class="button quiet" data-action="cancel">Cancel</button>
+            ${needsReview
+              ? `<button class="button primary" data-action="review">Review 391 changes</button>`
+              : `<button class="button primary" data-action="save" ${state.targetProject === "new" && !state.newProject.trim() ? "disabled" : ""}>${data.broad ? "Confirm and save" : "Save correction"}</button>`}
+          </div>
+        </div>`;
+      }
+
+      function savedNotice() {
+        return `<div class="save-toast" role="status"><strong>Saved</strong><span class="mono">${esc(state.lastSave.path)}</span><span>now maps to ${esc(state.lastSave.target)}.</span><button class="button" data-action="undo">Undo</button></div>`;
+      }
+
+      function renderVariantA() {
+        const project = currentProject();
+        return `<section class="page">
+          ${pageLead()}
+          <div class="split-view">
+            ${inventoryTable()}
+            <aside class="inspector">
+              <header><div class="row-between"><h2>${esc(project.name)}</h2><span class="tag blue">${project.rules} active rules</span></div><div class="project-facts"><span>${project.sessions.toLocaleString()} sessions</span><span>${project.machines} machines</span><span>${project.folders} observed folders</span></div></header>
+              <div class="inspector-section">
+                <div class="section-header"><h3>Observed and suggested folders</h3><button class="button quiet" data-action="suggested">Show suggestions</button></div>
+                <div class="folder-list">${folderItems(project.key)}</div>
+              </div>
+              ${composer()}
+            </aside>
+          </div>
+        </section>`;
+      }
+
+      function ledgerPanel() {
+        const project = currentProject();
+        const rows = folders.filter((folder) => folder.project === project.key || folder.inferred === project.key);
+        return `<div class="ledger-panel">
+          <div class="ledger-list">
+            ${rows.map((folder) => `<div class="ledger-row ${folder.id === state.selectedFolder ? "active" : ""}">
+              <button class="ledger-action" data-action="folder" data-folder="${folder.id}">${folderPath(folder.path)}</button>
+              <span class="muted">${folder.machine}</span>
+              ${statusTag(folder)}
+              <span class="numeric">${folder.sessions}</span>
+            </div>`).join("")}
+          </div>
+          <div class="ledger-side"><div class="row-between"><div><h2>${esc(project.name)}</h2><span class="muted">Folder ledger</span></div><span class="tag blue">${project.rules} rules</span></div>${composer(true)}</div>
+        </div>`;
+      }
+
+      function renderVariantB() {
+        return `<section class="page">
+          ${pageLead()}
+          <div class="ledger-wrap">
+            <div class="row-between"><span class="muted">Select a project to open its folder ledger without leaving the inventory.</span><button class="button" data-action="folder" data-folder="scratch-parser">Classify an unmapped folder</button></div>
+            ${inventoryTable(true)}
+          </div>
+        </section>`;
+      }
+
+      function renderVariantC() {
+        const project = currentProject();
+        return `<section class="page">
+          ${pageLead("Project workspace")}
+          <div class="focus-layout">
+            <nav class="project-rail" aria-label="Projects"><div class="rail-heading">Project inventory</div>${projects.map((item) => `<button class="rail-project ${item.key === project.key ? "active" : ""}" data-action="project" data-project="${item.key}"><strong>${esc(item.name)}</strong><small>${item.sessions.toLocaleString()} sessions · ${item.folders} folders</small></button>`).join("")}</nav>
+            <div class="focus-main">
+              <header class="focus-header"><div class="row-between"><div><h1>${esc(project.name)}</h1><div class="project-facts"><span>${project.sessions.toLocaleString()} sessions</span><span>${project.machines} machines</span><span>${project.rules} rules</span></div></div><span class="tag blue">Writable archive</span></div></header>
+              <div class="focus-body">
+                <div class="path-command"><input aria-label="Find or paste a folder" placeholder="Paste a folder path or search observed folders" /><button class="button" data-action="folder" data-folder="scratch-parser">Add folder</button></div>
+                <div class="section-header"><h2>Folders for ${esc(project.name)}</h2><span class="muted">Rule, inferred, and suggested paths together</span></div>
+                <div class="folder-list">${folderItems(project.key)}</div>
+              </div>
+            </div>
+            <aside class="focus-side"><div><h2>Correction</h2><p class="muted">One path, one destination, visible archive impact.</p></div>${composer(true)}<div class="read-only-note"><strong>Latest saved change</strong><br /><span class="muted">docs-site mapping on host-b.example, 18 minutes ago</span><br /><button class="button quiet" data-action="undo-latest">Undo latest change</button></div></aside>
+          </div>
+        </section>`;
+      }
+
+      function triageRows() {
+        const filtered = folders.filter((folder) => {
+          if (state.triageFilter === "attention") return ["mismatch", "unmapped", "missing"].includes(folder.status);
+          if (state.triageFilter === "suggested") return folder.status === "inferred";
+          if (state.triageFilter === "missing") return folder.status === "missing";
+          return true;
+        });
+        return filtered.map((folder) => `<tr class="${folder.id === state.selectedFolder ? "selected" : ""}">
+          <td><button class="project-button" data-action="folder" data-folder="${folder.id}"><span class="triage-path">${folderPath(folder.path)}<small>${folder.machine} · ${folder.sessions} sessions</small></span></button></td>
+          <td>${statusTag(folder)}</td>
+          <td>${esc(projects.find((project) => project.key === folder.project)?.name || "Unknown project")}</td>
+          <td>${esc(folder.inferred)}</td>
+          <td><div class="inline-targets"><button class="button" data-action="quick-target" data-folder="${folder.id}" data-target="${folder.inferred}">Use ${esc(folder.inferred)}</button><button class="button quiet" data-action="folder" data-folder="${folder.id}">Review</button></div></td>
+        </tr>`).join("");
+      }
+
+      function renderVariantD() {
+        const filters = [
+          ["attention", "Needs attention", 3],
+          ["suggested", "Suggestions", 2],
+          ["missing", "Missing paths", 1],
+          ["all", "All observed", 9],
+        ];
+        return `<section class="page">
+          ${pageLead("Folder triage")}
+          <div class="triage-layout">
+            <aside class="triage-sidebar"><h2>Queues</h2>${filters.map(([key, label, count]) => `<button class="triage-filter ${state.triageFilter === key ? "active" : ""}" data-action="triage-filter" data-filter="${key}"><span>${label}</span><span class="count-badge">${count}</span></button>`).join("")}</aside>
+            <div class="triage-content">
+              <div class="triage-toolbar"><div class="path-command"><input aria-label="Filter folders" placeholder="Filter paths, machines, or projects" /></div><button class="button" data-action="scenario" data-scenario="readonly">Preview read-only</button></div>
+              <div class="table-shell"><table class="triage-table"><thead><tr><th>Observed folder</th><th>State</th><th>Current project</th><th>Likely project</th><th>Action</th></tr></thead><tbody>${triageRows()}</tbody></table></div>
+              ${state.selectedFolder ? `<div style="margin-top: 10px">${composer()}</div>` : ""}
+            </div>
+          </div>
+        </section>`;
+      }
+
+      function prototypeDock() {
+        const item = variants.find((variant) => variant.key === state.variant);
+        return `<div class="prototype-dock" role="toolbar" aria-label="Prototype variants">
+          <button class="dock-arrow" data-action="previous" aria-label="Previous variant">←</button>
+          <div class="dock-title"><strong>${item.key}. ${item.name}</strong><span>${item.note}</span></div>
+          <button class="dock-state" data-action="state" aria-expanded="${state.stateOpen}">State</button>
+          <button class="dock-arrow" data-action="next" aria-label="Next variant">→</button>
+        </div>
+        ${state.stateOpen ? `<aside class="state-popover"><div class="row-between"><strong>In-memory prototype state</strong><button class="button quiet" data-action="state">Close</button></div><pre>${esc(JSON.stringify({ variant: state.variant, scenario: state.scenario, selectedProject: state.selectedProject, selectedFolder: state.selectedFolder, targetProject: targetLabel(), reviewAccepted: state.reviewAccepted, lastSave: state.lastSave }, null, 2))}</pre></aside>` : ""}`;
+      }
+
+      function render() {
+        const renderers = { A: renderVariantA, B: renderVariantB, C: renderVariantC, D: renderVariantD };
+        root.innerHTML = renderers[state.variant]() + prototypeDock();
+      }
+
+      function setVariant(key) {
+        state.variant = key;
+        const params = new URLSearchParams(location.search);
+        params.set("variant", key);
+        history.replaceState(null, "", `${location.pathname}?${params}`);
+        render();
+      }
+
+      function cycleVariant(direction) {
+        const index = variants.findIndex((item) => item.key === state.variant);
+        const next = (index + direction + variants.length) % variants.length;
+        setVariant(variants[next].key);
+      }
+
+      root.addEventListener("input", (event) => {
+        if (event.target.matches('[data-input="new-project"]')) {
+          state.newProject = event.target.value;
+          const save = root.querySelector('[data-action="save"]');
+          if (save) save.disabled = !state.newProject.trim();
+        }
+      });
+
+      root.addEventListener("click", (event) => {
+        const control = event.target.closest("[data-action]");
+        if (!control) return;
+        const action = control.dataset.action;
+        if (action === "previous") cycleVariant(-1);
+        if (action === "next") cycleVariant(1);
+        if (action === "state") { state.stateOpen = !state.stateOpen; render(); }
+        if (action === "project") {
+          state.selectedProject = control.dataset.project;
+          const candidate = folders.find((folder) => folder.project === state.selectedProject || folder.inferred === state.selectedProject);
+          if (candidate) state.selectedFolder = candidate.id;
+          state.targetProject = state.selectedProject;
+          state.reviewAccepted = false;
+          render();
+        }
+        if (action === "folder") {
+          state.selectedFolder = control.dataset.folder;
+          const folder = selectedFolder();
+          state.selectedProject = folder.inferred === "unknown" ? folder.project : folder.inferred;
+          state.targetProject = state.selectedProject;
+          state.reviewAccepted = false;
+          render();
+        }
+        if (action === "target") {
+          state.targetProject = control.dataset.target;
+          state.reviewAccepted = false;
+          render();
+        }
+        if (action === "scenario") {
+          state.scenario = control.dataset.scenario;
+          state.reviewAccepted = false;
+          if (state.scenario === "broad") state.selectedFolder = "agentsview-main";
+          if (state.scenario === "ordinary") state.selectedFolder = "agentsview-feature";
+          render();
+        }
+        if (action === "review") { state.reviewAccepted = true; render(); }
+        if (action === "save") {
+          const folder = selectedFolder();
+          state.lastSave = { path: folder.path, target: targetLabel(), previous: folder.project };
+          state.undoNotice = "";
+          folder.project = state.targetProject === "new" ? state.newProject.trim() : state.targetProject;
+          folder.status = "mapped";
+          state.reviewAccepted = false;
+          render();
+        }
+        if (action === "undo") {
+          if (state.lastSave) {
+            const folder = folders.find((item) => item.path === state.lastSave.path);
+            if (folder) { folder.project = state.lastSave.previous; folder.status = "mismatch"; }
+            state.undoNotice = `Restored ${state.lastSave.path} to ${state.lastSave.previous}.`;
+          }
+          state.lastSave = null;
+          render();
+        }
+        if (action === "undo-latest") {
+          state.undoNotice = "Restored the previous docs-site rule set. 42 sessions returned to their earlier classifications.";
+          render();
+        }
+        if (action === "cancel") { state.reviewAccepted = false; render(); }
+        if (action === "triage-filter") { state.triageFilter = control.dataset.filter; render(); }
+        if (action === "quick-target") {
+          state.selectedFolder = control.dataset.folder;
+          state.targetProject = control.dataset.target;
+          state.reviewAccepted = false;
+          render();
+        }
+      });
+
+      window.addEventListener("keydown", (event) => {
+        if (["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName) || document.activeElement?.isContentEditable) return;
+        if (event.key === "ArrowLeft") cycleVariant(-1);
+        if (event.key === "ArrowRight") cycleVariant(1);
+      });
+
+      render();
+    </script>
+  </body>
+</html>
