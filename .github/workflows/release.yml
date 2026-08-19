@@ -124,7 +124,7 @@ jobs:
           - os: windows-latest
             goos: windows
             goarch: amd64
-          - os: windows-11-arm
+          - os: windows-11-vs2026-arm
             goos: windows
             goarch: arm64
 
