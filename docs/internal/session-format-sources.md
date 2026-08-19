@@ -605,7 +605,14 @@ missing file does not classify a session as automated.
 - **Agentsview:** `internal/parser/opencode.go`,
   `internal/parser/opencode_provider.go`, and
   `internal/parser/opencode_storage_state.go`; legacy and database layouts are
-  both intentional compatibility targets.
+  both intentional compatibility targets. File-backed snapshots retain the
+  session JSON byte length in parsed session metadata so persisted `file_size`
+  matches the provider fingerprint and an unchanged cold-start sync stops
+  after fingerprinting instead of parsing the storage tree again. Reverified
+  2026-08-19 that legacy project-metadata events use the indexed sessions
+  whose cwd depends on that project. A malformed session path keeps the
+  directory fallback active only until that exact path is successfully
+  re-indexed or deleted.
 
 ## Kilo Code (`kilo`)
 

@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 	gosync "sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1112,6 +1113,95 @@ func TestSyncEngineOpenCodeStorageWatcherEventDoesNotRewriteUnchanged(
 	final := openCodeLocalModifiedSnapshot(t, env.db, fullID)
 	assert.NotEqual(t, after[fullID], final[fullID],
 		"a real content change must rewrite the session")
+}
+
+type openCodeStorageParseCountingProvider struct {
+	parser.Provider
+	parseCalls atomic.Int64
+}
+
+func (p *openCodeStorageParseCountingProvider) Parse(
+	ctx context.Context, req parser.ParseRequest,
+) (parser.ParseOutcome, error) {
+	p.parseCalls.Add(1)
+	return p.Provider.Parse(ctx, req)
+}
+
+type openCodeStorageParseCountingFactory struct {
+	provider *openCodeStorageParseCountingProvider
+}
+
+func (f openCodeStorageParseCountingFactory) Definition() parser.AgentDef {
+	return f.provider.Definition()
+}
+
+func (f openCodeStorageParseCountingFactory) Capabilities() parser.Capabilities {
+	return f.provider.Capabilities()
+}
+
+func (f openCodeStorageParseCountingFactory) NewProvider(
+	parser.ProviderConfig,
+) parser.Provider {
+	return f.provider
+}
+
+// A fresh engine has no in-memory storage-tree trust, so it fingerprints each
+// legacy OpenCode session once. The persisted source metadata must then prove
+// an unchanged session fresh without parsing the storage tree a second time.
+func TestSyncAllOpenCodeStorageColdStartSkipsUnchangedParse(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+	const sessionID = "oc-storage-cold-start"
+	sessionPath := storage.addSession(
+		t, "global", sessionID,
+		"/workspace/oc-app", "Storage Cold Start",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"steady storage reply", 1704067201000,
+	)
+
+	first := env.engine.SyncAll(t.Context(), nil)
+	require.False(t, first.Aborted, "first sync aborted: %+v", first)
+	require.Equal(t, 1, first.Synced, "first sync writes the session")
+
+	innerFactory, ok := parser.ProviderFactoryByType(parser.AgentOpenCode)
+	require.True(t, ok, "OpenCode provider factory registered")
+	inner := innerFactory.NewProvider(parser.ProviderConfig{
+		Roots:   []string{env.opencodeDir},
+		Machine: "local",
+	})
+	counting := &openCodeStorageParseCountingProvider{Provider: inner}
+	restarted := sync.NewEngine(env.db, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenCode: {env.opencodeDir},
+		},
+		Machine: "local",
+		ProviderFactories: []parser.ProviderFactory{
+			openCodeStorageParseCountingFactory{provider: counting},
+		},
+	})
+	t.Cleanup(restarted.Close)
+
+	stats := restarted.SyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted, "restart sync aborted: %+v", stats)
+	assert.Zero(t, stats.Synced, "unchanged restart must not rewrite the session")
+	assert.Zero(t, counting.parseCalls.Load(),
+		"unchanged restart must stop after fingerprinting")
+
+	stored, err := env.db.GetSessionFull(t.Context(), "opencode:"+sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	require.NotNil(t, stored.FileSize, "stored file_size")
+	info, err := os.Stat(sessionPath)
+	require.NoError(t, err)
+	assert.Equal(t, info.Size(), *stored.FileSize,
+		"stored file_size must match the fingerprinted session JSON")
 }
 
 // TestSyncEngineOpenCodeStorageStatIdenticalEventStillReemits pins the
@@ -7066,6 +7156,86 @@ func TestSyncEngineOpenCodeDataVersionRefreshesUnchangedCwdProject(
 	assertSessionState(t, env.db, agentviewID, func(sess *db.Session) {
 		assert.Equal(t, "/home/user/code/lonely-app", sess.Cwd)
 		assert.Equal(t, "lonely_app", sess.Project)
+		assert.Equal(t, db.CurrentDataVersion(), sess.DataVersion)
+	})
+}
+
+func TestSyncEngineOpenCodeStorageMalformedProjectPreservesArchive(
+	t *testing.T,
+) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+	const sessionID = "oc-storage-malformed-project"
+	oc.addSession(
+		t, "legacy-project", sessionID, "", "Malformed Project",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(t, sessionID, "msg-user", "user", 1704067200000, nil)
+	oc.addTextPart(t, sessionID, "msg-user", "part-user", "question", 1704067200000)
+	projectPath := filepath.Join(
+		env.opencodeDir, "storage", "project", "legacy-project.json",
+	)
+	oc.writeJSON(t, projectPath, map[string]any{
+		"id": "legacy-project", "worktree": "/home/user/code/legacy-app",
+	})
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted)
+	require.Equal(t, 1, stats.Synced)
+	assertSessionState(t, env.db, "opencode:"+sessionID, func(sess *db.Session) {
+		assert.Equal(t, "/home/user/code/legacy-app", sess.Cwd)
+		assert.Equal(t, "legacy_app", sess.Project)
+	})
+
+	require.NoError(t, os.WriteFile(projectPath, []byte("{"), 0o644))
+	future := time.Now().Add(2 * time.Second)
+	require.NoError(t, os.Chtimes(projectPath, future, future))
+	err := env.engine.SyncPathsContext(
+		context.Background(), []string{projectPath},
+	)
+	require.Error(t, err, "malformed project metadata must be reported by scoped sync")
+	assertSessionState(t, env.db, "opencode:"+sessionID, func(sess *db.Session) {
+		assert.Equal(t, "/home/user/code/legacy-app", sess.Cwd)
+		assert.Equal(t, "legacy_app", sess.Project)
+	})
+}
+
+func TestSyncEngineOpenCodeStorageDataVersionRefreshesArchivedCwdProject(
+	t *testing.T,
+) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+	const sessionID = "oc-storage-data-version-project"
+	oc.addSession(
+		t, "legacy-project", sessionID, "", "Data Version Project",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(t, sessionID, "msg-user", "user", 1704067200000, nil)
+	oc.addTextPart(t, sessionID, "msg-user", "part-user", "question", 1704067200000)
+	projectPath := filepath.Join(
+		env.opencodeDir, "storage", "project", "legacy-project.json",
+	)
+	oc.writeJSON(t, projectPath, map[string]any{
+		"id": "legacy-project", "worktree": "/home/user/code/legacy-app",
+	})
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1, Skipped: 0,
+	})
+	stored := openCodeStoredSession(t, env.db, "opencode:"+sessionID)
+	stored.Cwd = ""
+	stored.Project = "unknown"
+	require.NoError(t, env.db.UpsertSession(*stored))
+	require.NoError(t, env.db.SetSessionDataVersion(
+		"opencode:"+sessionID, db.CurrentDataVersion()-1,
+	))
+
+	require.NoError(t, env.engine.SyncPathsContext(
+		context.Background(), []string{projectPath},
+	))
+	assertSessionState(t, env.db, "opencode:"+sessionID, func(sess *db.Session) {
+		assert.Equal(t, "/home/user/code/legacy-app", sess.Cwd)
+		assert.Equal(t, "legacy_app", sess.Project)
 		assert.Equal(t, db.CurrentDataVersion(), sess.DataVersion)
 	})
 }

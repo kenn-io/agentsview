@@ -1008,10 +1008,10 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 		"expected tool_result_events table after reopen")
 }
 
-func TestCurrentDataVersionClaudeIDEEnvelopeSplit(t *testing.T) {
-	assert.Equal(t, 88, CurrentDataVersion(),
-		"version 88 splits Claude IDE envelopes off mixed prompts after "+
-			"the Codex fork replay boundary reparse")
+func TestCurrentDataVersionIncludesOpenCodeProjectMetadataChange(t *testing.T) {
+	assert.Equal(t, 89, CurrentDataVersion(),
+		"version 89 is the data-version boundary for file-backed OpenCode metadata changes")
+	t.Logf("CurrentDataVersion=%d", CurrentDataVersion())
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {

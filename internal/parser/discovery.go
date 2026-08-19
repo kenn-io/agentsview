@@ -343,8 +343,9 @@ func OpenCodeSQLiteVirtualPath(
 func openCodeSessionProject(path string) string {
 	data, err := os.ReadFile(path)
 	if err == nil {
-		if cwd := gjson.GetBytes(data, "directory").Str; cwd != "" {
-			if project := ExtractProjectFromCwd(cwd); project != "" {
+		cwd := gjson.GetBytes(data, "directory").Str
+		if resolved, resolveErr := resolveOpenCodeStorageWorktree(path, cwd); resolveErr == nil {
+			if project := ExtractProjectFromCwd(resolved); project != "" {
 				return project
 			}
 		}

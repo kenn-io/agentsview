@@ -15,6 +15,17 @@ func TestStatOpenCodeStorageSessionState(t *testing.T) {
 	sessionPath := writeOpenCodeProviderStorageSession(
 		t, root, "session", "ses_state", "state-app", "State Session",
 	)
+	writeOpenCodeStorageFile(t, sessionPath, map[string]any{
+		"id": "ses_state", "title": "State Session",
+		"time": map[string]any{
+			"created": int64(1700000000000),
+			"updated": int64(1700000060000),
+		},
+	})
+	projectPath := filepath.Join(root, "storage", "project", "global.json")
+	writeOpenCodeStorageFile(t, projectPath, map[string]any{
+		"id": "state-app", "worktree": "/home/user/code/state-app",
+	})
 
 	state, ok := StatOpenCodeStorageSessionState(sessionPath)
 	require.True(t, ok, "state capture must succeed")
@@ -23,6 +34,17 @@ func TestStatOpenCodeStorageSessionState(t *testing.T) {
 	again, ok := StatOpenCodeStorageSessionState(sessionPath)
 	require.True(t, ok)
 	assert.Equal(t, state, again, "untouched tree must produce equal states")
+
+	t.Run("project content changes state", func(t *testing.T) {
+		writeOpenCodeStorageFile(t, projectPath, map[string]any{
+			"id": "state-app", "worktree": "/home/user/code/changed-app",
+		})
+		next, ok := StatOpenCodeStorageSessionState(sessionPath)
+		require.True(t, ok)
+		assert.NotEqual(t, state, next,
+			"project metadata content must invalidate the session state")
+		state = next
+	})
 
 	t.Run("added part changes state", func(t *testing.T) {
 		writeOpenCodeStorageFile(t, filepath.Join(
@@ -108,4 +130,21 @@ func TestStatOpenCodeStorageSessionStateWithoutMessages(t *testing.T) {
 	again, ok := StatOpenCodeStorageSessionState(sessionPath)
 	require.True(t, ok)
 	assert.Equal(t, state, again)
+}
+
+func TestStatOpenCodeStorageSessionStateSkipsUnusedProjectMetadata(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	sessionPath := writeOpenCodeProviderStorageSession(
+		t, root, "session", "ses_directory", "directory-app", "Directory Session",
+	)
+	projectPath := filepath.Join(root, "storage", "project", "global.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(projectPath), 0o755))
+	require.NoError(t, os.WriteFile(projectPath, []byte("{"), 0o644))
+
+	state, ok := StatOpenCodeStorageSessionState(sessionPath)
+	require.True(t, ok,
+		"a usable session directory must not depend on unused project metadata")
+	require.NotEmpty(t, state)
 }
