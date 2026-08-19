@@ -40,6 +40,10 @@ states, and acceptance criteria.
 
 ## Decisions so far
 
+- [Audit current project-classification capabilities](issues/12-audit-current-project-classification-capabilities.md):
+  Reads span SQLite and the mirrors; conflict-checked preview and
+  transactional apply are SQLite-only, and there is no reversal API.
+
 ## Not yet specified
 
 - The prototypes may reveal whether the overview needs new classification
