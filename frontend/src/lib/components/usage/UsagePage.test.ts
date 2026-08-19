@@ -211,6 +211,7 @@ describe("UsagePage refresh behavior", () => {
     expect(
       document.querySelectorAll(".kit-filter-dropdown__item"),
     ).toHaveLength(2);
+    usage.excludedProjectKeys = "unlisted-project-key";
 
     const deselectAll = Array.from(
       document.querySelectorAll<HTMLButtonElement>(
@@ -221,7 +222,7 @@ describe("UsagePage refresh behavior", () => {
 
     deselectAll!.click();
     expect(usage.excludedProjectKeys).toBe(
-      "project-key-1,project-key-2",
+      "unlisted-project-key,project-key-1,project-key-2",
     );
 
     const selectAll = Array.from(
@@ -233,6 +234,42 @@ describe("UsagePage refresh behavior", () => {
 
     selectAll!.click();
     expect(usage.excludedProjectKeys).toBe("");
+  });
+
+  it("shows legacy project-name exclusions until they are cleared", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    router.route = "usage";
+    router.params = {};
+    usage.excludedProjects = "legacy-project";
+    usage.summary = usageSummaryWithUnsupported();
+
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+
+    const projectFilter = document.querySelector<HTMLButtonElement>(
+      '.kit-filter-dropdown__btn[aria-label="Project: 1 hidden"]',
+    );
+    expect(projectFilter).not.toBeNull();
+
+    projectFilter!.click();
+    await tick();
+    const selectAll = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        ".kit-filter-dropdown__bulk-btn",
+      ),
+    ).find((button) => button.textContent?.trim() === "Select all");
+    expect(selectAll).not.toBeUndefined();
+
+    selectAll!.click();
+    expect(usage.excludedProjects).toBe("");
   });
 
   it("hydrates token mode from the canonical URL before fetching", async () => {

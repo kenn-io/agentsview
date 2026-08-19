@@ -109,6 +109,12 @@
 
   const projectItems = $derived(knownProjects);
 
+  const legacyExcludedProjectCount = $derived(
+    usage.excludedProjects
+      ? usage.excludedProjects.split(",").filter(Boolean).length
+      : 0,
+  );
+
   const agentItems = $derived(
     sessions.agents.map((a) => ({
       name: a.name,
@@ -526,6 +532,7 @@
         label={m.analytics_col_project()}
         items={projectItems}
         excludedCsv={usage.excludedProjectKeys}
+        unlistedExcludedCount={legacyExcludedProjectCount}
         onToggle={(key) => usage.toggleProjectKey(key)}
         onSelectAll={() => usage.selectAllProjects()}
         onDeselectAll={() =>

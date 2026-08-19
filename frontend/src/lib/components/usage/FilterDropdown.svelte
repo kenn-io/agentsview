@@ -25,6 +25,8 @@
     onDeselectAll?: () => void;
     color?: (name: string) => string;
     mode?: "exclude" | "include";
+    /** Active exclusions represented outside excludedCsv. */
+    unlistedExcludedCount?: number;
   }
 
   let {
@@ -36,6 +38,7 @@
     onDeselectAll,
     color,
     mode = "exclude",
+    unlistedExcludedCount = 0,
   }: Props = $props();
 
   function itemId(item: FilterItem): string {
@@ -52,9 +55,12 @@
       0,
     ),
   );
-  const filteredCount = $derived(filterSet.size);
+  const filteredCount = $derived(
+    filterSet.size + Math.max(0, unlistedExcludedCount),
+  );
   const unlistedFilteredCount = $derived(
-    Math.max(0, filteredCount - listedFilteredCount),
+    Math.max(0, filterSet.size - listedFilteredCount) +
+      Math.max(0, unlistedExcludedCount),
   );
   const visibleCount = $derived(
     items.length - listedFilteredCount,

@@ -522,7 +522,13 @@ class UsageStore {
   }
 
   deselectAllProjectKeys(all: string[]): void {
-    this.excludedProjectKeys = all.join(",");
+    const excluded = new Set(
+      this.excludedProjectKeys
+        ? this.excludedProjectKeys.split(",").filter(Boolean)
+        : [],
+    );
+    for (const key of all) excluded.add(key);
+    this.excludedProjectKeys = [...excluded].join(",");
     this.fetchAll();
   }
 
