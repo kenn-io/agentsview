@@ -25,6 +25,8 @@ func TestEnsureSchemaCreatesRawIngestCustodyTables(t *testing.T) {
 	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
 
 	for _, table := range []string{
+		"raw_devices",
+		"raw_device_tokens",
 		"raw_objects",
 		"raw_manifests",
 		"raw_manifest_entries",
@@ -43,6 +45,7 @@ func TestEnsureSchemaCreatesRawIngestCustodyTables(t *testing.T) {
 	}
 
 	for _, index := range []string{
+		"idx_raw_device_tokens_expiry",
 		"idx_raw_ingest_jobs_ready",
 		"idx_raw_ingest_jobs_lease",
 	} {
@@ -67,6 +70,14 @@ func TestRawIngestSchemaUsesTenantScopedKeys(t *testing.T) {
 	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
 
 	wantDefinitions := map[string][]string{
+		"raw_devices": {
+			"PRIMARY KEY (device_id)",
+			"UNIQUE (tenant_id, device_id)",
+		},
+		"raw_device_tokens": {
+			"PRIMARY KEY (token_sha256)",
+			"FOREIGN KEY (tenant_id, device_id)",
+		},
 		"raw_objects": {
 			"PRIMARY KEY (tenant_id, sha256)",
 		},
