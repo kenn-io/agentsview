@@ -326,8 +326,10 @@ Model rates come from the
 layered underneath for models LiteLLM does not list. Both are fetched together
 (hourly at most on `usage` invocations, daily by the server) and merged into the
 `model_pricing` table; when both catalogs list a model, LiteLLM's rate wins, and
-an OpenRouter row is dropped once LiteLLM picks the model up. If either fetch
-fails, AgentsView keeps the last stored rates. Fresh databases are seeded from
+an OpenRouter row is dropped once LiteLLM picks the model up. If the LiteLLM
+fetch fails, AgentsView keeps the last stored rates; if only the OpenRouter
+fetch fails, the fresh LiteLLM rates are still stored and the stored OpenRouter
+rates are kept. Fresh databases are seeded from
 an embedded LiteLLM snapshot so offline use works before any refresh completes.
 Pass `--offline` to skip the fetch entirely and always use the embedded
 fallback.

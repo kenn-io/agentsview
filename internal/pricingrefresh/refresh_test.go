@@ -169,6 +169,31 @@ func TestRefreshIfStaleFetchFailureRecordsAttempt(t *testing.T) {
 	assert.Zero(t, second.calls)
 }
 
+func TestRefreshIfStaleStoresDegradedCatalog(t *testing.T) {
+	database := testDB(t)
+	wantErr := errors.New("openrouter down")
+	fetcher := &fetchRecorder{
+		rows: []pricing.ModelPricing{{
+			ModelPattern:  "degraded-model",
+			InputPerMTok:  money.MustParseDollars("1"),
+			OutputPerMTok: money.MustParseDollars("2"),
+		}},
+		err: wantErr,
+	}
+
+	refreshed, err := RefreshIfStale(
+		database, fetcher.fetch, time.Hour, pricingTestNow(),
+	)
+
+	assert.ErrorIs(t, err, wantErr,
+		"the degradation is reported alongside the refresh")
+	assert.True(t, refreshed)
+	stored, priceErr := database.GetModelPricing("degraded-model")
+	require.NoError(t, priceErr)
+	require.NotNil(t, stored, "LiteLLM rows stored despite the error")
+	assert.Equal(t, money.MustParseDollars("1"), stored.InputPerMTok)
+}
+
 func TestEnsureFetchFailurePreservesFallback(t *testing.T) {
 	database := testDB(t)
 	wantErr := errors.New("network down")

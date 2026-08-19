@@ -97,6 +97,9 @@ func SeedFallback(database *db.DB) error {
 }
 
 // RefreshIfStale refreshes when the last attempt is older than cooldown.
+// It can refresh and return an error at once: a fetch that degraded to a
+// LiteLLM-only snapshot (see pricing.FetchCatalog) still stores rows and
+// reports true, and the error describes the degradation.
 func RefreshIfStale(
 	database *db.DB,
 	fetch func() (pricing.Catalog, error),
@@ -128,14 +131,14 @@ func refreshAt(
 			"recording pricing refresh attempt: %w", err,
 		)
 	}
-	catalog, err := fetch()
-	if err != nil {
-		return false, err
+	catalog, fetchErr := fetch()
+	if fetchErr != nil && len(catalog.LiteLLM) == 0 {
+		return false, fetchErr
 	}
 	if err := storeCatalog(database, catalog); err != nil {
 		return false, err
 	}
-	return true, nil
+	return true, fetchErr
 }
 
 // Ensure seeds fallback pricing and refreshes online catalogs when due.
@@ -247,6 +250,14 @@ func runCurrent(
 // pricing.Catalog.Reconcile) and writes rows, retirements, and the
 // OpenRouter ownership sentinel in one transaction, so a crash or a
 // concurrent push never sees rows without the metadata that retires them.
+//
+// The sentinel and stored patterns are read before that transaction, and
+// the in-process refresh gate does not cover a second process on the
+// same archive (server loop beside a CLI refresh), so racing refreshes
+// can commit a plan built from a one-snapshot-stale read. The next
+// refresh recomputes ownership from the stored table and converges:
+// retiring an already-deleted row is a no-op and a re-listed pattern is
+// re-adopted.
 func storeCatalog(database *db.DB, catalog pricing.Catalog) error {
 	value, err := database.GetPricingMeta(pricing.OpenRouterModelsMetaKey)
 	if err != nil {

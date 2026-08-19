@@ -36,22 +36,38 @@ type Catalog struct {
 	OpenRouter []ModelPricing
 }
 
-// FetchCatalog fetches LiteLLM and OpenRouter. Either fetch failing fails
-// the whole snapshot: a partial catalog could not tell which OpenRouter
-// rows LiteLLM shadows, so the caller keeps its last stored pricing.
+// FetchCatalog fetches LiteLLM and OpenRouter. A LiteLLM failure fails
+// the whole snapshot and the caller keeps its last stored pricing. An
+// OpenRouter failure returns a LiteLLM-only snapshot alongside the
+// error: Reconcile treats the empty OpenRouter side as delisting
+// nothing, so previously stored OpenRouter rows stay priced and tracked
+// while the fresh LiteLLM rates are still stored, and the caller
+// surfaces the error as a warning.
 func FetchCatalog() (Catalog, error) {
 	return FetchCatalogContext(context.Background())
 }
 
 // FetchCatalogContext is FetchCatalog bound to ctx.
 func FetchCatalogContext(ctx context.Context) (Catalog, error) {
-	litellm, err := FetchLiteLLMPricingContext(ctx)
+	return fetchCatalog(
+		ctx, FetchLiteLLMPricingContext, FetchOpenRouterPricingContext,
+	)
+}
+
+func fetchCatalog(
+	ctx context.Context,
+	fetchLiteLLM, fetchOpenRouter func(context.Context) ([]ModelPricing, error),
+) (Catalog, error) {
+	litellm, err := fetchLiteLLM(ctx)
 	if err != nil {
 		return Catalog{}, err
 	}
-	openrouter, err := FetchOpenRouterPricingContext(ctx)
+	openrouter, err := fetchOpenRouter(ctx)
 	if err != nil {
-		return Catalog{}, err
+		return Catalog{LiteLLM: litellm}, fmt.Errorf(
+			"fetching openrouter catalog (storing litellm rates only): %w",
+			err,
+		)
 	}
 	return Catalog{LiteLLM: litellm, OpenRouter: openrouter}, nil
 }
@@ -170,7 +186,10 @@ func DecodeOpenRouterModels(value string) ([]string, error) {
 	var patterns []string
 	if err := json.Unmarshal([]byte(value), &patterns); err != nil {
 		return nil, fmt.Errorf(
-			"decoding %s: %w", OpenRouterModelsMetaKey, err,
+			"decoding %s (delete that model_pricing row on the "+
+				"affected database to reset OpenRouter ownership "+
+				"tracking): %w",
+			OpenRouterModelsMetaKey, err,
 		)
 	}
 	return patterns, nil

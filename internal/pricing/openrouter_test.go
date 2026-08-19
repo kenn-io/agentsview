@@ -1,6 +1,8 @@
 package pricing
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,6 +12,45 @@ import (
 
 func rate(dollars string) money.Money {
 	return money.MustParseDollars(dollars)
+}
+
+func TestFetchCatalogDegradesWhenOpenRouterFails(t *testing.T) {
+	litellm := []ModelPricing{
+		{ModelPattern: "acme/model", InputPerMTok: rate("1")},
+	}
+	fetchLiteLLM := func(context.Context) ([]ModelPricing, error) {
+		return litellm, nil
+	}
+	openrouterErr := errors.New("openrouter down")
+	fetchOpenRouter := func(context.Context) ([]ModelPricing, error) {
+		return nil, openrouterErr
+	}
+
+	catalog, err := fetchCatalog(
+		context.Background(), fetchLiteLLM, fetchOpenRouter,
+	)
+
+	assert.ErrorIs(t, err, openrouterErr)
+	assert.Equal(t, Catalog{LiteLLM: litellm}, catalog,
+		"LiteLLM rows survive an OpenRouter outage")
+}
+
+func TestFetchCatalogFailsWhenLiteLLMFails(t *testing.T) {
+	litellmErr := errors.New("litellm down")
+	fetchLiteLLM := func(context.Context) ([]ModelPricing, error) {
+		return nil, litellmErr
+	}
+	fetchOpenRouter := func(context.Context) ([]ModelPricing, error) {
+		t.Fatal("openrouter must not be fetched after a litellm failure")
+		return nil, nil
+	}
+
+	catalog, err := fetchCatalog(
+		context.Background(), fetchLiteLLM, fetchOpenRouter,
+	)
+
+	assert.ErrorIs(t, err, litellmErr)
+	assert.Equal(t, Catalog{}, catalog)
 }
 
 func TestCatalogReconcile(t *testing.T) {
