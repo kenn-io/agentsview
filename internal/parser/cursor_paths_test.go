@@ -350,3 +350,34 @@ func TestResolveCursorWorkspaceDirRootedCallsBypassCache(t *testing.T) {
 	assert.Equal(t, SourceCwdNone, second.State,
 		"rooted resolutions must observe the live filesystem")
 }
+
+func TestResolveCursorWorkspaceDirIncompleteDominatesAmbiguity(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "Users", "helix", "Code", "app")
+	second := filepath.Join(root, "Users", "helix", "Code-app")
+	blocked := filepath.Join(root, "Users", "helix", "Code_app")
+	require.NoError(t, os.MkdirAll(first, 0o755))
+	require.NoError(t, os.MkdirAll(second, 0o755))
+	require.NoError(t, os.MkdirAll(blocked, 0o755))
+
+	originalStat := osStat
+	t.Cleanup(func() { osStat = originalStat })
+	osStat = func(path string) (os.FileInfo, error) {
+		if filepath.Clean(path) == filepath.Clean(blocked) {
+			return nil, errors.New("permission denied")
+		}
+		return os.Stat(path)
+	}
+
+	resolution := ResolveCursorWorkspaceDirResolution(
+		root, "Users-helix-Code-app", "", CursorResolvePassiveDiscovery,
+	)
+	assert.Equal(t, SourceCwdUnavailable, resolution.State,
+		"an unreadable branch must not let plural matches clear a preserved Cwd")
+
+	explicit := ResolveCursorWorkspaceDirExplicit(
+		root, "Users-helix-Code-app", first,
+	)
+	assert.Equal(t, SourceCwdUnavailable, explicit.State,
+		"a hint cannot pick among matches while traversal is incomplete")
+}

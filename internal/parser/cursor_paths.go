@@ -189,6 +189,13 @@ func resolveCursorWorkspaceDirResolutionUncached(
 	matches, incomplete := resolveCursorWorkspaceDirFromRootMatches(
 		root, dirName, hint, 2, mode,
 	)
+	// Incompleteness dominates every other classification: an unreadable or
+	// uncanonicalizable branch may hide the true workspace or double-count
+	// one workspace as two matches, and Ambiguous/None would clear a
+	// preserved Cwd that Unavailable keeps.
+	if incomplete {
+		return SourceCwdResolution{State: SourceCwdUnavailable}
+	}
 	if mode == CursorResolveExplicitResume && hint != "" && len(matches) > 1 {
 		var hinted string
 		for _, match := range matches {
@@ -209,12 +216,6 @@ func resolveCursorWorkspaceDirResolutionUncached(
 	}
 	if len(matches) > 1 {
 		return SourceCwdResolution{State: SourceCwdAmbiguous}
-	}
-	if mode == CursorResolveExplicitResume && hint != "" && incomplete {
-		return SourceCwdResolution{State: SourceCwdUnavailable}
-	}
-	if incomplete {
-		return SourceCwdResolution{State: SourceCwdUnavailable}
 	}
 	switch len(matches) {
 	case 0:

@@ -5816,6 +5816,7 @@ func mergeReconciliationSyncStats(dst *SyncStats, src SyncStats) {
 	)
 	dst.cwdFilteredSessions += src.cwdFilteredSessions
 	dst.cwdFilteredFiles += src.cwdFilteredFiles
+	dst.CwdUpdated += src.CwdUpdated
 	dst.Aborted = dst.Aborted || src.Aborted
 }
 

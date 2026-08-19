@@ -467,3 +467,12 @@ func TestSyncStatsCwdUpdatedSurvivesWorkerJSONRoundTrip(t *testing.T) {
 	assert.True(t, restored.hasSessionChanges())
 	assert.True(t, restored.shouldEmitSync())
 }
+
+func TestMergeReconciliationSyncStatsCarriesCwdUpdated(t *testing.T) {
+	var dst SyncStats
+	src := SyncStats{CwdUpdated: 3}
+	mergeReconciliationSyncStats(&dst, src)
+	assert.Equal(t, 3, dst.CwdUpdated)
+	assert.True(t, dst.hasSessionChanges(),
+		"a cwd-only reconciliation must still notify session consumers")
+}
