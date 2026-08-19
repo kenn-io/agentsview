@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -53,6 +54,9 @@ type ProviderFactory interface {
 type ProviderConfig struct {
 	Roots   []string
 	Machine string
+	// SourceMachines labels configured roots with their source machine. A
+	// provider must treat roots owned by another machine as remote metadata.
+	SourceMachines map[string]string
 	// PathRewriter maps an on-disk source path to its canonical stored form.
 	// It is non-nil only during remote (SSH) sync, where source files are read
 	// from a temporary extraction directory but must keep a stable identity
@@ -76,6 +80,7 @@ type ProviderConfig struct {
 // Clone returns an independent config snapshot.
 func (cfg ProviderConfig) Clone() ProviderConfig {
 	cfg.Roots = cfg.RootsCopy()
+	cfg.SourceMachines = maps.Clone(cfg.SourceMachines)
 	return cfg
 }
 
@@ -594,6 +599,28 @@ func containerAwareReconciliationScopePlan(
 	return plan
 }
 
+// SourceCwdState identifies the authority a provider has for a source's local
+// working directory. Providers that do not participate leave the state at its
+// zero value.
+type SourceCwdState uint8
+
+const (
+	SourceCwdUnspecified SourceCwdState = iota
+	SourceCwdResolved
+	SourceCwdNone
+	SourceCwdAmbiguous
+	SourceCwdUnavailable
+	SourceCwdRemote
+)
+
+// SourceCwdResolution carries optional, provider-derived Cwd metadata. Path is
+// populated only for SourceCwdResolved; the other states describe what the
+// provider knows without exposing provider-specific filesystem knowledge.
+type SourceCwdResolution struct {
+	State SourceCwdState
+	Path  string
+}
+
 // SourceRef is the engine-visible handle for provider-owned source data. It is
 // the only source identity the engine should carry between discovery, changed
 // path classification, lookup, fingerprinting, parsing, skip-cache checks, and
@@ -627,6 +654,9 @@ type SourceRef struct {
 	ReconciliationIdentity string
 	// ProjectHint is advisory metadata for UI grouping and may be empty.
 	ProjectHint string
+	// CwdResolution is optional source metadata used by generic sync freshness
+	// and write preparation. Its zero value preserves existing provider behavior.
+	CwdResolution SourceCwdResolution
 	// DiscoveryMTimeNS is an optional per-source modification time in Unix
 	// nanoseconds captured at discovery. Providers whose sources are virtual --
 	// a shared store fanned out to one source per session, where DisplayPath is

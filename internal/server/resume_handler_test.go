@@ -447,7 +447,7 @@ func TestResumeSession(t *testing.T) {
 		assertSamePath(t, "cwd", resp.Cwd, runDir)
 	})
 
-	t.Run("cursor command only falls back workspace to cwd", func(t *testing.T) {
+	t.Run("cursor command only omits unresolved workspace", func(t *testing.T) {
 		runDir := filepath.Join(t.TempDir(), "frontend")
 		require.NoError(t, os.MkdirAll(runDir, 0o755))
 		runDirJSON, _ := json.Marshal(runDir)
@@ -471,10 +471,7 @@ func TestResumeSession(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.False(t, resp.Launched, "expected launched=false for command_only")
-		wantRunDir := canonicalTestPath(runDir)
-		assert.Equal(t,
-			"cursor agent --resume chat-2 --workspace '"+wantRunDir+"'",
-			resp.Command)
+		assert.Equal(t, "cursor agent --resume chat-2", resp.Command)
 		assertSamePath(t, "cwd", resp.Cwd, runDir)
 	})
 

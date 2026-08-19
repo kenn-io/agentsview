@@ -2941,6 +2941,153 @@ func (db *DB) GetFileInfoByAgentPath(
 	return s.Int64, m.Int64, true
 }
 
+// GetCwdByAgentPath returns the stored Cwd for the source owned by agent. A
+// source-missing tombstone remains eligible because its positive Cwd is the
+// preservation authority when the source is parsed again.
+func (db *DB) GetCwdByAgentPath(path, agent string) (cwd string, ok bool) {
+	err := db.getReader().QueryRow(
+		"SELECT cwd FROM sessions"+
+			" INDEXED BY idx_sessions_file_path"+
+			" WHERE file_path = ? AND agent = ?"+
+			" AND (deleted_at IS NULL"+
+			" OR deletion_cause = '"+deletionCauseSourceMissing+"')"+
+			" ORDER BY file_mtime DESC LIMIT 1",
+		path, agent,
+	).Scan(&cwd)
+	if err != nil {
+		return "", false
+	}
+	return cwd, true
+}
+
+// UpdateSessionCwd updates only the durable workspace identity for an
+// existing session. It is used when a parsed source is excluded by a cwd
+// filter but its source-owned identity still has to be reconciled.
+func (db *DB) UpdateSessionCwd(id, cwd string) error {
+	_, err := db.updateSessionCwd(
+		` WHERE id = ?`, []any{id}, cwd,
+	)
+	return err
+}
+
+// UpdateSessionCwdByIdentity updates one session only when its source path and
+// agent still match the parsed source that requested the reconciliation.
+func (db *DB) UpdateSessionCwdByIdentity(
+	id, path, agent, cwd string,
+) (bool, error) {
+	return db.updateSessionCwd(
+		` WHERE id = ? AND file_path = ? AND agent = ?`,
+		[]any{id, path, agent}, cwd,
+	)
+}
+
+func (db *DB) updateSessionCwd(
+	identityWhere string, identityArgs []any, cwd string,
+) (bool, error) {
+	if err := db.requireWritable(); err != nil {
+		return false, err
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	staleVersion := max(CurrentDataVersion()-1, 0)
+	args := append([]any{cwd, staleVersion}, identityArgs...)
+	result, err := db.getWriter().Exec(
+		`UPDATE sessions SET
+			cwd = ?,
+			data_version = MIN(data_version, ?),
+			local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		`+identityWhere+` AND cwd IS NOT ?
+		 AND (deleted_at IS NULL OR deletion_cause = ?)`,
+		append(args, cwd, deletionCauseSourceMissing)...,
+	)
+	if err != nil {
+		return false, fmt.Errorf("updating session cwd: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("counting session cwd updates: %w", err)
+	}
+	return rows > 0, nil
+}
+
+// UpdateCwdByAgentPath updates the workspace identity for every active or
+// source-missing row at one agent/path identity.
+func (db *DB) UpdateCwdByAgentPath(path, agent, cwd string) error {
+	_, err := db.UpdateCwdByAgentPathCount(path, agent, cwd)
+	return err
+}
+
+// UpdateCwdByAgentPathCount returns the number of source rows changed and
+// marks them stale so a later admitted parse can refresh project identity.
+func (db *DB) UpdateCwdByAgentPathCount(path, agent, cwd string) (int, error) {
+	if err := db.requireWritable(); err != nil {
+		return 0, err
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	staleVersion := max(CurrentDataVersion()-1, 0)
+	result, err := db.getWriter().Exec(
+		`UPDATE sessions SET
+			cwd = ?,
+			data_version = MIN(data_version, ?),
+			local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		 WHERE file_path = ? AND agent = ?
+		 AND cwd IS NOT ?
+		 AND (deleted_at IS NULL OR deletion_cause = ?)`,
+		cwd, staleVersion, path, agent, cwd, deletionCauseSourceMissing,
+	)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"updating cwd for %s/%s: %w", agent, path, err,
+		)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf(
+			"counting cwd updates for %s/%s: %w", agent, path, err,
+		)
+	}
+	return int(rows), nil
+}
+
+// StaleDataVersionAgentPaths returns every (agent, file_path) source identity
+// holding at least one row below version. Membership matches
+// pathNeedsDataVersionReparse's per-path form -- GetFileInfoByAgentPath
+// finding a qualifying row and GetDataVersionByAgentPath reporting a minimum
+// below version -- because both are equivalent to a qualifying row existing
+// with data_version < version. One scan replaces two point queries per
+// discovered file on the sync mtime-cutoff path.
+func (db *DB) StaleDataVersionAgentPaths(
+	version int,
+) ([]SessionSourcePath, error) {
+	rows, err := db.getReader().Query(
+		"SELECT DISTINCT agent, file_path FROM sessions"+
+			" WHERE data_version < ?"+
+			" AND file_path IS NOT NULL"+
+			" AND (deletion_cause IS NULL"+
+			" OR deletion_cause <> '"+deletionCauseSourceMissing+"')",
+		version,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing stale data-version sources: %w", err)
+	}
+	defer rows.Close()
+	var identities []SessionSourcePath
+	for rows.Next() {
+		var identity SessionSourcePath
+		if err := rows.Scan(&identity.Agent, &identity.FilePath); err != nil {
+			return nil, fmt.Errorf(
+				"scanning stale data-version source: %w", err,
+			)
+		}
+		identities = append(identities, identity)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading stale data-version sources: %w", err)
+	}
+	return identities, nil
+}
+
 // VirtualContainerMemberFreshness is one stored virtual member's freshness
 // signal: the newest stored file_mtime for its path, the minimum stored
 // data version, and the newest row's fingerprint hash, mirroring

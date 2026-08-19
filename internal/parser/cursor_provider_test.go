@@ -2,17 +2,38 @@ package parser
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+func setCursorTestResolver(t *testing.T, provider Provider, root string) {
+	t.Helper()
+	p, ok := provider.(*cursorProvider)
+	require.True(t, ok)
+	p.sources.resolver = func(projectDir string) string {
+		if filepath.Separator == '\\' && strings.HasPrefix(projectDir, "C-") {
+			projectDir = strings.TrimPrefix(projectDir, "C-")
+		}
+		resolved, ambiguous := ResolveCursorWorkspaceDirIn(root, projectDir)
+		if ambiguous {
+			return ""
+		}
+		return resolved
+	}
+}
+
 func TestCursorProviderSourceMethods(t *testing.T) {
 	root := t.TempDir()
 	projectDir := "Users-fiona-Documents-demo"
+	resolverRoot := filepath.Join(root, "resolver")
+	resolvedWorkspace := filepath.Join(resolverRoot, "Users", "fiona", "Documents", "demo")
+	require.NoError(t, os.MkdirAll(resolvedWorkspace, 0o755))
 	transcriptsDir := filepath.Join(root, projectDir, "agent-transcripts")
 	flatTxt := cursorProviderWriteTranscript(t, transcriptsDir, "flat.txt", "old")
 	flatJSONL := cursorProviderWriteJSONLTranscript(t, transcriptsDir, "flat.jsonl", "new")
@@ -30,6 +51,7 @@ func TestCursorProviderSourceMethods(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	setCursorTestResolver(t, provider, resolverRoot)
 
 	plan, err := provider.WatchPlan(context.Background())
 	require.NoError(t, err)
@@ -48,6 +70,8 @@ func TestCursorProviderSourceMethods(t *testing.T) {
 	for _, source := range discovered {
 		assert.Equal(t, AgentCursor, source.Provider)
 		assert.Equal(t, DecodeCursorProjectDir(projectDir), source.ProjectHint)
+		assert.Equal(t, SourceCwdResolved, source.CwdResolution.State)
+		assert.Equal(t, normalizeCursorDir(resolvedWorkspace), source.CwdResolution.Path)
 	}
 
 	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
@@ -124,9 +148,14 @@ func TestCursorProviderSourceMethods(t *testing.T) {
 
 func TestCursorStreamingDiscoveryUsesCanonicalMixedLayoutPrecedence(t *testing.T) {
 	root := t.TempDir()
-	transcriptsDir := filepath.Join(
-		root, "Users-demo", "agent-transcripts",
-	)
+	projectDir := "Users-fiona-Documents-demo"
+	if filepath.Separator == '\\' {
+		projectDir = "C-Users-fiona-Documents-demo"
+	}
+	resolverRoot := filepath.Join(root, "resolver")
+	resolvedWorkspace := filepath.Join(resolverRoot, "Users", "fiona", "Documents", "demo")
+	require.NoError(t, os.MkdirAll(resolvedWorkspace, 0o755))
+	transcriptsDir := filepath.Join(root, projectDir, "agent-transcripts")
 	flatJSONL := cursorProviderWriteJSONLTranscript(
 		t, transcriptsDir, "mixed.jsonl", "canonical flat source",
 	)
@@ -136,6 +165,7 @@ func TestCursorStreamingDiscoveryUsesCanonicalMixedLayoutPrecedence(t *testing.T
 	)
 	provider, ok := NewProvider(AgentCursor, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
+	setCursorTestResolver(t, provider, resolverRoot)
 
 	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
@@ -152,6 +182,40 @@ func TestCursorStreamingDiscoveryUsesCanonicalMixedLayoutPrecedence(t *testing.T
 	require.NoError(t, err)
 	require.Len(t, streamed, 1)
 	assert.Equal(t, flatJSONL, streamed[0].DisplayPath)
+	assert.Equal(t, SourceCwdResolved, streamed[0].CwdResolution.State)
+	assert.Equal(t, normalizeCursorDir(resolvedWorkspace), streamed[0].CwdResolution.Path)
+}
+
+func TestCursorProviderParseCarriesPathDerivedCwd(t *testing.T) {
+	root := t.TempDir()
+	projectDir := "Users-helix-Code-app"
+	if filepath.Separator == '\\' {
+		projectDir = "C-Users-helix-Code-app"
+	}
+	resolverRoot := filepath.Join(root, "resolver")
+	resolvedWorkspace := filepath.Join(resolverRoot, "Users", "helix", "Code", "app")
+	require.NoError(t, os.MkdirAll(resolvedWorkspace, 0o755))
+	transcriptsDir := filepath.Join(root, projectDir, "agent-transcripts")
+	sourcePath := cursorProviderWriteJSONLTranscript(
+		t, transcriptsDir, "path-derived.jsonl", "path-derived",
+	)
+	provider, ok := NewProvider(AgentCursor, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	setCursorTestResolver(t, provider, resolverRoot)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
+	require.NoError(t, err)
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
+		Source:      sources[0],
+		Fingerprint: fingerprint,
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, normalizeCursorDir(resolvedWorkspace), outcome.Results[0].Result.Session.Cwd)
+	assert.Equal(t, sourcePath,
+		outcome.Results[0].Result.Session.File.Path)
 }
 
 func TestCursorStreamingDiscoveryPropagatesAuthoritativeResolutionErrors(t *testing.T) {
@@ -231,15 +295,26 @@ func TestCursorProviderResolvesDuplicateStemsWithinProject(t *testing.T) {
 func TestCursorProviderParse(t *testing.T) {
 	root := t.TempDir()
 	projectDir := "Users-fiona-Documents-demo"
+	resolverRoot := filepath.Join(root, "resolver")
+	resolvedWorkspace := filepath.Join(resolverRoot, "Users", "fiona", "Documents", "demo")
+	require.NoError(t, os.MkdirAll(resolvedWorkspace, 0o755))
 	transcriptsDir := filepath.Join(root, projectDir, "agent-transcripts")
-	sourcePath := cursorProviderWriteJSONLTranscript(
-		t, transcriptsDir, "parse.jsonl", "parse question",
-	)
+	sourcePath := filepath.Join(transcriptsDir, "parse.jsonl")
+	recordedCwd := filepath.Join(root, "recorded-workspace")
+	require.NoError(t, os.MkdirAll(recordedCwd, 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(sourcePath), 0o755))
+	recordedCwdJSON, err := json.Marshal(recordedCwd)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(sourcePath, []byte(
+		`{"role":"user","message":{"content":"parse question"}}
+		{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"working_directory":`+string(recordedCwdJSON)+`}},{"type":"tool_use","name":"Shell","parameters":{"working_directory":`+string(recordedCwdJSON)+`}},{"type":"text","text":"Done."}]}}`,
+	), 0o644))
 	provider, ok := NewProvider(AgentCursor, ProviderConfig{
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	setCursorTestResolver(t, provider, resolverRoot)
 	sources, err := provider.Discover(context.Background())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
@@ -259,6 +334,7 @@ func TestCursorProviderParse(t *testing.T) {
 	assert.Equal(t, "cursor:parse", result.Result.Session.ID)
 	assert.Equal(t, AgentCursor, result.Result.Session.Agent)
 	assert.Equal(t, DecodeCursorProjectDir(projectDir), result.Result.Session.Project)
+	assert.Equal(t, normalizeCursorDir(resolvedWorkspace), result.Result.Session.Cwd)
 	assert.Equal(t, "devbox", result.Result.Session.Machine)
 	assert.Equal(t, sourcePath, result.Result.Session.File.Path)
 	assert.Equal(t, fingerprint.Hash, result.Result.Session.File.Hash)
@@ -334,4 +410,139 @@ func cursorProviderWriteJSONLTranscript(
 		0o644,
 	))
 	return path
+}
+
+func TestCursorProviderResolutionIsOperationLocalAndFresh(t *testing.T) {
+	root := t.TempDir()
+	projectDir := "Users-helix-Code-app"
+	transcriptsDir := filepath.Join(root, projectDir, "agent-transcripts")
+	first := cursorProviderWriteJSONLTranscript(
+		t, transcriptsDir, "11111111-2222-4333-8444-555555555555.jsonl", "one",
+	)
+	cursorProviderWriteJSONLTranscript(
+		t, transcriptsDir, "22222222-3333-4444-8555-666666666666.jsonl", "two",
+	)
+	workspaceRoot := t.TempDir()
+	workspace := filepath.Join(workspaceRoot, "Users", "helix", "Code", "app")
+	require.NoError(t, os.MkdirAll(workspace, 0o755))
+
+	provider, ok := NewProvider(AgentCursor, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	p := provider.(*cursorProvider)
+	var calls int
+	p.sources.resolutionResolver = func(
+		project string, mode CursorResolveMode, hint string,
+	) SourceCwdResolution {
+		calls++
+		return ResolveCursorWorkspaceDirResolution(
+			workspaceRoot, project, hint, mode,
+		)
+	}
+
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, discovered, 2)
+	assert.Equal(t, 1, calls)
+
+	var streamed []SourceRef
+	err = provider.(StreamingDiscoverer).DiscoverEach(
+		t.Context(), func(source SourceRef) error {
+			streamed = append(streamed, source)
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	assert.Len(t, streamed, 2)
+	assert.Equal(t, 2, calls)
+
+	_, err = provider.Discover(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 3, calls, "a second discovery gets a fresh operation cache")
+
+	require.NoError(t, os.MkdirAll(filepath.Join(workspaceRoot, "Users", "helix", "Code-app"), 0o755))
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
+		StoredFilePath: first,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, SourceCwdAmbiguous, found.CwdResolution.State)
+
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
+		Path: first, WatchRoot: root,
+	})
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, SourceCwdAmbiguous, changed[0].CwdResolution.State)
+}
+
+func TestCursorProviderPathRewriterMakesResolutionRemote(t *testing.T) {
+	root := t.TempDir()
+	projectDir := "Users-helix-Code-app"
+	path := cursorProviderWriteJSONLTranscript(
+		t, filepath.Join(root, projectDir, "agent-transcripts"),
+		"11111111-2222-4333-8444-555555555555.jsonl", "remote",
+	)
+	workspaceRoot := t.TempDir()
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(workspaceRoot, "Users", "helix", "Code", "app"), 0o755,
+	))
+	originalProbe := probeGitRootForCwd
+	t.Cleanup(func() { probeGitRootForCwd = originalProbe })
+	originalReadDir := cursorReadDir
+	t.Cleanup(func() { cursorReadDir = originalReadDir })
+	originalStat := osStat
+	t.Cleanup(func() { osStat = originalStat })
+	var probeCalls int
+	var readDirCalls int
+	var statCalls int
+	probeGitRootForCwd = func(path string) bool {
+		probeCalls++
+		return true
+	}
+	cursorReadDir = func(path string) ([]os.DirEntry, error) {
+		readDirCalls++
+		return os.ReadDir(path)
+	}
+	osStat = func(path string) (os.FileInfo, error) {
+		statCalls++
+		return os.Stat(path)
+	}
+
+	provider, ok := NewProvider(AgentCursor, ProviderConfig{
+		Roots: []string{root}, PathRewriter: func(string) string { return "remote:" + path },
+	})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, SourceCwdRemote, sources[0].CwdResolution.State)
+	assert.Zero(t, probeCalls)
+	assert.Zero(t, readDirCalls)
+	assert.Zero(t, statCalls)
+}
+
+func TestCursorProviderSourceMachineMakesResolutionRemote(t *testing.T) {
+	root := t.TempDir()
+	path := cursorProviderWriteJSONLTranscript(
+		t, filepath.Join(root, "Users-helix-Code-app", "agent-transcripts"),
+		"11111111-2222-4333-8444-555555555555.jsonl", "remote machine",
+	)
+	provider, ok := NewProvider(AgentCursor, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "localbox",
+		SourceMachines: map[string]string{
+			root: "archivebox",
+		},
+	})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, SourceCwdRemote, sources[0].CwdResolution.State)
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
+		Path: path, WatchRoot: root,
+	})
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, SourceCwdRemote, changed[0].CwdResolution.State)
 }

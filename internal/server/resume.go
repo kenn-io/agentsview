@@ -535,12 +535,9 @@ func cursorLastWorkingDir(session *db.Session) string {
 func resolveCursorResumePaths(
 	session *db.Session, lastCwd string,
 ) (launchDir, workspaceDir string) {
-	workspaceDir = resolveCursorWorkspaceDirWithHint(
-		session,
-		func() string { return lastCwd },
-	)
+	workspaceDir = normalizeCursorDir(session.Cwd)
 	if workspaceDir == "" {
-		workspaceDir = lastCwd
+		workspaceDir = resolveCursorWorkspaceDirWithHint(session, func() string { return lastCwd })
 	}
 	if lastCwd != "" {
 		return lastCwd, workspaceDir
@@ -566,49 +563,32 @@ func resolveCursorWorkspaceDirFromTranscriptPath(
 	dir, ambiguous := resolveCursorProjectDirFromSessionFile(
 		*session.FilePath,
 	)
+	if ambiguous {
+		return "", true
+	}
 	if canonical := normalizeCursorDir(dir); canonical != "" {
-		return canonical, ambiguous
+		return canonical, false
 	}
 	return "", false
-}
-
-func resolveCursorWorkspaceDirFromTranscriptPathHint(
-	session *db.Session, hint string,
-) string {
-	if session.FilePath == nil {
-		return ""
-	}
-	dir := resolveCursorProjectDirFromSessionFileHint(
-		*session.FilePath, hint,
-	)
-	return normalizeCursorDir(dir)
 }
 
 func resolveCursorWorkspaceDirWithHint(
 	session *db.Session, hintFn func() string,
 ) string {
 	projectDir := normalizeCursorDir(session.Project)
-	if dir, ambiguous := resolveCursorWorkspaceDirFromTranscriptPath(
-		session,
-	); dir != "" {
-		if ambiguous {
-			hint := projectDir
-			if hintFn != nil {
-				if value := hintFn(); value != "" {
-					hint = value
-				}
-			}
-			if hint != "" {
-				if hinted := resolveCursorWorkspaceDirFromTranscriptPathHint(
-					session, hint,
-				); hinted != "" {
-					return hinted
-				}
-			}
-			// Ambiguous with no useful hint — don't guess.
-			return projectDir
+	hint := projectDir
+	if hintFn != nil {
+		if value := hintFn(); value != "" {
+			hint = value
 		}
-		return dir
+	}
+	if session.FilePath == nil {
+		return projectDir
+	}
+	if dir := resolveCursorProjectDirFromSessionFileHint(
+		*session.FilePath, hint,
+	); dir != "" {
+		return normalizeCursorDir(dir)
 	}
 	return projectDir
 }
@@ -665,10 +645,10 @@ func resolveSessionDir(session *db.Session) string {
 // contents when the transcript path maps to multiple plausible
 // workspace roots.
 func resolveCursorWorkspaceDir(session *db.Session) string {
-	return resolveCursorWorkspaceDirWithHint(
-		session,
-		func() string { return cursorLastWorkingDir(session) },
-	)
+	if dir, ambiguous := resolveCursorWorkspaceDirFromTranscriptPath(session); !ambiguous {
+		return dir
+	}
+	return ""
 }
 
 func normalizeCursorDir(path string) string {
