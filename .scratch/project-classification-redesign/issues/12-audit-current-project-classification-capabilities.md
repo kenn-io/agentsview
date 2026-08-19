@@ -63,8 +63,9 @@ Sources: `internal/db/schema.sql`, `internal/db/worktree_mappings.go`,
 ### Matching and precedence
 
 - Only enabled rules participate. Rules are evaluated per machine, with the
-  longest path prefix first. A nested rule therefore overrides a broader
-  ancestor rule.
+  longest path prefix first. The first matching rule that successfully
+  resolves a project wins. A nested dynamic rule that cannot derive a project
+  falls through to broader matching rules.
 - An `explicit` rule returns its stored project. A `repo_dot_worktrees` rule
   derives the project from the first `<repo>.worktrees` directory beneath the
   configured parent and normalizes the repository name.
