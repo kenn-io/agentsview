@@ -1156,13 +1156,38 @@ local daemon token from `config.toml` to an explicitly supplied server.
 
 ______________________________________________________________________
 
+### `agentsview tui`
+
+Open the full-screen terminal interface. Local mode resolves and starts the
+writable daemon when needed. The TUI never opens SQLite directly.
+
+```bash
+agentsview tui
+agentsview tui --server http://127.0.0.1:8080
+agentsview tui --server https://agents.example.com \
+  --server-token-file /path/to/token
+```
+
+The interface includes sessions and transcripts, analytics, usage, activity,
+trends, insights, pins, trash, recent edits, settings, sync, import, export,
+publishing, embeddings, worktree mappings, and remote sync. Press `?` for the
+complete key and command reference. See [Terminal Interface](/tui/) for daemon,
+remote, localization, and terminal-rendering details.
+
+| Flag                         | Default | Description                                  |
+| ---------------------------- | ------- | -------------------------------------------- |
+| `--server <url>`             |         | Explicit daemon URL for TUI requests         |
+| `--server-token-file <path>` |         | Bearer token file for an explicit daemon URL |
+
+______________________________________________________________________
+
 ### `agentsview mcp`
 
 Run a read-only Model Context Protocol server for assistant clients that can
 call MCP tools. The server exposes session search, listing, overview, message
-retrieval, content search, and usage-summary tools over the same service layer
-used by the CLI and HTTP API. See [MCP Server](/mcp/) for setup examples and
-operational guidance.
+retrieval, content search, usage summaries, analytics, activity, trends, pins,
+insights, and recent edits over the same service layer used by the CLI and HTTP
+API. See [MCP Server](/mcp/) for setup examples and operational guidance.
 
 ```bash
 agentsview mcp

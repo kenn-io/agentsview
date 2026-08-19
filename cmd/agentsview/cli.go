@@ -105,6 +105,7 @@ func newRootCommand() *cobra.Command {
 	)
 
 	root.AddCommand(newServeCommand())
+	root.AddCommand(newTUICommand())
 	root.AddCommand(newDaemonCommand())
 	root.AddCommand(newSyncCommand())
 	root.AddCommand(newSyncWorkerCommand())
