@@ -1772,7 +1772,7 @@
   "insights_page_generate_title": "質の高い推奨事項を生成する",
   "insights_page_generate": "生成する",
   "insights_page_loading_archive": "アーカイブを読み込んでいます...",
-  "insights_page_no_generated_saved": "保存済みの生成済み分析はありません。",
+  "insights_page_no_generated_saved": "保存済みの生成分析はありません。",
   "insights_page_no_generated_hint": "上記の決定論的ダッシュボードは、LLM 設定なしで動作します。生成済みの分析は、生成分析フェーズで作成できます。",
   "insights_page_error": "エラー",
   "insights_page_running": "ランニング",
