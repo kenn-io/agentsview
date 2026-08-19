@@ -229,6 +229,7 @@ func (m *model) renderTranscript(width, height int) string {
 	}
 	lines = append(lines, m.sessionVitalLines(width)...)
 	lines = append(lines, "")
+	lineLimit := max(1, height*2)
 	start := max(0, m.messageSelected-2)
 	for i := start; i < len(m.messages); i++ {
 		message := m.messages[i]
@@ -240,25 +241,43 @@ func (m *model) renderTranscript(width, height int) string {
 			prefix += "  " + safe(message.Model)
 		}
 		lines = append(lines, selectedLine(truncateWidth(prefix, width-4), i == m.messageSelected))
+		if len(lines) >= lineLimit {
+			break
+		}
 		content := m.renderMessage(i, message, max(20, width-6))
-		lines = append(lines, strings.Split(strings.TrimSpace(content), "\n")...)
+		lines = appendTextLines(lines, content, lineLimit)
 		if m.showTools {
-			lines = append(lines, m.toolCallLines(message, width)...)
+			lines = append(lines, m.toolCallLines(message, width, lineLimit-len(lines))...)
 		}
-		if m.showThinking && message.HasThinking && message.ThinkingText != "" {
-			lines = append(lines, mutedStyle.Render(truncateWidth("thinking: "+terminaltext.Sanitize(message.ThinkingText), width-4)))
+		if len(lines) < lineLimit && m.showThinking && message.HasThinking && message.ThinkingText != "" {
+			lines = append(lines, mutedStyle.Render(truncateWidth(
+				"thinking: "+terminaltext.Sanitize(firstLine(message.ThinkingText)), width-4,
+			)))
 		}
-		if m.messageLayout != "compact" && m.messageLayout != "skim" {
+		if len(lines) < lineLimit && m.messageLayout != "compact" && m.messageLayout != "skim" {
 			lines = append(lines, "")
 		}
-		if len(lines) >= height*2 {
+		if len(lines) >= lineLimit {
 			break
 		}
 	}
-	if m.nextMessageOrdinal != nil {
+	if len(lines) < lineLimit && m.nextMessageOrdinal != nil {
 		lines = append(lines, mutedStyle.Render(fmt.Sprintf("n loads more messages · %d loaded", len(m.messages))))
 	}
 	return panel(windowLines(lines, max(1, height-2), 0), width, height, m.focus == 2)
+}
+
+func appendTextLines(lines []string, value string, limit int) []string {
+	if len(lines) >= limit {
+		return lines
+	}
+	for line := range strings.SplitSeq(strings.TrimSpace(value), "\n") {
+		lines = append(lines, line)
+		if len(lines) >= limit {
+			break
+		}
+	}
+	return lines
 }
 
 func (m *model) renderMessage(index int, message db.Message, width int) string {
@@ -280,9 +299,12 @@ func (m *model) renderMessage(index int, message db.Message, width int) string {
 	return rendered
 }
 
-func (m *model) toolCallLines(message db.Message, width int) []string {
+func (m *model) toolCallLines(message db.Message, width, limit int) []string {
 	var lines []string
 	for _, call := range message.ToolCalls {
+		if len(lines) >= limit {
+			break
+		}
 		header := "tool " + call.ToolName
 		if call.Category != "" {
 			header += " · " + call.Category
@@ -292,33 +314,43 @@ func (m *model) toolCallLines(message db.Message, width int) []string {
 		}
 		lines = append(lines, mutedStyle.Render(truncateWidth(terminaltext.Sanitize(header), width-4)))
 		if call.InputJSON != "" {
-			lines = append(lines, m.toolPayloadLines("input", call.InputJSON, width)...)
+			lines = append(lines, m.toolPayloadLines("input", call.InputJSON, width, limit-len(lines))...)
 		}
 		if call.ResultContent != "" {
-			lines = append(lines, m.toolPayloadLines("result", call.ResultContent, width)...)
+			lines = append(lines, m.toolPayloadLines("result", call.ResultContent, width, limit-len(lines))...)
 		}
 		for _, event := range call.ResultEvents {
-			if event.Content == "" {
+			if event.Content == "" || len(lines) >= limit {
 				continue
 			}
 			label := "event"
 			if event.Status != "" {
 				label += " " + event.Status
 			}
-			lines = append(lines, m.toolPayloadLines(label, event.Content, width)...)
+			lines = append(lines, m.toolPayloadLines(label, event.Content, width, limit-len(lines))...)
 		}
 	}
 	return lines
 }
 
-func (m *model) toolPayloadLines(label, value string, width int) []string {
-	value = terminaltext.Sanitize(value)
+func (m *model) toolPayloadLines(label, value string, width, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
 	if m.messageLayout == "compact" || m.messageLayout == "skim" {
-		return []string{mutedStyle.Render(truncateWidth("  "+label+": "+firstLine(value), width-4))}
+		return []string{mutedStyle.Render(truncateWidth(
+			"  "+label+": "+terminaltext.Sanitize(firstLine(value)), width-4,
+		))}
 	}
 	lines := []string{mutedStyle.Render("  " + label + ":")}
+	if len(lines) >= limit {
+		return lines
+	}
 	for line := range strings.SplitSeq(value, "\n") {
-		lines = append(lines, mutedStyle.Render(truncateWidth("    "+line, width-4)))
+		lines = append(lines, mutedStyle.Render(truncateWidth("    "+terminaltext.Sanitize(line), width-4)))
+		if len(lines) >= limit {
+			break
+		}
 	}
 	return lines
 }

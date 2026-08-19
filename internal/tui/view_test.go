@@ -70,6 +70,31 @@ func TestViewRefreshesCachedMessageContent(t *testing.T) {
 	assert.NotContains(t, second, "first")
 }
 
+func TestTranscriptRenderWorkIsBoundedByViewport(t *testing.T) {
+	makeModel := func(result string) *model {
+		m := newModel(context.Background(), &fakeDataClient{}, Options{})
+		m.width, m.height, m.focus, m.showTools = 100, 30, 2, true
+		m.detail = &service.SessionDetail{Session: db.Session{ID: "session", MessageCount: 1}}
+		m.messages = []db.Message{{
+			ID: 1, SessionID: "session", Role: "assistant", Content: "done",
+			ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: result}},
+		}}
+		return m
+	}
+	small := makeModel(strings.Repeat("tool result\n", 100))
+	large := makeModel(strings.Repeat("tool result\n", 10_000))
+
+	smallView := small.View().Content
+	largeView := large.View().Content
+	smallAllocs := testing.AllocsPerRun(3, func() { _ = small.View() })
+	largeAllocs := testing.AllocsPerRun(3, func() { _ = large.View() })
+
+	assert.Contains(t, smallView, "tool Read")
+	assert.Contains(t, largeView, "tool Read")
+	assert.Less(t, largeAllocs, smallAllocs*2,
+		"100x more off-screen tool output must keep per-redraw work bounded")
+}
+
 func BenchmarkModelViewLongTranscript(b *testing.B) {
 	m := newModel(context.Background(), &fakeDataClient{}, Options{})
 	m.width, m.height, m.focus = 160, 50, 2
@@ -90,5 +115,28 @@ func BenchmarkModelViewLongTranscript(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		benchmarkViewContent = m.View().Content
+	}
+}
+
+func BenchmarkModelViewToolResult(b *testing.B) {
+	for _, lineCount := range []int{100, 10_000} {
+		b.Run(fmt.Sprintf("lines-%d", lineCount), func(b *testing.B) {
+			m := newModel(context.Background(), &fakeDataClient{}, Options{})
+			m.width, m.height, m.focus, m.showTools = 100, 30, 2, true
+			m.detail = &service.SessionDetail{Session: db.Session{ID: "session", MessageCount: 1}}
+			m.messages = []db.Message{{
+				ID: 1, SessionID: "session", Role: "assistant", Content: "done",
+				ToolCalls: []db.ToolCall{{
+					ToolName: "Read", ResultContent: strings.Repeat("tool result\n", lineCount),
+				}},
+			}}
+			_ = m.View()
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				benchmarkViewContent = m.View().Content
+			}
+		})
 	}
 }
