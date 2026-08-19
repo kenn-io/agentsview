@@ -21,13 +21,19 @@ project rule takes precedence over inferred classification.
 A working directory recorded by one or more sessions and used as evidence for
 project classification. Its identity is its machine and normalized path. It
 remains relevant when the folder no longer exists because historical sessions
-still refer to it.
+still refer to it, and it may still receive a project rule. A renamed path is a
+different observed folder.
 
 **Project rule**:
 
 A reusable, machine-specific instruction that classifies sessions under a folder
 path as a project. When paths overlap, the longest matching path takes
 precedence.
+
+**Project rule set**:
+
+The versioned collection of project rules. Undo restores the previous version
+instead of creating new rules that attempt to reverse the change.
 
 **Session assignment**:
 
