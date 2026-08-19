@@ -60,18 +60,54 @@
     usageChartColorMaps(usage.summary, settings.chartPalette),
   );
 
-  const projectItems = $derived(
-    sessions.projects.map((p) => ({
-      name: p.name,
-      count: p.session_count,
-    })),
-  );
+  interface ProjectFilterItem {
+    id: string;
+    name: string;
+    count?: number;
+  }
 
-  const excludedProjectKeyCount = $derived(
-    usage.excludedProjectKeys
-      ? usage.excludedProjectKeys.split(",").filter(Boolean).length
-      : 0,
-  );
+  // Keep projects already returned by the summary so a project remains
+  // available in the dropdown after filtering removes it from the response.
+  let knownProjects: ProjectFilterItem[] = $state([]);
+
+  function mergeIntoKnownProjects(
+    projects: Array<{ project_key: string; project: string }>,
+    counts: Record<string, number>,
+  ): void {
+    if (projects.length === 0) return;
+    const byKey = new Map(knownProjects.map((project) => [project.id, project]));
+    let changed = false;
+    for (const project of projects) {
+      if (!project.project_key || !project.project) continue;
+      const existing = byKey.get(project.project_key);
+      const count = counts[project.project_key];
+      if (
+        !existing ||
+        existing.name !== project.project ||
+        existing.count !== count
+      ) {
+        byKey.set(project.project_key, {
+          id: project.project_key,
+          name: project.project,
+          count,
+        });
+        changed = true;
+      }
+    }
+    if (changed) {
+      knownProjects = [...byKey.values()].sort(
+        (a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
+      );
+    }
+  }
+
+  $effect(() => {
+    const fromSummary = usage.summary?.projectTotals ?? [];
+    const counts = usage.summary?.sessionCounts.byProject ?? {};
+    untrack(() => mergeIntoKnownProjects(fromSummary, counts));
+  });
+
+  const projectItems = $derived(knownProjects);
 
   const agentItems = $derived(
     sessions.agents.map((a) => ({
@@ -489,12 +525,11 @@
       <FilterDropdown
         label={m.analytics_col_project()}
         items={projectItems}
-        excludedCsv={usage.excludedProjects}
-        unlistedExcludedCount={excludedProjectKeyCount}
-        onToggle={(name) => usage.toggleProject(name)}
+        excludedCsv={usage.excludedProjectKeys}
+        onToggle={(key) => usage.toggleProjectKey(key)}
         onSelectAll={() => usage.selectAllProjects()}
         onDeselectAll={() =>
-          usage.deselectAllProjects(projectItems.map((p) => p.name))}
+          usage.deselectAllProjectKeys(projectItems.map((p) => p.id))}
       />
 
       <FilterDropdown

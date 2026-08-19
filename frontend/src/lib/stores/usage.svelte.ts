@@ -521,8 +521,8 @@ class UsageStore {
     this.fetchAll();
   }
 
-  deselectAllProjects(all: string[]): void {
-    this.excludedProjects = all.join(",");
+  deselectAllProjectKeys(all: string[]): void {
+    this.excludedProjectKeys = all.join(",");
     this.fetchAll();
   }
 
