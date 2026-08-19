@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
@@ -750,14 +751,7 @@ func truncateWidth(value string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	if lipgloss.Width(value) <= width {
-		return value
-	}
-	runes := []rune(value)
-	for len(runes) > 0 && lipgloss.Width(string(runes)+"…") > width {
-		runes = runes[:len(runes)-1]
-	}
-	return string(runes) + "…"
+	return ansi.Truncate(value, width, "…")
 }
 
 func cursor(selected bool) string {
