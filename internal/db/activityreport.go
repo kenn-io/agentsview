@@ -400,6 +400,8 @@ func activityReportProjectLabels(
 // partially-parsed session that began before the range but has messages
 // inside it is not dropped. COALESCE short-circuits, so the correlated
 // MAX subquery runs only for the rare sessions missing an ended_at.
+// A terminal tool event can outlive ended_at metadata, so it independently
+// keeps the session eligible when it reaches the report range.
 func (db *DB) activityReportSessions(
 	ctx context.Context, f AnalyticsFilter, rangeStartUTC, rangeEndUTC string,
 ) ([]activity.SessionMeta, []string, error) {
@@ -415,7 +417,7 @@ func (db *DB) activityReportSessionsFrom(
 	rangeStartUTC, rangeEndUTC string,
 ) ([]activity.SessionMeta, []string, error) {
 	where, args := f.buildWhereWithDate("", false, "s.id")
-	args = append(args, rangeStartUTC, rangeEndUTC)
+	args = append(args, rangeStartUTC, rangeStartUTC, rangeEndUTC)
 
 	// Each Title candidate is NULLIF'd independently (not a nested
 	// COALESCE-then-NULLIF) so an empty display_name cannot mask a real
@@ -432,10 +434,20 @@ func (db *DB) activityReportSessionsFrom(
 		COALESCE(s.is_automated, 0)
 	FROM sessions s
 	WHERE ` + where + `
-		AND COALESCE(NULLIF(s.ended_at, ''),
-			(SELECT MAX(m.timestamp) FROM messages m
-				WHERE m.session_id = s.id AND m.timestamp != ''),
-			NULLIF(s.started_at, ''), s.created_at) >= ?
+		AND (COALESCE(NULLIF(s.ended_at, ''),
+				(SELECT MAX(m.timestamp) FROM messages m
+					WHERE m.session_id = s.id AND m.timestamp != ''),
+				NULLIF(s.started_at, ''), s.created_at) >= ?
+			OR EXISTS (
+				SELECT 1 FROM tool_result_events tre
+				WHERE tre.session_id = s.id
+					AND tre.source = 'tool_execution'
+					AND tre.status IN ('completed', 'errored')
+					AND tre.timestamp IS NOT NULL
+					AND tre.timestamp != ''
+					AND agentsview_timestamp_unix_micro(tre.timestamp) IS NOT NULL
+					AND tre.timestamp >= ?
+			))
 		AND COALESCE(NULLIF(s.started_at, ''), s.created_at) < ?`
 
 	rows, err := q.QueryContext(ctx, query, args...)
@@ -601,6 +613,148 @@ WHERE m.session_id IN (SELECT value FROM json_each(?))
 ORDER BY agentsview_timestamp_unix_micro(m.timestamp),
 	m.session_id, m.ordinal`
 
+const activityReportTerminalCandidatesSQL = `WITH
+	session_ids AS (
+		SELECT value AS session_id FROM json_each(?)
+	),
+	terminal_events AS (
+		SELECT tre.session_id, tre.tool_call_message_ordinal AS ordinal,
+			tre.call_index, tre.event_index, tre.timestamp
+		FROM tool_result_events tre
+		JOIN session_ids ids ON ids.session_id = tre.session_id
+		WHERE tre.source = 'tool_execution'
+			AND tre.status IN ('completed', 'errored')
+			AND tre.timestamp IS NOT NULL
+			AND tre.timestamp != ''
+			AND agentsview_timestamp_unix_micro(tre.timestamp) IS NOT NULL
+			AND agentsview_timestamp_unix_micro(tre.timestamp) >= ?
+	),
+	terminal_sessions AS (
+		SELECT DISTINCT session_id FROM terminal_events
+	),
+	ordered_terminal AS (
+		SELECT te.*,
+			LEAD(te.ordinal) OVER terminal_order AS next_terminal_ordinal,
+			LEAD(te.timestamp) OVER terminal_order AS next_terminal_timestamp
+		FROM terminal_events te
+		WINDOW terminal_order AS (
+			PARTITION BY te.session_id
+			ORDER BY agentsview_timestamp_unix_micro(te.timestamp),
+				te.call_index, te.event_index
+		)
+	),
+	terminal_with_message AS (
+		SELECT ot.*, next_message.ordinal AS next_message_ordinal,
+			next_message.timestamp AS next_message_timestamp,
+			next_message.role AS next_message_role,
+			next_message.model AS next_message_model
+		FROM ordered_terminal ot
+		LEFT JOIN messages next_message ON next_message.id = (
+			SELECT next.id
+			FROM messages next INDEXED BY idx_messages_velocity
+			WHERE next.session_id = ot.session_id
+				AND next.ordinal > ot.ordinal
+				AND next.timestamp IS NOT NULL
+				AND next.timestamp != ''
+				AND agentsview_timestamp_unix_micro(next.timestamp) >
+					agentsview_timestamp_unix_micro(ot.timestamp)
+			ORDER BY next.ordinal
+			LIMIT 1
+		)
+	),
+	last_messages AS (
+		SELECT m.session_id, m.ordinal, m.timestamp
+		FROM terminal_sessions ts
+		JOIN messages m ON m.id = (
+			SELECT latest.id
+			FROM messages latest INDEXED BY idx_messages_velocity
+			WHERE latest.session_id = ts.session_id
+				AND latest.timestamp IS NOT NULL
+				AND latest.timestamp != ''
+				AND agentsview_timestamp_unix_micro(latest.timestamp) IS NOT NULL
+			ORDER BY latest.ordinal DESC
+			LIMIT 1
+		)
+	),
+	first_tail_events AS (
+		SELECT lm.session_id, lm.ordinal, lm.timestamp,
+			te.call_index, te.event_index, te.timestamp AS terminal_timestamp,
+			ROW_NUMBER() OVER (
+				PARTITION BY lm.session_id
+				ORDER BY agentsview_timestamp_unix_micro(te.timestamp),
+					te.call_index, te.event_index
+			) AS row_num
+		FROM last_messages lm
+		JOIN terminal_events te ON te.session_id = lm.session_id
+		WHERE agentsview_timestamp_unix_micro(te.timestamp) >
+				agentsview_timestamp_unix_micro(lm.timestamp)
+	),
+	candidates AS (
+		SELECT twm.session_id, twm.ordinal AS start_ordinal,
+			CASE
+				WHEN twm.next_terminal_timestamp IS NOT NULL AND
+					(twm.next_message_timestamp IS NULL OR
+					 agentsview_timestamp_unix_micro(twm.next_terminal_timestamp) <
+					 agentsview_timestamp_unix_micro(twm.next_message_timestamp))
+				THEN twm.next_terminal_ordinal
+				ELSE twm.next_message_ordinal
+			END AS end_ordinal,
+			twm.timestamp AS start_timestamp,
+			CASE
+				WHEN twm.next_terminal_timestamp IS NOT NULL AND
+					(twm.next_message_timestamp IS NULL OR
+					 agentsview_timestamp_unix_micro(twm.next_terminal_timestamp) <
+					 agentsview_timestamp_unix_micro(twm.next_message_timestamp))
+				THEN twm.next_terminal_timestamp
+				ELSE twm.next_message_timestamp
+			END AS end_timestamp,
+			CASE
+				WHEN twm.next_terminal_timestamp IS NOT NULL AND
+					(twm.next_message_timestamp IS NULL OR
+					 agentsview_timestamp_unix_micro(twm.next_terminal_timestamp) <
+					 agentsview_timestamp_unix_micro(twm.next_message_timestamp))
+				THEN 'tool'
+				ELSE twm.next_message_role
+			END AS closing_role,
+			CASE
+				WHEN twm.next_terminal_timestamp IS NOT NULL AND
+					(twm.next_message_timestamp IS NULL OR
+					 agentsview_timestamp_unix_micro(twm.next_terminal_timestamp) <
+					 agentsview_timestamp_unix_micro(twm.next_message_timestamp))
+				THEN ''
+				ELSE twm.next_message_model
+			END AS closing_model,
+			twm.call_index, twm.event_index
+		FROM terminal_with_message twm
+
+		UNION ALL
+
+		SELECT fte.session_id, fte.ordinal, fte.ordinal,
+			fte.timestamp, fte.terminal_timestamp, 'tool', '',
+			fte.call_index, fte.event_index
+		FROM first_tail_events fte
+		WHERE fte.row_num = 1
+	)
+SELECT candidate.session_id, candidate.start_ordinal, candidate.end_ordinal,
+	candidate.start_timestamp, candidate.end_timestamp,
+	candidate.closing_role, candidate.closing_model,
+	COALESCE((
+		SELECT prior.model
+		FROM messages prior
+		WHERE prior.session_id = candidate.session_id
+			AND prior.ordinal <= candidate.start_ordinal
+			AND prior.role = 'assistant'
+			AND prior.model != ''
+		ORDER BY prior.ordinal DESC
+		LIMIT 1
+	), 'unknown')
+FROM candidates candidate
+WHERE candidate.end_timestamp IS NOT NULL
+	AND agentsview_timestamp_unix_micro(candidate.start_timestamp) < ?
+ORDER BY agentsview_timestamp_unix_micro(candidate.start_timestamp),
+	candidate.session_id, candidate.start_ordinal,
+	candidate.call_index, candidate.event_index`
+
 func (db *DB) activityReportCandidateSource(
 	ids []string, q activity.Query,
 ) activity.CandidateSource {
@@ -622,44 +776,87 @@ func (db *DB) activityReportCandidateSource(
 		upper := upperTime.UnixMicro()
 		paddedLower := paddedUTCBound(lowerTime.Format(time.RFC3339), -14)
 		paddedUpper := paddedUTCBound(upperTime.Format(time.RFC3339), 14)
-		args := []any{string(encodedIDs), paddedLower, paddedUpper, lower, upper}
-		rows, err := db.getReader().QueryContext(
-			ctx, activityReportCandidatesSQL, args...,
-		)
-		if err != nil {
-			return fmt.Errorf("querying activity report candidates: %w", err)
-		}
-		defer rows.Close()
-		for rows.Next() {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
+		scanCandidate := func(
+			row interface{ Scan(dest ...any) error },
+		) (activity.IntervalCandidate, error) {
 			var candidate activity.IntervalCandidate
 			var start, end string
-			if err := rows.Scan(
+			if err := row.Scan(
 				&candidate.SessionID, &candidate.StartOrdinal,
 				&candidate.EndOrdinal, &start, &end,
 				&candidate.ClosingRole, &candidate.ClosingModel,
 				&candidate.PriorModel,
 			); err != nil {
-				return fmt.Errorf("scanning activity report candidate: %w", err)
+				return candidate, fmt.Errorf(
+					"scanning activity report candidate: %w", err)
 			}
-			var err error
 			candidate.Start, err = time.Parse(time.RFC3339Nano, start)
 			if err != nil {
-				return fmt.Errorf("parsing activity candidate start: %w", err)
+				return candidate, fmt.Errorf(
+					"parsing activity candidate start: %w", err)
 			}
 			candidate.End, err = time.Parse(time.RFC3339Nano, end)
 			if err != nil {
-				return fmt.Errorf("parsing activity candidate end: %w", err)
+				return candidate, fmt.Errorf(
+					"parsing activity candidate end: %w", err)
 			}
 			candidate.Start = candidate.Start.UTC()
 			candidate.End = candidate.End.UTC()
-			if err := yield(candidate); err != nil {
-				return err
-			}
+			return candidate, nil
 		}
-		return rows.Err()
+
+		terminalRows, err := db.getReader().QueryContext(
+			ctx, activityReportTerminalCandidatesSQL,
+			string(encodedIDs), lower, upper,
+		)
+		if err != nil {
+			return fmt.Errorf("querying activity report terminal candidates: %w", err)
+		}
+		var terminal []activity.IntervalCandidate
+		for terminalRows.Next() {
+			candidate, scanErr := scanCandidate(terminalRows)
+			if scanErr != nil {
+				terminalRows.Close()
+				return scanErr
+			}
+			terminal = append(terminal, candidate)
+		}
+		if err := terminalRows.Err(); err != nil {
+			terminalRows.Close()
+			return err
+		}
+		if err := terminalRows.Close(); err != nil {
+			return err
+		}
+
+		messageSource := func(
+			ctx context.Context,
+			yield func(activity.IntervalCandidate) error,
+		) error {
+			rows, queryErr := db.getReader().QueryContext(
+				ctx, activityReportCandidatesSQL,
+				string(encodedIDs), paddedLower, paddedUpper, lower, upper,
+			)
+			if queryErr != nil {
+				return fmt.Errorf(
+					"querying activity report candidates: %w", queryErr)
+			}
+			defer rows.Close()
+			for rows.Next() {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				candidate, scanErr := scanCandidate(rows)
+				if scanErr != nil {
+					return scanErr
+				}
+				if err := yield(candidate); err != nil {
+					return err
+				}
+			}
+			return rows.Err()
+		}
+		return activity.MergeCandidateSlice(terminal, messageSource)(ctx, yield)
 	}
 }
 

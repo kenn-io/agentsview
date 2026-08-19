@@ -68,29 +68,6 @@ discovered exact URLs, releases, and queries in the provider entry. If a
 repository or document disappears, retain its original URL and commit hash and
 add an archived or maintained mirror without replacing the original identity.
 
-Grok is temporarily excluded at the user's request because a separate
-format-alignment change owns that provider. Once that alignment lands, add a
-Grok section and remove the explicit registry exception in the coverage test.
-
-The narrow Grok automation-provenance claim is independently verified against
-`xai-org/grok-build` at `d92c5b0b8582fda358de1f97446aa74af44a464f`, checked
-2026-08-18. The first-party
-[headless guide](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-pager/docs/user-guide/14-headless-mode.md)
-defines prompt flags as non-interactive invocation. The producer propagates
-that startup mode into
-[`PromptContext.is_non_interactive`](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs#L936-L944),
-whose schema identifies headless, SDK, stdio, and generic ACP execution and
-defaults false for interactive or older contexts
-([schema](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-agent/src/prompt/context.rs#L145-L150),
-[default](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-agent/src/prompt/context.rs#L177-L199)).
-The producer then writes that context to the same session directory as
-`prompt_context.json`
-([persistence](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-shell/src/session/acp_session.rs#L1384-L1404),
-[spawn call](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs#L1049-L1055)).
-Agentsview treats only an explicit true value in a valid, session-associated
-file as durable automation evidence; file presence, a missing field, or a
-missing file does not classify a session as automated.
-
 ## Claude Code (`claude`)
 
 - **Format:** Project-scoped JSONL transcripts, including subagent JSONL, with
@@ -465,6 +442,51 @@ missing file does not classify a session as automated.
   `internal/importer/gemini_apps.go`; the CLI-only import path does not affect
   Gemini CLI discovery or parsing.
 
+## Grok Build (`grok`)
+
+- **Format:** Workspace-scoped session directories containing `summary.json`,
+  a derived `chat_history.jsonl` model-message cache, and an authoritative
+  `updates.jsonl` stream of timestamped ACP and xAI session notifications.
+- **Evidence:** `source`.
+- **Upstream:** Clone `https://github.com/xai-org/grok-build.git` at
+  `d71f6e0c1f5acc5469e503e192fe14824e6f8c90`. The
+  [session guide](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-pager/docs/user-guide/17-sessions.md)
+  identifies `updates.jsonl` as the authoritative conversation log. The
+  [storage reducer](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-shell/src/session/storage/mod.rs)
+  rebuilds `chat_history.jsonl` from that stream, while the
+  [JSONL adapter](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-shell/src/session/storage/jsonl/mod.rs)
+  wraps each persisted update in a Unix-second timestamp envelope. The
+  [conversation types](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-sampling-types/src/conversation.rs)
+  confirm that the derived chat rows themselves carry no message timestamps.
+  Agentsview maps timestamped `tool_call` and terminal `tool_call_update`
+  records to the existing tool-result event model, so Activity can use tool
+  completion time without adding derived transcript messages.
+- **Usage and cost:** Durable `turn_completed` updates may carry per-model
+  input, output, cache-read, cache-creation, and reasoning tokens plus optional
+  `costUsdTicks` (10^10 ticks per USD), as defined by the
+  [notification schema](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-shell/src/extensions/notification.rs).
+  Agentsview emits one usage event per prompt and model, subtracts cache reads
+  from the full input count, and uses reported cost ticks when present.
+- **Automation:** The first-party
+  [headless guide](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-pager/docs/user-guide/14-headless-mode.md)
+  defines prompt flags as non-interactive invocation. The producer propagates
+  that startup mode into
+  [`PromptContext.is_non_interactive`](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs#L936-L944),
+  whose schema identifies headless, SDK, stdio, and generic ACP execution and
+  defaults false for interactive or older contexts
+  ([schema](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-agent/src/prompt/context.rs#L145-L150),
+  [default](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-agent/src/prompt/context.rs#L177-L199)).
+  The producer writes that context to the same session directory as
+  `prompt_context.json`
+  ([persistence](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-shell/src/session/acp_session.rs#L1384-L1404),
+  [spawn call](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs#L1049-L1055)).
+  Agentsview treats only an explicit true value in a valid, session-associated
+  file as durable automation evidence; file presence, a missing field, or a
+  missing file does not classify a session as automated.
+- **Agentsview:** `internal/parser/grok.go`,
+  `internal/parser/grok_provider.go`, colocated tests, and the sanitized
+  upstream-generated fixtures in `internal/parser/testdata/grok-build`.
+
 ## MiMo Code (`mimocode`)
 
 - **Format:** OpenCode-compatible SQLite or legacy `storage/session`,
@@ -605,7 +627,14 @@ missing file does not classify a session as automated.
 - **Agentsview:** `internal/parser/opencode.go`,
   `internal/parser/opencode_provider.go`, and
   `internal/parser/opencode_storage_state.go`; legacy and database layouts are
-  both intentional compatibility targets.
+  both intentional compatibility targets. File-backed snapshots retain the
+  session JSON byte length in parsed session metadata so persisted `file_size`
+  matches the provider fingerprint and an unchanged cold-start sync stops
+  after fingerprinting instead of parsing the storage tree again. Reverified
+  2026-08-19 that legacy project-metadata events use the indexed sessions
+  whose cwd depends on that project. A malformed session path keeps the
+  directory fallback active only until that exact path is successfully
+  re-indexed or deleted.
 
 ## Kilo Code (`kilo`)
 

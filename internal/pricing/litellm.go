@@ -15,12 +15,6 @@ type ModelPricing = catalog.ModelPricing
 // threshold.
 type PricingBand = catalog.PricingBand
 
-// FetchLiteLLMPricing downloads the LiteLLM pricing JSON
-// and parses it into ModelPricing entries.
-func FetchLiteLLMPricing() ([]ModelPricing, error) {
-	return catalog.FetchLiteLLMPricing()
-}
-
 // FetchLiteLLMPricingContext downloads the LiteLLM pricing JSON and binds the
 // request lifetime to ctx.
 func FetchLiteLLMPricingContext(

@@ -321,11 +321,18 @@ The default window is the last 30 days; pass `--all` to scan the full history.
 ### Pricing Source
 
 Model rates come from the
-[LiteLLM model pricing catalog](https://github.com/BerriAI/litellm), which is
-fetched on each `usage` invocation and upserted into the `model_pricing` table.
-If the fetch fails — no network, or LiteLLM is down — AgentsView falls back to
-an embedded copy of the catalog so offline use keeps working. Pass `--offline`
-to skip the fetch entirely and always use the embedded fallback.
+[LiteLLM model pricing catalog](https://github.com/BerriAI/litellm), with the
+[OpenRouter model catalog](https://openrouter.ai/docs/api/api-reference/models/get-models)
+layered underneath for models LiteLLM does not list. Both are fetched together
+(hourly at most on `usage` invocations, daily by the server) and merged into the
+`model_pricing` table; when both catalogs list a model, LiteLLM's rate wins, and
+an OpenRouter row is dropped once LiteLLM picks the model up. If the LiteLLM
+fetch fails, AgentsView keeps the last stored rates; if only the OpenRouter
+fetch fails, the fresh LiteLLM rates are still stored and the stored OpenRouter
+rates are kept. Fresh databases are seeded from
+an embedded LiteLLM snapshot so offline use works before any refresh completes.
+Pass `--offline` to skip the fetch entirely and always use the embedded
+fallback.
 
 The embedded fallback is updated with AgentsView releases, so the numbers are as
 current as your installed version. For up-to-the-minute rates, leave `--offline`
@@ -388,13 +395,13 @@ output_microdollars_per_mtok = 800_000
 
 The table key is the model name as it appears in your session data (match the
 string the agent itself writes, dots and all — quote the key if it contains
-special characters). Custom rates take precedence over both the LiteLLM fetch
-and the embedded fallback, and apply to the Usage dashboard, the
-`agentsview usage` CLI, and `pg serve` alike. A custom entry replaces the full
-rate row for that model, so omitted fields are treated as zero rather than
-falling through to LiteLLM. A custom row is flat and suppresses any fetched
-request bands for that model. Models without a custom entry continue to resolve
-through LiteLLM as before.
+special characters). Custom rates take precedence over LiteLLM, OpenRouter, and
+the embedded fallback, and apply to the Usage dashboard, the `agentsview usage`
+CLI, and `pg serve` alike. A custom entry replaces the full rate row for that
+model, so omitted fields are treated as zero rather than falling through to
+another catalog. A custom row is flat and suppresses any fetched request bands
+for that model. Models without a custom entry continue to resolve through the
+stored catalog.
 
 ### Copilot CLI Token Metrics
 
@@ -1018,7 +1025,7 @@ Usage reports read from the same local SQLite database that powers the
 stored on each message row in the `messages` table; pricing is cached in a small
 `model_pricing` table that's refreshed on each `usage` invocation.
 
-No data leaves your machine. The only outbound request is the LiteLLM pricing
-fetch, which you can disable with `--offline`. See
+Session data stays on your machine. The only outbound requests are the LiteLLM
+and OpenRouter pricing fetches, which you can disable with `--offline`. See
 [Privacy and Telemetry](/configuration/#privacy-and-telemetry) for the full
 picture.

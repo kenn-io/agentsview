@@ -148,7 +148,9 @@ func (p *claudeProvider) ParseUploadedTranscript(
 	path, project, machine string,
 ) ([]ParseResult, error) {
 	machine = firstNonEmptyJSONLString(machine, p.Config.Machine)
-	results, _, err := claudeParseWithExclusions(path, project, machine)
+	results, _, err := claudeParseFile(path, project, machine, claudeParseOptions{
+		uploadIdentity: true,
+	})
 	if err != nil {
 		return nil, err
 	}

@@ -25,6 +25,22 @@ type SessionBatchWrite struct {
 	Findings                []SecretFinding
 	DataVersion             int
 	ReplaceMessages         bool
+	// RejectMessageCountDecrease prevents full replacement with fewer messages.
+	RejectMessageCountDecrease bool
+}
+
+// SessionWouldShortenError reports a rejected message-count decrease.
+type SessionWouldShortenError struct {
+	SessionID        string
+	ExistingMessages int
+	IncomingMessages int
+}
+
+func (e *SessionWouldShortenError) Error() string {
+	return fmt.Sprintf(
+		"session %q would shrink from %d to %d messages",
+		e.SessionID, e.ExistingMessages, e.IncomingMessages,
+	)
 }
 
 // SessionBatchResult summarizes a WriteSessionBatch call.
@@ -344,6 +360,14 @@ func writeOneSessionBatchTx(
 		)
 		if err != nil {
 			return 0, err
+		}
+		if write.RejectMessageCountDecrease &&
+			len(write.Messages) < len(stored) {
+			return 0, &SessionWouldShortenError{
+				SessionID:        write.Session.ID,
+				ExistingMessages: len(stored),
+				IncomingMessages: len(write.Messages),
+			}
 		}
 		replacementTranscriptChanged = !transcriptMessagesEqual(
 			stored, write.Messages,

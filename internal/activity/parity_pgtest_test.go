@@ -70,6 +70,9 @@ type parityFixtureSession struct {
 type parityEvent struct {
 	role string
 	ts   string
+	// toolCompletedAt adds one tool execution whose start is this message's
+	// timestamp and whose completion is a non-transcript activity event.
+	toolCompletedAt string
 	// model and outputTokens override the session defaults for this one
 	// assistant message. They exist so the fixture can inject an
 	// ineligible (synthetic-model) usage row that every backend must
@@ -165,6 +168,37 @@ func parityFixture() []parityFixtureSession {
 			},
 		},
 		{
+			// Tool completion is stored outside the transcript. Every backend
+			// must include it in activity without adding a message row.
+			id: "parity-tool", project: "tools", model: "model-x",
+			events: []parityEvent{
+				{role: "user", ts: parityDate + "T15:00:00Z"},
+				{role: "assistant", ts: parityDate + "T15:01:00Z",
+					toolCompletedAt: parityDate + "T15:02:00Z"},
+			},
+		},
+		{
+			// A completion between transcript messages resets the gap cap before
+			// the later message without double-counting the message interval.
+			id: "parity-tool-inline", project: "tools", model: "model-x",
+			events: []parityEvent{
+				{role: "user", ts: parityDate + "T15:10:00Z"},
+				{role: "assistant", ts: parityDate + "T15:11:00Z",
+					toolCompletedAt: parityDate + "T15:20:00Z"},
+				{role: "assistant", ts: parityDate + "T15:21:00Z"},
+			},
+		},
+		{
+			// A completion just after the report range closes the final message;
+			// aggregation clips the interval at the range boundary. The session
+			// summary predates the terminal event, as real provider metadata can.
+			id: "parity-tool-boundary", project: "tools", model: "model-x",
+			events: []parityEvent{
+				{role: "assistant", ts: parityDate + "T23:59:00Z",
+					toolCompletedAt: "2026-06-15T00:01:00Z"},
+			},
+		},
+		{
 			// Subagent of parity-a: a usage-only single message. Its tokens
 			// must count in every backend (the report includes subagent
 			// sessions so its cost matches daily usage) and its session row
@@ -242,8 +276,8 @@ func seedParitySQLite(t *testing.T) *db.DB {
 }
 
 // paritySessionWrite turns one fixture session into a SessionBatchWrite. The
-// session window spans its first and last event; assistant messages carry the
-// model and token_usage so they feed the usage path.
+// session window spans its first and last transcript event; assistant messages
+// carry the model and token_usage so they feed the usage path.
 func paritySessionWrite(fs parityFixtureSession) db.SessionBatchWrite {
 	first := fs.events[0].ts
 	last := fs.events[len(fs.events)-1].ts
@@ -304,6 +338,22 @@ func paritySessionWrite(fs parityFixtureSession) db.SessionBatchWrite {
 			m.TokenUsage = usage
 			m.OutputTokens = outputTokens
 			m.HasOutputTokens = true
+		}
+		if ev.toolCompletedAt != "" {
+			m.HasToolUse = true
+			m.ToolCalls = []db.ToolCall{{
+				SessionID: fs.id,
+				ToolName:  "sample_tool",
+				Category:  "Other",
+				ToolUseID: fs.id + "-tool",
+				CallIndex: 0,
+				ResultEvents: []db.ToolResultEvent{
+					{ToolUseID: fs.id + "-tool", Source: "tool_execution",
+						Status: "started", Timestamp: ev.ts, EventIndex: 0},
+					{ToolUseID: fs.id + "-tool", Source: "tool_execution",
+						Status: "completed", Timestamp: ev.toolCompletedAt, EventIndex: 1},
+				},
+			}}
 		}
 		msgs = append(msgs, m)
 	}
@@ -467,6 +517,51 @@ func TestGetActivityReportParityAcrossBackends(t *testing.T) {
 	}
 }
 
+func TestGetActivityReportIncludesTerminalAfterSessionEndAcrossBackends(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	local := seedParitySQLite(t)
+	pgStore := pushParityPostgres(t, ctx, local)
+	duckStore := pushParityDuckDB(t, ctx, local)
+
+	q, err := activity.ResolveQuery(activity.QueryInput{
+		Preset: "day", Date: "2026-06-15", Timezone: "UTC",
+	}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	filter := db.AnalyticsFilter{Timezone: "UTC"}
+
+	sqliteReport, err := local.GetActivityReport(ctx, filter, q)
+	require.NoError(t, err)
+	pgReport, err := pgStore.GetActivityReport(ctx, filter, q)
+	require.NoError(t, err)
+	duckReport, err := duckStore.GetActivityReport(ctx, filter, q)
+	require.NoError(t, err)
+
+	reports := []struct {
+		name   string
+		report activity.Report
+	}{
+		{name: "sqlite", report: sqliteReport},
+		{name: "postgres", report: pgReport},
+		{name: "duckdb", report: duckReport},
+	}
+	for _, backend := range reports {
+		t.Run(backend.name, func(t *testing.T) {
+			bySession := make(map[string]activity.SessionRow,
+				len(backend.report.BySession))
+			for _, session := range backend.report.BySession {
+				bySession[session.SessionID] = session
+			}
+			require.Contains(t, bySession, "parity-tool-boundary")
+			row := bySession["parity-tool-boundary"]
+			require.NotNil(t, row.AgentMinutes)
+			require.InDelta(t, 1.0, *row.AgentMinutes, 1e-9,
+				"terminal completion after ended_at must close next-day activity")
+		})
+	}
+}
+
 func assertCandidateParity(
 	t *testing.T, ctx context.Context,
 	local *db.DB, pgStore *postgresstore.Store, duckStore *duckdbstore.Store,
@@ -500,6 +595,41 @@ func assertCandidateParity(
 		events, q.RangeStart, q.EffectiveEnd,
 		time.Duration(q.GapCapSeconds)*time.Second,
 	)
+	want = append(want, activity.IntervalCandidate{
+		SessionID:    "parity-tool",
+		StartOrdinal: 1,
+		EndOrdinal:   1,
+		Start:        time.Date(2026, 6, 14, 15, 1, 0, 0, time.UTC),
+		End:          time.Date(2026, 6, 14, 15, 2, 0, 0, time.UTC),
+		ClosingRole:  "tool",
+		PriorModel:   "model-x",
+	}, activity.IntervalCandidate{
+		SessionID:    "parity-tool-inline",
+		StartOrdinal: 1,
+		EndOrdinal:   2,
+		Start:        time.Date(2026, 6, 14, 15, 20, 0, 0, time.UTC),
+		End:          time.Date(2026, 6, 14, 15, 21, 0, 0, time.UTC),
+		ClosingRole:  "assistant",
+		ClosingModel: "model-x",
+		PriorModel:   "model-x",
+	}, activity.IntervalCandidate{
+		SessionID:    "parity-tool-boundary",
+		StartOrdinal: 0,
+		EndOrdinal:   0,
+		Start:        time.Date(2026, 6, 14, 23, 59, 0, 0, time.UTC),
+		End:          time.Date(2026, 6, 15, 0, 1, 0, 0, time.UTC),
+		ClosingRole:  "tool",
+		PriorModel:   "model-x",
+	})
+	sort.Slice(want, func(i, j int) bool {
+		if !want[i].Start.Equal(want[j].Start) {
+			return want[i].Start.Before(want[j].Start)
+		}
+		if want[i].SessionID != want[j].SessionID {
+			return want[i].SessionID < want[j].SessionID
+		}
+		return want[i].StartOrdinal < want[j].StartOrdinal
+	})
 	collect := func(source activity.CandidateSource) []activity.IntervalCandidate {
 		t.Helper()
 		var candidates []activity.IntervalCandidate
@@ -547,7 +677,7 @@ func assertParityForCase(
 }
 
 // assertDayMinuteFixtureSanity checks the day-minute report actually exercises
-// the fixture: a full day with peak concurrency 2, nine sessions, non-zero
+// the fixture: a full day with peak concurrency 2, thirteen sessions, non-zero
 // cost, and exactly 22550 output tokens. The token total proves the
 // synthetic-model usage row (9999 tokens) is excluded, the dedup pair
 // keeps its complete 9000-token snapshot with earlier attribution, the
@@ -559,7 +689,7 @@ func assertDayMinuteFixtureSanity(t *testing.T, r activity.Report) {
 	t.Helper()
 	require.False(t, r.Partial, "fixture day must be a full day")
 	require.Equal(t, 2, r.Peak.Agents, "fixture must reach peak concurrency 2")
-	require.Equal(t, 10, r.Totals.Sessions, "fixture session count")
+	require.Equal(t, 13, r.Totals.Sessions, "fixture session count")
 	require.Positive(t, r.Totals.Cost.Microdollars, "fixture must exercise cost")
 	// 2400 (parity-a) + 1600 (parity-b) + 300 (parity-c; synthetic 9999 row
 	// excluded) + 9000 (parity-d receives parity-e's complete snapshot) +
@@ -592,4 +722,10 @@ func assertDayMinuteFixtureSanity(t *testing.T, r activity.Report) {
 		"the later fractional duplicate is dropped")
 	require.Equal(t, "model-x", bySession["parity-f"].PrimaryModel,
 		"zero-cost usage still reports its known model as primary")
+	require.NotNil(t, bySession["parity-tool-inline"].AgentMinutes)
+	require.InDelta(t, 7.0, *bySession["parity-tool-inline"].AgentMinutes, 1e-9,
+		"inline completion resets the gap cap before the final message")
+	require.NotNil(t, bySession["parity-tool-boundary"].AgentMinutes)
+	require.InDelta(t, 1.0, *bySession["parity-tool-boundary"].AgentMinutes, 1e-9,
+		"post-range completion closes the final in-range message")
 }

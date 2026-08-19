@@ -862,9 +862,10 @@ func (s *Server) humaEmptyTrash(
 }
 
 type uploadSessionInput struct {
-	Project string `query:"project" required:"true" doc:"Project for imported session"`
-	Machine string `query:"machine" default:"remote" doc:"Machine name for imported session"`
-	RawBody huma.MultipartFormFiles[uploadSessionForm]
+	Project      string `query:"project" required:"true" doc:"Project for imported session"`
+	Machine      string `query:"machine" default:"remote" doc:"Machine name for imported session"`
+	AllowShorter bool   `query:"allow_shorter" doc:"Permit replacing an existing session with fewer messages"`
+	RawBody      huma.MultipartFormFiles[uploadSessionForm]
 }
 
 type uploadSessionForm struct {
@@ -1089,12 +1090,17 @@ func (s *Server) humaUploadSession(
 	if len(results) == 0 {
 		return nil, apiError(http.StatusBadRequest, "no sessions parsed from upload")
 	}
+	stem := strings.TrimSuffix(safeName, ".jsonl")
+	if results[0].Session.ID != stem && parser.IsValidSessionID(results[0].Session.ID) {
+		upload.finalPath = filepath.Join(filepath.Dir(upload.finalPath), results[0].Session.ID+".jsonl")
+	}
 	for i := range results {
 		results[i].Session.File.Path = upload.finalPath
 	}
 	writes := make([]db.SessionBatchWrite, len(results))
 	for i, pr := range results {
 		writes[i] = sessionBatchWriteFromParsed(pr.Session, pr.Messages)
+		writes[i].RejectMessageCountDecrease = !in.AllowShorter
 	}
 	var commitErr error
 	var uploadCommit committedUpload
@@ -1116,6 +1122,14 @@ func (s *Server) humaUploadSession(
 		}
 		if handled := handleHumaReadOnly(err); handled != nil {
 			return nil, handled
+		}
+		var shorter *db.SessionWouldShortenError
+		if errors.As(err, &shorter) {
+			return nil, apiError(http.StatusConflict, fmt.Sprintf(
+				"session upload rejected: session %s has %d messages, upload has %d; retry with allow_shorter=true",
+				shorter.SessionID, shorter.ExistingMessages,
+				shorter.IncomingMessages,
+			))
 		}
 		if errors.Is(err, db.ErrSessionExcluded) ||
 			errors.Is(err, db.ErrSessionTrashed) {

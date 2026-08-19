@@ -35,6 +35,7 @@ type pricingProbeState struct {
 	mu               sync.Mutex
 	doneOnce         sync.Once
 	queries          int
+	execs            []string
 	err              error
 	rows             [][]driver.Value
 	block            <-chan struct{}
@@ -85,7 +86,21 @@ func (c *pricingProbeConn) Prepare(string) (driver.Stmt, error) {
 func (c *pricingProbeConn) Close() error { return nil }
 
 func (c *pricingProbeConn) Begin() (driver.Tx, error) {
-	return nil, errors.New("begin not implemented")
+	return pricingProbeTx{}, nil
+}
+
+type pricingProbeTx struct{}
+
+func (pricingProbeTx) Commit() error   { return nil }
+func (pricingProbeTx) Rollback() error { return nil }
+
+func (c *pricingProbeConn) ExecContext(
+	_ context.Context, query string, _ []driver.NamedValue,
+) (driver.Result, error) {
+	c.state.mu.Lock()
+	defer c.state.mu.Unlock()
+	c.state.execs = append(c.state.execs, query)
+	return driver.RowsAffected(0), nil
 }
 
 func (c *pricingProbeConn) QueryContext(
@@ -148,6 +163,12 @@ func (s *pricingProbeState) queryCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.queries
+}
+
+func (s *pricingProbeState) execStatements() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.execs...)
 }
 
 func (s *pricingProbeState) setRows(rows [][]driver.Value) {
@@ -676,12 +697,39 @@ func TestPGPricingFilterMatchesUpsertSemantics(t *testing.T) {
 	assert.Equal(t, db.PricingChangeSummary{
 		Total:     4,
 		Missing:   1,
-		Changed:   1,
-		Unchanged: 2,
+		Changed:   2,
+		Unchanged: 1,
 	}, got)
-	require.Len(t, changedRows, 2)
-	assert.Equal(t, "changed-model", changedRows[0].ModelPattern)
-	assert.Equal(t, "missing-model", changedRows[1].ModelPattern)
+	require.Len(t, changedRows, 3)
+	assert.Equal(t, "_fallback_version", changedRows[0].ModelPattern,
+		"sentinel rows sync by value")
+	assert.Equal(t, "changed-model", changedRows[1].ModelPattern)
+	assert.Equal(t, "missing-model", changedRows[2].ModelPattern)
+}
+
+func TestPGPricingMetaUpsertStatement(t *testing.T) {
+	query, args := pgPricingMetaUpsertStatement([]db.ModelPricing{
+		{ModelPattern: "_openrouter_models", UpdatedAt: `["a"]`},
+		{ModelPattern: "_fallback_version", UpdatedAt: "v3"},
+	})
+
+	assert.Contains(t, query, "VALUES ($1, 0, 0, 0, 0, $2), ($3, 0, 0, 0, 0, $4)")
+	assert.Contains(t, query, "DO UPDATE SET\n\t\tupdated_at = EXCLUDED.updated_at")
+	assert.NotContains(t, query, "timestamptz",
+		"sentinel values are opaque and must not be cast")
+	assert.Equal(t, []any{
+		"_openrouter_models", `["a"]`, "_fallback_version", "v3",
+	}, args)
+}
+
+func TestPGPricingDeleteStatement(t *testing.T) {
+	query, args := pgPricingDeleteStatement(
+		"model_pricing", []string{"a", "b"},
+	)
+
+	assert.Equal(t,
+		"DELETE FROM model_pricing WHERE model_pattern IN ($1, $2)", query)
+	assert.Equal(t, []any{"a", "b"}, args)
 }
 
 func TestSyncModelPricingSkipsWriteWhenRemoteRowsUnchanged(t *testing.T) {
@@ -707,4 +755,8 @@ func TestSyncModelPricingSkipsWriteWhenRemoteRowsUnchanged(t *testing.T) {
 
 	require.NoError(t, sync.syncModelPricing(ctx))
 	assert.Equal(t, 1, state.queryCount(), "pg pricing reads")
+	execs := state.execStatements()
+	require.Len(t, execs, 2, "only the serialization lock, no writes")
+	assert.Contains(t, execs[0], "ON CONFLICT (key) DO NOTHING")
+	assert.Contains(t, execs[1], "FOR UPDATE")
 }

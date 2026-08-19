@@ -1187,6 +1187,8 @@ curl -F "file=@session.jsonl" \
 Uploaded files are stored in `~/.agentsview/uploads/` and
 synced into the database.
 
+Replacing an existing session with fewer messages returns `409 Conflict` without changing the stored transcript. To permit an intentional shorter rewrite, add `allow_shorter=true` to the upload query.
+
 ---
 
 ## Keyboard Shortcuts

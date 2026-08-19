@@ -20,6 +20,8 @@ import (
 // swap, and the surrounding work can take longer on loaded Windows runners.
 const pricingResyncTestTimeout = 30 * time.Second
 
+// pricingCatalogTransport answers the LiteLLM and OpenRouter catalog
+// requests a refresh makes and records their URLs.
 type pricingCatalogTransport struct {
 	requests chan *http.Request
 }
@@ -28,15 +30,19 @@ func (t pricingCatalogTransport) RoundTrip(
 	req *http.Request,
 ) (*http.Response, error) {
 	t.requests <- req
-	return &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     make(http.Header),
-		Body: io.NopCloser(strings.NewReader(`{
+	body := `{"data": []}`
+	if req.URL.Host == "raw.githubusercontent.com" {
+		body = `{
 			"scheduled-model": {
 				"input_cost_per_token": 0.000002,
 				"litellm_provider": "test"
 			}
-		}`)),
+		}`
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(body)),
 	}, nil
 }
 
@@ -49,7 +55,7 @@ func TestRunPeriodicPricingRefreshFetchesAfterRecentAttempt(t *testing.T) {
 		"_litellm_last_attempt", previousAttempt,
 	))
 
-	requests := make(chan *http.Request, 1)
+	requests := make(chan *http.Request, 2)
 	originalTransport := http.DefaultTransport
 	http.DefaultTransport = pricingCatalogTransport{requests: requests}
 	t.Cleanup(func() {
@@ -81,11 +87,14 @@ func TestRunPeriodicPricingRefreshFetchesAfterRecentAttempt(t *testing.T) {
 		return err == nil && price != nil
 	}, time.Second, time.Millisecond)
 
-	request := <-requests
 	require.Equal(t,
 		"https://raw.githubusercontent.com/BerriAI/litellm/main/"+
 			"model_prices_and_context_window.json",
-		request.URL.String(),
+		(<-requests).URL.String(),
+	)
+	require.Equal(t,
+		"https://openrouter.ai/api/v1/models",
+		(<-requests).URL.String(),
 	)
 	currentAttempt, err := database.GetPricingMeta("_litellm_last_attempt")
 	require.NoError(t, err)
@@ -128,7 +137,7 @@ func TestStartPeriodicPricingRefreshWaitsForResyncSwap(t *testing.T) {
 		}
 	}, pricingResyncTestTimeout, time.Millisecond)
 
-	requests := make(chan *http.Request, 1)
+	requests := make(chan *http.Request, 2)
 	originalTransport := http.DefaultTransport
 	http.DefaultTransport = pricingCatalogTransport{requests: requests}
 	t.Cleanup(func() {

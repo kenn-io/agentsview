@@ -396,6 +396,8 @@ func activityReportProjectLabels(sessions []activity.SessionMeta) []string {
 // that began before the range but has messages inside it is not dropped,
 // matching SQLite and DuckDB. COALESCE short-circuits, so the correlated
 // MAX subquery runs only for the rare sessions missing an ended_at.
+// A terminal tool event can outlive ended_at metadata, so it independently
+// keeps the session eligible when it reaches the report range.
 func (s *Store) activityReportSessions(
 	ctx context.Context, f db.AnalyticsFilter, rangeStartUTC, rangeEndUTC string,
 ) ([]activity.SessionMeta, []string, error) {
@@ -418,11 +420,18 @@ func (s *Store) activityReportSessions(
 		COALESCE(s.is_automated, false) AS is_automated
 	FROM sessions s
 	WHERE ` + where + `
-		AND COALESCE(s.ended_at,
-			(SELECT MAX(m.timestamp) FROM messages m
-				WHERE m.session_id = s.id AND m.timestamp IS NOT NULL),
-			s.started_at, s.created_at) >= ` +
+		AND (COALESCE(s.ended_at,
+				(SELECT MAX(m.timestamp) FROM messages m
+					WHERE m.session_id = s.id AND m.timestamp IS NOT NULL),
+				s.started_at, s.created_at) >= ` +
 		lower + `::timestamptz
+			OR EXISTS (
+				SELECT 1 FROM tool_result_events tre
+				WHERE tre.session_id = s.id
+					AND tre.source = 'tool_execution'
+					AND tre.status IN ('completed', 'errored')
+					AND tre.timestamp >= ` + lower + `::timestamptz
+			))
 		AND COALESCE(s.started_at, s.created_at) < ` +
 		upper + `::timestamptz`
 
@@ -470,72 +479,233 @@ func (s *Store) activityReportCandidateSource(
 		lower := q.RangeStart.Add(
 			-time.Duration(q.GapCapSeconds) * time.Second,
 		)
-		query := `SELECT
-			m.session_id, m.ordinal, successor.ordinal,
-			m.timestamp, successor.timestamp,
-			successor.role, successor.model,
+		terminalQuery := `WITH terminal_events AS (
+			SELECT tre.session_id, tre.tool_call_message_ordinal AS ordinal,
+				tre.call_index, tre.event_index, tre.timestamp
+			FROM tool_result_events tre
+			WHERE tre.session_id = ANY($1)
+				AND tre.source = 'tool_execution'
+				AND tre.status IN ('completed', 'errored')
+				AND tre.timestamp IS NOT NULL
+				AND tre.timestamp >= $2
+		), terminal_sessions AS (
+			SELECT DISTINCT session_id FROM terminal_events
+		), ordered_terminal AS (
+			SELECT te.*,
+				LEAD(te.ordinal) OVER terminal_order AS next_terminal_ordinal,
+				LEAD(te.timestamp) OVER terminal_order AS next_terminal_timestamp
+			FROM terminal_events te
+			WINDOW terminal_order AS (
+				PARTITION BY te.session_id
+				ORDER BY te.timestamp, te.call_index, te.event_index
+			)
+		), terminal_with_message AS (
+			SELECT ot.*, next_message.ordinal AS next_message_ordinal,
+				next_message.timestamp AS next_message_timestamp,
+				next_message.role AS next_message_role,
+				next_message.model AS next_message_model
+			FROM ordered_terminal ot
+			LEFT JOIN LATERAL (
+				SELECT next.ordinal, next.timestamp, next.role, next.model
+				FROM messages next
+				WHERE next.session_id = ot.session_id
+					AND next.ordinal > ot.ordinal
+					AND next.timestamp IS NOT NULL
+					AND next.timestamp > ot.timestamp
+				ORDER BY next.ordinal
+				LIMIT 1
+			) next_message ON TRUE
+		), last_messages AS (
+			SELECT latest.session_id, latest.ordinal, latest.timestamp
+			FROM terminal_sessions ts
+			JOIN LATERAL (
+				SELECT m.session_id, m.ordinal, m.timestamp
+				FROM messages m
+				WHERE m.session_id = ts.session_id
+					AND m.timestamp IS NOT NULL
+				ORDER BY m.ordinal DESC
+				LIMIT 1
+			) latest ON TRUE
+		), first_tail_events AS (
+			SELECT lm.session_id, lm.ordinal, lm.timestamp,
+				te.call_index, te.event_index, te.timestamp AS terminal_timestamp,
+				ROW_NUMBER() OVER (
+					PARTITION BY lm.session_id
+					ORDER BY te.timestamp, te.call_index, te.event_index
+				) AS row_num
+			FROM last_messages lm
+			JOIN terminal_events te ON te.session_id = lm.session_id
+			WHERE te.timestamp > lm.timestamp
+		), candidates AS (
+			SELECT twm.session_id, twm.ordinal AS start_ordinal,
+				CASE
+					WHEN twm.next_terminal_timestamp IS NOT NULL AND
+						(twm.next_message_timestamp IS NULL OR
+						 twm.next_terminal_timestamp < twm.next_message_timestamp)
+					THEN twm.next_terminal_ordinal
+					ELSE twm.next_message_ordinal
+				END AS end_ordinal,
+				twm.timestamp AS start_timestamp,
+				CASE
+					WHEN twm.next_terminal_timestamp IS NOT NULL AND
+						(twm.next_message_timestamp IS NULL OR
+						 twm.next_terminal_timestamp < twm.next_message_timestamp)
+					THEN twm.next_terminal_timestamp
+					ELSE twm.next_message_timestamp
+				END AS end_timestamp,
+				CASE
+					WHEN twm.next_terminal_timestamp IS NOT NULL AND
+						(twm.next_message_timestamp IS NULL OR
+						 twm.next_terminal_timestamp < twm.next_message_timestamp)
+					THEN 'tool'
+					ELSE twm.next_message_role
+				END AS closing_role,
+				CASE
+					WHEN twm.next_terminal_timestamp IS NOT NULL AND
+						(twm.next_message_timestamp IS NULL OR
+						 twm.next_terminal_timestamp < twm.next_message_timestamp)
+					THEN ''
+					ELSE twm.next_message_model
+				END AS closing_model,
+				twm.call_index, twm.event_index
+			FROM terminal_with_message twm
+
+			UNION ALL
+
+			SELECT fte.session_id, fte.ordinal, fte.ordinal,
+				fte.timestamp, fte.terminal_timestamp, 'tool', '',
+				fte.call_index, fte.event_index
+			FROM first_tail_events fte
+			WHERE fte.row_num = 1
+		)
+		SELECT candidate.session_id, candidate.start_ordinal,
+			candidate.end_ordinal, candidate.start_timestamp,
+			candidate.end_timestamp, candidate.closing_role,
+			candidate.closing_model,
 			COALESCE((
 				SELECT prior.model
 				FROM messages prior
-				WHERE prior.session_id = m.session_id
-					AND prior.ordinal <= m.ordinal
+				WHERE prior.session_id = candidate.session_id
+					AND prior.ordinal <= candidate.start_ordinal
 					AND prior.role = 'assistant'
 					AND prior.model != ''
-					AND prior.timestamp IS NOT NULL
-					AND prior.timestamp > (
-						SELECT prior_previous.timestamp
-						FROM messages prior_previous
-						WHERE prior_previous.session_id = prior.session_id
-							AND prior_previous.ordinal < prior.ordinal
-							AND prior_previous.timestamp IS NOT NULL
-						ORDER BY prior_previous.ordinal DESC
-						LIMIT 1
-					)
 				ORDER BY prior.ordinal DESC
 				LIMIT 1
 			), 'unknown')
-		FROM messages m
-		JOIN messages successor
-			ON successor.session_id = m.session_id
-			AND successor.ordinal = (
-				SELECT next.ordinal
-				FROM messages next
-				WHERE next.session_id = m.session_id
-					AND next.ordinal > m.ordinal
-					AND next.timestamp IS NOT NULL
-				ORDER BY next.ordinal
-				LIMIT 1
-			)
-		WHERE m.session_id = ANY($1)
-			AND m.timestamp IS NOT NULL
-			AND m.timestamp >= $2
-			AND m.timestamp < $3
-		ORDER BY m.timestamp, m.session_id, m.ordinal`
-		rows, err := s.pg.QueryContext(ctx, query, ids, lower, q.EffectiveEnd)
-		if err != nil {
-			return fmt.Errorf("querying pg activity report candidates: %w", err)
-		}
-		defer rows.Close()
-		for rows.Next() {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
+		FROM candidates candidate
+		WHERE candidate.end_timestamp IS NOT NULL
+			AND candidate.start_timestamp < $3
+		ORDER BY candidate.start_timestamp, candidate.session_id,
+			candidate.start_ordinal, candidate.call_index, candidate.event_index`
+		scanCandidate := func(
+			row interface{ Scan(dest ...any) error },
+		) (activity.IntervalCandidate, error) {
 			var candidate activity.IntervalCandidate
-			if err := rows.Scan(
+			if err := row.Scan(
 				&candidate.SessionID, &candidate.StartOrdinal,
 				&candidate.EndOrdinal, &candidate.Start, &candidate.End,
 				&candidate.ClosingRole, &candidate.ClosingModel,
 				&candidate.PriorModel,
 			); err != nil {
-				return fmt.Errorf("scanning pg activity report candidate: %w", err)
+				return candidate, fmt.Errorf(
+					"scanning pg activity report candidate: %w", err)
 			}
 			candidate.Start = candidate.Start.UTC()
 			candidate.End = candidate.End.UTC()
-			if err := yield(candidate); err != nil {
-				return err
-			}
+			return candidate, nil
 		}
-		return rows.Err()
+
+		terminalRows, err := s.pg.QueryContext(
+			ctx, terminalQuery, ids, lower, q.EffectiveEnd,
+		)
+		if err != nil {
+			return fmt.Errorf("querying pg activity report terminal candidates: %w", err)
+		}
+		var terminal []activity.IntervalCandidate
+		for terminalRows.Next() {
+			candidate, scanErr := scanCandidate(terminalRows)
+			if scanErr != nil {
+				terminalRows.Close()
+				return scanErr
+			}
+			terminal = append(terminal, candidate)
+		}
+		if err := terminalRows.Err(); err != nil {
+			terminalRows.Close()
+			return err
+		}
+		if err := terminalRows.Close(); err != nil {
+			return err
+		}
+
+		messageSource := func(
+			ctx context.Context,
+			yield func(activity.IntervalCandidate) error,
+		) error {
+			query := `SELECT
+				m.session_id, m.ordinal, successor.ordinal,
+				m.timestamp, successor.timestamp,
+				successor.role, successor.model,
+				COALESCE((
+					SELECT prior.model
+					FROM messages prior
+					WHERE prior.session_id = m.session_id
+						AND prior.ordinal <= m.ordinal
+						AND prior.role = 'assistant'
+						AND prior.model != ''
+						AND prior.timestamp IS NOT NULL
+						AND prior.timestamp > (
+							SELECT prior_previous.timestamp
+							FROM messages prior_previous
+							WHERE prior_previous.session_id = prior.session_id
+								AND prior_previous.ordinal < prior.ordinal
+								AND prior_previous.timestamp IS NOT NULL
+							ORDER BY prior_previous.ordinal DESC
+							LIMIT 1
+						)
+					ORDER BY prior.ordinal DESC
+					LIMIT 1
+				), 'unknown')
+			FROM messages m
+			JOIN messages successor
+				ON successor.session_id = m.session_id
+				AND successor.ordinal = (
+					SELECT next.ordinal
+					FROM messages next
+					WHERE next.session_id = m.session_id
+						AND next.ordinal > m.ordinal
+						AND next.timestamp IS NOT NULL
+					ORDER BY next.ordinal
+					LIMIT 1
+				)
+			WHERE m.session_id = ANY($1)
+				AND m.timestamp IS NOT NULL
+				AND m.timestamp >= $2
+				AND m.timestamp < $3
+			ORDER BY m.timestamp, m.session_id, m.ordinal`
+			rows, queryErr := s.pg.QueryContext(
+				ctx, query, ids, lower, q.EffectiveEnd,
+			)
+			if queryErr != nil {
+				return fmt.Errorf(
+					"querying pg activity report candidates: %w", queryErr)
+			}
+			defer rows.Close()
+			for rows.Next() {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				candidate, scanErr := scanCandidate(rows)
+				if scanErr != nil {
+					return scanErr
+				}
+				if err := yield(candidate); err != nil {
+					return err
+				}
+			}
+			return rows.Err()
+		}
+		return activity.MergeCandidateSlice(terminal, messageSource)(ctx, yield)
 	}
 }
 

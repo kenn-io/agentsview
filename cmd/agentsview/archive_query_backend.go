@@ -300,13 +300,16 @@ func (b localArchiveQueryBackend) SessionUsage(
 	}
 	if len(u.UnpricedModels) > 0 && !b.offline {
 		refreshed, refErr := pricingrefresh.RefreshIfStale(
-			b.database, pricing.FetchLiteLLMPricing,
+			b.database, pricing.FetchCatalog,
 			pricingrefresh.RefreshCooldown, time.Now(),
 		)
 		if refErr != nil {
 			fmt.Fprintf(os.Stderr,
 				"warning: pricing refresh failed: %v\n", refErr)
-		} else if refreshed {
+		}
+		// A degraded refresh (see pricing.FetchCatalog) stores rows and
+		// reports an error at once, so re-read whenever rows changed.
+		if refreshed {
 			if u2, e := load(); e == nil && u2 != nil {
 				u = u2
 			}

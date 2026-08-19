@@ -421,7 +421,7 @@ func pgPricingUpsertStatement(
 }
 
 func listPGModelPricing(
-	ctx context.Context, pg *sql.DB,
+	ctx context.Context, pg pgSessionQueryer,
 ) ([]db.ModelPricing, error) {
 	rows, err := pg.QueryContext(ctx,
 		pgModelPricingSelect,
@@ -586,20 +586,95 @@ func pgPricingBandInsertStatement(
 	return b.String(), args
 }
 
-func upsertModelPricing(
-	ctx context.Context, pg *sql.DB,
-	prices []db.ModelPricing,
+// pgPricingMetaUpsertStatement writes sentinel metadata rows, whose
+// updated_at holds an opaque value rather than a timestamp.
+func pgPricingMetaUpsertStatement(
+	metaRows []db.ModelPricing,
+) (string, []any) {
+	var b strings.Builder
+	b.WriteString(`INSERT INTO model_pricing
+		(model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
+		 cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok,
+		 updated_at)
+	VALUES `)
+	args := make([]any, 0, len(metaRows)*2)
+	for i, row := range metaRows {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "($%d, 0, 0, 0, 0, $%d)", i*2+1, i*2+2)
+		args = append(args,
+			sanitizePG(row.ModelPattern), sanitizePG(row.UpdatedAt),
+		)
+	}
+	b.WriteString(`
+	ON CONFLICT (model_pattern) DO UPDATE SET
+		updated_at = EXCLUDED.updated_at`)
+	return b.String(), args
+}
+
+func pgPricingDeleteStatement(
+	table string, patterns []string,
+) (string, []any) {
+	placeholders := make([]string, len(patterns))
+	args := make([]any, len(patterns))
+	for i, pattern := range patterns {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = sanitizePG(pattern)
+	}
+	return `DELETE FROM ` + table + ` WHERE model_pattern IN (` +
+		strings.Join(placeholders, ", ") + `)`, args
+}
+
+// reconcileModelPricing deletes removePatterns and upserts prices within
+// tx. Sentinel metadata rows are written by value; model rows go through
+// the change-detecting upsert and band replacement.
+func reconcileModelPricing(
+	ctx context.Context, tx *sql.Tx,
+	prices []db.ModelPricing, removePatterns []string,
 ) error {
-	if len(prices) == 0 {
-		return nil
+	if err := deletePGModelPricing(ctx, tx, removePatterns); err != nil {
+		return err
 	}
-
-	tx, err := pg.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("beginning pg pricing upsert: %w", err)
+	metaRows := make([]db.ModelPricing, 0)
+	modelRows := make([]db.ModelPricing, 0, len(prices))
+	for _, price := range prices {
+		if strings.HasPrefix(price.ModelPattern, "_") {
+			metaRows = append(metaRows, price)
+		} else {
+			modelRows = append(modelRows, price)
+		}
 	}
-	defer func() { _ = tx.Rollback() }()
+	for i := 0; i < len(metaRows); i += pricingUpsertBatch {
+		end := min(i+pricingUpsertBatch, len(metaRows))
+		query, args := pgPricingMetaUpsertStatement(metaRows[i:end])
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			return fmt.Errorf(
+				"upserting pg pricing meta at batch %d: %w", i, err)
+		}
+	}
+	return upsertPGModelPricing(ctx, tx, modelRows)
+}
 
+func deletePGModelPricing(
+	ctx context.Context, tx *sql.Tx, patterns []string,
+) error {
+	for i := 0; i < len(patterns); i += pricingUpsertBatch {
+		end := min(i+pricingUpsertBatch, len(patterns))
+		for _, table := range []string{"model_pricing_bands", "model_pricing"} {
+			query, args := pgPricingDeleteStatement(table, patterns[i:end])
+			if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+				return fmt.Errorf(
+					"deleting pg %s rows at batch %d: %w", table, i, err)
+			}
+		}
+	}
+	return nil
+}
+
+func upsertPGModelPricing(
+	ctx context.Context, tx *sql.Tx, prices []db.ModelPricing,
+) error {
 	defaultUpdatedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	baseChanged := make(map[string]struct{}, len(prices))
 	for i := 0; i < len(prices); i += pricingUpsertBatch {
@@ -633,14 +708,10 @@ func upsertModelPricing(
 				"closing changed pg pricing at batch %d: %w", i, err)
 		}
 	}
-	modelPrices := make([]db.ModelPricing, 0, len(prices))
 	bandOnlyPrices := make([]db.ModelPricing, 0, len(prices))
 	for _, price := range prices {
-		if !strings.HasPrefix(price.ModelPattern, "_") {
-			modelPrices = append(modelPrices, price)
-			if _, changed := baseChanged[price.ModelPattern]; !changed {
-				bandOnlyPrices = append(bandOnlyPrices, price)
-			}
+		if _, changed := baseChanged[price.ModelPattern]; !changed {
+			bandOnlyPrices = append(bandOnlyPrices, price)
 		}
 	}
 	for i := 0; i < len(bandOnlyPrices); i += pricingUpsertBatch {
@@ -652,9 +723,9 @@ func upsertModelPricing(
 				"advancing pg pricing timestamps at batch %d: %w", i, err)
 		}
 	}
-	for i := 0; i < len(modelPrices); i += pricingUpsertBatch {
-		end := min(i+pricingUpsertBatch, len(modelPrices))
-		batch := modelPrices[i:end]
+	for i := 0; i < len(prices); i += pricingUpsertBatch {
+		end := min(i+pricingUpsertBatch, len(prices))
+		batch := prices[i:end]
 		query, args := pgPricingBandDeleteStatement(batch)
 		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
 			return fmt.Errorf(
@@ -662,7 +733,7 @@ func upsertModelPricing(
 		}
 	}
 	var bands []pgModelPricingBand
-	for _, price := range modelPrices {
+	for _, price := range prices {
 		for _, band := range price.Bands {
 			bands = append(bands, pgModelPricingBand{
 				model: price.ModelPattern,
@@ -679,9 +750,31 @@ func upsertModelPricing(
 				"inserting pg pricing bands at batch %d: %w", i, err)
 		}
 	}
+	return nil
+}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing pg pricing upsert: %w", err)
+// pricingSyncLockKey names the sync_metadata row a pricing sync locks
+// for the life of its transaction.
+const pricingSyncLockKey = "model_pricing_sync_lock"
+
+// lockPGModelPricing serializes concurrent pricing syncs by locking a
+// dedicated sync_metadata row until tx ends. A row lock is used instead
+// of pg_advisory_xact_lock because supported CockroachDB versions do not
+// implement advisory locks, and sync_metadata lives in the target
+// schema, so the lock is schema-scoped on both engines.
+func lockPGModelPricing(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO sync_metadata (key, value) VALUES ($1, '')
+		 ON CONFLICT (key) DO NOTHING`,
+		pricingSyncLockKey,
+	); err != nil {
+		return fmt.Errorf("creating pg model pricing lock row: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`SELECT value FROM sync_metadata WHERE key = $1 FOR UPDATE`,
+		pricingSyncLockKey,
+	); err != nil {
+		return fmt.Errorf("locking pg model pricing: %w", err)
 	}
 	return nil
 }
@@ -694,18 +787,38 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if len(prices) == 0 {
 		prices = fallbackPricingRows()
 	}
-	existing, err := listPGModelPricing(ctx, s.pg)
+	tx, err := s.pg.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning pg pricing sync: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	// Pushes from several machines read the same ownership sentinel and
+	// each write a merged copy, so read, plan, and write are serialized
+	// under one lock; otherwise a slower push could overwrite ownership a
+	// faster one recorded and leave its rows untracked.
+	if err := lockPGModelPricing(ctx, tx); err != nil {
+		return err
+	}
+	existing, err := listPGModelPricing(ctx, tx)
 	if err != nil {
 		return fmt.Errorf("listing pg model pricing: %w", err)
 	}
-	_, changedPrices := db.FilterChangedModelPricing(
+	changedPrices, removePatterns, err := db.PlanModelPricingSync(
 		existing, prices,
 	)
-	if len(changedPrices) == 0 {
+	if err != nil {
+		return fmt.Errorf("planning model pricing sync: %w", err)
+	}
+	if len(changedPrices) == 0 && len(removePatterns) == 0 {
 		return nil
 	}
-	if err := upsertModelPricing(ctx, s.pg, changedPrices); err != nil {
+	if err := reconcileModelPricing(
+		ctx, tx, changedPrices, removePatterns,
+	); err != nil {
 		return fmt.Errorf("syncing model pricing to pg: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing pg pricing sync: %w", err)
 	}
 	return nil
 }

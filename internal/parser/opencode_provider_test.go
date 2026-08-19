@@ -380,12 +380,25 @@ func TestOpenCodeProviderStorageSourceMethods(t *testing.T) {
 	sessionPath := writeOpenCodeProviderStorageSession(
 		t, root, "session", "ses_provider", "opencode-app", "Provider Session",
 	)
+	projectPath := filepath.Join(root, "storage", "project", "global.json")
+	writeOpenCodeStorageFile(t, projectPath, map[string]any{
+		"id": "global", "worktree": "/home/user/code/opencode-app",
+	})
 
 	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	for i := range 64 {
+		writeOpenCodeStorageFile(t, filepath.Join(
+			root, "storage", "session", "global",
+			fmt.Sprintf("ses_concrete_%02d.json", i),
+		), map[string]any{
+			"id":        fmt.Sprintf("ses_concrete_%02d", i),
+			"directory": fmt.Sprintf("/work/concrete-%02d", i),
+		})
+	}
 
 	plan, err := provider.WatchPlan(context.Background())
 	require.NoError(t, err)
@@ -401,12 +414,46 @@ func TestOpenCodeProviderStorageSourceMethods(t *testing.T) {
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
-	require.Len(t, discovered, 1)
-	source := discovered[0]
+	require.Len(t, discovered, 65)
+	var source SourceRef
+	for _, candidate := range discovered {
+		if candidate.DisplayPath == sessionPath {
+			source = candidate
+			break
+		}
+	}
+	require.NotEmpty(t, source.DisplayPath)
 	assert.Equal(t, AgentOpenCode, source.Provider)
 	assert.Equal(t, sessionPath, source.DisplayPath)
 	assert.Equal(t, sessionPath, source.FingerprintKey)
 	assert.Equal(t, "opencode_app", source.ProjectHint)
+	legacySessionPath := filepath.Join(
+		root, "storage", "session", "global", "ses_legacy.json",
+	)
+	writeOpenCodeStorageFile(t, legacySessionPath, map[string]any{
+		"id": "ses_legacy", "title": "Legacy project session",
+		"time": map[string]any{"created": int64(1700000000000)},
+	})
+	legacyChanged, err := provider.SourcesForChangedPath(
+		context.Background(), ChangedPathRequest{
+			Path: legacySessionPath, EventKind: "write",
+			WatchRoot: filepath.Join(root, "storage"),
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, legacyChanged, 1)
+	assert.Equal(t, legacySessionPath, legacyChanged[0].DisplayPath)
+	otherSessionPath := filepath.Join(
+		root, "storage", "session", "other-project", "ses_other.json",
+	)
+	writeOpenCodeStorageFile(t, otherSessionPath, map[string]any{
+		"id": "ses_other", "directory": "/home/user/code/other-app",
+	})
+	writeOpenCodeStorageFile(t, filepath.Join(
+		root, "storage", "project", "other-project.json",
+	), map[string]any{
+		"id": "other-project", "worktree": "/home/user/code/other-app",
+	})
 
 	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
 		FullSessionID: "remote~opencode:ses_provider",
@@ -441,16 +488,35 @@ func TestOpenCodeProviderStorageSourceMethods(t *testing.T) {
 			assert.Equal(t, sessionPath, changed[0].DisplayPath)
 		})
 	}
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(), ChangedPathRequest{
+			Path: projectPath, EventKind: "write",
+			WatchRoot: filepath.Join(root, "storage"),
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, legacySessionPath, changed[0].DisplayPath)
+	assert.Equal(t, "opencode_app", changed[0].ProjectHint)
+	assert.NotEqual(t, sessionPath, changed[0].DisplayPath,
+		"project changes must not fan out to sessions with concrete directories")
+	assert.NotEqual(t, otherSessionPath, changed[0].DisplayPath)
+	t.Logf("project event routed sources=%d ProjectHint=%q unrelated=%q excluded", len(changed), changed[0].ProjectHint, otherSessionPath)
+	relevance, err := ResolveChangedPathRelevance(
+		context.Background(), provider, ChangedPathRequest{
+			Path: projectPath, EventKind: "write",
+			WatchRoot: filepath.Join(root, "storage"),
+		},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, ChangedPathDataBearing, relevance)
 
 	fingerprint, err := provider.Fingerprint(context.Background(), found)
 	require.NoError(t, err)
 	assert.Equal(t, sessionPath, fingerprint.Key)
 	assert.Positive(t, fingerprint.Size)
 	assert.Positive(t, fingerprint.MTimeNS)
-	// Storage-mode Fingerprint is stat-only: the content fingerprint is
-	// computed by Parse, and hashing here would re-read every message and
-	// part file on each fingerprint call.
-	assert.Empty(t, fingerprint.Hash)
+	assert.NotEmpty(t, fingerprint.Hash)
 
 	outcome, err := provider.Parse(context.Background(), ParseRequest{
 		Source:      found,
@@ -467,8 +533,44 @@ func TestOpenCodeProviderStorageSourceMethods(t *testing.T) {
 	assert.Equal(t, "devbox", result.Result.Session.Machine)
 	assert.True(t,
 		HasOpenCodeStorageFingerprint(result.Result.Session.File.Hash),
-		"Parse must compute the storage content fingerprint itself")
+		"Parse must retain the provider content fingerprint")
+	assert.Equal(t, fingerprint.Hash, result.Result.Session.File.Hash)
 	assert.Len(t, result.Result.Messages, 1)
+
+	priorHash := fingerprint.Hash
+	updatedPartPath := filepath.Join(
+		root, "storage", "part", "msg_1", "prt_1.json",
+	)
+	rawPart, err := os.ReadFile(updatedPartPath)
+	require.NoError(t, err)
+	partInfo, err := os.Stat(updatedPartPath)
+	require.NoError(t, err)
+	updatedPart := strings.Replace(
+		string(rawPart), "Hello from storage", "Changed in storage", 1,
+	)
+	require.NotEqual(t, string(rawPart), updatedPart)
+	require.NoError(t, os.WriteFile(
+		updatedPartPath, []byte(updatedPart), 0o644,
+	))
+	require.NoError(t, os.Chtimes(
+		updatedPartPath, partInfo.ModTime(), partInfo.ModTime(),
+	))
+	laterFingerprint, err := provider.Fingerprint(
+		context.Background(), found,
+	)
+	require.NoError(t, err)
+	require.NotEqual(t, priorHash, laterFingerprint.Hash)
+	staleRequestOutcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: found, Fingerprint: fingerprint,
+	})
+	require.NoError(t, err)
+	require.Len(t, staleRequestOutcome.Results, 1)
+	assert.Equal(t, "Changed in storage",
+		staleRequestOutcome.Results[0].Result.Messages[0].Content,
+		"file-backed Parse must materialize the later storage snapshot")
+	assert.Equal(t, laterFingerprint.Hash,
+		staleRequestOutcome.Results[0].Result.Session.File.Hash,
+		"file-backed Parse must retain the hash from the snapshot it parsed")
 
 	require.NoError(t, os.Remove(sessionPath), "remove storage session")
 	removed, err := provider.SourcesForChangedPath(
@@ -485,6 +587,278 @@ func TestOpenCodeProviderStorageSourceMethods(t *testing.T) {
 	assert.Equal(t, "global", removed[0].ProjectHint)
 }
 
+func TestOpenCodeProviderProjectIndexSurvivesProviderRecreation(t *testing.T) {
+	root := t.TempDir()
+	projectID := "project-index"
+	projectPath := filepath.Join(
+		root, "storage", "project", projectID+".json",
+	)
+	writeOpenCodeStorageFile(t, projectPath, map[string]any{
+		"id": projectID, "worktree": "/home/user/code/indexed",
+	})
+	for i := range 256 {
+		id := fmt.Sprintf("ses_concrete_%03d", i)
+		writeOpenCodeStorageFile(t, filepath.Join(
+			root, "storage", "session", projectID, id+".json",
+		), map[string]any{
+			"id": id, "directory": "/home/user/code/concrete",
+		})
+	}
+	legacyPath := filepath.Join(
+		root, "storage", "session", projectID, "ses_legacy.json",
+	)
+	writeOpenCodeStorageFile(t, legacyPath, map[string]any{
+		"id": "ses_legacy",
+	})
+
+	factory := newOpenCodeProviderFactory(AgentDef{
+		Type: AgentOpenCode, IDPrefix: "opencode",
+	})
+	config := ProviderConfig{Roots: []string{root}}
+	primingProvider := factory.NewProvider(config)
+	_, err := primingProvider.Discover(t.Context())
+	require.NoError(t, err)
+
+	// Changed-path classification creates fresh providers, so the factory-owned index must persist.
+	changedProvider := factory.NewProvider(config)
+	changed, err := changedProvider.SourcesForChangedPath(
+		t.Context(), ChangedPathRequest{
+			Path: projectPath, EventKind: "write",
+			WatchRoot: filepath.Join(root, "storage"),
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, legacyPath, changed[0].DisplayPath)
+}
+
+func TestOpenCodeProviderReturnsSkipNoSessionForEmptyStorageSession(t *testing.T) {
+	root := t.TempDir()
+	const sessionID = "ses_empty"
+	sessionPath := filepath.Join(
+		root, "storage", "session", "global", sessionID+".json",
+	)
+	writeOpenCodeStorageFile(t, sessionPath, map[string]any{
+		"id": sessionID, "title": "New session - 2026-01-01T00:00:00Z",
+		"time": map[string]any{"created": int64(1700000000000)},
+	})
+	writeOpenCodeStorageFile(t, filepath.Join(
+		root, "storage", "project", "global.json",
+	), map[string]any{"id": "global", "worktree": "/"})
+
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
+	require.NoError(t, err)
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
+		Source: sources[0], Fingerprint: fingerprint,
+	})
+	require.NoError(t, err)
+	assert.True(t, outcome.ResultSetComplete)
+	assert.Equal(t, SkipNoSession, outcome.SkipReason)
+	assert.Empty(t, outcome.Results)
+}
+
+func TestOpenCodeProviderProjectEventRetainsMalformedSession(t *testing.T) {
+	root := t.TempDir()
+	projectID := "malformed-project"
+	projectPath := filepath.Join(root, "storage", "project", projectID+".json")
+	sessionPath := filepath.Join(
+		root, "storage", "session", projectID, "ses_malformed.json",
+	)
+	writeOpenCodeStorageFile(t, projectPath, map[string]any{
+		"id": projectID, "worktree": "/work/malformed-app",
+	})
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte("{"), 0o644))
+
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
+		Path: projectPath, EventKind: "write",
+		WatchRoot: filepath.Join(root, "storage"),
+	})
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, sessionPath, sources[0].DisplayPath)
+}
+
+func TestOpenCodeProviderClearsResolvedMalformedSessionsIndividually(t *testing.T) {
+	root := t.TempDir()
+	projectID := "malformed-project"
+	projectPath := filepath.Join(root, "storage", "project", projectID+".json")
+	sessionDir := filepath.Join(root, "storage", "session", projectID)
+	repairedPath := filepath.Join(sessionDir, "ses_repaired.json")
+	removedPath := filepath.Join(sessionDir, "ses_removed.json")
+	writeOpenCodeStorageFile(t, projectPath, map[string]any{
+		"id": projectID, "worktree": "/work/malformed-app",
+	})
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	for _, path := range []string{repairedPath, removedPath} {
+		require.NoError(t, os.WriteFile(path, []byte("{"), 0o644))
+	}
+
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	projectSources := func() ([]SourceRef, error) {
+		return provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
+			Path: projectPath, EventKind: "write",
+			WatchRoot: filepath.Join(root, "storage"),
+		})
+	}
+	sources, err := projectSources()
+	require.NoError(t, err)
+	require.Len(t, sources, 2)
+	assert.Equal(t, removedPath, sources[0].DisplayPath)
+	assert.Equal(t, repairedPath, sources[1].DisplayPath)
+
+	writeOpenCodeStorageFile(t, repairedPath, map[string]any{
+		"id": "ses_repaired", "directory": "/work/repaired-app",
+	})
+	_, err = provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
+		Path: repairedPath, EventKind: "write",
+		WatchRoot: filepath.Join(root, "storage"),
+	})
+	require.NoError(t, err)
+	sources, err = projectSources()
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, removedPath, sources[0].DisplayPath,
+		"an unresolved malformed session must keep the fallback active")
+
+	require.NoError(t, os.Remove(removedPath))
+	_, err = provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
+		Path: removedPath, EventKind: "remove",
+		WatchRoot: filepath.Join(root, "storage"),
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(repairedPath))
+	require.NoError(t, os.Remove(sessionDir))
+	require.NoError(t, os.WriteFile(sessionDir, []byte("not a directory"), 0o644))
+
+	sources, err = projectSources()
+	require.NoError(t, err,
+		"resolved malformed sessions must not leave the fallback scan active")
+	assert.Empty(t, sources)
+}
+
+func TestOpenCodeProviderProjectMetadataRefreshAndMalformedReturnsError(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	projectID := "legacy-project"
+	sessionID := "ses_refresh"
+	sessionPath := filepath.Join(
+		root, "storage", "session", projectID, sessionID+".json",
+	)
+	writeOpenCodeStorageFile(t, sessionPath, map[string]any{
+		"id": sessionID, "title": "Refresh", "time": map[string]any{
+			"created": int64(1700000000000), "updated": int64(1700000060000),
+		},
+	})
+	writeOpenCodeStorageFile(t, filepath.Join(
+		root, "storage", "message", sessionID, "msg_1.json",
+	), map[string]any{
+		"id": "msg_1", "sessionID": sessionID, "role": "user",
+		"time": map[string]any{"created": int64(1700000000000)},
+	})
+	writeOpenCodeStorageFile(t, filepath.Join(
+		root, "storage", "part", "msg_1", "part_1.json",
+	), map[string]any{
+		"id": "part_1", "sessionID": sessionID, "messageID": "msg_1",
+		"type": "text", "text": "hello",
+		"time": map[string]any{"created": int64(1700000000000)},
+	})
+	projectPath := filepath.Join(
+		root, "storage", "project", projectID+".json",
+	)
+	writeOpenCodeStorageFile(t, projectPath, map[string]any{
+		"id": projectID, "worktree": "/home/user/code/old-app",
+	})
+
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	parse := func(source SourceRef) (SourceFingerprint, ParsedSession) {
+		fingerprint, err := provider.Fingerprint(t.Context(), source)
+		require.NoError(t, err)
+		outcome, err := provider.Parse(t.Context(), ParseRequest{
+			Source: source, Fingerprint: fingerprint,
+		})
+		require.NoError(t, err)
+		require.Len(t, outcome.Results, 1)
+		return fingerprint, outcome.Results[0].Result.Session
+	}
+
+	priorFingerprint, prior := parse(discovered[0])
+	assert.Equal(t, "/home/user/code/old-app", prior.Cwd)
+	projectInfo, err := os.Stat(projectPath)
+	require.NoError(t, err)
+
+	writeOpenCodeStorageFile(t, projectPath, map[string]any{
+		"id": projectID, "worktree": "/home/user/code/new-app",
+	})
+	afterProjectInfo, err := os.Stat(projectPath)
+	require.NoError(t, err)
+	require.Equal(t, projectInfo.Size(), afterProjectInfo.Size())
+	require.NoError(t, os.Chtimes(
+		projectPath, projectInfo.ModTime(), projectInfo.ModTime(),
+	))
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
+		Path: projectPath, EventKind: "write",
+		WatchRoot: filepath.Join(root, "storage"),
+	})
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	refreshedFingerprint, refreshed := parse(changed[0])
+	assert.Equal(t, "/home/user/code/new-app", refreshed.Cwd)
+	assert.Equal(t, "new_app", refreshed.Project)
+	assert.NotEqual(t, priorFingerprint.Hash, refreshedFingerprint.Hash)
+	assert.Equal(t, refreshedFingerprint.Hash, refreshed.File.Hash)
+	t.Logf(
+		"metadata rewrite changed fingerprint and refreshed Cwd=%q Project=%q",
+		refreshed.Cwd, refreshed.Project,
+	)
+
+	require.NoError(t, os.WriteFile(projectPath, []byte("{"), 0o644))
+	_, err = provider.Fingerprint(t.Context(), changed[0])
+	assert.Error(t, err)
+}
+
+func TestOpenCodeProviderProjectMetadataChangeReportsSessionDirectoryError(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	projectID := "broken-project"
+	projectPath := filepath.Join(root, "storage", "project", projectID+".json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(projectPath), 0o755))
+	writeOpenCodeStorageFile(t, projectPath, map[string]any{
+		"id": projectID, "worktree": "/home/user/code/broken-app",
+	})
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "storage", "session"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "storage", "session", projectID),
+		[]byte("not a directory"), 0o644,
+	))
+
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	formatProvider, ok := provider.(*openCodeFormatProvider)
+	require.True(t, ok)
+	_, err := formatProvider.sources.sourcesForProject(root, projectID)
+	assert.Error(t, err)
+	_, publicErr := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
+		Path: projectPath, EventKind: "write",
+		WatchRoot: filepath.Join(root, "storage"),
+	})
+	assert.Error(t, publicErr)
+}
+
 func TestOpenCodeProviderSQLiteSourceMethods(t *testing.T) {
 
 	fixture := openCodeSQLiteProviderReadFixture(t)
@@ -497,6 +871,16 @@ func TestOpenCodeProviderSQLiteSourceMethods(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	relevance, err := ResolveChangedPathRelevance(
+		context.Background(), provider, ChangedPathRequest{
+			Path:      filepath.Join(root, "storage", "project", "global.json"),
+			EventKind: "write",
+			WatchRoot: root,
+		},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, ChangedPathUnclassified, relevance,
+		"SQLite-only roots must ignore file-backed project metadata events")
 
 	plan, err := provider.WatchPlan(context.Background())
 	require.NoError(t, err)
@@ -1129,6 +1513,55 @@ func TestOpenCodeFamilyProviderRelabelsForks(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, removed, 1)
 			assert.Equal(t, sessionPath, removed[0].DisplayPath)
+		})
+	}
+}
+
+func TestOpenCodeFamilyProviderFallsBackToProjectMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		agent         AgentType
+		sessionSubdir string
+		prefix        string
+	}{
+		{agent: AgentKilo, sessionSubdir: "session", prefix: "kilo:"},
+		{agent: AgentMiMoCode, sessionSubdir: "session_diff", prefix: "mimocode:"},
+		{agent: AgentIcodemate, sessionSubdir: "session_diff", prefix: "icodemate:"},
+	} {
+		t.Run(string(tc.agent), func(t *testing.T) {
+			root := t.TempDir()
+			const projectID = "global"
+			const sessionID = "ses-project-fallback"
+			sessionPath := writeOpenCodeProviderStorageSession(
+				t, root, tc.sessionSubdir, sessionID, "fork-app", "Fallback",
+			)
+			writeOpenCodeStorageFile(t, sessionPath, map[string]any{
+				"id": sessionID, "projectID": projectID, "title": "Fallback",
+				"time": map[string]any{
+					"created": int64(1700000000000),
+					"updated": int64(1700000060000),
+				},
+			})
+			writeOpenCodeStorageFile(t, filepath.Join(
+				root, "storage", "project", projectID+".json",
+			), map[string]any{
+				"id": projectID, "worktree": "/home/user/code/fork-app",
+			})
+
+			provider, ok := NewProvider(tc.agent, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			discovered, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, discovered, 1)
+			source := discovered[0]
+			assert.Equal(t, "fork_app", source.ProjectHint)
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
+			result := outcome.Results[0].Result
+			assert.Equal(t, tc.agent, result.Session.Agent)
+			assert.Equal(t, tc.prefix+sessionID, result.Session.ID)
+			assert.Equal(t, "/home/user/code/fork-app", result.Session.Cwd)
+			assert.Equal(t, "fork_app", result.Session.Project)
 		})
 	}
 }

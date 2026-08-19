@@ -55,6 +55,54 @@ type CandidateSource func(
 	ctx context.Context, yield func(IntervalCandidate) error,
 ) error
 
+// MergeCandidateSlice merges an ordered candidate slice into an ordered
+// candidate source without retaining the source stream. Equal keys from the
+// source are emitted first, matching storage query event ordering.
+func MergeCandidateSlice(
+	extra []IntervalCandidate, source CandidateSource,
+) CandidateSource {
+	return func(
+		ctx context.Context, yield func(IntervalCandidate) error,
+	) error {
+		next := 0
+		emitExtraBefore := func(candidate IntervalCandidate) error {
+			for next < len(extra) && candidateLess(extra[next], candidate) {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if err := yield(extra[next]); err != nil {
+					return err
+				}
+				next++
+			}
+			return yield(candidate)
+		}
+		if err := source(ctx, emitExtraBefore); err != nil {
+			return err
+		}
+		for next < len(extra) {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := yield(extra[next]); err != nil {
+				return err
+			}
+			next++
+		}
+		return nil
+	}
+}
+
+func candidateLess(a, b IntervalCandidate) bool {
+	if !a.Start.Equal(b.Start) {
+		return a.Start.Before(b.Start)
+	}
+	if a.SessionID != b.SessionID {
+		return a.SessionID < b.SessionID
+	}
+	return a.StartOrdinal < b.StartOrdinal
+}
+
 // PairActivityEvents is the Go reference implementation for backend pairing.
 // It preserves ordinal adjacency before applying the safe candidate-start
 // pruning window.
@@ -96,15 +144,7 @@ func PairActivityEvents(
 			}
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if !out[i].Start.Equal(out[j].Start) {
-			return out[i].Start.Before(out[j].Start)
-		}
-		if out[i].SessionID != out[j].SessionID {
-			return out[i].SessionID < out[j].SessionID
-		}
-		return out[i].StartOrdinal < out[j].StartOrdinal
-	})
+	sort.Slice(out, func(i, j int) bool { return candidateLess(out[i], out[j]) })
 	return out
 }
 
@@ -215,6 +255,7 @@ func buildCandidateArtifactsFromSource(
 	state := candidateSweep{
 		report: &report, windows: windows, effectiveEnd: p.EffectiveEnd,
 		last: p.RangeStart, automatedBy: automatedBy,
+		sessionEnds: make(map[string]time.Time),
 	}
 	heap.Init(&state.ends)
 	aggregates := make(map[string]*sessionIntervalAgg)
@@ -238,7 +279,15 @@ func buildCandidateArtifactsFromSource(
 		}
 		previousStart = iv.start
 		state.advance(iv.start)
-		state.open(iv)
+		if previousEnd, ok := state.sessionEnds[iv.sessionID]; ok {
+			if !iv.end.After(previousEnd) {
+				return nil
+			}
+			iv.start = previousEnd
+			state.extend(iv)
+		} else {
+			state.open(iv)
+		}
 		foldCandidateInterval(
 			&report, windows, membershipWindows, aggregates, membership, words,
 			automatedBy, iv,
@@ -304,6 +353,7 @@ func effectiveCandidateInterval(p Params, candidate IntervalCandidate) (interval
 }
 
 type activeCandidateEnd struct {
+	sessionID string
 	end       time.Time
 	automated bool
 }
@@ -331,6 +381,7 @@ type candidateSweep struct {
 	effectiveEnd time.Time
 	automatedBy  map[string]bool
 	ends         activeCandidateHeap
+	sessionEnds  map[string]time.Time
 	bucket       int
 	last         time.Time
 	live         int
@@ -357,6 +408,11 @@ func (s *candidateSweep) advance(target time.Time) {
 		s.accrue(next)
 		for len(s.ends) > 0 && s.ends[0].end.Equal(next) {
 			ended := heap.Pop(&s.ends).(activeCandidateEnd)
+			currentEnd, ok := s.sessionEnds[ended.sessionID]
+			if !ok || !currentEnd.Equal(ended.end) {
+				continue
+			}
+			delete(s.sessionEnds, ended.sessionID)
 			s.live--
 			if ended.automated {
 				s.liveAuto--
@@ -386,7 +442,10 @@ func (s *candidateSweep) accrue(target time.Time) {
 
 func (s *candidateSweep) open(iv interval) {
 	automated := s.automatedBy[iv.sessionID]
-	heap.Push(&s.ends, activeCandidateEnd{end: iv.end, automated: automated})
+	s.sessionEnds[iv.sessionID] = iv.end
+	heap.Push(&s.ends, activeCandidateEnd{
+		sessionID: iv.sessionID, end: iv.end, automated: automated,
+	})
 	s.live++
 	if automated {
 		s.liveAuto++
@@ -399,6 +458,14 @@ func (s *candidateSweep) open(iv interval) {
 		s.report.Peak.At = &at
 	}
 	s.recordBucketPeak()
+}
+
+func (s *candidateSweep) extend(iv interval) {
+	automated := s.automatedBy[iv.sessionID]
+	s.sessionEnds[iv.sessionID] = iv.end
+	heap.Push(&s.ends, activeCandidateEnd{
+		sessionID: iv.sessionID, end: iv.end, automated: automated,
+	})
 }
 
 func (s *candidateSweep) recordBucketPeak() {

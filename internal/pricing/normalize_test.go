@@ -142,6 +142,32 @@ func TestResolveCanonicalDeterminism(t *testing.T) {
 		"duplicate unqualified canonical keys are ambiguous")
 }
 
+// TestResolveOverlappingQualifiedRows pins the resolver behavior that
+// MergeCatalog exists to protect: a bare session model name resolves
+// against a lone provider-qualified key, but two qualified spellings of
+// one model (LiteLLM's minimax/MiniMax-M3 against OpenRouter's
+// minimax/minimax-m3) tie and stay unresolved.
+func TestResolveOverlappingQualifiedRows(t *testing.T) {
+	single := map[string]int{"minimax/MiniMax-M3": 2}
+	got, ok := Resolve(single, "MiniMax-M3")
+	require.True(t, ok, "bare name resolves against a lone qualified key")
+	assert.Equal(t, 2, got)
+
+	colliding := map[string]int{
+		"minimax/MiniMax-M3": 2,
+		"minimax/minimax-m3": 9,
+	}
+	_, ok = Resolve(colliding, "MiniMax-M3")
+	assert.False(t, ok,
+		"same-provider spellings of one model tie and stay ambiguous")
+
+	// Each spelling still resolves when addressed exactly, so dropping
+	// the lower-priority row never orphans a real model id.
+	got, ok = Resolve(colliding, "minimax/minimax-m3")
+	require.True(t, ok, "exact key still resolves")
+	assert.Equal(t, 9, got)
+}
+
 func TestResolveRejectsArbitrarySubstrings(t *testing.T) {
 	rates := map[string]int{
 		"openai/gpt-5.5":   30,
