@@ -53,8 +53,8 @@ project classification takes precedence.
 
 **Project rule set**:
 
-The versioned collection of project rules. Undo is linear and restores only the
-immediately previous version.
+The archive-wide, versioned collection of project rules. Undo walks backward
+through its linear history one version at a time.
 
 **Session assignment**:
 
