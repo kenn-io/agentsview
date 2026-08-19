@@ -70,7 +70,13 @@ test.describe("Session Vital Signs", () => {
     await gotoShowcase(page);
 
     const path = page.locator(".context-value--path");
-    await expect(path).toHaveText(SHOWCASE_WORKTREE);
+    // The worktree row renders only once the sidebar hydration delivers
+    // session.cwd, which arrives independently of the timing fetch that
+    // gotoShowcase waits on. On loaded CI runners hydration can trail the
+    // timing data past the 5s expect default, so give it its own budget.
+    await expect(path).toHaveText(SHOWCASE_WORKTREE, {
+      timeout: 15_000,
+    });
 
     const layout = await path.evaluate((element, expectedPath) => {
       const walker = document.createTreeWalker(
