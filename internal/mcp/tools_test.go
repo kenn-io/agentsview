@@ -38,8 +38,11 @@ func (f *fakeMCPRecallVectorSearcher) ValidateRecallSnapshot(
 func newTestToolset(t *testing.T) (*toolset, *db.DB) {
 	t.Helper()
 	d := dbtest.OpenTestDB(t)
+	svc := service.NewDirectBackend(d, nil)
+	reports, ok := svc.(service.ReportService)
+	require.True(t, ok)
 	return &toolset{
-		svc: service.NewDirectBackend(d, nil),
+		svc: svc, reports: reports,
 		now: func() time.Time { return fixedNow },
 	}, d
 }
@@ -486,6 +489,83 @@ func TestUsageSummary_RequestsOneShotSessions(t *testing.T) {
 		"usage summary should include one-shot sessions")
 	assert.Equal(t, "p", rec.lastUsage.Project)
 	assert.Equal(t, "claude", rec.lastUsage.Agent)
+}
+
+func TestAnalyticsReportUsesSharedReportService(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "report-1", "reports", func(s *db.Session) {
+		s.MessageCount = 4
+		s.UserMessageCount = 2
+		started := "2024-06-10T10:00:00Z"
+		ended := "2024-06-10T11:00:00Z"
+		s.StartedAt, s.EndedAt = &started, &ended
+	})
+
+	_, out, err := ts.analyticsReport(context.Background(), nil, analyticsReportIn{
+		reportFilterIn: reportFilterIn{From: "2024-06-01", To: "2024-06-30", IncludeOneShot: true},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.Equal(t, 1, out.TotalSessions)
+	assert.Equal(t, 4, out.TotalMessages)
+}
+
+func TestListPinsReturnsEmptyArray(t *testing.T) {
+	ts, _ := newTestToolset(t)
+
+	_, out, err := ts.listPins(context.Background(), nil, listPinsIn{})
+
+	require.NoError(t, err)
+	assert.NotNil(t, out.Pins)
+	assert.Empty(t, out.Pins)
+}
+
+type capturingListService struct {
+	service.SessionService
+	filter service.ListFilter
+}
+
+func (s *capturingListService) List(
+	_ context.Context, filter service.ListFilter,
+) (*service.SessionList, error) {
+	s.filter = filter
+	return &service.SessionList{}, nil
+}
+
+func TestListSessionsMapsExtendedFilters(t *testing.T) {
+	minFailures := 0
+	descending := false
+	recorder := &capturingListService{}
+	ts := &toolset{svc: recorder}
+
+	_, _, err := ts.listSessions(context.Background(), nil, listSessionsIn{
+		ExcludeProject: "archive", GitBranch: "opaque-branch", Date: "2024-06-10",
+		MinMessages: 2, MaxMessages: 20, MinUserMessages: 1,
+		IncludeOneShot: true, IncludeChildren: true, Outcome: "success",
+		HealthGrade: "A,B", Termination: "completed", MinToolFailures: &minFailures,
+		HasSecret: true, Starred: true, OrderBy: "health:asc", Descending: &descending,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "archive", recorder.filter.ExcludeProject)
+	assert.Equal(t, "opaque-branch", recorder.filter.GitBranch)
+	assert.Equal(t, "2024-06-10", recorder.filter.Date)
+	assert.Equal(t, 2, recorder.filter.MinMessages)
+	assert.Equal(t, 20, recorder.filter.MaxMessages)
+	assert.Equal(t, 1, recorder.filter.MinUserMessages)
+	assert.True(t, recorder.filter.IncludeOneShot)
+	assert.True(t, recorder.filter.IncludeChildren)
+	assert.Equal(t, "success", recorder.filter.Outcome)
+	assert.Equal(t, "A,B", recorder.filter.HealthGrade)
+	assert.Equal(t, "completed", recorder.filter.Termination)
+	require.NotNil(t, recorder.filter.MinToolFailures)
+	assert.Zero(t, *recorder.filter.MinToolFailures)
+	assert.True(t, recorder.filter.HasSecret)
+	assert.True(t, recorder.filter.Starred)
+	assert.Equal(t, "health:asc", recorder.filter.OrderBy)
+	require.NotNil(t, recorder.filter.Descending)
+	assert.False(t, *recorder.filter.Descending)
 }
 
 // search_content excludes one-shot sessions by default, matching the
@@ -951,6 +1031,8 @@ func TestServer_EndToEnd(t *testing.T) {
 	assert.ElementsMatch(t, []string{
 		ToolSearchSessions, ToolQueryRecall, ToolListSessions, ToolGetSessionOverview,
 		ToolGetMessages, ToolSearchContent, ToolGetUsageSummary,
+		ToolGetAnalyticsReport, ToolGetActivityReport, ToolGetTrends,
+		ToolListPins, ToolListInsights, ToolListRecentEdits,
 	}, names)
 
 	res, err := ct.CallTool(ctx, callParams("search_sessions", map[string]any{

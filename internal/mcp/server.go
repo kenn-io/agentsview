@@ -1,5 +1,5 @@
 // ABOUTME: Builds and serves the agentsview MCP server (stdio or
-// ABOUTME: StreamableHTTP) over the supported read-only retrieval tools.
+// ABOUTME: StreamableHTTP) over read-only session and report tools.
 package mcp
 
 import (
@@ -28,6 +28,12 @@ const (
 	ToolGetMessages        = "get_messages"
 	ToolSearchContent      = "search_content"
 	ToolGetUsageSummary    = "get_usage_summary"
+	ToolGetAnalyticsReport = "get_analytics_report"
+	ToolGetActivityReport  = "get_activity_report"
+	ToolGetTrends          = "get_trends"
+	ToolListPins           = "list_pins"
+	ToolListInsights       = "list_insights"
+	ToolListRecentEdits    = "list_recent_edits"
 )
 
 // ServeOptions configures the MCP server. Service is required; Version is
@@ -58,7 +64,8 @@ func newServer(opts ServeOptions) *mcp.Server {
 		Version: version,
 	}, nil)
 
-	t := &toolset{svc: opts.Service, now: opts.Now}
+	reports, _ := opts.Service.(service.ReportService)
+	t := &toolset{svc: opts.Service, reports: reports, now: opts.Now}
 	readOnly := &mcp.ToolAnnotations{ReadOnlyHint: true}
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -129,6 +136,42 @@ func newServer(opts ServeOptions) *mcp.Server {
 			"filterable by project, agent, machine, and date range.",
 		Annotations: readOnly,
 	}, t.usageSummary)
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        ToolGetAnalyticsReport,
+		Description: "Get an aggregate session analytics report with counts, token totals, active projects, distribution statistics, and per-agent totals.",
+		Annotations: readOnly,
+	}, t.analyticsReport)
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        ToolGetActivityReport,
+		Description: "Get a concurrency, active-time, output-token, and cost activity report for a day, week, month, or custom range.",
+		Annotations: readOnly,
+	}, t.activityReport)
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        ToolGetTrends,
+		Description: "Track up to 12 terms over time across user and assistant messages, with weekly, daily, or monthly buckets.",
+		Annotations: readOnly,
+	}, t.trends)
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        ToolListPins,
+		Description: "List pinned transcript messages and their notes, optionally restricted to one project.",
+		Annotations: readOnly,
+	}, t.listPins)
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        ToolListInsights,
+		Description: "List saved activity or agent-analysis insights by type, project, and date range.",
+		Annotations: readOnly,
+	}, t.listInsights)
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        ToolListRecentEdits,
+		Description: "List files recently changed by agent Edit or Write tool calls, grouped across sessions with recent edit provenance.",
+		Annotations: readOnly,
+	}, t.listRecentEdits)
 
 	return s
 }

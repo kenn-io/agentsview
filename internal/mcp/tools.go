@@ -1,15 +1,17 @@
-// ABOUTME: The six read-only MCP tools, implemented as thin adapters
+// ABOUTME: Read-only MCP tools, implemented as thin adapters
 // ABOUTME: over service.SessionService (the same seam the CLI and HTTP
 // ABOUTME: handlers use).
 package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
 )
@@ -17,8 +19,9 @@ import (
 // toolset holds the dependencies shared by every tool handler. now is
 // injectable so tests can control the self-reference exclusion window.
 type toolset struct {
-	svc service.SessionService
-	now func() time.Time
+	svc     service.SessionService
+	reports service.ReportService
+	now     func() time.Time
 }
 
 func (t *toolset) clock() time.Time {
@@ -201,12 +204,28 @@ func (t *toolset) queryRecall(
 
 type listSessionsIn struct {
 	Project          string `json:"project,omitempty" jsonschema:"Filter by project name."`
+	ExcludeProject   string `json:"exclude_project,omitempty" jsonschema:"Exclude one project name."`
 	Agent            string `json:"agent,omitempty" jsonschema:"Filter by agent (e.g. claude, codex, gemini, antigravity)."`
 	Machine          string `json:"machine,omitempty" jsonschema:"Filter by machine name."`
+	GitBranch        string `json:"git_branch,omitempty" jsonschema:"Filter by an opaque project and branch token from the branches API."`
+	Date             string `json:"date,omitempty" jsonschema:"Only sessions active on this date (YYYY-MM-DD)."`
 	DateFrom         string `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
 	DateTo           string `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
 	ActiveSince      string `json:"active_since,omitempty" jsonschema:"Only sessions active since this RFC3339 timestamp."`
+	MinMessages      int    `json:"min_messages,omitempty" jsonschema:"Minimum stored message count."`
+	MaxMessages      int    `json:"max_messages,omitempty" jsonschema:"Maximum stored message count."`
+	MinUserMessages  int    `json:"min_user_messages,omitempty" jsonschema:"Minimum user message count."`
+	IncludeOneShot   bool   `json:"include_one_shot,omitempty" jsonschema:"Include one-shot sessions."`
 	IncludeAutomated bool   `json:"include_automated,omitempty" jsonschema:"Include automated (non-interactive) sessions."`
+	IncludeChildren  bool   `json:"include_children,omitempty" jsonschema:"Include child, fork, and subagent sessions."`
+	Outcome          string `json:"outcome,omitempty" jsonschema:"Comma-separated detected outcome filter."`
+	HealthGrade      string `json:"health_grade,omitempty" jsonschema:"Comma-separated health grade filter."`
+	Termination      string `json:"termination,omitempty" jsonschema:"Comma-separated termination status filter."`
+	MinToolFailures  *int   `json:"min_tool_failures,omitempty" jsonschema:"Minimum tool failure signal count; zero is valid."`
+	HasSecret        bool   `json:"has_secret,omitempty" jsonschema:"Only sessions with detected secret findings."`
+	Starred          bool   `json:"starred,omitempty" jsonschema:"Only starred sessions."`
+	OrderBy          string `json:"order_by,omitempty" jsonschema:"Comma-separated sort keys such as recent, messages:desc, or health:asc."`
+	Descending       *bool  `json:"descending,omitempty" jsonschema:"Default direction for sort keys without an explicit suffix."`
 	Limit            int    `json:"limit,omitempty" jsonschema:"Max results, default 20, max 100."`
 	Cursor           string `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
 }
@@ -238,12 +257,28 @@ func (t *toolset) listSessions(
 ) (*mcp.CallToolResult, listSessionsOut, error) {
 	res, err := t.svc.List(ctx, service.ListFilter{
 		Project:          in.Project,
+		ExcludeProject:   in.ExcludeProject,
 		Agent:            in.Agent,
 		Machine:          in.Machine,
+		GitBranch:        in.GitBranch,
+		Date:             in.Date,
 		DateFrom:         in.DateFrom,
 		DateTo:           in.DateTo,
 		ActiveSince:      in.ActiveSince,
+		MinMessages:      in.MinMessages,
+		MaxMessages:      in.MaxMessages,
+		MinUserMessages:  in.MinUserMessages,
+		IncludeOneShot:   in.IncludeOneShot,
 		IncludeAutomated: in.IncludeAutomated,
+		IncludeChildren:  in.IncludeChildren,
+		Outcome:          in.Outcome,
+		HealthGrade:      in.HealthGrade,
+		Termination:      in.Termination,
+		MinToolFailures:  in.MinToolFailures,
+		HasSecret:        in.HasSecret,
+		Starred:          in.Starred,
+		OrderBy:          in.OrderBy,
+		Descending:       in.Descending,
 		Cursor:           in.Cursor,
 		Limit:            clampLimit(in.Limit, defaultListLimit, maxListLimit),
 	})
@@ -672,4 +707,173 @@ func (t *toolset) usageSummary(
 		return nil, nil, err
 	}
 	return nil, res, nil
+}
+
+// --- focused reports ---
+
+type reportFilterIn struct {
+	From             string `json:"from,omitempty" jsonschema:"Range start date (YYYY-MM-DD). Defaults to 30 days before to."`
+	To               string `json:"to,omitempty" jsonschema:"Range end date (YYYY-MM-DD). Defaults to today."`
+	Timezone         string `json:"timezone,omitempty" jsonschema:"IANA timezone name, default UTC."`
+	Project          string `json:"project,omitempty" jsonschema:"Restrict to one project."`
+	Agent            string `json:"agent,omitempty" jsonschema:"Restrict to one agent."`
+	Machine          string `json:"machine,omitempty" jsonschema:"Restrict to one machine."`
+	GitBranch        string `json:"git_branch,omitempty" jsonschema:"Restrict to an opaque project and branch token."`
+	Model            string `json:"model,omitempty" jsonschema:"Comma-separated model filter."`
+	MinUserMessages  int    `json:"min_user_messages,omitempty" jsonschema:"Minimum user message count."`
+	IncludeOneShot   bool   `json:"include_one_shot,omitempty" jsonschema:"Include one-shot sessions."`
+	IncludeAutomated bool   `json:"include_automated,omitempty" jsonschema:"Include automated sessions."`
+}
+
+func (in reportFilterIn) serviceFilter() service.ReportFilter {
+	return service.ReportFilter{
+		From: in.From, To: in.To, Timezone: in.Timezone, Project: in.Project,
+		Agent: in.Agent, Machine: in.Machine, GitBranch: in.GitBranch,
+		Model: in.Model, MinUserMessages: in.MinUserMessages,
+		IncludeOneShot: in.IncludeOneShot, IncludeAutomated: in.IncludeAutomated,
+	}
+}
+
+func (t *toolset) reporter() (service.ReportService, error) {
+	if t.reports == nil {
+		return nil, errors.New("report tools are unavailable on this transport")
+	}
+	return t.reports, nil
+}
+
+type analyticsReportIn struct{ reportFilterIn }
+
+func (t *toolset) analyticsReport(
+	ctx context.Context, _ *mcp.CallToolRequest, in analyticsReportIn,
+) (*mcp.CallToolResult, *db.AnalyticsSummary, error) {
+	reports, err := t.reporter()
+	if err != nil {
+		return nil, nil, err
+	}
+	out, err := reports.AnalyticsReport(ctx, in.serviceFilter())
+	return nil, out, err
+}
+
+type activityReportIn struct {
+	reportFilterIn
+	Preset     string `json:"preset,omitempty" jsonschema:"day, week, month, or custom; default day."`
+	Date       string `json:"date,omitempty" jsonschema:"Anchor date for day, week, or month (YYYY-MM-DD); default today."`
+	Bucket     string `json:"bucket,omitempty" jsonschema:"Optional bucket override: 5m, 15m, 1h, 1d, or 1w."`
+	Automation string `json:"automation,omitempty" jsonschema:"all (default), interactive, or automated."`
+}
+
+func (t *toolset) activityReport(
+	ctx context.Context, _ *mcp.CallToolRequest, in activityReportIn,
+) (*mcp.CallToolResult, *activity.Report, error) {
+	reports, err := t.reporter()
+	if err != nil {
+		return nil, nil, err
+	}
+	preset := in.Preset
+	if preset == "" {
+		preset = "day"
+	}
+	date := in.Date
+	if date == "" && preset != "custom" {
+		loc := time.UTC
+		if in.Timezone != "" {
+			if parsed, loadErr := time.LoadLocation(in.Timezone); loadErr == nil {
+				loc = parsed
+			}
+		}
+		date = t.clock().In(loc).Format(time.DateOnly)
+	}
+	out, err := reports.ActivityReport(ctx, service.ActivityReportRequest{ReportFilter: in.serviceFilter(), Preset: preset, Date: date, Bucket: in.Bucket, Automation: in.Automation})
+	return nil, out, err
+}
+
+type trendsIn struct {
+	reportFilterIn
+	Terms       []string `json:"terms" jsonschema:"One to 12 terms to track. Each item can contain pipe-separated variants."`
+	Granularity string   `json:"granularity,omitempty" jsonschema:"day, week (default), or month."`
+}
+
+func (t *toolset) trends(
+	ctx context.Context, _ *mcp.CallToolRequest, in trendsIn,
+) (*mcp.CallToolResult, *db.TrendsTermsResponse, error) {
+	reports, err := t.reporter()
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(in.Terms) == 0 {
+		return nil, nil, errors.New("terms is required")
+	}
+	granularity := in.Granularity
+	if granularity == "" {
+		granularity = "week"
+	}
+	out, err := reports.Trends(ctx, service.TrendsRequest{ReportFilter: in.serviceFilter(), Terms: in.Terms, Granularity: granularity})
+	return nil, out, err
+}
+
+type listPinsIn struct {
+	Project string `json:"project,omitempty" jsonschema:"Restrict pins to one project."`
+}
+type listPinsOut struct {
+	Pins []db.PinnedMessage `json:"pins"`
+}
+
+func (t *toolset) listPins(
+	ctx context.Context, _ *mcp.CallToolRequest, in listPinsIn,
+) (*mcp.CallToolResult, listPinsOut, error) {
+	reports, err := t.reporter()
+	if err != nil {
+		return nil, listPinsOut{}, err
+	}
+	pins, err := reports.ListPins(ctx, in.Project)
+	if pins == nil {
+		pins = []db.PinnedMessage{}
+	}
+	return nil, listPinsOut{Pins: pins}, err
+}
+
+type listInsightsIn struct {
+	Type     string `json:"type,omitempty" jsonschema:"daily_activity, agent_analysis, or llm_canned."`
+	Project  string `json:"project,omitempty" jsonschema:"Restrict to one project."`
+	DateFrom string `json:"date_from,omitempty" jsonschema:"Minimum insight range start date (YYYY-MM-DD)."`
+	DateTo   string `json:"date_to,omitempty" jsonschema:"Maximum insight range end date (YYYY-MM-DD)."`
+}
+type listInsightsOut struct {
+	Insights []db.Insight `json:"insights"`
+}
+
+func (t *toolset) listInsights(
+	ctx context.Context, _ *mcp.CallToolRequest, in listInsightsIn,
+) (*mcp.CallToolResult, listInsightsOut, error) {
+	reports, err := t.reporter()
+	if err != nil {
+		return nil, listInsightsOut{}, err
+	}
+	insights, err := reports.ListInsights(ctx, service.InsightsRequest{Type: in.Type, Project: in.Project, DateFrom: in.DateFrom, DateTo: in.DateTo})
+	if insights == nil {
+		insights = []db.Insight{}
+	}
+	return nil, listInsightsOut{Insights: insights}, err
+}
+
+type listRecentEditsIn struct {
+	Project string `json:"project,omitempty" jsonschema:"Restrict to one project."`
+	Search  string `json:"search,omitempty" jsonschema:"Case-insensitive file path substring."`
+	Limit   int    `json:"limit,omitempty" jsonschema:"Max file groups, default 50, max 200."`
+	Offset  int    `json:"offset,omitempty" jsonschema:"File groups to skip."`
+}
+
+func (t *toolset) listRecentEdits(
+	ctx context.Context, _ *mcp.CallToolRequest, in listRecentEditsIn,
+) (*mcp.CallToolResult, *db.RecentEditsResult, error) {
+	reports, err := t.reporter()
+	if err != nil {
+		return nil, nil, err
+	}
+	limit := in.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	out, err := reports.ListRecentEdits(ctx, db.RecentEditsParams{Project: in.Project, Search: in.Search, Limit: limit, Offset: max(0, in.Offset), MaxEditsPerFile: 20})
+	return nil, out, err
 }
