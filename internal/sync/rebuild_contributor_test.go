@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testjsonl"
 
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1063,4 +1065,90 @@ func TestResyncPreInstallSwapFailureDoesNotReportDiscardedTombstones(
 	stale, err := database.GetSession(context.Background(), staleID)
 	require.NoError(t, err)
 	assert.NotNil(t, stale, "the original archive keeps the stale fork active")
+}
+
+func countArchiveUsageIndexes(t *testing.T, path string) int {
+	t.Helper()
+	conn, err := sql.Open("sqlite3", path)
+	require.NoError(t, err, "open %s for usage index count", path)
+	defer conn.Close()
+	var count int
+	require.NoError(t, conn.QueryRow(
+		`SELECT count(*) FROM sqlite_master
+		 WHERE type = 'index' AND name IN (
+			'idx_messages_usage_timestamp',
+			'idx_messages_usage_session_covering',
+			'idx_messages_activity_timestamp'
+		 )`,
+	).Scan(&count), "count usage indexes in %s", path)
+	return count
+}
+
+func TestResyncDropsAndRebuildsUsageIndexes(t *testing.T) {
+	root := t.TempDir()
+	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+	path := filepath.Join(root, "proj", "session.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().
+		AddClaudeUser("2026-01-01T00:00:00Z", "usage index resync").String()), 0o644))
+
+	rebuildCalls := 0
+	duringRebuild := -1
+	stats, err := engine.resyncAllWithOptionsAndOperations(
+		context.Background(), nil, RebuildOptions{}, rebuildOperations{
+			rebuildUsageIndexes: func(newDB *db.DB) error {
+				rebuildCalls++
+				duringRebuild = countArchiveUsageIndexes(t, newDB.Path())
+				return newDB.RebuildUsageMessageIndexes()
+			},
+		},
+	)
+	require.NoError(t, err)
+	require.False(t, stats.Aborted, "resync aborted: %+v", stats)
+	assert.Equal(t, 1, rebuildCalls, "usage indexes rebuilt once")
+	assert.Equal(t, 0, duringRebuild,
+		"usage indexes must stay dropped during the bulk load")
+	assert.Equal(t, 3, countArchiveUsageIndexes(t, database.Path()),
+		"swapped archive must carry rebuilt usage indexes")
+}
+
+func TestResyncUsageIndexRebuildFailureAbortsSwap(t *testing.T) {
+	root := t.TempDir()
+	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+	oldPath := filepath.Join(root, "old", "old.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(oldPath), 0o755))
+	require.NoError(t, os.WriteFile(oldPath, []byte(testjsonl.NewSessionBuilder().
+		AddClaudeUser("2026-01-01T00:00:00Z", "archive survives usage failure").String()), 0o644))
+	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
+
+	sentinel := errors.New("usage index sentinel")
+	stats, err := engine.resyncAllWithOptionsAndOperations(
+		context.Background(), nil, RebuildOptions{}, rebuildOperations{
+			rebuildUsageIndexes: func(*db.DB) error { return sentinel },
+		},
+	)
+	require.ErrorIs(t, err, sentinel)
+	assert.True(t, stats.Aborted)
+	page, listErr := database.ListSessions(context.Background(), db.SessionFilter{})
+	require.NoError(t, listErr)
+	require.Len(t, page.Sessions, 1, "original archive must stay intact")
+	assert.Equal(t, 3, countArchiveUsageIndexes(t, database.Path()),
+		"original archive must keep its usage indexes")
+	assert.NoFileExists(t, database.Path()+resyncTempSuffix)
+	assert.NoFileExists(t, database.Path()+resyncTempSuffix+"-wal")
+	assert.NoFileExists(t, database.Path()+resyncTempSuffix+"-shm")
 }

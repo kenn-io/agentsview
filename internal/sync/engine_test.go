@@ -1419,6 +1419,7 @@ func TestCollectAndBatchBaselinesHealthySourceBesideFailedSource(t *testing.T) {
 type manyStreamingProvider struct {
 	parser.ProviderBase
 	sources       []parser.SourceRef
+	parseOutcome  *parser.ParseOutcome
 	discoverCalls atomic.Int32
 	streamCalls   atomic.Int32
 }
@@ -1464,9 +1465,12 @@ func (*manyStreamingProvider) WatchPlan(context.Context) (parser.WatchPlan, erro
 	return parser.WatchPlan{}, nil
 }
 
-func (*manyStreamingProvider) Parse(
+func (provider *manyStreamingProvider) Parse(
 	_ context.Context, req parser.ParseRequest,
 ) (parser.ParseOutcome, error) {
+	if provider.parseOutcome != nil {
+		return *provider.parseOutcome, nil
+	}
 	path := req.Source.DisplayPath
 	id := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	started := time.Unix(1704067200, 0)
@@ -1480,6 +1484,56 @@ func (*manyStreamingProvider) Parse(
 		}},
 		ResultSetComplete: true,
 	}, nil
+}
+
+func TestReconcileUnsupportedSourceMarkersStayPageBounded(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	const agent parser.AgentType = "unsupported-streaming"
+	const sourceCount = reconciliationPageSize*2 + 17
+	sources := make([]parser.SourceRef, sourceCount)
+	for i := range sources {
+		path := filepath.Join(root, fmt.Sprintf("container-%03d", i), "state.vscdb")
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte("unsupported"), 0o600))
+		sources[i] = parser.SourceRef{
+			Provider: agent,
+			Key:      path, DisplayPath: path, FingerprintKey: path,
+		}
+	}
+	unsupported := parser.ParseOutcome{
+		SkipReason: parser.SkipUnsupportedSource, ResultSetComplete: true,
+	}
+	provider := &manyStreamingProvider{
+		ProviderBase: parser.ProviderBase{
+			Def: parser.AgentDef{Type: agent, FileBased: true},
+			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+				DiscoverSources:    parser.CapabilitySupported,
+				StreamingDiscovery: parser.CapabilitySupported,
+				WatchSources:       parser.CapabilitySupported,
+			}},
+		},
+		sources: sources, parseOutcome: &unsupported,
+	}
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{agent: {root}},
+		Machine:   "local",
+		ProviderFactories: []parser.ProviderFactory{
+			manyStreamingFactory{provider},
+		},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			agent: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	t.Cleanup(engine.Close)
+
+	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{root}, false))
+	result := engine.LastReconciliationResult()
+	assert.True(t, result.Complete)
+	assert.Equal(t, reconciliationPageSize, result.Metrics.MaxSpoolPageRows)
+	assert.Equal(t, reconciliationPageSize,
+		result.Metrics.MaxNonAuthoritativeScopeRows,
+		"unsupported source cardinality must not create pass-wide in-memory state")
 }
 
 func (*manyStreamingProvider) Fingerprint(

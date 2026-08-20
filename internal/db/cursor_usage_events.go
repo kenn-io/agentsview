@@ -118,7 +118,11 @@ func (db *DB) InsertCursorUsageEvents(
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	db.notifyCursorUsage()
+	return nil
 }
 
 // CursorUsageEventDedupKey returns the stable cross-backend identity for a

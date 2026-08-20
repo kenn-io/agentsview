@@ -115,7 +115,7 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 	e.syncMu.Lock()
 	var stats SyncStats
 	defer func() {
-		if stats.Synced > 0 {
+		if stats.hasSessionChanges() {
 			e.emit("sessions")
 		}
 	}()
@@ -197,7 +197,7 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 	e.mu.Unlock()
 	result.Stats = stats
 
-	if stats.Synced > 0 {
+	if stats.Synced > 0 || stats.CwdUpdated > 0 {
 		log.Printf("sync: %d file(s) updated", stats.Synced)
 	}
 	if err := ctx.Err(); err != nil {

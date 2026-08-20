@@ -184,6 +184,7 @@ jobs:
             'go.kenn.io/agentsview/internal/db'
             'go.kenn.io/agentsview/internal/duckdb'
             'go.kenn.io/agentsview/internal/parser'
+            'go.kenn.io/agentsview/internal/sync'
           )
           $packages = $packages | Where-Object { $_ -notin $isolatedPackages }
           go test -tags "fts5" $packages -count=1 -timeout=20m
@@ -206,8 +207,8 @@ jobs:
         if: runner.os == 'Linux' && steps.codecov.outcome == 'failure'
         run: echo "::warning::Codecov upload failed"
 
-  # Keep the two slowest SQLite-backed packages isolated from each other and
-  # from the remaining Windows package set.
+  # Keep the slowest SQLite-backed packages isolated from each other and from
+  # the remaining Windows package set.
   test-sqlite-packages-windows:
     name: Go Test (windows-latest, ${{ matrix.name }})
     runs-on: windows-latest
@@ -219,6 +220,8 @@ jobs:
             package: ./internal/db
           - name: Parser
             package: ./internal/parser
+          - name: Sync
+            package: ./internal/sync
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:

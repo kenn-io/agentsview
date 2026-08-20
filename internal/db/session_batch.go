@@ -83,6 +83,7 @@ func (db *DB) WriteSessionBatch(
 	}
 	defer func() { _ = tx.Rollback() }()
 	var pendingRecallRevocations recallEvidenceRevocationEvents
+	var writtenUsageIDs []string
 
 	for i, write := range writes {
 		write = sanitizeSessionBatchWrite(write)
@@ -114,6 +115,7 @@ func (db *DB) WriteSessionBatch(
 			result.WrittenSessions++
 			result.WrittenMessages += messagesWritten
 			result.WrittenIndexes = append(result.WrittenIndexes, i)
+			writtenUsageIDs = append(writtenUsageIDs, write.Session.ID)
 		case errors.Is(err, ErrSessionExcluded),
 			errors.Is(err, ErrSessionTrashed):
 			if rerr := rollbackSavepoint(tx, savepoint); rerr != nil {
@@ -137,6 +139,7 @@ func (db *DB) WriteSessionBatch(
 	if err := tx.Commit(); err != nil {
 		return result, fmt.Errorf("committing batch tx: %w", err)
 	}
+	db.notifyUsageSessions(writtenUsageIDs)
 	pendingRecallRevocations.flush()
 	return result, nil
 }
@@ -165,6 +168,7 @@ func (db *DB) WriteSessionBatchAtomic(
 	}
 	defer func() { _ = tx.Rollback() }()
 	var pendingRecallRevocations recallEvidenceRevocationEvents
+	var writtenUsageIDs []string
 
 	for i, write := range writes {
 		write = sanitizeSessionBatchWrite(write)
@@ -194,6 +198,7 @@ func (db *DB) WriteSessionBatchAtomic(
 		result.WrittenSessions++
 		result.WrittenMessages += messagesWritten
 		result.WrittenIndexes = append(result.WrittenIndexes, i)
+		writtenUsageIDs = append(writtenUsageIDs, write.Session.ID)
 	}
 
 	if len(beforeCommit) > 0 && beforeCommit[0] != nil {
@@ -208,6 +213,7 @@ func (db *DB) WriteSessionBatchAtomic(
 	if err := tx.Commit(); err != nil {
 		return result, fmt.Errorf("committing batch tx: %w", err)
 	}
+	db.notifyUsageSessions(writtenUsageIDs)
 	pendingRecallRevocations.flush()
 	return result, nil
 }
@@ -446,7 +452,11 @@ func writeOneSessionBatchTx(
 		}
 	}
 	if transcriptChanged {
-		if err := bumpTranscriptRevisionTx(tx, write.Session.ID); err != nil {
+		bump := bumpTranscriptRevisionTx
+		if !sessionExists {
+			bump = bumpInsertedTranscriptRevisionTx
+		}
+		if err := bump(tx, write.Session.ID); err != nil {
 			return 0, err
 		}
 	}

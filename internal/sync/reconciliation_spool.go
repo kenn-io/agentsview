@@ -47,16 +47,17 @@ type reconciliationCursor struct {
 // ReconciliationMetrics reports the largest bounded batches retained while a
 // watcher-forced reconciliation was running.
 type ReconciliationMetrics struct {
-	MaxSpoolPageRows         int
-	MaxProviderBuffered      int
-	MaxRehydratedSources     int
-	MaxWorkerResults         int
-	MaxPendingWrites         int
-	ExcludedRemoteRoots      int
-	GlobalLinkPasses         int
-	MaxProviderRetainedBytes int64
-	SharedContainerScans     int
-	OpenCodeSQLiteParses     int
+	MaxSpoolPageRows             int
+	MaxNonAuthoritativeScopeRows int
+	MaxProviderBuffered          int
+	MaxRehydratedSources         int
+	MaxWorkerResults             int
+	MaxPendingWrites             int
+	ExcludedRemoteRoots          int
+	GlobalLinkPasses             int
+	MaxProviderRetainedBytes     int64
+	SharedContainerScans         int
+	OpenCodeSQLiteParses         int
 	// CodexReplacementIndexBuilds counts uuid-to-path replacement index
 	// builds during missing-path tombstoning. A streamed pass answers
 	// replacement lookups from its discovery spool, so this stays zero;
@@ -77,12 +78,20 @@ type reconciliationSpool struct {
 
 type reconciliationSpoolStore interface {
 	Add(context.Context, reconciliationCandidate) error
+	AddNonAuthoritativeScopes(context.Context, []reconciliationSourceScope) error
 	Candidate(context.Context, parser.AgentType, string) (reconciliationCandidate, bool, error)
 	ContainsSource(context.Context, parser.AgentType, string) (bool, error)
 	ContainsSourceIdentity(context.Context, parser.AgentType, string, string) (bool, error)
+	HasNonAuthoritativeScopes(context.Context, parser.AgentType) (bool, error)
+	ContainsNonAuthoritativeScope(context.Context, parser.AgentType, string) (bool, error)
 	Page(context.Context, reconciliationCursor, int) ([]reconciliationCandidate, error)
 	Metrics() ReconciliationMetrics
 	CloseAndRemove() error
+}
+
+type reconciliationSourceScope struct {
+	Provider parser.AgentType
+	Path     string
 }
 
 func (spool *reconciliationSpool) Candidate(
@@ -247,12 +256,113 @@ func (spool *reconciliationSpool) initialize() error {
 		) WITHOUT ROWID;
 		CREATE INDEX candidates_by_stored_path
 			ON candidates(provider, stored_path, member_identity);
+		CREATE TABLE non_authoritative_scopes (
+			provider TEXT NOT NULL,
+			path TEXT NOT NULL,
+			PRIMARY KEY (provider, path)
+		) WITHOUT ROWID;
 		BEGIN IMMEDIATE;
 	`)
 	if err != nil {
 		return fmt.Errorf("initialize reconciliation spool: %w", err)
 	}
 	return nil
+}
+
+func (spool *reconciliationSpool) AddNonAuthoritativeScopes(
+	ctx context.Context, scopes []reconciliationSourceScope,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(scopes) == 0 {
+		return nil
+	}
+	if err := spool.seal(ctx); err != nil {
+		return err
+	}
+	tx, err := spool.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin non-authoritative reconciliation scope batch: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, scope := range scopes {
+		if scope.Provider == "" || scope.Path == "" {
+			continue
+		}
+		path := canonicalReconciliationSourceIdentity(
+			validatedProviderSourceStatPath(scope.Path),
+		)
+		if path == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT OR IGNORE INTO non_authoritative_scopes(provider, path)
+			VALUES (?, ?)
+		`, string(scope.Provider), path); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			return fmt.Errorf("write non-authoritative reconciliation scope: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return fmt.Errorf("commit non-authoritative reconciliation scopes: %w", err)
+	}
+	spool.mu.Lock()
+	spool.metrics.MaxNonAuthoritativeScopeRows = max(
+		spool.metrics.MaxNonAuthoritativeScopeRows, len(scopes),
+	)
+	spool.mu.Unlock()
+	return nil
+}
+
+func (spool *reconciliationSpool) HasNonAuthoritativeScopes(
+	ctx context.Context, provider parser.AgentType,
+) (bool, error) {
+	return spool.queryNonAuthoritativeScope(ctx, provider, "", false)
+}
+
+func (spool *reconciliationSpool) ContainsNonAuthoritativeScope(
+	ctx context.Context, provider parser.AgentType, path string,
+) (bool, error) {
+	path = canonicalReconciliationSourceIdentity(validatedProviderSourceStatPath(path))
+	return spool.queryNonAuthoritativeScope(ctx, provider, path, true)
+}
+
+func (spool *reconciliationSpool) queryNonAuthoritativeScope(
+	ctx context.Context, provider parser.AgentType, path string, exact bool,
+) (bool, error) {
+	if err := spool.seal(ctx); err != nil {
+		return false, err
+	}
+	query := `
+		SELECT 1 FROM non_authoritative_scopes
+		WHERE provider = ? LIMIT 1
+	`
+	args := []any{string(provider)}
+	if exact {
+		query = `
+			SELECT 1 FROM non_authoritative_scopes
+			WHERE provider = ? AND path = ? LIMIT 1
+		`
+		args = append(args, path)
+	}
+	var found int
+	err := spool.db.QueryRowContext(ctx, query, args...).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return false, ctxErr
+		}
+		return false, fmt.Errorf("query non-authoritative reconciliation scope: %w", err)
+	}
+	return true, nil
 }
 
 func (spool *reconciliationSpool) Add(

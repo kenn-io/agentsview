@@ -73,6 +73,11 @@ type SyncStats struct {
 	// writes. It remains meaningful on a partially failed or aborted pass: a
 	// later retry cannot rediscover an already-tombstoned row to notify clients.
 	Tombstoned int `json:"tombstoned,omitempty"`
+	// CwdUpdated counts durable source workspace (Cwd) reconciliations that
+	// changed rows without an ordinary session write. It is exported and
+	// serialized because worker-process passes marshal SyncStats back to the
+	// daemon, which must still emit "sessions" for cwd-only changes.
+	CwdUpdated int `json:"cwd_updated,omitempty"`
 
 	// Anomalies aggregates per-run parser/sanitizer anomaly signals
 	// surfaced in the CLI sync summary. These are live per-run counters
@@ -117,7 +122,11 @@ type SyncStats struct {
 
 func (s SyncStats) shouldEmitSync() bool {
 	return s.Tombstoned > 0 ||
-		(!s.Aborted && (s.Synced > 0 || s.ArchiveRebuilt))
+		(!s.Aborted && (s.Synced > 0 || s.CwdUpdated > 0 || s.ArchiveRebuilt))
+}
+
+func (s SyncStats) hasSessionChanges() bool {
+	return s.Synced > 0 || s.CwdUpdated > 0 || s.Tombstoned > 0
 }
 
 // AnomalyStats aggregates parser-output anomaly signals observed during a
@@ -388,6 +397,11 @@ func (s *SyncStats) RecordSkip() {
 // RecordSynced adds n to the synced session counter.
 func (s *SyncStats) RecordSynced(n int) {
 	s.Synced += n
+}
+
+// RecordCwdUpdated records a durable source workspace reconciliation.
+func (s *SyncStats) RecordCwdUpdated(n int) {
+	s.CwdUpdated += n
 }
 
 // RecordFailed increments the hard-failure counter.

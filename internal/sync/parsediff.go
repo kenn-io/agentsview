@@ -228,8 +228,10 @@ func (e *Engine) parseDiffProviderSources(
 		return nil, nil
 	}
 	provider := factory.NewProvider(parser.ProviderConfig{
-		Roots:   roots,
-		Machine: e.machine,
+		Roots:          roots,
+		Machine:        e.machine,
+		SourceMachines: e.sourceMachines[agentType],
+		PathRewriter:   e.pathRewriter,
 	})
 	sources, err := provider.Discover(ctx)
 	if err != nil {
@@ -705,10 +707,13 @@ func (e *Engine) parseDiffCollectFile(
 
 	for _, pr := range job.results {
 		pw := pendingWrite{
-			sess:        pr.Session,
-			msgs:        pr.Messages,
-			usageEvents: pr.UsageEvents,
-			needsRetry:  job.needsRetryForSession(pr.Session.ID),
+			sess:                pr.Session,
+			msgs:                pr.Messages,
+			usageEvents:         pr.UsageEvents,
+			needsRetry:          job.needsRetryForSession(pr.Session.ID),
+			sourceCwdResolution: job.sourceCwdResolution,
+			sourceCwdStored:     job.sourceCwdStored,
+			sourceCwdStoredOK:   job.sourceCwdStoredOK,
 		}
 		preserved, err := e.preserveUnavailableSourceProjects(
 			ctx, []pendingWrite{pw},

@@ -16,6 +16,32 @@ import (
 // combined with the other key columns. Composite keys therefore use fixed-size
 // SHA-256 digests of those values; the full text is stored beside them.
 const rawIngestDDL = `
+CREATE TABLE IF NOT EXISTS raw_devices (
+    device_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    display_name TEXT NOT NULL
+        CHECK (octet_length(display_name) BETWEEN 1 AND 256),
+    credential_sha256 BYTEA NOT NULL UNIQUE
+        CHECK (octet_length(credential_sha256) = 32),
+    created_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ,
+    UNIQUE (tenant_id, device_id),
+    CHECK (revoked_at IS NULL OR revoked_at >= created_at)
+);
+
+CREATE TABLE IF NOT EXISTS raw_device_tokens (
+    token_sha256 BYTEA PRIMARY KEY
+        CHECK (octet_length(token_sha256) = 32),
+    tenant_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    scope_bits SMALLINT NOT NULL CHECK (scope_bits BETWEEN 1 AND 15),
+    issued_at TIMESTAMPTZ NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    CHECK (expires_at > issued_at),
+    FOREIGN KEY (tenant_id, device_id)
+        REFERENCES raw_devices (tenant_id, device_id) ON DELETE RESTRICT
+);
+
 CREATE TABLE IF NOT EXISTS raw_objects (
     tenant_id TEXT NOT NULL,
     sha256 TEXT NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
@@ -138,6 +164,8 @@ CREATE INDEX IF NOT EXISTS idx_raw_ingest_jobs_ready
 CREATE INDEX IF NOT EXISTS idx_raw_ingest_jobs_lease
     ON raw_ingest_jobs (lease_expires_at, id)
     WHERE state = 'leased';
+CREATE INDEX IF NOT EXISTS idx_raw_device_tokens_expiry
+    ON raw_device_tokens (expires_at, tenant_id, device_id);
 `
 
 const rawIngestAppendOnlyDDL = `

@@ -35,7 +35,7 @@ func (f cursorProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 			Caps:   cursorProviderCapabilities(),
 			Config: cfg,
 		},
-		sources: newCursorSourceSet(cfg.Roots),
+		sources: newCursorSourceSetWithConfig(cfg),
 	}
 }
 
@@ -90,7 +90,13 @@ func (p *cursorProvider) Parse(
 		return ParseOutcome{}, fmt.Errorf("cursor source path unavailable")
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
-	sess, msgs, err := p.parseSession(path, req.Source.ProjectHint, machine)
+	cwd := ""
+	if req.Source.CwdResolution.State == SourceCwdResolved {
+		cwd = req.Source.CwdResolution.Path
+	}
+	sess, msgs, err := p.parseSession(
+		path, req.Source.ProjectHint, cwd, machine,
+	)
 	if err != nil {
 		return ParseOutcome{}, err
 	}
@@ -121,22 +127,91 @@ type cursorSource struct {
 }
 
 type cursorSourceSet struct {
-	roots []string
+	roots              []string
+	resolver           func(string) string
+	resolutionResolver func(string, CursorResolveMode, string) SourceCwdResolution
+	remote             bool
+	remoteRoots        map[string]bool
 }
 
 func newCursorSourceSet(roots []string) cursorSourceSet {
-	return cursorSourceSet{roots: cleanJSONLRoots(roots)}
+	return cursorSourceSet{
+		roots:       cleanJSONLRoots(roots),
+		remoteRoots: make(map[string]bool),
+	}
+}
+
+func newCursorSourceSetWithConfig(cfg ProviderConfig) cursorSourceSet {
+	s := newCursorSourceSet(cfg.Roots)
+	s.remote = cfg.PathRewriter != nil
+	for root, machine := range cfg.SourceMachines {
+		if machine != "" && machine != cfg.Machine {
+			s.remoteRoots[filepath.Clean(root)] = true
+		}
+	}
+	return s
+}
+
+type cursorResolutionCache map[string]SourceCwdResolution
+
+func (s cursorSourceSet) resolveCwd(
+	root, projectDir string, mode CursorResolveMode, hint string,
+	cache cursorResolutionCache,
+) SourceCwdResolution {
+	cacheKey := filepath.Clean(root) + "\x00" + projectDir
+	if cache != nil && mode == CursorResolvePassiveDiscovery {
+		if resolution, ok := cache[cacheKey]; ok {
+			return resolution
+		}
+	}
+	var resolution SourceCwdResolution
+	if s.remote || s.remoteRoot(root) {
+		resolution = SourceCwdResolution{State: SourceCwdRemote}
+	} else if s.resolutionResolver != nil {
+		resolution = s.resolutionResolver(projectDir, mode, hint)
+	} else if s.resolver != nil && mode == CursorResolvePassiveDiscovery {
+		if path := s.resolver(projectDir); path != "" {
+			resolution = SourceCwdResolution{
+				State: SourceCwdResolved,
+				Path:  path,
+			}
+		} else {
+			resolution = SourceCwdResolution{State: SourceCwdNone}
+		}
+	} else {
+		resolution = ResolveCursorWorkspaceDirResolution(
+			"", projectDir, hint, mode,
+		)
+	}
+	if cache != nil && mode == CursorResolvePassiveDiscovery {
+		cache[cacheKey] = resolution
+	}
+	return resolution
+}
+
+func (s cursorSourceSet) remoteRoot(root string) bool {
+	clean := filepath.Clean(root)
+	if s.remoteRoots[clean] {
+		return true
+	}
+	for configured := range s.remoteRoots {
+		if samePath(configured, clean) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s cursorSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	var sources []SourceRef
 	seen := make(map[string]struct{})
+	resolutionCache := make(cursorResolutionCache)
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		for _, path := range s.discoverTranscriptPaths(root) {
-			source, ok := s.sourceRef(root, path)
+			source, ok := s.sourceRefWithCache(root, path, resolutionCache)
 			if !ok {
 				continue
 			}
@@ -148,6 +223,7 @@ func (s cursorSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 }
 
 func (s cursorSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	resolutionCache := make(cursorResolutionCache)
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -200,7 +276,9 @@ func (s cursorSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef)
 				if path == "" {
 					return nil
 				}
-				source, ok, sourceErr := s.streamingSourceRef(root, path)
+				source, ok, sourceErr := s.streamingSourceRefWithCache(
+					root, path, resolutionCache,
+				)
 				if sourceErr != nil {
 					return sourceErr
 				}
@@ -217,8 +295,8 @@ func (s cursorSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef)
 	return nil
 }
 
-func (s cursorSourceSet) streamingSourceRef(
-	root, path string,
+func (s cursorSourceSet) streamingSourceRefWithCache(
+	root, path string, resolutionCache cursorResolutionCache,
 ) (SourceRef, bool, error) {
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
@@ -251,7 +329,12 @@ func (s cursorSourceSet) streamingSourceRef(
 	return SourceRef{
 		Provider: AgentCursor, Key: path, DisplayPath: path,
 		FingerprintKey: path, ProjectHint: project,
-		Opaque: cursorSource{Root: root, Path: path},
+		CwdResolution: s.resolveCwd(
+			root, projectDir, CursorResolvePassiveDiscovery, "", resolutionCache,
+		),
+		Opaque: cursorSource{
+			Root: root, Path: path,
+		},
 	}, true, nil
 }
 
@@ -631,6 +714,12 @@ func (s cursorSourceSet) sourceForPathInRoot(
 }
 
 func (s cursorSourceSet) sourceRef(root, path string) (SourceRef, bool) {
+	return s.sourceRefWithCache(root, path, nil)
+}
+
+func (s cursorSourceSet) sourceRefWithCache(
+	root, path string, resolutionCache cursorResolutionCache,
+) (SourceRef, bool) {
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
 	if !IsRegularFile(path) {
@@ -658,6 +747,9 @@ func (s cursorSourceSet) sourceRef(root, path string) (SourceRef, bool) {
 		DisplayPath:    path,
 		FingerprintKey: path,
 		ProjectHint:    project,
+		CwdResolution: s.resolveCwd(
+			root, projectDir, CursorResolvePassiveDiscovery, "", resolutionCache,
+		),
 		Opaque: cursorSource{
 			Root: root,
 			Path: path,

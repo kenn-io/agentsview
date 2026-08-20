@@ -540,6 +540,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 		idleTracker.Touch()
 		go idleTracker.Run(ctx)
 	}
+	startDaemonUsageCacheBackfill(ctx, database, idleTracker)
 	if engine != nil && opts.SkipInitialSync {
 		go func() {
 			timer := time.NewTimer(deferredStartupSyncGracePeriod)
@@ -603,6 +604,34 @@ func runServe(cfg config.Config, opts serveOptions) {
 
 	if err := waitForServerRuntime(ctx, srv, rt); err != nil {
 		fatal("%v", err)
+	}
+}
+
+type usageCacheBackfiller interface {
+	StartUsageCacheBackfill(context.Context) error
+	WaitUsageCacheBackfill(context.Context) error
+	SetUsageCacheBackfillStarted(func())
+}
+
+func startDaemonUsageCacheBackfill(
+	ctx context.Context, backfiller usageCacheBackfiller,
+	idleTracker *server.IdleTracker,
+) {
+	backfiller.SetUsageCacheBackfillStarted(func() {
+		done, ok := idleTracker.BeginWork()
+		if !ok {
+			return
+		}
+		go func() {
+			defer done()
+			if err := backfiller.WaitUsageCacheBackfill(ctx); err != nil &&
+				ctx.Err() == nil {
+				log.Printf("usage cache backfill: %v", err)
+			}
+		}()
+	})
+	if err := backfiller.StartUsageCacheBackfill(ctx); err != nil && ctx.Err() == nil {
+		log.Printf("usage cache backfill: %v", err)
 	}
 }
 
@@ -2740,10 +2769,21 @@ func runArchiveAudit(
 	result, err := runWorkerWritePass(
 		ctx, ctx, cfg, engine, database, lock, "audit", nil,
 	)
-	if (result.Synced > 0 || result.Tombstoned > 0) && emitter != nil {
+	if workerResultHasSessionChanges(result) && emitter != nil {
 		emitter.Emit("sessions")
 	}
 	return err
+}
+
+// workerResultHasSessionChanges reports whether a worker pass changed rows
+// clients must refetch. Cwd-only reconciliations ride the serialized
+// SyncStats payload rather than the summary counters, so the audit emit
+// must consult it or a cwd-only pass would leave the UI stale.
+func workerResultHasSessionChanges(result workerResult) bool {
+	if result.Synced > 0 || result.Tombstoned > 0 {
+		return true
+	}
+	return result.Stats != nil && result.Stats.CwdUpdated > 0
 }
 
 // scheduledSyncEngine is the reconciliation surface the scheduled pass needs.

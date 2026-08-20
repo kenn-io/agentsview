@@ -139,6 +139,51 @@ func TestReconciliationSpoolPagesStayBoundedAndCleanup(t *testing.T) {
 	}
 }
 
+func TestReconciliationSpoolNonAuthoritativeScopesStayPageBounded(t *testing.T) {
+	spool, err := newReconciliationSpool(filepath.Join(t.TempDir(), "sessions.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, spool.CloseAndRemove()) })
+
+	ctx := t.Context()
+	require.NoError(t, spool.Add(ctx, reconciliationCandidate{
+		Provider: parser.AgentTrae,
+		Identity: "candidate",
+		Path:     "/trae/candidate/state.vscdb",
+	}))
+	_, err = spool.Page(ctx, reconciliationCursor{}, reconciliationPageSize)
+	require.NoError(t, err, "candidate paging must seal the discovery transaction")
+
+	const scopeCount = reconciliationPageSize*3 + 17
+	for start := 0; start < scopeCount; start += reconciliationPageSize {
+		end := min(start+reconciliationPageSize, scopeCount)
+		scopes := make([]reconciliationSourceScope, 0, end-start)
+		for i := start; i < end; i++ {
+			scopes = append(scopes, reconciliationSourceScope{
+				Provider: parser.AgentTrae,
+				Path:     filepath.Join("/trae", assertSessionIdentity(i), "state.vscdb"),
+			})
+		}
+		require.NoError(t, spool.AddNonAuthoritativeScopes(ctx, scopes))
+	}
+
+	for _, i := range []int{0, reconciliationPageSize, scopeCount - 1} {
+		present, queryErr := spool.ContainsNonAuthoritativeScope(
+			ctx, parser.AgentTrae,
+			filepath.Join("/trae", assertSessionIdentity(i), "state.vscdb"),
+		)
+		require.NoError(t, queryErr)
+		assert.True(t, present, "scope %d must remain queryable from disk", i)
+	}
+	present, err := spool.ContainsNonAuthoritativeScope(
+		ctx, parser.AgentTrae, filepath.Join("/trae", "absent", "state.vscdb"),
+	)
+	require.NoError(t, err)
+	assert.False(t, present)
+	assert.Equal(t, reconciliationPageSize,
+		spool.Metrics().MaxNonAuthoritativeScopeRows,
+		"disk-backed cardinality may grow, but one retained write batch must stay page-bounded")
+}
+
 func TestReconciliationSpoolCancellationAndClosedErrors(t *testing.T) {
 	spool, err := newReconciliationSpool(filepath.Join(t.TempDir(), "sessions.db"))
 	require.NoError(t, err)

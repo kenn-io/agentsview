@@ -134,14 +134,16 @@ func (e *Engine) missingMemberTombstoneAllowed(
 // allow-list admits and the number it vetoes. With no filter
 // configured it returns the input untouched.
 func (e *Engine) splitResultsByCwdFilter(
-	results []parser.ParseResult,
+	results []parser.ParseResult, sourceCwd sourceCwdDecision,
 ) ([]parser.ParseResult, int) {
 	if e.cwdFilter.empty() || len(results) == 0 {
 		return results, 0
 	}
 	allowed := make([]parser.ParseResult, 0, len(results))
 	for _, pr := range results {
-		if e.cwdFilter.allows(pr.Session.Cwd) {
+		if e.cwdFilter.allows(sourceCwdForFilter(
+			pr.Session.Cwd, sourceCwd,
+		)) {
 			allowed = append(allowed, pr)
 		}
 	}

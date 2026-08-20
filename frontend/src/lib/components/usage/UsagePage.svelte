@@ -60,11 +60,21 @@
     usageChartColorMaps(usage.summary, settings.chartPalette),
   );
 
-  const projectItems = $derived(
-    sessions.projects.map((p) => ({
-      name: p.name,
-      count: p.session_count,
-    })),
+  // Keep projects already returned by the summary so a project remains
+  // available after filtering removes it or the page is remounted.
+
+  $effect(() => {
+    const fromSummary = usage.summary?.projectTotals ?? [];
+    const counts = usage.summary?.sessionCounts.byProject ?? {};
+    untrack(() => usage.mergeKnownProjects(fromSummary, counts));
+  });
+
+  const projectItems = $derived(usage.knownProjects);
+
+  const legacyExcludedProjectCount = $derived(
+    usage.excludedProjects
+      ? usage.excludedProjects.split(",").filter(Boolean).length
+      : 0,
   );
 
   const agentItems = $derived(
@@ -483,11 +493,12 @@
       <FilterDropdown
         label={m.analytics_col_project()}
         items={projectItems}
-        excludedCsv={usage.excludedProjects}
-        onToggle={(name) => usage.toggleProject(name)}
+        excludedCsv={usage.excludedProjectKeys}
+        unlistedExcludedCount={legacyExcludedProjectCount}
+        onToggle={(key) => usage.toggleProjectKey(key)}
         onSelectAll={() => usage.selectAllProjects()}
         onDeselectAll={() =>
-          usage.deselectAllProjects(projectItems.map((p) => p.name))}
+          usage.deselectAllProjectKeys(projectItems.map((p) => p.id))}
       />
 
       <FilterDropdown

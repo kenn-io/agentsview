@@ -24,7 +24,7 @@ async function flushEffects() {
 
 let component: ReturnType<typeof mount> | undefined;
 
-function usageSummaryWithUnsupported(kind?: string) {
+function usageSummaryWithUnsupported(kind?: string): UsageSummaryResponse {
   return {
     from: "2024-06-01",
     to: "2024-06-01",
@@ -138,6 +138,9 @@ afterEach(() => {
   usage.toggles.timeSeries.groupBy = "project";
   usage.toggles.attribution.groupBy = "project";
   usage.toggles.attribution.view = "treemap";
+  usage.excludedProjects = "";
+  usage.excludedProjectKeys = "";
+  usage.knownProjects = [];
   settings.chartPalette = "agentsview";
   sessions.projects = [];
   yokedDates.setEnabled(false);
@@ -145,6 +148,146 @@ afterEach(() => {
 });
 
 describe("UsagePage refresh behavior", () => {
+  it("uses stable project keys in the Project filter", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    router.route = "usage";
+    router.params = {};
+    const summary = usageSummaryWithUnsupported();
+    summary.projectTotals = [
+      {
+        project_key: "project-key-1",
+        project: "shared-label",
+        inputTokens: 80,
+        outputTokens: 40,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        cost: testMoney(8),
+      },
+      {
+        project_key: "project-key-2",
+        project: "shared-label",
+        inputTokens: 20,
+        outputTokens: 10,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        cost: testMoney(2),
+      },
+    ];
+    usage.summary = summary;
+
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+
+    const projectFilter = document.querySelector<HTMLButtonElement>(
+      '.kit-filter-dropdown__btn[aria-label="Project: All"]',
+    );
+    expect(projectFilter).not.toBeNull();
+
+    projectFilter!.click();
+    await tick();
+    const projectOptions = document.querySelectorAll<HTMLButtonElement>(
+      ".kit-filter-dropdown__item",
+    );
+    expect(projectOptions).toHaveLength(2);
+    expect(projectOptions[0]?.textContent).toContain("shared-label");
+    expect(projectOptions[1]?.textContent).toContain("shared-label");
+
+    projectOptions[1]!.click();
+    expect(usage.excludedProjectKeys).toBe("project-key-2");
+    expect(usage.excludedProjects).toBe("");
+
+    usage.summary = {
+      ...summary,
+      projectTotals: [summary.projectTotals[0]!],
+    };
+    await unmount(component);
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+
+    const remountedProjectFilter = document.querySelector<HTMLButtonElement>(
+      ".usage-toolbar .kit-filter-dropdown__btn",
+    );
+    expect(remountedProjectFilter).not.toBeNull();
+    remountedProjectFilter!.click();
+    await tick();
+    expect(
+      document.querySelectorAll(".kit-filter-dropdown__item"),
+    ).toHaveLength(2);
+    const remountedOptions = document.querySelectorAll<HTMLButtonElement>(
+      ".kit-filter-dropdown__item",
+    );
+    remountedOptions[1]!.click();
+    expect(usage.excludedProjectKeys).toBe("");
+
+    usage.excludedProjectKeys = "unlisted-project-key";
+
+    const deselectAll = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        ".kit-filter-dropdown__bulk-btn",
+      ),
+    ).find((button) => button.textContent?.trim() === "Deselect all");
+    expect(deselectAll).not.toBeUndefined();
+
+    deselectAll!.click();
+    expect(usage.excludedProjectKeys).toBe(
+      "unlisted-project-key,project-key-1,project-key-2",
+    );
+
+    const selectAll = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        ".kit-filter-dropdown__bulk-btn",
+      ),
+    ).find((button) => button.textContent?.trim() === "Select all");
+    expect(selectAll).not.toBeUndefined();
+
+    selectAll!.click();
+    expect(usage.excludedProjectKeys).toBe("");
+  });
+
+  it("shows legacy project-name exclusions until they are cleared", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    router.route = "usage";
+    router.params = {};
+    usage.excludedProjects = "legacy-project";
+    usage.summary = usageSummaryWithUnsupported();
+
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+
+    const projectFilter = document.querySelector<HTMLButtonElement>(
+      '.kit-filter-dropdown__btn[aria-label="Project: 1 hidden"]',
+    );
+    expect(projectFilter).not.toBeNull();
+
+    projectFilter!.click();
+    await tick();
+    const selectAll = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        ".kit-filter-dropdown__bulk-btn",
+      ),
+    ).find((button) => button.textContent?.trim() === "Select all");
+    expect(selectAll).not.toBeUndefined();
+
+    selectAll!.click();
+    expect(usage.excludedProjects).toBe("");
+  });
+
   it("hydrates token mode from the canonical URL before fetching", async () => {
     vi.stubGlobal(
       "ResizeObserver",

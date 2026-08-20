@@ -91,7 +91,8 @@ func (e *Engine) planOneChangedPath(
 			)
 		}
 		provider := factory.NewProvider(parser.ProviderConfig{
-			Roots: roots, Machine: e.machine, PathRewriter: e.pathRewriter,
+			Roots: roots, Machine: e.machine,
+			SourceMachines: e.sourceMachines[agent], PathRewriter: e.pathRewriter,
 		})
 		watchRoots, err := e.providerChangedPathWatchRoots(ctx, agent, provider, roots)
 		if err != nil {
@@ -275,7 +276,9 @@ func (e *Engine) expandAffectedClaudeDuplicateCandidates(
 		return files, nil
 	}
 	provider := factory.NewProvider(parser.ProviderConfig{
-		Roots: roots, Machine: e.machine, PathRewriter: e.pathRewriter,
+		Roots: roots, Machine: e.machine,
+		SourceMachines: e.sourceMachines[parser.AgentClaude],
+		PathRewriter:   e.pathRewriter,
 	})
 	out := append([]parser.DiscoveredFile(nil), files...)
 	seenSources := make(map[string]struct{}, len(files))
@@ -586,6 +589,7 @@ func (e *Engine) discoverChangedPathFallbackProviders(
 		}
 		provider := factory.NewProvider(parser.ProviderConfig{
 			Roots: roots, Machine: e.machine, PathRewriter: e.pathRewriter,
+			SourceMachines: e.sourceMachines[agent],
 		})
 		sources, err := provider.Discover(ctx)
 		if err != nil {

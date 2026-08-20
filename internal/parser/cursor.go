@@ -21,7 +21,7 @@ const maxCursorTranscriptSize = 10 << 20
 // text with "user:" and "assistant:" role markers, tool calls, and thinking
 // blocks.
 func (p *cursorProvider) parseSession(
-	path, project, machine string,
+	path, project, cwd, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	// Open with O_NOFOLLOW (Unix) to reject symlinks at the
 	// final path component, closing the TOCTOU window between
@@ -71,7 +71,6 @@ func (p *cursorProvider) parseSession(
 	if len(messages) == 0 {
 		return nil, nil, nil
 	}
-
 	sessionID := CursorSessionID(path)
 
 	var firstMessage string
@@ -95,6 +94,7 @@ func (p *cursorProvider) parseSession(
 		Project:      project,
 		Machine:      machine,
 		Agent:        AgentCursor,
+		Cwd:          cwd,
 		FirstMessage: firstMessage,
 		StartedAt:    mtime,
 		EndedAt:      mtime,

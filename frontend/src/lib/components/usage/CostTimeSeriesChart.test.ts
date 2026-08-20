@@ -19,6 +19,7 @@ import type {
 } from "../../api/types/usage.js";
 import { projectColor } from "../../utils/projectColor.js";
 import { usageChartColorMaps } from "../../utils/usageChartColors.js";
+import { setLocale } from "../../i18n/index.js";
 
 const OBSERVED_WIDTH = 1648;
 
@@ -160,6 +161,7 @@ describe("CostTimeSeriesChart", () => {
     usage.summary = usageSummary();
     usage.toggles.timeSeries.groupBy = "project";
     settings.chartPalette = "agentsview";
+    setLocale("en");
   });
 
   afterEach(() => {
@@ -172,7 +174,28 @@ describe("CostTimeSeriesChart", () => {
       "output",
     ]);
     settings.chartPalette = "agentsview";
+    setLocale("en");
     document.body.innerHTML = "";
+  });
+
+  it("keeps French currency labels inside the SVG viewBox", async () => {
+    setLocale("fr");
+    const component = mountChart();
+    await tick();
+
+    const labels = Array.from(
+      document.querySelectorAll<SVGTextElement>("text.y-label"),
+    );
+    expect(labels.some((label) => label.textContent?.includes("$US"))).toBe(true);
+
+    const leftEdges = labels.map((label) => {
+      const x = Number(label.getAttribute("x"));
+      const textWidthEstimate = [...(label.textContent?.trim() ?? "")].length * 5;
+      return x - textWidthEstimate;
+    });
+    expect(Math.min(...leftEdges)).toBeGreaterThanOrEqual(0);
+
+    unmount(component);
   });
 
   it("keeps the rightmost date label inside the SVG viewBox", async () => {

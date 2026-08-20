@@ -80,7 +80,11 @@ func (db *DB) ReplaceSessionUsageEvents(
 		return err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	db.notifyUsageSessions([]string{sessionID})
+	return nil
 }
 
 func replaceSessionUsageEventsTx(
@@ -164,6 +168,14 @@ func replaceSessionUsageEventsTx(
 func (db *DB) UsageEventFingerprints(
 	sessionIDs []string,
 ) (map[string]string, error) {
+	return usageEventFingerprintsWithQuerier(
+		context.Background(), db.getReader(), sessionIDs,
+	)
+}
+
+func usageEventFingerprintsWithQuerier(
+	ctx context.Context, q messageRowsQuerier, sessionIDs []string,
+) (map[string]string, error) {
 	out := make(map[string]string, len(sessionIDs))
 	if len(sessionIDs) == 0 {
 		return out, nil
@@ -175,8 +187,8 @@ func (db *DB) UsageEventFingerprints(
 	const batchSize = 900
 	for start := 0; start < len(sessionIDs); start += batchSize {
 		end := min(start+batchSize, len(sessionIDs))
-		if err := db.appendUsageEventFingerprints(
-			out, sessionIDs[start:end],
+		if err := appendUsageEventFingerprints(
+			ctx, q, out, sessionIDs[start:end],
 		); err != nil {
 			return nil, err
 		}
@@ -184,7 +196,8 @@ func (db *DB) UsageEventFingerprints(
 	return out, nil
 }
 
-func (db *DB) appendUsageEventFingerprints(
+func appendUsageEventFingerprints(
+	ctx context.Context, q messageRowsQuerier,
 	out map[string]string, sessionIDs []string,
 ) error {
 	placeholders := make([]string, len(sessionIDs))
@@ -193,7 +206,7 @@ func (db *DB) appendUsageEventFingerprints(
 		placeholders[i] = "?"
 		args[i] = id
 	}
-	rows, err := db.getReader().Query(`
+	rows, err := q.QueryContext(ctx, `
 		SELECT session_id, message_ordinal, source, model,
 			input_tokens, output_tokens,
 			cache_creation_input_tokens, cache_read_input_tokens,

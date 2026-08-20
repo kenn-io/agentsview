@@ -333,7 +333,7 @@ BENCH_GATE_TIME ?= 20x
 # against top-level benchmark names, so sub-benchmarks follow their
 # parent; the cheap benchmarks keep the full iteration count because
 # their millisecond-scale samples are what needs the averaging.
-BENCH_GATE_HEAVY ?= GetDailyUsage|SQLiteActivityReport|SyncAllColdArchive|ResyncBulk
+BENCH_GATE_HEAVY ?= GetDailyUsage|UsageRollup|SQLiteActivityReport|SyncAllColdArchive|ResyncBulk
 BENCH_GATE_HEAVY_TIME ?= 5x
 bench-gate: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5" -run '^$$' \

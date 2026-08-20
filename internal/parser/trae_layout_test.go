@@ -90,7 +90,7 @@ func TestTraeLayoutStateMatrix(t *testing.T) {
 			},
 			check: func(t *testing.T, outcome ParseOutcome) {
 				assert.Equal(t, SkipUnsupportedSource, outcome.SkipReason)
-				assert.False(t, outcome.ResultSetComplete)
+				assert.True(t, outcome.ResultSetComplete)
 				assert.False(t, outcome.ForceReplace)
 			},
 		},

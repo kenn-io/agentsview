@@ -1736,8 +1736,9 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 // reconcileTranscriptRevisionsTx preserves read-progress identity across a
 // full resync. Reparsed sessions start with fresh local counters, so matching
 // transcript rows inherit the old counter and changed rows advance it once.
-// The comparison covers the user-visible message and tool-result fields while
-// deliberately excluding session metadata and token/source bookkeeping.
+// The comparison covers the same persisted transcript identity used by the
+// incremental message-diff path, including usage and provider dedup identities.
+// Session metadata and parser-only source bookkeeping remain excluded.
 func reconcileTranscriptRevisionsTx(
 	ctx context.Context, tx *sql.Tx,
 ) error {
@@ -1747,6 +1748,8 @@ func reconcileTranscriptRevisionsTx(
 	for table, columns := range map[string][]string{
 		"messages": {
 			"thinking_text", "is_system", "model",
+			"token_usage", "claude_message_id", "claude_request_id",
+			"source_uuid",
 			"context_tokens", "output_tokens",
 			"has_context_tokens", "has_output_tokens",
 			"source_subtype", "prompt_source", "is_compact_boundary",
@@ -1774,14 +1777,16 @@ func reconcileTranscriptRevisionsTx(
 			SELECT CASE WHEN
 				NOT EXISTS (
 					SELECT ordinal, role, content, thinking_text, timestamp,
-						has_thinking, has_tool_use, is_system, model,
+						has_thinking, has_tool_use, is_system, model, token_usage,
+						claude_message_id, claude_request_id, source_uuid,
 						context_tokens, output_tokens, has_context_tokens,
 						has_output_tokens, source_subtype, prompt_source,
 						is_compact_boundary
 					FROM main.messages WHERE session_id = current.id
 					EXCEPT
 					SELECT ordinal, role, content, thinking_text, timestamp,
-						has_thinking, has_tool_use, is_system, model,
+						has_thinking, has_tool_use, is_system, model, token_usage,
+						claude_message_id, claude_request_id, source_uuid,
 						context_tokens, output_tokens, has_context_tokens,
 						has_output_tokens, source_subtype, prompt_source,
 						is_compact_boundary
@@ -1789,14 +1794,16 @@ func reconcileTranscriptRevisionsTx(
 				)
 				AND NOT EXISTS (
 					SELECT ordinal, role, content, thinking_text, timestamp,
-						has_thinking, has_tool_use, is_system, model,
+						has_thinking, has_tool_use, is_system, model, token_usage,
+						claude_message_id, claude_request_id, source_uuid,
 						context_tokens, output_tokens, has_context_tokens,
 						has_output_tokens, source_subtype, prompt_source,
 						is_compact_boundary
 					FROM old_db.messages WHERE session_id = current.id
 					EXCEPT
 					SELECT ordinal, role, content, thinking_text, timestamp,
-						has_thinking, has_tool_use, is_system, model,
+						has_thinking, has_tool_use, is_system, model, token_usage,
+						claude_message_id, claude_request_id, source_uuid,
 						context_tokens, output_tokens, has_context_tokens,
 						has_output_tokens, source_subtype, prompt_source,
 						is_compact_boundary

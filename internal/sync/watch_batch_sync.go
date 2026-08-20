@@ -310,8 +310,7 @@ func (e *Engine) SyncWatchBatchThenRun(
 	if len(plan.paths) > 0 {
 		pathStats, tombstoned, pathErr := e.syncChangedPathsLocked(ctx, plan.paths)
 		mergeSyncStats(&stats, pathStats)
-		changed = changed || pathStats.Synced > 0 || tombstoned > 0 ||
-			pathStats.Tombstoned > 0
+		changed = changed || pathStats.hasSessionChanges() || tombstoned > 0
 		if pathErr != nil {
 			retry := WatchBatch{FullSync: plan.full, LostEvents: plan.lostEvents}
 			if !plan.full {
@@ -334,7 +333,7 @@ func (e *Engine) SyncWatchBatchThenRun(
 				ctx, "", reconcileRoots, false, plan.lostEvents, nil,
 			)
 		mergeSyncStats(&stats, reconcileStats)
-		changed = changed || reconcileStats.Synced > 0 || tombstoned > 0
+		changed = changed || reconcileStats.hasSessionChanges() || tombstoned > 0
 		if reconcileErr != nil {
 			return stats, watchBatchReconciliationError(
 				reconcileErr, reconcileRoots, plan.full, plan.lostEvents,

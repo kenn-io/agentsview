@@ -127,6 +127,9 @@ test.describe("Usage page", () => {
       .locator(".usage-toolbar .kit-filter-dropdown__btn")
       .first();
     await trigger.click();
+    await expect(
+      page.locator(".usage-toolbar .kit-filter-dropdown__item").first(),
+    ).toBeVisible();
 
     // Click "Deselect all".
     await page
@@ -231,7 +234,9 @@ test.describe("Usage page", () => {
     ).toHaveAttribute("aria-checked", "true");
   });
 
-  test("URL updates when filter changes", async ({ page }) => {
+  test("project filters use stable keys without writing them to the URL", async ({
+    page,
+  }) => {
     // Wait for data.
     await expect(
       page.locator(".summary-cards .card-value").first(),
@@ -242,15 +247,26 @@ test.describe("Usage page", () => {
       .locator(".usage-toolbar .kit-filter-dropdown__btn")
       .first();
     await trigger.click();
-    await page
+    const projectOption = page
       .locator(".usage-toolbar .kit-filter-dropdown__item")
       .filter({ hasText: "project-delta" })
-      .first()
-      .click();
+      .first();
+    await expect(projectOption).toBeVisible();
+    const filteredRequest = page.waitForRequest((request) => {
+      const url = new URL(request.url());
+      return url.pathname.endsWith("/api/v1/usage/summary") &&
+        !!url.searchParams.get("exclude_project_key");
+    });
+    await projectOption.click();
+    const requestUrl = new URL((await filteredRequest).url());
     await page.mouse.click(10, 10);
 
-    // URL should contain the exclude_project param.
-    await expect(page).toHaveURL(/exclude_project=/);
+    expect(requestUrl.searchParams.get("exclude_project_key")).toBeTruthy();
+    await expect(page).toHaveURL((url) =>
+      url.pathname === "/usage" &&
+      !url.searchParams.has("exclude_project") &&
+      !url.searchParams.has("exclude_project_key")
+    );
   });
 
   test("returning bare refreshes rolling bounds after midnight", async ({

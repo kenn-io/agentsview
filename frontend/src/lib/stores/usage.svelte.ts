@@ -41,6 +41,12 @@ export interface UsagePairwiseSelection {
   right: UsagePairwiseSideSelection;
 }
 
+export interface UsageProjectFilterItem {
+  id: string;
+  name: string;
+  count?: number;
+}
+
 export type GroupBy = "project" | "model" | "agent";
 export type TimeSeriesView = "stacked-area" | "bars" | "lines";
 export type AttributionView = "treemap" | "list" | "bars";
@@ -217,6 +223,7 @@ class UsageStore {
   excludedAgents: string = $state("");
   excludedModels: string = $state("");
   selectedModels: string = $state("");
+  knownProjects: UsageProjectFilterItem[] = $state([]);
 
   constructor() {
     const saved = loadUsageFilters();
@@ -333,6 +340,39 @@ class UsageStore {
     return this.summary?.projectTotals.find(
       (entry) => entry.project_key === key,
     )?.project ?? "";
+  }
+
+  mergeKnownProjects(
+    projects: Array<{ project_key: string; project: string }>,
+    counts: Record<string, number>,
+  ): void {
+    if (projects.length === 0) return;
+    const byKey = new Map(
+      this.knownProjects.map((project) => [project.id, project]),
+    );
+    let changed = false;
+    for (const project of projects) {
+      if (!project.project_key || !project.project) continue;
+      const existing = byKey.get(project.project_key);
+      const count = counts[project.project_key];
+      if (
+        !existing ||
+        existing.name !== project.project ||
+        existing.count !== count
+      ) {
+        byKey.set(project.project_key, {
+          id: project.project_key,
+          name: project.project,
+          count,
+        });
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.knownProjects = [...byKey.values()].sort(
+        (a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
+      );
+    }
   }
 
   private pairwiseOptionsFor(
@@ -521,8 +561,14 @@ class UsageStore {
     this.fetchAll();
   }
 
-  deselectAllProjects(all: string[]): void {
-    this.excludedProjects = all.join(",");
+  deselectAllProjectKeys(all: string[]): void {
+    const excluded = new Set(
+      this.excludedProjectKeys
+        ? this.excludedProjectKeys.split(",").filter(Boolean)
+        : [],
+    );
+    for (const key of all) excluded.add(key);
+    this.excludedProjectKeys = [...excluded].join(",");
     this.fetchAll();
   }
 

@@ -1,0 +1,123 @@
+---
+title: Hosted Raw Sync
+description: Architecture, security boundaries, and delivery status for raw-first hosted sync
+---
+
+Hosted raw sync is the planned, in-development path for sending original agent
+source artifacts to a hosted AgentsView service. The server will keep the
+authoritative raw generation, then derive PostgreSQL sessions and embeddings
+from it.
+
+```mermaid
+flowchart LR
+    Watcher["Laptop watcher"] -->|"authenticated raw upload"| Custody["Immutable raw custody"]
+    Custody --> Parser["Server parsing"]
+    Parser --> PostgreSQL["PostgreSQL projection"]
+    PostgreSQL --> Embeddings["Server embeddings"]
+```
+
+This moves long-running parsing and embedding work off laptops and gives the
+server enough source material to reparse after parser fixes or rebuild derived
+data after loss.
+
+!!! warning "Not available for use yet"
+
+    AgentsView has internal raw-custody and device-authentication foundations, but
+    it does not yet expose enrollment or upload endpoints, a laptop uploader,
+    server-side parsing workers, or server-owned embeddings. There is no command or
+    configuration setting to enable hosted raw sync.
+
+    The existing [`agentsview pg push`](/pg-sync/) workflow remains supported and
+    unchanged. It parses sessions locally and can build embeddings locally before
+    pushing derived rows and vectors to PostgreSQL.
+
+The tracked delivery sequence and production acceptance criteria live in
+[GitHub issue #1352](https://github.com/kenn-io/agentsview/issues/1352).
+
+## Delivery status
+
+| Layer                  | Status                                                                             | Current boundary                                                                                                            |
+| ---------------------- | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Raw custody            | Foundation implemented in [#1396](https://github.com/kenn-io/agentsview/pull/1396) | Validated objects, canonical manifests, durable receipts, source-head fencing, and parse-job creation                       |
+| Device authentication  | Foundation implemented in [#1459](https://github.com/kenn-io/agentsview/pull/1459) | One-time device credentials, scoped short-lived tokens, server-derived identity, and revocation                             |
+| HTTP raw transport     | Not implemented                                                                    | Enrollment, token, negotiation, resumable upload, commit, and status routes remain to be added                              |
+| Laptop capture         | Not implemented                                                                    | Provider watching, append fast paths, SQLite snapshots, spooling, checkpoints, and reconciliation remain future client work |
+| Server derivation      | Not implemented                                                                    | Manifest materialization, parsing, transactional PostgreSQL projection, and embeddings are not running                      |
+| Operations and cutover | Not implemented                                                                    | Retention, garbage collection, disaster rebuilds, rollout controls, and migration from `pg push` remain future work         |
+
+Because #1459 implements authentication but not HTTP handlers, the broader
+“device enrollment and authenticated raw transport” delivery item in #1352
+remains incomplete.
+
+## Raw custody contract
+
+The custody foundation accepts a complete logical generation of one provider
+source. A generation is represented by a canonical manifest containing:
+
+- the provider, configured source-root identity, and logical source key;
+- a capture identity and capture time;
+- either a snapshot with ordered file-object references or a tombstone; and
+- the expected receipt for the preceding accepted generation.
+
+The custody API accepts authenticated tenant and immutable device identity
+separately from the manifest. Future HTTP handlers must derive that identity
+through device authentication. Canonicalization binds it into the manifest
+envelope rather than trusting client-supplied manifest fields. The canonical
+JSON digest becomes the manifest ID.
+
+Raw objects are identified by exact SHA-256 and byte length. Custody is
+tenant-scoped, verifies content before registering it, treats an identical retry
+as a no-op, and rejects conflicting content. Providers that AgentsView does not
+recognize or excludes from remote sync are rejected before their bytes enter
+custody.
+
+A manifest can commit only after every referenced object exists and verifies.
+The PostgreSQL acceptance transaction then:
+
+1. checks the expected parent receipt against the current source head;
+1. records the manifest, file entries, and ordered object references;
+1. assigns a monotonically increasing generation and durable receipt;
+1. creates the corresponding parse job; and
+1. advances the source head.
+
+Repeating the same capture returns its existing receipt. Reusing a capture
+identity for different content or committing against a stale parent fails
+closed. Accepted manifest metadata is append-only. PostgreSQL holds custody
+metadata and processing state; the object store holds the authoritative raw
+bytes and canonical manifests.
+
+## Device authentication contract
+
+Enrollment creates an immutable device ID and a random credential. The clear
+credential is returned once; PostgreSQL retains only its SHA-256 digest.
+
+An active device exchanges that credential for an opaque, short-lived token.
+Tokens can be restricted to one or more fixed operations:
+
+- missing-object negotiation;
+- object upload;
+- manifest commit; and
+- status reads.
+
+Token authentication derives the tenant and device from server-side records and
+checks the required scope and expiry. PostgreSQL stores only the token digest.
+Revoking a device prevents new token issuance and immediately makes its
+outstanding tokens unusable. A human-readable device name is display metadata,
+not authorization identity.
+
+## Security and deployment boundary
+
+Raw provider files can contain prompts, responses, tool activity, paths, and
+other sensitive data. Hosted raw sync is not end-to-end encrypted: the server
+must be able to read retained source files to parse them.
+
+The implemented foundations isolate object and metadata identities by tenant and
+do not deduplicate across tenants. A production deployment must also provide TLS
+in transit, encryption at rest for object storage, PostgreSQL, backups, and
+worker scratch space, plus access controls around device enrollment and
+revocation. PostgreSQL row-level security remains a planned defense-in-depth
+layer; the current foundation does not configure it.
+
+Do not build integrations against the internal Go packages or raw PostgreSQL
+tables yet. The public HTTP protocol, operator controls, compatibility policy,
+and recovery tooling will be documented when those entry points exist.

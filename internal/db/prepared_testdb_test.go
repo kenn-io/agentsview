@@ -27,7 +27,8 @@ func OpenPreparedTestDB(path string) (*DB, error) {
 	}
 	reader.SetMaxOpenConns(4)
 
-	db := &DB{path: path}
+	db := &DB{path: path, usageCache: newUsageCacheManager(path)}
+	db.usageCache.attachArchive(db)
 	db.writer.Store(writer)
 	db.reader.Store(reader)
 

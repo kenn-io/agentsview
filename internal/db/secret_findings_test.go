@@ -111,6 +111,43 @@ func TestReplaceSessionMessagesResetsSecretState(t *testing.T) {
 	assert.Empty(t, ver, "secrets_rules_version (forces backfill rescan)")
 }
 
+func TestReplaceSessionMessagesPreservesSecretStateWhenTranscriptIsUnchanged(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+	insertSession(t, d, "s1", "proj")
+	messages := []Message{{
+		SessionID: "s1", Ordinal: 0, Role: "user", Content: "same content",
+	}}
+	require.NoError(t, d.ReplaceSessionMessages("s1", messages), "seed messages")
+	findings := []SecretFinding{{
+		SessionID: "s1", RuleName: "test-rule", Confidence: "definite",
+		LocationKind: "message", MessageOrdinal: 0, MatchStart: 0, MatchEnd: 4,
+		MatchIndex: 0, RedactedMatch: "same",
+	}}
+	require.NoError(t,
+		d.ReplaceSessionSecretFindings("s1", findings, 1, "rules-v1"),
+		"seed findings",
+	)
+
+	require.NoError(t, d.ReplaceSessionMessages("s1", messages), "no-op replace")
+
+	got, err := d.SessionSecretFindings(ctx, "s1")
+	require.NoError(t, err, "read findings")
+	require.Len(t, got, 1, "no-op replace must preserve current findings")
+	assert.Equal(t, "test-rule", got[0].RuleName)
+	var leak int
+	var version string
+	err = d.getReader().QueryRow(`
+		SELECT secret_leak_count, secrets_rules_version
+		FROM sessions WHERE id = 's1'`,
+	).Scan(&leak, &version)
+	require.NoError(t, err, "read scan state")
+	assert.Equal(t, 1, leak)
+	assert.Equal(t, "rules-v1", version)
+}
+
 func TestOrphanCopyPreservesSecretFindings(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()

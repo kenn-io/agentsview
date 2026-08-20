@@ -10,6 +10,7 @@
   import { m } from "../../i18n/index.js";
 
   interface FilterItem {
+    id?: string;
     name: string;
     count?: number;
   }
@@ -17,13 +18,15 @@
   interface Props {
     label: string;
     items: FilterItem[];
-    /** Comma-separated list of EXCLUDED item names. */
+    /** Comma-separated list of excluded item IDs. */
     excludedCsv: string;
-    onToggle: (name: string) => void;
+    onToggle: (id: string) => void;
     onSelectAll?: () => void;
     onDeselectAll?: () => void;
     color?: (name: string) => string;
     mode?: "exclude" | "include";
+    /** Active exclusions represented outside excludedCsv. */
+    unlistedExcludedCount?: number;
   }
 
   let {
@@ -35,15 +38,32 @@
     onDeselectAll,
     color,
     mode = "exclude",
+    unlistedExcludedCount = 0,
   }: Props = $props();
+
+  function itemId(item: FilterItem): string {
+    return item.id ?? item.name;
+  }
 
   const filterSet = $derived(
     new Set(excludedCsv ? excludedCsv.split(",") : []),
   );
 
-  const filteredCount = $derived(filterSet.size);
+  const listedFilteredCount = $derived(
+    items.reduce(
+      (count, item) => count + (filterSet.has(itemId(item)) ? 1 : 0),
+      0,
+    ),
+  );
+  const filteredCount = $derived(
+    filterSet.size + Math.max(0, unlistedExcludedCount),
+  );
+  const unlistedFilteredCount = $derived(
+    Math.max(0, filterSet.size - listedFilteredCount) +
+      Math.max(0, unlistedExcludedCount),
+  );
   const visibleCount = $derived(
-    items.length - filteredCount,
+    items.length - listedFilteredCount,
   );
 
   const buttonLabel = $derived.by(() => {
@@ -55,9 +75,9 @@
         countLabel: filteredCount.toLocaleString(),
       });
     }
-    if (visibleCount === 1) {
+    if (visibleCount === 1 && unlistedFilteredCount === 0) {
       const visible = items.find(
-        (i) => !filterSet.has(i.name),
+        (item) => !filterSet.has(itemId(item)),
       );
       if (visible) {
         const maxLen = 20;
@@ -67,7 +87,9 @@
         return `${label}: ${visible.name}`;
       }
     }
-    if (visibleCount === 0) return m.usage_filter_none({ label });
+    if (visibleCount === 0 && unlistedFilteredCount === 0) {
+      return m.usage_filter_none({ label });
+    }
     return m.usage_filter_hidden({
       label,
       countLabel: filteredCount.toLocaleString(),
@@ -76,17 +98,18 @@
 
   const dropdownItems = $derived.by((): FilterDropdownItem[] => {
     const mapped = items.map((item): FilterDropdownItem => {
+      const id = itemId(item);
       const included =
         mode === "include"
-          ? filterSet.has(item.name)
-          : !filterSet.has(item.name);
+          ? filterSet.has(id)
+          : !filterSet.has(id);
       return {
-        id: item.name,
+        id,
         label: item.name,
         active: included,
         count: item.count,
         color: color?.(item.name),
-        onSelect: () => onToggle(item.name),
+        onSelect: () => onToggle(id),
       };
     });
     if (mode === "include") {

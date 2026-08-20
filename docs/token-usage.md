@@ -287,6 +287,11 @@ populates per-project, per-agent, and per-machine breakdown arrays for every
 day, making costs from shared multi-machine archives separable without another
 query.
 
+On large archives, aggregate usage reads are served from a local cache of daily
+totals that stays exact as sessions sync. The first query after an install,
+upgrade, or cache deletion is slower while that cache builds; subsequent queries
+are fast.
+
 ## How Costs Are Computed
 
 Every message parsed from a session file stores its raw `token_usage` JSON
