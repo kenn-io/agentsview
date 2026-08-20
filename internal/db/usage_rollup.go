@@ -162,12 +162,17 @@ type usageRollupCall struct {
 	err      error
 }
 
+type usageRollupObserver struct {
+	beforeEnsure func()
+}
+
 type usageRollupCoordinator struct {
-	archive *DB
-	cache   *usageCache
-	ctx     context.Context
-	mu      sync.Mutex
-	calls   map[string]*usageRollupCall
+	archive  *DB
+	cache    *usageCache
+	ctx      context.Context
+	mu       sync.Mutex
+	calls    map[string]*usageRollupCall
+	observer usageRollupObserver
 }
 
 func newUsageRollupCoordinator(
@@ -196,14 +201,23 @@ func (c *usageRollupCoordinator) Ensure(
 	if call == nil {
 		call = &usageRollupCall{done: make(chan struct{})}
 		c.calls[key] = call
-		go func() {
+		if !c.cache.startDetachedWork(func() {
+			if c.observer.beforeEnsure != nil {
+				c.observer.beforeEnsure()
+			}
 			call.installs, call.metrics, call.err = c.ensureNow(
 				c.ctx, snapshot, fills, resolver, pricingHash)
 			close(call.done)
 			c.mu.Lock()
 			delete(c.calls, key)
 			c.mu.Unlock()
-		}()
+		}) {
+			delete(c.calls, key)
+			c.mu.Unlock()
+			return nil, usageRollupMetrics{}, fmt.Errorf(
+				"%w before starting detached rollup", errUsageCacheSourceChanged,
+			)
+		}
 	}
 	c.mu.Unlock()
 	select {

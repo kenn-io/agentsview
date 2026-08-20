@@ -78,7 +78,7 @@ data. `cached_at` is diagnostic only.
 Timezone rollup identity includes both the resolved zone name and its rule
 fingerprint. Cache-generation retirement cancels detached work immediately but
 keeps immutable coordinator pointers and the cache database alive until active
-query and backfill leases drain.
+query, backfill, fill, and rollup leases drain.
 
 `sync_marker` is a fingerprint component, not a monotonic version: its trigger
 recomputes the maximum of mutable timestamp fields, so it can decrease. A fill

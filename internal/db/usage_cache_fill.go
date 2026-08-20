@@ -123,7 +123,11 @@ func (c *usageFillCoordinator) Ensure(
 		c.mu.Unlock()
 	}
 	if len(owned) > 0 {
-		go c.fillSessions(owned)
+		if !c.cache.startDetachedWork(func() { c.fillSessions(owned) }) {
+			c.completeSessionCalls(owned, nil, fmt.Errorf(
+				"%w before starting detached fill", errUsageCacheSourceChanged,
+			))
+		}
 	}
 
 	for id, call := range waiting {
@@ -185,6 +189,12 @@ func (c *usageFillCoordinator) cachedSession(
 
 func (c *usageFillCoordinator) fillSessions(versions []usageSourceVersion) {
 	results, err := c.fillSessionsDetached(c.ctx, versions)
+	c.completeSessionCalls(versions, results, err)
+}
+
+func (c *usageFillCoordinator) completeSessionCalls(
+	versions []usageSourceVersion, results map[string]usageFillResult, err error,
+) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, version := range versions {
@@ -193,7 +203,9 @@ func (c *usageFillCoordinator) fillSessions(versions []usageSourceVersion) {
 		if call == nil {
 			continue
 		}
-		call.result = results[version.SessionID]
+		if results != nil {
+			call.result = results[version.SessionID]
+		}
 		call.err = err
 		delete(c.calls, key)
 		close(call.done)
@@ -934,7 +946,15 @@ func (c *usageFillCoordinator) ensureCursor(ctx context.Context, target int64) e
 		if call == nil {
 			call = &usageCursorFillCall{done: make(chan struct{})}
 			c.cursorCall = call
-			go c.fillCursor()
+			if !c.cache.startDetachedWork(c.fillCursor) {
+				c.cursorCall = nil
+				c.cursorTarget = 0
+				call.err = fmt.Errorf(
+					"%w before starting detached Cursor fill",
+					errUsageCacheSourceChanged,
+				)
+				close(call.done)
+			}
 		}
 		c.mu.Unlock()
 		select {

@@ -14,6 +14,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/export"
 )
 
 func TestUsageCacheGenerationCreatesIdentifiedSchema(t *testing.T) {
@@ -430,6 +432,126 @@ func TestUsageCacheRetirementWaitsForActiveGeneration(t *testing.T) {
 	require.Error(t, cache.db.PingContext(t.Context()))
 	_, _, err = database.usageCache.acquireGeneration(t.Context(), databaseID)
 	require.ErrorIs(t, err, errUsageCacheSourceChanged)
+}
+
+func TestUsageCacheRetirementWaitsForDetachedFill(t *testing.T) {
+	database := testDB(t)
+	insertSession(t, database, "detached-fill", "project")
+	require.NoError(t, database.InsertMessages([]Message{{
+		SessionID: "detached-fill", Ordinal: 0, Role: "assistant",
+		Timestamp: "2026-08-10T09:00:00Z", Model: "model",
+		TokenUsage: []byte(`{"input_tokens":1}`),
+	}}))
+	snapshot, err := database.captureUsageQuery(
+		t.Context(), UsageFilter{}, usageQueryKindToken)
+	require.NoError(t, err)
+	cache, releaseGeneration, err := database.usageCache.acquireGeneration(
+		t.Context(), snapshot.DatabaseID)
+	require.NoError(t, err)
+
+	started := make(chan struct{})
+	releaseWork := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseDetachedWork := func() {
+		releaseOnce.Do(func() { close(releaseWork) })
+	}
+	t.Cleanup(releaseDetachedWork)
+	cache.fill.observer.beforeExtract = func([]usageSourceVersion) {
+		close(started)
+		<-releaseWork
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	fillDone := make(chan error, 1)
+	go func() {
+		_, fillErr := cache.fill.Ensure(ctx, snapshot.Versions, 0)
+		fillDone <- fillErr
+	}()
+	<-started
+	assert.Equal(t, 2, usageCacheActiveUsers(cache),
+		"the caller and detached fill must each pin the generation")
+
+	cancel()
+	require.ErrorIs(t, <-fillDone, context.Canceled)
+	releaseGeneration()
+	assert.Equal(t, 1, usageCacheActiveUsers(cache),
+		"caller cancellation must leave the detached fill pinned")
+
+	retireDone := make(chan error, 1)
+	go func() {
+		retireDone <- database.usageCache.RetireExcept("replacement-database-id")
+	}()
+	<-cache.fill.ctx.Done()
+	select {
+	case <-cache.retired:
+		assert.Fail(t, "retirement ignored detached fill")
+	default:
+	}
+	require.NoError(t, cache.db.PingContext(t.Context()))
+	releaseDetachedWork()
+	require.NoError(t, <-retireDone)
+	require.Error(t, cache.db.PingContext(t.Context()))
+}
+
+func TestUsageCacheRetirementWaitsForDetachedRollup(t *testing.T) {
+	database := testDB(t)
+	databaseID, err := database.GetDatabaseID(t.Context())
+	require.NoError(t, err)
+	cache, releaseGeneration, err := database.usageCache.acquireGeneration(
+		t.Context(), databaseID)
+	require.NoError(t, err)
+
+	started := make(chan struct{})
+	releaseWork := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseDetachedWork := func() {
+		releaseOnce.Do(func() { close(releaseWork) })
+	}
+	t.Cleanup(releaseDetachedWork)
+	cache.rollup.observer.beforeEnsure = func() {
+		close(started)
+		<-releaseWork
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	rollupDone := make(chan error, 1)
+	go func() {
+		_, _, rollupErr := cache.rollup.Ensure(
+			ctx,
+			usageQuerySnapshot{DatabaseID: databaseID, location: time.UTC},
+			nil,
+			export.NewPricingResolver(nil),
+		)
+		rollupDone <- rollupErr
+	}()
+	<-started
+	assert.Equal(t, 2, usageCacheActiveUsers(cache),
+		"the caller and detached rollup must each pin the generation")
+
+	cancel()
+	require.ErrorIs(t, <-rollupDone, context.Canceled)
+	releaseGeneration()
+	assert.Equal(t, 1, usageCacheActiveUsers(cache),
+		"caller cancellation must leave the detached rollup pinned")
+
+	retireDone := make(chan error, 1)
+	go func() {
+		retireDone <- database.usageCache.RetireExcept("replacement-database-id")
+	}()
+	<-cache.rollup.ctx.Done()
+	select {
+	case <-cache.retired:
+		assert.Fail(t, "retirement ignored detached rollup")
+	default:
+	}
+	require.NoError(t, cache.db.PingContext(t.Context()))
+	releaseDetachedWork()
+	require.NoError(t, <-retireDone)
+	require.Error(t, cache.db.PingContext(t.Context()))
+}
+
+func usageCacheActiveUsers(cache *usageCache) int {
+	cache.lifecycleMu.Lock()
+	defer cache.lifecycleMu.Unlock()
+	return cache.users
 }
 
 func readUsageCacheMetadata(t *testing.T, conn *sql.DB) map[string]string {

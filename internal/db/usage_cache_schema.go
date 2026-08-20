@@ -331,6 +331,18 @@ func (cache *usageCache) acquire() (func(), bool) {
 	}, true
 }
 
+func (cache *usageCache) startDetachedWork(work func()) bool {
+	release, ok := cache.acquire()
+	if !ok {
+		return false
+	}
+	go func() {
+		defer release()
+		work()
+	}()
+	return true
+}
+
 func (cache *usageCache) release() {
 	cache.lifecycleMu.Lock()
 	defer cache.lifecycleMu.Unlock()

@@ -28,6 +28,9 @@ long-running background work. Also read it before investigating memory growth.
   never fill while holding the archive writer.
 - Foreground fills are per-session single-flight and detached from request
   cancellation. Cancelling one waiter must not cancel shared progress.
+- Detached fills and rollup builds hold their own cache-generation lease.
+  Retirement cancels their coordinator context and waits for those leases
+  before closing SQLite handles.
 - A writable daemon runs one newest-usage-first coverage pass after HTTP
   readiness. It installs at most 256 sessions per cache transaction and yields
   between batches. The pass fills normalized facts and daily rollups for the
