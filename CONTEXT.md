@@ -82,8 +82,8 @@ version governs effective classification.
 **Project mapping rule-set version**:
 
 An immutable record of the project mapping rule set after a saved change. Each
-version continues from one earlier version, so history can retain a skipped
-version even when a later save continues from the version before it.
+version continues from one earlier version and contains every rule delta in that
+change, so one version can represent an atomic multi-rule correction.
 
 **Session assignment**:
 
