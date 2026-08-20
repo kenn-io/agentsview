@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { formatDateTime, m } from "../../i18n/index.js";
+  import { Chart, Layer, Line, Rect, Spline, Text } from "layerchart";
+  import { scaleLinear } from "d3-scale";
+  import { formatDateTime, getLocale, m } from "../../i18n/index.js";
   import type { Report } from "../../api/types.js";
   import { Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
   import type { ActivityBucket } from "../../api/generated/index";
@@ -22,7 +24,7 @@
   const STRIP_H = 14;
   const STRIP_GAP = 6;
   const Y_LABEL_W = 32;
-  const RIGHT_PAD = 8;
+  const RIGHT_PAD = 16;
   const OVERLAY_AXIS_W = 48;
   // Reserved headroom so the tallest bar, its grid line, and
   // the top y-axis label do not clip against the viewBox edge.
@@ -110,7 +112,7 @@
         `${m.activity_agent_min_value({ value: b.agent_minutes.toFixed(1) })} · ` +
         `${m.activity_output_tokens_value({
           count: b.output_tokens,
-          countLabel: b.output_tokens.toLocaleString(),
+          countLabel: b.output_tokens.toLocaleString(getLocale()),
         })} · ` +
         formatMoney(b.cost),
     };
@@ -291,18 +293,14 @@
   });
   const overlayMax = $derived(overlayDataMax || 1);
 
-  const overlayPath = $derived.by(() => {
-    if (overlayMetric === "none" || buckets.length === 0) return "";
-    let d = "";
-    for (let i = 0; i < buckets.length; i++) {
-      const b = buckets[i]!;
-      const center = (Date.parse(b.start) + Date.parse(b.end)) / 2;
-      const x = xForMs(center);
-      const y = scaleY(bucketOverlayValue(b), overlayMax, CHART_H);
-      d += i === 0 ? `M${x},${y}` : `L${x},${y}`;
-    }
-    return d;
-  });
+  const overlayPoints = $derived(
+    overlayMetric === "none"
+      ? []
+      : buckets.map((bucket) => ({
+          time: (Date.parse(bucket.start) + Date.parse(bucket.end)) / 2,
+          value: (bucketOverlayValue(bucket) / overlayMax) * scale.max,
+        })),
+  );
 
   const overlayTicks = $derived.by(() => {
     if (overlayMetric === "none") return [];
@@ -404,7 +402,6 @@
     Math.max(((rangeEndMs - futureStartMs) / rangeSpanMs) * plotWidth, 0),
   );
 
-  const svgW = $derived(plotWidth + Y_LABEL_W + rightAxisW);
   const svgH = $derived(CHART_H + STRIP_GAP + STRIP_H + X_LABEL_H);
   const stripY = $derived(CHART_H + STRIP_GAP);
 
@@ -441,154 +438,161 @@
   </div>
 
   <div class="timeline-body" bind:this={containerEl}>
-    <svg
-      width="100%"
+    <Chart
+      data={overlayPoints}
+      x="time"
+      y="value"
+      xScale={scaleLinear()}
+      xDomain={[rangeStartMs, rangeEndMs]}
+      yDomain={[0, scale.max]}
+      xRange={[Y_LABEL_W, Y_LABEL_W + plotWidth]}
+      yRange={[CHART_H, TOP_PAD]}
+      padding={0}
       height={svgH}
-      viewBox="0 0 {svgW} {svgH}"
-      preserveAspectRatio="xMidYMid meet"
-      class="timeline-svg"
     >
-      {#if futureW > 0}
-        <rect
-          class="concurrency-future"
-          data-future
-          x={futureX}
-          y={TOP_PAD}
-          width={futureW}
-          height={CHART_H - TOP_PAD}
-        />
-      {/if}
-
-      {#each yTicks as tick}
-        <line
-          x1={Y_LABEL_W}
-          y1={tick.y}
-          x2={Y_LABEL_W + plotWidth}
-          y2={tick.y}
-          class="grid-line"
-        />
-        <text
-          x={Y_LABEL_W - 4}
-          y={tick.y + 3}
-          class="y-label"
-          text-anchor="end"
-        >
-          {tick.label}
-        </text>
-      {/each}
-
-      {#each bars as bar (bar.idx)}
-        <rect
-          class="concurrency-seg interactive"
-          class:selected={selectedBucket === bar.idx}
-          x={bar.x}
-          y={bar.interactiveY}
-          width={bar.w}
-          height={bar.interactiveH}
-        />
-        <rect
-          class="concurrency-seg automated"
-          class:selected={selectedBucket === bar.idx}
-          x={bar.x}
-          y={bar.automatedY}
-          width={bar.w}
-          height={bar.automatedH}
-        />
-        {#if selectedBucket === bar.idx}
-          <rect
-            class="concurrency-outline"
-            x={bar.x}
-            y={bar.y}
-            width={bar.w}
-            height={bar.h}
+      <Layer class="timeline-svg">
+        {#if futureW > 0}
+          <Rect
+            class="concurrency-future"
+            data-future
+            x={futureX}
+            y={TOP_PAD}
+            width={futureW}
+            height={CHART_H - TOP_PAD}
           />
         {/if}
-      {/each}
 
-      {#if overlayMetric !== "none" && overlayPath}
-        <path class="overlay-line" d={overlayPath} />
-        <line
-          class="overlay-axis-line"
-          x1={Y_LABEL_W + plotWidth}
-          y1={TOP_PAD}
-          x2={Y_LABEL_W + plotWidth}
-          y2={CHART_H}
-        />
-        {#each overlayTicks as tick}
-          <line
-            class="overlay-axis-tick"
-            x1={Y_LABEL_W + plotWidth}
+        {#each yTicks as tick}
+          <Line
+            x1={Y_LABEL_W}
             y1={tick.y}
-            x2={Y_LABEL_W + plotWidth + 4}
+            x2={Y_LABEL_W + plotWidth}
             y2={tick.y}
+            class="grid-line"
           />
-          <text
-            x={Y_LABEL_W + plotWidth + 6}
+          <Text
+            value={tick.label}
+            x={Y_LABEL_W - 4}
             y={tick.y + 3}
-            class="overlay-y-label"
-            text-anchor="start"
-          >
-            {tick.label}
-          </text>
+            class="y-label"
+            textAnchor="end"
+          />
         {/each}
-      {/if}
 
-      {#each xTicks as tick}
-        <text
-          x={tick.x}
-          y={svgH - 4}
-          class="x-label"
-          text-anchor="middle"
-        >
-          {tick.label}
-        </text>
-      {/each}
+        {#each bars as bar (bar.idx)}
+          <Rect
+            class={`concurrency-seg interactive${selectedBucket === bar.idx ? " selected" : ""}`}
+            x={bar.x}
+            y={bar.interactiveY}
+            width={bar.w}
+            height={bar.interactiveH}
+          />
+          <Rect
+            class={`concurrency-seg automated${selectedBucket === bar.idx ? " selected" : ""}`}
+            x={bar.x}
+            y={bar.automatedY}
+            width={bar.w}
+            height={bar.automatedH}
+          />
+          {#if selectedBucket === bar.idx}
+            <Rect
+              class="concurrency-outline"
+              x={bar.x}
+              y={bar.y}
+              width={bar.w}
+              height={bar.h}
+            />
+          {/if}
+        {/each}
 
-      <!-- Active/idle strip: one full-width cell per elapsed bucket. -->
-      {#each bars as bar (bar.idx)}
-        {@const b = buckets[bar.idx]}
-        <rect
-          class="strip-cell"
-          class:active={b !== undefined && b.max_agents > 0}
-          x={bar.cellX}
-          y={stripY}
-          width={bar.cellW}
-          height={STRIP_H}
-        />
-      {/each}
-      {#if futureW > 0}
-        <rect
-          class="strip-future"
-          x={futureX}
-          y={stripY}
-          width={futureW}
-          height={STRIP_H}
-        />
-      {/if}
+        {#if overlayMetric !== "none" && overlayPoints.length > 0}
+          <Spline
+            class="overlay-line"
+            data={overlayPoints}
+            x="time"
+            y="value"
+            fill="none"
+          />
+          <Line
+            class="overlay-axis-line"
+            x1={Y_LABEL_W + plotWidth}
+            y1={TOP_PAD}
+            x2={Y_LABEL_W + plotWidth}
+            y2={CHART_H}
+          />
+          {#each overlayTicks as tick}
+            <Line
+              class="overlay-axis-tick"
+              x1={Y_LABEL_W + plotWidth}
+              y1={tick.y}
+              x2={Y_LABEL_W + plotWidth + 4}
+              y2={tick.y}
+            />
+            <Text
+              value={tick.label}
+              x={Y_LABEL_W + plotWidth + 6}
+              y={tick.y + 3}
+              class="overlay-y-label"
+              textAnchor="start"
+            />
+          {/each}
+        {/if}
 
-      <!-- Transparent full-cell per-bucket hover/click target (one per bucket).
-           data-bucket-bar lives here, not on the visible bar, because the hover
-           handler that drives the tooltip is on this interactive rect. -->
-      {#each bars as bar (bar.idx)}
-        {@const b = buckets[bar.idx]}
-        <rect
-          class="slot-hit"
-          data-bucket-bar
-          x={bar.cellX}
-          y={TOP_PAD}
-          width={bar.cellW}
-          height={stripY + STRIP_H - TOP_PAD}
-          role="button"
-          tabindex="0"
-          aria-pressed={selectedBucket === bar.idx}
-          aria-label={m.activity_filter_active_in_slot()}
-          onmouseenter={(e) => b && showSlotTip(e, b)}
-          onmouseleave={hideTip}
-          onclick={() => selectSlot(bar.idx)}
-          onkeydown={(e) => onSlotKey(e, bar.idx)}
-        />
-      {/each}
-    </svg>
+        {#each xTicks as tick}
+          <Text
+            value={tick.label}
+            x={tick.x}
+            y={svgH - 4}
+            class="x-label"
+            textAnchor={tick.x <= Y_LABEL_W + 1
+              ? "start"
+              : tick.x >= Y_LABEL_W + plotWidth - 1
+                ? "end"
+                : "middle"}
+          />
+        {/each}
+
+        {#each bars as bar (bar.idx)}
+          {@const b = buckets[bar.idx]}
+          <Rect
+            class={`strip-cell${b !== undefined && b.max_agents > 0 ? " active" : ""}`}
+            x={bar.cellX}
+            y={stripY}
+            width={bar.cellW}
+            height={STRIP_H}
+          />
+        {/each}
+        {#if futureW > 0}
+          <Rect
+            class="strip-future"
+            x={futureX}
+            y={stripY}
+            width={futureW}
+            height={STRIP_H}
+          />
+        {/if}
+
+        {#each bars as bar (bar.idx)}
+          {@const b = buckets[bar.idx]}
+          <Rect
+            class="slot-hit"
+            data-bucket-bar
+            x={bar.cellX}
+            y={TOP_PAD}
+            width={bar.cellW}
+            height={stripY + STRIP_H - TOP_PAD}
+            role="button"
+            tabindex={0}
+            aria-pressed={selectedBucket === bar.idx}
+            aria-label={m.activity_filter_active_in_slot()}
+            onmouseenter={(event) => b && showSlotTip(event, b)}
+            onmouseleave={hideTip}
+            onclick={() => selectSlot(bar.idx)}
+            onkeydown={(event) => onSlotKey(event, bar.idx)}
+          />
+        {/each}
+      </Layer>
+    </Chart>
 
     {#if tooltip}
       <div class="tooltip" style="left: {tooltip.x}px; top: {tooltip.y}px;">
@@ -670,102 +674,102 @@
     width: 100%;
   }
 
-  .timeline-svg {
+  :global(.timeline-svg) {
     display: block;
   }
 
-  .grid-line {
+  :global(.grid-line) {
     stroke: var(--border-muted);
     stroke-width: 1;
     stroke-dasharray: 2 2;
   }
 
-  .y-label {
+  :global(.y-label) {
     font-size: 9px;
     fill: var(--text-muted);
     font-family: var(--font-mono);
   }
 
-  .x-label {
+  :global(.x-label) {
     font-size: 9px;
     fill: var(--text-muted);
     font-family: var(--font-mono);
   }
 
-  .concurrency-seg {
+  :global(.concurrency-seg) {
     opacity: 0.75;
   }
 
-  .concurrency-seg.interactive {
+  :global(.concurrency-seg.interactive) {
     fill: var(--accent-blue);
   }
 
-  .concurrency-seg.automated {
+  :global(.concurrency-seg.automated) {
     fill: var(--accent-orange);
   }
 
-  .concurrency-seg.selected {
+  :global(.concurrency-seg.selected) {
     opacity: 1;
   }
 
-  .concurrency-outline {
+  :global(.concurrency-outline) {
     fill: none;
     stroke: var(--text-primary);
     stroke-width: 1;
   }
 
-  .concurrency-future {
+  :global(.concurrency-future) {
     fill: var(--bg-inset);
     opacity: 0.5;
   }
 
-  .overlay-line {
+  :global(.overlay-line) {
     fill: none;
     stroke: var(--accent-amber);
     stroke-width: 1.5;
     opacity: 0.85;
   }
 
-  .overlay-axis-line,
-  .overlay-axis-tick {
+  :global(.overlay-axis-line),
+  :global(.overlay-axis-tick) {
     stroke: var(--accent-amber);
     stroke-width: 1;
     opacity: 0.55;
   }
 
-  .overlay-y-label {
+  :global(.overlay-y-label) {
     font-size: 9px;
     fill: var(--accent-amber);
     font-family: var(--font-mono);
   }
 
-  .strip-cell {
+  :global(.strip-cell) {
     fill: var(--bg-inset);
     stroke: var(--bg-surface);
     stroke-width: 0.5;
   }
 
-  .strip-cell.active {
+  :global(.strip-cell.active) {
     fill: var(--accent-blue);
     opacity: 0.55;
   }
 
-  .strip-future {
+  :global(.strip-future) {
     fill: var(--bg-inset);
     opacity: 0.5;
   }
 
-  .slot-hit {
+  :global(.slot-hit) {
     fill: transparent;
     cursor: pointer;
   }
 
-  .slot-hit:hover {
+  :global(.slot-hit:hover) {
     fill: var(--accent-blue);
     opacity: 0.08;
   }
 
-  .slot-hit:focus-visible {
+  :global(.slot-hit:focus-visible) {
     outline: 1px solid var(--accent-blue);
     outline-offset: -1px;
   }

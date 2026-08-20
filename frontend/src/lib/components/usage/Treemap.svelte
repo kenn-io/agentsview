@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { Chart, Group, Layer, Rect, Text } from "layerchart";
+  import { Treemap as LayerTreemap } from "layerchart/hierarchy";
+  import { hierarchy } from "d3-hierarchy";
   import { m } from "../../i18n/index.js";
-  import { squarify } from "../../utils/treemap.js";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
 
   interface TreemapItem {
@@ -29,58 +31,14 @@
     formatValue = formatCost,
   }: Props = $props();
 
-  let containerEl: HTMLDivElement | undefined = $state();
-  let width = $state(600);
+  const root = $derived.by(() =>
+    hierarchy<{ children?: TreemapItem[]; value?: number }>({ children: items })
+      .sum((item) => item.value ?? 0)
+      .sort((a, b) => (b.value ?? 0) - (a.value ?? 0))
+  );
 
-  $effect(() => {
-    if (!containerEl) return;
-    const ro = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (entry) {
-        width = Math.floor(entry.contentRect.width);
-      }
-    });
-    ro.observe(containerEl);
-    return () => ro.disconnect();
-  });
-
-  interface Tile {
-    id: string;
-    label: string;
-    value: number;
-    color: string;
-    meta?: string;
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  }
-
-  const tiles = $derived.by((): Tile[] => {
-    if (items.length === 0 || width <= 0 || height <= 0) {
-      return [];
-    }
-    const input = items.map((d) => ({
-      id: d.id,
-      value: d.value,
-    }));
-    const layout = squarify(input, width, height);
-    const byId = new Map(items.map((d) => [d.id, d]));
-    return layout.map((t) => {
-      const src = byId.get(t.id)!;
-      return {
-        id: t.id,
-        label: src.label,
-        value: src.value,
-        color: src.color,
-        meta: src.meta,
-        x: t.x,
-        y: t.y,
-        width: t.width,
-        height: t.height,
-      };
-    });
-  });
+  let measuredWidth = $state(0);
+  const chartWidth = $derived(measuredWidth > 0 ? measuredWidth : 600);
 
   function handleKey(e: KeyboardEvent, id: string) {
     if (e.key === "Enter" || e.key === " ") {
@@ -90,81 +48,48 @@
   }
 </script>
 
-<div class="treemap-container" bind:this={containerEl}>
-<svg
-  width="100%"
-  {height}
-  class="treemap"
-  viewBox="0 0 {width} {height}"
-  preserveAspectRatio="none"
->
-  {#each tiles as tile, i (tile.id)}
-    {@const large = tile.width > 60 && tile.height > 40}
-    {@const medium = tile.width > 40 && tile.height > 20}
-    {@const clipId = `tile-clip-${i}`}
-    <clipPath id={clipId}>
-      <rect
-        x={tile.x}
-        y={tile.y}
-        width={tile.width}
-        height={tile.height}
-      />
-    </clipPath>
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <g
-      class="tile"
-      tabindex="0"
-      role="button"
-      aria-label={m.usage_hide_from_chart({ label: tile.label })}
-      onclick={() => onSelect?.(tile.id)}
-      onkeydown={(e) => handleKey(e, tile.id)}
-      clip-path="url(#{clipId})"
-    >
-      <title>{m.usage_click_to_hide({ label: tile.label })}</title>
-      <rect
-        x={tile.x}
-        y={tile.y}
-        width={tile.width}
-        height={tile.height}
-        rx="3"
-        fill={tile.color}
-      />
-      {#if large}
-        <text
-          x={tile.x + 6}
-          y={tile.y + 16}
-          class="tile-label"
-        >
-          {tile.label}
-        </text>
-        <text
-          x={tile.x + 6}
-          y={tile.y + 30}
-          class="tile-value"
-        >
-          {formatValue(tile.value)}
-        </text>
-        {#if tile.meta}
-          <text
-            x={tile.x + 6}
-            y={tile.y + 42}
-            class="tile-meta"
-          >
-            {tile.meta}
-          </text>
-        {/if}
-      {:else if medium}
-        <text
-          x={tile.x + 4}
-          y={tile.y + 14}
-          class="tile-label-sm"
-        >
-          {tile.label}
-        </text>
-      {/if}
-    </g>
-  {/each}
-</svg>
+<div class="treemap-container" bind:clientWidth={measuredWidth}>
+  <Chart width={chartWidth} {height} padding={0}>
+    <Layer class="treemap">
+      <LayerTreemap hierarchy={root} padding={2}>
+        {#snippet children({ nodes })}
+          {#each nodes.filter((node) => node.depth === 1) as node ((node.data as TreemapItem).id)}
+            {@const tile = node.data as TreemapItem}
+            {@const tileWidth = node.x1 - node.x0}
+            {@const tileHeight = node.y1 - node.y0}
+            {@const large = tileWidth > 60 && tileHeight > 40}
+            {@const medium = tileWidth > 40 && tileHeight > 20}
+            <Group
+              x={node.x0}
+              y={node.y0}
+              class="tile"
+              tabindex={0}
+              role="button"
+              aria-label={m.usage_hide_from_chart({ label: tile.label })}
+              onclick={() => onSelect?.(tile.id)}
+              onkeydown={(event) => handleKey(event, tile.id)}
+            >
+              <Rect
+                width={tileWidth}
+                height={tileHeight}
+                rx={3}
+                fill={tile.color}
+              />
+              {#if large}
+                <Text value={tile.label} x={6} y={16} width={tileWidth - 12} truncate class="tile-label" />
+                <Text value={formatValue(tile.value)} x={6} y={30} width={tileWidth - 12} truncate class="tile-value" />
+                {#if tile.meta}
+                  <Text value={tile.meta} x={6} y={42} width={tileWidth - 12} truncate class="tile-meta" />
+                {/if}
+              {:else if medium}
+                <Text value={tile.label} x={4} y={14} width={tileWidth - 8} truncate class="tile-label-sm" />
+              {/if}
+            </Group>
+          {/each}
+        {/snippet}
+      </LayerTreemap>
+    </Layer>
+  </Chart>
 </div>
 
 <style>
@@ -173,28 +98,28 @@
     min-height: 0;
   }
 
-  .treemap {
+  :global(.treemap) {
     display: block;
   }
 
-  .tile {
+  :global(.tile) {
     cursor: pointer;
   }
 
-  .tile:hover rect {
+  :global(.tile:hover rect) {
     opacity: 0.92;
   }
 
-  .tile:focus-visible {
+  :global(.tile:focus-visible) {
     outline: none;
   }
 
-  .tile:focus-visible rect {
+  :global(.tile:focus-visible rect) {
     stroke: white;
     stroke-width: 2;
   }
 
-  .tile-label {
+  :global(.tile-label) {
     fill: white;
     font-size: 11px;
     font-weight: 600;
@@ -202,7 +127,7 @@
     pointer-events: none;
   }
 
-  .tile-value {
+  :global(.tile-value) {
     /* White regardless of theme: drawn over saturated per-agent tile fills */
     fill: white;
     fill-opacity: 0.85;
@@ -212,7 +137,7 @@
     pointer-events: none;
   }
 
-  .tile-meta {
+  :global(.tile-meta) {
     /* White regardless of theme: drawn over saturated per-agent tile fills */
     fill: white;
     fill-opacity: 0.7;
@@ -221,7 +146,7 @@
     pointer-events: none;
   }
 
-  .tile-label-sm {
+  :global(.tile-label-sm) {
     fill: white;
     font-size: 9px;
     font-weight: 500;

@@ -1,14 +1,13 @@
 <script lang="ts">
+  import { Axis, Bar, Chart, Grid, Layer } from "layerchart";
+  import { scaleBand } from "d3-scale";
   import { analytics } from "../../stores/analytics.svelte.js";
   import { addDays, endOfMonth } from "../../utils/dates.js";
-  import { m } from "../../i18n/index.js";
-
-  const BAR_HEIGHT = 120;
-  const LABEL_HEIGHT = 20;
-  const TOP_PAD = 20;
-  const SVG_HEIGHT = BAR_HEIGHT + LABEL_HEIGHT + TOP_PAD + 4;
-  const MIN_BAR_WIDTH = 6;
-  const BAR_GAP = 2;
+  import {
+    formatDateTime,
+    getLocale,
+    m,
+  } from "../../i18n/index.js";
 
   type Metric = "messages" | "sessions";
   interface Props {
@@ -19,83 +18,32 @@
 
   let metric = $state<Metric>("messages");
 
-  let containerEl = $state<HTMLDivElement | null>(null);
-  let containerWidth = $state(600);
-
-  $effect(() => {
-    if (!containerEl) return;
-    const obs = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        containerWidth = entry.contentRect.width;
-      }
-    });
-    obs.observe(containerEl);
-    return () => obs.disconnect();
-  });
-
   const chart = $derived.by(() => {
     const series = analytics.activity?.series;
     if (!series || series.length === 0) {
-      return { bars: [], maxVal: 0, labels: [] };
+      return { bars: [], labels: [] as string[] };
     }
 
-    const values = series.map((e) =>
-      metric === "messages" ? e.messages : e.sessions,
-    );
-    const maxVal = Math.max(...values, 1);
+    const bars = series.map((entry) => ({
+      value: metric === "messages" ? entry.messages : entry.sessions,
+      date: entry.date,
+      userMessages: entry.user_messages,
+      assistantMessages: entry.assistant_messages,
+    }));
 
-    const barWidth = Math.max(
-      MIN_BAR_WIDTH,
-      Math.floor(
-        (containerWidth - series.length * BAR_GAP) /
-          series.length,
-      ),
-    );
-
-    const bars = series.map((entry, i) => {
-      const val = values[i]!;
-      const height = (val / maxVal) * BAR_HEIGHT;
-      return {
-        x: i * (barWidth + BAR_GAP),
-        y: TOP_PAD + BAR_HEIGHT - height,
-        width: barWidth,
-        height,
-        value: val,
-        date: entry.date,
-        userMessages: entry.user_messages,
-        assistantMessages: entry.assistant_messages,
-      };
-    });
-
-    // Generate sparse x-axis labels
     const labelStep = Math.max(
       1,
       Math.floor(series.length / 8),
     );
     const labels = series
       .filter((_, i) => i % labelStep === 0)
-      .map((entry, _, arr) => {
-        const idx = series.indexOf(entry);
-        return {
-          x: idx * (barWidth + BAR_GAP) + barWidth / 2,
-          text: formatDateLabel(entry.date),
-        };
-      });
+      .map((entry) => entry.date);
 
-    return { bars, maxVal, labels };
+    return { bars, labels };
   });
 
-  const svgWidth = $derived(
-    chart.bars.length > 0
-      ? chart.bars[chart.bars.length - 1]!.x +
-          chart.bars[0]!.width +
-          4
-      : containerWidth,
-  );
-
   function formatDateLabel(date: string): string {
-    const d = new Date(date + "T00:00:00");
-    return d.toLocaleDateString("en", {
+    return formatDateTime(`${date}T00:00:00`, {
       month: "short",
       day: "numeric",
     });
@@ -114,8 +62,7 @@
     const rect = (
       e.currentTarget as SVGElement
     ).getBoundingClientRect();
-    const d = new Date(bar.date + "T00:00:00");
-    const label = d.toLocaleDateString("en", {
+    const label = formatDateTime(`${bar.date}T00:00:00`, {
       month: "short",
       day: "numeric",
       year: "numeric",
@@ -123,7 +70,7 @@
     const lines = [
       m.analytics_activity_timeline_tooltip_value({
         label,
-        value: bar.value.toLocaleString(),
+        value: bar.value.toLocaleString(getLocale()),
         metric: metric === "messages"
           ? m.analytics_metric_messages()
           : m.analytics_metric_sessions(),
@@ -168,6 +115,16 @@
 
   function handleBarLeave() {
     tooltip = null;
+  }
+
+  function handleBarKeydown(
+    event: KeyboardEvent,
+    bar: (typeof chart.bars)[number],
+  ) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      handleBarClick(bar);
+    }
   }
 </script>
 
@@ -227,61 +184,43 @@
       </button>
     </div>
   {:else if chart.bars.length > 0}
-    <div class="chart-area" bind:this={containerEl}>
-      <svg
-        width={svgWidth}
-        height={SVG_HEIGHT}
-        class="timeline-svg"
+    <div class="chart-area">
+      <Chart
+        data={chart.bars}
+        x="date"
+        y="value"
+        xScale={scaleBand().paddingInner(0.12).paddingOuter(0.02)}
+        yDomain={[0, null]}
+        yNice
+        padding={{ top: 20, right: 24, bottom: 20, left: 24 }}
+        height={164}
+        class="timeline-chart"
       >
-        <!-- Y-axis guide lines -->
-        {#each [0.25, 0.5, 0.75, 1] as frac}
-          <line
-            x1="0"
-            y1={TOP_PAD + BAR_HEIGHT * (1 - frac)}
-            x2={svgWidth}
-            y2={TOP_PAD + BAR_HEIGHT * (1 - frac)}
-            class="grid-line"
+        <Layer>
+          <Grid x={false} y class="grid-line" />
+          <Axis
+            placement="bottom"
+            ticks={chart.labels}
+            format={(date) => formatDateLabel(String(date))}
+            tickMarks={false}
+            rule={false}
+            classes={{ tickLabel: "x-label" }}
           />
-        {/each}
-
-        <!-- Bars -->
-        {#each chart.bars as bar}
-          <rect
-            x={bar.x}
-            y={bar.y}
-            width={bar.width}
-            height={Math.max(bar.height, 1)}
-            rx="1"
-            class="bar"
-            class:empty={bar.value === 0}
-            class:selected={analytics.selectedDate === bar.date}
-            class:dimmed={analytics.selectedDate !== null && analytics.selectedDate !== bar.date}
-            role="button"
-            tabindex="0"
-            onclick={() => handleBarClick(bar)}
-            onkeydown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                handleBarClick(bar);
-              }
-            }}
-            onmouseenter={(e) => handleBarHover(e, bar)}
-            onmouseleave={handleBarLeave}
-          />
-        {/each}
-
-        <!-- X-axis labels -->
-        {#each chart.labels as label}
-          <text
-            x={label.x}
-            y={TOP_PAD + BAR_HEIGHT + LABEL_HEIGHT - 4}
-            class="x-label"
-            text-anchor="middle"
-          >
-            {label.text}
-          </text>
-        {/each}
-      </svg>
+          {#each chart.bars as bar (bar.date)}
+            <Bar
+              data={bar}
+              radius={1}
+              class={`bar${bar.value === 0 ? " empty" : ""}${analytics.selectedDate === bar.date ? " selected" : ""}${analytics.selectedDate !== null && analytics.selectedDate !== bar.date ? " dimmed" : ""}`}
+              role="button"
+              tabindex={0}
+              onclick={() => handleBarClick(bar)}
+              onkeydown={(event) => handleBarKeydown(event, bar)}
+              onpointerenter={(event) => handleBarHover(event, bar)}
+              onpointerleave={handleBarLeave}
+            />
+          {/each}
+        </Layer>
+      </Chart>
     </div>
 
     {#if tooltip}
@@ -347,45 +286,45 @@
     padding-bottom: 4px;
   }
 
-  .timeline-svg {
+  :global(.timeline-chart) {
     display: block;
   }
 
-  .grid-line {
+  :global(.grid-line) {
     stroke: var(--border-muted);
     stroke-width: 0.5;
     stroke-dasharray: 2 2;
   }
 
-  .bar {
+  :global(.bar) {
     fill: var(--accent-blue);
     opacity: 0.8;
     cursor: pointer;
     transition: opacity 0.15s;
   }
 
-  .bar:hover {
+  :global(.bar:hover) {
     opacity: 1;
   }
 
-  .bar.selected {
+  :global(.bar.selected) {
     opacity: 1;
   }
 
-  .bar.dimmed {
+  :global(.bar.dimmed) {
     opacity: 0.2;
   }
 
-  .bar.dimmed:hover {
+  :global(.bar.dimmed:hover) {
     opacity: 0.5;
   }
 
-  .bar.empty {
+  :global(.bar.empty) {
     opacity: 0.2;
     cursor: default;
   }
 
-  .x-label {
+  :global(.x-label) {
     font-size: 9px;
     fill: var(--text-muted);
     font-family: var(--font-sans);

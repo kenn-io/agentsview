@@ -8,6 +8,7 @@ import { testMoney } from "../../test/money.js";
 
 class ResizeObserverMock {
   observe = vi.fn();
+  unobserve = vi.fn();
   disconnect = vi.fn();
 }
 

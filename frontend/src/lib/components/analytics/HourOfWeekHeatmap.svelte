@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { Chart, Layer, Rect, Text } from "layerchart";
   import { analytics } from "../../stores/analytics.svelte.js";
-  import { m } from "../../i18n/index.js";
+  import { getLocale, m } from "../../i18n/index.js";
 
   const CELL_SIZE = 17;
   const CELL_GAP = 2;
@@ -121,7 +122,7 @@
         day,
         hour: h,
         count: value,
-        countLabel: value.toLocaleString(),
+        countLabel: value.toLocaleString(getLocale()),
       }),
     };
   }
@@ -168,79 +169,75 @@
     </div>
   {:else if grid}
     <div class="how-scroll">
-      <svg
+      <Chart
         width={svgWidth}
         height={svgHeight}
-        class="how-svg"
+        padding={0}
       >
-        {#each [0, 3, 6, 9, 12, 15, 18, 21] as h}
-          <text
-            x={h * CELL_STEP + ROW_LABEL_WIDTH + CELL_SIZE / 2}
-            y={COL_LABEL_HEIGHT - 4}
-            class="hour-label"
-            class:active-label={analytics.selectedHour === h}
-            text-anchor="middle"
-            role="button"
-            tabindex="0"
-            onclick={() => handleHourClick(h)}
-            onkeydown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                handleHourClick(h);
-              }
-            }}
-          >
-            {h}
-          </text>
-        {/each}
-
-        {#each grid as row, rowIdx}
-          <text
-            x={ROW_LABEL_WIDTH - 4}
-            y={rowIdx * CELL_STEP + COL_LABEL_HEIGHT + CELL_SIZE - 2}
-            class="day-label"
-            class:active-label={analytics.selectedDow === row.dayIdx}
-            text-anchor="end"
-            role="button"
-            tabindex="0"
-            onclick={() => handleDayClick(row.dayIdx)}
-            onkeydown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                handleDayClick(row.dayIdx);
-              }
-            }}
-          >
-            {row.day}
-          </text>
-
-          {#each row.hours as cell}
-            <rect
-              x={cell.hour * CELL_STEP + ROW_LABEL_WIDTH}
-              y={rowIdx * CELL_STEP + COL_LABEL_HEIGHT}
-              width={CELL_SIZE}
-              height={CELL_SIZE}
-              rx="2"
-              fill={levelColor(cell.level)}
-              class="how-cell"
-              class:dimmed={isDimmed(row.dayIdx, cell.hour)}
+        <Layer class="how-svg">
+          {#each [0, 3, 6, 9, 12, 15, 18, 21] as hour}
+            <Text
+              value={hour}
+              x={hour * CELL_STEP + ROW_LABEL_WIDTH + CELL_SIZE / 2}
+              y={COL_LABEL_HEIGHT - 4}
+              class={`hour-label${analytics.selectedHour === hour ? " active-label" : ""}`}
+              textAnchor="middle"
               role="button"
-              tabindex="0"
-              onmouseenter={(e) =>
-                handleCellHover(e, row.day, cell.hour, cell.value)}
-              onmouseleave={handleCellLeave}
-              onclick={() =>
-                handleCellClick(row.dayIdx, cell.hour)}
-              onkeydown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  handleCellClick(row.dayIdx, cell.hour);
+              tabindex={0}
+              onclick={() => handleHourClick(hour)}
+              onkeydown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  handleHourClick(hour);
                 }
               }}
             />
           {/each}
-        {/each}
-      </svg>
+
+          {#each grid as row, rowIdx}
+            <Text
+              value={row.day}
+              x={ROW_LABEL_WIDTH - 4}
+              y={rowIdx * CELL_STEP + COL_LABEL_HEIGHT + CELL_SIZE - 2}
+              class={`day-label${analytics.selectedDow === row.dayIdx ? " active-label" : ""}`}
+              textAnchor="end"
+              role="button"
+              tabindex={0}
+              onclick={() => handleDayClick(row.dayIdx)}
+              onkeydown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  handleDayClick(row.dayIdx);
+                }
+              }}
+            />
+
+            {#each row.hours as cell}
+              <Rect
+                x={cell.hour * CELL_STEP + ROW_LABEL_WIDTH}
+                y={rowIdx * CELL_STEP + COL_LABEL_HEIGHT}
+                width={CELL_SIZE}
+                height={CELL_SIZE}
+                rx={2}
+                fill={levelColor(cell.level)}
+                class={`how-cell${isDimmed(row.dayIdx, cell.hour) ? " dimmed" : ""}`}
+                role="button"
+                tabindex={0}
+                onmouseenter={(event) =>
+                  handleCellHover(event, row.day, cell.hour, cell.value)}
+                onmouseleave={handleCellLeave}
+                onclick={() => handleCellClick(row.dayIdx, cell.hour)}
+                onkeydown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    handleCellClick(row.dayIdx, cell.hour);
+                  }
+                }}
+              />
+            {/each}
+          {/each}
+        </Layer>
+      </Chart>
     </div>
 
     {#if tooltip}
@@ -267,40 +264,40 @@
     padding-bottom: 4px;
   }
 
-  .how-svg {
+  :global(.how-svg) {
     display: block;
   }
 
-  .hour-label,
-  .day-label {
+  :global(.hour-label),
+  :global(.day-label) {
     font-size: 9px;
     fill: var(--text-muted);
     font-family: var(--font-sans);
     cursor: pointer;
   }
 
-  .hour-label:hover,
-  .day-label:hover {
+  :global(.hour-label:hover),
+  :global(.day-label:hover) {
     fill: var(--text-primary);
   }
 
-  .active-label {
+  :global(.active-label) {
     fill: var(--accent-blue);
     font-weight: 600;
   }
 
-  .how-cell {
+  :global(.how-cell) {
     cursor: pointer;
     transition: opacity 0.15s;
   }
 
-  .how-cell:hover {
+  :global(.how-cell:hover) {
     opacity: 0.8;
     stroke: var(--text-muted);
     stroke-width: 1;
   }
 
-  .how-cell.dimmed {
+  :global(.how-cell.dimmed) {
     opacity: 0.2;
   }
 

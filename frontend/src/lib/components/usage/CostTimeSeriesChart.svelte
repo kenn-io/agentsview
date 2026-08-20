@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { Area, Axis, Chart, Grid, Layer } from "layerchart";
+  import { scalePoint } from "d3-scale";
   import { usage, type GroupBy } from "../../stores/usage.svelte.js";
-  import { m } from "../../i18n/index.js";
+  import { formatDateTime, m } from "../../i18n/index.js";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
   import { sumSelectedTokens } from "../../stores/usageTokenTypes.js";
 
@@ -11,31 +13,13 @@
   let { colorMap }: Props = $props();
 
   const CHART_H = 180;
-  const X_LABEL_H = 20;
   const MIN_Y_LABEL_W = 40;
   const Y_LABEL_CHAR_W = 6;
   const Y_LABEL_GAP = 4;
-  const X_LABEL_RIGHT_PAD = 24;
   // Reserved headroom at the top of the plot area so the
   // maximum bar, its grid line, and the top y-axis label's
   // ascenders do not clip against the SVG viewBox edge.
-  const TOP_PAD = 10;
   const MAX_SERIES = 5;
-
-  let containerEl: HTMLDivElement | undefined = $state();
-  let containerWidth = $state(600);
-
-  $effect(() => {
-    if (!containerEl) return;
-    const ro = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (entry) {
-        containerWidth = Math.floor(entry.contentRect.width);
-      }
-    });
-    ro.observe(containerEl);
-    return () => ro.disconnect();
-  });
 
   interface Point {
     date: string;
@@ -182,8 +166,6 @@
     return { points, keys, maxY: maxY || 1, labels };
   });
 
-  const BAR_WIDTH = 40;
-
   // TICK_TARGET is the number of y-axis intervals we aim
   // for. niceScale picks a step from the 1/2/5 × 10ⁿ set so
   // the chosen max is always an integer multiple of the step
@@ -235,143 +217,21 @@
     );
   });
 
-  const chartWidth = $derived(
-    Math.max(containerWidth - yLabelWidth - X_LABEL_RIGHT_PAD, 100),
-  );
-
-  // scaleY maps a data value in [0, niceMax] onto the plot
-  // area [TOP_PAD, h], inverted so 0 is at the bottom. Kept
-  // as a function so both buildPaths and yTicks use identical
-  // math and the top tick lines up with the highest bar.
-  function scaleY(val: number, max: number, h: number): number {
-    const plotH = h - TOP_PAD;
-    return h - (val / max) * plotH;
-  }
-
-  function buildPaths(
-    points: Point[],
-    keys: string[],
-    maxY: number,
-    w: number,
-    h: number,
-    colors: ReadonlyMap<string, string>,
-    labelWidth: number,
-  ): Array<{ key: string; d: string; color: string }> {
-    if (points.length === 0) return [];
-
-    // Single data point: render stacked vertical bars instead
-    // of degenerate zero-width areas.
-    if (points.length === 1) {
-      const cx = labelWidth + w / 2;
-      const x0 = cx - BAR_WIDTH / 2;
-      const result: Array<{
-        key: string;
-        d: string;
-        color: string;
-      }> = [];
-      let baseline = 0;
-      for (const key of keys) {
-        const val = points[0]!.values[key] ?? 0;
-        const top = scaleY(baseline + val, maxY, h);
-        const bot = scaleY(baseline, maxY, h);
-        const d =
-          `M${x0},${bot}` +
-          `L${x0},${top}` +
-          `L${x0 + BAR_WIDTH},${top}` +
-          `L${x0 + BAR_WIDTH},${bot}Z`;
-        const color = key === "__other__"
-          ? "var(--text-muted)"
-          : colors.get(key) ?? "var(--text-muted)";
-        result.push({ key, d, color });
-        baseline += val;
-      }
-      return result;
-    }
-
-    const xStep = w / Math.max(points.length - 1, 1);
-    const result: Array<{
-      key: string;
-      d: string;
-      color: string;
-    }> = [];
-
-    const baselines = new Float64Array(points.length);
-
-    for (const key of keys) {
-      let d = "";
-
-      for (let i = 0; i < points.length; i++) {
-        const x = labelWidth + i * xStep;
-        const val = points[i]!.values[key] ?? 0;
-        const top = scaleY(baselines[i]! + val, maxY, h);
-        d += i === 0 ? `M${x},${top}` : `L${x},${top}`;
-      }
-
-      // Close area back along baseline
-      for (let i = points.length - 1; i >= 0; i--) {
-        const x = labelWidth + i * xStep;
-        const base = scaleY(baselines[i]!, maxY, h);
-        d += `L${x},${base}`;
-      }
-      d += "Z";
-
-      const color = key === "__other__"
-        ? "var(--text-muted)"
-        : colors.get(key) ?? "var(--text-muted)";
-      result.push({ key, d, color });
-
-      for (let i = 0; i < points.length; i++) {
-        baselines[i] = baselines[i]! + (points[i]!.values[key] ?? 0);
-      }
-    }
-
-    return result;
-  }
-
-  const paths = $derived(
-    buildPaths(
-      seriesData.points,
-      seriesData.keys,
-      scale.max,
-      chartWidth,
-      CHART_H,
-      colorMap,
-      yLabelWidth,
-    ),
-  );
-
   function dateLabel(date: string): string {
-    const d = new Date(date + "T00:00:00");
-    return d.toLocaleDateString("en", {
+    return formatDateTime(`${date}T00:00:00`, {
       month: "short",
       day: "numeric",
     });
   }
 
-  const xLabels = $derived.by(() => {
+  const xTicks = $derived.by(() => {
     const pts = seriesData.points;
-    if (pts.length <= 1) {
-      return pts.map((p, i) => ({ x: yLabelWidth, label: dateLabel(p.date), idx: i }));
-    }
-    const step = Math.max(
-      Math.floor(pts.length / 6),
-      1,
-    );
-    const xStep =
-      chartWidth / Math.max(pts.length - 1, 1);
-    const labels: Array<{
-      x: number;
-      label: string;
-      idx: number;
-    }> = [];
-    for (let i = 0; i < pts.length; i += step) {
-      labels.push({
-        x: yLabelWidth + i * xStep,
-        label: dateLabel(pts[i]!.date),
-        idx: i,
-      });
-    }
-    return labels;
+    const step = Math.max(Math.ceil(pts.length / 6), 1);
+    return pts
+      .filter((_, index) =>
+        index === 0 || index === pts.length - 1 || index % step === 0
+      )
+      .map((point) => point.date);
   });
 
   function fmtCostYLabel(v: number): string {
@@ -385,14 +245,15 @@
     return String(Math.round(v));
   }
 
-  const yTicks = $derived.by(() => {
-    return yTickValues.map((value) => ({
-      y: scaleY(value, scale.max, CHART_H),
-      label: isTokenMode
-        ? fmtTokenYLabel(value)
-        : fmtCostYLabel(value),
-    }));
-  });
+  const stackSeries = $derived(
+    seriesData.keys.map((key) => ({
+      key,
+      value: (point: Point) => point.values[key] ?? 0,
+      color: key === "__other__"
+        ? "var(--text-muted)"
+        : colorMap.get(key) ?? "var(--text-muted)",
+    })),
+  );
 
   function handleGroupByChange(g: GroupBy) {
     usage.setTimeSeriesGroupBy(g);
@@ -434,47 +295,47 @@
   {#if seriesData.points.length === 0}
     <div class="empty">{m.shared_no_data_for_period()}</div>
   {:else}
-    <div class="chart-scroll" bind:this={containerEl}>
-      <svg
-        width="100%"
-        height={CHART_H + X_LABEL_H}
-        viewBox="0 0 {chartWidth + yLabelWidth + X_LABEL_RIGHT_PAD} {CHART_H + X_LABEL_H}"
-        preserveAspectRatio="xMidYMid meet"
-        class="chart-svg"
+    <div class="chart-scroll">
+      <Chart
+        data={seriesData.points}
+        x="date"
+        y={(point) => Math.max(...seriesData.keys.map((key) => point.values[key] ?? 0))}
+        xScale={scalePoint().padding(seriesData.points.length === 1 ? 0.5 : 0.05)}
+        yDomain={[0, scale.max]}
+        series={stackSeries}
+        seriesLayout="stack"
+        padding={{ top: 10, right: 24, bottom: 20, left: yLabelWidth }}
+        height={CHART_H + 20}
       >
-        {#each yTicks as tick}
-          <line
-            x1={yLabelWidth}
-            y1={tick.y}
-            x2={chartWidth + yLabelWidth}
-            y2={tick.y}
-            class="grid-line"
+        <Layer class="chart-svg">
+          <Grid x={false} y yTicks={yTickValues} class="grid-line" />
+          <Axis
+            placement="left"
+            ticks={yTickValues}
+            format={(value) => isTokenMode
+              ? fmtTokenYLabel(Number(value))
+              : fmtCostYLabel(Number(value))}
+            tickMarks={false}
+            rule={false}
+            classes={{ tickLabel: "y-label" }}
           />
-          <text
-            x={yLabelWidth - Y_LABEL_GAP}
-            y={tick.y + 3}
-            class="y-label"
-            text-anchor="end"
-          >
-            {tick.label}
-          </text>
-        {/each}
-
-        {#each paths as p (p.key)}
-          <path d={p.d} fill={p.color} opacity="0.7" />
-        {/each}
-
-        {#each xLabels as lbl (lbl.idx)}
-          <text
-            x={lbl.x}
-            y={CHART_H + 14}
-            class="x-label"
-            text-anchor="middle"
-          >
-            {lbl.label}
-          </text>
-        {/each}
-      </svg>
+          <Axis
+            placement="bottom"
+            ticks={xTicks}
+            format={(value) => dateLabel(String(value))}
+            tickMarks={false}
+            rule={false}
+            classes={{ tickLabel: "x-label" }}
+          />
+          {#each stackSeries as item (item.key)}
+            <Area
+              seriesKey={item.key}
+              fill={item.color}
+              opacity={0.7}
+            />
+          {/each}
+        </Layer>
+      </Chart>
     </div>
 
     {#if seriesData.keys.length > 1}
@@ -545,23 +406,23 @@
     padding-bottom: 4px;
   }
 
-  .chart-svg {
+  :global(.chart-svg) {
     display: block;
   }
 
-  .grid-line {
+  :global(.grid-line) {
     stroke: var(--border-muted);
     stroke-width: 1;
     stroke-dasharray: 2 2;
   }
 
-  .y-label {
+  :global(.y-label) {
     font-size: 9px;
     fill: var(--text-muted);
     font-family: var(--font-mono);
   }
 
-  .x-label {
+  :global(.x-label) {
     font-size: 9px;
     fill: var(--text-muted);
     font-family: var(--font-sans);

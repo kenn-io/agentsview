@@ -1,7 +1,8 @@
 <script lang="ts">
+  import { Chart, Layer, Rect, Text } from "layerchart";
   import { analytics } from "../../stores/analytics.svelte.js";
   import type { HeatmapMetric } from "../../stores/analytics.svelte.js";
-  import { m } from "../../i18n/index.js";
+  import { formatDateTime, getLocale, m } from "../../i18n/index.js";
 
   const CELL_SIZE = 16;
   const CELL_GAP = 2;
@@ -65,8 +66,7 @@
     const rect = (
       e.currentTarget as SVGElement
     ).getBoundingClientRect();
-    const d = new Date(cell.date + "T00:00:00");
-    const label = d.toLocaleDateString("en", {
+    const label = formatDateTime(`${cell.date}T00:00:00`, {
       month: "short",
       day: "numeric",
       year: "numeric",
@@ -74,7 +74,7 @@
     tooltip = {
       x: rect.left + rect.width / 2,
       y: rect.top - 4,
-      text: `${label}: ${cell.value.toLocaleString()} ${metricLabel(analytics.metric)}`,
+      text: `${label}: ${cell.value.toLocaleString(getLocale())} ${metricLabel(analytics.metric)}`,
     };
   }
 
@@ -115,7 +115,7 @@
         currentCol = [];
       }
 
-      const month = d.toLocaleString("en", { month: "short" });
+      const month = d.toLocaleString(getLocale(), { month: "short" });
       if (month !== lastMonth && dow <= 3) {
         monthLabels.push({ col: cols.length, label: month });
         lastMonth = month;
@@ -185,62 +185,60 @@
       <div class="clamp-note">{m.analytics_heatmap_showing_recent_year()}</div>
     {/if}
     <div class="heatmap-scroll">
-      <svg
+      <Chart
         width={svgWidth}
         height={svgHeight}
-        class="heatmap-svg"
+        padding={0}
       >
-        {#each DAY_LABELS as label, i}
-          {#if label}
-            <text
-              x={LABEL_WIDTH - 4}
-              y={i * CELL_STEP + HEADER_HEIGHT + CELL_SIZE - 1}
-              class="day-label"
-              text-anchor="end"
-            >
-              {label}
-            </text>
-          {/if}
-        {/each}
+        <Layer class="heatmap-svg">
+          {#each DAY_LABELS as label, i}
+            {#if label}
+              <Text
+                value={label}
+                x={LABEL_WIDTH - 4}
+                y={i * CELL_STEP + HEADER_HEIGHT + CELL_SIZE - 1}
+                class="day-label"
+                textAnchor="end"
+              />
+            {/if}
+          {/each}
 
-        {#each grid.months as m}
-          <text
-            x={m.col * CELL_STEP + LABEL_WIDTH}
-            y={HEADER_HEIGHT - 4}
-            class="month-label"
-          >
-            {m.label}
-          </text>
-        {/each}
-
-        {#each grid.cols as col, colIdx}
-          {#each col as cell}
-            <rect
-              x={colIdx * CELL_STEP + LABEL_WIDTH}
-              y={cell.dayOfWeek * CELL_STEP + HEADER_HEIGHT}
-              width={CELL_SIZE}
-              height={CELL_SIZE}
-              rx="2"
-              fill={levelColor(cell.level)}
-              class="heatmap-cell"
-              class:clickable={cell.value > 0 || analytics.selectedDate === cell.date}
-              class:selected={analytics.selectedDate === cell.date}
-              role="button"
-              tabindex="-1"
-              onmouseenter={(e) => handleCellHover(e, cell)}
-              onmouseleave={handleCellLeave}
-              onclick={() => {
-                if (cell.value > 0 || analytics.selectedDate === cell.date)
-                  handleCellClick(cell);
-              }}
-              onkeydown={(e) => {
-                if (e.key === "Enter" && (cell.value > 0 || analytics.selectedDate === cell.date))
-                  handleCellClick(cell);
-              }}
+          {#each grid.months as month}
+            <Text
+              value={month.label}
+              x={month.col * CELL_STEP + LABEL_WIDTH}
+              y={HEADER_HEIGHT - 4}
+              class="month-label"
             />
           {/each}
-        {/each}
-      </svg>
+
+          {#each grid.cols as col, colIdx}
+            {#each col as cell}
+              <Rect
+                x={colIdx * CELL_STEP + LABEL_WIDTH}
+                y={cell.dayOfWeek * CELL_STEP + HEADER_HEIGHT}
+                width={CELL_SIZE}
+                height={CELL_SIZE}
+                rx={2}
+                fill={levelColor(cell.level)}
+                class={`heatmap-cell${cell.value > 0 || analytics.selectedDate === cell.date ? " clickable" : ""}${analytics.selectedDate === cell.date ? " selected" : ""}`}
+                role="button"
+                tabindex={-1}
+                onmouseenter={(event) => handleCellHover(event, cell)}
+                onmouseleave={handleCellLeave}
+                onclick={() => {
+                  if (cell.value > 0 || analytics.selectedDate === cell.date)
+                    handleCellClick(cell);
+                }}
+                onkeydown={(event) => {
+                  if (event.key === "Enter" && (cell.value > 0 || analytics.selectedDate === cell.date))
+                    handleCellClick(cell);
+                }}
+              />
+            {/each}
+          {/each}
+        </Layer>
+      </Chart>
     </div>
 
     {#if tooltip}
@@ -306,32 +304,32 @@
     padding-bottom: 4px;
   }
 
-  .heatmap-svg {
+  :global(.heatmap-svg) {
     display: block;
     margin: 0 auto;
   }
 
-  .day-label, .month-label {
+  :global(.day-label), :global(.month-label) {
     font-size: 9px;
     fill: var(--text-muted);
     font-family: var(--font-sans);
   }
 
-  .heatmap-cell {
+  :global(.heatmap-cell) {
     cursor: default;
   }
 
-  .heatmap-cell.clickable {
+  :global(.heatmap-cell.clickable) {
     cursor: pointer;
   }
 
-  .heatmap-cell.clickable:hover {
+  :global(.heatmap-cell.clickable:hover) {
     opacity: 0.8;
     stroke: var(--text-muted);
     stroke-width: 1;
   }
 
-  .heatmap-cell.selected {
+  :global(.heatmap-cell.selected) {
     stroke: var(--text-primary);
     stroke-width: 2;
   }

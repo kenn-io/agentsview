@@ -61,6 +61,7 @@ describe("TrendsPage", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );

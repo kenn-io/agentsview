@@ -77,6 +77,28 @@ export function installFallbackResizeObserver(): void {
   });
 }
 
+/** Svelte motion reads prefers-reduced-motion during module initialization.
+ * jsdom does not implement matchMedia, so provide the inert browser shape. */
+export function installFallbackMatchMedia(): void {
+  if (typeof window.matchMedia === "function") return;
+
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    writable: true,
+    value: (query: string): MediaQueryList => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener() {},
+      removeListener() {},
+      addEventListener() {},
+      removeEventListener() {},
+      dispatchEvent: () => false,
+    }),
+  });
+}
+
 installFallbackStorage("localStorage");
 installFallbackResizeObserver();
+installFallbackMatchMedia();
 initI18n();

@@ -153,6 +153,7 @@ describe("UsagePage refresh behavior", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );

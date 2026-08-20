@@ -22,6 +22,7 @@ function stubActivityPageCollaborators() {
     "ResizeObserver",
     class {
       observe() {}
+      unobserve() {}
       disconnect() {}
     },
   );
