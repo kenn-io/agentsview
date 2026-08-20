@@ -482,6 +482,14 @@
         font-size: 10px;
       }
 
+      .folder-action {
+        display: block;
+        margin-top: 2px;
+        color: var(--accent-text);
+        font-size: 10px;
+        font-weight: 650;
+      }
+
       .composer {
         display: flex;
         flex-direction: column;
@@ -1231,15 +1239,22 @@
         return `<span class="tag">${labels[folder.evidenceKind] || "Suggestion"}</span>`;
       }
 
+      function folderSuggestions(filterProject, includeSuggested = true) {
+        return folders.filter((folder) => folder.project === filterProject || (includeSuggested && folder.candidateProject === filterProject));
+      }
+
       function folderItems(filterProject = state.selectedProject, includeSuggested = true) {
-        let rows = folders.filter((folder) => folder.project === filterProject || (includeSuggested && folder.candidateProject === filterProject));
-        return rows.map((folder) => `<div class="folder-item ${folder.id === state.selectedFolder ? "active" : ""} ${folder.project !== filterProject ? "suggested" : ""}">
+        return folderSuggestions(filterProject, includeSuggested).map((folder) => {
+          const suggested = folder.project !== filterProject;
+          return `<div class="folder-item ${folder.id === state.selectedFolder ? "active" : ""} ${suggested ? "suggested" : ""}">
           <button class="folder-button" data-action="folder" data-folder="${folder.id}">
             ${folderPath(folder.path)}
             <span class="folder-meta"><span>${folder.machine}</span><span>${folder.sessions} sessions</span></span>
+            ${suggested && folder.available ? `<span class="folder-action">Use for this project</span>` : ""}
           </button>
           ${evidenceTag(folder)}
-        </div>`).join("");
+        </div>`;
+        }).join("");
       }
 
       function targetPicker() {
@@ -1255,6 +1270,9 @@
         const data = impact();
         if (isReadOnly()) {
           return `<div class="${compact ? "" : "composer"}"><div class="read-only-note"><strong>Changes are unavailable in this view.</strong><br />This source mirrors a remote archive. Open the writable archive on its source machine to change project mapping rules.</div></div>`;
+        }
+        if (!folder.available) {
+          return `<div class="${compact ? "" : "composer"}"><div class="read-only-note"><strong>No usable path prefix.</strong><br />This folder suggestion cannot start a correction. Choose another suggestion.</div></div>`;
         }
         if (!state.pendingEdit) {
           return `<div class="${compact ? "" : "composer"}"><div class="read-only-note"><strong>No pending correction.</strong><br />The saved version is reflected in the inventory. Select another folder suggestion to start a new correction.</div></div>`;
@@ -1294,7 +1312,7 @@
           <div class="split-view">
             ${inventoryTable()}
             <aside class="inspector">
-              <header><div class="row-between"><h2>${esc(project.name)}</h2><span class="tag blue">${project.rules} active mapping rules</span></div><div class="project-facts"><span>${project.sessions.toLocaleString()} sessions</span><span>${project.machines} machines</span><span>${project.folders} folder suggestions</span></div></header>
+              <header><div class="row-between"><h2>${esc(project.name)}</h2><span class="tag blue">${project.rules} active mapping rules</span></div><div class="project-facts"><span>${project.sessions.toLocaleString()} sessions</span><span>${project.machines} machines</span><span>${folderSuggestions(project.key).length} folder suggestions</span></div></header>
               <div class="inspector-section">
                 <div class="section-header"><div><h3>Folder suggestions</h3><p class="muted">Paths suggested from sessions in this project.</p></div><button class="button quiet" data-action="suggested">${state.showSuggestions ? "Hide suggestions" : "Show suggestions"}</button></div>
                 <div class="folder-list">${folderItems(project.key, state.showSuggestions)}</div>
@@ -1419,8 +1437,16 @@
       root.addEventListener("input", (event) => {
         if (event.target.matches('[data-input="new-project"]')) {
           state.newProject = event.target.value;
-          const save = root.querySelector('[data-action="save"]');
-          if (save) save.disabled = !state.newProject.trim();
+          const reviewWasAccepted = state.reviewAccepted;
+          state.reviewAccepted = false;
+          if (reviewWasAccepted) {
+            render();
+            const input = root.querySelector('[data-input="new-project"]');
+            input?.focus();
+            input?.setSelectionRange(state.newProject.length, state.newProject.length);
+          }
+          const submit = root.querySelector('[data-action="save"], [data-action="review"]');
+          if (submit) submit.disabled = !state.newProject.trim();
         }
       });
 
@@ -1473,6 +1499,9 @@
           }
           const folder = selectedFolder();
           const data = impact();
+          const previousSelectedProject = state.selectedProject;
+          const previousTargetProject = state.targetProject;
+          const previousNewProject = state.newProject;
           const target = state.targetProject === "new"
             ? projectKeyForName(state.newProject.trim())
             : { key: state.targetProject, created: false };
@@ -1496,6 +1525,9 @@
             target: targetProject?.name || target.key,
             targetKey: target.key,
             createdProjectKey: target.created ? target.key : null,
+            previousSelectedProject,
+            previousTargetProject,
+            previousNewProject,
             previousStates,
           };
           state.undoNotice = "";
@@ -1524,8 +1556,9 @@
             }
             const restored = state.lastSave.previousStates[0];
             state.selectedFolder = restored.id;
-            state.selectedProject = state.lastSave.targetKey;
-            state.targetProject = state.lastSave.targetKey;
+            state.selectedProject = state.lastSave.previousSelectedProject;
+            state.targetProject = state.lastSave.previousTargetProject;
+            state.newProject = state.lastSave.previousNewProject;
             state.pendingEdit = true;
             state.undoNotice = `Restored ${state.lastSave.path} on ${state.lastSave.machine} to its prior mapping-rule state.`;
           }
