@@ -11,17 +11,18 @@ states, and acceptance criteria.
 ## Notes
 
 - Preserve the project inventory overview as the primary Data view.
-- Make the selected-project pane the main place to add and move observed
-  folders.
+- Make the selected-project pane the main place to correct project
+  classification from folder suggestions.
 - Keep ordinary corrections explicit, quick, and immediately persistent. Require
   extra review only when impact is broad or surprising.
-- Keep Project rules as a secondary administrative view.
-- Evaluate prototypes with the agreed tasks: add a folder to an existing
-  project, move a misclassified folder, create a project classification,
-  recover from a mistaken correction, and understand a read-only result.
+- Keep Project mapping rules as a secondary administrative view.
+- Evaluate prototypes with the agreed tasks: use a folder suggestion for an
+  existing project, correct a misclassified path, create a project
+  classification, recover from a mistaken correction, and understand a
+  read-only result.
 - Prefer designs where the project overview remains available, ordinary
-  corrections need no manual prefix entry or trip to Project rules, broad
-  impact is visible before commitment, and completion or failure is
+  corrections need no manual prefix entry or trip to Project mapping rules,
+  broad impact is visible before commitment, and completion or failure is
   unambiguous.
 - Preserve current parser inference and machine-scoped rule semantics unless a
   resolved UX decision proves that a backend change is necessary.
@@ -29,7 +30,7 @@ states, and acceptance criteria.
   the workflow is supported. Record explicit read-only behavior for PostgreSQL
   and DuckDB views instead of assuming SQLite mutation APIs exist there.
 - Suggestions may reduce path entry, but Agents View must never apply a project
-  rule without an explicit user action.
+  mapping rule without an explicit user action.
 - Consult `mattpocock-skills:grilling` and `mattpocock-skills:domain-modeling`
   for decision tickets.
 - Consult `mattpocock-skills:prototype` and `impeccable` for prototype tickets.
@@ -52,6 +53,9 @@ states, and acceptance criteria.
 - [Prototype folder triage as a complementary workflow](issues/03-prototype-folder-triage.md):
   Reject folder triage because the product has no evidence-based problem state
   from which to build a trustworthy queue.
+- [Choose project classification language](issues/04-choose-project-classification-language.md):
+  Frame the common task as a project correction, call evidence-backed prefixes
+  folder suggestions, and reserve project mapping rule for the durable policy.
 
 ## Not yet specified
 
