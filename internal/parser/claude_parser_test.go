@@ -1745,9 +1745,11 @@ func TestResolveClaudePersistedToolResultsPreservesUntouchedNumbers(t *testing.T
 	require.NoError(t, os.MkdirAll(filepath.Dir(resultPath), 0o755))
 	require.NoError(t, os.WriteFile(resultPath, []byte("full output"), 0o644))
 
+	resultPathJSON := mustJSONString(t, resultPath)
+	contentJSON := mustJSONString(t, "Full output saved to: "+resultPath)
 	line := `{"future_counter":9007199254740993,"message":{"content":[` +
-		`{"type":"tool_result","content":"Full output saved to: ` + resultPath + `"}` +
-		`]},"toolUseResult":{"persistedOutputPath":"` + resultPath + `"}}`
+		`{"type":"tool_result","content":` + contentJSON + `}` +
+		`]},"toolUseResult":{"persistedOutputPath":` + resultPathJSON + `}}`
 
 	got := resolveClaudePersistedToolResults(sessionPath, line)
 
