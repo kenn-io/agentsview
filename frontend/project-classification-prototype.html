@@ -1007,7 +1007,7 @@
         {
           key: "C",
           name: "Focused workspace",
-          note: "Trade overview width for a dedicated project correction canvas.",
+          note: "Trade overview width for a dedicated project-correction canvas.",
         },
         {
           key: "D",
@@ -1203,7 +1203,7 @@
           <strong>Review scenario</strong>
           <span class="muted">Use the same state across every variant.</span>
           <div class="scenario-control" aria-label="Review scenario">
-            <button data-action="scenario" data-scenario="ordinary" class="${state.scenario === "ordinary" ? "active" : ""}">Move one folder</button>
+            <button data-action="scenario" data-scenario="ordinary" class="${state.scenario === "ordinary" ? "active" : ""}">Correct project</button>
             <button data-action="scenario" data-scenario="broad" class="${state.scenario === "broad" ? "active" : ""}">Broad impact</button>
             <button data-action="scenario" data-scenario="readonly" class="${state.scenario === "readonly" ? "active" : ""}">Read-only source</button>
             <button data-action="scenario" data-scenario="stale" class="${state.scenario === "stale" ? "active" : ""}">Stale preview</button>
@@ -1215,9 +1215,9 @@
       function pageLead(label = "Projects") {
         return `<div class="page-header">
           <h1>${label}</h1>
-          <div class="segmented" aria-label="Data view"><button class="active">Inventory</button><button>Project rules</button></div>
+          <div class="segmented" aria-label="Data view"><button class="active">Inventory</button><button>Project mapping rules</button></div>
         </div>
-        <div class="summary-strip"><span>${projects.length} projects</span><span>${projects.reduce((sum, project) => sum + project.sessions, 0).toLocaleString()} sessions</span><span>2,278 governed by rules</span><span>${folders.length} candidates in review set</span></div>
+        <div class="summary-strip"><span>${projects.length} projects</span><span>${projects.reduce((sum, project) => sum + project.sessions, 0).toLocaleString()} sessions</span><span>2,278 classified by mapping rules</span><span>${folders.length} folder suggestions</span></div>
         ${scenarioBar()}
         ${state.undoNotice ? `<div class="save-toast" role="status"><strong>Undone</strong><span>${esc(state.undoNotice)}</span></div>` : ""}
         ${resultNotice()}
@@ -1225,10 +1225,10 @@
       }
 
       function evidenceTag(folder) {
-        if (folder.ruleBacked) return `<span class="tag blue">Rule</span>`;
-        if (!folder.available) return `<span class="tag">Unavailable</span>`;
+        if (folder.ruleBacked) return `<span class="tag blue">Mapping rule</span>`;
+        if (!folder.available) return `<span class="tag">No usable prefix</span>`;
         const labels = { snapshot: "Snapshot", aggregate: "Aggregate", fallback: "Exact cwd" };
-        return `<span class="tag">${labels[folder.evidenceKind] || "Candidate"}</span>`;
+        return `<span class="tag">${labels[folder.evidenceKind] || "Suggestion"}</span>`;
       }
 
       function folderItems(filterProject = state.selectedProject, includeSuggested = true) {
@@ -1254,25 +1254,25 @@
         const folder = selectedFolder();
         const data = impact();
         if (isReadOnly()) {
-          return `<div class="${compact ? "" : "composer"}"><div class="read-only-note"><strong>Changes are unavailable in this view.</strong><br />This source mirrors a remote archive. Open the writable archive on its source machine to change project rules.</div></div>`;
+          return `<div class="${compact ? "" : "composer"}"><div class="read-only-note"><strong>Changes are unavailable in this view.</strong><br />This source mirrors a remote archive. Open the writable archive on its source machine to change project mapping rules.</div></div>`;
         }
         if (!state.pendingEdit) {
-          return `<div class="${compact ? "" : "composer"}"><div class="read-only-note"><strong>No pending correction.</strong><br />The saved version is reflected in the inventory. Select another candidate to start a new correction.</div></div>`;
+          return `<div class="${compact ? "" : "composer"}"><div class="read-only-note"><strong>No pending correction.</strong><br />The saved version is reflected in the inventory. Select another folder suggestion to start a new correction.</div></div>`;
         }
         if (state.result?.kind === "conflict") {
           return `<div class="${compact ? "" : "composer"}"><div class="result-note"><span><strong>Nothing was saved.</strong><br />The rule set changed after this preview. Refresh the impact before reviewing again.</span><button class="button" data-action="refresh-impact">Refresh impact</button></div></div>`;
         }
         const needsReview = data.requiresReview && !state.reviewAccepted;
         return `<div class="composer">
-          <div class="row-between"><h3>Pending correction</h3><span class="tag">${folder.machine}</span></div>
-          <div class="mapping-line"><span class="mapping-path" title="${esc(proposalPrefix())}">${esc(proposalPrefix())}</span><span>→</span></div>
+          <div class="row-between"><h3>Project correction</h3><span class="tag">${folder.machine}</span></div>
+          <div><h3>Path prefix</h3><div class="mapping-line"><span class="mapping-path" title="${esc(proposalPrefix())}">${esc(proposalPrefix())}</span><span>→</span></div></div>
           ${targetPicker()}
-          <div class="impact-line"><span>${data.matched} matched</span><span>${data.changing} changing</span><span>${data.projects} current project${data.projects === 1 ? "" : "s"}</span>${data.protected ? `<span>${data.protected} nested protected</span>` : ""}</div>
-          ${data.requiresReview ? `<div class="impact-warning"><strong>${data.broad ? "This prefix governs several observed candidates." : "This correction replaces an existing mapping."}</strong><br />Current classifications represented in the preview: ${esc(data.projectNames.join(", "))}. Review is required before saving.</div>` : ""}
+          <div class="impact-line"><span>${data.matched} sessions matched</span><span>${data.changing} sessions changing project</span><span>${data.affected.length} folder path${data.affected.length === 1 ? "" : "s"} affected</span><span>${data.projects} current project${data.projects === 1 ? "" : "s"}</span>${data.protected ? `<span>${data.protected} nested protected</span>` : ""}</div>
+          ${data.requiresReview ? `<div class="impact-warning"><strong>${data.broad ? "This path prefix affects several folder suggestions." : "This correction replaces an existing project mapping rule."}</strong><br />Current classifications represented in the preview: ${esc(data.projectNames.join(", "))}. Review is required before saving.</div>` : ""}
           <div class="composer-actions">
             <button class="button quiet" data-action="cancel">Cancel</button>
             ${needsReview
-              ? `<button class="button primary" data-action="review">Review ${data.changing} changes</button>`
+              ? `<button class="button primary" data-action="review">Review impact</button>`
               : `<button class="button primary" data-action="save" ${state.targetProject === "new" && !state.newProject.trim() ? "disabled" : ""}>${data.broad ? "Confirm and save" : "Save correction"}</button>`}
           </div>
         </div>`;
@@ -1294,9 +1294,9 @@
           <div class="split-view">
             ${inventoryTable()}
             <aside class="inspector">
-              <header><div class="row-between"><h2>${esc(project.name)}</h2><span class="tag blue">${project.rules} active rules</span></div><div class="project-facts"><span>${project.sessions.toLocaleString()} sessions</span><span>${project.machines} machines</span><span>${project.folders} observed folders</span></div></header>
+              <header><div class="row-between"><h2>${esc(project.name)}</h2><span class="tag blue">${project.rules} active mapping rules</span></div><div class="project-facts"><span>${project.sessions.toLocaleString()} sessions</span><span>${project.machines} machines</span><span>${project.folders} folder suggestions</span></div></header>
               <div class="inspector-section">
-                <div class="section-header"><h3>Observed and suggested folders</h3><button class="button quiet" data-action="suggested">${state.showSuggestions ? "Hide suggestions" : "Show suggestions"}</button></div>
+                <div class="section-header"><div><h3>Folder suggestions</h3><p class="muted">Paths suggested from sessions in this project.</p></div><button class="button quiet" data-action="suggested">${state.showSuggestions ? "Hide suggestions" : "Show suggestions"}</button></div>
                 <div class="folder-list">${folderItems(project.key, state.showSuggestions)}</div>
               </div>
               ${composer()}
@@ -1317,7 +1317,7 @@
               <span class="numeric">${folder.sessions}</span>
             </div>`).join("")}
           </div>
-          <div class="ledger-side"><div class="row-between"><div><h2>${esc(project.name)}</h2><span class="muted">Folder ledger</span></div><span class="tag blue">${project.rules} rules</span></div>${composer(true)}</div>
+          <div class="ledger-side"><div class="row-between"><div><h2>${esc(project.name)}</h2><span class="muted">Folder ledger</span></div><span class="tag blue">${project.rules} mapping rules</span></div>${composer(true)}</div>
         </div>`;
       }
 
@@ -1325,7 +1325,7 @@
         return `<section class="page">
           ${pageLead()}
           <div class="ledger-wrap">
-            <div class="row-between"><span class="muted">Select a project to open its folder ledger without leaving the inventory.</span><button class="button" data-action="folder" data-folder="scratch-parser">Review a candidate</button></div>
+            <div class="row-between"><span class="muted">Select a project to open its folder ledger without leaving the inventory.</span><button class="button" data-action="folder" data-folder="scratch-parser">Use for this project</button></div>
             ${inventoryTable(true)}
           </div>
         </section>`;
@@ -1338,10 +1338,10 @@
           <div class="focus-layout">
             <nav class="project-rail" aria-label="Projects"><div class="rail-heading">Project inventory</div>${projects.map((item) => `<button class="rail-project ${item.key === project.key ? "active" : ""}" data-action="project" data-project="${item.key}"><strong>${esc(item.name)}</strong><small>${item.sessions.toLocaleString()} sessions · ${item.folders} folders</small></button>`).join("")}</nav>
             <div class="focus-main">
-              <header class="focus-header"><div class="row-between"><div><h1>${esc(project.name)}</h1><div class="project-facts"><span>${project.sessions.toLocaleString()} sessions</span><span>${project.machines} machines</span><span>${project.rules} rules</span></div></div><span class="tag blue">${isReadOnly() ? "Read-only mirror" : "Writable archive"}</span></div></header>
+              <header class="focus-header"><div class="row-between"><div><h1>${esc(project.name)}</h1><div class="project-facts"><span>${project.sessions.toLocaleString()} sessions</span><span>${project.machines} machines</span><span>${project.rules} mapping rules</span></div></div><span class="tag blue">${isReadOnly() ? "Read-only mirror" : "Writable archive"}</span></div></header>
               <div class="focus-body">
                 <div class="read-only-note"><strong>Rejected comparison artifact.</strong><br />Search and add-folder interactions were retired when Split inspector was selected.</div>
-                <div class="section-header"><h2>Folders for ${esc(project.name)}</h2><span class="muted">Rule-backed paths and evidence candidates together</span></div>
+                <div class="section-header"><h2>Folder suggestions for ${esc(project.name)}</h2><span class="muted">Mapping-rule paths and evidence-backed suggestions together</span></div>
                 <div class="folder-list">${folderItems(project.key)}</div>
               </div>
             </div>
@@ -1527,7 +1527,7 @@
             state.selectedProject = state.lastSave.targetKey;
             state.targetProject = state.lastSave.targetKey;
             state.pendingEdit = true;
-            state.undoNotice = `Restored ${state.lastSave.path} on ${state.lastSave.machine} to its prior rule state.`;
+            state.undoNotice = `Restored ${state.lastSave.path} on ${state.lastSave.machine} to its prior mapping-rule state.`;
           }
           state.lastSave = null;
           state.result = null;

@@ -10,5 +10,5 @@ Blocked by: 02, 05
 
 What must Undo restore after a project correction, how long should immediate
 Undo remain available, and what durable history or reversal controls belong in
-Project rules? Reconcile the desired user promise with existing rule and
+Project mapping rules? Reconcile the desired user promise with existing rule and
 reclassification behavior before choosing the contract.
