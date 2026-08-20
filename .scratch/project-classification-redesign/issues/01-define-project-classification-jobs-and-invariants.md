@@ -19,14 +19,14 @@ evaluation criteria, but do not select the exact interaction flow.
 
 ### User jobs and evaluation
 
-Every prototype must let a user add an observed folder to an existing project,
-move a misclassified folder, create a project classification, recover from the
+Every prototype must let a user use a folder suggestion for an existing project,
+correct a misclassified path, create a project classification, recover from the
 latest mistaken correction, and understand a read-only result.
 
 The project inventory remains visible and primary. An ordinary correction uses
 the generated path suggestion, requires one explicit save, and does not require
-manual prefix entry or a trip to Project rules. Broad impact must be visible
-before commitment, and success, failure, or a read-only result must be
+manual prefix entry or a trip to Project mapping rules. Broad impact must be
+visible before commitment, and success, failure, or a read-only result must be
 unambiguous. These constraints do not select the final interaction flow.
 
 ### Folder and rule model
@@ -37,18 +37,19 @@ unambiguous. These constraints do not select the final interaction flow.
   machine/path pair can arrive from several archives. Session evidence defines
   whether a folder is observed. A renamed path is a separate observed folder;
   filesystem availability is not part of the current candidate evidence.
-- A folder is mapped only when a project rule produces a classification for it.
-  Session classifications do not map a folder. An unmapped parent may contain
-  mapped children.
-- Project rules are machine-specific path-prefix rules. The longest matching
-  rule that successfully produces a project wins. A dynamic rule that cannot
-  resolve its expected layout falls through to broader matching rules.
+- A folder is mapped only when a project mapping rule produces a classification
+  for it. Session classifications do not map a folder. An unmapped parent may
+  contain mapped children.
+- Project mapping rules are machine-specific path-prefix rules. The longest
+  matching rule that successfully produces a project wins. A dynamic rule that
+  cannot resolve its expected layout falls through to broader matching rules.
 - A folder correction evaluates current sessions at or below its prefix on the
   same machine. More specific successful rules and session assignments retain
   precedence.
-- Precedence is session assignment, project rule, then inferred classification.
-  A folder correction never creates, changes, or removes a session assignment.
-  Session-assignment interaction remains outside this redesign.
+- Precedence is session assignment, project mapping rule, then inferred
+  classification. A folder correction never creates, changes, or removes a
+  session assignment. Session-assignment interaction remains outside this
+  redesign.
 - Existing generated path suggestions remain the ordinary defaults. Suggestions
   for disposable leaves such as `issue-765` or `pr-887` should lift to the
   stable parent folder. Suggestions never apply a rule without explicit user
@@ -56,12 +57,12 @@ unambiguous. These constraints do not select the final interaction flow.
 
 ### Persistence and recovery
 
-- The database must retain inferred classification, versioned project rule sets,
-  session assignments when that separate feature exists, and an effective
-  classification that can be reconstructed from those layers.
-- The project rule set has one archive-wide linear history. Each saved change
-  creates a version. Undo walks backward one version at a time, including
-  across changes made to different machines.
+- The database must retain inferred classification, versioned project mapping
+  rule sets, session assignments when that separate feature exists, and an
+  effective classification that can be reconstructed from those layers.
+- The project mapping rule set has one archive-wide linear history. Each saved
+  change creates a version. Undo walks backward one version at a time,
+  including across changes made to different machines.
 - Creating, changing, disabling, deleting, or undoing a rule recomputes the
   effective classification of all current affected sessions. This includes
   sessions created after the original change. The rule-set change and
