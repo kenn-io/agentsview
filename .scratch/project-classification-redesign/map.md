@@ -60,6 +60,10 @@ states, and acceptance criteria.
   Save ordinary corrections directly, gate surprising scope with inline
   review, show all-time and 30-day impact, and distinguish pre-commit failure
   from a post-commit refresh failure.
+- [Define undo and change-history semantics](issues/06-define-undo-and-history.md):
+  Offer one immediate Undo of the latest rule-set version, recompute current
+  classifications, review newly expanded impact, and retain an unpruned audit
+  history without exposing history controls yet.
 
 ## Not yet specified
 

@@ -64,8 +64,14 @@ worktree mapping
 
 **Project mapping rule set**:
 
-The archive-wide, versioned collection of project mapping rules. Undo walks
-backward through its linear history one version at a time.
+The archive-wide, versioned collection of project mapping rules. Its active
+version governs effective classification.
+
+**Project mapping rule-set version**:
+
+An immutable record of the project mapping rule set after a saved change. Each
+version continues from one earlier version, so history can retain a skipped
+version even when a later save continues from the version before it.
 
 **Session assignment**:
 
