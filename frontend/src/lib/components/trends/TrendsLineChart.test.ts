@@ -49,4 +49,40 @@ describe("TrendsLineChart", () => {
 
     unmount(component);
   });
+
+  it("keeps active point markers out of pointer hit testing", async () => {
+    const component = mount(TrendsLineChart, {
+      target: document.body,
+      props: {
+        buckets: [
+          { date: "2026-08-10", message_count: 10 },
+          { date: "2026-08-17", message_count: 20 },
+        ],
+        series: [
+          {
+            term: "alpha",
+            variants: [],
+            total: 5,
+            points: [
+              { date: "2026-08-10", count: 2 },
+              { date: "2026-08-17", count: 3 },
+            ],
+          },
+        ],
+        colorFor: () => "#1f77b4",
+        activeTerm: "alpha",
+        normalized: false,
+        onHover: vi.fn(),
+      },
+    });
+    await tick();
+
+    const markers = document.querySelectorAll<SVGCircleElement>("circle");
+    expect(markers).toHaveLength(2);
+    expect([...markers].every((marker) =>
+      marker.getAttribute("pointer-events") === "none"
+    )).toBe(true);
+
+    unmount(component);
+  });
 });

@@ -144,6 +144,7 @@
               y="value"
               r={3}
               fill={item.color}
+              pointer-events="none"
             />
           {/if}
         {/each}
