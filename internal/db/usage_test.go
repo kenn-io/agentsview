@@ -4556,7 +4556,7 @@ func seedLongLivedUsageBenchmark(tb testing.TB, database *DB) {
 	)
 	start, err := time.Parse(time.RFC3339, "2023-07-31T12:00:00Z")
 	require.NoError(tb, err)
-	usage := json.RawMessage(`{"input_tokens":100,"output_tokens":50}`)
+	usage := jsontext.Value(`{"input_tokens":100,"output_tokens":50}`)
 	for sessionIndex := range sessionCount {
 		sessionID := "bench-long-lived-" + strconv.Itoa(sessionIndex)
 		messages := make([]Message, messageCount)
