@@ -56,6 +56,10 @@ states, and acceptance criteria.
 - [Choose project classification language](issues/04-choose-project-classification-language.md):
   Frame the common task as a project correction, call evidence-backed prefixes
   folder suggestions, and reserve project mapping rule for the durable policy.
+- [Define save and impact-review behavior](issues/05-define-save-and-impact-review.md):
+  Save ordinary corrections directly, gate surprising scope with inline
+  review, show all-time and 30-day impact, and distinguish pre-commit failure
+  from a post-commit refresh failure.
 
 ## Not yet specified
 
