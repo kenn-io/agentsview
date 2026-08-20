@@ -27,7 +27,10 @@ human-readable display name to its mirrors. Do not show the opaque identity. The
 first version does not publish or link to a source URL because the source is
 often unreachable from the mirror. Explain the boundary directly, for example:
 "This is a read-only copy from Dev Mac. Make corrections in that Source Agents
-View."
+View." A mirror gives sources with the same display name persistent, unique
+local labels so the user can tell them apart. Prefer a configured local alias;
+until one exists, append a stable ordinal such as **Dev Mac 2**. Do not expose a
+fragment of the opaque source identity as the suffix.
 
 Folder suggestions and project mapping rules in a mirror retain their source
 identity. Candidate identity and grouping include the source before machine and
@@ -50,4 +53,6 @@ List every machine, replacements, all-time and 30-day impact, and zero-match
 rules. Save all required machine-specific rules in one transaction and one
 project mapping rule-set version. Any conflict or failure rejects the entire
 bulk change. Immediate Undo restores the whole multi-machine version as one
-change.
+change. The version contains one delta and saved impact snapshot for each
+changed rule, as defined by the Undo and history contract; it does not flatten
+the bulk change into one machine, prefix, or target.

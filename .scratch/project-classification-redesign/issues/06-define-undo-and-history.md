@@ -50,8 +50,11 @@ not offer another Undo or Redo. Project mapping rules do not yet expose a
 history browser, repeated traversal, or selective restoration.
 
 Retain rule-set versions without automatic pruning. Each version records its
-timestamp, change kind, machine, path prefix, target before and after, and its
-matched-session, changed-session, 30-day changed-session, changed-path, and
-affected-project counts at save time. Saving after Undo creates a new version
-from the restored version. Versions skipped by that new line remain audit
-records.
+timestamp, change kind, and one or more per-rule deltas. Each delta records its
+machine, path prefix, target before and after, matched-session, changed-session,
+30-day changed-session, changed-path, and affected-project counts at save time.
+The version also retains the exact normalized folder identities and project
+identities in its saved impact. Undo compares those identities with its current
+impact to decide whether the scope has expanded. Saving after Undo creates a new
+version from the restored version. Versions skipped by that new line remain
+audit records.
