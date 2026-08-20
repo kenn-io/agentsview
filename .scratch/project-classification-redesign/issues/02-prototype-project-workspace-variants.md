@@ -2,7 +2,7 @@
 
 Type: prototype
 
-Status: claimed
+Status: resolved
 
 Blocked by: 01
 
@@ -43,3 +43,16 @@ Use the scenario control to compare an ordinary move, broad impact review, and a
 read-only source. Try saving a correction, creating a project name, and using
 Undo. The ticket stays claimed until live review chooses a direction or asks for
 another pass.
+
+## Answer
+
+Live review selected A, Split inspector, as the project-workspace structure.
+Keep the full project inventory visible. Selecting a project opens a side pane
+with its observed and suggested folders, correction controls, impact state, and
+immediate Undo result.
+
+The selection approves A's structure. No separate rationale was recorded, and it
+does not approve the inline ledger or focused workspace. Folder triage remains a
+separate decision in
+[Prototype folder triage as a complementary workflow](03-prototype-folder-triage.md),
+with Split inspector as its comparison baseline.
