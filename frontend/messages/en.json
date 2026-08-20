@@ -1038,7 +1038,7 @@
   "activity_int_auto_short": "{int} int / {auto} auto",
   "activity_peak_label": "peak {count}",
   "activity_agent_min_value": "{value} agent-min",
-  "activity_no_sessions_selected_slot": "No sessions active in the selected slot.",
+  "activity_no_sessions_selected_range": "No sessions active in the selected time range.",
   "activity_output_tokens_value": [
     {
       "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
@@ -1054,7 +1054,7 @@
   "activity_overlay_metric": "Concurrency overlay metric",
   "activity_overlay_none": "None",
   "activity_tokens": "Tokens",
-  "activity_filter_active_in_slot": "Filter sessions active in this time slot",
+  "activity_filter_active_in_range": "Filter sessions active in this time range",
   "activity_mixed": "mixed",
   "activity_window": "Window",
   "activity_sessions": "Sessions",

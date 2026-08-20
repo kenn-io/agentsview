@@ -1182,7 +1182,7 @@
   "activity_int_auto_short": "{int} 対話 / {auto} 自動",
   "activity_peak_label": "ピーク {count}",
   "activity_agent_min_value": "{value} エージェント分",
-  "activity_no_sessions_selected_slot": "選択したスロットにはアクティブなセッションがありません。",
+  "activity_no_sessions_selected_range": "選択した時間範囲にはアクティブなセッションがありません。",
   "activity_output_tokens_value": [
     {
       "declarations": [
@@ -1204,7 +1204,7 @@
   "activity_overlay_metric": "同時実行オーバーレイ メトリック",
   "activity_overlay_none": "なし",
   "activity_tokens": "トークン",
-  "activity_filter_active_in_slot": "このタイムスロットでアクティブなセッションをフィルターします",
+  "activity_filter_active_in_range": "この時間範囲でアクティブなセッションをフィルターします",
   "activity_mixed": "混合された",
   "activity_window": "ウィンドウ",
   "activity_sessions": "セッション",

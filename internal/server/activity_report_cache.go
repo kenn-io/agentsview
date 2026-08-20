@@ -24,9 +24,10 @@ type activityReportCacheEntry struct {
 }
 
 type activityReportOrderKey struct {
-	sort      activity.SessionSort
-	direction string
-	bucket    int
+	sort        activity.SessionSort
+	direction   string
+	bucketStart int
+	bucketEnd   int
 }
 
 type activityReportCache struct {
@@ -159,12 +160,14 @@ func (cache *activityReportCache) page(
 	if err != nil {
 		return activity.SessionPage{}, false, err
 	}
-	bucket := -1
-	if options.Bucket != nil {
-		bucket = *options.Bucket
+	bucketStart, bucketEnd := -1, -1
+	if options.BucketRange != nil {
+		bucketStart = options.BucketRange.Start
+		bucketEnd = options.BucketRange.End
 	}
 	key := activityReportOrderKey{
-		sort: options.Sort, direction: options.Direction, bucket: bucket,
+		sort: options.Sort, direction: options.Direction,
+		bucketStart: bucketStart, bucketEnd: bucketEnd,
 	}
 	cache.mu.Lock()
 	defer cache.mu.Unlock()

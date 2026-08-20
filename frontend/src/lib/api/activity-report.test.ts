@@ -49,7 +49,7 @@ describe("activity report API", () => {
     );
   });
 
-  it("requests a deterministic server page with bucket and sort state", async () => {
+  it("requests a deterministic server page with bucket range and sort state", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       report_id: "signed",
       sessions: [{ session_id: "s2" }],
@@ -63,7 +63,7 @@ describe("activity report API", () => {
       cursor: "cursor",
       sort: "cost",
       direction: "asc",
-      bucket: 7,
+      bucketRange: { start: 7, end: 9 },
     });
 
     expect(page).toMatchObject({ next_cursor: "next", total: 8 });
@@ -74,7 +74,8 @@ describe("activity report API", () => {
       cursor: "cursor",
       sort: "cost",
       direction: "asc",
-      bucket: "7",
+      bucket_start: "7",
+      bucket_end: "9",
     });
   });
 });

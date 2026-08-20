@@ -609,8 +609,10 @@ func newActivityReportCommand() *cobra.Command {
 			"agent_minutes, cost, first_active, project, agent")
 	cmd.Flags().StringVar(&cfg.SessionsDirection, "sessions-direction", "",
 		"Session sort direction (default desc): asc or desc")
-	cmd.Flags().StringVar(&cfg.SessionsBucket, "sessions-bucket", "",
-		"Only sessions active in this zero-based bucket index")
+	cmd.Flags().StringVar(&cfg.SessionsBucketStart, "sessions-bucket-start", "",
+		"First zero-based bucket in the inclusive session range")
+	cmd.Flags().StringVar(&cfg.SessionsBucketEnd, "sessions-bucket-end", "",
+		"Last zero-based bucket in the inclusive session range")
 	registerFormatFlags(cmd.Flags())
 	cmd.Flags().BoolVar(&cfg.NoSync, "no-sync", false, "Skip on-demand sync before querying")
 	cmd.Flags().BoolVar(&cfg.Offline, "offline", false, "Use fallback pricing only")

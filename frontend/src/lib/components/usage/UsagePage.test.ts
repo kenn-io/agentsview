@@ -575,7 +575,7 @@ describe("UsagePage refresh behavior", () => {
     await flushEffects();
 
     const firstMark = () => document.querySelector<SVGElement>(
-      ".chart-svg [opacity='0.7']",
+      ".chart-svg .lc-bar, .chart-svg .lc-area-path",
     );
     const firstDot = () => document.querySelector<HTMLElement>(".list-dot");
     expect(firstMark()?.getAttribute("fill")).toBe("var(--accent-sky)");

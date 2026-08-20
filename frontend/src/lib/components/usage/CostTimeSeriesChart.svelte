@@ -422,6 +422,7 @@
 
   .chart-container :global(.grid-line) {
     stroke: var(--border-muted);
+    stroke-opacity: 0.35;
     stroke-width: 1;
     stroke-dasharray: 2 2;
   }

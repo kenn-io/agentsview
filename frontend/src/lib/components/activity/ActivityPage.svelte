@@ -54,33 +54,38 @@
   let activityYokeReady = $state(false);
   let lastActivityDateSignature = "";
 
-  // Page-local drill-down: clicking a Concurrency bucket filters the sessions
-  // table to the sessions active in that slot. Deliberately not URL-synced — it
-  // is a transient selection that resets whenever the report reloads.
-  let slotFilter = $state<{
-    idx: number;
+  // Page-local drill-down: dragging across Concurrency buckets filters the
+  // sessions table to sessions active anywhere in that range. Deliberately not
+  // URL-synced; it is a transient selection that resets when the report reloads.
+  let rangeFilter = $state<{
+    start: number;
+    end: number;
     label: string;
   } | null>(null);
-  let slotReportGeneration = -1;
+  let rangeReportGeneration = -1;
 
   // Every successful full-report load gets fresh buckets and sessions, even
   // when its deterministic report_id is unchanged. Clear any slot membership
   // captured against the previous generation.
   $effect(() => {
     const generation = activity.reportGeneration;
-    if (generation !== slotReportGeneration) {
-      slotReportGeneration = generation;
-      slotFilter = null;
+    if (generation !== rangeReportGeneration) {
+      rangeReportGeneration = generation;
+      rangeFilter = null;
     }
   });
 
-  async function selectBucket(sel: { idx: number; label: string } | null) {
+  async function selectRange(
+    sel: { start: number; end: number; label: string } | null,
+  ) {
     const generation = activity.reportGeneration;
     if (
-      await activity.loadSessionPage({ bucket: sel?.idx ?? null })
+      await activity.loadSessionPage({
+        bucketRange: sel ? { start: sel.start, end: sel.end } : null,
+      })
       && activity.reportGeneration === generation
     ) {
-      slotFilter = sel;
+      rangeFilter = sel;
     }
   }
 
@@ -426,20 +431,20 @@
       <Card level="default" padding="none" class="chart-panel">
         <ConcurrencyTimeline
           report={activity.report}
-          selectedBucket={slotFilter?.idx ?? null}
-          onSelectBucket={selectBucket}
+          selectedRange={rangeFilter}
+          onSelectRange={selectRange}
         />
       </Card>
       <Card level="default" padding="none" class="chart-panel">
         <SessionsTable
           report={activity.report}
-          filterActive={slotFilter !== null}
-          filterLabel={slotFilter?.label ?? ""}
+          filterActive={rangeFilter !== null}
+          filterLabel={rangeFilter?.label ?? ""}
           loading={activity.sessionsLoading}
           error={activity.sessionsError}
           sortKey={activity.sessionsSort}
           sortDir={activity.sessionsDirection}
-          onClearFilter={() => selectBucket(null)}
+          onClearFilter={() => selectRange(null)}
           onSort={sortSessions}
           onNext={(cursor) => activity.loadSessionPage({ cursor })}
         />

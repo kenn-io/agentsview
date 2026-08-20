@@ -40,7 +40,8 @@ func TestActivityReportCommand_Flags(t *testing.T) {
 		"preset", "date", "from", "to", "timezone",
 		"bucket", "project", "agent", "machine", "json", "no-sync",
 		"offline", "sessions-limit", "sessions-cursor", "sessions-sort",
-		"sessions-direction", "sessions-bucket", "sessions-report-id",
+		"sessions-direction", "sessions-bucket-start", "sessions-bucket-end",
+		"sessions-report-id",
 	} {
 		assert.NotNilf(t, cmd.Flags().Lookup(name), "flag --%s must exist", name)
 	}
@@ -75,7 +76,7 @@ func TestResolveActivityReportCursorInheritsPagingOptions(t *testing.T) {
 		Preset: "custom", From: "2026-07-03T10:00:00Z",
 		To: "2026-07-03T13:00:00Z", Timezone: "UTC", Bucket: "1d",
 		SessionsLimit: 1, SessionsSort: "project", SessionsDirection: "asc",
-		SessionsBucket: "0",
+		SessionsBucketStart: "0", SessionsBucketEnd: "0",
 	}, database)
 	require.NoError(t, err)
 	require.Len(t, first.BySession, 1)
@@ -97,7 +98,7 @@ func TestResolveActivityReportCursorRejectsExplicitPagingMismatch(t *testing.T) 
 		Preset: "custom", From: "2026-07-03T10:00:00Z",
 		To: "2026-07-03T13:00:00Z", Timezone: "UTC", Bucket: "1d",
 		SessionsLimit: 1, SessionsSort: "project", SessionsDirection: "asc",
-		SessionsBucket: "0",
+		SessionsBucketStart: "0", SessionsBucketEnd: "0",
 	}, database)
 	require.NoError(t, err)
 	require.NotEmpty(t, first.SessionsNextCursor)
@@ -108,7 +109,10 @@ func TestResolveActivityReportCursorRejectsExplicitPagingMismatch(t *testing.T) 
 	}{
 		{"sort", func(cfg *ActivityReportConfig) { cfg.SessionsSort = "agent" }},
 		{"direction", func(cfg *ActivityReportConfig) { cfg.SessionsDirection = "desc" }},
-		{"bucket", func(cfg *ActivityReportConfig) { cfg.SessionsBucket = "1" }},
+		{"bucket range", func(cfg *ActivityReportConfig) {
+			cfg.SessionsBucketStart = "0"
+			cfg.SessionsBucketEnd = "1"
+		}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -238,7 +242,8 @@ func TestFetchHTTPActivityReportContinuesRequestedGeneration(t *testing.T) {
 			assert.Equal(t, "original-cursor", r.URL.Query().Get("cursor"))
 			assert.False(t, r.URL.Query().Has("sort"))
 			assert.False(t, r.URL.Query().Has("direction"))
-			assert.False(t, r.URL.Query().Has("bucket"))
+			assert.False(t, r.URL.Query().Has("bucket_start"))
+			assert.False(t, r.URL.Query().Has("bucket_end"))
 			assert.Equal(t, "true", r.URL.Query().Get("include_report"))
 			require.NoError(t, json.MarshalWrite(w, map[string]any{
 				"report_id": "original-report",
@@ -307,6 +312,7 @@ func TestActivityReportCommandCursorInheritsNonDefaultPagingFlags(t *testing.T) 
 	firstCommand.SetArgs([]string{
 		"activity", "report", "--json", "--sessions-report-id", "saved-report",
 		"--sessions-sort", "project", "--sessions-direction", "asc",
+		"--sessions-bucket-start", "2", "--sessions-bucket-end", "4",
 	})
 	var firstErr error
 	firstOutput := captureStdout(t, func() {
@@ -335,10 +341,14 @@ func TestActivityReportCommandCursorInheritsNonDefaultPagingFlags(t *testing.T) 
 	firstQuery := <-queries
 	assert.Equal(t, "project", firstQuery.Get("sort"))
 	assert.Equal(t, "asc", firstQuery.Get("direction"))
+	assert.Equal(t, "2", firstQuery.Get("bucket_start"))
+	assert.Equal(t, "4", firstQuery.Get("bucket_end"))
 	secondQuery := <-queries
 	assert.Equal(t, "project-ascending-cursor", secondQuery.Get("cursor"))
 	assert.False(t, secondQuery.Has("sort"))
 	assert.False(t, secondQuery.Has("direction"))
+	assert.False(t, secondQuery.Has("bucket_start"))
+	assert.False(t, secondQuery.Has("bucket_end"))
 }
 
 // mustLocation loads a named time zone, failing the test if it is unavailable.

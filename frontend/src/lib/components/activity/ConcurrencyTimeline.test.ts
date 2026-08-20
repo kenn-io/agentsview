@@ -217,6 +217,20 @@ async function chooseOverlayMetric(target: HTMLElement, label: string) {
   await tick();
 }
 
+async function dragRange(target: HTMLElement, start: number, end: number) {
+  const hits = target.querySelectorAll<SVGRectElement>(".slot-hit");
+  await fireEvent.pointerDown(hits[start]!, { button: 0 });
+  if (end !== start) {
+    const endX = Number(hits[end]!.getAttribute("x"));
+    const endWidth = Number(hits[end]!.getAttribute("width"));
+    await fireEvent.pointerMove(target.querySelector(".timeline-body")!, {
+      clientX: endX + endWidth / 2,
+    });
+  }
+  await fireEvent.pointerUp(window);
+  await tick();
+}
+
 describe("ConcurrencyTimeline", () => {
   let originalResizeObserver: typeof ResizeObserver | undefined;
 
@@ -395,27 +409,24 @@ describe("ConcurrencyTimeline", () => {
     target.remove();
   });
 
-  it("emits the bucket index for server-side membership paging", async () => {
-    const onSelectBucket = vi.fn();
+  it("emits a one-bucket range for server-side membership paging", async () => {
+    const onSelectRange = vi.fn();
     const target = document.createElement("div");
     document.body.appendChild(target);
     const c = mount(ConcurrencyTimeline, {
       target,
-      props: { report: popoverReport(), onSelectBucket },
+      props: { report: popoverReport(), onSelectRange },
     });
     await tick();
-    (target.querySelector(".slot-hit") as SVGRectElement).dispatchEvent(
-      new MouseEvent("click", { bubbles: true }),
-    );
-    await tick();
-    expect(onSelectBucket).toHaveBeenCalledWith(
-      { idx: 0, label: "10:00–10:05" },
+    await dragRange(target, 0, 0);
+    expect(onSelectRange).toHaveBeenCalledWith(
+      { start: 0, end: 0, label: "10:00–10:05" },
     );
     unmount(c);
     target.remove();
   });
 
-  it("emits an idle bucket index without computing membership locally", async () => {
+  it("emits an idle one-bucket range without computing membership locally", async () => {
     const report = makeReport({
       bucket_unit: "minute",
       bucket_seconds: 300,
@@ -441,71 +452,105 @@ describe("ConcurrencyTimeline", () => {
       ],
       by_session: [] as Report["by_session"],
     });
-    const onSelectBucket = vi.fn();
+    const onSelectRange = vi.fn();
     const target = document.createElement("div");
     document.body.appendChild(target);
     const c = mount(ConcurrencyTimeline, {
       target,
-      props: { report, onSelectBucket },
+      props: { report, onSelectRange },
     });
     await tick();
     const hits = target.querySelectorAll(".slot-hit");
     expect(hits.length).toBe(2);
-    (hits[1] as SVGRectElement).dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    await tick();
-    expect(onSelectBucket).toHaveBeenCalledWith(
-      { idx: 1, label: "10:05–10:10" },
+    await dragRange(target, 1, 1);
+    expect(onSelectRange).toHaveBeenCalledWith(
+      { start: 1, end: 1, label: "10:05–10:10" },
     );
     unmount(c);
     target.remove();
   });
 
-  it("clears the selection when the already selected slot is clicked again", async () => {
-    const onSelectBucket = vi.fn();
+  it("clears the selection when the selected range is clicked again", async () => {
+    const onSelectRange = vi.fn();
     const target = document.createElement("div");
     document.body.appendChild(target);
-    // selectedBucket=0 marks slot 0 active; clicking it again toggles it off.
     const c = mount(ConcurrencyTimeline, {
       target,
-      props: { report: popoverReport(), selectedBucket: 0, onSelectBucket },
+      props: {
+        report: popoverReport(),
+        selectedRange: { start: 0, end: 0 },
+        onSelectRange,
+      },
     });
     await tick();
-    (target.querySelector(".slot-hit") as SVGRectElement).dispatchEvent(
-      new MouseEvent("click", { bubbles: true }),
-    );
-    await tick();
-    expect(onSelectBucket).toHaveBeenCalledWith(null);
+    await dragRange(target, 0, 0);
+    expect(onSelectRange).toHaveBeenCalledWith(null);
     unmount(c);
     target.remove();
   });
 
   it("selects a slot with a keyboard Enter", async () => {
-    const onSelectBucket = vi.fn();
+    const onSelectRange = vi.fn();
     const target = document.createElement("div");
     document.body.appendChild(target);
     const c = mount(ConcurrencyTimeline, {
       target,
-      props: { report: popoverReport(), onSelectBucket },
+      props: { report: popoverReport(), onSelectRange },
     });
     await tick();
     const hit = target.querySelector(".slot-hit") as SVGRectElement;
     hit.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await tick();
-    expect(onSelectBucket).toHaveBeenCalledWith(expect.objectContaining({ idx: 0 }));
+    expect(onSelectRange).toHaveBeenCalledWith(
+      expect.objectContaining({ start: 0, end: 0 }),
+    );
     unmount(c);
     target.remove();
   });
 
-  it("marks the selected bucket with an outline and brightened segments", async () => {
+  it("marks the selected range and brightens its segments", async () => {
     const target = document.createElement("div");
     document.body.appendChild(target);
     const c = mount(ConcurrencyTimeline, {
       target,
-      props: { report: popoverReport(), selectedBucket: 0 },
+      props: { report: popoverReport(), selectedRange: { start: 0, end: 0 } },
     });
     await tick();
-    expect(target.querySelector(".concurrency-outline")).toBeTruthy();
-    expect(target.querySelector(".concurrency-seg.selected")).toBeTruthy();
+    const selection = target.querySelector(".range-selection");
+    const selectedSegment = target.querySelector(".concurrency-seg.selected");
+    const stripCell = target.querySelector(".strip-cell");
+    const hitTarget = target.querySelector(".slot-hit");
+    expect(selection).toBeTruthy();
+    expect(selectedSegment).toBeTruthy();
+    expect(stripCell).toBeTruthy();
+    expect(hitTarget).toBeTruthy();
+    expect(
+      selection!.compareDocumentPosition(stripCell!) & Node.DOCUMENT_POSITION_PRECEDING,
+    ).toBeTruthy();
+    expect(
+      selection!.compareDocumentPosition(hitTarget!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    unmount(c);
+    target.remove();
+  });
+
+  it("drags across buckets to emit an inclusive range", async () => {
+    const onSelectRange = vi.fn();
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const c = mount(ConcurrencyTimeline, {
+      target,
+      props: { report: minuteReport(), onSelectRange },
+    });
+    await tick();
+
+    await dragRange(target, 0, 2);
+
+    expect(onSelectRange).toHaveBeenCalledWith({
+      start: 0,
+      end: 2,
+      label: "00:00–00:15",
+    });
     unmount(c);
     target.remove();
   });

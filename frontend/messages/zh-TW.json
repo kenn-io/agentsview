@@ -984,7 +984,7 @@
   "activity_int_auto_short": "{int} 交互 / {auto} 自動",
   "activity_peak_label": "尖峰 {count}",
   "activity_agent_min_value": "{value} 代理分鐘",
-  "activity_no_sessions_selected_slot": "所選時段內沒有活躍對話。",
+  "activity_no_sessions_selected_range": "所選時間範圍內沒有活躍對話。",
   "activity_output_tokens_value": [
     {
       "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
@@ -999,7 +999,7 @@
   "activity_overlay_metric": "並發疊加指標",
   "activity_overlay_none": "無",
   "activity_tokens": "Token",
-  "activity_filter_active_in_slot": "篩選此時間段內活躍的對話",
+  "activity_filter_active_in_range": "篩選此時間範圍內活躍的對話",
   "activity_mixed": "混合",
   "activity_window": "時間窗",
   "activity_sessions": "對話",

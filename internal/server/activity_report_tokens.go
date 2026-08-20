@@ -43,13 +43,13 @@ type activityReportTokenPayload struct {
 }
 
 type activitySessionCursorPayload struct {
-	Version   int                  `json:"v"`
-	Schema    int                  `json:"schema"`
-	Digest    string               `json:"digest"`
-	Offset    int                  `json:"offset"`
-	Sort      activity.SessionSort `json:"sort"`
-	Direction string               `json:"direction"`
-	Bucket    *int                 `json:"bucket,omitempty"`
+	Version     int                   `json:"v"`
+	Schema      int                   `json:"schema"`
+	Digest      string                `json:"digest"`
+	Offset      int                   `json:"offset"`
+	Sort        activity.SessionSort  `json:"sort"`
+	Direction   string                `json:"direction"`
+	BucketRange *activity.BucketRange `json:"bucket_range,omitempty"`
 }
 
 func newActivityReportTokenPayload(

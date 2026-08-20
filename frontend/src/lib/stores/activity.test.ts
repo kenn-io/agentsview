@@ -344,7 +344,7 @@ describe("load", () => {
 });
 
 describe("session paging", () => {
-  it("replaces the embedded page with a server-filtered bucket page", async () => {
+  it("replaces the embedded page with a server-filtered bucket range", async () => {
     activity.report = makeReport({
       report_id: "signed-report",
       sessions_total: 301,
@@ -356,7 +356,11 @@ describe("session paging", () => {
       total: 1,
     });
 
-    await activity.loadSessionPage({ bucket: 7, sort: "cost", direction: "asc" });
+    await activity.loadSessionPage({
+      bucketRange: { start: 7, end: 9 },
+      sort: "cost",
+      direction: "asc",
+    });
 
     expect(api.getActivitySessions).toHaveBeenCalledWith(
       "signed-report",
@@ -365,16 +369,16 @@ describe("session paging", () => {
         cursor: undefined,
         sort: "cost",
         direction: "asc",
-        bucket: 7,
+        bucketRange: { start: 7, end: 9 },
       },
       expect.any(AbortSignal),
     );
     expect(activity.report?.by_session).toEqual([{ session_id: "active" }]);
     expect(activity.report?.sessions_total).toBe(1);
-    expect(activity.sessionsBucket).toBe(7);
+    expect(activity.sessionsBucketRange).toEqual({ start: 7, end: 9 });
   });
 
-  it("cancels a stale bucket page when a newer selection starts", async () => {
+  it("cancels a stale bucket range page when a newer selection starts", async () => {
     activity.report = makeReport({ report_id: "signed-report" });
     const signals: AbortSignal[] = [];
     api.getActivitySessions
@@ -388,12 +392,12 @@ describe("session paging", () => {
         total: 0,
       });
 
-    void activity.loadSessionPage({ bucket: 1 });
+    void activity.loadSessionPage({ bucketRange: { start: 1, end: 2 } });
     await Promise.resolve();
-    await activity.loadSessionPage({ bucket: 2 });
+    await activity.loadSessionPage({ bucketRange: { start: 4, end: 6 } });
 
     expect(signals[0]?.aborted).toBe(true);
-    expect(activity.sessionsBucket).toBe(2);
+    expect(activity.sessionsBucketRange).toEqual({ start: 4, end: 6 });
   });
 });
 

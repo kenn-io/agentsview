@@ -185,7 +185,7 @@
   {:else}
     <div class="empty">
       {filterActive
-        ? m.activity_no_sessions_selected_slot()
+        ? m.activity_no_sessions_selected_range()
         : m.shared_no_sessions_in_range()}
     </div>
   {/if}

@@ -984,7 +984,7 @@
   "activity_int_auto_short": "{int} 交互 / {auto} 自动",
   "activity_peak_label": "峰值 {count}",
   "activity_agent_min_value": "{value} 代理分钟",
-  "activity_no_sessions_selected_slot": "所选时段内没有活跃会话。",
+  "activity_no_sessions_selected_range": "所选时间范围内没有活跃会话。",
   "activity_output_tokens_value": [
     {
       "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
@@ -999,7 +999,7 @@
   "activity_overlay_metric": "并发叠加指标",
   "activity_overlay_none": "无",
   "activity_tokens": "Token",
-  "activity_filter_active_in_slot": "筛选此时间段内活跃的会话",
+  "activity_filter_active_in_range": "筛选此时间范围内活跃的会话",
   "activity_mixed": "混合",
   "activity_window": "时间窗",
   "activity_sessions": "会话",

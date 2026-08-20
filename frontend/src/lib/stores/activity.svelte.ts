@@ -8,6 +8,7 @@ import {
   fetchActivitySessions,
   type ActivityReportProgress,
   type ActivityReportQuery,
+  type ActivityBucketRange,
   type ActivitySessionPageOptions,
   type ActivitySessionSort,
 } from "../api/activity-report.js";
@@ -73,7 +74,7 @@ class ActivityStore {
   sessionsError: string | null = $state(null);
   sessionsSort: ActivitySessionSort = $state("agent_minutes");
   sessionsDirection: "asc" | "desc" = $state("desc");
-  sessionsBucket: number | null = $state(null);
+  sessionsBucketRange: ActivityBucketRange | null = $state(null);
   // Epoch ms of the last successful report fetch, powering the "Updated Xm ago"
   // refresh label. null until the first load completes.
   lastUpdatedAt: number | null = $state(null);
@@ -193,7 +194,7 @@ class ActivityStore {
       this.sessionsError = null;
       this.sessionsSort = "agent_minutes";
       this.sessionsDirection = "desc";
-      this.sessionsBucket = null;
+      this.sessionsBucketRange = null;
       this.report = res;
       this.reportGeneration++;
       this.lastUpdatedAt = Date.now();
@@ -227,9 +228,9 @@ class ActivityStore {
     const signal = this.sessionsRead.begin();
     const sort = options.sort ?? this.sessionsSort;
     const direction = options.direction ?? this.sessionsDirection;
-    const bucket = options.bucket === undefined
-      ? this.sessionsBucket ?? undefined
-      : options.bucket;
+    const bucketRange = options.bucketRange === undefined
+      ? this.sessionsBucketRange ?? undefined
+      : options.bucketRange;
     this.sessionsLoading = true;
     this.sessionsError = null;
     try {
@@ -238,7 +239,7 @@ class ActivityStore {
         cursor: options.cursor,
         sort,
         direction,
-        bucket,
+        bucketRange,
       }, signal);
       if (!this.sessionsRead.isCurrent(signal) || this.report?.report_id !== report.report_id) {
         return false;
@@ -248,14 +249,14 @@ class ActivityStore {
         this.reportGeneration++;
         this.sessionsSort = "agent_minutes";
         this.sessionsDirection = "desc";
-        this.sessionsBucket = null;
+        this.sessionsBucketRange = null;
         this.lastUpdatedAt = Date.now();
         this.hasNewData = false;
         return true;
       }
       this.sessionsSort = sort;
       this.sessionsDirection = direction;
-      this.sessionsBucket = bucket ?? null;
+      this.sessionsBucketRange = bucketRange ? { ...bucketRange } : null;
       this.report = {
         ...report,
         report_id: page.report_id,

@@ -1038,7 +1038,7 @@
   "activity_int_auto_short": "{int} int / {auto} auto",
   "activity_peak_label": "pic {count}",
   "activity_agent_min_value": "{value} agent-min",
-  "activity_no_sessions_selected_slot": "Aucune session active dans le créneau sélectionné.",
+  "activity_no_sessions_selected_range": "Aucune session active dans la plage horaire sélectionnée.",
   "activity_output_tokens_value": [
     {
       "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
@@ -1054,7 +1054,7 @@
   "activity_overlay_metric": "Métrique de superposition de simultanéité",
   "activity_overlay_none": "Aucune",
   "activity_tokens": "Tokens",
-  "activity_filter_active_in_slot": "Filtrer les sessions actives dans ce créneau horaire",
+  "activity_filter_active_in_range": "Filtrer les sessions actives dans cette plage horaire",
   "activity_mixed": "mixte",
   "activity_window": "Fenêtre",
   "activity_sessions": "Sessions",

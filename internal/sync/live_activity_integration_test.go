@@ -242,7 +242,10 @@ func requireActivityBucketMembership(
 	require.NotEqual(t, -1, bucket, "activity report should contain the target bucket")
 	page, err := activity.PageSessions(
 		artifacts.Sessions, artifacts.Membership,
-		activity.SessionPageOptions{Bucket: &bucket},
+		activity.SessionPageOptions{BucketRange: &activity.BucketRange{
+			Start: bucket,
+			End:   bucket,
+		}},
 	)
 	require.NoError(t, err)
 	assert.True(t, slices.ContainsFunc(page.Sessions, func(row activity.SessionRow) bool {

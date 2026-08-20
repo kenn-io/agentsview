@@ -89,6 +89,14 @@ function calendarDay(label: string): HTMLButtonElement {
   return screen.getByRole("button", { name: label }) as HTMLButtonElement;
 }
 
+async function selectFirstActivityRange() {
+  const target = screen.getByRole("button", {
+    name: "Filter sessions active in this time range",
+  });
+  await fireEvent.pointerDown(target, { button: 0 });
+  await fireEvent.pointerUp(window);
+}
+
 describe("ActivityPage refresh control layout", () => {
   it("keeps the shared refresh control inline with the toolbar filters", () => {
     expect(source).toContain("<RefreshControl");
@@ -203,12 +211,11 @@ describe("ActivityPage bucket drill-down", () => {
 
     component = mount(ActivityPage, { target: document.body });
     await flushEffects();
-    await fireEvent.click(
-      screen.getByRole("button", {
-        name: "Filter sessions active in this time slot",
-      }),
-    );
+    await selectFirstActivityRange();
     await flushEffects();
+    expect(activity.loadSessionPage).toHaveBeenCalledWith({
+      bucketRange: { start: 0, end: 0 },
+    });
     expect(screen.getByTitle("Clear time filter")).toBeTruthy();
 
     activity.reportGeneration = 2;
@@ -238,9 +245,7 @@ describe("ActivityPage bucket drill-down", () => {
 
     component = mount(ActivityPage, { target: document.body });
     await flushEffects();
-    await fireEvent.click(screen.getByRole("button", {
-      name: "Filter sessions active in this time slot",
-    }));
+    await selectFirstActivityRange();
     await flushEffects();
 
     expect(screen.queryByTitle("Clear time filter")).toBeNull();
@@ -272,9 +277,7 @@ describe("ActivityPage bucket drill-down", () => {
 
     component = mount(ActivityPage, { target: document.body });
     await flushEffects();
-    await fireEvent.click(screen.getByRole("button", {
-      name: "Filter sessions active in this time slot",
-    }));
+    await selectFirstActivityRange();
     await flushEffects();
 
     expect(screen.queryByTitle("Clear time filter")).toBeNull();
@@ -304,9 +307,7 @@ describe("ActivityPage bucket drill-down", () => {
 
     component = mount(ActivityPage, { target: document.body });
     await flushEffects();
-    await fireEvent.click(screen.getByRole("button", {
-      name: "Filter sessions active in this time slot",
-    }));
+    await selectFirstActivityRange();
     await flushEffects();
     await fireEvent.click(screen.getByTitle("Clear time filter"));
     await flushEffects();

@@ -22,25 +22,26 @@ import (
 
 // ActivityReportConfig holds the flags for `agentsview activity report`.
 type ActivityReportConfig struct {
-	Preset            string
-	Date              string
-	From              string
-	To                string
-	Timezone          string
-	Bucket            string
-	Project           string
-	Agent             string
-	Machine           string
-	JSON              bool
-	NoSync            bool
-	Offline           bool
-	ProgressWriter    io.Writer
-	SessionsLimit     int
-	SessionsReportID  string
-	SessionsCursor    string
-	SessionsSort      string
-	SessionsDirection string
-	SessionsBucket    string
+	Preset              string
+	Date                string
+	From                string
+	To                  string
+	Timezone            string
+	Bucket              string
+	Project             string
+	Agent               string
+	Machine             string
+	JSON                bool
+	NoSync              bool
+	Offline             bool
+	ProgressWriter      io.Writer
+	SessionsLimit       int
+	SessionsReportID    string
+	SessionsCursor      string
+	SessionsSort        string
+	SessionsDirection   string
+	SessionsBucketStart string
+	SessionsBucketEnd   string
 }
 
 var activityReportNow = time.Now
@@ -156,7 +157,7 @@ func fetchHTTPActivityReport(
 
 func activitySessionPageCustomized(cfg ActivityReportConfig) bool {
 	return cfg.SessionsReportID != "" || cfg.SessionsCursor != "" ||
-		cfg.SessionsBucket != "" ||
+		cfg.SessionsBucketStart != "" || cfg.SessionsBucketEnd != "" ||
 		cfg.SessionsLimit > 0 && cfg.SessionsLimit != activity.DefaultSessionPageLimit ||
 		cfg.SessionsSort != "" && cfg.SessionsSort != string(activity.SessionSortAgentMinutes) ||
 		cfg.SessionsDirection != "" && cfg.SessionsDirection != "desc"
@@ -196,8 +197,9 @@ func fetchHTTPActivitySessionPage(
 		query.Set("sort", string(options.Sort))
 		query.Set("direction", options.Direction)
 	}
-	if options.Bucket != nil {
-		query.Set("bucket", strconv.Itoa(*options.Bucket))
+	if options.BucketRange != nil {
+		query.Set("bucket_start", strconv.Itoa(options.BucketRange.Start))
+		query.Set("bucket_end", strconv.Itoa(options.BucketRange.End))
 	}
 	if cfg.SessionsReportID != "" {
 		query.Set("include_report", "true")
@@ -271,15 +273,15 @@ func newActivityProgressPrinter(writer io.Writer) func(activity.Progress) {
 }
 
 type cliActivitySessionCursor struct {
-	Version   int                     `json:"v"`
-	Schema    int                     `json:"schema"`
-	Digest    string                  `json:"digest"`
-	Offset    int                     `json:"offset"`
-	Sort      activity.SessionSort    `json:"sort"`
-	Direction string                  `json:"direction"`
-	Bucket    *int                    `json:"bucket,omitempty"`
-	Query     cliActivityCursorQuery  `json:"query"`
-	Filter    cliActivityCursorFilter `json:"filter"`
+	Version     int                     `json:"v"`
+	Schema      int                     `json:"schema"`
+	Digest      string                  `json:"digest"`
+	Offset      int                     `json:"offset"`
+	Sort        activity.SessionSort    `json:"sort"`
+	Direction   string                  `json:"direction"`
+	BucketRange *activity.BucketRange   `json:"bucket_range,omitempty"`
+	Query       cliActivityCursorQuery  `json:"query"`
+	Filter      cliActivityCursorFilter `json:"filter"`
 }
 
 type cliActivityCursorQuery struct {
@@ -309,25 +311,33 @@ func activitySessionPageOptions(
 		Limit: cfg.SessionsLimit, Sort: activity.SessionSort(cfg.SessionsSort),
 		Direction: cfg.SessionsDirection,
 	}
-	if cfg.SessionsBucket != "" {
-		bucket, err := strconv.Atoi(cfg.SessionsBucket)
-		if err != nil || bucket < 0 {
+	if (cfg.SessionsBucketStart == "") != (cfg.SessionsBucketEnd == "") {
+		return activity.SessionPageOptions{}, fmt.Errorf(
+			"sessions bucket range requires both start and end",
+		)
+	}
+	if cfg.SessionsBucketStart != "" {
+		start, startErr := strconv.Atoi(cfg.SessionsBucketStart)
+		end, endErr := strconv.Atoi(cfg.SessionsBucketEnd)
+		if startErr != nil || endErr != nil || start < 0 || end < start {
 			return activity.SessionPageOptions{}, fmt.Errorf(
-				"invalid sessions bucket %q", cfg.SessionsBucket,
+				"invalid sessions bucket range %q..%q",
+				cfg.SessionsBucketStart, cfg.SessionsBucketEnd,
 			)
 		}
-		options.Bucket = &bucket
+		options.BucketRange = &activity.BucketRange{Start: start, End: end}
 	}
 	var continuation *activity.SessionPageOptions
 	if cursor != nil {
 		continuation = &activity.SessionPageOptions{
-			Sort: cursor.Sort, Direction: cursor.Direction, Bucket: cursor.Bucket,
+			Sort: cursor.Sort, Direction: cursor.Direction,
+			BucketRange: cursor.BucketRange,
 		}
 	}
 	resolved, err := activity.ResolveSessionPageOptions(
 		options, continuation, activity.SessionPageOptionPresence{
 			Sort: cfg.SessionsSort != "", Direction: cfg.SessionsDirection != "",
-			Bucket: cfg.SessionsBucket != "",
+			BucketRange: cfg.SessionsBucketStart != "",
 		},
 	)
 	if err != nil && cursor != nil {
@@ -467,7 +477,7 @@ func decodeCLIActivitySessionCursor(
 	}
 	var cursor cliActivitySessionCursor
 	if err := json.Unmarshal(payload, &cursor); err != nil ||
-		cursor.Version != 2 || cursor.Schema != export.ActivityReportSchemaVersion ||
+		cursor.Version != 3 || cursor.Schema != export.ActivityReportSchemaVersion ||
 		cursor.Offset < 0 || cursor.Digest == "" {
 		return cliActivitySessionCursor{}, fmt.Errorf("invalid sessions cursor")
 	}
@@ -507,9 +517,9 @@ func newCLIActivitySessionCursor(
 	f db.AnalyticsFilter,
 ) cliActivitySessionCursor {
 	return cliActivitySessionCursor{
-		Version: 2, Schema: export.ActivityReportSchemaVersion,
+		Version: 3, Schema: export.ActivityReportSchemaVersion,
 		Digest: digest, Offset: offset, Sort: options.Sort,
-		Direction: options.Direction, Bucket: options.Bucket,
+		Direction: options.Direction, BucketRange: options.BucketRange,
 		Query: cliActivityCursorQuery{
 			Timezone: q.Timezone, RangeStart: q.RangeStart, RangeEnd: q.RangeEnd,
 			EffectiveEnd: q.EffectiveEnd, Partial: q.Partial,

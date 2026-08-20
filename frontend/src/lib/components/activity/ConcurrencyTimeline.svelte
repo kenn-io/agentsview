@@ -9,13 +9,13 @@
 
   let {
     report,
-    selectedBucket = null,
-    onSelectBucket,
+    selectedRange = null,
+    onSelectRange,
   }: {
     report: Report;
-    selectedBucket?: number | null;
-    onSelectBucket?: (
-      sel: { idx: number; label: string } | null,
+    selectedRange?: { start: number; end: number } | null;
+    onSelectRange?: (
+      sel: { start: number; end: number; label: string } | null,
     ) => void;
   } = $props();
 
@@ -122,23 +122,98 @@
     tooltip = null;
   }
 
+  function fmtSelectionRange(start: number, end: number): string {
+    const first = buckets[start];
+    const last = buckets[end];
+    if (!first || !last) return "";
+    if (start === end) return fmtBucketRange(first);
+    const startMs = Date.parse(first.start);
+    const endMs = Date.parse(last.end);
+    if (Number.isNaN(startMs) || Number.isNaN(endMs)) return "";
+    if (report.bucket_unit === "minute") return fmtMinuteRange(startMs, endMs);
+    if (report.bucket_unit === "hour") return fmtHourRange(startMs, endMs);
+    return fmtWeekRange(startMs, endMs);
+  }
+
+  function sameRange(start: number, end: number): boolean {
+    return selectedRange?.start === start && selectedRange.end === end;
+  }
+
   // Bucket membership is computed by the shared backend aggregator. The chart
-  // only selects an index; ActivityPage requests that page asynchronously.
-  function selectSlot(idx: number) {
-    if (!onSelectBucket) return;
-    if (selectedBucket === idx) {
-      onSelectBucket(null);
+  // emits an inclusive range; ActivityPage requests that page asynchronously.
+  function selectRange(startIndex: number, endIndex: number) {
+    if (!onSelectRange) return;
+    const start = Math.min(startIndex, endIndex);
+    const end = Math.max(startIndex, endIndex);
+    if (sameRange(start, end)) {
+      onSelectRange(null);
       return;
     }
-    const b = buckets[idx];
-    onSelectBucket({ idx, label: b ? fmtBucketRange(b) : "" });
+    onSelectRange({ start, end, label: fmtSelectionRange(start, end) });
   }
 
   function onSlotKey(e: KeyboardEvent, idx: number) {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      selectSlot(idx);
+      selectRange(idx, idx);
     }
+  }
+
+  let dragStart = $state<number | null>(null);
+  let dragEnd = $state<number | null>(null);
+
+  const activeRange = $derived.by(() => {
+    if (dragStart !== null) {
+      const end = dragEnd ?? dragStart;
+      return {
+        start: Math.min(dragStart, end),
+        end: Math.max(dragStart, end),
+      };
+    }
+    return selectedRange;
+  });
+
+  function beginRangeDrag(event: PointerEvent, idx: number) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    dragStart = idx;
+    dragEnd = idx;
+  }
+
+  function extendRangeDrag(idx: number) {
+    if (dragStart === null) return;
+    dragEnd = idx;
+  }
+
+  function moveRangeDrag(event: PointerEvent) {
+    if (dragStart === null || !containerEl || bars.length === 0) return;
+    const x = event.clientX - containerEl.getBoundingClientRect().left;
+    const first = bars[0]!;
+    const last = bars.at(-1)!;
+    if (x <= first.cellX) {
+      dragEnd = 0;
+      return;
+    }
+    if (x >= last.cellX + last.cellW) {
+      dragEnd = bars.length - 1;
+      return;
+    }
+    const idx = bars.findIndex((bar) => x < bar.cellX + bar.cellW);
+    if (idx >= 0) dragEnd = idx;
+  }
+
+  function finishRangeDrag() {
+    if (dragStart === null) return;
+    const start = dragStart;
+    const end = dragEnd ?? dragStart;
+    dragStart = null;
+    dragEnd = null;
+    selectRange(start, end);
+  }
+
+  function cancelRangeDrag() {
+    dragStart = null;
+    dragEnd = null;
   }
 
   // Optional secondary series overlaid on the bars: none, output tokens, or
@@ -283,6 +358,17 @@
     return out;
   });
 
+  const selectionBounds = $derived.by(() => {
+    if (!activeRange) return null;
+    const first = bars[activeRange.start];
+    const last = bars[activeRange.end];
+    if (!first || !last) return null;
+    return {
+      x: first.cellX,
+      width: last.cellX + last.cellW - first.cellX,
+    };
+  });
+
   const overlayDataMax = $derived.by(() => {
     let m = 0;
     for (const b of buckets) {
@@ -410,6 +496,11 @@
   }
 </script>
 
+<svelte:window
+  onpointerup={finishRangeDrag}
+  onpointercancel={cancelRangeDrag}
+/>
+
 <div class="timeline">
   <div class="timeline-header">
     <h3 class="timeline-title">{m.activity_concurrency()}</h3>
@@ -437,7 +528,13 @@
     </div>
   </div>
 
-  <div class="timeline-body" bind:this={containerEl}>
+  <div
+    class="timeline-body"
+    role="group"
+    aria-label={m.activity_concurrency()}
+    bind:this={containerEl}
+    onpointermove={moveRangeDrag}
+  >
     <Chart
       data={overlayPoints}
       x="time"
@@ -481,28 +578,19 @@
 
         {#each bars as bar (bar.idx)}
           <Rect
-            class={`concurrency-seg interactive${selectedBucket === bar.idx ? " selected" : ""}`}
+            class={`concurrency-seg interactive${activeRange && bar.idx >= activeRange.start && bar.idx <= activeRange.end ? " selected" : ""}`}
             x={bar.x}
             y={bar.interactiveY}
             width={bar.w}
             height={bar.interactiveH}
           />
           <Rect
-            class={`concurrency-seg automated${selectedBucket === bar.idx ? " selected" : ""}`}
+            class={`concurrency-seg automated${activeRange && bar.idx >= activeRange.start && bar.idx <= activeRange.end ? " selected" : ""}`}
             x={bar.x}
             y={bar.automatedY}
             width={bar.w}
             height={bar.automatedH}
           />
-          {#if selectedBucket === bar.idx}
-            <Rect
-              class="concurrency-outline"
-              x={bar.x}
-              y={bar.y}
-              width={bar.w}
-              height={bar.h}
-            />
-          {/if}
         {/each}
 
         {#if overlayMetric !== "none" && overlayPoints.length > 0}
@@ -572,6 +660,16 @@
           />
         {/if}
 
+        {#if selectionBounds}
+          <Rect
+            class="range-selection"
+            x={selectionBounds.x}
+            y={TOP_PAD}
+            width={selectionBounds.width}
+            height={stripY + STRIP_H - TOP_PAD}
+          />
+        {/if}
+
         {#each bars as bar (bar.idx)}
           {@const b = buckets[bar.idx]}
           <Rect
@@ -583,11 +681,12 @@
             height={stripY + STRIP_H - TOP_PAD}
             role="button"
             tabindex={0}
-            aria-pressed={selectedBucket === bar.idx}
-            aria-label={m.activity_filter_active_in_slot()}
+            aria-pressed={activeRange !== null && bar.idx >= activeRange.start && bar.idx <= activeRange.end}
+            aria-label={m.activity_filter_active_in_range()}
             onmouseenter={(event) => b && showSlotTip(event, b)}
             onmouseleave={hideTip}
-            onclick={() => selectSlot(bar.idx)}
+            onpointerdown={(event) => beginRangeDrag(event, bar.idx)}
+            onpointerenter={() => extendRangeDrag(bar.idx)}
             onkeydown={(event) => onSlotKey(event, bar.idx)}
           />
         {/each}
@@ -657,6 +756,7 @@
 
   .overlay-toggle {
     display: flex;
+    flex-shrink: 0;
     align-items: center;
     gap: 4px;
     font-size: 10px;
@@ -668,6 +768,10 @@
     --typeahead-control-height: 22px;
     --typeahead-control-padding: 0 6px;
     --typeahead-control-font-size: 10px;
+  }
+
+  .overlay-toggle :global(.kit-typeahead) {
+    flex: 0 0 96px;
   }
 
   .timeline-body {
@@ -712,10 +816,13 @@
     opacity: 1;
   }
 
-  .timeline :global(.concurrency-outline) {
-    fill: none;
-    stroke: var(--text-primary);
-    stroke-width: 1;
+  .timeline :global(.range-selection) {
+    fill: var(--accent-blue);
+    fill-opacity: 0.16;
+    stroke: var(--accent-blue);
+    stroke-opacity: 1;
+    stroke-width: 1.5;
+    pointer-events: none;
   }
 
   .timeline :global(.concurrency-future) {

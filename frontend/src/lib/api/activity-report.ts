@@ -39,12 +39,17 @@ export type ActivitySessionSort =
   | "project"
   | "agent";
 
+export interface ActivityBucketRange {
+  start: number;
+  end: number;
+}
+
 export interface ActivitySessionPageOptions {
   limit?: number;
   cursor?: string;
   sort?: ActivitySessionSort;
   direction?: "asc" | "desc";
-  bucket?: number | null;
+  bucketRange?: ActivityBucketRange | null;
 }
 
 export interface ActivitySessionPage {
@@ -169,7 +174,8 @@ export async function fetchActivitySessions(
   appendQuery(params, "cursor", options.cursor);
   appendQuery(params, "sort", options.sort);
   appendQuery(params, "direction", options.direction);
-  appendQuery(params, "bucket", options.bucket);
+  appendQuery(params, "bucket_start", options.bucketRange?.start);
+  appendQuery(params, "bucket_end", options.bucketRange?.end);
   const res = await fetch(
     `${getBase()}/activity/report/${encodeURIComponent(reportID)}/sessions?${params}`,
     authHeaders({ method: "GET", signal }),

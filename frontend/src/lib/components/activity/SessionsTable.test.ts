@@ -246,7 +246,7 @@ describe("SessionsTable", () => {
 
     expect(document.querySelectorAll(".session-row").length).toBe(0);
     expect(document.querySelector(".empty")?.textContent).toContain(
-      m.activity_no_sessions_selected_slot(),
+      m.activity_no_sessions_selected_range(),
     );
     expect(document.querySelector(".filter-badge")).toBeTruthy();
 

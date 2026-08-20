@@ -59,20 +59,25 @@ const (
 )
 
 type SessionPageOptions struct {
-	Limit     int
-	Offset    int
-	Sort      SessionSort
-	Direction string
-	Bucket    *int
+	Limit       int
+	Offset      int
+	Sort        SessionSort
+	Direction   string
+	BucketRange *BucketRange
+}
+
+type BucketRange struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
 }
 
 // SessionPageOptionPresence records which cursor-bound options the caller
 // explicitly supplied. Omitted options inherit their values from a
 // continuation cursor; explicit values must match it.
 type SessionPageOptionPresence struct {
-	Sort      bool
-	Direction bool
-	Bucket    bool
+	Sort        bool
+	Direction   bool
+	BucketRange bool
 }
 
 type SessionPage struct {
@@ -110,6 +115,10 @@ func NormalizeSessionPageOptions(options SessionPageOptions) (SessionPageOptions
 			"invalid activity session direction %q", options.Direction,
 		)
 	}
+	if options.BucketRange != nil &&
+		(options.BucketRange.Start < 0 || options.BucketRange.End < options.BucketRange.Start) {
+		return SessionPageOptions{}, fmt.Errorf("invalid activity session bucket range")
+	}
 	return options, nil
 }
 
@@ -134,16 +143,17 @@ func ResolveSessionPageOptions(
 	if presence.Direction && requested.Direction != normalizedContinuation.Direction {
 		return SessionPageOptions{}, fmt.Errorf("activity session direction does not match cursor")
 	}
-	if presence.Bucket && !sameSessionBucket(requested.Bucket, normalizedContinuation.Bucket) {
-		return SessionPageOptions{}, fmt.Errorf("activity session bucket does not match cursor")
+	if presence.BucketRange &&
+		!sameSessionBucketRange(requested.BucketRange, normalizedContinuation.BucketRange) {
+		return SessionPageOptions{}, fmt.Errorf("activity session bucket range does not match cursor")
 	}
 	requested.Sort = normalizedContinuation.Sort
 	requested.Direction = normalizedContinuation.Direction
-	requested.Bucket = normalizedContinuation.Bucket
+	requested.BucketRange = normalizedContinuation.BucketRange
 	return NormalizeSessionPageOptions(requested)
 }
 
-func sameSessionBucket(left, right *int) bool {
+func sameSessionBucketRange(left, right *BucketRange) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil
 	}
@@ -181,7 +191,9 @@ func OrderSessions(
 	}
 	order := make([]int, 0, len(rows))
 	for index, row := range rows {
-		if options.Bucket != nil && !membership[row.SessionID].Contains(*options.Bucket) {
+		if options.BucketRange != nil && !membership[row.SessionID].Intersects(
+			options.BucketRange.Start, options.BucketRange.End,
+		) {
 			continue
 		}
 		order = append(order, index)

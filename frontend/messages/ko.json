@@ -986,7 +986,7 @@
   "activity_int_auto_short": "{int} 대화형 / {auto} 자동화",
   "activity_peak_label": "최대 {count}",
   "activity_agent_min_value": "{value} 에이전트-분",
-  "activity_no_sessions_selected_slot": "선택한 시간대에 활성 세션이 없습니다.",
+  "activity_no_sessions_selected_range": "선택한 시간 범위에 활성 세션이 없습니다.",
   "activity_output_tokens_value": [
     {
       "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
@@ -1001,7 +1001,7 @@
   "activity_overlay_metric": "동시성 오버레이 지표",
   "activity_overlay_none": "없음",
   "activity_tokens": "토큰",
-  "activity_filter_active_in_slot": "이 시간대에 활성 세션 필터링",
+  "activity_filter_active_in_range": "이 시간 범위에 활성 세션 필터링",
   "activity_mixed": "혼합",
   "activity_window": "윈도우",
   "activity_sessions": "세션",

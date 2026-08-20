@@ -600,7 +600,7 @@ func TestActivityReportEndpointNegotiatesProgressAndPagesSessions(t *testing.T) 
 	assert.NotEqual(t, first.Sessions[0].SessionID, second.Sessions[0].SessionID)
 
 	nonDefaultResponse := te.get(t, "/api/v1/activity/report/"+report.ReportID+
-		"/sessions?limit=1&sort=project&direction=asc&bucket=120")
+		"/sessions?limit=1&sort=project&direction=asc&bucket_start=120&bucket_end=121")
 	assertStatus(t, nonDefaultResponse, http.StatusOK)
 	var nonDefaultFirst struct {
 		Sessions   []activity.SessionRow `json:"sessions"`
@@ -621,9 +621,10 @@ func TestActivityReportEndpointNegotiatesProgressAndPagesSessions(t *testing.T) 
 	assert.NotEqual(t, nonDefaultFirst.Sessions[0].SessionID, inherited.Sessions[0].SessionID)
 
 	for name, query := range map[string]string{
-		"sort":      "&sort=agent",
-		"direction": "&direction=desc",
-		"bucket":    "&bucket=121",
+		"sort":         "&sort=agent",
+		"direction":    "&direction=desc",
+		"bucket start": "&bucket_start=121&bucket_end=121",
+		"bucket end":   "&bucket_start=120&bucket_end=122",
 	} {
 		t.Run("cursor rejects explicit "+name+" mismatch", func(t *testing.T) {
 			mismatch := te.get(t, "/api/v1/activity/report/"+report.ReportID+

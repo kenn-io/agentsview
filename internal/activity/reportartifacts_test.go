@@ -20,9 +20,9 @@ func TestPageSessionsDefaultOrderMembershipAndCursorPosition(t *testing.T) {
 	membership := map[string]BucketMembership{
 		"a": {1}, "b": {1}, "c": {2},
 	}
-	bucket := 0
+	bucketRange := BucketRange{Start: 0, End: 0}
 	page, err := PageSessions(rows, membership, SessionPageOptions{
-		Limit: 1, Bucket: &bucket,
+		Limit: 1, BucketRange: &bucketRange,
 	})
 	require.NoError(t, err)
 	require.Equal(t, 2, page.Total)
@@ -32,11 +32,38 @@ func TestPageSessionsDefaultOrderMembershipAndCursorPosition(t *testing.T) {
 	assert.Equal(t, 1, page.Next)
 
 	page, err = PageSessions(rows, membership, SessionPageOptions{
-		Limit: 10, Offset: page.Next, Bucket: &bucket,
+		Limit: 10, Offset: page.Next, BucketRange: &bucketRange,
 	})
 	require.NoError(t, err)
 	require.Len(t, page.Sessions, 1)
 	assert.Equal(t, "b", page.Sessions[0].SessionID)
+}
+
+func TestPageSessionsFiltersByInclusiveBucketRange(t *testing.T) {
+	one := 1.0
+	rows := []SessionRow{
+		{SessionID: "before", AgentMinutes: &one},
+		{SessionID: "inside", AgentMinutes: &one},
+		{SessionID: "after", AgentMinutes: &one},
+	}
+	membership := map[string]BucketMembership{
+		"before": {1 << 0},
+		"inside": {1 << 2},
+		"after":  {1 << 4},
+	}
+	page, err := PageSessions(rows, membership, SessionPageOptions{
+		BucketRange: &BucketRange{Start: 1, End: 3},
+	})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 1)
+	assert.Equal(t, "inside", page.Sessions[0].SessionID)
+}
+
+func TestNormalizeSessionPageOptionsRejectsReversedBucketRange(t *testing.T) {
+	_, err := NormalizeSessionPageOptions(SessionPageOptions{
+		BucketRange: &BucketRange{Start: 3, End: 1},
+	})
+	require.Error(t, err)
 }
 
 func TestPageSessionsAlternateSortHasSessionIDTieBreak(t *testing.T) {
