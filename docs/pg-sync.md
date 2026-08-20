@@ -14,6 +14,14 @@ pushes its own sessions; `pg serve` reads from the shared database.
 The resulting UI includes the session browser, analytics dashboard,
 search, and, as of 0.23.0, the Usage dashboard as well.
 
+!!! note "Separate hosted raw-sync work"
+
+    [Hosted Raw Sync](/hosted-raw-sync/) is a separate, in-development path in
+    which a hosted server retains original provider artifacts and performs
+    parsing and embedding. Its internal custody and device-authentication
+    foundations do not change the `pg push`, `pg push --watch`, or `pg serve`
+    behavior documented on this page.
+
 ## Quick Start
 
 ### 1. Configure PostgreSQL
