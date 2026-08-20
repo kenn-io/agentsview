@@ -60,3 +60,12 @@ HTTP response, and inventory refresh occur after commit. If refresh fails, say
 that the correction was saved and offer **Retry refresh** without another save
 action. Production success and failure feedback should use kit-ui's
 `FlashBanner` and `showFlash` pattern.
+
+Give every apply request a client-generated correction ID and store that ID with
+the rule-set version in the transaction. If the client loses the response, show
+an indeterminate result instead of claiming success or failure. Reconcile by
+reading the authoritative result for that correction ID. If it committed, show
+the saved state and refresh the inventory. If it did not commit, restore the
+editor and allow a retry with the same ID. Repeated apply requests with one
+correction ID must return the original result without creating another rule-set
+version.

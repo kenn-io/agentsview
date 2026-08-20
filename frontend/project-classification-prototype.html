@@ -1500,6 +1500,7 @@
           const folder = selectedFolder();
           const data = impact();
           const previousSelectedProject = state.selectedProject;
+          const previousSelectedFolder = state.selectedFolder;
           const previousTargetProject = state.targetProject;
           const previousNewProject = state.newProject;
           const target = state.targetProject === "new"
@@ -1526,6 +1527,7 @@
             targetKey: target.key,
             createdProjectKey: target.created ? target.key : null,
             previousSelectedProject,
+            previousSelectedFolder,
             previousTargetProject,
             previousNewProject,
             previousStates,
@@ -1554,8 +1556,7 @@
               const index = projects.findIndex((project) => project.key === state.lastSave.createdProjectKey);
               if (index >= 0) projects.splice(index, 1);
             }
-            const restored = state.lastSave.previousStates[0];
-            state.selectedFolder = restored.id;
+            state.selectedFolder = state.lastSave.previousSelectedFolder;
             state.selectedProject = state.lastSave.previousSelectedProject;
             state.targetProject = state.lastSave.previousTargetProject;
             state.newProject = state.lastSave.previousNewProject;
